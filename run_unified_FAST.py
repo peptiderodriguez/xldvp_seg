@@ -15,7 +15,12 @@ Usage:
 
 # Set cellpose model path FIRST, before any imports (cellpose caches this at import time)
 import os
-os.environ['CELLPOSE_LOCAL_MODELS_PATH'] = '/ptmp/edrod/MKsegmentation/checkpoints'
+from pathlib import Path
+
+# Use checkpoints directory relative to this script
+SCRIPT_DIR = Path(__file__).parent
+CHECKPOINTS_DIR = SCRIPT_DIR / "checkpoints"
+os.environ['CELLPOSE_LOCAL_MODELS_PATH'] = str(CHECKPOINTS_DIR)
 
 import numpy as np
 import h5py
@@ -441,9 +446,8 @@ class UnifiedSegmenter:
         else:
             self.device = device
 
-        # Find SAM2 checkpoint
-        sam2_base = Path("/ptmp/edrod/MKsegmentation")
-        checkpoint_path = sam2_base / sam2_checkpoint
+        # Find SAM2 checkpoint (relative to script location)
+        checkpoint_path = CHECKPOINTS_DIR / sam2_checkpoint
 
         print(f"Loading SAM2 from {checkpoint_path}...")
         sam2_model = build_sam2(sam2_config, str(checkpoint_path), device=self.device)
