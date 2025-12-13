@@ -1,0 +1,22 @@
+# Core dependencies
+numpy
+opencv-python
+scipy
+scikit-image
+h5py
+tqdm
+pillow
+
+# Deep learning
+torch>=2.0.0
+torchvision
+
+# Segmentation models
+git+https://github.com/facebookresearch/segment-anything-2.git
+cellpose>=3.0
+
+# CZI file reading
+pylibCZIrw
+
+# Optional but recommended
+matplotlib
