@@ -599,6 +599,9 @@ class UnifiedSegmenter:
 
         for result in valid_results:
             mask = result['segmentation']
+            # Ensure boolean type for indexing (critical for NVIDIA CUDA compatibility)
+            if mask.dtype != bool:
+                mask = (mask > 0.5).astype(bool)
 
             # Check overlap with existing masks - skip if >50% overlaps (larger already added)
             if mk_masks.max() > 0:
@@ -688,6 +691,9 @@ class UnifiedSegmenter:
             # Take best mask
             best_idx = np.argmax(scores)
             sam2_mask = masks_pred[best_idx]
+            # Ensure boolean type for indexing (critical for NVIDIA CUDA compatibility)
+            if sam2_mask.dtype != bool:
+                sam2_mask = (sam2_mask > 0.5).astype(bool)
             sam2_score = float(scores[best_idx])
 
             if sam2_mask.sum() < 10:
@@ -714,6 +720,9 @@ class UnifiedSegmenter:
 
         for cand in hspc_candidates:
             sam2_mask = cand['mask']
+            # Ensure boolean type for indexing (critical for NVIDIA CUDA compatibility)
+            if sam2_mask.dtype != bool:
+                sam2_mask = (sam2_mask > 0.5).astype(bool)
             sam2_score = cand['score']
             cx, cy = cand['center']
 
