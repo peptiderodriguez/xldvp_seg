@@ -63,6 +63,26 @@ Export now runs automatically before releasing slide data from RAM.
 - `export_separate_mk_hspc.py` - Added hdf5plugin import
 - `run_local.sh` - Batch processing configuration
 
+### HTML Export & Hosting
+- **175 HTML pages generated** (132 MK + 42 HSPC + 1 index)
+- **6.6 GB total** (~35MB per page with 300 samples each)
+- **GitHub Pages failed** - 2GB pack size limit exceeded
+- **Git LFS failed** - GitHub Pages doesn't serve LFS files
+- **Solution:** Self-host locally with Python HTTP server
+
+```bash
+# Start annotation server
+cd docs && python -m http.server 8080
+# Open http://localhost:8080
+```
+
+### Annotation Workflow
+1. Open http://localhost:8080 in browser
+2. Click Yes/No/?  for each cell
+3. Labels saved to browser localStorage
+4. Click "Download Annotations JSON" when done
+5. Use annotations for classifier training
+
 ---
 
 ## SESSION: 2026-01-07 - Local Machine Setup & Batch Processing
