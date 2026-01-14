@@ -277,12 +277,16 @@ class UnifiedSegmenter:
             crop = np.ascontiguousarray(crop[..., :3])
 
         # Force PIL to use RGB mode
-        pil_img = Image.fromarray(crop, mode='RGB')
-        tensor = self.resnet_transform(pil_img).unsqueeze(0).to(self.device)
+        try:
+            pil_img = Image.fromarray(crop, mode='RGB')
+            tensor = self.resnet_transform(pil_img).unsqueeze(0).to(self.device)
 
-        with torch.no_grad():
-            features = self.resnet(tensor).cpu().numpy().flatten()
-        return features
+            with torch.no_grad():
+                features = self.resnet(tensor).cpu().numpy().flatten()
+            return features
+        except Exception as e:
+            # Return zeros if feature extraction fails
+            return np.zeros(2048)
 
     def extract_sam2_embedding(self, cy, cx):
         """Extract 256D SAM2 embedding at a point."""
@@ -375,6 +379,10 @@ class UnifiedSegmenter:
         labeled = label(bright_mask)
         props = regionprops(labeled, intensity_image=gray)
 
+        # Debug: log candidate counts
+        if len(props) > 0:
+            print(f"    NMJ: {len(props)} candidates after threshold={threshold:.0f}", flush=True)
+
         # Filter by elongation
         masks = np.zeros(image_rgb.shape[:2], dtype=np.uint32)
         features_list = []
@@ -382,7 +390,7 @@ class UnifiedSegmenter:
 
         # Set image for SAM2 embeddings if available
         if self.sam2_predictor is not None:
-            self.sam2_predictor.set_image(image_rgb)
+            self.sam2_predictor.set_image(image_rgb if image_rgb.dtype == np.uint8 else (image_rgb / 256).astype(np.uint8))
 
         for prop in props:
             if prop.area < params['min_area']:
@@ -435,8 +443,9 @@ class UnifiedSegmenter:
         if self.sam2_auto is None:
             raise RuntimeError("SAM2 not loaded - required for MK detection")
 
-        # Generate masks
-        sam2_results = self.sam2_auto.generate(image_rgb)
+        # Generate masks (SAM2 expects uint8)
+        sam2_img = image_rgb if image_rgb.dtype == np.uint8 else (image_rgb / 256).astype(np.uint8)
+        sam2_results = self.sam2_auto.generate(sam2_img)
 
         # Filter by size
         valid_results = []
@@ -455,7 +464,7 @@ class UnifiedSegmenter:
         det_id = 1
 
         # Set image for embeddings
-        self.sam2_predictor.set_image(image_rgb)
+        self.sam2_predictor.set_image(image_rgb if image_rgb.dtype == np.uint8 else (image_rgb / 256).astype(np.uint8))
 
         for result in valid_results:
             mask = result['segmentation']
@@ -525,7 +534,7 @@ class UnifiedSegmenter:
             cellpose_ids = np.array([a[0] for a in areas[:MAX_CANDIDATES]])
 
         # Set image for SAM2
-        self.sam2_predictor.set_image(image_rgb)
+        self.sam2_predictor.set_image(image_rgb if image_rgb.dtype == np.uint8 else (image_rgb / 256).astype(np.uint8))
 
         # Collect candidates with SAM2 refinement
         candidates = []
@@ -720,7 +729,7 @@ class UnifiedSegmenter:
 
         # Set image for SAM2 embeddings if available
         if self.sam2_predictor is not None:
-            self.sam2_predictor.set_image(image_rgb)
+            self.sam2_predictor.set_image(image_rgb if image_rgb.dtype == np.uint8 else (image_rgb / 256).astype(np.uint8))
 
         for cand in ring_candidates:
             outer = cand['outer']
