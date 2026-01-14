@@ -1458,16 +1458,18 @@ def generate_tile_grid(mosaic_info, tile_size):
     return tiles
 
 
-def load_all_channels_to_ram(reader, mosaic_info, n_channels=None):
+def load_all_channels_to_ram(reader, mosaic_info, n_channels=None, strip_height=2000):
     """
-    Load ALL channels into RAM as numpy array.
+    Load ALL channels into RAM as numpy array using strip-based loading.
 
-    For large network-mounted files, this is faster than repeated tile reads.
+    For large network-mounted files, this reads in horizontal strips (rows)
+    to show progress and be more robust than one huge read.
 
     Args:
         reader: CziFile reader
         mosaic_info: Dict with x, y, width, height
         n_channels: Number of channels (auto-detect if None)
+        strip_height: Height of each strip to read (default 2000 rows)
 
     Returns:
         Dict mapping channel index to numpy array of shape (height, width)
@@ -1489,28 +1491,47 @@ def load_all_channels_to_ram(reader, mosaic_info, n_channels=None):
         if n_channels is None:
             n_channels = 1
 
-    print(f"  Loading {n_channels} channels into RAM...")
+    print(f"  Loading {n_channels} channels into RAM (strip-based)...")
     per_channel_gb = width * height * 2 / 1e9
     total_gb = per_channel_gb * n_channels
     print(f"  Size: {width:,} x {height:,} px x {n_channels} channels = {total_gb:.1f} GB")
+
+    n_strips = (height + strip_height - 1) // strip_height
+    print(f"  Reading in {n_strips} strips of {strip_height} rows each")
 
     start_time = time.time()
 
     channels = {}
     for c in range(n_channels):
-        print(f"    Loading channel {c}...", end=" ", flush=True)
+        print(f"    Channel {c}:", flush=True)
         ch_start = time.time()
 
-        arr = reader.read_mosaic(
-            region=(x_start, y_start, width, height),
-            scale_factor=1,
-            C=c
-        )
-        arr = np.squeeze(arr)
+        # Pre-allocate full array for this channel
+        arr = np.empty((height, width), dtype=np.uint16)
+
+        # Read in strips
+        for strip_idx in range(n_strips):
+            y_off = strip_idx * strip_height
+            h = min(strip_height, height - y_off)
+
+            strip_start = time.time()
+            strip = reader.read_mosaic(
+                region=(x_start, y_start + y_off, width, h),
+                scale_factor=1,
+                C=c
+            )
+            strip = np.squeeze(strip)
+            arr[y_off:y_off + h, :] = strip
+
+            strip_elapsed = time.time() - strip_start
+            strip_mb = width * h * 2 / 1e6
+            pct = (strip_idx + 1) * 100 // n_strips
+            print(f"      Strip {strip_idx + 1}/{n_strips} ({pct}%): {strip_mb:.0f} MB in {strip_elapsed:.1f}s ({strip_mb / strip_elapsed:.0f} MB/s)", flush=True)
+
         channels[c] = arr
 
         ch_elapsed = time.time() - ch_start
-        print(f"{ch_elapsed:.1f}s")
+        print(f"    Channel {c} done: {per_channel_gb:.1f} GB in {ch_elapsed:.1f}s ({per_channel_gb * 1000 / ch_elapsed:.1f} MB/s)")
 
     elapsed = time.time() - start_time
     print(f"  Total load time: {elapsed:.1f}s ({total_gb * 1000 / elapsed:.1f} MB/s)")
