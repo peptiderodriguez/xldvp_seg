@@ -270,7 +270,14 @@ class UnifiedSegmenter:
         elif crop.dtype != np.uint8:
             crop = crop.astype(np.uint8)
 
-        pil_img = Image.fromarray(crop)
+        # Ensure RGB format (3 channels)
+        if crop.ndim == 2:
+            crop = np.stack([crop, crop, crop], axis=-1)
+        elif crop.shape[-1] != 3:
+            crop = np.ascontiguousarray(crop[..., :3])
+
+        # Force PIL to use RGB mode
+        pil_img = Image.fromarray(crop, mode='RGB')
         tensor = self.resnet_transform(pil_img).unsqueeze(0).to(self.device)
 
         with torch.no_grad():
