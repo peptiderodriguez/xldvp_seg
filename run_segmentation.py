@@ -1284,10 +1284,134 @@ class UnifiedSegmenter:
 # CZI LOADING
 # =============================================================================
 
+def get_czi_metadata(czi_path):
+    """
+    Extract metadata from CZI file without loading image data.
+
+    Returns dict with:
+        - channels: list of channel info (name, wavelength, fluor)
+        - pixel_size_um: pixel size in microns
+        - mosaic_size: (width, height) in pixels
+        - n_channels: number of channels
+    """
+    import xml.etree.ElementTree as ET
+
+    czi_path = str(czi_path)
+    metadata = {
+        'channels': [],
+        'pixel_size_um': 0.22,  # default
+        'mosaic_size': None,
+        'n_channels': 0,
+    }
+
+    # Try pylibCZIrw first (better for large files)
+    try:
+        from pylibCZIrw import czi as pylibczi
+
+        with pylibczi.open_czi(czi_path) as czidoc:
+            # Get dimensions
+            dims = czidoc.total_bounding_box
+            metadata['mosaic_size'] = (dims['X'][1] - dims['X'][0], dims['Y'][1] - dims['Y'][0])
+
+            # Get metadata XML
+            meta_xml = czidoc.raw_metadata
+            root = ET.fromstring(meta_xml)
+
+    except ImportError:
+        # Fall back to aicspylibczi
+        from aicspylibczi import CziFile
+        reader = CziFile(czi_path)
+
+        bbox = reader.get_mosaic_bounding_box()
+        metadata['mosaic_size'] = (bbox.w, bbox.h)
+
+        meta_xml = reader.meta
+        if isinstance(meta_xml, str):
+            root = ET.fromstring(meta_xml)
+        else:
+            root = meta_xml
+
+    # Parse XML for channel info
+    channels = []
+    for i, channel in enumerate(root.iter('Channel')):
+        ch_info = {
+            'index': i,
+            'name': channel.get('Name', f'Channel_{i}'),
+            'id': channel.get('Id', ''),
+        }
+
+        # Get fluorophore
+        fluor = channel.find('.//Fluor')
+        ch_info['fluorophore'] = fluor.text if fluor is not None else 'N/A'
+
+        # Get emission wavelength
+        emission = channel.find('.//EmissionWavelength')
+        ch_info['emission_nm'] = float(emission.text) if emission is not None and emission.text else None
+
+        # Get excitation wavelength
+        excitation = channel.find('.//ExcitationWavelength')
+        ch_info['excitation_nm'] = float(excitation.text) if excitation is not None and excitation.text else None
+
+        # Get dye name/description
+        dye_name = channel.find('.//DyeName')
+        ch_info['dye'] = dye_name.text if dye_name is not None else ch_info['fluorophore']
+
+        channels.append(ch_info)
+
+    metadata['channels'] = channels
+    metadata['n_channels'] = len(channels)
+
+    # Parse pixel size
+    for scaling in root.iter('Scaling'):
+        for items in scaling.iter('Items'):
+            for distance in items.iter('Distance'):
+                if distance.get('Id') == 'X':
+                    value = distance.find('Value')
+                    if value is not None and value.text:
+                        metadata['pixel_size_um'] = float(value.text) * 1e6
+                        break
+
+    return metadata
+
+
+def print_czi_metadata(czi_path):
+    """Print CZI metadata in human-readable format."""
+    print(f"\nCZI Metadata: {Path(czi_path).name}")
+    print("=" * 60)
+
+    try:
+        meta = get_czi_metadata(czi_path)
+
+        if meta['mosaic_size']:
+            w, h = meta['mosaic_size']
+            print(f"Mosaic size: {w:,} x {h:,} px")
+
+        print(f"Pixel size: {meta['pixel_size_um']:.4f} µm/px")
+        print(f"Number of channels: {meta['n_channels']}")
+
+        print("\nChannels:")
+        print("-" * 60)
+        for ch in meta['channels']:
+            ex = f"{ch['excitation_nm']:.0f}" if ch['excitation_nm'] else "N/A"
+            em = f"{ch['emission_nm']:.0f}" if ch['emission_nm'] else "N/A"
+            print(f"  [{ch['index']}] {ch['name']}")
+            print(f"      Fluorophore: {ch['fluorophore']}")
+            print(f"      Excitation: {ex} nm | Emission: {em} nm")
+
+        print("=" * 60)
+        return meta
+
+    except Exception as e:
+        print(f"ERROR reading metadata: {e}")
+        print("  File may be on slow network mount - try copying locally first")
+        return None
+
+
 def load_czi(czi_path):
     """Load CZI file and return reader + metadata."""
     from aicspylibczi import CziFile
 
+    print(f"Loading CZI: {czi_path}")
     reader = CziFile(str(czi_path))
 
     bbox = reader.get_mosaic_bounding_box()
@@ -1297,23 +1421,24 @@ def load_czi(czi_path):
         'width': bbox.w,
         'height': bbox.h,
     }
+    print(f"  Mosaic: {mosaic_info['width']:,} x {mosaic_info['height']:,} px")
 
-    # Get pixel size
+    # Get pixel size from pre-parsed metadata or parse now
     pixel_size_um = 0.22
     try:
-        meta = reader.meta
-        for elem in meta.iter():
-            if 'ScalingX' in elem.tag or 'Scale' in elem.tag:
-                if elem.text:
-                    try:
-                        val = float(elem.text)
-                        if val < 1e-3:
-                            pixel_size_um = val * 1e6
-                            break
-                    except:
-                        pass
-    except:
-        pass
+        meta = get_czi_metadata(czi_path)
+        pixel_size_um = meta['pixel_size_um']
+
+        # Print channel info
+        if meta['channels']:
+            print(f"  Channels: {len(meta['channels'])}")
+            for ch in meta['channels']:
+                em = f"{ch['emission_nm']:.0f}nm" if ch['emission_nm'] else ""
+                print(f"    [{ch['index']}] {ch['name']} {em}")
+    except Exception as e:
+        print(f"  Warning: Could not parse metadata ({e}), using defaults")
+
+    print(f"  Pixel size: {pixel_size_um:.4f} µm/px")
 
     return reader, mosaic_info, pixel_size_um
 
@@ -1331,6 +1456,66 @@ def generate_tile_grid(mosaic_info, tile_size):
             tiles.append({'x': x, 'y': y})
 
     return tiles
+
+
+def load_all_channels_to_ram(reader, mosaic_info, n_channels=None):
+    """
+    Load ALL channels into RAM as numpy array.
+
+    For large network-mounted files, this is faster than repeated tile reads.
+
+    Args:
+        reader: CziFile reader
+        mosaic_info: Dict with x, y, width, height
+        n_channels: Number of channels (auto-detect if None)
+
+    Returns:
+        Dict mapping channel index to numpy array of shape (height, width)
+    """
+    import time
+
+    x_start = mosaic_info['x']
+    y_start = mosaic_info['y']
+    width = mosaic_info['width']
+    height = mosaic_info['height']
+
+    # Auto-detect number of channels
+    if n_channels is None:
+        dims = reader.get_dims_shape()
+        for dim in dims:
+            if 'C' in dim:
+                n_channels = dim['C'][1]
+                break
+        if n_channels is None:
+            n_channels = 1
+
+    print(f"  Loading {n_channels} channels into RAM...")
+    per_channel_gb = width * height * 2 / 1e9
+    total_gb = per_channel_gb * n_channels
+    print(f"  Size: {width:,} x {height:,} px x {n_channels} channels = {total_gb:.1f} GB")
+
+    start_time = time.time()
+
+    channels = {}
+    for c in range(n_channels):
+        print(f"    Loading channel {c}...", end=" ", flush=True)
+        ch_start = time.time()
+
+        arr = reader.read_mosaic(
+            region=(x_start, y_start, width, height),
+            scale_factor=1,
+            C=c
+        )
+        arr = np.squeeze(arr)
+        channels[c] = arr
+
+        ch_elapsed = time.time() - ch_start
+        print(f"{ch_elapsed:.1f}s")
+
+    elapsed = time.time() - start_time
+    print(f"  Total load time: {elapsed:.1f}s ({total_gb * 1000 / elapsed:.1f} MB/s)")
+
+    return channels
 
 
 # =============================================================================
@@ -1618,21 +1803,31 @@ def run_pipeline(args):
     print(f"  Origin: ({mosaic_info['x']}, {mosaic_info['y']})")
     print(f"  Pixel size: {pixel_size_um:.4f} um/px")
 
-    # Generate tile grid
+    # Optionally load ALL channels into RAM for faster processing
+    channels_ram = None
+    if args.load_to_ram:
+        print("\nLoading ALL channels to RAM (faster for network mounts)...")
+        channels_ram = load_all_channels_to_ram(reader, mosaic_info)
+
+    # Generate tile grid (coordinates relative to origin for image_array, or absolute for reader)
     print(f"\nGenerating tile grid (size={args.tile_size})...")
     all_tiles = generate_tile_grid(mosaic_info, args.tile_size)
     print(f"  Total tiles: {len(all_tiles)}")
+
+    # Get image array for tissue detection (from RAM or will read from disk)
+    image_array = channels_ram[args.channel] if channels_ram else None
 
     # Calibrate tissue threshold
     print("\nCalibrating tissue threshold...")
     variance_threshold = calibrate_tissue_threshold(
         all_tiles,
-        reader=reader,
+        reader=reader if channels_ram is None else None,
         x_start=mosaic_info['x'],
         y_start=mosaic_info['y'],
         calibration_samples=min(50, len(all_tiles)),
         channel=args.channel,
         tile_size=args.tile_size,
+        image_array=image_array,
     )
 
     # Filter to tissue-containing tiles
@@ -1640,11 +1835,12 @@ def run_pipeline(args):
     tissue_tiles = filter_tissue_tiles(
         all_tiles,
         variance_threshold,
-        reader=reader,
+        reader=reader if channels_ram is None else None,
         x_start=mosaic_info['x'],
         y_start=mosaic_info['y'],
         channel=args.channel,
         tile_size=args.tile_size,
+        image_array=image_array,
     )
 
     if len(tissue_tiles) == 0:
@@ -1724,17 +1920,26 @@ def run_pipeline(args):
         tile_y = tile['y']
 
         try:
-            # Read tile
-            tile_data = reader.read_mosaic(
-                region=(tile_x, tile_y, args.tile_size, args.tile_size),
-                scale_factor=1,
-                C=args.channel
-            )
+            # Calculate relative coordinates for RAM arrays
+            rel_x = tile_x - mosaic_info['x']
+            rel_y = tile_y - mosaic_info['y']
 
-            if tile_data is None or tile_data.size == 0:
-                continue
-
-            tile_data = np.squeeze(tile_data)
+            # Read tile - from RAM or from CZI
+            if channels_ram is not None:
+                # Extract from pre-loaded array
+                tile_data = channels_ram[args.channel][rel_y:rel_y + args.tile_size, rel_x:rel_x + args.tile_size]
+                if tile_data.size == 0:
+                    continue
+            else:
+                # Read from CZI
+                tile_data = reader.read_mosaic(
+                    region=(tile_x, tile_y, args.tile_size, args.tile_size),
+                    scale_factor=1,
+                    C=args.channel
+                )
+                if tile_data is None or tile_data.size == 0:
+                    continue
+                tile_data = np.squeeze(tile_data)
 
             if tile_data.max() == 0:
                 continue
@@ -1745,16 +1950,21 @@ def run_pipeline(args):
             else:
                 tile_rgb = tile_data
 
-            # Read CD31 channel if specified (for vessel validation)
+            # Get CD31 channel if specified (for vessel validation)
             cd31_channel = None
             if args.cell_type == 'vessel' and args.cd31_channel is not None:
-                cd31_data = reader.read_mosaic(
-                    region=(tile_x, tile_y, args.tile_size, args.tile_size),
-                    scale_factor=1,
-                    C=args.cd31_channel
-                )
-                if cd31_data is not None and cd31_data.size > 0:
-                    cd31_channel = np.squeeze(cd31_data).astype(np.float32)
+                if channels_ram is not None:
+                    cd31_tile = channels_ram[args.cd31_channel][rel_y:rel_y + args.tile_size, rel_x:rel_x + args.tile_size]
+                    if cd31_tile.size > 0:
+                        cd31_channel = cd31_tile.astype(np.float32)
+                else:
+                    cd31_data = reader.read_mosaic(
+                        region=(tile_x, tile_y, args.tile_size, args.tile_size),
+                        scale_factor=1,
+                        C=args.cd31_channel
+                    )
+                    if cd31_data is not None and cd31_data.size > 0:
+                        cd31_channel = np.squeeze(cd31_data).astype(np.float32)
 
             # Detect cells
             masks, features_list = segmenter.process_tile(
@@ -1915,9 +2125,17 @@ def main():
 
     # Required
     parser.add_argument('--czi-path', type=str, required=True, help='Path to CZI file')
-    parser.add_argument('--cell-type', type=str, required=True,
+    parser.add_argument('--cell-type', type=str, default=None,
                         choices=['nmj', 'mk', 'hspc', 'vessel', 'mesothelium'],
-                        help='Cell type to detect')
+                        help='Cell type to detect (not required if --show-metadata)')
+
+    # Metadata inspection
+    parser.add_argument('--show-metadata', action='store_true',
+                        help='Show CZI channel/dimension info and exit (no processing)')
+
+    # Performance options
+    parser.add_argument('--load-to-ram', action='store_true',
+                        help='Load entire channel into RAM first (faster for network mounts)')
 
     # Output
     parser.add_argument('--output-dir', type=str, default='/home/dude/nmj_output', help='Output directory')
@@ -1978,6 +2196,16 @@ def main():
     parser.add_argument('--samples-per-page', type=int, default=300)
 
     args = parser.parse_args()
+
+    # Handle --show-metadata (exit early)
+    if args.show_metadata:
+        print_czi_metadata(args.czi_path)
+        return
+
+    # Require --cell-type if not showing metadata
+    if args.cell_type is None:
+        parser.error("--cell-type is required unless using --show-metadata")
+
     run_pipeline(args)
 
 

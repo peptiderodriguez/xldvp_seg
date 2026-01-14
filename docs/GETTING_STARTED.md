@@ -301,6 +301,21 @@ See [LMD_EXPORT_GUIDE.md](LMD_EXPORT_GUIDE.md) for detailed documentation.
 | `--tile-size` | 3000 | Tile dimensions in pixels |
 | `--sample-fraction` | 0.10 | Fraction of tissue tiles to process |
 
+### Performance
+
+| Parameter | Default | Description |
+|-----------|---------|-------------|
+| `--load-to-ram` | false | Load ALL channels into RAM first (faster for network mounts) |
+| `--show-metadata` | false | Show CZI metadata and exit (no processing) |
+
+**RAM Loading:** For large files on network mounts, `--load-to-ram` loads all channels into memory once, then extracts tiles from RAM. This eliminates repeated network I/O and is significantly faster despite the upfront load time.
+
+```bash
+# Example: 176GB file on network mount
+python run_segmentation.py --czi-path /mnt/x/slide.czi --cell-type nmj --load-to-ram
+# Loads ~50GB per channel, then processes tiles instantly from RAM
+```
+
 ### Tissue Detection
 
 | Parameter | Default | Description |

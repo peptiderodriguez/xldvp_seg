@@ -13,6 +13,13 @@
 - **[GETTING_STARTED.md](docs/GETTING_STARTED.md)** - Full user guide for all pipelines
 - **[LMD_EXPORT_GUIDE.md](docs/LMD_EXPORT_GUIDE.md)** - Laser microdissection export workflow
 
+### Performance: RAM Loading
+For large files on network mounts, use `--load-to-ram` to load all channels into RAM once:
+```bash
+python run_segmentation.py --czi-path /path/to/slide.czi --cell-type nmj --load-to-ram
+```
+This eliminates repeated network I/O - the image is read once, then all tiles are extracted from RAM.
+
 ### Key Locations
 | What | Where |
 |------|-------|
