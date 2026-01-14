@@ -21,6 +21,12 @@ from pathlib import Path
 from tqdm import tqdm
 from aicspylibczi import CziFile
 
+# Import hdf5plugin for LZ4 decompression
+try:
+    import hdf5plugin
+except ImportError:
+    pass
+
 from shared.html_export import (
     percentile_normalize,
     draw_mask_contour,
