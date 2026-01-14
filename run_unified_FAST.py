@@ -75,7 +75,61 @@ def create_hdf5_dataset(f, name, data):
 # HTML EXPORT FUNCTIONS (integrated to use slide data in RAM)
 # =============================================================================
 
-def load_samples_from_ram(tiles_dir, slide_image, pixel_size_um, max_samples=None):
+def get_largest_connected_component(mask):
+    """Extract only the largest connected component from a binary mask."""
+    from scipy import ndimage
+    labeled, num_features = ndimage.label(mask)
+    if num_features == 0:
+        return mask
+    # Find largest component
+    sizes = ndimage.sum(mask, labeled, range(1, num_features + 1))
+    largest_label = np.argmax(sizes) + 1
+    return labeled == largest_label
+
+
+def draw_mask_contour(img_array, mask, color=(144, 238, 144), dotted=True):
+    """
+    Draw mask contour on image as dotted light green line.
+
+    Args:
+        img_array: numpy array (H, W, 3) uint8
+        mask: binary mask (H, W)
+        color: RGB tuple for contour color (default: light green)
+        dotted: if True, draw dotted line
+
+    Returns:
+        img_array with contour drawn
+    """
+    from scipy import ndimage
+
+    # Find contour by detecting edges of the mask
+    # Dilate then subtract original to get the outline (6px thick)
+    dilated = ndimage.binary_dilation(mask, iterations=6)
+    contour = dilated & ~mask
+
+    # Get contour pixel coordinates
+    ys, xs = np.where(contour)
+
+    if len(ys) == 0:
+        return img_array
+
+    img_out = img_array.copy()
+
+    if dotted:
+        # Draw every other pixel for dotted effect
+        for i, (y, x) in enumerate(zip(ys, xs)):
+            if i % 2 == 0:  # Dotted pattern
+                if 0 <= y < img_out.shape[0] and 0 <= x < img_out.shape[1]:
+                    img_out[y, x] = color
+    else:
+        for y, x in zip(ys, xs):
+            if 0 <= y < img_out.shape[0] and 0 <= x < img_out.shape[1]:
+                img_out[y, x] = color
+
+    return img_out
+
+
+def load_samples_from_ram(tiles_dir, slide_image, pixel_size_um, cell_type='mk', max_samples=None):
     """
     Load cell samples from segmentation output, using in-memory slide image.
 
@@ -83,6 +137,7 @@ def load_samples_from_ram(tiles_dir, slide_image, pixel_size_um, max_samples=Non
         tiles_dir: Path to tiles directory (e.g., output/mk/tiles)
         slide_image: numpy array of full slide image (already in RAM)
         pixel_size_um: Pixel size in microns
+        cell_type: 'mk' or 'hspc' - affects mask selection
         max_samples: Maximum samples to load (None for all)
 
     Returns:
@@ -125,6 +180,12 @@ def load_samples_from_ram(tiles_dir, slide_image, pixel_size_um, max_samples=Non
         with h5py.File(seg_file, 'r') as f:
             masks = f['labels'][0]  # Shape: (H, W)
 
+        # For HSPCs, sort by solidity (higher = more confident/solid shape)
+        if cell_type == 'hspc':
+            tile_features = sorted(tile_features,
+                                   key=lambda x: x['features'].get('solidity', 0),
+                                   reverse=True)
+
         # Extract each cell
         for feat_dict in tile_features:
             det_id = feat_dict['id']
@@ -143,19 +204,36 @@ def load_samples_from_ram(tiles_dir, slide_image, pixel_size_um, max_samples=Non
                 if not cell_mask.any():
                     continue
 
+            # For MKs, extract only the largest connected component
+            if cell_type == 'mk':
+                cell_mask = get_largest_connected_component(cell_mask)
+                if not cell_mask.any():
+                    continue
+
             ys, xs = np.where(cell_mask)
             if len(ys) == 0:
                 continue
 
+            # Calculate mask centroid for centering
+            centroid_y = int(np.mean(ys))
+            centroid_x = int(np.mean(xs))
+
+            # Calculate mask bounding box
             y1_local, y2_local = ys.min(), ys.max()
             x1_local, x2_local = xs.min(), xs.max()
+            mask_h = y2_local - y1_local
+            mask_w = x2_local - x1_local
 
-            # Expand crop for context (150px each side)
-            pad = 150
-            crop_y1 = max(0, y1_local - pad)
-            crop_y2 = min(masks.shape[0], y2_local + pad)
-            crop_x1 = max(0, x1_local - pad)
-            crop_x2 = min(masks.shape[1], x2_local + pad)
+            # Create a centered crop around the mask centroid
+            # Crop size should be at least mask size + padding, minimum 300px
+            crop_size = max(300, max(mask_h, mask_w) + 100)
+            half_size = crop_size // 2
+
+            # Crop bounds centered on centroid
+            crop_y1 = max(0, centroid_y - half_size)
+            crop_y2 = min(masks.shape[0], centroid_y + half_size)
+            crop_x1 = max(0, centroid_x - half_size)
+            crop_x2 = min(masks.shape[1], centroid_x + half_size)
 
             # Read from in-memory slide image (instead of CZI)
             global_y1 = tile_y1 + crop_y1
@@ -181,14 +259,34 @@ def load_samples_from_ram(tiles_dir, slide_image, pixel_size_um, max_samples=Non
             elif crop.shape[2] == 4:
                 crop = crop[:, :, :3]
 
-            # Normalize and resize to 300x300
-            crop = crop.astype(np.uint8)
-            pil_img = Image.fromarray(crop)
-            pil_img = pil_img.resize((300, 300), Image.LANCZOS)
+            # Normalize using same percentile normalization as main pipeline
+            crop = percentile_normalize(crop, p_low=5, p_high=95)
 
-            # Convert to base64
+            # Extract the mask for this crop region
+            local_mask = cell_mask[crop_y1:crop_y2, crop_x1:crop_x2]
+
+            # Resize crop and mask to 300x300
+            pil_img = Image.fromarray(crop)
+            original_size = pil_img.size
+            pil_img = pil_img.resize((300, 300), Image.LANCZOS)
+            crop_resized = np.array(pil_img)
+
+            # Resize mask to match
+            if local_mask.shape[0] > 0 and local_mask.shape[1] > 0:
+                mask_pil = Image.fromarray(local_mask.astype(np.uint8) * 255)
+                mask_pil = mask_pil.resize((300, 300), Image.NEAREST)
+                mask_resized = np.array(mask_pil) > 127
+
+                # Draw solid bright green contour on the image (6px thick)
+                crop_with_contour = draw_mask_contour(crop_resized, mask_resized,
+                                                       color=(0, 255, 0), dotted=False)
+            else:
+                crop_with_contour = crop_resized
+
+            # Convert to base64 (JPEG for smaller file sizes)
+            pil_img_final = Image.fromarray(crop_with_contour)
             buffer = BytesIO()
-            pil_img.save(buffer, format='PNG', optimize=True)
+            pil_img_final.save(buffer, format='JPEG', quality=85)
             img_b64 = base64.b64encode(buffer.getvalue()).decode('utf-8')
 
             samples.append({
@@ -197,7 +295,9 @@ def load_samples_from_ram(tiles_dir, slide_image, pixel_size_um, max_samples=Non
                 'area_px': area_px,
                 'area_um2': area_um2,
                 'image': img_b64,
-                'features': features
+                'features': features,
+                'solidity': features.get('solidity', 0),
+                'circularity': features.get('circularity', 0)
             })
 
             if max_samples and len(samples) >= max_samples:
@@ -318,7 +418,7 @@ def generate_export_page_html(samples, cell_type, page_num, total_pages):
         cards_html += f'''
         <div class="card" id="{uid}" data-label="-1">
             <div class="card-img-container">
-                <img src="data:image/png;base64,{img_b64}" alt="{det_id}">
+                <img src="data:image/jpeg;base64,{img_b64}" alt="{det_id}">
             </div>
             <div class="card-info">
                 <div>
@@ -344,12 +444,16 @@ def generate_export_page_html(samples, cell_type, page_num, total_pages):
     <style>
         * {{ box-sizing: border-box; margin: 0; padding: 0; }}
         body {{ font-family: monospace; background: #0a0a0a; color: #ddd; }}
-        .header {{ background: #111; padding: 12px 20px; display: flex; justify-content: space-between; align-items: center; border-bottom: 1px solid #333; position: sticky; top: 0; z-index: 100; }}
+        .header {{ background: #111; padding: 12px 20px; display: flex; flex-direction: column; gap: 8px; border-bottom: 1px solid #333; position: sticky; top: 0; z-index: 100; }}
+        .header-top {{ display: flex; justify-content: space-between; align-items: center; }}
         .header h1 {{ font-size: 1.2em; font-weight: normal; }}
-        .stats {{ display: flex; gap: 15px; font-size: 0.85em; }}
+        .stats-row {{ display: flex; gap: 20px; font-size: 0.85em; flex-wrap: wrap; }}
+        .stats-group {{ display: flex; gap: 8px; align-items: center; }}
+        .stats-label {{ color: #888; font-size: 0.9em; }}
         .stat {{ padding: 4px 10px; background: #1a1a1a; border: 1px solid #333; }}
         .stat.positive {{ border-left: 3px solid #4a4; }}
         .stat.negative {{ border-left: 3px solid #a44; }}
+        .stat.global {{ background: #0f1a0f; }}
         .page-nav {{ text-align: center; padding: 15px; background: #111; border-bottom: 1px solid #333; }}
         .nav-btn {{ display: inline-block; padding: 8px 16px; margin: 0 10px; background: #1a1a1a; color: #ddd; text-decoration: none; border: 1px solid #333; }}
         .nav-btn:hover {{ background: #222; }}
@@ -357,7 +461,7 @@ def generate_export_page_html(samples, cell_type, page_num, total_pages):
         .content {{ padding: 20px; }}
         .grid {{ display: grid; grid-template-columns: repeat(auto-fill, minmax(280px, 1fr)); gap: 10px; }}
         .card {{ background: #111; border: 1px solid #333; display: flex; flex-direction: column; }}
-        .card-img-container {{ width: 100%; height: 200px; display: flex; align-items: center; justify-content: center; background: #0a0a0a; overflow: hidden; }}
+        .card-img-container {{ width: 100%; height: 280px; display: flex; align-items: center; justify-content: center; background: #0a0a0a; overflow: hidden; }}
         .card img {{ max-width: 100%; max-height: 100%; object-fit: contain; }}
         .card-info {{ padding: 8px; display: flex; justify-content: space-between; align-items: center; border-top: 1px solid #333; }}
         .card-id {{ font-size: 0.75em; color: #888; }}
@@ -372,11 +476,21 @@ def generate_export_page_html(samples, cell_type, page_num, total_pages):
 </head>
 <body>
     <div class="header">
-        <h1>{cell_type_display} - Page {page_num}/{total_pages}</h1>
-        <div class="stats">
-            <div class="stat">Page: <span id="sample-count">{len(samples)}</span></div>
-            <div class="stat positive">Yes: <span id="positive-count">0</span></div>
-            <div class="stat negative">No: <span id="negative-count">0</span></div>
+        <div class="header-top">
+            <h1>{cell_type_display} - Page {page_num}/{total_pages}</h1>
+        </div>
+        <div class="stats-row">
+            <div class="stats-group">
+                <span class="stats-label">This Page:</span>
+                <div class="stat">Total: <span id="sample-count">{len(samples)}</span></div>
+                <div class="stat positive">Yes: <span id="positive-count">0</span></div>
+                <div class="stat negative">No: <span id="negative-count">0</span></div>
+            </div>
+            <div class="stats-group">
+                <span class="stats-label">Global ({total_pages} pages):</span>
+                <div class="stat global positive">Yes: <span id="global-positive">0</span></div>
+                <div class="stat global negative">No: <span id="global-negative">0</span></div>
+            </div>
         </div>
     </div>
     {nav_html}
@@ -386,6 +500,9 @@ def generate_export_page_html(samples, cell_type, page_num, total_pages):
     {nav_html}
     <script>
         const STORAGE_KEY = '{cell_type}_labels_page{page_num}';
+        const CELL_TYPE = '{cell_type}';
+        const TOTAL_PAGES = {total_pages};
+
         function loadAnnotations() {{
             const stored = localStorage.getItem(STORAGE_KEY);
             if (!stored) return;
@@ -404,6 +521,7 @@ def generate_export_page_html(samples, cell_type, page_num, total_pages):
                 updateStats();
             }} catch(e) {{ console.error(e); }}
         }}
+
         function setLabel(cellType, uid, label) {{
             const card = document.getElementById(uid);
             if (!card) return;
@@ -415,6 +533,7 @@ def generate_export_page_html(samples, cell_type, page_num, total_pages):
             saveAnnotations();
             updateStats();
         }}
+
         function saveAnnotations() {{
             const labels = {{}};
             document.querySelectorAll('.card').forEach(card => {{
@@ -423,7 +542,9 @@ def generate_export_page_html(samples, cell_type, page_num, total_pages):
             }});
             localStorage.setItem(STORAGE_KEY, JSON.stringify(labels));
         }}
+
         function updateStats() {{
+            // Local stats (this page)
             let pos = 0, neg = 0;
             document.querySelectorAll('.card').forEach(card => {{
                 const label = parseInt(card.dataset.label);
@@ -432,13 +553,33 @@ def generate_export_page_html(samples, cell_type, page_num, total_pages):
             }});
             document.getElementById('positive-count').textContent = pos;
             document.getElementById('negative-count').textContent = neg;
+
+            // Global stats (all pages)
+            let globalPos = 0, globalNeg = 0;
+            for (let i = 1; i <= TOTAL_PAGES; i++) {{
+                const key = CELL_TYPE + '_labels_page' + i;
+                const stored = localStorage.getItem(key);
+                if (stored) {{
+                    try {{
+                        const labels = JSON.parse(stored);
+                        for (const label of Object.values(labels)) {{
+                            if (label === 1) globalPos++;
+                            else if (label === 0) globalNeg++;
+                        }}
+                    }} catch(e) {{}}
+                }}
+            }}
+            document.getElementById('global-positive').textContent = globalPos;
+            document.getElementById('global-negative').textContent = globalNeg;
         }}
+
         document.addEventListener('keydown', (e) => {{
             if (e.key === 'ArrowLeft' && {page_num} > 1)
                 window.location.href = '{cell_type}_page{prev_page}.html';
             else if (e.key === 'ArrowRight' && {page_num} < {total_pages})
                 window.location.href = '{cell_type}_page{next_page}.html';
         }});
+
         loadAnnotations();
     </script>
 </body>
@@ -510,16 +651,18 @@ def export_html_from_ram(slide_data, output_base, html_output_dir, samples_per_p
 
         slide_image = data['image']
 
-        # Load MK samples
+        # Load MK samples (uses largest connected component)
         mk_samples = load_samples_from_ram(
             slide_dir / "mk" / "tiles",
-            slide_image, pixel_size_um
+            slide_image, pixel_size_um,
+            cell_type='mk'
         )
 
-        # Load HSPC samples
+        # Load HSPC samples (sorted by solidity/confidence)
         hspc_samples = load_samples_from_ram(
             slide_dir / "hspc" / "tiles",
-            slide_image, pixel_size_um
+            slide_image, pixel_size_um,
+            cell_type='hspc'
         )
 
         # Add slide name to each sample

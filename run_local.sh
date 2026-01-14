@@ -100,6 +100,10 @@ if [ "$MODE" = "batch" ]; then
 
     echo "Found ${#CZI_PATHS[@]} valid CZI files"
 
+    # HTML export is integrated - happens automatically while slides are in RAM
+    DOCS_DIR="$SCRIPT_DIR/docs"
+    mkdir -p "$DOCS_DIR"
+
     python -u run_unified_FAST.py \
         --czi-paths "${CZI_PATHS[@]}" \
         --output-dir "$OUTPUT_BASE" \
@@ -108,7 +112,9 @@ if [ "$MODE" = "batch" ]; then
         --mk-min-area-um $MK_MIN_AREA_UM \
         --mk-max-area-um $MK_MAX_AREA_UM \
         --sample-fraction $SAMPLE_FRACTION \
-        --calibration-samples $CALIBRATION_SAMPLES
+        --calibration-samples $CALIBRATION_SAMPLES \
+        --html-output-dir "$DOCS_DIR" \
+        --samples-per-page 300
 
     echo ""
     echo "=============================================="
@@ -147,47 +153,18 @@ else
 fi
 
 # ============================================================================
-# EXPORT TO HTML
+# DONE - HTML export happened automatically during segmentation
 # ============================================================================
 echo ""
 echo "=============================================="
-echo "EXPORTING TO HTML"
+echo "ALL COMPLETE"
 echo "=============================================="
-
-DOCS_DIR="$SCRIPT_DIR/docs"
-mkdir -p "$DOCS_DIR"
-
-cd "$SCRIPT_DIR"
-python export_separate_mk_hspc.py \
-    --base-dir "$OUTPUT_BASE" \
-    --czi-base "$CZI_BASE" \
-    --output-dir "$DOCS_DIR" \
-    --mk-min-area-um $MK_MIN_AREA_UM \
-    --mk-max-area-um $MK_MAX_AREA_UM \
-    --samples-per-page 300
-
-echo "HTML export complete: $DOCS_DIR"
-
-# ============================================================================
-# DEPLOY TO GITHUB PAGES
-# ============================================================================
-echo ""
-echo "=============================================="
-echo "DEPLOYING TO GITHUB PAGES"
-echo "=============================================="
-
-cd "$SCRIPT_DIR"
-git add docs/
-git commit -m "Update results: $(date '+%Y-%m-%d %H:%M')" || echo "No changes to commit"
-git push origin main
-
-echo ""
-echo "=============================================="
-echo "DEPLOYMENT COMPLETE"
-echo "=============================================="
-echo "Website: https://peptiderodriguez.github.io/BM_MK_seg/"
 echo "Output:  $OUTPUT_BASE"
-echo "HTML:    $DOCS_DIR"
+echo "HTML:    $SCRIPT_DIR/docs"
+echo ""
+echo "To view locally:"
+echo "  cd $SCRIPT_DIR/docs && python -m http.server 8080"
+echo "  Open: http://localhost:8080"
 echo "=============================================="
 
 # ============================================================================

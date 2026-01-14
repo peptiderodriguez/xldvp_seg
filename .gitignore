@@ -69,3 +69,10 @@ Thumbs.db
 *.tmp
 *.temp
 tmp/
+
+# HTML output (annotation viewer pages)
+docs/*.html
+docs_output/
+
+# Test/debug scripts
+test_*.py
