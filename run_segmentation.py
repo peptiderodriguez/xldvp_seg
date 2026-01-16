@@ -2393,6 +2393,24 @@ def run_pipeline(args):
     if use_ram:
         logger.info(f"  Channel {args.channel} loaded to RAM")
 
+    # Load additional channels if --all-channels specified (for NMJ specificity checking)
+    all_channel_data = {args.channel: loader.channel_data}  # Primary channel
+    if getattr(args, 'all_channels', False) and use_ram:
+        # Get number of channels from CZI metadata
+        try:
+            dims = loader.reader.get_dims_shape()[0]
+            n_channels = dims.get('C', (0, 3))[1]  # Default to 3 channels
+        except:
+            n_channels = 3  # Fallback
+
+        logger.info(f"Loading all {n_channels} channels for multi-channel analysis...")
+        for ch in range(n_channels):
+            if ch != args.channel:
+                logger.info(f"  Loading channel {ch}...")
+                loader = get_loader(czi_path, load_to_ram=True, channel=ch, quiet=True)
+                all_channel_data[ch] = loader.get_channel_data(ch)
+        logger.info(f"  Loaded channels: {sorted(all_channel_data.keys())}")
+
     # Also load CD31 channel to RAM if specified (for vessel validation)
     # Note: get_loader() with the same path returns the cached loader and just adds the new channel
     if args.cell_type == 'vessel' and args.cd31_channel is not None:
@@ -2592,6 +2610,41 @@ def run_pipeline(args):
             if len(features_list) == 0:
                 continue
 
+            # Multi-channel intensity measurement for NMJ specificity checking
+            if args.cell_type == 'nmj' and len(all_channel_data) > 1:
+                for i, feat in enumerate(features_list):
+                    # Get mask for this detection
+                    if i < masks.max():
+                        mask = (masks == (i + 1))
+                        if mask.sum() > 0:
+                            channel_intensities = {}
+                            for ch, ch_data in all_channel_data.items():
+                                # Extract tile from channel data
+                                ch_tile = ch_data[tile_y:tile_y + args.tile_size,
+                                                  tile_x:tile_x + args.tile_size]
+                                if ch_tile.shape == mask.shape:
+                                    mean_int = float(ch_tile[mask].mean())
+                                    channel_intensities[f'ch{ch}_mean'] = mean_int
+                            # Add to features
+                            feat['features'].update(channel_intensities)
+                            # Calculate specificity metrics
+                            # BTX (ch1) / nuclear (ch0) - real NMJs have high BTX, low nuclear
+                            # Autofluorescence appears in all channels including nuclear
+                            btx_int = channel_intensities.get('ch1_mean', 0)
+                            nuclear_int = channel_intensities.get('ch0_mean', 1)  # avoid div by zero
+                            nfl_int = channel_intensities.get('ch2_mean', 0)
+
+                            feat['features']['btx_nuclear_ratio'] = btx_int / max(nuclear_int, 1)
+                            feat['features']['btx_nfl_ratio'] = btx_int / max(nfl_int, 1) if nfl_int > 0 else float('inf')
+                            # Legacy: overall specificity (BTX vs max other)
+                            primary_int = channel_intensities.get(f'ch{args.channel}_mean', 0)
+                            other_ints = [v for k, v in channel_intensities.items()
+                                         if k != f'ch{args.channel}_mean']
+                            if other_ints and max(other_ints) > 0:
+                                feat['features']['channel_specificity'] = primary_int / max(other_ints)
+                            else:
+                                feat['features']['channel_specificity'] = float('inf')
+
             # Add universal IDs and global coordinates to each detection
             for feat in features_list:
                 local_cx, local_cy = feat['center']
@@ -2790,7 +2843,9 @@ def main():
     # Tile processing
     parser.add_argument('--tile-size', type=int, default=3000, help='Tile size in pixels')
     parser.add_argument('--sample-fraction', type=float, default=0.20, help='Fraction of tissue tiles (default: 20%)')
-    parser.add_argument('--channel', type=int, default=1, help='Channel index')
+    parser.add_argument('--channel', type=int, default=1, help='Primary channel index for detection')
+    parser.add_argument('--all-channels', action='store_true',
+                        help='Load all channels for multi-channel analysis (NMJ specificity checking)')
 
     # NMJ parameters
     parser.add_argument('--intensity-percentile', type=float, default=99)

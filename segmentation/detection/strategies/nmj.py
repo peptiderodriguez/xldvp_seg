@@ -599,19 +599,22 @@ class NMJStrategy(DetectionStrategy):
         self,
         mask: np.ndarray,
         intensity_image: np.ndarray,
-        low_threshold_percentile: float = 90.0
+        low_threshold_percentile: float = 95.0,
+        max_area_growth: float = 1.0
     ) -> np.ndarray:
         """
         Expand mask to signal boundaries using watershed.
 
         Uses the initial mask as seeds and grows via watershed until
         reaching low-intensity boundaries. The expansion is constrained
-        to regions above a lower intensity threshold.
+        to regions above a lower intensity threshold and limited to
+        a maximum proportional growth of the original mask area.
 
         Args:
             mask: Initial binary mask (seeds)
             intensity_image: Grayscale intensity image
-            low_threshold_percentile: Lower threshold for expansion region (default 90)
+            low_threshold_percentile: Lower threshold for expansion region (default 95)
+            max_area_growth: Maximum fractional growth of mask area (default 1.0 = 100% growth)
 
         Returns:
             Expanded binary mask
@@ -621,9 +624,21 @@ class NMJStrategy(DetectionStrategy):
         if mask.sum() == 0:
             return mask.astype(bool)
 
+        # Calculate max expansion radius based on proportional area growth
+        # To grow area by factor (1 + max_area_growth), radius grows by sqrt(1 + max_area_growth)
+        # expansion_radius = r_orig * (sqrt(1 + max_area_growth) - 1)
+        original_area = mask.sum()
+        effective_radius = np.sqrt(original_area / np.pi)
+        max_expansion_radius = int(np.ceil(effective_radius * (np.sqrt(1 + max_area_growth) - 1)))
+        max_expansion_radius = max(max_expansion_radius, 2)  # At least 2 pixels
+
         # Create expansion region: lower threshold than initial detection
         low_threshold = np.percentile(intensity_image, low_threshold_percentile)
         expansion_region = intensity_image > low_threshold
+
+        # Limit expansion to max_expansion_radius from original mask
+        max_reach = binary_dilation(mask, disk(max_expansion_radius))
+        expansion_region = expansion_region & max_reach
 
         # Use negative intensity as elevation map (watershed fills valleys)
         # Higher intensity = lower elevation = easier to fill
@@ -728,7 +743,8 @@ def load_nmj_classifier(model_path: str, device=None):
 def _expand_to_signal_edge_simple(
     mask: np.ndarray,
     intensity_image: np.ndarray,
-    low_threshold_percentile: float = 90.0
+    low_threshold_percentile: float = 95.0,
+    max_area_growth: float = 1.0
 ) -> np.ndarray:
     """
     Expand mask to signal boundaries using watershed.
@@ -738,7 +754,8 @@ def _expand_to_signal_edge_simple(
     Args:
         mask: Initial binary mask (seeds)
         intensity_image: Grayscale intensity image
-        low_threshold_percentile: Lower threshold for expansion region
+        low_threshold_percentile: Lower threshold for expansion region (default 95)
+        max_area_growth: Maximum fractional growth of mask area (default 1.0 = 100% growth)
 
     Returns:
         Expanded binary mask
@@ -748,9 +765,19 @@ def _expand_to_signal_edge_simple(
     if mask.sum() == 0:
         return mask.astype(bool)
 
+    # Calculate max expansion radius based on proportional area growth
+    original_area = mask.sum()
+    effective_radius = np.sqrt(original_area / np.pi)
+    max_expansion_radius = int(np.ceil(effective_radius * (np.sqrt(1 + max_area_growth) - 1)))
+    max_expansion_radius = max(max_expansion_radius, 2)  # At least 2 pixels
+
     # Create expansion region with lower threshold
     low_threshold = np.percentile(intensity_image, low_threshold_percentile)
     expansion_region = intensity_image > low_threshold
+
+    # Limit expansion to max_expansion_radius from original mask
+    max_reach = binary_dilation(mask, disk(max_expansion_radius))
+    expansion_region = expansion_region & max_reach
 
     # Negative intensity as elevation (high intensity = low elevation)
     elevation = -intensity_image.astype(float)
