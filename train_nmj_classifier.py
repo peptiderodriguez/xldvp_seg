@@ -21,6 +21,10 @@ from sklearn.model_selection import train_test_split
 from tqdm import tqdm
 from glob import glob
 
+from segmentation.utils.logging import get_logger, setup_logging
+
+logger = get_logger(__name__)
+
 
 class NMJDataset(Dataset):
     """Dataset for NMJ classification."""
@@ -48,16 +52,33 @@ class NMJDataset(Dataset):
         return img, label
 
 
-def extract_crops_from_html(html_dirs):
+def extract_crops_from_html(html_dirs, slide_prefix=None):
     """Extract all base64 crops from HTML pages.
 
     Args:
         html_dirs: Single directory path or list of directory paths
+        slide_prefix: Prefix for converting short IDs to full IDs (auto-detected if None)
 
     Returns dict mapping sample_id -> PIL Image
     """
     if isinstance(html_dirs, str):
         html_dirs = [html_dirs]
+
+    # Auto-detect slide prefix from directory names if not provided
+    if slide_prefix is None:
+        for html_dir in html_dirs:
+            # Look for slide name pattern in path (e.g., "20251109_PMCA1...")
+            parts = Path(html_dir).parts
+            for part in parts:
+                if part.startswith("20") and "_" in part and len(part) >= 20:
+                    slide_prefix = part + "_tile_"
+                    logger.info(f"Auto-detected slide prefix: {slide_prefix}")
+                    break
+            if slide_prefix:
+                break
+        if slide_prefix is None:
+            slide_prefix = ""
+            logger.warning("Could not auto-detect slide prefix - short IDs may not match annotations")
 
     crops = {}
     html_files = []
@@ -73,7 +94,7 @@ def extract_crops_from_html(html_dirs):
 
     html_files = sorted(set(html_files))  # Remove duplicates
 
-    print(f"Found {len(html_files)} HTML pages")
+    logger.info(f"Found {len(html_files)} HTML pages")
 
     # Regex to extract card id and base64 image
     # Handles both id="..." and data-id="..." formats
@@ -82,9 +103,6 @@ def extract_crops_from_html(html_dirs):
         r'<img src="data:image/png;base64,([^"]+)"',
         re.DOTALL
     )
-
-    # Prefix for converting short IDs to full IDs
-    slide_prefix = "20251109_PMCA1_647_nuc488-EDFvar-stitch_tile_"
 
     for html_file in tqdm(html_files, desc="Parsing HTML pages"):
         with open(html_file, 'r') as f:
@@ -105,7 +123,7 @@ def extract_crops_from_html(html_dirs):
                     full_id = slide_prefix + sample_id
                     crops[full_id] = img
             except Exception as e:
-                print(f"Error decoding {sample_id}: {e}")
+                logger.error(f"Error decoding {sample_id}: {e}")
 
     return crops
 
@@ -128,8 +146,8 @@ def train_model(train_loader, val_loader, num_epochs=20, device='cuda'):
     best_model_state = None
 
     for epoch in range(num_epochs):
-        print(f"\nEpoch {epoch+1}/{num_epochs}")
-        print("-" * 30)
+        logger.info(f"\nEpoch {epoch+1}/{num_epochs}")
+        logger.info("-" * 30)
 
         # Training phase
         model.train()
@@ -154,7 +172,7 @@ def train_model(train_loader, val_loader, num_epochs=20, device='cuda'):
 
         epoch_loss = running_loss / total
         epoch_acc = running_corrects / total
-        print(f"Train Loss: {epoch_loss:.4f}, Acc: {epoch_acc:.4f}")
+        logger.info(f"Train Loss: {epoch_loss:.4f}, Acc: {epoch_acc:.4f}")
 
         # Validation phase
         model.eval()
@@ -177,13 +195,13 @@ def train_model(train_loader, val_loader, num_epochs=20, device='cuda'):
 
         val_epoch_loss = val_loss / val_total
         val_epoch_acc = val_corrects / val_total
-        print(f"Val Loss: {val_epoch_loss:.4f}, Acc: {val_epoch_acc:.4f}")
+        logger.info(f"Val Loss: {val_epoch_loss:.4f}, Acc: {val_epoch_acc:.4f}")
 
         # Save best model
         if val_epoch_acc > best_acc:
             best_acc = val_epoch_acc
             best_model_state = model.state_dict().copy()
-            print(f"New best model! Acc: {best_acc:.4f}")
+            logger.info(f"New best model! Acc: {best_acc:.4f}")
 
         scheduler.step()
 
@@ -206,51 +224,61 @@ def main():
                         help='Output directory for model')
     parser.add_argument('--epochs', type=int, default=20, help='Training epochs')
     parser.add_argument('--batch-size', type=int, default=32, help='Batch size')
+    parser.add_argument('--slide-prefix', type=str, default=None,
+                        help='Slide name prefix for ID matching (auto-detected if not provided)')
     args = parser.parse_args()
 
+    # Initialize logging
+    setup_logging()
+
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
-    print(f"Using device: {device}")
+    logger.info(f"Using device: {device}")
 
     # Load annotations
-    print("\nLoading annotations...")
+    logger.info("\nLoading annotations...")
     with open(args.annotations) as f:
         annotations = json.load(f)
 
     positive_ids = set(annotations.get('positive', []))
     negative_ids = set(annotations.get('negative', []))
 
-    print(f"Positive annotations: {len(positive_ids)}")
-    print(f"Negative annotations: {len(negative_ids)}")
+    logger.info(f"Positive annotations: {len(positive_ids)}")
+    logger.info(f"Negative annotations: {len(negative_ids)}")
 
     # Extract crops from HTML
-    print("\nExtracting crops from HTML pages...")
-    all_crops = extract_crops_from_html(args.html_dir)
-    print(f"Total crops extracted: {len(all_crops)}")
+    logger.info("\nExtracting crops from HTML pages...")
+    all_crops = extract_crops_from_html(args.html_dir, slide_prefix=args.slide_prefix)
+    logger.info(f"Total crops extracted: {len(all_crops)}")
 
     # Build training samples
     samples = []
-    missing = 0
+    missing_ids = []
 
     for sample_id in positive_ids:
         if sample_id in all_crops:
             samples.append((all_crops[sample_id], 1))  # 1 = positive
         else:
-            missing += 1
+            missing_ids.append(('positive', sample_id))
 
     for sample_id in negative_ids:
         if sample_id in all_crops:
             samples.append((all_crops[sample_id], 0))  # 0 = negative
         else:
-            missing += 1
+            missing_ids.append(('negative', sample_id))
 
-    print(f"\nTotal samples: {len(samples)}")
-    print(f"Positive: {len([s for s in samples if s[1] == 1])}")
-    print(f"Negative: {len([s for s in samples if s[1] == 0])}")
-    if missing > 0:
-        print(f"Missing crops: {missing}")
+    logger.info(f"\nTotal samples: {len(samples)}")
+    logger.info(f"Positive: {len([s for s in samples if s[1] == 1])}")
+    logger.info(f"Negative: {len([s for s in samples if s[1] == 0])}")
+    if missing_ids:
+        logger.warning(f"Missing crops: {len(missing_ids)}")
+        # Log first 10 missing IDs for debugging
+        for label, sample_id in missing_ids[:10]:
+            logger.debug(f"  Missing {label}: {sample_id}")
+        if len(missing_ids) > 10:
+            logger.debug(f"  ... and {len(missing_ids) - 10} more")
 
     if len(samples) < 50:
-        print("ERROR: Not enough samples for training!")
+        logger.error("ERROR: Not enough samples for training!")
         return
 
     # Split into train/val
@@ -259,8 +287,8 @@ def main():
         stratify=[s[1] for s in samples]
     )
 
-    print(f"\nTrain samples: {len(train_samples)}")
-    print(f"Val samples: {len(val_samples)}")
+    logger.info(f"\nTrain samples: {len(train_samples)}")
+    logger.info(f"Val samples: {len(val_samples)}")
 
     # Create transforms - resize to 224x224 for ResNet
     train_transform = transforms.Compose([
@@ -286,21 +314,28 @@ def main():
     # Create weighted sampler for class balancing
     train_labels = [s[1] for s in train_samples]
     class_counts = [train_labels.count(0), train_labels.count(1)]
+
+    # Issue #3: Check for empty classes before computing weights
+    if class_counts[0] == 0 or class_counts[1] == 0:
+        logger.error(f"ERROR: One or more classes have no samples! Negative: {class_counts[0]}, Positive: {class_counts[1]}")
+        logger.error("Training cannot proceed with imbalanced data. Please provide samples for both classes.")
+        return
+
     class_weights = [1.0 / c for c in class_counts]
     sample_weights = [class_weights[label] for label in train_labels]
     sampler = WeightedRandomSampler(sample_weights, num_samples=len(sample_weights), replacement=True)
 
-    print(f"\nClass balancing enabled:")
-    print(f"  Negative samples: {class_counts[0]} (weight: {class_weights[0]:.4f})")
-    print(f"  Positive samples: {class_counts[1]} (weight: {class_weights[1]:.4f})")
+    logger.info(f"\nClass balancing enabled:")
+    logger.info(f"  Negative samples: {class_counts[0]} (weight: {class_weights[0]:.4f})")
+    logger.info(f"  Positive samples: {class_counts[1]} (weight: {class_weights[1]:.4f})")
 
     train_loader = DataLoader(train_dataset, batch_size=args.batch_size, sampler=sampler, num_workers=4)
     val_loader = DataLoader(val_dataset, batch_size=args.batch_size, shuffle=False, num_workers=4)
 
     # Train model
-    print("\n" + "="*50)
-    print("TRAINING NMJ CLASSIFIER")
-    print("="*50)
+    logger.info("\n" + "="*50)
+    logger.info("TRAINING NMJ CLASSIFIER")
+    logger.info("="*50)
 
     model, best_acc = train_model(train_loader, val_loader, num_epochs=args.epochs, device=device)
 
@@ -316,8 +351,8 @@ def main():
         'num_negative': len([s for s in samples if s[1] == 0]),
     }, model_path)
 
-    print(f"\nModel saved to: {model_path}")
-    print(f"Best validation accuracy: {best_acc:.4f}")
+    logger.info(f"\nModel saved to: {model_path}")
+    logger.info(f"Best validation accuracy: {best_acc:.4f}")
 
 
 if __name__ == '__main__':

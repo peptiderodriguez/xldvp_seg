@@ -1,4 +1,4 @@
-# BM_MK_seg - Session Notes
+# xldvp_seg - Session Notes
 
 ## Quick Start for New AI
 
@@ -23,8 +23,8 @@ This eliminates repeated network I/O - the image is read once, then all tiles ar
 ### Key Locations
 | What | Where |
 |------|-------|
-| **This repo** | `/home/dude/code/BM_MK_seg_repo/` |
-| **MK/HSPC output** | `/home/dude/BM_MK_seg_output/` |
+| **This repo** | `/home/dude/code/xldvp_seg_repo/` |
+| **MK/HSPC output** | `/home/dude/xldvp_seg_output/` |
 | **NMJ output** | `/home/dude/nmj_output/` |
 | **NMJ test data** | `/home/dude/nmj_test_output/` |
 | **Conda env** | `mkseg` (activate: `source ~/miniforge3/etc/profile.d/conda.sh && conda activate mkseg`) |
@@ -36,8 +36,8 @@ This eliminates repeated network I/O - the image is read once, then all tiles ar
 - **Retrain classifier:** Use `train_nmj_classifier.py` with merged annotations
 
 ### Current State (as of Jan 2026)
-- NMJ classifier trained: 96.64% accuracy
-- 287 NMJs detected and spatially grouped into 10 main sets + 12 outliers
+- NMJ classifier trained: 95.83% accuracy (on 20251107_Fig5 slide, 115 pos / 123 neg samples)
+- Full-slide inference in progress with trained classifier (threshold 0.75)
 - Spatial grouping targets ~1500 µm² per set with 1200-1800 µm² tolerance
 - Output maps: `nmj_map_spatial_tight.png`
 
@@ -50,6 +50,19 @@ This eliminates repeated network I/O - the image is read once, then all tiles ar
 |--------|---------|
 | `tissue_detection.py` | K-means based tissue detection, variance thresholding |
 | `html_export.py` | Unified dark-theme HTML annotation interface |
+| `config.py` | Centralized configuration management and defaults |
+| `coordinates.py` | Coordinate conversion helpers (prevents x/y swap bugs) |
+| `czi_loader.py` | Unified CZI loading with optional RAM caching |
+
+### Coordinate System
+**All coordinates are stored as [x, y] (horizontal, vertical).**
+
+- `tile_origin`: [x, y] position of tile top-left corner in mosaic
+- `local_centroid`: [x, y] position of cell center within tile
+- `global_centroid` / `global_center`: [x, y] position in full mosaic
+- UIDs include coordinates: `{slide}_{celltype}_{round(x)}_{round(y)}`
+
+Note: NumPy arrays use [row, col] indexing internally, but all stored/exported coordinates are [x, y].
 
 ### Entry Points
 | Script | Use Case |
@@ -157,7 +170,7 @@ Bone Marrow Megakaryocyte (MK) and Hematopoietic Stem/Progenitor Cell (HSPC) seg
 
 ### 5. Output Structure
 ```
-/home/dude/BM_MK_seg_output/
+/home/dude/xldvp_seg_output/
 ├── {slide_name}/
 │   ├── tile_{x}_{y}/
 │   │   ├── mk_masks.h5
@@ -165,7 +178,7 @@ Bone Marrow Megakaryocyte (MK) and Hematopoietic Stem/Progenitor Cell (HSPC) seg
 │   │   └── features.h5
 │   └── summary.json
 
-/home/dude/code/BM_MK_seg_repo/docs/
+/home/dude/code/xldvp_seg_repo/docs/
 ├── index.html
 ├── mk_page_1.html ... mk_page_N.html
 └── hspc_page_1.html ... hspc_page_N.html
@@ -250,6 +263,15 @@ export HDF5_PLUGIN_PATH=""
 ### Overview
 Secondary pipeline for NMJ detection and classification in muscle tissue CZI images.
 
+### Detection Method
+NMJ detection uses a multi-stage approach:
+1. **Intensity thresholding** - Bright fluorescent regions (default 99th percentile)
+2. **Morphological cleanup** - Opening/closing to remove noise
+3. **Solidity filtering** - NMJs have branched shapes with low solidity (max_solidity=0.85)
+4. **Watershed expansion** - Masks are expanded to capture full BTX signal using watershed
+5. **Smoothing** - Binary smoothing before and after expansion for clean boundaries
+6. **Optional classifier** - ResNet18 trained to distinguish NMJ vs non-NMJ
+
 ### Current Dataset
 - **Slide:** `20251109_PMCA1_647_nuc488-EDFvar-stitch.czi`
 - **Location:** `/home/dude/nmj_test_output/`
@@ -310,6 +332,7 @@ NMJs can be grouped into sets for analysis:
 ### Filtering Criteria
 - Area ≥ 27 µm² (minimum)
 - Area < 1000 µm² (exclude large singles)
+- Solidity ≤ 0.85 (branched structures have low solidity)
 - Confidence ≥ 75%
 - Spatial proximity < 2mm for grouping
 

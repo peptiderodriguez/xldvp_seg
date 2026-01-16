@@ -2,86 +2,74 @@
 """
 Export NMJ inference results to HTML for visualization.
 Shows classified NMJs with confidence scores and morphological features.
+
+Uses the shared HTML export module for consistent styling and functionality.
 """
 
 import argparse
 import json
-import base64
-import io
 import numpy as np
 from pathlib import Path
-from PIL import Image, ImageDraw
+from PIL import Image
 from tqdm import tqdm
-from aicspylibczi import CziFile
 import h5py
 import hdf5plugin  # Required for reading compressed HDF5 masks
-from skimage import measure
+
+# Use shared segmentation utilities
+from segmentation.io.html_export import (
+    percentile_normalize,
+    draw_mask_contour,
+    image_to_base64,
+    export_samples_to_html,  # Shared HTML export function
+)
+from segmentation.utils.logging import get_logger, setup_logging
+from segmentation.io.czi_loader import get_loader, CZILoader
+
+logger = get_logger(__name__)
 
 
-def percentile_normalize(img, p_low=5, p_high=95):
-    """Normalize image using percentiles."""
-    img = img.astype(np.float32)
-    p_lo = np.percentile(img, p_low)
-    p_hi = np.percentile(img, p_high)
-    if p_hi - p_lo < 1e-6:
-        return np.zeros_like(img, dtype=np.uint8)
-    img = (img - p_lo) / (p_hi - p_lo)
-    img = np.clip(img * 255, 0, 255).astype(np.uint8)
-    return img
-
-
-def draw_mask_contour(img, mask, color=(144, 238, 144), dotted=True):
-    """Draw mask contour on image with dotted line."""
-    # Find contours
-    contours = measure.find_contours(mask, 0.5)
-
-    draw = ImageDraw.Draw(img)
-
-    for contour in contours:
-        # Convert to list of (x, y) tuples
-        points = [(int(p[1]), int(p[0])) for p in contour]
-
-        if dotted:
-            # Draw dotted line
-            for i in range(0, len(points) - 1, 2):
-                if i + 1 < len(points):
-                    draw.line([points[i], points[i + 1]], fill=color, width=2)
-        else:
-            # Draw solid line
-            if len(points) > 1:
-                draw.line(points, fill=color, width=2)
-
-    return img
-
-
-def extract_crop_with_mask(reader, tile_x, tile_y, centroid, nmj_id, channel,
+def extract_crop_with_mask(loader, tile_x, tile_y, centroid, nmj_id,
                            seg_dir, tile_size=3000, crop_size=300):
-    """Extract crop from CZI and overlay mask contour."""
-    # Read tile
-    tile_data = reader.read_mosaic(
-        region=(tile_x, tile_y, tile_size, tile_size),
-        scale_factor=1,
-        C=channel
-    )
+    """Extract crop from CZI and overlay mask contour.
+
+    Args:
+        loader: CZILoader instance with channel data loaded
+        tile_x: Tile X origin in mosaic coordinates
+        tile_y: Tile Y origin in mosaic coordinates
+        centroid: [x, y] centroid position within tile
+        nmj_id: NMJ ID string for mask lookup
+        seg_dir: Path to segmentation directory containing masks
+        tile_size: Size of tiles
+        crop_size: Size of output crop
+
+    Returns:
+        PIL Image with crop and mask contour overlay, or None if failed
+    """
+    # Read tile using shared loader
+    tile_data = loader.get_tile(tile_x, tile_y, tile_size)
 
     if tile_data is None or tile_data.size == 0:
         return None
 
-    tile_data = np.squeeze(tile_data)
-    if tile_data.ndim != 2:
-        return None
-
-    # Extract crop centered on centroid
-    # Note: centroid stored as [row, col] but actual mask uses [y, x] = [row, col]
-    # The features file stores centroid as [col, row] = [x, y], so swap
+    # Extract crop centered on centroid (stored as [x, y])
     cx, cy = int(centroid[0]), int(centroid[1])
     half = crop_size // 2
 
     h, w = tile_data.shape
+
+    # Validate centroid is within tile bounds (Issue #2)
+    if cx < 0 or cx >= w or cy < 0 or cy >= h:
+        logger.warning(f"NMJ centroid ({cx},{cy}) outside tile bounds ({w}x{h})")
+        return None
+
     y1 = max(0, cy - half)
     y2 = min(h, cy + half)
     x1 = max(0, cx - half)
     x2 = min(w, cx + half)
+
+    # Validate crop bounds before extracting
+    if y2 <= y1 or x2 <= x1:
+        return None
 
     crop = tile_data[y1:y2, x1:x2].copy()
 
@@ -102,23 +90,17 @@ def extract_crop_with_mask(reader, tile_x, tile_y, centroid, nmj_id, channel,
             label_num = int(nmj_id.split('_')[-1])
 
             with h5py.File(mask_file, 'r') as f:
-                # Masks stored as single labeled image
+                # Masks stored as single labeled image - use slicing for efficiency
                 if 'masks' in f:
-                    full_masks = f['masks'][:]
-                    # Extract crop region and create binary mask for this label
-                    mask_region = full_masks[y1:y2, x1:x2]
+                    # Read only the crop region (HDF5 handles this efficiently)
+                    mask_region = f['masks'][y1:y2, x1:x2]
                     mask_crop = (mask_region == label_num).astype(np.uint8)
 
-                    # Debug: check if mask was found
+                    # Issue #5, #15: Don't load full HDF5 - just log warning if mask not in crop
                     if mask_crop.sum() == 0:
-                        # Try finding where the label actually is in full image
-                        label_coords = np.where(full_masks == label_num)
-                        if len(label_coords[0]) > 0:
-                            actual_y = label_coords[0].mean()
-                            actual_x = label_coords[1].mean()
-                            print(f"  DEBUG {nmj_id}: mask at y={actual_y:.0f}, x={actual_x:.0f}, but crop y={y1}:{y2}, x={x1}:{x2}")
+                        logger.debug(f"{nmj_id}: mask {label_num} not in crop region y={y1}:{y2}, x={x1}:{x2}")
         except Exception as e:
-            print(f"  Error loading mask for {nmj_id}: {e}")
+            logger.debug(f"Error loading mask for {nmj_id}: {e}")
 
     # Resize crop
     if crop_rgb.shape[0] > 0 and crop_rgb.shape[1] > 0:
@@ -132,598 +114,20 @@ def extract_crop_with_mask(reader, tile_x, tile_y, centroid, nmj_id, channel,
             mask_pil = mask_pil.resize((crop_size, crop_size), Image.NEAREST)
             mask_resized = np.array(mask_pil) > 127
 
-            # Draw contour on image
-            pil_img = draw_mask_contour(pil_img, mask_resized,
-                                        color=(144, 238, 144), dotted=True)
+            # Draw contour on image (convert to/from numpy for shared function)
+            img_array = np.array(pil_img)
+            img_with_contour = draw_mask_contour(img_array, mask_resized,
+                                                  color=(144, 238, 144),
+                                                  thickness=2, dotted=True)
+            pil_img = Image.fromarray(img_with_contour)
 
         return pil_img
 
     return None
 
 
-def image_to_base64(img):
-    """Convert PIL Image to base64 string."""
-    buffer = io.BytesIO()
-    img.save(buffer, format='PNG')
-    return base64.b64encode(buffer.getvalue()).decode()
-
-
-def generate_html_page(nmjs, page_num, total_pages, slide_name):
-    """Generate HTML page for NMJ results with annotation support."""
-
-    html = f'''<!DOCTYPE html>
-<html>
-<head>
-    <title>NMJ Annotation - {slide_name} - Page {page_num}/{total_pages}</title>
-    <style>
-        body {{
-            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
-            background: #f5f5f5;
-            color: #333;
-            margin: 0;
-            padding: 20px;
-        }}
-        .header {{
-            text-align: center;
-            padding: 15px;
-            background: #fff;
-            border-bottom: 1px solid #ddd;
-            margin-bottom: 20px;
-        }}
-        .header h1 {{
-            margin: 0 0 5px 0;
-            font-size: 1.5em;
-            color: #333;
-        }}
-        .header p {{
-            margin: 0;
-            color: #666;
-        }}
-        .stats-bar {{
-            display: flex;
-            justify-content: center;
-            align-items: center;
-            gap: 20px;
-            padding: 12px 20px;
-            background: #fff;
-            border: 1px solid #ddd;
-            margin-bottom: 20px;
-            position: sticky;
-            top: 0;
-            z-index: 100;
-            flex-wrap: wrap;
-        }}
-        .stat {{
-            text-align: center;
-            padding: 8px 15px;
-        }}
-        .stat-value {{
-            font-size: 1.5em;
-            font-weight: 600;
-            color: #2e7d32;
-        }}
-        .stat-value.negative {{
-            color: #c62828;
-        }}
-        .stat-label {{
-            color: #666;
-            font-size: 0.85em;
-        }}
-        .grid {{
-            display: grid;
-            grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
-            gap: 15px;
-            padding: 10px;
-        }}
-        .card {{
-            background: #fff;
-            border: 1px solid #ddd;
-            border-radius: 4px;
-            overflow: hidden;
-            position: relative;
-        }}
-        .card.annotated-yes {{
-            border: 2px solid #2e7d32;
-        }}
-        .card.annotated-no {{
-            border: 2px solid #c62828;
-        }}
-        .card img {{
-            width: 100%;
-            height: 280px;
-            object-fit: contain;
-            background: #000;
-        }}
-        .card-info {{
-            padding: 12px;
-        }}
-        .confidence {{
-            font-size: 1.1em;
-            font-weight: 600;
-            margin-bottom: 8px;
-        }}
-        .confidence.high {{
-            color: #2e7d32;
-        }}
-        .confidence.medium {{
-            color: #f9a825;
-        }}
-        .confidence.low {{
-            color: #c62828;
-        }}
-        .features {{
-            display: grid;
-            grid-template-columns: 1fr 1fr;
-            gap: 5px;
-            font-size: 0.8em;
-            color: #666;
-        }}
-        .feature {{
-            padding: 3px 0;
-        }}
-        .annotation-buttons {{
-            display: flex;
-            gap: 8px;
-            margin-top: 10px;
-        }}
-        .annotation-buttons button {{
-            flex: 1;
-            padding: 8px;
-            border: 1px solid #ddd;
-            border-radius: 4px;
-            font-size: 0.9em;
-            cursor: pointer;
-            background: #fff;
-        }}
-        .btn-yes {{
-            color: #2e7d32;
-            border-color: #2e7d32;
-        }}
-        .btn-yes:hover, .btn-yes.active {{
-            background: #2e7d32;
-            color: #fff;
-        }}
-        .btn-no {{
-            color: #c62828;
-            border-color: #c62828;
-        }}
-        .btn-no:hover, .btn-no.active {{
-            background: #c62828;
-            color: #fff;
-        }}
-        .annotation-status {{
-            position: absolute;
-            top: 8px;
-            right: 8px;
-            padding: 4px 8px;
-            border-radius: 3px;
-            font-weight: 600;
-            font-size: 0.8em;
-        }}
-        .annotation-status.yes {{
-            background: #2e7d32;
-            color: #fff;
-        }}
-        .annotation-status.no {{
-            background: #c62828;
-            color: #fff;
-        }}
-        .pagination {{
-            display: flex;
-            justify-content: center;
-            gap: 5px;
-            margin: 20px 0;
-            flex-wrap: wrap;
-        }}
-        .pagination a {{
-            padding: 8px 12px;
-            background: #fff;
-            color: #333;
-            text-decoration: none;
-            border: 1px solid #ddd;
-            border-radius: 3px;
-        }}
-        .pagination a:hover {{
-            background: #f0f0f0;
-        }}
-        .pagination a.current {{
-            background: #333;
-            color: #fff;
-            border-color: #333;
-        }}
-        .nav-buttons {{
-            display: flex;
-            justify-content: center;
-            gap: 15px;
-            margin: 15px 0;
-        }}
-        .nav-buttons a {{
-            padding: 10px 25px;
-            background: #fff;
-            color: #333;
-            text-decoration: none;
-            border: 1px solid #ddd;
-            border-radius: 4px;
-        }}
-        .nav-buttons a:hover {{
-            background: #f0f0f0;
-        }}
-        .export-btn {{
-            padding: 8px 20px;
-            background: #333;
-            color: #fff;
-            border: none;
-            border-radius: 4px;
-            cursor: pointer;
-            font-size: 0.9em;
-        }}
-        .export-btn:hover {{
-            background: #555;
-        }}
-        .clear-btn {{
-            padding: 8px 15px;
-            background: #fff;
-            color: #666;
-            border: 1px solid #ddd;
-            border-radius: 4px;
-            cursor: pointer;
-            font-size: 0.85em;
-        }}
-        .clear-btn:hover {{
-            background: #f0f0f0;
-            color: #c62828;
-            border-color: #c62828;
-        }}
-    </style>
-</head>
-<body>
-    <div class="header">
-        <h1>NMJ Annotation - {slide_name}</h1>
-        <p>Page {page_num} of {total_pages}</p>
-    </div>
-
-    <div class="stats-bar">
-        <div class="stat">
-            <div class="stat-value">{len(nmjs)}</div>
-            <div class="stat-label">This page</div>
-        </div>
-        <div class="stat">
-            <div class="stat-value" id="page-yes">0</div>
-            <div class="stat-label">Yes (page)</div>
-        </div>
-        <div class="stat">
-            <div class="stat-value negative" id="page-no">0</div>
-            <div class="stat-label">No (page)</div>
-        </div>
-        <div class="stat">
-            <div class="stat-value" id="global-yes">0</div>
-            <div class="stat-label">Yes (all)</div>
-        </div>
-        <div class="stat">
-            <div class="stat-value negative" id="global-no">0</div>
-            <div class="stat-label">No (all)</div>
-        </div>
-        <button class="export-btn" onclick="exportAnnotations()">Export</button>
-        <button class="clear-btn" onclick="clearPage()">Clear Page</button>
-        <button class="clear-btn" onclick="clearAll()">Clear All</button>
-    </div>
-
-    <div class="nav-buttons">
-'''
-
-    if page_num > 1:
-        html += f'        <a href="nmj_results_page_{page_num-1}.html">&larr; Previous</a>\n'
-    if page_num < total_pages:
-        html += f'        <a href="nmj_results_page_{page_num+1}.html">Next &rarr;</a>\n'
-
-    html += '''    </div>
-
-    <div class="grid">
-'''
-
-    for i, nmj in enumerate(nmjs):
-        conf = nmj['confidence']
-        conf_class = 'high' if conf >= 0.8 else ('medium' if conf >= 0.6 else 'low')
-        # Create unique ID for this NMJ across all pages
-        unique_id = f"{nmj['tile_x']}_{nmj['tile_y']}_{nmj['id']}"
-
-        html += f'''        <div class="card" data-id="{unique_id}" data-index="{i}">
-            <div class="annotation-status" style="display:none;"></div>
-            <img src="data:image/png;base64,{nmj['image_b64']}" alt="NMJ">
-            <div class="card-info">
-                <div class="confidence {conf_class}">Confidence: {conf*100:.1f}%</div>
-                <div class="features">
-                    <div class="feature">Area: {nmj['area_um2']:.1f} &mu;m&sup2;</div>
-                    <div class="feature">Elongation: {nmj['elongation']:.2f}</div>
-                    <div class="feature">Skeleton: {nmj['skeleton_length']} px</div>
-                    <div class="feature">ID: {nmj['id']}</div>
-                </div>
-                <div class="annotation-buttons">
-                    <button class="btn-yes" onclick="annotate('{unique_id}', 'yes', {i})">Yes</button>
-                    <button class="btn-no" onclick="annotate('{unique_id}', 'no', {i})">No</button>
-                </div>
-            </div>
-        </div>
-'''
-
-    html += '''    </div>
-
-    <div class="pagination">
-'''
-
-    # Show pagination links
-    for p in range(1, total_pages + 1):
-        if p == page_num:
-            html += f'        <a href="nmj_results_page_{p}.html" class="current">{p}</a>\n'
-        else:
-            html += f'        <a href="nmj_results_page_{p}.html">{p}</a>\n'
-
-    html += '''    </div>
-
-    <script>
-        const STORAGE_KEY = 'nmj_annotations';
-        const cards = document.querySelectorAll('.card');
-
-        function getAnnotations() {
-            const stored = localStorage.getItem(STORAGE_KEY);
-            return stored ? JSON.parse(stored) : {};
-        }
-
-        function saveAnnotations(annotations) {
-            localStorage.setItem(STORAGE_KEY, JSON.stringify(annotations));
-        }
-
-        function annotate(id, value, cardIndex) {
-            const annotations = getAnnotations();
-            // Toggle off if clicking same value
-            if (annotations[id] === value) {
-                delete annotations[id];
-                saveAnnotations(annotations);
-                clearCardUI(cardIndex);
-            } else {
-                annotations[id] = value;
-                saveAnnotations(annotations);
-                updateCardUI(cardIndex, value);
-            }
-            updateStats();
-        }
-
-        function clearCardUI(index) {
-            const card = cards[index];
-            card.classList.remove('annotated-yes', 'annotated-no');
-            const status = card.querySelector('.annotation-status');
-            status.style.display = 'none';
-            const yesBtn = card.querySelector('.btn-yes');
-            const noBtn = card.querySelector('.btn-no');
-            yesBtn.classList.remove('active');
-            noBtn.classList.remove('active');
-        }
-
-        function updateCardUI(index, value) {
-            const card = cards[index];
-            card.classList.remove('annotated-yes', 'annotated-no');
-            card.classList.add('annotated-' + value);
-
-            const status = card.querySelector('.annotation-status');
-            status.style.display = 'block';
-            status.className = 'annotation-status ' + value;
-            status.textContent = value.toUpperCase();
-
-            const yesBtn = card.querySelector('.btn-yes');
-            const noBtn = card.querySelector('.btn-no');
-            yesBtn.classList.toggle('active', value === 'yes');
-            noBtn.classList.toggle('active', value === 'no');
-        }
-
-        function updateStats() {
-            const annotations = getAnnotations();
-            let globalYes = 0, globalNo = 0, pageYes = 0, pageNo = 0;
-
-            for (const [id, val] of Object.entries(annotations)) {
-                if (val === 'yes') globalYes++;
-                else if (val === 'no') globalNo++;
-            }
-
-            cards.forEach(card => {
-                const id = card.dataset.id;
-                if (annotations[id] === 'yes') pageYes++;
-                else if (annotations[id] === 'no') pageNo++;
-            });
-
-            document.getElementById('global-yes').textContent = globalYes;
-            document.getElementById('global-no').textContent = globalNo;
-            document.getElementById('page-yes').textContent = pageYes;
-            document.getElementById('page-no').textContent = pageNo;
-        }
-
-        function exportAnnotations() {
-            const annotations = getAnnotations();
-            const data = {
-                exported_at: new Date().toISOString(),
-                total_yes: Object.values(annotations).filter(v => v === 'yes').length,
-                total_no: Object.values(annotations).filter(v => v === 'no').length,
-                annotations: annotations
-            };
-
-            const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' });
-            const url = URL.createObjectURL(blob);
-            const a = document.createElement('a');
-            a.href = url;
-            a.download = 'nmj_annotations.json';
-            a.click();
-            URL.revokeObjectURL(url);
-        }
-
-        function clearPage() {
-            if (!confirm('Clear all annotations on this page?')) return;
-            const annotations = getAnnotations();
-            cards.forEach((card, i) => {
-                const id = card.dataset.id;
-                if (annotations[id]) {
-                    delete annotations[id];
-                    clearCardUI(i);
-                }
-            });
-            saveAnnotations(annotations);
-            updateStats();
-        }
-
-        function clearAll() {
-            if (!confirm('Clear ALL annotations across all pages?')) return;
-            localStorage.removeItem(STORAGE_KEY);
-            cards.forEach((card, i) => clearCardUI(i));
-            updateStats();
-        }
-
-        // Initialize
-        (function() {
-            const annotations = getAnnotations();
-            cards.forEach((card, i) => {
-                const id = card.dataset.id;
-                if (annotations[id]) {
-                    updateCardUI(i, annotations[id]);
-                }
-            });
-            updateStats();
-        })();
-    </script>
-</body>
-</html>
-'''
-
-    return html
-
-
-def generate_index_html(displayed_nmjs, total_nmjs, total_candidates, slide_name, total_pages, pixel_size, min_area=0, min_confidence=0):
-    """Generate index page with summary."""
-
-    # Build filter info text
-    filter_parts = []
-    if min_area > 0:
-        filter_parts.append(f"area &ge; {min_area} &mu;m&sup2;")
-    if min_confidence > 0:
-        filter_parts.append(f"confidence &ge; {min_confidence:.0%}")
-    filter_text = " and ".join(filter_parts) if filter_parts else ""
-
-    html = f'''<!DOCTYPE html>
-<html>
-<head>
-    <title>NMJ Results - {slide_name}</title>
-    <style>
-        body {{
-            font-family: Arial, sans-serif;
-            background: #1a1a2e;
-            color: #eee;
-            margin: 0;
-            padding: 40px;
-            min-height: 100vh;
-        }}
-        .container {{
-            max-width: 800px;
-            margin: 0 auto;
-        }}
-        h1 {{
-            text-align: center;
-            color: #00ff88;
-            margin-bottom: 40px;
-        }}
-        .summary {{
-            background: #16213e;
-            padding: 30px;
-            border-radius: 15px;
-            margin-bottom: 30px;
-        }}
-        .summary h2 {{
-            margin-top: 0;
-            color: #fff;
-        }}
-        .stats-grid {{
-            display: grid;
-            grid-template-columns: repeat(2, 1fr);
-            gap: 20px;
-            margin: 30px 0;
-        }}
-        .stat-box {{
-            background: #0f3460;
-            padding: 25px;
-            border-radius: 10px;
-            text-align: center;
-        }}
-        .stat-box .value {{
-            font-size: 2.5em;
-            font-weight: bold;
-            color: #00ff88;
-        }}
-        .stat-box .label {{
-            color: #aaa;
-            margin-top: 10px;
-        }}
-        .start-btn {{
-            display: block;
-            text-align: center;
-            padding: 20px 40px;
-            background: #00ff88;
-            color: #000;
-            text-decoration: none;
-            border-radius: 10px;
-            font-size: 1.3em;
-            font-weight: bold;
-            margin: 40px auto;
-            max-width: 300px;
-        }}
-        .start-btn:hover {{
-            background: #00cc6a;
-        }}
-        .info {{
-            color: #888;
-            text-align: center;
-            margin-top: 20px;
-        }}
-        .filter-note {{
-            color: #f9a825;
-            text-align: center;
-            margin-top: 15px;
-            font-size: 0.9em;
-        }}
-    </style>
-</head>
-<body>
-    <div class="container">
-        <h1>NMJ Classification Results</h1>
-
-        <div class="summary">
-            <h2>{slide_name}</h2>
-
-            <div class="stats-grid">
-                <div class="stat-box">
-                    <div class="value">{displayed_nmjs}</div>
-                    <div class="label">NMJs Displayed</div>
-                </div>
-                <div class="stat-box">
-                    <div class="value">{total_nmjs}</div>
-                    <div class="label">Total Classified</div>
-                </div>
-                <div class="stat-box">
-                    <div class="value">{total_candidates}</div>
-                    <div class="label">Initial Candidates</div>
-                </div>
-                <div class="stat-box">
-                    <div class="value">{total_pages}</div>
-                    <div class="label">Pages</div>
-                </div>
-            </div>
-
-            <p class="info">Pixel size: {pixel_size:.4f} um/px</p>
-            {f'<p class="filter-note">Filtered: {filter_text} ({total_nmjs - displayed_nmjs} hidden)</p>' if filter_text else ''}
-        </div>
-
-        <a href="nmj_results_page_1.html" class="start-btn">View Results &rarr;</a>
-    </div>
-</body>
-</html>
-'''
-
-    return html
+## Removed local generate_html_page and generate_index_html functions ##
+# Now using shared export_samples_to_html from segmentation.io.html_export
 
 
 def main():
@@ -738,34 +142,85 @@ def main():
                         help='Output directory for HTML files')
     parser.add_argument('--channel', type=int, default=1,
                         help='Channel index')
-    parser.add_argument('--per-page', type=int, default=50,
-                        help='NMJs per page')
-    parser.add_argument('--min-area', type=float, default=0,
-                        help='Minimum area in um^2 to display')
-    parser.add_argument('--min-confidence', type=float, default=0,
-                        help='Minimum confidence to display')
+    parser.add_argument('--per-page', type=int, default=300,
+                        help='NMJs per page (default: 300 to match shared module)')
+    parser.add_argument('--min-area', type=float, default=27,
+                        help='Minimum area in um^2 to display (default: 27)')
+    parser.add_argument('--min-confidence', type=float, default=0.75,
+                        help='Minimum confidence to display (default: 0.75)')
+    parser.add_argument('--load-to-ram', action='store_true', default=True,
+                        help='Load entire channel into RAM for faster crop extraction (default: True)')
+    parser.add_argument('--no-load-to-ram', dest='load_to_ram', action='store_false',
+                        help='Disable RAM loading (use less memory but slower)')
     args = parser.parse_args()
 
+    # Setup logging
+    setup_logging(level="INFO")
+
     # Load results
-    print("Loading results...")
+    logger.info("Loading results...")
     with open(args.results_json) as f:
         results = json.load(f)
 
-    nmjs = results['nmjs']
-    print(f"Total NMJs: {len(nmjs)}")
+    # Handle both formats: list directly or dict with 'nmjs' key
+    if isinstance(results, list):
+        nmjs = results
+        slide_name = nmjs[0].get('slide_name', 'unknown') if nmjs else 'unknown'
+        # Normalize field names from run_segmentation.py format
+        for nmj in nmjs:
+            # Extract area_um2 from features if not at top level
+            if 'area_um2' not in nmj and 'features' in nmj:
+                feat = nmj['features']
+                pixel_size = 0.1725  # Default for this slide
+                if 'area' in feat:
+                    nmj['area_um2'] = feat['area'] * (pixel_size ** 2)
+                else:
+                    nmj['area_um2'] = 0
+            # Extract confidence from features if not at top level
+            if 'confidence' not in nmj and 'features' in nmj:
+                feat = nmj['features']
+                nmj['confidence'] = feat.get('prob_nmj', feat.get('confidence', 1.0))
+            # Map center to local_centroid if needed
+            if 'local_centroid' not in nmj and 'center' in nmj:
+                nmj['local_centroid'] = nmj['center']
+            # Extract tile coordinates from tile_origin if not present
+            if 'tile_x' not in nmj and 'tile_origin' in nmj:
+                nmj['tile_x'] = nmj['tile_origin'][0]
+                nmj['tile_y'] = nmj['tile_origin'][1]
+            # Extract display fields from features
+            if 'features' in nmj:
+                feat = nmj['features']
+                if 'elongation' not in nmj:
+                    nmj['elongation'] = feat.get('elongation', 0.0)
+                if 'skeleton_length' not in nmj:
+                    nmj['skeleton_length'] = feat.get('skeleton_length', 0)
+        # Build results dict with required fields
+        results = {
+            'slide_name': slide_name,
+            'nmjs': nmjs,
+            'total_nmjs': len(nmjs),
+            'total_candidates': len(nmjs),  # Same as total when loading from list
+            'pixel_size_um': 0.1725  # Default for this slide
+        }
+    else:
+        nmjs = results['nmjs']
+        slide_name = results.get('slide_name', 'unknown')
+
+    logger.info(f"Total NMJs: {len(nmjs)}")
 
     if not nmjs:
-        print("No NMJs to export!")
+        logger.warning("No NMJs to export!")
         return
 
     # Filter by area and confidence (but don't delete from results)
     original_count = len(nmjs)
     if args.min_area > 0 or args.min_confidence > 0:
         nmjs = [n for n in nmjs if n['area_um2'] >= args.min_area and n['confidence'] >= args.min_confidence]
-        print(f"After filtering (area >= {args.min_area} um², conf >= {args.min_confidence}): {len(nmjs)} ({original_count - len(nmjs)} filtered out)")
+        logger.info(f"After filtering (area >= {args.min_area} um^2, conf >= {args.min_confidence}): {len(nmjs)} ({original_count - len(nmjs)} filtered out)")
 
-    # Sort by area (largest first), then by confidence (highest first)
-    nmjs = sorted(nmjs, key=lambda x: (x['area_um2'], x['confidence']), reverse=True)
+    # Sort by area in descending order (largest first)
+    nmjs = sorted(nmjs, key=lambda x: x['area_um2'], reverse=True)
+    logger.info(f"Sorted by area descending - largest: {nmjs[0]['area_um2']:.1f} um^2, smallest: {nmjs[-1]['area_um2']:.1f} um^2")
 
     # Setup output
     if args.output_dir:
@@ -780,68 +235,86 @@ def main():
     else:
         # Auto-detect from results path
         seg_dir = Path(args.results_json).parent.parent / "tiles"
-    print(f"Segmentation directory: {seg_dir}")
+    logger.info(f"Segmentation directory: {seg_dir}")
 
-    # Load CZI
-    print("Loading CZI...")
-    reader = CziFile(str(args.czi_path))
+    # Load CZI using shared loader (RAM-first for better performance)
+    logger.info("Loading CZI...")
+    loader = CZILoader(args.czi_path, load_to_ram=args.load_to_ram, channel=args.channel)
+    logger.info(f"  Mosaic dimensions: {loader.width} x {loader.height}")
+    logger.info(f"  RAM loading: {args.load_to_ram}")
 
-    # Extract crops and add base64 images
-    print("Extracting crops with mask overlay...")
+    # Extract crops and convert to format expected by shared HTML export
+    logger.info("Extracting crops with mask overlay...")
+    html_samples = []
+    failed_crops = 0
+
     for nmj in tqdm(nmjs, desc="Extracting"):
-        crop = extract_crop_with_mask(
-            reader,
-            nmj['tile_x'],
-            nmj['tile_y'],
-            nmj['local_centroid'],
-            nmj['id'],
-            args.channel,
-            seg_dir
-        )
-        if crop:
-            nmj['image_b64'] = image_to_base64(crop)
-        else:
-            nmj['image_b64'] = ''
+        try:
+            crop = extract_crop_with_mask(
+                loader,
+                nmj['tile_x'],
+                nmj['tile_y'],
+                nmj['local_centroid'],
+                nmj['id'],
+                seg_dir
+            )
+            if crop:
+                # image_to_base64 returns (base64_string, mime_type)
+                img_b64, mime = image_to_base64(np.array(crop))
 
-    # Filter out any without images
-    nmjs = [n for n in nmjs if n['image_b64']]
-    print(f"NMJs with valid crops: {len(nmjs)}")
+                # Build unique ID for this NMJ
+                unique_id = f"{nmj['tile_x']}_{nmj['tile_y']}_{nmj['id']}"
 
-    # Generate pages
-    per_page = args.per_page
-    total_pages = (len(nmjs) + per_page - 1) // per_page
+                # Build sample dict in format expected by shared HTML export
+                html_samples.append({
+                    'uid': unique_id,
+                    'image': img_b64,
+                    'mime_type': mime,
+                    'stats': {
+                        'area_um2': nmj['area_um2'],
+                        'confidence': nmj['confidence'],
+                        'elongation': nmj.get('elongation', 0.0),
+                    }
+                })
+            else:
+                failed_crops += 1
+        except Exception as e:
+            logger.error(f"Extracting crop for NMJ {nmj['id']}: {e}")
+            failed_crops += 1
 
-    print(f"Generating {total_pages} HTML pages...")
-    for page_num in range(1, total_pages + 1):
-        start_idx = (page_num - 1) * per_page
-        end_idx = start_idx + per_page
-        page_nmjs = nmjs[start_idx:end_idx]
+    if failed_crops > 0:
+        logger.warning(f"{failed_crops} crops failed to extract")
 
-        html = generate_html_page(page_nmjs, page_num, total_pages, results['slide_name'])
+    logger.info(f"NMJs with valid crops: {len(html_samples)}")
 
-        output_file = output_dir / f"nmj_results_page_{page_num}.html"
-        with open(output_file, 'w') as f:
-            f.write(html)
+    if not html_samples:
+        logger.error("No valid crops to export!")
+        return
 
-    # Generate index
-    index_html = generate_index_html(
-        len(nmjs),  # displayed count (after filtering)
-        results['total_nmjs'],  # total classified
-        results['total_candidates'],
-        results['slide_name'],
-        total_pages,
-        results['pixel_size_um'],
-        min_area=args.min_area,
-        min_confidence=args.min_confidence
+    # Build filter subtitle
+    filter_parts = []
+    if args.min_area > 0:
+        filter_parts.append(f"area >= {args.min_area} um^2")
+    if args.min_confidence > 0:
+        filter_parts.append(f"confidence >= {args.min_confidence:.0%}")
+    subtitle = f"Filtered: {', '.join(filter_parts)}" if filter_parts else None
+
+    # Use shared HTML export function with consistent naming
+    logger.info("Generating HTML pages using shared module...")
+    n_samples, n_pages = export_samples_to_html(
+        samples=html_samples,
+        output_dir=str(output_dir),
+        cell_type='nmj',
+        samples_per_page=args.per_page,
+        title=f'NMJ Results - {slide_name}',
+        subtitle=subtitle,
+        page_prefix='nmj_page',  # Consistent naming with run_segmentation.py
+        experiment_name=slide_name,
     )
 
-    index_file = output_dir / "index.html"
-    with open(index_file, 'w') as f:
-        f.write(index_html)
-
-    print(f"\nHTML export complete!")
-    print(f"Output directory: {output_dir}")
-    print(f"Open {index_file} to view results")
+    logger.info("HTML export complete!")
+    logger.info(f"Output directory: {output_dir}")
+    logger.info(f"Exported {n_samples} samples to {n_pages} pages")
 
 
 if __name__ == '__main__':

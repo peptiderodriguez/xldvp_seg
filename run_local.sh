@@ -13,7 +13,7 @@ set -e  # Exit on error
 # ============================================================================
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 CZI_BASE="/mnt/x/01_Users/EdRo_axioscan/bonemarrow/2025_11_18"
-OUTPUT_BASE="$HOME/BM_MK_seg_output"
+OUTPUT_BASE="$HOME/xldvp_seg_output"
 
 # ============================================================================
 # PROCESSING PARAMETERS - Optimized for RTX 4090 + 432GB RAM
@@ -53,7 +53,7 @@ ALL_SLIDES=(
 mkdir -p "$OUTPUT_BASE"
 
 echo "=============================================="
-echo "BM MK Segmentation - Local Run"
+echo "Cell Segmentation - Local Run"
 echo "=============================================="
 echo "Mode:          $MODE"
 echo "CZI source:    $CZI_BASE"

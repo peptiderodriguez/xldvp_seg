@@ -1,4 +1,4 @@
-# AI Agent Guide - BM_MK_seg Pipeline
+# AI Agent Guide - xldvp_seg Pipeline
 
 This document provides comprehensive technical details for AI agents working with this codebase. It explains the architecture, data flow, integration points, and common tasks.
 
@@ -407,8 +407,8 @@ else:
 
 **Step 1: Clone and setup**
 ```bash
-git clone https://github.com/peptiderodriguez/BM_MK_seg.git
-cd BM_MK_seg
+git clone https://github.com/peptiderodriguez/xldvp_seg.git
+cd xldvp_seg
 conda create -n mkseg python=3.10
 conda activate mkseg
 pip install torch torchvision --index-url https://download.pytorch.org/whl/cu118
@@ -419,7 +419,7 @@ pip install -r requirements.txt
 ```bash
 nano run_all_slides_local.sh
 # Edit: CZI_BASE="/your/actual/path/to/czi/files"
-# Edit: OUTPUT_BASE="$HOME/BM_MK_seg_output"
+# Edit: OUTPUT_BASE="$HOME/xldvp_seg_output"
 ```
 
 **Step 3: Run 10% segmentation**

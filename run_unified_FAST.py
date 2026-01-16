@@ -17,6 +17,27 @@ Usage:
 import os
 from pathlib import Path
 
+# Early logging import for module-level logger
+from segmentation.utils.logging import get_logger, setup_logging, log_parameters
+from segmentation.utils.feature_extraction import extract_resnet_features_batch, preprocess_crop_for_resnet
+from segmentation.io.czi_loader import get_loader, CZILoader
+from segmentation.io.html_export import (
+    create_hdf5_dataset,
+    draw_mask_contour,
+    percentile_normalize,
+    get_largest_connected_component,
+    HDF5_COMPRESSION_KWARGS,
+    HDF5_COMPRESSION_NAME,
+)
+from segmentation.detection.tissue import (
+    calibrate_tissue_threshold,
+    filter_tissue_tiles,
+    has_tissue,
+    calculate_block_variances,
+)
+
+logger = get_logger(__name__)
+
 # Auto-detect checkpoint directory (local or cluster)
 _script_dir = Path(__file__).parent.resolve()
 _checkpoint_candidates = [
@@ -51,82 +72,13 @@ import base64
 from io import BytesIO
 import re
 
-# Try to use LZ4 compression (faster than gzip), fallback to gzip
-try:
-    import hdf5plugin
-    # LZ4 is ~3-5x faster than gzip with similar compression ratio for image masks
-    HDF5_COMPRESSION_KWARGS = hdf5plugin.LZ4(nbytes=0)  # Returns dict-like for **unpacking
-    HDF5_COMPRESSION_NAME = "LZ4"
-except ImportError:
-    HDF5_COMPRESSION_KWARGS = {'compression': 'gzip'}
-    HDF5_COMPRESSION_NAME = "gzip"
-
-
-def create_hdf5_dataset(f, name, data):
-    """Create HDF5 dataset with best available compression (LZ4 or gzip)."""
-    if isinstance(HDF5_COMPRESSION_KWARGS, dict):
-        f.create_dataset(name, data=data, **HDF5_COMPRESSION_KWARGS)
-    else:
-        # hdf5plugin filter object
-        f.create_dataset(name, data=data, **HDF5_COMPRESSION_KWARGS)
-
 
 # =============================================================================
 # HTML EXPORT FUNCTIONS (integrated to use slide data in RAM)
 # =============================================================================
 
-def get_largest_connected_component(mask):
-    """Extract only the largest connected component from a binary mask."""
-    from scipy import ndimage
-    labeled, num_features = ndimage.label(mask)
-    if num_features == 0:
-        return mask
-    # Find largest component
-    sizes = ndimage.sum(mask, labeled, range(1, num_features + 1))
-    largest_label = np.argmax(sizes) + 1
-    return labeled == largest_label
-
-
-def draw_mask_contour(img_array, mask, color=(144, 238, 144), dotted=True):
-    """
-    Draw mask contour on image as dotted light green line.
-
-    Args:
-        img_array: numpy array (H, W, 3) uint8
-        mask: binary mask (H, W)
-        color: RGB tuple for contour color (default: light green)
-        dotted: if True, draw dotted line
-
-    Returns:
-        img_array with contour drawn
-    """
-    from scipy import ndimage
-
-    # Find contour by detecting edges of the mask
-    # Dilate then subtract original to get the outline (6px thick)
-    dilated = ndimage.binary_dilation(mask, iterations=6)
-    contour = dilated & ~mask
-
-    # Get contour pixel coordinates
-    ys, xs = np.where(contour)
-
-    if len(ys) == 0:
-        return img_array
-
-    img_out = img_array.copy()
-
-    if dotted:
-        # Draw every other pixel for dotted effect
-        for i, (y, x) in enumerate(zip(ys, xs)):
-            if i % 2 == 0:  # Dotted pattern
-                if 0 <= y < img_out.shape[0] and 0 <= x < img_out.shape[1]:
-                    img_out[y, x] = color
-    else:
-        for y, x in zip(ys, xs):
-            if 0 <= y < img_out.shape[0] and 0 <= x < img_out.shape[1]:
-                img_out[y, x] = color
-
-    return img_out
+# Note: create_hdf5_dataset, get_largest_connected_component, draw_mask_contour,
+# and percentile_normalize are imported from segmentation.io.html_export
 
 
 def load_samples_from_ram(tiles_dir, slide_image, pixel_size_um, cell_type='mk', max_samples=None):
@@ -169,7 +121,8 @@ def load_samples_from_ram(tiles_dir, slide_image, pixel_size_um, cell_type='mk',
                 tile_x1, tile_x2 = int(matches[1][0]), int(matches[1][1])
             else:
                 continue
-        except:
+        except Exception as e:
+            logger.debug(f"Failed to parse tile coordinates from {seg_file.parent.name}: {e}")
             continue
 
         # Load features
@@ -195,7 +148,8 @@ def load_samples_from_ram(tiles_dir, slide_image, pixel_size_um, cell_type='mk',
 
             try:
                 cell_idx = int(det_id.split('_')[1]) + 1
-            except:
+            except Exception as e:
+                logger.debug(f"Failed to parse cell index from {det_id}: {e}")
                 continue
 
             cell_mask = masks == cell_idx
@@ -247,7 +201,8 @@ def load_samples_from_ram(tiles_dir, slide_image, pixel_size_um, cell_type='mk',
 
             try:
                 crop = slide_image[global_y1:global_y2, global_x1:global_x2]
-            except Exception:
+            except Exception as e:
+                logger.debug(f"Failed to extract crop at ({global_x1}, {global_y1}): {e}")
                 continue
 
             if crop is None or crop.size == 0:
@@ -590,13 +545,13 @@ def generate_export_page_html(samples, cell_type, page_num, total_pages):
 def generate_export_pages(samples, cell_type, output_dir, samples_per_page):
     """Generate separate pages for a single cell type."""
     if not samples:
-        print(f"  No {cell_type.upper()} samples to export")
+        logger.info(f"  No {cell_type.upper()} samples to export")
         return
 
     pages = [samples[i:i+samples_per_page] for i in range(0, len(samples), samples_per_page)]
     total_pages = len(pages)
 
-    print(f"  Generating {total_pages} {cell_type.upper()} pages...")
+    logger.info(f"  Generating {total_pages} {cell_type.upper()} pages...")
 
     for page_num in range(1, total_pages + 1):
         page_samples = pages[page_num - 1]
@@ -620,9 +575,9 @@ def export_html_from_ram(slide_data, output_base, html_output_dir, samples_per_p
         mk_min_area_um: Min MK area filter
         mk_max_area_um: Max MK area filter
     """
-    print(f"\n{'='*70}")
-    print("EXPORTING HTML (using images in RAM)")
-    print(f"{'='*70}")
+    logger.info(f"\n{'='*70}")
+    logger.info("EXPORTING HTML (using images in RAM)")
+    logger.info(f"{'='*70}")
 
     html_output_dir = Path(html_output_dir)
     html_output_dir.mkdir(parents=True, exist_ok=True)
@@ -637,7 +592,7 @@ def export_html_from_ram(slide_data, output_base, html_output_dir, samples_per_p
         if not slide_dir.exists():
             continue
 
-        print(f"  Loading {slide_name}...", flush=True)
+        logger.info(f"  Loading {slide_name}...")
 
         # Get pixel size from summary
         summary_file = slide_dir / "summary.json"
@@ -674,7 +629,7 @@ def export_html_from_ram(slide_data, output_base, html_output_dir, samples_per_p
         all_mk_samples.extend(mk_samples)
         all_hspc_samples.extend(hspc_samples)
 
-        print(f"    {len(mk_samples)} MKs, {len(hspc_samples)} HSPCs")
+        logger.info(f"    {len(mk_samples)} MKs, {len(hspc_samples)} HSPCs")
 
     # Filter MK by size
     um_to_px_factor = PIXEL_SIZE_UM ** 2
@@ -683,7 +638,7 @@ def export_html_from_ram(slide_data, output_base, html_output_dir, samples_per_p
 
     mk_before = len(all_mk_samples)
     all_mk_samples = [s for s in all_mk_samples if mk_min_px <= s.get('area_px', 0) <= mk_max_px]
-    print(f"  MK size filter: {mk_before} -> {len(all_mk_samples)}")
+    logger.info(f"  MK size filter: {mk_before} -> {len(all_mk_samples)}")
 
     # Sort by area
     all_mk_samples.sort(key=lambda x: x.get('area_um2', 0), reverse=True)
@@ -698,8 +653,8 @@ def export_html_from_ram(slide_data, output_base, html_output_dir, samples_per_p
     hspc_pages = (len(all_hspc_samples) + samples_per_page - 1) // samples_per_page if all_hspc_samples else 0
     create_export_index(html_output_dir, len(all_mk_samples), len(all_hspc_samples), mk_pages, hspc_pages)
 
-    print(f"\n  HTML export complete: {html_output_dir}")
-    print(f"  Total: {len(all_mk_samples)} MKs, {len(all_hspc_samples)} HSPCs")
+    logger.info(f"\n  HTML export complete: {html_output_dir}")
+    logger.info(f"  Total: {len(all_mk_samples)} MKs, {len(all_hspc_samples)} HSPCs")
 
 
 # Global variable for worker process
@@ -717,8 +672,9 @@ def init_worker(mk_classifier_path, hspc_classifier_path, gpu_queue, mm_path, mm
             # Get a GPU ID from the queue
             gpu_id = gpu_queue.get(timeout=5)
             device = f"cuda:{gpu_id}"
-        except:
+        except Exception as e:
             # Fallback: simple modulo or default
+            logger.debug(f"GPU queue timeout, using fallback assignment: {e}")
             n_gpus = torch.cuda.device_count()
             if n_gpus > 0:
                 gpu_id = mp.current_process().pid % n_gpus
@@ -726,7 +682,7 @@ def init_worker(mk_classifier_path, hspc_classifier_path, gpu_queue, mm_path, mm
             else:
                 device = "cuda"
     
-    print(f"Worker {mp.current_process().pid} initialized on {device}", flush=True)
+    logger.info(f"Worker {mp.current_process().pid} initialized on {device}")
     
     # Initialize Segmenter
     segmenter = UnifiedSegmenter(
@@ -738,9 +694,9 @@ def init_worker(mk_classifier_path, hspc_classifier_path, gpu_queue, mm_path, mm
     # Attach to Memory Map (Read-Only)
     try:
         shared_image = np.memmap(mm_path, dtype=mm_dtype, mode='r', shape=mm_shape)
-        print(f"Worker {mp.current_process().pid} attached to memmap: {mm_path}", flush=True)
+        logger.info(f"Worker {mp.current_process().pid} attached to memmap: {mm_path}")
     except Exception as e:
-        print(f"Worker {mp.current_process().pid} FAILED to attach to memmap: {e}", flush=True)
+        logger.error(f"Worker {mp.current_process().pid} FAILED to attach to memmap: {e}")
         shared_image = None
 
 def process_tile_worker(args):
@@ -852,9 +808,9 @@ def _apply_rocm_patch_if_needed():
 
         # Apply the patch
         amg.mask_to_rle_pytorch = mask_to_rle_pytorch_rocm_safe
-        print("[ROCm FIX] Patched sam2.utils.amg.mask_to_rle_pytorch for INT_MAX workaround")
+        logger.info("[ROCm FIX] Patched sam2.utils.amg.mask_to_rle_pytorch for INT_MAX workaround")
     except ImportError as e:
-        print(f"[ROCm FIX] Could not apply patch: {e}")
+        logger.info(f"[ROCm FIX] Could not apply patch: {e}")
 
 def get_pixel_size_from_czi(czi_path):
     """Extract pixel size in microns from CZI metadata."""
@@ -879,144 +835,9 @@ def get_pixel_size_from_czi(czi_path):
     raise ValueError(f"Could not extract pixel size from {czi_path}")
 
 
-def percentile_normalize(image, p_low=5, p_high=95):
-    """
-    Normalize image intensity using percentile scaling.
-    Maps p_low to p_high percentile range to 0-255.
-    Reduces slide-to-slide variation from staining differences.
-    """
-    if image.ndim == 2:
-        low_val = np.percentile(image, p_low)
-        high_val = np.percentile(image, p_high)
-        if high_val > low_val:
-            normalized = (image.astype(np.float32) - low_val) / (high_val - low_val) * 255
-            return np.clip(normalized, 0, 255).astype(np.uint8)
-        return image.astype(np.uint8)
-    elif image.ndim == 3:
-        # Normalize each channel independently
-        result = np.zeros_like(image, dtype=np.uint8)
-        for c in range(image.shape[2]):
-            result[:, :, c] = percentile_normalize(image[:, :, c], p_low, p_high)
-        return result
-    return image
-
-
-def calculate_block_variances(gray_image, block_size=512):
-    """Calculate variance for each block in the image."""
-    variances = []
-    height, width = gray_image.shape
-
-    for y in range(0, height, block_size):
-        for x in range(0, width, block_size):
-            block = gray_image[y:y+block_size, x:x+block_size]
-            if block.size < (block_size * block_size) / 4:
-                continue
-            variances.append(np.var(block))
-
-    return variances
-
-
-def calibrate_tissue_threshold(tiles, reader=None, x_start=0, y_start=0, calibration_samples=50, block_size=512, image_array=None):
-    """
-    Auto-detect variance threshold using K-means clustering.
-    Supports reading from CZI reader OR memory-mapped/shared array.
-    """
-    import cv2
-    from sklearn.cluster import KMeans
-
-    print(f"Calibrating tissue threshold (K-means 3-cluster on {calibration_samples} random tiles)...")
-
-    # Sample 50 tiles
-    n_calibration = calibration_samples
-    np.random.seed(42)
-    calibration_tiles = list(np.random.choice(tiles, min(n_calibration, len(tiles)), replace=False))
-
-    all_variances = []
-    empty_count = 0
-
-    for tile in calibration_tiles:
-        # Extract tile from Array (Preferred) or CZI
-        if image_array is not None:
-            # image_array is (H, W, C) or (H, W) matching the tiles grid
-            img = image_array[tile['y']:tile['y']+tile['h'], tile['x']:tile['x']+tile['w']]
-        elif reader is not None:
-            roi = (x_start + tile['x'], y_start + tile['y'], tile['w'], tile['h'])
-            try:
-                img = reader.read(roi=roi, plane={'C': 0})
-            except:
-                continue
-        else:
-            continue
-
-        # Empty tiles contribute low variance (important for calibration)
-        if img.max() == 0:
-            n_blocks = (tile['w'] // block_size) * (tile['h'] // block_size)
-            all_variances.extend([0.0] * max(1, n_blocks))
-            empty_count += 1
-            continue
-
-        # Percentile normalize (5-95%) to standardize variance across slides
-        if img.ndim == 3:
-            img_norm = percentile_normalize(img, p_low=5, p_high=95)
-            gray = cv2.cvtColor(img_norm, cv2.COLOR_RGB2GRAY)
-        else:
-            gray = percentile_normalize(img, p_low=5, p_high=95)
-
-        block_vars = calculate_block_variances(gray, block_size)
-        if block_vars:
-            all_variances.extend(block_vars)
-
-    if len(all_variances) < 20:
-        print("  WARNING: Not enough samples, using default threshold 15.0")
-        return 15.0
-
-    variances = np.array(all_variances)
-
-    # K-means with 3 clusters: background (low var), tissue (medium var), artifacts (high var)
-    kmeans = KMeans(n_clusters=3, random_state=42, n_init=10).fit(variances.reshape(-1, 1))
-    labels = kmeans.labels_
-    centers = kmeans.cluster_centers_.flatten()
-
-    # Find the bottom cluster (lowest center = background)
-    sorted_indices = np.argsort(centers)
-    bottom_cluster_idx = sorted_indices[0]
-
-    # Threshold = max variance in the bottom cluster (to exclude all background blocks)
-    bottom_cluster_variances = variances[labels == bottom_cluster_idx]
-    threshold = float(np.max(bottom_cluster_variances)) if len(bottom_cluster_variances) > 0 else 15.0
-
-    print(f"  K-means centers: {sorted(centers)[0]:.1f} (bg), {sorted(centers)[1]:.1f} (tissue), {sorted(centers)[2]:.1f} (outliers)")
-    print(f"  Threshold (bg cluster max): {threshold:.1f}")
-    print(f"  Sampled {len(calibration_tiles)} tiles ({empty_count} empty), {len(variances)} blocks")
-
-    return threshold
-
-
-def has_tissue(tile_image, variance_threshold, min_tissue_fraction=0.15, block_size=512):
-    """
-    Check if a tile contains tissue using block-based variance.
-    """
-    import cv2
-
-    # Handle all-black tiles (empty CZI regions)
-    if tile_image.max() == 0:
-        return False, 0.0
-
-    # Convert to grayscale (already normalized)
-    if tile_image.ndim == 3:
-        gray = cv2.cvtColor(tile_image.astype(np.uint8), cv2.COLOR_RGB2GRAY)
-    else:
-        gray = tile_image.astype(np.uint8)
-
-    variances = calculate_block_variances(gray, block_size)
-
-    if len(variances) == 0:
-        return False, 0.0
-
-    tissue_blocks = sum(1 for v in variances if v >= variance_threshold)
-    tissue_fraction = tissue_blocks / len(variances)
-
-    return tissue_fraction >= min_tissue_fraction, tissue_fraction
+# Note: percentile_normalize is imported from segmentation.io.html_export
+# Note: calibrate_tissue_threshold, filter_tissue_tiles, has_tissue, and
+#       calculate_block_variances are imported from segmentation.detection.tissue
 
 
 def extract_morphological_features(mask, image):
@@ -1050,13 +871,13 @@ def extract_morphological_features(mask, image):
 
     gray_mean, gray_std = float(np.mean(gray)), float(np.std(gray))
 
-    # HSV features
+    # HSV features (vectorized for speed)
     if image.ndim == 3:
-        import colorsys
-        hsv = np.array([colorsys.rgb_to_hsv(r/255, g/255, b/255) for r, g, b in masked_pixels])
-        hue_mean = float(np.mean(hsv[:, 0]) * 180)
-        sat_mean = float(np.mean(hsv[:, 1]) * 255)
-        val_mean = float(np.mean(hsv[:, 2]) * 255)
+        from segmentation.utils.feature_extraction import compute_hsv_features
+        hsv_feats = compute_hsv_features(masked_pixels, sample_size=100)
+        hue_mean = hsv_feats['hue_mean']
+        sat_mean = hsv_feats['saturation_mean']
+        val_mean = hsv_feats['value_mean']
     else:
         hue_mean = sat_mean = 0.0
         val_mean = gray_mean
@@ -1128,7 +949,7 @@ class UnifiedSegmenter:
             # Default to local path (will fail with helpful error if missing)
             checkpoint_path = script_dir / "checkpoints" / Path(sam2_checkpoint).name
 
-        print(f"Loading SAM2 from {checkpoint_path}...")
+        logger.info(f"Loading SAM2 from {checkpoint_path}...")
         sam2_model = build_sam2(sam2_config, str(checkpoint_path), device=self.device)
 
         # SAM2 for auto mask generation (MKs)
@@ -1145,11 +966,11 @@ class UnifiedSegmenter:
         self.sam2_predictor = SAM2ImagePredictor(sam2_model)
 
         # Cellpose-SAM for HSPC detection (v4+ with SAM backbone)
-        print(f"Loading Cellpose-SAM model on {self.device}...")
+        logger.info(f"Loading Cellpose-SAM model on {self.device}...")
         self.cellpose = CellposeModel(pretrained_model='cpsam', gpu=True, device=self.device)
 
         # ResNet for deep features
-        print("Loading ResNet-50...")
+        logger.info("Loading ResNet-50...")
         resnet = tv_models.resnet50(weights='DEFAULT')
         self.resnet = torch.nn.Sequential(*list(resnet.children())[:-1])
         self.resnet.eval().to(self.device)
@@ -1167,22 +988,22 @@ class UnifiedSegmenter:
         self.hspc_feature_names = None
 
         if mk_classifier_path:
-            print(f"Loading MK classifier: {mk_classifier_path}")
+            logger.info(f"Loading MK classifier: {mk_classifier_path}")
             import joblib
             clf_data = joblib.load(mk_classifier_path)
             self.mk_classifier = clf_data['classifier']
             self.mk_feature_names = clf_data['feature_names']
-            print(f"  Features: {len(self.mk_feature_names)}, Trained on {clf_data.get('n_samples', '?')} samples")
+            logger.info(f"  Features: {len(self.mk_feature_names)}, Trained on {clf_data.get('n_samples', '?')} samples")
 
         if hspc_classifier_path:
-            print(f"Loading HSPC classifier: {hspc_classifier_path}")
+            logger.info(f"Loading HSPC classifier: {hspc_classifier_path}")
             import joblib
             clf_data = joblib.load(hspc_classifier_path)
             self.hspc_classifier = clf_data['classifier']
             self.hspc_feature_names = clf_data['feature_names']
-            print(f"  Features: {len(self.hspc_feature_names)}, Trained on {clf_data.get('n_samples', '?')} samples")
+            logger.info(f"  Features: {len(self.hspc_feature_names)}, Trained on {clf_data.get('n_samples', '?')} samples")
 
-        print("Models loaded.")
+        logger.info("Models loaded.")
 
     def apply_classifier(self, features_dict, cell_type):
         """Apply classifier to features and return (is_positive, confidence).
@@ -1224,28 +1045,86 @@ class UnifiedSegmenter:
             features = self.resnet(tensor).cpu().numpy().flatten()
         return features
 
+    def extract_resnet_features_batch(self, crops, batch_size=16):
+        """
+        Extract ResNet features for multiple crops in batches for GPU efficiency.
+
+        This method significantly improves GPU utilization by processing multiple
+        crops at once instead of one at a time.
+
+        Args:
+            crops: List of image crops as numpy arrays
+            batch_size: Number of crops to process at once (default 16)
+
+        Returns:
+            List of feature vectors as numpy arrays (2048D each)
+        """
+        return extract_resnet_features_batch(
+            crops,
+            self.resnet,
+            self.resnet_transform,
+            self.device,
+            batch_size=batch_size
+        )
+
     def extract_sam2_embedding(self, cy, cx):
-        """Extract 256D SAM2 embedding at location."""
+        """Extract 256D SAM2 embedding at location.
+
+        Args:
+            cy: Y coordinate (row) in image space
+            cx: X coordinate (col) in image space
+
+        Returns:
+            256D SAM2 embedding vector
+        """
         try:
-            emb_y = int(cy / 16)
-            emb_x = int(cx / 16)
-            shape = self.sam2_predictor._features.shape
-            emb_y = min(max(0, emb_y), shape[2] - 1)
-            emb_x = min(max(0, emb_x), shape[3] - 1)
-            return self.sam2_predictor._features[0, :, emb_y, emb_x].cpu().numpy()
-        except:
+            # Get feature map shape and image dimensions for proper scaling
+            # SAM2 features are stored as [batch, channels, H, W]
+            if hasattr(self.sam2_predictor, '_features'):
+                features = self.sam2_predictor._features
+                if isinstance(features, dict) and "image_embed" in features:
+                    features = features["image_embed"]
+                shape = features.shape
+                emb_h, emb_w = shape[2], shape[3]
+
+                # Get original image dimensions for proper coordinate mapping
+                if hasattr(self.sam2_predictor, '_orig_hw'):
+                    img_h, img_w = self.sam2_predictor._orig_hw
+                else:
+                    # Fallback to assuming 16x downsampling
+                    img_h, img_w = emb_h * 16, emb_w * 16
+
+                # Map image coordinates to embedding coordinates
+                emb_y = int(cy / img_h * emb_h)
+                emb_x = int(cx / img_w * emb_w)
+                emb_y = min(max(0, emb_y), emb_h - 1)
+                emb_x = min(max(0, emb_x), emb_w - 1)
+
+                return features[0, :, emb_y, emb_x].cpu().numpy()
+            return np.zeros(256)
+        except Exception as e:
+            logger.debug(f"Failed to extract SAM2 embedding: {e}")
             return np.zeros(256)
 
     def process_tile(
         self,
         image_rgb,
         mk_min_area=1000,
-        mk_max_area=100000
+        mk_max_area=100000,
+        resnet_batch_size=16
     ):
         """Process a single tile for both MKs and HSPCs.
 
+        Uses batch ResNet feature extraction for improved GPU utilization.
+
         Note: mk_min_area/mk_max_area only filter MKs, not HSPCs.
         Cellpose-SAM handles HSPC detection without size parameters.
+
+        Args:
+            image_rgb: RGB image array
+            mk_min_area: Minimum MK area in pixels
+            mk_max_area: Maximum MK area in pixels
+            resnet_batch_size: Batch size for ResNet feature extraction (default 16)
 
         Returns:
             mk_masks: Label array for MKs
@@ -1276,9 +1155,10 @@ class UnifiedSegmenter:
         gc.collect()
 
         mk_masks = np.zeros(image_rgb.shape[:2], dtype=np.uint32)
-        mk_features = []
+        mk_valid_detections = []  # Collect valid detections for batch processing
         mk_id = 1
 
+        # First pass: filter overlaps and collect valid MK detections
         for result in valid_results:
             mask = result['segmentation']
             # Ensure boolean type for indexing (critical for NVIDIA CUDA compatibility)
@@ -1297,39 +1177,77 @@ class UnifiedSegmenter:
             # Get centroid
             cy, cx = ndimage.center_of_mass(mask)
 
-            # Extract all features
-            morph = extract_morphological_features(mask, image_rgb)
-
-            # SAM2 embeddings
-            sam2_emb = self.extract_sam2_embedding(cy, cx)
-            for i, v in enumerate(sam2_emb):
-                morph[f'sam2_emb_{i}'] = float(v)
-
-            # ResNet features from masked crop
-            ys, xs = np.where(mask)
-            y1, y2 = ys.min(), ys.max()
-            x1, x2 = xs.min(), xs.max()
-            crop = image_rgb[y1:y2+1, x1:x2+1].copy()
-            crop_mask = mask[y1:y2+1, x1:x2+1]
-            crop[~crop_mask] = 0
-
-            resnet_feats = self.extract_resnet_features(crop)
-            for i, v in enumerate(resnet_feats):
-                morph[f'resnet_{i}'] = float(v)
-
-            mk_features.append({
-                'id': f'det_{mk_id}',
-                'center': [float(cx), float(cy)],
+            mk_valid_detections.append({
+                'id': mk_id,
+                'mask': mask,
+                'cy': cy,
+                'cx': cx,
                 'sam2_iou': float(result.get('predicted_iou', 0)),
-                'sam2_stability': float(result.get('stability_score', 0)),
-                'features': morph
+                'sam2_stability': float(result.get('stability_score', 0))
             })
-
             mk_id += 1
 
         # Delete valid_results to free memory (large mask arrays)
         del valid_results
         gc.collect()
+
+        # Batch feature extraction for MKs
+        mk_features = []
+        if mk_valid_detections:
+            # Extract morphological and SAM2 features, collect crops
+            mk_crops = []
+            mk_crop_indices = []
+
+            for idx, det in enumerate(mk_valid_detections):
+                mask = det['mask']
+                cy, cx = det['cy'], det['cx']
+
+                # Extract morphological features
+                morph = extract_morphological_features(mask, image_rgb)
+
+                # SAM2 embeddings
+                sam2_emb = self.extract_sam2_embedding(cy, cx)
+                for i, v in enumerate(sam2_emb):
+                    morph[f'sam2_emb_{i}'] = float(v)
+
+                det['morph'] = morph
+
+                # Prepare crop for batch ResNet processing
+                ys, xs = np.where(mask)
+                if len(ys) > 0:
+                    y1, y2 = ys.min(), ys.max()
+                    x1, x2 = xs.min(), xs.max()
+                    crop = image_rgb[y1:y2+1, x1:x2+1].copy()
+                    crop_mask = mask[y1:y2+1, x1:x2+1]
+                    crop[~crop_mask] = 0
+                    mk_crops.append(crop)
+                    mk_crop_indices.append(idx)
+
+            # Batch ResNet feature extraction
+            if mk_crops:
+                resnet_features_list = self.extract_resnet_features_batch(mk_crops, batch_size=resnet_batch_size)
+
+                # Assign ResNet features to correct detections
+                for crop_idx, resnet_feats in zip(mk_crop_indices, resnet_features_list):
+                    for i, v in enumerate(resnet_feats):
+                        mk_valid_detections[crop_idx]['morph'][f'resnet_{i}'] = float(v)
+
+            # Fill zeros for detections without valid crops
+            for det in mk_valid_detections:
+                if f'resnet_0' not in det['morph']:
+                    for i in range(2048):
+                        det['morph'][f'resnet_{i}'] = 0.0
+
+            # Build final MK features list
+            for det in mk_valid_detections:
+                mk_features.append({
+                    'id': f'det_{det["id"]}',
+                    'center': [float(det['cx']), float(det['cy'])],
+                    'sam2_iou': det['sam2_iou'],
+                    'sam2_stability': det['sam2_stability'],
+                    'features': det['morph']
+                })
+
         torch.cuda.empty_cache()  # Clear GPU cache after MK processing
 
         # ============================================
@@ -1393,9 +1311,10 @@ class UnifiedSegmenter:
         hspc_candidates.sort(key=lambda x: x['score'], reverse=True)
 
         hspc_masks = np.zeros(image_rgb.shape[:2], dtype=np.uint32)
-        hspc_features = []
+        hspc_valid_detections = []  # Collect valid detections for batch processing
         hspc_id = 1
 
+        # First pass: filter overlaps and collect valid HSPC detections
         for cand in hspc_candidates:
             sam2_mask = cand['mask']
             # Ensure boolean type for indexing (critical for NVIDIA CUDA compatibility)
@@ -1413,40 +1332,77 @@ class UnifiedSegmenter:
             # Add to label array
             hspc_masks[sam2_mask] = hspc_id
 
-            # Extract features
-            morph = extract_morphological_features(sam2_mask, image_rgb)
-
-            # SAM2 embeddings
-            sam2_emb = self.extract_sam2_embedding(cy, cx)
-            for i, v in enumerate(sam2_emb):
-                morph[f'sam2_emb_{i}'] = float(v)
-
-            # ResNet features
-            ys, xs = np.where(sam2_mask)
-            y1, y2 = ys.min(), ys.max()
-            x1, x2 = xs.min(), xs.max()
-            crop = image_rgb[y1:y2+1, x1:x2+1].copy()
-            crop_mask = sam2_mask[y1:y2+1, x1:x2+1]
-            crop[~crop_mask] = 0
-
-            resnet_feats = self.extract_resnet_features(crop)
-            for i, v in enumerate(resnet_feats):
-                morph[f'resnet_{i}'] = float(v)
-
-            hspc_features.append({
-                'id': f'det_{hspc_id}',
-                'center': [float(cx), float(cy)],
-                'cellpose_id': int(cand['cp_id']),
+            hspc_valid_detections.append({
+                'id': hspc_id,
+                'mask': sam2_mask,
+                'cy': cy,
+                'cx': cx,
                 'sam2_score': sam2_score,
-                'features': morph
+                'cp_id': int(cand['cp_id'])
             })
-
             hspc_id += 1
 
         # Delete large temporary arrays to free memory
         del hspc_candidates
         del cellpose_masks
         gc.collect()
+
+        # Batch feature extraction for HSPCs
+        hspc_features = []
+        if hspc_valid_detections:
+            # Extract morphological and SAM2 features, collect crops
+            hspc_crops = []
+            hspc_crop_indices = []
+
+            for idx, det in enumerate(hspc_valid_detections):
+                mask = det['mask']
+                cy, cx = det['cy'], det['cx']
+
+                # Extract morphological features
+                morph = extract_morphological_features(mask, image_rgb)
+
+                # SAM2 embeddings
+                sam2_emb = self.extract_sam2_embedding(cy, cx)
+                for i, v in enumerate(sam2_emb):
+                    morph[f'sam2_emb_{i}'] = float(v)
+
+                det['morph'] = morph
+
+                # Prepare crop for batch ResNet processing
+                ys, xs = np.where(mask)
+                if len(ys) > 0:
+                    y1, y2 = ys.min(), ys.max()
+                    x1, x2 = xs.min(), xs.max()
+                    crop = image_rgb[y1:y2+1, x1:x2+1].copy()
+                    crop_mask = mask[y1:y2+1, x1:x2+1]
+                    crop[~crop_mask] = 0
+                    hspc_crops.append(crop)
+                    hspc_crop_indices.append(idx)
+
+            # Batch ResNet feature extraction
+            if hspc_crops:
+                resnet_features_list = self.extract_resnet_features_batch(hspc_crops, batch_size=resnet_batch_size)
+
+                # Assign ResNet features to correct detections
+                for crop_idx, resnet_feats in zip(hspc_crop_indices, resnet_features_list):
+                    for i, v in enumerate(resnet_feats):
+                        hspc_valid_detections[crop_idx]['morph'][f'resnet_{i}'] = float(v)
+
+            # Fill zeros for detections without valid crops
+            for det in hspc_valid_detections:
+                if f'resnet_0' not in det['morph']:
+                    for i in range(2048):
+                        det['morph'][f'resnet_{i}'] = 0.0
+
+            # Build final HSPC features list
+            for det in hspc_valid_detections:
+                hspc_features.append({
+                    'id': f'det_{det["id"]}',
+                    'center': [float(det['cx']), float(det['cy'])],
+                    'cellpose_id': det['cp_id'],
+                    'sam2_score': det['sam2_score'],
+                    'features': det['morph']
+                })
 
         # Clear SAM2 cached features after processing this tile
         self.sam2_predictor.reset_predictor()
@@ -1467,10 +1423,15 @@ def run_unified_segmentation(
     calibration_samples=50,
     num_workers=4,
     mk_classifier_path=None,
-    hspc_classifier_path=None
+    hspc_classifier_path=None,
+    channel=0
 ):
-    """Run unified MK + HSPC segmentation with multiprocessing."""
-    from pylibCZIrw import czi as pyczi
+    """Run unified MK + HSPC segmentation with multiprocessing.
+
+    Uses RAM-first architecture: loads entire channel into RAM once,
+    then all tile processing references that RAM array.
+    """
+    import shutil
 
     # Set start method to 'spawn' for GPU safety
     if num_workers > 0:
@@ -1480,80 +1441,23 @@ def run_unified_segmentation(
     output_dir = Path(output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
 
-    print(f"\n{'='*70}")
-    print("UNIFIED SEGMENTATION: MK + HSPC (MULTIPROCESSING)")
-    print(f"{'='*70}")
-    print(f"CZI: {czi_path}")
+    logger.info(f"\n{'='*70}")
+    logger.info("UNIFIED SEGMENTATION: MK + HSPC (RAM-FIRST ARCHITECTURE)")
+    logger.info(f"{'='*70}")
+    logger.info(f"CZI: {czi_path}")
 
-    # Open CZI
-    reader = pyczi.CziReader(str(czi_path))
-    scenes = reader.scenes_bounding_rectangle
-    if scenes:
-        rect = scenes[0]
-        x_start, y_start = rect.x, rect.y
-        full_width, full_height = rect.w, rect.h
-    else:
-        bbox = reader.total_bounding_box
-        x_start, y_start = bbox['X'][0], bbox['Y'][0]
-        full_width = bbox['X'][1] - bbox['X'][0]
-        full_height = bbox['Y'][1] - bbox['Y'][0]
+    # Load channel into RAM using get_loader (uses global cache)
+    logger.info(f"Loading channel {channel} into RAM...")
+    loader = get_loader(czi_path, load_to_ram=True, channel=channel)
 
-    print(f"Image: {full_width} x {full_height}")
+    x_start, y_start = loader.mosaic_origin
+    full_width, full_height = loader.mosaic_size
 
-    # Load full image into Memory Map
-    print("Loading image into Memory Map...", flush=True)
-    # Note: read() returns (H, W, C) or (H, W)
-    full_img = reader.read(plane={"C": 0, "T": 0, "Z": 0}, roi=(x_start, y_start, full_width, full_height))
+    logger.info(f"Image: {full_width} x {full_height}")
+    img_size_gb = loader.channel_data.nbytes / (1024**3)
+    logger.info(f"Channel data loaded to RAM ({img_size_gb:.2f} GB)")
 
-    # Create temporary directory for memmap
-    # OPTIMIZATION: Use /dev/shm (RAM-backed tmpfs) if available and has space
-    # This eliminates disk I/O entirely - tiles are read directly from RAM
-    import shutil
-    import os
-
-    img_size_gb = full_img.nbytes / (1024**3)
-    use_ramdisk = False
-
-    # Check if /dev/shm exists and has enough space (need 2x for safety margin)
-    shm_path = Path("/dev/shm")
-    if shm_path.exists():
-        try:
-            shm_stat = os.statvfs("/dev/shm")
-            shm_free_gb = (shm_stat.f_bavail * shm_stat.f_frsize) / (1024**3)
-            if shm_free_gb > img_size_gb * 1.5:  # 50% safety margin
-                use_ramdisk = True
-                print(f"  Using RAM-backed storage (/dev/shm): {shm_free_gb:.1f} GB free")
-        except:
-            pass
-
-    if use_ramdisk:
-        temp_mm_dir = shm_path / f"mkseg_{os.getpid()}"
-    else:
-        temp_mm_dir = output_dir / "temp_mm"
-        print(f"  Using disk-backed storage (fallback)")
-
-    temp_mm_dir.mkdir(parents=True, exist_ok=True)
-    mm_path = temp_mm_dir / "image.dat"
-
-    # Create writable memmap
-    shm_arr = np.memmap(mm_path, dtype=full_img.dtype, mode='w+', shape=full_img.shape)
-
-    # Copy image to memmap
-    np.copyto(shm_arr, full_img)
-    shm_arr.flush()
-
-    storage_type = "RAM" if use_ramdisk else "disk"
-    print(f"Image loaded to {storage_type}: {mm_path} ({img_size_gb:.2f} GB)")
-    
-    # Capture shape/dtype for workers
-    mm_shape = full_img.shape
-    mm_dtype = full_img.dtype
-    
-    # Free local memory
-    del full_img
-    del shm_arr # Close handle in main process
-    
-    # Create tiles
+    # Create tiles (coordinates relative to mosaic origin)
     n_tx = int(np.ceil(full_width / (tile_size - overlap)))
     n_ty = int(np.ceil(full_height / (tile_size - overlap)))
     tiles = []
@@ -1567,28 +1471,59 @@ def run_unified_segmentation(
                 'h': min(tile_size, full_height - ty * (tile_size - overlap))
             })
 
-    print(f"Total tiles: {len(tiles)}")
+    logger.info(f"Total tiles: {len(tiles)}")
 
-    # Calibrate tissue threshold using MEMMAP array
-    # Re-open memmap in read mode for calibration
-    calib_arr = np.memmap(mm_path, dtype=mm_dtype, mode='r', shape=mm_shape)
-    
-    variance_threshold = calibrate_tissue_threshold(
-        tiles, reader=None, x_start=x_start, y_start=y_start, 
-        calibration_samples=calibration_samples, 
+    # Calibrate tissue threshold using RAM array directly
+    variance_threshold = shared_calibrate_tissue_threshold(
+        tiles=tiles,
+        image_array=loader.channel_data,
+        calibration_samples=calibration_samples,
         block_size=calibration_block_size,
-        image_array=calib_arr
+        tile_size=tile_size
     )
-    
-    del calib_arr # Close calibration handle
 
-    reader.close() # Close reader in main process
+    # Create memmap for worker processes (they can't share numpy arrays directly)
+    # Use /dev/shm if available for RAM-backed storage
+    shm_path = Path("/dev/shm")
+    use_ramdisk = False
+    if shm_path.exists():
+        try:
+            shm_stat = os.statvfs("/dev/shm")
+            shm_free_gb = (shm_stat.f_bavail * shm_stat.f_frsize) / (1024**3)
+            if shm_free_gb > img_size_gb * 1.5:
+                use_ramdisk = True
+                logger.info(f"  Using RAM-backed storage (/dev/shm): {shm_free_gb:.1f} GB free")
+        except Exception as e:
+            logger.debug(f"Could not check /dev/shm availability: {e}")
+
+    if use_ramdisk:
+        temp_mm_dir = shm_path / f"mkseg_{os.getpid()}"
+    else:
+        temp_mm_dir = output_dir / "temp_mm"
+        logger.info(f"  Using disk-backed storage (fallback)")
+
+    temp_mm_dir.mkdir(parents=True, exist_ok=True)
+    mm_path = temp_mm_dir / "image.dat"
+
+    # Create memmap and copy from loader's RAM array
+    mm_shape = loader.channel_data.shape
+    mm_dtype = loader.channel_data.dtype
+    shm_arr = np.memmap(mm_path, dtype=mm_dtype, mode='w+', shape=mm_shape)
+    np.copyto(shm_arr, loader.channel_data)
+    shm_arr.flush()
+    del shm_arr
+
+    storage_type = "RAM" if use_ramdisk else "disk"
+    logger.info(f"Memmap created for workers: {mm_path} ({storage_type})")
+
+    # Clear loader's RAM (memmap now holds the data for workers)
+    loader.close()
 
     if sample_fraction < 1.0:
         n = max(1, int(len(tiles) * sample_fraction))
         np.random.seed(42)
         tiles = list(np.random.choice(tiles, n, replace=False))
-        print(f"Sampling {len(tiles)} tiles for processing")
+        logger.info(f"Sampling {len(tiles)} tiles for processing")
 
     # Prepare arguments for worker processes (NO reader, NO large objects)
     worker_args = []
@@ -1693,7 +1628,7 @@ def run_unified_segmentation(
                             del new_hspc, hspc_tile_cells
 
                     elif result['status'] == 'error':
-                        print(f"  Tile {result['tid']} error: {result['error']}")
+                        logger.error(f"Tile {result['tid']} error: {result['error']}")
 
                     # Explicit memory cleanup after processing each result
                     # Delete large mask arrays from result before del result
@@ -1714,15 +1649,16 @@ def run_unified_segmentation(
         if 'temp_mm_dir' in locals() and temp_mm_dir.exists():
             try:
                 shutil.rmtree(temp_mm_dir)
-                print(f"Cleaned up temp directory: {temp_mm_dir}")
+                logger.info(f"Cleaned up temp directory: {temp_mm_dir}")
             except Exception as e:
-                print(f"Warning: Failed to cleanup {temp_mm_dir}: {e}")
+                logger.warning(f"Failed to cleanup {temp_mm_dir}: {e}")
 
     # Save summaries
     # Get pixel size from reader if possible (re-open temporarily)
     try:
         pixel_size_um = get_pixel_size_from_czi(czi_path)
-    except:
+    except Exception as e:
+        logger.debug(f"Could not get pixel size from CZI: {e}")
         pixel_size_um = None
 
     summary = {
@@ -1736,15 +1672,15 @@ def run_unified_segmentation(
     with open(output_dir / "summary.json", 'w') as f:
         json.dump(summary, f, indent=2)
 
-    print(f"\n{'='*70}")
-    print("COMPLETE")
-    print(f"{'='*70}")
-    print(f"MKs detected: {mk_count}")
-    print(f"HSPCs detected: {hspc_count}")
-    print(f"Features per cell: 2326 (22 + 256 + 2048)")
-    print(f"Output: {output_dir}")
-    print(f"  MK tiles: {output_dir}/mk/tiles/")
-    print(f"  HSPC tiles: {output_dir}/hspc/tiles/")
+    logger.info(f"\n{'='*70}")
+    logger.info("COMPLETE")
+    logger.info(f"{'='*70}")
+    logger.info(f"MKs detected: {mk_count}")
+    logger.info(f"HSPCs detected: {hspc_count}")
+    logger.info(f"Features per cell: 2326 (22 + 256 + 2048)")
+    logger.info(f"Output: {output_dir}")
+    logger.info(f"  MK tiles: {output_dir}/mk/tiles/")
+    logger.info(f"  HSPC tiles: {output_dir}/hspc/tiles/")
 
 
 def run_multi_slide_segmentation(
@@ -1763,17 +1699,18 @@ def run_multi_slide_segmentation(
     html_output_dir=None,
     samples_per_page=300,
     mk_min_area_um=200,
-    mk_max_area_um=2000
+    mk_max_area_um=2000,
+    channel=0
 ):
     """
-    Process multiple slides with UNIFIED SAMPLING.
+    Process multiple slides with UNIFIED SAMPLING using RAM-first architecture.
 
-    - Loads ALL slides into RAM
+    - Loads ALL slides into RAM using CZILoader
+    - Each slide's channel is loaded ONCE, then all tile processing references that RAM
     - Identifies tissue-containing tiles across ALL slides
     - Samples from the combined pool (truly representative)
     - Processes sampled tiles with models loaded ONCE
     """
-    from pylibCZIrw import czi as pyczi
     import shutil
     import cv2
 
@@ -1784,81 +1721,69 @@ def run_multi_slide_segmentation(
     output_base = Path(output_base)
     output_base.mkdir(parents=True, exist_ok=True)
 
-    print(f"\n{'='*70}")
-    print(f"UNIFIED SAMPLING SEGMENTATION: {len(czi_paths)} slides")
-    print(f"{'='*70}")
-    print(f"Step 1: Load ALL slides into RAM")
-    print(f"Step 2: Identify tissue tiles across all slides")
-    print(f"Step 3: Sample {sample_fraction*100:.0f}% from combined pool")
-    print(f"Step 4: Process with models loaded ONCE")
-    print(f"{'='*70}")
+    logger.info(f"\n{'='*70}")
+    logger.info(f"UNIFIED SAMPLING SEGMENTATION: {len(czi_paths)} slides (RAM-FIRST)")
+    logger.info(f"{'='*70}")
+    logger.info(f"Step 1: Load ALL slides into RAM using CZILoader")
+    logger.info(f"Step 2: Identify tissue tiles across all slides")
+    logger.info(f"Step 3: Sample {sample_fraction*100:.0f}% from combined pool")
+    logger.info(f"Step 4: Process with models loaded ONCE")
+    logger.info(f"{'='*70}")
 
     # =========================================================================
-    # PHASE 1: Load all slides into RAM
+    # PHASE 1: Load all slides into RAM using CZILoader
     # =========================================================================
-    print(f"\n{'='*70}")
-    print("PHASE 1: LOADING ALL SLIDES INTO RAM")
-    print(f"{'='*70}")
+    logger.info(f"\n{'='*70}")
+    logger.info("PHASE 1: LOADING ALL SLIDES INTO RAM (CZILoader)")
+    logger.info(f"{'='*70}")
 
-    slide_data = {}  # slide_name -> {'image': np.array, 'shape': tuple, 'czi_path': Path}
+    slide_data = {}  # slide_name -> {'image': np.array, 'shape': tuple, 'czi_path': Path, 'loader': CZILoader}
+    slide_loaders = {}  # Keep loaders alive to maintain RAM data
     total_size_gb = 0
 
     for slide_idx, czi_path in enumerate(czi_paths):
         czi_path = Path(czi_path)
         slide_name = czi_path.stem
 
-        print(f"\n[{slide_idx+1}/{len(czi_paths)}] Loading {slide_name}...", flush=True)
+        logger.info(f"\n[{slide_idx+1}/{len(czi_paths)}] Loading {slide_name} (channel {channel})...")
 
         try:
-            reader = pyczi.CziReader(str(czi_path))
-            scenes = reader.scenes_bounding_rectangle
-            if scenes:
-                rect = scenes[0]
-                x_start, y_start = rect.x, rect.y
-                full_width, full_height = rect.w, rect.h
-            else:
-                bbox = reader.total_bounding_box
-                x_start, y_start = bbox['X'][0], bbox['Y'][0]
-                full_width = bbox['X'][1] - bbox['X'][0]
-                full_height = bbox['Y'][1] - bbox['Y'][0]
+            # Use get_loader with load_to_ram=True for RAM-first architecture (global cache)
+            loader = get_loader(czi_path, load_to_ram=True, channel=channel)
 
-            print(f"  Reading {full_width} x {full_height}...", flush=True)
-            img = reader.read(plane={"C": 0, "T": 0, "Z": 0},
-                              roi=(x_start, y_start, full_width, full_height))
-            reader.close()
-            del reader  # Explicit cleanup
-
-            size_gb = img.nbytes / (1024**3)
+            full_width, full_height = loader.mosaic_size
+            size_gb = loader.channel_data.nbytes / (1024**3)
             total_size_gb += size_gb
 
+            # Store loader and reference to its channel_data
+            slide_loaders[slide_name] = loader
             slide_data[slide_name] = {
-                'image': img,
+                'image': loader.channel_data,  # Direct reference to RAM array
                 'shape': (full_width, full_height),
                 'czi_path': czi_path
             }
 
-            print(f"  Loaded: {full_width} x {full_height} ({size_gb:.2f} GB)", flush=True)
+            logger.info(f"  Loaded: {full_width} x {full_height} ({size_gb:.2f} GB)")
 
             # Force cleanup between loads to prevent memory fragmentation
             gc.collect()
 
         except Exception as e:
-            print(f"  ERROR loading {slide_name}: {e}", flush=True)
+            logger.error(f"Loading {slide_name}: {e}")
             continue
 
-    print(f"\nTotal RAM used: {total_size_gb:.2f} GB")
+    logger.info(f"\nTotal RAM used: {total_size_gb:.2f} GB")
 
     # Check available RAM
-    import psutil
     mem = psutil.virtual_memory()
-    print(f"System RAM: {mem.total/(1024**3):.1f} GB total, {mem.available/(1024**3):.1f} GB available")
+    logger.info(f"System RAM: {mem.total/(1024**3):.1f} GB total, {mem.available/(1024**3):.1f} GB available")
 
     # =========================================================================
     # PHASE 2: Create tiles and identify tissue
     # =========================================================================
-    print(f"\n{'='*70}")
-    print("PHASE 2: IDENTIFYING TISSUE TILES")
-    print(f"{'='*70}")
+    logger.info(f"\n{'='*70}")
+    logger.info("PHASE 2: IDENTIFYING TISSUE TILES")
+    logger.info(f"{'='*70}")
 
     all_tiles = []  # List of (slide_name, tile_dict, has_tissue)
 
@@ -1882,16 +1807,16 @@ def run_multi_slide_segmentation(
                 }
                 slide_tiles.append(tile)
 
-        print(f"  {slide_name}: {len(slide_tiles)} tiles")
+        logger.info(f"  {slide_name}: {len(slide_tiles)} tiles")
 
         for tile in slide_tiles:
             all_tiles.append((slide_name, tile))
 
-    print(f"\nTotal tiles across all slides: {len(all_tiles)}")
+    logger.info(f"\nTotal tiles across all slides: {len(all_tiles)}")
 
     # Calibrate tissue threshold using samples from all slides (PARALLEL)
     n_calib_samples = min(calibration_samples * len(czi_paths), len(all_tiles))
-    print(f"\nCalibrating tissue threshold from {n_calib_samples} samples...", flush=True)
+    logger.info(f"\nCalibrating tissue threshold from {n_calib_samples} samples...")
 
     np.random.seed(42)
     calib_indices = np.random.choice(len(all_tiles), n_calib_samples, replace=False)
@@ -1928,7 +1853,7 @@ def run_multi_slide_segmentation(
     # K-means clustering for threshold
     from sklearn.cluster import KMeans
     variances = np.array(all_variances)
-    print(f"  Running K-means on {len(variances)} variance samples...", flush=True)
+    logger.info(f"  Running K-means on {len(variances)} variance samples...")
     kmeans = KMeans(n_clusters=3, random_state=42, n_init=10).fit(variances.reshape(-1, 1))
     centers = kmeans.cluster_centers_.flatten()
     labels = kmeans.labels_
@@ -1937,15 +1862,15 @@ def run_multi_slide_segmentation(
     bottom_cluster_variances = variances[labels == bottom_cluster_idx]
     variance_threshold = float(np.max(bottom_cluster_variances)) if len(bottom_cluster_variances) > 0 else 15.0
 
-    print(f"  K-means centers: {sorted(centers)[0]:.1f} (bg), {sorted(centers)[1]:.1f} (tissue), {sorted(centers)[2]:.1f} (outliers)")
-    print(f"  Threshold: {variance_threshold:.1f}")
+    logger.info(f"  K-means centers: {sorted(centers)[0]:.1f} (bg), {sorted(centers)[1]:.1f} (tissue), {sorted(centers)[2]:.1f} (outliers)")
+    logger.info(f"  Threshold: {variance_threshold:.1f}")
 
     # Filter to tissue-containing tiles (PARALLEL)
-    print(f"\nFiltering to tissue-containing tiles...")
+    logger.info(f"\nFiltering to tissue-containing tiles...")
 
     # Use 80% of CPU cores for tissue checking (NumPy/cv2 release GIL)
     tissue_check_threads = max(1, int(os.cpu_count() * 0.8))
-    print(f"  Using {tissue_check_threads} threads for parallel tissue checking")
+    logger.info(f"  Using {tissue_check_threads} threads for parallel tissue checking")
 
     def check_tile_tissue(args):
         """Check if a single tile contains tissue. Thread-safe."""
@@ -1971,14 +1896,14 @@ def run_multi_slide_segmentation(
             if result is not None:
                 tissue_tiles.append(result)
 
-    print(f"\nTissue tiles: {len(tissue_tiles)} / {len(all_tiles)} ({100*len(tissue_tiles)/len(all_tiles):.1f}%)")
+    logger.info(f"\nTissue tiles: {len(tissue_tiles)} / {len(all_tiles)} ({100*len(tissue_tiles)/len(all_tiles):.1f}%)")
 
     # =========================================================================
     # PHASE 3: Sample from combined pool
     # =========================================================================
-    print(f"\n{'='*70}")
-    print("PHASE 3: SAMPLING FROM COMBINED POOL")
-    print(f"{'='*70}")
+    logger.info(f"\n{'='*70}")
+    logger.info("PHASE 3: SAMPLING FROM COMBINED POOL")
+    logger.info(f"{'='*70}")
 
     if sample_fraction < 1.0:
         n_sample = max(1, int(len(tissue_tiles) * sample_fraction))
@@ -1993,17 +1918,17 @@ def run_multi_slide_segmentation(
     for slide_name, tile in sampled_tiles:
         slide_counts[slide_name] = slide_counts.get(slide_name, 0) + 1
 
-    print(f"Sampled {len(sampled_tiles)} tiles ({sample_fraction*100:.0f}% of tissue tiles)")
-    print(f"\nPer-slide distribution:")
+    logger.info(f"Sampled {len(sampled_tiles)} tiles ({sample_fraction*100:.0f}% of tissue tiles)")
+    logger.info(f"\nPer-slide distribution:")
     for slide_name in sorted(slide_counts.keys()):
-        print(f"  {slide_name}: {slide_counts[slide_name]} tiles")
+        logger.info(f"  {slide_name}: {slide_counts[slide_name]} tiles")
 
     # =========================================================================
     # PHASE 4: Process sampled tiles
     # =========================================================================
-    print(f"\n{'='*70}")
-    print("PHASE 4: PROCESSING SAMPLED TILES")
-    print(f"{'='*70}")
+    logger.info(f"\n{'='*70}")
+    logger.info("PHASE 4: PROCESSING SAMPLED TILES")
+    logger.info(f"{'='*70}")
 
     # Setup worker pool
     manager = mp.Manager()
@@ -2031,7 +1956,7 @@ def run_multi_slide_segmentation(
 
     try:
         with mp.Pool(processes=num_workers, initializer=init_worker, initargs=init_args) as pool:
-            print(f"Worker pool ready with {num_workers} workers")
+            logger.info(f"Worker pool ready with {num_workers} workers")
 
             def tile_generator():
                 for slide_name, tile in sampled_tiles:
@@ -2115,7 +2040,7 @@ def run_multi_slide_segmentation(
                             del new_hspc, hspc_tile_cells
 
                     elif result['status'] == 'error':
-                        print(f"  Tile error: {result['error']}")
+                        logger.error(f"Tile error: {result['error']}")
 
                     # Cleanup
                     for key in ['mk_masks', 'hspc_masks', 'mk_feats', 'hspc_feats']:
@@ -2129,8 +2054,8 @@ def run_multi_slide_segmentation(
         if temp_init_dir.exists():
             try:
                 shutil.rmtree(temp_init_dir)
-            except:
-                pass
+            except Exception as e:
+                logger.debug(f"Failed to cleanup temp init dir: {e}")
 
     # Save summaries
     total_mk = 0
@@ -2143,10 +2068,19 @@ def run_multi_slide_segmentation(
         if sr['mk_count'] > 0 or sr['hspc_count'] > 0:
             output_dir.mkdir(parents=True, exist_ok=True)
 
-            try:
-                pixel_size_um = get_pixel_size_from_czi(data['czi_path'])
-            except:
-                pixel_size_um = None
+            # Get pixel size from loader if available
+            pixel_size_um = None
+            if slide_name in slide_loaders:
+                try:
+                    pixel_size_um = slide_loaders[slide_name].get_pixel_size()
+                except Exception as e:
+                    logger.debug(f"Failed to get pixel size from loader: {e}")
+            if pixel_size_um is None:
+                try:
+                    pixel_size_um = get_pixel_size_from_czi(data['czi_path'])
+                except Exception as e:
+                    logger.debug(f"Failed to get pixel size from CZI: {e}")
+                    pixel_size_um = None
 
             summary = {
                 'czi_path': str(data['czi_path']),
@@ -2160,7 +2094,7 @@ def run_multi_slide_segmentation(
 
         total_mk += sr['mk_count']
         total_hspc += sr['hspc_count']
-        print(f"  {slide_name}: {sr['mk_count']} MKs, {sr['hspc_count']} HSPCs")
+        logger.info(f"  {slide_name}: {sr['mk_count']} MKs, {sr['hspc_count']} HSPCs")
 
     # Export HTML while slide data is still in RAM
     if html_output_dir:
@@ -2173,16 +2107,19 @@ def run_multi_slide_segmentation(
             mk_max_area_um=mk_max_area_um
         )
 
-    # Clear slide data from RAM
+    # Clear slide data and loaders from RAM
     del slide_data
+    for loader in slide_loaders.values():
+        loader.close()
+    del slide_loaders
     gc.collect()
 
-    print(f"\n{'='*70}")
-    print("ALL SLIDES COMPLETE")
-    print(f"{'='*70}")
-    print(f"Total MKs: {total_mk}")
-    print(f"Total HSPCs: {total_hspc}")
-    print(f"Output: {output_base}")
+    logger.info(f"\n{'='*70}")
+    logger.info("ALL SLIDES COMPLETE")
+    logger.info(f"{'='*70}")
+    logger.info(f"Total MKs: {total_mk}")
+    logger.info(f"Total HSPCs: {total_hspc}")
+    logger.info(f"Output: {output_base}")
 
 
 def process_tile_worker_with_data_and_slide(args):
@@ -2285,8 +2222,8 @@ def preprocess_tile_cpu(slide_data, slide_name, tile, use_pinned_memory=True):
             # This enables DMA transfer to GPU without blocking CPU
             img_tensor = torch.from_numpy(img_rgb.copy()).pin_memory()
             img_rgb = img_tensor.numpy()
-        except Exception:
-            pass  # Fall back to regular memory if pinning fails
+        except Exception as e:
+            logger.debug(f"Failed to pin memory, using regular memory: {e}")
 
     return (tile, img_rgb, slide_name)
 
@@ -2426,16 +2363,16 @@ def run_pipelined_segmentation(
 
     output_base = Path(output_base)
 
-    print(f"\n{'='*70}")
-    print("PIPELINED PROCESSING")
-    print(f"{'='*70}")
-    print(f"Pre-process threads: {preprocess_threads}")
-    print(f"GPU workers: {num_workers}")
-    print(f"Save threads: {save_threads}")
-    print(f"Tiles to process: {len(sampled_tiles)}")
-    print(f"HDF5 compression: {HDF5_COMPRESSION_NAME}")
-    print(f"Pinned memory: {'enabled' if torch.cuda.is_available() else 'disabled (no CUDA)'}")
-    print(f"{'='*70}")
+    logger.info(f"\n{'='*70}")
+    logger.info("PIPELINED PROCESSING")
+    logger.info(f"{'='*70}")
+    logger.info(f"Pre-process threads: {preprocess_threads}")
+    logger.info(f"GPU workers: {num_workers}")
+    logger.info(f"Save threads: {save_threads}")
+    logger.info(f"Tiles to process: {len(sampled_tiles)}")
+    logger.info(f"HDF5 compression: {HDF5_COMPRESSION_NAME}")
+    logger.info(f"Pinned memory: {'enabled' if torch.cuda.is_available() else 'disabled (no CUDA)'}")
+    logger.info(f"{'='*70}")
 
     # Setup GPU worker pool
     manager = mp.Manager()
@@ -2484,7 +2421,7 @@ def run_pipelined_segmentation(
                     with stats_lock:
                         stats['preprocessed'] += 1
                 except Exception as e:
-                    print(f"Preprocess error: {e}")
+                    logger.error(f"Preprocess error: {e}")
 
             # Signal end
             preprocess_queue.put(None)
@@ -2510,7 +2447,7 @@ def run_pipelined_segmentation(
                         with stats_lock:
                             stats['saved'] += 1
                     except Exception as e:
-                        print(f"Save error: {e}")
+                        logger.error(f"Save error: {e}")
                     pending_saves.remove(f)
 
             # Wait for remaining saves
@@ -2520,7 +2457,7 @@ def run_pipelined_segmentation(
                     with stats_lock:
                         stats['saved'] += 1
                 except Exception as e:
-                    print(f"Save error: {e}")
+                    logger.error(f"Save error: {e}")
 
     try:
         # Start save worker thread
@@ -2532,7 +2469,7 @@ def run_pipelined_segmentation(
         preprocess_thread.start()
 
         with mp.Pool(processes=num_workers, initializer=init_worker, initargs=init_args) as pool:
-            print(f"GPU worker pool ready")
+            logger.info(f"GPU worker pool ready")
 
             def gpu_input_generator():
                 """Generate GPU inputs from preprocess queue."""
@@ -2557,7 +2494,7 @@ def run_pipelined_segmentation(
                     if result['status'] == 'success':
                         save_queue.put(result)
                     elif result['status'] == 'error':
-                        print(f"  GPU error: {result['error']}")
+                        logger.error(f"GPU error: {result['error']}")
 
                     # Cleanup large arrays
                     for key in ['mk_masks', 'hspc_masks', 'mk_feats', 'hspc_feats']:
@@ -2573,18 +2510,18 @@ def run_pipelined_segmentation(
         if temp_init_dir.exists():
             try:
                 shutil.rmtree(temp_init_dir)
-            except:
-                pass
+            except Exception as e:
+                logger.debug(f"Failed to cleanup temp init dir: {e}")
 
     # Summary
     total_mk = sum(sr['mk_count'] for sr in slide_results.values())
     total_hspc = sum(sr['hspc_count'] for sr in slide_results.values())
 
-    print(f"\n{'='*70}")
-    print("PIPELINED PROCESSING COMPLETE")
-    print(f"{'='*70}")
-    print(f"Total MKs: {total_mk}")
-    print(f"Total HSPCs: {total_hspc}")
+    logger.info(f"\n{'='*70}")
+    logger.info("PIPELINED PROCESSING COMPLETE")
+    logger.info(f"{'='*70}")
+    logger.info(f"Total MKs: {total_mk}")
+    logger.info(f"Total HSPCs: {total_hspc}")
 
     return slide_results
 
@@ -2678,7 +2615,7 @@ def main():
     mk_min_area_px = int(args.mk_min_area_um / um_to_px_factor)
     mk_max_area_px = int(args.mk_max_area_um / um_to_px_factor)
 
-    print(f"MK area filter: {args.mk_min_area_um}-{args.mk_max_area_um} µm² = {mk_min_area_px}-{mk_max_area_px} px²")
+    logger.info(f"MK area filter: {args.mk_min_area_um}-{args.mk_max_area_um} µm² = {mk_min_area_px}-{mk_max_area_px} px²")
 
     # Set HTML output directory (default: output_dir/../docs)
     html_output_dir = args.html_output_dir

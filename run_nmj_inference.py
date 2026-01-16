@@ -5,6 +5,7 @@ Uses existing masks/features from run_nmj_segmentation.py output to classify NMJ
 """
 
 import argparse
+import gc
 import json
 import numpy as np
 from pathlib import Path
@@ -14,19 +15,13 @@ import torch.nn as nn
 from torchvision import models, transforms
 from tqdm import tqdm
 import h5py
-from aicspylibczi import CziFile
 
+# Use segmentation utilities
+from segmentation.io.html_export import percentile_normalize
+from segmentation.utils.logging import get_logger, setup_logging, log_parameters
+from segmentation.io.czi_loader import get_loader, CZILoader
 
-def percentile_normalize(img, p_low=5, p_high=95):
-    """Normalize image using percentiles."""
-    img = img.astype(np.float32)
-    p_lo = np.percentile(img, p_low)
-    p_hi = np.percentile(img, p_high)
-    if p_hi - p_lo < 1e-6:
-        return np.zeros_like(img, dtype=np.uint8)
-    img = (img - p_lo) / (p_hi - p_lo)
-    img = np.clip(img * 255, 0, 255).astype(np.uint8)
-    return img
+logger = get_logger(__name__)
 
 
 def load_classifier(model_path, device):
@@ -39,8 +34,8 @@ def load_classifier(model_path, device):
     model = model.to(device)
     model.eval()
 
-    print(f"Loaded classifier with val accuracy: {checkpoint['best_acc']:.4f}")
-    print(f"  Trained on {checkpoint['num_positive']} positive, {checkpoint['num_negative']} negative")
+    logger.info(f"Loaded classifier with val accuracy: {checkpoint['best_acc']:.4f}")
+    logger.info(f"  Trained on {checkpoint['num_positive']} positive, {checkpoint['num_negative']} negative")
 
     return model
 
@@ -56,7 +51,8 @@ def get_transform():
 
 def extract_crop(tile_rgb, centroid, zoom_factor=7.5, base_size=300):
     """Extract crop centered on centroid with zoom factor."""
-    cy, cx = int(centroid[0]), int(centroid[1])
+    # centroid is [x, y]
+    cx, cy = int(centroid[0]), int(centroid[1])
     crop_size = int(base_size * zoom_factor / 7.5)
     half = crop_size // 2
 
@@ -65,6 +61,10 @@ def extract_crop(tile_rgb, centroid, zoom_factor=7.5, base_size=300):
     y2 = min(h, cy + half)
     x1 = max(0, cx - half)
     x2 = min(w, cx + half)
+
+    # Validate crop bounds before extracting
+    if y2 <= y1 or x2 <= x1:
+        return None
 
     crop = tile_rgb[y1:y2, x1:x2].copy()
 
@@ -98,6 +98,7 @@ def classify_candidates(model, candidates, tile_rgb, transform, device, batch_si
 
     # Batch inference
     results = []
+    num_batches = (len(crops) + batch_size - 1) // batch_size
     with torch.no_grad():
         for i in range(0, len(crops), batch_size):
             batch_crops = crops[i:i+batch_size]
@@ -121,6 +122,17 @@ def classify_candidates(model, candidates, tile_rgb, transform, device, batch_si
                     'prob_nmj': prob[1].item(),
                 })
 
+            # Clear GPU memory periodically (every 10 batches) to prevent OOM
+            batch_num = i // batch_size
+            if batch_num > 0 and batch_num % 10 == 0:
+                del batch_tensors, outputs, probs, preds
+                torch.cuda.empty_cache()
+                gc.collect()
+
+    # Clear GPU memory at end of batch processing
+    torch.cuda.empty_cache()
+    gc.collect()
+
     return results
 
 
@@ -139,50 +151,50 @@ def main():
     parser.add_argument('--tile-size', type=int, default=3000, help='Tile size')
     parser.add_argument('--confidence-threshold', type=float, default=0.5,
                         help='Confidence threshold for positive classification')
+    parser.add_argument('--load-to-ram', action='store_true', default=True,
+                        help='Load entire channel into RAM for faster tile extraction (default: True)')
+    parser.add_argument('--no-load-to-ram', dest='load_to_ram', action='store_false',
+                        help='Disable RAM loading (use less memory but slower)')
     args = parser.parse_args()
 
+    # Setup logging
+    setup_logging(level="INFO")
+
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
-    print(f"Using device: {device}")
+    logger.info(f"Using device: {device}")
 
     # Load classifier
-    print("\nLoading classifier...")
+    logger.info("Loading classifier...")
     model = load_classifier(args.model_path, device)
     transform = get_transform()
 
-    # Load CZI
-    print("\nLoading CZI file...")
+    # Load CZI using shared loader (RAM-first for better performance)
+    logger.info("Loading CZI file...")
     czi_path = Path(args.czi_path)
-    reader = CziFile(str(czi_path))
+    loader = CZILoader(czi_path, load_to_ram=args.load_to_ram, channel=args.channel)
 
-    bbox = reader.get_mosaic_bounding_box()
-    print(f"  Mosaic dimensions: {bbox.w} x {bbox.h}")
+    width, height = loader.mosaic_size
+    pixel_size = loader.get_pixel_size()
+    slide_name = loader.slide_name
 
-    # Get pixel size
-    metadata = reader.meta
-    pixel_size = 0.22
-    try:
-        scaling = metadata.find('.//Scaling/Items/Distance[@Id="X"]/Value')
-        if scaling is not None:
-            pixel_size = float(scaling.text) * 1e6
-    except:
-        pass
-    print(f"  Pixel size: {pixel_size:.4f} um/px")
+    logger.info(f"  Mosaic dimensions: {width} x {height}")
+    logger.info(f"  Pixel size: {pixel_size:.4f} um/px")
+    logger.info(f"  RAM loading: {args.load_to_ram}")
 
     # Find segmentation directory
-    slide_name = czi_path.stem
     if args.segmentation_dir:
         seg_dir = Path(args.segmentation_dir)
     else:
         seg_dir = Path(args.output_dir) / slide_name / "tiles"
 
     if not seg_dir.exists():
-        print(f"\nERROR: Segmentation directory not found: {seg_dir}")
-        print("Run run_nmj_segmentation.py first to generate segmentation results.")
+        logger.error(f"Segmentation directory not found: {seg_dir}")
+        logger.error("Run run_nmj_segmentation.py first to generate segmentation results.")
         return
 
     # Get list of tiles with detections
     tile_dirs = sorted([d for d in seg_dir.iterdir() if d.is_dir() and d.name.startswith('tile_')])
-    print(f"\nFound {len(tile_dirs)} tiles with detections")
+    logger.info(f"Found {len(tile_dirs)} tiles with detections")
 
     # Setup output
     output_dir = Path(args.output_dir) / slide_name / "inference"
@@ -194,8 +206,8 @@ def main():
     total_nmjs = 0
     tile_size = args.tile_size
 
-    print("\nClassifying pre-detected NMJs...")
-    for tile_dir in tqdm(tile_dirs, desc="Tiles"):
+    logger.info("Classifying pre-detected NMJs...")
+    for tile_idx, tile_dir in enumerate(tqdm(tile_dirs, desc="Tiles")):
         try:
             # Parse tile coordinates from directory name
             parts = tile_dir.name.split('_')
@@ -213,18 +225,9 @@ def main():
             if not features:
                 continue
 
-            # Read tile from CZI
-            tile_data = reader.read_mosaic(
-                region=(tile_x, tile_y, tile_size, tile_size),
-                scale_factor=1,
-                C=args.channel
-            )
-
+            # Read tile using shared loader
+            tile_data = loader.get_tile(tile_x, tile_y, tile_size)
             if tile_data is None or tile_data.size == 0:
-                continue
-
-            tile_data = np.squeeze(tile_data)
-            if tile_data.ndim != 2:
                 continue
 
             # Create RGB for crop extraction
@@ -251,16 +254,17 @@ def main():
             # Filter by confidence
             for res in results:
                 if res['is_nmj'] and res['confidence'] >= args.confidence_threshold:
-                    cy, cx = res['centroid']
-                    global_y = tile_y + cy
+                    # centroid from features is [x, y]
+                    cx, cy = res['centroid']
                     global_x = tile_x + cx
+                    global_y = tile_y + cy
 
                     nmj_info = {
                         'id': f"{tile_x}_{tile_y}_{res['id']}",
                         'tile_x': tile_x,
                         'tile_y': tile_y,
-                        'local_centroid': [cy, cx],
-                        'global_centroid': [global_y, global_x],
+                        'local_centroid': [cx, cy],  # [x, y]
+                        'global_centroid': [global_x, global_y],  # [x, y]
                         'area_px': res['area'],
                         'area_um2': res['area'] * pixel_size * pixel_size,
                         'skeleton_length': res['skeleton_length'],
@@ -272,17 +276,26 @@ def main():
                     all_nmjs.append(nmj_info)
                     total_nmjs += 1
 
+            # Clear GPU memory periodically (every 50 tiles) to prevent OOM on long runs
+            if tile_idx > 0 and tile_idx % 50 == 0:
+                torch.cuda.empty_cache()
+                gc.collect()
+
         except Exception as e:
-            print(f"\nError processing {tile_dir.name}: {e}")
+            logger.error(f"Error processing {tile_dir.name}: {e}")
             continue
 
-    print(f"\n" + "="*50)
-    print("INFERENCE COMPLETE")
-    print("="*50)
-    print(f"Total candidates from segmentation: {total_candidates}")
-    print(f"Total NMJs classified as positive: {total_nmjs}")
+    # Final GPU memory cleanup after all tiles processed
+    torch.cuda.empty_cache()
+    gc.collect()
+
+    logger.info("=" * 50)
+    logger.info("INFERENCE COMPLETE")
+    logger.info("=" * 50)
+    logger.info(f"Total candidates from segmentation: {total_candidates}")
+    logger.info(f"Total NMJs classified as positive: {total_nmjs}")
     if total_candidates > 0:
-        print(f"Classification rate: {total_nmjs/total_candidates*100:.1f}%")
+        logger.info(f"Classification rate: {total_nmjs/total_candidates*100:.1f}%")
 
     # Save results
     results_file = output_dir / "nmj_detections.json"
@@ -297,16 +310,16 @@ def main():
             'nmjs': all_nmjs,
         }, f, indent=2)
 
-    print(f"\nResults saved to: {results_file}")
+    logger.info(f"Results saved to: {results_file}")
 
     # Summary stats
     if all_nmjs:
         areas = [n['area_um2'] for n in all_nmjs]
         confidences = [n['confidence'] for n in all_nmjs]
-        print(f"\nNMJ Statistics:")
-        print(f"  Area range: {min(areas):.1f} - {max(areas):.1f} um^2")
-        print(f"  Mean area: {np.mean(areas):.1f} um^2")
-        print(f"  Mean confidence: {np.mean(confidences):.3f}")
+        logger.info("NMJ Statistics:")
+        logger.info(f"  Area range: {min(areas):.1f} - {max(areas):.1f} um^2")
+        logger.info(f"  Mean area: {np.mean(areas):.1f} um^2")
+        logger.info(f"  Mean confidence: {np.mean(confidences):.3f}")
 
 
 if __name__ == '__main__':

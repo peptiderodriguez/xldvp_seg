@@ -1,0 +1,91 @@
+[build-system]
+requires = ["setuptools>=61.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "cell-segmentation"
+version = "1.0.0"
+description = "Unified cell segmentation pipeline for microscopy images (MK, HSPC, NMJ, Vessel)"
+readme = "README.md"
+license = {text = "MIT"}
+requires-python = ">=3.10"
+authors = [
+    {name = "Cell Segmentation Team"}
+]
+keywords = ["segmentation", "microscopy", "cells", "deep-learning", "SAM2", "cellpose"]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: Science/Research",
+    "License :: OSI Approved :: MIT License",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Topic :: Scientific/Engineering :: Bio-Informatics",
+    "Topic :: Scientific/Engineering :: Image Processing",
+]
+
+dependencies = [
+    "numpy>=1.24",
+    "opencv-python>=4.8",
+    "scipy>=1.10",
+    "scikit-image>=0.21",
+    "h5py>=3.8",
+    "hdf5plugin>=4.0",
+    "tqdm>=4.65",
+    "pillow>=9.5",
+    "aicspylibczi>=3.1",
+    "matplotlib>=3.7",
+    "pydantic>=2.0",  # For JSON validation
+]
+
+[project.optional-dependencies]
+ml = [
+    "torch>=2.0",
+    "torchvision>=0.15",
+    "cellpose>=3.0",
+]
+dev = [
+    "pytest>=7.0",
+    "pytest-cov>=4.0",
+    "black>=23.0",
+    "ruff>=0.1",
+    "mypy>=1.0",
+]
+all = [
+    "cell-segmentation[ml,dev]",
+]
+
+[project.scripts]
+segmentation = "shared.cli:main"
+
+[project.urls]
+"Homepage" = "https://github.com/your-org/cell-segmentation"
+"Bug Tracker" = "https://github.com/your-org/cell-segmentation/issues"
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["shared*"]
+
+[tool.setuptools.package-data]
+"*" = ["*.yaml", "*.json"]
+
+[tool.black]
+line-length = 100
+target-version = ['py310', 'py311', 'py312']
+
+[tool.ruff]
+line-length = 100
+select = ["E", "F", "W", "I", "N", "UP", "B", "C4"]
+ignore = ["E501"]  # Line length handled by black
+
+[tool.mypy]
+python_version = "3.10"
+warn_return_any = true
+warn_unused_configs = true
+ignore_missing_imports = true
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+python_files = ["test_*.py"]
+addopts = "-v --tb=short"

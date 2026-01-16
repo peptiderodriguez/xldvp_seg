@@ -19,7 +19,7 @@ import h5py
 import cv2
 from pathlib import Path
 from tqdm import tqdm
-from aicspylibczi import CziFile
+from segmentation.io.czi_loader import get_loader
 
 # Import hdf5plugin for LZ4 decompression
 try:
@@ -27,38 +27,25 @@ try:
 except ImportError:
     pass
 
-from shared.html_export import (
+from segmentation.io.html_export import (
     percentile_normalize,
     draw_mask_contour,
     image_to_base64,
 )
+from segmentation.utils.logging import get_logger, setup_logging
+
+logger = get_logger(__name__)
 
 
 def load_channel_to_ram(czi_path, channel, strip_height=5000):
-    """Load a single channel from CZI into RAM."""
-    czi = CziFile(czi_path)
+    """
+    Load a single channel from CZI into RAM using CZILoader.
 
-    # Get mosaic info
-    bbox = czi.get_mosaic_scene_bounding_box()
-    x_start, y_start = bbox.x, bbox.y
-    width, height = bbox.w, bbox.h
-
-    print(f"Loading channel {channel} ({width:,} x {height:,} px)...")
-
-    n_strips = (height + strip_height - 1) // strip_height
-    channel_data = np.empty((height, width), dtype=np.uint16)
-
-    for i in tqdm(range(n_strips), desc="Loading"):
-        y_off = i * strip_height
-        h = min(strip_height, height - y_off)
-        strip = czi.read_mosaic(
-            region=(x_start, y_start + y_off, width, h),
-            scale_factor=1,
-            C=channel
-        )
-        channel_data[y_off:y_off+h, :] = np.squeeze(strip)
-
-    return channel_data, (x_start, y_start, width, height)
+    Uses the shared get_loader() to leverage the global cache.
+    """
+    loader = get_loader(czi_path, load_to_ram=True, channel=channel, strip_height=strip_height)
+    channel_data = loader.channel_data
+    return channel_data, (loader.x_start, loader.y_start, loader.width, loader.height)
 
 
 def regenerate_html(
@@ -72,6 +59,7 @@ def regenerate_html(
     contour_thickness=4,
     contour_color=(50, 255, 50),
     samples_per_page=300,
+    experiment_name=None,
 ):
     """
     Regenerate HTML viewer with sorting and improved visualization.
@@ -85,6 +73,7 @@ def regenerate_html(
         crop_size: Size of crop around each detection
         display_size: Size of displayed image in HTML
         contour_thickness: Thickness of mask contour
+        experiment_name: Experiment name for localStorage isolation
         contour_color: RGB color for contour
         samples_per_page: Number of samples per HTML page
     """
@@ -99,15 +88,15 @@ def regenerate_html(
     det_file = det_files[0]
     cell_type = det_file.stem.replace('_detections', '').split('_')[-1]
 
-    print(f"Loading detections from {det_file}")
+    logger.info(f"Loading detections from {det_file}")
     with open(det_file) as f:
         detections = json.load(f)
 
     if not detections:
-        print("No detections to process")
+        logger.warning("No detections to process")
         return
 
-    print(f"Loaded {len(detections)} detections")
+    logger.info(f"Loaded {len(detections)} detections")
 
     # Sort detections
     reverse = (sort_order == 'desc')
@@ -120,7 +109,7 @@ def regenerate_html(
         return 0
 
     detections_sorted = sorted(detections, key=get_sort_key, reverse=reverse)
-    print(f"Sorted by {sort_by} ({sort_order})")
+    logger.info(f"Sorted by {sort_by} ({sort_order})")
 
     # Auto-detect CZI path from summary
     if czi_path is None:
@@ -153,7 +142,7 @@ def regenerate_html(
             tile_detections[tile_key] = []
         tile_detections[tile_key].append(det)
 
-    print(f"Processing {len(tile_detections)} tiles...")
+    logger.info(f"Processing {len(tile_detections)} tiles...")
 
     # Generate samples
     samples = []
@@ -196,21 +185,28 @@ def regenerate_html(
             x1 = max(0, int(global_cx - half))
             x2 = min(width, int(global_cx + half))
 
+            # Validate crop bounds before extracting
+            if y2 <= y1 or x2 <= x1:
+                logger.warning(f"Invalid crop bounds for detection {det_id}, skipping")
+                continue
+
             crop = channel_data[y1:y2, x1:x2].copy()
 
             # Create mask for crop region
             crop_h, crop_w = y2 - y1, x2 - x1
             crop_mask = np.zeros((crop_h, crop_w), dtype=bool)
 
-            # Calculate where mask falls in crop
-            mask_offset_y = int(global_cy - half - tile_y)
-            mask_offset_x = int(global_cx - half - tile_x)
+            # Map mask pixels from tile coords to crop coords (vectorized)
+            # Mask pixel at (my, mx) in tile -> global (tile_y + my, tile_x + mx)
+            # Crop position is global position minus crop origin (y1, x1)
+            global_ys = ys + tile_y
+            global_xs = xs + tile_x
+            crop_ys = global_ys - y1
+            crop_xs = global_xs - x1
 
-            for my, mx in zip(ys, xs):
-                cy_in_crop = my - mask_offset_y
-                cx_in_crop = mx - mask_offset_x
-                if 0 <= cy_in_crop < crop_h and 0 <= cx_in_crop < crop_w:
-                    crop_mask[cy_in_crop, cx_in_crop] = True
+            # Vectorized bounds check
+            valid = (crop_ys >= 0) & (crop_ys < crop_h) & (crop_xs >= 0) & (crop_xs < crop_w)
+            crop_mask[crop_ys[valid], crop_xs[valid]] = True
 
             # Normalize and draw contour
             crop_norm = percentile_normalize(crop, p_low=1, p_high=99.5)
@@ -228,15 +224,18 @@ def regenerate_html(
             area_um2 = area * (pixel_size ** 2)
             elongation = det['features'].get('elongation', 0)
 
+            # image_to_base64 returns (base64_string, mime_type)
+            image_b64, _ = image_to_base64(crop_resized)
+
             samples.append({
                 'uid': det['uid'],
-                'image_b64': image_to_base64(crop_resized),
+                'image_b64': image_b64,
                 'area': area,
                 'area_um2': round(area_um2, 1),
                 'elongation': elongation,
             })
 
-    print(f"Generated {len(samples)} samples")
+    logger.info(f"Generated {len(samples)} samples")
 
     # Generate HTML pages
     n_pages = (len(samples) + samples_per_page - 1) // samples_per_page
@@ -248,12 +247,26 @@ def regenerate_html(
     <style>
         * {{ box-sizing: border-box; margin: 0; padding: 0; }}
         body {{ font-family: monospace; background: #0a0a0a; color: #ddd; padding: 10px; }}
-        .nav {{ background: #111; padding: 10px; margin-bottom: 10px; display: flex; justify-content: space-between; align-items: center; position: sticky; top: 0; z-index: 100; border: 1px solid #333; }}
-        .nav a {{ color: #4a4; text-decoration: none; padding: 5px 15px; border: 1px solid #333; }}
-        .nav a:hover {{ background: #1a1a1a; }}
-        .stats {{ color: #888; }}
+        .header {{ background: #111; padding: 10px 15px; position: sticky; top: 0; z-index: 100; border: 1px solid #333; margin-bottom: 10px; }}
+        .nav-row {{ display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 10px; }}
+        .nav-links {{ display: flex; gap: 8px; align-items: center; }}
+        .nav-links a {{ color: #4a4; text-decoration: none; padding: 6px 12px; border: 1px solid #333; }}
+        .nav-links a:hover {{ background: #1a1a1a; }}
+        .page-info {{ color: #888; }}
+        .stats-row {{ display: flex; gap: 15px; margin-top: 10px; flex-wrap: wrap; align-items: center; }}
+        .stat-group {{ display: flex; gap: 8px; align-items: center; }}
+        .stat-label {{ color: #666; font-size: 0.85em; }}
+        .stat {{ padding: 4px 10px; background: #1a1a1a; border: 1px solid #333; font-size: 0.9em; }}
+        .stat.yes {{ border-left: 3px solid #4a4; color: #4a4; }}
+        .stat.no {{ border-left: 3px solid #a44; color: #a44; }}
+        .action-btn {{ padding: 5px 12px; background: #1a1a1a; border: 1px solid #444; color: #888; cursor: pointer; font-family: monospace; font-size: 0.85em; }}
+        .action-btn:hover {{ background: #222; color: #aaa; }}
+        .action-btn.danger {{ border-color: #a44; color: #a44; }}
+        .action-btn.danger:hover {{ background: #2a1a1a; }}
         .grid {{ display: grid; grid-template-columns: repeat(auto-fill, minmax(270px, 1fr)); gap: 10px; }}
-        .card {{ background: #111; border: 1px solid #333; padding: 10px; text-align: center; }}
+        .card {{ background: #111; border: 2px solid #333; padding: 10px; text-align: center; transition: border-color 0.2s; }}
+        .card.labeled-yes {{ border-color: #4a4; background: #0f130f; }}
+        .card.labeled-no {{ border-color: #a44; background: #130f0f; }}
         .card img {{ width: {display_size}px; height: {display_size}px; border: 1px solid #333; }}
         .card .info {{ font-size: 0.8em; color: #888; margin: 5px 0; }}
         .card .area {{ color: #4a4; font-weight: bold; }}
@@ -268,42 +281,147 @@ def regenerate_html(
     </style>
 </head>
 <body>
-    <div class="nav">
-        <div>
-            {prev_link}
-            <a href="index.html">Index</a>
-            {next_link}
+    <div class="header">
+        <div class="nav-row">
+            <div class="nav-links">
+                {prev_link}
+                <a href="index.html">Index</a>
+                {next_link}
+            </div>
+            <span class="page-info">Page {page}/{total_pages} | Sorted by {sort_by} ({sort_order})</span>
         </div>
-        <div class="stats">Page {page}/{total_pages} | Sorted by {sort_by} ({sort_order})</div>
+        <div class="stats-row">
+            <div class="stat-group">
+                <span class="stat-label">Page:</span>
+                <span class="stat yes">Yes: <span id="pageYes">0</span></span>
+                <span class="stat no">No: <span id="pageNo">0</span></span>
+            </div>
+            <div class="stat-group">
+                <span class="stat-label">Total:</span>
+                <span class="stat yes">Yes: <span id="totalYes">0</span></span>
+                <span class="stat no">No: <span id="totalNo">0</span></span>
+            </div>
+            <button class="action-btn" onclick="clearPage()">Clear Page</button>
+            <button class="action-btn danger" onclick="clearAll()">Clear All</button>
+            <button class="action-btn" onclick="exportAnnotations()">Export JSON</button>
+        </div>
     </div>
     <div class="grid">
         {cards}
     </div>
     <script>
-        const STORAGE_KEY = '{cell_type}_annotations';
-        function getLabels() {{ return JSON.parse(localStorage.getItem(STORAGE_KEY) || '{{}}'); }}
-        function setLabel(uid, val) {{
-            const labels = getLabels();
-            labels[uid] = val;
+        const CELL_TYPE = '{cell_type}';
+        const EXPERIMENT_NAME = '{experiment_name or ""}';
+        const STORAGE_KEY = EXPERIMENT_NAME ? CELL_TYPE + '_' + EXPERIMENT_NAME + '_annotations' : CELL_TYPE + '_annotations';
+        let labels = {{}};
+
+        function loadLabels() {{
+            try {{
+                labels = JSON.parse(localStorage.getItem(STORAGE_KEY) || '{{}}');
+            }} catch(e) {{ labels = {{}}; }}
+        }}
+
+        function saveLabels() {{
             localStorage.setItem(STORAGE_KEY, JSON.stringify(labels));
-            updateButtons(uid);
         }}
-        function updateButtons(uid) {{
-            const labels = getLabels();
-            document.querySelectorAll(`[data-uid="${{uid}}"] button`).forEach(b => b.classList.remove('selected'));
+
+        function setLabel(uid, val) {{
+            // Toggle off if clicking same button
+            if (labels[uid] === val) {{
+                delete labels[uid];
+            }} else {{
+                labels[uid] = val;
+            }}
+            saveLabels();
+            updateCard(uid);
+            updateStats();
+        }}
+
+        function updateCard(uid) {{
+            const card = document.querySelector(`[data-uid="${{uid}}"]`);
+            if (!card) return;
+            card.classList.remove('labeled-yes', 'labeled-no');
+            card.querySelectorAll('button').forEach(b => b.classList.remove('selected'));
             const val = labels[uid];
-            if (val === 1) document.querySelector(`[data-uid="${{uid}}"] .btn-yes`)?.classList.add('selected');
-            if (val === 0) document.querySelector(`[data-uid="${{uid}}"] .btn-no`)?.classList.add('selected');
+            if (val === 1) {{
+                card.classList.add('labeled-yes');
+                card.querySelector('.btn-yes')?.classList.add('selected');
+            }} else if (val === 0) {{
+                card.classList.add('labeled-no');
+                card.querySelector('.btn-no')?.classList.add('selected');
+            }}
         }}
-        document.querySelectorAll('.card').forEach(c => updateButtons(c.dataset.uid));
+
+        function updateStats() {{
+            let pageYes = 0, pageNo = 0, totalYes = 0, totalNo = 0;
+            // Page stats
+            document.querySelectorAll('.card').forEach(card => {{
+                const uid = card.dataset.uid;
+                if (labels[uid] === 1) pageYes++;
+                else if (labels[uid] === 0) pageNo++;
+            }});
+            // Total stats
+            for (const v of Object.values(labels)) {{
+                if (v === 1) totalYes++;
+                else if (v === 0) totalNo++;
+            }}
+            document.getElementById('pageYes').textContent = pageYes;
+            document.getElementById('pageNo').textContent = pageNo;
+            document.getElementById('totalYes').textContent = totalYes;
+            document.getElementById('totalNo').textContent = totalNo;
+        }}
+
+        function clearPage() {{
+            if (!confirm('Clear all annotations on this page?')) return;
+            document.querySelectorAll('.card').forEach(card => {{
+                const uid = card.dataset.uid;
+                delete labels[uid];
+                updateCard(uid);
+            }});
+            saveLabels();
+            updateStats();
+        }}
+
+        function clearAll() {{
+            if (!confirm('Clear ALL annotations across all pages? This cannot be undone.')) return;
+            labels = {{}};
+            saveLabels();
+            document.querySelectorAll('.card').forEach(card => updateCard(card.dataset.uid));
+            updateStats();
+        }}
+
+        function exportAnnotations() {{
+            const data = {{
+                cell_type: '{cell_type}',
+                exported_at: new Date().toISOString(),
+                positive: [],
+                negative: []
+            }};
+            for (const [uid, val] of Object.entries(labels)) {{
+                if (val === 1) data.positive.push(uid);
+                else if (val === 0) data.negative.push(uid);
+            }}
+            const blob = new Blob([JSON.stringify(data, null, 2)], {{type: 'application/json'}});
+            const url = URL.createObjectURL(blob);
+            const a = document.createElement('a');
+            a.href = url;
+            a.download = '{cell_type}_annotations.json';
+            a.click();
+            URL.revokeObjectURL(url);
+        }}
+
+        // Initialize
+        loadLabels();
+        document.querySelectorAll('.card').forEach(c => updateCard(c.dataset.uid));
+        updateStats();
 
         // Keyboard shortcuts
         document.addEventListener('keydown', (e) => {{
             if (e.key === 'ArrowRight') {{
-                const next = document.querySelector('.nav a[href*="page_{next_page}"]');
+                const next = document.querySelector('.nav-links a[href*="page_{next_page}"]');
                 if (next) window.location = next.href;
             }} else if (e.key === 'ArrowLeft') {{
-                const prev = document.querySelector('.nav a[href*="page_{prev_page}"]');
+                const prev = document.querySelector('.nav-links a[href*="page_{prev_page}"]');
                 if (prev) window.location = prev.href;
             }}
         }});
@@ -313,7 +431,7 @@ def regenerate_html(
 
     card_template = '''<div class="card" data-uid="{uid}">
     <img src="data:image/jpeg;base64,{image_b64}" alt="{uid}">
-    <div class="info"><span class="area">{area_um2} µm²</span> | elong: {elongation:.2f}</div>
+    <div class="info"><span class="area">{area_um2} &micro;m&sup2;</span> | elong: {elongation:.2f}</div>
     <div class="buttons">
         <button class="btn-yes" onclick="setLabel('{uid}', 1)">Yes</button>
         <button class="btn-no" onclick="setLabel('{uid}', 0)">No</button>
@@ -351,7 +469,7 @@ def regenerate_html(
             f.write(html)
 
         page_size_mb = len(html) / 1e6
-        print(f"  Page {page_num}: {len(page_samples)} samples ({page_size_mb:.1f} MB)")
+        logger.info(f"  Page {page_num}: {len(page_samples)} samples ({page_size_mb:.1f} MB)")
 
     # Update index
     index_html = f'''<!DOCTYPE html>
@@ -366,9 +484,15 @@ def regenerate_html(
         .stats {{ display: flex; justify-content: center; gap: 30px; margin: 25px 0; flex-wrap: wrap; }}
         .stat {{ padding: 15px 30px; background: #1a1a1a; border: 1px solid #333; text-align: center; }}
         .stat .number {{ display: block; font-size: 2em; margin-top: 10px; color: #4a4; }}
+        .stat.annotation {{ border-left: 3px solid #4a4; }}
+        .stat.annotation .number {{ color: #6c6; }}
         .section {{ margin: 30px 0; text-align: center; }}
         .btn {{ padding: 15px 40px; background: #1a1a1a; border: 1px solid #4a4; color: #4a4; cursor: pointer; font-family: monospace; font-size: 1.1em; text-decoration: none; display: inline-block; margin: 10px; }}
         .btn:hover {{ background: #0f130f; }}
+        .btn.secondary {{ border-color: #666; color: #888; }}
+        .btn.secondary:hover {{ background: #151515; }}
+        .btn.danger {{ border-color: #a44; color: #a44; }}
+        .btn.danger:hover {{ background: #1a0f0f; }}
         .info {{ color: #888; margin-top: 20px; }}
     </style>
 </head>
@@ -376,21 +500,69 @@ def regenerate_html(
     <div class="header">
         <h1>{cell_type.upper()} Detection Results</h1>
         <div class="stats">
-            <div class="stat"><span>Total</span><span class="number">{len(samples):,}</span></div>
+            <div class="stat"><span>Total Samples</span><span class="number">{len(samples):,}</span></div>
             <div class="stat"><span>Pages</span><span class="number">{n_pages}</span></div>
+            <div class="stat annotation"><span>Annotated</span><span class="number" id="annotatedCount">0</span></div>
         </div>
         <p class="info">Sorted by {sort_by} ({sort_order})</p>
     </div>
     <div class="section">
         <a href="{cell_type}_page_1.html" class="btn">Start Review</a>
     </div>
+    <div class="section">
+        <button class="btn secondary" onclick="exportAnnotations()">Export Annotations</button>
+        <button class="btn danger" onclick="clearAll()">Clear All Annotations</button>
+    </div>
+    <script>
+        const CELL_TYPE = '{cell_type}';
+        const EXPERIMENT_NAME = '{experiment_name or ""}';
+        const STORAGE_KEY = EXPERIMENT_NAME ? CELL_TYPE + '_' + EXPERIMENT_NAME + '_annotations' : CELL_TYPE + '_annotations';
+
+        function updateCount() {{
+            try {{
+                const labels = JSON.parse(localStorage.getItem(STORAGE_KEY) || '{{}}');
+                document.getElementById('annotatedCount').textContent = Object.keys(labels).length;
+            }} catch(e) {{}}
+        }}
+
+        function exportAnnotations() {{
+            const labels = JSON.parse(localStorage.getItem(STORAGE_KEY) || '{{}}');
+            const data = {{
+                cell_type: CELL_TYPE,
+                experiment_name: EXPERIMENT_NAME || undefined,
+                exported_at: new Date().toISOString(),
+                positive: [],
+                negative: []
+            }};
+            for (const [uid, val] of Object.entries(labels)) {{
+                if (val === 1) data.positive.push(uid);
+                else if (val === 0) data.negative.push(uid);
+            }}
+            const blob = new Blob([JSON.stringify(data, null, 2)], {{type: 'application/json'}});
+            const url = URL.createObjectURL(blob);
+            const a = document.createElement('a');
+            a.href = url;
+            const filename = EXPERIMENT_NAME ? CELL_TYPE + '_' + EXPERIMENT_NAME + '_annotations.json' : CELL_TYPE + '_annotations.json';
+            a.download = filename;
+            a.click();
+            URL.revokeObjectURL(url);
+        }}
+
+        function clearAll() {{
+            if (!confirm('Clear ALL annotations? This cannot be undone.')) return;
+            localStorage.removeItem(STORAGE_KEY);
+            updateCount();
+        }}
+
+        updateCount();
+    </script>
 </body>
 </html>'''
 
     with open(html_dir / "index.html", 'w') as f:
         f.write(index_html)
 
-    print(f"\nDone! View at: {html_dir / 'index.html'}")
+    logger.info(f"\nDone! View at: {html_dir / 'index.html'}")
 
 
 def main():
@@ -404,6 +576,7 @@ def main():
     parser.add_argument('--display-size', type=int, default=250, help='Display size in HTML (default: 250)')
     parser.add_argument('--contour-thickness', type=int, default=4, help='Contour thickness (default: 4)')
     parser.add_argument('--samples-per-page', type=int, default=300, help='Samples per page (default: 300)')
+    parser.add_argument('--experiment-name', help='Experiment name for localStorage isolation (required)')
 
     args = parser.parse_args()
 
@@ -417,6 +590,7 @@ def main():
         display_size=args.display_size,
         contour_thickness=args.contour_thickness,
         samples_per_page=args.samples_per_page,
+        experiment_name=args.experiment_name,
     )
 
 

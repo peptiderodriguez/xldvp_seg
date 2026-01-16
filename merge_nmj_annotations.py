@@ -10,6 +10,10 @@ import json
 from pathlib import Path
 from collections import defaultdict
 
+from segmentation.utils.logging import get_logger, setup_logging
+
+logger = get_logger(__name__)
+
 
 def parse_annotations(data, slide_prefix=""):
     """Parse annotations from either format.
@@ -45,16 +49,16 @@ def merge_annotations(old_path, new_path, output_path, slide_prefix="20251109_PM
     """Merge annotations with new overwriting old."""
 
     # Load old annotations
-    print(f"Loading old annotations from: {old_path}")
+    logger.info(f"Loading old annotations from: {old_path}")
     with open(old_path) as f:
         old = json.load(f)
 
     old_positive, old_negative, _ = parse_annotations(old)
 
-    print(f"  Old: {len(old_positive)} positive, {len(old_negative)} negative")
+    logger.info(f"  Old: {len(old_positive)} positive, {len(old_negative)} negative")
 
     # Load new annotations
-    print(f"\nLoading new annotations from: {new_path}")
+    logger.info(f"\nLoading new annotations from: {new_path}")
     with open(new_path) as f:
         new = json.load(f)
 
@@ -63,7 +67,7 @@ def merge_annotations(old_path, new_path, output_path, slide_prefix="20251109_PM
         # Check if IDs already have prefix
         sample_id = next(iter(new['annotations'].keys()), "")
         if not sample_id.startswith("20"):
-            print(f"  Adding slide prefix: {slide_prefix}")
+            logger.info(f"  Adding slide prefix: {slide_prefix}")
         else:
             slide_prefix = ""
     else:
@@ -71,7 +75,7 @@ def merge_annotations(old_path, new_path, output_path, slide_prefix="20251109_PM
 
     new_positive, new_negative, new_unsure = parse_annotations(new, slide_prefix)
 
-    print(f"  New: {len(new_positive)} positive, {len(new_negative)} negative, {len(new_unsure)} unsure")
+    logger.info(f"  New: {len(new_positive)} positive, {len(new_negative)} negative, {len(new_unsure)} unsure")
 
     # Track conflicts
     conflicts = {
@@ -107,10 +111,10 @@ def merge_annotations(old_path, new_path, output_path, slide_prefix="20251109_PM
             conflicts['to_unsure'] += 1
 
     # Report conflicts
-    print(f"\nConflicts resolved (new overwrites old):")
-    print(f"  Positive → Negative: {conflicts['pos_to_neg']}")
-    print(f"  Negative → Positive: {conflicts['neg_to_pos']}")
-    print(f"  Labeled → Unsure (excluded): {conflicts['to_unsure']}")
+    logger.info(f"\nConflicts resolved (new overwrites old):")
+    logger.info(f"  Positive -> Negative: {conflicts['pos_to_neg']}")
+    logger.info(f"  Negative -> Positive: {conflicts['neg_to_pos']}")
+    logger.info(f"  Labeled -> Unsure (excluded): {conflicts['to_unsure']}")
 
     # Save merged
     merged = {
@@ -131,9 +135,9 @@ def merge_annotations(old_path, new_path, output_path, slide_prefix="20251109_PM
     with open(output_path, 'w') as f:
         json.dump(merged, f, indent=2)
 
-    print(f"\nMerged annotations saved to: {output_path}")
-    print(f"  Final: {len(merged_positive)} positive, {len(merged_negative)} negative")
-    print(f"  Total training samples: {len(merged_positive) + len(merged_negative)}")
+    logger.info(f"\nMerged annotations saved to: {output_path}")
+    logger.info(f"  Final: {len(merged_positive)} positive, {len(merged_negative)} negative")
+    logger.info(f"  Total training samples: {len(merged_positive) + len(merged_negative)}")
 
     return merged
 

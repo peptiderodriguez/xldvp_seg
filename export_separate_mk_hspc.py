@@ -11,29 +11,20 @@ import json
 import argparse
 from pathlib import Path
 import numpy as np
-import base64
-from io import BytesIO
 from PIL import Image
 import h5py
 import hdf5plugin  # Required for LZ4 compressed h5 files
 import re
 from scipy import ndimage
 
+# Use segmentation utilities
+from segmentation.io.html_export import percentile_normalize, draw_mask_contour, image_to_base64
+from segmentation.utils.logging import get_logger, setup_logging
 
-def percentile_normalize(image, p_low=5, p_high=95):
-    """Normalize image using percentiles (same as main pipeline)."""
-    if image.ndim == 2:
-        low_val = np.percentile(image, p_low)
-        high_val = np.percentile(image, p_high)
-        if high_val > low_val:
-            normalized = (image.astype(np.float32) - low_val) / (high_val - low_val) * 255
-            return np.clip(normalized, 0, 255).astype(np.uint8)
-        return image.astype(np.uint8)
-    else:
-        result = np.zeros_like(image, dtype=np.uint8)
-        for c in range(image.shape[2]):
-            result[:, :, c] = percentile_normalize(image[:, :, c], p_low, p_high)
-        return result
+logger = get_logger(__name__)
+
+# Default contour thickness for MK/HSPC (6px for visibility)
+DEFAULT_CONTOUR_THICKNESS = 6
 
 
 def get_largest_connected_component(mask):
@@ -44,28 +35,6 @@ def get_largest_connected_component(mask):
     sizes = ndimage.sum(mask, labeled, range(1, num_features + 1))
     largest_label = np.argmax(sizes) + 1
     return labeled == largest_label
-
-
-def draw_mask_contour(img_array, mask, color=(144, 238, 144), dotted=True):
-    """
-    Draw mask contour on image as dotted light green line.
-    """
-    dilated = ndimage.binary_dilation(mask, iterations=6)
-    contour = dilated & ~mask
-    ys, xs = np.where(contour)
-    if len(ys) == 0:
-        return img_array
-    img_out = img_array.copy()
-    if dotted:
-        for i, (y, x) in enumerate(zip(ys, xs)):
-            if i % 2 == 0:
-                if 0 <= y < img_out.shape[0] and 0 <= x < img_out.shape[1]:
-                    img_out[y, x] = color
-    else:
-        for y, x in zip(ys, xs):
-            if 0 <= y < img_out.shape[0] and 0 <= x < img_out.shape[1]:
-                img_out[y, x] = color
-    return img_out
 
 
 def load_samples(tiles_dir, reader, x_start, y_start, cell_type, pixel_size_um, max_samples=None):
@@ -109,7 +78,8 @@ def load_samples(tiles_dir, reader, x_start, y_start, cell_type, pixel_size_um, 
                 tile_x1, tile_x2 = int(matches[1][0]), int(matches[1][1])
             else:
                 continue
-        except:
+        except Exception as e:
+            logger.debug(f"Failed to parse tile coordinates from {seg_file.parent.name}: {e}")
             continue
 
         # Load features
@@ -136,7 +106,8 @@ def load_samples(tiles_dir, reader, x_start, y_start, cell_type, pixel_size_um, 
             # Get cell ID from det_id (format: det_N)
             try:
                 cell_idx = int(det_id.split('_')[1]) + 1  # masks are 1-indexed
-            except:
+            except Exception as e:
+                logger.debug(f"Failed to parse cell index from {det_id}: {e}")
                 continue
 
             # Find cell bounding box in mask
@@ -215,15 +186,14 @@ def load_samples(tiles_dir, reader, x_start, y_start, cell_type, pixel_size_um, 
 
                 # Draw solid bright green contour on the image (6px thick)
                 crop_with_contour = draw_mask_contour(crop_resized, mask_resized,
-                                                       color=(0, 255, 0), dotted=False)
+                                                       color=(0, 255, 0),
+                                                       thickness=DEFAULT_CONTOUR_THICKNESS,
+                                                       dotted=False)
             else:
                 crop_with_contour = crop_resized
 
             # Convert to base64 (JPEG for smaller file sizes)
-            pil_img_final = Image.fromarray(crop_with_contour)
-            buffer = BytesIO()
-            pil_img_final.save(buffer, format='JPEG', quality=85)
-            img_b64 = base64.b64encode(buffer.getvalue()).decode('utf-8')
+            img_b64, _ = image_to_base64(crop_with_contour, format='JPEG', quality=85)
 
             samples.append({
                 'tile_id': tile_dir.name,
@@ -344,13 +314,13 @@ def generate_cell_type_pages(samples, cell_type, output_dir, samples_per_page):
     """Generate separate pages for a single cell type."""
 
     if not samples:
-        print(f"\nNo {cell_type.upper()} samples to export")
+        logger.warning(f"\nNo {cell_type.upper()} samples to export")
         return
 
     pages = [samples[i:i+samples_per_page] for i in range(0, len(samples), samples_per_page)]
     total_pages = len(pages)
 
-    print(f"\nGenerating {total_pages} {cell_type.upper()} pages...")
+    logger.info(f"\nGenerating {total_pages} {cell_type.upper()} pages...")
 
     for page_num in range(1, total_pages + 1):
         page_samples = pages[page_num - 1]
@@ -361,7 +331,7 @@ def generate_cell_type_pages(samples, cell_type, output_dir, samples_per_page):
             f.write(html)
 
         file_size = html_path.stat().st_size / (1024*1024)
-        print(f"  Page {page_num}: {len(page_samples)} samples ({file_size:.1f} MB)")
+        logger.info(f"  Page {page_num}: {len(page_samples)} samples ({file_size:.1f} MB)")
 
 
 def generate_single_type_page_html(samples, cell_type, page_num, total_pages, output_dir):
@@ -593,12 +563,12 @@ def main():
     # Find all slide directories (flexible pattern matching)
     slide_dirs = sorted([d for d in base_dir.iterdir() if d.is_dir() and not d.name.startswith('.')])
 
-    print(f"\n{'='*60}")
-    print(f"Exporting SEPARATE MK and HSPC Pages")
-    print(f"{'='*60}")
-    print(f"Found {len(slide_dirs)} slides")
-    print(f"Samples per page: {args.samples_per_page}")
-    print(f"{'='*60}\n")
+    logger.info(f"\n{'='*60}")
+    logger.info(f"Exporting SEPARATE MK and HSPC Pages")
+    logger.info(f"{'='*60}")
+    logger.info(f"Found {len(slide_dirs)} slides")
+    logger.info(f"Samples per page: {args.samples_per_page}")
+    logger.info(f"{'='*60}\n")
 
     all_mk_samples = []
     all_hspc_samples = []
@@ -619,10 +589,10 @@ def main():
                 break
 
         if not czi_path:
-            print(f"Skipping {slide_name}: CZI not found")
+            logger.warning(f"Skipping {slide_name}: CZI not found")
             continue
 
-        print(f"Loading {slide_name}...")
+        logger.info(f"Loading {slide_name}...")
 
         # Load pixel size
         summary_file = slide_dir / "summary.json"
@@ -669,11 +639,11 @@ def main():
         all_mk_samples.extend(mk_samples)
         all_hspc_samples.extend(hspc_samples)
 
-        print(f"  Loaded {len(mk_samples)} MKs, {len(hspc_samples)} HSPCs")
+        logger.info(f"  Loaded {len(mk_samples)} MKs, {len(hspc_samples)} HSPCs")
 
-    print(f"\n{'='*60}")
-    print(f"Total: {len(all_mk_samples)} MKs, {len(all_hspc_samples)} HSPCs")
-    print(f"{'='*60}\n")
+    logger.info(f"\n{'='*60}")
+    logger.info(f"Total: {len(all_mk_samples)} MKs, {len(all_hspc_samples)} HSPCs")
+    logger.info(f"{'='*60}\n")
 
     # Convert um2 to px2 for filtering
     PIXEL_SIZE_UM = 0.1725
@@ -682,11 +652,11 @@ def main():
     mk_max_px = int(args.mk_max_area_um / um_to_px_factor)
 
     # Filter MK cells by size
-    print(f"Filtering MK cells by size ({args.mk_min_area_um}-{args.mk_max_area_um} um2)...")
+    logger.info(f"Filtering MK cells by size ({args.mk_min_area_um}-{args.mk_max_area_um} um2)...")
     mk_before = len(all_mk_samples)
     all_mk_samples = [s for s in all_mk_samples if mk_min_px <= s.get('area_px', 0) <= mk_max_px]
     mk_after = len(all_mk_samples)
-    print(f"  MK cells: {mk_before} -> {mk_after} (removed {mk_before - mk_after})")
+    logger.info(f"  MK cells: {mk_before} -> {mk_after} (removed {mk_before - mk_after})")
 
     # Sort by area (largest to smallest)
     all_mk_samples.sort(key=lambda x: x.get('area_um2', 0), reverse=True)
@@ -701,11 +671,11 @@ def main():
     hspc_pages = (len(all_hspc_samples) + args.samples_per_page - 1) // args.samples_per_page if all_hspc_samples else 0
     create_index(output_dir, len(all_mk_samples), len(all_hspc_samples), mk_pages, hspc_pages)
 
-    print(f"\n{'='*60}")
-    print(f"Export complete!")
-    print(f"{'='*60}")
-    print(f"Output: {output_dir}")
-    print(f"Open: {output_dir / 'index.html'}")
+    logger.info(f"\n{'='*60}")
+    logger.info(f"Export complete!")
+    logger.info(f"{'='*60}")
+    logger.info(f"Output: {output_dir}")
+    logger.info(f"Open: {output_dir / 'index.html'}")
 
 
 if __name__ == '__main__':

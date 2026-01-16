@@ -11,6 +11,10 @@ from sklearn.cluster import KMeans
 from tqdm import tqdm
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
+from segmentation.utils.logging import get_logger
+
+logger = get_logger(__name__)
+
 
 def calculate_block_variances(gray_image, block_size=512):
     """
@@ -81,6 +85,7 @@ def calibrate_tissue_threshold(
     image_array=None,
     channel=0,
     tile_size=3000,
+    loader=None,
 ):
     """
     Auto-detect variance threshold using K-means clustering.
@@ -89,20 +94,23 @@ def calibrate_tissue_threshold(
     and artifacts/noise (high var). Returns max variance of background cluster
     as the threshold.
 
+    Priority for tile data source: image_array > loader > reader
+
     Args:
         tiles: List of tile coordinates [(x, y), ...] or tile dicts
-        reader: CZI reader object (optional, use if image_array not provided)
-        x_start, y_start: CZI ROI offset
+        reader: CZI reader object (deprecated, use loader or image_array instead)
+        x_start, y_start: CZI ROI offset (only used with reader)
         calibration_samples: Number of tiles to sample for calibration
         block_size: Size of blocks for variance calculation
-        image_array: Pre-loaded image array (optional, faster than reader)
-        channel: Channel index for CZI reader
+        image_array: Pre-loaded image array (recommended, from loader.channel_data)
+        channel: Channel index for CZI reader or loader
         tile_size: Size of tiles
+        loader: CZILoader instance (preferred over reader for RAM-first architecture)
 
     Returns:
         float: Variance threshold for tissue detection
     """
-    print(f"Calibrating tissue threshold (K-means 3-cluster on {calibration_samples} random tiles)...")
+    logger.info(f"Calibrating tissue threshold (K-means 3-cluster on {calibration_samples} random tiles)...")
 
     # Sample tiles for calibration
     n_tiles = len(tiles)
@@ -121,12 +129,21 @@ def calibrate_tissue_threshold(
         else:
             tile_x, tile_y = tile
 
-        # Get tile image
+        # Get tile image (priority: image_array > loader > reader)
         if image_array is not None:
             # Extract from pre-loaded array
             tile_img = image_array[tile_y:tile_y+tile_size, tile_x:tile_x+tile_size]
+        elif loader is not None:
+            # Use CZILoader (RAM-first architecture)
+            try:
+                tile_img = loader.get_tile(tile_x, tile_y, tile_size, channel=channel)
+                if tile_img is None or tile_img.size == 0:
+                    continue
+            except Exception as e:
+                logger.debug(f"Failed to load tile ({tile_x}, {tile_y}) via loader: {e}")
+                continue
         elif reader is not None:
-            # Read from CZI
+            # Read from CZI (deprecated path)
             try:
                 tile_img = reader.read_mosaic(
                     region=(x_start + tile_x, y_start + tile_y, tile_size, tile_size),
@@ -136,10 +153,11 @@ def calibrate_tissue_threshold(
                 if tile_img is None or tile_img.size == 0:
                     continue
                 tile_img = np.squeeze(tile_img)
-            except Exception:
+            except Exception as e:
+                logger.debug(f"Failed to read tile ({tile_x}, {tile_y}) via CZI reader: {e}")
                 continue
         else:
-            raise ValueError("Either reader or image_array must be provided")
+            raise ValueError("Either reader, loader, or image_array must be provided")
 
         # Skip empty tiles
         if tile_img.max() == 0:
@@ -164,7 +182,7 @@ def calibrate_tissue_threshold(
         all_variances.extend(variances)
 
     if len(all_variances) < 10:
-        print("  WARNING: Not enough samples, using default threshold 15.0")
+        logger.warning("Not enough samples, using default threshold 15.0")
         return 15.0
 
     # K-means with 3 clusters: background (low var), tissue (medium var), artifacts (high var)
@@ -181,8 +199,8 @@ def calibrate_tissue_threshold(
 
     threshold = float(np.max(bottom_cluster_variances)) if len(bottom_cluster_variances) > 0 else 15.0
 
-    print(f"  K-means centers: {sorted(centers)[0]:.1f} (bg), {sorted(centers)[1]:.1f} (tissue), {sorted(centers)[2]:.1f} (outliers)")
-    print(f"  Threshold (bg cluster max): {threshold:.1f}")
+    logger.info(f"  K-means centers: {sorted(centers)[0]:.1f} (bg), {sorted(centers)[1]:.1f} (tissue), {sorted(centers)[2]:.1f} (outliers)")
+    logger.info(f"  Threshold (bg cluster max): {threshold:.1f}")
 
     return threshold
 
@@ -199,21 +217,25 @@ def filter_tissue_tiles(
     block_size=512,
     n_workers=None,
     show_progress=True,
+    loader=None,
 ):
     """
     Filter tiles to only those containing tissue.
 
+    Priority for tile data source: image_array > loader > reader
+
     Args:
         tiles: List of tile coordinates or tile dicts
         variance_threshold: Threshold from calibrate_tissue_threshold
-        reader: CZI reader (optional)
-        x_start, y_start: CZI ROI offset
-        image_array: Pre-loaded image array (optional)
-        channel: Channel index for CZI reader
+        reader: CZI reader (deprecated, use loader or image_array instead)
+        x_start, y_start: CZI ROI offset (only used with reader)
+        image_array: Pre-loaded image array (recommended, from loader.channel_data)
+        channel: Channel index for CZI reader or loader
         tile_size: Size of tiles
         block_size: Block size for variance calculation
         n_workers: Number of parallel workers (default: 80% of CPUs)
         show_progress: Whether to show progress bar
+        loader: CZILoader instance (preferred over reader for RAM-first architecture)
 
     Returns:
         List of tiles that contain tissue
@@ -223,8 +245,8 @@ def filter_tissue_tiles(
     if n_workers is None:
         n_workers = max(1, int(os.cpu_count() * 0.8))
 
-    print(f"Filtering tiles to tissue-containing only...")
-    print(f"  Using {n_workers} workers for parallel checking")
+    logger.info("Filtering tiles to tissue-containing only...")
+    logger.info(f"  Using {n_workers} workers for parallel checking")
 
     def check_tile(tile):
         """Check if a single tile contains tissue."""
@@ -235,11 +257,17 @@ def filter_tissue_tiles(
         else:
             tile_x, tile_y = tile
 
-        # Get tile image
+        # Get tile image (priority: image_array > loader > reader)
         try:
             if image_array is not None:
                 tile_img = image_array[tile_y:tile_y+tile_size, tile_x:tile_x+tile_size]
+            elif loader is not None:
+                # Use CZILoader (RAM-first architecture)
+                tile_img = loader.get_tile(tile_x, tile_y, tile_size, channel=channel)
+                if tile_img is None or tile_img.size == 0:
+                    return None
             elif reader is not None:
+                # Read from CZI (deprecated path)
                 tile_img = reader.read_mosaic(
                     region=(x_start + tile_x, y_start + tile_y, tile_size, tile_size),
                     scale_factor=1,
@@ -269,7 +297,8 @@ def filter_tissue_tiles(
                 return tile
             return None
 
-        except Exception:
+        except Exception as e:
+            logger.debug(f"Error checking tissue in tile: {e}")
             return None
 
     tissue_tiles = []
@@ -295,6 +324,6 @@ def filter_tissue_tiles(
             if result is not None:
                 tissue_tiles.append(result)
 
-    print(f"  Tissue tiles: {len(tissue_tiles)} / {len(tiles)} ({100*len(tissue_tiles)/len(tiles):.1f}%)")
+    logger.info(f"  Tissue tiles: {len(tissue_tiles)} / {len(tiles)} ({100*len(tissue_tiles)/len(tiles):.1f}%)")
 
     return tissue_tiles

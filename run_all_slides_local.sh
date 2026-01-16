@@ -8,7 +8,7 @@
 
 # Input/Output paths - UPDATE THESE FOR YOUR MACHINE
 CZI_BASE="/path/to/your/czi/files"  # Directory containing slide subdirectories
-OUTPUT_BASE="$HOME/BM_MK_seg_output"  # Output directory
+OUTPUT_BASE="$HOME/xldvp_seg_output"  # Output directory
 
 # Processing parameters (optimized for RTX 3090 + 512GB RAM)
 TILE_SIZE=4096           # Use maximum resolution

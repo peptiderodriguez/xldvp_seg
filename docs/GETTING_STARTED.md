@@ -1,4 +1,4 @@
-# Getting Started with BM_MK_seg
+# Getting Started with xldvp_seg
 
 A unified pipeline for cell detection and segmentation in whole-slide CZI microscopy images.
 
@@ -410,8 +410,8 @@ Increase parallel workers:
 
 | What | Where |
 |------|-------|
-| This repo | `/home/dude/code/BM_MK_seg_repo/` |
-| MK/HSPC output | `/home/dude/BM_MK_seg_output/` |
+| This repo | `/home/dude/code/xldvp_seg_repo/` |
+| MK/HSPC output | `/home/dude/xldvp_seg_output/` |
 | NMJ output | `/home/dude/nmj_output/` |
 | Conda env | `mkseg` |
 | SAM2 checkpoint | `checkpoints/sam2.1_hiera_large.pt` |

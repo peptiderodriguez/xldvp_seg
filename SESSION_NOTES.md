@@ -90,7 +90,7 @@ cd docs && python -m http.server 8080
 ### Environment
 - **Machine:** Local workstation (48 cores, 432GB RAM, RTX 4090 24GB VRAM)
 - **CZI Source:** `/mnt/x/01_Users/EdRo_axioscan/bonemarrow/2025_11_18/`
-- **Output:** `~/BM_MK_seg_output/`
+- **Output:** `~/xldvp_seg_output/`
 
 ### Changes Made
 
@@ -198,7 +198,7 @@ Resource usage during run:
 # 1. Convert annotations
 python convert_annotations_to_training.py \
     --annotations annotations/all_labels.json \
-    --base-dir ~/BM_MK_seg_output \
+    --base-dir ~/xldvp_seg_output \
     --mk-min-area-um 200 --mk-max-area-um 2000 \
     --output annotations/training_data.json
 
@@ -211,7 +211,7 @@ python train_separate_classifiers.py \
 # 3. Run 100% segmentation with classifiers
 python run_unified_FAST.py \
     --czi-paths /path/to/*.czi \
-    --output-dir ~/BM_MK_seg_output \
+    --output-dir ~/xldvp_seg_output \
     --mk-classifier mk_classifier.pkl \
     --hspc-classifier hspc_classifier.pkl \
     --sample-fraction 1.0
@@ -253,8 +253,8 @@ python run_unified_FAST.py \
 - Worker models: ~8-12 GB GPU VRAM per worker
 
 ### GitHub
-- Repo: `peptiderodriguez/BM_MK_seg`
-- Live site: `https://peptiderodriguez.github.io/BM_MK_seg/`
+- Repo: `peptiderodriguez/xldvp_seg`
+- Live site: `https://peptiderodriguez.github.io/xldvp_seg/`
 
 ---
 

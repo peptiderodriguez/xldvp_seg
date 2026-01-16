@@ -1,6 +1,10 @@
-# BM_MK_seg - Bone Marrow MK/HSPC Segmentation
+# xldvp_seg - Unified Cell Segmentation Pipeline
 
-Automated segmentation and classification pipeline for Megakaryocytes (MK) and Hematopoietic Stem/Progenitor Cells (HSPC) in bone marrow microscopy images.
+Automated segmentation and classification pipeline for multiple cell types in microscopy images:
+- **MK** (Megakaryocytes) and **HSPC** in bone marrow
+- **NMJ** (Neuromuscular Junctions) in muscle tissue
+- **Vessels** (SMA+ blood vessel cross-sections)
+- **Mesothelium** ribbons for laser microdissection
 
 ## Overview
 
@@ -45,8 +49,8 @@ This repository supports the full pipeline from raw images to validated cell cou
 
 ### 1. Clone Repository
 ```bash
-git clone https://github.com/peptiderodriguez/BM_MK_seg.git
-cd BM_MK_seg
+git clone https://github.com/peptiderodriguez/xldvp_seg.git
+cd xldvp_seg
 ```
 
 ### 2. Create Python Environment

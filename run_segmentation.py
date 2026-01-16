@@ -8,7 +8,7 @@ Supports multiple cell types with shared infrastructure and full feature extract
 Cell Types:
     - nmj: Neuromuscular junctions (intensity + elongation filter)
     - mk: Megakaryocytes (SAM2 automatic mask generation)
-    - hspc: Hematopoietic stem/progenitor cells (Cellpose-SAM + SAM2 refinement)
+    - cell: Hematopoietic stem/progenitor cells (Cellpose-SAM + SAM2 refinement)
     - vessel: Blood vessel cross-sections (ring detection via contour hierarchy)
 
 Features extracted per cell: 2326 total
@@ -22,6 +22,16 @@ Outputs:
     - {cell_type}_coordinates.csv: Quick export with center coordinates in pixels and µm
     - {cell_type}_masks.h5: Per-tile mask arrays
     - html/: Interactive HTML viewer for annotation
+
+After processing, automatically starts HTTP server and Cloudflare tunnel for remote viewing.
+Server runs in background by default - script exits but server keeps running.
+
+Server options:
+    --serve-background  Start server in background (default) - script exits, server persists
+    --serve             Start server in foreground - wait for Ctrl+C to stop
+    --no-serve          Don't start server
+    --port PORT         HTTP server port (default: 8081)
+    --stop-server       Stop any running background server and exit
 
 Usage:
     # NMJ detection
@@ -38,8 +48,13 @@ Usage:
 
 import os
 import gc
+import re
 import json
 import argparse
+import subprocess
+import signal
+import atexit
+import time
 import numpy as np
 from pathlib import Path
 from tqdm import tqdm
@@ -49,117 +64,431 @@ import torchvision.models as tv_models
 import torchvision.transforms as tv_transforms
 from PIL import Image
 
-# Import shared modules
-from shared.tissue_detection import (
+# Import segmentation modules
+from segmentation.detection.tissue import (
     calibrate_tissue_threshold,
     filter_tissue_tiles,
 )
-from shared.html_export import (
+from segmentation.io.html_export import (
     export_samples_to_html,
     percentile_normalize,
     draw_mask_contour,
     image_to_base64,
+    create_hdf5_dataset,  # Import shared HDF5 utilities
+    HDF5_COMPRESSION_KWARGS,
+    HDF5_COMPRESSION_NAME,
 )
+from segmentation.utils.logging import get_logger, setup_logging, log_parameters
+from segmentation.utils.feature_extraction import (
+    extract_resnet_features_batch,
+    preprocess_crop_for_resnet,
+    extract_morphological_features as _shared_extract_morphological_features,  # Import shared version
+    compute_hsv_features,
+)
+from segmentation.io.czi_loader import get_loader, CZILoader
 
-# Try LZ4 compression for HDF5
-try:
-    import hdf5plugin
-    HDF5_COMPRESSION = hdf5plugin.LZ4(nbytes=0)
-except ImportError:
-    HDF5_COMPRESSION = {'compression': 'gzip'}
+# Import new CellDetector and strategies
+from segmentation.detection.cell_detector import CellDetector
+from segmentation.detection.strategies.mk import MKStrategy
+from segmentation.detection.strategies.nmj import NMJStrategy
+from segmentation.detection.strategies.vessel import VesselStrategy
+from segmentation.detection.strategies.cell import CellStrategy
+from segmentation.detection.strategies.mesothelium import MesotheliumStrategy
+
+logger = get_logger(__name__)
+
+# Global list to track spawned processes for cleanup (foreground mode only)
+_spawned_processes = []
+
+# PID file location for background servers
+SERVER_PID_FILE = Path.home() / '.segmentation_server.pid'
 
 
-def create_hdf5_dataset(f, name, data):
-    """Create HDF5 dataset with compression."""
-    if isinstance(HDF5_COMPRESSION, dict):
-        f.create_dataset(name, data=data, **HDF5_COMPRESSION)
+def _cleanup_processes():
+    """Cleanup spawned HTTP server and tunnel processes on exit."""
+    for proc in _spawned_processes:
+        try:
+            if proc.poll() is None:  # Still running
+                proc.terminate()
+                proc.wait(timeout=5)
+        except Exception:
+            pass
+
+
+atexit.register(_cleanup_processes)
+
+
+def stop_background_server():
+    """Stop any running background server using saved PID file."""
+    if not SERVER_PID_FILE.exists():
+        logger.info("No background server running (no PID file found)")
+        return False
+
+    try:
+        data = json.loads(SERVER_PID_FILE.read_text())
+        http_pid = data.get('http_pid')
+        tunnel_pid = data.get('tunnel_pid')
+        stopped = False
+
+        for name, pid in [('HTTP server', http_pid), ('Cloudflare tunnel', tunnel_pid)]:
+            if pid:
+                try:
+                    os.kill(pid, signal.SIGTERM)
+                    logger.info(f"Stopped {name} (PID {pid})")
+                    stopped = True
+                except ProcessLookupError:
+                    logger.info(f"{name} (PID {pid}) was not running")
+                except PermissionError:
+                    logger.error(f"Permission denied stopping {name} (PID {pid})")
+
+        SERVER_PID_FILE.unlink()
+        return stopped
+    except Exception as e:
+        logger.error(f"Error stopping server: {e}")
+        return False
+
+
+def start_server_and_tunnel(html_dir: Path, port: int = 8081, background: bool = False) -> tuple:
+    """
+    Start HTTP server and Cloudflare tunnel for viewing results.
+
+    Args:
+        html_dir: Path to the HTML directory to serve
+        port: Port for HTTP server (default 8081)
+        background: If True, detach processes so they survive script exit
+
+    Returns:
+        Tuple of (http_process, tunnel_process, tunnel_url)
+    """
+    global _spawned_processes
+
+    html_dir = Path(html_dir)
+    if not html_dir.exists():
+        logger.error(f"HTML directory does not exist: {html_dir}")
+        return None, None, None
+
+    # Stop any existing background server first
+    if background and SERVER_PID_FILE.exists():
+        logger.info("Stopping existing background server...")
+        stop_background_server()
+
+    # Common args for background mode (detach from parent)
+    bg_kwargs = {}
+    if background:
+        bg_kwargs = {
+            'start_new_session': True,  # Detach from parent process group
+            'stdin': subprocess.DEVNULL,
+        }
+
+    # Start HTTP server
+    logger.info(f"Starting HTTP server on port {port}...")
+    http_proc = subprocess.Popen(
+        ['python', '-m', 'http.server', str(port)],
+        cwd=str(html_dir),
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+        **bg_kwargs,
+    )
+    if not background:
+        _spawned_processes.append(http_proc)
+    time.sleep(1)  # Give server time to start
+
+    if http_proc.poll() is not None:
+        logger.error("HTTP server failed to start")
+        return None, None, None
+
+    logger.info(f"HTTP server running: http://localhost:{port}")
+
+    # Start Cloudflare tunnel
+    cloudflared_path = os.path.expanduser('~/cloudflared')
+    if not os.path.exists(cloudflared_path):
+        logger.warning("Cloudflare tunnel not found at ~/cloudflared")
+        logger.info("Install with: curl -L https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-amd64 -o ~/cloudflared && chmod +x ~/cloudflared")
+        if background:
+            # Save HTTP server PID even without tunnel
+            SERVER_PID_FILE.write_text(json.dumps({
+                'http_pid': http_proc.pid,
+                'tunnel_pid': None,
+                'port': port,
+                'html_dir': str(html_dir),
+                'url': None,
+            }))
+        return http_proc, None, None
+
+    logger.info("Starting Cloudflare tunnel...")
+
+    # For background mode, we need to capture output to get URL but still detach
+    if background:
+        # Create a log file for tunnel output
+        tunnel_log = html_dir / '.tunnel.log'
+        tunnel_log_file = open(tunnel_log, 'w')
+        tunnel_proc = subprocess.Popen(
+            [cloudflared_path, 'tunnel', '--url', f'http://localhost:{port}'],
+            stdout=tunnel_log_file,
+            stderr=subprocess.STDOUT,
+            start_new_session=True,
+            stdin=subprocess.DEVNULL,
+        )
+        # Wait briefly and parse log for URL
+        time.sleep(5)
+        tunnel_log_file.flush()
+        tunnel_url = None
+        try:
+            log_content = tunnel_log.read_text()
+            match = re.search(r'(https://[^\s]+\.trycloudflare\.com)', log_content)
+            if match:
+                tunnel_url = match.group(1)
+        except Exception:
+            pass
     else:
-        f.create_dataset(name, data=data, **HDF5_COMPRESSION)
+        tunnel_proc = subprocess.Popen(
+            [cloudflared_path, 'tunnel', '--url', f'http://localhost:{port}'],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            text=True,
+        )
+        _spawned_processes.append(tunnel_proc)
+
+        # Wait for tunnel URL (usually appears within 5-10 seconds)
+        tunnel_url = None
+        start_time = time.time()
+        while time.time() - start_time < 30:
+            line = tunnel_proc.stdout.readline()
+            if not line:
+                if tunnel_proc.poll() is not None:
+                    logger.error("Cloudflare tunnel exited unexpectedly")
+                    break
+                continue
+            # Look for the tunnel URL in the output
+            if 'trycloudflare.com' in line:
+                match = re.search(r'(https://[^\s]+\.trycloudflare\.com)', line)
+                if match:
+                    tunnel_url = match.group(1)
+                    break
+
+    # Save PID file for background mode
+    if background:
+        SERVER_PID_FILE.write_text(json.dumps({
+            'http_pid': http_proc.pid,
+            'tunnel_pid': tunnel_proc.pid if tunnel_proc else None,
+            'port': port,
+            'html_dir': str(html_dir),
+            'url': tunnel_url,
+        }))
+
+    if tunnel_url:
+        logger.info("=" * 60)
+        logger.info("REMOTE ACCESS AVAILABLE")
+        logger.info("=" * 60)
+        logger.info(f"Public URL: {tunnel_url}")
+        logger.info(f"Local URL:  http://localhost:{port}")
+        if background:
+            logger.info("")
+            logger.info("Server running in BACKGROUND")
+            logger.info(f"To stop: python run_segmentation.py --stop-server")
+            logger.info(f"PID file: {SERVER_PID_FILE}")
+        else:
+            logger.info("")
+            logger.info("Press Ctrl+C to stop server and tunnel")
+        logger.info("=" * 60)
+    else:
+        logger.warning("Could not get tunnel URL (tunnel may still be starting)")
+        logger.info(f"Local URL: http://localhost:{port}")
+        if background:
+            logger.info(f"Check tunnel log: {html_dir / '.tunnel.log'}")
+
+    return http_proc, tunnel_proc, tunnel_url
+
+
+def wait_for_server_shutdown(http_proc, tunnel_proc):
+    """Wait for user to press Ctrl+C, then cleanup."""
+    if http_proc is None:
+        return
+
+    try:
+        logger.info("Server running. Press Ctrl+C to exit...")
+        while True:
+            time.sleep(1)
+            # Check if processes are still alive
+            if http_proc.poll() is not None:
+                logger.warning("HTTP server stopped unexpectedly")
+                break
+            if tunnel_proc and tunnel_proc.poll() is not None:
+                logger.warning("Tunnel stopped unexpectedly")
+    except KeyboardInterrupt:
+        logger.info("\nShutting down...")
+    finally:
+        _cleanup_processes()
+        logger.info("Server stopped")
+
+
+# =============================================================================
+# STRATEGY HELPER FUNCTIONS
+# =============================================================================
+
+def create_strategy_for_cell_type(cell_type, params, pixel_size_um):
+    """
+    Create the appropriate detection strategy for a cell type.
+
+    Args:
+        cell_type: One of 'nmj', 'mk', 'cell', 'vessel'
+        params: Cell-type specific parameters dict
+        pixel_size_um: Pixel size in microns
+
+    Returns:
+        DetectionStrategy instance
+
+    Raises:
+        ValueError: If cell_type is not supported by the new strategy pattern
+    """
+    if cell_type == 'nmj':
+        return NMJStrategy(
+            intensity_percentile=params.get('intensity_percentile', 99.0),
+            min_area_px=params.get('min_area', 150),
+            min_skeleton_length=params.get('min_skeleton_length', 30),
+            max_solidity=params.get('max_solidity', 0.85),
+        )
+    elif cell_type == 'mk':
+        # Convert area from pixels to um^2 for the strategy
+        min_area_px = params.get('mk_min_area', 4132)  # ~200 um^2 at 0.22 um/px
+        max_area_px = params.get('mk_max_area', 41322)  # ~2000 um^2 at 0.22 um/px
+        min_area_um = min_area_px * (pixel_size_um ** 2)
+        max_area_um = max_area_px * (pixel_size_um ** 2)
+        return MKStrategy(
+            min_area_um=min_area_um,
+            max_area_um=max_area_um,
+        )
+    elif cell_type == 'cell':
+        return CellStrategy(
+            min_area_um=params.get('min_area_um', 50),
+            max_area_um=params.get('max_area_um', 200),
+        )
+    elif cell_type == 'vessel':
+        return VesselStrategy(
+            min_diameter_um=params.get('min_vessel_diameter_um', 10),
+            max_diameter_um=params.get('max_vessel_diameter_um', 1000),
+            min_wall_thickness_um=params.get('min_wall_thickness_um', 2),
+            max_aspect_ratio=params.get('max_aspect_ratio', 4.0),
+            min_circularity=params.get('min_circularity', 0.3),
+            min_ring_completeness=params.get('min_ring_completeness', 0.5),
+            classify_vessel_types=params.get('classify_vessel_types', False),
+        )
+    elif cell_type == 'mesothelium':
+        return MesotheliumStrategy(
+            target_chunk_area_um2=params.get('target_chunk_area_um2', 1500.0),
+            min_ribbon_width_um=params.get('min_ribbon_width_um', 5.0),
+            max_ribbon_width_um=params.get('max_ribbon_width_um', 30.0),
+            min_fragment_area_um2=params.get('min_fragment_area_um2', 1500.0),
+            pixel_size_um=pixel_size_um,
+        )
+    else:
+        raise ValueError(f"Cell type '{cell_type}' does not have a strategy implementation. "
+                         f"Supported types: nmj, mk, cell, vessel, mesothelium")
+
+
+def detections_to_features_list(detections, cell_type):
+    """
+    Convert a list of Detection objects to the expected features_list format.
+
+    The old format is:
+        features_list = [
+            {
+                'id': 'nmj_1',
+                'center': [cx, cy],  # local coordinates
+                'features': {...}    # morphological + deep features
+            },
+            ...
+        ]
+
+    For vessels, contours are at the top level (not in features):
+        {
+            'id': 'vessel_1',
+            'center': [cx, cy],
+            'outer_contour': [...],  # At top level
+            'inner_contour': [...],  # At top level
+            'features': {...}
+        }
+
+    Args:
+        detections: List of Detection objects from strategy.detect()
+        cell_type: Cell type string for ID prefix
+
+    Returns:
+        List of feature dicts in the old format
+    """
+    features_list = []
+    for i, det in enumerate(detections, start=1):
+        feat_dict = {
+            'id': det.id if det.id else f'{cell_type}_{i}',
+            'center': det.centroid,  # [x, y] format
+            'features': det.features.copy(),
+        }
+        # Include score in features if available
+        if det.score is not None:
+            feat_dict['features']['score'] = det.score
+
+        # For vessels, lift contours from features to top level (old format compatibility)
+        if cell_type == 'vessel':
+            if 'outer_contour' in feat_dict['features']:
+                feat_dict['outer_contour'] = feat_dict['features'].pop('outer_contour')
+            if 'inner_contour' in feat_dict['features']:
+                feat_dict['inner_contour'] = feat_dict['features'].pop('inner_contour')
+
+        features_list.append(feat_dict)
+    return features_list
+
+
+def detections_to_label_array(detections, shape):
+    """
+    Convert a list of Detection objects to a label array.
+
+    Args:
+        detections: List of Detection objects
+        shape: (height, width) tuple for the output array
+
+    Returns:
+        uint32 array with labels
+    """
+    label_array = np.zeros(shape, dtype=np.uint32)
+    for i, det in enumerate(detections, start=1):
+        label_array[det.mask] = i
+    return label_array
+
+
+# NOTE: HDF5 compression utilities (create_hdf5_dataset, HDF5_COMPRESSION_KWARGS, HDF5_COMPRESSION_NAME)
+# are now imported from segmentation.io.html_export (Issue #7 - consolidated)
+# Alias for backwards compatibility
+HDF5_COMPRESSION = HDF5_COMPRESSION_KWARGS
 
 
 # =============================================================================
 # FEATURE EXTRACTION (shared across all cell types)
 # =============================================================================
-
-def extract_morphological_features(mask, image):
-    """
-    Extract 22 morphological/intensity features from a mask.
-
-    Returns dict with: area, perimeter, circularity, solidity, aspect_ratio,
-    extent, equiv_diameter, color stats (RGB, gray, HSV), texture features.
-    """
-    from skimage import measure
-
-    if not mask.any():
-        return {}
-
-    area = int(mask.sum())
-    props = measure.regionprops(mask.astype(int))[0]
-
-    perimeter = props.perimeter if hasattr(props, 'perimeter') else 0
-    circularity = 4 * np.pi * area / (perimeter ** 2) if perimeter > 0 else 0
-    solidity = props.solidity if hasattr(props, 'solidity') else 0
-    aspect_ratio = props.major_axis_length / props.minor_axis_length if props.minor_axis_length > 0 else 1
-    extent = props.extent if hasattr(props, 'extent') else 0
-    equiv_diameter = props.equivalent_diameter if hasattr(props, 'equivalent_diameter') else 0
-
-    # Intensity features
-    if image.ndim == 3:
-        masked_pixels = image[mask]
-        red_mean, red_std = float(np.mean(masked_pixels[:, 0])), float(np.std(masked_pixels[:, 0]))
-        green_mean, green_std = float(np.mean(masked_pixels[:, 1])), float(np.std(masked_pixels[:, 1]))
-        blue_mean, blue_std = float(np.mean(masked_pixels[:, 2])), float(np.std(masked_pixels[:, 2]))
-        gray = np.mean(masked_pixels, axis=1)
-    else:
-        gray = image[mask].astype(float)
-        red_mean = green_mean = blue_mean = float(np.mean(gray))
-        red_std = green_std = blue_std = float(np.std(gray))
-
-    gray_mean, gray_std = float(np.mean(gray)), float(np.std(gray))
-
-    # HSV features
-    if image.ndim == 3:
-        import colorsys
-        hsv = np.array([colorsys.rgb_to_hsv(r/255, g/255, b/255) for r, g, b in masked_pixels[:100]])  # Sample for speed
-        hue_mean = float(np.mean(hsv[:, 0]) * 180)
-        sat_mean = float(np.mean(hsv[:, 1]) * 255)
-        val_mean = float(np.mean(hsv[:, 2]) * 255)
-    else:
-        hue_mean = sat_mean = 0.0
-        val_mean = gray_mean
-
-    # Texture features
-    relative_brightness = gray_mean - np.mean(image) if image.size > 0 else 0
-    intensity_variance = float(np.var(gray))
-    dark_fraction = float(np.mean(gray < 100))
-    nuclear_complexity = gray_std
-
-    return {
-        'area': area,
-        'perimeter': float(perimeter),
-        'circularity': float(circularity),
-        'solidity': float(solidity),
-        'aspect_ratio': float(aspect_ratio),
-        'extent': float(extent),
-        'equiv_diameter': float(equiv_diameter),
-        'red_mean': red_mean, 'red_std': red_std,
-        'green_mean': green_mean, 'green_std': green_std,
-        'blue_mean': blue_mean, 'blue_std': blue_std,
-        'gray_mean': gray_mean, 'gray_std': gray_std,
-        'hue_mean': hue_mean, 'saturation_mean': sat_mean, 'value_mean': val_mean,
-        'relative_brightness': float(relative_brightness),
-        'intensity_variance': intensity_variance,
-        'dark_region_fraction': dark_fraction,
-        'nuclear_complexity': nuclear_complexity,
-    }
+# NOTE: extract_morphological_features is now imported from
+# segmentation.utils.feature_extraction (Issue #7 - consolidated from 7 files)
+# This alias preserves backwards compatibility for code in this file.
+extract_morphological_features = _shared_extract_morphological_features
 
 
 # =============================================================================
-# UNIFIED SEGMENTER CLASS
+# UNIFIED SEGMENTER CLASS (DEPRECATED)
+# =============================================================================
+# NOTE: This class is deprecated. Use CellDetector with strategy classes instead:
+#   from segmentation.detection.cell_detector import CellDetector
+#   from segmentation.detection.strategies import MKStrategy, NMJStrategy, VesselStrategy, CellStrategy
+#
+#   detector = CellDetector(device="cuda")
+#   strategy = MKStrategy(min_area_um=200, max_area_um=2000)
+#   label_array, detections = strategy.detect(tile, detector.models, pixel_size_um)
+#
+# This class is kept for backwards compatibility with mesothelium detection,
+# which does not yet have a strategy implementation.
 # =============================================================================
 
 class UnifiedSegmenter:
     """
+    DEPRECATED: Use CellDetector with strategy classes instead.
+
     Unified segmenter for all cell types (MK, HSPC, NMJ, Vessel).
 
     Loads models once and provides cell-type specific detection with
@@ -188,10 +517,10 @@ class UnifiedSegmenter:
         else:
             self.device = device
 
-        print(f"Initializing UnifiedSegmenter on {self.device}")
+        logger.info(f"Initializing UnifiedSegmenter on {self.device}")
 
         # ResNet for deep features (always loaded - 2048D features)
-        print("  Loading ResNet-50...")
+        logger.info("  Loading ResNet-50...")
         resnet = tv_models.resnet50(weights='DEFAULT')
         self.resnet = torch.nn.Sequential(*list(resnet.children())[:-1])
         self.resnet.eval().to(self.device)
@@ -232,10 +561,10 @@ class UnifiedSegmenter:
                 break
 
         if checkpoint_path is None:
-            print("  WARNING: SAM2 checkpoint not found, skipping SAM2")
+            logger.warning("SAM2 checkpoint not found, skipping SAM2")
             return
 
-        print(f"  Loading SAM2 from {checkpoint_path}...")
+        logger.info(f"  Loading SAM2 from {checkpoint_path}...")
         sam2_config = "configs/sam2.1/sam2.1_hiera_l.yaml"
         sam2_model = build_sam2(sam2_config, str(checkpoint_path), device=self.device)
 
@@ -256,7 +585,7 @@ class UnifiedSegmenter:
         """Load Cellpose-SAM model."""
         from cellpose.models import CellposeModel
 
-        print(f"  Loading Cellpose-SAM...")
+        logger.info("  Loading Cellpose-SAM...")
         self.cellpose = CellposeModel(pretrained_model='cpsam', gpu=True, device=self.device)
 
     def extract_resnet_features(self, crop):
@@ -288,6 +617,28 @@ class UnifiedSegmenter:
             # Return zeros if feature extraction fails
             return np.zeros(2048)
 
+    def extract_resnet_features_batch(self, crops, batch_size=16):
+        """
+        Extract ResNet features for multiple crops in batches for GPU efficiency.
+
+        This method significantly improves GPU utilization by processing multiple
+        crops at once instead of one at a time.
+
+        Args:
+            crops: List of image crops as numpy arrays
+            batch_size: Number of crops to process at once (default 16)
+
+        Returns:
+            List of feature vectors as numpy arrays (2048D each)
+        """
+        return extract_resnet_features_batch(
+            crops,
+            self.resnet,
+            self.resnet_transform,
+            self.device,
+            batch_size=batch_size
+        )
+
     def extract_sam2_embedding(self, cy, cx):
         """Extract 256D SAM2 embedding at a point."""
         if self.sam2_predictor is None:
@@ -304,7 +655,8 @@ class UnifiedSegmenter:
             emb_x = min(max(emb_x, 0), emb_w - 1)
 
             return self.sam2_predictor._features["image_embed"][0, :, emb_y, emb_x].cpu().numpy()
-        except:
+        except Exception as e:
+            logger.debug(f"Failed to extract SAM2 embedding: {e}")
             return np.zeros(256)
 
     def extract_full_features(self, mask, image_rgb, cy, cx):
@@ -345,13 +697,82 @@ class UnifiedSegmenter:
 
         return features
 
-    def detect_nmj(self, image_rgb, params):
+    def extract_full_features_batch(self, masks_list, image_rgb, centroids, batch_size=16):
+        """
+        Extract all 2326 features for multiple detections with batch ResNet processing.
+
+        This method improves GPU utilization by batching ResNet feature extraction
+        across multiple detections, instead of processing one at a time.
+
+        Args:
+            masks_list: List of binary masks
+            image_rgb: RGB image
+            centroids: List of (cy, cx) tuples for each mask
+            batch_size: Batch size for ResNet (default 16)
+
+        Returns:
+            List of feature dicts, one per detection
+        """
+        if not masks_list:
+            return []
+
+        # First pass: extract morphological and SAM2 features, collect crops
+        all_features = []
+        crops = []
+        crop_indices = []  # Track which detections have valid crops
+
+        for idx, (mask, (cy, cx)) in enumerate(zip(masks_list, centroids)):
+            # 22 morphological features
+            features = extract_morphological_features(mask, image_rgb)
+
+            # 256 SAM2 embedding features
+            sam2_emb = self.extract_sam2_embedding(cy, cx)
+            for i, v in enumerate(sam2_emb):
+                features[f'sam2_emb_{i}'] = float(v)
+
+            # Prepare crop for batch ResNet processing
+            ys, xs = np.where(mask)
+            if len(ys) > 0:
+                y1, y2 = ys.min(), ys.max()
+                x1, x2 = xs.min(), xs.max()
+                crop = image_rgb[y1:y2+1, x1:x2+1].copy()
+                crop_mask = mask[y1:y2+1, x1:x2+1]
+                crop[~crop_mask] = 0
+                crops.append(crop)
+                crop_indices.append(idx)
+            else:
+                # No valid crop - will fill with zeros later
+                pass
+
+            all_features.append(features)
+
+        # Batch ResNet feature extraction
+        if crops:
+            resnet_features_list = self.extract_resnet_features_batch(crops, batch_size=batch_size)
+
+            # Assign ResNet features to correct detections
+            for crop_idx, resnet_feats in zip(crop_indices, resnet_features_list):
+                for i, v in enumerate(resnet_feats):
+                    all_features[crop_idx][f'resnet_{i}'] = float(v)
+
+        # Fill zeros for detections without valid crops
+        for idx in range(len(all_features)):
+            if f'resnet_0' not in all_features[idx]:
+                for i in range(2048):
+                    all_features[idx][f'resnet_{i}'] = 0.0
+
+        return all_features
+
+    def detect_nmj(self, image_rgb, params, resnet_batch_size=16):
         """
         Detect NMJs using intensity threshold + elongation filter.
+
+        Uses batch ResNet feature extraction for improved GPU utilization.
 
         Args:
             image_rgb: RGB image array
             params: Dict with intensity_percentile, min_area, min_skeleton_length, min_elongation
+            resnet_batch_size: Batch size for ResNet feature extraction (default 16)
 
         Returns:
             Tuple of (masks, features_list)
@@ -381,16 +802,12 @@ class UnifiedSegmenter:
 
         # Debug: log candidate counts
         if len(props) > 0:
-            print(f"    NMJ: {len(props)} candidates after threshold={threshold:.0f}", flush=True)
+            logger.debug(f"    NMJ: {len(props)} candidates after threshold={threshold:.0f}")
 
-        # Filter by elongation
+        # First pass: filter by elongation and collect valid detections
         masks = np.zeros(image_rgb.shape[:2], dtype=np.uint32)
-        features_list = []
+        valid_detections = []  # (det_id, region_mask, cy, cx, skeleton_length, elongation, eccentricity, mean_intensity)
         det_id = 1
-
-        # Set image for SAM2 embeddings if available
-        if self.sam2_predictor is not None:
-            self.sam2_predictor.set_image(image_rgb if image_rgb.dtype == np.uint8 else (image_rgb / 256).astype(np.uint8))
 
         for prop in props:
             if prop.area < params['min_area']:
@@ -403,23 +820,47 @@ class UnifiedSegmenter:
 
             if skeleton_length >= params['min_skeleton_length'] and elongation >= params['min_elongation']:
                 masks[region_mask] = det_id
-
                 cy, cx = prop.centroid
 
-                # Extract full 2326 features
-                features = self.extract_full_features(region_mask, image_rgb, cy, cx)
-                features['skeleton_length'] = int(skeleton_length)
-                features['elongation'] = float(elongation)
-                features['eccentricity'] = float(prop.eccentricity)
-                features['mean_intensity'] = float(prop.mean_intensity)
-
-                features_list.append({
-                    'id': f'nmj_{det_id}',
-                    'center': [float(cx), float(cy)],
-                    'features': features
+                valid_detections.append({
+                    'det_id': det_id,
+                    'mask': region_mask,
+                    'cy': cy,
+                    'cx': cx,
+                    'skeleton_length': skeleton_length,
+                    'elongation': elongation,
+                    'eccentricity': prop.eccentricity,
+                    'mean_intensity': prop.mean_intensity
                 })
-
                 det_id += 1
+
+        # Set image for SAM2 embeddings if available
+        if self.sam2_predictor is not None:
+            self.sam2_predictor.set_image(image_rgb if image_rgb.dtype == np.uint8 else (image_rgb / 256).astype(np.uint8))
+
+        # Batch feature extraction for all valid detections
+        if valid_detections:
+            masks_list = [d['mask'] for d in valid_detections]
+            centroids = [(d['cy'], d['cx']) for d in valid_detections]
+            all_features = self.extract_full_features_batch(
+                masks_list, image_rgb, centroids, batch_size=resnet_batch_size
+            )
+        else:
+            all_features = []
+
+        # Build final features list
+        features_list = []
+        for det, features in zip(valid_detections, all_features):
+            features['skeleton_length'] = int(det['skeleton_length'])
+            features['elongation'] = float(det['elongation'])
+            features['eccentricity'] = float(det['eccentricity'])
+            features['mean_intensity'] = float(det['mean_intensity'])
+
+            features_list.append({
+                'id': f'nmj_{det["det_id"]}',
+                'center': [float(det['cx']), float(det['cy'])],
+                'features': features
+            })
 
         # Clear SAM2 cache
         if self.sam2_predictor is not None:
@@ -427,13 +868,16 @@ class UnifiedSegmenter:
 
         return masks, features_list
 
-    def detect_mk(self, image_rgb, params):
+    def detect_mk(self, image_rgb, params, resnet_batch_size=16):
         """
         Detect MKs using SAM2 automatic mask generation.
+
+        Uses batch ResNet feature extraction for improved GPU utilization.
 
         Args:
             image_rgb: RGB image array
             params: Dict with mk_min_area, mk_max_area
+            resnet_batch_size: Batch size for ResNet feature extraction (default 16)
 
         Returns:
             Tuple of (masks, features_list)
@@ -460,12 +904,13 @@ class UnifiedSegmenter:
         gc.collect()
 
         masks = np.zeros(image_rgb.shape[:2], dtype=np.uint32)
-        features_list = []
+        valid_detections = []  # Collect valid detections for batch processing
         det_id = 1
 
         # Set image for embeddings
         self.sam2_predictor.set_image(image_rgb if image_rgb.dtype == np.uint8 else (image_rgb / 256).astype(np.uint8))
 
+        # First pass: filter overlaps and collect valid detections
         for result in valid_results:
             mask = result['segmentation']
             if mask.dtype != bool:
@@ -480,34 +925,56 @@ class UnifiedSegmenter:
             masks[mask] = det_id
             cy, cx = ndimage.center_of_mass(mask)
 
-            # Extract full features
-            features = self.extract_full_features(mask, image_rgb, cy, cx)
-            features['sam2_iou'] = float(result.get('predicted_iou', 0))
-            features['sam2_stability'] = float(result.get('stability_score', 0))
-
-            features_list.append({
-                'id': f'mk_{det_id}',
-                'center': [float(cx), float(cy)],
-                'features': features
+            valid_detections.append({
+                'det_id': det_id,
+                'mask': mask,
+                'cy': cy,
+                'cx': cx,
+                'sam2_iou': float(result.get('predicted_iou', 0)),
+                'sam2_stability': float(result.get('stability_score', 0))
             })
-
             det_id += 1
 
         del valid_results
         gc.collect()
-        torch.cuda.empty_cache()
 
+        # Batch feature extraction for all valid detections
+        if valid_detections:
+            masks_list = [d['mask'] for d in valid_detections]
+            centroids = [(d['cy'], d['cx']) for d in valid_detections]
+            all_features = self.extract_full_features_batch(
+                masks_list, image_rgb, centroids, batch_size=resnet_batch_size
+            )
+        else:
+            all_features = []
+
+        # Build final features list
+        features_list = []
+        for det, features in zip(valid_detections, all_features):
+            features['sam2_iou'] = det['sam2_iou']
+            features['sam2_stability'] = det['sam2_stability']
+
+            features_list.append({
+                'id': f'mk_{det["det_id"]}',
+                'center': [float(det['cx']), float(det['cy'])],
+                'features': features
+            })
+
+        torch.cuda.empty_cache()
         self.sam2_predictor.reset_predictor()
 
         return masks, features_list
 
-    def detect_hspc(self, image_rgb, params):
+    def detect_cell(self, image_rgb, params, resnet_batch_size=16):
         """
         Detect HSPCs using Cellpose-SAM + SAM2 refinement.
+
+        Uses batch ResNet feature extraction for improved GPU utilization.
 
         Args:
             image_rgb: RGB image array
             params: Dict (currently unused, Cellpose auto-detects)
+            resnet_batch_size: Batch size for ResNet feature extraction (default 16)
 
         Returns:
             Tuple of (masks, features_list)
@@ -569,9 +1036,10 @@ class UnifiedSegmenter:
         candidates.sort(key=lambda x: x['score'], reverse=True)
 
         masks = np.zeros(image_rgb.shape[:2], dtype=np.uint32)
-        features_list = []
+        valid_detections = []  # Collect valid detections for batch processing
         det_id = 1
 
+        # First pass: filter overlaps and collect valid detections
         for cand in candidates:
             sam2_mask = cand['mask']
             if sam2_mask.dtype != bool:
@@ -586,21 +1054,40 @@ class UnifiedSegmenter:
             masks[sam2_mask] = det_id
             cx, cy = cand['center']
 
-            # Extract full features
-            features = self.extract_full_features(sam2_mask, image_rgb, cy, cx)
-            features['sam2_score'] = cand['score']
-            features['cellpose_id'] = int(cand['cp_id'])
-
-            features_list.append({
-                'id': f'hspc_{det_id}',
-                'center': [float(cx), float(cy)],
-                'features': features
+            valid_detections.append({
+                'det_id': det_id,
+                'mask': sam2_mask,
+                'cy': cy,
+                'cx': cx,
+                'sam2_score': cand['score'],
+                'cellpose_id': int(cand['cp_id'])
             })
-
             det_id += 1
 
         del candidates, cellpose_masks
         gc.collect()
+
+        # Batch feature extraction for all valid detections
+        if valid_detections:
+            masks_list = [d['mask'] for d in valid_detections]
+            centroids = [(d['cy'], d['cx']) for d in valid_detections]
+            all_features = self.extract_full_features_batch(
+                masks_list, image_rgb, centroids, batch_size=resnet_batch_size
+            )
+        else:
+            all_features = []
+
+        # Build final features list
+        features_list = []
+        for det, features in zip(valid_detections, all_features):
+            features['sam2_score'] = det['sam2_score']
+            features['cellpose_id'] = det['cellpose_id']
+
+            features_list.append({
+                'id': f'cell_{det["det_id"]}',
+                'center': [float(det['cx']), float(det['cy'])],
+                'features': features
+            })
 
         self.sam2_predictor.reset_predictor()
         torch.cuda.empty_cache()
@@ -1281,7 +1768,7 @@ class UnifiedSegmenter:
 
         Args:
             image_rgb: RGB image array
-            cell_type: 'nmj', 'mk', 'hspc', 'vessel', or 'mesothelium'
+            cell_type: 'nmj', 'mk', 'cell', 'vessel', or 'mesothelium'
             params: Cell-type specific parameters
             cd31_channel: Optional CD31 channel for vessel validation
 
@@ -1292,8 +1779,8 @@ class UnifiedSegmenter:
             return self.detect_nmj(image_rgb, params)
         elif cell_type == 'mk':
             return self.detect_mk(image_rgb, params)
-        elif cell_type == 'hspc':
-            return self.detect_hspc(image_rgb, params)
+        elif cell_type == 'cell':
+            return self.detect_cell(image_rgb, params)
         elif cell_type == 'vessel':
             return self.detect_vessel(image_rgb, params, cd31_channel=cd31_channel)
         elif cell_type == 'mesothelium':
@@ -1398,42 +1885,47 @@ def get_czi_metadata(czi_path):
 
 def print_czi_metadata(czi_path):
     """Print CZI metadata in human-readable format."""
-    print(f"\nCZI Metadata: {Path(czi_path).name}")
-    print("=" * 60)
+    logger.info(f"CZI Metadata: {Path(czi_path).name}")
+    logger.info("=" * 60)
 
     try:
         meta = get_czi_metadata(czi_path)
 
         if meta['mosaic_size']:
             w, h = meta['mosaic_size']
-            print(f"Mosaic size: {w:,} x {h:,} px")
+            logger.info(f"Mosaic size: {w:,} x {h:,} px")
 
-        print(f"Pixel size: {meta['pixel_size_um']:.4f} µm/px")
-        print(f"Number of channels: {meta['n_channels']}")
+        logger.info(f"Pixel size: {meta['pixel_size_um']:.4f} µm/px")
+        logger.info(f"Number of channels: {meta['n_channels']}")
 
-        print("\nChannels:")
-        print("-" * 60)
+        logger.info("Channels:")
+        logger.info("-" * 60)
         for ch in meta['channels']:
             ex = f"{ch['excitation_nm']:.0f}" if ch['excitation_nm'] else "N/A"
             em = f"{ch['emission_nm']:.0f}" if ch['emission_nm'] else "N/A"
-            print(f"  [{ch['index']}] {ch['name']}")
-            print(f"      Fluorophore: {ch['fluorophore']}")
-            print(f"      Excitation: {ex} nm | Emission: {em} nm")
+            logger.info(f"  [{ch['index']}] {ch['name']}")
+            logger.info(f"      Fluorophore: {ch['fluorophore']}")
+            logger.info(f"      Excitation: {ex} nm | Emission: {em} nm")
 
-        print("=" * 60)
+        logger.info("=" * 60)
         return meta
 
     except Exception as e:
-        print(f"ERROR reading metadata: {e}")
-        print("  File may be on slow network mount - try copying locally first")
+        logger.error(f"ERROR reading metadata: {e}")
+        logger.error("  File may be on slow network mount - try copying locally first")
         return None
 
 
 def load_czi(czi_path):
-    """Load CZI file and return reader + metadata."""
+    """
+    Load CZI file and return reader + metadata.
+
+    DEPRECATED: Use CZILoader from shared.czi_loader instead for RAM-first architecture.
+    This function is kept for backwards compatibility with external scripts.
+    """
     from aicspylibczi import CziFile
 
-    print(f"Loading CZI: {czi_path}")
+    logger.info(f"Loading CZI: {czi_path}")
     reader = CziFile(str(czi_path))
 
     bbox = reader.get_mosaic_bounding_box()
@@ -1443,7 +1935,7 @@ def load_czi(czi_path):
         'width': bbox.w,
         'height': bbox.h,
     }
-    print(f"  Mosaic: {mosaic_info['width']:,} x {mosaic_info['height']:,} px")
+    logger.info(f"  Mosaic: {mosaic_info['width']:,} x {mosaic_info['height']:,} px")
 
     # Get pixel size from pre-parsed metadata or parse now
     pixel_size_um = 0.22
@@ -1453,14 +1945,14 @@ def load_czi(czi_path):
 
         # Print channel info
         if meta['channels']:
-            print(f"  Channels: {len(meta['channels'])}")
+            logger.info(f"  Channels: {len(meta['channels'])}")
             for ch in meta['channels']:
                 em = f"{ch['emission_nm']:.0f}nm" if ch['emission_nm'] else ""
-                print(f"    [{ch['index']}] {ch['name']} {em}")
+                logger.info(f"    [{ch['index']}] {ch['name']} {em}")
     except Exception as e:
-        print(f"  Warning: Could not parse metadata ({e}), using defaults")
+        logger.warning(f"Could not parse metadata ({e}), using defaults")
 
-    print(f"  Pixel size: {pixel_size_um:.4f} µm/px")
+    logger.info(f"  Pixel size: {pixel_size_um:.4f} µm/px")
 
     return reader, mosaic_info, pixel_size_um
 
@@ -1483,6 +1975,9 @@ def generate_tile_grid(mosaic_info, tile_size):
 def load_all_channels_to_ram(reader, mosaic_info, n_channels=None, strip_height=2000):
     """
     Load ALL channels into RAM as numpy array using strip-based loading.
+
+    DEPRECATED: Use CZILoader from shared.czi_loader with load_to_ram=True instead.
+    This function is kept for backwards compatibility with external scripts.
 
     For large network-mounted files, this reads in horizontal strips (rows)
     to show progress and be more robust than one huge read.
@@ -1513,19 +2008,19 @@ def load_all_channels_to_ram(reader, mosaic_info, n_channels=None, strip_height=
         if n_channels is None:
             n_channels = 1
 
-    print(f"  Loading {n_channels} channels into RAM (strip-based)...")
+    logger.info(f"  Loading {n_channels} channels into RAM (strip-based)...")
     per_channel_gb = width * height * 2 / 1e9
     total_gb = per_channel_gb * n_channels
-    print(f"  Size: {width:,} x {height:,} px x {n_channels} channels = {total_gb:.1f} GB")
+    logger.info(f"  Size: {width:,} x {height:,} px x {n_channels} channels = {total_gb:.1f} GB")
 
     n_strips = (height + strip_height - 1) // strip_height
-    print(f"  Reading in {n_strips} strips of {strip_height} rows each")
+    logger.info(f"  Reading in {n_strips} strips of {strip_height} rows each")
 
     start_time = time.time()
 
     channels = {}
     for c in range(n_channels):
-        print(f"    Channel {c}:", flush=True)
+        logger.info(f"    Channel {c}:")
         ch_start = time.time()
 
         # Pre-allocate full array for this channel
@@ -1548,15 +2043,15 @@ def load_all_channels_to_ram(reader, mosaic_info, n_channels=None, strip_height=
             strip_elapsed = time.time() - strip_start
             strip_mb = width * h * 2 / 1e6
             pct = (strip_idx + 1) * 100 // n_strips
-            print(f"      Strip {strip_idx + 1}/{n_strips} ({pct}%): {strip_mb:.0f} MB in {strip_elapsed:.1f}s ({strip_mb / strip_elapsed:.0f} MB/s)", flush=True)
+            logger.debug(f"      Strip {strip_idx + 1}/{n_strips} ({pct}%): {strip_mb:.0f} MB in {strip_elapsed:.1f}s ({strip_mb / strip_elapsed:.0f} MB/s)")
 
         channels[c] = arr
 
         ch_elapsed = time.time() - ch_start
-        print(f"    Channel {c} done: {per_channel_gb:.1f} GB in {ch_elapsed:.1f}s ({per_channel_gb * 1000 / ch_elapsed:.1f} MB/s)")
+        logger.info(f"    Channel {c} done: {per_channel_gb:.1f} GB in {ch_elapsed:.1f}s ({per_channel_gb * 1000 / ch_elapsed:.1f} MB/s)")
 
     elapsed = time.time() - start_time
-    print(f"  Total load time: {elapsed:.1f}s ({total_gb * 1000 / elapsed:.1f} MB/s)")
+    logger.info(f"  Total load time: {elapsed:.1f}s ({total_gb * 1000 / elapsed:.1f} MB/s)")
 
     return channels
 
@@ -1596,8 +2091,8 @@ def export_to_leica_lmd(detections, output_path, pixel_size_um, image_height_px,
         from lmd.tools import makeCross
         has_pylmd = True
     except ImportError:
-        print("WARNING: py-lmd not installed. Install with: pip install py-lmd")
-        print("  Falling back to simple XML export...")
+        logger.warning("py-lmd not installed. Install with: pip install py-lmd")
+        logger.warning("  Falling back to simple XML export...")
         has_pylmd = False
 
     if image_width_px is None:
@@ -1670,9 +2165,9 @@ def export_to_leica_lmd(detections, output_path, pixel_size_um, image_height_px,
 
     # Save to XML
     collection.save(str(output_path))
-    print(f"  Exported {len(detections)} chunks to LMD XML: {output_path}")
+    logger.info(f"  Exported {len(detections)} chunks to LMD XML: {output_path}")
     if add_fiducials:
-        print(f"  Added {len(fiducial_positions)} fiducial crosses for calibration")
+        logger.info(f"  Added {len(fiducial_positions)} fiducial crosses for calibration")
 
     # Also save metadata CSV with both coordinate systems
     csv_path = output_path.with_suffix('.csv')
@@ -1690,7 +2185,7 @@ def export_to_leica_lmd(detections, output_path, pixel_size_um, image_height_px,
             area = det['features'].get('area_um2', 0)
             n_verts = det['features'].get('n_vertices', len(det.get('polygon_image', [])))
             f.write(f'{name},{cx_px:.1f},{cy_px:.1f},{cx_um:.2f},{cy_um:.2f},{area:.2f},{n_verts}\n')
-    print(f"  Saved coordinates CSV: {csv_path}")
+    logger.info(f"  Saved coordinates CSV: {csv_path}")
 
     return output_path
 
@@ -1746,7 +2241,7 @@ def _export_lmd_simple(detections, output_path, pixel_size_um, image_height_px,
     with open(output_path, 'w') as f:
         f.write(xml_str)
 
-    print(f"  Exported {len(detections)} chunks to simple XML: {output_path}")
+    logger.info(f"  Exported {len(detections)} chunks to simple XML: {output_path}")
     return output_path
 
 
@@ -1754,8 +2249,12 @@ def _export_lmd_simple(detections, output_path, pixel_size_um, image_height_px,
 # SAMPLE CREATION FOR HTML
 # =============================================================================
 
-def create_sample_from_detection(tile_x, tile_y, tile_rgb, masks, feat, pixel_size_um, slide_name, zoom_factor=7.5):
-    """Create an HTML sample from a detection."""
+def create_sample_from_detection(tile_x, tile_y, tile_rgb, masks, feat, pixel_size_um, slide_name, crop_size=224):
+    """Create an HTML sample from a detection.
+
+    Uses fixed 224x224 crop to match ResNet feature extraction input,
+    so annotators see exactly what the classifier will see.
+    """
     det_id = feat['id']
     det_num = int(det_id.split('_')[-1])
     mask = masks == det_num
@@ -1766,29 +2265,47 @@ def create_sample_from_detection(tile_x, tile_y, tile_rgb, masks, feat, pixel_si
     # Get centroid
     cy, cx = feat['center'][1], feat['center'][0]
 
-    # Calculate crop size
-    ys, xs = np.where(mask)
-    mask_h = ys.max() - ys.min()
-    mask_w = xs.max() - xs.min()
-    mask_extent = max(mask_h, mask_w)
-    crop_size = int(mask_extent * zoom_factor) if mask_extent > 0 else 500
-
+    # Use fixed crop size (224) to match ResNet classifier input
     half = crop_size // 2
-    y1 = max(0, int(cy) - half)
-    y2 = min(tile_rgb.shape[0], int(cy) + half)
-    x1 = max(0, int(cx) - half)
-    x2 = min(tile_rgb.shape[1], int(cx) + half)
+
+    # Calculate ideal crop bounds (may extend beyond tile)
+    y1_ideal = int(cy) - half
+    y2_ideal = int(cy) + half
+    x1_ideal = int(cx) - half
+    x2_ideal = int(cx) + half
+
+    # Clamp to tile bounds
+    y1 = max(0, y1_ideal)
+    y2 = min(tile_rgb.shape[0], y2_ideal)
+    x1 = max(0, x1_ideal)
+    x2 = min(tile_rgb.shape[1], x2_ideal)
+
+    # Validate crop bounds before extracting
+    if y2 <= y1 or x2 <= x1:
+        logger.warning(f"Invalid crop bounds: y1={y1}, y2={y2}, x1={x1}, x2={x2}, skipping detection {det_id}")
+        return None
 
     crop = tile_rgb[y1:y2, x1:x2].copy()
     crop_mask = mask[y1:y2, x1:x2]
+
+    # Pad to center the mask if crop was clamped at edges
+    # Use max(0, ...) to ensure non-negative padding values
+    pad_top = max(0, y1 - y1_ideal)
+    pad_bottom = max(0, y2_ideal - y2)
+    pad_left = max(0, x1 - x1_ideal)
+    pad_right = max(0, x2_ideal - x2)
+
+    if pad_top > 0 or pad_bottom > 0 or pad_left > 0 or pad_right > 0:
+        # Pad crop with zeros (black)
+        crop = np.pad(crop, ((pad_top, pad_bottom), (pad_left, pad_right), (0, 0)), mode='constant', constant_values=0)
+        crop_mask = np.pad(crop_mask, ((pad_top, pad_bottom), (pad_left, pad_right)), mode='constant', constant_values=False)
 
     # Normalize and draw contour
     crop_norm = percentile_normalize(crop, p_low=1, p_high=99.5)
     crop_with_contour = draw_mask_contour(crop_norm, crop_mask, color=(0, 255, 0), thickness=2)
 
-    # Resize to 300x300
+    # Keep at 224x224 (same as classifier input) - already correct size from crop
     pil_img = Image.fromarray(crop_with_contour)
-    pil_img = pil_img.resize((300, 300), Image.LANCZOS)
 
     img_b64, mime = image_to_base64(pil_img, format='PNG')
 
@@ -1826,68 +2343,98 @@ def create_sample_from_detection(tile_x, tile_y, tile_rgb, masks, feat, pixel_si
 
 def run_pipeline(args):
     """Main pipeline execution."""
+    # Setup logging
+    setup_logging(level="DEBUG" if getattr(args, 'verbose', False) else "INFO")
+
     czi_path = Path(args.czi_path)
     output_dir = Path(args.output_dir)
     slide_name = czi_path.stem
 
-    print(f"\n{'='*60}")
-    print(f"UNIFIED SEGMENTATION PIPELINE")
-    print(f"{'='*60}")
-    print(f"Slide: {slide_name}")
-    print(f"Cell type: {args.cell_type}")
-    print(f"Channel: {args.channel}")
-    print(f"{'='*60}\n")
+    logger.info("=" * 60)
+    logger.info("UNIFIED SEGMENTATION PIPELINE")
+    logger.info("=" * 60)
+    logger.info(f"Slide: {slide_name}")
+    logger.info(f"Cell type: {args.cell_type}")
+    logger.info(f"Channel: {args.channel}")
+    logger.info("=" * 60)
 
-    # Load CZI
-    print("Loading CZI file...")
-    reader, mosaic_info, pixel_size_um = load_czi(czi_path)
+    # RAM-first architecture: Load CZI channel into RAM ONCE at pipeline start
+    # This eliminates repeated network I/O for files on network mounts
+    # Default is RAM loading for single slides (best performance on network mounts)
+    use_ram = args.load_to_ram  # Default True for single slide processing
 
-    print(f"  Mosaic: {mosaic_info['width']} x {mosaic_info['height']} px")
-    print(f"  Origin: ({mosaic_info['x']}, {mosaic_info['y']})")
-    print(f"  Pixel size: {pixel_size_um:.4f} um/px")
+    logger.info("Loading CZI file with get_loader() (RAM-first architecture)...")
+    loader = get_loader(
+        czi_path,
+        load_to_ram=use_ram,
+        channel=args.channel,
+        quiet=False
+    )
 
-    # Optionally load ALL channels into RAM for faster processing
-    channels_ram = None
-    if args.load_to_ram:
-        print("\nLoading ALL channels to RAM (faster for network mounts)...")
-        channels_ram = load_all_channels_to_ram(reader, mosaic_info)
+    # Get mosaic bounds from loader properties
+    x_start, y_start = loader.mosaic_origin
+    width, height = loader.mosaic_size
 
-    # Generate tile grid (coordinates relative to origin for image_array, or absolute for reader)
-    print(f"\nGenerating tile grid (size={args.tile_size})...")
+    # Build mosaic_info dict for compatibility with existing functions
+    mosaic_info = {
+        'x': x_start,
+        'y': y_start,
+        'width': width,
+        'height': height,
+    }
+    pixel_size_um = loader.get_pixel_size()
+
+    logger.info(f"  Mosaic: {mosaic_info['width']} x {mosaic_info['height']} px")
+    logger.info(f"  Origin: ({mosaic_info['x']}, {mosaic_info['y']})")
+    logger.info(f"  Pixel size: {pixel_size_um:.4f} um/px")
+    if use_ram:
+        logger.info(f"  Channel {args.channel} loaded to RAM")
+
+    # Also load CD31 channel to RAM if specified (for vessel validation)
+    # Note: get_loader() with the same path returns the cached loader and just adds the new channel
+    if args.cell_type == 'vessel' and args.cd31_channel is not None:
+        logger.info(f"Loading CD31 channel {args.cd31_channel} to RAM...")
+        # Use get_loader to add channel to the same cached loader instance
+        loader = get_loader(
+            czi_path,
+            load_to_ram=use_ram,
+            channel=args.cd31_channel,
+            quiet=False
+        )
+
+    # Generate tile grid (using global coordinates)
+    logger.info(f"Generating tile grid (size={args.tile_size})...")
     all_tiles = generate_tile_grid(mosaic_info, args.tile_size)
-    print(f"  Total tiles: {len(all_tiles)}")
+    logger.info(f"  Total tiles: {len(all_tiles)}")
 
-    # Get image array for tissue detection (from RAM or will read from disk)
-    image_array = channels_ram[args.channel] if channels_ram else None
-
-    # Calibrate tissue threshold
-    print("\nCalibrating tissue threshold...")
+    # Calibrate tissue threshold using RAM-loaded data
+    logger.info("Calibrating tissue threshold...")
     variance_threshold = calibrate_tissue_threshold(
         all_tiles,
-        reader=reader if channels_ram is None else None,
-        x_start=mosaic_info['x'],
-        y_start=mosaic_info['y'],
+        reader=None,  # No reader needed - use image_array
+        x_start=0,    # Not needed when using image_array
+        y_start=0,
         calibration_samples=min(50, len(all_tiles)),
         channel=args.channel,
         tile_size=args.tile_size,
-        image_array=image_array,
+        image_array=loader.channel_data,  # Pass RAM array directly
     )
 
-    # Filter to tissue-containing tiles
-    print("\nFiltering to tissue-containing tiles...")
+    # Filter to tissue-containing tiles using RAM-loaded data
+    logger.info("Filtering to tissue-containing tiles...")
     tissue_tiles = filter_tissue_tiles(
         all_tiles,
         variance_threshold,
-        reader=reader if channels_ram is None else None,
-        x_start=mosaic_info['x'],
-        y_start=mosaic_info['y'],
+        reader=None,  # No reader needed - use image_array
+        x_start=0,
+        y_start=0,
         channel=args.channel,
         tile_size=args.tile_size,
-        image_array=image_array,
+        image_array=loader.channel_data,  # Pass RAM array directly
     )
 
     if len(tissue_tiles) == 0:
-        print("ERROR: No tissue-containing tiles found!")
+        logger.error("No tissue-containing tiles found!")
         return
 
     # Sample from tissue tiles
@@ -1895,23 +2442,46 @@ def run_pipeline(args):
     sample_indices = np.random.choice(len(tissue_tiles), n_sample, replace=False)
     sampled_tiles = [tissue_tiles[i] for i in sample_indices]
 
-    print(f"\nSampled {len(sampled_tiles)} tiles ({args.sample_fraction*100:.0f}% of {len(tissue_tiles)} tissue tiles)")
+    logger.info(f"Sampled {len(sampled_tiles)} tiles ({args.sample_fraction*100:.0f}% of {len(tissue_tiles)} tissue tiles)")
 
     # Setup output directories
     slide_output_dir = output_dir / slide_name
     tiles_dir = slide_output_dir / "tiles"
     tiles_dir.mkdir(parents=True, exist_ok=True)
 
-    # Initialize segmenter
-    # Always load SAM2 for full 2326 features (22 morph + 256 SAM2 + 2048 ResNet)
-    print("\nInitializing segmenter...")
-    load_sam2 = True  # Required for full feature extraction
-    load_cellpose = args.cell_type == 'hspc'
+    # Initialize detector
+    # Use CellDetector + strategy pattern for all cell types
+    logger.info("Initializing detector...")
 
-    segmenter = UnifiedSegmenter(
-        load_sam2=load_sam2,
-        load_cellpose=load_cellpose,
-    )
+    # All cell types now use the new CellDetector pattern
+    use_new_detector = args.cell_type in ('nmj', 'mk', 'cell', 'vessel', 'mesothelium')
+
+    if use_new_detector:
+        # New CellDetector with strategy pattern
+        # Note: mesothelium strategy doesn't need SAM2 (uses ridge detection)
+        detector = CellDetector(device="cuda")
+        segmenter = None  # Not used for these cell types
+
+        # Load NMJ classifier if provided
+        if args.cell_type == 'nmj' and getattr(args, 'nmj_classifier', None):
+            from segmentation.detection.strategies.nmj import load_nmj_classifier
+            from torchvision import transforms
+
+            logger.info(f"Loading NMJ classifier from {args.nmj_classifier}...")
+            nmj_classifier = load_nmj_classifier(args.nmj_classifier, device=detector.device)
+            classifier_transform = transforms.Compose([
+                transforms.ToPILImage(),
+                transforms.Resize((224, 224)),
+                transforms.ToTensor(),
+                transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])
+            ])
+            # Add classifier to models dict
+            detector.models['classifier'] = nmj_classifier
+            detector.models['transform'] = classifier_transform
+            logger.info("NMJ classifier loaded successfully")
+    else:
+        # No cell types fall back to UnifiedSegmenter anymore
+        raise ValueError(f"Unknown cell type: {args.cell_type}")
 
     # Detection parameters
     if args.cell_type == 'nmj':
@@ -1926,7 +2496,7 @@ def run_pipeline(args):
             'mk_min_area': args.mk_min_area,
             'mk_max_area': args.mk_max_area,
         }
-    elif args.cell_type == 'hspc':
+    elif args.cell_type == 'cell':
         params = {}
     elif args.cell_type == 'vessel':
         params = {
@@ -1950,10 +2520,16 @@ def run_pipeline(args):
     else:
         raise ValueError(f"Unknown cell type: {args.cell_type}")
 
-    print(f"\nDetection params: {params}")
+    logger.info(f"Detection params: {params}")
+
+    # Create strategy for new detector pattern
+    strategy = None
+    if use_new_detector:
+        strategy = create_strategy_for_cell_type(args.cell_type, params, pixel_size_um)
+        logger.info(f"Using {strategy.name} strategy: {strategy.get_config()}")
 
     # Process tiles
-    print("\nProcessing tiles...")
+    logger.info("Processing tiles...")
     all_samples = []
     all_detections = []  # Universal list with global coordinates
     total_detections = 0
@@ -1963,26 +2539,12 @@ def run_pipeline(args):
         tile_y = tile['y']
 
         try:
-            # Calculate relative coordinates for RAM arrays
-            rel_x = tile_x - mosaic_info['x']
-            rel_y = tile_y - mosaic_info['y']
+            # Use loader.get_tile() for consistent tile extraction
+            # This uses RAM-loaded data if available, or falls back to on-demand reading
+            tile_data = loader.get_tile(tile_x, tile_y, args.tile_size, channel=args.channel)
 
-            # Read tile - from RAM or from CZI
-            if channels_ram is not None:
-                # Extract from pre-loaded array
-                tile_data = channels_ram[args.channel][rel_y:rel_y + args.tile_size, rel_x:rel_x + args.tile_size]
-                if tile_data.size == 0:
-                    continue
-            else:
-                # Read from CZI
-                tile_data = reader.read_mosaic(
-                    region=(tile_x, tile_y, args.tile_size, args.tile_size),
-                    scale_factor=1,
-                    C=args.channel
-                )
-                if tile_data is None or tile_data.size == 0:
-                    continue
-                tile_data = np.squeeze(tile_data)
+            if tile_data is None or tile_data.size == 0:
+                continue
 
             if tile_data.max() == 0:
                 continue
@@ -1994,25 +2556,35 @@ def run_pipeline(args):
                 tile_rgb = tile_data
 
             # Get CD31 channel if specified (for vessel validation)
-            cd31_channel = None
+            # Uses the same loader - CD31 channel was already loaded to RAM via get_loader()
+            cd31_channel_data = None
             if args.cell_type == 'vessel' and args.cd31_channel is not None:
-                if channels_ram is not None:
-                    cd31_tile = channels_ram[args.cd31_channel][rel_y:rel_y + args.tile_size, rel_x:rel_x + args.tile_size]
-                    if cd31_tile.size > 0:
-                        cd31_channel = cd31_tile.astype(np.float32)
-                else:
-                    cd31_data = reader.read_mosaic(
-                        region=(tile_x, tile_y, args.tile_size, args.tile_size),
-                        scale_factor=1,
-                        C=args.cd31_channel
-                    )
-                    if cd31_data is not None and cd31_data.size > 0:
-                        cd31_channel = np.squeeze(cd31_data).astype(np.float32)
+                cd31_tile = loader.get_tile(tile_x, tile_y, args.tile_size, channel=args.cd31_channel)
+                if cd31_tile is not None and cd31_tile.size > 0:
+                    cd31_channel_data = cd31_tile.astype(np.float32)
 
             # Detect cells
-            masks, features_list = segmenter.process_tile(
-                tile_rgb, args.cell_type, params, cd31_channel=cd31_channel
-            )
+            if use_new_detector:
+                # New CellDetector + strategy pattern
+                # The strategy's detect() method returns (label_array, list[Detection])
+                if args.cell_type == 'vessel':
+                    # Vessel strategy needs cd31_channel parameter
+                    masks, detections = strategy.detect(
+                        tile_rgb, detector.models, pixel_size_um,
+                        cd31_channel=cd31_channel_data
+                    )
+                else:
+                    # Other strategies: nmj, mk, cell, mesothelium
+                    masks, detections = strategy.detect(
+                        tile_rgb, detector.models, pixel_size_um
+                    )
+                # Convert Detection objects to the expected features_list format
+                features_list = detections_to_features_list(detections, args.cell_type)
+            else:
+                # This branch is no longer used - all cell types use new detector
+                masks, features_list = segmenter.process_tile(
+                    tile_rgb, args.cell_type, params, cd31_channel=cd31_channel_data
+                )
 
             if len(features_list) == 0:
                 continue
@@ -2023,8 +2595,9 @@ def run_pipeline(args):
                 global_cx = tile_x + local_cx
                 global_cy = tile_y + local_cy
 
-                # Create universal ID: slide_celltype_globalX_globalY_localID
-                uid = f"{slide_name}_{args.cell_type}_{int(global_cx)}_{int(global_cy)}"
+                # Create universal ID: slide_celltype_globalX_globalY
+                # Use round() instead of int() to reduce collision probability for nearby cells
+                uid = f"{slide_name}_{args.cell_type}_{round(global_cx)}_{round(global_cy)}"
                 feat['uid'] = uid
                 feat['global_center'] = [float(global_cx), float(global_cy)]
                 feat['global_center_um'] = [float(global_cx * pixel_size_um), float(global_cy * pixel_size_um)]
@@ -2052,8 +2625,14 @@ def run_pipeline(args):
             with open(tile_out / f"{args.cell_type}_features.json", 'w') as f:
                 json.dump(features_list, f)
 
-            # Create samples for HTML
+            # Create samples for HTML (filter by minimum area 25 µm²)
+            min_area_um2 = 25.0
             for feat in features_list:
+                # Check area filter
+                area_um2 = feat['features'].get('area', 0) * (pixel_size_um ** 2)
+                if area_um2 < min_area_um2:
+                    continue
+
                 sample = create_sample_from_detection(
                     tile_x, tile_y, tile_rgb, masks, feat, pixel_size_um, slide_name
                 )
@@ -2062,21 +2641,21 @@ def run_pipeline(args):
                     total_detections += 1
 
             del tile_data, tile_rgb, masks
-            if cd31_channel is not None:
-                del cd31_channel
+            if cd31_channel_data is not None:
+                del cd31_channel_data
             gc.collect()
 
         except Exception as e:
-            print(f"\n  Error processing tile ({tile_x}, {tile_y}): {e}")
+            logger.error(f"Error processing tile ({tile_x}, {tile_y}): {e}")
             continue
 
-    print(f"\nTotal detections: {total_detections}")
+    logger.info(f"Total detections: {total_detections}")
 
-    # Sort samples by area
+    # Sort samples by area (ascending - smallest first)
     all_samples.sort(key=lambda x: x['stats'].get('area_um2', 0))
 
     # Export to HTML
-    print(f"\nExporting to HTML ({len(all_samples)} samples)...")
+    logger.info(f"Exporting to HTML ({len(all_samples)} samples)...")
     html_dir = slide_output_dir / "html"
 
     export_samples_to_html(
@@ -2084,20 +2663,19 @@ def run_pipeline(args):
         html_dir,
         args.cell_type,
         samples_per_page=args.samples_per_page,
-        title=f"{args.cell_type.upper()} Detection - {slide_name}",
-        subtitle=f"Pixel size: {pixel_size_um:.4f} um/px | {len(sampled_tiles)} tiles processed",
-        extra_stats={
-            'Tissue tiles': len(tissue_tiles),
-            'Sampled': len(sampled_tiles),
-        },
+        title=f"{args.cell_type.upper()} Annotation Review",
         page_prefix=f'{args.cell_type}_page',
+        file_name=f"{slide_name}.czi",
+        pixel_size_um=pixel_size_um,
+        tiles_processed=len(sampled_tiles),
+        tiles_total=len(all_tiles),
     )
 
     # Save all detections with universal IDs and global coordinates
     detections_file = slide_output_dir / f'{args.cell_type}_detections.json'
     with open(detections_file, 'w') as f:
         json.dump(all_detections, f, indent=2)
-    print(f"  Saved {len(all_detections)} detections to {detections_file}")
+    logger.info(f"  Saved {len(all_detections)} detections to {detections_file}")
 
     # Export CSV with contour coordinates for easy import
     csv_file = slide_output_dir / f'{args.cell_type}_coordinates.csv'
@@ -2118,11 +2696,11 @@ def run_pipeline(args):
                 area_um2 = feat.get('area', 0) * (pixel_size_um ** 2)
                 f.write(f"{det['uid']},{det['global_center'][0]:.1f},{det['global_center'][1]:.1f},"
                         f"{det['global_center_um'][0]:.2f},{det['global_center_um'][1]:.2f},{area_um2:.2f}\n")
-    print(f"  Saved coordinates to {csv_file}")
+    logger.info(f"  Saved coordinates to {csv_file}")
 
     # Export to Leica LMD format for mesothelium
     if args.cell_type == 'mesothelium' and len(all_detections) > 0:
-        print(f"\nExporting to Leica LMD XML format...")
+        logger.info("Exporting to Leica LMD XML format...")
         lmd_file = slide_output_dir / f'{args.cell_type}_chunks.xml'
         export_to_leica_lmd(
             all_detections,
@@ -2153,11 +2731,32 @@ def run_pipeline(args):
     with open(slide_output_dir / 'summary.json', 'w') as f:
         json.dump(summary, f, indent=2)
 
-    print(f"\n{'='*60}")
-    print("COMPLETE")
-    print(f"{'='*60}")
-    print(f"Output: {slide_output_dir}")
-    print(f"HTML viewer: {html_dir / 'index.html'}")
+    # Cleanup detector resources
+    if use_new_detector and detector is not None:
+        detector.cleanup()
+
+    logger.info("=" * 60)
+    logger.info("COMPLETE")
+    logger.info("=" * 60)
+    logger.info(f"Output: {slide_output_dir}")
+    logger.info(f"HTML viewer: {html_dir / 'index.html'}")
+
+    # Start HTTP server and Cloudflare tunnel if requested
+    no_serve = getattr(args, 'no_serve', False)
+    serve_foreground = getattr(args, 'serve', False)
+    serve_background = getattr(args, 'serve_background', True)
+    port = getattr(args, 'port', 8081)
+
+    if no_serve:
+        logger.info("Server disabled (--no-serve)")
+    elif serve_foreground:
+        # Foreground mode: start and wait for Ctrl+C
+        http_proc, tunnel_proc, tunnel_url = start_server_and_tunnel(html_dir, port, background=False)
+        if http_proc is not None:
+            wait_for_server_shutdown(http_proc, tunnel_proc)
+    elif serve_background:
+        # Background mode: start and exit script
+        start_server_and_tunnel(html_dir, port, background=True)
 
 
 def main():
@@ -2169,23 +2768,25 @@ def main():
     # Required
     parser.add_argument('--czi-path', type=str, required=True, help='Path to CZI file')
     parser.add_argument('--cell-type', type=str, default=None,
-                        choices=['nmj', 'mk', 'hspc', 'vessel', 'mesothelium'],
+                        choices=['nmj', 'mk', 'cell', 'vessel', 'mesothelium'],
                         help='Cell type to detect (not required if --show-metadata)')
 
     # Metadata inspection
     parser.add_argument('--show-metadata', action='store_true',
                         help='Show CZI channel/dimension info and exit (no processing)')
 
-    # Performance options
-    parser.add_argument('--load-to-ram', action='store_true',
-                        help='Load entire channel into RAM first (faster for network mounts)')
+    # Performance options - RAM loading is the default for single slides (best for network mounts)
+    parser.add_argument('--load-to-ram', action='store_true', default=True,
+                        help='Load entire channel into RAM first (default: True for best performance on network mounts)')
+    parser.add_argument('--no-ram', dest='load_to_ram', action='store_false',
+                        help='Disable RAM loading (use on-demand tile reading instead)')
 
     # Output
     parser.add_argument('--output-dir', type=str, default='/home/dude/nmj_output', help='Output directory')
 
     # Tile processing
     parser.add_argument('--tile-size', type=int, default=3000, help='Tile size in pixels')
-    parser.add_argument('--sample-fraction', type=float, default=0.10, help='Fraction of tissue tiles')
+    parser.add_argument('--sample-fraction', type=float, default=0.20, help='Fraction of tissue tiles (default: 20%)')
     parser.add_argument('--channel', type=int, default=1, help='Channel index')
 
     # NMJ parameters
@@ -2193,6 +2794,8 @@ def main():
     parser.add_argument('--min-area', type=int, default=150)
     parser.add_argument('--min-skeleton-length', type=int, default=30)
     parser.add_argument('--min-elongation', type=float, default=1.5)
+    parser.add_argument('--nmj-classifier', type=str, default=None,
+                        help='Path to trained NMJ classifier (.pth file)')
 
     # MK parameters
     parser.add_argument('--mk-min-area', type=int, default=1000)
@@ -2238,7 +2841,25 @@ def main():
     # HTML export
     parser.add_argument('--samples-per-page', type=int, default=300)
 
+    # Server options
+    parser.add_argument('--serve', action='store_true', default=False,
+                        help='Start HTTP server and wait for Ctrl+C (foreground mode)')
+    parser.add_argument('--serve-background', action='store_true', default=True,
+                        help='Start HTTP server in background and exit (default: True)')
+    parser.add_argument('--no-serve', action='store_true',
+                        help='Do not start server after processing')
+    parser.add_argument('--port', type=int, default=8081,
+                        help='Port for HTTP server (default: 8081)')
+    parser.add_argument('--stop-server', action='store_true',
+                        help='Stop any running background server and exit')
+
     args = parser.parse_args()
+
+    # Handle --stop-server (exit early)
+    if args.stop_server:
+        setup_logging()
+        stop_background_server()
+        return
 
     # Handle --show-metadata (exit early)
     if args.show_metadata:

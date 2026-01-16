@@ -26,23 +26,16 @@ from scipy import ndimage
 from skimage.morphology import skeletonize, remove_small_objects, binary_opening, binary_closing, disk
 from skimage.measure import label, regionprops
 from PIL import Image
-import base64
-from io import BytesIO
 
-# Try LZ4 compression
-try:
-    import hdf5plugin
-    HDF5_COMPRESSION_KWARGS = hdf5plugin.LZ4(nbytes=0)
-except ImportError:
-    HDF5_COMPRESSION_KWARGS = {'compression': 'gzip'}
+from segmentation.utils.logging import get_logger, setup_logging, log_parameters
+from segmentation.io.czi_loader import get_loader, CZILoader
+from segmentation.io.html_export import (
+    create_hdf5_dataset,  # Import shared HDF5 utilities (Issue #7)
+    HDF5_COMPRESSION_KWARGS,
+    HDF5_COMPRESSION_NAME,
+)
 
-
-def create_hdf5_dataset(f, name, data):
-    """Create HDF5 dataset with compression."""
-    if isinstance(HDF5_COMPRESSION_KWARGS, dict):
-        f.create_dataset(name, data=data, **HDF5_COMPRESSION_KWARGS)
-    else:
-        f.create_dataset(name, data=data, **HDF5_COMPRESSION_KWARGS)
+logger = get_logger(__name__)
 
 
 # =============================================================================
@@ -119,36 +112,14 @@ def detect_nmjs(image, intensity_percentile=99, min_area=150, min_skeleton_lengt
 
 
 # =============================================================================
-# HTML EXPORT
+# HTML EXPORT (using shared utilities)
 # =============================================================================
 
-def percentile_normalize(img, p_low=1, p_high=99.5):
-    """Normalize image using percentiles - wider range for NMJ images."""
-    img = img.astype(np.float32)
-    p_lo = np.percentile(img, p_low)
-    p_hi = np.percentile(img, p_high)
-    if p_hi - p_lo < 1e-6:
-        return np.zeros_like(img, dtype=np.uint8)
-    img = (img - p_lo) / (p_hi - p_lo)
-    img = np.clip(img * 255, 0, 255).astype(np.uint8)
-    return img
+from segmentation.io.html_export import percentile_normalize, draw_mask_contour, image_to_base64
 
-
-def draw_mask_contour(img_array, mask, color=(144, 238, 144), thickness=2):
-    """Draw mask contour on image."""
-    dilated = ndimage.binary_dilation(mask, iterations=thickness)
-    contour = dilated & ~mask
-    ys, xs = np.where(contour)
-
-    if len(ys) == 0:
-        return img_array
-
-    img_out = img_array.copy()
-    for y, x in zip(ys, xs):
-        if 0 <= y < img_out.shape[0] and 0 <= x < img_out.shape[1]:
-            img_out[y, x] = color
-
-    return img_out
+# NMJ uses wider percentile range for normalization
+NMJ_PERCENTILE_LOW = 1
+NMJ_PERCENTILE_HIGH = 99.5
 
 
 def create_nmj_index_html(output_dir, total_nmjs, total_pages):
@@ -406,38 +377,6 @@ def generate_nmj_page_html(samples, page_num, total_pages):
 # CZI PROCESSING
 # =============================================================================
 
-def load_czi_slide(czi_path):
-    """Load CZI file and return reader + metadata."""
-    from aicspylibczi import CziFile
-
-    reader = CziFile(czi_path)
-    dims = reader.get_dims_shape()[0]
-
-    # Get mosaic bounding box (actual extent of data)
-    bbox = reader.get_mosaic_bounding_box()
-    mosaic_info = {
-        'x': bbox.x,
-        'y': bbox.y,
-        'width': bbox.w,
-        'height': bbox.h
-    }
-
-    # Get pixel size from metadata
-    pixel_size_um = 0.22  # Default
-    try:
-        import xml.etree.ElementTree as ET
-        meta_xml = reader.meta
-        root = ET.fromstring(meta_xml)
-        for scale in root.iter():
-            if 'ScalingX' in scale.tag:
-                pixel_size_um = float(scale.text) * 1e6
-                break
-    except:
-        pass
-
-    return reader, dims, pixel_size_um, mosaic_info
-
-
 def process_czi_for_nmj(czi_path, output_dir,
                         tile_size=3000,
                         sample_fraction=0.10,
@@ -446,9 +385,23 @@ def process_czi_for_nmj(czi_path, output_dir,
                         min_area=150,
                         min_skeleton_length=30,
                         min_elongation=1.5,
-                        channel=1):
+                        channel=1,
+                        load_to_ram=True):
     """
     Process a CZI file for NMJ detection.
+
+    Args:
+        czi_path: Path to CZI file
+        output_dir: Output directory for results
+        tile_size: Size of tiles to process
+        sample_fraction: Fraction of tiles to sample
+        samples_per_page: Number of samples per HTML page
+        intensity_percentile: Percentile for intensity threshold
+        min_area: Minimum NMJ area in pixels
+        min_skeleton_length: Minimum skeleton length
+        min_elongation: Minimum elongation ratio
+        channel: Channel index to use
+        load_to_ram: If True, load entire channel into RAM (faster for network mounts)
     """
     czi_path = Path(czi_path)
     output_dir = Path(output_dir)
@@ -456,25 +409,28 @@ def process_czi_for_nmj(czi_path, output_dir,
 
     slide_name = czi_path.stem
 
-    print(f"\n{'='*60}")
-    print(f"NMJ SEGMENTATION: {slide_name}")
-    print(f"{'='*60}")
+    # Setup logging
+    setup_logging(level="INFO")
 
-    # Load CZI
-    print("\nLoading CZI file...")
-    reader, dims, pixel_size_um, mosaic_info = load_czi_slide(czi_path)
+    logger.info("=" * 60)
+    logger.info(f"NMJ SEGMENTATION: {slide_name}")
+    logger.info("=" * 60)
 
-    # Use mosaic bounding box for actual data extent
-    x_start = mosaic_info['x']
-    y_start = mosaic_info['y']
-    width = mosaic_info['width']
-    height = mosaic_info['height']
+    # Load CZI using shared loader (RAM-first for better performance)
+    logger.info("Loading CZI file...")
+    loader = CZILoader(czi_path, load_to_ram=load_to_ram, channel=channel)
 
-    print(f"  Mosaic dimensions: {width} x {height}")
-    print(f"  Mosaic origin: ({x_start}, {y_start})")
-    print(f"  Pixel size: {pixel_size_um:.4f} um/px")
-    print(f"  Detection params: p{intensity_percentile}, min_area={min_area}, min_skel={min_skeleton_length}, min_elong={min_elongation}")
-    print(f"  Channel: {channel}")
+    # Get mosaic info from loader
+    x_start, y_start = loader.mosaic_origin
+    width, height = loader.mosaic_size
+    pixel_size_um = loader.get_pixel_size()
+
+    logger.info(f"  Mosaic dimensions: {width} x {height}")
+    logger.info(f"  Mosaic origin: ({x_start}, {y_start})")
+    logger.info(f"  Pixel size: {pixel_size_um:.4f} um/px")
+    logger.info(f"  Detection params: p{intensity_percentile}, min_area={min_area}, min_skel={min_skeleton_length}, min_elong={min_elongation}")
+    logger.info(f"  Channel: {channel}")
+    logger.info(f"  RAM loading: {load_to_ram}")
 
     # Generate tile grid over actual data extent
     tiles = []
@@ -482,37 +438,33 @@ def process_czi_for_nmj(czi_path, output_dir,
         for x in range(x_start, x_start + width, tile_size):
             tiles.append((x, y))
 
-    print(f"  Total tiles: {len(tiles)}")
+    logger.info(f"  Total tiles: {len(tiles)}")
 
     # Sample tiles
     n_sample = max(1, int(len(tiles) * sample_fraction))
     sampled_indices = np.random.choice(len(tiles), n_sample, replace=False)
     sampled_tiles = [tiles[i] for i in sampled_indices]
 
-    print(f"  Sampled tiles: {len(sampled_tiles)} ({sample_fraction*100:.1f}%)")
+    logger.info(f"  Sampled tiles: {len(sampled_tiles)} ({sample_fraction*100:.1f}%)")
 
     # Process tiles
-    print("\nProcessing tiles...")
+    logger.info("Processing tiles...")
     all_samples = []
     tiles_dir = output_dir / slide_name / "tiles"
     tiles_dir.mkdir(parents=True, exist_ok=True)
 
     for tile_x, tile_y in tqdm(sampled_tiles, desc="Tiles"):
-        # Read tile
+        # Read tile using shared loader
         try:
-            tile_data = reader.read_mosaic(
-                region=(tile_x, tile_y, tile_size, tile_size),
-                scale_factor=1,
-                C=channel
-            )
+            tile_data = loader.get_tile(tile_x, tile_y, tile_size)
             if tile_data is None or tile_data.size == 0:
                 continue
-            tile_data = np.squeeze(tile_data)
 
             # Skip empty tiles (no data)
             if tile_data.max() == 0:
                 continue
         except Exception as e:
+            logger.warning(f"Failed to read tile ({tile_x}, {tile_y}): {e}")
             continue
 
         # Convert to RGB
@@ -544,8 +496,8 @@ def process_czi_for_nmj(czi_path, output_dir,
         with open(tile_out / "nmj_features.json", 'w') as f:
             json.dump(nmj_features, f)
 
-        # Create samples for HTML export
-        tile_rgb_norm = percentile_normalize(tile_rgb)
+        # Create samples for HTML export (NMJ uses wider percentile range)
+        tile_rgb_norm = percentile_normalize(tile_rgb, p_low=NMJ_PERCENTILE_LOW, p_high=NMJ_PERCENTILE_HIGH)
 
         for feat in nmj_features:
             nmj_id = int(feat['id'].split('_')[1])
@@ -570,6 +522,11 @@ def process_czi_for_nmj(czi_path, output_dir,
             x1 = max(0, cx - half)
             x2 = min(tile_rgb.shape[1], cx + half)
 
+            # Validate crop bounds before extracting
+            if y2 <= y1 or x2 <= x1:
+                logger.warning(f"Invalid crop bounds: y1={y1}, y2={y2}, x1={x1}, x2={x2}, skipping {feat['id']}")
+                continue
+
             crop = tile_rgb_norm[y1:y2, x1:x2].copy()
             crop_mask = mask[y1:y2, x1:x2]
 
@@ -580,9 +537,8 @@ def process_czi_for_nmj(czi_path, output_dir,
             pil_img = Image.fromarray(crop_with_contour)
             pil_img = pil_img.resize((300, 300), Image.LANCZOS)
 
-            buffer = BytesIO()
-            pil_img.save(buffer, format='PNG', optimize=True)
-            img_b64 = base64.b64encode(buffer.getvalue()).decode('utf-8')
+            # Convert to base64 (image_to_base64 returns tuple)
+            img_b64, _ = image_to_base64(np.array(pil_img))
 
             # Calculate area in µm²
             area_um2 = feat['area'] * (pixel_size_um ** 2)
@@ -601,7 +557,7 @@ def process_czi_for_nmj(czi_path, output_dir,
         gc.collect()
 
     # Generate HTML export
-    print(f"\nGenerating HTML export ({len(all_samples)} samples)...")
+    logger.info(f"Generating HTML export ({len(all_samples)} samples)...")
 
     html_dir = output_dir / "html"
     html_dir.mkdir(exist_ok=True)
@@ -619,11 +575,11 @@ def process_czi_for_nmj(czi_path, output_dir,
             html = generate_nmj_page_html(page_samples, page_num, total_pages)
             with open(html_dir / f"nmj_page{page_num}.html", 'w') as f:
                 f.write(html)
-            print(f"  Page {page_num}: {len(page_samples)} samples")
+            logger.debug(f"  Page {page_num}: {len(page_samples)} samples")
 
-    print(f"\nDone!")
-    print(f"  HTML output: {html_dir}")
-    print(f"  Total NMJ candidates: {len(all_samples)}")
+    logger.info("Done!")
+    logger.info(f"  HTML output: {html_dir}")
+    logger.info(f"  Total NMJ candidates: {len(all_samples)}")
 
     return all_samples
 
@@ -640,6 +596,10 @@ def main():
     parser.add_argument('--min-skeleton-length', type=int, default=30, help='Min skeleton length')
     parser.add_argument('--min-elongation', type=float, default=1.5, help='Min elongation ratio')
     parser.add_argument('--channel', type=int, default=1, help='Channel index to use (default 1 for 647)')
+    parser.add_argument('--load-to-ram', action='store_true', default=True,
+                        help='Load entire channel into RAM (default: True, faster for network mounts)')
+    parser.add_argument('--no-load-to-ram', dest='load_to_ram', action='store_false',
+                        help='Disable RAM loading (use less memory but slower)')
 
     args = parser.parse_args()
 
@@ -653,7 +613,8 @@ def main():
         min_area=args.min_area,
         min_skeleton_length=args.min_skeleton_length,
         min_elongation=args.min_elongation,
-        channel=args.channel
+        channel=args.channel,
+        load_to_ram=args.load_to_ram
     )
 
 

@@ -17,6 +17,37 @@ import numpy as np
 from scipy import ndimage
 
 
+# Try to use LZ4 compression (faster than gzip), fallback to gzip
+try:
+    import hdf5plugin
+    # LZ4 is ~3-5x faster than gzip with similar compression ratio for image masks
+    HDF5_COMPRESSION_KWARGS = hdf5plugin.LZ4(nbytes=0)  # Returns dict-like for **unpacking
+    HDF5_COMPRESSION_NAME = "LZ4"
+except ImportError:
+    HDF5_COMPRESSION_KWARGS = {'compression': 'gzip'}
+    HDF5_COMPRESSION_NAME = "gzip"
+
+
+def create_hdf5_dataset(f, name, data):
+    """Create HDF5 dataset with best available compression (LZ4 or gzip)."""
+    if isinstance(HDF5_COMPRESSION_KWARGS, dict):
+        f.create_dataset(name, data=data, **HDF5_COMPRESSION_KWARGS)
+    else:
+        # hdf5plugin filter object
+        f.create_dataset(name, data=data, **HDF5_COMPRESSION_KWARGS)
+
+
+def get_largest_connected_component(mask):
+    """Extract only the largest connected component from a binary mask."""
+    labeled, num_features = ndimage.label(mask)
+    if num_features == 0:
+        return mask
+    # Find largest component
+    sizes = ndimage.sum(mask, labeled, range(1, num_features + 1))
+    largest_label = np.argmax(sizes) + 1
+    return labeled == largest_label
+
+
 def percentile_normalize(image, p_low=5, p_high=95):
     """
     Normalize image using percentiles.
@@ -37,9 +68,19 @@ def percentile_normalize(image, p_low=5, p_high=95):
             return np.clip(normalized, 0, 255).astype(np.uint8)
         return image.astype(np.uint8)
     else:
+        # Vectorized multi-channel normalization
+        h, w, c = image.shape
         result = np.zeros_like(image, dtype=np.uint8)
-        for c in range(image.shape[2]):
-            result[:, :, c] = percentile_normalize(image[:, :, c], p_low, p_high)
+        # Compute percentiles for all channels at once
+        flat = image.reshape(-1, c)
+        low_vals = np.percentile(flat, p_low, axis=0)
+        high_vals = np.percentile(flat, p_high, axis=0)
+        for ch in range(c):
+            if high_vals[ch] > low_vals[ch]:
+                normalized = (image[:, :, ch].astype(np.float32) - low_vals[ch]) / (high_vals[ch] - low_vals[ch]) * 255
+                result[:, :, ch] = np.clip(normalized, 0, 255).astype(np.uint8)
+            else:
+                result[:, :, ch] = image[:, :, ch].astype(np.uint8)
         return result
 
 
@@ -335,6 +376,15 @@ def get_css():
             color: #44a;
         }
 
+        .btn-danger {
+            border-color: #a44;
+            color: #a44;
+        }
+
+        .btn-danger:hover {
+            background: #311;
+        }
+
         .keyboard-hint {
             text-align: center;
             padding: 15px;
@@ -354,21 +404,31 @@ def get_css():
     '''
 
 
-def get_js(cell_type, total_pages):
+def get_js(cell_type, total_pages, experiment_name=None):
     """
     Get the unified JavaScript for annotation handling.
 
     Args:
         cell_type: Type identifier (e.g., 'nmj', 'mk', 'hspc')
         total_pages: Total number of pages
+        experiment_name: Optional experiment name for localStorage key isolation
+                        If provided, key is '{cell_type}_{experiment_name}_annotations'
+                        Otherwise, key is '{cell_type}_annotations'
 
     Returns:
         JavaScript code string
     """
+    # Build storage key with optional experiment name
+    if experiment_name:
+        storage_key = f"{cell_type}_{experiment_name}_annotations"
+    else:
+        storage_key = f"{cell_type}_annotations"
+
     return f'''
         const CELL_TYPE = '{cell_type}';
+        const EXPERIMENT_NAME = '{experiment_name or ""}';
         const TOTAL_PAGES = {total_pages};
-        const STORAGE_KEY = CELL_TYPE + '_annotations';
+        const STORAGE_KEY = '{storage_key}';
 
         let labels = {{}};
         let selectedIdx = -1;
@@ -494,6 +554,18 @@ def get_js(cell_type, total_pages):
             updateStats();
         }}
 
+        function clearAll() {{
+            if (!confirm('Clear ALL annotations across ALL pages? This cannot be undone.')) return;
+            labels = {{}};
+            localStorage.setItem(STORAGE_KEY, JSON.stringify(labels));
+            cards.forEach(card => {{
+                card.classList.remove('labeled-yes', 'labeled-no', 'labeled-unsure');
+                card.dataset.label = -1;
+            }});
+            updateStats();
+            alert('All annotations cleared.');
+        }}
+
         document.addEventListener('keydown', (e) => {{
             // Navigation
             if (e.key === 'ArrowRight' || e.key === 'ArrowDown') {{
@@ -524,6 +596,7 @@ def generate_annotation_page(
     total_pages,
     title=None,
     page_prefix='page',
+    experiment_name=None,
 ):
     """
     Generate an HTML annotation page.
@@ -538,6 +611,7 @@ def generate_annotation_page(
         total_pages: Total number of pages
         title: Optional title override
         page_prefix: Prefix for page filenames
+        experiment_name: Optional experiment name for localStorage isolation
 
     Returns:
         HTML string
@@ -598,6 +672,7 @@ def generate_annotation_page(
     html = f'''<!DOCTYPE html>
 <html>
 <head>
+    <meta charset="UTF-8">
     <title>{title} - Page {page_num}/{total_pages}</title>
     <style>{get_css()}</style>
 </head>
@@ -620,6 +695,7 @@ def generate_annotation_page(
             </div>
             <button class="btn btn-export" onclick="exportAnnotations()">Export</button>
             <button class="btn" onclick="clearPage()">Clear Page</button>
+            <button class="btn btn-danger" onclick="clearAll()">Clear All</button>
         </div>
     </div>
 
@@ -635,7 +711,7 @@ def generate_annotation_page(
         {nav_html}
     </div>
 
-    <script>{get_js(cell_type, total_pages)}</script>
+    <script>{get_js(cell_type, total_pages, experiment_name)}</script>
 </body>
 </html>'''
 
@@ -650,6 +726,11 @@ def generate_index_page(
     subtitle=None,
     extra_stats=None,
     page_prefix='page',
+    experiment_name=None,
+    file_name=None,
+    pixel_size_um=None,
+    tiles_processed=None,
+    tiles_total=None,
 ):
     """
     Generate the index/landing page.
@@ -662,14 +743,31 @@ def generate_index_page(
         subtitle: Optional subtitle
         extra_stats: Dict of additional stats to display
         page_prefix: Prefix for page filenames
+        experiment_name: Optional experiment name for localStorage isolation
+        file_name: Source file name
+        pixel_size_um: Pixel size in micrometers
+        tiles_processed: Number of tiles processed
+        tiles_total: Total number of tiles
 
     Returns:
         HTML string
     """
     if title is None:
         title = f"{cell_type.upper()} Annotation Review"
-    if subtitle is None:
-        subtitle = "Cell Detection Pipeline"
+
+    # Build info lines
+    info_lines = []
+    info_lines.append(f"Detection type: {cell_type.upper()}")
+    if file_name:
+        info_lines.append(f"File: {file_name}")
+    if pixel_size_um:
+        info_lines.append(f"Pixel size: {pixel_size_um:.4f} &micro;m/px")
+    if tiles_processed is not None and tiles_total is not None:
+        info_lines.append(f"Tiles processed: {tiles_processed} / {tiles_total}")
+    info_lines.append(f"Total detections: {total_samples:,}")
+    info_lines.append(f"Pages: {total_pages}")
+
+    info_html = '<br>'.join(info_lines)
 
     extra_stats_html = ''
     if extra_stats:
@@ -683,6 +781,7 @@ def generate_index_page(
     html = f'''<!DOCTYPE html>
 <html>
 <head>
+    <meta charset="UTF-8">
     <title>{title}</title>
     <style>
         * {{ box-sizing: border-box; margin: 0; padding: 0; }}
@@ -705,6 +804,13 @@ def generate_index_page(
         .subtitle {{
             color: #888;
             margin-bottom: 20px;
+        }}
+
+        .info-block {{
+            color: #aaa;
+            line-height: 1.8;
+            margin: 20px 0;
+            font-size: 1.1em;
         }}
 
         .stats {{
@@ -759,23 +865,24 @@ def generate_index_page(
         .btn-export:hover {{
             background: #0f0f13;
         }}
+
+        .btn-danger {{
+            border-color: #a44;
+            color: #a44;
+        }}
+
+        .btn-danger:hover {{
+            background: #311;
+        }}
     </style>
 </head>
 <body>
     <div class="header">
         <h1>{title}</h1>
-        <p class="subtitle">{subtitle}</p>
-        <div class="stats">
-            <div class="stat">
-                <span>Total Samples</span>
-                <span class="number">{total_samples:,}</span>
-            </div>
-            <div class="stat">
-                <span>Pages</span>
-                <span class="number">{total_pages}</span>
-            </div>
-            {extra_stats_html}
+        <div class="info-block">
+            {info_html}
         </div>
+        {f'<div class="stats">{extra_stats_html}</div>' if extra_stats_html else ''}
     </div>
 
     <div class="section">
@@ -784,17 +891,21 @@ def generate_index_page(
 
     <div class="section">
         <button class="btn btn-export" onclick="exportAnnotations()">Export Annotations</button>
+        <button class="btn btn-danger" onclick="clearAll()">Clear All</button>
     </div>
 
     <script>
-        const STORAGE_KEY = '{cell_type}_annotations';
+        const CELL_TYPE = '{cell_type}';
+        const EXPERIMENT_NAME = '{experiment_name or ""}';
+        const STORAGE_KEY = EXPERIMENT_NAME ? CELL_TYPE + '_' + EXPERIMENT_NAME + '_annotations' : CELL_TYPE + '_annotations';
 
         function exportAnnotations() {{
             const stored = localStorage.getItem(STORAGE_KEY);
             const labels = stored ? JSON.parse(stored) : {{}};
 
             const data = {{
-                cell_type: '{cell_type}',
+                cell_type: CELL_TYPE,
+                experiment_name: EXPERIMENT_NAME || undefined,
                 exported_at: new Date().toISOString(),
                 positive: [],
                 negative: [],
@@ -811,9 +922,16 @@ def generate_index_page(
             const url = URL.createObjectURL(blob);
             const a = document.createElement('a');
             a.href = url;
-            a.download = '{cell_type}_annotations.json';
+            const filename = EXPERIMENT_NAME ? CELL_TYPE + '_' + EXPERIMENT_NAME + '_annotations.json' : CELL_TYPE + '_annotations.json';
+            a.download = filename;
             a.click();
             URL.revokeObjectURL(url);
+        }}
+
+        function clearAll() {{
+            if (!confirm('Clear ALL annotations across ALL pages? This cannot be undone.')) return;
+            localStorage.setItem(STORAGE_KEY, JSON.stringify({{}}));
+            alert('All annotations cleared. Refresh any open pages to see the change.');
         }}
     </script>
 </body>
@@ -831,6 +949,11 @@ def export_samples_to_html(
     subtitle=None,
     extra_stats=None,
     page_prefix='page',
+    experiment_name=None,
+    file_name=None,
+    pixel_size_um=None,
+    tiles_processed=None,
+    tiles_total=None,
 ):
     """
     Export samples to paginated HTML files.
@@ -844,6 +967,11 @@ def export_samples_to_html(
         subtitle: Optional subtitle
         extra_stats: Dict of extra stats for index page
         page_prefix: Prefix for page filenames
+        experiment_name: Optional experiment name for localStorage isolation
+        file_name: Source file name for index page
+        pixel_size_um: Pixel size in micrometers
+        tiles_processed: Number of tiles processed
+        tiles_total: Total number of tiles
 
     Returns:
         Tuple of (total_samples, total_pages)
@@ -870,6 +998,7 @@ def export_samples_to_html(
             total_pages,
             title=title,
             page_prefix=page_prefix,
+            experiment_name=experiment_name,
         )
 
         page_path = output_dir / f"{page_prefix}_{page_num}.html"
@@ -888,6 +1017,11 @@ def export_samples_to_html(
         subtitle=subtitle,
         extra_stats=extra_stats,
         page_prefix=page_prefix,
+        experiment_name=experiment_name,
+        file_name=file_name,
+        pixel_size_um=pixel_size_um,
+        tiles_processed=tiles_processed,
+        tiles_total=tiles_total,
     )
 
     index_path = output_dir / 'index.html'
