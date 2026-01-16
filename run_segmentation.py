@@ -771,8 +771,10 @@ class UnifiedSegmenter:
 
         Args:
             image_rgb: RGB image array
-            params: Dict with intensity_percentile, min_area, min_skeleton_length, min_elongation
+            params: Dict with intensity_percentile, min_area, min_skeleton_length, max_solidity
             resnet_batch_size: Batch size for ResNet feature extraction (default 16)
+
+        Note: This method is DEPRECATED. Use NMJStrategy with CellDetector instead.
 
         Returns:
             Tuple of (masks, features_list)
@@ -818,7 +820,8 @@ class UnifiedSegmenter:
             skeleton_length = skeleton.sum()
             elongation = skeleton_length / np.sqrt(prop.area) if prop.area > 0 else 0
 
-            if skeleton_length >= params['min_skeleton_length'] and elongation >= params['min_elongation']:
+            # Use solidity filter (branched NMJs have low solidity)
+            if skeleton_length >= params['min_skeleton_length'] and prop.solidity <= params.get('max_solidity', 0.85):
                 masks[region_mask] = det_id
                 cy, cx = prop.centroid
 
@@ -2489,7 +2492,7 @@ def run_pipeline(args):
             'intensity_percentile': args.intensity_percentile,
             'min_area': args.min_area,
             'min_skeleton_length': args.min_skeleton_length,
-            'min_elongation': args.min_elongation,
+            'max_solidity': args.max_solidity,
         }
     elif args.cell_type == 'mk':
         params = {
@@ -2793,7 +2796,8 @@ def main():
     parser.add_argument('--intensity-percentile', type=float, default=99)
     parser.add_argument('--min-area', type=int, default=150)
     parser.add_argument('--min-skeleton-length', type=int, default=30)
-    parser.add_argument('--min-elongation', type=float, default=1.5)
+    parser.add_argument('--max-solidity', type=float, default=0.85,
+                        help='Maximum solidity for NMJ detection (branched structures have low solidity)')
     parser.add_argument('--nmj-classifier', type=str, default=None,
                         help='Path to trained NMJ classifier (.pth file)')
 

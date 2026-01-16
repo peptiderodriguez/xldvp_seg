@@ -95,14 +95,14 @@ def _create_nmj_detector(
     intensity_percentile: float = 97,
     min_area: int = 50,
     min_skeleton_length: int = 20,
-    min_elongation: float = 0.8,
+    max_solidity: float = 0.85,
     **kwargs
 ) -> Callable:
     """
     Create NMJ detector with classifier model.
 
     The detector performs two stages:
-    1. Intensity threshold + elongation filter to find candidates
+    1. Intensity threshold + solidity filter to find branched candidates
     2. CNN classifier to classify candidates as NMJ or not
     """
     import torch
@@ -173,7 +173,8 @@ def _create_nmj_detector(
             skeleton_length = skeleton.sum()
             elongation = skeleton_length / np.sqrt(prop.area) if prop.area > 0 else 0
 
-            if skeleton_length < min_skeleton_length or elongation < min_elongation:
+            # Use solidity filter (branched structures have low solidity)
+            if skeleton_length < min_skeleton_length or prop.solidity > max_solidity:
                 continue
 
             cy, cx = prop.centroid  # regionprops returns (row, col)

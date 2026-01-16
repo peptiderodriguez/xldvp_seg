@@ -79,7 +79,7 @@ def build_detection_params(
         ...     intensity_percentile=99,
         ...     min_area=150,
         ...     min_skeleton_length=30,
-        ...     min_elongation=1.5
+        ...     max_solidity=0.85
         ... )
         >>> params = build_detection_params('nmj', args, 0.22)
         >>> params['intensity_percentile']
@@ -90,7 +90,7 @@ def build_detection_params(
             'intensity_percentile': getattr(args, 'intensity_percentile', 99),
             'min_area': getattr(args, 'min_area', 150),
             'min_skeleton_length': getattr(args, 'min_skeleton_length', 30),
-            'min_elongation': getattr(args, 'min_elongation', 1.5),
+            'max_solidity': getattr(args, 'max_solidity', 0.85),
         }
 
     elif cell_type == 'mk':

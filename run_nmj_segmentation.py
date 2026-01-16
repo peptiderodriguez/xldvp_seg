@@ -39,19 +39,21 @@ logger = get_logger(__name__)
 
 
 # =============================================================================
-# NMJ DETECTION (Simple: threshold + elongation)
+# NMJ DETECTION (Simple: threshold + solidity filter)
 # =============================================================================
 
-def detect_nmjs(image, intensity_percentile=99, min_area=150, min_skeleton_length=30, min_elongation=1.5):
+def detect_nmjs(image, intensity_percentile=99, min_area=150, min_skeleton_length=30, max_solidity=0.85):
     """
-    Detect NMJs using intensity threshold + elongation filter.
+    Detect NMJs using intensity threshold + solidity filter.
+
+    Note: This is a legacy script. For new projects, use run_segmentation.py with --cell-type nmj.
 
     Args:
         image: RGB or grayscale image
         intensity_percentile: Percentile for bright region threshold (default 99)
         min_area: Minimum NMJ area in pixels
-        min_skeleton_length: Minimum skeleton length (elongation measure)
-        min_elongation: Minimum elongation ratio (skeleton_length / sqrt(area))
+        min_skeleton_length: Minimum skeleton length
+        max_solidity: Maximum solidity (branched NMJs have low solidity, default 0.85)
 
     Returns:
         nmj_masks: Label array with NMJ IDs
@@ -90,7 +92,8 @@ def detect_nmjs(image, intensity_percentile=99, min_area=150, min_skeleton_lengt
         skeleton_length = skeleton.sum()
         elongation = skeleton_length / np.sqrt(prop.area) if prop.area > 0 else 0
 
-        if skeleton_length >= min_skeleton_length and elongation >= min_elongation:
+        # Use solidity filter (branched NMJs have low solidity)
+        if skeleton_length >= min_skeleton_length and prop.solidity <= max_solidity:
             nmj_masks[region_mask] = nmj_id
 
             nmj_features.append({
@@ -384,11 +387,13 @@ def process_czi_for_nmj(czi_path, output_dir,
                         intensity_percentile=99,
                         min_area=150,
                         min_skeleton_length=30,
-                        min_elongation=1.5,
+                        max_solidity=0.85,
                         channel=1,
                         load_to_ram=True):
     """
     Process a CZI file for NMJ detection.
+
+    Note: This is a legacy script. For new projects, use run_segmentation.py with --cell-type nmj.
 
     Args:
         czi_path: Path to CZI file
@@ -399,7 +404,7 @@ def process_czi_for_nmj(czi_path, output_dir,
         intensity_percentile: Percentile for intensity threshold
         min_area: Minimum NMJ area in pixels
         min_skeleton_length: Minimum skeleton length
-        min_elongation: Minimum elongation ratio
+        max_solidity: Maximum solidity (branched NMJs have low solidity)
         channel: Channel index to use
         load_to_ram: If True, load entire channel into RAM (faster for network mounts)
     """
@@ -428,7 +433,7 @@ def process_czi_for_nmj(czi_path, output_dir,
     logger.info(f"  Mosaic dimensions: {width} x {height}")
     logger.info(f"  Mosaic origin: ({x_start}, {y_start})")
     logger.info(f"  Pixel size: {pixel_size_um:.4f} um/px")
-    logger.info(f"  Detection params: p{intensity_percentile}, min_area={min_area}, min_skel={min_skeleton_length}, min_elong={min_elongation}")
+    logger.info(f"  Detection params: p{intensity_percentile}, min_area={min_area}, min_skel={min_skeleton_length}, max_solid={max_solidity}")
     logger.info(f"  Channel: {channel}")
     logger.info(f"  RAM loading: {load_to_ram}")
 
@@ -479,7 +484,7 @@ def process_czi_for_nmj(czi_path, output_dir,
             intensity_percentile=intensity_percentile,
             min_area=min_area,
             min_skeleton_length=min_skeleton_length,
-            min_elongation=min_elongation
+            max_solidity=max_solidity
         )
 
         if len(nmj_features) == 0:
@@ -594,7 +599,7 @@ def main():
     parser.add_argument('--intensity-percentile', type=float, default=99, help='Intensity percentile threshold')
     parser.add_argument('--min-area', type=int, default=150, help='Min NMJ area in pixels')
     parser.add_argument('--min-skeleton-length', type=int, default=30, help='Min skeleton length')
-    parser.add_argument('--min-elongation', type=float, default=1.5, help='Min elongation ratio')
+    parser.add_argument('--max-solidity', type=float, default=0.85, help='Max solidity (branched NMJs have low solidity)')
     parser.add_argument('--channel', type=int, default=1, help='Channel index to use (default 1 for 647)')
     parser.add_argument('--load-to-ram', action='store_true', default=True,
                         help='Load entire channel into RAM (default: True, faster for network mounts)')
@@ -612,7 +617,7 @@ def main():
         intensity_percentile=args.intensity_percentile,
         min_area=args.min_area,
         min_skeleton_length=args.min_skeleton_length,
-        min_elongation=args.min_elongation,
+        max_solidity=args.max_solidity,
         channel=args.channel,
         load_to_ram=args.load_to_ram
     )
