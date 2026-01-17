@@ -244,6 +244,10 @@ def load_samples_from_ram(tiles_dir, slide_image, pixel_size_um, cell_type='mk',
             pil_img_final.save(buffer, format='JPEG', quality=85)
             img_b64 = base64.b64encode(buffer.getvalue()).decode('utf-8')
 
+            # Compute global centroid for unique ID
+            global_centroid_x = tile_x1 + centroid_x
+            global_centroid_y = tile_y1 + centroid_y
+
             samples.append({
                 'tile_id': tile_dir.name,
                 'det_id': det_id,
@@ -252,7 +256,9 @@ def load_samples_from_ram(tiles_dir, slide_image, pixel_size_um, cell_type='mk',
                 'image': img_b64,
                 'features': features,
                 'solidity': features.get('solidity', 0),
-                'circularity': features.get('circularity', 0)
+                'circularity': features.get('circularity', 0),
+                'global_x': global_centroid_x,
+                'global_y': global_centroid_y
             })
 
             if max_samples and len(samples) >= max_samples:
@@ -375,20 +381,23 @@ def generate_export_page_html(samples, cell_type, page_num, total_pages, slides_
     cards_html = ""
     for sample in samples:
         slide = sample.get('slide', 'unknown').replace('.', '-')
-        tile_id = str(sample.get('tile_id', '0'))
-        det_id = sample.get('det_id', 'unknown')
-        uid = f"{slide}_{tile_id}_{det_id}"
+        global_x = sample.get('global_x', 0)
+        global_y = sample.get('global_y', 0)
+        # Build unique ID from global coordinates (e.g., "mk_12345_67890")
+        uid = f"{slide}_{cell_type}_{int(global_x)}_{int(global_y)}"
+        # Short display ID without slide name
+        display_id = f"{cell_type}_{int(global_x)}_{int(global_y)}"
         area_um2 = sample.get('area_um2', 0)
         area_px = sample.get('area_px', 0)
         img_b64 = sample['image']
         cards_html += f'''
         <div class="card" id="{uid}" data-label="-1">
             <div class="card-img-container">
-                <img src="data:image/jpeg;base64,{img_b64}" alt="{det_id}">
+                <img src="data:image/jpeg;base64,{img_b64}" alt="{display_id}">
             </div>
             <div class="card-info">
                 <div>
-                    <div class="card-id">{slide} | {tile_id} | {det_id}</div>
+                    <div class="card-id">{display_id}</div>
                     <div class="card-area">{area_um2:.1f} um2 | {area_px:.0f} px2</div>
                 </div>
                 <div class="buttons">
