@@ -112,7 +112,7 @@ python run_segmentation.py \
 
 ### NMJ Detection
 
-Detects neuromuscular junctions in muscle tissue.
+Detects neuromuscular junctions in muscle tissue using BTX channel thresholding and morphological filtering.
 
 ```bash
 python run_segmentation.py \
@@ -121,6 +121,19 @@ python run_segmentation.py \
     --channel 1 \
     --sample-fraction 0.10
 ```
+
+**With multi-channel feature extraction (~2,400 features):**
+```bash
+python run_segmentation.py \
+    --czi-path /path/to/muscle.czi \
+    --cell-type nmj \
+    --channel 1 \
+    --all-channels \
+    --load-to-ram \
+    --sample-fraction 0.15
+```
+
+The `--all-channels` flag extracts features from all 3 channels (nuclear, BTX, NFL) including ResNet embeddings and inter-channel ratios. Use `--load-to-ram` for faster processing on network mounts.
 
 **Inference with trained classifier:**
 ```bash
@@ -198,9 +211,9 @@ output_dir/
 
 ```json
 {
-  "uid": "slide_tile0_det001",
+  "uid": "slidename_nmj_45678_12345",
   "tile_origin": [3000, 6000],
-  "center": [150, 200],
+  "local_centroid": [150, 200],
   "global_center": [3150, 6200],
   "global_center_um": [693.0, 1364.0],
   "area_px": 4523,
@@ -212,6 +225,8 @@ output_dir/
   }
 }
 ```
+
+**UID format:** `{slide}_{celltype}_{global_x}_{global_y}` - coordinates ensure uniqueness across tiles.
 
 ---
 
