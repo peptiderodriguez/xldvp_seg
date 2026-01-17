@@ -36,10 +36,11 @@ This eliminates repeated network I/O - the image is read once, then all tiles ar
 - **Retrain classifier:** Use `train_nmj_classifier.py` with merged annotations
 
 ### Current State (as of Jan 2026)
-- NMJ classifier trained: 95.83% accuracy (on 20251107_Fig5 slide, 115 pos / 123 neg samples)
-- Full-slide inference in progress with trained classifier (threshold 0.75)
-- Spatial grouping targets ~1500 µm² per set with 1200-1800 µm² tolerance
-- Output maps: `nmj_map_spatial_tight.png`
+- **Multi-channel feature extraction**: Now extracts ~2,400 features from all 3 channels (nuclear, BTX, NFL)
+- **BTX-only thresholding**: Mask detection uses only BTX channel (ch1/647nm), not averaged channels
+- **HTML improvements**: Channel legend (R/G/B mapping) and short mask IDs in viewer
+- NMJ classifier: RF model trained on multi-channel features for NMJ vs autofluorescence
+- Working slide: `20251107_Fig5_nuc488_Bgtx647_NfL750-1-EDFvar-stitch.czi` (3-channel)
 
 ---
 
@@ -265,12 +266,36 @@ Secondary pipeline for NMJ detection and classification in muscle tissue CZI ima
 
 ### Detection Method
 NMJ detection uses a multi-stage approach:
-1. **Intensity thresholding** - Bright fluorescent regions (default 99th percentile)
+1. **Intensity thresholding** - BTX channel only (ch1/647nm) for mask formation
 2. **Morphological cleanup** - Opening/closing to remove noise
 3. **Solidity filtering** - NMJs have branched shapes with low solidity (max_solidity=0.85)
 4. **Watershed expansion** - Masks are expanded to capture full BTX signal using watershed
 5. **Smoothing** - Binary smoothing before and after expansion for clean boundaries
-6. **Optional classifier** - ResNet18 trained to distinguish NMJ vs non-NMJ
+6. **Optional classifier** - Random Forest trained on multi-channel features
+
+### Multi-Channel Feature Extraction
+With `--all-channels` flag, extracts ~2,400 features per detection:
+- **Per-channel stats (45):** mean, std, max, min, median, percentiles, variance, skewness, kurtosis, IQR, dynamic_range, CV for each of ch0/ch1/ch2
+- **Inter-channel ratios (8):** btx_nuclear_ratio, btx_nfl_ratio, nuclear_nfl_ratio, channel_specificity, etc.
+- **ResNet-50 embeddings (2,048):** From true 3-channel RGB image
+- **SAM2 embeddings (256):** From true 3-channel RGB image
+- **Morphological features (~25):** area, perimeter, solidity, skeleton_length, etc.
+
+Channel mapping for 3-channel slides:
+- **R (ch0):** Nuclear stain (488nm)
+- **G (ch1):** Bungarotoxin/BTX (647nm) - NMJ marker
+- **B (ch2):** Neurofilament/NFL (750nm)
+
+```bash
+# Multi-channel NMJ detection
+python run_segmentation.py \
+    --czi-path /path/to/slide.czi \
+    --cell-type nmj \
+    --channel 1 \
+    --all-channels \
+    --load-to-ram \
+    --sample-fraction 0.10
+```
 
 ### Current Dataset
 - **Slide:** `20251109_PMCA1_647_nuc488-EDFvar-stitch.czi`
@@ -314,6 +339,8 @@ python export_nmj_results_html.py \
 - Filtering by area and confidence
 - Mask contour overlay (dotted green)
 - Stats bar showing annotation progress
+- **Channel legend** (for multi-channel): Shows R=nuc488, G=Bgtx647, B=NfL750
+- **Short mask IDs**: Displays `nmj_x_y` instead of full slide name
 
 ### Spatial Grouping
 NMJs can be grouped into sets for analysis:

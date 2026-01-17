@@ -119,9 +119,11 @@ class NMJStrategy(DetectionStrategy):
         Returns:
             List of binary masks for NMJ candidates that pass solidity filter
         """
-        # Convert to grayscale
+        # Convert to grayscale - use BTX channel (green/index 1) for thresholding
+        # When tile is multi-channel RGB: R=nuclear(ch0), G=BTX(ch1), B=NFL(ch2)
+        # We want to threshold on BTX only since that's the NMJ marker
         if tile.ndim == 3:
-            gray = np.mean(tile[:, :, :3], axis=2)
+            gray = tile[:, :, 1].astype(float)  # BTX channel only
         else:
             gray = tile.astype(float)
 
@@ -367,24 +369,97 @@ class NMJStrategy(DetectionStrategy):
 
         return classified_detections
 
+    def classify_rf(
+        self,
+        detections: List[Detection],
+        classifier,
+        scaler,
+        feature_names: List[str]
+    ) -> List[Detection]:
+        """
+        Classify NMJ candidates using trained Random Forest model.
+
+        Args:
+            detections: List of Detection objects to classify
+            classifier: Trained sklearn RandomForest model
+            scaler: StandardScaler for feature normalization
+            feature_names: List of feature names expected by classifier
+
+        Returns:
+            List of Detection objects that pass classification
+        """
+        if not detections:
+            return []
+
+        # Extract features for each detection
+        X = []
+        valid_indices = []
+
+        for i, det in enumerate(detections):
+            if det.features:
+                row = []
+                for fn in feature_names:
+                    val = det.features.get(fn, 0)
+                    # Handle non-scalars
+                    if isinstance(val, (list, tuple)):
+                        val = 0
+                    row.append(float(val) if val is not None else 0)
+                X.append(row)
+                valid_indices.append(i)
+
+        if not X:
+            return detections
+
+        # Convert and scale
+        X = np.array(X, dtype=np.float32)
+        X = np.nan_to_num(X, nan=0, posinf=0, neginf=0)
+
+        if scaler is not None:
+            X = scaler.transform(X)
+
+        # Predict
+        probs = classifier.predict_proba(X)[:, 1]  # Probability of positive class
+
+        # Update detections with scores
+        classified_detections = []
+        for j, (idx, prob) in enumerate(zip(valid_indices, probs)):
+            det = detections[idx]
+            det.score = prob
+            det.features['prob_nmj'] = prob
+            det.features['confidence'] = prob
+
+            # Filter by classifier threshold
+            if prob >= self.classifier_threshold:
+                classified_detections.append(det)
+
+        logger.debug(f"RF classifier: {len(classified_detections)}/{len(detections)} passed (threshold={self.classifier_threshold})")
+
+        return classified_detections
+
     def detect(
         self,
         tile: np.ndarray,
         models: Dict[str, Any],
         pixel_size_um: float,
-        extract_full_features: bool = True
+        extract_full_features: bool = True,
+        extra_channels: Dict[int, np.ndarray] = None
     ) -> Tuple[np.ndarray, List[Detection]]:
         """
-        Complete NMJ detection pipeline with full 2326 feature extraction.
+        Complete NMJ detection pipeline with full feature extraction.
+
+        When extra_channels is provided, extracts per-channel features from all
+        channels, significantly increasing the feature count for better classification.
 
         Pipeline:
-        1. Segment candidates (intensity threshold + elongation filtering)
-        2. Extract full features (22 morphological + 256 SAM2 + 2048 ResNet)
+        1. Segment candidates (intensity threshold + solidity filtering)
+        2. Extract full features (morphological + SAM2 + ResNet)
+           - With extra_channels: ~2400+ features (22 morph/channel + ratios + embeddings)
+           - Without: ~2326 features
         3. Filter by area
         4. Optional classifier filtering
 
         Args:
-            tile: Input tile image
+            tile: Input tile image (RGB - can be true multi-channel if all channels loaded)
             models: Dict with optional keys:
                 - 'sam2_predictor': SAM2ImagePredictor (for embeddings)
                 - 'resnet': ResNet model (for features)
@@ -393,10 +468,13 @@ class NMJStrategy(DetectionStrategy):
                 - 'classifier': Optional NMJ classifier model
                 - 'transform': Transform for classifier
             pixel_size_um: Pixel size for area calculations
-            extract_full_features: Whether to extract all 2326 features (default True)
+            extract_full_features: Whether to extract all features (default True)
+            extra_channels: Dict mapping channel index to 2D array for per-channel
+                feature extraction. Keys are channel numbers (0, 1, 2), values are
+                grayscale tiles. If provided, extracts features from each channel.
 
         Returns:
-            Tuple of (label_array, list of Detection objects with 2326 features)
+            Tuple of (label_array, list of Detection objects with full features)
         """
         import torch
 
@@ -447,6 +525,11 @@ class NMJStrategy(DetectionStrategy):
             # Compute NMJ-specific features (skeleton-based)
             nmj_specific = self._compute_nmj_specific_features(mask, tile)
             morph_features.update(nmj_specific)
+
+            # Extract per-channel features if extra_channels provided
+            if extra_channels is not None and extract_full_features:
+                multichannel_feats = self._compute_multichannel_features(mask, extra_channels)
+                morph_features.update(multichannel_feats)
 
             # Get centroid
             ys, xs = np.where(mask)
@@ -534,12 +617,22 @@ class NMJStrategy(DetectionStrategy):
         # Step 4: Optional classifier filtering
         if self.use_classifier and 'classifier' in models:
             classifier = models['classifier']
-            transform = models.get('transform')
+            classifier_type = models.get('classifier_type', 'cnn')
 
-            if transform is not None and device is not None:
-                detections = self.classify(
-                    detections, tile, classifier, transform, device
+            if classifier_type == 'rf':
+                # Random Forest classifier - uses extracted features
+                scaler = models.get('scaler')
+                feature_names = models.get('feature_names', [])
+                detections = self.classify_rf(
+                    detections, classifier, scaler, feature_names
                 )
+            else:
+                # CNN classifier - uses image crops
+                transform = models.get('transform')
+                if transform is not None and device is not None:
+                    detections = self.classify(
+                        detections, tile, classifier, transform, device
+                    )
 
         # Re-build label array with only final detections
         final_label_array = np.zeros(tile.shape[:2], dtype=np.uint32)
@@ -594,6 +687,157 @@ class NMJStrategy(DetectionStrategy):
     # _extract_sam2_embedding inherited from DetectionStrategy base class
     # _extract_resnet_features_batch inherited from DetectionStrategy base class
     # _percentile_normalize inherited from DetectionStrategy base class
+
+    def _compute_multichannel_features(
+        self,
+        mask: np.ndarray,
+        extra_channels: Dict[int, np.ndarray]
+    ) -> Dict[str, Any]:
+        """
+        Compute features from all available channels for better NMJ classification.
+
+        Extracts intensity statistics, texture features, and inter-channel ratios
+        from each channel. This provides the classifier with much richer information
+        than single-channel features alone.
+
+        Channel mapping for NMJ:
+        - ch0: Nuclear (488nm) - should be LOW in real NMJs
+        - ch1: BTX (647nm) - should be HIGH in real NMJs (target signal)
+        - ch2: NFL (750nm) - neurofilament marker
+
+        Args:
+            mask: Binary mask of the NMJ candidate
+            extra_channels: Dict mapping channel index to 2D grayscale tile
+
+        Returns:
+            Dict with per-channel features and inter-channel ratios
+        """
+        if mask.sum() == 0:
+            return {}
+
+        features = {}
+
+        # Compute per-channel features
+        channel_means = {}
+        channel_stds = {}
+        channel_maxes = {}
+        channel_medians = {}
+
+        for ch_idx, ch_data in sorted(extra_channels.items()):
+            if ch_data is None:
+                continue
+
+            # Ensure shapes match
+            if ch_data.shape != mask.shape:
+                continue
+
+            # Get masked pixels
+            masked_pixels = ch_data[mask].astype(float)
+            if len(masked_pixels) == 0:
+                continue
+
+            # Basic intensity statistics
+            ch_mean = float(np.mean(masked_pixels))
+            ch_std = float(np.std(masked_pixels))
+            ch_max = float(np.max(masked_pixels))
+            ch_min = float(np.min(masked_pixels))
+            ch_median = float(np.median(masked_pixels))
+
+            # Percentiles for robust statistics
+            ch_p5 = float(np.percentile(masked_pixels, 5))
+            ch_p25 = float(np.percentile(masked_pixels, 25))
+            ch_p75 = float(np.percentile(masked_pixels, 75))
+            ch_p95 = float(np.percentile(masked_pixels, 95))
+
+            # Texture/distribution features
+            ch_variance = float(np.var(masked_pixels))
+            ch_skewness = float(self._safe_skewness(masked_pixels))
+            ch_kurtosis = float(self._safe_kurtosis(masked_pixels))
+            ch_iqr = ch_p75 - ch_p25  # Interquartile range
+            ch_dynamic_range = ch_max - ch_min
+
+            # Store for ratio calculations
+            channel_means[ch_idx] = ch_mean
+            channel_stds[ch_idx] = ch_std
+            channel_maxes[ch_idx] = ch_max
+            channel_medians[ch_idx] = ch_median
+
+            # Add to features with channel prefix
+            prefix = f'ch{ch_idx}'
+            features[f'{prefix}_mean'] = ch_mean
+            features[f'{prefix}_std'] = ch_std
+            features[f'{prefix}_max'] = ch_max
+            features[f'{prefix}_min'] = ch_min
+            features[f'{prefix}_median'] = ch_median
+            features[f'{prefix}_p5'] = ch_p5
+            features[f'{prefix}_p25'] = ch_p25
+            features[f'{prefix}_p75'] = ch_p75
+            features[f'{prefix}_p95'] = ch_p95
+            features[f'{prefix}_variance'] = ch_variance
+            features[f'{prefix}_skewness'] = ch_skewness
+            features[f'{prefix}_kurtosis'] = ch_kurtosis
+            features[f'{prefix}_iqr'] = ch_iqr
+            features[f'{prefix}_dynamic_range'] = ch_dynamic_range
+
+        # Compute inter-channel ratios (critical for distinguishing NMJs from autofluorescence)
+        # Real NMJs: high BTX (ch1), low nuclear (ch0)
+        # Autofluorescence: high signal in all channels including nuclear
+
+        if 0 in channel_means and 1 in channel_means:
+            # BTX / nuclear ratio - should be HIGH for real NMJs
+            btx = channel_means[1]
+            nuclear = max(channel_means[0], 1)  # Avoid div by zero
+            features['btx_nuclear_ratio'] = btx / nuclear
+            features['btx_nuclear_diff'] = btx - channel_means[0]
+
+        if 1 in channel_means and 2 in channel_means:
+            # BTX / NFL ratio
+            btx = channel_means[1]
+            nfl = max(channel_means[2], 1)
+            features['btx_nfl_ratio'] = btx / nfl
+            features['btx_nfl_diff'] = btx - channel_means[2]
+
+        if 0 in channel_means and 2 in channel_means:
+            # Nuclear / NFL ratio
+            nuclear = channel_means[0]
+            nfl = max(channel_means[2], 1)
+            features['nuclear_nfl_ratio'] = nuclear / nfl
+
+        # Channel specificity: primary (BTX) vs max of other channels
+        if 1 in channel_means:
+            btx = channel_means[1]
+            other_means = [v for k, v in channel_means.items() if k != 1]
+            if other_means:
+                max_other = max(other_means)
+                features['channel_specificity'] = btx / max(max_other, 1)
+                features['channel_specificity_diff'] = btx - max_other
+
+        # Coefficient of variation per channel (useful for texture)
+        for ch_idx in channel_means:
+            if channel_stds.get(ch_idx, 0) > 0 and channel_means.get(ch_idx, 0) > 0:
+                features[f'ch{ch_idx}_cv'] = channel_stds[ch_idx] / channel_means[ch_idx]
+
+        return features
+
+    def _safe_skewness(self, data: np.ndarray) -> float:
+        """Compute skewness safely, returning 0 if not enough data."""
+        if len(data) < 3:
+            return 0.0
+        try:
+            from scipy.stats import skew
+            return float(skew(data))
+        except:
+            return 0.0
+
+    def _safe_kurtosis(self, data: np.ndarray) -> float:
+        """Compute kurtosis safely, returning 0 if not enough data."""
+        if len(data) < 4:
+            return 0.0
+        try:
+            from scipy.stats import kurtosis
+            return float(kurtosis(data))
+        except:
+            return 0.0
 
     def _expand_to_signal_edge(
         self,
@@ -738,6 +982,50 @@ def load_nmj_classifier(model_path: str, device=None):
     ])
 
     return model, transform, device
+
+
+def load_nmj_rf_classifier(model_path: str):
+    """
+    Load a trained NMJ Random Forest classifier.
+
+    Args:
+        model_path: Path to pickle file (.pkl)
+
+    Returns:
+        Dict with 'model', 'scaler', 'feature_names', 'type'='rf'
+    """
+    import joblib
+
+    model_data = joblib.load(model_path)
+    model_data['type'] = 'rf'
+
+    logger.info(f"Loaded RF classifier with {len(model_data['feature_names'])} features")
+    logger.info(f"  Accuracy: {model_data.get('accuracy', 'N/A')}")
+
+    return model_data
+
+
+def load_classifier(model_path: str, device=None):
+    """
+    Load NMJ classifier - auto-detects CNN (.pth) vs RF (.pkl).
+
+    Args:
+        model_path: Path to model file
+        device: Torch device (for CNN only)
+
+    Returns:
+        Dict with classifier info and 'type' key ('cnn' or 'rf')
+    """
+    if model_path.endswith('.pkl'):
+        return load_nmj_rf_classifier(model_path)
+    else:
+        model, transform, device = load_nmj_classifier(model_path, device)
+        return {
+            'model': model,
+            'transform': transform,
+            'device': device,
+            'type': 'cnn'
+        }
 
 
 def _expand_to_signal_edge_simple(

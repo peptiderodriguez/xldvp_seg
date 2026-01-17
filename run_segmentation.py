@@ -32,6 +32,7 @@ Server options:
     --no-serve          Don't start server
     --port PORT         HTTP server port (default: 8081)
     --stop-server       Stop any running background server and exit
+    --server-status     Show status of running server (including public URL)
 
 Usage:
     # NMJ detection
@@ -100,8 +101,126 @@ logger = get_logger(__name__)
 # Global list to track spawned processes for cleanup (foreground mode only)
 _spawned_processes = []
 
-# PID file location for background servers
+# PID file directory for background servers (one file per port)
+SERVER_PID_DIR = Path.home() / '.segmentation_servers'
+# Legacy single PID file (for backwards compatibility)
 SERVER_PID_FILE = Path.home() / '.segmentation_server.pid'
+
+
+def parse_channel_legend_from_filename(filename: str) -> dict:
+    """
+    Parse channel information from filename to create legend.
+
+    Looks for patterns like:
+    - nuc488, nuc405 -> nuclear stain (keeps original like 'nuc488')
+    - Bgtx647, BTX647 -> bungarotoxin (keeps original)
+    - NfL750, NFL750 -> neurofilament (keeps original)
+    - DAPI -> nuclear
+    - SMA -> smooth muscle actin
+    - _647_ -> standalone wavelength
+
+    Args:
+        filename: Slide filename (e.g., '20251107_Fig5_nuc488_Bgtx647_NfL750-1-EDFvar-stitch')
+
+    Returns:
+        Dict with 'red', 'green', 'blue' keys mapping to channel names,
+        or None if no channels detected.
+    """
+    import re
+
+    channels = []
+
+    # Specific channel patterns - use original text from filename
+    # Order: patterns that include wavelength first, then standalone wavelengths
+    patterns = [
+        # Patterns with wavelength embedded (capture the whole thing)
+        r'nuc\d{3}',           # nuc488, nuc405
+        r'bgtx\d{3}',          # Bgtx647
+        r'btx\d{3}',           # BTX647
+        r'nfl?\d{3}',          # NfL750, NFL750
+        r'sma\d*',             # SMA, SMA488
+        r'cd\d+',              # CD31, CD34
+        # Named stains without wavelength
+        r'dapi',
+        r'bungarotoxin',
+        r'neurofilament',
+        # Standalone wavelengths (must be bounded by _ or - or start/end)
+        r'(?:^|[_-])(\d{3})(?:[_-]|$)',  # _647_, -488-
+    ]
+
+    # Find all channel mentions with their positions
+    found = []
+    for pattern in patterns:
+        for match in re.finditer(pattern, filename, re.IGNORECASE):
+            # For grouped patterns, use group(1) if it exists
+            if match.lastindex:
+                text = match.group(1)
+                pos = match.start(1)
+            else:
+                text = match.group(0)
+                pos = match.start()
+            found.append((pos, text))
+
+    # Sort by position in filename and deduplicate
+    found.sort(key=lambda x: x[0])
+    seen = set()
+    for pos, name in found:
+        name_lower = name.lower()
+        if name_lower not in seen:
+            channels.append(name)
+            seen.add(name_lower)
+
+    if len(channels) >= 3:
+        return {
+            'red': channels[0],
+            'green': channels[1],
+            'blue': channels[2]
+        }
+    elif len(channels) == 2:
+        return {
+            'red': channels[0],
+            'green': channels[1]
+        }
+    elif len(channels) == 1:
+        return {
+            'green': channels[0]  # Single channel shown as green
+        }
+
+    return None
+
+
+def _get_pid_file(port: int) -> Path:
+    """Get PID file path for a specific port."""
+    SERVER_PID_DIR.mkdir(exist_ok=True)
+    return SERVER_PID_DIR / f'server_{port}.json'
+
+
+def _get_all_servers() -> list:
+    """Get list of all server info dicts."""
+    servers = []
+
+    # Check legacy single PID file first
+    if SERVER_PID_FILE.exists():
+        try:
+            data = json.loads(SERVER_PID_FILE.read_text())
+            data['_pid_file'] = SERVER_PID_FILE
+            servers.append(data)
+        except Exception:
+            pass
+
+    # Check new per-port PID files
+    if SERVER_PID_DIR.exists():
+        for pid_file in SERVER_PID_DIR.glob('server_*.json'):
+            try:
+                data = json.loads(pid_file.read_text())
+                data['_pid_file'] = pid_file
+                # Skip if already covered by legacy file (same port)
+                if not any(s.get('port') == data.get('port') for s in servers):
+                    servers.append(data)
+            except Exception:
+                pass
+
+    return servers
 
 
 def _cleanup_processes():
@@ -148,7 +267,82 @@ def stop_background_server():
         return False
 
 
-def start_server_and_tunnel(html_dir: Path, port: int = 8081, background: bool = False) -> tuple:
+def show_server_status():
+    """Show status of all running background servers."""
+    servers = _get_all_servers()
+
+    if not servers:
+        print("No background servers running")
+        return False
+
+    # Filter to only running servers
+    running_servers = []
+    for data in servers:
+        http_pid = data.get('http_pid')
+        tunnel_pid = data.get('tunnel_pid')
+        http_running = http_pid and _pid_exists(http_pid)
+        tunnel_running = tunnel_pid and _pid_exists(tunnel_pid)
+
+        if http_running or tunnel_running:
+            data['_http_running'] = http_running
+            data['_tunnel_running'] = tunnel_running
+            running_servers.append(data)
+
+    if not running_servers:
+        print("No background servers running")
+        return False
+
+    print("=" * 70)
+    print(f"ACTIVE SEGMENTATION SERVERS ({len(running_servers)} running)")
+    print("=" * 70)
+
+    for i, data in enumerate(running_servers):
+        http_pid = data.get('http_pid')
+        tunnel_pid = data.get('tunnel_pid')
+        url = data.get('url')
+        port = data.get('port', 8081)
+        slide_name = data.get('slide_name', 'unknown')
+        cell_type = data.get('cell_type', 'unknown')
+        http_running = data.get('_http_running', False)
+        tunnel_running = data.get('_tunnel_running', False)
+
+        # Build human-readable name
+        if slide_name and slide_name != 'unknown' and cell_type and cell_type != 'unknown':
+            serving_name = f"{slide_name} ({cell_type.upper()})"
+        elif slide_name and slide_name != 'unknown':
+            serving_name = slide_name
+        else:
+            serving_name = f"Server on port {port}"
+
+        if i > 0:
+            print("-" * 70)
+
+        print(f"\n[{i+1}] {serving_name}")
+        print(f"    Slide:      {slide_name}")
+        print(f"    Cell Type:  {cell_type}")
+        print(f"    Port:       {port}")
+        print(f"    Status:     HTTP={'OK' if http_running else 'DOWN'}, Tunnel={'OK' if tunnel_running else 'DOWN'}")
+        if url and tunnel_running:
+            print(f"    PUBLIC:     {url}")
+        print(f"    LOCAL:      http://localhost:{port}")
+
+    print("\n" + "=" * 70)
+    print(f"To stop all: python run_segmentation.py --stop-server")
+    print("=" * 70)
+    return True
+
+
+def _pid_exists(pid):
+    """Check if a process with given PID exists."""
+    try:
+        os.kill(pid, 0)
+        return True
+    except (ProcessLookupError, PermissionError):
+        return False
+
+
+def start_server_and_tunnel(html_dir: Path, port: int = 8081, background: bool = False,
+                            slide_name: str = None, cell_type: str = None) -> tuple:
     """
     Start HTTP server and Cloudflare tunnel for viewing results.
 
@@ -156,6 +350,8 @@ def start_server_and_tunnel(html_dir: Path, port: int = 8081, background: bool =
         html_dir: Path to the HTML directory to serve
         port: Port for HTTP server (default 8081)
         background: If True, detach processes so they survive script exit
+        slide_name: Name of the slide being served (for status display)
+        cell_type: Type of cells being detected (for status display)
 
     Returns:
         Tuple of (http_process, tunnel_process, tunnel_url)
@@ -167,10 +363,40 @@ def start_server_and_tunnel(html_dir: Path, port: int = 8081, background: bool =
         logger.error(f"HTML directory does not exist: {html_dir}")
         return None, None, None
 
-    # Stop any existing background server first
+    # Check for existing server - reuse tunnel if possible
+    existing_tunnel_url = None
+    existing_tunnel_pid = None
     if background and SERVER_PID_FILE.exists():
-        logger.info("Stopping existing background server...")
-        stop_background_server()
+        try:
+            data = json.loads(SERVER_PID_FILE.read_text())
+            old_http_pid = data.get('http_pid')
+            old_tunnel_pid = data.get('tunnel_pid')
+            old_port = data.get('port', 8081)
+            existing_tunnel_url = data.get('url')
+
+            # Check if tunnel is still running
+            tunnel_running = old_tunnel_pid and _pid_exists(old_tunnel_pid)
+
+            if tunnel_running and old_port == port:
+                # Tunnel is running on same port - keep it, just restart HTTP server
+                logger.info(f"Reusing existing Cloudflare tunnel: {existing_tunnel_url}")
+                existing_tunnel_pid = old_tunnel_pid
+
+                # Stop only the HTTP server (not the tunnel)
+                if old_http_pid and _pid_exists(old_http_pid):
+                    try:
+                        os.kill(old_http_pid, signal.SIGTERM)
+                        logger.info(f"Stopped old HTTP server (PID {old_http_pid})")
+                        time.sleep(0.5)  # Give it time to release the port
+                    except Exception:
+                        pass
+            else:
+                # Tunnel not running or different port - start fresh
+                logger.info("Starting new server and tunnel...")
+                stop_background_server()
+                existing_tunnel_url = None
+        except Exception:
+            stop_background_server()
 
     # Common args for background mode (detach from parent)
     bg_kwargs = {}
@@ -199,82 +425,106 @@ def start_server_and_tunnel(html_dir: Path, port: int = 8081, background: bool =
 
     logger.info(f"HTTP server running: http://localhost:{port}")
 
-    # Start Cloudflare tunnel
-    cloudflared_path = os.path.expanduser('~/cloudflared')
-    if not os.path.exists(cloudflared_path):
-        logger.warning("Cloudflare tunnel not found at ~/cloudflared")
-        logger.info("Install with: curl -L https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-amd64 -o ~/cloudflared && chmod +x ~/cloudflared")
-        if background:
-            # Save HTTP server PID even without tunnel
-            SERVER_PID_FILE.write_text(json.dumps({
-                'http_pid': http_proc.pid,
-                'tunnel_pid': None,
-                'port': port,
-                'html_dir': str(html_dir),
-                'url': None,
-            }))
-        return http_proc, None, None
+    # Start Cloudflare tunnel (or reuse existing one)
+    tunnel_proc = None
+    tunnel_url = existing_tunnel_url
 
-    logger.info("Starting Cloudflare tunnel...")
+    if existing_tunnel_pid:
+        # Reusing existing tunnel - create a dummy process reference
+        logger.info(f"Tunnel already running (PID {existing_tunnel_pid})")
+        tunnel_proc = None  # We don't have the process object, just the PID
 
-    # For background mode, we need to capture output to get URL but still detach
-    if background:
-        # Create a log file for tunnel output
-        tunnel_log = html_dir / '.tunnel.log'
-        tunnel_log_file = open(tunnel_log, 'w')
-        tunnel_proc = subprocess.Popen(
-            [cloudflared_path, 'tunnel', '--url', f'http://localhost:{port}'],
-            stdout=tunnel_log_file,
-            stderr=subprocess.STDOUT,
-            start_new_session=True,
-            stdin=subprocess.DEVNULL,
-        )
-        # Wait briefly and parse log for URL
-        time.sleep(5)
-        tunnel_log_file.flush()
-        tunnel_url = None
-        try:
-            log_content = tunnel_log.read_text()
-            match = re.search(r'(https://[^\s]+\.trycloudflare\.com)', log_content)
-            if match:
-                tunnel_url = match.group(1)
-        except Exception:
-            pass
-    else:
-        tunnel_proc = subprocess.Popen(
-            [cloudflared_path, 'tunnel', '--url', f'http://localhost:{port}'],
-            stdout=subprocess.PIPE,
-            stderr=subprocess.STDOUT,
-            text=True,
-        )
-        _spawned_processes.append(tunnel_proc)
-
-        # Wait for tunnel URL (usually appears within 5-10 seconds)
-        tunnel_url = None
-        start_time = time.time()
-        while time.time() - start_time < 30:
-            line = tunnel_proc.stdout.readline()
-            if not line:
-                if tunnel_proc.poll() is not None:
-                    logger.error("Cloudflare tunnel exited unexpectedly")
-                    break
-                continue
-            # Look for the tunnel URL in the output
-            if 'trycloudflare.com' in line:
-                match = re.search(r'(https://[^\s]+\.trycloudflare\.com)', line)
-                if match:
-                    tunnel_url = match.group(1)
-                    break
-
-    # Save PID file for background mode
-    if background:
+        # Update PID file with new HTTP server but keep tunnel info
         SERVER_PID_FILE.write_text(json.dumps({
             'http_pid': http_proc.pid,
-            'tunnel_pid': tunnel_proc.pid if tunnel_proc else None,
+            'tunnel_pid': existing_tunnel_pid,
             'port': port,
             'html_dir': str(html_dir),
-            'url': tunnel_url,
+            'url': existing_tunnel_url,
+            'slide_name': slide_name,
+            'cell_type': cell_type,
         }))
+    else:
+        # Need to start a new tunnel
+        cloudflared_path = os.path.expanduser('~/cloudflared')
+        if not os.path.exists(cloudflared_path):
+            logger.warning("Cloudflare tunnel not found at ~/cloudflared")
+            logger.info("Install with: curl -L https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-amd64 -o ~/cloudflared && chmod +x ~/cloudflared")
+            if background:
+                # Save HTTP server PID even without tunnel
+                SERVER_PID_FILE.write_text(json.dumps({
+                    'http_pid': http_proc.pid,
+                    'tunnel_pid': None,
+                    'port': port,
+                    'html_dir': str(html_dir),
+                    'url': None,
+                    'slide_name': slide_name,
+                    'cell_type': cell_type,
+                }))
+            return http_proc, None, None
+
+        logger.info("Starting Cloudflare tunnel...")
+
+        # For background mode, we need to capture output to get URL but still detach
+        if background:
+            # Create a log file for tunnel output
+            tunnel_log = html_dir / '.tunnel.log'
+            tunnel_log_file = open(tunnel_log, 'w')
+            tunnel_proc = subprocess.Popen(
+                [cloudflared_path, 'tunnel', '--url', f'http://localhost:{port}'],
+                stdout=tunnel_log_file,
+                stderr=subprocess.STDOUT,
+                start_new_session=True,
+                stdin=subprocess.DEVNULL,
+            )
+            # Wait briefly and parse log for URL
+            time.sleep(5)
+            tunnel_log_file.flush()
+            tunnel_url = None
+            try:
+                log_content = tunnel_log.read_text()
+                match = re.search(r'(https://[^\s]+\.trycloudflare\.com)', log_content)
+                if match:
+                    tunnel_url = match.group(1)
+            except Exception:
+                pass
+        else:
+            tunnel_proc = subprocess.Popen(
+                [cloudflared_path, 'tunnel', '--url', f'http://localhost:{port}'],
+                stdout=subprocess.PIPE,
+                stderr=subprocess.STDOUT,
+                text=True,
+            )
+            _spawned_processes.append(tunnel_proc)
+
+            # Wait for tunnel URL (usually appears within 5-10 seconds)
+            tunnel_url = None
+            start_time = time.time()
+            while time.time() - start_time < 30:
+                line = tunnel_proc.stdout.readline()
+                if not line:
+                    if tunnel_proc.poll() is not None:
+                        logger.error("Cloudflare tunnel exited unexpectedly")
+                        break
+                    continue
+                # Look for the tunnel URL in the output
+                if 'trycloudflare.com' in line:
+                    match = re.search(r'(https://[^\s]+\.trycloudflare\.com)', line)
+                    if match:
+                        tunnel_url = match.group(1)
+                        break
+
+        # Save PID file for background mode
+        if background:
+            SERVER_PID_FILE.write_text(json.dumps({
+                'http_pid': http_proc.pid,
+                'tunnel_pid': tunnel_proc.pid if tunnel_proc else None,
+                'port': port,
+                'html_dir': str(html_dir),
+                'url': tunnel_url,
+                'slide_name': slide_name,
+                'cell_type': cell_type,
+            }))
 
     if tunnel_url:
         logger.info("=" * 60)
@@ -2483,23 +2733,34 @@ def run_pipeline(args):
         detector = CellDetector(device="cuda")
         segmenter = None  # Not used for these cell types
 
-        # Load NMJ classifier if provided
+        # Load NMJ classifier if provided (supports CNN .pth or RF .pkl)
         if args.cell_type == 'nmj' and getattr(args, 'nmj_classifier', None):
-            from segmentation.detection.strategies.nmj import load_nmj_classifier
-            from torchvision import transforms
+            from segmentation.detection.strategies.nmj import load_classifier
 
             logger.info(f"Loading NMJ classifier from {args.nmj_classifier}...")
-            nmj_classifier = load_nmj_classifier(args.nmj_classifier, device=detector.device)
-            classifier_transform = transforms.Compose([
-                transforms.ToPILImage(),
-                transforms.Resize((224, 224)),
-                transforms.ToTensor(),
-                transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])
-            ])
-            # Add classifier to models dict
-            detector.models['classifier'] = nmj_classifier
-            detector.models['transform'] = classifier_transform
-            logger.info("NMJ classifier loaded successfully")
+            classifier_data = load_classifier(args.nmj_classifier, device=detector.device)
+
+            if classifier_data['type'] == 'cnn':
+                # CNN classifier - use transform pipeline
+                from torchvision import transforms
+                classifier_transform = transforms.Compose([
+                    transforms.ToPILImage(),
+                    transforms.Resize((224, 224)),
+                    transforms.ToTensor(),
+                    transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])
+                ])
+                detector.models['classifier'] = classifier_data['model']
+                detector.models['classifier_type'] = 'cnn'
+                detector.models['transform'] = classifier_transform
+                detector.models['device'] = classifier_data['device']
+                logger.info("CNN classifier loaded successfully")
+            else:
+                # RF classifier - use features directly
+                detector.models['classifier'] = classifier_data['model']
+                detector.models['classifier_type'] = 'rf'
+                detector.models['scaler'] = classifier_data['scaler']
+                detector.models['feature_names'] = classifier_data['feature_names']
+                logger.info(f"RF classifier loaded successfully ({len(classifier_data['feature_names'])} features)")
     else:
         # No cell types fall back to UnifiedSegmenter anymore
         raise ValueError(f"Unknown cell type: {args.cell_type}")
@@ -2570,8 +2831,23 @@ def run_pipeline(args):
             if tile_data.max() == 0:
                 continue
 
-            # Convert to RGB
-            if tile_data.ndim == 2:
+            # Convert to RGB - use true multi-channel if available
+            # For NMJ: ch0=nuclear (488), ch1=BTX (647), ch2=NFL (750)
+            # Stack as RGB so ResNet sees all channels
+            extra_channel_tiles = None
+            if args.cell_type == 'nmj' and len(all_channel_data) >= 3:
+                # Build true 3-channel tile from all channels
+                ch0_tile = all_channel_data[0][tile_y:tile_y + args.tile_size,
+                                               tile_x:tile_x + args.tile_size]
+                ch1_tile = all_channel_data[1][tile_y:tile_y + args.tile_size,
+                                               tile_x:tile_x + args.tile_size]
+                ch2_tile = all_channel_data[2][tile_y:tile_y + args.tile_size,
+                                               tile_x:tile_x + args.tile_size]
+                # Stack as RGB: ch0=R (nuclear), ch1=G (BTX), ch2=B (NFL)
+                tile_rgb = np.stack([ch0_tile, ch1_tile, ch2_tile], axis=-1)
+                # Also pass individual channels for per-channel feature extraction
+                extra_channel_tiles = {0: ch0_tile, 1: ch1_tile, 2: ch2_tile}
+            elif tile_data.ndim == 2:
                 tile_rgb = np.stack([tile_data] * 3, axis=-1)
             else:
                 tile_rgb = tile_data
@@ -2594,8 +2870,14 @@ def run_pipeline(args):
                         tile_rgb, detector.models, pixel_size_um,
                         cd31_channel=cd31_channel_data
                     )
+                elif args.cell_type == 'nmj' and extra_channel_tiles is not None:
+                    # NMJ strategy with multi-channel feature extraction
+                    masks, detections = strategy.detect(
+                        tile_rgb, detector.models, pixel_size_um,
+                        extra_channels=extra_channel_tiles
+                    )
                 else:
-                    # Other strategies: nmj, mk, cell, mesothelium
+                    # Other strategies: mk, cell, mesothelium
                     masks, detections = strategy.detect(
                         tile_rgb, detector.models, pixel_size_um
                     )
@@ -2714,6 +2996,11 @@ def run_pipeline(args):
     logger.info(f"Exporting to HTML ({len(all_samples)} samples)...")
     html_dir = slide_output_dir / "html"
 
+    # Channel legend for multi-channel NMJ images - parse from filename
+    channel_legend = None
+    if args.cell_type == 'nmj' and getattr(args, 'all_channels', False):
+        channel_legend = parse_channel_legend_from_filename(slide_name)
+
     export_samples_to_html(
         all_samples,
         html_dir,
@@ -2725,6 +3012,7 @@ def run_pipeline(args):
         pixel_size_um=pixel_size_um,
         tiles_processed=len(sampled_tiles),
         tiles_total=len(all_tiles),
+        channel_legend=channel_legend,
     )
 
     # Save all detections with universal IDs and global coordinates
@@ -2807,12 +3095,21 @@ def run_pipeline(args):
         logger.info("Server disabled (--no-serve)")
     elif serve_foreground:
         # Foreground mode: start and wait for Ctrl+C
-        http_proc, tunnel_proc, tunnel_url = start_server_and_tunnel(html_dir, port, background=False)
+        http_proc, tunnel_proc, tunnel_url = start_server_and_tunnel(
+            html_dir, port, background=False,
+            slide_name=slide_name, cell_type=args.cell_type
+        )
         if http_proc is not None:
             wait_for_server_shutdown(http_proc, tunnel_proc)
     elif serve_background:
         # Background mode: start and exit script
-        start_server_and_tunnel(html_dir, port, background=True)
+        start_server_and_tunnel(
+            html_dir, port, background=True,
+            slide_name=slide_name, cell_type=args.cell_type
+        )
+        # Show final server status
+        print("")
+        show_server_status()
 
 
 def main():
@@ -2821,8 +3118,8 @@ def main():
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
 
-    # Required
-    parser.add_argument('--czi-path', type=str, required=True, help='Path to CZI file')
+    # Required (unless using utility commands like --stop-server or --server-status)
+    parser.add_argument('--czi-path', type=str, required=False, help='Path to CZI file')
     parser.add_argument('--cell-type', type=str, default=None,
                         choices=['nmj', 'mk', 'cell', 'vessel', 'mesothelium'],
                         help='Cell type to detect (not required if --show-metadata)')
@@ -2911,6 +3208,8 @@ def main():
                         help='Port for HTTP server (default: 8081)')
     parser.add_argument('--stop-server', action='store_true',
                         help='Stop any running background server and exit')
+    parser.add_argument('--server-status', action='store_true',
+                        help='Show status of running server (including public URL) and exit')
 
     args = parser.parse_args()
 
@@ -2920,10 +3219,19 @@ def main():
         stop_background_server()
         return
 
+    # Handle --server-status (exit early)
+    if args.server_status:
+        show_server_status()
+        return
+
     # Handle --show-metadata (exit early)
     if args.show_metadata:
         print_czi_metadata(args.czi_path)
         return
+
+    # Require --czi-path for actual pipeline runs
+    if args.czi_path is None:
+        parser.error("--czi-path is required (unless using --stop-server, --server-status, or --show-metadata)")
 
     # Require --cell-type if not showing metadata
     if args.cell_type is None:

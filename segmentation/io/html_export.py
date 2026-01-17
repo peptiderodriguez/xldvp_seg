@@ -198,6 +198,12 @@ def get_css():
             font-weight: normal;
         }
 
+        .header-subtitle {
+            font-size: 0.85em;
+            color: #888;
+            margin-top: 2px;
+        }
+
         .nav-buttons {
             display: flex;
             gap: 10px;
@@ -255,6 +261,23 @@ def get_css():
         .stat.negative {
             border-left: 3px solid #a44;
         }
+
+        .channel-legend {
+            margin-left: auto;
+            padding: 4px 12px;
+            background: #1a1a1a;
+            border: 1px solid #333;
+            border-radius: 4px;
+        }
+
+        .channel-legend span {
+            margin: 0 6px;
+            font-weight: bold;
+        }
+
+        .ch-red { color: #ff6666; }
+        .ch-green { color: #66ff66; }
+        .ch-blue { color: #6666ff; }
 
         .content {
             padding: 15px;
@@ -597,6 +620,8 @@ def generate_annotation_page(
     title=None,
     page_prefix='page',
     experiment_name=None,
+    channel_legend=None,
+    subtitle=None,
 ):
     """
     Generate an HTML annotation page.
@@ -612,6 +637,9 @@ def generate_annotation_page(
         title: Optional title override
         page_prefix: Prefix for page filenames
         experiment_name: Optional experiment name for localStorage isolation
+        channel_legend: Optional dict mapping colors to channel names,
+            e.g., {'red': 'nuc488', 'green': 'Bgtx647', 'blue': 'NfL750'}
+        subtitle: Optional subtitle (e.g., filename) shown below title
 
     Returns:
         HTML string
@@ -628,6 +656,23 @@ def generate_annotation_page(
     if page_num < total_pages:
         nav_html += f'<a href="{page_prefix}_{page_num+1}.html" class="nav-btn">Next</a>'
     nav_html += '</div>'
+
+    # Build channel legend HTML if provided
+    channel_legend_html = ''
+    if channel_legend:
+        channel_legend_html = '<div class="channel-legend"><span class="stats-label">Channels:</span>'
+        if 'red' in channel_legend:
+            channel_legend_html += f'<span class="ch-red">R={channel_legend["red"]}</span>'
+        if 'green' in channel_legend:
+            channel_legend_html += f'<span class="ch-green">G={channel_legend["green"]}</span>'
+        if 'blue' in channel_legend:
+            channel_legend_html += f'<span class="ch-blue">B={channel_legend["blue"]}</span>'
+        channel_legend_html += '</div>'
+
+    # Build subtitle HTML if provided
+    subtitle_html = ''
+    if subtitle:
+        subtitle_html = f'<div class="header-subtitle">{subtitle}</div>'
 
     # Build cards
     cards_html = ''
@@ -650,6 +695,18 @@ def generate_annotation_page(
 
         stats_str = ' | '.join(stats_parts) if stats_parts else ''
 
+        # Create short display ID (just the mask part, not full slide name)
+        # Format: slide_name_celltype_x_y -> celltype_x_y
+        display_id = uid
+        if '_nmj_' in uid:
+            display_id = 'nmj_' + uid.split('_nmj_')[-1]
+        elif '_mk_' in uid:
+            display_id = 'mk_' + uid.split('_mk_')[-1]
+        elif '_hspc_' in uid:
+            display_id = 'hspc_' + uid.split('_hspc_')[-1]
+        elif '_vessel_' in uid:
+            display_id = 'vessel_' + uid.split('_vessel_')[-1]
+
         cards_html += f'''
         <div class="card" id="{uid}" data-label="-1">
             <div class="card-img-container">
@@ -657,7 +714,7 @@ def generate_annotation_page(
             </div>
             <div class="card-info">
                 <div class="card-meta">
-                    <div class="card-id">{uid}</div>
+                    <div class="card-id">{display_id}</div>
                     <div class="card-stats">{stats_str}</div>
                 </div>
                 <div class="buttons">
@@ -679,7 +736,10 @@ def generate_annotation_page(
 <body>
     <div class="header">
         <div class="header-top">
-            <h1>{title} - Page {page_num}/{total_pages}</h1>
+            <div>
+                <h1>{title} - Page {page_num}/{total_pages}</h1>
+                {subtitle_html}
+            </div>
             {nav_html}
         </div>
         <div class="stats-row">
@@ -696,6 +756,7 @@ def generate_annotation_page(
             <button class="btn btn-export" onclick="exportAnnotations()">Export</button>
             <button class="btn" onclick="clearPage()">Clear Page</button>
             <button class="btn btn-danger" onclick="clearAll()">Clear All</button>
+            {channel_legend_html}
         </div>
     </div>
 
@@ -954,6 +1015,7 @@ def export_samples_to_html(
     pixel_size_um=None,
     tiles_processed=None,
     tiles_total=None,
+    channel_legend=None,
 ):
     """
     Export samples to paginated HTML files.
@@ -972,6 +1034,8 @@ def export_samples_to_html(
         pixel_size_um: Pixel size in micrometers
         tiles_processed: Number of tiles processed
         tiles_total: Total number of tiles
+        channel_legend: Optional dict mapping colors to channel names,
+            e.g., {'red': 'nuc488', 'green': 'Bgtx647', 'blue': 'NfL750'}
 
     Returns:
         Tuple of (total_samples, total_pages)
@@ -999,6 +1063,8 @@ def export_samples_to_html(
             title=title,
             page_prefix=page_prefix,
             experiment_name=experiment_name,
+            channel_legend=channel_legend,
+            subtitle=subtitle or file_name,  # Use subtitle or fallback to file_name
         )
 
         page_path = output_dir / f"{page_prefix}_{page_num}.html"
