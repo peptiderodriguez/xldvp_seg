@@ -24,10 +24,35 @@ This eliminates repeated network I/O - the image is read once, then all tiles ar
 | What | Where |
 |------|-------|
 | **This repo** | `/home/dude/code/xldvp_seg_repo/` |
-| **MK/HSPC output** | `/home/dude/xldvp_seg_output/` |
+| **MK/HSPC output** | `/home/dude/mk_output/` |
 | **NMJ output** | `/home/dude/nmj_output/` |
-| **NMJ test data** | `/home/dude/nmj_test_output/` |
+| **Vessel output** | `/home/dude/vessel_output/` |
 | **Conda env** | `mkseg` (activate: `source ~/miniforge3/etc/profile.d/conda.sh && conda activate mkseg`) |
+
+### Project Structure Convention
+**All new projects MUST follow this naming structure:**
+```
+/home/dude/{celltype}_output/{project_name}/
+├── html/                        # Annotation viewer
+│   ├── index.html
+│   └── {celltype}_page_*.html
+├── {celltype}_detections.json   # All detections with UIDs
+├── {celltype}_coordinates.csv   # Quick coordinate export
+└── {slide_name}/                # Per-slide data (if multi-slide)
+    └── tiles/{tile_id}/
+        ├── segmentation.h5
+        ├── features.json
+        └── window.csv
+```
+
+**Examples:**
+- NMJ single slide: `/home/dude/nmj_output/20251107_Fig5_fresh/`
+- MK 16-slide batch: `/home/dude/mk_output/2025_11_18_BM_16slides/`
+- Vessel project: `/home/dude/vessel_output/2025_01_SMA_study/`
+
+**Naming rules:**
+- `{celltype}` = `nmj`, `mk`, `hspc`, `vessel`, `mesothelium`
+- `{project_name}` = descriptive name with date (e.g., `20251107_Fig5_fresh`, `2025_11_18_BM_16slides`)
 
 ### Common Tasks
 - **Run unified segmentation:** `python run_segmentation.py --czi-path /path/to/slide.czi --cell-type nmj`
