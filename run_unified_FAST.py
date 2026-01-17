@@ -244,13 +244,23 @@ def load_samples_from_ram(tiles_dir, slide_image, pixel_size_um, cell_type='mk',
             pil_img_final.save(buffer, format='JPEG', quality=85)
             img_b64 = base64.b64encode(buffer.getvalue()).decode('utf-8')
 
-            # Compute global centroid for unique ID
-            global_centroid_x = tile_x1 + centroid_x
-            global_centroid_y = tile_y1 + centroid_y
+            # Use global center from features.json if available, otherwise compute
+            if 'center' in feat_dict:
+                # center is already in global coordinates
+                global_centroid_x = int(feat_dict['center'][0])
+                global_centroid_y = int(feat_dict['center'][1])
+            else:
+                # Backwards compatibility: compute from tile origin + local centroid
+                global_centroid_x = tile_x1 + centroid_x
+                global_centroid_y = tile_y1 + centroid_y
+
+            # Get global_id if available
+            global_id = feat_dict.get('global_id', None)
 
             samples.append({
                 'tile_id': tile_dir.name,
                 'det_id': det_id,
+                'global_id': global_id,
                 'area_px': area_px,
                 'area_um2': area_um2,
                 'image': img_b64,
@@ -381,12 +391,16 @@ def generate_export_page_html(samples, cell_type, page_num, total_pages, slides_
     cards_html = ""
     for sample in samples:
         slide = sample.get('slide', 'unknown').replace('.', '-')
+        global_id = sample.get('global_id')
         global_x = sample.get('global_x', 0)
         global_y = sample.get('global_y', 0)
-        # Build unique ID from global coordinates (e.g., "mk_12345_67890")
-        uid = f"{slide}_{cell_type}_{int(global_x)}_{int(global_y)}"
-        # Short display ID without slide name
-        display_id = f"{cell_type}_{int(global_x)}_{int(global_y)}"
+        # Use global_id if available, otherwise use coordinates
+        if global_id is not None:
+            uid = f"{slide}_{cell_type}_{global_id}"
+            display_id = f"{cell_type}_{global_id}"
+        else:
+            uid = f"{slide}_{cell_type}_{int(global_x)}_{int(global_y)}"
+            display_id = f"{cell_type}_{int(global_x)}_{int(global_y)}"
         area_um2 = sample.get('area_um2', 0)
         area_px = sample.get('area_px', 0)
         img_b64 = sample['image']
@@ -1640,7 +1654,7 @@ def run_unified_segmentation(
                             with h5py.File(mk_tile_dir / "segmentation.h5", 'w') as f:
                                 create_hdf5_dataset(f, 'labels', new_mk[np.newaxis])
                             with open(mk_tile_dir / "features.json", 'w') as f:
-                                json.dump([{'id': m['id'], 'features': m['features']} for m in result['mk_feats']], f)
+                                json.dump([{'id': m['id'], 'global_id': m['global_id'], 'center': m['center'], 'features': m['features']} for m in result['mk_feats']], f)
 
                             # Explicit cleanup to prevent memory accumulation
                             del new_mk, mk_tile_cells
@@ -1672,7 +1686,7 @@ def run_unified_segmentation(
                             with h5py.File(hspc_tile_dir / "segmentation.h5", 'w') as f:
                                 create_hdf5_dataset(f, 'labels', new_hspc[np.newaxis])
                             with open(hspc_tile_dir / "features.json", 'w') as f:
-                                json.dump([{'id': h['id'], 'features': h['features']} for h in result['hspc_feats']], f)
+                                json.dump([{'id': h['id'], 'global_id': h['global_id'], 'center': h['center'], 'features': h['features']} for h in result['hspc_feats']], f)
 
                             # Explicit cleanup to prevent memory accumulation
                             del new_hspc, hspc_tile_cells
@@ -2055,7 +2069,7 @@ def run_multi_slide_segmentation(
                             with h5py.File(mk_tile_dir / "segmentation.h5", 'w') as f:
                                 create_hdf5_dataset(f, 'labels', new_mk[np.newaxis])
                             with open(mk_tile_dir / "features.json", 'w') as f:
-                                json.dump([{'id': m['id'], 'features': m['features']} for m in result['mk_feats']], f)
+                                json.dump([{'id': m['id'], 'global_id': m['global_id'], 'center': m['center'], 'features': m['features']} for m in result['mk_feats']], f)
 
                             del new_mk, mk_tile_cells
 
@@ -2085,7 +2099,7 @@ def run_multi_slide_segmentation(
                             with h5py.File(hspc_tile_dir / "segmentation.h5", 'w') as f:
                                 create_hdf5_dataset(f, 'labels', new_hspc[np.newaxis])
                             with open(hspc_tile_dir / "features.json", 'w') as f:
-                                json.dump([{'id': h['id'], 'features': h['features']} for h in result['hspc_feats']], f)
+                                json.dump([{'id': h['id'], 'global_id': h['global_id'], 'center': h['center'], 'features': h['features']} for h in result['hspc_feats']], f)
 
                             del new_hspc, hspc_tile_cells
 
@@ -2337,7 +2351,7 @@ def save_tile_results(result, output_base, slide_results, slide_results_lock):
         with h5py.File(mk_tile_dir / "segmentation.h5", 'w') as f:
             create_hdf5_dataset(f, 'labels', new_mk[np.newaxis])
         with open(mk_tile_dir / "features.json", 'w') as f:
-            json.dump([{'id': m['id'], 'features': m['features']} for m in result['mk_feats']], f)
+            json.dump([{'id': m['id'], 'global_id': m['global_id'], 'center': m['center'], 'features': m['features']} for m in result['mk_feats']], f)
 
     if result['hspc_feats']:
         hspc_dir = output_dir / "hspc" / "tiles"
@@ -2366,7 +2380,7 @@ def save_tile_results(result, output_base, slide_results, slide_results_lock):
         with h5py.File(hspc_tile_dir / "segmentation.h5", 'w') as f:
             create_hdf5_dataset(f, 'labels', new_hspc[np.newaxis])
         with open(hspc_tile_dir / "features.json", 'w') as f:
-            json.dump([{'id': h['id'], 'features': h['features']} for h in result['hspc_feats']], f)
+            json.dump([{'id': h['id'], 'global_id': h['global_id'], 'center': h['center'], 'features': h['features']} for h in result['hspc_feats']], f)
 
     return {'slide_name': slide_name, 'mk_count': mk_count, 'hspc_count': hspc_count}
 
