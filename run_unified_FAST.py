@@ -261,8 +261,9 @@ def load_samples_from_ram(tiles_dir, slide_image, pixel_size_um, cell_type='mk',
     return samples
 
 
-def create_export_index(output_dir, total_mks, total_hspcs, mk_pages, hspc_pages):
+def create_export_index(output_dir, total_mks, total_hspcs, mk_pages, hspc_pages, slides_summary=None):
     """Create the main index.html page."""
+    subtitle_html = f'<p style="color: #888; margin-bottom: 10px;">{slides_summary}</p>' if slides_summary else ''
     html = f'''<!DOCTYPE html>
 <html>
 <head>
@@ -287,6 +288,7 @@ def create_export_index(output_dir, total_mks, total_hspcs, mk_pages, hspc_pages
 <body>
     <div class="header">
         <h1>MK + HSPC Cell Review</h1>
+        {subtitle_html}
         <p style="color: #888;">Annotation Interface</p>
         <div class="stats">
             <div class="stat"><span>Total MKs</span><span class="number">{total_mks:,}</span></div>
@@ -348,9 +350,18 @@ def create_export_index(output_dir, total_mks, total_hspcs, mk_pages, hspc_pages
         f.write(html)
 
 
-def generate_export_page_html(samples, cell_type, page_num, total_pages):
-    """Generate HTML for a single cell type page."""
+def generate_export_page_html(samples, cell_type, page_num, total_pages, slides_summary=None):
+    """Generate HTML for a single cell type page.
+
+    Args:
+        slides_summary: Optional string like "16 slides (FGC1, FGC2, ...)" for subtitle
+    """
     cell_type_display = "Megakaryocytes (MKs)" if cell_type == "mk" else "HSPCs"
+
+    # Build subtitle HTML
+    subtitle_html = ''
+    if slides_summary:
+        subtitle_html = f'<div class="header-subtitle">{slides_summary}</div>'
 
     nav_html = '<div class="page-nav">'
     nav_html += '<a href="index.html" class="nav-btn">Home</a>'
@@ -402,6 +413,7 @@ def generate_export_page_html(samples, cell_type, page_num, total_pages):
         .header {{ background: #111; padding: 12px 20px; display: flex; flex-direction: column; gap: 8px; border-bottom: 1px solid #333; position: sticky; top: 0; z-index: 100; }}
         .header-top {{ display: flex; justify-content: space-between; align-items: center; }}
         .header h1 {{ font-size: 1.2em; font-weight: normal; }}
+        .header-subtitle {{ font-size: 0.85em; color: #888; margin-top: 2px; }}
         .stats-row {{ display: flex; gap: 20px; font-size: 0.85em; flex-wrap: wrap; }}
         .stats-group {{ display: flex; gap: 8px; align-items: center; }}
         .stats-label {{ color: #888; font-size: 0.9em; }}
@@ -433,6 +445,7 @@ def generate_export_page_html(samples, cell_type, page_num, total_pages):
     <div class="header">
         <div class="header-top">
             <h1>{cell_type_display} - Page {page_num}/{total_pages}</h1>
+            {subtitle_html}
         </div>
         <div class="stats-row">
             <div class="stats-group">
@@ -542,8 +555,16 @@ def generate_export_page_html(samples, cell_type, page_num, total_pages):
     return html
 
 
-def generate_export_pages(samples, cell_type, output_dir, samples_per_page):
-    """Generate separate pages for a single cell type."""
+def generate_export_pages(samples, cell_type, output_dir, samples_per_page, slides_summary=None):
+    """Generate separate pages for a single cell type.
+
+    Args:
+        samples: List of sample dicts with image data
+        cell_type: 'mk' or 'hspc'
+        output_dir: Directory to write HTML files
+        samples_per_page: Number of samples per page
+        slides_summary: Optional string like "16 slides (FGC1, FGC2, ...)" for subtitle
+    """
     if not samples:
         logger.info(f"  No {cell_type.upper()} samples to export")
         return
@@ -555,7 +576,7 @@ def generate_export_pages(samples, cell_type, output_dir, samples_per_page):
 
     for page_num in range(1, total_pages + 1):
         page_samples = pages[page_num - 1]
-        html = generate_export_page_html(page_samples, cell_type, page_num, total_pages)
+        html = generate_export_page_html(page_samples, cell_type, page_num, total_pages, slides_summary=slides_summary)
 
         html_path = Path(output_dir) / f"{cell_type}_page{page_num}.html"
         with open(html_path, 'w') as f:
@@ -644,14 +665,34 @@ def export_html_from_ram(slide_data, output_base, html_output_dir, samples_per_p
     all_mk_samples.sort(key=lambda x: x.get('area_um2', 0), reverse=True)
     all_hspc_samples.sort(key=lambda x: x.get('area_um2', 0), reverse=True)
 
+    # Build slides summary for subtitle (e.g., "16 slides (FGC1, FGC2, ...)")
+    slide_names = sorted(slide_data.keys())
+    num_slides = len(slide_names)
+    if num_slides > 0:
+        # Extract short identifiers (e.g., "FGC1" from "2025_11_18_FGC1")
+        short_names = []
+        for name in slide_names:
+            parts = name.split('_')
+            # Take the last part that looks like a group identifier
+            short = parts[-1] if parts else name
+            short_names.append(short)
+        # Show first few names with ellipsis if many
+        if len(short_names) > 6:
+            preview = ', '.join(short_names[:4]) + ', ...'
+        else:
+            preview = ', '.join(short_names)
+        slides_summary = f"{num_slides} slides ({preview})"
+    else:
+        slides_summary = None
+
     # Generate pages
-    generate_export_pages(all_mk_samples, "mk", html_output_dir, samples_per_page)
-    generate_export_pages(all_hspc_samples, "hspc", html_output_dir, samples_per_page)
+    generate_export_pages(all_mk_samples, "mk", html_output_dir, samples_per_page, slides_summary=slides_summary)
+    generate_export_pages(all_hspc_samples, "hspc", html_output_dir, samples_per_page, slides_summary=slides_summary)
 
     # Create index
     mk_pages = (len(all_mk_samples) + samples_per_page - 1) // samples_per_page if all_mk_samples else 0
     hspc_pages = (len(all_hspc_samples) + samples_per_page - 1) // samples_per_page if all_hspc_samples else 0
-    create_export_index(html_output_dir, len(all_mk_samples), len(all_hspc_samples), mk_pages, hspc_pages)
+    create_export_index(html_output_dir, len(all_mk_samples), len(all_hspc_samples), mk_pages, hspc_pages, slides_summary=slides_summary)
 
     logger.info(f"\n  HTML export complete: {html_output_dir}")
     logger.info(f"  Total: {len(all_mk_samples)} MKs, {len(all_hspc_samples)} HSPCs")
