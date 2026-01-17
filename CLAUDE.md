@@ -61,7 +61,10 @@ This eliminates repeated network I/O - the image is read once, then all tiles ar
 - `tile_origin`: [x, y] position of tile top-left corner in mosaic
 - `local_centroid`: [x, y] position of cell center within tile
 - `global_centroid` / `global_center`: [x, y] position in full mosaic
-- UIDs include coordinates: `{slide}_{celltype}_{round(x)}_{round(y)}`
+
+**UID Formats:**
+- **MK/HSPC (run_unified_FAST.py):** `{slide}_{celltype}_{global_id}` (e.g., `2025_11_18_FGC1_mk_123`)
+- **NMJ/Vessel (run_segmentation.py):** `{slide}_{celltype}_{round(x)}_{round(y)}` (e.g., `slide_nmj_45678_12345`)
 
 Note: NumPy arrays use [row, col] indexing internally, but all stored/exported coordinates are [x, y].
 
@@ -161,6 +164,8 @@ Bone Marrow Megakaryocyte (MK) and Hematopoietic Stem/Progenitor Cell (HSPC) seg
 - **Automatic export:** Happens while slides are still in RAM
 - **Separate pages:** MK and HSPC annotation pages
 - **Features:**
+  - Slides summary subtitle (e.g., "16 slides (FGC1, FGC2, ...)")
+  - Unique card IDs using global_id (e.g., `mk_123`, `hspc_456`)
   - Dotted light green mask contours
   - Centered crops on mask centroid
   - Percentile normalization (5th-95th)
@@ -173,16 +178,31 @@ Bone Marrow Megakaryocyte (MK) and Hematopoietic Stem/Progenitor Cell (HSPC) seg
 ```
 /home/dude/xldvp_seg_output/
 ├── {slide_name}/
-│   ├── tile_{x}_{y}/
-│   │   ├── mk_masks.h5
-│   │   ├── hspc_masks.h5
-│   │   └── features.h5
+│   ├── mk/tiles/{tile_id}/
+│   │   ├── segmentation.h5      # Mask labels
+│   │   ├── features.json        # Per-cell features (see format below)
+│   │   ├── window.csv           # Tile coordinates in mosaic
+│   │   └── classes.csv          # Global IDs for this tile
+│   ├── hspc/tiles/{tile_id}/
+│   │   └── (same structure)
 │   └── summary.json
 
 /home/dude/code/xldvp_seg_repo/docs/
 ├── index.html
 ├── mk_page_1.html ... mk_page_N.html
 └── hspc_page_1.html ... hspc_page_N.html
+```
+
+**features.json format (per tile):**
+```json
+[
+  {
+    "id": "det_122",
+    "global_id": 123,
+    "center": [45678, 12345],  // Global [x, y] coordinates
+    "features": {"area": 1500, "solidity": 0.85, ...}
+  }
+]
 ```
 
 ### 6. External Access
