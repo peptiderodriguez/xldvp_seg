@@ -48,14 +48,14 @@ def get_largest_connected_component(mask):
     return labeled == largest_label
 
 
-def percentile_normalize(image, p_low=5, p_high=95):
+def percentile_normalize(image, p_low=1, p_high=99.5):
     """
     Normalize image using percentiles.
 
     Args:
         image: 2D or 3D numpy array
-        p_low: Lower percentile for normalization
-        p_high: Upper percentile for normalization
+        p_low: Lower percentile for normalization (default 1)
+        p_high: Upper percentile for normalization (default 99.5)
 
     Returns:
         uint8 normalized image
@@ -1489,7 +1489,7 @@ def load_samples_from_ram(tiles_dir, slide_image, pixel_size_um, cell_type='mk',
                 crop = crop[:, :, :3]
 
             # Normalize using same percentile normalization as main pipeline
-            crop = percentile_normalize(crop, p_low=5, p_high=95)
+            crop = percentile_normalize(crop)
 
             # Extract the mask for this crop region
             local_mask = cell_mask[crop_y1:crop_y2, crop_x1:crop_x2]

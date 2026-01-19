@@ -140,7 +140,7 @@ def _gpu_worker(
                     continue
 
                 # Normalize
-                img_rgb = percentile_normalize(img_rgb, p_low=5, p_high=95)
+                img_rgb = percentile_normalize(img_rgb)
 
                 # Check for tissue
                 try:

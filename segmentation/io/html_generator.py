@@ -1232,7 +1232,7 @@ def load_samples_from_ram(tiles_dir, slide_image, pixel_size_um, cell_type='mk',
                 crop = crop[:, :, :3]
 
             # Normalize using same percentile normalization as main pipeline
-            crop = percentile_normalize(crop, p_low=5, p_high=95)
+            crop = percentile_normalize(crop)
 
             # Extract the mask for this crop region
             local_mask = cell_mask[crop_y1:crop_y2, crop_x1:crop_x2]

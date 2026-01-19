@@ -51,14 +51,26 @@ def load_detections(detections_path: Path) -> dict:
     indexed = {}
     for d in data:
         # Primary: uid
-        indexed[d['uid']] = d
+        if 'uid' in d:
+            indexed[d['uid']] = d
 
-        # Alternative: construct tile-based ID (for older annotation formats)
+        # Alternative 1: construct tile-based ID without slide name
+        # Format: {tileX}_{tileY}_{id} (matches HTML export format)
+        if 'tile_origin' in d and 'id' in d:
+            tile_x, tile_y = d['tile_origin']
+            alt_id = f"{tile_x}_{tile_y}_{d['id']}"
+            indexed[alt_id] = d
+
+        # Alternative 2: construct tile-based ID with slide name
         # Format: {slide}_{tileX}_{tileY}_{id}
         if 'tile_origin' in d and 'id' in d and 'slide_name' in d:
             tile_x, tile_y = d['tile_origin']
-            alt_id = f"{d['slide_name']}_{tile_x}_{tile_y}_{d['id']}"
-            indexed[alt_id] = d
+            alt_id2 = f"{d['slide_name']}_{tile_x}_{tile_y}_{d['id']}"
+            indexed[alt_id2] = d
+
+        # Alternative 3: just the id
+        if 'id' in d:
+            indexed[d['id']] = d
 
     return indexed
 
