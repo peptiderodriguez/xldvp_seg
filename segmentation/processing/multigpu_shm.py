@@ -210,7 +210,7 @@ def _gpu_worker_shm(
             tile_img = slide_arr[y_start:y_end, x_start:x_end].copy()
 
             # Validate tile
-            is_valid, reason = check_tile_validity(tile_img)
+            is_valid, reason = check_tile_validity(tile_img, tid)
             if not is_valid:
                 output_queue.put(build_mk_hspc_result(
                     tid=tid,
@@ -224,8 +224,9 @@ def _gpu_worker_shm(
             tile_rgb = ensure_rgb_array(tile_img)
             tile_normalized = prepare_tile_for_detection(tile_rgb)
 
-            # Check for tissue
-            if not has_tissue(tile_normalized, variance_threshold, calibration_block_size):
+            # Check for tissue (has_tissue returns tuple of (bool, fraction))
+            has_tissue_flag, _ = has_tissue(tile_normalized, variance_threshold, calibration_block_size)
+            if not has_tissue_flag:
                 output_queue.put(build_mk_hspc_result(
                     tid=tid,
                     status='no_tissue',
@@ -236,16 +237,12 @@ def _gpu_worker_shm(
 
             # Process tile
             try:
-                mk_results, hspc_results = segmenter.process_tile(
+                # process_tile returns 4-tuple: (mk_masks, hspc_masks, mk_features, hspc_features)
+                mk_masks, hspc_masks, mk_feats, hspc_feats = segmenter.process_tile(
                     tile_normalized,
-                    min_area=mk_min_area,
-                    max_area=mk_max_area
+                    mk_min_area,
+                    mk_max_area
                 )
-
-                mk_masks = mk_results.get('masks') if mk_results else None
-                mk_feats = mk_results.get('features') if mk_results else None
-                hspc_masks = hspc_results.get('masks') if hspc_results else None
-                hspc_feats = hspc_results.get('features') if hspc_results else None
 
                 output_queue.put(build_mk_hspc_result(
                     tid=tid,
