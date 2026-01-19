@@ -466,16 +466,20 @@ class CZILoader:
         """Get mosaic origin (x_start, y_start)."""
         return (self.x_start, self.y_start)
 
-    def close(self):
-        """Release resources."""
-        self._channel_data.clear()
-        self._primary_channel = None
-        # Release CziFile reader reference to allow garbage collection
+    def release_reader(self):
+        """Release the CziFile reader to free memory while keeping loaded data."""
         if hasattr(self, 'reader') and self.reader is not None:
             del self.reader
             self.reader = None
-        import gc
-        gc.collect()
+            import gc
+            gc.collect()
+            logger.debug(f"Released reader for {self.slide_name} (data retained)")
+
+    def close(self):
+        """Release all resources including loaded data."""
+        self._channel_data.clear()
+        self._primary_channel = None
+        self.release_reader()
         logger.debug(f"Closed loader for {self.slide_name}")
 
     def __enter__(self):

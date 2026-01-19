@@ -1172,6 +1172,9 @@ def _phase1_load_slides(czi_paths, tile_size, overlap, channel):
             }
 
             logger.info(f"  Loaded: {full_width} x {full_height} ({size_gb:.2f} GB)")
+
+            # Release CziFile reader to free memory (data is now in numpy array)
+            loader.release_reader()
             gc.collect()
 
         except Exception as e:
@@ -1501,47 +1504,68 @@ def _phase4_process_tiles(
                 del result[key]
 
     # =========================================================================
-    # MULTI-GPU MODE: Each GPU processes one tile at a time
+    # MULTI-GPU MODE: Each GPU processes one tile at a time (SHARED MEMORY)
     # =========================================================================
     if multi_gpu:
-        from segmentation.processing.multigpu import MultiGPUTileProcessor
+        from segmentation.processing.multigpu_shm import (
+            SharedSlideManager,
+            MultiGPUTileProcessorSHM
+        )
 
-        with MultiGPUTileProcessor(
-            num_gpus=num_gpus,
-            mk_classifier_path=mk_classifier_path,
-            hspc_classifier_path=hspc_classifier_path,
-            mk_min_area=mk_min_area,
-            mk_max_area=mk_max_area,
-            variance_threshold=variance_threshold,
-            calibration_block_size=calibration_block_size,
-        ) as processor:
-            # Submit all tiles
-            logger.info(f"Submitting {len(sampled_tiles)} tiles to {num_gpus} GPUs...")
-            for slide_name, tile in sampled_tiles:
-                img = slide_data[slide_name]['image']
-                tile_img = img[tile['y']:tile['y']+tile['h'],
-                               tile['x']:tile['x']+tile['w']].copy()
-                processor.submit_tile(tile_img, slide_name, tile)
+        # Create shared memory for all slides (zero-copy access for workers)
+        # Copy one slide at a time to minimize peak memory usage
+        logger.info("Moving slides to shared memory...")
+        shm_manager = SharedSlideManager()
+        for i, (slide_name, data) in enumerate(slide_data.items()):
+            img = data['image']
+            size_gb = img.nbytes / (1024**3)
+            logger.info(f"  [{i+1}/{len(slide_data)}] {slide_name}: {size_gb:.1f} GB -> shared memory")
+            shm_manager.add_slide(slide_name, img)
+            # Free original array immediately after copying
+            data['image'] = None
+            del img
+            gc.collect()
+        logger.info(f"All {len(slide_data)} slides now in shared memory")
 
-            # Collect results with progress bar
-            logger.info("Collecting results...")
-            with tqdm(total=len(sampled_tiles), desc="Processing tiles (multi-GPU)") as pbar:
-                collected = 0
-                while collected < len(sampled_tiles):
-                    result = processor.collect_result(timeout=300)
-                    if result is None:
-                        logger.error(f"Timeout waiting for results ({collected}/{len(sampled_tiles)})")
-                        break
-                    # Skip ready messages
-                    if result.get('status') == 'ready':
-                        continue
+        try:
+            with MultiGPUTileProcessorSHM(
+                num_gpus=num_gpus,
+                slide_info=shm_manager.get_slide_info(),
+                mk_classifier_path=mk_classifier_path,
+                hspc_classifier_path=hspc_classifier_path,
+                mk_min_area=mk_min_area,
+                mk_max_area=mk_max_area,
+                variance_threshold=variance_threshold,
+                calibration_block_size=calibration_block_size,
+            ) as processor:
+                # Submit all tiles (only coordinates, not data!)
+                logger.info(f"Submitting {len(sampled_tiles)} tiles to {num_gpus} GPUs (shared memory)...")
+                for slide_name, tile in sampled_tiles:
+                    processor.submit_tile(slide_name, tile)
 
-                    process_result(result, slide_results)
-                    del result
-                    gc.collect()
+                # Collect results with progress bar
+                logger.info("Collecting results...")
+                with tqdm(total=len(sampled_tiles), desc="Processing tiles (multi-GPU-SHM)") as pbar:
+                    collected = 0
+                    while collected < len(sampled_tiles):
+                        result = processor.collect_result(timeout=300)
+                        if result is None:
+                            logger.error(f"Timeout waiting for results ({collected}/{len(sampled_tiles)})")
+                            break
+                        # Skip ready messages
+                        if result.get('status') == 'ready':
+                            continue
 
-                    pbar.update(1)
-                    collected += 1
+                        process_result(result, slide_results)
+                        del result
+                        gc.collect()
+
+                        pbar.update(1)
+                        collected += 1
+        finally:
+            # Always cleanup shared memory
+            logger.info("Cleaning up shared memory...")
+            shm_manager.cleanup()
 
     # =========================================================================
     # STANDARD MODE: Multiprocessing pool with shared GPU queue
