@@ -225,7 +225,7 @@ def _gpu_worker_shm(
             tile_normalized = prepare_tile_for_detection(tile_rgb)
 
             # Check for tissue (has_tissue returns tuple of (bool, fraction))
-            has_tissue_flag, _ = has_tissue(tile_normalized, variance_threshold, calibration_block_size)
+            has_tissue_flag, _ = has_tissue(tile_normalized, variance_threshold, block_size=calibration_block_size)
             if not has_tissue_flag:
                 output_queue.put(build_mk_hspc_result(
                     tid=tid,
