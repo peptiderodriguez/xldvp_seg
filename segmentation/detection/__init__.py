@@ -25,6 +25,8 @@ from .strategies import (
     NMJStrategy,
 )
 
+from .registry import StrategyRegistry
+
 __all__ = [
     # Tissue detection
     'calculate_block_variances',
@@ -38,4 +40,6 @@ __all__ = [
     'DetectionStrategy',
     'Detection',
     'NMJStrategy',
+    # Strategy registry
+    'StrategyRegistry',
 ]

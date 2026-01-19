@@ -11,6 +11,9 @@ Available strategies:
 - NMJStrategy: Neuromuscular junction detection (intensity threshold + elongation + ResNet)
 - VesselStrategy: Blood vessel detection (ring structures via contour hierarchy + ellipse fitting)
 - MesotheliumStrategy: Mesothelial ribbon detection for laser microdissection
+
+Mixins:
+- MultiChannelFeatureMixin: Extract per-channel features from multi-channel images
 """
 
 from .base import DetectionStrategy, Detection
@@ -19,6 +22,7 @@ from .cell import CellStrategy, HSPCStrategy  # HSPCStrategy is backward compati
 from .nmj import NMJStrategy
 from .vessel import VesselStrategy
 from .mesothelium import MesotheliumStrategy
+from .mixins import MultiChannelFeatureMixin
 
 __all__ = [
     'DetectionStrategy',
@@ -29,4 +33,5 @@ __all__ = [
     'NMJStrategy',
     'VesselStrategy',
     'MesotheliumStrategy',
+    'MultiChannelFeatureMixin',
 ]

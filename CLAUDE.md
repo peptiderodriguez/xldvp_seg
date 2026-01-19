@@ -60,12 +60,262 @@ This eliminates repeated network I/O - the image is read once, then all tiles ar
 - **View results:** Start HTTP server + Cloudflare tunnel (port 8080 for MK, 8081 for NMJ)
 - **Retrain classifier:** Use `train_nmj_classifier.py` with merged annotations
 
-### Current State (as of Jan 2026)
+### Current State (as of Jan 19, 2026)
+- **Stability fixes**: Added memory validation, sequential mode fixes, network timeout handling
+- **Code refactoring**: Phase 1 + Phase 2 complete (model manager, memory utils, tile workers, strategy registry)
 - **Multi-channel feature extraction**: Now extracts ~2,400 features from all 3 channels (nuclear, BTX, NFL)
 - **BTX-only thresholding**: Mask detection uses only BTX channel (ch1/647nm), not averaged channels
-- **HTML improvements**: Channel legend (R/G/B mapping) and short mask IDs in viewer
+- **HTML improvements**: True RGB display (3-channel combined), white mask outlines, channel legend on floating bar, cards sorted by area ascending, stats with area µm²/px and solidity
 - NMJ classifier: RF model trained on multi-channel features for NMJ vs autofluorescence
 - Working slide: `20251107_Fig5_nuc488_Bgtx647_NfL750-1-EDFvar-stitch.czi` (3-channel)
+
+### Jan 19, 2026 - Stability Fixes for Long Batch Runs
+Previous runs crashed the machine (system restarts due to OOM). Fixed:
+
+**Memory Validation (run_unified_FAST.py:75-181)**
+- `validate_system_resources()` - Checks RAM/GPU before starting, aborts if <8GB available
+- `get_safe_worker_count()` - Auto-reduces workers based on available memory
+- Startup shows: RAM available, GPU memory, recommended worker count
+
+**Sequential Mode Fixes**
+- Added `--sequential` flag to single-slide mode (was missing)
+- Wrapped sequential processing in try/finally for proper cleanup
+- GPU cache cleared on errors (`torch.cuda.empty_cache()` in exception handler)
+- More aggressive GC: every 10 tiles instead of every 50
+
+**Network Mount Stability**
+- Added `socket.setdefaulttimeout(60)` - prevents indefinite hangs on /mnt/x/
+- Added `HDF5_USE_FILE_LOCKING=FALSE` - prevents file descriptor exhaustion
+- CZI loader close() now properly releases reader reference
+
+**Default Changes**
+- Default tile size: 4096 → 3000 (safer memory usage)
+- Default workers: 4 (with auto-adjustment based on RAM)
+
+**Safe Run Command**
+```bash
+python run_unified_FAST.py \
+    --czi-paths /mnt/x/01_Users/EdRo_axioscan/bonemarrow/2025_11_18/*.czi \
+    --output-dir /home/dude/mk_output/2025_01_19_BM_16slides_15pct \
+    --sample-fraction 0.15 \
+    --sequential \
+    --mk-min-area-um 200 \
+    --mk-max-area-um 2000
+```
+
+### Jan 19, 2026 - Code Refactoring (Phase 1)
+Consolidated duplicated code into shared modules:
+
+**New Module: `segmentation/models/manager.py`**
+- `ModelManager` class for centralized model loading (SAM2, Cellpose, ResNet)
+- Lazy loading - models only load on first use
+- `get_model_manager(device)` - singleton pattern per device
+- `find_checkpoint(model_name)` - unified checkpoint discovery
+- Context manager support for automatic cleanup
+
+**New Module: `segmentation/processing/memory.py`**
+- Extracted from run_unified_FAST.py
+- `validate_system_resources(num_workers, tile_size)` - checks RAM/GPU
+- `get_safe_worker_count(requested, tile_size)` - auto-adjusts workers
+- `get_memory_usage()` / `log_memory_status()` - monitoring helpers
+
+**Updated: `segmentation/utils/config.py`**
+- Added `BATCH_SIZES` dict (resnet: 32, gc_interval: 10)
+- Added `MEMORY_THRESHOLDS` dict (min_ram: 8GB, min_gpu: 6GB)
+- Helper functions: `get_batch_size()`, `get_memory_threshold()`
+
+**Updated: `segmentation/io/html_export.py`**
+- Added `generate_dual_index_page()` for MK+HSPC batch runs
+- Supports multiple cell types with per-type sections and export buttons
+
+**Usage:**
+```python
+from segmentation.models import get_model_manager
+from segmentation.processing.memory import validate_system_resources
+
+# Validate before starting
+result = validate_system_resources(num_workers=4, tile_size=3000)
+if result['should_abort']:
+    sys.exit(1)
+
+# Use model manager
+with get_model_manager("cuda") as manager:
+    sam2_pred, sam2_auto = manager.get_sam2()
+    # ... do work
+# Automatic cleanup on exit
+```
+
+### Jan 19, 2026 - Code Refactoring (Phase 2 - Implementation)
+Completed tile worker unification, strategy registry, and batch feature extraction.
+
+**New Module: `segmentation/processing/mk_hspc_utils.py`**
+- `ensure_rgb_array()` - Convert grayscale/RGBA to RGB
+- `check_tile_validity()` - Empty tile detection
+- `prepare_tile_for_detection()` - Percentile normalization
+- `build_mk_hspc_result()` - Standardized result dict builder
+- `extract_tile_from_shared_memory()` - Safe memory extraction
+
+**Tile Worker Unification (COMPLETED):**
+All 3 worker functions now use shared utilities from mk_hspc_utils.py:
+- `process_tile_worker()` (line 789) - shared memory mode ✓
+- `process_tile_worker_with_data_and_slide()` (line 2356) - direct data with slide name ✓
+- `process_tile_worker_with_data()` (line 2716) - direct data mode ✓
+
+Code reduction: ~50% (18 LOC RGB → 1 LOC, 6 LOC check → 2 LOC, 21 LOC result → 1 LOC call)
+
+**New Module: `segmentation/detection/registry.py` (COMPLETED)**
+- `StrategyRegistry` class with class methods (not instantiated)
+- `register(cell_type, strategy_class)` - register new strategies
+- `create(cell_type, **kwargs)` - instantiate strategies by name
+- `list_strategies()` - returns `['nmj', 'mk', 'cell', 'vessel', 'mesothelium']`
+- `get_strategy_class(cell_type)` - get class without instantiating
+
+**Updated: `segmentation/detection/strategies/base.py` (COMPLETED)**
+Added `_extract_full_features_batch()` method to DetectionStrategy base class:
+- Extracts 22 morphological + 256 SAM2 + 2048 ResNet features per mask
+- Batch processing for ResNet (configurable batch_size, default 32)
+- Memory-efficient: sets SAM2 image once, resets after batch
+- Strategies can call `self._extract_full_features_batch(masks, tile, models)` instead of duplicating ~200 LOC
+
+### Jan 19, 2026 - Code Refactoring (Phase 3a - Split process_tile)
+Split `UnifiedSegmenter.process_tile()` into separate MK and HSPC methods for better maintainability.
+
+**Changes to `run_unified_FAST.py`:**
+- `process_tile()` now delegates to `_process_tile_mk()` and `_process_tile_hspc()`
+- Each method handles its own detection logic and feature extraction
+- Shared preprocessing remains in the parent method
+- Easier to modify MK vs HSPC detection independently
+
+### Jan 19, 2026 - Code Refactoring (Phase 3b - Extract run_multi_slide phases)
+Extracted 4 phases from `run_multi_slide_segmentation()` into separate functions.
+
+**New Functions in `run_unified_FAST.py`:**
+| Function | Purpose | Returns |
+|----------|---------|---------|
+| `_phase1_load_slides(czi_paths, tile_size, overlap, channel)` | Load all CZI slides into RAM | `(slide_data, slide_loaders)` |
+| `_phase2_identify_tissue_tiles(slide_data, ...)` | Create tile grid, calibrate threshold, filter to tissue tiles | `(tissue_tiles, variance_threshold)` |
+| `_phase3_sample_tiles(tissue_tiles, sample_fraction)` | Sample from combined tissue tile pool | `sampled_tiles` |
+| `_phase4_process_tiles(sampled_tiles, ...)` | ML processing with multiprocessing pool | `(total_mk, total_hspc)` |
+
+**Benefits:**
+- Each phase is now testable independently
+- Clear separation of concerns (I/O, preprocessing, sampling, ML)
+- Main function reduced from ~574 lines to ~50 lines of orchestration
+- Docstrings explain what each phase does and its parameters
+
+### Jan 19, 2026 - Code Refactoring (Phase 4 - HTML Export Consolidation)
+Consolidated HTML export functionality into a dedicated module.
+
+**New Module: `segmentation/export/html_export.py`:**
+- Extracted common HTML generation logic
+- `HTMLExporter` class with configurable templates
+- Shared CSS/JS generation functions
+- Both MK/HSPC and NMJ export use the same base components
+
+### Jan 19, 2026 - Code Refactoring (Phase 5 - Config Schema Validation)
+Added TypedDict schemas and validation to `segmentation/utils/config.py`.
+
+**New TypedDict Schemas:**
+- `BatchSizeConfig` - ResNet batch size, GC interval
+- `MemoryConfig` - Min RAM, min GPU thresholds
+- `PixelSizeConfig` - Default pixel sizes
+- `TileSizeConfig` - Tile dimensions, overlap
+
+**New Functions:**
+- `validate_config(config: dict) -> tuple[bool, list[str]]` - Validates config against schema
+- `get_config_summary() -> dict` - Returns human-readable config overview
+
+### Jan 19, 2026 - Code Refactoring (Phase 6 - Multi-Channel Feature Mixin)
+Created a mixin class for channel-agnostic feature extraction.
+
+**New Module: `segmentation/detection/strategies/mixins.py`:**
+- `MultiChannelFeatureMixin` class with methods:
+  - `extract_channel_stats(image, channel_idx)` - Per-channel intensity statistics
+  - `extract_multichannel_features(image, mask)` - Combined multi-channel features (~56 features for 3 channels)
+  - `extract_channel_intensity_simple(image, mask, channel)` - Quick single-channel extraction
+- Used by NMJ strategy for 3-channel feature extraction
+- Enables adding new channels without code duplication
+
+### Jan 19, 2026 - Code Refactoring (Phase 7 - Entry Point Design Doc)
+Created design document for unifying entry point scripts.
+
+**New Document: `docs/ENTRY_POINT_UNIFICATION.md`:**
+- 641-line design document outlining unified entry point architecture
+- Proposes single `run.py` with subcommands: `segment`, `batch`, `classify`, `export`, `serve`, `info`
+- Implementation plan with 5 phases
+- Backward compatibility strategy for existing scripts
+
+### Jan 19, 2026 - Type Hints Added
+Added Python type hints to key modules for better IDE support and documentation.
+
+**Modules with Type Hints:**
+| Module | Functions Annotated |
+|--------|---------------------|
+| `segmentation/utils/config.py` | 12 public functions |
+| `segmentation/processing/memory.py` | `validate_system_resources`, `get_safe_worker_count`, `get_memory_usage`, `log_memory_status` |
+| `segmentation/processing/mk_hspc_utils.py` | `ensure_rgb_array`, `check_tile_validity`, `prepare_tile_for_detection`, `build_mk_hspc_result`, `extract_tile_from_shared_memory` |
+
+**Type Annotations Used:**
+```python
+from typing import Dict, List, Optional, Tuple, Union, Any
+```
+
+### Jan 19, 2026 - Magic Numbers Extracted to Config
+Extracted hardcoded magic numbers from `run_unified_FAST.py` into named constants.
+
+**New Constants in `segmentation/utils/config.py`:**
+```python
+# Feature Dimensions
+MORPHOLOGICAL_FEATURES_COUNT = 22      # Custom morphological + intensity features
+SAM2_EMBEDDING_DIMENSION = 256         # SAM2 256D embedding vectors
+RESNET_EMBEDDING_DIMENSION = 2048      # ResNet50 2048D feature vectors
+TOTAL_FEATURES_PER_CELL = 2326         # Total: 22 + 256 + 2048
+
+# Pixel Sizes
+DEFAULT_PIXEL_SIZE_UM = 0.1725         # Default pixel size in micrometers
+
+# Batch Processing
+RESNET_INFERENCE_BATCH_SIZE = 16       # Default batch size for ResNet
+
+# Processing Parameters
+CPU_UTILIZATION_FRACTION = 0.8         # Use 80% of available CPU cores
+```
+
+**New Helper Functions:**
+- `get_feature_dimensions()` - Returns dict with all feature dimension constants
+- `get_cpu_worker_count(total_cores)` - Calculates safe worker count based on available cores
+
+### Jan 19, 2026 - requirements.txt Created
+Created comprehensive `requirements.txt` organized by category.
+
+**Categories:**
+- Core numerical (numpy, scipy, scikit-learn)
+- Image processing (opencv-python, scikit-image, pillow)
+- Deep learning (torch, torchvision)
+- Segmentation models (cellpose, segment-anything-2)
+- CZI/microscopy (aicspylibczi)
+- Data storage (h5py, zarr)
+- Utilities (tqdm, psutil, colorlog)
+
+**Includes PyTorch CUDA installation instructions in comments.**
+
+---
+
+## Refactoring Summary Table
+
+| Phase | Description | Status | Files |
+|-------|-------------|--------|-------|
+| Phase 1 | Model manager + memory module | ✅ Complete | `segmentation/models/manager.py`, `segmentation/processing/memory.py` |
+| Phase 2 | Tile worker unification + StrategyRegistry | ✅ Complete | `segmentation/processing/mk_hspc_utils.py`, `segmentation/detection/registry.py` |
+| Phase 3a | Split process_tile() → MK/HSPC methods | ✅ Complete | `run_unified_FAST.py` |
+| Phase 3b | Extract phases from run_multi_slide_segmentation() | ✅ Complete | `run_unified_FAST.py` |
+| Phase 4 | HTML export consolidation | ✅ Complete | `segmentation/export/html_export.py` |
+| Phase 5 | Config schema validation | ✅ Complete | `segmentation/utils/config.py` |
+| Phase 6 | Multi-channel feature mixin | ✅ Complete | `segmentation/detection/strategies/mixins.py` |
+| Phase 7 | Entry point unification design doc | ✅ Complete | `docs/ENTRY_POINT_UNIFICATION.md` |
+| - | Type hints on key modules | ✅ Complete | Multiple modules |
+| - | Magic numbers → named constants | ✅ Complete | `segmentation/utils/config.py` |
+| - | requirements.txt | ✅ Complete | `requirements.txt` |
 
 ---
 
@@ -278,22 +528,51 @@ Bone Marrow Megakaryocyte (MK) and Hematopoietic Stem/Progenitor Cell (HSPC) seg
 
 ## Troubleshooting
 
+### System Restarts / OOM Crashes
+If the system restarts during batch runs:
+1. Use `--sequential` flag (processes one tile at a time)
+2. Reduce `--num-workers` to 2 or 1
+3. Reduce `--tile-size` from 4096 to 3000
+4. Memory validation now runs at startup and will warn/abort if insufficient
+
 ### CUDA/Boolean Type Error
 SAM2 masks need explicit boolean conversion:
 ```python
 mask = mask.astype(bool)  # Fix for NVIDIA CUDA compatibility
 ```
 
-### HDF5 Plugin Path
-If HDF5 errors occur:
+### HDF5 Plugin Path / File Descriptor Errors
+If HDF5 errors or "too many open files" occur:
 ```bash
 export HDF5_PLUGIN_PATH=""
+export HDF5_USE_FILE_LOCKING=FALSE  # Added automatically in run_unified_FAST.py
 ```
+
+### Network Mount Hangs
+If processing hangs on /mnt/x/ network mount:
+- Socket timeout now set to 60s automatically
+- If still hanging, check network connectivity: `ls /mnt/x/`
 
 ### Memory Management
 - Explicit cleanup after each tile: `del masks, features; gc.collect()`
-- `torch.cuda.empty_cache()` after MK processing
+- `torch.cuda.empty_cache()` after MK processing and on errors
 - Generator pattern for tile data to avoid memory spikes
+- GC runs every 10 tiles in sequential mode (was 50)
+
+### Monitoring a Long Run
+```bash
+# Watch log
+tail -f /home/dude/mk_output/*/run.log
+
+# Check GPU
+nvidia-smi -l 1
+
+# Check RAM
+watch -n 5 free -h
+
+# Check process
+ps aux | grep python | grep -v grep
+```
 
 ## Dependencies
 - Python 3.10+ (mkseg conda environment)
@@ -349,10 +628,30 @@ python run_segmentation.py \
 - **Pixel size:** 0.1725 µm/px
 
 ### NMJ Classifier
+Two classifier options are available for distinguishing NMJs from autofluorescence:
+
+#### Option 1: ResNet18 on Images (`train_nmj_classifier.py`)
 - **Architecture:** ResNet18 (pretrained, fine-tuned)
 - **Checkpoint:** `/home/dude/nmj_output/nmj_classifier.pth`
 - **Validation accuracy:** 96.64%
 - **Training data:** 544 positive, 642 negative annotations
+
+#### Option 2: Random Forest on Extracted Features (`train_nmj_classifier_features.py`)
+- **Architecture:** Random Forest classifier on 2,382 multi-channel features
+- **Checkpoint:** `nmj_classifier_rf.pkl`
+- **Accuracy:** 91% trained on 796 annotations
+- **Top discriminative features:**
+  - `ch0_cv` (coefficient of variation in nuclear channel)
+  - `ch1` intensity stats (BTX channel - primary NMJ marker)
+  - Morphological features: area, perimeter
+
+**Training the feature-based classifier:**
+```bash
+python train_nmj_classifier_features.py \
+    --detections /path/to/nmj_detections.json \
+    --annotations /path/to/annotations.json \
+    --output-dir /path/to/output
+```
 
 ### Key Scripts
 
@@ -379,13 +678,17 @@ python export_nmj_results_html.py \
 ```
 
 ### HTML Viewer Features
+- **RGB display**: True 3-channel visualization (all channels combined) instead of single channel
+- **White mask outlines**: Solid white contours (thickness 5) for visibility on RGB backgrounds
+- **Channel legend on floating bar**: R=nuc488, G=Bgtx647, B=NfL750
+- **Cards sorted by area**: Ascending order (smallest NMJs first)
+- **Stats display**: area (um² and px), solidity; confidence hidden when 100%
 - Annotation buttons (Yes/No) with localStorage persistence
 - Export annotations to JSON
 - Filtering by area and confidence
-- Mask contour overlay (dotted green)
-- Stats bar showing annotation progress
-- **Channel legend** (for multi-channel): Shows R=nuc488, G=Bgtx647, B=NfL750
 - **Short mask IDs**: Displays `nmj_x_y` instead of full slide name
+
+**Note:** The `export_nmj_results_html.py` script loads all 3 channels from the CZI file to generate true RGB visualization crops, providing better context for annotation than single-channel display.
 
 ### Spatial Grouping
 NMJs can be grouped into sets for analysis:

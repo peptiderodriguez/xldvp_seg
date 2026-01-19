@@ -198,7 +198,21 @@ class CZILoader:
         logger.info(f"Loading channel {channel} into RAM ({self.width:,} x {self.height:,} px)...")
 
         n_strips = (self.height + strip_height - 1) // strip_height
-        channel_array = np.empty((self.height, self.width), dtype=np.uint16)
+
+        # Read a small test strip to detect if this is RGB data
+        test_strip = self.reader.read_mosaic(
+            region=(self.x_start, self.y_start, min(100, self.width), min(100, self.height)),
+            scale_factor=1,
+            C=channel
+        )
+        test_strip = np.squeeze(test_strip)
+        is_rgb = len(test_strip.shape) == 3 and test_strip.shape[-1] == 3
+
+        if is_rgb:
+            logger.info(f"  Detected RGB data (shape: {test_strip.shape})")
+            channel_array = np.empty((self.height, self.width, 3), dtype=np.uint8)
+        else:
+            channel_array = np.empty((self.height, self.width), dtype=np.uint16)
 
         iterator = range(n_strips)
         if not self.quiet:
@@ -212,7 +226,14 @@ class CZILoader:
                 scale_factor=1,
                 C=channel
             )
-            channel_array[y_off:y_off+h, :] = np.squeeze(strip)
+            strip = np.squeeze(strip)
+            if is_rgb:
+                # Ensure RGB data is uint8
+                if strip.dtype != np.uint8:
+                    strip = (strip / strip.max() * 255).astype(np.uint8) if strip.max() > 0 else strip.astype(np.uint8)
+                channel_array[y_off:y_off+h, :, :] = strip
+            else:
+                channel_array[y_off:y_off+h, :] = strip
 
         self._channel_data[channel] = channel_array
 
@@ -449,8 +470,13 @@ class CZILoader:
         """Release resources."""
         self._channel_data.clear()
         self._primary_channel = None
+        # Release CziFile reader reference to allow garbage collection
+        if hasattr(self, 'reader') and self.reader is not None:
+            del self.reader
+            self.reader = None
+        import gc
+        gc.collect()
         logger.debug(f"Closed loader for {self.slide_name}")
-        # CziFile doesn't have explicit close
 
     def __enter__(self):
         return self

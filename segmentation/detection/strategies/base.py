@@ -368,3 +368,152 @@ class DetectionStrategy(ABC):
         normalized = np.clip(normalized * 255, 0, 255).astype(np.uint8)
 
         return normalized
+
+    def _extract_full_features_batch(
+        self,
+        masks: List[np.ndarray],
+        tile: np.ndarray,
+        models: Dict[str, Any],
+        extract_sam2: bool = True,
+        extract_resnet: bool = True,
+        resnet_batch_size: int = 32
+    ) -> List[Dict[str, Any]]:
+        """
+        Extract full feature set for multiple masks in batch.
+
+        This method consolidates the feature extraction logic duplicated across
+        strategies (NMJ, MK, etc.) into a single reusable method. For each mask,
+        it extracts:
+        - Morphological features (22 features) using extract_morphological_features
+        - SAM2 embeddings (256 features) at the mask centroid
+        - ResNet features (2048 features) using efficient batch processing
+
+        Args:
+            masks: List of boolean mask arrays (each HxW)
+            tile: Image tile array (HxW for grayscale, HxWxC for RGB)
+            models: Dictionary containing loaded models:
+                - 'sam2_predictor': SAM2ImagePredictor (optional, for embeddings)
+                - 'resnet': ResNet model without final FC layer (optional)
+                - 'resnet_transform': torchvision transform for ResNet input
+                - 'device': torch device for inference
+            extract_sam2: Whether to extract SAM2 embeddings (default True)
+            extract_resnet: Whether to extract ResNet features (default True)
+            resnet_batch_size: Batch size for ResNet processing (default 32)
+
+        Returns:
+            List of feature dictionaries, one per mask. Each dict contains:
+            - Morphological features (area, perimeter, solidity, etc.)
+            - 'centroid': [x, y] coordinates
+            - 'sam2_emb_0' through 'sam2_emb_255': SAM2 embedding values
+            - 'resnet_0' through 'resnet_2047': ResNet feature values
+            Empty dict returned for invalid masks.
+        """
+        from segmentation.utils.feature_extraction import extract_morphological_features
+
+        if not masks:
+            return []
+
+        # Prepare tile for processing
+        if tile.ndim == 2:
+            tile_rgb = np.stack([tile, tile, tile], axis=-1)
+        elif tile.shape[2] == 1:
+            tile_rgb = np.concatenate([tile, tile, tile], axis=-1)
+        else:
+            tile_rgb = tile[:, :, :3]
+
+        # Ensure uint8 format
+        if tile_rgb.dtype == np.uint16:
+            tile_rgb = (tile_rgb / 256).astype(np.uint8)
+        elif tile_rgb.dtype != np.uint8:
+            tile_rgb = tile_rgb.astype(np.uint8)
+
+        # Get models
+        sam2_predictor = models.get('sam2_predictor')
+        resnet = models.get('resnet')
+        resnet_transform = models.get('resnet_transform')
+        device = models.get('device')
+
+        # Set image for SAM2 embeddings if available
+        if sam2_predictor is not None and extract_sam2:
+            try:
+                sam2_predictor.set_image(tile_rgb)
+            except Exception as e:
+                logger.debug(f"Failed to set SAM2 image: {e}")
+                sam2_predictor = None
+
+        # First pass: extract morphological features and SAM2 embeddings, collect crops
+        feature_list = []
+        crops_for_resnet = []
+        crop_indices = []
+
+        for idx, mask in enumerate(masks):
+            # Skip empty masks
+            if mask.sum() == 0:
+                feature_list.append({})
+                continue
+
+            # Extract morphological features (22 features)
+            morph_features = extract_morphological_features(mask, tile_rgb)
+            if not morph_features:
+                feature_list.append({})
+                continue
+
+            # Compute centroid
+            ys, xs = np.where(mask)
+            if len(ys) == 0:
+                feature_list.append({})
+                continue
+
+            cy, cx = float(np.mean(ys)), float(np.mean(xs))
+            morph_features['centroid'] = [cx, cy]  # [x, y] format
+
+            # Extract SAM2 embeddings (256D)
+            if sam2_predictor is not None and extract_sam2:
+                sam2_emb = self._extract_sam2_embedding(sam2_predictor, cy, cx)
+                for i, v in enumerate(sam2_emb):
+                    morph_features[f'sam2_emb_{i}'] = float(v)
+            elif extract_sam2:
+                # Fill with zeros if SAM2 not available
+                for i in range(SAM2_EMBEDDING_DIM):
+                    morph_features[f'sam2_emb_{i}'] = 0.0
+
+            # Prepare crop for batch ResNet processing
+            if extract_resnet:
+                y1, y2 = ys.min(), ys.max()
+                x1, x2 = xs.min(), xs.max()
+                if y2 > y1 and x2 > x1:
+                    crop = tile_rgb[y1:y2+1, x1:x2+1].copy()
+                    crop_mask = mask[y1:y2+1, x1:x2+1]
+                    crop[~crop_mask] = 0  # Zero out background
+                    crops_for_resnet.append(crop)
+                    crop_indices.append(idx)
+
+            feature_list.append(morph_features)
+
+        # Batch ResNet feature extraction
+        if crops_for_resnet and resnet is not None and resnet_transform is not None and extract_resnet:
+            resnet_features_list = self._extract_resnet_features_batch(
+                crops_for_resnet, resnet, resnet_transform, device, resnet_batch_size
+            )
+
+            # Assign ResNet features to correct detections
+            for crop_idx, resnet_feats in zip(crop_indices, resnet_features_list):
+                if feature_list[crop_idx]:  # Only if features dict exists
+                    for i, v in enumerate(resnet_feats):
+                        feature_list[crop_idx][f'resnet_{i}'] = float(v)
+
+        # Fill zeros for features without ResNet values
+        if extract_resnet:
+            for feat in feature_list:
+                if feat and 'resnet_0' not in feat:
+                    for i in range(RESNET50_FEATURE_DIM):
+                        feat[f'resnet_{i}'] = 0.0
+
+        # Reset SAM2 predictor to free memory
+        if sam2_predictor is not None and extract_sam2:
+            try:
+                sam2_predictor.reset_predictor()
+            except Exception as e:
+                logger.debug(f"Failed to reset SAM2 predictor: {e}")
+
+        return feature_list

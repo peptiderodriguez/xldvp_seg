@@ -41,6 +41,21 @@ from .tile_processing import (
     process_tile_complete,
 )
 
+from .memory import (
+    validate_system_resources,
+    get_safe_worker_count,
+    get_memory_usage,
+    log_memory_status,
+)
+
+from .mk_hspc_utils import (
+    ensure_rgb_array,
+    check_tile_validity,
+    prepare_tile_for_detection,
+    build_mk_hspc_result,
+    extract_tile_from_shared_memory,
+)
+
 __all__ = [
     # Pipeline
     'DetectionPipeline',
@@ -67,4 +82,15 @@ __all__ = [
     'enrich_detection_features',
     'save_tile_outputs',
     'process_tile_complete',
+    # Memory management
+    'validate_system_resources',
+    'get_safe_worker_count',
+    'get_memory_usage',
+    'log_memory_status',
+    # MK/HSPC utilities
+    'ensure_rgb_array',
+    'check_tile_validity',
+    'prepare_tile_for_detection',
+    'build_mk_hspc_result',
+    'extract_tile_from_shared_memory',
 ]

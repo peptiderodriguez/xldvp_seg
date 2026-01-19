@@ -3139,7 +3139,7 @@ def main():
 
     # Tile processing
     parser.add_argument('--tile-size', type=int, default=3000, help='Tile size in pixels')
-    parser.add_argument('--sample-fraction', type=float, default=0.20, help='Fraction of tissue tiles (default: 20%)')
+    parser.add_argument('--sample-fraction', type=float, default=0.20, help='Fraction of tissue tiles (default: 20%%)')
     parser.add_argument('--channel', type=int, default=1, help='Primary channel index for detection')
     parser.add_argument('--all-channels', action='store_true',
                         help='Load all channels for multi-channel analysis (NMJ specificity checking)')

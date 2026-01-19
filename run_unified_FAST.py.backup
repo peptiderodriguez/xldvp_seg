@@ -1,0 +1,3630 @@
+"""
+Unified segmentation: MKs (SAM2) + HSPCs (Cellpose-SAM) in one pass.
+
+Processes each tile once and outputs:
+- MK masks (SAM2 automatic mask generation, size-filtered by mk-min/max-area)
+- HSPC masks (Cellpose-SAM detection + SAM2 refinement, size-invariant)
+- All features: 22 custom + 256 SAM2 + 2048 ResNet = 2326 per cell
+
+Usage:
+    python run_unified_segmentation.py \
+        --czi-path /path/to/slide.czi \
+        --output-dir /path/to/output \
+        --mk-min-area 1000
+"""
+
+# Set cellpose model path FIRST, before any imports (cellpose caches this at import time)
+import os
+import socket
+from pathlib import Path
+
+# Network timeout for /mnt/x/ network mount operations (prevents indefinite hangs)
+socket.setdefaulttimeout(60)
+
+# HDF5 settings for network mounts (prevents file descriptor exhaustion)
+os.environ['HDF5_USE_FILE_LOCKING'] = 'FALSE'
+
+# Early logging import for module-level logger
+from segmentation.utils.logging import get_logger, setup_logging, log_parameters
+from segmentation.utils.feature_extraction import extract_resnet_features_batch, preprocess_crop_for_resnet
+from segmentation.io.czi_loader import get_loader, CZILoader
+from segmentation.io.html_export import (
+    create_hdf5_dataset,
+    draw_mask_contour,
+    percentile_normalize,
+    get_largest_connected_component,
+    HDF5_COMPRESSION_KWARGS,
+    HDF5_COMPRESSION_NAME,
+)
+from segmentation.io.html_generator import (
+    load_samples_from_ram,
+    create_export_index,
+    generate_export_page_html,
+    generate_export_pages,
+    export_html_from_ram,
+)
+from segmentation.detection.tissue import (
+    calibrate_tissue_threshold,
+    filter_tissue_tiles,
+    has_tissue,
+    calculate_block_variances,
+)
+from segmentation.processing.memory import (
+    validate_system_resources,
+    get_safe_worker_count,
+    log_memory_status,
+)
+from segmentation.processing.mk_hspc_utils import (
+    ensure_rgb_array,
+    check_tile_validity,
+    prepare_tile_for_detection,
+    build_mk_hspc_result,
+    extract_tile_from_shared_memory,
+)
+from segmentation.utils.config import get_batch_size, get_memory_threshold
+
+logger = get_logger(__name__)
+
+# Auto-detect checkpoint directory (local or cluster)
+_script_dir = Path(__file__).parent.resolve()
+_checkpoint_candidates = [
+    _script_dir / "checkpoints",  # Local: same dir as script
+    Path.home() / ".cache" / "cellpose",  # User cache
+    Path("/ptmp/edrod/MKsegmentation/checkpoints"),  # Cluster path
+]
+for _cp in _checkpoint_candidates:
+    if _cp.exists():
+        os.environ['CELLPOSE_LOCAL_MODELS_PATH'] = str(_cp)
+        break
+else:
+    # Default to local checkpoints dir (will be created)
+    os.environ['CELLPOSE_LOCAL_MODELS_PATH'] = str(_script_dir / "checkpoints")
+
+import gc
+import numpy as np
+import h5py
+import json
+import argparse
+from tqdm import tqdm
+import torch
+import torchvision.models as tv_models
+import torchvision.transforms as tv_transforms
+import torch.multiprocessing as mp
+from multiprocessing import shared_memory
+from concurrent.futures import ThreadPoolExecutor, as_completed
+from PIL import Image
+import psutil
+import base64
+from io import BytesIO
+import re
+
+
+# =============================================================================
+# MEMORY VALIDATION - Moved to segmentation/processing/memory.py
+# Functions validate_system_resources() and get_safe_worker_count() are now
+# imported from segmentation.processing.memory
+# =============================================================================
+
+
+# =============================================================================
+# HTML EXPORT FUNCTIONS - Moved to segmentation/io/html_generator.py
+# =============================================================================
+# The following functions are now imported from segmentation.io.html_generator:
+#   - load_samples_from_ram
+#   - create_export_index
+#   - generate_export_page_html
+#   - generate_export_pages
+#   - export_html_from_ram
+#
+# Note: create_hdf5_dataset, get_largest_connected_component, draw_mask_contour,
+# and percentile_normalize are imported from segmentation.io.html_export
+# =============================================================================
+
+
+# Global variable for worker process
+segmenter = None
+shared_image = None
+
+# REMOVED: ~620 lines of inline HTML export functions were here
+# They have been moved to segmentation/io/html_generator.py
+# See the import statement above for the list of functions.
+
+def init_worker(mk_classifier_path, hspc_classifier_path, cellpose_channels, gpu_queue, mm_path, mm_shape, mm_dtype):
+    """Initialize the segmenter and attach to shared memory map once per worker process."""
+    global segmenter, shared_image
+
+    # Assign GPU
+    device = "cpu"
+    if torch.cuda.is_available():
+        try:
+            # Get a GPU ID from the queue
+            gpu_id = gpu_queue.get(timeout=5)
+            device = f"cuda:{gpu_id}"
+        except Exception as e:
+            # Fallback: simple modulo or default
+            logger.debug(f"GPU queue timeout, using fallback assignment: {e}")
+            n_gpus = torch.cuda.device_count()
+            if n_gpus > 0:
+                gpu_id = mp.current_process().pid % n_gpus
+                device = f"cuda:{gpu_id}"
+            else:
+                device = "cuda"
+
+    logger.info(f"Worker {mp.current_process().pid} initialized on {device}")
+
+    # Initialize Segmenter
+    segmenter = UnifiedSegmenter(
+        mk_classifier_path=mk_classifier_path,
+        hspc_classifier_path=hspc_classifier_path,
+        cellpose_channels=cellpose_channels,
+        device=device
+    )
+
+    # Attach to Memory Map (Read-Only)
+    try:
+        shared_image = np.memmap(mm_path, dtype=mm_dtype, mode='r', shape=mm_shape)
+        logger.info(f"Worker {mp.current_process().pid} attached to memmap: {mm_path}")
+    except Exception as e:
+        logger.error(f"Worker {mp.current_process().pid} FAILED to attach to memmap: {e}")
+        shared_image = None
+
+
+def process_tile_worker(args):
+        features_file = tile_dir / "features.json"
+        seg_file = tile_dir / "segmentation.h5"
+        window_file = tile_dir / "window.csv"
+
+        if not all(f.exists() for f in [features_file, seg_file, window_file]):
+            continue
+
+        # Load tile window coordinates
+        with open(window_file, 'r') as f:
+            window_str = f.read().strip()
+        try:
+            matches = re.findall(r'slice\((\d+),\s*(\d+)', window_str)
+            if len(matches) >= 2:
+                tile_y1, tile_y2 = int(matches[0][0]), int(matches[0][1])
+                tile_x1, tile_x2 = int(matches[1][0]), int(matches[1][1])
+            else:
+                continue
+        except Exception as e:
+            logger.debug(f"Failed to parse tile coordinates from {seg_file.parent.name}: {e}")
+            continue
+
+        # Load features
+        with open(features_file, 'r') as f:
+            tile_features = json.load(f)
+
+        # Load segmentation masks
+        with h5py.File(seg_file, 'r') as f:
+            masks = f['labels'][0]  # Shape: (H, W)
+
+        # For HSPCs, sort by solidity (higher = more confident/solid shape)
+        if cell_type == 'hspc':
+            tile_features = sorted(tile_features,
+                                   key=lambda x: x['features'].get('solidity', 0),
+                                   reverse=True)
+
+        # Extract each cell
+        for feat_dict in tile_features:
+            det_id = feat_dict['id']
+            features = feat_dict['features']
+            area_px = features.get('area', 0)
+            area_um2 = area_px * (pixel_size_um ** 2)
+
+            try:
+                cell_idx = int(det_id.split('_')[1]) + 1
+            except Exception as e:
+                logger.debug(f"Failed to parse cell index from {det_id}: {e}")
+                continue
+
+            cell_mask = masks == cell_idx
+            if not cell_mask.any():
+                cell_mask = masks == int(det_id.split('_')[1])
+                if not cell_mask.any():
+                    continue
+
+            # For MKs, extract only the largest connected component
+            if cell_type == 'mk':
+                cell_mask = get_largest_connected_component(cell_mask)
+                if not cell_mask.any():
+                    continue
+
+            ys, xs = np.where(cell_mask)
+            if len(ys) == 0:
+                continue
+
+            # Calculate mask centroid for centering
+            centroid_y = int(np.mean(ys))
+            centroid_x = int(np.mean(xs))
+
+            # Calculate mask bounding box
+            y1_local, y2_local = ys.min(), ys.max()
+            x1_local, x2_local = xs.min(), xs.max()
+            mask_h = y2_local - y1_local
+            mask_w = x2_local - x1_local
+
+            # Create a centered crop around the mask centroid
+            # Crop size should be at least mask size + padding, minimum 300px
+            crop_size = max(300, max(mask_h, mask_w) + 100)
+            half_size = crop_size // 2
+
+            # Crop bounds centered on centroid
+            crop_y1 = max(0, centroid_y - half_size)
+            crop_y2 = min(masks.shape[0], centroid_y + half_size)
+            crop_x1 = max(0, centroid_x - half_size)
+            crop_x2 = min(masks.shape[1], centroid_x + half_size)
+
+            # Read from in-memory slide image (instead of CZI)
+            global_y1 = tile_y1 + crop_y1
+            global_y2 = tile_y1 + crop_y2
+            global_x1 = tile_x1 + crop_x1
+            global_x2 = tile_x1 + crop_x2
+
+            # Bounds check
+            global_y2 = min(global_y2, slide_image.shape[0])
+            global_x2 = min(global_x2, slide_image.shape[1])
+
+            try:
+                crop = slide_image[global_y1:global_y2, global_x1:global_x2]
+            except Exception as e:
+                logger.debug(f"Failed to extract crop at ({global_x1}, {global_y1}): {e}")
+                continue
+
+            if crop is None or crop.size == 0:
+                continue
+
+            # Convert to RGB if needed
+            if crop.ndim == 2:
+                crop = np.stack([crop] * 3, axis=-1)
+            elif crop.shape[2] == 4:
+                crop = crop[:, :, :3]
+
+            # Normalize using same percentile normalization as main pipeline
+            crop = percentile_normalize(crop, p_low=5, p_high=95)
+
+            # Extract the mask for this crop region
+            local_mask = cell_mask[crop_y1:crop_y2, crop_x1:crop_x2]
+
+            # Resize crop and mask to 300x300
+            pil_img = Image.fromarray(crop)
+            original_size = pil_img.size
+            pil_img = pil_img.resize((300, 300), Image.LANCZOS)
+            crop_resized = np.array(pil_img)
+
+            # Resize mask to match
+            if local_mask.shape[0] > 0 and local_mask.shape[1] > 0:
+                mask_pil = Image.fromarray(local_mask.astype(np.uint8) * 255)
+                mask_pil = mask_pil.resize((300, 300), Image.NEAREST)
+                mask_resized = np.array(mask_pil) > 127
+
+                # Draw solid bright green contour on the image (6px thick)
+                crop_with_contour = draw_mask_contour(crop_resized, mask_resized,
+                                                       color=(0, 255, 0), dotted=False)
+            else:
+                crop_with_contour = crop_resized
+
+            # Convert to base64 (JPEG for smaller file sizes)
+            pil_img_final = Image.fromarray(crop_with_contour)
+            buffer = BytesIO()
+            pil_img_final.save(buffer, format='JPEG', quality=85)
+            img_b64 = base64.b64encode(buffer.getvalue()).decode('utf-8')
+
+            # Use global center from features.json if available, otherwise compute
+            if 'center' in feat_dict:
+                # center is already in global coordinates
+                global_centroid_x = int(feat_dict['center'][0])
+                global_centroid_y = int(feat_dict['center'][1])
+            else:
+                # Backwards compatibility: compute from tile origin + local centroid
+                global_centroid_x = tile_x1 + centroid_x
+                global_centroid_y = tile_y1 + centroid_y
+
+            # Get global_id if available
+            global_id = feat_dict.get('global_id', None)
+
+            samples.append({
+                'tile_id': tile_dir.name,
+                'det_id': det_id,
+                'global_id': global_id,
+                'area_px': area_px,
+                'area_um2': area_um2,
+                'image': img_b64,
+                'features': features,
+                'solidity': features.get('solidity', 0),
+                'circularity': features.get('circularity', 0),
+                'global_x': global_centroid_x,
+                'global_y': global_centroid_y
+            })
+
+            if max_samples and len(samples) >= max_samples:
+                return samples
+
+    return samples
+
+
+def create_export_index(output_dir, total_mks, total_hspcs, mk_pages, hspc_pages, slides_summary=None, timestamp=None):
+    """Create the main index.html page."""
+    subtitle_html = f'<p style="color: #888; margin-bottom: 10px;">{slides_summary}</p>' if slides_summary else ''
+    timestamp_html = f'<p style="color: #666; font-size: 0.9em;">Segmentation: {timestamp}</p>' if timestamp else ''
+    html = f'''<!DOCTYPE html>
+<html>
+<head>
+    <title>MK + HSPC Cell Review</title>
+    <style>
+        * {{ box-sizing: border-box; margin: 0; padding: 0; }}
+        body {{ font-family: monospace; background: #0a0a0a; color: #ddd; padding: 20px; }}
+        .header {{ background: #111; padding: 20px; border: 1px solid #333; margin-bottom: 20px; text-align: center; }}
+        h1 {{ font-size: 1.5em; font-weight: normal; margin-bottom: 15px; }}
+        .stats {{ display: flex; justify-content: center; gap: 30px; margin: 20px 0; flex-wrap: wrap; }}
+        .stat {{ padding: 15px 30px; background: #1a1a1a; border: 1px solid #333; }}
+        .stat .number {{ display: block; font-size: 2em; margin-top: 10px; }}
+        .section {{ margin: 40px 0; }}
+        .section h2 {{ font-size: 1.3em; margin-bottom: 15px; padding: 10px; background: #111; border: 1px solid #333; border-left: 3px solid #555; }}
+        .controls {{ text-align: center; margin: 30px 0; }}
+        .btn {{ padding: 15px 30px; background: #1a1a1a; border: 1px solid #333; color: #ddd; cursor: pointer; font-family: monospace; font-size: 1.1em; margin: 10px; text-decoration: none; display: inline-block; }}
+        .btn:hover {{ background: #222; }}
+        .btn-primary {{ border-color: #4a4; color: #4a4; }}
+        .btn-export {{ border-color: #44a; color: #44a; }}
+    </style>
+</head>
+<body>
+    <div class="header">
+        <h1>MK + HSPC Cell Review</h1>
+        {subtitle_html}
+        {timestamp_html}
+        <p style="color: #888;">Annotation Interface</p>
+        <div class="stats">
+            <div class="stat"><span>Total MKs</span><span class="number">{total_mks:,}</span></div>
+            <div class="stat"><span>Total HSPCs</span><span class="number">{total_hspcs:,}</span></div>
+            <div class="stat"><span>MK Pages</span><span class="number">{mk_pages}</span></div>
+            <div class="stat"><span>HSPC Pages</span><span class="number">{hspc_pages}</span></div>
+        </div>
+    </div>
+    <div class="section">
+        <h2>Megakaryocytes (MKs)</h2>
+        <div class="controls">
+            <a href="mk_page1.html" class="btn btn-primary">Review MKs</a>
+        </div>
+    </div>
+    <div class="section">
+        <h2>HSPCs</h2>
+        <div class="controls">
+            <a href="hspc_page1.html" class="btn btn-primary">Review HSPCs</a>
+        </div>
+    </div>
+    <div class="section">
+        <h2>Export Annotations</h2>
+        <div class="controls">
+            <button class="btn btn-export" onclick="exportAnnotations()">Download Annotations JSON</button>
+        </div>
+    </div>
+    <script>
+        function exportAnnotations() {{
+            const allLabels = {{}};
+            const mkLabels = {{ positive: [], negative: [] }};
+            const hspcLabels = {{ positive: [], negative: [] }};
+            for (let i = 0; i < localStorage.length; i++) {{
+                const key = localStorage.key(i);
+                if (key.startsWith('mk_labels_page') || key.startsWith('hspc_labels_page')) {{
+                    try {{
+                        const labels = JSON.parse(localStorage.getItem(key));
+                        const cellType = key.startsWith('mk_') ? mkLabels : hspcLabels;
+                        for (const [uid, label] of Object.entries(labels)) {{
+                            if (label === 1) cellType.positive.push(uid);
+                            else if (label === 0) cellType.negative.push(uid);
+                        }}
+                    }} catch(e) {{ console.error(e); }}
+                }}
+            }}
+            allLabels.mk = mkLabels;
+            allLabels.hspc = hspcLabels;
+            const blob = new Blob([JSON.stringify(allLabels, null, 2)], {{type: 'application/json'}});
+            const url = URL.createObjectURL(blob);
+            const a = document.createElement('a');
+            a.href = url;
+            a.download = 'all_labels_combined.json';
+            a.click();
+            URL.revokeObjectURL(url);
+        }}
+    </script>
+</body>
+</html>'''
+    with open(Path(output_dir) / 'index.html', 'w') as f:
+        f.write(html)
+
+
+def generate_export_page_html(samples, cell_type, page_num, total_pages, slides_summary=None):
+    """Generate HTML for a single cell type page.
+
+    Args:
+        slides_summary: Optional string like "16 slides (FGC1, FGC2, ...)" for subtitle
+    """
+    cell_type_display = "Megakaryocytes (MKs)" if cell_type == "mk" else "HSPCs"
+
+    # Build subtitle HTML
+    subtitle_html = ''
+    if slides_summary:
+        subtitle_html = f'<div class="header-subtitle">{slides_summary}</div>'
+
+    nav_html = '<div class="page-nav">'
+    nav_html += '<a href="index.html" class="nav-btn">Home</a>'
+    if page_num > 1:
+        nav_html += f'<a href="{cell_type}_page{page_num-1}.html" class="nav-btn">Previous</a>'
+    nav_html += f'<span class="page-info">Page {page_num} of {total_pages}</span>'
+    if page_num < total_pages:
+        nav_html += f'<a href="{cell_type}_page{page_num+1}.html" class="nav-btn">Next</a>'
+    nav_html += '</div>'
+
+    cards_html = ""
+    for sample in samples:
+        slide = sample.get('slide', 'unknown').replace('.', '-')
+        global_id = sample.get('global_id')
+        global_x = sample.get('global_x', 0)
+        global_y = sample.get('global_y', 0)
+        # Use global_id if available, otherwise use coordinates
+        if global_id is not None:
+            uid = f"{slide}_{cell_type}_{global_id}"
+            display_id = f"{cell_type}_{global_id}"
+        else:
+            uid = f"{slide}_{cell_type}_{int(global_x)}_{int(global_y)}"
+            display_id = f"{cell_type}_{int(global_x)}_{int(global_y)}"
+        area_um2 = sample.get('area_um2', 0)
+        area_px = sample.get('area_px', 0)
+        img_b64 = sample['image']
+        cards_html += f'''
+        <div class="card" id="{uid}" data-label="-1">
+            <div class="card-img-container">
+                <img src="data:image/jpeg;base64,{img_b64}" alt="{display_id}">
+            </div>
+            <div class="card-info">
+                <div>
+                    <div class="card-id">{display_id}</div>
+                    <div class="card-area">{area_um2:.1f} um2 | {area_px:.0f} px2</div>
+                </div>
+                <div class="buttons">
+                    <button class="btn btn-yes" onclick="setLabel('{cell_type}', '{uid}', 1)">Yes</button>
+                    <button class="btn btn-unsure" onclick="setLabel('{cell_type}', '{uid}', 2)">?</button>
+                    <button class="btn btn-no" onclick="setLabel('{cell_type}', '{uid}', 0)">No</button>
+                </div>
+            </div>
+        </div>
+'''
+
+    prev_page = page_num - 1
+    next_page = page_num + 1
+
+    html = f'''<!DOCTYPE html>
+<html>
+<head>
+    <title>{cell_type_display} - Page {page_num}/{total_pages}</title>
+    <style>
+        * {{ box-sizing: border-box; margin: 0; padding: 0; }}
+        body {{ font-family: monospace; background: #0a0a0a; color: #ddd; }}
+        .header {{ background: #111; padding: 12px 20px; display: flex; flex-direction: column; gap: 8px; border-bottom: 1px solid #333; position: sticky; top: 0; z-index: 100; }}
+        .header-top {{ display: flex; justify-content: space-between; align-items: center; }}
+        .header h1 {{ font-size: 1.2em; font-weight: normal; }}
+        .header-subtitle {{ font-size: 0.85em; color: #888; margin-top: 2px; }}
+        .stats-row {{ display: flex; gap: 20px; font-size: 0.85em; flex-wrap: wrap; }}
+        .stats-group {{ display: flex; gap: 8px; align-items: center; }}
+        .stats-label {{ color: #888; font-size: 0.9em; }}
+        .stat {{ padding: 4px 10px; background: #1a1a1a; border: 1px solid #333; }}
+        .stat.positive {{ border-left: 3px solid #4a4; }}
+        .stat.negative {{ border-left: 3px solid #a44; }}
+        .stat.global {{ background: #0f1a0f; }}
+        .page-nav {{ text-align: center; padding: 15px; background: #111; border-bottom: 1px solid #333; }}
+        .nav-btn {{ display: inline-block; padding: 8px 16px; margin: 0 10px; background: #1a1a1a; color: #ddd; text-decoration: none; border: 1px solid #333; }}
+        .nav-btn:hover {{ background: #222; }}
+        .page-info {{ margin: 0 20px; }}
+        .content {{ padding: 20px; }}
+        .grid {{ display: grid; grid-template-columns: repeat(auto-fill, minmax(280px, 1fr)); gap: 10px; }}
+        .card {{ background: #111; border: 1px solid #333; display: flex; flex-direction: column; }}
+        .card-img-container {{ width: 100%; height: 280px; display: flex; align-items: center; justify-content: center; background: #0a0a0a; overflow: hidden; }}
+        .card img {{ max-width: 100%; max-height: 100%; object-fit: contain; }}
+        .card-info {{ padding: 8px; display: flex; justify-content: space-between; align-items: center; border-top: 1px solid #333; }}
+        .card-id {{ font-size: 0.75em; color: #888; }}
+        .card-area {{ font-size: 0.8em; }}
+        .buttons {{ display: flex; gap: 4px; }}
+        .btn {{ padding: 6px 12px; border: 1px solid #333; background: #1a1a1a; color: #ddd; cursor: pointer; font-family: monospace; }}
+        .btn:hover {{ background: #222; }}
+        .card.labeled-yes {{ border: 3px solid #0f0 !important; background: #131813 !important; }}
+        .card.labeled-no {{ border: 3px solid #f00 !important; background: #181111 !important; }}
+        .card.labeled-unsure {{ border: 3px solid #fa0 !important; background: #181611 !important; }}
+    </style>
+</head>
+<body>
+    <div class="header">
+        <div class="header-top">
+            <h1>{cell_type_display} - Page {page_num}/{total_pages}</h1>
+            {subtitle_html}
+        </div>
+        <div class="stats-row">
+            <div class="stats-group">
+                <span class="stats-label">This Page:</span>
+                <div class="stat">Total: <span id="sample-count">{len(samples)}</span></div>
+                <div class="stat positive">Yes: <span id="positive-count">0</span></div>
+                <div class="stat negative">No: <span id="negative-count">0</span></div>
+            </div>
+            <div class="stats-group">
+                <span class="stats-label">Global ({total_pages} pages):</span>
+                <div class="stat global positive">Yes: <span id="global-positive">0</span></div>
+                <div class="stat global negative">No: <span id="global-negative">0</span></div>
+            </div>
+        </div>
+    </div>
+    {nav_html}
+    <div class="content">
+        <div class="grid">{cards_html}</div>
+    </div>
+    {nav_html}
+    <script>
+        const STORAGE_KEY = '{cell_type}_labels_page{page_num}';
+        const CELL_TYPE = '{cell_type}';
+        const TOTAL_PAGES = {total_pages};
+
+        function loadAnnotations() {{
+            const stored = localStorage.getItem(STORAGE_KEY);
+            if (!stored) return;
+            try {{
+                const labels = JSON.parse(stored);
+                for (const [uid, label] of Object.entries(labels)) {{
+                    const card = document.getElementById(uid);
+                    if (card && label !== -1) {{
+                        card.dataset.label = label;
+                        card.classList.remove('labeled-yes', 'labeled-no', 'labeled-unsure');
+                        if (label == 1) card.classList.add('labeled-yes');
+                        else if (label == 2) card.classList.add('labeled-unsure');
+                        else card.classList.add('labeled-no');
+                    }}
+                }}
+                updateStats();
+            }} catch(e) {{ console.error(e); }}
+        }}
+
+        function setLabel(cellType, uid, label) {{
+            const card = document.getElementById(uid);
+            if (!card) return;
+            card.dataset.label = label;
+            card.classList.remove('labeled-yes', 'labeled-no', 'labeled-unsure');
+            if (label == 1) card.classList.add('labeled-yes');
+            else if (label == 2) card.classList.add('labeled-unsure');
+            else card.classList.add('labeled-no');
+            saveAnnotations();
+            updateStats();
+        }}
+
+        function saveAnnotations() {{
+            const labels = {{}};
+            document.querySelectorAll('.card').forEach(card => {{
+                const label = parseInt(card.dataset.label);
+                if (label !== -1) labels[card.id] = label;
+            }});
+            localStorage.setItem(STORAGE_KEY, JSON.stringify(labels));
+        }}
+
+        function updateStats() {{
+            // Local stats (this page)
+            let pos = 0, neg = 0;
+            document.querySelectorAll('.card').forEach(card => {{
+                const label = parseInt(card.dataset.label);
+                if (label === 1) pos++;
+                else if (label === 0) neg++;
+            }});
+            document.getElementById('positive-count').textContent = pos;
+            document.getElementById('negative-count').textContent = neg;
+
+            // Global stats (all pages)
+            let globalPos = 0, globalNeg = 0;
+            for (let i = 1; i <= TOTAL_PAGES; i++) {{
+                const key = CELL_TYPE + '_labels_page' + i;
+                const stored = localStorage.getItem(key);
+                if (stored) {{
+                    try {{
+                        const labels = JSON.parse(stored);
+                        for (const label of Object.values(labels)) {{
+                            if (label === 1) globalPos++;
+                            else if (label === 0) globalNeg++;
+                        }}
+                    }} catch(e) {{}}
+                }}
+            }}
+            document.getElementById('global-positive').textContent = globalPos;
+            document.getElementById('global-negative').textContent = globalNeg;
+        }}
+
+        document.addEventListener('keydown', (e) => {{
+            if (e.key === 'ArrowLeft' && {page_num} > 1)
+                window.location.href = '{cell_type}_page{prev_page}.html';
+            else if (e.key === 'ArrowRight' && {page_num} < {total_pages})
+                window.location.href = '{cell_type}_page{next_page}.html';
+        }});
+
+        loadAnnotations();
+    </script>
+</body>
+</html>'''
+    return html
+
+
+def generate_export_pages(samples, cell_type, output_dir, samples_per_page, slides_summary=None):
+    """Generate separate pages for a single cell type.
+
+    Args:
+        samples: List of sample dicts with image data
+        cell_type: 'mk' or 'hspc'
+        output_dir: Directory to write HTML files
+        samples_per_page: Number of samples per page
+        slides_summary: Optional string like "16 slides (FGC1, FGC2, ...)" for subtitle
+    """
+    if not samples:
+        logger.info(f"  No {cell_type.upper()} samples to export")
+        return
+
+    pages = [samples[i:i+samples_per_page] for i in range(0, len(samples), samples_per_page)]
+    total_pages = len(pages)
+
+    logger.info(f"  Generating {total_pages} {cell_type.upper()} pages...")
+
+    for page_num in range(1, total_pages + 1):
+        page_samples = pages[page_num - 1]
+        html = generate_export_page_html(page_samples, cell_type, page_num, total_pages, slides_summary=slides_summary)
+
+        html_path = Path(output_dir) / f"{cell_type}_page{page_num}.html"
+        with open(html_path, 'w') as f:
+            f.write(html)
+
+
+def export_html_from_ram(slide_data, output_base, html_output_dir, samples_per_page=300,
+                         mk_min_area_um=200, mk_max_area_um=2000, timestamp=None):
+    """
+    Export HTML pages using slide images already in RAM.
+
+    Args:
+        slide_data: dict of {slide_name: {'image': np.array, 'czi_path': path, ...}}
+        output_base: Path to segmentation output directory
+        html_output_dir: Path to write HTML files
+        samples_per_page: Number of samples per HTML page
+        mk_min_area_um: Min MK area filter
+        mk_max_area_um: Max MK area filter
+        timestamp: Segmentation timestamp string
+    """
+    logger.info(f"\n{'='*70}")
+    logger.info("EXPORTING HTML (using images in RAM)")
+    logger.info(f"{'='*70}")
+
+    html_output_dir = Path(html_output_dir)
+    html_output_dir.mkdir(parents=True, exist_ok=True)
+
+    all_mk_samples = []
+    all_hspc_samples = []
+
+    PIXEL_SIZE_UM = 0.1725  # Default pixel size
+
+    for slide_name, data in slide_data.items():
+        slide_dir = output_base / slide_name
+        if not slide_dir.exists():
+            continue
+
+        logger.info(f"  Loading {slide_name}...")
+
+        # Get pixel size from summary
+        summary_file = slide_dir / "summary.json"
+        pixel_size_um = PIXEL_SIZE_UM
+        if summary_file.exists():
+            with open(summary_file) as f:
+                summary = json.load(f)
+                ps = summary.get('pixel_size_um')
+                if ps:
+                    pixel_size_um = ps[0] if isinstance(ps, list) else ps
+
+        slide_image = data['image']
+
+        # Load MK samples (uses largest connected component)
+        mk_samples = load_samples_from_ram(
+            slide_dir / "mk" / "tiles",
+            slide_image, pixel_size_um,
+            cell_type='mk'
+        )
+
+        # Load HSPC samples (sorted by solidity/confidence)
+        hspc_samples = load_samples_from_ram(
+            slide_dir / "hspc" / "tiles",
+            slide_image, pixel_size_um,
+            cell_type='hspc'
+        )
+
+        # Add slide name to each sample
+        for s in mk_samples:
+            s['slide'] = slide_name
+        for s in hspc_samples:
+            s['slide'] = slide_name
+
+        all_mk_samples.extend(mk_samples)
+        all_hspc_samples.extend(hspc_samples)
+
+        logger.info(f"    {len(mk_samples)} MKs, {len(hspc_samples)} HSPCs")
+
+    # Filter MK by size
+    um_to_px_factor = PIXEL_SIZE_UM ** 2
+    mk_min_px = int(mk_min_area_um / um_to_px_factor)
+    mk_max_px = int(mk_max_area_um / um_to_px_factor)
+
+    mk_before = len(all_mk_samples)
+    all_mk_samples = [s for s in all_mk_samples if mk_min_px <= s.get('area_px', 0) <= mk_max_px]
+    logger.info(f"  MK size filter: {mk_before} -> {len(all_mk_samples)}")
+
+    # Sort by area
+    all_mk_samples.sort(key=lambda x: x.get('area_um2', 0), reverse=True)
+    all_hspc_samples.sort(key=lambda x: x.get('area_um2', 0), reverse=True)
+
+    # Build slides summary for subtitle (e.g., "16 slides (FGC1, FGC2, ...)")
+    slide_names = sorted(slide_data.keys())
+    num_slides = len(slide_names)
+    if num_slides > 0:
+        # Extract short identifiers (e.g., "FGC1" from "2025_11_18_FGC1")
+        short_names = []
+        for name in slide_names:
+            parts = name.split('_')
+            # Take the last part that looks like a group identifier
+            short = parts[-1] if parts else name
+            short_names.append(short)
+        # Show first few names with ellipsis if many
+        if len(short_names) > 6:
+            preview = ', '.join(short_names[:4]) + ', ...'
+        else:
+            preview = ', '.join(short_names)
+        slides_summary = f"{num_slides} slides ({preview})"
+    else:
+        slides_summary = None
+
+    # Generate pages
+    generate_export_pages(all_mk_samples, "mk", html_output_dir, samples_per_page, slides_summary=slides_summary)
+    generate_export_pages(all_hspc_samples, "hspc", html_output_dir, samples_per_page, slides_summary=slides_summary)
+
+    # Create index
+    mk_pages = (len(all_mk_samples) + samples_per_page - 1) // samples_per_page if all_mk_samples else 0
+    hspc_pages = (len(all_hspc_samples) + samples_per_page - 1) // samples_per_page if all_hspc_samples else 0
+    create_export_index(html_output_dir, len(all_mk_samples), len(all_hspc_samples), mk_pages, hspc_pages, slides_summary=slides_summary, timestamp=timestamp)
+
+    logger.info(f"\n  HTML export complete: {html_output_dir}")
+    logger.info(f"  Total: {len(all_mk_samples)} MKs, {len(all_hspc_samples)} HSPCs")
+
+
+# Global variable for worker process
+segmenter = None
+shared_image = None
+
+def init_worker(mk_classifier_path, hspc_classifier_path, cellpose_channels, gpu_queue, mm_path, mm_shape, mm_dtype):
+    """Initialize the segmenter and attach to shared memory map once per worker process."""
+    global segmenter, shared_image
+
+    # Assign GPU
+    device = "cpu"
+    if torch.cuda.is_available():
+        try:
+            # Get a GPU ID from the queue
+            gpu_id = gpu_queue.get(timeout=5)
+            device = f"cuda:{gpu_id}"
+        except Exception as e:
+            # Fallback: simple modulo or default
+            logger.debug(f"GPU queue timeout, using fallback assignment: {e}")
+            n_gpus = torch.cuda.device_count()
+            if n_gpus > 0:
+                gpu_id = mp.current_process().pid % n_gpus
+                device = f"cuda:{gpu_id}"
+            else:
+                device = "cuda"
+
+    logger.info(f"Worker {mp.current_process().pid} initialized on {device}")
+
+    # Initialize Segmenter
+    segmenter = UnifiedSegmenter(
+        mk_classifier_path=mk_classifier_path,
+        hspc_classifier_path=hspc_classifier_path,
+        cellpose_channels=cellpose_channels,
+        device=device
+    )
+
+    # Attach to Memory Map (Read-Only)
+    try:
+        shared_image = np.memmap(mm_path, dtype=mm_dtype, mode='r', shape=mm_shape)
+        logger.info(f"Worker {mp.current_process().pid} attached to memmap: {mm_path}")
+    except Exception as e:
+        logger.error(f"Worker {mp.current_process().pid} FAILED to attach to memmap: {e}")
+        shared_image = None
+
+def process_tile_worker(args):
+    """
+    Worker function for processing a single tile in a separate process.
+    Uses shared utilities from mk_hspc_utils for common operations.
+    """
+    # Unpack all arguments
+    tile, _, _, _, output_dir, \
+    mk_min_area, mk_max_area, variance_threshold, \
+    calibration_block_size = args
+
+    global segmenter, shared_image
+    tid = tile['id']
+
+    # Extract tile from shared memory
+    img, error = extract_tile_from_shared_memory(shared_image, tile)
+    if error:
+        return build_mk_hspc_result(tid, 'error', error=error)
+
+    # Convert to RGB and validate
+    img_rgb = ensure_rgb_array(img)
+    is_valid, status = check_tile_validity(img_rgb, tid)
+    if not is_valid:
+        return build_mk_hspc_result(tid, status)
+
+    # Normalize and check for tissue
+    img_rgb = prepare_tile_for_detection(img_rgb)
+    has_tissue_content, _ = has_tissue(img_rgb, variance_threshold, block_size=calibration_block_size)
+    if not has_tissue_content:
+        return build_mk_hspc_result(tid, 'no_tissue')
+
+    # Run detection
+    try:
+        mk_masks, hspc_masks, mk_feats, hspc_feats = segmenter.process_tile(
+            img_rgb, mk_min_area, mk_max_area
+        )
+        return build_mk_hspc_result(
+            tid, 'success',
+            mk_masks=mk_masks, hspc_masks=hspc_masks,
+            mk_feats=mk_feats, hspc_feats=hspc_feats,
+            tile=tile
+        )
+    except Exception as e:
+        return build_mk_hspc_result(tid, 'error', error=f"Processing error: {e}")
+
+
+_ROCM_PATCH_APPLIED = False
+
+def _apply_rocm_patch_if_needed():
+    """Apply ROCm INT_MAX fix lazily - call this before using SAM2."""
+    global _ROCM_PATCH_APPLIED
+    if _ROCM_PATCH_APPLIED:
+        return
+    _ROCM_PATCH_APPLIED = True
+
+    try:
+        import torch
+        from typing import List, Dict, Any
+        import sam2.utils.amg as amg
+
+        def mask_to_rle_pytorch_rocm_safe(tensor: torch.Tensor) -> List[Dict[str, Any]]:
+            """
+            Encodes masks to an uncompressed RLE, with ROCm INT_MAX workaround.
+            Moves tensor to CPU before nonzero() to avoid INT_MAX issues.
+            """
+            # Put in fortran order and flatten h,w
+            b, h, w = tensor.shape
+            tensor = tensor.permute(0, 2, 1).flatten(1)
+
+            # Compute change indices
+            diff = tensor[:, 1:] ^ tensor[:, :-1]
+
+            # ROCm FIX: Move to CPU before nonzero() to avoid INT_MAX error
+            diff_cpu = diff.cpu()
+            change_indices = diff_cpu.nonzero()
+
+            # Encode run length
+            out = []
+            for i in range(b):
+                cur_idxs = change_indices[change_indices[:, 0] == i, 1]
+                cur_idxs = torch.cat(
+                    [
+                        torch.tensor([0], dtype=cur_idxs.dtype, device=cur_idxs.device),
+                        cur_idxs + 1,
+                        torch.tensor([h * w], dtype=cur_idxs.dtype, device=cur_idxs.device),
+                    ]
+                )
+                btw_idxs = cur_idxs[1:] - cur_idxs[:-1]
+                counts = [] if tensor[i, 0] == 0 else [0]
+                counts.extend(btw_idxs.detach().cpu().tolist())
+                out.append({"size": [h, w], "counts": counts})
+            return out
+
+        # Apply the patch
+        amg.mask_to_rle_pytorch = mask_to_rle_pytorch_rocm_safe
+        logger.info("[ROCm FIX] Patched sam2.utils.amg.mask_to_rle_pytorch for INT_MAX workaround")
+    except ImportError as e:
+        logger.info(f"[ROCm FIX] Could not apply patch: {e}")
+
+def get_pixel_size_from_czi(czi_path):
+    """Extract pixel size in microns from CZI metadata."""
+    from pylibCZIrw import czi as pyczi
+
+    reader = pyczi.CziReader(str(czi_path))
+    meta = reader.metadata
+    reader.close()
+
+    try:
+        scaling = meta['ImageDocument']['Metadata']['Scaling']['Items']['Distance']
+        px_x = px_y = None
+        for item in scaling:
+            if item.get('@Id') == 'X':
+                px_x = float(item['Value']) * 1e6
+            elif item.get('@Id') == 'Y':
+                px_y = float(item['Value']) * 1e6
+        if px_x and px_y:
+            return px_x, px_y
+    except (KeyError, TypeError):
+        pass
+    raise ValueError(f"Could not extract pixel size from {czi_path}")
+
+
+# Note: percentile_normalize is imported from segmentation.io.html_export
+# Note: calibrate_tissue_threshold, filter_tissue_tiles, has_tissue, and
+#       calculate_block_variances are imported from segmentation.detection.tissue
+
+
+def extract_morphological_features(mask, image):
+    """Extract 22 morphological/intensity features from a mask."""
+    from skimage import measure
+
+    if not mask.any():
+        return {}
+
+    area = int(mask.sum())
+    props = measure.regionprops(mask.astype(int))[0]
+
+    perimeter = props.perimeter if hasattr(props, 'perimeter') else 0
+    circularity = 4 * np.pi * area / (perimeter ** 2) if perimeter > 0 else 0
+    solidity = props.solidity if hasattr(props, 'solidity') else 0
+    aspect_ratio = props.major_axis_length / props.minor_axis_length if props.minor_axis_length > 0 else 1
+    extent = props.extent if hasattr(props, 'extent') else 0
+    equiv_diameter = props.equivalent_diameter if hasattr(props, 'equivalent_diameter') else 0
+
+    # Intensity features
+    if image.ndim == 3:
+        masked_pixels = image[mask]
+        red_mean, red_std = float(np.mean(masked_pixels[:, 0])), float(np.std(masked_pixels[:, 0]))
+        green_mean, green_std = float(np.mean(masked_pixels[:, 1])), float(np.std(masked_pixels[:, 1]))
+        blue_mean, blue_std = float(np.mean(masked_pixels[:, 2])), float(np.std(masked_pixels[:, 2]))
+        gray = np.mean(masked_pixels, axis=1)
+    else:
+        gray = image[mask]
+        red_mean = green_mean = blue_mean = float(np.mean(gray))
+        red_std = green_std = blue_std = float(np.std(gray))
+
+    gray_mean, gray_std = float(np.mean(gray)), float(np.std(gray))
+
+    # HSV features (vectorized for speed)
+    if image.ndim == 3:
+        from segmentation.utils.feature_extraction import compute_hsv_features
+        hsv_feats = compute_hsv_features(masked_pixels, sample_size=100)
+        hue_mean = hsv_feats['hue_mean']
+        sat_mean = hsv_feats['saturation_mean']
+        val_mean = hsv_feats['value_mean']
+    else:
+        hue_mean = sat_mean = 0.0
+        val_mean = gray_mean
+
+    # Texture features
+    relative_brightness = gray_mean - np.mean(image) if image.size > 0 else 0
+    intensity_variance = float(np.var(gray))
+    dark_fraction = float(np.mean(gray < 100))
+    nuclear_complexity = gray_std
+
+    return {
+        'area': area,
+        'perimeter': float(perimeter),
+        'circularity': float(circularity),
+        'solidity': float(solidity),
+        'aspect_ratio': float(aspect_ratio),
+        'extent': float(extent),
+        'equiv_diameter': float(equiv_diameter),
+        'red_mean': red_mean, 'red_std': red_std,
+        'green_mean': green_mean, 'green_std': green_std,
+        'blue_mean': blue_mean, 'blue_std': blue_std,
+        'gray_mean': gray_mean, 'gray_std': gray_std,
+        'hue_mean': hue_mean, 'saturation_mean': sat_mean, 'value_mean': val_mean,
+        'relative_brightness': float(relative_brightness),
+        'intensity_variance': intensity_variance,
+        'dark_region_fraction': dark_fraction,
+        'nuclear_complexity': nuclear_complexity,
+    }
+
+
+class UnifiedSegmenter:
+    """Unified segmenter for MKs and HSPCs."""
+
+    def __init__(
+        self,
+        sam2_checkpoint="checkpoints/sam2.1_hiera_large.pt",
+        sam2_config="configs/sam2.1/sam2.1_hiera_l.yaml",
+        mk_classifier_path=None,
+        hspc_classifier_path=None,
+        cellpose_channels=None,  # For H&E: [1,3] = (cyto=R, nuc=B), None defaults to [0,0] (grayscale)
+        device=None
+    ):
+        _apply_rocm_patch_if_needed()
+        from cellpose.models import CellposeModel
+        from sam2.sam2_image_predictor import SAM2ImagePredictor
+        from sam2.automatic_mask_generator import SAM2AutomaticMaskGenerator
+        from sam2.build_sam import build_sam2
+
+        # Convert device to torch.device if it's a string
+        if device is None:
+            self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+        elif isinstance(device, str):
+            self.device = torch.device(device)
+        else:
+            self.device = device
+
+        # Find SAM2 checkpoint (auto-detect local or cluster)
+        script_dir = Path(__file__).parent.resolve()
+        sam2_candidates = [
+            script_dir / sam2_checkpoint,  # Local: same dir as script
+            script_dir / "checkpoints" / Path(sam2_checkpoint).name,  # Local checkpoints subdir
+            Path("/ptmp/edrod/MKsegmentation") / sam2_checkpoint,  # Cluster path
+        ]
+        checkpoint_path = None
+        for cp in sam2_candidates:
+            if cp.exists():
+                checkpoint_path = cp
+                break
+        if checkpoint_path is None:
+            # Default to local path (will fail with helpful error if missing)
+            checkpoint_path = script_dir / "checkpoints" / Path(sam2_checkpoint).name
+
+        logger.info(f"Loading SAM2 from {checkpoint_path}...")
+        sam2_model = build_sam2(sam2_config, str(checkpoint_path), device=self.device)
+
+        # SAM2 for auto mask generation (MKs)
+        self.sam2_auto = SAM2AutomaticMaskGenerator(
+            sam2_model,
+            points_per_side=24, # Changed from 32 to 24
+            pred_iou_thresh=0.5,  # Stricter filtering for speed
+            stability_score_thresh=0.4,
+            min_mask_region_area=500,
+            crop_n_layers=1 # Added crop_n_layers
+        )
+
+        # SAM2 predictor for point prompts (HSPCs)
+        self.sam2_predictor = SAM2ImagePredictor(sam2_model)
+
+        # Cellpose-SAM for HSPC detection (v4+ with SAM backbone)
+        logger.info(f"Loading Cellpose-SAM model on {self.device}...")
+        self.cellpose = CellposeModel(pretrained_model='cpsam', gpu=True, device=self.device)
+        # For H&E images: [1,3] = (cyto=R, nuc=B), None defaults to [0,0] (grayscale)
+        self.cellpose_channels = cellpose_channels if cellpose_channels else [0, 0]
+        logger.info(f"  Cellpose channels: {self.cellpose_channels}")
+
+        # ResNet for deep features
+        logger.info("Loading ResNet-50...")
+        resnet = tv_models.resnet50(weights='DEFAULT')
+        self.resnet = torch.nn.Sequential(*list(resnet.children())[:-1])
+        self.resnet.eval().to(self.device)
+        self.resnet_transform = tv_transforms.Compose([
+            tv_transforms.Resize(224),
+            tv_transforms.CenterCrop(224),
+            tv_transforms.ToTensor(),
+            tv_transforms.Normalize([0.485, 0.456, 0.406], [0.229, 0.224, 0.225])
+        ])
+
+        # Load classifiers if provided
+        self.mk_classifier = None
+        self.mk_feature_names = None
+        self.hspc_classifier = None
+        self.hspc_feature_names = None
+
+        if mk_classifier_path:
+            logger.info(f"Loading MK classifier: {mk_classifier_path}")
+            import joblib
+            clf_data = joblib.load(mk_classifier_path)
+            self.mk_classifier = clf_data['classifier']
+            self.mk_feature_names = clf_data['feature_names']
+            logger.info(f"  Features: {len(self.mk_feature_names)}, Trained on {clf_data.get('n_samples', '?')} samples")
+
+        if hspc_classifier_path:
+            logger.info(f"Loading HSPC classifier: {hspc_classifier_path}")
+            import joblib
+            clf_data = joblib.load(hspc_classifier_path)
+            self.hspc_classifier = clf_data['classifier']
+            self.hspc_feature_names = clf_data['feature_names']
+            logger.info(f"  Features: {len(self.hspc_feature_names)}, Trained on {clf_data.get('n_samples', '?')} samples")
+
+        logger.info("Models loaded.")
+
+    def apply_classifier(self, features_dict, cell_type):
+        """Apply classifier to features and return (is_positive, confidence).
+
+        Args:
+            features_dict: Dict of feature_name -> value
+            cell_type: 'mk' or 'hspc'
+
+        Returns:
+            (bool, float): (is_positive, confidence_score)
+        """
+        if cell_type == 'mk':
+            clf = self.mk_classifier
+            feature_names = self.mk_feature_names
+        else:
+            clf = self.hspc_classifier
+            feature_names = self.hspc_feature_names
+
+        if clf is None:
+            return True, 1.0  # No classifier = accept all
+
+        # Build feature vector in correct order
+        X = np.array([[features_dict.get(name, 0.0) for name in feature_names]])
+
+        # Predict
+        pred = clf.predict(X)[0]
+        proba = clf.predict_proba(X)[0]
+        confidence = proba[1] if pred == 1 else proba[0]
+
+        return bool(pred == 1), float(confidence)
+
+    def extract_resnet_features(self, crop):
+        """Extract 2048D ResNet features from crop."""
+        if crop.ndim == 2:
+            crop = np.stack([crop]*3, axis=-1)
+        pil_img = Image.fromarray(crop.astype(np.uint8))
+        tensor = self.resnet_transform(pil_img).unsqueeze(0).to(self.device)
+        with torch.no_grad():
+            features = self.resnet(tensor).cpu().numpy().flatten()
+        return features
+
+    def extract_resnet_features_batch(self, crops, batch_size=16):
+        """
+        Extract ResNet features for multiple crops in batches for GPU efficiency.
+
+        This method significantly improves GPU utilization by processing multiple
+        crops at once instead of one at a time.
+
+        Args:
+            crops: List of image crops as numpy arrays
+            batch_size: Number of crops to process at once (default 16)
+
+        Returns:
+            List of feature vectors as numpy arrays (2048D each)
+        """
+        return extract_resnet_features_batch(
+            crops,
+            self.resnet,
+            self.resnet_transform,
+            self.device,
+            batch_size=batch_size
+        )
+
+    def extract_sam2_embedding(self, cy, cx):
+        """Extract 256D SAM2 embedding at location.
+
+        Args:
+            cy: Y coordinate (row) in image space
+            cx: X coordinate (col) in image space
+
+        Returns:
+            256D SAM2 embedding vector
+        """
+        try:
+            # Get feature map shape and image dimensions for proper scaling
+            # SAM2 features are stored as [batch, channels, H, W]
+            if hasattr(self.sam2_predictor, '_features'):
+                features = self.sam2_predictor._features
+                if isinstance(features, dict) and "image_embed" in features:
+                    features = features["image_embed"]
+                shape = features.shape
+                emb_h, emb_w = shape[2], shape[3]
+
+                # Get original image dimensions for proper coordinate mapping
+                if hasattr(self.sam2_predictor, '_orig_hw'):
+                    img_h, img_w = self.sam2_predictor._orig_hw
+                else:
+                    # Fallback to assuming 16x downsampling
+                    img_h, img_w = emb_h * 16, emb_w * 16
+
+                # Map image coordinates to embedding coordinates
+                emb_y = int(cy / img_h * emb_h)
+                emb_x = int(cx / img_w * emb_w)
+                emb_y = min(max(0, emb_y), emb_h - 1)
+                emb_x = min(max(0, emb_x), emb_w - 1)
+
+                return features[0, :, emb_y, emb_x].cpu().numpy()
+            return np.zeros(256)
+        except Exception as e:
+            logger.debug(f"Failed to extract SAM2 embedding: {e}")
+            return np.zeros(256)
+
+    def process_tile_mk(
+        self,
+        image_rgb,
+        mk_min_area=1000,
+        mk_max_area=100000,
+        resnet_batch_size=16
+    ):
+        """Detect megakaryocytes (MKs) in a single tile using SAM2 automatic mask generation.
+
+        Uses batch ResNet feature extraction for improved GPU utilization.
+
+        Args:
+            image_rgb: RGB image array
+            mk_min_area: Minimum MK area in pixels
+            mk_max_area: Maximum MK area in pixels
+            resnet_batch_size: Batch size for ResNet feature extraction (default 16)
+
+        Returns:
+            mk_masks: Label array for MKs (uint32)
+            mk_features: List of feature dicts with morphological, SAM2, and ResNet features
+        """
+        from scipy import ndimage
+
+        # SAM2 automatic mask generation
+        sam2_results = self.sam2_auto.generate(image_rgb)
+
+        # Filter by size and sort by area (largest first)
+        valid_results = []
+        for result in sam2_results:
+            area = result['segmentation'].sum()
+            if mk_min_area <= area <= mk_max_area:
+                result['area'] = area
+                valid_results.append(result)
+        valid_results.sort(key=lambda x: x['area'], reverse=True)
+
+        # Delete original sam2_results to free memory (can be 3GB+ of masks)
+        del sam2_results
+        gc.collect()
+
+        mk_masks = np.zeros(image_rgb.shape[:2], dtype=np.uint32)
+        mk_valid_detections = []  # Collect valid detections for batch processing
+        mk_id = 1
+
+        # First pass: filter overlaps and collect valid MK detections
+        for result in valid_results:
+            mask = result['segmentation']
+            # Ensure boolean type for indexing (critical for NVIDIA CUDA compatibility)
+            if mask.dtype != bool:
+                mask = (mask > 0.5).astype(bool)
+
+            # Check overlap with existing masks - skip if >50% overlaps (larger already added)
+            if mk_masks.max() > 0:
+                overlap = ((mask > 0) & (mk_masks > 0)).sum()
+                if overlap > 0.5 * mask.sum():
+                    continue
+
+            # Add to label array
+            mk_masks[mask] = mk_id
+
+            # Get centroid
+            cy, cx = ndimage.center_of_mass(mask)
+
+            mk_valid_detections.append({
+                'id': mk_id,
+                'mask': mask,
+                'cy': cy,
+                'cx': cx,
+                'sam2_iou': float(result.get('predicted_iou', 0)),
+                'sam2_stability': float(result.get('stability_score', 0))
+            })
+            mk_id += 1
+
+        # Delete valid_results to free memory (large mask arrays)
+        del valid_results
+        gc.collect()
+
+        # Batch feature extraction for MKs
+        mk_features = []
+        if mk_valid_detections:
+            # Extract morphological and SAM2 features, collect crops
+            mk_crops = []
+            mk_crop_indices = []
+
+            for idx, det in enumerate(mk_valid_detections):
+                mask = det['mask']
+                cy, cx = det['cy'], det['cx']
+
+                # Extract morphological features
+                morph = extract_morphological_features(mask, image_rgb)
+
+                # SAM2 embeddings
+                sam2_emb = self.extract_sam2_embedding(cy, cx)
+                for i, v in enumerate(sam2_emb):
+                    morph[f'sam2_emb_{i}'] = float(v)
+
+                det['morph'] = morph
+
+                # Prepare crop for batch ResNet processing
+                ys, xs = np.where(mask)
+                if len(ys) > 0:
+                    y1, y2 = ys.min(), ys.max()
+                    x1, x2 = xs.min(), xs.max()
+                    crop = image_rgb[y1:y2+1, x1:x2+1].copy()
+                    crop_mask = mask[y1:y2+1, x1:x2+1]
+                    crop[~crop_mask] = 0
+                    mk_crops.append(crop)
+                    mk_crop_indices.append(idx)
+
+            # Batch ResNet feature extraction
+            if mk_crops:
+                resnet_features_list = self.extract_resnet_features_batch(mk_crops, batch_size=resnet_batch_size)
+
+                # Assign ResNet features to correct detections
+                for crop_idx, resnet_feats in zip(mk_crop_indices, resnet_features_list):
+                    for i, v in enumerate(resnet_feats):
+                        mk_valid_detections[crop_idx]['morph'][f'resnet_{i}'] = float(v)
+
+            # Fill zeros for detections without valid crops
+            for det in mk_valid_detections:
+                if f'resnet_0' not in det['morph']:
+                    for i in range(2048):
+                        det['morph'][f'resnet_{i}'] = 0.0
+
+            # Build final MK features list
+            for det in mk_valid_detections:
+                mk_features.append({
+                    'id': f'det_{det["id"]}',
+                    'center': [float(det['cx']), float(det['cy'])],
+                    'sam2_iou': det['sam2_iou'],
+                    'sam2_stability': det['sam2_stability'],
+                    'features': det['morph']
+                })
+
+        torch.cuda.empty_cache()  # Clear GPU cache after MK processing
+
+        return mk_masks, mk_features
+
+    def process_tile_hspc(
+        self,
+        image_rgb,
+        resnet_batch_size=16
+    ):
+        """Detect hematopoietic stem/progenitor cells (HSPCs) using Cellpose-SAM refinement.
+
+        Uses Cellpose for initial cell detection, then SAM2 for mask refinement.
+        Batch ResNet feature extraction for improved GPU utilization.
+
+        Args:
+            image_rgb: RGB image array
+            resnet_batch_size: Batch size for ResNet feature extraction (default 16)
+
+        Returns:
+            hspc_masks: Label array for HSPCs (uint32)
+            hspc_features: List of feature dicts with morphological, SAM2, and ResNet features
+        """
+        from scipy import ndimage
+
+        # Set image for SAM2 predictor
+        # This should be called after MK processing to avoid holding embeddings in two predictors
+        self.sam2_predictor.set_image(image_rgb)
+
+        # Cellpose with configurable channels (default: grayscale)
+        cellpose_masks, _, _ = self.cellpose.eval(image_rgb, channels=self.cellpose_channels)
+
+        # Get Cellpose centroids and limit to top 500 by mask area
+        cellpose_ids = np.unique(cellpose_masks)
+        cellpose_ids = cellpose_ids[cellpose_ids > 0]
+
+        # Limit Cellpose candidates to avoid processing thousands per tile
+        MAX_CELLPOSE_CANDIDATES = 500
+        if len(cellpose_ids) > MAX_CELLPOSE_CANDIDATES:
+            # Sort by mask area (larger first) and take top N
+            areas = [(cp_id, (cellpose_masks == cp_id).sum()) for cp_id in cellpose_ids]
+            areas.sort(key=lambda x: x[1], reverse=True)
+            cellpose_ids = np.array([a[0] for a in areas[:MAX_CELLPOSE_CANDIDATES]])
+
+        # Collect all HSPC candidates with SAM2 refinement
+        hspc_candidates = []
+        for cp_id in cellpose_ids:
+            cp_mask = cellpose_masks == cp_id
+            cy, cx = ndimage.center_of_mass(cp_mask)
+
+            # Use centroid as SAM2 prompt
+            point_coords = np.array([[cx, cy]])
+            point_labels = np.array([1])
+
+            masks_pred, scores, _ = self.sam2_predictor.predict(
+                point_coords=point_coords,
+                point_labels=point_labels,
+                multimask_output=True
+            )
+
+            # Take best mask
+            best_idx = np.argmax(scores)
+            sam2_mask = masks_pred[best_idx]
+            # Ensure boolean type for indexing (critical for NVIDIA CUDA compatibility)
+            if sam2_mask.dtype != bool:
+                sam2_mask = (sam2_mask > 0.5).astype(bool)
+            sam2_score = float(scores[best_idx])
+
+            if sam2_mask.sum() < 10:
+                continue
+
+            # Keep all candidates - overlap filtering happens after sorting by confidence
+            hspc_candidates.append({
+                'mask': sam2_mask,
+                'score': sam2_score,
+                'center': (cx, cy),
+                'cp_id': cp_id
+            })
+
+        # Sort by SAM2 score (most confident first) and handle overlaps
+        hspc_candidates.sort(key=lambda x: x['score'], reverse=True)
+
+        hspc_masks = np.zeros(image_rgb.shape[:2], dtype=np.uint32)
+        hspc_valid_detections = []  # Collect valid detections for batch processing
+        hspc_id = 1
+
+        # First pass: filter overlaps and collect valid HSPC detections
+        for cand in hspc_candidates:
+            sam2_mask = cand['mask']
+            # Ensure boolean type for indexing (critical for NVIDIA CUDA compatibility)
+            if sam2_mask.dtype != bool:
+                sam2_mask = (sam2_mask > 0.5).astype(bool)
+            sam2_score = cand['score']
+            cx, cy = cand['center']
+
+            # Check overlap with existing HSPC masks - skip if >50% overlaps
+            if hspc_masks.max() > 0:
+                overlap = ((sam2_mask > 0) & (hspc_masks > 0)).sum()
+                if overlap > 0.5 * sam2_mask.sum():
+                    continue
+
+            # Add to label array
+            hspc_masks[sam2_mask] = hspc_id
+
+            hspc_valid_detections.append({
+                'id': hspc_id,
+                'mask': sam2_mask,
+                'cy': cy,
+                'cx': cx,
+                'sam2_score': sam2_score,
+                'cp_id': int(cand['cp_id'])
+            })
+            hspc_id += 1
+
+        # Delete large temporary arrays to free memory
+        del hspc_candidates
+        del cellpose_masks
+        gc.collect()
+
+        # Batch feature extraction for HSPCs
+        hspc_features = []
+        if hspc_valid_detections:
+            # Extract morphological and SAM2 features, collect crops
+            hspc_crops = []
+            hspc_crop_indices = []
+
+            for idx, det in enumerate(hspc_valid_detections):
+                mask = det['mask']
+                cy, cx = det['cy'], det['cx']
+
+                # Extract morphological features
+                morph = extract_morphological_features(mask, image_rgb)
+
+                # SAM2 embeddings
+                sam2_emb = self.extract_sam2_embedding(cy, cx)
+                for i, v in enumerate(sam2_emb):
+                    morph[f'sam2_emb_{i}'] = float(v)
+
+                det['morph'] = morph
+
+                # Prepare crop for batch ResNet processing
+                ys, xs = np.where(mask)
+                if len(ys) > 0:
+                    y1, y2 = ys.min(), ys.max()
+                    x1, x2 = xs.min(), xs.max()
+                    crop = image_rgb[y1:y2+1, x1:x2+1].copy()
+                    crop_mask = mask[y1:y2+1, x1:x2+1]
+                    crop[~crop_mask] = 0
+                    hspc_crops.append(crop)
+                    hspc_crop_indices.append(idx)
+
+            # Batch ResNet feature extraction
+            if hspc_crops:
+                resnet_features_list = self.extract_resnet_features_batch(hspc_crops, batch_size=resnet_batch_size)
+
+                # Assign ResNet features to correct detections
+                for crop_idx, resnet_feats in zip(hspc_crop_indices, resnet_features_list):
+                    for i, v in enumerate(resnet_feats):
+                        hspc_valid_detections[crop_idx]['morph'][f'resnet_{i}'] = float(v)
+
+            # Fill zeros for detections without valid crops
+            for det in hspc_valid_detections:
+                if f'resnet_0' not in det['morph']:
+                    for i in range(2048):
+                        det['morph'][f'resnet_{i}'] = 0.0
+
+            # Build final HSPC features list
+            for det in hspc_valid_detections:
+                hspc_features.append({
+                    'id': f'det_{det["id"]}',
+                    'center': [float(det['cx']), float(det['cy'])],
+                    'cellpose_id': det['cp_id'],
+                    'sam2_score': det['sam2_score'],
+                    'features': det['morph']
+                })
+
+        # Clear SAM2 cached features after processing this tile
+        self.sam2_predictor.reset_predictor()
+        torch.cuda.empty_cache()
+
+        return hspc_masks, hspc_features
+
+    def process_tile(
+        self,
+        image_rgb,
+        mk_min_area=1000,
+        mk_max_area=100000,
+        resnet_batch_size=16
+    ):
+        """Process a single tile for both MKs and HSPCs.
+
+        This method calls process_tile_mk() and process_tile_hspc() sequentially
+        and combines their results. MK detection runs first to avoid holding
+        embeddings in two predictors simultaneously.
+
+        Args:
+            image_rgb: RGB image array
+            mk_min_area: Minimum MK area in pixels
+            mk_max_area: Maximum MK area in pixels
+            resnet_batch_size: Batch size for ResNet feature extraction (default 16)
+
+        Returns:
+            mk_masks: Label array for MKs
+            hspc_masks: Label array for HSPCs
+            mk_features: List of feature dicts
+            hspc_features: List of feature dicts
+        """
+        # Process MK detection first (auto generator manages its own predictor)
+        mk_masks, mk_features = self.process_tile_mk(
+            image_rgb,
+            mk_min_area=mk_min_area,
+            mk_max_area=mk_max_area,
+            resnet_batch_size=resnet_batch_size
+        )
+
+        # Process HSPC detection (uses SAM2 predictor after MK is done)
+        hspc_masks, hspc_features = self.process_tile_hspc(
+            image_rgb,
+            resnet_batch_size=resnet_batch_size
+        )
+
+        return mk_masks, hspc_masks, mk_features, hspc_features
+
+
+def run_unified_segmentation(
+    czi_path,
+    output_dir,
+    mk_min_area=1000,
+    mk_max_area=100000,
+    tile_size=3000,
+    overlap=512,
+    sample_fraction=1.0,
+    calibration_block_size=512,
+    calibration_samples=50,
+    num_workers=4,
+    mk_classifier_path=None,
+    hspc_classifier_path=None,
+    cellpose_channels=None,
+    channel=0,
+    sequential=False
+):
+    """Run unified MK + HSPC segmentation with multiprocessing.
+
+    Uses RAM-first architecture: loads entire channel into RAM once,
+    then all tile processing references that RAM array.
+
+    Args:
+        sequential: If True, process tiles one at a time (safer for GPU memory).
+    """
+    import shutil
+
+    # Sequential mode for single-slide uses num_workers=0
+    if sequential:
+        logger.info("Sequential mode enabled for single-slide processing")
+        num_workers = 0
+
+    # Set start method to 'spawn' for GPU safety
+    if num_workers > 0:
+        mp.set_start_method('spawn', force=True)
+
+    czi_path = Path(czi_path)
+    output_dir = Path(output_dir)
+    output_dir.mkdir(parents=True, exist_ok=True)
+
+    logger.info(f"\n{'='*70}")
+    logger.info("UNIFIED SEGMENTATION: MK + HSPC (RAM-FIRST ARCHITECTURE)")
+    logger.info(f"{'='*70}")
+    logger.info(f"CZI: {czi_path}")
+
+    # Load channel into RAM using get_loader (uses global cache)
+    logger.info(f"Loading channel {channel} into RAM...")
+    loader = get_loader(czi_path, load_to_ram=True, channel=channel)
+
+    x_start, y_start = loader.mosaic_origin
+    full_width, full_height = loader.mosaic_size
+
+    logger.info(f"Image: {full_width} x {full_height}")
+    img_size_gb = loader.channel_data.nbytes / (1024**3)
+    logger.info(f"Channel data loaded to RAM ({img_size_gb:.2f} GB)")
+
+    # Create tiles (coordinates relative to mosaic origin)
+    n_tx = int(np.ceil(full_width / (tile_size - overlap)))
+    n_ty = int(np.ceil(full_height / (tile_size - overlap)))
+    tiles = []
+    for ty in range(n_ty):
+        for tx in range(n_tx):
+            tiles.append({
+                'id': len(tiles),
+                'x': tx * (tile_size - overlap),
+                'y': ty * (tile_size - overlap),
+                'w': min(tile_size, full_width - tx * (tile_size - overlap)),
+                'h': min(tile_size, full_height - ty * (tile_size - overlap))
+            })
+
+    logger.info(f"Total tiles: {len(tiles)}")
+
+    # Calibrate tissue threshold using RAM array directly
+    variance_threshold = calibrate_tissue_threshold(
+        tiles=tiles,
+        image_array=loader.channel_data,
+        calibration_samples=calibration_samples,
+        block_size=calibration_block_size,
+        tile_size=tile_size
+    )
+
+    # Create memmap for worker processes (they can't share numpy arrays directly)
+    # Use /dev/shm if available for RAM-backed storage
+    shm_path = Path("/dev/shm")
+    use_ramdisk = False
+    if shm_path.exists():
+        try:
+            shm_stat = os.statvfs("/dev/shm")
+            shm_free_gb = (shm_stat.f_bavail * shm_stat.f_frsize) / (1024**3)
+            if shm_free_gb > img_size_gb * 1.5:
+                use_ramdisk = True
+                logger.info(f"  Using RAM-backed storage (/dev/shm): {shm_free_gb:.1f} GB free")
+        except Exception as e:
+            logger.debug(f"Could not check /dev/shm availability: {e}")
+
+    if use_ramdisk:
+        temp_mm_dir = shm_path / f"mkseg_{os.getpid()}"
+    else:
+        temp_mm_dir = output_dir / "temp_mm"
+        logger.info(f"  Using disk-backed storage (fallback)")
+
+    temp_mm_dir.mkdir(parents=True, exist_ok=True)
+    mm_path = temp_mm_dir / "image.dat"
+
+    # Create memmap and copy from loader's RAM array
+    mm_shape = loader.channel_data.shape
+    mm_dtype = loader.channel_data.dtype
+    shm_arr = np.memmap(mm_path, dtype=mm_dtype, mode='w+', shape=mm_shape)
+    np.copyto(shm_arr, loader.channel_data)
+    shm_arr.flush()
+    del shm_arr
+
+    storage_type = "RAM" if use_ramdisk else "disk"
+    logger.info(f"Memmap created for workers: {mm_path} ({storage_type})")
+
+    # Clear loader's RAM (memmap now holds the data for workers)
+    loader.close()
+
+    if sample_fraction < 1.0:
+        n = max(1, int(len(tiles) * sample_fraction))
+        np.random.seed(42)
+        tiles = list(np.random.choice(tiles, n, replace=False))
+        logger.info(f"Sampling {len(tiles)} tiles for processing")
+
+    # Prepare arguments for worker processes (NO reader, NO large objects)
+    worker_args = []
+    for tile in tiles:
+        worker_args.append((
+            tile, czi_path, x_start, y_start, output_dir,
+            mk_min_area, mk_max_area, variance_threshold,
+            calibration_block_size
+        ))
+    
+    # Process tiles in parallel
+    mk_count = 0  # Just count, don't accumulate features (already saved to disk)
+    hspc_count = 0
+    mk_gid = 1
+    hspc_gid = 1
+
+    # Setup GPU distribution
+    manager = mp.Manager()
+    gpu_queue = manager.Queue()
+    if torch.cuda.is_available():
+        n_gpus = torch.cuda.device_count()
+        if n_gpus > 0:
+            # Fill queue with GPU IDs for workers to consume
+            for i in range(num_workers):
+                gpu_queue.put(i % n_gpus)
+    
+    # Pass Memmap path to initializer
+    # Note: passing path as string is safe for pickling
+    init_args = (mk_classifier_path, hspc_classifier_path, cellpose_channels, gpu_queue, str(mm_path), mm_shape, mm_dtype)
+    
+    try:
+        with mp.Pool(processes=num_workers, initializer=init_worker, initargs=init_args) as pool:
+            with tqdm(total=len(tiles), desc="Processing tiles") as pbar:
+                for result in pool.imap_unordered(process_tile_worker, worker_args):
+                    pbar.update(1)
+                    if result['status'] == 'success':
+                        tile = result['tile']
+                        tid = result['tid']
+                        
+                        # Process and save MK results
+                        if result['mk_feats']:
+                            mk_dir = output_dir / "mk" / "tiles"
+                            mk_tile_dir = mk_dir / str(tid)
+                            mk_tile_dir.mkdir(parents=True, exist_ok=True)
+                            
+                            with open(mk_tile_dir / "window.csv", 'w') as f:
+                                f.write(f"(slice({tile['y']}, {tile['y']+tile['h']}, None), slice({tile['x']}, {tile['x']+tile['w']}, None))")
+                            
+                            new_mk = np.zeros_like(result['mk_masks'])
+                            mk_tile_cells = []
+                            for feat in result['mk_feats']:
+                                old_id = int(feat['id'].split('_')[1])
+                                new_mk[result['mk_masks'] == old_id] = mk_gid
+                                feat['id'] = f'det_{mk_gid - 1}'
+                                feat['global_id'] = mk_gid
+                                feat['center'][0] += tile['x']
+                                feat['center'][1] += tile['y']
+                                mk_tile_cells.append(mk_gid)
+                                mk_count += 1  # Just count, features already saved to disk
+                                mk_gid += 1
+                            
+                            with open(mk_tile_dir / "classes.csv", 'w') as f:
+                                for c in mk_tile_cells: f.write(f"{c}\n")
+                            with h5py.File(mk_tile_dir / "segmentation.h5", 'w') as f:
+                                create_hdf5_dataset(f, 'labels', new_mk[np.newaxis])
+                            with open(mk_tile_dir / "features.json", 'w') as f:
+                                json.dump([{'id': m['id'], 'global_id': m['global_id'], 'center': m['center'], 'features': m['features']} for m in result['mk_feats']], f)
+
+                            # Explicit cleanup to prevent memory accumulation
+                            del new_mk, mk_tile_cells
+
+                        # Process and save HSPC results
+                        if result['hspc_feats']:
+                            hspc_dir = output_dir / "hspc" / "tiles"
+                            hspc_tile_dir = hspc_dir / str(tid)
+                            hspc_tile_dir.mkdir(parents=True, exist_ok=True)
+                            
+                            with open(hspc_tile_dir / "window.csv", 'w') as f:
+                                f.write(f"(slice({tile['y']}, {tile['y']+tile['h']}, None), slice({tile['x']}, {tile['x']+tile['w']}, None))")
+                            
+                            new_hspc = np.zeros_like(result['hspc_masks'])
+                            hspc_tile_cells = []
+                            for feat in result['hspc_feats']:
+                                old_id = int(feat['id'].split('_')[1])
+                                new_hspc[result['hspc_masks'] == old_id] = hspc_gid
+                                feat['id'] = f'det_{hspc_gid - 1}'
+                                feat['global_id'] = hspc_gid
+                                feat['center'][0] += tile['x']
+                                feat['center'][1] += tile['y']
+                                hspc_tile_cells.append(hspc_gid)
+                                hspc_count += 1  # Just count, features already saved to disk
+                                hspc_gid += 1
+                                
+                            with open(hspc_tile_dir / "classes.csv", 'w') as f:
+                                for c in hspc_tile_cells: f.write(f"{c}\n")
+                            with h5py.File(hspc_tile_dir / "segmentation.h5", 'w') as f:
+                                create_hdf5_dataset(f, 'labels', new_hspc[np.newaxis])
+                            with open(hspc_tile_dir / "features.json", 'w') as f:
+                                json.dump([{'id': h['id'], 'global_id': h['global_id'], 'center': h['center'], 'features': h['features']} for h in result['hspc_feats']], f)
+
+                            # Explicit cleanup to prevent memory accumulation
+                            del new_hspc, hspc_tile_cells
+
+                    elif result['status'] == 'error':
+                        logger.error(f"Tile {result['tid']} error: {result['error']}")
+
+                    # Explicit memory cleanup after processing each result
+                    # Delete large mask arrays from result before del result
+                    if 'mk_masks' in result:
+                        del result['mk_masks']
+                    if 'hspc_masks' in result:
+                        del result['hspc_masks']
+                    if 'mk_feats' in result:
+                        del result['mk_feats']
+                    if 'hspc_feats' in result:
+                        del result['hspc_feats']
+                    del result
+
+                    # Run GC every 50 tiles to prevent accumulation (not every tile for performance)
+                    if pbar.n % 50 == 0:
+                        gc.collect()
+    finally:
+        # Always clean up temp memmap directory
+        if 'temp_mm_dir' in locals() and temp_mm_dir.exists():
+            try:
+                shutil.rmtree(temp_mm_dir)
+                logger.info(f"Cleaned up temp directory: {temp_mm_dir}")
+            except Exception as e:
+                logger.warning(f"Failed to cleanup {temp_mm_dir}: {e}")
+
+    # Save summaries
+    # Get pixel size from reader if possible (re-open temporarily)
+    try:
+        pixel_size_um = get_pixel_size_from_czi(czi_path)
+    except Exception as e:
+        logger.debug(f"Could not get pixel size from CZI: {e}")
+        pixel_size_um = None
+
+    summary = {
+        'czi_path': str(czi_path),
+        'pixel_size_um': pixel_size_um,
+        'mk_count': mk_count,
+        'hspc_count': hspc_count,
+        'feature_count': '22 morphological + 256 SAM2 + 2048 ResNet = 2326'
+    }
+
+    with open(output_dir / "summary.json", 'w') as f:
+        json.dump(summary, f, indent=2)
+
+    logger.info(f"\n{'='*70}")
+    logger.info("COMPLETE")
+    logger.info(f"{'='*70}")
+    logger.info(f"MKs detected: {mk_count}")
+    logger.info(f"HSPCs detected: {hspc_count}")
+    logger.info(f"Features per cell: 2326 (22 + 256 + 2048)")
+    logger.info(f"Output: {output_dir}")
+    logger.info(f"  MK tiles: {output_dir}/mk/tiles/")
+    logger.info(f"  HSPC tiles: {output_dir}/hspc/tiles/")
+
+
+def _phase1_load_slides(czi_paths, tile_size, overlap, channel=0):
+    """
+    Phase 1: Load all slides into RAM using CZILoader.
+
+    Loads each CZI slide's specified channel into RAM for efficient tile extraction.
+    Uses the global CZI loader cache to maintain references.
+
+    Args:
+        czi_paths: List of paths to CZI files
+        tile_size: Size of tiles to extract (used for logging only here)
+        overlap: Overlap between tiles (used for logging only here)
+        channel: Which channel to load (default 0)
+
+    Returns:
+        tuple: (slide_data, slide_loaders, total_size_gb) where:
+            - slide_data: dict mapping slide_name -> {'image': np.array, 'shape': tuple, 'czi_path': Path}
+            - slide_loaders: dict mapping slide_name -> CZILoader (kept alive to maintain RAM data)
+            - total_size_gb: float, total RAM used in GB
+    """
+    import gc
+
+    logger.info(f"\n{'='*70}")
+    logger.info("PHASE 1: LOADING ALL SLIDES INTO RAM (CZILoader)")
+    logger.info(f"{'='*70}")
+
+    slide_data = {}  # slide_name -> {'image': np.array, 'shape': tuple, 'czi_path': Path}
+    slide_loaders = {}  # Keep loaders alive to maintain RAM data
+    total_size_gb = 0
+
+    for slide_idx, czi_path in enumerate(czi_paths):
+        czi_path = Path(czi_path)
+        slide_name = czi_path.stem
+
+        logger.info(f"\n[{slide_idx+1}/{len(czi_paths)}] Loading {slide_name} (channel {channel})...")
+
+        try:
+            # Use get_loader with load_to_ram=True for RAM-first architecture (global cache)
+            loader = get_loader(czi_path, load_to_ram=True, channel=channel)
+
+            full_width, full_height = loader.mosaic_size
+            size_gb = loader.channel_data.nbytes / (1024**3)
+            total_size_gb += size_gb
+
+            # Store loader and reference to its channel_data
+            slide_loaders[slide_name] = loader
+            slide_data[slide_name] = {
+                'image': loader.channel_data,  # Direct reference to RAM array
+                'shape': (full_width, full_height),
+                'czi_path': czi_path
+            }
+
+            logger.info(f"  Loaded: {full_width} x {full_height} ({size_gb:.2f} GB)")
+
+            # Force cleanup between loads to prevent memory fragmentation
+            gc.collect()
+
+        except Exception as e:
+            logger.error(f"Loading {slide_name}: {e}")
+            continue
+
+    logger.info(f"\nTotal RAM used: {total_size_gb:.2f} GB")
+
+    # Check available RAM
+    mem = psutil.virtual_memory()
+    logger.info(f"System RAM: {mem.total/(1024**3):.1f} GB total, {mem.available/(1024**3):.1f} GB available")
+
+    return slide_data, slide_loaders, total_size_gb
+
+
+def _phase2_identify_tissue_tiles(slide_data, tile_size, overlap, variance_threshold, calibration_block_size, calibration_samples, czi_paths):
+    """
+    Phase 2: Create tiles and identify tissue-containing tiles.
+
+    Creates a grid of tiles across all slides, calibrates tissue detection threshold
+    using K-means clustering, and filters to only tissue-containing tiles.
+
+    Args:
+        slide_data: dict from phase 1 mapping slide_name -> {'image': np.array, 'shape': tuple, 'czi_path': Path}
+        tile_size: Size of tiles to extract
+        overlap: Overlap between tiles
+        variance_threshold: Initial variance threshold (will be auto-calibrated)
+        calibration_block_size: Block size for variance calculation
+        calibration_samples: Number of samples per slide for calibration
+        czi_paths: Original list of CZI paths (for calculating calibration sample count)
+
+    Returns:
+        tuple: (tissue_tiles, variance_threshold) where:
+            - tissue_tiles: list of (slide_name, tile_dict) tuples containing tissue
+            - variance_threshold: calibrated variance threshold
+    """
+    import cv2
+    from sklearn.cluster import KMeans
+
+    logger.info(f"\n{'='*70}")
+    logger.info("PHASE 2: IDENTIFYING TISSUE TILES")
+    logger.info(f"{'='*70}")
+
+    all_tiles = []  # List of (slide_name, tile_dict)
+
+    # First pass: create all tiles
+    for slide_name, data in slide_data.items():
+        img = data['image']
+        full_width, full_height = data['shape']
+
+        n_tx = int(np.ceil(full_width / (tile_size - overlap)))
+        n_ty = int(np.ceil(full_height / (tile_size - overlap)))
+
+        slide_tiles = []
+        for ty in range(n_ty):
+            for tx in range(n_tx):
+                tile = {
+                    'id': len(slide_tiles),
+                    'x': tx * (tile_size - overlap),
+                    'y': ty * (tile_size - overlap),
+                    'w': min(tile_size, full_width - tx * (tile_size - overlap)),
+                    'h': min(tile_size, full_height - ty * (tile_size - overlap))
+                }
+                slide_tiles.append(tile)
+
+        logger.info(f"  {slide_name}: {len(slide_tiles)} tiles")
+
+        for tile in slide_tiles:
+            all_tiles.append((slide_name, tile))
+
+    logger.info(f"\nTotal tiles across all slides: {len(all_tiles)}")
+
+    # Calibrate tissue threshold using samples from all slides (PARALLEL)
+    n_calib_samples = min(calibration_samples * len(czi_paths), len(all_tiles))
+    logger.info(f"\nCalibrating tissue threshold from {n_calib_samples} samples...")
+
+    np.random.seed(42)
+    calib_indices = np.random.choice(len(all_tiles), n_calib_samples, replace=False)
+    calib_tiles = [all_tiles[idx] for idx in calib_indices]
+
+    # Use parallel calibration (same as tissue checking)
+    calib_threads = max(1, int(os.cpu_count() * 0.8))
+
+    def calc_tile_variances(args):
+        """Calculate block variances for a single tile. Thread-safe."""
+        slide_name, tile = args
+        img = slide_data[slide_name]['image']
+        tile_img = img[tile['y']:tile['y']+tile['h'], tile['x']:tile['x']+tile['w']]
+
+        if tile_img.max() == 0:
+            return [0.0]
+
+        if tile_img.ndim == 3:
+            tile_norm = percentile_normalize(tile_img, p_low=5, p_high=95)
+            gray = cv2.cvtColor(tile_norm, cv2.COLOR_RGB2GRAY)
+        else:
+            gray = percentile_normalize(tile_img, p_low=5, p_high=95)
+
+        block_vars = calculate_block_variances(gray, calibration_block_size)
+        return block_vars if block_vars else []
+
+    all_variances = []
+    with ThreadPoolExecutor(max_workers=calib_threads) as executor:
+        futures = {executor.submit(calc_tile_variances, tile): tile for tile in calib_tiles}
+        for future in tqdm(as_completed(futures), total=len(calib_tiles), desc="Calibrating"):
+            result = future.result()
+            all_variances.extend(result)
+
+    # K-means clustering for threshold
+    variances = np.array(all_variances)
+    logger.info(f"  Running K-means on {len(variances)} variance samples...")
+    kmeans = KMeans(n_clusters=3, random_state=42, n_init=10).fit(variances.reshape(-1, 1))
+    centers = kmeans.cluster_centers_.flatten()
+    labels = kmeans.labels_
+    sorted_indices = np.argsort(centers)
+    bottom_cluster_idx = sorted_indices[0]
+    bottom_cluster_variances = variances[labels == bottom_cluster_idx]
+    variance_threshold = float(np.max(bottom_cluster_variances)) if len(bottom_cluster_variances) > 0 else 15.0
+
+    logger.info(f"  K-means centers: {sorted(centers)[0]:.1f} (bg), {sorted(centers)[1]:.1f} (tissue), {sorted(centers)[2]:.1f} (outliers)")
+    logger.info(f"  Threshold: {variance_threshold:.1f}")
+
+    # Filter to tissue-containing tiles (PARALLEL)
+    logger.info(f"\nFiltering to tissue-containing tiles...")
+
+    # Use 80% of CPU cores for tissue checking (NumPy/cv2 release GIL)
+    tissue_check_threads = max(1, int(os.cpu_count() * 0.8))
+    logger.info(f"  Using {tissue_check_threads} threads for parallel tissue checking")
+
+    def check_tile_tissue(args):
+        """Check if a single tile contains tissue. Thread-safe."""
+        slide_name, tile = args
+        img = slide_data[slide_name]['image']
+        tile_img = img[tile['y']:tile['y']+tile['h'], tile['x']:tile['x']+tile['w']]
+
+        if tile_img.max() == 0:
+            return None
+
+        tile_norm = percentile_normalize(tile_img, p_low=5, p_high=95)
+        has_tissue_flag, _ = has_tissue(tile_norm, variance_threshold, block_size=calibration_block_size)
+
+        if has_tissue_flag:
+            return (slide_name, tile)
+        return None
+
+    tissue_tiles = []
+    with ThreadPoolExecutor(max_workers=tissue_check_threads) as executor:
+        futures = {executor.submit(check_tile_tissue, tile_args): tile_args for tile_args in all_tiles}
+        for future in tqdm(as_completed(futures), total=len(all_tiles), desc="Checking tissue"):
+            result = future.result()
+            if result is not None:
+                tissue_tiles.append(result)
+
+    logger.info(f"\nTissue tiles: {len(tissue_tiles)} / {len(all_tiles)} ({100*len(tissue_tiles)/len(all_tiles):.1f}%)")
+
+    return tissue_tiles, variance_threshold
+
+
+def _phase3_sample_tiles(tissue_tiles, sample_fraction):
+    """
+    Phase 3: Sample from combined pool of tissue tiles.
+
+    Randomly samples a fraction of tissue-containing tiles for processing.
+    Uses fixed random seed for reproducibility.
+
+    Args:
+        tissue_tiles: list of (slide_name, tile_dict) tuples from phase 2
+        sample_fraction: fraction of tiles to sample (0.0 to 1.0)
+
+    Returns:
+        list: sampled_tiles - list of (slide_name, tile_dict) tuples to process
+    """
+    logger.info(f"\n{'='*70}")
+    logger.info("PHASE 3: SAMPLING FROM COMBINED POOL")
+    logger.info(f"{'='*70}")
+
+    if sample_fraction < 1.0:
+        n_sample = max(1, int(len(tissue_tiles) * sample_fraction))
+        np.random.seed(42)
+        sample_indices = np.random.choice(len(tissue_tiles), n_sample, replace=False)
+        sampled_tiles = [tissue_tiles[i] for i in sample_indices]
+    else:
+        sampled_tiles = tissue_tiles
+
+    # Count per slide
+    slide_counts = {}
+    for slide_name, tile in sampled_tiles:
+        slide_counts[slide_name] = slide_counts.get(slide_name, 0) + 1
+
+    logger.info(f"Sampled {len(sampled_tiles)} tiles ({sample_fraction*100:.0f}% of tissue tiles)")
+    logger.info(f"\nPer-slide distribution:")
+    for slide_name in sorted(slide_counts.keys()):
+        logger.info(f"  {slide_name}: {slide_counts[slide_name]} tiles")
+
+    return sampled_tiles
+
+
+def _phase4_process_tiles(
+    sampled_tiles,
+    slide_data,
+    slide_loaders,
+    output_base,
+    mk_min_area,
+    mk_max_area,
+    variance_threshold,
+    calibration_block_size,
+    num_workers,
+    mk_classifier_path,
+    hspc_classifier_path,
+    cellpose_channels,
+    sequential,
+    html_output_dir=None,
+    samples_per_page=300,
+    mk_min_area_um=200,
+    mk_max_area_um=2000,
+    seg_timestamp=None
+):
+    """
+    Phase 4: Process sampled tiles with ML models.
+
+    Processes tiles using either sequential mode (one at a time with GPU) or
+    multiprocessing mode (parallel workers). Saves masks and features to disk.
+
+    Args:
+        sampled_tiles: list of (slide_name, tile_dict) tuples from phase 3
+        slide_data: dict from phase 1 mapping slide_name -> {'image': np.array, 'shape': tuple, 'czi_path': Path}
+        slide_loaders: dict mapping slide_name -> CZILoader (for pixel size extraction)
+        output_base: Path to output directory
+        mk_min_area: minimum MK area in pixels
+        mk_max_area: maximum MK area in pixels
+        variance_threshold: calibrated variance threshold from phase 2
+        calibration_block_size: block size for variance calculation
+        num_workers: number of parallel workers
+        mk_classifier_path: path to MK classifier model
+        hspc_classifier_path: path to HSPC classifier model
+        cellpose_channels: channels for Cellpose
+        sequential: if True, use sequential mode; if False, use multiprocessing
+        html_output_dir: optional directory for HTML export
+        samples_per_page: samples per HTML page
+        mk_min_area_um: MK min area in um^2 for HTML export
+        mk_max_area_um: MK max area in um^2 for HTML export
+        seg_timestamp: timestamp string for HTML export
+
+    Returns:
+        tuple: (total_mk, total_hspc) counts of detected cells
+    """
+    import shutil
+
+    logger.info(f"\n{'='*70}")
+    logger.info("PHASE 4: PROCESSING SAMPLED TILES")
+    logger.info(f"{'='*70}")
+
+    # Track results per slide
+    slide_results = {name: {'mk_count': 0, 'hspc_count': 0, 'mk_gid': 1, 'hspc_gid': 1}
+                     for name in slide_data.keys()}
+
+    # Helper function to save tile results (shared by both modes)
+    def save_tile_result(result, slide_results):
+        """Save masks and features for a successful tile result."""
+        if result['status'] != 'success':
+            if result['status'] == 'error':
+                logger.error(f"Tile error: {result.get('error', 'unknown')}")
+            return
+
+        slide_name = result['slide_name']
+        tile = result['tile']
+        tid = result['tid']
+        output_dir = output_base / slide_name
+        output_dir.mkdir(parents=True, exist_ok=True)
+
+        sr = slide_results[slide_name]
+
+        if result['mk_feats']:
+            mk_dir = output_dir / "mk" / "tiles"
+            mk_tile_dir = mk_dir / str(tid)
+            mk_tile_dir.mkdir(parents=True, exist_ok=True)
+
+            with open(mk_tile_dir / "window.csv", 'w') as f:
+                f.write(f"(slice({tile['y']}, {tile['y']+tile['h']}, None), slice({tile['x']}, {tile['x']+tile['w']}, None))")
+
+            new_mk = np.zeros_like(result['mk_masks'])
+            mk_tile_cells = []
+            for feat in result['mk_feats']:
+                old_id = int(feat['id'].split('_')[1])
+                new_mk[result['mk_masks'] == old_id] = sr['mk_gid']
+                feat['id'] = f'det_{sr["mk_gid"] - 1}'
+                feat['global_id'] = sr['mk_gid']
+                feat['center'][0] += tile['x']
+                feat['center'][1] += tile['y']
+                mk_tile_cells.append(sr['mk_gid'])
+                sr['mk_count'] += 1
+                sr['mk_gid'] += 1
+
+            with open(mk_tile_dir / "classes.csv", 'w') as f:
+                for c in mk_tile_cells: f.write(f"{c}\n")
+            with h5py.File(mk_tile_dir / "segmentation.h5", 'w') as f:
+                create_hdf5_dataset(f, 'labels', new_mk[np.newaxis])
+            with open(mk_tile_dir / "features.json", 'w') as f:
+                json.dump([{'id': m['id'], 'global_id': m['global_id'], 'center': m['center'], 'features': m['features']} for m in result['mk_feats']], f)
+
+            del new_mk, mk_tile_cells
+
+        if result['hspc_feats']:
+            hspc_dir = output_dir / "hspc" / "tiles"
+            hspc_tile_dir = hspc_dir / str(tid)
+            hspc_tile_dir.mkdir(parents=True, exist_ok=True)
+
+            with open(hspc_tile_dir / "window.csv", 'w') as f:
+                f.write(f"(slice({tile['y']}, {tile['y']+tile['h']}, None), slice({tile['x']}, {tile['x']+tile['w']}, None))")
+
+            new_hspc = np.zeros_like(result['hspc_masks'])
+            hspc_tile_cells = []
+            for feat in result['hspc_feats']:
+                old_id = int(feat['id'].split('_')[1])
+                new_hspc[result['hspc_masks'] == old_id] = sr['hspc_gid']
+                feat['id'] = f'det_{sr["hspc_gid"] - 1}'
+                feat['global_id'] = sr['hspc_gid']
+                feat['center'][0] += tile['x']
+                feat['center'][1] += tile['y']
+                hspc_tile_cells.append(sr['hspc_gid'])
+                sr['hspc_count'] += 1
+                sr['hspc_gid'] += 1
+
+            with open(hspc_tile_dir / "classes.csv", 'w') as f:
+                for c in hspc_tile_cells: f.write(f"{c}\n")
+            with h5py.File(hspc_tile_dir / "segmentation.h5", 'w') as f:
+                create_hdf5_dataset(f, 'labels', new_hspc[np.newaxis])
+            with open(hspc_tile_dir / "features.json", 'w') as f:
+                json.dump([{'id': h['id'], 'global_id': h['global_id'], 'center': h['center'], 'features': h['features']} for h in result['hspc_feats']], f)
+
+            del new_hspc, hspc_tile_cells
+
+    if sequential:
+        # =====================================================================
+        # SEQUENTIAL MODE: Load models once, process tiles one at a time
+        # Pre-loads tiles from RAM while GPU processes current tile
+        # =====================================================================
+        logger.info("SEQUENTIAL MODE: Loading models once, processing tiles one at a time")
+        logger.info("  (No multiprocessing - safer for GPU, avoids fork/spawn issues)")
+        logger.info("  (Pre-loading tiles from RAM while GPU works)")
+
+        # Load models once in main process
+        segmenter = UnifiedSegmenter(
+            mk_classifier_path=mk_classifier_path,
+            hspc_classifier_path=hspc_classifier_path,
+            cellpose_channels=cellpose_channels,
+            device="cuda" if torch.cuda.is_available() else "cpu"
+        )
+        logger.info(f"Models loaded on {segmenter.device}")
+
+        def prepare_tile(slide_name, tile):
+            """Pre-load and prepare tile from RAM (CPU work)."""
+            img = slide_data[slide_name]['image']
+            tile_img = img[tile['y']:tile['y']+tile['h'],
+                           tile['x']:tile['x']+tile['w']].copy()
+
+            # Convert to RGB
+            if tile_img.ndim == 2:
+                img_rgb = np.stack([tile_img]*3, axis=-1)
+            elif tile_img.shape[2] == 4:
+                img_rgb = tile_img[:, :, :3]
+            else:
+                img_rgb = tile_img
+
+            if img_rgb.max() == 0:
+                return None  # Empty tile
+
+            # Normalize (CPU work)
+            img_rgb = percentile_normalize(img_rgb, p_low=5, p_high=95)
+            return img_rgb
+
+        # Use a single background thread to pre-load next tile while GPU works
+        prefetch_executor = ThreadPoolExecutor(max_workers=1)
+
+        try:
+            # Process tiles one at a time, with prefetching
+            with tqdm(total=len(sampled_tiles), desc="Processing tiles (sequential)") as pbar:
+                # Pre-fetch first tile
+                next_future = None
+                if len(sampled_tiles) > 0:
+                    slide_name, tile = sampled_tiles[0]
+                    next_future = prefetch_executor.submit(prepare_tile, slide_name, tile)
+
+                for tile_idx, (slide_name, tile) in enumerate(sampled_tiles):
+                    tid = tile['id']
+
+                    # Get pre-loaded tile (wait for prefetch to complete)
+                    if next_future is not None:
+                        img_rgb = next_future.result()
+                    else:
+                        img_rgb = prepare_tile(slide_name, tile)
+
+                    # Start prefetching next tile while we process this one
+                    if tile_idx + 1 < len(sampled_tiles):
+                        next_slide, next_tile = sampled_tiles[tile_idx + 1]
+                        next_future = prefetch_executor.submit(prepare_tile, next_slide, next_tile)
+                    else:
+                        next_future = None
+
+                    # Skip empty tiles
+                    if img_rgb is None:
+                        pbar.update(1)
+                        continue
+
+                    try:
+                        # Process tile on GPU (one at a time)
+                        mk_masks, hspc_masks, mk_feats, hspc_feats = segmenter.process_tile(
+                            img_rgb, mk_min_area, mk_max_area
+                        )
+
+                        result = {
+                            'tid': tid, 'status': 'success',
+                            'mk_masks': mk_masks, 'hspc_masks': hspc_masks,
+                            'mk_feats': mk_feats, 'hspc_feats': hspc_feats,
+                            'tile': tile, 'slide_name': slide_name
+                        }
+
+                    except Exception as e:
+                        result = {'tid': tid, 'status': 'error', 'error': str(e), 'slide_name': slide_name}
+                        logger.error(f"Tile {tid} error: {e}")
+                        # Clear GPU on error to prevent accumulation
+                        torch.cuda.empty_cache()
+
+                    # Save results
+                    save_tile_result(result, slide_results)
+
+                    # Cleanup tile data
+                    del img_rgb
+                    if 'mk_masks' in result:
+                        del result['mk_masks']
+                    if 'hspc_masks' in result:
+                        del result['hspc_masks']
+                    del result
+
+                    # GC every 10 tiles (more aggressive for long runs)
+                    if tile_idx % 10 == 0:
+                        gc.collect()
+                        torch.cuda.empty_cache()
+
+                    pbar.update(1)
+
+        finally:
+            # Always cleanup, even on exception
+            prefetch_executor.shutdown(wait=True)
+            del segmenter
+            gc.collect()
+            torch.cuda.empty_cache()
+            logger.info("Sequential mode cleanup complete")
+
+    else:
+        # =====================================================================
+        # MULTIPROCESSING MODE: Original behavior with mp.Pool
+        # =====================================================================
+        # Setup worker pool
+        manager = mp.Manager()
+        gpu_queue = manager.Queue()
+        if torch.cuda.is_available():
+            n_gpus = torch.cuda.device_count()
+            if n_gpus > 0:
+                for i in range(num_workers):
+                    gpu_queue.put(i % n_gpus)
+
+        # Dummy memmap for init
+        temp_init_dir = output_base / "temp_init"
+        temp_init_dir.mkdir(parents=True, exist_ok=True)
+        dummy_mm_path = temp_init_dir / "dummy.dat"
+        dummy_arr = np.memmap(dummy_mm_path, dtype=np.uint8, mode='w+', shape=(100, 100, 3))
+        dummy_arr.flush()
+        del dummy_arr
+
+        init_args = (mk_classifier_path, hspc_classifier_path, cellpose_channels, gpu_queue,
+                     str(dummy_mm_path), (100, 100, 3), np.uint8)
+
+        try:
+            with mp.Pool(processes=num_workers, initializer=init_worker, initargs=init_args) as pool:
+                logger.info(f"Worker pool ready with {num_workers} workers")
+
+                def tile_generator():
+                    for slide_name, tile in sampled_tiles:
+                        img = slide_data[slide_name]['image']
+                        tile_img = img[tile['y']:tile['y']+tile['h'],
+                                       tile['x']:tile['x']+tile['w']].copy()
+                        output_dir = output_base / slide_name
+                        yield (tile, tile_img, output_dir, mk_min_area, mk_max_area,
+                               variance_threshold, calibration_block_size, slide_name)
+
+                with tqdm(total=len(sampled_tiles), desc="Processing tiles") as pbar:
+                    for result in pool.imap_unordered(process_tile_worker_with_data_and_slide, tile_generator()):
+                        pbar.update(1)
+                        save_tile_result(result, slide_results)
+
+                        # Cleanup
+                        for key in ['mk_masks', 'hspc_masks', 'mk_feats', 'hspc_feats']:
+                            if key in result:
+                                del result[key]
+                        del result
+                        # Run GC every 50 tiles for performance
+                        if pbar.n % 50 == 0:
+                            gc.collect()
+
+        finally:
+            # Cleanup
+            if temp_init_dir.exists():
+                try:
+                    shutil.rmtree(temp_init_dir)
+                except Exception as e:
+                    logger.debug(f"Failed to cleanup temp init dir: {e}")
+
+    # Save summaries
+    total_mk = 0
+    total_hspc = 0
+
+    for slide_name, data in slide_data.items():
+        sr = slide_results[slide_name]
+        output_dir = output_base / slide_name
+
+        if sr['mk_count'] > 0 or sr['hspc_count'] > 0:
+            output_dir.mkdir(parents=True, exist_ok=True)
+
+            # Get pixel size from loader if available
+            pixel_size_um = None
+            if slide_name in slide_loaders:
+                try:
+                    pixel_size_um = slide_loaders[slide_name].get_pixel_size()
+                except Exception as e:
+                    logger.debug(f"Failed to get pixel size from loader: {e}")
+            if pixel_size_um is None:
+                try:
+                    pixel_size_um = get_pixel_size_from_czi(data['czi_path'])
+                except Exception as e:
+                    logger.debug(f"Failed to get pixel size from CZI: {e}")
+                    pixel_size_um = None
+
+            summary = {
+                'czi_path': str(data['czi_path']),
+                'pixel_size_um': pixel_size_um,
+                'mk_count': sr['mk_count'],
+                'hspc_count': sr['hspc_count'],
+                'feature_count': '22 morphological + 256 SAM2 + 2048 ResNet = 2326'
+            }
+            with open(output_dir / "summary.json", 'w') as f:
+                json.dump(summary, f, indent=2)
+
+        total_mk += sr['mk_count']
+        total_hspc += sr['hspc_count']
+        logger.info(f"  {slide_name}: {sr['mk_count']} MKs, {sr['hspc_count']} HSPCs")
+
+    # Export HTML while slide data is still in RAM
+    if html_output_dir:
+        export_html_from_ram(
+            slide_data=slide_data,
+            output_base=output_base,
+            html_output_dir=html_output_dir,
+            samples_per_page=samples_per_page,
+            mk_min_area_um=mk_min_area_um,
+            mk_max_area_um=mk_max_area_um,
+            timestamp=seg_timestamp
+        )
+
+    return total_mk, total_hspc
+
+
+def run_multi_slide_segmentation(
+    czi_paths,
+    output_base,
+    mk_min_area=1000,
+    mk_max_area=100000,
+    tile_size=3000,
+    overlap=512,
+    sample_fraction=1.0,
+    calibration_block_size=512,
+    calibration_samples=50,
+    num_workers=4,
+    mk_classifier_path=None,
+    hspc_classifier_path=None,
+    cellpose_channels=None,
+    html_output_dir=None,
+    samples_per_page=300,
+    mk_min_area_um=200,
+    mk_max_area_um=2000,
+    channel=0,
+    sequential=False
+):
+    """
+    Process multiple slides with UNIFIED SAMPLING using RAM-first architecture.
+
+    - Loads ALL slides into RAM using CZILoader
+    - Each slide's channel is loaded ONCE, then all tile processing references that RAM
+    - Identifies tissue-containing tiles across ALL slides
+    - Samples from the combined pool (truly representative)
+    - Processes sampled tiles with models loaded ONCE
+    """
+    import shutil
+    import cv2
+
+    # Set start method to 'spawn' for GPU safety
+    if num_workers > 0:
+        mp.set_start_method('spawn', force=True)
+
+    output_base = Path(output_base)
+    output_base.mkdir(parents=True, exist_ok=True)
+
+    # Capture segmentation start time for HTML export
+    from datetime import datetime
+    seg_timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+
+    logger.info(f"\n{'='*70}")
+    logger.info(f"UNIFIED SAMPLING SEGMENTATION: {len(czi_paths)} slides (RAM-FIRST)")
+    logger.info(f"{'='*70}")
+    logger.info(f"Step 1: Load ALL slides into RAM using CZILoader")
+    logger.info(f"Step 2: Identify tissue tiles across all slides")
+    logger.info(f"Step 3: Sample {sample_fraction*100:.0f}% from combined pool")
+    logger.info(f"Step 4: Process with models loaded ONCE")
+    logger.info(f"{'='*70}")
+
+    # =========================================================================
+    # PHASE 1: Load all slides into RAM using CZILoader
+    # =========================================================================
+    logger.info(f"\n{'='*70}")
+    logger.info("PHASE 1: LOADING ALL SLIDES INTO RAM (CZILoader)")
+    logger.info(f"{'='*70}")
+
+    slide_data = {}  # slide_name -> {'image': np.array, 'shape': tuple, 'czi_path': Path, 'loader': CZILoader}
+    slide_loaders = {}  # Keep loaders alive to maintain RAM data
+    total_size_gb = 0
+
+    for slide_idx, czi_path in enumerate(czi_paths):
+        czi_path = Path(czi_path)
+        slide_name = czi_path.stem
+
+        logger.info(f"\n[{slide_idx+1}/{len(czi_paths)}] Loading {slide_name} (channel {channel})...")
+
+        try:
+            # Use get_loader with load_to_ram=True for RAM-first architecture (global cache)
+            loader = get_loader(czi_path, load_to_ram=True, channel=channel)
+
+            full_width, full_height = loader.mosaic_size
+            size_gb = loader.channel_data.nbytes / (1024**3)
+            total_size_gb += size_gb
+
+            # Store loader and reference to its channel_data
+            slide_loaders[slide_name] = loader
+            slide_data[slide_name] = {
+                'image': loader.channel_data,  # Direct reference to RAM array
+                'shape': (full_width, full_height),
+                'czi_path': czi_path
+            }
+
+            logger.info(f"  Loaded: {full_width} x {full_height} ({size_gb:.2f} GB)")
+
+            # Force cleanup between loads to prevent memory fragmentation
+            gc.collect()
+
+        except Exception as e:
+            logger.error(f"Loading {slide_name}: {e}")
+            continue
+
+    logger.info(f"\nTotal RAM used: {total_size_gb:.2f} GB")
+
+    # Check available RAM
+    mem = psutil.virtual_memory()
+    logger.info(f"System RAM: {mem.total/(1024**3):.1f} GB total, {mem.available/(1024**3):.1f} GB available")
+
+    # =========================================================================
+    # PHASE 2: Create tiles and identify tissue
+    # =========================================================================
+    logger.info(f"\n{'='*70}")
+    logger.info("PHASE 2: IDENTIFYING TISSUE TILES")
+    logger.info(f"{'='*70}")
+
+    all_tiles = []  # List of (slide_name, tile_dict, has_tissue)
+
+    # First pass: create all tiles
+    for slide_name, data in slide_data.items():
+        img = data['image']
+        full_width, full_height = data['shape']
+
+        n_tx = int(np.ceil(full_width / (tile_size - overlap)))
+        n_ty = int(np.ceil(full_height / (tile_size - overlap)))
+
+        slide_tiles = []
+        for ty in range(n_ty):
+            for tx in range(n_tx):
+                tile = {
+                    'id': len(slide_tiles),
+                    'x': tx * (tile_size - overlap),
+                    'y': ty * (tile_size - overlap),
+                    'w': min(tile_size, full_width - tx * (tile_size - overlap)),
+                    'h': min(tile_size, full_height - ty * (tile_size - overlap))
+                }
+                slide_tiles.append(tile)
+
+        logger.info(f"  {slide_name}: {len(slide_tiles)} tiles")
+
+        for tile in slide_tiles:
+            all_tiles.append((slide_name, tile))
+
+    logger.info(f"\nTotal tiles across all slides: {len(all_tiles)}")
+
+    # Calibrate tissue threshold using samples from all slides (PARALLEL)
+    n_calib_samples = min(calibration_samples * len(czi_paths), len(all_tiles))
+    logger.info(f"\nCalibrating tissue threshold from {n_calib_samples} samples...")
+
+    np.random.seed(42)
+    calib_indices = np.random.choice(len(all_tiles), n_calib_samples, replace=False)
+    calib_tiles = [all_tiles[idx] for idx in calib_indices]
+
+    # Use parallel calibration (same as tissue checking)
+    calib_threads = max(1, int(os.cpu_count() * 0.8))
+
+    def calc_tile_variances(args):
+        """Calculate block variances for a single tile. Thread-safe."""
+        slide_name, tile = args
+        img = slide_data[slide_name]['image']
+        tile_img = img[tile['y']:tile['y']+tile['h'], tile['x']:tile['x']+tile['w']]
+
+        if tile_img.max() == 0:
+            return [0.0]
+
+        if tile_img.ndim == 3:
+            tile_norm = percentile_normalize(tile_img, p_low=5, p_high=95)
+            gray = cv2.cvtColor(tile_norm, cv2.COLOR_RGB2GRAY)
+        else:
+            gray = percentile_normalize(tile_img, p_low=5, p_high=95)
+
+        block_vars = calculate_block_variances(gray, calibration_block_size)
+        return block_vars if block_vars else []
+
+    all_variances = []
+    with ThreadPoolExecutor(max_workers=calib_threads) as executor:
+        futures = {executor.submit(calc_tile_variances, tile): tile for tile in calib_tiles}
+        for future in tqdm(as_completed(futures), total=len(calib_tiles), desc="Calibrating"):
+            result = future.result()
+            all_variances.extend(result)
+
+    # K-means clustering for threshold
+    from sklearn.cluster import KMeans
+    variances = np.array(all_variances)
+    logger.info(f"  Running K-means on {len(variances)} variance samples...")
+    kmeans = KMeans(n_clusters=3, random_state=42, n_init=10).fit(variances.reshape(-1, 1))
+    centers = kmeans.cluster_centers_.flatten()
+    labels = kmeans.labels_
+    sorted_indices = np.argsort(centers)
+    bottom_cluster_idx = sorted_indices[0]
+    bottom_cluster_variances = variances[labels == bottom_cluster_idx]
+    variance_threshold = float(np.max(bottom_cluster_variances)) if len(bottom_cluster_variances) > 0 else 15.0
+
+    logger.info(f"  K-means centers: {sorted(centers)[0]:.1f} (bg), {sorted(centers)[1]:.1f} (tissue), {sorted(centers)[2]:.1f} (outliers)")
+    logger.info(f"  Threshold: {variance_threshold:.1f}")
+
+    # Filter to tissue-containing tiles (PARALLEL)
+    logger.info(f"\nFiltering to tissue-containing tiles...")
+
+    # Use 80% of CPU cores for tissue checking (NumPy/cv2 release GIL)
+    tissue_check_threads = max(1, int(os.cpu_count() * 0.8))
+    logger.info(f"  Using {tissue_check_threads} threads for parallel tissue checking")
+
+    def check_tile_tissue(args):
+        """Check if a single tile contains tissue. Thread-safe."""
+        slide_name, tile = args
+        img = slide_data[slide_name]['image']
+        tile_img = img[tile['y']:tile['y']+tile['h'], tile['x']:tile['x']+tile['w']]
+
+        if tile_img.max() == 0:
+            return None
+
+        tile_norm = percentile_normalize(tile_img, p_low=5, p_high=95)
+        has_tissue_flag, _ = has_tissue(tile_norm, variance_threshold, block_size=calibration_block_size)
+
+        if has_tissue_flag:
+            return (slide_name, tile)
+        return None
+
+    tissue_tiles = []
+    with ThreadPoolExecutor(max_workers=tissue_check_threads) as executor:
+        futures = {executor.submit(check_tile_tissue, tile_args): tile_args for tile_args in all_tiles}
+        for future in tqdm(as_completed(futures), total=len(all_tiles), desc="Checking tissue"):
+            result = future.result()
+            if result is not None:
+                tissue_tiles.append(result)
+
+    logger.info(f"\nTissue tiles: {len(tissue_tiles)} / {len(all_tiles)} ({100*len(tissue_tiles)/len(all_tiles):.1f}%)")
+
+    # =========================================================================
+    # PHASE 3: Sample from combined pool
+    # =========================================================================
+    logger.info(f"\n{'='*70}")
+    logger.info("PHASE 3: SAMPLING FROM COMBINED POOL")
+    logger.info(f"{'='*70}")
+
+    if sample_fraction < 1.0:
+        n_sample = max(1, int(len(tissue_tiles) * sample_fraction))
+        np.random.seed(42)
+        sample_indices = np.random.choice(len(tissue_tiles), n_sample, replace=False)
+        sampled_tiles = [tissue_tiles[i] for i in sample_indices]
+    else:
+        sampled_tiles = tissue_tiles
+
+    # Count per slide
+    slide_counts = {}
+    for slide_name, tile in sampled_tiles:
+        slide_counts[slide_name] = slide_counts.get(slide_name, 0) + 1
+
+    logger.info(f"Sampled {len(sampled_tiles)} tiles ({sample_fraction*100:.0f}% of tissue tiles)")
+    logger.info(f"\nPer-slide distribution:")
+    for slide_name in sorted(slide_counts.keys()):
+        logger.info(f"  {slide_name}: {slide_counts[slide_name]} tiles")
+
+    # =========================================================================
+    # PHASE 4: Process sampled tiles
+    # =========================================================================
+    logger.info(f"\n{'='*70}")
+    logger.info("PHASE 4: PROCESSING SAMPLED TILES")
+    logger.info(f"{'='*70}")
+
+    # Track results per slide
+    slide_results = {name: {'mk_count': 0, 'hspc_count': 0, 'mk_gid': 1, 'hspc_gid': 1}
+                     for name in slide_data.keys()}
+
+    # Helper function to save tile results (shared by both modes)
+    def save_tile_result(result, slide_results):
+        """Save masks and features for a successful tile result."""
+        if result['status'] != 'success':
+            if result['status'] == 'error':
+                logger.error(f"Tile error: {result.get('error', 'unknown')}")
+            return
+
+        slide_name = result['slide_name']
+        tile = result['tile']
+        tid = result['tid']
+        output_dir = output_base / slide_name
+        output_dir.mkdir(parents=True, exist_ok=True)
+
+        sr = slide_results[slide_name]
+
+        if result['mk_feats']:
+            mk_dir = output_dir / "mk" / "tiles"
+            mk_tile_dir = mk_dir / str(tid)
+            mk_tile_dir.mkdir(parents=True, exist_ok=True)
+
+            with open(mk_tile_dir / "window.csv", 'w') as f:
+                f.write(f"(slice({tile['y']}, {tile['y']+tile['h']}, None), slice({tile['x']}, {tile['x']+tile['w']}, None))")
+
+            new_mk = np.zeros_like(result['mk_masks'])
+            mk_tile_cells = []
+            for feat in result['mk_feats']:
+                old_id = int(feat['id'].split('_')[1])
+                new_mk[result['mk_masks'] == old_id] = sr['mk_gid']
+                feat['id'] = f'det_{sr["mk_gid"] - 1}'
+                feat['global_id'] = sr['mk_gid']
+                feat['center'][0] += tile['x']
+                feat['center'][1] += tile['y']
+                mk_tile_cells.append(sr['mk_gid'])
+                sr['mk_count'] += 1
+                sr['mk_gid'] += 1
+
+            with open(mk_tile_dir / "classes.csv", 'w') as f:
+                for c in mk_tile_cells: f.write(f"{c}\n")
+            with h5py.File(mk_tile_dir / "segmentation.h5", 'w') as f:
+                create_hdf5_dataset(f, 'labels', new_mk[np.newaxis])
+            with open(mk_tile_dir / "features.json", 'w') as f:
+                json.dump([{'id': m['id'], 'global_id': m['global_id'], 'center': m['center'], 'features': m['features']} for m in result['mk_feats']], f)
+
+            del new_mk, mk_tile_cells
+
+        if result['hspc_feats']:
+            hspc_dir = output_dir / "hspc" / "tiles"
+            hspc_tile_dir = hspc_dir / str(tid)
+            hspc_tile_dir.mkdir(parents=True, exist_ok=True)
+
+            with open(hspc_tile_dir / "window.csv", 'w') as f:
+                f.write(f"(slice({tile['y']}, {tile['y']+tile['h']}, None), slice({tile['x']}, {tile['x']+tile['w']}, None))")
+
+            new_hspc = np.zeros_like(result['hspc_masks'])
+            hspc_tile_cells = []
+            for feat in result['hspc_feats']:
+                old_id = int(feat['id'].split('_')[1])
+                new_hspc[result['hspc_masks'] == old_id] = sr['hspc_gid']
+                feat['id'] = f'det_{sr["hspc_gid"] - 1}'
+                feat['global_id'] = sr['hspc_gid']
+                feat['center'][0] += tile['x']
+                feat['center'][1] += tile['y']
+                hspc_tile_cells.append(sr['hspc_gid'])
+                sr['hspc_count'] += 1
+                sr['hspc_gid'] += 1
+
+            with open(hspc_tile_dir / "classes.csv", 'w') as f:
+                for c in hspc_tile_cells: f.write(f"{c}\n")
+            with h5py.File(hspc_tile_dir / "segmentation.h5", 'w') as f:
+                create_hdf5_dataset(f, 'labels', new_hspc[np.newaxis])
+            with open(hspc_tile_dir / "features.json", 'w') as f:
+                json.dump([{'id': h['id'], 'global_id': h['global_id'], 'center': h['center'], 'features': h['features']} for h in result['hspc_feats']], f)
+
+            del new_hspc, hspc_tile_cells
+
+    if sequential:
+        # =====================================================================
+        # SEQUENTIAL MODE: Load models once, process tiles one at a time
+        # Pre-loads tiles from RAM while GPU processes current tile
+        # =====================================================================
+        logger.info("SEQUENTIAL MODE: Loading models once, processing tiles one at a time")
+        logger.info("  (No multiprocessing - safer for GPU, avoids fork/spawn issues)")
+        logger.info("  (Pre-loading tiles from RAM while GPU works)")
+
+        # Load models once in main process
+        segmenter = UnifiedSegmenter(
+            mk_classifier_path=mk_classifier_path,
+            hspc_classifier_path=hspc_classifier_path,
+            cellpose_channels=cellpose_channels,
+            device="cuda" if torch.cuda.is_available() else "cpu"
+        )
+        logger.info(f"Models loaded on {segmenter.device}")
+
+        def prepare_tile(slide_name, tile):
+            """Pre-load and prepare tile from RAM (CPU work)."""
+            img = slide_data[slide_name]['image']
+            tile_img = img[tile['y']:tile['y']+tile['h'],
+                           tile['x']:tile['x']+tile['w']].copy()
+
+            # Convert to RGB
+            if tile_img.ndim == 2:
+                img_rgb = np.stack([tile_img]*3, axis=-1)
+            elif tile_img.shape[2] == 4:
+                img_rgb = tile_img[:, :, :3]
+            else:
+                img_rgb = tile_img
+
+            if img_rgb.max() == 0:
+                return None  # Empty tile
+
+            # Normalize (CPU work)
+            img_rgb = percentile_normalize(img_rgb, p_low=5, p_high=95)
+            return img_rgb
+
+        # Use a single background thread to pre-load next tile while GPU works
+        # Note: ThreadPoolExecutor is imported at module level (line 67)
+        prefetch_executor = ThreadPoolExecutor(max_workers=1)
+
+        try:
+            # Process tiles one at a time, with prefetching
+            with tqdm(total=len(sampled_tiles), desc="Processing tiles (sequential)") as pbar:
+                # Pre-fetch first tile
+                next_future = None
+                if len(sampled_tiles) > 0:
+                    slide_name, tile = sampled_tiles[0]
+                    next_future = prefetch_executor.submit(prepare_tile, slide_name, tile)
+
+                for tile_idx, (slide_name, tile) in enumerate(sampled_tiles):
+                    tid = tile['id']
+
+                    # Get pre-loaded tile (wait for prefetch to complete)
+                    if next_future is not None:
+                        img_rgb = next_future.result()
+                    else:
+                        img_rgb = prepare_tile(slide_name, tile)
+
+                    # Start prefetching next tile while we process this one
+                    if tile_idx + 1 < len(sampled_tiles):
+                        next_slide, next_tile = sampled_tiles[tile_idx + 1]
+                        next_future = prefetch_executor.submit(prepare_tile, next_slide, next_tile)
+                    else:
+                        next_future = None
+
+                    # Skip empty tiles
+                    if img_rgb is None:
+                        pbar.update(1)
+                        continue
+
+                    try:
+                        # Process tile on GPU (one at a time)
+                        mk_masks, hspc_masks, mk_feats, hspc_feats = segmenter.process_tile(
+                            img_rgb, mk_min_area, mk_max_area
+                        )
+
+                        result = {
+                            'tid': tid, 'status': 'success',
+                            'mk_masks': mk_masks, 'hspc_masks': hspc_masks,
+                            'mk_feats': mk_feats, 'hspc_feats': hspc_feats,
+                            'tile': tile, 'slide_name': slide_name
+                        }
+
+                    except Exception as e:
+                        result = {'tid': tid, 'status': 'error', 'error': str(e), 'slide_name': slide_name}
+                        logger.error(f"Tile {tid} error: {e}")
+                        # Clear GPU on error to prevent accumulation
+                        torch.cuda.empty_cache()
+
+                    # Save results
+                    save_tile_result(result, slide_results)
+
+                    # Cleanup tile data
+                    del img_rgb
+                    if 'mk_masks' in result:
+                        del result['mk_masks']
+                    if 'hspc_masks' in result:
+                        del result['hspc_masks']
+                    del result
+
+                    # GC every 10 tiles (more aggressive for long runs)
+                    if tile_idx % 10 == 0:
+                        gc.collect()
+                        torch.cuda.empty_cache()
+
+                    pbar.update(1)
+
+        finally:
+            # Always cleanup, even on exception
+            prefetch_executor.shutdown(wait=True)
+            del segmenter
+            gc.collect()
+            torch.cuda.empty_cache()
+            logger.info("Sequential mode cleanup complete")
+
+    else:
+        # =====================================================================
+        # MULTIPROCESSING MODE: Original behavior with mp.Pool
+        # =====================================================================
+        # Setup worker pool
+        manager = mp.Manager()
+        gpu_queue = manager.Queue()
+        if torch.cuda.is_available():
+            n_gpus = torch.cuda.device_count()
+            if n_gpus > 0:
+                for i in range(num_workers):
+                    gpu_queue.put(i % n_gpus)
+
+        # Dummy memmap for init
+        temp_init_dir = output_base / "temp_init"
+        temp_init_dir.mkdir(parents=True, exist_ok=True)
+        dummy_mm_path = temp_init_dir / "dummy.dat"
+        dummy_arr = np.memmap(dummy_mm_path, dtype=np.uint8, mode='w+', shape=(100, 100, 3))
+        dummy_arr.flush()
+        del dummy_arr
+
+        init_args = (mk_classifier_path, hspc_classifier_path, cellpose_channels, gpu_queue,
+                     str(dummy_mm_path), (100, 100, 3), np.uint8)
+
+        try:
+            with mp.Pool(processes=num_workers, initializer=init_worker, initargs=init_args) as pool:
+                logger.info(f"Worker pool ready with {num_workers} workers")
+
+                def tile_generator():
+                    for slide_name, tile in sampled_tiles:
+                        img = slide_data[slide_name]['image']
+                        tile_img = img[tile['y']:tile['y']+tile['h'],
+                                       tile['x']:tile['x']+tile['w']].copy()
+                        output_dir = output_base / slide_name
+                        yield (tile, tile_img, output_dir, mk_min_area, mk_max_area,
+                               variance_threshold, calibration_block_size, slide_name)
+
+                with tqdm(total=len(sampled_tiles), desc="Processing tiles") as pbar:
+                    for result in pool.imap_unordered(process_tile_worker_with_data_and_slide, tile_generator()):
+                        pbar.update(1)
+                        save_tile_result(result, slide_results)
+
+                        # Cleanup
+                        for key in ['mk_masks', 'hspc_masks', 'mk_feats', 'hspc_feats']:
+                            if key in result:
+                                del result[key]
+                        del result
+                        # Run GC every 50 tiles for performance
+                        if pbar.n % 50 == 0:
+                            gc.collect()
+
+        finally:
+            # Cleanup
+            if temp_init_dir.exists():
+                try:
+                    shutil.rmtree(temp_init_dir)
+                except Exception as e:
+                    logger.debug(f"Failed to cleanup temp init dir: {e}")
+
+    # Save summaries
+    total_mk = 0
+    total_hspc = 0
+
+    for slide_name, data in slide_data.items():
+        sr = slide_results[slide_name]
+        output_dir = output_base / slide_name
+
+        if sr['mk_count'] > 0 or sr['hspc_count'] > 0:
+            output_dir.mkdir(parents=True, exist_ok=True)
+
+            # Get pixel size from loader if available
+            pixel_size_um = None
+            if slide_name in slide_loaders:
+                try:
+                    pixel_size_um = slide_loaders[slide_name].get_pixel_size()
+                except Exception as e:
+                    logger.debug(f"Failed to get pixel size from loader: {e}")
+            if pixel_size_um is None:
+                try:
+                    pixel_size_um = get_pixel_size_from_czi(data['czi_path'])
+                except Exception as e:
+                    logger.debug(f"Failed to get pixel size from CZI: {e}")
+                    pixel_size_um = None
+
+            summary = {
+                'czi_path': str(data['czi_path']),
+                'pixel_size_um': pixel_size_um,
+                'mk_count': sr['mk_count'],
+                'hspc_count': sr['hspc_count'],
+                'feature_count': '22 morphological + 256 SAM2 + 2048 ResNet = 2326'
+            }
+            with open(output_dir / "summary.json", 'w') as f:
+                json.dump(summary, f, indent=2)
+
+        total_mk += sr['mk_count']
+        total_hspc += sr['hspc_count']
+        logger.info(f"  {slide_name}: {sr['mk_count']} MKs, {sr['hspc_count']} HSPCs")
+
+    # Export HTML while slide data is still in RAM
+    if html_output_dir:
+        export_html_from_ram(
+            slide_data=slide_data,
+            output_base=output_base,
+            html_output_dir=html_output_dir,
+            samples_per_page=samples_per_page,
+            mk_min_area_um=mk_min_area_um,
+            mk_max_area_um=mk_max_area_um,
+            timestamp=seg_timestamp
+        )
+
+    # Clear slide data and loaders from RAM
+    del slide_data
+    for loader in slide_loaders.values():
+        loader.close()
+    del slide_loaders
+    gc.collect()
+
+    logger.info(f"\n{'='*70}")
+    logger.info("ALL SLIDES COMPLETE")
+    logger.info(f"{'='*70}")
+    logger.info(f"Total MKs: {total_mk}")
+    logger.info(f"Total HSPCs: {total_hspc}")
+    logger.info(f"Output: {output_base}")
+
+
+def process_tile_worker_with_data_and_slide(args):
+    """
+    Worker function for unified sampling mode - includes slide_name in result.
+    """
+    tile, img_data, output_dir, mk_min_area, mk_max_area, variance_threshold, calibration_block_size, slide_name = args
+
+    global segmenter
+    tid = tile['id']
+
+    if segmenter is None:
+        return build_mk_hspc_result(tid, 'error', error="Segmenter not initialized", slide_name=slide_name)
+
+    # Convert to RGB using shared utility
+    img_rgb = ensure_rgb_array(img_data)
+
+    # Check tile validity (skip tissue validation for this function)
+    is_valid, status = check_tile_validity(img_rgb, tid)
+    if not is_valid:
+        return build_mk_hspc_result(tid, status, slide_name=slide_name)
+
+    # Normalize for detection
+    img_rgb = prepare_tile_for_detection(img_rgb, normalize=True, p_low=5, p_high=95)
+
+    try:
+        mk_masks, hspc_masks, mk_feats, hspc_feats = segmenter.process_tile(
+            img_rgb, mk_min_area, mk_max_area
+        )
+        return build_mk_hspc_result(
+            tid, 'success',
+            mk_masks=mk_masks, hspc_masks=hspc_masks,
+            mk_feats=mk_feats, hspc_feats=hspc_feats,
+            tile=tile, slide_name=slide_name
+        )
+    except Exception as e:
+        return build_mk_hspc_result(tid, 'error', error=f"Processing error: {e}", slide_name=slide_name)
+
+
+def process_tile_gpu_only(args):
+    """
+    GPU-only worker: receives pre-normalized tile, does only GPU work.
+    CPU pre/post processing happens in main process threads.
+    """
+    tile, img_rgb, mk_min_area, mk_max_area, slide_name = args
+
+    global segmenter
+    tid = tile['id']
+
+    if segmenter is None:
+        return {'tid': tid, 'status': 'error', 'error': "Segmenter not initialized", 'slide_name': slide_name}
+
+    if img_rgb.max() == 0:
+        return {'tid': tid, 'status': 'empty', 'slide_name': slide_name}
+
+    try:
+        mk_masks, hspc_masks, mk_feats, hspc_feats = segmenter.process_tile(
+            img_rgb, mk_min_area, mk_max_area
+        )
+        return {
+            'tid': tid, 'status': 'success',
+            'mk_masks': mk_masks, 'hspc_masks': hspc_masks,
+            'mk_feats': mk_feats, 'hspc_feats': hspc_feats,
+            'tile': tile, 'slide_name': slide_name
+        }
+    except Exception as e:
+        return {'tid': tid, 'status': 'error', 'error': f"Processing error: {e}", 'slide_name': slide_name}
+
+
+def preprocess_tile_cpu(slide_data, slide_name, tile, use_pinned_memory=True):
+    """
+    CPU pre-processing: extract tile from RAM, normalize.
+    Runs in ThreadPoolExecutor in main process.
+
+    If use_pinned_memory=True and CUDA available, allocates output in pinned memory
+    for faster CPU→GPU transfer (DMA, doesn't block CPU).
+    """
+    img = slide_data[slide_name]['image']
+    tile_img = img[tile['y']:tile['y']+tile['h'],
+                   tile['x']:tile['x']+tile['w']].copy()
+
+    # Convert to RGB
+    if tile_img.ndim == 2:
+        img_rgb = np.stack([tile_img]*3, axis=-1)
+    elif tile_img.shape[2] == 4:
+        img_rgb = tile_img[:, :, :3]
+    else:
+        img_rgb = tile_img
+
+    # Normalize
+    if img_rgb.max() > 0:
+        img_rgb = percentile_normalize(img_rgb, p_low=5, p_high=95)
+
+    # Use pinned memory for faster GPU transfer (double-buffering optimization)
+    if use_pinned_memory and torch.cuda.is_available():
+        try:
+            # Convert to pinned numpy array via torch
+            # This enables DMA transfer to GPU without blocking CPU
+            img_tensor = torch.from_numpy(img_rgb.copy()).pin_memory()
+            img_rgb = img_tensor.numpy()
+        except Exception as e:
+            logger.debug(f"Failed to pin memory, using regular memory: {e}")
+
+    return (tile, img_rgb, slide_name)
+
+
+def save_tile_results(result, output_base, slide_results, slide_results_lock):
+    """
+    CPU post-processing: save masks and features to disk.
+    Runs in ThreadPoolExecutor in main process.
+
+    Processes ONE tile at a time. Thread-safe via slide_results_lock.
+    """
+    if result['status'] != 'success':
+        return result
+
+    slide_name = result['slide_name']
+    tile = result['tile']
+    tid = result['tid']
+    output_dir = output_base / slide_name
+    output_dir.mkdir(parents=True, exist_ok=True)
+
+    # Thread-safe access to per-slide counters
+    with slide_results_lock:
+        sr = slide_results[slide_name]
+
+        # Reserve global IDs for this tile's cells (atomic operation)
+        mk_start_gid = sr['mk_gid']
+        mk_count = len(result.get('mk_feats', []))
+        sr['mk_gid'] += mk_count
+        sr['mk_count'] += mk_count
+
+        hspc_start_gid = sr['hspc_gid']
+        hspc_count = len(result.get('hspc_feats', []))
+        sr['hspc_gid'] += hspc_count
+        sr['hspc_count'] += hspc_count
+
+    # Now do the actual I/O outside the lock (allows parallelism)
+    if result['mk_feats']:
+        mk_dir = output_dir / "mk" / "tiles"
+        mk_tile_dir = mk_dir / str(tid)
+        mk_tile_dir.mkdir(parents=True, exist_ok=True)
+
+        with open(mk_tile_dir / "window.csv", 'w') as f:
+            f.write(f"(slice({tile['y']}, {tile['y']+tile['h']}, None), slice({tile['x']}, {tile['x']+tile['w']}, None))")
+
+        new_mk = np.zeros_like(result['mk_masks'])
+        mk_tile_cells = []
+        current_gid = mk_start_gid
+        for feat in result['mk_feats']:
+            old_id = int(feat['id'].split('_')[1])
+            new_mk[result['mk_masks'] == old_id] = current_gid
+            feat['id'] = f'det_{current_gid - 1}'
+            feat['global_id'] = current_gid
+            feat['center'][0] += tile['x']
+            feat['center'][1] += tile['y']
+            mk_tile_cells.append(current_gid)
+            current_gid += 1
+
+        with open(mk_tile_dir / "classes.csv", 'w') as f:
+            for c in mk_tile_cells:
+                f.write(f"{c}\n")
+        with h5py.File(mk_tile_dir / "segmentation.h5", 'w') as f:
+            create_hdf5_dataset(f, 'labels', new_mk[np.newaxis])
+        with open(mk_tile_dir / "features.json", 'w') as f:
+            json.dump([{'id': m['id'], 'global_id': m['global_id'], 'center': m['center'], 'features': m['features']} for m in result['mk_feats']], f)
+
+    if result['hspc_feats']:
+        hspc_dir = output_dir / "hspc" / "tiles"
+        hspc_tile_dir = hspc_dir / str(tid)
+        hspc_tile_dir.mkdir(parents=True, exist_ok=True)
+
+        with open(hspc_tile_dir / "window.csv", 'w') as f:
+            f.write(f"(slice({tile['y']}, {tile['y']+tile['h']}, None), slice({tile['x']}, {tile['x']+tile['w']}, None))")
+
+        new_hspc = np.zeros_like(result['hspc_masks'])
+        hspc_tile_cells = []
+        current_gid = hspc_start_gid
+        for feat in result['hspc_feats']:
+            old_id = int(feat['id'].split('_')[1])
+            new_hspc[result['hspc_masks'] == old_id] = current_gid
+            feat['id'] = f'det_{current_gid - 1}'
+            feat['global_id'] = current_gid
+            feat['center'][0] += tile['x']
+            feat['center'][1] += tile['y']
+            hspc_tile_cells.append(current_gid)
+            current_gid += 1
+
+        with open(hspc_tile_dir / "classes.csv", 'w') as f:
+            for c in hspc_tile_cells:
+                f.write(f"{c}\n")
+        with h5py.File(hspc_tile_dir / "segmentation.h5", 'w') as f:
+            create_hdf5_dataset(f, 'labels', new_hspc[np.newaxis])
+        with open(hspc_tile_dir / "features.json", 'w') as f:
+            json.dump([{'id': h['id'], 'global_id': h['global_id'], 'center': h['center'], 'features': h['features']} for h in result['hspc_feats']], f)
+
+    return {'slide_name': slide_name, 'mk_count': mk_count, 'hspc_count': hspc_count}
+
+
+def run_pipelined_segmentation(
+    czi_paths,
+    output_base,
+    slide_data,  # Pre-loaded slides
+    sampled_tiles,  # Pre-sampled (slide_name, tile) tuples
+    variance_threshold,
+    mk_min_area=1000,
+    mk_max_area=100000,
+    num_workers=1,
+    mk_classifier_path=None,
+    hspc_classifier_path=None,
+    cellpose_channels=None,
+    preprocess_threads=None,  # CPU threads for pre-processing (default: 80% of cores)
+    save_threads=None,  # CPU threads for saving (default: shares the 80% pool)
+):
+    """
+    PIPELINED segmentation: parallel CPU pre/post processing + serial GPU.
+
+    Architecture:
+      CPU ThreadPool (pre)  -->  Queue  -->  GPU Worker  -->  Queue  -->  CPU ThreadPool (save)
+           N threads                          1 process                       M threads
+
+    Thread allocation (default 80% of CPU cores):
+      - Pre-process: 60% of allocated threads (extracting tiles, normalizing)
+      - Post-process: 40% of allocated threads (saving HDF5, features)
+
+    This keeps the GPU constantly fed while CPU handles I/O in parallel.
+    """
+    # Calculate CPU thread allocation: use 80% of available cores
+    total_cores = os.cpu_count() or 8
+    cpu_pool_size = int(total_cores * 0.8)  # 80% of cores
+
+    if preprocess_threads is None:
+        preprocess_threads = max(4, int(cpu_pool_size * 0.6))  # 60% for pre-processing
+    if save_threads is None:
+        save_threads = max(2, int(cpu_pool_size * 0.4))  # 40% for post-processing
+    # Note: ThreadPoolExecutor, as_completed imported at module level (line 67)
+    import queue
+    import threading
+    import shutil
+
+    output_base = Path(output_base)
+
+    logger.info(f"\n{'='*70}")
+    logger.info("PIPELINED PROCESSING")
+    logger.info(f"{'='*70}")
+    logger.info(f"Pre-process threads: {preprocess_threads}")
+    logger.info(f"GPU workers: {num_workers}")
+    logger.info(f"Save threads: {save_threads}")
+    logger.info(f"Tiles to process: {len(sampled_tiles)}")
+    logger.info(f"HDF5 compression: {HDF5_COMPRESSION_NAME}")
+    logger.info(f"Pinned memory: {'enabled' if torch.cuda.is_available() else 'disabled (no CUDA)'}")
+    logger.info(f"{'='*70}")
+
+    # Setup GPU worker pool
+    manager = mp.Manager()
+    gpu_queue = manager.Queue()
+    if torch.cuda.is_available():
+        n_gpus = torch.cuda.device_count()
+        if n_gpus > 0:
+            for i in range(num_workers):
+                gpu_queue.put(i % n_gpus)
+
+    temp_init_dir = output_base / "temp_init"
+    temp_init_dir.mkdir(parents=True, exist_ok=True)
+    dummy_mm_path = temp_init_dir / "dummy.dat"
+    dummy_arr = np.memmap(dummy_mm_path, dtype=np.uint8, mode='w+', shape=(100, 100, 3))
+    dummy_arr.flush()
+    del dummy_arr
+
+    init_args = (mk_classifier_path, hspc_classifier_path, cellpose_channels, gpu_queue,
+                 str(dummy_mm_path), (100, 100, 3), np.uint8)
+
+    # Track results per slide
+    slide_results = {Path(p).stem: {'mk_count': 0, 'hspc_count': 0, 'mk_gid': 1, 'hspc_gid': 1}
+                     for p in czi_paths}
+    slide_results_lock = threading.Lock()
+
+    # Queues for pipelining
+    preprocess_queue = queue.Queue(maxsize=preprocess_threads * 2)  # Buffer pre-processed tiles
+    save_queue = queue.Queue()  # Results waiting to be saved
+
+    # Stats
+    stats = {'preprocessed': 0, 'processed': 0, 'saved': 0}
+    stats_lock = threading.Lock()
+
+    def preprocess_worker():
+        """Thread that pre-processes tiles and feeds the queue."""
+        with ThreadPoolExecutor(max_workers=preprocess_threads) as executor:
+            futures = []
+            for slide_name, tile in sampled_tiles:
+                future = executor.submit(preprocess_tile_cpu, slide_data, slide_name, tile)
+                futures.append(future)
+
+            for future in as_completed(futures):
+                try:
+                    result = future.result()
+                    preprocess_queue.put(result)
+                    with stats_lock:
+                        stats['preprocessed'] += 1
+                except Exception as e:
+                    logger.error(f"Preprocess error: {e}")
+
+            # Signal end
+            preprocess_queue.put(None)
+
+    def save_worker():
+        """Thread that saves results using a thread pool for parallel I/O."""
+        with ThreadPoolExecutor(max_workers=save_threads) as save_executor:
+            pending_saves = []
+            while True:
+                item = save_queue.get()
+                if item is None:
+                    break
+                # Submit save job to thread pool (pass lock for thread-safe counter access)
+                future = save_executor.submit(save_tile_results, item, output_base, slide_results, slide_results_lock)
+                pending_saves.append(future)
+                save_queue.task_done()
+
+                # Check completed saves
+                done = [f for f in pending_saves if f.done()]
+                for f in done:
+                    try:
+                        f.result()
+                        with stats_lock:
+                            stats['saved'] += 1
+                    except Exception as e:
+                        logger.error(f"Save error: {e}")
+                    pending_saves.remove(f)
+
+            # Wait for remaining saves
+            for future in as_completed(pending_saves):
+                try:
+                    future.result()
+                    with stats_lock:
+                        stats['saved'] += 1
+                except Exception as e:
+                    logger.error(f"Save error: {e}")
+
+    try:
+        # Start save worker thread
+        save_thread = threading.Thread(target=save_worker, daemon=True)
+        save_thread.start()
+
+        # Start preprocess thread
+        preprocess_thread = threading.Thread(target=preprocess_worker, daemon=True)
+        preprocess_thread.start()
+
+        with mp.Pool(processes=num_workers, initializer=init_worker, initargs=init_args) as pool:
+            logger.info(f"GPU worker pool ready")
+
+            def gpu_input_generator():
+                """Generate GPU inputs from preprocess queue."""
+                while True:
+                    item = preprocess_queue.get()
+                    if item is None:
+                        break
+                    tile, img_rgb, slide_name = item
+                    yield (tile, img_rgb, mk_min_area, mk_max_area, slide_name)
+
+            with tqdm(total=len(sampled_tiles), desc="Processing") as pbar:
+                for result in pool.imap_unordered(process_tile_gpu_only, gpu_input_generator()):
+                    with stats_lock:
+                        stats['processed'] += 1
+                    pbar.update(1)
+                    pbar.set_postfix({
+                        'pre': stats['preprocessed'],
+                        'gpu': stats['processed'],
+                        'save': stats['saved']
+                    })
+
+                    if result['status'] == 'success':
+                        save_queue.put(result)
+                    elif result['status'] == 'error':
+                        logger.error(f"GPU error: {result['error']}")
+
+                    # Cleanup large arrays
+                    for key in ['mk_masks', 'hspc_masks', 'mk_feats', 'hspc_feats']:
+                        if key in result:
+                            del result[key]
+                    gc.collect()
+
+        # Wait for saves to complete
+        save_queue.put(None)  # Signal save worker to stop
+        save_thread.join(timeout=60)
+
+    finally:
+        if temp_init_dir.exists():
+            try:
+                shutil.rmtree(temp_init_dir)
+            except Exception as e:
+                logger.debug(f"Failed to cleanup temp init dir: {e}")
+
+    # Summary
+    total_mk = sum(sr['mk_count'] for sr in slide_results.values())
+    total_hspc = sum(sr['hspc_count'] for sr in slide_results.values())
+
+    logger.info(f"\n{'='*70}")
+    logger.info("PIPELINED PROCESSING COMPLETE")
+    logger.info(f"{'='*70}")
+    logger.info(f"Total MKs: {total_mk}")
+    logger.info(f"Total HSPCs: {total_hspc}")
+
+    return slide_results
+
+
+def process_tile_worker_with_data(args):
+    """
+    Worker function that receives tile image data directly (for multi-slide mode).
+    Models are already loaded in the worker via init_worker.
+    """
+    tile, img_data, output_dir, mk_min_area, mk_max_area, variance_threshold, calibration_block_size = args
+
+    global segmenter
+    tid = tile['id']
+
+    if segmenter is None:
+        return {'tid': tid, 'status': 'error', 'error': "Segmenter not initialized"}
+
+    # Convert to RGB
+    img_rgb = ensure_rgb_array(img_data)
+
+    is_valid, validity_status = check_tile_validity(img_rgb, tid)
+    if not is_valid:
+        return build_mk_hspc_result(tid, validity_status)
+
+    img_rgb = prepare_tile_for_detection(img_rgb, normalize=True, p_low=5, p_high=95)
+    has_tissue_content, _ = has_tissue(img_rgb, variance_threshold, block_size=calibration_block_size)
+    if not has_tissue_content:
+        return build_mk_hspc_result(tid, 'no_tissue')
+
+    try:
+        mk_masks, hspc_masks, mk_feats, hspc_feats = segmenter.process_tile(
+            img_rgb, mk_min_area, mk_max_area
+        )
+        return build_mk_hspc_result(
+            tid, 'success',
+            mk_masks=mk_masks, hspc_masks=hspc_masks,
+            mk_feats=mk_feats, hspc_feats=hspc_feats,
+            tile=tile
+        )
+    except Exception as e:
+        return build_mk_hspc_result(tid, 'error', error=f"Processing error: {e}")
+
+
+def main():
+    parser = argparse.ArgumentParser(description='Unified MK + HSPC segmentation')
+    parser.add_argument('--czi-path', help='Single CZI file path')
+    parser.add_argument('--czi-paths', nargs='+', help='Multiple CZI file paths (models loaded once)')
+    parser.add_argument('--output-dir', required=True, help='Output directory (subdirs created per slide if multiple)')
+    parser.add_argument('--mk-min-area-um', type=float, default=200,
+                        help='Minimum MK area in µm² (only applies to MKs)')
+    parser.add_argument('--mk-max-area-um', type=float, default=2000,
+                        help='Maximum MK area in µm² (only applies to MKs)')
+    parser.add_argument('--tile-size', type=int, default=3000,
+                        help='Tile size in pixels (default: 3000, safer for memory. Use 4096 for max detail)')
+    parser.add_argument('--overlap', type=int, default=512)
+    parser.add_argument('--sample-fraction', type=float, default=1.0)
+    parser.add_argument('--calibration-block-size', type=int, default=512,
+                        help='Block size for variance calculation in tissue calibration and detection.')
+    parser.add_argument('--calibration-samples', type=int, default=50,
+                        help='Number of tiles to sample for tissue calibration.')
+    parser.add_argument('--mk-classifier', type=str, help='Path to trained MK classifier (.pkl)')
+    parser.add_argument('--hspc-classifier', type=str, help='Path to trained HSPC classifier (.pkl)')
+    parser.add_argument('--cellpose-channels', type=int, nargs=2, default=None,
+                        help='Cellpose channels [cyto, nuc]. For H&E: "1 3" (cyto=R, nuc=B). Default: grayscale [0,0]')
+    parser.add_argument('--num-workers', type=int, default=4, help='Number of parallel workers for tile processing.')
+    parser.add_argument('--sequential', action='store_true',
+                        help='Process tiles sequentially (no multiprocessing). Safer for GPU, avoids fork/spawn issues.')
+    parser.add_argument('--html-output-dir', type=str, default=None,
+                        help='Directory for HTML export (default: output-dir/../docs)')
+    parser.add_argument('--samples-per-page', type=int, default=300,
+                        help='Number of cell samples per HTML page')
+
+    args = parser.parse_args()
+
+    # ==========================================================================
+    # MEMORY VALIDATION - Check resources before starting to prevent OOM crashes
+    # ==========================================================================
+    logger.info("\n" + "="*70)
+    logger.info("SYSTEM RESOURCE CHECK")
+    logger.info("="*70)
+
+    resource_check = validate_system_resources(args.num_workers, args.tile_size)
+
+    if resource_check['should_abort']:
+        logger.error("Aborting due to insufficient system resources.")
+        logger.error("Free up RAM or reduce --num-workers before retrying.")
+        return
+
+    # Auto-adjust workers if needed
+    safe_workers = get_safe_worker_count(args.num_workers, args.tile_size)
+    if safe_workers != args.num_workers:
+        logger.warning(f"Reducing workers from {args.num_workers} to {safe_workers} for safety")
+        args.num_workers = safe_workers
+
+    # Use sequential mode if only 1 worker (no point in multiprocessing overhead)
+    if args.num_workers <= 1 and not args.sequential:
+        logger.info("Only 1 worker - automatically enabling --sequential mode")
+        args.sequential = True
+
+    if args.sequential:
+        logger.info("SEQUENTIAL MODE ENABLED - Safer for GPU, lower memory usage")
+
+    logger.info("="*70 + "\n")
+
+    # Build list of CZI paths
+    czi_paths = []
+    if args.czi_paths:
+        czi_paths = [Path(p) for p in args.czi_paths]
+    elif args.czi_path:
+        czi_paths = [Path(args.czi_path)]
+    else:
+        parser.error("Must provide either --czi-path or --czi-paths")
+
+    # Validate all paths exist
+    for p in czi_paths:
+        if not p.exists():
+            parser.error(f"CZI file not found: {p}")
+
+    # Convert µm² to px² using pixel size (0.1725 µm/px)
+    PIXEL_SIZE_UM = 0.1725
+    um_to_px_factor = PIXEL_SIZE_UM ** 2  # 0.02975625
+    mk_min_area_px = int(args.mk_min_area_um / um_to_px_factor)
+    mk_max_area_px = int(args.mk_max_area_um / um_to_px_factor)
+
+    logger.info(f"MK area filter: {args.mk_min_area_um}-{args.mk_max_area_um} µm² = {mk_min_area_px}-{mk_max_area_px} px²")
+
+    # Set HTML output directory (default: output_dir/../docs)
+    html_output_dir = args.html_output_dir
+    if html_output_dir is None:
+        html_output_dir = Path(args.output_dir).parent / "docs"
+    html_output_dir = Path(html_output_dir)
+
+    # Process slides
+    if len(czi_paths) == 1:
+        # Single slide - use output_dir directly
+        run_unified_segmentation(
+            czi_paths[0], args.output_dir,
+            mk_min_area_px, mk_max_area_px,
+            args.tile_size, args.overlap, args.sample_fraction,
+            calibration_block_size=args.calibration_block_size,
+            calibration_samples=args.calibration_samples,
+            num_workers=args.num_workers,
+            mk_classifier_path=args.mk_classifier,
+            hspc_classifier_path=args.hspc_classifier,
+            cellpose_channels=args.cellpose_channels,
+            sequential=args.sequential
+        )
+    else:
+        # Multiple slides - load models once, process all slides
+        run_multi_slide_segmentation(
+            czi_paths, args.output_dir,
+            mk_min_area_px, mk_max_area_px,
+            args.tile_size, args.overlap, args.sample_fraction,
+            calibration_block_size=args.calibration_block_size,
+            calibration_samples=args.calibration_samples,
+            num_workers=args.num_workers,
+            mk_classifier_path=args.mk_classifier,
+            hspc_classifier_path=args.hspc_classifier,
+            cellpose_channels=args.cellpose_channels,
+            html_output_dir=str(html_output_dir),
+            samples_per_page=args.samples_per_page,
+            mk_min_area_um=args.mk_min_area_um,
+            mk_max_area_um=args.mk_max_area_um,
+            sequential=args.sequential
+        )
+
+
+if __name__ == "__main__":
+    main()

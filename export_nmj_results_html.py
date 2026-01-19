@@ -28,12 +28,12 @@ from segmentation.io.czi_loader import get_loader, CZILoader
 logger = get_logger(__name__)
 
 
-def extract_crop_with_mask(loader, tile_x, tile_y, centroid, nmj_id,
+def extract_crop_with_mask(loaders, tile_x, tile_y, centroid, nmj_id,
                            seg_dir, tile_size=3000, crop_size=300):
-    """Extract crop from CZI and overlay mask contour.
+    """Extract RGB crop from CZI and overlay mask contour.
 
     Args:
-        loader: CZILoader instance with channel data loaded
+        loaders: List of 3 CZILoader instances [ch0, ch1, ch2] for RGB
         tile_x: Tile X origin in mosaic coordinates
         tile_y: Tile Y origin in mosaic coordinates
         centroid: [x, y] centroid position within tile
@@ -45,17 +45,19 @@ def extract_crop_with_mask(loader, tile_x, tile_y, centroid, nmj_id,
     Returns:
         PIL Image with crop and mask contour overlay, or None if failed
     """
-    # Read tile using shared loader
-    tile_data = loader.get_tile(tile_x, tile_y, tile_size)
-
-    if tile_data is None or tile_data.size == 0:
-        return None
+    # Read tiles from all 3 channels
+    tiles = []
+    for loader in loaders:
+        tile_data = loader.get_tile(tile_x, tile_y, tile_size)
+        if tile_data is None or tile_data.size == 0:
+            return None
+        tiles.append(tile_data)
 
     # Extract crop centered on centroid (stored as [x, y])
     cx, cy = int(centroid[0]), int(centroid[1])
     half = crop_size // 2
 
-    h, w = tile_data.shape
+    h, w = tiles[0].shape
 
     # Validate centroid is within tile bounds (Issue #2)
     if cx < 0 or cx >= w or cy < 0 or cy >= h:
@@ -71,13 +73,15 @@ def extract_crop_with_mask(loader, tile_x, tile_y, centroid, nmj_id,
     if y2 <= y1 or x2 <= x1:
         return None
 
-    crop = tile_data[y1:y2, x1:x2].copy()
+    # Extract and normalize each channel crop, then combine as RGB
+    crops = []
+    for tile_data in tiles:
+        crop = tile_data[y1:y2, x1:x2].copy()
+        crop = percentile_normalize(crop)
+        crops.append(crop)
 
-    # Normalize
-    crop = percentile_normalize(crop)
-
-    # Convert to RGB
-    crop_rgb = np.stack([crop] * 3, axis=-1)
+    # Stack as RGB (ch0=R, ch1=G, ch2=B)
+    crop_rgb = np.stack(crops, axis=-1)
 
     # Load mask and extract corresponding region
     mask_crop = None
@@ -114,11 +118,11 @@ def extract_crop_with_mask(loader, tile_x, tile_y, centroid, nmj_id,
             mask_pil = mask_pil.resize((crop_size, crop_size), Image.NEAREST)
             mask_resized = np.array(mask_pil) > 127
 
-            # Draw contour on image (convert to/from numpy for shared function)
+            # Draw contour on image - white for visibility on RGB
             img_array = np.array(pil_img)
             img_with_contour = draw_mask_contour(img_array, mask_resized,
-                                                  color=(144, 238, 144),
-                                                  thickness=2, dotted=True)
+                                                  color=(255, 255, 255),
+                                                  thickness=5, dotted=False)
             pil_img = Image.fromarray(img_with_contour)
 
         return pil_img
@@ -161,6 +165,14 @@ def main():
     logger.info("Loading results...")
     with open(args.results_json) as f:
         results = json.load(f)
+
+    # Try to load summary.json for metadata
+    summary_path = Path(args.results_json).parent / "summary.json"
+    summary = {}
+    if summary_path.exists():
+        with open(summary_path) as f:
+            summary = json.load(f)
+        logger.info(f"Loaded metadata from summary.json")
 
     # Handle both formats: list directly or dict with 'nmjs' key
     if isinstance(results, list):
@@ -218,9 +230,9 @@ def main():
         nmjs = [n for n in nmjs if n['area_um2'] >= args.min_area and n['confidence'] >= args.min_confidence]
         logger.info(f"After filtering (area >= {args.min_area} um^2, conf >= {args.min_confidence}): {len(nmjs)} ({original_count - len(nmjs)} filtered out)")
 
-    # Sort by area in descending order (largest first)
-    nmjs = sorted(nmjs, key=lambda x: x['area_um2'], reverse=True)
-    logger.info(f"Sorted by area descending - largest: {nmjs[0]['area_um2']:.1f} um^2, smallest: {nmjs[-1]['area_um2']:.1f} um^2")
+    # Sort by area in ascending order (smallest first)
+    nmjs = sorted(nmjs, key=lambda x: x['area_um2'], reverse=False)
+    logger.info(f"Sorted by area ascending - smallest: {nmjs[0]['area_um2']:.1f} um^2, largest: {nmjs[-1]['area_um2']:.1f} um^2")
 
     # Setup output
     if args.output_dir:
@@ -233,15 +245,21 @@ def main():
     if args.segmentation_dir:
         seg_dir = Path(args.segmentation_dir)
     else:
-        # Auto-detect from results path
-        seg_dir = Path(args.results_json).parent.parent / "tiles"
+        # Auto-detect from results path (tiles are sibling to nmj_detections.json)
+        seg_dir = Path(args.results_json).parent / "tiles"
     logger.info(f"Segmentation directory: {seg_dir}")
 
-    # Load CZI using shared loader (RAM-first for better performance)
-    logger.info("Loading CZI...")
-    loader = CZILoader(args.czi_path, load_to_ram=args.load_to_ram, channel=args.channel)
-    logger.info(f"  Mosaic dimensions: {loader.width} x {loader.height}")
+    # Load all 3 channels for RGB display
+    logger.info("Loading CZI (3 channels for RGB)...")
+    loaders = []
+    for ch in range(3):
+        loader = CZILoader(args.czi_path, load_to_ram=args.load_to_ram, channel=ch)
+        loaders.append(loader)
+        logger.info(f"  Channel {ch} loaded: {loader.width} x {loader.height}")
     logger.info(f"  RAM loading: {args.load_to_ram}")
+
+    # Channel legend for NMJ slides
+    channel_legend = {'red': 'nuc488', 'green': 'Bgtx647', 'blue': 'NfL750'}
 
     # Extract crops and convert to format expected by shared HTML export
     logger.info("Extracting crops with mask overlay...")
@@ -251,7 +269,7 @@ def main():
     for nmj in tqdm(nmjs, desc="Extracting"):
         try:
             crop = extract_crop_with_mask(
-                loader,
+                loaders,
                 nmj['tile_x'],
                 nmj['tile_y'],
                 nmj['local_centroid'],
@@ -266,14 +284,20 @@ def main():
                 unique_id = f"{nmj['tile_x']}_{nmj['tile_y']}_{nmj['id']}"
 
                 # Build sample dict in format expected by shared HTML export
+                # Get area_px and solidity from features dict
+                features = nmj.get('features', {})
+                area_px = features.get('area', nmj.get('area_px', 0))
+                solidity = features.get('solidity', nmj.get('solidity', 0))
+
                 html_samples.append({
                     'uid': unique_id,
                     'image': img_b64,
                     'mime_type': mime,
                     'stats': {
                         'area_um2': nmj['area_um2'],
+                        'area_px': area_px,
+                        'solidity': solidity,
                         'confidence': nmj['confidence'],
-                        'elongation': nmj.get('elongation', 0.0),
                     }
                 })
             else:
@@ -299,6 +323,13 @@ def main():
         filter_parts.append(f"confidence >= {args.min_confidence:.0%}")
     subtitle = f"Filtered: {', '.join(filter_parts)}" if filter_parts else None
 
+    # Get metadata from summary.json or results dict
+    pixel_size_um = summary.get('pixel_size_um', results.get('pixel_size_um'))
+    tiles_total = summary.get('total_tiles', results.get('tiles_total'))
+    tissue_tiles = summary.get('tissue_tiles', results.get('tissue_tiles'))
+    tiles_processed = summary.get('sampled_tiles', results.get('tiles_processed'))
+    timestamp = summary.get('timestamp', summary.get('segmentation_time', results.get('timestamp')))
+
     # Use shared HTML export function with consistent naming
     logger.info("Generating HTML pages using shared module...")
     n_samples, n_pages = export_samples_to_html(
@@ -310,6 +341,13 @@ def main():
         subtitle=subtitle,
         page_prefix='nmj_page',  # Consistent naming with run_segmentation.py
         experiment_name=slide_name,
+        # file_name not passed since it's already in the title
+        pixel_size_um=pixel_size_um,
+        tiles_processed=tiles_processed,
+        tiles_total=tiles_total,
+        tissue_tiles=tissue_tiles,
+        channel_legend=channel_legend,
+        timestamp=timestamp,
     )
 
     logger.info("HTML export complete!")

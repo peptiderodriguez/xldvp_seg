@@ -74,5 +74,6 @@ tmp/
 docs/*.html
 docs_output/
 
-# Test/debug scripts
+# Test/debug scripts (except tests/ directory)
 test_*.py
+!tests/test_*.py
