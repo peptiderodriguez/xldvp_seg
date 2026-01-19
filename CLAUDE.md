@@ -60,9 +60,54 @@ This eliminates repeated network I/O - the image is read once, then all tiles ar
 - **View results:** Start HTTP server + Cloudflare tunnel (port 8080 for MK, 8081 for NMJ)
 - **Retrain classifier:** Use `train_nmj_classifier.py` with merged annotations
 
+### Installation (Server/Cluster)
+```bash
+# 1. Create conda environment
+conda create -n mkseg python=3.11 -y
+conda activate mkseg
+
+# 2. Clone and install
+git clone https://github.com/peptiderodriguez/xldvp_seg.git
+cd xldvp_seg
+./install.sh  # Auto-detects CUDA, installs PyTorch + SAM2 + all deps
+
+# Options:
+./install.sh --cuda 11.8    # Force specific CUDA version
+./install.sh --rocm         # For AMD GPUs
+./install.sh --cpu          # CPU only
+```
+
+### Multi-GPU Processing (Slurm Clusters)
+True multi-GPU tile processing: 4 GPUs, each processes 1 tile at a time from the same slide.
+
+```bash
+# Create input file list
+ls /path/to/slides/*.czi > input_files.txt
+
+# Submit Slurm job (4x L40s GPUs)
+sbatch slurm/run_multigpu.sbatch input_files.txt /path/to/output
+```
+
+**How it works:**
+1. Phase 1: Load all slides into RAM (single process)
+2. Phase 2-3: Identify tissue tiles, sample from pool
+3. Phase 4: Spawn 4 GPU workers, each loads models ONCE, processes tiles from queue
+4. Phase 5: HTML export
+
+**CLI flags:**
+- `--multi-gpu` - Enable multi-GPU mode
+- `--num-gpus 4` - Number of GPUs (default: 4)
+
+**Module:** `segmentation/processing/multigpu.py`
+- `MultiGPUTileProcessor` class with queue-based architecture
+- Workers pinned to GPUs via `CUDA_VISIBLE_DEVICES`
+
 ### Current State (as of Jan 19, 2026)
-- **Stability fixes**: Added memory validation, sequential mode fixes, network timeout handling
-- **Code refactoring**: Phase 1 + Phase 2 complete (model manager, memory utils, tile workers, strategy registry)
+- **Multi-GPU support**: 4 GPUs process tiles in parallel (`--multi-gpu` flag)
+- **Installable package**: `./install.sh` handles PyTorch+CUDA, SAM2, all dependencies
+- **Slurm support**: Ready-to-use sbatch scripts in `slurm/` directory
+- **Stability fixes**: Memory validation, sequential mode fixes, network timeout handling
+- **Code refactoring**: Phase 1-7 complete (model manager, memory utils, tile workers, strategy registry)
 - **Multi-channel feature extraction**: Now extracts ~2,400 features from all 3 channels (nuclear, BTX, NFL)
 - **BTX-only thresholding**: Mask detection uses only BTX channel (ch1/647nm), not averaged channels
 - **HTML improvements**: True RGB display (3-channel combined), white mask outlines, channel legend on floating bar, cards sorted by area ascending, stats with area µm²/px and solidity
