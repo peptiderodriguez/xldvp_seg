@@ -180,10 +180,9 @@ def _gpu_worker(
 
                 tiles_processed += 1
 
-                # Periodic cleanup
-                if tiles_processed % 10 == 0:
-                    gc.collect()
-                    torch.cuda.empty_cache()
+                # Cleanup after every tile to prevent GPU memory fragmentation
+                gc.collect()
+                torch.cuda.empty_cache()
 
             except Exception as e:
                 logger.error(f"[{worker_name}] Error processing tile {tid}: {e}")
