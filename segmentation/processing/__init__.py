@@ -56,6 +56,11 @@ from .mk_hspc_utils import (
     extract_tile_from_shared_memory,
 )
 
+from .multigpu import (
+    MultiGPUTileProcessor,
+    process_tiles_multi_gpu,
+)
+
 __all__ = [
     # Pipeline
     'DetectionPipeline',
@@ -93,4 +98,7 @@ __all__ = [
     'prepare_tile_for_detection',
     'build_mk_hspc_result',
     'extract_tile_from_shared_memory',
+    # Multi-GPU processing
+    'MultiGPUTileProcessor',
+    'process_tiles_multi_gpu',
 ]

@@ -1374,7 +1374,9 @@ def _phase4_process_tiles(
     html_output_dir,
     samples_per_page,
     mk_min_area_um,
-    mk_max_area_um
+    mk_max_area_um,
+    multi_gpu=False,
+    num_gpus=4,
 ):
     """
     Phase 4: Process sampled tiles using ML models (SAM2, Cellpose, ResNet).
@@ -1399,6 +1401,8 @@ def _phase4_process_tiles(
         samples_per_page: Number of samples per HTML page.
         mk_min_area_um: Minimum MK area in um^2 for HTML export filtering.
         mk_max_area_um: Maximum MK area in um^2 for HTML export filtering.
+        multi_gpu: Enable multi-GPU mode (each GPU processes one tile at a time).
+        num_gpus: Number of GPUs to use in multi-GPU mode.
 
     Returns:
         tuple: (total_mk, total_hspc) counts of detected cells.
@@ -1407,129 +1411,186 @@ def _phase4_process_tiles(
 
     logger.info(f"\n{'='*70}")
     logger.info("PHASE 4: PROCESSING SAMPLED TILES")
+    if multi_gpu:
+        logger.info(f"Mode: MULTI-GPU ({num_gpus} GPUs, 1 tile per GPU)")
+    else:
+        logger.info(f"Mode: Standard pool ({num_workers} workers)")
     logger.info(f"{'='*70}")
-
-    manager = mp.Manager()
-    gpu_queue = manager.Queue()
-    if torch.cuda.is_available():
-        n_gpus = torch.cuda.device_count()
-        if n_gpus > 0:
-            for i in range(num_workers):
-                gpu_queue.put(i % n_gpus)
-
-    temp_init_dir = output_base / "temp_init"
-    temp_init_dir.mkdir(parents=True, exist_ok=True)
-    dummy_mm_path = temp_init_dir / "dummy.dat"
-    dummy_arr = np.memmap(dummy_mm_path, dtype=np.uint8, mode='w+', shape=(100, 100, 3))
-    dummy_arr.flush()
-    del dummy_arr
-
-    init_args = (mk_classifier_path, hspc_classifier_path, gpu_queue,
-                 str(dummy_mm_path), (100, 100, 3), np.uint8)
 
     slide_results = {name: {'mk_count': 0, 'hspc_count': 0, 'mk_gid': 1, 'hspc_gid': 1}
                      for name in slide_data.keys()}
 
-    try:
-        with mp.Pool(processes=num_workers, initializer=init_worker, initargs=init_args) as pool:
-            logger.info(f"Worker pool ready with {num_workers} workers")
+    # Helper function to process a single result (shared by both modes)
+    def process_result(result, slide_results):
+        """Process a single tile result and save to disk."""
+        if result['status'] == 'success':
+            slide_name = result['slide_name']
+            tile = result['tile']
+            tid = result['tid']
+            output_dir = output_base / slide_name
+            output_dir.mkdir(parents=True, exist_ok=True)
 
-            def tile_generator():
-                for slide_name, tile in sampled_tiles:
-                    img = slide_data[slide_name]['image']
-                    tile_img = img[tile['y']:tile['y']+tile['h'],
-                                   tile['x']:tile['x']+tile['w']].copy()
-                    output_dir = output_base / slide_name
-                    yield (tile, tile_img, output_dir, mk_min_area, mk_max_area,
-                           variance_threshold, calibration_block_size, slide_name)
+            sr = slide_results[slide_name]
 
-            with tqdm(total=len(sampled_tiles), desc="Processing tiles") as pbar:
-                for result in pool.imap_unordered(process_tile_worker_with_data_and_slide, tile_generator()):
-                    pbar.update(1)
-                    if result['status'] == 'success':
-                        slide_name = result['slide_name']
-                        tile = result['tile']
-                        tid = result['tid']
-                        output_dir = output_base / slide_name
-                        output_dir.mkdir(parents=True, exist_ok=True)
+            if result.get('mk_feats'):
+                mk_dir = output_dir / "mk" / "tiles"
+                mk_tile_dir = mk_dir / str(tid)
+                mk_tile_dir.mkdir(parents=True, exist_ok=True)
 
-                        sr = slide_results[slide_name]
+                with open(mk_tile_dir / "window.csv", 'w') as f:
+                    f.write(f"(slice({tile['y']}, {tile['y']+tile['h']}, None), slice({tile['x']}, {tile['x']+tile['w']}, None))")
 
-                        if result['mk_feats']:
-                            mk_dir = output_dir / "mk" / "tiles"
-                            mk_tile_dir = mk_dir / str(tid)
-                            mk_tile_dir.mkdir(parents=True, exist_ok=True)
+                new_mk = np.zeros_like(result['mk_masks'])
+                mk_tile_cells = []
+                for feat in result['mk_feats']:
+                    old_id = int(feat['id'].split('_')[1])
+                    new_mk[result['mk_masks'] == old_id] = sr['mk_gid']
+                    feat['id'] = f'det_{sr["mk_gid"] - 1}'
+                    feat['global_id'] = sr['mk_gid']
+                    feat['center'][0] += tile['x']
+                    feat['center'][1] += tile['y']
+                    mk_tile_cells.append(sr['mk_gid'])
+                    sr['mk_count'] += 1
+                    sr['mk_gid'] += 1
 
-                            with open(mk_tile_dir / "window.csv", 'w') as f:
-                                f.write(f"(slice({tile['y']}, {tile['y']+tile['h']}, None), slice({tile['x']}, {tile['x']+tile['w']}, None))")
+                with open(mk_tile_dir / "classes.csv", 'w') as f:
+                    for c in mk_tile_cells: f.write(f"{c}\n")
+                with h5py.File(mk_tile_dir / "segmentation.h5", 'w') as f:
+                    create_hdf5_dataset(f, 'labels', new_mk[np.newaxis])
+                with open(mk_tile_dir / "features.json", 'w') as f:
+                    json.dump([{'id': m['id'], 'global_id': m['global_id'], 'center': m['center'], 'features': m['features']} for m in result['mk_feats']], f)
 
-                            new_mk = np.zeros_like(result['mk_masks'])
-                            mk_tile_cells = []
-                            for feat in result['mk_feats']:
-                                old_id = int(feat['id'].split('_')[1])
-                                new_mk[result['mk_masks'] == old_id] = sr['mk_gid']
-                                feat['id'] = f'det_{sr["mk_gid"] - 1}'
-                                feat['global_id'] = sr['mk_gid']
-                                feat['center'][0] += tile['x']
-                                feat['center'][1] += tile['y']
-                                mk_tile_cells.append(sr['mk_gid'])
-                                sr['mk_count'] += 1
-                                sr['mk_gid'] += 1
+                del new_mk, mk_tile_cells
 
-                            with open(mk_tile_dir / "classes.csv", 'w') as f:
-                                for c in mk_tile_cells: f.write(f"{c}\n")
-                            with h5py.File(mk_tile_dir / "segmentation.h5", 'w') as f:
-                                create_hdf5_dataset(f, 'labels', new_mk[np.newaxis])
-                            with open(mk_tile_dir / "features.json", 'w') as f:
-                                json.dump([{'id': m['id'], 'global_id': m['global_id'], 'center': m['center'], 'features': m['features']} for m in result['mk_feats']], f)
+            if result.get('hspc_feats'):
+                hspc_dir = output_dir / "hspc" / "tiles"
+                hspc_tile_dir = hspc_dir / str(tid)
+                hspc_tile_dir.mkdir(parents=True, exist_ok=True)
 
-                            del new_mk, mk_tile_cells
+                with open(hspc_tile_dir / "window.csv", 'w') as f:
+                    f.write(f"(slice({tile['y']}, {tile['y']+tile['h']}, None), slice({tile['x']}, {tile['x']+tile['w']}, None))")
 
-                        if result['hspc_feats']:
-                            hspc_dir = output_dir / "hspc" / "tiles"
-                            hspc_tile_dir = hspc_dir / str(tid)
-                            hspc_tile_dir.mkdir(parents=True, exist_ok=True)
+                new_hspc = np.zeros_like(result['hspc_masks'])
+                hspc_tile_cells = []
+                for feat in result['hspc_feats']:
+                    old_id = int(feat['id'].split('_')[1])
+                    new_hspc[result['hspc_masks'] == old_id] = sr['hspc_gid']
+                    feat['id'] = f'det_{sr["hspc_gid"] - 1}'
+                    feat['global_id'] = sr['hspc_gid']
+                    feat['center'][0] += tile['x']
+                    feat['center'][1] += tile['y']
+                    hspc_tile_cells.append(sr['hspc_gid'])
+                    sr['hspc_count'] += 1
+                    sr['hspc_gid'] += 1
 
-                            with open(hspc_tile_dir / "window.csv", 'w') as f:
-                                f.write(f"(slice({tile['y']}, {tile['y']+tile['h']}, None), slice({tile['x']}, {tile['x']+tile['w']}, None))")
+                with open(hspc_tile_dir / "classes.csv", 'w') as f:
+                    for c in hspc_tile_cells: f.write(f"{c}\n")
+                with h5py.File(hspc_tile_dir / "segmentation.h5", 'w') as f:
+                    create_hdf5_dataset(f, 'labels', new_hspc[np.newaxis])
+                with open(hspc_tile_dir / "features.json", 'w') as f:
+                    json.dump([{'id': h['id'], 'global_id': h['global_id'], 'center': h['center'], 'features': h['features']} for h in result['hspc_feats']], f)
 
-                            new_hspc = np.zeros_like(result['hspc_masks'])
-                            hspc_tile_cells = []
-                            for feat in result['hspc_feats']:
-                                old_id = int(feat['id'].split('_')[1])
-                                new_hspc[result['hspc_masks'] == old_id] = sr['hspc_gid']
-                                feat['id'] = f'det_{sr["hspc_gid"] - 1}'
-                                feat['global_id'] = sr['hspc_gid']
-                                feat['center'][0] += tile['x']
-                                feat['center'][1] += tile['y']
-                                hspc_tile_cells.append(sr['hspc_gid'])
-                                sr['hspc_count'] += 1
-                                sr['hspc_gid'] += 1
+                del new_hspc, hspc_tile_cells
 
-                            with open(hspc_tile_dir / "classes.csv", 'w') as f:
-                                for c in hspc_tile_cells: f.write(f"{c}\n")
-                            with h5py.File(hspc_tile_dir / "segmentation.h5", 'w') as f:
-                                create_hdf5_dataset(f, 'labels', new_hspc[np.newaxis])
-                            with open(hspc_tile_dir / "features.json", 'w') as f:
-                                json.dump([{'id': h['id'], 'global_id': h['global_id'], 'center': h['center'], 'features': h['features']} for h in result['hspc_feats']], f)
+        elif result['status'] == 'error':
+            logger.error(f"Tile error: {result.get('error', 'unknown')}")
 
-                            del new_hspc, hspc_tile_cells
+        # Cleanup result
+        for key in ['mk_masks', 'hspc_masks', 'mk_feats', 'hspc_feats']:
+            if key in result:
+                del result[key]
 
-                    elif result['status'] == 'error':
-                        logger.error(f"Tile error: {result['error']}")
+    # =========================================================================
+    # MULTI-GPU MODE: Each GPU processes one tile at a time
+    # =========================================================================
+    if multi_gpu:
+        from segmentation.processing.multigpu import MultiGPUTileProcessor
 
-                    for key in ['mk_masks', 'hspc_masks', 'mk_feats', 'hspc_feats']:
-                        if key in result:
-                            del result[key]
+        with MultiGPUTileProcessor(
+            num_gpus=num_gpus,
+            mk_classifier_path=mk_classifier_path,
+            hspc_classifier_path=hspc_classifier_path,
+            mk_min_area=mk_min_area,
+            mk_max_area=mk_max_area,
+            variance_threshold=variance_threshold,
+            calibration_block_size=calibration_block_size,
+        ) as processor:
+            # Submit all tiles
+            logger.info(f"Submitting {len(sampled_tiles)} tiles to {num_gpus} GPUs...")
+            for slide_name, tile in sampled_tiles:
+                img = slide_data[slide_name]['image']
+                tile_img = img[tile['y']:tile['y']+tile['h'],
+                               tile['x']:tile['x']+tile['w']].copy()
+                processor.submit_tile(tile_img, slide_name, tile)
+
+            # Collect results with progress bar
+            logger.info("Collecting results...")
+            with tqdm(total=len(sampled_tiles), desc="Processing tiles (multi-GPU)") as pbar:
+                collected = 0
+                while collected < len(sampled_tiles):
+                    result = processor.collect_result(timeout=300)
+                    if result is None:
+                        logger.error(f"Timeout waiting for results ({collected}/{len(sampled_tiles)})")
+                        break
+                    # Skip ready messages
+                    if result.get('status') == 'ready':
+                        continue
+
+                    process_result(result, slide_results)
                     del result
                     gc.collect()
 
-    finally:
-        if temp_init_dir.exists():
-            try:
-                shutil.rmtree(temp_init_dir)
-            except Exception as e:
-                logger.debug(f"Failed to cleanup temp init dir: {e}")
+                    pbar.update(1)
+                    collected += 1
+
+    # =========================================================================
+    # STANDARD MODE: Multiprocessing pool with shared GPU queue
+    # =========================================================================
+    else:
+        manager = mp.Manager()
+        gpu_queue = manager.Queue()
+        if torch.cuda.is_available():
+            n_gpus = torch.cuda.device_count()
+            if n_gpus > 0:
+                for i in range(num_workers):
+                    gpu_queue.put(i % n_gpus)
+
+        temp_init_dir = output_base / "temp_init"
+        temp_init_dir.mkdir(parents=True, exist_ok=True)
+        dummy_mm_path = temp_init_dir / "dummy.dat"
+        dummy_arr = np.memmap(dummy_mm_path, dtype=np.uint8, mode='w+', shape=(100, 100, 3))
+        dummy_arr.flush()
+        del dummy_arr
+
+        init_args = (mk_classifier_path, hspc_classifier_path, gpu_queue,
+                     str(dummy_mm_path), (100, 100, 3), np.uint8)
+
+        try:
+            with mp.Pool(processes=num_workers, initializer=init_worker, initargs=init_args) as pool:
+                logger.info(f"Worker pool ready with {num_workers} workers")
+
+                def tile_generator():
+                    for slide_name, tile in sampled_tiles:
+                        img = slide_data[slide_name]['image']
+                        tile_img = img[tile['y']:tile['y']+tile['h'],
+                                       tile['x']:tile['x']+tile['w']].copy()
+                        output_dir = output_base / slide_name
+                        yield (tile, tile_img, output_dir, mk_min_area, mk_max_area,
+                               variance_threshold, calibration_block_size, slide_name)
+
+                with tqdm(total=len(sampled_tiles), desc="Processing tiles") as pbar:
+                    for result in pool.imap_unordered(process_tile_worker_with_data_and_slide, tile_generator()):
+                        pbar.update(1)
+                        process_result(result, slide_results)
+                        del result
+                    gc.collect()
+
+        finally:
+            if temp_init_dir.exists():
+                try:
+                    shutil.rmtree(temp_init_dir)
+                except Exception as e:
+                    logger.debug(f"Failed to cleanup temp init dir: {e}")
 
     total_mk = 0
     total_hspc = 0
@@ -1598,7 +1659,9 @@ def run_multi_slide_segmentation(
     samples_per_page=300,
     mk_min_area_um=200,
     mk_max_area_um=2000,
-    channel=0
+    channel=0,
+    multi_gpu=False,
+    num_gpus=4,
 ):
     """
     Process multiple slides with UNIFIED SAMPLING using RAM-first architecture.
@@ -1659,7 +1722,9 @@ def run_multi_slide_segmentation(
         html_output_dir=html_output_dir,
         samples_per_page=samples_per_page,
         mk_min_area_um=mk_min_area_um,
-        mk_max_area_um=mk_max_area_um
+        mk_max_area_um=mk_max_area_um,
+        multi_gpu=multi_gpu,
+        num_gpus=num_gpus,
     )
 
     # Clear slide data and loaders from RAM
@@ -2143,6 +2208,10 @@ def main():
     parser.add_argument('--mk-classifier', type=str, help='Path to trained MK classifier (.pkl)')
     parser.add_argument('--hspc-classifier', type=str, help='Path to trained HSPC classifier (.pkl)')
     parser.add_argument('--num-workers', type=int, default=4, help='Number of parallel workers for tile processing.')
+    parser.add_argument('--multi-gpu', action='store_true',
+                        help='Enable multi-GPU mode: each GPU processes one tile at a time')
+    parser.add_argument('--num-gpus', type=int, default=4,
+                        help='Number of GPUs to use in multi-GPU mode (default: 4)')
     parser.add_argument('--html-output-dir', type=str, default=None,
                         help='Directory for HTML export (default: output-dir/../docs)')
     parser.add_argument('--samples-per-page', type=int, default=300,
@@ -2205,7 +2274,9 @@ def main():
             html_output_dir=str(html_output_dir),
             samples_per_page=args.samples_per_page,
             mk_min_area_um=args.mk_min_area_um,
-            mk_max_area_um=args.mk_max_area_um
+            mk_max_area_um=args.mk_max_area_um,
+            multi_gpu=args.multi_gpu,
+            num_gpus=args.num_gpus,
         )
 
 
