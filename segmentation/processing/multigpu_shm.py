@@ -116,7 +116,6 @@ def _gpu_worker_shm(
     sys.path.insert(0, str(Path(__file__).parent.parent.parent))
 
     from run_unified_FAST import UnifiedSegmenter
-    from segmentation.io.html_export import percentile_normalize
     from segmentation.detection.tissue import has_tissue
     from segmentation.processing.mk_hspc_utils import (
         ensure_rgb_array,
@@ -186,6 +185,7 @@ def _gpu_worker_shm(
                     slide_name=slide_name,
                     error=f'Unknown slide: {slide_name}'
                 ))
+                tiles_processed += 1
                 continue
 
             _, slide_arr = shared_slides[slide_name]
@@ -205,6 +205,7 @@ def _gpu_worker_shm(
                     slide_name=slide_name,
                     error='Tile coordinates out of bounds'
                 ))
+                tiles_processed += 1
                 continue
 
             tile_img = slide_arr[y_start:y_end, x_start:x_end].copy()
@@ -218,6 +219,7 @@ def _gpu_worker_shm(
                     tile=tile,
                     slide_name=slide_name
                 ))
+                tiles_processed += 1
                 continue
 
             # Prepare tile
@@ -225,7 +227,10 @@ def _gpu_worker_shm(
             tile_normalized = prepare_tile_for_detection(tile_rgb)
 
             # Check for tissue (has_tissue returns tuple of (bool, fraction))
-            has_tissue_flag, _ = has_tissue(tile_normalized, variance_threshold, block_size=calibration_block_size)
+            try:
+                has_tissue_flag, _ = has_tissue(tile_normalized, variance_threshold, block_size=calibration_block_size)
+            except Exception:
+                has_tissue_flag = True  # Assume tissue on error
             if not has_tissue_flag:
                 output_queue.put(build_mk_hspc_result(
                     tid=tid,
@@ -233,6 +238,7 @@ def _gpu_worker_shm(
                     tile=tile,
                     slide_name=slide_name
                 ))
+                tiles_processed += 1
                 continue
 
             # Process tile
