@@ -102,7 +102,9 @@ sbatch slurm/run_multigpu.sbatch input_files.txt /path/to/output
 - `MultiGPUTileProcessor` class with queue-based architecture
 - Workers pinned to GPUs via `CUDA_VISIBLE_DEVICES`
 
-### Current State (as of Jan 19, 2026)
+### Current State (as of Jan 20, 2026)
+- **Multi-GPU streaming mode**: Memory-efficient pipeline that streams CZI directly to shared memory
+- **Bug fixes (Jan 20)**: Coordinate system fix, tile ID collision fix, CZI reader cleanup
 - **Multi-GPU support**: 4 GPUs process tiles in parallel (`--multi-gpu` flag)
 - **Installable package**: `./install.sh` handles PyTorch+CUDA, SAM2, all dependencies
 - **Slurm support**: Ready-to-use sbatch scripts in `slurm/` directory
@@ -113,6 +115,26 @@ sbatch slurm/run_multigpu.sbatch input_files.txt /path/to/output
 - **HTML improvements**: True RGB display (3-channel combined), white mask outlines, channel legend on floating bar, cards sorted by area ascending, stats with area µm²/px and solidity
 - NMJ classifier: RF model trained on multi-channel features for NMJ vs autofluorescence
 - Working slide: `20251107_Fig5_nuc488_Bgtx647_NfL750-1-EDFvar-stitch.czi` (3-channel)
+
+### Jan 20, 2026 - Streaming Multi-GPU Pipeline & Bug Fixes
+
+**Memory-Efficient Streaming Mode**
+Previous OOM crash (640GB peak for 16 slides) fixed with streaming approach:
+- Phase 1: Open CZI readers only (~0 GB RAM)
+- Phase 2: Tissue detection reads tiles on-demand from CZI
+- Phase 3: Sample tiles from combined pool
+- Phase 4: Load ONE slide at a time directly into shared memory
+- Peak memory now ~320 GB (vs 640 GB before)
+
+**Critical Bug Fixes:**
+| Bug | Fix | Commit |
+|-----|-----|--------|
+| Coordinate mismatch in streaming | Convert 0-based to global coords when calling `get_tile()` | `3f7c177` |
+| Tile ID collision across slides | Use `{slide_name}_{idx}` format for globally unique IDs | `37b0c88` |
+| CZI reader FD leak on error | Move loader cleanup into `finally` block | `37b0c88` |
+
+**Data Location (Cluster):**
+CZI files at: `/fs/pool/pool-mann-axioscan/01_Users/EdRo_axioscan/bonemarrow/2025_11_18/`
 
 ### Jan 19, 2026 - Stability Fixes for Long Batch Runs
 Previous runs crashed the machine (system restarts due to OOM). Fixed:
