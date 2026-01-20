@@ -1324,6 +1324,152 @@ def _phase2_identify_tissue_tiles(slide_data, tile_size, overlap, variance_thres
     return tissue_tiles, variance_threshold
 
 
+def _phase2_identify_tissue_tiles_streaming(slide_loaders, tile_size, overlap, variance_threshold, calibration_block_size, calibration_samples, channel):
+    """
+    Phase 2 (Streaming): Create tiles and identify tissue-containing tiles across all slides.
+
+    Similar to _phase2_identify_tissue_tiles(), but reads tiles on-demand from CZI files
+    using the loader's get_tile() method instead of accessing pre-loaded RAM data.
+    This is useful when slides are too large to fit in RAM.
+
+    Args:
+        slide_loaders: dict mapping slide_name -> CZILoader instance
+        tile_size: Size of tiles in pixels.
+        overlap: Overlap between tiles in pixels.
+        variance_threshold: Initial variance threshold (may be recalibrated).
+        calibration_block_size: Block size for variance calculation.
+        calibration_samples: Number of samples per slide for threshold calibration.
+        channel: Channel index to read from CZI files.
+
+    Returns:
+        tuple: (tissue_tiles, variance_threshold) where:
+            - tissue_tiles: list of (slide_name, tile_dict) tuples for tiles containing tissue
+            - variance_threshold: Calibrated variance threshold used for tissue detection
+    """
+    import cv2
+    from sklearn.cluster import KMeans
+    from segmentation.processing.memory import log_memory_status
+
+    log_memory_status("Phase 2 tissue detection (streaming) - START")
+
+    logger.info(f"\n{'='*70}")
+    logger.info("PHASE 2: IDENTIFYING TISSUE TILES (STREAMING MODE)")
+    logger.info(f"{'='*70}")
+
+    all_tiles = []
+
+    for slide_name, loader in slide_loaders.items():
+        full_width, full_height = loader.mosaic_size
+
+        n_tx = int(np.ceil(full_width / (tile_size - overlap)))
+        n_ty = int(np.ceil(full_height / (tile_size - overlap)))
+
+        slide_tiles = []
+        for ty in range(n_ty):
+            for tx in range(n_tx):
+                tile = {
+                    'id': len(slide_tiles),
+                    'x': tx * (tile_size - overlap),
+                    'y': ty * (tile_size - overlap),
+                    'w': min(tile_size, full_width - tx * (tile_size - overlap)),
+                    'h': min(tile_size, full_height - ty * (tile_size - overlap))
+                }
+                slide_tiles.append(tile)
+
+        logger.info(f"  {slide_name}: {len(slide_tiles)} tiles (mosaic: {full_width}x{full_height})")
+
+        for tile in slide_tiles:
+            all_tiles.append((slide_name, tile))
+
+    logger.info(f"\nTotal tiles across all slides: {len(all_tiles)}")
+
+    n_calib_samples = min(calibration_samples * len(slide_loaders), len(all_tiles))
+    logger.info(f"\nCalibrating tissue threshold from {n_calib_samples} samples...")
+
+    np.random.seed(42)
+    calib_indices = np.random.choice(len(all_tiles), n_calib_samples, replace=False)
+    calib_tiles = [all_tiles[idx] for idx in calib_indices]
+
+    calib_threads = max(1, int(os.cpu_count() * 0.8))
+
+    def calc_tile_variances(args):
+        slide_name, tile = args
+        loader = slide_loaders[slide_name]
+        tile_img = loader.get_tile(tile['x'], tile['y'], max(tile['w'], tile['h']), channel)
+
+        if tile_img is None:
+            return [0.0]
+
+        if tile_img.max() == 0:
+            return [0.0]
+
+        if tile_img.ndim == 3:
+            tile_norm = percentile_normalize(tile_img, p_low=5, p_high=95)
+            gray = cv2.cvtColor(tile_norm, cv2.COLOR_RGB2GRAY)
+        else:
+            gray = percentile_normalize(tile_img, p_low=5, p_high=95)
+
+        block_vars = calculate_block_variances(gray, calibration_block_size)
+        return block_vars if block_vars else []
+
+    all_variances = []
+    with ThreadPoolExecutor(max_workers=calib_threads) as executor:
+        futures = {executor.submit(calc_tile_variances, tile): tile for tile in calib_tiles}
+        for future in tqdm(as_completed(futures), total=len(calib_tiles), desc="Calibrating (streaming)"):
+            result = future.result()
+            all_variances.extend(result)
+
+    variances = np.array(all_variances)
+    logger.info(f"  Running K-means on {len(variances)} variance samples...")
+    kmeans = KMeans(n_clusters=3, random_state=42, n_init=10).fit(variances.reshape(-1, 1))
+    centers = kmeans.cluster_centers_.flatten()
+    labels = kmeans.labels_
+    sorted_indices = np.argsort(centers)
+    bottom_cluster_idx = sorted_indices[0]
+    bottom_cluster_variances = variances[labels == bottom_cluster_idx]
+    variance_threshold = float(np.max(bottom_cluster_variances)) if len(bottom_cluster_variances) > 0 else 15.0
+
+    logger.info(f"  K-means centers: {sorted(centers)[0]:.1f} (bg), {sorted(centers)[1]:.1f} (tissue), {sorted(centers)[2]:.1f} (outliers)")
+    logger.info(f"  Threshold: {variance_threshold:.1f}")
+
+    logger.info(f"\nFiltering to tissue-containing tiles...")
+
+    tissue_check_threads = max(1, int(os.cpu_count() * 0.8))
+    logger.info(f"  Using {tissue_check_threads} threads for parallel tissue checking")
+
+    def check_tile_tissue(args):
+        slide_name, tile = args
+        loader = slide_loaders[slide_name]
+        tile_img = loader.get_tile(tile['x'], tile['y'], max(tile['w'], tile['h']), channel)
+
+        if tile_img is None:
+            return None
+
+        if tile_img.max() == 0:
+            return None
+
+        tile_norm = percentile_normalize(tile_img, p_low=5, p_high=95)
+        has_tissue_flag, _ = has_tissue(tile_norm, variance_threshold, block_size=calibration_block_size)
+
+        if has_tissue_flag:
+            return (slide_name, tile)
+        return None
+
+    tissue_tiles = []
+    with ThreadPoolExecutor(max_workers=tissue_check_threads) as executor:
+        futures = {executor.submit(check_tile_tissue, tile_args): tile_args for tile_args in all_tiles}
+        for future in tqdm(as_completed(futures), total=len(all_tiles), desc="Checking tissue (streaming)"):
+            result = future.result()
+            if result is not None:
+                tissue_tiles.append(result)
+
+    logger.info(f"\nTissue tiles: {len(tissue_tiles)} / {len(all_tiles)} ({100*len(tissue_tiles)/len(all_tiles):.1f}%)")
+
+    log_memory_status("Phase 2 tissue detection (streaming) - END")
+
+    return tissue_tiles, variance_threshold
+
+
 def _phase3_sample_tiles(tissue_tiles, sample_fraction):
     """
     Phase 3: Sample tiles from the combined pool of tissue-containing tiles.
@@ -1709,54 +1855,220 @@ def run_multi_slide_segmentation(
     output_base = Path(output_base)
     output_base.mkdir(parents=True, exist_ok=True)
 
-    logger.info(f"\n{'='*70}")
-    logger.info(f"UNIFIED SAMPLING SEGMENTATION: {len(czi_paths)} slides (RAM-FIRST)")
-    logger.info(f"{'='*70}")
-    logger.info(f"Step 1: Load ALL slides into RAM using CZILoader")
-    logger.info(f"Step 2: Identify tissue tiles across all slides")
-    logger.info(f"Step 3: Sample {sample_fraction*100:.0f}% from combined pool")
-    logger.info(f"Step 4: Process with models loaded ONCE")
-    logger.info(f"{'='*70}")
+    # =========================================================================
+    # MULTI-GPU MODE: Memory-efficient streaming approach
+    # =========================================================================
+    if multi_gpu:
+        from segmentation.processing.multigpu_shm import SharedSlideManager, MultiGPUTileProcessorSHM
+        from segmentation.processing.memory import log_memory_status
 
-    # Phase 1: Load all slides into RAM
-    slide_data, slide_loaders = _phase1_load_slides(czi_paths, tile_size, overlap, channel)
+        logger.info(f"\n{'='*70}")
+        logger.info(f"UNIFIED SAMPLING SEGMENTATION: {len(czi_paths)} slides (STREAMING MODE)")
+        logger.info(f"{'='*70}")
+        logger.info(f"Step 1: Open CZI readers (NO RAM loading)")
+        logger.info(f"Step 2: Identify tissue tiles (on-demand reading)")
+        logger.info(f"Step 3: Sample {sample_fraction*100:.0f}% from combined pool")
+        logger.info(f"Step 4: Load to shared memory one-by-one, then process")
+        logger.info(f"{'='*70}")
 
-    # Phase 2: Identify tissue-containing tiles
-    # Note: variance_threshold is computed dynamically in phase 2
-    tissue_tiles, variance_threshold = _phase2_identify_tissue_tiles(
-        slide_data, tile_size, overlap, None, calibration_block_size, calibration_samples
-    )
+        log_memory_status("Before Phase 1")
 
-    # Phase 3: Sample from combined pool
-    sampled_tiles = _phase3_sample_tiles(tissue_tiles, sample_fraction)
+        # Phase 1: Just open loaders (NO RAM loading!)
+        logger.info(f"\n{'='*70}")
+        logger.info("PHASE 1: OPENING CZI READERS (NO RAM LOADING)")
+        logger.info(f"{'='*70}")
 
-    # Phase 4: Process sampled tiles with ML models
-    total_mk, total_hspc = _phase4_process_tiles(
-        sampled_tiles=sampled_tiles,
-        slide_data=slide_data,
-        slide_loaders=slide_loaders,
-        output_base=output_base,
-        mk_min_area=mk_min_area,
-        mk_max_area=mk_max_area,
-        variance_threshold=variance_threshold,
-        calibration_block_size=calibration_block_size,
-        num_workers=num_workers,
-        mk_classifier_path=mk_classifier_path,
-        hspc_classifier_path=hspc_classifier_path,
-        html_output_dir=html_output_dir,
-        samples_per_page=samples_per_page,
-        mk_min_area_um=mk_min_area_um,
-        mk_max_area_um=mk_max_area_um,
-        multi_gpu=multi_gpu,
-        num_gpus=num_gpus,
-    )
+        slide_loaders = {}
+        slide_metadata = {}
+        for czi_path in czi_paths:
+            czi_path = Path(czi_path)
+            slide_name = czi_path.stem
+            logger.info(f"Opening {slide_name}...")
+            loader = get_loader(czi_path, load_to_ram=False, channel=channel)
+            slide_loaders[slide_name] = loader
+            slide_metadata[slide_name] = {
+                'shape': loader.mosaic_size,
+                'czi_path': czi_path
+            }
 
-    # Clear slide data and loaders from RAM
-    del slide_data
-    for loader in slide_loaders.values():
-        loader.close()
-    del slide_loaders
-    gc.collect()
+        log_memory_status("After Phase 1 (loaders opened)")
+
+        # Phase 2: Identify tissue tiles using streaming (on-demand reading)
+        tissue_tiles, variance_threshold = _phase2_identify_tissue_tiles_streaming(
+            slide_loaders, tile_size, overlap, None, calibration_block_size, calibration_samples, channel
+        )
+
+        log_memory_status("After Phase 2 (tissue detection)")
+
+        # Phase 3: Sample from combined pool
+        sampled_tiles = _phase3_sample_tiles(tissue_tiles, sample_fraction)
+
+        # Phase 4: Load slides to shared memory ONE AT A TIME, then process
+        logger.info(f"\n{'='*70}")
+        logger.info("PHASE 4: LOADING TO SHARED MEMORY & PROCESSING")
+        logger.info(f"{'='*70}")
+
+        shm_manager = SharedSlideManager()
+        slide_results = {name: {'mk_count': 0, 'hspc_count': 0, 'mk_gid': 1, 'hspc_gid': 1}
+                        for name in slide_loaders.keys()}
+
+        # Determine which slides have sampled tiles
+        slides_with_tiles = set(slide_name for slide_name, _ in sampled_tiles)
+        logger.info(f"Loading {len(slides_with_tiles)} slides with sampled tiles to shared memory...")
+
+        for i, slide_name in enumerate(slides_with_tiles):
+            loader = slide_loaders[slide_name]
+            log_memory_status(f"Before loading slide {i+1}/{len(slides_with_tiles)} ({slide_name})")
+
+            # Create shared memory buffer
+            shape = (loader.height, loader.width)
+            dtype = np.uint16  # Standard CZI grayscale dtype
+            shm_buffer = shm_manager.create_slide_buffer(slide_name, shape, dtype)
+
+            # Load CZI directly into shared memory
+            logger.info(f"  [{i+1}/{len(slides_with_tiles)}] Loading {slide_name} to shared memory...")
+            loader.load_to_shared_memory(channel, shm_buffer)
+
+            log_memory_status(f"After loading slide {i+1}")
+            gc.collect()
+
+        log_memory_status("All slides in shared memory")
+
+        # Now process with GPU workers
+        total_mk = 0
+        total_hspc = 0
+
+        try:
+            with MultiGPUTileProcessorSHM(
+                num_gpus=num_gpus,
+                slide_info=shm_manager.get_slide_info(),
+                mk_classifier_path=mk_classifier_path,
+                hspc_classifier_path=hspc_classifier_path,
+                mk_min_area=mk_min_area,
+                mk_max_area=mk_max_area,
+                variance_threshold=variance_threshold,
+                calibration_block_size=calibration_block_size,
+            ) as processor:
+                logger.info(f"Submitting {len(sampled_tiles)} tiles to {num_gpus} GPUs...")
+                for slide_name, tile in sampled_tiles:
+                    processor.submit_tile(slide_name, tile)
+
+                logger.info("Collecting results...")
+                with tqdm(total=len(sampled_tiles), desc="Processing tiles (multi-GPU)") as pbar:
+                    collected = 0
+                    while collected < len(sampled_tiles):
+                        result = processor.collect_result(timeout=300)
+                        if result is None:
+                            logger.error(f"Timeout waiting for results ({collected}/{len(sampled_tiles)})")
+                            break
+                        if result.get('status') == 'ready':
+                            continue
+
+                        # Process result (save to disk)
+                        if result['status'] == 'success':
+                            slide_name = result['slide_name']
+                            tile = result['tile']
+                            tid = result['tid']
+                            output_dir = output_base / slide_name
+                            output_dir.mkdir(parents=True, exist_ok=True)
+
+                            sr = slide_results[slide_name]
+
+                            if result.get('mk_feats'):
+                                mk_dir = output_dir / "mk" / "tiles" / str(tid)
+                                mk_dir.mkdir(parents=True, exist_ok=True)
+                                with open(mk_dir / "window.csv", 'w') as f:
+                                    f.write(f"(slice({tile['y']}, {tile['y']+tile['h']}, None), slice({tile['x']}, {tile['x']+tile['w']}, None))")
+                                for feat in result['mk_feats']:
+                                    feat['center'][0] += tile['x']
+                                    feat['center'][1] += tile['y']
+                                    sr['mk_count'] += 1
+                                with open(mk_dir / "features.json", 'w') as f:
+                                    json.dump(result['mk_feats'], f)
+
+                            if result.get('hspc_feats'):
+                                hspc_dir = output_dir / "hspc" / "tiles" / str(tid)
+                                hspc_dir.mkdir(parents=True, exist_ok=True)
+                                with open(hspc_dir / "window.csv", 'w') as f:
+                                    f.write(f"(slice({tile['y']}, {tile['y']+tile['h']}, None), slice({tile['x']}, {tile['x']+tile['w']}, None))")
+                                for feat in result['hspc_feats']:
+                                    feat['center'][0] += tile['x']
+                                    feat['center'][1] += tile['y']
+                                    sr['hspc_count'] += 1
+                                with open(hspc_dir / "features.json", 'w') as f:
+                                    json.dump(result['hspc_feats'], f)
+
+                        del result
+                        gc.collect()
+                        pbar.update(1)
+                        collected += 1
+
+        finally:
+            logger.info("Cleaning up shared memory...")
+            shm_manager.cleanup()
+
+        # Calculate totals
+        for sr in slide_results.values():
+            total_mk += sr['mk_count']
+            total_hspc += sr['hspc_count']
+
+        # Cleanup loaders
+        for loader in slide_loaders.values():
+            loader.close()
+        del slide_loaders
+        gc.collect()
+
+    # =========================================================================
+    # STANDARD MODE: RAM-first architecture
+    # =========================================================================
+    else:
+        logger.info(f"\n{'='*70}")
+        logger.info(f"UNIFIED SAMPLING SEGMENTATION: {len(czi_paths)} slides (RAM-FIRST)")
+        logger.info(f"{'='*70}")
+        logger.info(f"Step 1: Load ALL slides into RAM using CZILoader")
+        logger.info(f"Step 2: Identify tissue tiles across all slides")
+        logger.info(f"Step 3: Sample {sample_fraction*100:.0f}% from combined pool")
+        logger.info(f"Step 4: Process with models loaded ONCE")
+        logger.info(f"{'='*70}")
+
+        # Phase 1: Load all slides into RAM
+        slide_data, slide_loaders = _phase1_load_slides(czi_paths, tile_size, overlap, channel)
+
+        # Phase 2: Identify tissue-containing tiles
+        tissue_tiles, variance_threshold = _phase2_identify_tissue_tiles(
+            slide_data, tile_size, overlap, None, calibration_block_size, calibration_samples
+        )
+
+        # Phase 3: Sample from combined pool
+        sampled_tiles = _phase3_sample_tiles(tissue_tiles, sample_fraction)
+
+        # Phase 4: Process sampled tiles with ML models
+        total_mk, total_hspc = _phase4_process_tiles(
+            sampled_tiles=sampled_tiles,
+            slide_data=slide_data,
+            slide_loaders=slide_loaders,
+            output_base=output_base,
+            mk_min_area=mk_min_area,
+            mk_max_area=mk_max_area,
+            variance_threshold=variance_threshold,
+            calibration_block_size=calibration_block_size,
+            num_workers=num_workers,
+            mk_classifier_path=mk_classifier_path,
+            hspc_classifier_path=hspc_classifier_path,
+            html_output_dir=html_output_dir,
+            samples_per_page=samples_per_page,
+            mk_min_area_um=mk_min_area_um,
+            mk_max_area_um=mk_max_area_um,
+            multi_gpu=False,  # Don't use multi-GPU in standard mode
+            num_gpus=num_gpus,
+        )
+
+        # Clear slide data and loaders from RAM
+        del slide_data
+        for loader in slide_loaders.values():
+            loader.close()
+        del slide_loaders
+        gc.collect()
 
     logger.info(f"\n{'='*70}")
     logger.info("ALL SLIDES COMPLETE")

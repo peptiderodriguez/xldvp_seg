@@ -12,6 +12,7 @@ Features:
 - Memory reporting: track RAM usage
 """
 
+import gc
 import logging
 import threading
 import numpy as np
@@ -19,6 +20,8 @@ from pathlib import Path
 from typing import Dict, List, Tuple, Optional, Union
 from tqdm import tqdm
 from aicspylibczi import CziFile
+
+from segmentation.processing.memory import log_memory_status
 
 logger = logging.getLogger(__name__)
 
@@ -242,6 +245,106 @@ class CZILoader:
             self._primary_channel = channel
 
         logger.info(f"Channel {channel} loaded: {self._get_array_memory_gb(channel_array):.2f} GB")
+
+    def load_to_shared_memory(
+        self,
+        channel: int,
+        shm_buffer: np.ndarray,
+        strip_height: int = 5000
+    ) -> None:
+        """
+        Load a CZI channel directly into a pre-allocated shared memory buffer.
+
+        Similar to _load_channel_to_ram() but writes directly into the provided
+        buffer instead of allocating a new numpy array. Useful for multi-process
+        scenarios where the buffer is backed by shared memory.
+
+        Args:
+            channel: Channel number to load
+            shm_buffer: Pre-allocated numpy array to write into. Must have shape
+                        (height, width) for grayscale or (height, width, 3) for RGB,
+                        matching the mosaic dimensions.
+            strip_height: Height of strips for loading (memory optimization)
+
+        Raises:
+            ValueError: If shm_buffer shape doesn't match mosaic dimensions
+        """
+        # Validate buffer dimensions
+        expected_2d = (self.height, self.width)
+        expected_rgb = (self.height, self.width, 3)
+
+        if shm_buffer.shape != expected_2d and shm_buffer.shape != expected_rgb:
+            raise ValueError(
+                f"shm_buffer shape {shm_buffer.shape} does not match expected "
+                f"{expected_2d} (grayscale) or {expected_rgb} (RGB)"
+            )
+
+        is_rgb_buffer = len(shm_buffer.shape) == 3 and shm_buffer.shape[-1] == 3
+
+        logger.info(
+            f"Loading channel {channel} to shared memory ({self.width:,} x {self.height:,} px)..."
+        )
+
+        n_strips = (self.height + strip_height - 1) // strip_height
+
+        # Read a small test strip to detect if this is RGB data
+        test_strip = self.reader.read_mosaic(
+            region=(self.x_start, self.y_start, min(100, self.width), min(100, self.height)),
+            scale_factor=1,
+            C=channel
+        )
+        test_strip = np.squeeze(test_strip)
+        is_rgb_data = len(test_strip.shape) == 3 and test_strip.shape[-1] == 3
+
+        if is_rgb_data and not is_rgb_buffer:
+            raise ValueError(
+                f"CZI channel {channel} contains RGB data but shm_buffer is 2D. "
+                f"Provide a buffer with shape {expected_rgb}."
+            )
+        if not is_rgb_data and is_rgb_buffer:
+            raise ValueError(
+                f"CZI channel {channel} contains grayscale data but shm_buffer is RGB. "
+                f"Provide a buffer with shape {expected_2d}."
+            )
+
+        if is_rgb_data:
+            logger.info(f"  Detected RGB data (shape: {test_strip.shape})")
+
+        iterator = range(n_strips)
+        if not self.quiet:
+            iterator = tqdm(iterator, desc=f"Loading ch{channel} to shared memory")
+
+        for i in iterator:
+            y_off = i * strip_height
+            h = min(strip_height, self.height - y_off)
+
+            strip = self.reader.read_mosaic(
+                region=(self.x_start, self.y_start + y_off, self.width, h),
+                scale_factor=1,
+                C=channel
+            )
+            strip = np.squeeze(strip)
+
+            if is_rgb_data:
+                # Ensure RGB data is uint8
+                if strip.dtype != np.uint8:
+                    strip = (strip / strip.max() * 255).astype(np.uint8) if strip.max() > 0 else strip.astype(np.uint8)
+                shm_buffer[y_off:y_off + h, :, :] = strip
+            else:
+                shm_buffer[y_off:y_off + h, :] = strip
+
+            # Free memory after each strip
+            del strip
+            gc.collect()
+
+            # Log memory status every 5 strips
+            if (i + 1) % 5 == 0:
+                log_memory_status(f"Loaded strip {i + 1}/{n_strips}")
+
+        logger.info(
+            f"Channel {channel} loaded to shared memory: "
+            f"{shm_buffer.nbytes / (1024 ** 3):.2f} GB"
+        )
 
     def load_channel(self, channel: int, strip_height: Optional[int] = None):
         """
@@ -471,7 +574,6 @@ class CZILoader:
         if hasattr(self, 'reader') and self.reader is not None:
             del self.reader
             self.reader = None
-            import gc
             gc.collect()
             logger.debug(f"Released reader for {self.slide_name} (data retained)")
 

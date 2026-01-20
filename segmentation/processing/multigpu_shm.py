@@ -64,6 +64,27 @@ class SharedSlideManager:
         logger.debug(f"Created shared memory for {name}: {data.nbytes / 1e9:.2f} GB")
         return info
 
+    def create_slide_buffer(self, name: str, shape: tuple, dtype) -> np.ndarray:
+        """Create shared memory and return numpy array backed by it for direct loading.
+
+        Args:
+            name: Slide name
+            shape: Shape of the array to create
+            dtype: Data type of the array
+
+        Returns:
+            numpy array backed by shared memory (caller can load data directly into it)
+        """
+        size = int(np.prod(shape)) * np.dtype(dtype).itemsize
+        shm = SharedMemory(create=True, size=size)
+        arr = np.ndarray(shape, dtype=dtype, buffer=shm.buf)
+
+        self.shared_memories[name] = shm
+        self.slide_info[name] = {'shm_name': shm.name, 'shape': shape, 'dtype': str(dtype)}
+
+        logger.info(f"Created shared memory for {name}: {size/1e9:.2f} GB")
+        return arr
+
     def get_slide_info(self) -> Dict[str, Dict[str, Any]]:
         """Get info dict for all slides (to pass to workers)."""
         return self.slide_info.copy()
