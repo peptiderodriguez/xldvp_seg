@@ -89,6 +89,20 @@ class SharedSlideManager:
         """Get info dict for all slides (to pass to workers)."""
         return self.slide_info.copy()
 
+    def cleanup_slide(self, name: str):
+        """Release shared memory for a single slide."""
+        if name in self.shared_memories:
+            try:
+                shm = self.shared_memories[name]
+                shm.close()
+                shm.unlink()
+                logger.debug(f"Released shared memory for {name}")
+            except Exception as e:
+                logger.warning(f"Error releasing shared memory for {name}: {e}")
+            del self.shared_memories[name]
+        if name in self.slide_info:
+            del self.slide_info[name]
+
     def cleanup(self):
         """Release all shared memory."""
         for name, shm in self.shared_memories.items():

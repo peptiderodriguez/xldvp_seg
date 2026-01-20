@@ -1936,21 +1936,41 @@ def run_multi_slide_segmentation(
         slides_with_tiles = set(slide_name for slide_name, _ in sampled_tiles)
         logger.info(f"Loading {len(slides_with_tiles)} slides with sampled tiles to shared memory...")
 
-        for i, slide_name in enumerate(slides_with_tiles):
+        failed_slides = set()
+        for i, slide_name in enumerate(list(slides_with_tiles)):
             loader = slide_loaders[slide_name]
             log_memory_status(f"Before loading slide {i+1}/{len(slides_with_tiles)} ({slide_name})")
 
-            # Create shared memory buffer
-            shape = (loader.height, loader.width)
-            dtype = np.uint16  # Standard CZI grayscale dtype
-            shm_buffer = shm_manager.create_slide_buffer(slide_name, shape, dtype)
+            try:
+                # Create shared memory buffer
+                shape = (loader.height, loader.width)
+                dtype = np.uint16  # Standard CZI grayscale dtype
+                shm_buffer = shm_manager.create_slide_buffer(slide_name, shape, dtype)
 
-            # Load CZI directly into shared memory
-            logger.info(f"  [{i+1}/{len(slides_with_tiles)}] Loading {slide_name} to shared memory...")
-            loader.load_to_shared_memory(channel, shm_buffer)
+                # Load CZI directly into shared memory
+                logger.info(f"  [{i+1}/{len(slides_with_tiles)}] Loading {slide_name} to shared memory...")
+                loader.load_to_shared_memory(channel, shm_buffer)
 
-            log_memory_status(f"After loading slide {i+1}")
-            gc.collect()
+                log_memory_status(f"After loading slide {i+1}")
+            except Exception as e:
+                logger.error(f"Failed to load {slide_name} to shared memory: {e}")
+                logger.error(f"Skipping {slide_name} and its tiles")
+                failed_slides.add(slide_name)
+                # Remove failed slide's shared memory if it was partially created
+                try:
+                    shm_manager.cleanup_slide(slide_name)
+                except Exception:
+                    pass
+            finally:
+                gc.collect()
+
+        # Filter out tiles from failed slides
+        if failed_slides:
+            original_count = len(sampled_tiles)
+            sampled_tiles = [(sn, t) for sn, t in sampled_tiles if sn not in failed_slides]
+            logger.warning(f"Removed {original_count - len(sampled_tiles)} tiles from {len(failed_slides)} failed slides")
+            if not sampled_tiles:
+                raise RuntimeError("All slides failed to load - aborting")
 
         log_memory_status("All slides in shared memory")
 

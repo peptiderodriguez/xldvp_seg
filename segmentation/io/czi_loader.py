@@ -323,6 +323,14 @@ class CZILoader:
             )
             strip = np.squeeze(strip)
 
+            # Validate shape after squeeze to catch dimension issues early
+            if is_rgb_data:
+                if strip.ndim != 3 or strip.shape[2] != 3:
+                    raise ValueError(f"Expected RGB strip shape (h, w, 3), got {strip.shape}")
+            else:
+                if strip.ndim != 2:
+                    raise ValueError(f"Expected grayscale strip shape (h, w), got {strip.shape}")
+
             if is_rgb_data:
                 # Ensure RGB data is uint8
                 if strip.dtype != np.uint8:
