@@ -1233,8 +1233,9 @@ def _phase2_identify_tissue_tiles(slide_data, tile_size, overlap, variance_thres
         slide_tiles = []
         for ty in range(n_ty):
             for tx in range(n_tx):
+                # Use globally unique tile ID to prevent collisions across slides
                 tile = {
-                    'id': len(slide_tiles),
+                    'id': f"{slide_name}_{len(slide_tiles)}",
                     'x': tx * (tile_size - overlap),
                     'y': ty * (tile_size - overlap),
                     'w': min(tile_size, full_width - tx * (tile_size - overlap)),
@@ -1373,8 +1374,9 @@ def _phase2_identify_tissue_tiles_streaming(slide_loaders, tile_size, overlap, v
             for tx in range(n_tx):
                 # Keep 0-based relative coordinates for consistency with shared memory indexing
                 # (get_tile calls will convert to global coordinates internally)
+                # Use globally unique tile ID to prevent collisions across slides
                 tile = {
-                    'id': len(slide_tiles),
+                    'id': f"{slide_name}_{len(slide_tiles)}",
                     'x': tx * (tile_size - overlap),
                     'y': ty * (tile_size - overlap),
                     'w': min(tile_size, full_width - tx * (tile_size - overlap)),
@@ -2024,17 +2026,19 @@ def run_multi_slide_segmentation(
         finally:
             logger.info("Cleaning up shared memory...")
             shm_manager.cleanup()
+            # Close CZI readers to prevent file descriptor leaks
+            for loader in slide_loaders.values():
+                try:
+                    loader.close()
+                except Exception as e:
+                    logger.warning(f"Error closing loader: {e}")
+            del slide_loaders
+            gc.collect()
 
         # Calculate totals
         for sr in slide_results.values():
             total_mk += sr['mk_count']
             total_hspc += sr['hspc_count']
-
-        # Cleanup loaders
-        for loader in slide_loaders.values():
-            loader.close()
-        del slide_loaders
-        gc.collect()
 
     # =========================================================================
     # STANDARD MODE: RAM-first architecture

@@ -7,8 +7,8 @@
 #SBATCH --mem=512G
 #SBATCH --time=48:00:00
 #SBATCH --gres=gpu:l40s:4
-#SBATCH --output=logs/%x_%j.out
-#SBATCH --error=logs/%x_%j.err
+#SBATCH --output=/fs/gpfs41/lv12/fileset02/pool/pool-mann-edwin/code_bin/xldvp_seg/logs/%x_%j.out
+#SBATCH --error=/fs/gpfs41/lv12/fileset02/pool/pool-mann-edwin/code_bin/xldvp_seg/logs/%x_%j.err
 
 # =============================================================================
 # Multi-GPU Parallel Processing (4 GPUs, 1 tile per GPU at a time)
