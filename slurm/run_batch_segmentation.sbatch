@@ -78,13 +78,13 @@ echo "GPU: $CUDA_VISIBLE_DEVICES"
 echo "Files to process: ${#CZI_PATHS[@]}"
 echo "============================================================"
 
-# Load conda environment
-if [ -f ~/miniforge3/etc/profile.d/conda.sh ]; then
+# Load conda environment (cluster-specific path)
+CONDA_BASE="/fs/gpfs41/lv07/fileset03/home/b_mann/rodriguez/miniforge3"
+if [ -f "$CONDA_BASE/etc/profile.d/conda.sh" ]; then
+    source "$CONDA_BASE/etc/profile.d/conda.sh"
+elif [ -f ~/miniforge3/etc/profile.d/conda.sh ]; then
     source ~/miniforge3/etc/profile.d/conda.sh
-elif [ -f /etc/profile.d/conda.sh ]; then
-    source /etc/profile.d/conda.sh
 fi
-
 conda activate mkseg
 
 # Check GPU
@@ -94,7 +94,7 @@ mkdir -p "$OUTPUT_DIR"
 mkdir -p logs
 
 # --- Run Batch Segmentation ---
-cd /home/dude/code/xldvp_seg_repo
+cd /fs/gpfs41/lv12/fileset02/pool/pool-mann-edwin/code_bin/xldvp_seg
 
 echo ""
 echo "Processing ${#CZI_PATHS[@]} files..."
