@@ -287,6 +287,10 @@ SAM2_EMBEDDING_DIM = 256
 RESNET50_FEATURE_DIM = 2048
 MORPHOLOGICAL_FEATURE_COUNT = 22
 
+# Vessel-specific feature count (imported from vessel_features module)
+# This is re-exported here for convenience
+VESSEL_FEATURE_COUNT = 28  # Approx count, see vessel_features.py for exact list
+
 
 def extract_morphological_features(mask: np.ndarray, image: np.ndarray) -> dict:
     """

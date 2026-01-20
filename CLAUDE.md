@@ -382,9 +382,27 @@ Created comprehensive `requirements.txt` organized by category.
 - `local_centroid`: [x, y] position of cell center within tile
 - `global_centroid` / `global_center`: [x, y] position in full mosaic
 
-**UID Formats:**
-- **MK/HSPC (run_unified_FAST.py):** `{slide}_{celltype}_{global_id}` (e.g., `2025_11_18_FGC1_mk_123`)
-- **NMJ/Vessel (run_segmentation.py):** `{slide}_{celltype}_{round(x)}_{round(y)}` (e.g., `slide_nmj_45678_12345`)
+**Canonical UID Format (All Cell Types):**
+All pipelines now use the **spatial UID format** for consistency:
+```
+{slide}_{celltype}_{round(x)}_{round(y)}
+```
+Examples:
+- `2025_11_18_FGC1_mk_12346_67890`
+- `slide_01_hspc_5000_3000`
+- `muscle_sample_nmj_1234_5678`
+- `tissue_vessel_9876_5432`
+
+**Legacy Support:** The old numeric `global_id` is preserved in `features.json` for backwards compatibility, but the spatial UID is now the primary identifier.
+
+See `docs/COORDINATE_SYSTEM.md` for full specification.
+
+**Coordinate Utilities:** Use `segmentation.processing.coordinates` for:
+- `generate_uid()` - Generate spatial UIDs
+- `parse_uid()` - Parse UID into components
+- `migrate_uid_format()` - Convert legacy UIDs
+- `validate_xy_coordinates()` - Validate coordinate bounds
+- `format_coordinates_for_export()` - Format coordinates for JSON/CSV
 
 Note: NumPy arrays use [row, col] indexing internally, but all stored/exported coordinates are [x, y].
 
@@ -827,9 +845,454 @@ python run_segmentation.py \
     --cd31-channel 1 \
     --min-vessel-diameter 15 \
     --max-vessel-diameter 300
+
+# Multi-marker parallel detection (SMA + CD31 + LYVE1)
+python run_segmentation.py \
+    --czi-path /path/to/slide.czi \
+    --cell-type vessel \
+    --channel 1 \
+    --all-channels \
+    --channel-names "nuclear,sma,cd31,lyve1" \
+    --parallel-detection \
+    --parallel-workers 3
 ```
+
+### Parallel Multi-Marker Detection
+For slides with multiple vessel markers (SMA, CD31, LYVE1), parallel detection runs all marker analyses simultaneously using CPU threads:
+
+| Parameter | Default | Description |
+|-----------|---------|-------------|
+| `--parallel-detection` | False | Enable parallel multi-marker detection |
+| `--parallel-workers` | 3 | Number of parallel workers (one per marker) |
+| `--channel-names` | None | Comma-separated channel names (e.g., "nuclear,sma,cd31,lyve1") |
+
+**How it works:**
+- Uses `ThreadPoolExecutor` for CPU parallelism (detection is CPU-bound OpenCV operations)
+- GPU operations (SAM2, ResNet) remain sequential
+- 3x speedup for multi-marker slides (48 CPU cores available)
+- Detects: SMA+ ring vessels, CD31+ capillaries (tubular), LYVE1+ lymphatics
+
+**Marker-specific detection:**
+| Marker | Detection Method | Vessel Types |
+|--------|-----------------|--------------|
+| SMA | Contour hierarchy (ring detection) | Arteries, arterioles, large veins |
+| CD31 | Connected components (tubular) | Capillaries (SMA-negative) |
+| LYVE1 | Connected components (intensity) | Lymphatic vessels |
+
+### Multi-Marker Convenience Mode (`--multi-marker`)
+The `--multi-marker` flag is a convenience option that auto-enables all multi-marker features:
+
+```bash
+# Full multi-marker vessel detection with 6-type classification
+python run_segmentation.py \
+    --czi-path /path/to/slide.czi \
+    --cell-type vessel \
+    --channel 1 \
+    --multi-marker \
+    --channel-names "nuclear,sma,cd31,lyve1" \
+    --candidate-mode \
+    --sample-fraction 0.10
+```
+
+**What `--multi-marker` does:**
+1. Auto-enables `--all-channels` (loads all channels to RAM)
+2. Auto-enables `--parallel-detection` (runs SMA/CD31/LYVE1 detection in parallel)
+3. Merges overlapping candidates from different markers using IoU-based deduplication
+4. Extracts multi-channel intensity features (per-channel wall/lumen stats + cross-channel ratios)
+
+**6-Type Vessel Classification:**
+| Vessel Type | Marker Profile | Typical Size |
+|-------------|----------------|--------------|
+| `artery` | SMA+, CD31- | >100µm diameter, thick wall |
+| `arteriole` | SMA+, CD31- | 10-100µm diameter |
+| `vein` | SMA+/weak, CD31+ | Large, thin wall |
+| `capillary` | SMA-, CD31+ | 3-10µm diameter, tubular |
+| `lymphatic` | SMA-, LYVE1+ | Irregular shape |
+| `collecting_lymphatic` | SMA+, LYVE1+ | Has smooth muscle wall |
+
+Use `--vessel-type-classifier /path/to/model.joblib` to apply trained ML classifier for 6-type classification.
 
 ### Output
 - `vessel_detections.json` - All vessels with contours in global coordinates
 - `vessel_coordinates.csv` - Quick export: uid, center (px/µm), diameter, wall thickness, confidence
 - `html/` - Interactive viewer for annotation
+
+---
+
+## Jan 20, 2026 - Vessel Pipeline Major Enhancements
+
+### New Modules Created
+
+#### 1. Reporting Module (`segmentation/reporting/`)
+Full PDF/HTML report generation with interactive Plotly visualizations.
+
+```
+segmentation/reporting/
+├── __init__.py
+├── stats.py             # VesselStatistics, quantiles, type breakdown
+├── plots.py             # 10 Plotly visualizations (dark theme)
+└── vessel_report.py     # VesselReport, BatchVesselReport classes
+```
+
+**Usage:**
+```python
+from segmentation.reporting import VesselReport, BatchVesselReport
+
+# Single slide report
+report = VesselReport.from_json("vessel_detections.json")
+report.generate_html("report.html")
+
+# Batch comparison (multiple slides)
+batch = BatchVesselReport.from_directory("output/", pattern="**/vessel_detections.json")
+batch.generate_html("batch_report.html")
+```
+
+**Visualizations:** Diameter/wall thickness histograms, scatter plots, vessel type pie charts, quality metrics, batch comparison violin plots.
+
+#### 2. Classification Module (`segmentation/classification/`)
+Two-stage ML classification pipeline.
+
+```
+segmentation/classification/
+├── __init__.py
+├── vessel_classifier.py      # Vessel TYPE classifier (capillary/arteriole/artery)
+├── vessel_detector_rf.py     # Stage 2: Is this a vessel? (yes/no)
+├── artery_vein_classifier.py # Stage 3: Artery vs vein
+└── feature_selection.py      # Feature importance, RFECV, learning curves
+```
+
+**Two-stage pipeline:**
+1. **Stage 1:** Candidate detection (permissive mode) - catches all potential vessels
+2. **Stage 2:** VesselDetectorRF - filters false positives (vessel vs non-vessel)
+3. **Stage 3:** ArteryVeinClassifier - classifies confirmed vessels
+
+**Training scripts:**
+```bash
+# Train vessel detector (binary: vessel vs non-vessel)
+python scripts/train_vessel_detector.py \
+    --annotations annotations.json \
+    --detections vessel_detections.json \
+    --output-dir ./classifier_output
+
+# Train with stratified sampling by size (prevents size bias)
+python scripts/train_vessel_detector.py \
+    --annotations annotations.json \
+    --detections vessel_detections.json \
+    --output-dir ./classifier_output \
+    --stratify-by-size
+
+# Run full pipeline
+python scripts/run_full_pipeline.py \
+    --input candidates.json \
+    --vessel-detector vessel_detector.joblib \
+    --artery-vein artery_vein.joblib \
+    --output final_results.json
+```
+
+**Stratified Sampling by Vessel Size:**
+To prevent the classifier from learning size as a proxy for vessel vs non-vessel, use `--stratify-by-size`:
+- Bins vessels into 3 size classes: small (<50 um), medium (50-200 um), large (>200 um)
+- Balances training data across size classes
+- Uses compound stratification (label + size) for cross-validation
+- Logs size distribution analysis before and after balancing
+
+#### 3. Vessel-Specific Features (`segmentation/utils/vessel_features.py`)
+28 biologically meaningful features replacing generic morphological features.
+
+| Category | Features |
+|----------|----------|
+| Ring/Wall (6) | `ring_completeness`, `wall_uniformity`, `wall_thickness_cv`, `wall_asymmetry`, `lumen_wall_ratio`, `wall_fraction` |
+| Shape (5) | `circularity`, `ellipticity`, `convexity`, `roughness`, `compactness` |
+| Size (4) | `outer_diameter_um`, `inner_diameter_um`, `diameter_ratio`, `hydraulic_diameter` |
+| Intensity (6) | `wall_intensity_mean/std`, `lumen_intensity_mean`, `wall_lumen_contrast`, `edge_gradient_mean/std` |
+| Context (2) | `background_intensity`, `wall_background_contrast` |
+| Derived (5) | `wall_thickness_range`, `wall_eccentricity`, `lumen_circularity`, `center_offset`, `wall_coverage` |
+
+**Usage:**
+```python
+from segmentation.utils import VESSEL_FEATURE_NAMES, extract_vessel_features
+features = extract_vessel_features(outer_contour, inner_contour, image, pixel_size_um)
+```
+
+#### 4. Candidate Detection Mode
+Permissive mode with relaxed thresholds for high recall.
+
+```bash
+python run_segmentation.py --czi-path slide.czi --cell-type vessel --candidate-mode
+```
+
+| Parameter | Standard | Candidate Mode |
+|-----------|----------|----------------|
+| `min_circularity` | 0.3 | 0.1 |
+| `min_ring_completeness` | 0.5 | 0.2 |
+| `max_aspect_ratio` | 4.0 | 6.0 |
+| `min_diameter_um` | 10 | 5 |
+| `max_diameter_um` | 1000 | 2000 |
+
+**New features:**
+- **Open vessel detection:** Detects arcs/curves (not just closed rings)
+- **`detection_confidence`:** 0-1 score based on ring completeness, circularity, wall uniformity, aspect ratio
+- **Arc-specific fields:** `arc_length_um`, `avg_curvature`, `straightness`
+
+#### 5. Enhanced HTML Annotation for RF Training
+Updated `segmentation/io/html_export.py` with RF-ready exports.
+
+**New features:**
+- **Batch annotation:** Select multiple → bulk Yes/No
+- **Filtering:** By diameter range, confidence level, annotated/unannotated
+- **Statistics display:** Yes/No counts, progress bar, remaining count
+- **Export formats:**
+  - CSV (RF-ready): `uid, annotation, feature1, feature2, ...`
+  - sklearn JSON: `{X: [], y: [], feature_names: []}`
+
+**RF training data preparation:**
+```bash
+# Basic preparation
+python scripts/prepare_rf_training_data.py \
+    --annotations vessel_annotations.json \
+    --detections vessel_detections.json \
+    --output-dir ./rf_training_data
+
+# With stratified sampling by vessel size (recommended)
+python scripts/prepare_rf_training_data.py \
+    --annotations vessel_annotations.json \
+    --detections vessel_detections.json \
+    --output-dir ./rf_training_data \
+    --stratify-by-size
+
+# With custom samples per size class
+python scripts/prepare_rf_training_data.py \
+    --annotations vessel_annotations.json \
+    --detections vessel_detections.json \
+    --output-dir ./rf_training_data \
+    --stratify-by-size \
+    --samples-per-size-class 50
+```
+
+**Size Classes for Stratification:**
+| Class | Diameter Range | Typical Vessel Type |
+|-------|----------------|---------------------|
+| capillary | 0-10 um | Capillaries |
+| arteriole | 10-50 um | Arterioles, venules |
+| small_artery | 50-150 um | Small arteries/veins |
+| artery | >150 um | Large arteries/veins |
+
+### Vessel Pipeline Workflow (Complete)
+
+```
+┌─────────────────────────────────────────────────────────────────────┐
+│                     VESSEL ANALYSIS PIPELINE                        │
+├─────────────────────────────────────────────────────────────────────┤
+│                                                                     │
+│  STAGE 1: Candidate Detection (--candidate-mode)                   │
+│  ┌─────────────────────────────────────────┐                       │
+│  │ • Relaxed thresholds (high recall)      │                       │
+│  │ • Detects rings + arcs                   │                       │
+│  │ • Extracts 28 vessel-specific features   │                       │
+│  │ • + 256 SAM2 + 2048 ResNet features      │                       │
+│  └─────────────────────────────────────────┘                       │
+│                         ↓                                           │
+│  STAGE 2: HTML Annotation                                          │
+│  ┌─────────────────────────────────────────┐                       │
+│  │ • Review candidates in browser           │                       │
+│  │ • Mark YES (vessel) or NO (not vessel)   │                       │
+│  │ • Batch operations, filtering            │                       │
+│  │ • Export to CSV/sklearn JSON             │                       │
+│  └─────────────────────────────────────────┘                       │
+│                         ↓                                           │
+│  STAGE 3: Train Vessel Detector RF                                 │
+│  ┌─────────────────────────────────────────┐                       │
+│  │ • Binary classifier: vessel vs non-vessel│                       │
+│  │ • Uses your annotations as ground truth  │                       │
+│  │ • Stratified by size to avoid bias       │                       │
+│  └─────────────────────────────────────────┘                       │
+│                         ↓                                           │
+│  STAGE 4: Run on 100% of tiles                                     │
+│  ┌─────────────────────────────────────────┐                       │
+│  │ • Candidate detection on all tiles       │                       │
+│  │ • Apply trained RF to filter             │                       │
+│  │ • Output: confirmed vessels only         │                       │
+│  └─────────────────────────────────────────┘                       │
+│                         ↓                                           │
+│  STAGE 5: Artery vs Vein Classification                            │
+│  ┌─────────────────────────────────────────┐                       │
+│  │ • Only for confirmed vessels             │                       │
+│  │ • Features: wall thickness, diameter     │                       │
+│  │ • RF or rule-based classification        │                       │
+│  └─────────────────────────────────────────┘                       │
+│                         ↓                                           │
+│  STAGE 6: Full Report                                              │
+│  ┌─────────────────────────────────────────┐                       │
+│  │ • Vessel counts by type                  │                       │
+│  │ • Diameter/thickness distributions       │                       │
+│  │ • Plotly interactive visualizations      │                       │
+│  └─────────────────────────────────────────┘                       │
+│                                                                     │
+└─────────────────────────────────────────────────────────────────────┘
+```
+
+### Status (Jan 20, 2026)
+
+| Component | Status | Files |
+|-----------|--------|-------|
+| Reporting module | ✅ Complete | `segmentation/reporting/` |
+| Coordinate unification | ✅ Complete | `docs/COORDINATE_SYSTEM.md`, `segmentation/processing/coordinates.py` |
+| Vessel type classifier | ✅ Complete | `segmentation/classification/vessel_classifier.py` |
+| HTML annotation workflow | ✅ Complete | `segmentation/io/html_export.py`, `scripts/prepare_rf_training_data.py` |
+| Vessel/non-vessel classifier | ✅ Complete | `segmentation/classification/vessel_detector_rf.py` |
+| Artery/vein classifier | ✅ Complete | `segmentation/classification/artery_vein_classifier.py` |
+| Vessel-specific features | ✅ Complete | `segmentation/utils/vessel_features.py` (32 features including log-transformed + size class) |
+| Permissive candidate mode | ✅ Complete | `--candidate-mode` flag in `run_segmentation.py` |
+| Full pipeline script | ✅ Complete | `scripts/run_full_pipeline.py` (3-stage pipeline orchestration) |
+| Partial vessel detection | 🔄 In progress | Building blocks exist but **no orchestration**. See notes below. |
+| Full feature extraction | ✅ Complete | Vessel strategy extracts 22 morph + 256 SAM2 + 2048 ResNet + 32 vessel-specific features. |
+| Size bias fixes | ✅ Complete | Log-transformed features, size_class categorical, size-adaptive sampling all implemented in `vessel_features.py`. |
+| Code review | ✅ Complete | Module imports, feature extraction, pipeline scripts verified Jan 20, 2026. |
+| Multi-channel feature extraction | ✅ Complete | `--all-channels` now works for vessels. `segmentation/utils/vessel_features.py` |
+| CD31 tubular detection | ✅ Complete | Capillary detection via intensity thresholding + tubularity filter |
+| LYVE1 lymphatic detection | ✅ Complete | Lymphatic detection with SMA check for collecting lymphatics |
+| Multi-marker candidate merging | ✅ Complete | Union-Find IoU-based deduplication in `_merge_candidates()` |
+| VesselTypeClassifier (6 types) | ✅ Complete | `segmentation/classification/vessel_type_classifier.py` |
+| `--multi-marker` CLI mode | ✅ Complete | Auto-enables `--all-channels`, `--parallel-detection`, and candidate merging |
+
+**Notes on incomplete items:**
+
+**Partial vessel detection (cross-tile merging) - 🔄 In Progress:**
+
+*What exists:*
+- `PartialVessel` dataclass for storing partial vessel data
+- `CrossTileMergeConfig` for configuring merge parameters
+- `_detect_boundary_partial_vessels()` - detects vessels touching tile edges
+- `_merge_partial_vessels()` - merges two partial vessels into one
+- `merge_across_tiles()` - attempts to match and merge across adjacent tiles
+- `get_partial_vessels()` / `clear_partial_vessels()` - accessor methods
+- `_partial_vessels` dictionary stores detected partials keyed by tile coordinates
+
+*What is missing:*
+- **No orchestration code** - `merge_across_tiles()` is defined but **never called** anywhere in the codebase
+- The tile processing loop in `run_segmentation.py` does not call the merge function after processing adjacent tiles
+- No post-processing step exists to iterate through tile pairs and merge vessels
+
+*To complete:*
+1. Modify `run_segmentation.py` to track processed tiles and call `merge_across_tiles()` after adjacent tiles are both done
+2. OR add a separate post-processing script that loads partial vessel data and performs merging
+3. Need to handle the merged vessels in the final output (deduplicate, update UIDs, etc.)
+
+### Multi-Channel Vessel Feature Extraction (Jan 20, 2026)
+
+The `--all-channels` flag now works for vessels, enabling per-channel intensity features and cross-channel ratios.
+
+**Channel Mapping (from CZI metadata):**
+| Channel | Fluorophore | Stain | Purpose |
+|---------|-------------|-------|---------|
+| ch0 | AF488 | Nuclear | Reference |
+| ch1 | AF647 | **SMA** | Detection channel |
+| ch2 | AF750 | PM750 | Plasma membrane |
+| ch3 | AF555 | CD31 | Endothelial marker |
+
+**New Features (per vessel):**
+| Category | Count | Examples |
+|----------|-------|----------|
+| Per-channel wall intensity | 16 | `ch0_wall_mean`, `sma_wall_std`, `cd31_wall_cv` |
+| Per-channel lumen intensity | 16 | `ch0_lumen_mean`, `sma_lumen_median` |
+| Cross-channel ratios | 6 | `sma_cd31_wall_ratio`, `cd31_lumen_wall_ratio` |
+
+**Total features:** ~2378 (22 morph + 32 vessel + 38 multichannel + 256 SAM2 + 2048 ResNet)
+
+**Usage:**
+```bash
+# CD31 slide
+python run_segmentation.py \
+    --czi-path /path/to/4channel_slide.czi \
+    --cell-type vessel \
+    --channel 1 \
+    --all-channels \
+    --channel-names "nuclear,sma,pm,cd31" \
+    --candidate-mode \
+    --sample-fraction 0.10 \
+    --sequential \
+    --load-to-ram \
+    --output-dir /home/dude/vessel_output/project_name
+
+# LYVE1 slide (lymphatics)
+python run_segmentation.py \
+    --czi-path /path/to/lyve1_slide.czi \
+    --cell-type vessel \
+    --channel 1 \
+    --all-channels \
+    --channel-names "nuclear,sma,pm,lyve1" \
+    --candidate-mode \
+    --sample-fraction 0.10 \
+    --sequential \
+    --load-to-ram \
+    --output-dir /home/dude/vessel_output/lyve1_project
+```
+
+**Files modified:**
+- `segmentation/utils/vessel_features.py` - Added `extract_multichannel_intensity_features()`, `compute_channel_ratios()`, `extract_all_vessel_features_multichannel()`
+- `run_segmentation.py` - Extended `--all-channels` to support vessels
+- `segmentation/detection/strategies/vessel.py` - Added `extra_channels` parameter to `detect()`
+
+### Multi-Marker All-Vessel Detection (Planned)
+
+**Goal:** Detect ALL vessel types (arteries, veins, capillaries, lymphatics) using multiple markers.
+
+**Biological marker profiles:**
+| Vessel Type | SMA | CD31 | LYVE1 | Current Status |
+|-------------|-----|------|-------|----------------|
+| Artery/Arteriole | +++ | + | - | ✅ Detected (SMA ring) |
+| Vein | +/- | + | - | ⚠️ Partial (weak SMA) |
+| Capillary | - | + | - | ❌ Missed (no SMA) |
+| Lymphatic | - | - | + | ❌ Missed (no SMA) |
+| Collecting lymphatic | + | - | + | ⚠️ Partial (rare) |
+
+**Planned approach: Single permissive detection + classify**
+```
+┌─────────────────────────────────────────────────────────────┐
+│  Stage 1: Per-Channel Detection (parallel)                  │
+│    SMA → rings (arteries/veins)                            │
+│    CD31 → tubular structures (capillaries)                 │
+│    LYVE1 → irregular structures (lymphatics)               │
+├─────────────────────────────────────────────────────────────┤
+│  Stage 2: Merge overlapping candidates (IoU > 0.5)         │
+├─────────────────────────────────────────────────────────────┤
+│  Stage 3: Multi-channel feature extraction                  │
+│    + marker profile features (sma_score, cd31_score, etc.) │
+├─────────────────────────────────────────────────────────────┤
+│  Stage 4: Classification                                    │
+│    A) VesselDetectorRF: Is this a vessel? (yes/no)         │
+│    B) VesselTypeClassifier: artery/vein/capillary/lymph    │
+└─────────────────────────────────────────────────────────────┘
+```
+
+**New CLI flags (planned):**
+- `--multi-marker` - Enable multi-marker detection
+- `--detect-capillaries` - Enable CD31-based capillary detection
+- `--detect-lymphatics` - Enable LYVE1-based lymphatic detection
+- `--lyve1-channel` - LYVE1 channel index
+
+**Implementation status:**
+- [x] CD31 tubular detection - `_detect_cd31_tubular()` in vessel.py
+- [x] LYVE1 detection (lymphatics + collecting) - `_detect_lyve1_structures()` in vessel.py
+- [x] Candidate merging (Union-Find) - `_merge_candidates()` in vessel.py
+- [x] VesselTypeClassifier (6 types) - `segmentation/classification/vessel_type_classifier.py`
+- [x] Wire up `--multi-marker` CLI flag
+
+**Vessel type classification (marker combinations):**
+| SMA | CD31 | LYVE1 | Type |
+|-----|------|-------|------|
+| +++ | + | - | artery |
+| ++ | + | - | arteriole |
+| +/- | + | - | vein |
+| - | + | - | capillary |
+| - | - | + | lymphatic |
+| + | - | + | collecting_lymphatic |
+
+**New methods in vessel.py:**
+- `_detect_cd31_tubular()` - CD31+ tubular structures (capillaries, 3-20µm)
+- `_detect_lyve1_structures()` - LYVE1+ structures (lymphatics, checks SMA for collecting)
+- `_merge_candidates()` - Deduplicates overlapping detections via IoU
+- `_compute_iou()` - IoU between contours
+
+### Recommended Tile Size
+**Default tile size: 4000x4000 pixels** (increased from 3000x3000 for better vessel detection at boundaries)

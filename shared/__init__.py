@@ -71,6 +71,19 @@ from segmentation.processing.coordinates import (
     tile_to_global_coords,
     generate_uid,
     mask_to_crop_coords,
+    # UID parsing and migration
+    parse_uid,
+    migrate_uid_format,
+    is_spatial_uid,
+    # Coordinate validation
+    CoordinateValidationError,
+    validate_xy_coordinates,
+    validate_array_indices,
+    validate_bbox_xyxy,
+    # Coordinate labeling helpers
+    create_coordinate_dict,
+    format_coordinates_for_export,
+    convert_detections_to_spatial_uids,
 )
 
 from segmentation.io.czi_loader import CZILoader, get_loader, clear_cache, get_cached_paths
@@ -150,6 +163,19 @@ __all__ = [
     'tile_to_global_coords',
     'generate_uid',
     'mask_to_crop_coords',
+    # UID parsing and migration
+    'parse_uid',
+    'migrate_uid_format',
+    'is_spatial_uid',
+    # Coordinate validation
+    'CoordinateValidationError',
+    'validate_xy_coordinates',
+    'validate_array_indices',
+    'validate_bbox_xyxy',
+    # Coordinate labeling helpers
+    'create_coordinate_dict',
+    'format_coordinates_for_export',
+    'convert_detections_to_spatial_uids',
     # CZI loading
     'CZILoader',
     'get_loader',

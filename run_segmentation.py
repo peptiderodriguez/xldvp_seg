@@ -96,6 +96,10 @@ from segmentation.detection.strategies.vessel import VesselStrategy
 from segmentation.detection.strategies.cell import CellStrategy
 from segmentation.detection.strategies.mesothelium import MesotheliumStrategy
 
+# Import vessel classifier for ML-based classification
+from segmentation.classification.vessel_classifier import VesselClassifier, classify_vessel
+from segmentation.classification.vessel_type_classifier import VesselTypeClassifier
+
 logger = get_logger(__name__)
 
 # Global list to track spawned processes for cleanup (foreground mode only)
@@ -622,6 +626,10 @@ def create_strategy_for_cell_type(cell_type, params, pixel_size_um):
             min_circularity=params.get('min_circularity', 0.3),
             min_ring_completeness=params.get('min_ring_completeness', 0.5),
             classify_vessel_types=params.get('classify_vessel_types', False),
+            candidate_mode=params.get('candidate_mode', False),
+            parallel_detection=params.get('parallel_detection', False),
+            parallel_workers=params.get('parallel_workers', 3),
+            multi_marker=params.get('multi_marker', False),
         )
     elif cell_type == 'mesothelium':
         return MesotheliumStrategy(
@@ -2609,6 +2617,8 @@ def run_pipeline(args):
     logger.info(f"Slide: {slide_name}")
     logger.info(f"Cell type: {args.cell_type}")
     logger.info(f"Channel: {args.channel}")
+    if getattr(args, 'multi_marker', False):
+        logger.info("Multi-marker mode: ENABLED (auto-enabled --all-channels and --parallel-detection)")
     logger.info("=" * 60)
 
     # RAM-first architecture: Load CZI channel into RAM ONCE at pipeline start
@@ -2790,6 +2800,12 @@ def run_pipeline(args):
             'min_ring_completeness': args.min_ring_completeness,
             'pixel_size_um': pixel_size_um,
             'classify_vessel_types': args.classify_vessel_types,
+            'use_ml_classification': args.use_ml_classification,
+            'vessel_classifier_path': args.vessel_classifier_path,
+            'candidate_mode': args.candidate_mode,
+            'parallel_detection': getattr(args, 'parallel_detection', False),
+            'parallel_workers': getattr(args, 'parallel_workers', 3),
+            'multi_marker': getattr(args, 'multi_marker', False),
         }
     elif args.cell_type == 'mesothelium':
         params = {
@@ -2809,6 +2825,44 @@ def run_pipeline(args):
     if use_new_detector:
         strategy = create_strategy_for_cell_type(args.cell_type, params, pixel_size_um)
         logger.info(f"Using {strategy.name} strategy: {strategy.get_config()}")
+
+    # Load vessel classifier if ML classification requested
+    vessel_classifier = None
+    if args.cell_type == 'vessel' and args.use_ml_classification:
+        classifier_path = args.vessel_classifier_path
+        if classifier_path and Path(classifier_path).exists():
+            try:
+                vessel_classifier = VesselClassifier.load(classifier_path)
+                logger.info(f"Loaded vessel classifier from: {classifier_path}")
+                logger.info(f"  CV accuracy: {vessel_classifier.metrics.get('cv_accuracy_mean', 'N/A'):.4f}")
+            except Exception as e:
+                logger.warning(f"Failed to load vessel classifier: {e}")
+                logger.warning("Falling back to rule-based classification")
+        else:
+            logger.warning("--use-ml-classification specified but no model path provided or file not found")
+            logger.warning("Falling back to rule-based classification")
+            if args.classify_vessel_types:
+                logger.info("Using rule-based diameter thresholds for vessel classification")
+
+    # Load VesselTypeClassifier if path provided (for multi-marker 6-type classification)
+    vessel_type_classifier = None
+    if args.cell_type == 'vessel' and getattr(args, 'vessel_type_classifier', None):
+        classifier_path = args.vessel_type_classifier
+        if Path(classifier_path).exists():
+            try:
+                vessel_type_classifier = VesselTypeClassifier.load(classifier_path)
+                logger.info(f"Loaded VesselTypeClassifier from: {classifier_path}")
+                if vessel_type_classifier.metrics:
+                    accuracy = vessel_type_classifier.metrics.get('cv_accuracy_mean', 'N/A')
+                    if isinstance(accuracy, float):
+                        logger.info(f"  CV accuracy: {accuracy:.4f}")
+                    else:
+                        logger.info(f"  CV accuracy: {accuracy}")
+            except Exception as e:
+                logger.warning(f"Failed to load VesselTypeClassifier: {e}")
+                vessel_type_classifier = None
+        else:
+            logger.warning(f"VesselTypeClassifier path does not exist: {classifier_path}")
 
     # Process tiles
     logger.info("Processing tiles...")
@@ -2833,6 +2887,7 @@ def run_pipeline(args):
 
             # Convert to RGB - use true multi-channel if available
             # For NMJ: ch0=nuclear (488), ch1=BTX (647), ch2=NFL (750)
+            # For Vessel: ch0=nuclear, ch1=SMA (detection), ch2=PM, ch3=CD31
             # Stack as RGB so ResNet sees all channels
             extra_channel_tiles = None
             if args.cell_type == 'nmj' and len(all_channel_data) >= 3:
@@ -2847,6 +2902,21 @@ def run_pipeline(args):
                 tile_rgb = np.stack([ch0_tile, ch1_tile, ch2_tile], axis=-1)
                 # Also pass individual channels for per-channel feature extraction
                 extra_channel_tiles = {0: ch0_tile, 1: ch1_tile, 2: ch2_tile}
+            elif args.cell_type == 'vessel' and len(all_channel_data) >= 2:
+                # Build multi-channel data dict for vessel feature extraction
+                # Use detection channel (SMA) as primary, but extract features from all
+                extra_channel_tiles = {}
+                for ch_idx, ch_data in all_channel_data.items():
+                    ch_tile = ch_data[tile_y:tile_y + args.tile_size,
+                                      tile_x:tile_x + args.tile_size]
+                    extra_channel_tiles[ch_idx] = ch_tile
+                # For RGB, use first 3 channels or replicate detection channel
+                if len(all_channel_data) >= 3:
+                    ch_keys = sorted(all_channel_data.keys())[:3]
+                    tile_rgb = np.stack([extra_channel_tiles[k] for k in ch_keys], axis=-1)
+                else:
+                    # Fallback: use detection channel for all RGB
+                    tile_rgb = np.stack([tile_data] * 3, axis=-1)
             elif tile_data.ndim == 2:
                 tile_rgb = np.stack([tile_data] * 3, axis=-1)
             else:
@@ -2865,10 +2935,17 @@ def run_pipeline(args):
                 # New CellDetector + strategy pattern
                 # The strategy's detect() method returns (label_array, list[Detection])
                 if args.cell_type == 'vessel':
-                    # Vessel strategy needs cd31_channel parameter
+                    # Vessel strategy with cd31_channel and optional multi-channel features
+                    # Parse custom channel names if provided
+                    channel_names = None
+                    if getattr(args, 'channel_names', None):
+                        names = args.channel_names.split(',')
+                        channel_names = {i: name.strip() for i, name in enumerate(names)}
                     masks, detections = strategy.detect(
                         tile_rgb, detector.models, pixel_size_um,
-                        cd31_channel=cd31_channel_data
+                        cd31_channel=cd31_channel_data,
+                        extra_channels=extra_channel_tiles,  # Multi-channel for feature extraction
+                        channel_names=channel_names  # Custom channel names
                     )
                 elif args.cell_type == 'nmj' and extra_channel_tiles is not None:
                     # NMJ strategy with multi-channel feature extraction
@@ -2926,6 +3003,45 @@ def run_pipeline(args):
                                 feat['features']['channel_specificity'] = primary_int / max(other_ints)
                             else:
                                 feat['features']['channel_specificity'] = float('inf')
+
+            # Apply ML-based vessel classification if classifier loaded
+            if args.cell_type == 'vessel' and vessel_classifier is not None:
+                for feat in features_list:
+                    try:
+                        vessel_type, confidence = vessel_classifier.predict(feat['features'])
+                        feat['features']['vessel_type'] = vessel_type
+                        feat['features']['vessel_type_confidence'] = float(confidence)
+                        feat['features']['classification_method'] = 'ml'
+                    except Exception as e:
+                        # Fall back to rule-based if ML fails
+                        vessel_type, confidence = VesselClassifier.rule_based_classify(feat['features'])
+                        feat['features']['vessel_type'] = vessel_type
+                        feat['features']['vessel_type_confidence'] = float(confidence)
+                        feat['features']['classification_method'] = 'rule_based_fallback'
+                        logger.debug(f"ML classification failed, using rule-based: {e}")
+
+            # Apply VesselTypeClassifier for 6-type classification (multi-marker mode)
+            if args.cell_type == 'vessel' and vessel_type_classifier is not None:
+                for feat in features_list:
+                    try:
+                        vessel_type, confidence = vessel_type_classifier.predict(feat['features'])
+                        # Get full probability distribution
+                        probs = vessel_type_classifier.predict_proba(feat['features'])
+                        feat['features']['vessel_type_6class'] = vessel_type
+                        feat['features']['vessel_type_6class_confidence'] = float(confidence)
+                        feat['features']['vessel_type_6class_probabilities'] = {
+                            k: float(v) for k, v in probs.items()
+                        } if probs else {}
+                        feat['features']['classification_method_6class'] = 'ml_vessel_type_classifier'
+                    except Exception as e:
+                        # Fall back to rule-based if ML fails
+                        try:
+                            vessel_type, confidence = vessel_type_classifier.rule_based_classify(feat['features'])
+                            feat['features']['vessel_type_6class'] = vessel_type
+                            feat['features']['vessel_type_6class_confidence'] = float(confidence)
+                            feat['features']['classification_method_6class'] = 'rule_based_fallback'
+                        except Exception as e2:
+                            logger.debug(f"VesselTypeClassifier failed (both ML and rule-based): {e}, {e2}")
 
             # Add universal IDs and global coordinates to each detection
             for feat in features_list:
@@ -3143,6 +3259,8 @@ def main():
     parser.add_argument('--channel', type=int, default=1, help='Primary channel index for detection')
     parser.add_argument('--all-channels', action='store_true',
                         help='Load all channels for multi-channel analysis (NMJ specificity checking)')
+    parser.add_argument('--channel-names', type=str, default=None,
+                        help='Comma-separated channel names for feature naming (e.g., "nuclear,sma,pm,cd31" or "nuclear,sma,pm,lyve1")')
 
     # NMJ parameters
     parser.add_argument('--intensity-percentile', type=float, default=99)
@@ -3173,7 +3291,37 @@ def main():
     parser.add_argument('--cd31-channel', type=int, default=None,
                         help='CD31 channel index for vessel validation (optional)')
     parser.add_argument('--classify-vessel-types', action='store_true',
-                        help='Auto-classify vessels by size (capillary/arteriole/artery)')
+                        help='Auto-classify vessels by size (capillary/arteriole/artery) using rule-based method')
+    parser.add_argument('--use-ml-classification', action='store_true',
+                        help='Use ML-based vessel classification (requires trained model)')
+    parser.add_argument('--vessel-classifier-path', type=str, default=None,
+                        help='Path to trained vessel classifier (.joblib). If not provided with '
+                             '--use-ml-classification, falls back to rule-based classification.')
+    parser.add_argument('--candidate-mode', action='store_true',
+                        help='Enable candidate generation mode for vessel detection. '
+                             'Relaxes all thresholds to catch more potential vessels (higher recall). '
+                             'Includes detection_confidence score (0-1) for each candidate. '
+                             'Use for generating training data for manual annotation + RF classifier.')
+    parser.add_argument('--parallel-detection', action='store_true',
+                        help='Enable parallel multi-marker vessel detection. '
+                             'Runs SMA, CD31, and LYVE1 detection in parallel using CPU threads. '
+                             'Requires --channel-names to specify marker channels. '
+                             'Example: --channel-names "nuclear,sma,cd31,lyve1" --parallel-detection')
+    parser.add_argument('--parallel-workers', type=int, default=3,
+                        help='Number of parallel workers for multi-marker detection (default: 3). '
+                             'One worker per marker type (SMA, CD31, LYVE1).')
+    parser.add_argument('--multi-marker', action='store_true',
+                        help='Enable full multi-marker vessel detection pipeline. '
+                             'Automatically enables --all-channels and --parallel-detection. '
+                             'Detects SMA+ rings, CD31+ capillaries, and LYVE1+ lymphatics. '
+                             'Merges overlapping candidates from different markers. '
+                             'Extracts multi-channel features for downstream classification. '
+                             'Example: --multi-marker --channel-names "nuclear,sma,cd31,lyve1"')
+    parser.add_argument('--vessel-type-classifier', type=str, default=None,
+                        help='Path to trained VesselTypeClassifier model (.joblib) for 6-type '
+                             'vessel classification (artery/arteriole/vein/capillary/lymphatic/'
+                             'collecting_lymphatic). Used with --multi-marker for automated '
+                             'vessel type prediction based on marker profiles and morphology.')
 
     # Mesothelium parameters (for LMD chunking)
     parser.add_argument('--target-chunk-area', type=float, default=1500,
@@ -3236,6 +3384,15 @@ def main():
     # Require --cell-type if not showing metadata
     if args.cell_type is None:
         parser.error("--cell-type is required unless using --show-metadata")
+
+    # Handle --multi-marker: automatically enable dependent flags
+    if getattr(args, 'multi_marker', False):
+        if args.cell_type != 'vessel':
+            parser.error("--multi-marker is only valid with --cell-type vessel")
+        # Auto-enable all-channels and parallel-detection
+        args.all_channels = True
+        args.parallel_detection = True
+        # Note: logger not available yet, will log in run_pipeline()
 
     run_pipeline(args)
 

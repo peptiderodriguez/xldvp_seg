@@ -1020,19 +1020,21 @@ def run_unified_segmentation(
                                 old_id = int(feat['id'].split('_')[1])
                                 new_mk[result['mk_masks'] == old_id] = mk_gid
                                 feat['id'] = f'det_{mk_gid - 1}'
-                                feat['global_id'] = mk_gid
+                                feat['global_id'] = mk_gid  # Keep for backwards compatibility
                                 feat['center'][0] += tile['x']
                                 feat['center'][1] += tile['y']
+                                # Generate spatial UID: {slide}_{celltype}_{round(x)}_{round(y)}
+                                feat['uid'] = f"{slide_name}_mk_{round(feat['center'][0])}_{round(feat['center'][1])}"
                                 mk_tile_cells.append(mk_gid)
                                 mk_count += 1  # Just count, features already saved to disk
                                 mk_gid += 1
-                            
+
                             with open(mk_tile_dir / "classes.csv", 'w') as f:
                                 for c in mk_tile_cells: f.write(f"{c}\n")
                             with h5py.File(mk_tile_dir / "segmentation.h5", 'w') as f:
                                 create_hdf5_dataset(f, 'labels', new_mk[np.newaxis])
                             with open(mk_tile_dir / "features.json", 'w') as f:
-                                json.dump([{'id': m['id'], 'global_id': m['global_id'], 'center': m['center'], 'features': m['features']} for m in result['mk_feats']], f)
+                                json.dump([{'id': m['id'], 'global_id': m['global_id'], 'uid': m['uid'], 'center': m['center'], 'features': m['features']} for m in result['mk_feats']], f)
 
                             # Explicit cleanup to prevent memory accumulation
                             del new_mk, mk_tile_cells
@@ -1052,19 +1054,21 @@ def run_unified_segmentation(
                                 old_id = int(feat['id'].split('_')[1])
                                 new_hspc[result['hspc_masks'] == old_id] = hspc_gid
                                 feat['id'] = f'det_{hspc_gid - 1}'
-                                feat['global_id'] = hspc_gid
+                                feat['global_id'] = hspc_gid  # Keep for backwards compatibility
                                 feat['center'][0] += tile['x']
                                 feat['center'][1] += tile['y']
+                                # Generate spatial UID: {slide}_{celltype}_{round(x)}_{round(y)}
+                                feat['uid'] = f"{slide_name}_hspc_{round(feat['center'][0])}_{round(feat['center'][1])}"
                                 hspc_tile_cells.append(hspc_gid)
                                 hspc_count += 1  # Just count, features already saved to disk
                                 hspc_gid += 1
-                                
+
                             with open(hspc_tile_dir / "classes.csv", 'w') as f:
                                 for c in hspc_tile_cells: f.write(f"{c}\n")
                             with h5py.File(hspc_tile_dir / "segmentation.h5", 'w') as f:
                                 create_hdf5_dataset(f, 'labels', new_hspc[np.newaxis])
                             with open(hspc_tile_dir / "features.json", 'w') as f:
-                                json.dump([{'id': h['id'], 'global_id': h['global_id'], 'center': h['center'], 'features': h['features']} for h in result['hspc_feats']], f)
+                                json.dump([{'id': h['id'], 'global_id': h['global_id'], 'uid': h['uid'], 'center': h['center'], 'features': h['features']} for h in result['hspc_feats']], f)
 
                             # Explicit cleanup to prevent memory accumulation
                             del new_hspc, hspc_tile_cells
@@ -1605,9 +1609,11 @@ def _phase4_process_tiles(
                     old_id = int(feat['id'].split('_')[1])
                     new_mk[result['mk_masks'] == old_id] = sr['mk_gid']
                     feat['id'] = f'det_{sr["mk_gid"] - 1}'
-                    feat['global_id'] = sr['mk_gid']
+                    feat['global_id'] = sr['mk_gid']  # Keep for backwards compatibility
                     feat['center'][0] += tile['x']
                     feat['center'][1] += tile['y']
+                    # Generate spatial UID: {slide}_{celltype}_{round(x)}_{round(y)}
+                    feat['uid'] = f"{slide_name}_mk_{round(feat['center'][0])}_{round(feat['center'][1])}"
                     mk_tile_cells.append(sr['mk_gid'])
                     sr['mk_count'] += 1
                     sr['mk_gid'] += 1
@@ -1617,7 +1623,7 @@ def _phase4_process_tiles(
                 with h5py.File(mk_tile_dir / "segmentation.h5", 'w') as f:
                     create_hdf5_dataset(f, 'labels', new_mk[np.newaxis])
                 with open(mk_tile_dir / "features.json", 'w') as f:
-                    json.dump([{'id': m['id'], 'global_id': m['global_id'], 'center': m['center'], 'features': m['features']} for m in result['mk_feats']], f)
+                    json.dump([{'id': m['id'], 'global_id': m['global_id'], 'uid': m['uid'], 'center': m['center'], 'features': m['features']} for m in result['mk_feats']], f)
 
                 del new_mk, mk_tile_cells
 
@@ -1635,9 +1641,11 @@ def _phase4_process_tiles(
                     old_id = int(feat['id'].split('_')[1])
                     new_hspc[result['hspc_masks'] == old_id] = sr['hspc_gid']
                     feat['id'] = f'det_{sr["hspc_gid"] - 1}'
-                    feat['global_id'] = sr['hspc_gid']
+                    feat['global_id'] = sr['hspc_gid']  # Keep for backwards compatibility
                     feat['center'][0] += tile['x']
                     feat['center'][1] += tile['y']
+                    # Generate spatial UID: {slide}_{celltype}_{round(x)}_{round(y)}
+                    feat['uid'] = f"{slide_name}_hspc_{round(feat['center'][0])}_{round(feat['center'][1])}"
                     hspc_tile_cells.append(sr['hspc_gid'])
                     sr['hspc_count'] += 1
                     sr['hspc_gid'] += 1
@@ -1647,7 +1655,7 @@ def _phase4_process_tiles(
                 with h5py.File(hspc_tile_dir / "segmentation.h5", 'w') as f:
                     create_hdf5_dataset(f, 'labels', new_hspc[np.newaxis])
                 with open(hspc_tile_dir / "features.json", 'w') as f:
-                    json.dump([{'id': h['id'], 'global_id': h['global_id'], 'center': h['center'], 'features': h['features']} for h in result['hspc_feats']], f)
+                    json.dump([{'id': h['id'], 'global_id': h['global_id'], 'uid': h['uid'], 'center': h['center'], 'features': h['features']} for h in result['hspc_feats']], f)
 
                 del new_hspc, hspc_tile_cells
 
@@ -2241,9 +2249,11 @@ def save_tile_results(result, output_base, slide_results, slide_results_lock):
             old_id = int(feat['id'].split('_')[1])
             new_mk[result['mk_masks'] == old_id] = current_gid
             feat['id'] = f'det_{current_gid - 1}'
-            feat['global_id'] = current_gid
+            feat['global_id'] = current_gid  # Keep for backwards compatibility
             feat['center'][0] += tile['x']
             feat['center'][1] += tile['y']
+            # Generate spatial UID: {slide}_{celltype}_{round(x)}_{round(y)}
+            feat['uid'] = f"{slide_name}_mk_{round(feat['center'][0])}_{round(feat['center'][1])}"
             mk_tile_cells.append(current_gid)
             current_gid += 1
 
@@ -2253,7 +2263,7 @@ def save_tile_results(result, output_base, slide_results, slide_results_lock):
         with h5py.File(mk_tile_dir / "segmentation.h5", 'w') as f:
             create_hdf5_dataset(f, 'labels', new_mk[np.newaxis])
         with open(mk_tile_dir / "features.json", 'w') as f:
-            json.dump([{'id': m['id'], 'global_id': m['global_id'], 'center': m['center'], 'features': m['features']} for m in result['mk_feats']], f)
+            json.dump([{'id': m['id'], 'global_id': m['global_id'], 'uid': m['uid'], 'center': m['center'], 'features': m['features']} for m in result['mk_feats']], f)
 
     if result['hspc_feats']:
         hspc_dir = output_dir / "hspc" / "tiles"
@@ -2270,9 +2280,11 @@ def save_tile_results(result, output_base, slide_results, slide_results_lock):
             old_id = int(feat['id'].split('_')[1])
             new_hspc[result['hspc_masks'] == old_id] = current_gid
             feat['id'] = f'det_{current_gid - 1}'
-            feat['global_id'] = current_gid
+            feat['global_id'] = current_gid  # Keep for backwards compatibility
             feat['center'][0] += tile['x']
             feat['center'][1] += tile['y']
+            # Generate spatial UID: {slide}_{celltype}_{round(x)}_{round(y)}
+            feat['uid'] = f"{slide_name}_hspc_{round(feat['center'][0])}_{round(feat['center'][1])}"
             hspc_tile_cells.append(current_gid)
             current_gid += 1
 
@@ -2282,7 +2294,7 @@ def save_tile_results(result, output_base, slide_results, slide_results_lock):
         with h5py.File(hspc_tile_dir / "segmentation.h5", 'w') as f:
             create_hdf5_dataset(f, 'labels', new_hspc[np.newaxis])
         with open(hspc_tile_dir / "features.json", 'w') as f:
-            json.dump([{'id': h['id'], 'global_id': h['global_id'], 'center': h['center'], 'features': h['features']} for h in result['hspc_feats']], f)
+            json.dump([{'id': h['id'], 'global_id': h['global_id'], 'uid': h['uid'], 'center': h['center'], 'features': h['features']} for h in result['hspc_feats']], f)
 
     return {'slide_name': slide_name, 'mk_count': mk_count, 'hspc_count': hspc_count}
 

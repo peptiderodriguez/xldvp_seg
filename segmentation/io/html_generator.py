@@ -1429,21 +1429,21 @@ def generate_mk_hspc_page_html(samples, cell_type, page_num, total_pages, slides
     cards_html = ""
     for sample in samples:
         slide = sample.get('slide', 'unknown').replace('.', '-')
-        global_id = sample.get('global_id')
         global_x = sample.get('global_x', 0)
         global_y = sample.get('global_y', 0)
-        # Use global_id if available, otherwise use coordinates
-        if global_id is not None:
-            uid = f"{slide}_{cell_type}_{global_id}"
-            display_id = f"{cell_type}_{global_id}"
-        else:
-            uid = f"{slide}_{cell_type}_{int(global_x)}_{int(global_y)}"
-            display_id = f"{cell_type}_{int(global_x)}_{int(global_y)}"
+        # Always use spatial UID format for consistency across all cell types
+        # Format: {slide}_{celltype}_{round(x)}_{round(y)}
+        uid = f"{slide}_{cell_type}_{int(round(global_x))}_{int(round(global_y))}"
+        display_id = f"{cell_type}_{int(round(global_x))}_{int(round(global_y))}"
+        # Keep legacy global_id in data attribute for backwards compatibility
+        legacy_global_id = sample.get('global_id')
         area_um2 = sample.get('area_um2', 0)
         area_px = sample.get('area_px', 0)
         img_b64 = sample['image']
+        # Include legacy_global_id as data attribute for migration support
+        legacy_attr = f' data-legacy-id="{legacy_global_id}"' if legacy_global_id is not None else ''
         cards_html += f'''
-        <div class="card" id="{uid}" data-label="-1">
+        <div class="card" id="{uid}" data-label="-1"{legacy_attr}>
             <div class="card-img-container">
                 <img src="data:image/jpeg;base64,{img_b64}" alt="{display_id}">
             </div>
