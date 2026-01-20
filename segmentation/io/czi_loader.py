@@ -21,8 +21,6 @@ from typing import Dict, List, Tuple, Optional, Union
 from tqdm import tqdm
 from aicspylibczi import CziFile
 
-from segmentation.processing.memory import log_memory_status
-
 logger = logging.getLogger(__name__)
 
 # Global cache for CZILoader instances with thread-safe access
@@ -339,6 +337,7 @@ class CZILoader:
 
             # Log memory status every 5 strips
             if (i + 1) % 5 == 0:
+                from segmentation.processing.memory import log_memory_status
                 log_memory_status(f"Loaded strip {i + 1}/{n_strips}")
 
         logger.info(

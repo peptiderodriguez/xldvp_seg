@@ -1179,16 +1179,20 @@ python scripts/prepare_rf_training_data.py \
 
 ### Code Review Findings (Jan 20, 2026)
 
-**Critical bugs to fix before running:**
-| Issue | Location | Description |
-|-------|----------|-------------|
-| Uninitialized variables | `vessel.py:2991` | `is_vessel` and `rejection_reasons` used but never initialized in `extract_candidate_features()` |
-| Empty array crash | `vessel.py:838` | `np.percentile()` on empty array in `_detect_cd31_tubular()` if no CD31 signal |
-| Hardcoded tile coords | `vessel.py:1031` | `tile_x=0, tile_y=0` hardcoded in `_detect_all_markers_parallel()` breaks boundary tracking |
+**Critical bugs - FIXED (commit 6ff6b0c):**
+| Issue | Location | Status |
+|-------|----------|--------|
+| Uninitialized variables | `vessel.py:2995-2996` | ✅ Already initialized (false positive) |
+| Empty array crash | `vessel.py:838` | ✅ Fixed - added empty array check |
+| Hardcoded tile coords | `vessel.py:1031` | ✅ Fixed - added tile_x/tile_y params |
 
-**Medium priority:**
-- `run_segmentation.py:2940` - channel_names creates 0-based indices instead of actual CZI channel indices
-- `vessel.py:2197` - O(n²) contourArea recalculation in merge loop, should cache
+**Medium priority - FIXED:**
+| Issue | Location | Status |
+|-------|----------|--------|
+| channel_names wrong indices | `run_segmentation.py:2942` | ✅ Fixed - uses actual channel indices |
+| O(n²) contourArea | `vessel.py:2198-2205` | ✅ Already cached (false positive) |
+
+**Remaining (low priority):**
 - `vessel.py:3116` - Fixed 72-point sampling in candidate mode vs adaptive in regular mode
 - `run_segmentation.py:632` - `merge_iou_threshold` not exposed to CLI
 
