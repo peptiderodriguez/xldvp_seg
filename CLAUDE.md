@@ -1155,6 +1155,21 @@ python scripts/prepare_rf_training_data.py \
 | VesselTypeClassifier (6 types) | ✅ Complete | `segmentation/classification/vessel_type_classifier.py` |
 | `--multi-marker` CLI mode | ✅ Complete | Auto-enables `--all-channels`, `--parallel-detection`, and candidate merging |
 
+### Code Review Findings (Jan 20, 2026)
+
+**Critical bugs to fix before running:**
+| Issue | Location | Description |
+|-------|----------|-------------|
+| Uninitialized variables | `vessel.py:2991` | `is_vessel` and `rejection_reasons` used but never initialized in `extract_candidate_features()` |
+| Empty array crash | `vessel.py:838` | `np.percentile()` on empty array in `_detect_cd31_tubular()` if no CD31 signal |
+| Hardcoded tile coords | `vessel.py:1031` | `tile_x=0, tile_y=0` hardcoded in `_detect_all_markers_parallel()` breaks boundary tracking |
+
+**Medium priority:**
+- `run_segmentation.py:2940` - channel_names creates 0-based indices instead of actual CZI channel indices
+- `vessel.py:2197` - O(n²) contourArea recalculation in merge loop, should cache
+- `vessel.py:3116` - Fixed 72-point sampling in candidate mode vs adaptive in regular mode
+- `run_segmentation.py:632` - `merge_iou_threshold` not exposed to CLI
+
 **Notes on incomplete items:**
 
 **Partial vessel detection (cross-tile merging) - 🔄 In Progress:**

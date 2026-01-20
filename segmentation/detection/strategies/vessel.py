@@ -835,7 +835,11 @@ class VesselStrategy(DetectionStrategy):
             sma_norm = sma_channel.astype(np.uint8)
 
         # Step 1: Threshold CD31 channel at intensity_percentile
-        threshold_value = np.percentile(cd31_norm[cd31_norm > 0], intensity_percentile)
+        cd31_nonzero = cd31_norm[cd31_norm > 0]
+        if len(cd31_nonzero) == 0:
+            logger.debug("CD31 channel has no signal above 0, skipping capillary detection")
+            return []
+        threshold_value = np.percentile(cd31_nonzero, intensity_percentile)
         threshold_value = max(threshold_value, 10)  # Minimum threshold to avoid noise
         _, cd31_binary = cv2.threshold(cd31_norm, threshold_value, 255, cv2.THRESH_BINARY)
 
@@ -978,6 +982,8 @@ class VesselStrategy(DetectionStrategy):
         channel_names: Dict[int, str],
         models: Dict[str, Any],
         n_workers: int = 3,
+        tile_x: int = 0,
+        tile_y: int = 0,
     ) -> List[Dict]:
         """
         Run SMA, CD31, and LYVE1 detection in parallel.
@@ -1034,8 +1040,8 @@ class VesselStrategy(DetectionStrategy):
                 models,
                 pixel_size_um,
                 cd31_channel,  # CD31 for validation within SMA detection
-                0,  # tile_x
-                0,  # tile_y
+                tile_x,
+                tile_y,
             )] = 'sma'
 
             # CD31 tubular detection (for capillaries without SMA)
@@ -3368,6 +3374,8 @@ class VesselStrategy(DetectionStrategy):
                 channel_names=channel_names,
                 models=models,
                 n_workers=self.parallel_workers,
+                tile_x=tile_x,
+                tile_y=tile_y,
             )
 
             # Merge overlapping candidates from different markers (multi-marker mode)

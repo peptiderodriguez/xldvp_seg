@@ -2937,10 +2937,15 @@ def run_pipeline(args):
                 if args.cell_type == 'vessel':
                     # Vessel strategy with cd31_channel and optional multi-channel features
                     # Parse custom channel names if provided
+                    # Map names to actual channel indices from all_channel_data (not 0-based assumption)
                     channel_names = None
-                    if getattr(args, 'channel_names', None):
+                    if getattr(args, 'channel_names', None) and extra_channel_tiles:
                         names = args.channel_names.split(',')
-                        channel_names = {i: name.strip() for i, name in enumerate(names)}
+                        actual_indices = sorted(extra_channel_tiles.keys())
+                        # Map names to actual channel indices
+                        channel_names = {actual_indices[i]: name.strip()
+                                        for i, name in enumerate(names)
+                                        if i < len(actual_indices)}
                     masks, detections = strategy.detect(
                         tile_rgb, detector.models, pixel_size_um,
                         cd31_channel=cd31_channel_data,
