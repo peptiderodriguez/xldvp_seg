@@ -1367,6 +1367,8 @@ def _phase2_identify_tissue_tiles_streaming(slide_loaders, tile_size, overlap, v
         slide_tiles = []
         for ty in range(n_ty):
             for tx in range(n_tx):
+                # Keep 0-based relative coordinates for consistency with shared memory indexing
+                # (get_tile calls will convert to global coordinates internally)
                 tile = {
                     'id': len(slide_tiles),
                     'x': tx * (tile_size - overlap),
@@ -1395,7 +1397,11 @@ def _phase2_identify_tissue_tiles_streaming(slide_loaders, tile_size, overlap, v
     def calc_tile_variances(args):
         slide_name, tile = args
         loader = slide_loaders[slide_name]
-        tile_img = loader.get_tile(tile['x'], tile['y'], max(tile['w'], tile['h']), channel)
+        # Convert 0-based relative coords to global mosaic coords for get_tile()
+        x_origin, y_origin = loader.mosaic_origin
+        global_x = x_origin + tile['x']
+        global_y = y_origin + tile['y']
+        tile_img = loader.get_tile(global_x, global_y, max(tile['w'], tile['h']), channel)
 
         if tile_img is None:
             return [0.0]
@@ -1440,7 +1446,11 @@ def _phase2_identify_tissue_tiles_streaming(slide_loaders, tile_size, overlap, v
     def check_tile_tissue(args):
         slide_name, tile = args
         loader = slide_loaders[slide_name]
-        tile_img = loader.get_tile(tile['x'], tile['y'], max(tile['w'], tile['h']), channel)
+        # Convert 0-based relative coords to global mosaic coords for get_tile()
+        x_origin, y_origin = loader.mosaic_origin
+        global_x = x_origin + tile['x']
+        global_y = y_origin + tile['y']
+        tile_img = loader.get_tile(global_x, global_y, max(tile['w'], tile['h']), channel)
 
         if tile_img is None:
             return None
