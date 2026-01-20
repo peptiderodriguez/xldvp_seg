@@ -1407,7 +1407,7 @@ def _phase2_identify_tissue_tiles_streaming(slide_loaders, tile_size, overlap, v
         x_origin, y_origin = loader.mosaic_origin
         global_x = x_origin + tile['x']
         global_y = y_origin + tile['y']
-        tile_img = loader.get_tile(global_x, global_y, max(tile['w'], tile['h']), channel)
+        tile_img = loader.get_tile(global_x, global_y, min(tile['w'], tile['h']), channel)
 
         if tile_img is None:
             return [0.0]
@@ -1456,7 +1456,7 @@ def _phase2_identify_tissue_tiles_streaming(slide_loaders, tile_size, overlap, v
         x_origin, y_origin = loader.mosaic_origin
         global_x = x_origin + tile['x']
         global_y = y_origin + tile['y']
-        tile_img = loader.get_tile(global_x, global_y, max(tile['w'], tile['h']), channel)
+        tile_img = loader.get_tile(global_x, global_y, min(tile['w'], tile['h']), channel)
 
         if tile_img is None:
             return None

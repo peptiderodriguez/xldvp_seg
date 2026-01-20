@@ -539,7 +539,9 @@ class CZILoader:
             return None
 
         tile_data = np.squeeze(tile_data)
-        if tile_data.ndim != 2:
+
+        # Accept both grayscale (2D) and RGB (3D) data
+        if tile_data.ndim not in (2, 3):
             return None
 
         return tile_data
