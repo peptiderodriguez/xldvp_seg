@@ -168,17 +168,17 @@ def regenerate_html(
             # Quality filtering for vessels
             if cell_type == 'vessel':
                 features = det.get('features', {})
-                # Ring completeness: require at least 30%
-                ring_completeness = features.get('ring_completeness', 1.0)
-                if ring_completeness < 0.30:
+                # Ring completeness: require at least 30% (handle None values)
+                ring_completeness = features.get('ring_completeness')
+                if ring_completeness is None or ring_completeness < 0.30:
                     continue
-                # Circularity: require at least 0.15
-                circularity = features.get('circularity', 1.0)
-                if circularity < 0.15:
+                # Circularity: require at least 0.15 (handle None values)
+                circularity = features.get('circularity')
+                if circularity is None or circularity < 0.15:
                     continue
-                # Wall thickness: require at least 1.5 µm
-                wall_thickness = features.get('wall_thickness_mean_um', 10.0)
-                if wall_thickness < 1.5:
+                # Wall thickness: require at least 1.5 µm (handle None values)
+                wall_thickness = features.get('wall_thickness_mean_um')
+                if wall_thickness is None or wall_thickness < 1.5:
                     continue
 
             # Get mask
