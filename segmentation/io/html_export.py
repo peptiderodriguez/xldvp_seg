@@ -1559,8 +1559,9 @@ def load_samples_from_ram(tiles_dir, slide_image, pixel_size_um, cell_type='mk',
             mask_w = x2_local - x1_local
 
             # Create a centered crop around the mask centroid
-            # Crop size should be at least mask size + padding, minimum 300px
-            crop_size = max(300, max(mask_h, mask_w) + 100)
+            # Crop size should be 100% larger than mask (mask fills ~50% of crop)
+            # Minimum 300px, maximum 800px
+            crop_size = max(300, min(800, int(max(mask_h, mask_w) * 2)))
             half_size = crop_size // 2
 
             # Crop bounds centered on centroid

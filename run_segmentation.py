@@ -2528,11 +2528,12 @@ def _export_lmd_simple(detections, output_path, pixel_size_um, image_height_px,
 # SAMPLE CREATION FOR HTML
 # =============================================================================
 
-def create_sample_from_detection(tile_x, tile_y, tile_rgb, masks, feat, pixel_size_um, slide_name, crop_size=224):
+def create_sample_from_detection(tile_x, tile_y, tile_rgb, masks, feat, pixel_size_um, slide_name, crop_size=None):
     """Create an HTML sample from a detection.
 
-    Uses fixed 224x224 crop to match ResNet feature extraction input,
-    so annotators see exactly what the classifier will see.
+    Crop size is calculated dynamically to be 100% larger than the mask,
+    ensuring the full mask is visible with context around it.
+    Minimum crop size is 224px, maximum is 800px.
     """
     det_id = feat['id']
     det_num = int(det_id.split('_')[-1])
@@ -2544,7 +2545,19 @@ def create_sample_from_detection(tile_x, tile_y, tile_rgb, masks, feat, pixel_si
     # Get centroid
     cy, cx = feat['center'][1], feat['center'][0]
 
-    # Use fixed crop size (224) to match ResNet classifier input
+    # Calculate crop size based on mask bounding box
+    # Crop should be 100% larger than mask (mask fills ~50% of crop)
+    ys, xs = np.where(mask)
+    if len(ys) == 0 or len(xs) == 0:
+        return None
+    mask_h = ys.max() - ys.min()
+    mask_w = xs.max() - xs.min()
+    mask_size = max(mask_h, mask_w)
+
+    # Make crop 2x the mask size (100% larger), with min 224, max 800
+    if crop_size is None:
+        crop_size = max(224, min(800, int(mask_size * 2)))
+
     half = crop_size // 2
 
     # Calculate ideal crop bounds (may extend beyond tile)
@@ -3102,13 +3115,33 @@ def run_pipeline(args):
             with open(tile_out / f"{args.cell_type}_features.json", 'w') as f:
                 json.dump(features_list, f, cls=NumpyEncoder)
 
-            # Create samples for HTML (filter by minimum area 25 µm²)
+            # Create samples for HTML with quality filtering
+            # For vessels, apply stricter filters to reduce garbage
             min_area_um2 = 25.0
             for feat in features_list:
+                features_dict = feat.get('features', {})
+
                 # Check area filter
-                area_um2 = feat['features'].get('area', 0) * (pixel_size_um ** 2)
+                area_um2 = features_dict.get('area', 0) * (pixel_size_um ** 2)
                 if area_um2 < min_area_um2:
                     continue
+
+                # For vessel detection, apply quality filters to reduce false positives
+                if args.cell_type == 'vessel':
+                    # Ring completeness: require at least 30% (relaxed from 50% to allow partial vessels)
+                    ring_completeness = features_dict.get('ring_completeness', 1.0)
+                    if ring_completeness < 0.30:
+                        continue
+
+                    # Circularity: require at least 0.15 (relaxed from 0.3 to allow irregular vessels)
+                    circularity = features_dict.get('circularity', 1.0)
+                    if circularity < 0.15:
+                        continue
+
+                    # Wall thickness: require at least 1.5 µm to filter tiny artifacts
+                    wall_thickness = features_dict.get('wall_thickness_mean_um', 10.0)
+                    if wall_thickness < 1.5:
+                        continue
 
                 sample = create_sample_from_detection(
                     tile_x, tile_y, tile_rgb, masks, feat, pixel_size_um, slide_name
