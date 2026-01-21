@@ -102,6 +102,20 @@ from segmentation.classification.vessel_type_classifier import VesselTypeClassif
 
 logger = get_logger(__name__)
 
+
+class NumpyEncoder(json.JSONEncoder):
+    """JSON encoder that handles numpy types."""
+
+    def default(self, obj):
+        if isinstance(obj, np.integer):
+            return int(obj)
+        elif isinstance(obj, np.floating):
+            return float(obj)
+        elif isinstance(obj, np.ndarray):
+            return obj.tolist()
+        return super().default(obj)
+
+
 # Global list to track spawned processes for cleanup (foreground mode only)
 _spawned_processes = []
 
@@ -674,6 +688,10 @@ def detections_to_features_list(detections, cell_type):
     Returns:
         List of feature dicts in the old format
     """
+    # Defensive check: handle None detections gracefully
+    if detections is None:
+        return []
+
     features_list = []
     for i, det in enumerate(detections, start=1):
         feat_dict = {
@@ -3067,7 +3085,7 @@ def run_pipeline(args):
                 if 'outer_contour' in feat:
                     feat['outer_contour_global'] = [[pt[0][0] + tile_x, pt[0][1] + tile_y]
                                                     for pt in feat['outer_contour']]
-                if 'inner_contour' in feat:
+                if 'inner_contour' in feat and feat['inner_contour'] is not None:
                     feat['inner_contour_global'] = [[pt[0][0] + tile_x, pt[0][1] + tile_y]
                                                     for pt in feat['inner_contour']]
 
@@ -3082,7 +3100,7 @@ def run_pipeline(args):
                 create_hdf5_dataset(f, 'masks', masks.astype(np.uint16))
 
             with open(tile_out / f"{args.cell_type}_features.json", 'w') as f:
-                json.dump(features_list, f)
+                json.dump(features_list, f, cls=NumpyEncoder)
 
             # Create samples for HTML (filter by minimum area 25 µm²)
             min_area_um2 = 25.0
@@ -3105,7 +3123,9 @@ def run_pipeline(args):
             gc.collect()
 
         except Exception as e:
+            import traceback
             logger.error(f"Error processing tile ({tile_x}, {tile_y}): {e}")
+            logger.error(f"Traceback:\n{traceback.format_exc()}")
             continue
 
     logger.info(f"Total detections: {total_detections}")
@@ -3139,7 +3159,7 @@ def run_pipeline(args):
     # Save all detections with universal IDs and global coordinates
     detections_file = slide_output_dir / f'{args.cell_type}_detections.json'
     with open(detections_file, 'w') as f:
-        json.dump(all_detections, f, indent=2)
+        json.dump(all_detections, f, indent=2, cls=NumpyEncoder)
     logger.info(f"  Saved {len(all_detections)} detections to {detections_file}")
 
     # Export CSV with contour coordinates for easy import
@@ -3149,18 +3169,36 @@ def run_pipeline(args):
         if args.cell_type == 'vessel':
             f.write('uid,global_x_px,global_y_px,global_x_um,global_y_um,outer_diameter_um,wall_thickness_um,confidence\n')
             for det in all_detections:
+                # Skip detections with missing or invalid global coordinates
+                gc = det.get('global_center')
+                gc_um = det.get('global_center_um')
+                if gc is None or gc_um is None:
+                    continue
+                if len(gc) < 2 or gc[0] is None or gc[1] is None:
+                    continue
+                if len(gc_um) < 2 or gc_um[0] is None or gc_um[1] is None:
+                    continue
                 feat = det.get('features', {})
-                f.write(f"{det['uid']},{det['global_center'][0]:.1f},{det['global_center'][1]:.1f},"
-                        f"{det['global_center_um'][0]:.2f},{det['global_center_um'][1]:.2f},"
+                f.write(f"{det['uid']},{gc[0]:.1f},{gc[1]:.1f},"
+                        f"{gc_um[0]:.2f},{gc_um[1]:.2f},"
                         f"{feat.get('outer_diameter_um', 0):.2f},{feat.get('wall_thickness_mean_um', 0):.2f},"
                         f"{feat.get('confidence', 'unknown')}\n")
         else:
             f.write('uid,global_x_px,global_y_px,global_x_um,global_y_um,area_um2\n')
             for det in all_detections:
+                # Skip detections with missing or invalid global coordinates
+                gc = det.get('global_center')
+                gc_um = det.get('global_center_um')
+                if gc is None or gc_um is None:
+                    continue
+                if len(gc) < 2 or gc[0] is None or gc[1] is None:
+                    continue
+                if len(gc_um) < 2 or gc_um[0] is None or gc_um[1] is None:
+                    continue
                 feat = det.get('features', {})
                 area_um2 = feat.get('area', 0) * (pixel_size_um ** 2)
-                f.write(f"{det['uid']},{det['global_center'][0]:.1f},{det['global_center'][1]:.1f},"
-                        f"{det['global_center_um'][0]:.2f},{det['global_center_um'][1]:.2f},{area_um2:.2f}\n")
+                f.write(f"{det['uid']},{gc[0]:.1f},{gc[1]:.1f},"
+                        f"{gc_um[0]:.2f},{gc_um[1]:.2f},{area_um2:.2f}\n")
     logger.info(f"  Saved coordinates to {csv_file}")
 
     # Export to Leica LMD format for mesothelium
@@ -3194,7 +3232,7 @@ def run_pipeline(args):
     }
 
     with open(slide_output_dir / 'summary.json', 'w') as f:
-        json.dump(summary, f, indent=2)
+        json.dump(summary, f, indent=2, cls=NumpyEncoder)
 
     # Cleanup detector resources
     if use_new_detector and detector is not None:

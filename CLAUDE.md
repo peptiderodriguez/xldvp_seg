@@ -1196,6 +1196,40 @@ python scripts/prepare_rf_training_data.py \
 - `vessel.py:3116` - Fixed 72-point sampling in candidate mode vs adaptive in regular mode
 - `run_segmentation.py:632` - `merge_iou_threshold` not exposed to CLI
 
+### Multi-Marker Parallel Detection Issue (Jan 20, 2026)
+
+**Issue:** `--multi-marker` mode crashes during tile processing with no error message captured.
+
+**Symptoms:**
+- All 4 channels load successfully (~200GB total)
+- Tissue detection completes (2030/2975 tiles = 68.2%)
+- 203 tiles sampled for processing
+- Process starts at high CPU (300%+) indicating multi-threaded detection
+- After ~5 minutes of tile processing, process terminates with no tiles output
+- No OOM messages in dmesg, no Python traceback captured
+
+**Suspected cause:** Issue in `_detect_all_markers_parallel()` or one of:
+- `_detect_cd31_tubular()` - CD31 capillary detection
+- `_detect_lyve1_structures()` - LYVE1 lymphatic detection
+- Thread synchronization issue in ThreadPoolExecutor
+
+**Workaround:** Use basic single-channel mode while investigating:
+```bash
+python run_segmentation.py \
+    --czi-path /path/to/slide.czi \
+    --cell-type vessel \
+    --channel 2 \
+    --candidate-mode \
+    --sample-fraction 0.10 \
+    --load-to-ram \
+    --output-dir /path/to/output
+```
+
+**To investigate:**
+1. Add try/except around each detection method in `_detect_all_markers_parallel()`
+2. Run with verbose logging to capture which tile/marker fails
+3. Test each detection method individually (SMA-only, CD31-only, LYVE1-only)
+
 **Notes on incomplete items:**
 
 **Partial vessel detection (cross-tile merging) - 🔄 In Progress:**

@@ -176,6 +176,8 @@ class VesselStrategy(DetectionStrategy):
     ARC_MIN_CURVATURE = 0.01  # Minimum average curvature to be considered vessel-like
     ARC_MIN_LENGTH_UM = 20.0  # Minimum arc length in microns
     ARC_MAX_STRAIGHTNESS = 0.8  # Maximum straightness (1.0 = perfectly straight line)
+    ARC_MAX_CONTOURS_TO_PROCESS = 500  # Limit contours to prevent performance issues
+    ARC_MIN_CONTOUR_POINTS = 50  # Skip very small contours (more aggressive than 10)
 
     def __init__(
         self,
@@ -663,6 +665,11 @@ class VesselStrategy(DetectionStrategy):
             edges, cv2.RETR_LIST, cv2.CHAIN_APPROX_SIMPLE
         )
 
+        # Early exit if too many contours (performance protection)
+        if len(edge_contours) > 10000:
+            logger.debug(f"Skipping arc detection: too many edge contours ({len(edge_contours)})")
+            return []
+
         # Track which contours are already part of ring candidates
         ring_contour_areas = set()
         for cnt in contours:
@@ -670,12 +677,28 @@ class VesselStrategy(DetectionStrategy):
             if area > 0:
                 ring_contour_areas.add(int(area))
 
+        # Sort contours by perimeter (larger first) and limit processing
+        edge_contours_with_perim = []
         for cnt in edge_contours:
-            # Skip very small contours
-            if len(cnt) < 10:
+            if len(cnt) >= self.ARC_MIN_CONTOUR_POINTS:
+                perim = cv2.arcLength(cnt, False)
+                edge_contours_with_perim.append((perim, cnt))
+
+        # Sort by perimeter descending (larger arcs first, more likely to be vessels)
+        edge_contours_with_perim.sort(key=lambda x: -x[0])
+
+        # Limit to top N contours by perimeter
+        contours_to_process = edge_contours_with_perim[:self.ARC_MAX_CONTOURS_TO_PROCESS]
+
+        logger.debug(f"Arc detection: processing {len(contours_to_process)}/{len(edge_contours)} contours")
+
+        processed_count = 0
+        for perimeter, cnt in contours_to_process:
+            # Skip very small contours (redundant but kept for safety)
+            if len(cnt) < self.ARC_MIN_CONTOUR_POINTS:
                 continue
 
-            perimeter = cv2.arcLength(cnt, False)  # Open contour
+            # perimeter already calculated during sorting
             arc_length_um = perimeter * pixel_size_um
 
             # Skip if too short
@@ -3601,6 +3624,10 @@ class VesselStrategy(DetectionStrategy):
         features_list = [cand['features'] for cand in valid_candidates]
 
         detections = self.filter(masks_list, features_list, pixel_size_um)
+
+        # Defensive check: ensure detections is a list
+        if detections is None:
+            detections = []
 
         # Add contour data and tracking info to detections
         for i, det in enumerate(detections):
