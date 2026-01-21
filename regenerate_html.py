@@ -165,6 +165,22 @@ def regenerate_html(
         for det in tile_dets:
             det_id = int(det['id'].split('_')[-1])
 
+            # Quality filtering for vessels
+            if cell_type == 'vessel':
+                features = det.get('features', {})
+                # Ring completeness: require at least 30%
+                ring_completeness = features.get('ring_completeness', 1.0)
+                if ring_completeness < 0.30:
+                    continue
+                # Circularity: require at least 0.15
+                circularity = features.get('circularity', 1.0)
+                if circularity < 0.15:
+                    continue
+                # Wall thickness: require at least 1.5 µm
+                wall_thickness = features.get('wall_thickness_mean_um', 10.0)
+                if wall_thickness < 1.5:
+                    continue
+
             # Get mask
             mask = (masks == det_id)
             if not mask.any():
@@ -174,12 +190,19 @@ def regenerate_html(
             ys, xs = np.where(mask)
             cy, cx = np.mean(ys), np.mean(xs)
 
+            # Calculate dynamic crop size based on mask bounding box
+            # Crop should be 100% larger than mask (mask fills ~50% of crop)
+            mask_h = ys.max() - ys.min()
+            mask_w = xs.max() - xs.min()
+            mask_size = max(mask_h, mask_w)
+            dynamic_crop_size = max(crop_size, min(800, int(mask_size * 2)))
+
             # Global position
             global_cy = tile_y + cy
             global_cx = tile_x + cx
 
             # Extract crop centered on mask
-            half = crop_size // 2
+            half = dynamic_crop_size // 2
             y1 = max(0, int(global_cy - half))
             y2 = min(height, int(global_cy + half))
             x1 = max(0, int(global_cx - half))
@@ -220,9 +243,16 @@ def regenerate_html(
             crop_resized = cv2.resize(crop_rgb, (display_size, display_size))
 
             # Get features for display
-            area = det['features'].get('area', 0)
+            features = det['features']
+            area = features.get('area', 0)
             area_um2 = area * (pixel_size ** 2)
-            elongation = det['features'].get('elongation', 0)
+            elongation = features.get('elongation', 0)
+
+            # Vessel-specific features
+            diameter_um = features.get('outer_diameter_um', 0)
+            wall_thickness = features.get('wall_thickness_mean_um', 0)
+            ring_completeness = features.get('ring_completeness', 0)
+            circularity = features.get('circularity', 0)
 
             # image_to_base64 returns (base64_string, mime_type)
             image_b64, _ = image_to_base64(crop_resized)
@@ -233,6 +263,10 @@ def regenerate_html(
                 'area': area,
                 'area_um2': round(area_um2, 1),
                 'elongation': elongation,
+                'diameter_um': round(diameter_um, 1),
+                'wall_thickness': round(wall_thickness, 1),
+                'ring_completeness': round(ring_completeness, 2),
+                'circularity': round(circularity, 2),
             })
 
     logger.info(f"Generated {len(samples)} samples")
@@ -431,7 +465,7 @@ def regenerate_html(
 
     card_template = '''<div class="card" data-uid="{uid}">
     <img src="data:image/jpeg;base64,{image_b64}" alt="{uid}">
-    <div class="info"><span class="area">{area_um2} &micro;m&sup2;</span> | elong: {elongation:.2f}</div>
+    <div class="info"><span class="area">⌀{diameter_um}&micro;m</span> | wall:{wall_thickness}&micro;m | ring:{ring_completeness}</div>
     <div class="buttons">
         <button class="btn-yes" onclick="setLabel('{uid}', 1)">Yes</button>
         <button class="btn-no" onclick="setLabel('{uid}', 0)">No</button>
