@@ -36,7 +36,8 @@ from typing import Dict, Any, List, Callable, Optional, Tuple, Generator
 from tqdm import tqdm
 from datetime import datetime
 
-from segmentation.io.czi_loader import CZILoader
+# NOTE: CZILoader import moved to __init__ to avoid circular import
+# (czi_loader.py -> processing.memory -> processing/__init__.py -> pipeline.py -> czi_loader.py)
 from segmentation.utils.config import (
     DEFAULT_CONFIG,
     load_config,
@@ -114,7 +115,8 @@ class DetectionPipeline:
         else:
             self.config = load_config(self.output_dir, cell_type)
 
-        # Initialize CZI loader
+        # Initialize CZI loader (local import to avoid circular import)
+        from segmentation.io.czi_loader import CZILoader
         self.loader = CZILoader(
             czi_path,
             load_to_ram=load_to_ram,
