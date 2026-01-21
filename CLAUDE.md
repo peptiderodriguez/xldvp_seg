@@ -533,6 +533,36 @@ Bone Marrow Megakaryocyte (MK) and Hematopoietic Stem/Progenitor Cell (HSPC) seg
   - Global stats (across all pages via localStorage)
   - Keyboard navigation (Y/N/Arrow keys)
   - Pagination (configurable samples per page)
+  - **Auto-embed prior annotations** (see below)
+
+#### Auto-Embed Prior Annotations (Round-2 Workflow)
+When regenerating HTML after classifier training, you can pre-load the round-1 annotations so they're visible alongside the classifier's predictions. This enables continuing annotation from where you left off.
+
+**Usage in `export_samples_to_html`:**
+```python
+export_samples_to_html(
+    samples,
+    html_dir,
+    'nmj',
+    prior_annotations="/path/to/nmj_annotations.json",  # NEW: auto-embed prior annotations
+    ...
+)
+```
+
+**How it works:**
+1. Reads the prior annotations JSON file (exported from round-1 HTML viewer)
+2. Generates `preload_annotations.js` with annotations in localStorage format
+3. Injects `<script src="preload_annotations.js">` into each HTML page
+4. On page load, annotations are merged into localStorage (existing > preloaded)
+
+**Annotation JSON formats supported:**
+```json
+// Format 1: Export format
+{"positive": ["uid1", "uid2"], "negative": ["uid3"]}
+
+// Format 2: Alternative format
+{"annotations": {"uid1": "yes", "uid2": "no"}}
+```
 
 ### 5. Output Structure
 ```

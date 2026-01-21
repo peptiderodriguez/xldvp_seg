@@ -7,9 +7,11 @@ Provides a consistent dark-themed annotation interface for all cell types
 - Local + global annotation statistics
 - Single global localStorage key per cell type
 - JSON export functionality
+- Auto-loading of prior annotations (for post-classifier HTML regeneration)
 """
 
 import base64
+import json
 from io import BytesIO
 from pathlib import Path
 from PIL import Image
@@ -35,6 +37,83 @@ def create_hdf5_dataset(f, name, data):
     else:
         # hdf5plugin filter object
         f.create_dataset(name, data=data, **HDF5_COMPRESSION_KWARGS)
+
+
+def generate_preload_annotations_js(annotations_path: str, cell_type: str) -> str:
+    """
+    Generate JavaScript that pre-loads prior annotations into localStorage.
+
+    This is used when regenerating HTML after classifier training, so that
+    the user's round-1 annotations are visible alongside the classifier's
+    new predictions.
+
+    Args:
+        annotations_path: Path to annotations JSON file (exported from HTML viewer)
+        cell_type: Cell type identifier (e.g., 'nmj', 'mk')
+
+    Returns:
+        JavaScript code string to write to preload_annotations.js
+    """
+    annotations_path = Path(annotations_path)
+    if not annotations_path.exists():
+        return None
+
+    with open(annotations_path, 'r') as f:
+        data = json.load(f)
+
+    # Convert from export format {positive: [...], negative: [...]}
+    # to localStorage format {uid: 1, uid: 0}
+    ls_format = {}
+    for uid in data.get('positive', []):
+        ls_format[uid] = 1
+    for uid in data.get('negative', []):
+        ls_format[uid] = 0
+    for uid in data.get('unsure', []):
+        ls_format[uid] = 2
+
+    # Also handle the alternative format {annotations: {uid: "yes", uid: "no"}}
+    if 'annotations' in data:
+        for uid, label in data['annotations'].items():
+            if label == 'yes':
+                ls_format[uid] = 1
+            elif label == 'no':
+                ls_format[uid] = 0
+            elif label == 'unsure':
+                ls_format[uid] = 2
+
+    if not ls_format:
+        return None
+
+    storage_key = f"{cell_type}_annotations"
+
+    js_content = f'''// Pre-loaded annotations from {annotations_path.name}
+// Generated automatically during HTML export
+// These are EXISTING annotations - new annotations take precedence
+
+const PRELOADED_ANNOTATIONS = {json.dumps(ls_format)};
+
+// Merge: preloaded as base, existing localStorage on top (so new annotations aren't overwritten)
+(function() {{
+    try {{
+        let existing = {{}};
+        const saved = localStorage.getItem('{storage_key}');
+        if (saved) existing = JSON.parse(saved);
+
+        // Existing annotations take precedence over preloaded
+        const merged = {{...PRELOADED_ANNOTATIONS, ...existing}};
+        localStorage.setItem('{storage_key}', JSON.stringify(merged));
+
+        const preloadedCount = Object.keys(PRELOADED_ANNOTATIONS).length;
+        const existingCount = Object.keys(existing).length;
+        const newFromPreload = Object.keys(merged).length - existingCount;
+
+        if (newFromPreload > 0) {{
+            console.log('Loaded ' + newFromPreload + ' annotations from preload file (' + preloadedCount + ' total in file)');
+        }}
+    }} catch(e) {{ console.error('Failed to load annotations:', e); }}
+}})();
+'''
+    return js_content
 
 
 def get_largest_connected_component(mask):
@@ -622,6 +701,7 @@ def generate_annotation_page(
     experiment_name=None,
     channel_legend=None,
     subtitle=None,
+    include_preload_script=False,
 ):
     """
     Generate an HTML annotation page.
@@ -640,6 +720,7 @@ def generate_annotation_page(
         channel_legend: Optional dict mapping colors to channel names,
             e.g., {'red': 'nuc488', 'green': 'Bgtx647', 'blue': 'NfL750'}
         subtitle: Optional subtitle (e.g., filename) shown below title
+        include_preload_script: If True, include script tag for preload_annotations.js
 
     Returns:
         HTML string
@@ -761,6 +842,7 @@ def generate_annotation_page(
         {nav_html}
     </div>
 
+    {'<script src="preload_annotations.js"></script>' if include_preload_script else ''}
     <script>{get_js(cell_type, total_pages, experiment_name)}</script>
 </body>
 </html>'''
@@ -1254,6 +1336,7 @@ def export_samples_to_html(
     tissue_tiles=None,
     channel_legend=None,
     timestamp=None,
+    prior_annotations=None,
 ):
     """
     Export samples to paginated HTML files.
@@ -1275,6 +1358,10 @@ def export_samples_to_html(
         channel_legend: Optional dict mapping colors to channel names,
             e.g., {'red': 'nuc488', 'green': 'Bgtx647', 'blue': 'NfL750'}
         timestamp: Segmentation timestamp string
+        prior_annotations: Optional path to prior annotations JSON file.
+            If provided, annotations will be pre-loaded into localStorage
+            when the HTML pages load. This is useful for round-2 annotation
+            after classifier training, so round-1 annotations are visible.
 
     Returns:
         Tuple of (total_samples, total_pages)
@@ -1285,6 +1372,25 @@ def export_samples_to_html(
     if not samples:
         print(f"No {cell_type} samples to export")
         return 0, 0
+
+    # Generate preload_annotations.js if prior annotations provided
+    has_preload = False
+    if prior_annotations:
+        preload_js = generate_preload_annotations_js(prior_annotations, cell_type)
+        if preload_js:
+            preload_path = output_dir / "preload_annotations.js"
+            with open(preload_path, 'w') as f:
+                f.write(preload_js)
+            has_preload = True
+            # Count annotations for logging
+            with open(prior_annotations, 'r') as f:
+                ann_data = json.load(f)
+            n_pos = len(ann_data.get('positive', []))
+            n_neg = len(ann_data.get('negative', []))
+            if 'annotations' in ann_data:
+                n_pos = sum(1 for v in ann_data['annotations'].values() if v == 'yes')
+                n_neg = sum(1 for v in ann_data['annotations'].values() if v == 'no')
+            print(f"  Pre-loading {n_pos + n_neg} prior annotations ({n_pos} yes, {n_neg} no)")
 
     # Paginate
     pages = [samples[i:i+samples_per_page] for i in range(0, len(samples), samples_per_page)]
@@ -1304,6 +1410,7 @@ def export_samples_to_html(
             experiment_name=experiment_name,
             channel_legend=channel_legend,
             subtitle=subtitle or file_name,  # Use subtitle or fallback to file_name
+            include_preload_script=has_preload,
         )
 
         page_path = output_dir / f"{page_prefix}_{page_num}.html"
