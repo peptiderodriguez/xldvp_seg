@@ -345,7 +345,7 @@ def regenerate_html(
     </div>
     <script>
         const CELL_TYPE = '{cell_type}';
-        const EXPERIMENT_NAME = '{experiment_name or ""}';
+        const EXPERIMENT_NAME = '{experiment_name}';
         const STORAGE_KEY = EXPERIMENT_NAME ? CELL_TYPE + '_' + EXPERIMENT_NAME + '_annotations' : CELL_TYPE + '_annotations';
         let labels = {{}};
 
@@ -496,6 +496,7 @@ def regenerate_html(
             display_size=display_size,
             next_page=page_num + 1,
             prev_page=page_num - 1,
+            experiment_name=experiment_name or "",
         )
 
         page_file = html_dir / f"{cell_type}_page_{page_num}.html"
@@ -505,7 +506,8 @@ def regenerate_html(
         page_size_mb = len(html) / 1e6
         logger.info(f"  Page {page_num}: {len(page_samples)} samples ({page_size_mb:.1f} MB)")
 
-    # Update index
+    # Update index - handle None experiment_name for f-string
+    experiment_name = experiment_name or ""
     index_html = f'''<!DOCTYPE html>
 <html>
 <head>
@@ -549,7 +551,7 @@ def regenerate_html(
     </div>
     <script>
         const CELL_TYPE = '{cell_type}';
-        const EXPERIMENT_NAME = '{experiment_name or ""}';
+        const EXPERIMENT_NAME = '{experiment_name}';
         const STORAGE_KEY = EXPERIMENT_NAME ? CELL_TYPE + '_' + EXPERIMENT_NAME + '_annotations' : CELL_TYPE + '_annotations';
 
         function updateCount() {{
