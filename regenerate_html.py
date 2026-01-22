@@ -193,7 +193,7 @@ def regenerate_html(
 
         # Load masks
         with h5py.File(mask_file, 'r') as f:
-            masks = f['masks'][:]
+            masks = f['labels'][:]
 
         # Parse tile origin from window.csv if available, otherwise from tile_key
         window_file = tile_path / "window.csv"
