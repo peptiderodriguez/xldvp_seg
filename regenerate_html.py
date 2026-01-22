@@ -162,8 +162,15 @@ def regenerate_html(
     # Group detections by tile
     tile_detections = {}
     for det in detections_sorted:
-        tile_x, tile_y = det['tile_origin']
-        tile_key = f"tile_{tile_x}_{tile_y}"
+        # Handle both old format (tile_origin) and new format (tile_key from batch output)
+        if 'tile_origin' in det:
+            tile_x, tile_y = det['tile_origin']
+            tile_key = f"tile_{tile_x}_{tile_y}"
+        elif 'tile_key' in det:
+            tile_key = det['tile_key']
+        else:
+            # Skip detections without tile info
+            continue
         if tile_key not in tile_detections:
             tile_detections[tile_key] = []
         tile_detections[tile_key].append(det)
@@ -175,7 +182,11 @@ def regenerate_html(
 
     for tile_key, tile_dets in tqdm(tile_detections.items(), desc="Processing"):
         tile_path = tiles_dir / tile_key
+
+        # Try different mask file naming conventions
         mask_file = tile_path / f"{cell_type}_masks.h5"
+        if not mask_file.exists():
+            mask_file = tile_path / "segmentation.h5"
 
         if not mask_file.exists():
             continue
@@ -184,9 +195,27 @@ def regenerate_html(
         with h5py.File(mask_file, 'r') as f:
             masks = f['masks'][:]
 
-        # Parse tile origin
-        parts = tile_key.split('_')
-        tile_x, tile_y = int(parts[1]), int(parts[2])
+        # Parse tile origin from window.csv if available, otherwise from tile_key
+        window_file = tile_path / "window.csv"
+        if window_file.exists():
+            import re
+            with open(window_file) as f:
+                window_str = f.read()
+            matches = re.findall(r'slice\((\d+),\s*(\d+)', window_str)
+            if len(matches) >= 2:
+                tile_y = int(matches[0][0])
+                tile_x = int(matches[1][0])
+            else:
+                tile_x, tile_y = 0, 0
+        else:
+            # Try to parse from tile_key
+            parts = tile_key.split('_')
+            if len(parts) >= 3 and parts[-2].isdigit() and parts[-1].isdigit():
+                tile_x, tile_y = int(parts[-2]), int(parts[-1])
+            elif len(parts) >= 2 and parts[1].isdigit():
+                tile_x, tile_y = int(parts[1]), int(parts[2]) if len(parts) > 2 else 0
+            else:
+                tile_x, tile_y = 0, 0
 
         for det in tile_dets:
             det_id = int(det['id'].split('_')[-1])
