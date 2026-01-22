@@ -194,6 +194,9 @@ def regenerate_html(
         # Load masks
         with h5py.File(mask_file, 'r') as f:
             masks = f['labels'][:]
+            # Handle 3D masks with shape (1, H, W) - squeeze to 2D
+            if masks.ndim == 3 and masks.shape[0] == 1:
+                masks = masks[0]
 
         # Parse tile origin from window.csv if available, otherwise from tile_key
         window_file = tile_path / "window.csv"
