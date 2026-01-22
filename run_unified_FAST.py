@@ -706,14 +706,6 @@ class UnifiedSegmenter:
         cellpose_ids = np.unique(cellpose_masks)
         cellpose_ids = cellpose_ids[cellpose_ids > 0]
 
-        # Limit Cellpose candidates to avoid processing thousands per tile
-        MAX_CELLPOSE_CANDIDATES = 500
-        if len(cellpose_ids) > MAX_CELLPOSE_CANDIDATES:
-            # Sort by mask area (larger first) and take top N
-            areas = [(cp_id, (cellpose_masks == cp_id).sum()) for cp_id in cellpose_ids]
-            areas.sort(key=lambda x: x[1], reverse=True)
-            cellpose_ids = np.array([a[0] for a in areas[:MAX_CELLPOSE_CANDIDATES]])
-
         # Collect all HSPC candidates with SAM2 refinement
         hspc_candidates = []
         for cp_id in cellpose_ids:
@@ -2572,6 +2564,9 @@ def process_tile_worker_with_data(args):
 
 
 def main():
+    # Setup logging first so all messages are visible
+    setup_logging(level="INFO", console=True)
+
     parser = argparse.ArgumentParser(description='Unified MK + HSPC segmentation')
     parser.add_argument('--czi-path', help='Single CZI file path')
     parser.add_argument('--czi-paths', nargs='+', help='Multiple CZI file paths (models loaded once)')

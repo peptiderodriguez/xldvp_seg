@@ -60,6 +60,7 @@ def regenerate_html(
     contour_color=(50, 255, 50),
     samples_per_page=300,
     experiment_name=None,
+    cell_type=None,
 ):
     """
     Regenerate HTML viewer with sorting and improved visualization.
@@ -76,21 +77,46 @@ def regenerate_html(
         experiment_name: Experiment name for localStorage isolation
         contour_color: RGB color for contour
         samples_per_page: Number of samples per HTML page
+        cell_type: Cell type ('mk' or 'hspc') for batch output structure
     """
     output_dir = Path(output_dir)
     html_dir = output_dir / "html"
-    tiles_dir = output_dir / "tiles"
 
-    # Find detections file
+    # Handle batch output structure (output_dir/{cell_type}/tiles/)
+    if cell_type:
+        tiles_dir = output_dir / cell_type / "tiles"
+    else:
+        tiles_dir = output_dir / "tiles"
+
+    # Try to find detections file first
     det_files = list(output_dir.glob("*_detections.json"))
-    if not det_files:
-        raise FileNotFoundError(f"No detections file found in {output_dir}")
-    det_file = det_files[0]
-    cell_type = det_file.stem.replace('_detections', '').split('_')[-1]
 
-    logger.info(f"Loading detections from {det_file}")
-    with open(det_file) as f:
-        detections = json.load(f)
+    if det_files:
+        # Load from detections file
+        det_file = det_files[0]
+        if not cell_type:
+            cell_type = det_file.stem.replace('_detections', '').split('_')[-1]
+        logger.info(f"Loading detections from {det_file}")
+        with open(det_file) as f:
+            detections = json.load(f)
+    elif tiles_dir.exists():
+        # Load from individual features.json files (batch output structure)
+        logger.info(f"Loading detections from tiles in {tiles_dir}")
+        detections = []
+        for tile_dir in tiles_dir.iterdir():
+            if not tile_dir.is_dir():
+                continue
+            feat_file = tile_dir / "features.json"
+            if feat_file.exists():
+                with open(feat_file) as f:
+                    tile_dets = json.load(f)
+                for det in tile_dets:
+                    det['tile_key'] = tile_dir.name
+                detections.extend(tile_dets)
+        if not cell_type:
+            cell_type = 'detection'
+    else:
+        raise FileNotFoundError(f"No detections file or tiles directory found in {output_dir}")
 
     if not detections:
         logger.warning("No detections to process")
@@ -613,6 +639,7 @@ def main():
     parser.add_argument('--contour-thickness', type=int, default=4, help='Contour thickness (default: 4)')
     parser.add_argument('--samples-per-page', type=int, default=300, help='Samples per page (default: 300)')
     parser.add_argument('--experiment-name', help='Experiment name for localStorage isolation (required)')
+    parser.add_argument('--cell-type', choices=['mk', 'hspc'], help='Cell type for batch output structure')
 
     args = parser.parse_args()
 
@@ -627,6 +654,7 @@ def main():
         contour_thickness=args.contour_thickness,
         samples_per_page=args.samples_per_page,
         experiment_name=args.experiment_name,
+        cell_type=args.cell_type,
     )
 
 

@@ -1478,8 +1478,20 @@ def load_samples_from_ram(tiles_dir, slide_image, pixel_size_um, cell_type='mk',
         return []
 
     samples = []
+    # Sort tile directories - handle both old format (pure int) and new format (slide_name_tileID)
+    def tile_sort_key(x):
+        name = x.name
+        # Try pure integer first (old format)
+        if name.isdigit():
+            return (0, int(name))
+        # New format: extract last numeric part (e.g., "2025_11_18_FGC1_1105" -> 1105)
+        parts = name.split('_')
+        if parts[-1].isdigit():
+            return (1, int(parts[-1]))
+        return (2, name)  # Fallback: sort alphabetically
+
     tile_dirs = sorted([d for d in tiles_dir.iterdir() if d.is_dir()],
-                       key=lambda x: int(x.name))
+                       key=tile_sort_key)
 
     for tile_dir in tile_dirs:
         features_file = tile_dir / "features.json"
