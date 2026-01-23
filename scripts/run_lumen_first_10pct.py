@@ -53,7 +53,7 @@ CZI_PATH = "/home/dude/images/20251106_Fig2_nuc488_CD31_555_SMA647_PM750-EDFvar-
 OUTPUT_DIR = Path("/home/dude/vessel_output/lumen_first_test")
 PIXEL_SIZE_UM = 0.1725
 TILE_SIZE = 4000
-SAMPLE_FRACTION = 0.10
+SAMPLE_FRACTION = 0.20  # 20% of tissue tiles
 SMA_CHANNEL = 2  # SMA is channel 2 (0=nuc, 1=CD31, 2=SMA, 3=PM)
 NUC_CHANNEL = 0  # Nuclear (488nm)
 CD31_CHANNEL = 1  # CD31 (555nm)
@@ -569,7 +569,7 @@ def create_vessel_sample(vessel, tile_img, tile_x, tile_y, slide_name, pixel_siz
 
 def main():
     print("=" * 60)
-    print("LUMEN-FIRST VESSEL DETECTION (10% sample)")
+    print(f"LUMEN-FIRST VESSEL DETECTION ({SAMPLE_FRACTION*100:.0f}% sample)")
     print("=" * 60)
     print(f"CZI file: {CZI_PATH}")
     print(f"Output: {OUTPUT_DIR}")
@@ -676,10 +676,10 @@ def main():
             tile_corrected,
             pixel_size_um=PIXEL_SIZE_UM,
             min_lumen_area_um2=50,         # ~8um diameter minimum
-            max_lumen_area_um2=150000,     # Very permissive max
-            min_ellipse_fit=0.40,          # Permissive on shape
-            max_aspect_ratio=5.0,          # Allow oblique sections
-            min_wall_brightness_ratio=1.15, # Wall must be brighter than lumen
+            max_lumen_area_um2=500000,     # Very permissive max (increased for large vessels)
+            min_ellipse_fit=0.30,          # More permissive on shape for large irregular vessels
+            max_aspect_ratio=6.0,          # Allow more oblique sections
+            min_wall_brightness_ratio=1.08, # Lowered - large vessels have less contrast
         )
 
         total_vessels += len(candidates)
