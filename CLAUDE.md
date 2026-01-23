@@ -1399,5 +1399,79 @@ python run_segmentation.py \
 - `_merge_candidates()` - Deduplicates overlapping detections via IoU
 - `_compute_iou()` - IoU between contours
 
+### Multi-Scale Vessel Detection (Jan 21, 2026)
+
+**Problem Solved:** Large vessels (>100µm) spanning multiple tiles were being fragmented. Multi-scale detection runs at coarse resolution first (1/8x) where large vessels fit within a single tile, then progressively finer scales (1/4x, 1x) for smaller vessels.
+
+**Architecture:**
+```
+┌────────────────────────────────────────────────────────────────────┐
+│                    MULTI-SCALE DETECTION PIPELINE                   │
+├────────────────────────────────────────────────────────────────────┤
+│                                                                    │
+│  Scale 1/8x: ~1.4 µm/px                                           │
+│  ├─ Tile covers ~5500 µm (4000px × 1.38µm)                        │
+│  ├─ Detects: Large arteries >100 µm                               │
+│  └─ Fast: 1/64th of full-res pixels                               │
+│                              ↓                                     │
+│  Scale 1/4x: ~0.7 µm/px                                           │
+│  ├─ Tile covers ~2760 µm                                          │
+│  ├─ Detects: Medium vessels 30-150 µm                             │
+│  └─ Medium: 1/16th of full-res pixels                             │
+│                              ↓                                     │
+│  Scale 1x: 0.17 µm/px                                             │
+│  ├─ Tile covers ~680 µm                                           │
+│  ├─ Detects: Capillaries 3-50 µm                                  │
+│  └─ Slow but necessary for small vessels                          │
+│                              ↓                                     │
+│  Merge: IoU-based deduplication (threshold 0.3)                   │
+│  └─ Vessels detected at multiple scales → keep finest             │
+│                                                                    │
+└────────────────────────────────────────────────────────────────────┘
+```
+
+**CLI Usage:**
+```bash
+# Enable multi-scale detection
+python run_segmentation.py \
+    --czi-path /path/to/slide.czi \
+    --cell-type vessel \
+    --channel 2 \
+    --multi-scale \
+    --scales "8,4,1" \
+    --multiscale-iou-threshold 0.3 \
+    --sample-fraction 0.10 \
+    --load-to-ram \
+    --output-dir /path/to/output
+```
+
+**Parameters:**
+| Parameter | Default | Description |
+|-----------|---------|-------------|
+| `--multi-scale` | False | Enable multi-scale detection |
+| `--scales` | "8,4,1" | Comma-separated scale factors (coarse to fine) |
+| `--multiscale-iou-threshold` | 0.3 | IoU threshold for deduplication |
+
+**Scale-Specific Parameters (automatic):**
+| Scale | Pixel Size | Min Diameter | Max Diameter | Target Vessels |
+|-------|------------|--------------|--------------|----------------|
+| 1/8x | ~1.4 µm | 100 µm | 2000 µm | Large arteries |
+| 1/4x | ~0.7 µm | 30 µm | 200 µm | Medium vessels |
+| 1x | 0.17 µm | 3 µm | 75 µm | Capillaries |
+
+**Implementation Files:**
+| File | Purpose |
+|------|---------|
+| `segmentation/utils/multiscale.py` | Scale utilities, IoU computation, merge logic |
+| `segmentation/io/czi_loader.py` | `get_tile(scale_factor=N)` for multi-res reading |
+| `segmentation/detection/strategies/vessel.py` | `detect_multiscale()` method |
+| `run_segmentation.py` | CLI arguments and orchestration |
+
+**Key Functions:**
+- `multiscale.get_scale_params(scale)` - Returns detection params for scale
+- `multiscale.compute_iou_contours()` - Mask-based IoU between contours
+- `multiscale.merge_detections_across_scales()` - Deduplicate, prefer finer scale
+- `CZILoader.get_tile(..., scale_factor=N)` - Extract at reduced resolution
+
 ### Recommended Tile Size
 **Default tile size: 4000x4000 pixels** (increased from 3000x3000 for better vessel detection at boundaries)

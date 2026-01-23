@@ -11,6 +11,7 @@ Usage:
     from segmentation.io import CZILoader, get_loader
     from segmentation.detection import has_tissue, calibrate_tissue_threshold
     from segmentation.processing import DetectionPipeline, BatchProcessor
+    from segmentation.preprocessing import correct_photobleaching
     from segmentation.utils import get_logger, setup_logging, load_config
 """
 
@@ -27,6 +28,7 @@ __all__ = [
     "io",
     "detection",
     "processing",
+    "preprocessing",
     "utils",
     "cli",
 ]

@@ -16,6 +16,7 @@ import gc
 import logging
 import threading
 import numpy as np
+import cv2
 from pathlib import Path
 from typing import Dict, List, Tuple, Optional, Union
 from tqdm import tqdm
@@ -459,53 +460,85 @@ class CZILoader:
         tile_x: int,
         tile_y: int,
         tile_size: int,
-        channel: Optional[int] = None
+        channel: Optional[int] = None,
+        scale_factor: int = 1
     ) -> Optional[np.ndarray]:
         """
-        Get a tile from the CZI.
+        Get a tile from the CZI at the specified scale.
+
+        For multi-scale vessel detection, use scale_factor > 1 to get
+        downsampled tiles. The tile coordinates are in the SCALED coordinate
+        system (i.e., at 1/8x, a tile at (0, 0) of size 4000 covers
+        4000*8 = 32000 pixels in the original image).
 
         Args:
-            tile_x: Tile X origin (in global mosaic coords)
-            tile_y: Tile Y origin (in global mosaic coords)
-            tile_size: Size of tile (square)
+            tile_x: Tile X origin in scaled coordinates
+            tile_y: Tile Y origin in scaled coordinates
+            tile_size: Size of output tile (square), e.g., 4000
             channel: Channel to read. If None and data loaded to RAM, uses primary channel.
                      Required if reading from disk.
+            scale_factor: Downsampling factor (1=full res, 2=1/2, 4=1/4, 8=1/8).
+                          The returned tile will be tile_size x tile_size pixels.
 
         Returns:
-            2D numpy array with tile data, or None if tile is empty/invalid
+            2D numpy array with tile data at requested scale, or None if invalid
+
+        Example:
+            # Get a 4000x4000 tile at 1/8x resolution (covers 32000x32000 original pixels)
+            tile = loader.get_tile(0, 0, 4000, channel=1, scale_factor=8)
         """
         # Determine which channel to use
         target_channel = channel
 
         # Check if we have this channel in RAM
         if target_channel is not None and target_channel in self._channel_data:
-            return self._get_tile_from_ram(tile_x, tile_y, tile_size, target_channel)
+            return self._get_tile_from_ram(tile_x, tile_y, tile_size, target_channel, scale_factor)
 
         # If no channel specified, try primary channel
         if target_channel is None and self._primary_channel is not None:
-            return self._get_tile_from_ram(tile_x, tile_y, tile_size, self._primary_channel)
+            return self._get_tile_from_ram(tile_x, tile_y, tile_size, self._primary_channel, scale_factor)
 
         # Fall back to reading from CZI
         if target_channel is None:
             raise ValueError("channel is required when data not loaded to RAM")
 
-        return self._get_tile_from_czi(tile_x, tile_y, tile_size, target_channel)
+        return self._get_tile_from_czi(tile_x, tile_y, tile_size, target_channel, scale_factor)
 
     def _get_tile_from_ram(
         self,
         tile_x: int,
         tile_y: int,
         tile_size: int,
-        channel: int
+        channel: int,
+        scale_factor: int = 1
     ) -> Optional[np.ndarray]:
-        """Extract a tile from RAM-loaded channel data."""
+        """
+        Extract a tile from RAM-loaded channel data, optionally downsampled.
+
+        Args:
+            tile_x: Tile X origin in scaled coordinates
+            tile_y: Tile Y origin in scaled coordinates
+            tile_size: Size of output tile (square)
+            channel: Channel to extract
+            scale_factor: Downsampling factor (1=full res, 2=1/2, etc.)
+
+        Returns:
+            Tile data at requested scale, or None if invalid
+        """
         data = self._channel_data.get(channel)
         if data is None:
             logger.warning(f"Channel {channel} not loaded, falling back to CZI read")
-            return self._get_tile_from_czi(tile_x, tile_y, tile_size, channel)
+            return self._get_tile_from_czi(tile_x, tile_y, tile_size, channel, scale_factor)
 
-        rel_x = tile_x - self.x_start
-        rel_y = tile_y - self.y_start
+        # Convert scaled coordinates to full-resolution coordinates
+        # tile_x, tile_y are in the scaled coordinate space
+        full_tile_x = tile_x * scale_factor
+        full_tile_y = tile_y * scale_factor
+        full_tile_size = tile_size * scale_factor
+
+        # Convert to relative coordinates (from mosaic origin)
+        rel_x = full_tile_x - self.x_start
+        rel_y = full_tile_y - self.y_start
 
         # Bounds check
         if rel_x < 0 or rel_y < 0:
@@ -513,12 +546,29 @@ class CZILoader:
         if rel_x >= self.width or rel_y >= self.height:
             return None
 
-        y2 = min(rel_y + tile_size, self.height)
-        x2 = min(rel_x + tile_size, self.width)
+        y2 = min(rel_y + full_tile_size, self.height)
+        x2 = min(rel_x + full_tile_size, self.width)
 
+        # Extract full-resolution region
         tile_data = data[rel_y:y2, rel_x:x2]
         if tile_data.size == 0:
             return None
+
+        # Downsample if scale_factor > 1
+        if scale_factor > 1:
+            # Calculate target size (may be smaller if at edge)
+            target_h = (y2 - rel_y) // scale_factor
+            target_w = (x2 - rel_x) // scale_factor
+            if target_h == 0 or target_w == 0:
+                return None
+
+            # Use INTER_AREA for downsampling (best for reduction)
+            tile_data = cv2.resize(
+                tile_data,
+                (target_w, target_h),
+                interpolation=cv2.INTER_AREA
+            )
+
         return tile_data
 
     def _get_tile_from_czi(
@@ -526,12 +576,32 @@ class CZILoader:
         tile_x: int,
         tile_y: int,
         tile_size: int,
-        channel: int
+        channel: int,
+        scale_factor: int = 1
     ) -> Optional[np.ndarray]:
-        """Read a tile directly from the CZI file."""
+        """
+        Read a tile directly from the CZI file at the specified scale.
+
+        Args:
+            tile_x: Tile X origin in scaled coordinates
+            tile_y: Tile Y origin in scaled coordinates
+            tile_size: Size of output tile (square)
+            channel: Channel to read
+            scale_factor: Downsampling factor (1=full res, 2=1/2, etc.)
+
+        Returns:
+            Tile data at requested scale, or None if invalid
+        """
+        # Convert scaled coordinates to full-resolution coordinates
+        full_tile_x = tile_x * scale_factor
+        full_tile_y = tile_y * scale_factor
+        full_tile_size = tile_size * scale_factor
+
+        # Use aicspylibczi's native scale_factor parameter
+        # Note: aicspylibczi reads the region at full-res coords, then downsamples
         tile_data = self.reader.read_mosaic(
-            region=(tile_x, tile_y, tile_size, tile_size),
-            scale_factor=1,
+            region=(full_tile_x, full_tile_y, full_tile_size, full_tile_size),
+            scale_factor=scale_factor,
             C=channel
         )
 

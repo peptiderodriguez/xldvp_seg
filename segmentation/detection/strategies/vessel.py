@@ -207,7 +207,10 @@ class VesselStrategy(DetectionStrategy):
         multi_marker: bool = False,
         # IoU threshold for merging overlapping candidates from different markers
         merge_iou_threshold: float = 0.5,
+        # Lumen-first detection mode - finds dark lumens first, validates bright wall
+        lumen_first: bool = False,
     ):
+        self._lumen_first = lumen_first
         self.candidate_mode = candidate_mode
 
         # Apply relaxed thresholds if candidate_mode is enabled
@@ -263,6 +266,9 @@ class VesselStrategy(DetectionStrategy):
         if multi_marker and not parallel_detection:
             self.parallel_detection = True
             logger.info("Multi-marker mode: auto-enabled parallel_detection")
+
+        # Lumen-first detection mode (default False, uses edge-based detection)
+        self.lumen_first = getattr(self, '_lumen_first', False)
 
     @property
     def name(self) -> str:
@@ -623,6 +629,219 @@ class VesselStrategy(DetectionStrategy):
             ring_candidates.extend(partial_candidates)
 
         return ring_candidates
+
+    def _detect_lumen_first(
+        self,
+        tile: np.ndarray,
+        pixel_size_um: float = 0.1725,
+        min_lumen_area_um2: float = 50,
+        max_lumen_area_um2: float = 150000,
+        min_ellipse_fit: float = 0.40,
+        max_aspect_ratio: float = 5.0,
+        min_wall_brightness_ratio: float = 1.15,
+        wall_thickness_fraction: float = 0.4,
+    ) -> List[Dict[str, Any]]:
+        """
+        Lumen-first vessel detection: find dark lumens, validate bright SMA+ wall.
+
+        This approach is better for candidate generation as it:
+        1. Finds dark regions using Otsu threshold
+        2. Fits ellipses to validate shape (permissive)
+        3. Checks for bright wall surrounding the lumen
+        4. Allows irregular shapes to pass for classifier training
+
+        Args:
+            tile: Grayscale SMA image
+            pixel_size_um: Pixel size in micrometers
+            min_lumen_area_um2: Minimum lumen area in µm²
+            max_lumen_area_um2: Maximum lumen area in µm²
+            min_ellipse_fit: Minimum ellipse fit quality (IoU, 0-1)
+            max_aspect_ratio: Maximum major/minor axis ratio
+            min_wall_brightness_ratio: Minimum wall/lumen intensity ratio
+            wall_thickness_fraction: Wall region as fraction of lumen size
+
+        Returns:
+            List of candidate dicts with 'outer', 'inner', 'lumen_contour' keys
+        """
+        # Convert area thresholds to pixels
+        min_lumen_area_px = min_lumen_area_um2 / (pixel_size_um ** 2)
+        max_lumen_area_px = max_lumen_area_um2 / (pixel_size_um ** 2)
+
+        # Normalize to uint8
+        if tile.ndim == 3:
+            gray = cv2.cvtColor(tile, cv2.COLOR_RGB2GRAY) if tile.shape[2] == 3 else tile[:, :, 0]
+        else:
+            gray = tile
+
+        if gray.dtype != np.uint8:
+            img_min, img_max = gray.min(), gray.max()
+            if img_max - img_min > 1e-8:
+                img_norm = ((gray - img_min) / (img_max - img_min) * 255).astype(np.uint8)
+            else:
+                return []
+        else:
+            img_norm = gray.copy()
+
+        # Float version for intensity measurements
+        img_float = gray.astype(np.float32)
+        if img_float.max() > 0:
+            img_float = img_float / img_float.max()
+
+        h, w = img_float.shape[:2]
+
+        # Find dark regions using Otsu threshold
+        blurred = cv2.GaussianBlur(img_norm, (9, 9), 2.5)
+        otsu_thresh, lumen_binary = cv2.threshold(
+            blurred, 0, 255, cv2.THRESH_BINARY_INV + cv2.THRESH_OTSU
+        )
+
+        # Morphological cleanup
+        kernel_close = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (11, 11))
+        lumen_binary = cv2.morphologyEx(lumen_binary, cv2.MORPH_CLOSE, kernel_close)
+        kernel_open = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (7, 7))
+        lumen_binary = cv2.morphologyEx(lumen_binary, cv2.MORPH_OPEN, kernel_open)
+        kernel_small = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (3, 3))
+        lumen_binary = cv2.morphologyEx(lumen_binary, cv2.MORPH_CLOSE, kernel_small)
+
+        # Find contours
+        contours, _ = cv2.findContours(lumen_binary, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+
+        logger.debug(f"Lumen-first: Otsu={otsu_thresh:.1f}, {len(contours)} dark regions")
+
+        candidates = []
+
+        for contour in contours:
+            area = cv2.contourArea(contour)
+
+            # Size filter
+            if area < min_lumen_area_px or area > max_lumen_area_px:
+                continue
+            if len(contour) < 5:
+                continue
+
+            # Fit ellipse
+            try:
+                ellipse = cv2.fitEllipse(contour)
+            except:
+                continue
+
+            (cx, cy), (minor_axis, major_axis), angle = ellipse
+
+            # Aspect ratio check
+            if minor_axis > 0:
+                aspect_ratio = major_axis / minor_axis
+            else:
+                continue
+
+            if aspect_ratio > max_aspect_ratio:
+                continue
+
+            # Ellipse fit quality (IoU)
+            fit_quality = self._compute_ellipse_fit_quality(contour, ellipse, h, w)
+            if fit_quality < min_ellipse_fit:
+                continue
+
+            # Check for bright wall around lumen
+            lumen_mask = np.zeros((h, w), dtype=np.uint8)
+            cv2.drawContours(lumen_mask, [contour], 0, 255, -1)
+
+            avg_radius = (major_axis + minor_axis) / 4
+            wall_thickness = max(3, int(avg_radius * wall_thickness_fraction))
+
+            kernel_dilate = cv2.getStructuringElement(
+                cv2.MORPH_ELLIPSE,
+                (2 * wall_thickness + 1, 2 * wall_thickness + 1)
+            )
+            dilated_mask = cv2.dilate(lumen_mask, kernel_dilate)
+            wall_mask = dilated_mask - lumen_mask
+
+            lumen_pixels = img_float[lumen_mask > 0]
+            wall_pixels = img_float[wall_mask > 0]
+
+            if len(lumen_pixels) < 10 or len(wall_pixels) < 10:
+                continue
+
+            lumen_mean = np.mean(lumen_pixels)
+            wall_mean = np.mean(wall_pixels)
+
+            if lumen_mean > 0:
+                wall_lumen_ratio = wall_mean / lumen_mean
+            else:
+                wall_lumen_ratio = wall_mean / 0.01
+
+            if wall_lumen_ratio < min_wall_brightness_ratio:
+                continue
+
+            # Get outer contour from dilated mask
+            outer_contours, _ = cv2.findContours(
+                dilated_mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE
+            )
+            outer_contour = max(outer_contours, key=cv2.contourArea) if outer_contours else contour
+
+            # Calculate diameters
+            inner_diameter_um = (major_axis + minor_axis) / 2 * pixel_size_um
+            outer_diameter_um = inner_diameter_um + 2 * wall_thickness * pixel_size_um
+
+            candidates.append({
+                'outer': outer_contour,
+                'inner': contour,
+                'lumen_contour': contour,
+                'inner_ellipse': ellipse,
+                'centroid': (cx, cy),
+                'inner_area_px': area,
+                'outer_area_px': cv2.contourArea(outer_contour),
+                'inner_diameter_um': inner_diameter_um,
+                'outer_diameter_um': outer_diameter_um,
+                'aspect_ratio': aspect_ratio,
+                'ellipse_fit_quality': fit_quality,
+                'wall_lumen_ratio': wall_lumen_ratio,
+                'lumen_mean': lumen_mean,
+                'wall_mean': wall_mean,
+                'detection_method': 'lumen_first',
+            })
+
+        logger.info(f"Lumen-first detection: {len(candidates)} vessels from {len(contours)} dark regions")
+        return candidates
+
+    def _compute_ellipse_fit_quality(
+        self,
+        contour: np.ndarray,
+        ellipse: Tuple,
+        img_h: int,
+        img_w: int,
+    ) -> float:
+        """Compute IoU between contour and its fitted ellipse."""
+        if ellipse is None or len(contour) < 5:
+            return 0.0
+
+        (cx, cy), (ma, MA), angle = ellipse
+        x, y, w, h = cv2.boundingRect(contour)
+        margin = 5
+        x1, y1 = max(0, x - margin), max(0, y - margin)
+        w2, h2 = min(w + 2*margin, img_w - x1), min(h + 2*margin, img_h - y1)
+
+        if w2 <= 0 or h2 <= 0:
+            return 0.0
+
+        contour_mask = np.zeros((h2, w2), dtype=np.uint8)
+        contour_shifted = contour.copy()
+        contour_shifted[:, 0, 0] -= x1
+        contour_shifted[:, 0, 1] -= y1
+        cv2.drawContours(contour_mask, [contour_shifted], 0, 255, -1)
+
+        ellipse_mask = np.zeros((h2, w2), dtype=np.uint8)
+        ellipse_shifted = ((cx - x1, cy - y1), (ma, MA), angle)
+        try:
+            cv2.ellipse(ellipse_mask, ellipse_shifted, 255, -1)
+        except:
+            return 0.0
+
+        intersection = np.logical_and(contour_mask > 0, ellipse_mask > 0).sum()
+        union = np.logical_or(contour_mask > 0, ellipse_mask > 0).sum()
+
+        if union == 0:
+            return 0.0
+        return intersection / union
 
     def _detect_open_vessel_structures(
         self,
@@ -2680,6 +2899,9 @@ class VesselStrategy(DetectionStrategy):
             detection_type = 'complete'
 
         return {
+            # Contours (needed for IoU-based merge in multi-scale detection)
+            'outer': outer,
+            'inner': inner,
             # Diameters
             'outer_diameter_um': float(outer_diameter_um),
             'inner_diameter_um': float(inner_diameter_um),
@@ -2809,6 +3031,9 @@ class VesselStrategy(DetectionStrategy):
         detection_confidence = max(0.0, min(1.0, detection_confidence))
 
         return {
+            # Contours (needed for IoU-based merge in multi-scale detection)
+            'outer': outer,
+            'inner': None,
             # Estimated measurements (marked as estimates)
             'outer_diameter_um': float(estimated_diameter_um),
             'inner_diameter_um': None,  # Unknown for partial
@@ -2930,6 +3155,9 @@ class VesselStrategy(DetectionStrategy):
         detection_confidence = arc_confidence
 
         return {
+            # Contours (needed for IoU-based merge in multi-scale detection)
+            'outer': outer,
+            'inner': None,
             # Estimated measurements (marked as estimates for arcs)
             'outer_diameter_um': float(estimated_diameter_um),
             'inner_diameter_um': None,  # Unknown for arcs
@@ -3206,6 +3434,10 @@ class VesselStrategy(DetectionStrategy):
             detection_type = 'complete'
 
         return {
+            # Contours (needed for IoU-based merge in multi-scale detection)
+            'outer': outer,
+            'inner': inner,
+            # Measurements
             'outer_diameter_um': float(outer_diameter_um),
             'inner_diameter_um': float(inner_diameter_um),
             'major_axis_um': float(max(major_out, minor_out) * pixel_size_um),
@@ -3412,6 +3644,15 @@ class VesselStrategy(DetectionStrategy):
                     f"Multi-marker merge: {pre_merge_count} candidates -> "
                     f"{len(ring_candidates)} after IoU deduplication (threshold={self.merge_iou_threshold})"
                 )
+        elif self.lumen_first:
+            # Lumen-first detection mode
+            ring_candidates = self._detect_lumen_first(
+                tile, pixel_size_um,
+                min_lumen_area_um2=50 if self.candidate_mode else 75,
+                min_ellipse_fit=0.40 if self.candidate_mode else 0.55,
+                max_aspect_ratio=5.0 if self.candidate_mode else 4.0,
+                min_wall_brightness_ratio=1.15,
+            )
         else:
             # Standard sequential SMA ring detection
             ring_candidates = self.segment(
@@ -3678,8 +3919,599 @@ class VesselStrategy(DetectionStrategy):
 
         return combined_mask, final_detections
 
+    def detect_multiscale(
+        self,
+        tile_getter: callable,
+        models: Dict[str, Any],
+        mosaic_width: int,
+        mosaic_height: int,
+        tile_size: int = 4000,
+        scales: List[int] = None,
+        pixel_size_um: float = 0.17,
+        channel: int = 0,
+        iou_threshold: float = 0.3,
+        sample_fraction: float = 1.0,
+        progress_callback: Optional[callable] = None,
+        **detect_kwargs,
+    ) -> Tuple[List[np.ndarray], List[Detection]]:
+        """
+        Multi-scale vessel detection with IoU-based deduplication.
+
+        Detects vessels at multiple scales (coarse to fine) to capture
+        vessels of all sizes while avoiding cross-tile fragmentation.
+
+        Scale levels:
+        - 1/8x (coarse): Large vessels >100 µm, detects whole vessels
+        - 1/4x (medium): Medium vessels 30-200 µm
+        - 1x (fine): Small vessels and capillaries 3-75 µm
+
+        Args:
+            tile_getter: Function(x, y, size, channel, scale_factor) -> ndarray
+            models: Dict with SAM2/ResNet models
+            mosaic_width: Full-resolution mosaic width
+            mosaic_height: Full-resolution mosaic height
+            tile_size: Tile size in pixels (same at all scales)
+            scales: List of scale factors [8, 4, 1] = coarse to fine
+            pixel_size_um: Pixel size at full resolution in µm
+            channel: Channel to process
+            iou_threshold: IoU threshold for deduplication
+            sample_fraction: Fraction of tiles to process (0-1)
+            progress_callback: Optional callback(scale, tiles_done, total_tiles)
+            **detect_kwargs: Additional kwargs passed to detect()
+
+        Returns:
+            Tuple of (list of masks, list of Detection objects)
+
+        Example:
+            masks, detections = strategy.detect_multiscale(
+                tile_getter=loader.get_tile,
+                models=models,
+                mosaic_width=loader.width,
+                mosaic_height=loader.height,
+                scales=[8, 4, 1],
+                pixel_size_um=0.17,
+            )
+        """
+        from segmentation.utils.multiscale import (
+            get_scale_params,
+            generate_tile_grid_at_scale,
+            convert_detection_to_full_res,
+            merge_detections_across_scales,
+        )
+        import random
+
+        if scales is None:
+            scales = [8, 4, 1]  # Default: coarse, medium, fine
+
+        all_detections = []
+        all_masks = []
+
+        for scale in scales:
+            scale_pixel_size = pixel_size_um * scale
+            scale_params = get_scale_params(scale)
+
+            # Generate tile grid at this scale
+            tiles = generate_tile_grid_at_scale(
+                mosaic_width, mosaic_height, tile_size, scale
+            )
+
+            # Sample tiles if sample_fraction < 1.0
+            if sample_fraction < 1.0:
+                n_sample = max(1, int(len(tiles) * sample_fraction))
+                tiles = random.sample(tiles, n_sample)
+
+            logger.info(
+                f"Scale 1/{scale}x: Processing {len(tiles)} tiles, "
+                f"pixel_size={scale_pixel_size:.3f} µm, "
+                f"target: {scale_params['description']}"
+            )
+
+            scale_detections = 0
+            import time as _time
+            for i, (tile_x, tile_y) in enumerate(tiles):
+                tile_start = _time.time()
+                logger.info(f"  Scale 1/{scale}x: Tile {i+1}/{len(tiles)} at ({tile_x}, {tile_y})...")
+
+                # Get tile at this scale
+                tile = tile_getter(tile_x, tile_y, tile_size, channel, scale)
+                if tile is None:
+                    logger.info(f"  Scale 1/{scale}x: Tile {i+1}/{len(tiles)} - skipped (no data)")
+                    continue
+
+                # Temporarily adjust detection parameters for this scale
+                original_min_diam = self.min_diameter_um
+                original_max_diam = self.max_diameter_um
+
+                self.min_diameter_um = scale_params['min_diameter_um']
+                self.max_diameter_um = scale_params['max_diameter_um']
+
+                try:
+                    # Run detection
+                    masks, detections = self.detect(
+                        tile=tile,
+                        models=models,
+                        pixel_size_um=scale_pixel_size,
+                        tile_x=tile_x * scale,  # Convert to full-res coords
+                        tile_y=tile_y * scale,
+                        **detect_kwargs
+                    )
+
+                    # Convert detections to full resolution coordinates
+                    for det in detections:
+                        det_dict = det.to_dict() if hasattr(det, 'to_dict') else det
+                        # Preserve contour for IoU-based merge (to_dict() doesn't include it)
+                        # Contour is stored in det.features['outer'], need it at top level for merge
+                        if hasattr(det, 'features') and det.features.get('outer') is not None:
+                            det_dict['outer'] = det.features['outer']
+                        elif isinstance(det_dict.get('features'), dict) and det_dict['features'].get('outer') is not None:
+                            det_dict['outer'] = det_dict['features']['outer']
+                        det_fullres = convert_detection_to_full_res(
+                            det_dict, scale, tile_x, tile_y
+                        )
+                        all_detections.append(det_fullres)
+                        scale_detections += 1
+
+                    if masks is not None and masks.size > 0:
+                        all_masks.append((tile_x * scale, tile_y * scale, scale, masks))
+
+                finally:
+                    # Restore original parameters
+                    self.min_diameter_um = original_min_diam
+                    self.max_diameter_um = original_max_diam
+
+                tile_elapsed = _time.time() - tile_start
+                logger.info(
+                    f"  Scale 1/{scale}x: Tile {i+1}/{len(tiles)} done - "
+                    f"found {len(detections)} vessels in {tile_elapsed:.1f}s"
+                )
+
+                if progress_callback:
+                    progress_callback(scale, i + 1, len(tiles))
+
+            logger.info(f"Scale 1/{scale}x: Found {scale_detections} detections")
+
+        # Merge detections across scales (finer scale takes precedence)
+        logger.info(f"Merging {len(all_detections)} detections across scales...")
+        merged_detections = merge_detections_across_scales(
+            all_detections,
+            iou_threshold=iou_threshold,
+            prefer_finer_scale=True
+        )
+
+        # Convert back to Detection objects if needed
+        final_detections = []
+        for det_dict in merged_detections:
+            if isinstance(det_dict, Detection):
+                final_detections.append(det_dict)
+            else:
+                # Create Detection from dict
+                # Detection dataclass expects: mask, centroid, features, id, score
+                features = det_dict.get('features', {}).copy()
+                # ALWAYS use the scaled 'outer' contour from det_dict (not the original in features)
+                # convert_detection_to_full_res() already scaled det_dict['outer'] to full resolution
+                if det_dict.get('outer') is not None:
+                    features['outer'] = det_dict.get('outer')
+                if det_dict.get('inner') is not None:
+                    features['inner'] = det_dict.get('inner')
+
+                final_detections.append(Detection(
+                    mask=det_dict.get('mask', np.zeros((1, 1), dtype=bool)),
+                    centroid=det_dict.get('center', det_dict.get('centroid', [0, 0])),
+                    features=features,
+                    id=det_dict.get('id', det_dict.get('mask_id')),
+                    score=det_dict.get('score', det_dict.get('confidence', 1.0)),
+                ))
+
+        logger.info(
+            f"Multi-scale detection complete: {len(final_detections)} vessels "
+            f"(from {len(all_detections)} raw detections)"
+        )
+
+        return all_masks, final_detections
+
     # _extract_sam2_embedding inherited from DetectionStrategy base class
     # _extract_resnet_features_batch inherited from DetectionStrategy base class
+
+    def detect_medsam_multiscale(
+        self,
+        tile_getter: callable,
+        mosaic_width: int,
+        mosaic_height: int,
+        tile_size: int = 4000,
+        scales: List[int] = None,
+        pixel_size_um: float = 0.17,
+        channel: int = 0,
+        iou_threshold: float = 0.3,
+        sample_fraction: float = 1.0,
+        medsam_checkpoint: str = None,
+        progress_callback: Optional[callable] = None,
+        **detect_kwargs,
+    ) -> Tuple[List[Dict], List[Detection]]:
+        """
+        Multi-scale vessel detection using MedSAM with ring structure filtering.
+
+        MedSAM (Medical SAM) is SAM fine-tuned on 1.5M medical image-mask pairs,
+        providing better boundary detection for medical/biological structures.
+
+        Approach:
+        1. At each scale, run MedSAM automatic mask generation
+        2. Filter masks that have "holes" (lumen inside wall = vessel cross-section)
+        3. Extract vessel features from filtered masks
+        4. Convert coordinates to full resolution
+        5. Merge across scales using IoU deduplication
+
+        Args:
+            tile_getter: Function(x, y, size, channel, scale_factor) -> ndarray
+            mosaic_width: Full-resolution mosaic width
+            mosaic_height: Full-resolution mosaic height
+            tile_size: Tile size in pixels (same at all scales)
+            scales: List of scale factors [16, 8, 4] = coarse to fine
+            pixel_size_um: Pixel size at full resolution in µm
+            channel: Channel to process
+            iou_threshold: IoU threshold for deduplication
+            sample_fraction: Fraction of tiles to process (0-1)
+            medsam_checkpoint: Path to MedSAM checkpoint (auto-detected if None)
+            progress_callback: Optional callback(scale, tiles_done, total_tiles)
+            **detect_kwargs: Additional kwargs (min_area_um2, etc.)
+
+        Returns:
+            Tuple of (list of mask info dicts, list of Detection objects)
+        """
+        import torch
+        from segment_anything import sam_model_registry, SamAutomaticMaskGenerator
+        from segmentation.utils.multiscale import (
+            get_scale_params,
+            generate_tile_grid_at_scale,
+            convert_detection_to_full_res,
+            merge_detections_across_scales,
+        )
+        import random
+        import time as _time
+
+        if scales is None:
+            scales = [16, 8, 4]  # Default: very coarse to medium
+
+        # Find MedSAM checkpoint
+        if medsam_checkpoint is None:
+            import os
+            possible_paths = [
+                "/home/dude/code/vessel_seg/checkpoints/medsam_vit_b.pth",
+                "checkpoints/medsam_vit_b.pth",
+                os.path.expanduser("~/checkpoints/medsam_vit_b.pth"),
+            ]
+            for p in possible_paths:
+                if os.path.exists(p):
+                    medsam_checkpoint = p
+                    break
+            if medsam_checkpoint is None:
+                raise FileNotFoundError("MedSAM checkpoint not found. Please provide medsam_checkpoint path.")
+
+        # Load MedSAM
+        device = "cuda" if torch.cuda.is_available() else "cpu"
+        logger.info(f"Loading MedSAM from {medsam_checkpoint} on {device}...")
+        sam = sam_model_registry["vit_b"](checkpoint=medsam_checkpoint)
+        sam.to(device)
+        sam.eval()
+
+        # Create automatic mask generator with settings tuned for vessels
+        mask_generator = SamAutomaticMaskGenerator(
+            sam,
+            points_per_side=32,          # Dense point grid for finding all structures
+            pred_iou_thresh=0.86,        # Slightly lower for more candidates
+            stability_score_thresh=0.92, # Slightly lower for partial rings
+            min_mask_region_area=50,     # Small area to catch capillaries
+            crop_n_layers=1,             # Multi-crop for better coverage
+            crop_n_points_downscale_factor=2,
+        )
+        logger.info("MedSAM mask generator created")
+
+        all_detections = []
+        all_mask_info = []
+
+        for scale in scales:
+            scale_pixel_size = pixel_size_um * scale
+            scale_params = get_scale_params(scale)
+
+            # Generate tile grid at this scale
+            tiles = generate_tile_grid_at_scale(
+                mosaic_width, mosaic_height, tile_size, scale
+            )
+
+            # Sample tiles if sample_fraction < 1.0
+            if sample_fraction < 1.0:
+                n_sample = max(1, int(len(tiles) * sample_fraction))
+                tiles = random.sample(tiles, n_sample)
+
+            logger.info(
+                f"MedSAM Scale 1/{scale}x: Processing {len(tiles)} tiles, "
+                f"pixel_size={scale_pixel_size:.3f} µm, "
+                f"target: {scale_params['description']}"
+            )
+
+            scale_detections = 0
+            for i, (tile_x, tile_y) in enumerate(tiles):
+                tile_start = _time.time()
+                logger.info(f"  MedSAM Scale 1/{scale}x: Tile {i+1}/{len(tiles)} at ({tile_x}, {tile_y})...")
+
+                # Get tile at this scale
+                tile = tile_getter(tile_x, tile_y, tile_size, channel, scale)
+                if tile is None:
+                    logger.info(f"  MedSAM Scale 1/{scale}x: Tile {i+1}/{len(tiles)} - skipped (no data)")
+                    continue
+
+                # Convert to RGB for MedSAM (expects 3-channel)
+                if tile.ndim == 2:
+                    tile_rgb = np.stack([tile, tile, tile], axis=-1)
+                elif tile.shape[-1] == 1:
+                    tile_rgb = np.concatenate([tile, tile, tile], axis=-1)
+                else:
+                    tile_rgb = tile
+
+                # Normalize to uint8 if needed
+                if tile_rgb.dtype != np.uint8:
+                    if tile_rgb.max() > 255:
+                        tile_rgb = ((tile_rgb - tile_rgb.min()) / (tile_rgb.max() - tile_rgb.min() + 1e-8) * 255).astype(np.uint8)
+                    else:
+                        tile_rgb = tile_rgb.astype(np.uint8)
+
+                # Run MedSAM automatic mask generation
+                try:
+                    masks = mask_generator.generate(tile_rgb)
+                except Exception as e:
+                    logger.warning(f"  MedSAM error on tile ({tile_x}, {tile_y}): {e}")
+                    continue
+
+                logger.info(f"  MedSAM found {len(masks)} masks, filtering for vessel rings...")
+
+                # Filter masks for ring structures (vessel cross-sections)
+                vessel_detections = self._filter_medsam_masks_for_vessels(
+                    masks,
+                    tile_rgb,
+                    tile_x, tile_y,
+                    scale,
+                    scale_pixel_size,
+                    scale_params,
+                )
+
+                # Convert to full resolution coordinates
+                for det in vessel_detections:
+                    det_fullres = convert_detection_to_full_res(
+                        det, scale, tile_x, tile_y
+                    )
+                    all_detections.append(det_fullres)
+                    scale_detections += 1
+
+                tile_elapsed = _time.time() - tile_start
+                logger.info(
+                    f"  MedSAM Scale 1/{scale}x: Tile {i+1}/{len(tiles)} done - "
+                    f"found {len(vessel_detections)} vessels in {tile_elapsed:.1f}s"
+                )
+
+                if progress_callback:
+                    progress_callback(scale, i + 1, len(tiles))
+
+            logger.info(f"MedSAM Scale 1/{scale}x: Found {scale_detections} vessel detections")
+
+        # Cleanup MedSAM model
+        del sam, mask_generator
+        torch.cuda.empty_cache()
+        gc.collect()
+
+        # Merge detections across scales (finer scale takes precedence)
+        logger.info(f"Merging {len(all_detections)} detections across scales...")
+        merged_detections = merge_detections_across_scales(
+            all_detections,
+            iou_threshold=iou_threshold,
+            prefer_finer_scale=True
+        )
+
+        # Convert to Detection objects
+        final_detections = []
+        for det_dict in merged_detections:
+            if isinstance(det_dict, Detection):
+                final_detections.append(det_dict)
+            else:
+                features = det_dict.get('features', {}).copy()
+                if det_dict.get('outer') is not None:
+                    features['outer'] = det_dict.get('outer')
+                if det_dict.get('inner') is not None:
+                    features['inner'] = det_dict.get('inner')
+
+                final_detections.append(Detection(
+                    mask=det_dict.get('mask', np.zeros((1, 1), dtype=bool)),
+                    centroid=det_dict.get('center', det_dict.get('centroid', [0, 0])),
+                    features=features,
+                    id=det_dict.get('id', det_dict.get('mask_id')),
+                    score=det_dict.get('score', det_dict.get('confidence', 1.0)),
+                ))
+
+        logger.info(
+            f"MedSAM multi-scale detection complete: {len(final_detections)} vessels "
+            f"(from {len(all_detections)} raw detections)"
+        )
+
+        return all_mask_info, final_detections
+
+    def _filter_medsam_masks_for_vessels(
+        self,
+        masks: List[Dict],
+        tile_rgb: np.ndarray,
+        tile_x: int,
+        tile_y: int,
+        scale: int,
+        pixel_size_um: float,
+        scale_params: Dict,
+    ) -> List[Dict]:
+        """
+        Filter MedSAM masks for vessel ring structures.
+
+        A vessel cross-section has:
+        - Ring structure: wall surrounding a lumen (hole in mask)
+        - Appropriate size for the scale
+        - Circularity (not too elongated)
+
+        Args:
+            masks: List of MedSAM mask dicts with 'segmentation', 'area', etc.
+            tile_rgb: The RGB tile image
+            tile_x, tile_y: Tile position in scaled coordinates
+            scale: Scale factor
+            pixel_size_um: Pixel size at this scale
+            scale_params: Scale-specific parameters
+
+        Returns:
+            List of vessel detection dicts
+        """
+        vessel_detections = []
+        min_diam_px = scale_params['min_diameter_um'] / pixel_size_um
+        max_diam_px = scale_params['max_diameter_um'] / pixel_size_um
+        min_area_px = np.pi * (min_diam_px / 2) ** 2 * 0.5  # Allow some margin
+        max_area_px = np.pi * (max_diam_px / 2) ** 2 * 2.0
+
+        for mask_info in masks:
+            mask = mask_info['segmentation'].astype(np.uint8)
+            area = mask_info['area']
+
+            # Size filter
+            if area < min_area_px or area > max_area_px:
+                continue
+
+            # Find contours to check for ring structure
+            contours, hierarchy = cv2.findContours(
+                mask, cv2.RETR_CCOMP, cv2.CHAIN_APPROX_SIMPLE
+            )
+
+            if len(contours) == 0:
+                continue
+
+            # Check for ring structure: outer contour with inner hole(s)
+            # In RETR_CCOMP hierarchy: [Next, Previous, First_Child, Parent]
+            # A ring has an outer contour (parent=-1) with a child (lumen)
+            outer_contour = None
+            inner_contour = None
+            has_ring = False
+
+            if hierarchy is not None:
+                hierarchy = hierarchy[0]
+                for idx, (cnt, h) in enumerate(zip(contours, hierarchy)):
+                    # h = [Next, Previous, First_Child, Parent]
+                    if h[3] == -1 and h[2] != -1:  # No parent, has child = ring
+                        outer_contour = cnt
+                        child_idx = h[2]
+                        if child_idx < len(contours):
+                            inner_contour = contours[child_idx]
+                            has_ring = True
+                            break
+
+            # If no ring structure found, check if it's a solid vessel-like shape
+            if not has_ring:
+                # Use largest contour as outer
+                outer_contour = max(contours, key=cv2.contourArea)
+                # Check if mask has internal holes by comparing mask area to contour area
+                contour_area = cv2.contourArea(outer_contour)
+                mask_area = np.sum(mask > 0)
+                if contour_area > 0 and mask_area < contour_area * 0.9:
+                    # Mask has holes - it's a ring!
+                    has_ring = True
+                    # Find the largest internal contour as lumen
+                    inverted = 255 - mask
+                    inner_contours, _ = cv2.findContours(
+                        inverted, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE
+                    )
+                    # Filter to internal holes only
+                    internal_holes = []
+                    for ic in inner_contours:
+                        # Check if this contour is inside the outer contour
+                        M = cv2.moments(ic)
+                        if M['m00'] > 0:
+                            cx = int(M['m10'] / M['m00'])
+                            cy = int(M['m01'] / M['m00'])
+                            if cv2.pointPolygonTest(outer_contour, (cx, cy), False) > 0:
+                                internal_holes.append(ic)
+                    if internal_holes:
+                        inner_contour = max(internal_holes, key=cv2.contourArea)
+
+            if outer_contour is None:
+                continue
+
+            # Compute vessel metrics
+            outer_area = cv2.contourArea(outer_contour)
+            if outer_area < 10:
+                continue
+
+            # Fit ellipse if enough points
+            if len(outer_contour) >= 5:
+                ellipse = cv2.fitEllipse(outer_contour)
+                center, axes, angle = ellipse
+                major_axis = max(axes)
+                minor_axis = min(axes)
+                aspect_ratio = major_axis / (minor_axis + 1e-6)
+                outer_diameter_px = (major_axis + minor_axis) / 2
+            else:
+                # Fallback to bounding rect
+                x, y, w, h = cv2.boundingRect(outer_contour)
+                center = (x + w/2, y + h/2)
+                aspect_ratio = max(w, h) / (min(w, h) + 1e-6)
+                outer_diameter_px = (w + h) / 2
+
+            outer_diameter_um = outer_diameter_px * pixel_size_um
+
+            # Filter by aspect ratio (reject elongated structures)
+            if aspect_ratio > self.max_aspect_ratio:
+                continue
+
+            # Compute circularity
+            perimeter = cv2.arcLength(outer_contour, True)
+            circularity = 4 * np.pi * outer_area / (perimeter ** 2 + 1e-6)
+
+            if circularity < self.min_circularity:
+                continue
+
+            # Compute ring completeness (for ring structures)
+            ring_completeness = 0.0
+            wall_thickness_um = 0.0
+            inner_diameter_um = 0.0
+
+            if has_ring and inner_contour is not None:
+                inner_area = cv2.contourArea(inner_contour)
+                wall_area = outer_area - inner_area
+                ring_completeness = wall_area / (outer_area + 1e-6)
+
+                # Estimate wall thickness
+                inner_diameter_px = np.sqrt(4 * inner_area / np.pi)
+                inner_diameter_um = inner_diameter_px * pixel_size_um
+                wall_thickness_px = (outer_diameter_px - inner_diameter_px) / 2
+                wall_thickness_um = wall_thickness_px * pixel_size_um
+
+            # Build detection dict
+            detection = {
+                'id': f"medsam_{tile_x}_{tile_y}_{len(vessel_detections)}",
+                'mask_id': f"medsam_{tile_x}_{tile_y}_{len(vessel_detections)}",
+                'center': [float(center[0]), float(center[1])],
+                'centroid': [float(center[0]), float(center[1])],
+                'outer': outer_contour,
+                'inner': inner_contour,
+                'mask': mask.astype(bool),
+                'score': float(mask_info.get('predicted_iou', 0.9)),
+                'confidence': float(mask_info.get('stability_score', 0.9)),
+                'features': {
+                    'outer': outer_contour,
+                    'inner': inner_contour,
+                    'outer_diameter_um': outer_diameter_um,
+                    'inner_diameter_um': inner_diameter_um,
+                    'wall_thickness_mean_um': wall_thickness_um,
+                    'circularity': circularity,
+                    'aspect_ratio': aspect_ratio,
+                    'ring_completeness': ring_completeness,
+                    'has_ring': has_ring,
+                    'area_px': outer_area,
+                    'area_um2': outer_area * (pixel_size_um ** 2),
+                    'scale_detected': scale,
+                    'detection_method': 'medsam',
+                },
+            }
+            vessel_detections.append(detection)
+
+        return vessel_detections
 
     def create_vessel_mask(
         self,

@@ -641,6 +641,7 @@ def create_strategy_for_cell_type(cell_type, params, pixel_size_um):
             min_ring_completeness=params.get('min_ring_completeness', 0.5),
             classify_vessel_types=params.get('classify_vessel_types', False),
             candidate_mode=params.get('candidate_mode', False),
+            lumen_first=params.get('lumen_first', False),
             parallel_detection=params.get('parallel_detection', False),
             parallel_workers=params.get('parallel_workers', 3),
             multi_marker=params.get('multi_marker', False),
@@ -2834,6 +2835,7 @@ def run_pipeline(args):
             'use_ml_classification': args.use_ml_classification,
             'vessel_classifier_path': args.vessel_classifier_path,
             'candidate_mode': args.candidate_mode,
+            'lumen_first': getattr(args, 'lumen_first', False),
             'parallel_detection': getattr(args, 'parallel_detection', False),
             'parallel_workers': getattr(args, 'parallel_workers', 3),
             'multi_marker': getattr(args, 'multi_marker', False),
@@ -2901,265 +2903,342 @@ def run_pipeline(args):
     all_detections = []  # Universal list with global coordinates
     total_detections = 0
 
-    for tile in tqdm(sampled_tiles, desc="Tiles"):
-        tile_x = tile['x']
-        tile_y = tile['y']
+    # Multi-scale vessel detection mode
+    if args.cell_type == 'vessel' and getattr(args, 'multi_scale', False):
+        logger.info("=" * 60)
+        logger.info("MULTI-SCALE VESSEL DETECTION ENABLED")
+        logger.info("=" * 60)
 
-        try:
-            # Use loader.get_tile() for consistent tile extraction
-            # This uses RAM-loaded data if available, or falls back to on-demand reading
-            tile_data = loader.get_tile(tile_x, tile_y, args.tile_size, channel=args.channel)
+        # Parse scale factors
+        scales = [int(s.strip()) for s in args.scales.split(',')]
+        iou_threshold = getattr(args, 'multiscale_iou_threshold', 0.3)
 
-            if tile_data is None or tile_data.size == 0:
-                continue
+        logger.info(f"Scales: {scales} (coarse to fine)")
+        logger.info(f"IoU threshold for deduplication: {iou_threshold}")
 
-            if tile_data.max() == 0:
-                continue
+        # Run multi-scale detection
+        # The strategy.detect_multiscale() handles all tile iteration internally
+        from tqdm import tqdm as tqdm_progress
 
-            # Convert to RGB - use true multi-channel if available
-            # For NMJ: ch0=nuclear (488), ch1=BTX (647), ch2=NFL (750)
-            # For Vessel: ch0=nuclear, ch1=SMA (detection), ch2=PM, ch3=CD31
-            # Stack as RGB so ResNet sees all channels
-            extra_channel_tiles = None
-            if args.cell_type == 'nmj' and len(all_channel_data) >= 3:
-                # Build true 3-channel tile from all channels
-                ch0_tile = all_channel_data[0][tile_y:tile_y + args.tile_size,
-                                               tile_x:tile_x + args.tile_size]
-                ch1_tile = all_channel_data[1][tile_y:tile_y + args.tile_size,
-                                               tile_x:tile_x + args.tile_size]
-                ch2_tile = all_channel_data[2][tile_y:tile_y + args.tile_size,
-                                               tile_x:tile_x + args.tile_size]
-                # Stack as RGB: ch0=R (nuclear), ch1=G (BTX), ch2=B (NFL)
-                tile_rgb = np.stack([ch0_tile, ch1_tile, ch2_tile], axis=-1)
-                # Also pass individual channels for per-channel feature extraction
-                extra_channel_tiles = {0: ch0_tile, 1: ch1_tile, 2: ch2_tile}
-            elif args.cell_type == 'vessel' and len(all_channel_data) >= 2:
-                # Build multi-channel data dict for vessel feature extraction
-                # Use detection channel (SMA) as primary, but extract features from all
-                extra_channel_tiles = {}
-                for ch_idx, ch_data in all_channel_data.items():
-                    ch_tile = ch_data[tile_y:tile_y + args.tile_size,
-                                      tile_x:tile_x + args.tile_size]
-                    extra_channel_tiles[ch_idx] = ch_tile
-                # For RGB, use first 3 channels or replicate detection channel
-                if len(all_channel_data) >= 3:
-                    ch_keys = sorted(all_channel_data.keys())[:3]
-                    tile_rgb = np.stack([extra_channel_tiles[k] for k in ch_keys], axis=-1)
-                else:
-                    # Fallback: use detection channel for all RGB
-                    tile_rgb = np.stack([tile_data] * 3, axis=-1)
-            elif tile_data.ndim == 2:
-                tile_rgb = np.stack([tile_data] * 3, axis=-1)
+        def progress_callback(scale, done, total):
+            """Progress callback for multi-scale detection."""
+            pass  # tqdm handles progress display
+
+        all_masks, detections = strategy.detect_multiscale(
+            tile_getter=lambda x, y, size, ch, sf: loader.get_tile(x, y, size, ch, scale_factor=sf),
+            models=detector.models,
+            mosaic_width=mosaic_info['width'],
+            mosaic_height=mosaic_info['height'],
+            tile_size=args.tile_size,
+            scales=scales,
+            pixel_size_um=pixel_size_um,
+            channel=args.channel,
+            iou_threshold=iou_threshold,
+            sample_fraction=args.sample_fraction,
+            progress_callback=progress_callback,
+        )
+
+        # Convert to features list format
+        features_list = detections_to_features_list(detections, args.cell_type)
+        total_detections = len(features_list)
+
+        logger.info(f"Multi-scale detection complete: {total_detections} vessels")
+
+        # Create samples for HTML (using full-resolution crops)
+        for feat in features_list:
+            features_dict = feat.get('features', {})
+
+            # Get center coordinates (already in full resolution)
+            center = features_dict.get('global_center', features_dict.get('center', [0, 0]))
+            if isinstance(center, (list, tuple)) and len(center) >= 2:
+                cx, cy = int(center[0]), int(center[1])
             else:
-                tile_rgb = tile_data
-
-            # Get CD31 channel if specified (for vessel validation)
-            # Uses the same loader - CD31 channel was already loaded to RAM via get_loader()
-            cd31_channel_data = None
-            if args.cell_type == 'vessel' and args.cd31_channel is not None:
-                cd31_tile = loader.get_tile(tile_x, tile_y, args.tile_size, channel=args.cd31_channel)
-                if cd31_tile is not None and cd31_tile.size > 0:
-                    cd31_channel_data = cd31_tile.astype(np.float32)
-
-            # Detect cells
-            if use_new_detector:
-                # New CellDetector + strategy pattern
-                # The strategy's detect() method returns (label_array, list[Detection])
-                if args.cell_type == 'vessel':
-                    # Vessel strategy with cd31_channel and optional multi-channel features
-                    # Parse custom channel names if provided
-                    # Map names to actual channel indices from all_channel_data (not 0-based assumption)
-                    channel_names = None
-                    if getattr(args, 'channel_names', None) and extra_channel_tiles:
-                        names = args.channel_names.split(',')
-                        actual_indices = sorted(extra_channel_tiles.keys())
-                        # Map names to actual channel indices
-                        channel_names = {actual_indices[i]: name.strip()
-                                        for i, name in enumerate(names)
-                                        if i < len(actual_indices)}
-                    masks, detections = strategy.detect(
-                        tile_rgb, detector.models, pixel_size_um,
-                        cd31_channel=cd31_channel_data,
-                        extra_channels=extra_channel_tiles,  # Multi-channel for feature extraction
-                        channel_names=channel_names  # Custom channel names
-                    )
-                elif args.cell_type == 'nmj' and extra_channel_tiles is not None:
-                    # NMJ strategy with multi-channel feature extraction
-                    masks, detections = strategy.detect(
-                        tile_rgb, detector.models, pixel_size_um,
-                        extra_channels=extra_channel_tiles
-                    )
-                else:
-                    # Other strategies: mk, cell, mesothelium
-                    masks, detections = strategy.detect(
-                        tile_rgb, detector.models, pixel_size_um
-                    )
-                # Convert Detection objects to the expected features_list format
-                features_list = detections_to_features_list(detections, args.cell_type)
-            else:
-                # This branch is no longer used - all cell types use new detector
-                masks, features_list = segmenter.process_tile(
-                    tile_rgb, args.cell_type, params, cd31_channel=cd31_channel_data
-                )
-
-            if len(features_list) == 0:
                 continue
 
-            # Multi-channel intensity measurement for NMJ specificity checking
-            if args.cell_type == 'nmj' and len(all_channel_data) > 1:
-                for i, feat in enumerate(features_list):
-                    # Get mask for this detection
-                    if i < masks.max():
-                        mask = (masks == (i + 1))
-                        if mask.sum() > 0:
-                            channel_intensities = {}
-                            for ch, ch_data in all_channel_data.items():
-                                # Extract tile from channel data
-                                ch_tile = ch_data[tile_y:tile_y + args.tile_size,
-                                                  tile_x:tile_x + args.tile_size]
-                                if ch_tile.shape == mask.shape:
-                                    mean_int = float(ch_tile[mask].mean())
-                                    channel_intensities[f'ch{ch}_mean'] = mean_int
-                            # Add to features
-                            feat['features'].update(channel_intensities)
-                            # Calculate specificity metrics
-                            # BTX (ch1) / nuclear (ch0) - real NMJs have high BTX, low nuclear
-                            # Autofluorescence appears in all channels including nuclear
-                            btx_int = channel_intensities.get('ch1_mean', 0)
-                            nuclear_int = channel_intensities.get('ch0_mean', 1)  # avoid div by zero
-                            nfl_int = channel_intensities.get('ch2_mean', 0)
+            # Calculate crop region in full resolution
+            # Use mask bounding box if available, otherwise estimate from diameter
+            diameter_um = features_dict.get('outer_diameter_um', 50)
+            diameter_px = int(diameter_um / pixel_size_um)
+            crop_size = max(300, min(800, int(diameter_px * 2)))
 
-                            feat['features']['btx_nuclear_ratio'] = btx_int / max(nuclear_int, 1)
-                            feat['features']['btx_nfl_ratio'] = btx_int / max(nfl_int, 1) if nfl_int > 0 else float('inf')
-                            # Legacy: overall specificity (BTX vs max other)
-                            primary_int = channel_intensities.get(f'ch{args.channel}_mean', 0)
-                            other_ints = [v for k, v in channel_intensities.items()
-                                         if k != f'ch{args.channel}_mean']
-                            if other_ints and max(other_ints) > 0:
-                                feat['features']['channel_specificity'] = primary_int / max(other_ints)
-                            else:
-                                feat['features']['channel_specificity'] = float('inf')
+            # Generate UID
+            uid = f"{slide_name}_vessel_{cx}_{cy}"
 
-            # Apply ML-based vessel classification if classifier loaded
-            if args.cell_type == 'vessel' and vessel_classifier is not None:
-                for feat in features_list:
-                    try:
-                        vessel_type, confidence = vessel_classifier.predict(feat['features'])
-                        feat['features']['vessel_type'] = vessel_type
-                        feat['features']['vessel_type_confidence'] = float(confidence)
-                        feat['features']['classification_method'] = 'ml'
-                    except Exception as e:
-                        # Fall back to rule-based if ML fails
-                        vessel_type, confidence = VesselClassifier.rule_based_classify(feat['features'])
-                        feat['features']['vessel_type'] = vessel_type
-                        feat['features']['vessel_type_confidence'] = float(confidence)
-                        feat['features']['classification_method'] = 'rule_based_fallback'
-                        logger.debug(f"ML classification failed, using rule-based: {e}")
+            # Create detection dict for export
+            detection_dict = {
+                'uid': uid,
+                'slide': slide_name,
+                'center': [cx, cy],
+                'center_um': [cx * pixel_size_um, cy * pixel_size_um],
+                'features': features_dict,
+                'scale_detected': features_dict.get('scale_detected', 1),
+            }
+            all_detections.append(detection_dict)
 
-            # Apply VesselTypeClassifier for 6-type classification (multi-marker mode)
-            if args.cell_type == 'vessel' and vessel_type_classifier is not None:
-                for feat in features_list:
-                    try:
-                        vessel_type, confidence = vessel_type_classifier.predict(feat['features'])
-                        # Get full probability distribution
-                        probs = vessel_type_classifier.predict_proba(feat['features'])
-                        feat['features']['vessel_type_6class'] = vessel_type
-                        feat['features']['vessel_type_6class_confidence'] = float(confidence)
-                        feat['features']['vessel_type_6class_probabilities'] = {
-                            k: float(v) for k, v in probs.items()
-                        } if probs else {}
-                        feat['features']['classification_method_6class'] = 'ml_vessel_type_classifier'
-                    except Exception as e:
-                        # Fall back to rule-based if ML fails
-                        try:
-                            vessel_type, confidence = vessel_type_classifier.rule_based_classify(feat['features'])
-                            feat['features']['vessel_type_6class'] = vessel_type
-                            feat['features']['vessel_type_6class_confidence'] = float(confidence)
-                            feat['features']['classification_method_6class'] = 'rule_based_fallback'
-                        except Exception as e2:
-                            logger.debug(f"VesselTypeClassifier failed (both ML and rule-based): {e}, {e2}")
+        # Skip the regular tile loop - go directly to HTML export
+        logger.info("Skipping standard tile loop (multi-scale mode)")
 
-            # Add universal IDs and global coordinates to each detection
-            for feat in features_list:
-                local_cx, local_cy = feat['center']
-                global_cx = tile_x + local_cx
-                global_cy = tile_y + local_cy
+    else:
+        # Standard single-scale tile processing
+        for tile in tqdm(sampled_tiles, desc="Tiles"):
+            tile_x = tile['x']
+            tile_y = tile['y']
 
-                # Create universal ID: slide_celltype_globalX_globalY
-                # Use round() instead of int() to reduce collision probability for nearby cells
-                uid = f"{slide_name}_{args.cell_type}_{round(global_cx)}_{round(global_cy)}"
-                feat['uid'] = uid
-                feat['global_center'] = [float(global_cx), float(global_cy)]
-                feat['global_center_um'] = [float(global_cx * pixel_size_um), float(global_cy * pixel_size_um)]
-                feat['tile_origin'] = [tile_x, tile_y]
-                feat['slide_name'] = slide_name
+            try:
+                # Use loader.get_tile() for consistent tile extraction
+                # This uses RAM-loaded data if available, or falls back to on-demand reading
+                tile_data = loader.get_tile(tile_x, tile_y, args.tile_size, channel=args.channel)
 
-                # Convert contours to global coordinates if present (vessels)
-                if 'outer_contour' in feat:
-                    feat['outer_contour_global'] = [[pt[0][0] + tile_x, pt[0][1] + tile_y]
-                                                    for pt in feat['outer_contour']]
-                if 'inner_contour' in feat and feat['inner_contour'] is not None:
-                    feat['inner_contour_global'] = [[pt[0][0] + tile_x, pt[0][1] + tile_y]
-                                                    for pt in feat['inner_contour']]
-
-                all_detections.append(feat)
-
-            # Save masks and features
-            tile_id = f"tile_{tile_x}_{tile_y}"
-            tile_out = tiles_dir / tile_id
-            tile_out.mkdir(exist_ok=True)
-
-            with h5py.File(tile_out / f"{args.cell_type}_masks.h5", 'w') as f:
-                create_hdf5_dataset(f, 'masks', masks.astype(np.uint16))
-
-            with open(tile_out / f"{args.cell_type}_features.json", 'w') as f:
-                json.dump(features_list, f, cls=NumpyEncoder)
-
-            # Create samples for HTML with quality filtering
-            # For vessels, apply stricter filters to reduce garbage
-            min_area_um2 = 25.0
-            for feat in features_list:
-                features_dict = feat.get('features', {})
-
-                # Check area filter
-                area_um2 = features_dict.get('area', 0) * (pixel_size_um ** 2)
-                if area_um2 < min_area_um2:
+                if tile_data is None or tile_data.size == 0:
                     continue
 
-                # For vessel detection, apply quality filters to reduce false positives
-                if args.cell_type == 'vessel':
-                    # Ring completeness: require at least 30% (relaxed from 50% to allow partial vessels)
-                    ring_completeness = features_dict.get('ring_completeness', 1.0)
-                    if ring_completeness < 0.30:
+                if tile_data.max() == 0:
+                    continue
+
+                # Convert to RGB - use true multi-channel if available
+                # For NMJ: ch0=nuclear (488), ch1=BTX (647), ch2=NFL (750)
+                # For Vessel: ch0=nuclear, ch1=SMA (detection), ch2=PM, ch3=CD31
+                # Stack as RGB so ResNet sees all channels
+                extra_channel_tiles = None
+                if args.cell_type == 'nmj' and len(all_channel_data) >= 3:
+                    # Build true 3-channel tile from all channels
+                    ch0_tile = all_channel_data[0][tile_y:tile_y + args.tile_size,
+                                                   tile_x:tile_x + args.tile_size]
+                    ch1_tile = all_channel_data[1][tile_y:tile_y + args.tile_size,
+                                                   tile_x:tile_x + args.tile_size]
+                    ch2_tile = all_channel_data[2][tile_y:tile_y + args.tile_size,
+                                                   tile_x:tile_x + args.tile_size]
+                    # Stack as RGB: ch0=R (nuclear), ch1=G (BTX), ch2=B (NFL)
+                    tile_rgb = np.stack([ch0_tile, ch1_tile, ch2_tile], axis=-1)
+                    # Also pass individual channels for per-channel feature extraction
+                    extra_channel_tiles = {0: ch0_tile, 1: ch1_tile, 2: ch2_tile}
+                elif args.cell_type == 'vessel' and len(all_channel_data) >= 2:
+                    # Build multi-channel data dict for vessel feature extraction
+                    # Use detection channel (SMA) as primary, but extract features from all
+                    extra_channel_tiles = {}
+                    for ch_idx, ch_data in all_channel_data.items():
+                        ch_tile = ch_data[tile_y:tile_y + args.tile_size,
+                                          tile_x:tile_x + args.tile_size]
+                        extra_channel_tiles[ch_idx] = ch_tile
+                    # For RGB, use first 3 channels or replicate detection channel
+                    if len(all_channel_data) >= 3:
+                        ch_keys = sorted(all_channel_data.keys())[:3]
+                        tile_rgb = np.stack([extra_channel_tiles[k] for k in ch_keys], axis=-1)
+                    else:
+                        # Fallback: use detection channel for all RGB
+                        tile_rgb = np.stack([tile_data] * 3, axis=-1)
+                elif tile_data.ndim == 2:
+                    tile_rgb = np.stack([tile_data] * 3, axis=-1)
+                else:
+                    tile_rgb = tile_data
+
+                # Get CD31 channel if specified (for vessel validation)
+                # Uses the same loader - CD31 channel was already loaded to RAM via get_loader()
+                cd31_channel_data = None
+                if args.cell_type == 'vessel' and args.cd31_channel is not None:
+                    cd31_tile = loader.get_tile(tile_x, tile_y, args.tile_size, channel=args.cd31_channel)
+                    if cd31_tile is not None and cd31_tile.size > 0:
+                        cd31_channel_data = cd31_tile.astype(np.float32)
+
+                # Detect cells
+                if use_new_detector:
+                    # New CellDetector + strategy pattern
+                    # The strategy's detect() method returns (label_array, list[Detection])
+                    if args.cell_type == 'vessel':
+                        # Vessel strategy with cd31_channel and optional multi-channel features
+                        # Parse custom channel names if provided
+                        # Map names to actual channel indices from all_channel_data (not 0-based assumption)
+                        channel_names = None
+                        if getattr(args, 'channel_names', None) and extra_channel_tiles:
+                            names = args.channel_names.split(',')
+                            actual_indices = sorted(extra_channel_tiles.keys())
+                            # Map names to actual channel indices
+                            channel_names = {actual_indices[i]: name.strip()
+                                            for i, name in enumerate(names)
+                                            if i < len(actual_indices)}
+                        masks, detections = strategy.detect(
+                            tile_rgb, detector.models, pixel_size_um,
+                            cd31_channel=cd31_channel_data,
+                            extra_channels=extra_channel_tiles,  # Multi-channel for feature extraction
+                            channel_names=channel_names  # Custom channel names
+                        )
+                    elif args.cell_type == 'nmj' and extra_channel_tiles is not None:
+                        # NMJ strategy with multi-channel feature extraction
+                        masks, detections = strategy.detect(
+                            tile_rgb, detector.models, pixel_size_um,
+                            extra_channels=extra_channel_tiles
+                        )
+                    else:
+                        # Other strategies: mk, cell, mesothelium
+                        masks, detections = strategy.detect(
+                            tile_rgb, detector.models, pixel_size_um
+                        )
+                    # Convert Detection objects to the expected features_list format
+                    features_list = detections_to_features_list(detections, args.cell_type)
+                else:
+                    # This branch is no longer used - all cell types use new detector
+                    masks, features_list = segmenter.process_tile(
+                        tile_rgb, args.cell_type, params, cd31_channel=cd31_channel_data
+                    )
+
+                if len(features_list) == 0:
+                    continue
+
+                # Multi-channel intensity measurement for NMJ specificity checking
+                if args.cell_type == 'nmj' and len(all_channel_data) > 1:
+                    for i, feat in enumerate(features_list):
+                        # Get mask for this detection
+                        if i < masks.max():
+                            mask = (masks == (i + 1))
+                            if mask.sum() > 0:
+                                channel_intensities = {}
+                                for ch, ch_data in all_channel_data.items():
+                                    # Extract tile from channel data
+                                    ch_tile = ch_data[tile_y:tile_y + args.tile_size,
+                                                      tile_x:tile_x + args.tile_size]
+                                    if ch_tile.shape == mask.shape:
+                                        mean_int = float(ch_tile[mask].mean())
+                                        channel_intensities[f'ch{ch}_mean'] = mean_int
+                                # Add to features
+                                feat['features'].update(channel_intensities)
+                                # Calculate specificity metrics
+                                # BTX (ch1) / nuclear (ch0) - real NMJs have high BTX, low nuclear
+                                # Autofluorescence appears in all channels including nuclear
+                                btx_int = channel_intensities.get('ch1_mean', 0)
+                                nuclear_int = channel_intensities.get('ch0_mean', 1)  # avoid div by zero
+                                nfl_int = channel_intensities.get('ch2_mean', 0)
+
+                                feat['features']['btx_nuclear_ratio'] = btx_int / max(nuclear_int, 1)
+                                feat['features']['btx_nfl_ratio'] = btx_int / max(nfl_int, 1) if nfl_int > 0 else float('inf')
+                                # Legacy: overall specificity (BTX vs max other)
+                                primary_int = channel_intensities.get(f'ch{args.channel}_mean', 0)
+                                other_ints = [v for k, v in channel_intensities.items()
+                                             if k != f'ch{args.channel}_mean']
+                                if other_ints and max(other_ints) > 0:
+                                    feat['features']['channel_specificity'] = primary_int / max(other_ints)
+                                else:
+                                    feat['features']['channel_specificity'] = float('inf')
+
+                # Apply ML-based vessel classification if classifier loaded
+                if args.cell_type == 'vessel' and vessel_classifier is not None:
+                    for feat in features_list:
+                        try:
+                            vessel_type, confidence = vessel_classifier.predict(feat['features'])
+                            feat['features']['vessel_type'] = vessel_type
+                            feat['features']['vessel_type_confidence'] = float(confidence)
+                            feat['features']['classification_method'] = 'ml'
+                        except Exception as e:
+                            # Fall back to rule-based if ML fails
+                            vessel_type, confidence = VesselClassifier.rule_based_classify(feat['features'])
+                            feat['features']['vessel_type'] = vessel_type
+                            feat['features']['vessel_type_confidence'] = float(confidence)
+                            feat['features']['classification_method'] = 'rule_based_fallback'
+                            logger.debug(f"ML classification failed, using rule-based: {e}")
+
+                # Apply VesselTypeClassifier for 6-type classification (multi-marker mode)
+                if args.cell_type == 'vessel' and vessel_type_classifier is not None:
+                    for feat in features_list:
+                        try:
+                            vessel_type, confidence = vessel_type_classifier.predict(feat['features'])
+                            # Get full probability distribution
+                            probs = vessel_type_classifier.predict_proba(feat['features'])
+                            feat['features']['vessel_type_6class'] = vessel_type
+                            feat['features']['vessel_type_6class_confidence'] = float(confidence)
+                            feat['features']['vessel_type_6class_probabilities'] = {
+                                k: float(v) for k, v in probs.items()
+                            } if probs else {}
+                            feat['features']['classification_method_6class'] = 'ml_vessel_type_classifier'
+                        except Exception as e:
+                            # Fall back to rule-based if ML fails
+                            try:
+                                vessel_type, confidence = vessel_type_classifier.rule_based_classify(feat['features'])
+                                feat['features']['vessel_type_6class'] = vessel_type
+                                feat['features']['vessel_type_6class_confidence'] = float(confidence)
+                                feat['features']['classification_method_6class'] = 'rule_based_fallback'
+                            except Exception as e2:
+                                logger.debug(f"VesselTypeClassifier failed (both ML and rule-based): {e}, {e2}")
+
+                # Add universal IDs and global coordinates to each detection
+                for feat in features_list:
+                    local_cx, local_cy = feat['center']
+                    global_cx = tile_x + local_cx
+                    global_cy = tile_y + local_cy
+
+                    # Create universal ID: slide_celltype_globalX_globalY
+                    # Use round() instead of int() to reduce collision probability for nearby cells
+                    uid = f"{slide_name}_{args.cell_type}_{round(global_cx)}_{round(global_cy)}"
+                    feat['uid'] = uid
+                    feat['global_center'] = [float(global_cx), float(global_cy)]
+                    feat['global_center_um'] = [float(global_cx * pixel_size_um), float(global_cy * pixel_size_um)]
+                    feat['tile_origin'] = [tile_x, tile_y]
+                    feat['slide_name'] = slide_name
+
+                    # Convert contours to global coordinates if present (vessels)
+                    if 'outer_contour' in feat:
+                        feat['outer_contour_global'] = [[pt[0][0] + tile_x, pt[0][1] + tile_y]
+                                                        for pt in feat['outer_contour']]
+                    if 'inner_contour' in feat and feat['inner_contour'] is not None:
+                        feat['inner_contour_global'] = [[pt[0][0] + tile_x, pt[0][1] + tile_y]
+                                                        for pt in feat['inner_contour']]
+
+                    all_detections.append(feat)
+
+                # Save masks and features
+                tile_id = f"tile_{tile_x}_{tile_y}"
+                tile_out = tiles_dir / tile_id
+                tile_out.mkdir(exist_ok=True)
+
+                with h5py.File(tile_out / f"{args.cell_type}_masks.h5", 'w') as f:
+                    create_hdf5_dataset(f, 'masks', masks.astype(np.uint16))
+
+                with open(tile_out / f"{args.cell_type}_features.json", 'w') as f:
+                    json.dump(features_list, f, cls=NumpyEncoder)
+
+                # Create samples for HTML with quality filtering
+                # For vessels, apply stricter filters to reduce garbage
+                min_area_um2 = 25.0
+                for feat in features_list:
+                    features_dict = feat.get('features', {})
+
+                    # Check area filter
+                    area_um2 = features_dict.get('area', 0) * (pixel_size_um ** 2)
+                    if area_um2 < min_area_um2:
                         continue
 
-                    # Circularity: require at least 0.15 (relaxed from 0.3 to allow irregular vessels)
-                    circularity = features_dict.get('circularity', 1.0)
-                    if circularity < 0.15:
-                        continue
+                    # For vessel detection, apply quality filters to reduce false positives
+                    if args.cell_type == 'vessel':
+                        # Ring completeness: require at least 30% (relaxed from 50% to allow partial vessels)
+                        ring_completeness = features_dict.get('ring_completeness', 1.0)
+                        if ring_completeness < 0.30:
+                            continue
 
-                    # Wall thickness: require at least 1.5 µm to filter tiny artifacts
-                    wall_thickness = features_dict.get('wall_thickness_mean_um', 10.0)
-                    if wall_thickness < 1.5:
-                        continue
+                        # Circularity: require at least 0.15 (relaxed from 0.3 to allow irregular vessels)
+                        circularity = features_dict.get('circularity', 1.0)
+                        if circularity < 0.15:
+                            continue
 
-                sample = create_sample_from_detection(
-                    tile_x, tile_y, tile_rgb, masks, feat, pixel_size_um, slide_name
-                )
-                if sample:
-                    all_samples.append(sample)
-                    total_detections += 1
+                        # Wall thickness: require at least 1.5 µm to filter tiny artifacts
+                        wall_thickness = features_dict.get('wall_thickness_mean_um', 10.0)
+                        if wall_thickness < 1.5:
+                            continue
 
-            del tile_data, tile_rgb, masks
-            if cd31_channel_data is not None:
-                del cd31_channel_data
-            gc.collect()
+                    sample = create_sample_from_detection(
+                        tile_x, tile_y, tile_rgb, masks, feat, pixel_size_um, slide_name
+                    )
+                    if sample:
+                        all_samples.append(sample)
+                        total_detections += 1
 
-        except Exception as e:
-            import traceback
-            logger.error(f"Error processing tile ({tile_x}, {tile_y}): {e}")
-            logger.error(f"Traceback:\n{traceback.format_exc()}")
-            continue
+                del tile_data, tile_rgb, masks
+                if cd31_channel_data is not None:
+                    del cd31_channel_data
+                gc.collect()
+
+            except Exception as e:
+                import traceback
+                logger.error(f"Error processing tile ({tile_x}, {tile_y}): {e}")
+                logger.error(f"Traceback:\n{traceback.format_exc()}")
+                continue
 
     logger.info(f"Total detections: {total_detections}")
 
@@ -3378,6 +3457,12 @@ def main():
                              'Relaxes all thresholds to catch more potential vessels (higher recall). '
                              'Includes detection_confidence score (0-1) for each candidate. '
                              'Use for generating training data for manual annotation + RF classifier.')
+    parser.add_argument('--lumen-first', action='store_true',
+                        help='Enable lumen-first vessel detection mode. '
+                             'Instead of detecting SMA+ walls first (contour hierarchy), this mode '
+                             'finds dark lumens using Otsu threshold, then validates bright SMA+ wall '
+                             'surrounding each lumen. Better for detecting vessels with incomplete walls. '
+                             'Fits ellipses to candidates and filters by shape quality.')
     parser.add_argument('--parallel-detection', action='store_true',
                         help='Enable parallel multi-marker vessel detection. '
                              'Runs SMA, CD31, and LYVE1 detection in parallel using CPU threads. '
@@ -3398,6 +3483,22 @@ def main():
                              'vessel classification (artery/arteriole/vein/capillary/lymphatic/'
                              'collecting_lymphatic). Used with --multi-marker for automated '
                              'vessel type prediction based on marker profiles and morphology.')
+
+    # Multi-scale vessel detection
+    parser.add_argument('--multi-scale', action='store_true',
+                        help='Enable multi-scale vessel detection. Detects at multiple resolutions '
+                             '(1/8x, 1/4x, 1x) to capture all vessel sizes and avoid cross-tile '
+                             'fragmentation. Large vessels are detected at coarse scale (1/8x) '
+                             'where they fit within a single tile. Requires --cell-type vessel.')
+    parser.add_argument('--scales', type=str, default='8,4,1',
+                        help='Comma-separated scale factors for multi-scale detection (default: "8,4,1"). '
+                             'Numbers represent downsampling factors: 8=1/8x (coarse, large vessels), '
+                             '4=1/4x (medium), 1=full resolution (small vessels, capillaries). '
+                             'Detection runs coarse-to-fine with IoU deduplication.')
+    parser.add_argument('--multiscale-iou-threshold', type=float, default=0.3,
+                        help='IoU threshold for deduplicating vessels detected at multiple scales '
+                             '(default: 0.3). If a vessel is detected at both coarse and fine scales '
+                             'with IoU > threshold, the finer scale detection is kept.')
 
     # Mesothelium parameters (for LMD chunking)
     parser.add_argument('--target-chunk-area', type=float, default=1500,
