@@ -286,20 +286,17 @@ def regenerate_batch_html(
         center = det.get('center', [0, 0])
         cx, cy = int(center[0]), int(center[1])
 
-        # Convert global coordinates to local array coordinates
-        local_cx = cx - loader.x_start
-        local_cy = cy - loader.y_start
-
+        # Detection coords are already in array index space (0-based)
         # Check if detection center is within the loaded region
-        if local_cx < 0 or local_cx >= loader.width or local_cy < 0 or local_cy >= loader.height:
+        if cx < 0 or cx >= loader.width or cy < 0 or cy >= loader.height:
             return None
 
-        # Get crop bounds in local coordinates
+        # Get crop bounds
         half = crop_size // 2
-        x1 = max(0, local_cx - half)
-        y1 = max(0, local_cy - half)
-        x2 = min(loader.width, local_cx + half)
-        y2 = min(loader.height, local_cy + half)
+        x1 = max(0, cx - half)
+        y1 = max(0, cy - half)
+        x2 = min(loader.width, cx + half)
+        y2 = min(loader.height, cy + half)
 
         if x2 <= x1 or y2 <= y1:
             return None
