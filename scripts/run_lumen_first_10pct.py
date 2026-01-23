@@ -55,6 +55,15 @@ PIXEL_SIZE_UM = 0.1725
 TILE_SIZE = 4000
 SAMPLE_FRACTION = 0.10
 SMA_CHANNEL = 2  # SMA is channel 2 (0=nuc, 1=CD31, 2=SMA, 3=PM)
+NUC_CHANNEL = 0  # Nuclear (488nm)
+CD31_CHANNEL = 1  # CD31 (555nm)
+
+# Channel mapping for RGB display: R=SMA (detection channel), G=CD31, B=Nuclear
+CHANNEL_RGB_MAP = {
+    'R': SMA_CHANNEL,   # Red = SMA (what we're detecting)
+    'G': CD31_CHANNEL,  # Green = CD31 (endothelial)
+    'B': NUC_CHANNEL,   # Blue = Nuclear
+}
 
 
 def compute_ellipse_fit_quality(contour, ellipse, img_h, img_w):
@@ -263,6 +272,147 @@ def detect_lumen_first(
     return candidates
 
 
+def extract_multichannel_features(vessel, channel_data, tile_x, tile_y, tile_size, loader):
+    """
+    Extract intensity features from all channels for a vessel.
+
+    Args:
+        vessel: Vessel candidate dict with 'outer' and 'inner' contours
+        channel_data: Dict mapping channel index to full mosaic arrays
+        tile_x, tile_y: Tile origin coordinates
+        tile_size: Size of tile
+        loader: CZILoader instance
+
+    Returns:
+        Dict with multi-channel features
+    """
+    features = {}
+
+    # Get tile bounds in array coordinates
+    x_start = tile_x - loader.x_start
+    y_start = tile_y - loader.y_start
+    x_end = min(x_start + tile_size, loader.width)
+    y_end = min(y_start + tile_size, loader.height)
+    x_start = max(0, x_start)
+    y_start = max(0, y_start)
+
+    if x_end <= x_start or y_end <= y_start:
+        return features
+
+    h, w = y_end - y_start, x_end - x_start
+
+    # Create wall and lumen masks
+    wall_mask = np.zeros((h, w), dtype=np.uint8)
+    lumen_mask = np.zeros((h, w), dtype=np.uint8)
+
+    cv2.drawContours(wall_mask, [vessel['outer']], 0, 255, -1)
+    if vessel['inner'] is not None:
+        cv2.drawContours(wall_mask, [vessel['inner']], 0, 0, -1)
+        cv2.drawContours(lumen_mask, [vessel['inner']], 0, 255, -1)
+
+    wall_pixels_mask = wall_mask > 0
+    lumen_pixels_mask = lumen_mask > 0
+
+    channel_names = {
+        SMA_CHANNEL: 'sma',
+        CD31_CHANNEL: 'cd31',
+        NUC_CHANNEL: 'nuc',
+    }
+
+    # Extract per-channel statistics
+    for ch_idx, ch_name in channel_names.items():
+        ch_data = channel_data[ch_idx]
+        tile_ch = ch_data[y_start:y_end, x_start:x_end]
+
+        # Wall statistics
+        wall_pixels = tile_ch[wall_pixels_mask] if wall_pixels_mask.any() else np.array([0])
+        features[f'{ch_name}_wall_mean'] = float(np.mean(wall_pixels))
+        features[f'{ch_name}_wall_std'] = float(np.std(wall_pixels))
+        features[f'{ch_name}_wall_median'] = float(np.median(wall_pixels))
+        features[f'{ch_name}_wall_max'] = float(np.max(wall_pixels))
+
+        # Lumen statistics
+        lumen_pixels = tile_ch[lumen_pixels_mask] if lumen_pixels_mask.any() else np.array([0])
+        features[f'{ch_name}_lumen_mean'] = float(np.mean(lumen_pixels))
+        features[f'{ch_name}_lumen_std'] = float(np.std(lumen_pixels))
+        features[f'{ch_name}_lumen_median'] = float(np.median(lumen_pixels))
+
+        # Wall/lumen contrast
+        if features[f'{ch_name}_lumen_mean'] > 0:
+            features[f'{ch_name}_wall_lumen_ratio'] = features[f'{ch_name}_wall_mean'] / features[f'{ch_name}_lumen_mean']
+        else:
+            features[f'{ch_name}_wall_lumen_ratio'] = 0.0
+
+    # Cross-channel ratios (biologically meaningful)
+    # SMA/CD31 ratio in wall (arteries have high SMA, low CD31 in wall)
+    if features.get('cd31_wall_mean', 0) > 0:
+        features['sma_cd31_wall_ratio'] = features['sma_wall_mean'] / features['cd31_wall_mean']
+    else:
+        features['sma_cd31_wall_ratio'] = 0.0
+
+    # CD31 in lumen vs wall (endothelium at lumen boundary)
+    if features.get('cd31_wall_mean', 0) > 0:
+        features['cd31_lumen_wall_ratio'] = features['cd31_lumen_mean'] / features['cd31_wall_mean']
+    else:
+        features['cd31_lumen_wall_ratio'] = 0.0
+
+    # Nuclear density in wall (cellularity indicator)
+    features['nuc_wall_intensity'] = features.get('nuc_wall_mean', 0)
+
+    return features
+
+
+def extract_rgb_tile(channel_data, tile_x, tile_y, tile_size, loader):
+    """
+    Extract RGB tile from multi-channel data.
+
+    Args:
+        channel_data: Dict mapping channel index to image arrays
+        tile_x, tile_y: Tile origin coordinates
+        tile_size: Size of tile
+        loader: CZILoader instance (for coordinate conversion)
+
+    Returns:
+        RGB numpy array (H, W, 3) with R=SMA, G=CD31, B=Nuclear
+    """
+    # Get tile bounds in array coordinates
+    x_start = tile_x - loader.x_start
+    y_start = tile_y - loader.y_start
+    x_end = min(x_start + tile_size, loader.width)
+    y_end = min(y_start + tile_size, loader.height)
+
+    # Clamp to valid range
+    x_start = max(0, x_start)
+    y_start = max(0, y_start)
+
+    if x_end <= x_start or y_end <= y_start:
+        return None
+
+    # Extract each channel
+    tiles = {}
+    for ch_idx, ch_data in channel_data.items():
+        tiles[ch_idx] = ch_data[y_start:y_end, x_start:x_end].copy()
+
+    # Normalize each channel to 0-255
+    def normalize_channel(img):
+        if img.size == 0:
+            return img.astype(np.uint8)
+        p2, p98 = np.percentile(img, (2, 98))
+        if p98 > p2:
+            img_norm = np.clip((img - p2) / (p98 - p2) * 255, 0, 255)
+        else:
+            img_norm = np.zeros_like(img)
+        return img_norm.astype(np.uint8)
+
+    # Create RGB: R=SMA, G=CD31, B=Nuclear
+    r_ch = normalize_channel(tiles[SMA_CHANNEL])
+    g_ch = normalize_channel(tiles[CD31_CHANNEL])
+    b_ch = normalize_channel(tiles[NUC_CHANNEL])
+
+    rgb = np.stack([r_ch, g_ch, b_ch], axis=-1)
+    return rgb
+
+
 def generate_tile_grid(mosaic_info, tile_size):
     """Generate tile coordinates covering the mosaic."""
     tiles = []
@@ -406,6 +556,8 @@ def create_vessel_sample(vessel, tile_img, tile_x, tile_y, slide_name, pixel_siz
             'detection_method': vessel['detection_method'],
             'outer_area_px': float(vessel['outer_area_px']),
             'inner_area_px': float(vessel['inner_area_px']),
+            # Multi-channel intensity features
+            **vessel.get('multichannel_features', {}),
         },
         # Store contours for potential later use
         'outer_contour': vessel['outer'].tolist(),
@@ -434,14 +586,25 @@ def main():
     # Extract slide name
     slide_name = Path(CZI_PATH).stem
 
-    # Load CZI
-    print("Loading CZI file...")
-    loader = CZILoader(
-        CZI_PATH,
-        load_to_ram=True,
-        channel=SMA_CHANNEL,
-        quiet=False
-    )
+    # Load CZI - all 3 channels for RGB display
+    print("Loading CZI file (3 channels for RGB display)...")
+
+    # Load each channel separately
+    loader_sma = CZILoader(CZI_PATH, load_to_ram=True, channel=SMA_CHANNEL, quiet=False)
+    print("Loading CD31 channel...")
+    loader_cd31 = CZILoader(CZI_PATH, load_to_ram=True, channel=CD31_CHANNEL, quiet=True)
+    print("Loading nuclear channel...")
+    loader_nuc = CZILoader(CZI_PATH, load_to_ram=True, channel=NUC_CHANNEL, quiet=True)
+
+    # Use SMA loader as primary (for tissue detection)
+    loader = loader_sma
+
+    # Store all channel data
+    channel_data = {
+        SMA_CHANNEL: loader_sma.channel_data,
+        CD31_CHANNEL: loader_cd31.channel_data,
+        NUC_CHANNEL: loader_nuc.channel_data,
+    }
 
     mosaic_info = {
         'x': loader.x_start,
@@ -499,16 +662,16 @@ def main():
         tile_x = tile_info['x']
         tile_y = tile_info['y']
 
-        # Extract tile from RAM
-        tile_img = loader.get_tile(tile_x, tile_y, TILE_SIZE, channel=SMA_CHANNEL)
+        # Extract SMA tile for detection
+        tile_sma = loader.get_tile(tile_x, tile_y, TILE_SIZE, channel=SMA_CHANNEL)
 
-        if tile_img is None or tile_img.size == 0:
+        if tile_sma is None or tile_sma.size == 0:
             continue
 
-        # Apply photobleaching correction
-        tile_corrected = correct_photobleaching(tile_img)
+        # Apply photobleaching correction for detection
+        tile_corrected = correct_photobleaching(tile_sma)
 
-        # Run lumen-first detection
+        # Run lumen-first detection on SMA channel
         candidates = detect_lumen_first(
             tile_corrected,
             pixel_size_um=PIXEL_SIZE_UM,
@@ -521,11 +684,26 @@ def main():
 
         total_vessels += len(candidates)
 
-        # Create samples for each candidate
+        # Extract RGB tile for display (R=SMA, G=CD31, B=Nuclear)
+        tile_rgb = extract_rgb_tile(channel_data, tile_x, tile_y, TILE_SIZE, loader)
+        if tile_rgb is None:
+            tile_rgb = cv2.cvtColor(
+                ((tile_corrected - tile_corrected.min()) / (tile_corrected.max() - tile_corrected.min() + 1e-8) * 255).astype(np.uint8),
+                cv2.COLOR_GRAY2RGB
+            )
+
+        # Create samples for each candidate with multi-channel features
         for vessel in candidates:
+            # Extract multi-channel intensity features
+            mc_features = extract_multichannel_features(
+                vessel, channel_data, tile_x, tile_y, TILE_SIZE, loader
+            )
+            # Add multi-channel features to vessel dict
+            vessel['multichannel_features'] = mc_features
+
             sample = create_vessel_sample(
                 vessel,
-                tile_corrected,
+                tile_rgb,  # Pass RGB tile for display
                 tile_x,
                 tile_y,
                 slide_name,
