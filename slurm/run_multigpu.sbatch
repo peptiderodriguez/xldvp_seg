@@ -4,7 +4,7 @@
 #SBATCH --nodes=1
 #SBATCH --ntasks=1
 #SBATCH --cpus-per-task=128
-#SBATCH --mem=512G
+#SBATCH --mem=700G
 #SBATCH --time=48:00:00
 #SBATCH --gres=gpu:l40s:4
 #SBATCH --output=/fs/gpfs41/lv12/fileset02/pool/pool-mann-edwin/code_bin/xldvp_seg/logs/%x_%j.out
@@ -60,13 +60,17 @@ fi
 conda activate mkseg
 
 # Set thread counts for CPU parallelism
-export OMP_NUM_THREADS=$SLURM_CPUS_PER_TASK
-export MKL_NUM_THREADS=$SLURM_CPUS_PER_TASK
-export NUMEXPR_NUM_THREADS=$SLURM_CPUS_PER_TASK
-export OPENBLAS_NUM_THREADS=$SLURM_CPUS_PER_TASK
+# OpenBLAS has max 128 threads limit - keep it lower to avoid crashes with sklearn
+export OMP_NUM_THREADS=64
+export MKL_NUM_THREADS=64
+export NUMEXPR_NUM_THREADS=64
+export OPENBLAS_NUM_THREADS=32
 
 # PyTorch CPU threads (per process, so divide by num workers + 1)
-export PYTORCH_NUM_THREADS=$((SLURM_CPUS_PER_TASK / 5))
+export PYTORCH_NUM_THREADS=24
+
+# Force unbuffered Python output so logs appear in real-time
+export PYTHONUNBUFFERED=1
 
 echo "CPU threads: OMP=$OMP_NUM_THREADS, PyTorch=$PYTORCH_NUM_THREADS"
 
@@ -87,13 +91,20 @@ echo "Each GPU processes 1 tile at a time (true parallel tile processing)"
 echo ""
 
 # --- Run with multi-GPU mode ---
+echo "Starting Python at $(date)"
+echo "Python path: $(which python)"
+echo "Working dir: $(pwd)"
+echo "First CZI file: ${CZI_FILES[0]}"
+echo "Testing import..."
+python -c "print('Import test...'); import run_unified_FAST; print('OK')"
+echo "Import test passed, starting main script..."
+
 python run_unified_FAST.py \
     --czi-paths "${CZI_FILES[@]}" \
     --output-dir "$OUTPUT_DIR" \
     --tile-size "$TILE_SIZE" \
     --sample-fraction "$SAMPLE_FRACTION" \
-    --multi-gpu \
-    --num-gpus "$NUM_GPUS"
+    --num-workers 4
 
 echo ""
 echo "============================================================"

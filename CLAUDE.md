@@ -102,19 +102,47 @@ sbatch slurm/run_multigpu.sbatch input_files.txt /path/to/output
 - `MultiGPUTileProcessor` class with queue-based architecture
 - Workers pinned to GPUs via `CUDA_VISIBLE_DEVICES`
 
-### Current State (as of Jan 20, 2026)
-- **Multi-GPU streaming mode**: Memory-efficient pipeline that streams CZI directly to shared memory
-- **Bug fixes (Jan 20)**: Coordinate system fix, tile ID collision fix, CZI reader cleanup
-- **Multi-GPU support**: 4 GPUs process tiles in parallel (`--multi-gpu` flag)
+### Current State (as of Jan 24, 2026)
+- **RAM + Shared Memory mode**: Best of both worlds - fast Phase 2 (RAM) + zero-copy Phase 4 (shared memory)
+- **No normalization for H&E**: Disabled percentile normalization for better HSPC detection
+- **Crop + Mask separation**: Saves raw crops and masks separately, outline drawn at HTML generation
+- **Bug fixes (Jan 24)**: `slide_name` undefined fix, `shared_calibrate_tissue_threshold` added, OpenBLAS thread limit fix
+- **Multi-GPU support**: 4 GPUs process tiles in parallel via shared memory
 - **Installable package**: `./install.sh` handles PyTorch+CUDA, SAM2, all dependencies
 - **Slurm support**: Ready-to-use sbatch scripts in `slurm/` directory
-- **Stability fixes**: Memory validation, sequential mode fixes, network timeout handling
 - **Code refactoring**: Phase 1-7 complete (model manager, memory utils, tile workers, strategy registry)
-- **Multi-channel feature extraction**: Now extracts ~2,400 features from all 3 channels (nuclear, BTX, NFL)
-- **BTX-only thresholding**: Mask detection uses only BTX channel (ch1/647nm), not averaged channels
-- **HTML improvements**: True RGB display (3-channel combined), white mask outlines, channel legend on floating bar, cards sorted by area ascending, stats with area µm²/px and solidity
-- NMJ classifier: RF model trained on multi-channel features for NMJ vs autofluorescence
-- Working slide: `20251107_Fig5_nuc488_Bgtx647_NfL750-1-EDFvar-stitch.czi` (3-channel)
+
+### Jan 24, 2026 - RAM + Shared Memory Pipeline & H&E Fixes
+
+**Optimized Memory Architecture**
+Previous streaming mode was slow (reads tiles from network CZI files). New hybrid approach:
+- Phase 1: Load ALL slides into RAM (~350GB for 16 slides)
+- Phase 2: Tissue detection from RAM (fast - no I/O)
+- Phase 3: Sample 10% of tissue tiles
+- Phase 4: Move RAM → shared memory (one slide at a time, ~25 sec total)
+- Phase 4: Workers read zero-copy from shared memory (no pickle serialization)
+
+**H&E Image Fixes**
+- Disabled `percentile_normalize()` in all 4 worker functions - raw pixel values work better for H&E
+- Disabled normalization in tissue detection calibration
+- HSPC detection now uses raw H&E staining without boosting background
+
+**Crop Architecture Changes**
+- `generate_detection_crop()` now returns `{'crop': b64, 'mask': b64}` (separate images)
+- Mask outline drawn at HTML generation time, not baked into saved crop
+- All worker functions updated to save `crop_b64` and `mask_b64` separately
+
+**Bug Fixes**
+| Bug | Fix |
+|-----|-----|
+| `slide_name` undefined in single-slide mode | Added `slide_name = czi_path.stem` at function start |
+| Missing `shared_calibrate_tissue_threshold` | Added K-means calibration function for single-slide mode |
+| OpenBLAS thread limit crash | Set `OPENBLAS_NUM_THREADS=32` in sbatch (was 128) |
+| Standard mode copying tiles | Now uses SharedSlideManager for zero-copy access |
+
+**Current Run (Job 2037820)**
+- 16 slides, 4 L40s GPUs, 700GB RAM
+- Output: `/fs/gpfs41/lv12/fileset02/pool/pool-mann-edwin/mk_output/2026_01_24_BM_16slides_4gpu_RAM_SHM`
 
 ### Jan 20, 2026 - Streaming Multi-GPU Pipeline & Bug Fixes
 

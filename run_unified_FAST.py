@@ -26,6 +26,7 @@ from segmentation.io.html_export import (
     draw_mask_contour,
     percentile_normalize,
     get_largest_connected_component,
+    image_to_base64,
     HDF5_COMPRESSION_KWARGS,
     HDF5_COMPRESSION_NAME,
     # MK/HSPC batch HTML export functions (consolidated)
@@ -182,7 +183,8 @@ def process_tile_worker(args):
     if img_rgb.max() == 0:
         return {'tid': tid, 'status': 'empty'}
 
-    img_rgb = percentile_normalize(img_rgb, p_low=5, p_high=95)
+    # Normalization disabled for H&E images - raw pixel values work better
+    # img_rgb = percentile_normalize(img_rgb, p_low=5, p_high=95)
     has_tissue_content, _ = has_tissue(img_rgb, variance_threshold, block_size=calibration_block_size)
     if not has_tissue_content:
         return {'tid': tid, 'status': 'no_tissue'}
@@ -191,6 +193,27 @@ def process_tile_worker(args):
         mk_masks, hspc_masks, mk_feats, hspc_feats = segmenter.process_tile(
             img_rgb, mk_min_area, mk_max_area
         )
+
+        # Generate crops for each detection (for HTML export without reloading CZI)
+        for feat in mk_feats:
+            det_id = int(feat['id'].split('_')[1])
+            mask = (mk_masks == det_id)
+            # Centroid is in tile-local coordinates
+            centroid = feat.get('center', [img_rgb.shape[1]//2, img_rgb.shape[0]//2])
+            crop_result = generate_detection_crop(img_rgb, mask, centroid)
+            if crop_result:
+                feat['crop_b64'] = crop_result['crop']
+                feat['mask_b64'] = crop_result['mask']
+
+        for feat in hspc_feats:
+            det_id = int(feat['id'].split('_')[1])
+            mask = (hspc_masks == det_id)
+            centroid = feat.get('center', [img_rgb.shape[1]//2, img_rgb.shape[0]//2])
+            crop_result = generate_detection_crop(img_rgb, mask, centroid)
+            if crop_result:
+                feat['crop_b64'] = crop_result['crop']
+                feat['mask_b64'] = crop_result['mask']
+
         return {
             'tid': tid, 'status': 'success',
             'mk_masks': mk_masks, 'hspc_masks': hspc_masks,
@@ -280,6 +303,86 @@ def get_pixel_size_from_czi(czi_path):
 # Note: percentile_normalize is imported from segmentation.io.html_export
 # Note: calibrate_tissue_threshold, filter_tissue_tiles, has_tissue, and
 #       calculate_block_variances are imported from segmentation.detection.tissue
+
+
+def generate_detection_crop(img_rgb, mask, centroid, crop_size=300, display_size=250, padding_fraction=0.3):
+    """
+    Generate a crop image for a single detection.
+
+    Uses dynamic crop size based on mask bounding box to ensure 100% mask coverage.
+
+    Args:
+        img_rgb: RGB tile image (already normalized)
+        mask: Binary mask for this detection
+        centroid: (x, y) center of detection within tile (fallback if mask empty)
+        crop_size: Minimum crop size (used if mask is smaller)
+        display_size: Size to resize crop to
+        padding_fraction: Padding around mask bbox as fraction of bbox size (default 0.3 = 30%)
+
+    Returns:
+        Base64-encoded JPEG string of the crop with mask contour
+    """
+    import cv2
+
+    h, w = img_rgb.shape[:2]
+
+    # Calculate bounding box from mask
+    if mask.any():
+        rows = np.any(mask, axis=1)
+        cols = np.any(mask, axis=0)
+        y_indices = np.where(rows)[0]
+        x_indices = np.where(cols)[0]
+
+        bbox_y1, bbox_y2 = y_indices[0], y_indices[-1] + 1
+        bbox_x1, bbox_x2 = x_indices[0], x_indices[-1] + 1
+
+        bbox_h = bbox_y2 - bbox_y1
+        bbox_w = bbox_x2 - bbox_x1
+        bbox_center_x = (bbox_x1 + bbox_x2) // 2
+        bbox_center_y = (bbox_y1 + bbox_y2) // 2
+
+        # Dynamic crop size: max dimension + padding, but at least crop_size
+        max_dim = max(bbox_h, bbox_w)
+        padding = int(max_dim * padding_fraction)
+        dynamic_size = max(crop_size, max_dim + 2 * padding)
+
+        # Use bbox center for cropping
+        cx, cy = bbox_center_x, bbox_center_y
+    else:
+        # Fallback to centroid if mask is empty
+        cx, cy = int(centroid[0]), int(centroid[1])
+        dynamic_size = crop_size
+
+    half = dynamic_size // 2
+
+    # Calculate crop bounds
+    x1 = max(0, cx - half)
+    y1 = max(0, cy - half)
+    x2 = min(w, cx + half)
+    y2 = min(h, cy + half)
+
+    if x2 <= x1 or y2 <= y1:
+        return None
+
+    # Extract crop
+    crop = img_rgb[y1:y2, x1:x2].copy()
+
+    # Extract corresponding mask region
+    mask_crop = mask[y1:y2, x1:x2]
+
+    # Resize to display_size (square)
+    if crop.shape[0] != display_size or crop.shape[1] != display_size:
+        crop = cv2.resize(crop, (display_size, display_size))
+        mask_crop = cv2.resize(mask_crop.astype(np.uint8), (display_size, display_size), interpolation=cv2.INTER_NEAREST).astype(bool)
+
+    # Save raw crop and mask separately - outline drawn at HTML generation time
+    crop_b64, _ = image_to_base64(crop)
+
+    # Encode mask as compact PNG (1-bit effectively)
+    mask_img = (mask_crop.astype(np.uint8) * 255)
+    mask_b64, _ = image_to_base64(mask_img, format='PNG')
+
+    return {'crop': crop_b64, 'mask': mask_b64}
 
 
 def extract_morphological_features(mask, image):
@@ -845,6 +948,67 @@ class UnifiedSegmenter:
         return mk_masks, hspc_masks, mk_features, hspc_features
 
 
+def shared_calibrate_tissue_threshold(tiles, image_array, calibration_samples, block_size, tile_size):
+    """Calibrate tissue detection threshold using K-means clustering on variance samples.
+
+    Args:
+        tiles: List of tile dictionaries with x, y, w, h keys
+        image_array: The full slide image array (loaded to RAM)
+        calibration_samples: Number of tiles to sample for calibration
+        block_size: Block size for variance calculation
+        tile_size: Expected tile size
+
+    Returns:
+        float: Variance threshold for tissue detection
+    """
+    from sklearn.cluster import KMeans
+    from concurrent.futures import ThreadPoolExecutor, as_completed
+
+    # Sample tiles for calibration
+    calib_count = min(calibration_samples, len(tiles))
+    calib_tiles = random.sample(tiles, calib_count)
+    logger.info(f"Calibrating tissue threshold using {calib_count} tiles...")
+
+    def calc_tile_variances(tile):
+        tile_img = image_array[tile['y']:tile['y']+tile['h'], tile['x']:tile['x']+tile['w']]
+
+        if tile_img.max() == 0:
+            return [0.0]
+
+        # No normalization for H&E - use raw pixel values
+        if tile_img.ndim == 3:
+            gray = cv2.cvtColor(tile_img.astype(np.uint8), cv2.COLOR_RGB2GRAY)
+        else:
+            gray = tile_img.astype(np.uint8) if tile_img.dtype != np.uint8 else tile_img
+
+        block_vars = calculate_block_variances(gray, block_size)
+        return block_vars if block_vars else []
+
+    all_variances = []
+    with ThreadPoolExecutor(max_workers=8) as executor:
+        futures = {executor.submit(calc_tile_variances, tile): tile for tile in calib_tiles}
+        for future in tqdm(as_completed(futures), total=len(calib_tiles), desc="Calibrating"):
+            result = future.result()
+            all_variances.extend(result)
+
+    variances = np.array(all_variances)
+    if len(variances) == 0:
+        logger.warning("No variance samples collected, using default threshold 50.0")
+        return 50.0
+
+    logger.info(f"  Running K-means on {len(variances)} variance samples...")
+    kmeans = KMeans(n_clusters=3, random_state=42, n_init=10).fit(variances.reshape(-1, 1))
+    centers = kmeans.cluster_centers_.flatten()
+    sorted_centers = sorted(centers)
+
+    # Threshold between background and tissue clusters
+    variance_threshold = (sorted_centers[0] + sorted_centers[1]) / 2
+    logger.info(f"  K-means centers: {sorted_centers[0]:.1f} (bg), {sorted_centers[1]:.1f} (tissue), {sorted_centers[2]:.1f} (outliers)")
+    logger.info(f"  Tissue threshold: {variance_threshold:.1f}")
+
+    return variance_threshold
+
+
 def run_unified_segmentation(
     czi_path,
     output_dir,
@@ -872,6 +1036,7 @@ def run_unified_segmentation(
         mp.set_start_method('spawn', force=True)
 
     czi_path = Path(czi_path)
+    slide_name = czi_path.stem  # Extract slide name for UID generation
     output_dir = Path(output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
 
@@ -1026,7 +1191,7 @@ def run_unified_segmentation(
                             with h5py.File(mk_tile_dir / "segmentation.h5", 'w') as f:
                                 create_hdf5_dataset(f, 'labels', new_mk[np.newaxis])
                             with open(mk_tile_dir / "features.json", 'w') as f:
-                                json.dump([{'id': m['id'], 'global_id': m['global_id'], 'uid': m['uid'], 'center': m['center'], 'features': m['features']} for m in result['mk_feats']], f)
+                                json.dump([{'id': m['id'], 'global_id': m['global_id'], 'uid': m['uid'], 'center': m['center'], 'features': m['features'], 'crop_b64': m.get('crop_b64')} for m in result['mk_feats']], f)
 
                             # Explicit cleanup to prevent memory accumulation
                             del new_mk, mk_tile_cells
@@ -1060,7 +1225,7 @@ def run_unified_segmentation(
                             with h5py.File(hspc_tile_dir / "segmentation.h5", 'w') as f:
                                 create_hdf5_dataset(f, 'labels', new_hspc[np.newaxis])
                             with open(hspc_tile_dir / "features.json", 'w') as f:
-                                json.dump([{'id': h['id'], 'global_id': h['global_id'], 'uid': h['uid'], 'center': h['center'], 'features': h['features']} for h in result['hspc_feats']], f)
+                                json.dump([{'id': h['id'], 'global_id': h['global_id'], 'uid': h['uid'], 'center': h['center'], 'features': h['features'], 'crop_b64': h.get('crop_b64')} for h in result['hspc_feats']], f)
 
                             # Explicit cleanup to prevent memory accumulation
                             del new_hspc, hspc_tile_cells
@@ -1259,11 +1424,11 @@ def _phase2_identify_tissue_tiles(slide_data, tile_size, overlap, variance_thres
         if tile_img.max() == 0:
             return [0.0]
 
+        # Normalization disabled for H&E - use raw pixel values
         if tile_img.ndim == 3:
-            tile_norm = percentile_normalize(tile_img, p_low=5, p_high=95)
-            gray = cv2.cvtColor(tile_norm, cv2.COLOR_RGB2GRAY)
+            gray = cv2.cvtColor(tile_img.astype(np.uint8), cv2.COLOR_RGB2GRAY)
         else:
-            gray = percentile_normalize(tile_img, p_low=5, p_high=95)
+            gray = tile_img.astype(np.uint8) if tile_img.dtype != np.uint8 else tile_img
 
         block_vars = calculate_block_variances(gray, calibration_block_size)
         return block_vars if block_vars else []
@@ -1301,8 +1466,8 @@ def _phase2_identify_tissue_tiles(slide_data, tile_size, overlap, variance_thres
         if tile_img.max() == 0:
             return None
 
-        tile_norm = percentile_normalize(tile_img, p_low=5, p_high=95)
-        has_tissue_flag, _ = has_tissue(tile_norm, variance_threshold, block_size=calibration_block_size)
+        # Normalization disabled for H&E - use raw pixel values
+        has_tissue_flag, _ = has_tissue(tile_img, variance_threshold, block_size=calibration_block_size)
 
         if has_tissue_flag:
             return (slide_name, tile)
@@ -1407,11 +1572,11 @@ def _phase2_identify_tissue_tiles_streaming(slide_loaders, tile_size, overlap, v
         if tile_img.max() == 0:
             return [0.0]
 
+        # Normalization disabled for H&E - use raw pixel values
         if tile_img.ndim == 3:
-            tile_norm = percentile_normalize(tile_img, p_low=5, p_high=95)
-            gray = cv2.cvtColor(tile_norm, cv2.COLOR_RGB2GRAY)
+            gray = cv2.cvtColor(tile_img.astype(np.uint8), cv2.COLOR_RGB2GRAY)
         else:
-            gray = percentile_normalize(tile_img, p_low=5, p_high=95)
+            gray = tile_img.astype(np.uint8) if tile_img.dtype != np.uint8 else tile_img
 
         block_vars = calculate_block_variances(gray, calibration_block_size)
         return block_vars if block_vars else []
@@ -1456,8 +1621,8 @@ def _phase2_identify_tissue_tiles_streaming(slide_loaders, tile_size, overlap, v
         if tile_img.max() == 0:
             return None
 
-        tile_norm = percentile_normalize(tile_img, p_low=5, p_high=95)
-        has_tissue_flag, _ = has_tissue(tile_norm, variance_threshold, block_size=calibration_block_size)
+        # Normalization disabled for H&E - use raw pixel values
+        has_tissue_flag, _ = has_tissue(tile_img, variance_threshold, block_size=calibration_block_size)
 
         if has_tissue_flag:
             return (slide_name, tile)
@@ -1617,7 +1782,7 @@ def _phase4_process_tiles(
                 with h5py.File(mk_tile_dir / "segmentation.h5", 'w') as f:
                     create_hdf5_dataset(f, 'labels', new_mk[np.newaxis])
                 with open(mk_tile_dir / "features.json", 'w') as f:
-                    json.dump([{'id': m['id'], 'global_id': m['global_id'], 'uid': m['uid'], 'center': m['center'], 'features': m['features']} for m in result['mk_feats']], f)
+                    json.dump([{'id': m['id'], 'global_id': m['global_id'], 'uid': m['uid'], 'center': m['center'], 'features': m['features'], 'crop_b64': m.get('crop_b64')} for m in result['mk_feats']], f)
 
                 del new_mk, mk_tile_cells
 
@@ -1649,7 +1814,7 @@ def _phase4_process_tiles(
                 with h5py.File(hspc_tile_dir / "segmentation.h5", 'w') as f:
                     create_hdf5_dataset(f, 'labels', new_hspc[np.newaxis])
                 with open(hspc_tile_dir / "features.json", 'w') as f:
-                    json.dump([{'id': h['id'], 'global_id': h['global_id'], 'uid': h['uid'], 'center': h['center'], 'features': h['features']} for h in result['hspc_feats']], f)
+                    json.dump([{'id': h['id'], 'global_id': h['global_id'], 'uid': h['uid'], 'center': h['center'], 'features': h['features'], 'crop_b64': h.get('crop_b64')} for h in result['hspc_feats']], f)
 
                 del new_hspc, hspc_tile_cells
 
@@ -1726,53 +1891,73 @@ def _phase4_process_tiles(
             shm_manager.cleanup()
 
     # =========================================================================
-    # STANDARD MODE: Multiprocessing pool with shared GPU queue
+    # STANDARD MODE: Now also uses shared memory for zero-copy worker access
     # =========================================================================
     else:
-        manager = mp.Manager()
-        gpu_queue = manager.Queue()
-        if torch.cuda.is_available():
-            n_gpus = torch.cuda.device_count()
-            if n_gpus > 0:
-                for i in range(num_workers):
-                    gpu_queue.put(i % n_gpus)
+        from segmentation.processing.multigpu_shm import (
+            SharedSlideManager,
+            MultiGPUTileProcessorSHM
+        )
 
-        temp_init_dir = output_base / "temp_init"
-        temp_init_dir.mkdir(parents=True, exist_ok=True)
-        dummy_mm_path = temp_init_dir / "dummy.dat"
-        dummy_arr = np.memmap(dummy_mm_path, dtype=np.uint8, mode='w+', shape=(100, 100, 3))
-        dummy_arr.flush()
-        del dummy_arr
+        # Move slides from RAM to shared memory (zero-copy for workers)
+        logger.info("Moving slides to shared memory...")
+        shm_manager = SharedSlideManager()
+        for i, (slide_name, data) in enumerate(slide_data.items()):
+            img = data['image']
+            if img is None:
+                continue
+            size_gb = img.nbytes / (1024**3)
+            logger.info(f"  [{i+1}/{len(slide_data)}] {slide_name}: {size_gb:.1f} GB -> shared memory")
+            shm_manager.add_slide(slide_name, img)
+            # Free original array immediately after copying
+            data['image'] = None
+            del img
+            gc.collect()
+        logger.info(f"All slides now in shared memory")
 
-        init_args = (mk_classifier_path, hspc_classifier_path, gpu_queue,
-                     str(dummy_mm_path), (100, 100, 3), np.uint8)
+        # Use same processor as multi-GPU mode but with num_workers GPUs
+        actual_gpus = min(num_workers, torch.cuda.device_count()) if torch.cuda.is_available() else 1
+        logger.info(f"Using {actual_gpus} GPUs for processing")
 
         try:
-            with mp.Pool(processes=num_workers, initializer=init_worker, initargs=init_args) as pool:
-                logger.info(f"Worker pool ready with {num_workers} workers")
+            with MultiGPUTileProcessorSHM(
+                num_gpus=actual_gpus,
+                slide_info=shm_manager.get_slide_info(),
+                mk_classifier_path=mk_classifier_path,
+                hspc_classifier_path=hspc_classifier_path,
+                mk_min_area=mk_min_area,
+                mk_max_area=mk_max_area,
+                variance_threshold=variance_threshold,
+                calibration_block_size=calibration_block_size,
+            ) as processor:
+                # Submit all tiles (only coordinates, not data!)
+                logger.info(f"Submitting {len(sampled_tiles)} tiles to {actual_gpus} GPUs (shared memory)...")
+                for slide_name, tile in sampled_tiles:
+                    processor.submit_tile(slide_name, tile)
 
-                def tile_generator():
-                    for slide_name, tile in sampled_tiles:
-                        img = slide_data[slide_name]['image']
-                        tile_img = img[tile['y']:tile['y']+tile['h'],
-                                       tile['x']:tile['x']+tile['w']].copy()
-                        output_dir = output_base / slide_name
-                        yield (tile, tile_img, output_dir, mk_min_area, mk_max_area,
-                               variance_threshold, calibration_block_size, slide_name)
+                # Collect results with progress bar
+                logger.info("Collecting results...")
+                with tqdm(total=len(sampled_tiles), desc="Processing tiles (shared memory)") as pbar:
+                    collected = 0
+                    while collected < len(sampled_tiles):
+                        result = processor.collect_result(timeout=300)
+                        if result is None:
+                            logger.error(f"Timeout waiting for results ({collected}/{len(sampled_tiles)})")
+                            break
+                        # Skip ready messages
+                        if result.get('status') == 'ready':
+                            continue
 
-                with tqdm(total=len(sampled_tiles), desc="Processing tiles") as pbar:
-                    for result in pool.imap_unordered(process_tile_worker_with_data_and_slide, tile_generator()):
-                        pbar.update(1)
                         process_result(result, slide_results)
                         del result
-                    gc.collect()
+                        gc.collect()
 
+                        pbar.update(1)
+                        collected += 1
         finally:
-            if temp_init_dir.exists():
-                try:
-                    shutil.rmtree(temp_init_dir)
-                except Exception as e:
-                    logger.debug(f"Failed to cleanup temp init dir: {e}")
+            # Always cleanup shared memory
+            logger.info("Cleaning up shared memory...")
+            shm_manager.cleanup()
 
     total_mk = 0
     total_hspc = 0
@@ -2135,12 +2320,33 @@ def process_tile_worker_with_data_and_slide(args):
     if img_rgb.max() == 0:
         return {'tid': tid, 'status': 'empty', 'slide_name': slide_name}
 
-    img_rgb = percentile_normalize(img_rgb, p_low=5, p_high=95)
+    # Normalization disabled for H&E images - raw pixel values work better
+    # img_rgb = percentile_normalize(img_rgb, p_low=5, p_high=95)
 
     try:
         mk_masks, hspc_masks, mk_feats, hspc_feats = segmenter.process_tile(
             img_rgb, mk_min_area, mk_max_area
         )
+
+        # Generate crops for each detection
+        for feat in mk_feats:
+            det_id = int(feat['id'].split('_')[1])
+            mask = (mk_masks == det_id)
+            centroid = feat.get('center', [img_rgb.shape[1]//2, img_rgb.shape[0]//2])
+            crop_result = generate_detection_crop(img_rgb, mask, centroid)
+            if crop_result:
+                feat['crop_b64'] = crop_result['crop']
+                feat['mask_b64'] = crop_result['mask']
+
+        for feat in hspc_feats:
+            det_id = int(feat['id'].split('_')[1])
+            mask = (hspc_masks == det_id)
+            centroid = feat.get('center', [img_rgb.shape[1]//2, img_rgb.shape[0]//2])
+            crop_result = generate_detection_crop(img_rgb, mask, centroid)
+            if crop_result:
+                feat['crop_b64'] = crop_result['crop']
+                feat['mask_b64'] = crop_result['mask']
+
         return {
             'tid': tid, 'status': 'success',
             'mk_masks': mk_masks, 'hspc_masks': hspc_masks,
@@ -2171,6 +2377,26 @@ def process_tile_gpu_only(args):
         mk_masks, hspc_masks, mk_feats, hspc_feats = segmenter.process_tile(
             img_rgb, mk_min_area, mk_max_area
         )
+
+        # Generate crops for each detection
+        for feat in mk_feats:
+            det_id = int(feat['id'].split('_')[1])
+            mask = (mk_masks == det_id)
+            centroid = feat.get('center', [img_rgb.shape[1]//2, img_rgb.shape[0]//2])
+            crop_result = generate_detection_crop(img_rgb, mask, centroid)
+            if crop_result:
+                feat['crop_b64'] = crop_result['crop']
+                feat['mask_b64'] = crop_result['mask']
+
+        for feat in hspc_feats:
+            det_id = int(feat['id'].split('_')[1])
+            mask = (hspc_masks == det_id)
+            centroid = feat.get('center', [img_rgb.shape[1]//2, img_rgb.shape[0]//2])
+            crop_result = generate_detection_crop(img_rgb, mask, centroid)
+            if crop_result:
+                feat['crop_b64'] = crop_result['crop']
+                feat['mask_b64'] = crop_result['mask']
+
         return {
             'tid': tid, 'status': 'success',
             'mk_masks': mk_masks, 'hspc_masks': hspc_masks,
@@ -2201,9 +2427,9 @@ def preprocess_tile_cpu(slide_data, slide_name, tile, use_pinned_memory=True):
     else:
         img_rgb = tile_img
 
-    # Normalize
-    if img_rgb.max() > 0:
-        img_rgb = percentile_normalize(img_rgb, p_low=5, p_high=95)
+    # Normalization disabled for H&E images - raw pixel values work better
+    # if img_rgb.max() > 0:
+    #     img_rgb = percentile_normalize(img_rgb, p_low=5, p_high=95)
 
     # Use pinned memory for faster GPU transfer (double-buffering optimization)
     if use_pinned_memory and torch.cuda.is_available():
@@ -2279,7 +2505,7 @@ def save_tile_results(result, output_base, slide_results, slide_results_lock):
         with h5py.File(mk_tile_dir / "segmentation.h5", 'w') as f:
             create_hdf5_dataset(f, 'labels', new_mk[np.newaxis])
         with open(mk_tile_dir / "features.json", 'w') as f:
-            json.dump([{'id': m['id'], 'global_id': m['global_id'], 'uid': m['uid'], 'center': m['center'], 'features': m['features']} for m in result['mk_feats']], f)
+            json.dump([{'id': m['id'], 'global_id': m['global_id'], 'uid': m['uid'], 'center': m['center'], 'features': m['features'], 'crop_b64': m.get('crop_b64')} for m in result['mk_feats']], f)
 
     if result['hspc_feats']:
         hspc_dir = output_dir / "hspc" / "tiles"
@@ -2310,7 +2536,7 @@ def save_tile_results(result, output_base, slide_results, slide_results_lock):
         with h5py.File(hspc_tile_dir / "segmentation.h5", 'w') as f:
             create_hdf5_dataset(f, 'labels', new_hspc[np.newaxis])
         with open(hspc_tile_dir / "features.json", 'w') as f:
-            json.dump([{'id': h['id'], 'global_id': h['global_id'], 'uid': h['uid'], 'center': h['center'], 'features': h['features']} for h in result['hspc_feats']], f)
+            json.dump([{'id': h['id'], 'global_id': h['global_id'], 'uid': h['uid'], 'center': h['center'], 'features': h['features'], 'crop_b64': h.get('crop_b64')} for h in result['hspc_feats']], f)
 
     return {'slide_name': slide_name, 'mk_count': mk_count, 'hspc_count': hspc_count}
 
@@ -2544,7 +2770,8 @@ def process_tile_worker_with_data(args):
     if img_rgb.max() == 0:
         return {'tid': tid, 'status': 'empty'}
 
-    img_rgb = percentile_normalize(img_rgb, p_low=5, p_high=95)
+    # Normalization disabled for H&E images - raw pixel values work better
+    # img_rgb = percentile_normalize(img_rgb, p_low=5, p_high=95)
     has_tissue_content, _ = has_tissue(img_rgb, variance_threshold, block_size=calibration_block_size)
     if not has_tissue_content:
         return {'tid': tid, 'status': 'no_tissue'}
@@ -2553,6 +2780,26 @@ def process_tile_worker_with_data(args):
         mk_masks, hspc_masks, mk_feats, hspc_feats = segmenter.process_tile(
             img_rgb, mk_min_area, mk_max_area
         )
+
+        # Generate crops for each detection
+        for feat in mk_feats:
+            det_id = int(feat['id'].split('_')[1])
+            mask = (mk_masks == det_id)
+            centroid = feat.get('center', [img_rgb.shape[1]//2, img_rgb.shape[0]//2])
+            crop_result = generate_detection_crop(img_rgb, mask, centroid)
+            if crop_result:
+                feat['crop_b64'] = crop_result['crop']
+                feat['mask_b64'] = crop_result['mask']
+
+        for feat in hspc_feats:
+            det_id = int(feat['id'].split('_')[1])
+            mask = (hspc_masks == det_id)
+            centroid = feat.get('center', [img_rgb.shape[1]//2, img_rgb.shape[0]//2])
+            crop_result = generate_detection_crop(img_rgb, mask, centroid)
+            if crop_result:
+                feat['crop_b64'] = crop_result['crop']
+                feat['mask_b64'] = crop_result['mask']
+
         return {
             'tid': tid, 'status': 'success',
             'mk_masks': mk_masks, 'hspc_masks': hspc_masks,
