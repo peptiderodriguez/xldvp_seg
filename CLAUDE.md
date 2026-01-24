@@ -1475,3 +1475,50 @@ python run_segmentation.py \
 
 ### Recommended Tile Size
 **Default tile size: 4000x4000 pixels** (increased from 3000x3000 for better vessel detection at boundaries)
+
+### Jan 24, 2026 - Lumen-First Multi-Scale Detection with Full Scale Range
+
+**Major Update:** Extended multi-scale detection to include very coarse scales (1/64x, 1/32x) for detecting aorta and major arteries.
+
+**New Configuration:**
+- **Tile size**: 20,000×20,000 pixels (3.45mm coverage, fits mouse aorta 0.8-1.5mm)
+- **Scales**: [64, 32, 16, 8, 4, 2, 1] (7 scales from coarsest to finest)
+- **Per-channel photobleaching correction**: Applied to all RGB channels before display
+
+**Scale-Specific Parameters:**
+| Scale | Pixel Size | Min Lumen Area | Max Lumen Area | Target Vessels |
+|-------|------------|----------------|----------------|----------------|
+| 1/64x | ~11 µm | 500,000 µm² | 100,000,000 µm² | Aorta (>1mm) |
+| 1/32x | ~5.5 µm | 100,000 µm² | 25,000,000 µm² | Major arteries (500-5000 µm) |
+| 1/16x | ~2.8 µm | 20,000 µm² | 8,000,000 µm² | Large arteries (200-3000 µm) |
+| 1/8x | ~1.4 µm | 5,000 µm² | 1,000,000 µm² | Medium-large (100-1000 µm) |
+| 1/4x | ~0.7 µm | 1,500 µm² | 100,000 µm² | Medium (50-300 µm) |
+| 1/2x | ~0.35 µm | 200 µm² | 25,000 µm² | Small-medium (20-150 µm) |
+| 1x | 0.17 µm | 75 µm² | 6,000 µm² | Capillaries (5-75 µm) |
+
+**New Scripts:**
+| Script | Purpose |
+|--------|---------|
+| `scripts/run_lumen_first_10pct.py` | Full multi-scale lumen-first detection with HTML export |
+| `scripts/regenerate_html.py` | Fast HTML regeneration from saved crops |
+
+**Key Features:**
+1. **Lumen-first detection**: Find dark lumens, check for bright SMA+ walls around them
+2. **Per-channel photobleaching correction**: Fixes banding artifacts in RGB display
+3. **Crop caching**: Raw crops saved to disk for instant HTML style changes
+4. **IoU deduplication**: 0.3 threshold, prefer detections from finer scales
+
+**Usage:**
+```bash
+# Run lumen-first detection (100% of tiles)
+source ~/miniforge3/etc/profile.d/conda.sh && conda activate mkseg
+python scripts/run_lumen_first_10pct.py
+
+# Regenerate HTML with different contour style
+python scripts/regenerate_html.py --thickness 10 --inner-dotted
+```
+
+**Output:** `/home/dude/vessel_output/lumen_first_test/`
+- `vessel_detections.json` - All vessels with contours
+- `crops/` - Raw JPEG crops for each vessel
+- `html/` - Interactive annotation viewer

@@ -23,29 +23,61 @@ logger = logging.getLogger(__name__)
 
 # Scale-specific detection parameters
 SCALE_PARAMS = {
+    # Ultra-coarse scale (1/64x): Aorta and major vessels
+    64: {
+        'min_diameter_um': 1000,
+        'max_diameter_um': 10000,
+        'min_circularity': 0.10,
+        'min_ring_completeness': 0.15,
+        'description': 'Aorta and major vessels (>1000 µm)',
+    },
+    # Very coarse scale (1/32x): Large arteries
+    32: {
+        'min_diameter_um': 500,
+        'max_diameter_um': 5000,
+        'min_circularity': 0.12,
+        'min_ring_completeness': 0.20,
+        'description': 'Large arteries (500-5000 µm)',
+    },
+    # Coarse scale (1/16x): Very large vessels only
+    16: {
+        'min_diameter_um': 200,
+        'max_diameter_um': 3000,
+        'min_circularity': 0.15,
+        'min_ring_completeness': 0.25,
+        'description': 'Very large arteries (>200 µm)',
+    },
     # Coarse scale (1/8x): Large vessels only
     8: {
         'min_diameter_um': 100,
-        'max_diameter_um': 2000,
+        'max_diameter_um': 1000,
         'min_circularity': 0.2,
         'min_ring_completeness': 0.3,
-        'description': 'Large arteries (>100 µm)',
+        'description': 'Large arteries (100-1000 µm)',
     },
     # Medium scale (1/4x): Medium vessels
     4: {
-        'min_diameter_um': 30,
-        'max_diameter_um': 200,
+        'min_diameter_um': 50,
+        'max_diameter_um': 300,
         'min_circularity': 0.2,
         'min_ring_completeness': 0.3,
-        'description': 'Medium vessels (30-200 µm)',
+        'description': 'Medium vessels (50-300 µm)',
+    },
+    # Medium-fine scale (1/2x): Medium-small vessels
+    2: {
+        'min_diameter_um': 20,
+        'max_diameter_um': 150,
+        'min_circularity': 0.2,
+        'min_ring_completeness': 0.3,
+        'description': 'Medium-small vessels (20-150 µm)',
     },
     # Fine scale (1x): Small vessels and capillaries
     1: {
-        'min_diameter_um': 3,
+        'min_diameter_um': 5,
         'max_diameter_um': 75,
         'min_circularity': 0.15,
         'min_ring_completeness': 0.25,
-        'description': 'Small vessels and capillaries (3-75 µm)',
+        'description': 'Small vessels and capillaries (5-75 µm)',
     },
 }
 
