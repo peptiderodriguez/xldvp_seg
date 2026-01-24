@@ -1997,14 +1997,20 @@ def _phase4_process_tiles(
         logger.info(f"  {slide_name}: {sr['mk_count']} MKs, {sr['hspc_count']} HSPCs")
 
     if html_output_dir:
-        export_html_from_ram(
-            slide_data=slide_data,
-            output_base=output_base,
-            html_output_dir=html_output_dir,
-            samples_per_page=samples_per_page,
-            mk_min_area_um=mk_min_area_um,
-            mk_max_area_um=mk_max_area_um
-        )
+        # Check if images are still in RAM (they're freed when using shared memory mode)
+        images_available = any(data.get('image') is not None for data in slide_data.values())
+        if images_available:
+            export_html_from_ram(
+                slide_data=slide_data,
+                output_base=output_base,
+                html_output_dir=html_output_dir,
+                samples_per_page=samples_per_page,
+                mk_min_area_um=mk_min_area_um,
+                mk_max_area_um=mk_max_area_um
+            )
+        else:
+            logger.info("Skipping RAM-based HTML export (images freed for shared memory)")
+            logger.info(f"Run 'python regenerate_html_fast.py --output-dir {output_base}' to generate HTML from saved crops")
 
     return total_mk, total_hspc
 
