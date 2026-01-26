@@ -769,6 +769,12 @@ def generate_annotation_page(
             stats_parts.append(f"{stats['area_um2']:.1f} &micro;m&sup2;")
         if 'area_px' in stats:
             stats_parts.append(f"{stats['area_px']:.0f} px")
+        if 'sma_ratio' in stats:
+            stats_parts.append(f"sma: {stats['sma_ratio']:.2f}")
+        if 'diameter_um' in stats:
+            stats_parts.append(f"&empty; {stats['diameter_um']:.0f} &micro;m")
+        if 'scale' in stats:
+            stats_parts.append(f"{stats['scale']}")
         if 'solidity' in stats:
             stats_parts.append(f"sol: {stats['solidity']:.2f}")
         # Only show confidence if it's not 1.0 (i.e., after classifier training)
