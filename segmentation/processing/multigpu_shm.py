@@ -125,6 +125,7 @@ def _gpu_worker_shm(
     segmenter_kwargs: Dict[str, Any],
     mk_min_area: int,
     mk_max_area: int,
+    hspc_max_area: Optional[int],
     variance_threshold: float,
     calibration_block_size: int,
 ):
@@ -140,6 +141,7 @@ def _gpu_worker_shm(
         segmenter_kwargs: kwargs for UnifiedSegmenter
         mk_min_area: Minimum MK area in pixels
         mk_max_area: Maximum MK area in pixels
+        hspc_max_area: Maximum HSPC area in pixels (None = no filter)
         variance_threshold: Threshold for tissue detection
         calibration_block_size: Block size for variance calculation
     """
@@ -282,8 +284,29 @@ def _gpu_worker_shm(
                 mk_masks, hspc_masks, mk_feats, hspc_feats = segmenter.process_tile(
                     tile_normalized,
                     mk_min_area,
-                    mk_max_area
+                    mk_max_area,
+                    hspc_max_area
                 )
+
+                # Generate crops for each detection (same as non-SHM modes)
+                from run_unified_FAST import generate_detection_crop
+                for feat in mk_feats:
+                    det_id = int(feat['id'].split('_')[1])
+                    mask = (mk_masks == det_id)
+                    centroid = feat.get('center', [tile_normalized.shape[1]//2, tile_normalized.shape[0]//2])
+                    crop_result = generate_detection_crop(tile_normalized, mask, centroid)
+                    if crop_result:
+                        feat['crop_b64'] = crop_result['crop']
+                        feat['mask_b64'] = crop_result['mask']
+
+                for feat in hspc_feats:
+                    det_id = int(feat['id'].split('_')[1])
+                    mask = (hspc_masks == det_id)
+                    centroid = feat.get('center', [tile_normalized.shape[1]//2, tile_normalized.shape[0]//2])
+                    crop_result = generate_detection_crop(tile_normalized, mask, centroid)
+                    if crop_result:
+                        feat['crop_b64'] = crop_result['crop']
+                        feat['mask_b64'] = crop_result['mask']
 
                 output_queue.put(build_mk_hspc_result(
                     tid=tid,
@@ -359,6 +382,7 @@ class MultiGPUTileProcessorSHM:
         hspc_classifier_path: Optional[Path] = None,
         mk_min_area: int = 500,
         mk_max_area: int = 50000,
+        hspc_max_area: Optional[int] = None,
         variance_threshold: float = 100.0,
         calibration_block_size: int = 64,
     ):
@@ -366,6 +390,7 @@ class MultiGPUTileProcessorSHM:
         self.slide_info = slide_info
         self.mk_min_area = mk_min_area
         self.mk_max_area = mk_max_area
+        self.hspc_max_area = hspc_max_area
         self.variance_threshold = variance_threshold
         self.calibration_block_size = calibration_block_size
 
@@ -400,6 +425,7 @@ class MultiGPUTileProcessorSHM:
                     self.segmenter_kwargs,
                     self.mk_min_area,
                     self.mk_max_area,
+                    self.hspc_max_area,
                     self.variance_threshold,
                     self.calibration_block_size,
                 ),

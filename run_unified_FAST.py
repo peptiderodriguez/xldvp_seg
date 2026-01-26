@@ -148,7 +148,7 @@ def process_tile_worker(args):
     """
     # Unpack all arguments
     tile, _, _, _, output_dir, \
-    mk_min_area, mk_max_area, variance_threshold, \
+    mk_min_area, mk_max_area, hspc_max_area, variance_threshold, \
     calibration_block_size = args
 
     # Use global variables
@@ -191,7 +191,7 @@ def process_tile_worker(args):
 
     try:
         mk_masks, hspc_masks, mk_feats, hspc_feats = segmenter.process_tile(
-            img_rgb, mk_min_area, mk_max_area
+            img_rgb, mk_min_area, mk_max_area, hspc_max_area
         )
 
         # Generate crops for each detection (for HTML export without reloading CZI)
@@ -656,19 +656,18 @@ class UnifiedSegmenter:
         image_rgb,
         mk_min_area=1000,
         mk_max_area=100000,
+        hspc_max_area=None,
         resnet_batch_size=16
     ):
         """Process a single tile for both MKs and HSPCs.
 
         Uses batch ResNet feature extraction for improved GPU utilization.
 
-        Note: mk_min_area/mk_max_area only filter MKs, not HSPCs.
-        Cellpose-SAM handles HSPC detection without size parameters.
-
         Args:
             image_rgb: RGB image array
             mk_min_area: Minimum MK area in pixels
             mk_max_area: Maximum MK area in pixels
+            hspc_max_area: Maximum HSPC area in pixels (None = no filter)
             resnet_batch_size: Batch size for ResNet feature extraction (default 16)
 
         Returns:
@@ -860,6 +859,12 @@ class UnifiedSegmenter:
             sam2_score = cand['score']
             cx, cy = cand['center']
 
+            # HSPC size filter (if enabled)
+            if hspc_max_area is not None:
+                mask_area = sam2_mask.sum()
+                if mask_area > hspc_max_area:
+                    continue
+
             # Check overlap with existing HSPC masks - skip if >50% overlaps
             if hspc_masks.max() > 0:
                 overlap = ((sam2_mask > 0) & (hspc_masks > 0)).sum()
@@ -1014,6 +1019,7 @@ def run_unified_segmentation(
     output_dir,
     mk_min_area=1000,
     mk_max_area=100000,
+    hspc_max_area=None,
     tile_size=4096,
     overlap=512,
     sample_fraction=1.0,
@@ -1129,7 +1135,7 @@ def run_unified_segmentation(
     for tile in tiles:
         worker_args.append((
             tile, czi_path, x_start, y_start, output_dir,
-            mk_min_area, mk_max_area, variance_threshold,
+            mk_min_area, mk_max_area, hspc_max_area, variance_threshold,
             calibration_block_size
         ))
     
@@ -1191,7 +1197,7 @@ def run_unified_segmentation(
                             with h5py.File(mk_tile_dir / "segmentation.h5", 'w') as f:
                                 create_hdf5_dataset(f, 'labels', new_mk[np.newaxis])
                             with open(mk_tile_dir / "features.json", 'w') as f:
-                                json.dump([{'id': m['id'], 'global_id': m['global_id'], 'uid': m['uid'], 'center': m['center'], 'features': m['features'], 'crop_b64': m.get('crop_b64')} for m in result['mk_feats']], f)
+                                json.dump([{'id': m['id'], 'global_id': m['global_id'], 'uid': m['uid'], 'center': m['center'], 'features': m['features'], 'crop_b64': m.get('crop_b64'), 'mask_b64': m.get('mask_b64')} for m in result['mk_feats']], f)
 
                             # Explicit cleanup to prevent memory accumulation
                             del new_mk, mk_tile_cells
@@ -1225,7 +1231,7 @@ def run_unified_segmentation(
                             with h5py.File(hspc_tile_dir / "segmentation.h5", 'w') as f:
                                 create_hdf5_dataset(f, 'labels', new_hspc[np.newaxis])
                             with open(hspc_tile_dir / "features.json", 'w') as f:
-                                json.dump([{'id': h['id'], 'global_id': h['global_id'], 'uid': h['uid'], 'center': h['center'], 'features': h['features'], 'crop_b64': h.get('crop_b64')} for h in result['hspc_feats']], f)
+                                json.dump([{'id': h['id'], 'global_id': h['global_id'], 'uid': h['uid'], 'center': h['center'], 'features': h['features'], 'crop_b64': h.get('crop_b64'), 'mask_b64': h.get('mask_b64')} for h in result['hspc_feats']], f)
 
                             # Explicit cleanup to prevent memory accumulation
                             del new_hspc, hspc_tile_cells
@@ -1782,7 +1788,7 @@ def _phase4_process_tiles(
                 with h5py.File(mk_tile_dir / "segmentation.h5", 'w') as f:
                     create_hdf5_dataset(f, 'labels', new_mk[np.newaxis])
                 with open(mk_tile_dir / "features.json", 'w') as f:
-                    json.dump([{'id': m['id'], 'global_id': m['global_id'], 'uid': m['uid'], 'center': m['center'], 'features': m['features'], 'crop_b64': m.get('crop_b64')} for m in result['mk_feats']], f)
+                    json.dump([{'id': m['id'], 'global_id': m['global_id'], 'uid': m['uid'], 'center': m['center'], 'features': m['features'], 'crop_b64': m.get('crop_b64'), 'mask_b64': m.get('mask_b64')} for m in result['mk_feats']], f)
 
                 del new_mk, mk_tile_cells
 
@@ -1814,7 +1820,7 @@ def _phase4_process_tiles(
                 with h5py.File(hspc_tile_dir / "segmentation.h5", 'w') as f:
                     create_hdf5_dataset(f, 'labels', new_hspc[np.newaxis])
                 with open(hspc_tile_dir / "features.json", 'w') as f:
-                    json.dump([{'id': h['id'], 'global_id': h['global_id'], 'uid': h['uid'], 'center': h['center'], 'features': h['features'], 'crop_b64': h.get('crop_b64')} for h in result['hspc_feats']], f)
+                    json.dump([{'id': h['id'], 'global_id': h['global_id'], 'uid': h['uid'], 'center': h['center'], 'features': h['features'], 'crop_b64': h.get('crop_b64'), 'mask_b64': h.get('mask_b64')} for h in result['hspc_feats']], f)
 
                 del new_hspc, hspc_tile_cells
 
@@ -1825,6 +1831,100 @@ def _phase4_process_tiles(
         for key in ['mk_masks', 'hspc_masks', 'mk_feats', 'hspc_feats']:
             if key in result:
                 del result[key]
+
+    def collect_results_with_retry(
+        processor,
+        sampled_tiles,
+        slide_results,
+        process_result_fn,
+        max_retries=2,
+        timeout_per_tile=120,
+        stall_timeout=300,
+    ):
+        """
+        Collect results with retry logic for failed/timed-out tiles.
+
+        Args:
+            processor: MultiGPUTileProcessorSHM instance
+            sampled_tiles: List of (slide_name, tile) tuples
+            slide_results: Dict to accumulate results
+            process_result_fn: Function to process each result
+            max_retries: Max retries per tile before giving up
+            timeout_per_tile: Timeout for each result collection
+            stall_timeout: Timeout before declaring workers stalled
+
+        Returns:
+            tuple: (completed_count, failed_tiles) where failed_tiles is list of (slide_name, tile, error)
+        """
+        # Track pending tiles by their ID
+        pending = {}  # tid -> (slide_name, tile, retry_count)
+        for slide_name, tile in sampled_tiles:
+            tid = tile.get('id', f"{tile['x']}_{tile['y']}")
+            pending[tid] = (slide_name, tile, 0)
+
+        completed = 0
+        failed_tiles = []
+        consecutive_timeouts = 0
+        max_consecutive_timeouts = 3  # Declare workers dead after 3 consecutive timeouts
+
+        with tqdm(total=len(sampled_tiles), desc="Processing tiles") as pbar:
+            while pending or completed < len(sampled_tiles):
+                result = processor.collect_result(timeout=timeout_per_tile)
+
+                if result is None:
+                    consecutive_timeouts += 1
+                    if consecutive_timeouts >= max_consecutive_timeouts:
+                        logger.error(f"Workers appear stalled after {consecutive_timeouts} consecutive timeouts")
+                        logger.error(f"Completed {completed}/{len(sampled_tiles)} tiles, {len(pending)} pending")
+                        # Mark all pending as failed
+                        for tid, (slide_name, tile, retries) in pending.items():
+                            failed_tiles.append((slide_name, tile, "Worker stall timeout"))
+                        pending.clear()
+                        break
+                    continue
+
+                # Reset timeout counter on successful result
+                consecutive_timeouts = 0
+
+                # Skip ready messages
+                if result.get('status') == 'ready':
+                    continue
+
+                tid = result.get('tid')
+                if tid and tid in pending:
+                    slide_name, tile, retries = pending.pop(tid)
+
+                    if result['status'] == 'success':
+                        process_result_fn(result, slide_results)
+                        completed += 1
+                        pbar.update(1)
+                    elif result['status'] == 'error':
+                        error_msg = result.get('error', 'unknown')
+                        if retries < max_retries:
+                            logger.warning(f"Tile {tid} failed (attempt {retries+1}/{max_retries+1}): {error_msg}, retrying...")
+                            pending[tid] = (slide_name, tile, retries + 1)
+                            processor.submit_tile(slide_name, tile)
+                        else:
+                            logger.error(f"Tile {tid} failed after {max_retries+1} attempts: {error_msg}")
+                            failed_tiles.append((slide_name, tile, error_msg))
+                            completed += 1  # Count as "done" even if failed
+                            pbar.update(1)
+                    else:
+                        # Empty, no_tissue, invalid - count as completed
+                        completed += 1
+                        pbar.update(1)
+
+                # Cleanup result
+                for key in ['mk_masks', 'hspc_masks', 'mk_feats', 'hspc_feats']:
+                    if key in result:
+                        del result[key]
+                del result
+                gc.collect()
+
+        return completed, failed_tiles
+
+    # Track failed tiles across the run
+    all_failed_tiles = []
 
     # =========================================================================
     # MULTI-GPU MODE: Each GPU processes one tile at a time (SHARED MEMORY)
@@ -1858,6 +1958,7 @@ def _phase4_process_tiles(
                 hspc_classifier_path=hspc_classifier_path,
                 mk_min_area=mk_min_area,
                 mk_max_area=mk_max_area,
+                hspc_max_area=hspc_max_area,
                 variance_threshold=variance_threshold,
                 calibration_block_size=calibration_block_size,
             ) as processor:
@@ -1866,25 +1967,12 @@ def _phase4_process_tiles(
                 for slide_name, tile in sampled_tiles:
                     processor.submit_tile(slide_name, tile)
 
-                # Collect results with progress bar
+                # Collect results with retry logic
                 logger.info("Collecting results...")
-                with tqdm(total=len(sampled_tiles), desc="Processing tiles (multi-GPU-SHM)") as pbar:
-                    collected = 0
-                    while collected < len(sampled_tiles):
-                        result = processor.collect_result(timeout=300)
-                        if result is None:
-                            logger.error(f"Timeout waiting for results ({collected}/{len(sampled_tiles)})")
-                            break
-                        # Skip ready messages
-                        if result.get('status') == 'ready':
-                            continue
-
-                        process_result(result, slide_results)
-                        del result
-                        gc.collect()
-
-                        pbar.update(1)
-                        collected += 1
+                completed, failed = collect_results_with_retry(
+                    processor, sampled_tiles, slide_results, process_result
+                )
+                all_failed_tiles.extend(failed)
         finally:
             # Always cleanup shared memory
             logger.info("Cleaning up shared memory...")
@@ -1927,6 +2015,7 @@ def _phase4_process_tiles(
                 hspc_classifier_path=hspc_classifier_path,
                 mk_min_area=mk_min_area,
                 mk_max_area=mk_max_area,
+                hspc_max_area=hspc_max_area,
                 variance_threshold=variance_threshold,
                 calibration_block_size=calibration_block_size,
             ) as processor:
@@ -1935,25 +2024,12 @@ def _phase4_process_tiles(
                 for slide_name, tile in sampled_tiles:
                     processor.submit_tile(slide_name, tile)
 
-                # Collect results with progress bar
+                # Collect results with retry logic
                 logger.info("Collecting results...")
-                with tqdm(total=len(sampled_tiles), desc="Processing tiles (shared memory)") as pbar:
-                    collected = 0
-                    while collected < len(sampled_tiles):
-                        result = processor.collect_result(timeout=300)
-                        if result is None:
-                            logger.error(f"Timeout waiting for results ({collected}/{len(sampled_tiles)})")
-                            break
-                        # Skip ready messages
-                        if result.get('status') == 'ready':
-                            continue
-
-                        process_result(result, slide_results)
-                        del result
-                        gc.collect()
-
-                        pbar.update(1)
-                        collected += 1
+                completed, failed = collect_results_with_retry(
+                    processor, sampled_tiles, slide_results, process_result
+                )
+                all_failed_tiles.extend(failed)
         finally:
             # Always cleanup shared memory
             logger.info("Cleaning up shared memory...")
@@ -2012,6 +2088,35 @@ def _phase4_process_tiles(
             logger.info("Skipping RAM-based HTML export (images freed for shared memory)")
             logger.info(f"Run 'python regenerate_html_fast.py --output-dir {output_base}' to generate HTML from saved crops")
 
+    # Report failed tiles
+    if all_failed_tiles:
+        logger.error(f"\n{'='*70}")
+        logger.error(f"FAILED TILES: {len(all_failed_tiles)} tiles failed to process")
+        logger.error(f"{'='*70}")
+        # Group by slide
+        failed_by_slide = {}
+        for slide_name, tile, error in all_failed_tiles:
+            failed_by_slide.setdefault(slide_name, []).append((tile, error))
+        for slide_name, failures in failed_by_slide.items():
+            logger.error(f"  {slide_name}: {len(failures)} failed tiles")
+            for tile, error in failures[:3]:  # Show first 3 errors per slide
+                tid = tile.get('id', f"{tile['x']}_{tile['y']}")
+                logger.error(f"    - {tid}: {error}")
+            if len(failures) > 3:
+                logger.error(f"    ... and {len(failures) - 3} more")
+
+        # Save failed tiles to JSON for potential retry
+        failed_json = output_base / "failed_tiles.json"
+        with open(failed_json, 'w') as f:
+            json.dump([
+                {'slide': s, 'tile_id': t.get('id'), 'x': t['x'], 'y': t['y'], 'error': e}
+                for s, t, e in all_failed_tiles
+            ], f, indent=2)
+        logger.error(f"Failed tiles saved to: {failed_json}")
+
+        # Raise error to indicate incomplete run
+        raise RuntimeError(f"Run incomplete: {len(all_failed_tiles)} tiles failed. See {failed_json} for details.")
+
     return total_mk, total_hspc
 
 
@@ -2020,6 +2125,7 @@ def run_multi_slide_segmentation(
     output_base,
     mk_min_area=1000,
     mk_max_area=100000,
+    hspc_max_area=None,
     tile_size=4096,
     overlap=512,
     sample_fraction=1.0,
@@ -2066,35 +2172,49 @@ def run_multi_slide_segmentation(
         from segmentation.processing.memory import log_memory_status
 
         logger.info(f"\n{'='*70}")
-        logger.info(f"UNIFIED SAMPLING SEGMENTATION: {len(czi_paths)} slides (STREAMING MODE)")
+        logger.info(f"UNIFIED SAMPLING SEGMENTATION: {len(czi_paths)} slides (RAM-FIRST MODE)")
         logger.info(f"{'='*70}")
-        logger.info(f"Step 1: Open CZI readers (NO RAM loading)")
-        logger.info(f"Step 2: Identify tissue tiles (on-demand reading)")
+        logger.info(f"Step 1: Load ALL slides to RAM (fast subsequent access)")
+        logger.info(f"Step 2: Identify tissue tiles (from RAM - fast)")
         logger.info(f"Step 3: Sample {sample_fraction*100:.0f}% from combined pool")
-        logger.info(f"Step 4: Load to shared memory one-by-one, then process")
+        logger.info(f"Step 4: Copy RAM to shared memory, then process with GPUs")
         logger.info(f"{'='*70}")
 
         log_memory_status("Before Phase 1")
 
-        # Phase 1: Just open loaders (NO RAM loading!)
+        # Phase 1: Load all slides to RAM for fast tissue detection
         logger.info(f"\n{'='*70}")
-        logger.info("PHASE 1: OPENING CZI READERS (NO RAM LOADING)")
+        logger.info("PHASE 1: LOADING ALL SLIDES TO RAM")
         logger.info(f"{'='*70}")
 
         slide_loaders = {}
         slide_metadata = {}
-        for czi_path in czi_paths:
+        slide_is_rgb = {}  # Track which slides have RGB data
+        for i, czi_path in enumerate(czi_paths):
             czi_path = Path(czi_path)
             slide_name = czi_path.stem
-            logger.info(f"Opening {slide_name}...")
-            loader = get_loader(czi_path, load_to_ram=False, channel=channel)
+            log_memory_status(f"Before loading slide {i+1}/{len(czi_paths)} ({slide_name})")
+
+            logger.info(f"[{i+1}/{len(czi_paths)}] Loading {slide_name} to RAM...")
+            loader = get_loader(czi_path, load_to_ram=True, channel=channel)
             slide_loaders[slide_name] = loader
             slide_metadata[slide_name] = {
                 'shape': loader.mosaic_size,
                 'czi_path': czi_path
             }
+            # Check if this slide has RGB data
+            channel_data = loader.get_channel_data(channel)
+            is_rgb = channel_data is not None and len(channel_data.shape) == 3 and channel_data.shape[-1] == 3
+            slide_is_rgb[slide_name] = is_rgb
+            if is_rgb:
+                logger.info(f"  {slide_name}: RGB data detected (shape: {channel_data.shape})")
+            else:
+                logger.info(f"  {slide_name}: Grayscale data (shape: {channel_data.shape if channel_data is not None else 'None'})")
 
-        log_memory_status("After Phase 1 (loaders opened)")
+            log_memory_status(f"After loading slide {i+1}")
+            gc.collect()
+
+        log_memory_status("After Phase 1 (all slides in RAM)")
 
         # Phase 2: Identify tissue tiles using streaming (on-demand reading)
         tissue_tiles, variance_threshold = _phase2_identify_tissue_tiles_streaming(
@@ -2108,7 +2228,7 @@ def run_multi_slide_segmentation(
 
         # Phase 4: Load slides to shared memory ONE AT A TIME, then process
         logger.info(f"\n{'='*70}")
-        logger.info("PHASE 4: LOADING TO SHARED MEMORY & PROCESSING")
+        logger.info("PHASE 4: COPYING RAM TO SHARED MEMORY & PROCESSING")
         logger.info(f"{'='*70}")
 
         shm_manager = SharedSlideManager()
@@ -2117,26 +2237,29 @@ def run_multi_slide_segmentation(
 
         # Determine which slides have sampled tiles
         slides_with_tiles = set(slide_name for slide_name, _ in sampled_tiles)
-        logger.info(f"Loading {len(slides_with_tiles)} slides with sampled tiles to shared memory...")
+        logger.info(f"Copying {len(slides_with_tiles)} slides from RAM to shared memory...")
 
         failed_slides = set()
         for i, slide_name in enumerate(list(slides_with_tiles)):
             loader = slide_loaders[slide_name]
-            log_memory_status(f"Before loading slide {i+1}/{len(slides_with_tiles)} ({slide_name})")
+            log_memory_status(f"Before copying slide {i+1}/{len(slides_with_tiles)} ({slide_name})")
 
             try:
-                # Create shared memory buffer
-                shape = (loader.height, loader.width)
-                dtype = np.uint16  # Standard CZI grayscale dtype
-                shm_buffer = shm_manager.create_slide_buffer(slide_name, shape, dtype)
+                # Get channel data from RAM (already loaded in Phase 1)
+                channel_data = loader.get_channel_data(channel)
+                if channel_data is None:
+                    raise ValueError(f"Channel {channel} not loaded in RAM for {slide_name}")
 
-                # Load CZI directly into shared memory
-                logger.info(f"  [{i+1}/{len(slides_with_tiles)}] Loading {slide_name} to shared memory...")
-                loader.load_to_shared_memory(channel, shm_buffer)
+                is_rgb = slide_is_rgb.get(slide_name, False)
+                logger.info(f"  [{i+1}/{len(slides_with_tiles)}] Copying {slide_name} to shared memory "
+                           f"({'RGB' if is_rgb else 'grayscale'}, {channel_data.nbytes / 1e9:.2f} GB)...")
 
-                log_memory_status(f"After loading slide {i+1}")
+                # Copy RAM data to shared memory (fast memcpy, no CZI reading)
+                shm_manager.add_slide(slide_name, channel_data)
+
+                log_memory_status(f"After copying slide {i+1}")
             except Exception as e:
-                logger.error(f"Failed to load {slide_name} to shared memory: {e}")
+                logger.error(f"Failed to copy {slide_name} to shared memory: {e}")
                 logger.error(f"Skipping {slide_name} and its tiles")
                 failed_slides.add(slide_name)
                 # Remove failed slide's shared memory if it was partially created
@@ -2169,6 +2292,7 @@ def run_multi_slide_segmentation(
                 hspc_classifier_path=hspc_classifier_path,
                 mk_min_area=mk_min_area,
                 mk_max_area=mk_max_area,
+                hspc_max_area=hspc_max_area,
                 variance_threshold=variance_threshold,
                 calibration_block_size=calibration_block_size,
             ) as processor:
@@ -2207,7 +2331,7 @@ def run_multi_slide_segmentation(
                                     feat['center'][1] += tile['y']
                                     sr['mk_count'] += 1
                                 with open(mk_dir / "features.json", 'w') as f:
-                                    json.dump(result['mk_feats'], f)
+                                    json.dump([{'id': m['id'], 'global_id': m.get('global_id'), 'uid': m.get('uid'), 'center': m['center'], 'features': m['features'], 'crop_b64': m.get('crop_b64'), 'mask_b64': m.get('mask_b64')} for m in result['mk_feats']], f)
 
                             if result.get('hspc_feats'):
                                 hspc_dir = output_dir / "hspc" / "tiles" / str(tid)
@@ -2219,7 +2343,7 @@ def run_multi_slide_segmentation(
                                     feat['center'][1] += tile['y']
                                     sr['hspc_count'] += 1
                                 with open(hspc_dir / "features.json", 'w') as f:
-                                    json.dump(result['hspc_feats'], f)
+                                    json.dump([{'id': h['id'], 'global_id': h.get('global_id'), 'uid': h.get('uid'), 'center': h['center'], 'features': h['features'], 'crop_b64': h.get('crop_b64'), 'mask_b64': h.get('mask_b64')} for h in result['hspc_feats']], f)
 
                         del result
                         gc.collect()
@@ -2307,7 +2431,7 @@ def process_tile_worker_with_data_and_slide(args):
     """
     Worker function for unified sampling mode - includes slide_name in result.
     """
-    tile, img_data, output_dir, mk_min_area, mk_max_area, variance_threshold, calibration_block_size, slide_name = args
+    tile, img_data, output_dir, mk_min_area, mk_max_area, hspc_max_area, variance_threshold, calibration_block_size, slide_name = args
 
     global segmenter
     tid = tile['id']
@@ -2331,7 +2455,7 @@ def process_tile_worker_with_data_and_slide(args):
 
     try:
         mk_masks, hspc_masks, mk_feats, hspc_feats = segmenter.process_tile(
-            img_rgb, mk_min_area, mk_max_area
+            img_rgb, mk_min_area, mk_max_area, hspc_max_area
         )
 
         # Generate crops for each detection
@@ -2381,7 +2505,7 @@ def process_tile_gpu_only(args):
 
     try:
         mk_masks, hspc_masks, mk_feats, hspc_feats = segmenter.process_tile(
-            img_rgb, mk_min_area, mk_max_area
+            img_rgb, mk_min_area, mk_max_area, hspc_max_area
         )
 
         # Generate crops for each detection
@@ -2511,7 +2635,7 @@ def save_tile_results(result, output_base, slide_results, slide_results_lock):
         with h5py.File(mk_tile_dir / "segmentation.h5", 'w') as f:
             create_hdf5_dataset(f, 'labels', new_mk[np.newaxis])
         with open(mk_tile_dir / "features.json", 'w') as f:
-            json.dump([{'id': m['id'], 'global_id': m['global_id'], 'uid': m['uid'], 'center': m['center'], 'features': m['features'], 'crop_b64': m.get('crop_b64')} for m in result['mk_feats']], f)
+            json.dump([{'id': m['id'], 'global_id': m['global_id'], 'uid': m['uid'], 'center': m['center'], 'features': m['features'], 'crop_b64': m.get('crop_b64'), 'mask_b64': m.get('mask_b64')} for m in result['mk_feats']], f)
 
     if result['hspc_feats']:
         hspc_dir = output_dir / "hspc" / "tiles"
@@ -2542,7 +2666,7 @@ def save_tile_results(result, output_base, slide_results, slide_results_lock):
         with h5py.File(hspc_tile_dir / "segmentation.h5", 'w') as f:
             create_hdf5_dataset(f, 'labels', new_hspc[np.newaxis])
         with open(hspc_tile_dir / "features.json", 'w') as f:
-            json.dump([{'id': h['id'], 'global_id': h['global_id'], 'uid': h['uid'], 'center': h['center'], 'features': h['features'], 'crop_b64': h.get('crop_b64')} for h in result['hspc_feats']], f)
+            json.dump([{'id': h['id'], 'global_id': h['global_id'], 'uid': h['uid'], 'center': h['center'], 'features': h['features'], 'crop_b64': h.get('crop_b64'), 'mask_b64': h.get('mask_b64')} for h in result['hspc_feats']], f)
 
     return {'slide_name': slide_name, 'mk_count': mk_count, 'hspc_count': hspc_count}
 
@@ -2757,7 +2881,7 @@ def process_tile_worker_with_data(args):
     Worker function that receives tile image data directly (for multi-slide mode).
     Models are already loaded in the worker via init_worker.
     """
-    tile, img_data, output_dir, mk_min_area, mk_max_area, variance_threshold, calibration_block_size = args
+    tile, img_data, output_dir, mk_min_area, mk_max_area, hspc_max_area, variance_threshold, calibration_block_size = args
 
     global segmenter
     tid = tile['id']
@@ -2784,7 +2908,7 @@ def process_tile_worker_with_data(args):
 
     try:
         mk_masks, hspc_masks, mk_feats, hspc_feats = segmenter.process_tile(
-            img_rgb, mk_min_area, mk_max_area
+            img_rgb, mk_min_area, mk_max_area, hspc_max_area
         )
 
         # Generate crops for each detection
@@ -2828,6 +2952,8 @@ def main():
                         help='Minimum MK area in µm² (only applies to MKs)')
     parser.add_argument('--mk-max-area-um', type=float, default=2000,
                         help='Maximum MK area in µm² (only applies to MKs)')
+    parser.add_argument('--hspc-max-area-um', type=float, default=500,
+                        help='Maximum HSPC area in µm² (default 500, use 0 to disable)')
     parser.add_argument('--tile-size', type=int, default=4096)
     parser.add_argument('--overlap', type=int, default=512)
     parser.add_argument('--sample-fraction', type=float, default=1.0)
@@ -2868,8 +2994,13 @@ def main():
     um_to_px_factor = PIXEL_SIZE_UM ** 2  # 0.02975625
     mk_min_area_px = int(args.mk_min_area_um / um_to_px_factor)
     mk_max_area_px = int(args.mk_max_area_um / um_to_px_factor)
+    hspc_max_area_px = int(args.hspc_max_area_um / um_to_px_factor) if args.hspc_max_area_um > 0 else None
 
     logger.info(f"MK area filter: {args.mk_min_area_um}-{args.mk_max_area_um} µm² = {mk_min_area_px}-{mk_max_area_px} px²")
+    if hspc_max_area_px:
+        logger.info(f"HSPC area filter: <{args.hspc_max_area_um} µm² = <{hspc_max_area_px} px²")
+    else:
+        logger.info("HSPC area filter: disabled")
 
     # Set HTML output directory (default: output_dir/../docs)
     html_output_dir = args.html_output_dir
@@ -2882,7 +3013,7 @@ def main():
         # Single slide - use output_dir directly
         run_unified_segmentation(
             czi_paths[0], args.output_dir,
-            mk_min_area_px, mk_max_area_px,
+            mk_min_area_px, mk_max_area_px, hspc_max_area_px,
             args.tile_size, args.overlap, args.sample_fraction,
             calibration_block_size=args.calibration_block_size,
             calibration_samples=args.calibration_samples,
@@ -2894,7 +3025,7 @@ def main():
         # Multiple slides - load models once, process all slides
         run_multi_slide_segmentation(
             czi_paths, args.output_dir,
-            mk_min_area_px, mk_max_area_px,
+            mk_min_area_px, mk_max_area_px, hspc_max_area_px,
             args.tile_size, args.overlap, args.sample_fraction,
             calibration_block_size=args.calibration_block_size,
             calibration_samples=args.calibration_samples,

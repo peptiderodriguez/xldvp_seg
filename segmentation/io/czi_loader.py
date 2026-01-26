@@ -354,6 +354,25 @@ class CZILoader:
             f"{shm_buffer.nbytes / (1024 ** 3):.2f} GB"
         )
 
+    def is_channel_rgb(self, channel: int) -> bool:
+        """
+        Check if a channel contains RGB data by probing a small region.
+
+        Args:
+            channel: Channel number to check
+
+        Returns:
+            True if the channel contains RGB data (shape ends with 3), False for grayscale
+        """
+        # Read a small test region
+        test_region = self.reader.read_mosaic(
+            region=(self.x_start, self.y_start, min(100, self.width), min(100, self.height)),
+            scale_factor=1,
+            C=channel
+        )
+        test_region = np.squeeze(test_region)
+        return len(test_region.shape) == 3 and test_region.shape[-1] == 3
+
     def load_channel(self, channel: int, strip_height: Optional[int] = None):
         """
         Load a channel to RAM if not already loaded (lazy loading).
