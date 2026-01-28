@@ -1,16 +1,30 @@
 #!/usr/bin/env python3
 """
-Multi-scale SAM2 vessel detection.
-- Scale 1/4: 20k source → 5k for SAM2 (detects large vessels >200µm)
-- Scale 1: 5k tiles (detects medium vessels 10-200µm)
-Merge and deduplicate across scales.
+SAM2-based vessel detection at 1/8 scale.
+
+Approach:
+- Load channels at 1/2 scale into RAM (4x smaller than full-res)
+- Process at 1/8 scale (downsample 4x from 1/2 base)
+- No diameter filters - detect all ring structures, filter in post-processing
+- 4000px tiles cover 32000px at full res
+
+Pipeline:
+1. SAM2 generates mask proposals on SMA channel
+2. Filter to lumens (dark inside, bright SMA wall around)
+3. Watershed expand from lumen to find outer wall
+4. Extract vessel measurements + save crops with contours
+
+Output:
+- vessel_detections_multiscale.json - all vessels with coordinates and measurements
+- crops/ - vessel images with green (outer) and cyan (inner) contours
+- index.html - viewer sorted by diameter
 """
 
 import numpy as np
 from PIL import Image
 import cv2
 from scipy import ndimage
-from skimage.segmentation import watershed
+# watershed removed - using dilate_until_signal_drops instead
 from skimage.transform import resize
 import json
 import os
@@ -27,16 +41,167 @@ from segmentation.preprocessing.illumination import correct_photobleaching
 # Configuration
 CZI_PATH = "/home/dude/images/20251106_Fig2_nuc488_CD31_555_SMA647_PM750-EDFvar-stitch.czi"
 OUTPUT_DIR = "/home/dude/vessel_output/sam2_multiscale"
-SAMPLE_FRACTION = 0.20
+SAMPLE_FRACTION = 1.0  # 100% of tiles
+TILE_OVERLAP = 0.5  # 50% overlap between tiles
 TISSUE_VARIANCE_THRESHOLD = 50
 
-# Scale configurations (coarse to fine)
-# 1/16 scale: 80000px tiles require ~51GB transient memory - needs cleanup between tiles
+# Base scale for RAM loading (finest scale we need)
+# All coarser scales will downsample from this
+BASE_SCALE = 2  # 1/2 scale
+
+# Single scale configuration - 1/8 scale, no diameter filter
+# 4000px tiles at 1/8 scale = 32000px coverage at full res
+TILE_SIZE = 4000  # Default tile size
 SCALES = [
-    {'name': '1/16', 'source_size': 80000, 'sam2_size': 5000, 'scale': 0.0625, 'min_diam_um': 500, 'max_diam_um': 10000},
-    {'name': '1/4', 'source_size': 20000, 'sam2_size': 5000, 'scale': 0.25, 'min_diam_um': 100, 'max_diam_um': 1000},
-    {'name': '1/1', 'source_size': 5000, 'sam2_size': 5000, 'scale': 1.0, 'min_diam_um': 10, 'max_diam_um': 300},
+    {'name': '1/64', 'scale_factor': 64, 'min_diam_um': 0, 'max_diam_um': 999999, 'tile_size': 1000},
+    {'name': '1/32', 'scale_factor': 32, 'min_diam_um': 0, 'max_diam_um': 999999, 'tile_size': 1200},
+    {'name': '1/16', 'scale_factor': 16, 'min_diam_um': 0, 'max_diam_um': 999999, 'tile_size': 1400},
+    {'name': '1/8', 'scale_factor': 8, 'min_diam_um': 0, 'max_diam_um': 999999, 'tile_size': 1700},
+    {'name': '1/4', 'scale_factor': 4, 'min_diam_um': 0, 'max_diam_um': 999999, 'tile_size': 2000},
 ]
+
+
+class DownsampledChannelCache:
+    """
+    Holds channels loaded at BASE_SCALE (1/2), provides tiles at any coarser scale.
+
+    Memory usage: ~4x smaller than full-res (for BASE_SCALE=2).
+    """
+
+    def __init__(self, loader: CZILoader, channels: list, base_scale: int = 2, strip_height: int = 5000):
+        """
+        Load channels at base_scale into RAM using strip-by-strip loading.
+
+        Args:
+            loader: CZILoader instance (used for reading, not for RAM storage)
+            channels: List of channel indices to load
+            base_scale: Scale factor for base resolution (2 = 1/2 scale)
+            strip_height: Height of strips for loading (in full-res pixels)
+        """
+        self.base_scale = base_scale
+        self.channels = {}
+        self.full_res_size = loader.mosaic_size  # (width, height) at full res
+        self.loader = loader  # Keep reference for strip reading
+
+        # Size at base scale
+        self.base_width = self.full_res_size[0] // base_scale
+        self.base_height = self.full_res_size[1] // base_scale
+
+        print(f"\nLoading channels at 1/{base_scale} scale ({self.base_width} x {self.base_height})...")
+        print(f"  (Full res: {self.full_res_size[0]} x {self.full_res_size[1]})")
+
+        for ch in channels:
+            print(f"  Loading channel {ch}...", flush=True)
+            self.channels[ch] = self._load_channel_in_strips(ch, strip_height)
+            mem_gb = self.channels[ch].nbytes / (1024**3)
+            print(f"    Channel {ch}: {self.channels[ch].shape}, {mem_gb:.2f} GB")
+
+        total_gb = sum(arr.nbytes for arr in self.channels.values()) / (1024**3)
+        print(f"  Total RAM: {total_gb:.2f} GB")
+
+    def _load_channel_in_strips(self, channel: int, strip_height: int) -> np.ndarray:
+        """Load a channel in strips, downsampling each strip manually."""
+        # Pre-allocate output array at base scale
+        channel_array = np.empty((self.base_height, self.base_width), dtype=np.uint16)
+
+        n_strips = (self.loader.height + strip_height - 1) // strip_height
+
+        for i in tqdm(range(n_strips), desc=f"Loading ch{channel}"):
+            # Full-res strip coordinates
+            y_off = i * strip_height
+            h = min(strip_height, self.loader.height - y_off)
+
+            # Read strip at FULL resolution (scale_factor=1 to avoid aicspylibczi bug)
+            strip = self.loader.reader.read_mosaic(
+                region=(self.loader.x_start, self.loader.y_start + y_off, self.loader.width, h),
+                scale_factor=1,
+                C=channel
+            )
+            strip = np.squeeze(strip)
+
+            # Manually downsample to base_scale using cv2.resize
+            target_h = h // self.base_scale
+            target_w = self.loader.width // self.base_scale
+            if target_h > 0 and target_w > 0:
+                strip_downsampled = cv2.resize(strip, (target_w, target_h), interpolation=cv2.INTER_AREA)
+            else:
+                continue
+
+            # Calculate output position at base scale
+            y_out = y_off // self.base_scale
+
+            # Handle edge case where strip might be slightly smaller
+            actual_h = min(strip_downsampled.shape[0], self.base_height - y_out)
+            actual_w = min(strip_downsampled.shape[1], self.base_width)
+            if actual_h > 0:
+                channel_array[y_out:y_out + actual_h, :actual_w] = strip_downsampled[:actual_h, :actual_w]
+
+            del strip, strip_downsampled
+            gc.collect()
+
+        return channel_array
+
+    def get_tile(self, tile_x: int, tile_y: int, tile_size: int, channel: int, scale_factor: int) -> np.ndarray:
+        """
+        Get a tile at the specified scale.
+
+        Args:
+            tile_x, tile_y: Tile origin in SCALED coordinates (at target scale_factor)
+            tile_size: Output tile size (e.g., 5000)
+            channel: Channel index
+            scale_factor: Target scale (must be >= base_scale)
+
+        Returns:
+            Tile data at target scale, shape (tile_size, tile_size) or smaller at edges
+        """
+        if scale_factor < self.base_scale:
+            raise ValueError(f"scale_factor {scale_factor} < base_scale {self.base_scale}")
+
+        if channel not in self.channels:
+            raise ValueError(f"Channel {channel} not loaded")
+
+        # Convert tile coords from target scale to base scale
+        # tile_x is in target-scale space, need to convert to base-scale space
+        relative_scale = scale_factor // self.base_scale
+
+        # In target scale: tile covers tile_size pixels
+        # In full res: tile covers tile_size * scale_factor pixels
+        # In base scale: tile covers tile_size * scale_factor / base_scale = tile_size * relative_scale
+        base_tile_size = tile_size * relative_scale
+
+        # Convert tile origin from target-scale coords to base-scale coords
+        # tile_x (target) * scale_factor = full_res_x
+        # full_res_x / base_scale = base_x
+        base_x = (tile_x * scale_factor) // self.base_scale
+        base_y = (tile_y * scale_factor) // self.base_scale
+
+        # Extract region from base-scale data
+        data = self.channels[channel]
+        y2 = min(base_y + base_tile_size, data.shape[0])
+        x2 = min(base_x + base_tile_size, data.shape[1])
+
+        if base_x >= data.shape[1] or base_y >= data.shape[0]:
+            return None
+
+        region = data[base_y:y2, base_x:x2]
+
+        if region.size == 0:
+            return None
+
+        # Downsample from base scale to target scale if needed
+        if relative_scale > 1:
+            target_h = region.shape[0] // relative_scale
+            target_w = region.shape[1] // relative_scale
+            if target_h == 0 or target_w == 0:
+                return None
+            region = cv2.resize(region, (target_w, target_h), interpolation=cv2.INTER_AREA)
+
+        return region
+
+    def release(self):
+        """Release all channel data."""
+        self.channels.clear()
+        gc.collect()
 
 # Channel indices
 NUCLEAR = 0
@@ -46,7 +211,13 @@ PM = 3
 
 os.makedirs(OUTPUT_DIR, exist_ok=True)
 os.makedirs(os.path.join(OUTPUT_DIR, 'tiles'), exist_ok=True)
-os.makedirs(os.path.join(OUTPUT_DIR, 'crops'), exist_ok=True)
+
+# Clear crops folder at start of each run to avoid mixing with previous runs
+crops_dir = os.path.join(OUTPUT_DIR, 'crops')
+if os.path.exists(crops_dir):
+    import shutil
+    shutil.rmtree(crops_dir)
+os.makedirs(crops_dir, exist_ok=True)
 
 CROP_SIZE = 400  # pixels around vessel center for crops
 
@@ -57,24 +228,38 @@ def normalize_channel(arr, p_low=1, p_high=99):
     arr = np.clip((arr - p1) / (p99 - p1 + 1e-8) * 255, 0, 255)
     return arr.astype(np.uint8)
 
-def save_vessel_crop(vessel, sma_rgb, tile_x, tile_y, source_size, scale):
-    """Save a raw crop of the vessel (no contours - those are drawn at display time)."""
+def save_vessel_crop(vessel, display_rgb, outer_contour, inner_contour, tile_x, tile_y, tile_size, scale_factor):
+    """Save a crop of the vessel with contours drawn."""
     cx, cy = vessel['local_center']
 
-    # Crop region in SAM2 image coordinates
+    # Crop region in tile image coordinates
     half = CROP_SIZE // 2
     x1 = max(0, cx - half)
     y1 = max(0, cy - half)
-    x2 = min(sma_rgb.shape[1], cx + half)
-    y2 = min(sma_rgb.shape[0], cy + half)
+    x2 = min(display_rgb.shape[1], cx + half)
+    y2 = min(display_rgb.shape[0], cy + half)
 
-    crop = sma_rgb[y1:y2, x1:x2].copy()
+    # Check for valid crop
+    if x2 <= x1 or y2 <= y1:
+        return None
 
-    # Store crop offset for contour drawing at display time
+    crop = display_rgb[y1:y2, x1:x2].copy()
+
+    if crop.size == 0:
+        return None
+
+    # Draw contours on crop (translate to crop coordinates)
+    # Contours are in tile coordinates, need to offset by crop origin
+    outer_in_crop = outer_contour - np.array([x1, y1])
+    inner_in_crop = inner_contour - np.array([x1, y1])
+
+    cv2.drawContours(crop, [outer_in_crop], -1, (0, 255, 0), 2)  # Green for outer wall
+    cv2.drawContours(crop, [inner_in_crop], -1, (0, 255, 255), 2)  # Cyan for inner lumen
+
+    # Store crop offset for reference
     vessel['crop_offset'] = [x1, y1]
-    vessel['crop_scale'] = scale
+    vessel['crop_scale_factor'] = scale_factor
 
-    # Save raw crop (no contours)
     crop_path = os.path.join(OUTPUT_DIR, 'crops', f"{vessel['uid']}.jpg")
     cv2.imwrite(crop_path, cv2.cvtColor(crop, cv2.COLOR_RGB2BGR), [cv2.IMWRITE_JPEG_QUALITY, 90])
 
@@ -83,19 +268,28 @@ def save_vessel_crop(vessel, sma_rgb, tile_x, tile_y, source_size, scale):
 def is_tissue_tile(tile, threshold=TISSUE_VARIANCE_THRESHOLD):
     return np.var(tile) > threshold
 
-def verify_lumen_multichannel(mask, sma_norm, nuclear_norm, cd31_norm, pm_norm):
+def verify_lumen_multichannel(mask, sma_norm, nuclear_norm, cd31_norm, pm_norm, scale_factor=1):
     """Verify region is true lumen by checking multi-channel emptiness."""
     area = mask.sum()
-    if area < 50 or area > 500000:
+    # Scale area thresholds: base values for 1/1 scale, adjust for current scale
+    # At coarser scales, fewer pixels represent same physical area
+    min_area = 50 // (scale_factor * scale_factor) if scale_factor > 1 else 50
+    max_area = 500000 // (scale_factor * scale_factor) if scale_factor > 1 else 500000
+    min_area = max(10, min_area)  # floor to avoid rejecting everything
+
+    if area < min_area or area > max_area:
         return False, {}
 
     sma_inside = sma_norm[mask].mean()
     nuclear_inside = nuclear_norm[mask].mean()
 
-    dilated = cv2.dilate(mask.astype(np.uint8), np.ones((15, 15), np.uint8), iterations=1)
+    # Scale dilation kernel: 15px at 1/1 → smaller at coarser scales
+    kernel_size = max(3, 15 // scale_factor)
+    dilated = cv2.dilate(mask.astype(np.uint8), np.ones((kernel_size, kernel_size), np.uint8), iterations=1)
     surrounding = dilated.astype(bool) & ~mask
 
-    if surrounding.sum() < 100:
+    min_surrounding = max(20, 100 // (scale_factor * scale_factor))
+    if surrounding.sum() < min_surrounding:
         return False, {}
 
     sma_surrounding = sma_norm[surrounding].mean()
@@ -104,9 +298,9 @@ def verify_lumen_multichannel(mask, sma_norm, nuclear_norm, cd31_norm, pm_norm):
     sma_ratio = sma_inside / (sma_surrounding + 1)
     nuclear_ratio = nuclear_inside / (nuclear_surrounding + 1)
 
-    # Lumen must be darker than surrounding wall (sma_ratio < 0.85)
-    # and not too nuclear-dense (nuclear_ratio < 1.2)
-    is_valid = (sma_ratio < 0.85) and (nuclear_ratio < 1.2)
+    # Lumen must simply be darker than surrounding wall (any amount)
+    # Relaxed from sma_ratio < 0.85 to < 1.0 to catch more vessels
+    is_valid = (sma_ratio < 1.0) and (nuclear_ratio < 1.5)
 
     stats = {
         'area': int(area),
@@ -118,42 +312,85 @@ def verify_lumen_multichannel(mask, sma_norm, nuclear_norm, cd31_norm, pm_norm):
 
     return is_valid, stats
 
-def watershed_expand(lumens, sma_norm):
-    """Expand from lumens to find outer wall via watershed."""
-    sma_inverted = 255 - sma_norm
-    markers = np.zeros(sma_norm.shape, dtype=np.int32)
+def dilate_until_signal_drops(lumens, cd31_norm, scale_factor=1, drop_ratio=0.85, max_iterations=50):
+    """
+    Expand from lumens by dilating until CD31 signal drops.
+
+    CD31 marks endothelium (vessel lining), so this ensures we're capturing
+    actual blood vessel boundaries.
+
+    For each lumen:
+    1. Start with the lumen mask
+    2. Dilate iteratively
+    3. Check mean CD31 intensity in the newly added ring
+    4. Stop when ring intensity drops below drop_ratio * wall intensity
+
+    Returns labels array where each lumen's expanded region has a unique label.
+    """
+    labels = np.zeros(cd31_norm.shape, dtype=np.int32)
+    kernel = np.ones((3, 3), np.uint8)
 
     for idx, lumen in enumerate(lumens):
-        mask = lumen['mask']
-        eroded = cv2.erode(mask.astype(np.uint8), np.ones((3, 3), np.uint8), iterations=1)
-        markers[eroded > 0] = idx + 1
+        mask = lumen['mask'].astype(np.uint8)
+        label_id = idx + 1
 
-    background_thresh = np.percentile(sma_norm, 95)
-    background = sma_norm > background_thresh
-    markers[background] = len(lumens) + 1
+        # Get initial wall intensity (the CD31+ ring around lumen)
+        dilated_once = cv2.dilate(mask, kernel, iterations=1)
+        initial_ring = (dilated_once > 0) & (mask == 0)
+        if initial_ring.sum() == 0:
+            labels[mask > 0] = label_id
+            continue
+        wall_intensity = cd31_norm[initial_ring].mean()
 
-    labels = watershed(sma_inverted, markers, mask=None)
+        # Threshold for stopping: when ring drops below this
+        stop_threshold = wall_intensity * drop_ratio
+
+        # Iteratively dilate - always do at least one dilation
+        current_mask = dilated_once.copy()  # Start with one dilation already done
+        for i in range(max_iterations - 1):  # -1 since we already did one
+            dilated = cv2.dilate(current_mask, kernel, iterations=1)
+            new_ring = (dilated > 0) & (current_mask == 0)
+
+            if new_ring.sum() == 0:
+                break
+
+            ring_intensity = cd31_norm[new_ring].mean()
+
+            # Stop if signal dropped
+            if ring_intensity < stop_threshold:
+                break
+
+            # Only expand if signal is still strong
+            current_mask = dilated
+
+        # Assign label to final expanded region
+        labels[current_mask > 0] = label_id
+
     return labels
 
-def process_tile_at_scale(tile_x, tile_y, loader, sam2_generator, scale_config, pixel_size_um=0.1725):
+def process_tile_at_scale(tile_x, tile_y, channel_cache, sam2_generator, scale_config, pixel_size_um=0.1725):
     """
-    Process a tile at given scale.
+    Process a tile at given scale using downsampled channel cache.
 
-    For scale < 1: extract larger region, downsample for SAM2, then scale coords back up.
+    tile_x, tile_y are in SCALED coordinates (not full-res).
+    The channel_cache holds data at BASE_SCALE and downsamples further as needed.
     """
-    source_size = scale_config['source_size']
-    sam2_size = scale_config['sam2_size']
-    scale = scale_config['scale']
+    scale_factor = scale_config['scale_factor']
     min_diam = scale_config['min_diam_um']
     max_diam = scale_config['max_diam_um']
+    tile_size = scale_config.get('tile_size', TILE_SIZE)
 
-    # Effective pixel size at this scale
-    effective_pixel_size = pixel_size_um / scale
+    # Effective pixel size at this scale (larger pixels at coarser scales)
+    effective_pixel_size = pixel_size_um * scale_factor
 
-    # Get all channels
+    # Get all channels at this scale from cache
     tiles = {}
     for ch in [NUCLEAR, CD31, SMA, PM]:
-        tiles[ch] = loader.get_tile(tile_x, tile_y, source_size, ch)
+        tiles[ch] = channel_cache.get_tile(tile_x, tile_y, tile_size, ch, scale_factor)
+
+    # Check for valid tile data (all channels must be present)
+    if any(tiles[ch] is None or tiles[ch].size == 0 for ch in [NUCLEAR, CD31, SMA, PM]):
+        return []
 
     # Apply photobleaching correction + normalization to all channels
     sma_corrected = correct_photobleaching(tiles[SMA].astype(np.float32))
@@ -161,48 +398,43 @@ def process_tile_at_scale(tile_x, tile_y, loader, sam2_generator, scale_config, 
     cd31_corrected = correct_photobleaching(tiles[CD31].astype(np.float32))
     pm_corrected = correct_photobleaching(tiles[PM].astype(np.float32))
 
-    sma_norm_full = normalize_channel(sma_corrected)
-    nuclear_norm_full = normalize_channel(nuclear_corrected)
-    cd31_norm_full = normalize_channel(cd31_corrected)
-    pm_norm_full = normalize_channel(pm_corrected)
+    sma_norm = normalize_channel(sma_corrected)
+    nuclear_norm = normalize_channel(nuclear_corrected)
+    cd31_norm = normalize_channel(cd31_corrected)
+    pm_norm = normalize_channel(pm_corrected)
 
-    # Downsample if needed
-    if scale < 1.0:
-        sma_norm = cv2.resize(sma_norm_full, (sam2_size, sam2_size), interpolation=cv2.INTER_AREA)
-        nuclear_norm = cv2.resize(nuclear_norm_full, (sam2_size, sam2_size), interpolation=cv2.INTER_AREA)
-        cd31_norm = cv2.resize(cd31_norm_full, (sam2_size, sam2_size), interpolation=cv2.INTER_AREA)
-        pm_norm = cv2.resize(pm_norm_full, (sam2_size, sam2_size), interpolation=cv2.INTER_AREA)
-    else:
-        sma_norm = sma_norm_full
-        nuclear_norm = nuclear_norm_full
-        cd31_norm = cd31_norm_full
-        pm_norm = pm_norm_full
-
-    # SAM2 input: SMA grayscale as RGB (for detection)
+    # SAM2 input: grayscale as RGB (for detection)
     sma_rgb = cv2.cvtColor(sma_norm, cv2.COLOR_GRAY2RGB)
+    cd31_rgb = cv2.cvtColor(cd31_norm, cv2.COLOR_GRAY2RGB)
 
     # Display RGB: multi-channel for visualization (R=SMA, G=CD31, B=nuclear)
     display_rgb = np.stack([sma_norm, cd31_norm, nuclear_norm], axis=-1)
 
-    # Run SAM2
-    masks = sam2_generator.generate(sma_rgb)
+    # Run SAM2 on both SMA and CD31 channels to find more vessels
+    masks_sma = sam2_generator.generate(sma_rgb)
+    masks_cd31 = sam2_generator.generate(cd31_rgb)
+
+    # Combine masks from both channels
+    # Deduplication happens at the final merge step (merge_vessels_across_scales)
+    masks = masks_sma + masks_cd31
 
     # Filter to lumens
     lumens = []
     for i, m in enumerate(masks):
         mask = m['segmentation']
-        is_valid, stats = verify_lumen_multichannel(mask, sma_norm, nuclear_norm, cd31_norm, pm_norm)
+        is_valid, stats = verify_lumen_multichannel(mask, sma_norm, nuclear_norm, cd31_norm, pm_norm, scale_factor)
         if is_valid:
             lumens.append({'idx': i, 'mask': mask, 'stats': stats})
 
     if len(lumens) == 0:
         # Cleanup before returning
-        del tiles, sma_corrected, sma_norm_full, masks
+        del tiles, sma_corrected, nuclear_corrected, cd31_corrected, pm_corrected
+        del sma_norm, nuclear_norm, cd31_norm, pm_norm, sma_rgb, display_rgb, masks
         gc.collect()
-        return [], sma_rgb
+        return []
 
     # Watershed expansion
-    labels = watershed_expand(lumens, sma_norm)
+    labels = dilate_until_signal_drops(lumens, cd31_norm, scale_factor)
 
     # Extract vessels
     vessels = []
@@ -221,14 +453,14 @@ def process_tile_at_scale(tile_x, tile_y, loader, sam2_generator, scale_config, 
             continue
         inner_contour = max(inner_contours, key=cv2.contourArea)
 
-        # Compute measurements at SAM2 scale, then convert
-        outer_area_sam2 = cv2.contourArea(outer_contour)
-        inner_area_sam2 = cv2.contourArea(inner_contour)
+        # Compute measurements at tile scale, then convert to full resolution
+        outer_area_tile = cv2.contourArea(outer_contour)
+        inner_area_tile = cv2.contourArea(inner_contour)
 
-        # Convert areas back to full resolution
-        area_scale = 1.0 / (scale * scale)
-        outer_area = outer_area_sam2 * area_scale
-        inner_area = inner_area_sam2 * area_scale
+        # Convert areas back to full resolution (multiply by scale_factor^2)
+        area_scale = scale_factor * scale_factor
+        outer_area = outer_area_tile * area_scale
+        inner_area = inner_area_tile * area_scale
         wall_area = outer_area - inner_area
 
         # Fit ellipses
@@ -248,34 +480,44 @@ def process_tile_at_scale(tile_x, tile_y, loader, sam2_generator, scale_config, 
         if outer_diameter < min_diam or outer_diameter > max_diam:
             continue
 
+        # Skip invalid vessels (outer must be > inner)
+        if outer_diameter <= inner_diameter:
+            continue
+
+        # Filter out vessels with outer/inner ratio > 2 (likely false positives)
+        if inner_diameter > 0 and (outer_diameter / inner_diameter) > 2:
+            continue
+
         wall_thickness = (outer_diameter - inner_diameter) / 2
 
-        # Get centroid at SAM2 scale
+        # Get centroid at tile scale
         M = cv2.moments(outer_contour)
         if M['m00'] > 0:
-            cx_sam2 = int(M['m10'] / M['m00'])
-            cy_sam2 = int(M['m01'] / M['m00'])
+            cx_tile = int(M['m10'] / M['m00'])
+            cy_tile = int(M['m01'] / M['m00'])
         else:
-            cx_sam2, cy_sam2 = inner_contour.mean(axis=0)[0].astype(int)
+            cx_tile, cy_tile = inner_contour.mean(axis=0)[0].astype(int)
 
         # Scale contours and centroid back to full resolution
-        cx = int(cx_sam2 / scale)
-        cy = int(cy_sam2 / scale)
+        # tile coords * scale_factor = full res coords
+        cx_full = int(cx_tile * scale_factor)
+        cy_full = int(cy_tile * scale_factor)
 
-        outer_full = (outer_contour.astype(float) / scale).astype(int)
-        inner_full = (inner_contour.astype(float) / scale).astype(int)
+        outer_full = (outer_contour * scale_factor).astype(int)
+        inner_full = (inner_contour * scale_factor).astype(int)
 
-        # Global coordinates
-        global_x = tile_x + cx
-        global_y = tile_y + cy
+        # Global coordinates (tile_x/tile_y are in scaled coords, convert to full res)
+        global_x = tile_x * scale_factor + cx_full
+        global_y = tile_y * scale_factor + cy_full
 
         vessel = {
             'uid': f'vessel_{global_x}_{global_y}',
             'scale': scale_config['name'],
-            'tile_x': tile_x,
+            'scale_factor': scale_factor,
+            'tile_x': tile_x,  # in scaled coordinates
             'tile_y': tile_y,
-            'local_center': [int(cx), int(cy)],
-            'global_center': [int(global_x), int(global_y)],
+            'local_center': [int(cx_tile), int(cy_tile)],  # in tile coordinates
+            'global_center': [int(global_x), int(global_y)],  # in full-res coordinates
             'outer_contour': outer_full.tolist(),
             'inner_contour': inner_full.tolist(),
             'outer_diameter_um': float(outer_diameter),
@@ -287,34 +529,23 @@ def process_tile_at_scale(tile_x, tile_y, loader, sam2_generator, scale_config, 
             **lumen['stats']
         }
 
-        # Save crop (use display_rgb for multi-channel visualization)
-        crop_path = save_vessel_crop(vessel, display_rgb, tile_x, tile_y, source_size, scale)
+        # Save crop with contours (use tile-scale contours for drawing on tile-scale image)
+        crop_path = save_vessel_crop(vessel, display_rgb, outer_contour, inner_contour, tile_x, tile_y, tile_size, scale_factor)
         vessel['crop_path'] = crop_path
 
         vessels.append(vessel)
 
     # Cleanup large arrays before returning
-    del tiles, sma_corrected, sma_norm_full, masks, labels
-    if scale < 1.0:
-        del sma_norm, nuclear_norm, cd31_norm, pm_norm
+    del tiles, sma_corrected, nuclear_corrected, cd31_corrected, pm_corrected
+    del sma_norm, nuclear_norm, cd31_norm, pm_norm, sma_rgb, display_rgb, masks, labels
     gc.collect()
 
-    return vessels, display_rgb
-
-def compute_iou(contour1, contour2, img_shape):
-    """Compute IoU between two contours."""
-    mask1 = np.zeros(img_shape, dtype=np.uint8)
-    mask2 = np.zeros(img_shape, dtype=np.uint8)
-    cv2.fillPoly(mask1, [np.array(contour1)], 1)
-    cv2.fillPoly(mask2, [np.array(contour2)], 1)
-    intersection = np.logical_and(mask1, mask2).sum()
-    union = np.logical_or(mask1, mask2).sum()
-    return intersection / (union + 1e-8)
+    return vessels
 
 def merge_vessels_across_scales(vessels, iou_threshold=0.3):
-    """Merge vessels detected at different scales, keeping the finer scale version."""
-    # Sort by scale (finest first)
-    sorted_vessels = sorted(vessels, key=lambda v: -float(v['scale'].split('/')[1]) if '/' in v['scale'] else 1)
+    """Merge vessels detected at different scales, keeping the coarser scale version (more likely complete)."""
+    # Sort by scale (coarsest first - higher denominator = coarser)
+    sorted_vessels = sorted(vessels, key=lambda v: float(v['scale'].split('/')[1]) if '/' in v['scale'] else 1, reverse=True)
 
     merged = []
     used = set()
@@ -326,7 +557,7 @@ def merge_vessels_across_scales(vessels, iou_threshold=0.3):
         merged.append(v1)
         used.add(i)
 
-        # Find overlapping vessels at coarser scales
+        # Find overlapping vessels at finer scales (discard them, keep coarser)
         for j, v2 in enumerate(sorted_vessels):
             if j in used or j == i:
                 continue
@@ -337,29 +568,27 @@ def merge_vessels_across_scales(vessels, iou_threshold=0.3):
             max_dist = max(v1['outer_diameter_um'], v2['outer_diameter_um']) / 0.1725
 
             if dx < max_dist and dy < max_dist:
-                # Mark as used (keep v1 which is at finer scale)
+                # Mark as used (keep v1 which is at coarser scale, more likely complete)
                 used.add(j)
 
     return merged
 
 def main():
-    print("=" * 60)
-    print("Multi-Scale SAM2 Vessel Detection")
-    print("=" * 60)
+    import sys
+    print("=" * 60, flush=True)
+    print("Multi-Scale SAM2 Vessel Detection", flush=True)
+    print("=" * 60, flush=True)
 
+    # Open CZI (don't load full-res into RAM)
     loader = CZILoader(CZI_PATH)
-
-    # Load all channels
-    print("\nLoading all channels...")
-    for ch in [NUCLEAR, CD31, SMA, PM]:
-        print(f"  Loading channel {ch}...")
-        loader.load_channel(ch)
-
     mosaic_size = loader.mosaic_size
-    print(f"\nMosaic size: {mosaic_size}")
+    print(f"\nMosaic size (full res): {mosaic_size}", flush=True)
+
+    # Load all channels at BASE_SCALE (1/2) - 4x smaller than full res
+    channel_cache = DownsampledChannelCache(loader, [NUCLEAR, CD31, SMA, PM], BASE_SCALE)
 
     # Load SAM2
-    print("\nLoading SAM2...")
+    print("\nLoading SAM2...", flush=True)
     from sam2.build_sam import build_sam2
     from sam2.automatic_mask_generator import SAM2AutomaticMaskGenerator
 
@@ -371,9 +600,9 @@ def main():
 
     mask_generator = SAM2AutomaticMaskGenerator(
         model=sam2,
-        points_per_side=32,
-        pred_iou_thresh=0.7,
-        stability_score_thresh=0.85,
+        points_per_side=48,
+        pred_iou_thresh=0.5,
+        stability_score_thresh=0.7,
         min_mask_region_area=100,
     )
 
@@ -381,77 +610,68 @@ def main():
 
     # Process each scale
     for scale_config in SCALES:
-        print(f"\n{'='*40}")
-        print(f"Processing scale {scale_config['name']}")
-        print(f"  Source tile: {scale_config['source_size']}px")
-        print(f"  SAM2 input: {scale_config['sam2_size']}px")
-        print(f"  Diameter range: {scale_config['min_diam_um']}-{scale_config['max_diam_um']} µm")
-        print(f"{'='*40}")
+        scale_factor = scale_config['scale_factor']
+        tile_size = scale_config.get('tile_size', TILE_SIZE)
+        stride = int(tile_size * (1 - TILE_OVERLAP))  # With 50% overlap, stride = tile_size/2
 
-        source_size = scale_config['source_size']
+        print(f"\n{'='*40}", flush=True)
+        print(f"Processing scale {scale_config['name']}", flush=True)
+        print(f"  Scale factor: {scale_factor}x", flush=True)
+        print(f"  Tile size: {tile_size}px (covers {tile_size * scale_factor}px at full res)", flush=True)
+        print(f"  Stride: {stride}px ({int(TILE_OVERLAP*100)}% overlap)", flush=True)
+        print(f"  Diameter range: {scale_config['min_diam_um']}-{scale_config['max_diam_um']} µm", flush=True)
+        print(f"{'='*40}", flush=True)
 
-        # Create tile grid for this scale
-        n_tiles_x = mosaic_size[0] // source_size
-        n_tiles_y = mosaic_size[1] // source_size
+        # Create tile grid for this scale (in SCALED coordinates)
+        # With overlap, we use stride instead of tile_size for stepping
+        scaled_mosaic_x = mosaic_size[0] // scale_factor
+        scaled_mosaic_y = mosaic_size[1] // scale_factor
+        n_tiles_x = max(1, (scaled_mosaic_x - tile_size) // stride + 1)
+        n_tiles_y = max(1, (scaled_mosaic_y - tile_size) // stride + 1)
         total_tiles = n_tiles_x * n_tiles_y
-        print(f"Tile grid: {n_tiles_x} x {n_tiles_y} = {total_tiles} tiles")
+        print(f"Scaled mosaic: {scaled_mosaic_x} x {scaled_mosaic_y}", flush=True)
+        print(f"Tile grid: {n_tiles_x} x {n_tiles_y} = {total_tiles} tiles", flush=True)
 
-        # Find tissue tiles
-        print("Identifying tissue tiles...")
+        # Find tissue tiles (coordinates in scaled space)
+        print("Identifying tissue tiles...", flush=True)
         tissue_tiles = []
-        sample_size = 5000  # Size of sample regions for tissue check
 
         for ty in tqdm(range(n_tiles_y), desc="Scanning"):
             for tx in range(n_tiles_x):
-                tile_x = tx * source_size
-                tile_y = ty * source_size
+                # tile_x, tile_y are in SCALED coordinates (using stride for stepping)
+                tile_x = tx * stride
+                tile_y = ty * stride
 
-                # For large tiles, sample multiple regions across the tile
-                if source_size > sample_size * 2:
-                    # Sample 9 regions (3x3 grid) across the large tile
-                    has_tissue = False
-                    step = (source_size - sample_size) // 2
-                    for sy in range(3):
-                        for sx in range(3):
-                            sample_x = tile_x + sx * step
-                            sample_y = tile_y + sy * step
-                            sample = loader.get_tile(sample_x, sample_y, sample_size, SMA)
-                            if sample is not None and is_tissue_tile(sample):
-                                has_tissue = True
-                                break
-                        if has_tissue:
-                            break
-                    if has_tissue:
-                        tissue_tiles.append((tile_x, tile_y))
-                else:
-                    # Small tiles - check directly
-                    tile = loader.get_tile(tile_x, tile_y, min(source_size, sample_size), SMA)
-                    if tile is not None and is_tissue_tile(tile):
-                        tissue_tiles.append((tile_x, tile_y))
+                # Check for tissue using the scaled tile (from cache)
+                tile = channel_cache.get_tile(tile_x, tile_y, tile_size, SMA, scale_factor)
+                if tile is not None and is_tissue_tile(tile):
+                    tissue_tiles.append((tile_x, tile_y))
 
-        print(f"Found {len(tissue_tiles)} tissue tiles")
+        print(f"Found {len(tissue_tiles)} tissue tiles", flush=True)
 
-        # Sample
+        # Sample (at 100%, this just takes all tiles)
         n_sample = max(1, int(len(tissue_tiles) * SAMPLE_FRACTION))
         sampled_tiles = random.sample(tissue_tiles, min(n_sample, len(tissue_tiles)))
-        print(f"Sampling {len(sampled_tiles)} tiles")
+        print(f"Processing {len(sampled_tiles)} tiles", flush=True)
 
         # Process
         scale_vessels = []
         for tile_x, tile_y in tqdm(sampled_tiles, desc="Processing"):
             try:
-                vessels, _ = process_tile_at_scale(
-                    tile_x, tile_y, loader, mask_generator, scale_config
+                vessels = process_tile_at_scale(
+                    tile_x, tile_y, channel_cache, mask_generator, scale_config
                 )
                 scale_vessels.extend(vessels)
             except Exception as e:
-                print(f"\nError at ({tile_x}, {tile_y}): {e}")
+                print(f"\nError at ({tile_x}, {tile_y}): {e}", flush=True)
+                import traceback
+                traceback.print_exc()
             finally:
                 # Memory cleanup after each tile
                 gc.collect()
                 torch.cuda.empty_cache()
 
-        print(f"Found {len(scale_vessels)} vessels at scale {scale_config['name']}")
+        print(f"Found {len(scale_vessels)} vessels at scale {scale_config['name']}", flush=True)
         all_vessels.extend(scale_vessels)
 
         # Cleanup between scales
@@ -480,6 +700,8 @@ def main():
             count = sum(1 for v in merged_vessels if v['scale'] == scale_config['name'])
             print(f"  Scale {scale_config['name']}: {count} vessels")
 
+    # Cleanup
+    channel_cache.release()
     loader.close()
 
     # Generate HTML
@@ -488,79 +710,62 @@ def main():
     print("\nDone!")
 
 def generate_html(vessels):
-    """Generate HTML viewer from saved crops."""
+    """Generate HTML viewer using package template."""
+    import base64
+    from segmentation.io.html_export import export_vessel_samples_to_html
+
     print("\nGenerating HTML...")
 
-    # Sort by diameter descending
-    vessels = sorted(vessels, key=lambda v: -v.get('outer_diameter_um', 0))
-
-    html = '''<!DOCTYPE html>
-<html>
-<head>
-    <title>Multiscale Vessel Detection</title>
-    <style>
-        body { background: #1a1a1a; color: #fff; font-family: Arial, sans-serif; margin: 20px; }
-        h1 { text-align: center; }
-        .stats { text-align: center; margin: 20px; padding: 15px; background: #333; border-radius: 8px; }
-        .grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); gap: 10px; }
-        .card { background: #2a2a2a; border-radius: 8px; overflow: hidden; }
-        .card img { width: 100%; height: 180px; object-fit: contain; background: #000; }
-        .card-info { padding: 8px; font-size: 11px; }
-        .diam { color: #4CAF50; font-weight: bold; font-size: 14px; }
-        .wall { color: #2196F3; }
-        .scale { color: #FF9800; }
-        .legend { text-align: center; margin: 10px; }
-        .green { color: #0f0; }
-        .cyan { color: #0ff; }
-    </style>
-</head>
-<body>
-    <h1>Multiscale Vessel Detection</h1>
-    <div class="stats">
-        <strong>Total: ''' + str(len(vessels)) + ''' vessels</strong><br>
-        Scale 1/16: ''' + str(sum(1 for v in vessels if v.get('scale') == '1/16')) + ''' |
-        Scale 1/4: ''' + str(sum(1 for v in vessels if v.get('scale') == '1/4')) + ''' |
-        Scale 1/1: ''' + str(sum(1 for v in vessels if v.get('scale') == '1/1')) + '''
-    </div>
-    <div class="legend">
-        <span class="green">GREEN = outer wall</span> |
-        <span class="cyan">CYAN = inner lumen</span>
-    </div>
-    <div class="grid">
-'''
-
+    # Convert vessels to sample format expected by export_vessel_samples_to_html
+    samples = []
     for v in vessels:
         crop_path = v.get('crop_path', '')
-        if crop_path and os.path.exists(crop_path):
-            rel_path = os.path.relpath(crop_path, OUTPUT_DIR)
-        else:
+        if not crop_path or not os.path.exists(crop_path):
             continue
 
-        diam = v.get('outer_diameter_um', 0)
-        wall = v.get('wall_thickness_um', 0)
-        scale_name = v.get('scale', '?')
+        # Read crop and convert to base64
+        with open(crop_path, 'rb') as f:
+            img_data = f.read()
+        img_base64 = base64.b64encode(img_data).decode('utf-8')
 
-        html += f'''
-        <div class="card">
-            <img src="{rel_path}">
-            <div class="card-info">
-                <div class="diam">⌀ {diam:.0f} µm</div>
-                <div class="wall">wall: {wall:.1f} µm</div>
-                <div class="scale">{scale_name}</div>
-            </div>
-        </div>
-'''
+        # Build features dict (package expects specific keys)
+        features = {
+            'outer_diameter_um': v.get('outer_diameter_um', 0),
+            'inner_diameter_um': v.get('inner_diameter_um', 0),
+            'wall_thickness_mean_um': v.get('wall_thickness_um', 0),
+            'outer_area_px': v.get('outer_area_px', 0),
+            'inner_area_px': v.get('inner_area_px', 0),
+            'wall_area_px': v.get('wall_area_px', 0),
+            'sma_ratio': v.get('sma_ratio', 0),
+            'scale': v.get('scale', '?'),
+            'global_x': v.get('global_center', [0, 0])[0],
+            'global_y': v.get('global_center', [0, 0])[1],
+        }
 
-    html += '''
-    </div>
-</body>
-</html>
-'''
+        samples.append({
+            'uid': v.get('uid', ''),
+            'image': img_base64,  # Just base64, export function adds prefix
+            'features': features,
+        })
 
-    html_path = os.path.join(OUTPUT_DIR, 'index.html')
-    with open(html_path, 'w') as f:
-        f.write(html)
-    print(f"Saved HTML to {html_path}")
+    if not samples:
+        print("No samples to export")
+        return
+
+    # Sort by diameter descending
+    samples = sorted(samples, key=lambda s: -s['features'].get('outer_diameter_um', 0))
+
+    # Export using package template
+    export_vessel_samples_to_html(
+        samples=samples,
+        output_dir=OUTPUT_DIR,
+        cell_type='vessel',
+        samples_per_page=200,
+        title='SAM2 Multiscale Vessel Detection',
+        subtitle=f"Scales: {', '.join(s['name'] for s in SCALES)}",
+        experiment_name='sam2_multiscale',
+        file_name=os.path.basename(CZI_PATH),
+    )
 
 if __name__ == '__main__':
     main()
