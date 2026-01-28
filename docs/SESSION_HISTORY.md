@@ -5,13 +5,107 @@ For project overview and usage, see [CLAUDE.md](../CLAUDE.md).
 
 ---
 
-## Current State (as of Jan 26, 2026)
+## Current State (as of Jan 28, 2026)
 - **RAM-first pipeline**: Load ALL slides to RAM in Phase 1 for fast tissue detection
 - **RGB CZI support**: Auto-detects RGB vs grayscale CZI files, allocates correct buffer shape
+- **Mask cleanup for LMD export**: Optional hole filling and small object removal (`--cleanup-masks`)
+- **HSPC nuclear-only mode**: H&E deconvolution to detect HSPCs on hematoxylin channel (`--hspc-nuclear-only`)
 - **No normalization for H&E tissue detection**: Raw pixel values for variance-based tissue detection
 - **Percentile normalization for segmentation**: 5th-95th percentile norm before SAM2/Cellpose
 - **Multi-GPU support**: 4 GPUs process tiles in parallel via shared memory
-- **Tested on 16 H&E slides**: 20,789 MKs + 50,945 HSPCs detected in ~1 hr per 4-slide batch
+- **Note**: HTML export skipped in multi-GPU shared memory mode - run `regenerate_html_fast.py` after
+
+---
+
+## Jan 27-28, 2026 - HSPC Nuclear-Only Mode
+
+**Problem**: Cellpose HSPC detection on H&E images picks up many non-HSPC cells (cytoplasmic structures, RBCs, etc.) because it processes full RGB.
+
+**Solution**: H&E color deconvolution to extract hematoxylin (nuclear) channel only for HSPC detection.
+
+**New Function: `extract_hematoxylin_channel()`** (run_unified_FAST.py:96-127)
+- Uses `skimage.color.rgb2hed` for H&E color deconvolution
+- Extracts hematoxylin channel (index 0) which highlights nuclei
+- Normalizes to 0-255 and returns as uint8 grayscale
+- Cellpose then detects on this nuclear-only channel
+
+**New CLI Flag:**
+```bash
+python run_unified_FAST.py --czi-paths /path/*.czi --output-dir /out \
+    --cleanup-masks --hspc-nuclear-only
+```
+
+**Modified Files:**
+| File | Changes |
+|------|---------|
+| `run_unified_FAST.py` | Added `extract_hematoxylin_channel()`, `--hspc-nuclear-only` arg, updated `process_tile()` |
+| `segmentation/processing/multigpu_shm.py` | Pass `hspc_nuclear_only` config to workers |
+| `slurm/test_nuclear_only.sbatch` | L40S sbatch script for nuclear-only testing |
+| `slurm/test_nuclear_only_rtx5000.sbatch` | RTX 5000 sbatch script (smaller tile size) |
+
+**Test Runs:**
+
+| Date | Partition | Tile Size | Result |
+|------|-----------|-----------|--------|
+| Jan 27 | RTX 5000 (p.hpcl8) | 3000 | CUDA OOM (16GB VRAM insufficient) |
+| Jan 27 | RTX 5000 (p.hpcl8) | 2000 | RAM OOM (380GB insufficient for 4 slides + shared memory) |
+| Jan 28 | L40S (p.hpcl93) | 3000 | Queued - estimated ~2 days wait (fair-share penalty) |
+
+**Earlier Cleanup-Masks Test (1% sampling):**
+- Jobs: 2046450, 2046451, 2046452
+- Results: 1,982 MKs + 5,124 HSPCs across 16 slides
+- HTML: `/fs/gpfs41/lv12/fileset02/pool/pool-mann-edwin/test_cleanup_output/combined/html/`
+
+**Pending Nuclear-Only Test (10% sampling):**
+- Jobs: 2049316-2049319 on L40S partition
+- Input: 16 bone marrow slides (4 per node)
+- Expected: ~10x more detections than 1% run
+
+---
+
+## Jan 27, 2026 - Mask Cleanup for LMD Export
+
+**Problem**: SAM2-generated masks have internal holes and noise artifacts that cause issues with laser microdissection (LMD) cutting paths.
+
+**Solution**: New mask cleanup module with configurable parameters
+
+**New Module: `segmentation/utils/mask_cleanup.py`**
+- `cleanup_mask()` - Main function for mask post-processing
+- `fill_holes()` - Fill internal holes below size threshold
+- `remove_small_objects()` - Remove disconnected noise regions
+- `get_largest_component()` - Keep only largest connected component
+
+**New CLI Flags:**
+| Flag | Default | Description |
+|------|---------|-------------|
+| `--cleanup-masks` | False | Enable mask cleanup for LMD export |
+| `--no-fill-holes` | False | Disable hole filling (keep internal holes) |
+| `--max-hole-fraction` | 0.1 | Max hole size as fraction of mask area |
+
+**Modified Files:**
+| File | Changes |
+|------|---------|
+| `run_unified_FAST.py` | Added `--cleanup-masks`, `--no-fill-holes`, `--max-hole-fraction` args; integrated cleanup into mask generation |
+| `segmentation/processing/multigpu_shm.py` | Added mask cleanup to shared memory worker functions |
+| `slurm/test_cleanup_masks.sbatch` | Updated to include Phase 5 HTML generation |
+
+**Usage:**
+```bash
+# Enable mask cleanup with default settings
+python run_unified_FAST.py --czi-paths /path/*.czi --output-dir /out --cleanup-masks
+
+# Keep holes, only remove small objects
+python run_unified_FAST.py --czi-paths /path/*.czi --output-dir /out --cleanup-masks --no-fill-holes
+
+# Custom hole threshold (5% of mask area)
+python run_unified_FAST.py --czi-paths /path/*.czi --output-dir /out --cleanup-masks --max-hole-fraction 0.05
+```
+
+**Note on Multi-GPU Mode:**
+HTML export is skipped when using shared memory mode (`--multi-gpu`). After processing completes, run:
+```bash
+python regenerate_html_fast.py --input-dir /path/to/output --output-dir /path/to/output
+```
 
 ---
 

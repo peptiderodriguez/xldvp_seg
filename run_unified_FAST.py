@@ -53,6 +53,7 @@ from segmentation.utils.config import (
     get_feature_dimensions,
     get_cpu_worker_count,
 )
+from segmentation.utils.mask_cleanup import cleanup_mask, apply_cleanup_to_detection
 
 logger = get_logger(__name__)
 
@@ -89,6 +90,41 @@ import psutil
 import base64
 from io import BytesIO
 import re
+from skimage.color import rgb2hed
+
+
+def extract_hematoxylin_channel(rgb_image):
+    """Extract hematoxylin (nuclear) channel from H&E stained RGB image.
+
+    Uses color deconvolution to separate Hematoxylin (blue/purple nuclei)
+    from Eosin (pink cytoplasm). Returns inverted hematoxylin channel
+    as uint8 grayscale image suitable for Cellpose.
+
+    Args:
+        rgb_image: RGB image array (H, W, 3), uint8
+
+    Returns:
+        Grayscale image (H, W), uint8, with nuclei appearing bright
+    """
+    # Convert to HED color space (Hematoxylin-Eosin-DAB)
+    hed = rgb2hed(rgb_image)
+
+    # Extract hematoxylin channel (index 0)
+    # Higher values = more hematoxylin staining
+    hematoxylin = hed[:, :, 0]
+
+    # Normalize to 0-255 range and invert so nuclei are bright
+    # (Cellpose expects bright objects on dark background)
+    h_min, h_max = hematoxylin.min(), hematoxylin.max()
+    if h_max > h_min:
+        hematoxylin_norm = (hematoxylin - h_min) / (h_max - h_min)
+    else:
+        hematoxylin_norm = np.zeros_like(hematoxylin)
+
+    # Invert: high hematoxylin (nuclei) becomes bright
+    hematoxylin_inv = (hematoxylin_norm * 255).astype(np.uint8)
+
+    return hematoxylin_inv
 
 
 # =============================================================================
@@ -99,9 +135,28 @@ import re
 # are now consolidated in segmentation.io.html_export and imported above.
 
 
-# Global variable for worker process
+# Global variables for worker process
 segmenter = None
 shared_image = None
+
+# Global mask cleanup configuration (set via init_worker_cleanup_config)
+cleanup_config = {
+    'cleanup_masks': False,
+    'fill_holes': True,
+    'pixel_size_um': 0.1725,
+    'hspc_nuclear_only': False,
+}
+
+
+def set_cleanup_config(cleanup_masks=False, fill_holes=True, pixel_size_um=0.1725, hspc_nuclear_only=False):
+    """Set global cleanup configuration (call in main process before spawning workers)."""
+    global cleanup_config
+    cleanup_config = {
+        'cleanup_masks': cleanup_masks,
+        'fill_holes': fill_holes,
+        'pixel_size_um': pixel_size_um,
+        'hspc_nuclear_only': hspc_nuclear_only,
+    }
 
 
 def init_worker(mk_classifier_path, hspc_classifier_path, gpu_queue, mm_path, mm_shape, mm_dtype):
@@ -191,24 +246,30 @@ def process_tile_worker(args):
 
     try:
         mk_masks, hspc_masks, mk_feats, hspc_feats = segmenter.process_tile(
-            img_rgb, mk_min_area, mk_max_area, hspc_max_area
+            img_rgb, mk_min_area, mk_max_area, hspc_max_area,
+            hspc_nuclear_only=cleanup_config.get('hspc_nuclear_only', False)
         )
 
         # Generate crops for each detection (for HTML export without reloading CZI)
+        # Optionally apply mask cleanup if enabled in global config
         for feat in mk_feats:
-            det_id = int(feat['id'].split('_')[1])
-            mask = (mk_masks == det_id)
-            # Centroid is in tile-local coordinates
-            centroid = feat.get('center', [img_rgb.shape[1]//2, img_rgb.shape[0]//2])
-            crop_result = generate_detection_crop(img_rgb, mask, centroid)
+            _, crop_result = process_detection_with_cleanup(
+                feat, mk_masks, img_rgb, 'mk',
+                cleanup_masks=cleanup_config['cleanup_masks'],
+                fill_holes=cleanup_config['fill_holes'],
+                pixel_size_um=cleanup_config['pixel_size_um'],
+            )
             if crop_result:
                 feat['crop_b64'] = crop_result['crop']
                 feat['mask_b64'] = crop_result['mask']
 
         for feat in hspc_feats:
-            det_id = int(feat['id'].split('_')[1])
-            mask = (hspc_masks == det_id)
-            centroid = feat.get('center', [img_rgb.shape[1]//2, img_rgb.shape[0]//2])
+            _, crop_result = process_detection_with_cleanup(
+                feat, hspc_masks, img_rgb, 'hspc',
+                cleanup_masks=cleanup_config['cleanup_masks'],
+                fill_holes=cleanup_config['fill_holes'],
+                pixel_size_um=cleanup_config['pixel_size_um'],
+            )
             crop_result = generate_detection_crop(img_rgb, mask, centroid)
             if crop_result:
                 feat['crop_b64'] = crop_result['crop']
@@ -383,6 +444,45 @@ def generate_detection_crop(img_rgb, mask, centroid, crop_size=300, display_size
     mask_b64, _ = image_to_base64(mask_img, format='PNG')
 
     return {'crop': crop_b64, 'mask': mask_b64}
+
+
+def process_detection_with_cleanup(
+    feat, masks_array, img_rgb, cell_type,
+    cleanup_masks=False, fill_holes=True, pixel_size_um=0.1725
+):
+    """
+    Process a single detection: optionally cleanup mask, generate crop.
+
+    Args:
+        feat: Feature dict for the detection
+        masks_array: Label array containing all masks for this cell type
+        img_rgb: RGB tile image
+        cell_type: 'mk' or 'hspc' (for logging)
+        cleanup_masks: If True, apply mask cleanup (largest component + fill holes)
+        fill_holes: If True, fill internal holes (ignored if cleanup_masks=False)
+        pixel_size_um: Pixel size for area calculation
+
+    Returns:
+        Tuple of (cleaned_mask, crop_result) or (original_mask, crop_result)
+    """
+    det_id = int(feat['id'].split('_')[1])
+    mask = (masks_array == det_id)
+
+    if cleanup_masks and mask.any():
+        # Apply cleanup and update mask array + features in place
+        mask = apply_cleanup_to_detection(
+            mask, feat, masks_array, det_id,
+            pixel_size_um=pixel_size_um,
+            keep_largest=True,
+            fill_internal_holes=fill_holes,
+            max_hole_area_fraction=0.5,
+        )
+
+    # Get centroid (may have been updated by cleanup)
+    centroid = feat.get('center', [img_rgb.shape[1]//2, img_rgb.shape[0]//2])
+    crop_result = generate_detection_crop(img_rgb, mask, centroid)
+
+    return mask, crop_result
 
 
 def extract_morphological_features(mask, image):
@@ -657,7 +757,8 @@ class UnifiedSegmenter:
         mk_min_area=1000,
         mk_max_area=100000,
         hspc_max_area=None,
-        resnet_batch_size=16
+        resnet_batch_size=16,
+        hspc_nuclear_only=False
     ):
         """Process a single tile for both MKs and HSPCs.
 
@@ -669,6 +770,8 @@ class UnifiedSegmenter:
             mk_max_area: Maximum MK area in pixels
             hspc_max_area: Maximum HSPC area in pixels (None = no filter)
             resnet_batch_size: Batch size for ResNet feature extraction (default 16)
+            hspc_nuclear_only: If True, use H&E deconvolution to extract hematoxylin
+                              (nuclear) channel for HSPC detection (reduces false positives)
 
         Returns:
             mk_masks: Label array for MKs
@@ -801,8 +904,21 @@ class UnifiedSegmenter:
         # This ensures we only hold ONE predictor's embeddings at a time
         self.sam2_predictor.set_image(image_rgb)
 
+        # Prepare image for Cellpose HSPC detection
+        if hspc_nuclear_only:
+            # Use H&E deconvolution to extract hematoxylin (nuclear) channel
+            # This reduces false positives from non-nuclear structures
+            hematoxylin = extract_hematoxylin_channel(image_rgb)
+            # Cellpose expects (H, W) or (H, W, C) - pass grayscale directly
+            cellpose_input = hematoxylin
+            cellpose_channels = [0, 0]  # Grayscale mode
+        else:
+            # Original behavior: use full RGB with grayscale conversion
+            cellpose_input = image_rgb
+            cellpose_channels = [0, 0]
+
         # Cellpose with grayscale mode, let cpsam auto-detect size
-        cellpose_masks, _, _ = self.cellpose.eval(image_rgb, channels=[0,0])
+        cellpose_masks, _, _ = self.cellpose.eval(cellpose_input, channels=cellpose_channels)
 
         # Get Cellpose centroids and limit to top 500 by mask area
         cellpose_ids = np.unique(cellpose_masks)
@@ -1961,6 +2077,7 @@ def _phase4_process_tiles(
                 hspc_max_area=hspc_max_area,
                 variance_threshold=variance_threshold,
                 calibration_block_size=calibration_block_size,
+                cleanup_config=cleanup_config,
             ) as processor:
                 # Submit all tiles (only coordinates, not data!)
                 logger.info(f"Submitting {len(sampled_tiles)} tiles to {num_gpus} GPUs (shared memory)...")
@@ -2018,6 +2135,7 @@ def _phase4_process_tiles(
                 hspc_max_area=hspc_max_area,
                 variance_threshold=variance_threshold,
                 calibration_block_size=calibration_block_size,
+                cleanup_config=cleanup_config,
             ) as processor:
                 # Submit all tiles (only coordinates, not data!)
                 logger.info(f"Submitting {len(sampled_tiles)} tiles to {actual_gpus} GPUs (shared memory)...")
@@ -2295,6 +2413,7 @@ def run_multi_slide_segmentation(
                 hspc_max_area=hspc_max_area,
                 variance_threshold=variance_threshold,
                 calibration_block_size=calibration_block_size,
+                cleanup_config=cleanup_config,
             ) as processor:
                 logger.info(f"Submitting {len(sampled_tiles)} tiles to {num_gpus} GPUs...")
                 for slide_name, tile in sampled_tiles:
@@ -2455,24 +2574,29 @@ def process_tile_worker_with_data_and_slide(args):
 
     try:
         mk_masks, hspc_masks, mk_feats, hspc_feats = segmenter.process_tile(
-            img_rgb, mk_min_area, mk_max_area, hspc_max_area
+            img_rgb, mk_min_area, mk_max_area, hspc_max_area,
+            hspc_nuclear_only=cleanup_config.get('hspc_nuclear_only', False)
         )
 
-        # Generate crops for each detection
+        # Generate crops for each detection (with optional cleanup)
         for feat in mk_feats:
-            det_id = int(feat['id'].split('_')[1])
-            mask = (mk_masks == det_id)
-            centroid = feat.get('center', [img_rgb.shape[1]//2, img_rgb.shape[0]//2])
-            crop_result = generate_detection_crop(img_rgb, mask, centroid)
+            _, crop_result = process_detection_with_cleanup(
+                feat, mk_masks, img_rgb, 'mk',
+                cleanup_masks=cleanup_config['cleanup_masks'],
+                fill_holes=cleanup_config['fill_holes'],
+                pixel_size_um=cleanup_config['pixel_size_um'],
+            )
             if crop_result:
                 feat['crop_b64'] = crop_result['crop']
                 feat['mask_b64'] = crop_result['mask']
 
         for feat in hspc_feats:
-            det_id = int(feat['id'].split('_')[1])
-            mask = (hspc_masks == det_id)
-            centroid = feat.get('center', [img_rgb.shape[1]//2, img_rgb.shape[0]//2])
-            crop_result = generate_detection_crop(img_rgb, mask, centroid)
+            _, crop_result = process_detection_with_cleanup(
+                feat, hspc_masks, img_rgb, 'hspc',
+                cleanup_masks=cleanup_config['cleanup_masks'],
+                fill_holes=cleanup_config['fill_holes'],
+                pixel_size_um=cleanup_config['pixel_size_um'],
+            )
             if crop_result:
                 feat['crop_b64'] = crop_result['crop']
                 feat['mask_b64'] = crop_result['mask']
@@ -2505,24 +2629,29 @@ def process_tile_gpu_only(args):
 
     try:
         mk_masks, hspc_masks, mk_feats, hspc_feats = segmenter.process_tile(
-            img_rgb, mk_min_area, mk_max_area, hspc_max_area
+            img_rgb, mk_min_area, mk_max_area, hspc_max_area,
+            hspc_nuclear_only=cleanup_config.get('hspc_nuclear_only', False)
         )
 
-        # Generate crops for each detection
+        # Generate crops for each detection (with optional cleanup)
         for feat in mk_feats:
-            det_id = int(feat['id'].split('_')[1])
-            mask = (mk_masks == det_id)
-            centroid = feat.get('center', [img_rgb.shape[1]//2, img_rgb.shape[0]//2])
-            crop_result = generate_detection_crop(img_rgb, mask, centroid)
+            _, crop_result = process_detection_with_cleanup(
+                feat, mk_masks, img_rgb, 'mk',
+                cleanup_masks=cleanup_config['cleanup_masks'],
+                fill_holes=cleanup_config['fill_holes'],
+                pixel_size_um=cleanup_config['pixel_size_um'],
+            )
             if crop_result:
                 feat['crop_b64'] = crop_result['crop']
                 feat['mask_b64'] = crop_result['mask']
 
         for feat in hspc_feats:
-            det_id = int(feat['id'].split('_')[1])
-            mask = (hspc_masks == det_id)
-            centroid = feat.get('center', [img_rgb.shape[1]//2, img_rgb.shape[0]//2])
-            crop_result = generate_detection_crop(img_rgb, mask, centroid)
+            _, crop_result = process_detection_with_cleanup(
+                feat, hspc_masks, img_rgb, 'hspc',
+                cleanup_masks=cleanup_config['cleanup_masks'],
+                fill_holes=cleanup_config['fill_holes'],
+                pixel_size_um=cleanup_config['pixel_size_um'],
+            )
             if crop_result:
                 feat['crop_b64'] = crop_result['crop']
                 feat['mask_b64'] = crop_result['mask']
@@ -2908,24 +3037,29 @@ def process_tile_worker_with_data(args):
 
     try:
         mk_masks, hspc_masks, mk_feats, hspc_feats = segmenter.process_tile(
-            img_rgb, mk_min_area, mk_max_area, hspc_max_area
+            img_rgb, mk_min_area, mk_max_area, hspc_max_area,
+            hspc_nuclear_only=cleanup_config.get('hspc_nuclear_only', False)
         )
 
-        # Generate crops for each detection
+        # Generate crops for each detection (with optional cleanup)
         for feat in mk_feats:
-            det_id = int(feat['id'].split('_')[1])
-            mask = (mk_masks == det_id)
-            centroid = feat.get('center', [img_rgb.shape[1]//2, img_rgb.shape[0]//2])
-            crop_result = generate_detection_crop(img_rgb, mask, centroid)
+            _, crop_result = process_detection_with_cleanup(
+                feat, mk_masks, img_rgb, 'mk',
+                cleanup_masks=cleanup_config['cleanup_masks'],
+                fill_holes=cleanup_config['fill_holes'],
+                pixel_size_um=cleanup_config['pixel_size_um'],
+            )
             if crop_result:
                 feat['crop_b64'] = crop_result['crop']
                 feat['mask_b64'] = crop_result['mask']
 
         for feat in hspc_feats:
-            det_id = int(feat['id'].split('_')[1])
-            mask = (hspc_masks == det_id)
-            centroid = feat.get('center', [img_rgb.shape[1]//2, img_rgb.shape[0]//2])
-            crop_result = generate_detection_crop(img_rgb, mask, centroid)
+            _, crop_result = process_detection_with_cleanup(
+                feat, hspc_masks, img_rgb, 'hspc',
+                cleanup_masks=cleanup_config['cleanup_masks'],
+                fill_holes=cleanup_config['fill_holes'],
+                pixel_size_um=cleanup_config['pixel_size_um'],
+            )
             if crop_result:
                 feat['crop_b64'] = crop_result['crop']
                 feat['mask_b64'] = crop_result['mask']
@@ -2954,6 +3088,9 @@ def main():
                         help='Maximum MK area in µm² (only applies to MKs)')
     parser.add_argument('--hspc-max-area-um', type=float, default=500,
                         help='Maximum HSPC area in µm² (default 500, use 0 to disable)')
+    parser.add_argument('--hspc-nuclear-only', action='store_true',
+                        help='Use H&E deconvolution to detect HSPCs on nuclear (hematoxylin) channel only. '
+                             'Reduces false positives from non-nuclear structures in H&E stained tissue.')
     parser.add_argument('--tile-size', type=int, default=4096)
     parser.add_argument('--overlap', type=int, default=512)
     parser.add_argument('--sample-fraction', type=float, default=1.0)
@@ -2972,6 +3109,14 @@ def main():
                         help='Directory for HTML export (default: output-dir/../docs)')
     parser.add_argument('--samples-per-page', type=int, default=300,
                         help='Number of cell samples per HTML page')
+
+    # Mask cleanup options for LMD export
+    parser.add_argument('--cleanup-masks', action='store_true',
+                        help='Enable mask cleanup (keep largest component, fill holes)')
+    parser.add_argument('--no-fill-holes', action='store_true',
+                        help='Disable hole filling when using --cleanup-masks (for vessels)')
+    parser.add_argument('--max-hole-fraction', type=float, default=0.5,
+                        help='Max hole size to fill as fraction of mask area (default: 0.5)')
 
     args = parser.parse_args()
 
@@ -3007,6 +3152,19 @@ def main():
     if html_output_dir is None:
         html_output_dir = Path(args.output_dir).parent / "docs"
     html_output_dir = Path(html_output_dir)
+
+    # Configure mask cleanup (for LMD export) and HSPC nuclear-only mode
+    fill_holes = not args.no_fill_holes if args.cleanup_masks else True
+    set_cleanup_config(
+        cleanup_masks=args.cleanup_masks,
+        fill_holes=fill_holes,
+        pixel_size_um=PIXEL_SIZE_UM,
+        hspc_nuclear_only=args.hspc_nuclear_only,
+    )
+    if args.cleanup_masks:
+        logger.info(f"Mask cleanup ENABLED (fill_holes={fill_holes}, max_hole_fraction={args.max_hole_fraction})")
+    if args.hspc_nuclear_only:
+        logger.info("HSPC nuclear-only mode ENABLED (H&E deconvolution for hematoxylin channel)")
 
     # Process slides
     if len(czi_paths) == 1:

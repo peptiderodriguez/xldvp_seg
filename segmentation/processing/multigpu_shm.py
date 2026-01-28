@@ -9,6 +9,30 @@ Architecture:
 - N GPU workers: each pinned to one GPU, reads tiles from shared memory, processes, returns results
 
 Performance improvement: ~27MB per tile no longer serialized, only ~100 bytes of coordinates.
+
+Coordinate System:
+    Workers receive tiles with RELATIVE coordinates (array indices), NOT global CZI
+    coordinates. This is different from the `CZILoader.get_tile()` API which expects
+    global coordinates.
+
+    Tile dict format:
+        tile = {
+            'x': 0,      # Relative X - direct array column index
+            'y': 0,      # Relative Y - direct array row index
+            'w': 3000,   # Tile width
+            'h': 3000,   # Tile height
+        }
+
+    Worker tile extraction:
+        # Direct array slicing with relative coords (no conversion needed)
+        tile_img = slide_arr[tile['y']:tile['y']+tile['h'], tile['x']:tile['x']+tile['w']]
+
+    Why relative coords for workers?
+        - Shared memory contains the loaded mosaic data starting at array index (0, 0)
+        - Direct array slicing is faster than going through get_tile() conversion
+        - Tiles are created with relative coords specifically for this use case
+
+    See docs/COORDINATE_SYSTEM.md for the complete specification.
 """
 
 import os
@@ -128,6 +152,7 @@ def _gpu_worker_shm(
     hspc_max_area: Optional[int],
     variance_threshold: float,
     calibration_block_size: int,
+    cleanup_config: Optional[Dict[str, Any]] = None,
 ):
     """
     Worker process that reads tiles from shared memory.
@@ -144,7 +169,11 @@ def _gpu_worker_shm(
         hspc_max_area: Maximum HSPC area in pixels (None = no filter)
         variance_threshold: Threshold for tissue detection
         calibration_block_size: Block size for variance calculation
+        cleanup_config: Dict with cleanup options (cleanup_masks, fill_holes, pixel_size_um)
     """
+    # Default cleanup config if not provided
+    if cleanup_config is None:
+        cleanup_config = {'cleanup_masks': False, 'fill_holes': True, 'pixel_size_um': 0.1725}
     # Pin to specific GPU
     os.environ['CUDA_VISIBLE_DEVICES'] = str(gpu_id)
 
@@ -152,7 +181,7 @@ def _gpu_worker_shm(
     import sys
     sys.path.insert(0, str(Path(__file__).parent.parent.parent))
 
-    from run_unified_FAST import UnifiedSegmenter
+    from run_unified_FAST import UnifiedSegmenter, process_detection_with_cleanup
     from segmentation.detection.tissue import has_tissue
     from segmentation.processing.mk_hspc_utils import (
         ensure_rgb_array,
@@ -227,7 +256,10 @@ def _gpu_worker_shm(
 
             _, slide_arr = shared_slides[slide_name]
 
-            # Bounds checking to prevent out-of-range access
+            # Extract tile using RELATIVE coordinates (direct array indices).
+            # Unlike CZILoader.get_tile() which expects global CZI coords, shared
+            # memory workers use tile['x'], tile['y'] directly as array indices.
+            # See module docstring for coordinate system details.
             y_start = tile['y']
             x_start = tile['x']
             y_end = min(tile['y'] + tile['h'], slide_arr.shape[0])
@@ -285,25 +317,29 @@ def _gpu_worker_shm(
                     tile_normalized,
                     mk_min_area,
                     mk_max_area,
-                    hspc_max_area
+                    hspc_max_area,
+                    hspc_nuclear_only=cleanup_config.get('hspc_nuclear_only', False)
                 )
 
-                # Generate crops for each detection (same as non-SHM modes)
-                from run_unified_FAST import generate_detection_crop
+                # Generate crops for each detection (with optional cleanup, same as non-SHM modes)
                 for feat in mk_feats:
-                    det_id = int(feat['id'].split('_')[1])
-                    mask = (mk_masks == det_id)
-                    centroid = feat.get('center', [tile_normalized.shape[1]//2, tile_normalized.shape[0]//2])
-                    crop_result = generate_detection_crop(tile_normalized, mask, centroid)
+                    _, crop_result = process_detection_with_cleanup(
+                        feat, mk_masks, tile_normalized, 'mk',
+                        cleanup_masks=cleanup_config['cleanup_masks'],
+                        fill_holes=cleanup_config['fill_holes'],
+                        pixel_size_um=cleanup_config['pixel_size_um'],
+                    )
                     if crop_result:
                         feat['crop_b64'] = crop_result['crop']
                         feat['mask_b64'] = crop_result['mask']
 
                 for feat in hspc_feats:
-                    det_id = int(feat['id'].split('_')[1])
-                    mask = (hspc_masks == det_id)
-                    centroid = feat.get('center', [tile_normalized.shape[1]//2, tile_normalized.shape[0]//2])
-                    crop_result = generate_detection_crop(tile_normalized, mask, centroid)
+                    _, crop_result = process_detection_with_cleanup(
+                        feat, hspc_masks, tile_normalized, 'hspc',
+                        cleanup_masks=cleanup_config['cleanup_masks'],
+                        fill_holes=cleanup_config['fill_holes'],
+                        pixel_size_um=cleanup_config['pixel_size_um'],
+                    )
                     if crop_result:
                         feat['crop_b64'] = crop_result['crop']
                         feat['mask_b64'] = crop_result['mask']
@@ -385,6 +421,7 @@ class MultiGPUTileProcessorSHM:
         hspc_max_area: Optional[int] = None,
         variance_threshold: float = 100.0,
         calibration_block_size: int = 64,
+        cleanup_config: Optional[Dict[str, Any]] = None,
     ):
         self.num_gpus = num_gpus
         self.slide_info = slide_info
@@ -393,6 +430,7 @@ class MultiGPUTileProcessorSHM:
         self.hspc_max_area = hspc_max_area
         self.variance_threshold = variance_threshold
         self.calibration_block_size = calibration_block_size
+        self.cleanup_config = cleanup_config or {'cleanup_masks': False, 'fill_holes': True, 'pixel_size_um': 0.1725}
 
         self.segmenter_kwargs = {
             'mk_classifier_path': str(mk_classifier_path) if mk_classifier_path else None,
@@ -428,6 +466,7 @@ class MultiGPUTileProcessorSHM:
                     self.hspc_max_area,
                     self.variance_threshold,
                     self.calibration_block_size,
+                    self.cleanup_config,
                 ),
                 daemon=True
             )
