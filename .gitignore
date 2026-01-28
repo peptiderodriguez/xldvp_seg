@@ -43,6 +43,7 @@ venv/
 env/
 ENV/
 mkseg_env/
+mkseg_rocm_env/
 
 # Jupyter
 .ipynb_checkpoints/
@@ -56,6 +57,7 @@ mkseg_env/
 *~
 
 # SLURM
+logs/
 *.log
 *.err
 *.out
