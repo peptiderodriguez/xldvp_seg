@@ -405,8 +405,8 @@ def get_css():
         }
 
         .card img {
-            max-width: 100%;
-            max-height: 100%;
+            width: 100%;
+            height: 100%;
             object-fit: contain;
         }
 
@@ -1855,7 +1855,7 @@ def generate_mk_hspc_page_html(samples, cell_type, page_num, total_pages, slides
         .grid {{ display: grid; grid-template-columns: repeat(auto-fill, minmax(280px, 1fr)); gap: 10px; }}
         .card {{ background: #111; border: 1px solid #333; display: flex; flex-direction: column; }}
         .card-img-container {{ width: 100%; height: 280px; display: flex; align-items: center; justify-content: center; background: #0a0a0a; overflow: hidden; }}
-        .card img {{ max-width: 100%; max-height: 100%; object-fit: contain; }}
+        .card img {{ width: 100%; height: 100%; object-fit: contain; }}
         .card-info {{ padding: 8px; display: flex; justify-content: space-between; align-items: center; border-top: 1px solid #333; }}
         .card-id {{ font-size: 0.75em; color: #888; }}
         .card-area {{ font-size: 0.8em; }}
@@ -2408,8 +2408,8 @@ def get_vessel_css():
         }
 
         .card img {
-            max-width: 100%;
-            max-height: 100%;
+            width: 100%;
+            height: 100%;
             object-fit: contain;
         }
 

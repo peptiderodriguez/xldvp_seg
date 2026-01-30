@@ -5,7 +5,65 @@ For project overview and usage, see [CLAUDE.md](../CLAUDE.md).
 
 ---
 
-## Current State (as of Jan 28, 2026)
+## Current State (as of Jan 30, 2026)
+- **Cross-scale merging**: Now keeps finest segmentation (was: coarsest) with 90% coverage threshold
+- **1/2 scale detection**: Added finest scale, requires corroboration from coarser scales
+- **Union-Find clustering**: Groups all overlapping vessels before selecting best per cluster
+- **RAM-first pipeline**: Load ALL slides to RAM in Phase 1 for fast tissue detection
+- **RGB CZI support**: Auto-detects RGB vs grayscale CZI files, allocates correct buffer shape
+
+---
+
+## Jan 30, 2026 - Cross-Scale Vessel Merging: Keep Finest Segmentation
+
+**Problem**: Previous merge strategy kept coarsest-scale detections, losing fine vessel wall detail.
+
+**Solution**: Reverse merge logic to prefer finest segmentation that captures the full vessel.
+
+**Changes to `scripts/sam2_multiscale_vessels.py`:**
+
+1. **New constant** (line 383):
+   ```python
+   COVERAGE_THRESHOLD = 0.90  # Min coverage to consider fine-scale complete
+   ```
+
+2. **Added 1/2 scale** to SCALES config (line 398):
+   ```python
+   {'name': '1/2', 'scale_factor': 2, 'min_diam_um': 0, 'max_diam_um': 999999, 'tile_size': 2500}
+   ```
+
+3. **Rewrote `merge_vessels_across_scales()`** (lines 1632-1800):
+   - Sort vessels **finest-first** (was: coarsest-first)
+   - Union-Find clustering groups all overlapping vessels
+   - Per cluster: select finest detection with ≥90% coverage of coarsest
+   - Fallback to coarsest if no fine-scale meets threshold
+   - **1/2 scale corroboration**: Vessels at 1/2 scale only kept if overlapping with coarser scale
+
+**Scale Configuration:**
+| Scale | Scale Factor | Tile Size | Full-Res Coverage |
+|-------|--------------|-----------|-------------------|
+| 1/64  | 64           | 1000 px   | 64,000 px         |
+| 1/32  | 32           | 1200 px   | 38,400 px         |
+| 1/16  | 16           | 1400 px   | 22,400 px         |
+| 1/8   | 8            | 1700 px   | 13,600 px         |
+| 1/4   | 4            | 2000 px   | 8,000 px          |
+| 1/2   | 2            | 2500 px   | 5,000 px          |
+
+**Merge Behavior:**
+| Scenario | Result |
+|----------|--------|
+| Fine-scale covers ≥90% of coarse | Keep fine (better detail) |
+| Fine-scale incomplete (<90%) | Fallback to coarser |
+| 1/2 scale with coarser overlap | Keep if coverage ≥90% |
+| 1/2 scale alone (no overlap) | Filtered out |
+
+**Test Run (10% sample, in progress):**
+- Pre-merge vessels: 1/32=95, 1/16=165, 1/8=574, 1/4=1900, 1/2=TBD
+- Output: `/home/dude/vessel_output/sam2_multiscale/`
+
+---
+
+## Previous State (Jan 28, 2026)
 - **RAM-first pipeline**: Load ALL slides to RAM in Phase 1 for fast tissue detection
 - **RGB CZI support**: Auto-detects RGB vs grayscale CZI files, allocates correct buffer shape
 - **Mask cleanup for LMD export**: Optional hole filling and small object removal (`--cleanup-masks`)
