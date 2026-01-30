@@ -220,6 +220,7 @@ def apply_cleanup_to_detection(
     keep_largest: bool = True,
     fill_internal_holes: bool = True,
     max_hole_area_fraction: float = 0.5,
+    image: Optional[np.ndarray] = None,
 ) -> np.ndarray:
     """
     Apply cleanup to a single detection and update the label array and features.
@@ -236,6 +237,7 @@ def apply_cleanup_to_detection(
         keep_largest: If True, keep only largest connected component
         fill_internal_holes: If True, fill internal holes
         max_hole_area_fraction: Max hole size to fill as fraction of mask area
+        image: Optional RGB/grayscale image for recomputing ALL morphological features
 
     Returns:
         Cleaned mask (label_array is also updated in place)
@@ -252,13 +254,80 @@ def apply_cleanup_to_detection(
     label_array[mask] = 0  # Clear original
     label_array[cleaned_mask.astype(bool)] = det_id  # Set cleaned
 
-    # Update features
-    feat['area'] = int(cleaned_mask.sum())
-    feat['area_um2'] = feat['area'] * (pixel_size_um ** 2)
+    # Recompute ALL morphological features from cleaned mask
+    if image is not None and 'features' in feat:
+        # Import here to avoid circular dependency
+        from skimage import measure
 
-    # Recompute centroid for crop centering
-    if cleaned_mask.any():
-        ys, xs = np.where(cleaned_mask)
-        feat['center'] = [float(xs.mean()), float(ys.mean())]
+        if cleaned_mask.any():
+            # Recompute all shape and intensity features
+            area = int(cleaned_mask.sum())
+            props = measure.regionprops(cleaned_mask.astype(int))[0]
+
+            # Update area
+            feat['features']['area'] = area
+            feat['area'] = area
+            feat['area_um2'] = area * (pixel_size_um ** 2)
+
+            # Recompute centroid
+            ys, xs = np.where(cleaned_mask)
+            feat['center'] = [float(xs.mean()), float(ys.mean())]
+
+            # Recompute shape features
+            perimeter = props.perimeter if hasattr(props, 'perimeter') else 0
+            feat['features']['perimeter'] = perimeter
+            feat['features']['circularity'] = 4 * np.pi * area / (perimeter ** 2) if perimeter > 0 else 0
+            feat['features']['solidity'] = props.solidity if hasattr(props, 'solidity') else 0
+
+            # Aspect ratio / elongation
+            major_axis = props.major_axis_length if hasattr(props, 'major_axis_length') else 0
+            minor_axis = props.minor_axis_length if hasattr(props, 'minor_axis_length') else 0
+            if minor_axis > 0:
+                feat['features']['aspect_ratio'] = major_axis / minor_axis
+                feat['features']['elongation'] = 1.0 - (minor_axis / major_axis) if major_axis > 0 else 0
+
+            feat['features']['extent'] = props.extent if hasattr(props, 'extent') else 0
+            feat['features']['equiv_diameter'] = props.equivalent_diameter if hasattr(props, 'equivalent_diameter') else 0
+            feat['features']['eccentricity'] = props.eccentricity if hasattr(props, 'eccentricity') else 0
+
+            # Recompute intensity features (RGB, grayscale, HSV)
+            if image.ndim == 3:
+                masked_pixels = image[cleaned_mask]
+                feat['features']['red_mean'] = float(np.mean(masked_pixels[:, 0]))
+                feat['features']['red_std'] = float(np.std(masked_pixels[:, 0]))
+                feat['features']['green_mean'] = float(np.mean(masked_pixels[:, 1]))
+                feat['features']['green_std'] = float(np.std(masked_pixels[:, 1]))
+                feat['features']['blue_mean'] = float(np.mean(masked_pixels[:, 2]))
+                feat['features']['blue_std'] = float(np.std(masked_pixels[:, 2]))
+                gray = np.mean(masked_pixels, axis=1)
+
+                # HSV features
+                import cv2
+                hsv = cv2.cvtColor(image.astype(np.uint8), cv2.COLOR_RGB2HSV)
+                hsv_masked = hsv[cleaned_mask]
+                feat['features']['hue_mean'] = float(np.mean(hsv_masked[:, 0]))
+                feat['features']['saturation_mean'] = float(np.mean(hsv_masked[:, 1]))
+                feat['features']['value_mean'] = float(np.mean(hsv_masked[:, 2]))
+            else:
+                gray = image[cleaned_mask]
+                feat['features']['red_mean'] = feat['features']['green_mean'] = feat['features']['blue_mean'] = float(np.mean(gray))
+                feat['features']['red_std'] = feat['features']['green_std'] = feat['features']['blue_std'] = float(np.std(gray))
+
+            feat['features']['gray_mean'] = float(np.mean(gray))
+            feat['features']['gray_std'] = float(np.std(gray))
+
+            # Recompute derived features
+            feat['features']['relative_brightness'] = feat['features']['gray_mean'] - 128.0  # Assuming 0-255 scale
+            feat['features']['intensity_variance'] = feat['features']['gray_std'] ** 2
+            feat['features']['dark_region_fraction'] = float(np.sum(gray < 50) / len(gray)) if len(gray) > 0 else 0
+            feat['features']['nuclear_complexity'] = feat['features']['gray_std']  # Simplified
+    else:
+        # Fallback: just update area and center (old behavior)
+        feat['area'] = int(cleaned_mask.sum())
+        feat['area_um2'] = feat['area'] * (pixel_size_um ** 2)
+
+        if cleaned_mask.any():
+            ys, xs = np.where(cleaned_mask)
+            feat['center'] = [float(xs.mean()), float(ys.mean())]
 
     return cleaned_mask

@@ -329,9 +329,7 @@ class HTMLPageGenerator:
         .card-id {{
             font-size: 0.75em;
             color: {c['text_secondary']};
-            white-space: nowrap;
-            overflow: hidden;
-            text-overflow: ellipsis;
+            word-break: break-all;
         }}
 
         .card-stats {{
@@ -614,7 +612,7 @@ class HTMLPageGenerator:
             HTML string with navigation buttons.
         """
         nav_parts = ['<div class="nav-buttons">']
-        nav_parts.append('<a href="index.html" class="nav-btn">Home</a>')
+        nav_parts.append('<a href="../index.html" class="nav-btn">Home</a>')
 
         if page_num > 1:
             nav_parts.append(

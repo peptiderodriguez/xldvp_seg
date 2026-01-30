@@ -246,8 +246,11 @@ def process_tile_worker(args):
 
     try:
         mk_masks, hspc_masks, mk_feats, hspc_feats = segmenter.process_tile(
-            img_rgb, mk_min_area, mk_max_area, hspc_max_area,
-            hspc_nuclear_only=cleanup_config.get('hspc_nuclear_only', False)
+            img_rgb, mk_min_area, mk_max_area, hspc_min_area, hspc_max_area,
+            hspc_nuclear_only=cleanup_config.get('hspc_nuclear_only', False),
+            cleanup_masks=cleanup_config.get('cleanup_masks', False),
+            fill_holes=cleanup_config.get('fill_holes', True),
+            pixel_size_um=cleanup_config.get('pixel_size_um', 0.1725)
         )
 
         # Generate crops for each detection (for HTML export without reloading CZI)
@@ -469,13 +472,14 @@ def process_detection_with_cleanup(
     mask = (masks_array == det_id)
 
     if cleanup_masks and mask.any():
-        # Apply cleanup and update mask array + features in place
+        # Apply cleanup and update mask array + features in place (recomputes ALL features)
         mask = apply_cleanup_to_detection(
             mask, feat, masks_array, det_id,
             pixel_size_um=pixel_size_um,
             keep_largest=True,
             fill_internal_holes=fill_holes,
             max_hole_area_fraction=0.5,
+            image=img_rgb,  # Pass image to recompute ALL morphological features
         )
 
     # Get centroid (may have been updated by cleanup)
@@ -756,9 +760,13 @@ class UnifiedSegmenter:
         image_rgb,
         mk_min_area=1000,
         mk_max_area=100000,
+        hspc_min_area=None,
         hspc_max_area=None,
         resnet_batch_size=16,
-        hspc_nuclear_only=False
+        hspc_nuclear_only=False,
+        cleanup_masks=False,
+        fill_holes=True,
+        pixel_size_um=0.1725
     ):
         """Process a single tile for both MKs and HSPCs.
 
@@ -768,10 +776,14 @@ class UnifiedSegmenter:
             image_rgb: RGB image array
             mk_min_area: Minimum MK area in pixels
             mk_max_area: Maximum MK area in pixels
+            hspc_min_area: Minimum HSPC area in pixels (None = no filter)
             hspc_max_area: Maximum HSPC area in pixels (None = no filter)
             resnet_batch_size: Batch size for ResNet feature extraction (default 16)
             hspc_nuclear_only: If True, use H&E deconvolution to extract hematoxylin
                               (nuclear) channel for HSPC detection (reduces false positives)
+            cleanup_masks: If True, apply mask cleanup (largest component + fill holes) BEFORE feature extraction
+            fill_holes: If True, fill internal holes during cleanup
+            pixel_size_um: Pixel size for area calculations
 
         Returns:
             mk_masks: Label array for MKs
@@ -849,7 +861,19 @@ class UnifiedSegmenter:
                 mask = det['mask']
                 cy, cx = det['cy'], det['cx']
 
-                # Extract morphological features
+                # Apply mask cleanup BEFORE feature extraction (if enabled)
+                if cleanup_masks:
+                    mask = cleanup_mask(mask, keep_largest=True, fill_internal_holes=fill_holes, max_hole_area_fraction=0.5)
+                    # Update mask in detection dict and label array
+                    det['mask'] = mask
+                    mk_masks[mk_masks == det['id']] = 0  # Clear old
+                    mk_masks[mask] = det['id']  # Set cleaned
+                    # Recompute centroid
+                    if mask.any():
+                        cy, cx = ndimage.center_of_mass(mask)
+                        det['cy'], det['cx'] = cy, cx
+
+                # Extract morphological features (from cleaned mask if cleanup enabled)
                 morph = extract_morphological_features(mask, image_rgb)
 
                 # SAM2 embeddings
@@ -889,6 +913,8 @@ class UnifiedSegmenter:
             for det in mk_valid_detections:
                 mk_features.append({
                     'id': f'det_{det["id"]}',
+                    'global_id': None,  # Will be set in save_tile_results
+                    'uid': None,  # Will be set in save_tile_results
                     'center': [float(det['cx']), float(det['cy'])],
                     'sam2_iou': det['sam2_iou'],
                     'sam2_stability': det['sam2_stability'],
@@ -917,8 +943,9 @@ class UnifiedSegmenter:
             cellpose_input = image_rgb
             cellpose_channels = [0, 0]
 
-        # Cellpose with grayscale mode, let cpsam auto-detect size
-        cellpose_masks, _, _ = self.cellpose.eval(cellpose_input, channels=cellpose_channels)
+        # Cellpose with grayscale mode, fixed diameter=30 for small HSPCs
+        # diameter=30 targets small cells (~20-50 µm²), prevents auto-detection of large merged regions
+        cellpose_masks, _, _ = self.cellpose.eval(cellpose_input, channels=cellpose_channels, diameter=30)
 
         # Get Cellpose centroids and limit to top 500 by mask area
         cellpose_ids = np.unique(cellpose_masks)
@@ -976,10 +1003,11 @@ class UnifiedSegmenter:
             cx, cy = cand['center']
 
             # HSPC size filter (if enabled)
-            if hspc_max_area is not None:
-                mask_area = sam2_mask.sum()
-                if mask_area > hspc_max_area:
-                    continue
+            mask_area = sam2_mask.sum()
+            if hspc_min_area is not None and mask_area < hspc_min_area:
+                continue
+            if hspc_max_area is not None and mask_area > hspc_max_area:
+                continue
 
             # Check overlap with existing HSPC masks - skip if >50% overlaps
             if hspc_masks.max() > 0:
@@ -1016,7 +1044,19 @@ class UnifiedSegmenter:
                 mask = det['mask']
                 cy, cx = det['cy'], det['cx']
 
-                # Extract morphological features
+                # Apply mask cleanup BEFORE feature extraction (if enabled)
+                if cleanup_masks:
+                    mask = cleanup_mask(mask, keep_largest=True, fill_internal_holes=fill_holes, max_hole_area_fraction=0.5)
+                    # Update mask in detection dict and label array
+                    det['mask'] = mask
+                    hspc_masks[hspc_masks == det['id']] = 0  # Clear old
+                    hspc_masks[mask] = det['id']  # Set cleaned
+                    # Recompute centroid for SAM2 embedding extraction
+                    if mask.any():
+                        cy, cx = ndimage.center_of_mass(mask)
+                        det['cy'], det['cx'] = cy, cx
+
+                # Extract morphological features (from cleaned mask if cleanup enabled)
                 morph = extract_morphological_features(mask, image_rgb)
 
                 # SAM2 embeddings
@@ -1056,6 +1096,8 @@ class UnifiedSegmenter:
             for det in hspc_valid_detections:
                 hspc_features.append({
                     'id': f'det_{det["id"]}',
+                    'global_id': None,  # Will be set in save_tile_results
+                    'uid': None,  # Will be set in save_tile_results
                     'center': [float(det['cx']), float(det['cy'])],
                     'cellpose_id': det['cp_id'],
                     'sam2_score': det['sam2_score'],
@@ -1135,6 +1177,7 @@ def run_unified_segmentation(
     output_dir,
     mk_min_area=1000,
     mk_max_area=100000,
+    hspc_min_area=None,
     hspc_max_area=None,
     tile_size=4096,
     overlap=512,
@@ -2243,6 +2286,7 @@ def run_multi_slide_segmentation(
     output_base,
     mk_min_area=1000,
     mk_max_area=100000,
+    hspc_min_area=None,
     hspc_max_area=None,
     tile_size=4096,
     overlap=512,
@@ -2448,6 +2492,8 @@ def run_multi_slide_segmentation(
                                 for feat in result['mk_feats']:
                                     feat['center'][0] += tile['x']
                                     feat['center'][1] += tile['y']
+                                    # Generate spatial UID: {slide}_{celltype}_{round(x)}_{round(y)}
+                                    feat['uid'] = f"{slide_name}_mk_{round(feat['center'][0])}_{round(feat['center'][1])}"
                                     sr['mk_count'] += 1
                                 with open(mk_dir / "features.json", 'w') as f:
                                     json.dump([{'id': m['id'], 'global_id': m.get('global_id'), 'uid': m.get('uid'), 'center': m['center'], 'features': m['features'], 'crop_b64': m.get('crop_b64'), 'mask_b64': m.get('mask_b64')} for m in result['mk_feats']], f)
@@ -2460,6 +2506,8 @@ def run_multi_slide_segmentation(
                                 for feat in result['hspc_feats']:
                                     feat['center'][0] += tile['x']
                                     feat['center'][1] += tile['y']
+                                    # Generate spatial UID: {slide}_{celltype}_{round(x)}_{round(y)}
+                                    feat['uid'] = f"{slide_name}_hspc_{round(feat['center'][0])}_{round(feat['center'][1])}"
                                     sr['hspc_count'] += 1
                                 with open(hspc_dir / "features.json", 'w') as f:
                                     json.dump([{'id': h['id'], 'global_id': h.get('global_id'), 'uid': h.get('uid'), 'center': h['center'], 'features': h['features'], 'crop_b64': h.get('crop_b64'), 'mask_b64': h.get('mask_b64')} for h in result['hspc_feats']], f)
@@ -2550,7 +2598,7 @@ def process_tile_worker_with_data_and_slide(args):
     """
     Worker function for unified sampling mode - includes slide_name in result.
     """
-    tile, img_data, output_dir, mk_min_area, mk_max_area, hspc_max_area, variance_threshold, calibration_block_size, slide_name = args
+    tile, img_data, output_dir, mk_min_area, mk_max_area, hspc_min_area, hspc_max_area, variance_threshold, calibration_block_size, slide_name = args
 
     global segmenter
     tid = tile['id']
@@ -2574,8 +2622,11 @@ def process_tile_worker_with_data_and_slide(args):
 
     try:
         mk_masks, hspc_masks, mk_feats, hspc_feats = segmenter.process_tile(
-            img_rgb, mk_min_area, mk_max_area, hspc_max_area,
-            hspc_nuclear_only=cleanup_config.get('hspc_nuclear_only', False)
+            img_rgb, mk_min_area, mk_max_area, hspc_min_area, hspc_max_area,
+            hspc_nuclear_only=cleanup_config.get('hspc_nuclear_only', False),
+            cleanup_masks=cleanup_config.get('cleanup_masks', False),
+            fill_holes=cleanup_config.get('fill_holes', True),
+            pixel_size_um=cleanup_config.get('pixel_size_um', 0.1725)
         )
 
         # Generate crops for each detection (with optional cleanup)
@@ -2629,8 +2680,11 @@ def process_tile_gpu_only(args):
 
     try:
         mk_masks, hspc_masks, mk_feats, hspc_feats = segmenter.process_tile(
-            img_rgb, mk_min_area, mk_max_area, hspc_max_area,
-            hspc_nuclear_only=cleanup_config.get('hspc_nuclear_only', False)
+            img_rgb, mk_min_area, mk_max_area, hspc_min_area, hspc_max_area,
+            hspc_nuclear_only=cleanup_config.get('hspc_nuclear_only', False),
+            cleanup_masks=cleanup_config.get('cleanup_masks', False),
+            fill_holes=cleanup_config.get('fill_holes', True),
+            pixel_size_um=cleanup_config.get('pixel_size_um', 0.1725)
         )
 
         # Generate crops for each detection (with optional cleanup)
@@ -3010,7 +3064,7 @@ def process_tile_worker_with_data(args):
     Worker function that receives tile image data directly (for multi-slide mode).
     Models are already loaded in the worker via init_worker.
     """
-    tile, img_data, output_dir, mk_min_area, mk_max_area, hspc_max_area, variance_threshold, calibration_block_size = args
+    tile, img_data, output_dir, mk_min_area, mk_max_area, hspc_min_area, hspc_max_area, variance_threshold, calibration_block_size = args
 
     global segmenter
     tid = tile['id']
@@ -3037,8 +3091,11 @@ def process_tile_worker_with_data(args):
 
     try:
         mk_masks, hspc_masks, mk_feats, hspc_feats = segmenter.process_tile(
-            img_rgb, mk_min_area, mk_max_area, hspc_max_area,
-            hspc_nuclear_only=cleanup_config.get('hspc_nuclear_only', False)
+            img_rgb, mk_min_area, mk_max_area, hspc_min_area, hspc_max_area,
+            hspc_nuclear_only=cleanup_config.get('hspc_nuclear_only', False),
+            cleanup_masks=cleanup_config.get('cleanup_masks', False),
+            fill_holes=cleanup_config.get('fill_holes', True),
+            pixel_size_um=cleanup_config.get('pixel_size_um', 0.1725)
         )
 
         # Generate crops for each detection (with optional cleanup)
@@ -3086,6 +3143,8 @@ def main():
                         help='Minimum MK area in µm² (only applies to MKs)')
     parser.add_argument('--mk-max-area-um', type=float, default=2000,
                         help='Maximum MK area in µm² (only applies to MKs)')
+    parser.add_argument('--hspc-min-area-um', type=float, default=0,
+                        help='Minimum HSPC area in µm² (default 0 = no minimum, recommended 20)')
     parser.add_argument('--hspc-max-area-um', type=float, default=500,
                         help='Maximum HSPC area in µm² (default 500, use 0 to disable)')
     parser.add_argument('--hspc-nuclear-only', action='store_true',
@@ -3139,11 +3198,16 @@ def main():
     um_to_px_factor = PIXEL_SIZE_UM ** 2  # 0.02975625
     mk_min_area_px = int(args.mk_min_area_um / um_to_px_factor)
     mk_max_area_px = int(args.mk_max_area_um / um_to_px_factor)
+    hspc_min_area_px = int(args.hspc_min_area_um / um_to_px_factor) if args.hspc_min_area_um > 0 else None
     hspc_max_area_px = int(args.hspc_max_area_um / um_to_px_factor) if args.hspc_max_area_um > 0 else None
 
     logger.info(f"MK area filter: {args.mk_min_area_um}-{args.mk_max_area_um} µm² = {mk_min_area_px}-{mk_max_area_px} px²")
-    if hspc_max_area_px:
-        logger.info(f"HSPC area filter: <{args.hspc_max_area_um} µm² = <{hspc_max_area_px} px²")
+    if hspc_min_area_px or hspc_max_area_px:
+        min_str = f"{args.hspc_min_area_um}" if hspc_min_area_px else "0"
+        max_str = f"{args.hspc_max_area_um}" if hspc_max_area_px else "∞"
+        min_px_str = f"{hspc_min_area_px}" if hspc_min_area_px else "0"
+        max_px_str = f"{hspc_max_area_px}" if hspc_max_area_px else "∞"
+        logger.info(f"HSPC area filter: {min_str}-{max_str} µm² = {min_px_str}-{max_px_str} px²")
     else:
         logger.info("HSPC area filter: disabled")
 
@@ -3171,7 +3235,7 @@ def main():
         # Single slide - use output_dir directly
         run_unified_segmentation(
             czi_paths[0], args.output_dir,
-            mk_min_area_px, mk_max_area_px, hspc_max_area_px,
+            mk_min_area_px, mk_max_area_px, hspc_min_area_px, hspc_max_area_px,
             args.tile_size, args.overlap, args.sample_fraction,
             calibration_block_size=args.calibration_block_size,
             calibration_samples=args.calibration_samples,
@@ -3183,7 +3247,7 @@ def main():
         # Multiple slides - load models once, process all slides
         run_multi_slide_segmentation(
             czi_paths, args.output_dir,
-            mk_min_area_px, mk_max_area_px, hspc_max_area_px,
+            mk_min_area_px, mk_max_area_px, hspc_min_area_px, hspc_max_area_px,
             args.tile_size, args.overlap, args.sample_fraction,
             calibration_block_size=args.calibration_block_size,
             calibration_samples=args.calibration_samples,

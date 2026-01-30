@@ -95,9 +95,9 @@ for BATCH in $(seq 0 7); do
         --num-gpus 2 \
         --mk-min-area-um 200 \
         --mk-max-area-um 2000 \
-        --hspc-max-area-um 500 \
-        --cleanup-masks \
-        --hspc-nuclear-only; then
+        --hspc-min-area-um 25 \
+        --hspc-max-area-um 150 \
+        --cleanup-masks; then
 
         echo ""
         echo "✓ BATCH $((BATCH+1)) completed successfully at $(date)"
@@ -135,6 +135,60 @@ echo "============================================================"
 if [ ${#FAILED_BATCHES[@]} -eq 0 ]; then
     echo "✓ All 8 batches completed successfully"
     echo "✓ All 16 slides processed"
+
+    echo ""
+    echo "============================================================"
+    echo "GENERATING HTML VIEWERS"
+    echo "============================================================"
+
+    # Generate HTML for MK
+    echo ""
+    echo "Generating MK HTML viewer..."
+    if python generate_html_from_features.py \
+        --output-dir "$OUTPUT_DIR" \
+        --cell-type mk \
+        --sort-by area \
+        --sort-order desc \
+        --samples-per-page 300 \
+        --experiment-name mi300a_10pct_all16_fixed; then
+        echo "✓ MK HTML generated successfully"
+        MK_HTML="$OUTPUT_DIR/html_combined/mk/index.html"
+        echo "  View at: $MK_HTML"
+    else
+        echo "✗ MK HTML generation failed"
+    fi
+
+    # Generate HTML for HSPC
+    echo ""
+    echo "Generating HSPC HTML viewer..."
+    if python generate_html_from_features.py \
+        --output-dir "$OUTPUT_DIR" \
+        --cell-type hspc \
+        --sort-by area \
+        --sort-order desc \
+        --samples-per-page 300 \
+        --experiment-name mi300a_10pct_all16_fixed; then
+        echo "✓ HSPC HTML generated successfully"
+        HSPC_HTML="$OUTPUT_DIR/html_combined/hspc/index.html"
+        echo "  View at: $HSPC_HTML"
+    else
+        echo "✗ HSPC HTML generation failed"
+    fi
+
+    # Generate combined index page
+    echo ""
+    echo "Generating combined index page..."
+    if python create_combined_index.py "$OUTPUT_DIR"; then
+        echo "✓ Combined index page generated"
+        echo "  View at: $OUTPUT_DIR/html_combined/index.html"
+    else
+        echo "✗ Combined index generation failed"
+    fi
+
+    echo ""
+    echo "============================================================"
+    echo "COMPLETE - All processing and HTML generation finished"
+    echo "============================================================"
 else
     echo "✗ ${#FAILED_BATCHES[@]} batch(es) failed: ${FAILED_BATCHES[@]}"
     echo "Failed slide pairs:"
