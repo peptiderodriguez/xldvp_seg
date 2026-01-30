@@ -246,6 +246,200 @@ def assign_wells_96(n_clusters):
     return wells
 
 
+# Direction vectors for control placement (8 cardinal directions)
+CONTROL_DIRECTIONS = {
+    'E':  np.array([1, 0]),
+    'NE': np.array([1, -1]) / np.sqrt(2),
+    'N':  np.array([0, -1]),
+    'NW': np.array([-1, -1]) / np.sqrt(2),
+    'W':  np.array([-1, 0]),
+    'SW': np.array([-1, 1]) / np.sqrt(2),
+    'S':  np.array([0, 1]),
+    'SE': np.array([1, 1]) / np.sqrt(2),
+}
+
+
+def check_polygon_overlap(contour1, contour2):
+    """Check if two polygons intersect using Shapely."""
+    # Validate inputs
+    if contour1 is None or contour2 is None:
+        return True  # Conservative - assume overlap
+    contour1 = np.asarray(contour1)
+    contour2 = np.asarray(contour2)
+    if len(contour1) < 3 or len(contour2) < 3:
+        return True  # Not valid polygons, assume overlap
+
+    try:
+        from shapely.geometry import Polygon
+        from shapely.validation import make_valid
+    except ImportError:
+        # Fallback to simple bounding box check
+        bb1 = (contour1[:, 0].min(), contour1[:, 1].min(),
+               contour1[:, 0].max(), contour1[:, 1].max())
+        bb2 = (contour2[:, 0].min(), contour2[:, 1].min(),
+               contour2[:, 0].max(), contour2[:, 1].max())
+        return not (bb1[2] < bb2[0] or bb1[0] > bb2[2] or
+                    bb1[3] < bb2[1] or bb1[1] > bb2[3])
+
+    try:
+        poly1 = Polygon(contour1)
+        poly2 = Polygon(contour2)
+        if not poly1.is_valid:
+            poly1 = make_valid(poly1)
+        if not poly2.is_valid:
+            poly2 = make_valid(poly2)
+        return poly1.intersects(poly2)
+    except Exception:
+        return True  # Assume overlap on error (conservative)
+
+
+def generate_spatial_control(detection, all_detections, offset_um=150.0,
+                            pixel_size=0.1725, image_bounds=None):
+    """
+    Generate a control region by shifting the NMJ contour.
+
+    Tries 8 directions: E, NE, N, NW, W, SW, S, SE
+    Returns control dict or None if all directions overlap.
+    """
+    # Get the contour
+    if 'outer_contour_global' in detection:
+        contour = np.array(detection['outer_contour_global'])
+    elif 'outer_contour' in detection:
+        tile_origin = detection.get('tile_origin', [0, 0])
+        contour = np.array(detection['outer_contour'])
+        if len(contour.shape) == 3:
+            contour = contour.reshape(-1, 2)
+        contour = contour + np.array(tile_origin)
+    else:
+        return None
+
+    if len(contour) < 3:
+        return None
+
+    # Convert offset to pixels
+    offset_px = offset_um / pixel_size
+
+    # Get all NMJ contours for collision detection (excluding source)
+    source_uid = detection.get('uid', detection.get('id', ''))
+    all_contours = []
+    for det in all_detections:
+        det_uid = det.get('uid', det.get('id', ''))
+        if det_uid == source_uid:
+            continue  # Skip self
+        if 'outer_contour_global' in det:
+            all_contours.append(np.array(det['outer_contour_global']))
+        elif 'outer_contour' in det:
+            tile_origin = det.get('tile_origin', [0, 0])
+            c = np.array(det['outer_contour'])
+            if len(c.shape) == 3:
+                c = c.reshape(-1, 2)
+            all_contours.append(c + np.array(tile_origin))
+
+    # Try each direction
+    for direction_name, direction_vec in CONTROL_DIRECTIONS.items():
+        offset_vec = direction_vec * offset_px
+        shifted_contour = contour + offset_vec
+
+        # Check image bounds
+        if image_bounds is not None:
+            x_min, y_min, x_max, y_max = image_bounds
+            if (shifted_contour[:, 0].min() < x_min or
+                shifted_contour[:, 0].max() > x_max or
+                shifted_contour[:, 1].min() < y_min or
+                shifted_contour[:, 1].max() > y_max):
+                continue
+
+        # Check overlap with all NMJ contours
+        has_overlap = False
+        for nmj_contour in all_contours:
+            if check_polygon_overlap(shifted_contour, nmj_contour):
+                has_overlap = True
+                break
+
+        if not has_overlap:
+            # Found a clear direction
+            center = detection.get('global_center', contour.mean(axis=0).tolist())
+            shifted_center = [center[0] + offset_vec[0], center[1] + offset_vec[1]]
+
+            return {
+                'uid': detection.get('uid', detection.get('id', '')) + '_ctrl',
+                'control_of': detection.get('uid', detection.get('id', '')),
+                'global_center': shifted_center,
+                'outer_contour_global': shifted_contour.tolist(),
+                'offset_direction': direction_name,
+                'offset_um': offset_um,
+                'is_control': True,
+                'area_um2': detection.get('area_um2', 0),
+            }
+
+    # All directions overlap - return None
+    return None
+
+
+def generate_wells_serpentine_4_quadrants(n_wells):
+    """
+    Generate wells in serpentine order across 4 quadrants.
+    Excludes outer wells (row A/P, col 1/24).
+
+    Serpentine pattern traverses ROWS continuously, minimizing travel between quadrants:
+      B2 quadrant (top to bottom):
+        B2 -> B4 -> ... -> B22  (right)
+        D22 -> D20 -> ... -> D2  (left)
+        ...
+        N2 -> N4 -> ... -> N22  (right, ends at N22)
+
+      C2 quadrant (bottom to top, starting nearest to N22):
+        O22 -> O20 -> ... -> O2  (left, O22 is next to N22)
+        M2 -> M4 -> ... -> M22  (right)
+        ...
+        C22 -> C20 -> ... -> C2  (left, ends at C2)
+
+      B3 quadrant (top to bottom, starting nearest to C2):
+        B3 -> B5 -> ... -> B23  (right, B3 is near C2)
+        etc.
+
+    Returns list of well names in serpentine order.
+    """
+    if n_wells <= 0:
+        return []
+
+    wells = []
+    going_right = True  # Track serpentine direction
+    rows_top_to_bottom = True  # Track row order direction
+
+    # Define the 4 quadrants with their row sets and columns
+    quadrants = [
+        (['B', 'D', 'F', 'H', 'J', 'L', 'N'], list(range(2, 23, 2))),   # B2 quadrant
+        (['C', 'E', 'G', 'I', 'K', 'M', 'O'], list(range(2, 23, 2))),   # C2 quadrant
+        (['B', 'D', 'F', 'H', 'J', 'L', 'N'], list(range(3, 24, 2))),   # B3 quadrant
+        (['C', 'E', 'G', 'I', 'K', 'M', 'O'], list(range(3, 24, 2))),   # C3 quadrant
+    ]
+
+    for q_idx, (rows, cols) in enumerate(quadrants):
+        # Determine row order based on where we ended in previous quadrant
+        # After B2 (ends at N), C2 should start at O (reversed rows)
+        # After C2 (ends at C), B3 should start at B (normal rows)
+        if q_idx == 0:
+            row_order = rows  # B2: start at B, go to N
+        elif q_idx == 1:
+            row_order = rows[::-1]  # C2: start at O (near N), go to C
+        elif q_idx == 2:
+            row_order = rows  # B3: start at B (near C), go to N
+        else:
+            row_order = rows[::-1]  # C3: start at O (near N), go to C
+
+        for row in row_order:
+            row_cols = cols if going_right else cols[::-1]
+            for col in row_cols:
+                wells.append(f"{row}{col}")
+                if len(wells) >= n_wells:
+                    return wells
+            # Flip direction for next row
+            going_right = not going_right
+
+    return wells
+
+
 def generate_cross_placement_html(detections, output_dir, pixel_size_um,
                                   image_width_px, image_height_px,
                                   thumbnail_path=None):
@@ -624,8 +818,11 @@ def export_to_lmd(detections, crosses_data, output_path, flip_y=True,
             name=f"RefCross_{c['id']}"
         ))
 
-    # Cluster detections if requested
-    if cluster_size and cluster_size > 0:
+    # Check if wells are pre-assigned (e.g., from control generation)
+    has_preassigned_wells = any('_well' in det for det in detections)
+
+    # Cluster detections if requested (and no pre-assigned wells)
+    if cluster_size and cluster_size > 0 and not has_preassigned_wells:
         print(f"  Clustering detections spatially (target {cluster_size} per cluster, method={clustering_method})...")
         clusters = cluster_detections_spatially(detections, target_cluster_size=cluster_size, method=clustering_method)
 
@@ -645,6 +842,11 @@ def export_to_lmd(detections, crosses_data, output_path, flip_y=True,
             for det_idx in cluster:
                 det_to_well[det_idx] = well
                 det_to_cluster[det_idx] = cluster_idx
+    elif has_preassigned_wells:
+        # Use pre-assigned wells from _well attribute
+        det_to_well = {i: det.get('_well', 'A1') for i, det in enumerate(detections)}
+        det_to_cluster = {i: 0 for i in range(len(detections))}
+        clusters = None
     else:
         # All detections go to A1
         det_to_well = {i: "A1" for i in range(len(detections))}
@@ -701,10 +903,10 @@ def export_to_lmd(detections, crosses_data, output_path, flip_y=True,
     # Also save metadata CSV with cluster and well assignments
     csv_path = output_path.with_suffix('.csv')
     with open(csv_path, 'w') as f:
-        f.write('name,type,x_um,y_um,well,cluster\n')
+        f.write('name,type,x_um,y_um,well,cluster,is_control,control_of\n')
         for c in crosses:
             y_um = c['y_um'] if not flip_y else image_height_um - c['y_um']
-            f.write(f"RefCross_{c['id']},calibration,{c['x_um']:.2f},{y_um:.2f},CAL,\n")
+            f.write(f"RefCross_{c['id']},calibration,{c['x_um']:.2f},{y_um:.2f},CAL,,,\n")
         for i, det in enumerate(detections):
             name = det.get('uid', det.get('id', ''))
             if 'global_center_um' in det:
@@ -721,7 +923,10 @@ def export_to_lmd(detections, crosses_data, output_path, flip_y=True,
                 y = image_height_um - y
             well = det_to_well.get(i, 'A1')
             cluster_idx = det_to_cluster.get(i, 0)
-            f.write(f"{name},shape,{x:.2f},{y:.2f},{well},{cluster_idx}\n")
+            is_control = det.get('is_control', False)
+            control_of = det.get('control_of', '')
+            shape_type = 'control' if is_control else 'shape'
+            f.write(f"{name},{shape_type},{x:.2f},{y:.2f},{well},{cluster_idx},{is_control},{control_of}\n")
 
     print(f"Saved coordinate metadata to: {csv_path}")
 
@@ -821,6 +1026,12 @@ Examples:
                         choices=['greedy', 'kmeans', 'dbscan'],
                         help='Spatial clustering method (default: greedy)')
 
+    # Spatial controls
+    parser.add_argument('--generate-controls', action='store_true',
+                        help='Generate spatial control regions for each target')
+    parser.add_argument('--control-offset-um', type=float, default=150.0,
+                        help='Offset distance for controls in micrometers (default: 150)')
+
     # Options
     parser.add_argument('--no-flip-y', action='store_true',
                         help='Do not flip Y axis for stage coordinates')
@@ -905,14 +1116,113 @@ Examples:
         if args.image_height:
             crosses_data['image_height_px'] = args.image_height
 
+        # Generate spatial controls if requested
+        controls = []
+        pairs = []
+        if args.generate_controls:
+            print(f"Generating spatial controls (offset: {args.control_offset_um} um)...")
+
+            # Get image bounds for boundary checking
+            img_w = crosses_data.get('image_width_px', image_width)
+            img_h = crosses_data.get('image_height_px', image_height)
+            image_bounds = (0, 0, img_w, img_h)
+            ctrl_pixel_size = crosses_data.get('pixel_size_um', pixel_size)
+
+            for det in detections:
+                control = generate_spatial_control(
+                    det, detections,
+                    offset_um=args.control_offset_um,
+                    pixel_size=ctrl_pixel_size,
+                    image_bounds=image_bounds
+                )
+                if control:
+                    controls.append(control)
+                    pairs.append({
+                        'nmj_uid': det.get('uid', det.get('id', '')),
+                        'control_uid': control['uid'],
+                        'offset_direction': control['offset_direction'],
+                        'offset_um': control['offset_um']
+                    })
+                else:
+                    print(f"  Warning: Could not generate control for {det.get('uid', 'unknown')} - all directions overlap")
+
+            print(f"  Generated {len(controls)} controls for {len(detections)} NMJs")
+
+        # Handle export with or without controls
         output_path = output_dir / f"{args.output_name}.xml"
-        export_to_lmd(
-            detections, crosses_data, output_path,
-            flip_y=not args.no_flip_y,
-            cluster_size=args.cluster_size,
-            plate_format=args.plate_format,
-            clustering_method=args.clustering_method
-        )
+
+        if args.generate_controls and controls:
+            # Build UID-to-control mapping for correct pairing
+            control_by_uid = {ctrl['control_of']: ctrl for ctrl in controls}
+
+            # Interleave NMJs with their matched controls
+            all_shapes = []
+            valid_pairs = []
+            for det in detections:
+                det_uid = det.get('uid', det.get('id', ''))
+                all_shapes.append(det)
+                ctrl = control_by_uid.get(det_uid)
+                if ctrl:
+                    all_shapes.append(ctrl)
+                    valid_pairs.append({
+                        'nmj_uid': det_uid,
+                        'control_uid': ctrl['uid'],
+                        'offset_direction': ctrl['offset_direction'],
+                        'offset_um': ctrl['offset_um']
+                    })
+                # No else needed - detection without control just doesn't get paired
+
+            # Assign wells using serpentine quadrant layout
+            n_total = len(all_shapes)
+            wells = generate_wells_serpentine_4_quadrants(n_total) if n_total > 0 else []
+
+            # Assign wells to shapes
+            for i, shape in enumerate(all_shapes):
+                shape['_well'] = wells[i] if i < len(wells) else (wells[-1] if wells else 'A1')
+
+            # Update pairs with well assignments by finding actual indices
+            shape_idx = 0
+            for det in detections:
+                det_uid = det.get('uid', det.get('id', ''))
+                ctrl = control_by_uid.get(det_uid)
+                if ctrl:
+                    # Find matching pair and update wells
+                    for pair in valid_pairs:
+                        if pair['nmj_uid'] == det_uid:
+                            pair['nmj_well'] = wells[shape_idx] if shape_idx < len(wells) else 'A1'
+                            pair['control_well'] = wells[shape_idx + 1] if shape_idx + 1 < len(wells) else 'A1'
+                            break
+                    shape_idx += 2  # NMJ + control
+                else:
+                    shape_idx += 1  # Only NMJ
+
+            # Save pairing info
+            pairing_path = output_dir / 'nmj_control_pairs.json'
+            with open(pairing_path, 'w') as f:
+                json.dump({
+                    'n_pairs': len(valid_pairs),
+                    'n_detections_without_controls': len(detections) - len(controls),
+                    'offset_um': args.control_offset_um,
+                    'pairs': valid_pairs
+                }, f, indent=2)
+            print(f"Saved NMJ-control pairing to: {pairing_path}")
+
+            # Use all_shapes for export
+            export_to_lmd(
+                all_shapes, crosses_data, output_path,
+                flip_y=not args.no_flip_y,
+                cluster_size=None,  # Disable clustering - using serpentine well assignment
+                plate_format=args.plate_format,
+                clustering_method=args.clustering_method
+            )
+        else:
+            export_to_lmd(
+                detections, crosses_data, output_path,
+                flip_y=not args.no_flip_y,
+                cluster_size=args.cluster_size,
+                plate_format=args.plate_format,
+                clustering_method=args.clustering_method
+            )
 
     if not args.generate_cross_html and not args.export:
         print("No action specified. Use --generate-cross-html or --export")

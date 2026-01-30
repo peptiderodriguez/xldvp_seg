@@ -382,3 +382,32 @@ python run_lmd_export.py \
     --output-dir lmd_export \
     --export
 ```
+
+### Spatial Controls for LMD Export
+
+Generate paired control regions for each NMJ target (offset 150 µm, same shape):
+
+**Key functions in `run_lmd_export.py`:**
+- `generate_spatial_control()` - Shifts NMJ contour by offset, tries 8 directions to avoid collisions
+- `generate_wells_serpentine_4_quadrants()` - 384-well serpentine order across 4 quadrants (B2, C2, B3, C3)
+- `check_polygon_overlap()` - Shapely-based collision detection
+
+**Well assignment pattern:**
+- Alternating: NMJ → Control → NMJ → Control
+- Singles processed first, then clusters
+- Within each group: nearest-neighbor ordering to minimize slide movement
+- Cluster transition starts from nearest cluster to last single's control
+
+**Output files:**
+- `lmd_export_with_controls.json` - All shapes with well assignments
+- `shapes_with_controls.xml` - LMD XML for Leica microscope
+
+**Napari visualization:**
+```bash
+# View export overlaid on OME-Zarr pyramid
+python napari_view_export.py --zarr slide.zarr --export lmd_export_with_controls.json
+```
+- Green: Singles (NMJs)
+- Cyan: Single controls
+- Red: Clusters (NMJs)
+- Orange: Cluster controls
