@@ -13,7 +13,7 @@ from segmentation.utils.logging import setup_logging, get_logger
 setup_logging()
 logger = get_logger(__name__)
 
-def sample_pixels_from_slide(czi_path, channel=0, n_samples=50000):
+def sample_pixels_from_slide(czi_path, channel=0, n_samples=500000):
     """Sample random pixels from a slide."""
     logger.info(f"Sampling from {czi_path.name}...")
 
@@ -35,24 +35,28 @@ def sample_pixels_from_slide(czi_path, channel=0, n_samples=50000):
 
         logger.info(f"  Shape: {channel_data.shape}, RGB: {is_rgb}")
 
-        # Sample random pixels
+        # Sample random pixels efficiently (without flattening)
         n_pixels = h * w
         n_sample = min(n_samples, n_pixels)
 
-        indices = np.random.choice(n_pixels, n_sample, replace=False)
+        # Generate random 2D coordinates directly (with replacement)
+        # For 500k samples from billions of pixels, duplicates are negligible (~0.016%)
+        # This is MUCH faster than np.random.choice with replace=False on billions of elements
+        row_indices = np.random.randint(0, h, size=n_sample)
+        col_indices = np.random.randint(0, w, size=n_sample)
 
+        # Index directly into the array (much faster than flattening entire array)
         if is_rgb:
-            flat = channel_data.reshape(-1, 3)
-            samples = flat[indices].copy()  # Copy to avoid reference to large array
+            samples = channel_data[row_indices, col_indices, :].copy()  # Shape: (n_sample, 3)
         else:
-            flat = channel_data.reshape(-1)
-            samples = flat[indices].copy()
+            samples = channel_data[row_indices, col_indices].copy()  # Shape: (n_sample,)
 
         mean_intensity = samples.mean()
         logger.info(f"  Mean intensity: {mean_intensity:.1f}")
 
         # CRITICAL: Free memory immediately after sampling
-        del loader, channel_data, flat
+        loader.close()  # Release all loader resources including internal data cache
+        del loader, channel_data, row_indices, col_indices
         import gc
         gc.collect()
 
@@ -94,9 +98,13 @@ def main():
     all_samples = []
 
     for czi_path in slides:
-        samples = sample_pixels_from_slide(czi_path, channel=0, n_samples=50000)
+        samples = sample_pixels_from_slide(czi_path, channel=0, n_samples=500000)
         if samples is not None:
             all_samples.append(samples)
+
+        # Force garbage collection after each slide to prevent memory accumulation
+        import gc
+        gc.collect()
 
     if len(all_samples) == 0:
         logger.error("No samples collected!")

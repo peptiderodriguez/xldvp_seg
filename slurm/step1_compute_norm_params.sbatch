@@ -6,7 +6,7 @@
 #SBATCH --nodes=1
 #SBATCH --cpus-per-task=16
 #SBATCH --mem=200G
-#SBATCH --time=1:00:00
+#SBATCH --time=4:00:00
 #SBATCH --output=/viper/ptmp2/edrod/xldvp_seg_fresh/logs/compute_norm_params_%j.out
 #SBATCH --error=/viper/ptmp2/edrod/xldvp_seg_fresh/logs/compute_norm_params_%j.err
 
