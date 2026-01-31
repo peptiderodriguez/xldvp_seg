@@ -173,6 +173,54 @@ python train_nmj_classifier_features.py \
     --output-dir /path/to/output
 ```
 
+### Feature Extraction Options
+
+**ResNet50 features (2048D):**
+- `resnet_0` to `resnet_2047`: Masked features (background zeroed out)
+- `resnet_ctx_0` to `resnet_ctx_2047`: Context features (full tissue crop)
+
+Use `--all-channels` flag to extract features from true 3-channel RGB instead of single-channel BTX stacked 3x.
+
+**Masked vs Context comparison (v1 single-channel results):**
+| Method | Accuracy | Recall+ | F1+ |
+|--------|----------|---------|-----|
+| ResNet masked | 0.717 | 0.153 | 0.253 |
+| ResNet context | 0.700 | 0.181 | 0.274 |
+| ResNet combined | **0.739** | **0.250** | **0.375** |
+
+Context features capture surrounding tissue information. Combined (masked + context) gives best F1.
+
+**DINOv2 alternative:**
+Self-supervised vision transformer, better for microscopy than ImageNet-trained ResNet.
+DINOv2-L (1024D) is now integrated into the pipeline alongside ResNet.
+
+| Model | Params | Feature Dim |
+|-------|--------|-------------|
+| dinov2_vits14 | 21M | 384 |
+| dinov2_vitb14 | 86M | 768 |
+| dinov2_vitl14 | 300M | 1024 ← **used in pipeline** |
+
+**Full feature set per detection (with --all-channels):**
+| Feature | Dimension | Description |
+|---------|-----------|-------------|
+| `resnet_0-2047` | 2048 | ResNet50 masked (bg zeroed) |
+| `resnet_ctx_0-2047` | 2048 | ResNet50 context (full tissue) |
+| `dinov2_0-1023` | 1024 | DINOv2-L masked |
+| `dinov2_ctx_0-1023` | 1024 | DINOv2-L context |
+| `sam2_emb_0-255` | 256 | SAM2 embeddings |
+| morphological | ~25 | Area, solidity, etc. |
+
+**Total: ~6,400 features per detection**
+
+**DINOv2 vs ResNet (v1 single-channel results):**
+| Method | Accuracy | Recall+ | F1+ |
+|--------|----------|---------|-----|
+| ResNet50 masked | 0.717 | 0.153 | 0.253 |
+| DINOv2-S context | 0.674 | 0.208 | 0.286 |
+| DINOv2-S combined | 0.700 | 0.208 | **0.303** |
+
+Key finding: DINOv2 context > DINOv2 masked (self-supervised models need full context)
+
 ---
 
 ## Vessel Pipeline

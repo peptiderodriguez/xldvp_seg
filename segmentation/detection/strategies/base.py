@@ -13,6 +13,9 @@ import logging
 
 from segmentation.utils.feature_extraction import SAM2_EMBEDDING_DIM, RESNET50_FEATURE_DIM
 
+# DINOv2 ViT-L/14 feature dimension
+DINOV2_FEATURE_DIM = 1024
+
 logger = logging.getLogger(__name__)
 
 
@@ -339,6 +342,85 @@ class DetectionStrategy(ABC):
 
         return all_features
 
+    def _extract_dinov2_features_batch(
+        self,
+        crops: List[np.ndarray],
+        model,
+        transform,
+        device,
+        batch_size: int = 32
+    ) -> List[np.ndarray]:
+        """
+        Extract DINOv2 features for multiple crops in batches.
+
+        Args:
+            crops: List of image crops as numpy arrays
+            model: DINOv2 model
+            transform: Torchvision transform for preprocessing
+            device: Torch device to use
+            batch_size: Batch size for processing
+
+        Returns:
+            List of 384D feature vectors as numpy arrays (for ViT-S/14)
+        """
+        import torch
+        from PIL import Image
+
+        if not crops:
+            return []
+
+        if batch_size is None or batch_size < 1:
+            batch_size = 32
+
+        all_features = []
+
+        for i in range(0, len(crops), batch_size):
+            batch_crops = crops[i:i + batch_size]
+            batch_tensors = []
+            valid_indices = []
+
+            for idx, crop in enumerate(batch_crops):
+                try:
+                    if crop.dtype == np.uint16:
+                        crop = (crop / 256).astype(np.uint8)
+                    elif crop.dtype != np.uint8:
+                        crop = crop.astype(np.uint8)
+
+                    if crop.ndim == 2:
+                        crop = np.stack([crop, crop, crop], axis=-1)
+                    elif crop.shape[-1] != 3:
+                        crop = np.ascontiguousarray(crop[..., :3])
+
+                    if crop.size == 0:
+                        continue
+
+                    pil_img = Image.fromarray(crop, mode='RGB')
+                    tensor = transform(pil_img)
+                    batch_tensors.append(tensor)
+                    valid_indices.append(idx)
+                except Exception as e:
+                    logger.debug(f"Failed to preprocess crop for DINOv2 {idx}: {e}")
+
+            if batch_tensors:
+                batch_tensor = torch.stack(batch_tensors).to(device)
+
+                with torch.no_grad():
+                    # DINOv2 returns CLS token features directly
+                    features = model(batch_tensor).cpu().numpy()
+
+                feature_idx = 0
+                for idx in range(len(batch_crops)):
+                    if idx in valid_indices:
+                        all_features.append(features[feature_idx])
+                        feature_idx += 1
+                    else:
+                        all_features.append(np.zeros(DINOV2_FEATURE_DIM))
+            else:
+                for _ in batch_crops:
+                    all_features.append(np.zeros(DINOV2_FEATURE_DIM))
+
+        return all_features
+
     def _percentile_normalize(
         self,
         image: np.ndarray,
@@ -443,7 +525,8 @@ class DetectionStrategy(ABC):
 
         # First pass: extract morphological features and SAM2 embeddings, collect crops
         feature_list = []
-        crops_for_resnet = []
+        crops_for_resnet = []  # Masked crops (background zeroed)
+        crops_for_resnet_context = []  # Context crops (full tissue, unmasked)
         crop_indices = []
 
         for idx, mask in enumerate(masks):
@@ -477,30 +560,47 @@ class DetectionStrategy(ABC):
                 for i in range(SAM2_EMBEDDING_DIM):
                     morph_features[f'sam2_emb_{i}'] = 0.0
 
-            # Prepare crop for batch ResNet processing
+            # Prepare crops for batch ResNet processing (both masked and context)
             if extract_resnet:
                 y1, y2 = ys.min(), ys.max()
                 x1, x2 = xs.min(), xs.max()
                 if y2 > y1 and x2 > x1:
-                    crop = tile_rgb[y1:y2+1, x1:x2+1].copy()
+                    # Context crop (unmasked - full tissue context)
+                    crop_context = tile_rgb[y1:y2+1, x1:x2+1].copy()
+                    crops_for_resnet_context.append(crop_context)
+
+                    # Masked crop (background zeroed out)
+                    crop_masked = crop_context.copy()
                     crop_mask = mask[y1:y2+1, x1:x2+1]
-                    crop[~crop_mask] = 0  # Zero out background
-                    crops_for_resnet.append(crop)
+                    crop_masked[~crop_mask] = 0
+                    crops_for_resnet.append(crop_masked)
                     crop_indices.append(idx)
 
             feature_list.append(morph_features)
 
-        # Batch ResNet feature extraction
+        # Batch ResNet feature extraction - masked (original)
         if crops_for_resnet and resnet is not None and resnet_transform is not None and extract_resnet:
             resnet_features_list = self._extract_resnet_features_batch(
                 crops_for_resnet, resnet, resnet_transform, device, resnet_batch_size
             )
 
-            # Assign ResNet features to correct detections
+            # Assign masked ResNet features to correct detections
             for crop_idx, resnet_feats in zip(crop_indices, resnet_features_list):
                 if feature_list[crop_idx]:  # Only if features dict exists
                     for i, v in enumerate(resnet_feats):
                         feature_list[crop_idx][f'resnet_{i}'] = float(v)
+
+        # Batch ResNet feature extraction - context (unmasked)
+        if crops_for_resnet_context and resnet is not None and resnet_transform is not None and extract_resnet:
+            resnet_context_list = self._extract_resnet_features_batch(
+                crops_for_resnet_context, resnet, resnet_transform, device, resnet_batch_size
+            )
+
+            # Assign context ResNet features to correct detections
+            for crop_idx, resnet_feats in zip(crop_indices, resnet_context_list):
+                if feature_list[crop_idx]:
+                    for i, v in enumerate(resnet_feats):
+                        feature_list[crop_idx][f'resnet_ctx_{i}'] = float(v)
 
         # Fill zeros for features without ResNet values
         if extract_resnet:
@@ -508,6 +608,42 @@ class DetectionStrategy(ABC):
                 if feat and 'resnet_0' not in feat:
                     for i in range(RESNET50_FEATURE_DIM):
                         feat[f'resnet_{i}'] = 0.0
+                if feat and 'resnet_ctx_0' not in feat:
+                    for i in range(RESNET50_FEATURE_DIM):
+                        feat[f'resnet_ctx_{i}'] = 0.0
+
+        # Batch DINOv2 feature extraction (both masked and context)
+        dinov2 = models.get('dinov2')
+        dinov2_transform = models.get('dinov2_transform')
+
+        if crops_for_resnet and dinov2 is not None and dinov2_transform is not None:
+            # DINOv2 masked features
+            dinov2_masked_list = self._extract_dinov2_features_batch(
+                crops_for_resnet, dinov2, dinov2_transform, device, resnet_batch_size
+            )
+            for crop_idx, dino_feats in zip(crop_indices, dinov2_masked_list):
+                if feature_list[crop_idx]:
+                    for i, v in enumerate(dino_feats):
+                        feature_list[crop_idx][f'dinov2_{i}'] = float(v)
+
+            # DINOv2 context features
+            dinov2_context_list = self._extract_dinov2_features_batch(
+                crops_for_resnet_context, dinov2, dinov2_transform, device, resnet_batch_size
+            )
+            for crop_idx, dino_feats in zip(crop_indices, dinov2_context_list):
+                if feature_list[crop_idx]:
+                    for i, v in enumerate(dino_feats):
+                        feature_list[crop_idx][f'dinov2_ctx_{i}'] = float(v)
+
+        # Fill zeros for features without DINOv2 values
+        if dinov2 is not None:
+            for feat in feature_list:
+                if feat and 'dinov2_0' not in feat:
+                    for i in range(DINOV2_FEATURE_DIM):
+                        feat[f'dinov2_{i}'] = 0.0
+                if feat and 'dinov2_ctx_0' not in feat:
+                    for i in range(DINOV2_FEATURE_DIM):
+                        feat[f'dinov2_ctx_{i}'] = 0.0
 
         # Reset SAM2 predictor to free memory
         if sam2_predictor is not None and extract_sam2:

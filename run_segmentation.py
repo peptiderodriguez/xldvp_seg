@@ -2529,7 +2529,7 @@ def _export_lmd_simple(detections, output_path, pixel_size_um, image_height_px,
 # SAMPLE CREATION FOR HTML
 # =============================================================================
 
-def create_sample_from_detection(tile_x, tile_y, tile_rgb, masks, feat, pixel_size_um, slide_name, crop_size=None):
+def create_sample_from_detection(tile_x, tile_y, tile_rgb, masks, feat, pixel_size_um, slide_name, cell_type='nmj', crop_size=None):
     """Create an HTML sample from a detection.
 
     Crop size is calculated dynamically to be 100% larger than the mask,
@@ -2602,8 +2602,12 @@ def create_sample_from_detection(tile_x, tile_y, tile_rgb, masks, feat, pixel_si
 
     img_b64, mime = image_to_base64(pil_img, format='PNG')
 
-    # Create unique ID
-    uid = f"{slide_name}_{tile_x}_{tile_y}_{det_id}"
+    # Create unique ID using global coordinates (consistent with detection JSON)
+    # Global center = tile origin + local center
+    local_cx, local_cy = feat['center'][0], feat['center'][1]
+    global_cx = tile_x + local_cx
+    global_cy = tile_y + local_cy
+    uid = f"{slide_name}_{cell_type}_{int(round(global_cx))}_{int(round(global_cy))}"
 
     # Get stats from features
     features = feat['features']
@@ -3223,7 +3227,8 @@ def run_pipeline(args):
                             continue
 
                     sample = create_sample_from_detection(
-                        tile_x, tile_y, tile_rgb, masks, feat, pixel_size_um, slide_name
+                        tile_x, tile_y, tile_rgb, masks, feat, pixel_size_um, slide_name,
+                        cell_type=args.cell_type
                     )
                     if sample:
                         all_samples.append(sample)
@@ -3282,35 +3287,35 @@ def run_pipeline(args):
             f.write('uid,global_x_px,global_y_px,global_x_um,global_y_um,outer_diameter_um,wall_thickness_um,confidence\n')
             for det in all_detections:
                 # Skip detections with missing or invalid global coordinates
-                gc = det.get('global_center')
-                gc_um = det.get('global_center_um')
-                if gc is None or gc_um is None:
+                g_center = det.get('global_center')
+                g_center_um = det.get('global_center_um')
+                if g_center is None or g_center_um is None:
                     continue
-                if len(gc) < 2 or gc[0] is None or gc[1] is None:
+                if len(g_center) < 2 or g_center[0] is None or g_center[1] is None:
                     continue
-                if len(gc_um) < 2 or gc_um[0] is None or gc_um[1] is None:
+                if len(g_center_um) < 2 or g_center_um[0] is None or g_center_um[1] is None:
                     continue
                 feat = det.get('features', {})
-                f.write(f"{det['uid']},{gc[0]:.1f},{gc[1]:.1f},"
-                        f"{gc_um[0]:.2f},{gc_um[1]:.2f},"
+                f.write(f"{det['uid']},{g_center[0]:.1f},{g_center[1]:.1f},"
+                        f"{g_center_um[0]:.2f},{g_center_um[1]:.2f},"
                         f"{feat.get('outer_diameter_um', 0):.2f},{feat.get('wall_thickness_mean_um', 0):.2f},"
                         f"{feat.get('confidence', 'unknown')}\n")
         else:
             f.write('uid,global_x_px,global_y_px,global_x_um,global_y_um,area_um2\n')
             for det in all_detections:
                 # Skip detections with missing or invalid global coordinates
-                gc = det.get('global_center')
-                gc_um = det.get('global_center_um')
-                if gc is None or gc_um is None:
+                g_center = det.get('global_center')
+                g_center_um = det.get('global_center_um')
+                if g_center is None or g_center_um is None:
                     continue
-                if len(gc) < 2 or gc[0] is None or gc[1] is None:
+                if len(g_center) < 2 or g_center[0] is None or g_center[1] is None:
                     continue
-                if len(gc_um) < 2 or gc_um[0] is None or gc_um[1] is None:
+                if len(g_center_um) < 2 or g_center_um[0] is None or g_center_um[1] is None:
                     continue
                 feat = det.get('features', {})
                 area_um2 = feat.get('area', 0) * (pixel_size_um ** 2)
-                f.write(f"{det['uid']},{gc[0]:.1f},{gc[1]:.1f},"
-                        f"{gc_um[0]:.2f},{gc_um[1]:.2f},{area_um2:.2f}\n")
+                f.write(f"{det['uid']},{g_center[0]:.1f},{g_center[1]:.1f},"
+                        f"{g_center_um[0]:.2f},{g_center_um[1]:.2f},{area_um2:.2f}\n")
     logger.info(f"  Saved coordinates to {csv_file}")
 
     # Export to Leica LMD format for mesothelium

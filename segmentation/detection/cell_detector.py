@@ -110,6 +110,8 @@ class CellDetector:
         self._cellpose = None
         self._resnet = None
         self._resnet_transform = None
+        self._dinov2 = None
+        self._dinov2_transform = None
 
         logger.info(f"CellDetector initialized (device={self.device})")
 
@@ -128,6 +130,8 @@ class CellDetector:
             'cellpose': self.cellpose,
             'resnet': self.resnet,
             'resnet_transform': self.resnet_transform,
+            'dinov2': self.dinov2,
+            'dinov2_transform': self.dinov2_transform,
             'device': self.device,
         }
 
@@ -165,6 +169,37 @@ class CellDetector:
         if self._resnet_transform is None:
             self._load_resnet()
         return self._resnet_transform
+
+    @property
+    def dinov2(self):
+        """Lazy load DINOv2 feature extractor."""
+        if self._dinov2 is None:
+            self._load_dinov2()
+        return self._dinov2
+
+    @property
+    def dinov2_transform(self):
+        """Get DINOv2 preprocessing transform."""
+        if self._dinov2_transform is None:
+            self._load_dinov2()
+        return self._dinov2_transform
+
+    def _load_dinov2(self):
+        """Load DINOv2 feature extractor (ViT-L/14, 1024D features)."""
+        logger.info("Loading DINOv2 (dinov2_vitl14)...")
+
+        try:
+            self._dinov2 = torch.hub.load('facebookresearch/dinov2', 'dinov2_vitl14')
+            self._dinov2.eval().to(self.device)
+
+            # Same transform as ResNet (ImageNet normalization)
+            self._dinov2_transform = create_resnet_transform()
+
+            logger.info("DINOv2 loaded successfully (1024D features)")
+        except Exception as e:
+            logger.warning(f"Failed to load DINOv2: {e}. DINOv2 features will be zeros.")
+            self._dinov2 = None
+            self._dinov2_transform = None
 
     def _find_sam2_checkpoint(self) -> Optional[Path]:
         """Find SAM2 checkpoint in common locations."""
