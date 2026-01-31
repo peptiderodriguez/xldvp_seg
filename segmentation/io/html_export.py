@@ -2413,6 +2413,39 @@ def get_vessel_css():
             object-fit: contain;
         }
 
+        /* Side-by-side image layout for raw + contours */
+        .card-img-sidebyside {
+            display: flex;
+            flex-direction: row;
+            gap: 2px;
+        }
+
+        .img-half {
+            flex: 1;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            position: relative;
+        }
+
+        .img-half img {
+            width: 100%;
+            height: 100%;
+            object-fit: contain;
+        }
+
+        .img-label {
+            position: absolute;
+            bottom: 4px;
+            left: 50%;
+            transform: translateX(-50%);
+            background: rgba(0, 0, 0, 0.7);
+            color: #aaa;
+            font-size: 0.65em;
+            padding: 2px 6px;
+            border-radius: 3px;
+        }
+
         .card-info {
             padding: 10px;
             display: flex;
@@ -3105,6 +3138,7 @@ def generate_vessel_annotation_page(
     for idx, sample in enumerate(samples):
         uid = sample['uid']
         img_b64 = sample['image']
+        img_raw_b64 = sample.get('image_raw')  # Raw image without contours
         mime = sample.get('mime_type', 'jpeg')
         feat = sample.get('features', {})
 
@@ -3135,14 +3169,31 @@ def generate_vessel_annotation_page(
             feat_parts.append(f"lumen={feat['lumen_area_um2']:.0f}&micro;m&sup2;")
         feat_str = ' | '.join(feat_parts) if feat_parts else ''
 
+        # Build image container - side-by-side if raw image available
+        if img_raw_b64:
+            img_container = f'''
+            <div class="card-img-container card-img-sidebyside" onclick="selectCard({idx})">
+                <div class="img-half">
+                    <img src="data:image/{mime};base64,{img_raw_b64}" alt="{uid} raw">
+                    <div class="img-label">Raw</div>
+                </div>
+                <div class="img-half">
+                    <img src="data:image/{mime};base64,{img_b64}" alt="{uid} contours">
+                    <div class="img-label">Contours</div>
+                </div>
+            </div>'''
+        else:
+            img_container = f'''
+            <div class="card-img-container" onclick="selectCard({idx})">
+                <img src="data:image/{mime};base64,{img_b64}" alt="{uid}">
+            </div>'''
+
         cards_html += f'''
         <div class="card" id="{uid}" data-label="-1"
              data-diameter="{feat.get('outer_diameter_um', 0)}"
              data-confidence="{feat.get('confidence', 'unknown')}">
             <input type="checkbox" class="card-checkbox" onclick="event.stopPropagation(); toggleBatchSelect('{uid}')">
-            <div class="card-img-container" onclick="selectCard({idx})">
-                <img src="data:image/{mime};base64,{img_b64}" alt="{uid}">
-            </div>
+            {img_container}
             <div class="card-info">
                 <div class="card-meta">
                     <div class="card-id">{uid}</div>

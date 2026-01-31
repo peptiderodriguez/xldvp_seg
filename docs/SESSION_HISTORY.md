@@ -6,11 +6,58 @@ For project overview and usage, see [CLAUDE.md](../CLAUDE.md).
 ---
 
 ## Current State (as of Jan 30, 2026)
-- **Cross-scale merging**: Now keeps finest segmentation (was: coarsest) with 90% coverage threshold
-- **1/2 scale detection**: Added finest scale, requires corroboration from coarser scales
+- **CD31 endothelial lining filter**: Requires 40% of lumen perimeter to have CD31+ lining (filters tissue tears)
+- **Side-by-side HTML crops**: Shows raw image + contoured image for each vessel
+- **Cross-scale merging**: Keeps finest segmentation with 90% coverage threshold
+- **1/2 scale detection**: Finest scale, requires corroboration from coarser scales
 - **Union-Find clustering**: Groups all overlapping vessels before selecting best per cluster
-- **RAM-first pipeline**: Load ALL slides to RAM in Phase 1 for fast tissue detection
-- **RGB CZI support**: Auto-detects RGB vs grayscale CZI files, allocates correct buffer shape
+
+---
+
+## Jan 30, 2026 - CD31 Endothelial Lining Filter
+
+**Problem**: Detection was capturing tissue tears (dark gaps) in addition to real vessels.
+
+**Solution**: Check for CD31+ endothelial lining at the lumen edge. Real vessels have endothelium lining the lumen; tears don't.
+
+**New function `compute_cd31_edge_coverage()`:**
+- Creates thin ring (3px) immediately adjacent to lumen boundary
+- Samples CD31 intensity at ~36 points around perimeter
+- Counts fraction with CD31 > 1.5x background
+- Requires ≥40% coverage (configurable via `CD31_EDGE_COVERAGE_THRESHOLD`)
+
+**New constant:**
+```python
+CD31_EDGE_COVERAGE_THRESHOLD = 0.40  # 40% of perimeter must have CD31+ lining
+```
+
+**Behavior:**
+| Lumen Type | CD31 Edge Coverage | Result |
+|------------|-------------------|--------|
+| Real vessel | 40-100% | Kept |
+| Tissue tear | 0-30% | Filtered |
+| Partial section | 30-40% | Borderline |
+
+---
+
+## Jan 30, 2026 - Side-by-Side HTML Crops
+
+**Feature**: HTML viewer now shows raw image alongside contoured image for each vessel.
+
+**Changes:**
+
+1. **`save_vessel_crop()`** now saves two files:
+   - `{uid}_raw.jpg` - Raw image without contours
+   - `{uid}.jpg` - Image with green (outer) and cyan (inner) contours
+
+2. **`generate_html()`** passes both images to HTML template
+
+3. **HTML template** displays side-by-side with "Raw" and "Contours" labels
+
+**CSS classes added:**
+- `.card-img-sidebyside` - Flex container for side-by-side layout
+- `.img-half` - Half-width container for each image
+- `.img-label` - Overlay label ("Raw" / "Contours")
 
 ---
 
@@ -19,25 +66,6 @@ For project overview and usage, see [CLAUDE.md](../CLAUDE.md).
 **Problem**: Previous merge strategy kept coarsest-scale detections, losing fine vessel wall detail.
 
 **Solution**: Reverse merge logic to prefer finest segmentation that captures the full vessel.
-
-**Changes to `scripts/sam2_multiscale_vessels.py`:**
-
-1. **New constant** (line 383):
-   ```python
-   COVERAGE_THRESHOLD = 0.90  # Min coverage to consider fine-scale complete
-   ```
-
-2. **Added 1/2 scale** to SCALES config (line 398):
-   ```python
-   {'name': '1/2', 'scale_factor': 2, 'min_diam_um': 0, 'max_diam_um': 999999, 'tile_size': 2500}
-   ```
-
-3. **Rewrote `merge_vessels_across_scales()`** (lines 1632-1800):
-   - Sort vessels **finest-first** (was: coarsest-first)
-   - Union-Find clustering groups all overlapping vessels
-   - Per cluster: select finest detection with ≥90% coverage of coarsest
-   - Fallback to coarsest if no fine-scale meets threshold
-   - **1/2 scale corroboration**: Vessels at 1/2 scale only kept if overlapping with coarser scale
 
 **Scale Configuration:**
 | Scale | Scale Factor | Tile Size | Full-Res Coverage |
@@ -56,10 +84,6 @@ For project overview and usage, see [CLAUDE.md](../CLAUDE.md).
 | Fine-scale incomplete (<90%) | Fallback to coarser |
 | 1/2 scale with coarser overlap | Keep if coverage ≥90% |
 | 1/2 scale alone (no overlap) | Filtered out |
-
-**Test Run (10% sample, in progress):**
-- Pre-merge vessels: 1/32=95, 1/16=165, 1/8=574, 1/4=1900, 1/2=TBD
-- Output: `/home/dude/vessel_output/sam2_multiscale/`
 
 ---
 

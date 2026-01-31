@@ -377,7 +377,7 @@ from segmentation.preprocessing.illumination import correct_photobleaching
 # Configuration
 CZI_PATH = "/home/dude/images/20251106_Fig2_nuc488_CD31_555_SMA647_PM750-EDFvar-stitch.czi"
 OUTPUT_DIR = "/home/dude/vessel_output/sam2_multiscale"
-SAMPLE_FRACTION = 0.1  # 10% of tiles
+SAMPLE_FRACTION = 0.10  # 10% of tiles
 TILE_OVERLAP = 0.5  # 50% overlap between tiles
 TISSUE_VARIANCE_THRESHOLD = 50
 COVERAGE_THRESHOLD = 0.90  # Min coverage to consider fine-scale complete (for cross-scale merging)
@@ -881,9 +881,10 @@ def compute_cell_composition(cell_intensities, cd31_threshold, sma_threshold):
 
 
 def save_vessel_crop(vessel, display_rgb, outer_contour, inner_contour, tile_x, tile_y, tile_size, scale_factor):
-    """Save a crop of the vessel with contours drawn.
+    """Save a crop of the vessel - both raw and with contours drawn.
 
     Crop is centered on the mask centroid and sized to be 2x the mask bounding box.
+    Saves two files: {uid}_raw.jpg (no contours) and {uid}.jpg (with contours).
     """
     # Get bounding box of both contours combined
     all_points = np.vstack([outer_contour, inner_contour])
@@ -916,24 +917,33 @@ def save_vessel_crop(vessel, display_rgb, outer_contour, inner_contour, tile_x, 
     if x2 <= x1 or y2 <= y1:
         return None
 
-    crop = display_rgb[y1:y2, x1:x2].copy()
+    crop_raw = display_rgb[y1:y2, x1:x2].copy()
 
-    if crop.size == 0:
+    if crop_raw.size == 0:
         return None
 
-    # Draw contours on crop (translate to crop coordinates)
+    # Save raw crop (no contours)
+    raw_path = os.path.join(OUTPUT_DIR, 'crops', f"{vessel['uid']}_raw.jpg")
+    cv2.imwrite(raw_path, cv2.cvtColor(crop_raw, cv2.COLOR_RGB2BGR), [cv2.IMWRITE_JPEG_QUALITY, 90])
+
+    # Draw contours on a copy for the contoured version
+    crop_contoured = crop_raw.copy()
     outer_in_crop = outer_contour - np.array([x1, y1])
     inner_in_crop = inner_contour - np.array([x1, y1])
 
-    cv2.drawContours(crop, [outer_in_crop], -1, (0, 255, 0), 2)  # Green for outer wall
-    cv2.drawContours(crop, [inner_in_crop], -1, (0, 255, 255), 2)  # Cyan for inner lumen
+    cv2.drawContours(crop_contoured, [outer_in_crop], -1, (0, 255, 0), 2)  # Green for outer wall
+    cv2.drawContours(crop_contoured, [inner_in_crop], -1, (0, 255, 255), 2)  # Cyan for inner lumen
 
     # Store crop offset for reference
     vessel['crop_offset'] = [int(x1), int(y1)]
     vessel['crop_scale_factor'] = scale_factor
 
+    # Save contoured crop
     crop_path = os.path.join(OUTPUT_DIR, 'crops', f"{vessel['uid']}.jpg")
-    cv2.imwrite(crop_path, cv2.cvtColor(crop, cv2.COLOR_RGB2BGR), [cv2.IMWRITE_JPEG_QUALITY, 90])
+    cv2.imwrite(crop_path, cv2.cvtColor(crop_contoured, cv2.COLOR_RGB2BGR), [cv2.IMWRITE_JPEG_QUALITY, 90])
+
+    # Store raw path for side-by-side display
+    vessel['crop_path_raw'] = raw_path
 
     return crop_path
 
@@ -1258,6 +1268,104 @@ def verify_lumens_batch(masks, sma_norm, nuclear_norm, cd31_norm, pm_norm, scale
 
     return results
 
+
+# Minimum CD31 edge coverage to consider a lumen as a real vessel (not a tear)
+CD31_EDGE_COVERAGE_THRESHOLD = 0.40  # 40% of perimeter must have CD31+ lining
+
+
+def compute_cd31_edge_coverage(lumen_mask, cd31_norm, ring_width=3, n_samples=36):
+    """
+    Compute fraction of lumen perimeter that has CD31+ endothelial lining.
+
+    Real vessels have CD31+ endothelium lining the lumen edge.
+    Tissue tears have no endothelial lining.
+
+    Args:
+        lumen_mask: Binary mask of the lumen
+        cd31_norm: Normalized CD31 channel (0-1 float)
+        ring_width: Width of ring to sample at lumen edge (pixels)
+        n_samples: Number of points to sample around perimeter
+
+    Returns:
+        Tuple of (coverage_fraction, edge_intensity_mean, background_intensity)
+        coverage_fraction: Fraction of perimeter with elevated CD31 (0-1)
+    """
+    # Find lumen contour
+    contours, _ = cv2.findContours(
+        lumen_mask.astype(np.uint8), cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_NONE
+    )
+    if len(contours) == 0:
+        return 0.0, 0.0, 0.0
+
+    contour = max(contours, key=cv2.contourArea)
+    if len(contour) < 10:
+        return 0.0, 0.0, 0.0
+
+    # Create thin ring mask just outside the lumen (the endothelial zone)
+    lumen_dilated = cv2.dilate(lumen_mask.astype(np.uint8),
+                                np.ones((ring_width*2+1, ring_width*2+1), np.uint8))
+    edge_ring = lumen_dilated.astype(bool) & ~lumen_mask.astype(bool)
+
+    if edge_ring.sum() < 10:
+        return 0.0, 0.0, 0.0
+
+    # Get CD31 intensity in the edge ring
+    edge_intensities = cd31_norm[edge_ring]
+    edge_mean = edge_intensities.mean()
+
+    # Get background intensity (outside the dilated region, nearby)
+    bg_dilated = cv2.dilate(lumen_dilated, np.ones((20, 20), np.uint8))
+    bg_mask = bg_dilated.astype(bool) & ~lumen_dilated.astype(bool)
+    if bg_mask.sum() > 0:
+        bg_intensity = cd31_norm[bg_mask].mean()
+    else:
+        bg_intensity = cd31_norm.mean()
+
+    # Sample points around the contour perimeter
+    contour_points = contour.reshape(-1, 2)
+    step = max(1, len(contour_points) // n_samples)
+    sample_indices = range(0, len(contour_points), step)
+
+    # For each sample point, check if CD31 is elevated in the adjacent ring
+    n_positive = 0
+    n_checked = 0
+
+    # Threshold: CD31 must be at least 1.5x background to count as "lined"
+    cd31_threshold = max(bg_intensity * 1.5, 0.1)
+
+    for i in sample_indices:
+        px, py = contour_points[i]
+
+        # Sample a small region just outside this point
+        # Move outward from contour by ring_width/2
+        # Use gradient direction or just sample nearby
+        y1 = max(0, py - ring_width)
+        y2 = min(cd31_norm.shape[0], py + ring_width + 1)
+        x1 = max(0, px - ring_width)
+        x2 = min(cd31_norm.shape[1], px + ring_width + 1)
+
+        if y2 <= y1 or x2 <= x1:
+            continue
+
+        # Get intensity in this small patch, but only the ring portion
+        patch_ring = edge_ring[y1:y2, x1:x2]
+        if patch_ring.sum() == 0:
+            continue
+
+        patch_cd31 = cd31_norm[y1:y2, x1:x2]
+        local_intensity = patch_cd31[patch_ring].mean()
+
+        n_checked += 1
+        if local_intensity >= cd31_threshold:
+            n_positive += 1
+
+    if n_checked == 0:
+        return 0.0, edge_mean, bg_intensity
+
+    coverage = n_positive / n_checked
+    return coverage, edge_mean, bg_intensity
+
+
 def dilate_until_signal_drops(lumens, cd31_norm, scale_factor=1, drop_ratio=0.85, max_iterations=50):
     """
     Expand from lumens by dilating until CD31 signal drops.
@@ -1418,6 +1526,7 @@ def process_tile_at_scale(tile_x, tile_y, channel_cache, sam2_generator, scale_c
     # for GMM-based adaptive thresholding
     candidates = []
     cd31_enrichment_ratios = []
+    n_filtered_no_cd31_lining = 0  # Count lumens filtered for lacking CD31 endothelial lining
 
     for idx, lumen in enumerate(lumens):
         label_id = idx + 1
@@ -1460,6 +1569,17 @@ def process_tile_at_scale(tile_x, tile_y, channel_cache, sam2_generator, scale_c
         cd31_in_lumen = cd31_norm[lumen['mask']].mean()
         cd31_enrichment = cd31_in_wall / (cd31_in_lumen + 1e-6)
 
+        # Check for CD31+ endothelial lining at lumen edge
+        # This distinguishes real vessels (with endothelium) from tissue tears
+        cd31_edge_coverage, cd31_edge_mean, cd31_bg = compute_cd31_edge_coverage(
+            lumen['mask'], cd31_norm, ring_width=3
+        )
+
+        # Skip if insufficient CD31 lining (likely a tear, not a vessel)
+        if cd31_edge_coverage < CD31_EDGE_COVERAGE_THRESHOLD:
+            n_filtered_no_cd31_lining += 1
+            continue
+
         # Store candidate for second pass
         candidates.append({
             'lumen': lumen,
@@ -1469,8 +1589,13 @@ def process_tile_at_scale(tile_x, tile_y, channel_cache, sam2_generator, scale_c
             'cd31_in_wall': cd31_in_wall,
             'cd31_in_lumen': cd31_in_lumen,
             'cd31_enrichment': cd31_enrichment,
+            'cd31_edge_coverage': cd31_edge_coverage,
         })
         cd31_enrichment_ratios.append(cd31_enrichment)
+
+    # Log how many were filtered for lacking CD31 lining
+    if n_filtered_no_cd31_lining > 0:
+        print(f"    Filtered {n_filtered_no_cd31_lining} lumens lacking CD31+ endothelial lining (likely tears)")
 
     # Second pass: Apply GMM-based CD31 enrichment classification
     # For enrichment, we want the HIGHER ratio class (wall > lumen)
@@ -1567,6 +1692,7 @@ def process_tile_at_scale(tile_x, tile_y, channel_cache, sam2_generator, scale_c
             'outer_area_px': float(outer_area),
             'inner_area_px': float(inner_area),
             'wall_area_px': float(wall_area),
+            'cd31_edge_coverage': float(candidate.get('cd31_edge_coverage', 0)),
             **lumen['stats']
         }
 
@@ -2521,10 +2647,18 @@ def generate_html(vessels):
         if not crop_path or not os.path.exists(crop_path):
             continue
 
-        # Read crop and convert to base64
+        # Read contoured crop and convert to base64
         with open(crop_path, 'rb') as f:
             img_data = f.read()
         img_base64 = base64.b64encode(img_data).decode('utf-8')
+
+        # Read raw crop (no contours) if available
+        raw_path = v.get('crop_path_raw', '')
+        img_raw_base64 = None
+        if raw_path and os.path.exists(raw_path):
+            with open(raw_path, 'rb') as f:
+                raw_data = f.read()
+            img_raw_base64 = base64.b64encode(raw_data).decode('utf-8')
 
         # Build features dict (package expects specific keys)
         features = {
@@ -2540,11 +2674,15 @@ def generate_html(vessels):
             'global_y': v.get('global_center', [0, 0])[1],
         }
 
-        samples.append({
+        sample = {
             'uid': v.get('uid', ''),
-            'image': img_base64,  # Just base64, export function adds prefix
+            'image': img_base64,  # Contoured image
             'features': features,
-        })
+        }
+        if img_raw_base64:
+            sample['image_raw'] = img_raw_base64  # Raw image (no contours)
+
+        samples.append(sample)
 
     if not samples:
         print("No samples to export")
