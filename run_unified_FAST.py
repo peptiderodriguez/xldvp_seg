@@ -54,6 +54,11 @@ from segmentation.utils.config import (
     get_cpu_worker_count,
 )
 from segmentation.utils.mask_cleanup import cleanup_mask, apply_cleanup_to_detection
+from segmentation.preprocessing.stain_normalization import (
+    percentile_normalize_rgb,
+    compute_global_percentiles,
+    normalize_to_percentiles
+)
 
 logger = get_logger(__name__)
 
@@ -2378,6 +2383,75 @@ def run_multi_slide_segmentation(
 
         log_memory_status("After Phase 1 (all slides in RAM)")
 
+        # NORMALIZATION: Compute global percentiles and normalize all slides
+        if args.normalize_slides and len(czi_paths) > 1:
+            logger.info(f"\n{'='*70}")
+            logger.info("CROSS-SLIDE NORMALIZATION")
+            logger.info(f"{'='*70}")
+
+            # Load normalization parameters from file if provided
+            if args.norm_params_file:
+                logger.info(f"Loading pre-computed normalization parameters from: {args.norm_params_file}")
+                with open(args.norm_params_file, 'r') as f:
+                    params = json.load(f)
+
+                target_low = np.array(params['target_low'])
+                target_high = np.array(params['target_high'])
+                logger.info(f"  Parameters computed from {params['n_slides']} slides")
+                logger.info(f"  P{params['p_low']}-P{params['p_high']}")
+            else:
+                # Compute global percentiles from current slides
+                logger.info(f"Computing global percentiles (P{args.norm_percentile_low}-P{args.norm_percentile_high}) from {len(slide_loaders)} slides...")
+
+                # Collect channel data from all slides for global stats
+                all_channel_data = []
+                for slide_name, loader in slide_loaders.items():
+                    channel_data = loader.get_channel_data(channel)
+                    if channel_data is not None:
+                        all_channel_data.append(channel_data)
+
+                # Compute global target percentiles
+                target_low, target_high = compute_global_percentiles(
+                    all_channel_data,
+                    p_low=args.norm_percentile_low,
+                    p_high=args.norm_percentile_high,
+                    n_samples=50000  # Sample 50k pixels per slide
+                )
+
+            logger.info(f"  Global target range:")
+            logger.info(f"    R: [{target_low[0]:.1f}, {target_high[0]:.1f}]")
+            logger.info(f"    G: [{target_low[1]:.1f}, {target_high[1]:.1f}]")
+            logger.info(f"    B: [{target_low[2]:.1f}, {target_high[2]:.1f}]")
+
+            # Normalize each slide
+            for slide_name, loader in slide_loaders.items():
+                logger.info(f"  Normalizing {slide_name}...")
+                channel_data = loader.get_channel_data(channel)
+
+                if channel_data is not None:
+                    # Show before stats
+                    before_mean = channel_data.mean(axis=(0,1))
+
+                    # Normalize
+                    normalized = normalize_to_percentiles(
+                        channel_data,
+                        target_low,
+                        target_high,
+                        p_low=args.norm_percentile_low,
+                        p_high=args.norm_percentile_high
+                    )
+
+                    # Update loader's channel data
+                    loader.channel_data = normalized
+
+                    # Show after stats
+                    after_mean = normalized.mean(axis=(0,1))
+                    logger.info(f"    Before: RGB=({before_mean[0]:.1f}, {before_mean[1]:.1f}, {before_mean[2]:.1f})")
+                    logger.info(f"    After:  RGB=({after_mean[0]:.1f}, {after_mean[1]:.1f}, {after_mean[2]:.1f})")
+
+            logger.info("Cross-slide normalization complete!")
+            log_memory_status("After normalization")
+
         # Phase 2: Identify tissue tiles using streaming (on-demand reading)
         tissue_tiles, variance_threshold = _phase2_identify_tissue_tiles_streaming(
             slide_loaders, tile_size, overlap, None, calibration_block_size, calibration_samples, channel
@@ -3176,6 +3250,16 @@ def main():
                         help='Disable hole filling when using --cleanup-masks (for vessels)')
     parser.add_argument('--max-hole-fraction', type=float, default=0.5,
                         help='Max hole size to fill as fraction of mask area (default: 0.5)')
+
+    # Cross-slide normalization options
+    parser.add_argument('--normalize-slides', action='store_true',
+                        help='Apply cross-slide intensity normalization (recommended for multi-slide batches)')
+    parser.add_argument('--norm-percentile-low', type=float, default=1.0,
+                        help='Lower percentile for normalization (default: 1.0)')
+    parser.add_argument('--norm-percentile-high', type=float, default=99.0,
+                        help='Upper percentile for normalization (default: 99.0)')
+    parser.add_argument('--norm-params-file', type=str, default=None,
+                        help='JSON file with pre-computed normalization parameters (for parallel jobs)')
 
     args = parser.parse_args()
 

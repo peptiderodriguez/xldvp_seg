@@ -4,6 +4,7 @@ Preprocessing modules for microscopy image correction.
 Includes:
 - illumination: Photobleaching and illumination artifact correction, CLAHE
 - vesselness: Frangi vesselness filtering for tubular/ring structure enhancement
+- stain_normalization: Cross-slide intensity normalization
 """
 
 from .illumination import (
@@ -20,6 +21,13 @@ from .vesselness import (
     enhance_ring_structures,
 )
 
+from .stain_normalization import (
+    percentile_normalize_rgb,
+    compute_global_percentiles,
+    normalize_to_percentiles,
+    normalize_slide_to_reference,
+)
+
 __all__ = [
     # Illumination correction
     'normalize_rows_columns',
@@ -31,4 +39,9 @@ __all__ = [
     'compute_vesselness',
     'compute_vesselness_multiscale',
     'enhance_ring_structures',
+    # Stain normalization
+    'percentile_normalize_rgb',
+    'compute_global_percentiles',
+    'normalize_to_percentiles',
+    'normalize_slide_to_reference',
 ]
