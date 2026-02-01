@@ -5,7 +5,7 @@ For project overview and usage, see [CLAUDE.md](../CLAUDE.md).
 
 ---
 
-## Current State (as of Jan 31, 2026)
+## Current State (as of Feb 1, 2026)
 
 ### BEST RESULTS TO DATE - CD31 Endothelial Lining Filter
 
@@ -28,12 +28,69 @@ For project overview and usage, see [CLAUDE.md](../CLAUDE.md).
 
 **Output:** `/home/dude/vessel_output/sam2_multiscale/`
 
+### RF Classifier Training (Feb 1)
+
+Trained Random Forest on 330 annotations (95 positive, 235 negative):
+
+| Metric | Value |
+|--------|-------|
+| 5-Fold CV Accuracy | **89.1%** |
+| Precision (vessel) | 87% |
+| Recall (vessel) | 73% |
+| F1 (vessel) | 79% |
+
+**Top features by importance:**
+1. `nuclear_ratio` (17.8%) - vessels have nuclei in walls
+2. `sma_wall` (16.9%) - SMA intensity in vessel wall
+3. `sma_ratio` (11.2%) - overall SMA enrichment
+4. `cd31_ratio` (7.7%) - CD31 enrichment
+5. `cd31_edge_coverage` (6.4%) - endothelial lining filter
+
+**Model saved:** `/home/dude/vessel_output/sam2_multiscale/vessel_rf_classifier.joblib`
+
 ### Current Pipeline Features
 - **CD31 endothelial lining filter**: Requires 40% of lumen perimeter to have CD31+ lining (filters tissue tears)
 - **Side-by-side HTML crops**: Shows raw image + contoured image for each vessel
 - **Cross-scale merging**: Keeps finest segmentation with 90% coverage threshold
 - **1/2 scale detection**: Finest scale, requires corroboration from coarser scales
 - **Union-Find clustering**: Groups all overlapping vessels before selecting best per cluster
+- **Slide-wide photobleaching correction**: Fixes banding artifacts across tile boundaries (NEW)
+
+---
+
+## Feb 1, 2026 - Slide-Wide Photobleaching Correction
+
+**Problem**: Horizontal/vertical banding artifacts visible across tile boundaries. Per-tile correction normalized each tile independently, so banding that spanned tiles remained visible.
+
+**Solution**: Apply photobleaching correction to the full mosaic (at 1/2 scale, ~45GB in RAM) *before* extracting tiles.
+
+**Implementation:**
+- New method `DownsampledChannelCache.apply_photobleaching_correction()`
+- Called after channel loading but before any tile extraction
+- Uses `normalize_rows_columns()` to fix banding + `morphological_background_subtraction()` (201px kernel) for gradients
+- Reports before/after banding severity (row_cv%, col_cv%)
+
+**Location:** `scripts/sam2_multiscale_vessels.py` lines ~540-584
+
+**Removed:** Per-tile `correct_photobleaching()` calls to avoid double-applying correction.
+
+---
+
+## Feb 1, 2026 - RF Classifier Training
+
+Trained vessel vs non-vessel classifier on manual annotations.
+
+**Training data:** 330 annotations (95 positive vessels, 235 negative/tears)
+
+**Features used (15 total):**
+- Intensity ratios: `cd31_ratio`, `nuclear_ratio`, `pm_ratio`, `sma_ratio`
+- CD31 edge coverage: `cd31_edge_coverage`
+- SMA metrics: `sma_inside`, `sma_wall`
+- Size metrics: `inner_area_px`, `outer_area_px`, `wall_area_px`, `area`
+- Diameter metrics: `inner_diameter_um`, `outer_diameter_um`, `wall_thickness_um`
+- Scale: `scale_factor`
+
+**Results:** 89.1% accuracy, 87% precision, 73% recall on vessels
 
 ---
 

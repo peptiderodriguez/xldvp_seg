@@ -372,7 +372,6 @@ def get_cellpose_model():
 
 sys.path.insert(0, '/home/dude/code/vessel_seg')
 from segmentation.io.czi_loader import CZILoader
-from segmentation.preprocessing.illumination import correct_photobleaching
 
 # Configuration
 CZI_PATH = "/home/dude/images/20251106_Fig2_nuc488_CD31_555_SMA647_PM750-EDFvar-stitch.czi"
@@ -536,6 +535,52 @@ class DownsampledChannelCache:
             region = cv2.resize(region, (target_w, target_h), interpolation=cv2.INTER_AREA)
 
         return region
+
+    def apply_photobleaching_correction(self, verbose: bool = True):
+        """
+        Apply slide-wide photobleaching correction to all loaded channels.
+
+        This corrects for:
+        - Horizontal/vertical banding from stitched acquisitions
+        - Uneven illumination gradients across the slide
+
+        Must be called AFTER loading but BEFORE extracting tiles.
+        """
+        from segmentation.preprocessing.illumination import (
+            normalize_rows_columns,
+            morphological_background_subtraction,
+            estimate_band_severity
+        )
+
+        if verbose:
+            print("\nApplying slide-wide photobleaching correction...")
+
+        for ch, data in self.channels.items():
+            if verbose:
+                # Estimate severity before correction
+                severity = estimate_band_severity(data)
+                print(f"  Channel {ch}: row_cv={severity['row_cv']:.1f}%, col_cv={severity['col_cv']:.1f}% ({severity['severity']})")
+
+            # Step 1: Normalize row/column means (fixes banding)
+            corrected = normalize_rows_columns(data)
+
+            # Step 2: Morphological background subtraction (fixes gradients)
+            # Use larger kernel for slide-wide correction
+            corrected = morphological_background_subtraction(corrected, kernel_size=201)
+
+            # Clip to valid range and convert back to uint16
+            corrected = np.clip(corrected, 0, 65535).astype(np.uint16)
+
+            # Replace channel data in-place
+            self.channels[ch] = corrected
+
+            if verbose:
+                # Check improvement
+                severity_after = estimate_band_severity(corrected)
+                print(f"    After: row_cv={severity_after['row_cv']:.1f}%, col_cv={severity_after['col_cv']:.1f}% ({severity_after['severity']})")
+
+        if verbose:
+            print("  Photobleaching correction complete.")
 
     def release(self):
         """Release all channel data."""
@@ -1467,16 +1512,11 @@ def process_tile_at_scale(tile_x, tile_y, channel_cache, sam2_generator, scale_c
         gc.collect()
         return []
 
-    # Apply photobleaching correction + normalization to all channels
-    sma_corrected = correct_photobleaching(tiles[SMA].astype(np.float32))
-    nuclear_corrected = correct_photobleaching(tiles[NUCLEAR].astype(np.float32))
-    cd31_corrected = correct_photobleaching(tiles[CD31].astype(np.float32))
-    pm_corrected = correct_photobleaching(tiles[PM].astype(np.float32))
-
-    sma_norm = normalize_channel(sma_corrected)
-    nuclear_norm = normalize_channel(nuclear_corrected)
-    cd31_norm = normalize_channel(cd31_corrected)
-    pm_norm = normalize_channel(pm_corrected)
+    # Normalize channels to uint8 (slide-wide photobleaching already applied to channel cache)
+    sma_norm = normalize_channel(tiles[SMA])
+    nuclear_norm = normalize_channel(tiles[NUCLEAR])
+    cd31_norm = normalize_channel(tiles[CD31])
+    pm_norm = normalize_channel(tiles[PM])
 
     # SAM2 input: grayscale as RGB (for detection)
     sma_rgb = cv2.cvtColor(sma_norm, cv2.COLOR_GRAY2RGB)
@@ -1514,8 +1554,7 @@ def process_tile_at_scale(tile_x, tile_y, channel_cache, sam2_generator, scale_c
 
     if len(lumens) == 0:
         # Cleanup before returning
-        del tiles, sma_corrected, nuclear_corrected, cd31_corrected, pm_corrected
-        del sma_norm, nuclear_norm, cd31_norm, pm_norm, sma_rgb, display_rgb, masks
+        del tiles, sma_norm, nuclear_norm, cd31_norm, pm_norm, sma_rgb, display_rgb, masks
         gc.collect()
         return []
 
@@ -1703,8 +1742,7 @@ def process_tile_at_scale(tile_x, tile_y, channel_cache, sam2_generator, scale_c
         vessels.append(vessel)
 
     # Cleanup large arrays before returning
-    del tiles, sma_corrected, nuclear_corrected, cd31_corrected, pm_corrected
-    del sma_norm, nuclear_norm, cd31_norm, pm_norm, sma_rgb, display_rgb, masks, labels
+    del tiles, sma_norm, nuclear_norm, cd31_norm, pm_norm, sma_rgb, display_rgb, masks, labels
     gc.collect()
 
     return vessels
@@ -2107,6 +2145,9 @@ def main():
 
     # Load all channels at BASE_SCALE (1/2) - 4x smaller than full res
     channel_cache = DownsampledChannelCache(loader, [NUCLEAR, CD31, SMA, PM], BASE_SCALE)
+
+    # Apply slide-wide photobleaching correction to fix banding artifacts
+    channel_cache.apply_photobleaching_correction()
 
     # Load SAM2
     print("\nLoading SAM2...", flush=True)
