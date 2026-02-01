@@ -1129,7 +1129,6 @@ def shared_calibrate_tissue_threshold(tiles, image_array, calibration_samples, b
     Returns:
         float: Variance threshold for tissue detection
     """
-    from sklearn.cluster import KMeans
     from concurrent.futures import ThreadPoolExecutor, as_completed
 
     # Sample tiles for calibration
@@ -1165,8 +1164,7 @@ def shared_calibrate_tissue_threshold(tiles, image_array, calibration_samples, b
         return 50.0
 
     logger.info(f"  Running K-means on {len(variances)} variance samples...")
-    kmeans = KMeans(n_clusters=3, random_state=42, n_init=10).fit(variances.reshape(-1, 1))
-    centers = kmeans.cluster_centers_.flatten()
+    centers, labels = _calibrate_variance_threshold(variances)
     sorted_centers = sorted(centers)
 
     # Threshold between background and tissue clusters
@@ -1461,6 +1459,32 @@ def run_unified_segmentation(
     logger.info(f"  HSPC tiles: {output_dir}/hspc/tiles/")
 
 
+def _calibrate_variance_threshold(variances):
+    """
+    Performs K-means clustering on variance samples to identify tissue regions.
+
+    Uses 3 clusters to separate:
+    - Background (low variance)
+    - Tissue (medium variance)
+    - Outliers (high variance)
+
+    Args:
+        variances: numpy array of variance values
+
+    Returns:
+        tuple: (centers, labels) where:
+            - centers: cluster centers as flattened array
+            - labels: cluster assignments for each variance sample
+    """
+    from sklearn.cluster import KMeans
+
+    kmeans = KMeans(n_clusters=3, random_state=42, n_init=10).fit(variances.reshape(-1, 1))
+    centers = kmeans.cluster_centers_.flatten()
+    labels = kmeans.labels_
+
+    return centers, labels
+
+
 def _phase1_load_slides(czi_paths, tile_size, overlap, channel):
     """
     Phase 1: Load all slides into RAM using CZILoader.
@@ -1547,7 +1571,6 @@ def _phase2_identify_tissue_tiles(slide_data, tile_size, overlap, variance_thres
             - variance_threshold: Calibrated variance threshold used for tissue detection
     """
     import cv2
-    from sklearn.cluster import KMeans
 
     logger.info(f"\n{'='*70}")
     logger.info("PHASE 2: IDENTIFYING TISSUE TILES")
@@ -1617,9 +1640,7 @@ def _phase2_identify_tissue_tiles(slide_data, tile_size, overlap, variance_thres
 
     variances = np.array(all_variances)
     logger.info(f"  Running K-means on {len(variances)} variance samples...")
-    kmeans = KMeans(n_clusters=3, random_state=42, n_init=10).fit(variances.reshape(-1, 1))
-    centers = kmeans.cluster_centers_.flatten()
-    labels = kmeans.labels_
+    centers, labels = _calibrate_variance_threshold(variances)
     sorted_indices = np.argsort(centers)
     bottom_cluster_idx = sorted_indices[0]
     bottom_cluster_variances = variances[labels == bottom_cluster_idx]
@@ -1684,7 +1705,6 @@ def _phase2_identify_tissue_tiles_streaming(slide_loaders, tile_size, overlap, v
             - variance_threshold: Calibrated variance threshold used for tissue detection
     """
     import cv2
-    from sklearn.cluster import KMeans
     from segmentation.processing.memory import log_memory_status
 
     log_memory_status("Phase 2 tissue detection (streaming) - START")
@@ -1765,9 +1785,7 @@ def _phase2_identify_tissue_tiles_streaming(slide_loaders, tile_size, overlap, v
 
     variances = np.array(all_variances)
     logger.info(f"  Running K-means on {len(variances)} variance samples...")
-    kmeans = KMeans(n_clusters=3, random_state=42, n_init=10).fit(variances.reshape(-1, 1))
-    centers = kmeans.cluster_centers_.flatten()
-    labels = kmeans.labels_
+    centers, labels = _calibrate_variance_threshold(variances)
     sorted_indices = np.argsort(centers)
     bottom_cluster_idx = sorted_indices[0]
     bottom_cluster_variances = variances[labels == bottom_cluster_idx]
@@ -2973,7 +2991,7 @@ def save_tile_results(result, output_base, slide_results, slide_results_lock):
         with h5py.File(mk_tile_dir / "segmentation.h5", 'w') as f:
             create_hdf5_dataset(f, 'labels', new_mk[np.newaxis])
         with open(mk_tile_dir / "features.json", 'w') as f:
-            json.dump([{'id': m['id'], 'global_id': m['global_id'], 'uid': m['uid'], 'center': m['center'], 'features': m['features'], 'crop_b64': m.get('crop_b64'), 'mask_b64': m.get('mask_b64')} for m in result['mk_feats']], f)
+            json.dump(result['mk_feats'], f)
 
     if result['hspc_feats']:
         hspc_dir = output_dir / "hspc" / "tiles"
@@ -3004,7 +3022,7 @@ def save_tile_results(result, output_base, slide_results, slide_results_lock):
         with h5py.File(hspc_tile_dir / "segmentation.h5", 'w') as f:
             create_hdf5_dataset(f, 'labels', new_hspc[np.newaxis])
         with open(hspc_tile_dir / "features.json", 'w') as f:
-            json.dump([{'id': h['id'], 'global_id': h['global_id'], 'uid': h['uid'], 'center': h['center'], 'features': h['features'], 'crop_b64': h.get('crop_b64'), 'mask_b64': h.get('mask_b64')} for h in result['hspc_feats']], f)
+            json.dump(result['hspc_feats'], f)
 
     return {'slide_name': slide_name, 'mk_count': mk_count, 'hspc_count': hspc_count}
 
