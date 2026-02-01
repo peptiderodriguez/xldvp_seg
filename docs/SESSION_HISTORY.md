@@ -5,7 +5,30 @@ For project overview and usage, see [CLAUDE.md](../CLAUDE.md).
 
 ---
 
-## Current State (as of Jan 30, 2026)
+## Current State (as of Jan 31, 2026)
+
+### BEST RESULTS TO DATE - CD31 Endothelial Lining Filter
+
+**Key breakthrough**: Requiring CD31+ endothelial lining at the lumen edge filters out tissue tears while keeping real vessels.
+
+**10% Sample Run Results (Jan 31):**
+| Scale | Vessels |
+|-------|---------|
+| 1/32  | 12      |
+| 1/16  | 28      |
+| 1/8   | 177     |
+| 1/4   | 376     |
+| 1/2   | 1 (776 filtered as uncorroborated) |
+| **Final (merged)** | **594** |
+
+**What made this work:**
+1. **CD31 edge coverage filter** - Checks for endothelial lining at lumen boundary (≥40% coverage required)
+2. **1/2 scale corroboration** - Finest scale detections only kept if overlapping with coarser scales
+3. **Cross-scale merging** - Keeps finest segmentation with ≥90% area coverage
+
+**Output:** `/home/dude/vessel_output/sam2_multiscale/`
+
+### Current Pipeline Features
 - **CD31 endothelial lining filter**: Requires 40% of lumen perimeter to have CD31+ lining (filters tissue tears)
 - **Side-by-side HTML crops**: Shows raw image + contoured image for each vessel
 - **Cross-scale merging**: Keeps finest segmentation with 90% coverage threshold
@@ -14,9 +37,9 @@ For project overview and usage, see [CLAUDE.md](../CLAUDE.md).
 
 ---
 
-## Jan 30, 2026 - CD31 Endothelial Lining Filter
+## Jan 30-31, 2026 - CD31 Endothelial Lining Filter
 
-**Problem**: Detection was capturing tissue tears (dark gaps) in addition to real vessels.
+**Problem**: Detection was capturing tissue tears (dark gaps) in addition to real vessels. Previous runs had hundreds of false positives.
 
 **Solution**: Check for CD31+ endothelial lining at the lumen edge. Real vessels have endothelium lining the lumen; tears don't.
 
@@ -37,6 +60,8 @@ CD31_EDGE_COVERAGE_THRESHOLD = 0.40  # 40% of perimeter must have CD31+ lining
 | Real vessel | 40-100% | Kept |
 | Tissue tear | 0-30% | Filtered |
 | Partial section | 30-40% | Borderline |
+
+**Impact**: Thousands of tissue tears filtered out, leaving ~594 high-quality vessel detections.
 
 ---
 
