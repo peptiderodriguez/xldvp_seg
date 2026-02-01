@@ -1203,7 +1203,12 @@ def run_unified_segmentation(
 
     # Set start method to 'spawn' for GPU safety
     if num_workers > 0:
-        mp.set_start_method('spawn', force=True)
+        try:
+            mp.set_start_method('spawn')
+        except RuntimeError:
+            # Already set, verify it's 'spawn'
+            if mp.get_start_method() != 'spawn':
+                logger.warning(f"Multiprocessing start method already set to '{mp.get_start_method()}', expected 'spawn'")
 
     czi_path = Path(czi_path)
     slide_name = czi_path.stem  # Extract slide name for UID generation
@@ -1734,7 +1739,7 @@ def _phase2_identify_tissue_tiles_streaming(slide_loaders, tile_size, overlap, v
         x_origin, y_origin = loader.mosaic_origin
         global_x = x_origin + tile['x']
         global_y = y_origin + tile['y']
-        tile_img = loader.get_tile(global_x, global_y, min(tile['w'], tile['h']), channel)
+        tile_img = loader.get_tile(global_x, global_y, tile_size, channel)
 
         if tile_img is None:
             return [0.0]
@@ -1783,7 +1788,7 @@ def _phase2_identify_tissue_tiles_streaming(slide_loaders, tile_size, overlap, v
         x_origin, y_origin = loader.mosaic_origin
         global_x = x_origin + tile['x']
         global_y = y_origin + tile['y']
-        tile_img = loader.get_tile(global_x, global_y, min(tile['w'], tile['h']), channel)
+        tile_img = loader.get_tile(global_x, global_y, tile_size, channel)
 
         if tile_img is None:
             return None
@@ -2330,7 +2335,12 @@ def run_multi_slide_segmentation(
     """
     # Set start method to 'spawn' for GPU safety
     if num_workers > 0:
-        mp.set_start_method('spawn', force=True)
+        try:
+            mp.set_start_method('spawn')
+        except RuntimeError:
+            # Already set, verify it's 'spawn'
+            if mp.get_start_method() != 'spawn':
+                logger.warning(f"Multiprocessing start method already set to '{mp.get_start_method()}', expected 'spawn'")
 
     output_base = Path(output_base)
     output_base.mkdir(parents=True, exist_ok=True)
@@ -2373,9 +2383,8 @@ def run_multi_slide_segmentation(
                 'shape': loader.mosaic_size,
                 'czi_path': czi_path
             }
-            # Check if this slide has RGB data
-            channel_data = loader.get_channel_data(channel)
-            is_rgb = channel_data is not None and len(channel_data.shape) == 3 and channel_data.shape[-1] == 3
+            # Check if this slide has RGB data - use purpose-built method
+            is_rgb = loader.is_channel_rgb(channel)
             slide_is_rgb[slide_name] = is_rgb
             if is_rgb:
                 logger.info(f"  {slide_name}: RGB data detected (shape: {channel_data.shape})")
@@ -2399,10 +2408,68 @@ def run_multi_slide_segmentation(
                 with open(norm_params_file, 'r') as f:
                     params = json.load(f)
 
-                target_low = np.array(params['target_low'])
-                target_high = np.array(params['target_high'])
+                # Validate required keys in JSON file
+                required_keys = {'target_low', 'target_high', 'p_low', 'p_high', 'n_slides'}
+                missing_keys = required_keys - set(params.keys())
+                if missing_keys:
+                    raise ValueError(
+                        f"Normalization parameters file '{norm_params_file}' is missing required keys: {missing_keys}. "
+                        f"Required keys: {required_keys}"
+                    )
+
+                # Validate percentile values are in range [0, 100]
+                p_low = params['p_low']
+                p_high = params['p_high']
+
+                if not isinstance(p_low, (int, float)) or not isinstance(p_high, (int, float)):
+                    raise ValueError(
+                        f"Percentile values must be numeric. Got p_low={type(p_low).__name__}, p_high={type(p_high).__name__}"
+                    )
+
+                if not (0 <= p_low <= 100):
+                    raise ValueError(
+                        f"Lower percentile (p_low) must be in range [0, 100]. Got: {p_low}"
+                    )
+
+                if not (0 <= p_high <= 100):
+                    raise ValueError(
+                        f"Upper percentile (p_high) must be in range [0, 100]. Got: {p_high}"
+                    )
+
+                if p_low >= p_high:
+                    raise ValueError(
+                        f"Lower percentile must be less than upper percentile. Got p_low={p_low}, p_high={p_high}"
+                    )
+
+                # Validate and convert target_low and target_high
+                try:
+                    target_low = np.array(params['target_low'], dtype=np.float32)
+                    target_high = np.array(params['target_high'], dtype=np.float32)
+                except (TypeError, ValueError) as e:
+                    raise ValueError(
+                        f"Failed to convert target_low and target_high to arrays: {e}"
+                    )
+
+                # Validate target range has 3 channels (RGB)
+                if target_low.shape != (3,) or target_high.shape != (3,):
+                    raise ValueError(
+                        f"Target ranges must have exactly 3 channels (RGB). "
+                        f"Got target_low shape={target_low.shape}, target_high shape={target_high.shape}"
+                    )
+
+                # Validate target ranges are valid (low < high for each channel)
+                for channel_idx in range(3):
+                    channel_name = ['R', 'G', 'B'][channel_idx]
+                    if target_low[channel_idx] >= target_high[channel_idx]:
+                        raise ValueError(
+                            f"Invalid target range for {channel_name} channel: "
+                            f"target_low ({target_low[channel_idx]}) must be less than "
+                            f"target_high ({target_high[channel_idx]})"
+                        )
+
+                # Log validated parameters
                 logger.info(f"  Parameters computed from {params['n_slides']} slides")
-                logger.info(f"  P{params['p_low']}-P{params['p_high']}")
+                logger.info(f"  P{p_low}-P{p_high}")
             else:
                 # Compute global percentiles from current slides
                 logger.info(f"Computing global percentiles (P{norm_percentile_low}-P{norm_percentile_high}) from {len(slide_loaders)} slides...")
@@ -2450,8 +2517,16 @@ def run_multi_slide_segmentation(
 
                     # Show after stats
                     after_mean = normalized.mean(axis=(0,1))
-                    logger.info(f"    Before: RGB=({before_mean[0]:.1f}, {before_mean[1]:.1f}, {before_mean[2]:.1f})")
-                    logger.info(f"    After:  RGB=({after_mean[0]:.1f}, {after_mean[1]:.1f}, {after_mean[2]:.1f})")
+
+                    # Handle both RGB and grayscale cases
+                    if normalized.ndim == 3 and normalized.shape[2] == 3:
+                        # RGB case: log all 3 channels
+                        logger.info(f"    Before: RGB=({before_mean[0]:.1f}, {before_mean[1]:.1f}, {before_mean[2]:.1f})")
+                        logger.info(f"    After:  RGB=({after_mean[0]:.1f}, {after_mean[1]:.1f}, {after_mean[2]:.1f})")
+                    else:
+                        # Grayscale case: log single mean value
+                        logger.info(f"    Before: Grayscale={before_mean:.1f}")
+                        logger.info(f"    After:  Grayscale={after_mean:.1f}")
 
             logger.info("Cross-slide normalization complete!")
             log_memory_status("After normalization")
