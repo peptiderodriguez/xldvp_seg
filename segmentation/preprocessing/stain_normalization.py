@@ -73,6 +73,9 @@ def normalize_to_percentiles(
     """
     Normalize image to match target percentile range.
 
+    Memory-optimized: processes one channel at a time to avoid creating
+    a full float32 copy of the entire image (4x memory reduction).
+
     Args:
         image: RGB image (H, W, 3) or grayscale (H, W)
         target_low: Target values for p_low percentile (shape: 3 for RGB, scalar for grayscale)
@@ -85,10 +88,11 @@ def normalize_to_percentiles(
     """
     # Handle RGB vs grayscale
     if image.ndim == 3 and image.shape[2] == 3:
-        # RGB image
-        normalized = np.zeros_like(image, dtype=np.float32)
+        # RGB image - allocate output as uint8 directly (not float32!)
+        normalized = np.empty_like(image, dtype=np.uint8)
 
         for c in range(3):
+            # Work with one channel at a time in float32 (much smaller temp array)
             channel = image[:, :, c].astype(np.float32)
 
             # Compute current percentiles (both in single pass)
@@ -96,13 +100,19 @@ def normalize_to_percentiles(
 
             # Avoid division by zero
             if curr_high - curr_low < 1:
-                normalized[:, :, c] = channel
+                normalized[:, :, c] = image[:, :, c]
                 continue
 
             # Rescale to target range
             # Map [curr_low, curr_high] → [target_low, target_high]
             scale = (target_high[c] - target_low[c]) / (curr_high - curr_low)
-            normalized[:, :, c] = (channel - curr_low) * scale + target_low[c]
+            channel_normalized = (channel - curr_low) * scale + target_low[c]
+
+            # Clip and convert to uint8, write directly to output
+            normalized[:, :, c] = np.clip(channel_normalized, 0, 255).astype(np.uint8)
+
+            # Free temporary float32 arrays immediately
+            del channel, channel_normalized
 
     elif image.ndim == 2:
         # Grayscale image
@@ -113,19 +123,20 @@ def normalize_to_percentiles(
 
         # Avoid division by zero
         if curr_high - curr_low < 1:
-            normalized = channel
+            normalized = image.copy()
         else:
             # Rescale to target range
             target_low_val = target_low if np.isscalar(target_low) else target_low[0]
             target_high_val = target_high if np.isscalar(target_high) else target_high[0]
             scale = (target_high_val - target_low_val) / (curr_high - curr_low)
-            normalized = (channel - curr_low) * scale + target_low_val
+            channel_normalized = (channel - curr_low) * scale + target_low_val
+
+            # Clip and convert to uint8
+            normalized = np.clip(channel_normalized, 0, 255).astype(np.uint8)
+            del channel, channel_normalized
 
     else:
         raise ValueError(f"Unsupported image shape: {image.shape}")
-
-    # Clip to valid range and convert to uint8
-    normalized = np.clip(normalized, 0, 255).astype(np.uint8)
 
     return normalized
 
