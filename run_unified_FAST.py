@@ -208,7 +208,7 @@ def process_tile_worker(args):
     """
     # Unpack all arguments
     tile, _, _, _, output_dir, \
-    mk_min_area, mk_max_area, hspc_max_area, variance_threshold, \
+    mk_min_area, mk_max_area, hspc_min_area, hspc_max_area, variance_threshold, \
     calibration_block_size = args
 
     # Use global variables
@@ -278,7 +278,6 @@ def process_tile_worker(args):
                 fill_holes=cleanup_config['fill_holes'],
                 pixel_size_um=cleanup_config['pixel_size_um'],
             )
-            crop_result = generate_detection_crop(img_rgb, mask, centroid)
             if crop_result:
                 feat['crop_b64'] = crop_result['crop']
                 feat['mask_b64'] = crop_result['mask']
@@ -1302,7 +1301,7 @@ def run_unified_segmentation(
     for tile in tiles:
         worker_args.append((
             tile, czi_path, x_start, y_start, output_dir,
-            mk_min_area, mk_max_area, hspc_max_area, variance_threshold,
+            mk_min_area, mk_max_area, hspc_min_area, hspc_max_area, variance_threshold,
             calibration_block_size
         ))
     
