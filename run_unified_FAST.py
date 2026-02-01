@@ -909,10 +909,10 @@ class UnifiedSegmenter:
                         mk_valid_detections[crop_idx]['morph'][f'resnet_{i}'] = float(v)
 
             # Fill zeros for detections without valid crops
+            # Fill missing ResNet features with zeros (batch initialization)
             for det in mk_valid_detections:
-                if f'resnet_0' not in det['morph']:
-                    for i in range(2048):
-                        det['morph'][f'resnet_{i}'] = 0.0
+                if 'resnet_0' not in det['morph']:
+                    det['morph'].update({f'resnet_{i}': 0.0 for i in range(2048)})
 
             # Build final MK features list
             for det in mk_valid_detections:
@@ -1092,10 +1092,10 @@ class UnifiedSegmenter:
                         hspc_valid_detections[crop_idx]['morph'][f'resnet_{i}'] = float(v)
 
             # Fill zeros for detections without valid crops
+            # Fill missing ResNet features with zeros (batch initialization)
             for det in hspc_valid_detections:
-                if f'resnet_0' not in det['morph']:
-                    for i in range(2048):
-                        det['morph'][f'resnet_{i}'] = 0.0
+                if 'resnet_0' not in det['morph']:
+                    det['morph'].update({f'resnet_{i}': 0.0 for i in range(2048)})
 
             # Build final HSPC features list
             for det in hspc_valid_detections:
@@ -1366,7 +1366,7 @@ def run_unified_segmentation(
                             with h5py.File(mk_tile_dir / "segmentation.h5", 'w') as f:
                                 create_hdf5_dataset(f, 'labels', new_mk[np.newaxis])
                             with open(mk_tile_dir / "features.json", 'w') as f:
-                                json.dump([{'id': m['id'], 'global_id': m['global_id'], 'uid': m['uid'], 'center': m['center'], 'features': m['features'], 'crop_b64': m.get('crop_b64'), 'mask_b64': m.get('mask_b64')} for m in result['mk_feats']], f)
+                                json.dump(result['mk_feats'], f)
 
                             # Explicit cleanup to prevent memory accumulation
                             del new_mk, mk_tile_cells
@@ -1400,7 +1400,7 @@ def run_unified_segmentation(
                             with h5py.File(hspc_tile_dir / "segmentation.h5", 'w') as f:
                                 create_hdf5_dataset(f, 'labels', new_hspc[np.newaxis])
                             with open(hspc_tile_dir / "features.json", 'w') as f:
-                                json.dump([{'id': h['id'], 'global_id': h['global_id'], 'uid': h['uid'], 'center': h['center'], 'features': h['features'], 'crop_b64': h.get('crop_b64'), 'mask_b64': h.get('mask_b64')} for h in result['hspc_feats']], f)
+                                json.dump(result['hspc_feats'], f)
 
                             # Explicit cleanup to prevent memory accumulation
                             del new_hspc, hspc_tile_cells
@@ -1957,7 +1957,7 @@ def _phase4_process_tiles(
                 with h5py.File(mk_tile_dir / "segmentation.h5", 'w') as f:
                     create_hdf5_dataset(f, 'labels', new_mk[np.newaxis])
                 with open(mk_tile_dir / "features.json", 'w') as f:
-                    json.dump([{'id': m['id'], 'global_id': m['global_id'], 'uid': m['uid'], 'center': m['center'], 'features': m['features'], 'crop_b64': m.get('crop_b64'), 'mask_b64': m.get('mask_b64')} for m in result['mk_feats']], f)
+                    json.dump(result['mk_feats'], f)
 
                 del new_mk, mk_tile_cells
 
@@ -1989,7 +1989,7 @@ def _phase4_process_tiles(
                 with h5py.File(hspc_tile_dir / "segmentation.h5", 'w') as f:
                     create_hdf5_dataset(f, 'labels', new_hspc[np.newaxis])
                 with open(hspc_tile_dir / "features.json", 'w') as f:
-                    json.dump([{'id': h['id'], 'global_id': h['global_id'], 'uid': h['uid'], 'center': h['center'], 'features': h['features'], 'crop_b64': h.get('crop_b64'), 'mask_b64': h.get('mask_b64')} for h in result['hspc_feats']], f)
+                    json.dump(result['hspc_feats'], f)
 
                 del new_hspc, hspc_tile_cells
 
@@ -2652,7 +2652,7 @@ def run_multi_slide_segmentation(
                                     feat['uid'] = f"{slide_name}_mk_{round(feat['center'][0])}_{round(feat['center'][1])}"
                                     sr['mk_count'] += 1
                                 with open(mk_dir / "features.json", 'w') as f:
-                                    json.dump([{'id': m['id'], 'global_id': m.get('global_id'), 'uid': m.get('uid'), 'center': m['center'], 'features': m['features'], 'crop_b64': m.get('crop_b64'), 'mask_b64': m.get('mask_b64')} for m in result['mk_feats']], f)
+                                    json.dump(result['mk_feats'], f)
 
                             if result.get('hspc_feats'):
                                 hspc_dir = output_dir / "hspc" / "tiles" / str(tid)
@@ -2666,7 +2666,7 @@ def run_multi_slide_segmentation(
                                     feat['uid'] = f"{slide_name}_hspc_{round(feat['center'][0])}_{round(feat['center'][1])}"
                                     sr['hspc_count'] += 1
                                 with open(hspc_dir / "features.json", 'w') as f:
-                                    json.dump([{'id': h['id'], 'global_id': h.get('global_id'), 'uid': h.get('uid'), 'center': h['center'], 'features': h['features'], 'crop_b64': h.get('crop_b64'), 'mask_b64': h.get('mask_b64')} for h in result['hspc_feats']], f)
+                                    json.dump(result['hspc_feats'], f)
 
                         del result
                         pbar.update(1)
@@ -2902,10 +2902,10 @@ def preprocess_tile_cpu(slide_data, slide_name, tile, use_pinned_memory=True):
     # Use pinned memory for faster GPU transfer (double-buffering optimization)
     if use_pinned_memory and torch.cuda.is_available():
         try:
-            # Convert to pinned numpy array via torch
-            # This enables DMA transfer to GPU without blocking CPU
-            img_tensor = torch.from_numpy(img_rgb.copy()).pin_memory()
-            img_rgb = img_tensor.numpy()
+            # Pin memory for DMA transfer to GPU without blocking CPU
+            # torch.from_numpy shares memory with numpy array (zero-copy)
+            img_tensor = torch.from_numpy(img_rgb).pin_memory()
+            # Note: img_rgb still references same memory, now pinned
         except Exception as e:
             logger.debug(f"Failed to pin memory, using regular memory: {e}")
 
