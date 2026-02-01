@@ -48,7 +48,7 @@ def compute_global_percentiles(
             # Random sampling for grayscale with direct 2D indexing
             row_indices = np.random.randint(0, h, size=n_sample)
             col_indices = np.random.randint(0, w, size=n_sample)
-            samples = slide_rgb[row_indices, col_indices].copy()
+            samples = slide_rgb[row_indices, col_indices].copy().reshape(-1, 1)  # Reshape to (N, 1) for vstack compatibility
         else:
             raise ValueError(f"Unexpected slide shape: {slide_rgb.shape}")
 

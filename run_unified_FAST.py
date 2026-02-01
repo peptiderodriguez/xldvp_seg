@@ -2386,6 +2386,9 @@ def run_multi_slide_segmentation(
             # Check if this slide has RGB data - use purpose-built method
             is_rgb = loader.is_channel_rgb(channel)
             slide_is_rgb[slide_name] = is_rgb
+
+            # Get channel data for shape logging
+            channel_data = loader.get_channel_data(channel)
             if is_rgb:
                 logger.info(f"  {slide_name}: RGB data detected (shape: {channel_data.shape})")
             else:
