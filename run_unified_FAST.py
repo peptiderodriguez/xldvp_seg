@@ -2310,6 +2310,8 @@ def run_multi_slide_segmentation(
     num_gpus=4,
     normalize_slides=False,
     norm_params_file=None,
+    norm_percentile_low=1.0,
+    norm_percentile_high=99.0,
 ):
     """
     Process multiple slides with UNIFIED SAMPLING using RAM-first architecture.
@@ -2403,7 +2405,7 @@ def run_multi_slide_segmentation(
                 logger.info(f"  P{params['p_low']}-P{params['p_high']}")
             else:
                 # Compute global percentiles from current slides
-                logger.info(f"Computing global percentiles (P{args.norm_percentile_low}-P{args.norm_percentile_high}) from {len(slide_loaders)} slides...")
+                logger.info(f"Computing global percentiles (P{norm_percentile_low}-P{norm_percentile_high}) from {len(slide_loaders)} slides...")
 
                 # Collect channel data from all slides for global stats
                 all_channel_data = []
@@ -2415,8 +2417,8 @@ def run_multi_slide_segmentation(
                 # Compute global target percentiles
                 target_low, target_high = compute_global_percentiles(
                     all_channel_data,
-                    p_low=args.norm_percentile_low,
-                    p_high=args.norm_percentile_high,
+                    p_low=norm_percentile_low,
+                    p_high=norm_percentile_high,
                     n_samples=50000  # Sample 50k pixels per slide
                 )
 
@@ -2439,8 +2441,8 @@ def run_multi_slide_segmentation(
                         channel_data,
                         target_low,
                         target_high,
-                        p_low=args.norm_percentile_low,
-                        p_high=args.norm_percentile_high
+                        p_low=norm_percentile_low,
+                        p_high=norm_percentile_high
                     )
 
                     # Update loader's channel data
@@ -2589,7 +2591,6 @@ def run_multi_slide_segmentation(
                                     json.dump([{'id': h['id'], 'global_id': h.get('global_id'), 'uid': h.get('uid'), 'center': h['center'], 'features': h['features'], 'crop_b64': h.get('crop_b64'), 'mask_b64': h.get('mask_b64')} for h in result['hspc_feats']], f)
 
                         del result
-                        gc.collect()
                         pbar.update(1)
                         collected += 1
 
@@ -2743,7 +2744,7 @@ def process_tile_gpu_only(args):
     GPU-only worker: receives pre-normalized tile, does only GPU work.
     CPU pre/post processing happens in main process threads.
     """
-    tile, img_rgb, mk_min_area, mk_max_area, slide_name = args
+    tile, img_rgb, mk_min_area, mk_max_area, hspc_min_area, hspc_max_area, slide_name = args
 
     global segmenter
     tid = tile['id']
@@ -3087,7 +3088,7 @@ def run_pipelined_segmentation(
                     if item is None:
                         break
                     tile, img_rgb, slide_name = item
-                    yield (tile, img_rgb, mk_min_area, mk_max_area, slide_name)
+                    yield (tile, img_rgb, mk_min_area, mk_max_area, hspc_min_area, hspc_max_area, slide_name)
 
             with tqdm(total=len(sampled_tiles), desc="Processing") as pbar:
                 for result in pool.imap_unordered(process_tile_gpu_only, gpu_input_generator()):
@@ -3109,7 +3110,6 @@ def run_pipelined_segmentation(
                     for key in ['mk_masks', 'hspc_masks', 'mk_feats', 'hspc_feats']:
                         if key in result:
                             del result[key]
-                    gc.collect()
 
         # Wait for saves to complete
         save_queue.put(None)  # Signal save worker to stop
@@ -3348,6 +3348,8 @@ def main():
             num_gpus=args.num_gpus,
             normalize_slides=args.normalize_slides,
             norm_params_file=args.norm_params_file,
+            norm_percentile_low=args.norm_percentile_low,
+            norm_percentile_high=args.norm_percentile_high,
         )
 
 

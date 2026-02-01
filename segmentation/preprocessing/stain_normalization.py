@@ -36,19 +36,19 @@ def compute_global_percentiles(
             n_pixels = h * w
             n_sample = min(n_samples, n_pixels)
 
-            # Random sampling
-            indices = np.random.choice(n_pixels, n_sample, replace=False)
-            flat = slide_rgb.reshape(-1, c)
-            samples = flat[indices]
+            # Random sampling with direct 2D indexing (no reshape/flatten)
+            row_indices = np.random.randint(0, h, size=n_sample)
+            col_indices = np.random.randint(0, w, size=n_sample)
+            samples = slide_rgb[row_indices, col_indices, :].copy()
         elif slide_rgb.ndim == 2:
             h, w = slide_rgb.shape
             n_pixels = h * w
             n_sample = min(n_samples, n_pixels)
 
-            # Random sampling for grayscale
-            indices = np.random.choice(n_pixels, n_sample, replace=False)
-            flat = slide_rgb.reshape(-1)
-            samples = flat[indices]
+            # Random sampling for grayscale with direct 2D indexing
+            row_indices = np.random.randint(0, h, size=n_sample)
+            col_indices = np.random.randint(0, w, size=n_sample)
+            samples = slide_rgb[row_indices, col_indices].copy()
         else:
             raise ValueError(f"Unexpected slide shape: {slide_rgb.shape}")
 
@@ -57,9 +57,8 @@ def compute_global_percentiles(
     # Combine all samples
     combined = np.vstack(all_samples)
 
-    # Compute global percentiles per channel
-    low_vals = np.percentile(combined, p_low, axis=0)
-    high_vals = np.percentile(combined, p_high, axis=0)
+    # Compute global percentiles per channel (both in single pass)
+    low_vals, high_vals = np.percentile(combined, [p_low, p_high], axis=0)
 
     return low_vals, high_vals
 
@@ -92,9 +91,8 @@ def normalize_to_percentiles(
         for c in range(3):
             channel = image[:, :, c].astype(np.float32)
 
-            # Compute current percentiles
-            curr_low = np.percentile(channel, p_low)
-            curr_high = np.percentile(channel, p_high)
+            # Compute current percentiles (both in single pass)
+            curr_low, curr_high = np.percentile(channel, [p_low, p_high])
 
             # Avoid division by zero
             if curr_high - curr_low < 1:
@@ -110,9 +108,8 @@ def normalize_to_percentiles(
         # Grayscale image
         channel = image.astype(np.float32)
 
-        # Compute current percentiles
-        curr_low = np.percentile(channel, p_low)
-        curr_high = np.percentile(channel, p_high)
+        # Compute current percentiles (both in single pass)
+        curr_low, curr_high = np.percentile(channel, [p_low, p_high])
 
         # Avoid division by zero
         if curr_high - curr_low < 1:
@@ -151,9 +148,8 @@ def normalize_slide_to_reference(
     Returns:
         Normalized RGB image
     """
-    # Compute reference percentiles
-    ref_low = np.array([np.percentile(reference_image[:, :, c], p_low) for c in range(3)])
-    ref_high = np.array([np.percentile(reference_image[:, :, c], p_high) for c in range(3)])
+    # Compute reference percentiles (all channels and both percentiles in one pass)
+    ref_low, ref_high = np.percentile(reference_image, [p_low, p_high], axis=(0, 1))
 
     # Normalize to match reference
     return normalize_to_percentiles(image, ref_low, ref_high, p_low, p_high)
