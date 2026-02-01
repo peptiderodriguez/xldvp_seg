@@ -9,6 +9,7 @@ import json
 from pathlib import Path
 from segmentation.io.czi_loader import get_loader
 from segmentation.utils.logging import setup_logging, get_logger
+from segmentation.preprocessing.stain_normalization import compute_global_percentiles
 
 setup_logging()
 logger = get_logger(__name__)
@@ -66,20 +67,22 @@ def sample_pixels_from_slide(czi_path, channel=0, n_samples=500000):
         logger.error(f"  Failed to sample from {czi_path.name}: {e}")
         return None
 
-def compute_global_percentiles(all_samples, p_low=1.0, p_high=99.0):
-    """Compute global percentiles from all slide samples."""
+def compute_percentiles_from_samples(all_samples, p_low=1.0, p_high=99.0):
+    """
+    Compute global percentiles from pre-sampled pixel data.
 
+    This is a wrapper around the module's compute_global_percentiles() that
+    works with already-sampled data (for memory-efficient processing).
+    """
     # Stack all samples
     combined = np.vstack(all_samples)
     logger.info(f"Computing percentiles from {len(combined):,} total samples...")
 
-    # Compute percentiles per channel
+    # Compute percentiles per channel (using optimized single-pass percentile)
     if combined.ndim == 2 and combined.shape[1] == 3:  # RGB
-        low_vals = np.percentile(combined, p_low, axis=0)
-        high_vals = np.percentile(combined, p_high, axis=0)
+        low_vals, high_vals = np.percentile(combined, [p_low, p_high], axis=0)
     else:
-        low_vals = np.percentile(combined, p_low)
-        high_vals = np.percentile(combined, p_high)
+        low_vals, high_vals = np.percentile(combined, [p_low, p_high])
 
     return low_vals, high_vals
 
@@ -113,7 +116,7 @@ def main():
     # Compute global percentiles
     logger.info("")
     logger.info("="*70)
-    target_low, target_high = compute_global_percentiles(all_samples, p_low=1.0, p_high=99.0)
+    target_low, target_high = compute_percentiles_from_samples(all_samples, p_low=1.0, p_high=99.0)
 
     # Save parameters
     params = {
