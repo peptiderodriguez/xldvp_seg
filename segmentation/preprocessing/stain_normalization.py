@@ -89,7 +89,7 @@ def normalize_to_percentiles(
     # Handle RGB vs grayscale
     if image.ndim == 3 and image.shape[2] == 3:
         # RGB image - allocate output as uint8 directly (not float32!)
-        normalized = np.empty_like(image, dtype=np.uint8)
+        normalized = np.zeros_like(image, dtype=np.uint8)
 
         for c in range(3):
             # Work with one channel at a time in float32 (much smaller temp array)
@@ -101,6 +101,7 @@ def normalize_to_percentiles(
             # Avoid division by zero
             if curr_high - curr_low < 1:
                 normalized[:, :, c] = image[:, :, c]
+                del channel  # Free temp array before continue
                 continue
 
             # Rescale to target range
@@ -124,6 +125,7 @@ def normalize_to_percentiles(
         # Avoid division by zero
         if curr_high - curr_low < 1:
             normalized = image.copy()
+            del channel  # Free temp array
         else:
             # Rescale to target range
             target_low_val = target_low if np.isscalar(target_low) else target_low[0]
