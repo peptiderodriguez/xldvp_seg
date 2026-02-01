@@ -2308,6 +2308,8 @@ def run_multi_slide_segmentation(
     channel=0,
     multi_gpu=False,
     num_gpus=4,
+    normalize_slides=False,
+    norm_params_file=None,
 ):
     """
     Process multiple slides with UNIFIED SAMPLING using RAM-first architecture.
@@ -2384,15 +2386,15 @@ def run_multi_slide_segmentation(
         log_memory_status("After Phase 1 (all slides in RAM)")
 
         # NORMALIZATION: Compute global percentiles and normalize all slides
-        if args.normalize_slides and len(czi_paths) > 1:
+        if normalize_slides and len(czi_paths) > 1:
             logger.info(f"\n{'='*70}")
             logger.info("CROSS-SLIDE NORMALIZATION")
             logger.info(f"{'='*70}")
 
             # Load normalization parameters from file if provided
-            if args.norm_params_file:
-                logger.info(f"Loading pre-computed normalization parameters from: {args.norm_params_file}")
-                with open(args.norm_params_file, 'r') as f:
+            if norm_params_file:
+                logger.info(f"Loading pre-computed normalization parameters from: {norm_params_file}")
+                with open(norm_params_file, 'r') as f:
                     params = json.load(f)
 
                 target_low = np.array(params['target_low'])
@@ -3344,6 +3346,8 @@ def main():
             mk_max_area_um=args.mk_max_area_um,
             multi_gpu=args.multi_gpu,
             num_gpus=args.num_gpus,
+            normalize_slides=args.normalize_slides,
+            norm_params_file=args.norm_params_file,
         )
 
 
