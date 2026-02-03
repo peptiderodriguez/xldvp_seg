@@ -47,6 +47,59 @@ from segmentation.detection.strategies.base import Detection, DetectionStrategy
 logger = get_logger(__name__)
 
 
+class _LazyModelDict(dict):
+    """
+    Dictionary that lazy-loads models from CellDetector only when accessed.
+
+    This avoids loading ResNet/DINOv2 when they're not needed (e.g., when using
+    only morphological + SAM2 features for NMJ classification).
+    """
+
+    def __init__(self, detector: 'CellDetector'):
+        super().__init__()
+        self._detector = detector
+        # Track which models have been loaded (must be set before any dict ops)
+        self._loaded = {'device'}
+        # Pre-populate with device (always available)
+        super().__setitem__('device', detector.device)
+
+    def __getitem__(self, key):
+        if key not in self._loaded:
+            self._load_model(key)
+        return super().get(key)
+
+    def get(self, key, default=None):
+        if key not in self._loaded:
+            self._load_model(key)
+        return super().get(key, default)
+
+    def _load_model(self, key):
+        """Load a model on-demand."""
+        self._loaded.add(key)
+        if key == 'sam2_predictor':
+            self[key] = self._detector.sam2_predictor
+        elif key == 'sam2_auto':
+            self[key] = self._detector.sam2_auto
+        elif key == 'cellpose':
+            self[key] = self._detector.cellpose
+        elif key == 'resnet':
+            self[key] = self._detector.resnet
+        elif key == 'resnet_transform':
+            self[key] = self._detector.resnet_transform
+        elif key == 'dinov2':
+            self[key] = self._detector.dinov2
+        elif key == 'dinov2_transform':
+            self[key] = self._detector.dinov2_transform
+        elif key == 'device':
+            self[key] = self._detector.device
+        # For any other key (like 'classifier'), just leave it as-is
+
+    def __setitem__(self, key, value):
+        """Allow setting arbitrary keys (e.g., classifier)."""
+        self._loaded.add(key)
+        super().__setitem__(key, value)
+
+
 class CellDetector:
     """
     Unified cell detector with pluggable strategies.
@@ -113,27 +166,28 @@ class CellDetector:
         self._dinov2 = None
         self._dinov2_transform = None
 
+        # Cached lazy model dict (created on first access)
+        self._models_dict = None
+
         logger.info(f"CellDetector initialized (device={self.device})")
 
     @property
     def models(self) -> Dict[str, Any]:
         """
-        Get loaded models dict for strategies.
+        Get models dict for strategies.
+
+        Note: This uses internal attributes directly to avoid triggering lazy loading.
+        Models will be loaded on-demand when strategies access them via the properties.
+        The dict is cached so items can be added (e.g., 'classifier') and persist.
 
         Returns:
             Dict with keys: 'sam2_predictor', 'sam2_auto', 'cellpose', 'resnet',
-                           'resnet_transform', 'device'
+                           'resnet_transform', 'dinov2', 'dinov2_transform', 'device'
         """
-        return {
-            'sam2_predictor': self.sam2_predictor,
-            'sam2_auto': self.sam2_auto,
-            'cellpose': self.cellpose,
-            'resnet': self.resnet,
-            'resnet_transform': self.resnet_transform,
-            'dinov2': self.dinov2,
-            'dinov2_transform': self.dinov2_transform,
-            'device': self.device,
-        }
+        # Return cached dict or create new one
+        if self._models_dict is None:
+            self._models_dict = _LazyModelDict(self)
+        return self._models_dict
 
     @property
     def sam2_predictor(self):

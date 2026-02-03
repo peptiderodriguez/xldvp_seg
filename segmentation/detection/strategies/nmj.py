@@ -379,15 +379,22 @@ class NMJStrategy(DetectionStrategy):
         """
         Classify NMJ candidates using trained Random Forest model.
 
+        Supports two formats:
+        1. Separate classifier and scaler objects (legacy)
+        2. sklearn Pipeline with scaler+RF combined (new format)
+           - Pass pipeline as 'classifier', scaler=None
+
         Args:
             detections: List of Detection objects to classify
-            classifier: Trained sklearn RandomForest model
-            scaler: StandardScaler for feature normalization
+            classifier: Trained sklearn RandomForest model OR sklearn Pipeline
+            scaler: StandardScaler for feature normalization (None if using Pipeline)
             feature_names: List of feature names expected by classifier
 
         Returns:
             List of Detection objects that pass classification
         """
+        from sklearn.pipeline import Pipeline
+
         if not detections:
             return []
 
@@ -410,15 +417,19 @@ class NMJStrategy(DetectionStrategy):
         if not X:
             return detections
 
-        # Convert and scale
+        # Convert to numpy
         X = np.array(X, dtype=np.float32)
         X = np.nan_to_num(X, nan=0, posinf=0, neginf=0)
 
-        if scaler is not None:
-            X = scaler.transform(X)
-
-        # Predict
-        probs = classifier.predict_proba(X)[:, 1]  # Probability of positive class
+        # Handle Pipeline vs separate scaler+classifier
+        if isinstance(classifier, Pipeline):
+            # Pipeline handles scaling internally
+            probs = classifier.predict_proba(X)[:, 1]
+        else:
+            # Legacy: apply scaler separately
+            if scaler is not None:
+                X = scaler.transform(X)
+            probs = classifier.predict_proba(X)[:, 1]
 
         # Update detections with scores
         classified_detections = []
@@ -499,11 +510,17 @@ class NMJStrategy(DetectionStrategy):
             else:
                 tile_rgb = tile_rgb.astype(np.uint8)
 
-        # Get models
+        # Get models - only load ResNet/DINOv2 if we'll use them
         sam2_predictor = models.get('sam2_predictor')
-        resnet = models.get('resnet')
-        resnet_transform = models.get('resnet_transform')
         device = models.get('device', torch.device('cuda' if torch.cuda.is_available() else 'cpu'))
+
+        # Only access ResNet/DINOv2 if extract_resnet_features is enabled (avoids triggering lazy load)
+        if self.extract_resnet_features:
+            resnet = models.get('resnet')
+            resnet_transform = models.get('resnet_transform')
+        else:
+            resnet = None
+            resnet_transform = None
 
         # Set image for SAM2 embeddings if available
         if sam2_predictor is not None and self.extract_sam2_embeddings and extract_full_features:
@@ -511,7 +528,8 @@ class NMJStrategy(DetectionStrategy):
 
         # Step 2: Extract features for each mask
         valid_detections = []
-        crops_for_resnet = []
+        crops_for_resnet = []  # Masked crops
+        crops_for_resnet_context = []  # Context crops (unmasked)
         crop_indices = []
         label_array = np.zeros(tile.shape[:2], dtype=np.uint32)
         det_id = 1
@@ -541,20 +559,24 @@ class NMJStrategy(DetectionStrategy):
             if sam2_predictor is not None and self.extract_sam2_embeddings and extract_full_features:
                 sam2_emb = self._extract_sam2_embedding(sam2_predictor, cy, cx)
                 for i, v in enumerate(sam2_emb):
-                    morph_features[f'sam2_emb_{i}'] = float(v)
+                    morph_features[f'sam2_{i}'] = float(v)
             elif extract_full_features:
                 # Fill with zeros if SAM2 not available
                 for i in range(256):
-                    morph_features[f'sam2_emb_{i}'] = 0.0
+                    morph_features[f'sam2_{i}'] = 0.0
 
-            # Prepare crop for batch ResNet processing
+            # Prepare crops for batch ResNet/DINOv2 processing (masked + context)
             if self.extract_resnet_features and extract_full_features:
                 y1, y2 = ys.min(), ys.max()
                 x1, x2 = xs.min(), xs.max()
-                crop = tile_rgb[y1:y2+1, x1:x2+1].copy()
+                # Context crop (unmasked - full tissue)
+                crop_context = tile_rgb[y1:y2+1, x1:x2+1].copy()
+                # Masked crop (background zeroed out)
+                crop_masked = crop_context.copy()
                 crop_mask = mask[y1:y2+1, x1:x2+1]
-                crop[~crop_mask] = 0  # Zero out background
-                crops_for_resnet.append(crop)
+                crop_masked[~crop_mask] = 0
+                crops_for_resnet.append(crop_masked)
+                crops_for_resnet_context.append(crop_context)
                 crop_indices.append(len(valid_detections))
 
             valid_detections.append({
@@ -570,23 +592,69 @@ class NMJStrategy(DetectionStrategy):
             label_array[mask] = det_id
             det_id += 1
 
-        # Batch ResNet feature extraction
+        # Batch ResNet feature extraction - masked
         if crops_for_resnet and resnet is not None and resnet_transform is not None and extract_full_features:
             resnet_features_list = self._extract_resnet_features_batch(
                 crops_for_resnet, resnet, resnet_transform, device
             )
 
-            # Assign ResNet features to correct detections
+            # Assign masked ResNet features to correct detections
             for crop_idx, resnet_feats in zip(crop_indices, resnet_features_list):
                 for i, v in enumerate(resnet_feats):
                     valid_detections[crop_idx]['features'][f'resnet_{i}'] = float(v)
 
-        # Fill zeros for detections without ResNet features
-        if extract_full_features:
+        # Batch ResNet feature extraction - context (unmasked)
+        if crops_for_resnet_context and resnet is not None and resnet_transform is not None and extract_full_features:
+            resnet_context_list = self._extract_resnet_features_batch(
+                crops_for_resnet_context, resnet, resnet_transform, device
+            )
+
+            # Assign context ResNet features to correct detections
+            for crop_idx, resnet_feats in zip(crop_indices, resnet_context_list):
+                for i, v in enumerate(resnet_feats):
+                    valid_detections[crop_idx]['features'][f'resnet_ctx_{i}'] = float(v)
+
+        # Batch DINOv2 feature extraction (masked + context)
+        # Only access DINOv2 if extract_resnet_features is enabled (avoids triggering lazy load)
+        if self.extract_resnet_features:
+            dinov2 = models.get('dinov2')
+            dinov2_transform = models.get('dinov2_transform')
+        else:
+            dinov2 = None
+            dinov2_transform = None
+
+        if crops_for_resnet and dinov2 is not None and dinov2_transform is not None and extract_full_features:
+            # DINOv2 masked features
+            dinov2_masked_list = self._extract_dinov2_features_batch(
+                crops_for_resnet, dinov2, dinov2_transform, device
+            )
+            for crop_idx, dino_feats in zip(crop_indices, dinov2_masked_list):
+                for i, v in enumerate(dino_feats):
+                    valid_detections[crop_idx]['features'][f'dinov2_{i}'] = float(v)
+
+            # DINOv2 context features
+            dinov2_context_list = self._extract_dinov2_features_batch(
+                crops_for_resnet_context, dinov2, dinov2_transform, device
+            )
+            for crop_idx, dino_feats in zip(crop_indices, dinov2_context_list):
+                for i, v in enumerate(dino_feats):
+                    valid_detections[crop_idx]['features'][f'dinov2_ctx_{i}'] = float(v)
+
+        # Fill zeros for detections without ResNet/DINOv2 features (only if extraction is enabled)
+        if extract_full_features and self.extract_resnet_features:
             for det in valid_detections:
                 if 'resnet_0' not in det['features']:
                     for i in range(2048):
                         det['features'][f'resnet_{i}'] = 0.0
+                if 'resnet_ctx_0' not in det['features']:
+                    for i in range(2048):
+                        det['features'][f'resnet_ctx_{i}'] = 0.0
+                if dinov2 is not None and 'dinov2_0' not in det['features']:
+                    for i in range(1024):  # DINOv2-L dimension
+                        det['features'][f'dinov2_{i}'] = 0.0
+                if dinov2 is not None and 'dinov2_ctx_0' not in det['features']:
+                    for i in range(1024):
+                        det['features'][f'dinov2_ctx_{i}'] = 0.0
 
         # Reset SAM2 predictor
         if sam2_predictor is not None and self.extract_sam2_embeddings:
@@ -988,26 +1056,79 @@ def load_nmj_rf_classifier(model_path: str):
     """
     Load a trained NMJ Random Forest classifier.
 
+    Supports two formats:
+    1. Dict with 'model', 'scaler', 'feature_names' keys (legacy)
+    2. sklearn Pipeline with scaler + RF (new format from train_morph_sam2_classifier.py)
+       - Feature names loaded from companion JSON file
+
     Args:
-        model_path: Path to pickle file (.pkl)
+        model_path: Path to pickle/joblib file (.pkl or .joblib)
 
     Returns:
-        Dict with 'model', 'scaler', 'feature_names', 'type'='rf'
+        Dict with 'pipeline' (sklearn Pipeline), 'feature_names', 'type'='rf'
     """
     import joblib
+    import json
+    from pathlib import Path
+    from sklearn.pipeline import Pipeline
 
     model_data = joblib.load(model_path)
-    model_data['type'] = 'rf'
 
-    logger.info(f"Loaded RF classifier with {len(model_data['feature_names'])} features")
-    logger.info(f"  Accuracy: {model_data.get('accuracy', 'N/A')}")
+    # Check if it's a Pipeline (new format) or dict (legacy format)
+    if isinstance(model_data, Pipeline):
+        # New format: Pipeline saved directly, feature names in companion JSON
+        pipeline = model_data
 
-    return model_data
+        # Look for companion feature names file
+        model_dir = Path(model_path).parent
+        feature_names_path = model_dir / "nmj_classifier_feature_names.json"
+
+        if feature_names_path.exists():
+            with open(feature_names_path) as f:
+                feature_names = json.load(f)
+            logger.info(f"Loaded feature names from {feature_names_path}")
+        else:
+            # Try to infer feature count from model
+            n_features = pipeline.named_steps['rf'].n_features_in_
+            feature_names = [f"feature_{i}" for i in range(n_features)]
+            logger.warning(f"No feature names file found, using generic names for {n_features} features")
+
+        result = {
+            'pipeline': pipeline,
+            'feature_names': feature_names,
+            'type': 'rf'
+        }
+        logger.info(f"Loaded RF Pipeline classifier with {len(feature_names)} features")
+
+    else:
+        # Legacy format: dict with model, scaler, feature_names
+        # Wrap in pipeline-like structure for consistent interface
+        from sklearn.pipeline import Pipeline
+        from sklearn.preprocessing import StandardScaler
+
+        if 'scaler' in model_data and 'model' in model_data:
+            pipeline = Pipeline([
+                ('scaler', model_data['scaler']),
+                ('rf', model_data['model'])
+            ])
+        else:
+            pipeline = model_data.get('model', model_data)
+
+        result = {
+            'pipeline': pipeline,
+            'feature_names': model_data.get('feature_names', []),
+            'type': 'rf'
+        }
+        logger.info(f"Loaded RF classifier (legacy format) with {len(result['feature_names'])} features")
+        if 'accuracy' in model_data:
+            logger.info(f"  Accuracy: {model_data['accuracy']}")
+
+    return result
 
 
 def load_classifier(model_path: str, device=None):
     """
-    Load NMJ classifier - auto-detects CNN (.pth) vs RF (.pkl).
+    Load NMJ classifier - auto-detects CNN (.pth) vs RF (.pkl/.joblib).
 
     Args:
         model_path: Path to model file
@@ -1016,7 +1137,7 @@ def load_classifier(model_path: str, device=None):
     Returns:
         Dict with classifier info and 'type' key ('cnn' or 'rf')
     """
-    if model_path.endswith('.pkl'):
+    if model_path.endswith('.pkl') or model_path.endswith('.joblib'):
         return load_nmj_rf_classifier(model_path)
     else:
         model, transform, device = load_nmj_classifier(model_path, device)

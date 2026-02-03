@@ -147,17 +147,22 @@ Utilities in `segmentation.processing.coordinates`:
 4. Watershed expansion
 5. Optional RF classifier
 
-### Multi-Channel Features (~2,400 total)
-- Per-channel stats (45): mean, std, percentiles, etc.
-- Inter-channel ratios (8)
-- ResNet embeddings (2,048)
-- SAM2 embeddings (256)
-- Morphological (25)
+### Multi-Channel Features (with `--all-channels`)
+
+All feature extractors use true 3-channel RGB input:
+- **Morphological (22)**: Per-channel intensity stats (red/green/blue mean/std), HSV, shape
+- **SAM2 embeddings (256)**: Extracted from 3-channel tile
+- **ResNet50 (4,096)**: Masked + context, both from 3-channel crops
+- **DINOv2-L (2,048)**: Masked + context, both from 3-channel crops
+
+**Total: ~6,400 deep features per detection**
 
 ### Channel Mapping (3-channel slides)
 - R (ch0): Nuclear (488nm)
-- G (ch1): BTX (647nm) - NMJ marker
+- G (ch1): BTX (647nm) - NMJ marker (used for mask detection)
 - B (ch2): NFL (750nm)
+
+Note: Mask detection uses BTX channel only (intensity thresholding), but all feature extraction uses the full 3-channel RGB.
 
 ### Classifiers
 | Type | File | Accuracy |
@@ -181,18 +186,26 @@ python train_nmj_classifier_features.py \
 
 Use `--all-channels` flag to extract features from true 3-channel RGB instead of single-channel BTX stacked 3x.
 
-**Masked vs Context comparison (v1 single-channel results):**
-| Method | Accuracy | Recall+ | F1+ |
-|--------|----------|---------|-----|
-| ResNet masked | 0.717 | 0.153 | 0.253 |
-| ResNet context | 0.700 | 0.181 | 0.274 |
-| ResNet combined | **0.739** | **0.250** | **0.375** |
+**Feature comparison results (3-channel, 844 annotated detections):**
 
-Context features capture surrounding tissue information. Combined (masked + context) gives best F1.
+| Feature Set | n | Accuracy | Precision | Recall | F1 |
+|-------------|---|----------|-----------|--------|-----|
+| **all_features** | 6478 | **0.937** | 0.925 | **0.897** | **0.909** |
+| morph+dinov2_combined | 2126 | 0.931 | 0.922 | 0.883 | 0.901 |
+| morphological | 78 | 0.931 | 0.937 | 0.867 | 0.900 |
+| dinov2_context | 1024 | 0.891 | 0.864 | 0.827 | 0.843 |
+| resnet_context | 2048 | 0.883 | 0.834 | 0.840 | 0.836 |
+| resnet_masked | 2048 | 0.838 | 0.799 | 0.727 | 0.761 |
+| sam2 | 256 | 0.834 | 0.868 | 0.630 | 0.728 |
+| dinov2_masked | 1024 | 0.815 | 0.796 | 0.650 | 0.714 |
 
-**DINOv2 alternative:**
-Self-supervised vision transformer, better for microscopy than ImageNet-trained ResNet.
-DINOv2-L (1024D) is now integrated into the pipeline alongside ResNet.
+**Key findings:**
+- Context features outperform masked features for both ResNet and DINOv2
+- Morphological features alone achieve F1=0.900 (very discriminative)
+- Best efficiency: morph+dinov2_combined (F1=0.901 with only 2126 features)
+- All features combined gives best overall performance (F1=0.909)
+
+**DINOv2 models:**
 
 | Model | Params | Feature Dim |
 |-------|--------|-------------|
@@ -207,10 +220,10 @@ DINOv2-L (1024D) is now integrated into the pipeline alongside ResNet.
 | `resnet_ctx_0-2047` | 2048 | ResNet50 context (full tissue) |
 | `dinov2_0-1023` | 1024 | DINOv2-L masked |
 | `dinov2_ctx_0-1023` | 1024 | DINOv2-L context |
-| `sam2_emb_0-255` | 256 | SAM2 embeddings |
-| morphological | ~25 | Area, solidity, etc. |
+| `sam2_emb_0-255` | 256 | SAM2 spatial embeddings |
+| morphological | ~78 | Area, solidity, channel stats, etc. |
 
-**Total: ~6,400 features per detection**
+**Total: ~6,478 features per detection**
 
 **DINOv2 vs ResNet (v1 single-channel results):**
 | Method | Accuracy | Recall+ | F1+ |
@@ -331,6 +344,23 @@ report.generate_html("report.html")
 ```python
 mask = mask.astype(bool)  # Fix for SAM2 masks
 ```
+
+### SAM2 Embedding Extraction
+The SAM2 predictor's `_orig_hw` attribute returns a list containing a tuple, not just a tuple:
+```python
+# Wrong (causes "not enough values to unpack" error):
+img_h, img_w = sam2_predictor._orig_hw
+
+# Correct:
+img_h, img_w = sam2_predictor._orig_hw[0]
+```
+
+### Feature Extraction Best Practices
+When extracting deep features (ResNet, DINOv2) for detections:
+- **Use actual detection masks** for cropping, not area-based approximations
+- **Use actual bounding boxes** from mask coordinates (`ys.min(), ys.max()`)
+- **Never use fixed crop sizes** - each detection should have a unique crop
+- The pipeline in `nmj.py` does this correctly; avoid writing standalone extraction scripts
 
 ### HDF5 Errors
 ```bash

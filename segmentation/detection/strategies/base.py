@@ -234,7 +234,8 @@ class DetectionStrategy(ABC):
         try:
             shape = sam2_predictor._features["image_embed"].shape
             emb_h, emb_w = shape[2], shape[3]
-            img_h, img_w = sam2_predictor._orig_hw
+            # _orig_hw is a list containing a tuple: [(h, w)]
+            img_h, img_w = sam2_predictor._orig_hw[0]
 
             # Check for division by zero
             if img_h == 0 or img_w == 0:

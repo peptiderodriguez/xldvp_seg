@@ -615,6 +615,7 @@ def create_strategy_for_cell_type(cell_type, params, pixel_size_um):
             min_area_px=params.get('min_area', 150),
             min_skeleton_length=params.get('min_skeleton_length', 30),
             max_solidity=params.get('max_solidity', 0.85),
+            extract_resnet_features=params.get('extract_resnet_features', True),
         )
     elif cell_type == 'mk':
         # Convert area from pixels to um^2 for the strategy
@@ -2237,16 +2238,29 @@ def load_czi(czi_path):
     return reader, mosaic_info, pixel_size_um
 
 
-def generate_tile_grid(mosaic_info, tile_size):
-    """Generate tile coordinates covering the mosaic."""
+def generate_tile_grid(mosaic_info, tile_size, overlap_fraction=0.0):
+    """Generate tile coordinates covering the mosaic.
+
+    Args:
+        mosaic_info: Dict with x, y, width, height
+        tile_size: Size of each tile in pixels
+        overlap_fraction: Fraction of tile to overlap (0.0 = no overlap, 0.1 = 10% overlap)
+
+    Returns:
+        List of tile coordinate dicts with 'x' and 'y' keys
+    """
     tiles = []
     x_start = mosaic_info['x']
     y_start = mosaic_info['y']
     width = mosaic_info['width']
     height = mosaic_info['height']
 
-    for y in range(y_start, y_start + height, tile_size):
-        for x in range(x_start, x_start + width, tile_size):
+    # Calculate stride (step size) based on overlap
+    stride = int(tile_size * (1 - overlap_fraction))
+    stride = max(stride, 1)  # Ensure at least 1 pixel stride
+
+    for y in range(y_start, y_start + height, stride):
+        for x in range(x_start, x_start + width, stride):
             tiles.append({'x': x, 'y': y})
 
     return tiles
@@ -2719,9 +2733,54 @@ def run_pipeline(args):
             quiet=False
         )
 
+    # Apply photobleaching correction if requested (slide-wide, before tiling)
+    if getattr(args, 'photobleaching_correction', False) and use_ram:
+        from segmentation.preprocessing.illumination import normalize_rows_columns, estimate_band_severity
+
+        logger.info("Applying slide-wide photobleaching correction...")
+
+        for ch, ch_data in all_channel_data.items():
+            original_dtype = ch_data.dtype
+
+            # Report severity before
+            severity_before = estimate_band_severity(ch_data)
+            logger.info(f"  Channel {ch} before: row_cv={severity_before['row_cv']:.1f}%, "
+                       f"col_cv={severity_before['col_cv']:.1f}% ({severity_before['severity']})")
+
+            # Apply row/column normalization to fix banding
+            # Note: uses float64 internally, may need ~4x memory temporarily
+            corrected = normalize_rows_columns(ch_data)
+
+            # Convert back to original dtype
+            if original_dtype == np.uint16:
+                corrected = np.clip(corrected, 0, 65535).astype(np.uint16)
+            elif original_dtype == np.uint8:
+                corrected = np.clip(corrected, 0, 255).astype(np.uint8)
+            else:
+                # Keep as float but match original dtype if possible
+                corrected = corrected.astype(original_dtype)
+
+            # Update in-place
+            all_channel_data[ch] = corrected
+
+            # Also update loader.channel_data if this is the primary channel
+            if ch == args.channel:
+                loader.channel_data = corrected
+
+            # Report severity after
+            severity_after = estimate_band_severity(corrected)
+            logger.info(f"  Channel {ch} after:  row_cv={severity_after['row_cv']:.1f}%, "
+                       f"col_cv={severity_after['col_cv']:.1f}% ({severity_after['severity']})")
+
+            # Force garbage collection after each channel to free float64 intermediate
+            gc.collect()
+
+        logger.info("Photobleaching correction complete.")
+
     # Generate tile grid (using global coordinates)
-    logger.info(f"Generating tile grid (size={args.tile_size})...")
-    all_tiles = generate_tile_grid(mosaic_info, args.tile_size)
+    overlap = getattr(args, 'tile_overlap', 0.0)
+    logger.info(f"Generating tile grid (size={args.tile_size}, overlap={overlap*100:.0f}%)...")
+    all_tiles = generate_tile_grid(mosaic_info, args.tile_size, overlap_fraction=overlap)
     logger.info(f"  Total tiles: {len(all_tiles)}")
 
     # Calibrate tissue threshold using RAM-loaded data
@@ -2802,9 +2861,14 @@ def run_pipeline(args):
                 logger.info("CNN classifier loaded successfully")
             else:
                 # RF classifier - use features directly
-                detector.models['classifier'] = classifier_data['model']
+                # New format uses 'pipeline', legacy uses 'model'
+                if 'pipeline' in classifier_data:
+                    detector.models['classifier'] = classifier_data['pipeline']
+                    detector.models['scaler'] = None  # Pipeline handles scaling internally
+                else:
+                    detector.models['classifier'] = classifier_data['model']
+                    detector.models['scaler'] = classifier_data.get('scaler')
                 detector.models['classifier_type'] = 'rf'
-                detector.models['scaler'] = classifier_data['scaler']
                 detector.models['feature_names'] = classifier_data['feature_names']
                 logger.info(f"RF classifier loaded successfully ({len(classifier_data['feature_names'])} features)")
     else:
@@ -2818,6 +2882,7 @@ def run_pipeline(args):
             'min_area': args.min_area,
             'min_skeleton_length': args.min_skeleton_length,
             'max_solidity': args.max_solidity,
+            'extract_resnet_features': not getattr(args, 'skip_deep_features', False),
         }
     elif args.cell_type == 'mk':
         params = {
@@ -3415,12 +3480,15 @@ def main():
 
     # Tile processing
     parser.add_argument('--tile-size', type=int, default=3000, help='Tile size in pixels')
+    parser.add_argument('--tile-overlap', type=float, default=0.0, help='Tile overlap fraction (0.0-0.5, default: 0.0 = no overlap)')
     parser.add_argument('--sample-fraction', type=float, default=0.20, help='Fraction of tissue tiles (default: 20%%)')
     parser.add_argument('--channel', type=int, default=1, help='Primary channel index for detection')
     parser.add_argument('--all-channels', action='store_true',
                         help='Load all channels for multi-channel analysis (NMJ specificity checking)')
     parser.add_argument('--channel-names', type=str, default=None,
                         help='Comma-separated channel names for feature naming (e.g., "nuclear,sma,pm,cd31" or "nuclear,sma,pm,lyve1")')
+    parser.add_argument('--photobleaching-correction', action='store_true',
+                        help='Apply slide-wide photobleaching correction (fixes horizontal/vertical banding)')
 
     # NMJ parameters
     parser.add_argument('--intensity-percentile', type=float, default=99)
@@ -3519,10 +3587,11 @@ def main():
     parser.add_argument('--no-fiducials', dest='add_fiducials', action='store_false',
                         help='Do not add calibration markers')
 
-    # Feature extraction (always enabled - 2326 features per detection)
-    # Kept for backwards compatibility but no longer needed
+    # Feature extraction options
     parser.add_argument('--extract-full-features', action='store_true',
-                        help='(Deprecated) Full features always extracted')
+                        help='Extract full features including SAM2 embeddings')
+    parser.add_argument('--skip-deep-features', action='store_true',
+                        help='Skip ResNet and DINOv2 feature extraction (faster, use with morph+SAM2 classifier)')
 
     # HTML export
     parser.add_argument('--samples-per-page', type=int, default=300)

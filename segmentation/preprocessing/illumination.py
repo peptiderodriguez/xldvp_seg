@@ -35,35 +35,38 @@ def normalize_rows_columns(
     1. Computing row-wise means and normalizing rows
     2. Computing column-wise means and normalizing columns
 
+    Uses float32 for memory efficiency on large mosaics (~94GB for 263k×89k
+    instead of ~188GB with float64).
+
     Args:
         image: 2D grayscale image (any numeric dtype)
         target_mean: Target mean intensity. If None, uses global mean.
 
     Returns:
-        Corrected image with consistent row/column intensities (float64)
+        Corrected image with consistent row/column intensities (float32)
 
     Example:
         >>> corrected = normalize_rows_columns(tile)
         >>> # Row and column means will now be uniform
     """
-    img = image.astype(np.float64)
+    # Use float32 for memory efficiency on large images
+    img = image.astype(np.float32)
 
     # Use global mean as target if not specified
     if target_mean is None:
-        target_mean = np.mean(img)
+        target_mean = float(np.mean(img))
 
-    # Step 1: Normalize rows
+    # Step 1: Normalize rows (in-place to save memory)
     row_means = np.mean(img, axis=1, keepdims=True)
-    # Avoid division by zero
     row_means = np.where(row_means > 0, row_means, 1)
-    row_corrected = img * (target_mean / row_means)
+    img *= (target_mean / row_means)  # In-place multiplication
 
-    # Step 2: Normalize columns on the row-corrected image
-    col_means = np.mean(row_corrected, axis=0, keepdims=True)
+    # Step 2: Normalize columns (in-place)
+    col_means = np.mean(img, axis=0, keepdims=True)
     col_means = np.where(col_means > 0, col_means, 1)
-    corrected = row_corrected * (target_mean / col_means)
+    img *= (target_mean / col_means)  # In-place multiplication
 
-    return corrected
+    return img
 
 
 def morphological_background_subtraction(
