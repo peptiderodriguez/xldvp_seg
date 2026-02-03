@@ -79,8 +79,8 @@ The included classifier (`nmj_classifier_morph_sam2.joblib`) uses:
 
 Performance:
 - Precision: **0.952** (optimized for minimal false positives)
-- Recall: 0.697
-- F1: 0.803
+- Recall: 0.840
+- F1: 0.891
 
 ## Output Structure
 
