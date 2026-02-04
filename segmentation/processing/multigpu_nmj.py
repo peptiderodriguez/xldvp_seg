@@ -324,6 +324,7 @@ def _nmj_gpu_worker(
 
                     # Build feature dict
                     feat = {
+                        'id': uid,  # Required by create_sample_from_detection()
                         'uid': uid,
                         'slide_name': slide_name,
                         'center': [float(local_cx), float(local_cy)],
