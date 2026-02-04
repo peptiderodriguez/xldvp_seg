@@ -34,6 +34,6 @@ python run_segmentation.py \
     --sample-fraction 0.10 \
     --multi-gpu --num-gpus 4 \
     --no-serve \
-    --output-dir /tmp/test_multigpu_nmj
+    --output-dir /fs/gpfs41/lv12/fileset02/pool/pool-mann-edwin/nmj_output/multigpu_test
 
 echo "=== Test complete ==="

@@ -2551,7 +2551,11 @@ def create_sample_from_detection(tile_x, tile_y, tile_rgb, masks, feat, pixel_si
     Minimum crop size is 224px, maximum is 800px.
     """
     det_id = feat['id']
-    det_num = int(det_id.split('_')[-1])
+    # Use mask_label if available (multi-GPU path), otherwise parse from id (single-GPU path)
+    if 'mask_label' in feat:
+        det_num = feat['mask_label']
+    else:
+        det_num = int(det_id.split('_')[-1])
     mask = masks == det_num
 
     if mask.sum() == 0:

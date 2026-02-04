@@ -311,7 +311,7 @@ def _nmj_gpu_worker(
 
                 # Build features list with global UIDs
                 features_list = []
-                for det in detections:
+                for idx, det in enumerate(detections):
                     # Get local centroid
                     local_cx, local_cy = det.centroid  # [x, y]
 
@@ -323,9 +323,11 @@ def _nmj_gpu_worker(
                     uid = f"{slide_name}_nmj_{round(global_cx)}_{round(global_cy)}"
 
                     # Build feature dict
+                    # mask_label matches the label in the masks array (1-indexed)
                     feat = {
                         'id': uid,  # Required by create_sample_from_detection()
                         'uid': uid,
+                        'mask_label': idx + 1,  # Mask labels are 1-indexed
                         'slide_name': slide_name,
                         'center': [float(local_cx), float(local_cy)],
                         'global_center': [float(global_cx), float(global_cy)],
