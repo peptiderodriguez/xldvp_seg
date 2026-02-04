@@ -3047,6 +3047,166 @@ def run_pipeline(args):
         # Skip the regular tile loop - go directly to HTML export
         logger.info("Skipping standard tile loop (multi-scale mode)")
 
+    elif args.cell_type == 'nmj' and getattr(args, 'multi_gpu', False):
+        # Multi-GPU NMJ processing
+        logger.info("=" * 60)
+        logger.info("MULTI-GPU NMJ DETECTION ENABLED")
+        logger.info("=" * 60)
+
+        num_gpus = getattr(args, 'num_gpus', 4)
+        logger.info(f"Using {num_gpus} GPUs for parallel NMJ detection")
+
+        # Require --all-channels for multi-GPU NMJ (needed for proper multi-channel features)
+        if not getattr(args, 'all_channels', False) or len(all_channel_data) < 3:
+            logger.error("Multi-GPU NMJ mode requires --all-channels flag with 3+ channels loaded")
+            logger.error("  Channel mapping: ch0=nuclear(488), ch1=BTX(647), ch2=NFL(750)")
+            logger.error("  Segmentation uses BTX only, but feature extraction needs all channels")
+            raise ValueError("--multi-gpu requires --all-channels for NMJ detection")
+
+        from segmentation.processing.multigpu_shm import SharedSlideManager
+        from segmentation.processing.multigpu_nmj import MultiGPUNMJProcessor
+
+        # Create shared memory manager
+        shm_manager = SharedSlideManager()
+
+        try:
+            # Load all 3 channels to shared memory: ch0=nuclear, ch1=BTX, ch2=NFL
+            # Channel order must match: R=ch0, G=ch1(BTX), B=ch2
+            # NMJStrategy.segment() uses tile[:,:,1] for BTX thresholding
+            ch_keys = sorted(all_channel_data.keys())[:3]
+            h, w = all_channel_data[ch_keys[0]].shape
+            logger.info(f"Creating shared memory for 3 channels ({h}x{w})...")
+            logger.info(f"  Channel mapping: {ch_keys} -> [R, G(BTX), B]")
+
+            # Create shared memory buffer and load directly
+            slide_shm_arr = shm_manager.create_slide_buffer(
+                slide_name, (h, w, 3), all_channel_data[ch_keys[0]].dtype
+            )
+            for i, ch_key in enumerate(ch_keys):
+                slide_shm_arr[:, :, i] = all_channel_data[ch_key]
+                logger.info(f"  Loaded channel {ch_key} to shared memory slot {i}")
+
+            # Build strategy parameters
+            strategy_params = {
+                'intensity_percentile': args.intensity_percentile,
+                'min_area': args.min_area,
+                'min_skeleton_length': args.min_skeleton_length,
+                'max_solidity': args.max_solidity,
+                'classifier_threshold': 0.5,  # Keep more candidates, filter by score later
+            }
+
+            # Get classifier path - use morph+SAM2 classifier by default for multi-GPU
+            # Multi-GPU mode extracts morph+SAM2 features (334 total), not deep features
+            classifier_path = getattr(args, 'nmj_classifier', None)
+            if classifier_path is None:
+                # Check for default morph+SAM2 classifier
+                default_classifier = Path(__file__).parent / "checkpoints" / "nmj_classifier_morph_sam2.joblib"
+                if default_classifier.exists():
+                    classifier_path = str(default_classifier)
+                    logger.info(f"Using default morph+SAM2 classifier: {classifier_path}")
+                else:
+                    logger.warning("No classifier specified and default not found")
+                    logger.warning("  Expected: checkpoints/nmj_classifier_morph_sam2.joblib")
+                    logger.warning("  Will return all candidates without filtering")
+            else:
+                logger.info(f"Using specified classifier: {classifier_path}")
+                logger.info("  NOTE: Multi-GPU mode extracts morph+SAM2 features (334 total)")
+                logger.info("  Classifier must be trained on these features, not deep features")
+
+            # Create multi-GPU processor
+            with MultiGPUNMJProcessor(
+                num_gpus=num_gpus,
+                slide_info=shm_manager.get_slide_info(),
+                strategy_params=strategy_params,
+                pixel_size_um=pixel_size_um,
+                classifier_path=classifier_path,
+                extract_sam2_embeddings=True,  # Required for morph+SAM2 classifier
+            ) as processor:
+
+                # Submit all tiles (add tile dimensions for worker)
+                logger.info(f"Submitting {len(sampled_tiles)} tiles to {num_gpus} GPUs...")
+                tile_size = args.tile_size
+                for tile in sampled_tiles:
+                    # Worker expects 'x', 'y', 'w', 'h' keys
+                    tile_with_dims = {
+                        'x': tile['x'],
+                        'y': tile['y'],
+                        'w': tile_size,
+                        'h': tile_size,
+                    }
+                    processor.submit_tile(slide_name, tile_with_dims)
+
+                # Collect results with progress bar
+                from tqdm import tqdm as tqdm_progress
+                pbar = tqdm_progress(total=len(sampled_tiles), desc="Processing tiles")
+
+                results_collected = 0
+                while results_collected < len(sampled_tiles):
+                    result = processor.collect_result(timeout=300)  # 5 min timeout per tile
+                    if result is None:
+                        logger.warning("Timeout waiting for result")
+                        break
+
+                    results_collected += 1
+                    pbar.update(1)
+
+                    if result['status'] == 'success':
+                        tile = result['tile']
+                        tile_x, tile_y = tile['x'], tile['y']
+                        masks = result['masks']
+                        features_list = result['features_list']
+
+                        # Save tile outputs
+                        tile_id = f"tile_{tile_x}_{tile_y}"
+                        tile_out = tiles_dir / tile_id
+                        tile_out.mkdir(exist_ok=True)
+
+                        # Save masks
+                        with h5py.File(tile_out / f"{args.cell_type}_masks.h5", 'w') as f:
+                            create_hdf5_dataset(f, 'masks', masks.astype(np.uint16))
+
+                        # Save features
+                        with open(tile_out / f"{args.cell_type}_features.json", 'w') as f:
+                            json.dump(features_list, f, cls=NumpyEncoder)
+
+                        # Add detections to global list
+                        for feat in features_list:
+                            all_detections.append(feat)
+
+                        # Create samples for HTML
+                        # We need to load the tile for crop generation
+                        if len(all_channel_data) >= 3:
+                            ch_keys = sorted(all_channel_data.keys())[:3]
+                            tile_rgb = np.stack([
+                                all_channel_data[ch_keys[i]][tile_y:tile_y+args.tile_size, tile_x:tile_x+args.tile_size]
+                                for i in range(3)
+                            ], axis=-1)
+                        else:
+                            tile_data = loader.channel_data[tile_y:tile_y+args.tile_size, tile_x:tile_x+args.tile_size]
+                            tile_rgb = np.stack([tile_data] * 3, axis=-1)
+
+                        for feat in features_list:
+                            sample = create_sample_from_detection(
+                                tile_x, tile_y, tile_rgb, masks, feat, pixel_size_um, slide_name,
+                                cell_type=args.cell_type
+                            )
+                            if sample:
+                                all_samples.append(sample)
+                                total_detections += 1
+
+                    elif result['status'] in ('empty', 'no_tissue'):
+                        pass  # Normal - no tissue in tile
+                    elif result['status'] == 'error':
+                        logger.warning(f"Tile {result['tid']} error: {result.get('error', 'unknown')}")
+
+                pbar.close()
+
+            logger.info(f"Multi-GPU processing complete: {total_detections} NMJs from {results_collected} tiles")
+
+        finally:
+            # Cleanup shared memory
+            shm_manager.cleanup()
+
     else:
         # Standard single-scale tile processing
         for tile in tqdm(sampled_tiles, desc="Tiles"):
@@ -3592,6 +3752,12 @@ def main():
                         help='Extract full features including SAM2 embeddings')
     parser.add_argument('--skip-deep-features', action='store_true',
                         help='Skip ResNet and DINOv2 feature extraction (faster, use with morph+SAM2 classifier)')
+
+    # Multi-GPU processing (NMJ only)
+    parser.add_argument('--multi-gpu', action='store_true',
+                        help='Enable multi-GPU processing (NMJ only). Distributes tiles across GPUs.')
+    parser.add_argument('--num-gpus', type=int, default=4,
+                        help='Number of GPUs to use for multi-GPU processing (default: 4)')
 
     # HTML export
     parser.add_argument('--samples-per-page', type=int, default=300)

@@ -74,6 +74,15 @@ from .multigpu import (
     process_tiles_multi_gpu,
 )
 
+from .multigpu_shm import (
+    SharedSlideManager,
+    MultiGPUTileProcessorSHM,
+)
+
+from .multigpu_nmj import (
+    MultiGPUNMJProcessor,
+)
+
 __all__ = [
     # Pipeline
     'DetectionPipeline',
@@ -127,4 +136,9 @@ __all__ = [
     # Multi-GPU processing
     'MultiGPUTileProcessor',
     'process_tiles_multi_gpu',
+    # Multi-GPU shared memory
+    'SharedSlideManager',
+    'MultiGPUTileProcessorSHM',
+    # Multi-GPU NMJ
+    'MultiGPUNMJProcessor',
 ]
