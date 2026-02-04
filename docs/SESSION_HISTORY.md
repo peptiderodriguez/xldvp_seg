@@ -5,7 +5,13 @@ For project overview and usage, see [CLAUDE.md](../CLAUDE.md).
 
 ---
 
-## Current State (as of Feb 1, 2026)
+## Current State (as of Feb 4, 2026)
+
+### Full Slide Run In Progress
+
+Running 100% segmentation (SAMPLE_FRACTION=1.0) followed by RF classifier filtering at **0.80 probability threshold**.
+
+**Expected output:** ~870 vessels (extrapolated from 10% sample)
 
 ### BEST RESULTS TO DATE - CD31 Endothelial Lining Filter
 
@@ -54,25 +60,31 @@ Trained Random Forest on 330 annotations (95 positive, 235 negative):
 - **Cross-scale merging**: Keeps finest segmentation with 90% coverage threshold
 - **1/2 scale detection**: Finest scale, requires corroboration from coarser scales
 - **Union-Find clustering**: Groups all overlapping vessels before selecting best per cluster
-- **Slide-wide photobleaching correction**: Fixes banding artifacts across tile boundaries (NEW)
+- **RF classifier**: Post-hoc filtering with 0.80 probability threshold (89.1% CV accuracy)
 
 ---
 
-## Feb 1, 2026 - Slide-Wide Photobleaching Correction
+## Feb 4, 2026 - Slide-Wide Photobleaching Correction (DISABLED)
 
 **Problem**: Horizontal/vertical banding artifacts visible across tile boundaries. Per-tile correction normalized each tile independently, so banding that spanned tiles remained visible.
 
-**Solution**: Apply photobleaching correction to the full mosaic (at 1/2 scale, ~45GB in RAM) *before* extracting tiles.
+**Attempted Solution**: Apply photobleaching correction to the full mosaic (at 1/2 scale, ~45GB in RAM) *before* extracting tiles.
 
 **Implementation:**
 - New method `DownsampledChannelCache.apply_photobleaching_correction()`
-- Called after channel loading but before any tile extraction
 - Uses `normalize_rows_columns()` to fix banding + `morphological_background_subtraction()` (201px kernel) for gradients
-- Reports before/after banding severity (row_cv%, col_cv%)
 
-**Location:** `scripts/sam2_multiscale_vessels.py` lines ~540-584
+**ISSUE: TOO SLOW** - Morphological background subtraction with 201px kernel on 117k x 52k image took 16+ hours and never completed. The operation is O(n²) with kernel size.
 
-**Removed:** Per-tile `correct_photobleaching()` calls to avoid double-applying correction.
+**Resolution**: Disabled slide-wide photobleaching correction. The successful 10% run that produced good results did NOT use this correction anyway. Code remains in place but commented out.
+
+**Location:** `scripts/sam2_multiscale_vessels.py` lines ~540-584 (method exists but call is commented out at line ~2150)
+
+**Future options if banding becomes an issue:**
+1. Use smaller kernel (51px instead of 201px)
+2. Only apply row/column normalization (skip morphological step)
+3. Process in strips/chunks instead of full mosaic
+4. Apply correction at coarser scale (1/8 or 1/16) then upsample
 
 ---
 

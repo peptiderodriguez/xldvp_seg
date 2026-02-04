@@ -376,7 +376,7 @@ from segmentation.io.czi_loader import CZILoader
 # Configuration
 CZI_PATH = "/home/dude/images/20251106_Fig2_nuc488_CD31_555_SMA647_PM750-EDFvar-stitch.czi"
 OUTPUT_DIR = "/home/dude/vessel_output/sam2_multiscale"
-SAMPLE_FRACTION = 0.10  # 10% of tiles
+SAMPLE_FRACTION = 1.0  # 100% of tiles
 TILE_OVERLAP = 0.5  # 50% overlap between tiles
 TISSUE_VARIANCE_THRESHOLD = 50
 COVERAGE_THRESHOLD = 0.90  # Min coverage to consider fine-scale complete (for cross-scale merging)
@@ -2146,8 +2146,8 @@ def main():
     # Load all channels at BASE_SCALE (1/2) - 4x smaller than full res
     channel_cache = DownsampledChannelCache(loader, [NUCLEAR, CD31, SMA, PM], BASE_SCALE)
 
-    # Apply slide-wide photobleaching correction to fix banding artifacts
-    channel_cache.apply_photobleaching_correction()
+    # NOTE: Slide-wide photobleaching correction disabled - too slow on large images
+    # channel_cache.apply_photobleaching_correction()
 
     # Load SAM2
     print("\nLoading SAM2...", flush=True)
