@@ -769,6 +769,8 @@ def generate_annotation_page(
             stats_parts.append(f"{stats['area_um2']:.1f} &micro;m&sup2;")
         if 'area_px' in stats:
             stats_parts.append(f"{stats['area_px']:.0f} px")
+        if 'score' in stats:
+            stats_parts.append(f"score: {stats['score']:.2f}")
         if 'sma_ratio' in stats:
             stats_parts.append(f"sma: {stats['sma_ratio']:.2f}")
         if 'diameter_um' in stats:
@@ -1938,7 +1940,7 @@ def generate_mk_hspc_page_html(samples, cell_type, page_num, total_pages, slides
         }}
 
         function updateStats() {{
-            // Local stats (this page)
+            // Local stats (this page) - count from DOM (always current)
             let pos = 0, neg = 0;
             document.querySelectorAll('.card').forEach(card => {{
                 const label = parseInt(card.dataset.label);
@@ -1949,8 +1951,11 @@ def generate_mk_hspc_page_html(samples, cell_type, page_num, total_pages, slides
             document.getElementById('negative-count').textContent = neg;
 
             // Global stats (all pages)
-            let globalPos = 0, globalNeg = 0;
+            // Use DOM count for current page, localStorage for other pages
+            let globalPos = pos, globalNeg = neg;
+            const currentPage = {page_num};
             for (let i = 1; i <= TOTAL_PAGES; i++) {{
+                if (i === currentPage) continue;  // Already counted from DOM
                 const key = CELL_TYPE + '_labels_page' + i;
                 const stored = localStorage.getItem(key);
                 if (stored) {{
