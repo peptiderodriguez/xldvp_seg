@@ -10,7 +10,9 @@
 
 ### Documentation
 - **[GETTING_STARTED.md](docs/GETTING_STARTED.md)** - Full user guide
-- **[LMD_EXPORT_GUIDE.md](docs/LMD_EXPORT_GUIDE.md)** - Laser microdissection export
+- **[NMJ_PIPELINE_GUIDE.md](docs/NMJ_PIPELINE_GUIDE.md)** - NMJ detection with classifier
+- **[NMJ_LMD_EXPORT_WORKFLOW.md](docs/NMJ_LMD_EXPORT_WORKFLOW.md)** - Full LMD export workflow
+- **[LMD_EXPORT_GUIDE.md](docs/LMD_EXPORT_GUIDE.md)** - Basic LMD export
 - **[COORDINATE_SYSTEM.md](docs/COORDINATE_SYSTEM.md)** - Coordinate conventions
 
 ### Key Locations
@@ -105,6 +107,8 @@ python -m http.server 8080 --directory /home/dude/mk_output/project/html
 | `run_nmj_inference.py` | NMJ classification with trained model |
 | `scripts/czi_to_ome_zarr.py` | Convert CZI to OME-Zarr with pyramids |
 | `scripts/napari_place_crosses.py` | Interactive reference cross placement |
+| `scripts/contour_processing.py` | Contour dilation and RDP simplification |
+| `scripts/napari_view_lmd_export.py` | View LMD export overlaid on slide |
 
 ---
 
@@ -483,7 +487,7 @@ Generate paired control regions for each NMJ target (offset 150 µm, same shape)
 **Napari visualization:**
 ```bash
 # View export overlaid on OME-Zarr pyramid
-python napari_view_export.py --zarr slide.zarr --export lmd_export_with_controls.json
+python scripts/napari_view_lmd_export.py --zarr slide.zarr --export lmd_export_with_controls.json
 ```
 - Green: Singles (NMJs)
 - Cyan: Single controls
