@@ -74,20 +74,43 @@ Use greedy nearest-neighbor algorithm:
 
 | File | Purpose |
 |------|---------|
-| `lmd_export_full.json` | Complete export with contours (singles + clusters) |
-| `shapes.xml` | Final LMD XML output for Leica LMD7 |
+| `lmd_export_with_controls.json` | Complete export with contours + spatial controls |
+| `shapes_with_controls.xml` | Final LMD XML output for Leica LMD7 |
 | `reference_crosses.json` | Calibration cross positions |
-| `singles_with_contours.json` | Processed single NMJ contours |
-| `contour_processing.py` | Post-processing module (dilation, RDP) |
+| `well_assignment_384.json` | Well plate mapping |
 
 ## Scripts
 
+**Main entry point:**
+```bash
+python run_lmd_export.py \
+    --detections nmj_detections.json \
+    --crosses reference_crosses.json \
+    --output-dir lmd_export \
+    --export \
+    --generate-controls \
+    --control-offset-um 150
+```
+
+**Supporting scripts in `scripts/`:**
+
 | Script | Purpose |
 |--------|---------|
-| `generate_full_lmd_export.py` | Full pipeline: extract contours, assign wells, order by NN |
-| `generate_lmd_xml.py` | Generate Leica LMD XML from export |
-| `contour_processing.py` | Post-processing: dilation +0.5µm, RDP simplification |
-| `extract_singles_contours.py` | Extract contours for outlier/single NMJs |
+| `run_lmd_export.py` | **Main CLI** - clustering, controls, well assignment, XML export |
+| `scripts/contour_processing.py` | Post-processing: dilation +0.5µm, RDP simplification |
+| `scripts/napari_place_crosses.py` | Interactive reference cross placement in Napari |
+| `scripts/napari_view_lmd_export.py` | View export overlaid on OME-Zarr pyramid |
+| `scripts/czi_to_ome_zarr.py` | Convert CZI to OME-Zarr for Napari |
+
+**Example/template scripts (require path customization):**
+
+| Script | Purpose |
+|--------|---------|
+| `scripts/generate_full_lmd_export.py` | Example: extract contours, assign wells, order by NN |
+| `scripts/generate_lmd_xml.py` | Example: generate Leica XML from export JSON |
+| `scripts/extract_singles_contours.py` | Example: extract contours from H5 mask files |
+
+Note: Example scripts have hardcoded paths - modify `BASE_DIR`, `TILES_DIR`, etc. for your project.
 
 ## Contour Post-Processing
 
@@ -99,20 +122,32 @@ Typical area increase: ~35% after dilation.
 
 ## Workflow
 
+See [NMJ_LMD_EXPORT_WORKFLOW.md](../docs/NMJ_LMD_EXPORT_WORKFLOW.md) for complete details.
+
 ```
-1. Run segmentation → get detections
-2. Cluster detections (spatial grouping)
-3. Review/annotate → identify outliers
-4. Generate full export:
-   python generate_full_lmd_export.py
-   - Extracts contours from H5 masks
-   - Applies post-processing (dilation + RDP)
-   - Orders by nearest-neighbor
-   - Assigns wells in serpentine order
-5. Generate LMD XML:
-   python generate_lmd_xml.py
-6. Place reference crosses in Napari (on Mac)
-7. Transfer shapes.xml to LMD computer
+1. Run segmentation with classifier:
+   python run_segmentation.py --cell-type nmj --nmj-classifier checkpoints/nmj_classifier_morph_sam2.joblib ...
+
+2. Extract contours from H5 masks (use extract_singles_contours.py as template)
+
+3. Convert CZI to OME-Zarr for Napari:
+   python scripts/czi_to_ome_zarr.py slide.czi slide.zarr
+
+4. Place reference crosses in Napari:
+   python scripts/napari_place_crosses.py slide.zarr --output reference_crosses.json
+
+5. Export to LMD with controls:
+   python run_lmd_export.py \
+       --detections nmj_detections_with_contours.json \
+       --crosses reference_crosses.json \
+       --output-dir lmd_export \
+       --export \
+       --generate-controls
+
+6. Verify in Napari:
+   python scripts/napari_view_lmd_export.py --zarr slide.zarr --export lmd_export_with_controls.json
+
+7. Transfer shapes_with_controls.xml to LMD computer
 ```
 
 ## Napari Reference Cross Placement (on Mac)
