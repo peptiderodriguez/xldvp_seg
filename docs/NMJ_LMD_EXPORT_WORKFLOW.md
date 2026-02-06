@@ -17,13 +17,37 @@ This workflow takes classifier-filtered NMJ detections and prepares them for las
 
 ## Prerequisites
 
+### Installation
+
 ```bash
+# Clone repo and install
+git clone https://github.com/peptiderodriguez/xldvp_seg.git
+cd xldvp_seg
+./install.sh  # Auto-detects CUDA
+
 # Activate environment
 source ~/miniforge3/etc/profile.d/conda.sh && conda activate mkseg
 
-# Required packages
+# Additional packages for LMD export
 pip install napari[all] ome-zarr shapely hdf5plugin
 ```
+
+### SAM2 Checkpoint
+
+Download the SAM2.1 Large model (~900MB):
+```bash
+wget -P checkpoints/ https://dl.fbaipublicfiles.com/segment_anything_2/092824/sam2.1_hiera_large.pt
+```
+
+### Hardware Requirements
+
+| Resource | Minimum | Recommended |
+|----------|---------|-------------|
+| RAM | 64 GB | 128+ GB |
+| GPU VRAM | 8 GB | 24 GB |
+| Storage | 500 GB | 1+ TB (for zarr pyramids) |
+
+For very large slides (250k x 100k pixels), loading all channels to RAM requires ~140GB.
 
 **Input files required:**
 - `nmj_detections.json` - Detection results from `run_segmentation.py`
@@ -34,6 +58,19 @@ pip install napari[all] ome-zarr shapely hdf5plugin
 
 ### Step 1: Run NMJ Detection with Classifier
 
+**Channel mapping for 3-channel NMJ slides:**
+| Channel | Wavelength | Marker | Role |
+|---------|------------|--------|------|
+| 0 (R) | 488nm | Nuclear | Context |
+| 1 (G) | 647nm | BTX | NMJ marker (detection channel) |
+| 2 (B) | 750nm | NFL | Neurofilament context |
+
+**Classifier details:**
+- File: `checkpoints/nmj_classifier_morph_sam2.joblib`
+- Features: 334 (78 morphological + 256 SAM2 embeddings)
+- Performance: Precision **0.952**, Recall 0.840, F1 0.891
+- Training data: `training_data/nmj_annotations_20250202_morph_sam2_training.json` (844 annotations)
+
 ```bash
 python run_segmentation.py \
     --czi-path /path/to/slide.czi \
@@ -42,10 +79,22 @@ python run_segmentation.py \
     --channel 1 \
     --intensity-percentile 97 \
     --all-channels \
+    --load-to-ram \
     --extract-full-features \
     --skip-deep-features \
+    --tile-overlap 0.1 \
     --nmj-classifier checkpoints/nmj_classifier_morph_sam2.joblib
 ```
+
+**Key parameters:**
+| Parameter | Value | Description |
+|-----------|-------|-------------|
+| `--channel 1` | BTX channel | Used for intensity-based detection |
+| `--intensity-percentile 97` | Threshold | Pixels above 97th percentile |
+| `--all-channels` | flag | Load all 3 channels for feature extraction |
+| `--load-to-ram` | flag | Faster for network-mounted slides |
+| `--tile-overlap 0.1` | 10% | Catches NMJs at tile boundaries |
+| `--skip-deep-features` | flag | Use morph+SAM2 only (faster) |
 
 **Output:**
 ```
@@ -56,6 +105,24 @@ output/
 ├── nmj_detections.json      # Merged detections with RF predictions
 └── html/                    # Annotation viewer
 ```
+
+**Expected runtime:** ~120-150 sec/tile due to SAM2 embedding extraction. A 250k x 100k pixel slide with ~1800 tiles takes 60-80 hours at 100% sampling.
+
+**Note on tile overlap:** With `--tile-overlap 0.1`, NMJs at tile boundaries may be detected in multiple tiles. Deduplication is applied automatically based on centroid distance.
+
+### Step 1b: Review Detections (Optional)
+
+Before proceeding to LMD export, review detections in the HTML viewer:
+
+```bash
+# Start HTTP server
+python -m http.server 8080 --directory /path/to/output/html
+
+# Or use Cloudflare tunnel for remote access
+~/cloudflared tunnel --url http://localhost:8080
+```
+
+Open `index.html` in browser. Detections are paginated (300 per page). Use keyboard navigation (arrow keys) to review. The classifier has 95.2% precision, so ~5% may be false positives.
 
 ### Step 2: Extract Contours from Masks
 
@@ -189,9 +256,16 @@ python run_lmd_export.py \
     --detections nmj_detections_with_contours.json \
     --output-dir lmd_export \
     --cluster-size 10 \
-    --clustering-method dbscan \
-    --cluster-eps-um 500
+    --clustering-method greedy \
+    --plate-format 384
 ```
+
+**Clustering options:**
+| Option | Description |
+|--------|-------------|
+| `--cluster-size N` | Target detections per well (e.g., 10) |
+| `--clustering-method` | `greedy` (default), `kmeans`, or `dbscan` |
+| `--plate-format` | `384` or `96` |
 
 **Well assignment pattern:**
 - **Singles first**, then **clusters**
@@ -383,11 +457,12 @@ lmd_export/
 
 | Parameter | Default | Description |
 |-----------|---------|-------------|
-| `PIXEL_SIZE_UM` | 0.1725 | Micrometers per pixel |
-| `DILATION_UM` | 0.5 | Buffer around NMJ contour |
+| `PIXEL_SIZE_UM` | 0.1725 | Micrometers per pixel (for this slide) |
+| `DILATION_UM` | 0.5 | Buffer around NMJ contour for laser cutting |
 | `RDP_EPSILON` | 5 | RDP simplification threshold (pixels) |
-| `CONTROL_OFFSET_UM` | 150 | Control region offset distance |
-| `CLUSTER_EPS_UM` | 500 | DBSCAN clustering epsilon |
+| `CONTROL_OFFSET_UM` | 150 | Control region offset distance (µm) |
+| `--intensity-percentile` | 97 | Detection threshold percentile |
+| `--tile-overlap` | 0.1 | Tile overlap fraction for boundary NMJs |
 
 ## Well Plate Layout
 
