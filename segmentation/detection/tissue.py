@@ -41,6 +41,50 @@ def calculate_block_variances(gray_image, block_size=512):
     return variances
 
 
+def compute_pixel_level_tissue_mask(
+    image: np.ndarray,
+    variance_threshold: float,
+    block_size: int = 7
+) -> np.ndarray:
+    """
+    Compute pixel-level tissue mask using local variance.
+
+    Identifies tissue pixels (high local variance) vs background pixels (low variance).
+    Uses same variance threshold as tile-level tissue detection for consistency.
+
+    Args:
+        image: RGB or grayscale image (H, W, 3) or (H, W)
+        variance_threshold: Variance threshold for tissue detection
+        block_size: Local neighborhood size for variance computation (default: 7×7)
+
+    Returns:
+        Boolean mask (H, W) where True = tissue, False = background
+    """
+    # Convert to grayscale if needed
+    if image.ndim == 3:
+        gray = cv2.cvtColor(image.astype(np.uint8), cv2.COLOR_RGB2GRAY)
+    else:
+        gray = image.astype(np.uint8)
+
+    # Compute local variance using uniform filter
+    # This is equivalent to computing variance in each block_size×block_size neighborhood
+    from scipy.ndimage import uniform_filter
+
+    # Local mean
+    local_mean = uniform_filter(gray.astype(np.float32), size=block_size)
+
+    # Local mean of squared values
+    local_mean_sq = uniform_filter(gray.astype(np.float32) ** 2, size=block_size)
+
+    # Local variance: E[X²] - E[X]²
+    local_variance = local_mean_sq - local_mean ** 2
+
+    # Threshold: pixels with variance above threshold are tissue
+    tissue_mask = local_variance >= variance_threshold
+
+    return tissue_mask
+
+
 def has_tissue(tile_image, variance_threshold, min_tissue_fraction=0.15, block_size=512):
     """
     Check if a tile contains tissue using block-based variance.

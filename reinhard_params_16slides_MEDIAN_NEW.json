@@ -1,0 +1,33 @@
+{
+  "L_median": 54.117645263671875,
+  "L_mad": 15.294116973876953,
+  "a_median": 4.0,
+  "a_mad": 5.0,
+  "b_median": -2.0,
+  "b_mad": 3.0,
+  "n_slides": 16,
+  "n_total_pixels": 8000000,
+  "method": "reinhard_median",
+  "slides": [
+    "2025_11_18_FGC1.czi",
+    "2025_11_18_FGC2.czi",
+    "2025_11_18_FGC3.czi",
+    "2025_11_18_FGC4.czi",
+    "2025_11_18_FHU1.czi",
+    "2025_11_18_FHU2.czi",
+    "2025_11_18_FHU3.czi",
+    "2025_11_18_FHU4.czi",
+    "2025_11_18_MGC1.czi",
+    "2025_11_18_MGC2.czi",
+    "2025_11_18_MGC3.czi",
+    "2025_11_18_MGC4.czi",
+    "2025_11_18_MHU1.czi",
+    "2025_11_18_MHU2.czi",
+    "2025_11_18_MHU3.czi",
+    "2025_11_18_MHU4.czi"
+  ],
+  "samples_per_slide": 500000,
+  "sampling_method": "tissue_aware_10x_lower_threshold",
+  "tile_size": 3000,
+  "block_size": 512
+}

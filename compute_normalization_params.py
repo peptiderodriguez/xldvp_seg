@@ -15,10 +15,12 @@ setup_logging()
 logger = get_logger(__name__)
 
 def sample_pixels_from_slide(czi_path, channel=0, n_samples=500000):
-    """Sample random pixels from a slide."""
+    """Sample random pixels from TISSUE REGIONS only (using variance-based detection)."""
     logger.info(f"Sampling from {czi_path.name}...")
 
     try:
+        from segmentation.detection.tissue import calibrate_tissue_threshold, filter_tissue_tiles
+
         loader = get_loader(str(czi_path), load_to_ram=True, channel=channel)
         channel_data = loader.get_channel_data(channel)
 
@@ -26,38 +28,79 @@ def sample_pixels_from_slide(czi_path, channel=0, n_samples=500000):
             logger.warning(f"  No data loaded for {czi_path.name}")
             return None
 
-        # Get shape
-        if len(channel_data.shape) == 3:  # RGB
-            h, w, c = channel_data.shape
-            is_rgb = (c == 3)
-        else:
-            h, w = channel_data.shape
-            is_rgb = False
+        # Ensure RGB
+        if len(channel_data.shape) == 2:
+            channel_data = np.stack([channel_data] * 3, axis=-1)
 
-        logger.info(f"  Shape: {channel_data.shape}, RGB: {is_rgb}")
+        h, w, c = channel_data.shape
+        logger.info(f"  Shape: {channel_data.shape}")
 
-        # Sample random pixels efficiently (without flattening)
-        n_pixels = h * w
-        n_sample = min(n_samples, n_pixels)
+        # Use proper tissue detection at block level (fast)
+        logger.info(f"  Detecting tissue blocks using variance thresholding...")
 
-        # Generate random 2D coordinates directly (with replacement)
-        # For 500k samples from billions of pixels, duplicates are negligible (~0.016%)
-        # This is MUCH faster than np.random.choice with replace=False on billions of elements
-        row_indices = np.random.randint(0, h, size=n_sample)
-        col_indices = np.random.randint(0, w, size=n_sample)
+        block_size = 512
+        blocks = []
+        for y in range(0, h - block_size, block_size):
+            for x in range(0, w - block_size, block_size):
+                blocks.append({'x': x, 'y': y})
 
-        # Index directly into the array (much faster than flattening entire array)
-        if is_rgb:
-            samples = channel_data[row_indices, col_indices, :].copy()  # Shape: (n_sample, 3)
-        else:
-            samples = channel_data[row_indices, col_indices].copy()  # Shape: (n_sample,)
+        logger.info(f"  Created {len(blocks)} blocks, calibrating tissue threshold...")
 
-        mean_intensity = samples.mean()
-        logger.info(f"  Mean intensity: {mean_intensity:.1f}")
+        # Calibrate tissue threshold
+        variance_threshold = calibrate_tissue_threshold(
+            blocks,
+            image_array=channel_data,
+            calibration_samples=min(100, len(blocks)),
+            block_size=block_size,
+            tile_size=block_size
+        )
 
-        # CRITICAL: Free memory immediately after sampling
-        loader.close()  # Release all loader resources including internal data cache
-        del loader, channel_data, row_indices, col_indices
+        logger.info(f"  Tissue variance threshold (computed): {variance_threshold:.1f}")
+
+        # Reduce threshold by 10x to detect more tissue (especially lighter-stained regions)
+        variance_threshold = variance_threshold / 10.0
+        logger.info(f"  Tissue variance threshold (reduced 10x): {variance_threshold:.1f}")
+        logger.info(f"  Filtering to tissue blocks...")
+
+        # Filter to tissue blocks only
+        tissue_blocks = filter_tissue_tiles(
+            blocks,
+            variance_threshold,
+            image_array=channel_data,
+            tile_size=block_size,
+            block_size=block_size,
+            n_workers=8,
+            show_progress=False
+        )
+
+        if len(tissue_blocks) == 0:
+            logger.warning(f"  No tissue blocks found in {czi_path.name}!")
+            return None
+
+        logger.info(f"  Found {len(tissue_blocks)} tissue blocks ({100*len(tissue_blocks)/len(blocks):.1f}%)")
+        logger.info(f"  Sampling {n_samples} pixels from tissue blocks...")
+
+        # Sample random pixels from tissue blocks only (no per-pixel checks needed!)
+        tissue_samples = []
+
+        for _ in range(n_samples):
+            # Pick random tissue block
+            block = tissue_blocks[np.random.randint(len(tissue_blocks))]
+
+            # Pick random pixel within that block
+            y = block['y'] + np.random.randint(0, min(block_size, h - block['y']))
+            x = block['x'] + np.random.randint(0, min(block_size, w - block['x']))
+
+            tissue_samples.append(channel_data[y, x, :])
+
+        samples = np.array(tissue_samples)  # (N, 3)
+        logger.info(f"  Sampled {len(samples)} tissue pixels, mean intensity: {samples.mean():.1f}")
+
+        # Close and clear to prevent memory accumulation across slides
+        loader.close()
+        from segmentation.io.czi_loader import clear_cache
+        clear_cache()
+        del loader, channel_data
         import gc
         gc.collect()
 
@@ -113,27 +156,58 @@ def main():
         logger.error("No samples collected!")
         return
 
-    # Compute global percentiles
+    # Compute global median/MAD for Reinhard normalization
+    import cv2
     logger.info("")
     logger.info("="*70)
-    target_low, target_high = compute_percentiles_from_samples(all_samples, p_low=1.0, p_high=99.0)
+    logger.info("Computing global median/MAD for Reinhard normalization...")
 
-    # Save parameters
+    # Stack all samples
+    combined = np.vstack(all_samples)  # (N, 3) RGB
+    logger.info(f"Total samples: {len(combined):,}")
+
+    # Convert to LAB
+    tissue_img = combined.reshape(1, -1, 3).astype(np.uint8)
+    lab = cv2.cvtColor(tissue_img, cv2.COLOR_RGB2LAB).astype(np.float32)
+    lab = lab.reshape(-1, 3)  # Back to (N, 3)
+
+    # Convert to actual LAB scale
+    lab[:, 0] = lab[:, 0] * 100.0 / 255.0  # L: [0,255] -> [0,100]
+    lab[:, 1] = lab[:, 1] - 128.0          # a: [0,255] -> [-128,127]
+    lab[:, 2] = lab[:, 2] - 128.0          # b: [0,255] -> [-128,127]
+
+    # Compute median and MAD for each channel
+    medians = np.median(lab, axis=0)
+    mads = np.median(np.abs(lab - medians), axis=0)
+
+    # Save parameters in Reinhard format
     params = {
+        'L_median': float(medians[0]),
+        'L_mad': float(mads[0]),
+        'a_median': float(medians[1]),
+        'a_mad': float(mads[1]),
+        'b_median': float(medians[2]),
+        'b_mad': float(mads[2]),
         'n_slides': len(all_samples),
-        'p_low': 1.0,
-        'p_high': 99.0,
-        'target_low': target_low.tolist() if hasattr(target_low, 'tolist') else [target_low],
-        'target_high': target_high.tolist() if hasattr(target_high, 'tolist') else [target_high],
-        'slides': [s.name for s in slides]
+        'n_total_pixels': len(combined),
+        'method': 'reinhard_median',
+        'slides': [s.name for s in slides],
+        'samples_per_slide': 500000,
+        'sampling_method': 'tissue_aware_10x_lower_threshold',
+        'tile_size': 3000,
+        'block_size': 512
     }
 
-    output_file = Path("/viper/ptmp2/edrod/xldvp_seg_fresh/normalization_params_all16.json")
+    output_file = Path("/viper/ptmp2/edrod/xldvp_seg_fresh/reinhard_params_16slides_MEDIAN_NEW.json")
     with open(output_file, 'w') as f:
         json.dump(params, f, indent=2)
 
     logger.info("="*70)
-    logger.info("GLOBAL NORMALIZATION PARAMETERS:")
+    logger.info("GLOBAL REINHARD NORMALIZATION PARAMETERS:")
+    logger.info(f"  L: median={medians[0]:.2f}, MAD={mads[0]:.2f}")
+    logger.info(f"  a: median={medians[1]:.2f}, MAD={mads[1]:.2f}")
+    logger.info(f"  b: median={medians[2]:.2f}, MAD={mads[2]:.2f}")
+    logger.info("="*70)
     if isinstance(target_low, np.ndarray) and len(target_low) == 3:
         logger.info(f"  R: [{target_low[0]:.1f}, {target_high[0]:.1f}]")
         logger.info(f"  G: [{target_low[1]:.1f}, {target_high[1]:.1f}]")
