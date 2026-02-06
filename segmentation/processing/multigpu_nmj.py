@@ -32,6 +32,7 @@ Coordinate System:
         uid = f"{slide_name}_nmj_{global_cx}_{global_cy}"
 """
 
+import atexit
 import os
 import gc
 import json
@@ -40,10 +41,28 @@ import shutil
 import time
 import traceback
 from pathlib import Path
-from typing import Dict, List, Optional, Tuple, Any
+from typing import Dict, List, Optional, Tuple, Any, Set
 import multiprocessing as mp
 from multiprocessing.shared_memory import SharedMemory
 import numpy as np
+
+# Global registry of shared memory names for cleanup on crash
+_shm_registry: Set[str] = set()
+
+def _cleanup_shared_memory_on_exit():
+    """Emergency cleanup of shared memory on process exit."""
+    for shm_name in list(_shm_registry):
+        try:
+            shm = SharedMemory(name=shm_name)
+            shm.close()
+            shm.unlink()
+            logger.info(f"Emergency cleanup: unlinked shared memory {shm_name}")
+        except Exception:
+            pass  # Already cleaned up or doesn't exist
+    _shm_registry.clear()
+
+# Register cleanup on normal exit and signals
+atexit.register(_cleanup_shared_memory_on_exit)
 
 # Use 'spawn' start method for CUDA compatibility in subprocesses
 # 'fork' (Linux default) copies CUDA state and causes hangs
@@ -265,10 +284,10 @@ def _nmj_gpu_worker(
                 tiles_processed += 1
                 continue
 
-            # IMPORTANT: Keep ORIGINAL uint16 data for extra_channel_tiles (intensity features)
-            # The classifier was trained on uint16 intensity values (0-65535).
-            # Converting to uint8 would make intensity features ~256x smaller and break classification.
-            # Create extra_channels dict from ORIGINAL data BEFORE any conversion
+            # IMPORTANT: Keep ORIGINAL uint16 data for:
+            # 1. extra_channel_tiles (intensity features) - classifier trained on uint16
+            # 2. has_tissue() check - threshold calibrated for uint16
+            #
             # Channel mapping: ch0=nuclear(R), ch1=BTX(G), ch2=NFL(B)
             extra_channel_tiles = {
                 0: tile_rgb[:, :, 0].copy(),  # Nuclear (488nm) - ORIGINAL uint16
@@ -276,18 +295,19 @@ def _nmj_gpu_worker(
                 2: tile_rgb[:, :, 2].copy() if tile_rgb.shape[2] > 2 else tile_rgb[:, :, 1].copy(),  # NFL (750nm)
             }
 
+            # Check for tissue BEFORE uint8 conversion (threshold is calibrated for uint16)
+            try:
+                # Use BTX channel (ch1) for tissue detection - this is the NMJ marker channel
+                has_tissue_flag, _ = has_tissue(extra_channel_tiles[1], threshold=1000.0, block_size=64)
+            except Exception:
+                has_tissue_flag = True  # Assume tissue on error
+
             # Now convert to uint8 for SAM2/visual processing (SAM2 expects uint8 RGB)
             if tile_rgb.dtype != np.uint8:
                 if tile_rgb.dtype == np.uint16:
                     tile_rgb = (tile_rgb / 256).astype(np.uint8)
                 else:
                     tile_rgb = tile_rgb.astype(np.uint8)
-
-            # Check for tissue (optional - can skip for speed)
-            try:
-                has_tissue_flag, _ = has_tissue(tile_rgb, threshold=100.0, block_size=64)
-            except Exception:
-                has_tissue_flag = True  # Assume tissue on error
 
             if not has_tissue_flag:
                 output_queue.put({
@@ -299,35 +319,96 @@ def _nmj_gpu_worker(
                 tiles_processed += 1
                 continue
 
-            # Run NMJ detection
-            try:
-                masks, detections = strategy.detect(
-                    tile_rgb,
-                    models,
-                    pixel_size_um,
-                    extract_full_features=True,
-                    extra_channels=extra_channel_tiles
-                )
+            # Run NMJ detection with CUDA error retry
+            max_retries = 3
+            for attempt in range(max_retries):
+                try:
+                    masks, detections = strategy.detect(
+                        tile_rgb,
+                        models,
+                        pixel_size_um,
+                        extract_full_features=True,
+                        extra_channels=extra_channel_tiles
+                    )
+                    break  # Success, exit retry loop
+                except (torch.cuda.OutOfMemoryError, RuntimeError) as cuda_err:
+                    err_str = str(cuda_err).lower()
+                    is_cuda_error = (
+                        isinstance(cuda_err, torch.cuda.OutOfMemoryError) or
+                        'cuda' in err_str or
+                        'out of memory' in err_str or
+                        'device-side assert' in err_str
+                    )
+                    if is_cuda_error and attempt < max_retries - 1:
+                        logger.warning(f"[{worker_name}] CUDA error on tile {tid} (attempt {attempt + 1}/{max_retries}): {cuda_err}")
+                        logger.warning(f"[{worker_name}] Clearing CUDA cache and retrying...")
+                        gc.collect()
+                        torch.cuda.empty_cache()
+                        torch.cuda.synchronize()
+                        time.sleep(1.0 * (attempt + 1))  # Exponential backoff
+                        continue
+                    else:
+                        raise  # Re-raise if not CUDA error or max retries exceeded
+            else:
+                # All retries exhausted (for-else: executes only if loop completed without break)
+                logger.error(f"[{worker_name}] All {max_retries} retries failed for tile {tid}")
+                output_queue.put({
+                    'status': 'error',
+                    'tid': tid,
+                    'slide_name': slide_name,
+                    'tile': tile,
+                    'error': f'CUDA error after {max_retries} retries',
+                })
+                tiles_processed += 1
+                continue
 
-                # Build features list with global UIDs
+            # Build features list with global UIDs (only reached if detection succeeded)
+            # The UID (based on global coordinates) is the PRIMARY identifier
+            try:
                 features_list = []
-                for idx, det in enumerate(detections):
+                for det in detections:
                     # Get local centroid
                     local_cx, local_cy = det.centroid  # [x, y]
 
-                    # Compute global coordinates
+                    # Compute global coordinates - this is the PRIMARY identifier
                     global_cx = tile['x'] + local_cx
                     global_cy = tile['y'] + local_cy
 
-                    # Create UID
+                    # Create UID from global coordinates
                     uid = f"{slide_name}_nmj_{round(global_cx)}_{round(global_cy)}"
 
-                    # Build feature dict
-                    # mask_label matches the label in the masks array (1-indexed)
+                    # Get ACTUAL mask label from the mask array at detection centroid
+                    # Don't assume sequential ordering - look it up directly
+                    mask_y = int(round(local_cy))
+                    mask_x = int(round(local_cx))
+                    # Clamp to valid range
+                    mask_y = max(0, min(mask_y, masks.shape[0] - 1))
+                    mask_x = max(0, min(mask_x, masks.shape[1] - 1))
+                    actual_mask_label = int(masks[mask_y, mask_x])
+
+                    if actual_mask_label == 0:
+                        # Centroid landed on background - search nearby
+                        # This can happen with concave shapes
+                        found_label = 0
+                        for dy in range(-3, 4):
+                            for dx in range(-3, 4):
+                                ny = max(0, min(mask_y + dy, masks.shape[0] - 1))
+                                nx = max(0, min(mask_x + dx, masks.shape[1] - 1))
+                                if masks[ny, nx] > 0:
+                                    found_label = int(masks[ny, nx])
+                                    break
+                            if found_label > 0:
+                                break
+                        actual_mask_label = found_label
+                        if found_label == 0:
+                            logger.warning(f"[{worker_name}] Could not find mask label for detection at ({local_cx}, {local_cy})")
+                            continue  # Skip this detection
+
+                    # Build feature dict - UID is the primary identifier
                     feat = {
-                        'id': uid,  # Required by create_sample_from_detection()
+                        'id': uid,  # UID is THE identifier
                         'uid': uid,
-                        'mask_label': idx + 1,  # Mask labels are 1-indexed
+                        'mask_label': actual_mask_label,  # Actual label from mask array
                         'slide_name': slide_name,
                         'center': [float(local_cx), float(local_cy)],
                         'global_center': [float(global_cx), float(global_cy)],
@@ -362,7 +443,7 @@ def _nmj_gpu_worker(
 
             tiles_processed += 1
 
-            # Cleanup after every tile
+            # Cleanup after every tile to prevent memory accumulation
             gc.collect()
             torch.cuda.empty_cache()
 
@@ -448,6 +529,7 @@ class MultiGPUNMJProcessor:
         self.stop_event: Optional[Event] = None
         self.tiles_submitted = 0
         self._local_checkpoint_path: Optional[Path] = None  # For cleanup
+        self._workers_started = False  # Track if start() completed
 
     def _copy_checkpoint_to_local(self) -> str:
         """Copy SAM2 checkpoint to local /tmp for faster loading.
@@ -509,6 +591,14 @@ class MultiGPUNMJProcessor:
         """
         logger.info(f"Starting {self.num_gpus} GPU workers for NMJ detection...")
 
+        # Register shared memory names for emergency cleanup on crash
+        # This ensures shared memory is cleaned up even if main process crashes
+        for slide_name, info in self.slide_info.items():
+            shm_name = info.get('shm_name')
+            if shm_name:
+                _shm_registry.add(shm_name)
+                logger.debug(f"Registered shared memory {shm_name} for emergency cleanup")
+
         # Copy checkpoint to local /tmp for faster parallel loading
         local_checkpoint = self._copy_checkpoint_to_local()
 
@@ -569,6 +659,7 @@ class MultiGPUNMJProcessor:
             raise RuntimeError(f"Only {ready_count}/{self.num_gpus} workers initialized - aborting")
 
         logger.info(f"All {self.num_gpus} NMJ workers ready")
+        self._workers_started = True
 
     def submit_tile(self, slide_name: str, tile: Dict[str, Any]):
         """Submit a tile for processing."""
@@ -578,26 +669,40 @@ class MultiGPUNMJProcessor:
     def collect_result(self, timeout: float = None) -> Optional[Dict[str, Any]]:
         """Collect one tile result from workers.
 
-        Skips non-tile messages (like stray 'ready' messages from race conditions).
+        Only skips 'ready' messages if workers have already started (race condition).
+        Any 'ready' message after start() is unexpected and logged as warning.
         """
+        if not self._workers_started:
+            raise RuntimeError("Cannot collect results before start() completes")
+
         start = time.time()
         remaining = timeout if timeout else float('inf')
 
         while remaining > 0:
             try:
                 result = self.output_queue.get(timeout=min(remaining, 1.0))
-                # Filter out non-tile results (like stray 'ready' messages)
-                if result.get('status') in ('success', 'error', 'empty', 'no_tissue'):
+                status = result.get('status')
+
+                # Normal tile results
+                if status in ('success', 'error', 'empty', 'no_tissue'):
                     return result
-                # Skip other message types (ready, init_error)
-                logger.debug(f"Skipping non-tile message: {result.get('status')}")
+
+                # Stray ready/init messages (race condition) - log and skip
+                if status in ('ready', 'init_error'):
+                    logger.warning(f"Unexpected '{status}' message after workers started (GPU-{result.get('gpu_id')})")
+                    continue
+
+                # Unknown status - return it, let caller handle
+                logger.warning(f"Unknown result status: {status}")
+                return result
+
             except queue.Empty:
                 if timeout:
                     remaining = timeout - (time.time() - start)
                     if remaining <= 0:
                         return None
-                else:
-                    return None
+                # If no timeout, keep waiting (remaining stays at inf)
+                continue
         return None
 
     def stop(self):
@@ -626,6 +731,14 @@ class MultiGPUNMJProcessor:
 
         # Cleanup local checkpoint copy
         self._cleanup_local_checkpoint()
+
+        # Remove shared memory from emergency cleanup registry
+        # (SharedSlideManager handles actual unlinking, but we track for crash recovery)
+        for slide_name, info in self.slide_info.items():
+            shm_name = info.get('shm_name')
+            if shm_name and shm_name in _shm_registry:
+                _shm_registry.discard(shm_name)
+                logger.debug(f"Removed {shm_name} from emergency cleanup registry")
 
     def __enter__(self):
         self.start()

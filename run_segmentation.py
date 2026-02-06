@@ -2644,6 +2644,10 @@ def create_sample_from_detection(tile_x, tile_y, tile_rgb, masks, feat, pixel_si
     if 'sam2_score' in features:
         stats['confidence'] = features['sam2_score']
 
+    # Add classifier score if available (from NMJ multi-GPU pipeline)
+    if 'score' in feat:
+        stats['score'] = feat['score']
+
     return {
         'uid': uid,
         'image': img_b64,
@@ -3476,8 +3480,11 @@ def run_pipeline(args):
 
     logger.info(f"Total detections: {total_detections}")
 
-    # Sort samples by area (ascending - smallest first)
-    all_samples.sort(key=lambda x: x['stats'].get('area_um2', 0))
+    # Sort samples: NMJ by classifier score (descending), others by area (ascending)
+    if args.cell_type == 'nmj':
+        all_samples.sort(key=lambda x: x['stats'].get('score', 0), reverse=True)
+    else:
+        all_samples.sort(key=lambda x: x['stats'].get('area_um2', 0))
 
     # Export to HTML
     logger.info(f"Exporting to HTML ({len(all_samples)} samples)...")

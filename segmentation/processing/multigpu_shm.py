@@ -35,12 +35,13 @@ Coordinate System:
     See docs/COORDINATE_SYSTEM.md for the complete specification.
 """
 
+import atexit
 import os
 import gc
 import queue
 import traceback
 from pathlib import Path
-from typing import Dict, List, Optional, Tuple, Any
+from typing import Dict, List, Optional, Tuple, Any, Set
 from multiprocessing import Process, Queue, Event
 from multiprocessing.shared_memory import SharedMemory
 import numpy as np
@@ -49,6 +50,30 @@ import torch
 from segmentation.utils.logging import get_logger
 
 logger = get_logger(__name__)
+
+# Global registry of shared memory names for cleanup on crash
+_shm_registry: Set[str] = set()
+
+def _cleanup_shared_memory_on_exit():
+    """Emergency cleanup of shared memory on process exit.
+
+    This ensures shared memory is released even if the main process crashes
+    or is killed. Without this, shared memory persists until system reboot.
+    """
+    for shm_name in list(_shm_registry):
+        try:
+            shm = SharedMemory(name=shm_name)
+            shm.close()
+            shm.unlink()
+            logger.info(f"Emergency cleanup: unlinked shared memory {shm_name}")
+        except FileNotFoundError:
+            pass  # Already cleaned up
+        except Exception as e:
+            logger.warning(f"Failed to cleanup shared memory {shm_name}: {e}")
+    _shm_registry.clear()
+
+# Register cleanup on normal exit
+atexit.register(_cleanup_shared_memory_on_exit)
 
 
 class SharedSlideManager:
@@ -71,6 +96,9 @@ class SharedSlideManager:
         """
         # Create shared memory
         shm = SharedMemory(create=True, size=data.nbytes)
+
+        # Register for emergency cleanup (in case of crash)
+        _shm_registry.add(shm.name)
 
         # Create numpy array backed by shared memory and copy data
         shared_arr = np.ndarray(data.shape, dtype=data.dtype, buffer=shm.buf)
@@ -103,6 +131,9 @@ class SharedSlideManager:
         shm = SharedMemory(create=True, size=size)
         arr = np.ndarray(shape, dtype=dtype, buffer=shm.buf)
 
+        # Register for emergency cleanup (in case of crash)
+        _shm_registry.add(shm.name)
+
         self.shared_memories[name] = shm
         self.slide_info[name] = {'shm_name': shm.name, 'shape': shape, 'dtype': str(dtype)}
 
@@ -118,6 +149,8 @@ class SharedSlideManager:
         if name in self.shared_memories:
             try:
                 shm = self.shared_memories[name]
+                # Remove from emergency cleanup registry
+                _shm_registry.discard(shm.name)
                 shm.close()
                 shm.unlink()
                 logger.debug(f"Released shared memory for {name}")
@@ -131,6 +164,8 @@ class SharedSlideManager:
         """Release all shared memory."""
         for name, shm in self.shared_memories.items():
             try:
+                # Remove from emergency cleanup registry
+                _shm_registry.discard(shm.name)
                 shm.close()
                 shm.unlink()
                 logger.debug(f"Released shared memory for {name}")
@@ -367,7 +402,7 @@ def _gpu_worker_shm(
 
             tiles_processed += 1
 
-            # Cleanup after every tile
+            # Cleanup after every tile to prevent memory accumulation
             gc.collect()
             torch.cuda.empty_cache()
 
