@@ -1,4 +1,6 @@
 #!/usr/bin/env python3
+# DEPRECATED: This script has been superseded by run_lmd_export.py (unified pipeline).
+# Use: python run_lmd_export.py --export --clusters ... --tiles-dir ... --generate-controls
 """
 Generate complete LMD export with singles + clusters.
 

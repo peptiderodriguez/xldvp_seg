@@ -415,7 +415,7 @@ def _nmj_gpu_worker(
                         'global_center_um': [float(global_cx * pixel_size_um), float(global_cy * pixel_size_um)],
                         'tile_origin': [tile['x'], tile['y']],
                         'features': det.features,
-                        'score': det.score,
+                        'rf_prediction': det.score,
                     }
                     features_list.append(feat)
 

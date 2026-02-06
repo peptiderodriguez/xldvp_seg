@@ -199,9 +199,16 @@ def process_contour(
 
     stats['points_after'] = len(simplified_um)
 
-    # Calculate final area
+    # Calculate final area (fix self-intersecting post-RDP polygons)
     final_poly = Polygon(simplified_um)
-    if final_poly.is_valid and not final_poly.is_empty:
+    if not final_poly.is_valid:
+        final_poly = make_valid(final_poly)
+        if final_poly.geom_type != 'Polygon':
+            # Take largest polygon from geometry collection
+            polys = [g for g in getattr(final_poly, 'geoms', []) if g.geom_type == 'Polygon']
+            if polys:
+                final_poly = max(polys, key=lambda p: p.area)
+    if not final_poly.is_empty:
         stats['area_after_um2'] = final_poly.area
 
     stats['valid'] = True

@@ -1,4 +1,6 @@
 #!/usr/bin/env python3
+# DEPRECATED: Contour extraction is now integrated into run_lmd_export.py (--tiles-dir flag).
+# Use: python run_lmd_export.py --export --tiles-dir /path/to/tiles ...
 """
 Extract contours for single (outlier) NMJs from mask files.
 

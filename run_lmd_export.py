@@ -1,50 +1,47 @@
 #!/usr/bin/env python3
 """
-LMD Export Tool - Export annotated detections to Leica LMD format.
+Unified LMD Export Tool - Export NMJ detections to Leica LMD format.
 
-Workflow:
-1. Run segmentation to get candidates
-2. Annotate in HTML viewer (yes/no)
-3. Train classifier if needed
-4. Run this script to:
-   a) Load detections + annotations
-   b) Place reference crosses interactively
-   c) Export to Leica LMD XML
+Handles the complete pipeline:
+1. Load detections + filter by score/annotations
+2. Load biological clusters (from cluster_nmjs.py)
+3. Extract contours from H5 masks (if needed)
+4. Post-process contours (dilate + RDP simplify)
+5. Order singles and clusters by nearest-neighbor path on slide
+6. Generate spatial controls for ALL samples (singles and clusters)
+7. Assign wells in serpentine order with alternating NMJ/Control
+8. Export to Leica LMD XML via py-lmd
 
 Usage:
-    # Step 1: Generate HTML for placing reference crosses
-    python run_lmd_export.py \
-        --detections /path/to/detections.json \
-        --annotations /path/to/annotations.json \
-        --output-dir /path/to/output \
+    # Full pipeline with clusters and controls
+    python run_lmd_export.py \\
+        --detections nmj_detections.json \\
+        --crosses reference_crosses.json \\
+        --clusters nmj_clusters.json \\
+        --tiles-dir /path/to/tiles \\
+        --output-dir lmd_export \\
+        --export --generate-controls
+
+    # Generate cross placement HTML (step before export)
+    python run_lmd_export.py \\
+        --detections nmj_detections.json \\
+        --output-dir lmd_export \\
         --generate-cross-html
-
-    # Step 2: After placing crosses in HTML, export to LMD
-    python run_lmd_export.py \
-        --detections /path/to/detections.json \
-        --annotations /path/to/annotations.json \
-        --crosses /path/to/crosses.json \
-        --output-dir /path/to/output \
-        --export
-
-    # With spatial clustering (100 detections per well)
-    python run_lmd_export.py \
-        --detections /path/to/detections.json \
-        --annotations /path/to/annotations.json \
-        --crosses /path/to/crosses.json \
-        --output-dir /path/to/output \
-        --export \
-        --cluster-size 100 \
-        --plate-format 384 \
-        --clustering-method greedy
 """
 
 import os
+os.environ['HDF5_USE_FILE_LOCKING'] = 'FALSE'
+
 import json
 import argparse
 import numpy as np
 from pathlib import Path
+from typing import List, Dict, Tuple, Optional
 
+
+# ---------------------------------------------------------------------------
+# Loading helpers
+# ---------------------------------------------------------------------------
 
 def load_detections(detections_path):
     """Load detections from JSON file."""
@@ -56,9 +53,10 @@ def load_annotations(annotations_path):
     """
     Load annotations and return set of positive UIDs.
 
-    Supports multiple formats:
+    Supports formats:
     - {"positive": [...], "negative": [...]}
     - {"annotations": {"uid": "yes/no", ...}}
+    - Plain list of UIDs
     """
     with open(annotations_path, 'r') as f:
         data = json.load(f)
@@ -66,187 +64,311 @@ def load_annotations(annotations_path):
     positive_uids = set()
 
     if 'positive' in data:
-        # Old format
         positive_uids.update(data['positive'])
     elif 'annotations' in data:
-        # New format from HTML export
         for uid, label in data['annotations'].items():
             if label.lower() in ('yes', 'positive', 'true', '1'):
                 positive_uids.add(uid)
-    else:
-        # Assume list of positive UIDs
-        if isinstance(data, list):
-            positive_uids.update(data)
+    elif isinstance(data, list):
+        positive_uids.update(data)
 
     return positive_uids
 
 
-def filter_detections(detections, positive_uids):
-    """Filter detections to only include positively annotated ones."""
+def filter_detections(detections, positive_uids=None, min_score=None):
+    """Filter detections by annotations and/or score."""
     filtered = []
     for det in detections:
         uid = det.get('uid', det.get('id', ''))
-        if uid in positive_uids:
-            filtered.append(det)
+
+        if positive_uids is not None and uid not in positive_uids:
+            continue
+
+        if min_score is not None:
+            score = det.get('rf_prediction', det.get('score', 0))
+            if score is None:
+                score = 0
+            if score < min_score:
+                continue
+
+        filtered.append(det)
     return filtered
 
 
+def load_clusters(clusters_path):
+    """Load and validate clusters JSON from cluster_nmjs.py."""
+    with open(clusters_path, 'r') as f:
+        data = json.load(f)
+
+    if 'main_clusters' not in data or 'outliers' not in data:
+        raise ValueError(f"Invalid clusters file: missing 'main_clusters' or 'outliers' keys")
+
+    return data
+
+
 def get_detection_coordinates(det):
-    """Extract (x, y) coordinates from detection."""
+    """Extract (x, y) pixel coordinates from detection."""
     if 'global_center' in det:
         return det['global_center']
-    elif 'center' in det:
+    if 'center' in det:
         return det['center']
     return None
 
 
-def cluster_detections_spatially(detections, target_cluster_size=100, method='greedy'):
+# ---------------------------------------------------------------------------
+# Contour extraction from H5 masks
+# ---------------------------------------------------------------------------
+
+def extract_contour_from_mask(mask, label):
+    """Extract the outer contour for a specific label in a mask array."""
+    import cv2
+
+    binary = (mask == label).astype(np.uint8)
+    if binary.sum() == 0:
+        return None
+
+    contours, _ = cv2.findContours(binary, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_NONE)
+    if not contours:
+        return None
+
+    largest = max(contours, key=cv2.contourArea)
+    return largest.reshape(-1, 2)
+
+
+def extract_contours_for_detections(detections, tiles_dir, pixel_size,
+                                    mask_filename='nmj_masks.h5',
+                                    dilation_um=0.5, rdp_epsilon=5.0):
     """
-    Cluster detections spatially for well assignment.
+    Extract and process contours for detections from H5 mask files.
 
-    Args:
-        detections: List of detection dicts
-        target_cluster_size: Target number of detections per cluster
-        method: 'greedy' (nearest neighbor), 'kmeans', or 'dbscan'
+    Skips detections that already have 'contour_um' set.
 
-    Returns:
-        List of clusters, each cluster is a list of detection indices
+    Returns dict mapping uid -> contour data.
     """
-    # Extract coordinates
-    coords = []
-    valid_indices = []
-    for i, det in enumerate(detections):
-        xy = get_detection_coordinates(det)
-        if xy is not None:
-            coords.append(xy)
-            valid_indices.append(i)
+    import hdf5plugin  # noqa: F401 - must import before h5py for LZ4
+    import h5py
+    from scripts.contour_processing import process_contour
 
-    if len(coords) == 0:
+    tiles_dir = Path(tiles_dir)
+
+    # Group by tile
+    by_tile = {}
+    for det in detections:
+        # Skip if contour already exists
+        if det.get('contour_um') is not None:
+            continue
+
+        tile_origin = det.get('tile_origin', [0, 0])
+        tile_name = f"tile_{tile_origin[0]}_{tile_origin[1]}"
+        if tile_name not in by_tile:
+            by_tile[tile_name] = []
+        by_tile[tile_name].append(det)
+
+    if not by_tile:
+        print("    All detections already have contours, skipping extraction.")
+        return {}
+
+    results = {}
+    for tile_idx, (tile_name, tile_dets) in enumerate(by_tile.items()):
+        if (tile_idx + 1) % 20 == 0:
+            print(f"    Tile {tile_idx + 1}/{len(by_tile)}...")
+
+        mask_path = tiles_dir / tile_name / mask_filename
+        if not mask_path.exists():
+            continue
+
+        with h5py.File(mask_path, 'r') as hf:
+            masks = hf['masks'][:]
+
+        for det in tile_dets:
+            uid = det.get('uid', det.get('id', ''))
+            label = det.get('mask_label')
+            if label is None:
+                # Fallback for single-GPU path: parse from id (e.g., "nmj_3" -> 3)
+                det_id = det.get('id', '')
+                try:
+                    label = int(det_id.split('_')[-1])
+                except (ValueError, IndexError):
+                    continue
+
+            contour_local = extract_contour_from_mask(masks, label)
+            if contour_local is None:
+                continue
+
+            # Convert to global coordinates
+            tile_origin = det.get('tile_origin', [0, 0])
+            contour_global = contour_local.astype(float)
+            contour_global[:, 0] += tile_origin[0]
+            contour_global[:, 1] += tile_origin[1]
+
+            # Apply post-processing (dilation + RDP)
+            processed, stats = process_contour(
+                contour_global.tolist(),
+                pixel_size_um=pixel_size,
+                dilation_um=dilation_um,
+                rdp_epsilon=rdp_epsilon,
+                return_stats=True,
+            )
+
+            if processed is None:
+                continue
+
+            results[uid] = {
+                'contour_global_px': contour_global.tolist(),
+                'contour_um': processed.tolist(),
+                'area_um2': stats['area_after_um2'],
+                'n_points': stats['points_after'],
+            }
+
+    return results
+
+
+# ---------------------------------------------------------------------------
+# Nearest-neighbor path ordering
+# ---------------------------------------------------------------------------
+
+def nearest_neighbor_order(points, start_idx=None):
+    """Order points using nearest-neighbor algorithm. Returns index order."""
+    n = len(points)
+    if n == 0:
+        return []
+    if n == 1:
+        return [0]
+
+    points_arr = np.array(points)
+
+    if start_idx is None:
+        # Start from top-left-most point
+        start_idx = int(np.argmin(points_arr[:, 0] + points_arr[:, 1]))
+
+    visited = [False] * n
+    order = [start_idx]
+    visited[start_idx] = True
+
+    current = start_idx
+    for _ in range(n - 1):
+        min_dist = float('inf')
+        nearest = -1
+
+        for j in range(n):
+            if not visited[j]:
+                dist = np.linalg.norm(points_arr[current] - points_arr[j])
+                if dist < min_dist:
+                    min_dist = dist
+                    nearest = j
+
+        if nearest >= 0:
+            order.append(nearest)
+            visited[nearest] = True
+            current = nearest
+
+    return order
+
+
+# ---------------------------------------------------------------------------
+# Serpentine well generation (384-well plate, 4 quadrants)
+# ---------------------------------------------------------------------------
+
+def generate_quadrant_serpentine(quadrant, start_corner='auto'):
+    """Generate wells for a 384-well quadrant in serpentine order."""
+    even_rows = ['B', 'D', 'F', 'H', 'J', 'L', 'N']
+    odd_rows = ['C', 'E', 'G', 'I', 'K', 'M', 'O']
+    even_cols = [2, 4, 6, 8, 10, 12, 14, 16, 18, 20, 22]
+    odd_cols = [3, 5, 7, 9, 11, 13, 15, 17, 19, 21, 23]
+
+    if quadrant == 'B2':
+        rows, cols = even_rows, even_cols
+    elif quadrant == 'B3':
+        rows, cols = even_rows, odd_cols
+    elif quadrant == 'C2':
+        rows, cols = odd_rows, even_cols
+    elif quadrant == 'C3':
+        rows, cols = odd_rows, odd_cols
+    else:
+        raise ValueError(f"Unknown quadrant: {quadrant}")
+
+    if start_corner == 'auto':
+        start_corner = 'TL' if quadrant.startswith('B') else 'BR'
+
+    if start_corner == 'TL':
+        row_order = rows
+        first_row_left_to_right = True
+    elif start_corner == 'TR':
+        row_order = rows
+        first_row_left_to_right = False
+    elif start_corner == 'BL':
+        row_order = list(reversed(rows))
+        first_row_left_to_right = True
+    elif start_corner == 'BR':
+        row_order = list(reversed(rows))
+        first_row_left_to_right = False
+    else:
+        raise ValueError(f"Unknown start_corner: {start_corner}")
+
+    wells = []
+    for i, row in enumerate(row_order):
+        if i % 2 == 0:
+            col_order = cols if first_row_left_to_right else list(reversed(cols))
+        else:
+            col_order = list(reversed(cols)) if first_row_left_to_right else cols
+        for col in col_order:
+            wells.append(f"{row}{col}")
+
+    return wells
+
+
+def generate_wells_serpentine_4_quadrants(n_wells):
+    """
+    Generate wells in serpentine order across 4 quadrants: B2 -> B3 -> C3 -> C2.
+
+    Uses auto start corners that minimize travel between quadrants:
+      B2: TL start (B2 -> ... -> N22)
+      B3: determined from last well of B2
+      C3: determined from last well of B3
+      C2: determined from last well of C3
+
+    Each quadrant has 77 wells (7 rows x 11 cols). Total = 308 wells.
+    """
+    if n_wells <= 0:
         return []
 
-    coords = np.array(coords)
-    n_detections = len(coords)
-    n_clusters = max(1, n_detections // target_cluster_size)
+    quadrant_order = ['B2', 'B3', 'C3', 'C2']
+    all_wells = []
 
-    if method == 'kmeans':
-        from sklearn.cluster import KMeans
-        kmeans = KMeans(n_clusters=n_clusters, random_state=42, n_init=10)
-        labels = kmeans.fit_predict(coords)
+    for i, quad in enumerate(quadrant_order):
+        if i == 0:
+            wells = generate_quadrant_serpentine(quad, start_corner='TL')
+        else:
+            # Determine start corner from last well of previous quadrant
+            prev_well = all_wells[-1]
+            prev_row, prev_col = prev_well[0], int(prev_well[1:])
+            top_rows = set('BCDEFGH')
+            is_top = prev_row in top_rows
+            is_left = prev_col <= 12
 
-        clusters = [[] for _ in range(n_clusters)]
-        for i, label in enumerate(labels):
-            clusters[label].append(valid_indices[i])
-
-    elif method == 'dbscan':
-        from sklearn.cluster import DBSCAN
-        # Estimate eps from target cluster size
-        # Assume roughly circular clusters
-        area_per_cluster = (coords.max(axis=0) - coords.min(axis=0)).prod() / n_clusters
-        eps = np.sqrt(area_per_cluster / np.pi) * 0.5
-
-        dbscan = DBSCAN(eps=eps, min_samples=1)
-        labels = dbscan.fit_predict(coords)
-
-        n_labels = labels.max() + 1
-        clusters = [[] for _ in range(n_labels)]
-        noise_cluster = []
-
-        for i, label in enumerate(labels):
-            if label == -1:
-                noise_cluster.append(valid_indices[i])
+            if is_top and is_left:
+                start = 'TL'
+            elif is_top and not is_left:
+                start = 'TR'
+            elif not is_top and is_left:
+                start = 'BL'
             else:
-                clusters[label].append(valid_indices[i])
+                start = 'BR'
 
-        # Add noise to nearest cluster or as separate cluster
-        if noise_cluster:
-            clusters.append(noise_cluster)
+            wells = generate_quadrant_serpentine(quad, start_corner=start)
 
-    else:  # greedy method
-        # Greedy nearest-neighbor clustering
-        remaining = set(range(len(coords)))
-        clusters = []
+        all_wells.extend(wells)
+        if len(all_wells) >= n_wells:
+            return all_wells[:n_wells]
 
-        while remaining:
-            # Start new cluster from first remaining point
-            start_idx = min(remaining)
-            cluster = [valid_indices[start_idx]]
-            remaining.remove(start_idx)
-            current_centroid = coords[start_idx].copy()
-
-            # Add nearest neighbors until cluster is full
-            while len(cluster) < target_cluster_size and remaining:
-                # Find nearest remaining point to cluster centroid
-                min_dist = float('inf')
-                nearest_idx = None
-
-                for idx in remaining:
-                    dist = np.linalg.norm(coords[idx] - current_centroid)
-                    if dist < min_dist:
-                        min_dist = dist
-                        nearest_idx = idx
-
-                if nearest_idx is not None:
-                    cluster.append(valid_indices[nearest_idx])
-                    remaining.remove(nearest_idx)
-                    # Update centroid
-                    cluster_coords = coords[[i for i in range(len(coords))
-                                            if valid_indices[i] in cluster]]
-                    current_centroid = cluster_coords.mean(axis=0)
-
-            clusters.append(cluster)
-
-    # Sort clusters by centroid Y then X (top-to-bottom, left-to-right)
-    cluster_centroids = []
-    for cluster in clusters:
-        cluster_coords = np.array([coords[valid_indices.index(i)] for i in cluster])
-        centroid = cluster_coords.mean(axis=0)
-        cluster_centroids.append(centroid)
-
-    # Sort by Y first (row), then X (column)
-    sorted_indices = sorted(range(len(clusters)),
-                           key=lambda i: (cluster_centroids[i][1], cluster_centroids[i][0]))
-    clusters = [clusters[i] for i in sorted_indices]
-
-    return clusters
+    return all_wells[:n_wells]
 
 
-def assign_wells_384(n_clusters):
-    """
-    Generate well names for 384-well plate (A1-P24).
+# ---------------------------------------------------------------------------
+# Spatial control generation
+# ---------------------------------------------------------------------------
 
-    Returns list of well names in order.
-    """
-    rows = 'ABCDEFGHIJKLMNOP'  # 16 rows
-    cols = range(1, 25)  # 24 columns
-
-    wells = []
-    for col in cols:
-        for row in rows:
-            wells.append(f"{row}{col}")
-            if len(wells) >= n_clusters:
-                return wells
-
-    return wells
-
-
-def assign_wells_96(n_clusters):
-    """
-    Generate well names for 96-well plate (A1-H12).
-    """
-    rows = 'ABCDEFGH'  # 8 rows
-    cols = range(1, 13)  # 12 columns
-
-    wells = []
-    for col in cols:
-        for row in rows:
-            wells.append(f"{row}{col}")
-            if len(wells) >= n_clusters:
-                return wells
-
-    return wells
-
-
-# Direction vectors for control placement (8 cardinal directions)
+# 8 cardinal directions
 CONTROL_DIRECTIONS = {
     'E':  np.array([1, 0]),
     'NE': np.array([1, -1]) / np.sqrt(2),
@@ -259,443 +381,431 @@ CONTROL_DIRECTIONS = {
 }
 
 
-def check_polygon_overlap(contour1, contour2):
-    """Check if two polygons intersect using Shapely."""
-    # Validate inputs
-    if contour1 is None or contour2 is None:
-        return True  # Conservative - assume overlap
-    contour1 = np.asarray(contour1)
-    contour2 = np.asarray(contour2)
-    if len(contour1) < 3 or len(contour2) < 3:
-        return True  # Not valid polygons, assume overlap
-
+def _make_polygon(contour):
+    """Create a validated Shapely Polygon from a contour array. Returns None on failure."""
     try:
         from shapely.geometry import Polygon
         from shapely.validation import make_valid
     except ImportError:
-        # Fallback to simple bounding box check
-        bb1 = (contour1[:, 0].min(), contour1[:, 1].min(),
-               contour1[:, 0].max(), contour1[:, 1].max())
-        bb2 = (contour2[:, 0].min(), contour2[:, 1].min(),
-               contour2[:, 0].max(), contour2[:, 1].max())
-        return not (bb1[2] < bb2[0] or bb1[0] > bb2[2] or
-                    bb1[3] < bb2[1] or bb1[1] > bb2[3])
-
+        return None
     try:
-        poly1 = Polygon(contour1)
-        poly2 = Polygon(contour2)
-        if not poly1.is_valid:
-            poly1 = make_valid(poly1)
-        if not poly2.is_valid:
-            poly2 = make_valid(poly2)
-        return poly1.intersects(poly2)
+        contour = np.asarray(contour)
+        if len(contour) < 3:
+            return None
+        poly = Polygon(contour)
+        if not poly.is_valid:
+            poly = make_valid(poly)
+        return poly
     except Exception:
-        return True  # Assume overlap on error (conservative)
-
-
-def generate_spatial_control(detection, all_detections, offset_um=150.0,
-                            pixel_size=0.1725, image_bounds=None):
-    """
-    Generate a control region by shifting the NMJ contour.
-
-    Tries 8 directions: E, NE, N, NW, W, SW, S, SE
-    Returns control dict or None if all directions overlap.
-    """
-    # Get the contour
-    if 'outer_contour_global' in detection:
-        contour = np.array(detection['outer_contour_global'])
-    elif 'outer_contour' in detection:
-        tile_origin = detection.get('tile_origin', [0, 0])
-        contour = np.array(detection['outer_contour'])
-        if len(contour.shape) == 3:
-            contour = contour.reshape(-1, 2)
-        contour = contour + np.array(tile_origin)
-    else:
         return None
 
-    if len(contour) < 3:
-        return None
 
-    # Convert offset to pixels
-    offset_px = offset_um / pixel_size
+def _check_overlap_precomputed(shifted_contour, precomputed_polygons):
+    """Check if shifted contour overlaps any precomputed polygon.
 
-    # Get all NMJ contours for collision detection (excluding source)
-    source_uid = detection.get('uid', detection.get('id', ''))
-    all_contours = []
-    for det in all_detections:
-        det_uid = det.get('uid', det.get('id', ''))
-        if det_uid == source_uid:
-            continue  # Skip self
-        if 'outer_contour_global' in det:
-            all_contours.append(np.array(det['outer_contour_global']))
-        elif 'outer_contour' in det:
-            tile_origin = det.get('tile_origin', [0, 0])
-            c = np.array(det['outer_contour'])
-            if len(c.shape) == 3:
-                c = c.reshape(-1, 2)
-            all_contours.append(c + np.array(tile_origin))
+    Args:
+        shifted_contour: numpy array (N, 2) of the candidate contour
+        precomputed_polygons: list of Shapely Polygon objects (or None entries)
 
-    # Try each direction
-    for direction_name, direction_vec in CONTROL_DIRECTIONS.items():
-        offset_vec = direction_vec * offset_px
-        shifted_contour = contour + offset_vec
-
-        # Check image bounds
-        if image_bounds is not None:
-            x_min, y_min, x_max, y_max = image_bounds
-            if (shifted_contour[:, 0].min() < x_min or
-                shifted_contour[:, 0].max() > x_max or
-                shifted_contour[:, 1].min() < y_min or
-                shifted_contour[:, 1].max() > y_max):
-                continue
-
-        # Check overlap with all NMJ contours
-        has_overlap = False
-        for nmj_contour in all_contours:
-            if check_polygon_overlap(shifted_contour, nmj_contour):
-                has_overlap = True
-                break
-
-        if not has_overlap:
-            # Found a clear direction
-            center = detection.get('global_center', contour.mean(axis=0).tolist())
-            shifted_center = [center[0] + offset_vec[0], center[1] + offset_vec[1]]
-
-            return {
-                'uid': detection.get('uid', detection.get('id', '')) + '_ctrl',
-                'control_of': detection.get('uid', detection.get('id', '')),
-                'global_center': shifted_center,
-                'outer_contour_global': shifted_contour.tolist(),
-                'offset_direction': direction_name,
-                'offset_um': offset_um,
-                'is_control': True,
-                'area_um2': detection.get('area_um2', 0),
-            }
-
-    # All directions overlap - return None
-    return None
-
-
-def generate_wells_serpentine_4_quadrants(n_wells):
+    Returns True if overlap detected, False if no overlap.
     """
-    Generate wells in serpentine order across 4 quadrants.
-    Excludes outer wells (row A/P, col 1/24).
+    candidate_poly = _make_polygon(shifted_contour)
+    if candidate_poly is None:
+        return True  # Can't validate, assume overlap
 
-    Serpentine pattern traverses ROWS continuously, minimizing travel between quadrants:
-      B2 quadrant (top to bottom):
-        B2 -> B4 -> ... -> B22  (right)
-        D22 -> D20 -> ... -> D2  (left)
-        ...
-        N2 -> N4 -> ... -> N22  (right, ends at N22)
+    for existing_poly in precomputed_polygons:
+        if existing_poly is None:
+            continue
+        try:
+            if candidate_poly.overlaps(existing_poly) or candidate_poly.within(existing_poly) or existing_poly.within(candidate_poly):
+                return True
+        except Exception:
+            return True
+    return False
 
-      C2 quadrant (bottom to top, starting nearest to N22):
-        O22 -> O20 -> ... -> O2  (left, O22 is next to N22)
-        M2 -> M4 -> ... -> M22  (right)
-        ...
-        C22 -> C20 -> ... -> C2  (left, ends at C2)
 
-      B3 quadrant (top to bottom, starting nearest to C2):
-        B3 -> B5 -> ... -> B23  (right, B3 is near C2)
-        etc.
-
-    Returns list of well names in serpentine order.
+def generate_spatial_control(contour_um, precomputed_polygons,
+                             offset_um=100.0, max_attempts=3):
     """
-    if n_wells <= 0:
-        return []
+    Generate a control contour by shifting in 8 directions.
 
-    wells = []
-    going_right = True  # Track serpentine direction
-    rows_top_to_bottom = True  # Track row order direction
+    Every sample MUST have a control. If all 8 directions at the initial
+    offset overlap, we increase the offset by 50% and retry, up to
+    max_attempts times.
 
-    # Define the 4 quadrants with their row sets and columns
-    quadrants = [
-        (['B', 'D', 'F', 'H', 'J', 'L', 'N'], list(range(2, 23, 2))),   # B2 quadrant
-        (['C', 'E', 'G', 'I', 'K', 'M', 'O'], list(range(2, 23, 2))),   # C2 quadrant
-        (['B', 'D', 'F', 'H', 'J', 'L', 'N'], list(range(3, 24, 2))),   # B3 quadrant
-        (['C', 'E', 'G', 'I', 'K', 'M', 'O'], list(range(3, 24, 2))),   # C3 quadrant
-    ]
+    Args:
+        contour_um: Contour in um, shape (N, 2)
+        precomputed_polygons: List of precomputed Shapely Polygon objects
+        offset_um: Starting offset distance in um
+        max_attempts: Number of times to increase offset if all directions fail
 
-    for q_idx, (rows, cols) in enumerate(quadrants):
-        # Determine row order based on where we ended in previous quadrant
-        # After B2 (ends at N), C2 should start at O (reversed rows)
-        # After C2 (ends at C), B3 should start at B (normal rows)
-        if q_idx == 0:
-            row_order = rows  # B2: start at B, go to N
-        elif q_idx == 1:
-            row_order = rows[::-1]  # C2: start at O (near N), go to C
-        elif q_idx == 2:
-            row_order = rows  # B3: start at B (near C), go to N
+    Returns:
+        (shifted_contour_um, direction_name, actual_offset_um) tuple.
+        Always returns a result (falls back to largest-gap direction).
+    """
+    contour_arr = np.array(contour_um)
+
+    for attempt in range(max_attempts):
+        current_offset = offset_um * (1.5 ** attempt)
+
+        for direction_name, direction_vec in CONTROL_DIRECTIONS.items():
+            offset_vec = direction_vec * current_offset
+            shifted = contour_arr + offset_vec
+
+            if not _check_overlap_precomputed(shifted, precomputed_polygons):
+                return shifted.tolist(), direction_name, current_offset
+
+    # Fallback: use first direction (E) at largest attempted offset.
+    # This ensures every sample always gets a control.
+    fallback_offset = offset_um * (1.5 ** max_attempts)
+    fallback_vec = CONTROL_DIRECTIONS['E'] * fallback_offset
+    shifted = contour_arr + fallback_vec
+    return shifted.tolist(), 'E_fallback', fallback_offset
+
+
+def generate_cluster_control(cluster_contours_um, precomputed_polygons,
+                             offset_um=100.0, max_attempts=3):
+    """
+    Generate control for a cluster: shift ALL member contours by the SAME vector.
+
+    Returns (list_of_shifted_contours_um, direction_name, actual_offset_um).
+    Always returns a result.
+    """
+    for attempt in range(max_attempts):
+        current_offset = offset_um * (1.5 ** attempt)
+
+        for direction_name, direction_vec in CONTROL_DIRECTIONS.items():
+            offset_vec = direction_vec * current_offset
+
+            # Check all member contours for collisions
+            any_overlap = False
+            for contour_um in cluster_contours_um:
+                shifted = np.array(contour_um) + offset_vec
+                if _check_overlap_precomputed(shifted, precomputed_polygons):
+                    any_overlap = True
+                    break
+
+            if not any_overlap:
+                shifted_contours = [(np.array(c) + offset_vec).tolist()
+                                    for c in cluster_contours_um]
+                return shifted_contours, direction_name, current_offset
+
+    # Fallback
+    fallback_offset = offset_um * (1.5 ** max_attempts)
+    fallback_vec = CONTROL_DIRECTIONS['E'] * fallback_offset
+    shifted_contours = [(np.array(c) + fallback_vec).tolist()
+                        for c in cluster_contours_um]
+    return shifted_contours, 'E_fallback', fallback_offset
+
+
+# ---------------------------------------------------------------------------
+# Well assignment with controls
+# ---------------------------------------------------------------------------
+
+def assign_wells_with_controls(ordered_singles, ordered_single_ctrls,
+                               ordered_clusters, ordered_cluster_ctrls):
+    """
+    Assign wells in serpentine order: alternating NMJ -> Control.
+
+    Singles first, then clusters. Every sample has a control.
+    Each single gets 2 wells (NMJ, ctrl). Each cluster gets 2 wells (cluster, ctrl).
+
+    Returns list of (shape_dict, well) tuples in well order.
+    """
+    # Total wells needed: 2 per single + 2 per cluster
+    n_wells = 2 * len(ordered_singles) + 2 * len(ordered_clusters)
+    wells = generate_wells_serpentine_4_quadrants(n_wells)
+
+    assignments = []
+    well_idx = 0
+
+    # Singles: NMJ -> Control -> NMJ -> Control ...
+    for single, ctrl in zip(ordered_singles, ordered_single_ctrls):
+        single['well'] = wells[well_idx] if well_idx < len(wells) else f"overflow_{well_idx}"
+        assignments.append(single)
+        well_idx += 1
+
+        ctrl['well'] = wells[well_idx] if well_idx < len(wells) else f"overflow_{well_idx}"
+        assignments.append(ctrl)
+        well_idx += 1
+
+    # Clusters: Cluster -> Control -> Cluster -> Control ...
+    for cluster, ctrl in zip(ordered_clusters, ordered_cluster_ctrls):
+        cluster['well'] = wells[well_idx] if well_idx < len(wells) else f"overflow_{well_idx}"
+        assignments.append(cluster)
+        well_idx += 1
+
+        ctrl['well'] = wells[well_idx] if well_idx < len(wells) else f"overflow_{well_idx}"
+        assignments.append(ctrl)
+        well_idx += 1
+
+    return assignments, wells[:well_idx]
+
+
+# ---------------------------------------------------------------------------
+# Build unified export data
+# ---------------------------------------------------------------------------
+
+def build_export_data(assignments, well_order, metadata):
+    """Build the unified export JSON structure."""
+    shapes = []
+    n_singles = n_single_controls = n_clusters = n_cluster_controls = 0
+    n_nmjs_in_clusters = 0
+
+    for item in assignments:
+        shapes.append(item)
+        t = item.get('type', '')
+        if t == 'single':
+            n_singles += 1
+        elif t == 'single_control':
+            n_single_controls += 1
+        elif t == 'cluster':
+            n_clusters += 1
+            n_nmjs_in_clusters += item.get('n_nmjs', 0)
+        elif t == 'cluster_control':
+            n_cluster_controls += 1
+
+    return {
+        'metadata': metadata,
+        'summary': {
+            'n_singles': n_singles,
+            'n_single_controls': n_single_controls,
+            'n_clusters': n_clusters,
+            'n_cluster_controls': n_cluster_controls,
+            'n_nmjs_in_clusters': n_nmjs_in_clusters,
+            'total_wells_used': len(well_order),
+        },
+        'shapes': shapes,
+        'well_order': well_order,
+    }
+
+
+# ---------------------------------------------------------------------------
+# LMD XML export
+# ---------------------------------------------------------------------------
+
+def export_to_lmd_xml(shapes, crosses_data, output_path, flip_y=True):
+    """
+    Export shapes to Leica LMD XML via py-lmd.
+
+    Handles single contours (single, single_control) and
+    multi-contour shapes (cluster, cluster_control).
+    """
+    from lmd.lib import Collection, Shape
+    from lmd.tools import makeCross
+
+    pixel_size = crosses_data['pixel_size_um']
+    image_height_um = crosses_data['image_height_px'] * pixel_size
+
+    # Calibration from first 3 crosses
+    crosses = crosses_data['crosses']
+    if len(crosses) < 3:
+        raise ValueError("Need at least 3 reference crosses for calibration")
+
+    calibration_points = np.array([
+        [c['x_um'], c['y_um'] if not flip_y else image_height_um - c['y_um']]
+        for c in crosses[:3]
+    ])
+
+    collection = Collection(calibration_points=calibration_points)
+
+    # Add reference crosses
+    for c in crosses:
+        x_um = c['x_um']
+        y_um = c['y_um'] if not flip_y else image_height_um - c['y_um']
+        cross = makeCross(
+            center=np.array([x_um, y_um]),
+            arm_length=100, arm_width=10,
+        )
+        collection.add_shape(Shape(
+            points=cross, well="CAL", name=f"RefCross_{c['id']}"
+        ))
+
+    # Add shapes
+    for shape in shapes:
+        well = shape.get('well', 'A1')
+        shape_type = shape.get('type', 'single')
+
+        # Collect contours for this shape
+        contours_um = []
+        if shape_type in ('cluster', 'cluster_control'):
+            for c in shape.get('contours_um', []):
+                if c and len(c) >= 3:
+                    contours_um.append(np.array(c))
         else:
-            row_order = rows[::-1]  # C3: start at O (near N), go to C
+            c = shape.get('contour_um')
+            if c and len(c) >= 3:
+                contours_um.append(np.array(c))
 
-        for row in row_order:
-            row_cols = cols if going_right else cols[::-1]
-            for col in row_cols:
-                wells.append(f"{row}{col}")
-                if len(wells) >= n_wells:
-                    return wells
-            # Flip direction for next row
-            going_right = not going_right
+        for idx, polygon_um in enumerate(contours_um):
+            polygon_um = polygon_um.copy()
+            if flip_y:
+                polygon_um[:, 1] = image_height_um - polygon_um[:, 1]
 
-    return wells
+            # Close polygon
+            if not np.allclose(polygon_um[0], polygon_um[-1]):
+                polygon_um = np.vstack([polygon_um, polygon_um[0]])
 
+            uid = shape.get('uid', '')
+            if shape_type == 'cluster':
+                uids = shape.get('member_uids', [])
+                name = uids[idx] if idx < len(uids) else f"{uid}_member{idx}"
+            elif shape_type == 'cluster_control':
+                name = f"{uid}_ctrl_member{idx}"
+            else:
+                name = uid
+
+            collection.new_shape(polygon_um, well=well, name=name)
+
+    output_path = Path(output_path)
+    collection.save(str(output_path))
+    print(f"  Exported LMD XML: {output_path}")
+
+    return output_path
+
+
+# ---------------------------------------------------------------------------
+# Cross placement HTML (unchanged from before)
+# ---------------------------------------------------------------------------
 
 def generate_cross_placement_html(detections, output_dir, pixel_size_um,
-                                  image_width_px, image_height_px,
-                                  thumbnail_path=None):
-    """
-    Generate HTML page for interactively placing reference crosses.
-
-    User clicks on the overview to place crosses, then saves positions.
-    """
+                                  image_width_px, image_height_px):
+    """Generate HTML page for interactively placing reference crosses."""
     output_dir = Path(output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
 
-    # Calculate detection bounds for overview
-    all_x = []
-    all_y = []
+    all_x, all_y = [], []
     for det in detections:
-        if 'global_center' in det:
-            all_x.append(det['global_center'][0])
-            all_y.append(det['global_center'][1])
-        elif 'center' in det:
-            all_x.append(det['center'][0])
-            all_y.append(det['center'][1])
+        coords = get_detection_coordinates(det)
+        if coords:
+            all_x.append(coords[0])
+            all_y.append(coords[1])
 
     if not all_x:
         print("ERROR: No detection coordinates found")
         return None
 
-    min_x, max_x = min(all_x), max(all_x)
-    min_y, max_y = min(all_y), max(all_y)
-
-    # Create SVG overview of detections
     svg_width = 1200
     svg_height = int(svg_width * image_height_px / image_width_px)
-
     scale_x = svg_width / image_width_px
     scale_y = svg_height / image_height_px
 
     detection_circles = []
     for det in detections:
-        if 'global_center' in det:
-            cx, cy = det['global_center']
-        elif 'center' in det:
-            cx, cy = det['center']
-        else:
+        coords = get_detection_coordinates(det)
+        if not coords:
             continue
-
-        svg_x = cx * scale_x
-        svg_y = cy * scale_y
-        detection_circles.append(f'<circle cx="{svg_x:.1f}" cy="{svg_y:.1f}" r="3" fill="lime" opacity="0.7"/>')
+        svg_x = coords[0] * scale_x
+        svg_y = coords[1] * scale_y
+        detection_circles.append(
+            f'<circle cx="{svg_x:.1f}" cy="{svg_y:.1f}" r="3" fill="lime" opacity="0.7"/>'
+        )
 
     html_content = f'''<!DOCTYPE html>
 <html>
 <head>
     <title>LMD Reference Cross Placement</title>
     <style>
-        body {{
-            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
-            background: #1a1a2e;
-            color: #eee;
-            margin: 0;
-            padding: 20px;
-        }}
-        .container {{
-            max-width: 1400px;
-            margin: 0 auto;
-        }}
-        h1 {{
-            color: #00d4ff;
-            margin-bottom: 10px;
-        }}
-        .instructions {{
-            background: #16213e;
-            padding: 15px;
-            border-radius: 8px;
-            margin-bottom: 20px;
-        }}
-        .instructions ul {{
-            margin: 10px 0;
-            padding-left: 20px;
-        }}
-        .canvas-container {{
-            position: relative;
-            border: 2px solid #333;
-            border-radius: 8px;
-            overflow: hidden;
-            background: #000;
-        }}
-        #mainSvg {{
-            display: block;
-            cursor: crosshair;
-        }}
-        .cross-list {{
-            margin-top: 20px;
-            background: #16213e;
-            padding: 15px;
-            border-radius: 8px;
-        }}
-        .cross-item {{
-            display: flex;
-            justify-content: space-between;
-            align-items: center;
-            padding: 8px;
-            margin: 5px 0;
-            background: #0f3460;
-            border-radius: 4px;
-        }}
-        .cross-item button {{
-            background: #e94560;
-            color: white;
-            border: none;
-            padding: 5px 10px;
-            border-radius: 4px;
-            cursor: pointer;
-        }}
-        .buttons {{
-            margin-top: 20px;
-            display: flex;
-            gap: 10px;
-        }}
-        .btn {{
-            padding: 12px 24px;
-            border: none;
-            border-radius: 6px;
-            cursor: pointer;
-            font-size: 16px;
-            font-weight: bold;
-        }}
-        .btn-primary {{
-            background: #00d4ff;
-            color: #000;
-        }}
-        .btn-secondary {{
-            background: #333;
-            color: #fff;
-        }}
-        .btn-success {{
-            background: #00ff88;
-            color: #000;
-        }}
-        .info {{
-            margin-top: 15px;
-            color: #888;
-            font-size: 14px;
-        }}
-        .cross-marker {{
-            pointer-events: none;
-        }}
+        body {{ font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+               background: #1a1a2e; color: #eee; margin: 0; padding: 20px; }}
+        .container {{ max-width: 1400px; margin: 0 auto; }}
+        h1 {{ color: #00d4ff; margin-bottom: 10px; }}
+        .instructions {{ background: #16213e; padding: 15px; border-radius: 8px; margin-bottom: 20px; }}
+        .instructions ul {{ margin: 10px 0; padding-left: 20px; }}
+        .canvas-container {{ position: relative; border: 2px solid #333; border-radius: 8px;
+                            overflow: hidden; background: #000; }}
+        #mainSvg {{ display: block; cursor: crosshair; }}
+        .cross-list {{ margin-top: 20px; background: #16213e; padding: 15px; border-radius: 8px; }}
+        .cross-item {{ display: flex; justify-content: space-between; align-items: center;
+                      padding: 8px; margin: 5px 0; background: #0f3460; border-radius: 4px; }}
+        .cross-item button {{ background: #e94560; color: white; border: none;
+                             padding: 5px 10px; border-radius: 4px; cursor: pointer; }}
+        .buttons {{ margin-top: 20px; display: flex; gap: 10px; }}
+        .btn {{ padding: 12px 24px; border: none; border-radius: 6px;
+               cursor: pointer; font-size: 16px; font-weight: bold; }}
+        .btn-primary {{ background: #00d4ff; color: #000; }}
+        .btn-secondary {{ background: #333; color: #fff; }}
+        .btn-success {{ background: #00ff88; color: #000; }}
+        .info {{ margin-top: 15px; color: #888; font-size: 14px; }}
+        .cross-marker {{ pointer-events: none; }}
     </style>
 </head>
 <body>
     <div class="container">
         <h1>LMD Reference Cross Placement</h1>
-
         <div class="instructions">
             <strong>Instructions:</strong>
             <ul>
                 <li>Click on the image to place reference crosses (minimum 3 required)</li>
                 <li>Crosses should be placed at identifiable landmarks visible under the LMD</li>
-                <li>Recommended: place crosses at tissue corners or distinctive features</li>
                 <li>Green dots show detection locations for reference</li>
             </ul>
         </div>
-
         <div class="canvas-container">
             <svg id="mainSvg" width="{svg_width}" height="{svg_height}"
                  viewBox="0 0 {svg_width} {svg_height}">
-                <!-- Background -->
                 <rect width="100%" height="100%" fill="#111"/>
-
-                <!-- Detection points -->
-                <g id="detections">
-                    {''.join(detection_circles)}
-                </g>
-
-                <!-- Reference crosses (added by clicks) -->
+                <g id="detections">{''.join(detection_circles)}</g>
                 <g id="crosses"></g>
             </svg>
         </div>
-
         <div class="cross-list">
             <h3>Reference Crosses: <span id="crossCount">0</span></h3>
             <div id="crossListItems"></div>
         </div>
-
         <div class="buttons">
             <button class="btn btn-secondary" onclick="clearCrosses()">Clear All</button>
             <button class="btn btn-primary" onclick="undoLast()">Undo Last</button>
             <button class="btn btn-success" onclick="saveCrosses()">Save Crosses</button>
         </div>
-
         <div class="info">
-            <p>Image size: {image_width_px} x {image_height_px} px | Pixel size: {pixel_size_um:.4f} µm/px</p>
+            <p>Image size: {image_width_px} x {image_height_px} px | Pixel size: {pixel_size_um:.4f} um/px</p>
             <p>Total detections shown: {len(detections)}</p>
         </div>
     </div>
-
     <script>
         const imageWidth = {image_width_px};
         const imageHeight = {image_height_px};
         const svgWidth = {svg_width};
         const svgHeight = {svg_height};
         const pixelSize = {pixel_size_um};
-
         let crosses = [];
 
         document.getElementById('mainSvg').addEventListener('click', function(e) {{
             const rect = this.getBoundingClientRect();
             const svgX = e.clientX - rect.left;
             const svgY = e.clientY - rect.top;
-
-            // Convert to image pixel coordinates
             const imgX = svgX / svgWidth * imageWidth;
             const imgY = svgY / svgHeight * imageHeight;
-
-            // Convert to µm
             const umX = imgX * pixelSize;
             const umY = imgY * pixelSize;
-
             addCross(imgX, imgY, umX, umY, svgX, svgY);
         }});
 
         function addCross(imgX, imgY, umX, umY, svgX, svgY) {{
             const id = crosses.length + 1;
-            crosses.push({{
-                id: id,
-                x_px: imgX,
-                y_px: imgY,
-                x_um: umX,
-                y_um: umY
-            }});
-
-            // Add cross to SVG
+            crosses.push({{ id, x_px: imgX, y_px: imgY, x_um: umX, y_um: umY }});
             const crossGroup = document.getElementById('crosses');
             const crossSize = 15;
             const cross = document.createElementNS('http://www.w3.org/2000/svg', 'g');
             cross.setAttribute('id', 'cross_' + id);
             cross.setAttribute('class', 'cross-marker');
             cross.innerHTML = `
-                <line x1="${{svgX - crossSize}}" y1="${{svgY}}" x2="${{svgX + crossSize}}" y2="${{svgY}}"
-                      stroke="red" stroke-width="3"/>
-                <line x1="${{svgX}}" y1="${{svgY - crossSize}}" x2="${{svgX}}" y2="${{svgY + crossSize}}"
-                      stroke="red" stroke-width="3"/>
+                <line x1="${{svgX - crossSize}}" y1="${{svgY}}" x2="${{svgX + crossSize}}" y2="${{svgY}}" stroke="red" stroke-width="3"/>
+                <line x1="${{svgX}}" y1="${{svgY - crossSize}}" x2="${{svgX}}" y2="${{svgY + crossSize}}" stroke="red" stroke-width="3"/>
                 <circle cx="${{svgX}}" cy="${{svgY}}" r="20" fill="none" stroke="red" stroke-width="2"/>
                 <text x="${{svgX + 25}}" y="${{svgY + 5}}" fill="red" font-size="14" font-weight="bold">${{id}}</text>
             `;
             crossGroup.appendChild(cross);
-
             updateCrossList();
         }}
 
         function updateCrossList() {{
             document.getElementById('crossCount').textContent = crosses.length;
-
             const listDiv = document.getElementById('crossListItems');
             listDiv.innerHTML = crosses.map((c, i) => `
                 <div class="cross-item">
-                    <span>Cross ${{c.id}}: (${{c.x_px.toFixed(0)}}, ${{c.y_px.toFixed(0)}}) px = (${{c.x_um.toFixed(1)}}, ${{c.y_um.toFixed(1)}}) µm</span>
+                    <span>Cross ${{c.id}}: (${{c.x_px.toFixed(0)}}, ${{c.y_px.toFixed(0)}}) px</span>
                     <button onclick="removeCross(${{i}})">Remove</button>
                 </div>
             `).join('');
@@ -716,40 +826,24 @@ def generate_cross_placement_html(detections, output_dir, pixel_size_um,
         }}
 
         function undoLast() {{
-            if (crosses.length > 0) {{
-                removeCross(crosses.length - 1);
-            }}
+            if (crosses.length > 0) removeCross(crosses.length - 1);
         }}
 
         function saveCrosses() {{
-            if (crosses.length < 3) {{
-                alert('Please place at least 3 reference crosses!');
-                return;
-            }}
-
+            if (crosses.length < 3) {{ alert('Please place at least 3 reference crosses!'); return; }}
             const data = {{
-                image_width_px: imageWidth,
-                image_height_px: imageHeight,
+                image_width_px: imageWidth, image_height_px: imageHeight,
                 pixel_size_um: pixelSize,
                 crosses: crosses.map(c => ({{
-                    id: c.id,
-                    x_px: c.x_px,
-                    y_px: c.y_px,
-                    x_um: c.x_um,
-                    y_um: c.y_um
+                    id: c.id, x_px: c.x_px, y_px: c.y_px, x_um: c.x_um, y_um: c.y_um
                 }}))
             }};
-
-            // Download as JSON
             const blob = new Blob([JSON.stringify(data, null, 2)], {{type: 'application/json'}});
             const url = URL.createObjectURL(blob);
             const a = document.createElement('a');
-            a.href = url;
-            a.download = 'reference_crosses.json';
-            a.click();
+            a.href = url; a.download = 'reference_crosses.json'; a.click();
             URL.revokeObjectURL(url);
-
-            alert('Saved ' + crosses.length + ' reference crosses!\\n\\nUse this file with:\\npython run_lmd_export.py --crosses reference_crosses.json --export');
+            alert('Saved ' + crosses.length + ' reference crosses!');
         }}
     </script>
 </body>
@@ -760,232 +854,34 @@ def generate_cross_placement_html(detections, output_dir, pixel_size_um,
         f.write(html_content)
 
     print(f"Generated cross placement HTML: {html_path}")
-    print(f"Open this file in a browser, place crosses, and save the JSON.")
-
     return html_path
 
 
-def export_to_lmd(detections, crosses_data, output_path, flip_y=True,
-                  cluster_size=None, plate_format='384', clustering_method='greedy'):
-    """
-    Export detections to Leica LMD XML format using py-lmd.
-
-    Args:
-        detections: List of detection dicts with polygon_image or contours
-        crosses_data: Dict with crosses list and image metadata
-        output_path: Path to save XML file
-        flip_y: Whether to flip Y axis for stage coordinates
-        cluster_size: If set, spatially cluster detections into groups of this size
-                      and assign each cluster to a well
-        plate_format: '384' or '96' well plate format
-        clustering_method: 'greedy', 'kmeans', or 'dbscan'
-    """
-    from lmd.lib import Collection, Shape
-    from lmd.tools import makeCross
-
-    pixel_size = crosses_data['pixel_size_um']
-    image_height_px = crosses_data['image_height_px']
-    image_width_px = crosses_data['image_width_px']
-    image_height_um = image_height_px * pixel_size
-    image_width_um = image_width_px * pixel_size
-
-    # Get calibration points from crosses (first 3)
-    crosses = crosses_data['crosses']
-    if len(crosses) < 3:
-        raise ValueError("Need at least 3 reference crosses for calibration")
-
-    calibration_points = np.array([
-        [c['x_um'], c['y_um'] if not flip_y else image_height_um - c['y_um']]
-        for c in crosses[:3]
-    ])
-
-    # Create collection
-    collection = Collection(calibration_points=calibration_points)
-
-    # Add reference crosses
-    for c in crosses:
-        x_um = c['x_um']
-        y_um = c['y_um'] if not flip_y else image_height_um - c['y_um']
-
-        cross = makeCross(
-            center=np.array([x_um, y_um]),
-            arm_length=100,  # µm
-            arm_width=10,    # µm
-        )
-        collection.add_shape(Shape(
-            points=cross,
-            well="CAL",
-            name=f"RefCross_{c['id']}"
-        ))
-
-    # Check if wells are pre-assigned (e.g., from control generation)
-    has_preassigned_wells = any('_well' in det for det in detections)
-
-    # Cluster detections if requested (and no pre-assigned wells)
-    if cluster_size and cluster_size > 0 and not has_preassigned_wells:
-        print(f"  Clustering detections spatially (target {cluster_size} per cluster, method={clustering_method})...")
-        clusters = cluster_detections_spatially(detections, target_cluster_size=cluster_size, method=clustering_method)
-
-        # Assign wells
-        if plate_format == '96':
-            wells = assign_wells_96(len(clusters))
-        else:
-            wells = assign_wells_384(len(clusters))
-
-        print(f"  Created {len(clusters)} clusters for {len(wells)} wells")
-
-        # Build detection-to-well mapping
-        det_to_well = {}
-        det_to_cluster = {}
-        for cluster_idx, cluster in enumerate(clusters):
-            well = wells[cluster_idx] if cluster_idx < len(wells) else wells[-1]
-            for det_idx in cluster:
-                det_to_well[det_idx] = well
-                det_to_cluster[det_idx] = cluster_idx
-    elif has_preassigned_wells:
-        # Use pre-assigned wells from _well attribute
-        det_to_well = {i: det.get('_well', 'A1') for i, det in enumerate(detections)}
-        det_to_cluster = {i: 0 for i in range(len(detections))}
-        clusters = None
-    else:
-        # All detections go to A1
-        det_to_well = {i: "A1" for i in range(len(detections))}
-        det_to_cluster = {i: 0 for i in range(len(detections))}
-        clusters = None
-
-    # Add detection shapes
-    for i, det in enumerate(detections):
-        # Get polygon coordinates
-        polygon_px = None
-
-        if 'polygon_image' in det:
-            polygon_px = np.array(det['polygon_image'])
-        elif 'outer_contour_global' in det:
-            polygon_px = np.array(det['outer_contour_global'])
-        elif 'outer_contour' in det:
-            # Local contour - need tile origin
-            tile_origin = det.get('tile_origin', [0, 0])
-            contour = np.array(det['outer_contour'])
-            if len(contour.shape) == 3:
-                contour = contour.reshape(-1, 2)
-            polygon_px = contour + np.array(tile_origin)
-
-        if polygon_px is None or len(polygon_px) < 3:
-            continue
-
-        # Convert to µm
-        polygon_um = polygon_px * pixel_size
-
-        # Flip Y if needed
-        if flip_y:
-            polygon_um[:, 1] = image_height_um - polygon_um[:, 1]
-
-        # Close polygon if not closed
-        if not np.allclose(polygon_um[0], polygon_um[-1]):
-            polygon_um = np.vstack([polygon_um, polygon_um[0]])
-
-        # Get well assignment
-        well = det_to_well.get(i, "A1")
-
-        # Add to collection
-        name = det.get('uid', det.get('id', f'Shape_{i+1:04d}'))
-        collection.new_shape(polygon_um, well=well, name=name)
-
-    # Save
-    output_path = Path(output_path)
-    collection.save(str(output_path))
-
-    if clusters:
-        print(f"Exported {len(detections)} shapes in {len(clusters)} clusters + {len(crosses)} reference crosses to: {output_path}")
-    else:
-        print(f"Exported {len(detections)} shapes + {len(crosses)} reference crosses to: {output_path}")
-
-    # Also save metadata CSV with cluster and well assignments
-    csv_path = output_path.with_suffix('.csv')
-    with open(csv_path, 'w') as f:
-        f.write('name,type,x_um,y_um,well,cluster,is_control,control_of\n')
-        for c in crosses:
-            y_um = c['y_um'] if not flip_y else image_height_um - c['y_um']
-            f.write(f"RefCross_{c['id']},calibration,{c['x_um']:.2f},{y_um:.2f},CAL,,,\n")
-        for i, det in enumerate(detections):
-            name = det.get('uid', det.get('id', ''))
-            if 'global_center_um' in det:
-                x, y = det['global_center_um']
-            elif 'global_center' in det:
-                x = det['global_center'][0] * pixel_size
-                y = det['global_center'][1] * pixel_size
-            elif 'center' in det:
-                x = det['center'][0] * pixel_size
-                y = det['center'][1] * pixel_size
-            else:
-                continue
-            if flip_y:
-                y = image_height_um - y
-            well = det_to_well.get(i, 'A1')
-            cluster_idx = det_to_cluster.get(i, 0)
-            is_control = det.get('is_control', False)
-            control_of = det.get('control_of', '')
-            shape_type = 'control' if is_control else 'shape'
-            f.write(f"{name},{shape_type},{x:.2f},{y:.2f},{well},{cluster_idx},{is_control},{control_of}\n")
-
-    print(f"Saved coordinate metadata to: {csv_path}")
-
-    # Save cluster summary if clustering was used
-    if clusters:
-        cluster_summary_path = output_path.with_name(output_path.stem + '_cluster_summary.json')
-        cluster_summary = {
-            'total_detections': len(detections),
-            'total_clusters': len(clusters),
-            'cluster_size_target': cluster_size,
-            'clustering_method': clustering_method,
-            'plate_format': plate_format,
-            'clusters': []
-        }
-        for cluster_idx, cluster in enumerate(clusters):
-            well = wells[cluster_idx] if cluster_idx < len(wells) else wells[-1]
-            cluster_coords = np.array([
-                get_detection_coordinates(detections[det_idx])
-                for det_idx in cluster
-                if get_detection_coordinates(detections[det_idx]) is not None
-            ])
-            centroid = cluster_coords.mean(axis=0) if len(cluster_coords) > 0 else [0, 0]
-            cluster_summary['clusters'].append({
-                'cluster_id': cluster_idx,
-                'well': well,
-                'n_detections': len(cluster),
-                'centroid_px': [float(centroid[0]), float(centroid[1])],
-                'centroid_um': [float(centroid[0] * pixel_size), float(centroid[1] * pixel_size)],
-                'detection_uids': [detections[idx].get('uid', detections[idx].get('id', f'det_{idx}'))
-                                   for idx in cluster]
-            })
-        with open(cluster_summary_path, 'w') as f:
-            json.dump(cluster_summary, f, indent=2)
-        print(f"Saved cluster summary to: {cluster_summary_path}")
-
-    return output_path
-
+# ---------------------------------------------------------------------------
+# Main pipeline
+# ---------------------------------------------------------------------------
 
 def main():
     parser = argparse.ArgumentParser(
-        description='Export annotated detections to Leica LMD format',
+        description='Unified LMD Export - NMJ detections to Leica LMD format',
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog='''
 Examples:
-  # Step 1: Generate HTML for placing reference crosses
+  # Full pipeline with clusters and controls
   python run_lmd_export.py \\
-      --detections output/slide/detections.json \\
-      --annotations output/slide/annotations.json \\
-      --output-dir output/slide/lmd \\
-      --generate-cross-html
-
-  # Step 2: After placing crosses, export to LMD
-  python run_lmd_export.py \\
-      --detections output/slide/detections.json \\
-      --annotations output/slide/annotations.json \\
+      --detections nmj_detections.json \\
       --crosses reference_crosses.json \\
-      --output-dir output/slide/lmd \\
-      --export
-'''
+      --clusters nmj_clusters.json \\
+      --tiles-dir /path/to/tiles \\
+      --output-dir lmd_export \\
+      --export --generate-controls
+
+  # Generate HTML for placing reference crosses
+  python run_lmd_export.py \\
+      --detections nmj_detections.json \\
+      --output-dir lmd_export \\
+      --generate-cross-html
+''',
     )
 
     # Input files
@@ -994,7 +890,15 @@ Examples:
     parser.add_argument('--annotations', type=str, default=None,
                         help='Path to annotations JSON (filters to positives only)')
     parser.add_argument('--crosses', type=str, default=None,
-                        help='Path to reference crosses JSON (from HTML tool)')
+                        help='Path to reference crosses JSON')
+    parser.add_argument('--clusters', type=str, default=None,
+                        help='Path to clusters JSON from cluster_nmjs.py')
+
+    # Contour extraction
+    parser.add_argument('--tiles-dir', type=str, default=None,
+                        help='Path to tiles/ directory with H5 masks')
+    parser.add_argument('--mask-filename', type=str, default='nmj_masks.h5',
+                        help='Mask filename within each tile dir (default: nmj_masks.h5)')
 
     # Output
     parser.add_argument('--output-dir', type=str, required=True,
@@ -1008,29 +912,29 @@ Examples:
     parser.add_argument('--export', action='store_true',
                         help='Export to LMD XML (requires --crosses)')
 
-    # Image metadata (can be auto-detected from detections)
+    # Image metadata
     parser.add_argument('--pixel-size', type=float, default=None,
-                        help='Pixel size in µm (auto-detect from detections if not set)')
+                        help='Pixel size in um (auto-detect from detections if not set)')
     parser.add_argument('--image-width', type=int, default=None,
                         help='Image width in pixels')
     parser.add_argument('--image-height', type=int, default=None,
                         help='Image height in pixels')
 
-    # Spatial clustering
-    parser.add_argument('--cluster-size', type=int, default=None,
-                        help='Target number of detections per well (enables clustering)')
-    parser.add_argument('--plate-format', type=str, default='384',
-                        choices=['384', '96'],
-                        help='Well plate format (default: 384)')
-    parser.add_argument('--clustering-method', type=str, default='greedy',
-                        choices=['greedy', 'kmeans', 'dbscan'],
-                        help='Spatial clustering method (default: greedy)')
+    # Filtering
+    parser.add_argument('--min-score', type=float, default=None,
+                        help='Minimum rf_prediction score (filters detections)')
 
-    # Spatial controls
+    # Controls
     parser.add_argument('--generate-controls', action='store_true',
-                        help='Generate spatial control regions for each target')
-    parser.add_argument('--control-offset-um', type=float, default=150.0,
-                        help='Offset distance for controls in micrometers (default: 150)')
+                        help='Generate spatial control regions for every target')
+    parser.add_argument('--control-offset-um', type=float, default=100.0,
+                        help='Offset distance for controls in um (default: 100)')
+
+    # Contour processing
+    parser.add_argument('--dilation-um', type=float, default=0.5,
+                        help='Contour dilation in um (default: 0.5)')
+    parser.add_argument('--rdp-epsilon', type=float, default=5.0,
+                        help='RDP simplification epsilon in pixels (default: 5)')
 
     # Options
     parser.add_argument('--no-flip-y', action='store_true',
@@ -1038,77 +942,86 @@ Examples:
 
     args = parser.parse_args()
 
+    # -----------------------------------------------------------------------
     # Load detections
+    # -----------------------------------------------------------------------
     print(f"Loading detections from: {args.detections}")
-    detections = load_detections(args.detections)
-    print(f"  Loaded {len(detections)} detections")
+    all_detections = load_detections(args.detections)
+    print(f"  Loaded {len(all_detections)} detections")
 
-    # Filter by annotations if provided
+    # Keep original list for cluster index lookups (cluster_nmjs.py indices
+    # reference the ORIGINAL unfiltered list, since it filters internally)
+    detections = list(all_detections)
+
+    # Filter by annotations
     if args.annotations:
         print(f"Loading annotations from: {args.annotations}")
         positive_uids = load_annotations(args.annotations)
         print(f"  Found {len(positive_uids)} positive annotations")
-
-        detections = filter_detections(detections, positive_uids)
+        detections = filter_detections(detections, positive_uids=positive_uids)
         print(f"  Filtered to {len(detections)} positive detections")
+
+    # Filter by score (skip if --clusters provided, clustering already filtered)
+    if args.min_score is not None and not args.clusters:
+        before = len(detections)
+        detections = filter_detections(detections, min_score=args.min_score)
+        print(f"  Score filter (>= {args.min_score}): {before} -> {len(detections)}")
+    elif args.min_score is not None and args.clusters:
+        print(f"  Score filter skipped (cluster_nmjs.py already filtered at >= {args.min_score})")
 
     if len(detections) == 0:
         print("ERROR: No detections to export!")
         return
 
-    # Try to auto-detect image metadata
+    # Auto-detect metadata
     pixel_size = args.pixel_size
+    if pixel_size is None:
+        sample = detections[0]
+        if 'features' in sample and 'pixel_size_um' in sample['features']:
+            pixel_size = sample['features']['pixel_size_um']
+        else:
+            pixel_size = 0.1725
+        print(f"  Pixel size: {pixel_size} um/px")
+
     image_width = args.image_width
     image_height = args.image_height
-
-    # Check first detection for metadata
-    sample_det = detections[0]
-    if pixel_size is None:
-        if 'features' in sample_det and 'pixel_size_um' in sample_det['features']:
-            pixel_size = sample_det['features']['pixel_size_um']
-        else:
-            pixel_size = 0.22  # Default
-        print(f"  Using pixel size: {pixel_size} µm/px")
-
-    # Estimate image size from detection coordinates
     if image_width is None or image_height is None:
         max_x = max_y = 0
-        for det in detections:
-            if 'global_center' in det:
-                max_x = max(max_x, det['global_center'][0])
-                max_y = max(max_y, det['global_center'][1])
-            elif 'center' in det:
-                max_x = max(max_x, det['center'][0])
-                max_y = max(max_y, det['center'][1])
-
-        # Add margin
+        for det in all_detections:
+            coords = get_detection_coordinates(det)
+            if coords:
+                max_x = max(max_x, coords[0])
+                max_y = max(max_y, coords[1])
         if image_width is None:
             image_width = int(max_x * 1.1)
         if image_height is None:
             image_height = int(max_y * 1.1)
-        print(f"  Estimated image size: {image_width} x {image_height} px")
+        print(f"  Image size (estimated): {image_width} x {image_height} px")
 
     output_dir = Path(args.output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
 
+    # -----------------------------------------------------------------------
     # Generate cross placement HTML
+    # -----------------------------------------------------------------------
     if args.generate_cross_html:
         generate_cross_placement_html(
-            detections, output_dir, pixel_size,
-            image_width, image_height
+            detections, output_dir, pixel_size, image_width, image_height
         )
 
-    # Export to LMD
+    # -----------------------------------------------------------------------
+    # Export pipeline
+    # -----------------------------------------------------------------------
     if args.export:
         if not args.crosses:
             print("ERROR: --crosses required for export. First use --generate-cross-html")
             return
 
-        print(f"Loading crosses from: {args.crosses}")
+        print(f"\nLoading crosses from: {args.crosses}")
         with open(args.crosses, 'r') as f:
             crosses_data = json.load(f)
 
-        # Override with command line args if provided
+        # Override metadata from CLI
         if args.pixel_size:
             crosses_data['pixel_size_um'] = args.pixel_size
         if args.image_width:
@@ -1116,113 +1029,365 @@ Examples:
         if args.image_height:
             crosses_data['image_height_px'] = args.image_height
 
-        # Generate spatial controls if requested
-        controls = []
-        pairs = []
-        if args.generate_controls:
-            print(f"Generating spatial controls (offset: {args.control_offset_um} um)...")
+        # -------------------------------------------------------------------
+        # Step 1: Separate singles vs clustered NMJs
+        # -------------------------------------------------------------------
+        if args.clusters:
+            print(f"\nLoading clusters from: {args.clusters}")
+            cluster_data = load_clusters(args.clusters)
 
-            # Get image bounds for boundary checking
-            img_w = crosses_data.get('image_width_px', image_width)
-            img_h = crosses_data.get('image_height_px', image_height)
-            image_bounds = (0, 0, img_w, img_h)
-            ctrl_pixel_size = crosses_data.get('pixel_size_um', pixel_size)
+            # Cluster indices reference the ORIGINAL unfiltered detections list
+            # (cluster_nmjs.py runs its own score filtering internally)
+            outlier_indices = [o['nmj_index'] for o in cluster_data['outliers']]
 
-            for det in detections:
-                control = generate_spatial_control(
-                    det, detections,
-                    offset_um=args.control_offset_um,
-                    pixel_size=ctrl_pixel_size,
-                    image_bounds=image_bounds
+            single_dets = [all_detections[i] for i in outlier_indices if i < len(all_detections)]
+            cluster_groups = []
+            for c in cluster_data['main_clusters']:
+                members = [all_detections[i] for i in c['nmj_indices'] if i < len(all_detections)]
+                if members:
+                    cluster_groups.append({
+                        'id': c['id'],
+                        'members': members,
+                        'cx': c.get('cx', 0),
+                        'cy': c.get('cy', 0),
+                    })
+
+            print(f"  Singles: {len(single_dets)}")
+            print(f"  Clusters: {len(cluster_groups)} "
+                  f"({sum(len(cg['members']) for cg in cluster_groups)} NMJs)")
+        else:
+            # No clusters file: all detections are singles
+            single_dets = detections
+            cluster_groups = []
+            print(f"  All {len(single_dets)} detections treated as singles (no --clusters)")
+
+        # -------------------------------------------------------------------
+        # Step 2: Extract contours from H5 masks if needed
+        # -------------------------------------------------------------------
+        all_dets_needing_contours = list(single_dets)
+        for cg in cluster_groups:
+            all_dets_needing_contours.extend(cg['members'])
+
+        need_extraction = any(
+            d.get('contour_um') is None and d.get('outer_contour_global') is None
+            for d in all_dets_needing_contours
+        )
+
+        if need_extraction and args.tiles_dir:
+            print(f"\nExtracting contours from H5 masks ({args.tiles_dir})...")
+            contour_results = extract_contours_for_detections(
+                all_dets_needing_contours, args.tiles_dir, pixel_size,
+                mask_filename=args.mask_filename,
+                dilation_um=args.dilation_um,
+                rdp_epsilon=args.rdp_epsilon,
+            )
+            print(f"  Extracted {len(contour_results)} contours")
+
+            # Attach contours to detections
+            for det in all_dets_needing_contours:
+                uid = det.get('uid', det.get('id', ''))
+                if uid in contour_results:
+                    det['contour_um'] = contour_results[uid]['contour_um']
+                    det['area_um2'] = contour_results[uid]['area_um2']
+        elif need_extraction and not args.tiles_dir:
+            # Try to process existing outer_contour_global
+            from scripts.contour_processing import process_contour
+            print("\nProcessing existing contours (dilation + RDP)...")
+            processed_count = 0
+            for det in all_dets_needing_contours:
+                if det.get('contour_um') is not None:
+                    continue
+                contour_px = det.get('outer_contour_global')
+                if contour_px is None:
+                    continue
+                processed, stats = process_contour(
+                    contour_px, pixel_size_um=pixel_size,
+                    dilation_um=args.dilation_um,
+                    rdp_epsilon=args.rdp_epsilon,
+                    return_stats=True,
                 )
-                if control:
-                    controls.append(control)
-                    pairs.append({
-                        'nmj_uid': det.get('uid', det.get('id', '')),
-                        'control_uid': control['uid'],
-                        'offset_direction': control['offset_direction'],
-                        'offset_um': control['offset_um']
-                    })
-                else:
-                    print(f"  Warning: Could not generate control for {det.get('uid', 'unknown')} - all directions overlap")
+                if processed is not None:
+                    det['contour_um'] = processed.tolist()
+                    det['area_um2'] = stats['area_after_um2']
+                    processed_count += 1
+            print(f"  Processed {processed_count} contours")
 
-            print(f"  Generated {len(controls)} controls for {len(detections)} NMJs")
+        # -------------------------------------------------------------------
+        # Step 3: Order singles by nearest-neighbor path
+        # -------------------------------------------------------------------
+        print("\nOrdering singles by nearest-neighbor path on slide...")
+        singles_with_contours = []
+        singles_positions = []
+        for det in single_dets:
+            if det.get('contour_um') is None:
+                continue
+            singles_with_contours.append(det)
+            coords = get_detection_coordinates(det)
+            if coords:
+                singles_positions.append((coords[0], coords[1]))
+            else:
+                singles_positions.append((0, 0))
 
-        # Handle export with or without controls
-        output_path = output_dir / f"{args.output_name}.xml"
+        if singles_positions:
+            nn_order = nearest_neighbor_order(singles_positions)
+            ordered_singles_dets = [singles_with_contours[i] for i in nn_order]
+            last_pos = singles_positions[nn_order[-1]]
+            total_dist = sum(
+                np.linalg.norm(np.array(singles_positions[nn_order[i]]) -
+                               np.array(singles_positions[nn_order[i+1]]))
+                for i in range(len(nn_order) - 1)
+            )
+            print(f"  Ordered {len(ordered_singles_dets)} singles, "
+                  f"path: {total_dist * pixel_size / 1000:.1f} mm")
+        else:
+            ordered_singles_dets = []
+            last_pos = (0, 0)
 
-        if args.generate_controls and controls:
-            # Build UID-to-control mapping for correct pairing
-            control_by_uid = {ctrl['control_of']: ctrl for ctrl in controls}
+        # -------------------------------------------------------------------
+        # Step 4: Order clusters by nearest-neighbor (from last single)
+        # -------------------------------------------------------------------
+        print("Ordering clusters by nearest-neighbor path...")
+        clusters_with_contours = []
+        cluster_centroids = []
 
-            # Interleave NMJs with their matched controls
-            all_shapes = []
-            valid_pairs = []
-            for det in detections:
-                det_uid = det.get('uid', det.get('id', ''))
-                all_shapes.append(det)
-                ctrl = control_by_uid.get(det_uid)
-                if ctrl:
-                    all_shapes.append(ctrl)
-                    valid_pairs.append({
-                        'nmj_uid': det_uid,
-                        'control_uid': ctrl['uid'],
-                        'offset_direction': ctrl['offset_direction'],
-                        'offset_um': ctrl['offset_um']
-                    })
-                # No else needed - detection without control just doesn't get paired
+        for cg in cluster_groups:
+            # Check all members have contours
+            member_contours = []
+            member_uids = []
+            for m in cg['members']:
+                contour = m.get('contour_um')
+                if contour is not None:
+                    member_contours.append(contour)
+                    member_uids.append(m.get('uid', m.get('id', '')))
 
-            # Assign wells using serpentine quadrant layout
-            n_total = len(all_shapes)
-            wells = generate_wells_serpentine_4_quadrants(n_total) if n_total > 0 else []
+            if not member_contours:
+                print(f"  WARNING: Cluster {cg['id']} has no contours, skipping entirely")
+                continue
 
-            # Assign wells to shapes
-            for i, shape in enumerate(all_shapes):
-                shape['_well'] = wells[i] if i < len(wells) else (wells[-1] if wells else 'A1')
+            dropped = len(cg['members']) - len(member_contours)
+            if dropped > 0:
+                print(f"  WARNING: Cluster {cg['id']} lost {dropped}/{len(cg['members'])} members (contour extraction failed)")
 
-            # Update pairs with well assignments by finding actual indices
-            shape_idx = 0
-            for det in detections:
-                det_uid = det.get('uid', det.get('id', ''))
-                ctrl = control_by_uid.get(det_uid)
-                if ctrl:
-                    # Find matching pair and update wells
-                    for pair in valid_pairs:
-                        if pair['nmj_uid'] == det_uid:
-                            pair['nmj_well'] = wells[shape_idx] if shape_idx < len(wells) else 'A1'
-                            pair['control_well'] = wells[shape_idx + 1] if shape_idx + 1 < len(wells) else 'A1'
-                            break
-                    shape_idx += 2  # NMJ + control
-                else:
-                    shape_idx += 1  # Only NMJ
+            clusters_with_contours.append({
+                'id': cg['id'],
+                'members': cg['members'],
+                'member_contours_um': member_contours,
+                'member_uids': member_uids,
+                'cx': cg['cx'],
+                'cy': cg['cy'],
+            })
+            cluster_centroids.append((cg['cx'], cg['cy']))
 
-            # Save pairing info
-            pairing_path = output_dir / 'nmj_control_pairs.json'
-            with open(pairing_path, 'w') as f:
-                json.dump({
-                    'n_pairs': len(valid_pairs),
-                    'n_detections_without_controls': len(detections) - len(controls),
-                    'offset_um': args.control_offset_um,
-                    'pairs': valid_pairs
-                }, f, indent=2)
-            print(f"Saved NMJ-control pairing to: {pairing_path}")
+        if cluster_centroids:
+            # Start from nearest cluster to last single position
+            dists = [np.linalg.norm(np.array(cc) - np.array(last_pos))
+                     for cc in cluster_centroids]
+            start_cluster = int(np.argmin(dists))
+            cluster_order = nearest_neighbor_order(cluster_centroids, start_idx=start_cluster)
+            ordered_clusters_data = [clusters_with_contours[i] for i in cluster_order]
+            print(f"  Ordered {len(ordered_clusters_data)} clusters")
+        else:
+            ordered_clusters_data = []
 
-            # Use all_shapes for export
-            export_to_lmd(
-                all_shapes, crosses_data, output_path,
-                flip_y=not args.no_flip_y,
-                cluster_size=None,  # Disable clustering - using serpentine well assignment
-                plate_format=args.plate_format,
-                clustering_method=args.clustering_method
+        # -------------------------------------------------------------------
+        # Step 5: Generate controls
+        # -------------------------------------------------------------------
+        if args.generate_controls:
+            print(f"\nGenerating controls (offset: {args.control_offset_um} um)...")
+            print("  Every sample will have a control.")
+
+            # Precompute Shapely polygons for all NMJ contours (avoids
+            # recreating Polygon objects on every overlap check)
+            precomputed_polygons = []
+            for det in ordered_singles_dets:
+                c = det.get('contour_um')
+                if c and len(c) >= 3:
+                    precomputed_polygons.append(_make_polygon(c))
+
+            for cdata in ordered_clusters_data:
+                for c in cdata['member_contours_um']:
+                    if c and len(c) >= 3:
+                        precomputed_polygons.append(_make_polygon(c))
+
+            print(f"  Precomputed {len(precomputed_polygons)} collision polygons")
+
+            # Generate single controls (progressively add to collision list)
+            ordered_single_ctrls = []
+            fallback_count = 0
+            for det in ordered_singles_dets:
+                contour_um = det.get('contour_um')
+                shifted, direction, actual_offset = generate_spatial_control(
+                    contour_um, precomputed_polygons,
+                    offset_um=args.control_offset_um,
+                )
+                if 'fallback' in direction:
+                    fallback_count += 1
+
+                # Add generated control to collision list to prevent
+                # control-vs-control overlap
+                if shifted and len(shifted) >= 3:
+                    precomputed_polygons.append(_make_polygon(shifted))
+
+                uid = det.get('uid', det.get('id', ''))
+                ordered_single_ctrls.append({
+                    'type': 'single_control',
+                    'uid': uid + '_ctrl',
+                    'control_of': uid,
+                    'contour_um': shifted,
+                    'offset_direction': direction,
+                    'offset_um': actual_offset,
+                    'area_um2': det.get('area_um2', 0),
+                })
+
+            print(f"  Single controls: {len(ordered_single_ctrls)} "
+                  f"({fallback_count} used fallback offset)")
+
+            # Generate cluster controls (progressively add to collision list)
+            ordered_cluster_ctrls = []
+            cluster_fallback = 0
+            for cdata in ordered_clusters_data:
+                shifted_contours, direction, actual_offset = generate_cluster_control(
+                    cdata['member_contours_um'], precomputed_polygons,
+                    offset_um=args.control_offset_um,
+                )
+                if 'fallback' in direction:
+                    cluster_fallback += 1
+
+                # Add all shifted contours to collision list
+                for sc in shifted_contours:
+                    if sc and len(sc) >= 3:
+                        precomputed_polygons.append(_make_polygon(sc))
+
+                ordered_cluster_ctrls.append({
+                    'type': 'cluster_control',
+                    'uid': f"cluster_{cdata['id']}_ctrl",
+                    'control_of_cluster': cdata['id'],
+                    'contours_um': shifted_contours,
+                    'offset_direction': direction,
+                    'offset_um': actual_offset,
+                })
+
+            print(f"  Cluster controls: {len(ordered_cluster_ctrls)} "
+                  f"({cluster_fallback} used fallback offset)")
+        else:
+            ordered_single_ctrls = []
+            ordered_cluster_ctrls = []
+
+        # -------------------------------------------------------------------
+        # Step 6: Build shape dicts for export
+        # -------------------------------------------------------------------
+        # Convert singles to shape dicts
+        ordered_singles = []
+        for det in ordered_singles_dets:
+            uid = det.get('uid', det.get('id', ''))
+            ordered_singles.append({
+                'type': 'single',
+                'uid': uid,
+                'contour_um': det.get('contour_um'),
+                'area_um2': det.get('area_um2', 0),
+                'global_center': det.get('global_center'),
+            })
+
+        # Convert clusters to shape dicts
+        ordered_clusters = []
+        for cdata in ordered_clusters_data:
+            total_area = sum(
+                m.get('area_um2', 0) for m in cdata['members']
+                if m.get('contour_um') is not None
+            )
+            ordered_clusters.append({
+                'type': 'cluster',
+                'uid': f"cluster_{cdata['id']}",
+                'cluster_id': cdata['id'],
+                'n_nmjs': len(cdata['member_contours_um']),
+                'contours_um': cdata['member_contours_um'],
+                'member_uids': cdata['member_uids'],
+                'total_area_um2': total_area,
+                'cx': cdata['cx'],
+                'cy': cdata['cy'],
+            })
+
+        # -------------------------------------------------------------------
+        # Step 7: Assign wells
+        # -------------------------------------------------------------------
+        if args.generate_controls:
+            print("\nAssigning wells (serpentine, B2->B3->C3->C2, alternating NMJ/Control)...")
+            assignments, well_order = assign_wells_with_controls(
+                ordered_singles, ordered_single_ctrls,
+                ordered_clusters, ordered_cluster_ctrls,
             )
         else:
-            export_to_lmd(
-                detections, crosses_data, output_path,
+            # No controls: just assign sequentially
+            all_shapes = ordered_singles + ordered_clusters
+            n_wells = len(all_shapes)
+            well_order = generate_wells_serpentine_4_quadrants(n_wells)
+            for i, shape in enumerate(all_shapes):
+                shape['well'] = well_order[i] if i < len(well_order) else f"overflow_{i}"
+            assignments = all_shapes
+
+        print(f"  Total wells used: {len(well_order)}")
+        if well_order:
+            print(f"  First well: {well_order[0]}, Last well: {well_order[-1]}")
+
+        # -------------------------------------------------------------------
+        # Step 8: Build and save export data
+        # -------------------------------------------------------------------
+        metadata = {
+            'plate_format': '384',
+            'quadrant_order': ['B2', 'B3', 'C3', 'C2'],
+            'pixel_size_um': pixel_size,
+            'dilation_um': args.dilation_um,
+            'rdp_epsilon_px': args.rdp_epsilon,
+            'control_offset_um': args.control_offset_um,
+        }
+
+        export_data = build_export_data(assignments, well_order, metadata)
+
+        # Save JSON
+        json_path = output_dir / f"{args.output_name}_with_controls.json"
+        with open(json_path, 'w') as f:
+            json.dump(export_data, f, indent=2)
+        print(f"\n  Saved export JSON: {json_path}")
+
+        # Save CSV summary
+        csv_path = output_dir / f"{args.output_name}_summary.csv"
+        with open(csv_path, 'w') as f:
+            f.write('well,type,uid,area_um2,n_contours,offset_direction\n')
+            for shape in assignments:
+                well = shape.get('well', '')
+                stype = shape.get('type', '')
+                uid = shape.get('uid', '')
+                area = shape.get('area_um2', shape.get('total_area_um2', 0))
+                n_contours = len(shape.get('contours_um', [])) or (1 if shape.get('contour_um') else 0)
+                direction = shape.get('offset_direction', '')
+                f.write(f"{well},{stype},{uid},{area:.2f},{n_contours},{direction}\n")
+        print(f"  Saved CSV summary: {csv_path}")
+
+        # Export LMD XML
+        xml_path = output_dir / f"{args.output_name}.xml"
+        try:
+            export_to_lmd_xml(
+                assignments, crosses_data, xml_path,
                 flip_y=not args.no_flip_y,
-                cluster_size=args.cluster_size,
-                plate_format=args.plate_format,
-                clustering_method=args.clustering_method
             )
+        except ImportError:
+            print("  WARNING: py-lmd not installed, skipping XML export.")
+            print("  Install with: pip install py-lmd")
+        except Exception as e:
+            print(f"  WARNING: XML export failed: {e}")
+
+        # Print summary
+        s = export_data['summary']
+        print(f"\n{'='*60}")
+        print(f"EXPORT SUMMARY")
+        print(f"{'='*60}")
+        print(f"  Singles:          {s['n_singles']}")
+        print(f"  Single controls:  {s['n_single_controls']}")
+        print(f"  Clusters:         {s['n_clusters']}")
+        print(f"  Cluster controls: {s['n_cluster_controls']}")
+        print(f"  NMJs in clusters: {s['n_nmjs_in_clusters']}")
+        print(f"  Total wells used: {s['total_wells_used']}")
+        print(f"{'='*60}")
 
     if not args.generate_cross_html and not args.export:
         print("No action specified. Use --generate-cross-html or --export")

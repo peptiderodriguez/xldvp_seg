@@ -40,7 +40,16 @@ PIXEL_SIZE_UM = 0.1725
 
 
 def load_export_shapes(export_path: Path):
-    """Load shapes from LMD export JSON."""
+    """Load shapes from unified LMD export JSON.
+
+    Reads the 'shapes' list with 'type' field:
+    - single: one contour_um
+    - single_control: one contour_um
+    - cluster: multiple contours_um
+    - cluster_control: multiple contours_um
+
+    Returns dict with lists of (contour_px, tooltip) tuples per category.
+    """
     with open(export_path) as f:
         data = json.load(f)
 
@@ -51,44 +60,32 @@ def load_export_shapes(export_path: Path):
     clusters = []
     cluster_controls = []
 
+    def um_to_napari(contour_um):
+        """Convert um contour to Napari [y, x] pixel coords."""
+        return np.array([[pt[1] / pixel_size, pt[0] / pixel_size] for pt in contour_um])
+
     for shape in data.get("shapes", []):
         shape_type = shape.get("type", "")
         well = shape.get("well", "")
+        uid = shape.get("uid", "")
+        tooltip = f"{well} | {uid}"
 
-        # Get contour(s)
-        if shape_type == "cluster":
-            # Clusters have multiple contours
+        if shape_type in ("cluster", "cluster_control"):
             contours_um = shape.get("contours_um", [])
-            for contour_um in contours_um:
+            target = clusters if shape_type == "cluster" else cluster_controls
+            n_members = len(contours_um)
+            for i, contour_um in enumerate(contours_um):
                 if contour_um and len(contour_um) >= 3:
-                    # Convert µm to pixels, and to [y, x] for Napari
-                    contour_px = np.array([[pt[1] / pixel_size, pt[0] / pixel_size] for pt in contour_um])
-                    clusters.append((contour_px, well))
-        else:
+                    member_tip = f"{well} | {uid} [{i+1}/{n_members}]"
+                    target.append((um_to_napari(contour_um), member_tip))
+        elif shape_type in ("single", "single_control"):
             contour_um = shape.get("contour_um")
             if contour_um and len(contour_um) >= 3:
-                # Convert µm to pixels, and to [y, x] for Napari
-                contour_px = np.array([[pt[1] / pixel_size, pt[0] / pixel_size] for pt in contour_um])
-
+                contour_px = um_to_napari(contour_um)
                 if shape_type == "single":
-                    singles.append((contour_px, well))
-                elif shape_type == "single_control":
-                    single_controls.append((contour_px, well))
-
-        # Handle cluster_control with multiple contours (same as clusters)
-        if shape_type == "cluster_control":
-            contours_um = shape.get("contours_um", [])
-            if contours_um:
-                for contour_um in contours_um:
-                    if contour_um and len(contour_um) >= 3:
-                        contour_px = np.array([[pt[1] / pixel_size, pt[0] / pixel_size] for pt in contour_um])
-                        cluster_controls.append((contour_px, well))
-            else:
-                # Fallback to single contour_um if contours_um not present
-                contour_um = shape.get("contour_um")
-                if contour_um and len(contour_um) >= 3:
-                    contour_px = np.array([[pt[1] / pixel_size, pt[0] / pixel_size] for pt in contour_um])
-                    cluster_controls.append((contour_px, well))
+                    singles.append((contour_px, tooltip))
+                else:
+                    single_controls.append((contour_px, tooltip))
 
     return {
         "singles": singles,
@@ -134,10 +131,16 @@ def main():
     # Load export shapes
     print(f"Loading export: {export_path}")
     shapes = load_export_shapes(export_path)
-    print(f"  Singles: {len(shapes['singles'])}")
-    print(f"  Single controls: {len(shapes['single_controls'])}")
-    print(f"  Clusters: {len(shapes['clusters'])}")
-    print(f"  Cluster controls: {len(shapes['cluster_controls'])}")
+
+    n_s = len(shapes['singles'])
+    n_sc = len(shapes['single_controls'])
+    n_c = len(shapes['clusters'])
+    n_cc = len(shapes['cluster_controls'])
+    print(f"  Singles:          {n_s} contours")
+    print(f"  Single controls:  {n_sc} contours")
+    print(f"  Clusters:         {n_c} contours (member NMJs)")
+    print(f"  Cluster controls: {n_cc} contours")
+    print(f"  Total shapes:     {n_s + n_sc + n_c + n_cc}")
 
     # Create Napari viewer
     viewer = napari.Viewer(title="LMD Export Viewer")

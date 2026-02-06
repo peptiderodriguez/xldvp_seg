@@ -13,7 +13,7 @@ This strategy uses intensity thresholding combined with morphological analysis,
 and optionally extracts SAM2 embeddings and ResNet features for ML classification.
 
 Reference parameters from the original pipeline:
-- intensity_percentile: 99 (default)
+- intensity_percentile: 98 (default)
 - min_area: 150 pixels (default)
 - min_skeleton_length: 30 pixels (default)
 - max_solidity: 0.85 (default, lower = more branched)
@@ -57,7 +57,7 @@ class NMJStrategy(DetectionStrategy):
     6. Optionally classifies with a trained ResNet model
 
     Parameters:
-        intensity_percentile: Percentile threshold for bright regions (default 99)
+        intensity_percentile: Percentile threshold for bright regions (default 98)
         max_solidity: Maximum solidity to pass filter (default 0.85, lower = more branched)
         min_skeleton_length: Minimum skeleton length in pixels (default 30)
         min_area_px: Minimum area in pixels (default 150)
@@ -72,7 +72,7 @@ class NMJStrategy(DetectionStrategy):
 
     def __init__(
         self,
-        intensity_percentile: float = 99.0,
+        intensity_percentile: float = 98.0,
         max_solidity: float = 0.85,
         min_skeleton_length: int = 30,
         min_area_px: int = 150,
@@ -351,23 +351,21 @@ class NMJStrategy(DetectionStrategy):
                     prob_nmj = prob[1].item()
                     results[idx] = prob_nmj
 
-        # Update detections with scores
-        classified_detections = []
+        # Update detections with scores (keep ALL - filter post-hoc by rf_prediction)
         for i, det in enumerate(detections):
             if i in results:
                 det.score = results[i]
                 det.features['prob_nmj'] = results[i]
                 det.features['confidence'] = results[i]
-
-                # Filter by classifier threshold
-                if results[i] >= self.classifier_threshold:
-                    classified_detections.append(det)
             else:
-                # No classification, keep if not using classifier
-                if not self.use_classifier:
-                    classified_detections.append(det)
+                det.score = 0.0
+                det.features['prob_nmj'] = 0.0
+                det.features['confidence'] = 0.0
 
-        return classified_detections
+        n_above = sum(1 for d in detections if d.score >= self.classifier_threshold)
+        logger.debug(f"CNN classifier: {n_above}/{len(detections)} above threshold ({self.classifier_threshold})")
+
+        return detections
 
     def classify_rf(
         self,
@@ -431,21 +429,24 @@ class NMJStrategy(DetectionStrategy):
                 X = scaler.transform(X)
             probs = classifier.predict_proba(X)[:, 1]
 
-        # Update detections with scores
-        classified_detections = []
+        # Update detections with scores (keep ALL - filter post-hoc by rf_prediction)
         for j, (idx, prob) in enumerate(zip(valid_indices, probs)):
             det = detections[idx]
             det.score = prob
             det.features['prob_nmj'] = prob
             det.features['confidence'] = prob
 
-            # Filter by classifier threshold
-            if prob >= self.classifier_threshold:
-                classified_detections.append(det)
+        # Set score=0 for detections that couldn't be classified (missing features)
+        for i, det in enumerate(detections):
+            if det.score is None:
+                det.score = 0.0
+                det.features['prob_nmj'] = 0.0
+                det.features['confidence'] = 0.0
 
-        logger.debug(f"RF classifier: {len(classified_detections)}/{len(detections)} passed (threshold={self.classifier_threshold})")
+        n_above = sum(1 for d in detections if d.score >= self.classifier_threshold)
+        logger.debug(f"RF classifier: {n_above}/{len(detections)} above threshold ({self.classifier_threshold}), keeping all")
 
-        return classified_detections
+        return detections
 
     def detect(
         self,
@@ -1204,7 +1205,7 @@ def _expand_to_signal_edge_simple(
 
 def detect_nmjs_simple(
     image: np.ndarray,
-    intensity_percentile: float = 99,
+    intensity_percentile: float = 98,
     min_area: int = 150,
     min_skeleton_length: int = 30,
     max_solidity: float = 0.85
@@ -1217,7 +1218,7 @@ def detect_nmjs_simple(
 
     Args:
         image: RGB or grayscale image
-        intensity_percentile: Percentile for bright region threshold (default 99)
+        intensity_percentile: Percentile for bright region threshold (default 98)
         min_area: Minimum NMJ area in pixels
         min_skeleton_length: Minimum skeleton length in pixels
         max_solidity: Maximum solidity (default 0.85, lower = more branched)

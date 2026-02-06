@@ -701,9 +701,9 @@ def detections_to_features_list(detections, cell_type):
             'center': det.centroid,  # [x, y] format
             'features': det.features.copy(),
         }
-        # Include score in features if available
+        # Include RF prediction score at top level if available
         if det.score is not None:
-            feat_dict['features']['score'] = det.score
+            feat_dict['rf_prediction'] = det.score
 
         # For vessels, lift contours from features to top level (old format compatibility)
         if cell_type == 'vessel':
@@ -2645,8 +2645,10 @@ def create_sample_from_detection(tile_x, tile_y, tile_rgb, masks, feat, pixel_si
         stats['confidence'] = features['sam2_score']
 
     # Add classifier score if available (from NMJ multi-GPU pipeline)
-    if 'score' in feat:
-        stats['score'] = feat['score']
+    if 'rf_prediction' in feat:
+        stats['rf_prediction'] = feat['rf_prediction']
+    elif 'score' in feat:
+        stats['rf_prediction'] = feat['score']
 
     return {
         'uid': uid,
@@ -3194,6 +3196,11 @@ def run_pipeline(args):
                             tile_rgb = np.stack([tile_data] * 3, axis=-1)
 
                         for feat in features_list:
+                            # Only show detections above score threshold in HTML
+                            rf_score = feat.get('rf_prediction', feat.get('score', 1.0))
+                            if rf_score < args.html_score_threshold:
+                                continue
+
                             sample = create_sample_from_detection(
                                 tile_x, tile_y, tile_rgb, masks, feat, pixel_size_um, slide_name,
                                 cell_type=args.cell_type
@@ -3437,6 +3444,11 @@ def run_pipeline(args):
                 for feat in features_list:
                     features_dict = feat.get('features', {})
 
+                    # Only show detections above score threshold in HTML
+                    rf_score = feat.get('rf_prediction', feat.get('score', 1.0))
+                    if rf_score < args.html_score_threshold:
+                        continue
+
                     # Check area filter
                     area_um2 = features_dict.get('area', 0) * (pixel_size_um ** 2)
                     if area_um2 < min_area_um2:
@@ -3478,15 +3490,30 @@ def run_pipeline(args):
                 logger.error(f"Traceback:\n{traceback.format_exc()}")
                 continue
 
-    logger.info(f"Total detections: {total_detections}")
+    logger.info(f"Total detections (pre-dedup): {len(all_detections)}")
+
+    # NMJ deduplication: tile overlap causes same NMJ to be detected in adjacent tiles
+    # Uses actual mask pixel overlap (loads HDF5 mask files) for accurate dedup
+    if args.cell_type == 'nmj' and getattr(args, 'tile_overlap', 0) > 0 and len(all_detections) > 0:
+        from segmentation.processing.deduplication import deduplicate_by_mask_overlap
+        pre_dedup = len(all_detections)
+        all_detections = deduplicate_by_mask_overlap(all_detections, tiles_dir, min_overlap_fraction=0.1)
+
+        # Filter HTML samples to match deduped detections
+        if len(all_detections) < pre_dedup:
+            deduped_uids = {det.get('uid', det.get('id', '')) for det in all_detections}
+            all_samples = [s for s in all_samples if s.get('uid', '') in deduped_uids]
 
     # Sort samples: NMJ by classifier score (descending), others by area (ascending)
     if args.cell_type == 'nmj':
-        all_samples.sort(key=lambda x: x['stats'].get('score', 0), reverse=True)
+        all_samples.sort(key=lambda x: x['stats'].get('rf_prediction', 0), reverse=True)
     else:
         all_samples.sort(key=lambda x: x['stats'].get('area_um2', 0))
 
     # Export to HTML
+    if args.cell_type == 'nmj' and len(all_detections) > len(all_samples):
+        logger.info(f"Total detections (all scores): {len(all_detections)}, "
+                     f"shown in HTML (rf_prediction >= {args.html_score_threshold}): {len(all_samples)}")
     logger.info(f"Exporting to HTML ({len(all_samples)} samples)...")
     html_dir = slide_output_dir / "html"
 
@@ -3662,13 +3689,15 @@ def main():
                         help='Apply slide-wide photobleaching correction (fixes horizontal/vertical banding)')
 
     # NMJ parameters
-    parser.add_argument('--intensity-percentile', type=float, default=99)
+    parser.add_argument('--intensity-percentile', type=float, default=98)
     parser.add_argument('--min-area', type=int, default=150)
     parser.add_argument('--min-skeleton-length', type=int, default=30)
     parser.add_argument('--max-solidity', type=float, default=0.85,
                         help='Maximum solidity for NMJ detection (branched structures have low solidity)')
     parser.add_argument('--nmj-classifier', type=str, default=None,
                         help='Path to trained NMJ classifier (.pth file)')
+    parser.add_argument('--html-score-threshold', type=float, default=0.5,
+                        help='Minimum rf_prediction score to show in HTML (default 0.5). All detections still saved to JSON.')
 
     # MK parameters
     parser.add_argument('--mk-min-area', type=int, default=1000)

@@ -769,7 +769,9 @@ def generate_annotation_page(
             stats_parts.append(f"{stats['area_um2']:.1f} &micro;m&sup2;")
         if 'area_px' in stats:
             stats_parts.append(f"{stats['area_px']:.0f} px")
-        if 'score' in stats:
+        if 'rf_prediction' in stats:
+            stats_parts.append(f"RF: {stats['rf_prediction']:.2f}")
+        elif 'score' in stats:
             stats_parts.append(f"score: {stats['score']:.2f}")
         if 'sma_ratio' in stats:
             stats_parts.append(f"sma: {stats['sma_ratio']:.2f}")
