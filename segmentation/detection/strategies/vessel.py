@@ -723,7 +723,7 @@ class VesselStrategy(DetectionStrategy, MultiChannelFeatureMixin):
             # Fit ellipse
             try:
                 ellipse = cv2.fitEllipse(contour)
-            except:
+            except Exception:
                 continue
 
             (cx, cy), (minor_axis, major_axis), angle = ellipse
@@ -834,7 +834,7 @@ class VesselStrategy(DetectionStrategy, MultiChannelFeatureMixin):
         ellipse_shifted = ((cx - x1, cy - y1), (ma, MA), angle)
         try:
             cv2.ellipse(ellipse_mask, ellipse_shifted, 255, -1)
-        except:
+        except Exception:
             return 0.0
 
         intersection = np.logical_and(contour_mask > 0, ellipse_mask > 0).sum()
@@ -3689,8 +3689,12 @@ class VesselStrategy(DetectionStrategy, MultiChannelFeatureMixin):
 
         # Get models
         sam2_predictor = models.get('sam2_predictor')
-        resnet = models.get('resnet')
-        resnet_transform = models.get('resnet_transform')
+        if self.extract_deep_features:
+            resnet = models.get('resnet')
+            resnet_transform = models.get('resnet_transform')
+        else:
+            resnet = None
+            resnet_transform = None
         device = models.get('device', torch.device('cuda' if torch.cuda.is_available() else 'cpu'))
 
         # Set image for SAM2 embeddings if available

@@ -335,6 +335,13 @@ def generate_wells_serpentine_4_quadrants(n_wells):
     if n_wells <= 0:
         return []
 
+    MAX_WELLS = 308  # 4 quadrants x 77 wells each
+    if n_wells > MAX_WELLS:
+        raise ValueError(
+            f"Requested {n_wells} wells but 384-well plate only has {MAX_WELLS} usable wells "
+            f"(4 quadrants x 77). Reduce the number of detections or split across multiple plates."
+        )
+
     quadrant_order = ['B2', 'B3', 'C3', 'C2']
     all_wells = []
 
@@ -420,7 +427,7 @@ def _check_overlap_precomputed(shifted_contour, precomputed_polygons):
         if existing_poly is None:
             continue
         try:
-            if candidate_poly.overlaps(existing_poly) or candidate_poly.within(existing_poly) or existing_poly.within(candidate_poly):
+            if candidate_poly.intersects(existing_poly):
                 return True
         except Exception:
             return True
@@ -1206,6 +1213,29 @@ Examples:
             ordered_clusters_data = []
 
         # -------------------------------------------------------------------
+        # Well capacity check (before expensive control generation)
+        # -------------------------------------------------------------------
+        MAX_WELLS = 308  # 4 quadrants x 77 wells each on 384-well plate
+        n_items = len(ordered_singles_dets) + len(ordered_clusters_data)
+        n_wells_needed = n_items * 2 if args.generate_controls else n_items
+        if n_wells_needed > MAX_WELLS:
+            print(f"\n{'='*70}")
+            print(f"WELL CAPACITY EXCEEDED")
+            print(f"{'='*70}")
+            print(f"  Singles:  {len(ordered_singles_dets)}")
+            print(f"  Clusters: {len(ordered_clusters_data)}")
+            print(f"  Controls: {'yes (x2)' if args.generate_controls else 'no'}")
+            print(f"  Wells needed: {n_wells_needed}")
+            print(f"  Wells available: {MAX_WELLS} (384-well plate, 4 quadrants)")
+            print(f"  Overflow: {n_wells_needed - MAX_WELLS} wells")
+            print(f"\nOptions:")
+            print(f"  1. Increase --min-score to reduce detections")
+            print(f"  2. Split detections across multiple plates")
+            print(f"  3. Run without --generate-controls (halves well usage)")
+            print(f"{'='*70}")
+            return
+
+        # -------------------------------------------------------------------
         # Step 5: Generate controls
         # -------------------------------------------------------------------
         if args.generate_controls:
@@ -1326,20 +1356,41 @@ Examples:
         # -------------------------------------------------------------------
         # Step 7: Assign wells
         # -------------------------------------------------------------------
-        if args.generate_controls:
-            print("\nAssigning wells (serpentine, B2->B3->C3->C2, alternating target/control)...")
-            assignments, well_order = assign_wells_with_controls(
-                ordered_singles, ordered_single_ctrls,
-                ordered_clusters, ordered_cluster_ctrls,
-            )
-        else:
-            # No controls: just assign sequentially
-            all_shapes = ordered_singles + ordered_clusters
-            n_wells = len(all_shapes)
-            well_order = generate_wells_serpentine_4_quadrants(n_wells)
-            for i, shape in enumerate(all_shapes):
-                shape['well'] = well_order[i] if i < len(well_order) else f"overflow_{i}"
-            assignments = all_shapes
+        try:
+            if args.generate_controls:
+                print("\nAssigning wells (serpentine, B2->B3->C3->C2, alternating target/control)...")
+                assignments, well_order = assign_wells_with_controls(
+                    ordered_singles, ordered_single_ctrls,
+                    ordered_clusters, ordered_cluster_ctrls,
+                )
+            else:
+                # No controls: just assign sequentially
+                all_shapes = ordered_singles + ordered_clusters
+                n_wells = len(all_shapes)
+                well_order = generate_wells_serpentine_4_quadrants(n_wells)
+                for i, shape in enumerate(all_shapes):
+                    shape['well'] = well_order[i] if i < len(well_order) else f"overflow_{i}"
+                assignments = all_shapes
+        except ValueError as e:
+            # Well overflow — save partial results (shapes without well assignments)
+            print(f"\nERROR: {e}")
+            partial_shapes = ordered_singles + ordered_single_ctrls + ordered_clusters + ordered_cluster_ctrls
+            partial_path = output_dir / f"{args.output_name}_NO_WELLS.json"
+            partial_data = {
+                'metadata': {
+                    'cell_type': args.cell_type or 'unknown',
+                    'error': str(e),
+                    'n_singles': len(ordered_singles),
+                    'n_clusters': len(ordered_clusters),
+                    'controls': args.generate_controls,
+                },
+                'shapes': partial_shapes,
+            }
+            with open(partial_path, 'w') as f:
+                json.dump(partial_data, f, indent=2)
+            print(f"  Partial results saved to: {partial_path}")
+            print(f"  (shapes without well assignments — prune list and re-run)")
+            return
 
         print(f"  Total wells used: {len(well_order)}")
         if well_order:

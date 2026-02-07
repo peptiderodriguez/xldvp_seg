@@ -70,9 +70,8 @@ def detections_to_features_list(detections, cell_type):
             'center': det.centroid,  # [x, y] format
             'features': det.features.copy(),
         }
-        # Include RF prediction score at top level if available
-        if det.score is not None:
-            feat_dict['rf_prediction'] = det.score
+        # Include RF prediction score at top level (always present for consistency)
+        feat_dict['rf_prediction'] = det.score
 
         # For vessels, lift contours from features to top level
         if cell_type == 'vessel':
@@ -232,10 +231,17 @@ def process_single_tile(
 
         feat['mask_label'] = actual_mask_label
 
+    # Remove detections with mask_label=0 (no valid mask found)
+    features_list = [f for f in features_list if f.get('mask_label', 0) > 0]
+
     # --- Step 4: UID + global coords + contour globalization ---
     enrich_detection_features(
         features_list, tile_x, tile_y, slide_name, pixel_size_um, cell_type
     )
+
+    # Set id=uid for consistency with multigpu_nmj path
+    for feat in features_list:
+        feat['id'] = feat['uid']
 
     return masks, features_list
 

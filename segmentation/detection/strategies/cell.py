@@ -317,10 +317,14 @@ class CellStrategy(DetectionStrategy, MultiChannelFeatureMixin):
                 cy_val, cx_val = np.mean(ys), np.mean(xs)
 
             # SAM2 embeddings (256D)
-            if self.extract_sam2_embeddings:
+            if self.extract_sam2_embeddings and sam2_predictor is not None:
                 sam2_emb = self._extract_sam2_embedding(sam2_predictor, cy_val, cx_val)
                 for i, v in enumerate(sam2_emb):
                     feat[f'sam2_{i}'] = float(v)
+            elif self.extract_sam2_embeddings:
+                logger.warning("SAM2 predictor unavailable - zero-filling 256D embeddings")
+                for i in range(256):
+                    feat[f'sam2_{i}'] = 0.0
 
             # Prepare crops for batch ResNet/DINOv2 processing (masked + context)
             if self.extract_deep_features:

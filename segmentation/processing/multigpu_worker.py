@@ -255,6 +255,8 @@ def _gpu_worker(
         strategy = CellStrategy(
             min_area_um=strategy_params.get('min_area_um', 50),
             max_area_um=strategy_params.get('max_area_um', 200),
+            extract_deep_features=extract_deep_features,
+            extract_sam2_embeddings=extract_sam2_embeddings,
         )
     elif cell_type == 'vessel':
         from segmentation.detection.strategies.vessel import VesselStrategy
@@ -535,7 +537,7 @@ class MultiGPUTileProcessor:
             if shm_name:
                 _shm_registry.add(shm_name)
 
-        local_checkpoint = self._copy_checkpoint_to_local()
+        local_checkpoint = self._copy_checkpoint_to_local() if self.extract_sam2_embeddings else None
 
         self.input_queue = Queue()
         self.output_queue = Queue()

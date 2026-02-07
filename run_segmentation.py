@@ -617,6 +617,7 @@ def create_strategy_for_cell_type(cell_type, params, pixel_size_um):
             min_skeleton_length=params.get('min_skeleton_length', 30),
             max_solidity=params.get('max_solidity', 0.85),
             extract_deep_features=params.get('extract_deep_features', False),
+            extract_sam2_embeddings=params.get('extract_sam2_embeddings', True),
         )
     elif cell_type == 'mk':
         # Convert area from pixels to um^2 for the strategy
@@ -627,11 +628,15 @@ def create_strategy_for_cell_type(cell_type, params, pixel_size_um):
         return MKStrategy(
             min_area_um=min_area_um,
             max_area_um=max_area_um,
+            extract_deep_features=params.get('extract_deep_features', False),
+            extract_sam2_embeddings=params.get('extract_sam2_embeddings', True),
         )
     elif cell_type == 'cell':
         return CellStrategy(
             min_area_um=params.get('min_area_um', 50),
             max_area_um=params.get('max_area_um', 200),
+            extract_deep_features=params.get('extract_deep_features', False),
+            extract_sam2_embeddings=params.get('extract_sam2_embeddings', True),
         )
     elif cell_type == 'vessel':
         return VesselStrategy(
@@ -647,6 +652,8 @@ def create_strategy_for_cell_type(cell_type, params, pixel_size_um):
             parallel_detection=params.get('parallel_detection', False),
             parallel_workers=params.get('parallel_workers', 3),
             multi_marker=params.get('multi_marker', False),
+            extract_deep_features=params.get('extract_deep_features', False),
+            extract_sam2_embeddings=params.get('extract_sam2_embeddings', True),
         )
     elif cell_type == 'mesothelium':
         return MesotheliumStrategy(
@@ -715,6 +722,8 @@ def filter_and_create_html_samples(
         features_dict = feat.get('features', {})
 
         rf_score = feat.get('rf_prediction', feat.get('score', 1.0))
+        if rf_score is None:
+            rf_score = 1.0  # No classifier loaded; show all candidates
         if rf_score < html_score_threshold:
             continue
 
@@ -2668,9 +2677,9 @@ def create_sample_from_detection(tile_x, tile_y, tile_rgb, masks, feat, pixel_si
         stats['confidence'] = features['sam2_score']
 
     # Add classifier score if available (from NMJ multi-GPU pipeline)
-    if 'rf_prediction' in feat:
+    if 'rf_prediction' in feat and feat['rf_prediction'] is not None:
         stats['rf_prediction'] = feat['rf_prediction']
-    elif 'score' in feat:
+    elif 'score' in feat and feat['score'] is not None:
         stats['rf_prediction'] = feat['score']
 
     return {
@@ -2743,7 +2752,7 @@ def run_pipeline(args):
         try:
             dims = loader.reader.get_dims_shape()[0]
             n_channels = dims.get('C', (0, 3))[1]  # Default to 3 channels
-        except:
+        except Exception:
             n_channels = 3  # Fallback
 
         logger.info(f"Loading all {n_channels} channels for multi-channel analysis...")
@@ -2874,7 +2883,7 @@ def run_pipeline(args):
                 all_channel_data[ch_key] = normalized_rgb[:, :, i]
         else:
             # Single channel — take first channel from normalized RGB
-            normalized_single = normalized_rgb[:, :, 0]
+            normalized_single = normalized_rgb[:, :, 0].copy()
             loader.channel_data = normalized_single
             all_channel_data[args.channel] = normalized_single
             del normalized_single
@@ -2897,26 +2906,20 @@ def run_pipeline(args):
     logger.info("Calibrating tissue threshold...")
     variance_threshold = calibrate_tissue_threshold(
         all_tiles,
-        reader=None,  # No reader needed - use image_array
-        x_start=0,    # Not needed when using image_array
-        y_start=0,
         calibration_samples=min(50, len(all_tiles)),
         channel=args.channel,
         tile_size=args.tile_size,
-        image_array=loader.channel_data,  # Pass RAM array directly
+        loader=loader,  # Loader handles mosaic origin offset correctly
     )
 
-    # Filter to tissue-containing tiles using RAM-loaded data
+    # Filter to tissue-containing tiles using loader (handles mosaic origin)
     logger.info("Filtering to tissue-containing tiles...")
     tissue_tiles = filter_tissue_tiles(
         all_tiles,
         variance_threshold,
-        reader=None,  # No reader needed - use image_array
-        x_start=0,
-        y_start=0,
         channel=args.channel,
         tile_size=args.tile_size,
-        image_array=loader.channel_data,  # Pass RAM array directly
+        loader=loader,  # Loader handles mosaic origin offset correctly
     )
 
     if len(tissue_tiles) == 0:
@@ -2949,6 +2952,7 @@ def run_pipeline(args):
         segmenter = None  # Not used for these cell types
 
         # Load NMJ classifier if provided (supports CNN .pth or RF .pkl)
+        classifier_loaded = False
         if args.cell_type == 'nmj' and getattr(args, 'nmj_classifier', None):
             from segmentation.detection.strategies.nmj import load_classifier
 
@@ -2969,6 +2973,7 @@ def run_pipeline(args):
                 detector.models['transform'] = classifier_transform
                 detector.models['device'] = classifier_data['device']
                 logger.info("CNN classifier loaded successfully")
+                classifier_loaded = True
             else:
                 # RF classifier - use features directly
                 # New format uses 'pipeline', legacy uses 'model'
@@ -2981,6 +2986,7 @@ def run_pipeline(args):
                 detector.models['classifier_type'] = 'rf'
                 detector.models['feature_names'] = classifier_data['feature_names']
                 logger.info(f"RF classifier loaded successfully ({len(classifier_data['feature_names'])} features)")
+                classifier_loaded = True
     else:
         # No cell types fall back to UnifiedSegmenter anymore
         raise ValueError(f"Unknown cell type: {args.cell_type}")
@@ -3230,10 +3236,12 @@ def run_pipeline(args):
                     default_classifier = Path(__file__).parent / "checkpoints" / "nmj_classifier_morph_sam2.joblib"
                     if default_classifier.exists():
                         classifier_path = str(default_classifier)
+                        classifier_loaded = True
                         logger.info(f"Using default classifier: {classifier_path}")
                     else:
                         logger.warning("No classifier found — will return all candidates")
                 else:
+                    classifier_loaded = True
                     logger.info(f"Using specified classifier: {classifier_path}")
 
             # Create multi-GPU processor (supports all cell types)
@@ -3319,16 +3327,19 @@ def run_pipeline(args):
                                 all_detections.append(feat)
 
                             # Create samples for HTML
+                            # Convert global tile coords to 0-based array indices
+                            rel_tx = tile_x - x_start
+                            rel_ty = tile_y - y_start
                             # Use masks.shape to handle edge tiles (smaller than tile_size at boundaries)
                             tile_h, tile_w = masks.shape[:2]
                             if len(all_channel_data) >= 3:
                                 ch_keys = sorted(all_channel_data.keys())[:3]
                                 tile_rgb_html = np.stack([
-                                    all_channel_data[ch_keys[i]][tile_y:tile_y+tile_h, tile_x:tile_x+tile_w]
+                                    all_channel_data[ch_keys[i]][rel_ty:rel_ty+tile_h, rel_tx:rel_tx+tile_w]
                                     for i in range(3)
                                 ], axis=-1)
                             else:
-                                tile_data = loader.channel_data[tile_y:tile_y+tile_h, tile_x:tile_x+tile_w]
+                                tile_data = loader.channel_data[rel_ty:rel_ty+tile_h, rel_tx:rel_tx+tile_w]
                                 tile_rgb_html = np.stack([tile_data] * 3, axis=-1)
                             if tile_rgb_html.dtype == np.uint16:
                                 tile_rgb_html = (tile_rgb_html / 256).astype(np.uint8)
@@ -3339,7 +3350,7 @@ def run_pipeline(args):
                                 args.html_score_threshold,
                             )
                             all_samples.extend(html_samples)
-                            total_detections += len(html_samples)
+                            total_detections += len(features_list)
 
                         except Exception as e:
                             import traceback
@@ -3376,21 +3387,26 @@ def run_pipeline(args):
                 if tile_data.max() == 0:
                     continue
 
+                # Convert global tile coords to 0-based array indices
+                # (tiles have global mosaic coords, but RAM arrays are 0-indexed)
+                rel_x = tile_x - x_start
+                rel_y = tile_y - y_start
+
                 # Build extra_channel_tiles for ALL cell types when multi-channel available
                 extra_channel_tiles = None
                 if len(all_channel_data) >= 2:
                     extra_channel_tiles = {}
                     for ch_idx, ch_data in all_channel_data.items():
                         extra_channel_tiles[ch_idx] = ch_data[
-                            tile_y:tile_y + args.tile_size,
-                            tile_x:tile_x + args.tile_size
+                            rel_y:rel_y + args.tile_size,
+                            rel_x:rel_x + args.tile_size
                         ]
 
                 # Build RGB tile from channels
                 if len(all_channel_data) >= 3:
                     ch_keys = sorted(all_channel_data.keys())[:3]
                     tile_rgb = np.stack([
-                        all_channel_data[k][tile_y:tile_y + args.tile_size, tile_x:tile_x + args.tile_size]
+                        all_channel_data[k][rel_y:rel_y + args.tile_size, rel_x:rel_x + args.tile_size]
                         for k in ch_keys
                     ], axis=-1)
                 elif tile_data.ndim == 2:
@@ -3401,7 +3417,7 @@ def run_pipeline(args):
                 # has_tissue() check on uint16 BEFORE conversion
                 try:
                     det_ch = extra_channel_tiles.get(args.channel, tile_rgb[:, :, 0]) if extra_channel_tiles else tile_rgb[:, :, 0]
-                    has_tissue_flag, _ = has_tissue(det_ch, variance_threshold=1000.0, block_size=64)
+                    has_tissue_flag, _ = has_tissue(det_ch, variance_threshold=variance_threshold)
                 except Exception:
                     has_tissue_flag = True
                 if not has_tissue_flag:
@@ -3477,17 +3493,23 @@ def run_pipeline(args):
                     args.html_score_threshold,
                 )
                 all_samples.extend(html_samples)
-                total_detections += len(html_samples)
+                total_detections += len(features_list)
 
                 del tile_data, tile_rgb, masks
+                if extra_channel_tiles is not None:
+                    del extra_channel_tiles
+                    extra_channel_tiles = None
                 if cd31_channel_data is not None:
                     del cd31_channel_data
                 gc.collect()
+                torch.cuda.empty_cache()
 
             except Exception as e:
                 import traceback
                 logger.error(f"Error processing tile ({tile_x}, {tile_y}): {e}")
                 logger.error(f"Traceback:\n{traceback.format_exc()}")
+                gc.collect()
+                torch.cuda.empty_cache()
                 continue
 
     logger.info(f"Total detections (pre-dedup): {len(all_detections)}")
@@ -3505,9 +3527,16 @@ def run_pipeline(args):
             deduped_uids = {det.get('uid', det.get('id', '')) for det in all_detections}
             all_samples = [s for s in all_samples if s.get('uid', '') in deduped_uids]
 
+    # Auto-detect annotation run: no classifier → show ALL candidates in HTML
+    if args.cell_type == 'nmj' and not classifier_loaded and args.html_score_threshold > 0:
+        logger.info(f"No classifier loaded — annotation run detected. "
+                     f"Overriding --html-score-threshold from {args.html_score_threshold} to 0.0 "
+                     f"(showing ALL {len(all_detections)} candidates for annotation)")
+        args.html_score_threshold = 0.0
+
     # Sort samples: NMJ by classifier score (descending), others by area (ascending)
     if args.cell_type == 'nmj':
-        all_samples.sort(key=lambda x: x['stats'].get('rf_prediction', 0), reverse=True)
+        all_samples.sort(key=lambda x: x['stats'].get('rf_prediction') or 0, reverse=True)
     else:
         all_samples.sort(key=lambda x: x['stats'].get('area_um2', 0))
 
@@ -3535,6 +3564,7 @@ def run_pipeline(args):
         tiles_processed=len(sampled_tiles),
         tiles_total=len(all_tiles),
         channel_legend=channel_legend,
+        prior_annotations=getattr(args, 'prior_annotations', None),
     )
 
     # Save all detections with universal IDs and global coordinates
@@ -3606,7 +3636,8 @@ def run_pipeline(args):
         'total_tiles': len(all_tiles),
         'tissue_tiles': len(tissue_tiles),
         'sampled_tiles': len(sampled_tiles),
-        'total_detections': total_detections,
+        'total_detections': len(all_detections),
+        'html_displayed': len(all_samples),
         'params': params,
         'detections_file': str(detections_file),
         'coordinates_file': str(csv_file),
@@ -3622,6 +3653,8 @@ def run_pipeline(args):
     logger.info("=" * 60)
     logger.info("COMPLETE")
     logger.info("=" * 60)
+    logger.info(f"Total detections: {len(all_detections)}")
+    logger.info(f"Displayed in HTML: {len(all_samples)} (score >= {args.html_score_threshold})")
     logger.info(f"Output: {slide_output_dir}")
     logger.info(f"HTML viewer: {html_dir / 'index.html'}")
 
@@ -3686,6 +3719,8 @@ def main():
                         help='Load all channels for multi-channel analysis (NMJ specificity checking)')
     parser.add_argument('--channel-names', type=str, default=None,
                         help='Comma-separated channel names for feature naming (e.g., "nuclear,sma,pm,cd31" or "nuclear,sma,pm,lyve1")')
+    parser.add_argument('--verbose', '-v', action='store_true',
+                        help='Enable verbose/debug logging')
     parser.add_argument('--photobleaching-correction', action='store_true',
                         help='Apply slide-wide photobleaching correction (fixes horizontal/vertical banding)')
     parser.add_argument('--norm-params-file', type=str, default=None,
@@ -3701,7 +3736,14 @@ def main():
     parser.add_argument('--nmj-classifier', type=str, default=None,
                         help='Path to trained NMJ classifier (.pth file)')
     parser.add_argument('--html-score-threshold', type=float, default=0.5,
-                        help='Minimum rf_prediction score to show in HTML (default 0.5). All detections still saved to JSON.')
+                        help='Minimum rf_prediction score to show in HTML (default 0.5). '
+                             'All detections still saved to JSON regardless. '
+                             'Auto-set to 0.0 when no classifier is loaded (annotation run). '
+                             'Use --html-score-threshold 0.0 to show ALL candidates explicitly.')
+    parser.add_argument('--prior-annotations', type=str, default=None,
+                        help='Path to prior annotations JSON file (from round-1 annotation). '
+                             'Pre-loads annotations into HTML localStorage so round-1 labels '
+                             'are visible during round-2 review after classifier training.')
 
     # MK parameters
     parser.add_argument('--mk-min-area', type=int, default=1000)

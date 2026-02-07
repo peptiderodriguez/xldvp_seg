@@ -167,7 +167,7 @@ def main():
     logger.info(f"Total samples: {len(combined):,}")
 
     # Convert to LAB
-    tissue_img = combined.reshape(1, -1, 3).astype(np.uint8)
+    tissue_img = np.clip(combined.reshape(1, -1, 3) / 256, 0, 255).astype(np.uint8)
     lab = cv2.cvtColor(tissue_img, cv2.COLOR_RGB2LAB).astype(np.float32)
     lab = lab.reshape(-1, 3)  # Back to (N, 3)
 

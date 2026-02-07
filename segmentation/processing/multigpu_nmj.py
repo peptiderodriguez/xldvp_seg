@@ -466,7 +466,7 @@ class MultiGPUNMJProcessor:
         with MultiGPUNMJProcessor(
             num_gpus=4,
             slide_info=manager.get_slide_info(),
-            strategy_params={'intensity_percentile': 99.0},
+            strategy_params={'intensity_percentile': 98.0},
             pixel_size_um=0.1725,
         ) as processor:
             for tile in tiles:
@@ -589,7 +589,7 @@ class MultiGPUNMJProcessor:
                 logger.debug(f"Registered shared memory {shm_name} for emergency cleanup")
 
         # Copy checkpoint to local /tmp for faster parallel loading
-        local_checkpoint = self._copy_checkpoint_to_local()
+        local_checkpoint = self._copy_checkpoint_to_local() if self.extract_sam2_embeddings else None
 
         self.input_queue = Queue()
         self.output_queue = Queue()

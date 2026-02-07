@@ -378,8 +378,12 @@ class MKStrategy(DetectionStrategy, MultiChannelFeatureMixin):
                         crop_indices.append(idx)
 
             # Batch deep feature extraction (ResNet + DINOv2, masked + context)
-            resnet = models.get('resnet')
-            resnet_transform = models.get('resnet_transform')
+            if self.extract_deep_features:
+                resnet = models.get('resnet')
+                resnet_transform = models.get('resnet_transform')
+            else:
+                resnet = None
+                resnet_transform = None
             device = models.get('device')
 
             # ResNet masked
