@@ -7,13 +7,12 @@ Includes reference crosses for calibration.
 """
 
 import json
+import argparse
 import xml.etree.ElementTree as ET
 from xml.dom import minidom
 from pathlib import Path
 from typing import List, Dict, Optional
 import numpy as np
-
-OUTPUT_DIR = Path("/home/dude/nmj_output/20251107_Fig5_full_classified_v3/lmd_export")
 
 
 def create_lmd_xml(
@@ -139,13 +138,13 @@ def create_lmd_xml(
     return pretty_xml
 
 
-def main():
+def main(output_dir: Path):
     print("=" * 70)
     print("GENERATE LMD XML")
     print("=" * 70)
 
     # Load export data
-    export_path = OUTPUT_DIR / "lmd_export_full.json"
+    export_path = output_dir / "lmd_export_full.json"
     print(f"\nLoading: {export_path}")
     with open(export_path) as f:
         export_data = json.load(f)
@@ -155,7 +154,7 @@ def main():
     print(f"  Total NMJs: {export_data['summary']['n_singles'] + export_data['summary']['n_nmjs_in_clusters']}")
 
     # Load reference crosses if available
-    crosses_path = OUTPUT_DIR / "reference_crosses.json"
+    crosses_path = output_dir / "reference_crosses.json"
     reference_crosses = None
     if crosses_path.exists():
         print(f"\nLoading reference crosses: {crosses_path}")
@@ -169,7 +168,7 @@ def main():
 
     # Generate XML
     print("\nGenerating XML...")
-    output_path = OUTPUT_DIR / "shapes.xml"
+    output_path = output_dir / "shapes.xml"
     create_lmd_xml(export_data, reference_crosses, output_path)
 
     # Summary
@@ -196,4 +195,8 @@ def main():
 
 
 if __name__ == '__main__':
-    main()
+    parser = argparse.ArgumentParser(description='Generate Leica LMD XML from export data')
+    parser.add_argument('--output-dir', type=Path, required=True,
+                        help='Directory containing lmd_export_full.json (and optionally reference_crosses.json)')
+    args = parser.parse_args()
+    main(args.output_dir)

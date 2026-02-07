@@ -11,6 +11,7 @@ import os
 os.environ['HDF5_USE_FILE_LOCKING'] = 'FALSE'
 
 import json
+import argparse
 import numpy as np
 import hdf5plugin  # Must import BEFORE h5py to register LZ4 filter
 import h5py
@@ -19,15 +20,6 @@ from pathlib import Path
 from typing import List, Dict, Tuple, Optional
 
 from scripts.contour_processing import process_contour
-
-# Paths
-BASE_DIR = Path("/home/dude/nmj_output/20251107_Fig5_full_classified_v3")
-TILES_DIR = Path("/home/dude/nmj_output/20251107_Fig5_full_multichannel/20251107_Fig5_nuc488_Bgtx647_NfL750-1-EDFvar-stitch/tiles")
-CLUSTERS_PATH = BASE_DIR / "nmj_clusters_375_425_500_1000.json"
-DETECTIONS_PATH = BASE_DIR / "nmj_detections_classified_v2.json"
-OUTPUT_PATH = BASE_DIR / "lmd_export" / "singles_with_contours.json"
-
-PIXEL_SIZE_UM = 0.1725
 
 
 def extract_contour_from_mask(mask: np.ndarray, label: int) -> Optional[np.ndarray]:
@@ -79,14 +71,15 @@ def local_to_global_contour(contour_local: np.ndarray, tile_origin: Tuple[int, i
     return contour_global
 
 
-def main():
+def main(base_dir: Path, tiles_dir: Path, clusters_path: Path,
+         detections_path: Path, output_path: Path, pixel_size_um: float):
     print("=" * 70)
     print("EXTRACT CONTOURS FOR SINGLES (OUTLIERS)")
     print("=" * 70)
 
     # Load cluster data to get outlier indices
     print("\n[1/5] Loading cluster data...")
-    with open(CLUSTERS_PATH) as f:
+    with open(clusters_path) as f:
         cluster_data = json.load(f)
 
     outliers = cluster_data.get('outliers', [])
@@ -95,7 +88,7 @@ def main():
 
     # Load all detections
     print("\n[2/5] Loading detections...")
-    with open(DETECTIONS_PATH) as f:
+    with open(detections_path) as f:
         all_detections = json.load(f)
 
     positives = [d for d in all_detections if d.get('rf_prediction', 0) >= 0.5]
@@ -130,7 +123,7 @@ def main():
             print(f"  Processing tile {tile_idx + 1}/{len(by_tile)}...")
 
         # Load mask file
-        mask_path = TILES_DIR / tile_name / "nmj_masks.h5"
+        mask_path = tiles_dir / tile_name / "nmj_masks.h5"
         if not mask_path.exists():
             print(f"  WARNING: Mask file not found: {mask_path}")
             fail_count += len(tile_dets)
@@ -160,7 +153,7 @@ def main():
             # Apply post-processing (dilate + RDP)
             contour_processed, stats = process_contour(
                 contour_global.tolist(),
-                pixel_size_um=PIXEL_SIZE_UM,
+                pixel_size_um=pixel_size_um,
                 return_stats=True
             )
 
@@ -197,9 +190,10 @@ def main():
 
     # Save results
     print("\n[5/5] Saving results...")
-    with open(OUTPUT_PATH, 'w') as f:
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    with open(output_path, 'w') as f:
         json.dump(results, f, indent=2)
-    print(f"  Saved to: {OUTPUT_PATH}")
+    print(f"  Saved to: {output_path}")
 
     # Print area statistics
     print("\n" + "=" * 70)
@@ -224,4 +218,30 @@ def main():
 
 
 if __name__ == '__main__':
-    main()
+    parser = argparse.ArgumentParser(description='Extract contours for single (outlier) NMJs from mask files')
+    parser.add_argument('--base-dir', type=Path, required=True,
+                        help='Base output directory (e.g., nmj_output/experiment_name)')
+    parser.add_argument('--tiles-dir', type=Path, required=True,
+                        help='Directory containing tile subdirectories with nmj_masks.h5 files')
+    parser.add_argument('--clusters', type=Path, default=None,
+                        help='Path to clusters JSON (default: <base-dir>/nmj_clusters_375_425_500_1000.json)')
+    parser.add_argument('--detections', type=Path, default=None,
+                        help='Path to detections JSON (default: <base-dir>/nmj_detections_classified_v2.json)')
+    parser.add_argument('--output', type=Path, default=None,
+                        help='Output path for results JSON (default: <base-dir>/lmd_export/singles_with_contours.json)')
+    parser.add_argument('--pixel-size', type=float, default=0.1725,
+                        help='Pixel size in micrometers (default: 0.1725)')
+    args = parser.parse_args()
+
+    clusters_path = args.clusters if args.clusters else args.base_dir / "nmj_clusters_375_425_500_1000.json"
+    detections_path = args.detections if args.detections else args.base_dir / "nmj_detections_classified_v2.json"
+    output_path = args.output if args.output else args.base_dir / "lmd_export" / "singles_with_contours.json"
+
+    main(
+        base_dir=args.base_dir,
+        tiles_dir=args.tiles_dir,
+        clusters_path=clusters_path,
+        detections_path=detections_path,
+        output_path=output_path,
+        pixel_size_um=args.pixel_size,
+    )

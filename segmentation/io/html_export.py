@@ -35,8 +35,8 @@ def create_hdf5_dataset(f, name, data):
     if isinstance(HDF5_COMPRESSION_KWARGS, dict):
         f.create_dataset(name, data=data, **HDF5_COMPRESSION_KWARGS)
     else:
-        # hdf5plugin filter object
-        f.create_dataset(name, data=data, **HDF5_COMPRESSION_KWARGS)
+        # hdf5plugin filter object — pass as compression kwarg
+        f.create_dataset(name, data=data, **dict(HDF5_COMPRESSION_KWARGS))
 
 
 def generate_preload_annotations_js(annotations_path: str, cell_type: str) -> str:
@@ -145,6 +145,8 @@ def percentile_normalize(image, p_low=1, p_high=99.5):
         if high_val > low_val:
             normalized = (image.astype(np.float32) - low_val) / (high_val - low_val) * 255
             return np.clip(normalized, 0, 255).astype(np.uint8)
+        if image.dtype == np.uint16:
+            return (image / 256).astype(np.uint8)
         return image.astype(np.uint8)
     else:
         # Vectorized multi-channel normalization
@@ -159,7 +161,10 @@ def percentile_normalize(image, p_low=1, p_high=99.5):
                 normalized = (image[:, :, ch].astype(np.float32) - low_vals[ch]) / (high_vals[ch] - low_vals[ch]) * 255
                 result[:, :, ch] = np.clip(normalized, 0, 255).astype(np.uint8)
             else:
-                result[:, :, ch] = image[:, :, ch].astype(np.uint8)
+                if image.dtype == np.uint16:
+                    result[:, :, ch] = (image[:, :, ch] / 256).astype(np.uint8)
+                else:
+                    result[:, :, ch] = image[:, :, ch].astype(np.uint8)
         return result
 
 

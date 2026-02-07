@@ -78,6 +78,7 @@ def _gpu_worker(
     sam2_config: str = "configs/sam2.1/sam2.1_hiera_l.yaml",
     cd31_channel: Optional[int] = None,
     channel_names: Optional[Dict[int, str]] = None,
+    variance_threshold: float = 1000.0,
 ):
     """
     Generic GPU worker for any cell type.
@@ -102,6 +103,7 @@ def _gpu_worker(
         extract_sam2_embeddings: Whether to extract SAM2 embeddings
         detection_channel: Which channel for tissue detection (default 1)
         sam2_checkpoint: Path to SAM2 checkpoint
+        variance_threshold: Variance threshold for tissue detection (default 1000.0)
         sam2_config: SAM2 config file
         cd31_channel: Optional channel index for CD31 (vessel validation)
         channel_names: Optional channel name mapping for vessels
@@ -349,7 +351,7 @@ def _gpu_worker(
             # has_tissue() check on uint16 BEFORE conversion
             try:
                 det_ch = extra_channel_tiles.get(detection_channel, tile_rgb[:, :, 0]) if extra_channel_tiles else tile_rgb[:, :, 0]
-                has_tissue_flag, _ = has_tissue(det_ch, variance_threshold=1000.0, block_size=64)
+                has_tissue_flag, _ = has_tissue(det_ch, variance_threshold=variance_threshold, block_size=512)
             except Exception:
                 has_tissue_flag = True
 
@@ -471,6 +473,7 @@ class MultiGPUTileProcessor:
         sam2_config: str = "configs/sam2.1/sam2.1_hiera_l.yaml",
         cd31_channel: Optional[int] = None,
         channel_names: Optional[Dict[int, str]] = None,
+        variance_threshold: float = 1000.0,
     ):
         self.num_gpus = num_gpus
         self.slide_info = slide_info
@@ -485,6 +488,7 @@ class MultiGPUTileProcessor:
         self.sam2_config = sam2_config
         self.cd31_channel = cd31_channel
         self.channel_names = channel_names
+        self.variance_threshold = variance_threshold
 
         self.workers: List[Process] = []
         self.input_queue: Optional[Queue] = None
@@ -566,6 +570,7 @@ class MultiGPUTileProcessor:
                     self.sam2_config,
                     self.cd31_channel,
                     self.channel_names,
+                    self.variance_threshold,
                 ),
                 daemon=True,
             )

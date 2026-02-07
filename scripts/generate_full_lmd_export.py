@@ -8,13 +8,14 @@ Creates:
 3. LMD XML file for Leica LMD7
 
 Usage:
-    python generate_full_lmd_export.py
+    python generate_full_lmd_export.py --base-dir /path/to/output --tiles-dir /path/to/tiles
 """
 
 import os
 os.environ['HDF5_USE_FILE_LOCKING'] = 'FALSE'
 
 import json
+import argparse
 import numpy as np
 import hdf5plugin
 import h5py
@@ -22,15 +23,6 @@ import cv2
 from pathlib import Path
 from typing import List, Dict, Tuple, Optional
 from scripts.contour_processing import process_contour
-
-# Paths
-BASE_DIR = Path("/home/dude/nmj_output/20251107_Fig5_full_classified_v3")
-TILES_DIR = Path("/home/dude/nmj_output/20251107_Fig5_full_multichannel/20251107_Fig5_nuc488_Bgtx647_NfL750-1-EDFvar-stitch/tiles")
-CLUSTERS_PATH = BASE_DIR / "nmj_clusters_375_425_500_1000.json"
-DETECTIONS_PATH = BASE_DIR / "nmj_detections_classified_v2.json"
-OUTPUT_DIR = BASE_DIR / "lmd_export"
-
-PIXEL_SIZE_UM = 0.1725
 
 
 def generate_quadrant_serpentine(quadrant: str, start_corner: str = 'auto') -> List[str]:
@@ -165,7 +157,8 @@ def extract_contour_from_mask(mask: np.ndarray, label: int) -> Optional[np.ndarr
     return largest.reshape(-1, 2)
 
 
-def extract_contours_for_detections(detections: List[Dict], tiles_dir: Path) -> Dict[str, Dict]:
+def extract_contours_for_detections(detections: List[Dict], tiles_dir: Path,
+                                    pixel_size_um: float = 0.1725) -> Dict[str, Dict]:
     """Extract and process contours for a list of detections."""
     # Group by tile
     by_tile = {}
@@ -210,7 +203,7 @@ def extract_contours_for_detections(detections: List[Dict], tiles_dir: Path) -> 
             # Apply post-processing
             processed, stats = process_contour(
                 contour_global.tolist(),
-                pixel_size_um=PIXEL_SIZE_UM,
+                pixel_size_um=pixel_size_um,
                 return_stats=True
             )
 
@@ -234,17 +227,21 @@ def extract_contours_for_detections(detections: List[Dict], tiles_dir: Path) -> 
     return results
 
 
-def main():
+def main(base_dir: Path, tiles_dir: Path, clusters_path: Path,
+         detections_path: Path, pixel_size_um: float):
     print("=" * 70)
     print("FULL LMD EXPORT: SINGLES + CLUSTERS")
     print("=" * 70)
 
+    output_dir = base_dir / "lmd_export"
+    output_dir.mkdir(parents=True, exist_ok=True)
+
     # Load data
     print("\n[1/7] Loading data...")
-    with open(CLUSTERS_PATH) as f:
+    with open(clusters_path) as f:
         cluster_data = json.load(f)
 
-    with open(DETECTIONS_PATH) as f:
+    with open(detections_path) as f:
         all_detections = json.load(f)
 
     positives = [d for d in all_detections if d.get('rf_prediction', 0) >= 0.5]
@@ -265,13 +262,13 @@ def main():
 
     # Extract contours for singles
     print("\n[2/7] Extracting contours for singles...")
-    singles_contours = extract_contours_for_detections(outlier_dets, TILES_DIR)
+    singles_contours = extract_contours_for_detections(outlier_dets, tiles_dir, pixel_size_um)
     print(f"  Extracted: {len(singles_contours)}/{len(outlier_dets)}")
 
     # Extract contours for clustered NMJs
     print("\n[3/7] Extracting contours for clustered NMJs...")
     clustered_dets = [positives[idx] for idx in clustered_indices]
-    clustered_contours = extract_contours_for_detections(clustered_dets, TILES_DIR)
+    clustered_contours = extract_contours_for_detections(clustered_dets, tiles_dir, pixel_size_um)
     print(f"  Extracted: {len(clustered_contours)}/{len(clustered_dets)}")
 
     # Generate well order
@@ -305,7 +302,7 @@ def main():
             p1 = singles_positions[nn_order[i]]
             p2 = singles_positions[nn_order[i + 1]]
             total_dist += np.sqrt((p1[0] - p2[0])**2 + (p1[1] - p2[1])**2)
-        print(f"  Ordered {len(ordered_singles)} singles, path: {total_dist * PIXEL_SIZE_UM / 1000:.1f} mm")
+        print(f"  Ordered {len(ordered_singles)} singles, path: {total_dist * pixel_size_um / 1000:.1f} mm")
 
         last_single_pos = singles_positions[nn_order[-1]]
     else:
@@ -332,7 +329,7 @@ def main():
             p1 = cluster_centroids[cluster_nn_order[i]]
             p2 = cluster_centroids[cluster_nn_order[i + 1]]
             total_dist += np.sqrt((p1[0] - p2[0])**2 + (p1[1] - p2[1])**2)
-        print(f"  Ordered {len(ordered_clusters)} clusters, path: {total_dist * PIXEL_SIZE_UM / 1000:.1f} mm")
+        print(f"  Ordered {len(ordered_clusters)} clusters, path: {total_dist * pixel_size_um / 1000:.1f} mm")
     else:
         ordered_clusters = []
 
@@ -350,7 +347,7 @@ def main():
         'metadata': {
             'plate_format': '384',
             'quadrants': quadrants,
-            'pixel_size_um': PIXEL_SIZE_UM,
+            'pixel_size_um': pixel_size_um,
             'dilation_um': 0.5,
             'rdp_epsilon_px': 5,
         },
@@ -403,14 +400,14 @@ def main():
             'well': well,
             'well_index': n_singles + i + 1,
             'cluster_id': cluster['id'],
-            'centroid_um': [cluster['cx'] * PIXEL_SIZE_UM, cluster['cy'] * PIXEL_SIZE_UM],
+            'centroid_um': [cluster['cx'] * pixel_size_um, cluster['cy'] * pixel_size_um],
             'n_nmjs': len(cluster_nmjs),
             'total_area_um2': sum(nmj['area_um2'] for nmj in cluster_nmjs),
             'nmjs': cluster_nmjs,
         })
 
     # Save
-    output_path = OUTPUT_DIR / "lmd_export_full.json"
+    output_path = output_dir / "lmd_export_full.json"
     with open(output_path, 'w') as f:
         json.dump(export_data, f, indent=2)
     print(f"  Saved: {output_path}")
@@ -439,4 +436,26 @@ def main():
 
 
 if __name__ == '__main__':
-    main()
+    parser = argparse.ArgumentParser(description='Generate complete LMD export with singles + clusters')
+    parser.add_argument('--base-dir', type=Path, required=True,
+                        help='Base output directory (e.g., nmj_output/experiment_name)')
+    parser.add_argument('--tiles-dir', type=Path, required=True,
+                        help='Directory containing tile subdirectories with nmj_masks.h5 files')
+    parser.add_argument('--clusters', type=Path, default=None,
+                        help='Path to clusters JSON (default: <base-dir>/nmj_clusters_375_425_500_1000.json)')
+    parser.add_argument('--detections', type=Path, default=None,
+                        help='Path to detections JSON (default: <base-dir>/nmj_detections_classified_v2.json)')
+    parser.add_argument('--pixel-size', type=float, default=0.1725,
+                        help='Pixel size in micrometers (default: 0.1725)')
+    args = parser.parse_args()
+
+    clusters_path = args.clusters if args.clusters else args.base_dir / "nmj_clusters_375_425_500_1000.json"
+    detections_path = args.detections if args.detections else args.base_dir / "nmj_detections_classified_v2.json"
+
+    main(
+        base_dir=args.base_dir,
+        tiles_dir=args.tiles_dir,
+        clusters_path=clusters_path,
+        detections_path=detections_path,
+        pixel_size_um=args.pixel_size,
+    )

@@ -126,7 +126,7 @@ class Detection(BaseModel):
 class DetectionFile(BaseModel):
     """Schema for *_detections.json files."""
     slide_name: str
-    cell_type: Literal["mk", "cell", "nmj", "vessel"]
+    cell_type: Literal["mk", "cell", "nmj", "vessel", "mesothelium", "hspc"]
     experiment_name: Optional[str] = None
     pixel_size_um: Optional[float] = None
     total_detections: Optional[int] = None
@@ -156,7 +156,7 @@ class DetectionFile(BaseModel):
 class Config(BaseModel):
     """Schema for config.json files."""
     experiment_name: Optional[str] = None
-    cell_type: Optional[Literal["mk", "cell", "nmj", "vessel"]] = None
+    cell_type: Optional[Literal["mk", "cell", "nmj", "vessel", "mesothelium", "hspc"]] = None
     slide_name: Optional[str] = None
     channel: Optional[int] = None
     pixel_size_um: Optional[float] = None

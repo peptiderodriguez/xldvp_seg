@@ -235,6 +235,6 @@ def extract_tile_from_shared_memory(
         ]
         if img.size == 0:
             return None, f"Empty crop extracted from tile {tile.get('id', 'unknown')}"
-        return img, None
+        return img.copy(), None
     except Exception as e:
         return None, f"Memory slice error: {e}"

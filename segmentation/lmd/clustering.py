@@ -47,7 +47,13 @@ def get_detection_area_um2(det: Dict, pixel_size: float) -> float:
 
 
 def get_detection_center(det: Dict) -> Optional[Tuple[float, float]]:
-    """Get (x, y) center coordinates from detection."""
+    """
+    Get (x, y) center coordinates from detection, in PIXELS.
+
+    Returns pixel coordinates from 'global_center' or 'center' fields.
+    Callers (e.g. two_stage_clustering) are responsible for converting
+    to microns by multiplying by pixel_size before distance calculations.
+    """
     if 'global_center' in det:
         gc = det['global_center']
         return (float(gc[0]), float(gc[1]))

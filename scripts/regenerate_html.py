@@ -3,11 +3,10 @@
 Regenerate vessel HTML from saved crops without re-reading CZI.
 
 Usage:
-    python regenerate_html.py [--thickness 10] [--inner-dotted]
+    python regenerate_html.py --input-dir /path/to/vessel_output [--thickness 10] [--inner-dotted]
 """
 
 import sys
-sys.path.insert(0, '/home/dude/code/vessel_seg')
 
 import json
 import argparse
@@ -147,8 +146,7 @@ def regenerate_from_crops(
 
 def main():
     parser = argparse.ArgumentParser(description='Regenerate vessel HTML from saved crops')
-    parser.add_argument('--input-dir', type=Path,
-                        default=Path('/home/dude/vessel_output/lumen_first_test'),
+    parser.add_argument('--input-dir', type=Path, required=True,
                         help='Directory with vessel_detections.json and crops/')
     parser.add_argument('--thickness', type=int, default=10,
                         help='Contour line thickness (default: 10)')

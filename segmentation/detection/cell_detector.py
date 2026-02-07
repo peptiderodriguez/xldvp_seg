@@ -408,7 +408,7 @@ class CellDetector:
         try:
             shape = self._sam2_predictor._features["image_embed"].shape
             emb_h, emb_w = shape[2], shape[3]
-            img_h, img_w = self._sam2_predictor._orig_hw
+            img_h, img_w = self._sam2_predictor._orig_hw[0]
 
             emb_y = int(cy / img_h * emb_h)
             emb_x = int(cx / img_w * emb_w)

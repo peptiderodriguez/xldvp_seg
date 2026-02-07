@@ -8,6 +8,7 @@ scanner differences.
 
 import logging
 import numpy as np
+import cv2
 from typing import Tuple, Optional, Dict
 from skimage import color
 
@@ -253,16 +254,18 @@ def compute_reinhard_params_from_samples(
     all_lab_samples = []
 
     for samples_rgb in slide_samples:
-        # Convert RGB samples to Lab color space
+        # Convert RGB samples to Lab color space using cv2 (consistent with apply function)
         # Input: (N, 3) array in range [0, 255]
-        # Output: (N, 3) array in Lab space (L: 0-100, a/b: approx -128 to 127)
-        samples_rgb_scaled = samples_rgb.astype(np.float32) / 255.0
-
-        # Reshape for skimage: needs (H, W, 3) or (N, 1, 3) for batch processing
-        # We'll process as (N, 1, 3) to treat each pixel independently
-        samples_reshaped = samples_rgb_scaled.reshape(-1, 1, 3)
-        samples_lab = color.rgb2lab(samples_reshaped)
+        # cv2.cvtColor expects uint8 input for COLOR_RGB2LAB
+        samples_uint8 = np.clip(samples_rgb, 0, 255).astype(np.uint8)
+        samples_img = samples_uint8.reshape(1, -1, 3)
+        samples_lab = cv2.cvtColor(samples_img, cv2.COLOR_RGB2LAB).astype(np.float32)
         samples_lab = samples_lab.reshape(-1, 3)  # Back to (N, 3)
+
+        # Convert from cv2 LAB encoding to standard LAB scale
+        samples_lab[:, 0] = samples_lab[:, 0] * 100.0 / 255.0  # L: [0,255] -> [0,100]
+        samples_lab[:, 1] = samples_lab[:, 1] - 128.0           # a: [0,255] -> [-128,127]
+        samples_lab[:, 2] = samples_lab[:, 2] - 128.0           # b: [0,255] -> [-128,127]
 
         all_lab_samples.append(samples_lab)
 

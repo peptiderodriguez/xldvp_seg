@@ -193,7 +193,14 @@ def regenerate_html(
 
         # Load masks
         with h5py.File(mask_file, 'r') as f:
-            masks = f['labels'][:]
+            # Support both old format ('labels') and new format ('masks')
+            if 'masks' in f:
+                masks = f['masks'][:]
+            elif 'labels' in f:
+                masks = f['labels'][:]
+            else:
+                available = list(f.keys())
+                raise KeyError(f"No 'masks' or 'labels' dataset found. Available: {available}")
             # Handle 3D masks with shape (1, H, W) - squeeze to 2D
             if masks.ndim == 3 and masks.shape[0] == 1:
                 masks = masks[0]

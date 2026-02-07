@@ -148,6 +148,7 @@ def process_single_tile(
                 masks, detections = strategy.detect(
                     tile_rgb, models, pixel_size_um,
                     extra_channels=extra_channel_tiles,
+                    extract_full_features=True,
                 )
             else:
                 # Mesothelium and others — basic detect()
@@ -589,9 +590,8 @@ def save_tile_outputs(
         # Save masks to HDF5 with compression
         masks_path = tile_out_dir / f"{cell_type}_masks.h5"
         with h5py.File(masks_path, 'w') as f:
-            # Convert to uint16 for storage efficiency
-            # (supports up to 65535 detections per tile)
-            create_hdf5_dataset(f, 'masks', masks.astype(np.uint16))
+            # Keep original dtype (uint32 supports >65535 labels per tile)
+            create_hdf5_dataset(f, 'masks', masks)
 
         result['masks_path'] = str(masks_path)
 

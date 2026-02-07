@@ -892,8 +892,8 @@ class HTMLPageGenerator:
         """
         if self.storage_strategy == 'page-specific':
             return '''
-        const PAGE_NUM = typeof PAGE_NUM !== 'undefined' ? PAGE_NUM : 1;
-        const STORAGE_KEY = CELL_TYPE + '_labels_page' + PAGE_NUM;
+        var _page_num = typeof PAGE_NUM !== 'undefined' ? PAGE_NUM : 1;
+        const STORAGE_KEY = CELL_TYPE + '_labels_page' + _page_num;
             '''
         elif self.storage_strategy == 'experiment':
             return f'''

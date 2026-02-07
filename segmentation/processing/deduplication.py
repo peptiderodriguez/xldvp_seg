@@ -22,7 +22,7 @@ logger = get_logger(__name__)
 
 
 def deduplicate_by_mask_overlap(detections, tiles_dir, min_overlap_fraction=0.1,
-                                mask_filename='nmj_masks.h5'):
+                                mask_filename=None):
     """Remove duplicate detections by checking actual mask pixel overlap.
 
     For each pair of detections, checks if their masks overlap in global
@@ -33,7 +33,8 @@ def deduplicate_by_mask_overlap(detections, tiles_dir, min_overlap_fraction=0.1,
         detections: List of detection dicts with 'tile_origin', 'mask_label', 'features'
         tiles_dir: Path to tiles directory containing mask h5 files
         min_overlap_fraction: Minimum overlap (fraction of smaller mask) to consider duplicates
-        mask_filename: Name of the mask HDF5 file in each tile dir (default: 'nmj_masks.h5')
+        mask_filename: Name of the mask HDF5 file in each tile dir (e.g. 'nmj_masks.h5').
+            Must be provided explicitly by the caller.
 
     Returns:
         List of deduplicated detections
@@ -42,6 +43,12 @@ def deduplicate_by_mask_overlap(detections, tiles_dir, min_overlap_fraction=0.1,
 
     if not detections:
         return []
+
+    if mask_filename is None:
+        raise ValueError(
+            "mask_filename must be provided (e.g. '{cell_type}_masks.h5'). "
+            "No default is assumed to avoid cell-type-specific assumptions."
+        )
 
     tiles_dir = Path(tiles_dir)
 

@@ -280,14 +280,14 @@ class VesselTypeClassifier:
         if cd31_wall is not None and cd31_wall > 0:
             features['sma_cd31_wall_ratio'] = sma_wall / cd31_wall if sma_wall is not None else 0
         else:
-            features['sma_cd31_wall_ratio'] = float('inf') if sma_wall and sma_wall > 0 else 0
+            features['sma_cd31_wall_ratio'] = 1000.0 if sma_wall and sma_wall > 0 else 0
 
         # LYVE1/CD31 ratio (for lymphatic detection)
         lyve1_wall = features.get('lyve1_wall_mean', 0)
         if cd31_wall is not None and cd31_wall > 0:
             features['lyve1_cd31_ratio'] = lyve1_wall / cd31_wall if lyve1_wall is not None else 0
         else:
-            features['lyve1_cd31_ratio'] = float('inf') if lyve1_wall and lyve1_wall > 0 else 0
+            features['lyve1_cd31_ratio'] = 1000.0 if lyve1_wall and lyve1_wall > 0 else 0
 
         # SMA wall-lumen contrast
         sma_lumen = features.get('sma_lumen_mean', 0)

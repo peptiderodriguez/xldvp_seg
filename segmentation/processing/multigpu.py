@@ -21,9 +21,15 @@ import queue
 import traceback
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple, Any, Callable
-from multiprocessing import Process, Queue, Event
+import multiprocessing as mp
 import numpy as np
 import torch
+
+# Use 'spawn' context for CUDA compatibility (fork copies CUDA state and hangs)
+_mp_ctx = mp.get_context('spawn')
+Process = _mp_ctx.Process
+Queue = _mp_ctx.Queue
+Event = _mp_ctx.Event
 
 from segmentation.utils.logging import get_logger
 
@@ -373,7 +379,7 @@ class MultiGPUTileProcessor:
 
     def collect_result(self, timeout: float = None) -> Optional[Dict[str, Any]]:
         """
-        Collect one result from the output queue.
+        Collect one tile result from the output queue, filtering stray messages.
 
         Args:
             timeout: Timeout in seconds (None for blocking)
@@ -381,10 +387,26 @@ class MultiGPUTileProcessor:
         Returns:
             Result dict or None if timeout
         """
-        try:
-            return self.output_queue.get(timeout=timeout)
-        except queue.Empty:
-            return None
+        import time
+        start = time.time()
+        remaining = timeout if timeout else float('inf')
+
+        while remaining > 0:
+            try:
+                result = self.output_queue.get(timeout=min(remaining, 1.0) if timeout else 1.0)
+                status = result.get('status')
+                if status in ('ready', 'init_error'):
+                    continue  # Skip stray worker init messages
+                return result
+            except queue.Empty:
+                if timeout:
+                    remaining = timeout - (time.time() - start)
+                    if remaining <= 0:
+                        return None
+                elif timeout is None:
+                    return None  # Non-blocking when no timeout
+                continue
+        return None
 
     def collect_all_results(self, progress_callback: Callable[[int, int], None] = None) -> List[Dict[str, Any]]:
         """

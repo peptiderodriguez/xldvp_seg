@@ -316,10 +316,10 @@ def apply_cleanup_to_detection(
             feat['features']['gray_mean'] = float(np.mean(gray))
             feat['features']['gray_std'] = float(np.std(gray))
 
-            # Recompute derived features
-            feat['features']['relative_brightness'] = feat['features']['gray_mean'] - 128.0  # Assuming 0-255 scale
+            # Recompute derived features (match extract_morphological_features)
+            feat['features']['relative_brightness'] = feat['features']['gray_mean'] - (float(np.mean(image)) if image.size > 0 else 0)
             feat['features']['intensity_variance'] = feat['features']['gray_std'] ** 2
-            feat['features']['dark_region_fraction'] = float(np.sum(gray < 50) / len(gray)) if len(gray) > 0 else 0
+            feat['features']['dark_fraction'] = float(np.mean(gray < 100)) if len(gray) > 0 else 0
             feat['features']['nuclear_complexity'] = feat['features']['gray_std']  # Simplified
     else:
         # Fallback: just update area and center (old behavior)

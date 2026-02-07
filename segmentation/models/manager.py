@@ -321,11 +321,11 @@ class ModelManager:
             Dict with keys: sam2_predictor, sam2_auto, cellpose, resnet, resnet_transform, device
         """
         return {
-            'sam2_predictor': self.sam2_predictor if self._sam2_predictor else None,
-            'sam2_auto': self.sam2_auto if self._sam2_auto else None,
-            'cellpose': self.cellpose if self._cellpose else None,
-            'resnet': self.resnet if self._resnet else None,
-            'resnet_transform': self.resnet_transform if self._resnet_transform else None,
+            'sam2_predictor': self._sam2_predictor,
+            'sam2_auto': self._sam2_auto,
+            'cellpose': self._cellpose,
+            'resnet': self._resnet,
+            'resnet_transform': self._resnet_transform,
             'device': self.device,
         }
 

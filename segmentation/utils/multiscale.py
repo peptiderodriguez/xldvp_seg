@@ -261,19 +261,19 @@ def merge_detections_across_scales(
         reverse=not prefer_finer_scale
     )
 
-    # DEBUG: Count detections with valid outer contours
+    # Count detections with valid outer contours
     valid_outer_count = sum(1 for d in sorted_dets if d.get('outer') is not None)
-    logger.info(f"DEBUG: {valid_outer_count}/{len(sorted_dets)} detections have valid 'outer' contour")
+    logger.debug(f"{valid_outer_count}/{len(sorted_dets)} detections have valid 'outer' contour")
 
-    # DEBUG: Print first detection's outer info
+    # Log first detection's outer info
     if sorted_dets:
         first = sorted_dets[0]
         outer = first.get('outer')
         if outer is not None:
-            logger.info(f"DEBUG: First detection outer shape: {outer.shape}, dtype: {outer.dtype}")
-            logger.info(f"DEBUG: First detection outer bounds: x=[{outer[:,:,0].min()}, {outer[:,:,0].max()}], y=[{outer[:,:,1].min()}, {outer[:,:,1].max()}]")
+            logger.debug(f"First detection outer shape: {outer.shape}, dtype: {outer.dtype}")
+            logger.debug(f"First detection outer bounds: x=[{outer[:,:,0].min()}, {outer[:,:,0].max()}], y=[{outer[:,:,1].min()}, {outer[:,:,1].max()}]")
         else:
-            logger.info(f"DEBUG: First detection has no 'outer' contour. Keys: {list(first.keys())}")
+            logger.debug(f"First detection has no 'outer' contour. Keys: {list(first.keys())}")
 
     merged = []
     skipped_no_outer = 0
@@ -298,8 +298,8 @@ def merge_detections_across_scales(
                 duplicate_count += 1
                 # Log first few duplicates for debugging
                 if duplicate_count <= 5:
-                    logger.info(
-                        f"DEBUG: Duplicate #{duplicate_count} (IoU={iou:.3f}): "
+                    logger.debug(
+                        f"Duplicate #{duplicate_count} (IoU={iou:.3f}): "
                         f"scale {det.get('scale_detected')} vs {existing.get('scale_detected')}, "
                         f"new bounds x=[{outer[:,:,0].min()}, {outer[:,:,0].max()}], "
                         f"existing bounds x=[{existing_outer[:,:,0].min()}, {existing_outer[:,:,0].max()}]"
@@ -309,7 +309,7 @@ def merge_detections_across_scales(
         if not is_duplicate:
             merged.append(det)
 
-    logger.info(f"DEBUG: Skipped {skipped_no_outer} detections with no outer contour")
+    logger.debug(f"Skipped {skipped_no_outer} detections with no outer contour")
     logger.info(
         f"Merged {len(detections)} detections → {len(merged)} "
         f"(removed {len(detections) - len(merged)} duplicates)"

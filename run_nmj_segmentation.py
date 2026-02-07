@@ -42,7 +42,7 @@ logger = get_logger(__name__)
 # NMJ DETECTION (Simple: threshold + solidity filter)
 # =============================================================================
 
-def detect_nmjs(image, intensity_percentile=99, min_area=150, min_skeleton_length=30, max_solidity=0.85):
+def detect_nmjs(image, intensity_percentile=98, min_area=150, min_skeleton_length=30, max_solidity=0.85):
     """
     Detect NMJs using intensity threshold + solidity filter.
 
@@ -384,7 +384,7 @@ def process_czi_for_nmj(czi_path, output_dir,
                         tile_size=3000,
                         sample_fraction=0.10,
                         samples_per_page=300,
-                        intensity_percentile=99,
+                        intensity_percentile=98,
                         min_area=150,
                         min_skeleton_length=30,
                         max_solidity=0.85,

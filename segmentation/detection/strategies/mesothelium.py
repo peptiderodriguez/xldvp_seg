@@ -183,21 +183,36 @@ class MesotheliumStrategy(DetectionStrategy):
         self.max_ribbon_width_um = max_ribbon_width_um
         self.min_fragment_area_um2 = min_fragment_area_um2
         self.pixel_size_um = pixel_size_um
+        # Side-channel metadata populated by segment(), consumed by filter()/detect()
+        self._last_segment_metadata: List[Dict[str, Any]] = []
 
-    def segment(
+    def _segment_ribbons(
         self,
         tile: np.ndarray,
         models: Dict[str, Any]
-    ) -> Tuple[np.ndarray, List[Dict[str, Any]]]:
+    ) -> List[Dict[str, Any]]:
         """
-        Segment mesothelial ribbons and divide into chunks.
+        Internal: segment mesothelial ribbons and divide into chunks.
+
+        Contains the full detection logic (ridge detection, skeletonization,
+        path walking, area-based chunking). Returns rich metadata dicts
+        that include both the binary mask and mesothelium-specific fields
+        (polygon, path_points, widths, branch_id, area_um2).
 
         Args:
             tile: RGB image array
             models: Dict with loaded models (not used for mesothelium)
 
         Returns:
-            Tuple of (label_mask, raw_detections_list)
+            List of raw detection dicts, each containing:
+                - det_id: chunk ID (1-indexed)
+                - mask: boolean mask array (HxW)
+                - centroid: (x, y) tuple
+                - polygon: Mx2 array of (x, y) vertices
+                - area_um2: estimated area in um^2
+                - path_points: skeleton path coordinates
+                - widths_px: width at each skeleton point
+                - branch_id: index of the skeleton branch
         """
         from skimage.morphology import (
             skeletonize, medial_axis, remove_small_objects,
@@ -222,7 +237,7 @@ class MesotheliumStrategy(DetectionStrategy):
         gray_range = gray.max() - gray.min()
         if gray_range < 1e-8:
             # Uniform image, no ridges
-            return np.zeros(tile.shape[:2], dtype=np.uint32), []
+            return []
         gray_norm = (gray - gray.min()) / gray_range
 
         # Ridge detection using Meijering filter (optimized for neurite/line structures)
@@ -252,7 +267,7 @@ class MesotheliumStrategy(DetectionStrategy):
                 valid_labels.append(prop.label)
 
         if len(valid_labels) == 0:
-            return np.zeros(tile.shape[:2], dtype=np.uint32), []
+            return []
 
         # Create cleaned binary with only valid fragments
         binary_clean = np.isin(labeled, valid_labels)
@@ -271,7 +286,6 @@ class MesotheliumStrategy(DetectionStrategy):
             paths = _trace_skeleton_paths(skeleton)
 
         # Chunk each path by area
-        masks = np.zeros(tile.shape[:2], dtype=np.uint32)
         raw_detections = []
         chunk_id = 1
 
@@ -357,8 +371,6 @@ class MesotheliumStrategy(DetectionStrategy):
                 if chunk_mask_bool.sum() == 0:
                     continue
 
-                masks[chunk_mask_bool] = chunk_id
-
                 # Calculate centroid
                 cy, cx = ndimage.center_of_mass(chunk_mask_bool)
 
@@ -375,77 +387,94 @@ class MesotheliumStrategy(DetectionStrategy):
 
                 chunk_id += 1
 
-        return masks, raw_detections
+        return raw_detections
+
+    def segment(
+        self,
+        tile: np.ndarray,
+        models: Dict[str, Any]
+    ) -> List[np.ndarray]:
+        """
+        Segment mesothelial ribbons and divide into chunks.
+
+        Complies with the base class interface: returns a list of binary masks.
+        Mesothelium-specific metadata (polygons, path info, etc.) is stored
+        in self._last_segment_metadata for use by filter() and detect().
+
+        Args:
+            tile: RGB image array
+            models: Dict with loaded models (not used for mesothelium)
+
+        Returns:
+            List of binary masks (each HxW boolean array)
+        """
+        raw_detections = self._segment_ribbons(tile, models)
+
+        # Store metadata side-channel for filter()/detect() to consume
+        self._last_segment_metadata = raw_detections
+
+        # Return just the binary masks per base class interface
+        return [det['mask'] for det in raw_detections]
 
     def filter(
         self,
-        detections: List[Dict[str, Any]],
-        tile: np.ndarray,
-        models: Dict[str, Any]
-    ) -> List[Dict[str, Any]]:
-        """
-        Filter mesothelium detections (minimal filtering needed).
-
-        Args:
-            detections: Raw detections from segment()
-            tile: Original tile image
-            models: Loaded models (not used)
-
-        Returns:
-            Filtered detections (same as input for mesothelium)
-        """
-        # Mesothelium chunks are already filtered during segmentation
-        # No additional filtering needed
-        return detections
-
-    def extract_features(
-        self,
-        detections: List[Dict[str, Any]],
-        tile: np.ndarray,
-        models: Dict[str, Any]
+        masks: List[np.ndarray],
+        features: List[Dict[str, Any]],
+        pixel_size_um: float
     ) -> List[Detection]:
         """
-        Extract features and create Detection objects.
+        Filter and classify candidate masks.
+
+        Mesothelium chunks are already filtered during segmentation, so this
+        applies no additional filtering. It creates Detection objects by
+        combining the masks, computed features, and mesothelium-specific
+        metadata stored during segment().
 
         Args:
-            detections: Filtered detections
-            tile: Original tile image
-            models: Loaded models (not used for mesothelium)
+            masks: List of candidate masks from segment()
+            features: List of feature dictionaries (one per mask)
+            pixel_size_um: Pixel size for area calculations
 
         Returns:
-            List of Detection objects with mesothelium-specific features
+            List of Detection objects (all candidates pass for mesothelium)
         """
-        pixel_size = self.pixel_size_um
-        results = []
+        detections = []
+        metadata_list = self._last_segment_metadata
 
-        for det in detections:
-            mask = det['mask']
-            area_px = int(mask.sum())
+        for i, (mask, feat) in enumerate(zip(masks, features)):
+            if not feat:
+                continue
 
-            # Basic features
-            features = {
-                'area': area_px,
-                'area_um2': det['area_um2'],
-                'path_length_um': float(len(det['path_points']) * pixel_size),
-                'mean_width_um': float(np.mean(det['widths_px']) * pixel_size),
-                'n_vertices': len(det['polygon']),
-                'branch_id': det['branch_id'],
-            }
+            centroid = feat.get('centroid', [0.0, 0.0])
 
-            # Create Detection object
+            # Merge mesothelium-specific metadata into features if available
+            if i < len(metadata_list):
+                meta = metadata_list[i]
+                feat.setdefault('area_um2', meta.get('area_um2', 0.0))
+                feat.setdefault('path_length_um',
+                                float(len(meta.get('path_points', [])) * pixel_size_um))
+                feat.setdefault('mean_width_um',
+                                float(np.mean(meta.get('widths_px', [0])) * pixel_size_um))
+                feat.setdefault('n_vertices', len(meta.get('polygon', [])))
+                feat.setdefault('branch_id', meta.get('branch_id', -1))
+                det_id = meta.get('det_id', i + 1)
+            else:
+                det_id = i + 1
+
             detection = Detection(
-                id=f"meso_{det['det_id']}",
+                id=f"meso_{det_id}",
                 mask=mask,
-                centroid=det['centroid'],
-                features=features
+                centroid=list(centroid),
+                features=feat,
             )
 
             # Store polygon for LMD export (not in standard Detection but useful)
-            detection.polygon = det['polygon']
+            if i < len(metadata_list):
+                detection.polygon = metadata_list[i].get('polygon')
 
-            results.append(detection)
+            detections.append(detection)
 
-        return results
+        return detections
 
     def detect(
         self,
@@ -468,18 +497,36 @@ class MesotheliumStrategy(DetectionStrategy):
         if pixel_size_um is not None:
             self.pixel_size_um = pixel_size_um
 
-        # Segment
-        masks, raw_detections = self.segment(tile, models)
+        # Segment (populates self._last_segment_metadata as side-channel)
+        masks = self.segment(tile, models)
 
-        if not raw_detections:
-            return masks, []
+        if not masks:
+            return np.zeros(tile.shape[:2], dtype=np.uint32), []
 
-        # Filter (minimal for mesothelium)
-        filtered = self.filter(raw_detections, tile, models)
+        # Compute features for each mask
+        features = [self.compute_features(m, tile) for m in masks]
 
-        # Extract features
-        detections = self.extract_features(filtered, tile, models)
+        # Enrich features with mesothelium-specific metadata
+        for i, feat in enumerate(features):
+            if i < len(self._last_segment_metadata):
+                meta = self._last_segment_metadata[i]
+                feat['area_um2'] = meta.get('area_um2', 0.0)
+                feat['path_length_um'] = float(
+                    len(meta.get('path_points', [])) * self.pixel_size_um)
+                feat['mean_width_um'] = float(
+                    np.mean(meta.get('widths_px', [0])) * self.pixel_size_um)
+                feat['n_vertices'] = len(meta.get('polygon', []))
+                feat['branch_id'] = meta.get('branch_id', -1)
+
+        # Filter (creates Detection objects; minimal filtering for mesothelium)
+        detections = self.filter(masks, features, self.pixel_size_um)
 
         logger.debug(f"Mesothelium: {len(detections)} chunks detected")
 
-        return masks, detections
+        # Build label array from detections
+        label_array = np.zeros(tile.shape[:2], dtype=np.uint32)
+        for i, det in enumerate(detections, start=1):
+            if det.mask is not None:
+                label_array[det.mask] = i
+
+        return label_array, detections

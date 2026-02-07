@@ -175,14 +175,17 @@ class MKStrategy(DetectionStrategy, MultiChannelFeatureMixin):
             if min_area_px <= result['area'] <= max_area_px:
                 valid_results.append(result)
 
-        # Step 2: Sort by area (largest first)
+        # Step 2: Sort by area (largest first) — keep features aligned with results
+        # Pair features with results before sorting so indices stay consistent
+        for i, result in enumerate(valid_results):
+            result['_orig_features'] = features[i] if i < len(features) else {}
         valid_results.sort(key=lambda x: x['area'], reverse=True)
 
         # Step 3: Overlap filtering and detection creation
         detections = []
         accepted_mask = None  # Combined mask of all accepted detections
 
-        for i, result in enumerate(valid_results):
+        for result in valid_results:
             mask = result['mask']
 
             # Ensure boolean type (critical for NVIDIA CUDA compatibility)
@@ -195,8 +198,8 @@ class MKStrategy(DetectionStrategy, MultiChannelFeatureMixin):
                 if overlap > self.overlap_threshold * mask.sum():
                     continue  # Skip this mask - too much overlap
 
-            # Get features if available
-            feat = features[i] if i < len(features) else {}
+            # Get features (aligned with sorted results)
+            feat = result['_orig_features']
 
             # Step 4: Classifier filtering
             mk_score = feat.get('mk_score', 1.0)

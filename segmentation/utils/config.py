@@ -24,6 +24,7 @@ Environment Variables:
     SEGMENTATION_DATA_DIR: Default input data directory
 """
 
+import copy
 import json
 import os
 from pathlib import Path
@@ -252,7 +253,7 @@ DEFAULT_CONFIG = {
 DETECTION_DEFAULTS = {
     "nmj": {
         "channel": 1,
-        "intensity_percentile": 99,
+        "intensity_percentile": 98,
         "min_area_px": 150,
         "min_skeleton_length": 30,
         "max_solidity": 0.85,  # Branched structures have low solidity
@@ -342,6 +343,28 @@ def get_normalization_percentiles(config: Dict[str, Any], cell_type: str) -> Tup
     return tuple(p)
 
 
+def _deep_merge(base: Dict[str, Any], override: Dict[str, Any]) -> None:
+    """
+    Recursively merge override dict into base dict (in-place).
+
+    For nested dicts, merges keys rather than replacing the entire dict.
+    For all other types, override values replace base values.
+
+    Args:
+        base: Base dictionary to merge into (modified in-place)
+        override: Dictionary with values to overlay on base
+    """
+    for key, value in override.items():
+        if (
+            key in base
+            and isinstance(base[key], dict)
+            and isinstance(value, dict)
+        ):
+            _deep_merge(base[key], value)
+        else:
+            base[key] = value
+
+
 def load_config(
     experiment_dir: Union[str, Path],
     cell_type: Optional[str] = None,
@@ -363,16 +386,16 @@ def load_config(
     experiment_dir = Path(experiment_dir)
     config_path = experiment_dir / config_filename
 
-    # Start with defaults
-    config = DEFAULT_CONFIG.copy()
+    # Start with defaults (deep copy so nested dicts are independent)
+    config = copy.deepcopy(DEFAULT_CONFIG)
 
     # Load from file if exists
     if config_path.exists():
         try:
             with open(config_path, 'r') as f:
                 file_config = json.load(f)
-            # Merge file config over defaults
-            config.update(file_config)
+            # Deep merge file config over defaults (preserves nested dict keys)
+            _deep_merge(config, file_config)
         except (json.JSONDecodeError, IOError) as e:
             print(f"Warning: Could not load config from {config_path}: {e}")
 
@@ -913,11 +936,16 @@ def get_config_summary(
 # EXTRACTED MAGIC NUMBERS FROM run_unified_FAST.py
 # =============================================================================
 
-# Feature extraction dimensions (lines 7, 1110, 1142, 1149, 1175, 1178)
-MORPHOLOGICAL_FEATURES_COUNT = 22      # Extract 22 morphological/intensity features
+# Feature extraction dimensions
+# Morphological: ~78 features (shape, intensity, texture, skeleton, etc.)
+# SAM2: 256D embedding vectors (always extracted)
+# ResNet50: 2x 2048D = 4096 (masked + context, opt-in via --extract-deep-features)
+# DINOv2-L: 2x 1024D = 2048 (masked + context, opt-in via --extract-deep-features)
+MORPHOLOGICAL_FEATURES_COUNT = 78      # ~78 morphological/intensity features
 SAM2_EMBEDDING_DIMENSION = 256         # SAM2 256D embedding vectors
-RESNET_EMBEDDING_DIMENSION = 2048      # ResNet50 2048D feature vectors
-TOTAL_FEATURES_PER_CELL = 2326         # Total: 22 + 256 + 2048
+RESNET_EMBEDDING_DIMENSION = 4096      # ResNet50 2x2048D (masked + context)
+DINOV2_EMBEDDING_DIMENSION = 2048      # DINOv2-L 2x1024D (masked + context)
+TOTAL_FEATURES_PER_CELL = 6478         # Total: 78 + 256 + 4096 + 2048
 
 # Pixel size constants (lines 649, 660, 696, 3364, 3365)
 DEFAULT_PIXEL_SIZE_UM = 0.1725         # Default pixel size in micrometers per pixel
@@ -944,6 +972,7 @@ def get_feature_dimensions() -> Dict[str, int]:
         "morphological": MORPHOLOGICAL_FEATURES_COUNT,
         "sam2_embedding": SAM2_EMBEDDING_DIMENSION,
         "resnet_embedding": RESNET_EMBEDDING_DIMENSION,
+        "dinov2_embedding": DINOV2_EMBEDDING_DIMENSION,
         "total": TOTAL_FEATURES_PER_CELL,
     }
 

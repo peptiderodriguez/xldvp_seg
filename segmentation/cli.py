@@ -835,12 +835,17 @@ def _extract_samples_for_html(
             if x2_clip <= x1_clip or y2_clip <= y1_clip:
                 continue
 
-            # Get crop from loader
+            # Get crop from loader — use max dimension for square tile, then slice
+            crop_w = x2_clip - x1_clip
+            crop_h = y2_clip - y1_clip
+            crop_size = max(crop_w, crop_h)
             crop = pipeline.loader.get_tile(
                 x1_clip, y1_clip,
-                x2_clip - x1_clip,
+                crop_size,
                 channel=pipeline.channel
             )
+            if crop is not None and crop.ndim >= 2:
+                crop = crop[:crop_h, :crop_w]
 
             if crop is None or crop.size == 0:
                 continue

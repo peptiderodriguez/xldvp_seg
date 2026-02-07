@@ -218,10 +218,10 @@ class CrossPlacer:
     def _bind_shortcuts(self):
         """Bind keyboard shortcuts to viewer."""
 
-        @self.viewer.bind_key('w', overwrite=True)
+        @self.viewer.bind_key('s', overwrite=True)
         def save_crosses(viewer):
             try:
-                print("W key pressed - attempting save...")
+                print("S key pressed - attempting save...")
                 self.save_crosses()
             except Exception as e:
                 print(f"ERROR saving: {e}")

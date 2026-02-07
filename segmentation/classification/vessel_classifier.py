@@ -208,11 +208,17 @@ class VesselClassifier:
         # Handle string labels
         y_array = np.asarray(y)
         if y_array.dtype.kind in ('U', 'S', 'O'):  # String types
-            y_encoded = self.label_encoder.fit_transform(y_array)
+            if not hasattr(self.label_encoder, 'classes_') or len(self.label_encoder.classes_) == 0:
+                # First call (training) — fit the encoder
+                y_encoded = self.label_encoder.fit_transform(y_array)
+            else:
+                # Subsequent calls (evaluation) — use existing mapping
+                y_encoded = self.label_encoder.transform(y_array)
         else:
             y_encoded = y_array.astype(int)
-            # Fit label encoder with known classes
-            self.label_encoder.fit(VESSEL_TYPES)
+            # Fit label encoder with known classes if not already fitted
+            if not hasattr(self.label_encoder, 'classes_') or len(self.label_encoder.classes_) == 0:
+                self.label_encoder.fit(VESSEL_TYPES)
 
         return X_array, y_encoded
 
@@ -283,7 +289,7 @@ class VesselClassifier:
             'n_features': len(self.feature_names),
             'class_distribution': dict(zip(
                 self.label_encoder.classes_.tolist(),
-                [int(c) for c in np.bincount(y_encoded)]
+                [int(c) for c in np.bincount(y_encoded, minlength=len(self.label_encoder.classes_))]
             )),
         }
 

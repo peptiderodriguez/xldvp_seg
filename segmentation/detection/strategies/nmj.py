@@ -204,9 +204,11 @@ class NMJStrategy(DetectionStrategy, MultiChannelFeatureMixin):
         if mask.sum() == 0:
             return {}
 
-        # Get intensity image
-        if tile.ndim == 3:
-            gray = np.mean(tile[:, :, :3], axis=2)
+        # Get intensity image — use BTX channel (ch1) for NMJ, consistent with segment()
+        if tile.ndim == 3 and tile.shape[2] > 1:
+            gray = tile[:, :, 1].astype(float)
+        elif tile.ndim == 3:
+            gray = tile[:, :, 0].astype(float)
         else:
             gray = tile.astype(float)
 
@@ -734,9 +736,11 @@ class NMJStrategy(DetectionStrategy, MultiChannelFeatureMixin):
         if mask.sum() == 0:
             return {}
 
-        # Get intensity image
-        if tile.ndim == 3:
-            gray = np.mean(tile[:, :, :3], axis=2)
+        # Get intensity image — use BTX channel (ch1) for NMJ, consistent with segment()
+        if tile.ndim == 3 and tile.shape[2] > 1:
+            gray = tile[:, :, 1].astype(float)
+        elif tile.ndim == 3:
+            gray = tile[:, :, 0].astype(float)
         else:
             gray = tile.astype(float)
 
@@ -1084,9 +1088,11 @@ def detect_nmjs_simple(
         - nmj_masks: Label array with NMJ IDs (0 = background)
         - nmj_features: List of feature dictionaries
     """
-    # Convert to grayscale
-    if image.ndim == 3:
-        gray = np.mean(image[:, :, :3], axis=2)
+    # Convert to grayscale — use BTX channel (ch1) for NMJ detection
+    if image.ndim == 3 and image.shape[2] > 1:
+        gray = image[:, :, 1].astype(float)  # BTX channel = NMJ marker
+    elif image.ndim == 3:
+        gray = image[:, :, 0].astype(float)
     else:
         gray = image.astype(float)
 

@@ -957,7 +957,7 @@ class UnifiedSegmenter:
         try:
             shape = self.sam2_predictor._features["image_embed"].shape
             emb_h, emb_w = shape[2], shape[3]
-            img_h, img_w = self.sam2_predictor._orig_hw
+            img_h, img_w = self.sam2_predictor._orig_hw[0]
 
             emb_y = int(cy / img_h * emb_h)
             emb_x = int(cx / img_w * emb_w)
@@ -2759,8 +2759,8 @@ def run_pipeline(args):
         for ch in range(n_channels):
             if ch != args.channel:
                 logger.info(f"  Loading channel {ch}...")
-                loader = get_loader(czi_path, load_to_ram=True, channel=ch, quiet=True)
-                all_channel_data[ch] = loader.get_channel_data(ch)
+                ch_loader = get_loader(czi_path, load_to_ram=True, channel=ch, quiet=True)
+                all_channel_data[ch] = ch_loader.get_channel_data(ch)
         logger.info(f"  Loaded channels: {sorted(all_channel_data.keys())}")
 
     # Also load CD31 channel to RAM if specified (for vessel validation)
@@ -3180,10 +3180,10 @@ def run_pipeline(args):
                 crop_rgb = (crop_rgb / 256).astype(np.uint8)
 
             if crop_rgb.size > 0:
-                from segmentation.io.html_export import encode_image_to_base64
+                from segmentation.io.html_export import image_to_base64
                 sample = {
                     'uid': uid,
-                    'crop_b64': encode_image_to_base64(crop_rgb),
+                    'crop_b64': image_to_base64(crop_rgb),
                     'stats': features_dict,
                 }
                 all_samples.append(sample)

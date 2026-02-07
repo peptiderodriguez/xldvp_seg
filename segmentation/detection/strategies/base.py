@@ -80,7 +80,8 @@ class DetectionStrategy(ABC):
     def segment(
         self,
         tile: np.ndarray,
-        models: Dict[str, Any]
+        models: Dict[str, Any],
+        **kwargs
     ) -> List[np.ndarray]:
         """
         Generate candidate masks from a tile image.
@@ -89,6 +90,7 @@ class DetectionStrategy(ABC):
             tile: Input tile image (HxW for grayscale, HxWxC for RGB)
             models: Dictionary of loaded models (e.g., SAM2, Cellpose, classifiers)
                    May be empty if strategy doesn't use learned models.
+            **kwargs: Strategy-specific parameters (e.g., pixel_size_um, cd31_channel)
 
         Returns:
             List of binary masks (each HxW boolean array)

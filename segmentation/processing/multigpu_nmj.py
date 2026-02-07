@@ -88,6 +88,7 @@ def _nmj_gpu_worker(
     extract_sam2_embeddings: bool = True,
     sam2_checkpoint: Optional[str] = None,
     sam2_config: str = "configs/sam2.1/sam2.1_hiera_l.yaml",
+    variance_threshold: float = 1000.0,
 ):
     """
     Worker process for NMJ detection on a single GPU.
@@ -111,6 +112,7 @@ def _nmj_gpu_worker(
         extract_sam2_embeddings: Whether to extract SAM2 embeddings (default True)
         sam2_checkpoint: Optional path to SAM2 checkpoint
         sam2_config: SAM2 config file path
+        variance_threshold: Variance threshold for tissue detection (default 1000.0)
     """
     # Pin to specific GPU
     os.environ['CUDA_VISIBLE_DEVICES'] = str(gpu_id)
@@ -298,7 +300,7 @@ def _nmj_gpu_worker(
             # Check for tissue BEFORE uint8 conversion (threshold is calibrated for uint16)
             try:
                 # Use BTX channel (ch1) for tissue detection - this is the NMJ marker channel
-                has_tissue_flag, _ = has_tissue(extra_channel_tiles[1], variance_threshold=1000.0, block_size=64)
+                has_tissue_flag, _ = has_tissue(extra_channel_tiles[1], variance_threshold=variance_threshold, block_size=512)
             except Exception:
                 has_tissue_flag = True  # Assume tissue on error
 
@@ -489,6 +491,7 @@ class MultiGPUNMJProcessor:
         extract_sam2_embeddings: bool = True,
         sam2_checkpoint: Optional[str] = None,
         sam2_config: str = "configs/sam2.1/sam2.1_hiera_l.yaml",
+        variance_threshold: float = 1000.0,
     ):
         """
         Initialize multi-GPU NMJ processor.
@@ -502,6 +505,7 @@ class MultiGPUNMJProcessor:
             extract_sam2_embeddings: Whether to extract SAM2 embeddings
             sam2_checkpoint: Optional path to SAM2 checkpoint
             sam2_config: SAM2 config file path
+            variance_threshold: Variance threshold for tissue detection (default 1000.0)
         """
         self.num_gpus = num_gpus
         self.slide_info = slide_info
@@ -511,6 +515,7 @@ class MultiGPUNMJProcessor:
         self.extract_sam2_embeddings = extract_sam2_embeddings
         self.sam2_checkpoint = sam2_checkpoint
         self.sam2_config = sam2_config
+        self.variance_threshold = variance_threshold
 
         self.workers: List[Process] = []
         self.input_queue: Optional[Queue] = None
@@ -616,6 +621,7 @@ class MultiGPUNMJProcessor:
                     self.extract_sam2_embeddings,
                     local_checkpoint,  # Use local /tmp copy for fast loading
                     self.sam2_config,
+                    self.variance_threshold,
                 ),
                 daemon=True
             )

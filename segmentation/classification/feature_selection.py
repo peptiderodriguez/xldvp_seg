@@ -339,25 +339,26 @@ def cross_validate_features(
     if feature_indices is not None:
         X = X[:, feature_indices]
 
-    # Scale
-    scaler = StandardScaler()
-    X_scaled = scaler.fit_transform(X)
-
     # Encode labels
     if y.dtype.kind in ('U', 'S', 'O'):
         le = LabelEncoder()
         y = le.fit_transform(y)
 
-    # Cross-validation
+    # Cross-validation with Pipeline to avoid data leakage
+    # (scaler fits inside each fold, not on full dataset)
+    from sklearn.pipeline import Pipeline
     cv = StratifiedKFold(n_splits=cv_folds, shuffle=True, random_state=random_state)
-    rf = RandomForestClassifier(
-        n_estimators=n_estimators,
-        random_state=random_state,
-        n_jobs=-1,
-        class_weight='balanced'
-    )
+    pipe = Pipeline([
+        ('scaler', StandardScaler()),
+        ('rf', RandomForestClassifier(
+            n_estimators=n_estimators,
+            random_state=random_state,
+            n_jobs=-1,
+            class_weight='balanced'
+        )),
+    ])
 
-    fold_scores = cross_val_score(rf, X_scaled, y, cv=cv, scoring='accuracy')
+    fold_scores = cross_val_score(pipe, X, y, cv=cv, scoring='accuracy')
 
     result = {
         'mean_accuracy': float(fold_scores.mean()),

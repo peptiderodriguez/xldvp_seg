@@ -326,7 +326,7 @@ class TestSAM2EmbeddingDimensions(unittest.TestCase):
         }
         mock_features["image_embed"].shape = (1, 256, 64, 64)  # B, C, H, W
         mock_predictor._features = mock_features
-        mock_predictor._orig_hw = (512, 512)
+        mock_predictor._orig_hw = [(512, 512)]
 
         # Create mock tensor that returns numpy array
         mock_tensor = MagicMock()

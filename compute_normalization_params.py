@@ -40,8 +40,8 @@ def sample_pixels_from_slide(czi_path, channel=0, n_samples=500000):
 
         block_size = 512
         blocks = []
-        for y in range(0, h - block_size, block_size):
-            for x in range(0, w - block_size, block_size):
+        for y in range(0, h, block_size):
+            for x in range(0, w, block_size):
                 blocks.append({'x': x, 'y': y})
 
         logger.info(f"  Created {len(blocks)} blocks, calibrating tissue threshold...")
@@ -166,8 +166,11 @@ def main():
     combined = np.vstack(all_samples)  # (N, 3) RGB
     logger.info(f"Total samples: {len(combined):,}")
 
-    # Convert to LAB
-    tissue_img = np.clip(combined.reshape(1, -1, 3) / 256, 0, 255).astype(np.uint8)
+    # Convert to LAB — handle both uint8 and uint16 input
+    if combined.dtype == np.uint16:
+        tissue_img = np.clip(combined.reshape(1, -1, 3) / 256, 0, 255).astype(np.uint8)
+    else:
+        tissue_img = combined.reshape(1, -1, 3).astype(np.uint8)
     lab = cv2.cvtColor(tissue_img, cv2.COLOR_RGB2LAB).astype(np.float32)
     lab = lab.reshape(-1, 3)  # Back to (N, 3)
 
