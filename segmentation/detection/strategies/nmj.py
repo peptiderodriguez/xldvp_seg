@@ -29,6 +29,7 @@ from skimage.morphology import skeletonize, remove_small_objects, binary_opening
 from skimage.measure import label, regionprops
 
 from .base import DetectionStrategy, Detection
+from .mixins import MultiChannelFeatureMixin
 from segmentation.utils.logging import get_logger
 from segmentation.utils.feature_extraction import (
     extract_morphological_features,
@@ -42,7 +43,7 @@ logger = get_logger(__name__)
 # Issue #7: Local extract_morphological_features removed - now imported from shared module
 
 
-class NMJStrategy(DetectionStrategy):
+class NMJStrategy(DetectionStrategy, MultiChannelFeatureMixin):
     """
     NMJ detection strategy using intensity threshold + solidity filtering.
 
@@ -63,9 +64,9 @@ class NMJStrategy(DetectionStrategy):
         min_area_px: Minimum area in pixels (default 150)
         max_area_px: Maximum area in pixels (default None = no limit)
         min_area_um: Minimum area in um^2 (default 25, used if pixel_size known)
-        classifier_threshold: Confidence threshold for classifier (default 0.75)
+        classifier_threshold: Confidence threshold for classifier (default 0.5)
         use_classifier: Whether to use ResNet classifier (default True if model provided)
-        extract_resnet_features: Whether to extract 2048D ResNet features (default True)
+        extract_deep_features: Whether to extract ResNet+DINOv2 features (default False, opt-in)
         extract_sam2_embeddings: Whether to extract 256D SAM2 embeddings (default True)
         resnet_batch_size: Batch size for ResNet feature extraction (default 16)
     """
@@ -78,9 +79,9 @@ class NMJStrategy(DetectionStrategy):
         min_area_px: int = 150,
         max_area_px: Optional[int] = None,
         min_area_um: float = 25.0,
-        classifier_threshold: float = 0.75,
+        classifier_threshold: float = 0.5,
         use_classifier: bool = True,
-        extract_resnet_features: bool = True,
+        extract_deep_features: bool = False,
         extract_sam2_embeddings: bool = True,
         resnet_batch_size: int = 32
     ):
@@ -92,7 +93,7 @@ class NMJStrategy(DetectionStrategy):
         self.min_area_um = min_area_um
         self.classifier_threshold = classifier_threshold
         self.use_classifier = use_classifier
-        self.extract_resnet_features = extract_resnet_features
+        self.extract_deep_features = extract_deep_features
         self.extract_sam2_embeddings = extract_sam2_embeddings
         self.resnet_batch_size = resnet_batch_size
 
@@ -515,8 +516,8 @@ class NMJStrategy(DetectionStrategy):
         sam2_predictor = models.get('sam2_predictor')
         device = models.get('device', torch.device('cuda' if torch.cuda.is_available() else 'cpu'))
 
-        # Only access ResNet/DINOv2 if extract_resnet_features is enabled (avoids triggering lazy load)
-        if self.extract_resnet_features:
+        # Only access ResNet/DINOv2 if extract_deep_features is enabled (avoids triggering lazy load)
+        if self.extract_deep_features:
             resnet = models.get('resnet')
             resnet_transform = models.get('resnet_transform')
         else:
@@ -547,7 +548,10 @@ class NMJStrategy(DetectionStrategy):
 
             # Extract per-channel features if extra_channels provided
             if extra_channels is not None and extract_full_features:
-                multichannel_feats = self._compute_multichannel_features(mask, extra_channels)
+                channels_dict = {f'ch{k}': v for k, v in sorted(extra_channels.items()) if v is not None}
+                multichannel_feats = self.extract_multichannel_features(
+                    mask, channels_dict, primary_channel='ch1'
+                )
                 morph_features.update(multichannel_feats)
 
             # Get centroid
@@ -567,7 +571,7 @@ class NMJStrategy(DetectionStrategy):
                     morph_features[f'sam2_{i}'] = 0.0
 
             # Prepare crops for batch ResNet/DINOv2 processing (masked + context)
-            if self.extract_resnet_features and extract_full_features:
+            if self.extract_deep_features and extract_full_features:
                 y1, y2 = ys.min(), ys.max()
                 x1, x2 = xs.min(), xs.max()
                 # Context crop (unmasked - full tissue)
@@ -616,8 +620,8 @@ class NMJStrategy(DetectionStrategy):
                     valid_detections[crop_idx]['features'][f'resnet_ctx_{i}'] = float(v)
 
         # Batch DINOv2 feature extraction (masked + context)
-        # Only access DINOv2 if extract_resnet_features is enabled (avoids triggering lazy load)
-        if self.extract_resnet_features:
+        # Only access DINOv2 if extract_deep_features is enabled (avoids triggering lazy load)
+        if self.extract_deep_features:
             dinov2 = models.get('dinov2')
             dinov2_transform = models.get('dinov2_transform')
         else:
@@ -641,17 +645,19 @@ class NMJStrategy(DetectionStrategy):
                 for i, v in enumerate(dino_feats):
                     valid_detections[crop_idx]['features'][f'dinov2_ctx_{i}'] = float(v)
 
-        # Fill zeros for detections without ResNet/DINOv2 features (only if extraction is enabled)
-        if extract_full_features and self.extract_resnet_features:
+        # Fill zeros for detections that failed crop extraction (warn so it's not silent)
+        if extract_full_features and self.extract_deep_features:
             for det in valid_detections:
                 if 'resnet_0' not in det['features']:
+                    logger.warning("Detection missing ResNet features - zero-filling")
                     for i in range(2048):
                         det['features'][f'resnet_{i}'] = 0.0
                 if 'resnet_ctx_0' not in det['features']:
                     for i in range(2048):
                         det['features'][f'resnet_ctx_{i}'] = 0.0
                 if dinov2 is not None and 'dinov2_0' not in det['features']:
-                    for i in range(1024):  # DINOv2-L dimension
+                    logger.warning("Detection missing DINOv2 features - zero-filling")
+                    for i in range(1024):
                         det['features'][f'dinov2_{i}'] = 0.0
                 if dinov2 is not None and 'dinov2_ctx_0' not in det['features']:
                     for i in range(1024):
@@ -756,157 +762,7 @@ class NMJStrategy(DetectionStrategy):
     # _extract_sam2_embedding inherited from DetectionStrategy base class
     # _extract_resnet_features_batch inherited from DetectionStrategy base class
     # _percentile_normalize inherited from DetectionStrategy base class
-
-    def _compute_multichannel_features(
-        self,
-        mask: np.ndarray,
-        extra_channels: Dict[int, np.ndarray]
-    ) -> Dict[str, Any]:
-        """
-        Compute features from all available channels for better NMJ classification.
-
-        Extracts intensity statistics, texture features, and inter-channel ratios
-        from each channel. This provides the classifier with much richer information
-        than single-channel features alone.
-
-        Channel mapping for NMJ:
-        - ch0: Nuclear (488nm) - should be LOW in real NMJs
-        - ch1: BTX (647nm) - should be HIGH in real NMJs (target signal)
-        - ch2: NFL (750nm) - neurofilament marker
-
-        Args:
-            mask: Binary mask of the NMJ candidate
-            extra_channels: Dict mapping channel index to 2D grayscale tile
-
-        Returns:
-            Dict with per-channel features and inter-channel ratios
-        """
-        if mask.sum() == 0:
-            return {}
-
-        features = {}
-
-        # Compute per-channel features
-        channel_means = {}
-        channel_stds = {}
-        channel_maxes = {}
-        channel_medians = {}
-
-        for ch_idx, ch_data in sorted(extra_channels.items()):
-            if ch_data is None:
-                continue
-
-            # Ensure shapes match
-            if ch_data.shape != mask.shape:
-                continue
-
-            # Get masked pixels
-            masked_pixels = ch_data[mask].astype(float)
-            if len(masked_pixels) == 0:
-                continue
-
-            # Basic intensity statistics
-            ch_mean = float(np.mean(masked_pixels))
-            ch_std = float(np.std(masked_pixels))
-            ch_max = float(np.max(masked_pixels))
-            ch_min = float(np.min(masked_pixels))
-            ch_median = float(np.median(masked_pixels))
-
-            # Percentiles for robust statistics
-            ch_p5 = float(np.percentile(masked_pixels, 5))
-            ch_p25 = float(np.percentile(masked_pixels, 25))
-            ch_p75 = float(np.percentile(masked_pixels, 75))
-            ch_p95 = float(np.percentile(masked_pixels, 95))
-
-            # Texture/distribution features
-            ch_variance = float(np.var(masked_pixels))
-            ch_skewness = float(self._safe_skewness(masked_pixels))
-            ch_kurtosis = float(self._safe_kurtosis(masked_pixels))
-            ch_iqr = ch_p75 - ch_p25  # Interquartile range
-            ch_dynamic_range = ch_max - ch_min
-
-            # Store for ratio calculations
-            channel_means[ch_idx] = ch_mean
-            channel_stds[ch_idx] = ch_std
-            channel_maxes[ch_idx] = ch_max
-            channel_medians[ch_idx] = ch_median
-
-            # Add to features with channel prefix
-            prefix = f'ch{ch_idx}'
-            features[f'{prefix}_mean'] = ch_mean
-            features[f'{prefix}_std'] = ch_std
-            features[f'{prefix}_max'] = ch_max
-            features[f'{prefix}_min'] = ch_min
-            features[f'{prefix}_median'] = ch_median
-            features[f'{prefix}_p5'] = ch_p5
-            features[f'{prefix}_p25'] = ch_p25
-            features[f'{prefix}_p75'] = ch_p75
-            features[f'{prefix}_p95'] = ch_p95
-            features[f'{prefix}_variance'] = ch_variance
-            features[f'{prefix}_skewness'] = ch_skewness
-            features[f'{prefix}_kurtosis'] = ch_kurtosis
-            features[f'{prefix}_iqr'] = ch_iqr
-            features[f'{prefix}_dynamic_range'] = ch_dynamic_range
-
-        # Compute inter-channel ratios (critical for distinguishing NMJs from autofluorescence)
-        # Real NMJs: high BTX (ch1), low nuclear (ch0)
-        # Autofluorescence: high signal in all channels including nuclear
-
-        if 0 in channel_means and 1 in channel_means:
-            # BTX / nuclear ratio - should be HIGH for real NMJs
-            btx = channel_means[1]
-            nuclear = max(channel_means[0], 1)  # Avoid div by zero
-            features['btx_nuclear_ratio'] = btx / nuclear
-            features['btx_nuclear_diff'] = btx - channel_means[0]
-
-        if 1 in channel_means and 2 in channel_means:
-            # BTX / NFL ratio
-            btx = channel_means[1]
-            nfl = max(channel_means[2], 1)
-            features['btx_nfl_ratio'] = btx / nfl
-            features['btx_nfl_diff'] = btx - channel_means[2]
-
-        if 0 in channel_means and 2 in channel_means:
-            # Nuclear / NFL ratio
-            nuclear = channel_means[0]
-            nfl = max(channel_means[2], 1)
-            features['nuclear_nfl_ratio'] = nuclear / nfl
-
-        # Channel specificity: primary (BTX) vs max of other channels
-        if 1 in channel_means:
-            btx = channel_means[1]
-            other_means = [v for k, v in channel_means.items() if k != 1]
-            if other_means:
-                max_other = max(other_means)
-                features['channel_specificity'] = btx / max(max_other, 1)
-                features['channel_specificity_diff'] = btx - max_other
-
-        # Coefficient of variation per channel (useful for texture)
-        for ch_idx in channel_means:
-            if channel_stds.get(ch_idx, 0) > 0 and channel_means.get(ch_idx, 0) > 0:
-                features[f'ch{ch_idx}_cv'] = channel_stds[ch_idx] / channel_means[ch_idx]
-
-        return features
-
-    def _safe_skewness(self, data: np.ndarray) -> float:
-        """Compute skewness safely, returning 0 if not enough data."""
-        if len(data) < 3:
-            return 0.0
-        try:
-            from scipy.stats import skew
-            return float(skew(data))
-        except:
-            return 0.0
-
-    def _safe_kurtosis(self, data: np.ndarray) -> float:
-        """Compute kurtosis safely, returning 0 if not enough data."""
-        if len(data) < 4:
-            return 0.0
-        try:
-            from scipy.stats import kurtosis
-            return float(kurtosis(data))
-        except:
-            return 0.0
+    # _safe_skewness, _safe_kurtosis, extract_multichannel_features inherited from MultiChannelFeatureMixin
 
     def _expand_to_signal_edge(
         self,

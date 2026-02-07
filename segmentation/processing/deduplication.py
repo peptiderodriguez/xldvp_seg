@@ -1,9 +1,11 @@
 """
-Mask-overlap deduplication for NMJ detections.
+Mask-overlap deduplication for detections.
 
 Removes duplicate detections caused by tile overlap by comparing actual mask
 pixels in global coordinates. When two masks overlap significantly, the larger
 detection is kept.
+
+Works with any cell type (NMJ, MK, vessel, mesothelium, etc.).
 """
 
 import numpy as np
@@ -19,7 +21,8 @@ from segmentation.utils.logging import get_logger
 logger = get_logger(__name__)
 
 
-def deduplicate_by_mask_overlap(detections, tiles_dir, min_overlap_fraction=0.1):
+def deduplicate_by_mask_overlap(detections, tiles_dir, min_overlap_fraction=0.1,
+                                mask_filename='nmj_masks.h5'):
     """Remove duplicate detections by checking actual mask pixel overlap.
 
     For each pair of detections, checks if their masks overlap in global
@@ -30,6 +33,7 @@ def deduplicate_by_mask_overlap(detections, tiles_dir, min_overlap_fraction=0.1)
         detections: List of detection dicts with 'tile_origin', 'mask_label', 'features'
         tiles_dir: Path to tiles directory containing mask h5 files
         min_overlap_fraction: Minimum overlap (fraction of smaller mask) to consider duplicates
+        mask_filename: Name of the mask HDF5 file in each tile dir (default: 'nmj_masks.h5')
 
     Returns:
         List of deduplicated detections
@@ -64,7 +68,7 @@ def deduplicate_by_mask_overlap(detections, tiles_dir, min_overlap_fraction=0.1)
 
         # Load masks if not cached
         if tile_id not in mask_cache:
-            masks_file = tiles_dir / tile_id / "nmj_masks.h5"
+            masks_file = tiles_dir / tile_id / mask_filename
             if masks_file.exists():
                 try:
                     with h5py.File(masks_file, 'r') as f:

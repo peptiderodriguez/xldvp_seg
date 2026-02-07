@@ -10,7 +10,6 @@ import logging
 import numpy as np
 from typing import Tuple, Optional, Dict
 from skimage import color
-from scipy.ndimage import uniform_filter
 
 logger = logging.getLogger(__name__)
 
@@ -290,31 +289,6 @@ def compute_reinhard_params_from_samples(
     }
 
 
-def _compute_local_variance_map(gray_image: np.ndarray, block_size: int = 7) -> np.ndarray:
-    """
-    Compute local variance map for pixel-level tissue detection.
-
-    Args:
-        gray_image: Grayscale image (H, W)
-        block_size: Local neighborhood size (default: 7×7)
-
-    Returns:
-        Variance map (H, W) with same shape as input
-    """
-    # Convert to float for computation
-    gray_float = gray_image.astype(np.float32)
-
-    # Local mean
-    local_mean = uniform_filter(gray_float, size=block_size)
-
-    # Local mean of squared values
-    local_mean_sq = uniform_filter(gray_float ** 2, size=block_size)
-
-    # Local variance: E[X²] - E[X]²
-    local_variance = local_mean_sq - local_mean ** 2
-
-    return local_variance
-
 
 def compute_reinhard_params_from_samples_MEDIAN(
     slide_samples: list,
@@ -562,19 +536,16 @@ def apply_reinhard_normalization(
         Normalized RGB image (H, W, 3), dtype uint8 with only tissue pixels normalized
     """
     import cv2
+    from segmentation.detection.tissue import compute_pixel_level_tissue_mask
 
     h, w, c = image.shape
-
-    # Convert to grayscale for variance computation
-    gray = cv2.cvtColor(image, cv2.COLOR_RGB2GRAY)
 
     # Step 1: Compute tissue statistics from TISSUE PIXELS ONLY
     # Sample 1M tissue pixels for statistics
     max_pixels_for_stats = 1000000
 
-    # Compute variance map for pixel-level tissue detection
-    variance_map = _compute_local_variance_map(gray, block_size=block_size)
-    tissue_mask_global = variance_map >= variance_threshold
+    # Compute pixel-level tissue mask using local variance
+    tissue_mask_global = compute_pixel_level_tissue_mask(image, variance_threshold, block_size=block_size)
 
     # Get tissue pixel coordinates
     tissue_coords = np.argwhere(tissue_mask_global)
@@ -663,6 +634,6 @@ def apply_reinhard_normalization(
             del tile, tile_mask, tile_float, tile_lab, tile_lab_normalized, tile_rgb, tile_result
 
     # Free global mask
-    del variance_map, tissue_mask_global, gray
+    del tissue_mask_global
 
     return result

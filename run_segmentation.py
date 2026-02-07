@@ -69,6 +69,7 @@ from PIL import Image
 from segmentation.detection.tissue import (
     calibrate_tissue_threshold,
     filter_tissue_tiles,
+    has_tissue,
 )
 from segmentation.io.html_export import (
     export_samples_to_html,
@@ -611,11 +612,11 @@ def create_strategy_for_cell_type(cell_type, params, pixel_size_um):
     """
     if cell_type == 'nmj':
         return NMJStrategy(
-            intensity_percentile=params.get('intensity_percentile', 99.0),
+            intensity_percentile=params.get('intensity_percentile', 98.0),
             min_area_px=params.get('min_area', 150),
             min_skeleton_length=params.get('min_skeleton_length', 30),
             max_solidity=params.get('max_solidity', 0.85),
-            extract_resnet_features=params.get('extract_resnet_features', True),
+            extract_deep_features=params.get('extract_deep_features', False),
         )
     elif cell_type == 'mk':
         # Convert area from pixels to um^2 for the strategy
@@ -660,60 +661,82 @@ def create_strategy_for_cell_type(cell_type, params, pixel_size_um):
                          f"Supported types: nmj, mk, cell, vessel, mesothelium")
 
 
-def detections_to_features_list(detections, cell_type):
+# Import from canonical location (segmentation.processing.tile_processing)
+from segmentation.processing.tile_processing import detections_to_features_list, process_single_tile
+
+
+def apply_vessel_classifiers(features_list, vessel_classifier, vessel_type_classifier):
+    """Apply vessel binary + 6-class classifiers to detection features in-place."""
+    if vessel_classifier is not None:
+        for feat in features_list:
+            try:
+                vessel_type, confidence = vessel_classifier.predict(feat['features'])
+                feat['features']['vessel_type'] = vessel_type
+                feat['features']['vessel_type_confidence'] = float(confidence)
+                feat['features']['classification_method'] = 'ml'
+            except Exception as e:
+                vessel_type, confidence = VesselClassifier.rule_based_classify(feat['features'])
+                feat['features']['vessel_type'] = vessel_type
+                feat['features']['vessel_type_confidence'] = float(confidence)
+                feat['features']['classification_method'] = 'rule_based_fallback'
+                logger.debug(f"ML classification failed, using rule-based: {e}")
+
+    if vessel_type_classifier is not None:
+        for feat in features_list:
+            try:
+                vessel_type, confidence = vessel_type_classifier.predict(feat['features'])
+                probs = vessel_type_classifier.predict_proba(feat['features'])
+                feat['features']['vessel_type_6class'] = vessel_type
+                feat['features']['vessel_type_6class_confidence'] = float(confidence)
+                feat['features']['vessel_type_6class_probabilities'] = {
+                    k: float(v) for k, v in probs.items()
+                } if probs else {}
+                feat['features']['classification_method_6class'] = 'ml_vessel_type_classifier'
+            except Exception as e:
+                try:
+                    vessel_type, confidence = vessel_type_classifier.rule_based_classify(feat['features'])
+                    feat['features']['vessel_type_6class'] = vessel_type
+                    feat['features']['vessel_type_6class_confidence'] = float(confidence)
+                    feat['features']['classification_method_6class'] = 'rule_based_fallback'
+                except Exception as e2:
+                    logger.debug(f"VesselTypeClassifier failed: {e}, {e2}")
+
+
+def filter_and_create_html_samples(
+    features_list, tile_x, tile_y, tile_rgb, masks, pixel_size_um,
+    slide_name, cell_type, html_score_threshold, min_area_um2=25.0,
+):
+    """Filter detections by quality and create HTML samples.
+
+    Returns list of (sample, count) tuples for accepted detections.
     """
-    Convert a list of Detection objects to the expected features_list format.
+    samples = []
+    for feat in features_list:
+        features_dict = feat.get('features', {})
 
-    The old format is:
-        features_list = [
-            {
-                'id': 'nmj_1',
-                'center': [cx, cy],  # local coordinates
-                'features': {...}    # morphological + deep features
-            },
-            ...
-        ]
+        rf_score = feat.get('rf_prediction', feat.get('score', 1.0))
+        if rf_score < html_score_threshold:
+            continue
 
-    For vessels, contours are at the top level (not in features):
-        {
-            'id': 'vessel_1',
-            'center': [cx, cy],
-            'outer_contour': [...],  # At top level
-            'inner_contour': [...],  # At top level
-            'features': {...}
-        }
+        area_um2 = features_dict.get('area', 0) * (pixel_size_um ** 2)
+        if area_um2 < min_area_um2:
+            continue
 
-    Args:
-        detections: List of Detection objects from strategy.detect()
-        cell_type: Cell type string for ID prefix
-
-    Returns:
-        List of feature dicts in the old format
-    """
-    # Defensive check: handle None detections gracefully
-    if detections is None:
-        return []
-
-    features_list = []
-    for i, det in enumerate(detections, start=1):
-        feat_dict = {
-            'id': det.id if det.id else f'{cell_type}_{i}',
-            'center': det.centroid,  # [x, y] format
-            'features': det.features.copy(),
-        }
-        # Include RF prediction score at top level if available
-        if det.score is not None:
-            feat_dict['rf_prediction'] = det.score
-
-        # For vessels, lift contours from features to top level (old format compatibility)
         if cell_type == 'vessel':
-            if 'outer_contour' in feat_dict['features']:
-                feat_dict['outer_contour'] = feat_dict['features'].pop('outer_contour')
-            if 'inner_contour' in feat_dict['features']:
-                feat_dict['inner_contour'] = feat_dict['features'].pop('inner_contour')
+            if features_dict.get('ring_completeness', 1.0) < 0.30:
+                continue
+            if features_dict.get('circularity', 1.0) < 0.15:
+                continue
+            if features_dict.get('wall_thickness_mean_um', 10.0) < 1.5:
+                continue
 
-        features_list.append(feat_dict)
-    return features_list
+        sample = create_sample_from_detection(
+            tile_x, tile_y, tile_rgb, masks, feat, pixel_size_um, slide_name,
+            cell_type=cell_type
+        )
+        if sample:
+            samples.append(sample)
+    return samples
 
 
 def detections_to_label_array(detections, shape):
@@ -955,7 +978,7 @@ class UnifiedSegmenter:
         # 256 SAM2 embedding features
         sam2_emb = self.extract_sam2_embedding(cy, cx)
         for i, v in enumerate(sam2_emb):
-            features[f'sam2_emb_{i}'] = float(v)
+            features[f'sam2_{i}'] = float(v)
 
         # 2048 ResNet features from masked crop
         ys, xs = np.where(mask)
@@ -1006,7 +1029,7 @@ class UnifiedSegmenter:
             # 256 SAM2 embedding features
             sam2_emb = self.extract_sam2_embedding(cy, cx)
             for i, v in enumerate(sam2_emb):
-                features[f'sam2_emb_{i}'] = float(v)
+                features[f'sam2_{i}'] = float(v)
 
             # Prepare crop for batch ResNet processing
             ys, xs = np.where(mask)
@@ -2787,6 +2810,83 @@ def run_pipeline(args):
 
         logger.info("Photobleaching correction complete.")
 
+    # Apply Reinhard normalization if params file provided (whole-slide, before tiling)
+    if getattr(args, 'norm_params_file', None) and use_ram:
+        import json as _json
+        from segmentation.preprocessing.stain_normalization import apply_reinhard_normalization_MEDIAN
+
+        logger.info(f"\n{'='*70}")
+        logger.info("CROSS-SLIDE REINHARD NORMALIZATION (median/MAD)")
+        logger.info(f"{'='*70}")
+        logger.info(f"Loading params from: {args.norm_params_file}")
+
+        with open(args.norm_params_file, 'r') as f:
+            norm_params = _json.load(f)
+
+        # Validate required keys
+        required_keys = {'L_median', 'L_mad', 'a_median', 'a_mad', 'b_median', 'b_mad'}
+        missing_keys = required_keys - set(norm_params.keys())
+        if missing_keys:
+            raise ValueError(
+                f"Normalization params file missing required keys: {missing_keys}. "
+                f"Required: {required_keys}"
+            )
+
+        logger.info(f"  Target: L_median={norm_params['L_median']:.2f}, L_mad={norm_params['L_mad']:.2f}")
+        logger.info(f"  Target: a_median={norm_params['a_median']:.2f}, a_mad={norm_params['a_mad']:.2f}")
+        logger.info(f"  Target: b_median={norm_params['b_median']:.2f}, b_mad={norm_params['b_mad']:.2f}")
+        if 'n_slides' in norm_params:
+            logger.info(f"  Computed from {norm_params['n_slides']} slides, {norm_params.get('n_total_pixels', '?')} pixels")
+
+        # Build RGB image for normalization
+        primary_data = loader.channel_data
+        if primary_data.ndim == 3 and primary_data.shape[2] >= 3:
+            # Already RGB (or more channels) — use first 3
+            rgb_for_norm = primary_data[:, :, :3].copy()
+        elif primary_data.ndim == 2:
+            # Single channel — stack 3x (same as compute_normalization_params.py)
+            rgb_for_norm = np.stack([primary_data] * 3, axis=-1)
+        else:
+            raise ValueError(f"Unexpected channel data shape for normalization: {primary_data.shape}")
+
+        # Convert to uint8 if needed (Reinhard expects uint8)
+        if rgb_for_norm.dtype == np.uint16:
+            logger.info(f"  Converting uint16 → uint8 for normalization ({rgb_for_norm.nbytes / 1e9:.1f} GB)")
+            rgb_for_norm = (rgb_for_norm / 256).astype(np.uint8)
+        elif rgb_for_norm.dtype != np.uint8:
+            rgb_for_norm = rgb_for_norm.astype(np.uint8)
+
+        logger.info(f"  RGB shape: {rgb_for_norm.shape}, dtype: {rgb_for_norm.dtype} ({rgb_for_norm.nbytes / 1e9:.1f} GB)")
+        logger.info(f"  Applying Reinhard normalization (this normalizes tissue blocks, preserves background)...")
+
+        normalized_rgb = apply_reinhard_normalization_MEDIAN(rgb_for_norm, norm_params)
+        del rgb_for_norm
+        gc.collect()
+
+        # Update channel data with normalized values
+        if primary_data.ndim == 3 and primary_data.shape[2] >= 3:
+            # Replace the 3 RGB channels
+            loader.channel_data = normalized_rgb
+            all_channel_data[args.channel] = normalized_rgb
+            # Also update individual extra channels if loaded
+            ch_keys = sorted(all_channel_data.keys())
+            for i, ch_key in enumerate(ch_keys[:3]):
+                all_channel_data[ch_key] = normalized_rgb[:, :, i]
+        else:
+            # Single channel — take first channel from normalized RGB
+            normalized_single = normalized_rgb[:, :, 0]
+            loader.channel_data = normalized_single
+            all_channel_data[args.channel] = normalized_single
+            del normalized_single
+
+        del normalized_rgb
+        gc.collect()
+
+        logger.info("  Reinhard normalization complete.")
+
+    elif getattr(args, 'norm_params_file', None) and not use_ram:
+        logger.warning("--norm-params-file requires --load-to-ram (whole-slide normalization). Skipping normalization.")
+
     # Generate tile grid (using global coordinates)
     overlap = getattr(args, 'tile_overlap', 0.0)
     logger.info(f"Generating tile grid (size={args.tile_size}, overlap={overlap*100:.0f}%)...")
@@ -2892,7 +2992,7 @@ def run_pipeline(args):
             'min_area': args.min_area,
             'min_skeleton_length': args.min_skeleton_length,
             'max_solidity': args.max_solidity,
-            'extract_resnet_features': not getattr(args, 'skip_deep_features', False),
+            'extract_deep_features': getattr(args, 'extract_deep_features', False),
         }
     elif args.cell_type == 'mk':
         params = {
@@ -3054,83 +3154,113 @@ def run_pipeline(args):
             }
             all_detections.append(detection_dict)
 
-        # Skip the regular tile loop - go directly to HTML export
-        logger.info("Skipping standard tile loop (multi-scale mode)")
+            # Create HTML sample with a crop around the detection center
+            half = crop_size // 2
+            y1 = max(0, cy - half)
+            x1 = max(0, cx - half)
+            y2 = min(mosaic_info['height'], cy + half)
+            x2 = min(mosaic_info['width'], cx + half)
 
-    elif args.cell_type == 'nmj' and getattr(args, 'multi_gpu', False):
-        # Multi-GPU NMJ processing
+            if len(all_channel_data) >= 3:
+                ch_keys = sorted(all_channel_data.keys())[:3]
+                crop_rgb = np.stack([
+                    all_channel_data[ch_keys[i]][y1:y2, x1:x2]
+                    for i in range(3)
+                ], axis=-1)
+            else:
+                crop_data = loader.channel_data[y1:y2, x1:x2]
+                crop_rgb = np.stack([crop_data] * 3, axis=-1)
+            if crop_rgb.dtype == np.uint16:
+                crop_rgb = (crop_rgb / 256).astype(np.uint8)
+
+            if crop_rgb.size > 0:
+                from segmentation.io.html_export import encode_image_to_base64
+                sample = {
+                    'uid': uid,
+                    'crop_b64': encode_image_to_base64(crop_rgb),
+                    'stats': features_dict,
+                }
+                all_samples.append(sample)
+
+        # Skip the regular tile loop - go directly to HTML export
+        logger.info(f"Multi-scale mode: {len(all_detections)} detections, {len(all_samples)} HTML samples")
+
+    elif getattr(args, 'multi_gpu', False):
+        # Multi-GPU processing (all cell types)
         logger.info("=" * 60)
-        logger.info("MULTI-GPU NMJ DETECTION ENABLED")
+        logger.info(f"MULTI-GPU {args.cell_type.upper()} DETECTION ENABLED")
         logger.info("=" * 60)
 
         num_gpus = getattr(args, 'num_gpus', 4)
-        logger.info(f"Using {num_gpus} GPUs for parallel NMJ detection")
+        logger.info(f"Using {num_gpus} GPUs for parallel {args.cell_type} detection")
 
-        # Require --all-channels for multi-GPU NMJ (needed for proper multi-channel features)
-        if not getattr(args, 'all_channels', False) or len(all_channel_data) < 3:
-            logger.error("Multi-GPU NMJ mode requires --all-channels flag with 3+ channels loaded")
-            logger.error("  Channel mapping: ch0=nuclear(488), ch1=BTX(647), ch2=NFL(750)")
-            logger.error("  Segmentation uses BTX only, but feature extraction needs all channels")
-            raise ValueError("--multi-gpu requires --all-channels for NMJ detection")
+        # Multi-channel data is recommended but not required
+        if len(all_channel_data) < 2:
+            logger.warning("Multi-GPU mode works best with --all-channels for multi-channel features")
 
         from segmentation.processing.multigpu_shm import SharedSlideManager
-        from segmentation.processing.multigpu_nmj import MultiGPUNMJProcessor
+        from segmentation.processing.multigpu_worker import MultiGPUTileProcessor
 
         # Create shared memory manager
         shm_manager = SharedSlideManager()
 
         try:
-            # Load all 3 channels to shared memory: ch0=nuclear, ch1=BTX, ch2=NFL
-            # Channel order must match: R=ch0, G=ch1(BTX), B=ch2
-            # NMJStrategy.segment() uses tile[:,:,1] for BTX thresholding
+            # Load channels to shared memory (up to 3 for RGB, or fewer if available)
             ch_keys = sorted(all_channel_data.keys())[:3]
+            n_channels = len(ch_keys)
             h, w = all_channel_data[ch_keys[0]].shape
-            logger.info(f"Creating shared memory for 3 channels ({h}x{w})...")
-            logger.info(f"  Channel mapping: {ch_keys} -> [R, G(BTX), B]")
+            logger.info(f"Creating shared memory for {n_channels} channels ({h}x{w})...")
+            logger.info(f"  Channel mapping: {ch_keys}")
 
             # Create shared memory buffer and load directly
             slide_shm_arr = shm_manager.create_slide_buffer(
-                slide_name, (h, w, 3), all_channel_data[ch_keys[0]].dtype
+                slide_name, (h, w, n_channels), all_channel_data[ch_keys[0]].dtype
             )
             for i, ch_key in enumerate(ch_keys):
                 slide_shm_arr[:, :, i] = all_channel_data[ch_key]
                 logger.info(f"  Loaded channel {ch_key} to shared memory slot {i}")
 
-            # Build strategy parameters
-            strategy_params = {
-                'intensity_percentile': args.intensity_percentile,
-                'min_area': args.min_area,
-                'min_skeleton_length': args.min_skeleton_length,
-                'max_solidity': args.max_solidity,
-                'classifier_threshold': 0.5,  # Keep more candidates, filter by score later
-            }
+            # Build strategy parameters from the already-constructed params dict
+            strategy_params = dict(params)  # params built by build_detection_params()
 
-            # Get classifier path - use morph+SAM2 classifier by default for multi-GPU
-            # Multi-GPU mode extracts morph+SAM2 features (334 total), not deep features
+            # Get classifier path (NMJ-specific)
             classifier_path = getattr(args, 'nmj_classifier', None)
-            if classifier_path is None:
-                # Check for default morph+SAM2 classifier
-                default_classifier = Path(__file__).parent / "checkpoints" / "nmj_classifier_morph_sam2.joblib"
-                if default_classifier.exists():
-                    classifier_path = str(default_classifier)
-                    logger.info(f"Using default morph+SAM2 classifier: {classifier_path}")
+            if args.cell_type == 'nmj':
+                if classifier_path is None:
+                    default_classifier = Path(__file__).parent / "checkpoints" / "nmj_classifier_morph_sam2.joblib"
+                    if default_classifier.exists():
+                        classifier_path = str(default_classifier)
+                        logger.info(f"Using default classifier: {classifier_path}")
+                    else:
+                        logger.warning("No classifier found — will return all candidates")
                 else:
-                    logger.warning("No classifier specified and default not found")
-                    logger.warning("  Expected: checkpoints/nmj_classifier_morph_sam2.joblib")
-                    logger.warning("  Will return all candidates without filtering")
-            else:
-                logger.info(f"Using specified classifier: {classifier_path}")
-                logger.info("  NOTE: Multi-GPU mode extracts morph+SAM2 features (334 total)")
-                logger.info("  Classifier must be trained on these features, not deep features")
+                    logger.info(f"Using specified classifier: {classifier_path}")
 
-            # Create multi-GPU processor
-            with MultiGPUNMJProcessor(
+            # Create multi-GPU processor (supports all cell types)
+            extract_deep = getattr(args, 'extract_deep_features', False)
+
+            # Vessel-specific params for multi-GPU
+            mgpu_cd31_channel = getattr(args, 'cd31_channel', None) if args.cell_type == 'vessel' else None
+            mgpu_channel_names = None
+            if args.cell_type == 'vessel' and getattr(args, 'channel_names', None):
+                names = args.channel_names.split(',')
+                ch_keys = sorted(all_channel_data.keys())
+                mgpu_channel_names = {ch_keys[i]: name.strip()
+                                      for i, name in enumerate(names)
+                                      if i < len(ch_keys)}
+
+            with MultiGPUTileProcessor(
                 num_gpus=num_gpus,
                 slide_info=shm_manager.get_slide_info(),
+                cell_type=args.cell_type,
                 strategy_params=strategy_params,
                 pixel_size_um=pixel_size_um,
                 classifier_path=classifier_path,
-                extract_sam2_embeddings=True,  # Required for morph+SAM2 classifier
+                extract_deep_features=extract_deep,
+                extract_sam2_embeddings=True,
+                detection_channel=args.channel,
+                cd31_channel=mgpu_cd31_channel,
+                channel_names=mgpu_channel_names,
             ) as processor:
 
                 # Submit all tiles (add tile dimensions for worker)
@@ -3161,53 +3291,60 @@ def run_pipeline(args):
                     pbar.update(1)
 
                     if result['status'] == 'success':
-                        tile = result['tile']
-                        tile_x, tile_y = tile['x'], tile['y']
-                        masks = result['masks']
-                        features_list = result['features_list']
+                        try:
+                            tile = result['tile']
+                            tile_x, tile_y = tile['x'], tile['y']
+                            masks = result['masks']
+                            features_list = result['features_list']
 
-                        # Save tile outputs
-                        tile_id = f"tile_{tile_x}_{tile_y}"
-                        tile_out = tiles_dir / tile_id
-                        tile_out.mkdir(exist_ok=True)
+                            # Apply vessel classifier post-processing BEFORE saving
+                            if args.cell_type == 'vessel':
+                                apply_vessel_classifiers(features_list, vessel_classifier, vessel_type_classifier)
 
-                        # Save masks
-                        with h5py.File(tile_out / f"{args.cell_type}_masks.h5", 'w') as f:
-                            create_hdf5_dataset(f, 'masks', masks.astype(np.uint16))
+                            # Save tile outputs
+                            tile_id = f"tile_{tile_x}_{tile_y}"
+                            tile_out = tiles_dir / tile_id
+                            tile_out.mkdir(exist_ok=True)
 
-                        # Save features
-                        with open(tile_out / f"{args.cell_type}_features.json", 'w') as f:
-                            json.dump(features_list, f, cls=NumpyEncoder)
+                            # Save masks
+                            with h5py.File(tile_out / f"{args.cell_type}_masks.h5", 'w') as f:
+                                create_hdf5_dataset(f, 'masks', masks.astype(np.uint16))
 
-                        # Add detections to global list
-                        for feat in features_list:
-                            all_detections.append(feat)
+                            # Save features (includes vessel classification if applicable)
+                            with open(tile_out / f"{args.cell_type}_features.json", 'w') as f:
+                                json.dump(features_list, f, cls=NumpyEncoder)
 
-                        # Create samples for HTML
-                        # We need to load the tile for crop generation
-                        if len(all_channel_data) >= 3:
-                            ch_keys = sorted(all_channel_data.keys())[:3]
-                            tile_rgb = np.stack([
-                                all_channel_data[ch_keys[i]][tile_y:tile_y+args.tile_size, tile_x:tile_x+args.tile_size]
-                                for i in range(3)
-                            ], axis=-1)
-                        else:
-                            tile_data = loader.channel_data[tile_y:tile_y+args.tile_size, tile_x:tile_x+args.tile_size]
-                            tile_rgb = np.stack([tile_data] * 3, axis=-1)
+                            # Add detections to global list
+                            for feat in features_list:
+                                all_detections.append(feat)
 
-                        for feat in features_list:
-                            # Only show detections above score threshold in HTML
-                            rf_score = feat.get('rf_prediction', feat.get('score', 1.0))
-                            if rf_score < args.html_score_threshold:
-                                continue
+                            # Create samples for HTML
+                            # Use masks.shape to handle edge tiles (smaller than tile_size at boundaries)
+                            tile_h, tile_w = masks.shape[:2]
+                            if len(all_channel_data) >= 3:
+                                ch_keys = sorted(all_channel_data.keys())[:3]
+                                tile_rgb_html = np.stack([
+                                    all_channel_data[ch_keys[i]][tile_y:tile_y+tile_h, tile_x:tile_x+tile_w]
+                                    for i in range(3)
+                                ], axis=-1)
+                            else:
+                                tile_data = loader.channel_data[tile_y:tile_y+tile_h, tile_x:tile_x+tile_w]
+                                tile_rgb_html = np.stack([tile_data] * 3, axis=-1)
+                            if tile_rgb_html.dtype == np.uint16:
+                                tile_rgb_html = (tile_rgb_html / 256).astype(np.uint8)
 
-                            sample = create_sample_from_detection(
-                                tile_x, tile_y, tile_rgb, masks, feat, pixel_size_um, slide_name,
-                                cell_type=args.cell_type
+                            html_samples = filter_and_create_html_samples(
+                                features_list, tile_x, tile_y, tile_rgb_html, masks,
+                                pixel_size_um, slide_name, args.cell_type,
+                                args.html_score_threshold,
                             )
-                            if sample:
-                                all_samples.append(sample)
-                                total_detections += 1
+                            all_samples.extend(html_samples)
+                            total_detections += len(html_samples)
+
+                        except Exception as e:
+                            import traceback
+                            logger.error(f"Error post-processing tile ({tile_x}, {tile_y}): {e}")
+                            logger.error(f"Traceback:\n{traceback.format_exc()}")
 
                     elif result['status'] in ('empty', 'no_tissue'):
                         pass  # Normal - no tissue in tile
@@ -3216,7 +3353,7 @@ def run_pipeline(args):
 
                 pbar.close()
 
-            logger.info(f"Multi-GPU processing complete: {total_detections} NMJs from {results_collected} tiles")
+            logger.info(f"Multi-GPU processing complete: {total_detections} {args.cell_type} detections from {results_collected} tiles")
 
         finally:
             # Cleanup shared memory
@@ -3239,192 +3376,87 @@ def run_pipeline(args):
                 if tile_data.max() == 0:
                     continue
 
-                # Convert to RGB - use true multi-channel if available
-                # For NMJ: ch0=nuclear (488), ch1=BTX (647), ch2=NFL (750)
-                # For Vessel: ch0=nuclear, ch1=SMA (detection), ch2=PM, ch3=CD31
-                # Stack as RGB so ResNet sees all channels
+                # Build extra_channel_tiles for ALL cell types when multi-channel available
                 extra_channel_tiles = None
-                if args.cell_type == 'nmj' and len(all_channel_data) >= 3:
-                    # Build true 3-channel tile from all channels
-                    ch0_tile = all_channel_data[0][tile_y:tile_y + args.tile_size,
-                                                   tile_x:tile_x + args.tile_size]
-                    ch1_tile = all_channel_data[1][tile_y:tile_y + args.tile_size,
-                                                   tile_x:tile_x + args.tile_size]
-                    ch2_tile = all_channel_data[2][tile_y:tile_y + args.tile_size,
-                                                   tile_x:tile_x + args.tile_size]
-                    # Stack as RGB: ch0=R (nuclear), ch1=G (BTX), ch2=B (NFL)
-                    tile_rgb = np.stack([ch0_tile, ch1_tile, ch2_tile], axis=-1)
-                    # Also pass individual channels for per-channel feature extraction
-                    extra_channel_tiles = {0: ch0_tile, 1: ch1_tile, 2: ch2_tile}
-                elif args.cell_type == 'vessel' and len(all_channel_data) >= 2:
-                    # Build multi-channel data dict for vessel feature extraction
-                    # Use detection channel (SMA) as primary, but extract features from all
+                if len(all_channel_data) >= 2:
                     extra_channel_tiles = {}
                     for ch_idx, ch_data in all_channel_data.items():
-                        ch_tile = ch_data[tile_y:tile_y + args.tile_size,
-                                          tile_x:tile_x + args.tile_size]
-                        extra_channel_tiles[ch_idx] = ch_tile
-                    # For RGB, use first 3 channels or replicate detection channel
-                    if len(all_channel_data) >= 3:
-                        ch_keys = sorted(all_channel_data.keys())[:3]
-                        tile_rgb = np.stack([extra_channel_tiles[k] for k in ch_keys], axis=-1)
-                    else:
-                        # Fallback: use detection channel for all RGB
-                        tile_rgb = np.stack([tile_data] * 3, axis=-1)
+                        extra_channel_tiles[ch_idx] = ch_data[
+                            tile_y:tile_y + args.tile_size,
+                            tile_x:tile_x + args.tile_size
+                        ]
+
+                # Build RGB tile from channels
+                if len(all_channel_data) >= 3:
+                    ch_keys = sorted(all_channel_data.keys())[:3]
+                    tile_rgb = np.stack([
+                        all_channel_data[k][tile_y:tile_y + args.tile_size, tile_x:tile_x + args.tile_size]
+                        for k in ch_keys
+                    ], axis=-1)
                 elif tile_data.ndim == 2:
                     tile_rgb = np.stack([tile_data] * 3, axis=-1)
                 else:
                     tile_rgb = tile_data
 
+                # has_tissue() check on uint16 BEFORE conversion
+                try:
+                    det_ch = extra_channel_tiles.get(args.channel, tile_rgb[:, :, 0]) if extra_channel_tiles else tile_rgb[:, :, 0]
+                    has_tissue_flag, _ = has_tissue(det_ch, variance_threshold=1000.0, block_size=64)
+                except Exception:
+                    has_tissue_flag = True
+                if not has_tissue_flag:
+                    continue
+
+                # Convert to uint8 for visual models (extra_channel_tiles stay uint16)
+                if tile_rgb.dtype != np.uint8:
+                    if tile_rgb.dtype == np.uint16:
+                        tile_rgb = (tile_rgb / 256).astype(np.uint8)
+                    else:
+                        tile_rgb = tile_rgb.astype(np.uint8)
+
                 # Get CD31 channel if specified (for vessel validation)
-                # Uses the same loader - CD31 channel was already loaded to RAM via get_loader()
                 cd31_channel_data = None
-                if args.cell_type == 'vessel' and args.cd31_channel is not None:
+                if args.cell_type == 'vessel' and getattr(args, 'cd31_channel', None) is not None:
                     cd31_tile = loader.get_tile(tile_x, tile_y, args.tile_size, channel=args.cd31_channel)
                     if cd31_tile is not None and cd31_tile.size > 0:
                         cd31_channel_data = cd31_tile.astype(np.float32)
 
-                # Detect cells
-                if use_new_detector:
-                    # New CellDetector + strategy pattern
-                    # The strategy's detect() method returns (label_array, list[Detection])
-                    if args.cell_type == 'vessel':
-                        # Vessel strategy with cd31_channel and optional multi-channel features
-                        # Parse custom channel names if provided
-                        # Map names to actual channel indices from all_channel_data (not 0-based assumption)
-                        channel_names = None
-                        if getattr(args, 'channel_names', None) and extra_channel_tiles:
-                            names = args.channel_names.split(',')
-                            actual_indices = sorted(extra_channel_tiles.keys())
-                            # Map names to actual channel indices
-                            channel_names = {actual_indices[i]: name.strip()
-                                            for i, name in enumerate(names)
-                                            if i < len(actual_indices)}
-                        masks, detections = strategy.detect(
-                            tile_rgb, detector.models, pixel_size_um,
-                            cd31_channel=cd31_channel_data,
-                            extra_channels=extra_channel_tiles,  # Multi-channel for feature extraction
-                            channel_names=channel_names  # Custom channel names
-                        )
-                    elif args.cell_type == 'nmj' and extra_channel_tiles is not None:
-                        # NMJ strategy with multi-channel feature extraction
-                        masks, detections = strategy.detect(
-                            tile_rgb, detector.models, pixel_size_um,
-                            extra_channels=extra_channel_tiles
-                        )
-                    else:
-                        # Other strategies: mk, cell, mesothelium
-                        masks, detections = strategy.detect(
-                            tile_rgb, detector.models, pixel_size_um
-                        )
-                    # Convert Detection objects to the expected features_list format
-                    features_list = detections_to_features_list(detections, args.cell_type)
-                else:
-                    # This branch is no longer used - all cell types use new detector
-                    masks, features_list = segmenter.process_tile(
-                        tile_rgb, args.cell_type, params, cd31_channel=cd31_channel_data
-                    )
+                # Parse vessel channel names
+                channel_names = None
+                if args.cell_type == 'vessel' and getattr(args, 'channel_names', None) and extra_channel_tiles:
+                    names = args.channel_names.split(',')
+                    actual_indices = sorted(extra_channel_tiles.keys())
+                    channel_names = {actual_indices[i]: name.strip()
+                                     for i, name in enumerate(names)
+                                     if i < len(actual_indices)}
 
-                if len(features_list) == 0:
+                # Detect using common function (CUDA retry, mask_label, UID enrichment)
+                result = process_single_tile(
+                    tile_rgb=tile_rgb,
+                    extra_channel_tiles=extra_channel_tiles,
+                    strategy=strategy,
+                    models=detector.models,
+                    pixel_size_um=pixel_size_um,
+                    cell_type=args.cell_type,
+                    slide_name=slide_name,
+                    tile_x=tile_x,
+                    tile_y=tile_y,
+                    cd31_channel_data=cd31_channel_data,
+                    channel_names=channel_names,
+                    max_retries=3,
+                )
+
+                if result is None:
                     continue
 
-                # Multi-channel intensity measurement for NMJ specificity checking
-                if args.cell_type == 'nmj' and len(all_channel_data) > 1:
-                    for i, feat in enumerate(features_list):
-                        # Get mask for this detection
-                        if i < masks.max():
-                            mask = (masks == (i + 1))
-                            if mask.sum() > 0:
-                                channel_intensities = {}
-                                for ch, ch_data in all_channel_data.items():
-                                    # Extract tile from channel data
-                                    ch_tile = ch_data[tile_y:tile_y + args.tile_size,
-                                                      tile_x:tile_x + args.tile_size]
-                                    if ch_tile.shape == mask.shape:
-                                        mean_int = float(ch_tile[mask].mean())
-                                        channel_intensities[f'ch{ch}_mean'] = mean_int
-                                # Add to features
-                                feat['features'].update(channel_intensities)
-                                # Calculate specificity metrics
-                                # BTX (ch1) / nuclear (ch0) - real NMJs have high BTX, low nuclear
-                                # Autofluorescence appears in all channels including nuclear
-                                btx_int = channel_intensities.get('ch1_mean', 0)
-                                nuclear_int = channel_intensities.get('ch0_mean', 1)  # avoid div by zero
-                                nfl_int = channel_intensities.get('ch2_mean', 0)
+                masks, features_list = result
 
-                                feat['features']['btx_nuclear_ratio'] = btx_int / max(nuclear_int, 1)
-                                feat['features']['btx_nfl_ratio'] = btx_int / max(nfl_int, 1) if nfl_int > 0 else float('inf')
-                                # Legacy: overall specificity (BTX vs max other)
-                                primary_int = channel_intensities.get(f'ch{args.channel}_mean', 0)
-                                other_ints = [v for k, v in channel_intensities.items()
-                                             if k != f'ch{args.channel}_mean']
-                                if other_ints and max(other_ints) > 0:
-                                    feat['features']['channel_specificity'] = primary_int / max(other_ints)
-                                else:
-                                    feat['features']['channel_specificity'] = float('inf')
+                # Apply vessel classifier post-processing
+                if args.cell_type == 'vessel':
+                    apply_vessel_classifiers(features_list, vessel_classifier, vessel_type_classifier)
 
-                # Apply ML-based vessel classification if classifier loaded
-                if args.cell_type == 'vessel' and vessel_classifier is not None:
-                    for feat in features_list:
-                        try:
-                            vessel_type, confidence = vessel_classifier.predict(feat['features'])
-                            feat['features']['vessel_type'] = vessel_type
-                            feat['features']['vessel_type_confidence'] = float(confidence)
-                            feat['features']['classification_method'] = 'ml'
-                        except Exception as e:
-                            # Fall back to rule-based if ML fails
-                            vessel_type, confidence = VesselClassifier.rule_based_classify(feat['features'])
-                            feat['features']['vessel_type'] = vessel_type
-                            feat['features']['vessel_type_confidence'] = float(confidence)
-                            feat['features']['classification_method'] = 'rule_based_fallback'
-                            logger.debug(f"ML classification failed, using rule-based: {e}")
-
-                # Apply VesselTypeClassifier for 6-type classification (multi-marker mode)
-                if args.cell_type == 'vessel' and vessel_type_classifier is not None:
-                    for feat in features_list:
-                        try:
-                            vessel_type, confidence = vessel_type_classifier.predict(feat['features'])
-                            # Get full probability distribution
-                            probs = vessel_type_classifier.predict_proba(feat['features'])
-                            feat['features']['vessel_type_6class'] = vessel_type
-                            feat['features']['vessel_type_6class_confidence'] = float(confidence)
-                            feat['features']['vessel_type_6class_probabilities'] = {
-                                k: float(v) for k, v in probs.items()
-                            } if probs else {}
-                            feat['features']['classification_method_6class'] = 'ml_vessel_type_classifier'
-                        except Exception as e:
-                            # Fall back to rule-based if ML fails
-                            try:
-                                vessel_type, confidence = vessel_type_classifier.rule_based_classify(feat['features'])
-                                feat['features']['vessel_type_6class'] = vessel_type
-                                feat['features']['vessel_type_6class_confidence'] = float(confidence)
-                                feat['features']['classification_method_6class'] = 'rule_based_fallback'
-                            except Exception as e2:
-                                logger.debug(f"VesselTypeClassifier failed (both ML and rule-based): {e}, {e2}")
-
-                # Add universal IDs and global coordinates to each detection
+                # Add to global list
                 for feat in features_list:
-                    local_cx, local_cy = feat['center']
-                    global_cx = tile_x + local_cx
-                    global_cy = tile_y + local_cy
-
-                    # Create universal ID: slide_celltype_globalX_globalY
-                    # Use round() instead of int() to reduce collision probability for nearby cells
-                    uid = f"{slide_name}_{args.cell_type}_{round(global_cx)}_{round(global_cy)}"
-                    feat['uid'] = uid
-                    feat['global_center'] = [float(global_cx), float(global_cy)]
-                    feat['global_center_um'] = [float(global_cx * pixel_size_um), float(global_cy * pixel_size_um)]
-                    feat['tile_origin'] = [tile_x, tile_y]
-                    feat['slide_name'] = slide_name
-
-                    # Convert contours to global coordinates if present (vessels)
-                    if 'outer_contour' in feat:
-                        feat['outer_contour_global'] = [[pt[0][0] + tile_x, pt[0][1] + tile_y]
-                                                        for pt in feat['outer_contour']]
-                    if 'inner_contour' in feat and feat['inner_contour'] is not None:
-                        feat['inner_contour_global'] = [[pt[0][0] + tile_x, pt[0][1] + tile_y]
-                                                        for pt in feat['inner_contour']]
-
                     all_detections.append(feat)
 
                 # Save masks and features
@@ -3439,45 +3471,13 @@ def run_pipeline(args):
                     json.dump(features_list, f, cls=NumpyEncoder)
 
                 # Create samples for HTML with quality filtering
-                # For vessels, apply stricter filters to reduce garbage
-                min_area_um2 = 25.0
-                for feat in features_list:
-                    features_dict = feat.get('features', {})
-
-                    # Only show detections above score threshold in HTML
-                    rf_score = feat.get('rf_prediction', feat.get('score', 1.0))
-                    if rf_score < args.html_score_threshold:
-                        continue
-
-                    # Check area filter
-                    area_um2 = features_dict.get('area', 0) * (pixel_size_um ** 2)
-                    if area_um2 < min_area_um2:
-                        continue
-
-                    # For vessel detection, apply quality filters to reduce false positives
-                    if args.cell_type == 'vessel':
-                        # Ring completeness: require at least 30% (relaxed from 50% to allow partial vessels)
-                        ring_completeness = features_dict.get('ring_completeness', 1.0)
-                        if ring_completeness < 0.30:
-                            continue
-
-                        # Circularity: require at least 0.15 (relaxed from 0.3 to allow irregular vessels)
-                        circularity = features_dict.get('circularity', 1.0)
-                        if circularity < 0.15:
-                            continue
-
-                        # Wall thickness: require at least 1.5 µm to filter tiny artifacts
-                        wall_thickness = features_dict.get('wall_thickness_mean_um', 10.0)
-                        if wall_thickness < 1.5:
-                            continue
-
-                    sample = create_sample_from_detection(
-                        tile_x, tile_y, tile_rgb, masks, feat, pixel_size_um, slide_name,
-                        cell_type=args.cell_type
-                    )
-                    if sample:
-                        all_samples.append(sample)
-                        total_detections += 1
+                html_samples = filter_and_create_html_samples(
+                    features_list, tile_x, tile_y, tile_rgb, masks,
+                    pixel_size_um, slide_name, args.cell_type,
+                    args.html_score_threshold,
+                )
+                all_samples.extend(html_samples)
+                total_detections += len(html_samples)
 
                 del tile_data, tile_rgb, masks
                 if cd31_channel_data is not None:
@@ -3492,12 +3492,13 @@ def run_pipeline(args):
 
     logger.info(f"Total detections (pre-dedup): {len(all_detections)}")
 
-    # NMJ deduplication: tile overlap causes same NMJ to be detected in adjacent tiles
+    # Deduplication: tile overlap causes same detection in adjacent tiles
     # Uses actual mask pixel overlap (loads HDF5 mask files) for accurate dedup
-    if args.cell_type == 'nmj' and getattr(args, 'tile_overlap', 0) > 0 and len(all_detections) > 0:
+    if getattr(args, 'tile_overlap', 0) > 0 and len(all_detections) > 0:
         from segmentation.processing.deduplication import deduplicate_by_mask_overlap
         pre_dedup = len(all_detections)
-        all_detections = deduplicate_by_mask_overlap(all_detections, tiles_dir, min_overlap_fraction=0.1)
+        mask_fn = f'{args.cell_type}_masks.h5'
+        all_detections = deduplicate_by_mask_overlap(all_detections, tiles_dir, min_overlap_fraction=0.1, mask_filename=mask_fn)
 
         # Filter HTML samples to match deduped detections
         if len(all_detections) < pre_dedup:
@@ -3678,8 +3679,8 @@ def main():
 
     # Tile processing
     parser.add_argument('--tile-size', type=int, default=3000, help='Tile size in pixels')
-    parser.add_argument('--tile-overlap', type=float, default=0.0, help='Tile overlap fraction (0.0-0.5, default: 0.0 = no overlap)')
-    parser.add_argument('--sample-fraction', type=float, default=0.20, help='Fraction of tissue tiles (default: 20%%)')
+    parser.add_argument('--tile-overlap', type=float, default=0.10, help='Tile overlap fraction (0.0-0.5, default: 0.10 = 10%% overlap)')
+    parser.add_argument('--sample-fraction', type=float, default=0.10, help='Fraction of tissue tiles (default: 10%%)')
     parser.add_argument('--channel', type=int, default=1, help='Primary channel index for detection')
     parser.add_argument('--all-channels', action='store_true',
                         help='Load all channels for multi-channel analysis (NMJ specificity checking)')
@@ -3687,6 +3688,9 @@ def main():
                         help='Comma-separated channel names for feature naming (e.g., "nuclear,sma,pm,cd31" or "nuclear,sma,pm,lyve1")')
     parser.add_argument('--photobleaching-correction', action='store_true',
                         help='Apply slide-wide photobleaching correction (fixes horizontal/vertical banding)')
+    parser.add_argument('--norm-params-file', type=str, default=None,
+                        help='Path to pre-computed Reinhard normalization params JSON (from compute_normalization_params.py). '
+                             'Applies whole-slide Lab-space normalization before tile processing.')
 
     # NMJ parameters
     parser.add_argument('--intensity-percentile', type=float, default=98)
@@ -3790,12 +3794,14 @@ def main():
     # Feature extraction options
     parser.add_argument('--extract-full-features', action='store_true',
                         help='Extract full features including SAM2 embeddings')
+    parser.add_argument('--extract-deep-features', action='store_true',
+                        help='Extract ResNet and DINOv2 features (opt-in, default morph+SAM2 only)')
     parser.add_argument('--skip-deep-features', action='store_true',
-                        help='Skip ResNet and DINOv2 feature extraction (faster, use with morph+SAM2 classifier)')
+                        help='Deprecated: deep features are off by default now. Use --extract-deep-features to enable.')
 
-    # Multi-GPU processing (NMJ only)
+    # Multi-GPU processing
     parser.add_argument('--multi-gpu', action='store_true',
-                        help='Enable multi-GPU processing (NMJ only). Distributes tiles across GPUs.')
+                        help='Enable multi-GPU processing. Distributes tiles across GPUs via shared memory.')
     parser.add_argument('--num-gpus', type=int, default=4,
                         help='Number of GPUs to use for multi-GPU processing (default: 4)')
 

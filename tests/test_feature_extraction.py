@@ -570,7 +570,7 @@ class TestCombinedFeatureVector(unittest.TestCase):
         self.assertIn('circularity', features)
 
         # Should have SAM2 embedding features (filled with zeros)
-        sam2_count = sum(1 for k in features.keys() if k.startswith('sam2_emb_'))
+        sam2_count = sum(1 for k in features.keys() if k.startswith('sam2_'))
         self.assertEqual(
             sam2_count, SAM2_EMBEDDING_DIMENSION,
             f"Expected {SAM2_EMBEDDING_DIMENSION} SAM2 features, got {sam2_count}"

@@ -1,6 +1,8 @@
 #!/usr/bin/env python3
 """
-View LMD export in Napari with NMJ and control overlays.
+View LMD export in Napari with detection and control overlays.
+
+Works with any cell type (NMJ, MK, vessel, mesothelium, etc.).
 
 Opens the OME-Zarr pyramid and overlays:
 - Singles (green polygons)
@@ -9,8 +11,7 @@ Opens the OME-Zarr pyramid and overlays:
 - Cluster controls (orange polygons)
 
 Usage:
-    python napari_view_export.py
-    python napari_view_export.py --zarr /path/to/pyramid.zarr
+    python napari_view_lmd_export.py --zarr /path/to/pyramid.zarr --export export.json
 """
 
 import argparse
@@ -138,7 +139,7 @@ def main():
     n_cc = len(shapes['cluster_controls'])
     print(f"  Singles:          {n_s} contours")
     print(f"  Single controls:  {n_sc} contours")
-    print(f"  Clusters:         {n_c} contours (member NMJs)")
+    print(f"  Clusters:         {n_c} contours (cluster members)")
     print(f"  Cluster controls: {n_cc} contours")
     print(f"  Total shapes:     {n_s + n_sc + n_c + n_cc}")
 
@@ -160,7 +161,7 @@ def main():
         viewer.add_shapes(
             single_polygons,
             shape_type="polygon",
-            name="Singles (NMJ)",
+            name="Singles",
             edge_color="lime",
             face_color=[0, 1, 0, 0.2],
             edge_width=2,
@@ -188,7 +189,7 @@ def main():
         viewer.add_shapes(
             cluster_polygons,
             shape_type="polygon",
-            name="Clusters (NMJ)",
+            name="Clusters",
             edge_color="red",
             face_color=[1, 0, 0, 0.2],
             edge_width=2,
@@ -211,9 +212,9 @@ def main():
 
     print("\n" + "="*60)
     print("NAPARI VIEWER READY")
-    print("  - Green: Singles (NMJs)")
+    print("  - Green: Singles")
     print("  - Cyan: Single controls")
-    print("  - Red: Clusters (NMJs)")
+    print("  - Red: Clusters")
     print("  - Orange: Cluster controls")
     print("="*60)
 

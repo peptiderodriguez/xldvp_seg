@@ -450,7 +450,7 @@ class CellDetector:
         # 256 SAM2 embedding features
         sam2_emb = self.extract_sam2_embedding(cy, cx)
         for i, v in enumerate(sam2_emb):
-            features[f'sam2_emb_{i}'] = float(v)
+            features[f'sam2_{i}'] = float(v)
 
         # 2048 ResNet features from masked crop
         ys, xs = np.where(mask)

@@ -158,20 +158,20 @@ class MultiChannelFeatureMixin:
             Returns empty dict if mask is empty.
 
         Example:
-            # For NMJ detection with 3-channel imaging
+            # For 3-channel imaging with generic channel names
             features = self.extract_multichannel_features(
                 mask,
                 {
-                    'nuclear': ch0_data,  # Should be LOW for real NMJ
-                    'btx': ch1_data,      # Should be HIGH for real NMJ
-                    'nfl': ch2_data
+                    'ch0': ch0_data,
+                    'ch1': ch1_data,
+                    'ch2': ch2_data
                 },
-                primary_channel='btx'
+                primary_channel='ch1'
             )
 
             # Access features
-            btx_mean = features['btx_mean']
-            btx_nuclear_ratio = features['btx_nuclear_ratio']
+            ch1_mean = features['ch1_mean']
+            ch0_ch1_ratio = features['ch0_ch1_ratio']
         """
         if mask.sum() == 0:
             return {}

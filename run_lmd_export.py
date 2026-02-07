@@ -1,30 +1,33 @@
 #!/usr/bin/env python3
 """
-Unified LMD Export Tool - Export NMJ detections to Leica LMD format.
+Unified LMD Export Tool - Export detections to Leica LMD format.
+
+Works with any cell type (NMJ, MK, vessel, mesothelium, etc.).
 
 Handles the complete pipeline:
 1. Load detections + filter by score/annotations
-2. Load biological clusters (from cluster_nmjs.py)
+2. Load biological clusters (from cluster_detections.py)
 3. Extract contours from H5 masks (if needed)
 4. Post-process contours (dilate + RDP simplify)
 5. Order singles and clusters by nearest-neighbor path on slide
 6. Generate spatial controls for ALL samples (singles and clusters)
-7. Assign wells in serpentine order with alternating NMJ/Control
+7. Assign wells in serpentine order with alternating target/control
 8. Export to Leica LMD XML via py-lmd
 
 Usage:
     # Full pipeline with clusters and controls
     python run_lmd_export.py \\
-        --detections nmj_detections.json \\
+        --detections detections.json \\
+        --cell-type nmj \\
         --crosses reference_crosses.json \\
-        --clusters nmj_clusters.json \\
+        --clusters clusters.json \\
         --tiles-dir /path/to/tiles \\
         --output-dir lmd_export \\
         --export --generate-controls
 
     # Generate cross placement HTML (step before export)
     python run_lmd_export.py \\
-        --detections nmj_detections.json \\
+        --detections detections.json \\
         --output-dir lmd_export \\
         --generate-cross-html
 """
@@ -96,7 +99,7 @@ def filter_detections(detections, positive_uids=None, min_score=None):
 
 
 def load_clusters(clusters_path):
-    """Load and validate clusters JSON from cluster_nmjs.py."""
+    """Load and validate clusters JSON from cluster_detections.py."""
     with open(clusters_path, 'r') as f:
         data = json.load(f)
 
@@ -147,7 +150,7 @@ def extract_contours_for_detections(detections, tiles_dir, pixel_size,
     """
     import hdf5plugin  # noqa: F401 - must import before h5py for LZ4
     import h5py
-    from scripts.contour_processing import process_contour
+    from segmentation.lmd.contour_processing import process_contour
 
     tiles_dir = Path(tiles_dir)
 
@@ -505,10 +508,10 @@ def generate_cluster_control(cluster_contours_um, precomputed_polygons,
 def assign_wells_with_controls(ordered_singles, ordered_single_ctrls,
                                ordered_clusters, ordered_cluster_ctrls):
     """
-    Assign wells in serpentine order: alternating NMJ -> Control.
+    Assign wells in serpentine order: alternating Target -> Control.
 
     Singles first, then clusters. Every sample has a control.
-    Each single gets 2 wells (NMJ, ctrl). Each cluster gets 2 wells (cluster, ctrl).
+    Each single gets 2 wells (target, ctrl). Each cluster gets 2 wells (cluster, ctrl).
 
     Returns list of (shape_dict, well) tuples in well order.
     """
@@ -519,7 +522,7 @@ def assign_wells_with_controls(ordered_singles, ordered_single_ctrls,
     assignments = []
     well_idx = 0
 
-    # Singles: NMJ -> Control -> NMJ -> Control ...
+    # Singles: Target -> Control -> Target -> Control ...
     for single, ctrl in zip(ordered_singles, ordered_single_ctrls):
         single['well'] = wells[well_idx] if well_idx < len(wells) else f"overflow_{well_idx}"
         assignments.append(single)
@@ -550,7 +553,7 @@ def build_export_data(assignments, well_order, metadata):
     """Build the unified export JSON structure."""
     shapes = []
     n_singles = n_single_controls = n_clusters = n_cluster_controls = 0
-    n_nmjs_in_clusters = 0
+    n_detections_in_clusters = 0
 
     for item in assignments:
         shapes.append(item)
@@ -561,7 +564,7 @@ def build_export_data(assignments, well_order, metadata):
             n_single_controls += 1
         elif t == 'cluster':
             n_clusters += 1
-            n_nmjs_in_clusters += item.get('n_nmjs', 0)
+            n_detections_in_clusters += item.get('n_members', item.get('n_nmjs', 0))
         elif t == 'cluster_control':
             n_cluster_controls += 1
 
@@ -572,7 +575,7 @@ def build_export_data(assignments, well_order, metadata):
             'n_single_controls': n_single_controls,
             'n_clusters': n_clusters,
             'n_cluster_controls': n_cluster_controls,
-            'n_nmjs_in_clusters': n_nmjs_in_clusters,
+            'n_detections_in_clusters': n_detections_in_clusters,
             'total_wells_used': len(well_order),
         },
         'shapes': shapes,
@@ -863,22 +866,23 @@ def generate_cross_placement_html(detections, output_dir, pixel_size_um,
 
 def main():
     parser = argparse.ArgumentParser(
-        description='Unified LMD Export - NMJ detections to Leica LMD format',
+        description='Unified LMD Export - detections to Leica LMD format',
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog='''
 Examples:
   # Full pipeline with clusters and controls
   python run_lmd_export.py \\
-      --detections nmj_detections.json \\
+      --detections detections.json \\
+      --cell-type nmj \\
       --crosses reference_crosses.json \\
-      --clusters nmj_clusters.json \\
+      --clusters clusters.json \\
       --tiles-dir /path/to/tiles \\
       --output-dir lmd_export \\
       --export --generate-controls
 
   # Generate HTML for placing reference crosses
   python run_lmd_export.py \\
-      --detections nmj_detections.json \\
+      --detections detections.json \\
       --output-dir lmd_export \\
       --generate-cross-html
 ''',
@@ -887,18 +891,21 @@ Examples:
     # Input files
     parser.add_argument('--detections', type=str, required=True,
                         help='Path to detections JSON file')
+    parser.add_argument('--cell-type', type=str, default=None,
+                        help='Cell type (nmj, mk, vessel, mesothelium). '
+                             'Auto-derives mask filename if --mask-filename not set.')
     parser.add_argument('--annotations', type=str, default=None,
                         help='Path to annotations JSON (filters to positives only)')
     parser.add_argument('--crosses', type=str, default=None,
                         help='Path to reference crosses JSON')
     parser.add_argument('--clusters', type=str, default=None,
-                        help='Path to clusters JSON from cluster_nmjs.py')
+                        help='Path to clusters JSON from cluster_detections.py')
 
     # Contour extraction
     parser.add_argument('--tiles-dir', type=str, default=None,
                         help='Path to tiles/ directory with H5 masks')
-    parser.add_argument('--mask-filename', type=str, default='nmj_masks.h5',
-                        help='Mask filename within each tile dir (default: nmj_masks.h5)')
+    parser.add_argument('--mask-filename', type=str, default=None,
+                        help='Mask filename within each tile dir (default: auto from --cell-type, or nmj_masks.h5)')
 
     # Output
     parser.add_argument('--output-dir', type=str, required=True,
@@ -942,6 +949,13 @@ Examples:
 
     args = parser.parse_args()
 
+    # Auto-derive mask filename from cell type
+    if args.mask_filename is None:
+        if args.cell_type:
+            args.mask_filename = f'{args.cell_type}_masks.h5'
+        else:
+            args.mask_filename = 'nmj_masks.h5'  # backward-compatible default
+
     # -----------------------------------------------------------------------
     # Load detections
     # -----------------------------------------------------------------------
@@ -949,8 +963,8 @@ Examples:
     all_detections = load_detections(args.detections)
     print(f"  Loaded {len(all_detections)} detections")
 
-    # Keep original list for cluster index lookups (cluster_nmjs.py indices
-    # reference the ORIGINAL unfiltered list, since it filters internally)
+    # Keep original list for cluster index lookups (cluster_detections.py
+    # indices reference the ORIGINAL unfiltered list, since it filters internally)
     detections = list(all_detections)
 
     # Filter by annotations
@@ -967,7 +981,7 @@ Examples:
         detections = filter_detections(detections, min_score=args.min_score)
         print(f"  Score filter (>= {args.min_score}): {before} -> {len(detections)}")
     elif args.min_score is not None and args.clusters:
-        print(f"  Score filter skipped (cluster_nmjs.py already filtered at >= {args.min_score})")
+        print(f"  Score filter skipped (clustering already filtered at >= {args.min_score})")
 
     if len(detections) == 0:
         print("ERROR: No detections to export!")
@@ -1030,20 +1044,22 @@ Examples:
             crosses_data['image_height_px'] = args.image_height
 
         # -------------------------------------------------------------------
-        # Step 1: Separate singles vs clustered NMJs
+        # Step 1: Separate singles vs clustered detections
         # -------------------------------------------------------------------
         if args.clusters:
             print(f"\nLoading clusters from: {args.clusters}")
             cluster_data = load_clusters(args.clusters)
 
             # Cluster indices reference the ORIGINAL unfiltered detections list
-            # (cluster_nmjs.py runs its own score filtering internally)
-            outlier_indices = [o['nmj_index'] for o in cluster_data['outliers']]
+            # (cluster_detections.py runs its own score filtering internally)
+            outlier_indices = [o.get('detection_index', o.get('nmj_index'))
+                               for o in cluster_data['outliers']]
 
             single_dets = [all_detections[i] for i in outlier_indices if i < len(all_detections)]
             cluster_groups = []
             for c in cluster_data['main_clusters']:
-                members = [all_detections[i] for i in c['nmj_indices'] if i < len(all_detections)]
+                member_indices = c.get('detection_indices', c.get('nmj_indices', []))
+                members = [all_detections[i] for i in member_indices if i < len(all_detections)]
                 if members:
                     cluster_groups.append({
                         'id': c['id'],
@@ -1054,7 +1070,7 @@ Examples:
 
             print(f"  Singles: {len(single_dets)}")
             print(f"  Clusters: {len(cluster_groups)} "
-                  f"({sum(len(cg['members']) for cg in cluster_groups)} NMJs)")
+                  f"({sum(len(cg['members']) for cg in cluster_groups)} detections)")
         else:
             # No clusters file: all detections are singles
             single_dets = detections
@@ -1091,7 +1107,7 @@ Examples:
                     det['area_um2'] = contour_results[uid]['area_um2']
         elif need_extraction and not args.tiles_dir:
             # Try to process existing outer_contour_global
-            from scripts.contour_processing import process_contour
+            from segmentation.lmd.contour_processing import process_contour
             print("\nProcessing existing contours (dilation + RDP)...")
             processed_count = 0
             for det in all_dets_needing_contours:
@@ -1196,7 +1212,7 @@ Examples:
             print(f"\nGenerating controls (offset: {args.control_offset_um} um)...")
             print("  Every sample will have a control.")
 
-            # Precompute Shapely polygons for all NMJ contours (avoids
+            # Precompute Shapely polygons for all detection contours (avoids
             # recreating Polygon objects on every overlap check)
             precomputed_polygons = []
             for det in ordered_singles_dets:
@@ -1299,7 +1315,7 @@ Examples:
                 'type': 'cluster',
                 'uid': f"cluster_{cdata['id']}",
                 'cluster_id': cdata['id'],
-                'n_nmjs': len(cdata['member_contours_um']),
+                'n_members': len(cdata['member_contours_um']),
                 'contours_um': cdata['member_contours_um'],
                 'member_uids': cdata['member_uids'],
                 'total_area_um2': total_area,
@@ -1311,7 +1327,7 @@ Examples:
         # Step 7: Assign wells
         # -------------------------------------------------------------------
         if args.generate_controls:
-            print("\nAssigning wells (serpentine, B2->B3->C3->C2, alternating NMJ/Control)...")
+            print("\nAssigning wells (serpentine, B2->B3->C3->C2, alternating target/control)...")
             assignments, well_order = assign_wells_with_controls(
                 ordered_singles, ordered_single_ctrls,
                 ordered_clusters, ordered_cluster_ctrls,
@@ -1333,6 +1349,7 @@ Examples:
         # Step 8: Build and save export data
         # -------------------------------------------------------------------
         metadata = {
+            'cell_type': args.cell_type or 'unknown',
             'plate_format': '384',
             'quadrant_order': ['B2', 'B3', 'C3', 'C2'],
             'pixel_size_um': pixel_size,
@@ -1385,7 +1402,7 @@ Examples:
         print(f"  Single controls:  {s['n_single_controls']}")
         print(f"  Clusters:         {s['n_clusters']}")
         print(f"  Cluster controls: {s['n_cluster_controls']}")
-        print(f"  NMJs in clusters: {s['n_nmjs_in_clusters']}")
+        print(f"  Detections in clusters: {s['n_detections_in_clusters']}")
         print(f"  Total wells used: {s['total_wells_used']}")
         print(f"{'='*60}")
 

@@ -42,10 +42,9 @@ import queue
 import traceback
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple, Any, Set
-from multiprocessing import Process, Queue, Event
+import multiprocessing
 from multiprocessing.shared_memory import SharedMemory
 import numpy as np
-import torch
 
 from segmentation.utils.logging import get_logger
 
@@ -177,9 +176,9 @@ class SharedSlideManager:
 
 def _gpu_worker_shm(
     gpu_id: int,
-    input_queue: Queue,
-    output_queue: Queue,
-    stop_event: Event,
+    input_queue,
+    output_queue,
+    stop_event,
     slide_info: Dict[str, Dict[str, Any]],
     segmenter_kwargs: Dict[str, Any],
     mk_min_area: int,
@@ -472,22 +471,23 @@ class MultiGPUTileProcessorSHM:
             'hspc_classifier_path': str(hspc_classifier_path) if hspc_classifier_path else None,
         }
 
-        self.workers: List[Process] = []
-        self.input_queue: Optional[Queue] = None
-        self.output_queue: Optional[Queue] = None
-        self.stop_event: Optional[Event] = None
+        self.workers: List[multiprocessing.Process] = []
+        self.input_queue: Optional[multiprocessing.Queue] = None
+        self.output_queue: Optional[multiprocessing.Queue] = None
+        self.stop_event: Optional[multiprocessing.Event] = None
         self.tiles_submitted = 0
 
     def start(self):
         """Start worker processes."""
-        logger.info(f"Starting {self.num_gpus} GPU workers with shared memory...")
+        logger.info(f"Starting {self.num_gpus} GPU workers with shared memory (spawn context)...")
 
-        self.input_queue = Queue()
-        self.output_queue = Queue()
-        self.stop_event = Event()
+        ctx = multiprocessing.get_context('spawn')
+        self.input_queue = ctx.Queue()
+        self.output_queue = ctx.Queue()
+        self.stop_event = ctx.Event()
 
         for gpu_id in range(self.num_gpus):
-            p = Process(
+            p = ctx.Process(
                 target=_gpu_worker_shm,
                 args=(
                     gpu_id,

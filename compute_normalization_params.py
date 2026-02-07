@@ -208,12 +208,6 @@ def main():
     logger.info(f"  a: median={medians[1]:.2f}, MAD={mads[1]:.2f}")
     logger.info(f"  b: median={medians[2]:.2f}, MAD={mads[2]:.2f}")
     logger.info("="*70)
-    if isinstance(target_low, np.ndarray) and len(target_low) == 3:
-        logger.info(f"  R: [{target_low[0]:.1f}, {target_high[0]:.1f}]")
-        logger.info(f"  G: [{target_low[1]:.1f}, {target_high[1]:.1f}]")
-        logger.info(f"  B: [{target_low[2]:.1f}, {target_high[2]:.1f}]")
-    else:
-        logger.info(f"  Range: [{target_low:.1f}, {target_high:.1f}]")
     logger.info(f"\nSaved to: {output_file}")
     logger.info("="*70)
 

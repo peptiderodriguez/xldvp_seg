@@ -7,7 +7,7 @@ a specific type of cell or structure in microscopy images.
 
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
-from typing import Dict, Any, List, Optional
+from typing import Dict, Any, List, Optional, Tuple
 import numpy as np
 import logging
 
@@ -120,7 +120,7 @@ class DetectionStrategy(ABC):
         tile: np.ndarray,
         models: Dict[str, Any],
         pixel_size_um: float
-    ) -> List[Detection]:
+    ) -> Tuple[np.ndarray, List[Detection]]:
         """
         Complete detection pipeline: segment + compute features + filter.
 
@@ -133,13 +133,13 @@ class DetectionStrategy(ABC):
             pixel_size_um: Pixel size for area calculations
 
         Returns:
-            List of Detection objects
+            Tuple of (label_array, list of Detection objects)
         """
         # Generate candidate masks
         masks = self.segment(tile, models)
 
         if not masks:
-            return []
+            return np.zeros(tile.shape[:2], dtype=np.uint32), []
 
         # Compute features for each mask
         features = [self.compute_features(m, tile) for m in masks]
@@ -147,7 +147,13 @@ class DetectionStrategy(ABC):
         # Filter and classify
         detections = self.filter(masks, features, pixel_size_um)
 
-        return detections
+        # Build label array
+        label_array = np.zeros(tile.shape[:2], dtype=np.uint32)
+        for i, det in enumerate(detections, start=1):
+            if det.mask is not None:
+                label_array[det.mask] = i
+
+        return label_array, detections
 
     def compute_features(
         self,
@@ -362,7 +368,7 @@ class DetectionStrategy(ABC):
             batch_size: Batch size for processing
 
         Returns:
-            List of 384D feature vectors as numpy arrays (for ViT-S/14)
+            List of 1024D feature vectors as numpy arrays (for ViT-L/14)
         """
         import torch
         from PIL import Image
@@ -487,7 +493,7 @@ class DetectionStrategy(ABC):
             List of feature dictionaries, one per mask. Each dict contains:
             - Morphological features (area, perimeter, solidity, etc.)
             - 'centroid': [x, y] coordinates
-            - 'sam2_emb_0' through 'sam2_emb_255': SAM2 embedding values
+            - 'sam2_0' through 'sam2_255': SAM2 embedding values
             - 'resnet_0' through 'resnet_2047': ResNet feature values
             Empty dict returned for invalid masks.
         """
@@ -555,11 +561,11 @@ class DetectionStrategy(ABC):
             if sam2_predictor is not None and extract_sam2:
                 sam2_emb = self._extract_sam2_embedding(sam2_predictor, cy, cx)
                 for i, v in enumerate(sam2_emb):
-                    morph_features[f'sam2_emb_{i}'] = float(v)
+                    morph_features[f'sam2_{i}'] = float(v)
             elif extract_sam2:
                 # Fill with zeros if SAM2 not available
                 for i in range(SAM2_EMBEDDING_DIM):
-                    morph_features[f'sam2_emb_{i}'] = 0.0
+                    morph_features[f'sam2_{i}'] = 0.0
 
             # Prepare crops for batch ResNet processing (both masked and context)
             if extract_resnet:

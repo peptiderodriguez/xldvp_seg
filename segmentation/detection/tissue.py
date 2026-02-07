@@ -60,8 +60,14 @@ def compute_pixel_level_tissue_mask(
     Returns:
         Boolean mask (H, W) where True = tissue, False = background
     """
-    # Convert to grayscale if needed
-    if image.ndim == 3:
+    # Convert to grayscale if needed, scaling uint16 properly
+    if image.dtype == np.uint16:
+        if image.ndim == 3:
+            scaled = (image / 256).astype(np.uint8)
+            gray = cv2.cvtColor(scaled, cv2.COLOR_RGB2GRAY)
+        else:
+            gray = (image / 256).astype(np.uint8)
+    elif image.ndim == 3:
         gray = cv2.cvtColor(image.astype(np.uint8), cv2.COLOR_RGB2GRAY)
     else:
         gray = image.astype(np.uint8)
@@ -102,8 +108,14 @@ def has_tissue(tile_image, variance_threshold, min_tissue_fraction=0.15, block_s
     if tile_image.max() == 0:
         return False, 0.0
 
-    # Convert to grayscale if needed
-    if tile_image.ndim == 3:
+    # Convert to grayscale if needed, scaling uint16 properly
+    if tile_image.dtype == np.uint16:
+        if tile_image.ndim == 3:
+            scaled = (tile_image / 256).astype(np.uint8)
+            gray = cv2.cvtColor(scaled, cv2.COLOR_RGB2GRAY)
+        else:
+            gray = (tile_image / 256).astype(np.uint8)
+    elif tile_image.ndim == 3:
         gray = cv2.cvtColor(tile_image.astype(np.uint8), cv2.COLOR_RGB2GRAY)
     else:
         gray = tile_image.astype(np.uint8)

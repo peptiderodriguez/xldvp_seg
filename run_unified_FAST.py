@@ -883,7 +883,7 @@ class UnifiedSegmenter:
                 # SAM2 embeddings
                 sam2_emb = self.extract_sam2_embedding(cy, cx)
                 for i, v in enumerate(sam2_emb):
-                    morph[f'sam2_emb_{i}'] = float(v)
+                    morph[f'sam2_{i}'] = float(v)
 
                 det['morph'] = morph
 
@@ -1066,7 +1066,7 @@ class UnifiedSegmenter:
                 # SAM2 embeddings
                 sam2_emb = self.extract_sam2_embedding(cy, cx)
                 for i, v in enumerate(sam2_emb):
-                    morph[f'sam2_emb_{i}'] = float(v)
+                    morph[f'sam2_{i}'] = float(v)
 
                 det['morph'] = morph
 

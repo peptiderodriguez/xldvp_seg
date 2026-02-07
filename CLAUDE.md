@@ -102,12 +102,12 @@ python -m http.server 8080 --directory /home/dude/mk_output/project/html
 | Script | Use Case |
 |--------|----------|
 | `run_segmentation.py` | Unified entry point (recommended) |
-| `run_lmd_export.py` | Export to Leica LMD format |
+| `run_lmd_export.py` | Export to Leica LMD format (any cell type) |
 | `run_unified_FAST.py` | Legacy MK/HSPC batch pipeline |
 | `run_nmj_inference.py` | NMJ classification with trained model |
 | `scripts/czi_to_ome_zarr.py` | Convert CZI to OME-Zarr with pyramids |
 | `scripts/napari_place_crosses.py` | Interactive reference cross placement |
-| `scripts/contour_processing.py` | Contour dilation and RDP simplification |
+| `scripts/cluster_detections.py` | Biological clustering for LMD well assignment |
 | `scripts/napari_view_lmd_export.py` | View LMD export overlaid on slide |
 
 ---
@@ -224,7 +224,7 @@ Use `--all-channels` flag to extract features from true 3-channel RGB instead of
 | `resnet_ctx_0-2047` | 2048 | ResNet50 context (full tissue) |
 | `dinov2_0-1023` | 1024 | DINOv2-L masked |
 | `dinov2_ctx_0-1023` | 1024 | DINOv2-L context |
-| `sam2_emb_0-255` | 256 | SAM2 spatial embeddings |
+| `sam2_0-255` | 256 | SAM2 spatial embeddings |
 | morphological | ~78 | Area, solidity, channel stats, etc. |
 
 **Total: ~6,478 features per detection**
@@ -467,29 +467,32 @@ python run_lmd_export.py \
 
 ### Spatial Controls for LMD Export
 
-Generate paired control regions for each NMJ target (offset 150 µm, same shape):
+Generate paired control regions for each detection target (offset 100 um, same shape).
+Works with any cell type via `--cell-type` flag.
+
+**LMD module:** `segmentation.lmd` (clustering, contour processing)
 
 **Key functions in `run_lmd_export.py`:**
-- `generate_spatial_control()` - Shifts NMJ contour by offset, tries 8 directions to avoid collisions
-- `generate_wells_serpentine_4_quadrants()` - 384-well serpentine order across 4 quadrants (B2, C2, B3, C3)
-- `check_polygon_overlap()` - Shapely-based collision detection
+- `generate_spatial_control()` - Shifts detection contour by offset, tries 8 directions to avoid collisions
+- `generate_wells_serpentine_4_quadrants()` - 384-well serpentine order across 4 quadrants (B2, B3, C3, C2)
+- `_check_overlap_precomputed()` - Shapely-based collision detection
 
 **Well assignment pattern:**
-- Alternating: NMJ → Control → NMJ → Control
+- Alternating: Target → Control → Target → Control
 - Singles processed first, then clusters
 - Within each group: nearest-neighbor ordering to minimize slide movement
 - Cluster transition starts from nearest cluster to last single's control
 
 **Output files:**
 - `lmd_export_with_controls.json` - All shapes with well assignments
-- `shapes_with_controls.xml` - LMD XML for Leica microscope
+- `shapes.xml` - LMD XML for Leica microscope
 
 **Napari visualization:**
 ```bash
 # View export overlaid on OME-Zarr pyramid
 python scripts/napari_view_lmd_export.py --zarr slide.zarr --export lmd_export_with_controls.json
 ```
-- Green: Singles (NMJs)
+- Green: Singles
 - Cyan: Single controls
-- Red: Clusters (NMJs)
+- Red: Clusters
 - Orange: Cluster controls

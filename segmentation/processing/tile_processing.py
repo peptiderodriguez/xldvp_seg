@@ -5,6 +5,7 @@ This module provides helper functions to reduce nesting in the main tile process
 loop by extracting common patterns into reusable, well-typed functions.
 
 Functions:
+    process_single_tile: Common per-tile detection with CUDA retry, mask_label, UID
     build_detection_params: Factory for cell-type-specific detection parameters
     load_and_validate_tile: Load and validate tile data from loader
     enrich_detection_features: Add global coordinates and metadata to detections
@@ -33,7 +34,9 @@ Usage:
     result = save_tile_outputs(tile_out_dir, 'nmj', masks, features_list)
 """
 
+import gc
 import json
+import time
 import numpy as np
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple, Union
@@ -43,6 +46,198 @@ from segmentation.io.html_export import create_hdf5_dataset
 from segmentation.utils.logging import get_logger
 
 logger = get_logger(__name__)
+
+
+def detections_to_features_list(detections, cell_type):
+    """
+    Convert a list of Detection objects to the expected features_list format.
+
+    Args:
+        detections: List of Detection objects from strategy.detect()
+        cell_type: Cell type string for ID prefix
+
+    Returns:
+        List of feature dicts with 'id', 'center', 'features', and optionally
+        'rf_prediction' and vessel contour fields.
+    """
+    if detections is None:
+        return []
+
+    features_list = []
+    for i, det in enumerate(detections, start=1):
+        feat_dict = {
+            'id': det.id if det.id else f'{cell_type}_{i}',
+            'center': det.centroid,  # [x, y] format
+            'features': det.features.copy(),
+        }
+        # Include RF prediction score at top level if available
+        if det.score is not None:
+            feat_dict['rf_prediction'] = det.score
+
+        # For vessels, lift contours from features to top level
+        if cell_type == 'vessel':
+            if 'outer_contour' in feat_dict['features']:
+                feat_dict['outer_contour'] = feat_dict['features'].pop('outer_contour')
+            if 'inner_contour' in feat_dict['features']:
+                feat_dict['inner_contour'] = feat_dict['features'].pop('inner_contour')
+
+        features_list.append(feat_dict)
+    return features_list
+
+
+def process_single_tile(
+    tile_rgb: np.ndarray,
+    extra_channel_tiles: Optional[Dict[int, np.ndarray]],
+    strategy,
+    models: Dict[str, Any],
+    pixel_size_um: float,
+    cell_type: str,
+    slide_name: str,
+    tile_x: int,
+    tile_y: int,
+    cd31_channel_data: Optional[np.ndarray] = None,
+    channel_names: Optional[Dict[int, str]] = None,
+    max_retries: int = 3,
+) -> Optional[Tuple[np.ndarray, List[Dict[str, Any]]]]:
+    """
+    Process a single tile through detection pipeline with CUDA retry.
+
+    This is the common per-tile logic shared by both single-GPU and multi-GPU paths.
+    Encapsulates:
+    1. CUDA retry with exponential backoff around strategy.detect()
+    2. Detection-to-dict conversion
+    3. Centroid-based mask_label lookup with 3x3 fallback
+    4. UID + global coords + contour globalization
+
+    Args:
+        tile_rgb: uint8 RGB tile for detection/visual models (H, W, 3)
+        extra_channel_tiles: Dict mapping channel index to uint16 2D arrays
+            for per-channel feature extraction (or None)
+        strategy: DetectionStrategy instance (NMJ, MK, Vessel, Cell, etc.)
+        models: Dict with loaded models (sam2_predictor, resnet, etc.)
+        pixel_size_um: Pixel size in micrometers
+        cell_type: Cell type string ('nmj', 'mk', 'vessel', 'cell', 'mesothelium')
+        slide_name: Slide name for UID generation
+        tile_x: Global X coordinate of tile origin
+        tile_y: Global Y coordinate of tile origin
+        cd31_channel_data: Optional CD31 channel for vessel validation
+        channel_names: Optional channel name mapping for vessels
+        max_retries: Max CUDA retry attempts (default 3)
+
+    Returns:
+        Tuple of (label_array, features_list) or None if detection failed.
+        - label_array: uint32 mask array with detection IDs
+        - features_list: List of feature dicts with uid, global_center, mask_label, etc.
+    """
+    import torch
+
+    # --- Step 1: Run detection with CUDA retry ---
+    masks = None
+    detections = None
+
+    for attempt in range(max_retries):
+        try:
+            # Dispatch to strategy.detect() with cell-type-appropriate kwargs
+            if cell_type == 'vessel':
+                masks, detections = strategy.detect(
+                    tile_rgb, models, pixel_size_um,
+                    cd31_channel=cd31_channel_data,
+                    extra_channels=extra_channel_tiles,
+                    channel_names=channel_names,
+                )
+            elif cell_type in ('nmj', 'mk', 'cell'):
+                masks, detections = strategy.detect(
+                    tile_rgb, models, pixel_size_um,
+                    extra_channels=extra_channel_tiles,
+                )
+            else:
+                # Mesothelium and others — basic detect()
+                result = strategy.detect(tile_rgb, models, pixel_size_um)
+                # Some strategies return tuple, some return list
+                if isinstance(result, tuple) and len(result) == 2:
+                    masks, detections = result
+                else:
+                    detections = result
+                    masks = None
+            break  # Success
+
+        except (torch.cuda.OutOfMemoryError, RuntimeError) as cuda_err:
+            err_str = str(cuda_err).lower()
+            is_cuda_error = (
+                isinstance(cuda_err, torch.cuda.OutOfMemoryError) or
+                'cuda' in err_str or
+                'out of memory' in err_str or
+                'device-side assert' in err_str
+            )
+            if is_cuda_error and attempt < max_retries - 1:
+                logger.warning(
+                    f"CUDA error on tile ({tile_x}, {tile_y}) attempt "
+                    f"{attempt + 1}/{max_retries}: {cuda_err}"
+                )
+                gc.collect()
+                torch.cuda.empty_cache()
+                if torch.cuda.is_available():
+                    torch.cuda.synchronize()
+                time.sleep(1.0 * (attempt + 1))
+                continue
+            else:
+                logger.error(f"All {max_retries} CUDA retries failed for tile ({tile_x}, {tile_y})")
+                raise
+
+    # --- Step 2: Convert detections to features_list format ---
+    if detections is None or len(detections) == 0:
+        return None
+
+    features_list = detections_to_features_list(detections, cell_type)
+    if not features_list:
+        return None
+
+    # Build label array if not returned by strategy
+    if masks is None:
+        from segmentation.detection.strategies.base import Detection
+        h, w = tile_rgb.shape[:2]
+        masks = np.zeros((h, w), dtype=np.uint32)
+        for i, det in enumerate(detections, start=1):
+            if hasattr(det, 'mask') and det.mask is not None:
+                masks[det.mask] = i
+
+    # --- Step 3: Centroid-based mask_label lookup with 3x3 fallback ---
+    for feat in features_list:
+        local_cx, local_cy = feat['center']
+        mask_y = int(round(local_cy))
+        mask_x = int(round(local_cx))
+        # Clamp to valid range
+        mask_y = max(0, min(mask_y, masks.shape[0] - 1))
+        mask_x = max(0, min(mask_x, masks.shape[1] - 1))
+        actual_mask_label = int(masks[mask_y, mask_x])
+
+        if actual_mask_label == 0:
+            # Centroid on background — search 3x3 neighborhood (concave shapes)
+            found_label = 0
+            for dy in range(-3, 4):
+                for dx in range(-3, 4):
+                    ny = max(0, min(mask_y + dy, masks.shape[0] - 1))
+                    nx = max(0, min(mask_x + dx, masks.shape[1] - 1))
+                    if masks[ny, nx] > 0:
+                        found_label = int(masks[ny, nx])
+                        break
+                if found_label > 0:
+                    break
+            actual_mask_label = found_label
+            if found_label == 0:
+                logger.warning(
+                    f"Could not find mask label for detection at "
+                    f"({local_cx}, {local_cy}) in tile ({tile_x}, {tile_y})"
+                )
+
+        feat['mask_label'] = actual_mask_label
+
+    # --- Step 4: UID + global coords + contour globalization ---
+    enrich_detection_features(
+        features_list, tile_x, tile_y, slide_name, pixel_size_um, cell_type
+    )
+
+    return masks, features_list
 
 
 def build_detection_params(
@@ -87,7 +282,7 @@ def build_detection_params(
     """
     if cell_type == 'nmj':
         return {
-            'intensity_percentile': getattr(args, 'intensity_percentile', 99),
+            'intensity_percentile': getattr(args, 'intensity_percentile', 98),
             'min_area': getattr(args, 'min_area', 150),
             'min_skeleton_length': getattr(args, 'min_skeleton_length', 30),
             'max_solidity': getattr(args, 'max_solidity', 0.85),
@@ -281,7 +476,7 @@ def enrich_detection_features(
 
         # Create universal ID: slide_celltype_globalX_globalY
         # Use round() to reduce collision probability for nearby cells
-        uid = f"{slide_name}_{cell_type}_{round(global_cx)}_{round(global_cy)}"
+        uid = f"{slide_name}_{cell_type}_{int(round(global_cx))}_{int(round(global_cy))}"
 
         # Add enriched fields
         feat['uid'] = uid

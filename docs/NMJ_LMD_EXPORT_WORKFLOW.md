@@ -87,14 +87,14 @@ output/
 python -m http.server 8080 --directory /path/to/output/html
 ```
 
-### Step 3: Cluster NMJs Biologically
+### Step 3: Cluster Detections Biologically
 
-Group nearby NMJs into clusters targeting 375-425 um2 total area per cluster. Two-stage spatial clustering:
+Group nearby detections into clusters targeting 375-425 um2 total area per cluster. Two-stage spatial clustering:
 - Round 1: 500 um distance threshold (tight groups)
-- Round 2: 1000 um threshold (remaining NMJs)
+- Round 2: 1000 um threshold (remaining detections)
 
 ```bash
-python scripts/cluster_nmjs.py \
+python scripts/cluster_detections.py \
     --detections nmj_detections.json \
     --pixel-size 0.1725 \
     --area-min 375 --area-max 425 \
@@ -102,6 +102,8 @@ python scripts/cluster_nmjs.py \
     --min-score 0.5 \
     --output nmj_clusters.json
 ```
+
+**Note:** The clustering algorithm is cell-type-agnostic. The same script works for any detection type. The underlying module is `segmentation.lmd.clustering`.
 
 **Output:** `nmj_clusters.json` with `main_clusters` and `outliers` (singles).
 

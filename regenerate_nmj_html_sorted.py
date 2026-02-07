@@ -159,7 +159,7 @@ def main():
     # Deduplicate by checking actual mask overlap (keep larger mask)
     original_count = len(all_detections)
     logger.info("Checking mask overlaps for deduplication...")
-    all_detections = deduplicate_by_mask_overlap(all_detections, tiles_dir, min_overlap_fraction=0.1)
+    all_detections = deduplicate_by_mask_overlap(all_detections, tiles_dir, min_overlap_fraction=0.1, mask_filename='nmj_masks.h5')
     if len(all_detections) < original_count:
         logger.info(f"Deduplicated: {original_count} -> {len(all_detections)} ({original_count - len(all_detections)} duplicates removed)")
 

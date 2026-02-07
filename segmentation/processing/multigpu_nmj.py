@@ -204,15 +204,15 @@ def _nmj_gpu_worker(
 
     # Create NMJStrategy with parameters
     strategy = NMJStrategy(
-        intensity_percentile=strategy_params.get('intensity_percentile', 99.0),
+        intensity_percentile=strategy_params.get('intensity_percentile', 98.0),
         max_solidity=strategy_params.get('max_solidity', 0.85),
         min_skeleton_length=strategy_params.get('min_skeleton_length', 30),
         min_area_px=strategy_params.get('min_area', 150),
         max_area_px=strategy_params.get('max_area_px'),
         min_area_um=strategy_params.get('min_area_um', 25.0),
-        classifier_threshold=strategy_params.get('classifier_threshold', 0.75),
+        classifier_threshold=strategy_params.get('classifier_threshold', 0.5),
         use_classifier=classifier is not None,
-        extract_resnet_features=False,  # NMJ multi-GPU uses morph+SAM2 only
+        extract_deep_features=False,  # Multi-GPU uses morph+SAM2 by default
         extract_sam2_embeddings=extract_sam2_embeddings,
     )
 
@@ -298,7 +298,7 @@ def _nmj_gpu_worker(
             # Check for tissue BEFORE uint8 conversion (threshold is calibrated for uint16)
             try:
                 # Use BTX channel (ch1) for tissue detection - this is the NMJ marker channel
-                has_tissue_flag, _ = has_tissue(extra_channel_tiles[1], threshold=1000.0, block_size=64)
+                has_tissue_flag, _ = has_tissue(extra_channel_tiles[1], variance_threshold=1000.0, block_size=64)
             except Exception:
                 has_tissue_flag = True  # Assume tissue on error
 
@@ -348,19 +348,8 @@ def _nmj_gpu_worker(
                         time.sleep(1.0 * (attempt + 1))  # Exponential backoff
                         continue
                     else:
+                        logger.error(f"[{worker_name}] All {max_retries} retries failed for tile {tid}")
                         raise  # Re-raise if not CUDA error or max retries exceeded
-            else:
-                # All retries exhausted (for-else: executes only if loop completed without break)
-                logger.error(f"[{worker_name}] All {max_retries} retries failed for tile {tid}")
-                output_queue.put({
-                    'status': 'error',
-                    'tid': tid,
-                    'slide_name': slide_name,
-                    'tile': tile,
-                    'error': f'CUDA error after {max_retries} retries',
-                })
-                tiles_processed += 1
-                continue
 
             # Build features list with global UIDs (only reached if detection succeeded)
             # The UID (based on global coordinates) is the PRIMARY identifier

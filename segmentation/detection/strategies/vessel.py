@@ -23,6 +23,7 @@ import cv2
 from PIL import Image
 
 from .base import DetectionStrategy, Detection
+from .mixins import MultiChannelFeatureMixin
 from segmentation.utils.logging import get_logger
 from segmentation.utils.feature_extraction import (
     extract_morphological_features,
@@ -105,7 +106,7 @@ class CrossTileMergeConfig:
 # Issue #7: Local extract_morphological_features removed - now imported from shared module
 
 
-class VesselStrategy(DetectionStrategy):
+class VesselStrategy(DetectionStrategy, MultiChannelFeatureMixin):
     """
     Vessel detection strategy for ring structures.
 
@@ -137,7 +138,7 @@ class VesselStrategy(DetectionStrategy):
         canny_low: Low threshold for Canny (auto if None)
         canny_high: High threshold for Canny (auto if None)
         classify_vessel_types: Whether to auto-classify by diameter (default: False)
-        extract_resnet_features: Whether to extract 2048D ResNet features (default: True)
+        extract_deep_features: Whether to extract ResNet+DINOv2 features (default: False, opt-in)
         extract_sam2_embeddings: Whether to extract 256D SAM2 embeddings (default: True)
         resnet_batch_size: Batch size for ResNet feature extraction (default: 16)
         enable_boundary_detection: Enable detection of partial vessels at tile edges (default: True)
@@ -190,7 +191,7 @@ class VesselStrategy(DetectionStrategy):
         canny_low: Optional[int] = None,
         canny_high: Optional[int] = None,
         classify_vessel_types: bool = False,
-        extract_resnet_features: bool = True,
+        extract_deep_features: bool = False,
         extract_sam2_embeddings: bool = True,
         resnet_batch_size: int = 32,
         # New parameters for boundary detection
@@ -241,7 +242,7 @@ class VesselStrategy(DetectionStrategy):
         self.canny_low = canny_low
         self.canny_high = canny_high
         self.classify_vessel_types = classify_vessel_types
-        self.extract_resnet_features = extract_resnet_features
+        self.extract_deep_features = extract_deep_features
         self.extract_sam2_embeddings = extract_sam2_embeddings
         self.resnet_batch_size = resnet_batch_size
 
@@ -3699,6 +3700,7 @@ class VesselStrategy(DetectionStrategy):
         # Extract features and create masks for valid candidates
         valid_candidates = []
         crops_for_resnet = []
+        crops_for_resnet_context = []
         crop_indices = []
 
         for cand_idx, cand in enumerate(ring_candidates):
@@ -3795,22 +3797,24 @@ class VesselStrategy(DetectionStrategy):
             if sam2_predictor is not None and self.extract_sam2_embeddings and extract_full_features:
                 sam2_emb = self._extract_sam2_embedding(sam2_predictor, cy, cx)
                 for i, v in enumerate(sam2_emb):
-                    all_features[f'sam2_emb_{i}'] = float(v)
+                    all_features[f'sam2_{i}'] = float(v)
             elif extract_full_features:
                 # Fill with zeros if SAM2 not available
                 for i in range(256):
-                    all_features[f'sam2_emb_{i}'] = 0.0
+                    all_features[f'sam2_{i}'] = 0.0
 
-            # Prepare crop for batch ResNet processing
-            if self.extract_resnet_features and extract_full_features:
+            # Prepare crops for batch ResNet/DINOv2 processing (masked + context)
+            if self.extract_deep_features and extract_full_features:
                 ys, xs = np.where(wall_mask)
                 if len(ys) > 0:
                     y1, y2 = ys.min(), ys.max()
                     x1, x2 = xs.min(), xs.max()
-                    crop = tile_rgb[y1:y2+1, x1:x2+1].copy()
+                    crop_context = tile_rgb[y1:y2+1, x1:x2+1].copy()
+                    crop_masked = crop_context.copy()
                     crop_mask = wall_mask[y1:y2+1, x1:x2+1]
-                    crop[~crop_mask] = 0  # Zero out background
-                    crops_for_resnet.append(crop)
+                    crop_masked[~crop_mask] = 0  # Zero out background
+                    crops_for_resnet.append(crop_masked)
+                    crops_for_resnet_context.append(crop_context)
                     crop_indices.append(len(valid_candidates))
 
             # Store inner contour only if it exists
@@ -3829,23 +3833,65 @@ class VesselStrategy(DetectionStrategy):
                 'detection_type': vessel_feat.get('detection_type', 'complete'),
             })
 
-        # Batch ResNet feature extraction
+        # Batch deep feature extraction (ResNet + DINOv2, masked + context)
+        # ResNet masked
         if crops_for_resnet and resnet is not None and resnet_transform is not None and extract_full_features:
             resnet_features_list = self._extract_resnet_features_batch(
                 crops_for_resnet, resnet, resnet_transform, device
             )
-
-            # Assign ResNet features to correct candidates
             for crop_idx, resnet_feats in zip(crop_indices, resnet_features_list):
                 for i, v in enumerate(resnet_feats):
                     valid_candidates[crop_idx]['features'][f'resnet_{i}'] = float(v)
 
-        # Fill zeros for candidates without ResNet features
-        if extract_full_features:
+        # ResNet context
+        if crops_for_resnet_context and resnet is not None and resnet_transform is not None and extract_full_features:
+            resnet_ctx_list = self._extract_resnet_features_batch(
+                crops_for_resnet_context, resnet, resnet_transform, device
+            )
+            for crop_idx, resnet_feats in zip(crop_indices, resnet_ctx_list):
+                for i, v in enumerate(resnet_feats):
+                    valid_candidates[crop_idx]['features'][f'resnet_ctx_{i}'] = float(v)
+
+        # DINOv2 (only access model if extract_deep_features is enabled)
+        if self.extract_deep_features:
+            dinov2 = models.get('dinov2')
+            dinov2_transform = models.get('dinov2_transform')
+        else:
+            dinov2 = None
+            dinov2_transform = None
+
+        if crops_for_resnet and dinov2 is not None and dinov2_transform is not None and extract_full_features:
+            dinov2_masked_list = self._extract_dinov2_features_batch(
+                crops_for_resnet, dinov2, dinov2_transform, device
+            )
+            for crop_idx, dino_feats in zip(crop_indices, dinov2_masked_list):
+                for i, v in enumerate(dino_feats):
+                    valid_candidates[crop_idx]['features'][f'dinov2_{i}'] = float(v)
+
+            dinov2_ctx_list = self._extract_dinov2_features_batch(
+                crops_for_resnet_context, dinov2, dinov2_transform, device
+            )
+            for crop_idx, dino_feats in zip(crop_indices, dinov2_ctx_list):
+                for i, v in enumerate(dino_feats):
+                    valid_candidates[crop_idx]['features'][f'dinov2_ctx_{i}'] = float(v)
+
+        # Fill zeros for candidates that failed crop extraction (warn so it's not silent)
+        if extract_full_features and self.extract_deep_features:
             for cand in valid_candidates:
                 if 'resnet_0' not in cand['features']:
+                    logger.warning("Detection missing ResNet features - zero-filling")
                     for i in range(2048):
                         cand['features'][f'resnet_{i}'] = 0.0
+                if 'resnet_ctx_0' not in cand['features']:
+                    for i in range(2048):
+                        cand['features'][f'resnet_ctx_{i}'] = 0.0
+                if dinov2 is not None and 'dinov2_0' not in cand['features']:
+                    logger.warning("Detection missing DINOv2 features - zero-filling")
+                    for i in range(1024):
+                        cand['features'][f'dinov2_{i}'] = 0.0
+                if dinov2 is not None and 'dinov2_ctx_0' not in cand['features']:
+                    for i in range(1024):
+                        cand['features'][f'dinov2_ctx_{i}'] = 0.0
 
         # Reset SAM2 predictor
         if sam2_predictor is not None and self.extract_sam2_embeddings:
@@ -4559,7 +4605,7 @@ class VesselStrategy(DetectionStrategy):
             'canny_low': self.canny_low,
             'canny_high': self.canny_high,
             'classify_vessel_types': self.classify_vessel_types,
-            'extract_resnet_features': self.extract_resnet_features,
+            'extract_deep_features': self.extract_deep_features,
             'extract_sam2_embeddings': self.extract_sam2_embeddings,
             'resnet_batch_size': self.resnet_batch_size,
             # Boundary detection settings

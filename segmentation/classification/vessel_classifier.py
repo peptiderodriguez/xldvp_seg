@@ -77,7 +77,7 @@ MORPHOLOGICAL_FEATURES = [
 DEFAULT_FEATURES = VESSEL_CORE_FEATURES + MORPHOLOGICAL_FEATURES
 
 # SAM2 embedding features (256D)
-SAM2_FEATURES = [f'sam2_emb_{i}' for i in range(256)]
+SAM2_FEATURES = [f'sam2_{i}' for i in range(256)]
 
 # ResNet-50 features (2048D)
 RESNET_FEATURES = [f'resnet_{i}' for i in range(2048)]

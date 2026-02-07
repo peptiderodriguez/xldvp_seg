@@ -21,6 +21,7 @@ from typing import List, Dict, Any, Optional, Tuple
 import numpy as np
 
 from .base import DetectionStrategy, Detection
+from .mixins import MultiChannelFeatureMixin
 from segmentation.utils.feature_extraction import (
     extract_morphological_features,
     SAM2_EMBEDDING_DIM,
@@ -33,7 +34,7 @@ logger = logging.getLogger(__name__)
 # Issue #7: Local extract_morphological_features removed - now imported from shared module
 
 
-class MKStrategy(DetectionStrategy):
+class MKStrategy(DetectionStrategy, MultiChannelFeatureMixin):
     """
     Megakaryocyte detection strategy.
 
@@ -56,7 +57,7 @@ class MKStrategy(DetectionStrategy):
                  max_area_um: float = 2000.0,
                  classifier_threshold: float = 0.5,
                  overlap_threshold: float = 0.5,
-                 extract_resnet_features: bool = True,
+                 extract_deep_features: bool = False,
                  extract_sam2_embeddings: bool = True,
                  resnet_batch_size: int = 32):
         """
@@ -67,7 +68,7 @@ class MKStrategy(DetectionStrategy):
             max_area_um: Maximum MK area in square micrometers (default 2000)
             classifier_threshold: Minimum classifier score to keep detection (default 0.5)
             overlap_threshold: Maximum overlap fraction with existing masks (default 0.5)
-            extract_resnet_features: Whether to extract 2048D ResNet features
+            extract_deep_features: Whether to extract ResNet+DINOv2 features (default False, opt-in)
             extract_sam2_embeddings: Whether to extract 256D SAM2 embeddings
             resnet_batch_size: Batch size for ResNet feature extraction
         """
@@ -75,7 +76,7 @@ class MKStrategy(DetectionStrategy):
         self.max_area_um = max_area_um
         self.classifier_threshold = classifier_threshold
         self.overlap_threshold = overlap_threshold
-        self.extract_resnet_features = extract_resnet_features
+        self.extract_deep_features = extract_deep_features
         self.extract_sam2_embeddings = extract_sam2_embeddings
         self.resnet_batch_size = resnet_batch_size
 
@@ -230,7 +231,8 @@ class MKStrategy(DetectionStrategy):
                tile: np.ndarray,
                models: Dict[str, Any],
                pixel_size_um: float = 0.22,
-               extract_features: bool = True) -> Tuple[np.ndarray, List[Detection]]:
+               extract_features: bool = True,
+               extra_channels: Dict[int, np.ndarray] = None) -> Tuple[np.ndarray, List[Detection]]:
         """
         Full MK detection pipeline with optimized batch processing.
 
@@ -239,7 +241,8 @@ class MKStrategy(DetectionStrategy):
         2. Size filtering (before feature extraction for efficiency)
         3. Overlap filtering
         4. Batch feature extraction (morphological + SAM2 + ResNet)
-        5. Optional classifier filtering
+        5. Per-channel features when extra_channels provided
+        6. Optional classifier filtering
 
         Args:
             tile: RGB image tile (H, W, 3)
@@ -251,6 +254,8 @@ class MKStrategy(DetectionStrategy):
                 - 'mk_classifier': Optional classifier model
             pixel_size_um: Pixel size in micrometers (default 0.22)
             extract_features: Whether to extract full features
+            extra_channels: Dict mapping channel index to 2D uint16 array for
+                per-channel feature extraction (optional)
 
         Returns:
             Tuple of (label_array, list of Detection objects)
@@ -330,6 +335,7 @@ class MKStrategy(DetectionStrategy):
 
             # First pass: Extract morphological and SAM2 features, collect crops
             crops = []
+            crops_context = []
             crop_indices = []
 
             for idx, det in enumerate(valid_detections):
@@ -339,46 +345,101 @@ class MKStrategy(DetectionStrategy):
                 # Extract morphological features
                 morph = extract_morphological_features(mask, tile)
 
+                # Extract per-channel features if extra_channels provided
+                if extra_channels is not None:
+                    channels_dict = {f'ch{k}': v for k, v in sorted(extra_channels.items()) if v is not None}
+                    multichannel_feats = self.extract_multichannel_features(mask, channels_dict)
+                    morph.update(multichannel_feats)
+
                 # Extract SAM2 embeddings
                 if sam2_predictor is not None and self.extract_sam2_embeddings:
                     sam2_emb = self._extract_sam2_embedding(sam2_predictor, cy, cx)
                     for i, v in enumerate(sam2_emb):
-                        morph[f'sam2_emb_{i}'] = float(v)
+                        morph[f'sam2_{i}'] = float(v)
+                elif self.extract_sam2_embeddings:
+                    logger.warning("SAM2 predictor unavailable - zero-filling 256D embeddings")
+                    for i in range(256):
+                        morph[f'sam2_{i}'] = 0.0
 
                 det['features'] = morph
 
-                # Prepare crop for batch ResNet processing
-                if self.extract_resnet_features:
+                # Prepare crops for batch ResNet/DINOv2 processing (masked + context)
+                if self.extract_deep_features:
                     ys, xs = np.where(mask)
                     if len(ys) > 0:
                         y1, y2 = ys.min(), ys.max()
                         x1, x2 = xs.min(), xs.max()
-                        crop = tile[y1:y2+1, x1:x2+1].copy()
+                        crop_context = tile[y1:y2+1, x1:x2+1].copy()
+                        crop_masked = crop_context.copy()
                         crop_mask = mask[y1:y2+1, x1:x2+1]
-                        crop[~crop_mask] = 0  # Zero out background
-                        crops.append(crop)
+                        crop_masked[~crop_mask] = 0  # Zero out background
+                        crops.append(crop_masked)
+                        crops_context.append(crop_context)
                         crop_indices.append(idx)
 
-            # Batch ResNet feature extraction
+            # Batch deep feature extraction (ResNet + DINOv2, masked + context)
             resnet = models.get('resnet')
             resnet_transform = models.get('resnet_transform')
             device = models.get('device')
 
+            # ResNet masked
             if crops and resnet is not None and resnet_transform is not None:
                 resnet_features_list = self._extract_resnet_features_batch(
                     crops, resnet, resnet_transform, device
                 )
-
-                # Assign ResNet features to correct detections
                 for crop_idx, resnet_feats in zip(crop_indices, resnet_features_list):
                     for i, v in enumerate(resnet_feats):
                         valid_detections[crop_idx]['features'][f'resnet_{i}'] = float(v)
 
-            # Fill zeros for detections without valid ResNet features
-            for det in valid_detections:
-                if 'resnet_0' not in det['features']:
-                    for i in range(2048):
-                        det['features'][f'resnet_{i}'] = 0.0
+            # ResNet context
+            if crops_context and resnet is not None and resnet_transform is not None:
+                resnet_ctx_list = self._extract_resnet_features_batch(
+                    crops_context, resnet, resnet_transform, device
+                )
+                for crop_idx, resnet_feats in zip(crop_indices, resnet_ctx_list):
+                    for i, v in enumerate(resnet_feats):
+                        valid_detections[crop_idx]['features'][f'resnet_ctx_{i}'] = float(v)
+
+            # DINOv2 (only access model if extract_deep_features is enabled)
+            if self.extract_deep_features:
+                dinov2 = models.get('dinov2')
+                dinov2_transform = models.get('dinov2_transform')
+            else:
+                dinov2 = None
+                dinov2_transform = None
+
+            if crops and dinov2 is not None and dinov2_transform is not None:
+                dinov2_masked_list = self._extract_dinov2_features_batch(
+                    crops, dinov2, dinov2_transform, device
+                )
+                for crop_idx, dino_feats in zip(crop_indices, dinov2_masked_list):
+                    for i, v in enumerate(dino_feats):
+                        valid_detections[crop_idx]['features'][f'dinov2_{i}'] = float(v)
+
+                dinov2_ctx_list = self._extract_dinov2_features_batch(
+                    crops_context, dinov2, dinov2_transform, device
+                )
+                for crop_idx, dino_feats in zip(crop_indices, dinov2_ctx_list):
+                    for i, v in enumerate(dino_feats):
+                        valid_detections[crop_idx]['features'][f'dinov2_ctx_{i}'] = float(v)
+
+            # Fill zeros for detections that failed crop extraction (warn so it's not silent)
+            if self.extract_deep_features:
+                for det in valid_detections:
+                    if 'resnet_0' not in det['features']:
+                        logger.warning("Detection missing ResNet features - zero-filling")
+                        for i in range(2048):
+                            det['features'][f'resnet_{i}'] = 0.0
+                    if 'resnet_ctx_0' not in det['features']:
+                        for i in range(2048):
+                            det['features'][f'resnet_ctx_{i}'] = 0.0
+                    if dinov2 is not None and 'dinov2_0' not in det['features']:
+                        logger.warning("Detection missing DINOv2 features - zero-filling")
+                        for i in range(1024):
+                            det['features'][f'dinov2_{i}'] = 0.0
+                    if dinov2 is not None and 'dinov2_ctx_0' not in det['features']:
+                        for i in range(1024):
+                            det['features'][f'dinov2_ctx_{i}'] = 0.0
 
             # Reset SAM2 predictor
             if sam2_predictor is not None:

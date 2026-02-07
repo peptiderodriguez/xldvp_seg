@@ -207,7 +207,7 @@ class YourStrategy(DetectionStrategy):
             # Combine all features
             features = {**morph_features}
             for i, v in enumerate(sam2_emb):
-                features[f'sam2_emb_{i}'] = float(v)
+                features[f'sam2_{i}'] = float(v)
             for i, v in enumerate(resnet_features):
                 features[f'resnet_{i}'] = float(v)
 
