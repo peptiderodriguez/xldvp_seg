@@ -1638,7 +1638,6 @@ def run_pipeline(args):
                 # CNN classifier - use transform pipeline
                 from torchvision import transforms
                 classifier_transform = transforms.Compose([
-                    transforms.ToPILImage(),
                     transforms.Resize((224, 224)),
                     transforms.ToTensor(),
                     transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])
@@ -1895,8 +1894,8 @@ def run_pipeline(args):
         shm_manager = SharedSlideManager()
 
         try:
-            # Load channels to shared memory (up to 3 for RGB, or fewer if available)
-            ch_keys = sorted(all_channel_data.keys())[:3]
+            # Load ALL channels to shared memory (RGB display uses first 3, feature extraction needs all)
+            ch_keys = sorted(all_channel_data.keys())
             n_channels = len(ch_keys)
             h, w = all_channel_data[ch_keys[0]].shape
             logger.info(f"Creating shared memory for {n_channels} channels ({h}x{w})...")
@@ -1913,20 +1912,14 @@ def run_pipeline(args):
             # Build strategy parameters from the already-constructed params dict
             strategy_params = dict(params)  # params built by build_detection_params()
 
-            # Get classifier path (NMJ-specific)
+            # Get classifier path (NMJ-specific) — only use if explicitly specified
+            # (no auto-loading from checkpoints/, to match single-GPU behavior)
             classifier_path = getattr(args, 'nmj_classifier', None)
-            if args.cell_type == 'nmj':
-                if classifier_path is None:
-                    default_classifier = Path(__file__).parent / "checkpoints" / "nmj_classifier_morph_sam2.joblib"
-                    if default_classifier.exists():
-                        classifier_path = str(default_classifier)
-                        classifier_loaded = True
-                        logger.info(f"Using default classifier: {classifier_path}")
-                    else:
-                        logger.warning("No classifier found — will return all candidates")
-                else:
-                    classifier_loaded = True
-                    logger.info(f"Using specified classifier: {classifier_path}")
+            if args.cell_type == 'nmj' and classifier_path:
+                classifier_loaded = True
+                logger.info(f"Using specified classifier: {classifier_path}")
+            elif args.cell_type == 'nmj':
+                logger.info("No --nmj-classifier specified — will return all candidates (annotation run)")
 
             # Create multi-GPU processor (supports all cell types)
             extract_deep = getattr(args, 'extract_deep_features', False)
@@ -2092,17 +2085,24 @@ def run_pipeline(args):
                             rel_x:rel_x + args.tile_size
                         ]
 
-                # Build RGB tile from channels
-                if len(all_channel_data) >= 3:
-                    ch_keys = sorted(all_channel_data.keys())[:3]
+                # Build RGB tile from channels (matches multi-GPU path in multigpu_worker.py)
+                ch_keys_sorted = sorted(all_channel_data.keys())
+                n_ch = len(ch_keys_sorted)
+                if n_ch >= 3:
                     tile_rgb = np.stack([
                         all_channel_data[k][rel_y:rel_y + args.tile_size, rel_x:rel_x + args.tile_size]
-                        for k in ch_keys
+                        for k in ch_keys_sorted[:3]
                     ], axis=-1)
-                elif tile_data.ndim == 2:
-                    tile_rgb = np.stack([tile_data] * 3, axis=-1)
+                elif n_ch == 2:
+                    ch0 = all_channel_data[ch_keys_sorted[0]][rel_y:rel_y + args.tile_size, rel_x:rel_x + args.tile_size]
+                    ch1 = all_channel_data[ch_keys_sorted[1]][rel_y:rel_y + args.tile_size, rel_x:rel_x + args.tile_size]
+                    tile_rgb = np.stack([ch0, ch1, ch1], axis=-1)
+                elif n_ch == 1:
+                    ch0 = all_channel_data[ch_keys_sorted[0]][rel_y:rel_y + args.tile_size, rel_x:rel_x + args.tile_size]
+                    tile_rgb = np.stack([ch0, ch0, ch0], axis=-1)
                 else:
-                    tile_rgb = tile_data
+                    # Fallback: use detection channel tile
+                    tile_rgb = np.stack([tile_data] * 3, axis=-1)
 
                 # has_tissue() check on uint16 BEFORE conversion
                 try:
