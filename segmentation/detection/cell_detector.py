@@ -66,7 +66,7 @@ class _LazyModelDict(dict):
     def __getitem__(self, key):
         if key not in self._loaded:
             self._load_model(key)
-        return super().get(key)
+        return super().__getitem__(key)
 
     def get(self, key, default=None):
         if key not in self._loaded:
@@ -410,6 +410,9 @@ class CellDetector:
             emb_h, emb_w = shape[2], shape[3]
             img_h, img_w = self._sam2_predictor._orig_hw[0]
 
+            if img_h == 0 or img_w == 0:
+                return np.zeros(256)
+
             emb_y = int(cy / img_h * emb_h)
             emb_x = int(cx / img_w * emb_w)
             emb_y = min(max(emb_y, 0), emb_h - 1)
@@ -428,10 +431,10 @@ class CellDetector:
         cx: float
     ) -> Dict[str, Any]:
         """
-        Extract all 2326 features for a single detection.
+        Extract full features for a single detection.
 
         Features include:
-        - 22 morphological/intensity features
+        - 22 base morphological/intensity features (up to ~78 with multi-channel)
         - 256 SAM2 embedding features
         - 2048 ResNet deep features
 
@@ -558,6 +561,8 @@ class CellDetector:
         self._cellpose = None
         self._resnet = None
         self._resnet_transform = None
+        self._dinov2 = None
+        self._dinov2_transform = None
 
         gc.collect()
         if torch.cuda.is_available():

@@ -28,6 +28,7 @@ import numpy as np
 import joblib
 
 from sklearn.ensemble import RandomForestClassifier
+from sklearn.pipeline import Pipeline
 from sklearn.preprocessing import StandardScaler, LabelEncoder
 from sklearn.model_selection import cross_val_score, StratifiedKFold
 from sklearn.metrics import classification_report, confusion_matrix
@@ -82,8 +83,8 @@ SAM2_FEATURES = [f'sam2_{i}' for i in range(256)]
 # ResNet-50 features (2048D)
 RESNET_FEATURES = [f'resnet_{i}' for i in range(2048)]
 
-# Full feature set: 22 morphological + 13 vessel-specific + 256 SAM2 + 2048 ResNet = 2339
-# Note: There's overlap between morphological and vessel-specific, actual unique ~2326
+# Full feature set (single-pass): 22 base morph + 13 vessel-specific + 256 SAM2 + 2048 ResNet
+# Note: Full pipeline uses masked+context (4096 ResNet, 2048 DINOv2) for up to 6478 total
 FULL_FEATURES = DEFAULT_FEATURES + SAM2_FEATURES + RESNET_FEATURES
 
 
@@ -260,20 +261,31 @@ class VesselClassifier:
         # Handle NaN/Inf
         X_array = np.nan_to_num(X_array, nan=0, posinf=0, neginf=0)
 
-        # Scale features
-        X_scaled = self.scaler.fit_transform(X_array)
-
-        # Cross-validation
+        # Cross-validation using Pipeline to avoid data leakage
+        # (scaler is fit only on training folds, not on validation data)
         if verbose:
             logger.info(f"Running {cv_folds}-fold cross-validation...")
 
         cv = StratifiedKFold(n_splits=cv_folds, shuffle=True, random_state=self.random_state)
-        cv_scores = cross_val_score(self.model, X_scaled, y_encoded, cv=cv, scoring='accuracy')
+        cv_pipeline = Pipeline([
+            ('scaler', StandardScaler()),
+            ('classifier', RandomForestClassifier(
+                n_estimators=self.n_estimators,
+                max_depth=self.max_depth,
+                min_samples_split=self.min_samples_split,
+                min_samples_leaf=self.min_samples_leaf,
+                class_weight=self.class_weight,
+                random_state=self.random_state,
+                n_jobs=-1,
+            )),
+        ])
+        cv_scores = cross_val_score(cv_pipeline, X_array, y_encoded, cv=cv, scoring='accuracy')
 
         if verbose:
             logger.info(f"CV Accuracy: {cv_scores.mean():.4f} (+/- {cv_scores.std() * 2:.4f})")
 
-        # Train on full dataset
+        # Train on full dataset (fit scaler on all data only for final model)
+        X_scaled = self.scaler.fit_transform(X_array)
         self.model.fit(X_scaled, y_encoded)
         self.trained = True
 

@@ -248,7 +248,7 @@ class CrossPlacer:
         """Update window title with cross count and status."""
         n_crosses = len(self.points_layer.data)
         status = "READY" if n_crosses >= 3 else f"Need {3 - n_crosses} more"
-        self.viewer.title = f"LMD Cross Placement - {n_crosses} crosses ({status}) | W=Save U=Undo C=Clear Q=Quit"
+        self.viewer.title = f"LMD Cross Placement - {n_crosses} crosses ({status}) | S=Save U=Undo C=Clear Q=Quit"
 
     def save_crosses(self) -> bool:
         """Save crosses to JSON file."""

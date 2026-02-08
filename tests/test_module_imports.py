@@ -91,10 +91,10 @@ class TestConfigImports(unittest.TestCase):
             RESNET_EMBEDDING_DIMENSION,
             TOTAL_FEATURES_PER_CELL,
         )
-        assert MORPHOLOGICAL_FEATURES_COUNT == 22
+        assert MORPHOLOGICAL_FEATURES_COUNT == 78  # Full pipeline (22 base + NMJ-specific + multi-channel)
         assert SAM2_EMBEDDING_DIMENSION == 256
-        assert RESNET_EMBEDDING_DIMENSION == 2048
-        assert TOTAL_FEATURES_PER_CELL == 2326
+        assert RESNET_EMBEDDING_DIMENSION == 4096  # 2 x 2048 (masked + context)
+        assert TOTAL_FEATURES_PER_CELL == 6478  # 78 + 256 + 4096 + 2048
 
     def test_pixel_size_constant(self):
         """Test that default pixel size constant can be imported."""
@@ -119,7 +119,7 @@ class TestConfigImports(unittest.TestCase):
         assert 'sam2_embedding' in dims
         assert 'resnet_embedding' in dims
         assert 'total' in dims
-        assert dims['total'] == dims['morphological'] + dims['sam2_embedding'] + dims['resnet_embedding']
+        assert dims['total'] == dims['morphological'] + dims['sam2_embedding'] + dims['resnet_embedding'] + dims['dinov2_embedding']
 
     def test_config_constants_and_defaults(self):
         """Test that config defaults and constants can be imported."""

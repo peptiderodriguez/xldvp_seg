@@ -197,6 +197,13 @@ class CZILoader:
             logger.debug(f"Channel {channel} already loaded, skipping")
             return
 
+        if strip_height <= 0:
+            raise ValueError(f"strip_height must be positive, got {strip_height}")
+        if self.height <= 0 or self.width <= 0:
+            raise ValueError(
+                f"Mosaic dimensions must be positive, got {self.width}x{self.height}"
+            )
+
         logger.info(f"Loading channel {channel} into RAM ({self.width:,} x {self.height:,} px)...")
 
         n_strips = (self.height + strip_height - 1) // strip_height
@@ -268,6 +275,13 @@ class CZILoader:
         Raises:
             ValueError: If shm_buffer shape doesn't match mosaic dimensions
         """
+        if strip_height <= 0:
+            raise ValueError(f"strip_height must be positive, got {strip_height}")
+        if self.height <= 0 or self.width <= 0:
+            raise ValueError(
+                f"Mosaic dimensions must be positive, got {self.width}x{self.height}"
+            )
+
         # Validate buffer dimensions
         expected_2d = (self.height, self.width)
         expected_rgb = (self.height, self.width, 3)
@@ -543,7 +557,13 @@ class CZILoader:
 
         Returns:
             Tile data at requested scale, or None if invalid
+
+        Raises:
+            ValueError: If scale_factor is not positive
         """
+        if scale_factor <= 0:
+            raise ValueError(f"scale_factor must be positive, got {scale_factor}")
+
         data = self._channel_data.get(channel)
         if data is None:
             logger.warning(f"Channel {channel} not loaded, falling back to CZI read")
@@ -610,7 +630,13 @@ class CZILoader:
 
         Returns:
             Tile data at requested scale, or None if invalid
+
+        Raises:
+            ValueError: If scale_factor is not positive
         """
+        if scale_factor <= 0:
+            raise ValueError(f"scale_factor must be positive, got {scale_factor}")
+
         # Convert scaled coordinates to full-resolution coordinates
         full_tile_x = tile_x * scale_factor
         full_tile_y = tile_y * scale_factor

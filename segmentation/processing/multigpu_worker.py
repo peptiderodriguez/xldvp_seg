@@ -79,6 +79,7 @@ def _gpu_worker(
     cd31_channel: Optional[int] = None,
     channel_names: Optional[Dict[int, str]] = None,
     variance_threshold: float = 1000.0,
+    channel_keys: Optional[List[int]] = None,
 ):
     """
     Generic GPU worker for any cell type.
@@ -270,9 +271,12 @@ def _gpu_worker(
         )
     else:
         from segmentation.detection.strategies.mesothelium import MesotheliumStrategy
+        meso_params = {k: v for k, v in strategy_params.items() if k != 'pixel_size_um'}
         strategy = MesotheliumStrategy(
             pixel_size_um=pixel_size_um,
-            **{k: v for k, v in strategy_params.items() if k != 'pixel_size_um'},
+            extract_deep_features=extract_deep_features,
+            extract_sam2_embeddings=extract_sam2_embeddings,
+            **meso_params,
         )
 
     logger.info(f"[{worker_name}] {cell_type} strategy created: {strategy.get_config()}")
@@ -310,14 +314,18 @@ def _gpu_worker(
             _, slide_arr = shared_slides[slide_name]
 
             # Extract tile from shared memory
-            y_start, x_start = tile['y'], tile['x']
+            # Tile coords are global CZI mosaic coords; shared memory is 0-indexed
+            # Convert global→relative for array indexing
+            mosaic_ox, mosaic_oy = slide_info[slide_name].get('mosaic_origin', (0, 0))
+            y_rel = tile['y'] - mosaic_oy
+            x_rel = tile['x'] - mosaic_ox
             tile_h, tile_w = tile['h'], tile['w']
 
-            y_end = min(y_start + tile_h, slide_arr.shape[0])
-            x_end = min(x_start + tile_w, slide_arr.shape[1])
+            y_end = min(y_rel + tile_h, slide_arr.shape[0])
+            x_end = min(x_rel + tile_w, slide_arr.shape[1])
 
             if slide_arr.ndim == 3:
-                tile_raw = slide_arr[y_start:y_end, x_start:x_end, :].copy()
+                tile_raw = slide_arr[y_rel:y_end, x_rel:x_end, :].copy()
                 n_ch = tile_raw.shape[2]
                 if n_ch >= 3:
                     tile_rgb = tile_raw[:, :, :3]
@@ -327,7 +335,7 @@ def _gpu_worker(
                 else:
                     tile_rgb = np.stack([tile_raw[:, :, 0]] * 3, axis=-1)
             else:
-                tile_gray = slide_arr[y_start:y_end, x_start:x_end].copy()
+                tile_gray = slide_arr[y_rel:y_end, x_rel:x_end].copy()
                 tile_rgb = np.stack([tile_gray] * 3, axis=-1)
 
             # Validate tile
@@ -339,14 +347,17 @@ def _gpu_worker(
                 tiles_processed += 1
                 continue
 
-            # Build extra_channel_tiles from REAL channels (before RGB padding/uint8 conversion)
+            # Build extra_channel_tiles from tile_raw (already copied from shared memory)
+            # Keys are CZI channel indices (not slot indices) so detection_channel lookup works
             extra_channel_tiles = None
             if slide_arr.ndim == 3:
-                n_real_ch = slide_arr.shape[2]
+                n_real_ch = tile_raw.shape[2]
                 if n_real_ch >= 2:
                     extra_channel_tiles = {}
-                    for ch_idx in range(n_real_ch):
-                        extra_channel_tiles[ch_idx] = slide_arr[y_start:y_end, x_start:x_end, ch_idx].copy()
+                    for slot_idx in range(n_real_ch):
+                        # Map slot index back to CZI channel index
+                        czi_ch = channel_keys[slot_idx] if channel_keys and slot_idx < len(channel_keys) else slot_idx
+                        extra_channel_tiles[czi_ch] = tile_raw[:, :, slot_idx].copy()
 
             # has_tissue() check on uint16 BEFORE conversion
             try:
@@ -474,6 +485,7 @@ class MultiGPUTileProcessor:
         cd31_channel: Optional[int] = None,
         channel_names: Optional[Dict[int, str]] = None,
         variance_threshold: float = 1000.0,
+        channel_keys: Optional[List[int]] = None,
     ):
         self.num_gpus = num_gpus
         self.slide_info = slide_info
@@ -489,6 +501,7 @@ class MultiGPUTileProcessor:
         self.cd31_channel = cd31_channel
         self.channel_names = channel_names
         self.variance_threshold = variance_threshold
+        self.channel_keys = channel_keys
 
         self.workers: List[Process] = []
         self.input_queue: Optional[Queue] = None
@@ -571,6 +584,7 @@ class MultiGPUTileProcessor:
                     self.cd31_channel,
                     self.channel_names,
                     self.variance_threshold,
+                    self.channel_keys,
                 ),
                 daemon=True,
             )
@@ -610,7 +624,7 @@ class MultiGPUTileProcessor:
             raise RuntimeError("Call start() first")
 
         start = time.time()
-        remaining = timeout if timeout else float('inf')
+        remaining = timeout if timeout is not None else float('inf')
 
         while remaining > 0:
             try:
@@ -622,7 +636,7 @@ class MultiGPUTileProcessor:
                     continue
                 return result
             except queue.Empty:
-                if timeout:
+                if timeout is not None:
                     remaining = timeout - (time.time() - start)
                     if remaining <= 0:
                         return None

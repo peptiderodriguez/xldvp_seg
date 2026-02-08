@@ -1,14 +1,22 @@
 #!/usr/bin/env python3
 """
-Extract contours for single (outlier) NMJs from mask files.
+Extract contours for single (outlier) detections from mask files.
 
-Reads the original mask H5 files, extracts contours for each outlier NMJ,
+Reads the original mask H5 files, extracts contours for each outlier detection,
 converts to global coordinates, applies post-processing, and saves results.
+
+Supports any cell type via the --cell-type flag, which determines the mask
+filename pattern ({cell_type}_masks.h5).
 """
 
 # Fix HDF5 plugin issues - must be set BEFORE importing h5py
 import os
+import sys
+from pathlib import Path
 os.environ['HDF5_USE_FILE_LOCKING'] = 'FALSE'
+
+# Ensure repo root is on sys.path for imports
+sys.path.insert(0, str(Path(__file__).parent.parent))
 
 import json
 import argparse
@@ -16,10 +24,9 @@ import numpy as np
 import hdf5plugin  # Must import BEFORE h5py to register LZ4 filter
 import h5py
 import cv2
-from pathlib import Path
 from typing import List, Dict, Tuple, Optional
 
-from scripts.contour_processing import process_contour
+from segmentation.lmd.contour_processing import process_contour
 
 
 def extract_contour_from_mask(mask: np.ndarray, label: int) -> Optional[np.ndarray]:
@@ -72,10 +79,13 @@ def local_to_global_contour(contour_local: np.ndarray, tile_origin: Tuple[int, i
 
 
 def main(base_dir: Path, tiles_dir: Path, clusters_path: Path,
-         detections_path: Path, output_path: Path, pixel_size_um: float):
+         detections_path: Path, output_path: Path, pixel_size_um: float,
+         cell_type: str = "nmj"):
     print("=" * 70)
     print("EXTRACT CONTOURS FOR SINGLES (OUTLIERS)")
     print("=" * 70)
+
+    mask_filename = f"{cell_type}_masks.h5"
 
     # Load cluster data to get outlier indices
     print("\n[1/5] Loading cluster data...")
@@ -83,7 +93,7 @@ def main(base_dir: Path, tiles_dir: Path, clusters_path: Path,
         cluster_data = json.load(f)
 
     outliers = cluster_data.get('outliers', [])
-    outlier_indices = [o['nmj_index'] for o in outliers]
+    outlier_indices = [o.get('detection_index', o.get('nmj_index')) for o in outliers]
     print(f"  Found {len(outlier_indices)} outliers")
 
     # Load all detections
@@ -94,8 +104,18 @@ def main(base_dir: Path, tiles_dir: Path, clusters_path: Path,
     positives = [d for d in all_detections if d.get('rf_prediction', 0) >= 0.5]
     print(f"  {len(positives)} positive detections")
 
-    # Get outlier detections
-    outlier_detections = [positives[idx] for idx in outlier_indices]
+    # Get outlier detections (with bounds checking)
+    outlier_detections = []
+    skipped_indices = []
+    for idx in outlier_indices:
+        if idx < 0 or idx >= len(positives):
+            skipped_indices.append(idx)
+            continue
+        outlier_detections.append(positives[idx])
+    if skipped_indices:
+        print(f"  WARNING: {len(skipped_indices)} outlier indices out of range "
+              f"(max valid: {len(positives) - 1}): {skipped_indices[:10]}"
+              f"{'...' if len(skipped_indices) > 10 else ''}")
 
     # Group by tile for efficient processing
     print("\n[3/5] Grouping by tile...")
@@ -123,7 +143,7 @@ def main(base_dir: Path, tiles_dir: Path, clusters_path: Path,
             print(f"  Processing tile {tile_idx + 1}/{len(by_tile)}...")
 
         # Load mask file
-        mask_path = tiles_dir / tile_name / "nmj_masks.h5"
+        mask_path = tiles_dir / tile_name / mask_filename
         if not mask_path.exists():
             print(f"  WARNING: Mask file not found: {mask_path}")
             fail_count += len(tile_dets)
@@ -218,11 +238,13 @@ def main(base_dir: Path, tiles_dir: Path, clusters_path: Path,
 
 
 if __name__ == '__main__':
-    parser = argparse.ArgumentParser(description='Extract contours for single (outlier) NMJs from mask files')
+    parser = argparse.ArgumentParser(description='Extract contours for single (outlier) detections from mask files')
     parser.add_argument('--base-dir', type=Path, required=True,
                         help='Base output directory (e.g., nmj_output/experiment_name)')
     parser.add_argument('--tiles-dir', type=Path, required=True,
-                        help='Directory containing tile subdirectories with nmj_masks.h5 files')
+                        help='Directory containing tile subdirectories with {cell_type}_masks.h5 files')
+    parser.add_argument('--cell-type', type=str, default='nmj',
+                        help='Cell type, used to construct mask filename as {cell_type}_masks.h5 (default: nmj)')
     parser.add_argument('--clusters', type=Path, default=None,
                         help='Path to clusters JSON (default: <base-dir>/nmj_clusters_375_425_500_1000.json)')
     parser.add_argument('--detections', type=Path, default=None,
@@ -244,4 +266,5 @@ if __name__ == '__main__':
         detections_path=detections_path,
         output_path=output_path,
         pixel_size_um=args.pixel_size,
+        cell_type=args.cell_type,
     )

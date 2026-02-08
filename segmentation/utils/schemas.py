@@ -182,7 +182,7 @@ class AnnotationsOldFormat(BaseModel):
 
 class AnnotationsNewFormat(BaseModel):
     """New annotation format: {annotations: {uid: "yes"|"no"}}"""
-    annotations: Dict[str, Literal["yes", "no"]]
+    annotations: Dict[str, Literal["yes", "no", "unsure"]]
 
 
 class Annotations(BaseModel):
@@ -192,7 +192,7 @@ class Annotations(BaseModel):
     negative: Optional[List[str]] = None
 
     # New format
-    annotations: Optional[Dict[str, str]] = None
+    annotations: Optional[Dict[str, Literal["yes", "no", "unsure"]]] = None
 
     def to_unified(self) -> Dict[str, str]:
         """Convert to unified format {uid: "yes"|"no"}."""

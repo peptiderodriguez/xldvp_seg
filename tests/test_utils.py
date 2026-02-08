@@ -68,7 +68,8 @@ class TestConfigFeatureDimensions(TestCase):
         expected_total = (
             result['morphological'] +
             result['sam2_embedding'] +
-            result['resnet_embedding']
+            result['resnet_embedding'] +
+            result['dinov2_embedding']
         )
         self.assertEqual(result['total'], expected_total)
 
@@ -78,11 +79,12 @@ class TestConfigFeatureDimensions(TestCase):
 
         result = get_feature_dimensions()
 
-        # These are the documented feature counts
-        self.assertEqual(result['morphological'], 22)
+        # These are the full-pipeline feature counts (config.py)
+        self.assertEqual(result['morphological'], 78)   # 22 base + NMJ-specific + multi-channel
         self.assertEqual(result['sam2_embedding'], 256)
-        self.assertEqual(result['resnet_embedding'], 2048)
-        self.assertEqual(result['total'], 2326)
+        self.assertEqual(result['resnet_embedding'], 4096)  # 2 x 2048 (masked + context)
+        self.assertEqual(result['dinov2_embedding'], 2048)  # 2 x 1024 (masked + context)
+        self.assertEqual(result['total'], 6478)  # 78 + 256 + 4096 + 2048
 
 
 class TestConfigCpuWorkerCount(TestCase):

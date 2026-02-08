@@ -10,6 +10,7 @@ import numpy as np
 from pathlib import Path
 from sklearn.ensemble import RandomForestClassifier
 from sklearn.model_selection import train_test_split, cross_val_score
+from sklearn.pipeline import Pipeline
 from sklearn.preprocessing import StandardScaler
 from sklearn.metrics import classification_report, confusion_matrix
 import joblib
@@ -174,9 +175,22 @@ def main():
     logger.info(f"  TN={cm[0,0]}, FP={cm[0,1]}")
     logger.info(f"  FN={cm[1,0]}, TP={cm[1,1]}")
 
-    # Cross-validation
+    # Cross-validation using Pipeline to avoid data leakage
+    # (scaler is fit only on training folds, not on validation data)
     logger.info("\nCross-validation (5-fold)...")
-    cv_scores = cross_val_score(clf, X_train_scaled, y_train, cv=5)
+    cv_pipeline = Pipeline([
+        ('scaler', StandardScaler()),
+        ('classifier', RandomForestClassifier(
+            n_estimators=args.n_estimators,
+            max_depth=20,
+            min_samples_split=5,
+            min_samples_leaf=2,
+            class_weight='balanced',
+            random_state=42,
+            n_jobs=-1,
+        )),
+    ])
+    cv_scores = cross_val_score(cv_pipeline, X_train, y_train, cv=5)
     logger.info(f"CV Accuracy: {cv_scores.mean():.4f} (+/- {cv_scores.std()*2:.4f})")
 
     # Feature importance

@@ -29,8 +29,16 @@ def regenerate_from_crops(
     thickness: int = 10,
     inner_dotted: bool = False,
     outer_dotted: bool = False,
+    pixel_size_um: float = None,
+    channel_legend: dict = None,
 ):
-    """Regenerate HTML from saved crops with configurable contour style."""
+    """Regenerate HTML from saved crops with configurable contour style.
+
+    Args:
+        channel_legend: Optional dict mapping colors to channel names,
+            e.g., {"red": "SMA (647)", "green": "CD31 (555)", "blue": "Nuclear (488)"}.
+            If None, auto-detected from detection JSON metadata or slide name.
+    """
 
     # Load detections
     with open(detections_json) as f:
@@ -38,7 +46,28 @@ def regenerate_from_crops(
 
     vessels = data.get('detections', data.get('vessels', []))
     slide_name = data.get('slide_name', 'unknown')
-    pixel_size_um = data.get('pixel_size_um', 0.1725)
+
+    # Read pixel_size from detection metadata; CLI arg takes priority
+    if pixel_size_um is None:
+        pixel_size_um = data.get('pixel_size_um')
+        if pixel_size_um is None:
+            # Try nested metadata
+            pixel_size_um = data.get('metadata', {}).get('pixel_size_um')
+        if pixel_size_um is None:
+            print("WARNING: pixel_size_um not found in detection data and not provided via --pixel-size. "
+                  "Defaulting to 0.1725 um/px.")
+            pixel_size_um = 0.1725
+
+    # Auto-detect channel legend from metadata if not provided via CLI
+    if channel_legend is None:
+        channel_legend = data.get('channel_legend')
+    if channel_legend is None:
+        # Try to parse from slide_name using the standard parser
+        try:
+            from run_segmentation import parse_channel_legend_from_filename
+            channel_legend = parse_channel_legend_from_filename(slide_name)
+        except (ImportError, Exception):
+            pass
 
     print(f"Loaded {len(vessels)} vessels from {detections_json}")
     print(f"Crops directory: {crops_dir}")
@@ -138,7 +167,7 @@ def regenerate_from_crops(
         cell_type='vessel',
         samples_per_page=200,
         experiment_name=f"{slide_name} - Lumen-First Detection",
-        channel_legend={"red": "SMA (647)", "green": "CD31 (555)", "blue": "Nuclear (488)"},
+        channel_legend=channel_legend,
     )
 
     print(f"HTML exported to: {html_dir}")
@@ -154,8 +183,23 @@ def main():
                         help='Use dotted line for inner contour')
     parser.add_argument('--outer-dotted', action='store_true',
                         help='Use dotted line for outer contour')
+    parser.add_argument('--pixel-size', type=float, default=None,
+                        help='Pixel size in micrometers (overrides value from detection JSON)')
+    parser.add_argument('--channel-legend', type=str, default=None,
+                        help='Channel legend as JSON string, e.g., '
+                             '\'{"red": "SMA (647)", "green": "CD31 (555)", "blue": "Nuclear (488)"}\'. '
+                             'If not provided, auto-detected from detection JSON metadata or slide name.')
 
     args = parser.parse_args()
+
+    # Parse channel legend from CLI arg if provided
+    cli_channel_legend = None
+    if args.channel_legend:
+        try:
+            cli_channel_legend = json.loads(args.channel_legend)
+        except json.JSONDecodeError:
+            print(f"Error: --channel-legend must be valid JSON. Got: {args.channel_legend}")
+            sys.exit(1)
 
     detections_json = args.input_dir / 'vessel_detections.json'
     crops_dir = args.input_dir / 'crops'
@@ -176,6 +220,8 @@ def main():
         thickness=args.thickness,
         inner_dotted=args.inner_dotted,
         outer_dotted=args.outer_dotted,
+        pixel_size_um=args.pixel_size,
+        channel_legend=cli_channel_legend,
     )
 
 

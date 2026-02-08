@@ -20,6 +20,7 @@ Usage:
 
 import gc
 import os
+import threading
 from pathlib import Path
 from typing import Dict, Optional, Tuple, Any
 
@@ -99,13 +100,14 @@ def find_checkpoint(model_name: str) -> Optional[Path]:
 
 # Global cache of ModelManager instances per device
 _manager_cache: Dict[str, 'ModelManager'] = {}
+_manager_cache_lock = threading.Lock()
 
 
 def get_model_manager(device: str = "cuda") -> 'ModelManager':
     """
     Get or create a ModelManager for the specified device.
 
-    This implements a singleton pattern - only one manager exists per device.
+    This implements a thread-safe singleton pattern - only one manager exists per device.
 
     Args:
         device: Device string ('cuda', 'cpu', 'cuda:0', etc.)
@@ -114,17 +116,19 @@ def get_model_manager(device: str = "cuda") -> 'ModelManager':
         ModelManager instance for the device
     """
     device_key = str(device)
-    if device_key not in _manager_cache:
-        _manager_cache[device_key] = ModelManager(device=device)
-    return _manager_cache[device_key]
+    with _manager_cache_lock:
+        if device_key not in _manager_cache:
+            _manager_cache[device_key] = ModelManager(device=device)
+        return _manager_cache[device_key]
 
 
 def clear_manager_cache():
     """Clear all cached ModelManager instances and free resources."""
     global _manager_cache
-    for key, manager in list(_manager_cache.items()):
-        manager.cleanup()
-    _manager_cache.clear()
+    with _manager_cache_lock:
+        for key, manager in list(_manager_cache.items()):
+            manager.cleanup()
+        _manager_cache.clear()
     logger.info("Cleared model manager cache")
 
 
@@ -141,12 +145,14 @@ class ModelManager:
         sam2_auto: Loaded SAM2 automatic mask generator (or None)
         cellpose: Loaded Cellpose model (or None)
         resnet: Loaded ResNet feature extractor (or None)
+        dinov2: Loaded DINOv2 feature extractor (or None)
 
     Example:
         manager = ModelManager(device="cuda")
         sam2_pred, sam2_auto = manager.get_sam2()
         cellpose = manager.get_cellpose()
         resnet, transform = manager.get_resnet()
+        dinov2, dinov2_transform = manager.get_dinov2()
         manager.cleanup()
     """
 
@@ -171,6 +177,8 @@ class ModelManager:
         self._cellpose = None
         self._resnet = None
         self._resnet_transform = None
+        self._dinov2 = None
+        self._dinov2_transform = None
         self._mk_classifier = None
 
     @property
@@ -207,6 +215,20 @@ class ModelManager:
         if self._resnet_transform is None:
             self._load_resnet()
         return self._resnet_transform
+
+    @property
+    def dinov2(self):
+        """DINOv2 feature extractor (lazy loaded)."""
+        if self._dinov2 is None:
+            self._load_dinov2()
+        return self._dinov2
+
+    @property
+    def dinov2_transform(self):
+        """DINOv2 preprocessing transform (lazy loaded)."""
+        if self._dinov2_transform is None:
+            self._load_dinov2()
+        return self._dinov2_transform
 
     def get_sam2(self) -> Tuple[Any, Any]:
         """
@@ -246,6 +268,18 @@ class ModelManager:
         if self._resnet is None:
             self._load_resnet()
         return self._resnet, self._resnet_transform
+
+    def get_dinov2(self) -> Tuple[Any, Any]:
+        """
+        Get DINOv2 feature extractor and transform.
+
+        Returns:
+            Tuple of (DINOv2 model, preprocessing transform).
+            Model may be None if loading fails.
+        """
+        if self._dinov2 is None:
+            self._load_dinov2()
+        return self._dinov2, self._dinov2_transform
 
     def _load_sam2(self):
         """Load SAM2 models."""
@@ -311,6 +345,28 @@ class ModelManager:
 
         logger.info("ResNet-50 loaded successfully")
 
+    def _load_dinov2(self):
+        """Load DINOv2 ViT-L/14 feature extractor (1024D features)."""
+        logger.info("Loading DINOv2 (dinov2_vitl14)...")
+
+        try:
+            self._dinov2 = torch.hub.load('facebookresearch/dinov2', 'dinov2_vitl14')
+            self._dinov2.eval().to(self.device)
+
+            # Same transform as ResNet (ImageNet normalization)
+            self._dinov2_transform = tv_transforms.Compose([
+                tv_transforms.Resize(224),
+                tv_transforms.CenterCrop(224),
+                tv_transforms.ToTensor(),
+                tv_transforms.Normalize([0.485, 0.456, 0.406], [0.229, 0.224, 0.225])
+            ])
+
+            logger.info("DINOv2 loaded successfully (1024D features)")
+        except Exception as e:
+            logger.warning(f"Failed to load DINOv2: {e}. DINOv2 features will be zeros.")
+            self._dinov2 = None
+            self._dinov2_transform = None
+
     def get_models_dict(self) -> Dict[str, Any]:
         """
         Get a dict of all loaded models (for passing to detection strategies).
@@ -326,6 +382,8 @@ class ModelManager:
             'cellpose': self._cellpose,
             'resnet': self._resnet,
             'resnet_transform': self._resnet_transform,
+            'dinov2': self._dinov2,
+            'dinov2_transform': self._dinov2_transform,
             'device': self.device,
         }
 
@@ -354,6 +412,10 @@ class ModelManager:
         self._resnet = None
         self._resnet_transform = None
 
+        # Clear DINOv2
+        self._dinov2 = None
+        self._dinov2_transform = None
+
         # Force garbage collection
         gc.collect()
 
@@ -380,6 +442,8 @@ class ModelManager:
             loaded.append("Cellpose")
         if self._resnet is not None:
             loaded.append("ResNet")
+        if self._dinov2 is not None:
+            loaded.append("DINOv2")
         loaded_str = ", ".join(loaded) if loaded else "none"
         return f"ModelManager(device={self.device}, loaded=[{loaded_str}])"
 

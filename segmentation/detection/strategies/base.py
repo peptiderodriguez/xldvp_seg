@@ -475,9 +475,10 @@ class DetectionStrategy(ABC):
         This method consolidates the feature extraction logic duplicated across
         strategies (NMJ, MK, etc.) into a single reusable method. For each mask,
         it extracts:
-        - Morphological features (22 features) using extract_morphological_features
+        - Base morphological features (22 features) using extract_morphological_features
         - SAM2 embeddings (256 features) at the mask centroid
-        - ResNet features (2048 features) using efficient batch processing
+        - ResNet features (2x2048 = 4096: masked + context) using efficient batch processing
+        - DINOv2 features (2x1024 = 2048: masked + context) if dinov2 model provided
 
         Args:
             masks: List of boolean mask arrays (each HxW)
@@ -569,8 +570,8 @@ class DetectionStrategy(ABC):
                 for i in range(SAM2_EMBEDDING_DIM):
                     morph_features[f'sam2_{i}'] = 0.0
 
-            # Prepare crops for batch ResNet processing (both masked and context)
-            if extract_resnet:
+            # Prepare crops for batch deep feature extraction (ResNet and/or DINOv2)
+            if extract_resnet or (models.get('dinov2') is not None):
                 y1, y2 = ys.min(), ys.max()
                 x1, x2 = xs.min(), xs.max()
                 if y2 > y1 and x2 > x1:

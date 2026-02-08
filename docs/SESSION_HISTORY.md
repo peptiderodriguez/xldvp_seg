@@ -704,7 +704,7 @@ segmentation/classification/
 
 | Category | Features |
 |----------|----------|
-| Ring/Wall (6) | `ring_completeness`, `wall_uniformity`, `wall_thickness_cv`, `wall_asymmetry`, `lumen_wall_ratio`, `wall_fraction` |
+| Ring/Wall (5) | `ring_completeness`, `wall_thickness_cv`, `wall_asymmetry`, `lumen_wall_ratio`, `wall_fraction` |
 | Shape (5) | `circularity`, `ellipticity`, `convexity`, `roughness`, `compactness` |
 | Size (4) | `outer_diameter_um`, `inner_diameter_um`, `diameter_ratio`, `hydraulic_diameter` |
 | Intensity (6) | `wall_intensity_mean/std`, `lumen_intensity_mean`, `wall_lumen_contrast`, `edge_gradient_mean/std` |

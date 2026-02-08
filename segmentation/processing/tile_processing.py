@@ -212,7 +212,7 @@ def process_single_tile(
         actual_mask_label = int(masks[mask_y, mask_x])
 
         if actual_mask_label == 0:
-            # Centroid on background — search 3x3 neighborhood (concave shapes)
+            # Centroid on background — search 7x7 neighborhood (concave shapes)
             found_label = 0
             for dy in range(-3, 4):
                 for dx in range(-3, 4):
@@ -637,7 +637,7 @@ def process_tile_complete(
 
     Args:
         loader: CZILoader instance.
-        segmenter: UnifiedSegmenter instance.
+        segmenter: CellDetector instance.
         tile_x: X coordinate of tile origin.
         tile_y: Y coordinate of tile origin.
         tile_size: Tile size in pixels.

@@ -34,7 +34,6 @@ import numpy as np
 import joblib
 
 from sklearn.ensemble import RandomForestClassifier
-from sklearn.preprocessing import StandardScaler
 from sklearn.model_selection import (
     cross_val_score,
     StratifiedKFold,
@@ -151,7 +150,6 @@ class VesselDetectorRF:
 
     Attributes:
         model: Trained RandomForestClassifier
-        scaler: StandardScaler for feature normalization
         feature_names: List of feature names used
         trained: Whether model has been trained
         metrics: Training metrics (accuracy, precision, recall, F1)
@@ -196,7 +194,6 @@ class VesselDetectorRF:
             n_jobs=-1,
         )
 
-        self.scaler = StandardScaler()
         self.feature_names = feature_names or VESSEL_DETECTION_FEATURES.copy()
         self.trained = False
         self.metrics: Dict[str, Any] = {}
@@ -353,8 +350,8 @@ class VesselDetectorRF:
         # Handle NaN/Inf
         X_array = np.nan_to_num(X_array, nan=0, posinf=0, neginf=0)
 
-        # Scale features
-        X_scaled = self.scaler.fit_transform(X_array)
+        # RF is scale-invariant, so no StandardScaler needed.
+        # Pass raw features directly to avoid data leakage from fitting scaler on full data.
 
         # Cross-validation
         if verbose:
@@ -366,21 +363,21 @@ class VesselDetectorRF:
             # e.g., label=0, size=1 -> group=1; label=1, size=1 -> group=4
             stratify_groups = y_encoded * 3 + size_classes
             cv = StratifiedKFold(n_splits=cv_folds, shuffle=True, random_state=self.random_state)
-            cv_scores = cross_val_score(self.model, X_scaled, y_encoded, cv=cv.split(X_scaled, stratify_groups), scoring='accuracy')
+            cv_scores = cross_val_score(self.model, X_array, y_encoded, cv=cv.split(X_array, stratify_groups), scoring='accuracy')
         else:
             cv = StratifiedKFold(n_splits=cv_folds, shuffle=True, random_state=self.random_state)
-            cv_scores = cross_val_score(self.model, X_scaled, y_encoded, cv=cv, scoring='accuracy')
+            cv_scores = cross_val_score(self.model, X_array, y_encoded, cv=cv, scoring='accuracy')
 
         if verbose:
             logger.info(f"CV Accuracy: {cv_scores.mean():.4f} (+/- {cv_scores.std() * 2:.4f})")
 
         # Train on full dataset
-        self.model.fit(X_scaled, y_encoded)
+        self.model.fit(X_array, y_encoded)
         self.trained = True
 
         # Compute training metrics
-        y_pred = self.model.predict(X_scaled)
-        y_proba = self.model.predict_proba(X_scaled)[:, 1]
+        y_pred = self.model.predict(X_array)
+        y_proba = self.model.predict_proba(X_array)[:, 1]
 
         precision, recall, f1, _ = precision_recall_fscore_support(
             y_encoded, y_pred, average='binary', pos_label=1
@@ -522,10 +519,9 @@ class VesselDetectorRF:
         # Handle NaN/Inf
         X = np.nan_to_num(X, nan=0, posinf=0, neginf=0)
 
-        # Scale and predict
-        X_scaled = self.scaler.transform(X)
-        prediction = self.model.predict(X_scaled)[0]
-        proba = self.model.predict_proba(X_scaled)[0]
+        # Predict directly (RF is scale-invariant, no scaler needed)
+        prediction = self.model.predict(X)[0]
+        proba = self.model.predict_proba(X)[0]
 
         is_vessel = bool(prediction == 1)
         confidence = float(proba[1])  # Probability of vessel class
@@ -557,10 +553,9 @@ class VesselDetectorRF:
         # Handle NaN/Inf
         X = np.nan_to_num(X, nan=0, posinf=0, neginf=0)
 
-        # Scale and predict
-        X_scaled = self.scaler.transform(X)
-        predictions = self.model.predict(X_scaled)
-        probas = self.model.predict_proba(X_scaled)
+        # Predict directly (RF is scale-invariant, no scaler needed)
+        predictions = self.model.predict(X)
+        probas = self.model.predict_proba(X)
 
         is_vessel = predictions == 1
         confidence = probas[:, 1]
@@ -618,10 +613,9 @@ class VesselDetectorRF:
         X_array, y_true = self._prepare_training_data(X, y)
         X_array = np.nan_to_num(X_array, nan=0, posinf=0, neginf=0)
 
-        # Predict
-        X_scaled = self.scaler.transform(X_array)
-        y_pred = self.model.predict(X_scaled)
-        y_proba = self.model.predict_proba(X_scaled)[:, 1]
+        # Predict directly (RF is scale-invariant, no scaler needed)
+        y_pred = self.model.predict(X_array)
+        y_proba = self.model.predict_proba(X_array)[:, 1]
 
         # Compute metrics
         accuracy = (y_pred == y_true).mean()
@@ -681,7 +675,6 @@ class VesselDetectorRF:
 
         model_data = {
             'model': self.model,
-            'scaler': self.scaler,
             'feature_names': self.feature_names,
             'metrics': self.metrics,
             'config': {
@@ -734,7 +727,6 @@ class VesselDetectorRF:
 
         # Restore trained state
         instance.model = model_data['model']
-        instance.scaler = model_data['scaler']
         instance.metrics = model_data.get('metrics', {})
         instance.trained = True
 

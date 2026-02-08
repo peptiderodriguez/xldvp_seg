@@ -17,14 +17,20 @@ Note: Unlike MK/HSPC pipeline, NMJ does NOT use Cellpose, ResNet, or DINOv2 by d
 The morph+SAM2 classifier achieves 95% precision with only 334 features.
 
 Coordinate System:
-    Workers receive tiles with RELATIVE coordinates (array indices), NOT global CZI
-    coordinates. Tile dict format:
+    Workers receive tiles with GLOBAL mosaic coordinates, same as multigpu_worker.py.
+    The mosaic_origin is subtracted for array indexing into shared memory.
+    Tile dict format:
         tile = {
-            'x': 0,      # Relative X - direct array column index (used as tile origin for UID)
-            'y': 0,      # Relative Y - direct array row index (used as tile origin for UID)
+            'x': 12345,  # Global mosaic X coordinate
+            'y': 67890,  # Global mosaic Y coordinate
             'w': 3000,   # Tile width
             'h': 3000,   # Tile height
         }
+
+    Array indexing uses relative coordinates:
+        mosaic_ox, mosaic_oy = slide_info[slide_name].get('mosaic_origin', (0, 0))
+        y_rel = tile['y'] - mosaic_oy
+        x_rel = tile['x'] - mosaic_ox
 
     Global coordinates for UIDs are computed as:
         global_cx = tile['x'] + local_cx
@@ -168,7 +174,6 @@ def _nmj_gpu_worker(
                 checkpoint_candidates = [
                     script_dir / "checkpoints" / "sam2.1_hiera_large.pt",
                     script_dir / "checkpoints" / "sam2.1_hiera_l.pt",
-                    Path("/ptmp/edrod/MKsegmentation/checkpoints/sam2.1_hiera_large.pt"),
                 ]
                 for cp in checkpoint_candidates:
                     if cp.exists():
@@ -255,10 +260,12 @@ def _nmj_gpu_worker(
 
             _, slide_arr = shared_slides[slide_name]
 
-            # Extract tile using RELATIVE coordinates (direct array indices)
-            # slide_arr is 3D: (H, W, C) for multi-channel or (H, W) for single channel
-            y_start = tile['y']
-            x_start = tile['x']
+            # Extract tile from shared memory
+            # Tile coords are global CZI mosaic coords; shared memory is 0-indexed
+            # Convert global->relative for array indexing (same as multigpu_worker.py)
+            mosaic_ox, mosaic_oy = slide_info[slide_name].get('mosaic_origin', (0, 0))
+            y_start = tile['y'] - mosaic_oy
+            x_start = tile['x'] - mosaic_ox
             tile_h = tile['h']
             tile_w = tile['w']
 
@@ -291,11 +298,13 @@ def _nmj_gpu_worker(
             # 2. has_tissue() check - threshold calibrated for uint16
             #
             # Channel mapping: ch0=nuclear(R), ch1=BTX(G), ch2=NFL(B)
-            extra_channel_tiles = {
-                0: tile_rgb[:, :, 0].copy(),  # Nuclear (488nm) - ORIGINAL uint16
-                1: tile_rgb[:, :, 1].copy(),  # BTX (647nm) - used for segmentation, ORIGINAL uint16
-                2: tile_rgb[:, :, 2].copy() if tile_rgb.shape[2] > 2 else tile_rgb[:, :, 1].copy(),  # NFL (750nm)
-            }
+            n_ch = tile_rgb.shape[2]
+            extra_channel_tiles = {}
+            if n_ch >= 2:
+                for ch_idx in range(n_ch):
+                    extra_channel_tiles[ch_idx] = tile_rgb[:, :, ch_idx].copy()
+            else:
+                extra_channel_tiles = None
 
             # Check for tissue BEFORE uint8 conversion (threshold is calibrated for uint16)
             try:
@@ -671,7 +680,7 @@ class MultiGPUNMJProcessor:
             raise RuntimeError("Cannot collect results before start() completes")
 
         start = time.time()
-        remaining = timeout if timeout else float('inf')
+        remaining = timeout if timeout is not None else float('inf')
 
         while remaining > 0:
             try:
@@ -692,7 +701,7 @@ class MultiGPUNMJProcessor:
                 return result
 
             except queue.Empty:
-                if timeout:
+                if timeout is not None:
                     remaining = timeout - (time.time() - start)
                     if remaining <= 0:
                         return None

@@ -1,33 +1,40 @@
 # Project Plan and Task Tracking
-Last Updated: 2026-02-07 20:50:00
+Last Updated: 2026-02-08 09:45:00
 
 ## Current Objectives
-- [x] Pipeline Spec Review (Steps 1-6): CZI loading, tiling, sampling, segmentation, features, dedup
+- Comprehensive review of feature extraction pipeline and utility modules
 
-## Completed Tasks
+## Current Session: Feature Extraction & Utils Deep Review (2026-02-08)
+- [x] Read and review feature_extraction.py - priority: high
+- [x] Read and review config.py - priority: high
+- [x] Read and review vessel_features.py - priority: high
+- [x] Read and review multiscale.py - priority: medium
+- [x] Read and review schemas.py - priority: medium
+- [x] Read and review deduplication.py - priority: medium
+- [x] Cross-reference feature constants across files - priority: high
+- [x] Compile final review report - priority: high
+
+## Completed Tasks (Previous Sessions)
+- [x] Pipeline Spec Review (Steps 1-6) - 2026-02-07
 - [x] Full code review of run_segmentation.py - 2026-02-07
-- [x] Read tile_processing.py
-- [x] Read cell.py strategy
-- [x] Read vessel.py strategy (header)
-- [x] Read tissue.py (has_tissue)
-- [x] Read czi_loader.py (channel_data)
-- [x] Review: compute_normalization_params.py - 2026-02-07
-- [x] Review: stain_normalization.py - 2026-02-07
-- [x] Review: tissue.py - 2026-02-07
-- [x] Review: czi_loader.py - 2026-02-07
-- [x] Review: html_export.py - 2026-02-07
-- [x] Review: run_lmd_export.py (previous pass) - 2026-02-07
-- [x] Review: segmentation/lmd/clustering.py (previous pass) - 2026-02-07
-- [x] Review: segmentation/lmd/contour_processing.py (previous pass) - 2026-02-07
-- [x] Pipeline Steps 1-6 specification review - 2026-02-07
-
-## Pending Tasks
-- [ ] Write detection strategy review report - medium
+- [x] Detection strategy review - 2026-02-07 22:14
+- [x] I/O, HTML, Model, Utils layers review - 2026-02-07 22:30
+- [x] LMD pipeline review (clustering, contour_processing, run_lmd_export) - 2026-02-07 22:30
+- [x] Normalization review (stain_normalization, compute_normalization_params) - 2026-02-07 22:30
+- [x] Classification layer review - 2026-02-07 22:30
+- [x] Scripts / Tests / Utils review (26+ files) - 2026-02-07
+- [x] Processing pipeline + multi-GPU layer review (7 files) - 2026-02-07 22:13
+- [x] Multi-GPU post-fix review - 2026-02-08 09:30
+- [x] Classification pipeline review - 2026-02-08 09:30
+- [x] LMD Export Pipeline Deep Review - 2026-02-08 09:31
+- [x] Stain Normalization Deep Review - 2026-02-08 10:15
+- [x] HTML Export Review - 2026-02-08 10:30
+- [x] Entry Point Script Review - 2026-02-08 10:00
 
 ## Notes and Observations
-- Previous review noted: intersects() is overly conservative for collision detection
-- Previous review noted: Round 2 clustering index mapping verified correct
-- Previous review noted: Well generation transitions verified correct (B2->B3->C3->C2)
-- NEW: Coordinate mismatch bug when mosaic origin != (0,0) for direct array indexing
-- NEW: block_size mismatch between calibration (512) and in-loop tissue check (64)
-- NEW: extract_sam2_embeddings not in params dict but defaults correctly via .get()
+- 29 issues found across 6 files (5 CRITICAL, 6 HIGH, 11 MEDIUM, 7 LOW)
+- test_mk_hspc_imports.py asserts MORPHOLOGICAL_FEATURES_COUNT==22, but config.py defines it as 78
+- test_mk_hspc_imports.py asserts RESNET_EMBEDDING_DIMENSION==2048, but config.py defines it as 4096
+- VESSEL_FEATURE_COUNT in feature_extraction.py (28) does not match vessel_features.py (32)
+- Center point scaling in convert_detection_to_full_res is inconsistent with contour scaling
+- Annotations to_unified() has silent overwrite on conflicts between old/new format

@@ -31,5 +31,4 @@ __all__ = [
     "processing",
     "preprocessing",
     "utils",
-    "cli",
 ]

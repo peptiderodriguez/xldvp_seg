@@ -454,7 +454,7 @@ class MultiGPUTileProcessorSHM:
         mk_max_area: int = 50000,
         hspc_max_area: Optional[int] = None,
         variance_threshold: float = 100.0,
-        calibration_block_size: int = 64,
+        calibration_block_size: int = 512,
         cleanup_config: Optional[Dict[str, Any]] = None,
     ):
         self.num_gpus = num_gpus
@@ -537,11 +537,26 @@ class MultiGPUTileProcessorSHM:
         self.tiles_submitted += 1
 
     def collect_result(self, timeout: float = None) -> Optional[Dict[str, Any]]:
-        """Collect one result from workers."""
-        try:
-            return self.output_queue.get(timeout=timeout)
-        except queue.Empty:
-            return None
+        """Collect one result from workers, filtering stray init messages."""
+        import time
+        start = time.time()
+        remaining = timeout if timeout is not None else float('inf')
+
+        while remaining > 0:
+            try:
+                wait = min(remaining, 1.0) if timeout is not None else 1.0
+                result = self.output_queue.get(timeout=wait)
+                status = result.get('status')
+                if status in ('ready', 'init_error'):
+                    continue  # Skip stray worker init messages
+                return result
+            except queue.Empty:
+                if timeout is not None:
+                    remaining = timeout - (time.time() - start)
+                    if remaining <= 0:
+                        return None
+                continue
+        return None
 
     def stop(self):
         """Stop all workers."""

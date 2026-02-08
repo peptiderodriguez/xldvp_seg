@@ -140,11 +140,13 @@ def extract_resnet_features_batch(
         # Clear GPU memory periodically (every 10 batches) to prevent OOM on long runs
         batch_num = i // batch_size
         if batch_num > 0 and batch_num % 10 == 0:
-            torch.cuda.empty_cache()
+            if torch.cuda.is_available():
+                torch.cuda.empty_cache()
             gc.collect()
 
     # Final cleanup after all batches processed
-    torch.cuda.empty_cache()
+    if torch.cuda.is_available():
+        torch.cuda.empty_cache()
     gc.collect()
 
     return all_features
@@ -282,7 +284,26 @@ def compute_hsv_features(masked_pixels: np.ndarray, sample_size: int = 100) -> d
 # MORPHOLOGICAL FEATURE EXTRACTION (Issue #7 - Consolidated from 7 files)
 # =============================================================================
 
-# Feature dimension constants (Issue #8)
+# =============================================================================
+# Feature dimension constants for THIS MODULE's extraction functions.
+#
+# These are the "single-pass" dimensions — i.e., what each individual extraction
+# function produces.  The full-pipeline dimensions (which double ResNet/DINOv2
+# for masked + context crops, and include NMJ-specific + multi-channel features)
+# are defined in segmentation/utils/config.py.
+#
+#   This module (feature_extraction.py)    |  config.py (full pipeline)
+#   ─────────────────────────────────────  |  ────────────────────────────
+#   MORPHOLOGICAL_FEATURE_COUNT = 22       |  MORPHOLOGICAL_FEATURES_COUNT = 78
+#     (base extract_morphological_features)|    (22 base + NMJ-specific + multi-ch)
+#   RESNET50_FEATURE_DIM = 2048            |  RESNET_EMBEDDING_DIMENSION = 4096
+#     (single-pass output dim)             |    (2 x 2048: masked + context)
+#   SAM2_EMBEDDING_DIM = 256               |  SAM2_EMBEDDING_DIMENSION = 256
+#   (DINOv2 ViT-L/14 = 1024 per pass)     |  DINOV2_EMBEDDING_DIMENSION = 2048
+#                                          |    (2 x 1024: masked + context)
+#                                          |  TOTAL_FEATURES_PER_CELL = 6478
+#                                          |    (78 + 256 + 4096 + 2048)
+# =============================================================================
 SAM2_EMBEDDING_DIM = 256
 RESNET50_FEATURE_DIM = 2048
 MORPHOLOGICAL_FEATURE_COUNT = 22
@@ -294,18 +315,28 @@ VESSEL_FEATURE_COUNT = 28  # Approx count, see vessel_features.py for exact list
 
 def extract_morphological_features(mask: np.ndarray, image: np.ndarray) -> dict:
     """
-    Extract 22 morphological/intensity features from a mask.
+    Extract MORPHOLOGICAL_FEATURE_COUNT (22) base morphological/intensity features.
 
     This is the single canonical implementation - previously duplicated in 7 files.
     All strategy files should import from here.
+
+    Note: The full-pipeline "morphological" feature set (~78 features as reported in
+    config.py) includes these 22 PLUS NMJ-specific features (skeleton_length, etc.)
+    and multi-channel per-channel statistics added by the detection strategies.
 
     Args:
         mask: Binary mask as numpy array
         image: Source image (RGB or grayscale)
 
     Returns:
-        Dict with 22 features: area, perimeter, circularity, solidity, aspect_ratio,
-        extent, equiv_diameter, color stats (RGB, gray, HSV), texture features.
+        Dict with 22 features:
+          Shape (7): area, perimeter, circularity, solidity, aspect_ratio, extent,
+                     equiv_diameter
+          Color (8): red_mean, red_std, green_mean, green_std, blue_mean, blue_std,
+                     gray_mean, gray_std
+          HSV (3):   hue_mean, saturation_mean, value_mean
+          Texture (4): relative_brightness, intensity_variance, dark_fraction,
+                       nuclear_complexity
     """
     from skimage import measure
 

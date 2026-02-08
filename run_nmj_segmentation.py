@@ -50,7 +50,7 @@ def detect_nmjs(image, intensity_percentile=98, min_area=150, min_skeleton_lengt
 
     Args:
         image: RGB or grayscale image
-        intensity_percentile: Percentile for bright region threshold (default 99)
+        intensity_percentile: Percentile for bright region threshold (default 98)
         min_area: Minimum NMJ area in pixels
         min_skeleton_length: Minimum skeleton length
         max_solidity: Maximum solidity (branched NMJs have low solidity, default 0.85)
@@ -596,7 +596,7 @@ def main():
     parser.add_argument('--tile-size', type=int, default=3000, help='Tile size in pixels')
     parser.add_argument('--sample-fraction', type=float, default=0.10, help='Fraction of tiles to process')
     parser.add_argument('--samples-per-page', type=int, default=300, help='Samples per HTML page')
-    parser.add_argument('--intensity-percentile', type=float, default=99, help='Intensity percentile threshold')
+    parser.add_argument('--intensity-percentile', type=float, default=98, help='Intensity percentile threshold')
     parser.add_argument('--min-area', type=int, default=150, help='Min NMJ area in pixels')
     parser.add_argument('--min-skeleton-length', type=int, default=30, help='Min skeleton length')
     parser.add_argument('--max-solidity', type=float, default=0.85, help='Max solidity (branched NMJs have low solidity)')

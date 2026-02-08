@@ -108,19 +108,24 @@ def scale_contour(contour: np.ndarray, scale_factor: int) -> np.ndarray:
     """
     Scale contour coordinates from scaled space to full resolution.
 
+    Returns float64 to preserve precision. The caller is responsible for
+    casting to int32 after all coordinate transformations (e.g., adding
+    tile offsets) are complete. This avoids truncation errors that are
+    amplified at high scale factors (e.g., up to 64 px error at scale 64).
+
     Args:
         contour: Contour array shape (N, 1, 2) or (N, 2)
         scale_factor: The scale at which contour was detected
 
     Returns:
-        Contour in full-resolution coordinates
+        Contour in full-resolution coordinates (float64)
     """
     if contour is None:
         return None
 
     scaled = contour.copy().astype(np.float64)
     scaled *= scale_factor
-    return scaled.astype(np.int32)
+    return scaled
 
 
 def scale_point(point: Tuple[float, float], scale_factor: int) -> Tuple[float, float]:
@@ -386,17 +391,22 @@ def convert_detection_to_full_res(
     """
     det = detection.copy()
 
-    # Scale contours
+    # Scale contours — stay in float64 until after offset, then cast to int32.
+    # This avoids truncation errors amplified by large scale factors (up to
+    # scale_factor pixels of displacement when casting before offset).
+    tile_offset = np.array([tile_x_scaled * scale_factor, tile_y_scaled * scale_factor], dtype=np.float64)
+
     if 'outer' in det and det['outer'] is not None:
         det['outer'] = scale_contour(det['outer'], scale_factor)
-        # Add tile offset in full-res coordinates
-        det['outer'] += np.array([tile_x_scaled * scale_factor, tile_y_scaled * scale_factor])
+        det['outer'] += tile_offset
+        det['outer'] = det['outer'].astype(np.int32)
 
     if 'inner' in det and det['inner'] is not None:
         det['inner'] = scale_contour(det['inner'], scale_factor)
-        det['inner'] += np.array([tile_x_scaled * scale_factor, tile_y_scaled * scale_factor])
+        det['inner'] += tile_offset
+        det['inner'] = det['inner'].astype(np.int32)
 
-    # Scale center point
+    # Scale center point (offset before scale, same as contour logic)
     if 'center' in det:
         cx, cy = det['center']
         det['center'] = [
@@ -416,7 +426,7 @@ def run_multiscale_detection(
     mosaic_width: int,
     mosaic_height: int,
     tile_size: int = 4000,
-    scales: List[int] = [8, 4, 1],
+    scales: Optional[List[int]] = None,
     pixel_size_um: float = 0.17,
     channel: int = 0,
     iou_threshold: float = 0.3,
@@ -444,6 +454,9 @@ def run_multiscale_detection(
     Returns:
         List of deduplicated detections in full-resolution coordinates
     """
+    if scales is None:
+        scales = [8, 4, 1]
+
     all_detections = []
 
     for scale in scales:

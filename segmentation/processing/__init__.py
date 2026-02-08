@@ -69,9 +69,8 @@ from .mk_hspc_utils import (
     extract_tile_from_shared_memory,
 )
 
-from .multigpu import (
+from .multigpu_worker import (
     MultiGPUTileProcessor,
-    process_tiles_multi_gpu,
 )
 
 from .multigpu_shm import (
@@ -135,7 +134,6 @@ __all__ = [
     'extract_tile_from_shared_memory',
     # Multi-GPU processing
     'MultiGPUTileProcessor',
-    'process_tiles_multi_gpu',
     # Multi-GPU shared memory
     'SharedSlideManager',
     'MultiGPUTileProcessorSHM',

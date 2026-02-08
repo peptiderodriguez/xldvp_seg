@@ -231,39 +231,64 @@ def extract_contours_for_detections(detections, tiles_dir, pixel_size,
 # ---------------------------------------------------------------------------
 
 def nearest_neighbor_order(points, start_idx=None):
-    """Order points using nearest-neighbor algorithm. Returns index order."""
+    """Order points using nearest-neighbor algorithm with KDTree for efficiency.
+
+    Uses scipy.spatial.cKDTree to find nearest unvisited neighbor at each step,
+    replacing the naive O(n^2) inner loop with O(n log n) lookups.
+
+    Returns index order.
+    """
+    from scipy.spatial import cKDTree
+
     n = len(points)
     if n == 0:
         return []
     if n == 1:
         return [0]
 
-    points_arr = np.array(points)
+    points_arr = np.array(points, dtype=np.float64)
 
     if start_idx is None:
         # Start from top-left-most point
         start_idx = int(np.argmin(points_arr[:, 0] + points_arr[:, 1]))
 
-    visited = [False] * n
+    # Build KDTree for efficient nearest-neighbor queries
+    tree = cKDTree(points_arr)
+
+    visited = np.zeros(n, dtype=bool)
     order = [start_idx]
     visited[start_idx] = True
 
     current = start_idx
     for _ in range(n - 1):
-        min_dist = float('inf')
-        nearest = -1
+        # Query progressively more neighbors until we find an unvisited one.
+        # Start with k=2 (self + 1 neighbor); increase if all found are visited.
+        k = min(8, n)  # Start with a reasonable batch size
+        while True:
+            dists, indices = tree.query(points_arr[current], k=k)
+            # Make sure dists/indices are arrays even for k=1
+            if np.ndim(dists) == 0:
+                dists = np.array([dists])
+                indices = np.array([indices])
 
-        for j in range(n):
-            if not visited[j]:
-                dist = np.linalg.norm(points_arr[current] - points_arr[j])
-                if dist < min_dist:
-                    min_dist = dist
-                    nearest = j
+            # Find first unvisited neighbor (sorted by distance)
+            found = False
+            for idx in indices:
+                if idx < n and not visited[idx]:
+                    order.append(int(idx))
+                    visited[idx] = True
+                    current = int(idx)
+                    found = True
+                    break
 
-        if nearest >= 0:
-            order.append(nearest)
-            visited[nearest] = True
-            current = nearest
+            if found:
+                break
+
+            # All k neighbors were visited; increase k
+            if k >= n:
+                # All points visited (shouldn't happen but guard against it)
+                break
+            k = min(k * 2, n)
 
     return order
 
@@ -1001,7 +1026,7 @@ Examples:
         if 'features' in sample and 'pixel_size_um' in sample['features']:
             pixel_size = sample['features']['pixel_size_um']
         else:
-            pixel_size = 0.1725
+            pixel_size = 0.22
         print(f"  Pixel size: {pixel_size} um/px")
 
     image_width = args.image_width

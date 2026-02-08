@@ -24,8 +24,17 @@ Example usage:
     generator.export_to_html(samples, '/path/to/output')
 """
 
+import html as html_mod
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Literal, Optional, Union
+
+
+def _esc(value) -> str:
+    """Escape a value for safe insertion into HTML/JS strings.
+
+    Prevents XSS by escaping <, >, &, ", and ' characters.
+    """
+    return html_mod.escape(str(value), quote=True)
 
 
 # Type aliases
@@ -417,33 +426,58 @@ class HTMLPageGenerator:
         storage_key = self.get_storage_key(page_num=1)  # Base key for global/experiment
 
         return f'''
-        const CELL_TYPE = '{self.cell_type}';
-        const EXPERIMENT_NAME = '{self.experiment_name or ""}';
+        const CELL_TYPE = '{_esc(self.cell_type)}';
+        const EXPERIMENT_NAME = '{_esc(self.experiment_name or "")}';
         const TOTAL_PAGES = {total_pages};
-        const STORAGE_STRATEGY = '{self.storage_strategy}';
+        const STORAGE_STRATEGY = '{_esc(self.storage_strategy)}';
 
-        // Get storage key based on strategy
-        function getStorageKey(pageNum) {{
-            if (STORAGE_STRATEGY === 'page-specific') {{
-                return CELL_TYPE + '_labels_page' + pageNum;
-            }} else if (STORAGE_STRATEGY === 'experiment' && EXPERIMENT_NAME) {{
+        // Get storage keys: both page-specific and global
+        function getGlobalKey() {{
+            if (STORAGE_STRATEGY === 'experiment' && EXPERIMENT_NAME) {{
                 return CELL_TYPE + '_' + EXPERIMENT_NAME + '_annotations';
             }} else {{
                 return CELL_TYPE + '_annotations';
             }}
         }}
 
-        const STORAGE_KEY = getStorageKey(typeof PAGE_NUM !== 'undefined' ? PAGE_NUM : 1);
+        function getPageKey(pageNum) {{
+            return CELL_TYPE + '_labels_page' + pageNum;
+        }}
+
+        const GLOBAL_STORAGE_KEY = getGlobalKey();
+        const PAGE_STORAGE_KEY = getPageKey(typeof PAGE_NUM !== 'undefined' ? PAGE_NUM : 1);
 
         let labels = {{}};
         let selectedIdx = -1;
         const cards = document.querySelectorAll('.card');
 
-        // Load from localStorage
+        // Save to BOTH page-specific and global localStorage keys
+        function saveLabels() {{
+            localStorage.setItem(PAGE_STORAGE_KEY, JSON.stringify(labels));
+            // Merge into global store instead of overwriting
+            let globalLabels = {{}};
+            try {{ globalLabels = JSON.parse(localStorage.getItem(GLOBAL_STORAGE_KEY)) || {{}}; }} catch(e) {{}}
+            Object.assign(globalLabels, labels);
+            localStorage.setItem(GLOBAL_STORAGE_KEY, JSON.stringify(globalLabels));
+        }}
+
+        // Load from localStorage: page-specific first, then global fallback
         function loadAnnotations() {{
             try {{
-                const saved = localStorage.getItem(STORAGE_KEY);
-                if (saved) labels = JSON.parse(saved);
+                let saved = localStorage.getItem(PAGE_STORAGE_KEY);
+                if (!saved) {{
+                    // Fallback: load only UIDs present on this page from global
+                    const globalSaved = localStorage.getItem(GLOBAL_STORAGE_KEY);
+                    if (globalSaved) {{
+                        const globalLabels = JSON.parse(globalSaved);
+                        const pageUids = new Set(Array.from(cards).map(c => c.id));
+                        for (const [uid, label] of Object.entries(globalLabels)) {{
+                            if (pageUids.has(uid)) labels[uid] = label;
+                        }}
+                    }}
+                }} else {{
+                    labels = JSON.parse(saved);
+                }}
             }} catch(e) {{ console.error(e); }}
 
             // Apply to cards
@@ -480,7 +514,7 @@ class HTMLPageGenerator:
                 if (card) applyLabelToCard(card, label);
             }}
 
-            localStorage.setItem(STORAGE_KEY, JSON.stringify(labels));
+            saveLabels();
             updateStats();
 
             if (autoAdvance && selectedIdx >= 0 && selectedIdx < cards.length - 1) {{
@@ -500,12 +534,18 @@ class HTMLPageGenerator:
                 else if (labels[uid] === 2) localUnsure++;
             }});
 
-            // Count global
-            for (const v of Object.values(labels)) {{
-                if (v === 1) globalYes++;
-                else if (v === 0) globalNo++;
-                else if (v === 2) globalUnsure++;
-            }}
+            // Count global from the global key
+            try {{
+                const globalSaved = localStorage.getItem(GLOBAL_STORAGE_KEY);
+                if (globalSaved) {{
+                    const globalLabels = JSON.parse(globalSaved);
+                    for (const v of Object.values(globalLabels)) {{
+                        if (v === 1) globalYes++;
+                        else if (v === 0) globalNo++;
+                        else if (v === 2) globalUnsure++;
+                    }}
+                }}
+            }} catch(e) {{ console.error(e); }}
 
             // Update DOM if elements exist
             const localYesEl = document.getElementById('localYes');
@@ -529,6 +569,13 @@ class HTMLPageGenerator:
         }}
 
         function exportAnnotations() {{
+            // Export from global key to get all annotations across pages
+            let allLabels = {{}};
+            try {{
+                const globalSaved = localStorage.getItem(GLOBAL_STORAGE_KEY);
+                if (globalSaved) allLabels = JSON.parse(globalSaved);
+            }} catch(e) {{ console.error(e); }}
+
             const data = {{
                 cell_type: CELL_TYPE,
                 experiment_name: EXPERIMENT_NAME || undefined,
@@ -539,7 +586,7 @@ class HTMLPageGenerator:
                 unsure: []
             }};
 
-            for (const [uid, label] of Object.entries(labels)) {{
+            for (const [uid, label] of Object.entries(allLabels)) {{
                 if (label === 1) data.positive.push(uid);
                 else if (label === 0) data.negative.push(uid);
                 else if (label === 2) data.unsure.push(uid);
@@ -567,7 +614,7 @@ class HTMLPageGenerator:
                     card.dataset.label = -1;
                 }}
             }});
-            localStorage.setItem(STORAGE_KEY, JSON.stringify(labels));
+            saveLabels();
             updateStats();
         }}
 
@@ -670,7 +717,7 @@ class HTMLPageGenerator:
         Returns:
             HTML string for the card.
         """
-        uid = sample['uid']
+        uid = _esc(sample['uid'])
         img_b64 = sample['image']
         mime = sample.get('mime_type', 'jpeg')
         stats = sample.get('stats', {})
@@ -727,8 +774,8 @@ class HTMLPageGenerator:
             for label, value in extra_stats.items():
                 extra_stats_html += f'''
             <div class="stat">
-                <span>{label}</span>
-                <span class="number">{value}</span>
+                <span>{_esc(label)}</span>
+                <span class="number">{_esc(value)}</span>
             </div>'''
 
         # Build storage key for export
@@ -738,7 +785,7 @@ class HTMLPageGenerator:
         return f'''<!DOCTYPE html>
 <html>
 <head>
-    <title>{self.title}</title>
+    <title>{_esc(self.title)}</title>
     <style>
         * {{ box-sizing: border-box; margin: 0; padding: 0; }}
         body {{ font-family: monospace; background: {c['bg_primary']}; color: {c['text_primary']}; padding: 20px; }}
@@ -818,8 +865,8 @@ class HTMLPageGenerator:
 </head>
 <body>
     <div class="header">
-        <h1>{self.title}</h1>
-        <p class="subtitle">{subtitle}</p>
+        <h1>{_esc(self.title)}</h1>
+        <p class="subtitle">{_esc(subtitle or '')}</p>
         <div class="stats">
             <div class="stat">
                 <span>Total Samples</span>
@@ -842,9 +889,9 @@ class HTMLPageGenerator:
     </div>
 
     <script>
-        const CELL_TYPE = '{self.cell_type}';
-        const EXPERIMENT_NAME = '{self.experiment_name or ""}';
-        const STORAGE_STRATEGY = '{self.storage_strategy}';
+        const CELL_TYPE = '{_esc(self.cell_type)}';
+        const EXPERIMENT_NAME = '{_esc(self.experiment_name or "")}';
+        const STORAGE_STRATEGY = '{_esc(self.storage_strategy)}';
 
         {storage_key_js}
 
@@ -888,18 +935,13 @@ class HTMLPageGenerator:
         Generate JavaScript code to compute the storage key.
 
         Returns:
-            JavaScript code that sets STORAGE_KEY variable.
+            JavaScript code that sets STORAGE_KEY variable (used by index pages).
         """
-        if self.storage_strategy == 'page-specific':
-            return '''
-        var _page_num = typeof PAGE_NUM !== 'undefined' ? PAGE_NUM : 1;
-        const STORAGE_KEY = CELL_TYPE + '_labels_page' + _page_num;
-            '''
-        elif self.storage_strategy == 'experiment':
+        if self.storage_strategy == 'experiment':
             return f'''
         const STORAGE_KEY = CELL_TYPE + '_' + EXPERIMENT_NAME + '_annotations';
             '''
-        else:  # global
+        else:  # global or page-specific (index page always uses global key)
             return '''
         const STORAGE_KEY = CELL_TYPE + '_annotations';
             '''
@@ -938,13 +980,13 @@ class HTMLPageGenerator:
         return f'''<!DOCTYPE html>
 <html>
 <head>
-    <title>{self.title} - Page {page_num}/{total_pages}</title>
+    <title>{_esc(self.title)} - Page {page_num}/{total_pages}</title>
     <style>{self._generate_css()}</style>
 </head>
 <body>
     <div class="header">
         <div class="header-top">
-            <h1>{self.title} - Page {page_num}/{total_pages}</h1>
+            <h1>{_esc(self.title)} - Page {page_num}/{total_pages}</h1>
             {nav_html}
         </div>
         <div class="stats-row">
@@ -1364,21 +1406,35 @@ def create_mk_hspc_index(output_dir, total_mks, total_hspcs, mk_pages, hspc_page
             const allLabels = {{}};
             const mkLabels = {{ positive: [], negative: [] }};
             const hspcLabels = {{ positive: [], negative: [] }};
-            for (let i = 0; i < localStorage.length; i++) {{
-                const key = localStorage.key(i);
-                if (key.startsWith('mk_labels_page') || key.startsWith('hspc_labels_page')) {{
+            // Read from global keys (preferred), falling back to page keys
+            ['mk', 'hspc'].forEach(ct => {{
+                const result = {{ positive: [], negative: [] }};
+                const globalKey = ct + '_annotations';
+                const globalStored = localStorage.getItem(globalKey);
+                if (globalStored) {{
                     try {{
-                        const labels = JSON.parse(localStorage.getItem(key));
-                        const cellType = key.startsWith('mk_') ? mkLabels : hspcLabels;
+                        const labels = JSON.parse(globalStored);
                         for (const [uid, label] of Object.entries(labels)) {{
-                            if (label === 1) cellType.positive.push(uid);
-                            else if (label === 0) cellType.negative.push(uid);
+                            if (label === 1) result.positive.push(uid);
+                            else if (label === 0) result.negative.push(uid);
                         }}
                     }} catch(e) {{ console.error(e); }}
+                }} else {{
+                    for (let i = 0; i < localStorage.length; i++) {{
+                        const key = localStorage.key(i);
+                        if (key && key.startsWith(ct + '_labels_page')) {{
+                            try {{
+                                const labels = JSON.parse(localStorage.getItem(key));
+                                for (const [uid, label] of Object.entries(labels)) {{
+                                    if (label === 1) result.positive.push(uid);
+                                    else if (label === 0) result.negative.push(uid);
+                                }}
+                            }} catch(e) {{ console.error(e); }}
+                        }}
+                    }}
                 }}
-            }}
-            allLabels.mk = mkLabels;
-            allLabels.hspc = hspcLabels;
+                allLabels[ct] = result;
+            }});
             const blob = new Blob([JSON.stringify(allLabels, null, 2)], {{type: 'application/json'}});
             const url = URL.createObjectURL(blob);
             const a = document.createElement('a');
@@ -1408,20 +1464,21 @@ def generate_mk_hspc_page_html(samples, cell_type, page_num, total_pages, slides
     Returns:
         HTML string for the page
     """
-    cell_type_display = "Megakaryocytes (MKs)" if cell_type == "mk" else "HSPCs"
+    cell_type_display = _esc("Megakaryocytes (MKs)" if cell_type == "mk" else "HSPCs")
+    cell_type_safe = _esc(cell_type)
 
     # Build subtitle HTML
     subtitle_html = ''
     if slides_summary:
-        subtitle_html = f'<div class="header-subtitle">{slides_summary}</div>'
+        subtitle_html = f'<div class="header-subtitle">{_esc(slides_summary)}</div>'
 
     nav_html = '<div class="page-nav">'
     nav_html += '<a href="index.html" class="nav-btn">Home</a>'
     if page_num > 1:
-        nav_html += f'<a href="{cell_type}_page{page_num-1}.html" class="nav-btn">Previous</a>'
+        nav_html += f'<a href="{cell_type_safe}_page{page_num-1}.html" class="nav-btn">Previous</a>'
     nav_html += f'<span class="page-info">Page {page_num} of {total_pages}</span>'
     if page_num < total_pages:
-        nav_html += f'<a href="{cell_type}_page{page_num+1}.html" class="nav-btn">Next</a>'
+        nav_html += f'<a href="{cell_type_safe}_page{page_num+1}.html" class="nav-btn">Next</a>'
     nav_html += '</div>'
 
     cards_html = ""
@@ -1431,15 +1488,15 @@ def generate_mk_hspc_page_html(samples, cell_type, page_num, total_pages, slides
         global_y = sample.get('global_y', 0)
         # Always use spatial UID format for consistency across all cell types
         # Format: {slide}_{celltype}_{round(x)}_{round(y)}
-        uid = f"{slide}_{cell_type}_{int(round(global_x))}_{int(round(global_y))}"
-        display_id = f"{cell_type}_{int(round(global_x))}_{int(round(global_y))}"
+        uid = _esc(f"{slide}_{cell_type}_{int(round(global_x))}_{int(round(global_y))}")
+        display_id = _esc(f"{cell_type}_{int(round(global_x))}_{int(round(global_y))}")
         # Keep legacy global_id in data attribute for backwards compatibility
         legacy_global_id = sample.get('global_id')
         area_um2 = sample.get('area_um2', 0)
         area_px = sample.get('area_px', 0)
         img_b64 = sample['image']
         # Include legacy_global_id as data attribute for migration support
-        legacy_attr = f' data-legacy-id="{legacy_global_id}"' if legacy_global_id is not None else ''
+        legacy_attr = f' data-legacy-id="{_esc(legacy_global_id)}"' if legacy_global_id is not None else ''
         cards_html += f'''
         <div class="card" id="{uid}" data-label="-1"{legacy_attr}>
             <div class="card-img-container">
@@ -1451,9 +1508,9 @@ def generate_mk_hspc_page_html(samples, cell_type, page_num, total_pages, slides
                     <div class="card-area">{area_um2:.1f} um2 | {area_px:.0f} px2</div>
                 </div>
                 <div class="buttons">
-                    <button class="btn btn-yes" onclick="setLabel('{cell_type}', '{uid}', 1)">Yes</button>
-                    <button class="btn btn-unsure" onclick="setLabel('{cell_type}', '{uid}', 2)">?</button>
-                    <button class="btn btn-no" onclick="setLabel('{cell_type}', '{uid}', 0)">No</button>
+                    <button class="btn btn-yes" onclick="setLabel('{uid}', 1)">Y</button>
+                    <button class="btn btn-unsure" onclick="setLabel('{uid}', 2)">?</button>
+                    <button class="btn btn-no" onclick="setLabel('{uid}', 0)">N</button>
                 </div>
             </div>
         </div>
@@ -1526,37 +1583,66 @@ def generate_mk_hspc_page_html(samples, cell_type, page_num, total_pages, slides
     </div>
     {nav_html}
     <script>
-        const STORAGE_KEY = '{cell_type}_labels_page{page_num}';
-        const CELL_TYPE = '{cell_type}';
+        const PAGE_STORAGE_KEY = '{cell_type_safe}_labels_page{page_num}';
+        const GLOBAL_STORAGE_KEY = '{cell_type_safe}_annotations';
+        const CELL_TYPE = '{cell_type_safe}';
         const TOTAL_PAGES = {total_pages};
 
         function loadAnnotations() {{
-            const stored = localStorage.getItem(STORAGE_KEY);
-            if (!stored) return;
+            const allCards = document.querySelectorAll('.card');
             try {{
-                const labels = JSON.parse(stored);
-                for (const [uid, label] of Object.entries(labels)) {{
-                    const card = document.getElementById(uid);
-                    if (card && label !== -1) {{
-                        card.dataset.label = label;
-                        card.classList.remove('labeled-yes', 'labeled-no', 'labeled-unsure');
-                        if (label == 1) card.classList.add('labeled-yes');
-                        else if (label == 2) card.classList.add('labeled-unsure');
-                        else card.classList.add('labeled-no');
+                let stored = localStorage.getItem(PAGE_STORAGE_KEY);
+                if (!stored) {{
+                    // Fallback: load only UIDs present on this page from global
+                    const globalSaved = localStorage.getItem(GLOBAL_STORAGE_KEY);
+                    if (globalSaved) {{
+                        const globalLabels = JSON.parse(globalSaved);
+                        const pageUids = new Set(Array.from(allCards).map(c => c.id));
+                        for (const [uid, label] of Object.entries(globalLabels)) {{
+                            if (pageUids.has(uid)) {{
+                                const card = document.getElementById(uid);
+                                if (card && label !== -1) {{
+                                    card.dataset.label = label;
+                                    card.classList.remove('labeled-yes', 'labeled-no', 'labeled-unsure');
+                                    if (label === 1) card.classList.add('labeled-yes');
+                                    else if (label === 2) card.classList.add('labeled-unsure');
+                                    else if (label === 0) card.classList.add('labeled-no');
+                                }}
+                            }}
+                        }}
+                    }}
+                }} else {{
+                    const labels = JSON.parse(stored);
+                    for (const [uid, label] of Object.entries(labels)) {{
+                        const card = document.getElementById(uid);
+                        if (card && label !== -1) {{
+                            card.dataset.label = label;
+                            card.classList.remove('labeled-yes', 'labeled-no', 'labeled-unsure');
+                            if (label === 1) card.classList.add('labeled-yes');
+                            else if (label === 2) card.classList.add('labeled-unsure');
+                            else if (label === 0) card.classList.add('labeled-no');
+                        }}
                     }}
                 }}
                 updateStats();
             }} catch(e) {{ console.error(e); }}
         }}
 
-        function setLabel(cellType, uid, label) {{
+        function setLabel(uid, label, autoAdvance = false) {{
             const card = document.getElementById(uid);
             if (!card) return;
-            card.dataset.label = label;
-            card.classList.remove('labeled-yes', 'labeled-no', 'labeled-unsure');
-            if (label == 1) card.classList.add('labeled-yes');
-            else if (label == 2) card.classList.add('labeled-unsure');
-            else card.classList.add('labeled-no');
+            // Toggle off if same label
+            const currentLabel = parseInt(card.dataset.label);
+            if (currentLabel === label) {{
+                card.dataset.label = -1;
+                card.classList.remove('labeled-yes', 'labeled-no', 'labeled-unsure');
+            }} else {{
+                card.dataset.label = label;
+                card.classList.remove('labeled-yes', 'labeled-no', 'labeled-unsure');
+                if (label === 1) card.classList.add('labeled-yes');
+                else if (label === 2) card.classList.add('labeled-unsure');
+                else if (label === 0) card.classList.add('labeled-no');
+            }}
             saveAnnotations();
             updateStats();
         }}
@@ -1567,7 +1653,12 @@ def generate_mk_hspc_page_html(samples, cell_type, page_num, total_pages, slides
                 const label = parseInt(card.dataset.label);
                 if (label !== -1) labels[card.id] = label;
             }});
-            localStorage.setItem(STORAGE_KEY, JSON.stringify(labels));
+            localStorage.setItem(PAGE_STORAGE_KEY, JSON.stringify(labels));
+            // Merge into global store instead of overwriting
+            let globalLabels = {{}};
+            try {{ globalLabels = JSON.parse(localStorage.getItem(GLOBAL_STORAGE_KEY)) || {{}}; }} catch(e) {{}}
+            Object.assign(globalLabels, labels);
+            localStorage.setItem(GLOBAL_STORAGE_KEY, JSON.stringify(globalLabels));
         }}
 
         function updateStats() {{
@@ -1581,30 +1672,27 @@ def generate_mk_hspc_page_html(samples, cell_type, page_num, total_pages, slides
             document.getElementById('positive-count').textContent = pos;
             document.getElementById('negative-count').textContent = neg;
 
-            // Global stats (all pages)
+            // Global stats from global key
             let globalPos = 0, globalNeg = 0;
-            for (let i = 1; i <= TOTAL_PAGES; i++) {{
-                const key = CELL_TYPE + '_labels_page' + i;
-                const stored = localStorage.getItem(key);
-                if (stored) {{
-                    try {{
-                        const labels = JSON.parse(stored);
-                        for (const label of Object.values(labels)) {{
-                            if (label === 1) globalPos++;
-                            else if (label === 0) globalNeg++;
-                        }}
-                    }} catch(e) {{}}
+            try {{
+                const globalSaved = localStorage.getItem(GLOBAL_STORAGE_KEY);
+                if (globalSaved) {{
+                    const globalLabels = JSON.parse(globalSaved);
+                    for (const v of Object.values(globalLabels)) {{
+                        if (v === 1) globalPos++;
+                        else if (v === 0) globalNeg++;
+                    }}
                 }}
-            }}
+            }} catch(e) {{}}
             document.getElementById('global-positive').textContent = globalPos;
             document.getElementById('global-negative').textContent = globalNeg;
         }}
 
         document.addEventListener('keydown', (e) => {{
             if (e.key === 'ArrowLeft' && {page_num} > 1)
-                window.location.href = '{cell_type}_page{prev_page}.html';
+                window.location.href = '{cell_type_safe}_page{prev_page}.html';
             else if (e.key === 'ArrowRight' && {page_num} < {total_pages})
-                window.location.href = '{cell_type}_page{next_page}.html';
+                window.location.href = '{cell_type_safe}_page{next_page}.html';
         }});
 
         loadAnnotations();

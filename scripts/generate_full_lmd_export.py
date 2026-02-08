@@ -3,7 +3,7 @@
 Generate complete LMD export with singles + clusters.
 
 Creates:
-1. Well assignments (384-well, B2+C2 quadrants, serpentine order)
+1. Well assignments (384-well, B2+B3+C3+C2 quadrants, serpentine order)
 2. Processed contours for all NMJs (dilation +0.5µm, RDP simplification)
 3. LMD XML file for Leica LMD7
 
@@ -12,7 +12,12 @@ Usage:
 """
 
 import os
+import sys
+from pathlib import Path
 os.environ['HDF5_USE_FILE_LOCKING'] = 'FALSE'
+
+# Ensure repo root is on sys.path for imports
+sys.path.insert(0, str(Path(__file__).parent.parent))
 
 import json
 import argparse
@@ -20,9 +25,8 @@ import numpy as np
 import hdf5plugin
 import h5py
 import cv2
-from pathlib import Path
 from typing import List, Dict, Tuple, Optional
-from scripts.contour_processing import process_contour
+from segmentation.lmd.contour_processing import process_contour
 
 
 def generate_quadrant_serpentine(quadrant: str, start_corner: str = 'auto') -> List[str]:
@@ -106,39 +110,54 @@ def generate_multi_quadrant_serpentine(quadrants: List[str]) -> List[str]:
 
 
 def nearest_neighbor_order(points: List[Tuple[float, float]], start_idx: int = None) -> List[int]:
-    """Order points using nearest-neighbor algorithm."""
+    """Order points using nearest-neighbor algorithm with KDTree for efficiency.
+
+    Uses scipy.spatial.cKDTree to find nearest unvisited neighbor at each step,
+    replacing the naive O(n^2) inner loop with O(n log n) lookups.
+    """
+    from scipy.spatial import cKDTree
+
     n = len(points)
     if n == 0:
         return []
     if n == 1:
         return [0]
 
-    points_arr = np.array(points)
+    points_arr = np.array(points, dtype=np.float64)
 
     if start_idx is None:
-        start_idx = np.argmin(points_arr[:, 0] + points_arr[:, 1])
+        start_idx = int(np.argmin(points_arr[:, 0] + points_arr[:, 1]))
 
-    visited = [False] * n
+    tree = cKDTree(points_arr)
+
+    visited = np.zeros(n, dtype=bool)
     order = [start_idx]
     visited[start_idx] = True
 
     current = start_idx
     for _ in range(n - 1):
-        min_dist = float('inf')
-        nearest = -1
+        k = min(8, n)
+        while True:
+            dists, indices = tree.query(points_arr[current], k=k)
+            if np.ndim(dists) == 0:
+                dists = np.array([dists])
+                indices = np.array([indices])
 
-        for j in range(n):
-            if not visited[j]:
-                dist = np.sqrt((points_arr[current, 0] - points_arr[j, 0])**2 +
-                              (points_arr[current, 1] - points_arr[j, 1])**2)
-                if dist < min_dist:
-                    min_dist = dist
-                    nearest = j
+            found = False
+            for idx in indices:
+                if idx < n and not visited[idx]:
+                    order.append(int(idx))
+                    visited[idx] = True
+                    current = int(idx)
+                    found = True
+                    break
 
-        if nearest >= 0:
-            order.append(nearest)
-            visited[nearest] = True
-            current = nearest
+            if found:
+                break
+
+            if k >= n:
+                break
+            k = min(k * 2, n)
 
     return order
 
@@ -244,20 +263,33 @@ def main(base_dir: Path, tiles_dir: Path, clusters_path: Path,
     with open(detections_path) as f:
         all_detections = json.load(f)
 
-    positives = [d for d in all_detections if d.get('rf_prediction', 0) >= 0.5]
-    print(f"  Total positive NMJs: {len(positives)}")
+    print(f"  Total detections loaded: {len(all_detections)}")
 
-    # Get outliers (singles)
+    # IMPORTANT: Clustering indices reference positions in all_detections (the
+    # ORIGINAL unfiltered list), NOT a filtered subset. We must index all_detections
+    # directly to get the correct detections.
+
+    # Get outliers (singles) — with bounds checking against all_detections
     outliers = cluster_data.get('outliers', [])
-    outlier_indices = [o['nmj_index'] for o in outliers]
-    outlier_dets = [positives[idx] for idx in outlier_indices]
+    outlier_indices = [o.get('detection_index', o.get('nmj_index')) for o in outliers]
+    outlier_dets = []
+    skipped_indices = []
+    for idx in outlier_indices:
+        if idx < 0 or idx >= len(all_detections):
+            skipped_indices.append(idx)
+            continue
+        outlier_dets.append(all_detections[idx])
+    if skipped_indices:
+        print(f"  WARNING: {len(skipped_indices)} outlier indices out of range "
+              f"(max valid: {len(all_detections) - 1}): {skipped_indices[:10]}"
+              f"{'...' if len(skipped_indices) > 10 else ''}")
     print(f"  Singles (outliers): {len(outlier_dets)}")
 
     # Get clusters
     clusters = cluster_data.get('main_clusters', [])
     clustered_indices = set()
     for c in clusters:
-        clustered_indices.update(c['nmj_indices'])
+        clustered_indices.update(c.get('detection_indices', c.get('nmj_indices', [])))
     print(f"  Clusters: {len(clusters)} containing {len(clustered_indices)} NMJs")
 
     # Extract contours for singles
@@ -267,12 +299,12 @@ def main(base_dir: Path, tiles_dir: Path, clusters_path: Path,
 
     # Extract contours for clustered NMJs
     print("\n[3/7] Extracting contours for clustered NMJs...")
-    clustered_dets = [positives[idx] for idx in clustered_indices]
+    clustered_dets = [all_detections[idx] for idx in clustered_indices if 0 <= idx < len(all_detections)]
     clustered_contours = extract_contours_for_detections(clustered_dets, tiles_dir, pixel_size_um)
     print(f"  Extracted: {len(clustered_contours)}/{len(clustered_dets)}")
 
     # Generate well order
-    quadrants = ['B2', 'C2']
+    quadrants = ['B2', 'B3', 'C3', 'C2']
     print(f"\n[4/7] Generating well order ({' + '.join(quadrants)} quadrants)...")
     all_wells = generate_multi_quadrant_serpentine(quadrants)
     print(f"  Total wells available: {len(all_wells)}")
@@ -384,8 +416,10 @@ def main(base_dir: Path, tiles_dir: Path, clusters_path: Path,
 
         # Get contours for all NMJs in cluster
         cluster_nmjs = []
-        for idx in cluster['nmj_indices']:
-            det = positives[idx]
+        for idx in cluster.get('detection_indices', cluster.get('nmj_indices', [])):
+            if idx < 0 or idx >= len(all_detections):
+                continue
+            det = all_detections[idx]
             uid = det.get('uid', det.get('id'))
             if uid in clustered_contours:
                 cluster_nmjs.append({
@@ -420,15 +454,23 @@ def main(base_dir: Path, tiles_dir: Path, clusters_path: Path,
     print(f"  Total wells: {total_needed} / {len(all_wells)} available")
     print(f"")
     print(f"  SINGLES: {n_singles}")
-    print(f"    Wells: {all_wells[0]} → {all_wells[n_singles-1]}")
-    singles_area = sum(s['area_um2'] for s in export_data['singles'])
-    print(f"    Total area: {singles_area:.0f} µm²")
+    if n_singles > 0:
+        print(f"    Wells: {all_wells[0]} → {all_wells[n_singles-1]}")
+        singles_area = sum(s['area_um2'] for s in export_data['singles'])
+        print(f"    Total area: {singles_area:.0f} µm²")
+    else:
+        singles_area = 0
+        print(f"    (none)")
     print(f"")
     print(f"  CLUSTERS: {n_clusters}")
-    print(f"    Wells: {all_wells[n_singles]} → {all_wells[total_needed-1]}")
-    print(f"    NMJs in clusters: {export_data['summary']['n_nmjs_in_clusters']}")
-    clusters_area = sum(c['total_area_um2'] for c in export_data['clusters'])
-    print(f"    Total area: {clusters_area:.0f} µm²")
+    if n_clusters > 0:
+        print(f"    Wells: {all_wells[n_singles]} → {all_wells[total_needed-1]}")
+        print(f"    NMJs in clusters: {export_data['summary']['n_nmjs_in_clusters']}")
+        clusters_area = sum(c['total_area_um2'] for c in export_data['clusters'])
+        print(f"    Total area: {clusters_area:.0f} µm²")
+    else:
+        clusters_area = 0
+        print(f"    (none)")
     print(f"")
     print(f"  TOTAL NMJs: {n_singles + export_data['summary']['n_nmjs_in_clusters']}")
     print(f"  TOTAL AREA: {singles_area + clusters_area:.0f} µm²")

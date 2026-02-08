@@ -5,18 +5,27 @@ Provides a consistent dark-themed annotation interface for all cell types
 (MK, HSPC, NMJ, etc.) with:
 - Keyboard navigation (Y/N keys for labeling, arrows for navigation)
 - Local + global annotation statistics
-- Single global localStorage key per cell type
+- Dual localStorage keys (page-specific + global) for annotation persistence
 - JSON export functionality
 - Auto-loading of prior annotations (for post-classifier HTML regeneration)
 """
 
 import base64
+import html as html_mod
 import json
 from io import BytesIO
 from pathlib import Path
 from PIL import Image
 import numpy as np
 from scipy import ndimage
+
+
+def _esc(value) -> str:
+    """Escape a value for safe insertion into HTML/JS strings.
+
+    Prevents XSS by escaping <, >, &, ", and ' characters.
+    """
+    return html_mod.escape(str(value), quote=True)
 
 
 # Try to use LZ4 compression (faster than gzip), fallback to gzip
@@ -84,28 +93,40 @@ def generate_preload_annotations_js(annotations_path: str, cell_type: str) -> st
     if not ls_format:
         return None
 
-    storage_key = f"{cell_type}_annotations"
+    global_key = _esc(f"{cell_type}_annotations")
+    page_key_prefix = _esc(f"{cell_type}_labels_page")
 
-    js_content = f'''// Pre-loaded annotations from {annotations_path.name}
+    js_content = f'''// Pre-loaded annotations from {_esc(annotations_path.name)}
 // Generated automatically during HTML export
 // These are EXISTING annotations - new annotations take precedence
 
 const PRELOADED_ANNOTATIONS = {json.dumps(ls_format)};
 
 // Merge: preloaded as base, existing localStorage on top (so new annotations aren't overwritten)
+// Write to BOTH the global key and any existing page-specific keys
 (function() {{
     try {{
-        let existing = {{}};
-        const saved = localStorage.getItem('{storage_key}');
-        if (saved) existing = JSON.parse(saved);
+        // Merge into global key
+        let existingGlobal = {{}};
+        const savedGlobal = localStorage.getItem('{global_key}');
+        if (savedGlobal) existingGlobal = JSON.parse(savedGlobal);
+        const mergedGlobal = {{...PRELOADED_ANNOTATIONS, ...existingGlobal}};
+        localStorage.setItem('{global_key}', JSON.stringify(mergedGlobal));
 
-        // Existing annotations take precedence over preloaded
-        const merged = {{...PRELOADED_ANNOTATIONS, ...existing}};
-        localStorage.setItem('{storage_key}', JSON.stringify(merged));
+        // Also merge into any existing page-specific keys for this cell type
+        for (let i = 0; i < localStorage.length; i++) {{
+            const key = localStorage.key(i);
+            if (key && key.startsWith('{page_key_prefix}')) {{
+                let existingPage = {{}};
+                try {{ existingPage = JSON.parse(localStorage.getItem(key)); }} catch(e2) {{}}
+                const mergedPage = {{...PRELOADED_ANNOTATIONS, ...existingPage}};
+                localStorage.setItem(key, JSON.stringify(mergedPage));
+            }}
+        }}
 
         const preloadedCount = Object.keys(PRELOADED_ANNOTATIONS).length;
-        const existingCount = Object.keys(existing).length;
-        const newFromPreload = Object.keys(merged).length - existingCount;
+        const existingCount = Object.keys(existingGlobal).length;
+        const newFromPreload = Object.keys(mergedGlobal).length - existingCount;
 
         if (newFromPreload > 0) {{
             console.log('Loaded ' + newFromPreload + ' annotations from preload file (' + preloadedCount + ' total in file)');
@@ -511,41 +532,71 @@ def get_css():
     '''
 
 
-def get_js(cell_type, total_pages, experiment_name=None):
+def get_js(cell_type, total_pages, experiment_name=None, page_num=1):
     """
     Get the unified JavaScript for annotation handling.
+
+    Uses BOTH a page-specific localStorage key and a global key so that
+    annotations are visible from both single-page and cross-page views.
 
     Args:
         cell_type: Type identifier (e.g., 'nmj', 'mk', 'hspc')
         total_pages: Total number of pages
         experiment_name: Optional experiment name for localStorage key isolation
-                        If provided, key is '{cell_type}_{experiment_name}_annotations'
-                        Otherwise, key is '{cell_type}_annotations'
+                        If provided, global key is '{cell_type}_{experiment_name}_annotations'
+                        Otherwise, global key is '{cell_type}_annotations'
+        page_num: Current page number (1-indexed) for page-specific key
 
     Returns:
         JavaScript code string
     """
-    # Build storage key with optional experiment name
+    # Build storage keys: both global and page-specific
     if experiment_name:
-        storage_key = f"{cell_type}_{experiment_name}_annotations"
+        global_key = _esc(f"{cell_type}_{experiment_name}_annotations")
     else:
-        storage_key = f"{cell_type}_annotations"
+        global_key = _esc(f"{cell_type}_annotations")
+    page_key = _esc(f"{cell_type}_labels_page{page_num}")
+    cell_type_safe = _esc(cell_type)
+    experiment_name_safe = _esc(experiment_name or "")
 
     return f'''
-        const CELL_TYPE = '{cell_type}';
-        const EXPERIMENT_NAME = '{experiment_name or ""}';
+        const CELL_TYPE = '{cell_type_safe}';
+        const EXPERIMENT_NAME = '{experiment_name_safe}';
         const TOTAL_PAGES = {total_pages};
-        const STORAGE_KEY = '{storage_key}';
+        const GLOBAL_STORAGE_KEY = '{global_key}';
+        const PAGE_STORAGE_KEY = '{page_key}';
 
         let labels = {{}};
         let selectedIdx = -1;
         const cards = document.querySelectorAll('.card');
 
-        // Load from localStorage
+        // Save to BOTH page-specific and global localStorage keys
+        function saveLabels() {{
+            localStorage.setItem(PAGE_STORAGE_KEY, JSON.stringify(labels));
+            // Merge into global store instead of overwriting
+            let globalLabels = {{}};
+            try {{ globalLabels = JSON.parse(localStorage.getItem(GLOBAL_STORAGE_KEY)) || {{}}; }} catch(e) {{}}
+            Object.assign(globalLabels, labels);
+            localStorage.setItem(GLOBAL_STORAGE_KEY, JSON.stringify(globalLabels));
+        }}
+
+        // Load from localStorage: page-specific first, then global fallback
         function loadAnnotations() {{
             try {{
-                const saved = localStorage.getItem(STORAGE_KEY);
-                if (saved) labels = JSON.parse(saved);
+                let saved = localStorage.getItem(PAGE_STORAGE_KEY);
+                if (!saved) {{
+                    // Fallback: load only UIDs present on this page from global
+                    const globalSaved = localStorage.getItem(GLOBAL_STORAGE_KEY);
+                    if (globalSaved) {{
+                        const globalLabels = JSON.parse(globalSaved);
+                        const pageUids = new Set(Array.from(cards).map(c => c.id));
+                        for (const [uid, label] of Object.entries(globalLabels)) {{
+                            if (pageUids.has(uid)) labels[uid] = label;
+                        }}
+                    }}
+                }} else {{
+                    labels = JSON.parse(saved);
+                }}
             }} catch(e) {{ console.error(e); }}
 
             // Apply to cards
@@ -582,7 +633,7 @@ def get_js(cell_type, total_pages, experiment_name=None):
                 if (card) applyLabelToCard(card, label);
             }}
 
-            localStorage.setItem(STORAGE_KEY, JSON.stringify(labels));
+            saveLabels();
             updateStats();
 
             if (autoAdvance && selectedIdx >= 0 && selectedIdx < cards.length - 1) {{
@@ -602,16 +653,27 @@ def get_js(cell_type, total_pages, experiment_name=None):
                 else if (labels[uid] === 2) localUnsure++;
             }});
 
-            // Count global
-            for (const v of Object.values(labels)) {{
-                if (v === 1) globalYes++;
-                else if (v === 0) globalNo++;
-            }}
+            // Count global from the global key (contains all annotations)
+            try {{
+                const globalSaved = localStorage.getItem(GLOBAL_STORAGE_KEY);
+                if (globalSaved) {{
+                    const globalLabels = JSON.parse(globalSaved);
+                    for (const v of Object.values(globalLabels)) {{
+                        if (v === 1) globalYes++;
+                        else if (v === 0) globalNo++;
+                    }}
+                }}
+            }} catch(e) {{ console.error(e); }}
 
-            document.getElementById('localYes').textContent = localYes;
-            document.getElementById('localNo').textContent = localNo;
-            document.getElementById('globalYes').textContent = globalYes;
-            document.getElementById('globalNo').textContent = globalNo;
+            const localYesEl = document.getElementById('localYes');
+            const localNoEl = document.getElementById('localNo');
+            const globalYesEl = document.getElementById('globalYes');
+            const globalNoEl = document.getElementById('globalNo');
+
+            if (localYesEl) localYesEl.textContent = localYes;
+            if (localNoEl) localNoEl.textContent = localNo;
+            if (globalYesEl) globalYesEl.textContent = globalYes;
+            if (globalNoEl) globalNoEl.textContent = globalNo;
         }}
 
         function selectCard(idx) {{
@@ -624,6 +686,13 @@ def get_js(cell_type, total_pages, experiment_name=None):
         }}
 
         function exportAnnotations() {{
+            // Export from global key to get all annotations across pages
+            let allLabels = {{}};
+            try {{
+                const globalSaved = localStorage.getItem(GLOBAL_STORAGE_KEY);
+                if (globalSaved) allLabels = JSON.parse(globalSaved);
+            }} catch(e) {{ console.error(e); }}
+
             const data = {{
                 cell_type: CELL_TYPE,
                 exported_at: new Date().toISOString(),
@@ -632,7 +701,7 @@ def get_js(cell_type, total_pages, experiment_name=None):
                 unsure: []
             }};
 
-            for (const [uid, label] of Object.entries(labels)) {{
+            for (const [uid, label] of Object.entries(allLabels)) {{
                 if (label === 1) data.positive.push(uid);
                 else if (label === 0) data.negative.push(uid);
                 else if (label === 2) data.unsure.push(uid);
@@ -657,14 +726,18 @@ def get_js(cell_type, total_pages, experiment_name=None):
                     card.dataset.label = -1;
                 }}
             }});
-            localStorage.setItem(STORAGE_KEY, JSON.stringify(labels));
+            saveLabels();
             updateStats();
         }}
 
         function clearAll() {{
             if (!confirm('Clear ALL annotations across ALL pages? This cannot be undone.')) return;
             labels = {{}};
-            localStorage.setItem(STORAGE_KEY, JSON.stringify(labels));
+            saveLabels();
+            // Also clear all other page-specific keys for this cell type
+            for (let i = 1; i <= TOTAL_PAGES; i++) {{
+                localStorage.setItem(CELL_TYPE + '_labels_page' + i, JSON.stringify({{}}));
+            }}
             cards.forEach(card => {{
                 card.classList.remove('labeled-yes', 'labeled-no', 'labeled-unsure');
                 card.dataset.label = -1;
@@ -732,6 +805,7 @@ def generate_annotation_page(
     """
     if title is None:
         title = cell_type.upper()
+    title = _esc(title)
 
     # Build navigation
     nav_html = '<div class="nav-buttons">'
@@ -748,22 +822,22 @@ def generate_annotation_page(
     if channel_legend:
         channel_legend_html = '<div class="channel-legend"><span class="stats-label">Channels:</span>'
         if 'red' in channel_legend:
-            channel_legend_html += f'<span class="ch-red">R={channel_legend["red"]}</span>'
+            channel_legend_html += f'<span class="ch-red">R={_esc(channel_legend["red"])}</span>'
         if 'green' in channel_legend:
-            channel_legend_html += f'<span class="ch-green">G={channel_legend["green"]}</span>'
+            channel_legend_html += f'<span class="ch-green">G={_esc(channel_legend["green"])}</span>'
         if 'blue' in channel_legend:
-            channel_legend_html += f'<span class="ch-blue">B={channel_legend["blue"]}</span>'
+            channel_legend_html += f'<span class="ch-blue">B={_esc(channel_legend["blue"])}</span>'
         channel_legend_html += '</div>'
 
     # Build subtitle HTML if provided
     subtitle_html = ''
     if subtitle:
-        subtitle_html = f'<div class="header-subtitle">{subtitle}</div>'
+        subtitle_html = f'<div class="header-subtitle">{_esc(subtitle)}</div>'
 
     # Build cards
     cards_html = ''
     for sample in samples:
-        uid = sample['uid']
+        uid = _esc(sample['uid'])
         img_b64 = sample['image']
         mime = sample.get('mime_type', 'jpeg')
         stats = sample.get('stats', {})
@@ -783,12 +857,16 @@ def generate_annotation_page(
         if 'diameter_um' in stats:
             stats_parts.append(f"&empty; {stats['diameter_um']:.0f} &micro;m")
         if 'scale' in stats:
-            stats_parts.append(f"{stats['scale']}")
+            stats_parts.append(f"{_esc(stats['scale'])}")
         if 'solidity' in stats:
             stats_parts.append(f"sol: {stats['solidity']:.2f}")
-        # Only show confidence if it's not 1.0 (i.e., after classifier training)
-        if 'confidence' in stats and stats['confidence'] < 0.999:
-            stats_parts.append(f"{stats['confidence']*100:.0f}%")
+        # Only show confidence if it's numeric and not 1.0 (i.e., after classifier training)
+        if 'confidence' in stats:
+            conf = stats['confidence']
+            if isinstance(conf, (int, float)) and conf < 0.999:
+                stats_parts.append(f"{conf*100:.0f}%")
+            elif isinstance(conf, str):
+                stats_parts.append(f"{_esc(conf)}")
 
         stats_str = ' | '.join(stats_parts) if stats_parts else ''
 
@@ -858,7 +936,7 @@ def generate_annotation_page(
     </div>
 
     {'<script src="preload_annotations.js"></script>' if include_preload_script else ''}
-    <script>{get_js(cell_type, total_pages, experiment_name)}</script>
+    <script>{get_js(cell_type, total_pages, experiment_name, page_num)}</script>
 </body>
 </html>'''
 
@@ -905,12 +983,13 @@ def generate_index_page(
     """
     if title is None:
         title = f"{cell_type.upper()} Annotation Review"
+    title = _esc(title)
 
     # Build info lines
     info_lines = []
-    info_lines.append(f"Detection type: {cell_type.upper()}")
+    info_lines.append(f"Detection type: {_esc(cell_type.upper())}")
     if file_name:
-        info_lines.append(f"File: {file_name}")
+        info_lines.append(f"File: {_esc(file_name)}")
     if pixel_size_um:
         info_lines.append(f"Pixel size: {pixel_size_um:.4f} &micro;m/px")
     if tiles_processed is not None:
@@ -923,7 +1002,7 @@ def generate_index_page(
     info_lines.append(f"Total detections: {total_samples:,}")
     info_lines.append(f"Pages: {total_pages}")
     if timestamp:
-        info_lines.append(f"Segmentation: {timestamp}")
+        info_lines.append(f"Segmentation: {_esc(timestamp)}")
 
     info_html = '<br>'.join(info_lines)
 
@@ -932,8 +1011,8 @@ def generate_index_page(
         for label, value in extra_stats.items():
             extra_stats_html += f'''
             <div class="stat">
-                <span>{label}</span>
-                <span class="number">{value}</span>
+                <span>{_esc(label)}</span>
+                <span class="number">{_esc(value)}</span>
             </div>'''
 
     html = f'''<!DOCTYPE html>
@@ -1053,8 +1132,8 @@ def generate_index_page(
     </div>
 
     <script>
-        const CELL_TYPE = '{cell_type}';
-        const EXPERIMENT_NAME = '{experiment_name or ""}';
+        const CELL_TYPE = '{_esc(cell_type)}';
+        const EXPERIMENT_NAME = '{_esc(experiment_name or "")}';
         const STORAGE_KEY = EXPERIMENT_NAME ? CELL_TYPE + '_' + EXPERIMENT_NAME + '_annotations' : CELL_TYPE + '_annotations';
 
         function exportAnnotations() {{
@@ -1089,6 +1168,13 @@ def generate_index_page(
         function clearAll() {{
             if (!confirm('Clear ALL annotations across ALL pages? This cannot be undone.')) return;
             localStorage.setItem(STORAGE_KEY, JSON.stringify({{}}));
+            // Also clear page-specific keys
+            for (let i = 0; i < localStorage.length; i++) {{
+                const key = localStorage.key(i);
+                if (key && key.startsWith(CELL_TYPE + '_labels_page')) {{
+                    localStorage.setItem(key, JSON.stringify({{}}));
+                }}
+            }}
             alert('All annotations cleared. Refresh any open pages to see the change.');
         }}
     </script>
@@ -1135,11 +1221,12 @@ def generate_dual_index_page(
     if title is None:
         types_str = " + ".join(ct.upper() for ct in cell_types.keys())
         title = f"{types_str} Annotation Review"
+    title = _esc(title)
 
     # Build info lines
     info_lines = []
     if file_name:
-        info_lines.append(f"Source: {file_name}")
+        info_lines.append(f"Source: {_esc(file_name)}")
     if pixel_size_um:
         info_lines.append(f"Pixel size: {pixel_size_um:.4f} &micro;m/px")
     if tiles_processed is not None:
@@ -1149,21 +1236,22 @@ def generate_dual_index_page(
             label = "Tissue tiles processed" if tissue_tiles else "Tiles processed"
             info_lines.append(f"{label}: {tiles_processed:,} / {denominator:,} ({pct:.1f}%)")
     if timestamp:
-        info_lines.append(f"Segmentation: {timestamp}")
+        info_lines.append(f"Segmentation: {_esc(timestamp)}")
 
     info_html = '<br>'.join(info_lines) if info_lines else ''
-    subtitle_html = f'<div class="subtitle">{subtitle}</div>' if subtitle else ''
+    subtitle_html = f'<div class="subtitle">{_esc(subtitle)}</div>' if subtitle else ''
 
     # Build cell type sections
     sections_html = ''
     for ct, info in cell_types.items():
+        ct_safe = _esc(ct)
         total_samples = info.get('total_samples', 0)
         total_pages = info.get('total_pages', 0)
         page_prefix = info.get('page_prefix', f'{ct}_page')
 
         sections_html += f'''
         <div class="cell-type-section">
-            <h2>{ct.upper()}</h2>
+            <h2>{ct_safe.upper()}</h2>
             <div class="stats">
                 <div class="stat">
                     <span>Detections</span>
@@ -1174,15 +1262,16 @@ def generate_dual_index_page(
                     <span class="number">{total_pages}</span>
                 </div>
             </div>
-            <a href="{page_prefix}_1.html" class="btn">Review {ct.upper()}</a>
+            <a href="{page_prefix}_1.html" class="btn">Review {ct_safe.upper()}</a>
         </div>
         '''
 
     # Build export buttons for each cell type
     export_buttons = ''
     for ct in cell_types.keys():
+        ct_safe = _esc(ct)
         export_buttons += f'''
-        <button class="btn btn-export" onclick="exportAnnotations('{ct}')">Export {ct.upper()}</button>
+        <button class="btn btn-export" onclick="exportAnnotations('{ct_safe}')">Export {ct_safe.upper()}</button>
         '''
 
     html = f'''<!DOCTYPE html>
@@ -1284,7 +1373,7 @@ def generate_dual_index_page(
     </div>
 
     <script>
-        const EXPERIMENT_NAME = '{experiment_name or ""}';
+        const EXPERIMENT_NAME = '{_esc(experiment_name or "")}';
 
         function getStorageKey(cellType) {{
             return EXPERIMENT_NAME ? cellType + '_' + EXPERIMENT_NAME + '_annotations' : cellType + '_annotations';
@@ -1321,9 +1410,16 @@ def generate_dual_index_page(
 
         function clearAll() {{
             if (!confirm('Clear ALL annotations for ALL cell types? This cannot be undone.')) return;
-            const cellTypes = {list(cell_types.keys())};
+            const cellTypes = {json.dumps(list(cell_types.keys()))};
             cellTypes.forEach(ct => {{
                 localStorage.setItem(getStorageKey(ct), JSON.stringify({{}}));
+                // Also clear page-specific keys
+                for (let i = 0; i < localStorage.length; i++) {{
+                    const key = localStorage.key(i);
+                    if (key && key.startsWith(ct + '_labels_page')) {{
+                        localStorage.setItem(key, JSON.stringify({{}}));
+                    }}
+                }}
             }});
             alert('All annotations cleared. Refresh any open pages.');
         }}
@@ -1742,23 +1838,37 @@ def create_mk_hspc_index(output_dir, total_mks, total_hspcs, mk_pages, hspc_page
     <script>
         function exportAnnotations() {{
             const allLabels = {{}};
-            const mkLabels = {{ positive: [], negative: [] }};
-            const hspcLabels = {{ positive: [], negative: [] }};
-            for (let i = 0; i < localStorage.length; i++) {{
-                const key = localStorage.key(i);
-                if (key.startsWith('mk_labels_page') || key.startsWith('hspc_labels_page')) {{
+            // Read from global keys (preferred), falling back to page keys
+            ['mk', 'hspc'].forEach(ct => {{
+                const result = {{ positive: [], negative: [] }};
+                // Try global key first
+                const globalKey = ct + '_annotations';
+                const globalStored = localStorage.getItem(globalKey);
+                if (globalStored) {{
                     try {{
-                        const labels = JSON.parse(localStorage.getItem(key));
-                        const cellType = key.startsWith('mk_') ? mkLabels : hspcLabels;
+                        const labels = JSON.parse(globalStored);
                         for (const [uid, label] of Object.entries(labels)) {{
-                            if (label === 1) cellType.positive.push(uid);
-                            else if (label === 0) cellType.negative.push(uid);
+                            if (label === 1) result.positive.push(uid);
+                            else if (label === 0) result.negative.push(uid);
                         }}
                     }} catch(e) {{ console.error(e); }}
+                }} else {{
+                    // Fallback: iterate page-specific keys
+                    for (let i = 0; i < localStorage.length; i++) {{
+                        const key = localStorage.key(i);
+                        if (key && key.startsWith(ct + '_labels_page')) {{
+                            try {{
+                                const labels = JSON.parse(localStorage.getItem(key));
+                                for (const [uid, label] of Object.entries(labels)) {{
+                                    if (label === 1) result.positive.push(uid);
+                                    else if (label === 0) result.negative.push(uid);
+                                }}
+                            }} catch(e) {{ console.error(e); }}
+                        }}
+                    }}
                 }}
-            }}
-            allLabels.mk = mkLabels;
-            allLabels.hspc = hspcLabels;
+                allLabels[ct] = result;
+            }});
             const blob = new Blob([JSON.stringify(allLabels, null, 2)], {{type: 'application/json'}});
             const url = URL.createObjectURL(blob);
             const a = document.createElement('a');
@@ -1784,20 +1894,21 @@ def generate_mk_hspc_page_html(samples, cell_type, page_num, total_pages, slides
         total_pages: Total number of pages
         slides_summary: Optional string like "16 slides (FGC1, FGC2, ...)" for subtitle
     """
-    cell_type_display = "Megakaryocytes (MKs)" if cell_type == "mk" else "HSPCs"
+    cell_type_display = _esc("Megakaryocytes (MKs)" if cell_type == "mk" else "HSPCs")
+    cell_type_safe = _esc(cell_type)
 
     # Build subtitle HTML
     subtitle_html = ''
     if slides_summary:
-        subtitle_html = f'<div class="header-subtitle">{slides_summary}</div>'
+        subtitle_html = f'<div class="header-subtitle">{_esc(slides_summary)}</div>'
 
     nav_html = '<div class="page-nav">'
     nav_html += '<a href="index.html" class="nav-btn">Home</a>'
     if page_num > 1:
-        nav_html += f'<a href="{cell_type}_page{page_num-1}.html" class="nav-btn">Previous</a>'
+        nav_html += f'<a href="{cell_type_safe}_page{page_num-1}.html" class="nav-btn">Previous</a>'
     nav_html += f'<span class="page-info">Page {page_num} of {total_pages}</span>'
     if page_num < total_pages:
-        nav_html += f'<a href="{cell_type}_page{page_num+1}.html" class="nav-btn">Next</a>'
+        nav_html += f'<a href="{cell_type_safe}_page{page_num+1}.html" class="nav-btn">Next</a>'
     nav_html += '</div>'
 
     cards_html = ""
@@ -1807,15 +1918,15 @@ def generate_mk_hspc_page_html(samples, cell_type, page_num, total_pages, slides
         global_y = sample.get('global_y', 0)
         # Always use spatial UID format for consistency across all cell types
         # Format: {slide}_{celltype}_{round(x)}_{round(y)}
-        uid = f"{slide}_{cell_type}_{int(round(global_x))}_{int(round(global_y))}"
-        display_id = f"{cell_type}_{int(round(global_x))}_{int(round(global_y))}"
+        uid = _esc(f"{slide}_{cell_type}_{int(round(global_x))}_{int(round(global_y))}")
+        display_id = _esc(f"{cell_type}_{int(round(global_x))}_{int(round(global_y))}")
         # Keep legacy global_id in data attribute for backwards compatibility
         legacy_global_id = sample.get('global_id')
         area_um2 = sample.get('area_um2', 0)
         area_px = sample.get('area_px', 0)
         img_b64 = sample['image']
         # Include legacy_global_id as data attribute for migration support
-        legacy_attr = f' data-legacy-id="{legacy_global_id}"' if legacy_global_id is not None else ''
+        legacy_attr = f' data-legacy-id="{_esc(legacy_global_id)}"' if legacy_global_id is not None else ''
         cards_html += f'''
         <div class="card" id="{uid}" data-label="-1"{legacy_attr}>
             <div class="card-img-container">
@@ -1827,9 +1938,9 @@ def generate_mk_hspc_page_html(samples, cell_type, page_num, total_pages, slides
                     <div class="card-area">{area_um2:.1f} um2 | {area_px:.0f} px2</div>
                 </div>
                 <div class="buttons">
-                    <button class="btn btn-yes" onclick="setLabel('{cell_type}', '{uid}', 1)">Yes</button>
-                    <button class="btn btn-unsure" onclick="setLabel('{cell_type}', '{uid}', 2)">?</button>
-                    <button class="btn btn-no" onclick="setLabel('{cell_type}', '{uid}', 0)">No</button>
+                    <button class="btn btn-yes" onclick="setLabel('{uid}', 1)">Y</button>
+                    <button class="btn btn-unsure" onclick="setLabel('{uid}', 2)">?</button>
+                    <button class="btn btn-no" onclick="setLabel('{uid}', 0)">N</button>
                 </div>
             </div>
         </div>
@@ -1902,37 +2013,66 @@ def generate_mk_hspc_page_html(samples, cell_type, page_num, total_pages, slides
     </div>
     {nav_html}
     <script>
-        const STORAGE_KEY = '{cell_type}_labels_page{page_num}';
-        const CELL_TYPE = '{cell_type}';
+        const PAGE_STORAGE_KEY = '{cell_type_safe}_labels_page{page_num}';
+        const GLOBAL_STORAGE_KEY = '{cell_type_safe}_annotations';
+        const CELL_TYPE = '{cell_type_safe}';
         const TOTAL_PAGES = {total_pages};
 
         function loadAnnotations() {{
-            const stored = localStorage.getItem(STORAGE_KEY);
-            if (!stored) return;
+            const allCards = document.querySelectorAll('.card');
             try {{
-                const labels = JSON.parse(stored);
-                for (const [uid, label] of Object.entries(labels)) {{
-                    const card = document.getElementById(uid);
-                    if (card && label !== -1) {{
-                        card.dataset.label = label;
-                        card.classList.remove('labeled-yes', 'labeled-no', 'labeled-unsure');
-                        if (label == 1) card.classList.add('labeled-yes');
-                        else if (label == 2) card.classList.add('labeled-unsure');
-                        else card.classList.add('labeled-no');
+                let stored = localStorage.getItem(PAGE_STORAGE_KEY);
+                if (!stored) {{
+                    // Fallback: load only UIDs present on this page from global
+                    const globalSaved = localStorage.getItem(GLOBAL_STORAGE_KEY);
+                    if (globalSaved) {{
+                        const globalLabels = JSON.parse(globalSaved);
+                        const pageUids = new Set(Array.from(allCards).map(c => c.id));
+                        for (const [uid, label] of Object.entries(globalLabels)) {{
+                            if (pageUids.has(uid)) {{
+                                const card = document.getElementById(uid);
+                                if (card && label !== -1) {{
+                                    card.dataset.label = label;
+                                    card.classList.remove('labeled-yes', 'labeled-no', 'labeled-unsure');
+                                    if (label === 1) card.classList.add('labeled-yes');
+                                    else if (label === 2) card.classList.add('labeled-unsure');
+                                    else if (label === 0) card.classList.add('labeled-no');
+                                }}
+                            }}
+                        }}
+                    }}
+                }} else {{
+                    const labels = JSON.parse(stored);
+                    for (const [uid, label] of Object.entries(labels)) {{
+                        const card = document.getElementById(uid);
+                        if (card && label !== -1) {{
+                            card.dataset.label = label;
+                            card.classList.remove('labeled-yes', 'labeled-no', 'labeled-unsure');
+                            if (label == 1) card.classList.add('labeled-yes');
+                            else if (label == 2) card.classList.add('labeled-unsure');
+                            else card.classList.add('labeled-no');
+                        }}
                     }}
                 }}
                 updateStats();
             }} catch(e) {{ console.error(e); }}
         }}
 
-        function setLabel(cellType, uid, label) {{
+        function setLabel(uid, label, autoAdvance = false) {{
             const card = document.getElementById(uid);
             if (!card) return;
-            card.dataset.label = label;
-            card.classList.remove('labeled-yes', 'labeled-no', 'labeled-unsure');
-            if (label == 1) card.classList.add('labeled-yes');
-            else if (label == 2) card.classList.add('labeled-unsure');
-            else card.classList.add('labeled-no');
+            // Toggle off if same label
+            const currentLabel = parseInt(card.dataset.label);
+            if (currentLabel === label) {{
+                card.dataset.label = -1;
+                card.classList.remove('labeled-yes', 'labeled-no', 'labeled-unsure');
+            }} else {{
+                card.dataset.label = label;
+                card.classList.remove('labeled-yes', 'labeled-no', 'labeled-unsure');
+                if (label === 1) card.classList.add('labeled-yes');
+                else if (label === 2) card.classList.add('labeled-unsure');
+                else if (label === 0) card.classList.add('labeled-no');
+            }}
             saveAnnotations();
             updateStats();
         }}
@@ -1943,7 +2083,12 @@ def generate_mk_hspc_page_html(samples, cell_type, page_num, total_pages, slides
                 const label = parseInt(card.dataset.label);
                 if (label !== -1) labels[card.id] = label;
             }});
-            localStorage.setItem(STORAGE_KEY, JSON.stringify(labels));
+            localStorage.setItem(PAGE_STORAGE_KEY, JSON.stringify(labels));
+            // Merge into global store instead of overwriting
+            let globalLabels = {{}};
+            try {{ globalLabels = JSON.parse(localStorage.getItem(GLOBAL_STORAGE_KEY)) || {{}}; }} catch(e) {{}}
+            Object.assign(globalLabels, labels);
+            localStorage.setItem(GLOBAL_STORAGE_KEY, JSON.stringify(globalLabels));
         }}
 
         function updateStats() {{
@@ -1957,33 +2102,27 @@ def generate_mk_hspc_page_html(samples, cell_type, page_num, total_pages, slides
             document.getElementById('positive-count').textContent = pos;
             document.getElementById('negative-count').textContent = neg;
 
-            // Global stats (all pages)
-            // Use DOM count for current page, localStorage for other pages
-            let globalPos = pos, globalNeg = neg;
-            const currentPage = {page_num};
-            for (let i = 1; i <= TOTAL_PAGES; i++) {{
-                if (i === currentPage) continue;  // Already counted from DOM
-                const key = CELL_TYPE + '_labels_page' + i;
-                const stored = localStorage.getItem(key);
-                if (stored) {{
-                    try {{
-                        const labels = JSON.parse(stored);
-                        for (const label of Object.values(labels)) {{
-                            if (label === 1) globalPos++;
-                            else if (label === 0) globalNeg++;
-                        }}
-                    }} catch(e) {{}}
+            // Global stats from global key
+            let globalPos = 0, globalNeg = 0;
+            try {{
+                const globalSaved = localStorage.getItem(GLOBAL_STORAGE_KEY);
+                if (globalSaved) {{
+                    const globalLabels = JSON.parse(globalSaved);
+                    for (const v of Object.values(globalLabels)) {{
+                        if (v === 1) globalPos++;
+                        else if (v === 0) globalNeg++;
+                    }}
                 }}
-            }}
+            }} catch(e) {{}}
             document.getElementById('global-positive').textContent = globalPos;
             document.getElementById('global-negative').textContent = globalNeg;
         }}
 
         document.addEventListener('keydown', (e) => {{
             if (e.key === 'ArrowLeft' && {page_num} > 1)
-                window.location.href = '{cell_type}_page{prev_page}.html';
+                window.location.href = '{cell_type_safe}_page{prev_page}.html';
             else if (e.key === 'ArrowRight' && {page_num} < {total_pages})
-                window.location.href = '{cell_type}_page{next_page}.html';
+                window.location.href = '{cell_type_safe}_page{next_page}.html';
         }});
 
         loadAnnotations();
@@ -2626,7 +2765,7 @@ def get_vessel_css():
     '''
 
 
-def get_vessel_js(cell_type, total_pages, experiment_name=None, all_features_json='{}'):
+def get_vessel_js(cell_type, total_pages, experiment_name=None, all_features_json='{}', page_num=1):
     """
     Get enhanced JavaScript for vessel annotation with RF training support.
 
@@ -2639,17 +2778,21 @@ def get_vessel_js(cell_type, total_pages, experiment_name=None, all_features_jso
     Returns:
         JavaScript code string
     """
-    # Build storage key with optional experiment name
+    # Build storage keys: both global and page-specific
     if experiment_name:
-        storage_key = f"{cell_type}_{experiment_name}_annotations"
+        global_key = _esc(f"{cell_type}_{experiment_name}_annotations")
     else:
-        storage_key = f"{cell_type}_annotations"
+        global_key = _esc(f"{cell_type}_annotations")
+    page_key = _esc(f"{cell_type}_labels_page{page_num}")
+    cell_type_safe = _esc(cell_type)
+    experiment_name_safe = _esc(experiment_name or "")
 
     return f'''
-        const CELL_TYPE = '{cell_type}';
-        const EXPERIMENT_NAME = '{experiment_name or ""}';
+        const CELL_TYPE = '{cell_type_safe}';
+        const EXPERIMENT_NAME = '{experiment_name_safe}';
         const TOTAL_PAGES = {total_pages};
-        const STORAGE_KEY = '{storage_key}';
+        const GLOBAL_STORAGE_KEY = '{global_key}';
+        const PAGE_STORAGE_KEY = '{page_key}';
         const ALL_FEATURES = {all_features_json};
 
         let labels = {{}};
@@ -2657,11 +2800,33 @@ def get_vessel_js(cell_type, total_pages, experiment_name=None, all_features_jso
         let batchSelected = new Set();
         const cards = document.querySelectorAll('.card');
 
-        // Load from localStorage
+        // Save to BOTH page-specific and global localStorage keys
+        function saveLabels() {{
+            localStorage.setItem(PAGE_STORAGE_KEY, JSON.stringify(labels));
+            // Merge into global store instead of overwriting
+            let globalLabels = {{}};
+            try {{ globalLabels = JSON.parse(localStorage.getItem(GLOBAL_STORAGE_KEY)) || {{}}; }} catch(e) {{}}
+            Object.assign(globalLabels, labels);
+            localStorage.setItem(GLOBAL_STORAGE_KEY, JSON.stringify(globalLabels));
+        }}
+
+        // Load from localStorage: page-specific first, then global fallback
         function loadAnnotations() {{
             try {{
-                const saved = localStorage.getItem(STORAGE_KEY);
-                if (saved) labels = JSON.parse(saved);
+                let saved = localStorage.getItem(PAGE_STORAGE_KEY);
+                if (!saved) {{
+                    // Fallback: load only UIDs present on this page from global
+                    const globalSaved = localStorage.getItem(GLOBAL_STORAGE_KEY);
+                    if (globalSaved) {{
+                        const globalLabels = JSON.parse(globalSaved);
+                        const pageUids = new Set(Array.from(cards).map(c => c.id));
+                        for (const [uid, label] of Object.entries(globalLabels)) {{
+                            if (pageUids.has(uid)) labels[uid] = label;
+                        }}
+                    }}
+                }} else {{
+                    labels = JSON.parse(saved);
+                }}
             }} catch(e) {{ console.error(e); }}
 
             // Apply to cards
@@ -2698,7 +2863,7 @@ def get_vessel_js(cell_type, total_pages, experiment_name=None, all_features_jso
                 if (card) applyLabelToCard(card, label);
             }}
 
-            localStorage.setItem(STORAGE_KEY, JSON.stringify(labels));
+            saveLabels();
             updateStats();
 
             if (autoAdvance && selectedIdx >= 0) {{
@@ -2728,12 +2893,18 @@ def get_vessel_js(cell_type, total_pages, experiment_name=None, all_features_jso
                 }}
             }});
 
-            // Count global
-            for (const v of Object.values(labels)) {{
-                if (v === 1) globalYes++;
-                else if (v === 0) globalNo++;
-                globalTotal++;
-            }}
+            // Count global from the global key
+            try {{
+                const globalSaved = localStorage.getItem(GLOBAL_STORAGE_KEY);
+                if (globalSaved) {{
+                    const globalLabels = JSON.parse(globalSaved);
+                    for (const v of Object.values(globalLabels)) {{
+                        if (v === 1) globalYes++;
+                        else if (v === 0) globalNo++;
+                        globalTotal++;
+                    }}
+                }}
+            }} catch(e) {{ console.error(e); }}
 
             const localRemaining = localTotal - localYes - localNo - localUnsure;
 
@@ -2785,7 +2956,7 @@ def get_vessel_js(cell_type, total_pages, experiment_name=None, all_features_jso
                 const card = document.getElementById(uid);
                 if (card) applyLabelToCard(card, label);
             }});
-            localStorage.setItem(STORAGE_KEY, JSON.stringify(labels));
+            saveLabels();
             clearBatchSelection();
             updateStats();
         }}
@@ -3026,14 +3197,18 @@ Export Formats:
                     card.dataset.label = -1;
                 }}
             }});
-            localStorage.setItem(STORAGE_KEY, JSON.stringify(labels));
+            saveLabels();
             updateStats();
         }}
 
         function clearAll() {{
             if (!confirm('Clear ALL annotations across ALL pages? This cannot be undone.')) return;
             labels = {{}};
-            localStorage.setItem(STORAGE_KEY, JSON.stringify(labels));
+            saveLabels();
+            // Also clear all other page-specific keys for this cell type
+            for (let i = 1; i <= TOTAL_PAGES; i++) {{
+                localStorage.setItem(CELL_TYPE + '_labels_page' + i, JSON.stringify({{}}));
+            }}
             cards.forEach(card => {{
                 card.classList.remove('labeled-yes', 'labeled-no', 'labeled-unsure');
                 card.dataset.label = -1;
@@ -3118,6 +3293,7 @@ def generate_vessel_annotation_page(
 
     if title is None:
         title = cell_type.upper()
+    title = _esc(title)
 
     # Build navigation
     nav_html = '<div class="nav-buttons">'
@@ -3132,23 +3308,23 @@ def generate_vessel_annotation_page(
     # Build subtitle HTML if provided
     subtitle_html = ''
     if subtitle:
-        subtitle_html = f'<div class="header-subtitle">{subtitle}</div>'
+        subtitle_html = f'<div class="header-subtitle">{_esc(subtitle)}</div>'
 
     # Collect all features for this page (for filtering/export)
     all_features = {}
     for sample in samples:
-        uid = sample['uid']
+        uid_raw = sample['uid']
         feat = sample.get('features', {})
         # Filter to numeric features only
-        all_features[uid] = {k: v for k, v in feat.items()
-                            if isinstance(v, (int, float)) and not isinstance(v, bool)}
+        all_features[uid_raw] = {k: v for k, v in feat.items()
+                                 if isinstance(v, (int, float)) and not isinstance(v, bool)}
 
     all_features_json = json.dumps(all_features)
 
     # Build cards
     cards_html = ''
     for idx, sample in enumerate(samples):
-        uid = sample['uid']
+        uid = _esc(sample['uid'])
         img_b64 = sample['image']
         img_raw_b64 = sample.get('image_raw')  # Raw image without contours
         mime = sample.get('mime_type', 'jpeg')
@@ -3165,7 +3341,7 @@ def generate_vessel_annotation_page(
         if 'confidence' in feat:
             conf = feat['confidence']
             if isinstance(conf, str):
-                stats_parts.append(conf)
+                stats_parts.append(_esc(conf))
             else:
                 stats_parts.append(f"{conf*100:.0f}%")
 
@@ -3329,7 +3505,7 @@ def generate_vessel_annotation_page(
         </div>
     </div>
 
-    <script>{get_vessel_js(cell_type, total_pages, experiment_name, all_features_json)}</script>
+    <script>{get_vessel_js(cell_type, total_pages, experiment_name, all_features_json, page_num)}</script>
 </body>
 </html>'''
 
@@ -3372,18 +3548,19 @@ def generate_vessel_index_page(
     """
     if title is None:
         title = f"{cell_type.upper()} Annotation Review"
+    title = _esc(title)
 
     # Build info lines
     info_lines = []
-    info_lines.append(f"Detection type: {cell_type.upper()}")
+    info_lines.append(f"Detection type: {_esc(cell_type.upper())}")
     if file_name:
-        info_lines.append(f"File: {file_name}")
+        info_lines.append(f"File: {_esc(file_name)}")
     if pixel_size_um:
         info_lines.append(f"Pixel size: {pixel_size_um:.4f} &micro;m/px")
     info_lines.append(f"Total detections: {total_samples:,}")
     info_lines.append(f"Pages: {total_pages}")
     if timestamp:
-        info_lines.append(f"Segmentation: {timestamp}")
+        info_lines.append(f"Segmentation: {_esc(timestamp)}")
 
     info_html = '<br>'.join(info_lines)
 
@@ -3394,7 +3571,7 @@ def generate_vessel_index_page(
         for key, stats in feature_summary.items():
             feature_html += f'''
             <tr>
-                <td>{key}</td>
+                <td>{_esc(key)}</td>
                 <td>min: {stats.get("min", 0):.2f}</td>
                 <td>max: {stats.get("max", 0):.2f}</td>
                 <td>mean: {stats.get("mean", 0):.2f}</td>
@@ -3406,8 +3583,8 @@ def generate_vessel_index_page(
         for label, value in extra_stats.items():
             extra_stats_html += f'''
             <div class="stat">
-                <span>{label}</span>
-                <span class="number">{value}</span>
+                <span>{_esc(label)}</span>
+                <span class="number">{_esc(value)}</span>
             </div>'''
 
     html = f'''<!DOCTYPE html>
@@ -3603,8 +3780,8 @@ def generate_vessel_index_page(
     </div>
 
     <script>
-        const CELL_TYPE = '{cell_type}';
-        const EXPERIMENT_NAME = '{experiment_name or ""}';
+        const CELL_TYPE = '{_esc(cell_type)}';
+        const EXPERIMENT_NAME = '{_esc(experiment_name or "")}';
         const TOTAL_SAMPLES = {total_samples};
         const STORAGE_KEY = EXPERIMENT_NAME ? CELL_TYPE + '_' + EXPERIMENT_NAME + '_annotations' : CELL_TYPE + '_annotations';
 
@@ -3669,6 +3846,13 @@ def generate_vessel_index_page(
         function clearAll() {{
             if (!confirm('Clear ALL annotations across ALL pages? This cannot be undone.')) return;
             localStorage.setItem(STORAGE_KEY, JSON.stringify({{}}));
+            // Also clear page-specific keys
+            for (let i = 0; i < localStorage.length; i++) {{
+                const key = localStorage.key(i);
+                if (key && key.startsWith(CELL_TYPE + '_labels_page')) {{
+                    localStorage.setItem(key, JSON.stringify({{}}));
+                }}
+            }}
             updateProgress();
             alert('All annotations cleared. Refresh any open pages to see the change.');
         }}

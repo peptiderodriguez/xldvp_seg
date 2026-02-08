@@ -147,7 +147,7 @@ import cellpose
 import numpy
 import cv2
 import h5py
-from segmentation.processing.multigpu import MultiGPUTileProcessor
+from segmentation.processing.multigpu_worker import MultiGPUTileProcessor
 print('All imports successful!')
 print(f'  torch: {torch.__version__}')
 print(f'  cellpose: {cellpose.__version__}')

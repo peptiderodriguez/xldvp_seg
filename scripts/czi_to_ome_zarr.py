@@ -806,6 +806,20 @@ def convert_czi_to_ome_zarr(
         overwrite=overwrite,
     )
 
+    # Align strip_height to chunk_size to prevent race conditions when
+    # parallel workers write to the same zarr chunk from adjacent strips.
+    # Without alignment, strip boundaries (e.g., every 5000px) can fall
+    # inside a chunk (e.g., 1024px), causing concurrent writes to overlap.
+    if num_workers > 1 and strip_height % chunk_size != 0:
+        aligned_strip_height = (strip_height // chunk_size) * chunk_size
+        if aligned_strip_height == 0:
+            aligned_strip_height = chunk_size
+        logger.info(
+            f"Aligned strip_height {strip_height} -> {aligned_strip_height} "
+            f"(multiple of chunk_size={chunk_size}) to prevent parallel write conflicts"
+        )
+        strip_height = aligned_strip_height
+
     # Copy tiles to level 0
     logger.info("Writing level 0 (full resolution)...")
     copy_tiles_to_zarr(

@@ -46,11 +46,10 @@ logger = get_logger(__name__)
 # FEATURE NAME DEFINITIONS
 # =============================================================================
 
-# Ring/Wall Features (6 features)
+# Ring/Wall Features (5 features)
 RING_WALL_FEATURE_NAMES = [
     'ring_completeness',       # Fraction of perimeter with SMA signal
-    'wall_uniformity',         # std/mean of wall thickness (lower = more uniform)
-    'wall_thickness_cv',       # Coefficient of variation of wall thickness
+    'wall_thickness_cv',       # Coefficient of variation of wall thickness (std/mean)
     'wall_asymmetry',          # max/min wall thickness ratio
     'lumen_wall_ratio',        # lumen_area / wall_area
     'wall_fraction',           # wall_area / outer_area
@@ -75,14 +74,6 @@ LOG_SIZE_FEATURE_NAMES = [
 # Size class categorical feature (1 feature, encoded as numeric)
 SIZE_CLASS_FEATURE_NAMES = [
     'size_class',              # 0=capillary(<10um), 1=arteriole(10-50um), 2=small_artery(50-150um), 3=artery(>150um)
-]
-
-# Additional scale-invariant ratio features (3 features)
-# These ratios are inherently independent of vessel size
-SCALE_INVARIANT_FEATURE_NAMES = [
-    'lumen_wall_ratio',        # Already in RING_WALL - lumen_area / wall_area
-    'diameter_ratio',          # Already in DIAMETER_SIZE - inner/outer
-    'wall_fraction',           # Already in RING_WALL - wall_area / outer_area
 ]
 
 # Shape Features (5 features)
@@ -139,7 +130,7 @@ SIZE_CLASS_THRESHOLDS = {
     'capillary': (0, 10),        # 5-10 um (class 0)
     'arteriole': (10, 50),       # 10-50 um (class 1)
     'small_artery': (50, 150),   # 50-150 um (class 2)
-    'artery': (150, float('inf'))  # >150 um (class 3)
+    'artery': (150, 1e9)            # >150 um (class 3)
 }
 
 def get_size_class(diameter_um: float) -> int:
@@ -214,7 +205,7 @@ def extract_vessel_features(
         ...     outer_contour, inner_contour,
         ...     pixel_size_um=0.22
         ... )
-        >>> print(features['wall_uniformity'])
+        >>> print(features['wall_thickness_cv'])
         0.15
     """
     features = {}
@@ -287,7 +278,6 @@ def _extract_ring_wall_features(
     """
     features = {
         'ring_completeness': None,
-        'wall_uniformity': None,
         'wall_thickness_cv': None,
         'wall_asymmetry': None,
         'lumen_wall_ratio': None,
@@ -325,10 +315,7 @@ def _extract_ring_wall_features(
             min_thickness = np.min(wall_thicknesses)
             max_thickness = np.max(wall_thicknesses)
 
-            # Wall uniformity: std/mean (lower = more uniform = vessel-like)
-            features['wall_uniformity'] = std_thickness / mean_thickness if mean_thickness > 0 else None
-
-            # Coefficient of variation
+            # Coefficient of variation (std/mean, lower = more uniform = vessel-like)
             features['wall_thickness_cv'] = std_thickness / mean_thickness if mean_thickness > 0 else None
 
             # Wall asymmetry: max/min ratio
@@ -424,16 +411,32 @@ def _measure_wall_thickness(
     """
     Measure wall thickness at multiple points around the vessel.
 
-    Uses distance transform from lumen boundary and samples at
-    evenly spaced points around the inner contour.
+    Two measurement methods are used independently:
+
+    1. **Contour-sampling** (primary): Samples evenly-spaced points along the
+       inner contour and reads the distance-transform value at each point.
+       Each value is the distance from the lumen boundary outward into the
+       wall -- a one-sided (radial) thickness estimate.
+
+    2. **Skeleton-based** (fallback): Skeletonises the wall mask and reads the
+       distance-transform at each skeleton pixel, then doubles it to obtain a
+       full wall-width (diameter) estimate.  Because this measures a
+       fundamentally different quantity (full width vs. one-sided distance),
+       the skeleton values are only used when contour-sampling returns fewer
+       than ``num_samples // 2`` measurements.
+
+    Returns:
+        1-D array of wall thickness values in micrometers.  All values in a
+        single call come from the same measurement method to keep statistics
+        (mean, std, CV, asymmetry) internally consistent.
     """
     h, w = wall_mask.shape
 
     # Distance from lumen boundary into wall
     dist_from_lumen = distance_transform_edt(~lumen_mask)
 
-    # Sample thickness at points along inner contour
-    wall_thickness_values = []
+    # ---- Method 1: contour-sampling (one-sided radial distance) ----
+    contour_thicknesses: list = []
     step = max(1, len(inner_contour) // num_samples)
 
     for pt in inner_contour[::step]:
@@ -442,19 +445,27 @@ def _measure_wall_thickness(
             if wall_mask[py, px] or lumen_mask[py, px]:
                 ray_dist = dist_from_lumen[py, px]
                 if ray_dist > 0:
-                    wall_thickness_values.append(ray_dist * pixel_size_um)
+                    contour_thicknesses.append(ray_dist * pixel_size_um)
 
-    # Also use skeleton-based measurement
+    # If contour-sampling produced enough points, return those directly.
+    min_required = max(num_samples // 2, 3)
+    if len(contour_thicknesses) >= min_required:
+        return np.array(contour_thicknesses)
+
+    # ---- Method 2: skeleton-based (full wall-width estimate, fallback) ----
     try:
         skeleton = skeletonize(wall_mask)
         skeleton_distances = dist_from_lumen[skeleton]
         if len(skeleton_distances) > 0:
+            # Multiply by 2 because skeleton sits at the medial axis, so the
+            # distance-transform value is roughly half the total wall width.
             medial_thicknesses = skeleton_distances * 2 * pixel_size_um
-            wall_thickness_values.extend(medial_thicknesses.tolist())
+            return medial_thicknesses
     except Exception:
         pass
 
-    return np.array(wall_thickness_values) if wall_thickness_values else np.array([])
+    # Return whatever contour-sampling collected (may be empty)
+    return np.array(contour_thicknesses) if contour_thicknesses else np.array([])
 
 
 # =============================================================================
@@ -1232,8 +1243,7 @@ def get_vessel_feature_importance() -> Dict[str, str]:
     return {
         # Ring/Wall features
         'ring_completeness': 'High for vessels (>0.7), low for artifacts. Key discriminator.',
-        'wall_uniformity': 'Low (<0.3) for vessels, high for irregular structures.',
-        'wall_thickness_cv': 'Similar to wall_uniformity. CV < 0.3 typical for vessels.',
+        'wall_thickness_cv': 'CV of wall thickness. Low (<0.3) for vessels, high for irregular structures.',
         'wall_asymmetry': 'Ratio < 3.0 typical for vessels, higher indicates artifacts.',
         'lumen_wall_ratio': 'Typically 1.0-5.0 for vessels, varies by type.',
         'wall_fraction': 'Typically 0.1-0.5 for vessels.',

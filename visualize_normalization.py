@@ -51,10 +51,15 @@ def compute_tissue_stats(image, tissue_blocks, block_sz=512, n_samples=1000000):
     block_indices = np.random.randint(0, len(tissue_blocks), size=n_samples)
     selected_origins = block_origins[block_indices]
 
-    x_offsets = np.random.randint(0, block_sz, size=n_samples)
-    y_offsets = np.random.randint(0, block_sz, size=n_samples)
-    xs = np.clip(selected_origins[:, 0] + x_offsets, 0, w - 1)
-    ys = np.clip(selected_origins[:, 1] + y_offsets, 0, h - 1)
+    # Per-block-bounded offsets (matches compute_normalization_params.py)
+    max_x_offsets = np.minimum(block_sz, w - selected_origins[:, 0])
+    max_y_offsets = np.minimum(block_sz, h - selected_origins[:, 1])
+    max_x_offsets = np.maximum(max_x_offsets, 1)
+    max_y_offsets = np.maximum(max_y_offsets, 1)
+    x_offsets = (np.random.random(n_samples) * max_x_offsets).astype(np.intp)
+    y_offsets = (np.random.random(n_samples) * max_y_offsets).astype(np.intp)
+    xs = selected_origins[:, 0] + x_offsets
+    ys = selected_origins[:, 1] + y_offsets
 
     samples = image[ys, xs]  # (n_samples, 3) uint8
 

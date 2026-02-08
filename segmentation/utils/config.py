@@ -30,6 +30,27 @@ import os
 from pathlib import Path
 from typing import Dict, Any, Optional, List, Union, TypedDict, Tuple
 
+import numpy as np
+
+
+class _NumpyEncoder(json.JSONEncoder):
+    """JSON encoder that handles numpy types.
+
+    numpy integers, floats, booleans, and arrays are converted to their
+    Python equivalents so that ``json.dump`` does not raise a TypeError.
+    """
+
+    def default(self, obj):
+        if isinstance(obj, np.integer):
+            return int(obj)
+        if isinstance(obj, np.floating):
+            return float(obj)
+        if isinstance(obj, np.bool_):
+            return bool(obj)
+        if isinstance(obj, np.ndarray):
+            return obj.tolist()
+        return super().default(obj)
+
 
 # =============================================================================
 # CONFIGURATION TYPE DEFINITIONS
@@ -169,10 +190,10 @@ _VALIDATION_RULES: Dict[str, Dict[str, Any]] = {
 
 # Environment-based paths (with sensible defaults)
 DEFAULT_PATHS = {
-    "output_dir": os.getenv("SEGMENTATION_OUTPUT_DIR", "/home/dude/segmentation_output"),
-    "nmj_output_dir": os.getenv("NMJ_OUTPUT_DIR", "/home/dude/nmj_output"),
-    "mk_output_dir": os.getenv("MK_OUTPUT_DIR", "/home/dude/xldvp_seg_output"),
-    "nmj_model_path": os.getenv("NMJ_MODEL_PATH", "/home/dude/nmj_output/nmj_classifier.pth"),
+    "output_dir": os.getenv("SEGMENTATION_OUTPUT_DIR", str(Path.home() / "segmentation_output")),
+    "nmj_output_dir": os.getenv("NMJ_OUTPUT_DIR", str(Path.home() / "nmj_output")),
+    "mk_output_dir": os.getenv("MK_OUTPUT_DIR", str(Path.home() / "xldvp_seg_output")),
+    "nmj_model_path": os.getenv("NMJ_MODEL_PATH", str(Path.home() / "nmj_output" / "nmj_classifier.pth")),
     "data_dir": os.getenv("SEGMENTATION_DATA_DIR", "/mnt/x/01_Users/EdRo_axioscan"),
 }
 
@@ -348,7 +369,8 @@ def _deep_merge(base: Dict[str, Any], override: Dict[str, Any]) -> None:
     Recursively merge override dict into base dict (in-place).
 
     For nested dicts, merges keys rather than replacing the entire dict.
-    For all other types, override values replace base values.
+    For all other types (including lists), override values are deep-copied
+    to prevent shared mutable references between base and override.
 
     Args:
         base: Base dictionary to merge into (modified in-place)
@@ -362,7 +384,7 @@ def _deep_merge(base: Dict[str, Any], override: Dict[str, Any]) -> None:
         ):
             _deep_merge(base[key], value)
         else:
-            base[key] = value
+            base[key] = copy.deepcopy(value)
 
 
 def load_config(
@@ -428,7 +450,7 @@ def save_config(
     config_path = experiment_dir / config_filename
 
     with open(config_path, 'w') as f:
-        json.dump(config, f, indent=2)
+        json.dump(config, f, indent=2, cls=_NumpyEncoder)
 
     return config_path
 
@@ -936,12 +958,27 @@ def get_config_summary(
 # EXTRACTED MAGIC NUMBERS FROM run_unified_FAST.py
 # =============================================================================
 
-# Feature extraction dimensions
-# Morphological: ~78 features (shape, intensity, texture, skeleton, etc.)
+# Feature extraction dimensions — FULL PIPELINE values.
+#
+# These represent the total features produced by the complete detection pipeline
+# (not just a single extraction function). For the per-function "single-pass"
+# constants, see segmentation/utils/feature_extraction.py.
+#
+# Morphological breakdown (78 total for 3-channel NMJ pipeline):
+#   - 22 base features from extract_morphological_features()
+#     (area, perimeter, circularity, solidity, aspect_ratio, extent,
+#      equiv_diameter, RGB+gray+HSV stats, texture features)
+#   - ~5 NMJ-specific features (skeleton_length, eccentricity, mean_intensity,
+#     solidity override, bbox)
+#   - ~45 multi-channel stats (15 per channel x 3 channels via MultiChannelFeatureMixin)
+#   - ~6 inter-channel ratios + specificity metrics
+#   (Exact count varies by cell type and number of channels; 78 is the empirical
+#    value from the 3-channel NMJ classifier training.)
+#
 # SAM2: 256D embedding vectors (always extracted)
 # ResNet50: 2x 2048D = 4096 (masked + context, opt-in via --extract-deep-features)
 # DINOv2-L: 2x 1024D = 2048 (masked + context, opt-in via --extract-deep-features)
-MORPHOLOGICAL_FEATURES_COUNT = 78      # ~78 morphological/intensity features
+MORPHOLOGICAL_FEATURES_COUNT = 78      # Full-pipeline morphological features (see breakdown above)
 SAM2_EMBEDDING_DIMENSION = 256         # SAM2 256D embedding vectors
 RESNET_EMBEDDING_DIMENSION = 4096      # ResNet50 2x2048D (masked + context)
 DINOV2_EMBEDDING_DIMENSION = 2048      # DINOv2-L 2x1024D (masked + context)
@@ -963,10 +1000,11 @@ CPU_UTILIZATION_FRACTION = 0.8         # Use 80% of available CPU cores
 
 def get_feature_dimensions() -> Dict[str, int]:
     """
-    Get all feature dimension constants.
+    Get all full-pipeline feature dimension constants.
 
     Returns:
-        Dict with keys: morphological, sam2_embedding, resnet_embedding, total
+        Dict with keys: morphological (78), sam2_embedding (256),
+        resnet_embedding (4096), dinov2_embedding (2048), total (6478)
     """
     return {
         "morphological": MORPHOLOGICAL_FEATURES_COUNT,

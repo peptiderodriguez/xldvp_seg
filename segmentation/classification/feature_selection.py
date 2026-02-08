@@ -37,6 +37,7 @@ from sklearn.model_selection import (
     StratifiedKFold,
     learning_curve,
 )
+from sklearn.pipeline import Pipeline
 from sklearn.preprocessing import StandardScaler, LabelEncoder
 from sklearn.inspection import permutation_importance
 
@@ -79,8 +80,6 @@ def analyze_feature_importance(
     """
     # Prepare data
     X = np.nan_to_num(X, nan=0, posinf=0, neginf=0)
-    scaler = StandardScaler()
-    X_scaled = scaler.fit_transform(X)
 
     # Encode labels if strings
     if y.dtype.kind in ('U', 'S', 'O'):
@@ -88,6 +87,11 @@ def analyze_feature_importance(
         y = le.fit_transform(y)
 
     results = {}
+
+    # Scale data for analysis (fit on all data is acceptable for feature
+    # importance analysis since we're not reporting generalization scores)
+    scaler = StandardScaler()
+    X_scaled = scaler.fit_transform(X)
 
     # Train base model
     rf = RandomForestClassifier(
@@ -196,8 +200,6 @@ def select_optimal_features(
     """
     # Prepare data
     X = np.nan_to_num(X, nan=0, posinf=0, neginf=0)
-    scaler = StandardScaler()
-    X_scaled = scaler.fit_transform(X)
 
     # Encode labels
     if y.dtype.kind in ('U', 'S', 'O'):
@@ -212,10 +214,17 @@ def select_optimal_features(
         class_weight='balanced'
     )
 
+    # Scale data for methods that need pre-scaled input (threshold, top_n)
+    # RFECV and RFE use Pipeline internally to avoid leakage
+    scaler = StandardScaler()
+    X_scaled = scaler.fit_transform(X)
+
     result = {}
 
     if method == 'rfecv':
         # Recursive Feature Elimination with Cross-Validation
+        # RF is scale-invariant (tree-based), so no scaler needed here.
+        # This avoids data leakage that would occur from pre-scaling all data.
         cv = StratifiedKFold(n_splits=cv_folds, shuffle=True, random_state=random_state)
         selector = RFECV(
             estimator=rf,
@@ -225,7 +234,7 @@ def select_optimal_features(
             min_features_to_select=min_features,
             n_jobs=-1
         )
-        selector.fit(X_scaled, y)
+        selector.fit(X, y)
 
         selected_mask = selector.support_
         result['cv_scores'] = selector.cv_results_['mean_test_score'].tolist()
@@ -237,7 +246,7 @@ def select_optimal_features(
             logger.info(f"Best CV score: {max(selector.cv_results_['mean_test_score']):.4f}")
 
     elif method == 'rfe':
-        # RFE without CV
+        # RFE without CV (no leakage concern since no CV, but use scaled data)
         selector = RFE(
             estimator=rf,
             n_features_to_select=min_features,
@@ -251,7 +260,7 @@ def select_optimal_features(
             logger.info(f"RFE selected {min_features} features")
 
     elif method == 'threshold':
-        # Select features above mean importance
+        # Select features above mean importance (no CV, no leakage concern)
         rf.fit(X_scaled, y)
         selector = SelectFromModel(rf, prefit=True, threshold='mean')
         selected_mask = selector.get_support()
@@ -268,7 +277,7 @@ def select_optimal_features(
             logger.info(f"Threshold selection: {selected_mask.sum()} features")
 
     elif method == 'top_n':
-        # Simply select top N by importance
+        # Simply select top N by importance (no CV, no leakage concern)
         rf.fit(X_scaled, y)
         importance = rf.feature_importances_
         top_indices = np.argsort(importance)[-min_features:]
@@ -346,7 +355,6 @@ def cross_validate_features(
 
     # Cross-validation with Pipeline to avoid data leakage
     # (scaler fits inside each fold, not on full dataset)
-    from sklearn.pipeline import Pipeline
     cv = StratifiedKFold(n_splits=cv_folds, shuffle=True, random_state=random_state)
     pipe = Pipeline([
         ('scaler', StandardScaler()),
@@ -367,18 +375,21 @@ def cross_validate_features(
         'n_features': X.shape[1],
     }
 
-    # Optionally return trained models
+    # Optionally return trained models (each with its own scaler, no leakage)
     if return_models:
         models = []
-        for train_idx, _ in cv.split(X_scaled, y):
-            model = RandomForestClassifier(
-                n_estimators=n_estimators,
-                random_state=random_state,
-                n_jobs=-1,
-                class_weight='balanced'
-            )
-            model.fit(X_scaled[train_idx], y[train_idx])
-            models.append(model)
+        for train_idx, _ in cv.split(X, y):
+            fold_pipe = Pipeline([
+                ('scaler', StandardScaler()),
+                ('rf', RandomForestClassifier(
+                    n_estimators=n_estimators,
+                    random_state=random_state,
+                    n_jobs=-1,
+                    class_weight='balanced'
+                )),
+            ])
+            fold_pipe.fit(X[train_idx], y[train_idx])
+            models.append(fold_pipe)
         result['models'] = models
 
     logger.info(f"CV Accuracy: {fold_scores.mean():.4f} (+/- {fold_scores.std() * 2:.4f})")
@@ -418,23 +429,25 @@ def compute_learning_curve(
 
     # Prepare data
     X = np.nan_to_num(X, nan=0, posinf=0, neginf=0)
-    scaler = StandardScaler()
-    X_scaled = scaler.fit_transform(X)
 
     # Encode labels
     if y.dtype.kind in ('U', 'S', 'O'):
         le = LabelEncoder()
         y = le.fit_transform(y)
 
-    rf = RandomForestClassifier(
-        n_estimators=n_estimators,
-        random_state=random_state,
-        n_jobs=-1,
-        class_weight='balanced'
-    )
+    # Use Pipeline to avoid data leakage: scaler fits per CV fold
+    pipe = Pipeline([
+        ('scaler', StandardScaler()),
+        ('rf', RandomForestClassifier(
+            n_estimators=n_estimators,
+            random_state=random_state,
+            n_jobs=-1,
+            class_weight='balanced'
+        )),
+    ])
 
     train_sizes_abs, train_scores, test_scores = learning_curve(
-        rf, X_scaled, y,
+        pipe, X, y,
         train_sizes=train_sizes,
         cv=cv_folds,
         scoring='accuracy',

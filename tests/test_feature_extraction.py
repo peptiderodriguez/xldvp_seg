@@ -3,16 +3,31 @@ Comprehensive tests for feature extraction utilities.
 
 Tests the feature extraction functions and constants in the xldvp_seg_repo codebase,
 specifically from:
-- segmentation/utils/config.py (feature dimension constants)
-- segmentation/utils/feature_extraction.py (morphological features, ResNet, SAM2)
+- segmentation/utils/config.py (full-pipeline feature dimension constants)
+- segmentation/utils/feature_extraction.py (base morphological features, single-pass ResNet, SAM2)
 - segmentation/detection/strategies/base.py (feature extraction methods)
 
+Feature dimension constants exist at TWO levels:
+
+1. feature_extraction.py (single-pass / per-function values):
+   - MORPHOLOGICAL_FEATURE_COUNT = 22  (base extract_morphological_features output)
+   - RESNET50_FEATURE_DIM = 2048       (single ResNet pass output)
+   - SAM2_EMBEDDING_DIM = 256          (SAM2 embedding)
+
+2. config.py (full-pipeline values for trained classifiers):
+   - MORPHOLOGICAL_FEATURES_COUNT = 78   (22 base + NMJ-specific + multi-channel)
+   - RESNET_EMBEDDING_DIMENSION = 4096   (2 x 2048: masked + context crops)
+   - DINOV2_EMBEDDING_DIMENSION = 2048   (2 x 1024: masked + context crops)
+   - SAM2_EMBEDDING_DIMENSION = 256      (same at both levels)
+   - TOTAL_FEATURES_PER_CELL = 6478      (78 + 256 + 4096 + 2048)
+
 Test categories:
-1. Feature dimension constants verification
-2. Morphological feature extraction (22 features)
-3. SAM2 embedding dimensions (256)
-4. ResNet feature dimensions (2048)
-5. Combined feature vector tests (total = 2326)
+1. Full-pipeline feature dimension constants (config.py)
+2. Single-pass feature dimension constants (feature_extraction.py)
+3. Morphological feature extraction (22 base features)
+4. SAM2 embedding dimensions (256)
+5. ResNet feature dimensions (2048 single-pass)
+6. Combined feature vector tests
 """
 
 import sys
@@ -35,23 +50,21 @@ def _check_torch_available():
         return False
 
 
-class TestFeatureDimensionConstants(unittest.TestCase):
+class TestFullPipelineFeatureDimensions(unittest.TestCase):
     """
-    Tests for feature dimension constants defined in segmentation/utils/config.py.
+    Tests for full-pipeline feature dimension constants in segmentation/utils/config.py.
 
-    These constants define the expected dimensions for different feature types:
-    - Morphological features: 22
-    - SAM2 embeddings: 256
-    - ResNet embeddings: 2048
-    - Total features per cell: 2326 (22 + 256 + 2048)
+    These represent the total features produced by the complete detection pipeline
+    (including masked + context crops for ResNet/DINOv2, and all morphological
+    features including NMJ-specific and multi-channel stats).
     """
 
-    def test_morphological_features_count_equals_22(self):
-        """Verify MORPHOLOGICAL_FEATURES_COUNT constant equals 22."""
+    def test_morphological_features_count_equals_78(self):
+        """Verify MORPHOLOGICAL_FEATURES_COUNT constant equals 78 (full pipeline)."""
         from segmentation.utils.config import MORPHOLOGICAL_FEATURES_COUNT
         self.assertEqual(
-            MORPHOLOGICAL_FEATURES_COUNT, 22,
-            f"Expected 22 morphological features, got {MORPHOLOGICAL_FEATURES_COUNT}"
+            MORPHOLOGICAL_FEATURES_COUNT, 78,
+            f"Expected 78 full-pipeline morphological features, got {MORPHOLOGICAL_FEATURES_COUNT}"
         )
 
     def test_sam2_embedding_dimension_equals_256(self):
@@ -62,79 +75,139 @@ class TestFeatureDimensionConstants(unittest.TestCase):
             f"Expected SAM2 embedding dimension of 256, got {SAM2_EMBEDDING_DIMENSION}"
         )
 
-    def test_resnet_embedding_dimension_equals_2048(self):
-        """Verify RESNET_EMBEDDING_DIMENSION constant equals 2048."""
+    def test_resnet_embedding_dimension_equals_4096(self):
+        """Verify RESNET_EMBEDDING_DIMENSION constant equals 4096 (2x2048 masked+context)."""
         from segmentation.utils.config import RESNET_EMBEDDING_DIMENSION
         self.assertEqual(
-            RESNET_EMBEDDING_DIMENSION, 2048,
-            f"Expected ResNet embedding dimension of 2048, got {RESNET_EMBEDDING_DIMENSION}"
+            RESNET_EMBEDDING_DIMENSION, 4096,
+            f"Expected ResNet embedding dimension of 4096, got {RESNET_EMBEDDING_DIMENSION}"
         )
 
-    def test_total_features_per_cell_equals_2326(self):
-        """Verify TOTAL_FEATURES_PER_CELL constant equals 2326 (22 + 256 + 2048)."""
+    def test_dinov2_embedding_dimension_equals_2048(self):
+        """Verify DINOV2_EMBEDDING_DIMENSION constant equals 2048 (2x1024 masked+context)."""
+        from segmentation.utils.config import DINOV2_EMBEDDING_DIMENSION
+        self.assertEqual(
+            DINOV2_EMBEDDING_DIMENSION, 2048,
+            f"Expected DINOv2 embedding dimension of 2048, got {DINOV2_EMBEDDING_DIMENSION}"
+        )
+
+    def test_total_features_per_cell_equals_6478(self):
+        """Verify TOTAL_FEATURES_PER_CELL constant equals 6478 (78 + 256 + 4096 + 2048)."""
         from segmentation.utils.config import TOTAL_FEATURES_PER_CELL
         self.assertEqual(
-            TOTAL_FEATURES_PER_CELL, 2326,
-            f"Expected total features of 2326, got {TOTAL_FEATURES_PER_CELL}"
+            TOTAL_FEATURES_PER_CELL, 6478,
+            f"Expected total features of 6478, got {TOTAL_FEATURES_PER_CELL}"
         )
 
     def test_total_features_equals_sum_of_components(self):
-        """Verify TOTAL_FEATURES_PER_CELL equals sum of morphological + SAM2 + ResNet."""
+        """Verify TOTAL_FEATURES_PER_CELL equals sum of all full-pipeline components."""
         from segmentation.utils.config import (
             MORPHOLOGICAL_FEATURES_COUNT,
             SAM2_EMBEDDING_DIMENSION,
             RESNET_EMBEDDING_DIMENSION,
+            DINOV2_EMBEDDING_DIMENSION,
             TOTAL_FEATURES_PER_CELL,
         )
         expected_total = (
             MORPHOLOGICAL_FEATURES_COUNT +
             SAM2_EMBEDDING_DIMENSION +
-            RESNET_EMBEDDING_DIMENSION
+            RESNET_EMBEDDING_DIMENSION +
+            DINOV2_EMBEDDING_DIMENSION
         )
         self.assertEqual(
             TOTAL_FEATURES_PER_CELL, expected_total,
-            f"Total features ({TOTAL_FEATURES_PER_CELL}) does not equal sum of components ({expected_total})"
+            f"Total features ({TOTAL_FEATURES_PER_CELL}) does not equal sum of components ({expected_total}): "
+            f"morph={MORPHOLOGICAL_FEATURES_COUNT} + sam2={SAM2_EMBEDDING_DIMENSION} + "
+            f"resnet={RESNET_EMBEDDING_DIMENSION} + dinov2={DINOV2_EMBEDDING_DIMENSION}"
         )
 
     def test_get_feature_dimensions_returns_correct_values(self):
-        """Verify get_feature_dimensions() helper returns correct dictionary."""
+        """Verify get_feature_dimensions() helper returns correct full-pipeline values."""
         from segmentation.utils.config import get_feature_dimensions
         dims = get_feature_dimensions()
 
         self.assertIn("morphological", dims)
         self.assertIn("sam2_embedding", dims)
         self.assertIn("resnet_embedding", dims)
+        self.assertIn("dinov2_embedding", dims)
         self.assertIn("total", dims)
 
-        self.assertEqual(dims["morphological"], 22)
+        self.assertEqual(dims["morphological"], 78)
         self.assertEqual(dims["sam2_embedding"], 256)
-        self.assertEqual(dims["resnet_embedding"], 2048)
-        self.assertEqual(dims["total"], 2326)
+        self.assertEqual(dims["resnet_embedding"], 4096)
+        self.assertEqual(dims["dinov2_embedding"], 2048)
+        self.assertEqual(dims["total"], 6478)
 
-    def test_feature_extraction_module_constants_match_config(self):
-        """Verify constants in feature_extraction.py match those in config.py."""
-        from segmentation.utils.feature_extraction import (
-            SAM2_EMBEDDING_DIM,
-            RESNET50_FEATURE_DIM,
-            MORPHOLOGICAL_FEATURE_COUNT,
-        )
-        from segmentation.utils.config import (
-            SAM2_EMBEDDING_DIMENSION,
-            RESNET_EMBEDDING_DIMENSION,
-            MORPHOLOGICAL_FEATURES_COUNT,
+
+class TestSinglePassFeatureDimensions(unittest.TestCase):
+    """
+    Tests for single-pass feature dimension constants in feature_extraction.py.
+
+    These are the output dimensions of individual extraction functions, NOT the
+    full-pipeline values. They are intentionally different from config.py values:
+    - MORPHOLOGICAL_FEATURE_COUNT = 22 (base features only, not 78)
+    - RESNET50_FEATURE_DIM = 2048 (single pass, not 4096)
+    - SAM2_EMBEDDING_DIM = 256 (same as full pipeline)
+    """
+
+    def test_morphological_feature_count_equals_22(self):
+        """Verify MORPHOLOGICAL_FEATURE_COUNT (single-pass) equals 22."""
+        from segmentation.utils.feature_extraction import MORPHOLOGICAL_FEATURE_COUNT
+        self.assertEqual(
+            MORPHOLOGICAL_FEATURE_COUNT, 22,
+            f"Expected 22 base morphological features, got {MORPHOLOGICAL_FEATURE_COUNT}"
         )
 
+    def test_resnet50_feature_dim_equals_2048(self):
+        """Verify RESNET50_FEATURE_DIM (single-pass) equals 2048."""
+        from segmentation.utils.feature_extraction import RESNET50_FEATURE_DIM
+        self.assertEqual(
+            RESNET50_FEATURE_DIM, 2048,
+            f"Expected single-pass ResNet dim of 2048, got {RESNET50_FEATURE_DIM}"
+        )
+
+    def test_sam2_embedding_dim_equals_256(self):
+        """Verify SAM2_EMBEDDING_DIM equals 256."""
+        from segmentation.utils.feature_extraction import SAM2_EMBEDDING_DIM
+        self.assertEqual(SAM2_EMBEDDING_DIM, 256)
+
+    def test_sam2_dims_match_across_modules(self):
+        """Verify SAM2 dimension is consistent between feature_extraction.py and config.py."""
+        from segmentation.utils.feature_extraction import SAM2_EMBEDDING_DIM
+        from segmentation.utils.config import SAM2_EMBEDDING_DIMENSION
         self.assertEqual(
             SAM2_EMBEDDING_DIM, SAM2_EMBEDDING_DIMENSION,
-            "SAM2 dimension mismatch between modules"
+            "SAM2 dimension should be the same in both modules (256)"
         )
+
+    def test_resnet_config_is_double_single_pass(self):
+        """Verify config.py ResNet dim is 2x the single-pass dim (masked + context)."""
+        from segmentation.utils.feature_extraction import RESNET50_FEATURE_DIM
+        from segmentation.utils.config import RESNET_EMBEDDING_DIMENSION
         self.assertEqual(
-            RESNET50_FEATURE_DIM, RESNET_EMBEDDING_DIMENSION,
-            "ResNet dimension mismatch between modules"
+            RESNET_EMBEDDING_DIMENSION, 2 * RESNET50_FEATURE_DIM,
+            f"Config ResNet ({RESNET_EMBEDDING_DIMENSION}) should be "
+            f"2 x single-pass ({RESNET50_FEATURE_DIM}) = {2 * RESNET50_FEATURE_DIM}"
         )
+
+    def test_dinov2_config_is_double_single_pass(self):
+        """Verify config.py DINOv2 dim is 2x the single-pass dim (masked + context)."""
+        from segmentation.detection.strategies.base import DINOV2_FEATURE_DIM
+        from segmentation.utils.config import DINOV2_EMBEDDING_DIMENSION
         self.assertEqual(
-            MORPHOLOGICAL_FEATURE_COUNT, MORPHOLOGICAL_FEATURES_COUNT,
-            "Morphological feature count mismatch between modules"
+            DINOV2_EMBEDDING_DIMENSION, 2 * DINOV2_FEATURE_DIM,
+            f"Config DINOv2 ({DINOV2_EMBEDDING_DIMENSION}) should be "
+            f"2 x single-pass ({DINOV2_FEATURE_DIM}) = {2 * DINOV2_FEATURE_DIM}"
+        )
+
+    def test_config_morph_includes_base_morph(self):
+        """Verify config.py morph count (78) is greater than base morph count (22)."""
+        from segmentation.utils.feature_extraction import MORPHOLOGICAL_FEATURE_COUNT
+        from segmentation.utils.config import MORPHOLOGICAL_FEATURES_COUNT
+        self.assertGreater(
+            MORPHOLOGICAL_FEATURES_COUNT, MORPHOLOGICAL_FEATURE_COUNT,
+            f"Full-pipeline morph count ({MORPHOLOGICAL_FEATURES_COUNT}) should be "
+            f"greater than base morph count ({MORPHOLOGICAL_FEATURE_COUNT})"
         )
 
 
@@ -142,7 +215,7 @@ class TestMorphologicalFeatureExtraction(unittest.TestCase):
     """
     Tests for morphological feature extraction from segmentation/utils/feature_extraction.py.
 
-    The extract_morphological_features() function should return exactly 22 features
+    The extract_morphological_features() function should return exactly 22 base features
     including area, perimeter, circularity, solidity, color stats, etc.
     """
 
@@ -167,15 +240,19 @@ class TestMorphologicalFeatureExtraction(unittest.TestCase):
         self.gray_image[self.circular_mask] = 180
 
     def test_extract_morphological_features_returns_22_features(self):
-        """Verify extract_morphological_features returns exactly 22 features."""
-        from segmentation.utils.feature_extraction import extract_morphological_features
+        """Verify extract_morphological_features returns exactly 22 base features."""
+        from segmentation.utils.feature_extraction import (
+            extract_morphological_features,
+            MORPHOLOGICAL_FEATURE_COUNT,
+        )
 
         features = extract_morphological_features(self.circular_mask, self.rgb_image)
 
         self.assertEqual(
-            len(features), 22,
-            f"Expected 22 features, got {len(features)}"
+            len(features), MORPHOLOGICAL_FEATURE_COUNT,
+            f"Expected {MORPHOLOGICAL_FEATURE_COUNT} features, got {len(features)}"
         )
+        self.assertEqual(len(features), 22)
 
     def test_extract_morphological_features_with_circular_mask(self):
         """Test feature extraction with a synthetic circular mask."""
@@ -221,6 +298,9 @@ class TestMorphologicalFeatureExtraction(unittest.TestCase):
                 f"Expected feature '{feature_name}' not found in extracted features"
             )
 
+        # Verify the expected list has exactly 22 entries
+        self.assertEqual(len(expected_features), 22)
+
     def test_empty_mask_returns_empty_dict(self):
         """Test that empty mask returns empty dictionary (graceful handling)."""
         from segmentation.utils.feature_extraction import extract_morphological_features
@@ -245,13 +325,16 @@ class TestMorphologicalFeatureExtraction(unittest.TestCase):
 
     def test_morphological_features_with_grayscale_image(self):
         """Test feature extraction works with grayscale images."""
-        from segmentation.utils.feature_extraction import extract_morphological_features
+        from segmentation.utils.feature_extraction import (
+            extract_morphological_features,
+            MORPHOLOGICAL_FEATURE_COUNT,
+        )
 
         features = extract_morphological_features(self.circular_mask, self.gray_image)
 
         self.assertEqual(
-            len(features), 22,
-            "Should still return 22 features for grayscale image"
+            len(features), MORPHOLOGICAL_FEATURE_COUNT,
+            f"Should still return {MORPHOLOGICAL_FEATURE_COUNT} features for grayscale image"
         )
 
         # For grayscale, RGB means should equal the grayscale mean
@@ -372,11 +455,12 @@ class TestResNetFeatureDimensions(unittest.TestCase):
     """
     Tests for ResNet50 feature extraction dimensions.
 
-    ResNet50 features (before the final FC layer) should be 2048-dimensional.
+    ResNet50 features (before the final FC layer) should be 2048-dimensional
+    per single pass. The full pipeline uses 2 passes (masked + context) = 4096.
     """
 
     def test_resnet50_feature_dim_constant_is_2048(self):
-        """Verify RESNET50_FEATURE_DIM constant is 2048."""
+        """Verify RESNET50_FEATURE_DIM constant is 2048 (single pass)."""
         from segmentation.utils.feature_extraction import RESNET50_FEATURE_DIM
         self.assertEqual(RESNET50_FEATURE_DIM, 2048)
 
@@ -442,7 +526,7 @@ class TestResNetFeatureDimensions(unittest.TestCase):
         "PyTorch not available, skipping GPU-dependent tests"
     )
     def test_extract_resnet_features_batch_returns_2048d(self):
-        """Test batch ResNet extraction returns 2048-dimensional features."""
+        """Test batch ResNet extraction returns 2048-dimensional features (single pass)."""
         from segmentation.detection.strategies.base import DetectionStrategy
         from segmentation.utils.feature_extraction import RESNET50_FEATURE_DIM
 
@@ -484,16 +568,22 @@ class TestResNetFeatureDimensions(unittest.TestCase):
         for feat in features:
             self.assertEqual(
                 len(feat), RESNET50_FEATURE_DIM,
-                f"ResNet features should be {RESNET50_FEATURE_DIM}-dimensional"
+                f"ResNet features should be {RESNET50_FEATURE_DIM}-dimensional (single pass)"
             )
 
 
 class TestCombinedFeatureVector(unittest.TestCase):
     """
-    Tests for combined feature vectors (morphological + SAM2 + ResNet = 2326 total).
+    Tests for combined feature vectors in the full pipeline.
 
-    The _extract_full_features_batch method in DetectionStrategy should produce
-    feature dictionaries with the correct total number of features.
+    The _extract_full_features_batch method in DetectionStrategy produces feature
+    dictionaries. The full pipeline total is 6478 features as defined in config.py:
+      78 morph + 256 SAM2 + 4096 ResNet (2x2048) + 2048 DINOv2 (2x1024) = 6478
+
+    Note that _extract_full_features_batch itself only produces:
+      22 base morph + 256 SAM2 + 4096 ResNet + 2048 DINOv2
+    The remaining morphological features come from NMJ-specific + multi-channel
+    features added in the strategy's detect() method.
     """
 
     def setUp(self):
@@ -505,32 +595,33 @@ class TestCombinedFeatureVector(unittest.TestCase):
         self.mask = ((x - center_x)**2 + (y - center_y)**2 <= radius**2).astype(bool)
         self.tile = np.random.randint(0, 256, (self.mask_size, self.mask_size, 3), dtype=np.uint8)
 
-    def test_total_features_count_with_all_extractors(self):
-        """Test that full feature extraction produces 2326 features when all extractors run."""
+    def test_total_features_count_from_config(self):
+        """Test that full pipeline feature total is 6478."""
         from segmentation.utils.config import (
             MORPHOLOGICAL_FEATURES_COUNT,
             SAM2_EMBEDDING_DIMENSION,
             RESNET_EMBEDDING_DIMENSION,
+            DINOV2_EMBEDDING_DIMENSION,
             TOTAL_FEATURES_PER_CELL,
         )
 
-        # Verify the math
+        # Verify the math: 78 + 256 + 4096 + 2048 = 6478
         expected_total = (
             MORPHOLOGICAL_FEATURES_COUNT +
             SAM2_EMBEDDING_DIMENSION +
-            RESNET_EMBEDDING_DIMENSION
+            RESNET_EMBEDDING_DIMENSION +
+            DINOV2_EMBEDDING_DIMENSION
         )
 
-        self.assertEqual(expected_total, 2326)
-        self.assertEqual(TOTAL_FEATURES_PER_CELL, 2326)
+        self.assertEqual(expected_total, 6478)
+        self.assertEqual(TOTAL_FEATURES_PER_CELL, 6478)
 
     def test_extract_full_features_batch_with_mocks(self):
         """Test _extract_full_features_batch returns correct structure."""
         from segmentation.detection.strategies.base import DetectionStrategy
-        from segmentation.utils.config import (
-            MORPHOLOGICAL_FEATURES_COUNT,
-            SAM2_EMBEDDING_DIMENSION,
-            RESNET_EMBEDDING_DIMENSION,
+        from segmentation.utils.feature_extraction import (
+            SAM2_EMBEDDING_DIM,
+            RESNET50_FEATURE_DIM,
         )
 
         class TestStrategy(DetectionStrategy):
@@ -572,28 +663,45 @@ class TestCombinedFeatureVector(unittest.TestCase):
         # Should have SAM2 embedding features (filled with zeros)
         sam2_count = sum(1 for k in features.keys() if k.startswith('sam2_'))
         self.assertEqual(
-            sam2_count, SAM2_EMBEDDING_DIMENSION,
-            f"Expected {SAM2_EMBEDDING_DIMENSION} SAM2 features, got {sam2_count}"
+            sam2_count, SAM2_EMBEDDING_DIM,
+            f"Expected {SAM2_EMBEDDING_DIM} SAM2 features, got {sam2_count}"
         )
 
-        # Should have ResNet features (filled with zeros)
-        resnet_count = sum(1 for k in features.keys() if k.startswith('resnet_'))
+        # Should have ResNet masked features (filled with zeros) - 2048 per pass
+        resnet_masked_count = sum(1 for k in features.keys()
+                                  if k.startswith('resnet_') and not k.startswith('resnet_ctx_'))
         self.assertEqual(
-            resnet_count, RESNET_EMBEDDING_DIMENSION,
-            f"Expected {RESNET_EMBEDDING_DIMENSION} ResNet features, got {resnet_count}"
+            resnet_masked_count, RESNET50_FEATURE_DIM,
+            f"Expected {RESNET50_FEATURE_DIM} ResNet masked features, got {resnet_masked_count}"
+        )
+
+        # Should have ResNet context features (filled with zeros) - 2048 per pass
+        resnet_ctx_count = sum(1 for k in features.keys() if k.startswith('resnet_ctx_'))
+        self.assertEqual(
+            resnet_ctx_count, RESNET50_FEATURE_DIM,
+            f"Expected {RESNET50_FEATURE_DIM} ResNet context features, got {resnet_ctx_count}"
+        )
+
+        # Total ResNet features = masked + context = 4096
+        total_resnet = resnet_masked_count + resnet_ctx_count
+        from segmentation.utils.config import RESNET_EMBEDDING_DIMENSION
+        self.assertEqual(
+            total_resnet, RESNET_EMBEDDING_DIMENSION,
+            f"Total ResNet features ({total_resnet}) should match config ({RESNET_EMBEDDING_DIMENSION})"
         )
 
     def test_feature_vector_dimensions_match_constants(self):
-        """Verify extracted feature vector dimensions match defined constants."""
+        """Verify get_feature_dimensions returns correct full-pipeline values."""
         from segmentation.utils.config import get_feature_dimensions
 
         dims = get_feature_dimensions()
 
-        # These should be the canonical values
-        self.assertEqual(dims['morphological'], 22)
+        # These should be the canonical full-pipeline values
+        self.assertEqual(dims['morphological'], 78)
         self.assertEqual(dims['sam2_embedding'], 256)
-        self.assertEqual(dims['resnet_embedding'], 2048)
-        self.assertEqual(dims['total'], 22 + 256 + 2048)
+        self.assertEqual(dims['resnet_embedding'], 4096)
+        self.assertEqual(dims['dinov2_embedding'], 2048)
+        self.assertEqual(dims['total'], 78 + 256 + 4096 + 2048)
 
     def test_empty_mask_list_returns_empty_list(self):
         """Test _extract_full_features_batch with empty mask list."""

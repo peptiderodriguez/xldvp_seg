@@ -20,7 +20,8 @@ Multi-scale detection ensures:
 """
 
 import sys
-sys.path.insert(0, '/home/dude/code/vessel_seg')
+from pathlib import Path
+sys.path.insert(0, str(Path(__file__).parent.parent))
 
 import json
 import logging
@@ -67,9 +68,11 @@ from segmentation.io.html_export import (
 )
 
 
-# Configuration
-CZI_PATH = "/home/dude/images/20251106_Fig2_nuc488_CD31_555_SMA647_PM750-EDFvar-stitch.czi"
-OUTPUT_DIR = Path("/home/dude/vessel_output/lumen_first_test")
+# Default configuration (overridden by CLI arguments)
+_DEFAULT_CZI_PATH = "/home/dude/images/20251106_Fig2_nuc488_CD31_555_SMA647_PM750-EDFvar-stitch.czi"
+_DEFAULT_OUTPUT_DIR = "/home/dude/vessel_output/lumen_first_test"
+CZI_PATH = _DEFAULT_CZI_PATH
+OUTPUT_DIR = Path(_DEFAULT_OUTPUT_DIR)
 CROPS_DIR = OUTPUT_DIR / "crops"  # Save raw crops for fast HTML regeneration
 PIXEL_SIZE_UM = 0.1725
 TILE_SIZE = 20000  # Large tiles (3.45mm coverage) for big vessels like aorta
@@ -545,14 +548,15 @@ def run_multiscale_detection_on_tile(
         scale_counts[scale] = len(candidates)
 
         # Scale contours back to full resolution
+        # scale_contour returns float64; cast to int32 after scaling
         for cand in candidates:
             # Scale contours
             if cand['outer'] is not None:
-                cand['outer'] = scale_contour(cand['outer'], scale)
+                cand['outer'] = scale_contour(cand['outer'], scale).astype(np.int32)
             if cand['inner'] is not None:
-                cand['inner'] = scale_contour(cand['inner'], scale)
+                cand['inner'] = scale_contour(cand['inner'], scale).astype(np.int32)
             if cand.get('lumen_contour') is not None:
-                cand['lumen_contour'] = scale_contour(cand['lumen_contour'], scale)
+                cand['lumen_contour'] = scale_contour(cand['lumen_contour'], scale).astype(np.int32)
 
             # Scale centroid (local to tile)
             cx, cy = cand['centroid']
@@ -1156,4 +1160,17 @@ def main():
 
 
 if __name__ == "__main__":
+    import argparse as _ap
+    _parser = _ap.ArgumentParser(description="Multi-scale lumen-first vessel detection")
+    _parser.add_argument('--czi-path', type=str, default=_DEFAULT_CZI_PATH,
+                         help=f'Path to CZI file (default: {_DEFAULT_CZI_PATH})')
+    _parser.add_argument('--output-dir', type=str, default=_DEFAULT_OUTPUT_DIR,
+                         help=f'Output directory (default: {_DEFAULT_OUTPUT_DIR})')
+    _args = _parser.parse_args()
+
+    # Override module-level globals from CLI
+    CZI_PATH = _args.czi_path
+    OUTPUT_DIR = Path(_args.output_dir)
+    CROPS_DIR = OUTPUT_DIR / "crops"
+
     main()

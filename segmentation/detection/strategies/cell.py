@@ -38,7 +38,7 @@ class CellStrategy(DetectionStrategy, MultiChannelFeatureMixin):
     1. Cellpose nuclei detection (auto size detection)
     2. SAM2 refinement using nuclei centroids as point prompts
     3. Overlap filtering (skip masks with >50% overlap with existing detections)
-    4. Full feature extraction (22 morphological + 256 SAM2 + 2048 ResNet = 2326 features)
+    4. Full feature extraction (78 morph + 256 SAM2 + 4096 ResNet + 2048 DINOv2 = 6478 features)
 
     Required models in detect():
         - 'cellpose': CellposeModel with cpsam pretrained model
@@ -87,7 +87,8 @@ class CellStrategy(DetectionStrategy, MultiChannelFeatureMixin):
     def segment(
         self,
         tile: np.ndarray,
-        models: Dict[str, Any]
+        models: Dict[str, Any],
+        **kwargs
     ) -> List[np.ndarray]:
         """
         Generate cell candidate masks using Cellpose + SAM2 refinement.

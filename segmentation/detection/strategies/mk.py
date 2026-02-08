@@ -84,7 +84,26 @@ class MKStrategy(DetectionStrategy, MultiChannelFeatureMixin):
     def name(self) -> str:
         return "mk"
 
-    def segment(self, tile: np.ndarray, models: Dict[str, Any]) -> List[Dict[str, Any]]:
+    def segment(self, tile: np.ndarray, models: Dict[str, Any], **kwargs) -> List[np.ndarray]:
+        """
+        Generate candidate binary masks from a tile image.
+
+        Conforms to the DetectionStrategy base class interface by returning
+        List[np.ndarray] (binary masks). Internally delegates to _segment_sam2()
+        and extracts the 'segmentation' mask from each SAM2 result dict.
+
+        Args:
+            tile: RGB image tile (H, W, 3)
+            models: Dict with 'sam2_auto' (SAM2AutomaticMaskGenerator)
+            **kwargs: Additional strategy-specific parameters (unused)
+
+        Returns:
+            List of binary masks (each HxW boolean array)
+        """
+        sam2_results = self._segment_sam2(tile, models)
+        return [result['segmentation'].astype(bool) for result in sam2_results]
+
+    def _segment_sam2(self, tile: np.ndarray, models: Dict[str, Any]) -> List[Dict[str, Any]]:
         """
         Use SAM2 automatic mask generation to find MK candidates.
 
@@ -169,16 +188,15 @@ class MKStrategy(DetectionStrategy, MultiChannelFeatureMixin):
                 'metadata': metadata
             })
 
-        # Step 1: Size filtering
+        # Step 1: Size filtering — pair each result with its original feature dict
+        # so that filtering doesn't break the index correspondence
         valid_results = []
-        for result in results:
+        for orig_idx, result in enumerate(results):
             if min_area_px <= result['area'] <= max_area_px:
+                result['_orig_features'] = features[orig_idx] if orig_idx < len(features) else {}
                 valid_results.append(result)
 
-        # Step 2: Sort by area (largest first) — keep features aligned with results
-        # Pair features with results before sorting so indices stay consistent
-        for i, result in enumerate(valid_results):
-            result['_orig_features'] = features[i] if i < len(features) else {}
+        # Step 2: Sort by area (largest first) — features travel with results
         valid_results.sort(key=lambda x: x['area'], reverse=True)
 
         # Step 3: Overlap filtering and detection creation
@@ -271,7 +289,7 @@ class MKStrategy(DetectionStrategy, MultiChannelFeatureMixin):
         max_area_px = self.max_area_um / (pixel_size_um ** 2)
 
         # Step 1: Generate masks with SAM2
-        sam2_results = self.segment(tile, models)
+        sam2_results = self._segment_sam2(tile, models)
 
         # Step 2: Pre-filter by size (before expensive feature extraction)
         valid_results = []

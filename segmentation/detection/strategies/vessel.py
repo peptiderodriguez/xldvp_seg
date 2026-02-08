@@ -4,7 +4,7 @@ Vessel detection strategy.
 Detects blood vessel cross-sections (ring structures) in SMA-stained tissue
 using contour hierarchy analysis and ellipse fitting.
 
-Full feature extraction: 22 morphological + 256 SAM2 + 2048 ResNet = 2326 features
+Full feature extraction: 78 morph + 256 SAM2 + 4096 ResNet + 2048 DINOv2 = 6478 features
 plus vessel-specific features (wall thickness, diameters, etc.)
 
 Enhanced features (v2):
@@ -116,7 +116,7 @@ class VesselStrategy(DetectionStrategy, MultiChannelFeatureMixin):
     3. Ellipse fitting for outer (adventitia) and inner (lumen) boundaries
     4. Wall thickness measurement via distance transform + skeleton analysis
     5. Optional CD31 validation (endothelial marker at lumen boundary)
-    6. Full feature extraction (22 morphological + 256 SAM2 + 2048 ResNet = 2326 features)
+    6. Full feature extraction (78 morph + 256 SAM2 + 4096 ResNet + 2048 DINOv2 = 6478 features)
 
     Enhanced features (v2):
     7. Cross-tile boundary detection for partial vessels at tile edges
@@ -276,6 +276,54 @@ class VesselStrategy(DetectionStrategy, MultiChannelFeatureMixin):
         return "vessel"
 
     def segment(
+        self,
+        tile: np.ndarray,
+        models: Dict[str, Any],
+        **kwargs
+    ) -> List[np.ndarray]:
+        """
+        Generate candidate binary masks from a tile image.
+
+        Conforms to the DetectionStrategy base class interface by returning
+        List[np.ndarray] (binary masks). Internally delegates to _segment_rings()
+        and extracts wall masks from ring candidate dicts.
+
+        Args:
+            tile: RGB or grayscale image (SMA channel)
+            models: Dict of models (not used for vessel detection)
+            **kwargs: Strategy-specific parameters:
+                - pixel_size_um (float): Pixel size in microns (default 0.22)
+                - cd31_channel (np.ndarray): Optional CD31 channel for validation
+                - tile_x (int): X coordinate of tile origin
+                - tile_y (int): Y coordinate of tile origin
+
+        Returns:
+            List of binary masks (each HxW boolean array)
+        """
+        pixel_size_um = kwargs.get('pixel_size_um', 0.22)
+        cd31_channel = kwargs.get('cd31_channel', None)
+        tile_x = kwargs.get('tile_x', 0)
+        tile_y = kwargs.get('tile_y', 0)
+
+        ring_candidates = self._segment_rings(
+            tile, models, pixel_size_um, cd31_channel,
+            tile_x=tile_x, tile_y=tile_y
+        )
+
+        # Convert ring candidate dicts to binary masks (base class interface)
+        h, w = tile.shape[:2]
+        masks = []
+        for cand in ring_candidates:
+            temp = np.zeros((h, w), dtype=np.uint8)
+            cv2.drawContours(temp, [cand['outer']], 0, 1, -1)
+            if cand.get('inner') is not None:
+                cv2.drawContours(temp, [cand['inner']], 0, 0, -1)
+            wall_mask = temp.astype(bool)
+            if wall_mask.sum() > 0:
+                masks.append(wall_mask)
+        return masks
+
+    def _segment_rings(
         self,
         tile: np.ndarray,
         models: Dict[str, Any],
@@ -1278,7 +1326,7 @@ class VesselStrategy(DetectionStrategy, MultiChannelFeatureMixin):
             # SMA ring detection (always run)
             # Note: segment() is the main SMA detection method
             futures[executor.submit(
-                self.segment,
+                self._segment_rings,
                 tile,
                 models,
                 pixel_size_um,
@@ -3230,7 +3278,7 @@ class VesselStrategy(DetectionStrategy, MultiChannelFeatureMixin):
         This is essential for RF training where the classifier needs to learn
         from both positive (vessel) and negative (non-vessel) examples.
 
-        The full 2326 features (22 morph + 256 SAM2 + 2048 ResNet) are added by detect().
+        The full features (78 morph + 256 SAM2 + 4096 ResNet + 2048 DINOv2 = 6478) are added by detect().
 
         Args:
             ring_candidate: Dict with 'outer', 'inner', 'all_inner' contours
@@ -3532,7 +3580,7 @@ class VesselStrategy(DetectionStrategy, MultiChannelFeatureMixin):
         channel_names: Optional[Dict[int, str]] = None,
     ) -> Tuple[np.ndarray, List[Detection]]:
         """
-        Complete vessel detection pipeline with full 2326 feature extraction.
+        Complete vessel detection pipeline with full feature extraction.
 
         Enhanced: Supports tile boundary detection and cross-tile merging.
 
@@ -3541,7 +3589,7 @@ class VesselStrategy(DetectionStrategy, MultiChannelFeatureMixin):
         2. Detect partial vessels at tile boundaries (stored in self._partial_vessels)
         3. Attempt cross-tile merging if enabled (during processing)
         4. Extract vessel-specific features (wall thickness, diameters, etc.)
-        5. Extract full features (22 morphological + 256 SAM2 + 2048 ResNet)
+        5. Extract full features (78 morph + 256 SAM2 + 4096 ResNet + 2048 DINOv2)
         6. Filter by size and create Detection objects
 
         Cross-Tile Merging Options:
@@ -3594,7 +3642,7 @@ class VesselStrategy(DetectionStrategy, MultiChannelFeatureMixin):
                 - 'device': torch device
             pixel_size_um: Pixel size in microns
             cd31_channel: Optional CD31 channel for validation
-            extract_full_features: Whether to extract all 2326 features (default True)
+            extract_full_features: Whether to extract full feature set (default True)
             tile_x: X coordinate of tile origin (for boundary tracking)
             tile_y: Y coordinate of tile origin (for boundary tracking)
             tile_size: Size of tiles (for cross-tile merging)
@@ -3656,7 +3704,7 @@ class VesselStrategy(DetectionStrategy, MultiChannelFeatureMixin):
             )
         else:
             # Standard sequential SMA ring detection
-            ring_candidates = self.segment(
+            ring_candidates = self._segment_rings(
                 tile, models, pixel_size_um, cd31_channel,
                 tile_x=tile_x, tile_y=tile_y
             )

@@ -9,8 +9,7 @@ scanner differences.
 import logging
 import numpy as np
 import cv2
-from typing import Tuple, Optional, Dict
-from skimage import color
+from typing import Tuple, Dict
 
 logger = logging.getLogger(__name__)
 
@@ -238,17 +237,22 @@ def compute_reinhard_params_from_samples(
     """
     Compute global Reinhard normalization parameters from sampled pixels.
 
+    Uses median and MAD (median absolute deviation) for robust statistics
+    that are less sensitive to outliers than mean/std.
+    Uses cv2 for LAB conversion (consistent with apply function).
+
     Args:
         slide_samples: List of RGB arrays (N_samples, 3) from each slide
 
     Returns:
         Dictionary with Lab channel statistics:
         {
-            'L_mean': float, 'L_std': float,
-            'a_mean': float, 'a_std': float,
-            'b_mean': float, 'b_std': float,
+            'L_median': float, 'L_mad': float,
+            'a_median': float, 'a_mad': float,
+            'b_median': float, 'b_mad': float,
             'n_slides': int,
-            'n_total_pixels': int
+            'n_total_pixels': int,
+            'method': 'reinhard_median'
         }
     """
     all_lab_samples = []
@@ -272,62 +276,7 @@ def compute_reinhard_params_from_samples(
     # Combine all samples from all slides
     combined_lab = np.vstack(all_lab_samples)
 
-    # Compute global mean and std for each Lab channel
-    L_mean = np.mean(combined_lab[:, 0])
-    L_std = np.std(combined_lab[:, 0])
-    a_mean = np.mean(combined_lab[:, 1])
-    a_std = np.std(combined_lab[:, 1])
-    b_mean = np.mean(combined_lab[:, 2])
-    b_std = np.std(combined_lab[:, 2])
-
-    return {
-        'L_mean': float(L_mean),
-        'L_std': float(L_std),
-        'a_mean': float(a_mean),
-        'a_std': float(a_std),
-        'b_mean': float(b_mean),
-        'b_std': float(b_std),
-        'n_slides': len(slide_samples),
-        'n_total_pixels': int(combined_lab.shape[0])
-    }
-
-
-
-def compute_reinhard_params_from_samples_MEDIAN(
-    slide_samples: list,
-) -> Dict[str, float]:
-    """
-    Compute global Reinhard normalization parameters using MEDIAN and MAD (robust to outliers).
-
-    Args:
-        slide_samples: List of RGB arrays (N_samples, 3) from each slide
-
-    Returns:
-        Dictionary with Lab channel statistics:
-        {
-            'L_median': float, 'L_mad': float,
-            'a_median': float, 'a_mad': float,
-            'b_median': float, 'b_mad': float,
-            'n_slides': int,
-            'n_total_pixels': int,
-            'method': 'reinhard_median'
-        }
-    """
-    all_lab_samples = []
-
-    for samples_rgb in slide_samples:
-        # Convert RGB samples to Lab color space
-        samples_rgb_scaled = samples_rgb.astype(np.float32) / 255.0
-        samples_reshaped = samples_rgb_scaled.reshape(-1, 1, 3)
-        samples_lab = color.rgb2lab(samples_reshaped)
-        samples_lab = samples_lab.reshape(-1, 3)
-
-        all_lab_samples.append(samples_lab)
-
-    # Combine all samples from all slides
-    combined_lab = np.vstack(all_lab_samples)
-
-    # Compute MEDIAN and MAD for each Lab channel (robust to outliers!)
+    # Compute median and MAD for each Lab channel (robust to outliers)
     L_median = np.median(combined_lab[:, 0])
     L_mad = np.median(np.abs(combined_lab[:, 0] - L_median))
 
@@ -348,6 +297,12 @@ def compute_reinhard_params_from_samples_MEDIAN(
         'n_total_pixels': int(combined_lab.shape[0]),
         'method': 'reinhard_median'
     }
+
+
+
+# Deprecated alias: identical to compute_reinhard_params_from_samples (which already
+# uses median/MAD). Kept for backward compatibility with external scripts.
+compute_reinhard_params_from_samples_MEDIAN = compute_reinhard_params_from_samples
 
 
 def apply_reinhard_normalization_MEDIAN(
@@ -432,10 +387,16 @@ def apply_reinhard_normalization_MEDIAN(
     block_indices = np.random.randint(0, len(tissue_blocks), size=n_samples)
     selected_origins = block_origins[block_indices]
 
-    x_offsets = np.random.randint(0, block_sz, size=n_samples)
-    y_offsets = np.random.randint(0, block_sz, size=n_samples)
-    xs = np.clip(selected_origins[:, 0] + x_offsets, 0, w - 1)
-    ys = np.clip(selected_origins[:, 1] + y_offsets, 0, h - 1)
+    # Per-block-bounded offsets (matches compute_normalization_params.py)
+    # Prevents over-sampling boundary pixels at image edges
+    max_x_offsets = np.minimum(block_sz, w - selected_origins[:, 0])
+    max_y_offsets = np.minimum(block_sz, h - selected_origins[:, 1])
+    max_x_offsets = np.maximum(max_x_offsets, 1)  # avoid zero range
+    max_y_offsets = np.maximum(max_y_offsets, 1)
+    x_offsets = (np.random.random(n_samples) * max_x_offsets).astype(np.intp)
+    y_offsets = (np.random.random(n_samples) * max_y_offsets).astype(np.intp)
+    xs = selected_origins[:, 0] + x_offsets
+    ys = selected_origins[:, 1] + y_offsets
 
     samples = image[ys, xs]  # (n_samples, 3) uint8
 
@@ -484,17 +445,17 @@ def apply_reinhard_normalization_MEDIAN(
         block_lab[:, :, 2] = block_lab[:, :, 2] - 128.0
 
         # Apply normalization: (x - img_median) / img_mad * target_mad + target_median
-        if L_img_mad > 0.01:
+        if L_img_mad > 1.0:
             block_lab[:, :, 0] = (block_lab[:, :, 0] - L_img_median) / L_img_mad * params['L_mad'] + params['L_median']
         else:
             block_lab[:, :, 0] = params['L_median']
 
-        if a_img_mad > 0.01:
+        if a_img_mad > 1.0:
             block_lab[:, :, 1] = (block_lab[:, :, 1] - a_img_median) / a_img_mad * params['a_mad'] + params['a_median']
         else:
             block_lab[:, :, 1] = params['a_median']
 
-        if b_img_mad > 0.01:
+        if b_img_mad > 1.0:
             block_lab[:, :, 2] = (block_lab[:, :, 2] - b_img_median) / b_img_mad * params['b_mad'] + params['b_median']
         else:
             block_lab[:, :, 2] = params['b_median']
@@ -521,122 +482,27 @@ def apply_reinhard_normalization(
     block_size: int = 7
 ) -> np.ndarray:
     """
-    Apply Reinhard normalization with pixel-level tissue masking.
+    Apply Reinhard normalization with block-level tissue detection.
 
-    Only tissue pixels are normalized; background pixels remain unchanged.
-    This prevents artifacts at tissue edges.
+    Uses median/MAD statistics (robust to outliers) and cv2 for LAB conversion
+    (consistent with Phase 1 compute_normalization_params.py).
 
-    Memory-efficient implementation: processes image in tiles to avoid OOM on large slides.
+    Delegates to apply_reinhard_normalization_MEDIAN which implements the
+    block-level tissue detection approach matching Phase 1.
 
     Args:
         image: RGB image (H, W, 3) in range [0, 255], dtype uint8
-        params: Dictionary with Lab statistics from compute_reinhard_params_from_samples()
-        variance_threshold: Variance threshold for pixel-level tissue detection (default: 15.0)
-        tile_size: Tile size for memory-efficient processing (default: 10000 pixels)
-        block_size: Local neighborhood size for variance computation (default: 7×7)
+        params: Dictionary with Lab statistics (must contain L_median, L_mad, etc.)
+        variance_threshold: (unused, kept for API compatibility)
+        tile_size: (unused, kept for API compatibility)
+        block_size: (unused, kept for API compatibility)
 
     Returns:
-        Normalized RGB image (H, W, 3), dtype uint8 with only tissue pixels normalized
+        Normalized RGB image (H, W, 3), dtype uint8
     """
-    import cv2
-    from segmentation.detection.tissue import compute_pixel_level_tissue_mask
-
-    h, w, c = image.shape
-
-    # Step 1: Compute tissue statistics from TISSUE PIXELS ONLY
-    # Sample 1M tissue pixels for statistics
-    max_pixels_for_stats = 1000000
-
-    # Compute pixel-level tissue mask using local variance
-    tissue_mask_global = compute_pixel_level_tissue_mask(image, variance_threshold, block_size=block_size)
-
-    # Get tissue pixel coordinates
-    tissue_coords = np.argwhere(tissue_mask_global)
-
-    if len(tissue_coords) == 0:
-        # No tissue pixels found, return original image
-        return image.copy()
-
-    # Sample from tissue pixels for statistics
-    if len(tissue_coords) > max_pixels_for_stats:
-        sampled_indices = np.random.choice(len(tissue_coords), max_pixels_for_stats, replace=False)
-        sampled_coords = tissue_coords[sampled_indices]
-    else:
-        sampled_coords = tissue_coords
-
-    # Extract tissue pixel values and convert to Lab
-    tissue_pixels = image[sampled_coords[:, 0], sampled_coords[:, 1]].astype(np.float32) / 255.0
-    tissue_pixels_reshaped = tissue_pixels.reshape(-1, 1, 3)
-    tissue_lab = color.rgb2lab(tissue_pixels_reshaped).reshape(-1, 3)
-
-    # Compute statistics from tissue pixels only
-    lab_means = np.mean(tissue_lab, axis=0)
-    lab_stds = np.std(tissue_lab, axis=0)
-
-    L_img_mean, a_img_mean, b_img_mean = lab_means
-    L_img_std, a_img_std, b_img_std = lab_stds
-
-    del tissue_pixels, tissue_pixels_reshaped, tissue_lab, tissue_coords, sampled_coords
-
-    # Step 2: Process image in tiles with pixel-level masking
-    result = image.copy()  # Start with original image
-
-    for y in range(0, h, tile_size):
-        for x in range(0, w, tile_size):
-            y_end = min(y + tile_size, h)
-            x_end = min(x + tile_size, w)
-
-            # Extract tile and its tissue mask
-            tile = image[y:y_end, x:x_end]
-            tile_mask = tissue_mask_global[y:y_end, x:x_end]
-
-            # Skip if no tissue in this tile
-            if not tile_mask.any():
-                continue
-
-            # Convert to float and scale to [0, 1]
-            tile_float = tile.astype(np.float32) / 255.0
-
-            # Convert RGB to Lab
-            tile_lab = color.rgb2lab(tile_float)
-
-            # Create normalized version (start with copy)
-            tile_lab_normalized = tile_lab.copy()
-
-            # Normalize ONLY tissue pixels using global image statistics
-            # Transform: (x - μ_img) / σ_img * σ_target + μ_target
-
-            # L channel (avoid division by zero)
-            if L_img_std > 0.01:
-                tile_lab_normalized[tile_mask, 0] = (tile_lab[tile_mask, 0] - L_img_mean) / L_img_std * params['L_std'] + params['L_mean']
-            else:
-                tile_lab_normalized[tile_mask, 0] = params['L_mean']
-
-            # a channel
-            if a_img_std > 0.01:
-                tile_lab_normalized[tile_mask, 1] = (tile_lab[tile_mask, 1] - a_img_mean) / a_img_std * params['a_std'] + params['a_mean']
-            else:
-                tile_lab_normalized[tile_mask, 1] = params['a_mean']
-
-            # b channel
-            if b_img_std > 0.01:
-                tile_lab_normalized[tile_mask, 2] = (tile_lab[tile_mask, 2] - b_img_mean) / b_img_std * params['b_std'] + params['b_mean']
-            else:
-                tile_lab_normalized[tile_mask, 2] = params['b_mean']
-
-            # Convert back to RGB
-            tile_rgb = color.lab2rgb(tile_lab_normalized)
-
-            # Scale back to [0, 255] and convert to uint8
-            tile_result = np.clip(tile_rgb * 255.0, 0, 255).astype(np.uint8)
-
-            # Update result ONLY for tissue pixels (background remains original)
-            result[y:y_end, x:x_end] = tile_result
-
-            # Free tile memory immediately
-            del tile, tile_mask, tile_float, tile_lab, tile_lab_normalized, tile_rgb, tile_result
-
-    # Free global mask
-    del tissue_mask_global
-
-    return result
+    return apply_reinhard_normalization_MEDIAN(
+        image, params,
+        variance_threshold=variance_threshold,
+        tile_size=tile_size,
+        block_size=block_size
+    )

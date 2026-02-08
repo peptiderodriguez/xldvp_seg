@@ -80,20 +80,30 @@ def sample_pixels_from_slide(czi_path, channel=0, n_samples=500000):
         logger.info(f"  Found {len(tissue_blocks)} tissue blocks ({100*len(tissue_blocks)/len(blocks):.1f}%)")
         logger.info(f"  Sampling {n_samples} pixels from tissue blocks...")
 
-        # Sample random pixels from tissue blocks only (no per-pixel checks needed!)
-        tissue_samples = []
+        # Vectorized sampling: pick random blocks, then random offsets within each
+        block_origins = np.array([(b['x'], b['y']) for b in tissue_blocks])
+        block_indices = np.random.randint(0, len(tissue_blocks), size=n_samples)
+        selected_origins = block_origins[block_indices]
 
-        for _ in range(n_samples):
-            # Pick random tissue block
-            block = tissue_blocks[np.random.randint(len(tissue_blocks))]
+        # Compute max valid offsets per selected block (clip to image bounds)
+        max_x_offsets = np.minimum(block_size, w - selected_origins[:, 0])
+        max_y_offsets = np.minimum(block_size, h - selected_origins[:, 1])
 
-            # Pick random pixel within that block
-            y = block['y'] + np.random.randint(0, min(block_size, h - block['y']))
-            x = block['x'] + np.random.randint(0, min(block_size, w - block['x']))
+        # Generate random offsets (uniform per-sample, respecting per-block max)
+        x_offsets = (np.random.random(n_samples) * max_x_offsets).astype(np.intp)
+        y_offsets = (np.random.random(n_samples) * max_y_offsets).astype(np.intp)
 
-            tissue_samples.append(channel_data[y, x, :])
+        xs = selected_origins[:, 0] + x_offsets
+        ys = selected_origins[:, 1] + y_offsets
 
-        samples = np.array(tissue_samples)  # (N, 3)
+        # Clip to image bounds (safety)
+        xs = np.clip(xs, 0, w - 1)
+        ys = np.clip(ys, 0, h - 1)
+
+        samples = channel_data[ys, xs]  # (N, 3) -- vectorized indexing
+
+        del block_origins, block_indices, selected_origins
+        del max_x_offsets, max_y_offsets, x_offsets, y_offsets, xs, ys
         logger.info(f"  Sampled {len(samples)} tissue pixels, mean intensity: {samples.mean():.1f}")
 
         # Close and clear to prevent memory accumulation across slides

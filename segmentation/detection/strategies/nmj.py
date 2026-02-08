@@ -7,7 +7,7 @@ NMJs are detected using a unique multi-stage approach:
 3. Watershed expansion - Masks are expanded to capture full BTX signal
 4. Smoothing - Binary smoothing before and after expansion
 5. Optional ResNet classifier - Trained to distinguish NMJ vs non-NMJ
-6. Full feature extraction (22 morphological + 256 SAM2 + 2048 ResNet = 2326 features)
+6. Full feature extraction (78 morph + 256 SAM2 + 4096 ResNet + 2048 DINOv2 = 6478 features)
 
 This strategy uses intensity thresholding combined with morphological analysis,
 and optionally extracts SAM2 embeddings and ResNet features for ML classification.
@@ -54,7 +54,7 @@ class NMJStrategy(DetectionStrategy, MultiChannelFeatureMixin):
     2. Applies morphological cleanup (opening/closing)
     3. Filters by skeleton length and solidity (branched structures have low solidity)
     4. Smooths and expands masks for better coverage
-    5. Full feature extraction (22 morphological + 256 SAM2 + 2048 ResNet = 2326 features)
+    5. Full feature extraction (78 morph + 256 SAM2 + 4096 ResNet + 2048 DINOv2 = 6478 features)
     6. Optionally classifies with a trained ResNet model
 
     Parameters:
@@ -104,7 +104,8 @@ class NMJStrategy(DetectionStrategy, MultiChannelFeatureMixin):
     def segment(
         self,
         tile: np.ndarray,
-        models: Dict[str, Any]
+        models: Dict[str, Any],
+        **kwargs
     ) -> List[np.ndarray]:
         """
         Segment NMJ candidates using intensity threshold + solidity filtering.
@@ -467,9 +468,9 @@ class NMJStrategy(DetectionStrategy, MultiChannelFeatureMixin):
 
         Pipeline:
         1. Segment candidates (intensity threshold + solidity filtering)
-        2. Extract full features (morphological + SAM2 + ResNet)
-           - With extra_channels: ~2400+ features (22 morph/channel + ratios + embeddings)
-           - Without: ~2326 features
+        2. Extract full features (morphological + SAM2 + ResNet + DINOv2)
+           - With extra_channels: ~6478 features (morph + multi-channel + embeddings)
+           - Without extra_channels: ~22 base morph + 256 SAM2 + optional deep features
         3. Filter by area
         4. Optional classifier filtering
 
@@ -967,13 +968,18 @@ def load_nmj_rf_classifier(model_path: str):
         from sklearn.pipeline import Pipeline
         from sklearn.preprocessing import StandardScaler
 
-        if 'scaler' in model_data and 'model' in model_data:
+        # Support both 'model' key (legacy) and 'classifier' key (train_nmj_classifier_features.py)
+        rf_model = model_data.get('model', model_data.get('classifier'))
+        if rf_model is None:
+            raise ValueError(f"Classifier file has no 'model' or 'classifier' key. Keys: {list(model_data.keys())}")
+
+        if 'scaler' in model_data:
             pipeline = Pipeline([
                 ('scaler', model_data['scaler']),
-                ('rf', model_data['model'])
+                ('rf', rf_model)
             ])
         else:
-            pipeline = model_data.get('model', model_data)
+            pipeline = rf_model
 
         result = {
             'pipeline': pipeline,
