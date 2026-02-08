@@ -248,17 +248,9 @@ def _gpu_worker(
             extract_sam2_embeddings=extract_sam2_embeddings,
         )
     elif cell_type == 'mk':
-        # strategy_params has 'mk_min_area'/'mk_max_area' in pixels from CLI;
-        # convert to um² for MKStrategy which expects min_area_um/max_area_um
-        if 'mk_min_area' in strategy_params:
-            mk_min_um = strategy_params['mk_min_area'] * (pixel_size_um ** 2)
-            mk_max_um = strategy_params['mk_max_area'] * (pixel_size_um ** 2)
-        else:
-            mk_min_um = strategy_params.get('min_area_um', 200.0)
-            mk_max_um = strategy_params.get('max_area_um', 2000.0)
         strategy = MKStrategy(
-            min_area_um=mk_min_um,
-            max_area_um=mk_max_um,
+            min_area_um=strategy_params.get('mk_min_area', 200.0),
+            max_area_um=strategy_params.get('mk_max_area', 2000.0),
             extract_deep_features=extract_deep_features,
             extract_sam2_embeddings=extract_sam2_embeddings,
         )

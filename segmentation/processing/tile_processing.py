@@ -144,22 +144,11 @@ def process_single_tile(
                     extra_channels=extra_channel_tiles,
                     channel_names=channel_names,
                 )
-            elif cell_type == 'nmj':
+            elif cell_type in ('nmj', 'mk', 'cell'):
                 masks, detections = strategy.detect(
                     tile_rgb, models, pixel_size_um,
                     extra_channels=extra_channel_tiles,
                     extract_full_features=True,
-                )
-            elif cell_type == 'mk':
-                masks, detections = strategy.detect(
-                    tile_rgb, models, pixel_size_um,
-                    extra_channels=extra_channel_tiles,
-                    extract_features=True,
-                )
-            elif cell_type == 'cell':
-                masks, detections = strategy.detect(
-                    tile_rgb, models, pixel_size_um,
-                    extra_channels=extra_channel_tiles,
                 )
             else:
                 # Mesothelium and others — basic detect()
@@ -308,8 +297,8 @@ def build_detection_params(
 
     elif cell_type == 'mk':
         return {
-            'mk_min_area': getattr(args, 'mk_min_area', 1000),
-            'mk_max_area': getattr(args, 'mk_max_area', 100000),
+            'mk_min_area': getattr(args, 'mk_min_area', 200.0),
+            'mk_max_area': getattr(args, 'mk_max_area', 2000.0),
         }
 
     elif cell_type == 'hspc':

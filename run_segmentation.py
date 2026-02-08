@@ -621,14 +621,9 @@ def create_strategy_for_cell_type(cell_type, params, pixel_size_um):
             extract_sam2_embeddings=params.get('extract_sam2_embeddings', True),
         )
     elif cell_type == 'mk':
-        # Convert area from pixels to um^2 for the strategy
-        min_area_px = params.get('mk_min_area', 4132)  # ~200 um^2 at 0.22 um/px
-        max_area_px = params.get('mk_max_area', 41322)  # ~2000 um^2 at 0.22 um/px
-        min_area_um = min_area_px * (pixel_size_um ** 2)
-        max_area_um = max_area_px * (pixel_size_um ** 2)
         return MKStrategy(
-            min_area_um=min_area_um,
-            max_area_um=max_area_um,
+            min_area_um=params.get('mk_min_area', 200.0),
+            max_area_um=params.get('mk_max_area', 2000.0),
             extract_deep_features=params.get('extract_deep_features', False),
             extract_sam2_embeddings=params.get('extract_sam2_embeddings', True),
         )
@@ -2437,9 +2432,11 @@ def main():
                              'Pre-loads annotations into HTML localStorage so round-1 labels '
                              'are visible during round-2 review after classifier training.')
 
-    # MK parameters
-    parser.add_argument('--mk-min-area', type=int, default=1000)
-    parser.add_argument('--mk-max-area', type=int, default=100000)
+    # MK parameters (area in um²)
+    parser.add_argument('--mk-min-area', type=float, default=200.0,
+                        help='Minimum MK area in um² (default 200)')
+    parser.add_argument('--mk-max-area', type=float, default=2000.0,
+                        help='Maximum MK area in um² (default 2000)')
 
     # Vessel parameters
     parser.add_argument('--min-vessel-diameter', type=float, default=10,

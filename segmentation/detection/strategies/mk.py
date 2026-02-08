@@ -252,7 +252,7 @@ class MKStrategy(DetectionStrategy, MultiChannelFeatureMixin):
                tile: np.ndarray,
                models: Dict[str, Any],
                pixel_size_um: float = 0.22,
-               extract_features: bool = True,
+               extract_full_features: bool = True,
                extra_channels: Dict[int, np.ndarray] = None) -> Tuple[np.ndarray, List[Detection]]:
         """
         Full MK detection pipeline with optimized batch processing.
@@ -274,7 +274,7 @@ class MKStrategy(DetectionStrategy, MultiChannelFeatureMixin):
                 - 'resnet_transform': torchvision transform
                 - 'mk_classifier': Optional classifier model
             pixel_size_um: Pixel size in micrometers (default 0.22)
-            extract_features: Whether to extract full features
+            extract_full_features: Whether to extract full features
             extra_channels: Dict mapping channel index to 2D uint16 array for
                 per-channel feature extraction (optional)
 
@@ -347,7 +347,7 @@ class MKStrategy(DetectionStrategy, MultiChannelFeatureMixin):
         # Step 4: Feature extraction (batch processing)
         detections = []
 
-        if valid_detections and extract_features:
+        if valid_detections and extract_full_features:
             # Set image for SAM2 embeddings if predictor available
             sam2_predictor = models.get('sam2_predictor')
             if sam2_predictor is not None and self.extract_sam2_embeddings:
