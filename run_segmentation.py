@@ -2237,6 +2237,14 @@ def run_pipeline(args):
     if args.cell_type == 'nmj' and getattr(args, 'all_channels', False):
         channel_legend = parse_channel_legend_from_filename(slide_name)
 
+    # Use slide_name + timestamp as experiment_name so each run gets its own
+    # localStorage namespace (prevents stale annotations from prior runs).
+    # The timestamp ensures re-runs of the same slide don't collide.
+    # For round-2 (--prior-annotations), prior labels come from the preload JS
+    # file (not localStorage), so a unique key is safe for all runs.
+    prior_ann = getattr(args, 'prior_annotations', None)
+    experiment_name = f"{slide_name}_{int(time.time())}"
+
     export_samples_to_html(
         all_samples,
         html_dir,
@@ -2244,12 +2252,13 @@ def run_pipeline(args):
         samples_per_page=args.samples_per_page,
         title=f"{args.cell_type.upper()} Annotation Review",
         page_prefix=f'{args.cell_type}_page',
+        experiment_name=experiment_name,
         file_name=f"{slide_name}.czi",
         pixel_size_um=pixel_size_um,
         tiles_processed=len(sampled_tiles),
         tiles_total=len(all_tiles),
         channel_legend=channel_legend,
-        prior_annotations=getattr(args, 'prior_annotations', None),
+        prior_annotations=prior_ann,
     )
 
     # Save all detections with universal IDs and global coordinates

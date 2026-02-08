@@ -48,7 +48,7 @@ def create_hdf5_dataset(f, name, data):
         f.create_dataset(name, data=data, **dict(HDF5_COMPRESSION_KWARGS))
 
 
-def generate_preload_annotations_js(annotations_path: str, cell_type: str) -> str:
+def generate_preload_annotations_js(annotations_path: str, cell_type: str, experiment_name: str = None) -> str:
     """
     Generate JavaScript that pre-loads prior annotations into localStorage.
 
@@ -59,6 +59,8 @@ def generate_preload_annotations_js(annotations_path: str, cell_type: str) -> st
     Args:
         annotations_path: Path to annotations JSON file (exported from HTML viewer)
         cell_type: Cell type identifier (e.g., 'nmj', 'mk')
+        experiment_name: Optional experiment name for localStorage key isolation.
+            Must match the experiment_name used in the page JS.
 
     Returns:
         JavaScript code string to write to preload_annotations.js
@@ -93,8 +95,12 @@ def generate_preload_annotations_js(annotations_path: str, cell_type: str) -> st
     if not ls_format:
         return None
 
-    global_key = _esc(f"{cell_type}_annotations")
-    page_key_prefix = _esc(f"{cell_type}_labels_page")
+    if experiment_name:
+        global_key = _esc(f"{cell_type}_{experiment_name}_annotations")
+        page_key_prefix = _esc(f"{cell_type}_{experiment_name}_labels_page")
+    else:
+        global_key = _esc(f"{cell_type}_annotations")
+        page_key_prefix = _esc(f"{cell_type}_labels_page")
 
     js_content = f'''// Pre-loaded annotations from {_esc(annotations_path.name)}
 // Generated automatically during HTML export
@@ -553,11 +559,16 @@ def get_js(cell_type, total_pages, experiment_name=None, page_num=1):
     # Build storage keys: both global and page-specific
     if experiment_name:
         global_key = _esc(f"{cell_type}_{experiment_name}_annotations")
+        page_key = _esc(f"{cell_type}_{experiment_name}_labels_page{page_num}")
     else:
         global_key = _esc(f"{cell_type}_annotations")
-    page_key = _esc(f"{cell_type}_labels_page{page_num}")
+        page_key = _esc(f"{cell_type}_labels_page{page_num}")
     cell_type_safe = _esc(cell_type)
     experiment_name_safe = _esc(experiment_name or "")
+    if experiment_name:
+        page_key_prefix = _esc(f"{cell_type}_{experiment_name}_labels_page")
+    else:
+        page_key_prefix = _esc(f"{cell_type}_labels_page")
 
     return f'''
         const CELL_TYPE = '{cell_type_safe}';
@@ -565,6 +576,7 @@ def get_js(cell_type, total_pages, experiment_name=None, page_num=1):
         const TOTAL_PAGES = {total_pages};
         const GLOBAL_STORAGE_KEY = '{global_key}';
         const PAGE_STORAGE_KEY = '{page_key}';
+        const PAGE_KEY_PREFIX = '{page_key_prefix}';
 
         let labels = {{}};
         let selectedIdx = -1;
@@ -711,7 +723,7 @@ def get_js(cell_type, total_pages, experiment_name=None, page_num=1):
             const url = URL.createObjectURL(blob);
             const a = document.createElement('a');
             a.href = url;
-            a.download = CELL_TYPE + '_annotations.json';
+            a.download = EXPERIMENT_NAME ? CELL_TYPE + '_' + EXPERIMENT_NAME + '_annotations.json' : CELL_TYPE + '_annotations.json';
             a.click();
             URL.revokeObjectURL(url);
         }}
@@ -734,9 +746,9 @@ def get_js(cell_type, total_pages, experiment_name=None, page_num=1):
             if (!confirm('Clear ALL annotations across ALL pages? This cannot be undone.')) return;
             labels = {{}};
             saveLabels();
-            // Also clear all other page-specific keys for this cell type
+            // Also clear all other page-specific keys for this experiment
             for (let i = 1; i <= TOTAL_PAGES; i++) {{
-                localStorage.setItem(CELL_TYPE + '_labels_page' + i, JSON.stringify({{}}));
+                localStorage.setItem(PAGE_KEY_PREFIX + i, JSON.stringify({{}}));
             }}
             cards.forEach(card => {{
                 card.classList.remove('labeled-yes', 'labeled-no', 'labeled-unsure');
@@ -1135,6 +1147,7 @@ def generate_index_page(
         const CELL_TYPE = '{_esc(cell_type)}';
         const EXPERIMENT_NAME = '{_esc(experiment_name or "")}';
         const STORAGE_KEY = EXPERIMENT_NAME ? CELL_TYPE + '_' + EXPERIMENT_NAME + '_annotations' : CELL_TYPE + '_annotations';
+        const PAGE_KEY_PREFIX = EXPERIMENT_NAME ? CELL_TYPE + '_' + EXPERIMENT_NAME + '_labels_page' : CELL_TYPE + '_labels_page';
 
         function exportAnnotations() {{
             const stored = localStorage.getItem(STORAGE_KEY);
@@ -1168,10 +1181,10 @@ def generate_index_page(
         function clearAll() {{
             if (!confirm('Clear ALL annotations across ALL pages? This cannot be undone.')) return;
             localStorage.setItem(STORAGE_KEY, JSON.stringify({{}}));
-            // Also clear page-specific keys
+            // Also clear page-specific keys for this experiment
             for (let i = 0; i < localStorage.length; i++) {{
                 const key = localStorage.key(i);
-                if (key && key.startsWith(CELL_TYPE + '_labels_page')) {{
+                if (key && key.startsWith(PAGE_KEY_PREFIX)) {{
                     localStorage.setItem(key, JSON.stringify({{}}));
                 }}
             }}
@@ -1379,6 +1392,10 @@ def generate_dual_index_page(
             return EXPERIMENT_NAME ? cellType + '_' + EXPERIMENT_NAME + '_annotations' : cellType + '_annotations';
         }}
 
+        function getPageKeyPrefix(cellType) {{
+            return EXPERIMENT_NAME ? cellType + '_' + EXPERIMENT_NAME + '_labels_page' : cellType + '_labels_page';
+        }}
+
         function exportAnnotations(cellType) {{
             const key = getStorageKey(cellType);
             const stored = localStorage.getItem(key);
@@ -1413,10 +1430,11 @@ def generate_dual_index_page(
             const cellTypes = {json.dumps(list(cell_types.keys()))};
             cellTypes.forEach(ct => {{
                 localStorage.setItem(getStorageKey(ct), JSON.stringify({{}}));
-                // Also clear page-specific keys
+                // Also clear page-specific keys for this experiment
+                const prefix = getPageKeyPrefix(ct);
                 for (let i = 0; i < localStorage.length; i++) {{
                     const key = localStorage.key(i);
-                    if (key && key.startsWith(ct + '_labels_page')) {{
+                    if (key && key.startsWith(prefix)) {{
                         localStorage.setItem(key, JSON.stringify({{}}));
                     }}
                 }}
@@ -1487,7 +1505,7 @@ def export_samples_to_html(
     # Generate preload_annotations.js if prior annotations provided
     has_preload = False
     if prior_annotations:
-        preload_js = generate_preload_annotations_js(prior_annotations, cell_type)
+        preload_js = generate_preload_annotations_js(prior_annotations, cell_type, experiment_name)
         if preload_js:
             preload_path = output_dir / "preload_annotations.js"
             with open(preload_path, 'w') as f:
@@ -2781,11 +2799,16 @@ def get_vessel_js(cell_type, total_pages, experiment_name=None, all_features_jso
     # Build storage keys: both global and page-specific
     if experiment_name:
         global_key = _esc(f"{cell_type}_{experiment_name}_annotations")
+        page_key = _esc(f"{cell_type}_{experiment_name}_labels_page{page_num}")
     else:
         global_key = _esc(f"{cell_type}_annotations")
-    page_key = _esc(f"{cell_type}_labels_page{page_num}")
+        page_key = _esc(f"{cell_type}_labels_page{page_num}")
     cell_type_safe = _esc(cell_type)
     experiment_name_safe = _esc(experiment_name or "")
+    if experiment_name:
+        page_key_prefix = _esc(f"{cell_type}_{experiment_name}_labels_page")
+    else:
+        page_key_prefix = _esc(f"{cell_type}_labels_page")
 
     return f'''
         const CELL_TYPE = '{cell_type_safe}';
@@ -2793,6 +2816,7 @@ def get_vessel_js(cell_type, total_pages, experiment_name=None, all_features_jso
         const TOTAL_PAGES = {total_pages};
         const GLOBAL_STORAGE_KEY = '{global_key}';
         const PAGE_STORAGE_KEY = '{page_key}';
+        const PAGE_KEY_PREFIX = '{page_key_prefix}';
         const ALL_FEATURES = {all_features_json};
 
         let labels = {{}};
@@ -3205,9 +3229,9 @@ Export Formats:
             if (!confirm('Clear ALL annotations across ALL pages? This cannot be undone.')) return;
             labels = {{}};
             saveLabels();
-            // Also clear all other page-specific keys for this cell type
+            // Also clear all other page-specific keys for this experiment
             for (let i = 1; i <= TOTAL_PAGES; i++) {{
-                localStorage.setItem(CELL_TYPE + '_labels_page' + i, JSON.stringify({{}}));
+                localStorage.setItem(PAGE_KEY_PREFIX + i, JSON.stringify({{}}));
             }}
             cards.forEach(card => {{
                 card.classList.remove('labeled-yes', 'labeled-no', 'labeled-unsure');
@@ -3784,6 +3808,7 @@ def generate_vessel_index_page(
         const EXPERIMENT_NAME = '{_esc(experiment_name or "")}';
         const TOTAL_SAMPLES = {total_samples};
         const STORAGE_KEY = EXPERIMENT_NAME ? CELL_TYPE + '_' + EXPERIMENT_NAME + '_annotations' : CELL_TYPE + '_annotations';
+        const PAGE_KEY_PREFIX = EXPERIMENT_NAME ? CELL_TYPE + '_' + EXPERIMENT_NAME + '_labels_page' : CELL_TYPE + '_labels_page';
 
         function updateProgress() {{
             const stored = localStorage.getItem(STORAGE_KEY);
@@ -3846,10 +3871,10 @@ def generate_vessel_index_page(
         function clearAll() {{
             if (!confirm('Clear ALL annotations across ALL pages? This cannot be undone.')) return;
             localStorage.setItem(STORAGE_KEY, JSON.stringify({{}}));
-            // Also clear page-specific keys
+            // Also clear page-specific keys for this experiment
             for (let i = 0; i < localStorage.length; i++) {{
                 const key = localStorage.key(i);
-                if (key && key.startsWith(CELL_TYPE + '_labels_page')) {{
+                if (key && key.startsWith(PAGE_KEY_PREFIX)) {{
                     localStorage.setItem(key, JSON.stringify({{}}));
                 }}
             }}
