@@ -4,12 +4,22 @@ Compute global normalization parameters from all 16 slides.
 Saves parameters to JSON for use in parallel segmentation jobs.
 """
 
+import gc
+import cv2
 import numpy as np
 import json
 from pathlib import Path
+from PIL import Image, ImageDraw, ImageFont
 from segmentation.io.czi_loader import get_loader
 from segmentation.utils.logging import setup_logging, get_logger
-from segmentation.preprocessing.stain_normalization import compute_global_percentiles
+from segmentation.preprocessing.stain_normalization import (
+    compute_global_percentiles,
+    apply_reinhard_normalization,
+)
+from segmentation.detection.tissue import (
+    calibrate_tissue_threshold,
+    filter_tissue_tiles,
+)
 
 setup_logging()
 logger = get_logger(__name__)
@@ -19,8 +29,6 @@ def sample_pixels_from_slide(czi_path, channel=0, n_samples=500000):
     logger.info(f"Sampling from {czi_path.name}...")
 
     try:
-        from segmentation.detection.tissue import calibrate_tissue_threshold, filter_tissue_tiles
-
         loader = get_loader(str(czi_path), load_to_ram=True, channel=channel)
         channel_data = loader.get_channel_data(channel)
 
@@ -111,7 +119,6 @@ def sample_pixels_from_slide(czi_path, channel=0, n_samples=500000):
         from segmentation.io.czi_loader import clear_cache
         clear_cache()
         del loader, channel_data
-        import gc
         gc.collect()
 
         return samples
@@ -159,7 +166,6 @@ def main():
             all_samples.append(samples)
 
         # Force garbage collection after each slide to prevent memory accumulation
-        import gc
         gc.collect()
 
     if len(all_samples) == 0:
@@ -167,7 +173,6 @@ def main():
         return
 
     # Compute global median/MAD for Reinhard normalization
-    import cv2
     logger.info("")
     logger.info("="*70)
     logger.info("Computing global median/MAD for Reinhard normalization...")
@@ -225,6 +230,224 @@ def main():
     logger.info("="*70)
 
     logger.info("\nNext step: Launch 8 parallel jobs with --norm-params-file flag")
+
+    # ── Visual validation ─────────────────────────────────────────────
+    logger.info("")
+    logger.info("="*70)
+    logger.info("VISUAL VALIDATION: tissue maps + raw vs normalized")
+    logger.info("="*70)
+
+    # Free the sampling data before loading slides for validation
+    del all_samples, combined, tissue_img, lab
+    gc.collect()
+
+    validate_slides = [
+        slides[0],   # first slide (FGC1)
+        slides[4],   # middle-ish (FHU1)
+        slides[8],   # another group (MGC1)
+        slides[12],  # last group (MHU1)
+        slides[-1],  # very last (MHU4)
+    ]
+    # Filter to slides that actually exist
+    validate_slides = [s for s in validate_slides if s.exists()]
+
+    generate_visual_validation(validate_slides, params, output_file.parent / "verification_tiles")
+
+
+def _get_font(size=40):
+    """Try to find a usable font."""
+    for path in [
+        "/usr/share/fonts/dejavu-sans-fonts/DejaVuSans-Bold.ttf",
+        "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf",
+    ]:
+        try:
+            return ImageFont.truetype(path, size)
+        except (OSError, IOError):
+            continue
+    return ImageFont.load_default()
+
+
+def _ensure_rgb(arr):
+    """Convert array to RGB uint8."""
+    if arr.ndim == 2:
+        arr = np.stack([arr] * 3, axis=-1)
+    elif arr.shape[2] == 4:
+        arr = arr[:, :, :3]
+    if arr.dtype != np.uint8:
+        if arr.max() <= 1.0:
+            arr = (arr * 255).astype(np.uint8)
+        else:
+            arr = np.clip(arr, 0, 255).astype(np.uint8)
+    return arr
+
+
+def generate_visual_validation(slide_paths, norm_params, output_dir, tile_size=3000, block_size=512, tiles_per_slide=3):
+    """
+    For each slide, produce:
+      1. tissue_map_{slide}.png  — downsampled whole-slide with green/red tile grid
+      2. comparison_{slide}_tile{N}.png — side-by-side RAW vs REINHARD NORMALIZED
+    """
+    output_dir = Path(output_dir)
+    output_dir.mkdir(parents=True, exist_ok=True)
+
+    all_outputs = []
+
+    for czi_path in slide_paths:
+        slide_name = czi_path.stem
+        logger.info(f"\n{'='*60}")
+        logger.info(f"Validating: {slide_name}")
+        logger.info(f"{'='*60}")
+
+        loader = get_loader(str(czi_path), load_to_ram=True, channel=0)
+        image_array = loader.get_channel_data(0)
+        if image_array is None:
+            logger.warning(f"  Failed to load {slide_name}, skipping")
+            loader.close()
+            loader.clear_cache()
+            del loader
+            gc.collect()
+            continue
+
+        dims = loader.get_dimensions()
+        h, w = dims['height'], dims['width']
+        logger.info(f"  Slide: {w} x {h}")
+
+        # ── Tissue map ────────────────────────────────────────────────
+        # Build tile grid (same as segmentation pipeline)
+        tiles = []
+        for ty in range(0, h - tile_size + 1, tile_size):
+            for tx in range(0, w - tile_size + 1, tile_size):
+                tiles.append({'x': tx, 'y': ty, 'w': tile_size, 'h': tile_size})
+        logger.info(f"  Total tiles ({tile_size}x{tile_size}): {len(tiles)}")
+
+        # Calibrate threshold (same K-means as pipeline)
+        threshold = calibrate_tissue_threshold(
+            tiles=tiles,
+            image_array=image_array,
+            calibration_samples=min(100, len(tiles)),
+            block_size=block_size,
+            tile_size=tile_size,
+        )
+        logger.info(f"  Calibrated threshold: {threshold:.1f}")
+
+        # Filter using pipeline's function
+        tissue_tiles = filter_tissue_tiles(
+            tiles=tiles,
+            variance_threshold=threshold,
+            image_array=image_array,
+            tile_size=tile_size,
+            block_size=block_size,
+        )
+        tissue_set = {(t['x'], t['y']) for t in tissue_tiles}
+        bg_tiles = [t for t in tiles if (t['x'], t['y']) not in tissue_set]
+        logger.info(f"  Tissue tiles: {len(tissue_tiles)} / {len(tiles)} ({100*len(tissue_tiles)/len(tiles):.1f}%)")
+
+        # Create downsampled overview (~2000px long side)
+        scale = max(1, max(w, h) // 2000)
+        thumb_w, thumb_h = w // scale, h // scale
+        logger.info(f"  Creating overview at 1/{scale}x ({thumb_w}x{thumb_h})...")
+
+        # Resize directly from image_array to avoid 23GB RGB copy
+        if image_array.ndim == 2:
+            thumb_gray = cv2.resize(image_array, (thumb_w, thumb_h), interpolation=cv2.INTER_AREA)
+            thumb = np.stack([thumb_gray] * 3, axis=-1).astype(np.uint8)
+            del thumb_gray
+        else:
+            src = image_array[:, :, :3] if image_array.shape[2] > 3 else image_array
+            thumb = cv2.resize(src.astype(np.uint8), (thumb_w, thumb_h), interpolation=cv2.INTER_AREA)
+
+        img = Image.fromarray(thumb)
+        draw = ImageDraw.Draw(img, 'RGBA')
+
+        # Red tint on rejected tiles
+        for t in bg_tiles:
+            x1, y1 = t['x'] // scale, t['y'] // scale
+            x2, y2 = (t['x'] + tile_size) // scale, (t['y'] + tile_size) // scale
+            draw.rectangle([x1, y1, x2, y2], fill=(255, 0, 0, 40), outline=(255, 0, 0, 120), width=1)
+
+        # Green outline on tissue tiles
+        for t in tissue_tiles:
+            x1, y1 = t['x'] // scale, t['y'] // scale
+            x2, y2 = (t['x'] + tile_size) // scale, (t['y'] + tile_size) // scale
+            draw.rectangle([x1, y1, x2, y2], outline=(0, 255, 0, 200), width=2)
+
+        # Legend
+        font = _get_font(24)
+        font_sm = _get_font(18)
+        draw.rectangle([10, 10, 430, 130], fill=(255, 255, 255, 200))
+        draw.text((20, 15), slide_name, fill=(0, 0, 0), font=font)
+        draw.rectangle([20, 50, 40, 65], fill=(0, 255, 0, 200), outline=(0, 255, 0))
+        draw.text((50, 47), f"Tissue: {len(tissue_tiles)} tiles", fill=(0, 100, 0), font=font_sm)
+        draw.rectangle([20, 75, 40, 90], fill=(255, 0, 0, 80), outline=(255, 0, 0))
+        draw.text((50, 72), f"Background: {len(bg_tiles)} tiles", fill=(150, 0, 0), font=font_sm)
+        draw.text((20, 100), f"Threshold: {threshold:.1f} (K-means)", fill=(80, 80, 80), font=font_sm)
+
+        map_path = output_dir / f"tissue_map_{slide_name}.png"
+        img.convert('RGB').save(map_path, quality=95)
+        logger.info(f"  Saved: {map_path}")
+        all_outputs.append(map_path)
+
+        del thumb
+        gc.collect()
+
+        # ── Raw vs Normalized tiles ───────────────────────────────────
+        # Score tissue tiles by variance, pick top N
+        scored = []
+        for t in tissue_tiles:
+            tx, ty = t['x'], t['y']
+            tile_img = image_array[ty:ty + tile_size, tx:tx + tile_size]
+            if tile_img.ndim == 3:
+                gray = tile_img.mean(axis=2)
+            else:
+                gray = tile_img.astype(np.float32)
+            scored.append((float(np.var(gray)), tx, ty))
+        scored.sort(reverse=True)
+
+        for idx, (var_score, tx, ty) in enumerate(scored[:tiles_per_slide]):
+            logger.info(f"  Tile {idx+1}: pos=({tx},{ty}), var={var_score:.0f}")
+
+            raw_tile = _ensure_rgb(image_array[ty:ty + tile_size, tx:tx + tile_size].copy())
+            norm_tile = apply_reinhard_normalization(raw_tile.copy(), norm_params)
+
+            logger.info(f"    Raw  RGB mean: R={raw_tile[:,:,0].mean():.1f} G={raw_tile[:,:,1].mean():.1f} B={raw_tile[:,:,2].mean():.1f}")
+            logger.info(f"    Norm RGB mean: R={norm_tile[:,:,0].mean():.1f} G={norm_tile[:,:,1].mean():.1f} B={norm_tile[:,:,2].mean():.1f}")
+
+            # Side-by-side canvas
+            th, tw = raw_tile.shape[:2]
+            gap = 10
+            label_h = 80
+            canvas = np.ones((th + label_h, tw * 2 + gap, 3), dtype=np.uint8) * 240
+            canvas[label_h:, :tw] = raw_tile
+            canvas[label_h:, tw + gap:] = norm_tile
+
+            comp_img = Image.fromarray(canvas)
+            comp_draw = ImageDraw.Draw(comp_img)
+            comp_draw.text((20, 15), "RAW", fill=(200, 0, 0), font=_get_font(40))
+            comp_draw.text((tw + gap + 20, 15), "REINHARD NORMALIZED", fill=(0, 130, 0), font=_get_font(40))
+            comp_draw.text((20, 50), f"{slide_name}  pos=({tx},{ty})  var={var_score:.0f}", fill=(80, 80, 80), font=_get_font(28))
+
+            comp_path = output_dir / f"comparison_{slide_name}_tile{idx}.png"
+            comp_img = comp_img.resize((comp_img.width // 2, comp_img.height // 2), Image.LANCZOS)
+            comp_img.save(comp_path, quality=95)
+            logger.info(f"    Saved: {comp_path}")
+            all_outputs.append(comp_path)
+
+            del raw_tile, norm_tile
+            gc.collect()
+
+        # Free slide
+        loader.close()
+        loader.clear_cache()
+        del loader, image_array
+        gc.collect()
+
+    logger.info(f"\n{'='*60}")
+    logger.info(f"VALIDATION COMPLETE — {len(all_outputs)} images saved to: {output_dir}/")
+    for p in all_outputs:
+        logger.info(f"  {p.name}")
+    logger.info(f"{'='*60}")
+    logger.info(f"\nInspect these images before launching segmentation!")
+
 
 if __name__ == "__main__":
     main()

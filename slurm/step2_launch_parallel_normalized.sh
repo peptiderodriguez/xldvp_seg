@@ -5,7 +5,7 @@
 cd /viper/ptmp2/edrod/xldvp_seg_fresh
 
 # Check if normalization params file exists
-NORM_PARAMS="/viper/ptmp2/edrod/xldvp_seg_fresh/normalization_params_all16.json"
+NORM_PARAMS="/viper/ptmp2/edrod/xldvp_seg_fresh/reinhard_params_16slides_MEDIAN_NEW.json"
 if [ ! -f "$NORM_PARAMS" ]; then
     echo "ERROR: Normalization parameters file not found: $NORM_PARAMS"
     echo "Please run step1_compute_norm_params.sbatch first!"
@@ -45,7 +45,7 @@ for i in {0..7}; do
            --nodes=1 \
            --ntasks=1 \
            --cpus-per-task=48 \
-           --mem=180G \
+           --mem=200G \
            --time=2:00:00 \
            --gres=gpu:2 \
            --output="logs/${JOB_NAME}_%j.out" \
@@ -71,6 +71,7 @@ python run_unified_FAST.py \
     --hspc-max-area-um 150 \
     --cleanup-masks \
     --normalize-slides \
+    --normalization-method reinhard \
     --norm-params-file $NORM_PARAMS
 "
 
