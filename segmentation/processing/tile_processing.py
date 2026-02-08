@@ -144,11 +144,22 @@ def process_single_tile(
                     extra_channels=extra_channel_tiles,
                     channel_names=channel_names,
                 )
-            elif cell_type in ('nmj', 'mk', 'cell'):
+            elif cell_type == 'nmj':
                 masks, detections = strategy.detect(
                     tile_rgb, models, pixel_size_um,
                     extra_channels=extra_channel_tiles,
                     extract_full_features=True,
+                )
+            elif cell_type == 'mk':
+                masks, detections = strategy.detect(
+                    tile_rgb, models, pixel_size_um,
+                    extra_channels=extra_channel_tiles,
+                    extract_features=True,
+                )
+            elif cell_type == 'cell':
+                masks, detections = strategy.detect(
+                    tile_rgb, models, pixel_size_um,
+                    extra_channels=extra_channel_tiles,
                 )
             else:
                 # Mesothelium and others — basic detect()

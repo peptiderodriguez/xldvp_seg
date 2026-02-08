@@ -248,9 +248,17 @@ def _gpu_worker(
             extract_sam2_embeddings=extract_sam2_embeddings,
         )
     elif cell_type == 'mk':
+        # strategy_params has 'mk_min_area'/'mk_max_area' in pixels from CLI;
+        # convert to um² for MKStrategy which expects min_area_um/max_area_um
+        if 'mk_min_area' in strategy_params:
+            mk_min_um = strategy_params['mk_min_area'] * (pixel_size_um ** 2)
+            mk_max_um = strategy_params['mk_max_area'] * (pixel_size_um ** 2)
+        else:
+            mk_min_um = strategy_params.get('min_area_um', 200.0)
+            mk_max_um = strategy_params.get('max_area_um', 2000.0)
         strategy = MKStrategy(
-            min_area_um=strategy_params.get('min_area_um', 200.0),
-            max_area_um=strategy_params.get('max_area_um', 2000.0),
+            min_area_um=mk_min_um,
+            max_area_um=mk_max_um,
             extract_deep_features=extract_deep_features,
             extract_sam2_embeddings=extract_sam2_embeddings,
         )
@@ -349,6 +357,7 @@ def _gpu_worker(
 
             # Build extra_channel_tiles from tile_raw (already copied from shared memory)
             # Keys are CZI channel indices (not slot indices) so detection_channel lookup works
+            # No .copy() needed: tile_raw is already a copy, views are safe
             extra_channel_tiles = None
             if slide_arr.ndim == 3:
                 n_real_ch = tile_raw.shape[2]
@@ -357,7 +366,7 @@ def _gpu_worker(
                     for slot_idx in range(n_real_ch):
                         # Map slot index back to CZI channel index
                         czi_ch = channel_keys[slot_idx] if channel_keys and slot_idx < len(channel_keys) else slot_idx
-                        extra_channel_tiles[czi_ch] = tile_raw[:, :, slot_idx].copy()
+                        extra_channel_tiles[czi_ch] = tile_raw[:, :, slot_idx]
 
             # has_tissue() check on uint16 BEFORE conversion
             try:
