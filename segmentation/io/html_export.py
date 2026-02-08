@@ -589,6 +589,8 @@ def get_js(cell_type, total_pages, experiment_name=None, page_num=1):
             let globalLabels = {{}};
             try {{ globalLabels = JSON.parse(localStorage.getItem(GLOBAL_STORAGE_KEY)) || {{}}; }} catch(e) {{}}
             Object.assign(globalLabels, labels);
+            // Remove toggled-off annotations: delete page UIDs not in labels
+            cards.forEach(card => {{ if (!(card.id in labels)) delete globalLabels[card.id]; }});
             localStorage.setItem(GLOBAL_STORAGE_KEY, JSON.stringify(globalLabels));
         }}
 
@@ -2097,7 +2099,9 @@ def generate_mk_hspc_page_html(samples, cell_type, page_num, total_pages, slides
 
         function saveAnnotations() {{
             const labels = {{}};
+            const pageUids = [];
             document.querySelectorAll('.card').forEach(card => {{
+                pageUids.push(card.id);
                 const label = parseInt(card.dataset.label);
                 if (label !== -1) labels[card.id] = label;
             }});
@@ -2106,6 +2110,8 @@ def generate_mk_hspc_page_html(samples, cell_type, page_num, total_pages, slides
             let globalLabels = {{}};
             try {{ globalLabels = JSON.parse(localStorage.getItem(GLOBAL_STORAGE_KEY)) || {{}}; }} catch(e) {{}}
             Object.assign(globalLabels, labels);
+            // Remove toggled-off annotations: delete page UIDs not in labels
+            pageUids.forEach(uid => {{ if (!(uid in labels)) delete globalLabels[uid]; }});
             localStorage.setItem(GLOBAL_STORAGE_KEY, JSON.stringify(globalLabels));
         }}
 
@@ -2831,6 +2837,8 @@ def get_vessel_js(cell_type, total_pages, experiment_name=None, all_features_jso
             let globalLabels = {{}};
             try {{ globalLabels = JSON.parse(localStorage.getItem(GLOBAL_STORAGE_KEY)) || {{}}; }} catch(e) {{}}
             Object.assign(globalLabels, labels);
+            // Remove toggled-off annotations: delete page UIDs not in labels
+            cards.forEach(card => {{ if (!(card.id in labels)) delete globalLabels[card.id]; }});
             localStorage.setItem(GLOBAL_STORAGE_KEY, JSON.stringify(globalLabels));
         }}
 
