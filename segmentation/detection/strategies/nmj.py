@@ -457,7 +457,7 @@ class NMJStrategy(DetectionStrategy, MultiChannelFeatureMixin):
         tile: np.ndarray,
         models: Dict[str, Any],
         pixel_size_um: float,
-        extract_full_features: bool = True,
+        extract_features: bool = True,
         extra_channels: Dict[int, np.ndarray] = None
     ) -> Tuple[np.ndarray, List[Detection]]:
         """
@@ -484,7 +484,7 @@ class NMJStrategy(DetectionStrategy, MultiChannelFeatureMixin):
                 - 'classifier': Optional NMJ classifier model
                 - 'transform': Transform for classifier
             pixel_size_um: Pixel size for area calculations
-            extract_full_features: Whether to extract all features (default True)
+            extract_features: Whether to extract all features (default True)
             extra_channels: Dict mapping channel index to 2D array for per-channel
                 feature extraction. Keys are channel numbers (0, 1, 2), values are
                 grayscale tiles. If provided, extracts features from each channel.
@@ -528,7 +528,7 @@ class NMJStrategy(DetectionStrategy, MultiChannelFeatureMixin):
             resnet_transform = None
 
         # Set image for SAM2 embeddings if available
-        if sam2_predictor is not None and self.extract_sam2_embeddings and extract_full_features:
+        if sam2_predictor is not None and self.extract_sam2_embeddings and extract_features:
             sam2_predictor.set_image(tile_rgb)
 
         # Step 2: Extract features for each mask
@@ -550,7 +550,7 @@ class NMJStrategy(DetectionStrategy, MultiChannelFeatureMixin):
             morph_features.update(nmj_specific)
 
             # Extract per-channel features if extra_channels provided
-            if extra_channels is not None and extract_full_features:
+            if extra_channels is not None and extract_features:
                 channels_dict = {f'ch{k}': v for k, v in sorted(extra_channels.items()) if v is not None}
                 multichannel_feats = self.extract_multichannel_features(
                     mask, channels_dict, primary_channel='ch1'
@@ -564,17 +564,17 @@ class NMJStrategy(DetectionStrategy, MultiChannelFeatureMixin):
             cy, cx = np.mean(ys), np.mean(xs)
 
             # Extract SAM2 embeddings (256D)
-            if sam2_predictor is not None and self.extract_sam2_embeddings and extract_full_features:
+            if sam2_predictor is not None and self.extract_sam2_embeddings and extract_features:
                 sam2_emb = self._extract_sam2_embedding(sam2_predictor, cy, cx)
                 for i, v in enumerate(sam2_emb):
                     morph_features[f'sam2_{i}'] = float(v)
-            elif extract_full_features:
+            elif extract_features:
                 # Fill with zeros if SAM2 not available
                 for i in range(256):
                     morph_features[f'sam2_{i}'] = 0.0
 
             # Prepare crops for batch ResNet/DINOv2 processing (masked + context)
-            if self.extract_deep_features and extract_full_features:
+            if self.extract_deep_features and extract_features:
                 y1, y2 = ys.min(), ys.max()
                 x1, x2 = xs.min(), xs.max()
                 # Context crop (unmasked - full tissue)
@@ -601,7 +601,7 @@ class NMJStrategy(DetectionStrategy, MultiChannelFeatureMixin):
             det_id += 1
 
         # Batch ResNet feature extraction - masked
-        if crops_for_resnet and resnet is not None and resnet_transform is not None and extract_full_features:
+        if crops_for_resnet and resnet is not None and resnet_transform is not None and extract_features:
             resnet_features_list = self._extract_resnet_features_batch(
                 crops_for_resnet, resnet, resnet_transform, device
             )
@@ -612,7 +612,7 @@ class NMJStrategy(DetectionStrategy, MultiChannelFeatureMixin):
                     valid_detections[crop_idx]['features'][f'resnet_{i}'] = float(v)
 
         # Batch ResNet feature extraction - context (unmasked)
-        if crops_for_resnet_context and resnet is not None and resnet_transform is not None and extract_full_features:
+        if crops_for_resnet_context and resnet is not None and resnet_transform is not None and extract_features:
             resnet_context_list = self._extract_resnet_features_batch(
                 crops_for_resnet_context, resnet, resnet_transform, device
             )
@@ -631,7 +631,7 @@ class NMJStrategy(DetectionStrategy, MultiChannelFeatureMixin):
             dinov2 = None
             dinov2_transform = None
 
-        if crops_for_resnet and dinov2 is not None and dinov2_transform is not None and extract_full_features:
+        if crops_for_resnet and dinov2 is not None and dinov2_transform is not None and extract_features:
             # DINOv2 masked features
             dinov2_masked_list = self._extract_dinov2_features_batch(
                 crops_for_resnet, dinov2, dinov2_transform, device
@@ -649,7 +649,7 @@ class NMJStrategy(DetectionStrategy, MultiChannelFeatureMixin):
                     valid_detections[crop_idx]['features'][f'dinov2_ctx_{i}'] = float(v)
 
         # Fill zeros for detections that failed crop extraction (warn so it's not silent)
-        if extract_full_features and self.extract_deep_features:
+        if extract_features and self.extract_deep_features:
             for det in valid_detections:
                 if 'resnet_0' not in det['features']:
                     logger.warning("Detection missing ResNet features - zero-filling")

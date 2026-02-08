@@ -148,7 +148,7 @@ def process_single_tile(
                 masks, detections = strategy.detect(
                     tile_rgb, models, pixel_size_um,
                     extra_channels=extra_channel_tiles,
-                    extract_full_features=True,
+                    extract_features=True,
                 )
             else:
                 # Mesothelium and others — basic detect()

@@ -338,7 +338,7 @@ def _nmj_gpu_worker(
                         tile_rgb,
                         models,
                         pixel_size_um,
-                        extract_full_features=True,
+                        extract_features=True,
                         extra_channels=extra_channel_tiles
                     )
                     break  # Success, exit retry loop

@@ -254,7 +254,7 @@ class CellStrategy(DetectionStrategy, MultiChannelFeatureMixin):
         tile: np.ndarray,
         models: Dict[str, Any],
         pixel_size_um: float,
-        extract_full_features: bool = True,
+        extract_features: bool = True,
         extra_channels: Dict[int, np.ndarray] = None
     ) -> Tuple[np.ndarray, List[Detection]]:
         """
@@ -266,7 +266,7 @@ class CellStrategy(DetectionStrategy, MultiChannelFeatureMixin):
             tile: RGB image array
             models: Dict with 'cellpose', 'sam2_predictor', 'resnet', 'resnet_transform'
             pixel_size_um: Pixel size in microns
-            extract_full_features: Whether to extract full features (default True)
+            extract_features: Whether to extract full features (default True)
             extra_channels: Dict mapping channel index to 2D uint16 array for
                 per-channel feature extraction (optional)
 

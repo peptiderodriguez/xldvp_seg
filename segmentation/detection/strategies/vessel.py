@@ -3571,7 +3571,7 @@ class VesselStrategy(DetectionStrategy, MultiChannelFeatureMixin):
         models: Dict[str, Any],
         pixel_size_um: float = 0.22,
         cd31_channel: Optional[np.ndarray] = None,
-        extract_full_features: bool = True,
+        extract_features: bool = True,
         tile_x: int = 0,
         tile_y: int = 0,
         tile_size: Optional[int] = None,
@@ -3642,7 +3642,7 @@ class VesselStrategy(DetectionStrategy, MultiChannelFeatureMixin):
                 - 'device': torch device
             pixel_size_um: Pixel size in microns
             cd31_channel: Optional CD31 channel for validation
-            extract_full_features: Whether to extract full feature set (default True)
+            extract_features: Whether to extract full feature set (default True)
             tile_x: X coordinate of tile origin (for boundary tracking)
             tile_y: Y coordinate of tile origin (for boundary tracking)
             tile_size: Size of tiles (for cross-tile merging)
@@ -3746,7 +3746,7 @@ class VesselStrategy(DetectionStrategy, MultiChannelFeatureMixin):
         device = models.get('device', torch.device('cuda' if torch.cuda.is_available() else 'cpu'))
 
         # Set image for SAM2 embeddings if available
-        if sam2_predictor is not None and self.extract_sam2_embeddings and extract_full_features:
+        if sam2_predictor is not None and self.extract_sam2_embeddings and extract_features:
             sam2_predictor.set_image(tile_rgb)
 
         # Extract features and create masks for valid candidates
@@ -3846,17 +3846,17 @@ class VesselStrategy(DetectionStrategy, MultiChannelFeatureMixin):
             cx, cy = center[0], center[1]
 
             # Extract SAM2 embeddings (256D)
-            if sam2_predictor is not None and self.extract_sam2_embeddings and extract_full_features:
+            if sam2_predictor is not None and self.extract_sam2_embeddings and extract_features:
                 sam2_emb = self._extract_sam2_embedding(sam2_predictor, cy, cx)
                 for i, v in enumerate(sam2_emb):
                     all_features[f'sam2_{i}'] = float(v)
-            elif extract_full_features:
+            elif extract_features:
                 # Fill with zeros if SAM2 not available
                 for i in range(256):
                     all_features[f'sam2_{i}'] = 0.0
 
             # Prepare crops for batch ResNet/DINOv2 processing (masked + context)
-            if self.extract_deep_features and extract_full_features:
+            if self.extract_deep_features and extract_features:
                 ys, xs = np.where(wall_mask)
                 if len(ys) > 0:
                     y1, y2 = ys.min(), ys.max()
@@ -3887,7 +3887,7 @@ class VesselStrategy(DetectionStrategy, MultiChannelFeatureMixin):
 
         # Batch deep feature extraction (ResNet + DINOv2, masked + context)
         # ResNet masked
-        if crops_for_resnet and resnet is not None and resnet_transform is not None and extract_full_features:
+        if crops_for_resnet and resnet is not None and resnet_transform is not None and extract_features:
             resnet_features_list = self._extract_resnet_features_batch(
                 crops_for_resnet, resnet, resnet_transform, device
             )
@@ -3896,7 +3896,7 @@ class VesselStrategy(DetectionStrategy, MultiChannelFeatureMixin):
                     valid_candidates[crop_idx]['features'][f'resnet_{i}'] = float(v)
 
         # ResNet context
-        if crops_for_resnet_context and resnet is not None and resnet_transform is not None and extract_full_features:
+        if crops_for_resnet_context and resnet is not None and resnet_transform is not None and extract_features:
             resnet_ctx_list = self._extract_resnet_features_batch(
                 crops_for_resnet_context, resnet, resnet_transform, device
             )
@@ -3912,7 +3912,7 @@ class VesselStrategy(DetectionStrategy, MultiChannelFeatureMixin):
             dinov2 = None
             dinov2_transform = None
 
-        if crops_for_resnet and dinov2 is not None and dinov2_transform is not None and extract_full_features:
+        if crops_for_resnet and dinov2 is not None and dinov2_transform is not None and extract_features:
             dinov2_masked_list = self._extract_dinov2_features_batch(
                 crops_for_resnet, dinov2, dinov2_transform, device
             )
@@ -3928,7 +3928,7 @@ class VesselStrategy(DetectionStrategy, MultiChannelFeatureMixin):
                     valid_candidates[crop_idx]['features'][f'dinov2_ctx_{i}'] = float(v)
 
         # Fill zeros for candidates that failed crop extraction (warn so it's not silent)
-        if extract_full_features and self.extract_deep_features:
+        if extract_features and self.extract_deep_features:
             for cand in valid_candidates:
                 if 'resnet_0' not in cand['features']:
                     logger.warning("Detection missing ResNet features - zero-filling")
