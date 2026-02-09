@@ -993,6 +993,88 @@ def save_vessel_crop(vessel, display_rgb, outer_contour, inner_contour, tile_x, 
 
     return crop_path
 
+def regenerate_missing_crops(vessels, channel_cache):
+    """Regenerate crop images for vessels that are missing crop files on disk.
+
+    This handles the case where crops from prior scales are lost (e.g., after
+    a system reboot) but the vessel data was preserved in checkpoints.
+
+    Groups vessels by tile to minimize redundant CZI reads, then calls
+    save_vessel_crop() for each vessel with a missing crop.
+    """
+    # Build scale_factor -> tile_size lookup from SCALES config
+    scale_tile_sizes = {s['scale_factor']: s.get('tile_size', TILE_SIZE) for s in SCALES}
+
+    # Find vessels with missing crops
+    missing = []
+    for i, v in enumerate(vessels):
+        crop_path = v.get('crop_path')
+        if crop_path is None or not os.path.exists(crop_path):
+            missing.append(i)
+
+    if not missing:
+        print("All crop files present - no regeneration needed.")
+        return
+
+    print(f"Regenerating crops for {len(missing)} vessels with missing crop files...")
+
+    # Group by (tile_x, tile_y, scale_factor) to batch tile reads
+    tile_groups = {}
+    for idx in missing:
+        v = vessels[idx]
+        key = (v['tile_x'], v['tile_y'], v['scale_factor'])
+        if key not in tile_groups:
+            tile_groups[key] = []
+        tile_groups[key].append(idx)
+
+    n_generated = 0
+    n_failed = 0
+
+    for (tile_x, tile_y, scale_factor), indices in tqdm(tile_groups.items(), desc="Regenerating crops"):
+        tile_size = scale_tile_sizes.get(scale_factor, TILE_SIZE)
+
+        # Read tile channels
+        sma = channel_cache.get_tile(tile_x, tile_y, tile_size, SMA, scale_factor)
+        cd31 = channel_cache.get_tile(tile_x, tile_y, tile_size, CD31, scale_factor)
+        nuclear = channel_cache.get_tile(tile_x, tile_y, tile_size, NUCLEAR, scale_factor)
+
+        if sma is None or cd31 is None or nuclear is None:
+            n_failed += len(indices)
+            continue
+
+        # Create display RGB (same as process_tile_at_scale)
+        display_rgb = np.stack([
+            normalize_channel(sma),
+            normalize_channel(cd31),
+            normalize_channel(nuclear),
+        ], axis=-1)
+
+        for idx in indices:
+            v = vessels[idx]
+            # Contours in JSON are in full-res coordinates; convert back to tile scale
+            outer_contour = np.array(v['outer_contour'], dtype=np.int32) // scale_factor
+            inner_contour = np.array(v['inner_contour'], dtype=np.int32) // scale_factor
+
+            if len(outer_contour) == 0 or len(inner_contour) == 0:
+                n_failed += 1
+                continue
+
+            crop_path = save_vessel_crop(
+                v, display_rgb, outer_contour, inner_contour,
+                tile_x, tile_y, tile_size, scale_factor
+            )
+            if crop_path:
+                v['crop_path'] = crop_path
+                n_generated += 1
+            else:
+                n_failed += 1
+
+        del display_rgb, sma, cd31, nuclear
+        gc.collect()
+
+    print(f"  Regenerated {n_generated} crops, {n_failed} failed")
+
+
 def is_tissue_tile(tile, threshold=TISSUE_VARIANCE_THRESHOLD):
     return np.var(tile) > threshold
 
@@ -2341,6 +2423,9 @@ def main():
 
     # Report tiles skipped by Sobel pre-filter
     print(f"Tiles skipped by Sobel pre-filter: {TILES_SKIPPED_BY_SOBEL}")
+
+    # Regenerate any missing crop images (e.g., from checkpoint-loaded vessels)
+    regenerate_missing_crops(merged_vessels, channel_cache)
 
     # Analyze vessel network topology (skeletonization)
     network_metrics = analyze_vessel_network(merged_vessels, mosaic_size)
