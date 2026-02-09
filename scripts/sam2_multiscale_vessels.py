@@ -588,21 +588,86 @@ class DownsampledChannelCache:
         self.channels.clear()
         gc.collect()
 
+
+class SharedChannelCache:
+    """
+    Read-only channel cache backed by shared memory arrays.
+
+    Used by multi-GPU workers to access channel data placed into shared memory
+    by the main process. Mirrors DownsampledChannelCache.get_tile() exactly.
+    """
+
+    def __init__(self, channel_arrays, base_scale, full_res_size):
+        """
+        Args:
+            channel_arrays: Dict {ch_idx: np.ndarray} backed by shared memory
+            base_scale: Scale factor of the loaded data (e.g. 2 for 1/2 scale)
+            full_res_size: (width, height) at full resolution
+        """
+        self.channels = channel_arrays
+        self.base_scale = base_scale
+        self.full_res_size = full_res_size
+        self.base_width = full_res_size[0] // base_scale
+        self.base_height = full_res_size[1] // base_scale
+
+    def get_tile(self, tile_x, tile_y, tile_size, channel, scale_factor):
+        """
+        Get a tile at the specified scale. Same logic as DownsampledChannelCache.get_tile().
+
+        Args:
+            tile_x, tile_y: Tile origin in SCALED coordinates (at target scale_factor)
+            tile_size: Output tile size
+            channel: Channel index
+            scale_factor: Target scale (must be >= base_scale)
+
+        Returns:
+            Tile data at target scale, or None if out of bounds
+        """
+        if scale_factor < self.base_scale:
+            raise ValueError(f"scale_factor {scale_factor} < base_scale {self.base_scale}")
+
+        if channel not in self.channels:
+            raise ValueError(f"Channel {channel} not loaded")
+
+        relative_scale = scale_factor // self.base_scale
+        base_tile_size = tile_size * relative_scale
+
+        base_x = (tile_x * scale_factor) // self.base_scale
+        base_y = (tile_y * scale_factor) // self.base_scale
+
+        data = self.channels[channel]
+        y2 = min(base_y + base_tile_size, data.shape[0])
+        x2 = min(base_x + base_tile_size, data.shape[1])
+
+        if base_x >= data.shape[1] or base_y >= data.shape[0]:
+            return None
+
+        region = data[base_y:y2, base_x:x2]
+
+        if region.size == 0:
+            return None
+
+        if relative_scale > 1:
+            target_h = region.shape[0] // relative_scale
+            target_w = region.shape[1] // relative_scale
+            if target_h == 0 or target_w == 0:
+                return None
+            region = cv2.resize(region, (target_w, target_h), interpolation=cv2.INTER_AREA)
+
+        return region
+
+    def release(self):
+        """Clear references (does not unlink shared memory)."""
+        self.channels.clear()
+
+
 # Channel indices
 NUCLEAR = 0
 CD31 = 1
 SMA = 2
 PM = 3
 
-os.makedirs(OUTPUT_DIR, exist_ok=True)
-os.makedirs(os.path.join(OUTPUT_DIR, 'tiles'), exist_ok=True)
-
-# Clear crops folder at start of each run to avoid mixing with previous runs
-crops_dir = os.path.join(OUTPUT_DIR, 'crops')
-if os.path.exists(crops_dir):
-    import shutil
-    shutil.rmtree(crops_dir)
-os.makedirs(crops_dir, exist_ok=True)
+# Directory creation moved to main() to avoid side effects on import (critical for multi-GPU workers)
 
 def normalize_channel(arr, p_low=1, p_high=99):
     """Normalize to uint8 using percentile clipping (robust to outliers)."""
@@ -926,12 +991,17 @@ def compute_cell_composition(cell_intensities, cd31_threshold, sma_threshold):
     }
 
 
-def save_vessel_crop(vessel, display_rgb, outer_contour, inner_contour, tile_x, tile_y, tile_size, scale_factor):
+def save_vessel_crop(vessel, display_rgb, outer_contour, inner_contour, tile_x, tile_y, tile_size, scale_factor, output_dir=None):
     """Save a crop of the vessel - both raw and with contours drawn.
 
     Crop is centered on the mask centroid and sized to be 2x the mask bounding box.
     Saves two files: {uid}_raw.jpg (no contours) and {uid}.jpg (with contours).
+
+    Args:
+        output_dir: Output directory. Defaults to global OUTPUT_DIR if None.
     """
+    if output_dir is None:
+        output_dir = OUTPUT_DIR
     # Get bounding box of both contours combined
     all_points = np.vstack([outer_contour, inner_contour])
     x_min, y_min = all_points.min(axis=0).flatten()
@@ -969,7 +1039,7 @@ def save_vessel_crop(vessel, display_rgb, outer_contour, inner_contour, tile_x, 
         return None
 
     # Save raw crop (no contours)
-    raw_path = os.path.join(OUTPUT_DIR, 'crops', f"{vessel['uid']}_raw.jpg")
+    raw_path = os.path.join(output_dir, 'crops', f"{vessel['uid']}_raw.jpg")
     cv2.imwrite(raw_path, cv2.cvtColor(crop_raw, cv2.COLOR_RGB2BGR), [cv2.IMWRITE_JPEG_QUALITY, 90])
 
     # Draw contours on a copy for the contoured version
@@ -985,7 +1055,7 @@ def save_vessel_crop(vessel, display_rgb, outer_contour, inner_contour, tile_x, 
     vessel['crop_scale_factor'] = scale_factor
 
     # Save contoured crop
-    crop_path = os.path.join(OUTPUT_DIR, 'crops', f"{vessel['uid']}.jpg")
+    crop_path = os.path.join(output_dir, 'crops', f"{vessel['uid']}.jpg")
     cv2.imwrite(crop_path, cv2.cvtColor(crop_contoured, cv2.COLOR_RGB2BGR), [cv2.IMWRITE_JPEG_QUALITY, 90])
 
     # Store raw path for side-by-side display
@@ -2215,6 +2285,370 @@ def analyze_vessel_network(vessels, mosaic_size, pixel_size_um=0.1725):
     return network_metrics
 
 
+# ==============================================================================
+# Multi-GPU Vessel Processing
+# ==============================================================================
+
+def _vessel_gpu_worker(gpu_id, input_queue, output_queue, stop_event,
+                       channel_shm_info, base_scale, full_res_size,
+                       output_dir, sam2_checkpoint_path, sam2_config,
+                       sam2_generator_params, adaptive_sobel_threshold,
+                       tile_sleep, reset_interval):
+    """
+    GPU worker process for vessel detection.
+
+    Each worker:
+    1. Pins to assigned GPU via CUDA_VISIBLE_DEVICES
+    2. Attaches to shared memory channel arrays
+    3. Loads SAM2 model on cuda:0 (from local /tmp copy)
+    4. Processes tiles from input_queue, puts vessels on output_queue
+
+    Workers are started once and reused across all scales to avoid
+    repeated 30s SAM2 load times.
+    """
+    os.environ['CUDA_VISIBLE_DEVICES'] = str(gpu_id)
+
+    import queue as queue_module
+    from multiprocessing.shared_memory import SharedMemory
+
+    worker_name = f"GPU-{gpu_id}"
+    print(f"[{worker_name}] Starting vessel worker...", flush=True)
+
+    # Attach to shared memory channels
+    shared_memories = []
+    channel_arrays = {}
+    try:
+        for ch_idx_str, info in channel_shm_info.items():
+            ch_idx = int(ch_idx_str) if isinstance(ch_idx_str, str) else ch_idx_str
+            shm = SharedMemory(name=info['shm_name'])
+            arr = np.ndarray(tuple(info['shape']), dtype=np.dtype(info['dtype']), buffer=shm.buf)
+            shared_memories.append(shm)
+            channel_arrays[ch_idx] = arr
+        print(f"[{worker_name}] Attached to {len(channel_arrays)} shared memory channels", flush=True)
+    except Exception as e:
+        print(f"[{worker_name}] Failed to attach shared memory: {e}", flush=True)
+        output_queue.put({'status': 'init_error', 'gpu_id': gpu_id, 'error': str(e)})
+        return
+
+    # Create SharedChannelCache
+    channel_cache = SharedChannelCache(channel_arrays, base_scale, tuple(full_res_size))
+
+    # Ensure crops dir exists (workers save crops concurrently)
+    os.makedirs(os.path.join(output_dir, 'crops'), exist_ok=True)
+
+    # Load SAM2 model (from local /tmp copy for speed)
+    try:
+        from sam2.build_sam import build_sam2
+        from sam2.automatic_mask_generator import SAM2AutomaticMaskGenerator
+
+        print(f"[{worker_name}] Loading SAM2 from {sam2_checkpoint_path}...", flush=True)
+        sam2_model = build_sam2(sam2_config, sam2_checkpoint_path, device="cuda")
+        mask_generator = SAM2AutomaticMaskGenerator(model=sam2_model, **sam2_generator_params)
+        print(f"[{worker_name}] SAM2 loaded on GPU {gpu_id}", flush=True)
+    except Exception as e:
+        print(f"[{worker_name}] Failed to load SAM2: {e}", flush=True)
+        output_queue.put({'status': 'init_error', 'gpu_id': gpu_id, 'error': str(e)})
+        for shm in shared_memories:
+            shm.close()
+        return
+
+    # Signal ready
+    output_queue.put({'status': 'ready', 'gpu_id': gpu_id})
+
+    tiles_processed = 0
+    tiles_since_reset = 0
+
+    while not stop_event.is_set():
+        try:
+            try:
+                work_item = input_queue.get(timeout=1.0)
+            except queue_module.Empty:
+                continue
+
+            if work_item is None:
+                print(f"[{worker_name}] Received shutdown signal", flush=True)
+                break
+
+            tile_x, tile_y, scale_config = work_item
+
+            try:
+                vessels = process_tile_at_scale(
+                    tile_x, tile_y, channel_cache, mask_generator, scale_config,
+                    adaptive_sobel_threshold=adaptive_sobel_threshold
+                )
+
+                output_queue.put({
+                    'status': 'success',
+                    'tile_x': tile_x,
+                    'tile_y': tile_y,
+                    'scale': scale_config['name'],
+                    'vessels': vessels,
+                })
+            except Exception as e:
+                print(f"[{worker_name}] Error at ({tile_x}, {tile_y}): {e}", flush=True)
+                import traceback
+                traceback.print_exc()
+                output_queue.put({
+                    'status': 'error',
+                    'tile_x': tile_x,
+                    'tile_y': tile_y,
+                    'scale': scale_config['name'],
+                    'error': str(e),
+                })
+
+            tiles_processed += 1
+            tiles_since_reset += 1
+
+            # Memory cleanup after each tile
+            torch.cuda.synchronize()
+            gc.collect()
+            torch.cuda.empty_cache()
+
+            # WSL2 sleep workaround
+            if tile_sleep > 0:
+                time.sleep(tile_sleep)
+
+            # Periodic SAM2 predictor reset to prevent VRAM fragmentation
+            if reset_interval > 0 and tiles_since_reset >= reset_interval:
+                if hasattr(mask_generator, 'predictor') and hasattr(mask_generator.predictor, 'reset_predictor'):
+                    mask_generator.predictor.reset_predictor()
+                torch.cuda.synchronize()
+                gc.collect()
+                torch.cuda.empty_cache()
+                tiles_since_reset = 0
+                if tile_sleep > 0:
+                    time.sleep(tile_sleep * 3)  # Longer pause on reset
+                vram_used = torch.cuda.memory_allocated() / 1e9
+                vram_cached = torch.cuda.memory_reserved() / 1e9
+                print(f"[{worker_name}] VRAM reset after {tiles_processed} tiles: "
+                      f"alloc={vram_used:.1f}GB, cached={vram_cached:.1f}GB", flush=True)
+
+        except Exception as e:
+            print(f"[{worker_name}] Worker loop error: {e}", flush=True)
+            import traceback
+            traceback.print_exc()
+
+    # Cleanup
+    print(f"[{worker_name}] Shutting down, processed {tiles_processed} tiles", flush=True)
+    del mask_generator, sam2_model
+    gc.collect()
+    torch.cuda.empty_cache()
+
+    channel_cache.release()
+    for shm in shared_memories:
+        shm.close()
+
+
+class VesselMultiGPUProcessor:
+    """
+    Multi-GPU processor for vessel detection.
+
+    Workers are started once and reused across all scales (avoids 30s SAM2 reload).
+    Uses shared memory for channel data (zero-copy tile reads).
+
+    Follows the same patterns as MultiGPUTileProcessor:
+    - Staggered worker init (start one, wait for ready, start next)
+    - SAM2 checkpoint copied to /tmp for fast loading
+    - Proper queue.Empty handling, _workers_started guard
+
+    Usage:
+        with VesselMultiGPUProcessor(...) as processor:
+            for scale_config in scales:
+                for tile_x, tile_y in tissue_tiles:
+                    processor.submit_tile(tile_x, tile_y, scale_config)
+                for _ in range(n_tiles):
+                    result = processor.collect_result()
+    """
+
+    def __init__(self, num_gpus, channel_shm_info, base_scale, full_res_size,
+                 output_dir, sam2_checkpoint_path, sam2_config, sam2_generator_params,
+                 adaptive_sobel_threshold, tile_sleep=0.0, reset_interval=0):
+        self.num_gpus = num_gpus
+        self.channel_shm_info = channel_shm_info
+        self.base_scale = base_scale
+        self.full_res_size = full_res_size
+        self.output_dir = output_dir
+        self.sam2_checkpoint_path = sam2_checkpoint_path
+        self.sam2_config = sam2_config
+        self.sam2_generator_params = sam2_generator_params
+        self.adaptive_sobel_threshold = adaptive_sobel_threshold
+        self.tile_sleep = tile_sleep
+        self.reset_interval = reset_interval
+
+        self.workers = []
+        self.input_queue = None
+        self.output_queue = None
+        self.stop_event = None
+        self.tiles_submitted = 0
+        self._local_checkpoint_path = None
+        self._workers_started = False
+
+    def _copy_checkpoint_to_local(self):
+        """Copy SAM2 checkpoint to local /tmp for faster loading from network mounts."""
+        import shutil
+        from pathlib import Path
+
+        checkpoint_path = Path(self.sam2_checkpoint_path)
+        if not checkpoint_path.exists():
+            raise FileNotFoundError(f"SAM2 checkpoint not found: {checkpoint_path}")
+
+        local_dir = Path("/tmp") / f"sam2_vessel_cache_{os.getpid()}"
+        local_dir.mkdir(exist_ok=True)
+        local_path = local_dir / checkpoint_path.name
+
+        if local_path.exists():
+            print(f"  SAM2 checkpoint already cached at {local_path}", flush=True)
+            self._local_checkpoint_path = local_path
+            return str(local_path)
+
+        print(f"  Copying SAM2 checkpoint to /tmp...", flush=True)
+        start = time.time()
+        shutil.copy2(checkpoint_path, local_path)
+        print(f"  Copied in {time.time() - start:.1f}s", flush=True)
+        self._local_checkpoint_path = local_path
+        return str(local_path)
+
+    def _cleanup_local_checkpoint(self):
+        """Remove local checkpoint copy."""
+        import shutil
+        if self._local_checkpoint_path and self._local_checkpoint_path.exists():
+            try:
+                shutil.rmtree(self._local_checkpoint_path.parent)
+            except Exception as e:
+                print(f"  Warning: failed to cleanup checkpoint: {e}", flush=True)
+
+    def start(self):
+        """Start worker processes with staggered initialization.
+
+        Starts workers one at a time, waiting for each to signal ready before
+        starting the next. This avoids GPU contention during SAM2 model loading.
+        """
+        import multiprocessing
+        import queue as queue_module
+        ctx = multiprocessing.get_context('spawn')
+
+        # Copy SAM2 checkpoint to local /tmp (once, shared by all workers)
+        local_checkpoint = self._copy_checkpoint_to_local()
+
+        self.input_queue = ctx.Queue()
+        self.output_queue = ctx.Queue()
+        self.stop_event = ctx.Event()
+
+        print(f"Starting {self.num_gpus} vessel GPU workers (staggered)...", flush=True)
+
+        ready_count = 0
+        errors = []
+
+        for gpu_id in range(self.num_gpus):
+            p = ctx.Process(
+                target=_vessel_gpu_worker,
+                args=(
+                    gpu_id,
+                    self.input_queue,
+                    self.output_queue,
+                    self.stop_event,
+                    self.channel_shm_info,
+                    self.base_scale,
+                    self.full_res_size,
+                    self.output_dir,
+                    local_checkpoint,
+                    self.sam2_config,
+                    self.sam2_generator_params,
+                    self.adaptive_sobel_threshold,
+                    self.tile_sleep,
+                    self.reset_interval,
+                ),
+                daemon=True,
+            )
+            p.start()
+            self.workers.append(p)
+            print(f"  Started vessel worker GPU-{gpu_id} (PID: {p.pid})", flush=True)
+
+            # Staggered: wait for THIS worker to be ready before starting next
+            try:
+                msg = self.output_queue.get(timeout=180)  # 3 min for SAM2 load
+                if msg.get('status') == 'ready':
+                    ready_count += 1
+                    print(f"  Worker GPU-{msg['gpu_id']} ready ({ready_count}/{self.num_gpus})", flush=True)
+                elif msg.get('status') == 'init_error':
+                    errors.append(f"GPU-{msg['gpu_id']}: {msg['error']}")
+            except queue_module.Empty:
+                errors.append(f"GPU-{gpu_id}: timeout waiting for ready")
+
+        if errors:
+            self.stop()
+            raise RuntimeError(f"Worker init errors: {errors}")
+
+        if ready_count < self.num_gpus:
+            self.stop()
+            raise RuntimeError(f"Only {ready_count}/{self.num_gpus} workers ready")
+
+        print(f"All {self.num_gpus} vessel workers ready", flush=True)
+        self._workers_started = True
+
+    def submit_tile(self, tile_x, tile_y, scale_config):
+        """Submit a tile for processing."""
+        self.input_queue.put((tile_x, tile_y, scale_config))
+        self.tiles_submitted += 1
+
+    def collect_result(self, timeout=300):
+        """Collect one tile result from workers, filtering stray init messages."""
+        if not self._workers_started:
+            raise RuntimeError("Call start() first")
+
+        import queue as queue_module
+        start = time.time()
+        remaining = timeout
+
+        while remaining > 0:
+            try:
+                result = self.output_queue.get(timeout=min(remaining, 1.0))
+                status = result.get('status')
+                if status in ('success', 'error'):
+                    return result
+                if status in ('ready', 'init_error'):
+                    continue  # Skip stray init messages
+                return result  # Unknown status, pass through
+            except queue_module.Empty:
+                remaining = timeout - (time.time() - start)
+                if remaining <= 0:
+                    return None
+                continue
+        return None
+
+    def stop(self):
+        """Stop all workers."""
+        # Send sentinels before setting stop_event (avoids race)
+        if self.input_queue:
+            for _ in range(self.num_gpus):
+                try:
+                    self.input_queue.put(None, timeout=1.0)
+                except Exception:
+                    pass
+
+        if self.stop_event:
+            self.stop_event.set()
+
+        for p in self.workers:
+            p.join(timeout=15)
+            if p.is_alive():
+                print(f"  Worker {p.pid} did not stop, terminating", flush=True)
+                p.terminate()
+
+        self.workers.clear()
+        self._cleanup_local_checkpoint()
+        self._workers_started = False
+        print("All vessel workers stopped", flush=True)
+
+    def __enter__(self):
+        self.start()
+        return self
+
+    def __exit__(self, exc_type, exc_val, exc_tb):
+        self.stop()
+        return False
+
+
 def main():
     import sys
     import argparse
@@ -2223,11 +2657,34 @@ def main():
     parser.add_argument('--resume-from', type=str, default=None,
                         help='Resume from a specific scale (e.g., "1/4", "1/2"). '
                              'Loads previously saved scale results and continues from the specified scale.')
+    parser.add_argument('--num-gpus', type=int, default=1,
+                        help='Number of GPUs for parallel tile processing (default: 1, sequential)')
+    parser.add_argument('--tile-sleep', type=float, default=None,
+                        help='Sleep seconds between tiles for GPU stability. '
+                             'Default: auto (1.0 on WSL2, 0.0 on native Linux)')
+    parser.add_argument('--predictor-reset-interval', type=int, default=None,
+                        help='Reset SAM2 predictor every N tiles to prevent VRAM fragmentation. '
+                             'Default: auto (50 on WSL2, 0/disabled on native Linux)')
     args = parser.parse_args()
+
+    # Auto-detect WSL2 for sleep/reset defaults
+    _is_wsl2 = os.path.exists('/proc/version') and 'microsoft' in open('/proc/version').read().lower()
+    tile_sleep = args.tile_sleep if args.tile_sleep is not None else (1.0 if _is_wsl2 else 0.0)
+    reset_interval = args.predictor_reset_interval if args.predictor_reset_interval is not None else (50 if _is_wsl2 else 0)
+    num_gpus = args.num_gpus
 
     print("=" * 60, flush=True)
     print("Multi-Scale SAM2 Vessel Detection", flush=True)
     print("=" * 60, flush=True)
+
+    # Create output directories (must be in main(), not module level, for multi-GPU workers)
+    os.makedirs(OUTPUT_DIR, exist_ok=True)
+    os.makedirs(os.path.join(OUTPUT_DIR, 'tiles'), exist_ok=True)
+    import shutil
+    crops_dir = os.path.join(OUTPUT_DIR, 'crops')
+    if os.path.exists(crops_dir):
+        shutil.rmtree(crops_dir)
+    os.makedirs(crops_dir, exist_ok=True)
 
     # Open CZI (don't load full-res into RAM)
     loader = CZILoader(CZI_PATH)
@@ -2240,26 +2697,20 @@ def main():
     # NOTE: Slide-wide photobleaching correction disabled - too slow on large images
     # channel_cache.apply_photobleaching_correction()
 
-    # Load SAM2
-    print("\nLoading SAM2...", flush=True)
-    from sam2.build_sam import build_sam2
-    from sam2.automatic_mask_generator import SAM2AutomaticMaskGenerator
+    # SAM2 configuration (shared between single-GPU and multi-GPU paths)
+    SAM2_CONFIG = "configs/sam2.1/sam2.1_hiera_l.yaml"
+    SAM2_CHECKPOINT = "/home/dude/code/xldvp_seg_repo/checkpoints/sam2.1_hiera_large.pt"
+    SAM2_GENERATOR_PARAMS = {
+        'points_per_side': 48,
+        'pred_iou_thresh': 0.5,
+        'stability_score_thresh': 0.7,
+        'min_mask_region_area': 100,
+    }
 
-    sam2 = build_sam2(
-        "configs/sam2.1/sam2.1_hiera_l.yaml",
-        "/home/dude/code/xldvp_seg_repo/checkpoints/sam2.1_hiera_large.pt",
-        device="cuda"
-    )
+    print(f"\nMode: {'Multi-GPU (' + str(num_gpus) + ' GPUs)' if num_gpus > 1 else 'Single-GPU'}", flush=True)
+    print(f"  tile_sleep={tile_sleep:.1f}s, reset_interval={reset_interval}", flush=True)
 
-    mask_generator = SAM2AutomaticMaskGenerator(
-        model=sam2,
-        points_per_side=48,
-        pred_iou_thresh=0.5,
-        stability_score_thresh=0.7,
-        min_mask_region_area=100,
-    )
-
-    # Compute adaptive Sobel threshold using the first (coarsest) scale
+    # Compute adaptive Sobel threshold (CPU, uses channel_cache directly)
     adaptive_sobel_threshold = compute_adaptive_sobel_threshold(channel_cache, SCALES[0]['scale_factor'])
     print(f"Adaptive Sobel threshold: {adaptive_sobel_threshold:.4f}")
 
@@ -2288,127 +2739,249 @@ def main():
         scales_to_process = SCALES[resume_idx:]
         print(f"\nResuming from scale {resume_from} with {len(all_vessels)} vessels from prior scales", flush=True)
 
-    # Process each scale
-    for scale_config in scales_to_process:
-        scale_factor = scale_config['scale_factor']
-        tile_size = scale_config.get('tile_size', TILE_SIZE)
-        stride = int(tile_size * (1 - TILE_OVERLAP))  # With 50% overlap, stride = tile_size/2
+    # ========================================================================
+    # Multi-GPU path: shared memory + worker pool
+    # ========================================================================
+    if num_gpus > 1:
+        from segmentation.processing.multigpu_shm import SharedSlideManager
 
-        print(f"\n{'='*40}", flush=True)
-        print(f"Processing scale {scale_config['name']}", flush=True)
-        print(f"  Scale factor: {scale_factor}x", flush=True)
-        print(f"  Tile size: {tile_size}px (covers {tile_size * scale_factor}px at full res)", flush=True)
-        print(f"  Stride: {stride}px ({int(TILE_OVERLAP*100)}% overlap)", flush=True)
-        print(f"  Diameter range: {scale_config['min_diam_um']}-{scale_config['max_diam_um']} µm", flush=True)
-        # VRAM status at start of scale
-        vram_used = torch.cuda.memory_allocated() / 1e9
-        vram_cached = torch.cuda.memory_reserved() / 1e9
-        print(f"  VRAM: {vram_used:.1f}GB used, {vram_cached:.1f}GB cached", flush=True)
-        print(f"{'='*40}", flush=True)
+        print(f"\nSetting up shared memory for {num_gpus} GPUs...", flush=True)
+        shm_manager = SharedSlideManager()
 
-        # Create tile grid for this scale (in SCALED coordinates)
-        # With overlap, we use stride instead of tile_size for stepping
-        scaled_mosaic_x = mosaic_size[0] // scale_factor
-        scaled_mosaic_y = mosaic_size[1] // scale_factor
-        n_tiles_x = max(1, (scaled_mosaic_x - tile_size) // stride + 1)
-        n_tiles_y = max(1, (scaled_mosaic_y - tile_size) // stride + 1)
-        total_tiles = n_tiles_x * n_tiles_y
-        print(f"Scaled mosaic: {scaled_mosaic_x} x {scaled_mosaic_y}", flush=True)
-        print(f"Tile grid: {n_tiles_x} x {n_tiles_y} = {total_tiles} tiles", flush=True)
+        # Copy channel data into shared memory
+        channel_shm_info = {}
+        for ch_idx, ch_data in channel_cache.channels.items():
+            info = shm_manager.add_slide(f"vessel_ch{ch_idx}", ch_data)
+            channel_shm_info[ch_idx] = info
 
-        # Find tissue tiles (coordinates in scaled space)
-        print("Identifying tissue tiles...", flush=True)
-        tissue_tiles = []
+        total_shm_gb = sum(ch.nbytes for ch in channel_cache.channels.values()) / (1024**3)
+        print(f"  Shared memory allocated: {total_shm_gb:.1f} GB for {len(channel_shm_info)} channels", flush=True)
 
-        for ty in tqdm(range(n_tiles_y), desc="Scanning"):
-            for tx in range(n_tiles_x):
-                # tile_x, tile_y are in SCALED coordinates (using stride for stepping)
-                tile_x = tx * stride
-                tile_y = ty * stride
+        # Release original channel cache to save ~45GB RAM (shared memory has the copy)
+        # But keep the reference for tissue tile scanning (reads from shm via SharedChannelCache)
+        channel_cache.release()
+        print("  Released original channel cache (data now in shared memory)", flush=True)
 
-                # Check for tissue using the scaled tile (from cache)
-                tile = channel_cache.get_tile(tile_x, tile_y, tile_size, SMA, scale_factor)
-                if tile is not None and is_tissue_tile(tile):
-                    tissue_tiles.append((tile_x, tile_y))
+        # Create a SharedChannelCache for main process tissue scanning
+        main_shm_channels = {}
+        from multiprocessing.shared_memory import SharedMemory as _SharedMemory
+        _main_shm_handles = []
+        for ch_idx, info in channel_shm_info.items():
+            shm = _SharedMemory(name=info['shm_name'])
+            arr = np.ndarray(tuple(info['shape']), dtype=np.dtype(info['dtype']), buffer=shm.buf)
+            main_shm_channels[ch_idx] = arr
+            _main_shm_handles.append(shm)
+        main_channel_cache = SharedChannelCache(main_shm_channels, BASE_SCALE, mosaic_size)
 
-        print(f"Found {len(tissue_tiles)} tissue tiles", flush=True)
+        # Start multi-GPU workers (once, reused across all scales)
+        with VesselMultiGPUProcessor(
+            num_gpus=num_gpus,
+            channel_shm_info=channel_shm_info,
+            base_scale=BASE_SCALE,
+            full_res_size=list(mosaic_size),
+            output_dir=OUTPUT_DIR,
+            sam2_checkpoint_path=SAM2_CHECKPOINT,
+            sam2_config=SAM2_CONFIG,
+            sam2_generator_params=SAM2_GENERATOR_PARAMS,
+            adaptive_sobel_threshold=adaptive_sobel_threshold,
+            tile_sleep=tile_sleep,
+            reset_interval=reset_interval,
+        ) as processor:
 
-        # Sample (at 100%, this just takes all tiles)
-        n_sample = max(1, int(len(tissue_tiles) * SAMPLE_FRACTION))
-        sampled_tiles = random.sample(tissue_tiles, min(n_sample, len(tissue_tiles)))
-        print(f"Processing {len(sampled_tiles)} tiles", flush=True)
+            for scale_config in scales_to_process:
+                scale_factor = scale_config['scale_factor']
+                tile_size = scale_config.get('tile_size', TILE_SIZE)
+                stride = int(tile_size * (1 - TILE_OVERLAP))
 
-        # Process
-        scale_vessels = []
-        tiles_since_reset = 0
-        RESET_INTERVAL = 50  # Reset SAM2 predictor every N tiles to prevent VRAM fragmentation
+                print(f"\n{'='*40}", flush=True)
+                print(f"Processing scale {scale_config['name']} ({num_gpus} GPUs)", flush=True)
+                print(f"  Scale factor: {scale_factor}x", flush=True)
+                print(f"  Tile size: {tile_size}px (covers {tile_size * scale_factor}px at full res)", flush=True)
+                print(f"  Stride: {stride}px ({int(TILE_OVERLAP*100)}% overlap)", flush=True)
+                print(f"{'='*40}", flush=True)
 
-        for tile_x, tile_y in tqdm(sampled_tiles, desc="Processing"):
-            try:
-                vessels = process_tile_at_scale(
-                    tile_x, tile_y, channel_cache, mask_generator, scale_config,
-                    adaptive_sobel_threshold=adaptive_sobel_threshold
-                )
-                scale_vessels.extend(vessels)
-            except Exception as e:
-                print(f"\nError at ({tile_x}, {tile_y}): {e}", flush=True)
-                import traceback
-                traceback.print_exc()
-            finally:
-                # Memory cleanup after each tile
-                torch.cuda.synchronize()
-                gc.collect()
-                torch.cuda.empty_cache()
+                # Create tile grid and find tissue tiles (CPU, main process)
+                scaled_mosaic_x = mosaic_size[0] // scale_factor
+                scaled_mosaic_y = mosaic_size[1] // scale_factor
+                n_tiles_x = max(1, (scaled_mosaic_x - tile_size) // stride + 1)
+                n_tiles_y = max(1, (scaled_mosaic_y - tile_size) // stride + 1)
+                print(f"Scaled mosaic: {scaled_mosaic_x} x {scaled_mosaic_y}", flush=True)
+                print(f"Tile grid: {n_tiles_x} x {n_tiles_y} = {n_tiles_x * n_tiles_y} tiles", flush=True)
 
-                # Brief pause to let WSL2 GPU driver reclaim memory
-                # Without this, sustained rapid alloc/dealloc cycles crash the dxgk driver
-                time.sleep(1)
+                print("Identifying tissue tiles...", flush=True)
+                tissue_tiles = []
+                for ty in tqdm(range(n_tiles_y), desc="Scanning"):
+                    for tx in range(n_tiles_x):
+                        tile_x = tx * stride
+                        tile_y = ty * stride
+                        tile = main_channel_cache.get_tile(tile_x, tile_y, tile_size, SMA, scale_factor)
+                        if tile is not None and is_tissue_tile(tile):
+                            tissue_tiles.append((tile_x, tile_y))
 
-                # Periodically reset SAM2 predictor to fully release VRAM
-                tiles_since_reset += 1
-                if tiles_since_reset >= RESET_INTERVAL:
-                    if hasattr(mask_generator, 'predictor') and hasattr(mask_generator.predictor, 'reset_predictor'):
-                        mask_generator.predictor.reset_predictor()
-                    # Force full CUDA synchronization and cleanup
+                print(f"Found {len(tissue_tiles)} tissue tiles", flush=True)
+
+                n_sample = max(1, int(len(tissue_tiles) * SAMPLE_FRACTION))
+                sampled_tiles = random.sample(tissue_tiles, min(n_sample, len(tissue_tiles)))
+                print(f"Processing {len(sampled_tiles)} tiles on {num_gpus} GPUs", flush=True)
+
+                # Submit all tiles to workers
+                for tile_x, tile_y in sampled_tiles:
+                    processor.submit_tile(tile_x, tile_y, scale_config)
+
+                # Collect all results
+                scale_vessels = []
+                for i in tqdm(range(len(sampled_tiles)), desc="Collecting"):
+                    result = processor.collect_result(timeout=600)
+                    if result is None:
+                        print(f"\n  WARNING: Timeout collecting result {i+1}/{len(sampled_tiles)}", flush=True)
+                        continue
+                    if result.get('status') == 'success':
+                        scale_vessels.extend(result.get('vessels', []))
+                    elif result.get('status') == 'error':
+                        print(f"\n  Error at ({result.get('tile_x')}, {result.get('tile_y')}): {result.get('error')}", flush=True)
+
+                print(f"Found {len(scale_vessels)} vessels at scale {scale_config['name']}", flush=True)
+                all_vessels.extend(scale_vessels)
+
+                # Save checkpoint after each scale
+                checkpoint_path = os.path.join(OUTPUT_DIR, f"checkpoint_scale_{scale_config['name'].replace('/', '_')}.json")
+                checkpoint_data = {
+                    'scale': scale_config['name'],
+                    'vessels': scale_vessels,
+                    'num_vessels': len(scale_vessels),
+                }
+                with open(checkpoint_path, 'w') as f:
+                    json.dump(checkpoint_data, f)
+                print(f"  Checkpoint saved: {checkpoint_path} ({len(scale_vessels)} vessels)", flush=True)
+
+                # Cumulative checkpoint
+                cumulative_path = os.path.join(OUTPUT_DIR, 'vessel_detections_checkpoint.json')
+                with open(cumulative_path, 'w') as f:
+                    json.dump({'vessels': all_vessels, 'scales_completed': [s['name'] for s in SCALES if s['name'] <= scale_config['name']], 'num_vessels': len(all_vessels)}, f)
+                print(f"  Cumulative checkpoint: {len(all_vessels)} vessels total", flush=True)
+
+        # Workers stopped by context manager
+        # Keep shared memory alive for post-processing (crop regen, cell composition)
+        # SharedChannelCache has same API as DownsampledChannelCache (get_tile, channels, base_width, etc.)
+        channel_cache = main_channel_cache
+        print("Workers stopped, shared memory kept alive for post-processing", flush=True)
+
+    # ========================================================================
+    # Single-GPU path: original sequential processing
+    # ========================================================================
+    else:
+        # Load SAM2 on the single GPU
+        print("\nLoading SAM2...", flush=True)
+        from sam2.build_sam import build_sam2
+        from sam2.automatic_mask_generator import SAM2AutomaticMaskGenerator
+
+        sam2 = build_sam2(SAM2_CONFIG, SAM2_CHECKPOINT, device="cuda")
+        mask_generator = SAM2AutomaticMaskGenerator(model=sam2, **SAM2_GENERATOR_PARAMS)
+
+        # Process each scale sequentially
+        for scale_config in scales_to_process:
+            scale_factor = scale_config['scale_factor']
+            tile_size = scale_config.get('tile_size', TILE_SIZE)
+            stride = int(tile_size * (1 - TILE_OVERLAP))
+
+            print(f"\n{'='*40}", flush=True)
+            print(f"Processing scale {scale_config['name']}", flush=True)
+            print(f"  Scale factor: {scale_factor}x", flush=True)
+            print(f"  Tile size: {tile_size}px (covers {tile_size * scale_factor}px at full res)", flush=True)
+            print(f"  Stride: {stride}px ({int(TILE_OVERLAP*100)}% overlap)", flush=True)
+            print(f"  Diameter range: {scale_config['min_diam_um']}-{scale_config['max_diam_um']} µm", flush=True)
+            vram_used = torch.cuda.memory_allocated() / 1e9
+            vram_cached = torch.cuda.memory_reserved() / 1e9
+            print(f"  VRAM: {vram_used:.1f}GB used, {vram_cached:.1f}GB cached", flush=True)
+            print(f"{'='*40}", flush=True)
+
+            scaled_mosaic_x = mosaic_size[0] // scale_factor
+            scaled_mosaic_y = mosaic_size[1] // scale_factor
+            n_tiles_x = max(1, (scaled_mosaic_x - tile_size) // stride + 1)
+            n_tiles_y = max(1, (scaled_mosaic_y - tile_size) // stride + 1)
+            total_tiles = n_tiles_x * n_tiles_y
+            print(f"Scaled mosaic: {scaled_mosaic_x} x {scaled_mosaic_y}", flush=True)
+            print(f"Tile grid: {n_tiles_x} x {n_tiles_y} = {total_tiles} tiles", flush=True)
+
+            print("Identifying tissue tiles...", flush=True)
+            tissue_tiles = []
+            for ty in tqdm(range(n_tiles_y), desc="Scanning"):
+                for tx in range(n_tiles_x):
+                    tile_x = tx * stride
+                    tile_y = ty * stride
+                    tile = channel_cache.get_tile(tile_x, tile_y, tile_size, SMA, scale_factor)
+                    if tile is not None and is_tissue_tile(tile):
+                        tissue_tiles.append((tile_x, tile_y))
+
+            print(f"Found {len(tissue_tiles)} tissue tiles", flush=True)
+
+            n_sample = max(1, int(len(tissue_tiles) * SAMPLE_FRACTION))
+            sampled_tiles = random.sample(tissue_tiles, min(n_sample, len(tissue_tiles)))
+            print(f"Processing {len(sampled_tiles)} tiles", flush=True)
+
+            scale_vessels = []
+            tiles_since_reset = 0
+
+            for tile_x, tile_y in tqdm(sampled_tiles, desc="Processing"):
+                try:
+                    vessels = process_tile_at_scale(
+                        tile_x, tile_y, channel_cache, mask_generator, scale_config,
+                        adaptive_sobel_threshold=adaptive_sobel_threshold
+                    )
+                    scale_vessels.extend(vessels)
+                except Exception as e:
+                    print(f"\nError at ({tile_x}, {tile_y}): {e}", flush=True)
+                    import traceback
+                    traceback.print_exc()
+                finally:
                     torch.cuda.synchronize()
                     gc.collect()
                     torch.cuda.empty_cache()
-                    tiles_since_reset = 0
-                    # Longer pause on reset
-                    time.sleep(3)
-                    # Log VRAM usage
-                    vram_used = torch.cuda.memory_allocated() / 1e9
-                    vram_cached = torch.cuda.memory_reserved() / 1e9
-                    print(f"\n  [VRAM reset] allocated={vram_used:.1f}GB, cached={vram_cached:.1f}GB", flush=True)
 
-        print(f"Found {len(scale_vessels)} vessels at scale {scale_config['name']}", flush=True)
-        all_vessels.extend(scale_vessels)
+                    if tile_sleep > 0:
+                        time.sleep(tile_sleep)
 
-        # Save checkpoint after each scale
-        checkpoint_path = os.path.join(OUTPUT_DIR, f"checkpoint_scale_{scale_config['name'].replace('/', '_')}.json")
-        checkpoint_data = {
-            'scale': scale_config['name'],
-            'vessels': scale_vessels,
-            'num_vessels': len(scale_vessels),
-        }
-        with open(checkpoint_path, 'w') as f:
-            json.dump(checkpoint_data, f)
-        print(f"  Checkpoint saved: {checkpoint_path} ({len(scale_vessels)} vessels)", flush=True)
+                    tiles_since_reset += 1
+                    if reset_interval > 0 and tiles_since_reset >= reset_interval:
+                        if hasattr(mask_generator, 'predictor') and hasattr(mask_generator.predictor, 'reset_predictor'):
+                            mask_generator.predictor.reset_predictor()
+                        torch.cuda.synchronize()
+                        gc.collect()
+                        torch.cuda.empty_cache()
+                        tiles_since_reset = 0
+                        if tile_sleep > 0:
+                            time.sleep(tile_sleep * 3)
+                        vram_used = torch.cuda.memory_allocated() / 1e9
+                        vram_cached = torch.cuda.memory_reserved() / 1e9
+                        print(f"\n  [VRAM reset] allocated={vram_used:.1f}GB, cached={vram_cached:.1f}GB", flush=True)
 
-        # Also save cumulative progress
-        cumulative_path = os.path.join(OUTPUT_DIR, 'vessel_detections_checkpoint.json')
-        with open(cumulative_path, 'w') as f:
-            json.dump({'vessels': all_vessels, 'scales_completed': [s['name'] for s in SCALES if s['name'] <= scale_config['name']], 'num_vessels': len(all_vessels)}, f)
-        print(f"  Cumulative checkpoint: {len(all_vessels)} vessels total", flush=True)
+            print(f"Found {len(scale_vessels)} vessels at scale {scale_config['name']}", flush=True)
+            all_vessels.extend(scale_vessels)
 
-        # Aggressive cleanup between scales
-        if hasattr(mask_generator, 'predictor') and hasattr(mask_generator.predictor, 'reset_predictor'):
-            mask_generator.predictor.reset_predictor()
-        torch.cuda.synchronize()
-        gc.collect()
-        torch.cuda.empty_cache()
-        vram_after = torch.cuda.memory_allocated() / 1e9
-        print(f"  [Scale complete] VRAM after cleanup: {vram_after:.1f}GB", flush=True)
+            # Save checkpoint after each scale
+            checkpoint_path = os.path.join(OUTPUT_DIR, f"checkpoint_scale_{scale_config['name'].replace('/', '_')}.json")
+            checkpoint_data = {
+                'scale': scale_config['name'],
+                'vessels': scale_vessels,
+                'num_vessels': len(scale_vessels),
+            }
+            with open(checkpoint_path, 'w') as f:
+                json.dump(checkpoint_data, f)
+            print(f"  Checkpoint saved: {checkpoint_path} ({len(scale_vessels)} vessels)", flush=True)
+
+            cumulative_path = os.path.join(OUTPUT_DIR, 'vessel_detections_checkpoint.json')
+            with open(cumulative_path, 'w') as f:
+                json.dump({'vessels': all_vessels, 'scales_completed': [s['name'] for s in SCALES if s['name'] <= scale_config['name']], 'num_vessels': len(all_vessels)}, f)
+            print(f"  Cumulative checkpoint: {len(all_vessels)} vessels total", flush=True)
+
+            # Aggressive cleanup between scales
+            if hasattr(mask_generator, 'predictor') and hasattr(mask_generator.predictor, 'reset_predictor'):
+                mask_generator.predictor.reset_predictor()
+            torch.cuda.synchronize()
+            gc.collect()
+            torch.cuda.empty_cache()
+            vram_after = torch.cuda.memory_allocated() / 1e9
+            print(f"  [Scale complete] VRAM after cleanup: {vram_after:.1f}GB", flush=True)
 
     # Merge across scales (uses adaptive IoU threshold)
     print(f"\nTotal vessels before merge: {len(all_vessels)}")
@@ -2585,15 +3158,21 @@ def main():
             count = sum(1 for v in merged_vessels if v['scale'] == scale_config['name'])
             print(f"  Scale {scale_config['name']}: {count} vessels")
 
-    # Cleanup
-    channel_cache.release()
-    loader.close()
-
     # Generate HTML
     generate_html(merged_vessels)
 
     # Generate histograms
     generate_histograms(merged_vessels, OUTPUT_DIR)
+
+    # Final cleanup
+    channel_cache.release()
+    if num_gpus > 1:
+        # Close main process shared memory handles and unlink
+        for shm in _main_shm_handles:
+            shm.close()
+        shm_manager.cleanup()
+        print("Shared memory cleaned up", flush=True)
+    loader.close()
 
     print("\nDone!")
 
