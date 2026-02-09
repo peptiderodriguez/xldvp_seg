@@ -1162,7 +1162,13 @@ def shared_calibrate_tissue_threshold(tiles, image_array, calibration_samples, b
         return 50.0
 
     logger.info(f"  Running K-means on {len(variances)} variance samples...")
-    return compute_variance_threshold(variances, default=50.0)
+    threshold = compute_variance_threshold(variances, default=50.0)
+
+    # Apply 10× reduction to catch lighter/uniform tissue — matches step 1 (compute_normalization_params.py)
+    threshold = threshold / 10.0
+    logger.info(f"  Tissue variance threshold (reduced 10x): {threshold:.1f}")
+
+    return threshold
 
 
 def run_unified_segmentation(
@@ -1648,6 +1654,10 @@ def _calibrate_and_filter_tissue(all_tiles, n_slides, calibration_block_size, ca
     variances = np.array(all_variances)
     logger.info(f"  Running K-means on {len(variances)} variance samples...")
     variance_threshold = compute_variance_threshold(variances)
+
+    # Apply 10× reduction to catch lighter/uniform tissue — matches step 1 (compute_normalization_params.py)
+    variance_threshold = variance_threshold / 10.0
+    logger.info(f"  Tissue variance threshold (reduced 10x): {variance_threshold:.1f}")
 
     logger.info(f"\nFiltering to tissue-containing tiles...")
 

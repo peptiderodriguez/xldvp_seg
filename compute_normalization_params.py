@@ -24,7 +24,7 @@ from segmentation.detection.tissue import (
 setup_logging()
 logger = get_logger(__name__)
 
-def sample_pixels_from_slide(czi_path, channel=0, n_samples=500000):
+def sample_pixels_from_slide(czi_path, channel=0, n_samples=1000000):
     """Sample random pixels from TISSUE REGIONS only (using variance-based detection)."""
     logger.info(f"Sampling from {czi_path.name}...")
 
@@ -161,7 +161,7 @@ def main():
     all_samples = []
 
     for czi_path in slides:
-        samples = sample_pixels_from_slide(czi_path, channel=0, n_samples=500000)
+        samples = sample_pixels_from_slide(czi_path, channel=0, n_samples=1000000)
         if samples is not None:
             all_samples.append(samples)
 
@@ -210,7 +210,7 @@ def main():
         'n_total_pixels': len(combined),
         'method': 'reinhard_median',
         'slides': [s.name for s in slides],
-        'samples_per_slide': 500000,
+        'samples_per_slide': 1000000,
         'sampling_method': 'tissue_aware_10x_lower_threshold',
         'tile_size': 3000,
         'block_size': 512
