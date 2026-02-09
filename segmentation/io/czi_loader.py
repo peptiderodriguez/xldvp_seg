@@ -55,21 +55,35 @@ def get_loader(
     """
     key = str(Path(czi_path).resolve())
 
+    # Look up cache under lock (fast), but do expensive channel loading outside it
+    existing = None
     with _image_cache_lock:
         if key in _image_cache:
             existing = _image_cache[key]
             logger.debug(f"Returning cached loader for {Path(czi_path).name}")
 
-            # If additional channels requested, load them lazily
-            if load_to_ram:
-                if channels:
-                    for ch in channels:
+    if existing is not None:
+        # Load additional channels outside cache lock (per-loader lock prevents double-loading)
+        if load_to_ram:
+            channels_needed = []
+            if channels:
+                channels_needed = [ch for ch in channels if ch not in existing.loaded_channels]
+            elif channel is not None and channel not in existing.loaded_channels:
+                channels_needed = [channel]
+
+            if channels_needed:
+                with existing._load_lock:
+                    for ch in channels_needed:
                         if ch not in existing.loaded_channels:
                             existing.load_channel(ch, strip_height=strip_height)
-                elif channel is not None and channel not in existing.loaded_channels:
-                    existing.load_channel(channel, strip_height=strip_height)
 
-            return existing
+        return existing
+
+    # Create new loader (constructor may be slow, but path is unique so no contention)
+    with _image_cache_lock:
+        # Double-check after re-acquiring lock
+        if key in _image_cache:
+            return _image_cache[key]
 
         logger.debug(f"Creating new loader for {Path(czi_path).name}")
         loader = CZILoader(
@@ -159,37 +173,42 @@ class CZILoader:
         self.reader = CziFile(str(self.czi_path))
         self.quiet = quiet
         self._strip_height = strip_height
+        self._load_lock = threading.Lock()
 
-        # Get mosaic info
-        self.bbox = self.reader.get_mosaic_scene_bounding_box()
-        self.x_start = self.bbox.x
-        self.y_start = self.bbox.y
-        self.width = self.bbox.w
-        self.height = self.bbox.h
+        try:
+            # Get mosaic info
+            self.bbox = self.reader.get_mosaic_scene_bounding_box()
+            self.x_start = self.bbox.x
+            self.y_start = self.bbox.y
+            self.width = self.bbox.w
+            self.height = self.bbox.h
 
-        # Multi-channel RAM data storage
-        self._channel_data: Dict[int, np.ndarray] = {}
+            # Multi-channel RAM data storage
+            self._channel_data: Dict[int, np.ndarray] = {}
 
-        # Backward compatibility: single channel_data property
-        self._primary_channel: Optional[int] = None
+            # Backward compatibility: single channel_data property
+            self._primary_channel: Optional[int] = None
 
-        if load_to_ram:
-            # Handle both single channel and multi-channel
-            channels_to_load = []
+            if load_to_ram:
+                # Handle both single channel and multi-channel
+                channels_to_load = []
 
-            if channels is not None:
-                channels_to_load = list(channels)
-            elif channel is not None:
-                channels_to_load = [channel]
-            else:
-                raise ValueError("channel or channels is required when load_to_ram=True")
+                if channels is not None:
+                    channels_to_load = list(channels)
+                elif channel is not None:
+                    channels_to_load = [channel]
+                else:
+                    raise ValueError("channel or channels is required when load_to_ram=True")
 
-            for ch in channels_to_load:
-                self._load_channel_to_ram(ch, strip_height)
+                for ch in channels_to_load:
+                    self._load_channel_to_ram(ch, strip_height)
 
-            # Set primary channel for backward compatibility
-            if channels_to_load:
-                self._primary_channel = channels_to_load[0]
+                # Set primary channel for backward compatibility
+                if channels_to_load:
+                    self._primary_channel = channels_to_load[0]
+        except Exception:
+            self.reader.close()
+            raise
 
     def _load_channel_to_ram(self, channel: int, strip_height: int):
         """Load a single channel into RAM."""
@@ -300,14 +319,7 @@ class CZILoader:
 
         n_strips = (self.height + strip_height - 1) // strip_height
 
-        # Read a small test strip to detect if this is RGB data
-        test_strip = self.reader.read_mosaic(
-            region=(self.x_start, self.y_start, min(100, self.width), min(100, self.height)),
-            scale_factor=1,
-            C=channel
-        )
-        test_strip = np.squeeze(test_strip)
-        is_rgb_data = len(test_strip.shape) == 3 and test_strip.shape[-1] == 3
+        is_rgb_data = self.is_channel_rgb(channel)
 
         if is_rgb_data and not is_rgb_buffer:
             raise ValueError(
@@ -653,7 +665,9 @@ class CZILoader:
         if tile_data is None or tile_data.size == 0:
             return None
 
-        tile_data = np.squeeze(tile_data)
+        # Remove only the batch dimension (axis 0), not spatial singletons
+        if tile_data.ndim > 0 and tile_data.shape[0] == 1:
+            tile_data = tile_data.squeeze(axis=0)
 
         # Accept both grayscale (2D) and RGB (3D) data
         if tile_data.ndim not in (2, 3):

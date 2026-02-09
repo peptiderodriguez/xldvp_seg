@@ -35,8 +35,10 @@ def calculate_block_variances(gray_image, block_size=512):
     for y in range(0, height, block_size):
         for x in range(0, width, block_size):
             block = gray_image[y:y+block_size, x:x+block_size]
-            # Skip blocks that are too small (less than 25% of full size)
-            if block.size < (block_size * block_size) / 4:
+            # Skip very small edge blocks (less than ~1.5% of full size)
+            # This prevents near-degenerate blocks from skewing statistics
+            # while still including most edge tissue
+            if block.size < (block_size * block_size) // 64:
                 continue
             variances.append(np.var(block))
             means.append(np.mean(block))
@@ -84,13 +86,11 @@ def compute_pixel_level_tissue_mask(
     # This is equivalent to computing variance in each block_size×block_size neighborhood
     from scipy.ndimage import uniform_filter
 
-    # Local mean
-    local_mean = uniform_filter(gray.astype(np.float32), size=block_size)
-
-    # Local mean of squared values
-    local_mean_sq = uniform_filter(gray.astype(np.float32) ** 2, size=block_size)
+    gray_f = gray.astype(np.float32)
 
     # Local variance: E[X²] - E[X]²
+    local_mean = uniform_filter(gray_f, size=block_size)
+    local_mean_sq = uniform_filter(gray_f ** 2, size=block_size)
     local_variance = local_mean_sq - local_mean ** 2
 
     # Threshold: pixels with variance above threshold are tissue
@@ -164,6 +164,44 @@ def has_tissue(tile_image, variance_threshold, min_tissue_fraction=0.10, block_s
     tissue_fraction = tissue_blocks / len(variances)
 
     return tissue_fraction >= min_tissue_fraction, tissue_fraction
+
+
+def compute_variance_threshold(variances, default=15.0):
+    """Compute tissue detection threshold from pre-collected variance samples using K-means.
+
+    Uses 3-cluster K-means: background (low), tissue (medium), outliers (high).
+    Returns max variance of the background cluster as the threshold.
+
+    Args:
+        variances: array-like of variance values from calculate_block_variances()
+        default: fallback threshold if insufficient samples
+
+    Returns:
+        float: variance threshold for tissue detection
+    """
+    variances = np.asarray(variances, dtype=float)
+
+    if len(variances) < 10:
+        logger.warning(f"Not enough variance samples ({len(variances)}), using default threshold {default}")
+        return default
+
+    kmeans = KMeans(n_clusters=3, random_state=42, n_init=10)
+    kmeans.fit(variances.reshape(-1, 1))
+
+    centers = kmeans.cluster_centers_.flatten()
+    labels = kmeans.labels_
+
+    # Background cluster = lowest center
+    bg_cluster_idx = np.argmin(centers)
+    bg_variances = variances[labels == bg_cluster_idx]
+
+    threshold = float(np.max(bg_variances)) if len(bg_variances) > 0 else default
+
+    sorted_centers = sorted(centers)
+    logger.info(f"  K-means centers: {sorted_centers[0]:.1f} (bg), {sorted_centers[1]:.1f} (tissue), {sorted_centers[2]:.1f} (outliers)")
+    logger.info(f"  Threshold (bg cluster max): {threshold:.1f}")
+
+    return threshold
 
 
 def calibrate_tissue_threshold(
@@ -284,24 +322,7 @@ def calibrate_tissue_threshold(
         logger.warning("Not enough samples, using default threshold 15.0")
         return 15.0
 
-    # K-means with 3 clusters: background (low var), tissue (medium var), artifacts (high var)
-    variances_array = np.array(all_variances).reshape(-1, 1)
-    kmeans = KMeans(n_clusters=3, random_state=42, n_init=10)
-    kmeans.fit(variances_array)
-
-    centers = kmeans.cluster_centers_.flatten()
-    labels = kmeans.labels_
-
-    # Find the cluster with lowest center (background)
-    bg_cluster_idx = np.argmin(centers)
-    bottom_cluster_variances = variances_array[labels == bg_cluster_idx].flatten()
-
-    threshold = float(np.max(bottom_cluster_variances)) if len(bottom_cluster_variances) > 0 else 15.0
-
-    logger.info(f"  K-means centers: {sorted(centers)[0]:.1f} (bg), {sorted(centers)[1]:.1f} (tissue), {sorted(centers)[2]:.1f} (outliers)")
-    logger.info(f"  Threshold (bg cluster max): {threshold:.1f}")
-
-    return threshold
+    return compute_variance_threshold(np.array(all_variances))
 
 
 def filter_tissue_tiles(

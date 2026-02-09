@@ -332,28 +332,22 @@ def _gpu_worker_shm(
             tile_rgb = ensure_rgb_array(tile_img)
 
             # Apply Reinhard normalization if requested (tile-by-tile to avoid OOM)
-            # Reinhard includes pixel-level tissue masking, so we can skip has_tissue check
-            applied_reinhard = False
             if normalization_method == 'reinhard' and norm_params is not None:
                 tile_rgb = apply_reinhard_normalization(
                     tile_rgb,
                     norm_params,
                     variance_threshold=variance_threshold
                 )
-                applied_reinhard = True
 
             # Prepare for detection (percentile normalization, disabled for Reinhard)
             use_percentile_norm = (normalization_method != 'reinhard')
             tile_normalized = prepare_tile_for_detection(tile_rgb, normalize=use_percentile_norm)
 
-            # Check for tissue - skip if Reinhard already did pixel-level masking (avoids duplicate variance computation)
-            if applied_reinhard:
-                has_tissue_flag = True  # Reinhard already filtered to tissue pixels
-            else:
-                try:
-                    has_tissue_flag, _ = has_tissue(tile_normalized, variance_threshold, block_size=calibration_block_size)
-                except Exception:
-                    has_tissue_flag = True  # Assume tissue on error
+            # Check for tissue (always run — Reinhard normalizes but does not filter out background)
+            try:
+                has_tissue_flag, _ = has_tissue(tile_normalized, variance_threshold, block_size=calibration_block_size)
+            except Exception:
+                has_tissue_flag = True  # Assume tissue on error
 
             if not has_tissue_flag:
                 output_queue.put(build_mk_hspc_result(

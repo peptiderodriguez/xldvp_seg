@@ -57,8 +57,8 @@ python run_unified_FAST.py \
     --hspc-max-area-um 150 \
     --cleanup-masks \
     --normalize-slides \
-    --norm-percentile-low 1.0 \
-    --norm-percentile-high 99.0
+    --normalization-method reinhard \
+    --norm-params-file /viper/ptmp2/edrod/xldvp_seg_fresh/reinhard_params_16slides_MEDIAN_NEW.json
 "
 
     echo "  Submitted batch $((i+1)): $SLIDES"

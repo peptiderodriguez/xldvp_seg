@@ -25,7 +25,7 @@ cd /viper/ptmp2/edrod/xldvp_seg_fresh
 
 # Run validation on ALL 16 slides
 python validate_reinhard_normalization.py \
-    --params reinhard_params_16slides.json \
+    --params reinhard_params_16slides_MEDIAN_NEW.json \
     --slides \
         2025_11_18_FGC1.czi \
         2025_11_18_FGC2.czi \

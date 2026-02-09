@@ -39,6 +39,7 @@ from segmentation.io.html_export import (
 )
 from segmentation.detection.tissue import (
     calibrate_tissue_threshold,
+    compute_variance_threshold,
     filter_tissue_tiles,
     has_tissue,
     calculate_block_variances,
@@ -84,20 +85,15 @@ import numpy as np
 import cv2
 import h5py
 import json
-from pathlib import Path
 import argparse
 from tqdm import tqdm
 import torch
 import torchvision.models as tv_models
 import torchvision.transforms as tv_transforms
 import torch.multiprocessing as mp
-from multiprocessing import shared_memory
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from PIL import Image
 import psutil
-import base64
-from io import BytesIO
-import re
 from skimage.color import rgb2hed
 
 
@@ -1166,15 +1162,7 @@ def shared_calibrate_tissue_threshold(tiles, image_array, calibration_samples, b
         return 50.0
 
     logger.info(f"  Running K-means on {len(variances)} variance samples...")
-    centers, labels = _calibrate_variance_threshold(variances)
-    sorted_centers = sorted(centers)
-
-    # Threshold between background and tissue clusters
-    variance_threshold = (sorted_centers[0] + sorted_centers[1]) / 2
-    logger.info(f"  K-means centers: {sorted_centers[0]:.1f} (bg), {sorted_centers[1]:.1f} (tissue), {sorted_centers[2]:.1f} (outliers)")
-    logger.info(f"  Tissue threshold: {variance_threshold:.1f}")
-
-    return variance_threshold
+    return compute_variance_threshold(variances, default=50.0)
 
 
 def run_unified_segmentation(
@@ -1493,7 +1481,7 @@ def run_unified_segmentation(
         'pixel_size_um': pixel_size_um,
         'mk_count': mk_count,
         'hspc_count': hspc_count,
-        'feature_count': '22 morphological + 256 SAM2 + 2048 ResNet = 2326'
+        'feature_count': f'{MORPHOLOGICAL_FEATURES_COUNT} morphological + {SAM2_EMBEDDING_DIMENSION} SAM2 + {RESNET_EMBEDDING_DIMENSION} ResNet = {TOTAL_FEATURES_PER_CELL}'
     }
 
     with open(output_dir / "summary.json", 'w') as f:
@@ -1508,32 +1496,6 @@ def run_unified_segmentation(
     logger.info(f"Output: {output_dir}")
     logger.info(f"  MK tiles: {output_dir}/mk/tiles/")
     logger.info(f"  HSPC tiles: {output_dir}/hspc/tiles/")
-
-
-def _calibrate_variance_threshold(variances):
-    """
-    Performs K-means clustering on variance samples to identify tissue regions.
-
-    Uses 3 clusters to separate:
-    - Background (low variance)
-    - Tissue (medium variance)
-    - Outliers (high variance)
-
-    Args:
-        variances: numpy array of variance values
-
-    Returns:
-        tuple: (centers, labels) where:
-            - centers: cluster centers as flattened array
-            - labels: cluster assignments for each variance sample
-    """
-    from sklearn.cluster import KMeans
-
-    kmeans = KMeans(n_clusters=3, random_state=42, n_init=10).fit(variances.reshape(-1, 1))
-    centers = kmeans.cluster_centers_.flatten()
-    labels = kmeans.labels_
-
-    return centers, labels
 
 
 def _phase1_load_slides(czi_paths, tile_size, overlap, channel, norm_method='none', norm_params=None):
@@ -1635,46 +1597,108 @@ def _phase1_load_slides(czi_paths, tile_size, overlap, channel, norm_method='non
     return slide_data, slide_loaders
 
 
-def _phase2_identify_tissue_tiles(slide_data, tile_size, overlap, variance_threshold, calibration_block_size, calibration_samples):
-    """
-    Phase 2: Create tiles and identify tissue-containing tiles across all slides.
-
-    Creates a grid of tiles for each slide, calibrates a tissue detection threshold
-    using K-means clustering on variance samples, and filters tiles to keep only
-    those containing tissue.
+def _calibrate_and_filter_tissue(all_tiles, n_slides, calibration_block_size, calibration_samples,
+                                   get_tile_fn, desc_suffix=""):
+    """Shared calibration + tissue filtering logic for Phase 2.
 
     Args:
-        slide_data: dict mapping slide_name -> {'image': np.array, 'shape': tuple, 'czi_path': Path}
-        tile_size: Size of tiles in pixels.
-        overlap: Overlap between tiles in pixels.
-        variance_threshold: Initial variance threshold (may be recalibrated).
-        calibration_block_size: Block size for variance calculation.
-        calibration_samples: Number of samples per slide for threshold calibration.
+        all_tiles: list of (slide_name, tile_dict) tuples
+        n_slides: number of slides (for scaling calibration samples)
+        calibration_block_size: block size for variance calculation
+        calibration_samples: samples per slide for threshold calibration
+        get_tile_fn: callable(slide_name, tile) -> np.ndarray or None
+        desc_suffix: suffix for tqdm progress bars (e.g. " (streaming)")
 
     Returns:
-        tuple: (tissue_tiles, variance_threshold) where:
-            - tissue_tiles: list of (slide_name, tile_dict) tuples for tiles containing tissue
-            - variance_threshold: Calibrated variance threshold used for tissue detection
+        tuple: (tissue_tiles, variance_threshold)
     """
     import cv2
 
-    logger.info(f"\n{'='*70}")
-    logger.info("PHASE 2: IDENTIFYING TISSUE TILES")
-    logger.info(f"{'='*70}")
+    n_calib_samples = min(calibration_samples * n_slides, len(all_tiles))
+    logger.info(f"\nCalibrating tissue threshold from {n_calib_samples} samples...")
 
+    np.random.seed(42)
+    calib_indices = np.random.choice(len(all_tiles), n_calib_samples, replace=False)
+    calib_tiles = [all_tiles[idx] for idx in calib_indices]
+
+    calib_threads = max(1, int(os.cpu_count() * 0.8))
+
+    def calc_tile_variances(args):
+        slide_name, tile = args
+        tile_img = get_tile_fn(slide_name, tile)
+
+        if tile_img is None or tile_img.max() == 0:
+            return [0.0]
+
+        if tile_img.ndim == 3:
+            gray = cv2.cvtColor(tile_img.astype(np.uint8), cv2.COLOR_RGB2GRAY)
+        else:
+            gray = tile_img.astype(np.uint8) if tile_img.dtype != np.uint8 else tile_img
+
+        block_vars, _ = calculate_block_variances(gray, calibration_block_size)
+        return block_vars if block_vars else []
+
+    all_variances = []
+    with ThreadPoolExecutor(max_workers=calib_threads) as executor:
+        futures = {executor.submit(calc_tile_variances, tile): tile for tile in calib_tiles}
+        for future in tqdm(as_completed(futures), total=len(calib_tiles), desc=f"Calibrating{desc_suffix}"):
+            result = future.result()
+            all_variances.extend(result)
+
+    variances = np.array(all_variances)
+    logger.info(f"  Running K-means on {len(variances)} variance samples...")
+    variance_threshold = compute_variance_threshold(variances)
+
+    logger.info(f"\nFiltering to tissue-containing tiles...")
+
+    tissue_check_threads = max(1, int(os.cpu_count() * 0.8))
+    logger.info(f"  Using {tissue_check_threads} threads for parallel tissue checking")
+
+    def check_tile_tissue(args):
+        slide_name, tile = args
+        tile_img = get_tile_fn(slide_name, tile)
+
+        if tile_img is None or tile_img.max() == 0:
+            return None
+
+        has_tissue_flag, _ = has_tissue(tile_img, variance_threshold, block_size=calibration_block_size)
+
+        if has_tissue_flag:
+            return (slide_name, tile)
+        return None
+
+    tissue_tiles = []
+    with ThreadPoolExecutor(max_workers=tissue_check_threads) as executor:
+        futures = {executor.submit(check_tile_tissue, tile_args): tile_args for tile_args in all_tiles}
+        for future in tqdm(as_completed(futures), total=len(all_tiles), desc=f"Checking tissue{desc_suffix}"):
+            result = future.result()
+            if result is not None:
+                tissue_tiles.append(result)
+
+    logger.info(f"\nTissue tiles: {len(tissue_tiles)} / {len(all_tiles)} ({100*len(tissue_tiles)/len(all_tiles):.1f}%)")
+
+    return tissue_tiles, variance_threshold
+
+
+def _create_tile_grid(slide_names_and_sizes, tile_size, overlap):
+    """Create tile grid for multiple slides.
+
+    Args:
+        slide_names_and_sizes: list of (slide_name, full_width, full_height) tuples
+        tile_size: tile size in pixels
+        overlap: overlap between tiles in pixels
+
+    Returns:
+        list of (slide_name, tile_dict) tuples
+    """
     all_tiles = []
-
-    for slide_name, data in slide_data.items():
-        img = data['image']
-        full_width, full_height = data['shape']
-
+    for slide_name, full_width, full_height in slide_names_and_sizes:
         n_tx = int(np.ceil(full_width / (tile_size - overlap)))
         n_ty = int(np.ceil(full_height / (tile_size - overlap)))
 
         slide_tiles = []
         for ty in range(n_ty):
             for tx in range(n_tx):
-                # Use globally unique tile ID to prevent collisions across slides
                 tile = {
                     'id': f"{slide_name}_{len(slide_tiles)}",
                     'x': tx * (tile_size - overlap),
@@ -1685,112 +1709,32 @@ def _phase2_identify_tissue_tiles(slide_data, tile_size, overlap, variance_thres
                 slide_tiles.append(tile)
 
         logger.info(f"  {slide_name}: {len(slide_tiles)} tiles")
+        all_tiles.extend((slide_name, tile) for tile in slide_tiles)
 
-        for tile in slide_tiles:
-            all_tiles.append((slide_name, tile))
+    return all_tiles
 
+
+def _phase2_identify_tissue_tiles(slide_data, tile_size, overlap, variance_threshold, calibration_block_size, calibration_samples):
+    """Phase 2: Create tiles and identify tissue-containing tiles (RAM mode)."""
+    logger.info(f"\n{'='*70}")
+    logger.info("PHASE 2: IDENTIFYING TISSUE TILES")
+    logger.info(f"{'='*70}")
+
+    slide_sizes = [(name, data['shape'][0], data['shape'][1]) for name, data in slide_data.items()]
+    all_tiles = _create_tile_grid(slide_sizes, tile_size, overlap)
     logger.info(f"\nTotal tiles across all slides: {len(all_tiles)}")
 
-    n_calib_samples = min(calibration_samples * len(slide_data), len(all_tiles))
-    logger.info(f"\nCalibrating tissue threshold from {n_calib_samples} samples...")
-
-    np.random.seed(42)
-    calib_indices = np.random.choice(len(all_tiles), n_calib_samples, replace=False)
-    calib_tiles = [all_tiles[idx] for idx in calib_indices]
-
-    calib_threads = max(1, int(os.cpu_count() * 0.8))
-
-    def calc_tile_variances(args):
-        slide_name, tile = args
+    def get_tile_from_ram(slide_name, tile):
         img = slide_data[slide_name]['image']
-        tile_img = img[tile['y']:tile['y']+tile['h'], tile['x']:tile['x']+tile['w']]
+        return img[tile['y']:tile['y']+tile['h'], tile['x']:tile['x']+tile['w']]
 
-        if tile_img.max() == 0:
-            return [0.0]
-
-        # Normalization disabled for H&E - use raw pixel values
-        if tile_img.ndim == 3:
-            gray = cv2.cvtColor(tile_img.astype(np.uint8), cv2.COLOR_RGB2GRAY)
-        else:
-            gray = tile_img.astype(np.uint8) if tile_img.dtype != np.uint8 else tile_img
-
-        block_vars, _ = calculate_block_variances(gray, calibration_block_size)
-        return block_vars if block_vars else []
-
-    all_variances = []
-    with ThreadPoolExecutor(max_workers=calib_threads) as executor:
-        futures = {executor.submit(calc_tile_variances, tile): tile for tile in calib_tiles}
-        for future in tqdm(as_completed(futures), total=len(calib_tiles), desc="Calibrating"):
-            result = future.result()
-            all_variances.extend(result)
-
-    variances = np.array(all_variances)
-    logger.info(f"  Running K-means on {len(variances)} variance samples...")
-    centers, labels = _calibrate_variance_threshold(variances)
-    sorted_indices = np.argsort(centers)
-    bottom_cluster_idx = sorted_indices[0]
-    bottom_cluster_variances = variances[labels == bottom_cluster_idx]
-    variance_threshold = float(np.max(bottom_cluster_variances)) if len(bottom_cluster_variances) > 0 else 15.0
-
-    logger.info(f"  K-means centers: {sorted(centers)[0]:.1f} (bg), {sorted(centers)[1]:.1f} (tissue), {sorted(centers)[2]:.1f} (outliers)")
-    logger.info(f"  Threshold: {variance_threshold:.1f}")
-
-    logger.info(f"\nFiltering to tissue-containing tiles...")
-
-    tissue_check_threads = max(1, int(os.cpu_count() * 0.8))
-    logger.info(f"  Using {tissue_check_threads} threads for parallel tissue checking")
-
-    def check_tile_tissue(args):
-        slide_name, tile = args
-        img = slide_data[slide_name]['image']
-        tile_img = img[tile['y']:tile['y']+tile['h'], tile['x']:tile['x']+tile['w']]
-
-        if tile_img.max() == 0:
-            return None
-
-        # Normalization disabled for H&E - use raw pixel values
-        has_tissue_flag, _ = has_tissue(tile_img, variance_threshold, block_size=calibration_block_size)
-
-        if has_tissue_flag:
-            return (slide_name, tile)
-        return None
-
-    tissue_tiles = []
-    with ThreadPoolExecutor(max_workers=tissue_check_threads) as executor:
-        futures = {executor.submit(check_tile_tissue, tile_args): tile_args for tile_args in all_tiles}
-        for future in tqdm(as_completed(futures), total=len(all_tiles), desc="Checking tissue"):
-            result = future.result()
-            if result is not None:
-                tissue_tiles.append(result)
-
-    logger.info(f"\nTissue tiles: {len(tissue_tiles)} / {len(all_tiles)} ({100*len(tissue_tiles)/len(all_tiles):.1f}%)")
-
-    return tissue_tiles, variance_threshold
+    return _calibrate_and_filter_tissue(
+        all_tiles, len(slide_data), calibration_block_size, calibration_samples, get_tile_from_ram
+    )
 
 
 def _phase2_identify_tissue_tiles_streaming(slide_loaders, tile_size, overlap, variance_threshold, calibration_block_size, calibration_samples, channel):
-    """
-    Phase 2 (Streaming): Create tiles and identify tissue-containing tiles across all slides.
-
-    Similar to _phase2_identify_tissue_tiles(), but reads tiles on-demand from CZI files
-    using the loader's get_tile() method instead of accessing pre-loaded RAM data.
-    This is useful when slides are too large to fit in RAM.
-
-    Args:
-        slide_loaders: dict mapping slide_name -> CZILoader instance
-        tile_size: Size of tiles in pixels.
-        overlap: Overlap between tiles in pixels.
-        variance_threshold: Initial variance threshold (may be recalibrated).
-        calibration_block_size: Block size for variance calculation.
-        calibration_samples: Number of samples per slide for threshold calibration.
-        channel: Channel index to read from CZI files.
-
-    Returns:
-        tuple: (tissue_tiles, variance_threshold) where:
-            - tissue_tiles: list of (slide_name, tile_dict) tuples for tiles containing tissue
-            - variance_threshold: Calibrated variance threshold used for tissue detection
-    """
-    import cv2
+    """Phase 2 (Streaming): Identify tissue tiles by reading from CZI on-demand."""
     from segmentation.processing.memory import log_memory_status
 
     log_memory_status("Phase 2 tissue detection (streaming) - START")
@@ -1799,123 +1743,19 @@ def _phase2_identify_tissue_tiles_streaming(slide_loaders, tile_size, overlap, v
     logger.info("PHASE 2: IDENTIFYING TISSUE TILES (STREAMING MODE)")
     logger.info(f"{'='*70}")
 
-    all_tiles = []
-
-    for slide_name, loader in slide_loaders.items():
-        full_width, full_height = loader.mosaic_size
-
-        n_tx = int(np.ceil(full_width / (tile_size - overlap)))
-        n_ty = int(np.ceil(full_height / (tile_size - overlap)))
-
-        slide_tiles = []
-        for ty in range(n_ty):
-            for tx in range(n_tx):
-                # Keep 0-based relative coordinates for consistency with shared memory indexing
-                # (get_tile calls will convert to global coordinates internally)
-                # Use globally unique tile ID to prevent collisions across slides
-                tile = {
-                    'id': f"{slide_name}_{len(slide_tiles)}",
-                    'x': tx * (tile_size - overlap),
-                    'y': ty * (tile_size - overlap),
-                    'w': min(tile_size, full_width - tx * (tile_size - overlap)),
-                    'h': min(tile_size, full_height - ty * (tile_size - overlap))
-                }
-                slide_tiles.append(tile)
-
-        logger.info(f"  {slide_name}: {len(slide_tiles)} tiles (mosaic: {full_width}x{full_height})")
-
-        for tile in slide_tiles:
-            all_tiles.append((slide_name, tile))
-
+    slide_sizes = [(name, loader.mosaic_size[0], loader.mosaic_size[1]) for name, loader in slide_loaders.items()]
+    all_tiles = _create_tile_grid(slide_sizes, tile_size, overlap)
     logger.info(f"\nTotal tiles across all slides: {len(all_tiles)}")
 
-    n_calib_samples = min(calibration_samples * len(slide_loaders), len(all_tiles))
-    logger.info(f"\nCalibrating tissue threshold from {n_calib_samples} samples...")
-
-    np.random.seed(42)
-    calib_indices = np.random.choice(len(all_tiles), n_calib_samples, replace=False)
-    calib_tiles = [all_tiles[idx] for idx in calib_indices]
-
-    calib_threads = max(1, int(os.cpu_count() * 0.8))
-
-    def calc_tile_variances(args):
-        slide_name, tile = args
+    def get_tile_from_czi(slide_name, tile):
         loader = slide_loaders[slide_name]
-        # Convert 0-based relative coords to global mosaic coords for get_tile()
         x_origin, y_origin = loader.mosaic_origin
-        global_x = x_origin + tile['x']
-        global_y = y_origin + tile['y']
-        tile_img = loader.get_tile(global_x, global_y, tile_size, channel)
+        return loader.get_tile(x_origin + tile['x'], y_origin + tile['y'], tile_size, channel)
 
-        if tile_img is None:
-            return [0.0]
-
-        if tile_img.max() == 0:
-            return [0.0]
-
-        # Normalization disabled for H&E - use raw pixel values
-        if tile_img.ndim == 3:
-            gray = cv2.cvtColor(tile_img.astype(np.uint8), cv2.COLOR_RGB2GRAY)
-        else:
-            gray = tile_img.astype(np.uint8) if tile_img.dtype != np.uint8 else tile_img
-
-        block_vars, _ = calculate_block_variances(gray, calibration_block_size)
-        return block_vars if block_vars else []
-
-    all_variances = []
-    with ThreadPoolExecutor(max_workers=calib_threads) as executor:
-        futures = {executor.submit(calc_tile_variances, tile): tile for tile in calib_tiles}
-        for future in tqdm(as_completed(futures), total=len(calib_tiles), desc="Calibrating (streaming)"):
-            result = future.result()
-            all_variances.extend(result)
-
-    variances = np.array(all_variances)
-    logger.info(f"  Running K-means on {len(variances)} variance samples...")
-    centers, labels = _calibrate_variance_threshold(variances)
-    sorted_indices = np.argsort(centers)
-    bottom_cluster_idx = sorted_indices[0]
-    bottom_cluster_variances = variances[labels == bottom_cluster_idx]
-    variance_threshold = float(np.max(bottom_cluster_variances)) if len(bottom_cluster_variances) > 0 else 15.0
-
-    logger.info(f"  K-means centers: {sorted(centers)[0]:.1f} (bg), {sorted(centers)[1]:.1f} (tissue), {sorted(centers)[2]:.1f} (outliers)")
-    logger.info(f"  Threshold: {variance_threshold:.1f}")
-
-    logger.info(f"\nFiltering to tissue-containing tiles...")
-
-    tissue_check_threads = max(1, int(os.cpu_count() * 0.8))
-    logger.info(f"  Using {tissue_check_threads} threads for parallel tissue checking")
-
-    def check_tile_tissue(args):
-        slide_name, tile = args
-        loader = slide_loaders[slide_name]
-        # Convert 0-based relative coords to global mosaic coords for get_tile()
-        x_origin, y_origin = loader.mosaic_origin
-        global_x = x_origin + tile['x']
-        global_y = y_origin + tile['y']
-        tile_img = loader.get_tile(global_x, global_y, tile_size, channel)
-
-        if tile_img is None:
-            return None
-
-        if tile_img.max() == 0:
-            return None
-
-        # Normalization disabled for H&E - use raw pixel values
-        has_tissue_flag, _ = has_tissue(tile_img, variance_threshold, block_size=calibration_block_size)
-
-        if has_tissue_flag:
-            return (slide_name, tile)
-        return None
-
-    tissue_tiles = []
-    with ThreadPoolExecutor(max_workers=tissue_check_threads) as executor:
-        futures = {executor.submit(check_tile_tissue, tile_args): tile_args for tile_args in all_tiles}
-        for future in tqdm(as_completed(futures), total=len(all_tiles), desc="Checking tissue (streaming)"):
-            result = future.result()
-            if result is not None:
-                tissue_tiles.append(result)
-
-    logger.info(f"\nTissue tiles: {len(tissue_tiles)} / {len(all_tiles)} ({100*len(tissue_tiles)/len(all_tiles):.1f}%)")
+    tissue_tiles, variance_threshold = _calibrate_and_filter_tissue(
+        all_tiles, len(slide_loaders), calibration_block_size, calibration_samples,
+        get_tile_from_czi, desc_suffix=" (streaming)"
+    )
 
     log_memory_status("Phase 2 tissue detection (streaming) - END")
 
@@ -1976,6 +1816,8 @@ def _phase4_process_tiles(
     samples_per_page,
     mk_min_area_um,
     mk_max_area_um,
+    hspc_min_area=25,
+    hspc_max_area=100,
     multi_gpu=False,
     num_gpus=4,
     norm_params=None,
@@ -2285,6 +2127,11 @@ def _phase4_process_tiles(
         actual_gpus = min(num_workers, torch.cuda.device_count()) if torch.cuda.is_available() else 1
         logger.info(f"Using {actual_gpus} GPUs for processing")
 
+        if normalization_method != 'none' and norm_params is None:
+            logger.warning(f"Normalization method is '{normalization_method}' but norm_params is None — "
+                           f"tiles will NOT be normalized by GPU workers. "
+                           f"Ensure normalization was applied at slide level before calling _phase4_process_tiles().")
+
         try:
             with MultiGPUTileProcessorSHM(
                 num_gpus=actual_gpus,
@@ -2297,6 +2144,8 @@ def _phase4_process_tiles(
                 variance_threshold=variance_threshold,
                 calibration_block_size=calibration_block_size,
                 cleanup_config=cleanup_config,
+                norm_params=norm_params,
+                normalization_method=normalization_method,
             ) as processor:
                 # Submit all tiles (only coordinates, not data!)
                 logger.info(f"Submitting {len(sampled_tiles)} tiles to {actual_gpus} GPUs (shared memory)...")
@@ -2342,7 +2191,7 @@ def _phase4_process_tiles(
                 'pixel_size_um': pixel_size_um,
                 'mk_count': sr['mk_count'],
                 'hspc_count': sr['hspc_count'],
-                'feature_count': '22 morphological + 256 SAM2 + 2048 ResNet = 2326'
+                'feature_count': f'{MORPHOLOGICAL_FEATURES_COUNT} morphological + {SAM2_EMBEDDING_DIMENSION} SAM2 + {RESNET_EMBEDDING_DIMENSION} ResNet = {TOTAL_FEATURES_PER_CELL}'
             }
             with open(output_dir / "summary.json", 'w') as f:
                 json.dump(summary, f, indent=2)
@@ -2903,6 +2752,8 @@ def run_multi_slide_segmentation(
             samples_per_page=samples_per_page,
             mk_min_area_um=mk_min_area_um,
             mk_max_area_um=mk_max_area_um,
+            hspc_min_area=hspc_min_area,
+            hspc_max_area=hspc_max_area,
             multi_gpu=False,  # Don't use multi-GPU in standard mode
             num_gpus=num_gpus,
         )
@@ -2920,74 +2771,6 @@ def run_multi_slide_segmentation(
     logger.info(f"Total MKs: {total_mk}")
     logger.info(f"Total HSPCs: {total_hspc}")
     logger.info(f"Output: {output_base}")
-
-
-def process_tile_worker_with_data_and_slide(args):
-    """
-    Worker function for unified sampling mode - includes slide_name in result.
-    """
-    tile, img_data, output_dir, mk_min_area, mk_max_area, hspc_min_area, hspc_max_area, variance_threshold, calibration_block_size, slide_name = args
-
-    global segmenter
-    tid = tile['id']
-
-    if segmenter is None:
-        return {'tid': tid, 'status': 'error', 'error': "Segmenter not initialized", 'slide_name': slide_name}
-
-    # Convert to RGB
-    if img_data.ndim == 2:
-        img_rgb = np.stack([img_data]*3, axis=-1)
-    elif img_data.shape[2] == 4:
-        img_rgb = img_data[:, :, :3]
-    else:
-        img_rgb = img_data
-
-    if img_rgb.max() == 0:
-        return {'tid': tid, 'status': 'empty', 'slide_name': slide_name}
-
-    # Normalization disabled for H&E images - raw pixel values work better
-    # img_rgb = percentile_normalize(img_rgb, p_low=5, p_high=95)
-
-    try:
-        mk_masks, hspc_masks, mk_feats, hspc_feats = segmenter.process_tile(
-            img_rgb, mk_min_area, mk_max_area, hspc_min_area, hspc_max_area,
-            hspc_nuclear_only=cleanup_config.get('hspc_nuclear_only', False),
-            cleanup_masks=cleanup_config.get('cleanup_masks', False),
-            fill_holes=cleanup_config.get('fill_holes', True),
-            pixel_size_um=cleanup_config.get('pixel_size_um', 0.1725)
-        )
-
-        # Generate crops for each detection (with optional cleanup)
-        for feat in mk_feats:
-            _, crop_result = process_detection_with_cleanup(
-                feat, mk_masks, img_rgb, 'mk',
-                cleanup_masks=cleanup_config['cleanup_masks'],
-                fill_holes=cleanup_config['fill_holes'],
-                pixel_size_um=cleanup_config['pixel_size_um'],
-            )
-            if crop_result:
-                feat['crop_b64'] = crop_result['crop']
-                feat['mask_b64'] = crop_result['mask']
-
-        for feat in hspc_feats:
-            _, crop_result = process_detection_with_cleanup(
-                feat, hspc_masks, img_rgb, 'hspc',
-                cleanup_masks=cleanup_config['cleanup_masks'],
-                fill_holes=cleanup_config['fill_holes'],
-                pixel_size_um=cleanup_config['pixel_size_um'],
-            )
-            if crop_result:
-                feat['crop_b64'] = crop_result['crop']
-                feat['mask_b64'] = crop_result['mask']
-
-        return {
-            'tid': tid, 'status': 'success',
-            'mk_masks': mk_masks, 'hspc_masks': hspc_masks,
-            'mk_feats': mk_feats, 'hspc_feats': hspc_feats,
-            'tile': tile, 'slide_name': slide_name
-        }
-    except Exception as e:
-        return {'tid': tid, 'status': 'error', 'error': f"Processing error: {e}", 'slide_name': slide_name}
 
 
 def process_tile_gpu_only(args):
@@ -3048,22 +2831,16 @@ def process_tile_gpu_only(args):
         return {'tid': tid, 'status': 'error', 'error': f"Processing error: {e}", 'slide_name': slide_name}
 
 
-def preprocess_tile_cpu(slide_data, slide_name, tile, use_pinned_memory=True,
-                        norm_params=None, normalization_method='none', variance_threshold=15.0):
+def preprocess_tile_cpu(slide_data, slide_name, tile, use_pinned_memory=True):
     """
     CPU pre-processing: extract tile from RAM (already normalized at slide-level).
     Runs in ThreadPoolExecutor in main process.
 
-    NOTE: Normalization is applied at SLIDE-LEVEL in Phase 1, not per-tile!
+    Normalization is applied at SLIDE-LEVEL in Phase 1, not per-tile.
     The slide_data['image'] contains pre-normalized data if normalization was requested.
 
     If use_pinned_memory=True and CUDA available, allocates output in pinned memory
-    for faster CPU→GPU transfer (DMA, doesn't block CPU).
-
-    Args:
-        norm_params: DEPRECATED - normalization now happens in Phase 1
-        normalization_method: DEPRECATED - normalization now happens in Phase 1
-        variance_threshold: DEPRECATED - normalization now happens in Phase 1
+    for faster CPU->GPU transfer (DMA, doesn't block CPU).
     """
     img = slide_data[slide_name]['image']
     tile_img = img[tile['y']:tile['y']+tile['h'],
@@ -3089,7 +2866,7 @@ def preprocess_tile_cpu(slide_data, slide_name, tile, use_pinned_memory=True,
             img_tensor = torch.from_numpy(img_rgb).pin_memory()
             # Note: img_rgb still references same memory, now pinned
         except Exception as e:
-            logger.debug(f"Failed to pin memory, using regular memory: {e}")
+            logger.info(f"Failed to pin memory, using regular memory: {e}")
 
     return (tile, img_rgb, slide_name)
 
@@ -3199,6 +2976,8 @@ def run_pipelined_segmentation(
     variance_threshold,
     mk_min_area=1000,
     mk_max_area=100000,
+    hspc_min_area=25,
+    hspc_max_area=100,
     num_workers=1,
     mk_classifier_path=None,
     hspc_classifier_path=None,
@@ -3283,9 +3062,7 @@ def run_pipelined_segmentation(
         with ThreadPoolExecutor(max_workers=preprocess_threads) as executor:
             futures = []
             for slide_name, tile in sampled_tiles:
-                future = executor.submit(preprocess_tile_cpu, slide_data, slide_name, tile,
-                                        norm_params=norm_params, normalization_method=normalization_method,
-                                        variance_threshold=variance_threshold)
+                future = executor.submit(preprocess_tile_cpu, slide_data, slide_name, tile)
                 futures.append(future)
 
             for future in as_completed(futures):
@@ -3397,78 +3174,6 @@ def run_pipelined_segmentation(
     logger.info(f"Total HSPCs: {total_hspc}")
 
     return slide_results
-
-
-def process_tile_worker_with_data(args):
-    """
-    Worker function that receives tile image data directly (for multi-slide mode).
-    Models are already loaded in the worker via init_worker.
-    """
-    tile, img_data, output_dir, mk_min_area, mk_max_area, hspc_min_area, hspc_max_area, variance_threshold, calibration_block_size = args
-
-    global segmenter
-    tid = tile['id']
-
-    if segmenter is None:
-        return {'tid': tid, 'status': 'error', 'error': "Segmenter not initialized"}
-
-    # Convert to RGB
-    if img_data.ndim == 2:
-        img_rgb = np.stack([img_data]*3, axis=-1)
-    elif img_data.shape[2] == 4:
-        img_rgb = img_data[:, :, :3]
-    else:
-        img_rgb = img_data
-
-    if img_rgb.max() == 0:
-        return {'tid': tid, 'status': 'empty'}
-
-    # Normalization disabled for H&E images - raw pixel values work better
-    # img_rgb = percentile_normalize(img_rgb, p_low=5, p_high=95)
-    has_tissue_content, _ = has_tissue(img_rgb, variance_threshold, block_size=calibration_block_size)
-    if not has_tissue_content:
-        return {'tid': tid, 'status': 'no_tissue'}
-
-    try:
-        mk_masks, hspc_masks, mk_feats, hspc_feats = segmenter.process_tile(
-            img_rgb, mk_min_area, mk_max_area, hspc_min_area, hspc_max_area,
-            hspc_nuclear_only=cleanup_config.get('hspc_nuclear_only', False),
-            cleanup_masks=cleanup_config.get('cleanup_masks', False),
-            fill_holes=cleanup_config.get('fill_holes', True),
-            pixel_size_um=cleanup_config.get('pixel_size_um', 0.1725)
-        )
-
-        # Generate crops for each detection (with optional cleanup)
-        for feat in mk_feats:
-            _, crop_result = process_detection_with_cleanup(
-                feat, mk_masks, img_rgb, 'mk',
-                cleanup_masks=cleanup_config['cleanup_masks'],
-                fill_holes=cleanup_config['fill_holes'],
-                pixel_size_um=cleanup_config['pixel_size_um'],
-            )
-            if crop_result:
-                feat['crop_b64'] = crop_result['crop']
-                feat['mask_b64'] = crop_result['mask']
-
-        for feat in hspc_feats:
-            _, crop_result = process_detection_with_cleanup(
-                feat, hspc_masks, img_rgb, 'hspc',
-                cleanup_masks=cleanup_config['cleanup_masks'],
-                fill_holes=cleanup_config['fill_holes'],
-                pixel_size_um=cleanup_config['pixel_size_um'],
-            )
-            if crop_result:
-                feat['crop_b64'] = crop_result['crop']
-                feat['mask_b64'] = crop_result['mask']
-
-        return {
-            'tid': tid, 'status': 'success',
-            'mk_masks': mk_masks, 'hspc_masks': hspc_masks,
-            'mk_feats': mk_feats, 'hspc_feats': hspc_feats,
-            'tile': tile
-        }
-    except Exception as e:
-        return {'tid': tid, 'status': 'error', 'error': f"Processing error: {e}"}
 
 
 def main():

@@ -36,6 +36,7 @@ warnings.warn(
 from segmentation.detection.tissue import (
     calculate_block_variances,
     has_tissue,
+    compute_variance_threshold,
     calibrate_tissue_threshold,
     filter_tissue_tiles,
 )
@@ -134,6 +135,7 @@ __all__ = [
     # Tissue detection
     'calculate_block_variances',
     'has_tissue',
+    'compute_variance_threshold',
     'calibrate_tissue_threshold',
     'filter_tissue_tiles',
     # HTML export
