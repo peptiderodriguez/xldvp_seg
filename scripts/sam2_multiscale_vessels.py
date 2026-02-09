@@ -40,6 +40,7 @@ import os
 import sys
 import random
 import gc
+import time
 import torch
 from tqdm import tqdm
 
@@ -2134,6 +2135,14 @@ def analyze_vessel_network(vessels, mosaic_size, pixel_size_um=0.1725):
 
 def main():
     import sys
+    import argparse
+
+    parser = argparse.ArgumentParser(description="Multi-Scale SAM2 Vessel Detection")
+    parser.add_argument('--resume-from', type=str, default=None,
+                        help='Resume from a specific scale (e.g., "1/4", "1/2"). '
+                             'Loads previously saved scale results and continues from the specified scale.')
+    args = parser.parse_args()
+
     print("=" * 60, flush=True)
     print("Multi-Scale SAM2 Vessel Detection", flush=True)
     print("=" * 60, flush=True)
@@ -2174,8 +2183,31 @@ def main():
 
     all_vessels = []
 
+    # Resume support: load previously saved scale results and skip completed scales
+    resume_from = args.resume_from
+    scales_to_process = SCALES
+    if resume_from:
+        # Find the resume scale index
+        scale_names = [s['name'] for s in SCALES]
+        if resume_from not in scale_names:
+            print(f"ERROR: Unknown scale '{resume_from}'. Available: {scale_names}", flush=True)
+            sys.exit(1)
+        resume_idx = scale_names.index(resume_from)
+        # Load saved results from completed scales
+        for i, sc in enumerate(SCALES[:resume_idx]):
+            checkpoint_path = os.path.join(OUTPUT_DIR, f"checkpoint_scale_{sc['name'].replace('/', '_')}.json")
+            if os.path.exists(checkpoint_path):
+                with open(checkpoint_path, 'r') as f:
+                    saved = json.load(f)
+                all_vessels.extend(saved['vessels'])
+                print(f"  Loaded {len(saved['vessels'])} vessels from {sc['name']} checkpoint", flush=True)
+            else:
+                print(f"  WARNING: No checkpoint for scale {sc['name']}, skipping", flush=True)
+        scales_to_process = SCALES[resume_idx:]
+        print(f"\nResuming from scale {resume_from} with {len(all_vessels)} vessels from prior scales", flush=True)
+
     # Process each scale
-    for scale_config in SCALES:
+    for scale_config in scales_to_process:
         scale_factor = scale_config['scale_factor']
         tile_size = scale_config.get('tile_size', TILE_SIZE)
         stride = int(tile_size * (1 - TILE_OVERLAP))  # With 50% overlap, stride = tile_size/2
@@ -2186,6 +2218,10 @@ def main():
         print(f"  Tile size: {tile_size}px (covers {tile_size * scale_factor}px at full res)", flush=True)
         print(f"  Stride: {stride}px ({int(TILE_OVERLAP*100)}% overlap)", flush=True)
         print(f"  Diameter range: {scale_config['min_diam_um']}-{scale_config['max_diam_um']} µm", flush=True)
+        # VRAM status at start of scale
+        vram_used = torch.cuda.memory_allocated() / 1e9
+        vram_cached = torch.cuda.memory_reserved() / 1e9
+        print(f"  VRAM: {vram_used:.1f}GB used, {vram_cached:.1f}GB cached", flush=True)
         print(f"{'='*40}", flush=True)
 
         # Create tile grid for this scale (in SCALED coordinates)
@@ -2222,6 +2258,9 @@ def main():
 
         # Process
         scale_vessels = []
+        tiles_since_reset = 0
+        RESET_INTERVAL = 50  # Reset SAM2 predictor every N tiles to prevent VRAM fragmentation
+
         for tile_x, tile_y in tqdm(sampled_tiles, desc="Processing"):
             try:
                 vessels = process_tile_at_scale(
@@ -2235,15 +2274,59 @@ def main():
                 traceback.print_exc()
             finally:
                 # Memory cleanup after each tile
+                torch.cuda.synchronize()
                 gc.collect()
                 torch.cuda.empty_cache()
+
+                # Brief pause to let WSL2 GPU driver reclaim memory
+                # Without this, sustained rapid alloc/dealloc cycles crash the dxgk driver
+                time.sleep(1)
+
+                # Periodically reset SAM2 predictor to fully release VRAM
+                tiles_since_reset += 1
+                if tiles_since_reset >= RESET_INTERVAL:
+                    if hasattr(mask_generator, 'predictor') and hasattr(mask_generator.predictor, 'reset_predictor'):
+                        mask_generator.predictor.reset_predictor()
+                    # Force full CUDA synchronization and cleanup
+                    torch.cuda.synchronize()
+                    gc.collect()
+                    torch.cuda.empty_cache()
+                    tiles_since_reset = 0
+                    # Longer pause on reset
+                    time.sleep(3)
+                    # Log VRAM usage
+                    vram_used = torch.cuda.memory_allocated() / 1e9
+                    vram_cached = torch.cuda.memory_reserved() / 1e9
+                    print(f"\n  [VRAM reset] allocated={vram_used:.1f}GB, cached={vram_cached:.1f}GB", flush=True)
 
         print(f"Found {len(scale_vessels)} vessels at scale {scale_config['name']}", flush=True)
         all_vessels.extend(scale_vessels)
 
-        # Cleanup between scales
+        # Save checkpoint after each scale
+        checkpoint_path = os.path.join(OUTPUT_DIR, f"checkpoint_scale_{scale_config['name'].replace('/', '_')}.json")
+        checkpoint_data = {
+            'scale': scale_config['name'],
+            'vessels': scale_vessels,
+            'num_vessels': len(scale_vessels),
+        }
+        with open(checkpoint_path, 'w') as f:
+            json.dump(checkpoint_data, f)
+        print(f"  Checkpoint saved: {checkpoint_path} ({len(scale_vessels)} vessels)", flush=True)
+
+        # Also save cumulative progress
+        cumulative_path = os.path.join(OUTPUT_DIR, 'vessel_detections_checkpoint.json')
+        with open(cumulative_path, 'w') as f:
+            json.dump({'vessels': all_vessels, 'scales_completed': [s['name'] for s in SCALES if s['name'] <= scale_config['name']], 'num_vessels': len(all_vessels)}, f)
+        print(f"  Cumulative checkpoint: {len(all_vessels)} vessels total", flush=True)
+
+        # Aggressive cleanup between scales
+        if hasattr(mask_generator, 'predictor') and hasattr(mask_generator.predictor, 'reset_predictor'):
+            mask_generator.predictor.reset_predictor()
+        torch.cuda.synchronize()
         gc.collect()
         torch.cuda.empty_cache()
+        vram_after = torch.cuda.memory_allocated() / 1e9
+        print(f"  [Scale complete] VRAM after cleanup: {vram_after:.1f}GB", flush=True)
 
     # Merge across scales (uses adaptive IoU threshold)
     print(f"\nTotal vessels before merge: {len(all_vessels)}")
