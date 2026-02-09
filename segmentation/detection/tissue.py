@@ -18,16 +18,18 @@ logger = get_logger(__name__)
 
 def calculate_block_variances(gray_image, block_size=512):
     """
-    Calculate variance for each block in the image.
+    Calculate variance and mean intensity for each block in the image.
 
     Args:
         gray_image: 2D grayscale image array
         block_size: Size of blocks to analyze
 
     Returns:
-        List of variance values for each block
+        Tuple of (variances, means) — lists of variance and mean intensity
+        values for each block
     """
     variances = []
+    means = []
     height, width = gray_image.shape
 
     for y in range(0, height, block_size):
@@ -37,8 +39,9 @@ def calculate_block_variances(gray_image, block_size=512):
             if block.size < (block_size * block_size) / 4:
                 continue
             variances.append(np.var(block))
+            means.append(np.mean(block))
 
-    return variances
+    return variances, means
 
 
 def compute_pixel_level_tissue_mask(
@@ -96,9 +99,13 @@ def compute_pixel_level_tissue_mask(
     return tissue_mask
 
 
-def has_tissue(tile_image, variance_threshold, min_tissue_fraction=0.10, block_size=512):
+def has_tissue(tile_image, variance_threshold, min_tissue_fraction=0.10, block_size=512, max_bg_intensity=220):
     """
-    Check if a tile contains tissue using block-based variance.
+    Check if a tile contains tissue using block-based variance and intensity.
+
+    A block is classified as tissue if it has high variance (textured) OR
+    low mean intensity (darker than background). This dual criterion catches
+    uniform tissue blocks that have low variance but are clearly not background.
 
     Args:
         tile_image: RGB or grayscale image array (uint8 or uint16)
@@ -106,6 +113,9 @@ def has_tissue(tile_image, variance_threshold, min_tissue_fraction=0.10, block_s
             (calibrated on percentile-normalized uint8 data)
         min_tissue_fraction: Minimum fraction of blocks that must be tissue
         block_size: Size of blocks for variance calculation
+        max_bg_intensity: Maximum mean intensity for background blocks (uint8 scale).
+            Blocks with mean intensity below this are considered tissue regardless
+            of variance. Default 220 is conservative for H&E (background ~230-250).
 
     Returns:
         Tuple of (has_tissue: bool, tissue_fraction: float)
@@ -142,12 +152,15 @@ def has_tissue(tile_image, variance_threshold, min_tissue_fraction=0.10, block_s
     else:
         gray = tile_image.astype(np.uint8)
 
-    variances = calculate_block_variances(gray, block_size)
+    variances, means = calculate_block_variances(gray, block_size)
 
     if len(variances) == 0:
         return False, 0.0
 
-    tissue_blocks = sum(1 for v in variances if v >= variance_threshold)
+    tissue_blocks = sum(
+        1 for v, m in zip(variances, means)
+        if v >= variance_threshold or m < max_bg_intensity
+    )
     tissue_fraction = tissue_blocks / len(variances)
 
     return tissue_fraction >= min_tissue_fraction, tissue_fraction
@@ -264,7 +277,7 @@ def calibrate_tissue_threshold(
             gray = tile_img
 
         # Calculate block variances
-        variances = calculate_block_variances(gray, block_size)
+        variances, _ = calculate_block_variances(gray, block_size)
         all_variances.extend(variances)
 
     if len(all_variances) < 10:

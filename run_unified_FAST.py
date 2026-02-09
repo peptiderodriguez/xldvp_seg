@@ -1150,7 +1150,7 @@ def shared_calibrate_tissue_threshold(tiles, image_array, calibration_samples, b
         else:
             gray = tile_img.astype(np.uint8) if tile_img.dtype != np.uint8 else tile_img
 
-        block_vars = calculate_block_variances(gray, block_size)
+        block_vars, _ = calculate_block_variances(gray, block_size)
         return block_vars if block_vars else []
 
     all_variances = []
@@ -1714,7 +1714,7 @@ def _phase2_identify_tissue_tiles(slide_data, tile_size, overlap, variance_thres
         else:
             gray = tile_img.astype(np.uint8) if tile_img.dtype != np.uint8 else tile_img
 
-        block_vars = calculate_block_variances(gray, calibration_block_size)
+        block_vars, _ = calculate_block_variances(gray, calibration_block_size)
         return block_vars if block_vars else []
 
     all_variances = []
@@ -1859,7 +1859,7 @@ def _phase2_identify_tissue_tiles_streaming(slide_loaders, tile_size, overlap, v
         else:
             gray = tile_img.astype(np.uint8) if tile_img.dtype != np.uint8 else tile_img
 
-        block_vars = calculate_block_variances(gray, calibration_block_size)
+        block_vars, _ = calculate_block_variances(gray, calibration_block_size)
         return block_vars if block_vars else []
 
     all_variances = []
