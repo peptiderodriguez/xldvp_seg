@@ -47,6 +47,7 @@ from multiprocessing.shared_memory import SharedMemory
 import numpy as np
 
 from segmentation.utils.logging import get_logger
+from segmentation.preprocessing.stain_normalization import apply_reinhard_normalization
 
 logger = get_logger(__name__)
 
@@ -187,6 +188,8 @@ def _gpu_worker_shm(
     variance_threshold: float,
     calibration_block_size: int,
     cleanup_config: Optional[Dict[str, Any]] = None,
+    norm_params: Optional[Dict[str, float]] = None,
+    normalization_method: str = 'none',
 ):
     """
     Worker process that reads tiles from shared memory.
@@ -327,13 +330,31 @@ def _gpu_worker_shm(
 
             # Prepare tile
             tile_rgb = ensure_rgb_array(tile_img)
-            tile_normalized = prepare_tile_for_detection(tile_rgb)
 
-            # Check for tissue (has_tissue returns tuple of (bool, fraction))
-            try:
-                has_tissue_flag, _ = has_tissue(tile_normalized, variance_threshold, block_size=calibration_block_size)
-            except Exception:
-                has_tissue_flag = True  # Assume tissue on error
+            # Apply Reinhard normalization if requested (tile-by-tile to avoid OOM)
+            # Reinhard includes pixel-level tissue masking, so we can skip has_tissue check
+            applied_reinhard = False
+            if normalization_method == 'reinhard' and norm_params is not None:
+                tile_rgb = apply_reinhard_normalization(
+                    tile_rgb,
+                    norm_params,
+                    variance_threshold=variance_threshold
+                )
+                applied_reinhard = True
+
+            # Prepare for detection (percentile normalization, disabled for Reinhard)
+            use_percentile_norm = (normalization_method != 'reinhard')
+            tile_normalized = prepare_tile_for_detection(tile_rgb, normalize=use_percentile_norm)
+
+            # Check for tissue - skip if Reinhard already did pixel-level masking (avoids duplicate variance computation)
+            if applied_reinhard:
+                has_tissue_flag = True  # Reinhard already filtered to tissue pixels
+            else:
+                try:
+                    has_tissue_flag, _ = has_tissue(tile_normalized, variance_threshold, block_size=calibration_block_size)
+                except Exception:
+                    has_tissue_flag = True  # Assume tissue on error
+
             if not has_tissue_flag:
                 output_queue.put(build_mk_hspc_result(
                     tid=tid,
@@ -456,6 +477,8 @@ class MultiGPUTileProcessorSHM:
         variance_threshold: float = 100.0,
         calibration_block_size: int = 512,
         cleanup_config: Optional[Dict[str, Any]] = None,
+        norm_params: Optional[Dict[str, float]] = None,
+        normalization_method: str = 'none',
     ):
         self.num_gpus = num_gpus
         self.slide_info = slide_info
@@ -465,6 +488,8 @@ class MultiGPUTileProcessorSHM:
         self.variance_threshold = variance_threshold
         self.calibration_block_size = calibration_block_size
         self.cleanup_config = cleanup_config or {'cleanup_masks': False, 'fill_holes': True, 'pixel_size_um': 0.1725}
+        self.norm_params = norm_params
+        self.normalization_method = normalization_method
 
         self.segmenter_kwargs = {
             'mk_classifier_path': str(mk_classifier_path) if mk_classifier_path else None,
@@ -502,6 +527,8 @@ class MultiGPUTileProcessorSHM:
                     self.variance_threshold,
                     self.calibration_block_size,
                     self.cleanup_config,
+                    self.norm_params,
+                    self.normalization_method,
                 ),
                 daemon=True
             )

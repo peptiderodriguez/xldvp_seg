@@ -303,13 +303,11 @@ def generate_visual_validation(slide_paths, norm_params, output_dir, tile_size=3
         if image_array is None:
             logger.warning(f"  Failed to load {slide_name}, skipping")
             loader.close()
-            loader.clear_cache()
             del loader
             gc.collect()
             continue
 
-        dims = loader.get_dimensions()
-        h, w = dims['height'], dims['width']
+        h, w = image_array.shape[:2]
         logger.info(f"  Slide: {w} x {h}")
 
         # ── Tissue map ────────────────────────────────────────────────
@@ -437,7 +435,6 @@ def generate_visual_validation(slide_paths, norm_params, output_dir, tile_size=3
 
         # Free slide
         loader.close()
-        loader.clear_cache()
         del loader, image_array
         gc.collect()
 
