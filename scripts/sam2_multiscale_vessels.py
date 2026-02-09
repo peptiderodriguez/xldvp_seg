@@ -1121,7 +1121,7 @@ def regenerate_missing_crops(vessels, channel_cache):
 
         for idx in indices:
             v = vessels[idx]
-            # Contours in JSON are in full-res coordinates; convert back to tile scale
+            # Contours are tile-local at full-res scale; convert back to tile scale
             outer_contour = np.array(v['outer_contour'], dtype=np.int32) // scale_factor
             inner_contour = np.array(v['inner_contour'], dtype=np.int32) // scale_factor
 
@@ -1900,12 +1900,27 @@ def process_tile_at_scale(tile_x, tile_y, channel_cache, sam2_generator, scale_c
 
     return vessels
 
+def _vessel_contour_global(vessel):
+    """
+    Get vessel outer contour in global (mosaic) coordinates.
+
+    Stored contours are tile-local at full-res scale. This adds the tile
+    origin offset to produce true global coordinates for IoU computation.
+    """
+    c = np.array(vessel['outer_contour']).reshape(-1, 1, 2).astype(np.int32)
+    tile_offset_x = vessel['tile_x'] * vessel['scale_factor']
+    tile_offset_y = vessel['tile_y'] * vessel['scale_factor']
+    c = c.copy()
+    c[:, :, 0] += tile_offset_x
+    c[:, :, 1] += tile_offset_y
+    return c
+
+
 def compute_vessel_iou(v1, v2):
     """
-    Compute IoU between two vessels based on their bounding boxes.
+    Compute IoU between two vessels using rendered contour masks.
 
-    Uses bounding box IoU as a fast approximation. For more accurate
-    polygon IoU, use shapely.
+    Translates tile-local contours to global coordinates before comparison.
 
     Args:
         v1, v2: Vessel dicts with 'outer_contour' keys
@@ -1913,37 +1928,77 @@ def compute_vessel_iou(v1, v2):
     Returns:
         float: IoU value between 0 and 1
     """
-    # Get bounding boxes from contours
-    c1 = np.array(v1['outer_contour']).reshape(-1, 2)  # Flatten to (N, 2)
-    c2 = np.array(v2['outer_contour']).reshape(-1, 2)
+    from segmentation.utils.multiscale import compute_iou_contours
+
+    c1 = _vessel_contour_global(v1)
+    c2 = _vessel_contour_global(v2)
 
     if c1.shape[0] < 3 or c2.shape[0] < 3:
-        return 0.0  # Need at least 3 points for a valid contour
-
-    # Bounding boxes: [x_min, y_min, x_max, y_max]
-    box1 = [c1[:, 0].min(), c1[:, 1].min(), c1[:, 0].max(), c1[:, 1].max()]
-    box2 = [c2[:, 0].min(), c2[:, 1].min(), c2[:, 0].max(), c2[:, 1].max()]
-
-    # Intersection
-    x_min = max(box1[0], box2[0])
-    y_min = max(box1[1], box2[1])
-    x_max = min(box1[2], box2[2])
-    y_max = min(box1[3], box2[3])
-
-    if x_max <= x_min or y_max <= y_min:
         return 0.0
 
-    intersection = (x_max - x_min) * (y_max - y_min)
+    return compute_iou_contours(c1, c2)
 
-    # Union
-    area1 = (box1[2] - box1[0]) * (box1[3] - box1[1])
-    area2 = (box2[2] - box2[0]) * (box2[3] - box2[1])
-    union = area1 + area2 - intersection
 
-    if union <= 0:
-        return 0.0
+def deduplicate_vessels_within_scale(vessels, distance_threshold_px=None):
+    """
+    Remove duplicate vessels detected in overlapping tiles within the same scale.
 
-    return intersection / union
+    Uses centroid proximity (cKDTree) to find candidates, then contour IoU
+    to confirm duplicates. Keeps the vessel with the largest outer area.
+
+    Args:
+        vessels: List of vessel dicts from a single scale
+        distance_threshold_px: Max centroid distance for duplicate candidates.
+            Default: half the median vessel outer diameter in pixels.
+    Returns:
+        List of deduplicated vessels
+    """
+    if len(vessels) <= 1:
+        return vessels
+
+    from segmentation.utils.multiscale import compute_iou_contours
+
+    # Build spatial index from global centers
+    centers = np.array([v['global_center'] for v in vessels])
+    tree = cKDTree(centers)
+
+    # Auto-compute distance threshold from median vessel size
+    if distance_threshold_px is None:
+        diameters_px = [v['outer_diameter_um'] / 0.1725 for v in vessels]
+        distance_threshold_px = np.median(diameters_px) * 0.5
+
+    # Sort by outer area descending (largest-wins strategy)
+    indexed_vessels = sorted(enumerate(vessels), key=lambda x: x[1].get('outer_area_px', 0), reverse=True)
+
+    kept = []          # indices of kept vessels (ordered)
+    kept_set = set()   # same indices for O(1) lookup
+    removed = set()    # indices of removed vessels
+
+    for orig_idx, vessel in indexed_vessels:
+        if orig_idx in removed:
+            continue
+        kept.append(orig_idx)
+        kept_set.add(orig_idx)
+
+        # Find nearby vessels
+        center = np.array(vessel['global_center'])
+        nearby = tree.query_ball_point(center, distance_threshold_px)
+
+        # Compute global contour once for this vessel
+        c1 = _vessel_contour_global(vessel)
+
+        for j in nearby:
+            if j == orig_idx or j in removed or j in kept_set:
+                continue
+            c2 = _vessel_contour_global(vessels[j])
+            iou = compute_iou_contours(c1, c2)
+            if iou > 0.5:  # >50% contour overlap = same vessel
+                removed.add(j)
+
+    result = [vessels[i] for i in kept]
+    if len(removed) > 0:
+        print(f"    Within-scale dedup: {len(vessels)} -> {len(result)} ({len(removed)} duplicates removed)")
+    return result
 
 
 def merge_vessels_across_scales(vessels, iou_threshold=None, coverage_threshold=None):
@@ -2174,12 +2229,13 @@ def analyze_vessel_network(vessels, mosaic_size, pixel_size_um=0.1725):
     combined_mask = np.zeros((work_height, work_width), dtype=np.uint8)
 
     for v in tqdm(vessels, desc="Drawing contours"):
-        outer_contour = np.array(v['outer_contour'])
-        if outer_contour.size == 0:
+        # Get contour in global coordinates (stored contours are tile-local)
+        global_contour = _vessel_contour_global(v)
+        if global_contour.size == 0:
             continue
 
-        # Scale contour from full-res to working scale
-        scaled_contour = (outer_contour / work_scale).astype(np.int32)
+        # Scale contour from full-res global to working scale
+        scaled_contour = (global_contour / work_scale).astype(np.int32)
 
         # Draw filled contour on mask
         cv2.drawContours(combined_mask, [scaled_contour], -1, 255, thickness=cv2.FILLED)
@@ -2372,6 +2428,7 @@ def _vessel_gpu_worker(gpu_id, input_queue, output_queue, stop_event,
             tile_x, tile_y, scale_config = work_item
 
             try:
+                sobel_before = TILES_SKIPPED_BY_SOBEL
                 vessels = process_tile_at_scale(
                     tile_x, tile_y, channel_cache, mask_generator, scale_config,
                     adaptive_sobel_threshold=adaptive_sobel_threshold
@@ -2383,6 +2440,7 @@ def _vessel_gpu_worker(gpu_id, input_queue, output_queue, stop_event,
                     'tile_y': tile_y,
                     'scale': scale_config['name'],
                     'vessels': vessels,
+                    'sobel_skipped': TILES_SKIPPED_BY_SOBEL > sobel_before,
                 })
             except Exception as e:
                 print(f"[{worker_name}] Error at ({tile_x}, {tile_y}): {e}", flush=True)
@@ -2787,6 +2845,9 @@ def main():
             tile_sleep=tile_sleep,
             reset_interval=reset_interval,
         ) as processor:
+            import queue as queue_module
+
+            tiles_skipped_multigpu = 0
 
             for scale_config in scales_to_process:
                 scale_factor = scale_config['scale_factor']
@@ -2836,10 +2897,36 @@ def main():
                         print(f"\n  WARNING: Timeout collecting result {i+1}/{len(sampled_tiles)}", flush=True)
                         continue
                     if result.get('status') == 'success':
-                        scale_vessels.extend(result.get('vessels', []))
+                        if result.get('scale') != scale_config['name']:
+                            # Late result from a previous scale - add directly
+                            all_vessels.extend(result.get('vessels', []))
+                            print(f"\n  Note: Got late result from scale {result.get('scale')}", flush=True)
+                        else:
+                            scale_vessels.extend(result.get('vessels', []))
+                        if result.get('sobel_skipped'):
+                            tiles_skipped_multigpu += 1
                     elif result.get('status') == 'error':
                         print(f"\n  Error at ({result.get('tile_x')}, {result.get('tile_y')}): {result.get('error')}", flush=True)
 
+                # Drain any late-arriving results before next scale
+                drained = 0
+                while True:
+                    try:
+                        result = processor.output_queue.get_nowait()
+                        if result.get('status') == 'success':
+                            if result.get('scale') == scale_config['name']:
+                                scale_vessels.extend(result.get('vessels', []))
+                            else:
+                                all_vessels.extend(result.get('vessels', []))
+                            if result.get('sobel_skipped'):
+                                tiles_skipped_multigpu += 1
+                        drained += 1
+                    except queue_module.Empty:
+                        break
+                if drained > 0:
+                    print(f"  Drained {drained} late-arriving results from queue", flush=True)
+
+                scale_vessels = deduplicate_vessels_within_scale(scale_vessels)
                 print(f"Found {len(scale_vessels)} vessels at scale {scale_config['name']}", flush=True)
                 all_vessels.extend(scale_vessels)
 
@@ -2864,6 +2951,9 @@ def main():
         # Keep shared memory alive for post-processing (crop regen, cell composition)
         # SharedChannelCache has same API as DownsampledChannelCache (get_tile, channels, base_width, etc.)
         channel_cache = main_channel_cache
+        # Propagate worker sobel skip count to global for reporting
+        global TILES_SKIPPED_BY_SOBEL
+        TILES_SKIPPED_BY_SOBEL = tiles_skipped_multigpu
         print("Workers stopped, shared memory kept alive for post-processing", flush=True)
 
     # ========================================================================
@@ -2955,6 +3045,7 @@ def main():
                         vram_cached = torch.cuda.memory_reserved() / 1e9
                         print(f"\n  [VRAM reset] allocated={vram_used:.1f}GB, cached={vram_cached:.1f}GB", flush=True)
 
+            scale_vessels = deduplicate_vessels_within_scale(scale_vessels)
             print(f"Found {len(scale_vessels)} vessels at scale {scale_config['name']}", flush=True)
             all_vessels.extend(scale_vessels)
 
@@ -3351,10 +3442,16 @@ def export_to_geodataframe(vessels, output_path):
     records = []
     for v in vessels:
         try:
-            # Convert contours to Shapely Polygons
-            # Contours are stored as [[[x, y]], [[x, y]], ...] from OpenCV
-            outer_coords = np.array(v['outer_contour']).squeeze()
-            inner_coords = np.array(v['inner_contour']).squeeze()
+            # Convert contours to Shapely Polygons (in global coordinates)
+            # Stored contours are tile-local; add tile origin offset
+            tile_offset_x = v['tile_x'] * v['scale_factor']
+            tile_offset_y = v['tile_y'] * v['scale_factor']
+            outer_coords = np.array(v['outer_contour']).squeeze().copy()
+            inner_coords = np.array(v['inner_contour']).squeeze().copy()
+            outer_coords[..., 0] += tile_offset_x
+            outer_coords[..., 1] += tile_offset_y
+            inner_coords[..., 0] += tile_offset_x
+            inner_coords[..., 1] += tile_offset_y
 
             # Need at least 3 points for a polygon
             if len(outer_coords) < 3 or len(inner_coords) < 3:
