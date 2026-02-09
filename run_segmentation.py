@@ -1374,14 +1374,17 @@ def run_pipeline(args):
     # Setup logging
     setup_logging(level="DEBUG" if getattr(args, 'verbose', False) else "INFO")
 
+    from datetime import datetime
     czi_path = Path(args.czi_path)
     output_dir = Path(args.output_dir)
     slide_name = czi_path.stem
+    run_timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
 
     logger.info("=" * 60)
     logger.info("UNIFIED SEGMENTATION PIPELINE")
     logger.info("=" * 60)
     logger.info(f"Slide: {slide_name}")
+    logger.info(f"Run: {run_timestamp}")
     logger.info(f"Cell type: {args.cell_type}")
     logger.info(f"Channel: {args.channel}")
     if getattr(args, 'multi_marker', False):
@@ -1608,8 +1611,8 @@ def run_pipeline(args):
 
     logger.info(f"Sampled {len(sampled_tiles)} tiles ({args.sample_fraction*100:.0f}% of {len(tissue_tiles)} tissue tiles)")
 
-    # Setup output directories
-    slide_output_dir = output_dir / slide_name
+    # Setup output directories (timestamped to avoid overwriting previous runs)
+    slide_output_dir = output_dir / f'{slide_name}_{run_timestamp}'
     tiles_dir = slide_output_dir / "tiles"
     tiles_dir.mkdir(parents=True, exist_ok=True)
 
@@ -2219,8 +2222,8 @@ def run_pipeline(args):
 
     # (annotation threshold override already applied before tile loop)
 
-    # Sort samples: NMJ by classifier score (descending), others by area (ascending)
-    if args.cell_type == 'nmj':
+    # Sort samples: with classifier → descending RF score; without → ascending area
+    if args.cell_type == 'nmj' and classifier_loaded:
         all_samples.sort(key=lambda x: x['stats'].get('rf_prediction') or 0, reverse=True)
     else:
         all_samples.sort(key=lambda x: x['stats'].get('area_um2', 0))

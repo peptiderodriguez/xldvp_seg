@@ -7,8 +7,8 @@
 #SBATCH --mem=500G
 #SBATCH --gres=gpu:l40s:4
 #SBATCH --time=4:00:00
-#SBATCH --output=slurm/logs/nmj_10pct_%j.out
-#SBATCH --error=slurm/logs/nmj_10pct_%j.err
+#SBATCH --output=/fs/gpfs41/lv12/fileset02/pool/pool-mann-edwin/code_bin/xldvp_seg/slurm/logs/nmj_10pct_%j.out
+#SBATCH --error=/fs/gpfs41/lv12/fileset02/pool/pool-mann-edwin/code_bin/xldvp_seg/slurm/logs/nmj_10pct_%j.err
 
 # NMJ multi-GPU segmentation — 10% annotation run
 # Slide: 20251107_Fig5 (3-channel: nuc488, Bgtx647, NfL750)
