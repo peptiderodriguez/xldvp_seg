@@ -371,12 +371,12 @@ def get_cellpose_model():
             _CELLPOSE_MODEL = None
     return _CELLPOSE_MODEL
 
-sys.path.insert(0, '/home/dude/code/vessel_seg')
+sys.path.insert(0, '/fs/gpfs41/lv12/fileset02/pool/pool-mann-edwin/code_bin/xldvp_seg')
 from segmentation.io.czi_loader import CZILoader
 
 # Configuration
-CZI_PATH = "/home/dude/images/20251106_Fig2_nuc488_CD31_555_SMA647_PM750-EDFvar-stitch.czi"
-OUTPUT_DIR = "/home/dude/vessel_output/sam2_multiscale"
+CZI_PATH = "/fs/pool/pool-mann-axioscan/01_Users/EdRo_axioscan/xDVP/20251106_Fig2_nuc488_CD31_555_SMA647_PM750-EDFvar-stitch.czi"
+OUTPUT_DIR = "/fs/pool/pool-mann-edwin/vessel_output/sam2_multiscale"
 SAMPLE_FRACTION = 1.0  # 100% of tiles
 TILE_OVERLAP = 0.5  # 50% overlap between tiles
 TISSUE_VARIANCE_THRESHOLD = 50
@@ -2726,7 +2726,10 @@ def main():
     args = parser.parse_args()
 
     # Auto-detect WSL2 for sleep/reset defaults
-    _is_wsl2 = os.path.exists('/proc/version') and 'microsoft' in open('/proc/version').read().lower()
+    _is_wsl2 = False
+    if os.path.exists('/proc/version'):
+        with open('/proc/version') as f:
+            _is_wsl2 = 'microsoft' in f.read().lower()
     tile_sleep = args.tile_sleep if args.tile_sleep is not None else (1.0 if _is_wsl2 else 0.0)
     reset_interval = args.predictor_reset_interval if args.predictor_reset_interval is not None else (50 if _is_wsl2 else 0)
     num_gpus = args.num_gpus
@@ -2740,7 +2743,7 @@ def main():
     os.makedirs(os.path.join(OUTPUT_DIR, 'tiles'), exist_ok=True)
     import shutil
     crops_dir = os.path.join(OUTPUT_DIR, 'crops')
-    if os.path.exists(crops_dir):
+    if os.path.exists(crops_dir) and not args.resume_from:
         shutil.rmtree(crops_dir)
     os.makedirs(crops_dir, exist_ok=True)
 
@@ -2757,7 +2760,7 @@ def main():
 
     # SAM2 configuration (shared between single-GPU and multi-GPU paths)
     SAM2_CONFIG = "configs/sam2.1/sam2.1_hiera_l.yaml"
-    SAM2_CHECKPOINT = "/home/dude/code/xldvp_seg_repo/checkpoints/sam2.1_hiera_large.pt"
+    SAM2_CHECKPOINT = "/fs/gpfs41/lv12/fileset02/pool/pool-mann-edwin/code_bin/xldvp_seg/checkpoints/sam2.1_hiera_large.pt"
     SAM2_GENERATOR_PARAMS = {
         'points_per_side': 48,
         'pred_iou_thresh': 0.5,
@@ -2944,7 +2947,7 @@ def main():
                 # Cumulative checkpoint
                 cumulative_path = os.path.join(OUTPUT_DIR, 'vessel_detections_checkpoint.json')
                 with open(cumulative_path, 'w') as f:
-                    json.dump({'vessels': all_vessels, 'scales_completed': [s['name'] for s in SCALES if s['name'] <= scale_config['name']], 'num_vessels': len(all_vessels)}, f)
+                    json.dump({'vessels': all_vessels, 'scales_completed': [s['name'] for i, s in enumerate(SCALES) if i <= next(j for j, sc in enumerate(SCALES) if sc['name'] == scale_config['name'])], 'num_vessels': len(all_vessels)}, f)
                 print(f"  Cumulative checkpoint: {len(all_vessels)} vessels total", flush=True)
 
         # Workers stopped by context manager
@@ -3062,7 +3065,7 @@ def main():
 
             cumulative_path = os.path.join(OUTPUT_DIR, 'vessel_detections_checkpoint.json')
             with open(cumulative_path, 'w') as f:
-                json.dump({'vessels': all_vessels, 'scales_completed': [s['name'] for s in SCALES if s['name'] <= scale_config['name']], 'num_vessels': len(all_vessels)}, f)
+                json.dump({'vessels': all_vessels, 'scales_completed': [s['name'] for i, s in enumerate(SCALES) if i <= next(j for j, sc in enumerate(SCALES) if sc['name'] == scale_config['name'])], 'num_vessels': len(all_vessels)}, f)
             print(f"  Cumulative checkpoint: {len(all_vessels)} vessels total", flush=True)
 
             # Aggressive cleanup between scales
@@ -3073,6 +3076,12 @@ def main():
             torch.cuda.empty_cache()
             vram_after = torch.cuda.memory_allocated() / 1e9
             print(f"  [Scale complete] VRAM after cleanup: {vram_after:.1f}GB", flush=True)
+
+        # Free SAM2 model before post-processing (no longer needed)
+        del mask_generator, sam2
+        gc.collect()
+        torch.cuda.empty_cache()
+        print(f"SAM2 model freed. VRAM: {torch.cuda.memory_allocated() / 1e9:.1f}GB", flush=True)
 
     # Merge across scales (uses adaptive IoU threshold)
     print(f"\nTotal vessels before merge: {len(all_vessels)}")
