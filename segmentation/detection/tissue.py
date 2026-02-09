@@ -96,7 +96,7 @@ def compute_pixel_level_tissue_mask(
     return tissue_mask
 
 
-def has_tissue(tile_image, variance_threshold, min_tissue_fraction=0.15, block_size=512):
+def has_tissue(tile_image, variance_threshold, min_tissue_fraction=0.10, block_size=512):
     """
     Check if a tile contains tissue using block-based variance.
 
@@ -112,6 +112,16 @@ def has_tissue(tile_image, variance_threshold, min_tissue_fraction=0.15, block_s
     """
     # Handle all-black tiles (empty CZI regions)
     if tile_image.max() == 0:
+        return False, 0.0
+
+    # Reject scan boundary tiles (mix of black CZI padding + background)
+    # CZI padding is exactly 0; real tissue/background is never 0
+    if tile_image.ndim == 3:
+        raw_check = np.min(tile_image, axis=2)  # any channel being 0
+    else:
+        raw_check = tile_image
+    black_fraction = np.mean(raw_check < 5)
+    if black_fraction > 0.02:  # >2% near-black pixels = scan boundary
         return False, 0.0
 
     # Convert to grayscale if needed
@@ -229,6 +239,14 @@ def calibrate_tissue_threshold(
 
         # Skip empty tiles
         if tile_img.max() == 0:
+            continue
+
+        # Skip scan boundary tiles (mix of black CZI padding + background)
+        if tile_img.ndim == 3:
+            raw_check = np.min(tile_img, axis=2)
+        else:
+            raw_check = tile_img
+        if np.mean(raw_check < 5) > 0.02:
             continue
 
         # Normalize to uint8 for variance calculation
