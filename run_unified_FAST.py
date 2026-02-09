@@ -1978,6 +1978,8 @@ def _phase4_process_tiles(
     mk_max_area_um,
     multi_gpu=False,
     num_gpus=4,
+    norm_params=None,
+    normalization_method='none',
 ):
     """
     Phase 4: Process sampled tiles using ML models (SAM2, Cellpose, ResNet).
@@ -2235,8 +2237,8 @@ def _phase4_process_tiles(
                 variance_threshold=variance_threshold,
                 calibration_block_size=calibration_block_size,
                 cleanup_config=cleanup_config,
-                norm_params=norm_params_for_workers,
-                normalization_method=norm_method_for_workers,
+                norm_params=norm_params,
+                normalization_method=normalization_method,
             ) as processor:
                 # Submit all tiles (only coordinates, not data!)
                 logger.info(f"Submitting {len(sampled_tiles)} tiles to {num_gpus} GPUs (shared memory)...")
@@ -2452,6 +2454,25 @@ def run_multi_slide_segmentation(
     output_base = Path(output_base)
     output_base.mkdir(parents=True, exist_ok=True)
 
+    # Initialize normalization parameters (shared by both multi-GPU and standard paths)
+    # Set up once here so both branches can use them.
+    norm_params_for_workers = None
+    norm_method_for_workers = 'none'
+
+    if normalize_slides and normalization_method == 'reinhard':
+        if not norm_params_file:
+            raise ValueError(
+                "Reinhard normalization requires --norm-params-file to be specified. "
+                "Please provide a JSON file with Reinhard Lab statistics."
+            )
+        with open(norm_params_file, 'r') as f:
+            reinhard_params = json.load(f)
+        if 'L_median' in reinhard_params and 'L_mad' in reinhard_params:
+            norm_method_for_workers = 'reinhard_median'
+        else:
+            norm_method_for_workers = 'reinhard'
+        norm_params_for_workers = reinhard_params
+
     # =========================================================================
     # MULTI-GPU MODE: Memory-efficient streaming approach
     # =========================================================================
@@ -2470,41 +2491,12 @@ def run_multi_slide_segmentation(
 
         log_memory_status("Before Phase 1")
 
-        # Load normalization parameters BEFORE Phase 1 if normalization is requested
-        norm_params_for_slide_loading = None
-        norm_method_for_slide_loading = 'none'
-
-        if normalize_slides and normalization_method == 'reinhard':
-            if not norm_params_file:
-                raise ValueError(
-                    "Reinhard normalization requires --norm-params-file to be specified. "
-                    "Please provide a JSON file with Reinhard Lab statistics."
-                )
-
+        if norm_params_for_workers is not None:
             logger.info(f"\n{'='*70}")
-            logger.info("REINHARD NORMALIZATION SETUP (SLIDE-LEVEL)")
+            logger.info("REINHARD NORMALIZATION (SLIDE-LEVEL)")
             logger.info(f"{'='*70}")
-            logger.info(f"Loading parameters from: {norm_params_file}")
-
-            with open(norm_params_file, 'r') as f:
-                reinhard_params = json.load(f)
-
-            # Check if this is median/MAD or mean/std version
-            if 'L_median' in reinhard_params and 'L_mad' in reinhard_params:
-                logger.info(f"  Lab statistics (MEDIAN/MAD from {reinhard_params['n_slides']} reference slides):")
-                logger.info(f"    L: median={reinhard_params['L_median']:.3f}, MAD={reinhard_params['L_mad']:.3f}")
-                logger.info(f"    a: median={reinhard_params['a_median']:.3f}, MAD={reinhard_params['a_mad']:.3f}")
-                logger.info(f"    b: median={reinhard_params['b_median']:.3f}, MAD={reinhard_params['b_mad']:.3f}")
-                norm_method_for_slide_loading = 'reinhard_median'
-            else:
-                logger.info(f"  Lab statistics (MEAN/STD from {reinhard_params['n_slides']} reference slides):")
-                logger.info(f"    L: mean={reinhard_params['L_mean']:.3f}, std={reinhard_params['L_std']:.3f}")
-                logger.info(f"    a: mean={reinhard_params['a_mean']:.3f}, std={reinhard_params['a_std']:.3f}")
-                logger.info(f"    b: mean={reinhard_params['b_mean']:.3f}, std={reinhard_params['b_std']:.3f}")
-                norm_method_for_slide_loading = 'reinhard'
-
+            logger.info(f"  Method: {norm_method_for_workers}")
             logger.info(f"  Normalization will be applied to each slide BEFORE tile extraction")
-            norm_params_for_slide_loading = reinhard_params
 
         # Phase 1: Load all slides to RAM for fast tissue detection
         logger.info(f"\n{'='*70}")
@@ -2538,13 +2530,13 @@ def run_multi_slide_segmentation(
                 logger.info(f"  {slide_name}: Grayscale data (shape: {channel_data.shape if channel_data is not None else 'None'})")
 
             # Apply slide-level normalization if requested
-            if norm_method_for_slide_loading == 'reinhard_median' and norm_params_for_slide_loading is not None:
+            if norm_method_for_workers == 'reinhard_median' and norm_params_for_workers is not None:
                 from segmentation.preprocessing.stain_normalization import apply_reinhard_normalization_MEDIAN
-                logger.info(f"  Normalizing {slide_name} (reinhard_median, L={norm_params_for_slide_loading['L_median']:.2f}±{norm_params_for_slide_loading['L_mad']:.2f})...")
+                logger.info(f"  Normalizing {slide_name} (reinhard_median, L={norm_params_for_workers['L_median']:.2f}±{norm_params_for_workers['L_mad']:.2f})...")
                 channel_data_normalized = apply_reinhard_normalization_MEDIAN(
                     channel_data,
-                    norm_params_for_slide_loading,
-                    variance_threshold=norm_params_for_slide_loading.get('variance_threshold', 15.0),
+                    norm_params_for_workers,
+                    variance_threshold=norm_params_for_workers.get('variance_threshold', 15.0),
                     tile_size=10000,
                     block_size=7
                 )
@@ -2554,12 +2546,12 @@ def run_multi_slide_segmentation(
                 gc.collect()
                 logger.info(f"  {slide_name} normalized successfully")
                 gc.collect()
-            elif norm_method_for_slide_loading == 'reinhard' and norm_params_for_slide_loading is not None:
+            elif norm_method_for_workers == 'reinhard' and norm_params_for_workers is not None:
                 logger.info(f"  Normalizing {slide_name} (reinhard mean/std)...")
                 channel_data_normalized = apply_reinhard_normalization(
                     channel_data,
-                    norm_params_for_slide_loading,
-                    variance_threshold=norm_params_for_slide_loading.get('variance_threshold', 15.0)
+                    norm_params_for_workers,
+                    variance_threshold=norm_params_for_workers.get('variance_threshold', 15.0)
                 )
                 # Replace channel data in loader with normalized version
                 loader.channel_data = channel_data_normalized
@@ -2572,76 +2564,8 @@ def run_multi_slide_segmentation(
 
         log_memory_status("After Phase 1 (all slides in RAM)")
 
-        # Initialize normalization parameters for tile-level processing
-        # These will be passed to workers if normalization is enabled
-        norm_params_for_workers = None
-        norm_method_for_workers = 'none'
-
-        # NORMALIZATION SETUP
-        # Reinhard: Load pre-computed params (works with any number of slides)
-        # Percentile: Requires multiple slides for cross-slide statistics
-        if normalize_slides:
-            method = normalization_method
-
-            if method == 'reinhard':
-                # ===== REINHARD NORMALIZATION (SLIDE-LEVEL, NOT TILE-BY-TILE) =====
-                # Load pre-computed parameters from file (works with 1+ slides)
-                if not norm_params_file:
-                    raise ValueError(
-                        "Reinhard normalization requires --norm-params-file to be specified. "
-                        "Please provide a JSON file with Reinhard Lab statistics."
-                    )
-
-                logger.info(f"\n{'='*70}")
-                logger.info("REINHARD NORMALIZATION SETUP (SLIDE-LEVEL)")
-                logger.info(f"{'='*70}")
-                logger.info(f"Loading parameters from: {norm_params_file}")
-
-                with open(norm_params_file, 'r') as f:
-                    reinhard_params = json.load(f)
-
-                # Check if this is median/MAD or mean/std version
-                if 'L_median' in reinhard_params and 'L_mad' in reinhard_params:
-                    # MEDIAN/MAD version (robust)
-                    required_keys = {'L_median', 'L_mad', 'a_median', 'a_mad', 'b_median', 'b_mad', 'n_slides'}
-                    missing_keys = required_keys - set(reinhard_params.keys())
-                    if missing_keys:
-                        raise ValueError(
-                            f"Reinhard MEDIAN parameters file missing required keys: {missing_keys}. "
-                            f"Required: {required_keys}"
-                        )
-
-                    # Log statistics
-                    logger.info(f"  Lab statistics (MEDIAN/MAD from {reinhard_params['n_slides']} reference slides):")
-                    logger.info(f"    L: median={reinhard_params['L_median']:.3f}, MAD={reinhard_params['L_mad']:.3f}")
-                    logger.info(f"    a: median={reinhard_params['a_median']:.3f}, MAD={reinhard_params['a_mad']:.3f}")
-                    logger.info(f"    b: median={reinhard_params['b_median']:.3f}, MAD={reinhard_params['b_mad']:.3f}")
-                    logger.info(f"  Normalization will be applied ONCE per slide (before tile extraction)")
-
-                    # Set for slide-level normalization
-                    norm_params_for_workers = reinhard_params
-                    norm_method_for_workers = 'reinhard_median'
-
-                else:
-                    # MEAN/STD version (classic)
-                    required_keys = {'L_mean', 'L_std', 'a_mean', 'a_std', 'b_mean', 'b_std', 'n_slides'}
-                    missing_keys = required_keys - set(reinhard_params.keys())
-                    if missing_keys:
-                        raise ValueError(
-                            f"Reinhard parameters file missing required keys: {missing_keys}. "
-                            f"Required: {required_keys}"
-                        )
-
-                    # Log statistics
-                    logger.info(f"  Lab statistics (MEAN/STD from {reinhard_params['n_slides']} reference slides):")
-                    logger.info(f"    L: mean={reinhard_params['L_mean']:.3f}, std={reinhard_params['L_std']:.3f}")
-                    logger.info(f"    a: mean={reinhard_params['a_mean']:.3f}, std={reinhard_params['a_std']:.3f}")
-                    logger.info(f"    b: mean={reinhard_params['b_mean']:.3f}, std={reinhard_params['b_std']:.3f}")
-                    logger.info(f"  Normalization will be applied ONCE per slide (before tile extraction)")
-
-                    # Set for slide-level normalization
-                    norm_params_for_workers = reinhard_params
-                    norm_method_for_workers = 'reinhard'
+        # Reinhard normalization already applied at slide level above (lines 2540-2568).
+        # Do NOT pass norm params to GPU workers — would cause double normalization.
 
         # CROSS-SLIDE NORMALIZATION (percentile only, requires multiple slides)
         if normalize_slides and len(czi_paths) > 1 and normalization_method == 'percentile':
@@ -2858,8 +2782,7 @@ def run_multi_slide_segmentation(
                 variance_threshold=variance_threshold,
                 calibration_block_size=calibration_block_size,
                 cleanup_config=cleanup_config,
-                norm_params=norm_params_for_workers,
-                normalization_method=norm_method_for_workers,
+                # Don't pass norm params — normalization already applied at slide level
             ) as processor:
                 logger.info(f"Submitting {len(sampled_tiles)} tiles to {num_gpus} GPUs...")
                 for slide_name, tile in sampled_tiles:
