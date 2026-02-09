@@ -190,6 +190,7 @@ def _gpu_worker_shm(
     cleanup_config: Optional[Dict[str, Any]] = None,
     norm_params: Optional[Dict[str, float]] = None,
     normalization_method: str = 'none',
+    intensity_threshold: float = 220.0,
 ):
     """
     Worker process that reads tiles from shared memory.
@@ -207,6 +208,7 @@ def _gpu_worker_shm(
         variance_threshold: Threshold for tissue detection
         calibration_block_size: Block size for variance calculation
         cleanup_config: Dict with cleanup options (cleanup_masks, fill_holes, pixel_size_um)
+        intensity_threshold: Max background intensity for tissue detection (Otsu-derived)
     """
     # Default cleanup config if not provided
     if cleanup_config is None:
@@ -345,7 +347,7 @@ def _gpu_worker_shm(
 
             # Check for tissue (always run — Reinhard normalizes but does not filter out background)
             try:
-                has_tissue_flag, _ = has_tissue(tile_normalized, variance_threshold, block_size=calibration_block_size)
+                has_tissue_flag, _ = has_tissue(tile_normalized, variance_threshold, block_size=calibration_block_size, max_bg_intensity=intensity_threshold)
             except Exception:
                 has_tissue_flag = True  # Assume tissue on error
 
@@ -473,6 +475,7 @@ class MultiGPUTileProcessorSHM:
         cleanup_config: Optional[Dict[str, Any]] = None,
         norm_params: Optional[Dict[str, float]] = None,
         normalization_method: str = 'none',
+        intensity_threshold: float = 220.0,
     ):
         self.num_gpus = num_gpus
         self.slide_info = slide_info
@@ -484,6 +487,7 @@ class MultiGPUTileProcessorSHM:
         self.cleanup_config = cleanup_config or {'cleanup_masks': False, 'fill_holes': True, 'pixel_size_um': 0.1725}
         self.norm_params = norm_params
         self.normalization_method = normalization_method
+        self.intensity_threshold = intensity_threshold
 
         self.segmenter_kwargs = {
             'mk_classifier_path': str(mk_classifier_path) if mk_classifier_path else None,
@@ -523,6 +527,7 @@ class MultiGPUTileProcessorSHM:
                     self.cleanup_config,
                     self.norm_params,
                     self.normalization_method,
+                    self.intensity_threshold,
                 ),
                 daemon=True
             )

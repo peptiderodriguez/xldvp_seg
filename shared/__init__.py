@@ -37,6 +37,7 @@ from segmentation.detection.tissue import (
     calculate_block_variances,
     has_tissue,
     compute_variance_threshold,
+    compute_tissue_thresholds,
     calibrate_tissue_threshold,
     filter_tissue_tiles,
 )
@@ -136,6 +137,7 @@ __all__ = [
     'calculate_block_variances',
     'has_tissue',
     'compute_variance_threshold',
+    'compute_tissue_thresholds',
     'calibrate_tissue_threshold',
     'filter_tissue_tiles',
     # HTML export

@@ -204,6 +204,40 @@ def compute_variance_threshold(variances, default=15.0):
     return threshold
 
 
+def compute_tissue_thresholds(variances, means, default_var=15.0, default_intensity=220):
+    """Compute variance and intensity thresholds from block-level calibration data.
+
+    Runs K-means 3-cluster on variances to get variance threshold.
+    Runs Otsu on block mean intensities to find the tissue/background boundary,
+    replacing the hardcoded max_bg_intensity=220.
+
+    Args:
+        variances: array-like of block variance values
+        means: array-like of block mean intensity values (uint8 scale)
+        default_var: fallback variance threshold
+        default_intensity: fallback intensity threshold if Otsu fails
+
+    Returns:
+        tuple: (variance_threshold, intensity_threshold)
+    """
+    variance_threshold = compute_variance_threshold(variances, default=default_var)
+
+    means = np.asarray(means, dtype=float)
+    if len(means) < 10:
+        logger.warning(f"Not enough mean samples ({len(means)}), using default intensity threshold {default_intensity}")
+        return variance_threshold, default_intensity
+
+    # Otsu on block mean intensities to find tissue/background boundary
+    means_uint8 = np.clip(means, 0, 255).astype(np.uint8)
+    otsu_val, _ = cv2.threshold(means_uint8.reshape(1, -1), 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
+    intensity_threshold = float(otsu_val)
+
+    logger.info(f"  Intensity threshold (Otsu on block means): {intensity_threshold:.1f}")
+    logger.info(f"  Block mean range: {means.min():.1f} – {np.median(means):.1f} (median) – {means.max():.1f}")
+
+    return variance_threshold, intensity_threshold
+
+
 def calibrate_tissue_threshold(
     tiles,
     reader=None,

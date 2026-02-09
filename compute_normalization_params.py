@@ -65,9 +65,9 @@ def sample_pixels_from_slide(czi_path, channel=0, n_samples=1000000):
 
         logger.info(f"  Tissue variance threshold (computed): {variance_threshold:.1f}")
 
-        # Reduce threshold by 10x to detect more tissue (especially lighter-stained regions)
-        variance_threshold = variance_threshold / 10.0
-        logger.info(f"  Tissue variance threshold (reduced 10x): {variance_threshold:.1f}")
+        # Reduce threshold by 3x to detect more tissue (especially lighter-stained regions)
+        variance_threshold = variance_threshold / 3.0
+        logger.info(f"  Tissue variance threshold (reduced 3x): {variance_threshold:.1f}")
         logger.info(f"  Filtering to tissue blocks...")
 
         # Filter to tissue blocks only
@@ -112,7 +112,7 @@ def sample_pixels_from_slide(czi_path, channel=0, n_samples=1000000):
 
         del block_origins, block_indices, selected_origins
         del max_x_offsets, max_y_offsets, x_offsets, y_offsets, xs, ys
-        logger.info(f"  Sampled {len(samples)} tissue pixels, mean intensity: {samples.mean():.1f}")
+        logger.info(f"  Sampled {len(samples)} tissue pixels, median intensity: {np.median(samples):.1f}")
 
         # Close and clear to prevent memory accumulation across slides
         loader.close()
@@ -241,17 +241,7 @@ def main():
     del all_samples, combined, tissue_img, lab
     gc.collect()
 
-    validate_slides = [
-        slides[0],   # first slide (FGC1)
-        slides[4],   # middle-ish (FHU1)
-        slides[8],   # another group (MGC1)
-        slides[12],  # last group (MHU1)
-        slides[-1],  # very last (MHU4)
-    ]
-    # Filter to slides that actually exist
-    validate_slides = [s for s in validate_slides if s.exists()]
-
-    generate_visual_validation(validate_slides, params, output_file.parent / "verification_tiles")
+    generate_visual_validation(slides, params, output_file.parent / "verification_tiles")
 
 
 def _get_font(size=40):
@@ -388,7 +378,7 @@ def generate_visual_validation(slide_paths, norm_params, output_dir, tile_size=3
         del thumb
         gc.collect()
 
-        # ── Raw vs Normalized tiles ───────────────────────────────────
+        # ── Raw vs Normalized tiles (all on one image per slide) ─────
         # Score tissue tiles by variance, pick top N
         scored = []
         for t in tissue_tiles:
@@ -401,37 +391,59 @@ def generate_visual_validation(slide_paths, norm_params, output_dir, tile_size=3
             scored.append((float(np.var(gray)), tx, ty))
         scored.sort(reverse=True)
 
-        for idx, (var_score, tx, ty) in enumerate(scored[:tiles_per_slide]):
+        selected = scored[:tiles_per_slide]
+        row_images = []
+        gap = 10
+        label_h = 60
+
+        for idx, (var_score, tx, ty) in enumerate(selected):
             logger.info(f"  Tile {idx+1}: pos=({tx},{ty}), var={var_score:.0f}")
 
             raw_tile = _ensure_rgb(image_array[ty:ty + tile_size, tx:tx + tile_size].copy())
             norm_tile = apply_reinhard_normalization(raw_tile.copy(), norm_params)
 
-            logger.info(f"    Raw  RGB mean: R={raw_tile[:,:,0].mean():.1f} G={raw_tile[:,:,1].mean():.1f} B={raw_tile[:,:,2].mean():.1f}")
-            logger.info(f"    Norm RGB mean: R={norm_tile[:,:,0].mean():.1f} G={norm_tile[:,:,1].mean():.1f} B={norm_tile[:,:,2].mean():.1f}")
+            logger.info(f"    Raw  RGB median: R={np.median(raw_tile[:,:,0]):.1f} G={np.median(raw_tile[:,:,1]):.1f} B={np.median(raw_tile[:,:,2]):.1f}")
+            logger.info(f"    Norm RGB median: R={np.median(norm_tile[:,:,0]):.1f} G={np.median(norm_tile[:,:,1]):.1f} B={np.median(norm_tile[:,:,2]):.1f}")
 
-            # Side-by-side canvas
+            # Side-by-side row: RAW | NORMALIZED
             th, tw = raw_tile.shape[:2]
-            gap = 10
-            label_h = 80
-            canvas = np.ones((th + label_h, tw * 2 + gap, 3), dtype=np.uint8) * 240
-            canvas[label_h:, :tw] = raw_tile
-            canvas[label_h:, tw + gap:] = norm_tile
+            row = np.ones((th + label_h, tw * 2 + gap, 3), dtype=np.uint8) * 240
+            row[label_h:, :tw] = raw_tile
+            row[label_h:, tw + gap:] = norm_tile
 
-            comp_img = Image.fromarray(canvas)
+            row_img = Image.fromarray(row)
+            row_draw = ImageDraw.Draw(row_img)
+            row_draw.text((20, 10), f"RAW  pos=({tx},{ty})  var={var_score:.0f}", fill=(200, 0, 0), font=_get_font(32))
+            row_draw.text((tw + gap + 20, 10), "REINHARD NORMALIZED", fill=(0, 130, 0), font=_get_font(32))
+
+            row_images.append(row_img)
+            del raw_tile, norm_tile
+
+        # Stack all rows vertically with a header
+        if row_images:
+            row_w = row_images[0].width
+            header_h = 60
+            row_gap = 6
+            total_h = header_h + sum(r.height for r in row_images) + row_gap * (len(row_images) - 1)
+
+            comp_img = Image.new('RGB', (row_w, total_h), (240, 240, 240))
             comp_draw = ImageDraw.Draw(comp_img)
-            comp_draw.text((20, 15), "RAW", fill=(200, 0, 0), font=_get_font(40))
-            comp_draw.text((tw + gap + 20, 15), "REINHARD NORMALIZED", fill=(0, 130, 0), font=_get_font(40))
-            comp_draw.text((20, 50), f"{slide_name}  pos=({tx},{ty})  var={var_score:.0f}", fill=(80, 80, 80), font=_get_font(28))
+            comp_draw.text((20, 12), f"{slide_name} — RAW vs REINHARD ({len(selected)} tiles)", fill=(0, 0, 0), font=_get_font(36))
 
-            comp_path = output_dir / f"comparison_{slide_name}_tile{idx}.png"
+            y_pos = header_h
+            for row_img in row_images:
+                comp_img.paste(row_img, (0, y_pos))
+                y_pos += row_img.height + row_gap
+
+            # Downscale to keep file size reasonable
             comp_img = comp_img.resize((comp_img.width // 2, comp_img.height // 2), Image.LANCZOS)
+            comp_path = output_dir / f"comparison_{slide_name}.png"
             comp_img.save(comp_path, quality=95)
-            logger.info(f"    Saved: {comp_path}")
+            logger.info(f"  Saved: {comp_path}")
             all_outputs.append(comp_path)
 
-            del raw_tile, norm_tile
-            gc.collect()
+        del row_images
+        gc.collect()
 
         # Free slide
         loader.close()

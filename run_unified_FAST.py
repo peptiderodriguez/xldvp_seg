@@ -40,6 +40,7 @@ from segmentation.io.html_export import (
 from segmentation.detection.tissue import (
     calibrate_tissue_threshold,
     compute_variance_threshold,
+    compute_tissue_thresholds,
     filter_tissue_tiles,
     has_tissue,
     calculate_block_variances,
@@ -208,7 +209,7 @@ def process_tile_worker(args):
     # Unpack all arguments
     tile, _, _, _, output_dir, \
     mk_min_area, mk_max_area, hspc_min_area, hspc_max_area, variance_threshold, \
-    calibration_block_size = args
+    calibration_block_size, intensity_threshold = args
 
     # Use global variables
     global segmenter, shared_image
@@ -244,7 +245,7 @@ def process_tile_worker(args):
 
     # Normalization disabled for H&E images - raw pixel values work better
     # img_rgb = percentile_normalize(img_rgb, p_low=5, p_high=95)
-    has_tissue_content, _ = has_tissue(img_rgb, variance_threshold, block_size=calibration_block_size)
+    has_tissue_content, _ = has_tissue(img_rgb, variance_threshold, block_size=calibration_block_size, max_bg_intensity=intensity_threshold)
     if not has_tissue_content:
         return {'tid': tid, 'status': 'no_tissue'}
 
@@ -1115,7 +1116,7 @@ class UnifiedSegmenter:
 
 
 def shared_calibrate_tissue_threshold(tiles, image_array, calibration_samples, block_size, tile_size):
-    """Calibrate tissue detection threshold using K-means clustering on variance samples.
+    """Calibrate tissue detection thresholds using K-means (variance) and Otsu (intensity).
 
     Args:
         tiles: List of tile dictionaries with x, y, w, h keys
@@ -1125,7 +1126,7 @@ def shared_calibrate_tissue_threshold(tiles, image_array, calibration_samples, b
         tile_size: Expected tile size
 
     Returns:
-        float: Variance threshold for tissue detection
+        tuple: (variance_threshold, intensity_threshold)
     """
     from concurrent.futures import ThreadPoolExecutor, as_completed
 
@@ -1134,41 +1135,37 @@ def shared_calibrate_tissue_threshold(tiles, image_array, calibration_samples, b
     calib_tiles = random.sample(tiles, calib_count)
     logger.info(f"Calibrating tissue threshold using {calib_count} tiles...")
 
-    def calc_tile_variances(tile):
+    def calc_tile_stats(tile):
         tile_img = image_array[tile['y']:tile['y']+tile['h'], tile['x']:tile['x']+tile['w']]
 
         if tile_img.max() == 0:
-            return [0.0]
+            return [0.0], [255.0]
 
-        # No normalization for H&E - use raw pixel values
         if tile_img.ndim == 3:
             gray = cv2.cvtColor(tile_img.astype(np.uint8), cv2.COLOR_RGB2GRAY)
         else:
             gray = tile_img.astype(np.uint8) if tile_img.dtype != np.uint8 else tile_img
 
-        block_vars, _ = calculate_block_variances(gray, block_size)
-        return block_vars if block_vars else []
+        block_vars, block_means = calculate_block_variances(gray, block_size)
+        return block_vars if block_vars else [], block_means if block_means else []
 
     all_variances = []
+    all_means = []
     with ThreadPoolExecutor(max_workers=8) as executor:
-        futures = {executor.submit(calc_tile_variances, tile): tile for tile in calib_tiles}
+        futures = {executor.submit(calc_tile_stats, tile): tile for tile in calib_tiles}
         for future in tqdm(as_completed(futures), total=len(calib_tiles), desc="Calibrating"):
-            result = future.result()
-            all_variances.extend(result)
+            block_vars, block_means = future.result()
+            all_variances.extend(block_vars)
+            all_means.extend(block_means)
 
     variances = np.array(all_variances)
+    means = np.array(all_means)
     if len(variances) == 0:
-        logger.warning("No variance samples collected, using default threshold 50.0")
-        return 50.0
+        logger.warning("No variance samples collected, using defaults")
+        return 50.0, 220.0
 
-    logger.info(f"  Running K-means on {len(variances)} variance samples...")
-    threshold = compute_variance_threshold(variances, default=50.0)
-
-    # Apply 10× reduction to catch lighter/uniform tissue — matches step 1 (compute_normalization_params.py)
-    threshold = threshold / 10.0
-    logger.info(f"  Tissue variance threshold (reduced 10x): {threshold:.1f}")
-
-    return threshold
+    logger.info(f"  Running K-means + Otsu on {len(variances)} block samples...")
+    return compute_tissue_thresholds(variances, means, default_var=50.0)
 
 
 def run_unified_segmentation(
@@ -1291,7 +1288,7 @@ def run_unified_segmentation(
     logger.info(f"Total tiles: {len(tiles)}")
 
     # Calibrate tissue threshold using RAM array directly
-    variance_threshold = shared_calibrate_tissue_threshold(
+    variance_threshold, intensity_threshold = shared_calibrate_tissue_threshold(
         tiles=tiles,
         image_array=loader.channel_data,
         calibration_samples=calibration_samples,
@@ -1348,7 +1345,7 @@ def run_unified_segmentation(
         worker_args.append((
             tile, czi_path, x_start, y_start, output_dir,
             mk_min_area, mk_max_area, hspc_min_area, hspc_max_area, variance_threshold,
-            calibration_block_size
+            calibration_block_size, intensity_threshold
         ))
     
     # Process tiles in parallel
@@ -1616,7 +1613,7 @@ def _calibrate_and_filter_tissue(all_tiles, n_slides, calibration_block_size, ca
         desc_suffix: suffix for tqdm progress bars (e.g. " (streaming)")
 
     Returns:
-        tuple: (tissue_tiles, variance_threshold)
+        tuple: (tissue_tiles, variance_threshold, intensity_threshold)
     """
     import cv2
 
@@ -1629,35 +1626,34 @@ def _calibrate_and_filter_tissue(all_tiles, n_slides, calibration_block_size, ca
 
     calib_threads = max(1, int(os.cpu_count() * 0.8))
 
-    def calc_tile_variances(args):
+    def calc_tile_stats(args):
         slide_name, tile = args
         tile_img = get_tile_fn(slide_name, tile)
 
         if tile_img is None or tile_img.max() == 0:
-            return [0.0]
+            return [0.0], [255.0]
 
         if tile_img.ndim == 3:
             gray = cv2.cvtColor(tile_img.astype(np.uint8), cv2.COLOR_RGB2GRAY)
         else:
             gray = tile_img.astype(np.uint8) if tile_img.dtype != np.uint8 else tile_img
 
-        block_vars, _ = calculate_block_variances(gray, calibration_block_size)
-        return block_vars if block_vars else []
+        block_vars, block_means = calculate_block_variances(gray, calibration_block_size)
+        return block_vars if block_vars else [], block_means if block_means else []
 
     all_variances = []
+    all_means = []
     with ThreadPoolExecutor(max_workers=calib_threads) as executor:
-        futures = {executor.submit(calc_tile_variances, tile): tile for tile in calib_tiles}
+        futures = {executor.submit(calc_tile_stats, tile): tile for tile in calib_tiles}
         for future in tqdm(as_completed(futures), total=len(calib_tiles), desc=f"Calibrating{desc_suffix}"):
-            result = future.result()
-            all_variances.extend(result)
+            block_vars, block_means = future.result()
+            all_variances.extend(block_vars)
+            all_means.extend(block_means)
 
     variances = np.array(all_variances)
-    logger.info(f"  Running K-means on {len(variances)} variance samples...")
-    variance_threshold = compute_variance_threshold(variances)
-
-    # Apply 10× reduction to catch lighter/uniform tissue — matches step 1 (compute_normalization_params.py)
-    variance_threshold = variance_threshold / 10.0
-    logger.info(f"  Tissue variance threshold (reduced 10x): {variance_threshold:.1f}")
+    means = np.array(all_means)
+    logger.info(f"  Running K-means + Otsu on {len(variances)} block samples...")
+    variance_threshold, intensity_threshold = compute_tissue_thresholds(variances, means)
 
     logger.info(f"\nFiltering to tissue-containing tiles...")
 
@@ -1671,7 +1667,8 @@ def _calibrate_and_filter_tissue(all_tiles, n_slides, calibration_block_size, ca
         if tile_img is None or tile_img.max() == 0:
             return None
 
-        has_tissue_flag, _ = has_tissue(tile_img, variance_threshold, block_size=calibration_block_size)
+        has_tissue_flag, _ = has_tissue(tile_img, variance_threshold, block_size=calibration_block_size,
+                                        max_bg_intensity=intensity_threshold)
 
         if has_tissue_flag:
             return (slide_name, tile)
@@ -1687,7 +1684,7 @@ def _calibrate_and_filter_tissue(all_tiles, n_slides, calibration_block_size, ca
 
     logger.info(f"\nTissue tiles: {len(tissue_tiles)} / {len(all_tiles)} ({100*len(tissue_tiles)/len(all_tiles):.1f}%)")
 
-    return tissue_tiles, variance_threshold
+    return tissue_tiles, variance_threshold, intensity_threshold
 
 
 def _create_tile_grid(slide_names_and_sizes, tile_size, overlap):
@@ -1762,14 +1759,14 @@ def _phase2_identify_tissue_tiles_streaming(slide_loaders, tile_size, overlap, v
         x_origin, y_origin = loader.mosaic_origin
         return loader.get_tile(x_origin + tile['x'], y_origin + tile['y'], tile_size, channel)
 
-    tissue_tiles, variance_threshold = _calibrate_and_filter_tissue(
+    tissue_tiles, variance_threshold, intensity_threshold = _calibrate_and_filter_tissue(
         all_tiles, len(slide_loaders), calibration_block_size, calibration_samples,
         get_tile_from_czi, desc_suffix=" (streaming)"
     )
 
     log_memory_status("Phase 2 tissue detection (streaming) - END")
 
-    return tissue_tiles, variance_threshold
+    return tissue_tiles, variance_threshold, intensity_threshold
 
 
 def _phase3_sample_tiles(tissue_tiles, sample_fraction):
@@ -1832,6 +1829,7 @@ def _phase4_process_tiles(
     num_gpus=4,
     norm_params=None,
     normalization_method='none',
+    intensity_threshold=220,
 ):
     """
     Phase 4: Process sampled tiles using ML models (SAM2, Cellpose, ResNet).
@@ -2091,6 +2089,7 @@ def _phase4_process_tiles(
                 cleanup_config=cleanup_config,
                 norm_params=norm_params,
                 normalization_method=normalization_method,
+                intensity_threshold=intensity_threshold,
             ) as processor:
                 # Submit all tiles (only coordinates, not data!)
                 logger.info(f"Submitting {len(sampled_tiles)} tiles to {num_gpus} GPUs (shared memory)...")
@@ -2156,6 +2155,7 @@ def _phase4_process_tiles(
                 cleanup_config=cleanup_config,
                 norm_params=norm_params,
                 normalization_method=normalization_method,
+                intensity_threshold=intensity_threshold,
             ) as processor:
                 # Submit all tiles (only coordinates, not data!)
                 logger.info(f"Submitting {len(sampled_tiles)} tiles to {actual_gpus} GPUs (shared memory)...")
@@ -2562,7 +2562,7 @@ def run_multi_slide_segmentation(
                 log_memory_status("After percentile normalization")
 
         # Phase 2: Identify tissue tiles using streaming (on-demand reading)
-        tissue_tiles, variance_threshold = _phase2_identify_tissue_tiles_streaming(
+        tissue_tiles, variance_threshold, intensity_threshold = _phase2_identify_tissue_tiles_streaming(
             slide_loaders, tile_size, overlap, None, calibration_block_size, calibration_samples, channel
         )
 
@@ -2641,6 +2641,7 @@ def run_multi_slide_segmentation(
                 variance_threshold=variance_threshold,
                 calibration_block_size=calibration_block_size,
                 cleanup_config=cleanup_config,
+                intensity_threshold=intensity_threshold,
                 # Don't pass norm params — normalization already applied at slide level
             ) as processor:
                 logger.info(f"Submitting {len(sampled_tiles)} tiles to {num_gpus} GPUs...")
@@ -2738,7 +2739,7 @@ def run_multi_slide_segmentation(
         )
 
         # Phase 2: Identify tissue-containing tiles
-        tissue_tiles, variance_threshold = _phase2_identify_tissue_tiles(
+        tissue_tiles, variance_threshold, intensity_threshold = _phase2_identify_tissue_tiles(
             slide_data, tile_size, overlap, None, calibration_block_size, calibration_samples
         )
 
@@ -2766,6 +2767,7 @@ def run_multi_slide_segmentation(
             hspc_max_area=hspc_max_area,
             multi_gpu=False,  # Don't use multi-GPU in standard mode
             num_gpus=num_gpus,
+            intensity_threshold=intensity_threshold,
         )
 
         # Clear slide data and loaders from RAM
@@ -2995,6 +2997,7 @@ def run_pipelined_segmentation(
     save_threads=None,  # CPU threads for saving (default: shares the 80% pool)
     norm_params=None,  # Reinhard normalization parameters (dict with Lab stats)
     normalization_method='none',  # Normalization method ('none', 'reinhard', 'percentile')
+    intensity_threshold=220,  # Max background intensity (Otsu-derived)
 ):
     """
     PIPELINED segmentation: parallel CPU pre/post processing + serial GPU.
