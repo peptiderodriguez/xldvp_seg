@@ -47,6 +47,10 @@ from tqdm import tqdm
 # Global counter for tiles skipped by Sobel pre-filter
 TILES_SKIPPED_BY_SOBEL = 0
 
+# Global dilation config (set from CLI args in main())
+DILATION_MODE = 'adaptive'
+SMA_MIN_WALL_INTENSITY = 30
+
 # ==============================================================================
 # GMM-based Adaptive Thresholding
 # ==============================================================================
@@ -991,7 +995,7 @@ def compute_cell_composition(cell_intensities, cd31_threshold, sma_threshold):
     }
 
 
-def save_vessel_crop(vessel, display_rgb, outer_contour, inner_contour, tile_x, tile_y, tile_size, scale_factor, output_dir=None):
+def save_vessel_crop(vessel, display_rgb, outer_contour, inner_contour, tile_x, tile_y, tile_size, scale_factor, output_dir=None, sma_contour=None):
     """Save a crop of the vessel - both raw and with contours drawn.
 
     Crop is centered on the mask centroid and sized to be 2x the mask bounding box.
@@ -999,11 +1003,16 @@ def save_vessel_crop(vessel, display_rgb, outer_contour, inner_contour, tile_x, 
 
     Args:
         output_dir: Output directory. Defaults to global OUTPUT_DIR if None.
+        sma_contour: Optional SMA (smooth muscle) contour. When present, drawn in
+            magenta as the 3rd ring. Color scheme: cyan=lumen, green=CD31, magenta=SMA.
     """
     if output_dir is None:
         output_dir = OUTPUT_DIR
-    # Get bounding box of both contours combined
-    all_points = np.vstack([outer_contour, inner_contour])
+    # Get bounding box of all contours combined
+    contour_list = [outer_contour, inner_contour]
+    if sma_contour is not None and len(sma_contour) > 0:
+        contour_list.append(sma_contour)
+    all_points = np.vstack(contour_list)
     x_min, y_min = all_points.min(axis=0).flatten()
     x_max, y_max = all_points.max(axis=0).flatten()
 
@@ -1047,8 +1056,13 @@ def save_vessel_crop(vessel, display_rgb, outer_contour, inner_contour, tile_x, 
     outer_in_crop = outer_contour - np.array([x1, y1])
     inner_in_crop = inner_contour - np.array([x1, y1])
 
-    cv2.drawContours(crop_contoured, [outer_in_crop], -1, (0, 255, 0), 2)  # Green for outer wall
+    cv2.drawContours(crop_contoured, [outer_in_crop], -1, (0, 255, 0), 2)  # Green for CD31 outer wall
     cv2.drawContours(crop_contoured, [inner_in_crop], -1, (0, 255, 255), 2)  # Cyan for inner lumen
+
+    # Draw SMA contour in magenta if present
+    if sma_contour is not None and len(sma_contour) > 0:
+        sma_in_crop = sma_contour.reshape(-1, 1, 2) - np.array([x1, y1])
+        cv2.drawContours(crop_contoured, [sma_in_crop], -1, (255, 0, 255), 2)  # Magenta for SMA
 
     # Store crop offset for reference
     vessel['crop_offset'] = [int(x1), int(y1)]
@@ -1062,6 +1076,139 @@ def save_vessel_crop(vessel, display_rgb, outer_contour, inner_contour, tile_x, 
     vessel['crop_path_raw'] = raw_path
 
     return crop_path
+
+
+def save_vessel_crop_fullres(vessel, channel_cache, output_dir=None, padding_factor=1.0):
+    """Save a crop at full CZI resolution with refined contours.
+
+    Reads a small ROI from the CZI at native resolution, normalizes the 3
+    display channels (SMA, CD31, nuclear), and draws all contours at
+    pixel-perfect resolution.
+
+    Color scheme: cyan=lumen, green=CD31, magenta=SMA.
+
+    Args:
+        vessel: Vessel dict with refined contours in full-res tile-local coords.
+        channel_cache: DownsampledChannelCache (used for its .loader reference).
+        output_dir: Output directory. Defaults to global OUTPUT_DIR.
+        padding_factor: Padding around contour bbox as multiple of vessel size.
+
+    Returns:
+        crop_path if successful, None otherwise.
+    """
+    if output_dir is None:
+        output_dir = OUTPUT_DIR
+
+    scale_factor = vessel['scale_factor']
+    tile_x = vessel['tile_x']
+    tile_y = vessel['tile_y']
+
+    # All contours are in full-res tile-local coordinates
+    inner_pts = np.array(vessel['inner_contour']).reshape(-1, 2)
+    outer_pts = np.array(vessel['outer_contour']).reshape(-1, 2)
+
+    if len(inner_pts) < 3 or len(outer_pts) < 3:
+        return None
+
+    # Collect all contour points for bounding box
+    all_pts_list = [inner_pts, outer_pts]
+    has_sma = vessel.get('has_sma_ring', False) and vessel.get('sma_contour')
+    if has_sma:
+        sma_pts = np.array(vessel['sma_contour']).reshape(-1, 2)
+        all_pts_list.append(sma_pts)
+    all_pts = np.vstack(all_pts_list)
+
+    x_min, y_min = all_pts.min(axis=0)
+    x_max, y_max = all_pts.max(axis=0)
+    w = x_max - x_min
+    h = y_max - y_min
+
+    # Crop size = vessel bbox + padding
+    pad_x = int(w * padding_factor / 2)
+    pad_y = int(h * padding_factor / 2)
+    roi_x1 = max(0, int(x_min) - pad_x)
+    roi_y1 = max(0, int(y_min) - pad_y)
+    roi_x2 = int(x_max) + pad_x
+    roi_y2 = int(y_max) + pad_y
+    roi_w = roi_x2 - roi_x1
+    roi_h = roi_y2 - roi_y1
+
+    if roi_w <= 0 or roi_h <= 0:
+        return None
+
+    # Convert to global CZI mosaic coords
+    tile_origin_x = tile_x * scale_factor
+    tile_origin_y = tile_y * scale_factor
+    global_x = tile_origin_x + roi_x1
+    global_y = tile_origin_y + roi_y1
+
+    loader = channel_cache.loader
+
+    # Read 3 display channels at full resolution
+    try:
+        sma_raw = loader.reader.read_mosaic(
+            region=(loader.x_start + global_x, loader.y_start + global_y, roi_w, roi_h),
+            scale_factor=1, C=SMA
+        )
+        cd31_raw = loader.reader.read_mosaic(
+            region=(loader.x_start + global_x, loader.y_start + global_y, roi_w, roi_h),
+            scale_factor=1, C=CD31
+        )
+        nuc_raw = loader.reader.read_mosaic(
+            region=(loader.x_start + global_x, loader.y_start + global_y, roi_w, roi_h),
+            scale_factor=1, C=NUCLEAR
+        )
+    except Exception:
+        return None
+
+    sma_raw = np.squeeze(sma_raw)
+    cd31_raw = np.squeeze(cd31_raw)
+    nuc_raw = np.squeeze(nuc_raw)
+
+    if sma_raw.size == 0 or cd31_raw.size == 0 or nuc_raw.size == 0:
+        return None
+
+    # Normalize and build display RGB (R=SMA, G=CD31, B=nuclear)
+    display_rgb = np.stack([
+        normalize_channel(sma_raw),
+        normalize_channel(cd31_raw),
+        normalize_channel(nuc_raw),
+    ], axis=-1)
+
+    # Map contours from tile-local to crop-local coords
+    offset = np.array([roi_x1, roi_y1])
+    inner_crop = (inner_pts - offset).astype(np.int32).reshape(-1, 1, 2)
+    outer_crop = (outer_pts - offset).astype(np.int32).reshape(-1, 1, 2)
+
+    uid = vessel['uid']
+
+    # Save raw crop (no contours)
+    raw_path = os.path.join(output_dir, 'crops', f"{uid}_raw.jpg")
+    cv2.imwrite(raw_path, cv2.cvtColor(display_rgb, cv2.COLOR_RGB2BGR),
+                [cv2.IMWRITE_JPEG_QUALITY, 90])
+
+    # Draw contours
+    crop_contoured = display_rgb.copy()
+    cv2.drawContours(crop_contoured, [outer_crop], -1, (0, 255, 0), 2)   # Green: CD31
+    cv2.drawContours(crop_contoured, [inner_crop], -1, (0, 255, 255), 2)  # Cyan: lumen
+
+    if has_sma:
+        sma_crop = (sma_pts - offset).astype(np.int32).reshape(-1, 1, 2)
+        cv2.drawContours(crop_contoured, [sma_crop], -1, (255, 0, 255), 2)  # Magenta: SMA
+
+    crop_path = os.path.join(output_dir, 'crops', f"{uid}.jpg")
+    cv2.imwrite(crop_path, cv2.cvtColor(crop_contoured, cv2.COLOR_RGB2BGR),
+                [cv2.IMWRITE_JPEG_QUALITY, 90])
+
+    # Update vessel dict
+    vessel['crop_path'] = crop_path
+    vessel['crop_path_raw'] = raw_path
+    vessel['crop_offset'] = [int(roi_x1), int(roi_y1)]
+    vessel['crop_scale_factor'] = 1  # Full resolution
+
+    del display_rgb, crop_contoured, sma_raw, cd31_raw, nuc_raw
+    return crop_path
+
 
 def regenerate_missing_crops(vessels, channel_cache):
     """Regenerate crop images for vessels that are missing crop files on disk.
@@ -1564,23 +1711,31 @@ def compute_cd31_edge_coverage(lumen_mask, cd31_norm, ring_width=3, n_samples=36
     return coverage, edge_mean, bg_intensity
 
 
-def dilate_until_signal_drops(lumens, cd31_norm, scale_factor=1, drop_ratio=0.85, max_iterations=50):
+def dilate_until_signal_drops(lumens, cd31_norm, scale_factor=1, drop_ratio=0.9,
+                              max_iterations=50, mode='adaptive'):
     """
     Expand from lumens by dilating until CD31 signal drops.
 
     CD31 marks endothelium (vessel lining), so this ensures we're capturing
     actual blood vessel boundaries.
 
-    For each lumen:
-    1. Start with the lumen mask
-    2. Dilate iteratively
-    3. Check mean CD31 intensity in the newly added ring
-    4. Stop when ring intensity drops below drop_ratio * wall intensity
+    Two modes:
+    - 'adaptive' (default): Per-pixel region growing. Each candidate pixel is
+      accepted only if its local CD31 intensity exceeds the threshold. Produces
+      irregular contours that follow the actual endothelial boundary.
+    - 'uniform': Global ring check. Expands uniformly in all directions; stops
+      when the mean intensity of the entire new ring drops below threshold.
 
     Returns labels array where each lumen's expanded region has a unique label.
     """
     labels = np.zeros(cd31_norm.shape, dtype=np.int32)
     kernel = np.ones((3, 3), np.uint8)
+
+    # For adaptive mode, smooth slightly to reduce single-pixel noise
+    if mode == 'adaptive':
+        cd31_smooth = cv2.GaussianBlur(cd31_norm, (3, 3), 0)
+    else:
+        cd31_smooth = cd31_norm
 
     for idx, lumen in enumerate(lumens):
         mask = lumen['mask'].astype(np.uint8)
@@ -1592,33 +1747,432 @@ def dilate_until_signal_drops(lumens, cd31_norm, scale_factor=1, drop_ratio=0.85
         if initial_ring.sum() == 0:
             labels[mask > 0] = label_id
             continue
-        wall_intensity = cd31_norm[initial_ring].mean()
+        wall_intensity = cd31_smooth[initial_ring].mean()
 
         # Threshold for stopping: when ring drops below this
         stop_threshold = wall_intensity * drop_ratio
 
-        # Iteratively dilate - always do at least one dilation
-        current_mask = dilated_once.copy()  # Start with one dilation already done
-        for i in range(max_iterations - 1):  # -1 since we already did one
-            dilated = cv2.dilate(current_mask, kernel, iterations=1)
-            new_ring = (dilated > 0) & (current_mask == 0)
+        if mode == 'adaptive':
+            # Per-pixel region growing: only accept pixels where CD31 is above threshold
+            current_mask = dilated_once.copy()
+            initial_reject = initial_ring & (cd31_smooth < stop_threshold)
+            current_mask[initial_reject] = 0
+            current_mask[mask > 0] = 1
 
-            if new_ring.sum() == 0:
-                break
+            for i in range(max_iterations - 1):
+                dilated = cv2.dilate(current_mask, kernel, iterations=1)
+                new_pixels = (dilated > 0) & (current_mask == 0)
 
-            ring_intensity = cd31_norm[new_ring].mean()
+                if new_pixels.sum() == 0:
+                    break
 
-            # Stop if signal dropped
-            if ring_intensity < stop_threshold:
-                break
+                accept = new_pixels & (cd31_smooth >= stop_threshold)
 
-            # Only expand if signal is still strong
-            current_mask = dilated
+                if accept.sum() == 0:
+                    break
+
+                current_mask[accept] = 1
+        else:
+            # Uniform mode: global ring check (original behavior)
+            current_mask = dilated_once.copy()
+            for i in range(max_iterations - 1):
+                dilated = cv2.dilate(current_mask, kernel, iterations=1)
+                new_ring = (dilated > 0) & (current_mask == 0)
+
+                if new_ring.sum() == 0:
+                    break
+
+                ring_intensity = cd31_smooth[new_ring].mean()
+
+                if ring_intensity < stop_threshold:
+                    break
+
+                current_mask = dilated
 
         # Assign label to final expanded region
         labels[current_mask > 0] = label_id
 
     return labels
+
+
+def dilate_until_sma_drops(lumens, sma_norm, scale_factor=1, drop_ratio=0.9,
+                           max_iterations=50, min_wall_intensity=30,
+                           mode='adaptive'):
+    """
+    Expand from lumens by dilating until SMA signal drops.
+
+    SMA (smooth muscle actin) wraps around endothelium in arteries/arterioles.
+    This function detects the SMA ring by expanding outward from the lumen on the
+    SMA channel, mirroring dilate_until_signal_drops() but for smooth muscle.
+
+    Starts from the lumen masks (same as CD31 expansion) because CD31 and SMA
+    can be intermingled in these scans.
+
+    If SMA signal around a lumen is too weak (< min_wall_intensity), returns
+    the lumen boundary unchanged — this vessel is likely a vein or capillary
+    with no smooth muscle layer.
+
+    Two modes:
+    - 'adaptive' (default): Per-pixel region growing. Each candidate pixel is
+      accepted only if its local SMA intensity exceeds the threshold. This
+      produces irregular rings that follow the actual SMA boundary — thicker
+      where smooth muscle is thick, thinner where it's thin.
+    - 'uniform': Global ring check (same as CD31 dilation). Expands uniformly
+      in all directions; stops when the mean intensity of the entire new ring
+      drops below threshold. Always produces rings that follow the lumen outline.
+
+    Args:
+        lumens: List of dicts with 'mask' key (bool/uint8 arrays)
+        sma_norm: Normalized SMA channel (uint8, 0-255)
+        scale_factor: Current processing scale factor
+        drop_ratio: Stop when intensity drops below wall_intensity * drop_ratio
+        max_iterations: Maximum dilation iterations
+        min_wall_intensity: Minimum SMA intensity in initial ring to attempt dilation.
+            Below this threshold, the vessel has no SMA layer (vein/capillary).
+        mode: 'adaptive' for per-pixel region growing (irregular rings),
+              'uniform' for global ring check (uniform-width rings).
+
+    Returns:
+        labels: Array where each lumen's expanded region has a unique label
+    """
+    labels = np.zeros(sma_norm.shape, dtype=np.int32)
+    kernel = np.ones((3, 3), np.uint8)
+
+    # For adaptive mode, smooth SMA slightly to reduce single-pixel noise
+    # while preserving the true boundary shape
+    if mode == 'adaptive':
+        sma_smooth = cv2.GaussianBlur(sma_norm, (3, 3), 0)
+    else:
+        sma_smooth = sma_norm
+
+    for idx, lumen in enumerate(lumens):
+        mask = lumen['mask'].astype(np.uint8)
+        label_id = idx + 1
+
+        # Get initial wall intensity (the SMA ring around lumen)
+        dilated_once = cv2.dilate(mask, kernel, iterations=1)
+        initial_ring = (dilated_once > 0) & (mask == 0)
+        if initial_ring.sum() == 0:
+            labels[mask > 0] = label_id
+            continue
+        wall_intensity = sma_smooth[initial_ring].mean()
+
+        # If SMA signal is too weak, this is a vein/capillary — return lumen only
+        if wall_intensity < min_wall_intensity:
+            labels[mask > 0] = label_id
+            continue
+
+        # Threshold for stopping
+        stop_threshold = wall_intensity * drop_ratio
+
+        if mode == 'adaptive':
+            # Per-pixel region growing: only accept pixels where SMA is above threshold
+            # This produces irregular rings that follow the actual SMA boundary
+            current_mask = dilated_once.copy()
+            # Accept initial ring pixels that pass threshold
+            initial_reject = initial_ring & (sma_smooth < stop_threshold)
+            current_mask[initial_reject] = 0
+            # Re-add lumen pixels (always included)
+            current_mask[mask > 0] = 1
+
+            for i in range(max_iterations - 1):
+                dilated = cv2.dilate(current_mask, kernel, iterations=1)
+                new_pixels = (dilated > 0) & (current_mask == 0)
+
+                if new_pixels.sum() == 0:
+                    break
+
+                # Only accept pixels where SMA intensity is still strong
+                accept = new_pixels & (sma_smooth >= stop_threshold)
+
+                if accept.sum() == 0:
+                    break
+
+                current_mask[accept] = 1
+        else:
+            # Uniform mode: global ring check (original behavior)
+            current_mask = dilated_once.copy()
+            for i in range(max_iterations - 1):
+                dilated = cv2.dilate(current_mask, kernel, iterations=1)
+                new_ring = (dilated > 0) & (current_mask == 0)
+
+                if new_ring.sum() == 0:
+                    break
+
+                ring_intensity = sma_smooth[new_ring].mean()
+
+                if ring_intensity < stop_threshold:
+                    break
+
+                current_mask = dilated
+
+        # Assign label to final expanded region
+        labels[current_mask > 0] = label_id
+
+    return labels
+
+
+# ==============================================================================
+# Contour Refinement at Full Resolution
+# ==============================================================================
+
+def smooth_contour_spline(contour, smoothing=3.0, n_points=0):
+    """
+    Smooth a closed contour using periodic B-spline interpolation.
+
+    Fits a smooth curve through the contour points, eliminating stair-step
+    artifacts from coarse-scale detection and upscaling.
+
+    Args:
+        contour: Contour array, shape (N, 1, 2) or (N, 2), integer pixel coords
+        smoothing: Spline smoothing factor. Higher = smoother (less faithful to
+            original points). 0 = interpolating spline (passes through all points).
+            Default 3.0 works well for removing scaling stair-steps.
+        n_points: Number of output points. 0 = same as input. Set higher for
+            smoother visual appearance (e.g., 2*N).
+
+    Returns:
+        Smoothed contour as int32 array, shape (M, 1, 2) suitable for cv2
+    """
+    from scipy.interpolate import splprep, splev
+
+    pts = np.array(contour).reshape(-1, 2).astype(np.float64)
+    if len(pts) < 5:
+        return contour  # Too few points to smooth
+
+    # Remove duplicate consecutive points (can cause splprep to fail)
+    diffs = np.diff(pts, axis=0)
+    mask = np.any(diffs != 0, axis=1)
+    mask = np.append(mask, True)  # Keep last point
+    pts = pts[mask]
+    if len(pts) < 5:
+        return contour
+
+    x, y = pts[:, 0], pts[:, 1]
+
+    try:
+        # Fit periodic B-spline (closed contour)
+        tck, u = splprep([x, y], s=smoothing, per=True, k=3)
+
+        # Evaluate at desired number of points
+        if n_points <= 0:
+            n_points = len(pts)
+        u_new = np.linspace(0, 1, n_points)
+        x_new, y_new = splev(u_new, tck)
+
+        smoothed = np.stack([x_new, y_new], axis=-1).astype(np.int32)
+        return smoothed.reshape(-1, 1, 2)
+    except Exception:
+        # If spline fitting fails (degenerate contour), return original
+        return np.array(contour).reshape(-1, 1, 2).astype(np.int32)
+
+
+def refine_vessel_contours_fullres(vessel, channel_cache, spline=False,
+                                   spline_smoothing=3.0,
+                                   cd31_drop_ratio=0.9, cd31_mode='adaptive',
+                                   sma_drop_ratio=0.9,
+                                   sma_min_wall_intensity=30, sma_mode='adaptive',
+                                   pixel_size_um=0.1725, padding_factor=2.0):
+    """
+    Refine vessel contours at full resolution using CZI data.
+
+    Reads a small ROI from the CZI at native resolution around the vessel,
+    reconstructs the lumen mask, re-runs CD31 and SMA dilation at full res,
+    and extracts pixel-perfect contours with no scaling artifacts.
+
+    Optionally applies spline smoothing for extra polish.
+
+    Args:
+        vessel: Vessel dict with 'inner_contour', 'outer_contour', 'tile_x', etc.
+        channel_cache: DownsampledChannelCache (used for its .loader reference)
+        spline: Apply spline smoothing to refined contours (default False)
+        spline_smoothing: Spline smoothing factor (default 3.0)
+        cd31_drop_ratio: Drop ratio for CD31 dilation (default 0.9)
+        cd31_mode: CD31 dilation mode, 'adaptive' or 'uniform' (default 'adaptive')
+        sma_drop_ratio: Drop ratio for SMA dilation (default 0.9)
+        sma_min_wall_intensity: Min SMA wall intensity threshold (default 30)
+        sma_mode: SMA dilation mode, 'adaptive' or 'uniform' (default 'adaptive')
+        pixel_size_um: Physical pixel size at full resolution (default 0.1725)
+        padding_factor: Padding around vessel bbox as multiple of vessel size (default 2.0)
+
+    Returns:
+        True if refinement succeeded, False otherwise.
+        Modifies vessel dict in-place with refined contours and updated measurements.
+    """
+    scale_factor = vessel['scale_factor']
+    tile_x = vessel['tile_x']
+    tile_y = vessel['tile_y']
+
+    # Get coarse contours in full-res tile-local coordinates
+    inner_pts = np.array(vessel['inner_contour']).reshape(-1, 2)
+    outer_pts = np.array(vessel['outer_contour']).reshape(-1, 2)
+
+    if len(inner_pts) < 3 or len(outer_pts) < 3:
+        return False
+
+    # Include SMA contour in bbox calculation if present
+    all_pts = [inner_pts, outer_pts]
+    sma_pts = None
+    if vessel.get('sma_contour') and len(vessel['sma_contour']) >= 3:
+        sma_pts = np.array(vessel['sma_contour']).reshape(-1, 2)
+        all_pts.append(sma_pts)
+    all_pts_arr = np.vstack(all_pts)
+
+    # Bounding box in full-res tile-local coords
+    x_min, y_min = all_pts_arr.min(axis=0)
+    x_max, y_max = all_pts_arr.max(axis=0)
+    w = x_max - x_min
+    h = y_max - y_min
+
+    # Add padding so dilation has room to expand
+    pad_x = int(w * padding_factor / 2)
+    pad_y = int(h * padding_factor / 2)
+    roi_x1 = max(0, int(x_min) - pad_x)
+    roi_y1 = max(0, int(y_min) - pad_y)
+    roi_x2 = int(x_max) + pad_x
+    roi_y2 = int(y_max) + pad_y
+
+    roi_w = roi_x2 - roi_x1
+    roi_h = roi_y2 - roi_y1
+
+    if roi_w <= 0 or roi_h <= 0:
+        return False
+
+    # Convert ROI from tile-local full-res coords to global CZI mosaic coords
+    tile_origin_x_fullres = tile_x * scale_factor
+    tile_origin_y_fullres = tile_y * scale_factor
+    global_roi_x = tile_origin_x_fullres + roi_x1
+    global_roi_y = tile_origin_y_fullres + roi_y1
+
+    loader = channel_cache.loader
+
+    # Read CD31 and SMA channels at full resolution from CZI
+    try:
+        cd31_roi = loader.reader.read_mosaic(
+            region=(loader.x_start + global_roi_x, loader.y_start + global_roi_y, roi_w, roi_h),
+            scale_factor=1, C=CD31
+        )
+        cd31_roi = np.squeeze(cd31_roi)
+
+        sma_roi = loader.reader.read_mosaic(
+            region=(loader.x_start + global_roi_x, loader.y_start + global_roi_y, roi_w, roi_h),
+            scale_factor=1, C=SMA
+        )
+        sma_roi = np.squeeze(sma_roi)
+    except Exception:
+        return False
+
+    if cd31_roi.size == 0 or sma_roi.size == 0:
+        return False
+
+    # Normalize to uint8
+    cd31_norm = normalize_channel(cd31_roi)
+    sma_norm = normalize_channel(sma_roi)
+
+    # Reconstruct lumen mask at full res within ROI
+    lumen_mask = np.zeros((roi_h, roi_w), dtype=np.uint8)
+    inner_in_roi = inner_pts - np.array([roi_x1, roi_y1])
+    cv2.drawContours(lumen_mask, [inner_in_roi.reshape(-1, 1, 2).astype(np.int32)], -1, 1, -1)
+
+    if lumen_mask.sum() == 0:
+        return False
+
+    lumens = [{'mask': lumen_mask.astype(bool)}]
+
+    # Re-run CD31 dilation at full resolution (scale_factor=1)
+    cd31_labels = dilate_until_signal_drops(lumens, cd31_norm, scale_factor=1,
+                                            drop_ratio=cd31_drop_ratio,
+                                            mode=cd31_mode)
+
+    # Re-run SMA dilation at full resolution
+    sma_labels = dilate_until_sma_drops(lumens, sma_norm, scale_factor=1,
+                                        drop_ratio=sma_drop_ratio,
+                                        min_wall_intensity=sma_min_wall_intensity,
+                                        mode=sma_mode)
+
+    # Extract refined contours in ROI coordinates
+    # Inner (lumen) contour — spline-smooth the original since we don't re-detect it
+    inner_in_roi_cv = inner_in_roi.reshape(-1, 1, 2).astype(np.int32)
+    if spline:
+        inner_in_roi_cv = smooth_contour_spline(inner_in_roi_cv, smoothing=spline_smoothing)
+
+    # Outer (CD31) contour
+    cd31_mask = (cd31_labels == 1).astype(np.uint8)
+    cd31_contours, _ = cv2.findContours(cd31_mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+    if len(cd31_contours) == 0:
+        return False
+    outer_in_roi = max(cd31_contours, key=cv2.contourArea)
+    if spline:
+        outer_in_roi = smooth_contour_spline(outer_in_roi, smoothing=spline_smoothing)
+
+    # SMA contour
+    sma_mask = (sma_labels == 1).astype(np.uint8)
+    sma_contours_found, _ = cv2.findContours(sma_mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+    if len(sma_contours_found) > 0:
+        sma_in_roi = max(sma_contours_found, key=cv2.contourArea)
+    else:
+        sma_in_roi = inner_in_roi_cv  # Fallback
+
+    sma_area_roi = cv2.contourArea(sma_in_roi)
+    inner_area_roi = cv2.contourArea(inner_in_roi_cv)
+    has_sma_ring = sma_area_roi > inner_area_roi * 1.05
+
+    if spline and has_sma_ring:
+        sma_in_roi = smooth_contour_spline(sma_in_roi, smoothing=spline_smoothing)
+
+    # Convert back to tile-local full-res coordinates
+    offset = np.array([roi_x1, roi_y1])
+    inner_full = (np.array(inner_in_roi_cv).reshape(-1, 2) + offset).astype(np.int32)
+    outer_full = (np.array(outer_in_roi).reshape(-1, 2) + offset).astype(np.int32)
+    sma_full = (np.array(sma_in_roi).reshape(-1, 2) + offset).astype(np.int32)
+
+    # Recompute measurements at full resolution
+    outer_area = cv2.contourArea(outer_full.reshape(-1, 1, 2))
+    inner_area = cv2.contourArea(inner_full.reshape(-1, 1, 2))
+    sma_area = cv2.contourArea(sma_full.reshape(-1, 1, 2))
+
+    if len(outer_full) >= 5:
+        outer_ellipse = cv2.fitEllipse(outer_full.reshape(-1, 1, 2))
+        outer_diameter = (outer_ellipse[1][0] + outer_ellipse[1][1]) / 2 * pixel_size_um
+    else:
+        outer_diameter = np.sqrt(outer_area / np.pi) * 2 * pixel_size_um
+
+    if len(inner_full) >= 5:
+        inner_ellipse = cv2.fitEllipse(inner_full.reshape(-1, 1, 2))
+        inner_diameter = (inner_ellipse[1][0] + inner_ellipse[1][1]) / 2 * pixel_size_um
+    else:
+        inner_diameter = np.sqrt(inner_area / np.pi) * 2 * pixel_size_um
+
+    if len(sma_full) >= 5 and has_sma_ring:
+        sma_ellipse = cv2.fitEllipse(sma_full.reshape(-1, 1, 2))
+        sma_diameter = (sma_ellipse[1][0] + sma_ellipse[1][1]) / 2 * pixel_size_um
+    else:
+        sma_diameter = outer_diameter if not has_sma_ring else np.sqrt(sma_area / np.pi) * 2 * pixel_size_um
+
+    wall_thickness = (outer_diameter - inner_diameter) / 2
+    sma_thickness = (sma_diameter - outer_diameter) / 2 if has_sma_ring else 0.0
+
+    # Update vessel dict in-place
+    vessel['outer_contour'] = outer_full.tolist()
+    vessel['inner_contour'] = inner_full.tolist()
+    vessel['sma_contour'] = sma_full.tolist()
+    vessel['outer_diameter_um'] = float(outer_diameter)
+    vessel['inner_diameter_um'] = float(inner_diameter)
+    vessel['sma_diameter_um'] = float(sma_diameter)
+    vessel['sma_thickness_um'] = float(sma_thickness)
+    vessel['has_sma_ring'] = bool(has_sma_ring)
+    vessel['wall_thickness_um'] = float(wall_thickness)
+    vessel['outer_area_px'] = float(outer_area)
+    vessel['inner_area_px'] = float(inner_area)
+    vessel['wall_area_px'] = float(outer_area - inner_area)
+    vessel['refined'] = True
+
+    # Cleanup
+    del cd31_roi, sma_roi, cd31_norm, sma_norm, cd31_labels, sma_labels, lumen_mask
+    gc.collect()
+
+    return True
+
 
 def process_tile_at_scale(tile_x, tile_y, channel_cache, sam2_generator, scale_config, pixel_size_um=0.1725, adaptive_sobel_threshold=0.05):
     """
@@ -1711,8 +2265,13 @@ def process_tile_at_scale(tile_x, tile_y, channel_cache, sam2_generator, scale_c
         gc.collect()
         return []
 
-    # Watershed expansion
-    labels = dilate_until_signal_drops(lumens, cd31_norm, scale_factor)
+    # Watershed expansion (CD31 outer wall)
+    labels = dilate_until_signal_drops(lumens, cd31_norm, scale_factor, mode=DILATION_MODE)
+
+    # SMA ring detection (3rd contour) — expands from lumen on SMA channel
+    sma_labels = dilate_until_sma_drops(lumens, sma_norm, scale_factor,
+                                        min_wall_intensity=SMA_MIN_WALL_INTENSITY,
+                                        mode=DILATION_MODE)
 
     # First pass: collect all candidate vessels with their CD31 enrichment ratios
     # for GMM-based adaptive thresholding
@@ -1734,6 +2293,19 @@ def process_tile_at_scale(tile_x, tile_y, channel_cache, sam2_generator, scale_c
         if len(inner_contours) == 0:
             continue
         inner_contour = max(inner_contours, key=cv2.contourArea)
+
+        # Extract SMA contour from sma_labels
+        sma_mask = (sma_labels == label_id).astype(np.uint8)
+        sma_contours_found, _ = cv2.findContours(sma_mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+        if len(sma_contours_found) > 0:
+            sma_contour = max(sma_contours_found, key=cv2.contourArea)
+        else:
+            sma_contour = inner_contour  # Fallback: no SMA = lumen boundary
+
+        # Determine if SMA ring is meaningful (expanded beyond lumen)
+        sma_area_tile = cv2.contourArea(sma_contour)
+        inner_area_tile_check = cv2.contourArea(inner_contour)
+        has_sma_ring = sma_area_tile > inner_area_tile_check * 1.05  # >5% larger than lumen
 
         # Verify outer contour actually surrounds inner contour
         # Check that inner bounding box is contained within outer bounding box
@@ -1862,6 +2434,16 @@ def process_tile_at_scale(tile_x, tile_y, channel_cache, sam2_generator, scale_c
 
         outer_full = (outer_contour * scale_factor).astype(int)
         inner_full = (inner_contour * scale_factor).astype(int)
+        sma_full = (sma_contour * scale_factor).astype(int)
+
+        # SMA measurements
+        sma_area_px = cv2.contourArea(sma_contour) * area_scale
+        if len(sma_contour) >= 5 and has_sma_ring:
+            sma_ellipse = cv2.fitEllipse(sma_contour)
+            sma_diameter = (sma_ellipse[1][0] + sma_ellipse[1][1]) / 2 * effective_pixel_size
+        else:
+            sma_diameter = float(outer_diameter) if not has_sma_ring else np.sqrt(sma_area_px / np.pi) * 2 * pixel_size_um
+        sma_thickness = (sma_diameter - outer_diameter) / 2 if has_sma_ring else 0.0
 
         # Global coordinates (tile_x/tile_y are in scaled coords, convert to full res)
         global_x = tile_x * scale_factor + cx_full
@@ -1878,8 +2460,12 @@ def process_tile_at_scale(tile_x, tile_y, channel_cache, sam2_generator, scale_c
             'global_center': [int(global_x), int(global_y)],  # in full-res coordinates
             'outer_contour': outer_full.tolist(),
             'inner_contour': inner_full.tolist(),
+            'sma_contour': sma_full.tolist(),
             'outer_diameter_um': float(outer_diameter),
             'inner_diameter_um': float(inner_diameter),
+            'sma_diameter_um': float(sma_diameter),
+            'sma_thickness_um': float(sma_thickness),
+            'has_sma_ring': bool(has_sma_ring),
             'wall_thickness_um': float(wall_thickness),
             'outer_area_px': float(outer_area),
             'inner_area_px': float(inner_area),
@@ -1889,13 +2475,14 @@ def process_tile_at_scale(tile_x, tile_y, channel_cache, sam2_generator, scale_c
         }
 
         # Save crop with contours (use tile-scale contours for drawing on tile-scale image)
-        crop_path = save_vessel_crop(vessel, display_rgb, outer_contour, inner_contour, tile_x, tile_y, tile_size, scale_factor)
+        crop_path = save_vessel_crop(vessel, display_rgb, outer_contour, inner_contour, tile_x, tile_y, tile_size, scale_factor,
+                                     sma_contour=sma_contour if has_sma_ring else None)
         vessel['crop_path'] = crop_path
 
         vessels.append(vessel)
 
     # Cleanup large arrays before returning
-    del tiles, sma_norm, nuclear_norm, cd31_norm, pm_norm, sma_rgb, display_rgb, masks, labels
+    del tiles, sma_norm, nuclear_norm, cd31_norm, pm_norm, sma_rgb, display_rgb, masks, labels, sma_labels
     gc.collect()
 
     return vessels
@@ -2723,6 +3310,18 @@ def main():
     parser.add_argument('--predictor-reset-interval', type=int, default=None,
                         help='Reset SAM2 predictor every N tiles to prevent VRAM fragmentation. '
                              'Default: auto (50 on WSL2, 0/disabled on native Linux)')
+    parser.add_argument('--no-refine', action='store_true',
+                        help='Skip full-resolution contour refinement (faster, blockier contours)')
+    parser.add_argument('--spline', action='store_true',
+                        help='Enable spline smoothing during refinement (off by default)')
+    parser.add_argument('--spline-smoothing', type=float, default=3.0,
+                        help='Spline smoothing factor (default: 3.0). Higher = smoother.')
+    parser.add_argument('--dilation-mode', choices=['adaptive', 'uniform'], default='adaptive',
+                        help='Dilation mode for CD31 and SMA: adaptive = per-pixel region growing '
+                             '(irregular contours following actual signal), uniform = global ring '
+                             'check (uniform-width rings). Default: adaptive')
+    parser.add_argument('--min-sma-intensity', type=float, default=30,
+                        help='Min SMA wall intensity to detect SMA ring (default: 30)')
     args = parser.parse_args()
 
     # Auto-detect WSL2 for sleep/reset defaults
@@ -2733,6 +3332,11 @@ def main():
     tile_sleep = args.tile_sleep if args.tile_sleep is not None else (1.0 if _is_wsl2 else 0.0)
     reset_interval = args.predictor_reset_interval if args.predictor_reset_interval is not None else (50 if _is_wsl2 else 0)
     num_gpus = args.num_gpus
+
+    # Set global dilation config from CLI args
+    global DILATION_MODE, SMA_MIN_WALL_INTENSITY
+    DILATION_MODE = args.dilation_mode
+    SMA_MIN_WALL_INTENSITY = args.min_sma_intensity
 
     print("=" * 60, flush=True)
     print("Multi-Scale SAM2 Vessel Detection", flush=True)
@@ -3097,8 +3701,46 @@ def main():
     # Report tiles skipped by Sobel pre-filter
     print(f"Tiles skipped by Sobel pre-filter: {TILES_SKIPPED_BY_SOBEL}")
 
-    # Regenerate any missing crop images (e.g., from checkpoint-loaded vessels)
-    regenerate_missing_crops(merged_vessels, channel_cache)
+    # Full-resolution contour refinement
+    if not args.no_refine:
+        print(f"\n{'=' * 60}")
+        print(f"Full-Resolution Contour Refinement")
+        print(f"{'=' * 60}")
+        print(f"  Dilation mode: {args.dilation_mode} (CD31 + SMA)")
+        print(f"  Spline smoothing: {'on' if args.spline else 'off'} (factor={args.spline_smoothing})")
+        print(f"  SMA min_wall_intensity: {args.min_sma_intensity}")
+        n_refined = 0
+        n_failed = 0
+        for vessel in tqdm(merged_vessels, desc="Refining contours at full res"):
+            ok = refine_vessel_contours_fullres(
+                vessel, channel_cache,
+                spline=args.spline,
+                spline_smoothing=args.spline_smoothing,
+                cd31_mode=args.dilation_mode,
+                sma_min_wall_intensity=args.min_sma_intensity,
+                sma_mode=args.dilation_mode,
+            )
+            if ok:
+                n_refined += 1
+            else:
+                n_failed += 1
+        print(f"  Refined {n_refined} vessels, {n_failed} failed")
+
+        # Regenerate ALL crops at full resolution with refined contours
+        print(f"\nRegenerating crops at full resolution...")
+        n_crops = 0
+        n_crop_fail = 0
+        for vessel in tqdm(merged_vessels, desc="Full-res crops"):
+            crop_path = save_vessel_crop_fullres(vessel, channel_cache)
+            if crop_path:
+                n_crops += 1
+            else:
+                n_crop_fail += 1
+        print(f"  Generated {n_crops} full-res crops, {n_crop_fail} failed")
+    else:
+        print("\nSkipping full-resolution contour refinement (--no-refine)")
+        # Regenerate any missing crop images at tile scale
+        regenerate_missing_crops(merged_vessels, channel_cache)
 
     # Analyze vessel network topology (skeletonization)
     network_metrics = analyze_vessel_network(merged_vessels, mosaic_size)
@@ -3364,8 +4006,26 @@ def generate_histograms(vessels, output_dir):
         plt.savefig(os.path.join(output_dir, 'histogram_lumen_wall_ratio.png'), dpi=150)
         plt.close()
 
+    # 4. SMA thickness histogram (only vessels with SMA ring)
+    sma_thickness = np.array([v['sma_thickness_um'] for v in vessels if v.get('has_sma_ring', False)])
+    n_with_sma = len(sma_thickness)
+    n_without_sma = len(vessels) - n_with_sma
+    if len(sma_thickness) > 0:
+        fig, ax = plt.subplots(figsize=(10, 6))
+        ax.hist(sma_thickness, bins=50, edgecolor='black', alpha=0.7, color='magenta')
+        ax.set_xlabel('SMA Thickness (µm)', fontsize=12)
+        ax.set_ylabel('Count', fontsize=12)
+        ax.set_title(f'SMA Ring Thickness (n={n_with_sma} with SMA, {n_without_sma} without)', fontsize=14)
+        ax.axvline(np.median(sma_thickness), color='red', linestyle='--', label=f'Median: {np.median(sma_thickness):.1f} µm')
+        ax.axvline(np.mean(sma_thickness), color='orange', linestyle='--', label=f'Mean: {np.mean(sma_thickness):.1f} µm')
+        ax.legend()
+        ax.grid(True, alpha=0.3)
+        plt.tight_layout()
+        plt.savefig(os.path.join(output_dir, 'histogram_sma_thickness.png'), dpi=150)
+        plt.close()
+
     # --- Combined figure ---
-    fig, axes = plt.subplots(2, 2, figsize=(14, 10))
+    fig, axes = plt.subplots(3, 2, figsize=(14, 15))
 
     # Diameter
     ax = axes[0, 0]
@@ -3392,8 +4052,20 @@ def generate_histograms(vessels, output_dir):
         ax.set_title(f'Lumen/Wall Ratio (median={np.median(lumen_wall_ratios):.2f})')
         ax.grid(True, alpha=0.3)
 
-    # Diameter by scale
+    # SMA thickness
     ax = axes[1, 1]
+    if len(sma_thickness) > 0:
+        ax.hist(sma_thickness, bins=50, edgecolor='black', alpha=0.7, color='magenta')
+        ax.set_xlabel('SMA Thickness (µm)')
+        ax.set_ylabel('Count')
+        ax.set_title(f'SMA Thickness (n={n_with_sma}, median={np.median(sma_thickness):.1f} µm)')
+        ax.grid(True, alpha=0.3)
+    else:
+        ax.text(0.5, 0.5, 'No SMA rings detected', transform=ax.transAxes, ha='center', va='center')
+        ax.set_title('SMA Thickness')
+
+    # Diameter by scale
+    ax = axes[2, 0]
     scale_data = {}
     for v in vessels:
         scale = v.get('scale', 'unknown')
@@ -3410,6 +4082,17 @@ def generate_histograms(vessels, output_dir):
     ax.legend()
     ax.grid(True, alpha=0.3)
 
+    # SMA ring presence
+    ax = axes[2, 1]
+    sma_counts = [n_with_sma, n_without_sma]
+    sma_labels_plot = [f'SMA+ (n={n_with_sma})', f'SMA- (n={n_without_sma})']
+    sma_colors = ['magenta', 'lightgray']
+    if sum(sma_counts) > 0:
+        ax.bar(sma_labels_plot, sma_counts, color=sma_colors, edgecolor='black')
+        ax.set_ylabel('Count')
+        ax.set_title(f'SMA Ring Presence ({n_with_sma}/{len(vessels)} = {100*n_with_sma/len(vessels):.0f}%)')
+        ax.grid(True, alpha=0.3, axis='y')
+
     plt.tight_layout()
     plt.savefig(os.path.join(output_dir, 'histogram_combined.png'), dpi=150)
     plt.close()
@@ -3418,6 +4101,7 @@ def generate_histograms(vessels, output_dir):
     print(f"    - histogram_diameters.png")
     print(f"    - histogram_wall_thickness.png")
     print(f"    - histogram_lumen_wall_ratio.png")
+    print(f"    - histogram_sma_thickness.png")
     print(f"    - histogram_combined.png")
 
 
@@ -3482,6 +4166,18 @@ def export_to_geodataframe(vessels, output_path):
             except Exception:
                 wall_poly = outer_poly  # Fallback if difference fails
 
+            # SMA geometry (if present)
+            sma_poly = None
+            sma_contour_data = v.get('sma_contour')
+            if sma_contour_data and len(sma_contour_data) >= 3:
+                sma_coords = np.array(sma_contour_data).squeeze().copy()
+                sma_coords[..., 0] += tile_offset_x
+                sma_coords[..., 1] += tile_offset_y
+                if len(sma_coords) >= 3:
+                    sma_poly = Polygon(sma_coords)
+                    if not sma_poly.is_valid:
+                        sma_poly = make_valid(sma_poly)
+
             # Build record with all vessel attributes
             record = {
                 'uid': v.get('uid', ''),
@@ -3493,6 +4189,9 @@ def export_to_geodataframe(vessels, output_path):
                 'outer_diameter_um': v.get('outer_diameter_um', 0),
                 'inner_diameter_um': v.get('inner_diameter_um', 0),
                 'wall_thickness_um': v.get('wall_thickness_um', 0),
+                'sma_diameter_um': v.get('sma_diameter_um', 0),
+                'sma_thickness_um': v.get('sma_thickness_um', 0),
+                'has_sma_ring': v.get('has_sma_ring', False),
                 'outer_area_px': v.get('outer_area_px', 0),
                 'inner_area_px': v.get('inner_area_px', 0),
                 'wall_area_px': v.get('wall_area_px', 0),
@@ -3506,6 +4205,8 @@ def export_to_geodataframe(vessels, output_path):
                 'inner_geometry': inner_poly,
                 'wall_geometry': wall_poly,
             }
+            if sma_poly is not None:
+                record['sma_geometry'] = sma_poly
             records.append(record)
 
         except Exception as e:
@@ -3559,6 +4260,9 @@ def generate_html(vessels):
             'outer_diameter_um': v.get('outer_diameter_um', 0),
             'inner_diameter_um': v.get('inner_diameter_um', 0),
             'wall_thickness_mean_um': v.get('wall_thickness_um', 0),
+            'sma_diameter_um': v.get('sma_diameter_um', 0),
+            'sma_thickness_um': v.get('sma_thickness_um', 0),
+            'has_sma_ring': v.get('has_sma_ring', False),
             'outer_area_px': v.get('outer_area_px', 0),
             'inner_area_px': v.get('inner_area_px', 0),
             'wall_area_px': v.get('wall_area_px', 0),

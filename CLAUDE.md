@@ -153,6 +153,8 @@ UID format: `{slide}_{celltype}_{x}_{y}`
 | `scripts/napari_place_crosses.py` | Interactive reference cross placement |
 | `scripts/cluster_detections.py` | Biological clustering for LMD well assignment |
 | `scripts/napari_view_lmd_export.py` | View LMD export overlaid on slide |
+| `scripts/add_sma_ring.py` | Retroactively add SMA ring + full-res refinement to vessel detections |
+| `scripts/regenerate_vessel_crops.py` | Regenerate vessel crop images from saved JSON |
 
 ---
 
@@ -198,6 +200,32 @@ Tissue detection in normalization uses calibrated threshold / 10 for permissive 
 1. Adaptive + Otsu thresholding for SMA+ regions
 2. Contour hierarchy analysis (find rings)
 3. Ellipse fitting, wall thickness at 36 angles
+4. **3-contour system**: lumen (cyan), CD31 outer (green), SMA ring (magenta)
+5. Adaptive per-pixel dilation on CD31 and SMA channels (irregular contours following signal)
+6. Full-resolution contour refinement (reads CZI ROI at native res per vessel)
+7. Full-resolution crop rendering for HTML
+
+### 3-Contour Ring Detection
+- **Lumen** (cyan): Inner boundary from SAM2/threshold segmentation
+- **CD31** (green): Endothelial outer boundary via adaptive dilation on CD31 channel
+- **SMA** (magenta): Smooth muscle ring via adaptive dilation on SMA channel, expanding from lumen (not from CD31 boundary, since CD31 and SMA intermingle)
+- `has_sma_ring`: True when SMA expansion > 5% larger than lumen. Veins/capillaries lack SMA, so SMA contour collapses to lumen boundary.
+
+### CLI Options (Vessel-specific)
+```bash
+--no-refine             # Skip full-res refinement (use tile-scale contours)
+--spline                # Enable spline smoothing (off by default)
+--spline-smoothing 3.0  # Spline smoothing factor
+--dilation-mode adaptive|uniform  # Dilation mode for CD31+SMA (default: adaptive)
+--min-sma-intensity 30  # Min SMA signal to attempt ring detection
+```
+
+### Post-processing
+```bash
+# Add SMA ring to existing detections (retroactive)
+python scripts/add_sma_ring.py --input /path/to/vessel_detections_multiscale.json
+python scripts/add_sma_ring.py --skip-crops --min-sma-intensity 20  # fast tuning
+```
 
 ### Multi-Marker (6-type classification)
 artery, arteriole, vein, capillary, lymphatic, collecting_lymphatic

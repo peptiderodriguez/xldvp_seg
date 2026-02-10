@@ -22,27 +22,15 @@ from tqdm import tqdm
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from segmentation.io.czi_loader import CZILoader
-
-# Same constants as sam2_multiscale_vessels.py
-CZI_PATH = "/home/dude/images/20251106_Fig2_nuc488_CD31_555_SMA647_PM750-EDFvar-stitch.czi"
-OUTPUT_DIR = "/home/dude/vessel_output/sam2_multiscale"
-NUCLEAR = 0
-CD31 = 1
-SMA = 2
-PM = 3
-BASE_SCALE = 2
+from scripts.sam2_multiscale_vessels import (
+    normalize_channel, CZI_PATH, OUTPUT_DIR,
+    NUCLEAR, CD31, SMA, PM, BASE_SCALE,
+)
 
 SCALE_TILE_SIZES = {
     '1/64': 1000, '1/32': 1200, '1/16': 1400,
     '1/8': 1700, '1/4': 2000, '1/2': 2500,
 }
-
-
-def normalize_channel(arr, p_low=1, p_high=99):
-    arr = arr.astype(np.float32)
-    p1, p99 = np.percentile(arr, (p_low, p_high))
-    arr = np.clip((arr - p1) / (p99 - p1 + 1e-8) * 255, 0, 255)
-    return arr.astype(np.uint8)
 
 
 def main():
@@ -108,12 +96,20 @@ def main():
             outer_contour = np.array(v['outer_contour'], dtype=np.int32) // scale_factor
             inner_contour = np.array(v['inner_contour'], dtype=np.int32) // scale_factor
 
+            # SMA contour if present
+            sma_contour = None
+            if v.get('sma_contour') and v.get('has_sma_ring', False):
+                sma_contour = np.array(v['sma_contour'], dtype=np.int32) // scale_factor
+
             if len(outer_contour) == 0 or len(inner_contour) == 0:
                 n_skipped += 1
                 continue
 
-            # Bounding box of both contours
-            all_points = np.vstack([outer_contour, inner_contour])
+            # Bounding box of all contours
+            contour_list = [outer_contour, inner_contour]
+            if sma_contour is not None and len(sma_contour) > 0:
+                contour_list.append(sma_contour)
+            all_points = np.vstack(contour_list)
             x_min, y_min = all_points.min(axis=0).flatten()[:2]
             x_max, y_max = all_points.max(axis=0).flatten()[:2]
 
@@ -152,6 +148,11 @@ def main():
             inner_in_crop = inner_contour.reshape(-1, 1, 2) - np.array([x1, y1])
             cv2.drawContours(crop_contoured, [outer_in_crop], -1, (0, 255, 0), 2)
             cv2.drawContours(crop_contoured, [inner_in_crop], -1, (0, 255, 255), 2)
+
+            # Draw SMA contour in magenta if present
+            if sma_contour is not None and len(sma_contour) > 0:
+                sma_in_crop = sma_contour.reshape(-1, 1, 2) - np.array([x1, y1])
+                cv2.drawContours(crop_contoured, [sma_in_crop], -1, (255, 0, 255), 2)
 
             crop_path = os.path.join(crops_dir, f"{uid}.jpg")
             cv2.imwrite(crop_path, cv2.cvtColor(crop_contoured, cv2.COLOR_RGB2BGR),
