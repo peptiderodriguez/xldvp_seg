@@ -245,7 +245,7 @@ def process_tile_worker(args):
 
     # Normalization disabled for H&E images - raw pixel values work better
     # img_rgb = percentile_normalize(img_rgb, p_low=5, p_high=95)
-    has_tissue_content, _ = has_tissue(img_rgb, variance_threshold, block_size=calibration_block_size, max_bg_intensity=intensity_threshold)
+    has_tissue_content, _ = has_tissue(img_rgb, variance_threshold, block_size=calibration_block_size, intensity_threshold=intensity_threshold, modality='brightfield')
     if not has_tissue_content:
         return {'tid': tid, 'status': 'no_tissue'}
 
@@ -1115,7 +1115,8 @@ class UnifiedSegmenter:
         return mk_masks, hspc_masks, mk_features, hspc_features
 
 
-def shared_calibrate_tissue_threshold(tiles, image_array, calibration_samples, block_size, tile_size):
+def shared_calibrate_tissue_threshold(tiles, image_array, calibration_samples, block_size, tile_size,
+                                      modality=None):
     """Calibrate tissue detection thresholds using K-means (variance) and Otsu (intensity).
 
     Args:
@@ -1124,6 +1125,7 @@ def shared_calibrate_tissue_threshold(tiles, image_array, calibration_samples, b
         calibration_samples: Number of tiles to sample for calibration
         block_size: Block size for variance calculation
         tile_size: Expected tile size
+        modality: 'brightfield' for H&E (÷3 variance + pixel Otsu), None for default
 
     Returns:
         tuple: (variance_threshold, intensity_threshold)
@@ -1139,7 +1141,7 @@ def shared_calibrate_tissue_threshold(tiles, image_array, calibration_samples, b
         tile_img = image_array[tile['y']:tile['y']+tile['h'], tile['x']:tile['x']+tile['w']]
 
         if tile_img.max() == 0:
-            return [0.0], [255.0]
+            return [0.0], [255.0], np.array([], dtype=np.uint8)
 
         if tile_img.ndim == 3:
             gray = cv2.cvtColor(tile_img.astype(np.uint8), cv2.COLOR_RGB2GRAY)
@@ -1147,25 +1149,40 @@ def shared_calibrate_tissue_threshold(tiles, image_array, calibration_samples, b
             gray = tile_img.astype(np.uint8) if tile_img.dtype != np.uint8 else tile_img
 
         block_vars, block_means = calculate_block_variances(gray, block_size)
-        return block_vars if block_vars else [], block_means if block_means else []
+
+        # Collect pixel samples for brightfield Otsu
+        pixel_sample = np.array([], dtype=np.uint8)
+        if modality == 'brightfield':
+            flat = gray.ravel()
+            n = min(2000, len(flat))
+            pixel_sample = flat[np.random.choice(len(flat), n, replace=False)]
+
+        return (block_vars if block_vars else [],
+                block_means if block_means else [],
+                pixel_sample)
 
     all_variances = []
     all_means = []
+    all_pixel_samples = []
     with ThreadPoolExecutor(max_workers=8) as executor:
         futures = {executor.submit(calc_tile_stats, tile): tile for tile in calib_tiles}
         for future in tqdm(as_completed(futures), total=len(calib_tiles), desc="Calibrating"):
-            block_vars, block_means = future.result()
+            block_vars, block_means, pixel_sample = future.result()
             all_variances.extend(block_vars)
             all_means.extend(block_means)
+            if len(pixel_sample) > 0:
+                all_pixel_samples.append(pixel_sample)
 
     variances = np.array(all_variances)
     means = np.array(all_means)
+    pixel_samples = np.concatenate(all_pixel_samples) if all_pixel_samples else None
     if len(variances) == 0:
         logger.warning("No variance samples collected, using defaults")
         return 50.0, 220.0
 
     logger.info(f"  Running K-means + Otsu on {len(variances)} block samples...")
-    return compute_tissue_thresholds(variances, means, default_var=50.0)
+    return compute_tissue_thresholds(variances, means, default_var=50.0,
+                                     modality=modality, pixel_samples=pixel_samples)
 
 
 def run_unified_segmentation(
@@ -1293,7 +1310,8 @@ def run_unified_segmentation(
         image_array=loader.channel_data,
         calibration_samples=calibration_samples,
         block_size=calibration_block_size,
-        tile_size=tile_size
+        tile_size=tile_size,
+        modality='brightfield',
     )
 
     # Create memmap for worker processes (they can't share numpy arrays directly)
@@ -1601,7 +1619,7 @@ def _phase1_load_slides(czi_paths, tile_size, overlap, channel, norm_method='non
 
 
 def _calibrate_and_filter_tissue(all_tiles, n_slides, calibration_block_size, calibration_samples,
-                                   get_tile_fn, desc_suffix=""):
+                                   get_tile_fn, desc_suffix="", modality=None):
     """Shared calibration + tissue filtering logic for Phase 2.
 
     Args:
@@ -1611,6 +1629,7 @@ def _calibrate_and_filter_tissue(all_tiles, n_slides, calibration_block_size, ca
         calibration_samples: samples per slide for threshold calibration
         get_tile_fn: callable(slide_name, tile) -> np.ndarray or None
         desc_suffix: suffix for tqdm progress bars (e.g. " (streaming)")
+        modality: 'brightfield' for H&E (÷3 variance + pixel Otsu), None for default
 
     Returns:
         tuple: (tissue_tiles, variance_threshold, intensity_threshold)
@@ -1631,7 +1650,7 @@ def _calibrate_and_filter_tissue(all_tiles, n_slides, calibration_block_size, ca
         tile_img = get_tile_fn(slide_name, tile)
 
         if tile_img is None or tile_img.max() == 0:
-            return [0.0], [255.0]
+            return [0.0], [255.0], np.array([], dtype=np.uint8)
 
         if tile_img.ndim == 3:
             gray = cv2.cvtColor(tile_img.astype(np.uint8), cv2.COLOR_RGB2GRAY)
@@ -1639,21 +1658,36 @@ def _calibrate_and_filter_tissue(all_tiles, n_slides, calibration_block_size, ca
             gray = tile_img.astype(np.uint8) if tile_img.dtype != np.uint8 else tile_img
 
         block_vars, block_means = calculate_block_variances(gray, calibration_block_size)
-        return block_vars if block_vars else [], block_means if block_means else []
+
+        # Collect pixel samples for brightfield Otsu
+        pixel_sample = np.array([], dtype=np.uint8)
+        if modality == 'brightfield':
+            flat = gray.ravel()
+            n = min(2000, len(flat))
+            pixel_sample = flat[np.random.choice(len(flat), n, replace=False)]
+
+        return (block_vars if block_vars else [],
+                block_means if block_means else [],
+                pixel_sample)
 
     all_variances = []
     all_means = []
+    all_pixel_samples = []
     with ThreadPoolExecutor(max_workers=calib_threads) as executor:
         futures = {executor.submit(calc_tile_stats, tile): tile for tile in calib_tiles}
         for future in tqdm(as_completed(futures), total=len(calib_tiles), desc=f"Calibrating{desc_suffix}"):
-            block_vars, block_means = future.result()
+            block_vars, block_means, pixel_sample = future.result()
             all_variances.extend(block_vars)
             all_means.extend(block_means)
+            if len(pixel_sample) > 0:
+                all_pixel_samples.append(pixel_sample)
 
     variances = np.array(all_variances)
     means = np.array(all_means)
+    pixel_samples = np.concatenate(all_pixel_samples) if all_pixel_samples else None
     logger.info(f"  Running K-means + Otsu on {len(variances)} block samples...")
-    variance_threshold, intensity_threshold = compute_tissue_thresholds(variances, means)
+    variance_threshold, intensity_threshold = compute_tissue_thresholds(
+        variances, means, modality=modality, pixel_samples=pixel_samples)
 
     logger.info(f"\nFiltering to tissue-containing tiles...")
 
@@ -1668,7 +1702,7 @@ def _calibrate_and_filter_tissue(all_tiles, n_slides, calibration_block_size, ca
             return None
 
         has_tissue_flag, _ = has_tissue(tile_img, variance_threshold, block_size=calibration_block_size,
-                                        max_bg_intensity=intensity_threshold)
+                                        intensity_threshold=intensity_threshold, modality=modality)
 
         if has_tissue_flag:
             return (slide_name, tile)
@@ -1736,7 +1770,8 @@ def _phase2_identify_tissue_tiles(slide_data, tile_size, overlap, variance_thres
         return img[tile['y']:tile['y']+tile['h'], tile['x']:tile['x']+tile['w']]
 
     return _calibrate_and_filter_tissue(
-        all_tiles, len(slide_data), calibration_block_size, calibration_samples, get_tile_from_ram
+        all_tiles, len(slide_data), calibration_block_size, calibration_samples, get_tile_from_ram,
+        modality='brightfield',
     )
 
 
@@ -1761,7 +1796,7 @@ def _phase2_identify_tissue_tiles_streaming(slide_loaders, tile_size, overlap, v
 
     tissue_tiles, variance_threshold, intensity_threshold = _calibrate_and_filter_tissue(
         all_tiles, len(slide_loaders), calibration_block_size, calibration_samples,
-        get_tile_from_czi, desc_suffix=" (streaming)"
+        get_tile_from_czi, desc_suffix=" (streaming)", modality='brightfield',
     )
 
     log_memory_status("Phase 2 tissue detection (streaming) - END")
@@ -2090,6 +2125,7 @@ def _phase4_process_tiles(
                 norm_params=norm_params,
                 normalization_method=normalization_method,
                 intensity_threshold=intensity_threshold,
+                modality='brightfield',
             ) as processor:
                 # Submit all tiles (only coordinates, not data!)
                 logger.info(f"Submitting {len(sampled_tiles)} tiles to {num_gpus} GPUs (shared memory)...")
@@ -2156,6 +2192,7 @@ def _phase4_process_tiles(
                 norm_params=norm_params,
                 normalization_method=normalization_method,
                 intensity_threshold=intensity_threshold,
+                modality='brightfield',
             ) as processor:
                 # Submit all tiles (only coordinates, not data!)
                 logger.info(f"Submitting {len(sampled_tiles)} tiles to {actual_gpus} GPUs (shared memory)...")
@@ -2642,6 +2679,7 @@ def run_multi_slide_segmentation(
                 calibration_block_size=calibration_block_size,
                 cleanup_config=cleanup_config,
                 intensity_threshold=intensity_threshold,
+                modality='brightfield',
                 # Don't pass norm params — normalization already applied at slide level
             ) as processor:
                 logger.info(f"Submitting {len(sampled_tiles)} tiles to {num_gpus} GPUs...")

@@ -17,6 +17,9 @@ from segmentation.preprocessing.stain_normalization import (
     apply_reinhard_normalization,
 )
 from segmentation.detection.tissue import (
+    calculate_block_variances,
+    is_tissue_block,
+    compute_tissue_thresholds,
     calibrate_tissue_threshold,
     filter_tissue_tiles,
 )
@@ -25,7 +28,12 @@ setup_logging()
 logger = get_logger(__name__)
 
 def sample_pixels_from_slide(czi_path, channel=0, n_samples=1000000):
-    """Sample random pixels from TISSUE REGIONS only (using variance-based detection)."""
+    """Sample random pixels from TISSUE REGIONS only using shared detection functions.
+
+    Uses the same compute_tissue_thresholds(modality='brightfield') and
+    is_tissue_block(modality='brightfield') as step 2, ensuring normalization
+    parameters are computed from the same tissue regions that get segmented.
+    """
     logger.info(f"Sampling from {czi_path.name}...")
 
     try:
@@ -43,100 +51,68 @@ def sample_pixels_from_slide(czi_path, channel=0, n_samples=1000000):
         h, w, c = channel_data.shape
         logger.info(f"  Shape: {channel_data.shape}")
 
-        # Use proper tissue detection at block level (fast)
-        logger.info(f"  Detecting tissue blocks using variance thresholding...")
+        # ── Collect block-level stats + pixel samples for calibration ──
+        # Use cv2.cvtColor for grayscale — matches step 2's _calibrate_and_filter_tissue
+        logger.info(f"  Computing block variances and collecting pixel samples...")
 
         block_size = 512
-        blocks = []
+
+        # Compute full-slide grayscale once (single pass, matches step 2)
+        if channel_data.ndim == 3:
+            full_gray = cv2.cvtColor(channel_data.astype(np.uint8), cv2.COLOR_RGB2GRAY)
+        else:
+            full_gray = channel_data.astype(np.uint8)
+
+        # Single call to get ALL block variances and means
+        all_variances, all_means = calculate_block_variances(full_gray, block_size)
+        logger.info(f"  Computed {len(all_variances)} block stats")
+
+        # Collect pixel samples from ~200 random blocks for Otsu
+        block_coords = []
         for y in range(0, h, block_size):
             for x in range(0, w, block_size):
-                blocks.append({'x': x, 'y': y})
+                block_coords.append((x, y))
 
-        logger.info(f"  Created {len(blocks)} blocks, calibrating tissue threshold...")
+        n_cal = min(200, len(block_coords))
+        cal_indices = np.random.choice(len(block_coords), n_cal, replace=False)
+        pixel_samples_list = []
+        for idx in cal_indices:
+            x0, y0 = block_coords[idx]
+            x1, y1 = min(x0 + block_size, w), min(y0 + block_size, h)
+            g = full_gray[y0:y1, x0:x1].ravel()
+            if len(g) > 2000:
+                g = g[np.random.choice(len(g), 2000, replace=False)]
+            pixel_samples_list.append(g)
 
-        # Calibrate tissue threshold
-        variance_threshold = calibrate_tissue_threshold(
-            blocks,
-            image_array=channel_data,
-            calibration_samples=min(100, len(blocks)),
-            block_size=block_size,
-            tile_size=block_size
+        pixel_samples = np.concatenate(pixel_samples_list) if pixel_samples_list else None
+        del pixel_samples_list
+
+        # ── Compute thresholds using shared function (brightfield mode) ──
+        logger.info(f"  Computing thresholds (brightfield mode: ÷3 variance + pixel Otsu)...")
+        variance_threshold, intensity_threshold = compute_tissue_thresholds(
+            np.array(all_variances), np.array(all_means),
+            modality='brightfield', pixel_samples=pixel_samples,
         )
+        del pixel_samples
+        logger.info(f"  Variance threshold: {variance_threshold:.1f}")
+        logger.info(f"  Intensity threshold: {intensity_threshold:.1f}")
 
-        logger.info(f"  Tissue variance threshold (computed): {variance_threshold:.1f}")
-
-        # Reduce threshold by 3x to detect more tissue (especially lighter-stained regions)
-        variance_threshold = variance_threshold / 3.0
-        logger.info(f"  Tissue variance threshold (reduced 3x): {variance_threshold:.1f}")
-        logger.info(f"  Filtering to tissue blocks...")
-
-        # Filter to tissue blocks only
-        tissue_blocks = filter_tissue_tiles(
-            blocks,
-            variance_threshold,
-            image_array=channel_data,
-            tile_size=block_size,
-            block_size=block_size,
-            n_workers=8,
-            show_progress=False
-        )
+        # ── Filter blocks using shared is_tissue_block (brightfield AND logic) ──
+        logger.info(f"  Filtering blocks with is_tissue_block(modality='brightfield')...")
+        tissue_blocks = []
+        for x0, y0 in block_coords:
+            x1, y1 = min(x0 + block_size, w), min(y0 + block_size, h)
+            gray_block = full_gray[y0:y1, x0:x1]
+            if is_tissue_block(gray_block, variance_threshold, modality='brightfield',
+                               intensity_threshold=intensity_threshold):
+                tissue_blocks.append({'x': x0, 'y': y0})
 
         if len(tissue_blocks) == 0:
             logger.warning(f"  No tissue blocks found in {czi_path.name}!")
             return None
 
-        logger.info(f"  Found {len(tissue_blocks)} tissue blocks ({100*len(tissue_blocks)/len(blocks):.1f}%)")
-
-        # ── Pixel-level intensity threshold (Otsu) ──────────────────────
-        # Blocks straddle tissue/background edges, so uniform sampling pulls
-        # in too many white pixels.  Otsu on grayscale separates tissue from
-        # background at the pixel level.
-        logger.info(f"  Computing pixel-level intensity threshold (Otsu)...")
-
-        n_cal = min(200, len(tissue_blocks))
-        cal_indices = np.random.choice(len(tissue_blocks), n_cal, replace=False)
-        gray_cal = []
-        for idx in cal_indices:
-            b = tissue_blocks[idx]
-            x0, y0 = b['x'], b['y']
-            x1, y1 = min(x0 + block_size, w), min(y0 + block_size, h)
-            block_rgb = channel_data[y0:y1, x0:x1]
-            g = np.mean(block_rgb.astype(np.float32), axis=2).ravel()
-            if len(g) > 2000:
-                g = g[np.random.choice(len(g), 2000, replace=False)]
-            gray_cal.append(g)
-
-        gray_all = np.concatenate(gray_cal)
-        gray_u8 = np.clip(gray_all, 0, 255).astype(np.uint8)
-        otsu_val, _ = cv2.threshold(gray_u8.reshape(1, -1), 0, 255,
-                                     cv2.THRESH_BINARY + cv2.THRESH_OTSU)
-        intensity_threshold = float(otsu_val)
-        logger.info(f"  Pixel intensity threshold (Otsu): {intensity_threshold:.1f}")
-        logger.info(f"  Grayscale range: {gray_all.min():.0f} – "
-                     f"{np.median(gray_all):.0f} (median) – {gray_all.max():.0f}")
-        del gray_cal, gray_all, gray_u8
-
-        # ── Filter out blocks that are mostly background ──────────────
-        # Keep blocks where at least 20% of pixels are below the Otsu threshold
-        # (softer than mean-based filter — preserves edge blocks with real tissue)
-        min_tissue_frac = 0.20
-        pre_filter = len(tissue_blocks)
-        filtered_blocks = []
-        for b in tissue_blocks:
-            x0, y0 = b['x'], b['y']
-            x1, y1 = min(x0 + block_size, w), min(y0 + block_size, h)
-            gray = np.mean(channel_data[y0:y1, x0:x1].astype(np.float32), axis=2)
-            tissue_frac = np.sum(gray < intensity_threshold) / gray.size
-            if tissue_frac >= min_tissue_frac:
-                filtered_blocks.append(b)
-        tissue_blocks = filtered_blocks
-        logger.info(f"  After intensity filter (>={min_tissue_frac:.0%} tissue): "
-                     f"{len(tissue_blocks)}/{pre_filter} blocks "
-                     f"(removed {pre_filter - len(tissue_blocks)} light blocks)")
-
-        if len(tissue_blocks) == 0:
-            logger.warning(f"  No tissue blocks after intensity filtering!")
-            return None
+        logger.info(f"  Tissue blocks: {len(tissue_blocks)} / {len(block_coords)} "
+                     f"({100*len(tissue_blocks)/len(block_coords):.1f}%)")
 
         # ── Pass 1: count tissue pixels per block ──────────────────────
         logger.info(f"  Counting tissue pixels per block...")
@@ -144,8 +120,8 @@ def sample_pixels_from_slide(czi_path, channel=0, n_samples=1000000):
         for i, b in enumerate(tissue_blocks):
             x0, y0 = b['x'], b['y']
             x1, y1 = min(x0 + block_size, w), min(y0 + block_size, h)
-            gray = np.mean(channel_data[y0:y1, x0:x1].astype(np.float32), axis=2)
-            block_tissue_counts[i] = np.sum(gray < intensity_threshold)
+            gray_block = full_gray[y0:y1, x0:x1]
+            block_tissue_counts[i] = np.sum(gray_block < intensity_threshold)
 
         total_tissue_px = int(block_tissue_counts.sum())
         blocks_with_tissue = int(np.sum(block_tissue_counts > 0))
@@ -182,8 +158,8 @@ def sample_pixels_from_slide(czi_path, channel=0, n_samples=1000000):
             x0, y0 = b['x'], b['y']
             x1, y1 = min(x0 + block_size, w), min(y0 + block_size, h)
             block_rgb = channel_data[y0:y1, x0:x1]
-            gray = np.mean(block_rgb.astype(np.float32), axis=2)
-            tissue_pixels = block_rgb[gray < intensity_threshold]  # (K, 3)
+            gray_block = full_gray[y0:y1, x0:x1]
+            tissue_pixels = block_rgb[gray_block < intensity_threshold]  # (K, 3)
             if len(tissue_pixels) == 0:
                 continue
             if n >= len(tissue_pixels):
@@ -193,7 +169,7 @@ def sample_pixels_from_slide(czi_path, channel=0, n_samples=1000000):
                 all_samples.append(tissue_pixels[idx])
 
         samples = np.vstack(all_samples)
-        del all_samples, block_tissue_counts, samples_per_block
+        del all_samples, block_tissue_counts, samples_per_block, full_gray
         logger.info(f"  Sampled {len(samples)} tissue pixels, median intensity: {np.median(samples):.1f}")
 
         # Close and clear to prevent memory accumulation across slides
@@ -207,6 +183,8 @@ def sample_pixels_from_slide(czi_path, channel=0, n_samples=1000000):
 
     except Exception as e:
         logger.error(f"  Failed to sample from {czi_path.name}: {e}")
+        import traceback
+        logger.error(traceback.format_exc())
         return None
 
 def compute_percentiles_from_samples(all_samples, p_low=1.0, p_high=99.0):

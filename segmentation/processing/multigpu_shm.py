@@ -191,6 +191,7 @@ def _gpu_worker_shm(
     norm_params: Optional[Dict[str, float]] = None,
     normalization_method: str = 'none',
     intensity_threshold: float = 220.0,
+    modality: Optional[str] = None,
 ):
     """
     Worker process that reads tiles from shared memory.
@@ -209,6 +210,7 @@ def _gpu_worker_shm(
         calibration_block_size: Block size for variance calculation
         cleanup_config: Dict with cleanup options (cleanup_masks, fill_holes, pixel_size_um)
         intensity_threshold: Max background intensity for tissue detection (Otsu-derived)
+        modality: 'brightfield' for H&E, None for fluorescence (OR logic)
     """
     # Default cleanup config if not provided
     if cleanup_config is None:
@@ -347,7 +349,7 @@ def _gpu_worker_shm(
 
             # Check for tissue (always run — Reinhard normalizes but does not filter out background)
             try:
-                has_tissue_flag, _ = has_tissue(tile_normalized, variance_threshold, block_size=calibration_block_size, max_bg_intensity=intensity_threshold)
+                has_tissue_flag, _ = has_tissue(tile_normalized, variance_threshold, block_size=calibration_block_size, intensity_threshold=intensity_threshold, modality=modality)
             except Exception:
                 has_tissue_flag = True  # Assume tissue on error
 
@@ -476,6 +478,7 @@ class MultiGPUTileProcessorSHM:
         norm_params: Optional[Dict[str, float]] = None,
         normalization_method: str = 'none',
         intensity_threshold: float = 220.0,
+        modality: Optional[str] = None,
     ):
         self.num_gpus = num_gpus
         self.slide_info = slide_info
@@ -488,6 +491,7 @@ class MultiGPUTileProcessorSHM:
         self.norm_params = norm_params
         self.normalization_method = normalization_method
         self.intensity_threshold = intensity_threshold
+        self.modality = modality
 
         self.segmenter_kwargs = {
             'mk_classifier_path': str(mk_classifier_path) if mk_classifier_path else None,
@@ -528,6 +532,7 @@ class MultiGPUTileProcessorSHM:
                     self.norm_params,
                     self.normalization_method,
                     self.intensity_threshold,
+                    self.modality,
                 ),
                 daemon=True
             )

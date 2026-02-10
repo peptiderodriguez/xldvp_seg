@@ -35,6 +35,7 @@ warnings.warn(
 # Re-export everything from new locations for backward compatibility
 from segmentation.detection.tissue import (
     calculate_block_variances,
+    is_tissue_block,
     has_tissue,
     compute_variance_threshold,
     compute_tissue_thresholds,
@@ -135,6 +136,7 @@ except ImportError:
 __all__ = [
     # Tissue detection
     'calculate_block_variances',
+    'is_tissue_block',
     'has_tissue',
     'compute_variance_threshold',
     'compute_tissue_thresholds',

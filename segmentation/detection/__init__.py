@@ -9,6 +9,7 @@ Provides:
 
 from .tissue import (
     calculate_block_variances,
+    is_tissue_block,
     has_tissue,
     compute_variance_threshold,
     compute_tissue_thresholds,
@@ -32,6 +33,7 @@ from .registry import StrategyRegistry
 __all__ = [
     # Tissue detection
     'calculate_block_variances',
+    'is_tissue_block',
     'has_tissue',
     'compute_variance_threshold',
     'compute_tissue_thresholds',
