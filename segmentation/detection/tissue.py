@@ -125,13 +125,14 @@ def has_tissue(tile_image, variance_threshold, min_tissue_fraction=0.10, block_s
         return False, 0.0
 
     # Reject scan boundary tiles (mix of black CZI padding + background)
-    # CZI padding is exactly 0; real tissue/background is never 0
+    # CZI padding is exactly 0; use == 0 (not < 5) so fluorescence tiles
+    # with near-zero background are not rejected
     if tile_image.ndim == 3:
         raw_check = np.min(tile_image, axis=2)  # any channel being 0
     else:
         raw_check = tile_image
-    black_fraction = np.mean(raw_check < 5)
-    if black_fraction > 0.02:  # >2% near-black pixels = scan boundary
+    black_fraction = np.mean(raw_check == 0)
+    if black_fraction > 0.02:  # >2% exactly-zero pixels = scan boundary
         return False, 0.0
 
     # Convert to grayscale if needed
@@ -327,11 +328,12 @@ def calibrate_tissue_threshold(
             continue
 
         # Skip scan boundary tiles (mix of black CZI padding + background)
+        # Use == 0 (not < 5) so fluorescence tiles with near-zero background pass
         if tile_img.ndim == 3:
             raw_check = np.min(tile_img, axis=2)
         else:
             raw_check = tile_img
-        if np.mean(raw_check < 5) > 0.02:
+        if np.mean(raw_check == 0) > 0.02:
             continue
 
         # Normalize to uint8 for variance calculation
