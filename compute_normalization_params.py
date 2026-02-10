@@ -116,6 +116,25 @@ def sample_pixels_from_slide(czi_path, channel=0, n_samples=1000000):
                      f"{np.median(gray_all):.0f} (median) – {gray_all.max():.0f}")
         del gray_cal, gray_all, gray_u8
 
+        # ── Filter out blocks that are mostly background ──────────────
+        # Reject blocks whose mean intensity is above the Otsu threshold
+        # (these are mostly white/background even if they had some variance)
+        pre_filter = len(tissue_blocks)
+        filtered_blocks = []
+        for b in tissue_blocks:
+            x0, y0 = b['x'], b['y']
+            x1, y1 = min(x0 + block_size, w), min(y0 + block_size, h)
+            block_mean = np.mean(channel_data[y0:y1, x0:x1].astype(np.float32))
+            if block_mean < intensity_threshold:
+                filtered_blocks.append(b)
+        tissue_blocks = filtered_blocks
+        logger.info(f"  After intensity filter: {len(tissue_blocks)}/{pre_filter} blocks "
+                     f"(removed {pre_filter - len(tissue_blocks)} light blocks)")
+
+        if len(tissue_blocks) == 0:
+            logger.warning(f"  No tissue blocks after intensity filtering!")
+            return None
+
         # ── Pass 1: count tissue pixels per block ──────────────────────
         logger.info(f"  Counting tissue pixels per block...")
         block_tissue_counts = np.zeros(len(tissue_blocks), dtype=np.int64)
