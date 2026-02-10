@@ -86,32 +86,92 @@ def sample_pixels_from_slide(czi_path, channel=0, n_samples=1000000):
             return None
 
         logger.info(f"  Found {len(tissue_blocks)} tissue blocks ({100*len(tissue_blocks)/len(blocks):.1f}%)")
-        logger.info(f"  Sampling {n_samples} pixels from tissue blocks...")
 
-        # Vectorized sampling: pick random blocks, then random offsets within each
-        block_origins = np.array([(b['x'], b['y']) for b in tissue_blocks])
-        block_indices = np.random.randint(0, len(tissue_blocks), size=n_samples)
-        selected_origins = block_origins[block_indices]
+        # ── Pixel-level intensity threshold (Otsu) ──────────────────────
+        # Blocks straddle tissue/background edges, so uniform sampling pulls
+        # in too many white pixels.  Otsu on grayscale separates tissue from
+        # background at the pixel level.
+        logger.info(f"  Computing pixel-level intensity threshold (Otsu)...")
 
-        # Compute max valid offsets per selected block (clip to image bounds)
-        max_x_offsets = np.minimum(block_size, w - selected_origins[:, 0])
-        max_y_offsets = np.minimum(block_size, h - selected_origins[:, 1])
+        n_cal = min(200, len(tissue_blocks))
+        cal_indices = np.random.choice(len(tissue_blocks), n_cal, replace=False)
+        gray_cal = []
+        for idx in cal_indices:
+            b = tissue_blocks[idx]
+            x0, y0 = b['x'], b['y']
+            x1, y1 = min(x0 + block_size, w), min(y0 + block_size, h)
+            block_rgb = channel_data[y0:y1, x0:x1]
+            g = np.mean(block_rgb.astype(np.float32), axis=2).ravel()
+            if len(g) > 2000:
+                g = g[np.random.choice(len(g), 2000, replace=False)]
+            gray_cal.append(g)
 
-        # Generate random offsets (uniform per-sample, respecting per-block max)
-        x_offsets = (np.random.random(n_samples) * max_x_offsets).astype(np.intp)
-        y_offsets = (np.random.random(n_samples) * max_y_offsets).astype(np.intp)
+        gray_all = np.concatenate(gray_cal)
+        gray_u8 = np.clip(gray_all, 0, 255).astype(np.uint8)
+        otsu_val, _ = cv2.threshold(gray_u8.reshape(1, -1), 0, 255,
+                                     cv2.THRESH_BINARY + cv2.THRESH_OTSU)
+        intensity_threshold = float(otsu_val)
+        logger.info(f"  Pixel intensity threshold (Otsu): {intensity_threshold:.1f}")
+        logger.info(f"  Grayscale range: {gray_all.min():.0f} – "
+                     f"{np.median(gray_all):.0f} (median) – {gray_all.max():.0f}")
+        del gray_cal, gray_all, gray_u8
 
-        xs = selected_origins[:, 0] + x_offsets
-        ys = selected_origins[:, 1] + y_offsets
+        # ── Pass 1: count tissue pixels per block ──────────────────────
+        logger.info(f"  Counting tissue pixels per block...")
+        block_tissue_counts = np.zeros(len(tissue_blocks), dtype=np.int64)
+        for i, b in enumerate(tissue_blocks):
+            x0, y0 = b['x'], b['y']
+            x1, y1 = min(x0 + block_size, w), min(y0 + block_size, h)
+            gray = np.mean(channel_data[y0:y1, x0:x1].astype(np.float32), axis=2)
+            block_tissue_counts[i] = np.sum(gray < intensity_threshold)
 
-        # Clip to image bounds (safety)
-        xs = np.clip(xs, 0, w - 1)
-        ys = np.clip(ys, 0, h - 1)
+        total_tissue_px = int(block_tissue_counts.sum())
+        blocks_with_tissue = int(np.sum(block_tissue_counts > 0))
+        total_block_px = sum(
+            min(block_size, w - b['x']) * min(block_size, h - b['y'])
+            for b in tissue_blocks
+        )
+        logger.info(f"  Tissue pixels: {total_tissue_px:,} in "
+                     f"{blocks_with_tissue}/{len(tissue_blocks)} blocks "
+                     f"({100 * total_tissue_px / max(total_block_px, 1):.1f}% of block area)")
 
-        samples = channel_data[ys, xs]  # (N, 3) -- vectorized indexing
+        if total_tissue_px == 0:
+            logger.warning(f"  No tissue pixels after pixel-level masking!")
+            return None
 
-        del block_origins, block_indices, selected_origins
-        del max_x_offsets, max_y_offsets, x_offsets, y_offsets, xs, ys
+        # ── Pass 2: sample proportionally from each block ──────────────
+        weights = block_tissue_counts.astype(np.float64) / total_tissue_px
+        samples_per_block = np.round(weights * n_samples).astype(np.int64)
+
+        # Adjust rounding so we get exactly n_samples
+        diff = n_samples - int(samples_per_block.sum())
+        if diff != 0:
+            top = np.argsort(-block_tissue_counts)
+            for j in range(abs(diff)):
+                samples_per_block[top[j % len(top)]] += 1 if diff > 0 else -1
+
+        logger.info(f"  Sampling {n_samples} pixels from pixel-masked tissue regions...")
+
+        all_samples = []
+        for i, b in enumerate(tissue_blocks):
+            n = int(samples_per_block[i])
+            if n <= 0:
+                continue
+            x0, y0 = b['x'], b['y']
+            x1, y1 = min(x0 + block_size, w), min(y0 + block_size, h)
+            block_rgb = channel_data[y0:y1, x0:x1]
+            gray = np.mean(block_rgb.astype(np.float32), axis=2)
+            tissue_pixels = block_rgb[gray < intensity_threshold]  # (K, 3)
+            if len(tissue_pixels) == 0:
+                continue
+            if n >= len(tissue_pixels):
+                all_samples.append(tissue_pixels)
+            else:
+                idx = np.random.choice(len(tissue_pixels), n, replace=False)
+                all_samples.append(tissue_pixels[idx])
+
+        samples = np.vstack(all_samples)
+        del all_samples, block_tissue_counts, samples_per_block
         logger.info(f"  Sampled {len(samples)} tissue pixels, median intensity: {np.median(samples):.1f}")
 
         # Close and clear to prevent memory accumulation across slides
@@ -211,7 +271,7 @@ def main():
         'method': 'reinhard_median',
         'slides': [s.name for s in slides],
         'samples_per_slide': 1000000,
-        'sampling_method': 'tissue_aware_10x_lower_threshold',
+        'sampling_method': 'tissue_aware_pixel_masked_otsu',
         'tile_size': 3000,
         'block_size': 512
     }
