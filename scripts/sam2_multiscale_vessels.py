@@ -25,7 +25,6 @@ from PIL import Image
 import cv2
 from scipy import ndimage
 from scipy.spatial import cKDTree
-# watershed removed - using dilate_until_signal_drops instead
 from skimage.transform import resize
 from skimage.morphology import skeletonize
 from skimage.filters import threshold_otsu
@@ -41,6 +40,7 @@ import sys
 import random
 import gc
 import time
+import tempfile
 import torch
 from tqdm import tqdm
 
@@ -51,11 +51,25 @@ TILES_SKIPPED_BY_SOBEL = 0
 DILATION_MODE = 'adaptive'
 SMA_MIN_WALL_INTENSITY = 30
 
+# Pixel size in micrometers (set from CZI metadata in main(), can be overridden via CLI)
+PIXEL_SIZE_UM = 0.1725  # Default fallback
+
 # ==============================================================================
 # GMM-based Adaptive Thresholding
 # ==============================================================================
 # More robust to staining intensity variation across the slide than fixed thresholds.
 # Instead of `ratio < 1.0`, fits a 2-component GMM to separate populations.
+
+def _make_gmm():
+    """Create a consistently configured 2-component GMM."""
+    return GaussianMixture(
+        n_components=2,
+        covariance_type='full',
+        max_iter=100,
+        n_init=3,
+        random_state=42
+    )
+
 
 class GMMClassifier:
     """
@@ -92,13 +106,7 @@ class GMMClassifier:
             return self
 
         # Fit 2-component GMM
-        self.gmm = GaussianMixture(
-            n_components=2,
-            covariance_type='full',
-            max_iter=100,
-            n_init=3,
-            random_state=42
-        )
+        self.gmm = _make_gmm()
         self.gmm.fit(values.reshape(-1, 1))
 
         # Identify which component has lower mean (this is "positive" for lumens,
@@ -171,13 +179,7 @@ def gmm_classify_ratios(ratios: np.ndarray, threshold_ppv: float = 0.5,
             return ratios > 1.1
 
     # Fit 2-component GMM
-    gmm = GaussianMixture(
-        n_components=2,
-        covariance_type='full',
-        max_iter=100,
-        n_init=3,
-        random_state=42
-    )
+    gmm = _make_gmm()
     gmm.fit(ratios.reshape(-1, 1))
 
     # Select positive component based on mean
@@ -218,26 +220,26 @@ def gmm_classify_single(value: float, all_values: np.ndarray, threshold_ppv: flo
         else:
             return value > 1.1
 
-    # Fit GMM on all values
-    gmm = GaussianMixture(
-        n_components=2,
-        covariance_type='full',
-        max_iter=100,
-        n_init=3,
-        random_state=42
-    )
-    gmm.fit(all_values.reshape(-1, 1))
+    # Use GMMClassifier for consistent fitting
+    classifier = GMMClassifier(min_samples=min_samples)
+    classifier.fit(all_values)
 
-    # Select positive component
-    means = gmm.means_.flatten()
+    if not classifier.fitted:
+        if lower_is_positive:
+            return value < 1.0
+        else:
+            return value > 1.1
+
+    # For lower_is_positive, GMMClassifier already uses argmin(means) for positive
     if lower_is_positive:
-        positive_component = int(np.argmin(means))
+        proba = classifier.predict_proba(np.array([value]))
+        return proba[0] >= threshold_ppv
     else:
-        positive_component = int(np.argmax(means))
-
-    # Get probability for the single value
-    proba = gmm.predict_proba(np.array([[value]]))
-    return proba[0, positive_component] >= threshold_ppv
+        # Need the higher-mean component -- use 1 - default proba
+        means = classifier.gmm.means_.flatten()
+        higher_component = int(np.argmax(means))
+        proba = classifier.gmm.predict_proba(np.array([[value]]))
+        return proba[0, higher_component] >= threshold_ppv
 
 
 def adaptive_diameter_ratio_filter(vessels):
@@ -404,6 +406,56 @@ SCALES = [
 # Note: 1/2 scale vessels are only kept if corroborated by coarser scales (see merge_vessels_across_scales)
 
 
+def _extract_tile_from_cache(channels, base_scale, tile_x, tile_y, tile_size, channel, scale_factor):
+    """Extract a tile from channel arrays at the specified scale.
+
+    Shared logic for DownsampledChannelCache and SharedChannelCache.
+
+    Args:
+        channels: Dict mapping channel index to numpy arrays at base_scale
+        base_scale: Scale factor of stored data (e.g. 2 for 1/2 scale)
+        tile_x, tile_y: Tile origin in SCALED coordinates (at target scale_factor)
+        tile_size: Output tile size
+        channel: Channel index
+        scale_factor: Target scale (must be >= base_scale)
+
+    Returns:
+        Tile data at target scale, or None if out of bounds
+    """
+    if scale_factor < base_scale:
+        raise ValueError(f"scale_factor {scale_factor} < base_scale {base_scale}")
+
+    if channel not in channels:
+        raise ValueError(f"Channel {channel} not loaded")
+
+    relative_scale = scale_factor // base_scale
+    base_tile_size = tile_size * relative_scale
+
+    base_x = (tile_x * scale_factor) // base_scale
+    base_y = (tile_y * scale_factor) // base_scale
+
+    data = channels[channel]
+    y2 = min(base_y + base_tile_size, data.shape[0])
+    x2 = min(base_x + base_tile_size, data.shape[1])
+
+    if base_x >= data.shape[1] or base_y >= data.shape[0]:
+        return None
+
+    region = data[base_y:y2, base_x:x2]
+
+    if region.size == 0:
+        return None
+
+    if relative_scale > 1:
+        target_h = region.shape[0] // relative_scale
+        target_w = region.shape[1] // relative_scale
+        if target_h == 0 or target_w == 0:
+            return None
+        region = cv2.resize(region, (target_w, target_h), interpolation=cv2.INTER_AREA)
+
+    return region
+
+
 class DownsampledChannelCache:
     """
     Holds channels loaded at BASE_SCALE (1/2), provides tiles at any coarser scale.
@@ -497,49 +549,7 @@ class DownsampledChannelCache:
         Returns:
             Tile data at target scale, shape (tile_size, tile_size) or smaller at edges
         """
-        if scale_factor < self.base_scale:
-            raise ValueError(f"scale_factor {scale_factor} < base_scale {self.base_scale}")
-
-        if channel not in self.channels:
-            raise ValueError(f"Channel {channel} not loaded")
-
-        # Convert tile coords from target scale to base scale
-        # tile_x is in target-scale space, need to convert to base-scale space
-        relative_scale = scale_factor // self.base_scale
-
-        # In target scale: tile covers tile_size pixels
-        # In full res: tile covers tile_size * scale_factor pixels
-        # In base scale: tile covers tile_size * scale_factor / base_scale = tile_size * relative_scale
-        base_tile_size = tile_size * relative_scale
-
-        # Convert tile origin from target-scale coords to base-scale coords
-        # tile_x (target) * scale_factor = full_res_x
-        # full_res_x / base_scale = base_x
-        base_x = (tile_x * scale_factor) // self.base_scale
-        base_y = (tile_y * scale_factor) // self.base_scale
-
-        # Extract region from base-scale data
-        data = self.channels[channel]
-        y2 = min(base_y + base_tile_size, data.shape[0])
-        x2 = min(base_x + base_tile_size, data.shape[1])
-
-        if base_x >= data.shape[1] or base_y >= data.shape[0]:
-            return None
-
-        region = data[base_y:y2, base_x:x2]
-
-        if region.size == 0:
-            return None
-
-        # Downsample from base scale to target scale if needed
-        if relative_scale > 1:
-            target_h = region.shape[0] // relative_scale
-            target_w = region.shape[1] // relative_scale
-            if target_h == 0 or target_w == 0:
-                return None
-            region = cv2.resize(region, (target_w, target_h), interpolation=cv2.INTER_AREA)
-
-        return region
+        return _extract_tile_from_cache(self.channels, self.base_scale, tile_x, tile_y, tile_size, channel, scale_factor)
 
     def apply_photobleaching_correction(self, verbose: bool = True):
         """
@@ -627,38 +637,7 @@ class SharedChannelCache:
         Returns:
             Tile data at target scale, or None if out of bounds
         """
-        if scale_factor < self.base_scale:
-            raise ValueError(f"scale_factor {scale_factor} < base_scale {self.base_scale}")
-
-        if channel not in self.channels:
-            raise ValueError(f"Channel {channel} not loaded")
-
-        relative_scale = scale_factor // self.base_scale
-        base_tile_size = tile_size * relative_scale
-
-        base_x = (tile_x * scale_factor) // self.base_scale
-        base_y = (tile_y * scale_factor) // self.base_scale
-
-        data = self.channels[channel]
-        y2 = min(base_y + base_tile_size, data.shape[0])
-        x2 = min(base_x + base_tile_size, data.shape[1])
-
-        if base_x >= data.shape[1] or base_y >= data.shape[0]:
-            return None
-
-        region = data[base_y:y2, base_x:x2]
-
-        if region.size == 0:
-            return None
-
-        if relative_scale > 1:
-            target_h = region.shape[0] // relative_scale
-            target_w = region.shape[1] // relative_scale
-            if target_h == 0 or target_w == 0:
-                return None
-            region = cv2.resize(region, (target_w, target_h), interpolation=cv2.INTER_AREA)
-
-        return region
+        return _extract_tile_from_cache(self.channels, self.base_scale, tile_x, tile_y, tile_size, channel, scale_factor)
 
     def release(self):
         """Clear references (does not unlink shared memory)."""
@@ -821,29 +800,21 @@ def measure_cell_intensities(cell_masks, cd31_roi, sma_roi):
         }
 
     # Convert ROIs to float for accurate mean calculation
-    cd31_float = cd31_roi.astype(np.float32)
-    sma_float = sma_roi.astype(np.float32)
+    cd31_float = cd31_roi.astype(np.float64)
+    sma_float = sma_roi.astype(np.float64)
 
-    # Measure intensities for each cell (single pass)
-    cd31_intensities = []
-    sma_intensities = []
-    valid_cell_ids = []
+    # Vectorized intensity measurement using scipy.ndimage.mean
+    cd31_means = ndimage.mean(cd31_float, labels=cell_masks, index=cell_ids)
+    sma_means = ndimage.mean(sma_float, labels=cell_masks, index=cell_ids)
 
-    for cell_id in cell_ids:
-        cell_mask = cell_masks == cell_id
-        n_pixels = cell_mask.sum()
-
-        # Skip cells with very few pixels (likely noise)
-        if n_pixels < 5:
-            continue
-
-        cd31_intensities.append(cd31_float[cell_mask].mean())
-        sma_intensities.append(sma_float[cell_mask].mean())
-        valid_cell_ids.append(cell_id)
+    # Filter out cells with very few pixels (likely noise)
+    cell_sizes = ndimage.sum(np.ones_like(cell_masks, dtype=np.int32), labels=cell_masks, index=cell_ids)
+    valid_mask = np.asarray(cell_sizes) >= 5
+    valid_cell_ids = cell_ids[valid_mask]
 
     return {
-        'cd31': np.array(cd31_intensities, dtype=np.float32),
-        'sma': np.array(sma_intensities, dtype=np.float32),
+        'cd31': np.array(cd31_means, dtype=np.float32)[valid_mask],
+        'sma': np.array(sma_means, dtype=np.float32)[valid_mask],
         'cell_ids': np.array(valid_cell_ids, dtype=np.int32)
     }
 
@@ -894,13 +865,7 @@ def classify_cells_gmm(all_cd31_intensities, all_sma_intensities, min_samples=50
         return cd31_threshold, sma_threshold, gmm_info
 
     # Fit CD31 GMM
-    cd31_gmm = GaussianMixture(
-        n_components=2,
-        covariance_type='full',
-        max_iter=100,
-        n_init=3,
-        random_state=42
-    )
+    cd31_gmm = _make_gmm()
     cd31_gmm.fit(all_cd31.reshape(-1, 1))
 
     cd31_means = cd31_gmm.means_.flatten()
@@ -918,13 +883,7 @@ def classify_cells_gmm(all_cd31_intensities, all_sma_intensities, min_samples=50
     gmm_info['cd31_threshold_method'] = 'gmm'
 
     # Fit SMA GMM
-    sma_gmm = GaussianMixture(
-        n_components=2,
-        covariance_type='full',
-        max_iter=100,
-        n_init=3,
-        random_state=42
-    )
+    sma_gmm = _make_gmm()
     sma_gmm.fit(all_sma.reshape(-1, 1))
 
     sma_means = sma_gmm.means_.flatten()
@@ -995,7 +954,7 @@ def compute_cell_composition(cell_intensities, cd31_threshold, sma_threshold):
     }
 
 
-def save_vessel_crop(vessel, display_rgb, outer_contour, inner_contour, tile_x, tile_y, tile_size, scale_factor, output_dir=None, sma_contour=None):
+def save_vessel_crop(vessel, display_rgb, outer_contour, inner_contour, scale_factor, output_dir=None, sma_contour=None):
     """Save a crop of the vessel - both raw and with contours drawn.
 
     Crop is centered on the mask centroid and sized to be 2x the mask bounding box.
@@ -1276,9 +1235,15 @@ def regenerate_missing_crops(vessels, channel_cache):
                 n_failed += 1
                 continue
 
+            # Extract SMA contour if available
+            sma_contour_regen = None
+            sma_raw = v.get('sma_contour')
+            if sma_raw and len(sma_raw) >= 3 and v.get('has_sma_ring', False):
+                sma_contour_regen = np.array(sma_raw, dtype=np.int32) // scale_factor
+
             crop_path = save_vessel_crop(
                 v, display_rgb, outer_contour, inner_contour,
-                tile_x, tile_y, tile_size, scale_factor
+                scale_factor, sma_contour=sma_contour_regen
             )
             if crop_path:
                 v['crop_path'] = crop_path
@@ -1296,16 +1261,15 @@ def is_tissue_tile(tile, threshold=TISSUE_VARIANCE_THRESHOLD):
     return np.var(tile) > threshold
 
 
-def compute_edge_density(tile, threshold_percentile=80):
+def compute_edge_density(tile):
     """
-    Compute Sobel edge density for a tile.
+    Compute mean Sobel gradient magnitude for a tile.
 
     Args:
         tile: 2D numpy array (grayscale tile data)
-        threshold_percentile: Percentile for edge thresholding (default: 80)
 
     Returns:
-        float: Edge density (fraction of pixels above threshold)
+        float: Mean gradient magnitude (absolute, not relative to percentile)
     """
     # Convert to float32 for processing
     tile_float = tile.astype(np.float32)
@@ -1318,14 +1282,7 @@ def compute_edge_density(tile, threshold_percentile=80):
     sobel_y = cv2.Sobel(smoothed, cv2.CV_32F, 0, 1, ksize=3)
     gradient_magnitude = np.sqrt(sobel_x**2 + sobel_y**2)
 
-    # Threshold at given percentile
-    threshold = np.percentile(gradient_magnitude, threshold_percentile)
-    edge_mask = gradient_magnitude > threshold
-
-    # Calculate edge density (fraction of pixels above threshold)
-    edge_density = edge_mask.sum() / edge_mask.size
-
-    return edge_density
+    return float(gradient_magnitude.mean())
 
 
 def compute_adaptive_sobel_threshold(channel_cache, scale_factor, sample_tiles=100, tile_size=1000):
@@ -1400,13 +1357,7 @@ def compute_adaptive_sobel_threshold(channel_cache, scale_factor, sample_tiles=1
 
     # Fit 2-component GMM to separate tissue (high edge density) from background (low)
     try:
-        gmm = GaussianMixture(
-            n_components=2,
-            covariance_type='full',
-            max_iter=100,
-            n_init=3,
-            random_state=42
-        )
+        gmm = _make_gmm()
         gmm.fit(edge_densities.reshape(-1, 1))
 
         means = gmm.means_.flatten()
@@ -1450,7 +1401,7 @@ def compute_adaptive_sobel_threshold(channel_cache, scale_factor, sample_tiles=1
         return 0.05
 
 
-def has_vessel_candidates(tile, threshold_percentile=80, min_edge_density=0.05):
+def has_vessel_candidates(tile, min_edge_density=0.05):
     """
     Fast Sobel-based pre-filter to detect if tile has vessel candidates.
 
@@ -1459,14 +1410,13 @@ def has_vessel_candidates(tile, threshold_percentile=80, min_edge_density=0.05):
 
     Args:
         tile: 2D numpy array (grayscale tile data)
-        threshold_percentile: Percentile for edge thresholding (default: 80)
-        min_edge_density: Minimum fraction of pixels above threshold to consider
-                         tile as having vessel candidates (default: 0.05 = 5%)
+        min_edge_density: Minimum mean gradient magnitude to consider
+                         tile as having vessel candidates (default: 0.05)
 
     Returns:
         True if tile has sufficient edge density (potential vessels), False otherwise.
     """
-    edge_density = compute_edge_density(tile, threshold_percentile)
+    edge_density = compute_edge_density(tile)
     return edge_density > min_edge_density
 
 
@@ -1509,10 +1459,10 @@ def compute_lumen_ratios(mask, sma_norm, nuclear_norm, cd31_norm, pm_norm, scale
     pm_surrounding = pm_norm[surrounding].mean()
 
     # Compute ratios (inside / surrounding)
-    sma_ratio = sma_inside / (sma_surrounding + 1)
-    nuclear_ratio = nuclear_inside / (nuclear_surrounding + 1)
-    cd31_ratio = cd31_inside / (cd31_surrounding + 1)
-    pm_ratio = pm_inside / (pm_surrounding + 1)
+    sma_ratio = sma_inside / max(sma_surrounding, 1e-6)
+    nuclear_ratio = nuclear_inside / max(nuclear_surrounding, 1e-6)
+    cd31_ratio = cd31_inside / max(cd31_surrounding, 1e-6)
+    pm_ratio = pm_inside / max(pm_surrounding, 1e-6)
 
     return {
         'area': int(area),
@@ -1712,17 +1662,23 @@ def compute_cd31_edge_coverage(lumen_mask, cd31_norm, ring_width=3, n_samples=36
 
 
 def dilate_until_signal_drops(lumens, cd31_norm, scale_factor=1, drop_ratio=0.9,
-                              max_iterations=50, mode='adaptive'):
+                              max_iterations=50, mode='adaptive',
+                              min_wall_intensity=None):
     """
-    Expand from lumens by dilating until CD31 signal drops.
+    Expand from lumens by dilating until signal drops.
 
-    CD31 marks endothelium (vessel lining), so this ensures we're capturing
-    actual blood vessel boundaries.
+    Works for any channel (CD31, SMA, etc.). Expands outward from lumen masks
+    until the signal intensity drops below a threshold relative to the initial
+    wall intensity.
+
+    When min_wall_intensity is set, lumens whose initial ring intensity is below
+    this value are returned as-is (no expansion). This is used for SMA ring
+    detection where weak signal means no smooth muscle layer (vein/capillary).
 
     Two modes:
     - 'adaptive' (default): Per-pixel region growing. Each candidate pixel is
-      accepted only if its local CD31 intensity exceeds the threshold. Produces
-      irregular contours that follow the actual endothelial boundary.
+      accepted only if its local intensity exceeds the threshold. Produces
+      irregular contours that follow the actual signal boundary.
     - 'uniform': Global ring check. Expands uniformly in all directions; stops
       when the mean intensity of the entire new ring drops below threshold.
 
@@ -1748,6 +1704,11 @@ def dilate_until_signal_drops(lumens, cd31_norm, scale_factor=1, drop_ratio=0.9,
             labels[mask > 0] = label_id
             continue
         wall_intensity = cd31_smooth[initial_ring].mean()
+
+        # If min_wall_intensity is set and signal is too weak, return lumen only
+        if min_wall_intensity is not None and wall_intensity < min_wall_intensity:
+            labels[mask > 0] = label_id
+            continue
 
         # Threshold for stopping: when ring drops below this
         stop_threshold = wall_intensity * drop_ratio
@@ -1783,123 +1744,6 @@ def dilate_until_signal_drops(lumens, cd31_norm, scale_factor=1, drop_ratio=0.9,
                     break
 
                 ring_intensity = cd31_smooth[new_ring].mean()
-
-                if ring_intensity < stop_threshold:
-                    break
-
-                current_mask = dilated
-
-        # Assign label to final expanded region
-        labels[current_mask > 0] = label_id
-
-    return labels
-
-
-def dilate_until_sma_drops(lumens, sma_norm, scale_factor=1, drop_ratio=0.9,
-                           max_iterations=50, min_wall_intensity=30,
-                           mode='adaptive'):
-    """
-    Expand from lumens by dilating until SMA signal drops.
-
-    SMA (smooth muscle actin) wraps around endothelium in arteries/arterioles.
-    This function detects the SMA ring by expanding outward from the lumen on the
-    SMA channel, mirroring dilate_until_signal_drops() but for smooth muscle.
-
-    Starts from the lumen masks (same as CD31 expansion) because CD31 and SMA
-    can be intermingled in these scans.
-
-    If SMA signal around a lumen is too weak (< min_wall_intensity), returns
-    the lumen boundary unchanged — this vessel is likely a vein or capillary
-    with no smooth muscle layer.
-
-    Two modes:
-    - 'adaptive' (default): Per-pixel region growing. Each candidate pixel is
-      accepted only if its local SMA intensity exceeds the threshold. This
-      produces irregular rings that follow the actual SMA boundary — thicker
-      where smooth muscle is thick, thinner where it's thin.
-    - 'uniform': Global ring check (same as CD31 dilation). Expands uniformly
-      in all directions; stops when the mean intensity of the entire new ring
-      drops below threshold. Always produces rings that follow the lumen outline.
-
-    Args:
-        lumens: List of dicts with 'mask' key (bool/uint8 arrays)
-        sma_norm: Normalized SMA channel (uint8, 0-255)
-        scale_factor: Current processing scale factor
-        drop_ratio: Stop when intensity drops below wall_intensity * drop_ratio
-        max_iterations: Maximum dilation iterations
-        min_wall_intensity: Minimum SMA intensity in initial ring to attempt dilation.
-            Below this threshold, the vessel has no SMA layer (vein/capillary).
-        mode: 'adaptive' for per-pixel region growing (irregular rings),
-              'uniform' for global ring check (uniform-width rings).
-
-    Returns:
-        labels: Array where each lumen's expanded region has a unique label
-    """
-    labels = np.zeros(sma_norm.shape, dtype=np.int32)
-    kernel = np.ones((3, 3), np.uint8)
-
-    # For adaptive mode, smooth SMA slightly to reduce single-pixel noise
-    # while preserving the true boundary shape
-    if mode == 'adaptive':
-        sma_smooth = cv2.GaussianBlur(sma_norm, (3, 3), 0)
-    else:
-        sma_smooth = sma_norm
-
-    for idx, lumen in enumerate(lumens):
-        mask = lumen['mask'].astype(np.uint8)
-        label_id = idx + 1
-
-        # Get initial wall intensity (the SMA ring around lumen)
-        dilated_once = cv2.dilate(mask, kernel, iterations=1)
-        initial_ring = (dilated_once > 0) & (mask == 0)
-        if initial_ring.sum() == 0:
-            labels[mask > 0] = label_id
-            continue
-        wall_intensity = sma_smooth[initial_ring].mean()
-
-        # If SMA signal is too weak, this is a vein/capillary — return lumen only
-        if wall_intensity < min_wall_intensity:
-            labels[mask > 0] = label_id
-            continue
-
-        # Threshold for stopping
-        stop_threshold = wall_intensity * drop_ratio
-
-        if mode == 'adaptive':
-            # Per-pixel region growing: only accept pixels where SMA is above threshold
-            # This produces irregular rings that follow the actual SMA boundary
-            current_mask = dilated_once.copy()
-            # Accept initial ring pixels that pass threshold
-            initial_reject = initial_ring & (sma_smooth < stop_threshold)
-            current_mask[initial_reject] = 0
-            # Re-add lumen pixels (always included)
-            current_mask[mask > 0] = 1
-
-            for i in range(max_iterations - 1):
-                dilated = cv2.dilate(current_mask, kernel, iterations=1)
-                new_pixels = (dilated > 0) & (current_mask == 0)
-
-                if new_pixels.sum() == 0:
-                    break
-
-                # Only accept pixels where SMA intensity is still strong
-                accept = new_pixels & (sma_smooth >= stop_threshold)
-
-                if accept.sum() == 0:
-                    break
-
-                current_mask[accept] = 1
-        else:
-            # Uniform mode: global ring check (original behavior)
-            current_mask = dilated_once.copy()
-            for i in range(max_iterations - 1):
-                dilated = cv2.dilate(current_mask, kernel, iterations=1)
-                new_ring = (dilated > 0) & (current_mask == 0)
-
-                if new_ring.sum() == 0:
-                    break
-
-                ring_intensity = sma_smooth[new_ring].mean()
 
                 if ring_intensity < stop_threshold:
                     break
@@ -2065,6 +1909,12 @@ def refine_vessel_contours_fullres(vessel, channel_cache, spline=False,
     if cd31_roi.size == 0 or sma_roi.size == 0:
         return False
 
+    # Validate ROI shapes match expected (roi_h, roi_w); resize if CZI returned different size
+    if cd31_roi.shape != (roi_h, roi_w):
+        cd31_roi = cv2.resize(cd31_roi, (roi_w, roi_h), interpolation=cv2.INTER_LINEAR)
+    if sma_roi.shape != (roi_h, roi_w):
+        sma_roi = cv2.resize(sma_roi, (roi_w, roi_h), interpolation=cv2.INTER_LINEAR)
+
     # Normalize to uint8
     cd31_norm = normalize_channel(cd31_roi)
     sma_norm = normalize_channel(sma_roi)
@@ -2085,10 +1935,10 @@ def refine_vessel_contours_fullres(vessel, channel_cache, spline=False,
                                             mode=cd31_mode)
 
     # Re-run SMA dilation at full resolution
-    sma_labels = dilate_until_sma_drops(lumens, sma_norm, scale_factor=1,
-                                        drop_ratio=sma_drop_ratio,
-                                        min_wall_intensity=sma_min_wall_intensity,
-                                        mode=sma_mode)
+    sma_labels = dilate_until_signal_drops(lumens, sma_norm, scale_factor=1,
+                                           drop_ratio=sma_drop_ratio,
+                                           min_wall_intensity=sma_min_wall_intensity,
+                                           mode=sma_mode)
 
     # Extract refined contours in ROI coordinates
     # Inner (lumen) contour — spline-smooth the original since we don't re-detect it
@@ -2193,6 +2043,8 @@ def process_tile_at_scale(tile_x, tile_y, channel_cache, sam2_generator, scale_c
     min_diam = scale_config['min_diam_um']
     max_diam = scale_config['max_diam_um']
     tile_size = scale_config.get('tile_size', TILE_SIZE)
+    dilation_mode = scale_config.get('dilation_mode', DILATION_MODE)
+    sma_min_wall_intensity = scale_config.get('sma_min_wall_intensity', SMA_MIN_WALL_INTENSITY)
 
     # Effective pixel size at this scale (larger pixels at coarser scales)
     effective_pixel_size = pixel_size_um * scale_factor
@@ -2261,17 +2113,17 @@ def process_tile_at_scale(tile_x, tile_y, channel_cache, sam2_generator, scale_c
 
     if len(lumens) == 0:
         # Cleanup before returning
-        del tiles, sma_norm, nuclear_norm, cd31_norm, pm_norm, sma_rgb, display_rgb, masks
+        del tiles, sma_norm, nuclear_norm, cd31_norm, pm_norm, sma_rgb, cd31_rgb, display_rgb, masks
         gc.collect()
         return []
 
     # Watershed expansion (CD31 outer wall)
-    labels = dilate_until_signal_drops(lumens, cd31_norm, scale_factor, mode=DILATION_MODE)
+    labels = dilate_until_signal_drops(lumens, cd31_norm, scale_factor, mode=dilation_mode)
 
     # SMA ring detection (3rd contour) — expands from lumen on SMA channel
-    sma_labels = dilate_until_sma_drops(lumens, sma_norm, scale_factor,
-                                        min_wall_intensity=SMA_MIN_WALL_INTENSITY,
-                                        mode=DILATION_MODE)
+    sma_labels = dilate_until_signal_drops(lumens, sma_norm, scale_factor,
+                                           min_wall_intensity=sma_min_wall_intensity,
+                                           mode=dilation_mode)
 
     # First pass: collect all candidate vessels with their CD31 enrichment ratios
     # for GMM-based adaptive thresholding
@@ -2331,7 +2183,7 @@ def process_tile_at_scale(tile_x, tile_y, channel_cache, sam2_generator, scale_c
 
         cd31_in_wall = cd31_norm[wall_only].mean()
         cd31_in_lumen = cd31_norm[lumen['mask']].mean()
-        cd31_enrichment = cd31_in_wall / (cd31_in_lumen + 1e-6)
+        cd31_enrichment = cd31_in_wall / max(cd31_in_lumen, 1e-6)
 
         # Check for CD31+ endothelial lining at lumen edge
         # This distinguishes real vessels (with endothelium) from tissue tears
@@ -2350,6 +2202,8 @@ def process_tile_at_scale(tile_x, tile_y, channel_cache, sam2_generator, scale_c
             'wall_mask': wall_mask,
             'outer_contour': outer_contour,
             'inner_contour': inner_contour,
+            'sma_contour': sma_contour,
+            'has_sma_ring': has_sma_ring,
             'cd31_in_wall': cd31_in_wall,
             'cd31_in_lumen': cd31_in_lumen,
             'cd31_enrichment': cd31_enrichment,
@@ -2382,6 +2236,8 @@ def process_tile_at_scale(tile_x, tile_y, channel_cache, sam2_generator, scale_c
         wall_mask = candidate['wall_mask']
         outer_contour = candidate['outer_contour']
         inner_contour = candidate['inner_contour']
+        sma_contour = candidate['sma_contour']
+        has_sma_ring = candidate['has_sma_ring']
 
         # Compute measurements at tile scale, then convert to full resolution
         outer_area_tile = cv2.contourArea(outer_contour)
@@ -2475,14 +2331,14 @@ def process_tile_at_scale(tile_x, tile_y, channel_cache, sam2_generator, scale_c
         }
 
         # Save crop with contours (use tile-scale contours for drawing on tile-scale image)
-        crop_path = save_vessel_crop(vessel, display_rgb, outer_contour, inner_contour, tile_x, tile_y, tile_size, scale_factor,
+        crop_path = save_vessel_crop(vessel, display_rgb, outer_contour, inner_contour, scale_factor,
                                      sma_contour=sma_contour if has_sma_ring else None)
         vessel['crop_path'] = crop_path
 
         vessels.append(vessel)
 
     # Cleanup large arrays before returning
-    del tiles, sma_norm, nuclear_norm, cd31_norm, pm_norm, sma_rgb, display_rgb, masks, labels, sma_labels
+    del tiles, sma_norm, nuclear_norm, cd31_norm, pm_norm, sma_rgb, cd31_rgb, display_rgb, masks, labels, sma_labels
     gc.collect()
 
     return vessels
@@ -2526,7 +2382,7 @@ def compute_vessel_iou(v1, v2):
     return compute_iou_contours(c1, c2)
 
 
-def deduplicate_vessels_within_scale(vessels, distance_threshold_px=None):
+def deduplicate_vessels_within_scale(vessels, distance_threshold_px=None, pixel_size_um=PIXEL_SIZE_UM):
     """
     Remove duplicate vessels detected in overlapping tiles within the same scale.
 
@@ -2551,7 +2407,7 @@ def deduplicate_vessels_within_scale(vessels, distance_threshold_px=None):
 
     # Auto-compute distance threshold from median vessel size
     if distance_threshold_px is None:
-        diameters_px = [v['outer_diameter_um'] / 0.1725 for v in vessels]
+        diameters_px = [v['outer_diameter_um'] / pixel_size_um for v in vessels]
         distance_threshold_px = np.median(diameters_px) * 0.5
 
     # Sort by outer area descending (largest-wins strategy)
@@ -2588,7 +2444,7 @@ def deduplicate_vessels_within_scale(vessels, distance_threshold_px=None):
     return result
 
 
-def merge_vessels_across_scales(vessels, iou_threshold=None, coverage_threshold=None):
+def merge_vessels_across_scales(vessels, iou_threshold=None, coverage_threshold=None, pixel_size_um=PIXEL_SIZE_UM):
     """
     Merge vessels detected at different scales, keeping the finest segmentation that captures the full vessel.
 
@@ -2632,7 +2488,7 @@ def merge_vessels_across_scales(vessels, iou_threshold=None, coverage_threshold=
     tree = cKDTree(centers)
 
     # Compute max search radius (largest vessel diameter in pixels * 1.5)
-    max_diam_px = max(v['outer_diameter_um'] / 0.1725 for v in sorted_vessels)
+    max_diam_px = max(v['outer_diameter_um'] / pixel_size_um for v in sorted_vessels)
     search_radius = max_diam_px * 1.5
 
     print(f"  Building spatial index for {n} vessels (search radius: {search_radius:.0f}px)...")
@@ -2642,7 +2498,7 @@ def merge_vessels_across_scales(vessels, iou_threshold=None, coverage_threshold=
 
     # First pass: collect pairwise IoUs using cached neighbor lists
     all_ious = []
-    checked_pairs = set()
+    iou_cache = {}  # Cache IoU values to avoid recomputation in Union-Find pass
 
     for i in range(n):
         v1 = sorted_vessels[i]
@@ -2653,12 +2509,12 @@ def merge_vessels_across_scales(vessels, iou_threshold=None, coverage_threshold=
                 continue
 
             pair_key = (i, j)
-            if pair_key in checked_pairs:
+            if pair_key in iou_cache:
                 continue
-            checked_pairs.add(pair_key)
 
             v2 = sorted_vessels[j]
             iou = compute_vessel_iou(v1, v2)
+            iou_cache[pair_key] = iou
             if iou > 0:
                 all_ious.append(iou)
 
@@ -2689,12 +2545,15 @@ def merge_vessels_across_scales(vessels, iou_threshold=None, coverage_threshold=
         if px != py:
             parent[px] = py
 
-    # Group vessels with IoU > threshold using Union-Find
+    # Group vessels with IoU > threshold using Union-Find (reuse cached IoUs)
     for i in range(n):
         for j in neighbor_lists[i]:
             if j <= i:
                 continue
-            iou = compute_vessel_iou(sorted_vessels[i], sorted_vessels[j])
+            pair_key = (i, j)
+            iou = iou_cache.get(pair_key)
+            if iou is None:
+                iou = compute_vessel_iou(sorted_vessels[i], sorted_vessels[j])
             if iou > iou_threshold:
                 union(i, j)
 
@@ -2936,7 +2795,7 @@ def _vessel_gpu_worker(gpu_id, input_queue, output_queue, stop_event,
                        channel_shm_info, base_scale, full_res_size,
                        output_dir, sam2_checkpoint_path, sam2_config,
                        sam2_generator_params, adaptive_sobel_threshold,
-                       tile_sleep, reset_interval):
+                       tile_sleep, reset_interval, pixel_size_um=0.1725):
     """
     GPU worker process for vessel detection.
 
@@ -3018,6 +2877,7 @@ def _vessel_gpu_worker(gpu_id, input_queue, output_queue, stop_event,
                 sobel_before = TILES_SKIPPED_BY_SOBEL
                 vessels = process_tile_at_scale(
                     tile_x, tile_y, channel_cache, mask_generator, scale_config,
+                    pixel_size_um=pixel_size_um,
                     adaptive_sobel_threshold=adaptive_sobel_threshold
                 )
 
@@ -3107,7 +2967,8 @@ class VesselMultiGPUProcessor:
 
     def __init__(self, num_gpus, channel_shm_info, base_scale, full_res_size,
                  output_dir, sam2_checkpoint_path, sam2_config, sam2_generator_params,
-                 adaptive_sobel_threshold, tile_sleep=0.0, reset_interval=0):
+                 adaptive_sobel_threshold, tile_sleep=0.0, reset_interval=0,
+                 pixel_size_um=0.1725):
         self.num_gpus = num_gpus
         self.channel_shm_info = channel_shm_info
         self.base_scale = base_scale
@@ -3119,6 +2980,7 @@ class VesselMultiGPUProcessor:
         self.adaptive_sobel_threshold = adaptive_sobel_threshold
         self.tile_sleep = tile_sleep
         self.reset_interval = reset_interval
+        self.pixel_size_um = pixel_size_um
 
         self.workers = []
         self.input_queue = None
@@ -3202,6 +3064,7 @@ class VesselMultiGPUProcessor:
                     self.adaptive_sobel_threshold,
                     self.tile_sleep,
                     self.reset_interval,
+                    self.pixel_size_um,
                 ),
                 daemon=True,
             )
@@ -3294,8 +3157,88 @@ class VesselMultiGPUProcessor:
         return False
 
 
+def _scan_tissue_tiles(channel_cache, scale_factor, tile_size, stride, mosaic_size):
+    """Scan tile grid and return list of (tile_x, tile_y) for tissue-containing tiles.
+
+    Args:
+        channel_cache: Channel cache with get_tile() method
+        scale_factor: Current processing scale
+        tile_size: Tile size at this scale
+        stride: Tile stride (tile_size * (1 - overlap))
+        mosaic_size: (width, height) at full resolution
+
+    Returns:
+        List of (tile_x, tile_y) tuples for tiles that contain tissue
+    """
+    scaled_mosaic_x = mosaic_size[0] // scale_factor
+    scaled_mosaic_y = mosaic_size[1] // scale_factor
+    n_tiles_x = max(1, (scaled_mosaic_x - tile_size) // stride + 1)
+    n_tiles_y = max(1, (scaled_mosaic_y - tile_size) // stride + 1)
+
+    print(f"Scaled mosaic: {scaled_mosaic_x} x {scaled_mosaic_y}", flush=True)
+    print(f"Tile grid: {n_tiles_x} x {n_tiles_y} = {n_tiles_x * n_tiles_y} tiles", flush=True)
+
+    print("Identifying tissue tiles...", flush=True)
+    tissue_tiles = []
+    for ty in tqdm(range(n_tiles_y), desc="Scanning"):
+        for tx in range(n_tiles_x):
+            tile_x = tx * stride
+            tile_y = ty * stride
+            tile = channel_cache.get_tile(tile_x, tile_y, tile_size, SMA, scale_factor)
+            if tile is not None and is_tissue_tile(tile):
+                tissue_tiles.append((tile_x, tile_y))
+
+    print(f"Found {len(tissue_tiles)} tissue tiles", flush=True)
+    return tissue_tiles
+
+
+def _save_scale_checkpoint(scale_config, scale_vessels, all_vessels, output_dir):
+    """Save per-scale and cumulative checkpoints atomically.
+
+    Uses tempfile + os.replace for atomic writes to prevent corruption
+    if the process is interrupted during the write.
+
+    Args:
+        scale_config: Scale configuration dict
+        scale_vessels: Vessels found at this scale
+        all_vessels: All vessels found so far (cumulative)
+        output_dir: Output directory for checkpoint files
+    """
+    # Per-scale checkpoint
+    checkpoint_path = os.path.join(output_dir, f"checkpoint_scale_{scale_config['name'].replace('/', '_')}.json")
+    checkpoint_data = {
+        'scale': scale_config['name'],
+        'vessels': scale_vessels,
+        'num_vessels': len(scale_vessels),
+    }
+    fd, tmp_path = tempfile.mkstemp(dir=output_dir, suffix='.json.tmp')
+    try:
+        with os.fdopen(fd, 'w') as f:
+            json.dump(checkpoint_data, f)
+        os.replace(tmp_path, checkpoint_path)
+    except Exception:
+        if os.path.exists(tmp_path):
+            os.unlink(tmp_path)
+        raise
+    print(f"  Checkpoint saved: {checkpoint_path} ({len(scale_vessels)} vessels)", flush=True)
+
+    # Cumulative checkpoint
+    cumulative_path = os.path.join(output_dir, 'vessel_detections_checkpoint.json')
+    current_idx = next((j for j, sc in enumerate(SCALES) if sc['name'] == scale_config['name']), 0)
+    completed_scales = [s['name'] for i, s in enumerate(SCALES) if i <= current_idx]
+    fd2, tmp_path2 = tempfile.mkstemp(dir=output_dir, suffix='.json.tmp')
+    try:
+        with os.fdopen(fd2, 'w') as f:
+            json.dump({'vessels': all_vessels, 'scales_completed': completed_scales, 'num_vessels': len(all_vessels)}, f)
+        os.replace(tmp_path2, cumulative_path)
+    except Exception:
+        if os.path.exists(tmp_path2):
+            os.unlink(tmp_path2)
+        raise
+    print(f"  Cumulative checkpoint: {len(all_vessels)} vessels total", flush=True)
+
+
 def main():
-    import sys
     import argparse
 
     parser = argparse.ArgumentParser(description="Multi-Scale SAM2 Vessel Detection")
@@ -3322,6 +3265,8 @@ def main():
                              'check (uniform-width rings). Default: adaptive')
     parser.add_argument('--min-sma-intensity', type=float, default=30,
                         help='Min SMA wall intensity to detect SMA ring (default: 30)')
+    parser.add_argument('--pixel-size', type=float, default=None,
+                        help='Override pixel size in micrometers (default: read from CZI metadata, fallback 0.1725)')
     args = parser.parse_args()
 
     # Auto-detect WSL2 for sleep/reset defaults
@@ -3337,6 +3282,11 @@ def main():
     global DILATION_MODE, SMA_MIN_WALL_INTENSITY
     DILATION_MODE = args.dilation_mode
     SMA_MIN_WALL_INTENSITY = args.min_sma_intensity
+
+    # Inject CLI config into each SCALES entry so multi-GPU workers receive them
+    for sc in SCALES:
+        sc['dilation_mode'] = DILATION_MODE
+        sc['sma_min_wall_intensity'] = SMA_MIN_WALL_INTENSITY
 
     print("=" * 60, flush=True)
     print("Multi-Scale SAM2 Vessel Detection", flush=True)
@@ -3355,6 +3305,22 @@ def main():
     loader = CZILoader(CZI_PATH)
     mosaic_size = loader.mosaic_size
     print(f"\nMosaic size (full res): {mosaic_size}", flush=True)
+
+    # Read pixel size from CZI metadata (or CLI override)
+    global PIXEL_SIZE_UM
+    if args.pixel_size is not None:
+        PIXEL_SIZE_UM = args.pixel_size
+        print(f"Pixel size (CLI override): {PIXEL_SIZE_UM} um", flush=True)
+    else:
+        czi_pixel_size = None
+        if hasattr(loader, 'get_pixel_size'):
+            czi_pixel_size = loader.get_pixel_size()
+        # Validate: must be positive and reasonable (0.01 to 100 um)
+        if czi_pixel_size is not None and 0.01 < czi_pixel_size < 100:
+            PIXEL_SIZE_UM = czi_pixel_size
+            print(f"Pixel size (CZI metadata): {PIXEL_SIZE_UM} um", flush=True)
+        else:
+            print(f"Pixel size (default fallback): {PIXEL_SIZE_UM} um", flush=True)
 
     # Load all channels at BASE_SCALE (1/2) - 4x smaller than full res
     channel_cache = DownsampledChannelCache(loader, [NUCLEAR, CD31, SMA, PM], BASE_SCALE)
@@ -3451,6 +3417,7 @@ def main():
             adaptive_sobel_threshold=adaptive_sobel_threshold,
             tile_sleep=tile_sleep,
             reset_interval=reset_interval,
+            pixel_size_um=PIXEL_SIZE_UM,
         ) as processor:
             import queue as queue_module
 
@@ -3469,24 +3436,7 @@ def main():
                 print(f"{'='*40}", flush=True)
 
                 # Create tile grid and find tissue tiles (CPU, main process)
-                scaled_mosaic_x = mosaic_size[0] // scale_factor
-                scaled_mosaic_y = mosaic_size[1] // scale_factor
-                n_tiles_x = max(1, (scaled_mosaic_x - tile_size) // stride + 1)
-                n_tiles_y = max(1, (scaled_mosaic_y - tile_size) // stride + 1)
-                print(f"Scaled mosaic: {scaled_mosaic_x} x {scaled_mosaic_y}", flush=True)
-                print(f"Tile grid: {n_tiles_x} x {n_tiles_y} = {n_tiles_x * n_tiles_y} tiles", flush=True)
-
-                print("Identifying tissue tiles...", flush=True)
-                tissue_tiles = []
-                for ty in tqdm(range(n_tiles_y), desc="Scanning"):
-                    for tx in range(n_tiles_x):
-                        tile_x = tx * stride
-                        tile_y = ty * stride
-                        tile = main_channel_cache.get_tile(tile_x, tile_y, tile_size, SMA, scale_factor)
-                        if tile is not None and is_tissue_tile(tile):
-                            tissue_tiles.append((tile_x, tile_y))
-
-                print(f"Found {len(tissue_tiles)} tissue tiles", flush=True)
+                tissue_tiles = _scan_tissue_tiles(main_channel_cache, scale_factor, tile_size, stride, mosaic_size)
 
                 n_sample = max(1, int(len(tissue_tiles) * SAMPLE_FRACTION))
                 sampled_tiles = random.sample(tissue_tiles, min(n_sample, len(tissue_tiles)))
@@ -3533,31 +3483,18 @@ def main():
                 if drained > 0:
                     print(f"  Drained {drained} late-arriving results from queue", flush=True)
 
-                scale_vessels = deduplicate_vessels_within_scale(scale_vessels)
+                scale_vessels = deduplicate_vessels_within_scale(scale_vessels, pixel_size_um=PIXEL_SIZE_UM)
                 print(f"Found {len(scale_vessels)} vessels at scale {scale_config['name']}", flush=True)
                 all_vessels.extend(scale_vessels)
 
-                # Save checkpoint after each scale
-                checkpoint_path = os.path.join(OUTPUT_DIR, f"checkpoint_scale_{scale_config['name'].replace('/', '_')}.json")
-                checkpoint_data = {
-                    'scale': scale_config['name'],
-                    'vessels': scale_vessels,
-                    'num_vessels': len(scale_vessels),
-                }
-                with open(checkpoint_path, 'w') as f:
-                    json.dump(checkpoint_data, f)
-                print(f"  Checkpoint saved: {checkpoint_path} ({len(scale_vessels)} vessels)", flush=True)
-
-                # Cumulative checkpoint
-                cumulative_path = os.path.join(OUTPUT_DIR, 'vessel_detections_checkpoint.json')
-                with open(cumulative_path, 'w') as f:
-                    json.dump({'vessels': all_vessels, 'scales_completed': [s['name'] for i, s in enumerate(SCALES) if i <= next(j for j, sc in enumerate(SCALES) if sc['name'] == scale_config['name'])], 'num_vessels': len(all_vessels)}, f)
-                print(f"  Cumulative checkpoint: {len(all_vessels)} vessels total", flush=True)
+                # Save checkpoint after each scale (atomic writes)
+                _save_scale_checkpoint(scale_config, scale_vessels, all_vessels, OUTPUT_DIR)
 
         # Workers stopped by context manager
         # Keep shared memory alive for post-processing (crop regen, cell composition)
         # SharedChannelCache has same API as DownsampledChannelCache (get_tile, channels, base_width, etc.)
         channel_cache = main_channel_cache
+        channel_cache.loader = loader
         # Propagate worker sobel skip count to global for reporting
         global TILES_SKIPPED_BY_SOBEL
         TILES_SKIPPED_BY_SOBEL = tiles_skipped_multigpu
@@ -3592,25 +3529,7 @@ def main():
             print(f"  VRAM: {vram_used:.1f}GB used, {vram_cached:.1f}GB cached", flush=True)
             print(f"{'='*40}", flush=True)
 
-            scaled_mosaic_x = mosaic_size[0] // scale_factor
-            scaled_mosaic_y = mosaic_size[1] // scale_factor
-            n_tiles_x = max(1, (scaled_mosaic_x - tile_size) // stride + 1)
-            n_tiles_y = max(1, (scaled_mosaic_y - tile_size) // stride + 1)
-            total_tiles = n_tiles_x * n_tiles_y
-            print(f"Scaled mosaic: {scaled_mosaic_x} x {scaled_mosaic_y}", flush=True)
-            print(f"Tile grid: {n_tiles_x} x {n_tiles_y} = {total_tiles} tiles", flush=True)
-
-            print("Identifying tissue tiles...", flush=True)
-            tissue_tiles = []
-            for ty in tqdm(range(n_tiles_y), desc="Scanning"):
-                for tx in range(n_tiles_x):
-                    tile_x = tx * stride
-                    tile_y = ty * stride
-                    tile = channel_cache.get_tile(tile_x, tile_y, tile_size, SMA, scale_factor)
-                    if tile is not None and is_tissue_tile(tile):
-                        tissue_tiles.append((tile_x, tile_y))
-
-            print(f"Found {len(tissue_tiles)} tissue tiles", flush=True)
+            tissue_tiles = _scan_tissue_tiles(channel_cache, scale_factor, tile_size, stride, mosaic_size)
 
             n_sample = max(1, int(len(tissue_tiles) * SAMPLE_FRACTION))
             sampled_tiles = random.sample(tissue_tiles, min(n_sample, len(tissue_tiles)))
@@ -3623,6 +3542,7 @@ def main():
                 try:
                     vessels = process_tile_at_scale(
                         tile_x, tile_y, channel_cache, mask_generator, scale_config,
+                        pixel_size_um=PIXEL_SIZE_UM,
                         adaptive_sobel_threshold=adaptive_sobel_threshold
                     )
                     scale_vessels.extend(vessels)
@@ -3652,25 +3572,12 @@ def main():
                         vram_cached = torch.cuda.memory_reserved() / 1e9
                         print(f"\n  [VRAM reset] allocated={vram_used:.1f}GB, cached={vram_cached:.1f}GB", flush=True)
 
-            scale_vessels = deduplicate_vessels_within_scale(scale_vessels)
+            scale_vessels = deduplicate_vessels_within_scale(scale_vessels, pixel_size_um=PIXEL_SIZE_UM)
             print(f"Found {len(scale_vessels)} vessels at scale {scale_config['name']}", flush=True)
             all_vessels.extend(scale_vessels)
 
-            # Save checkpoint after each scale
-            checkpoint_path = os.path.join(OUTPUT_DIR, f"checkpoint_scale_{scale_config['name'].replace('/', '_')}.json")
-            checkpoint_data = {
-                'scale': scale_config['name'],
-                'vessels': scale_vessels,
-                'num_vessels': len(scale_vessels),
-            }
-            with open(checkpoint_path, 'w') as f:
-                json.dump(checkpoint_data, f)
-            print(f"  Checkpoint saved: {checkpoint_path} ({len(scale_vessels)} vessels)", flush=True)
-
-            cumulative_path = os.path.join(OUTPUT_DIR, 'vessel_detections_checkpoint.json')
-            with open(cumulative_path, 'w') as f:
-                json.dump({'vessels': all_vessels, 'scales_completed': [s['name'] for i, s in enumerate(SCALES) if i <= next(j for j, sc in enumerate(SCALES) if sc['name'] == scale_config['name'])], 'num_vessels': len(all_vessels)}, f)
-            print(f"  Cumulative checkpoint: {len(all_vessels)} vessels total", flush=True)
+            # Save checkpoint after each scale (atomic writes)
+            _save_scale_checkpoint(scale_config, scale_vessels, all_vessels, OUTPUT_DIR)
 
             # Aggressive cleanup between scales
             if hasattr(mask_generator, 'predictor') and hasattr(mask_generator.predictor, 'reset_predictor'):
@@ -3689,7 +3596,7 @@ def main():
 
     # Merge across scales (uses adaptive IoU threshold)
     print(f"\nTotal vessels before merge: {len(all_vessels)}")
-    merged_vessels = merge_vessels_across_scales(all_vessels)
+    merged_vessels = merge_vessels_across_scales(all_vessels, pixel_size_um=PIXEL_SIZE_UM)
     print(f"After merge: {len(merged_vessels)}")
 
     # Apply adaptive diameter ratio filter (GMM-based)
@@ -3719,6 +3626,7 @@ def main():
                 cd31_mode=args.dilation_mode,
                 sma_min_wall_intensity=args.min_sma_intensity,
                 sma_mode=args.dilation_mode,
+                pixel_size_um=PIXEL_SIZE_UM,
             )
             if ok:
                 n_refined += 1
@@ -3743,7 +3651,7 @@ def main():
         regenerate_missing_crops(merged_vessels, channel_cache)
 
     # Analyze vessel network topology (skeletonization)
-    network_metrics = analyze_vessel_network(merged_vessels, mosaic_size)
+    network_metrics = analyze_vessel_network(merged_vessels, mosaic_size, pixel_size_um=PIXEL_SIZE_UM)
 
     # ==========================================================================
     # Cell Composition Analysis - 3-Pass Approach
@@ -3775,7 +3683,7 @@ def main():
                 # Convert to pixels at base scale
                 # ROI size = 1.5x outer diameter to capture full vessel
                 roi_size_um = outer_diam_um * 1.5
-                roi_size_px = int(roi_size_um / (0.1725 * BASE_SCALE))  # pixels at base scale
+                roi_size_px = int(roi_size_um / (PIXEL_SIZE_UM * BASE_SCALE))  # pixels at base scale
                 roi_size_px = max(roi_size_px, 50)  # minimum size
 
                 # Convert global coords to base scale
@@ -3879,10 +3787,17 @@ def main():
         }
     }
 
-    # Save JSON with vessels and network metrics
+    # Save JSON with vessels and network metrics (atomic write)
     output_path = os.path.join(OUTPUT_DIR, 'vessel_detections_multiscale.json')
-    with open(output_path, 'w') as f:
-        json.dump(output_data, f, indent=2)
+    fd, tmp_path = tempfile.mkstemp(dir=OUTPUT_DIR, suffix='.json.tmp')
+    try:
+        with os.fdopen(fd, 'w') as f:
+            json.dump(output_data, f, indent=2)
+        os.replace(tmp_path, output_path)
+    except Exception:
+        if os.path.exists(tmp_path):
+            os.unlink(tmp_path)
+        raise
     print(f"\nSaved to {output_path}")
 
     # Export to GeoPackage for GIS compatibility

@@ -27,6 +27,7 @@ Usage:
 import json
 import os
 import sys
+import tempfile
 from tqdm import tqdm
 
 # Add repo root to path
@@ -36,7 +37,7 @@ from segmentation.io.czi_loader import CZILoader
 from scripts.sam2_multiscale_vessels import (
     DownsampledChannelCache, refine_vessel_contours_fullres,
     save_vessel_crop_fullres, generate_html, generate_histograms,
-    CZI_PATH, OUTPUT_DIR, NUCLEAR, CD31, SMA, PM, BASE_SCALE,
+    CZI_PATH, OUTPUT_DIR, NUCLEAR, CD31, SMA, PM, BASE_SCALE, PIXEL_SIZE_UM,
 )
 
 
@@ -59,7 +60,12 @@ def main():
                         help='Enable spline smoothing (off by default)')
     parser.add_argument('--spline-smoothing', type=float, default=3.0,
                         help='Spline smoothing factor (default: 3.0). Higher = smoother.')
+    parser.add_argument('--pixel-size', type=float, default=None,
+                        help='Pixel size in micrometers (default: from main module, fallback 0.1725)')
     args = parser.parse_args()
+
+    # Determine pixel size
+    pixel_size_um = args.pixel_size if args.pixel_size is not None else PIXEL_SIZE_UM
 
     # Load detections (supports both final and checkpoint format)
     print(f"Loading detections from {args.input}...")
@@ -82,72 +88,77 @@ def main():
     loader = CZILoader(CZI_PATH)
     channel_cache = DownsampledChannelCache(loader, [NUCLEAR, CD31, SMA, PM], BASE_SCALE)
 
-    # Run full-resolution refinement on every vessel
-    # refine_vessel_contours_fullres() handles:
-    #   - Reading full-res ROI from CZI
-    #   - CD31 dilation (outer contour)
-    #   - SMA dilation (3rd ring, adaptive or uniform)
-    #   - Spline smoothing (optional)
-    #   - Recomputing all measurements at native resolution
-    print(f"\nRefining contours at full CZI resolution...")
-    print(f"  Dilation mode: {args.dilation_mode} (CD31 + SMA)")
-    print(f"  SMA min_wall_intensity: {args.min_sma_intensity}")
-    print(f"  Spline: {'on' if args.spline else 'off'} (factor={args.spline_smoothing})")
+    try:
+        # Run full-resolution refinement on every vessel
+        # refine_vessel_contours_fullres() handles:
+        #   - Reading full-res ROI from CZI
+        #   - CD31 dilation (outer contour)
+        #   - SMA dilation (3rd ring, adaptive or uniform)
+        #   - Spline smoothing (optional)
+        #   - Recomputing all measurements at native resolution
+        print(f"\nRefining contours at full CZI resolution...")
+        print(f"  Dilation mode: {args.dilation_mode} (CD31 + SMA)")
+        print(f"  SMA min_wall_intensity: {args.min_sma_intensity}")
+        print(f"  Spline: {'on' if args.spline else 'off'} (factor={args.spline_smoothing})")
 
-    n_refined = 0
-    n_failed = 0
-    n_sma_positive = 0
+        n_refined = 0
+        n_failed = 0
+        n_sma_positive = 0
 
-    for v in tqdm(vessels, desc="Refining contours"):
-        ok = refine_vessel_contours_fullres(
-            v, channel_cache,
-            spline=args.spline,
-            spline_smoothing=args.spline_smoothing,
-            cd31_drop_ratio=args.drop_ratio,
-            cd31_mode=args.dilation_mode,
-            sma_drop_ratio=args.drop_ratio,
-            sma_min_wall_intensity=args.min_sma_intensity,
-            sma_mode=args.dilation_mode,
-        )
-        if ok:
-            n_refined += 1
-            if v.get('has_sma_ring'):
-                n_sma_positive += 1
-        else:
-            n_failed += 1
-
-    print(f"\nDone! Refined {n_refined} vessels, {n_failed} failed")
-    print(f"  SMA+ (has ring): {n_sma_positive} ({100*n_sma_positive/max(n_refined,1):.1f}%)")
-    print(f"  SMA- (no ring):  {n_refined - n_sma_positive} ({100*(n_refined-n_sma_positive)/max(n_refined,1):.1f}%)")
-
-    # Regenerate crops at full resolution with refined contours
-    if not args.skip_crops:
-        print("\nRegenerating crops at full resolution...")
-        os.makedirs(os.path.join(OUTPUT_DIR, 'crops'), exist_ok=True)
-        n_crops = 0
-        n_crop_fail = 0
-        for v in tqdm(vessels, desc="Full-res crops"):
-            crop_path = save_vessel_crop_fullres(v, channel_cache)
-            if crop_path:
-                n_crops += 1
+        for v in tqdm(vessels, desc="Refining contours"):
+            ok = refine_vessel_contours_fullres(
+                v, channel_cache,
+                spline=args.spline,
+                spline_smoothing=args.spline_smoothing,
+                cd31_drop_ratio=args.drop_ratio,
+                cd31_mode=args.dilation_mode,
+                sma_drop_ratio=args.drop_ratio,
+                sma_min_wall_intensity=args.min_sma_intensity,
+                sma_mode=args.dilation_mode,
+                pixel_size_um=pixel_size_um,
+            )
+            if ok:
+                n_refined += 1
+                if v.get('has_sma_ring'):
+                    n_sma_positive += 1
             else:
-                n_crop_fail += 1
-        print(f"  Generated {n_crops} full-res crops, {n_crop_fail} failed")
+                n_failed += 1
 
-    # Save updated JSON
-    print(f"\nSaving updated JSON to {args.input}...")
-    with open(args.input, 'w') as f:
-        json.dump(data, f, indent=2)
+        print(f"\nDone! Refined {n_refined} vessels, {n_failed} failed")
+        print(f"  SMA+ (has ring): {n_sma_positive} ({100*n_sma_positive/max(n_refined,1):.1f}%)")
+        print(f"  SMA- (no ring):  {n_refined - n_sma_positive} ({100*(n_refined-n_sma_positive)/max(n_refined,1):.1f}%)")
 
-    # Regenerate HTML and histograms
-    print("Regenerating HTML...")
-    generate_html(vessels)
-    print("Regenerating histograms...")
-    generate_histograms(vessels, OUTPUT_DIR)
+        # Regenerate crops at full resolution with refined contours
+        if not args.skip_crops:
+            print("\nRegenerating crops at full resolution...")
+            os.makedirs(os.path.join(OUTPUT_DIR, 'crops'), exist_ok=True)
+            n_crops = 0
+            n_crop_fail = 0
+            for v in tqdm(vessels, desc="Full-res crops"):
+                crop_path = save_vessel_crop_fullres(v, channel_cache)
+                if crop_path:
+                    n_crops += 1
+                else:
+                    n_crop_fail += 1
+            print(f"  Generated {n_crops} full-res crops, {n_crop_fail} failed")
 
-    channel_cache.release()
-    loader.close()
-    print("\nAll done!")
+        # Save updated JSON (atomic write to prevent corruption on crash)
+        print(f"\nSaving updated JSON to {args.input}...")
+        with tempfile.NamedTemporaryFile('w', dir=os.path.dirname(args.input) or '.', suffix='.tmp', delete=False) as tmp:
+            json.dump(data, tmp, indent=2)
+            tmp_path = tmp.name
+        os.replace(tmp_path, args.input)
+
+        # Regenerate HTML and histograms
+        print("Regenerating HTML...")
+        generate_html(vessels)
+        print("Regenerating histograms...")
+        generate_histograms(vessels, OUTPUT_DIR)
+
+        print("\nAll done!")
+    finally:
+        channel_cache.release()
+        loader.close()
 
 
 if __name__ == '__main__':
