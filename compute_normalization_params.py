@@ -117,18 +117,21 @@ def sample_pixels_from_slide(czi_path, channel=0, n_samples=1000000):
         del gray_cal, gray_all, gray_u8
 
         # ── Filter out blocks that are mostly background ──────────────
-        # Reject blocks whose mean intensity is above the Otsu threshold
-        # (these are mostly white/background even if they had some variance)
+        # Keep blocks where at least 20% of pixels are below the Otsu threshold
+        # (softer than mean-based filter — preserves edge blocks with real tissue)
+        min_tissue_frac = 0.20
         pre_filter = len(tissue_blocks)
         filtered_blocks = []
         for b in tissue_blocks:
             x0, y0 = b['x'], b['y']
             x1, y1 = min(x0 + block_size, w), min(y0 + block_size, h)
-            block_mean = np.mean(channel_data[y0:y1, x0:x1].astype(np.float32))
-            if block_mean < intensity_threshold:
+            gray = np.mean(channel_data[y0:y1, x0:x1].astype(np.float32), axis=2)
+            tissue_frac = np.sum(gray < intensity_threshold) / gray.size
+            if tissue_frac >= min_tissue_frac:
                 filtered_blocks.append(b)
         tissue_blocks = filtered_blocks
-        logger.info(f"  After intensity filter: {len(tissue_blocks)}/{pre_filter} blocks "
+        logger.info(f"  After intensity filter (>={min_tissue_frac:.0%} tissue): "
+                     f"{len(tissue_blocks)}/{pre_filter} blocks "
                      f"(removed {pre_filter - len(tissue_blocks)} light blocks)")
 
         if len(tissue_blocks) == 0:
