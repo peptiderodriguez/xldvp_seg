@@ -61,7 +61,8 @@ from segmentation.preprocessing.stain_normalization import (
     percentile_normalize_rgb,
     compute_global_percentiles,
     normalize_to_percentiles,
-    apply_reinhard_normalization
+    apply_reinhard_normalization,
+    extract_slide_norm_params,
 )
 
 logger = get_logger(__name__)
@@ -1116,7 +1117,7 @@ class UnifiedSegmenter:
 
 
 def shared_calibrate_tissue_threshold(tiles, image_array, calibration_samples, block_size, tile_size,
-                                      modality=None):
+                                      modality=None, precomputed_thresholds=None, slide_name=None):
     """Calibrate tissue detection thresholds using K-means (variance) and Otsu (intensity).
 
     Args:
@@ -1126,10 +1127,23 @@ def shared_calibrate_tissue_threshold(tiles, image_array, calibration_samples, b
         block_size: Block size for variance calculation
         tile_size: Expected tile size
         modality: 'brightfield' for H&E (÷3 variance + pixel Otsu), None for default
+        precomputed_thresholds: Dict mapping slide_name -> {variance_threshold, intensity_threshold}
+            from step 1 JSON. If provided and slide_name found, skips calibration.
+        slide_name: Name of the current slide (for looking up precomputed thresholds)
 
     Returns:
         tuple: (variance_threshold, intensity_threshold)
     """
+    # Use precomputed thresholds from step 1 if available
+    if precomputed_thresholds and slide_name:
+        precomputed = precomputed_thresholds.get(slide_name)
+        if precomputed is not None:
+            otsu_thresh = precomputed.get('otsu_threshold',
+                                          precomputed.get('intensity_threshold', 220.0))
+            logger.info(f"Using pre-computed tissue thresholds from step 1 for '{slide_name}':")
+            logger.info(f"  otsu_threshold={otsu_thresh:.1f} (variance_threshold=0, unused for brightfield)")
+            return 0.0, otsu_thresh
+
     from concurrent.futures import ThreadPoolExecutor, as_completed
 
     # Sample tiles for calibration
@@ -1241,7 +1255,8 @@ def run_unified_segmentation(
     img_size_gb = loader.channel_data.nbytes / (1024**3)
     logger.info(f"Channel data loaded to RAM ({img_size_gb:.2f} GB)")
 
-    # Apply slide-level normalization if requested
+    # Load normalization params and per-slide tissue thresholds from JSON
+    precomputed_thresholds = None
     if normalization_method == 'reinhard' and norm_params_file:
         logger.info(f"\n{'='*70}")
         logger.info("APPLYING SLIDE-LEVEL NORMALIZATION")
@@ -1250,6 +1265,13 @@ def run_unified_segmentation(
 
         with open(norm_params_file, 'r') as f:
             reinhard_params = json.load(f)
+
+        # Extract per-slide tissue thresholds from step 1 (if present)
+        precomputed_thresholds = reinhard_params.get('tissue_thresholds')
+        if precomputed_thresholds:
+            logger.info(f"  Found pre-computed tissue thresholds for {len(precomputed_thresholds)} slides")
+        else:
+            logger.warning(f"  No tissue_thresholds in params file — will fall back to recalibration")
 
         # Detect median/MAD vs mean/std
         if 'L_median' in reinhard_params and 'L_mad' in reinhard_params:
@@ -1260,12 +1282,13 @@ def run_unified_segmentation(
             logger.info(f"  b: median={reinhard_params['b_median']:.2f}, MAD={reinhard_params['b_mad']:.2f}")
             logger.info(f"  Normalizing entire slide...")
 
+            slide_thresh = precomputed_thresholds.get(slide_name) if precomputed_thresholds else None
+            _otsu, _slab = extract_slide_norm_params(slide_thresh)
             channel_data_normalized = apply_reinhard_normalization_MEDIAN(
                 loader.channel_data,
                 reinhard_params,
-                variance_threshold=reinhard_params.get('variance_threshold', 15.0),
-                tile_size=10000,
-                block_size=7
+                otsu_threshold=_otsu,
+                slide_lab_stats=_slab,
             )
             loader.channel_data = channel_data_normalized
             del channel_data_normalized
@@ -1278,10 +1301,13 @@ def run_unified_segmentation(
             logger.info(f"  b: mean={reinhard_params['b_mean']:.2f}, std={reinhard_params['b_std']:.2f}")
             logger.info(f"  Normalizing entire slide...")
 
+            slide_thresh = precomputed_thresholds.get(slide_name) if precomputed_thresholds else None
+            _otsu, _slab = extract_slide_norm_params(slide_thresh)
             channel_data_normalized = apply_reinhard_normalization(
                 loader.channel_data,
                 reinhard_params,
-                variance_threshold=reinhard_params.get('variance_threshold', 15.0)
+                otsu_threshold=_otsu,
+                slide_lab_stats=_slab,
             )
             loader.channel_data = channel_data_normalized
             del channel_data_normalized
@@ -1305,6 +1331,7 @@ def run_unified_segmentation(
     logger.info(f"Total tiles: {len(tiles)}")
 
     # Calibrate tissue threshold using RAM array directly
+    # (will use precomputed thresholds from step 1 if available)
     variance_threshold, intensity_threshold = shared_calibrate_tissue_threshold(
         tiles=tiles,
         image_array=loader.channel_data,
@@ -1312,6 +1339,8 @@ def run_unified_segmentation(
         block_size=calibration_block_size,
         tile_size=tile_size,
         modality='brightfield',
+        precomputed_thresholds=precomputed_thresholds,
+        slide_name=slide_name,
     )
 
     # Create memmap for worker processes (they can't share numpy arrays directly)
@@ -1566,12 +1595,13 @@ def _phase1_load_slides(czi_paths, tile_size, overlap, channel, norm_method='non
             if norm_method == 'reinhard_median' and norm_params is not None:
                 from segmentation.preprocessing.stain_normalization import apply_reinhard_normalization_MEDIAN
                 logger.info(f"  Normalizing slide (reinhard_median, L={norm_params['L_median']:.2f}±{norm_params['L_mad']:.2f})...")
+                _tissue_th = norm_params.get('tissue_thresholds', {}).get(slide_name)
+                _otsu, _slab = extract_slide_norm_params(_tissue_th)
                 channel_data_normalized = apply_reinhard_normalization_MEDIAN(
                     channel_data,
                     norm_params,
-                    variance_threshold=norm_params.get('variance_threshold', 15.0),
-                    tile_size=10000,
-                    block_size=7
+                    otsu_threshold=_otsu,
+                    slide_lab_stats=_slab,
                 )
                 # Free original channel data to prevent OOM (normalization returns new array)
                 loader.channel_data = None
@@ -1581,10 +1611,13 @@ def _phase1_load_slides(czi_paths, tile_size, overlap, channel, norm_method='non
                 logger.info(f"  Slide normalized successfully (original data freed)")
             elif norm_method == 'reinhard' and norm_params is not None:
                 logger.info(f"  Normalizing slide (reinhard mean/std)...")
+                _tissue_th = norm_params.get('tissue_thresholds', {}).get(slide_name)
+                _otsu, _slab = extract_slide_norm_params(_tissue_th)
                 channel_data_normalized = apply_reinhard_normalization(
                     channel_data,
                     norm_params,
-                    variance_threshold=norm_params.get('variance_threshold', 15.0)
+                    otsu_threshold=_otsu,
+                    slide_lab_stats=_slab,
                 )
                 # Free original channel data to prevent OOM
                 loader.channel_data = None
@@ -1619,7 +1652,8 @@ def _phase1_load_slides(czi_paths, tile_size, overlap, channel, norm_method='non
 
 
 def _calibrate_and_filter_tissue(all_tiles, n_slides, calibration_block_size, calibration_samples,
-                                   get_tile_fn, desc_suffix="", modality=None):
+                                   get_tile_fn, desc_suffix="", modality=None,
+                                   precomputed_thresholds=None):
     """Shared calibration + tissue filtering logic for Phase 2.
 
     Args:
@@ -1630,64 +1664,80 @@ def _calibrate_and_filter_tissue(all_tiles, n_slides, calibration_block_size, ca
         get_tile_fn: callable(slide_name, tile) -> np.ndarray or None
         desc_suffix: suffix for tqdm progress bars (e.g. " (streaming)")
         modality: 'brightfield' for H&E (÷3 variance + pixel Otsu), None for default
+        precomputed_thresholds: Dict mapping slide_name -> {variance_threshold, intensity_threshold}
+            from step 1 JSON. If provided, skips calibration and uses per-slide thresholds.
 
     Returns:
         tuple: (tissue_tiles, variance_threshold, intensity_threshold)
     """
     import cv2
 
-    n_calib_samples = min(calibration_samples * n_slides, len(all_tiles))
-    logger.info(f"\nCalibrating tissue threshold from {n_calib_samples} samples...")
+    if precomputed_thresholds:
+        # Use pre-computed per-slide thresholds — skip calibration entirely
+        logger.info(f"\nUsing pre-computed tissue thresholds from step 1 for {len(precomputed_thresholds)} slides")
+        for sn, th in precomputed_thresholds.items():
+            otsu_val = th.get('otsu_threshold', th.get('intensity_threshold', 220.0))
+            logger.info(f"  {sn}: otsu_threshold={otsu_val:.1f}")
 
-    np.random.seed(42)
-    calib_indices = np.random.choice(len(all_tiles), n_calib_samples, replace=False)
-    calib_tiles = [all_tiles[idx] for idx in calib_indices]
+        # Compute median Otsu threshold as aggregate for downstream code
+        all_otsu = [th.get('otsu_threshold', th.get('intensity_threshold', 220.0))
+                    for th in precomputed_thresholds.values()]
+        variance_threshold = 0.0  # unused for brightfield
+        intensity_threshold = float(np.median(all_otsu))
+        logger.info(f"  Aggregate (median): otsu_threshold={intensity_threshold:.1f} (variance_threshold=0, unused for brightfield)")
+    else:
+        n_calib_samples = min(calibration_samples * n_slides, len(all_tiles))
+        logger.info(f"\nCalibrating tissue threshold from {n_calib_samples} samples...")
 
-    calib_threads = max(1, int(os.cpu_count() * 0.8))
+        np.random.seed(42)
+        calib_indices = np.random.choice(len(all_tiles), n_calib_samples, replace=False)
+        calib_tiles = [all_tiles[idx] for idx in calib_indices]
 
-    def calc_tile_stats(args):
-        slide_name, tile = args
-        tile_img = get_tile_fn(slide_name, tile)
+        calib_threads = max(1, int(os.cpu_count() * 0.8))
 
-        if tile_img is None or tile_img.max() == 0:
-            return [0.0], [255.0], np.array([], dtype=np.uint8)
+        def calc_tile_stats(args):
+            slide_name, tile = args
+            tile_img = get_tile_fn(slide_name, tile)
 
-        if tile_img.ndim == 3:
-            gray = cv2.cvtColor(tile_img.astype(np.uint8), cv2.COLOR_RGB2GRAY)
-        else:
-            gray = tile_img.astype(np.uint8) if tile_img.dtype != np.uint8 else tile_img
+            if tile_img is None or tile_img.max() == 0:
+                return [0.0], [255.0], np.array([], dtype=np.uint8)
 
-        block_vars, block_means = calculate_block_variances(gray, calibration_block_size)
+            if tile_img.ndim == 3:
+                gray = cv2.cvtColor(tile_img.astype(np.uint8), cv2.COLOR_RGB2GRAY)
+            else:
+                gray = tile_img.astype(np.uint8) if tile_img.dtype != np.uint8 else tile_img
 
-        # Collect pixel samples for brightfield Otsu
-        pixel_sample = np.array([], dtype=np.uint8)
-        if modality == 'brightfield':
-            flat = gray.ravel()
-            n = min(2000, len(flat))
-            pixel_sample = flat[np.random.choice(len(flat), n, replace=False)]
+            block_vars, block_means = calculate_block_variances(gray, calibration_block_size)
 
-        return (block_vars if block_vars else [],
-                block_means if block_means else [],
-                pixel_sample)
+            # Collect pixel samples for brightfield Otsu
+            pixel_sample = np.array([], dtype=np.uint8)
+            if modality == 'brightfield':
+                flat = gray.ravel()
+                n = min(2000, len(flat))
+                pixel_sample = flat[np.random.choice(len(flat), n, replace=False)]
 
-    all_variances = []
-    all_means = []
-    all_pixel_samples = []
-    with ThreadPoolExecutor(max_workers=calib_threads) as executor:
-        futures = {executor.submit(calc_tile_stats, tile): tile for tile in calib_tiles}
-        for future in tqdm(as_completed(futures), total=len(calib_tiles), desc=f"Calibrating{desc_suffix}"):
-            block_vars, block_means, pixel_sample = future.result()
-            all_variances.extend(block_vars)
-            all_means.extend(block_means)
-            if len(pixel_sample) > 0:
-                all_pixel_samples.append(pixel_sample)
+            return (block_vars if block_vars else [],
+                    block_means if block_means else [],
+                    pixel_sample)
 
-    variances = np.array(all_variances)
-    means = np.array(all_means)
-    pixel_samples = np.concatenate(all_pixel_samples) if all_pixel_samples else None
-    logger.info(f"  Running K-means + Otsu on {len(variances)} block samples...")
-    variance_threshold, intensity_threshold = compute_tissue_thresholds(
-        variances, means, modality=modality, pixel_samples=pixel_samples)
+        all_variances = []
+        all_means = []
+        all_pixel_samples = []
+        with ThreadPoolExecutor(max_workers=calib_threads) as executor:
+            futures = {executor.submit(calc_tile_stats, tile): tile for tile in calib_tiles}
+            for future in tqdm(as_completed(futures), total=len(calib_tiles), desc=f"Calibrating{desc_suffix}"):
+                block_vars, block_means, pixel_sample = future.result()
+                all_variances.extend(block_vars)
+                all_means.extend(block_means)
+                if len(pixel_sample) > 0:
+                    all_pixel_samples.append(pixel_sample)
+
+        variances = np.array(all_variances)
+        means = np.array(all_means)
+        pixel_samples = np.concatenate(all_pixel_samples) if all_pixel_samples else None
+        logger.info(f"  Running K-means + Otsu on {len(variances)} block samples...")
+        variance_threshold, intensity_threshold = compute_tissue_thresholds(
+            variances, means, modality=modality, pixel_samples=pixel_samples)
 
     logger.info(f"\nFiltering to tissue-containing tiles...")
 
@@ -1701,8 +1751,18 @@ def _calibrate_and_filter_tissue(all_tiles, n_slides, calibration_block_size, ca
         if tile_img is None or tile_img.max() == 0:
             return None
 
-        has_tissue_flag, _ = has_tissue(tile_img, variance_threshold, block_size=calibration_block_size,
-                                        intensity_threshold=intensity_threshold, modality=modality)
+        # Use per-slide thresholds if available, otherwise aggregate
+        if precomputed_thresholds and slide_name in precomputed_thresholds:
+            vt = 0.0  # unused for brightfield
+            it = precomputed_thresholds[slide_name].get(
+                'otsu_threshold',
+                precomputed_thresholds[slide_name].get('intensity_threshold', 220.0))
+        else:
+            vt = variance_threshold
+            it = intensity_threshold
+
+        has_tissue_flag, _ = has_tissue(tile_img, vt, block_size=calibration_block_size,
+                                        intensity_threshold=it, modality=modality)
 
         if has_tissue_flag:
             return (slide_name, tile)
@@ -1755,7 +1815,8 @@ def _create_tile_grid(slide_names_and_sizes, tile_size, overlap):
     return all_tiles
 
 
-def _phase2_identify_tissue_tiles(slide_data, tile_size, overlap, variance_threshold, calibration_block_size, calibration_samples):
+def _phase2_identify_tissue_tiles(slide_data, tile_size, overlap, variance_threshold, calibration_block_size, calibration_samples,
+                                   precomputed_thresholds=None):
     """Phase 2: Create tiles and identify tissue-containing tiles (RAM mode)."""
     logger.info(f"\n{'='*70}")
     logger.info("PHASE 2: IDENTIFYING TISSUE TILES")
@@ -1772,10 +1833,12 @@ def _phase2_identify_tissue_tiles(slide_data, tile_size, overlap, variance_thres
     return _calibrate_and_filter_tissue(
         all_tiles, len(slide_data), calibration_block_size, calibration_samples, get_tile_from_ram,
         modality='brightfield',
+        precomputed_thresholds=precomputed_thresholds,
     )
 
 
-def _phase2_identify_tissue_tiles_streaming(slide_loaders, tile_size, overlap, variance_threshold, calibration_block_size, calibration_samples, channel):
+def _phase2_identify_tissue_tiles_streaming(slide_loaders, tile_size, overlap, variance_threshold, calibration_block_size, calibration_samples, channel,
+                                             precomputed_thresholds=None):
     """Phase 2 (Streaming): Identify tissue tiles by reading from CZI on-demand."""
     from segmentation.processing.memory import log_memory_status
 
@@ -1797,6 +1860,7 @@ def _phase2_identify_tissue_tiles_streaming(slide_loaders, tile_size, overlap, v
     tissue_tiles, variance_threshold, intensity_threshold = _calibrate_and_filter_tissue(
         all_tiles, len(slide_loaders), calibration_block_size, calibration_samples,
         get_tile_from_czi, desc_suffix=" (streaming)", modality='brightfield',
+        precomputed_thresholds=precomputed_thresholds,
     )
 
     log_memory_status("Phase 2 tissue detection (streaming) - END")
@@ -1865,6 +1929,7 @@ def _phase4_process_tiles(
     norm_params=None,
     normalization_method='none',
     intensity_threshold=220,
+    per_slide_thresholds=None,
 ):
     """
     Phase 4: Process sampled tiles using ML models (SAM2, Cellpose, ResNet).
@@ -2126,6 +2191,7 @@ def _phase4_process_tiles(
                 normalization_method=normalization_method,
                 intensity_threshold=intensity_threshold,
                 modality='brightfield',
+                per_slide_thresholds=per_slide_thresholds,
             ) as processor:
                 # Submit all tiles (only coordinates, not data!)
                 logger.info(f"Submitting {len(sampled_tiles)} tiles to {num_gpus} GPUs (shared memory)...")
@@ -2193,6 +2259,7 @@ def _phase4_process_tiles(
                 normalization_method=normalization_method,
                 intensity_threshold=intensity_threshold,
                 modality='brightfield',
+                per_slide_thresholds=per_slide_thresholds,
             ) as processor:
                 # Submit all tiles (only coordinates, not data!)
                 logger.info(f"Submitting {len(sampled_tiles)} tiles to {actual_gpus} GPUs (shared memory)...")
@@ -2355,6 +2422,7 @@ def run_multi_slide_segmentation(
     norm_params_for_workers = None
     norm_method_for_workers = 'none'
 
+    precomputed_thresholds = None
     if normalize_slides and normalization_method == 'reinhard':
         if not norm_params_file:
             raise ValueError(
@@ -2368,6 +2436,13 @@ def run_multi_slide_segmentation(
         else:
             norm_method_for_workers = 'reinhard'
         norm_params_for_workers = reinhard_params
+
+        # Extract per-slide tissue thresholds from step 1 (if present)
+        precomputed_thresholds = reinhard_params.get('tissue_thresholds')
+        if precomputed_thresholds:
+            logger.info(f"Found pre-computed tissue thresholds for {len(precomputed_thresholds)} slides")
+        else:
+            logger.warning(f"No tissue_thresholds in params file — will fall back to recalibration")
 
     # =========================================================================
     # MULTI-GPU MODE: Memory-efficient streaming approach
@@ -2429,25 +2504,28 @@ def run_multi_slide_segmentation(
             if norm_method_for_workers == 'reinhard_median' and norm_params_for_workers is not None:
                 from segmentation.preprocessing.stain_normalization import apply_reinhard_normalization_MEDIAN
                 logger.info(f"  Normalizing {slide_name} (reinhard_median, L={norm_params_for_workers['L_median']:.2f}±{norm_params_for_workers['L_mad']:.2f})...")
+                _tissue_th = precomputed_thresholds.get(slide_name) if precomputed_thresholds else None
+                _otsu, _slab = extract_slide_norm_params(_tissue_th)
                 channel_data_normalized = apply_reinhard_normalization_MEDIAN(
                     channel_data,
                     norm_params_for_workers,
-                    variance_threshold=norm_params_for_workers.get('variance_threshold', 15.0),
-                    tile_size=10000,
-                    block_size=7
+                    otsu_threshold=_otsu,
+                    slide_lab_stats=_slab,
                 )
                 # Replace channel data in loader with normalized version
                 loader.channel_data = channel_data_normalized
                 del channel_data, channel_data_normalized
-                gc.collect()
                 logger.info(f"  {slide_name} normalized successfully")
                 gc.collect()
             elif norm_method_for_workers == 'reinhard' and norm_params_for_workers is not None:
                 logger.info(f"  Normalizing {slide_name} (reinhard mean/std)...")
+                _tissue_th = precomputed_thresholds.get(slide_name) if precomputed_thresholds else None
+                _otsu, _slab = extract_slide_norm_params(_tissue_th)
                 channel_data_normalized = apply_reinhard_normalization(
                     channel_data,
                     norm_params_for_workers,
-                    variance_threshold=norm_params_for_workers.get('variance_threshold', 15.0)
+                    otsu_threshold=_otsu,
+                    slide_lab_stats=_slab,
                 )
                 # Replace channel data in loader with normalized version
                 loader.channel_data = channel_data_normalized
@@ -2600,7 +2678,8 @@ def run_multi_slide_segmentation(
 
         # Phase 2: Identify tissue tiles using streaming (on-demand reading)
         tissue_tiles, variance_threshold, intensity_threshold = _phase2_identify_tissue_tiles_streaming(
-            slide_loaders, tile_size, overlap, None, calibration_block_size, calibration_samples, channel
+            slide_loaders, tile_size, overlap, None, calibration_block_size, calibration_samples, channel,
+            precomputed_thresholds=precomputed_thresholds,
         )
 
         log_memory_status("After Phase 2 (tissue detection)")
@@ -2680,6 +2759,7 @@ def run_multi_slide_segmentation(
                 cleanup_config=cleanup_config,
                 intensity_threshold=intensity_threshold,
                 modality='brightfield',
+                per_slide_thresholds=precomputed_thresholds,
                 # Don't pass norm params — normalization already applied at slide level
             ) as processor:
                 logger.info(f"Submitting {len(sampled_tiles)} tiles to {num_gpus} GPUs...")
@@ -2778,7 +2858,8 @@ def run_multi_slide_segmentation(
 
         # Phase 2: Identify tissue-containing tiles
         tissue_tiles, variance_threshold, intensity_threshold = _phase2_identify_tissue_tiles(
-            slide_data, tile_size, overlap, None, calibration_block_size, calibration_samples
+            slide_data, tile_size, overlap, None, calibration_block_size, calibration_samples,
+            precomputed_thresholds=precomputed_thresholds,
         )
 
         # Phase 3: Sample from combined pool
@@ -2806,6 +2887,7 @@ def run_multi_slide_segmentation(
             multi_gpu=False,  # Don't use multi-GPU in standard mode
             num_gpus=num_gpus,
             intensity_threshold=intensity_threshold,
+            per_slide_thresholds=precomputed_thresholds,
         )
 
         # Clear slide data and loaders from RAM

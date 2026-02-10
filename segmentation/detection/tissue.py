@@ -16,6 +16,42 @@ from segmentation.utils.logging import get_logger
 logger = get_logger(__name__)
 
 
+def compute_otsu_threshold(gray_image, max_subsample=10_000_000):
+    """Compute Otsu threshold on a grayscale image, excluding black padding.
+
+    Subsamples up to max_subsample non-zero pixels to avoid allocating a
+    full thresholded copy of the image.
+
+    Args:
+        gray_image: 2D uint8 grayscale array
+        max_subsample: Maximum pixels to feed to Otsu (default 10M)
+
+    Returns:
+        float: Otsu threshold value
+    """
+    # Subsample random pixels (avoids full-image allocation)
+    h, w = gray_image.shape
+    n_total = h * w
+    n_sample = min(max_subsample, n_total)
+
+    if n_sample < n_total:
+        rows = np.random.randint(0, h, size=n_sample)
+        cols = np.random.randint(0, w, size=n_sample)
+        pixels = gray_image[rows, cols]
+    else:
+        pixels = gray_image.ravel()
+
+    # Exclude black padding (gray == 0)
+    pixels = pixels[pixels > 0]
+    if len(pixels) < 100:
+        logger.warning("  compute_otsu_threshold: <100 non-zero pixels, returning default 200")
+        return 200.0
+
+    otsu_val, _ = cv2.threshold(pixels.reshape(1, -1), 0, 255,
+                                cv2.THRESH_BINARY + cv2.THRESH_OTSU)
+    return float(otsu_val)
+
+
 def calculate_block_variances(gray_image, block_size=512):
     """
     Calculate variance and mean intensity for each block in the image.
@@ -50,14 +86,16 @@ def is_tissue_block(gray_block, variance_threshold, modality=None,
                     intensity_threshold=220, min_tissue_pixel_frac=0.20):
     """Shared block-level tissue criterion.
 
-    Brightfield: AND logic — variance AND >=20% dark pixels.
+    Brightfield: Otsu-only — >=20% of pixels below intensity_threshold (Otsu).
+        variance_threshold is ignored (pass 0).
     Other/default: OR logic — variance OR low mean intensity (existing behavior).
 
     Args:
         gray_block: 2D grayscale array (single block)
-        variance_threshold: Variance threshold from K-means calibration
+        variance_threshold: Variance threshold (used for fluorescence only;
+            ignored for brightfield)
         modality: 'brightfield' for H&E, None/other for fluorescence (OR logic)
-        intensity_threshold: Pixel intensity cutoff (brightfield: Otsu on pixels;
+        intensity_threshold: Pixel intensity cutoff (brightfield: Otsu threshold;
             fluorescence: Otsu on block means or hardcoded 220)
         min_tissue_pixel_frac: Minimum fraction of pixels below intensity_threshold
             to count as tissue (brightfield only, default 0.20)
@@ -65,11 +103,11 @@ def is_tissue_block(gray_block, variance_threshold, modality=None,
     Returns:
         bool: True if the block is classified as tissue
     """
-    var = np.var(gray_block.astype(np.float64))
     if modality == 'brightfield':
-        tissue_frac = np.sum(gray_block < intensity_threshold) / gray_block.size
-        return var >= variance_threshold and tissue_frac >= min_tissue_pixel_frac
+        tissue_frac = np.sum((gray_block > 0) & (gray_block < intensity_threshold)) / gray_block.size
+        return tissue_frac >= min_tissue_pixel_frac
     else:
+        var = np.var(gray_block.astype(np.float64))
         mean_val = np.mean(gray_block.astype(np.float64))
         return var >= variance_threshold or mean_val < intensity_threshold
 
@@ -133,8 +171,8 @@ def has_tissue(tile_image, variance_threshold, min_tissue_fraction=0.10, block_s
     """
     Check if a tile contains tissue using block-based variance and intensity.
 
-    When modality='brightfield': uses AND logic via is_tissue_block() — a block
-    must have high variance AND >=20% dark pixels.
+    When modality='brightfield': Otsu-only — a block is tissue if >=20% of its
+    non-black pixels are below the Otsu threshold. Variance is ignored.
 
     When modality is None/other (default): uses OR logic — a block is tissue if
     it has high variance OR low mean intensity. This preserves existing behavior

@@ -13,6 +13,24 @@ from typing import Tuple, Dict
 
 logger = logging.getLogger(__name__)
 
+_LAB_KEYS = ('L_median', 'L_mad', 'a_median', 'a_mad', 'b_median', 'b_mad')
+
+
+def extract_slide_norm_params(slide_thresh):
+    """Extract Otsu threshold and per-slide LAB stats from a per-slide threshold dict.
+
+    Args:
+        slide_thresh: Per-slide dict from tissue_thresholds JSON, or None.
+
+    Returns:
+        tuple: (otsu_threshold, slide_lab_stats) — either or both may be None.
+    """
+    if not slide_thresh:
+        return None, None
+    otsu = slide_thresh.get('otsu_threshold', slide_thresh.get('intensity_threshold'))
+    slab = {k: slide_thresh[k] for k in _LAB_KEYS if k in slide_thresh}
+    return otsu, slab if len(slab) == 6 else None
+
 
 def compute_global_percentiles(
     slides_data: list,
@@ -310,166 +328,170 @@ def apply_reinhard_normalization_MEDIAN(
     params: Dict[str, float],
     variance_threshold: float = 15.0,
     tile_size: int = 10000,
-    block_size: int = 7
+    block_size: int = 7,
+    precomputed_variance_threshold: float = None,
+    precomputed_intensity_threshold: float = None,
+    otsu_threshold: float = None,
+    slide_lab_stats: Dict[str, float] = None,
 ) -> np.ndarray:
     """
-    Apply Reinhard normalization with MEDIAN/MAD (robust version).
+    Apply Reinhard normalization with pixel-level tissue masking.
 
-    Uses block-level tissue detection (same as Phase 1 compute_normalization_params.py):
-    512x512 blocks, K-means calibrated threshold / 10, cv2 LAB conversion.
-    All pixels within tissue blocks are normalized; background blocks unchanged.
+    Iterates over 512x512 blocks for memory efficiency. Within each block,
+    pixels with (gray > 0) & (gray < otsu_threshold) are tissue — only those
+    get normalized. Background pixels are left untouched.
 
     Args:
         image: RGB image (H, W, 3) in range [0, 255], dtype uint8
-        params: Dictionary with Lab statistics from Phase 1
+        params: Dictionary with global target Lab statistics from Phase 1
                 Must contain: L_median, L_mad, a_median, a_mad, b_median, b_mad
         variance_threshold: (unused, kept for API compatibility)
         tile_size: (unused, kept for API compatibility)
         block_size: (unused, kept for API compatibility)
+        precomputed_variance_threshold: (unused, kept for API compatibility)
+        precomputed_intensity_threshold: (unused, kept for API compatibility)
+        otsu_threshold: Per-slide Otsu threshold from step 1 JSON.
+            If None, computed from image.
+        slide_lab_stats: Per-slide LAB stats dict from step 1 JSON with keys:
+            L_median, L_mad, a_median, a_mad, b_median, b_mad.
+            If None, computed from image by sampling tissue pixels.
 
     Returns:
         Normalized RGB image (H, W, 3), dtype uint8
     """
-    import cv2
-    from segmentation.detection.tissue import calibrate_tissue_threshold, filter_tissue_tiles
+    from segmentation.detection.tissue import compute_otsu_threshold
 
     h, w, c = image.shape
     block_sz = 512
+    gray = None  # Lazy — only computed if otsu_threshold or slide_lab_stats is missing
 
-    # Step 1: Block-level tissue detection (same method as Phase 1)
-    logger.info(f"  Tissue detection: block-level ({block_sz}x{block_sz}), same as Phase 1")
-    blocks = []
-    for y in range(0, h, block_sz):
-        for x in range(0, w, block_sz):
-            blocks.append({'x': x, 'y': y})
+    # Step 1: Get Otsu threshold (from step 1 JSON or compute)
+    if otsu_threshold is not None:
+        otsu_val = otsu_threshold
+        logger.info(f"  Using pre-computed Otsu threshold: {otsu_val:.1f}")
+    else:
+        gray = cv2.cvtColor(image, cv2.COLOR_RGB2GRAY)
+        otsu_val = compute_otsu_threshold(gray)
+        logger.info(f"  Computed Otsu threshold from image: {otsu_val:.1f}")
 
-    logger.info(f"  Total blocks: {len(blocks)}")
+    # Step 2: Get per-slide LAB stats (from step 1 JSON or compute by sampling)
+    if slide_lab_stats is not None:
+        L_src_median = slide_lab_stats['L_median']
+        L_src_mad = slide_lab_stats['L_mad']
+        a_src_median = slide_lab_stats['a_median']
+        a_src_mad = slide_lab_stats['a_mad']
+        b_src_median = slide_lab_stats['b_median']
+        b_src_mad = slide_lab_stats['b_mad']
+        logger.info(f"  Using pre-computed slide LAB stats: L={L_src_median:.2f}±{L_src_mad:.2f}")
+    else:
+        # Fallback: rejection-sample 1M tissue pixels and compute LAB stats
+        if gray is None:
+            gray = cv2.cvtColor(image, cv2.COLOR_RGB2GRAY)
+        logger.info(f"  Computing slide LAB stats by sampling tissue pixels...")
+        n_samples = 1_000_000
+        max_attempts = n_samples * 5
+        collected = []
+        total_collected = 0
+        attempt = 0
+        while total_collected < n_samples and attempt < max_attempts:
+            batch = min(n_samples * 2, max_attempts - attempt)
+            rows = np.random.randint(0, h, size=batch)
+            cols = np.random.randint(0, w, size=batch)
+            g = gray[rows, cols]
+            mask = (g > 0) & (g < otsu_val)
+            tissue_rows = rows[mask]
+            tissue_cols = cols[mask]
+            if len(tissue_rows) > 0:
+                rgb_pixels = image[tissue_rows, tissue_cols]  # (K, 3)
+                collected.append(rgb_pixels)
+                total_collected += len(rgb_pixels)
+            attempt += batch
 
-    # Calibrate threshold using K-means (same as Phase 1)
-    var_threshold = calibrate_tissue_threshold(
-        blocks,
-        image_array=image,
-        calibration_samples=min(100, len(blocks)),
-        block_size=block_sz,
-        tile_size=block_sz
-    )
-    logger.info(f"  Calibrated variance threshold: {var_threshold:.1f}")
+        if not collected:
+            logger.warning("  No tissue pixels found for LAB stats, returning original image")
+            del gray
+            return image.copy()
 
-    # Reduce by 10x (same as Phase 1)
-    var_threshold /= 10.0
-    logger.info(f"  Reduced threshold (10x): {var_threshold:.1f}")
+        all_pixels = np.concatenate(collected)[:n_samples]
+        # Convert to LAB
+        px_img = all_pixels.reshape(1, -1, 3).astype(np.uint8)
+        px_lab = cv2.cvtColor(px_img, cv2.COLOR_RGB2LAB).astype(np.float32).reshape(-1, 3)
+        px_lab[:, 0] = px_lab[:, 0] * 100.0 / 255.0
+        px_lab[:, 1] -= 128.0
+        px_lab[:, 2] -= 128.0
 
-    # Filter to tissue blocks
-    tissue_blocks = filter_tissue_tiles(
-        blocks,
-        var_threshold,
-        image_array=image,
-        tile_size=block_sz,
-        block_size=block_sz,
-        n_workers=8,
-        show_progress=False
-    )
+        L_src_median = float(np.median(px_lab[:, 0]))
+        L_src_mad = float(np.median(np.abs(px_lab[:, 0] - L_src_median)))
+        a_src_median = float(np.median(px_lab[:, 1]))
+        a_src_mad = float(np.median(np.abs(px_lab[:, 1] - a_src_median)))
+        b_src_median = float(np.median(px_lab[:, 2]))
+        b_src_mad = float(np.median(np.abs(px_lab[:, 2] - b_src_median)))
+        del all_pixels, px_img, px_lab, collected
+        logger.info(f"  Computed slide LAB stats: L={L_src_median:.2f}±{L_src_mad:.2f}")
 
-    logger.info(f"  Tissue blocks: {len(tissue_blocks)} / {len(blocks)} ({100*len(tissue_blocks)/len(blocks):.1f}%)")
+    if gray is not None:
+        del gray
 
-    if len(tissue_blocks) == 0:
-        logger.warning("  No tissue blocks found, returning original image")
-        return image.copy()
+    # Log source vs target stats
+    logger.info(f"  Source stats: L={L_src_median:.2f}±{L_src_mad:.2f}, a={a_src_median:.2f}±{a_src_mad:.2f}, b={b_src_median:.2f}±{b_src_mad:.2f}")
+    logger.info(f"  Target stats: L={params['L_median']:.2f}±{params['L_mad']:.2f}, a={params['a_median']:.2f}±{params['a_mad']:.2f}, b={params['b_median']:.2f}±{params['b_mad']:.2f}")
 
-    del blocks
-
-    # Step 2: Sample random pixels from tissue blocks for stats (same as Phase 1)
-    n_samples = 1000000
-    logger.info(f"  Sampling {n_samples:,} pixels from tissue blocks for stats...")
-
-    # Vectorized sampling: pick random blocks, random offsets within each
-    block_origins = np.array([(b['x'], b['y']) for b in tissue_blocks])
-    block_indices = np.random.randint(0, len(tissue_blocks), size=n_samples)
-    selected_origins = block_origins[block_indices]
-
-    # Per-block-bounded offsets (matches compute_normalization_params.py)
-    # Prevents over-sampling boundary pixels at image edges
-    max_x_offsets = np.minimum(block_sz, w - selected_origins[:, 0])
-    max_y_offsets = np.minimum(block_sz, h - selected_origins[:, 1])
-    max_x_offsets = np.maximum(max_x_offsets, 1)  # avoid zero range
-    max_y_offsets = np.maximum(max_y_offsets, 1)
-    x_offsets = (np.random.random(n_samples) * max_x_offsets).astype(np.intp)
-    y_offsets = (np.random.random(n_samples) * max_y_offsets).astype(np.intp)
-    xs = selected_origins[:, 0] + x_offsets
-    ys = selected_origins[:, 1] + y_offsets
-
-    samples = image[ys, xs]  # (n_samples, 3) uint8
-
-    del block_origins, block_indices, selected_origins, x_offsets, y_offsets, xs, ys
-
-    # Convert to LAB using cv2 (same as Phase 1)
-    samples_img = samples.reshape(1, -1, 3)
-    lab = cv2.cvtColor(samples_img, cv2.COLOR_RGB2LAB).astype(np.float32)
-    lab = lab.reshape(-1, 3)
-    lab[:, 0] = lab[:, 0] * 100.0 / 255.0  # L: [0,255] -> [0,100]
-    lab[:, 1] = lab[:, 1] - 128.0           # a: [0,255] -> [-128,127]
-    lab[:, 2] = lab[:, 2] - 128.0           # b: [0,255] -> [-128,127]
-
-    del samples, samples_img
-
-    # Compute image-level MEDIAN and MAD
-    L_img_median = np.median(lab[:, 0])
-    L_img_mad = np.median(np.abs(lab[:, 0] - L_img_median))
-    a_img_median = np.median(lab[:, 1])
-    a_img_mad = np.median(np.abs(lab[:, 1] - a_img_median))
-    b_img_median = np.median(lab[:, 2])
-    b_img_mad = np.median(np.abs(lab[:, 2] - b_img_median))
-
-    del lab
-
-    # Log internal stats for verification
-    logger.info(f"  Image stats ({n_samples:,} samples from {len(tissue_blocks)} tissue blocks):")
-    logger.info(f"    L: median={L_img_median:.2f}, MAD={L_img_mad:.2f}  (target: {params['L_median']:.2f}, {params['L_mad']:.2f})")
-    logger.info(f"    a: median={a_img_median:.2f}, MAD={a_img_mad:.2f}  (target: {params['a_median']:.2f}, {params['a_mad']:.2f})")
-    logger.info(f"    b: median={b_img_median:.2f}, MAD={b_img_mad:.2f}  (target: {params['b_median']:.2f}, {params['b_mad']:.2f})")
-
-    # Step 3: Normalize all pixels in tissue blocks
+    # Step 3: Normalize tissue pixels block-by-block (512x512 for memory efficiency)
     result = image.copy()
+    tissue_px_count = 0
+    total_px_count = 0
 
-    for block in tissue_blocks:
-        bx, by = block['x'], block['y']
-        by_end = min(by + block_sz, h)
-        bx_end = min(bx + block_sz, w)
+    for by in range(0, h, block_sz):
+        for bx in range(0, w, block_sz):
+            by_end = min(by + block_sz, h)
+            bx_end = min(bx + block_sz, w)
 
-        block_img = image[by:by_end, bx:bx_end]
+            block_img = result[by:by_end, bx:bx_end]
+            block_gray = cv2.cvtColor(block_img, cv2.COLOR_RGB2GRAY)
 
-        # Convert to LAB using cv2 (same as Phase 1)
-        block_lab = cv2.cvtColor(block_img, cv2.COLOR_RGB2LAB).astype(np.float32)
-        block_lab[:, :, 0] = block_lab[:, :, 0] * 100.0 / 255.0
-        block_lab[:, :, 1] = block_lab[:, :, 1] - 128.0
-        block_lab[:, :, 2] = block_lab[:, :, 2] - 128.0
+            # Tissue mask: non-black and below Otsu
+            tissue_mask = (block_gray > 0) & (block_gray < otsu_val)
+            n_tissue = int(tissue_mask.sum())
+            total_px_count += block_gray.size
 
-        # Apply normalization: (x - img_median) / img_mad * target_mad + target_median
-        if L_img_mad > 1.0:
-            block_lab[:, :, 0] = (block_lab[:, :, 0] - L_img_median) / L_img_mad * params['L_mad'] + params['L_median']
-        else:
-            block_lab[:, :, 0] = params['L_median']
+            if n_tissue == 0:
+                continue
+            tissue_px_count += n_tissue
 
-        if a_img_mad > 1.0:
-            block_lab[:, :, 1] = (block_lab[:, :, 1] - a_img_median) / a_img_mad * params['a_mad'] + params['a_median']
-        else:
-            block_lab[:, :, 1] = params['a_median']
+            # Convert entire block to LAB
+            block_lab = cv2.cvtColor(block_img, cv2.COLOR_RGB2LAB).astype(np.float32)
+            block_lab[:, :, 0] = block_lab[:, :, 0] * 100.0 / 255.0
+            block_lab[:, :, 1] = block_lab[:, :, 1] - 128.0
+            block_lab[:, :, 2] = block_lab[:, :, 2] - 128.0
 
-        if b_img_mad > 1.0:
-            block_lab[:, :, 2] = (block_lab[:, :, 2] - b_img_median) / b_img_mad * params['b_mad'] + params['b_median']
-        else:
-            block_lab[:, :, 2] = params['b_median']
+            # Normalize ONLY tissue pixels
+            if L_src_mad > 1.0:
+                block_lab[:, :, 0][tissue_mask] = (block_lab[:, :, 0][tissue_mask] - L_src_median) / L_src_mad * params['L_mad'] + params['L_median']
+            else:
+                block_lab[:, :, 0][tissue_mask] = params['L_median']
 
-        # Convert back to cv2 LAB encoding and then to RGB
-        block_lab[:, :, 0] = block_lab[:, :, 0] * 255.0 / 100.0
-        block_lab[:, :, 1] = block_lab[:, :, 1] + 128.0
-        block_lab[:, :, 2] = block_lab[:, :, 2] + 128.0
+            if a_src_mad > 1.0:
+                block_lab[:, :, 1][tissue_mask] = (block_lab[:, :, 1][tissue_mask] - a_src_median) / a_src_mad * params['a_mad'] + params['a_median']
+            else:
+                block_lab[:, :, 1][tissue_mask] = params['a_median']
 
-        block_lab = np.clip(block_lab, 0, 255).astype(np.uint8)
-        block_rgb = cv2.cvtColor(block_lab, cv2.COLOR_LAB2RGB)
+            if b_src_mad > 1.0:
+                block_lab[:, :, 2][tissue_mask] = (block_lab[:, :, 2][tissue_mask] - b_src_median) / b_src_mad * params['b_mad'] + params['b_median']
+            else:
+                block_lab[:, :, 2][tissue_mask] = params['b_median']
 
-        result[by:by_end, bx:bx_end] = block_rgb
-        del block_img, block_lab, block_rgb
+            # Convert back to RGB — only tissue pixels changed, background preserved
+            block_lab[:, :, 0] = block_lab[:, :, 0] * 255.0 / 100.0
+            block_lab[:, :, 1] = block_lab[:, :, 1] + 128.0
+            block_lab[:, :, 2] = block_lab[:, :, 2] + 128.0
+
+            block_lab = np.clip(block_lab, 0, 255).astype(np.uint8)
+            block_rgb = cv2.cvtColor(block_lab, cv2.COLOR_LAB2RGB)
+
+            result[by:by_end, bx:bx_end] = block_rgb
+            del block_lab, block_rgb
+
+    logger.info(f"  Normalized {tissue_px_count:,} tissue pixels ({100*tissue_px_count/max(total_px_count,1):.1f}% of image)")
 
     return result
 
@@ -479,30 +501,33 @@ def apply_reinhard_normalization(
     params: Dict[str, float],
     variance_threshold: float = 15.0,
     tile_size: int = 10000,
-    block_size: int = 7
+    block_size: int = 7,
+    precomputed_variance_threshold: float = None,
+    precomputed_intensity_threshold: float = None,
+    otsu_threshold: float = None,
+    slide_lab_stats: Dict[str, float] = None,
 ) -> np.ndarray:
     """
-    Apply Reinhard normalization with block-level tissue detection.
+    Apply Reinhard normalization with pixel-level tissue masking.
 
-    Uses median/MAD statistics (robust to outliers) and cv2 for LAB conversion
-    (consistent with Phase 1 compute_normalization_params.py).
-
-    Delegates to apply_reinhard_normalization_MEDIAN which implements the
-    block-level tissue detection approach matching Phase 1.
+    Delegates to apply_reinhard_normalization_MEDIAN.
 
     Args:
         image: RGB image (H, W, 3) in range [0, 255], dtype uint8
-        params: Dictionary with Lab statistics (must contain L_median, L_mad, etc.)
+        params: Dictionary with global target Lab statistics
         variance_threshold: (unused, kept for API compatibility)
         tile_size: (unused, kept for API compatibility)
         block_size: (unused, kept for API compatibility)
+        precomputed_variance_threshold: (unused, kept for API compatibility)
+        precomputed_intensity_threshold: (unused, kept for API compatibility)
+        otsu_threshold: Per-slide Otsu threshold from step 1 JSON
+        slide_lab_stats: Per-slide LAB source stats from step 1 JSON
 
     Returns:
         Normalized RGB image (H, W, 3), dtype uint8
     """
     return apply_reinhard_normalization_MEDIAN(
         image, params,
-        variance_threshold=variance_threshold,
-        tile_size=tile_size,
-        block_size=block_size
+        otsu_threshold=otsu_threshold,
+        slide_lab_stats=slide_lab_stats,
     )

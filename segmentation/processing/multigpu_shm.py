@@ -47,7 +47,7 @@ from multiprocessing.shared_memory import SharedMemory
 import numpy as np
 
 from segmentation.utils.logging import get_logger
-from segmentation.preprocessing.stain_normalization import apply_reinhard_normalization
+from segmentation.preprocessing.stain_normalization import apply_reinhard_normalization, extract_slide_norm_params
 
 logger = get_logger(__name__)
 
@@ -192,6 +192,7 @@ def _gpu_worker_shm(
     normalization_method: str = 'none',
     intensity_threshold: float = 220.0,
     modality: Optional[str] = None,
+    per_slide_thresholds: Optional[Dict[str, Dict[str, float]]] = None,
 ):
     """
     Worker process that reads tiles from shared memory.
@@ -211,6 +212,8 @@ def _gpu_worker_shm(
         cleanup_config: Dict with cleanup options (cleanup_masks, fill_holes, pixel_size_um)
         intensity_threshold: Max background intensity for tissue detection (Otsu-derived)
         modality: 'brightfield' for H&E, None for fluorescence (OR logic)
+        per_slide_thresholds: Dict mapping slide_name -> {variance_threshold, intensity_threshold}
+            from step 1. If present, overrides scalar thresholds for per-slide tissue detection.
     """
     # Default cleanup config if not provided
     if cleanup_config is None:
@@ -337,10 +340,13 @@ def _gpu_worker_shm(
 
             # Apply Reinhard normalization if requested (tile-by-tile to avoid OOM)
             if normalization_method == 'reinhard' and norm_params is not None:
+                _pst = per_slide_thresholds.get(slide_name) if per_slide_thresholds and slide_name else None
+                _otsu, _slab = extract_slide_norm_params(_pst)
                 tile_rgb = apply_reinhard_normalization(
                     tile_rgb,
                     norm_params,
-                    variance_threshold=variance_threshold
+                    otsu_threshold=_otsu,
+                    slide_lab_stats=_slab,
                 )
 
             # Prepare for detection (percentile normalization, disabled for Reinhard)
@@ -348,8 +354,17 @@ def _gpu_worker_shm(
             tile_normalized = prepare_tile_for_detection(tile_rgb, normalize=use_percentile_norm)
 
             # Check for tissue (always run — Reinhard normalizes but does not filter out background)
+            # Use per-slide thresholds if available
+            slide_vt = variance_threshold
+            slide_it = intensity_threshold
+            if per_slide_thresholds and slide_name in per_slide_thresholds:
+                slide_vt = 0.0  # unused for brightfield
+                slide_it = per_slide_thresholds[slide_name].get(
+                    'otsu_threshold',
+                    per_slide_thresholds[slide_name].get('intensity_threshold', 220.0))
+
             try:
-                has_tissue_flag, _ = has_tissue(tile_normalized, variance_threshold, block_size=calibration_block_size, intensity_threshold=intensity_threshold, modality=modality)
+                has_tissue_flag, _ = has_tissue(tile_normalized, slide_vt, block_size=calibration_block_size, intensity_threshold=slide_it, modality=modality)
             except Exception:
                 has_tissue_flag = True  # Assume tissue on error
 
@@ -479,6 +494,7 @@ class MultiGPUTileProcessorSHM:
         normalization_method: str = 'none',
         intensity_threshold: float = 220.0,
         modality: Optional[str] = None,
+        per_slide_thresholds: Optional[Dict[str, Dict[str, float]]] = None,
     ):
         self.num_gpus = num_gpus
         self.slide_info = slide_info
@@ -492,6 +508,7 @@ class MultiGPUTileProcessorSHM:
         self.normalization_method = normalization_method
         self.intensity_threshold = intensity_threshold
         self.modality = modality
+        self.per_slide_thresholds = per_slide_thresholds
 
         self.segmenter_kwargs = {
             'mk_classifier_path': str(mk_classifier_path) if mk_classifier_path else None,
@@ -533,6 +550,7 @@ class MultiGPUTileProcessorSHM:
                     self.normalization_method,
                     self.intensity_threshold,
                     self.modality,
+                    self.per_slide_thresholds,
                 ),
                 daemon=True
             )
