@@ -360,10 +360,15 @@ class VesselStrategy(DetectionStrategy, MultiChannelFeatureMixin):
         else:
             gray = tile.astype(np.float32)
 
-        # Normalize to 0-255 for OpenCV
-        gray_min, gray_max = gray.min(), gray.max()
+        # Normalize to 0-255 for OpenCV — use non-zero pixels only (exclude CZI padding)
+        valid = gray > 0
+        valid_pixels = gray[valid]
+        if len(valid_pixels) > 0:
+            gray_min, gray_max = valid_pixels.min(), valid_pixels.max()
+        else:
+            gray_min, gray_max = 0.0, 0.0
         if gray_max - gray_min > 1e-8:
-            gray_norm = ((gray - gray_min) / (gray_max - gray_min) * 255).astype(np.uint8)
+            gray_norm = np.clip((gray - gray_min) / (gray_max - gray_min) * 255, 0, 255).astype(np.uint8)
         else:
             gray_norm = np.zeros_like(gray, dtype=np.uint8)
 

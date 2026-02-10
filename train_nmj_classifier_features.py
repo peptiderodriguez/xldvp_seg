@@ -15,6 +15,7 @@ Feature sets:
 import argparse
 import json
 import numpy as np
+from datetime import datetime
 from pathlib import Path
 from sklearn.ensemble import RandomForestClassifier
 from sklearn.model_selection import train_test_split, cross_val_score
@@ -241,7 +242,8 @@ def main():
     output_dir = Path(args.output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
 
-    model_path = output_dir / "nmj_classifier_rf.pkl"
+    timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
+    model_path = output_dir / f"nmj_classifier_rf_{timestamp}.pkl"
     joblib.dump({
         'classifier': final_clf,
         'feature_names': feature_names,

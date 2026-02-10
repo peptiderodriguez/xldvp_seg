@@ -134,7 +134,11 @@ class NMJStrategy(DetectionStrategy, MultiChannelFeatureMixin):
             return []
 
         # Threshold bright regions
-        threshold = np.percentile(gray, self.intensity_percentile)
+        # Exclude zero pixels (CZI padding) from percentile — zeros would pull threshold down
+        valid = gray[gray > 0]
+        if len(valid) == 0:
+            return []
+        threshold = np.percentile(valid, self.intensity_percentile)
         bright_mask = gray > threshold
 
         # Morphological cleanup
@@ -807,8 +811,12 @@ class NMJStrategy(DetectionStrategy, MultiChannelFeatureMixin):
         max_expansion_radius = max(max_expansion_radius, 2)  # At least 2 pixels
 
         # Create expansion region: lower threshold than initial detection
-        low_threshold = np.percentile(intensity_image, low_threshold_percentile)
-        expansion_region = intensity_image > low_threshold
+        # Percentile on non-zero pixels only; exclude zeros from expansion
+        valid_intensity = intensity_image[intensity_image > 0]
+        if len(valid_intensity) == 0:
+            return mask.astype(bool)
+        low_threshold = np.percentile(valid_intensity, low_threshold_percentile)
+        expansion_region = (intensity_image > low_threshold) & (intensity_image > 0)
 
         # Limit expansion to max_expansion_radius from original mask
         max_reach = binary_dilation(mask, disk(max_expansion_radius))
@@ -1048,8 +1056,12 @@ def _expand_to_signal_edge_simple(
     max_expansion_radius = max(max_expansion_radius, 2)  # At least 2 pixels
 
     # Create expansion region with lower threshold
-    low_threshold = np.percentile(intensity_image, low_threshold_percentile)
-    expansion_region = intensity_image > low_threshold
+    # Percentile on non-zero pixels only; exclude zeros from expansion
+    valid_intensity = intensity_image[intensity_image > 0]
+    if len(valid_intensity) == 0:
+        return mask.astype(bool)
+    low_threshold = np.percentile(valid_intensity, low_threshold_percentile)
+    expansion_region = (intensity_image > low_threshold) & (intensity_image > 0)
 
     # Limit expansion to max_expansion_radius from original mask
     max_reach = binary_dilation(mask, disk(max_expansion_radius))
@@ -1107,7 +1119,11 @@ def detect_nmjs_simple(
         return np.zeros(image.shape[:2], dtype=np.uint32), []
 
     # Threshold bright regions
-    threshold = np.percentile(gray, intensity_percentile)
+    # Exclude zero pixels (CZI padding) from percentile
+    valid = gray[gray > 0]
+    if len(valid) == 0:
+        return np.zeros(image.shape[:2], dtype=np.uint32), []
+    threshold = np.percentile(valid, intensity_percentile)
     bright_mask = gray > threshold
 
     # Morphological cleanup

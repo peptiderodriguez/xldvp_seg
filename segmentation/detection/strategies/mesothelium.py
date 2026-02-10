@@ -233,12 +233,18 @@ class MesotheliumStrategy(DetectionStrategy):
         else:
             gray = tile.astype(np.float32)
 
-        # Normalize to 0-1 for ridge detection
-        gray_range = gray.max() - gray.min()
+        # Normalize to 0-1 for ridge detection — use non-zero pixels only (exclude CZI padding)
+        valid = gray > 0
+        valid_pixels = gray[valid]
+        if len(valid_pixels) == 0:
+            return []
+        gray_min, gray_max = valid_pixels.min(), valid_pixels.max()
+        gray_range = gray_max - gray_min
         if gray_range < 1e-8:
             # Uniform image, no ridges
             return []
-        gray_norm = (gray - gray.min()) / gray_range
+        gray_norm = (gray - gray_min) / gray_range
+        gray_norm[~valid] = 0  # Keep padding as zero
 
         # Ridge detection using Meijering filter (optimized for neurite/line structures)
         sigmas = np.linspace(min_width_px * 0.5, max_width_px * 0.5, 5)

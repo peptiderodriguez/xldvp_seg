@@ -158,6 +158,9 @@ def percentile_normalize(image, p_low=1, p_high=99.5):
     """
     Normalize image using percentiles.
 
+    Percentiles are computed on non-zero pixels only (CZI padding is exactly 0).
+    Zero pixels stay black after normalization.
+
     Args:
         image: 2D or 3D numpy array
         p_low: Lower percentile for normalization (default 1)
@@ -167,31 +170,42 @@ def percentile_normalize(image, p_low=1, p_high=99.5):
         uint8 normalized image
     """
     if image.ndim == 2:
-        low_val = np.percentile(image, p_low)
-        high_val = np.percentile(image, p_high)
+        # Percentile on non-zero pixels only (exclude CZI padding)
+        nonzero = image[image > 0]
+        if len(nonzero) == 0:
+            return np.zeros_like(image, dtype=np.uint8)
+        low_val = np.percentile(nonzero, p_low)
+        high_val = np.percentile(nonzero, p_high)
         if high_val > low_val:
             normalized = (image.astype(np.float32) - low_val) / (high_val - low_val) * 255
-            return np.clip(normalized, 0, 255).astype(np.uint8)
+            result = np.clip(normalized, 0, 255).astype(np.uint8)
+            result[image == 0] = 0  # Keep padding black
+            return result
         if image.dtype == np.uint16:
             return (image / 256).astype(np.uint8)
         return image.astype(np.uint8)
     else:
-        # Vectorized multi-channel normalization
+        # Multi-channel: valid pixel = any channel > 0
         h, w, c = image.shape
+        valid_mask = np.max(image, axis=2) > 0
         result = np.zeros_like(image, dtype=np.uint8)
-        # Compute percentiles for all channels at once
-        flat = image.reshape(-1, c)
-        low_vals = np.percentile(flat, p_low, axis=0)
-        high_vals = np.percentile(flat, p_high, axis=0)
         for ch in range(c):
-            if high_vals[ch] > low_vals[ch]:
-                normalized = (image[:, :, ch].astype(np.float32) - low_vals[ch]) / (high_vals[ch] - low_vals[ch]) * 255
+            ch_data = image[:, :, ch]
+            valid_pixels = ch_data[valid_mask]
+            if len(valid_pixels) == 0:
+                continue
+            low_val = np.percentile(valid_pixels, p_low)
+            high_val = np.percentile(valid_pixels, p_high)
+            if high_val > low_val:
+                normalized = (ch_data.astype(np.float32) - low_val) / (high_val - low_val) * 255
                 result[:, :, ch] = np.clip(normalized, 0, 255).astype(np.uint8)
             else:
                 if image.dtype == np.uint16:
-                    result[:, :, ch] = (image[:, :, ch] / 256).astype(np.uint8)
+                    result[:, :, ch] = (ch_data / 256).astype(np.uint8)
                 else:
-                    result[:, :, ch] = image[:, :, ch].astype(np.uint8)
+                    result[:, :, ch] = ch_data.astype(np.uint8)
+        # Keep padding pixels black
+        result[~valid_mask] = 0
         return result
 
 

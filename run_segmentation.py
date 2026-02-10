@@ -1612,7 +1612,8 @@ def run_pipeline(args):
     logger.info(f"Sampled {len(sampled_tiles)} tiles ({args.sample_fraction*100:.0f}% of {len(tissue_tiles)} tissue tiles)")
 
     # Setup output directories (timestamped to avoid overwriting previous runs)
-    slide_output_dir = output_dir / f'{slide_name}_{run_timestamp}'
+    pct = int(args.sample_fraction * 100)
+    slide_output_dir = output_dir / f'{slide_name}_{run_timestamp}_{pct}pct'
     tiles_dir = slide_output_dir / "tiles"
     tiles_dir.mkdir(parents=True, exist_ok=True)
 
@@ -2253,7 +2254,7 @@ def run_pipeline(args):
     # For round-2 (--prior-annotations), prior labels come from the preload JS
     # file (not localStorage), so a unique key is safe for all runs.
     prior_ann = getattr(args, 'prior_annotations', None)
-    experiment_name = f"{slide_name}_{int(time.time())}"
+    experiment_name = f"{slide_name}_{run_timestamp}_{pct}pct"
 
     export_samples_to_html(
         all_samples,

@@ -52,6 +52,29 @@ def compute_otsu_threshold(gray_image, max_subsample=10_000_000):
     return float(otsu_val)
 
 
+def _normalize_to_uint8(data):
+    """Normalize non-uint8 data to uint8, computing percentiles on non-zero pixels only.
+
+    CZI padding is exactly 0; zeros are preserved in the output.
+
+    Args:
+        data: Image array (2D or 3D, any dtype except uint8)
+
+    Returns:
+        Tuple of (normalized_uint8, success). success=False if insufficient non-zero pixels.
+    """
+    zero_mask = data == 0
+    nonzero = data[~zero_mask]
+    if len(nonzero) < 10:
+        return np.zeros_like(data, dtype=np.uint8), False
+    p_low, p_high = np.percentile(nonzero, [1, 99])
+    if p_high <= p_low:
+        return np.zeros_like(data, dtype=np.uint8), False
+    result = np.clip((data.astype(np.float64) - p_low) / (p_high - p_low) * 255, 0, 255).astype(np.uint8)
+    result[zero_mask] = 0
+    return result, True
+
+
 def calculate_block_variances(gray_image, block_size=512):
     """
     Calculate variance and mean intensity for each block in the image.
@@ -76,8 +99,12 @@ def calculate_block_variances(gray_image, block_size=512):
             # while still including most edge tissue
             if block.size < (block_size * block_size) // 64:
                 continue
-            variances.append(np.var(block))
-            means.append(np.mean(block))
+            # Exclude zero pixels (CZI padding) from statistics
+            valid = block[block > 0]
+            if len(valid) < 10:
+                continue
+            variances.append(np.var(valid.astype(np.float64)))
+            means.append(np.mean(valid.astype(np.float64)))
 
     return variances, means
 
@@ -86,9 +113,9 @@ def is_tissue_block(gray_block, variance_threshold, modality=None,
                     intensity_threshold=220, min_tissue_pixel_frac=0.20):
     """Shared block-level tissue criterion.
 
-    Brightfield: Otsu-only — >=20% of pixels below intensity_threshold (Otsu).
+    Brightfield: Otsu-only — >=20% of non-zero pixels below intensity_threshold.
         variance_threshold is ignored (pass 0).
-    Other/default: OR logic — variance OR low mean intensity (existing behavior).
+    Fluorescence/default: variance-only (zero pixels excluded from computation).
 
     Args:
         gray_block: 2D grayscale array (single block)
@@ -103,13 +130,18 @@ def is_tissue_block(gray_block, variance_threshold, modality=None,
     Returns:
         bool: True if the block is classified as tissue
     """
+    # Exclude zero pixels (CZI padding) from variance computation
+    valid = gray_block[gray_block > 0]
+    if len(valid) < 10:
+        return False
     if modality == 'brightfield':
+        # Otsu-only: fraction of non-zero pixels below intensity_threshold
         tissue_frac = np.sum((gray_block > 0) & (gray_block < intensity_threshold)) / gray_block.size
         return tissue_frac >= min_tissue_pixel_frac
     else:
-        var = np.var(gray_block.astype(np.float64))
-        mean_val = np.mean(gray_block.astype(np.float64))
-        return var >= variance_threshold or mean_val < intensity_threshold
+        # Fluorescence: variance-only on non-zero pixels
+        var = np.var(valid.astype(np.float64))
+        return var >= variance_threshold
 
 
 def compute_pixel_level_tissue_mask(
@@ -135,14 +167,10 @@ def compute_pixel_level_tissue_mask(
     # For uint16: use percentile normalization (consistent with calibrate_tissue_threshold)
     if image.dtype == np.uint16:
         if image.ndim == 3:
-            gray_raw = cv2.cvtColor(image, cv2.COLOR_RGB2GRAY).astype(np.float64)
+            gray_raw = cv2.cvtColor(image, cv2.COLOR_RGB2GRAY)
         else:
-            gray_raw = image.astype(np.float64)
-        p_low, p_high = np.percentile(gray_raw, [1, 99])
-        if p_high > p_low:
-            gray = np.clip((gray_raw - p_low) / (p_high - p_low) * 255, 0, 255).astype(np.uint8)
-        else:
-            gray = np.zeros(gray_raw.shape, dtype=np.uint8)
+            gray_raw = image
+        gray, _ = _normalize_to_uint8(gray_raw)
     elif image.ndim == 3:
         gray = cv2.cvtColor(image.astype(np.uint8), cv2.COLOR_RGB2GRAY)
     else:
@@ -174,9 +202,8 @@ def has_tissue(tile_image, variance_threshold, min_tissue_fraction=0.10, block_s
     When modality='brightfield': Otsu-only — a block is tissue if >=20% of its
     non-black pixels are below the Otsu threshold. Variance is ignored.
 
-    When modality is None/other (default): uses OR logic — a block is tissue if
-    it has high variance OR low mean intensity. This preserves existing behavior
-    for fluorescence pipelines.
+    When modality is None/other (default, fluorescence): uses variance-only.
+    Zero pixels (CZI padding) are excluded from variance computation.
 
     Args:
         tile_image: RGB or grayscale image array (uint8 or uint16)
@@ -201,29 +228,16 @@ def has_tissue(tile_image, variance_threshold, min_tissue_fraction=0.10, block_s
     if tile_image.max() == 0:
         return False, 0.0
 
-    # Reject scan boundary tiles (mix of black CZI padding + background)
-    # CZI padding is exactly 0; use == 0 (not < 5) so fluorescence tiles
-    # with near-zero background are not rejected
-    if tile_image.ndim == 3:
-        raw_check = np.min(tile_image, axis=2)  # any channel being 0
-    else:
-        raw_check = tile_image
-    black_fraction = np.mean(raw_check == 0)
-    if black_fraction > 0.02:  # >2% exactly-zero pixels = scan boundary
-        return False, 0.0
-
     # Convert to grayscale if needed
     # For uint16: use percentile normalization (consistent with calibrate_tissue_threshold)
     # Simple /256 crushes dynamic range for fluorescence images where signal is in low uint16 band
     if tile_image.dtype == np.uint16:
         if tile_image.ndim == 3:
-            gray_raw = cv2.cvtColor(tile_image, cv2.COLOR_RGB2GRAY).astype(np.float64)
+            gray_raw = cv2.cvtColor(tile_image, cv2.COLOR_RGB2GRAY)
         else:
-            gray_raw = tile_image.astype(np.float64)
-        p_low, p_high = np.percentile(gray_raw, [1, 99])
-        if p_high > p_low:
-            gray = np.clip((gray_raw - p_low) / (p_high - p_low) * 255, 0, 255).astype(np.uint8)
-        else:
+            gray_raw = tile_image
+        gray, ok = _normalize_to_uint8(gray_raw)
+        if not ok:
             return False, 0.0
     elif tile_image.ndim == 3:
         gray = cv2.cvtColor(tile_image.astype(np.uint8), cv2.COLOR_RGB2GRAY)
@@ -441,22 +455,11 @@ def calibrate_tissue_threshold(
         if tile_img.max() == 0:
             continue
 
-        # Skip scan boundary tiles (mix of black CZI padding + background)
-        # Use == 0 (not < 5) so fluorescence tiles with near-zero background pass
-        if tile_img.ndim == 3:
-            raw_check = np.min(tile_img, axis=2)
-        else:
-            raw_check = tile_img
-        if np.mean(raw_check == 0) > 0.02:
-            continue
-
         # Normalize to uint8 for variance calculation
         if tile_img.dtype != np.uint8:
-            p_low, p_high = np.percentile(tile_img, [1, 99])
-            if p_high > p_low:
-                tile_img = np.clip((tile_img - p_low) / (p_high - p_low) * 255, 0, 255).astype(np.uint8)
-            else:
-                tile_img = np.zeros_like(tile_img, dtype=np.uint8)
+            tile_img, ok = _normalize_to_uint8(tile_img)
+            if not ok:
+                continue
 
         # Convert to grayscale if needed
         if tile_img.ndim == 3:
@@ -561,10 +564,8 @@ def filter_tissue_tiles(
 
             # Normalize to uint8
             if tile_img.dtype != np.uint8:
-                p_low, p_high = np.percentile(tile_img, [1, 99])
-                if p_high > p_low:
-                    tile_img = np.clip((tile_img - p_low) / (p_high - p_low) * 255, 0, 255).astype(np.uint8)
-                else:
+                tile_img, ok = _normalize_to_uint8(tile_img)
+                if not ok:
                     return None
 
             has_tissue_flag, _ = has_tissue(tile_img, variance_threshold, block_size=block_size,

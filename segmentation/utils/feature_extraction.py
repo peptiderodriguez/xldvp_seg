@@ -353,15 +353,24 @@ def extract_morphological_features(mask: np.ndarray, image: np.ndarray) -> dict:
     extent = props.extent if hasattr(props, 'extent') else 0
     equiv_diameter = props.equivalent_diameter if hasattr(props, 'equivalent_diameter') else 0
 
-    # Intensity features
+    # Intensity features — exclude zero pixels (CZI padding)
     if image.ndim == 3:
         masked_pixels = image[mask]
+        # Exclude pixels where all channels are zero (CZI padding)
+        valid = np.max(masked_pixels, axis=1) > 0
+        masked_pixels = masked_pixels[valid]
+        if len(masked_pixels) == 0:
+            return {}
         red_mean, red_std = float(np.mean(masked_pixels[:, 0])), float(np.std(masked_pixels[:, 0]))
         green_mean, green_std = float(np.mean(masked_pixels[:, 1])), float(np.std(masked_pixels[:, 1]))
         blue_mean, blue_std = float(np.mean(masked_pixels[:, 2])), float(np.std(masked_pixels[:, 2]))
         gray = np.mean(masked_pixels, axis=1)
     else:
         gray = image[mask].astype(float)
+        # Exclude zero pixels (CZI padding)
+        gray = gray[gray > 0]
+        if len(gray) == 0:
+            return {}
         red_mean = green_mean = blue_mean = float(np.mean(gray))
         red_std = green_std = blue_std = float(np.std(gray))
 
@@ -378,7 +387,13 @@ def extract_morphological_features(mask: np.ndarray, image: np.ndarray) -> dict:
         val_mean = gray_mean
 
     # Texture features
-    relative_brightness = gray_mean - np.mean(image) if image.size > 0 else 0
+    # Exclude zero pixels from global mean (CZI padding)
+    if image.ndim == 3:
+        global_valid = np.max(image, axis=2) > 0
+        relative_brightness = gray_mean - float(np.mean(image[global_valid])) if global_valid.any() else 0
+    else:
+        global_valid = image > 0
+        relative_brightness = gray_mean - float(np.mean(image[global_valid])) if global_valid.any() else 0
     intensity_variance = float(np.var(gray))
     dark_fraction = float(np.mean(gray < 100))
     nuclear_complexity = gray_std
