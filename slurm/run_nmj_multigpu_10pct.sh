@@ -43,7 +43,7 @@ $PYTHON run_segmentation.py \
     --cell-type nmj \
     --channel 1 \
     --output-dir "$OUTPUT_DIR" \
-    --sample-fraction 0.10 \
+    --sample-fraction 0.15 \
     --tile-size 3000 \
     --tile-overlap 0.10 \
     --multi-gpu \
