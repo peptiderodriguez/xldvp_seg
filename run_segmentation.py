@@ -705,9 +705,24 @@ def apply_vessel_classifiers(features_list, vessel_classifier, vessel_type_class
                     logger.debug(f"VesselTypeClassifier failed: {e}, {e2}")
 
 
+def _compute_tile_percentiles(tile_rgb, p_low=1, p_high=99.5):
+    """Compute per-channel percentiles from an entire tile for uniform HTML normalization.
+
+    Returns dict {channel_idx: (low_val, high_val)} suitable for percentile_normalize().
+    """
+    valid_mask = np.max(tile_rgb, axis=2) > 0
+    percentiles = {}
+    for ch in range(tile_rgb.shape[2]):
+        valid = tile_rgb[:, :, ch][valid_mask]
+        if len(valid) > 0:
+            percentiles[ch] = (float(np.percentile(valid, p_low)), float(np.percentile(valid, p_high)))
+    return percentiles if percentiles else None
+
+
 def filter_and_create_html_samples(
     features_list, tile_x, tile_y, tile_rgb, masks, pixel_size_um,
     slide_name, cell_type, html_score_threshold, min_area_um2=25.0,
+    tile_percentiles=None,
 ):
     """Filter detections by quality and create HTML samples.
 
@@ -737,7 +752,7 @@ def filter_and_create_html_samples(
 
         sample = create_sample_from_detection(
             tile_x, tile_y, tile_rgb, masks, feat, pixel_size_um, slide_name,
-            cell_type=cell_type
+            cell_type=cell_type, tile_percentiles=tile_percentiles
         )
         if sample:
             samples.append(sample)
@@ -1250,7 +1265,7 @@ def _export_lmd_simple(detections, output_path, pixel_size_um, image_height_px,
 # SAMPLE CREATION FOR HTML
 # =============================================================================
 
-def create_sample_from_detection(tile_x, tile_y, tile_rgb, masks, feat, pixel_size_um, slide_name, cell_type='nmj', crop_size=None):
+def create_sample_from_detection(tile_x, tile_y, tile_rgb, masks, feat, pixel_size_um, slide_name, cell_type='nmj', crop_size=None, tile_percentiles=None):
     """Create an HTML sample from a detection.
 
     Crop size is calculated dynamically to be 100% larger than the mask,
@@ -1319,7 +1334,7 @@ def create_sample_from_detection(tile_x, tile_y, tile_rgb, masks, feat, pixel_si
         crop_mask = np.pad(crop_mask, ((pad_top, pad_bottom), (pad_left, pad_right)), mode='constant', constant_values=False)
 
     # Normalize and draw contour
-    crop_norm = percentile_normalize(crop, p_low=1, p_high=99.5)
+    crop_norm = percentile_normalize(crop, p_low=1, p_high=99.5, global_percentiles=tile_percentiles)
     crop_with_contour = draw_mask_contour(crop_norm, crop_mask, color=(0, 255, 0), thickness=2)
 
     # Keep at 224x224 (same as classifier input) - already correct size from crop
@@ -1496,6 +1511,28 @@ def run_pipeline(args):
             gc.collect()
 
         logger.info("Photobleaching correction complete.")
+
+    # Apply flat-field illumination correction (smooth out regional intensity gradients)
+    if getattr(args, 'normalize_features', True) and use_ram:
+        from segmentation.preprocessing.flat_field import estimate_illumination_profile
+
+        logger.info(f"\n{'='*70}")
+        logger.info("FLAT-FIELD ILLUMINATION CORRECTION")
+        logger.info(f"{'='*70}")
+        logger.info("Estimating slide-level illumination profile...")
+
+        illumination_profile = estimate_illumination_profile(all_channel_data)
+
+        for ch in all_channel_data:
+            illumination_profile.correct_channel_inplace(all_channel_data[ch], ch)
+            if ch == args.channel:
+                loader.channel_data = all_channel_data[ch]
+
+        gc.collect()
+        logger.info("Flat-field correction complete.")
+
+    elif getattr(args, 'normalize_features', True) and not use_ram:
+        logger.warning("--normalize-features requires --load-to-ram. Skipping flat-field correction.")
 
     # Apply Reinhard normalization if params file provided (whole-slide, before tiling)
     if getattr(args, 'norm_params_file', None) and use_ram:
@@ -2031,10 +2068,12 @@ def run_pipeline(args):
                             if tile_rgb_html.dtype == np.uint16:
                                 tile_rgb_html = (tile_rgb_html / 256).astype(np.uint8)
 
+                            tile_pct = _compute_tile_percentiles(tile_rgb_html) if getattr(args, 'html_normalization', 'crop') == 'tile' else None
                             html_samples = filter_and_create_html_samples(
                                 features_list, tile_x, tile_y, tile_rgb_html, masks,
                                 pixel_size_um, slide_name, args.cell_type,
                                 args.html_score_threshold,
+                                tile_percentiles=tile_pct,
                             )
                             all_samples.extend(html_samples)
                             total_detections += len(features_list)
@@ -2181,10 +2220,12 @@ def run_pipeline(args):
                     json.dump(features_list, f, cls=NumpyEncoder)
 
                 # Create samples for HTML with quality filtering
+                tile_pct = _compute_tile_percentiles(tile_rgb) if getattr(args, 'html_normalization', 'crop') == 'tile' else None
                 html_samples = filter_and_create_html_samples(
                     features_list, tile_x, tile_y, tile_rgb, masks,
                     pixel_size_um, slide_name, args.cell_type,
                     args.html_score_threshold,
+                    tile_percentiles=tile_pct,
                 )
                 all_samples.extend(html_samples)
                 total_detections += len(features_list)
@@ -2433,6 +2474,12 @@ def main():
     parser.add_argument('--norm-params-file', type=str, default=None,
                         help='Path to pre-computed Reinhard normalization params JSON (from compute_normalization_params.py). '
                              'Applies whole-slide Lab-space normalization before tile processing.')
+    parser.add_argument('--normalize-features', action='store_true', default=True,
+                        help='Apply flat-field illumination correction (default: ON)')
+    parser.add_argument('--no-normalize-features', dest='normalize_features', action='store_false',
+                        help='Disable flat-field correction (use raw intensities)')
+    parser.add_argument('--html-normalization', choices=['tile', 'crop'], default='tile',
+                        help='HTML crop normalization scope: tile=shared percentiles per tile, crop=per-crop (default: tile)')
 
     # NMJ parameters
     parser.add_argument('--intensity-percentile', type=float, default=98)

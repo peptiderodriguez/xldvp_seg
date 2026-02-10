@@ -154,7 +154,7 @@ def get_largest_connected_component(mask):
     return labeled == largest_label
 
 
-def percentile_normalize(image, p_low=1, p_high=99.5):
+def percentile_normalize(image, p_low=1, p_high=99.5, global_percentiles=None):
     """
     Normalize image using percentiles.
 
@@ -165,6 +165,10 @@ def percentile_normalize(image, p_low=1, p_high=99.5):
         image: 2D or 3D numpy array
         p_low: Lower percentile for normalization (default 1)
         p_high: Upper percentile for normalization (default 99.5)
+        global_percentiles: Optional dict {channel_index: (low_val, high_val)}.
+            When provided and the channel index exists in the dict, use these
+            precomputed percentile values instead of computing from the crop.
+            Only applies to multi-channel (3D) images.
 
     Returns:
         uint8 normalized image
@@ -194,8 +198,11 @@ def percentile_normalize(image, p_low=1, p_high=99.5):
             valid_pixels = ch_data[valid_mask]
             if len(valid_pixels) == 0:
                 continue
-            low_val = np.percentile(valid_pixels, p_low)
-            high_val = np.percentile(valid_pixels, p_high)
+            if global_percentiles is not None and ch in global_percentiles:
+                low_val, high_val = global_percentiles[ch]
+            else:
+                low_val = np.percentile(valid_pixels, p_low)
+                high_val = np.percentile(valid_pixels, p_high)
             if high_val > low_val:
                 normalized = (ch_data.astype(np.float32) - low_val) / (high_val - low_val) * 255
                 result[:, :, ch] = np.clip(normalized, 0, 255).astype(np.uint8)
