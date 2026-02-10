@@ -1930,6 +1930,7 @@ def _phase4_process_tiles(
     normalization_method='none',
     intensity_threshold=220,
     per_slide_thresholds=None,
+    experiment_name=None,
 ):
     """
     Phase 4: Process sampled tiles using ML models (SAM2, Cellpose, ResNet).
@@ -2324,7 +2325,8 @@ def _phase4_process_tiles(
                 html_output_dir=html_output_dir,
                 samples_per_page=samples_per_page,
                 mk_min_area_um=mk_min_area_um,
-                mk_max_area_um=mk_max_area_um
+                mk_max_area_um=mk_max_area_um,
+                experiment_name=experiment_name,
             )
         else:
             logger.info("Skipping RAM-based HTML export (images freed for shared memory)")
@@ -2389,6 +2391,7 @@ def run_multi_slide_segmentation(
     norm_params_file=None,
     norm_percentile_low=1.0,
     norm_percentile_high=99.0,
+    experiment_name=None,
 ):
     """
     Process multiple slides with UNIFIED SAMPLING using RAM-first architecture.
@@ -2831,6 +2834,30 @@ def run_multi_slide_segmentation(
             del slide_loaders
             gc.collect()
 
+        # Write summary.json per slide (matches standard path output)
+        for slide_name, sr in slide_results.items():
+            if sr['mk_count'] > 0 or sr['hspc_count'] > 0:
+                slide_out = output_base / slide_name
+                slide_out.mkdir(parents=True, exist_ok=True)
+
+                pixel_size_um = None
+                czi_path = slide_metadata.get(slide_name, {}).get('czi_path')
+                if czi_path:
+                    try:
+                        pixel_size_um = get_pixel_size_from_czi(czi_path)
+                    except Exception:
+                        pixel_size_um = None
+
+                summary = {
+                    'czi_path': str(czi_path) if czi_path else None,
+                    'pixel_size_um': pixel_size_um,
+                    'mk_count': sr['mk_count'],
+                    'hspc_count': sr['hspc_count'],
+                    'feature_count': f'{MORPHOLOGICAL_FEATURES_COUNT} morphological + {SAM2_EMBEDDING_DIMENSION} SAM2 + {RESNET_EMBEDDING_DIMENSION} ResNet = {TOTAL_FEATURES_PER_CELL}'
+                }
+                with open(slide_out / "summary.json", 'w') as f:
+                    json.dump(summary, f, indent=2)
+
         # Calculate totals
         for sr in slide_results.values():
             total_mk += sr['mk_count']
@@ -2888,6 +2915,7 @@ def run_multi_slide_segmentation(
             num_gpus=num_gpus,
             intensity_threshold=intensity_threshold,
             per_slide_thresholds=precomputed_thresholds,
+            experiment_name=experiment_name,
         )
 
         # Clear slide data and loaders from RAM
@@ -3344,6 +3372,8 @@ def main():
                         help='Number of GPUs to use in multi-GPU mode (default: 4)')
     parser.add_argument('--html-output-dir', type=str, default=None,
                         help='Directory for HTML export (default: output-dir/../docs)')
+    parser.add_argument('--experiment-name', type=str, default=None,
+                        help='Experiment name for HTML localStorage isolation and annotation filenames (e.g. "2026-02-10_10pct_2gpu")')
     parser.add_argument('--samples-per-page', type=int, default=300,
                         help='Number of cell samples per HTML page')
 
@@ -3477,6 +3507,7 @@ def main():
             norm_params_file=args.norm_params_file,
             norm_percentile_low=args.norm_percentile_low,
             norm_percentile_high=args.norm_percentile_high,
+            experiment_name=args.experiment_name,
         )
 
 

@@ -6,7 +6,7 @@ Saves parameters to JSON for use in parallel segmentation jobs.
 Pipeline:
   1. Per slide: Otsu threshold → sample 1M tissue pixels → compute per-slide LAB stats
   2. Compute initial global LAB stats from all slides combined
-  3. Outlier rejection: reject slides where |slide_L_median - global_L_median| > 2*global_L_MAD
+  3. Outlier rejection: reject slides where any of |slide_median - global_median| > 1*MAD
   4. Recompute global stats from surviving slides only
   5. Save JSON with global target + per-slide source stats + rejected list
 """

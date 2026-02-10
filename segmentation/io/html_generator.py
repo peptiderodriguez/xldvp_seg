@@ -1334,7 +1334,7 @@ def load_samples_from_ram(tiles_dir, slide_image, pixel_size_um, cell_type='mk',
     return samples
 
 
-def create_mk_hspc_index(output_dir, total_mks, total_hspcs, mk_pages, hspc_pages, slides_summary=None, timestamp=None):
+def create_mk_hspc_index(output_dir, total_mks, total_hspcs, mk_pages, hspc_pages, slides_summary=None, timestamp=None, experiment_name=None):
     """
     Create the main index.html page for MK + HSPC batch review.
 
@@ -1346,6 +1346,7 @@ def create_mk_hspc_index(output_dir, total_mks, total_hspcs, mk_pages, hspc_page
         hspc_pages: Number of HSPC pages
         slides_summary: Optional string like "16 slides (FGC1, FGC2, ...)"
         timestamp: Segmentation timestamp string
+        experiment_name: Optional experiment identifier for localStorage isolation and download filenames
     """
     subtitle_html = f'<p style="color: #888; margin-bottom: 10px;">{slides_summary}</p>' if slides_summary else ''
     timestamp_html = f'<p style="color: #666; font-size: 0.9em;">Segmentation: {timestamp}</p>' if timestamp else ''
@@ -1402,14 +1403,13 @@ def create_mk_hspc_index(output_dir, total_mks, total_hspcs, mk_pages, hspc_page
         </div>
     </div>
     <script>
+        const EXPERIMENT_NAME = '{_esc(experiment_name or "")}';
         function exportAnnotations() {{
             const allLabels = {{}};
-            const mkLabels = {{ positive: [], negative: [] }};
-            const hspcLabels = {{ positive: [], negative: [] }};
             // Read from global keys (preferred), falling back to page keys
             ['mk', 'hspc'].forEach(ct => {{
                 const result = {{ positive: [], negative: [] }};
-                const globalKey = ct + '_annotations';
+                const globalKey = EXPERIMENT_NAME ? ct + '_' + EXPERIMENT_NAME + '_annotations' : ct + '_annotations';
                 const globalStored = localStorage.getItem(globalKey);
                 if (globalStored) {{
                     try {{
@@ -1420,9 +1420,10 @@ def create_mk_hspc_index(output_dir, total_mks, total_hspcs, mk_pages, hspc_page
                         }}
                     }} catch(e) {{ console.error(e); }}
                 }} else {{
+                    const pagePrefix = EXPERIMENT_NAME ? ct + '_' + EXPERIMENT_NAME + '_labels_page' : ct + '_labels_page';
                     for (let i = 0; i < localStorage.length; i++) {{
                         const key = localStorage.key(i);
-                        if (key && key.startsWith(ct + '_labels_page')) {{
+                        if (key && key.startsWith(pagePrefix)) {{
                             try {{
                                 const labels = JSON.parse(localStorage.getItem(key));
                                 for (const [uid, label] of Object.entries(labels)) {{
@@ -1435,11 +1436,14 @@ def create_mk_hspc_index(output_dir, total_mks, total_hspcs, mk_pages, hspc_page
                 }}
                 allLabels[ct] = result;
             }});
+            if (EXPERIMENT_NAME) {{
+                allLabels['experiment_name'] = EXPERIMENT_NAME;
+            }}
             const blob = new Blob([JSON.stringify(allLabels, null, 2)], {{type: 'application/json'}});
             const url = URL.createObjectURL(blob);
             const a = document.createElement('a');
             a.href = url;
-            a.download = 'all_labels_combined.json';
+            a.download = EXPERIMENT_NAME ? 'annotations_' + EXPERIMENT_NAME + '.json' : 'all_labels_combined.json';
             a.click();
             URL.revokeObjectURL(url);
         }}
@@ -1450,7 +1454,7 @@ def create_mk_hspc_index(output_dir, total_mks, total_hspcs, mk_pages, hspc_page
         f.write(html)
 
 
-def generate_mk_hspc_page_html(samples, cell_type, page_num, total_pages, slides_summary=None):
+def generate_mk_hspc_page_html(samples, cell_type, page_num, total_pages, slides_summary=None, experiment_name=None):
     """
     Generate HTML for a single MK or HSPC annotation page.
 
@@ -1460,6 +1464,7 @@ def generate_mk_hspc_page_html(samples, cell_type, page_num, total_pages, slides
         page_num: Current page number (1-indexed)
         total_pages: Total number of pages for this cell type
         slides_summary: Optional string like "16 slides (FGC1, FGC2, ...)" for subtitle
+        experiment_name: Optional experiment identifier for localStorage isolation and download filenames
 
     Returns:
         HTML string for the page
@@ -1583,8 +1588,9 @@ def generate_mk_hspc_page_html(samples, cell_type, page_num, total_pages, slides
     </div>
     {nav_html}
     <script>
-        const PAGE_STORAGE_KEY = '{cell_type_safe}_labels_page{page_num}';
-        const GLOBAL_STORAGE_KEY = '{cell_type_safe}_annotations';
+        const EXPERIMENT_NAME = '{_esc(experiment_name or "")}';
+        const PAGE_STORAGE_KEY = EXPERIMENT_NAME ? '{cell_type_safe}_' + EXPERIMENT_NAME + '_labels_page{page_num}' : '{cell_type_safe}_labels_page{page_num}';
+        const GLOBAL_STORAGE_KEY = EXPERIMENT_NAME ? '{cell_type_safe}_' + EXPERIMENT_NAME + '_annotations' : '{cell_type_safe}_annotations';
         const CELL_TYPE = '{cell_type_safe}';
         const TOTAL_PAGES = {total_pages};
 
@@ -1702,7 +1708,7 @@ def generate_mk_hspc_page_html(samples, cell_type, page_num, total_pages, slides
     return html
 
 
-def generate_mk_hspc_pages(samples, cell_type, output_dir, samples_per_page, slides_summary=None):
+def generate_mk_hspc_pages(samples, cell_type, output_dir, samples_per_page, slides_summary=None, experiment_name=None):
     """
     Generate separate annotation pages for MK or HSPC samples.
 
@@ -1712,6 +1718,7 @@ def generate_mk_hspc_pages(samples, cell_type, output_dir, samples_per_page, sli
         output_dir: Directory to write HTML files
         samples_per_page: Number of samples per page
         slides_summary: Optional string like "16 slides (FGC1, FGC2, ...)" for subtitle
+        experiment_name: Optional experiment identifier for localStorage isolation
     """
     if not samples:
         _logger.info(f"  No {cell_type.upper()} samples to export")
@@ -1724,7 +1731,7 @@ def generate_mk_hspc_pages(samples, cell_type, output_dir, samples_per_page, sli
 
     for page_num in range(1, total_pages + 1):
         page_samples = pages[page_num - 1]
-        html = generate_mk_hspc_page_html(page_samples, cell_type, page_num, total_pages, slides_summary=slides_summary)
+        html = generate_mk_hspc_page_html(page_samples, cell_type, page_num, total_pages, slides_summary=slides_summary, experiment_name=experiment_name)
 
         html_path = Path(output_dir) / f"{cell_type}_page{page_num}.html"
         with open(html_path, 'w') as f:
@@ -1732,7 +1739,7 @@ def generate_mk_hspc_pages(samples, cell_type, output_dir, samples_per_page, sli
 
 
 def export_mk_hspc_html_from_ram(slide_data, output_base, html_output_dir, samples_per_page=300,
-                                  mk_min_area_um=200, mk_max_area_um=2000, timestamp=None):
+                                  mk_min_area_um=200, mk_max_area_um=2000, timestamp=None, experiment_name=None):
     """
     Export MK + HSPC HTML annotation pages using slide images already in RAM.
 
@@ -1839,13 +1846,13 @@ def export_mk_hspc_html_from_ram(slide_data, output_base, html_output_dir, sampl
         slides_summary = None
 
     # Generate pages
-    generate_mk_hspc_pages(all_mk_samples, "mk", html_output_dir, samples_per_page, slides_summary=slides_summary)
-    generate_mk_hspc_pages(all_hspc_samples, "hspc", html_output_dir, samples_per_page, slides_summary=slides_summary)
+    generate_mk_hspc_pages(all_mk_samples, "mk", html_output_dir, samples_per_page, slides_summary=slides_summary, experiment_name=experiment_name)
+    generate_mk_hspc_pages(all_hspc_samples, "hspc", html_output_dir, samples_per_page, slides_summary=slides_summary, experiment_name=experiment_name)
 
     # Create index
     mk_pages = (len(all_mk_samples) + samples_per_page - 1) // samples_per_page if all_mk_samples else 0
     hspc_pages = (len(all_hspc_samples) + samples_per_page - 1) // samples_per_page if all_hspc_samples else 0
-    create_mk_hspc_index(html_output_dir, len(all_mk_samples), len(all_hspc_samples), mk_pages, hspc_pages, slides_summary=slides_summary, timestamp=timestamp)
+    create_mk_hspc_index(html_output_dir, len(all_mk_samples), len(all_hspc_samples), mk_pages, hspc_pages, slides_summary=slides_summary, timestamp=timestamp, experiment_name=experiment_name)
 
     _logger.info(f"\n  HTML export complete: {html_output_dir}")
     _logger.info(f"  Total: {len(all_mk_samples)} MKs, {len(all_hspc_samples)} HSPCs")
