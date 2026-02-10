@@ -2215,10 +2215,17 @@ def run_pipeline(args):
         mask_fn = f'{args.cell_type}_masks.h5'
         all_detections = deduplicate_by_mask_overlap(all_detections, tiles_dir, min_overlap_fraction=0.1, mask_filename=mask_fn)
 
-        # Filter HTML samples to match deduped detections
-        if len(all_detections) < pre_dedup:
-            deduped_uids = {det.get('uid', det.get('id', '')) for det in all_detections}
-            all_samples = [s for s in all_samples if s.get('uid', '') in deduped_uids]
+        # Filter HTML samples to match deduped detections and remove duplicate UIDs
+        deduped_uids = {det.get('uid', det.get('id', '')) for det in all_detections}
+        seen_uids = set()
+        unique_samples = []
+        for s in all_samples:
+            uid = s.get('uid', '')
+            if uid in deduped_uids and uid not in seen_uids:
+                seen_uids.add(uid)
+                unique_samples.append(s)
+        logger.info(f"Dedup: {len(all_samples)} HTML samples -> {len(unique_samples)} (removed {len(all_samples) - len(unique_samples)} duplicate UIDs)")
+        all_samples = unique_samples
 
     # (annotation threshold override already applied before tile loop)
 
