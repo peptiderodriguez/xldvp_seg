@@ -6,7 +6,7 @@
 #SBATCH --cpus-per-task=48
 #SBATCH --gres=gpu:2
 #SBATCH --mem=200G
-#SBATCH --time=2:00:00
+#SBATCH --time=3:00:00
 #SBATCH --output=/viper/ptmp2/edrod/xldvp_seg_fresh/logs/reinhard_params_16slides_MEDIAN_%j.out
 #SBATCH --error=/viper/ptmp2/edrod/xldvp_seg_fresh/logs/reinhard_params_16slides_MEDIAN_%j.err
 
