@@ -3384,6 +3384,25 @@ def main():
         if not p.exists():
             parser.error(f"CZI file not found: {p}")
 
+    # Skip rejected slides (from step 1 outlier rejection)
+    if hasattr(args, 'norm_params_file') and args.norm_params_file:
+        try:
+            with open(args.norm_params_file, 'r') as f:
+                _pre_filter_params = json.load(f)
+            _rejected = set(_pre_filter_params.get('rejected_slides', []))
+            if _rejected:
+                before = len(czi_paths)
+                czi_paths = [p for p in czi_paths if p.stem not in _rejected]
+                skipped = before - len(czi_paths)
+                if skipped:
+                    logger.info(f"Skipping {skipped} rejected slide(s): {sorted(_rejected)}")
+                if not czi_paths:
+                    logger.error("All slides were rejected — nothing to process")
+                    return
+            del _pre_filter_params
+        except (FileNotFoundError, json.JSONDecodeError):
+            pass  # Will be loaded properly later; just skip pre-filtering
+
     # Convert µm² to px² using pixel size (0.1725 µm/px)
     PIXEL_SIZE_UM = 0.1725
     um_to_px_factor = PIXEL_SIZE_UM ** 2  # 0.02975625

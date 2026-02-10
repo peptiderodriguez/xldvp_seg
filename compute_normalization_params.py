@@ -315,7 +315,11 @@ def main():
     del all_samples, combined
     gc.collect()
 
-    generate_visual_validation(slides, params, output_file.parent / "verification_tiles",
+    # Only validate surviving slides (skip rejected ones)
+    surviving_slides = [s for s in slides if s.stem not in rejected_slides]
+    logger.info(f"Validating {len(surviving_slides)} surviving slides (skipping {len(rejected_slides)} rejected)")
+
+    generate_visual_validation(surviving_slides, params, output_file.parent / "verification_tiles",
                                tissue_thresholds=tissue_thresholds)
 
 
