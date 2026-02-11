@@ -5,7 +5,7 @@
 #SBATCH --ntasks=1
 #SBATCH --cpus-per-task=128
 #SBATCH --mem=450G
-#SBATCH --time=2-00:00:00
+#SBATCH --time=2-12:00:00
 #SBATCH --gres=gpu:l40s:4
 #SBATCH --output=/fs/gpfs41/lv12/fileset02/pool/pool-mann-edwin/code_bin/xldvp_seg/logs/%x_%j.out
 #SBATCH --error=/fs/gpfs41/lv12/fileset02/pool/pool-mann-edwin/code_bin/xldvp_seg/logs/%x_%j.err
@@ -19,15 +19,20 @@
 #
 # Resume after interruption:
 #   sbatch run_vessel_4gpu.sbatch --resume "1/16"
+# Resume post-processing only (after tile collection completed):
+#   sbatch run_vessel_4gpu.sbatch --post-process-only
 # =============================================================================
 
 set -e
 
-# Parse optional --resume argument
+# Parse optional arguments
 RESUME_ARG=""
 if [ "$1" == "--resume" ] && [ -n "$2" ]; then
     RESUME_ARG="--resume-from $2"
     echo "Resuming from scale $2"
+elif [ "$1" == "--post-process-only" ]; then
+    RESUME_ARG="--post-process-only"
+    echo "Post-processing only mode"
 fi
 
 echo "============================================================"

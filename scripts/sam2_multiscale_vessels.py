@@ -3238,6 +3238,289 @@ def _save_scale_checkpoint(scale_config, scale_vessels, all_vessels, output_dir)
     print(f"  Cumulative checkpoint: {len(all_vessels)} vessels total", flush=True)
 
 
+def _save_postprocess_checkpoint(stage, vessels, output_dir, extra=None):
+    """Save a post-processing stage checkpoint (atomic write)."""
+    path = os.path.join(output_dir, f'postprocess_stage_{stage}.json')
+    data = {'stage': stage, 'vessels': vessels, 'num_vessels': len(vessels)}
+    if extra:
+        data.update(extra)
+    fd, tmp = tempfile.mkstemp(dir=output_dir, suffix='.json.tmp')
+    try:
+        with os.fdopen(fd, 'w') as f:
+            json.dump(data, f)
+        os.replace(tmp, path)
+    except Exception:
+        if os.path.exists(tmp):
+            os.unlink(tmp)
+        raise
+    print(f"  Post-processing checkpoint saved: {stage} ({len(vessels)} vessels)", flush=True)
+
+
+def _load_postprocess_stage(output_dir):
+    """Detect latest completed post-processing stage and load its checkpoint."""
+    for stage in ['cells', 'refined', 'merged']:
+        path = os.path.join(output_dir, f'postprocess_stage_{stage}.json')
+        if os.path.exists(path):
+            with open(path, 'r') as f:
+                data = json.load(f)
+            return stage, data['vessels']
+    return None, None
+
+
+def _run_post_processing(all_vessels, channel_cache, mosaic_size, args, output_dir,
+                         loader, num_gpus, _main_shm_handles=None, shm_manager=None):
+    """Run all post-processing stages with checkpoint/resume support.
+
+    Stages:
+      1. merged  — cross-scale merge + diameter ratio filter
+      2. refined — full-res contour refinement + crop generation
+      3. cells   — cell composition analysis (Cellpose)
+      4. output  — final JSON/GeoPackage/HTML/histograms (always re-run)
+    """
+    # Detect resume point from existing stage checkpoints
+    completed_stage, staged_vessels = _load_postprocess_stage(output_dir)
+
+    if completed_stage:
+        print(f"\nResuming post-processing after stage '{completed_stage}' "
+              f"({len(staged_vessels)} vessels)", flush=True)
+
+    # Report tiles skipped by Sobel pre-filter
+    print(f"Tiles skipped by Sobel pre-filter: {TILES_SKIPPED_BY_SOBEL}")
+
+    # ---- Stage 1: Merge + diameter filter ----
+    if completed_stage is None:
+        print(f"\nTotal vessels before merge: {len(all_vessels)}")
+        merged_vessels = merge_vessels_across_scales(all_vessels, pixel_size_um=PIXEL_SIZE_UM)
+        print(f"After merge: {len(merged_vessels)}")
+
+        print(f"\nApplying adaptive diameter ratio filter...")
+        filtered_vessels = adaptive_diameter_ratio_filter(merged_vessels)
+        print(f"After diameter ratio filter: {len(filtered_vessels)}")
+        merged_vessels = filtered_vessels
+
+        _save_postprocess_checkpoint('merged', merged_vessels, output_dir)
+    else:
+        # completed_stage is 'merged', 'refined', or 'cells' — load from checkpoint
+        merged_vessels = staged_vessels
+        print(f"  Skipping merge (already done at stage '{completed_stage}')")
+
+    # ---- Stage 2: Full-res contour refinement + crops ----
+    if completed_stage in (None, 'merged'):
+        if not args.no_refine:
+            print(f"\n{'=' * 60}")
+            print(f"Full-Resolution Contour Refinement")
+            print(f"{'=' * 60}")
+            print(f"  Dilation mode: {args.dilation_mode} (CD31 + SMA)")
+            print(f"  Spline smoothing: {'on' if args.spline else 'off'} (factor={args.spline_smoothing})")
+            print(f"  SMA min_wall_intensity: {args.min_sma_intensity}")
+            n_refined = 0
+            n_failed = 0
+            for vessel in tqdm(merged_vessels, desc="Refining contours at full res"):
+                ok = refine_vessel_contours_fullres(
+                    vessel, channel_cache,
+                    spline=args.spline,
+                    spline_smoothing=args.spline_smoothing,
+                    cd31_mode=args.dilation_mode,
+                    sma_min_wall_intensity=args.min_sma_intensity,
+                    sma_mode=args.dilation_mode,
+                    pixel_size_um=PIXEL_SIZE_UM,
+                )
+                if ok:
+                    n_refined += 1
+                else:
+                    n_failed += 1
+            print(f"  Refined {n_refined} vessels, {n_failed} failed")
+
+            # Regenerate ALL crops at full resolution with refined contours
+            print(f"\nRegenerating crops at full resolution...")
+            n_crops = 0
+            n_crop_fail = 0
+            for vessel in tqdm(merged_vessels, desc="Full-res crops"):
+                crop_path = save_vessel_crop_fullres(vessel, channel_cache)
+                if crop_path:
+                    n_crops += 1
+                else:
+                    n_crop_fail += 1
+            print(f"  Generated {n_crops} full-res crops, {n_crop_fail} failed")
+        else:
+            print("\nSkipping full-resolution contour refinement (--no-refine)")
+            regenerate_missing_crops(merged_vessels, channel_cache)
+
+        _save_postprocess_checkpoint('refined', merged_vessels, output_dir)
+    else:
+        # completed_stage is 'refined' or 'cells' — already loaded from checkpoint
+        print(f"  Skipping refinement (already done at stage '{completed_stage}')")
+
+    # Analyze vessel network topology (skeletonization) — fast, always re-run
+    network_metrics = analyze_vessel_network(merged_vessels, mosaic_size, pixel_size_um=PIXEL_SIZE_UM)
+
+    # ---- Stage 3: Cell composition analysis ----
+    gmm_info = {'error': 'Cell composition analysis skipped - no Cellpose'}
+
+    if completed_stage != 'cells':
+        if CELLPOSE_AVAILABLE and len(merged_vessels) > 0:
+            print("\n" + "=" * 60)
+            print("Cell Composition Analysis")
+            print("=" * 60)
+            print(f"Analyzing cell composition for {len(merged_vessels)} vessels...")
+
+            # Pass 1: Segment cells in all vessels, collect intensities
+            all_cell_data = []
+            total_cells = 0
+
+            for i, vessel in enumerate(tqdm(merged_vessels, desc="Pass 1: Segmenting cells")):
+                try:
+                    global_x, global_y = vessel['global_center']
+                    outer_diam_um = vessel['outer_diameter_um']
+
+                    roi_size_um = outer_diam_um * 1.5
+                    roi_size_px = int(roi_size_um / (PIXEL_SIZE_UM * BASE_SCALE))
+                    roi_size_px = max(roi_size_px, 50)
+
+                    base_x = global_x // BASE_SCALE
+                    base_y = global_y // BASE_SCALE
+
+                    x1 = max(0, base_x - roi_size_px // 2)
+                    y1 = max(0, base_y - roi_size_px // 2)
+                    x2 = min(channel_cache.base_width, base_x + roi_size_px // 2)
+                    y2 = min(channel_cache.base_height, base_y + roi_size_px // 2)
+
+                    if x2 <= x1 or y2 <= y1:
+                        all_cell_data.append({'cd31': np.array([]), 'sma': np.array([])})
+                        continue
+
+                    pm_roi = channel_cache.channels[PM][y1:y2, x1:x2]
+                    nuclear_roi = channel_cache.channels[NUCLEAR][y1:y2, x1:x2]
+                    cd31_roi = channel_cache.channels[CD31][y1:y2, x1:x2]
+                    sma_roi = channel_cache.channels[SMA][y1:y2, x1:x2]
+
+                    cell_masks, num_cells = segment_cells_in_vessel(pm_roi, nuclear_roi)
+
+                    if num_cells == 0:
+                        all_cell_data.append({'cd31': np.array([]), 'sma': np.array([])})
+                        continue
+
+                    cell_intensities = measure_cell_intensities(cell_masks, cd31_roi, sma_roi)
+                    all_cell_data.append(cell_intensities)
+                    total_cells += len(cell_intensities['cd31'])
+
+                except Exception as e:
+                    print(f"\n  Warning: Error processing vessel {i}: {e}")
+                    all_cell_data.append({'cd31': np.array([]), 'sma': np.array([])})
+
+            print(f"  Total cells segmented: {total_cells}")
+
+            # Pass 2: Fit slide-wide GMM and classify
+            if total_cells > 0:
+                print("Pass 2: Fitting slide-wide GMM...")
+
+                all_cd31 = np.concatenate([d['cd31'] for d in all_cell_data if len(d['cd31']) > 0])
+                all_sma = np.concatenate([d['sma'] for d in all_cell_data if len(d['sma']) > 0])
+
+                cd31_thresh, sma_thresh, gmm_info = classify_cells_gmm(all_cd31, all_sma)
+
+                print(f"  CD31 threshold: {cd31_thresh:.1f}")
+                print(f"  SMA threshold: {sma_thresh:.1f}")
+                print(f"  GMM fallback used: {gmm_info.get('fallback_used', False)}")
+
+                # Pass 3: Update vessel dicts with cell_composition
+                print("Pass 3: Computing cell composition per vessel...")
+
+                for vessel, cell_data in zip(merged_vessels, all_cell_data):
+                    vessel['cell_composition'] = compute_cell_composition(
+                        cell_data, cd31_thresh, sma_thresh
+                    )
+
+                vessels_with_cells = sum(1 for v in merged_vessels if v.get('cell_composition', {}).get('n_total', 0) > 0)
+                total_endothelial = sum(v.get('cell_composition', {}).get('n_endothelial', 0) for v in merged_vessels)
+                total_smooth_muscle = sum(v.get('cell_composition', {}).get('n_smooth_muscle', 0) for v in merged_vessels)
+
+                print(f"\n  Cell composition summary:")
+                print(f"    Vessels with cells: {vessels_with_cells}/{len(merged_vessels)}")
+                print(f"    Total endothelial (CD31+): {total_endothelial}")
+                print(f"    Total smooth muscle (SMA+): {total_smooth_muscle}")
+            else:
+                print("  No cells found across all vessels - skipping GMM classification")
+                gmm_info = {'error': 'No cells found', 'n_cells_total': 0}
+                for vessel in merged_vessels:
+                    vessel['cell_composition'] = compute_cell_composition({}, 0, 0)
+        else:
+            if not CELLPOSE_AVAILABLE:
+                print("Cellpose not available - skipping cell composition analysis")
+            else:
+                print("No vessels found - skipping cell composition analysis")
+            for vessel in merged_vessels:
+                vessel['cell_composition'] = compute_cell_composition({}, 0, 0)
+
+        _save_postprocess_checkpoint('cells', merged_vessels, output_dir,
+                                      extra={'gmm_info': gmm_info})
+    else:
+        # Resuming after cells — cell_composition already in vessel dicts
+        print("\n  Cell composition already completed (loaded from checkpoint)", flush=True)
+        # Recover gmm_info from checkpoint if available
+        cells_path = os.path.join(output_dir, 'postprocess_stage_cells.json')
+        with open(cells_path, 'r') as f:
+            cells_ckpt = json.load(f)
+        gmm_info = cells_ckpt.get('gmm_info', gmm_info)
+
+    # ---- Stage 4: Final output (always re-run — fast, idempotent) ----
+    output_data = {
+        'vessels': merged_vessels,
+        'network_metrics': network_metrics,
+        'metadata': {
+            'czi_path': CZI_PATH,
+            'mosaic_size': list(mosaic_size),
+            'num_vessels': len(merged_vessels),
+            'scales': [s['name'] for s in SCALES],
+            'cell_classification': gmm_info,
+        }
+    }
+
+    # Save JSON (atomic write)
+    output_path = os.path.join(output_dir, 'vessel_detections_multiscale.json')
+    fd, tmp_path = tempfile.mkstemp(dir=output_dir, suffix='.json.tmp')
+    try:
+        with os.fdopen(fd, 'w') as f:
+            json.dump(output_data, f, indent=2)
+        os.replace(tmp_path, output_path)
+    except Exception:
+        if os.path.exists(tmp_path):
+            os.unlink(tmp_path)
+        raise
+    print(f"\nSaved to {output_path}")
+
+    # Export to GeoPackage
+    gpkg_path = os.path.join(output_dir, 'vessel_detections_multiscale.gpkg')
+    export_to_geodataframe(merged_vessels, gpkg_path)
+
+    # Stats
+    if len(merged_vessels) > 0:
+        diameters = [v['outer_diameter_um'] for v in merged_vessels]
+        print(f"\nDiameter stats:")
+        print(f"  min={min(diameters):.1f}, max={max(diameters):.1f}, mean={np.mean(diameters):.1f} µm")
+
+        for scale_config in SCALES:
+            count = sum(1 for v in merged_vessels if v['scale'] == scale_config['name'])
+            print(f"  Scale {scale_config['name']}: {count} vessels")
+
+    # Generate HTML
+    generate_html(merged_vessels)
+
+    # Generate histograms
+    generate_histograms(merged_vessels, output_dir)
+
+    # Final cleanup
+    channel_cache.release()
+    if num_gpus > 1 and _main_shm_handles is not None:
+        for shm in _main_shm_handles:
+            shm.close()
+        shm_manager.cleanup()
+        print("Shared memory cleaned up", flush=True)
+    loader.close()
+
+    print("\nDone!")
+
+
 def main():
     import argparse
 
@@ -3267,6 +3550,9 @@ def main():
                         help='Min SMA wall intensity to detect SMA ring (default: 30)')
     parser.add_argument('--pixel-size', type=float, default=None,
                         help='Override pixel size in micrometers (default: read from CZI metadata, fallback 0.1725)')
+    parser.add_argument('--post-process-only', action='store_true',
+                        help='Skip tile collection, load cumulative checkpoint, '
+                             'and resume post-processing from last completed stage.')
     args = parser.parse_args()
 
     # Auto-detect WSL2 for sleep/reset defaults
@@ -3297,9 +3583,16 @@ def main():
     os.makedirs(os.path.join(OUTPUT_DIR, 'tiles'), exist_ok=True)
     import shutil
     crops_dir = os.path.join(OUTPUT_DIR, 'crops')
-    if os.path.exists(crops_dir) and not args.resume_from:
+    if os.path.exists(crops_dir) and not args.resume_from and not args.post_process_only:
         shutil.rmtree(crops_dir)
     os.makedirs(crops_dir, exist_ok=True)
+
+    # Clean up stale post-processing checkpoints on fresh runs
+    if not args.resume_from and not args.post_process_only:
+        import glob as _glob
+        for stale in _glob.glob(os.path.join(OUTPUT_DIR, 'postprocess_stage_*.json')):
+            os.unlink(stale)
+            print(f"  Removed stale checkpoint: {os.path.basename(stale)}", flush=True)
 
     # Open CZI (don't load full-res into RAM)
     loader = CZILoader(CZI_PATH)
@@ -3338,6 +3631,24 @@ def main():
         'min_mask_region_area': 100,
     }
 
+    # --post-process-only: skip all tile collection, jump to post-processing
+    if args.post_process_only:
+        checkpoint_path = os.path.join(OUTPUT_DIR, 'vessel_detections_checkpoint.json')
+        if not os.path.exists(checkpoint_path):
+            print(f"ERROR: No checkpoint found at {checkpoint_path}", flush=True)
+            sys.exit(1)
+        with open(checkpoint_path, 'r') as f:
+            ckpt = json.load(f)
+        all_vessels = ckpt['vessels']
+        print(f"\nLoaded {len(all_vessels)} vessels from checkpoint ({ckpt.get('scales_completed', '?')})")
+        print("Skipping tile collection, jumping to post-processing...", flush=True)
+
+        _run_post_processing(
+            all_vessels, channel_cache, mosaic_size, args, OUTPUT_DIR, loader,
+            num_gpus, _main_shm_handles=None, shm_manager=None,
+        )
+        return
+
     print(f"\nMode: {'Multi-GPU (' + str(num_gpus) + ' GPUs)' if num_gpus > 1 else 'Single-GPU'}", flush=True)
     print(f"  tile_sleep={tile_sleep:.1f}s, reset_interval={reset_interval}", flush=True)
 
@@ -3369,6 +3680,10 @@ def main():
                 print(f"  WARNING: No checkpoint for scale {sc['name']}, skipping", flush=True)
         scales_to_process = SCALES[resume_idx:]
         print(f"\nResuming from scale {resume_from} with {len(all_vessels)} vessels from prior scales", flush=True)
+
+    # These are set in multi-GPU path and passed to post-processing for cleanup
+    _main_shm_handles = None
+    shm_manager = None
 
     # ========================================================================
     # Multi-GPU path: shared memory + worker pool
@@ -3594,244 +3909,10 @@ def main():
         torch.cuda.empty_cache()
         print(f"SAM2 model freed. VRAM: {torch.cuda.memory_allocated() / 1e9:.1f}GB", flush=True)
 
-    # Merge across scales (uses adaptive IoU threshold)
-    print(f"\nTotal vessels before merge: {len(all_vessels)}")
-    merged_vessels = merge_vessels_across_scales(all_vessels, pixel_size_um=PIXEL_SIZE_UM)
-    print(f"After merge: {len(merged_vessels)}")
-
-    # Apply adaptive diameter ratio filter (GMM-based)
-    print(f"\nApplying adaptive diameter ratio filter...")
-    filtered_vessels = adaptive_diameter_ratio_filter(merged_vessels)
-    print(f"After diameter ratio filter: {len(filtered_vessels)}")
-    merged_vessels = filtered_vessels
-
-    # Report tiles skipped by Sobel pre-filter
-    print(f"Tiles skipped by Sobel pre-filter: {TILES_SKIPPED_BY_SOBEL}")
-
-    # Full-resolution contour refinement
-    if not args.no_refine:
-        print(f"\n{'=' * 60}")
-        print(f"Full-Resolution Contour Refinement")
-        print(f"{'=' * 60}")
-        print(f"  Dilation mode: {args.dilation_mode} (CD31 + SMA)")
-        print(f"  Spline smoothing: {'on' if args.spline else 'off'} (factor={args.spline_smoothing})")
-        print(f"  SMA min_wall_intensity: {args.min_sma_intensity}")
-        n_refined = 0
-        n_failed = 0
-        for vessel in tqdm(merged_vessels, desc="Refining contours at full res"):
-            ok = refine_vessel_contours_fullres(
-                vessel, channel_cache,
-                spline=args.spline,
-                spline_smoothing=args.spline_smoothing,
-                cd31_mode=args.dilation_mode,
-                sma_min_wall_intensity=args.min_sma_intensity,
-                sma_mode=args.dilation_mode,
-                pixel_size_um=PIXEL_SIZE_UM,
-            )
-            if ok:
-                n_refined += 1
-            else:
-                n_failed += 1
-        print(f"  Refined {n_refined} vessels, {n_failed} failed")
-
-        # Regenerate ALL crops at full resolution with refined contours
-        print(f"\nRegenerating crops at full resolution...")
-        n_crops = 0
-        n_crop_fail = 0
-        for vessel in tqdm(merged_vessels, desc="Full-res crops"):
-            crop_path = save_vessel_crop_fullres(vessel, channel_cache)
-            if crop_path:
-                n_crops += 1
-            else:
-                n_crop_fail += 1
-        print(f"  Generated {n_crops} full-res crops, {n_crop_fail} failed")
-    else:
-        print("\nSkipping full-resolution contour refinement (--no-refine)")
-        # Regenerate any missing crop images at tile scale
-        regenerate_missing_crops(merged_vessels, channel_cache)
-
-    # Analyze vessel network topology (skeletonization)
-    network_metrics = analyze_vessel_network(merged_vessels, mosaic_size, pixel_size_um=PIXEL_SIZE_UM)
-
-    # ==========================================================================
-    # Cell Composition Analysis - 3-Pass Approach
-    # ==========================================================================
-    # Pass 1: Segment cells in all vessels, collect intensities
-    # Pass 2: Fit slide-wide GMM and classify
-    # Pass 3: Update vessel dicts with cell_composition
-    # ==========================================================================
-
-    print("\n" + "=" * 60)
-    print("Cell Composition Analysis")
-    print("=" * 60)
-
-    gmm_info = {'error': 'Cell composition analysis skipped - no Cellpose'}
-
-    if CELLPOSE_AVAILABLE and len(merged_vessels) > 0:
-        print(f"Analyzing cell composition for {len(merged_vessels)} vessels...")
-
-        # Pass 1: Segment cells in all vessels, collect intensities
-        all_cell_data = []
-        total_cells = 0
-
-        for i, vessel in enumerate(tqdm(merged_vessels, desc="Pass 1: Segmenting cells")):
-            try:
-                # Get vessel ROI center and size
-                global_x, global_y = vessel['global_center']
-                outer_diam_um = vessel['outer_diameter_um']
-
-                # Convert to pixels at base scale
-                # ROI size = 1.5x outer diameter to capture full vessel
-                roi_size_um = outer_diam_um * 1.5
-                roi_size_px = int(roi_size_um / (PIXEL_SIZE_UM * BASE_SCALE))  # pixels at base scale
-                roi_size_px = max(roi_size_px, 50)  # minimum size
-
-                # Convert global coords to base scale
-                base_x = global_x // BASE_SCALE
-                base_y = global_y // BASE_SCALE
-
-                # Calculate ROI bounds at base scale
-                x1 = max(0, base_x - roi_size_px // 2)
-                y1 = max(0, base_y - roi_size_px // 2)
-                x2 = min(channel_cache.base_width, base_x + roi_size_px // 2)
-                y2 = min(channel_cache.base_height, base_y + roi_size_px // 2)
-
-                if x2 <= x1 or y2 <= y1:
-                    all_cell_data.append({'cd31': np.array([]), 'sma': np.array([])})
-                    continue
-
-                # Extract ROIs from channel cache (at base scale)
-                pm_roi = channel_cache.channels[PM][y1:y2, x1:x2]
-                nuclear_roi = channel_cache.channels[NUCLEAR][y1:y2, x1:x2]
-                cd31_roi = channel_cache.channels[CD31][y1:y2, x1:x2]
-                sma_roi = channel_cache.channels[SMA][y1:y2, x1:x2]
-
-                # Segment cells using Cellpose
-                cell_masks, num_cells = segment_cells_in_vessel(pm_roi, nuclear_roi)
-
-                if num_cells == 0:
-                    all_cell_data.append({'cd31': np.array([]), 'sma': np.array([])})
-                    continue
-
-                # Measure intensities
-                cell_intensities = measure_cell_intensities(cell_masks, cd31_roi, sma_roi)
-                all_cell_data.append(cell_intensities)
-                total_cells += len(cell_intensities['cd31'])
-
-            except Exception as e:
-                print(f"\n  Warning: Error processing vessel {i}: {e}")
-                all_cell_data.append({'cd31': np.array([]), 'sma': np.array([])})
-
-        print(f"  Total cells segmented: {total_cells}")
-
-        # Pass 2: Fit slide-wide GMM and classify
-        if total_cells > 0:
-            print("Pass 2: Fitting slide-wide GMM...")
-
-            # Collect all intensities
-            all_cd31 = np.concatenate([d['cd31'] for d in all_cell_data if len(d['cd31']) > 0])
-            all_sma = np.concatenate([d['sma'] for d in all_cell_data if len(d['sma']) > 0])
-
-            # Fit GMM
-            cd31_thresh, sma_thresh, gmm_info = classify_cells_gmm(all_cd31, all_sma)
-
-            print(f"  CD31 threshold: {cd31_thresh:.1f}")
-            print(f"  SMA threshold: {sma_thresh:.1f}")
-            print(f"  GMM fallback used: {gmm_info.get('fallback_used', False)}")
-
-            # Pass 3: Update vessel dicts with cell_composition
-            print("Pass 3: Computing cell composition per vessel...")
-
-            for vessel, cell_data in zip(merged_vessels, all_cell_data):
-                vessel['cell_composition'] = compute_cell_composition(
-                    cell_data, cd31_thresh, sma_thresh
-                )
-
-            # Summary stats
-            vessels_with_cells = sum(1 for v in merged_vessels if v.get('cell_composition', {}).get('n_total', 0) > 0)
-            total_endothelial = sum(v.get('cell_composition', {}).get('n_endothelial', 0) for v in merged_vessels)
-            total_smooth_muscle = sum(v.get('cell_composition', {}).get('n_smooth_muscle', 0) for v in merged_vessels)
-
-            print(f"\n  Cell composition summary:")
-            print(f"    Vessels with cells: {vessels_with_cells}/{len(merged_vessels)}")
-            print(f"    Total endothelial (CD31+): {total_endothelial}")
-            print(f"    Total smooth muscle (SMA+): {total_smooth_muscle}")
-
-        else:
-            print("  No cells found across all vessels - skipping GMM classification")
-            gmm_info = {'error': 'No cells found', 'n_cells_total': 0}
-
-            # Add empty cell_composition to all vessels
-            for vessel in merged_vessels:
-                vessel['cell_composition'] = compute_cell_composition({}, 0, 0)
-    else:
-        if not CELLPOSE_AVAILABLE:
-            print("Cellpose not available - skipping cell composition analysis")
-        else:
-            print("No vessels found - skipping cell composition analysis")
-
-        # Add empty cell_composition to all vessels
-        for vessel in merged_vessels:
-            vessel['cell_composition'] = compute_cell_composition({}, 0, 0)
-
-    # Build output data with both vessels and network metrics
-    output_data = {
-        'vessels': merged_vessels,
-        'network_metrics': network_metrics,
-        'metadata': {
-            'czi_path': CZI_PATH,
-            'mosaic_size': list(mosaic_size),
-            'num_vessels': len(merged_vessels),
-            'scales': [s['name'] for s in SCALES],
-            'cell_classification': gmm_info,
-        }
-    }
-
-    # Save JSON with vessels and network metrics (atomic write)
-    output_path = os.path.join(OUTPUT_DIR, 'vessel_detections_multiscale.json')
-    fd, tmp_path = tempfile.mkstemp(dir=OUTPUT_DIR, suffix='.json.tmp')
-    try:
-        with os.fdopen(fd, 'w') as f:
-            json.dump(output_data, f, indent=2)
-        os.replace(tmp_path, output_path)
-    except Exception:
-        if os.path.exists(tmp_path):
-            os.unlink(tmp_path)
-        raise
-    print(f"\nSaved to {output_path}")
-
-    # Export to GeoPackage for GIS compatibility
-    gpkg_path = os.path.join(OUTPUT_DIR, 'vessel_detections_multiscale.gpkg')
-    export_to_geodataframe(merged_vessels, gpkg_path)
-
-    # Stats
-    if len(merged_vessels) > 0:
-        diameters = [v['outer_diameter_um'] for v in merged_vessels]
-        print(f"\nDiameter stats:")
-        print(f"  min={min(diameters):.1f}, max={max(diameters):.1f}, mean={np.mean(diameters):.1f} µm")
-
-        # By scale
-        for scale_config in SCALES:
-            count = sum(1 for v in merged_vessels if v['scale'] == scale_config['name'])
-            print(f"  Scale {scale_config['name']}: {count} vessels")
-
-    # Generate HTML
-    generate_html(merged_vessels)
-
-    # Generate histograms
-    generate_histograms(merged_vessels, OUTPUT_DIR)
-
-    # Final cleanup
-    channel_cache.release()
-    if num_gpus > 1:
-        # Close main process shared memory handles and unlink
-        for shm in _main_shm_handles:
-            shm.close()
-        shm_manager.cleanup()
-        print("Shared memory cleaned up", flush=True)
-    loader.close()
-
-    print("\nDone!")
+    _run_post_processing(
+        all_vessels, channel_cache, mosaic_size, args, OUTPUT_DIR, loader,
+        num_gpus, _main_shm_handles=_main_shm_handles, shm_manager=shm_manager,
+    )
 
 def generate_histograms(vessels, output_dir):
     """
