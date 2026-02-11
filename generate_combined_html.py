@@ -46,6 +46,69 @@ logger = logging.getLogger('generate_combined_html')
 PIXEL_SIZE_UM = 0.1725  # Default pixel size for area conversions
 
 
+def deduplicate_samples(samples, distance_threshold_px=50):
+    """Remove duplicate detections caused by tile overlap.
+
+    Groups by slide, then uses a spatial grid to find detections whose
+    centers are within distance_threshold_px of each other. Keeps the
+    one with larger area.
+
+    Args:
+        samples: List of sample dicts with 'slide', 'global_x', 'global_y', 'area_px'
+        distance_threshold_px: Max center distance (in pixels) to consider duplicates
+
+    Returns:
+        Deduplicated list of samples
+    """
+    from collections import defaultdict
+
+    if not samples:
+        return samples
+
+    by_slide = defaultdict(list)
+    for s in samples:
+        by_slide[s['slide']].append(s)
+
+    kept = []
+    total_removed = 0
+
+    for slide, slide_samples in by_slide.items():
+        slide_samples.sort(key=lambda s: s.get('area_px', 0), reverse=True)
+
+        grid = {}
+        cell_size = distance_threshold_px
+        slide_kept = []
+
+        for s in slide_samples:
+            x, y = s['global_x'], s['global_y']
+            gx, gy = int(x // cell_size), int(y // cell_size)
+
+            is_dup = False
+            for dx in (-1, 0, 1):
+                if is_dup:
+                    break
+                for dy in (-1, 0, 1):
+                    for existing in grid.get((gx + dx, gy + dy), []):
+                        dist = ((x - existing['global_x'])**2 + (y - existing['global_y'])**2) ** 0.5
+                        if dist < distance_threshold_px:
+                            is_dup = True
+                            break
+                    if is_dup:
+                        break
+
+            if not is_dup:
+                slide_kept.append(s)
+                grid.setdefault((gx, gy), []).append(s)
+
+        total_removed += len(slide_samples) - len(slide_kept)
+        kept.extend(slide_kept)
+
+    if total_removed > 0:
+        logger.info(f"  Deduplication: {len(samples)} -> {len(kept)} ({total_removed} duplicates removed)")
+
+    return kept
+
+
 def _draw_contour_on_crop(crop_b64, mask_b64):
     """Decode crop + mask, draw green contour, re-encode to base64 JPEG."""
     # Decode crop
@@ -200,6 +263,9 @@ def main():
     all_mk_samples = [s for s in all_mk_samples if mk_min_px <= s.get('area_px', 0) <= mk_max_px]
     logger.info(f"\n  MK size filter: {mk_before} -> {len(all_mk_samples)} "
                 f"({args.mk_min_area_um}-{args.mk_max_area_um} um^2)")
+
+    # Deduplicate MKs (tile overlap can produce duplicates)
+    all_mk_samples = deduplicate_samples(all_mk_samples, distance_threshold_px=50)
 
     # Sort: MK by area descending, HSPC by area descending
     all_mk_samples.sort(key=lambda x: x.get('area_um2', 0), reverse=True)
