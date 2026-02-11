@@ -1401,41 +1401,75 @@ def create_mk_hspc_index(output_dir, total_mks, total_hspcs, mk_pages, hspc_page
         </div>
     </div>
     <div class="section">
-        <h2>Export Annotations</h2>
+        <h2>Manage Annotations</h2>
         <div class="controls">
             <button class="btn btn-export" onclick="exportAnnotations()">Download Annotations JSON</button>
+            <button class="btn" onclick="clearAllMK()" style="border-color: #a44; color: #a44;">Clear All MK</button>
+            <button class="btn" onclick="clearAllHSPC()" style="border-color: #a44; color: #a44;">Clear All HSPC</button>
+            <button class="btn" onclick="clearEverything()" style="border-color: #f44; color: #f44;">Clear Everything</button>
         </div>
     </div>
     <script>
         const EXPERIMENT_NAME = '{_esc(experiment_name or "")}';
+        const MK_PAGES = {mk_pages};
+        const HSPC_PAGES = {hspc_pages};
+
+        function getGlobalKey(ct) {{
+            return EXPERIMENT_NAME ? ct + '_' + EXPERIMENT_NAME + '_annotations' : ct + '_annotations';
+        }}
+        function getPageKey(ct, page) {{
+            return EXPERIMENT_NAME ? ct + '_' + EXPERIMENT_NAME + '_labels_page' + page : ct + '_labels_page' + page;
+        }}
+
+        function clearCellType(ct, totalPages) {{
+            localStorage.removeItem(getGlobalKey(ct));
+            for (let i = 1; i <= totalPages; i++) {{
+                localStorage.removeItem(getPageKey(ct, i));
+            }}
+        }}
+        function clearAllMK() {{
+            if (!confirm('Clear ALL MK annotations across all ' + MK_PAGES + ' pages?')) return;
+            clearCellType('mk', MK_PAGES);
+            alert('All MK annotations cleared.');
+        }}
+        function clearAllHSPC() {{
+            if (!confirm('Clear ALL HSPC annotations across all ' + HSPC_PAGES + ' pages?')) return;
+            clearCellType('hspc', HSPC_PAGES);
+            alert('All HSPC annotations cleared.');
+        }}
+        function clearEverything() {{
+            if (!confirm('Clear ALL MK and HSPC annotations? This cannot be undone.')) return;
+            clearCellType('mk', MK_PAGES);
+            clearCellType('hspc', HSPC_PAGES);
+            alert('All annotations cleared.');
+        }}
+
         function exportAnnotations() {{
             const allLabels = {{}};
-            // Read from global keys (preferred), falling back to page keys
             ['mk', 'hspc'].forEach(ct => {{
-                const result = {{ positive: [], negative: [] }};
-                const globalKey = EXPERIMENT_NAME ? ct + '_' + EXPERIMENT_NAME + '_annotations' : ct + '_annotations';
-                const globalStored = localStorage.getItem(globalKey);
+                const result = {{ positive: [], negative: [], unsure: [] }};
+                const globalStored = localStorage.getItem(getGlobalKey(ct));
                 if (globalStored) {{
                     try {{
                         const labels = JSON.parse(globalStored);
                         for (const [uid, label] of Object.entries(labels)) {{
                             if (label === 1) result.positive.push(uid);
                             else if (label === 0) result.negative.push(uid);
+                            else if (label === 2) result.unsure.push(uid);
                         }}
                     }} catch(e) {{ console.error(e); }}
                 }} else {{
-                    const pagePrefix = EXPERIMENT_NAME ? ct + '_' + EXPERIMENT_NAME + '_labels_page' : ct + '_labels_page';
-                    for (let i = 0; i < localStorage.length; i++) {{
-                        const key = localStorage.key(i);
-                        if (key && key.startsWith(pagePrefix)) {{
-                            try {{
-                                const labels = JSON.parse(localStorage.getItem(key));
-                                for (const [uid, label] of Object.entries(labels)) {{
-                                    if (label === 1) result.positive.push(uid);
-                                    else if (label === 0) result.negative.push(uid);
-                                }}
-                            }} catch(e) {{ console.error(e); }}
-                        }}
+                    const totalPages = ct === 'mk' ? MK_PAGES : HSPC_PAGES;
+                    for (let i = 1; i <= totalPages; i++) {{
+                        try {{
+                            const labels = JSON.parse(localStorage.getItem(getPageKey(ct, i)));
+                            if (!labels) continue;
+                            for (const [uid, label] of Object.entries(labels)) {{
+                                if (label === 1) result.positive.push(uid);
+                                else if (label === 0) result.negative.push(uid);
+                                else if (label === 2) result.unsure.push(uid);
+                            }}
+                        }} catch(e) {{ console.error(e); }}
                     }}
                 }}
                 allLabels[ct] = result;
@@ -1586,6 +1620,9 @@ def generate_mk_hspc_page_html(samples, cell_type, page_num, total_pages, slides
                 <div class="stat global positive">Yes: <span id="global-positive">0</span></div>
                 <div class="stat global negative">No: <span id="global-negative">0</span></div>
             </div>
+            <button class="btn" onclick="exportAnnotations()">Export</button>
+            <button class="btn" onclick="clearPage()">Clear Page</button>
+            <button class="btn" onclick="clearAll()">Clear All</button>
         </div>
     </div>
     {nav_html}
@@ -1656,6 +1693,49 @@ def generate_mk_hspc_page_html(samples, cell_type, page_num, total_pages, slides
                 else if (label === 0) card.classList.add('labeled-no');
             }}
             saveAnnotations();
+            updateStats();
+        }}
+
+        function exportAnnotations() {{
+            let globalLabels = {{}};
+            try {{ globalLabels = JSON.parse(localStorage.getItem(GLOBAL_STORAGE_KEY)) || {{}}; }} catch(e) {{}}
+            const result = {{ positive: [], negative: [], unsure: [] }};
+            for (const [uid, label] of Object.entries(globalLabels)) {{
+                if (label === 1) result.positive.push(uid);
+                else if (label === 0) result.negative.push(uid);
+                else if (label === 2) result.unsure.push(uid);
+            }}
+            const data = {{ cell_type: CELL_TYPE, experiment_name: EXPERIMENT_NAME, ...result }};
+            const blob = new Blob([JSON.stringify(data, null, 2)], {{type: 'application/json'}});
+            const url = URL.createObjectURL(blob);
+            const a = document.createElement('a');
+            a.href = url;
+            a.download = EXPERIMENT_NAME ? CELL_TYPE + '_annotations_' + EXPERIMENT_NAME + '.json' : CELL_TYPE + '_annotations.json';
+            a.click();
+            URL.revokeObjectURL(url);
+        }}
+
+        function clearPage() {{
+            if (!confirm('Clear all annotations on this page?')) return;
+            document.querySelectorAll('.card').forEach(card => {{
+                card.dataset.label = -1;
+                card.classList.remove('labeled-yes', 'labeled-no', 'labeled-unsure');
+            }});
+            saveAnnotations();
+            updateStats();
+        }}
+
+        function clearAll() {{
+            if (!confirm('Clear ALL ' + CELL_TYPE.toUpperCase() + ' annotations across ALL pages?')) return;
+            localStorage.removeItem(GLOBAL_STORAGE_KEY);
+            for (let i = 1; i <= TOTAL_PAGES; i++) {{
+                const pageKey = EXPERIMENT_NAME ? CELL_TYPE + '_' + EXPERIMENT_NAME + '_labels_page' + i : CELL_TYPE + '_labels_page' + i;
+                localStorage.removeItem(pageKey);
+            }}
+            document.querySelectorAll('.card').forEach(card => {{
+                card.dataset.label = -1;
+                card.classList.remove('labeled-yes', 'labeled-no', 'labeled-unsure');
+            }});
             updateStats();
         }}
 
