@@ -2723,6 +2723,11 @@ def run_multi_slide_segmentation(
                 # Copy RAM data to shared memory (fast memcpy, no CZI reading)
                 shm_manager.add_slide(slide_name, channel_data)
 
+                # Free the CZI loader's RAM copy — workers read from SHM now
+                loader.channel_data = None
+                del channel_data
+                gc.collect()
+
                 log_memory_status(f"After copying slide {i+1}")
             except Exception as e:
                 logger.error(f"Failed to copy {slide_name} to shared memory: {e}")
