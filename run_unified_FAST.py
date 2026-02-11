@@ -3471,8 +3471,11 @@ def main():
         logger.info("HSPC nuclear-only mode ENABLED (H&E deconvolution for hematoxylin channel)")
 
     # Process slides
-    if len(czi_paths) == 1:
-        # Single slide - use output_dir directly
+    # Always use multi-slide path when --multi-gpu is set (even with 1 slide after rejection),
+    # because the single-slide path writes to flat output_dir/mk/ instead of output_dir/{slide}/mk/
+    # and doesn't support shared-memory GPU processing.
+    if len(czi_paths) == 1 and not args.multi_gpu:
+        # Single slide without multi-GPU - use output_dir directly
         run_unified_segmentation(
             czi_paths[0], args.output_dir,
             mk_min_area_px, mk_max_area_px, hspc_min_area_px, hspc_max_area_px,
@@ -3486,7 +3489,7 @@ def main():
             norm_params_file=args.norm_params_file if hasattr(args, 'norm_params_file') else None
         )
     else:
-        # Multiple slides - load models once, process all slides
+        # Multiple slides, or single slide with --multi-gpu
         run_multi_slide_segmentation(
             czi_paths, args.output_dir,
             mk_min_area_px, mk_max_area_px, hspc_min_area_px, hspc_max_area_px,
