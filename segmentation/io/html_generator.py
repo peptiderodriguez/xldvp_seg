@@ -1498,7 +1498,9 @@ def generate_mk_hspc_page_html(samples, cell_type, page_num, total_pages, slides
         # Always use spatial UID format for consistency across all cell types
         # Format: {slide}_{celltype}_{round(x)}_{round(y)}
         uid = _esc(f"{slide}_{cell_type}_{int(round(global_x))}_{int(round(global_y))}")
-        display_id = _esc(f"{cell_type}_{int(round(global_x))}_{int(round(global_y))}")
+        # Extract short slide name (e.g., "FGC1" from "2025_11_18_FGC1")
+        short_slide = slide.split('_')[-1] if '_' in slide else slide
+        display_id = _esc(f"{short_slide}_{cell_type}_{int(round(global_x))}_{int(round(global_y))}")
         # Keep legacy global_id in data attribute for backwards compatibility
         legacy_global_id = sample.get('global_id')
         area_um2 = sample.get('area_um2', 0)
