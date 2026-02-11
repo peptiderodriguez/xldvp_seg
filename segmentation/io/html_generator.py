@@ -454,10 +454,14 @@ class HTMLPageGenerator:
         // Save to BOTH page-specific and global localStorage keys
         function saveLabels() {{
             localStorage.setItem(PAGE_STORAGE_KEY, JSON.stringify(labels));
-            // Merge into global store instead of overwriting
+            // Merge into global store: add/update labeled, remove unlabeled
             let globalLabels = {{}};
             try {{ globalLabels = JSON.parse(localStorage.getItem(GLOBAL_STORAGE_KEY)) || {{}}; }} catch(e) {{}}
             Object.assign(globalLabels, labels);
+            // Delete UIDs from global that were un-labeled on this page
+            cards.forEach(card => {{
+                if (!(card.id in labels)) delete globalLabels[card.id];
+            }});
             localStorage.setItem(GLOBAL_STORAGE_KEY, JSON.stringify(globalLabels));
         }}
 
@@ -1660,10 +1664,14 @@ def generate_mk_hspc_page_html(samples, cell_type, page_num, total_pages, slides
                 if (label !== -1) labels[card.id] = label;
             }});
             localStorage.setItem(PAGE_STORAGE_KEY, JSON.stringify(labels));
-            // Merge into global store instead of overwriting
+            // Merge into global store: add/update labeled, remove unlabeled
             let globalLabels = {{}};
             try {{ globalLabels = JSON.parse(localStorage.getItem(GLOBAL_STORAGE_KEY)) || {{}}; }} catch(e) {{}}
             Object.assign(globalLabels, labels);
+            // Delete UIDs from global that were un-labeled on this page
+            document.querySelectorAll('.card').forEach(card => {{
+                if (!(card.id in labels)) delete globalLabels[card.id];
+            }});
             localStorage.setItem(GLOBAL_STORAGE_KEY, JSON.stringify(globalLabels));
         }}
 

@@ -184,6 +184,7 @@ def _gpu_worker_shm(
     segmenter_kwargs: Dict[str, Any],
     mk_min_area: int,
     mk_max_area: int,
+    hspc_min_area: Optional[int],
     hspc_max_area: Optional[int],
     variance_threshold: float,
     calibration_block_size: int,
@@ -206,6 +207,7 @@ def _gpu_worker_shm(
         segmenter_kwargs: kwargs for UnifiedSegmenter
         mk_min_area: Minimum MK area in pixels
         mk_max_area: Maximum MK area in pixels
+        hspc_min_area: Minimum HSPC area in pixels (None = no filter)
         hspc_max_area: Maximum HSPC area in pixels (None = no filter)
         variance_threshold: Threshold for tissue detection
         calibration_block_size: Block size for variance calculation
@@ -383,10 +385,11 @@ def _gpu_worker_shm(
                 # process_tile returns 4-tuple: (mk_masks, hspc_masks, mk_features, hspc_features)
                 mk_masks, hspc_masks, mk_feats, hspc_feats = segmenter.process_tile(
                     tile_normalized,
-                    mk_min_area,
-                    mk_max_area,
-                    hspc_max_area,
-                    hspc_nuclear_only=cleanup_config.get('hspc_nuclear_only', False)
+                    mk_min_area=mk_min_area,
+                    mk_max_area=mk_max_area,
+                    hspc_min_area=hspc_min_area,
+                    hspc_max_area=hspc_max_area,
+                    hspc_nuclear_only=cleanup_config.get('hspc_nuclear_only', False),
                 )
 
                 # Generate crops for each detection (with optional cleanup, same as non-SHM modes)
@@ -486,6 +489,7 @@ class MultiGPUTileProcessorSHM:
         hspc_classifier_path: Optional[Path] = None,
         mk_min_area: int = 500,
         mk_max_area: int = 50000,
+        hspc_min_area: Optional[int] = None,
         hspc_max_area: Optional[int] = None,
         variance_threshold: float = 100.0,
         calibration_block_size: int = 512,
@@ -500,6 +504,7 @@ class MultiGPUTileProcessorSHM:
         self.slide_info = slide_info
         self.mk_min_area = mk_min_area
         self.mk_max_area = mk_max_area
+        self.hspc_min_area = hspc_min_area
         self.hspc_max_area = hspc_max_area
         self.variance_threshold = variance_threshold
         self.calibration_block_size = calibration_block_size
@@ -542,6 +547,7 @@ class MultiGPUTileProcessorSHM:
                     self.segmenter_kwargs,
                     self.mk_min_area,
                     self.mk_max_area,
+                    self.hspc_min_area,
                     self.hspc_max_area,
                     self.variance_threshold,
                     self.calibration_block_size,

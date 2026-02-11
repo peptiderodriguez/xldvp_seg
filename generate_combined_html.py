@@ -17,15 +17,21 @@ Usage:
 """
 
 import argparse
+import base64
 import json
 import logging
 import sys
 import time
+from io import BytesIO
 from pathlib import Path
+
+import numpy as np
+from PIL import Image
 
 # Add project root to path
 sys.path.insert(0, str(Path(__file__).parent))
 
+from segmentation.io.html_export import draw_mask_contour
 from segmentation.io.html_generator import (
     generate_mk_hspc_pages,
     create_mk_hspc_index,
@@ -40,9 +46,31 @@ logger = logging.getLogger('generate_combined_html')
 PIXEL_SIZE_UM = 0.1725  # Default pixel size for area conversions
 
 
+def _draw_contour_on_crop(crop_b64, mask_b64):
+    """Decode crop + mask, draw green contour, re-encode to base64 JPEG."""
+    # Decode crop
+    crop_bytes = base64.b64decode(crop_b64)
+    crop_img = np.array(Image.open(BytesIO(crop_bytes)).convert('RGB'))
+
+    # Decode mask
+    mask_bytes = base64.b64decode(mask_b64)
+    mask_img = np.array(Image.open(BytesIO(mask_bytes)).convert('L'))
+    mask_bool = mask_img > 127
+
+    # Draw contour
+    crop_with_contour = draw_mask_contour(crop_img, mask_bool, color=(0, 255, 0), thickness=2)
+
+    # Re-encode to base64 JPEG
+    pil_out = Image.fromarray(crop_with_contour)
+    buf = BytesIO()
+    pil_out.save(buf, format='JPEG', quality=85)
+    return base64.b64encode(buf.getvalue()).decode('utf-8')
+
+
 def load_samples_from_disk(output_dir, cell_type):
     """
-    Read crop_b64 + metadata from features.json across all slides.
+    Read crop_b64 + mask_b64 from features.json across all slides,
+    draw mask contours on crops, and return samples for HTML generation.
 
     Args:
         output_dir: Path to segmentation output directory (contains slide subdirs)
@@ -81,13 +109,21 @@ def load_samples_from_disk(output_dir, cell_type):
                 area_px = feat.get('area', feat['features'].get('area', 0))
                 area_um2 = feat.get('area_um2', area_px * PIXEL_SIZE_UM ** 2)
 
+                # Draw mask contour on the crop (crop_b64 is raw, mask_b64 has the mask)
+                img_b64 = feat['crop_b64']
+                if 'mask_b64' in feat:
+                    try:
+                        img_b64 = _draw_contour_on_crop(feat['crop_b64'], feat['mask_b64'])
+                    except Exception as e:
+                        logger.debug(f"Failed to draw contour for {feat['id']}: {e}")
+
                 samples.append({
                     'tile_id': tile_dir.name,
                     'det_id': feat['id'],
                     'global_id': feat.get('global_id'),
                     'area_px': area_px,
                     'area_um2': area_um2,
-                    'image': feat['crop_b64'],
+                    'image': img_b64,
                     'features': feat['features'],
                     'solidity': feat['features'].get('solidity', 0),
                     'circularity': feat['features'].get('circularity', 0),
