@@ -641,13 +641,17 @@ class UnifiedSegmenter:
         self.hspc_classifier = None
         self.hspc_feature_names = None
 
+        self.mk_threshold = 0.5
+        self.hspc_threshold = 0.5
+
         if mk_classifier_path:
             logger.info(f"Loading MK classifier: {mk_classifier_path}")
             import joblib
             clf_data = joblib.load(mk_classifier_path)
             self.mk_classifier = clf_data['classifier']
             self.mk_feature_names = clf_data['feature_names']
-            logger.info(f"  Features: {len(self.mk_feature_names)}, Trained on {clf_data.get('n_samples', '?')} samples")
+            self.mk_threshold = clf_data.get('threshold', 0.5)
+            logger.info(f"  Features: {len(self.mk_feature_names)}, Trained on {clf_data.get('n_samples', '?')} samples, threshold={self.mk_threshold}")
 
         if hspc_classifier_path:
             logger.info(f"Loading HSPC classifier: {hspc_classifier_path}")
@@ -655,7 +659,8 @@ class UnifiedSegmenter:
             clf_data = joblib.load(hspc_classifier_path)
             self.hspc_classifier = clf_data['classifier']
             self.hspc_feature_names = clf_data['feature_names']
-            logger.info(f"  Features: {len(self.hspc_feature_names)}, Trained on {clf_data.get('n_samples', '?')} samples")
+            self.hspc_threshold = clf_data.get('threshold', 0.5)
+            logger.info(f"  Features: {len(self.hspc_feature_names)}, Trained on {clf_data.get('n_samples', '?')} samples, threshold={self.hspc_threshold}")
 
         logger.info("Models loaded.")
 
@@ -672,9 +677,11 @@ class UnifiedSegmenter:
         if cell_type == 'mk':
             clf = self.mk_classifier
             feature_names = self.mk_feature_names
+            threshold = self.mk_threshold
         else:
             clf = self.hspc_classifier
             feature_names = self.hspc_feature_names
+            threshold = self.hspc_threshold
 
         if clf is None:
             return True, 1.0  # No classifier = accept all
@@ -682,12 +689,12 @@ class UnifiedSegmenter:
         # Build feature vector in correct order
         X = np.array([[features_dict.get(name, 0.0) for name in feature_names]])
 
-        # Predict
-        pred = clf.predict(X)[0]
+        # Predict using probability threshold
         proba = clf.predict_proba(X)[0]
-        confidence = proba[1] if pred == 1 else proba[0]
+        positive_prob = float(proba[1])
+        is_positive = positive_prob >= threshold
 
-        return bool(pred == 1), float(confidence)
+        return is_positive, positive_prob
 
     def extract_resnet_features(self, crop):
         """Extract 2048D ResNet features from crop."""

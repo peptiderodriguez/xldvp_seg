@@ -25,10 +25,11 @@ import argparse
 
 def load_cell_samples(base_dir, cell_type, size_filter=None):
     """
-    Load all cells into a dictionary keyed by robust Unique ID (UID).
-    
+    Load all cells into a dictionary keyed by spatial UID from features.json.
+
     Returns: dict {uid: sample_dict}
-    UID format: {slide}_{tile_id}_{det_id} (slide name has . replaced by -)
+    UID format: {slide}_{celltype}_{round(global_x)}_{round(global_y)}
+    Falls back to legacy {slide}_{tile_id}_{det_id} if 'uid' field missing.
     """
     base_dir = Path(base_dir)
     pixel_size_um = 0.1725
@@ -40,9 +41,8 @@ def load_cell_samples(base_dir, cell_type, size_filter=None):
 
     for slide_dir in slides:
         slide_name = slide_dir.name
-        # Sanitize slide name to match HTML export logic (replace . with -)
         safe_slide_name = slide_name.replace('.', '-')
-        
+
         cell_type_dir = slide_dir / cell_type / "tiles"
 
         if not cell_type_dir.exists():
@@ -50,7 +50,7 @@ def load_cell_samples(base_dir, cell_type, size_filter=None):
 
         # Get all tile directories
         tile_dirs = sorted([d for d in cell_type_dir.iterdir() if d.is_dir()],
-                          key=lambda x: int(x.name))
+                          key=lambda x: x.name)
 
         for tile_dir in tile_dirs:
             tile_id = tile_dir.name
@@ -69,17 +69,17 @@ def load_cell_samples(base_dir, cell_type, size_filter=None):
                 features = feat_dict['features']
                 area_px = features.get('area', 0)
                 area_um2 = area_px * (pixel_size_um ** 2)
-                
+
                 # Check size filter
                 if size_filter:
                     min_px, max_px = size_filter
                     if not (min_px <= area_px <= max_px):
                         continue
 
-                # Construct Unique ID
-                uid = f"{safe_slide_name}_{tile_id}_{det_id}"
+                # Use spatial UID from features.json if present, else legacy format
+                uid = feat_dict.get('uid', f"{safe_slide_name}_{tile_id}_{det_id}")
 
-                inventory[uid] = {
+                sample = {
                     'slide': slide_name,
                     'tile_id': tile_id,
                     'det_id': det_id,
@@ -88,6 +88,15 @@ def load_cell_samples(base_dir, cell_type, size_filter=None):
                     'area_um2': area_um2,
                     'uid': uid
                 }
+                inventory[uid] = sample
+
+                # Also index by truncated-coordinate UID (int() instead of round())
+                # to match annotations from earlier HTML versions
+                center = feat_dict.get('center')
+                if center:
+                    trunc_uid = f"{slide_name}_{cell_type}_{int(center[0])}_{int(center[1])}"
+                    if trunc_uid != uid and trunc_uid not in inventory:
+                        inventory[trunc_uid] = sample
                 
     return inventory
 
@@ -104,19 +113,24 @@ def convert_annotations(annotations_path, base_dir, output_path, mk_min_area_um=
     with open(annotations_path, 'r') as f:
         all_annotations = json.load(f)
 
-    # Combine all pages into one flat dictionary of UID -> label
-    # The JSON structure from local storage export is usually:
-    # { "mk_labels_page1": {"uid1": 1, "uid2": 0}, "mk_labels_page2": ... }
-    # OR if it's the consolidated format: {"mk": {"positive": [], "negative": []}} 
-    # Wait, the user manual implies we get a consolidated JSON.
-    # Let's handle the consolidated format but expect UIDs in the list if they are strings, 
-    # or handle the raw localStorage dump.
-    
-    # Assuming input is the consolidated JSON from `download_annotations.html` helper 
-    # which typically formats as: {"mk": {"positive": [list_of_ids], "negative": [...]}}
-    
-    mk_ann = all_annotations.get('mk', {'positive': [], 'negative': []})
-    hspc_ann = all_annotations.get('hspc', {'positive': [], 'negative': []})
+    # Handle multiple annotation JSON formats:
+    # (A) Combined index export: {"mk": {"positive": [...], "negative": [...]}, "hspc": {...}}
+    # (B) Per-celltype page export: {"cell_type": "mk", "positive": [...], "negative": [...]}
+
+    if 'cell_type' in all_annotations:
+        # Format (B): single cell type export from page-level Export button
+        ct = all_annotations['cell_type']
+        ann = {'positive': all_annotations.get('positive', []),
+               'negative': all_annotations.get('negative', []),
+               'unsure': all_annotations.get('unsure', [])}
+        mk_ann = ann if ct == 'mk' else {'positive': [], 'negative': []}
+        hspc_ann = ann if ct == 'hspc' else {'positive': [], 'negative': []}
+        print(f"  Format: per-celltype ({ct})")
+    else:
+        # Format (A): combined export from index page
+        mk_ann = all_annotations.get('mk', {'positive': [], 'negative': []})
+        hspc_ann = all_annotations.get('hspc', {'positive': [], 'negative': []})
+        print(f"  Format: combined (mk + hspc)")
     
     # Convert µm² to px² if provided
     mk_size_filter = None

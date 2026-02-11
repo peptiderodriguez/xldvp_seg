@@ -190,8 +190,8 @@ def load_samples_from_disk(output_dir, cell_type):
                     'features': feat['features'],
                     'solidity': feat['features'].get('solidity', 0),
                     'circularity': feat['features'].get('circularity', 0),
-                    'global_x': int(feat['center'][0]),
-                    'global_y': int(feat['center'][1]),
+                    'global_x': round(feat['center'][0]),
+                    'global_y': round(feat['center'][1]),
                     'slide': slide_dir.name,
                 })
                 slide_samples += 1
