@@ -778,7 +778,8 @@ class UnifiedSegmenter:
         hspc_nuclear_only=False,
         cleanup_masks=False,
         fill_holes=True,
-        pixel_size_um=0.1725
+        pixel_size_um=0.1725,
+        skip_hspc=False,
     ):
         """Process a single tile for both MKs and HSPCs.
 
@@ -796,6 +797,7 @@ class UnifiedSegmenter:
             cleanup_masks: If True, apply mask cleanup (largest component + fill holes) BEFORE feature extraction
             fill_holes: If True, fill internal holes during cleanup
             pixel_size_um: Pixel size for area calculations
+            skip_hspc: If True, skip HSPC detection entirely (MK only mode)
 
         Returns:
             mk_masks: Label array for MKs
@@ -933,7 +935,20 @@ class UnifiedSegmenter:
                     'features': det['morph']
                 })
 
+        # Score MKs with classifier (if available) — score only, no filtering
+        if self.mk_classifier is not None:
+            for feat in mk_features:
+                _, score = self.apply_classifier(feat['features'], 'mk')
+                feat['mk_score'] = score
+
         torch.cuda.empty_cache()  # Clear GPU cache after MK processing
+
+        # Skip HSPC detection if requested (MK-only mode)
+        if skip_hspc:
+            hspc_masks = np.zeros(image_rgb.shape[:2], dtype=np.uint32)
+            hspc_features = []
+            self.sam2_predictor.reset_predictor()
+            return mk_masks, hspc_masks, mk_features, hspc_features
 
         # ============================================
         # HSPC Detection: Cellpose-SAM + SAM2 refinement
@@ -1938,6 +1953,7 @@ def _phase4_process_tiles(
     intensity_threshold=220,
     per_slide_thresholds=None,
     experiment_name=None,
+    skip_hspc=False,
 ):
     """
     Phase 4: Process sampled tiles using ML models (SAM2, Cellpose, ResNet).
@@ -2201,6 +2217,7 @@ def _phase4_process_tiles(
                 intensity_threshold=intensity_threshold,
                 modality='brightfield',
                 per_slide_thresholds=per_slide_thresholds,
+                skip_hspc=skip_hspc,
             ) as processor:
                 # Submit all tiles (only coordinates, not data!)
                 logger.info(f"Submitting {len(sampled_tiles)} tiles to {num_gpus} GPUs (shared memory)...")
@@ -2270,6 +2287,7 @@ def _phase4_process_tiles(
                 intensity_threshold=intensity_threshold,
                 modality='brightfield',
                 per_slide_thresholds=per_slide_thresholds,
+                skip_hspc=skip_hspc,
             ) as processor:
                 # Submit all tiles (only coordinates, not data!)
                 logger.info(f"Submitting {len(sampled_tiles)} tiles to {actual_gpus} GPUs (shared memory)...")
@@ -2401,6 +2419,7 @@ def run_multi_slide_segmentation(
     norm_percentile_low=1.0,
     norm_percentile_high=99.0,
     experiment_name=None,
+    skip_hspc=False,
 ):
     """
     Process multiple slides with UNIFIED SAMPLING using RAM-first architecture.
@@ -2778,6 +2797,7 @@ def run_multi_slide_segmentation(
                 intensity_threshold=intensity_threshold,
                 modality='brightfield',
                 per_slide_thresholds=precomputed_thresholds,
+                skip_hspc=skip_hspc,
                 # Don't pass norm params — normalization already applied at slide level
             ) as processor:
                 logger.info(f"Submitting {len(sampled_tiles)} tiles to {num_gpus} GPUs...")
@@ -2931,6 +2951,7 @@ def run_multi_slide_segmentation(
             intensity_threshold=intensity_threshold,
             per_slide_thresholds=precomputed_thresholds,
             experiment_name=experiment_name,
+            skip_hspc=skip_hspc,
         )
 
         # Clear slide data and loaders from RAM
@@ -3380,6 +3401,8 @@ def main():
                         help='Number of tiles to sample for tissue calibration.')
     parser.add_argument('--mk-classifier', type=str, help='Path to trained MK classifier (.pkl)')
     parser.add_argument('--hspc-classifier', type=str, help='Path to trained HSPC classifier (.pkl)')
+    parser.add_argument('--skip-hspc', action='store_true',
+                        help='Skip HSPC detection entirely (MK only mode, saves time)')
     parser.add_argument('--num-workers', type=int, default=4, help='Number of parallel workers for tile processing.')
     parser.add_argument('--multi-gpu', action='store_true',
                         help='Enable multi-GPU mode: each GPU processes one tile at a time')
@@ -3526,6 +3549,7 @@ def main():
             norm_percentile_low=args.norm_percentile_low,
             norm_percentile_high=args.norm_percentile_high,
             experiment_name=args.experiment_name,
+            skip_hspc=args.skip_hspc,
         )
 
 

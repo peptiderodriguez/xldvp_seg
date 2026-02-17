@@ -193,6 +193,7 @@ def load_samples_from_disk(output_dir, cell_type):
                     'global_x': round(feat['center'][0]),
                     'global_y': round(feat['center'][1]),
                     'slide': slide_dir.name,
+                    'mk_score': feat.get('mk_score'),
                 })
                 slide_samples += 1
 
@@ -217,6 +218,9 @@ def main():
                         help='Minimum MK area in um^2 (default: 200)')
     parser.add_argument('--mk-max-area-um', type=float, default=2000,
                         help='Maximum MK area in um^2 (default: 2000)')
+    parser.add_argument('--mk-clf-threshold', type=float, default=None,
+                        help='MK classifier score threshold (e.g. 0.45). Only show MKs with score >= threshold. '
+                             'Requires mk_score in features.json from step 2.')
 
     args = parser.parse_args()
 
@@ -236,6 +240,8 @@ def main():
     logger.info(f"  Experiment name:  {args.experiment_name}")
     logger.info(f"  Samples/page:     {args.samples_per_page}")
     logger.info(f"  MK area range:    {args.mk_min_area_um}-{args.mk_max_area_um} um^2")
+    if args.mk_clf_threshold is not None:
+        logger.info(f"  MK clf threshold: {args.mk_clf_threshold}")
 
     t0 = time.time()
 
@@ -267,8 +273,17 @@ def main():
     # Deduplicate MKs (tile overlap can produce duplicates)
     all_mk_samples = deduplicate_samples(all_mk_samples, distance_threshold_px=50)
 
-    # Sort: MK by area descending, HSPC by area descending
-    all_mk_samples.sort(key=lambda x: x.get('area_um2', 0), reverse=True)
+    # Filter MKs by classifier score threshold (if specified)
+    if args.mk_clf_threshold is not None:
+        mk_before_clf = len(all_mk_samples)
+        all_mk_samples = [s for s in all_mk_samples if (s.get('mk_score') or 0) >= args.mk_clf_threshold]
+        logger.info(f"  MK clf filter (>= {args.mk_clf_threshold}): {mk_before_clf} -> {len(all_mk_samples)}")
+
+    # Sort: MK by classifier score descending (if available), else by area descending
+    if all_mk_samples and all_mk_samples[0].get('mk_score') is not None:
+        all_mk_samples.sort(key=lambda x: x.get('mk_score', 0), reverse=True)
+    else:
+        all_mk_samples.sort(key=lambda x: x.get('area_um2', 0), reverse=True)
     all_hspc_samples.sort(key=lambda x: x.get('area_um2', 0), reverse=True)
 
     # Build slides summary

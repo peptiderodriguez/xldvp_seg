@@ -1539,6 +1539,8 @@ def generate_mk_hspc_page_html(samples, cell_type, page_num, total_pages, slides
         legacy_global_id = sample.get('global_id')
         area_um2 = sample.get('area_um2', 0)
         area_px = sample.get('area_px', 0)
+        mk_score = sample.get('mk_score')
+        score_html = f'<div class="card-score">CLF: {mk_score:.2f}</div>' if mk_score is not None else ''
         img_b64 = sample['image']
         # Include legacy_global_id as data attribute for migration support
         legacy_attr = f' data-legacy-id="{_esc(legacy_global_id)}"' if legacy_global_id is not None else ''
@@ -1551,6 +1553,7 @@ def generate_mk_hspc_page_html(samples, cell_type, page_num, total_pages, slides
                 <div>
                     <div class="card-id">{display_id}</div>
                     <div class="card-area">{area_um2:.1f} um2 | {area_px:.0f} px2</div>
+                        {score_html}
                 </div>
                 <div class="buttons">
                     <button class="btn btn-yes" onclick="setLabel('{uid}', 1)">Y</button>
@@ -1594,6 +1597,7 @@ def generate_mk_hspc_page_html(samples, cell_type, page_num, total_pages, slides
         .card-info {{ padding: 8px; display: flex; justify-content: space-between; align-items: center; border-top: 1px solid #333; }}
         .card-id {{ font-size: 0.75em; color: #888; }}
         .card-area {{ font-size: 0.8em; }}
+        .card-score {{ font-size: 0.8em; color: #888; }}
         .buttons {{ display: flex; gap: 4px; }}
         .btn {{ padding: 6px 12px; border: 1px solid #333; background: #1a1a1a; color: #ddd; cursor: pointer; font-family: monospace; }}
         .btn:hover {{ background: #222; }}

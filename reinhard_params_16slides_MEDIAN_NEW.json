@@ -1,12 +1,12 @@
 {
-  "L_median": 37.64706039428711,
-  "L_mad": 8.627452850341797,
+  "L_median": 38.039215087890625,
+  "L_mad": 9.019607543945312,
   "a_median": 9.0,
-  "a_mad": 4.0,
+  "a_mad": 3.0,
   "b_median": -1.0,
   "b_mad": 4.0,
-  "n_slides": 16,
-  "n_total_pixels": 16000000,
+  "n_slides": 13,
+  "n_total_pixels": 13000000,
   "method": "reinhard_median",
   "slides": [
     "2025_11_18_FGC1.czi",
@@ -27,7 +27,157 @@
     "2025_11_18_MHU4.czi"
   ],
   "samples_per_slide": 1000000,
-  "sampling_method": "tissue_aware_pixel_masked_otsu",
-  "tile_size": 3000,
-  "block_size": 512
+  "sampling_method": "otsu_rejection_sampling",
+  "tissue_thresholds": {
+    "2025_11_18_FGC1": {
+      "L_median": 34.117645263671875,
+      "L_mad": 10.980390548706055,
+      "a_median": 10.0,
+      "a_mad": 3.0,
+      "b_median": -3.0,
+      "b_mad": 4.0,
+      "otsu_threshold": 125.0
+    },
+    "2025_11_18_FGC2": {
+      "L_median": 52.54901885986328,
+      "L_mad": 5.490196228027344,
+      "a_median": 5.0,
+      "a_mad": 2.0,
+      "b_median": -3.0,
+      "b_mad": 2.0,
+      "otsu_threshold": 145.0
+    },
+    "2025_11_18_FGC3": {
+      "L_median": 37.64706039428711,
+      "L_mad": 9.019609451293945,
+      "a_median": 8.0,
+      "a_mad": 3.0,
+      "b_median": -1.0,
+      "b_mad": 3.0,
+      "otsu_threshold": 129.0
+    },
+    "2025_11_18_FGC4": {
+      "L_median": 41.17647171020508,
+      "L_mad": 9.411762237548828,
+      "a_median": 11.0,
+      "a_mad": 3.0,
+      "b_median": -6.0,
+      "b_mad": 5.0,
+      "otsu_threshold": 132.0
+    },
+    "2025_11_18_FHU1": {
+      "L_median": 45.09803771972656,
+      "L_mad": 7.843135833740234,
+      "a_median": 10.0,
+      "a_mad": 4.0,
+      "b_median": -5.0,
+      "b_mad": 5.0,
+      "otsu_threshold": 135.0
+    },
+    "2025_11_18_FHU2": {
+      "L_median": 34.117645263671875,
+      "L_mad": 8.235292434692383,
+      "a_median": 10.0,
+      "a_mad": 3.0,
+      "b_median": 0.0,
+      "b_mad": 4.0,
+      "otsu_threshold": 124.0
+    },
+    "2025_11_18_FHU3": {
+      "L_median": 32.156864166259766,
+      "L_mad": 9.803922653198242,
+      "a_median": 12.0,
+      "a_mad": 3.0,
+      "b_median": -3.0,
+      "b_mad": 4.0,
+      "otsu_threshold": 122.0
+    },
+    "2025_11_18_FHU4": {
+      "L_median": 35.686275482177734,
+      "L_mad": 9.019607543945312,
+      "a_median": 9.0,
+      "a_mad": 3.0,
+      "b_median": -2.0,
+      "b_mad": 4.0,
+      "otsu_threshold": 126.0
+    },
+    "2025_11_18_MGC1": {
+      "L_median": 32.156864166259766,
+      "L_mad": 10.588233947753906,
+      "a_median": 10.0,
+      "a_mad": 3.0,
+      "b_median": -2.0,
+      "b_mad": 4.0,
+      "otsu_threshold": 123.0
+    },
+    "2025_11_18_MGC2": {
+      "L_median": 39.2156867980957,
+      "L_mad": 7.450981140136719,
+      "a_median": 7.0,
+      "a_mad": 3.0,
+      "b_median": 0.0,
+      "b_mad": 3.0,
+      "otsu_threshold": 129.0
+    },
+    "2025_11_18_MGC3": {
+      "L_median": 34.117645263671875,
+      "L_mad": 9.019611358642578,
+      "a_median": 10.0,
+      "a_mad": 3.0,
+      "b_median": -1.0,
+      "b_mad": 4.0,
+      "otsu_threshold": 125.0
+    },
+    "2025_11_18_MGC4": {
+      "L_median": 40.0,
+      "L_mad": 9.411764144897461,
+      "a_median": 10.0,
+      "a_mad": 3.0,
+      "b_median": -5.0,
+      "b_mad": 5.0,
+      "otsu_threshold": 130.0
+    },
+    "2025_11_18_MHU1": {
+      "L_median": 40.39215850830078,
+      "L_mad": 8.627452850341797,
+      "a_median": 8.0,
+      "a_mad": 3.0,
+      "b_median": -2.0,
+      "b_mad": 4.0,
+      "otsu_threshold": 130.0
+    },
+    "2025_11_18_MHU2": {
+      "L_median": 45.882354736328125,
+      "L_mad": 6.274509429931641,
+      "a_median": 5.0,
+      "a_mad": 2.0,
+      "b_median": 1.0,
+      "b_mad": 3.0,
+      "otsu_threshold": 138.0
+    },
+    "2025_11_18_MHU3": {
+      "L_median": 41.17647171020508,
+      "L_mad": 6.274509429931641,
+      "a_median": 8.0,
+      "a_mad": 3.0,
+      "b_median": 1.0,
+      "b_mad": 3.0,
+      "otsu_threshold": 133.0
+    },
+    "2025_11_18_MHU4": {
+      "L_median": 43.92156982421875,
+      "L_mad": 7.058826446533203,
+      "a_median": 13.0,
+      "a_mad": 4.0,
+      "b_median": 14.0,
+      "b_mad": 3.0,
+      "otsu_threshold": 141.0
+    }
+  },
+  "rejected_slides": [
+    "2025_11_18_FGC2",
+    "2025_11_18_FGC4",
+    "2025_11_18_MHU4"
+  ],
+  "rejection_criterion": "any of L/a/b median outside 1*MAD of global"
 }

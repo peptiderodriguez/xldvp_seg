@@ -194,6 +194,7 @@ def _gpu_worker_shm(
     intensity_threshold: float = 220.0,
     modality: Optional[str] = None,
     per_slide_thresholds: Optional[Dict[str, Dict[str, float]]] = None,
+    skip_hspc: bool = False,
 ):
     """
     Worker process that reads tiles from shared memory.
@@ -216,6 +217,7 @@ def _gpu_worker_shm(
         modality: 'brightfield' for H&E, None for fluorescence (OR logic)
         per_slide_thresholds: Dict mapping slide_name -> {variance_threshold, intensity_threshold}
             from step 1. If present, overrides scalar thresholds for per-slide tissue detection.
+        skip_hspc: If True, skip HSPC detection entirely (MK only mode)
     """
     # Default cleanup config if not provided
     if cleanup_config is None:
@@ -390,6 +392,7 @@ def _gpu_worker_shm(
                     hspc_min_area=hspc_min_area,
                     hspc_max_area=hspc_max_area,
                     hspc_nuclear_only=cleanup_config.get('hspc_nuclear_only', False),
+                    skip_hspc=skip_hspc,
                 )
 
                 # Generate crops for each detection (with optional cleanup, same as non-SHM modes)
@@ -499,6 +502,7 @@ class MultiGPUTileProcessorSHM:
         intensity_threshold: float = 220.0,
         modality: Optional[str] = None,
         per_slide_thresholds: Optional[Dict[str, Dict[str, float]]] = None,
+        skip_hspc: bool = False,
     ):
         self.num_gpus = num_gpus
         self.slide_info = slide_info
@@ -514,6 +518,7 @@ class MultiGPUTileProcessorSHM:
         self.intensity_threshold = intensity_threshold
         self.modality = modality
         self.per_slide_thresholds = per_slide_thresholds
+        self.skip_hspc = skip_hspc
 
         self.segmenter_kwargs = {
             'mk_classifier_path': str(mk_classifier_path) if mk_classifier_path else None,
@@ -557,6 +562,7 @@ class MultiGPUTileProcessorSHM:
                     self.intensity_threshold,
                     self.modality,
                     self.per_slide_thresholds,
+                    self.skip_hspc,
                 ),
                 daemon=True
             )
