@@ -387,6 +387,11 @@ class HTMLPageGenerator:
             color: {c['export']};
         }}
 
+        .btn-import {{
+            border-color: #4a8;
+            color: #4a8;
+        }}
+
         .keyboard-hint {{
             text-align: center;
             padding: 15px;
@@ -620,6 +625,59 @@ class HTMLPageGenerator:
             }});
             saveLabels();
             updateStats();
+        }}
+
+        function parseImportData(data) {{
+            let imported = {{}};
+            if (data.positive || data.negative || data.unsure) {{
+                (data.positive || []).forEach(uid => imported[uid] = 1);
+                (data.negative || []).forEach(uid => imported[uid] = 0);
+                (data.unsure || []).forEach(uid => imported[uid] = 2);
+            }} else if (data[CELL_TYPE]) {{
+                const section = data[CELL_TYPE];
+                (section.positive || []).forEach(uid => imported[uid] = 1);
+                (section.negative || []).forEach(uid => imported[uid] = 0);
+                (section.unsure || []).forEach(uid => imported[uid] = 2);
+            }} else {{
+                for (const [k, v] of Object.entries(data)) {{
+                    if (v === 0 || v === 1 || v === 2) imported[k] = v;
+                }}
+            }}
+            return imported;
+        }}
+
+        function importAnnotations() {{
+            const input = document.createElement('input');
+            input.type = 'file';
+            input.accept = '.json';
+            input.onchange = function(e) {{
+                const file = e.target.files[0];
+                if (!file) return;
+                const reader = new FileReader();
+                reader.onload = function(ev) {{
+                    try {{
+                        const imported = parseImportData(JSON.parse(ev.target.result));
+                        if (Object.keys(imported).length === 0) {{
+                            alert('No annotations found in file.');
+                            return;
+                        }}
+                        let existing = {{}};
+                        try {{ existing = JSON.parse(localStorage.getItem(GLOBAL_STORAGE_KEY)) || {{}}; }} catch(ex) {{}}
+                        Object.assign(existing, imported);
+                        localStorage.setItem(GLOBAL_STORAGE_KEY, JSON.stringify(existing));
+                        // Clear page-specific keys so reload picks up from global
+                        for (let i = 1; i <= TOTAL_PAGES; i++) {{
+                            localStorage.removeItem(getPageKey(i));
+                        }}
+                        alert('Imported ' + Object.keys(imported).length + ' annotations. Reloading...');
+                        location.reload();
+                    }} catch(err) {{
+                        alert('Failed to parse JSON: ' + err.message);
+                    }}
+                }};
+                reader.readAsText(file);
+            }};
+            input.click();
         }}
 
         // Keyboard navigation
@@ -890,12 +948,14 @@ class HTMLPageGenerator:
 
     <div class="section">
         <button class="btn btn-export" onclick="exportAnnotations()">Export Annotations</button>
+        <button class="btn" style="border-color: #4a8; color: #4a8;" onclick="importAnnotations()">Import Annotations</button>
     </div>
 
     <script>
         const CELL_TYPE = '{_esc(self.cell_type)}';
         const EXPERIMENT_NAME = '{_esc(self.experiment_name or "")}';
         const STORAGE_STRATEGY = '{_esc(self.storage_strategy)}';
+        const TOTAL_PAGES = {total_pages};
 
         {storage_key_js}
 
@@ -929,6 +989,55 @@ class HTMLPageGenerator:
             a.download = filename;
             a.click();
             URL.revokeObjectURL(url);
+        }}
+
+        function importAnnotations() {{
+            const input = document.createElement('input');
+            input.type = 'file';
+            input.accept = '.json';
+            input.onchange = function(e) {{
+                const file = e.target.files[0];
+                if (!file) return;
+                const reader = new FileReader();
+                reader.onload = function(ev) {{
+                    try {{
+                        const data = JSON.parse(ev.target.result);
+                        let imported = {{}};
+                        if (data.positive || data.negative || data.unsure) {{
+                            (data.positive || []).forEach(uid => imported[uid] = 1);
+                            (data.negative || []).forEach(uid => imported[uid] = 0);
+                            (data.unsure || []).forEach(uid => imported[uid] = 2);
+                        }} else if (data[CELL_TYPE]) {{
+                            const section = data[CELL_TYPE];
+                            (section.positive || []).forEach(uid => imported[uid] = 1);
+                            (section.negative || []).forEach(uid => imported[uid] = 0);
+                            (section.unsure || []).forEach(uid => imported[uid] = 2);
+                        }} else {{
+                            for (const [k, v] of Object.entries(data)) {{
+                                if (v === 0 || v === 1 || v === 2) imported[k] = v;
+                            }}
+                        }}
+                        if (Object.keys(imported).length === 0) {{
+                            alert('No annotations found in file.');
+                            return;
+                        }}
+                        let existing = {{}};
+                        try {{ existing = JSON.parse(localStorage.getItem(STORAGE_KEY)) || {{}}; }} catch(ex) {{}}
+                        Object.assign(existing, imported);
+                        localStorage.setItem(STORAGE_KEY, JSON.stringify(existing));
+                        // Clear page-specific keys so annotation pages reload from global
+                        for (let i = 1; i <= TOTAL_PAGES; i++) {{
+                            localStorage.removeItem(CELL_TYPE + '_labels_page' + i);
+                        }}
+                        alert('Imported ' + Object.keys(imported).length + ' annotations. Reloading...');
+                        location.reload();
+                    }} catch(err) {{
+                        alert('Failed to parse JSON: ' + err.message);
+                    }}
+                }};
+                reader.readAsText(file);
+            }};
+            input.click();
         }}
     </script>
 </body>
@@ -1004,6 +1113,7 @@ class HTMLPageGenerator:
                 <div class="stat positive">Yes: <span id="globalYes">0</span></div>
                 <div class="stat negative">No: <span id="globalNo">0</span></div>
             </div>
+            <button class="btn btn-import" onclick="importAnnotations()">Import</button>
             <button class="btn btn-export" onclick="exportAnnotations()">Export</button>
             <button class="btn" onclick="clearPage()">Clear Page</button>
         </div>
@@ -1403,6 +1513,7 @@ def create_mk_hspc_index(output_dir, total_mks, total_hspcs, mk_pages, hspc_page
     <div class="section">
         <h2>Manage Annotations</h2>
         <div class="controls">
+            <button class="btn" onclick="importAnnotations()" style="border-color: #4a8; color: #4a8;">Import Annotations JSON</button>
             <button class="btn btn-export" onclick="exportAnnotations()">Download Annotations JSON</button>
             <button class="btn" onclick="clearAllMK()" style="border-color: #a44; color: #a44;">Clear All MK</button>
             <button class="btn" onclick="clearAllHSPC()" style="border-color: #a44; color: #a44;">Clear All HSPC</button>
@@ -1442,6 +1553,59 @@ def create_mk_hspc_index(output_dir, total_mks, total_hspcs, mk_pages, hspc_page
             clearCellType('mk', MK_PAGES);
             clearCellType('hspc', HSPC_PAGES);
             alert('All annotations cleared.');
+        }}
+
+        function importAnnotations() {{
+            const input = document.createElement('input');
+            input.type = 'file';
+            input.accept = '.json';
+            input.onchange = function(e) {{
+                const file = e.target.files[0];
+                if (!file) return;
+                const reader = new FileReader();
+                reader.onload = function(ev) {{
+                    try {{
+                        const data = JSON.parse(ev.target.result);
+                        let totalImported = 0;
+                        ['mk', 'hspc'].forEach(ct => {{
+                            let imported = {{}};
+                            const section = data[ct];
+                            if (section) {{
+                                (section.positive || []).forEach(uid => imported[uid] = 1);
+                                (section.negative || []).forEach(uid => imported[uid] = 0);
+                                (section.unsure || []).forEach(uid => imported[uid] = 2);
+                            }} else if (data.cell_type === ct) {{
+                                (data.positive || []).forEach(uid => imported[uid] = 1);
+                                (data.negative || []).forEach(uid => imported[uid] = 0);
+                                (data.unsure || []).forEach(uid => imported[uid] = 2);
+                            }}
+                            if (Object.keys(imported).length > 0) {{
+                                const key = getGlobalKey(ct);
+                                let existing = {{}};
+                                try {{ existing = JSON.parse(localStorage.getItem(key)) || {{}}; }} catch(ex) {{}}
+                                Object.assign(existing, imported);
+                                localStorage.setItem(key, JSON.stringify(existing));
+                                totalImported += Object.keys(imported).length;
+                            }}
+                            // Clear page-specific keys so reload picks up from global
+                            const pages = ct === 'mk' ? MK_PAGES : HSPC_PAGES;
+                            for (let i = 1; i <= pages; i++) {{
+                                localStorage.removeItem(getPageKey(ct, i));
+                            }}
+                        }});
+                        if (totalImported === 0) {{
+                            alert('No annotations found in file.');
+                        }} else {{
+                            alert('Imported ' + totalImported + ' annotations. Reloading...');
+                            location.reload();
+                        }}
+                    }} catch(err) {{
+                        alert('Failed to parse JSON: ' + err.message);
+                    }}
+                }};
+                reader.readAsText(file);
+            }};
+            input.click();
         }}
 
         function exportAnnotations() {{
@@ -1624,6 +1788,7 @@ def generate_mk_hspc_page_html(samples, cell_type, page_num, total_pages, slides
                 <div class="stat global positive">Yes: <span id="global-positive">0</span></div>
                 <div class="stat global negative">No: <span id="global-negative">0</span></div>
             </div>
+            <button class="btn" style="border-color: #4a8; color: #4a8;" onclick="importAnnotations()">Import</button>
             <button class="btn" onclick="exportAnnotations()">Export</button>
             <button class="btn" onclick="clearPage()">Clear Page</button>
             <button class="btn" onclick="clearAll()">Clear All</button>
@@ -1786,6 +1951,56 @@ def generate_mk_hspc_page_html(samples, cell_type, page_num, total_pages, slides
             }} catch(e) {{}}
             document.getElementById('global-positive').textContent = globalPos;
             document.getElementById('global-negative').textContent = globalNeg;
+        }}
+
+        function importAnnotations() {{
+            const input = document.createElement('input');
+            input.type = 'file';
+            input.accept = '.json';
+            input.onchange = function(e) {{
+                const file = e.target.files[0];
+                if (!file) return;
+                const reader = new FileReader();
+                reader.onload = function(ev) {{
+                    try {{
+                        const data = JSON.parse(ev.target.result);
+                        let imported = {{}};
+                        if (data.positive || data.negative || data.unsure) {{
+                            (data.positive || []).forEach(uid => imported[uid] = 1);
+                            (data.negative || []).forEach(uid => imported[uid] = 0);
+                            (data.unsure || []).forEach(uid => imported[uid] = 2);
+                        }} else if (data[CELL_TYPE]) {{
+                            const section = data[CELL_TYPE];
+                            (section.positive || []).forEach(uid => imported[uid] = 1);
+                            (section.negative || []).forEach(uid => imported[uid] = 0);
+                            (section.unsure || []).forEach(uid => imported[uid] = 2);
+                        }} else {{
+                            for (const [k, v] of Object.entries(data)) {{
+                                if (v === 0 || v === 1 || v === 2) imported[k] = v;
+                            }}
+                        }}
+                        if (Object.keys(imported).length === 0) {{
+                            alert('No annotations found in file.');
+                            return;
+                        }}
+                        let existing = {{}};
+                        try {{ existing = JSON.parse(localStorage.getItem(GLOBAL_STORAGE_KEY)) || {{}}; }} catch(ex) {{}}
+                        Object.assign(existing, imported);
+                        localStorage.setItem(GLOBAL_STORAGE_KEY, JSON.stringify(existing));
+                        // Clear page-specific keys so reload picks up from global
+                        for (let i = 1; i <= TOTAL_PAGES; i++) {{
+                            const pageKey = EXPERIMENT_NAME ? CELL_TYPE + '_' + EXPERIMENT_NAME + '_labels_page' + i : CELL_TYPE + '_labels_page' + i;
+                            localStorage.removeItem(pageKey);
+                        }}
+                        alert('Imported ' + Object.keys(imported).length + ' annotations. Reloading...');
+                        location.reload();
+                    }} catch(err) {{
+                        alert('Failed to parse JSON: ' + err.message);
+                    }}
+                }};
+                reader.readAsText(file);
+            }};
+            input.click();
         }}
 
         document.addEventListener('keydown', (e) => {{
