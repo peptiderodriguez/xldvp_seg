@@ -125,27 +125,29 @@ class IsletStrategy(CellStrategy):
         **kwargs,
     ) -> List[np.ndarray]:
         """
-        Segment islet cells using 2-channel Cellpose + SAM2 refinement.
+        Segment islet cells using 2-channel Cellpose (membrane + nuclear).
 
-        Constructs membrane+nuclear input for Cellpose instead of using the
-        default grayscale mode from CellStrategy.
+        SAM2 refinement is intentionally SKIPPED for islet because dense
+        islet tissue causes SAM2 point prompts to return whole-tissue regions
+        (100K+ px) instead of individual cells. Cellpose with membrane+nuclear
+        already produces high-quality individual cell masks.
+
+        SAM2 embeddings are still extracted per-cell in detect() for downstream
+        classification features.
 
         Args:
-            tile: RGB image array (HxWx3, uint8) — used for SAM2
-            models: Dict with 'cellpose' and 'sam2_predictor'
+            tile: RGB image array (HxWx3, uint8)
+            models: Dict with 'cellpose' (and optionally 'sam2_predictor')
             extra_channels: Dict mapping CZI channel index to 2D uint16 arrays.
                 Must contain membrane_channel and nuclear_channel.
 
         Returns:
-            List of boolean masks sorted by SAM2 confidence
+            List of boolean masks sorted by area (largest first)
         """
         cellpose = models.get('cellpose')
-        sam2_predictor = models.get('sam2_predictor')
 
         if cellpose is None:
             raise RuntimeError("Cellpose model required for islet detection")
-        if sam2_predictor is None:
-            raise RuntimeError("SAM2 predictor required for islet detection")
 
         # --- Build 2-channel Cellpose input from extra_channels ---
         if extra_channels is None:
@@ -176,68 +178,30 @@ class IsletStrategy(CellStrategy):
         cellpose_ids = np.unique(cellpose_masks)
         cellpose_ids = cellpose_ids[cellpose_ids > 0]
 
-        # Limit candidates
+        logger.info(f"Cellpose found {len(cellpose_ids)} cells")
+
+        # Limit candidates by area (keep largest)
         if len(cellpose_ids) > self.max_candidates:
             areas = [(cp_id, (cellpose_masks == cp_id).sum()) for cp_id in cellpose_ids]
             areas.sort(key=lambda x: x[1], reverse=True)
             cellpose_ids = np.array([a[0] for a in areas[:self.max_candidates]])
+            logger.info(f"  Limited to {len(cellpose_ids)} largest candidates")
 
-        # SAM2 refinement — use membrane channel as grayscale RGB
-        sam2_rgb = np.stack([membrane_u8, membrane_u8, membrane_u8], axis=-1)
-        sam2_predictor.set_image(sam2_rgb)
-
-        candidates = []
-        for cp_id in cellpose_ids:
-            cp_mask = cellpose_masks == cp_id
-            cy, cx = ndimage.center_of_mass(cp_mask)
-
-            point_coords = np.array([[cx, cy]])
-            point_labels = np.array([1])
-
-            masks_pred, scores, _ = sam2_predictor.predict(
-                point_coords=point_coords,
-                point_labels=point_labels,
-                multimask_output=True,
-            )
-
-            best_idx = np.argmax(scores)
-            sam2_mask = masks_pred[best_idx]
-
-            if sam2_mask.dtype != bool:
-                sam2_mask = (sam2_mask > 0.5).astype(bool)
-
-            if sam2_mask.sum() < self.min_mask_pixels:
-                continue
-
-            candidates.append({
-                'mask': sam2_mask,
-                'score': float(scores[best_idx]),
-                'center': (cx, cy),
-                'cellpose_id': int(cp_id),
-            })
-
-        # Sort by SAM2 confidence (highest first)
-        candidates.sort(key=lambda x: x['score'], reverse=True)
-
-        # Overlap filtering
+        # Extract individual boolean masks from Cellpose label array
+        # No overlap filtering needed — Cellpose masks are non-overlapping by design
         accepted_masks = []
-        accepted_scores = []
-        combined_mask = np.zeros(tile.shape[:2], dtype=bool)
+        for cp_id in cellpose_ids:
+            cp_mask = (cellpose_masks == cp_id).astype(bool)
+            if cp_mask.sum() < self.min_mask_pixels:
+                continue
+            accepted_masks.append(cp_mask)
 
-        for cand in candidates:
-            sam2_mask = cand['mask']
-            if combined_mask.any():
-                overlap = (sam2_mask & combined_mask).sum()
-                if overlap > self.overlap_threshold * sam2_mask.sum():
-                    continue
-            accepted_masks.append(sam2_mask)
-            accepted_scores.append(cand['score'])
-            combined_mask |= sam2_mask
+        # No SAM2 scores — use None placeholder (detect() handles this)
+        self._last_segment_scores = []
 
-        # Store SAM2 scores for detect() to pick up
-        self._last_segment_scores = accepted_scores
+        logger.info(f"  Accepted {len(accepted_masks)} masks (>= {self.min_mask_pixels} px)")
 
-        del candidates, cellpose_masks
+        del cellpose_masks
         gc.collect()
 
         return accepted_masks
@@ -336,17 +300,28 @@ class IsletStrategy(CellStrategy):
 
         sam2_predictor = models.get('sam2_predictor')
 
-        if models.get('cellpose') is None or sam2_predictor is None:
-            raise RuntimeError("Cellpose and SAM2 predictor required for islet detection")
+        if models.get('cellpose') is None:
+            raise RuntimeError("Cellpose model required for islet detection")
 
         # Generate masks using our 2-channel segment()
         masks = self.segment(tile, models, extra_channels=extra_channels)
 
         if not masks:
-            sam2_predictor.reset_predictor()
+            if sam2_predictor is not None:
+                sam2_predictor.reset_predictor()
             if torch.cuda.is_available():
                 torch.cuda.empty_cache()
             return np.zeros(tile.shape[:2], dtype=np.uint32), []
+
+        # Set SAM2 image for embedding extraction (segment() no longer uses SAM2)
+        if self.extract_sam2_embeddings and sam2_predictor is not None:
+            membrane_raw = extra_channels.get(self.membrane_channel) if extra_channels else None
+            if membrane_raw is not None:
+                membrane_u8 = _percentile_normalize_channel(membrane_raw)
+                sam2_rgb = np.stack([membrane_u8, membrane_u8, membrane_u8], axis=-1)
+            else:
+                sam2_rgb = tile  # fallback to tile RGB
+            sam2_predictor.set_image(sam2_rgb)
 
         # Feature extraction loop (reuse CellStrategy pattern)
         valid_detections = []
@@ -354,7 +329,7 @@ class IsletStrategy(CellStrategy):
         crops_for_resnet_context = []
         crop_indices = []
 
-        # Retrieve SAM2 scores from segment()
+        # No SAM2 scores from segment() (Cellpose-only)
         segment_scores = getattr(self, '_last_segment_scores', [])
 
         for idx, mask in enumerate(masks):

@@ -2120,7 +2120,10 @@ def run_pipeline(args):
                             else:
                                 tile_data = loader.channel_data[rel_ty:rel_ty+tile_h, rel_tx:rel_tx+tile_w]
                                 tile_rgb_html = np.stack([tile_data] * 3, axis=-1)
-                            if tile_rgb_html.dtype == np.uint16:
+                            # Convert uint16→uint8 for non-islet (NMJ/MK channels are high-signal, /256 works).
+                            # For islet: keep uint16 — low-signal fluorescence (Gcg mean=16.7)
+                            # would become all-zero after /256. percentile_normalize() handles uint16.
+                            if tile_rgb_html.dtype == np.uint16 and args.cell_type != 'islet':
                                 tile_rgb_html = (tile_rgb_html / 256).astype(np.uint8)
 
                             tile_pct = _compute_tile_percentiles(tile_rgb_html) if getattr(args, 'html_normalization', 'crop') == 'tile' else None
@@ -2284,8 +2287,8 @@ def run_pipeline(args):
                         extra_channel_tiles[3],  # G = Ins
                         extra_channel_tiles[5],  # B = Sst
                     ], axis=-1)
-                    if tile_rgb_display.dtype == np.uint16:
-                        tile_rgb_display = (tile_rgb_display / 256).astype(np.uint8)
+                    # Keep uint16 for islet — low-signal fluorescence (Gcg mean=16.7)
+                    # would become all-zero after /256. percentile_normalize() handles uint16.
                 else:
                     tile_rgb_display = tile_rgb
                 tile_pct = _compute_tile_percentiles(tile_rgb_display) if getattr(args, 'html_normalization', 'crop') == 'tile' else None
