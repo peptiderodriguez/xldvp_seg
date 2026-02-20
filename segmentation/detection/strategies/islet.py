@@ -78,7 +78,6 @@ class IsletStrategy(CellStrategy):
         nuclear_channel: int = 4,
         min_area_um: float = 30,
         max_area_um: float = 500,
-        max_candidates: int = 1000,
         overlap_threshold: float = 0.5,
         min_mask_pixels: int = 10,
         extract_deep_features: bool = False,
@@ -93,7 +92,6 @@ class IsletStrategy(CellStrategy):
             nuclear_channel: CZI channel index for nuclear marker (default 4, DAPI)
             min_area_um: Minimum cell area in um2 (default 30)
             max_area_um: Maximum cell area in um2 (default 500)
-            max_candidates: Max Cellpose candidates per tile (default 1000)
             overlap_threshold: Skip masks with overlap > this fraction (default 0.5)
             min_mask_pixels: Minimum mask size in pixels (default 10)
             extract_deep_features: Whether to extract ResNet+DINOv2 (default False)
@@ -103,7 +101,6 @@ class IsletStrategy(CellStrategy):
         super().__init__(
             min_area_um=min_area_um,
             max_area_um=max_area_um,
-            max_candidates=max_candidates,
             overlap_threshold=overlap_threshold,
             min_mask_pixels=min_mask_pixels,
             extract_deep_features=extract_deep_features,
@@ -179,18 +176,34 @@ class IsletStrategy(CellStrategy):
         cellpose_ids = cellpose_ids[cellpose_ids > 0]
 
         logger.info(f"Cellpose found {len(cellpose_ids)} cells")
+        print(f"[islet] Cellpose found {len(cellpose_ids)} cells", flush=True)
 
-        # Limit candidates by area (keep largest)
-        if len(cellpose_ids) > self.max_candidates:
-            areas = [(cp_id, (cellpose_masks == cp_id).sum()) for cp_id in cellpose_ids]
-            areas.sort(key=lambda x: x[1], reverse=True)
-            cellpose_ids = np.array([a[0] for a in areas[:self.max_candidates]])
-            logger.info(f"  Limited to {len(cellpose_ids)} largest candidates")
+        # Compute area in um² for each cell and filter by min/max area
+        # This is done HERE (before detect() feature extraction) to avoid
+        # extracting expensive features for cells that will be discarded.
+        pixel_area_um2 = kwargs.get('pixel_size_um', 0.325) ** 2
+        min_area_px = int(self.min_area_um / pixel_area_um2) if pixel_area_um2 > 0 else 10
+        max_area_px = int(self.max_area_um / pixel_area_um2) if pixel_area_um2 > 0 else 100000
+
+        # Compute areas for all cells
+        areas = []
+        for cp_id in cellpose_ids:
+            area_px = (cellpose_masks == cp_id).sum()
+            areas.append((cp_id, area_px))
+
+        # Filter by area range (um² converted to pixels)
+        in_range = [(cp_id, a) for cp_id, a in areas if min_area_px <= a <= max_area_px]
+        out_of_range = len(areas) - len(in_range)
+        print(f"[islet] Area filter: {len(in_range)}/{len(areas)} in range "
+              f"[{min_area_px}-{max_area_px}px = {self.min_area_um}-{self.max_area_um}um²], "
+              f"pixel_size={kwargs.get('pixel_size_um', '?')}", flush=True)
+        if out_of_range > 0:
+            logger.info(f"  Area filter: {len(in_range)} in range [{self.min_area_um}-{self.max_area_um} um²], "
+                        f"{out_of_range} rejected")
 
         # Extract individual boolean masks from Cellpose label array
-        # No overlap filtering needed — Cellpose masks are non-overlapping by design
         accepted_masks = []
-        for cp_id in cellpose_ids:
+        for cp_id, _ in in_range:
             cp_mask = (cellpose_masks == cp_id).astype(bool)
             if cp_mask.sum() < self.min_mask_pixels:
                 continue
@@ -304,7 +317,8 @@ class IsletStrategy(CellStrategy):
             raise RuntimeError("Cellpose model required for islet detection")
 
         # Generate masks using our 2-channel segment()
-        masks = self.segment(tile, models, extra_channels=extra_channels)
+        masks = self.segment(tile, models, extra_channels=extra_channels,
+                             pixel_size_um=pixel_size_um)
 
         if not masks:
             if sam2_predictor is not None:
@@ -332,7 +346,10 @@ class IsletStrategy(CellStrategy):
         # No SAM2 scores from segment() (Cellpose-only)
         segment_scores = getattr(self, '_last_segment_scores', [])
 
+        n_masks = len(masks)
         for idx, mask in enumerate(masks):
+            if idx % 500 == 0:
+                print(f"[islet] Featurizing cell {idx}/{n_masks}", flush=True)
             feat = extract_morphological_features(mask, tile)
             if not feat:
                 continue
@@ -443,8 +460,11 @@ class IsletStrategy(CellStrategy):
                     for i in range(1024):
                         det['features'][f'dinov2_ctx_{i}'] = 0.0
 
+        print(f"[islet] Feature extraction done: {len(valid_detections)}/{n_masks} valid", flush=True)
+
         # Reset predictor state
-        sam2_predictor.reset_predictor()
+        if sam2_predictor is not None:
+            sam2_predictor.reset_predictor()
         if torch.cuda.is_available():
             torch.cuda.empty_cache()
 

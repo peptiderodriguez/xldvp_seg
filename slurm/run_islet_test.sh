@@ -45,7 +45,6 @@ $PYTHON run_segmentation.py \
     --sample-fraction 0.10 \
     --load-to-ram \
     --multi-gpu --num-gpus 2 \
-    --no-sam2-embeddings \
     --output-dir "$OUTPUT_DIR" \
     --no-serve
 

@@ -99,6 +99,7 @@ from segmentation.detection.strategies.vessel import VesselStrategy
 from segmentation.detection.strategies.cell import CellStrategy
 from segmentation.detection.strategies.mesothelium import MesotheliumStrategy
 from segmentation.detection.strategies.islet import IsletStrategy
+from segmentation.detection.strategies.tissue_pattern import TissuePatternStrategy
 
 # Import vessel classifier for ML-based classification
 from segmentation.classification.vessel_classifier import VesselClassifier, classify_vessel
@@ -667,13 +668,21 @@ def create_strategy_for_cell_type(cell_type, params, pixel_size_um):
             nuclear_channel=params.get('nuclear_channel', 4),
             min_area_um=params.get('min_area_um', 30),
             max_area_um=params.get('max_area_um', 500),
-            max_candidates=params.get('max_candidates', 1000),
+            extract_deep_features=params.get('extract_deep_features', False),
+            extract_sam2_embeddings=params.get('extract_sam2_embeddings', True),
+        )
+    elif cell_type == 'tissue_pattern':
+        return TissuePatternStrategy(
+            detection_channels=params.get('detection_channels', [0, 3]),
+            nuclear_channel=params.get('nuclear_channel', 4),
+            min_area_um=params.get('min_area_um', 20),
+            max_area_um=params.get('max_area_um', 300),
             extract_deep_features=params.get('extract_deep_features', False),
             extract_sam2_embeddings=params.get('extract_sam2_embeddings', True),
         )
     else:
         raise ValueError(f"Cell type '{cell_type}' does not have a strategy implementation. "
-                         f"Supported types: nmj, mk, cell, vessel, mesothelium, islet")
+                         f"Supported types: nmj, mk, cell, vessel, mesothelium, islet, tissue_pattern")
 
 
 # Import from canonical location (segmentation.processing.tile_processing)
@@ -1646,6 +1655,9 @@ def run_pipeline(args):
     if args.cell_type == 'islet':
         tissue_channel = getattr(args, 'nuclear_channel', 4)
         logger.info(f"Islet: using DAPI (ch{tissue_channel}) for tissue detection")
+    elif args.cell_type == 'tissue_pattern':
+        tissue_channel = getattr(args, 'tp_nuclear_channel', 4)
+        logger.info(f"Tissue pattern: using nuclear (ch{tissue_channel}) for tissue detection")
     logger.info("Filtering to tissue-containing tiles...")
     tissue_tiles = filter_tissue_tiles(
         all_tiles,
@@ -1677,7 +1689,7 @@ def run_pipeline(args):
     logger.info("Initializing detector...")
 
     # All cell types now use the new CellDetector pattern
-    use_new_detector = args.cell_type in ('nmj', 'mk', 'cell', 'vessel', 'mesothelium', 'islet')
+    use_new_detector = args.cell_type in ('nmj', 'mk', 'cell', 'vessel', 'mesothelium', 'islet', 'tissue_pattern')
 
     if use_new_detector:
         # New CellDetector with strategy pattern
@@ -1732,6 +1744,17 @@ def run_pipeline(args):
             detector.models['feature_names'] = classifier_data['feature_names']
             logger.info(f"Islet RF classifier loaded ({len(classifier_data['feature_names'])} features)")
             classifier_loaded = True
+        # Load tissue_pattern classifier if provided (generic RF loading)
+        elif args.cell_type == 'tissue_pattern' and getattr(args, 'tp_classifier', None):
+            from segmentation.detection.strategies.nmj import load_nmj_rf_classifier
+            logger.info(f"Loading tissue_pattern RF classifier from {args.tp_classifier}...")
+            classifier_data = load_nmj_rf_classifier(args.tp_classifier)
+            detector.models['classifier'] = classifier_data['pipeline']
+            detector.models['scaler'] = None
+            detector.models['classifier_type'] = 'rf'
+            detector.models['feature_names'] = classifier_data['feature_names']
+            logger.info(f"Tissue pattern RF classifier loaded ({len(classifier_data['feature_names'])} features)")
+            classifier_loaded = True
 
     else:
         # All cell types use CellDetector with strategy classes
@@ -1739,7 +1762,7 @@ def run_pipeline(args):
 
     # Auto-detect annotation run: no classifier → show ALL candidates in HTML
     # Must happen BEFORE tile processing so filter_and_create_html_samples uses threshold=0.0
-    if args.cell_type in ('nmj', 'islet') and not classifier_loaded and args.html_score_threshold > 0:
+    if args.cell_type in ('nmj', 'islet', 'tissue_pattern') and not classifier_loaded and args.html_score_threshold > 0:
         logger.info(f"No classifier loaded — annotation run detected. "
                      f"Overriding --html-score-threshold from {args.html_score_threshold} to 0.0 "
                      f"(will show ALL candidates for annotation)")
@@ -1793,7 +1816,14 @@ def run_pipeline(args):
             'nuclear_channel': getattr(args, 'nuclear_channel', 4),
             'min_area_um': getattr(args, 'islet_min_area', 30.0),
             'max_area_um': getattr(args, 'islet_max_area', 500.0),
-            'max_candidates': 1000,
+            'extract_deep_features': getattr(args, 'extract_deep_features', False),
+        }
+    elif args.cell_type == 'tissue_pattern':
+        params = {
+            'detection_channels': [int(x) for x in args.tp_detection_channels.split(',')],
+            'nuclear_channel': getattr(args, 'tp_nuclear_channel', 4),
+            'min_area_um': getattr(args, 'tp_min_area', 20.0),
+            'max_area_um': getattr(args, 'tp_max_area', 300.0),
             'extract_deep_features': getattr(args, 'extract_deep_features', False),
         }
     else:
@@ -2009,6 +2039,13 @@ def run_pipeline(args):
                     logger.info(f"Using specified islet classifier: {classifier_path}")
                 else:
                     logger.info("No --islet-classifier specified — will return all candidates (annotation run)")
+            elif args.cell_type == 'tissue_pattern':
+                classifier_path = getattr(args, 'tp_classifier', None)
+                if classifier_path:
+                    classifier_loaded = True
+                    logger.info(f"Using specified tissue_pattern classifier: {classifier_path}")
+                else:
+                    logger.info("No --tp-classifier specified — will return all candidates (annotation run)")
 
             # Create multi-GPU processor (supports all cell types)
             extract_deep = getattr(args, 'extract_deep_features', False)
@@ -2062,7 +2099,7 @@ def run_pipeline(args):
 
                 results_collected = 0
                 while results_collected < len(sampled_tiles):
-                    result = processor.collect_result(timeout=300)  # 5 min timeout per tile
+                    result = processor.collect_result(timeout=3600)  # 60 min timeout per tile
                     if result is None:
                         logger.warning("Timeout waiting for result")
                         break
@@ -2111,6 +2148,21 @@ def run_pipeline(args):
                                     all_channel_data[3][rel_ty:rel_ty+tile_h, rel_tx:rel_tx+tile_w],
                                     all_channel_data[5][rel_ty:rel_ty+tile_h, rel_tx:rel_tx+tile_w],
                                 ], axis=-1)
+                            elif args.cell_type == 'tissue_pattern':
+                                # Tissue pattern: configurable R/G/B display channels
+                                tp_disp = [int(x) for x in args.tp_display_channels.split(',')]
+                                if len(tp_disp) >= 3 and all(k in all_channel_data for k in tp_disp[:3]):
+                                    tile_rgb_html = np.stack([
+                                        all_channel_data[tp_disp[0]][rel_ty:rel_ty+tile_h, rel_tx:rel_tx+tile_w],
+                                        all_channel_data[tp_disp[1]][rel_ty:rel_ty+tile_h, rel_tx:rel_tx+tile_w],
+                                        all_channel_data[tp_disp[2]][rel_ty:rel_ty+tile_h, rel_tx:rel_tx+tile_w],
+                                    ], axis=-1)
+                                else:
+                                    ch_keys = sorted(all_channel_data.keys())[:3]
+                                    tile_rgb_html = np.stack([
+                                        all_channel_data[ch_keys[i]][rel_ty:rel_ty+tile_h, rel_tx:rel_tx+tile_w]
+                                        for i in range(min(3, len(ch_keys)))
+                                    ], axis=-1)
                             elif len(all_channel_data) >= 3:
                                 ch_keys = sorted(all_channel_data.keys())[:3]
                                 tile_rgb_html = np.stack([
@@ -2123,7 +2175,7 @@ def run_pipeline(args):
                             # Convert uint16→uint8 for non-islet (NMJ/MK channels are high-signal, /256 works).
                             # For islet: keep uint16 — low-signal fluorescence (Gcg mean=16.7)
                             # would become all-zero after /256. percentile_normalize() handles uint16.
-                            if tile_rgb_html.dtype == np.uint16 and args.cell_type != 'islet':
+                            if tile_rgb_html.dtype == np.uint16 and args.cell_type not in ('islet', 'tissue_pattern'):
                                 tile_rgb_html = (tile_rgb_html / 256).astype(np.uint8)
 
                             tile_pct = _compute_tile_percentiles(tile_rgb_html) if getattr(args, 'html_normalization', 'crop') == 'tile' else None
@@ -2208,7 +2260,12 @@ def run_pipeline(args):
                 # has_tissue() check on uint16 BEFORE conversion
                 # For islet: use DAPI (nuclear) — more reliable tissue indicator
                 try:
-                    tissue_ch = getattr(args, 'nuclear_channel', 4) if args.cell_type == 'islet' else args.channel
+                    if args.cell_type == 'islet':
+                        tissue_ch = getattr(args, 'nuclear_channel', 4)
+                    elif args.cell_type == 'tissue_pattern':
+                        tissue_ch = getattr(args, 'tp_nuclear_channel', 4)
+                    else:
+                        tissue_ch = args.channel
                     det_ch = extra_channel_tiles.get(tissue_ch, tile_rgb[:, :, 0]) if extra_channel_tiles else tile_rgb[:, :, 0]
                     has_tissue_flag, _ = has_tissue(det_ch, variance_threshold=variance_threshold)
                 except Exception:
@@ -2289,6 +2346,18 @@ def run_pipeline(args):
                     ], axis=-1)
                     # Keep uint16 for islet — low-signal fluorescence (Gcg mean=16.7)
                     # would become all-zero after /256. percentile_normalize() handles uint16.
+                elif args.cell_type == 'tissue_pattern' and extra_channel_tiles:
+                    # Tissue pattern: configurable R/G/B display channels
+                    tp_disp = [int(x) for x in args.tp_display_channels.split(',')]
+                    if len(tp_disp) >= 3 and all(k in extra_channel_tiles for k in tp_disp[:3]):
+                        tile_rgb_display = np.stack([
+                            extra_channel_tiles[tp_disp[0]],
+                            extra_channel_tiles[tp_disp[1]],
+                            extra_channel_tiles[tp_disp[2]],
+                        ], axis=-1)
+                        # Keep uint16 — FISH channels can have low signal like islet
+                    else:
+                        tile_rgb_display = tile_rgb
                 else:
                     tile_rgb_display = tile_rgb
                 tile_pct = _compute_tile_percentiles(tile_rgb_display) if getattr(args, 'html_normalization', 'crop') == 'tile' else None
@@ -2347,13 +2416,13 @@ def run_pipeline(args):
     # (annotation threshold override already applied before tile loop)
 
     # Sort samples: with classifier → descending RF score; without → ascending area
-    if args.cell_type in ('nmj', 'islet') and classifier_loaded:
+    if args.cell_type in ('nmj', 'islet', 'tissue_pattern') and classifier_loaded:
         all_samples.sort(key=lambda x: x['stats'].get('rf_prediction') or 0, reverse=True)
     else:
         all_samples.sort(key=lambda x: x['stats'].get('area_um2', 0))
 
     # Export to HTML
-    if args.cell_type in ('nmj', 'islet') and len(all_detections) > len(all_samples):
+    if args.cell_type in ('nmj', 'islet', 'tissue_pattern') and len(all_detections) > len(all_samples):
         logger.info(f"Total detections (all scores): {len(all_detections)}, "
                      f"shown in HTML (rf_prediction >= {args.html_score_threshold}): {len(all_samples)}")
     logger.info(f"Exporting to HTML ({len(all_samples)} samples)...")
@@ -2369,6 +2438,17 @@ def run_pipeline(args):
             'green': 'Ins (beta)',
             'blue': 'Sst (delta)',
         }
+    elif args.cell_type == 'tissue_pattern':
+        tp_disp = [int(x) for x in args.tp_display_channels.split(',')]
+        probe_legend = parse_channel_legend_from_filename(slide_name)
+        if probe_legend:
+            channel_legend = probe_legend
+        else:
+            channel_legend = {
+                'red': f'Ch{tp_disp[0]}' if len(tp_disp) > 0 else 'Ch0',
+                'green': f'Ch{tp_disp[1]}' if len(tp_disp) > 1 else 'Ch1',
+                'blue': f'Ch{tp_disp[2]}' if len(tp_disp) > 2 else 'Ch2',
+            }
 
     # Use slide_name + timestamp as experiment_name so each run gets its own
     # localStorage namespace (prevents stale annotations from prior runs).
@@ -2521,7 +2601,7 @@ def main():
     # Required (unless using utility commands like --stop-server or --server-status)
     parser.add_argument('--czi-path', type=str, required=False, help='Path to CZI file')
     parser.add_argument('--cell-type', type=str, default=None,
-                        choices=['nmj', 'mk', 'cell', 'vessel', 'mesothelium', 'islet'],
+                        choices=['nmj', 'mk', 'cell', 'vessel', 'mesothelium', 'islet', 'tissue_pattern'],
                         help='Cell type to detect (not required if --show-metadata)')
 
     # Metadata inspection
@@ -2685,6 +2765,20 @@ def main():
                         help='Sort by confidence (score) instead of area during deduplication. '
                              'Automatically enabled for islet cell type.')
 
+    # Tissue pattern parameters
+    parser.add_argument('--tp-detection-channels', type=str, default='0,3',
+                        help='Comma-separated channel indices to sum for tissue_pattern detection (default: 0,3 = Slc17a7+Gad1)')
+    parser.add_argument('--tp-nuclear-channel', type=int, default=4,
+                        help='Nuclear channel for tissue detection (default: 4, Hoechst)')
+    parser.add_argument('--tp-display-channels', type=str, default='0,3,1',
+                        help='Comma-separated R,G,B channel indices for HTML display (default: 0,3,1 = Slc17a7/Gad1/Htr2a)')
+    parser.add_argument('--tp-classifier', type=str, default=None,
+                        help='Path to trained tissue_pattern RF classifier (.pkl)')
+    parser.add_argument('--tp-min-area', type=float, default=20.0,
+                        help='Minimum cell area in um² for tissue_pattern (default 20)')
+    parser.add_argument('--tp-max-area', type=float, default=300.0,
+                        help='Maximum cell area in um² for tissue_pattern (default 300)')
+
     # Feature extraction options
     parser.add_argument('--extract-full-features', action='store_true',
                         help='Extract full features including SAM2 embeddings')
@@ -2754,11 +2848,18 @@ def main():
             args.channel = 1
         elif args.cell_type == 'islet':
             args.channel = getattr(args, 'membrane_channel', 1)
+        elif args.cell_type == 'tissue_pattern':
+            # Primary channel = first detection channel (for tissue loading)
+            args.channel = int(args.tp_detection_channels.split(',')[0])
         else:
             args.channel = 0
 
     # Handle --cell-type islet: auto-enable all-channels, dedup by area (largest wins)
     if args.cell_type == 'islet':
+        args.all_channels = True
+
+    # Handle --cell-type tissue_pattern: auto-enable all-channels
+    if args.cell_type == 'tissue_pattern':
         args.all_channels = True
 
     # Handle --multi-marker: automatically enable dependent flags

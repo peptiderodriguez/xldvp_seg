@@ -184,8 +184,8 @@ def _gpu_worker(
         except Exception as e:
             logger.warning(f"[{worker_name}] Failed to load SAM2 auto: {e}")
 
-    # --- Load Cellpose (Cell/Islet strategy needs it) ---
-    if cell_type in ('cell', 'islet'):
+    # --- Load Cellpose (Cell/Islet/TissuePattern strategy needs it) ---
+    if cell_type in ('cell', 'islet', 'tissue_pattern'):
         try:
             from cellpose import models as cellpose_models
             cellpose_model = cellpose_models.CellposeModel(gpu=True, pretrained_model='cpsam')
@@ -268,7 +268,16 @@ def _gpu_worker(
             nuclear_channel=strategy_params.get('nuclear_channel', 4),
             min_area_um=strategy_params.get('min_area_um', 30),
             max_area_um=strategy_params.get('max_area_um', 500),
-            max_candidates=strategy_params.get('max_candidates', 1000),
+            extract_deep_features=extract_deep_features,
+            extract_sam2_embeddings=extract_sam2_embeddings,
+        )
+    elif cell_type == 'tissue_pattern':
+        from segmentation.detection.strategies.tissue_pattern import TissuePatternStrategy
+        strategy = TissuePatternStrategy(
+            detection_channels=strategy_params.get('detection_channels', [0, 3]),
+            nuclear_channel=strategy_params.get('nuclear_channel', 4),
+            min_area_um=strategy_params.get('min_area_um', 20),
+            max_area_um=strategy_params.get('max_area_um', 300),
             extract_deep_features=extract_deep_features,
             extract_sam2_embeddings=extract_sam2_embeddings,
         )
