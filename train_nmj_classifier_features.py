@@ -7,9 +7,10 @@ so no StandardScaler is needed. This keeps the prediction path simple:
 just pass raw features to classifier.predict_proba().
 
 Feature sets:
-  --feature-set morph       → morphological features only (~78)
-  --feature-set morph_sam2  → morph + SAM2 embeddings (~334)
-  --feature-set all         → all scalar features (default)
+  --feature-set morph          → morphological features only (~78)
+  --feature-set morph_sam2     → morph + SAM2 embeddings (~334)
+  --feature-set channel_stats  → per-channel intensity features only (ch*_ prefixed)
+  --feature-set all            → all scalar features (default)
 """
 
 import argparse
@@ -26,7 +27,7 @@ from segmentation.utils.logging import get_logger, setup_logging
 
 logger = get_logger(__name__)
 
-# Feature name prefixes for each feature set
+# Feature name prefixes (documentation only — actual filtering uses is_*_feature() functions below)
 MORPH_PREFIXES = (
     'area', 'perimeter', 'eccentricity', 'solidity', 'extent', 'circularity',
     'aspect_ratio', 'compactness', 'convex_area', 'filled_area', 'euler_number',
@@ -37,14 +38,14 @@ MORPH_PREFIXES = (
     'percentile', 'entropy', 'haralick', 'gabor', 'lbp',
     'gradient', 'edge', 'texture', 'shape', 'concavity', 'roughness',
     'branching', 'endpoint', 'curvature',
-    # Multi-channel stats
-    'ch0_', 'ch1_', 'ch2_', 'channel_',
+    # Multi-channel stats (ch0-ch5 for 6-channel islet, ch0-ch2 for 3-channel NMJ)
+    'ch0_', 'ch1_', 'ch2_', 'ch3_', 'ch4_', 'ch5_', 'channel_',
 )
 SAM2_PREFIX = 'sam2_'
 
 
 def is_morph_feature(name):
-    """Check if a feature name is morphological (not SAM2/ResNet/DINOv2)."""
+    """Check if feature is morph + channel stats (excludes SAM2/ResNet/DINOv2 embeddings)."""
     return not name.startswith(('sam2_', 'resnet_', 'dinov2_'))
 
 
@@ -53,12 +54,19 @@ def is_morph_sam2_feature(name):
     return not name.startswith(('resnet_', 'dinov2_'))
 
 
+def is_channel_stats_feature(name):
+    """Check if a feature name is a per-channel intensity stat or inter-channel ratio."""
+    return name.startswith('ch') or name.startswith('channel_')
+
+
 def filter_feature_names(feature_names, feature_set):
     """Filter feature names based on the requested feature set."""
     if feature_set == 'morph':
         return [n for n in feature_names if is_morph_feature(n)]
     elif feature_set == 'morph_sam2':
         return [n for n in feature_names if is_morph_sam2_feature(n)]
+    elif feature_set == 'channel_stats':
+        return [n for n in feature_names if is_channel_stats_feature(n)]
     else:  # 'all'
         return feature_names
 
@@ -163,8 +171,9 @@ def main():
     parser.add_argument('--n-estimators', type=int, default=200,
                         help='Number of trees in Random Forest')
     parser.add_argument('--feature-set', type=str, default='all',
-                        choices=['morph', 'morph_sam2', 'all'],
-                        help='Feature subset to use (default: all)')
+                        choices=['morph', 'morph_sam2', 'channel_stats', 'all'],
+                        help='Feature subset to use (default: all). '
+                             'channel_stats: per-channel intensity features only (ch*_ prefixed)')
     args = parser.parse_args()
 
     setup_logging()

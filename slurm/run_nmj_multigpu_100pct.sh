@@ -6,7 +6,7 @@
 #SBATCH --cpus-per-task=64
 #SBATCH --mem=500G
 #SBATCH --gres=gpu:l40s:4
-#SBATCH --time=24:00:00
+#SBATCH --time=36:00:00
 #SBATCH --output=/fs/gpfs41/lv12/fileset02/pool/pool-mann-edwin/code_bin/xldvp_seg/slurm/logs/nmj_100pct_%j.out
 #SBATCH --error=/fs/gpfs41/lv12/fileset02/pool/pool-mann-edwin/code_bin/xldvp_seg/slurm/logs/nmj_100pct_%j.err
 

@@ -10,6 +10,7 @@ Cell Types:
     - mk: Megakaryocytes (SAM2 automatic mask generation)
     - cell: Hematopoietic stem/progenitor cells (Cellpose-SAM + SAM2 refinement)
     - vessel: Blood vessel cross-sections (ring detection via contour hierarchy)
+    - islet: Pancreatic islet cells (Cellpose membrane+nuclear + SAM2)
 
 Features extracted per cell: up to 6478 total (with --extract-deep-features and --all-channels)
     - ~78 morphological features (22 base + NMJ-specific + multi-channel stats)
@@ -97,6 +98,7 @@ from segmentation.detection.strategies.nmj import NMJStrategy
 from segmentation.detection.strategies.vessel import VesselStrategy
 from segmentation.detection.strategies.cell import CellStrategy
 from segmentation.detection.strategies.mesothelium import MesotheliumStrategy
+from segmentation.detection.strategies.islet import IsletStrategy
 
 # Import vessel classifier for ML-based classification
 from segmentation.classification.vessel_classifier import VesselClassifier, classify_vessel
@@ -659,9 +661,19 @@ def create_strategy_for_cell_type(cell_type, params, pixel_size_um):
             min_fragment_area_um2=params.get('min_fragment_area_um2', 1500.0),
             pixel_size_um=pixel_size_um,
         )
+    elif cell_type == 'islet':
+        return IsletStrategy(
+            membrane_channel=params.get('membrane_channel', 1),
+            nuclear_channel=params.get('nuclear_channel', 4),
+            min_area_um=params.get('min_area_um', 30),
+            max_area_um=params.get('max_area_um', 500),
+            max_candidates=params.get('max_candidates', 1000),
+            extract_deep_features=params.get('extract_deep_features', False),
+            extract_sam2_embeddings=params.get('extract_sam2_embeddings', True),
+        )
     else:
         raise ValueError(f"Cell type '{cell_type}' does not have a strategy implementation. "
-                         f"Supported types: nmj, mk, cell, vessel, mesothelium")
+                         f"Supported types: nmj, mk, cell, vessel, mesothelium, islet")
 
 
 # Import from canonical location (segmentation.processing.tile_processing)
@@ -1659,7 +1671,7 @@ def run_pipeline(args):
     logger.info("Initializing detector...")
 
     # All cell types now use the new CellDetector pattern
-    use_new_detector = args.cell_type in ('nmj', 'mk', 'cell', 'vessel', 'mesothelium')
+    use_new_detector = args.cell_type in ('nmj', 'mk', 'cell', 'vessel', 'mesothelium', 'islet')
 
     if use_new_detector:
         # New CellDetector with strategy pattern
@@ -1702,13 +1714,26 @@ def run_pipeline(args):
                 detector.models['feature_names'] = classifier_data['feature_names']
                 logger.info(f"RF classifier loaded successfully ({len(classifier_data['feature_names'])} features)")
                 classifier_loaded = True
+        # Load islet classifier if provided (generic RF loading)
+        elif args.cell_type == 'islet' and getattr(args, 'islet_classifier', None):
+            from segmentation.detection.strategies.nmj import load_nmj_rf_classifier
+            logger.info(f"Loading islet RF classifier from {args.islet_classifier}...")
+            classifier_data = load_nmj_rf_classifier(args.islet_classifier)
+            # load_nmj_rf_classifier always returns 'pipeline' key (wraps legacy format)
+            detector.models['classifier'] = classifier_data['pipeline']
+            detector.models['scaler'] = None
+            detector.models['classifier_type'] = 'rf'
+            detector.models['feature_names'] = classifier_data['feature_names']
+            logger.info(f"Islet RF classifier loaded ({len(classifier_data['feature_names'])} features)")
+            classifier_loaded = True
+
     else:
         # All cell types use CellDetector with strategy classes
         raise ValueError(f"Unknown cell type: {args.cell_type}")
 
     # Auto-detect annotation run: no classifier → show ALL candidates in HTML
     # Must happen BEFORE tile processing so filter_and_create_html_samples uses threshold=0.0
-    if args.cell_type == 'nmj' and not classifier_loaded and args.html_score_threshold > 0:
+    if args.cell_type in ('nmj', 'islet') and not classifier_loaded and args.html_score_threshold > 0:
         logger.info(f"No classifier loaded — annotation run detected. "
                      f"Overriding --html-score-threshold from {args.html_score_threshold} to 0.0 "
                      f"(will show ALL candidates for annotation)")
@@ -1755,6 +1780,15 @@ def run_pipeline(args):
             'max_ribbon_width_um': args.max_ribbon_width,
             'min_fragment_area_um2': args.min_fragment_area,
             'pixel_size_um': pixel_size_um,
+        }
+    elif args.cell_type == 'islet':
+        params = {
+            'membrane_channel': getattr(args, 'membrane_channel', 1),
+            'nuclear_channel': getattr(args, 'nuclear_channel', 4),
+            'min_area_um': getattr(args, 'islet_min_area', 30.0),
+            'max_area_um': getattr(args, 'islet_max_area', 500.0),
+            'max_candidates': 1000,
+            'extract_deep_features': getattr(args, 'extract_deep_features', False),
         }
     else:
         raise ValueError(f"Unknown cell type: {args.cell_type}")
@@ -1953,14 +1987,22 @@ def run_pipeline(args):
             # Build strategy parameters from the already-constructed params dict
             strategy_params = dict(params)  # params built by build_detection_params()
 
-            # Get classifier path (NMJ-specific) — only use if explicitly specified
-            # (no auto-loading from checkpoints/, to match single-GPU behavior)
-            classifier_path = getattr(args, 'nmj_classifier', None)
-            if args.cell_type == 'nmj' and classifier_path:
-                classifier_loaded = True
-                logger.info(f"Using specified classifier: {classifier_path}")
-            elif args.cell_type == 'nmj':
-                logger.info("No --nmj-classifier specified — will return all candidates (annotation run)")
+            # Get classifier path — only use if explicitly specified
+            classifier_path = None
+            if args.cell_type == 'nmj':
+                classifier_path = getattr(args, 'nmj_classifier', None)
+                if classifier_path:
+                    classifier_loaded = True
+                    logger.info(f"Using specified NMJ classifier: {classifier_path}")
+                else:
+                    logger.info("No --nmj-classifier specified — will return all candidates (annotation run)")
+            elif args.cell_type == 'islet':
+                classifier_path = getattr(args, 'islet_classifier', None)
+                if classifier_path:
+                    classifier_loaded = True
+                    logger.info(f"Using specified islet classifier: {classifier_path}")
+                else:
+                    logger.info("No --islet-classifier specified — will return all candidates (annotation run)")
 
             # Create multi-GPU processor (supports all cell types)
             extract_deep = getattr(args, 'extract_deep_features', False)
@@ -2056,7 +2098,14 @@ def run_pipeline(args):
                             rel_ty = tile_y - y_start
                             # Use masks.shape to handle edge tiles (smaller than tile_size at boundaries)
                             tile_h, tile_w = masks.shape[:2]
-                            if len(all_channel_data) >= 3:
+                            if args.cell_type == 'islet' and all(k in all_channel_data for k in (2, 3, 5)):
+                                # Islet: R=Gcg(ch2), G=Ins(ch3), B=Sst(ch5)
+                                tile_rgb_html = np.stack([
+                                    all_channel_data[2][rel_ty:rel_ty+tile_h, rel_tx:rel_tx+tile_w],
+                                    all_channel_data[3][rel_ty:rel_ty+tile_h, rel_tx:rel_tx+tile_w],
+                                    all_channel_data[5][rel_ty:rel_ty+tile_h, rel_tx:rel_tx+tile_w],
+                                ], axis=-1)
+                            elif len(all_channel_data) >= 3:
                                 ch_keys = sorted(all_channel_data.keys())[:3]
                                 tile_rgb_html = np.stack([
                                     all_channel_data[ch_keys[i]][rel_ty:rel_ty+tile_h, rel_tx:rel_tx+tile_w]
@@ -2220,9 +2269,20 @@ def run_pipeline(args):
                     json.dump(features_list, f, cls=NumpyEncoder)
 
                 # Create samples for HTML with quality filtering
-                tile_pct = _compute_tile_percentiles(tile_rgb) if getattr(args, 'html_normalization', 'crop') == 'tile' else None
+                # For islet: use Gcg(ch2)/Ins(ch3)/Sst(ch5) as RGB display
+                if args.cell_type == 'islet' and extra_channel_tiles and 2 in extra_channel_tiles and 3 in extra_channel_tiles and 5 in extra_channel_tiles:
+                    tile_rgb_display = np.stack([
+                        extra_channel_tiles[2],  # R = Gcg
+                        extra_channel_tiles[3],  # G = Ins
+                        extra_channel_tiles[5],  # B = Sst
+                    ], axis=-1)
+                    if tile_rgb_display.dtype == np.uint16:
+                        tile_rgb_display = (tile_rgb_display / 256).astype(np.uint8)
+                else:
+                    tile_rgb_display = tile_rgb
+                tile_pct = _compute_tile_percentiles(tile_rgb_display) if getattr(args, 'html_normalization', 'crop') == 'tile' else None
                 html_samples = filter_and_create_html_samples(
-                    features_list, tile_x, tile_y, tile_rgb, masks,
+                    features_list, tile_x, tile_y, tile_rgb_display, masks,
                     pixel_size_um, slide_name, args.cell_type,
                     args.html_score_threshold,
                     tile_percentiles=tile_pct,
@@ -2255,7 +2315,11 @@ def run_pipeline(args):
         from segmentation.processing.deduplication import deduplicate_by_mask_overlap
         pre_dedup = len(all_detections)
         mask_fn = f'{args.cell_type}_masks.h5'
-        all_detections = deduplicate_by_mask_overlap(all_detections, tiles_dir, min_overlap_fraction=0.1, mask_filename=mask_fn)
+        dedup_sort = 'confidence' if getattr(args, 'dedup_by_confidence', False) else 'area'
+        all_detections = deduplicate_by_mask_overlap(
+            all_detections, tiles_dir, min_overlap_fraction=0.1,
+            mask_filename=mask_fn, sort_by=dedup_sort,
+        )
 
         # Filter HTML samples to match deduped detections and remove duplicate UIDs
         deduped_uids = {det.get('uid', det.get('id', '')) for det in all_detections}
@@ -2272,22 +2336,28 @@ def run_pipeline(args):
     # (annotation threshold override already applied before tile loop)
 
     # Sort samples: with classifier → descending RF score; without → ascending area
-    if args.cell_type == 'nmj' and classifier_loaded:
+    if args.cell_type in ('nmj', 'islet') and classifier_loaded:
         all_samples.sort(key=lambda x: x['stats'].get('rf_prediction') or 0, reverse=True)
     else:
         all_samples.sort(key=lambda x: x['stats'].get('area_um2', 0))
 
     # Export to HTML
-    if args.cell_type == 'nmj' and len(all_detections) > len(all_samples):
+    if args.cell_type in ('nmj', 'islet') and len(all_detections) > len(all_samples):
         logger.info(f"Total detections (all scores): {len(all_detections)}, "
                      f"shown in HTML (rf_prediction >= {args.html_score_threshold}): {len(all_samples)}")
     logger.info(f"Exporting to HTML ({len(all_samples)} samples)...")
     html_dir = slide_output_dir / "html"
 
-    # Channel legend for multi-channel NMJ images - parse from filename
+    # Channel legend for multi-channel images
     channel_legend = None
     if args.cell_type == 'nmj' and getattr(args, 'all_channels', False):
         channel_legend = parse_channel_legend_from_filename(slide_name)
+    elif args.cell_type == 'islet':
+        channel_legend = {
+            'red': 'Gcg (alpha)',
+            'green': 'Ins (beta)',
+            'blue': 'Sst (delta)',
+        }
 
     # Use slide_name + timestamp as experiment_name so each run gets its own
     # localStorage namespace (prevents stale annotations from prior runs).
@@ -2440,7 +2510,7 @@ def main():
     # Required (unless using utility commands like --stop-server or --server-status)
     parser.add_argument('--czi-path', type=str, required=False, help='Path to CZI file')
     parser.add_argument('--cell-type', type=str, default=None,
-                        choices=['nmj', 'mk', 'cell', 'vessel', 'mesothelium'],
+                        choices=['nmj', 'mk', 'cell', 'vessel', 'mesothelium', 'islet'],
                         help='Cell type to detect (not required if --show-metadata)')
 
     # Metadata inspection
@@ -2589,6 +2659,21 @@ def main():
     parser.add_argument('--no-fiducials', dest='add_fiducials', action='store_false',
                         help='Do not add calibration markers')
 
+    # Islet parameters
+    parser.add_argument('--membrane-channel', type=int, default=1,
+                        help='Membrane marker channel index for islet Cellpose input (default: 1, AF633)')
+    parser.add_argument('--nuclear-channel', type=int, default=4,
+                        help='Nuclear marker channel index for islet Cellpose input (default: 4, DAPI)')
+    parser.add_argument('--islet-classifier', type=str, default=None,
+                        help='Path to trained islet RF classifier (.pkl)')
+    parser.add_argument('--islet-min-area', type=float, default=30.0,
+                        help='Minimum islet cell area in um² (default 30)')
+    parser.add_argument('--islet-max-area', type=float, default=500.0,
+                        help='Maximum islet cell area in um² (default 500)')
+    parser.add_argument('--dedup-by-confidence', action='store_true', default=False,
+                        help='Sort by confidence (score) instead of area during deduplication. '
+                             'Automatically enabled for islet cell type.')
+
     # Feature extraction options
     parser.add_argument('--extract-full-features', action='store_true',
                         help='Extract full features including SAM2 embeddings')
@@ -2650,10 +2735,20 @@ def main():
     if args.output_dir is None:
         default_dirs = {'nmj': '/home/dude/nmj_output', 'mk': '/home/dude/mk_output',
                         'vessel': '/home/dude/vessel_output', 'cell': '/home/dude/cell_output',
-                        'mesothelium': '/home/dude/mesothelium_output'}
+                        'mesothelium': '/home/dude/mesothelium_output',
+                        'islet': '/home/dude/islet_output'}
         args.output_dir = default_dirs.get(args.cell_type, f'/home/dude/{args.cell_type}_output')
     if args.channel is None:
-        args.channel = 1 if args.cell_type == 'nmj' else 0
+        if args.cell_type == 'nmj':
+            args.channel = 1
+        elif args.cell_type == 'islet':
+            args.channel = getattr(args, 'membrane_channel', 1)
+        else:
+            args.channel = 0
+
+    # Handle --cell-type islet: auto-enable all-channels, dedup by area (largest wins)
+    if args.cell_type == 'islet':
+        args.all_channels = True
 
     # Handle --multi-marker: automatically enable dependent flags
     if getattr(args, 'multi_marker', False):

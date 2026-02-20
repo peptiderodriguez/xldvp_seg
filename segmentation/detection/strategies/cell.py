@@ -243,7 +243,7 @@ class CellStrategy(DetectionStrategy, MultiChannelFeatureMixin):
                 mask=mask,
                 centroid=centroid,
                 features=feat,
-                id=f'cell_{i}',
+                id=f'{self.name}_{i}',
                 score=feat.get('sam2_score', feat.get('solidity', 0.0))
             ))
 
@@ -311,13 +311,12 @@ class CellStrategy(DetectionStrategy, MultiChannelFeatureMixin):
                 multichannel_feats = self.extract_multichannel_features(mask, channels_dict)
                 feat.update(multichannel_feats)
 
-            # Get centroid
-            cy = feat.get('centroid', [0, 0])
-            if isinstance(cy, list) and len(cy) >= 2:
-                cx_val, cy_val = cy[0], cy[1]
-            else:
-                ys, xs = np.where(mask)
-                cy_val, cx_val = np.mean(ys), np.mean(xs)
+            # Compute centroid from mask (extract_morphological_features does NOT return centroid)
+            ys, xs = np.where(mask)
+            if len(ys) == 0:
+                continue
+            cx_val, cy_val = float(np.mean(xs)), float(np.mean(ys))
+            feat['centroid'] = [cx_val, cy_val]
 
             # SAM2 embeddings (256D)
             if self.extract_sam2_embeddings and sam2_predictor is not None:

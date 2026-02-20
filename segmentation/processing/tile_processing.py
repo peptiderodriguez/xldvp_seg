@@ -70,8 +70,15 @@ def detections_to_features_list(detections, cell_type):
             'center': det.centroid,  # [x, y] format
             'features': det.features.copy(),
         }
-        # Include RF prediction score at top level (always present for consistency)
-        feat_dict['rf_prediction'] = det.score
+        # Include RF prediction score at top level.
+        # Prefer classifier-set feature keys (rf_prediction for islet, prob_nmj for NMJ)
+        # to avoid exposing solidity/sam2_score as "rf_prediction" when no classifier ran.
+        if 'rf_prediction' in det.features:
+            feat_dict['rf_prediction'] = det.features['rf_prediction']
+        elif 'prob_nmj' in det.features:
+            feat_dict['rf_prediction'] = det.features['prob_nmj']
+        else:
+            feat_dict['rf_prediction'] = det.score
 
         # For vessels, lift contours from features to top level
         if cell_type == 'vessel':
@@ -144,7 +151,7 @@ def process_single_tile(
                     extra_channels=extra_channel_tiles,
                     channel_names=channel_names,
                 )
-            elif cell_type in ('nmj', 'mk', 'cell'):
+            elif cell_type in ('nmj', 'mk', 'cell', 'islet'):
                 masks, detections = strategy.detect(
                     tile_rgb, models, pixel_size_um,
                     extra_channels=extra_channel_tiles,
@@ -328,10 +335,19 @@ def build_detection_params(
             'pixel_size_um': pixel_size_um,
         }
 
+    elif cell_type == 'islet':
+        return {
+            'membrane_channel': getattr(args, 'membrane_channel', 1),
+            'nuclear_channel': getattr(args, 'nuclear_channel', 4),
+            'min_area_um': getattr(args, 'islet_min_area', 30.0),
+            'max_area_um': getattr(args, 'islet_max_area', 500.0),
+            'max_candidates': 1000,
+        }
+
     else:
         raise ValueError(
             f"Unknown cell type: {cell_type}. "
-            f"Supported types: nmj, mk, hspc, vessel, mesothelium"
+            f"Supported types: nmj, mk, hspc, vessel, mesothelium, islet"
         )
 
 

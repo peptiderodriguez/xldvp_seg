@@ -184,11 +184,11 @@ def _gpu_worker(
         except Exception as e:
             logger.warning(f"[{worker_name}] Failed to load SAM2 auto: {e}")
 
-    # --- Load Cellpose (Cell strategy needs it) ---
-    if cell_type in ('cell',):
+    # --- Load Cellpose (Cell/Islet strategy needs it) ---
+    if cell_type in ('cell', 'islet'):
         try:
             from cellpose import models as cellpose_models
-            cellpose_model = cellpose_models.CellposeModel(gpu=True, model_type='cyto3')
+            cellpose_model = cellpose_models.CellposeModel(gpu=True, pretrained_model='cpsam')
             models['cellpose'] = cellpose_model
             logger.info(f"[{worker_name}] Cellpose loaded")
         except Exception as e:
@@ -258,6 +258,17 @@ def _gpu_worker(
         strategy = CellStrategy(
             min_area_um=strategy_params.get('min_area_um', 50),
             max_area_um=strategy_params.get('max_area_um', 200),
+            extract_deep_features=extract_deep_features,
+            extract_sam2_embeddings=extract_sam2_embeddings,
+        )
+    elif cell_type == 'islet':
+        from segmentation.detection.strategies.islet import IsletStrategy
+        strategy = IsletStrategy(
+            membrane_channel=strategy_params.get('membrane_channel', 1),
+            nuclear_channel=strategy_params.get('nuclear_channel', 4),
+            min_area_um=strategy_params.get('min_area_um', 30),
+            max_area_um=strategy_params.get('max_area_um', 500),
+            max_candidates=strategy_params.get('max_candidates', 1000),
             extract_deep_features=extract_deep_features,
             extract_sam2_embeddings=extract_sam2_embeddings,
         )

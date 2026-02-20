@@ -105,6 +105,7 @@ class PixelSizeConfig(TypedDict, total=False):
     nmj: float
     vessel: float
     mesothelium: float
+    islet: float
     default: float
 
 
@@ -120,6 +121,7 @@ class NormalizationPercentilesConfig(TypedDict, total=False):
     nmj: List[float]
     vessel: List[float]
     mesothelium: List[float]
+    islet: List[float]
     default: List[float]
 
 
@@ -225,6 +227,8 @@ def get_output_dir(cell_type: str) -> Path:
         return Path(DEFAULT_PATHS["nmj_output_dir"])
     elif cell_type in ("mk", "cell"):
         return Path(DEFAULT_PATHS["mk_output_dir"])
+    elif cell_type == "islet":
+        return Path(os.getenv("ISLET_OUTPUT_DIR", str(Path.home() / "islet_output")))
     else:
         return Path(DEFAULT_PATHS["output_dir"])
 
@@ -238,6 +242,7 @@ DEFAULT_CONFIG = {
         "nmj": 0.1725,
         "vessel": 0.22,
         "mesothelium": 0.22,
+        "islet": 0.22,
         "default": 0.22
     },
 
@@ -248,6 +253,7 @@ DEFAULT_CONFIG = {
         "nmj": [1, 99.5],  # Wider range for NMJ images
         "vessel": [5, 95],
         "mesothelium": [5, 95],
+        "islet": [1, 99.5],
         "default": [5, 95]
     },
 
@@ -310,6 +316,14 @@ DETECTION_DEFAULTS = {
         "max_ribbon_width_um": 30,
         "min_fragment_area_um2": 1500,
         "add_fiducials": True,
+    },
+    "islet": {
+        "channel": 1,  # AF633 membrane marker
+        "membrane_channel": 1,  # AF633
+        "nuclear_channel": 4,  # DAPI
+        "min_area_um2": 30,
+        "max_area_um2": 500,
+        "max_candidates": 1000,
     },
 }
 

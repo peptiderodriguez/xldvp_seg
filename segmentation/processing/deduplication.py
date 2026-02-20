@@ -22,12 +22,12 @@ logger = get_logger(__name__)
 
 
 def deduplicate_by_mask_overlap(detections, tiles_dir, min_overlap_fraction=0.1,
-                                mask_filename=None):
+                                mask_filename=None, sort_by='area'):
     """Remove duplicate detections by checking actual mask pixel overlap.
 
     For each pair of detections, checks if their masks overlap in global
     coordinates. When masks overlap by more than min_overlap_fraction of
-    the smaller mask, keeps the larger detection.
+    the smaller mask, keeps the higher-priority detection.
 
     Args:
         detections: List of detection dicts with 'tile_origin', 'mask_label', 'features'
@@ -35,6 +35,9 @@ def deduplicate_by_mask_overlap(detections, tiles_dir, min_overlap_fraction=0.1,
         min_overlap_fraction: Minimum overlap (fraction of smaller mask) to consider duplicates
         mask_filename: Name of the mask HDF5 file in each tile dir (e.g. 'nmj_masks.h5').
             Must be provided explicitly by the caller.
+        sort_by: Priority for keeping detections during dedup.
+            'area' (default): larger detections win (backward-compat)
+            'confidence': higher-scoring detections win (uses rf_prediction/score/sam2_score)
 
     Returns:
         List of deduplicated detections
@@ -110,8 +113,19 @@ def deduplicate_by_mask_overlap(detections, tiles_dir, min_overlap_fraction=0.1,
 
         det_info.append((det, bbox, global_coords))
 
-    # Sort by area descending (keep larger ones)
-    det_info.sort(key=lambda x: x[0].get('features', {}).get('area', 0), reverse=True)
+    # Sort by priority descending (keep higher-priority ones)
+    if sort_by == 'confidence':
+        def _confidence_key(item):
+            det = item[0]
+            score = det.get('rf_prediction')
+            if score is None:
+                score = det.get('score')
+            if score is None:
+                score = det.get('features', {}).get('sam2_score', 0)
+            return score if score is not None else 0
+        det_info.sort(key=_confidence_key, reverse=True)
+    else:
+        det_info.sort(key=lambda x: x[0].get('features', {}).get('area', 0), reverse=True)
 
     # Greedy deduplication: keep detection if it doesn't significantly overlap with any kept detection
     kept = []
