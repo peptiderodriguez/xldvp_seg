@@ -1640,11 +1640,17 @@ def run_pipeline(args):
     )
 
     # Filter to tissue-containing tiles using loader (handles mosaic origin)
+    # For islet: use DAPI (nuclear) for tissue detection — universal cell marker,
+    # more reliable than membrane channel which can have weak/variable signal
+    tissue_channel = args.channel
+    if args.cell_type == 'islet':
+        tissue_channel = getattr(args, 'nuclear_channel', 4)
+        logger.info(f"Islet: using DAPI (ch{tissue_channel}) for tissue detection")
     logger.info("Filtering to tissue-containing tiles...")
     tissue_tiles = filter_tissue_tiles(
         all_tiles,
         variance_threshold,
-        channel=args.channel,
+        channel=tissue_channel,
         tile_size=args.tile_size,
         loader=loader,  # Loader handles mosaic origin offset correctly
     )
@@ -2197,8 +2203,10 @@ def run_pipeline(args):
                     tile_rgb = np.stack([tile_data] * 3, axis=-1)
 
                 # has_tissue() check on uint16 BEFORE conversion
+                # For islet: use DAPI (nuclear) — more reliable tissue indicator
                 try:
-                    det_ch = extra_channel_tiles.get(args.channel, tile_rgb[:, :, 0]) if extra_channel_tiles else tile_rgb[:, :, 0]
+                    tissue_ch = getattr(args, 'nuclear_channel', 4) if args.cell_type == 'islet' else args.channel
+                    det_ch = extra_channel_tiles.get(tissue_ch, tile_rgb[:, :, 0]) if extra_channel_tiles else tile_rgb[:, :, 0]
                     has_tissue_flag, _ = has_tissue(det_ch, variance_threshold=variance_threshold)
                 except Exception:
                     has_tissue_flag = True
