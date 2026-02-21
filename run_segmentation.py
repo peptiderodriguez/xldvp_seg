@@ -1706,19 +1706,8 @@ def run_pipeline(args):
     all_tiles = generate_tile_grid(mosaic_info, args.tile_size, overlap_fraction=overlap)
     logger.info(f"  Total tiles: {len(all_tiles)}")
 
-    # Calibrate tissue threshold using RAM-loaded data
-    logger.info("Calibrating tissue threshold...")
-    variance_threshold = calibrate_tissue_threshold(
-        all_tiles,
-        calibration_samples=min(50, len(all_tiles)),
-        channel=args.channel,
-        tile_size=args.tile_size,
-        loader=loader,  # Loader handles mosaic origin offset correctly
-    )
-
-    # Filter to tissue-containing tiles using loader (handles mosaic origin)
-    # For islet: use DAPI (nuclear) for tissue detection — universal cell marker,
-    # more reliable than membrane channel which can have weak/variable signal
+    # Determine tissue detection channel BEFORE calibration
+    # For islet/tissue_pattern: use nuclear channel (universal cell marker)
     tissue_channel = args.channel
     if args.cell_type == 'islet':
         tissue_channel = getattr(args, 'nuclear_channel', 4)
@@ -1726,6 +1715,16 @@ def run_pipeline(args):
     elif args.cell_type == 'tissue_pattern':
         tissue_channel = getattr(args, 'tp_nuclear_channel', 4)
         logger.info(f"Tissue pattern: using nuclear (ch{tissue_channel}) for tissue detection")
+
+    # Calibrate tissue threshold on the SAME channel used for filtering
+    logger.info("Calibrating tissue threshold...")
+    variance_threshold = calibrate_tissue_threshold(
+        all_tiles,
+        calibration_samples=min(50, len(all_tiles)),
+        channel=tissue_channel,
+        tile_size=args.tile_size,
+        loader=loader,  # Loader handles mosaic origin offset correctly
+    )
     logger.info("Filtering to tissue-containing tiles...")
     tissue_tiles = filter_tissue_tiles(
         all_tiles,
@@ -2142,7 +2141,7 @@ def run_pipeline(args):
                 classifier_path=classifier_path,
                 extract_deep_features=extract_deep,
                 extract_sam2_embeddings=True,
-                detection_channel=args.channel,
+                detection_channel=tissue_channel,
                 cd31_channel=mgpu_cd31_channel,
                 channel_names=mgpu_channel_names,
                 variance_threshold=variance_threshold,
