@@ -7,6 +7,7 @@ different detection strategies without code duplication.
 
 from typing import Dict, Any, Optional
 import numpy as np
+from scipy.stats import skew, kurtosis
 
 
 class MultiChannelFeatureMixin:
@@ -86,7 +87,9 @@ class MultiChannelFeatureMixin:
         masked_pixels = channel_data[mask].astype(float)
         masked_pixels = masked_pixels[masked_pixels > 0]
         if len(masked_pixels) == 0:
-            return {}
+            return {f'{channel_name}_{stat}': 0.0 for stat in
+                    ['mean', 'std', 'max', 'min', 'median', 'p5', 'p25', 'p75', 'p95',
+                     'variance', 'skewness', 'kurtosis', 'iqr', 'dynamic_range', 'cv']}
 
         features = {}
         prefix = channel_name
@@ -266,9 +269,11 @@ class MultiChannelFeatureMixin:
         """
         if len(data) < 3:
             return 0.0
+        if data.max() == data.min():  # constant array
+            return 0.0
         try:
-            from scipy.stats import skew
-            return float(skew(data))
+            result = float(skew(data))
+            return result if np.isfinite(result) else 0.0
         except Exception:
             return 0.0
 
@@ -284,9 +289,11 @@ class MultiChannelFeatureMixin:
         """
         if len(data) < 4:
             return 0.0
+        if data.max() == data.min():  # constant array
+            return 0.0
         try:
-            from scipy.stats import kurtosis
-            return float(kurtosis(data))
+            result = float(kurtosis(data))
+            return result if np.isfinite(result) else 0.0
         except Exception:
             return 0.0
 

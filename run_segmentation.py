@@ -818,20 +818,32 @@ def compute_islet_marker_thresholds(all_detections, vis_threshold_overrides=None
         ratio_min: dominant marker must be >= ratio_min * second-highest
             to be classified as single-marker. Otherwise → "multi".
 
-    Returns (norm_ranges, ch_thresholds, ratio_min) for classify_islet_marker().
+    Returns (norm_ranges, ch_thresholds, ratio_min) for classify_islet_marker(),
+        or None if too few detections for reliable thresholds.
     """
+    if len(all_detections) < 10:
+        logger.warning(f"Only {len(all_detections)} detections — too few for reliable "
+                       "marker thresholds. Skipping marker classification.")
+        return None
+
     from skimage.filters import threshold_otsu
 
-    gcg = np.array([d['features'].get('ch2_mean', 0) for d in all_detections])
-    ins = np.array([d['features'].get('ch3_mean', 0) for d in all_detections])
-    sst = np.array([d['features'].get('ch5_mean', 0) for d in all_detections])
+    gcg = np.array([d.get('features', {}).get('ch2_mean', 0) for d in all_detections])
+    ins = np.array([d.get('features', {}).get('ch3_mean', 0) for d in all_detections])
+    sst = np.array([d.get('features', {}).get('ch5_mean', 0) for d in all_detections])
 
     norm_ranges = {}
     ch_thresholds = {}
 
     for ch_key, ch_name, arr in [('ch2', 'Gcg', gcg), ('ch3', 'Ins', ins), ('ch5', 'Sst', sst)]:
-        lo = float(np.percentile(arr, 1))
-        hi = float(np.percentile(arr, 99.5))
+        # Exclude zero-valued entries (cells with no signal or missing features)
+        # to prevent pulling down p1 percentile and skewing Otsu thresholds
+        arr_pos = arr[arr > 0]
+        if len(arr_pos) < 10:
+            logger.warning(f"Only {len(arr_pos)} cells with nonzero {ch_name} — using full array for percentiles")
+            arr_pos = arr
+        lo = float(np.percentile(arr_pos, 1))
+        hi = float(np.percentile(arr_pos, 99.5))
         norm_ranges[ch_key] = (lo, hi)
 
         # Normalize to [0, 1]
@@ -1439,7 +1451,7 @@ def create_sample_from_detection(tile_x, tile_y, tile_rgb, masks, feat, pixel_si
     Minimum crop size is 224px, maximum is 800px.
     """
     det_id = feat['id']
-    # Use mask_label if available (multi-GPU path), otherwise parse from id (single-GPU path)
+    # Use mask_label if available, otherwise parse from id (legacy fallback)
     if 'mask_label' in feat:
         det_num = feat['mask_label']
     else:
@@ -2140,18 +2152,16 @@ def run_pipeline(args):
         # Skip the regular tile loop - go directly to HTML export
         logger.info(f"Multi-scale mode: {len(all_detections)} detections, {len(all_samples)} HTML samples")
 
-    elif getattr(args, 'multi_gpu', False):
-        # Multi-GPU processing (all cell types)
+    else:
+        # Tile processing via shared-memory worker infrastructure (all cell types, 1+ GPUs)
+        num_gpus = getattr(args, 'num_gpus', 1)
         logger.info("=" * 60)
-        logger.info(f"MULTI-GPU {args.cell_type.upper()} DETECTION ENABLED")
+        logger.info(f"{args.cell_type.upper()} DETECTION — {num_gpus} GPU(s)")
         logger.info("=" * 60)
-
-        num_gpus = getattr(args, 'num_gpus', 4)
-        logger.info(f"Using {num_gpus} GPUs for parallel {args.cell_type} detection")
 
         # Multi-channel data is recommended but not required
         if len(all_channel_data) < 2:
-            logger.warning("Multi-GPU mode works best with --all-channels for multi-channel features")
+            logger.warning("Pipeline works best with --all-channels for multi-channel features")
 
         from segmentation.processing.multigpu_shm import SharedSlideManager
         from segmentation.processing.multigpu_worker import MultiGPUTileProcessor
@@ -2191,25 +2201,24 @@ def run_pipeline(args):
             strategy_params = dict(params)  # params built by build_detection_params()
 
             # Get classifier path — only use if explicitly specified
+            # Note: classifier_loaded is already set during detector initialization above;
+            # we just need the path string for the multi-GPU workers.
             classifier_path = None
             if args.cell_type == 'nmj':
                 classifier_path = getattr(args, 'nmj_classifier', None)
                 if classifier_path:
-                    classifier_loaded = True
                     logger.info(f"Using specified NMJ classifier: {classifier_path}")
                 else:
                     logger.info("No --nmj-classifier specified — will return all candidates (annotation run)")
             elif args.cell_type == 'islet':
                 classifier_path = getattr(args, 'islet_classifier', None)
                 if classifier_path:
-                    classifier_loaded = True
                     logger.info(f"Using specified islet classifier: {classifier_path}")
                 else:
                     logger.info("No --islet-classifier specified — will return all candidates (annotation run)")
             elif args.cell_type == 'tissue_pattern':
                 classifier_path = getattr(args, 'tp_classifier', None)
                 if classifier_path:
-                    classifier_loaded = True
                     logger.info(f"Using specified tissue_pattern classifier: {classifier_path}")
                 else:
                     logger.info("No --tp-classifier specified — will return all candidates (annotation run)")
@@ -2400,229 +2409,13 @@ def run_pipeline(args):
                         )
                         all_samples.extend(html_samples)
                     deferred_html_tiles = []  # clear after processing
+                    gc.collect()  # free ~1.6 GB of retained tile data
 
-            logger.info(f"Multi-GPU processing complete: {total_detections} {args.cell_type} detections from {results_collected} tiles")
+            logger.info(f"Processing complete: {total_detections} {args.cell_type} detections from {results_collected} tiles")
 
         finally:
             # Cleanup shared memory
             shm_manager.cleanup()
-
-    else:
-        # Standard single-scale tile processing
-        for tile in tqdm(sampled_tiles, desc="Tiles"):
-            tile_x = tile['x']
-            tile_y = tile['y']
-
-            try:
-                # Use loader.get_tile() for consistent tile extraction
-                # This uses RAM-loaded data if available, or falls back to on-demand reading
-                tile_data = loader.get_tile(tile_x, tile_y, args.tile_size, channel=args.channel)
-
-                if tile_data is None or tile_data.size == 0:
-                    continue
-
-                if tile_data.max() == 0:
-                    continue
-
-                # Convert global tile coords to 0-based array indices
-                # (tiles have global mosaic coords, but RAM arrays are 0-indexed)
-                rel_x = tile_x - x_start
-                rel_y = tile_y - y_start
-
-                # Build extra_channel_tiles for ALL cell types when multi-channel available
-                extra_channel_tiles = None
-                if len(all_channel_data) >= 2:
-                    extra_channel_tiles = {}
-                    for ch_idx, ch_data in all_channel_data.items():
-                        extra_channel_tiles[ch_idx] = ch_data[
-                            rel_y:rel_y + args.tile_size,
-                            rel_x:rel_x + args.tile_size
-                        ]
-
-                # Build RGB tile from channels (matches multi-GPU path in multigpu_worker.py)
-                ch_keys_sorted = sorted(all_channel_data.keys())
-                n_ch = len(ch_keys_sorted)
-                if n_ch >= 3:
-                    tile_rgb = np.stack([
-                        all_channel_data[k][rel_y:rel_y + args.tile_size, rel_x:rel_x + args.tile_size]
-                        for k in ch_keys_sorted[:3]
-                    ], axis=-1)
-                elif n_ch == 2:
-                    ch0 = all_channel_data[ch_keys_sorted[0]][rel_y:rel_y + args.tile_size, rel_x:rel_x + args.tile_size]
-                    ch1 = all_channel_data[ch_keys_sorted[1]][rel_y:rel_y + args.tile_size, rel_x:rel_x + args.tile_size]
-                    tile_rgb = np.stack([ch0, ch1, ch1], axis=-1)
-                elif n_ch == 1:
-                    ch0 = all_channel_data[ch_keys_sorted[0]][rel_y:rel_y + args.tile_size, rel_x:rel_x + args.tile_size]
-                    tile_rgb = np.stack([ch0, ch0, ch0], axis=-1)
-                else:
-                    # Fallback: use detection channel tile
-                    tile_rgb = np.stack([tile_data] * 3, axis=-1)
-
-                # has_tissue() check on uint16 BEFORE conversion
-                # For islet: use DAPI (nuclear) — more reliable tissue indicator
-                try:
-                    if args.cell_type == 'islet':
-                        tissue_ch = getattr(args, 'nuclear_channel', 4)
-                    elif args.cell_type == 'tissue_pattern':
-                        tissue_ch = getattr(args, 'tp_nuclear_channel', 4)
-                    else:
-                        tissue_ch = args.channel
-                    det_ch = extra_channel_tiles.get(tissue_ch, tile_rgb[:, :, 0]) if extra_channel_tiles else tile_rgb[:, :, 0]
-                    has_tissue_flag, _ = has_tissue(det_ch, variance_threshold=variance_threshold)
-                except Exception:
-                    has_tissue_flag = True
-                if not has_tissue_flag:
-                    continue
-
-                # Convert to uint8 for visual models (extra_channel_tiles stay uint16)
-                if tile_rgb.dtype != np.uint8:
-                    if tile_rgb.dtype == np.uint16:
-                        tile_rgb = (tile_rgb / 256).astype(np.uint8)
-                    else:
-                        tile_rgb = tile_rgb.astype(np.uint8)
-
-                # Get CD31 channel if specified (for vessel validation)
-                cd31_channel_data = None
-                if args.cell_type == 'vessel' and getattr(args, 'cd31_channel', None) is not None:
-                    cd31_tile = loader.get_tile(tile_x, tile_y, args.tile_size, channel=args.cd31_channel)
-                    if cd31_tile is not None and cd31_tile.size > 0:
-                        cd31_channel_data = cd31_tile.astype(np.float32)
-
-                # Parse vessel channel names
-                channel_names = None
-                if args.cell_type == 'vessel' and getattr(args, 'channel_names', None) and extra_channel_tiles:
-                    names = args.channel_names.split(',')
-                    actual_indices = sorted(extra_channel_tiles.keys())
-                    channel_names = {actual_indices[i]: name.strip()
-                                     for i, name in enumerate(names)
-                                     if i < len(actual_indices)}
-
-                # Detect using common function (CUDA retry, mask_label, UID enrichment)
-                result = process_single_tile(
-                    tile_rgb=tile_rgb,
-                    extra_channel_tiles=extra_channel_tiles,
-                    strategy=strategy,
-                    models=detector.models,
-                    pixel_size_um=pixel_size_um,
-                    cell_type=args.cell_type,
-                    slide_name=slide_name,
-                    tile_x=tile_x,
-                    tile_y=tile_y,
-                    cd31_channel_data=cd31_channel_data,
-                    channel_names=channel_names,
-                    max_retries=3,
-                )
-
-                if result is None:
-                    continue
-
-                masks, features_list = result
-
-                # Apply vessel classifier post-processing
-                if args.cell_type == 'vessel':
-                    apply_vessel_classifiers(features_list, vessel_classifier, vessel_type_classifier)
-
-                # Add to global list
-                for feat in features_list:
-                    all_detections.append(feat)
-
-                # Save masks and features
-                tile_id = f"tile_{tile_x}_{tile_y}"
-                tile_out = tiles_dir / tile_id
-                tile_out.mkdir(exist_ok=True)
-
-                with h5py.File(tile_out / f"{args.cell_type}_masks.h5", 'w') as f:
-                    create_hdf5_dataset(f, 'masks', masks)
-
-                with open(tile_out / f"{args.cell_type}_features.json", 'w') as f:
-                    json.dump(features_list, f, cls=NumpyEncoder)
-
-                # Create samples for HTML with quality filtering
-                # For islet: use Gcg(ch2)/Ins(ch3)/Sst(ch5) as RGB display
-                if args.cell_type == 'islet' and extra_channel_tiles and 2 in extra_channel_tiles and 3 in extra_channel_tiles and 5 in extra_channel_tiles:
-                    tile_rgb_display = np.stack([
-                        extra_channel_tiles[2],  # R = Gcg
-                        extra_channel_tiles[3],  # G = Ins
-                        extra_channel_tiles[5],  # B = Sst
-                    ], axis=-1)
-                    # Keep uint16 for islet — low-signal fluorescence (Gcg mean=16.7)
-                    # would become all-zero after /256. percentile_normalize() handles uint16.
-                elif args.cell_type == 'tissue_pattern' and extra_channel_tiles:
-                    # Tissue pattern: configurable R/G/B display channels
-                    # Handles any number of display channels (1, 2, or 3+), always produces (h, w, 3)
-                    tp_disp = [int(x) for x in args.tp_display_channels.split(',')]
-                    _ect_dtype = next(iter(extra_channel_tiles.values())).dtype
-                    _th, _tw = next(iter(extra_channel_tiles.values())).shape[:2]
-                    rgb_channels = []
-                    for _ci in range(3):
-                        if _ci < len(tp_disp) and tp_disp[_ci] in extra_channel_tiles:
-                            rgb_channels.append(extra_channel_tiles[tp_disp[_ci]])
-                        else:
-                            rgb_channels.append(np.zeros((_th, _tw), dtype=_ect_dtype))
-                    tile_rgb_display = np.stack(rgb_channels, axis=-1)
-                    # Keep uint16 — FISH channels can have low signal like islet
-                else:
-                    tile_rgb_display = tile_rgb
-                tile_pct = _compute_tile_percentiles(tile_rgb_display) if getattr(args, 'html_normalization', 'crop') == 'tile' else None
-
-                if args.cell_type == 'islet':
-                    # Defer HTML generation until marker thresholds are computed
-                    deferred_html_tiles.append({
-                        'features_list': features_list,
-                        'tile_x': tile_x, 'tile_y': tile_y,
-                        'tile_rgb_html': tile_rgb_display,
-                        'masks': masks.copy(),
-                        'tile_pct': tile_pct,
-                    })
-                else:
-                    html_samples = filter_and_create_html_samples(
-                        features_list, tile_x, tile_y, tile_rgb_display, masks,
-                        pixel_size_um, slide_name, args.cell_type,
-                        args.html_score_threshold,
-                        tile_percentiles=tile_pct,
-                    )
-                    all_samples.extend(html_samples)
-                total_detections += len(features_list)
-
-                del tile_data, tile_rgb, masks
-                if extra_channel_tiles is not None:
-                    del extra_channel_tiles
-                    extra_channel_tiles = None
-                if cd31_channel_data is not None:
-                    del cd31_channel_data
-                gc.collect()
-                torch.cuda.empty_cache()
-
-            except Exception as e:
-                import traceback
-                logger.error(f"Error processing tile ({tile_x}, {tile_y}): {e}")
-                logger.error(f"Traceback:\n{traceback.format_exc()}")
-                gc.collect()
-                torch.cuda.empty_cache()
-                continue
-
-    # Deferred HTML generation for islet — single-GPU path only
-    # (multi-GPU path handles this inside its own block and clears deferred_html_tiles)
-    if deferred_html_tiles and args.cell_type == 'islet':
-        marker_thresholds = compute_islet_marker_thresholds(all_detections) if all_detections else None
-        if marker_thresholds:
-            counts = {}
-            for det in all_detections:
-                mc, _ = classify_islet_marker(det.get('features', {}), marker_thresholds)
-                det['marker_class'] = mc
-                counts[mc] = counts.get(mc, 0) + 1
-            logger.info(f"Islet marker classification: {counts}")
-        for dt in deferred_html_tiles:
-            html_samples = filter_and_create_html_samples(
-                dt['features_list'], dt['tile_x'], dt['tile_y'],
-                dt['tile_rgb_html'], dt['masks'],
-                pixel_size_um, slide_name, args.cell_type,
-                args.html_score_threshold,
-                tile_percentiles=dt['tile_pct'],
-                marker_thresholds=marker_thresholds,
-            )
-            all_samples.extend(html_samples)
-        del deferred_html_tiles
 
     logger.info(f"Total detections (pre-dedup): {len(all_detections)}")
 
@@ -3024,11 +2817,14 @@ def main():
     parser.add_argument('--skip-deep-features', action='store_true',
                         help='Deprecated: deep features are off by default now. Use --extract-deep-features to enable.')
 
-    # Multi-GPU processing
-    parser.add_argument('--multi-gpu', action='store_true',
-                        help='Enable multi-GPU processing. Distributes tiles across GPUs via shared memory.')
-    parser.add_argument('--num-gpus', type=int, default=4,
-                        help='Number of GPUs to use for multi-GPU processing (default: 4)')
+    # GPU processing (always uses multi-GPU infrastructure, even with 1 GPU)
+    parser.add_argument('--multi-gpu', action='store_true', default=True,
+                        help='[DEPRECATED - always enabled] Multi-GPU processing is now the only code path. '
+                             'Use --num-gpus to control how many GPUs are used (default: auto-detect).')
+    parser.add_argument('--num-gpus', type=int, default=None,
+                        help='Number of GPUs to use (default: auto-detect via torch.cuda.device_count(), '
+                             'minimum 1). The pipeline always uses the multi-GPU infrastructure, '
+                             'even with --num-gpus 1.')
 
     # HTML export
     parser.add_argument('--samples-per-page', type=int, default=300)
@@ -3107,6 +2903,16 @@ def main():
         args.all_channels = True
         args.parallel_detection = True
         # Note: logger not available yet, will log in run_pipeline()
+
+    # Auto-detect number of GPUs if not specified
+    if args.num_gpus is None:
+        try:
+            args.num_gpus = max(1, torch.cuda.device_count())
+        except Exception:
+            args.num_gpus = 1
+
+    # --multi-gpu is always True now (kept for backward compatibility)
+    args.multi_gpu = True
 
     run_pipeline(args)
 

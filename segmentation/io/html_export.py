@@ -908,7 +908,7 @@ def generate_annotation_page(
             mc_color = mc_colors.get(mc, '#888')
             stats_parts.append(f'<span style="color:{mc_color};font-weight:bold">{mc}</span>')
         if 'islet_id' in stats and stats['islet_id'] is not None:
-            stats_parts.append(f'I{stats["islet_id"]}')
+            stats_parts.append(f'I{_esc(str(stats["islet_id"]))}')
 
         stats_str = ' | '.join(stats_parts) if stats_parts else ''
 

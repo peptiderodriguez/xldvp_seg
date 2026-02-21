@@ -329,6 +329,8 @@ def _gpu_worker(
                     'error': f'Unknown slide: {slide_name}'
                 })
                 tiles_processed += 1
+                if tiles_processed % 5 == 0:
+                    gc.collect()
                 continue
 
             _, slide_arr = shared_slides[slide_name]
@@ -344,6 +346,8 @@ def _gpu_worker(
             y_end = min(y_rel + tile_h, slide_arr.shape[0])
             x_end = min(x_rel + tile_w, slide_arr.shape[1])
 
+            n_ch = 1  # default for 2D arrays
+            tile_raw = None
             if slide_arr.ndim == 3:
                 tile_raw = slide_arr[y_rel:y_end, x_rel:x_end, :].copy()
                 n_ch = tile_raw.shape[2]
@@ -365,6 +369,8 @@ def _gpu_worker(
                     'slide_name': slide_name, 'tile': tile,
                 })
                 tiles_processed += 1
+                if tiles_processed % 5 == 0:
+                    gc.collect()
                 continue
 
             # Build extra_channel_tiles from tile_raw (already copied from shared memory)
@@ -380,6 +386,25 @@ def _gpu_worker(
                         czi_ch = channel_keys[slot_idx] if channel_keys and slot_idx < len(channel_keys) else slot_idx
                         extra_channel_tiles[czi_ch] = tile_raw[:, :, slot_idx]
 
+            # For islet: override tile_rgb with display channels (Gcg/Ins/Sst)
+            # so morphological features are extracted from the marker channels,
+            # not the first 3 channels (Bright/AF633/Gcg).
+            if cell_type == 'islet' and extra_channel_tiles and n_ch >= 6:
+                # channel_keys maps slot indices to CZI channel indices
+                # Find slots corresponding to CZI channels 2, 3, 5
+                slot_2 = next((i for i, k in enumerate(channel_keys) if k == 2), None)
+                slot_3 = next((i for i, k in enumerate(channel_keys) if k == 3), None)
+                slot_5 = next((i for i, k in enumerate(channel_keys) if k == 5), None)
+                if slot_2 is not None and slot_3 is not None and slot_5 is not None:
+                    tile_rgb = np.stack([
+                        tile_raw[:, :, slot_2],  # Gcg -> R
+                        tile_raw[:, :, slot_3],  # Ins -> G
+                        tile_raw[:, :, slot_5],  # Sst -> B
+                    ], axis=-1)
+                else:
+                    logger.warning(f"[{worker_name}] Islet display channels 2,3,5 not all in "
+                                   f"channel_keys={channel_keys}. Using first 3 channels.")
+
             # has_tissue() check on uint16 BEFORE conversion
             try:
                 det_ch = extra_channel_tiles.get(detection_channel, tile_rgb[:, :, 0]) if extra_channel_tiles else tile_rgb[:, :, 0]
@@ -388,10 +413,12 @@ def _gpu_worker(
                 has_tissue_flag = True
 
             # Convert to uint8 for visual models
+            # For islet: skip /256 truncation — low-signal fluorescence (Gcg mean=16.7)
+            # would become all-zero. Downstream handles uint16.
             if tile_rgb.dtype != np.uint8:
-                if tile_rgb.dtype == np.uint16:
+                if tile_rgb.dtype == np.uint16 and cell_type not in ('islet',):
                     tile_rgb = (tile_rgb / 256).astype(np.uint8)
-                else:
+                elif tile_rgb.dtype != np.uint16:
                     tile_rgb = tile_rgb.astype(np.uint8)
 
             if not has_tissue_flag:
@@ -400,6 +427,8 @@ def _gpu_worker(
                     'slide_name': slide_name, 'tile': tile,
                 })
                 tiles_processed += 1
+                if tiles_processed % 5 == 0:
+                    gc.collect()
                 continue
 
             # Extract CD31 channel tile for vessel validation (if available in shared memory)
@@ -453,8 +482,9 @@ def _gpu_worker(
                 })
 
             tiles_processed += 1
-            gc.collect()
-            torch.cuda.empty_cache()
+            if tiles_processed % 5 == 0:
+                gc.collect()
+                torch.cuda.empty_cache()
 
         except Exception as e:
             logger.error(f"[{worker_name}] Worker loop error: {e}")

@@ -20,6 +20,7 @@ from typing import Dict, Any, List, Optional, Tuple
 from scipy import ndimage
 
 from .cell import CellStrategy
+from .base import Detection
 from segmentation.utils.logging import get_logger
 from segmentation.utils.feature_extraction import extract_morphological_features
 
@@ -111,11 +112,52 @@ class IsletStrategy(CellStrategy):
         self.nuclear_channel = nuclear_channel
         # IsletStrategy.segment() doesn't use max_candidates (area pre-filter instead)
         # Remove inherited attr so it doesn't pollute get_config() logs
-        del self.max_candidates
+        if hasattr(self, 'max_candidates'):
+            del self.max_candidates
 
     @property
     def name(self) -> str:
         return "islet"
+
+    def filter(
+        self,
+        masks: List[np.ndarray],
+        features: List[Dict[str, Any]],
+        pixel_size_um: float
+    ) -> List[Detection]:
+        """
+        Filter islet candidates — skip area check (already done in segment()).
+
+        Preserves all non-area behavior from CellStrategy.filter():
+        centroid extraction, area_um2 computation, Detection creation with id/score.
+        """
+        if not masks:
+            return []
+
+        pixel_area_um2 = pixel_size_um ** 2
+
+        detections = []
+        for i, (mask, feat) in enumerate(zip(masks, features)):
+            area_px = mask.sum()
+
+            # Get centroid
+            centroid = feat.get('centroid', [0, 0])
+
+            # Compute area in microns
+            area_um2 = area_px * pixel_area_um2
+
+            # Add computed area to features
+            feat['area_um2'] = area_um2
+
+            detections.append(Detection(
+                mask=mask,
+                centroid=centroid,
+                features=feat,
+                id=f'{self.name}_{i}',
+                score=feat.get('sam2_score', feat.get('solidity', 0.0))
+            ))
+
+        return detections
 
     def segment(
         self,
@@ -150,23 +192,28 @@ class IsletStrategy(CellStrategy):
             raise RuntimeError("Cellpose model required for islet detection")
 
         # --- Build 2-channel Cellpose input from extra_channels ---
-        if extra_channels is None:
-            logger.warning("No extra_channels for islet — falling back to grayscale Cellpose")
-            return super().segment(tile, models, **kwargs)
+        if extra_channels is None or self.membrane_channel not in extra_channels:
+            raise ValueError(
+                f"IsletStrategy requires extra_channels with membrane_channel={self.membrane_channel}. "
+                f"Available: {list(extra_channels.keys()) if extra_channels else 'None'}"
+            )
 
         membrane_raw = extra_channels.get(self.membrane_channel)
         nuclear_raw = extra_channels.get(self.nuclear_channel)
 
         if membrane_raw is None or nuclear_raw is None:
-            logger.warning(
-                f"Missing membrane (ch{self.membrane_channel}) or nuclear "
-                f"(ch{self.nuclear_channel}) — falling back to grayscale Cellpose"
+            raise ValueError(
+                f"IsletStrategy requires both membrane (ch{self.membrane_channel}) and nuclear "
+                f"(ch{self.nuclear_channel}) channels. Got membrane={membrane_raw is not None}, "
+                f"nuclear={nuclear_raw is not None}. Available: {list(extra_channels.keys())}"
             )
-            return super().segment(tile, models, **kwargs)
 
         # Percentile-normalize uint16 -> uint8 per channel
         membrane_u8 = _percentile_normalize_channel(membrane_raw)
         nuclear_u8 = _percentile_normalize_channel(nuclear_raw)
+
+        # Cache for detect() to reuse (avoids double normalization — E7)
+        self._membrane_u8 = membrane_u8
 
         # Stack as 2-channel input: (H, W, 2)
         cellpose_input = np.stack([membrane_u8, nuclear_u8], axis=-1)
@@ -184,36 +231,40 @@ class IsletStrategy(CellStrategy):
         # Compute area in um² for each cell and filter by min/max area
         # This is done HERE (before detect() feature extraction) to avoid
         # extracting expensive features for cells that will be discarded.
-        pixel_area_um2 = kwargs.get('pixel_size_um', 0.325) ** 2
+        pixel_size_um = kwargs.get('pixel_size_um')
+        if pixel_size_um is None:
+            raise ValueError("pixel_size_um must be passed to islet segment()")
+        pixel_area_um2 = pixel_size_um ** 2
         min_area_px = int(self.min_area_um / pixel_area_um2) if pixel_area_um2 > 0 else 10
         max_area_px = int(self.max_area_um / pixel_area_um2) if pixel_area_um2 > 0 else 100000
 
-        # Compute areas for all cells
-        areas = []
-        for cp_id in cellpose_ids:
-            area_px = (cellpose_masks == cp_id).sum()
-            areas.append((cp_id, area_px))
+        # Compute areas for all cells in O(M) using bincount
+        areas_all = np.bincount(cellpose_masks.ravel())
+        areas = [(cp_id, areas_all[cp_id]) for cp_id in cellpose_ids]
 
         # Filter by area range (um² converted to pixels)
         in_range = [(cp_id, a) for cp_id, a in areas if min_area_px <= a <= max_area_px]
         out_of_range = len(areas) - len(in_range)
         print(f"[islet] Area filter: {len(in_range)}/{len(areas)} in range "
               f"[{min_area_px}-{max_area_px}px = {self.min_area_um}-{self.max_area_um}um²], "
-              f"pixel_size={kwargs.get('pixel_size_um', '?')}", flush=True)
+              f"pixel_size={pixel_size_um}", flush=True)
         if out_of_range > 0:
             logger.info(f"  Area filter: {len(in_range)} in range [{self.min_area_um}-{self.max_area_um} um²], "
                         f"{out_of_range} rejected")
 
-        # Extract individual boolean masks from Cellpose label array
+        # Extract individual boolean masks from Cellpose label array using find_objects
+        # find_objects returns slices for each label (1-indexed), enabling O(1) per-cell extraction
+        slices = ndimage.find_objects(cellpose_masks)
         accepted_masks = []
-        for cp_id, _ in in_range:
-            cp_mask = (cellpose_masks == cp_id).astype(bool)
+        for cp_id, area_px in in_range:
+            sl = slices[cp_id - 1]  # find_objects is 1-indexed
+            if sl is None:
+                continue
+            cp_mask = np.zeros(cellpose_masks.shape, dtype=bool)
+            cp_mask[sl] = (cellpose_masks[sl] == cp_id)
             if cp_mask.sum() < self.min_mask_pixels:
                 continue
             accepted_masks.append(cp_mask)
-
-        # No SAM2 scores — use None placeholder (detect() handles this)
-        self._last_segment_scores = []
 
         logger.info(f"  Accepted {len(accepted_masks)} masks (>= {self.min_mask_pixels} px)")
 
@@ -312,7 +363,6 @@ class IsletStrategy(CellStrategy):
             Tuple of (label_array, list of Detection objects)
         """
         import torch
-        from .base import Detection
 
         sam2_predictor = models.get('sam2_predictor')
 
@@ -331,10 +381,10 @@ class IsletStrategy(CellStrategy):
             return np.zeros(tile.shape[:2], dtype=np.uint32), []
 
         # Set SAM2 image for embedding extraction (segment() no longer uses SAM2)
+        # Reuse cached membrane_u8 from segment() to avoid double percentile normalization (E7)
         if self.extract_sam2_embeddings and sam2_predictor is not None:
-            membrane_raw = extra_channels.get(self.membrane_channel) if extra_channels else None
-            if membrane_raw is not None:
-                membrane_u8 = _percentile_normalize_channel(membrane_raw)
+            membrane_u8 = getattr(self, '_membrane_u8', None)
+            if membrane_u8 is not None:
                 sam2_rgb = np.stack([membrane_u8, membrane_u8, membrane_u8], axis=-1)
             else:
                 sam2_rgb = tile  # fallback to tile RGB
@@ -346,20 +396,35 @@ class IsletStrategy(CellStrategy):
         crops_for_resnet_context = []
         crop_indices = []
 
-        # No SAM2 scores from segment() (Cellpose-only)
-        segment_scores = getattr(self, '_last_segment_scores', [])
+        # Convert tile to uint8 for morphological feature extraction
+        # (extract_morphological_features assumes uint8 for HSV, dark_fraction, etc.)
+        if tile.dtype != np.uint8:
+            tile_u8 = np.zeros_like(tile, dtype=np.uint8)
+            for ch in range(tile.shape[2] if tile.ndim == 3 else 1):
+                ch_data = tile[:, :, ch] if tile.ndim == 3 else tile
+                nonzero = ch_data[ch_data > 0]
+                if len(nonzero) > 0:
+                    p1, p99 = np.percentile(nonzero, [1, 99])
+                    if p99 > p1:
+                        if tile.ndim == 3:
+                            tile_u8[:, :, ch] = np.clip((ch_data.astype(np.float32) - p1) / (p99 - p1) * 255, 0, 255).astype(np.uint8)
+                        else:
+                            tile_u8 = np.clip((ch_data.astype(np.float32) - p1) / (p99 - p1) * 255, 0, 255).astype(np.uint8)
+                    # Preserve zero pixels (CZI padding)
+                    if tile.ndim == 3:
+                        tile_u8[:, :, ch][ch_data == 0] = 0
+                    else:
+                        tile_u8[ch_data == 0] = 0
+        else:
+            tile_u8 = tile
 
         n_masks = len(masks)
         for idx, mask in enumerate(masks):
             if idx % 500 == 0:
                 print(f"[islet] Featurizing cell {idx}/{n_masks}", flush=True)
-            feat = extract_morphological_features(mask, tile)
+            feat = extract_morphological_features(mask, tile_u8)
             if not feat:
                 continue
-
-            # SAM2 confidence score from segment()
-            if idx < len(segment_scores):
-                feat['sam2_score'] = float(segment_scores[idx])
 
             # Per-channel features from all 6 channels
             if extra_channels is not None:
@@ -465,7 +530,8 @@ class IsletStrategy(CellStrategy):
 
         print(f"[islet] Feature extraction done: {len(valid_detections)}/{n_masks} valid", flush=True)
 
-        # Reset predictor state
+        # Reset predictor state and clean up cached membrane_u8
+        self._membrane_u8 = None
         if sam2_predictor is not None:
             sam2_predictor.reset_predictor()
         if torch.cuda.is_available():

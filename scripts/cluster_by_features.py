@@ -290,10 +290,31 @@ def run_clustering(args):
             det['umap_x'] = None
             det['umap_y'] = None
 
+    # Clean NaN/inf before JSON serialization
+    # NOTE: json.dump(default=) only fires for non-serializable types.
+    # Python float NaN IS serializable (outputs non-standard "NaN" token),
+    # so we must walk the structure recursively to catch them.
+    import math
+
+    def sanitize_for_json(obj):
+        """Recursively replace NaN/inf with None in nested structures."""
+        if isinstance(obj, dict):
+            return {k: sanitize_for_json(v) for k, v in obj.items()}
+        if isinstance(obj, (list, tuple)):
+            return [sanitize_for_json(v) for v in obj]
+        if isinstance(obj, (float, np.floating)):
+            v = float(obj)
+            return None if (math.isnan(v) or math.isinf(v)) else v
+        if isinstance(obj, np.integer):
+            return int(obj)
+        if isinstance(obj, np.ndarray):
+            return sanitize_for_json(obj.tolist())
+        return obj
+
     # Save enriched detections
     clustered_path = output_dir / 'islet_detections_clustered.json'
     with open(clustered_path, 'w') as f:
-        json.dump(detections, f, indent=2, default=str)
+        json.dump(sanitize_for_json(detections), f, indent=2)
     print(f"  Saved: {clustered_path}")
 
     # Build summary DataFrame

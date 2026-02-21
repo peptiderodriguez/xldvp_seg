@@ -194,7 +194,9 @@ def recompute_mask_features(
 
         # Solidity = area / convex_area
         props = measure.regionprops(mask_bool.astype(np.uint8))[0]
-        convex_area = props.convex_area if hasattr(props, 'convex_area') else area_px
+        convex_area = getattr(props, 'area_convex', None)
+        if convex_area is None:
+            convex_area = getattr(props, 'convex_area', area_px)
         features['solidity'] = area_px / convex_area if convex_area > 0 else 1.0
 
         # Circularity = 4 * pi * area / perimeter^2
@@ -262,7 +264,7 @@ def apply_cleanup_to_detection(
         if cleaned_mask.any():
             # Recompute all shape and intensity features
             area = int(cleaned_mask.sum())
-            props = measure.regionprops(cleaned_mask.astype(int))[0]
+            props = measure.regionprops(cleaned_mask.astype(np.int32), cache=False)[0]
 
             # Update area
             feat['features']['area'] = area
@@ -280,19 +282,32 @@ def apply_cleanup_to_detection(
             feat['features']['solidity'] = props.solidity if hasattr(props, 'solidity') else 0
 
             # Aspect ratio / elongation
-            major_axis = props.major_axis_length if hasattr(props, 'major_axis_length') else 0
-            minor_axis = props.minor_axis_length if hasattr(props, 'minor_axis_length') else 0
+            major_axis = getattr(props, 'axis_major_length', None)
+            if major_axis is None:
+                major_axis = getattr(props, 'major_axis_length', 0)
+            minor_axis = getattr(props, 'axis_minor_length', None)
+            if minor_axis is None:
+                minor_axis = getattr(props, 'minor_axis_length', 0)
             if minor_axis > 0:
                 feat['features']['aspect_ratio'] = major_axis / minor_axis
                 feat['features']['elongation'] = 1.0 - (minor_axis / major_axis) if major_axis > 0 else 0
 
             feat['features']['extent'] = props.extent if hasattr(props, 'extent') else 0
-            feat['features']['equiv_diameter'] = props.equivalent_diameter if hasattr(props, 'equivalent_diameter') else 0
+            equiv_diameter = getattr(props, 'equivalent_diameter_area', None)
+            if equiv_diameter is None:
+                equiv_diameter = getattr(props, 'equivalent_diameter', 0)
+            feat['features']['equiv_diameter'] = equiv_diameter
             feat['features']['eccentricity'] = props.eccentricity if hasattr(props, 'eccentricity') else 0
 
             # Recompute intensity features (RGB, grayscale, HSV)
+            # Exclude zero pixels (CZI padding) — matches extract_morphological_features()
             if image.ndim == 3:
                 masked_pixels = image[cleaned_mask]
+                # Exclude pixels where all channels are zero (CZI padding)
+                valid = np.max(masked_pixels, axis=1) > 0
+                masked_pixels = masked_pixels[valid]
+                if len(masked_pixels) == 0:
+                    return cleaned_mask  # All padding — skip intensity updates
                 feat['features']['red_mean'] = float(np.mean(masked_pixels[:, 0]))
                 feat['features']['red_std'] = float(np.std(masked_pixels[:, 0]))
                 feat['features']['green_mean'] = float(np.mean(masked_pixels[:, 1]))
@@ -301,15 +316,27 @@ def apply_cleanup_to_detection(
                 feat['features']['blue_std'] = float(np.std(masked_pixels[:, 2]))
                 gray = np.mean(masked_pixels, axis=1)
 
-                # HSV features
+                # HSV features — subsample for efficiency, exclude zeros
                 import cv2
-                hsv = cv2.cvtColor(image.astype(np.uint8), cv2.COLOR_RGB2HSV)
-                hsv_masked = hsv[cleaned_mask]
-                feat['features']['hue_mean'] = float(np.mean(hsv_masked[:, 0]))
-                feat['features']['saturation_mean'] = float(np.mean(hsv_masked[:, 1]))
-                feat['features']['value_mean'] = float(np.mean(hsv_masked[:, 2]))
+                mask_ys, mask_xs = np.where(cleaned_mask)
+                step = max(1, len(mask_ys) // 1000)
+                sub_ys, sub_xs = mask_ys[::step], mask_xs[::step]
+                hsv_pixels = cv2.cvtColor(image[sub_ys.min():sub_ys.max()+1, sub_xs.min():sub_xs.max()+1].astype(np.uint8), cv2.COLOR_RGB2HSV)
+                local_mask = cleaned_mask[sub_ys.min():sub_ys.max()+1, sub_xs.min():sub_xs.max()+1]
+                hsv_masked = hsv_pixels[local_mask]
+                # Exclude zero-pixel HSV values
+                hsv_valid = np.max(image[sub_ys.min():sub_ys.max()+1, sub_xs.min():sub_xs.max()+1][local_mask], axis=1) > 0
+                hsv_masked = hsv_masked[hsv_valid]
+                if len(hsv_masked) > 0:
+                    feat['features']['hue_mean'] = float(np.mean(hsv_masked[:, 0]))
+                    feat['features']['saturation_mean'] = float(np.mean(hsv_masked[:, 1]))
+                    feat['features']['value_mean'] = float(np.mean(hsv_masked[:, 2]))
             else:
-                gray = image[cleaned_mask]
+                gray = image[cleaned_mask].astype(float)
+                # Exclude zero pixels
+                gray = gray[gray > 0]
+                if len(gray) == 0:
+                    return cleaned_mask
                 feat['features']['red_mean'] = feat['features']['green_mean'] = feat['features']['blue_mean'] = float(np.mean(gray))
                 feat['features']['red_std'] = feat['features']['green_std'] = feat['features']['blue_std'] = float(np.std(gray))
 
@@ -317,7 +344,14 @@ def apply_cleanup_to_detection(
             feat['features']['gray_std'] = float(np.std(gray))
 
             # Recompute derived features (match extract_morphological_features)
-            feat['features']['relative_brightness'] = feat['features']['gray_mean'] - (float(np.mean(image)) if image.size > 0 else 0)
+            # Use tile_global_mean excluding zeros for relative_brightness
+            if image.ndim == 3:
+                img_nonzero = image[np.max(image, axis=2) > 0]
+                tile_mean = float(np.mean(img_nonzero)) if len(img_nonzero) > 0 else 0
+            else:
+                img_nonzero = image[image > 0]
+                tile_mean = float(np.mean(img_nonzero)) if len(img_nonzero) > 0 else 0
+            feat['features']['relative_brightness'] = feat['features']['gray_mean'] - tile_mean
             feat['features']['intensity_variance'] = feat['features']['gray_std'] ** 2
             feat['features']['dark_fraction'] = float(np.mean(gray < 100)) if len(gray) > 0 else 0
             feat['features']['nuclear_complexity'] = feat['features']['gray_std']  # Simplified

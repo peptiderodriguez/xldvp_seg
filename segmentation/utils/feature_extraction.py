@@ -263,10 +263,10 @@ def compute_hsv_features(masked_pixels: np.ndarray, sample_size: int = 100) -> d
     if len(masked_pixels) == 0:
         return {'hue_mean': 0.0, 'saturation_mean': 0.0, 'value_mean': 0.0}
 
-    # Sample for speed if needed
+    # Deterministic subsample: take evenly spaced pixels
     if len(masked_pixels) > sample_size:
-        indices = np.random.choice(len(masked_pixels), sample_size, replace=False)
-        sample = masked_pixels[indices]
+        step = max(1, len(masked_pixels) // sample_size)
+        sample = masked_pixels[::step][:sample_size]
     else:
         sample = masked_pixels
 
@@ -313,7 +313,7 @@ MORPHOLOGICAL_FEATURE_COUNT = 22
 VESSEL_FEATURE_COUNT = 28  # Approx count, see vessel_features.py for exact list
 
 
-def extract_morphological_features(mask: np.ndarray, image: np.ndarray) -> dict:
+def extract_morphological_features(mask: np.ndarray, image: np.ndarray, tile_global_mean: Optional[float] = None) -> dict:
     """
     Extract MORPHOLOGICAL_FEATURE_COUNT (22) base morphological/intensity features.
 
@@ -327,6 +327,9 @@ def extract_morphological_features(mask: np.ndarray, image: np.ndarray) -> dict:
     Args:
         mask: Binary mask as numpy array
         image: Source image (RGB or grayscale)
+        tile_global_mean: Precomputed tile-wide mean intensity (excluding zero pixels).
+            If None, computed from image on each call. Pass this when calling in a loop
+            over many masks from the same tile to avoid recomputing the full-tile mean.
 
     Returns:
         Dict with 22 features:
@@ -344,14 +347,22 @@ def extract_morphological_features(mask: np.ndarray, image: np.ndarray) -> dict:
         return {}
 
     area = int(mask.sum())
-    props = measure.regionprops(mask.astype(int))[0]
+    props = measure.regionprops(mask.astype(np.int32), cache=False)[0]
 
     perimeter = props.perimeter if hasattr(props, 'perimeter') else 0
     circularity = 4 * np.pi * area / (perimeter ** 2) if perimeter > 0 else 0
     solidity = props.solidity if hasattr(props, 'solidity') else 0
-    aspect_ratio = props.major_axis_length / props.minor_axis_length if props.minor_axis_length > 0 else 1
+    major = getattr(props, 'axis_major_length', None)
+    if major is None:
+        major = getattr(props, 'major_axis_length', 0)
+    minor = getattr(props, 'axis_minor_length', None)
+    if minor is None:
+        minor = getattr(props, 'minor_axis_length', 0)
+    aspect_ratio = major / minor if minor > 0 else 1
     extent = props.extent if hasattr(props, 'extent') else 0
-    equiv_diameter = props.equivalent_diameter if hasattr(props, 'equivalent_diameter') else 0
+    equiv_diameter = getattr(props, 'equivalent_diameter_area', None)
+    if equiv_diameter is None:
+        equiv_diameter = getattr(props, 'equivalent_diameter', 0)
 
     # Intensity features — exclude zero pixels (CZI padding)
     if image.ndim == 3:
@@ -388,12 +399,15 @@ def extract_morphological_features(mask: np.ndarray, image: np.ndarray) -> dict:
 
     # Texture features
     # Exclude zero pixels from global mean (CZI padding)
-    if image.ndim == 3:
-        global_valid = np.max(image, axis=2) > 0
-        relative_brightness = gray_mean - float(np.mean(image[global_valid])) if global_valid.any() else 0
-    else:
-        global_valid = image > 0
-        relative_brightness = gray_mean - float(np.mean(image[global_valid])) if global_valid.any() else 0
+    if tile_global_mean is None:
+        # Compute it (backward compat) — expensive for large tiles
+        if image.ndim == 3:
+            global_valid = np.max(image, axis=2) > 0
+            tile_global_mean = float(np.mean(image[global_valid])) if global_valid.any() else 0
+        else:
+            global_valid = image > 0
+            tile_global_mean = float(np.mean(image[global_valid])) if global_valid.any() else 0
+    relative_brightness = gray_mean - tile_global_mean
     intensity_variance = float(np.var(gray))
     dark_fraction = float(np.mean(gray < 100))
     nuclear_complexity = gray_std
