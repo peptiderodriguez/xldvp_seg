@@ -323,7 +323,6 @@ DETECTION_DEFAULTS = {
         "nuclear_channel": 4,  # DAPI
         "min_area_um2": 30,
         "max_area_um2": 500,
-        "max_candidates": 1000,
     },
 }
 

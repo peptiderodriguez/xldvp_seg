@@ -740,10 +740,67 @@ def _compute_tile_percentiles(tile_rgb, p_low=1, p_high=99.5):
     return percentiles if percentiles else None
 
 
+def classify_islet_marker(features_dict, marker_thresholds=None):
+    """Classify an islet cell by dominant hormone marker.
+
+    Uses ch2=Gcg (alpha), ch3=Ins (beta), ch5=Sst (delta).
+    Returns (class_name, contour_color_rgb).
+    """
+    gcg = features_dict.get('ch2_mean', 0)
+    ins = features_dict.get('ch3_mean', 0)
+    sst = features_dict.get('ch5_mean', 0)
+
+    if marker_thresholds:
+        gcg_t, ins_t, sst_t = marker_thresholds
+    else:
+        # Fallback thresholds (will be overridden by population stats)
+        gcg_t, ins_t, sst_t = 22, 550, 210
+
+    # Check which markers are above background
+    gcg_pos = gcg > gcg_t
+    ins_pos = ins > ins_t
+    sst_pos = sst > sst_t
+
+    if not (gcg_pos or ins_pos or sst_pos):
+        return 'none', (128, 128, 128)  # gray
+
+    # Dominant = highest fold-change over threshold
+    scores = []
+    if gcg_pos:
+        scores.append(('alpha', gcg / max(gcg_t, 1), (255, 50, 50)))    # red
+    if ins_pos:
+        scores.append(('beta', ins / max(ins_t, 1), (50, 255, 50)))     # green
+    if sst_pos:
+        scores.append(('delta', sst / max(sst_t, 1), (50, 200, 255)))   # cyan
+
+    scores.sort(key=lambda x: x[1], reverse=True)
+    return scores[0][0], scores[0][2]
+
+
+def compute_islet_marker_thresholds(all_detections):
+    """Compute background thresholds for islet marker channels from population stats.
+
+    Uses mean+3sd of the lower half (below median) as background threshold.
+    """
+    gcg = np.array([d['features'].get('ch2_mean', 0) for d in all_detections])
+    ins = np.array([d['features'].get('ch3_mean', 0) for d in all_detections])
+    sst = np.array([d['features'].get('ch5_mean', 0) for d in all_detections])
+
+    thresholds = []
+    for arr in [gcg, ins, sst]:
+        med = np.median(arr)
+        bg = arr[arr <= med]
+        t = bg.mean() + 3 * bg.std() if len(bg) > 0 else med
+        thresholds.append(float(t))
+
+    logger.info(f"Islet marker thresholds: Gcg>{thresholds[0]:.0f}, Ins>{thresholds[1]:.0f}, Sst>{thresholds[2]:.0f}")
+    return tuple(thresholds)
+
+
 def filter_and_create_html_samples(
     features_list, tile_x, tile_y, tile_rgb, masks, pixel_size_um,
     slide_name, cell_type, html_score_threshold, min_area_um2=25.0,
-    tile_percentiles=None,
+    tile_percentiles=None, marker_thresholds=None,
 ):
     """Filter detections by quality and create HTML samples.
 
@@ -773,7 +830,8 @@ def filter_and_create_html_samples(
 
         sample = create_sample_from_detection(
             tile_x, tile_y, tile_rgb, masks, feat, pixel_size_um, slide_name,
-            cell_type=cell_type, tile_percentiles=tile_percentiles
+            cell_type=cell_type, tile_percentiles=tile_percentiles,
+            marker_thresholds=marker_thresholds,
         )
         if sample:
             samples.append(sample)
@@ -1286,7 +1344,7 @@ def _export_lmd_simple(detections, output_path, pixel_size_um, image_height_px,
 # SAMPLE CREATION FOR HTML
 # =============================================================================
 
-def create_sample_from_detection(tile_x, tile_y, tile_rgb, masks, feat, pixel_size_um, slide_name, cell_type='nmj', crop_size=None, tile_percentiles=None):
+def create_sample_from_detection(tile_x, tile_y, tile_rgb, masks, feat, pixel_size_um, slide_name, cell_type='nmj', crop_size=None, tile_percentiles=None, marker_thresholds=None):
     """Create an HTML sample from a detection.
 
     Crop size is calculated dynamically to be 100% larger than the mask,
@@ -1354,9 +1412,16 @@ def create_sample_from_detection(tile_x, tile_y, tile_rgb, masks, feat, pixel_si
         crop = np.pad(crop, ((pad_top, pad_bottom), (pad_left, pad_right), (0, 0)), mode='constant', constant_values=0)
         crop_mask = np.pad(crop_mask, ((pad_top, pad_bottom), (pad_left, pad_right)), mode='constant', constant_values=False)
 
+    # Determine contour color
+    features = feat['features']
+    contour_color = (0, 255, 0)  # default green
+    marker_class = None
+    if cell_type == 'islet' and marker_thresholds is not None:
+        marker_class, contour_color = classify_islet_marker(features, marker_thresholds)
+
     # Normalize and draw contour
     crop_norm = percentile_normalize(crop, p_low=1, p_high=99.5, global_percentiles=tile_percentiles)
-    crop_with_contour = draw_mask_contour(crop_norm, crop_mask, color=(0, 255, 0), thickness=2)
+    crop_with_contour = draw_mask_contour(crop_norm, crop_mask, color=contour_color, thickness=2)
 
     # Keep at 224x224 (same as classifier input) - already correct size from crop
     pil_img = Image.fromarray(crop_with_contour)
@@ -1371,13 +1436,16 @@ def create_sample_from_detection(tile_x, tile_y, tile_rgb, masks, feat, pixel_si
     uid = f"{slide_name}_{cell_type}_{int(round(global_cx))}_{int(round(global_cy))}"
 
     # Get stats from features
-    features = feat['features']
     area_um2 = features.get('area', 0) * (pixel_size_um ** 2)
 
     stats = {
         'area_um2': area_um2,
         'area_px': features.get('area', 0),
     }
+
+    # Add marker classification for islet
+    if marker_class is not None:
+        stats['marker_class'] = marker_class
 
     # Add cell-type specific stats
     if 'elongation' in features:
@@ -1880,6 +1948,7 @@ def run_pipeline(args):
     all_samples = []
     all_detections = []  # Universal list with global coordinates
     total_detections = 0
+    deferred_html_tiles = []  # For islet: defer HTML until marker thresholds computed
 
     # Multi-scale vessel detection mode
     if args.cell_type == 'vessel' and getattr(args, 'multi_scale', False):
@@ -2099,7 +2168,7 @@ def run_pipeline(args):
 
                 results_collected = 0
                 while results_collected < len(sampled_tiles):
-                    result = processor.collect_result(timeout=3600)  # 60 min timeout per tile
+                    result = processor.collect_result(timeout=14400)  # 4h timeout per tile (islet: ~7K cells @ 33/min = ~3.5h)
                     if result is None:
                         logger.warning("Timeout waiting for result")
                         break
@@ -2179,13 +2248,24 @@ def run_pipeline(args):
                                 tile_rgb_html = (tile_rgb_html / 256).astype(np.uint8)
 
                             tile_pct = _compute_tile_percentiles(tile_rgb_html) if getattr(args, 'html_normalization', 'crop') == 'tile' else None
-                            html_samples = filter_and_create_html_samples(
-                                features_list, tile_x, tile_y, tile_rgb_html, masks,
-                                pixel_size_um, slide_name, args.cell_type,
-                                args.html_score_threshold,
-                                tile_percentiles=tile_pct,
-                            )
-                            all_samples.extend(html_samples)
+
+                            if args.cell_type == 'islet':
+                                # Defer HTML generation until marker thresholds are computed
+                                deferred_html_tiles.append({
+                                    'features_list': features_list,
+                                    'tile_x': tile_x, 'tile_y': tile_y,
+                                    'tile_rgb_html': tile_rgb_html,
+                                    'masks': masks,
+                                    'tile_pct': tile_pct,
+                                })
+                            else:
+                                html_samples = filter_and_create_html_samples(
+                                    features_list, tile_x, tile_y, tile_rgb_html, masks,
+                                    pixel_size_um, slide_name, args.cell_type,
+                                    args.html_score_threshold,
+                                    tile_percentiles=tile_pct,
+                                )
+                                all_samples.extend(html_samples)
                             total_detections += len(features_list)
 
                         except Exception as e:
@@ -2199,6 +2279,29 @@ def run_pipeline(args):
                         logger.warning(f"Tile {result['tid']} error: {result.get('error', 'unknown')}")
 
                 pbar.close()
+
+                # Deferred HTML generation for islet (needs population-level marker thresholds)
+                if deferred_html_tiles and args.cell_type == 'islet':
+                    marker_thresholds = compute_islet_marker_thresholds(all_detections) if all_detections else None
+                    # Add marker_class to each detection for JSON export
+                    if marker_thresholds:
+                        counts = {}
+                        for det in all_detections:
+                            mc, _ = classify_islet_marker(det.get('features', {}), marker_thresholds)
+                            det['marker_class'] = mc
+                            counts[mc] = counts.get(mc, 0) + 1
+                        logger.info(f"Islet marker classification: {counts}")
+                    for dt in deferred_html_tiles:
+                        html_samples = filter_and_create_html_samples(
+                            dt['features_list'], dt['tile_x'], dt['tile_y'],
+                            dt['tile_rgb_html'], dt['masks'],
+                            pixel_size_um, slide_name, args.cell_type,
+                            args.html_score_threshold,
+                            tile_percentiles=dt['tile_pct'],
+                            marker_thresholds=marker_thresholds,
+                        )
+                        all_samples.extend(html_samples)
+                    del deferred_html_tiles  # free memory
 
             logger.info(f"Multi-GPU processing complete: {total_detections} {args.cell_type} detections from {results_collected} tiles")
 
@@ -2361,13 +2464,24 @@ def run_pipeline(args):
                 else:
                     tile_rgb_display = tile_rgb
                 tile_pct = _compute_tile_percentiles(tile_rgb_display) if getattr(args, 'html_normalization', 'crop') == 'tile' else None
-                html_samples = filter_and_create_html_samples(
-                    features_list, tile_x, tile_y, tile_rgb_display, masks,
-                    pixel_size_um, slide_name, args.cell_type,
-                    args.html_score_threshold,
-                    tile_percentiles=tile_pct,
-                )
-                all_samples.extend(html_samples)
+
+                if args.cell_type == 'islet':
+                    # Defer HTML generation until marker thresholds are computed
+                    deferred_html_tiles.append({
+                        'features_list': features_list,
+                        'tile_x': tile_x, 'tile_y': tile_y,
+                        'tile_rgb_html': tile_rgb_display,
+                        'masks': masks.copy(),
+                        'tile_pct': tile_pct,
+                    })
+                else:
+                    html_samples = filter_and_create_html_samples(
+                        features_list, tile_x, tile_y, tile_rgb_display, masks,
+                        pixel_size_um, slide_name, args.cell_type,
+                        args.html_score_threshold,
+                        tile_percentiles=tile_pct,
+                    )
+                    all_samples.extend(html_samples)
                 total_detections += len(features_list)
 
                 del tile_data, tile_rgb, masks
@@ -2386,6 +2500,28 @@ def run_pipeline(args):
                 gc.collect()
                 torch.cuda.empty_cache()
                 continue
+
+    # Deferred HTML generation for islet (needs population-level marker thresholds)
+    if deferred_html_tiles and args.cell_type == 'islet':
+        marker_thresholds = compute_islet_marker_thresholds(all_detections) if all_detections else None
+        if marker_thresholds:
+            counts = {}
+            for det in all_detections:
+                mc, _ = classify_islet_marker(det.get('features', {}), marker_thresholds)
+                det['marker_class'] = mc
+                counts[mc] = counts.get(mc, 0) + 1
+            logger.info(f"Islet marker classification: {counts}")
+        for dt in deferred_html_tiles:
+            html_samples = filter_and_create_html_samples(
+                dt['features_list'], dt['tile_x'], dt['tile_y'],
+                dt['tile_rgb_html'], dt['masks'],
+                pixel_size_um, slide_name, args.cell_type,
+                args.html_score_threshold,
+                tile_percentiles=dt['tile_pct'],
+                marker_thresholds=marker_thresholds,
+            )
+            all_samples.extend(html_samples)
+        del deferred_html_tiles
 
     logger.info(f"Total detections (pre-dedup): {len(all_detections)}")
 

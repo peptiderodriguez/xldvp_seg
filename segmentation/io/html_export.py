@@ -902,6 +902,11 @@ def generate_annotation_page(
                 stats_parts.append(f"{conf*100:.0f}%")
             elif isinstance(conf, str):
                 stats_parts.append(f"{_esc(conf)}")
+        if 'marker_class' in stats:
+            mc = _esc(str(stats['marker_class']))
+            mc_colors = {'alpha': '#ff5050', 'beta': '#50ff50', 'delta': '#50c8ff', 'none': '#888'}
+            mc_color = mc_colors.get(mc, '#888')
+            stats_parts.append(f'<span style="color:{mc_color};font-weight:bold">{mc}</span>')
 
         stats_str = ' | '.join(stats_parts) if stats_parts else ''
 

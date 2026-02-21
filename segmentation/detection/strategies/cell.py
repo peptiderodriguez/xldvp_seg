@@ -51,7 +51,7 @@ class CellStrategy(DetectionStrategy, MultiChannelFeatureMixin):
         self,
         min_area_um: float = 50,
         max_area_um: float = 200,
-        max_candidates: int = 500,
+        max_candidates: int = 10000,
         overlap_threshold: float = 0.5,
         min_mask_pixels: int = 10,
         extract_deep_features: bool = False,

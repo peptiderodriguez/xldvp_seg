@@ -151,7 +151,7 @@ def process_single_tile(
                     extra_channels=extra_channel_tiles,
                     channel_names=channel_names,
                 )
-            elif cell_type in ('nmj', 'mk', 'cell', 'islet'):
+            elif cell_type in ('nmj', 'mk', 'cell', 'islet', 'tissue_pattern'):
                 masks, detections = strategy.detect(
                     tile_rgb, models, pixel_size_um,
                     extra_channels=extra_channel_tiles,
@@ -341,13 +341,20 @@ def build_detection_params(
             'nuclear_channel': getattr(args, 'nuclear_channel', 4),
             'min_area_um': getattr(args, 'islet_min_area', 30.0),
             'max_area_um': getattr(args, 'islet_max_area', 500.0),
-            'max_candidates': 1000,
+        }
+
+    elif cell_type == 'tissue_pattern':
+        return {
+            'detection_channels': [int(x) for x in getattr(args, 'tp_detection_channels', '0,3').split(',')],
+            'nuclear_channel': getattr(args, 'tp_nuclear_channel', 4),
+            'min_area_um': getattr(args, 'tp_min_area', 20.0),
+            'max_area_um': getattr(args, 'tp_max_area', 300.0),
         }
 
     else:
         raise ValueError(
             f"Unknown cell type: {cell_type}. "
-            f"Supported types: nmj, mk, hspc, vessel, mesothelium, islet"
+            f"Supported types: nmj, mk, hspc, vessel, mesothelium, islet, tissue_pattern"
         )
 
 

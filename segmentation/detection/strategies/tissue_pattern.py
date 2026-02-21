@@ -1,103 +1,62 @@
 """
-Pancreatic islet cell detection strategy using Cellpose + SAM2.
+Tissue pattern detection strategy using Cellpose on summed detection channels.
 
-Uses membrane (AF633) + nuclear (DAPI) channels as 2-channel Cellpose input
-for cell segmentation, then SAM2 refinement. Extracts features from all 6
-channels for downstream RF classification and clustering.
+Designed for FISH brain sections but generalizable to any multi-channel tissue:
+- Sums configurable detection channels for Cellpose input (grayscale mode)
+- No SAM2 refinement (dense tissue causes whole-region expansion)
+- SAM2 embeddings still extracted per-cell for downstream features
+- Per-channel feature extraction from all available channels
 
-6-channel CZI layout:
-  Ch0: Bright (brightfield, not used for detection)
-  Ch1: AF633 (membrane marker — Cellpose input)
-  Ch2: AF555/Gcg (alpha cells — display Red)
-  Ch3: AF488/Ins (beta cells — display Green)
-  Ch4: DAPI (nucleus — Cellpose input)
-  Ch5: Cy7/Sst (delta cells — display Blue)
+Default 5-channel CZI layout (brain FISH):
+  Ch0: AF488  -> Slc17a7 (excitatory neurons, detection)
+  Ch1: AF647  -> Htr2a   (serotonin receptor, analysis)
+  Ch2: AF750  -> Ntrk2   (BDNF receptor, analysis)
+  Ch3: AF555  -> Gad1    (inhibitory neurons, detection)
+  Ch4: Hoechst -> Nuclear (tissue detection)
 """
 
 import gc
 import numpy as np
 from typing import Dict, Any, List, Optional, Tuple
-from scipy import ndimage
 
 from .cell import CellStrategy
+from .islet import _percentile_normalize_channel
 from segmentation.utils.logging import get_logger
 from segmentation.utils.feature_extraction import extract_morphological_features
 
 logger = get_logger(__name__)
 
 
-def _percentile_normalize_channel(channel: np.ndarray) -> np.ndarray:
-    """Normalize a single uint16 channel to uint8 using percentile clipping.
-
-    Computes p1/p99.5 on non-zero pixels, maps linearly to 0-255.
-    Zero pixels (CZI padding) stay 0.
-
-    Args:
-        channel: 2D uint16 array
-
-    Returns:
-        2D uint8 array
+class TissuePatternStrategy(CellStrategy):
     """
-    nonzero = channel[channel > 0]
-    if len(nonzero) == 0:
-        return np.zeros(channel.shape, dtype=np.uint8)
-
-    p_low = np.percentile(nonzero, 1)
-    p_high = np.percentile(nonzero, 99.5)
-
-    if p_high <= p_low:
-        return np.zeros(channel.shape, dtype=np.uint8)
-
-    result = np.zeros(channel.shape, dtype=np.float32)
-    mask = channel > 0
-    result[mask] = (channel[mask].astype(np.float32) - p_low) / (p_high - p_low) * 255.0
-    result = np.clip(result, 0, 255).astype(np.uint8)
-    return result
-
-
-class IsletStrategy(CellStrategy):
-    """
-    Pancreatic islet cell detection using Cellpose (membrane+nuclear) + SAM2.
+    Tissue pattern cell detection using Cellpose on summed channels.
 
     Extends CellStrategy with:
-    - 2-channel Cellpose input (membrane + nuclear) instead of grayscale
-    - Area pre-filter in segment() (no max_candidates cap)
-    - 6-channel feature extraction
+    - Summed multi-channel Cellpose input (grayscale mode)
+    - No SAM2 refinement (dense tissue)
+    - Configurable detection and display channels
+    - Multi-channel feature extraction
 
     Detection pipeline:
-    1. Construct 2-channel input: membrane (AF633) + nuclear (DAPI)
-    2. Cellpose detection with channels=[1,2] (cytoplasm + nucleus)
-    3. SAM2 refinement using centroids as point prompts
-    4. Overlap filtering
-    5. Feature extraction from all 6 channels (mask-only, zero-excluded)
+    1. Sum detection channels (percentile-normalized to uint8 each, then summed+clipped)
+    2. Cellpose detection with channels=[0,0] (grayscale)
+    3. Area filtering
+    4. Feature extraction from all channels (mask-only, zero-excluded)
+    5. SAM2 embedding extraction (using summed channel as pseudo-RGB)
     """
 
     def __init__(
         self,
-        membrane_channel: int = 1,
+        detection_channels: List[int] = None,
         nuclear_channel: int = 4,
-        min_area_um: float = 30,
-        max_area_um: float = 500,
+        min_area_um: float = 20,
+        max_area_um: float = 300,
         overlap_threshold: float = 0.5,
         min_mask_pixels: int = 10,
         extract_deep_features: bool = False,
         extract_sam2_embeddings: bool = True,
         resnet_batch_size: int = 32,
     ):
-        """
-        Initialize islet detection strategy.
-
-        Args:
-            membrane_channel: CZI channel index for membrane marker (default 1, AF633)
-            nuclear_channel: CZI channel index for nuclear marker (default 4, DAPI)
-            min_area_um: Minimum cell area in um2 (default 30)
-            max_area_um: Maximum cell area in um2 (default 500)
-            overlap_threshold: Skip masks with overlap > this fraction (default 0.5)
-            min_mask_pixels: Minimum mask size in pixels (default 10)
-            extract_deep_features: Whether to extract ResNet+DINOv2 (default False)
-            extract_sam2_embeddings: Whether to extract SAM2 embeddings (default True)
-            resnet_batch_size: Batch size for ResNet feature extraction (default 32)
-        """
         super().__init__(
             min_area_um=min_area_um,
             max_area_um=max_area_um,
@@ -107,15 +66,12 @@ class IsletStrategy(CellStrategy):
             extract_sam2_embeddings=extract_sam2_embeddings,
             resnet_batch_size=resnet_batch_size,
         )
-        self.membrane_channel = membrane_channel
+        self.detection_channels = detection_channels if detection_channels is not None else [0, 3]
         self.nuclear_channel = nuclear_channel
-        # IsletStrategy.segment() doesn't use max_candidates (area pre-filter instead)
-        # Remove inherited attr so it doesn't pollute get_config() logs
-        del self.max_candidates
 
     @property
     def name(self) -> str:
-        return "islet"
+        return "tissue_pattern"
 
     def segment(
         self,
@@ -125,86 +81,76 @@ class IsletStrategy(CellStrategy):
         **kwargs,
     ) -> List[np.ndarray]:
         """
-        Segment islet cells using 2-channel Cellpose (membrane + nuclear).
+        Segment cells using Cellpose on summed detection channels (grayscale).
 
-        SAM2 refinement is intentionally SKIPPED for islet because dense
-        islet tissue causes SAM2 point prompts to return whole-tissue regions
-        (100K+ px) instead of individual cells. Cellpose with membrane+nuclear
-        already produces high-quality individual cell masks.
-
-        SAM2 embeddings are still extracted per-cell in detect() for downstream
-        classification features.
+        SAM2 refinement is intentionally SKIPPED for dense tissue (same reason
+        as islet — point prompts expand to whole-tissue regions).
 
         Args:
             tile: RGB image array (HxWx3, uint8)
-            models: Dict with 'cellpose' (and optionally 'sam2_predictor')
+            models: Dict with 'cellpose'
             extra_channels: Dict mapping CZI channel index to 2D uint16 arrays.
-                Must contain membrane_channel and nuclear_channel.
+                Must contain all detection_channels.
 
         Returns:
             List of boolean masks sorted by area (largest first)
         """
+        self._last_summed_channel = None  # Reset for each tile
+
         cellpose = models.get('cellpose')
 
         if cellpose is None:
-            raise RuntimeError("Cellpose model required for islet detection")
+            raise RuntimeError("Cellpose model required for tissue_pattern detection")
 
-        # --- Build 2-channel Cellpose input from extra_channels ---
         if extra_channels is None:
-            logger.warning("No extra_channels for islet — falling back to grayscale Cellpose")
+            logger.warning("No extra_channels for tissue_pattern — falling back to grayscale Cellpose")
             return super().segment(tile, models, **kwargs)
 
-        membrane_raw = extra_channels.get(self.membrane_channel)
-        nuclear_raw = extra_channels.get(self.nuclear_channel)
+        # Sum detection channels (each percentile-normalized to uint8 first)
+        ch_arrays = []
+        for ch_idx in self.detection_channels:
+            ch_raw = extra_channels.get(ch_idx)
+            if ch_raw is None:
+                logger.warning(
+                    f"Missing detection channel {ch_idx} — falling back to grayscale Cellpose"
+                )
+                return super().segment(tile, models, **kwargs)
+            ch_arrays.append(_percentile_normalize_channel(ch_raw))
 
-        if membrane_raw is None or nuclear_raw is None:
-            logger.warning(
-                f"Missing membrane (ch{self.membrane_channel}) or nuclear "
-                f"(ch{self.nuclear_channel}) — falling back to grayscale Cellpose"
-            )
-            return super().segment(tile, models, **kwargs)
+        # Sum and clip to uint8
+        summed = np.zeros(ch_arrays[0].shape, dtype=np.uint16)
+        for ch_u8 in ch_arrays:
+            summed += ch_u8.astype(np.uint16)
+        summed = np.clip(summed, 0, 255).astype(np.uint8)
 
-        # Percentile-normalize uint16 -> uint8 per channel
-        membrane_u8 = _percentile_normalize_channel(membrane_raw)
-        nuclear_u8 = _percentile_normalize_channel(nuclear_raw)
+        # Store for detect() to use for SAM2 image setting
+        self._last_summed_channel = summed
 
-        # Stack as 2-channel input: (H, W, 2)
-        cellpose_input = np.stack([membrane_u8, nuclear_u8], axis=-1)
-
-        # Cellpose: channels=[1,2] means ch0 of input=cytoplasm, ch1=nucleus
-        cellpose_masks, _, _ = cellpose.eval(cellpose_input, channels=[1, 2])
+        # Cellpose grayscale: channels=[0,0]
+        cellpose_masks, _, _ = cellpose.eval(summed, channels=[0, 0])
 
         # Get unique mask IDs (exclude background 0)
         cellpose_ids = np.unique(cellpose_masks)
         cellpose_ids = cellpose_ids[cellpose_ids > 0]
 
         logger.info(f"Cellpose found {len(cellpose_ids)} cells")
-        print(f"[islet] Cellpose found {len(cellpose_ids)} cells", flush=True)
 
-        # Compute area in um² for each cell and filter by min/max area
-        # This is done HERE (before detect() feature extraction) to avoid
-        # extracting expensive features for cells that will be discarded.
-        pixel_area_um2 = kwargs.get('pixel_size_um', 0.325) ** 2
+        # Area filtering (same pattern as islet)
+        pixel_area_um2 = kwargs.get('pixel_size_um', 0.1725) ** 2
         min_area_px = int(self.min_area_um / pixel_area_um2) if pixel_area_um2 > 0 else 10
         max_area_px = int(self.max_area_um / pixel_area_um2) if pixel_area_um2 > 0 else 100000
 
-        # Compute areas for all cells
         areas = []
         for cp_id in cellpose_ids:
             area_px = (cellpose_masks == cp_id).sum()
             areas.append((cp_id, area_px))
 
-        # Filter by area range (um² converted to pixels)
         in_range = [(cp_id, a) for cp_id, a in areas if min_area_px <= a <= max_area_px]
         out_of_range = len(areas) - len(in_range)
-        print(f"[islet] Area filter: {len(in_range)}/{len(areas)} in range "
-              f"[{min_area_px}-{max_area_px}px = {self.min_area_um}-{self.max_area_um}um²], "
-              f"pixel_size={kwargs.get('pixel_size_um', '?')}", flush=True)
         if out_of_range > 0:
             logger.info(f"  Area filter: {len(in_range)} in range [{self.min_area_um}-{self.max_area_um} um²], "
                         f"{out_of_range} rejected")
 
-        # Extract individual boolean masks from Cellpose label array
         accepted_masks = []
         for cp_id, _ in in_range:
             cp_mask = (cellpose_masks == cp_id).astype(bool)
@@ -212,7 +158,7 @@ class IsletStrategy(CellStrategy):
                 continue
             accepted_masks.append(cp_mask)
 
-        # No SAM2 scores — use None placeholder (detect() handles this)
+        # No SAM2 scores — Cellpose-only
         self._last_segment_scores = []
 
         logger.info(f"  Accepted {len(accepted_masks)} masks (>= {self.min_mask_pixels} px)")
@@ -221,72 +167,6 @@ class IsletStrategy(CellStrategy):
         gc.collect()
 
         return accepted_masks
-
-    def classify_rf(
-        self,
-        detections: list,
-        classifier,
-        scaler,
-        feature_names: list,
-    ) -> list:
-        """
-        Classify islet candidates using trained Random Forest.
-
-        load_nmj_rf_classifier() always wraps into a Pipeline, so classifier
-        is always a Pipeline that handles scaling internally.
-
-        Args:
-            detections: List of Detection objects to classify
-            classifier: sklearn Pipeline (or bare RF model)
-            scaler: Unused (Pipeline handles scaling), kept for interface compat
-            feature_names: List of feature names expected by classifier
-
-        Returns:
-            List of Detection objects with updated scores (keeps ALL)
-        """
-        if not detections:
-            return []
-
-        X = []
-        valid_indices = []
-
-        for i, det in enumerate(detections):
-            if det.features:
-                row = []
-                for fn in feature_names:
-                    val = det.features.get(fn, 0)
-                    if isinstance(val, (list, tuple)):
-                        val = 0
-                    row.append(float(val) if val is not None else 0)
-                X.append(row)
-                valid_indices.append(i)
-
-        if not X:
-            return detections
-
-        X = np.array(X, dtype=np.float32)
-        X = np.nan_to_num(X, nan=0, posinf=0, neginf=0)
-
-        probs = classifier.predict_proba(X)[:, 1]
-
-        # Update detections with RF probability (keep ALL — filter post-hoc in HTML)
-        for j, (idx, prob) in enumerate(zip(valid_indices, probs)):
-            det = detections[idx]
-            det.score = float(prob)
-            det.features['rf_prediction'] = float(prob)
-            det.features['confidence'] = float(prob)
-
-        # Set score=0 for detections that couldn't be classified (missing features)
-        for i, det in enumerate(detections):
-            if det.score is None:
-                det.score = 0.0
-                det.features['rf_prediction'] = 0.0
-                det.features['confidence'] = 0.0
-
-        n_above = sum(1 for d in detections if d.score >= 0.5)
-        logger.debug(f"RF classifier: {n_above}/{len(detections)} above 0.5, keeping all")
-
-        return detections
 
     def detect(
         self,
@@ -297,9 +177,7 @@ class IsletStrategy(CellStrategy):
         extra_channels: Dict[int, np.ndarray] = None,
     ) -> Tuple[np.ndarray, List['Detection']]:
         """
-        Complete islet detection pipeline.
-
-        Overrides CellStrategy.detect() to pass extra_channels into segment().
+        Complete tissue pattern detection pipeline.
 
         Args:
             tile: RGB image array (uint8)
@@ -317,9 +195,9 @@ class IsletStrategy(CellStrategy):
         sam2_predictor = models.get('sam2_predictor')
 
         if models.get('cellpose') is None:
-            raise RuntimeError("Cellpose model required for islet detection")
+            raise RuntimeError("Cellpose model required for tissue_pattern detection")
 
-        # Generate masks using our 2-channel segment()
+        # Generate masks using summed-channel segment()
         masks = self.segment(tile, models, extra_channels=extra_channels,
                              pixel_size_um=pixel_size_um)
 
@@ -330,38 +208,32 @@ class IsletStrategy(CellStrategy):
                 torch.cuda.empty_cache()
             return np.zeros(tile.shape[:2], dtype=np.uint32), []
 
-        # Set SAM2 image for embedding extraction (segment() no longer uses SAM2)
+        # Set SAM2 image using summed channel as pseudo-RGB (for embedding extraction)
         if self.extract_sam2_embeddings and sam2_predictor is not None:
-            membrane_raw = extra_channels.get(self.membrane_channel) if extra_channels else None
-            if membrane_raw is not None:
-                membrane_u8 = _percentile_normalize_channel(membrane_raw)
-                sam2_rgb = np.stack([membrane_u8, membrane_u8, membrane_u8], axis=-1)
+            summed = getattr(self, '_last_summed_channel', None)
+            if summed is not None:
+                sam2_rgb = np.stack([summed, summed, summed], axis=-1)
             else:
-                sam2_rgb = tile  # fallback to tile RGB
+                sam2_rgb = tile
             sam2_predictor.set_image(sam2_rgb)
 
-        # Feature extraction loop (reuse CellStrategy pattern)
+        # Feature extraction loop
         valid_detections = []
         crops_for_resnet = []
         crops_for_resnet_context = []
         crop_indices = []
 
-        # No SAM2 scores from segment() (Cellpose-only)
         segment_scores = getattr(self, '_last_segment_scores', [])
 
-        n_masks = len(masks)
         for idx, mask in enumerate(masks):
-            if idx % 500 == 0:
-                print(f"[islet] Featurizing cell {idx}/{n_masks}", flush=True)
             feat = extract_morphological_features(mask, tile)
             if not feat:
                 continue
 
-            # SAM2 confidence score from segment()
             if idx < len(segment_scores):
                 feat['sam2_score'] = float(segment_scores[idx])
 
-            # Per-channel features from all 6 channels
+            # Per-channel features from all channels
             if extra_channels is not None:
                 channels_dict = {
                     f'ch{k}': v for k, v in sorted(extra_channels.items())
@@ -370,7 +242,7 @@ class IsletStrategy(CellStrategy):
                 multichannel_feats = self.extract_multichannel_features(mask, channels_dict)
                 feat.update(multichannel_feats)
 
-            # Compute centroid from mask (extract_morphological_features does NOT return centroid)
+            # Compute centroid from mask
             ys, xs = np.where(mask)
             if len(ys) == 0:
                 continue
@@ -463,8 +335,6 @@ class IsletStrategy(CellStrategy):
                     for i in range(1024):
                         det['features'][f'dinov2_ctx_{i}'] = 0.0
 
-        print(f"[islet] Feature extraction done: {len(valid_detections)}/{n_masks} valid", flush=True)
-
         # Reset predictor state
         if sam2_predictor is not None:
             sam2_predictor.reset_predictor()
@@ -498,3 +368,47 @@ class IsletStrategy(CellStrategy):
                 label_array[det.mask] = i
 
         return label_array, detections
+
+    def classify_rf(self, detections, classifier, scaler, feature_names):
+        """Classify candidates using trained Random Forest (same as IsletStrategy)."""
+        if not detections:
+            return []
+
+        X = []
+        valid_indices = []
+
+        for i, det in enumerate(detections):
+            if det.features:
+                row = []
+                for fn in feature_names:
+                    val = det.features.get(fn, 0)
+                    if isinstance(val, (list, tuple)):
+                        val = 0
+                    row.append(float(val) if val is not None else 0)
+                X.append(row)
+                valid_indices.append(i)
+
+        if not X:
+            return detections
+
+        X = np.array(X, dtype=np.float32)
+        X = np.nan_to_num(X, nan=0, posinf=0, neginf=0)
+
+        probs = classifier.predict_proba(X)[:, 1]
+
+        for j, (idx, prob) in enumerate(zip(valid_indices, probs)):
+            det = detections[idx]
+            det.score = float(prob)
+            det.features['rf_prediction'] = float(prob)
+            det.features['confidence'] = float(prob)
+
+        for i, det in enumerate(detections):
+            if det.score is None:
+                det.score = 0.0
+                det.features['rf_prediction'] = 0.0
+                det.features['confidence'] = 0.0
+
+        n_above = sum(1 for d in detections if d.score >= 0.5)
+        logger.debug(f"RF classifier: {n_above}/{len(detections)} above 0.5, keeping all")
+
+        return detections
