@@ -40,27 +40,73 @@ import numpy as np
 from matplotlib.colors import ListedColormap
 from scipy.spatial import KDTree
 from sklearn.cluster import AgglomerativeClustering
-from sklearn.metrics import silhouette_score
 from sklearn.neighbors import kneighbors_graph
 from sklearn.preprocessing import StandardScaler
 
 
 # ── Loading ───────────────────────────────────────────────────────────
 
-def load_and_prepare(detections_path, marker_channels=None, min_score=0.0):
-    """Load detection JSON, extract positions + marker features.
+_SKIP_FEATURE_KEYS = {
+    'global_center_um', 'tile_origin', 'rf_prediction', 'mask_filename',
+    'detection_channel', 'uid', 'mask_label', 'tile_idx',
+}
+
+_DEEP_FEATURE_PREFIXES = ('resnet_', 'dinov2_')
+
+
+def _auto_detect_feature_keys(detections, mode='channels'):
+    """Auto-detect feature keys from detection dicts.
+
+    Args:
+        mode: 'channels' — only ch*_mean keys (default, backward compat)
+              'all' — all numeric features except deep features and metadata
+              'morph_sam2' — morphological + SAM2 embeddings (no ch*_mean, no deep)
+
+    Returns sorted list of feature key names.
+    """
+    key_set = set()
+    sample = detections[:min(50, len(detections))]
+    for det in sample:
+        feats = det.get('features', det)
+        for k, v in feats.items():
+            if k in _SKIP_FEATURE_KEYS:
+                continue
+            if not isinstance(v, (int, float)):
+                continue
+            if any(k.startswith(p) for p in _DEEP_FEATURE_PREFIXES):
+                continue
+
+            if mode == 'channels':
+                if k.startswith('ch') and k.endswith('_mean'):
+                    key_set.add(k)
+            elif mode == 'morph_sam2':
+                if not k.startswith('ch'):
+                    key_set.add(k)
+            else:  # 'all'
+                key_set.add(k)
+
+    return sorted(key_set)
+
+
+def load_and_prepare(detections_path, marker_channels=None, min_score=0.0,
+                     feature_mode='channels', n_pca=None):
+    """Load detection JSON, extract positions + features.
 
     Args:
         detections_path: Path to detection JSON
-        marker_channels: List of channel keys (e.g. ['ch0_mean', 'ch1_mean']).
-            If None, auto-detect all ch*_mean keys.
+        marker_channels: List of feature keys to use. If None, auto-detect
+            based on feature_mode.
         min_score: Minimum rf_prediction score to include
+        feature_mode: 'channels' (ch*_mean only), 'all' (morph+SAM2+channels),
+            'morph_sam2' (morph+SAM2, no channel means)
+        n_pca: If set, reduce features to this many dimensions via PCA after
+            z-scoring. Useful when feature count is high (>50).
 
     Returns:
         detections: Original detection list (filtered)
         positions: (N, 2) array of [x_um, y_um]
-        features: (N, n_markers) array of z-scored marker values
-        channel_keys: List of channel key names used
+        features: (N, n_features) array of z-scored (and optionally PCA'd) features
+        channel_keys: List of feature key names used
     """
     with open(detections_path) as f:
         data = json.load(f)
@@ -91,20 +137,14 @@ def load_and_prepare(detections_path, marker_channels=None, min_score=0.0):
         print("ERROR: No cells with positions found after filtering")
         sys.exit(1)
 
-    # Auto-detect channel keys
+    # Auto-detect feature keys
     if marker_channels is None:
-        ch_keys = set()
-        for det in detections:
-            feats = det.get('features', det)
-            for k in feats:
-                if k.startswith('ch') and k.endswith('_mean'):
-                    ch_keys.add(k)
-        channel_keys = sorted(ch_keys)
+        channel_keys = _auto_detect_feature_keys(detections, mode=feature_mode)
     else:
         channel_keys = marker_channels
 
     if not channel_keys:
-        print("ERROR: No marker channel features found")
+        print("ERROR: No features found")
         sys.exit(1)
 
     # Extract arrays
@@ -119,12 +159,21 @@ def load_and_prepare(detections_path, marker_channels=None, min_score=0.0):
             val = feats.get(key, 0)
             features_raw[i, j] = float(val) if val is not None else 0.0
 
-    # Z-score marker features
+    # Z-score features
     scaler = StandardScaler()
     features = scaler.fit_transform(features_raw)
 
-    print(f"Loaded {len(detections)} cells, {len(channel_keys)} marker channels")
-    print(f"  Channels: {channel_keys}")
+    # Optional PCA dimensionality reduction
+    if n_pca is not None and n_pca < features.shape[1]:
+        from sklearn.decomposition import PCA
+        pca = PCA(n_components=n_pca, random_state=42)
+        features = pca.fit_transform(features)
+        explained = pca.explained_variance_ratio_.sum()
+        print(f"  PCA: {len(channel_keys)} features -> {n_pca} components "
+              f"({explained:.1%} variance explained)")
+
+    print(f"Loaded {len(detections)} cells, {len(channel_keys)} features")
+    print(f"  Features: {channel_keys[:10]}{'...' if len(channel_keys) > 10 else ''}")
     print(f"  Tissue extent: {np.ptp(positions[:, 0]):.0f} x {np.ptp(positions[:, 1]):.0f} um")
 
     return detections, positions, features, channel_keys
@@ -148,64 +197,97 @@ def build_spatial_graph(positions, k_neighbors=15):
     return graph
 
 
-def find_zones_auto(features, connectivity, min_zones=3, max_zones=20):
-    """Auto-select number of zones via silhouette score sweep.
+def find_zones_elbow(features, connectivity, min_zones=3, max_zones=20,
+                     scale=1.0):
+    """Find natural n_zones via dendrogram merge distance elbow.
 
-    Tries each n_clusters in [min_zones, max_zones] and picks the one
-    with the highest silhouette score.
+    Args:
+        scale: Zone count scale factor (must be positive; 0.5 = 2x more zones).
+
+    Runs agglomerative clustering ONCE with compute_distances=True, examines
+    top-level merge distances, and finds the elbow (Kneedle method -- max
+    perpendicular distance from first-to-last line) to determine the natural
+    cluster count. Much faster than silhouette sweep (1 fit vs 18).
+
+    Args:
+        features: (N, D) feature matrix (already combined with spatial)
+        connectivity: Sparse k-NN graph
+        min_zones: Floor for zone count
+        max_zones: Ceiling for zone count
+        scale: Divide natural k by this. 0.5 = 2x more zones, 2.0 = half.
 
     Returns:
-        labels: (N,) array of zone assignments
-        best_k: Number of zones chosen
-        scores: Dict of {k: silhouette_score}
+        labels: (N,) zone assignments
+        chosen_k: Number of zones chosen
+        elbow_info: Dict with 'natural_k' and 'merge_dists' (for plotting)
     """
-    scores = {}
-    best_k = min_zones
-    best_score = -1
-    best_labels = None
+    if scale <= 0:
+        raise ValueError(f"scale must be positive, got {scale}")
 
-    for k in range(min_zones, max_zones + 1):
-        try:
-            model = AgglomerativeClustering(
-                n_clusters=k, connectivity=connectivity, linkage='ward',
-            )
-            labels = model.fit_predict(features)
+    # Run once at min_zones -- compute_distances gives ALL N-1 merge distances
+    model = AgglomerativeClustering(
+        n_clusters=min_zones, connectivity=connectivity, linkage='ward',
+        compute_distances=True,
+    )
+    model.fit(features)
 
-            # Silhouette needs at least 2 clusters and not all same label
-            n_unique = len(set(labels))
-            if n_unique < 2 or n_unique > len(features) - 1:
-                continue
+    dists = model.distances_
+    n_top = min(max_zones, len(dists))
+    top_dists = dists[-n_top:]
 
-            # Subsample for speed if >5000 cells
-            if len(features) > 5000:
-                rng = np.random.RandomState(42)
-                idx = rng.choice(len(features), 5000, replace=False)
-                score = silhouette_score(features[idx], labels[idx])
+    # Kneedle: max perpendicular distance to line from first to last point
+    # top_dists[j] = merge from (n_top-j+1) to (n_top-j) clusters
+    n = len(top_dists)
+    if n < 3:
+        natural_k = min_zones
+    else:
+        x = np.arange(n, dtype=float)
+        y = top_dists.copy()
+
+        x_norm = (x - x[0]) / max(x[-1] - x[0], 1e-12)
+        y_norm = (y - y[0]) / max(y[-1] - y[0], 1e-12)
+
+        dx = x_norm[-1] - x_norm[0]
+        dy = y_norm[-1] - y_norm[0]
+        line_len = np.sqrt(dx**2 + dy**2)
+
+        if line_len < 1e-12:
+            natural_k = (min_zones + max_zones) // 2
+        else:
+            perp_dist = np.abs(
+                dy * x_norm - dx * y_norm
+                + x_norm[-1] * y_norm[0] - y_norm[-1] * x_norm[0]
+            ) / line_len
+            if perp_dist.max() < 0.01:
+                # No clear elbow (constant/linear merge distances)
+                natural_k = (min_zones + max_zones) // 2
             else:
-                score = silhouette_score(features, labels)
+                elbow_idx = np.argmax(perp_dist)
+                natural_k = n_top - elbow_idx
 
-            scores[k] = score
-            print(f"  k={k}: silhouette={score:.4f}")
+    natural_k = max(min_zones, min(max_zones, natural_k))
 
-            if score > best_score:
-                best_score = score
-                best_k = k
-                best_labels = labels.copy()
+    # Apply scale factor
+    scaled_k = int(round(natural_k / scale))
+    scaled_k = max(min_zones, min(max_zones, scaled_k))
 
-        except Exception as e:
-            print(f"  k={k}: failed ({e})")
-            continue
+    print(f"  Dendrogram elbow: natural k={natural_k}", end='')
+    if scale != 1.0:
+        print(f", scale={scale} -> k={scaled_k}")
+    else:
+        print(f" -> k={scaled_k}")
 
-    if best_labels is None:
-        # Fallback: just use min_zones
-        model = AgglomerativeClustering(
-            n_clusters=min_zones, connectivity=connectivity, linkage='ward',
+    # Re-run at chosen k if different from min_zones
+    if scaled_k != min_zones:
+        model2 = AgglomerativeClustering(
+            n_clusters=scaled_k, connectivity=connectivity, linkage='ward',
         )
-        best_labels = model.fit_predict(features)
-        best_k = min_zones
+        labels = model2.fit_predict(features)
+    else:
+        labels = model.labels_
 
-    print(f"  Best: k={best_k} (silhouette={best_score:.4f})")
-    return best_labels, best_k, scores
+    elbow_info = {'natural_k': natural_k, 'merge_dists': top_dists}
+    return labels, scaled_k, elbow_info
 
 
 def find_zones_fixed(features, connectivity, n_zones):
@@ -217,27 +299,121 @@ def find_zones_fixed(features, connectivity, n_zones):
     return labels
 
 
+def _subsample_and_propagate(features, positions, k_neighbors, n_zones,
+                              spatial_weight, max_direct_cells, min_zones,
+                              max_zones, scale):
+    """Cluster a subsample and propagate labels to all cells via k-NN.
+
+    For datasets > max_direct_cells, randomly samples max_direct_cells cells,
+    runs full agglomerative clustering on the subsample, then assigns each
+    remaining cell to the zone of its nearest spatial neighbor in the subsample.
+
+    Returns:
+        labels: (N,) zone assignments for ALL cells
+        n_found: Number of zones
+        elbow_info: Dict with elbow info (or None if fixed k)
+    """
+    N = len(features)
+    rng = np.random.RandomState(42)
+    sub_idx = np.sort(rng.choice(N, max_direct_cells, replace=False))
+
+    print(f"\n  Subsampling: {N:,} -> {max_direct_cells:,} cells for clustering")
+
+    sub_features = features[sub_idx]
+    sub_positions = positions[sub_idx]
+
+    # Build connectivity on subsample positions
+    sub_connectivity = build_spatial_graph(sub_positions, k_neighbors=k_neighbors)
+
+    # Augment with spatial coordinates
+    if spatial_weight > 0:
+        pos_scaled = StandardScaler().fit_transform(sub_positions)
+        combined = np.hstack([
+            sub_features * (1.0 - spatial_weight),
+            pos_scaled * spatial_weight,
+        ])
+    else:
+        combined = sub_features
+
+    # Cluster the subsample
+    if n_zones is not None:
+        print(f"  Clustering subsample into {n_zones} zones (fixed)...")
+        labels_sub = find_zones_fixed(combined, sub_connectivity, n_zones)
+        n_found = n_zones
+        elbow_info = None
+    else:
+        print(f"  Auto-selecting zones (elbow, range {min_zones}-{max_zones})...")
+        labels_sub, n_found, elbow_info = find_zones_elbow(
+            combined, sub_connectivity, min_zones=min_zones,
+            max_zones=max_zones, scale=scale,
+        )
+
+    # Propagate to remaining cells via nearest spatial neighbor
+    remaining_mask = np.ones(N, dtype=bool)
+    remaining_mask[sub_idx] = False
+    n_remaining = remaining_mask.sum()
+
+    print(f"  Propagating labels to {n_remaining:,} remaining cells...")
+    tree = KDTree(sub_positions)
+
+    labels_all = np.empty(N, dtype=int)
+    labels_all[sub_idx] = labels_sub
+
+    _, nn_idx = tree.query(positions[remaining_mask])
+    labels_all[remaining_mask] = labels_sub[nn_idx]
+
+    print(f"  Subsample + propagation complete: {n_found} zones")
+    return labels_all, n_found, elbow_info
+
+
 def find_zones(features, positions, connectivity, n_zones=None, spatial_weight=0.3,
-               min_zones=3, max_zones=20):
+               min_zones=3, max_zones=20, max_direct_cells=250000, scale=1.0,
+               k_neighbors=15):
     """Main zone-finding entry point.
 
     If spatial_weight > 0, augments the marker feature matrix with scaled
     spatial coordinates before clustering.
 
+    For large datasets (> max_direct_cells), subsamples, clusters the subsample,
+    then propagates labels to remaining cells via nearest spatial neighbor.
+
     Args:
         features: (N, n_markers) z-scored marker features
         positions: (N, 2) spatial positions in um
-        connectivity: Sparse k-NN graph
-        n_zones: Fixed number of zones (None = auto)
+        connectivity: Sparse k-NN graph (used for direct path)
+        n_zones: Fixed number of zones (None = auto via elbow)
         spatial_weight: Weight for spatial coordinates (0 = markers only, 1 = equal)
         min_zones: Min zones for auto search
         max_zones: Max zones for auto search
+        max_direct_cells: Subsample threshold (default: 250K)
+        scale: Zone count scale factor (0.5 = 2x more zones)
+        k_neighbors: k-NN graph connectivity (for subsample path)
 
     Returns:
         labels: (N,) zone assignments
         n_zones_found: Actual number of zones
-        auto_scores: Dict of silhouette scores (empty if fixed k)
+        elbow_info: Dict with 'natural_k' and 'merge_dists' (None if fixed k)
     """
+    N = len(features)
+
+    # Guard: degenerate cases
+    if N <= 1:
+        return np.zeros(N, dtype=int), max(1, N), None
+    min_zones = min(min_zones, N)
+    max_zones = min(max_zones, N)
+    if n_zones is not None:
+        n_zones = min(n_zones, N)
+
+    # Subsample + propagate for large datasets
+    if N > max_direct_cells:
+        labels, n_found, elbow_info = _subsample_and_propagate(
+            features, positions, k_neighbors=k_neighbors, n_zones=n_zones,
+            spatial_weight=spatial_weight, max_direct_cells=max_direct_cells,
+            min_zones=min_zones, max_zones=max_zones, scale=scale,
+        )
+        return labels, n_found, elbow_info
+
+    # Direct clustering path
     # Augment features with spatial coordinates
     if spatial_weight > 0:
         pos_scaled = StandardScaler().fit_transform(positions)
@@ -250,13 +426,14 @@ def find_zones(features, positions, connectivity, n_zones=None, spatial_weight=0
     if n_zones is not None:
         print(f"\nClustering into {n_zones} zones (fixed)...")
         labels = find_zones_fixed(combined, connectivity, n_zones)
-        return labels, n_zones, {}
+        return labels, n_zones, None
     else:
-        print(f"\nAuto-selecting zones (range {min_zones}-{max_zones})...")
-        labels, best_k, scores = find_zones_auto(
+        print(f"\nAuto-selecting zones (elbow, range {min_zones}-{max_zones})...")
+        labels, best_k, elbow_info = find_zones_elbow(
             combined, connectivity, min_zones=min_zones, max_zones=max_zones,
+            scale=scale,
         )
-        return labels, best_k, scores
+        return labels, best_k, elbow_info
 
 
 # ── Post-processing ──────────────────────────────────────────────────
@@ -526,7 +703,7 @@ def gate_cells(features_raw, channel_keys, channel_names, gate_markers,
         for bit in range(n_gates):
             is_pos = (code >> (n_gates - 1 - bit)) & 1
             parts.append(f"{gate_names[bit]}{'+'if is_pos else '-'}")
-            code_to_label[code] = '/'.join(parts)
+        code_to_label[code] = '/'.join(parts)
 
     # Renumber to contiguous labels (only groups with cells)
     present_codes = sorted(set(binary_codes))
@@ -944,21 +1121,38 @@ def plot_kdistance(kdist_data, eps_used, output_path):
     print(f"  Saved: {output_path}")
 
 
-def plot_silhouette_sweep(scores, best_k, output_path):
-    """Plot silhouette score vs number of zones."""
-    if not scores:
+def plot_dendrogram_elbow(elbow_info, chosen_k, output_path):
+    """Plot merge distances with elbow point marked.
+
+    Args:
+        elbow_info: Dict with 'natural_k' and 'merge_dists' from find_zones_elbow()
+        chosen_k: Final zone count (after scaling)
+        output_path: Where to save the plot
+    """
+    if elbow_info is None:
         return
 
+    merge_dists = elbow_info['merge_dists']
+    natural_k = elbow_info['natural_k']
+    n_top = len(merge_dists)
+
+    # x-axis: number of clusters after each merge
+    # merge_dists[j] = merge from (n_top-j+1) to (n_top-j) clusters
+    n_clusters = np.arange(n_top, 0, -1)
+
     fig, ax = plt.subplots(figsize=(8, 5))
-    ks = sorted(scores.keys())
-    vals = [scores[k] for k in ks]
-    ax.plot(ks, vals, 'bo-', linewidth=1.5, markersize=6)
-    ax.axvline(best_k, color='red', linestyle='--', alpha=0.7, label=f'Best k={best_k}')
-    ax.set_xlabel('Number of zones')
-    ax.set_ylabel('Silhouette score')
-    ax.set_title('Zone Count Selection')
+    ax.plot(n_clusters, merge_dists, 'bo-', linewidth=1.5, markersize=5)
+    ax.axvline(natural_k, color='green', linestyle='--', alpha=0.7,
+               label=f'elbow k={natural_k}')
+    if chosen_k != natural_k:
+        ax.axvline(chosen_k, color='red', linestyle='--', alpha=0.7,
+                   label=f'final k={chosen_k}')
+    ax.set_xlabel('Number of clusters')
+    ax.set_ylabel('Merge distance (Ward)')
+    ax.set_title('Dendrogram Elbow (merge distances)')
     ax.legend()
     ax.grid(alpha=0.3)
+    ax.invert_xaxis()
 
     plt.tight_layout()
     plt.savefig(output_path, dpi=150, bbox_inches='tight')
@@ -980,11 +1174,17 @@ def main():
 
     # Zone parameters
     parser.add_argument('--n-zones', type=int, default=None,
-                        help='Fixed number of zones (default: auto via silhouette)')
+                        help='Fixed number of zones (default: auto via dendrogram elbow)')
     parser.add_argument('--min-zones', type=int, default=3,
                         help='Min zones for auto search (default: 3)')
     parser.add_argument('--max-zones', type=int, default=20,
                         help='Max zones for auto search (default: 20)')
+    parser.add_argument('--max-direct-cells', type=int, default=250000,
+                        help='Max cells for direct clustering. Above this, subsample '
+                             'and propagate via k-NN (default: 250000)')
+    parser.add_argument('--n-zones-scale', type=float, default=1.0,
+                        help='Scale factor for auto zone count. 0.5 = 2x more zones '
+                             '(finer resolution), 2.0 = half (coarser). Default: 1.0')
     parser.add_argument('--spatial-weight', type=float, default=0.15,
                         help='Weight for spatial coordinates vs markers, 0-1 (default: 0.15)')
     parser.add_argument('--k-neighbors', type=int, default=15,
@@ -999,6 +1199,16 @@ def main():
                         help='Comma-separated friendly channel names for labels')
     parser.add_argument('--min-score', type=float, default=0.0,
                         help='Minimum RF score to include (default: 0.0 = all)')
+    parser.add_argument('--all-features', action='store_true',
+                        help='Use all features (morph + SAM2 + channels) instead of '
+                             'just ch*_mean. For whole-tissue region discovery.')
+    parser.add_argument('--morph-sam2', action='store_true',
+                        help='Use morph + SAM2 features only (no channel means). '
+                             'For tissue region discovery without marker-specific channels.')
+    parser.add_argument('--n-pca', type=int, default=None,
+                        help='Reduce features to N PCA components before clustering. '
+                             'Auto-set to 50 when --all-features or --morph-sam2 and '
+                             'feature count > 50. Set 0 to disable.')
 
     # Marker gating mode
     parser.add_argument('--gate', type=str, default=None,
@@ -1030,6 +1240,11 @@ def main():
 
     args = parser.parse_args()
 
+    if args.n_zones_scale <= 0:
+        parser.error("--n-zones-scale must be positive")
+    if args.n_zones is not None and args.n_zones_scale != 1.0:
+        print("WARNING: --n-zones-scale is ignored when --n-zones is set (fixed zone count)")
+
     output_dir = Path(args.output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
 
@@ -1050,21 +1265,47 @@ def main():
     if args.channel_names:
         channel_names = [c.strip() for c in args.channel_names.split(',')]
 
+    # Determine feature mode
+    if args.morph_sam2:
+        feature_mode = 'morph_sam2'
+    elif args.all_features:
+        feature_mode = 'all'
+    else:
+        feature_mode = 'channels'
+
+    # Auto PCA for high-dimensional feature modes
+    n_pca = args.n_pca
+    if n_pca is None and feature_mode in ('all', 'morph_sam2'):
+        n_pca = 50  # auto PCA when using full feature sets
+    if n_pca == 0:
+        n_pca = None  # --n-pca 0 disables
+
     # ── Load ──────────────────────────────────────────────────────
     detections, positions, features, channel_keys = load_and_prepare(
         args.detections, marker_channels=marker_channels, min_score=args.min_score,
+        feature_mode=feature_mode, n_pca=n_pca,
     )
 
     if channel_names is None:
         channel_names = [k.replace('_mean', '') for k in channel_keys]
 
-    # ── Build raw features (for characterization, before z-scoring) ───
-    features_raw = np.zeros((len(detections), len(channel_keys)))
+    # ── Build raw features for characterization (always ch*_mean) ─────
+    # Even when clustering on all features, zone profiles use channel means
+    ch_mean_keys = _auto_detect_feature_keys(detections, mode='channels')
+    if not ch_mean_keys:
+        ch_mean_keys = channel_keys  # fallback if no ch*_mean found
+    features_raw = np.zeros((len(detections), len(ch_mean_keys)))
     for i, det in enumerate(detections):
         feats = det.get('features', det)
-        for j, key in enumerate(channel_keys):
+        for j, key in enumerate(ch_mean_keys):
             val = feats.get(key, 0)
             features_raw[i, j] = float(val) if val is not None else 0.0
+    # Use ch_mean_keys for characterization/plots, channel_keys for clustering
+    char_keys = ch_mean_keys
+    if channel_names is None or len(channel_names) != len(char_keys):
+        char_names = [k.replace('_mean', '') for k in char_keys]
+    else:
+        char_names = channel_names
 
     # ── Parse gate args ───────────────────────────────────────────
     gate_markers = None
@@ -1075,14 +1316,15 @@ def main():
             thresh_vals = [float(t) for t in args.gate_thresholds.split(',')]
             gate_thresholds = dict(zip(gate_markers, thresh_vals))
 
-    auto_scores = {}
+    elbow_info = None
+    n_zones_pre_merge = None
     features_raw_all = features_raw.copy()  # keep unfiltered copy for histograms
 
     if gate_markers:
         # ── Gating mode ──────────────────────────────────────────
         print(f"\nMarker gating mode: {gate_markers}")
         labels, zone_metadata, thresholds = gate_cells(
-            features_raw, channel_keys, channel_names,
+            features_raw, char_keys, char_names,
             gate_markers, gate_thresholds,
         )
         # Add marker profiles to gated groups
@@ -1091,7 +1333,7 @@ def main():
             zone_feats = features_raw[mask]
             zone_pos = positions[mask]
             z['marker_profile'] = {}
-            for j, key in enumerate(channel_keys):
+            for j, key in enumerate(char_keys):
                 ch_name = key.replace('_mean', '')
                 z['marker_profile'][ch_name] = {
                     'mean': float(zone_feats[:, j].mean()),
@@ -1105,18 +1347,27 @@ def main():
         n_zones = len(zone_metadata)
     else:
         # ── Spatial clustering mode ───────────────────────────────
-        print(f"\nBuilding k-NN spatial graph (k={args.k_neighbors})...")
-        connectivity = build_spatial_graph(positions, k_neighbors=args.k_neighbors)
+        if len(positions) <= args.max_direct_cells:
+            print(f"\nBuilding k-NN spatial graph (k={args.k_neighbors})...")
+            connectivity = build_spatial_graph(positions, k_neighbors=args.k_neighbors)
+        else:
+            print(f"\n  {len(positions):,} cells > {args.max_direct_cells:,} max_direct_cells"
+                  f" — will subsample")
+            connectivity = None  # subsample path builds its own
 
-        # Auto min_zones: at least n_channels so each marker can have its own zone
-        min_zones = max(args.min_zones, len(channel_keys))
-        labels, n_zones, auto_scores = find_zones(
+        # Auto min_zones: at least n_marker_channels so each marker can have its own zone
+        min_zones = max(args.min_zones, len(char_keys))
+        labels, n_zones, elbow_info = find_zones(
             features, positions, connectivity,
             n_zones=args.n_zones,
             spatial_weight=args.spatial_weight,
             min_zones=min_zones,
             max_zones=max(args.max_zones, min_zones),
+            max_direct_cells=args.max_direct_cells,
+            scale=args.n_zones_scale,
+            k_neighbors=args.k_neighbors,
         )
+        n_zones_pre_merge = n_zones  # save for dendrogram plot
 
         # Merge small zones
         labels = merge_small_zones(labels, positions, min_cells=args.min_cells_per_zone)
@@ -1124,9 +1375,9 @@ def main():
         n_zones = len(set(labels))
         print(f"\nFinal: {n_zones} zones")
 
-        # Characterize
-        zone_metadata = characterize_zones(labels, positions, features_raw, channel_keys)
-        auto_label_zones(zone_metadata, channel_keys, channel_names,
+        # Characterize (always based on channel means for interpretability)
+        zone_metadata = characterize_zones(labels, positions, features_raw, char_keys)
+        auto_label_zones(zone_metadata, char_keys, char_names,
                          features_raw=features_raw)
         thresholds = None
 
@@ -1182,7 +1433,7 @@ def main():
             z_feats = features_raw[mask]
             z_pos = positions[mask]
             z['marker_profile'] = {}
-            for j, key in enumerate(channel_keys):
+            for j, key in enumerate(char_keys):
                 ch_name = key.replace('_mean', '')
                 z['marker_profile'][ch_name] = {
                     'mean': float(z_feats[:, j].mean()),
@@ -1221,8 +1472,11 @@ def main():
             'n_zones_requested': args.n_zones,
             'min_zones': args.min_zones,
             'max_zones': args.max_zones,
-            'marker_channels': channel_keys,
-            'channel_names': channel_names,
+            'clustering_features': channel_keys,
+            'marker_channels': char_keys,
+            'channel_names': char_names,
+            'feature_mode': feature_mode,
+            'n_pca': n_pca,
             'min_score': args.min_score,
         },
         'zones': zone_metadata,
@@ -1230,8 +1484,14 @@ def main():
     if gate_markers:
         meta_output['gate_markers'] = gate_markers
         meta_output['gate_thresholds'] = {k: float(v) for k, v in thresholds.items()}
-    if auto_scores:
-        meta_output['auto_scores'] = {str(k): v for k, v in auto_scores.items()}
+    if elbow_info is not None:
+        meta_output['elbow'] = {
+            'natural_k': int(elbow_info['natural_k']),
+            'n_zones_scale': args.n_zones_scale,
+            'merge_dists': [float(d) for d in elbow_info['merge_dists']],
+        }
+    meta_output['parameters']['max_direct_cells'] = args.max_direct_cells
+    meta_output['parameters']['n_zones_scale'] = args.n_zones_scale
     with open(output_dir / 'zone_metadata.json', 'w') as f:
         json.dump(meta_output, f, indent=2)
     print(f"  Saved: {output_dir / 'zone_metadata.json'}")
@@ -1248,18 +1508,18 @@ def main():
     plot_zone_map(positions, labels, zone_metadata,
                   output_dir / 'zone_map.png', title=title)
 
-    plot_marker_profiles(zone_metadata, channel_keys, channel_names,
+    plot_marker_profiles(zone_metadata, char_keys, char_names,
                          output_dir / 'zone_marker_profiles.png')
 
     plot_zone_map_with_density(positions, labels, zone_metadata,
                                output_dir / 'zone_map_with_density.png')
 
-    if auto_scores:
-        plot_silhouette_sweep(auto_scores, n_zones,
-                              output_dir / 'silhouette_sweep.png')
+    if elbow_info is not None:
+        plot_dendrogram_elbow(elbow_info, n_zones_pre_merge,
+                              output_dir / 'dendrogram_elbow.png')
 
     if gate_markers and thresholds:
-        plot_gate_histograms(features_raw_all, channel_keys, channel_names,
+        plot_gate_histograms(features_raw_all, char_keys, char_names,
                              gate_markers, thresholds,
                              output_dir / 'gate_histograms.png')
 
@@ -1288,8 +1548,8 @@ def main():
     print(f"  zone_map.png              — cells colored by zone")
     print(f"  zone_marker_profiles.png  — marker expression per zone")
     print(f"  zone_map_with_density.png — zones over density heatmap")
-    if auto_scores:
-        print(f"  silhouette_sweep.png      — auto k-selection curve")
+    if elbow_info is not None:
+        print(f"  dendrogram_elbow.png      — auto k-selection (elbow method)")
 
 
 if __name__ == '__main__':

@@ -2175,6 +2175,18 @@ def run_pipeline(args):
                 slide_shm_arr[:, :, i] = all_channel_data[ch_key]
                 logger.info(f"  Loaded channel {ch_key} to shared memory slot {i}")
 
+            # Build channel→slot mapping so we can read from shm instead of all_channel_data
+            ch_to_slot = {ch_key: i for i, ch_key in enumerate(ch_keys)}
+
+            # Free original channel data — everything is now in shared memory
+            # This reclaims ~54 GB per channel (e.g. 108 GB for 2-channel coronal)
+            mem_freed_gb = sum(arr.nbytes for arr in all_channel_data.values()) / (1024**3)
+            del all_channel_data
+            # Also release loader's reference to primary channel array
+            loader.channel_data = None
+            gc.collect()
+            logger.info(f"Freed all_channel_data ({mem_freed_gb:.1f} GB) — using shared memory for all reads")
+
             # Build strategy parameters from the already-constructed params dict
             strategy_params = dict(params)  # params built by build_detection_params()
 
@@ -2210,7 +2222,7 @@ def run_pipeline(args):
             mgpu_channel_names = None
             if args.cell_type == 'vessel' and getattr(args, 'channel_names', None):
                 names = args.channel_names.split(',')
-                ch_keys = sorted(all_channel_data.keys())
+                # ch_keys already set from line above shm creation
                 mgpu_channel_names = {ch_keys[i]: name.strip()
                                       for i, name in enumerate(names)
                                       if i < len(ch_keys)}
@@ -2296,37 +2308,37 @@ def run_pipeline(args):
                             rel_ty = tile_y - y_start
                             # Use masks.shape to handle edge tiles (smaller than tile_size at boundaries)
                             tile_h, tile_w = masks.shape[:2]
-                            if args.cell_type == 'islet' and all(k in all_channel_data for k in (2, 3, 5)):
+                            # Read HTML crops from shared memory (all_channel_data freed after shm creation)
+                            if args.cell_type == 'islet' and all(k in ch_to_slot for k in (2, 3, 5)):
                                 # Islet: R=Gcg(ch2), G=Ins(ch3), B=Sst(ch5)
                                 tile_rgb_html = np.stack([
-                                    all_channel_data[2][rel_ty:rel_ty+tile_h, rel_tx:rel_tx+tile_w],
-                                    all_channel_data[3][rel_ty:rel_ty+tile_h, rel_tx:rel_tx+tile_w],
-                                    all_channel_data[5][rel_ty:rel_ty+tile_h, rel_tx:rel_tx+tile_w],
+                                    slide_shm_arr[rel_ty:rel_ty+tile_h, rel_tx:rel_tx+tile_w, ch_to_slot[2]],
+                                    slide_shm_arr[rel_ty:rel_ty+tile_h, rel_tx:rel_tx+tile_w, ch_to_slot[3]],
+                                    slide_shm_arr[rel_ty:rel_ty+tile_h, rel_tx:rel_tx+tile_w, ch_to_slot[5]],
                                 ], axis=-1)
                             elif args.cell_type == 'tissue_pattern':
                                 # Tissue pattern: configurable R/G/B display channels
+                                # Handles any number of display channels (1, 2, or 3+), always produces (h, w, 3)
                                 tp_disp = [int(x) for x in args.tp_display_channels.split(',')]
-                                if len(tp_disp) >= 3 and all(k in all_channel_data for k in tp_disp[:3]):
-                                    tile_rgb_html = np.stack([
-                                        all_channel_data[tp_disp[0]][rel_ty:rel_ty+tile_h, rel_tx:rel_tx+tile_w],
-                                        all_channel_data[tp_disp[1]][rel_ty:rel_ty+tile_h, rel_tx:rel_tx+tile_w],
-                                        all_channel_data[tp_disp[2]][rel_ty:rel_ty+tile_h, rel_tx:rel_tx+tile_w],
-                                    ], axis=-1)
-                                else:
-                                    ch_keys = sorted(all_channel_data.keys())[:3]
-                                    tile_rgb_html = np.stack([
-                                        all_channel_data[ch_keys[i]][rel_ty:rel_ty+tile_h, rel_tx:rel_tx+tile_w]
-                                        for i in range(min(3, len(ch_keys)))
-                                    ], axis=-1)
-                            elif len(all_channel_data) >= 3:
-                                ch_keys = sorted(all_channel_data.keys())[:3]
+                                _shm_dtype = slide_shm_arr.dtype
+                                rgb_channels = []
+                                for _ci in range(3):
+                                    if _ci < len(tp_disp) and tp_disp[_ci] in ch_to_slot:
+                                        rgb_channels.append(
+                                            slide_shm_arr[rel_ty:rel_ty+tile_h, rel_tx:rel_tx+tile_w, ch_to_slot[tp_disp[_ci]]]
+                                        )
+                                    else:
+                                        rgb_channels.append(np.zeros((tile_h, tile_w), dtype=_shm_dtype))
+                                tile_rgb_html = np.stack(rgb_channels, axis=-1)
+                            elif n_channels >= 3:
                                 tile_rgb_html = np.stack([
-                                    all_channel_data[ch_keys[i]][rel_ty:rel_ty+tile_h, rel_tx:rel_tx+tile_w]
+                                    slide_shm_arr[rel_ty:rel_ty+tile_h, rel_tx:rel_tx+tile_w, i]
                                     for i in range(3)
                                 ], axis=-1)
                             else:
-                                tile_data = loader.channel_data[rel_ty:rel_ty+tile_h, rel_tx:rel_tx+tile_w]
-                                tile_rgb_html = np.stack([tile_data] * 3, axis=-1)
+                                tile_rgb_html = np.stack([
+                                    slide_shm_arr[rel_ty:rel_ty+tile_h, rel_tx:rel_tx+tile_w, 0]
+                                ] * 3, axis=-1)
                             # Convert uint16→uint8 for non-islet (NMJ/MK channels are high-signal, /256 works).
                             # For islet: keep uint16 — low-signal fluorescence (Gcg mean=16.7)
                             # would become all-zero after /256. percentile_normalize() handles uint16.
@@ -2387,7 +2399,7 @@ def run_pipeline(args):
                             marker_thresholds=marker_thresholds,
                         )
                         all_samples.extend(html_samples)
-                    del deferred_html_tiles  # free memory
+                    deferred_html_tiles = []  # clear after processing
 
             logger.info(f"Multi-GPU processing complete: {total_detections} {args.cell_type} detections from {results_collected} tiles")
 
@@ -2537,16 +2549,18 @@ def run_pipeline(args):
                     # would become all-zero after /256. percentile_normalize() handles uint16.
                 elif args.cell_type == 'tissue_pattern' and extra_channel_tiles:
                     # Tissue pattern: configurable R/G/B display channels
+                    # Handles any number of display channels (1, 2, or 3+), always produces (h, w, 3)
                     tp_disp = [int(x) for x in args.tp_display_channels.split(',')]
-                    if len(tp_disp) >= 3 and all(k in extra_channel_tiles for k in tp_disp[:3]):
-                        tile_rgb_display = np.stack([
-                            extra_channel_tiles[tp_disp[0]],
-                            extra_channel_tiles[tp_disp[1]],
-                            extra_channel_tiles[tp_disp[2]],
-                        ], axis=-1)
-                        # Keep uint16 — FISH channels can have low signal like islet
-                    else:
-                        tile_rgb_display = tile_rgb
+                    _ect_dtype = next(iter(extra_channel_tiles.values())).dtype
+                    _th, _tw = next(iter(extra_channel_tiles.values())).shape[:2]
+                    rgb_channels = []
+                    for _ci in range(3):
+                        if _ci < len(tp_disp) and tp_disp[_ci] in extra_channel_tiles:
+                            rgb_channels.append(extra_channel_tiles[tp_disp[_ci]])
+                        else:
+                            rgb_channels.append(np.zeros((_th, _tw), dtype=_ect_dtype))
+                    tile_rgb_display = np.stack(rgb_channels, axis=-1)
+                    # Keep uint16 — FISH channels can have low signal like islet
                 else:
                     tile_rgb_display = tile_rgb
                 tile_pct = _compute_tile_percentiles(tile_rgb_display) if getattr(args, 'html_normalization', 'crop') == 'tile' else None
@@ -2587,7 +2601,8 @@ def run_pipeline(args):
                 torch.cuda.empty_cache()
                 continue
 
-    # Deferred HTML generation for islet (needs population-level marker thresholds)
+    # Deferred HTML generation for islet — single-GPU path only
+    # (multi-GPU path handles this inside its own block and clears deferred_html_tiles)
     if deferred_html_tiles and args.cell_type == 'islet':
         marker_thresholds = compute_islet_marker_thresholds(all_detections) if all_detections else None
         if marker_thresholds:
@@ -2667,9 +2682,9 @@ def run_pipeline(args):
             channel_legend = probe_legend
         else:
             channel_legend = {
-                'red': f'Ch{tp_disp[0]}' if len(tp_disp) > 0 else 'Ch0',
-                'green': f'Ch{tp_disp[1]}' if len(tp_disp) > 1 else 'Ch1',
-                'blue': f'Ch{tp_disp[2]}' if len(tp_disp) > 2 else 'Ch2',
+                'red': f'Ch{tp_disp[0]}' if len(tp_disp) > 0 else 'none',
+                'green': f'Ch{tp_disp[1]}' if len(tp_disp) > 1 else 'none',
+                'blue': f'Ch{tp_disp[2]}' if len(tp_disp) > 2 else 'none',
             }
 
     # Use slide_name + timestamp as experiment_name so each run gets its own
