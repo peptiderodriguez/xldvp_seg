@@ -54,25 +54,29 @@ def load_detections(detections_path, threshold=0.5):
     return positive
 
 
-def extract_feature_matrix(detections, feature_prefix='ch'):
+def extract_feature_matrix(detections, feature_prefix='ch', feature_names_override=None):
     """Extract feature matrix from detections.
 
-    Selects features matching the prefix (default: per-channel stats).
+    Selects features matching the prefix (default: per-channel stats),
+    or uses an explicit list if feature_names_override is provided.
 
     Returns:
         X: numpy array (n_cells, n_features)
         feature_names: list of feature name strings
         valid_indices: indices of detections with complete features
     """
-    # Collect all feature names matching prefix
-    all_names = set()
-    for det in detections:
-        feats = det.get('features', {})
-        for k in feats:
-            if k.startswith(feature_prefix) and isinstance(feats[k], (int, float)):
-                all_names.add(k)
+    if feature_names_override:
+        feature_names = list(feature_names_override)
+    else:
+        # Collect all feature names matching prefix
+        all_names = set()
+        for det in detections:
+            feats = det.get('features', {})
+            for k in feats:
+                if k.startswith(feature_prefix) and isinstance(feats[k], (int, float)):
+                    all_names.add(k)
+        feature_names = sorted(all_names)
 
-    feature_names = sorted(all_names)
     if not feature_names:
         return None, [], []
 
@@ -97,11 +101,45 @@ def extract_feature_matrix(detections, feature_prefix='ch'):
     return X, feature_names, valid_indices
 
 
-def auto_label_clusters(detections, labels, valid_indices):
+def normalize_marker_features(X, feature_names):
+    """Normalize marker features using population p1-p99.5 percentile stretch.
+
+    Same normalization as classify_islet_marker() / HTML display so clustering
+    matches visual appearance.
+
+    Args:
+        X: (n_cells, n_features) raw feature matrix
+        feature_names: list of feature names
+
+    Returns:
+        X_norm: (n_cells, n_features) normalized to [0, 1]
+        norm_ranges: dict mapping feature_name -> (lo, hi) percentile values
+    """
+    X_norm = np.zeros_like(X)
+    norm_ranges = {}
+    for j in range(X.shape[1]):
+        col = X[:, j]
+        lo = np.percentile(col, 1)
+        hi = np.percentile(col, 99.5)
+        norm_ranges[feature_names[j]] = (lo, hi)
+        if hi > lo:
+            X_norm[:, j] = np.clip((col - lo) / (hi - lo), 0, 1)
+        else:
+            X_norm[:, j] = 0.0
+        print(f"  {feature_names[j]}: range [{lo:.1f}, {hi:.1f}] -> [0, 1]")
+    return X_norm, norm_ranges
+
+
+def auto_label_clusters(detections, labels, valid_indices, norm_ranges=None):
     """Auto-label clusters by dominant marker expression.
 
     For each cluster, compute mean of ch2_mean (Gcg), ch3_mean (Ins), ch5_mean (Sst).
-    Assign label based on highest mean.
+    When norm_ranges is provided, normalize values before comparing (so each channel
+    is on the same scale and the highest-signal channel doesn't dominate).
+
+    Args:
+        norm_ranges: dict mapping 'ch2_mean' etc to (lo, hi) percentile ranges.
+            If provided, values are normalized to [0,1] before comparison.
     """
     cluster_labels = {}
     unique_labels = set(labels)
@@ -120,12 +158,25 @@ def auto_label_clusters(detections, labels, valid_indices):
         marker_means = {}
         for label, key in marker_keys.items():
             vals = [d.get('features', {}).get(key, 0) for d in cluster_dets]
-            marker_means[label] = np.mean(vals) if vals else 0
+            mean_val = np.mean(vals) if vals else 0
+            # Normalize if ranges provided
+            if norm_ranges and key in norm_ranges:
+                lo, hi = norm_ranges[key]
+                if hi > lo:
+                    mean_val = max(0, (mean_val - lo) / (hi - lo))
+                else:
+                    mean_val = 0.0
+            marker_means[label] = mean_val
 
         if max(marker_means.values()) == 0:
             cluster_labels[cl] = 'other'
         else:
-            cluster_labels[cl] = max(marker_means, key=marker_means.get)
+            best = max(marker_means, key=marker_means.get)
+            # Only label if dominant marker is clearly above baseline (>0.1 normalized)
+            if norm_ranges and marker_means[best] < 0.1:
+                cluster_labels[cl] = 'other'
+            else:
+                cluster_labels[cl] = best
 
     cluster_labels[-1] = 'noise'
     return cluster_labels
@@ -162,9 +213,17 @@ def run_clustering(args):
 
     # Extract features
     print("Extracting feature matrix...")
-    X, feature_names, valid_indices = extract_feature_matrix(
-        detections, feature_prefix=args.feature_prefix
-    )
+    marker_features = ['ch2_mean', 'ch3_mean', 'ch5_mean']  # Gcg, Ins, Sst
+
+    if args.marker_only:
+        print("  Using normalized marker channels only (ch2_mean, ch3_mean, ch5_mean)")
+        X, feature_names, valid_indices = extract_feature_matrix(
+            detections, feature_names_override=marker_features
+        )
+    else:
+        X, feature_names, valid_indices = extract_feature_matrix(
+            detections, feature_prefix=args.feature_prefix
+        )
 
     if X is None or len(X) == 0:
         print("ERROR: No valid features found")
@@ -172,9 +231,16 @@ def run_clustering(args):
 
     print(f"  Feature matrix: {X.shape[0]} cells x {X.shape[1]} features")
 
-    # Scale features (required for UMAP)
-    scaler = StandardScaler()
-    X_scaled = scaler.fit_transform(X)
+    # Normalize and scale
+    norm_ranges = None
+    if args.marker_only:
+        # Population percentile normalization (matches HTML display)
+        print("  Applying p1-p99.5 percentile normalization...")
+        X_scaled, norm_ranges = normalize_marker_features(X, feature_names)
+        # No StandardScaler needed — already [0, 1] and all same units
+    else:
+        scaler = StandardScaler()
+        X_scaled = scaler.fit_transform(X)
 
     # Replace NaN/inf with 0
     X_scaled = np.nan_to_num(X_scaled, nan=0.0, posinf=0.0, neginf=0.0)
@@ -203,7 +269,7 @@ def run_clustering(args):
     print(f"  Found {n_clusters} clusters, {n_noise} noise points")
 
     # Auto-label clusters
-    cluster_label_map = auto_label_clusters(detections, labels, valid_indices)
+    cluster_label_map = auto_label_clusters(detections, labels, valid_indices, norm_ranges=norm_ranges)
     print(f"  Cluster labels: {cluster_label_map}")
 
     # Enrich detections with cluster info
@@ -362,6 +428,8 @@ def main():
                         help='Output directory for clustering results')
     parser.add_argument('--threshold', type=float, default=0.5,
                         help='Minimum rf_prediction score (default: 0.5)')
+    parser.add_argument('--marker-only', action='store_true',
+                        help='Use only 3 normalized marker channels (ch2/Gcg, ch3/Ins, ch5/Sst)')
     parser.add_argument('--feature-prefix', type=str, default='ch',
                         help='Feature name prefix to select (default: "ch" for channel stats)')
     parser.add_argument('--n-neighbors', type=int, default=30,

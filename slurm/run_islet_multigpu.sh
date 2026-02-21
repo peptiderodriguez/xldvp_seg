@@ -4,9 +4,9 @@
 #SBATCH --nodes=1
 #SBATCH --ntasks=1
 #SBATCH --cpus-per-task=96
-#SBATCH --mem=300G
+#SBATCH --mem=500G
 #SBATCH --gres=gpu:l40s:4
-#SBATCH --time=24:00:00
+#SBATCH --time=48:00:00
 #SBATCH --output=/fs/gpfs41/lv12/fileset02/pool/pool-mann-edwin/code_bin/xldvp_seg/slurm/logs/islet_%j.out
 #SBATCH --error=/fs/gpfs41/lv12/fileset02/pool/pool-mann-edwin/code_bin/xldvp_seg/slurm/logs/islet_%j.err
 
@@ -56,7 +56,6 @@ $PYTHON run_segmentation.py \
     --all-channels \
     --tile-size 3000 \
     --tile-overlap 0.10 \
-    --sample-fraction 0.10 \
     --load-to-ram \
     --multi-gpu --num-gpus 4 \
     --output-dir "$OUTPUT_DIR" \

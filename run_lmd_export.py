@@ -963,6 +963,12 @@ Examples:
     parser.add_argument('--min-score', type=float, default=None,
                         help='Minimum rf_prediction score (filters detections)')
 
+    # Zone filtering
+    parser.add_argument('--zone-filter', type=str, default=None,
+                        help='Include only these zone IDs (comma-separated, e.g. "1,3,5")')
+    parser.add_argument('--zone-exclude', type=str, default=None,
+                        help='Exclude these zone IDs (comma-separated, e.g. "0")')
+
     # Controls
     parser.add_argument('--generate-controls', action='store_true',
                         help='Generate spatial control regions for every target')
@@ -1014,6 +1020,18 @@ Examples:
         print(f"  Score filter (>= {args.min_score}): {before} -> {len(detections)}")
     elif args.min_score is not None and args.clusters:
         print(f"  Score filter skipped (clustering already filtered at >= {args.min_score})")
+
+    # Filter by zone (from assign_tissue_zones.py)
+    if args.zone_filter:
+        zone_ids = {int(z) for z in args.zone_filter.split(',')}
+        before = len(detections)
+        detections = [d for d in detections if d.get('zone_id') in zone_ids]
+        print(f"  Zone filter (include {zone_ids}): {before} -> {len(detections)}")
+    if args.zone_exclude:
+        exclude_ids = {int(z) for z in args.zone_exclude.split(',')}
+        before = len(detections)
+        detections = [d for d in detections if d.get('zone_id') not in exclude_ids]
+        print(f"  Zone exclude ({exclude_ids}): {before} -> {len(detections)}")
 
     if len(detections) == 0:
         print("ERROR: No detections to export!")

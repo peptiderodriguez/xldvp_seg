@@ -743,58 +743,145 @@ def _compute_tile_percentiles(tile_rgb, p_low=1, p_high=99.5):
 def classify_islet_marker(features_dict, marker_thresholds=None):
     """Classify an islet cell by dominant hormone marker.
 
-    Uses ch2=Gcg (alpha), ch3=Ins (beta), ch5=Sst (delta).
+    Uses NORMALIZED channel values (same as HTML display) so contour color
+    matches what the user sees. Channels: ch2=Gcg (alpha), ch3=Ins (beta), ch5=Sst (delta).
+
+    marker_thresholds = (norm_ranges, ch_thresholds, ratio_min) where:
+      norm_ranges = {ch: (p_low, p_high)} for percentile normalization
+      ch_thresholds = {ch: float} — per-channel gate (Otsu for Gcg/Ins, med+3MAD for Sst)
+      ratio_min = float — dominant marker must be >= ratio_min * second-highest
+
+    Classification:
+      1. Gate: cell must exceed at least one channel's threshold to be "endocrine"
+      2. Ratio: among positive cells, dominant marker must be ratio_min x the runner-up
+      3. If ratio not met → "multi" (co-expressing, orange contour)
+
     Returns (class_name, contour_color_rgb).
     """
     gcg = features_dict.get('ch2_mean', 0)
     ins = features_dict.get('ch3_mean', 0)
     sst = features_dict.get('ch5_mean', 0)
 
-    if marker_thresholds:
-        gcg_t, ins_t, sst_t = marker_thresholds
-    else:
-        # Fallback thresholds (will be overridden by population stats)
-        gcg_t, ins_t, sst_t = 22, 550, 210
+    if marker_thresholds is None:
+        return 'none', (128, 128, 128)
 
-    # Check which markers are above background
-    gcg_pos = gcg > gcg_t
-    ins_pos = ins > ins_t
-    sst_pos = sst > sst_t
+    norm_ranges, ch_thresholds, ratio_min = marker_thresholds
+
+    # Normalize to 0-1 using same percentiles as HTML display
+    def _norm(val, ch_key):
+        lo, hi = norm_ranges.get(ch_key, (0, 1))
+        if hi <= lo:
+            return 0.0
+        return max(0.0, min(1.0, (val - lo) / (hi - lo)))
+
+    gcg_n = _norm(gcg, 'ch2')
+    ins_n = _norm(ins, 'ch3')
+    sst_n = _norm(sst, 'ch5')
+
+    # Gate: must exceed at least one channel's threshold
+    gcg_pos = gcg_n >= ch_thresholds.get('ch2', 0.5)
+    ins_pos = ins_n >= ch_thresholds.get('ch3', 0.5)
+    sst_pos = sst_n >= ch_thresholds.get('ch5', 0.5)
 
     if not (gcg_pos or ins_pos or sst_pos):
-        return 'none', (128, 128, 128)  # gray
+        return 'none', (128, 128, 128)
 
-    # Dominant = highest fold-change over threshold
-    scores = []
-    if gcg_pos:
-        scores.append(('alpha', gcg / max(gcg_t, 1), (255, 50, 50)))    # red
-    if ins_pos:
-        scores.append(('beta', ins / max(ins_t, 1), (50, 255, 50)))     # green
-    if sst_pos:
-        scores.append(('delta', sst / max(sst_t, 1), (50, 200, 255)))   # cyan
+    # Ratio classification among gated cells
+    markers = [
+        ('alpha', gcg_n, (255, 50, 50)),
+        ('beta',  ins_n, (50, 255, 50)),
+        ('delta', sst_n, (50, 50, 255)),
+    ]
+    markers.sort(key=lambda x: x[1], reverse=True)
+    best_name, best_val, best_color = markers[0]
+    second_val = markers[1][1]
 
-    scores.sort(key=lambda x: x[1], reverse=True)
-    return scores[0][0], scores[0][2]
+    if second_val > 0 and best_val / second_val < ratio_min:
+        return 'multi', (255, 170, 0)  # orange
+
+    return best_name, best_color
 
 
-def compute_islet_marker_thresholds(all_detections):
-    """Compute background thresholds for islet marker channels from population stats.
+def compute_islet_marker_thresholds(all_detections, vis_threshold_overrides=None, ratio_min=1.5):
+    """Compute per-channel thresholds for islet marker classification.
 
-    Uses mean+3sd of the lower half (below median) as background threshold.
+    For each marker channel:
+      1. Normalize raw values to [0,1] using population p1-p99.5 percentiles
+      2. Otsu threshold for channels with bimodal separation (Gcg, Ins)
+      3. median+3*MAD for channels with low dynamic range (Sst)
+      4. Fallback: if Otsu gives >15% positive, use med+3*MAD instead
+
+    Args:
+        all_detections: list of detection dicts with features
+        vis_threshold_overrides: optional dict {ch_key: float} to manually override
+            per-channel thresholds (e.g. {'ch5': 0.6})
+        ratio_min: dominant marker must be >= ratio_min * second-highest
+            to be classified as single-marker. Otherwise → "multi".
+
+    Returns (norm_ranges, ch_thresholds, ratio_min) for classify_islet_marker().
     """
+    from skimage.filters import threshold_otsu
+
     gcg = np.array([d['features'].get('ch2_mean', 0) for d in all_detections])
     ins = np.array([d['features'].get('ch3_mean', 0) for d in all_detections])
     sst = np.array([d['features'].get('ch5_mean', 0) for d in all_detections])
 
-    thresholds = []
-    for arr in [gcg, ins, sst]:
-        med = np.median(arr)
-        bg = arr[arr <= med]
-        t = bg.mean() + 3 * bg.std() if len(bg) > 0 else med
-        thresholds.append(float(t))
+    norm_ranges = {}
+    ch_thresholds = {}
 
-    logger.info(f"Islet marker thresholds: Gcg>{thresholds[0]:.0f}, Ins>{thresholds[1]:.0f}, Sst>{thresholds[2]:.0f}")
-    return tuple(thresholds)
+    for ch_key, ch_name, arr in [('ch2', 'Gcg', gcg), ('ch3', 'Ins', ins), ('ch5', 'Sst', sst)]:
+        lo = float(np.percentile(arr, 1))
+        hi = float(np.percentile(arr, 99.5))
+        norm_ranges[ch_key] = (lo, hi)
+
+        # Normalize to [0, 1]
+        if hi > lo:
+            norm_vals = np.clip((arr - lo) / (hi - lo), 0, 1)
+        else:
+            norm_vals = np.zeros_like(arr)
+
+        # Otsu on normalized values
+        try:
+            otsu_t = float(threshold_otsu(norm_vals))
+        except ValueError:
+            otsu_t = 0.5
+
+        # median + 3*MAD — robust for unimodal distributions with a signal tail
+        med = float(np.median(norm_vals))
+        mad = float(np.median(np.abs(norm_vals - med)))
+        mad3_t = med + 3 * 1.4826 * mad  # 1.4826 scales MAD to std for normal dist
+
+        # Use Otsu if it gives <=15% positive, otherwise fall back to med+3*MAD.
+        # Channels with low dynamic range (like Sst) produce poor Otsu thresholds
+        # because the distribution isn't clearly bimodal.
+        n_otsu = int(np.sum(norm_vals > otsu_t))
+        otsu_pct = 100 * n_otsu / len(arr) if len(arr) > 0 else 0
+
+        if otsu_pct <= 15:
+            auto_t = otsu_t
+            method = 'otsu'
+        else:
+            auto_t = mad3_t
+            method = 'med+3MAD'
+
+        # Allow manual override
+        if vis_threshold_overrides and ch_key in vis_threshold_overrides:
+            ch_thresholds[ch_key] = vis_threshold_overrides[ch_key]
+            logger.info(f"Islet {ch_name}({ch_key}): p1={lo:.1f}, p99.5={hi:.1f}, "
+                        f"auto={auto_t:.3f} ({method}), OVERRIDE={vis_threshold_overrides[ch_key]:.3f}")
+        else:
+            ch_thresholds[ch_key] = auto_t
+            logger.info(f"Islet {ch_name}({ch_key}): p1={lo:.1f}, p99.5={hi:.1f}, "
+                        f"threshold={auto_t:.3f} ({method})")
+
+        # Count positive cells at this threshold
+        raw_cutoff = lo + ch_thresholds[ch_key] * (hi - lo)
+        n_pos = int(np.sum(arr > raw_cutoff))
+        logger.info(f"  {ch_name}-positive: {n_pos} cells ({100*n_pos/len(arr):.1f}%) "
+                    f"[raw > {raw_cutoff:.0f}]")
+
+    logger.info(f"Islet marker ratio_min: {ratio_min}x (dominant must be >= {ratio_min}x runner-up)")
+    return (norm_ranges, ch_thresholds, ratio_min)
 
 
 def filter_and_create_html_samples(
