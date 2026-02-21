@@ -224,7 +224,7 @@ def detect_lumen_first(
     tile: np.ndarray,
     pixel_size_um: float = 0.1725,
     min_lumen_area_um2: float = 50,
-    max_lumen_area_um2: float = 150000,
+    max_lumen_area_um2: float = None,
     min_ellipse_fit: float = 0.40,
     max_aspect_ratio: float = 5.0,
     min_wall_brightness_ratio: float = 1.15,
@@ -257,6 +257,13 @@ def detect_lumen_first(
     Returns:
         List of candidate dicts with vessel info, including 'scale_detected' field
     """
+    h, w = tile.shape[:2]
+
+    # Compute max lumen area from tile dimensions if not specified (90% of tile)
+    if max_lumen_area_um2 is None:
+        tile_area_um2 = h * w * (pixel_size_um ** 2)
+        max_lumen_area_um2 = tile_area_um2 * 0.90
+
     # Convert area thresholds to pixels
     min_lumen_area_px = min_lumen_area_um2 / (pixel_size_um ** 2)
     max_lumen_area_px = max_lumen_area_um2 / (pixel_size_um ** 2)
@@ -268,18 +275,26 @@ def detect_lumen_first(
         gray = tile
 
     if gray.dtype != np.uint8:
-        img_min, img_max = gray.min(), gray.max()
+        # Exclude CZI padding zeros from normalization range
+        valid = gray > 0
+        valid_px = gray[valid]
+        if len(valid_px) > 0:
+            img_min, img_max = valid_px.min(), valid_px.max()
+        else:
+            return []
         if img_max - img_min > 1e-8:
-            img_norm = ((gray - img_min) / (img_max - img_min) * 255).astype(np.uint8)
+            img_norm = np.clip((gray.astype(np.float64) - img_min) / (img_max - img_min) * 255, 0, 255).astype(np.uint8)
         else:
             return []
     else:
         img_norm = gray.copy()
 
-    # Float version for intensity measurements
+    # Float version for intensity measurements (non-zero only)
     img_float = gray.astype(np.float32)
-    if img_float.max() > 0:
-        img_float = img_float / img_float.max()
+    valid_f = img_float > 0
+    fmax = img_float[valid_f].max() if valid_f.any() else 0
+    if fmax > 0:
+        img_float = img_float / fmax
 
     h, w = img_float.shape[:2]
 
@@ -589,7 +604,7 @@ def run_multiscale_detection_on_tile(
         merged = merge_detections_across_scales(
             all_detections,
             iou_threshold=iou_threshold,
-            prefer_finer_scale=True  # Prefer finer scale detections
+            prefer_larger=True  # Keep larger/more complete detection
         )
     else:
         merged = all_detections

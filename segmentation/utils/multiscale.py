@@ -239,19 +239,19 @@ def compute_iou_from_masks(mask1: np.ndarray, mask2: np.ndarray) -> float:
 def merge_detections_across_scales(
     detections: List[Dict],
     iou_threshold: float = 0.3,
-    prefer_finer_scale: bool = True
+    prefer_larger: bool = True
 ) -> List[Dict]:
     """
     Merge detections from different scales, removing duplicates.
 
     When the same vessel is detected at multiple scales, keeps the
-    detection from the finest scale (or coarsest if prefer_finer_scale=False).
+    detection with the larger outer contour area (more complete).
 
     Args:
         detections: List of detection dicts, each with 'outer' contour
                    and 'scale_detected' field
         iou_threshold: IoU above which detections are considered duplicates
-        prefer_finer_scale: If True, keep finer scale detection; else coarser
+        prefer_larger: If True (default), keep larger contour area detection
 
     Returns:
         Deduplicated list of detections
@@ -259,11 +259,22 @@ def merge_detections_across_scales(
     if not detections:
         return []
 
-    # Sort by scale (finer first if prefer_finer_scale)
+    def _contour_area(det):
+        """Compute outer contour area for sorting."""
+        outer = det.get('outer')
+        if outer is None:
+            return 0.0
+        try:
+            return abs(cv2.contourArea(np.asarray(outer).reshape(-1, 1, 2).astype(np.int32)))
+        except Exception:
+            return 0.0
+
+    # Sort by contour area descending (largest first) so larger detections
+    # are kept when duplicates overlap
     sorted_dets = sorted(
         detections,
-        key=lambda d: d.get('scale_detected', 1),
-        reverse=not prefer_finer_scale
+        key=_contour_area,
+        reverse=True
     )
 
     # Count detections with valid outer contours
@@ -303,11 +314,12 @@ def merge_detections_across_scales(
                 duplicate_count += 1
                 # Log first few duplicates for debugging
                 if duplicate_count <= 5:
+                    new_area = _contour_area(det)
+                    kept_area = _contour_area(existing)
                     logger.debug(
                         f"Duplicate #{duplicate_count} (IoU={iou:.3f}): "
-                        f"scale {det.get('scale_detected')} vs {existing.get('scale_detected')}, "
-                        f"new bounds x=[{outer[:,:,0].min()}, {outer[:,:,0].max()}], "
-                        f"existing bounds x=[{existing_outer[:,:,0].min()}, {existing_outer[:,:,0].max()}]"
+                        f"dropping area={new_area:.0f}px (scale 1/{det.get('scale_detected', '?')}x), "
+                        f"keeping area={kept_area:.0f}px (scale 1/{existing.get('scale_detected', '?')}x)"
                     )
                 break
 
@@ -373,18 +385,27 @@ def convert_detection_to_full_res(
     detection: Dict,
     scale_factor: int,
     tile_x_scaled: int,
-    tile_y_scaled: int
+    tile_y_scaled: int,
+    smooth: bool = True,
+    smooth_base_factor: float = 3.0,
 ) -> Dict:
     """
     Convert a detection from scaled coordinates to full resolution.
 
-    Updates all coordinate fields in the detection dict.
+    Updates all coordinate fields in the detection dict. Optionally applies
+    B-spline smoothing AFTER upscaling to remove stair-step artifacts that
+    arise from coarse-scale detection (e.g., 1/32x contours have 32px jumps).
+
+    The smoothing factor scales with the detection scale: at 1x no smoothing
+    is needed, at 1/32x the factor is base * 32 to handle 32px stair-steps.
 
     Args:
         detection: Detection dict with 'outer', 'inner', 'center' fields
         scale_factor: Scale at which detection was made
         tile_x_scaled: Tile X origin in scaled coordinates
         tile_y_scaled: Tile Y origin in scaled coordinates
+        smooth: Whether to apply B-spline smoothing (default True)
+        smooth_base_factor: Base smoothing factor, scaled by scale_factor
 
     Returns:
         Detection with coordinates in full resolution
@@ -396,23 +417,55 @@ def convert_detection_to_full_res(
     # scale_factor pixels of displacement when casting before offset).
     tile_offset = np.array([tile_x_scaled * scale_factor, tile_y_scaled * scale_factor], dtype=np.float64)
 
+    # Import smoothing function (lazy to avoid circular imports)
+    _smooth_fn = None
+    if smooth and scale_factor > 1:
+        try:
+            from segmentation.detection.strategies.vessel import smooth_contour_spline
+            _smooth_fn = smooth_contour_spline
+        except ImportError:
+            pass
+
+    # Smoothing factor scales with detection scale — coarser = more smoothing
+    effective_smoothing = smooth_base_factor * scale_factor
+
+    # Arc contours are open curves — don't force periodic spline closure
+    is_arc = det.get('is_arc', False)
+    contour_closed = not is_arc
+
     if 'outer' in det and det['outer'] is not None:
         det['outer'] = scale_contour(det['outer'], scale_factor)
         det['outer'] += tile_offset
-        det['outer'] = det['outer'].astype(np.int32)
+        if _smooth_fn is not None:
+            det['outer'] = _smooth_fn(det['outer'], smoothing=effective_smoothing, force_closed=contour_closed)
+        det['outer'] = np.asarray(det['outer']).astype(np.int32)
 
     if 'inner' in det and det['inner'] is not None:
         det['inner'] = scale_contour(det['inner'], scale_factor)
         det['inner'] += tile_offset
-        det['inner'] = det['inner'].astype(np.int32)
+        if _smooth_fn is not None:
+            det['inner'] = _smooth_fn(det['inner'], smoothing=effective_smoothing, force_closed=contour_closed)
+        det['inner'] = np.asarray(det['inner']).astype(np.int32)
 
-    # Scale center point (offset before scale, same as contour logic)
-    if 'center' in det:
-        cx, cy = det['center']
-        det['center'] = [
-            (cx + tile_x_scaled) * scale_factor,
-            (cy + tile_y_scaled) * scale_factor
-        ]
+    # Scale center/centroid point
+    for key in ('center', 'centroid'):
+        if key in det:
+            cx, cy = det[key]
+            det[key] = [
+                (cx + tile_x_scaled) * scale_factor,
+                (cy + tile_y_scaled) * scale_factor
+            ]
+
+    # Scale center points inside features dict
+    feats = det.get('features', {})
+    if isinstance(feats, dict):
+        for center_key in ('outer_center', 'inner_center'):
+            if center_key in feats and feats[center_key] is not None:
+                cx, cy = feats[center_key]
+                feats[center_key] = [
+                    (cx + tile_x_scaled) * scale_factor,
+                    (cy + tile_y_scaled) * scale_factor
+                ]
 
     # Add scale metadata
     det['scale_detected'] = scale_factor
@@ -455,7 +508,7 @@ def run_multiscale_detection(
         List of deduplicated detections in full-resolution coordinates
     """
     if scales is None:
-        scales = [8, 4, 1]
+        scales = [32, 16, 8, 4, 2]
 
     all_detections = []
 
@@ -503,11 +556,11 @@ def run_multiscale_detection(
             f"Scale 1/{scale}x: Found {len([d for d in all_detections if d.get('scale_detected') == scale])} detections"
         )
 
-    # Merge across scales (finer scale takes precedence)
+    # Merge across scales (keep larger/more complete detection)
     merged = merge_detections_across_scales(
         all_detections,
         iou_threshold=iou_threshold,
-        prefer_finer_scale=True
+        prefer_larger=True
     )
 
     return merged

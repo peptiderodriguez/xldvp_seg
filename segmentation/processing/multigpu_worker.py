@@ -286,6 +286,18 @@ def _gpu_worker(
         strategy = VesselStrategy(
             min_diameter_um=strategy_params.get('min_vessel_diameter_um', 10),
             max_diameter_um=strategy_params.get('max_vessel_diameter_um', 1000),
+            min_wall_thickness_um=strategy_params.get('min_wall_thickness_um', 2),
+            max_aspect_ratio=strategy_params.get('max_aspect_ratio', 4.0),
+            min_circularity=strategy_params.get('min_circularity', 0.3),
+            min_ring_completeness=strategy_params.get('min_ring_completeness', 0.5),
+            classify_vessel_types=strategy_params.get('classify_vessel_types', False),
+            candidate_mode=strategy_params.get('candidate_mode', False),
+            lumen_first=strategy_params.get('lumen_first', False),
+            smooth_contours=strategy_params.get('smooth_contours', True),
+            smooth_contours_factor=strategy_params.get('smooth_contours_factor', 3.0),
+            parallel_detection=strategy_params.get('parallel_detection', False),
+            parallel_workers=strategy_params.get('parallel_workers', 3),
+            multi_marker=strategy_params.get('multi_marker', False),
             extract_deep_features=extract_deep_features,
             extract_sam2_embeddings=extract_sam2_embeddings,
         )

@@ -15,6 +15,8 @@ Enhanced features (v2):
 """
 
 import gc
+import threading
+from contextlib import contextmanager
 from dataclasses import dataclass, field
 from enum import Enum
 from typing import List, Dict, Any, Optional, Tuple, Set
@@ -106,6 +108,57 @@ class CrossTileMergeConfig:
 # Issue #7: Local extract_morphological_features removed - now imported from shared module
 
 
+def smooth_contour_spline(contour, smoothing=3.0, n_points=0, force_closed=None):
+    """
+    Smooth a contour using B-spline interpolation.
+
+    Eliminates stair-step artifacts from coarse-scale detection and upscaling.
+
+    Args:
+        contour: Contour array, shape (N, 1, 2) or (N, 2), integer pixel coords
+        smoothing: Spline smoothing factor. Higher = smoother. Default 3.0.
+        n_points: Number of output points. 0 = same as input.
+        force_closed: If True, always use periodic (closed) spline. If False,
+            always use open spline. If None (default), auto-detect by checking
+            endpoint distance (<=5px = closed). Use True for vessel contours
+            that are known to be closed but have distant endpoints after upscaling.
+
+    Returns:
+        Smoothed contour as int32 array, shape (M, 1, 2) suitable for cv2
+    """
+    from scipy.interpolate import splprep, splev
+
+    pts = np.array(contour).reshape(-1, 2).astype(np.float64)
+    if len(pts) < 5:
+        return np.array(contour).reshape(-1, 1, 2).astype(np.int32)
+
+    # Remove duplicate consecutive points (can cause splprep to fail)
+    diffs = np.diff(pts, axis=0)
+    mask = np.any(diffs != 0, axis=1)
+    mask = np.append(mask, True)
+    pts = pts[mask]
+    if len(pts) < 5:
+        return np.array(contour).reshape(-1, 1, 2).astype(np.int32)
+
+    x, y = pts[:, 0], pts[:, 1]
+
+    try:
+        if force_closed is not None:
+            is_closed = force_closed
+        else:
+            # Auto-detect: endpoints within 5px = closed
+            is_closed = np.linalg.norm(pts[0] - pts[-1]) <= 5.0
+        tck, u = splprep([x, y], s=smoothing, per=is_closed, k=3)
+        if n_points <= 0:
+            n_points = len(pts)
+        u_new = np.linspace(0, 1, n_points)
+        x_new, y_new = splev(u_new, tck)
+        smoothed = np.stack([x_new, y_new], axis=-1).astype(np.int32)
+        return smoothed.reshape(-1, 1, 2)
+    except Exception:
+        return np.array(contour).reshape(-1, 1, 2).astype(np.int32)
+
+
 class VesselStrategy(DetectionStrategy, MultiChannelFeatureMixin):
     """
     Vessel detection strategy for ring structures.
@@ -173,6 +226,9 @@ class VesselStrategy(DetectionStrategy, MultiChannelFeatureMixin):
     CANDIDATE_MAX_DIAMETER_UM = 2000.0
     CANDIDATE_MIN_WALL_THICKNESS_UM = 1.0
 
+    # Maximum fraction of tile area a single vessel can occupy (allows large arteries/aorta)
+    MAX_TILE_AREA_FRACTION = 0.90
+
     # Thresholds for open vessel (arc) detection in candidate mode
     ARC_MIN_CURVATURE = 0.01  # Minimum average curvature to be considered vessel-like
     ARC_MIN_LENGTH_UM = 20.0  # Minimum arc length in microns
@@ -210,9 +266,14 @@ class VesselStrategy(DetectionStrategy, MultiChannelFeatureMixin):
         merge_iou_threshold: float = 0.5,
         # Lumen-first detection mode - finds dark lumens first, validates bright wall
         lumen_first: bool = False,
+        # Contour smoothing - removes stair-step artifacts from coarse-scale detection
+        smooth_contours: bool = True,
+        smooth_contours_factor: float = 3.0,
     ):
         self._lumen_first = lumen_first
         self.candidate_mode = candidate_mode
+        self.smooth_contours = smooth_contours
+        self.smooth_contours_factor = smooth_contours_factor
 
         # Apply relaxed thresholds if candidate_mode is enabled
         if candidate_mode:
@@ -269,7 +330,26 @@ class VesselStrategy(DetectionStrategy, MultiChannelFeatureMixin):
             logger.info("Multi-marker mode: auto-enabled parallel_detection")
 
         # Lumen-first detection mode (default False, uses edge-based detection)
-        self.lumen_first = getattr(self, '_lumen_first', False)
+        self.lumen_first = self._lumen_first
+
+        # Lock for detect_multiscale which temporarily mutates diameter bounds
+        self._scale_lock = threading.Lock()
+
+    @contextmanager
+    def _scale_override(self, scale_params):
+        """Temporarily override diameter bounds for a detection scale.
+
+        Thread-safe: acquires _scale_lock so concurrent calls block."""
+        with self._scale_lock:
+            orig_min = self.min_diameter_um
+            orig_max = self.max_diameter_um
+            self.min_diameter_um = scale_params['min_diameter_um']
+            self.max_diameter_um = scale_params['max_diameter_um']
+            try:
+                yield
+            finally:
+                self.min_diameter_um = orig_min
+                self.max_diameter_um = orig_max
 
     @property
     def name(self) -> str:
@@ -689,7 +769,7 @@ class VesselStrategy(DetectionStrategy, MultiChannelFeatureMixin):
         tile: np.ndarray,
         pixel_size_um: float = 0.1725,
         min_lumen_area_um2: float = 50,
-        max_lumen_area_um2: float = 150000,
+        max_lumen_area_um2: float = None,
         min_ellipse_fit: float = 0.40,
         max_aspect_ratio: float = 5.0,
         min_wall_brightness_ratio: float = 1.15,
@@ -708,7 +788,7 @@ class VesselStrategy(DetectionStrategy, MultiChannelFeatureMixin):
             tile: Grayscale SMA image
             pixel_size_um: Pixel size in micrometers
             min_lumen_area_um2: Minimum lumen area in µm²
-            max_lumen_area_um2: Maximum lumen area in µm²
+            max_lumen_area_um2: Maximum lumen area in µm² (None = 90% of tile area)
             min_ellipse_fit: Minimum ellipse fit quality (IoU, 0-1)
             max_aspect_ratio: Maximum major/minor axis ratio
             min_wall_brightness_ratio: Minimum wall/lumen intensity ratio
@@ -717,6 +797,13 @@ class VesselStrategy(DetectionStrategy, MultiChannelFeatureMixin):
         Returns:
             List of candidate dicts with 'outer', 'inner', 'lumen_contour' keys
         """
+        h, w = tile.shape[:2]
+
+        # Compute max lumen area from tile dimensions if not specified
+        if max_lumen_area_um2 is None:
+            tile_area_um2 = h * w * (pixel_size_um ** 2)
+            max_lumen_area_um2 = tile_area_um2 * self.MAX_TILE_AREA_FRACTION
+
         # Convert area thresholds to pixels
         min_lumen_area_px = min_lumen_area_um2 / (pixel_size_um ** 2)
         max_lumen_area_px = max_lumen_area_um2 / (pixel_size_um ** 2)
@@ -728,20 +815,26 @@ class VesselStrategy(DetectionStrategy, MultiChannelFeatureMixin):
             gray = tile
 
         if gray.dtype != np.uint8:
-            img_min, img_max = gray.min(), gray.max()
+            # Exclude CZI padding zeros from normalization range
+            valid = gray > 0
+            valid_px = gray[valid]
+            if len(valid_px) > 0:
+                img_min, img_max = valid_px.min(), valid_px.max()
+            else:
+                return []
             if img_max - img_min > 1e-8:
-                img_norm = ((gray - img_min) / (img_max - img_min) * 255).astype(np.uint8)
+                img_norm = np.clip((gray.astype(np.float64) - img_min) / (img_max - img_min) * 255, 0, 255).astype(np.uint8)
             else:
                 return []
         else:
             img_norm = gray.copy()
 
-        # Float version for intensity measurements
+        # Float version for intensity measurements (non-zero only)
         img_float = gray.astype(np.float32)
-        if img_float.max() > 0:
-            img_float = img_float / img_float.max()
-
-        h, w = img_float.shape[:2]
+        valid_f = img_float > 0
+        fmax = img_float[valid_f].max() if valid_f.any() else 0
+        if fmax > 0:
+            img_float = img_float / fmax
 
         # Find dark regions using Otsu threshold
         blurred = cv2.GaussianBlur(img_norm, (9, 9), 2.5)
@@ -1023,10 +1116,9 @@ class VesselStrategy(DetectionStrategy, MultiChannelFeatureMixin):
             else:
                 estimated_diameter_um = max(major_ax, minor_ax) * pixel_size_um
 
-            # Check diameter range
+            # Check minimum diameter (no max — arc diameter from curvature is speculative,
+            # and large vessels produce arcs that legitimately span the tile)
             if estimated_diameter_um < self.min_diameter_um:
-                continue
-            if estimated_diameter_um > self.max_diameter_um:
                 continue
 
             # Calculate arc-specific confidence
@@ -2775,10 +2867,12 @@ class VesselStrategy(DetectionStrategy, MultiChannelFeatureMixin):
         outer_diameter_um = max(major_out, minor_out) * pixel_size_um
         inner_diameter_um = max(major_in, minor_in) * pixel_size_um
 
-        # Size filtering
+        # Size filtering — use tile-area-based max for large vessels
+        tile_h, tile_w = tile.shape[:2]
+        max_area_px = tile_h * tile_w * self.MAX_TILE_AREA_FRACTION
         if outer_diameter_um < self.min_diameter_um:
             return None
-        if outer_diameter_um > self.max_diameter_um:
+        if outer_area > max_area_px:
             return None
 
         # Aspect ratio filtering (exclude longitudinal sections)
@@ -3348,22 +3442,25 @@ class VesselStrategy(DetectionStrategy, MultiChannelFeatureMixin):
         outer_diameter_um = max(major_out, minor_out) * pixel_size_um
         inner_diameter_um = max(major_in, minor_in) * pixel_size_um
 
-        # Check against original strict thresholds (default values)
-        if outer_diameter_um < 10:
+        # Check against standard thresholds (class defaults) for is_vessel flagging
+        # Use tile-area-based max to allow large vessels (up to 90% of tile)
+        tile_h, tile_w = tile.shape[:2]
+        max_area_px = tile_h * tile_w * self.MAX_TILE_AREA_FRACTION
+        if outer_diameter_um < self.DEFAULT_MIN_DIAMETER_UM:
             rejection_reasons.append(f'too_small:{outer_diameter_um:.1f}um')
             is_vessel = False
-        if outer_diameter_um > 1000:
+        if outer_area > max_area_px:
             rejection_reasons.append(f'too_large:{outer_diameter_um:.1f}um')
             is_vessel = False
 
         aspect_ratio_out = max(major_out, minor_out) / (min(major_out, minor_out) + 1e-8)
-        if aspect_ratio_out > 4.0:
+        if aspect_ratio_out > self.DEFAULT_MAX_ASPECT_RATIO:
             rejection_reasons.append(f'aspect_ratio:{aspect_ratio_out:.2f}')
             is_vessel = False
 
         perimeter_out = cv2.arcLength(outer, True)
         circularity = 4 * np.pi * outer_area / (perimeter_out ** 2 + 1e-8)
-        if circularity < 0.3:
+        if circularity < self.DEFAULT_MIN_CIRCULARITY:
             rejection_reasons.append(f'circularity:{circularity:.2f}')
             is_vessel = False
 
@@ -3487,6 +3584,18 @@ class VesselStrategy(DetectionStrategy, MultiChannelFeatureMixin):
         else:
             detection_type = 'complete'
 
+        # Continuous detection_confidence (0-1) matching extract_features()
+        wall_uniformity = 1.0 - (wall_thickness_std / (wall_thickness_mean + 1e-8))
+        wall_uniformity = max(0.0, min(1.0, wall_uniformity))
+        aspect_ratio_score = 1.0 - min(1.0, (aspect_ratio_out - 1.0) / 5.0)
+        detection_confidence = (
+            0.30 * ring_completeness +
+            0.25 * circularity +
+            0.25 * wall_uniformity +
+            0.20 * aspect_ratio_score
+        )
+        detection_confidence = max(0.0, min(1.0, detection_confidence))
+
         return {
             # Contours (needed for IoU-based merge in multi-scale detection)
             'outer': outer,
@@ -3526,6 +3635,7 @@ class VesselStrategy(DetectionStrategy, MultiChannelFeatureMixin):
             'is_vessel': is_vessel,
             'rejection_reasons': rejection_reasons,
             'candidate_mode': True,
+            'detection_confidence': float(detection_confidence),
         }
 
     def filter(
@@ -3874,16 +3984,30 @@ class VesselStrategy(DetectionStrategy, MultiChannelFeatureMixin):
                     crops_for_resnet_context.append(crop_context)
                     crop_indices.append(len(valid_candidates))
 
-            # Store inner contour only if it exists
+            # Apply mild smoothing at detection scale (handles Canny jaggedness).
+            # For multiscale detection, heavier scale-aware smoothing is applied
+            # AFTER upscaling in convert_detection_to_full_res().
+            outer_contour = cand['outer']
+            inner_contour = cand.get('inner')
+            if self.smooth_contours:
+                outer_contour = smooth_contour_spline(
+                    outer_contour, smoothing=self.smooth_contours_factor
+                )
+                if inner_contour is not None:
+                    inner_contour = smooth_contour_spline(
+                        inner_contour, smoothing=self.smooth_contours_factor
+                    )
+
+            # Store contours
             inner_contour_data = None
-            if cand.get('inner') is not None:
-                inner_contour_data = cand['inner'].tolist()
+            if inner_contour is not None:
+                inner_contour_data = np.array(inner_contour).reshape(-1, 2).tolist()
 
             valid_candidates.append({
                 'mask': wall_mask,
                 'features': all_features,
                 'centroid': center,
-                'outer_contour': cand['outer'].tolist(),
+                'outer_contour': np.array(outer_contour).reshape(-1, 2).tolist(),
                 'inner_contour': inner_contour_data,
                 'is_partial': vessel_feat.get('is_partial', False),
                 'is_merged': vessel_feat.get('is_merged', False),
@@ -3979,6 +4103,13 @@ class VesselStrategy(DetectionStrategy, MultiChannelFeatureMixin):
                 det.features['outer_contour'] = valid_candidates[i]['outer_contour']
                 det.features['inner_contour'] = valid_candidates[i]['inner_contour']  # May be None for partial
 
+        # Sort detections by detection_confidence (continuous 0-1) descending —
+        # more confident detections take priority during within-tile overlap checking
+        detections.sort(
+            key=lambda d: d.features.get('detection_confidence', d.score or 0),
+            reverse=True
+        )
+
         # Build combined mask with overlap checking
         combined_mask = np.zeros((h, w), dtype=np.uint32)
         final_detections = []
@@ -4071,7 +4202,7 @@ class VesselStrategy(DetectionStrategy, MultiChannelFeatureMixin):
                 models=models,
                 mosaic_width=loader.width,
                 mosaic_height=loader.height,
-                scales=[8, 4, 1],
+                scales=[32, 16, 8, 4, 2],
                 pixel_size_um=0.17,
             )
         """
@@ -4084,7 +4215,7 @@ class VesselStrategy(DetectionStrategy, MultiChannelFeatureMixin):
         import random
 
         if scales is None:
-            scales = [8, 4, 1]  # Default: coarse, medium, fine
+            scales = [32, 16, 8, 4, 2]  # Default: coarse to fine
 
         all_detections = []
         all_masks = []
@@ -4121,14 +4252,7 @@ class VesselStrategy(DetectionStrategy, MultiChannelFeatureMixin):
                     logger.info(f"  Scale 1/{scale}x: Tile {i+1}/{len(tiles)} - skipped (no data)")
                     continue
 
-                # Temporarily adjust detection parameters for this scale
-                original_min_diam = self.min_diameter_um
-                original_max_diam = self.max_diameter_um
-
-                self.min_diameter_um = scale_params['min_diameter_um']
-                self.max_diameter_um = scale_params['max_diameter_um']
-
-                try:
+                with self._scale_override(scale_params):
                     # Run detection
                     masks, detections = self.detect(
                         tile=tile,
@@ -4142,25 +4266,30 @@ class VesselStrategy(DetectionStrategy, MultiChannelFeatureMixin):
                     # Convert detections to full resolution coordinates
                     for det in detections:
                         det_dict = det.to_dict() if hasattr(det, 'to_dict') else det
-                        # Preserve contour for IoU-based merge (to_dict() doesn't include it)
-                        # Contour is stored in det.features['outer'], need it at top level for merge
-                        if hasattr(det, 'features') and det.features.get('outer') is not None:
-                            det_dict['outer'] = det.features['outer']
-                        elif isinstance(det_dict.get('features'), dict) and det_dict['features'].get('outer') is not None:
-                            det_dict['outer'] = det_dict['features']['outer']
+                        feats = det.features if hasattr(det, 'features') else det_dict.get('features', {})
+                        # Promote outer/inner contours to top-level for convert_detection_to_full_res
+                        if feats.get('outer') is not None and 'outer' not in det_dict:
+                            det_dict['outer'] = feats['outer']
+                        if feats.get('inner') is not None and 'inner' not in det_dict:
+                            det_dict['inner'] = feats['inner']
+                        # to_dict() uses 'centroid', convert_detection_to_full_res uses 'center'
+                        if 'center' not in det_dict and 'centroid' in det_dict:
+                            det_dict['center'] = det_dict['centroid']
+                        elif 'center' not in det_dict and feats.get('outer_center') is not None:
+                            det_dict['center'] = feats['outer_center']
+                        # Track if this is an arc (open contour) for smoothing
+                        if feats.get('detection_type') == 'arc':
+                            det_dict['is_arc'] = True
                         det_fullres = convert_detection_to_full_res(
-                            det_dict, scale, tile_x, tile_y
+                            det_dict, scale, tile_x, tile_y,
+                            smooth=self.smooth_contours,
+                            smooth_base_factor=self.smooth_contours_factor,
                         )
                         all_detections.append(det_fullres)
                         scale_detections += 1
 
                     if masks is not None and masks.size > 0:
                         all_masks.append((tile_x * scale, tile_y * scale, scale, masks))
-
-                finally:
-                    # Restore original parameters
-                    self.min_diameter_um = original_min_diam
-                    self.max_diameter_um = original_max_diam
 
                 tile_elapsed = _time.time() - tile_start
                 logger.info(
@@ -4173,12 +4302,12 @@ class VesselStrategy(DetectionStrategy, MultiChannelFeatureMixin):
 
             logger.info(f"Scale 1/{scale}x: Found {scale_detections} detections")
 
-        # Merge detections across scales (finer scale takes precedence)
+        # Merge detections across scales (keep larger/more complete detection)
         logger.info(f"Merging {len(all_detections)} detections across scales...")
         merged_detections = merge_detections_across_scales(
             all_detections,
             iou_threshold=iou_threshold,
-            prefer_finer_scale=True
+            prefer_larger=True
         )
 
         # Convert back to Detection objects if needed
@@ -4272,7 +4401,7 @@ class VesselStrategy(DetectionStrategy, MultiChannelFeatureMixin):
         import time as _time
 
         if scales is None:
-            scales = [16, 8, 4]  # Default: very coarse to medium
+            scales = [32, 16, 8, 4, 2]  # Default: coarse to fine
 
         # Find MedSAM checkpoint
         if medsam_checkpoint is None:
@@ -4379,7 +4508,9 @@ class VesselStrategy(DetectionStrategy, MultiChannelFeatureMixin):
                 # Convert to full resolution coordinates
                 for det in vessel_detections:
                     det_fullres = convert_detection_to_full_res(
-                        det, scale, tile_x, tile_y
+                        det, scale, tile_x, tile_y,
+                        smooth=self.smooth_contours,
+                        smooth_base_factor=self.smooth_contours_factor,
                     )
                     all_detections.append(det_fullres)
                     scale_detections += 1
@@ -4400,12 +4531,12 @@ class VesselStrategy(DetectionStrategy, MultiChannelFeatureMixin):
         torch.cuda.empty_cache()
         gc.collect()
 
-        # Merge detections across scales (finer scale takes precedence)
+        # Merge detections across scales (keep larger/more complete detection)
         logger.info(f"Merging {len(all_detections)} detections across scales...")
         merged_detections = merge_detections_across_scales(
             all_detections,
             iou_threshold=iou_threshold,
-            prefer_finer_scale=True
+            prefer_larger=True
         )
 
         # Convert to Detection objects
@@ -4468,7 +4599,9 @@ class VesselStrategy(DetectionStrategy, MultiChannelFeatureMixin):
         min_diam_px = scale_params['min_diameter_um'] / pixel_size_um
         max_diam_px = scale_params['max_diameter_um'] / pixel_size_um
         min_area_px = np.pi * (min_diam_px / 2) ** 2 * 0.5  # Allow some margin
-        max_area_px = np.pi * (max_diam_px / 2) ** 2 * 2.0
+        # Use tile-area-based max to allow large vessels (up to 90% of tile)
+        tile_h, tile_w = tile_rgb.shape[:2]
+        max_area_px = tile_h * tile_w * self.MAX_TILE_AREA_FRACTION
 
         for mask_info in masks:
             mask = mask_info['segmentation'].astype(np.uint8)
@@ -4674,6 +4807,10 @@ class VesselStrategy(DetectionStrategy, MultiChannelFeatureMixin):
             'cross_tile_position_tolerance_px': self.cross_tile_config.position_tolerance_px,
             'cross_tile_orientation_tolerance_deg': self.cross_tile_config.orientation_tolerance_deg,
             'cross_tile_curvature_threshold': self.cross_tile_config.curvature_match_threshold,
+            # Contour smoothing
+            'smooth_contours': self.smooth_contours,
+            'smooth_contours_factor': self.smooth_contours_factor,
+            'max_tile_area_fraction': self.MAX_TILE_AREA_FRACTION,
         }
         return base_config
 

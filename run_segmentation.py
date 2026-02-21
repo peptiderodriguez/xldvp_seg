@@ -653,6 +653,8 @@ def create_strategy_for_cell_type(cell_type, params, pixel_size_um):
             multi_marker=params.get('multi_marker', False),
             extract_deep_features=params.get('extract_deep_features', False),
             extract_sam2_embeddings=params.get('extract_sam2_embeddings', True),
+            smooth_contours=params.get('smooth_contours', True),
+            smooth_contours_factor=params.get('smooth_contours_factor', 3.0),
         )
     elif cell_type == 'mesothelium':
         return MesotheliumStrategy(
@@ -1967,6 +1969,8 @@ def run_pipeline(args):
             'parallel_detection': getattr(args, 'parallel_detection', False),
             'parallel_workers': getattr(args, 'parallel_workers', 3),
             'multi_marker': getattr(args, 'multi_marker', False),
+            'smooth_contours': not getattr(args, 'no_smooth_contours', False),
+            'smooth_contours_factor': getattr(args, 'smooth_contours_factor', 3.0),
         }
     elif args.cell_type == 'mesothelium':
         params = {
@@ -2744,6 +2748,12 @@ def main():
                              'Merges overlapping candidates from different markers. '
                              'Extracts multi-channel features for downstream classification. '
                              'Example: --multi-marker --channel-names "nuclear,sma,cd31,lyve1"')
+    parser.add_argument('--no-smooth-contours', action='store_true',
+                        help='Disable B-spline contour smoothing (on by default). '
+                             'Smoothing removes stair-step artifacts from coarse-scale detection.')
+    parser.add_argument('--smooth-contours-factor', type=float, default=3.0,
+                        help='Spline smoothing factor for vessel contours (default: 3.0). '
+                             'Higher = smoother. 0 = interpolating spline (passes through all points).')
     parser.add_argument('--vessel-type-classifier', type=str, default=None,
                         help='Path to trained VesselTypeClassifier model (.joblib) for 6-type '
                              'vessel classification (artery/arteriole/vein/capillary/lymphatic/'
@@ -2756,15 +2766,15 @@ def main():
                              '(1/8x, 1/4x, 1x) to capture all vessel sizes and avoid cross-tile '
                              'fragmentation. Large vessels are detected at coarse scale (1/8x) '
                              'where they fit within a single tile. Requires --cell-type vessel.')
-    parser.add_argument('--scales', type=str, default='8,4,1',
-                        help='Comma-separated scale factors for multi-scale detection (default: "8,4,1"). '
-                             'Numbers represent downsampling factors: 8=1/8x (coarse, large vessels), '
-                             '4=1/4x (medium), 1=full resolution (small vessels, capillaries). '
+    parser.add_argument('--scales', type=str, default='32,16,8,4,2',
+                        help='Comma-separated scale factors for multi-scale detection (default: "32,16,8,4,2"). '
+                             'Numbers represent downsampling factors: 32=1/32x (large arteries), '
+                             '16=1/16x, 8=1/8x, 4=1/4x (medium), 2=1/2x (small vessels). '
                              'Detection runs coarse-to-fine with IoU deduplication.')
     parser.add_argument('--multiscale-iou-threshold', type=float, default=0.3,
                         help='IoU threshold for deduplicating vessels detected at multiple scales '
                              '(default: 0.3). If a vessel is detected at both coarse and fine scales '
-                             'with IoU > threshold, the finer scale detection is kept.')
+                             'with IoU > threshold, the detection with larger contour area is kept.')
 
     # Mesothelium parameters (for LMD chunking)
     parser.add_argument('--target-chunk-area', type=float, default=1500,
