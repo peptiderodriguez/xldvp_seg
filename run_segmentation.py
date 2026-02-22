@@ -2548,14 +2548,18 @@ def run_pipeline(args):
                                     'tile_pct': tile_pct,
                                 })
                             else:
-                                html_samples = filter_and_create_html_samples(
-                                    features_list, tile_x, tile_y, tile_rgb_html, masks,
-                                    pixel_size_um, slide_name, args.cell_type,
-                                    args.html_score_threshold,
-                                    tile_percentiles=tile_pct,
-                                    candidate_mode=args.candidate_mode,
-                                )
-                                all_samples.extend(html_samples)
+                                _max_html = getattr(args, 'max_html_samples', 0)
+                                if _max_html > 0 and len(all_samples) >= _max_html:
+                                    pass  # Skip HTML crop generation — cap reached
+                                else:
+                                    html_samples = filter_and_create_html_samples(
+                                        features_list, tile_x, tile_y, tile_rgb_html, masks,
+                                        pixel_size_um, slide_name, args.cell_type,
+                                        args.html_score_threshold,
+                                        tile_percentiles=tile_pct,
+                                        candidate_mode=args.candidate_mode,
+                                    )
+                                    all_samples.extend(html_samples)
                             total_detections += len(features_list)
 
                         except Exception as e:
@@ -3055,6 +3059,9 @@ def main():
 
     # HTML export
     parser.add_argument('--samples-per-page', type=int, default=300)
+    parser.add_argument('--max-html-samples', type=int, default=0,
+                        help='Maximum HTML samples to keep in memory (0=unlimited). '
+                             'For full runs with 500K+ cells, set to e.g. 5000 to avoid OOM from base64 crop accumulation.')
 
     # Server options
     parser.add_argument('--serve', action='store_true', default=False,
