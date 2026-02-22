@@ -1426,6 +1426,7 @@ class VesselStrategy(DetectionStrategy, MultiChannelFeatureMixin):
                 'is_partial_only': False,
                 'is_merged': False,
                 'is_arc': False,
+                'detection_method': 'cd31_tubular',
             })
 
         logger.debug(
@@ -2043,6 +2044,7 @@ class VesselStrategy(DetectionStrategy, MultiChannelFeatureMixin):
                 'touches_boundary': False,
                 'boundary_edges': set(),
                 'binary': binary,
+                'detection_method': 'lyve1',
             }
 
             # If inner contour found, calculate lumen features
@@ -4117,6 +4119,10 @@ class VesselStrategy(DetectionStrategy, MultiChannelFeatureMixin):
                 'detection_type': vessel_feat.get('detection_type', 'complete'),
                 'detection_method': cand.get('detection_method', 'unknown'),
             })
+            # Normalize detection_method to always be a list for consistent downstream handling
+            dm = valid_candidates[-1]['detection_method']
+            if isinstance(dm, str):
+                valid_candidates[-1]['detection_method'] = [dm]
 
         # Batch deep feature extraction (ResNet + DINOv2, masked + context)
         # ResNet masked
