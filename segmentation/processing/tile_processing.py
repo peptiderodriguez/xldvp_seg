@@ -541,16 +541,19 @@ def _transform_vessel_contours(
         tile_y: Y coordinate of tile origin.
     """
     # Transform outer contour
+    # Contours may be OpenCV format [[x, y]] or flat [x, y] (from .tolist())
     if 'outer_contour' in feat:
         feat['outer_contour_global'] = [
-            [pt[0][0] + tile_x, pt[0][1] + tile_y]
+            [pt[0] + tile_x, pt[1] + tile_y] if isinstance(pt[0], (int, float))
+            else [pt[0][0] + tile_x, pt[0][1] + tile_y]
             for pt in feat['outer_contour']
         ]
 
     # Transform inner contour
     if 'inner_contour' in feat:
         feat['inner_contour_global'] = [
-            [pt[0][0] + tile_x, pt[0][1] + tile_y]
+            [pt[0] + tile_x, pt[1] + tile_y] if isinstance(pt[0], (int, float))
+            else [pt[0][0] + tile_x, pt[0][1] + tile_y]
             for pt in feat['inner_contour']
         ]
 

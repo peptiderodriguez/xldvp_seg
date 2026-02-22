@@ -11,15 +11,16 @@
 #SBATCH --error=/fs/gpfs41/lv12/fileset02/pool/pool-mann-edwin/code_bin/xldvp_seg/logs/%x_%j.err
 
 # =============================================================================
-# Vessel Multi-Scale Detection — 4x L40S
+# Vessel Multi-Scale Detection — 4x L40S (Unified: ring + lumen-first)
 #
 # Input:  259 GB CZI (4-channel: nuc488, CD31_555, SMA647, PM750)
 # Output: /fs/pool/pool-mann-edwin/vessel_output/multiscale/
 # Scales: 1/32 → 1/16 → 1/8 → 1/4 → 1/2
 # Tile:   3000x3000, 10% overlap
+# Detection: Ring (Canny+hierarchy) + supplementary lumen-first (Otsu+wall)
 # Max vessel area: 90% of tile area
 # Contour smoothing: ON (factor 3.0, scale-aware after upscaling)
-# Dedup: keep largest contour area
+# Dedup: keep largest contour area, IoU 0.3 cross-method merge
 # =============================================================================
 
 set -e
@@ -55,8 +56,8 @@ mkdir -p "$OUTPUT_DIR"
 
 # Run vessel detection
 # Channel 2 = SMA647 (smooth muscle actin, main vessel detection channel)
-# --candidate-mode: keep all candidates for RF training
-# --lumen-first: dark lumen detection (better for large vessels)
+# --candidate-mode: keep all candidates for RF training/annotation
+# Unified detection: ring + supplementary lumen-first (default, no flag needed)
 # --load-to-ram: faster for network mount
 python run_segmentation.py \
     --czi-path "$CZI_PATH" \
@@ -69,7 +70,6 @@ python run_segmentation.py \
     --num-gpus 4 \
     --load-to-ram \
     --candidate-mode \
-    --lumen-first \
     --multi-scale \
     --scales "32,16,8,4,2" \
     --multiscale-iou-threshold 0.3 \
