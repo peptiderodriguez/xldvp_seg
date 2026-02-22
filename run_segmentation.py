@@ -1887,7 +1887,11 @@ def run_pipeline(args):
 
     # Setup output directories (timestamped to avoid overwriting previous runs)
     pct = int(args.sample_fraction * 100)
-    slide_output_dir = output_dir / f'{slide_name}_{run_timestamp}_{pct}pct'
+    if getattr(args, 'resume_from', None):
+        slide_output_dir = Path(args.resume_from)
+        logger.info(f"Resuming into existing output directory: {slide_output_dir}")
+    else:
+        slide_output_dir = output_dir / f'{slide_name}_{run_timestamp}_{pct}pct'
     tiles_dir = slide_output_dir / "tiles"
     tiles_dir.mkdir(parents=True, exist_ok=True)
 
@@ -2206,7 +2210,39 @@ def run_pipeline(args):
                 all_scale_detections = []  # Accumulate full-res detections across scales
                 total_tiles_submitted = 0
 
+                # Resume from checkpoints if available
+                completed_scales = set()
+                if getattr(args, 'resume_from', None):
+                    checkpoint_dir = Path(args.resume_from) / "checkpoints"
+                    if checkpoint_dir.exists():
+                        # Sort by modification time (not lexicographic — scale_8x > scale_16x lex)
+                        checkpoint_files = sorted(
+                            checkpoint_dir.glob("scale_*x.json"),
+                            key=lambda p: p.stat().st_mtime,
+                        )
+                        if checkpoint_files:
+                            latest = checkpoint_files[-1]
+                            with open(latest) as f:
+                                all_scale_detections = json.load(f)
+                            # Restore numpy arrays for contours (json.load produces lists)
+                            for det in all_scale_detections:
+                                for key in ('outer', 'inner', 'outer_contour', 'inner_contour'):
+                                    if key in det and det[key] is not None:
+                                        det[key] = np.array(det[key], dtype=np.int32)
+                            for cf in checkpoint_files:
+                                # Parse scale from filename like "scale_32x.json"
+                                s = int(cf.stem.split('_')[1].rstrip('x'))
+                                completed_scales.add(s)
+                            logger.info(
+                                f"Resumed from {latest}: {len(all_scale_detections)} detections, "
+                                f"completed scales: {sorted(completed_scales)}"
+                            )
+
                 for scale in scales:
+                    if scale in completed_scales:
+                        logger.info(f"Scale 1/{scale}x: skipping (checkpointed)")
+                        continue
+
                     scale_params = get_scale_params(scale)
                     scale_tiles = generate_tile_grid_at_scale(
                         mosaic_info['width'], mosaic_info['height'],
@@ -2336,6 +2372,14 @@ def run_pipeline(args):
                     gc.collect()
                     import torch
                     torch.cuda.empty_cache()
+
+                    # Save checkpoint after each scale
+                    checkpoint_dir = slide_output_dir / "checkpoints"
+                    checkpoint_dir.mkdir(exist_ok=True)
+                    checkpoint_file = checkpoint_dir / f"scale_{scale}x.json"
+                    with open(checkpoint_file, 'w') as f:
+                        json.dump(all_scale_detections, f, cls=NumpyEncoder)
+                    logger.info(f"Checkpoint saved: {checkpoint_file} ({len(all_scale_detections)} detections)")
 
             # Merge across scales (contour-based IoU dedup)
             logger.info(f"Merging {len(all_scale_detections)} detections across scales...")
@@ -2745,6 +2789,14 @@ def run_pipeline(args):
         json.dump(all_detections, f, indent=2, cls=NumpyEncoder)
     logger.info(f"  Saved {len(all_detections)} detections to {detections_file}")
 
+    # Clean up multiscale checkpoints after successful completion
+    if is_multiscale:
+        checkpoint_dir = slide_output_dir / "checkpoints"
+        if checkpoint_dir.exists():
+            import shutil
+            shutil.rmtree(checkpoint_dir)
+            logger.info("Multiscale checkpoints cleaned up after successful completion")
+
     # Export CSV with contour coordinates for easy import
     csv_file = slide_output_dir / f'{args.cell_type}_coordinates.csv'
     with open(csv_file, 'w') as f:
@@ -3008,6 +3060,9 @@ def main():
                         help='IoU threshold for deduplicating vessels detected at multiple scales '
                              '(default: 0.3). If a vessel is detected at both coarse and fine scales '
                              'with IoU > threshold, the detection with larger contour area is kept.')
+    parser.add_argument('--resume-from', type=str, default=None,
+                        help='Resume multiscale run from checkpoints in a previous run directory. '
+                             'Skips already-completed scales and reuses the output directory.')
 
     # Mesothelium parameters (for LMD chunking)
     parser.add_argument('--target-chunk-area', type=float, default=1500,
