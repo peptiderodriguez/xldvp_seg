@@ -542,7 +542,7 @@ def _transform_vessel_contours(
     """
     # Transform outer contour
     # Contours may be OpenCV format [[x, y]] or flat [x, y] (from .tolist())
-    if 'outer_contour' in feat:
+    if feat.get('outer_contour') is not None:
         feat['outer_contour_global'] = [
             [pt[0] + tile_x, pt[1] + tile_y] if isinstance(pt[0], (int, float))
             else [pt[0][0] + tile_x, pt[0][1] + tile_y]
@@ -550,7 +550,7 @@ def _transform_vessel_contours(
         ]
 
     # Transform inner contour
-    if 'inner_contour' in feat:
+    if feat.get('inner_contour') is not None:
         feat['inner_contour_global'] = [
             [pt[0] + tile_x, pt[1] + tile_y] if isinstance(pt[0], (int, float))
             else [pt[0][0] + tile_x, pt[0][1] + tile_y]
