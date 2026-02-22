@@ -51,7 +51,6 @@ class CellStrategy(DetectionStrategy, MultiChannelFeatureMixin):
         self,
         min_area_um: float = 50,
         max_area_um: float = 200,
-        max_candidates: int = 10000,
         overlap_threshold: float = 0.5,
         min_mask_pixels: int = 10,
         extract_deep_features: bool = False,
@@ -64,7 +63,6 @@ class CellStrategy(DetectionStrategy, MultiChannelFeatureMixin):
         Args:
             min_area_um: Minimum area in square microns (default 50)
             max_area_um: Maximum area in square microns (default 200)
-            max_candidates: Maximum Cellpose candidates per tile (default 500)
             overlap_threshold: Skip masks with overlap > this fraction (default 0.5)
             min_mask_pixels: Minimum mask size in pixels (default 10)
             extract_deep_features: Whether to extract ResNet+DINOv2 features (default False, opt-in)
@@ -73,7 +71,6 @@ class CellStrategy(DetectionStrategy, MultiChannelFeatureMixin):
         """
         self.min_area_um = min_area_um
         self.max_area_um = max_area_um
-        self.max_candidates = max_candidates
         self.overlap_threshold = overlap_threshold
         self.min_mask_pixels = min_mask_pixels
         self.extract_deep_features = extract_deep_features
@@ -126,13 +123,6 @@ class CellStrategy(DetectionStrategy, MultiChannelFeatureMixin):
         # Get unique mask IDs (exclude background 0)
         cellpose_ids = np.unique(cellpose_masks)
         cellpose_ids = cellpose_ids[cellpose_ids > 0]
-
-        # Limit candidates to avoid processing thousands per tile
-        if len(cellpose_ids) > self.max_candidates:
-            # Sort by mask area (larger first) and take top N
-            areas = [(cp_id, (cellpose_masks == cp_id).sum()) for cp_id in cellpose_ids]
-            areas.sort(key=lambda x: x[1], reverse=True)
-            cellpose_ids = np.array([a[0] for a in areas[:self.max_candidates]])
 
         # Step 2: Set image for SAM2 predictor
         sam2_predictor.set_image(tile_uint8)

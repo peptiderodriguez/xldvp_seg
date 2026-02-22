@@ -62,7 +62,7 @@ class IsletStrategy(CellStrategy):
 
     Extends CellStrategy with:
     - 2-channel Cellpose input (membrane + nuclear) instead of grayscale
-    - Area pre-filter in segment() (no max_candidates cap)
+    - Area pre-filter in segment() (no count cap)
     - 6-channel feature extraction
 
     Detection pipeline:
@@ -110,10 +110,6 @@ class IsletStrategy(CellStrategy):
         )
         self.membrane_channel = membrane_channel
         self.nuclear_channel = nuclear_channel
-        # IsletStrategy.segment() doesn't use max_candidates (area pre-filter instead)
-        # Remove inherited attr so it doesn't pollute get_config() logs
-        if hasattr(self, 'max_candidates'):
-            del self.max_candidates
 
     @property
     def name(self) -> str:
