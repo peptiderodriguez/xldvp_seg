@@ -54,13 +54,38 @@ _SKIP_FEATURE_KEYS = {
 _DEEP_FEATURE_PREFIXES = ('resnet_', 'dinov2_')
 
 
-def _auto_detect_feature_keys(detections, mode='channels'):
+def _should_exclude_key(key, exclude_channels):
+    """Check if a feature key should be excluded based on channel indices.
+
+    Matches:
+      - ch{idx}_*  (e.g. ch3_mean, ch3_std, ch3_p99)
+      - *_ch{idx}_* cross-channel keys (e.g. ch0_ch3_ratio, ch0_ch3_diff)
+      - ch{idx} in ratio/diff keys where it appears as either operand
+    """
+    if not exclude_channels:
+        return False
+    for idx in exclude_channels:
+        tag = f'ch{idx}'
+        # Matches ch{idx}_ at start (per-channel features)
+        if key.startswith(tag + '_'):
+            return True
+        # Matches _ch{idx}_ in middle (cross-channel ratios/diffs like ch0_ch3_ratio)
+        if f'_{tag}_' in key:
+            return True
+        # Matches _ch{idx} at end (shouldn't normally happen but be safe)
+        if key.endswith(f'_{tag}'):
+            return True
+    return False
+
+
+def _auto_detect_feature_keys(detections, mode='channels', exclude_channels=None):
     """Auto-detect feature keys from detection dicts.
 
     Args:
         mode: 'channels' — only ch*_mean keys (default, backward compat)
               'all' — all numeric features except deep features and metadata
               'morph_sam2' — morphological + SAM2 embeddings (no ch*_mean, no deep)
+        exclude_channels: Set of channel indices to exclude (e.g. {3} removes ch3_*)
 
     Returns sorted list of feature key names.
     """
@@ -85,11 +110,14 @@ def _auto_detect_feature_keys(detections, mode='channels'):
             else:  # 'all'
                 key_set.add(k)
 
+    if exclude_channels:
+        key_set = {k for k in key_set if not _should_exclude_key(k, exclude_channels)}
+
     return sorted(key_set)
 
 
 def load_and_prepare(detections_path, marker_channels=None, min_score=0.0,
-                     feature_mode='channels', n_pca=None):
+                     feature_mode='channels', n_pca=None, exclude_channels=None):
     """Load detection JSON, extract positions + features.
 
     Args:
@@ -101,6 +129,7 @@ def load_and_prepare(detections_path, marker_channels=None, min_score=0.0,
             'morph_sam2' (morph+SAM2, no channel means)
         n_pca: If set, reduce features to this many dimensions via PCA after
             z-scoring. Useful when feature count is high (>50).
+        exclude_channels: Set of channel indices to exclude (e.g. {3}).
 
     Returns:
         detections: Original detection list (filtered)
@@ -139,9 +168,15 @@ def load_and_prepare(detections_path, marker_channels=None, min_score=0.0,
 
     # Auto-detect feature keys
     if marker_channels is None:
-        channel_keys = _auto_detect_feature_keys(detections, mode=feature_mode)
+        channel_keys = _auto_detect_feature_keys(detections, mode=feature_mode,
+                                                  exclude_channels=exclude_channels)
     else:
-        channel_keys = marker_channels
+        # Apply exclusion to explicitly provided keys too
+        if exclude_channels:
+            channel_keys = [k for k in marker_channels
+                            if not _should_exclude_key(k, exclude_channels)]
+        else:
+            channel_keys = marker_channels
 
     if not channel_keys:
         print("ERROR: No features found")
@@ -157,7 +192,8 @@ def load_and_prepare(detections_path, marker_channels=None, min_score=0.0,
         positions[i] = [float(center_um[0]), float(center_um[1])]
         for j, key in enumerate(channel_keys):
             val = feats.get(key, 0)
-            features_raw[i, j] = float(val) if val is not None else 0.0
+            fval = float(val) if val is not None else 0.0
+            features_raw[i, j] = fval if not np.isnan(fval) else 0.0
 
     # Z-score features
     scaler = StandardScaler()
@@ -659,7 +695,9 @@ def gate_cells(features_raw, channel_keys, channel_names, gate_markers,
     thresholds = {}
 
     for marker in gate_markers:
-        idx = name_to_idx.get(marker) or name_to_idx.get(marker.lower())
+        idx = name_to_idx.get(marker)
+        if idx is None:
+            idx = name_to_idx.get(marker.lower())
         if idx is None:
             # Try matching channel key directly
             for j, key in enumerate(channel_keys):
@@ -1043,7 +1081,9 @@ def plot_gate_histograms(features_raw, channel_keys, channel_names, gate_markers
     gate_indices = []
     gate_names = []
     for marker in gate_markers:
-        idx = name_to_idx.get(marker) or name_to_idx.get(marker.lower())
+        idx = name_to_idx.get(marker)
+        if idx is None:
+            idx = name_to_idx.get(marker.lower())
         if idx is None:
             for j, key in enumerate(channel_keys):
                 if marker in key:
@@ -1205,6 +1245,11 @@ def main():
     parser.add_argument('--morph-sam2', action='store_true',
                         help='Use morph + SAM2 features only (no channel means). '
                              'For tissue region discovery without marker-specific channels.')
+    parser.add_argument('--exclude-channels', type=str, default=None,
+                        help='Comma-separated channel indices to exclude from zone '
+                             'discovery (e.g. "3" or "3,5"). Filters out all features '
+                             'starting with ch{idx}_ and cross-channel keys like '
+                             'ch0_ch3_ratio, ch0_ch3_diff.')
     parser.add_argument('--n-pca', type=int, default=None,
                         help='Reduce features to N PCA components before clustering. '
                              'Auto-set to 50 when --all-features or --morph-sam2 and '
@@ -1265,6 +1310,18 @@ def main():
     if args.channel_names:
         channel_names = [c.strip() for c in args.channel_names.split(',')]
 
+    # Parse exclude channels
+    exclude_channels = None
+    if args.exclude_channels:
+        exclude_channels = set()
+        for idx_str in args.exclude_channels.split(','):
+            idx_str = idx_str.strip()
+            if idx_str.isdigit():
+                exclude_channels.add(int(idx_str))
+            else:
+                parser.error(f"--exclude-channels: '{idx_str}' is not a valid channel index")
+        print(f"Excluding channels: {sorted(exclude_channels)}")
+
     # Determine feature mode
     if args.morph_sam2:
         feature_mode = 'morph_sam2'
@@ -1283,7 +1340,7 @@ def main():
     # ── Load ──────────────────────────────────────────────────────
     detections, positions, features, channel_keys = load_and_prepare(
         args.detections, marker_channels=marker_channels, min_score=args.min_score,
-        feature_mode=feature_mode, n_pca=n_pca,
+        feature_mode=feature_mode, n_pca=n_pca, exclude_channels=exclude_channels,
     )
 
     if channel_names is None:
@@ -1291,7 +1348,8 @@ def main():
 
     # ── Build raw features for characterization (always ch*_mean) ─────
     # Even when clustering on all features, zone profiles use channel means
-    ch_mean_keys = _auto_detect_feature_keys(detections, mode='channels')
+    ch_mean_keys = _auto_detect_feature_keys(detections, mode='channels',
+                                                exclude_channels=exclude_channels)
     if not ch_mean_keys:
         ch_mean_keys = channel_keys  # fallback if no ch*_mean found
     features_raw = np.zeros((len(detections), len(ch_mean_keys)))
@@ -1299,7 +1357,8 @@ def main():
         feats = det.get('features', det)
         for j, key in enumerate(ch_mean_keys):
             val = feats.get(key, 0)
-            features_raw[i, j] = float(val) if val is not None else 0.0
+            fval = float(val) if val is not None else 0.0
+            features_raw[i, j] = fval if not np.isnan(fval) else 0.0
     # Use ch_mean_keys for characterization/plots, channel_keys for clustering
     char_keys = ch_mean_keys
     if channel_names is None or len(channel_names) != len(char_keys):
@@ -1478,6 +1537,7 @@ def main():
             'feature_mode': feature_mode,
             'n_pca': n_pca,
             'min_score': args.min_score,
+            'exclude_channels': sorted(exclude_channels) if exclude_channels else None,
         },
         'zones': zone_metadata,
     }

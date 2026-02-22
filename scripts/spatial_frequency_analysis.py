@@ -222,8 +222,12 @@ def build_density_profile(distances, transect_length, bin_width_um, weights=None
         return positions, np.zeros(n_bins)
 
     try:
-        # Bandwidth selection: Scott's rule scaled by bin width
-        bw = bin_width_um / transect_length * 3.0  # ~3 bins smoothing
+        # Bandwidth: ~3 bin widths of smoothing in data units
+        dist_std = np.std(distances)
+        if dist_std > 0:
+            bw = bin_width_um * 3.0 / dist_std
+        else:
+            bw = 0.1  # fallback
         kde = gaussian_kde(distances, bw_method=bw, weights=weights)
         density = kde(positions)
     except (np.linalg.LinAlgError, ValueError):
@@ -391,15 +395,15 @@ def plot_scalogram(scalogram, positions_um, channel_name, boundaries=None,
     axes[0].set_ylabel('Density')
     axes[0].set_title(f'CWT Scalogram — {channel_name}')
 
-    # Middle: scalogram
-    extent = [positions_um[0], positions_um[-1],
-              scalogram['periods_um'][-1], scalogram['periods_um'][0]]
-    im = axes[1].imshow(
-        scalogram['power'], aspect='auto', extent=extent,
-        cmap='viridis', interpolation='bilinear',
+    # Middle: scalogram (pcolormesh for correct log-scale y-axis)
+    periods = scalogram['periods_um']
+    im = axes[1].pcolormesh(
+        positions_um, periods, scalogram['power'],
+        cmap='viridis', shading='auto',
     )
     axes[1].set_ylabel('Spatial period (um)')
     axes[1].set_yscale('log')
+    axes[1].set_ylim(periods.min(), periods.max())
     plt.colorbar(im, ax=axes[1], label='Power', pad=0.01)
 
     # Bottom: boundary signal
