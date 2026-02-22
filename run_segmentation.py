@@ -2550,6 +2550,7 @@ def run_pipeline(args):
                                     'tile_x': tile_x, 'tile_y': tile_y,
                                     'tile_pct': tile_pct,
                                 })
+                                total_detections += len(features_list)
                                 del masks, tile_rgb_html, features_list
                                 result['masks'] = None  # Release array ref from result dict
                                 result['features_list'] = None
@@ -2567,7 +2568,7 @@ def run_pipeline(args):
                                         candidate_mode=args.candidate_mode,
                                     )
                                     all_samples.extend(html_samples)
-                            total_detections += len(features_list)
+                                total_detections += len(features_list)
 
                         except Exception as e:
                             import traceback
