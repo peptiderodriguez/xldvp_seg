@@ -4382,10 +4382,13 @@ class VesselStrategy(DetectionStrategy, MultiChannelFeatureMixin):
                         det_dict = det.to_dict() if hasattr(det, 'to_dict') else det
                         feats = det.features if hasattr(det, 'features') else det_dict.get('features', {})
                         # Promote outer/inner contours to top-level for convert_detection_to_full_res
-                        if feats.get('outer') is not None and 'outer' not in det_dict:
-                            det_dict['outer'] = feats['outer']
-                        if feats.get('inner') is not None and 'inner' not in det_dict:
-                            det_dict['inner'] = feats['inner']
+                        # Features dict uses 'outer_contour'/'inner_contour' keys (from extract_features)
+                        outer_key = 'outer_contour' if 'outer_contour' in feats else 'outer'
+                        inner_key = 'inner_contour' if 'inner_contour' in feats else 'inner'
+                        if feats.get(outer_key) is not None and 'outer' not in det_dict:
+                            det_dict['outer'] = feats[outer_key]
+                        if feats.get(inner_key) is not None and 'inner' not in det_dict:
+                            det_dict['inner'] = feats[inner_key]
                         # to_dict() uses 'centroid', convert_detection_to_full_res uses 'center'
                         if 'center' not in det_dict and 'centroid' in det_dict:
                             det_dict['center'] = det_dict['centroid']

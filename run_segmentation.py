@@ -915,6 +915,7 @@ def filter_and_create_html_samples(
     features_list, tile_x, tile_y, tile_rgb, masks, pixel_size_um,
     slide_name, cell_type, html_score_threshold, min_area_um2=25.0,
     tile_percentiles=None, marker_thresholds=None, marker_map=None,
+    candidate_mode=False,
 ):
     """Filter detections by quality and create HTML samples.
 
@@ -934,12 +935,13 @@ def filter_and_create_html_samples(
         if area_um2 < min_area_um2:
             continue
 
-        if cell_type == 'vessel':
+        if cell_type == 'vessel' and not candidate_mode:
             if features_dict.get('ring_completeness', 1.0) < 0.30:
                 continue
             if features_dict.get('circularity', 1.0) < 0.15:
                 continue
-            if features_dict.get('wall_thickness_mean_um', 10.0) < 1.5:
+            wt = features_dict.get('wall_thickness_mean_um')
+            if wt is not None and wt < 1.5:
                 continue
 
         sample = create_sample_from_detection(
@@ -1561,6 +1563,11 @@ def create_sample_from_detection(tile_x, tile_y, tile_rgb, masks, feat, pixel_si
     if marker_class is not None:
         stats['marker_class'] = marker_class
         stats['marker_color'] = f'#{contour_color[0]:02x}{contour_color[1]:02x}{contour_color[2]:02x}'
+
+    # Add vessel detection method provenance
+    if 'detection_method' in features:
+        dm = features['detection_method']
+        stats['detection_method'] = ', '.join(dm) if isinstance(dm, list) else dm
 
     # Add cell-type specific stats
     if 'elongation' in features:
@@ -2540,6 +2547,7 @@ def run_pipeline(args):
                                     pixel_size_um, slide_name, args.cell_type,
                                     args.html_score_threshold,
                                     tile_percentiles=tile_pct,
+                                    candidate_mode=args.candidate_mode,
                                 )
                                 all_samples.extend(html_samples)
                             total_detections += len(features_list)
@@ -2579,6 +2587,7 @@ def run_pipeline(args):
                             tile_percentiles=dt['tile_pct'],
                             marker_thresholds=marker_thresholds,
                             marker_map=_islet_mm,
+                            candidate_mode=args.candidate_mode,
                         )
                         all_samples.extend(html_samples)
                     deferred_html_tiles = []  # clear after processing

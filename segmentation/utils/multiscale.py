@@ -123,6 +123,7 @@ def scale_contour(contour: np.ndarray, scale_factor: int) -> np.ndarray:
     if contour is None:
         return None
 
+    contour = np.asarray(contour)
     scaled = contour.copy().astype(np.float64)
     scaled *= scale_factor
     return scaled
