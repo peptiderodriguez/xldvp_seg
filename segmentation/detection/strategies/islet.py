@@ -84,6 +84,7 @@ class IsletStrategy(CellStrategy):
         extract_deep_features: bool = False,
         extract_sam2_embeddings: bool = True,
         resnet_batch_size: int = 32,
+        marker_signal_factor: float = 2.0,
     ):
         """
         Initialize islet detection strategy.
@@ -98,6 +99,10 @@ class IsletStrategy(CellStrategy):
             extract_deep_features: Whether to extract ResNet+DINOv2 (default False)
             extract_sam2_embeddings: Whether to extract SAM2 embeddings (default True)
             resnet_batch_size: Batch size for ResNet feature extraction (default 32)
+            marker_signal_factor: Divisor for Otsu/med+3MAD pre-filter threshold.
+                Cells need marker signal > auto_threshold/factor to get full features.
+                Higher = more permissive (2.0 = half the classification threshold).
+                Set to 0 to disable pre-filtering. (default 2.0)
         """
         super().__init__(
             min_area_um=min_area_um,
@@ -110,6 +115,7 @@ class IsletStrategy(CellStrategy):
         )
         self.membrane_channel = membrane_channel
         self.nuclear_channel = nuclear_channel
+        self.marker_signal_factor = marker_signal_factor
 
     @property
     def name(self) -> str:
@@ -414,38 +420,170 @@ class IsletStrategy(CellStrategy):
         else:
             tile_u8 = tile
 
+        # Precompute tile_global_mean once (avoids recomputing per cell in extract_morphological_features)
+        if tile_u8.ndim == 3:
+            global_valid = np.max(tile_u8, axis=2) > 0
+            tile_global_mean = float(np.mean(tile_u8[global_valid])) if global_valid.any() else 0
+        else:
+            global_valid = tile_u8 > 0
+            tile_global_mean = float(np.mean(tile_u8[global_valid])) if global_valid.any() else 0
+        del global_valid
+
+        # Determine marker channels (all except bright=0, membrane, nuclear)
+        non_marker_chs = {0, self.membrane_channel, self.nuclear_channel}
+        marker_chs = sorted(set(extra_channels.keys()) - non_marker_chs) if extra_channels else []
+
+        # Build channels_dict once (reused for every cell)
+        channels_dict = {}
+        if extra_channels is not None:
+            channels_dict = {
+                f'ch{k}': v for k, v in sorted(extra_channels.items())
+                if v is not None
+            }
+
+        # ====================================================================
+        # Phase 0: Quick marker means for ALL cells (~0.01ms/cell)
+        # Just enough to compute Otsu/2 thresholds for pre-filtering.
+        # ====================================================================
         n_masks = len(masks)
+        quick_data = []  # list of {mask, centroid, marker_means}
         for idx, mask in enumerate(masks):
-            if idx % 500 == 0:
-                print(f"[islet] Featurizing cell {idx}/{n_masks}", flush=True)
-            feat = extract_morphological_features(mask, tile_u8)
-            if not feat:
-                continue
+            if idx % 2000 == 0:
+                print(f"[islet] Phase 0 (marker scan) {idx}/{n_masks}", flush=True)
 
-            # Per-channel features from all 6 channels
-            if extra_channels is not None:
-                channels_dict = {
-                    f'ch{k}': v for k, v in sorted(extra_channels.items())
-                    if v is not None
-                }
-                multichannel_feats = self.extract_multichannel_features(mask, channels_dict)
-                feat.update(multichannel_feats)
-
-            # Compute centroid from mask (extract_morphological_features does NOT return centroid)
+            # Centroid
             ys, xs = np.where(mask)
             if len(ys) == 0:
                 continue
             cx_val, cy_val = float(np.mean(xs)), float(np.mean(ys))
+
+            # Quick marker channel means (raw uint16, zero-excluded)
+            marker_means = {}
+            for ch_idx in marker_chs:
+                ch_data = extra_channels.get(ch_idx)
+                if ch_data is not None:
+                    masked_vals = ch_data[mask]
+                    nonzero = masked_vals[masked_vals > 0]
+                    marker_means[ch_idx] = float(np.mean(nonzero)) if len(nonzero) > 0 else 0.0
+
+            quick_data.append({
+                'mask': mask,
+                'centroid': [cx_val, cy_val],
+                'marker_means': marker_means,
+            })
+
+        print(f"[islet] Phase 0 done: {len(quick_data)}/{n_masks} cells scanned", flush=True)
+
+        # ====================================================================
+        # Compute Otsu/2 pre-filter thresholds (same method as downstream
+        # compute_islet_marker_thresholds): normalize to [0,1] via p1/p99.5,
+        # Otsu (or med+3*MAD if Otsu > 15% positive), then threshold/2.
+        # ====================================================================
+        from skimage.filters import threshold_otsu as _threshold_otsu
+
+        # otsu_thresholds stores RAW uint16 cutoff values per marker channel
+        otsu_thresholds = {}
+        if marker_chs and self.marker_signal_factor > 0:
+            for ch_idx in marker_chs:
+                raw_vals = np.array([c['marker_means'].get(ch_idx, 0) for c in quick_data])
+                raw_pos = raw_vals[raw_vals > 0]
+                if len(raw_pos) < 50:
+                    continue
+
+                lo = float(np.percentile(raw_pos, 1))
+                hi = float(np.percentile(raw_pos, 99.5))
+                if hi <= lo:
+                    continue
+
+                norm_vals = np.clip((raw_vals - lo) / (hi - lo), 0, 1)
+                try:
+                    otsu_t = float(_threshold_otsu(norm_vals))
+                except (ValueError, IndexError):
+                    otsu_t = 0.5
+
+                med = float(np.median(norm_vals))
+                mad = float(np.median(np.abs(norm_vals - med)))
+                mad3_t = med + 3 * 1.4826 * mad
+
+                n_otsu = int(np.sum(norm_vals > otsu_t))
+                otsu_pct = 100 * n_otsu / max(len(raw_vals), 1)
+                if otsu_pct <= 15:
+                    auto_t = otsu_t
+                    method = 'otsu'
+                else:
+                    auto_t = mad3_t
+                    method = 'med+3MAD'
+
+                divisor = max(self.marker_signal_factor, 0.01)
+                raw_cutoff = lo + (auto_t / divisor) * (hi - lo)
+                otsu_thresholds[ch_idx] = raw_cutoff
+
+                n_above = int(np.sum(raw_vals > raw_cutoff))
+                logger.info(f"  ch{ch_idx}: {method} norm_t={auto_t:.3f}, "
+                            f"pre-filter={auto_t/divisor:.3f} (raw={raw_cutoff:.1f}), "
+                            f"{n_above}/{len(raw_vals)} pass")
+
+            if otsu_thresholds:
+                print(f"[islet] Pre-filter (Otsu/2): "
+                      + ", ".join(f"ch{k}={v:.1f}" for k, v in sorted(otsu_thresholds.items())),
+                      flush=True)
+
+        # Split cells into promising (any marker > Otsu/2) vs background
+        promising_indices = []
+        background_indices = []
+        for i, cell in enumerate(quick_data):
+            if otsu_thresholds:
+                passes = any(
+                    cell['marker_means'].get(ch, 0) > otsu_thresholds[ch]
+                    for ch in otsu_thresholds
+                )
+            else:
+                passes = True  # no thresholds → keep all
+            if passes:
+                promising_indices.append(i)
+            else:
+                background_indices.append(i)
+
+        n_promising = len(promising_indices)
+        n_background = len(background_indices)
+        if n_background > 0:
+            pct = 100 * n_background / len(quick_data)
+            print(f"[islet] Pre-filter: {n_promising} promising + {n_background} background "
+                  f"({pct:.0f}% skipped before feature extraction)", flush=True)
+
+        # ====================================================================
+        # Phase 1: Full features for PROMISING cells only
+        # (morph + all 6 channels + SAM2 + deep features)
+        # ====================================================================
+        n_sam2_extracted = 0
+
+        for pi, cell_idx in enumerate(promising_indices):
+            if pi % 500 == 0:
+                print(f"[islet] Featurizing cell {pi}/{n_promising}", flush=True)
+            cell = quick_data[cell_idx]
+            mask = cell['mask']
+            cx_val, cy_val = cell['centroid']
+
+            feat = extract_morphological_features(mask, tile_u8, tile_global_mean=tile_global_mean)
+            if not feat:
+                continue
+
+            # Per-channel features from all 6 channels
+            if channels_dict:
+                multichannel_feats = self.extract_multichannel_features(mask, channels_dict)
+                feat.update(multichannel_feats)
+
             feat['centroid'] = [cx_val, cy_val]
 
             # SAM2 embeddings (256D)
             if self.extract_sam2_embeddings and sam2_predictor is not None:
                 sam2_emb = self._extract_sam2_embedding(sam2_predictor, cy_val, cx_val)
-                for i, v in enumerate(sam2_emb):
-                    feat[f'sam2_{i}'] = float(v)
+                for si, v in enumerate(sam2_emb):
+                    feat[f'sam2_{si}'] = float(v)
+                n_sam2_extracted += 1
             elif self.extract_sam2_embeddings:
-                for i in range(256):
-                    feat[f'sam2_{i}'] = 0.0
+                for si in range(256):
+                    feat[f'sam2_{si}'] = 0.0
 
             # Deep features (opt-in)
             if self.extract_deep_features:
@@ -466,6 +604,37 @@ class IsletStrategy(CellStrategy):
                 'centroid': [cx_val, cy_val],
                 'features': feat,
             })
+
+        # ====================================================================
+        # Phase 2: Minimal features for BACKGROUND cells
+        # (marker means from Phase 0 + centroid + area — no morph, no SAM2)
+        # ====================================================================
+        for cell_idx in background_indices:
+            cell = quick_data[cell_idx]
+            mask = cell['mask']
+            cx_val, cy_val = cell['centroid']
+
+            feat = {
+                'centroid': [cx_val, cy_val],
+                'area': int(mask.sum()),
+            }
+            # Store the quick marker means as ch{idx}_mean features
+            for ch_idx, val in cell['marker_means'].items():
+                feat[f'ch{ch_idx}_mean'] = val
+
+            # Zero SAM2 embeddings
+            if self.extract_sam2_embeddings:
+                for si in range(256):
+                    feat[f'sam2_{si}'] = 0.0
+
+            valid_detections.append({
+                'mask': mask,
+                'centroid': [cx_val, cy_val],
+                'features': feat,
+            })
+
+        # Free quick_data (masks are now referenced by valid_detections)
+        del quick_data
 
         # Batch deep feature extraction
         if self.extract_deep_features:
@@ -524,6 +693,10 @@ class IsletStrategy(CellStrategy):
                     for i in range(1024):
                         det['features'][f'dinov2_ctx_{i}'] = 0.0
 
+        if n_background > 0:
+            print(f"[islet] Pre-filter saved: {n_promising} full + {n_background} minimal "
+                  f"({100*n_background/len(valid_detections):.0f}% skipped, "
+                  f"~{n_background * 1.8 / 3600:.1f}h SAM2 time saved)", flush=True)
         print(f"[islet] Feature extraction done: {len(valid_detections)}/{n_masks} valid", flush=True)
 
         # Reset predictor state and clean up cached membrane_u8

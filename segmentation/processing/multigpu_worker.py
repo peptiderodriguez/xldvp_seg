@@ -272,6 +272,7 @@ def _gpu_worker(
             max_area_um=strategy_params.get('max_area_um', 500),
             extract_deep_features=extract_deep_features,
             extract_sam2_embeddings=extract_sam2_embeddings,
+            marker_signal_factor=strategy_params.get('marker_signal_factor', 2.0),
         )
     elif cell_type == 'tissue_pattern':
         from segmentation.detection.strategies.tissue_pattern import TissuePatternStrategy

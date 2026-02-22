@@ -673,6 +673,7 @@ def create_strategy_for_cell_type(cell_type, params, pixel_size_um):
             max_area_um=params.get('max_area_um', 500),
             extract_deep_features=params.get('extract_deep_features', False),
             extract_sam2_embeddings=params.get('extract_sam2_embeddings', True),
+            marker_signal_factor=params.get('marker_signal_factor', 2.0),
         )
     elif cell_type == 'tissue_pattern':
         return TissuePatternStrategy(
@@ -2031,6 +2032,7 @@ def run_pipeline(args):
             'min_area_um': getattr(args, 'islet_min_area', 30.0),
             'max_area_um': getattr(args, 'islet_max_area', 500.0),
             'extract_deep_features': getattr(args, 'extract_deep_features', False),
+            'marker_signal_factor': getattr(args, 'marker_signal_factor', 2.0),
         }
     elif args.cell_type == 'tissue_pattern':
         params = {
@@ -3095,6 +3097,10 @@ def main():
                         help='Minimum islet cell area in um² (default 30)')
     parser.add_argument('--islet-max-area', type=float, default=500.0,
                         help='Maximum islet cell area in um² (default 500)')
+    parser.add_argument('--marker-signal-factor', type=float, default=2.0,
+                        help='Pre-filter divisor for Otsu threshold. Cells need marker '
+                             'signal > auto_threshold/N to get full features + SAM2. '
+                             'Higher = more permissive. 0 = disable. (default 2.0)')
     parser.add_argument('--dedup-by-confidence', action='store_true', default=False,
                         help='Sort by confidence (score) instead of area during deduplication. '
                              'Automatically enabled for islet cell type.')
