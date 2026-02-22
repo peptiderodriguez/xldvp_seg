@@ -53,13 +53,33 @@ logger = logging.getLogger(__name__)
 
 PADDING = 40
 PINK = (255, 0, 255)
-MARKER_COLORS = {
-    'alpha': (255, 50, 50),
-    'beta': (50, 255, 50),
-    'delta': (50, 50, 255),
-    'multi': (255, 170, 0),
-    'none': (128, 128, 128),
-}
+# Base marker colors — first 3 markers get R, G, B; extras get gray.
+# 'multi' and 'none' are always present.
+_BASE_MARKER_COLORS = [(255, 50, 50), (50, 255, 50), (50, 50, 255)]
+
+
+def build_marker_colors(marker_map):
+    """Build marker_class → RGB color dict from marker_map."""
+    colors = {'multi': (255, 170, 0), 'none': (128, 128, 128)}
+    for i, name in enumerate(marker_map.keys()):
+        colors[name] = _BASE_MARKER_COLORS[i] if i < len(_BASE_MARKER_COLORS) else (200, 200, 200)
+    return colors
+
+
+_MARKER_HTML_COLORS = ['#ff3333', '#33cc33', '#3333ff']
+_MARKER_CSS_NAMES = ['red', 'green', 'blue']
+
+
+def _build_marker_legend(marker_map):
+    """Build HTML legend spans from marker_map, e.g. 'red=gcg green=ins blue=sst'."""
+    parts = []
+    for i, name in enumerate(marker_map.keys()):
+        if i < len(_MARKER_HTML_COLORS):
+            parts.append(
+                f'<span style="color:{_MARKER_HTML_COLORS[i]}">'
+                f'{_MARKER_CSS_NAMES[i]}={name}</span>'
+            )
+    return '\n'.join(parts)
 
 
 def pct_norm(img):
@@ -100,7 +120,8 @@ def draw_dashed_contours(img, contours, color, thickness=1, dash_len=6, gap_len=
 
 
 def render_islet_card(islet_id, cells, masks, tile_vis, tile_x, tile_y,
-                      tile_h, tile_w, pixel_size, signal_per_cell):
+                      tile_h, tile_w, pixel_size, signal_per_cell,
+                      marker_colors, marker_map):
     """Render a single islet card and return HTML string, or None if empty."""
     cell_info = []
     mask_labels = []
@@ -137,7 +158,7 @@ def render_islet_card(islet_id, cells, masks, tile_vis, tile_x, tile_y,
 
     # Dashed cell contours
     for _cx_rel, _cy_rel, ml, mc in cell_info:
-        color = MARKER_COLORS.get(mc, (128, 128, 128))
+        color = marker_colors.get(mc, (128, 128, 128))
         if ml is not None and ml > 0:
             mask_crop = (masks[y_min:y_max, x_min:x_max] == ml).astype(np.uint8)
             if mask_crop.any():
@@ -153,26 +174,34 @@ def render_islet_card(islet_id, cells, masks, tile_vis, tile_x, tile_y,
     b64 = base64.b64encode(buf).decode()
 
     n = len(cells)
-    na = sum(1 for d in cells if d.get('marker_class') == 'alpha')
-    nb = sum(1 for d in cells if d.get('marker_class') == 'beta')
-    nd = sum(1 for d in cells if d.get('marker_class') == 'delta')
-    nm = sum(1 for d in cells if d.get('marker_class') == 'multi')
     area_um2 = float(union_mask.sum()) * pixel_size * pixel_size
+
+    # Count per marker class dynamically
+    marker_names = list(marker_map.keys())
+    marker_counts = {name: sum(1 for d in cells if d.get('marker_class') == name) for name in marker_names}
+    n_multi = sum(1 for d in cells if d.get('marker_class') == 'multi')
 
     total = max(n, 1)
     bar_parts = []
-    if nb > 0:
-        bar_parts.append(f'<div style="width:{100*nb/total:.0f}%;background:#33cc33" title="beta {nb}"></div>')
-    if na > 0:
-        bar_parts.append(f'<div style="width:{100*na/total:.0f}%;background:#ff3333" title="alpha {na}"></div>')
-    if nd > 0:
-        bar_parts.append(f'<div style="width:{100*nd/total:.0f}%;background:#3333ff" title="delta {nd}"></div>')
-    if nm > 0:
-        bar_parts.append(f'<div style="width:{100*nm/total:.0f}%;background:#ffaa00" title="multi {nm}"></div>')
+    for i, name in enumerate(marker_names):
+        cnt = marker_counts[name]
+        if cnt > 0:
+            html_color = _MARKER_HTML_COLORS[i] if i < len(_MARKER_HTML_COLORS) else '#cccccc'
+            bar_parts.append(f'<div style="width:{100*cnt/total:.0f}%;background:{html_color}" title="{name} {cnt}"></div>')
+    if n_multi > 0:
+        bar_parts.append(f'<div style="width:{100*n_multi/total:.0f}%;background:#ffaa00" title="multi {n_multi}"></div>')
     bar = (
         f'<div style="display:flex;height:8px;width:100%;border-radius:4px;'
         f'overflow:hidden;margin:4px 0">{"".join(bar_parts)}</div>'
     )
+
+    # Build marker count labels
+    count_spans = []
+    for i, name in enumerate(marker_names):
+        html_color = _MARKER_HTML_COLORS[i] if i < len(_MARKER_HTML_COLORS) else '#cccccc'
+        count_spans.append(f'<span style="color:{html_color}">{name[0]}:{marker_counts[name]}</span>')
+    count_spans.append(f'<span style="color:#ffaa00">m:{n_multi}</span>')
+    counts_html = '\n            '.join(count_spans)
 
     spc = signal_per_cell
     return f'''
@@ -182,10 +211,7 @@ def render_islet_card(islet_id, cells, masks, tile_vis, tile_x, tile_y,
         <div style="color:white;font-family:monospace;font-size:12px;margin-top:6px">
             <b style="color:#ff00ff">Islet {islet_id}</b> | {n} cells | {area_um2:.0f} um2 | sig/cell={spc:.2f}
             {bar}
-            <span style="color:#ff3333">a:{na}</span>
-            <span style="color:#33cc33">b:{nb}</span>
-            <span style="color:#3333ff">d:{nd}</span>
-            <span style="color:#ffaa00">m:{nm}</span>
+            {counts_html}
         </div>
     </div>'''
 
@@ -208,12 +234,23 @@ def main():
                         help='DBSCAN min_samples (default: 5)')
     parser.add_argument('--marker-only', action='store_true',
                         help='Only show marker-positive cells (exclude none/gray)')
+    parser.add_argument('--display-channels', type=str, default='2,3,5',
+                        help='Comma-separated R,G,B channel indices for display (default: 2,3,5)')
+    parser.add_argument('--marker-channels', type=str, default='gcg:2,ins:3,sst:5',
+                        help='Marker-to-channel mapping (default: gcg:2,ins:3,sst:5)')
     args = parser.parse_args()
 
     logging.basicConfig(level=logging.INFO, format='%(levelname)s: %(message)s')
 
     run_dir = Path(args.run_dir)
     czi_path = Path(args.czi_path)
+
+    # Parse channel config
+    display_chs = [int(x.strip()) for x in args.display_channels.split(',')]
+    marker_map = {}
+    for pair in args.marker_channels.split(','):
+        name, ch = pair.strip().split(':')
+        marker_map[name.strip()] = int(ch.strip())
 
     # ---------------------------------------------------------------
     # 1. Load global detections
@@ -235,7 +272,7 @@ def main():
     # ---------------------------------------------------------------
     # 2. Compute marker thresholds and classify
     # ---------------------------------------------------------------
-    marker_thresholds = compute_islet_marker_thresholds(all_dets)
+    marker_thresholds = compute_islet_marker_thresholds(all_dets, marker_map=marker_map)
     if marker_thresholds is None:
         print(f"WARNING: Only {len(all_dets)} detections — too few for marker thresholds. "
               "All cells will be shown as 'none' (gray).")
@@ -244,7 +281,7 @@ def main():
             sys.exit(1)
     marker_counts = {}
     for det in all_dets:
-        mc, _ = classify_islet_marker(det.get('features', {}), marker_thresholds)
+        mc, _ = classify_islet_marker(det.get('features', {}), marker_thresholds, marker_map=marker_map)
         det['marker_class'] = mc
         marker_counts[mc] = marker_counts.get(mc, 0) + 1
     print(f"Marker classification: {marker_counts}")
@@ -252,14 +289,14 @@ def main():
     # ---------------------------------------------------------------
     # 3. Load CZI display channels
     # ---------------------------------------------------------------
-    print(f"Loading CZI channels (2=Gcg, 3=Ins, 5=Sst)...")
-    loader = get_loader(czi_path, load_to_ram=True, channel=1)
+    print(f"Loading CZI display channels {display_chs}...")
+    loader = get_loader(czi_path, load_to_ram=True, channel=display_chs[0])
     pixel_size = loader.get_pixel_size()
     x_start = loader.x_start
     y_start = loader.y_start
 
     ch_data = {}
-    for ch in [2, 3, 5]:
+    for ch in display_chs:
         print(f"  Loading channel {ch}...")
         loader.load_channel(ch)
         ch_data[ch] = loader._channel_data[ch]
@@ -305,15 +342,20 @@ def main():
     # ---------------------------------------------------------------
     # 5. Compute normalized signal/cell per islet and Otsu filter
     # ---------------------------------------------------------------
-    gcg_all = np.array([d.get('features', {}).get('ch2_mean', 0) for d in all_dets])
-    ins_all = np.array([d.get('features', {}).get('ch3_mean', 0) for d in all_dets])
-    sst_all = np.array([d.get('features', {}).get('ch5_mean', 0) for d in all_dets])
-
     def norm_arr(arr):
         lo, hi = np.percentile(arr, 1), np.percentile(arr, 99.5)
         return np.clip((arr - lo) / (hi - lo), 0, 1) if hi > lo else np.zeros_like(arr)
 
-    total_n = norm_arr(gcg_all) + norm_arr(ins_all) + norm_arr(sst_all)
+    # Sum normalized marker signals across all markers from marker_map
+    marker_arrays = {}
+    for mname, ch_idx in marker_map.items():
+        marker_arrays[mname] = np.array([
+            d.get('features', {}).get(f'ch{ch_idx}_mean', 0) for d in all_dets
+        ])
+    if marker_arrays:
+        total_n = sum(norm_arr(arr) for arr in marker_arrays.values())
+    else:
+        total_n = np.zeros(len(all_dets))
 
     # Group by islet_id (exclude noise = -1)
     islet_groups = {}  # islet_id -> [det_index, ...]
@@ -454,11 +496,15 @@ def main():
         th, tw = masks.shape[:2]
         rel_tx = tx - x_start
         rel_ty = ty - y_start
-        tile_rgb = np.stack([
-            ch_data[2][rel_ty:rel_ty+th, rel_tx:rel_tx+tw],
-            ch_data[3][rel_ty:rel_ty+th, rel_tx:rel_tx+tw],
-            ch_data[5][rel_ty:rel_ty+th, rel_tx:rel_tx+tw],
-        ], axis=-1)
+        rgb_channels = []
+        for ch in display_chs[:3]:
+            if ch in ch_data:
+                rgb_channels.append(ch_data[ch][rel_ty:rel_ty+th, rel_tx:rel_tx+tw])
+            else:
+                rgb_channels.append(np.zeros((th, tw), dtype=np.uint16))
+        while len(rgb_channels) < 3:
+            rgb_channels.append(np.zeros((th, tw), dtype=np.uint16))
+        tile_rgb = np.stack(rgb_channels, axis=-1)
         tile_vis_cache[(tx, ty)] = pct_norm(tile_rgb)
 
         print(f"  Loaded tile ({tx}, {ty}): masks {masks.shape}, {masks.max()} labels")
@@ -469,6 +515,7 @@ def main():
     cards_html = ''
     rendered_count = 0
     skipped_count = 0
+    mc_colors = build_marker_colors(marker_map)
 
     for iid in sorted(true_islets, key=lambda x: len(islet_groups[x]), reverse=True):
         tile_key = islet_tile_map.get(iid)
@@ -499,7 +546,8 @@ def main():
         spc = islet_sig_per_cell[iid]
 
         card = render_islet_card(
-            iid, cells, masks, tile_vis, tx, ty, th, tw, pixel_size, spc
+            iid, cells, masks, tile_vis, tx, ty, th, tw, pixel_size, spc,
+            marker_colors=mc_colors, marker_map=marker_map,
         )
         if card is not None:
             cards_html += card
@@ -526,9 +574,7 @@ h1 {{ color: white; font-family: sans-serif; }}
 (Otsu sig/cell &ge; {otsu_spc:.3f}) |
 DBSCAN eps={args.eps_um} um, min_samples={args.min_samples} |
 <span style="color:#ff00ff">pink = islet boundary</span> |
-<span style="color:#ff3333">red=alpha</span>
-<span style="color:#33cc33">green=beta</span>
-<span style="color:#3333ff">blue=delta</span>
+{_build_marker_legend(marker_map)}
 <span style="color:#ffaa00">orange=multi</span> (dashed)</div>
 {cards_html}
 </body></html>'''

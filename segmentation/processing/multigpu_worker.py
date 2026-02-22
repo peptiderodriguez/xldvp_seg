@@ -26,6 +26,7 @@ import queue
 import shutil
 import time
 import traceback
+from contextlib import nullcontext
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple, Any, Set
 import multiprocessing as mp
@@ -80,6 +81,7 @@ def _gpu_worker(
     channel_names: Optional[Dict[int, str]] = None,
     variance_threshold: float = 1000.0,
     channel_keys: Optional[List[int]] = None,
+    islet_display_channels: Optional[List[int]] = None,
 ):
     """
     Generic GPU worker for any cell type.
@@ -347,6 +349,10 @@ def _gpu_worker(
 
             _, slide_arr = shared_slides[slide_name]
 
+            # Multiscale support: scale_factor > 1 means strided read (nearest-neighbor downscale)
+            sf = tile.get('scale_factor', 1)
+            scale_params = tile.get('scale_params')
+
             # Extract tile from shared memory
             # Tile coords are global CZI mosaic coords; shared memory is 0-indexed
             # Convert global→relative for array indexing
@@ -361,7 +367,8 @@ def _gpu_worker(
             n_ch = 1  # default for 2D arrays
             tile_raw = None
             if slide_arr.ndim == 3:
-                tile_raw = slide_arr[y_rel:y_end, x_rel:x_end, :].copy()
+                # Strided read: reads only 1/sf² pixels (nearest-neighbor downscale)
+                tile_raw = slide_arr[y_rel:y_end:sf, x_rel:x_end:sf, :].copy()
                 n_ch = tile_raw.shape[2]
                 if n_ch >= 3:
                     tile_rgb = tile_raw[:, :, :3]
@@ -371,7 +378,7 @@ def _gpu_worker(
                 else:
                     tile_rgb = np.stack([tile_raw[:, :, 0]] * 3, axis=-1)
             else:
-                tile_gray = slide_arr[y_rel:y_end, x_rel:x_end].copy()
+                tile_gray = slide_arr[y_rel:y_end:sf, x_rel:x_end:sf].copy()
                 tile_rgb = np.stack([tile_gray] * 3, axis=-1)
 
             # Validate tile
@@ -398,23 +405,25 @@ def _gpu_worker(
                         czi_ch = channel_keys[slot_idx] if channel_keys and slot_idx < len(channel_keys) else slot_idx
                         extra_channel_tiles[czi_ch] = tile_raw[:, :, slot_idx]
 
-            # For islet: override tile_rgb with display channels (Gcg/Ins/Sst)
+            # For islet: override tile_rgb with display channels from --islet-display-channels
             # so morphological features are extracted from the marker channels,
-            # not the first 3 channels (Bright/AF633/Gcg).
-            if cell_type == 'islet' and extra_channel_tiles and n_ch >= 6:
-                # channel_keys maps slot indices to CZI channel indices
-                # Find slots corresponding to CZI channels 2, 3, 5
-                slot_2 = next((i for i, k in enumerate(channel_keys) if k == 2), None)
-                slot_3 = next((i for i, k in enumerate(channel_keys) if k == 3), None)
-                slot_5 = next((i for i, k in enumerate(channel_keys) if k == 5), None)
-                if slot_2 is not None and slot_3 is not None and slot_5 is not None:
-                    tile_rgb = np.stack([
-                        tile_raw[:, :, slot_2],  # Gcg -> R
-                        tile_raw[:, :, slot_3],  # Ins -> G
-                        tile_raw[:, :, slot_5],  # Sst -> B
-                    ], axis=-1)
+            # not the first 3 channels.
+            _islet_disp = islet_display_channels or [2, 3, 5]
+            if cell_type == 'islet' and extra_channel_tiles and n_ch >= 2:
+                # Find shared memory slots corresponding to the display channel indices
+                _disp_slots = []
+                for _dc in _islet_disp:
+                    slot = next((i for i, k in enumerate(channel_keys) if k == _dc), None) if channel_keys else None
+                    _disp_slots.append(slot)
+                if all(s is not None for s in _disp_slots):
+                    rgb_channels = [tile_raw[:, :, s] for s in _disp_slots]
+                    # Pad to 3 channels if fewer display channels specified
+                    while len(rgb_channels) < 3:
+                        rgb_channels.append(np.zeros_like(rgb_channels[0]))
+                    tile_rgb = np.stack(rgb_channels[:3], axis=-1)
                 else:
-                    logger.warning(f"[{worker_name}] Islet display channels 2,3,5 not all in "
+                    missing = [c for c, s in zip(_islet_disp, _disp_slots) if s is None]
+                    logger.warning(f"[{worker_name}] Islet display channels {missing} not in "
                                    f"channel_keys={channel_keys}. Using first 3 channels.")
 
             # has_tissue() check on uint16 BEFORE conversion
@@ -451,21 +460,34 @@ def _gpu_worker(
                     cd31_channel_data = cd31_tile.astype(np.float32)
 
             # Process tile using common function (includes CUDA retry)
+            # For multiscale: use local coords (0,0) so detections stay in downscaled space.
+            # Main process converts to full-res later via convert_detection_to_full_res().
+            # Scale pixel_size so diameter filters match the downscaled resolution.
+            effective_pixel_size = pixel_size_um * sf
+            tile_x_for_detect = 0 if sf > 1 else tile['x']
+            tile_y_for_detect = 0 if sf > 1 else tile['y']
+
+            # For multiscale vessel: override diameter bounds per scale
+            scale_ctx = (strategy._scale_override(scale_params)
+                         if sf > 1 and scale_params and hasattr(strategy, '_scale_override')
+                         else nullcontext())
+
             try:
-                result = process_single_tile(
-                    tile_rgb=tile_rgb,
-                    extra_channel_tiles=extra_channel_tiles,
-                    strategy=strategy,
-                    models=models,
-                    pixel_size_um=pixel_size_um,
-                    cell_type=cell_type,
-                    slide_name=slide_name,
-                    tile_x=tile['x'],
-                    tile_y=tile['y'],
-                    cd31_channel_data=cd31_channel_data,
-                    channel_names=channel_names,
-                    max_retries=3,
-                )
+                with scale_ctx:
+                    result = process_single_tile(
+                        tile_rgb=tile_rgb,
+                        extra_channel_tiles=extra_channel_tiles,
+                        strategy=strategy,
+                        models=models,
+                        pixel_size_um=effective_pixel_size,
+                        cell_type=cell_type,
+                        slide_name=slide_name,
+                        tile_x=tile_x_for_detect,
+                        tile_y=tile_y_for_detect,
+                        cd31_channel_data=cd31_channel_data,
+                        channel_names=channel_names,
+                        max_retries=3,
+                    )
 
                 if result is None:
                     output_queue.put({
@@ -473,6 +495,7 @@ def _gpu_worker(
                         'slide_name': slide_name, 'tile': tile,
                         'masks': np.zeros(tile_rgb.shape[:2], dtype=np.uint32),
                         'features_list': [],
+                        'scale_factor': sf,
                     })
                 else:
                     masks, features_list = result
@@ -482,6 +505,7 @@ def _gpu_worker(
                         'slide_name': slide_name, 'tile': tile,
                         'masks': masks,
                         'features_list': features_list,
+                        'scale_factor': sf,
                     })
 
             except Exception as e:
@@ -549,6 +573,7 @@ class MultiGPUTileProcessor:
         channel_names: Optional[Dict[int, str]] = None,
         variance_threshold: float = 1000.0,
         channel_keys: Optional[List[int]] = None,
+        islet_display_channels: Optional[List[int]] = None,
     ):
         self.num_gpus = num_gpus
         self.slide_info = slide_info
@@ -565,6 +590,7 @@ class MultiGPUTileProcessor:
         self.channel_names = channel_names
         self.variance_threshold = variance_threshold
         self.channel_keys = channel_keys
+        self.islet_display_channels = islet_display_channels
 
         self.workers: List[Process] = []
         self.input_queue: Optional[Queue] = None
@@ -648,6 +674,7 @@ class MultiGPUTileProcessor:
                     self.channel_names,
                     self.variance_threshold,
                     self.channel_keys,
+                    self.islet_display_channels,
                 ),
                 daemon=True,
             )

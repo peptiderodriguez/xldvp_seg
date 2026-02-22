@@ -742,27 +742,29 @@ def _compute_tile_percentiles(tile_rgb, p_low=1, p_high=99.5):
     return percentiles if percentiles else None
 
 
-def classify_islet_marker(features_dict, marker_thresholds=None):
+def classify_islet_marker(features_dict, marker_thresholds=None, marker_map=None):
     """Classify an islet cell by dominant hormone marker.
 
     Uses NORMALIZED channel values (same as HTML display) so contour color
-    matches what the user sees. Channels: ch2=Gcg (alpha), ch3=Ins (beta), ch5=Sst (delta).
+    matches what the user sees. Marker channels are defined by marker_map.
 
-    marker_thresholds = (norm_ranges, ch_thresholds, ratio_min) where:
-      norm_ranges = {ch: (p_low, p_high)} for percentile normalization
-      ch_thresholds = {ch: float} — per-channel gate (Otsu for Gcg/Ins, med+3MAD for Sst)
-      ratio_min = float — dominant marker must be >= ratio_min * second-highest
-
-    Classification:
-      1. Gate: cell must exceed at least one channel's threshold to be "endocrine"
-      2. Ratio: among positive cells, dominant marker must be ratio_min x the runner-up
-      3. If ratio not met → "multi" (co-expressing, orange contour)
+    Args:
+        features_dict: dict with 'ch{N}_mean' feature keys
+        marker_thresholds: (norm_ranges, ch_thresholds, ratio_min) from compute_islet_marker_thresholds()
+        marker_map: dict mapping marker name → CZI channel index, e.g. {'gcg': 2, 'ins': 3, 'sst': 5}
 
     Returns (class_name, contour_color_rgb).
     """
-    gcg = features_dict.get('ch2_mean', 0)
-    ins = features_dict.get('ch3_mean', 0)
-    sst = features_dict.get('ch5_mean', 0)
+    if marker_map is None:
+        marker_map = {'gcg': 2, 'ins': 3, 'sst': 5}
+
+    # Build ordered marker list with colors (R, G, B for first 3 markers)
+    _marker_colors = [(255, 50, 50), (50, 255, 50), (50, 50, 255)]
+    marker_names = list(marker_map.keys())
+    marker_vals = {}
+    for name in marker_names:
+        ch_idx = marker_map[name]
+        marker_vals[name] = features_dict.get(f'ch{ch_idx}_mean', 0)
 
     if marker_thresholds is None:
         return 'none', (128, 128, 128)
@@ -776,27 +778,25 @@ def classify_islet_marker(features_dict, marker_thresholds=None):
             return 0.0
         return max(0.0, min(1.0, (val - lo) / (hi - lo)))
 
-    gcg_n = _norm(gcg, 'ch2')
-    ins_n = _norm(ins, 'ch3')
-    sst_n = _norm(sst, 'ch5')
+    normed = {}
+    positive = {}
+    for name in marker_names:
+        ch_key = f'ch{marker_map[name]}'
+        normed[name] = _norm(marker_vals[name], ch_key)
+        positive[name] = normed[name] >= ch_thresholds.get(ch_key, 0.5)
 
     # Gate: must exceed at least one channel's threshold
-    gcg_pos = gcg_n >= ch_thresholds.get('ch2', 0.5)
-    ins_pos = ins_n >= ch_thresholds.get('ch3', 0.5)
-    sst_pos = sst_n >= ch_thresholds.get('ch5', 0.5)
-
-    if not (gcg_pos or ins_pos or sst_pos):
+    if not any(positive.values()):
         return 'none', (128, 128, 128)
 
     # Ratio classification among gated cells
-    markers = [
-        ('alpha', gcg_n, (255, 50, 50)),
-        ('beta',  ins_n, (50, 255, 50)),
-        ('delta', sst_n, (50, 50, 255)),
-    ]
+    markers = []
+    for i, name in enumerate(marker_names):
+        color = _marker_colors[i] if i < len(_marker_colors) else (200, 200, 200)
+        markers.append((name, normed[name], color))
     markers.sort(key=lambda x: x[1], reverse=True)
     best_name, best_val, best_color = markers[0]
-    second_val = markers[1][1]
+    second_val = markers[1][1] if len(markers) > 1 else 0
 
     if second_val > 0 and best_val / second_val < ratio_min:
         return 'multi', (255, 170, 0)  # orange
@@ -804,13 +804,14 @@ def classify_islet_marker(features_dict, marker_thresholds=None):
     return best_name, best_color
 
 
-def compute_islet_marker_thresholds(all_detections, vis_threshold_overrides=None, ratio_min=1.5):
+def compute_islet_marker_thresholds(all_detections, vis_threshold_overrides=None, ratio_min=1.5,
+                                    marker_map=None):
     """Compute per-channel thresholds for islet marker classification.
 
     For each marker channel:
       1. Normalize raw values to [0,1] using population p1-p99.5 percentiles
-      2. Otsu threshold for channels with bimodal separation (Gcg, Ins)
-      3. median+3*MAD for channels with low dynamic range (Sst)
+      2. Otsu threshold for channels with bimodal separation
+      3. median+3*MAD for channels with low dynamic range
       4. Fallback: if Otsu gives >15% positive, use med+3*MAD instead
 
     Args:
@@ -819,10 +820,15 @@ def compute_islet_marker_thresholds(all_detections, vis_threshold_overrides=None
             per-channel thresholds (e.g. {'ch5': 0.6})
         ratio_min: dominant marker must be >= ratio_min * second-highest
             to be classified as single-marker. Otherwise → "multi".
+        marker_map: dict mapping marker name → CZI channel index,
+            e.g. {'gcg': 2, 'ins': 3, 'sst': 5}
 
     Returns (norm_ranges, ch_thresholds, ratio_min) for classify_islet_marker(),
         or None if too few detections for reliable thresholds.
     """
+    if marker_map is None:
+        marker_map = {'gcg': 2, 'ins': 3, 'sst': 5}
+
     if len(all_detections) < 10:
         logger.warning(f"Only {len(all_detections)} detections — too few for reliable "
                        "marker thresholds. Skipping marker classification.")
@@ -830,14 +836,20 @@ def compute_islet_marker_thresholds(all_detections, vis_threshold_overrides=None
 
     from skimage.filters import threshold_otsu
 
-    gcg = np.array([d.get('features', {}).get('ch2_mean', 0) for d in all_detections])
-    ins = np.array([d.get('features', {}).get('ch3_mean', 0) for d in all_detections])
-    sst = np.array([d.get('features', {}).get('ch5_mean', 0) for d in all_detections])
+    # Build arrays from features using marker_map channel indices
+    marker_arrays = {}
+    for name, ch_idx in marker_map.items():
+        marker_arrays[name] = np.array([
+            d.get('features', {}).get(f'ch{ch_idx}_mean', 0) for d in all_detections
+        ])
 
     norm_ranges = {}
     ch_thresholds = {}
 
-    for ch_key, ch_name, arr in [('ch2', 'Gcg', gcg), ('ch3', 'Ins', ins), ('ch5', 'Sst', sst)]:
+    for name, ch_idx in marker_map.items():
+        ch_key = f'ch{ch_idx}'
+        ch_name = name.capitalize()
+        arr = marker_arrays[name]
         # Exclude zero-valued entries (cells with no signal or missing features)
         # to prevent pulling down p1 percentile and skewing Otsu thresholds
         arr_pos = arr[arr > 0]
@@ -901,7 +913,7 @@ def compute_islet_marker_thresholds(all_detections, vis_threshold_overrides=None
 def filter_and_create_html_samples(
     features_list, tile_x, tile_y, tile_rgb, masks, pixel_size_um,
     slide_name, cell_type, html_score_threshold, min_area_um2=25.0,
-    tile_percentiles=None, marker_thresholds=None,
+    tile_percentiles=None, marker_thresholds=None, marker_map=None,
 ):
     """Filter detections by quality and create HTML samples.
 
@@ -932,7 +944,7 @@ def filter_and_create_html_samples(
         sample = create_sample_from_detection(
             tile_x, tile_y, tile_rgb, masks, feat, pixel_size_um, slide_name,
             cell_type=cell_type, tile_percentiles=tile_percentiles,
-            marker_thresholds=marker_thresholds,
+            marker_thresholds=marker_thresholds, marker_map=marker_map,
         )
         if sample:
             samples.append(sample)
@@ -1445,7 +1457,7 @@ def _export_lmd_simple(detections, output_path, pixel_size_um, image_height_px,
 # SAMPLE CREATION FOR HTML
 # =============================================================================
 
-def create_sample_from_detection(tile_x, tile_y, tile_rgb, masks, feat, pixel_size_um, slide_name, cell_type='nmj', crop_size=None, tile_percentiles=None, marker_thresholds=None):
+def create_sample_from_detection(tile_x, tile_y, tile_rgb, masks, feat, pixel_size_um, slide_name, cell_type='nmj', crop_size=None, tile_percentiles=None, marker_thresholds=None, marker_map=None):
     """Create an HTML sample from a detection.
 
     Crop size is calculated dynamically to be 100% larger than the mask,
@@ -1518,7 +1530,7 @@ def create_sample_from_detection(tile_x, tile_y, tile_rgb, masks, feat, pixel_si
     contour_color = (0, 255, 0)  # default green
     marker_class = None
     if cell_type == 'islet' and marker_thresholds is not None:
-        marker_class, contour_color = classify_islet_marker(features, marker_thresholds)
+        marker_class, contour_color = classify_islet_marker(features, marker_thresholds, marker_map=marker_map)
 
     # Normalize and draw contour
     crop_norm = percentile_normalize(crop, p_low=1, p_high=99.5, global_percentiles=tile_percentiles)
@@ -1547,6 +1559,7 @@ def create_sample_from_detection(tile_x, tile_y, tile_rgb, masks, feat, pixel_si
     # Add marker classification for islet
     if marker_class is not None:
         stats['marker_class'] = marker_class
+        stats['marker_color'] = f'#{contour_color[0]:02x}{contour_color[1]:02x}{contour_color[2]:02x}'
 
     # Add cell-type specific stats
     if 'elongation' in features:
@@ -1627,6 +1640,18 @@ def run_pipeline(args):
     logger.info(f"  Pixel size: {pixel_size_um:.4f} um/px")
     if use_ram:
         logger.info(f"  Channel {args.channel} loaded to RAM")
+
+    # Always log channel metadata so the log is self-documenting
+    try:
+        _czi_meta = get_czi_metadata(czi_path)
+        logger.info(f"  CZI channels ({_czi_meta['n_channels']}):")
+        for _ch in _czi_meta['channels']:
+            _ex = f"{_ch['excitation_nm']:.0f}" if _ch['excitation_nm'] else "?"
+            _em = f"{_ch['emission_nm']:.0f}" if _ch['emission_nm'] else "?"
+            _label = _ch['fluorophore'] if _ch['fluorophore'] != 'N/A' else _ch['name']
+            logger.info(f"    [{_ch['index']}] {_ch['name']:<20s}  Ex {_ex} → Em {_em} nm  ({_label})")
+    except Exception as _e:
+        logger.warning(f"  Could not read channel metadata: {_e}")
 
     # Load additional channels if --all-channels specified (for NMJ specificity checking)
     all_channel_data = {args.channel: loader.channel_data}  # Primary channel
@@ -2051,198 +2076,329 @@ def run_pipeline(args):
     all_detections = []  # Universal list with global coordinates
     total_detections = 0
     deferred_html_tiles = []  # For islet: defer HTML until marker thresholds computed
+    is_multiscale = args.cell_type == 'vessel' and getattr(args, 'multi_scale', False)
 
-    # Multi-scale vessel detection mode
-    if args.cell_type == 'vessel' and getattr(args, 'multi_scale', False):
-        logger.info("=" * 60)
-        logger.info("MULTI-SCALE VESSEL DETECTION ENABLED")
-        logger.info("=" * 60)
+    # ---- Shared memory creation (used by BOTH regular and multiscale paths) ----
+    num_gpus = getattr(args, 'num_gpus', 1)
 
-        # Parse scale factors
-        scales = [int(s.strip()) for s in args.scales.split(',')]
-        iou_threshold = getattr(args, 'multiscale_iou_threshold', 0.3)
+    if len(all_channel_data) < 2:
+        logger.warning("Pipeline works best with --all-channels for multi-channel features")
 
-        logger.info(f"Scales: {scales} (coarse to fine)")
-        logger.info(f"IoU threshold for deduplication: {iou_threshold}")
+    from segmentation.processing.multigpu_shm import SharedSlideManager
+    from segmentation.processing.multigpu_worker import MultiGPUTileProcessor
 
-        # Run multi-scale detection
-        # The strategy.detect_multiscale() handles all tile iteration internally
-        from tqdm import tqdm as tqdm_progress
+    shm_manager = SharedSlideManager()
 
-        def progress_callback(scale, done, total):
-            """Progress callback for multi-scale detection."""
-            pass  # tqdm handles progress display
+    try:
+        # Load ALL channels to shared memory (RGB display uses first 3, feature extraction needs all)
+        ch_keys = sorted(all_channel_data.keys())
+        n_channels = len(ch_keys)
+        h, w = all_channel_data[ch_keys[0]].shape
+        logger.info(f"Creating shared memory for {n_channels} channels ({h}x{w})...")
+        logger.info(f"  Channel mapping: {ch_keys}")
 
-        all_masks, detections = strategy.detect_multiscale(
-            tile_getter=lambda x, y, size, ch, sf: loader.get_tile(x, y, size, ch, scale_factor=sf),
-            models=detector.models,
-            mosaic_width=mosaic_info['width'],
-            mosaic_height=mosaic_info['height'],
-            tile_size=args.tile_size,
-            scales=scales,
-            pixel_size_um=pixel_size_um,
-            channel=args.channel,
-            iou_threshold=iou_threshold,
-            sample_fraction=args.sample_fraction,
-            progress_callback=progress_callback,
+        slide_shm_arr = shm_manager.create_slide_buffer(
+            slide_name, (h, w, n_channels), all_channel_data[ch_keys[0]].dtype
         )
+        for i, ch_key in enumerate(ch_keys):
+            slide_shm_arr[:, :, i] = all_channel_data[ch_key]
+            logger.info(f"  Loaded channel {ch_key} to shared memory slot {i}")
 
-        # Convert to features list format
-        features_list = detections_to_features_list(detections, args.cell_type)
-        total_detections = len(features_list)
+        ch_to_slot = {ch_key: i for i, ch_key in enumerate(ch_keys)}
 
-        logger.info(f"Multi-scale detection complete: {total_detections} vessels")
+        # Free original channel data — everything is now in shared memory
+        mem_freed_gb = sum(arr.nbytes for arr in all_channel_data.values()) / (1024**3)
+        del all_channel_data
+        loader.channel_data = None
+        gc.collect()
+        logger.info(f"Freed all_channel_data ({mem_freed_gb:.1f} GB) — using shared memory for all reads")
 
-        # Create samples for HTML (using full-resolution crops)
-        for feat in features_list:
-            features_dict = feat.get('features', {})
+        # Build strategy parameters from the already-constructed params dict
+        strategy_params = dict(params)
 
-            # Get center coordinates (already in full resolution)
-            center = features_dict.get('global_center', features_dict.get('center', [0, 0]))
-            if isinstance(center, (list, tuple)) and len(center) >= 2:
-                cx, cy = int(center[0]), int(center[1])
+        # Get classifier path
+        classifier_path = None
+        if args.cell_type == 'nmj':
+            classifier_path = getattr(args, 'nmj_classifier', None)
+            if classifier_path:
+                logger.info(f"Using specified NMJ classifier: {classifier_path}")
             else:
-                continue
-
-            # Calculate crop region in full resolution
-            # Use mask bounding box if available, otherwise estimate from diameter
-            diameter_um = features_dict.get('outer_diameter_um', 50)
-            diameter_px = int(diameter_um / pixel_size_um)
-            crop_size = max(300, min(800, int(diameter_px * 2)))
-
-            # Generate UID
-            uid = f"{slide_name}_vessel_{cx}_{cy}"
-
-            # Create detection dict for export
-            detection_dict = {
-                'uid': uid,
-                'slide': slide_name,
-                'center': [cx, cy],
-                'center_um': [cx * pixel_size_um, cy * pixel_size_um],
-                'features': features_dict,
-                'scale_detected': features_dict.get('scale_detected', 1),
-            }
-            all_detections.append(detection_dict)
-
-            # Create HTML sample with a crop around the detection center
-            half = crop_size // 2
-            y1 = max(0, cy - half)
-            x1 = max(0, cx - half)
-            y2 = min(mosaic_info['height'], cy + half)
-            x2 = min(mosaic_info['width'], cx + half)
-
-            if len(all_channel_data) >= 3:
-                ch_keys = sorted(all_channel_data.keys())[:3]
-                crop_rgb = np.stack([
-                    all_channel_data[ch_keys[i]][y1:y2, x1:x2]
-                    for i in range(3)
-                ], axis=-1)
+                logger.info("No --nmj-classifier specified — will return all candidates (annotation run)")
+        elif args.cell_type == 'islet':
+            classifier_path = getattr(args, 'islet_classifier', None)
+            if classifier_path:
+                logger.info(f"Using specified islet classifier: {classifier_path}")
             else:
-                crop_data = loader.channel_data[y1:y2, x1:x2]
-                crop_rgb = np.stack([crop_data] * 3, axis=-1)
-            if crop_rgb.dtype == np.uint16:
-                crop_rgb = (crop_rgb / 256).astype(np.uint8)
+                logger.info("No --islet-classifier specified — will return all candidates (annotation run)")
+        elif args.cell_type == 'tissue_pattern':
+            classifier_path = getattr(args, 'tp_classifier', None)
+            if classifier_path:
+                logger.info(f"Using specified tissue_pattern classifier: {classifier_path}")
+            else:
+                logger.info("No --tp-classifier specified — will return all candidates (annotation run)")
 
-            if crop_rgb.size > 0:
-                from segmentation.io.html_export import image_to_base64
+        extract_deep = getattr(args, 'extract_deep_features', False)
+
+        # Vessel-specific params for multi-GPU
+        mgpu_cd31_channel = getattr(args, 'cd31_channel', None) if args.cell_type == 'vessel' else None
+        mgpu_channel_names = None
+        if args.cell_type == 'vessel' and getattr(args, 'channel_names', None):
+            names = args.channel_names.split(',')
+            mgpu_channel_names = {ch_keys[i]: name.strip()
+                                  for i, name in enumerate(names)
+                                  if i < len(ch_keys)}
+
+        # Add mosaic origin to slide_info so workers can convert global→relative coords
+        mgpu_slide_info = shm_manager.get_slide_info()
+        mgpu_slide_info[slide_name]['mosaic_origin'] = (x_start, y_start)
+
+        # ---- Multi-scale vessel detection mode ----
+        if is_multiscale:
+            logger.info("=" * 60)
+            logger.info(f"MULTI-SCALE VESSEL DETECTION — {num_gpus} GPU(s)")
+            logger.info("=" * 60)
+
+            from segmentation.utils.multiscale import (
+                get_scale_params, generate_tile_grid_at_scale,
+                convert_detection_to_full_res, merge_detections_across_scales,
+            )
+            from tqdm import tqdm as tqdm_progress
+
+            scales = [int(s.strip()) for s in args.scales.split(',')]
+            iou_threshold = getattr(args, 'multiscale_iou_threshold', 0.3)
+            tile_size = args.tile_size
+
+            logger.info(f"Scales: {scales} (coarse to fine)")
+            logger.info(f"IoU threshold for deduplication: {iou_threshold}")
+
+            # One MultiGPUTileProcessor for all scales (workers stay alive, models stay loaded)
+            with MultiGPUTileProcessor(
+                num_gpus=num_gpus,
+                slide_info=mgpu_slide_info,
+                cell_type='vessel',
+                strategy_params=strategy_params,
+                pixel_size_um=pixel_size_um,
+                classifier_path=classifier_path,
+                extract_deep_features=extract_deep,
+                extract_sam2_embeddings=True,
+                detection_channel=tissue_channel,
+                cd31_channel=mgpu_cd31_channel,
+                channel_names=mgpu_channel_names,
+                variance_threshold=variance_threshold,
+                channel_keys=ch_keys,
+            ) as processor:
+
+                all_scale_detections = []  # Accumulate full-res detections across scales
+                total_tiles_submitted = 0
+
+                for scale in scales:
+                    scale_params = get_scale_params(scale)
+                    scale_tiles = generate_tile_grid_at_scale(
+                        mosaic_info['width'], mosaic_info['height'],
+                        tile_size, scale, overlap=0,
+                    )
+
+                    # Sample tiles if requested
+                    if args.sample_fraction < 1.0:
+                        n_sample = max(1, int(len(scale_tiles) * args.sample_fraction))
+                        indices = np.random.choice(len(scale_tiles), n_sample, replace=False)
+                        scale_tiles = [scale_tiles[i] for i in indices]
+
+                    logger.info(
+                        f"Scale 1/{scale}x: {len(scale_tiles)} tiles, "
+                        f"pixel_size={pixel_size_um * scale:.3f} µm, "
+                        f"target: {scale_params.get('description', '')}"
+                    )
+
+                    # Submit tiles for this scale with scale metadata
+                    for tx_s, ty_s in scale_tiles:
+                        # Tile coords in full-res space (for shm extraction):
+                        # worker subtracts mosaic_origin, then strides by sf
+                        tile_with_dims = {
+                            'x': x_start + tx_s * scale,
+                            'y': y_start + ty_s * scale,
+                            'w': tile_size * scale,
+                            'h': tile_size * scale,
+                            'scale_factor': scale,
+                            'scale_params': scale_params,
+                            'tile_x_scaled': tx_s,
+                            'tile_y_scaled': ty_s,
+                        }
+                        processor.submit_tile(slide_name, tile_with_dims)
+
+                    # Collect results for this scale
+                    pbar = tqdm_progress(total=len(scale_tiles), desc=f"Scale 1/{scale}x")
+                    scale_det_count = 0
+                    results_collected = 0
+
+                    while results_collected < len(scale_tiles):
+                        result = processor.collect_result(timeout=3600)
+                        if result is None:
+                            logger.warning(f"Timeout at scale 1/{scale}x")
+                            break
+
+                        results_collected += 1
+                        pbar.update(1)
+
+                        if result['status'] == 'success':
+                            tile_dict = result['tile']
+                            features_list = result['features_list']
+                            sf = result.get('scale_factor', scale)
+                            tx_s = tile_dict.get('tile_x_scaled', 0)
+                            ty_s = tile_dict.get('tile_y_scaled', 0)
+
+                            # Apply vessel classifiers
+                            apply_vessel_classifiers(features_list, vessel_classifier, vessel_type_classifier)
+
+                            # Convert each detection from downscaled-local to full-res global
+                            for feat in features_list:
+                                # FIX 1: Promote contour keys — detections_to_features_list
+                                # outputs 'outer_contour'/'inner_contour' but
+                                # convert_detection_to_full_res expects 'outer'/'inner'
+                                if 'outer_contour' in feat and 'outer' not in feat:
+                                    feat['outer'] = feat.pop('outer_contour')
+                                if 'inner_contour' in feat and 'inner' not in feat:
+                                    feat['inner'] = feat.pop('inner_contour')
+                                if feat.get('features', {}).get('detection_type') == 'arc':
+                                    feat['is_arc'] = True
+
+                                det_fullres = convert_detection_to_full_res(
+                                    feat, sf, tx_s, ty_s,
+                                    smooth=True,
+                                    smooth_base_factor=getattr(args, 'smooth_contours_factor', 3.0),
+                                )
+
+                                # FIX 2: Add mosaic origin — convert_detection_to_full_res
+                                # produces mosaic-relative coords (0-indexed into shm).
+                                # Add (x_start, y_start) for CZI-global coords matching
+                                # the regular pipeline.
+                                for key in ('center', 'centroid'):
+                                    if key in det_fullres:
+                                        det_fullres[key][0] += x_start
+                                        det_fullres[key][1] += y_start
+                                feats_d = det_fullres.get('features', {})
+                                if isinstance(feats_d, dict):
+                                    # features['center'] not scaled by convert_detection_to_full_res
+                                    if 'center' in feats_d and feats_d['center'] is not None:
+                                        fc = feats_d['center']
+                                        feats_d['center'] = [
+                                            (fc[0] + tx_s) * sf + x_start,
+                                            (fc[1] + ty_s) * sf + y_start,
+                                        ]
+                                    # outer_center/inner_center already scaled, add mosaic origin
+                                    for ck in ('outer_center', 'inner_center'):
+                                        if ck in feats_d and feats_d[ck] is not None:
+                                            feats_d[ck][0] += x_start
+                                            feats_d[ck][1] += y_start
+                                mosaic_offset = np.array([x_start, y_start], dtype=np.int32)
+                                if 'outer' in det_fullres and det_fullres['outer'] is not None:
+                                    det_fullres['outer'] = det_fullres['outer'] + mosaic_offset
+                                if 'inner' in det_fullres and det_fullres['inner'] is not None:
+                                    det_fullres['inner'] = det_fullres['inner'] + mosaic_offset
+
+                                # FIX 3: Rebuild outer_contour/outer_contour_global from
+                                # scaled+offset contours (worker created these in downscaled
+                                # local space with tile_x=0, tile_y=0)
+                                for ckey in ('outer', 'inner'):
+                                    if ckey in det_fullres and det_fullres[ckey] is not None:
+                                        det_fullres[f'{ckey}_contour'] = det_fullres[ckey]
+                                        det_fullres[f'{ckey}_contour_global'] = [
+                                            [int(pt[0][0]), int(pt[0][1])]
+                                            for pt in det_fullres[ckey]
+                                        ]
+
+                                det_fullres['scale_detected'] = sf
+                                all_scale_detections.append(det_fullres)
+                                scale_det_count += 1
+
+                        elif result['status'] == 'error':
+                            logger.warning(f"Tile {result['tid']} error: {result.get('error', 'unknown')}")
+
+                    pbar.close()
+                    total_tiles_submitted += results_collected
+                    logger.info(f"Scale 1/{scale}x: {scale_det_count} detections")
+
+                    gc.collect()
+                    import torch
+                    torch.cuda.empty_cache()
+
+            # Merge across scales (contour-based IoU dedup)
+            logger.info(f"Merging {len(all_scale_detections)} detections across scales...")
+            merged_detections = merge_detections_across_scales(
+                all_scale_detections, iou_threshold=iou_threshold, prefer_larger=True,
+            )
+            logger.info(f"After merge: {len(merged_detections)} vessels")
+
+            # Regenerate UIDs from full-res global coords and build all_detections
+            for det in merged_detections:
+                features_dict = det.get('features', {})
+                center = features_dict.get('center', det.get('center', [0, 0]))
+                if isinstance(center, (list, tuple)) and len(center) >= 2:
+                    cx, cy = int(center[0]), int(center[1])
+                else:
+                    cx, cy = 0, 0
+
+                uid = f"{slide_name}_vessel_{cx}_{cy}"
+                det['uid'] = uid
+                det['slide'] = slide_name
+                det['center'] = [cx, cy]
+                det['center_um'] = [cx * pixel_size_um, cy * pixel_size_um]
+                det['global_center'] = [cx, cy]
+                det['global_center_um'] = [cx * pixel_size_um, cy * pixel_size_um]
+                all_detections.append(det)
+
+            total_detections = len(all_detections)
+
+            # Generate HTML crops from shared memory with percentile normalization
+            logger.info(f"Generating HTML crops for {len(all_detections)} multiscale detections...")
+            from segmentation.io.html_export import image_to_base64
+
+            for det in all_detections:
+                features_dict = det.get('features', {})
+                cx, cy = det['center']
+
+                diameter_um = features_dict.get('outer_diameter_um', 50)
+                diameter_px = int(diameter_um / pixel_size_um)
+                crop_size = max(300, min(800, int(diameter_px * 2)))
+                half = crop_size // 2
+
+                # Crop from shared memory (0-indexed, subtract mosaic origin)
+                rel_cy = cy - y_start
+                rel_cx = cx - x_start
+                y1 = max(0, rel_cy - half)
+                x1 = max(0, rel_cx - half)
+                y2 = min(h, rel_cy + half)
+                x2 = min(w, rel_cx + half)
+
+                if n_channels >= 3:
+                    crop_rgb = np.stack([
+                        slide_shm_arr[y1:y2, x1:x2, i] for i in range(3)
+                    ], axis=-1)
+                else:
+                    crop_rgb = np.stack([slide_shm_arr[y1:y2, x1:x2, 0]] * 3, axis=-1)
+
+                if crop_rgb.size == 0:
+                    continue
+
+                # Percentile normalize (not /256) for proper dynamic range
+                crop_rgb = percentile_normalize(crop_rgb, p_low=1, p_high=99.5)
+
                 b64_str, _ = image_to_base64(crop_rgb)
                 sample = {
-                    'uid': uid,
+                    'uid': det['uid'],
                     'image': b64_str,
                     'stats': features_dict,
                 }
                 all_samples.append(sample)
 
-        # Skip the regular tile loop - go directly to HTML export
-        logger.info(f"Multi-scale mode: {len(all_detections)} detections, {len(all_samples)} HTML samples")
+            logger.info(f"Multi-scale mode: {total_detections} detections, {len(all_samples)} HTML samples "
+                        f"from {total_tiles_submitted} tiles on {num_gpus} GPUs")
 
-    else:
-        # Tile processing via shared-memory worker infrastructure (all cell types, 1+ GPUs)
-        num_gpus = getattr(args, 'num_gpus', 1)
-        logger.info("=" * 60)
-        logger.info(f"{args.cell_type.upper()} DETECTION — {num_gpus} GPU(s)")
-        logger.info("=" * 60)
-
-        # Multi-channel data is recommended but not required
-        if len(all_channel_data) < 2:
-            logger.warning("Pipeline works best with --all-channels for multi-channel features")
-
-        from segmentation.processing.multigpu_shm import SharedSlideManager
-        from segmentation.processing.multigpu_worker import MultiGPUTileProcessor
-
-        # Create shared memory manager
-        shm_manager = SharedSlideManager()
-
-        try:
-            # Load ALL channels to shared memory (RGB display uses first 3, feature extraction needs all)
-            ch_keys = sorted(all_channel_data.keys())
-            n_channels = len(ch_keys)
-            h, w = all_channel_data[ch_keys[0]].shape
-            logger.info(f"Creating shared memory for {n_channels} channels ({h}x{w})...")
-            logger.info(f"  Channel mapping: {ch_keys}")
-
-            # Create shared memory buffer and load directly
-            slide_shm_arr = shm_manager.create_slide_buffer(
-                slide_name, (h, w, n_channels), all_channel_data[ch_keys[0]].dtype
-            )
-            for i, ch_key in enumerate(ch_keys):
-                slide_shm_arr[:, :, i] = all_channel_data[ch_key]
-                logger.info(f"  Loaded channel {ch_key} to shared memory slot {i}")
-
-            # Build channel→slot mapping so we can read from shm instead of all_channel_data
-            ch_to_slot = {ch_key: i for i, ch_key in enumerate(ch_keys)}
-
-            # Free original channel data — everything is now in shared memory
-            # This reclaims ~54 GB per channel (e.g. 108 GB for 2-channel coronal)
-            mem_freed_gb = sum(arr.nbytes for arr in all_channel_data.values()) / (1024**3)
-            del all_channel_data
-            # Also release loader's reference to primary channel array
-            loader.channel_data = None
-            gc.collect()
-            logger.info(f"Freed all_channel_data ({mem_freed_gb:.1f} GB) — using shared memory for all reads")
-
-            # Build strategy parameters from the already-constructed params dict
-            strategy_params = dict(params)  # params built by build_detection_params()
-
-            # Get classifier path — only use if explicitly specified
-            # Note: classifier_loaded is already set during detector initialization above;
-            # we just need the path string for the multi-GPU workers.
-            classifier_path = None
-            if args.cell_type == 'nmj':
-                classifier_path = getattr(args, 'nmj_classifier', None)
-                if classifier_path:
-                    logger.info(f"Using specified NMJ classifier: {classifier_path}")
-                else:
-                    logger.info("No --nmj-classifier specified — will return all candidates (annotation run)")
-            elif args.cell_type == 'islet':
-                classifier_path = getattr(args, 'islet_classifier', None)
-                if classifier_path:
-                    logger.info(f"Using specified islet classifier: {classifier_path}")
-                else:
-                    logger.info("No --islet-classifier specified — will return all candidates (annotation run)")
-            elif args.cell_type == 'tissue_pattern':
-                classifier_path = getattr(args, 'tp_classifier', None)
-                if classifier_path:
-                    logger.info(f"Using specified tissue_pattern classifier: {classifier_path}")
-                else:
-                    logger.info("No --tp-classifier specified — will return all candidates (annotation run)")
-
-            # Create multi-GPU processor (supports all cell types)
-            extract_deep = getattr(args, 'extract_deep_features', False)
-
-            # Vessel-specific params for multi-GPU
-            mgpu_cd31_channel = getattr(args, 'cd31_channel', None) if args.cell_type == 'vessel' else None
-            mgpu_channel_names = None
-            if args.cell_type == 'vessel' and getattr(args, 'channel_names', None):
-                names = args.channel_names.split(',')
-                # ch_keys already set from line above shm creation
-                mgpu_channel_names = {ch_keys[i]: name.strip()
-                                      for i, name in enumerate(names)
-                                      if i < len(ch_keys)}
-
-            # Add mosaic origin to slide_info so workers can convert global→relative coords
-            mgpu_slide_info = shm_manager.get_slide_info()
-            mgpu_slide_info[slide_name]['mosaic_origin'] = (x_start, y_start)
+        # ---- Regular (non-multiscale) tile processing ----
+        else:
+            logger.info("=" * 60)
+            logger.info(f"{args.cell_type.upper()} DETECTION — {num_gpus} GPU(s)")
+            logger.info("=" * 60)
 
             with MultiGPUTileProcessor(
                 num_gpus=num_gpus,
@@ -2258,6 +2414,7 @@ def run_pipeline(args):
                 channel_names=mgpu_channel_names,
                 variance_threshold=variance_threshold,
                 channel_keys=ch_keys,
+                islet_display_channels=getattr(args, 'islet_display_chs', None),
             ) as processor:
 
                 # Submit all tiles (add tile dimensions for worker)
@@ -2322,13 +2479,19 @@ def run_pipeline(args):
                             # Use masks.shape to handle edge tiles (smaller than tile_size at boundaries)
                             tile_h, tile_w = masks.shape[:2]
                             # Read HTML crops from shared memory (all_channel_data freed after shm creation)
-                            if args.cell_type == 'islet' and all(k in ch_to_slot for k in (2, 3, 5)):
-                                # Islet: R=Gcg(ch2), G=Ins(ch3), B=Sst(ch5)
-                                tile_rgb_html = np.stack([
-                                    slide_shm_arr[rel_ty:rel_ty+tile_h, rel_tx:rel_tx+tile_w, ch_to_slot[2]],
-                                    slide_shm_arr[rel_ty:rel_ty+tile_h, rel_tx:rel_tx+tile_w, ch_to_slot[3]],
-                                    slide_shm_arr[rel_ty:rel_ty+tile_h, rel_tx:rel_tx+tile_w, ch_to_slot[5]],
-                                ], axis=-1)
+                            if args.cell_type == 'islet' and hasattr(args, 'islet_display_chs'):
+                                # Islet: display channels from --islet-display-channels (R, G, B)
+                                _islet_disp = args.islet_display_chs
+                                _shm_dtype = slide_shm_arr.dtype
+                                rgb_channels = []
+                                for _ci in range(3):
+                                    if _ci < len(_islet_disp) and _islet_disp[_ci] in ch_to_slot:
+                                        rgb_channels.append(
+                                            slide_shm_arr[rel_ty:rel_ty+tile_h, rel_tx:rel_tx+tile_w, ch_to_slot[_islet_disp[_ci]]]
+                                        )
+                                    else:
+                                        rgb_channels.append(np.zeros((tile_h, tile_w), dtype=_shm_dtype))
+                                tile_rgb_html = np.stack(rgb_channels, axis=-1)
                             elif args.cell_type == 'tissue_pattern':
                                 # Tissue pattern: configurable R/G/B display channels
                                 # Handles any number of display channels (1, 2, or 3+), always produces (h, w, 3)
@@ -2393,12 +2556,15 @@ def run_pipeline(args):
 
                 # Deferred HTML generation for islet (needs population-level marker thresholds)
                 if deferred_html_tiles and args.cell_type == 'islet':
-                    marker_thresholds = compute_islet_marker_thresholds(all_detections) if all_detections else None
+                    _islet_mm = getattr(args, 'islet_marker_map', None)
+                    marker_thresholds = compute_islet_marker_thresholds(
+                        all_detections, marker_map=_islet_mm) if all_detections else None
                     # Add marker_class to each detection for JSON export
                     if marker_thresholds:
                         counts = {}
                         for det in all_detections:
-                            mc, _ = classify_islet_marker(det.get('features', {}), marker_thresholds)
+                            mc, _ = classify_islet_marker(
+                                det.get('features', {}), marker_thresholds, marker_map=_islet_mm)
                             det['marker_class'] = mc
                             counts[mc] = counts.get(mc, 0) + 1
                         logger.info(f"Islet marker classification: {counts}")
@@ -2410,6 +2576,7 @@ def run_pipeline(args):
                             args.html_score_threshold,
                             tile_percentiles=dt['tile_pct'],
                             marker_thresholds=marker_thresholds,
+                            marker_map=_islet_mm,
                         )
                         all_samples.extend(html_samples)
                     deferred_html_tiles = []  # clear after processing
@@ -2417,15 +2584,16 @@ def run_pipeline(args):
 
             logger.info(f"Processing complete: {total_detections} {args.cell_type} detections from {results_collected} tiles")
 
-        finally:
-            # Cleanup shared memory
-            shm_manager.cleanup()
+    finally:
+        # Cleanup shared memory
+        shm_manager.cleanup()
 
     logger.info(f"Total detections (pre-dedup): {len(all_detections)}")
 
     # Deduplication: tile overlap causes same detection in adjacent tiles
     # Uses actual mask pixel overlap (loads HDF5 mask files) for accurate dedup
-    if getattr(args, 'tile_overlap', 0) > 0 and len(all_detections) > 0:
+    # Skip for multiscale — already deduped by contour IoU in merge_detections_across_scales()
+    if not is_multiscale and getattr(args, 'tile_overlap', 0) > 0 and len(all_detections) > 0:
         from segmentation.processing.deduplication import deduplicate_by_mask_overlap
         pre_dedup = len(all_detections)
         mask_fn = f'{args.cell_type}_masks.h5'
@@ -2462,27 +2630,45 @@ def run_pipeline(args):
     logger.info(f"Exporting to HTML ({len(all_samples)} samples)...")
     html_dir = slide_output_dir / "html"
 
-    # Channel legend for multi-channel images
+    # Channel legend for multi-channel images — derived from CZI metadata when available
     channel_legend = None
+
+    def _channel_label(ch_idx):
+        """Get human-readable label for a channel index from CZI metadata."""
+        try:
+            for ch in _czi_meta['channels']:
+                if ch['index'] == ch_idx:
+                    name = ch['name']
+                    em = f" ({ch['emission_nm']:.0f}nm)" if ch.get('emission_nm') else ''
+                    return f'{name}{em}'
+        except (NameError, TypeError, KeyError):
+            pass
+        return f'Ch{ch_idx}'
+
     if args.cell_type == 'nmj' and getattr(args, 'all_channels', False):
-        channel_legend = parse_channel_legend_from_filename(slide_name)
+        # Try CZI metadata first, fall back to filename parsing
+        try:
+            channel_legend = {
+                'red': _channel_label(0),
+                'green': _channel_label(1),
+                'blue': _channel_label(2),
+            }
+        except Exception:
+            channel_legend = parse_channel_legend_from_filename(slide_name)
     elif args.cell_type == 'islet':
+        _islet_disp = getattr(args, 'islet_display_chs', [2, 3, 5])
         channel_legend = {
-            'red': 'Gcg (alpha)',
-            'green': 'Ins (beta)',
-            'blue': 'Sst (delta)',
+            'red': _channel_label(_islet_disp[0]) if len(_islet_disp) > 0 else 'none',
+            'green': _channel_label(_islet_disp[1]) if len(_islet_disp) > 1 else 'none',
+            'blue': _channel_label(_islet_disp[2]) if len(_islet_disp) > 2 else 'none',
         }
     elif args.cell_type == 'tissue_pattern':
         tp_disp = [int(x) for x in args.tp_display_channels.split(',')]
-        probe_legend = parse_channel_legend_from_filename(slide_name)
-        if probe_legend:
-            channel_legend = probe_legend
-        else:
-            channel_legend = {
-                'red': f'Ch{tp_disp[0]}' if len(tp_disp) > 0 else 'none',
-                'green': f'Ch{tp_disp[1]}' if len(tp_disp) > 1 else 'none',
-                'blue': f'Ch{tp_disp[2]}' if len(tp_disp) > 2 else 'none',
-            }
+        channel_legend = {
+            'red': _channel_label(tp_disp[0]) if len(tp_disp) > 0 else 'none',
+            'green': _channel_label(tp_disp[1]) if len(tp_disp) > 1 else 'none',
+            'blue': _channel_label(tp_disp[2]) if len(tp_disp) > 2 else 'none',
+        }
 
     # Use slide_name + timestamp as experiment_name so each run gets its own
     # localStorage namespace (prevents stale annotations from prior runs).
@@ -2797,6 +2983,12 @@ def main():
                         help='Nuclear marker channel index for islet Cellpose input (default: 4, DAPI)')
     parser.add_argument('--islet-classifier', type=str, default=None,
                         help='Path to trained islet RF classifier (.pkl)')
+    parser.add_argument('--islet-display-channels', type=str, default='2,3,5',
+                        help='Comma-separated R,G,B channel indices for islet HTML display (default: 2,3,5). '
+                             'Channels are mapped to R/G/B in order.')
+    parser.add_argument('--islet-marker-channels', type=str, default='gcg:2,ins:3,sst:5',
+                        help='Marker-to-channel mapping for islet classification, as name:index pairs. '
+                             'Format: "gcg:2,ins:3,sst:5". Names are used in logs and legends.')
     parser.add_argument('--islet-min-area', type=float, default=30.0,
                         help='Minimum islet cell area in um² (default 30)')
     parser.add_argument('--islet-max-area', type=float, default=500.0,
@@ -2900,6 +3092,13 @@ def main():
     # Handle --cell-type islet: auto-enable all-channels, dedup by area (largest wins)
     if args.cell_type == 'islet':
         args.all_channels = True
+        # Parse --islet-display-channels into list of ints
+        args.islet_display_chs = [int(x.strip()) for x in args.islet_display_channels.split(',')]
+        # Parse --islet-marker-channels into dict: {name: channel_index}
+        args.islet_marker_map = {}
+        for pair in args.islet_marker_channels.split(','):
+            name, ch = pair.strip().split(':')
+            args.islet_marker_map[name.strip()] = int(ch.strip())
 
     # Handle --cell-type tissue_pattern: auto-enable all-channels
     if args.cell_type == 'tissue_pattern':

@@ -1,40 +1,31 @@
 # Project Plan and Task Tracking
-Last Updated: 2026-02-08 09:45:00
+Last Updated: 2026-02-22 03:45:00
 
-## Current Objectives
-- Comprehensive review of feature extraction pipeline and utility modules
+## Current Session: Multiscale Vessel Multi-GPU Review (2026-02-22 03:07)
+Review changes implementing multiscale vessel detection over multi-GPU infrastructure.
 
-## Current Session: Feature Extraction & Utils Deep Review (2026-02-08)
-- [x] Read and review feature_extraction.py - priority: high
-- [x] Read and review config.py - priority: high
-- [x] Read and review vessel_features.py - priority: high
-- [x] Read and review multiscale.py - priority: medium
-- [x] Read and review schemas.py - priority: medium
-- [x] Read and review deduplication.py - priority: medium
-- [x] Cross-reference feature constants across files - priority: high
-- [x] Compile final review report - priority: high
+### Findings: 3 critical, 3 medium, 3 low
+See review_multiscale_multigpu_2026-02-22.md
 
-## Completed Tasks (Previous Sessions)
-- [x] Pipeline Spec Review (Steps 1-6) - 2026-02-07
-- [x] Full code review of run_segmentation.py - 2026-02-07
-- [x] Detection strategy review - 2026-02-07 22:14
-- [x] I/O, HTML, Model, Utils layers review - 2026-02-07 22:30
-- [x] LMD pipeline review (clustering, contour_processing, run_lmd_export) - 2026-02-07 22:30
-- [x] Normalization review (stain_normalization, compute_normalization_params) - 2026-02-07 22:30
-- [x] Classification layer review - 2026-02-07 22:30
-- [x] Scripts / Tests / Utils review (26+ files) - 2026-02-07
-- [x] Processing pipeline + multi-GPU layer review (7 files) - 2026-02-07 22:13
-- [x] Multi-GPU post-fix review - 2026-02-08 09:30
-- [x] Classification pipeline review - 2026-02-08 09:30
-- [x] LMD Export Pipeline Deep Review - 2026-02-08 09:31
-- [x] Stain Normalization Deep Review - 2026-02-08 10:15
-- [x] HTML Export Review - 2026-02-08 10:30
-- [x] Entry Point Script Review - 2026-02-08 10:00
+### Tasks
+- [x] Read multigpu_worker.py - full (764 lines)
+- [x] Read run_segmentation.py (multiscale sections 2078-2564)
+- [x] Read segmentation/utils/multiscale.py (567 lines)
+- [x] Read vessel strategy _scale_override + detect_multiscale
+- [x] Read convert_detection_to_full_res + merge_detections_across_scales
+- [x] Read tile_processing.py for process_single_tile + enrich_detection_features
+- [x] Read multigpu_shm.py for shared memory structure
+- [x] Trace contour key names through full pipeline
+- [x] Trace coordinate flow end-to-end
+- [x] Write review summary
 
-## Notes and Observations
-- 29 issues found across 6 files (5 CRITICAL, 6 HIGH, 11 MEDIUM, 7 LOW)
-- test_mk_hspc_imports.py asserts MORPHOLOGICAL_FEATURES_COUNT==22, but config.py defines it as 78
-- test_mk_hspc_imports.py asserts RESNET_EMBEDDING_DIMENSION==2048, but config.py defines it as 4096
-- VESSEL_FEATURE_COUNT in feature_extraction.py (28) does not match vessel_features.py (32)
-- Center point scaling in convert_detection_to_full_res is inconsistent with contour scaling
-- Annotations to_unified() has silent overwrite on conflicts between old/new format
+### Critical Findings
+1. **Contour key mismatch**: `outer_contour` vs `outer` -- contours never scaled, dedup never works
+2. **Center coords 0-indexed vs global**: HTML crops at wrong position for non-zero-origin CZIs
+3. **outer_contour_global not updated**: LMD export would use wrong coordinates
+
+## Previous Sessions
+- Vessel Pipeline Review Round 2 (2026-02-21 19:09) - 1 critical, 3 medium, 3 low
+- Vessel Pipeline E2E Review Round 1 (2026-02-21 18:51) - 1 critical, 5 medium, 5 low
+- Vessel Pipeline Review - Max Area + Contour Smoothing (2026-02-21 18:28)
+- Islet Pipeline Path Review (2026-02-21 17:19)

@@ -904,8 +904,12 @@ def generate_annotation_page(
                 stats_parts.append(f"{_esc(conf)}")
         if 'marker_class' in stats:
             mc = _esc(str(stats['marker_class']))
-            mc_colors = {'alpha': '#ff5050', 'beta': '#50ff50', 'delta': '#5050ff', 'multi': '#ffaa00', 'none': '#888'}
-            mc_color = mc_colors.get(mc, '#888')
+            # Use stored marker_color (from classify_islet_marker contour color) if available
+            mc_color = stats.get('marker_color', '#888')
+            if mc in ('multi',):
+                mc_color = '#ffaa00'
+            elif mc in ('none',):
+                mc_color = '#888'
             stats_parts.append(f'<span style="color:{mc_color};font-weight:bold">{mc}</span>')
         if 'islet_id' in stats and stats['islet_id'] is not None:
             stats_parts.append(f'I{_esc(str(stats["islet_id"]))}')

@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
 """Regenerate islet HTML with marker-colored contours from existing detections.
 
-Reads saved features + masks, loads only the 3 display channels from CZI,
+Reads saved features + masks, loads only the display channels from CZI,
 computes population-level marker thresholds, and regenerates HTML with
-colored contours: red=alpha(Gcg), green=beta(Ins), blue=delta(Sst), gray=none.
+colored contours by marker type.
 """
 import argparse
 import json
@@ -23,8 +23,18 @@ from run_segmentation import (
     compute_islet_marker_thresholds,
     filter_and_create_html_samples,
     _compute_tile_percentiles,
+    get_czi_metadata,
 )
 from segmentation.io.html_export import export_samples_to_html
+
+
+def parse_marker_channels(s):
+    """Parse 'gcg:2,ins:3,sst:5' into dict."""
+    result = {}
+    for pair in s.split(','):
+        name, ch = pair.strip().split(':')
+        result[name.strip()] = int(ch.strip())
+    return result
 
 
 def main():
@@ -33,12 +43,16 @@ def main():
     parser.add_argument("--czi-path", required=True, help="Path to CZI file")
     parser.add_argument("--marker-only", action="store_true",
                         help="Only show cells expressing a marker (exclude gray/none)")
+    parser.add_argument("--display-channels", type=str, default="2,3,5",
+                        help="Comma-separated R,G,B channel indices for display (default: 2,3,5)")
+    parser.add_argument("--marker-channels", type=str, default="gcg:2,ins:3,sst:5",
+                        help="Marker-to-channel mapping for classification (default: gcg:2,ins:3,sst:5)")
     parser.add_argument("--threshold-gcg", type=float, default=None,
-                        help="Override Gcg (alpha) normalized threshold (default: Otsu auto)")
+                        help="Override first marker normalized threshold (default: Otsu auto)")
     parser.add_argument("--threshold-ins", type=float, default=None,
-                        help="Override Ins (beta) normalized threshold (default: Otsu auto)")
+                        help="Override second marker normalized threshold (default: Otsu auto)")
     parser.add_argument("--threshold-sst", type=float, default=None,
-                        help="Override Sst (delta) normalized threshold (default: Otsu auto)")
+                        help="Override third marker normalized threshold (default: Otsu auto)")
     parser.add_argument("--ratio-min", type=float, default=1.5,
                         help="Dominant marker must be >= ratio_min * runner-up (default: 1.5). "
                              "Cells below this ratio are classified as 'multi'.")
@@ -47,6 +61,11 @@ def main():
     run_dir = Path(args.run_dir)
     czi_path = Path(args.czi_path)
 
+    # Parse channel config
+    display_chs = [int(x.strip()) for x in args.display_channels.split(',')]
+    marker_map = parse_marker_channels(args.marker_channels)
+    marker_names = list(marker_map.keys())
+
     # Load existing detections
     det_path = run_dir / "islet_detections.json"
     print(f"Loading detections from {det_path}")
@@ -54,9 +73,9 @@ def main():
         all_detections = json.load(f)
     print(f"  {len(all_detections)} detections")
 
-    # Load CZI — only the 3 display channels + detection channel for metadata
-    print(f"Loading CZI display channels (2=Gcg, 3=Ins, 5=Sst)...")
-    loader = get_loader(czi_path, load_to_ram=True, channel=1)
+    # Load CZI — only the display channels
+    print(f"Loading CZI display channels {display_chs}...")
+    loader = get_loader(czi_path, load_to_ram=True, channel=display_chs[0])
     pixel_size_um = loader.get_pixel_size()
     x_start = loader.x_start
     y_start = loader.y_start
@@ -64,34 +83,32 @@ def main():
 
     # Load display channels
     all_channel_data = {}
-    for ch in [2, 3, 5]:
+    for ch in display_chs:
         print(f"  Loading channel {ch}...")
         loader.load_channel(ch)
         all_channel_data[ch] = loader._channel_data[ch]
 
-    # Compute marker thresholds from population (Otsu auto per channel, with optional overrides)
+    # Build threshold overrides keyed by ch{N}
     overrides = {}
-    if args.threshold_gcg is not None:
-        overrides['ch2'] = args.threshold_gcg
-    if args.threshold_ins is not None:
-        overrides['ch3'] = args.threshold_ins
-    if args.threshold_sst is not None:
-        overrides['ch5'] = args.threshold_sst
+    threshold_args = [args.threshold_gcg, args.threshold_ins, args.threshold_sst]
+    for i, name in enumerate(marker_names):
+        if i < len(threshold_args) and threshold_args[i] is not None:
+            overrides[f'ch{marker_map[name]}'] = threshold_args[i]
+
     marker_thresholds = compute_islet_marker_thresholds(
         all_detections, vis_threshold_overrides=overrides or None,
-        ratio_min=args.ratio_min,
+        ratio_min=args.ratio_min, marker_map=marker_map,
     )
 
     # Classify all detections
     counts = {}
     for det in all_detections:
-        mc, _ = classify_islet_marker(det.get('features', {}), marker_thresholds)
+        mc, _ = classify_islet_marker(det.get('features', {}), marker_thresholds, marker_map=marker_map)
         det['marker_class'] = mc
         counts[mc] = counts.get(mc, 0) + 1
     print(f"Marker classification: {counts}")
 
     # Save updated detections with marker_class
-    # Use recursive sanitizer to handle NaN/inf (NumpyEncoder passes them through)
     import math
     def _sanitize(obj):
         if isinstance(obj, dict):
@@ -145,7 +162,7 @@ def main():
         if args.marker_only:
             features_list = [
                 f for f in features_list
-                if classify_islet_marker(f.get('features', {}), marker_thresholds)[0] != 'none'
+                if classify_islet_marker(f.get('features', {}), marker_thresholds, marker_map=marker_map)[0] != 'none'
             ]
         print(f"  {len(features_list)} detections")
 
@@ -162,11 +179,15 @@ def main():
         rel_ty = tile_y - y_start
         tile_h, tile_w = masks.shape[:2]
 
-        tile_rgb = np.stack([
-            all_channel_data[2][rel_ty:rel_ty+tile_h, rel_tx:rel_tx+tile_w],
-            all_channel_data[3][rel_ty:rel_ty+tile_h, rel_tx:rel_tx+tile_w],
-            all_channel_data[5][rel_ty:rel_ty+tile_h, rel_tx:rel_tx+tile_w],
-        ], axis=-1)
+        rgb_channels = []
+        for ch in display_chs[:3]:
+            if ch in all_channel_data:
+                rgb_channels.append(all_channel_data[ch][rel_ty:rel_ty+tile_h, rel_tx:rel_tx+tile_w])
+            else:
+                rgb_channels.append(np.zeros((tile_h, tile_w), dtype=np.uint16))
+        while len(rgb_channels) < 3:
+            rgb_channels.append(np.zeros((tile_h, tile_w), dtype=np.uint16))
+        tile_rgb = np.stack(rgb_channels, axis=-1)
 
         tile_pct = _compute_tile_percentiles(tile_rgb)
 
@@ -176,18 +197,31 @@ def main():
             html_score_threshold=0.0,
             tile_percentiles=tile_pct,
             marker_thresholds=marker_thresholds,
+            marker_map=marker_map,
         )
         all_samples.extend(html_samples)
         print(f"  {len(html_samples)} HTML samples")
 
     print(f"\nTotal HTML samples: {len(all_samples)}")
 
-    # Generate HTML
+    # Generate HTML — derive legend from CZI metadata
     html_dir = run_dir / "html"
+    try:
+        meta = get_czi_metadata(czi_path)
+        def _ch_label(idx):
+            for ch in meta['channels']:
+                if ch['index'] == idx:
+                    em = f" ({ch['emission_nm']:.0f}nm)" if ch.get('emission_nm') else ''
+                    return f"{ch['name']}{em}"
+            return f'Ch{idx}'
+    except Exception:
+        def _ch_label(idx):
+            return f'Ch{idx}'
+
     channel_legend = {
-        'red': 'Gcg (alpha)',
-        'green': 'Ins (beta)',
-        'blue': 'Sst (delta)',
+        'red': _ch_label(display_chs[0]) if len(display_chs) > 0 else 'none',
+        'green': _ch_label(display_chs[1]) if len(display_chs) > 1 else 'none',
+        'blue': _ch_label(display_chs[2]) if len(display_chs) > 2 else 'none',
     }
 
     export_samples_to_html(
@@ -198,7 +232,9 @@ def main():
         channel_legend=channel_legend,
     )
     print(f"\nHTML exported to {html_dir}")
-    print(f"Marker legend: red contour=alpha, green=beta, blue=delta, gray=none")
+    marker_colors = ['red', 'green', 'blue']
+    legend_parts = [f"{c} contour={n}" for c, n in zip(marker_colors, marker_names)]
+    print(f"Marker legend: {', '.join(legend_parts)}, gray=none")
 
 
 if __name__ == '__main__':
