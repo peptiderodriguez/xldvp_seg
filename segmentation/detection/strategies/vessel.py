@@ -236,6 +236,18 @@ class VesselStrategy(DetectionStrategy, MultiChannelFeatureMixin):
     ARC_MAX_CONTOURS_TO_PROCESS = 500  # Limit contours to prevent performance issues
     ARC_MIN_CONTOUR_POINTS = 50  # Skip very small contours (more aggressive than 10)
 
+    # Supplementary lumen-first pass parameters (targeting great vessels)
+    # Higher floor than primary lumen-first: small vessels already caught by ring detection
+    SUPP_LUMEN_MIN_AREA_UM2 = 200.0
+    # Very permissive ellipse fit: great vessels have irregular/collapsed lumens
+    SUPP_LUMEN_MIN_ELLIPSE_FIT = 0.20
+    # Allow very elongated: collapsed vessels are highly eccentric
+    SUPP_LUMEN_MAX_ASPECT_RATIO = 6.0
+    # Slightly relaxed wall brightness (great vessels may have patchy SMA)
+    SUPP_LUMEN_MIN_WALL_BRIGHTNESS = 1.10
+    # Cap wall dilation to 50µm regardless of vessel size (prevents neighbor overlap)
+    SUPP_LUMEN_MAX_WALL_UM = 50.0
+
     def __init__(
         self,
         min_diameter_um: float = 10,
@@ -266,6 +278,8 @@ class VesselStrategy(DetectionStrategy, MultiChannelFeatureMixin):
         merge_iou_threshold: float = 0.5,
         # Lumen-first detection mode - finds dark lumens first, validates bright wall
         lumen_first: bool = False,
+        # Disable supplementary lumen-first pass (ring detection only)
+        ring_only: bool = False,
         # Contour smoothing - removes stair-step artifacts from coarse-scale detection
         smooth_contours: bool = True,
         smooth_contours_factor: float = 3.0,
@@ -329,8 +343,16 @@ class VesselStrategy(DetectionStrategy, MultiChannelFeatureMixin):
             self.parallel_detection = True
             logger.info("Multi-marker mode: auto-enabled parallel_detection")
 
-        # Lumen-first detection mode (default False, uses edge-based detection)
-        self.lumen_first = self._lumen_first
+        # Legacy lumen-first flag: now a no-op since supplementary lumen-first always runs
+        if self._lumen_first:
+            logger.info(
+                "--lumen-first is deprecated: supplementary lumen-first detection runs by default. "
+                "Use --ring-only to disable it."
+            )
+        self.lumen_first = False  # No longer used for branching
+
+        # Ring-only mode: disable supplementary lumen-first pass
+        self.ring_only = ring_only
 
         # Lock for detect_multiscale which temporarily mutates diameter bounds
         self._scale_lock = threading.Lock()
@@ -389,6 +411,16 @@ class VesselStrategy(DetectionStrategy, MultiChannelFeatureMixin):
             tile, models, pixel_size_um, cd31_channel,
             tile_x=tile_x, tile_y=tile_y
         )
+
+        # Supplementary lumen-first pass (unless ring_only)
+        if not self.ring_only:
+            lumen_candidates = self._supplementary_lumen_first(tile, pixel_size_um)
+            if lumen_candidates:
+                combined = ring_candidates + lumen_candidates
+                if len(combined) > 1:
+                    ring_candidates = self._merge_candidates(combined, iou_threshold=0.3)
+                else:
+                    ring_candidates = combined
 
         # Convert ring candidate dicts to binary masks (base class interface)
         h, w = tile.shape[:2]
@@ -623,6 +655,7 @@ class VesselStrategy(DetectionStrategy, MultiChannelFeatureMixin):
                         'is_partial': boundary_info['is_partial'],
                         'is_merged': False,
                         'source_tiles': [(tile_x, tile_y)],
+                        'detection_method': 'ring',
                     })
 
         # Detect partial vessels at boundaries (contours without complete ring structure)
@@ -722,6 +755,7 @@ class VesselStrategy(DetectionStrategy, MultiChannelFeatureMixin):
                                 'is_nested': True,
                                 'parent_vessel_idx': len(ring_candidates),
                                 'source_tiles': [(tile_x, tile_y)],
+                                'detection_method': 'ring',
                             })
 
                         for gc in grandchildren:
@@ -744,6 +778,7 @@ class VesselStrategy(DetectionStrategy, MultiChannelFeatureMixin):
                         'is_merged': False,
                         'is_nested': False,
                         'source_tiles': [(tile_x, tile_y)],
+                        'detection_method': 'ring',
                     })
 
         # Detect partial vessels at boundaries
@@ -774,6 +809,7 @@ class VesselStrategy(DetectionStrategy, MultiChannelFeatureMixin):
         max_aspect_ratio: float = 5.0,
         min_wall_brightness_ratio: float = 1.15,
         wall_thickness_fraction: float = 0.4,
+        max_wall_thickness_um: Optional[float] = None,
     ) -> List[Dict[str, Any]]:
         """
         Lumen-first vessel detection: find dark lumens, validate bright SMA+ wall.
@@ -793,6 +829,7 @@ class VesselStrategy(DetectionStrategy, MultiChannelFeatureMixin):
             max_aspect_ratio: Maximum major/minor axis ratio
             min_wall_brightness_ratio: Minimum wall/lumen intensity ratio
             wall_thickness_fraction: Wall region as fraction of lumen size
+            max_wall_thickness_um: Cap wall dilation to this many µm (None = no cap)
 
         Returns:
             List of candidate dicts with 'outer', 'inner', 'lumen_contour' keys
@@ -895,6 +932,11 @@ class VesselStrategy(DetectionStrategy, MultiChannelFeatureMixin):
             avg_radius = (major_axis + minor_axis) / 4
             wall_thickness = max(3, int(avg_radius * wall_thickness_fraction))
 
+            # Cap wall dilation to prevent neighbor overlap on large vessels
+            if max_wall_thickness_um is not None:
+                max_wall_px = int(max_wall_thickness_um / pixel_size_um)
+                wall_thickness = min(wall_thickness, max_wall_px)
+
             kernel_dilate = cv2.getStructuringElement(
                 cv2.MORPH_ELLIPSE,
                 (2 * wall_thickness + 1, 2 * wall_thickness + 1)
@@ -948,6 +990,35 @@ class VesselStrategy(DetectionStrategy, MultiChannelFeatureMixin):
             })
 
         logger.info(f"Lumen-first detection: {len(candidates)} vessels from {len(contours)} dark regions")
+        return candidates
+
+    def _supplementary_lumen_first(
+        self,
+        tile: np.ndarray,
+        pixel_size_um: float,
+    ) -> List[Dict[str, Any]]:
+        """
+        Supplementary lumen-first pass targeting great vessels.
+
+        Uses relaxed shape parameters and capped wall dilation to catch
+        vessels with dark lumens and irregular/folded walls that ring
+        detection misses (aorta, pulmonary artery, etc.).
+
+        Returns:
+            List of candidate dicts tagged with detection_method='lumen_first_supp'
+        """
+        candidates = self._detect_lumen_first(
+            tile,
+            pixel_size_um,
+            min_lumen_area_um2=self.SUPP_LUMEN_MIN_AREA_UM2,
+            min_ellipse_fit=self.SUPP_LUMEN_MIN_ELLIPSE_FIT,
+            max_aspect_ratio=self.SUPP_LUMEN_MAX_ASPECT_RATIO,
+            min_wall_brightness_ratio=self.SUPP_LUMEN_MIN_WALL_BRIGHTNESS,
+            wall_thickness_fraction=0.25,
+            max_wall_thickness_um=self.SUPP_LUMEN_MAX_WALL_UM,
+        )
+        for cand in candidates:
+            cand['detection_method'] = 'lumen_first_supp'
         return candidates
 
     def _compute_ellipse_fit_quality(
@@ -1153,6 +1224,7 @@ class VesselStrategy(DetectionStrategy, MultiChannelFeatureMixin):
                 'straightness': float(straightness),
                 'estimated_diameter_um': float(estimated_diameter_um),
                 'arc_confidence': float(arc_confidence),
+                'detection_method': 'ring_arc',
             })
 
         logger.debug(f"Detected {len(arc_candidates)} open vessel structures (arcs) in candidate mode")
@@ -1661,6 +1733,7 @@ class VesselStrategy(DetectionStrategy, MultiChannelFeatureMixin):
                 'source_tiles': [(tile_x, tile_y)],
                 'curvature_signature': curvature_sig,
                 'orientation': orientation,
+                'detection_method': 'ring',
             })
 
         return partial_candidates
@@ -2719,6 +2792,18 @@ class VesselStrategy(DetectionStrategy, MultiChannelFeatureMixin):
 
         merged['detected_by'] = sorted(list(all_markers))
 
+        # Combine detection_method provenance from all candidates
+        all_methods: Set[str] = set()
+        for cand in group:
+            method = cand.get('detection_method')
+            if method:
+                if isinstance(method, list):
+                    all_methods.update(method)
+                else:
+                    all_methods.add(method)
+        if all_methods:
+            merged['detection_method'] = sorted(list(all_methods))
+
         # Combine marker scores if present
         combined_scores: Dict[str, float] = {}
         for cand in group:
@@ -3775,13 +3860,12 @@ class VesselStrategy(DetectionStrategy, MultiChannelFeatureMixin):
         """
         import torch
 
-        # Get ring candidates - either parallel multi-marker or sequential SMA-only
+        # === Phase 1: Primary detection ===
         if (self.parallel_detection and
             extra_channels is not None and
             channel_names is not None and
             len(extra_channels) > 0):
             # Parallel multi-marker detection (SMA + CD31 + LYVE1)
-            # Uses ThreadPoolExecutor to run CPU-bound detection in parallel
             logger.info(
                 f"Running parallel multi-marker detection with {self.parallel_workers} workers "
                 f"(channels: {list(channel_names.values())})"
@@ -3808,21 +3892,40 @@ class VesselStrategy(DetectionStrategy, MultiChannelFeatureMixin):
                     f"Multi-marker merge: {pre_merge_count} candidates -> "
                     f"{len(ring_candidates)} after IoU deduplication (threshold={self.merge_iou_threshold})"
                 )
-        elif self.lumen_first:
-            # Lumen-first detection mode
-            ring_candidates = self._detect_lumen_first(
-                tile, pixel_size_um,
-                min_lumen_area_um2=50 if self.candidate_mode else 75,
-                min_ellipse_fit=0.40 if self.candidate_mode else 0.55,
-                max_aspect_ratio=5.0 if self.candidate_mode else 4.0,
-                min_wall_brightness_ratio=1.15,
-            )
         else:
             # Standard sequential SMA ring detection
             ring_candidates = self._segment_rings(
                 tile, models, pixel_size_um, cd31_channel,
                 tile_x=tile_x, tile_y=tile_y
             )
+
+        # === Phase 2: Supplementary lumen-first pass ===
+        # Catches great vessels (aorta, pulmonary artery) with dark lumens and
+        # irregular/folded walls that ring detection misses.
+        if not self.ring_only:
+            primary_count = len(ring_candidates)
+            lumen_candidates = self._supplementary_lumen_first(tile, pixel_size_um)
+
+            if lumen_candidates:
+                logger.info(
+                    f"Supplementary lumen-first: {len(lumen_candidates)} additional candidates "
+                    f"(primary had {primary_count})"
+                )
+                combined = ring_candidates + lumen_candidates
+                if len(combined) > 1:
+                    pre_merge = len(combined)
+                    ring_candidates = self._merge_candidates(
+                        combined,
+                        iou_threshold=0.3,
+                    )
+                    logger.info(
+                        f"Ring+lumen merge: {pre_merge} -> {len(ring_candidates)} "
+                        f"(deduplicated {pre_merge - len(ring_candidates)} overlaps)"
+                    )
+                else:
+                    ring_candidates = combined
+        else:
+            logger.debug("Ring-only mode: skipping supplementary lumen-first pass")
 
         # Attempt cross-tile merging if enabled and adjacent tiles have been processed
         if attempt_merge and tile_size is not None and self.cross_tile_config.enabled:
@@ -4012,6 +4115,7 @@ class VesselStrategy(DetectionStrategy, MultiChannelFeatureMixin):
                 'is_partial': vessel_feat.get('is_partial', False),
                 'is_merged': vessel_feat.get('is_merged', False),
                 'detection_type': vessel_feat.get('detection_type', 'complete'),
+                'detection_method': cand.get('detection_method', 'unknown'),
             })
 
         # Batch deep feature extraction (ResNet + DINOv2, masked + context)
@@ -4102,6 +4206,7 @@ class VesselStrategy(DetectionStrategy, MultiChannelFeatureMixin):
             if i < len(valid_candidates):
                 det.features['outer_contour'] = valid_candidates[i]['outer_contour']
                 det.features['inner_contour'] = valid_candidates[i]['inner_contour']  # May be None for partial
+                det.features['detection_method'] = valid_candidates[i].get('detection_method', 'unknown')
 
         # Sort detections by detection_confidence (continuous 0-1) descending —
         # more confident detections take priority during within-tile overlap checking
@@ -4825,6 +4930,7 @@ class VesselStrategy(DetectionStrategy, MultiChannelFeatureMixin):
             'smooth_contours': self.smooth_contours,
             'smooth_contours_factor': self.smooth_contours_factor,
             'max_tile_area_fraction': self.MAX_TILE_AREA_FRACTION,
+            'ring_only': self.ring_only,
         }
         return base_config
 

@@ -648,6 +648,7 @@ def create_strategy_for_cell_type(cell_type, params, pixel_size_um):
             classify_vessel_types=params.get('classify_vessel_types', False),
             candidate_mode=params.get('candidate_mode', False),
             lumen_first=params.get('lumen_first', False),
+            ring_only=params.get('ring_only', False),
             parallel_detection=params.get('parallel_detection', False),
             parallel_workers=params.get('parallel_workers', 3),
             multi_marker=params.get('multi_marker', False),
@@ -1991,6 +1992,7 @@ def run_pipeline(args):
             'vessel_classifier_path': args.vessel_classifier_path,
             'candidate_mode': args.candidate_mode,
             'lumen_first': getattr(args, 'lumen_first', False),
+            'ring_only': getattr(args, 'ring_only', False),
             'parallel_detection': getattr(args, 'parallel_detection', False),
             'parallel_workers': getattr(args, 'parallel_workers', 3),
             'multi_marker': getattr(args, 'multi_marker', False),
@@ -2914,11 +2916,13 @@ def main():
                              'Includes detection_confidence score (0-1) for each candidate. '
                              'Use for generating training data for manual annotation + RF classifier.')
     parser.add_argument('--lumen-first', action='store_true',
-                        help='Enable lumen-first vessel detection mode. '
-                             'Instead of detecting SMA+ walls first (contour hierarchy), this mode '
-                             'finds dark lumens using Otsu threshold, then validates bright SMA+ wall '
-                             'surrounding each lumen. Better for detecting vessels with incomplete walls. '
-                             'Fits ellipses to candidates and filters by shape quality.')
+                        help='[DEPRECATED] Lumen-first detection now runs automatically as a '
+                             'supplementary pass alongside ring detection. This flag is a no-op. '
+                             'Use --ring-only to disable the supplementary lumen-first pass.')
+    parser.add_argument('--ring-only', action='store_true',
+                        help='Disable the supplementary lumen-first detection pass. '
+                             'Only use Canny edge + contour hierarchy ring detection. '
+                             'Useful if you know there are no great vessels in the tissue.')
     parser.add_argument('--parallel-detection', action='store_true',
                         help='Enable parallel multi-marker vessel detection. '
                              'Runs SMA, CD31, and LYVE1 detection in parallel using CPU threads. '
