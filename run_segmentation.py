@@ -2539,14 +2539,21 @@ def run_pipeline(args):
                             tile_pct = _compute_tile_percentiles(tile_rgb_html) if getattr(args, 'html_normalization', 'crop') == 'tile' else None
 
                             if args.cell_type == 'islet':
-                                # Defer HTML generation until marker thresholds are computed
+                                # Flush tile data to disk — keep only lightweight metadata in memory
+                                # to avoid OOM from accumulating masks+tile_rgb across all tiles
+                                np.save(tile_out / 'tile_rgb_html.npy', tile_rgb_html)
+                                if tile_pct is not None:
+                                    with open(tile_out / 'tile_pct.json', 'w') as f_pct:
+                                        json.dump(tile_pct, f_pct)
                                 deferred_html_tiles.append({
-                                    'features_list': features_list,
+                                    'tile_dir': str(tile_out),
                                     'tile_x': tile_x, 'tile_y': tile_y,
-                                    'tile_rgb_html': tile_rgb_html,
-                                    'masks': masks,
                                     'tile_pct': tile_pct,
                                 })
+                                del masks, tile_rgb_html, features_list
+                                result['masks'] = None  # Release array ref from result dict
+                                result['features_list'] = None
+                                gc.collect()
                             else:
                                 _max_html = getattr(args, 'max_html_samples', 0)
                                 if _max_html > 0 and len(all_samples) >= _max_html:
@@ -2588,10 +2595,24 @@ def run_pipeline(args):
                             det['marker_class'] = mc
                             counts[mc] = counts.get(mc, 0) + 1
                         logger.info(f"Islet marker classification: {counts}")
+                    # Build UID→marker_class lookup for injecting into reloaded features
+                    uid_to_marker = {d.get('uid', ''): d.get('marker_class') for d in all_detections}
                     for dt in deferred_html_tiles:
+                        # Reload tile data from disk (one at a time to control memory)
+                        _td = Path(dt['tile_dir'])
+                        _tile_rgb = np.load(_td / 'tile_rgb_html.npy')
+                        with h5py.File(_td / f'{args.cell_type}_masks.h5', 'r') as _hf:
+                            _tile_masks = _hf['masks'][:]
+                        with open(_td / f'{args.cell_type}_features.json', 'r') as _ff:
+                            _tile_feats = json.load(_ff)
+                        # Inject marker_class into reloaded features
+                        for _feat in _tile_feats:
+                            _mc = uid_to_marker.get(_feat.get('uid', ''))
+                            if _mc:
+                                _feat['marker_class'] = _mc
                         html_samples = filter_and_create_html_samples(
-                            dt['features_list'], dt['tile_x'], dt['tile_y'],
-                            dt['tile_rgb_html'], dt['masks'],
+                            _tile_feats, dt['tile_x'], dt['tile_y'],
+                            _tile_rgb, _tile_masks,
                             pixel_size_um, slide_name, args.cell_type,
                             args.html_score_threshold,
                             tile_percentiles=dt['tile_pct'],
@@ -2600,7 +2621,9 @@ def run_pipeline(args):
                             candidate_mode=args.candidate_mode,
                         )
                         all_samples.extend(html_samples)
-                    deferred_html_tiles = []  # clear after processing
+                        del _tile_rgb, _tile_masks, _tile_feats
+                        gc.collect()
+                    deferred_html_tiles = []  # clear metadata
                     gc.collect()  # free ~1.6 GB of retained tile data
 
             logger.info(f"Processing complete: {total_detections} {args.cell_type} detections from {results_collected} tiles")

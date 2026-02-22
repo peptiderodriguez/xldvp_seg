@@ -4,7 +4,7 @@
 #SBATCH --nodes=1
 #SBATCH --ntasks=1
 #SBATCH --cpus-per-task=96
-#SBATCH --mem=400G
+#SBATCH --mem=450G
 #SBATCH --gres=gpu:l40s:4
 #SBATCH --time=48:00:00
 #SBATCH --output=/fs/gpfs41/lv12/fileset02/pool/pool-mann-edwin/code_bin/xldvp_seg/slurm/logs/islet_%j.out
