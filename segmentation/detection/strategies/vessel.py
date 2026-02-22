@@ -4213,6 +4213,8 @@ class VesselStrategy(DetectionStrategy, MultiChannelFeatureMixin):
             merge_detections_across_scales,
         )
         import random
+        import gc
+        import torch
 
         if scales is None:
             scales = [32, 16, 8, 4, 2]  # Default: coarse to fine
@@ -4250,6 +4252,7 @@ class VesselStrategy(DetectionStrategy, MultiChannelFeatureMixin):
                 tile = tile_getter(tile_x, tile_y, tile_size, channel, scale)
                 if tile is None:
                     logger.info(f"  Scale 1/{scale}x: Tile {i+1}/{len(tiles)} - skipped (no data)")
+                    del tile
                     continue
 
                 with self._scale_override(scale_params):
@@ -4300,7 +4303,18 @@ class VesselStrategy(DetectionStrategy, MultiChannelFeatureMixin):
                 if progress_callback:
                     progress_callback(scale, i + 1, len(tiles))
 
+                # Free tile data and GPU cache between tiles to reduce OOM risk
+                del tile, masks, detections
+                gc.collect()
+                if torch.cuda.is_available():
+                    torch.cuda.empty_cache()
+
             logger.info(f"Scale 1/{scale}x: Found {scale_detections} detections")
+
+            # Aggressive cleanup between scales
+            gc.collect()
+            if torch.cuda.is_available():
+                torch.cuda.empty_cache()
 
         # Merge detections across scales (keep larger/more complete detection)
         logger.info(f"Merging {len(all_detections)} detections across scales...")
