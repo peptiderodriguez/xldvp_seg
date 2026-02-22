@@ -1664,15 +1664,21 @@ def run_pipeline(args):
     # Load additional channels if --all-channels specified (for NMJ specificity checking)
     all_channel_data = {args.channel: loader.channel_data}  # Primary channel
     if getattr(args, 'all_channels', False) and use_ram:
-        # Get number of channels from CZI metadata
-        try:
-            dims = loader.reader.get_dims_shape()[0]
-            n_channels = dims.get('C', (0, 3))[1]  # Default to 3 channels
-        except Exception:
-            n_channels = 3  # Fallback
+        # Determine which channels to load
+        if getattr(args, 'channels', None):
+            ch_list = [int(x.strip()) for x in args.channels.split(',')]
+            logger.info(f"Loading specified channels {ch_list} for multi-channel analysis...")
+        else:
+            # Load all channels from CZI
+            try:
+                dims = loader.reader.get_dims_shape()[0]
+                n_channels = dims.get('C', (0, 3))[1]  # Default to 3 channels
+            except Exception:
+                n_channels = 3  # Fallback
+            ch_list = list(range(n_channels))
+            logger.info(f"Loading all {len(ch_list)} channels for multi-channel analysis...")
 
-        logger.info(f"Loading all {n_channels} channels for multi-channel analysis...")
-        for ch in range(n_channels):
+        for ch in ch_list:
             if ch != args.channel:
                 logger.info(f"  Loading channel {ch}...")
                 ch_loader = get_loader(czi_path, load_to_ram=True, channel=ch, quiet=True)
@@ -3023,6 +3029,12 @@ def main():
                         help='Minimum cell area in um² for tissue_pattern (default 20)')
     parser.add_argument('--tp-max-area', type=float, default=300.0,
                         help='Maximum cell area in um² for tissue_pattern (default 300)')
+
+    # Channel selection
+    parser.add_argument('--channels', type=str, default=None,
+                        help='Comma-separated list of CZI channel indices to load (e.g. "8,9,10,11"). '
+                             'If not specified, all channels are loaded when --all-channels is active. '
+                             'Use with multi-channel CZIs that have EDF/processing layers to avoid loading unnecessary data.')
 
     # Feature extraction options
     parser.add_argument('--extract-full-features', action='store_true',
