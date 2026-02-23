@@ -248,6 +248,9 @@ def merge_detections_across_scales(
     When the same vessel is detected at multiple scales, keeps the
     detection with the larger outer contour area (more complete).
 
+    Uses spatial grid indexing for O(n*k) performance instead of O(n^2),
+    where k is the average number of nearby detections per grid cell.
+
     Args:
         detections: List of detection dicts, each with 'outer' contour
                    and 'scale_detected' field
@@ -257,80 +260,106 @@ def merge_detections_across_scales(
     Returns:
         Deduplicated list of detections
     """
+    from collections import defaultdict
+
     if not detections:
         return []
 
-    def _contour_area(det):
-        """Compute outer contour area for sorting."""
-        outer = det.get('outer')
-        if outer is None:
-            return 0.0
-        try:
-            return abs(cv2.contourArea(np.asarray(outer).reshape(-1, 1, 2).astype(np.int32)))
-        except Exception:
-            return 0.0
-
-    # Sort by contour area descending (largest first) so larger detections
-    # are kept when duplicates overlap
-    sorted_dets = sorted(
-        detections,
-        key=_contour_area,
-        reverse=True
-    )
-
-    # Count detections with valid outer contours
-    valid_outer_count = sum(1 for d in sorted_dets if d.get('outer') is not None)
-    logger.debug(f"{valid_outer_count}/{len(sorted_dets)} detections have valid 'outer' contour")
-
-    # Log first detection's outer info
-    if sorted_dets:
-        first = sorted_dets[0]
-        outer = first.get('outer')
-        if outer is not None:
-            logger.debug(f"First detection outer shape: {outer.shape}, dtype: {outer.dtype}")
-            logger.debug(f"First detection outer bounds: x=[{outer[:,:,0].min()}, {outer[:,:,0].max()}], y=[{outer[:,:,1].min()}, {outer[:,:,1].max()}]")
-        else:
-            logger.debug(f"First detection has no 'outer' contour. Keys: {list(first.keys())}")
-
-    merged = []
+    # Pre-compute contours in cv2 format and bounding boxes
+    prepared = []  # (det, contour_cv2, bbox, area)
     skipped_no_outer = 0
-    duplicate_count = 0
-
-    for det in sorted_dets:
+    for det in detections:
         outer = det.get('outer')
         if outer is None:
             skipped_no_outer += 1
             continue
+        try:
+            c = np.asarray(outer).reshape(-1, 1, 2).astype(np.int32)
+            bbox = cv2.boundingRect(c)  # (x, y, w, h)
+            area = abs(cv2.contourArea(c))
+            prepared.append((det, c, bbox, area))
+        except Exception:
+            skipped_no_outer += 1
+
+    logger.info(f"Merge: {len(prepared)} valid contours, {skipped_no_outer} skipped (no outer)")
+
+    # Sort by area descending (largest first = highest priority)
+    prepared.sort(key=lambda t: t[3], reverse=True)
+
+    # Determine grid cell size: use median bounding box diagonal as cell size
+    # This balances between too-fine (many cells per detection) and too-coarse (all in one cell)
+    if len(prepared) > 10:
+        diags = [np.sqrt(b[2]**2 + b[3]**2) for _, _, b, _ in prepared[:1000]]
+        cell_size = max(500, int(np.median(diags) * 3))
+    else:
+        cell_size = 2000
+    logger.info(f"Merge: grid cell size = {cell_size}px")
+
+    def _bbox_cells(bbox):
+        """Return set of grid cell keys that a bounding box overlaps."""
+        x, y, w, h = bbox
+        x1, y1 = x // cell_size, y // cell_size
+        x2, y2 = (x + w) // cell_size, (y + h) // cell_size
+        cells = set()
+        for gx in range(x1, x2 + 1):
+            for gy in range(y1, y2 + 1):
+                cells.add((gx, gy))
+        return cells
+
+    def _bboxes_overlap(b1, b2):
+        """Fast bounding box overlap check."""
+        x1, y1, w1, h1 = b1
+        x2, y2, w2, h2 = b2
+        return not (x1 + w1 < x2 or x2 + w2 < x1 or y1 + h1 < y2 or y2 + h2 < y1)
+
+    # Spatial grid: cell_key -> list of (index_in_merged, bbox, contour)
+    grid = defaultdict(list)
+    merged = []
+    merged_contours = []  # parallel list of (contour_cv2, bbox)
+    duplicate_count = 0
+    iou_checks = 0
+
+    for det, contour, bbox, area in prepared:
+        cells = _bbox_cells(bbox)
+
+        # Collect candidate indices from overlapping grid cells (deduplicate)
+        candidate_indices = set()
+        for cell in cells:
+            for idx in grid[cell]:
+                candidate_indices.add(idx)
 
         is_duplicate = False
-
-        for existing in merged:
-            existing_outer = existing.get('outer')
-            if existing_outer is None:
+        for idx in candidate_indices:
+            existing_c, existing_bbox = merged_contours[idx]
+            # Fast bbox pre-check before expensive IoU
+            if not _bboxes_overlap(bbox, existing_bbox):
                 continue
-
-            iou = compute_iou_contours(outer, existing_outer)
+            iou_checks += 1
+            iou = compute_iou_contours(contour, existing_c)
             if iou > iou_threshold:
                 is_duplicate = True
                 duplicate_count += 1
-                # Log first few duplicates for debugging
                 if duplicate_count <= 5:
-                    new_area = _contour_area(det)
-                    kept_area = _contour_area(existing)
+                    existing_area = abs(cv2.contourArea(existing_c))
                     logger.debug(
                         f"Duplicate #{duplicate_count} (IoU={iou:.3f}): "
-                        f"dropping area={new_area:.0f}px (scale 1/{det.get('scale_detected', '?')}x), "
-                        f"keeping area={kept_area:.0f}px (scale 1/{existing.get('scale_detected', '?')}x)"
+                        f"dropping area={area:.0f}px (scale 1/{det.get('scale_detected', '?')}x), "
+                        f"keeping area={existing_area:.0f}px (scale 1/{merged[idx].get('scale_detected', '?')}x)"
                     )
                 break
 
         if not is_duplicate:
+            new_idx = len(merged)
             merged.append(det)
+            merged_contours.append((contour, bbox))
+            for cell in cells:
+                grid[cell].append(new_idx)
 
     logger.debug(f"Skipped {skipped_no_outer} detections with no outer contour")
     logger.info(
         f"Merged {len(detections)} detections → {len(merged)} "
-        f"(removed {len(detections) - len(merged)} duplicates)"
+        f"(removed {len(detections) - len(merged)} duplicates, "
+        f"{iou_checks} IoU checks vs {len(prepared) * len(merged) // 2} brute-force)"
     )
 
     return merged
