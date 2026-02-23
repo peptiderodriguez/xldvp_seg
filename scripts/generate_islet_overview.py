@@ -246,6 +246,10 @@ def main():
     parser.add_argument('--marker-pct-channels', type=str, default='sst',
                         help='Comma-separated marker names using percentile thresholding '
                              'instead of GMM (default: sst)')
+    parser.add_argument('--gmm-p-cutoff', type=float, default=0.75,
+                        help='GMM posterior probability cutoff for marker classification (default 0.75)')
+    parser.add_argument('--ratio-min', type=float, default=1.5,
+                        help='Dominant marker must be >= ratio_min * runner-up (default 1.5)')
     args = parser.parse_args()
 
     logging.basicConfig(level=logging.INFO, format='%(levelname)s: %(message)s')
@@ -284,6 +288,7 @@ def main():
     marker_thresholds = compute_islet_marker_thresholds(
         all_dets, marker_map=marker_map,
         marker_top_pct=args.marker_top_pct, pct_channels=_pct_channels,
+        gmm_p_cutoff=args.gmm_p_cutoff, ratio_min=args.ratio_min,
     )
     if marker_thresholds is None:
         print(f"WARNING: Only {len(all_dets)} detections — too few for marker thresholds. "

@@ -37,6 +37,8 @@ echo "=========================================="
 
 MARKER_TOP_PCT="${3:-5}"
 MARKER_PCT_CHANNELS="${4:-sst}"
+GMM_P_CUTOFF="${5:-0.75}"
+RATIO_MIN="${6:-1.5}"
 
 $PYTHON scripts/analyze_islets.py \
     --run-dir "$RUN_DIR" \
@@ -46,7 +48,9 @@ $PYTHON scripts/analyze_islets.py \
     --display-channels 2,3,5 \
     --marker-channels gcg:2,ins:3,sst:5 \
     --marker-top-pct "$MARKER_TOP_PCT" \
-    --marker-pct-channels "$MARKER_PCT_CHANNELS"
+    --marker-pct-channels "$MARKER_PCT_CHANNELS" \
+    --gmm-p-cutoff "$GMM_P_CUTOFF" \
+    --ratio-min "$RATIO_MIN"
 
 echo "=========================================="
 echo "Done: $(date)"

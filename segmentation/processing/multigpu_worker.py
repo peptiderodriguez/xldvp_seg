@@ -268,11 +268,10 @@ def _gpu_worker(
         strategy = IsletStrategy(
             membrane_channel=strategy_params.get('membrane_channel', 1),
             nuclear_channel=strategy_params.get('nuclear_channel', 4),
-            min_area_um=strategy_params.get('min_area_um', 30),
-            max_area_um=strategy_params.get('max_area_um', 500),
             extract_deep_features=extract_deep_features,
             extract_sam2_embeddings=extract_sam2_embeddings,
             marker_signal_factor=strategy_params.get('marker_signal_factor', 2.0),
+            gmm_prefilter_thresholds=strategy_params.get('gmm_prefilter_thresholds'),
         )
     elif cell_type == 'tissue_pattern':
         from segmentation.detection.strategies.tissue_pattern import TissuePatternStrategy

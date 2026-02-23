@@ -39,7 +39,6 @@ from scipy.spatial import ConvexHull, cKDTree
 REPO = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(REPO))
 
-from segmentation.io.czi_loader import get_loader
 from run_segmentation import classify_islet_marker, compute_islet_marker_thresholds
 
 try:
@@ -48,6 +47,51 @@ except ImportError:
     pass
 
 logger = logging.getLogger(__name__)
+
+
+def load_czi_direct(czi_path, channels, strip_height=4096):
+    """Load CZI channels directly using aicspylibczi, bypassing CZILoader.
+
+    CZILoader has issues with multi-scene CZI files (S dimension causes
+    CDimCoordinatesOverspecifiedException). This function reads channels
+    via read_mosaic() without passing S, which works correctly.
+
+    Returns:
+        (pixel_size, x_start, y_start, ch_data) where ch_data is {ch: np.ndarray}
+    """
+    from aicspylibczi import CziFile
+
+    reader = CziFile(str(czi_path))
+    bbox = reader.get_mosaic_scene_bounding_box(index=0)
+    x_start, y_start, width, height = bbox.x, bbox.y, bbox.w, bbox.h
+
+    # Pixel size from metadata
+    pixel_size = 0.22
+    try:
+        scaling = reader.meta.find('.//Scaling/Items/Distance[@Id="X"]/Value')
+        if scaling is not None:
+            pixel_size = float(scaling.text) * 1e6
+    except Exception:
+        pass
+
+    ch_data = {}
+    n_strips = (height + strip_height - 1) // strip_height
+    for ch in channels:
+        print(f"  Loading channel {ch}...")
+        arr = np.empty((height, width), dtype=np.uint16)
+        for i in range(n_strips):
+            y_off = i * strip_height
+            h = min(strip_height, height - y_off)
+            strip = reader.read_mosaic(
+                region=(x_start, y_start + y_off, width, h),
+                scale_factor=1, C=ch
+            )
+            arr[y_off:y_off + h, :] = np.squeeze(strip)
+        ch_data[ch] = arr
+        print(f"  Channel {ch} loaded: {arr.nbytes / 1e9:.2f} GB")
+
+    return pixel_size, x_start, y_start, ch_data
+
 
 # ---------------------------------------------------------------------------
 # Constants
@@ -82,11 +126,13 @@ def load_detections(run_dir):
     return dets
 
 
-def classify_all(detections, marker_map, marker_top_pct=5, pct_channels=None):
+def classify_all(detections, marker_map, marker_top_pct=5, pct_channels=None,
+                 gmm_p_cutoff=0.75, ratio_min=1.5, threshold_factor=1.0):
     """Classify all detections by marker type. Modifies in place."""
     marker_thresholds = compute_islet_marker_thresholds(
         detections, marker_map=marker_map, marker_top_pct=marker_top_pct,
-        pct_channels=pct_channels)
+        pct_channels=pct_channels, gmm_p_cutoff=gmm_p_cutoff,
+        ratio_min=ratio_min, threshold_factor=threshold_factor)
     counts = Counter()
     for det in detections:
         mc, _ = classify_islet_marker(det.get('features', {}), marker_thresholds, marker_map=marker_map)
@@ -96,7 +142,7 @@ def classify_all(detections, marker_map, marker_top_pct=5, pct_channels=None):
     return marker_thresholds
 
 
-def define_islets(detections, pixel_size, buffer_um=25.0, min_cells=5):
+def define_islets(detections, pixel_size, buffer_um=25.0, min_cells=5, no_recruit=False):
     """Define islets as the union of marker-positive (bright) cells + spatial buffer.
 
     Simple approach:
@@ -172,7 +218,10 @@ def define_islets(detections, pixel_size, buffer_um=25.0, min_cells=5):
             detections[det_i]['islet_id'] = -1
 
     # Recruit 'none' cells within buffer_um of any islet's marker+ cells
-    if none_idx and valid_components:
+    if no_recruit:
+        for i in none_idx:
+            detections[i]['islet_id'] = -1
+    elif none_idx and valid_components:
         # Build KDTree of valid endocrine cells only
         valid_mask = np.array([labels[r] in valid_components for r in range(n)])
         valid_coords = endo_coords_um[valid_mask]
@@ -716,6 +765,19 @@ def analyze_all_islets(detections, islet_groups, pixel_size, marker_map,
         row = {'islet_id': iid}
         row.update(compute_islet_shape(cells, pixel_size))
         row.update(compute_composition(cells, marker_map))
+
+        # Mean dominant marker intensity for marker+ cells (quality metric)
+        marker_cells = [c for c in cells if c.get('marker_class') not in ('none', 'multi')]
+        if marker_cells:
+            dom_vals = []
+            for c in marker_cells:
+                mc = c['marker_class']
+                ch_idx = marker_map.get(mc)
+                if ch_idx is not None:
+                    dom_vals.append(c.get('features', {}).get(f'ch{ch_idx}_mean', 0))
+            row['mean_marker_intensity'] = float(np.mean(dom_vals)) if dom_vals else 0.0
+        else:
+            row['mean_marker_intensity'] = 0.0
         spatial = compute_spatial_metrics(cells, pixel_size, marker_map)
         row.update(spatial)
         row.update(compute_cell_type_sizes(cells, pixel_size, marker_map))
@@ -1400,6 +1462,21 @@ def main():
     parser.add_argument('--marker-pct-channels', type=str, default='sst',
                         help='Comma-separated marker names that use percentile-based '
                              'thresholding instead of GMM (default: sst)')
+    parser.add_argument('--gmm-p-cutoff', type=float, default=0.75,
+                        help='GMM posterior probability cutoff for marker classification (default 0.75)')
+    parser.add_argument('--ratio-min', type=float, default=1.5,
+                        help='Dominant marker must be >= ratio_min * runner-up (default 1.5)')
+    parser.add_argument('--threshold-factor', type=float, default=2.0,
+                        help='Divide GMM threshold by this factor (>1 = more permissive, '
+                             'matches pipeline pre-filter). Default: 2.0')
+    parser.add_argument('--no-recruit', action='store_true',
+                        help='Do not recruit marker-negative cells into islets (show only marker+ and multi)')
+    parser.add_argument('--quality-filter', choices=['none', 'otsu'], default='otsu',
+                        help='Filter dim islets by mean marker intensity. '
+                             'otsu=Otsu threshold on per-islet mean (default: otsu)')
+    parser.add_argument('--quality-factor', type=float, default=0.5,
+                        help='Multiply Otsu threshold by this factor (<1 = more permissive). '
+                             'Default: 0.5 (divide Otsu by 2)')
     parser.add_argument('--no-html', action='store_true',
                         help='Skip HTML generation (just CSV + JSON)')
     args = parser.parse_args()
@@ -1427,24 +1504,25 @@ def main():
     _pct_channels = set(s.strip() for s in args.marker_pct_channels.split(',')) if args.marker_pct_channels else set()
     marker_thresholds = classify_all(detections, marker_map,
                                      marker_top_pct=args.marker_top_pct,
-                                     pct_channels=_pct_channels)
+                                     pct_channels=_pct_channels,
+                                     gmm_p_cutoff=args.gmm_p_cutoff,
+                                     ratio_min=args.ratio_min,
+                                     threshold_factor=args.threshold_factor)
     n_endocrine = sum(1 for d in detections if d.get('marker_class', 'none') != 'none')
     if n_endocrine == 0:
         print("ERROR: No marker-positive cells found. Cannot define islets.")
         sys.exit(1)
 
-    # 3. Get pixel size from CZI
+    # 3. Get pixel size from CZI and pre-load display channels
     print(f"Loading CZI metadata from {czi_path}...")
-    loader = get_loader(czi_path, load_to_ram=False, channel=display_chs[0])
-    pixel_size = loader.get_pixel_size()
-    x_start = loader.x_start
-    y_start = loader.y_start
+    pixel_size, x_start, y_start, ch_data = load_czi_direct(czi_path, display_chs)
     print(f"  pixel_size={pixel_size:.4f} um/px")
 
     # 4. Define islets (union of bright cells + buffer)
     islet_groups = define_islets(detections, pixel_size,
                                 buffer_um=args.buffer_um,
-                                min_cells=args.min_cells)
+                                min_cells=args.min_cells,
+                                no_recruit=args.no_recruit)
 
     if not islet_groups:
         print("No islets defined — exiting")
@@ -1457,6 +1535,34 @@ def main():
     islet_features = analyze_all_islets(detections, islet_groups, pixel_size, marker_map,
                                         marker_thresholds=marker_thresholds)
     print(f"  {len(islet_features)} islets analyzed")
+
+    # 5a. Quality filter: drop dim islets by mean marker intensity
+    if args.quality_filter == 'otsu' and len(islet_features) >= 3:
+        intensities = np.array([f['mean_marker_intensity'] for f in islet_features])
+        from skimage.filters import threshold_otsu
+        try:
+            otsu_raw = threshold_otsu(intensities)
+            otsu_t = otsu_raw * args.quality_factor
+            n_before = len(islet_features)
+            bright = [f for f in islet_features if f['mean_marker_intensity'] >= otsu_t]
+            dim = [f for f in islet_features if f['mean_marker_intensity'] < otsu_t]
+            if dim:
+                dim_ids = {f['islet_id'] for f in dim}
+                for iid in dim_ids:
+                    islet_groups.pop(iid, None)
+                for d in detections:
+                    if d.get('islet_id', -1) in dim_ids:
+                        d['islet_id'] = -1
+                islet_features = bright
+                dim_vals = ', '.join(str(round(f['mean_marker_intensity'])) for f in dim)
+                print(f"  Quality filter (Otsu): raw={otsu_raw:.0f}, "
+                      f"adjusted={otsu_t:.0f} (x{args.quality_factor}), "
+                      f"kept {len(bright)}/{n_before} islets, "
+                      f"dropped {len(dim)} dim (intensities: {dim_vals})")
+            else:
+                print(f"  Quality filter (Otsu): all {n_before} islets above threshold={otsu_t:.0f}")
+        except ValueError:
+            print("  Quality filter: Otsu failed (all same value?), skipping")
 
     # 5b. Tissue-level analysis
     print("Computing tissue-level metrics...")
@@ -1525,13 +1631,7 @@ def main():
             if not tile_info:
                 print("No tile directories found — skipping HTML")
             else:
-                # Load CZI display channels
-                loader = get_loader(czi_path, load_to_ram=True, channel=display_chs[0])
-                ch_data = {}
-                for ch in display_chs:
-                    print(f"  Loading channel {ch}...")
-                    loader.load_channel(ch)
-                    ch_data[ch] = loader._channel_data[ch]
+                # ch_data already loaded by load_czi_direct() above
 
                 # Get tile dimensions from first tile
                 first_td = next(iter(tile_info.values()))

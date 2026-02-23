@@ -54,7 +54,7 @@ def main():
     parser.add_argument("--threshold-sst", type=float, default=None,
                         help="Override third marker normalized threshold (default: Otsu auto)")
     parser.add_argument("--ratio-min", type=float, default=1.5,
-                        help="Dominant marker must be >= ratio_min * runner-up (default: 2.0). "
+                        help="Dominant marker must be >= ratio_min * runner-up (default: 1.5). "
                              "Cells below this ratio are classified as 'multi'.")
     parser.add_argument("--marker-top-pct", type=float, default=5,
                         help="For percentile-method channels, classify the top N%% "
@@ -62,6 +62,8 @@ def main():
     parser.add_argument("--marker-pct-channels", type=str, default="sst",
                         help="Comma-separated marker names using percentile thresholding "
                              "instead of GMM (default: sst)")
+    parser.add_argument("--gmm-p-cutoff", type=float, default=0.75,
+                        help="GMM posterior probability cutoff for marker classification (default 0.75)")
     args = parser.parse_args()
 
     run_dir = Path(args.run_dir)
@@ -106,6 +108,7 @@ def main():
         all_detections, vis_threshold_overrides=overrides or None,
         ratio_min=args.ratio_min, marker_map=marker_map,
         marker_top_pct=args.marker_top_pct, pct_channels=_pct_channels,
+        gmm_p_cutoff=args.gmm_p_cutoff,
     )
 
     # Classify all detections

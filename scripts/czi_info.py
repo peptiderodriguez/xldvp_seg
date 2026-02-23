@@ -23,6 +23,8 @@ def main():
     parser = argparse.ArgumentParser(description="Print CZI file metadata")
     parser.add_argument("czi_path", help="Path to CZI file")
     parser.add_argument("--json", action="store_true", help="Output as JSON")
+    parser.add_argument("--scene", type=int, default=None,
+                        help="Scene index to show (default: show all scenes)")
     args = parser.parse_args()
 
     czi_path = Path(args.czi_path)
@@ -30,9 +32,20 @@ def main():
         print(f"ERROR: File not found: {czi_path}", file=sys.stderr)
         sys.exit(1)
 
-    meta = get_czi_metadata(czi_path)
+    # Get metadata for scene count (use scene=0 for channel info, it's shared)
+    meta = get_czi_metadata(czi_path, scene=args.scene if args.scene is not None else 0)
+    n_scenes = meta.get('n_scenes', 1)
 
     if args.json:
+        # Include per-scene mosaic sizes in JSON output
+        if n_scenes > 1 and args.scene is None:
+            meta['scenes'] = []
+            for s in range(n_scenes):
+                s_meta = get_czi_metadata(czi_path, scene=s)
+                meta['scenes'].append({
+                    'index': s,
+                    'mosaic_size': s_meta['mosaic_size'],
+                })
         print(json.dumps(meta, indent=2, default=str))
         return
 
@@ -40,9 +53,24 @@ def main():
     print(f"CZI: {czi_path.name}")
     print(f"{'=' * 60}")
 
-    if meta['mosaic_size']:
-        w, h = meta['mosaic_size']
-        print(f"Mosaic:     {w:,} x {h:,} px")
+    print(f"Scenes:     {n_scenes}")
+
+    # Show per-scene mosaic dimensions
+    if args.scene is not None:
+        # Single scene
+        if meta['mosaic_size']:
+            w, h = meta['mosaic_size']
+            print(f"Mosaic:     {w:,} x {h:,} px  (scene {args.scene})")
+    elif n_scenes > 1:
+        for s in range(n_scenes):
+            s_meta = get_czi_metadata(czi_path, scene=s)
+            if s_meta['mosaic_size']:
+                w, h = s_meta['mosaic_size']
+                print(f"  Scene {s}: {w:,} x {h:,} px")
+    else:
+        if meta['mosaic_size']:
+            w, h = meta['mosaic_size']
+            print(f"Mosaic:     {w:,} x {h:,} px")
 
     print(f"Pixel size: {meta['pixel_size_um']:.4f} µm/px")
     print(f"Channels:   {meta['n_channels']}")

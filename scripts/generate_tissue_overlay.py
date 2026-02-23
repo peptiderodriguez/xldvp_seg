@@ -23,8 +23,15 @@ import numpy as np
 import pandas as pd
 
 
-def read_czi_thumbnail(czi_path, display_channels, scale_factor=0.02):
-    """Read CZI mosaic at low resolution, composite 3 channels to RGB."""
+def read_czi_thumbnail(czi_path, display_channels, scale_factor=0.02, scene=0):
+    """Read CZI mosaic at low resolution, composite 3 channels to RGB.
+
+    Args:
+        czi_path: Path to CZI file
+        display_channels: List of channel indices to read
+        scale_factor: Downsampling factor (e.g. 0.02 = 2%)
+        scene: CZI scene index (0-based, default 0)
+    """
     from aicspylibczi import CziFile
 
     czi = CziFile(czi_path)
@@ -38,10 +45,16 @@ def read_czi_thumbnail(czi_path, display_channels, scale_factor=0.02):
     except Exception:
         pass
 
+    # Get scene bounding box — scenes are spatially separated in mosaic CZIs,
+    # so we select the scene by reading only its spatial region (not via S= param).
+    bbox = czi.get_mosaic_scene_bounding_box(index=scene)
+    region = (bbox.x, bbox.y, bbox.w, bbox.h)
+    print(f"  Scene {scene}: {bbox.w}x{bbox.h} px at ({bbox.x}, {bbox.y})", flush=True)
+
     channels = []
     for ch in display_channels:
         print(f"  Reading channel {ch} at scale {scale_factor}...", flush=True)
-        img = czi.read_mosaic(C=ch, scale_factor=scale_factor)
+        img = czi.read_mosaic(C=ch, region=region, scale_factor=scale_factor)
         # Shape: (1, 1, 1, H, W) or (H, W) depending on version
         img = np.squeeze(img)
         channels.append(img)
@@ -415,6 +428,8 @@ def main():
     parser.add_argument('--dpi', type=int, default=200, help='PNG DPI')
     parser.add_argument('--no-html', action='store_true', help='Skip interactive HTML generation')
     parser.add_argument('--no-png', action='store_true', help='Skip static PNG generation')
+    parser.add_argument('--scene', type=int, default=0,
+                        help='CZI scene index (0-based, default 0)')
     args = parser.parse_args()
 
     output_dir = Path(args.output_dir)
@@ -428,7 +443,8 @@ def main():
     # 1. Read CZI thumbnail
     print(f"Reading CZI thumbnail at {args.scale_factor*100:.0f}% scale...", flush=True)
     valid_channels = [ch for ch in display_channels if ch >= 0]
-    rgb, pixel_size = read_czi_thumbnail(args.czi_path, valid_channels, args.scale_factor)
+    rgb, pixel_size = read_czi_thumbnail(args.czi_path, valid_channels, args.scale_factor,
+                                         scene=args.scene)
 
     # If fewer than 3 channels, remap
     if len(valid_channels) < 3:

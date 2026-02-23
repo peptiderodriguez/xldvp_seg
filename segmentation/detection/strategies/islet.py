@@ -77,8 +77,6 @@ class IsletStrategy(CellStrategy):
         self,
         membrane_channel: int = 1,
         nuclear_channel: int = 4,
-        min_area_um: float = 30,
-        max_area_um: float = 500,
         overlap_threshold: float = 0.5,
         min_mask_pixels: int = 10,
         extract_deep_features: bool = False,
@@ -93,8 +91,6 @@ class IsletStrategy(CellStrategy):
         Args:
             membrane_channel: CZI channel index for membrane marker (default 1, AF633)
             nuclear_channel: CZI channel index for nuclear marker (default 4, DAPI)
-            min_area_um: Minimum cell area in um2 (default 30)
-            max_area_um: Maximum cell area in um2 (default 500)
             overlap_threshold: Skip masks with overlap > this fraction (default 0.5)
             min_mask_pixels: Minimum mask size in pixels (default 10)
             extract_deep_features: Whether to extract ResNet+DINOv2 (default False)
@@ -110,8 +106,8 @@ class IsletStrategy(CellStrategy):
                 (default None = fit per-tile GMM)
         """
         super().__init__(
-            min_area_um=min_area_um,
-            max_area_um=max_area_um,
+            min_area_um=20,     # permissive safety net in filter() (um²)
+            max_area_um=2000,   # permissive safety net in filter() (um²)
             overlap_threshold=overlap_threshold,
             min_mask_pixels=min_mask_pixels,
             extract_deep_features=extract_deep_features,

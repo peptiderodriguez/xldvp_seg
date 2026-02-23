@@ -669,8 +669,6 @@ def create_strategy_for_cell_type(cell_type, params, pixel_size_um):
         return IsletStrategy(
             membrane_channel=params.get('membrane_channel', 1),
             nuclear_channel=params.get('nuclear_channel', 4),
-            min_area_um=params.get('min_area_um', 30),
-            max_area_um=params.get('max_area_um', 500),
             extract_deep_features=params.get('extract_deep_features', False),
             extract_sam2_embeddings=params.get('extract_sam2_embeddings', True),
             marker_signal_factor=params.get('marker_signal_factor', 2.0),
@@ -809,12 +807,16 @@ def classify_islet_marker(features_dict, marker_thresholds=None, marker_map=None
 
 def calibrate_islet_marker_gmm(pilot_tiles, loader, all_channel_data, slide_shm_arr,
                                ch_to_slot, marker_channels, membrane_channel=1,
-                               nuclear_channel=4, tile_size=4000, pixel_size_um=0.325,
-                               min_area_um=30.0, max_area_um=500.0):
+                               nuclear_channel=4, tile_size=4000, pixel_size_um=0.325):
     """Run Cellpose on pilot tiles to calibrate global GMM pre-filter thresholds.
 
     Similar to calibrate_tissue_threshold(): samples a few tiles to estimate
     slide-level parameters before the main multi-GPU processing loop.
+
+    Note: This is a PRE-FILTER for skipping expensive feature extraction on
+    background cells. It uses med+3MAD fallback for low-separation channels
+    (intentionally more permissive than the final GMM P=0.75 classification
+    in compute_islet_marker_thresholds). No area filtering — matches segment().
 
     Args:
         pilot_tiles: list of tile dicts with 'x', 'y' keys (~5% of tissue tiles)
@@ -827,8 +829,6 @@ def calibrate_islet_marker_gmm(pilot_tiles, loader, all_channel_data, slide_shm_
         nuclear_channel: CZI channel for Cellpose nuclear input
         tile_size: tile dimensions in pixels
         pixel_size_um: pixel size in micrometers
-        min_area_um: minimum cell area in um2
-        max_area_um: maximum cell area in um2
 
     Returns:
         dict mapping channel_idx → raw GMM threshold (P(signal) = 0.5),
@@ -843,8 +843,8 @@ def calibrate_islet_marker_gmm(pilot_tiles, loader, all_channel_data, slide_shm_
 
     # Load Cellpose model (lightweight — single GPU, no SAM2 needed)
     try:
-        from cellpose import models as cp_models
-        cellpose_model = cp_models.Cellpose(model_type='cyto3', gpu=True)
+        from cellpose.models import CellposeModel
+        cellpose_model = CellposeModel(gpu=True, pretrained_model='cpsam')
     except Exception as e:
         logger.warning(f"Failed to load Cellpose for calibration: {e}")
         return {}
@@ -853,7 +853,7 @@ def calibrate_islet_marker_gmm(pilot_tiles, loader, all_channel_data, slide_shm_
     def _read_channel(ch_idx, x, y, w, h):
         if slide_shm_arr is not None and ch_to_slot and ch_idx in ch_to_slot:
             slot = ch_to_slot[ch_idx]
-            return slide_shm_arr[slot, y:y+h, x:x+w].copy()
+            return slide_shm_arr[y:y+h, x:x+w, slot].copy()
         elif all_channel_data and ch_idx in all_channel_data:
             return all_channel_data[ch_idx][y:y+h, x:x+w].copy()
         return None
@@ -869,10 +869,6 @@ def calibrate_islet_marker_gmm(pilot_tiles, loader, all_channel_data, slide_shm_
         if hi <= lo:
             return np.zeros_like(img, dtype=np.uint8)
         return np.clip(255 * (img.astype(np.float32) - lo) / (hi - lo), 0, 255).astype(np.uint8)
-
-    # Area bounds in pixels
-    min_area_px = min_area_um / (pixel_size_um ** 2)
-    max_area_px = max_area_um / (pixel_size_um ** 2)
 
     # Collect marker means from all pilot tiles
     all_marker_means = {ch: [] for ch in marker_channels}
@@ -925,7 +921,7 @@ def calibrate_islet_marker_gmm(pilot_tiles, loader, all_channel_data, slide_shm_
             label = label_idx + 1
             cell_mask = masks[sl] == label
             area_px = cell_mask.sum()
-            if area_px < min_area_px or area_px > max_area_px:
+            if area_px < 10:  # noise rejection only, matches segment()
                 continue
             for ch_idx, ch_data in marker_data.items():
                 vals = ch_data[sl][cell_mask]
@@ -935,7 +931,7 @@ def calibrate_islet_marker_gmm(pilot_tiles, loader, all_channel_data, slide_shm_
             tile_cells += 1
 
         total_cells += tile_cells
-        logger.info(f"    {n_cells} Cellpose masks → {tile_cells} area-filtered cells")
+        logger.info(f"    {n_cells} Cellpose masks → {tile_cells} cells")
 
     logger.info(f"  Pilot calibration: {total_cells} cells from {len(pilot_tiles)} tiles")
 
@@ -967,23 +963,21 @@ def calibrate_islet_marker_gmm(pilot_tiles, loader, all_channel_data, slide_shm_
         separation = abs(gmm_means[signal_idx] - gmm_means[1 - signal_idx]) / max(gmm_stds[1 - signal_idx], gmm_stds[signal_idx])
 
         if separation >= 1.0:
-            # Good separation: use GMM P=0.5 crossover
+            # Good separation: use GMM P=0.75 crossover (matches final classification)
             lo_raw, hi_raw = 0.0, float(arr.max())
             for _ in range(50):
                 mid = (lo_raw + hi_raw) / 2
                 p = gmm.predict_proba(np.log1p(np.array([[mid]])))
-                if p[0, signal_idx] > 0.5:
+                if p[0, signal_idx] > 0.75:
                     hi_raw = mid
                 else:
                     lo_raw = mid
             threshold = (lo_raw + hi_raw) / 2
-            method = 'GMM'
+            method = 'GMM(P≥0.75)'
         else:
-            # Poor separation: use med+3*MAD (conservative)
-            med = float(np.median(arr_pos))
-            mad = float(np.median(np.abs(arr_pos - med)))
-            threshold = med + 3 * 1.4826 * mad
-            method = 'med+3MAD'
+            # Poor separation: use top-5% percentile (matches compute_islet_marker_thresholds)
+            threshold = float(np.percentile(arr_pos, 95))
+            method = 'top-5%'
 
         gmm_thresholds[ch_idx] = threshold
         n_pos = int(np.sum(arr > threshold))
@@ -997,7 +991,6 @@ def calibrate_islet_marker_gmm(pilot_tiles, loader, all_channel_data, slide_shm_
 
     # Clean up Cellpose model
     del cellpose_model
-    import gc
     gc.collect()
     try:
         import torch
@@ -1010,7 +1003,8 @@ def calibrate_islet_marker_gmm(pilot_tiles, loader, all_channel_data, slide_shm_
 
 def compute_islet_marker_thresholds(all_detections, vis_threshold_overrides=None, ratio_min=1.5,
                                     marker_map=None, marker_top_pct=5,
-                                    pct_channels=None):
+                                    pct_channels=None, gmm_p_cutoff=0.75,
+                                    threshold_factor=1.0):
     """Compute per-channel thresholds for islet marker classification.
 
     Two methods, selectable per channel:
@@ -1032,6 +1026,11 @@ def compute_islet_marker_thresholds(all_detections, vis_threshold_overrides=None
             as marker-positive (default 5 = 95th percentile)
         pct_channels: set of marker names that should use percentile-based
             thresholding instead of GMM (default {'sst'})
+        gmm_p_cutoff: GMM posterior probability cutoff for signal classification.
+            Higher = stricter (fewer false positives). (default 0.75)
+        threshold_factor: Divisor for the raw threshold. Values > 1 make
+            classification more permissive (e.g. 2.0 halves the threshold).
+            Matches the pipeline pre-filter's marker_signal_factor. (default 1.0)
 
     Returns (norm_ranges, ch_thresholds, ratio_min) for classify_islet_marker(),
         or None if too few detections for reliable thresholds.
@@ -1096,11 +1095,10 @@ def compute_islet_marker_thresholds(all_detections, vis_threshold_overrides=None
             stds = np.sqrt(gmm.covariances_.flatten())
             separation = abs(means[signal_idx] - means[bg_idx]) / max(stds[bg_idx], stds[signal_idx])
 
-            method = 'GMM(P≥0.75)'
-            # Find raw threshold where P(signal) = 0.75 via binary search.
+            method = f'GMM(P≥{gmm_p_cutoff})'
+            # Find raw threshold where P(signal) = gmm_p_cutoff via binary search.
             # Higher than P=0.5 crossover — requires stronger evidence of signal,
             # reducing false positives and multi-marker misclassification.
-            gmm_p_cutoff = 0.75
             lo_raw, hi_raw = 0.0, float(arr.max())
             for _ in range(50):
                 mid = (lo_raw + hi_raw) / 2
@@ -1110,6 +1108,10 @@ def compute_islet_marker_thresholds(all_detections, vis_threshold_overrides=None
                 else:
                     lo_raw = mid
             raw_cutoff = (lo_raw + hi_raw) / 2
+
+        # Apply threshold_factor (>1 = more permissive, matches pipeline pre-filter)
+        if threshold_factor > 1.0:
+            raw_cutoff = raw_cutoff / threshold_factor
 
         # Convert raw threshold to normalized [0,1] for classify_islet_marker()
         if hi > lo:
@@ -1221,15 +1223,20 @@ extract_morphological_features = _shared_extract_morphological_features
 # CZI LOADING
 # =============================================================================
 
-def get_czi_metadata(czi_path):
+def get_czi_metadata(czi_path, scene: int = 0):
     """
     Extract metadata from CZI file without loading image data.
+
+    Args:
+        czi_path: Path to CZI file
+        scene: Scene index (0-based, default 0). Pass None for global bbox.
 
     Returns dict with:
         - channels: list of channel info (name, wavelength, fluor)
         - pixel_size_um: pixel size in microns
-        - mosaic_size: (width, height) in pixels
+        - mosaic_size: (width, height) in pixels for the specified scene
         - n_channels: number of channels
+        - n_scenes: number of scenes in the CZI
     """
     import xml.etree.ElementTree as ET
 
@@ -1239,16 +1246,35 @@ def get_czi_metadata(czi_path):
         'pixel_size_um': 0.22,  # default
         'mosaic_size': None,
         'n_channels': 0,
+        'n_scenes': 1,
     }
+
+    n_data_channels = None  # actual channel count from file dimensions
 
     # Try pylibCZIrw first (better for large files)
     try:
         from pylibCZIrw import czi as pylibczi
 
         with pylibczi.open_czi(czi_path) as czidoc:
-            # Get dimensions
-            dims = czidoc.total_bounding_box
-            metadata['mosaic_size'] = (dims['X'][1] - dims['X'][0], dims['Y'][1] - dims['Y'][0])
+            # Get per-scene dimensions if available
+            try:
+                scene_bbox = czidoc.scenes_bounding_rectangle
+                if scene_bbox and len(scene_bbox) > 0:
+                    metadata['n_scenes'] = len(scene_bbox)
+                    if scene is not None and scene in scene_bbox:
+                        rect = scene_bbox[scene]
+                        metadata['mosaic_size'] = (rect.w, rect.h)
+                    else:
+                        # Fallback to total bounding box
+                        dims = czidoc.total_bounding_box
+                        metadata['mosaic_size'] = (dims['X'][1] - dims['X'][0], dims['Y'][1] - dims['Y'][0])
+                else:
+                    dims = czidoc.total_bounding_box
+                    metadata['mosaic_size'] = (dims['X'][1] - dims['X'][0], dims['Y'][1] - dims['Y'][0])
+            except (AttributeError, Exception):
+                # Older pylibCZIrw without scenes_bounding_rectangle
+                dims = czidoc.total_bounding_box
+                metadata['mosaic_size'] = (dims['X'][1] - dims['X'][0], dims['Y'][1] - dims['Y'][0])
 
             # Get metadata XML
             meta_xml = czidoc.raw_metadata
@@ -1259,7 +1285,22 @@ def get_czi_metadata(czi_path):
         from aicspylibczi import CziFile
         reader = CziFile(czi_path)
 
-        bbox = reader.get_mosaic_bounding_box()
+        # Query scene count and channel count from dims_shape
+        # dims_shape returns a list with one entry per scene
+        n_data_channels = None
+        try:
+            dims_shape_list = reader.get_dims_shape()
+            metadata['n_scenes'] = len(dims_shape_list)
+            if 'C' in dims_shape_list[0]:
+                n_data_channels = dims_shape_list[0]['C'][1] - dims_shape_list[0]['C'][0]
+        except Exception:
+            pass
+
+        # Get per-scene bounding box
+        if scene is not None:
+            bbox = reader.get_mosaic_scene_bounding_box(index=scene)
+        else:
+            bbox = reader.get_mosaic_bounding_box()
         metadata['mosaic_size'] = (bbox.w, bbox.h)
 
         meta_xml = reader.meta
@@ -1268,32 +1309,58 @@ def get_czi_metadata(czi_path):
         else:
             root = meta_xml
 
-    # Parse XML for channel info
-    channels = []
-    for i, channel in enumerate(root.iter('Channel')):
-        ch_info = {
-            'index': i,
-            'name': channel.get('Name', f'Channel_{i}'),
-            'id': channel.get('Id', ''),
-        }
+    # Parse XML for channel info.
+    # CZI XML may contain duplicate <Channel> entries across sections (e.g.
+    # EDFvar files have 3x5=15 entries for 5 actual channels). We collect
+    # all entries indexed by Channel:N id, merging metadata from the richest
+    # entry per index. Then limit to actual data channel count from dims_shape.
+    channel_map = {}  # index -> ch_info dict
+    for channel in root.iter('Channel'):
+        ch_id = channel.get('Id', '')
+        name = channel.get('Name', '')
 
-        # Get fluorophore
+        # Extract channel index from Id like "Channel:0", "Channel:1", etc.
+        ch_idx = None
+        if ch_id and ch_id.startswith('Channel:'):
+            try:
+                ch_idx = int(ch_id.split(':')[1])
+            except (ValueError, IndexError):
+                pass
+
         fluor = channel.find('.//Fluor')
-        ch_info['fluorophore'] = fluor.text if fluor is not None else 'N/A'
-
-        # Get emission wavelength
+        fluor_text = fluor.text if fluor is not None else 'N/A'
         emission = channel.find('.//EmissionWavelength')
-        ch_info['emission_nm'] = float(emission.text) if emission is not None and emission.text else None
-
-        # Get excitation wavelength
+        emission_nm = float(emission.text) if emission is not None and emission.text else None
         excitation = channel.find('.//ExcitationWavelength')
-        ch_info['excitation_nm'] = float(excitation.text) if excitation is not None and excitation.text else None
-
-        # Get dye name/description
+        excitation_nm = float(excitation.text) if excitation is not None and excitation.text else None
         dye_name = channel.find('.//DyeName')
-        ch_info['dye'] = dye_name.text if dye_name is not None else ch_info['fluorophore']
+        dye = dye_name.text if dye_name is not None else fluor_text
 
-        channels.append(ch_info)
+        if ch_idx is not None:
+            existing = channel_map.get(ch_idx)
+            if existing is None:
+                channel_map[ch_idx] = {
+                    'index': ch_idx, 'name': name, 'id': ch_id,
+                    'fluorophore': fluor_text, 'emission_nm': emission_nm,
+                    'excitation_nm': excitation_nm, 'dye': dye,
+                }
+            else:
+                # Merge: prefer non-null/non-default values
+                if fluor_text and fluor_text != 'N/A' and existing['fluorophore'] == 'N/A':
+                    existing['fluorophore'] = fluor_text
+                if emission_nm and not existing['emission_nm']:
+                    existing['emission_nm'] = emission_nm
+                if excitation_nm and not existing['excitation_nm']:
+                    existing['excitation_nm'] = excitation_nm
+                if dye and dye != 'N/A' and existing['dye'] in ('N/A', existing['fluorophore']):
+                    existing['dye'] = dye
+
+    # Build sorted channel list
+    channels = [channel_map[k] for k in sorted(channel_map.keys())]
+
+    # Limit to actual data channel count if known (from dims_shape)
+    if n_data_channels is not None and len(channels) > n_data_channels:
+        channels = channels[:n_data_channels]
 
     metadata['channels'] = channels
     metadata['n_channels'] = len(channels)
@@ -1311,13 +1378,13 @@ def get_czi_metadata(czi_path):
     return metadata
 
 
-def print_czi_metadata(czi_path):
+def print_czi_metadata(czi_path, scene: int = 0):
     """Print CZI metadata in human-readable format."""
     logger.info(f"CZI Metadata: {Path(czi_path).name}")
     logger.info("=" * 60)
 
     try:
-        meta = get_czi_metadata(czi_path)
+        meta = get_czi_metadata(czi_path, scene=scene)
 
         if meta['mosaic_size']:
             w, h = meta['mosaic_size']
@@ -1844,6 +1911,8 @@ def run_pipeline(args):
     logger.info(f"Run: {run_timestamp}")
     logger.info(f"Cell type: {args.cell_type}")
     logger.info(f"Channel: {args.channel}")
+    if args.scene != 0:
+        logger.info(f"Scene: {args.scene}")
     if getattr(args, 'multi_marker', False):
         logger.info("Multi-marker mode: ENABLED (auto-enabled --all-channels and --parallel-detection)")
     logger.info("=" * 60)
@@ -1858,7 +1927,8 @@ def run_pipeline(args):
         czi_path,
         load_to_ram=use_ram,
         channel=args.channel,
-        quiet=False
+        quiet=False,
+        scene=args.scene
     )
 
     # Get mosaic bounds from loader properties
@@ -1882,7 +1952,7 @@ def run_pipeline(args):
 
     # Always log channel metadata so the log is self-documenting
     try:
-        _czi_meta = get_czi_metadata(czi_path)
+        _czi_meta = get_czi_metadata(czi_path, scene=args.scene)
         logger.info(f"  CZI channels ({_czi_meta['n_channels']}):")
         for _ch in _czi_meta['channels']:
             _ex = f"{_ch['excitation_nm']:.0f}" if _ch['excitation_nm'] else "?"
@@ -1912,7 +1982,7 @@ def run_pipeline(args):
         for ch in ch_list:
             if ch != args.channel:
                 logger.info(f"  Loading channel {ch}...")
-                ch_loader = get_loader(czi_path, load_to_ram=True, channel=ch, quiet=True)
+                ch_loader = get_loader(czi_path, load_to_ram=True, channel=ch, quiet=True, scene=args.scene)
                 all_channel_data[ch] = ch_loader.get_channel_data(ch)
         logger.info(f"  Loaded channels: {sorted(all_channel_data.keys())}")
 
@@ -1925,7 +1995,8 @@ def run_pipeline(args):
             czi_path,
             load_to_ram=use_ram,
             channel=args.cd31_channel,
-            quiet=False
+            quiet=False,
+            scene=args.scene
         )
 
     # Apply photobleaching correction if requested (slide-wide, before tiling)
@@ -2259,8 +2330,6 @@ def run_pipeline(args):
         params = {
             'membrane_channel': getattr(args, 'membrane_channel', 1),
             'nuclear_channel': getattr(args, 'nuclear_channel', 4),
-            'min_area_um': getattr(args, 'islet_min_area', 30.0),
-            'max_area_um': getattr(args, 'islet_max_area', 500.0),
             'extract_deep_features': getattr(args, 'extract_deep_features', False),
             'marker_signal_factor': getattr(args, 'marker_signal_factor', 2.0),
         }
@@ -2378,8 +2447,6 @@ def run_pipeline(args):
                 nuclear_channel=getattr(args, 'nuclear_channel', 4),
                 tile_size=args.tile_size,
                 pixel_size_um=pixel_size_um,
-                min_area_um=getattr(args, 'islet_min_area', 30.0),
-                max_area_um=getattr(args, 'islet_max_area', 500.0),
             )
 
         # Free original channel data — everything is now in shared memory
@@ -2891,10 +2958,14 @@ def run_pipeline(args):
                     _marker_top_pct = getattr(args, 'marker_top_pct', 5)
                     _pct_chs_str = getattr(args, 'marker_pct_channels', 'sst')
                     _pct_channels = set(s.strip() for s in _pct_chs_str.split(',')) if _pct_chs_str else set()
+                    _gmm_p = getattr(args, 'gmm_p_cutoff', 0.75)
+                    _ratio_min = getattr(args, 'ratio_min', 1.5)
                     marker_thresholds = compute_islet_marker_thresholds(
                         all_detections, marker_map=_islet_mm,
                         marker_top_pct=_marker_top_pct,
-                        pct_channels=_pct_channels) if all_detections else None
+                        pct_channels=_pct_channels,
+                        gmm_p_cutoff=_gmm_p,
+                        ratio_min=_ratio_min) if all_detections else None
                     # Add marker_class to each detection for JSON export
                     if marker_thresholds:
                         counts = {}
@@ -3052,8 +3123,8 @@ def run_pipeline(args):
     # Keep mask_label as the original integer — needed for dedup and mask operations.
     for det in all_detections:
         det['tile_mask_label'] = det.get('mask_label', 0)
-        gc = det.get('global_center', det.get('center', [0, 0]))
-        det['global_id'] = f"{int(round(gc[0]))}_{int(round(gc[1]))}"
+        _gc = det.get('global_center', det.get('center', [0, 0]))
+        det['global_id'] = f"{int(round(_gc[0]))}_{int(round(_gc[1]))}"
 
     # Save all detections with universal IDs and global coordinates
     detections_file = slide_output_dir / f'{args.cell_type}_detections.json'
@@ -3192,6 +3263,11 @@ def main():
     parser.add_argument('--cell-type', type=str, default=None,
                         choices=['nmj', 'mk', 'cell', 'vessel', 'mesothelium', 'islet', 'tissue_pattern'],
                         help='Cell type to detect (not required if --show-metadata)')
+
+    # CZI scene selection (multi-scene slides, e.g. brain with 2 tissue sections)
+    parser.add_argument('--scene', type=int, default=0,
+                        help='CZI scene index (0-based, default 0). '
+                             'Multi-scene slides store separate tissue sections as scenes.')
 
     # Metadata inspection
     parser.add_argument('--show-metadata', action='store_true',
@@ -3363,10 +3439,6 @@ def main():
     parser.add_argument('--islet-marker-channels', type=str, default='gcg:2,ins:3,sst:5',
                         help='Marker-to-channel mapping for islet classification, as name:index pairs. '
                              'Format: "gcg:2,ins:3,sst:5". Names are used in logs and legends.')
-    parser.add_argument('--islet-min-area', type=float, default=30.0,
-                        help='Minimum islet cell area in um² (default 30)')
-    parser.add_argument('--islet-max-area', type=float, default=500.0,
-                        help='Maximum islet cell area in um² (default 500)')
     parser.add_argument('--marker-signal-factor', type=float, default=2.0,
                         help='Pre-filter divisor for GMM threshold. Cells need marker '
                              'signal > auto_threshold/N to get full features + SAM2. '
@@ -3378,6 +3450,12 @@ def main():
     parser.add_argument('--marker-pct-channels', type=str, default='sst',
                         help='Comma-separated marker names that use percentile-based '
                              'thresholding instead of GMM (default: sst)')
+    parser.add_argument('--gmm-p-cutoff', type=float, default=0.75,
+                        help='GMM posterior probability cutoff for marker classification. '
+                             'Higher = stricter (fewer false positives). (default 0.75)')
+    parser.add_argument('--ratio-min', type=float, default=1.5,
+                        help='Dominant marker must be >= ratio_min * runner-up for '
+                             'single-marker classification. Below → "multi". (default 1.5)')
     parser.add_argument('--dedup-by-confidence', action='store_true', default=False,
                         help='Sort by confidence (score) instead of area during deduplication. '
                              'Automatically enabled for islet cell type.')
@@ -3454,7 +3532,7 @@ def main():
 
     # Handle --show-metadata (exit early)
     if args.show_metadata:
-        print_czi_metadata(args.czi_path)
+        print_czi_metadata(args.czi_path, scene=args.scene)
         return
 
     # Require --czi-path for actual pipeline runs

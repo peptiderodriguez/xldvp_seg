@@ -50,9 +50,13 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 
-def get_mosaic_info(czi: CziFile) -> Dict:
+def get_mosaic_info(czi: CziFile, scene: int = 0) -> Dict:
     """
     Extract mosaic information from CZI file.
+
+    Args:
+        czi: CziFile object
+        scene: Scene index (0-based, default 0)
 
     Returns dict with:
         - bbox: full mosaic bounding box (x, y, w, h)
@@ -64,10 +68,11 @@ def get_mosaic_info(czi: CziFile) -> Dict:
         - nominal_tile_size: expected tile size (may differ for edge tiles)
         - pixel_type: data type (e.g., 'uint16')
     """
-    # Try scene bounding box first, fall back to regular bounding box
+    # Get scene-specific bounding box
     try:
-        bbox = czi.get_mosaic_scene_bounding_box()
-    except Exception:
+        bbox = czi.get_mosaic_scene_bounding_box(index=scene)
+    except TypeError:
+        # Older aicspylibczi without scene support — fall back to global bbox
         bbox = czi.get_mosaic_bounding_box()
     dims_shape = czi.get_dims_shape()[0]
 
@@ -79,7 +84,7 @@ def get_mosaic_info(czi: CziFile) -> Dict:
     # Build kwargs based on available dimensions
     tile_kwargs = {'M': 0}
     if 'S' in dims_shape:
-        tile_kwargs['S'] = 0
+        tile_kwargs['S'] = scene
     if 'H' in dims_shape:
         tile_kwargs['H'] = 0
     if 'C' in dims_shape:
@@ -109,6 +114,7 @@ def get_mosaic_info(czi: CziFile) -> Dict:
         'tiles_per_col': tiles_per_col,
         'nominal_tile_size': nominal_tile_size,
         'pixel_type': pixel_type,
+        'scene': scene,
     }
 
 
@@ -197,7 +203,8 @@ def preflight_check(
         test_data = czi.read_mosaic(
             region=(test_x, test_y, test_w, test_h),
             scale_factor=1,
-            C=channels[0]
+            C=channels[0],
+            S=mosaic_info.get('scene', 0)
         )
         test_data = np.squeeze(test_data)
 
@@ -479,6 +486,7 @@ def _process_strip(
     strip_height: int,
     bbox: Dict,
     zarr_path: str,
+    scene: int = 0,
 ) -> Tuple[int, int, bool]:
     """Process a single strip (for parallel execution)."""
     from aicspylibczi import CziFile
@@ -495,10 +503,13 @@ def _process_strip(
     czi = CziFile(czi_path)
 
     # Read strip from CZI
+    # Scene selection is implicit: x_start/y_start come from
+    # get_mosaic_scene_bounding_box(index=scene), so the region
+    # coordinates naturally read from the correct scene.
     strip_data = czi.read_mosaic(
         region=(x_start, y_start + y_off, total_width, h),
         scale_factor=1,
-        C=ch
+        C=ch,
     )
 
     # Remove singleton dimensions
@@ -562,6 +573,8 @@ def copy_tiles_to_zarr(
 
     logger.info(f"Writing {len(channels)} channels, {n_strips} strips of {strip_height}px")
 
+    scene = mosaic_info.get('scene', 0)
+
     if num_workers > 1 and czi_path and zarr_path:
         # Parallel mode
         logger.info(f"Using {num_workers} parallel workers")
@@ -576,7 +589,7 @@ def copy_tiles_to_zarr(
             futures = {
                 executor.submit(
                     _process_strip,
-                    czi_path, ch, ch_idx, strip_idx, strip_height, bbox, zarr_path
+                    czi_path, ch, ch_idx, strip_idx, strip_height, bbox, zarr_path, scene
                 ): (ch_idx, strip_idx)
                 for ch, ch_idx, strip_idx in work_items
             }
@@ -602,7 +615,7 @@ def copy_tiles_to_zarr(
                 strip_data = czi.read_mosaic(
                     region=(x_start, y_start + y_off, total_width, h),
                     scale_factor=1,
-                    C=ch
+                    C=ch,
                 )
 
                 # Remove singleton dimensions
@@ -720,6 +733,7 @@ def convert_czi_to_ome_zarr(
     overwrite: bool = False,
     dry_run: bool = False,
     num_workers: int = 1,
+    scene: int = 0,
 ) -> Optional[Dict]:
     """
     Convert a CZI mosaic file to OME-Zarr format.
@@ -735,6 +749,7 @@ def convert_czi_to_ome_zarr(
         overwrite: Overwrite existing output
         dry_run: Only run preflight check, don't convert
         num_workers: Number of parallel workers for strip processing
+        scene: CZI scene index (0-based, default 0)
 
     Returns:
         None on success, or preflight results dict if dry_run=True
@@ -744,8 +759,8 @@ def convert_czi_to_ome_zarr(
     logger.info(f"Opening CZI: {czi_path}")
     czi = CziFile(str(czi_path))
 
-    # Get mosaic info
-    mosaic_info = get_mosaic_info(czi)
+    # Get mosaic info for the specified scene
+    mosaic_info = get_mosaic_info(czi, scene=scene)
     logger.info(f"Mosaic size: {mosaic_info['bbox']['w']} x {mosaic_info['bbox']['h']} pixels")
     logger.info(f"Channels: {mosaic_info['n_channels']}")
     logger.info(f"Tiles: {mosaic_info['n_tiles']} ({mosaic_info['tiles_per_row']} x {mosaic_info['tiles_per_col']})")
@@ -946,6 +961,12 @@ Examples:
         help="Only run preflight check, don't convert",
     )
     parser.add_argument(
+        "--scene",
+        type=int,
+        default=0,
+        help="CZI scene index (0-based, default: 0)",
+    )
+    parser.add_argument(
         "--verbose", "-v",
         action="store_true",
         help="Verbose output",
@@ -973,6 +994,7 @@ Examples:
         overwrite=args.overwrite,
         dry_run=args.dry_run,
         num_workers=args.workers,
+        scene=args.scene,
     )
 
     if args.dry_run and result:

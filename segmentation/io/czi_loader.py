@@ -35,12 +35,13 @@ def get_loader(
     channels: Optional[List[int]] = None,
     channel: Optional[int] = None,
     strip_height: int = 5000,
-    quiet: bool = False
+    quiet: bool = False,
+    scene: int = 0
 ) -> 'CZILoader':
     """
     Get or create a CZILoader for this path.
 
-    Returns existing loader if already loaded for this path.
+    Returns existing loader if already loaded for this path+scene.
 
     Args:
         czi_path: Path to CZI file
@@ -49,11 +50,12 @@ def get_loader(
         channel: Single channel to load (backward compatibility)
         strip_height: Height of strips for RAM loading
         quiet: Suppress progress output
+        scene: CZI scene index (0-based, default 0)
 
     Returns:
         CZILoader instance (new or existing)
     """
-    key = str(Path(czi_path).resolve())
+    key = f"{Path(czi_path).resolve()}:S{scene}"
 
     # Look up cache under lock (fast), but do expensive channel loading outside it
     existing = None
@@ -85,14 +87,15 @@ def get_loader(
         if key in _image_cache:
             return _image_cache[key]
 
-        logger.debug(f"Creating new loader for {Path(czi_path).name}")
+        logger.debug(f"Creating new loader for {Path(czi_path).name} scene={scene}")
         loader = CZILoader(
             czi_path,
             load_to_ram=load_to_ram,
             channels=channels,
             channel=channel,
             strip_height=strip_height,
-            quiet=quiet
+            quiet=quiet,
+            scene=scene
         )
         _image_cache[key] = loader
         return loader
@@ -146,7 +149,8 @@ class CZILoader:
         channel: Optional[int] = None,
         channels: Optional[List[int]] = None,
         strip_height: int = 5000,
-        quiet: bool = False
+        quiet: bool = False,
+        scene: int = 0
     ):
         """
         Initialize CZI loader.
@@ -158,6 +162,7 @@ class CZILoader:
             channels: List of channels to load (for multi-channel support)
             strip_height: Height of strips for RAM loading (memory optimization)
             quiet: Suppress progress output
+            scene: CZI scene index (0-based, default 0)
 
         Raises:
             FileNotFoundError: If czi_path does not exist
@@ -171,13 +176,14 @@ class CZILoader:
             raise FileNotFoundError(f"CZI path is not a file: {self.czi_path}")
 
         self.reader = CziFile(str(self.czi_path))
+        self.scene = scene
         self.quiet = quiet
         self._strip_height = strip_height
         self._load_lock = threading.Lock()
 
         try:
-            # Get mosaic info
-            self.bbox = self.reader.get_mosaic_scene_bounding_box()
+            # Get mosaic info for the selected scene
+            self.bbox = self.reader.get_mosaic_scene_bounding_box(index=self.scene)
             self.x_start = self.bbox.x
             self.y_start = self.bbox.y
             self.width = self.bbox.w
@@ -228,10 +234,13 @@ class CZILoader:
         n_strips = (self.height + strip_height - 1) // strip_height
 
         # Read a small test strip to detect if this is RGB data
+        # Scene selection is implicit: self.x_start/y_start come from
+        # get_mosaic_scene_bounding_box(index=self.scene), so the region
+        # coordinates naturally read from the correct scene.
         test_strip = self.reader.read_mosaic(
             region=(self.x_start, self.y_start, min(100, self.width), min(100, self.height)),
             scale_factor=1,
-            C=channel
+            C=channel,
         )
         test_strip = np.squeeze(test_strip)
         is_rgb = len(test_strip.shape) == 3 and test_strip.shape[-1] == 3
@@ -252,7 +261,7 @@ class CZILoader:
             strip = self.reader.read_mosaic(
                 region=(self.x_start, self.y_start + y_off, self.width, h),
                 scale_factor=1,
-                C=channel
+                C=channel,
             )
             strip = np.squeeze(strip)
             if is_rgb:
@@ -333,7 +342,7 @@ class CZILoader:
             )
 
         if is_rgb_data:
-            logger.info(f"  Detected RGB data (shape: {test_strip.shape})")
+            logger.info(f"  Detected RGB data for channel {channel}")
 
         iterator = range(n_strips)
         if not self.quiet:
@@ -346,7 +355,7 @@ class CZILoader:
             strip = self.reader.read_mosaic(
                 region=(self.x_start, self.y_start + y_off, self.width, h),
                 scale_factor=1,
-                C=channel
+                C=channel,
             )
             strip = np.squeeze(strip)
 
@@ -394,7 +403,7 @@ class CZILoader:
         test_region = self.reader.read_mosaic(
             region=(self.x_start, self.y_start, min(100, self.width), min(100, self.height)),
             scale_factor=1,
-            C=channel
+            C=channel,
         )
         test_region = np.squeeze(test_region)
         return len(test_region.shape) == 3 and test_region.shape[-1] == 3
@@ -659,7 +668,7 @@ class CZILoader:
         tile_data = self.reader.read_mosaic(
             region=(full_tile_x, full_tile_y, full_tile_size, full_tile_size),
             scale_factor=scale_factor,
-            C=channel
+            C=channel,
         )
 
         if tile_data is None or tile_data.size == 0:
@@ -731,8 +740,9 @@ class CZILoader:
 
     def __repr__(self) -> str:
         channels_str = ', '.join(str(c) for c in self.loaded_channels) if self.loaded_channels else 'none'
+        scene_str = f", scene={self.scene}" if self.scene != 0 else ""
         return (
-            f"CZILoader('{self.slide_name}', "
+            f"CZILoader('{self.slide_name}'{scene_str}, "
             f"size={self.width}x{self.height}, "
             f"loaded_channels=[{channels_str}], "
             f"memory={self.memory_usage_gb():.2f}GB)"

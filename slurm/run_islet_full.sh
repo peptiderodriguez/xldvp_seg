@@ -1,17 +1,17 @@
 #!/bin/bash
-#SBATCH --job-name=islet_test
+#SBATCH --job-name=islet_full
 #SBATCH --partition=p.hpcl93
 #SBATCH --nodes=1
 #SBATCH --ntasks=1
 #SBATCH --cpus-per-task=48
-#SBATCH --mem=200G
+#SBATCH --mem=400G
 #SBATCH --gres=gpu:l40s:4
-#SBATCH --time=8:00:00
-#SBATCH --output=/fs/gpfs41/lv12/fileset02/pool/pool-mann-edwin/code_bin/xldvp_seg/slurm/logs/islet_test_%j.out
-#SBATCH --error=/fs/gpfs41/lv12/fileset02/pool/pool-mann-edwin/code_bin/xldvp_seg/slurm/logs/islet_test_%j.err
+#SBATCH --time=12:00:00
+#SBATCH --output=/fs/gpfs41/lv12/fileset02/pool/pool-mann-edwin/code_bin/xldvp_seg/slurm/logs/islet_full_%j.out
+#SBATCH --error=/fs/gpfs41/lv12/fileset02/pool/pool-mann-edwin/code_bin/xldvp_seg/slurm/logs/islet_full_%j.err
 
-# Islet 10% test run — 4 GPUs
-# BS-100 slide: 35 tiles, 29 tissue → 3 tiles at 10%
+# Islet 100% run — 4 GPUs
+# BS-100 slide: 14 tissue tiles, ~7K cells/tile, ~4h expected
 
 set -euo pipefail
 
@@ -28,7 +28,7 @@ cd "$REPO"
 mkdir -p "$OUTPUT_DIR"
 mkdir -p slurm/logs
 
-echo "=== Islet 10% test run ==="
+echo "=== Islet 100% full run ==="
 echo "Start: $(date)"
 echo "Node: $(hostname)"
 echo "GPUs: 4"
@@ -42,10 +42,24 @@ $PYTHON run_segmentation.py \
     --all-channels \
     --tile-size 4000 \
     --tile-overlap 0.25 \
-    --sample-fraction 0.10 \
+    --sample-fraction 1.0 \
     --load-to-ram \
     --multi-gpu --num-gpus 4 \
     --output-dir "$OUTPUT_DIR" \
     --no-serve
+
+echo "Detection done: $(date)"
+
+# Find the run directory (most recent islet output)
+RUN_DIR=$(ls -dt "$OUTPUT_DIR"/2025_09_03_30610012_BS-100_* | head -1)
+echo "Run dir: $RUN_DIR"
+
+# Post-hoc islet analysis with Otsu quality filter
+$PYTHON "$REPO/scripts/analyze_islets.py" \
+    --run-dir "$RUN_DIR" \
+    --czi-path "$CZI" \
+    --threshold-factor 2.0 \
+    --quality-filter otsu \
+    --buffer-um 25 --min-cells 5 --no-recruit
 
 echo "Done: $(date)"

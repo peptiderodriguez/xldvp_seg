@@ -339,8 +339,7 @@ def build_detection_params(
         return {
             'membrane_channel': getattr(args, 'membrane_channel', 1),
             'nuclear_channel': getattr(args, 'nuclear_channel', 4),
-            'min_area_um': getattr(args, 'islet_min_area', 30.0),
-            'max_area_um': getattr(args, 'islet_max_area', 500.0),
+            'marker_signal_factor': getattr(args, 'marker_signal_factor', 2.0),
         }
 
     elif cell_type == 'tissue_pattern':

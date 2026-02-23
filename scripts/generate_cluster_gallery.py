@@ -418,6 +418,8 @@ def main():
     parser.add_argument('--cluster-field', type=str, default='cluster_label',
                         help='Field to group by (default: cluster_label, '
                         'also: subcluster_label)')
+    parser.add_argument('--scene', type=int, default=0,
+                        help='CZI scene index (0-based, default 0)')
     args = parser.parse_args()
 
     output_dir = Path(args.output_dir)
@@ -462,7 +464,7 @@ def main():
 
     # Auto-detect display channels if needed
     from segmentation.io.czi_loader import CZILoader
-    loader = CZILoader(args.czi_path)
+    loader = CZILoader(args.czi_path, scene=args.scene)
     if display_channels is None:
         n_channels = loader.num_channels
         display_channels = list(range(min(3, n_channels)))
