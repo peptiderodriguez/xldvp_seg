@@ -17,6 +17,7 @@ Default 5-channel CZI layout (brain FISH):
 
 import gc
 import numpy as np
+from scipy import ndimage
 from typing import Dict, Any, List, Optional, Tuple
 
 from .cell import CellStrategy
@@ -140,10 +141,9 @@ class TissuePatternStrategy(CellStrategy):
         min_area_px = int(self.min_area_um / pixel_area_um2) if pixel_area_um2 > 0 else 10
         max_area_px = int(self.max_area_um / pixel_area_um2) if pixel_area_um2 > 0 else 100000
 
-        areas = []
-        for cp_id in cellpose_ids:
-            area_px = (cellpose_masks == cp_id).sum()
-            areas.append((cp_id, area_px))
+        # Compute areas for all cells in O(M) using bincount (not O(N×H×W) per cell)
+        areas_all = np.bincount(cellpose_masks.ravel())
+        areas = [(cp_id, areas_all[cp_id]) for cp_id in cellpose_ids]
 
         in_range = [(cp_id, a) for cp_id, a in areas if min_area_px <= a <= max_area_px]
         out_of_range = len(areas) - len(in_range)
@@ -151,9 +151,15 @@ class TissuePatternStrategy(CellStrategy):
             logger.info(f"  Area filter: {len(in_range)} in range [{self.min_area_um}-{self.max_area_um} um²], "
                         f"{out_of_range} rejected")
 
+        # Extract masks using find_objects for bbox-scoped extraction (not full-tile scan per cell)
+        slices = ndimage.find_objects(cellpose_masks)
         accepted_masks = []
         for cp_id, _ in in_range:
-            cp_mask = (cellpose_masks == cp_id).astype(bool)
+            sl = slices[cp_id - 1]  # find_objects is 1-indexed
+            if sl is None:
+                continue
+            cp_mask = np.zeros(cellpose_masks.shape, dtype=bool)
+            cp_mask[sl] = (cellpose_masks[sl] == cp_id)
             if cp_mask.sum() < self.min_mask_pixels:
                 continue
             accepted_masks.append(cp_mask)
@@ -225,8 +231,20 @@ class TissuePatternStrategy(CellStrategy):
 
         segment_scores = getattr(self, '_last_segment_scores', [])
 
+        # Precompute tile_global_mean once (avoids recomputing per cell in extract_morphological_features)
+        if tile.ndim == 3:
+            global_valid = np.max(tile, axis=2) > 0
+            tile_global_mean = float(np.mean(tile[global_valid])) if global_valid.any() else 0
+        else:
+            global_valid = tile > 0
+            tile_global_mean = float(np.mean(tile[global_valid])) if global_valid.any() else 0
+        del global_valid
+
+        n_masks = len(masks)
         for idx, mask in enumerate(masks):
-            feat = extract_morphological_features(mask, tile)
+            if idx % 500 == 0:
+                print(f"[tissue_pattern] Featurizing cell {idx}/{n_masks}", flush=True)
+            feat = extract_morphological_features(mask, tile, tile_global_mean=tile_global_mean)
             if not feat:
                 continue
 

@@ -2785,6 +2785,14 @@ def run_pipeline(args):
         prior_annotations=prior_ann,
     )
 
+    # Assign globally unique mask_labels encoding centroid in global coordinates
+    # Format: x_y (integer pixel coords) — spatially meaningful + unique
+    # Preserve original per-tile label as 'tile_mask_label' for HDF5 lookups
+    for det in all_detections:
+        det['tile_mask_label'] = det.get('mask_label', 0)
+        gc = det.get('global_center', det.get('center', [0, 0]))
+        det['mask_label'] = f"{int(round(gc[0]))}_{int(round(gc[1]))}"
+
     # Save all detections with universal IDs and global coordinates
     detections_file = slide_output_dir / f'{args.cell_type}_detections.json'
     with open(detections_file, 'w') as f:

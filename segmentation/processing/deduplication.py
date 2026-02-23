@@ -9,6 +9,7 @@ Works with any cell type (NMJ, MK, vessel, mesothelium, etc.).
 """
 
 import numpy as np
+from scipy import ndimage
 
 try:
     import hdf5plugin  # Register LZ4 filter for h5py
@@ -19,6 +20,9 @@ import h5py
 from segmentation.utils.logging import get_logger
 
 logger = get_logger(__name__)
+
+# Encode (x, y) as single int64 for fast numpy set intersection
+_COORD_STRIDE = 300000  # Must exceed max slide dimension in pixels
 
 
 def deduplicate_by_mask_overlap(detections, tiles_dir, min_overlap_fraction=0.1,
@@ -54,14 +58,19 @@ def deduplicate_by_mask_overlap(detections, tiles_dir, min_overlap_fraction=0.1,
         )
 
     tiles_dir = Path(tiles_dir)
+    n_total = len(detections)
+    print(f"[dedup] Starting dedup for {n_total} detections...", flush=True)
 
     # Load all masks and compute global bounding boxes
-    det_info = []  # List of (det, global_bbox, global_mask_coords)
+    det_info = []  # List of (det, global_bbox, encoded_coords)
 
-    # Cache loaded mask files
+    # Cache: tile_id -> (masks_array, find_objects_slices)
     mask_cache = {}
 
-    for det in detections:
+    for i, det in enumerate(detections):
+        if i % 5000 == 0 and i > 0:
+            print(f"[dedup] Loading masks: {i}/{n_total}", flush=True)
+
         tile_origin = tuple(det.get('tile_origin', [0, 0]))
         tile_x, tile_y = tile_origin
         tile_id = f"tile_{tile_x}_{tile_y}"
@@ -76,42 +85,59 @@ def deduplicate_by_mask_overlap(detections, tiles_dir, min_overlap_fraction=0.1,
                 det_info.append((det, None, None))
                 continue
 
-        # Load masks if not cached
+        # Load masks + precompute find_objects if not cached
         if tile_id not in mask_cache:
             masks_file = tiles_dir / tile_id / mask_filename
             if masks_file.exists():
                 try:
                     with h5py.File(masks_file, 'r') as f:
-                        mask_cache[tile_id] = f['masks'][:]
+                        masks_array = f['masks'][:]
+                    slices = ndimage.find_objects(masks_array)
+                    mask_cache[tile_id] = (masks_array, slices)
                 except Exception as e:
                     logger.warning(f"Failed to load masks from {masks_file}: {e}")
                     mask_cache[tile_id] = None
             else:
                 mask_cache[tile_id] = None
 
-        masks = mask_cache.get(tile_id)
-        if masks is None:
+        cached = mask_cache.get(tile_id)
+        if cached is None:
             det_info.append((det, None, None))
             continue
 
-        # Get mask pixels in local coords
-        local_ys, local_xs = np.where(masks == mask_label)
+        masks_array, slices = cached
+
+        # Extract mask coordinates via find_objects bbox (O(bbox) not O(H×W))
+        if mask_label < 1 or mask_label > len(slices):
+            det_info.append((det, None, None))
+            continue
+        sl = slices[mask_label - 1]  # find_objects is 1-indexed
+        if sl is None:
+            det_info.append((det, None, None))
+            continue
+
+        local_ys, local_xs = np.where(masks_array[sl] == mask_label)
         if len(local_ys) == 0:
             det_info.append((det, None, None))
             continue
 
-        # Convert to global coords
-        global_xs = local_xs + tile_x
-        global_ys = local_ys + tile_y
+        # Adjust for slice offset + convert to global coords
+        global_xs = local_xs + sl[1].start + tile_x
+        global_ys = local_ys + sl[0].start + tile_y
 
         # Compute bounding box (x_min, y_min, x_max, y_max)
         bbox = (int(global_xs.min()), int(global_ys.min()),
                 int(global_xs.max()), int(global_ys.max()))
 
-        # Store global mask coords as set for fast overlap checking
-        global_coords = set(zip(global_xs.tolist(), global_ys.tolist()))
+        # Encode coords as sorted int64 array for fast numpy intersection
+        encoded = np.sort(global_ys.astype(np.int64) * _COORD_STRIDE + global_xs.astype(np.int64))
 
-        det_info.append((det, bbox, global_coords))
+        det_info.append((det, bbox, encoded))
+
+    # Free mask cache — no longer needed
+    del mask_cache
+
+    print(f"[dedup] Masks loaded. Running overlap check...", flush=True)
 
     # Sort by priority descending (keep higher-priority ones)
     if sort_by == 'confidence':
@@ -129,9 +155,12 @@ def deduplicate_by_mask_overlap(detections, tiles_dir, min_overlap_fraction=0.1,
 
     # Greedy deduplication: keep detection if it doesn't significantly overlap with any kept detection
     kept = []
-    kept_info = []  # (bbox, global_coords) for kept detections
+    kept_info = []  # (bbox, encoded_coords) for kept detections
 
-    for det, bbox, coords in det_info:
+    for i, (det, bbox, coords) in enumerate(det_info):
+        if i % 10000 == 0 and i > 0:
+            print(f"[dedup] Overlap check: {i}/{n_total} processed, {len(kept)} kept", flush=True)
+
         if bbox is None or coords is None:
             # Can't check overlap, keep it
             kept.append(det)
@@ -145,8 +174,8 @@ def deduplicate_by_mask_overlap(detections, tiles_dir, min_overlap_fraction=0.1,
                     bbox[1] > kept_bbox[3] or bbox[3] < kept_bbox[1]):
                 continue
 
-            # Check actual pixel overlap
-            overlap = len(coords & kept_coords)
+            # Fast numpy intersection on sorted int64 arrays
+            overlap = len(np.intersect1d(coords, kept_coords, assume_unique=True))
             smaller_size = min(len(coords), len(kept_coords))
 
             if smaller_size > 0 and overlap / smaller_size >= min_overlap_fraction:
@@ -160,5 +189,6 @@ def deduplicate_by_mask_overlap(detections, tiles_dir, min_overlap_fraction=0.1,
     n_removed = len(detections) - len(kept)
     if n_removed > 0:
         logger.info(f"Mask overlap dedup: {len(detections)} -> {len(kept)} ({n_removed} duplicates removed)")
+    print(f"[dedup] Done: {len(detections)} -> {len(kept)} ({n_removed} removed)", flush=True)
 
     return kept

@@ -289,9 +289,21 @@ class CellStrategy(DetectionStrategy, MultiChannelFeatureMixin):
         crops_for_resnet_context = []
         crop_indices = []
 
+        # Precompute tile_global_mean once (avoids recomputing per cell in extract_morphological_features)
+        if tile.ndim == 3:
+            global_valid = np.max(tile, axis=2) > 0
+            tile_global_mean = float(np.mean(tile[global_valid])) if global_valid.any() else 0
+        else:
+            global_valid = tile > 0
+            tile_global_mean = float(np.mean(tile[global_valid])) if global_valid.any() else 0
+        del global_valid
+
+        n_masks = len(masks)
         for idx, mask in enumerate(masks):
+            if idx % 500 == 0:
+                print(f"[cell] Featurizing cell {idx}/{n_masks}", flush=True)
             # Basic morphological features
-            feat = extract_morphological_features(mask, tile)
+            feat = extract_morphological_features(mask, tile, tile_global_mean=tile_global_mean)
             if not feat:
                 continue
 

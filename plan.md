@@ -1,31 +1,20 @@
 # Project Plan and Task Tracking
-Last Updated: 2026-02-22 03:45:00
+Last Updated: 2026-02-23 09:28
 
-## Current Session: Multiscale Vessel Multi-GPU Review (2026-02-22 03:07)
-Review changes implementing multiscale vessel detection over multi-GPU infrastructure.
+## Current Objectives
+- Review `merge_detections_across_scales` (lines 240-365) and `compute_iou_contours` (lines 146-217) in multiscale.py
+- Check for bugs, edge cases, inefficiencies, format compatibility
 
-### Findings: 3 critical, 3 medium, 3 low
-See review_multiscale_multigpu_2026-02-22.md
+## Completed Tasks
+- [x] Read multiscale.py in full - 2026-02-23 09:27
+- [x] Read callers in run_segmentation.py (checkpoint resume, multi-GPU path) - 2026-02-23 09:28
+- [x] Read callers in vessel.py (detect_multiscale, detect_multiscale_medsam) - 2026-02-23 09:28
 
-### Tasks
-- [x] Read multigpu_worker.py - full (764 lines)
-- [x] Read run_segmentation.py (multiscale sections 2078-2564)
-- [x] Read segmentation/utils/multiscale.py (567 lines)
-- [x] Read vessel strategy _scale_override + detect_multiscale
-- [x] Read convert_detection_to_full_res + merge_detections_across_scales
-- [x] Read tile_processing.py for process_single_tile + enrich_detection_features
-- [x] Read multigpu_shm.py for shared memory structure
-- [x] Trace contour key names through full pipeline
-- [x] Trace coordinate flow end-to-end
-- [x] Write review summary
+## Pending Tasks
+- [ ] Complete line-by-line analysis of both functions - high
+- [ ] Write review findings as numbered list with severity - high
 
-### Critical Findings
-1. **Contour key mismatch**: `outer_contour` vs `outer` -- contours never scaled, dedup never works
-2. **Center coords 0-indexed vs global**: HTML crops at wrong position for non-zero-origin CZIs
-3. **outer_contour_global not updated**: LMD export would use wrong coordinates
-
-## Previous Sessions
-- Vessel Pipeline Review Round 2 (2026-02-21 19:09) - 1 critical, 3 medium, 3 low
-- Vessel Pipeline E2E Review Round 1 (2026-02-21 18:51) - 1 critical, 5 medium, 5 low
-- Vessel Pipeline Review - Max Area + Contour Smoothing (2026-02-21 18:28)
-- Islet Pipeline Path Review (2026-02-21 17:19)
+## Notes and Observations
+- Checkpoint resume (run_segmentation.py:2228-2233) loads JSON -> lists, then converts back to np.array(int32). This means `merge_detections_across_scales` receives proper numpy arrays.
+- After `convert_detection_to_full_res`, `det['outer']` is int32 numpy (line 471). So `merge_detections_across_scales` always gets numpy for non-resumed detections.
+- The `np.asarray(outer).reshape(-1,1,2)` at line 277 is safe for both numpy and list inputs.

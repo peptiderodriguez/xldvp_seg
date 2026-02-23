@@ -877,16 +877,26 @@ def export_detections(detections, output_path):
 # 8. HTML visualization
 # ---------------------------------------------------------------------------
 
-def pct_norm(img):
-    """Percentile-normalize a multi-channel image, preserving zero (padding) pixels."""
+def pct_norm(img, pop_ranges=None):
+    """Percentile-normalize a multi-channel image, preserving zero (padding) pixels.
+
+    Args:
+        img: (H, W, C) uint16 array
+        pop_ranges: optional list of (lo, hi) per channel from population stats.
+            If provided, uses these instead of per-tile percentiles for consistent
+            display across tiles (matching classification thresholds).
+    """
     out = np.zeros_like(img, dtype=np.uint8)
     valid = np.any(img > 0, axis=-1)
     for c in range(img.shape[2]):
         ch = img[:, :, c].astype(float)
-        vals = ch[valid]
-        if len(vals) == 0:
-            continue
-        lo, hi = np.percentile(vals, 1), np.percentile(vals, 99.5)
+        if pop_ranges is not None and c < len(pop_ranges) and pop_ranges[c] is not None:
+            lo, hi = pop_ranges[c]
+        else:
+            vals = ch[valid]
+            if len(vals) == 0:
+                continue
+            lo, hi = np.percentile(vals, 1), np.percentile(vals, 99.5)
         if hi > lo:
             out[:, :, c] = np.clip(255 * (ch - lo) / (hi - lo), 0, 255).astype(np.uint8)
     return out
@@ -926,8 +936,10 @@ def render_islet_card(islet_feat, cells, masks, tile_vis, tile_x, tile_y,
         gc = d.get('global_center', d.get('center', [0, 0]))
         cx_rel = gc[0] - tile_x
         cy_rel = gc[1] - tile_y
-        ml = d.get('mask_label')
-        cell_info.append((cx_rel, cy_rel, ml, d.get('marker_class', 'none')))
+        # Use tile_mask_label for HDF5 lookup (new data), fall back to mask_label (old data)
+        ml = d.get('tile_mask_label', d.get('mask_label'))
+        mc = d.get('marker_class', 'none')
+        cell_info.append((cx_rel, cy_rel, ml, mc))
         if ml is not None and ml > 0:
             mask_labels.append(ml)
 
@@ -935,7 +947,9 @@ def render_islet_card(islet_feat, cells, masks, tile_vis, tile_x, tile_y,
         return None
 
     # Union mask + dilate for islet boundary
-    union_mask = np.zeros((tile_h, tile_w), dtype=np.uint8)
+    # Use actual mask shape (edge tiles may be smaller than tile_h x tile_w)
+    mh, mw = masks.shape[:2]
+    union_mask = np.zeros((mh, mw), dtype=np.uint8)
     for ml in mask_labels:
         union_mask |= (masks == ml).astype(np.uint8)
 
@@ -947,20 +961,22 @@ def render_islet_card(islet_feat, cells, masks, tile_vis, tile_x, tile_y,
         return None
 
     x_min = max(0, int(xs.min()) - PADDING)
-    x_max = min(tile_w, int(xs.max()) + PADDING)
+    x_max = min(mw, int(xs.max()) + PADDING)
     y_min = max(0, int(ys.min()) - PADDING)
-    y_max = min(tile_h, int(ys.max()) + PADDING)
+    y_max = min(mh, int(ys.max()) + PADDING)
 
     crop = tile_vis[y_min:y_max, x_min:x_max].copy()
 
-    # Dashed cell contours colored by marker
+    # Draw dashed contours for marker+ cells only (skip 'none' — exocrine clutter)
     for _cx, _cy, ml, mc in cell_info:
+        if mc == 'none':
+            continue
         color = marker_colors.get(mc, (128, 128, 128))
         if ml is not None and ml > 0:
             mask_crop = (masks[y_min:y_max, x_min:x_max] == ml).astype(np.uint8)
             if mask_crop.any():
                 cnts, _ = cv2.findContours(mask_crop, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_NONE)
-                draw_dashed_contours(crop, cnts, color, thickness=1)
+                draw_dashed_contours(crop, cnts, color, thickness=2)
 
     # Solid pink islet boundary
     boundary_crop = dilated[y_min:y_max, x_min:x_max]
@@ -1177,11 +1193,12 @@ def generate_html(islet_features, detections, islet_groups, tile_info, tile_mask
         masks = tile_masks_cache[tile_key]
         tile_vis = tile_vis_cache[tile_key]
 
-        # Filter to cells within this tile (avoid cross-tile mask label collisions)
+        # Filter to cells whose mask_label belongs to THIS tile (tile_origin match)
+        # mask_labels are per-tile (1..N), so a cell's mask_label is only valid
+        # in the masks.h5 from its origin tile, not any overlapping tile
         all_cells = [detections[i] for i in islet_groups[iid]]
         cells = [c for c in all_cells
-                 if tx <= c.get('global_center', c.get('center', [0, 0]))[0] < tx + tile_w
-                 and ty <= c.get('global_center', c.get('center', [0, 0]))[1] < ty + tile_h]
+                 if tuple(c.get('tile_origin', [-1, -1])) == (tx, ty)]
         if not cells:
             continue
 
@@ -1542,7 +1559,19 @@ def main():
                             rgb_chs.append(np.zeros((th, tw), dtype=np.uint16))
                     while len(rgb_chs) < 3:
                         rgb_chs.append(np.zeros((th, tw), dtype=np.uint16))
-                    tile_vis_cache[(tx, ty)] = pct_norm(np.stack(rgb_chs, axis=-1))
+                    # Use population-level percentiles (from classification thresholds)
+                    # so display brightness matches classification decisions across all tiles
+                    pop_ranges = []
+                    if marker_thresholds is not None:
+                        norm_ranges = marker_thresholds[0]  # {ch_key: (lo, hi)}
+                        for ch in display_chs[:3]:
+                            ch_key = f'ch{ch}'
+                            if ch_key in norm_ranges:
+                                pop_ranges.append(norm_ranges[ch_key])
+                            else:
+                                pop_ranges.append(None)
+                    tile_vis_cache[(tx, ty)] = pct_norm(np.stack(rgb_chs, axis=-1),
+                                                        pop_ranges=pop_ranges or None)
                     print(f"  Loaded tile ({tx},{ty})")
 
                 marker_colors = build_marker_colors(marker_map)

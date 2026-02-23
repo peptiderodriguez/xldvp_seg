@@ -9,7 +9,9 @@ For islet detections (backward compat): auto-detects ch2/ch3/ch5 and labels
 alpha/beta/delta when --marker-channels is not specified.
 
 Feature groups:
-  - "morph":   morphological features (area, eccentricity, solidity, etc.)
+  - "morph":   all morphological features (= shape + color, backward compat)
+  - "shape":   pure geometry (area, circularity, solidity, aspect_ratio, etc.)
+  - "color":   intensity/color (gray_mean, hue_mean, relative_brightness, etc.)
   - "sam2":    SAM2 embedding features (sam2_0..sam2_255)
   - "channel": per-channel stats (ch0_mean, ch1_std, ch0_ch2_ratio, etc.)
   - "deep":    deep features (resnet_*, dinov2_*)
@@ -168,10 +170,26 @@ def discover_marker_channels(detections, exclude_channels=None):
     return {f'ch{ch}': ch for ch in available}
 
 
+_COLOR_FEATURES = frozenset({
+    'red_mean', 'red_std', 'green_mean', 'green_std', 'blue_mean', 'blue_std',
+    'gray_mean', 'gray_std', 'hue_mean', 'saturation_mean', 'value_mean',
+    'relative_brightness', 'intensity_variance', 'dark_fraction',
+})
+
+_SHAPE_FEATURES = frozenset({
+    'area', 'area_um2', 'perimeter', 'circularity', 'solidity', 'aspect_ratio',
+    'extent', 'equiv_diameter', 'nuclear_complexity',
+})
+
+
 def classify_feature_group(key):
     """Classify a feature key into its group.
 
-    Returns one of: 'morph', 'sam2', 'channel', 'deep', or None if unrecognized.
+    Returns one of: 'shape', 'color', 'morph' (=shape+color), 'sam2',
+    'channel', 'deep', or None if unrecognized.
+
+    'morph' is a virtual group that matches both 'shape' and 'color' features,
+    preserving backward compatibility with --feature-groups morph,sam2,channel.
     """
     if re.match(r'^ch\d+', key):
         return 'channel'
@@ -179,9 +197,13 @@ def classify_feature_group(key):
         return 'sam2'
     if key.startswith('resnet_') or key.startswith('dinov2_'):
         return 'deep'
-    # Everything else is morphological (area, eccentricity, solidity, perimeter, etc.)
+    if key in _SHAPE_FEATURES:
+        return 'shape'
+    if key in _COLOR_FEATURES:
+        return 'color'
+    # Unknown non-prefixed keys default to shape
     if isinstance(key, str) and not key.startswith(('ch', 'sam2', 'resnet', 'dinov2')):
-        return 'morph'
+        return 'shape'
     return None
 
 
@@ -198,13 +220,22 @@ def select_feature_names(detections, feature_groups, exclude_channels=None):
 
     Args:
         detections: list of detection dicts
-        feature_groups: set of group names {'morph', 'sam2', 'channel', 'deep'}
+        feature_groups: set of group names. Recognized groups:
+            'morph' (= shape + color, backward compat), 'shape', 'color',
+            'sam2', 'channel', 'deep'
         exclude_channels: set of channel indices to exclude from 'channel' group
 
     Returns: sorted list of feature name strings
     """
     if exclude_channels is None:
         exclude_channels = set()
+
+    # Expand 'morph' into shape + color for backward compatibility
+    expanded = set(feature_groups)
+    if 'morph' in expanded:
+        expanded.discard('morph')
+        expanded.add('shape')
+        expanded.add('color')
 
     # Collect all numeric feature names from detections
     all_names = set()
@@ -218,7 +249,7 @@ def select_feature_names(detections, feature_groups, exclude_channels=None):
     selected = []
     for name in sorted(all_names):
         group = classify_feature_group(name)
-        if group is None or group not in feature_groups:
+        if group is None or group not in expanded:
             continue
 
         # For channel features, check if any referenced channel is excluded
@@ -426,7 +457,7 @@ def run_clustering(args):
     marker_channels = parse_marker_channels(args.marker_channels)
     exclude_channels = parse_exclude_channels(args.exclude_channels)
     feature_groups = {g.strip() for g in args.feature_groups.split(',')}
-    valid_groups = {'morph', 'sam2', 'channel', 'deep'}
+    valid_groups = {'morph', 'shape', 'color', 'sam2', 'channel', 'deep'}
     invalid_groups = feature_groups - valid_groups
     if invalid_groups:
         print(f"WARNING: Unknown feature groups ignored: {invalid_groups}")
@@ -725,13 +756,314 @@ def run_clustering(args):
 
     print(f"\nDone! {n_clusters} clusters found in {len(valid_indices)} cells.")
 
+    # Sub-clustering (optional)
+    if getattr(args, 'subcluster', False):
+        run_subclustering(
+            detections, output_dir, marker_channels, exclude_channels,
+            subcluster_features=args.subcluster_features,
+            subcluster_min_size=args.subcluster_min_size,
+            n_neighbors=args.n_neighbors,
+            min_dist=args.min_dist,
+        )
+        # Re-save detections with subcluster fields
+        clustered_path = output_dir / 'detections_clustered.json'
+        with open(clustered_path, 'w') as f:
+            json.dump(sanitize_for_json(detections), f, indent=2)
+        print(f"  Updated: {clustered_path} (with subcluster fields)")
+
+
+def run_subclustering(detections, output_dir, marker_channels, exclude_channels,
+                      subcluster_features='morph,sam2', subcluster_min_size=50,
+                      n_neighbors=30, min_dist=0.1):
+    """Sub-cluster each parent cluster by appearance features (morph+sam2).
+
+    For each parent cluster with enough cells, runs UMAP + HDBSCAN on
+    appearance-only features to find morphologically distinct sub-populations.
+
+    Modifies detections in-place, adding:
+      - subcluster_id: int (cluster ID within parent)
+      - subcluster_label: str ("{parent}_{letter}")
+      - sub_umap_x, sub_umap_y: float (UMAP coords within parent)
+
+    Outputs per parent cluster:
+      - subclusters/{parent}/umap_subcluster.png
+      - subclusters/{parent}/morph_violin.png
+
+    Master output:
+      - subclusters/subcluster_summary.csv
+    """
+    from sklearn.preprocessing import StandardScaler
+    try:
+        import umap
+    except ImportError:
+        print("ERROR: umap-learn not installed")
+        return
+    try:
+        import hdbscan
+    except ImportError:
+        print("ERROR: hdbscan not installed")
+        return
+
+    subcluster_dir = output_dir / 'subclusters'
+    subcluster_dir.mkdir(exist_ok=True)
+
+    # Feature selection: appearance only
+    sub_groups = {g.strip() for g in subcluster_features.split(',')}
+    sub_feature_names = select_feature_names(detections, sub_groups, exclude_channels)
+    if not sub_feature_names:
+        print("ERROR: No features found for subclustering")
+        return
+
+    group_counts = {}
+    for fn in sub_feature_names:
+        g = classify_feature_group(fn)
+        group_counts[g] = group_counts.get(g, 0) + 1
+    print(f"\n{'='*60}")
+    print(f"SUB-CLUSTERING by appearance ({len(sub_feature_names)} features: "
+          f"{', '.join(f'{g}:{n}' for g, n in sorted(group_counts.items()))})")
+    print(f"{'='*60}")
+
+    # Group detections by parent cluster label
+    parent_groups = {}  # {label: [det_index, ...]}
+    for i, det in enumerate(detections):
+        label = det.get('cluster_label')
+        if label and label not in ('noise', 'unclassified'):
+            parent_groups.setdefault(label, []).append(i)
+
+    min_for_sub = max(subcluster_min_size * 3, 100)
+    master_rows = []
+
+    for parent_label in sorted(parent_groups.keys()):
+        det_indices = parent_groups[parent_label]
+        if len(det_indices) < min_for_sub:
+            print(f"\n  '{parent_label}': {len(det_indices)} cells — "
+                  f"skipping (need >= {min_for_sub})")
+            continue
+
+        print(f"\n--- Sub-clustering '{parent_label}' ({len(det_indices)} cells) ---")
+
+        # Build feature matrix for this subset only
+        sub_dets = [detections[di] for di in det_indices]
+        X_sub, _, sub_valid_local = extract_feature_matrix(sub_dets, sub_feature_names)
+
+        if X_sub is None or len(X_sub) < min_for_sub:
+            n = 0 if X_sub is None else len(X_sub)
+            print(f"  {n} valid cells — skipping")
+            continue
+
+        print(f"  Feature matrix: {X_sub.shape[0]} x {X_sub.shape[1]}")
+
+        # Scale
+        scaler = StandardScaler()
+        X_scaled = np.nan_to_num(scaler.fit_transform(X_sub),
+                                 nan=0.0, posinf=0.0, neginf=0.0)
+
+        # PCA if many features (SAM2 alone is 256D)
+        n_features = X_scaled.shape[1]
+        if n_features > 50:
+            from sklearn.decomposition import PCA
+            n_comp = min(50, X_scaled.shape[0] - 1, n_features)
+            pca = PCA(n_components=n_comp, random_state=42)
+            X_scaled = pca.fit_transform(X_scaled)
+            var_expl = pca.explained_variance_ratio_.sum() * 100
+            print(f"  PCA: {n_features} -> {n_comp} dims ({var_expl:.1f}% variance)")
+
+        # UMAP
+        n_nbrs = min(n_neighbors, len(X_scaled) - 1)
+        reducer = umap.UMAP(n_neighbors=n_nbrs, min_dist=min_dist,
+                            n_components=2, random_state=42)
+        embedding = reducer.fit_transform(X_scaled)
+
+        # HDBSCAN
+        mcs = max(min(subcluster_min_size, len(X_scaled) // 5), 10)
+        clusterer = hdbscan.HDBSCAN(min_cluster_size=mcs)
+        labels = clusterer.fit_predict(embedding)
+
+        n_sc = len(set(labels)) - (1 if -1 in labels else 0)
+        n_noise = (labels == -1).sum()
+        print(f"  {n_sc} sub-clusters, {n_noise} noise")
+        if n_sc == 0:
+            print("  No sub-clusters found")
+            continue
+
+        # Map IDs to letters (A, B, C...) sorted by count descending
+        label_ids = sorted(set(labels) - {-1})
+        counts = {lid: int((labels == lid).sum()) for lid in label_ids}
+        sorted_ids = sorted(label_ids, key=lambda x: -counts[x])
+        alpha_map = {}
+        for i, lid in enumerate(sorted_ids):
+            alpha_map[lid] = chr(ord('A') + i) if i < 26 else f'sub{i}'
+        alpha_map[-1] = 'noise'
+
+        # Per-subcluster stats
+        morph_keys = ['area_um2', 'circularity', 'eccentricity', 'solidity',
+                      'aspect_ratio']
+        for lid in sorted_ids:
+            sc_mask = labels == lid
+            sc_local_indices = [sub_valid_local[j]
+                                for j, m in enumerate(sc_mask) if m]
+            sc_dets = [sub_dets[li] for li in sc_local_indices]
+
+            row = {
+                'parent': parent_label,
+                'subcluster': alpha_map[lid],
+                'label': f"{parent_label}_{alpha_map[lid]}",
+                'n_cells': counts[lid],
+            }
+            for mk in morph_keys:
+                vals = [d.get('features', {}).get(mk)
+                        for d in sc_dets]
+                vals = [v for v in vals
+                        if v is not None and isinstance(v, (int, float))]
+                row[mk] = round(float(np.mean(vals)), 2) if vals else None
+
+            for mname, midx in sorted(marker_channels.items(),
+                                       key=lambda x: x[1]):
+                mk = f'ch{midx}_mean'
+                vals = [d.get('features', {}).get(mk)
+                        for d in sc_dets]
+                vals = [v for v in vals if v is not None]
+                row[f'{mname}_mean'] = (round(float(np.mean(vals)), 1)
+                                        if vals else None)
+
+            master_rows.append(row)
+
+        # Write back to detections
+        for local_pos, local_valid_idx in enumerate(sub_valid_local):
+            det_idx = det_indices[local_valid_idx]
+            sc_id = int(labels[local_pos])
+            detections[det_idx]['subcluster_id'] = sc_id
+            detections[det_idx]['subcluster_label'] = (
+                f"{parent_label}_{alpha_map[sc_id]}")
+            detections[det_idx]['sub_umap_x'] = float(embedding[local_pos, 0])
+            detections[det_idx]['sub_umap_y'] = float(embedding[local_pos, 1])
+
+        # --- Plots ---
+        try:
+            import matplotlib
+            matplotlib.use('Agg')
+            import matplotlib.pyplot as plt
+
+            parent_dir = subcluster_dir / parent_label
+            parent_dir.mkdir(exist_ok=True)
+
+            # UMAP colored by subcluster
+            fig, ax = plt.subplots(figsize=(10, 8))
+            tab_colors = (list(plt.cm.tab10.colors)
+                          + list(plt.cm.tab20.colors))
+            for i, lid in enumerate(sorted_ids):
+                mask = labels == lid
+                ax.scatter(
+                    embedding[mask, 0], embedding[mask, 1],
+                    c=[tab_colors[i % len(tab_colors)]],
+                    label=f"{alpha_map[lid]} (n={counts[lid]})",
+                    s=5, alpha=0.6,
+                )
+            noise_mask = labels == -1
+            if noise_mask.any():
+                ax.scatter(
+                    embedding[noise_mask, 0], embedding[noise_mask, 1],
+                    c='lightgray', label=f'noise (n={n_noise})',
+                    s=3, alpha=0.3,
+                )
+            ax.legend(markerscale=4)
+            ax.set_title(
+                f"Sub-clusters of '{parent_label}' ({len(X_scaled)} cells)")
+            ax.set_xlabel('UMAP 1')
+            ax.set_ylabel('UMAP 2')
+            umap_path = parent_dir / 'umap_subcluster.png'
+            fig.savefig(umap_path, dpi=150, bbox_inches='tight')
+            plt.close(fig)
+            print(f"  Saved: {umap_path}")
+
+            # Morph violin: area + circularity per subcluster
+            morph_plot_keys = ['area_um2', 'circularity', 'eccentricity']
+            fig, axes = plt.subplots(
+                1, len(morph_plot_keys),
+                figsize=(5 * len(morph_plot_keys), 5))
+            if len(morph_plot_keys) == 1:
+                axes = [axes]
+            for ax, mk in zip(axes, morph_plot_keys):
+                data = []
+                tick_labels = []
+                for lid in sorted_ids:
+                    sc_mask = labels == lid
+                    sc_local = [sub_valid_local[j]
+                                for j, m in enumerate(sc_mask) if m]
+                    vals = [sub_dets[li].get('features', {}).get(mk, 0)
+                            for li in sc_local]
+                    if len(vals) >= 2:
+                        data.append(vals)
+                        tick_labels.append(alpha_map[lid])
+                if data:
+                    parts = ax.violinplot(
+                        data, showmeans=True, showmedians=True)
+                    ax.set_xticks(range(1, len(tick_labels) + 1))
+                    ax.set_xticklabels(tick_labels)
+                ax.set_title(mk)
+                ax.set_ylabel(mk)
+            fig.suptitle(f"Morphology: '{parent_label}' sub-clusters")
+            fig.tight_layout()
+            violin_path = parent_dir / 'morph_violin.png'
+            fig.savefig(violin_path, dpi=150, bbox_inches='tight')
+            plt.close(fig)
+            print(f"  Saved: {violin_path}")
+
+            # Marker violin per subcluster
+            if marker_channels:
+                marker_pairs = get_marker_mean_keys(marker_channels)
+                n_markers = len(marker_pairs)
+                fig, axes = plt.subplots(1, n_markers,
+                                         figsize=(5 * n_markers, 5))
+                if n_markers == 1:
+                    axes = [axes]
+                for ax, (mname, mkey) in zip(axes, marker_pairs):
+                    data = []
+                    tick_labels = []
+                    for lid in sorted_ids:
+                        sc_mask = labels == lid
+                        sc_local = [sub_valid_local[j]
+                                    for j, m in enumerate(sc_mask) if m]
+                        vals = [sub_dets[li].get('features', {}).get(mkey, 0)
+                                for li in sc_local]
+                        if len(vals) >= 2:
+                            data.append(vals)
+                            tick_labels.append(alpha_map[lid])
+                    if data:
+                        parts = ax.violinplot(
+                            data, showmeans=True, showmedians=True)
+                        ax.set_xticks(range(1, len(tick_labels) + 1))
+                        ax.set_xticklabels(tick_labels)
+                    ax.set_title(f'{mname} (ch{marker_channels[mname]})')
+                    ax.set_ylabel('Intensity')
+                fig.suptitle(f"Markers: '{parent_label}' sub-clusters")
+                fig.tight_layout()
+                mk_violin_path = parent_dir / 'marker_violin.png'
+                fig.savefig(mk_violin_path, dpi=150, bbox_inches='tight')
+                plt.close(fig)
+                print(f"  Saved: {mk_violin_path}")
+
+        except ImportError:
+            print("  Skipping plots (matplotlib not installed)")
+
+    # Master summary
+    if master_rows:
+        summary_df = pd.DataFrame(master_rows)
+        summary_path = subcluster_dir / 'subcluster_summary.csv'
+        summary_df.to_csv(summary_path, index=False)
+        print(f"\nSub-cluster summary:")
+        print(summary_df.to_string(index=False))
+        print(f"\nSaved: {summary_path}")
+
+    return master_rows
+
 
 def main():
     parser = argparse.ArgumentParser(
         description='Feature-based clustering of cell detections (any cell type)'
     )
-    parser.add_argument('--detections', required=True,
-                        help='Path to detections JSON file')
+    parser.add_argument('--detections', default=None,
+                        help='Path to detections JSON file (required unless --subcluster-input)')
     parser.add_argument('--output-dir', required=True,
                         help='Output directory for clustering results')
     parser.add_argument('--threshold', type=float, default=0.5,
@@ -743,8 +1075,8 @@ def main():
     parser.add_argument('--exclude-channels', type=str, default=None,
                         help='Channel indices to exclude from feature matrix: "3" or "0,3,5"')
     parser.add_argument('--feature-groups', type=str, default='morph,sam2,channel',
-                        help='Comma-separated feature groups to include: '
-                        'morph, sam2, channel, deep (default: "morph,sam2,channel")')
+                        help='Comma-separated feature groups: morph (=shape+color), '
+                        'shape, color, sam2, channel, deep (default: "morph,sam2,channel")')
     parser.add_argument('--marker-only', action='store_true',
                         help='Use only normalized marker channel _mean features '
                         '(population p1-p99.5 percentile stretch)')
@@ -756,7 +1088,56 @@ def main():
                         help='HDBSCAN min_cluster_size (default: 50)')
     parser.add_argument('--min-samples', type=int, default=None,
                         help='HDBSCAN min_samples (default: None, uses min_cluster_size)')
+    parser.add_argument('--subcluster', action='store_true',
+                        help='After main clustering, sub-cluster each parent cluster '
+                        'by appearance features (morph+sam2)')
+    parser.add_argument('--subcluster-input', type=str, default=None,
+                        help='Path to pre-clustered detections JSON for standalone '
+                        'subclustering (skips main clustering)')
+    parser.add_argument('--subcluster-features', type=str, default='shape,sam2',
+                        help='Feature groups for subclustering (default: "shape,sam2")')
+    parser.add_argument('--subcluster-min-size', type=int, default=50,
+                        help='HDBSCAN min_cluster_size for sub-clusters (default: 50)')
     args = parser.parse_args()
+
+    if args.subcluster_input:
+        # Standalone subclustering on pre-clustered detections
+        pass  # --detections not needed
+    elif not args.detections:
+        parser.error("--detections is required (unless using --subcluster-input)")
+
+    if args.subcluster_input:
+        output_dir = Path(args.output_dir)
+        output_dir.mkdir(parents=True, exist_ok=True)
+
+        marker_channels = parse_marker_channels(args.marker_channels)
+        exclude_channels = parse_exclude_channels(args.exclude_channels)
+
+        print(f"Loading pre-clustered detections from {args.subcluster_input}...")
+        with open(args.subcluster_input) as f:
+            detections = json.load(f)
+        print(f"  {len(detections)} detections")
+
+        if marker_channels is None:
+            marker_channels = (discover_marker_channels(detections, exclude_channels)
+                               or {})
+            if marker_channels:
+                print(f"  Auto-detected marker channels: {marker_channels}")
+
+        run_subclustering(
+            detections, output_dir, marker_channels, exclude_channels,
+            subcluster_features=args.subcluster_features,
+            subcluster_min_size=args.subcluster_min_size,
+            n_neighbors=args.n_neighbors,
+            min_dist=args.min_dist,
+        )
+
+        # Save enriched detections
+        out_path = output_dir / 'detections_subclustered.json'
+        with open(out_path, 'w') as f:
+            json.dump(sanitize_for_json(detections), f, indent=2)
+        print(f"\nSaved: {out_path}")
+        return
 
     run_clustering(args)
 
