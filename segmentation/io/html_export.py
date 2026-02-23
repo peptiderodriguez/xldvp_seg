@@ -216,7 +216,8 @@ def percentile_normalize(image, p_low=1, p_high=99.5, global_percentiles=None):
         return result
 
 
-def draw_mask_contour(img_array, mask, color=(0, 255, 0), thickness=2, dotted=False, use_cv2=True):
+def draw_mask_contour(img_array, mask, color=(0, 255, 0), thickness=2, dotted=False,
+                      use_cv2=True, bw_dashed=False):
     """
     Draw mask contour on image.
 
@@ -227,6 +228,7 @@ def draw_mask_contour(img_array, mask, color=(0, 255, 0), thickness=2, dotted=Fa
         thickness: Contour thickness in pixels
         dotted: Whether to use dotted line
         use_cv2: Use OpenCV for faster, smoother contours (default True)
+        bw_dashed: Draw alternating black/white dashed contour (overrides color)
 
     Returns:
         Image with contour drawn (always RGB)
@@ -238,6 +240,24 @@ def draw_mask_contour(img_array, mask, color=(0, 255, 0), thickness=2, dotted=Fa
         img_out = cv2.cvtColor(img_array, cv2.COLOR_GRAY2RGB)
     else:
         img_out = img_array.copy()
+
+    if bw_dashed:
+        # Alternating black/white dashed contour — visible on any background
+        contours, _ = cv2.findContours(
+            mask.astype(np.uint8),
+            cv2.RETR_EXTERNAL,
+            cv2.CHAIN_APPROX_NONE
+        )
+        dash_len, gap_len = 6, 4
+        for cnt in contours:
+            pts = cnt.reshape(-1, 2)
+            cycle = dash_len + gap_len
+            for i, pt in enumerate(pts):
+                if (i % cycle) < dash_len:
+                    cv2.circle(img_out, tuple(pt), 0, (0, 0, 0), thickness)
+                else:
+                    cv2.circle(img_out, tuple(pt), 0, (255, 255, 255), thickness)
+        return img_out
 
     if use_cv2 and not dotted:
         # Use cv2.drawContours for smooth, thick lines

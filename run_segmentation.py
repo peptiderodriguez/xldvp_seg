@@ -674,6 +674,7 @@ def create_strategy_for_cell_type(cell_type, params, pixel_size_um):
             extract_deep_features=params.get('extract_deep_features', False),
             extract_sam2_embeddings=params.get('extract_sam2_embeddings', True),
             marker_signal_factor=params.get('marker_signal_factor', 2.0),
+            gmm_prefilter_thresholds=params.get('gmm_prefilter_thresholds'),
         )
     elif cell_type == 'tissue_pattern':
         return TissuePatternStrategy(
@@ -806,15 +807,218 @@ def classify_islet_marker(features_dict, marker_thresholds=None, marker_map=None
     return best_name, best_color
 
 
+def calibrate_islet_marker_gmm(pilot_tiles, loader, all_channel_data, slide_shm_arr,
+                               ch_to_slot, marker_channels, membrane_channel=1,
+                               nuclear_channel=4, tile_size=4000, pixel_size_um=0.325,
+                               min_area_um=30.0, max_area_um=500.0):
+    """Run Cellpose on pilot tiles to calibrate global GMM pre-filter thresholds.
+
+    Similar to calibrate_tissue_threshold(): samples a few tiles to estimate
+    slide-level parameters before the main multi-GPU processing loop.
+
+    Args:
+        pilot_tiles: list of tile dicts with 'x', 'y' keys (~5% of tissue tiles)
+        loader: CZI loader (for get_tile fallback)
+        all_channel_data: dict of channel_idx → 2D array (or None if using shm)
+        slide_shm_arr: shared memory array [n_slots, H, W] (or None)
+        ch_to_slot: dict mapping CZI channel → shm slot index
+        marker_channels: list of CZI channel indices for markers (e.g. [2, 3, 5])
+        membrane_channel: CZI channel for Cellpose cytoplasm input
+        nuclear_channel: CZI channel for Cellpose nuclear input
+        tile_size: tile dimensions in pixels
+        pixel_size_um: pixel size in micrometers
+        min_area_um: minimum cell area in um2
+        max_area_um: maximum cell area in um2
+
+    Returns:
+        dict mapping channel_idx → raw GMM threshold (P(signal) = 0.5),
+        or empty dict if calibration fails.
+    """
+    from sklearn.mixture import GaussianMixture
+
+    if not pilot_tiles:
+        return {}
+
+    logger.info(f"Calibrating islet marker thresholds on {len(pilot_tiles)} pilot tiles...")
+
+    # Load Cellpose model (lightweight — single GPU, no SAM2 needed)
+    try:
+        from cellpose import models as cp_models
+        cellpose_model = cp_models.Cellpose(model_type='cyto3', gpu=True)
+    except Exception as e:
+        logger.warning(f"Failed to load Cellpose for calibration: {e}")
+        return {}
+
+    # Helper to read a channel tile from shm or all_channel_data
+    def _read_channel(ch_idx, x, y, w, h):
+        if slide_shm_arr is not None and ch_to_slot and ch_idx in ch_to_slot:
+            slot = ch_to_slot[ch_idx]
+            return slide_shm_arr[slot, y:y+h, x:x+w].copy()
+        elif all_channel_data and ch_idx in all_channel_data:
+            return all_channel_data[ch_idx][y:y+h, x:x+w].copy()
+        return None
+
+    # Helper: percentile normalize uint16 → uint8
+    def _pct_norm(img):
+        if img is None or img.size == 0:
+            return np.zeros_like(img, dtype=np.uint8) if img is not None else None
+        valid = img[img > 0]
+        if len(valid) == 0:
+            return np.zeros_like(img, dtype=np.uint8)
+        lo, hi = np.percentile(valid, 1), np.percentile(valid, 99.5)
+        if hi <= lo:
+            return np.zeros_like(img, dtype=np.uint8)
+        return np.clip(255 * (img.astype(np.float32) - lo) / (hi - lo), 0, 255).astype(np.uint8)
+
+    # Area bounds in pixels
+    min_area_px = min_area_um / (pixel_size_um ** 2)
+    max_area_px = max_area_um / (pixel_size_um ** 2)
+
+    # Collect marker means from all pilot tiles
+    all_marker_means = {ch: [] for ch in marker_channels}
+    total_cells = 0
+
+    for ti, tile in enumerate(pilot_tiles):
+        tx, ty = tile['x'], tile['y']
+        logger.info(f"  Pilot tile {ti+1}/{len(pilot_tiles)} at ({tx}, {ty})...")
+
+        # Read membrane + nuclear channels for Cellpose
+        membrane = _read_channel(membrane_channel, tx, ty, tile_size, tile_size)
+        nuclear = _read_channel(nuclear_channel, tx, ty, tile_size, tile_size)
+        if membrane is None or nuclear is None:
+            logger.warning(f"  Skipping tile ({tx},{ty}): missing channels")
+            continue
+
+        # Normalize to uint8 for Cellpose
+        mem_u8 = _pct_norm(membrane)
+        nuc_u8 = _pct_norm(nuclear)
+        cellpose_input = np.stack([mem_u8, nuc_u8], axis=-1)
+
+        # Run Cellpose
+        try:
+            masks, _, _ = cellpose_model.eval(
+                cellpose_input, channels=[1, 2],
+                diameter=None, flow_threshold=0.4,
+            )
+        except Exception as e:
+            logger.warning(f"  Cellpose failed on tile ({tx},{ty}): {e}")
+            continue
+
+        n_cells = masks.max()
+        if n_cells == 0:
+            continue
+
+        # Read marker channels
+        marker_data = {}
+        for ch_idx in marker_channels:
+            ch_tile = _read_channel(ch_idx, tx, ty, tile_size, tile_size)
+            if ch_tile is not None:
+                marker_data[ch_idx] = ch_tile
+
+        # Extract per-cell marker means (same as Phase 0 in detect())
+        from scipy.ndimage import find_objects
+        slices = find_objects(masks)
+        tile_cells = 0
+        for label_idx, sl in enumerate(slices):
+            if sl is None:
+                continue
+            label = label_idx + 1
+            cell_mask = masks[sl] == label
+            area_px = cell_mask.sum()
+            if area_px < min_area_px or area_px > max_area_px:
+                continue
+            for ch_idx, ch_data in marker_data.items():
+                vals = ch_data[sl][cell_mask]
+                nonzero = vals[vals > 0]
+                mean_val = float(np.mean(nonzero)) if len(nonzero) > 0 else 0.0
+                all_marker_means[ch_idx].append(mean_val)
+            tile_cells += 1
+
+        total_cells += tile_cells
+        logger.info(f"    {n_cells} Cellpose masks → {tile_cells} area-filtered cells")
+
+    logger.info(f"  Pilot calibration: {total_cells} cells from {len(pilot_tiles)} tiles")
+
+    if total_cells < 100:
+        logger.warning(f"  Only {total_cells} pilot cells — too few for reliable GMM. "
+                       "Falling back to per-tile GMM.")
+        return {}
+
+    # Fit 2-component GMM per marker channel
+    gmm_thresholds = {}
+    for ch_idx in marker_channels:
+        arr = np.array(all_marker_means[ch_idx])
+        arr_pos = arr[arr > 0]
+        if len(arr_pos) < 50:
+            logger.warning(f"  ch{ch_idx}: only {len(arr_pos)} nonzero values — skipping")
+            continue
+
+        log_vals = np.log1p(arr_pos).reshape(-1, 1)
+        gmm = GaussianMixture(n_components=2, random_state=42, max_iter=200)
+        gmm.fit(log_vals)
+
+        signal_idx = int(np.argmax(gmm.means_.flatten()))
+        bg_mean = float(np.exp(gmm.means_.flatten()[1 - signal_idx]))
+        sig_mean = float(np.exp(gmm.means_.flatten()[signal_idx]))
+
+        # Check separation quality
+        gmm_means = gmm.means_.flatten()
+        gmm_stds = np.sqrt(gmm.covariances_.flatten())
+        separation = abs(gmm_means[signal_idx] - gmm_means[1 - signal_idx]) / max(gmm_stds[1 - signal_idx], gmm_stds[signal_idx])
+
+        if separation >= 1.0:
+            # Good separation: use GMM P=0.5 crossover
+            lo_raw, hi_raw = 0.0, float(arr.max())
+            for _ in range(50):
+                mid = (lo_raw + hi_raw) / 2
+                p = gmm.predict_proba(np.log1p(np.array([[mid]])))
+                if p[0, signal_idx] > 0.5:
+                    hi_raw = mid
+                else:
+                    lo_raw = mid
+            threshold = (lo_raw + hi_raw) / 2
+            method = 'GMM'
+        else:
+            # Poor separation: use med+3*MAD (conservative)
+            med = float(np.median(arr_pos))
+            mad = float(np.median(np.abs(arr_pos - med)))
+            threshold = med + 3 * 1.4826 * mad
+            method = 'med+3MAD'
+
+        gmm_thresholds[ch_idx] = threshold
+        n_pos = int(np.sum(arr > threshold))
+        logger.info(f"  ch{ch_idx}: {method} bg={bg_mean:.0f}, sig={sig_mean:.0f}, sep={separation:.2f}σ, "
+                    f"threshold={threshold:.0f} (raw), "
+                    f"{n_pos}/{len(arr)} positive ({100*n_pos/len(arr):.1f}%)")
+
+    if gmm_thresholds:
+        logger.info(f"Islet marker calibration complete: "
+                    + ", ".join(f"ch{k}={v:.0f}" for k, v in sorted(gmm_thresholds.items())))
+
+    # Clean up Cellpose model
+    del cellpose_model
+    import gc
+    gc.collect()
+    try:
+        import torch
+        torch.cuda.empty_cache()
+    except Exception:
+        pass
+
+    return gmm_thresholds
+
+
 def compute_islet_marker_thresholds(all_detections, vis_threshold_overrides=None, ratio_min=1.5,
-                                    marker_map=None):
+                                    marker_map=None, marker_top_pct=5,
+                                    pct_channels=None):
     """Compute per-channel thresholds for islet marker classification.
 
-    For each marker channel:
-      1. Normalize raw values to [0,1] using population p1-p99.5 percentiles
-      2. Otsu threshold for channels with bimodal separation
-      3. median+3*MAD for channels with low dynamic range
-      4. Fallback: if Otsu gives >15% positive, use med+3*MAD instead
+    Two methods, selectable per channel:
+    - **GMM** (default): 2-component Gaussian Mixture on log-transformed intensities.
+      Finds the natural boundary between background and signal populations.
+    - **Percentile** (for specified channels): top N% of the intensity distribution
+      = positive. Simple, interpretable, biologically grounded for channels where
+      GMM separation is too poor to be reliable.
 
     Args:
         all_detections: list of detection dicts with features
@@ -824,19 +1028,25 @@ def compute_islet_marker_thresholds(all_detections, vis_threshold_overrides=None
             to be classified as single-marker. Otherwise → "multi".
         marker_map: dict mapping marker name → CZI channel index,
             e.g. {'gcg': 2, 'ins': 3, 'sst': 5}
+        marker_top_pct: for pct_channels, classify the top N% of cells
+            as marker-positive (default 5 = 95th percentile)
+        pct_channels: set of marker names that should use percentile-based
+            thresholding instead of GMM (default {'sst'})
 
     Returns (norm_ranges, ch_thresholds, ratio_min) for classify_islet_marker(),
         or None if too few detections for reliable thresholds.
     """
     if marker_map is None:
         marker_map = {'gcg': 2, 'ins': 3, 'sst': 5}
+    if pct_channels is None:
+        pct_channels = {'sst'}
 
     if len(all_detections) < 10:
         logger.warning(f"Only {len(all_detections)} detections — too few for reliable "
                        "marker thresholds. Skipping marker classification.")
         return None
 
-    from skimage.filters import threshold_otsu
+    from sklearn.mixture import GaussianMixture
 
     # Build arrays from features using marker_map channel indices
     marker_arrays = {}
@@ -853,7 +1063,6 @@ def compute_islet_marker_thresholds(all_detections, vis_threshold_overrides=None
         ch_name = name.capitalize()
         arr = marker_arrays[name]
         # Exclude zero-valued entries (cells with no signal or missing features)
-        # to prevent pulling down p1 percentile and skewing Otsu thresholds
         arr_pos = arr[arr > 0]
         if len(arr_pos) < 10:
             logger.warning(f"Only {len(arr_pos)} cells with nonzero {ch_name} — using full array for percentiles")
@@ -862,51 +1071,71 @@ def compute_islet_marker_thresholds(all_detections, vis_threshold_overrides=None
         hi = float(np.percentile(arr_pos, 99.5))
         norm_ranges[ch_key] = (lo, hi)
 
-        # Normalize to [0, 1]
+        if name in pct_channels:
+            # --- Percentile-based threshold (for channels with poor GMM separation) ---
+            method = f'top-{marker_top_pct}%'
+            pct_cutoff = 100 - marker_top_pct
+            raw_cutoff = float(np.percentile(arr_pos, pct_cutoff))
+            bg_mean = sig_mean = separation = 0  # not computed for percentile channels
+            logger.info(f"  {ch_name}: using top {marker_top_pct}% "
+                        f"(p{pct_cutoff}={raw_cutoff:.0f})")
+        else:
+            # --- GMM on log-transformed intensities ---
+            # Log1p compresses dynamic range, making background vs signal more Gaussian.
+            log_arr = np.log1p(arr_pos).reshape(-1, 1)
+
+            gmm = GaussianMixture(n_components=2, random_state=42, max_iter=200)
+            gmm.fit(log_arr)
+
+            signal_idx = int(np.argmax(gmm.means_.flatten()))
+            bg_idx = 1 - signal_idx
+            bg_mean = float(np.exp(gmm.means_.flatten()[bg_idx]))
+            sig_mean = float(np.exp(gmm.means_.flatten()[signal_idx]))
+
+            means = gmm.means_.flatten()
+            stds = np.sqrt(gmm.covariances_.flatten())
+            separation = abs(means[signal_idx] - means[bg_idx]) / max(stds[bg_idx], stds[signal_idx])
+
+            method = 'GMM(P≥0.75)'
+            # Find raw threshold where P(signal) = 0.75 via binary search.
+            # Higher than P=0.5 crossover — requires stronger evidence of signal,
+            # reducing false positives and multi-marker misclassification.
+            gmm_p_cutoff = 0.75
+            lo_raw, hi_raw = 0.0, float(arr.max())
+            for _ in range(50):
+                mid = (lo_raw + hi_raw) / 2
+                p = gmm.predict_proba(np.log1p(np.array([[mid]])))
+                if p[0, signal_idx] > gmm_p_cutoff:
+                    hi_raw = mid
+                else:
+                    lo_raw = mid
+            raw_cutoff = (lo_raw + hi_raw) / 2
+
+        # Convert raw threshold to normalized [0,1] for classify_islet_marker()
         if hi > lo:
-            norm_vals = np.clip((arr - lo) / (hi - lo), 0, 1)
+            auto_t = float(np.clip((raw_cutoff - lo) / (hi - lo), 0.0, 1.0))
         else:
-            norm_vals = np.zeros_like(arr)
+            auto_t = 0.5
 
-        # Otsu on normalized values
-        try:
-            otsu_t = float(threshold_otsu(norm_vals))
-        except ValueError:
-            otsu_t = 0.5
-
-        # median + 3*MAD — robust for unimodal distributions with a signal tail
-        med = float(np.median(norm_vals))
-        mad = float(np.median(np.abs(norm_vals - med)))
-        mad3_t = med + 3 * 1.4826 * mad  # 1.4826 scales MAD to std for normal dist
-
-        # Use Otsu if it gives <=15% positive, otherwise fall back to med+3*MAD.
-        # Channels with low dynamic range (like Sst) produce poor Otsu thresholds
-        # because the distribution isn't clearly bimodal.
-        n_otsu = int(np.sum(norm_vals > otsu_t))
-        otsu_pct = 100 * n_otsu / len(arr) if len(arr) > 0 else 0
-
-        if otsu_pct <= 15:
-            auto_t = otsu_t
-            method = 'otsu'
-        else:
-            auto_t = mad3_t
-            method = 'med+3MAD'
+        # Count positive cells
+        n_pos = int(np.sum(arr > raw_cutoff))
+        pos_pct = 100 * n_pos / len(arr) if len(arr) > 0 else 0
 
         # Allow manual override
         if vis_threshold_overrides and ch_key in vis_threshold_overrides:
             ch_thresholds[ch_key] = vis_threshold_overrides[ch_key]
-            logger.info(f"Islet {ch_name}({ch_key}): p1={lo:.1f}, p99.5={hi:.1f}, "
-                        f"auto={auto_t:.3f} ({method}), OVERRIDE={vis_threshold_overrides[ch_key]:.3f}")
+            override_raw = lo + vis_threshold_overrides[ch_key] * (hi - lo)
+            n_override = int(np.sum(arr > override_raw))
+            logger.info(f"Islet {ch_name}({ch_key}): {method} bg={bg_mean:.0f}, sig={sig_mean:.0f}, "
+                        f"sep={separation:.2f}σ, auto={auto_t:.3f} (raw={raw_cutoff:.0f}, {pos_pct:.1f}%), "
+                        f"OVERRIDE={vis_threshold_overrides[ch_key]:.3f} "
+                        f"({100*n_override/len(arr):.1f}%)")
         else:
             ch_thresholds[ch_key] = auto_t
             logger.info(f"Islet {ch_name}({ch_key}): p1={lo:.1f}, p99.5={hi:.1f}, "
-                        f"threshold={auto_t:.3f} ({method})")
-
-        # Count positive cells at this threshold
-        raw_cutoff = lo + ch_thresholds[ch_key] * (hi - lo)
-        n_pos = int(np.sum(arr > raw_cutoff))
-        logger.info(f"  {ch_name}-positive: {n_pos} cells ({100*n_pos/len(arr):.1f}%) "
-                    f"[raw > {raw_cutoff:.0f}]")
+                        f"{method} bg={bg_mean:.0f}, sig={sig_mean:.0f}, sep={separation:.2f}σ, "
+                        f"threshold={auto_t:.3f} (raw>{raw_cutoff:.0f})")
+            logger.info(f"  {ch_name}-positive: {n_pos} cells ({pos_pct:.1f}%)")
 
     logger.info(f"Islet marker ratio_min: {ratio_min}x (dominant must be >= {ratio_min}x runner-up)")
     return (norm_ranges, ch_thresholds, ratio_min)
@@ -1538,7 +1767,8 @@ def create_sample_from_detection(tile_x, tile_y, tile_rgb, masks, feat, pixel_si
 
     # Normalize and draw contour
     crop_norm = percentile_normalize(crop, p_low=1, p_high=99.5, global_percentiles=tile_percentiles)
-    crop_with_contour = draw_mask_contour(crop_norm, crop_mask, color=contour_color, thickness=2)
+    _bw = (cell_type == 'islet')
+    crop_with_contour = draw_mask_contour(crop_norm, crop_mask, color=contour_color, thickness=2, bw_dashed=_bw)
 
     # Keep at 224x224 (same as classifier input) - already correct size from crop
     pil_img = Image.fromarray(crop_with_contour)
@@ -2127,6 +2357,31 @@ def run_pipeline(args):
 
         ch_to_slot = {ch_key: i for i, ch_key in enumerate(ch_keys)}
 
+        # --- Islet marker calibration (pilot phase, before freeing channel data) ---
+        # Like tissue calibration: run Cellpose on ~5% of tiles to estimate
+        # global GMM marker thresholds, then use for all tiles.
+        islet_gmm_thresholds = {}
+        if args.cell_type == 'islet':
+            marker_chs_str = getattr(args, 'islet_marker_channels', 'gcg:2,ins:3,sst:5')
+            marker_chs_list = [int(pair.split(':')[1]) for pair in marker_chs_str.split(',')]
+            n_pilot = max(1, int(len(sampled_tiles) * 0.05))
+            pilot_indices = np.random.choice(len(sampled_tiles), n_pilot, replace=False)
+            pilot_tiles = [sampled_tiles[i] for i in pilot_indices]
+            islet_gmm_thresholds = calibrate_islet_marker_gmm(
+                pilot_tiles=pilot_tiles,
+                loader=loader,
+                all_channel_data=all_channel_data,
+                slide_shm_arr=None,  # Use all_channel_data directly (still in RAM)
+                ch_to_slot=None,
+                marker_channels=marker_chs_list,
+                membrane_channel=getattr(args, 'membrane_channel', 1),
+                nuclear_channel=getattr(args, 'nuclear_channel', 4),
+                tile_size=args.tile_size,
+                pixel_size_um=pixel_size_um,
+                min_area_um=getattr(args, 'islet_min_area', 30.0),
+                max_area_um=getattr(args, 'islet_max_area', 500.0),
+            )
+
         # Free original channel data — everything is now in shared memory
         mem_freed_gb = sum(arr.nbytes for arr in all_channel_data.values()) / (1024**3)
         del all_channel_data
@@ -2136,6 +2391,8 @@ def run_pipeline(args):
 
         # Build strategy parameters from the already-constructed params dict
         strategy_params = dict(params)
+        if islet_gmm_thresholds:
+            strategy_params['gmm_prefilter_thresholds'] = islet_gmm_thresholds
 
         # Get classifier path
         classifier_path = None
@@ -2631,8 +2888,13 @@ def run_pipeline(args):
                 # Deferred HTML generation for islet (needs population-level marker thresholds)
                 if deferred_html_tiles and args.cell_type == 'islet':
                     _islet_mm = getattr(args, 'islet_marker_map', None)
+                    _marker_top_pct = getattr(args, 'marker_top_pct', 5)
+                    _pct_chs_str = getattr(args, 'marker_pct_channels', 'sst')
+                    _pct_channels = set(s.strip() for s in _pct_chs_str.split(',')) if _pct_chs_str else set()
                     marker_thresholds = compute_islet_marker_thresholds(
-                        all_detections, marker_map=_islet_mm) if all_detections else None
+                        all_detections, marker_map=_islet_mm,
+                        marker_top_pct=_marker_top_pct,
+                        pct_channels=_pct_channels) if all_detections else None
                     # Add marker_class to each detection for JSON export
                     if marker_thresholds:
                         counts = {}
@@ -2785,13 +3047,13 @@ def run_pipeline(args):
         prior_annotations=prior_ann,
     )
 
-    # Assign globally unique mask_labels encoding centroid in global coordinates
-    # Format: x_y (integer pixel coords) — spatially meaningful + unique
-    # Preserve original per-tile label as 'tile_mask_label' for HDF5 lookups
+    # Add tile_mask_label (copy of per-tile integer label for HDF5 lookups)
+    # and global_id (centroid-based string for spatial identification).
+    # Keep mask_label as the original integer — needed for dedup and mask operations.
     for det in all_detections:
         det['tile_mask_label'] = det.get('mask_label', 0)
         gc = det.get('global_center', det.get('center', [0, 0]))
-        det['mask_label'] = f"{int(round(gc[0]))}_{int(round(gc[1]))}"
+        det['global_id'] = f"{int(round(gc[0]))}_{int(round(gc[1]))}"
 
     # Save all detections with universal IDs and global coordinates
     detections_file = slide_output_dir / f'{args.cell_type}_detections.json'
@@ -3106,9 +3368,16 @@ def main():
     parser.add_argument('--islet-max-area', type=float, default=500.0,
                         help='Maximum islet cell area in um² (default 500)')
     parser.add_argument('--marker-signal-factor', type=float, default=2.0,
-                        help='Pre-filter divisor for Otsu threshold. Cells need marker '
+                        help='Pre-filter divisor for GMM threshold. Cells need marker '
                              'signal > auto_threshold/N to get full features + SAM2. '
                              'Higher = more permissive. 0 = disable. (default 2.0)')
+    parser.add_argument('--marker-top-pct', type=float, default=5,
+                        help='For percentile-method channels (see --marker-pct-channels), '
+                             'classify the top N%% of cells as marker-positive. '
+                             '(default 5 = 95th percentile)')
+    parser.add_argument('--marker-pct-channels', type=str, default='sst',
+                        help='Comma-separated marker names that use percentile-based '
+                             'thresholding instead of GMM (default: sst)')
     parser.add_argument('--dedup-by-confidence', action='store_true', default=False,
                         help='Sort by confidence (score) instead of area during deduplication. '
                              'Automatically enabled for islet cell type.')

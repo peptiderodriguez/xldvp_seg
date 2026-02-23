@@ -82,9 +82,11 @@ def load_detections(run_dir):
     return dets
 
 
-def classify_all(detections, marker_map):
+def classify_all(detections, marker_map, marker_top_pct=5, pct_channels=None):
     """Classify all detections by marker type. Modifies in place."""
-    marker_thresholds = compute_islet_marker_thresholds(detections, marker_map=marker_map)
+    marker_thresholds = compute_islet_marker_thresholds(
+        detections, marker_map=marker_map, marker_top_pct=marker_top_pct,
+        pct_channels=pct_channels)
     counts = Counter()
     for det in detections:
         mc, _ = classify_islet_marker(det.get('features', {}), marker_thresholds, marker_map=marker_map)
@@ -902,8 +904,8 @@ def pct_norm(img, pop_ranges=None):
     return out
 
 
-def draw_dashed_contours(img, contours, color, thickness=1, dash_len=6, gap_len=4):
-    """Draw dashed contour lines on img in-place."""
+def draw_dashed_contours(img, contours, color=None, thickness=1, dash_len=6, gap_len=4):
+    """Draw alternating black/white dashed contour lines on img in-place."""
     for cnt in contours:
         pts = cnt.reshape(-1, 2)
         if len(pts) < 2:
@@ -921,7 +923,9 @@ def draw_dashed_contours(img, contours, color, thickness=1, dash_len=6, gap_len=
         cycle = dash_len + gap_len
         for i, pt in enumerate(all_pts):
             if (i % cycle) < dash_len:
-                cv2.circle(img, tuple(pt), 0, color, thickness)
+                cv2.circle(img, tuple(pt), 0, (0, 0, 0), thickness)       # black dash
+            else:
+                cv2.circle(img, tuple(pt), 0, (255, 255, 255), thickness)  # white dash
 
 
 def render_islet_card(islet_feat, cells, masks, tile_vis, tile_x, tile_y,
@@ -930,8 +934,8 @@ def render_islet_card(islet_feat, cells, masks, tile_vis, tile_x, tile_y,
     marker_names = list(marker_map.keys())
 
     # Collect cell info within this tile
-    mask_labels = []
     cell_info = []
+    has_marker_cells = False
     for d in cells:
         gc = d.get('global_center', d.get('center', [0, 0]))
         cx_rel = gc[0] - tile_x
@@ -940,20 +944,23 @@ def render_islet_card(islet_feat, cells, masks, tile_vis, tile_x, tile_y,
         ml = d.get('tile_mask_label', d.get('mask_label'))
         mc = d.get('marker_class', 'none')
         cell_info.append((cx_rel, cy_rel, ml, mc))
-        if ml is not None and ml > 0:
-            mask_labels.append(ml)
+        if mc != 'none' and ml is not None and ml > 0:
+            has_marker_cells = True
 
-    if not mask_labels:
+    if not has_marker_cells:
         return None
 
-    # Union mask + dilate for islet boundary
-    # Use actual mask shape (edge tiles may be smaller than tile_h x tile_w)
+    # Union mask of MARKER+ cells only for islet boundary
+    # (using all cells including recruited 'none' makes boundary too broad)
     mh, mw = masks.shape[:2]
     union_mask = np.zeros((mh, mw), dtype=np.uint8)
-    for ml in mask_labels:
+    for _cx, _cy, ml, mc in cell_info:
+        if mc == 'none' or ml is None or ml <= 0:
+            continue
         union_mask |= (masks == ml).astype(np.uint8)
 
-    kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (15, 15))
+    # Mild dilation (7px ≈ 2µm) to close small gaps between adjacent cells
+    kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (7, 7))
     dilated = cv2.dilate(union_mask, kernel)
 
     ys, xs = np.where(dilated > 0)
@@ -1387,6 +1394,12 @@ def main():
                         help='R,G,B channel indices for display (default: 2,3,5)')
     parser.add_argument('--marker-channels', type=str, default='gcg:2,ins:3,sst:5',
                         help='Marker-to-channel mapping (default: gcg:2,ins:3,sst:5)')
+    parser.add_argument('--marker-top-pct', type=float, default=5,
+                        help='For percentile-method channels, classify the top N%% '
+                             'of cells as marker-positive (default 5)')
+    parser.add_argument('--marker-pct-channels', type=str, default='sst',
+                        help='Comma-separated marker names that use percentile-based '
+                             'thresholding instead of GMM (default: sst)')
     parser.add_argument('--no-html', action='store_true',
                         help='Skip HTML generation (just CSV + JSON)')
     args = parser.parse_args()
@@ -1411,7 +1424,10 @@ def main():
         sys.exit(0)
 
     # 2. Classify markers (need enough detections for reliable thresholds)
-    marker_thresholds = classify_all(detections, marker_map)
+    _pct_channels = set(s.strip() for s in args.marker_pct_channels.split(',')) if args.marker_pct_channels else set()
+    marker_thresholds = classify_all(detections, marker_map,
+                                     marker_top_pct=args.marker_top_pct,
+                                     pct_channels=_pct_channels)
     n_endocrine = sum(1 for d in detections if d.get('marker_class', 'none') != 'none')
     if n_endocrine == 0:
         print("ERROR: No marker-positive cells found. Cannot define islets.")

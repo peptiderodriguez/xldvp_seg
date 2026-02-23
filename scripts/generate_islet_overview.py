@@ -97,8 +97,8 @@ def pct_norm(img):
     return out
 
 
-def draw_dashed_contours(img, contours, color, thickness=1, dash_len=6, gap_len=4):
-    """Draw dashed contour lines on *img* in-place."""
+def draw_dashed_contours(img, contours, color=None, thickness=1, dash_len=6, gap_len=4):
+    """Draw alternating black/white dashed contour lines on *img* in-place."""
     for cnt in contours:
         pts = cnt.reshape(-1, 2)
         if len(pts) < 2:
@@ -116,7 +116,9 @@ def draw_dashed_contours(img, contours, color, thickness=1, dash_len=6, gap_len=
         cycle = dash_len + gap_len
         for i, pt in enumerate(all_pts):
             if (i % cycle) < dash_len:
-                cv2.circle(img, tuple(pt), 0, color, thickness)
+                cv2.circle(img, tuple(pt), 0, (0, 0, 0), thickness)       # black dash
+            else:
+                cv2.circle(img, tuple(pt), 0, (255, 255, 255), thickness)  # white dash
 
 
 def render_islet_card(islet_id, cells, masks, tile_vis, tile_x, tile_y,
@@ -238,6 +240,12 @@ def main():
                         help='Comma-separated R,G,B channel indices for display (default: 2,3,5)')
     parser.add_argument('--marker-channels', type=str, default='gcg:2,ins:3,sst:5',
                         help='Marker-to-channel mapping (default: gcg:2,ins:3,sst:5)')
+    parser.add_argument('--marker-top-pct', type=float, default=5,
+                        help='For percentile-method channels, classify the top N%% '
+                             'as marker-positive (default 5)')
+    parser.add_argument('--marker-pct-channels', type=str, default='sst',
+                        help='Comma-separated marker names using percentile thresholding '
+                             'instead of GMM (default: sst)')
     args = parser.parse_args()
 
     logging.basicConfig(level=logging.INFO, format='%(levelname)s: %(message)s')
@@ -272,7 +280,11 @@ def main():
     # ---------------------------------------------------------------
     # 2. Compute marker thresholds and classify
     # ---------------------------------------------------------------
-    marker_thresholds = compute_islet_marker_thresholds(all_dets, marker_map=marker_map)
+    _pct_channels = set(s.strip() for s in args.marker_pct_channels.split(',')) if args.marker_pct_channels else set()
+    marker_thresholds = compute_islet_marker_thresholds(
+        all_dets, marker_map=marker_map,
+        marker_top_pct=args.marker_top_pct, pct_channels=_pct_channels,
+    )
     if marker_thresholds is None:
         print(f"WARNING: Only {len(all_dets)} detections — too few for marker thresholds. "
               "All cells will be shown as 'none' (gray).")

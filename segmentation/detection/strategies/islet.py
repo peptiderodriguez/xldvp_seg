@@ -85,6 +85,7 @@ class IsletStrategy(CellStrategy):
         extract_sam2_embeddings: bool = True,
         resnet_batch_size: int = 32,
         marker_signal_factor: float = 2.0,
+        gmm_prefilter_thresholds: dict = None,
     ):
         """
         Initialize islet detection strategy.
@@ -99,10 +100,14 @@ class IsletStrategy(CellStrategy):
             extract_deep_features: Whether to extract ResNet+DINOv2 (default False)
             extract_sam2_embeddings: Whether to extract SAM2 embeddings (default True)
             resnet_batch_size: Batch size for ResNet feature extraction (default 32)
-            marker_signal_factor: Divisor for Otsu/med+3MAD pre-filter threshold.
-                Cells need marker signal > auto_threshold/factor to get full features.
+            marker_signal_factor: Divisor for GMM pre-filter threshold.
+                Cells need marker signal > gmm_threshold/factor to get full features.
                 Higher = more permissive (2.0 = half the classification threshold).
                 Set to 0 to disable pre-filtering. (default 2.0)
+            gmm_prefilter_thresholds: Pre-computed global GMM thresholds from pilot
+                calibration phase. Dict mapping channel index → raw threshold value.
+                If provided, uses these instead of per-tile GMM fitting.
+                (default None = fit per-tile GMM)
         """
         super().__init__(
             min_area_um=min_area_um,
@@ -116,6 +121,7 @@ class IsletStrategy(CellStrategy):
         self.membrane_channel = membrane_channel
         self.nuclear_channel = nuclear_channel
         self.marker_signal_factor = marker_signal_factor
+        self.gmm_prefilter_thresholds = gmm_prefilter_thresholds
 
     @property
     def name(self) -> str:
@@ -128,10 +134,10 @@ class IsletStrategy(CellStrategy):
         pixel_size_um: float
     ) -> List[Detection]:
         """
-        Filter islet candidates — skip area check (already done in segment()).
+        Convert masks to Detection objects (no area filtering).
 
-        Preserves all non-area behavior from CellStrategy.filter():
-        centroid extraction, area_um2 computation, Detection creation with id/score.
+        Computes area_um2, extracts centroid, creates Detection with id/score.
+        No size filtering — Cellpose determines what constitutes a cell.
         """
         if not masks:
             return []
@@ -230,43 +236,24 @@ class IsletStrategy(CellStrategy):
         logger.info(f"Cellpose found {len(cellpose_ids)} cells")
         print(f"[islet] Cellpose found {len(cellpose_ids)} cells", flush=True)
 
-        # Compute area in um² for each cell and filter by min/max area
-        # This is done HERE (before detect() feature extraction) to avoid
-        # extracting expensive features for cells that will be discarded.
-        pixel_size_um = kwargs.get('pixel_size_um')
-        if pixel_size_um is None:
-            raise ValueError("pixel_size_um must be passed to islet segment()")
-        pixel_area_um2 = pixel_size_um ** 2
-        min_area_px = int(self.min_area_um / pixel_area_um2) if pixel_area_um2 > 0 else 10
-        max_area_px = int(self.max_area_um / pixel_area_um2) if pixel_area_um2 > 0 else 100000
-
-        # Compute areas for all cells in O(M) using bincount
-        areas_all = np.bincount(cellpose_masks.ravel())
-        areas = [(cp_id, areas_all[cp_id]) for cp_id in cellpose_ids]
-
-        # Filter by area range (um² converted to pixels)
-        in_range = [(cp_id, a) for cp_id, a in areas if min_area_px <= a <= max_area_px]
-        out_of_range = len(areas) - len(in_range)
-        print(f"[islet] Area filter: {len(in_range)}/{len(areas)} in range "
-              f"[{min_area_px}-{max_area_px}px = {self.min_area_um}-{self.max_area_um}um²], "
-              f"pixel_size={pixel_size_um}", flush=True)
-        if out_of_range > 0:
-            logger.info(f"  Area filter: {len(in_range)} in range [{self.min_area_um}-{self.max_area_um} um²], "
-                        f"{out_of_range} rejected")
-
         # Extract individual boolean masks from Cellpose label array using find_objects
-        # find_objects returns slices for each label (1-indexed), enabling O(1) per-cell extraction
+        # No area filtering — let Cellpose decide what's a cell, only reject
+        # fragments smaller than min_mask_pixels (noise).
         slices = ndimage.find_objects(cellpose_masks)
         accepted_masks = []
-        for cp_id, area_px in in_range:
+        n_tiny = 0
+        for cp_id in cellpose_ids:
             sl = slices[cp_id - 1]  # find_objects is 1-indexed
             if sl is None:
                 continue
             cp_mask = np.zeros(cellpose_masks.shape, dtype=bool)
             cp_mask[sl] = (cellpose_masks[sl] == cp_id)
             if cp_mask.sum() < self.min_mask_pixels:
+                n_tiny += 1
                 continue
             accepted_masks.append(cp_mask)
+        if n_tiny > 0:
+            logger.info(f"  Rejected {n_tiny} fragments < {self.min_mask_pixels} pixels")
 
         logger.info(f"  Accepted {len(accepted_masks)} masks (>= {self.min_mask_pixels} px)")
 
@@ -372,8 +359,7 @@ class IsletStrategy(CellStrategy):
             raise RuntimeError("Cellpose model required for islet detection")
 
         # Generate masks using our 2-channel segment()
-        masks = self.segment(tile, models, extra_channels=extra_channels,
-                             pixel_size_um=pixel_size_um)
+        masks = self.segment(tile, models, extra_channels=extra_channels)
 
         if not masks:
             if sam2_predictor is not None:
@@ -475,67 +461,78 @@ class IsletStrategy(CellStrategy):
         print(f"[islet] Phase 0 done: {len(quick_data)}/{n_masks} cells scanned", flush=True)
 
         # ====================================================================
-        # Compute Otsu/2 pre-filter thresholds (same method as downstream
-        # compute_islet_marker_thresholds): normalize to [0,1] via p1/p99.5,
-        # Otsu (or med+3*MAD if Otsu > 15% positive), then threshold/2.
+        # GMM pre-filter: use global thresholds from pilot calibration if
+        # available, otherwise fit per-tile GMM as fallback. The pre-filter
+        # applies a permissive margin (threshold / marker_signal_factor).
         # ====================================================================
-        from skimage.filters import threshold_otsu as _threshold_otsu
-
-        # otsu_thresholds stores RAW uint16 cutoff values per marker channel
-        otsu_thresholds = {}
+        gmm_thresholds = {}
         if marker_chs and self.marker_signal_factor > 0:
-            for ch_idx in marker_chs:
-                raw_vals = np.array([c['marker_means'].get(ch_idx, 0) for c in quick_data])
-                raw_pos = raw_vals[raw_vals > 0]
-                if len(raw_pos) < 50:
-                    continue
+            divisor = max(self.marker_signal_factor, 0.01)
 
-                lo = float(np.percentile(raw_pos, 1))
-                hi = float(np.percentile(raw_pos, 99.5))
-                if hi <= lo:
-                    continue
+            if self.gmm_prefilter_thresholds:
+                # Use pre-computed global thresholds from pilot calibration
+                for ch_idx in marker_chs:
+                    if ch_idx in self.gmm_prefilter_thresholds:
+                        raw_cutoff = self.gmm_prefilter_thresholds[ch_idx] / divisor
+                        gmm_thresholds[ch_idx] = raw_cutoff
+                        raw_vals = np.array([c['marker_means'].get(ch_idx, 0) for c in quick_data])
+                        n_above = int(np.sum(raw_vals > raw_cutoff))
+                        logger.info(f"  ch{ch_idx}: global GMM P50={self.gmm_prefilter_thresholds[ch_idx]:.0f}, "
+                                    f"pre-filter={raw_cutoff:.0f} (/{divisor:.1f}), "
+                                    f"{n_above}/{len(raw_vals)} pass")
+                if gmm_thresholds:
+                    print(f"[islet] Pre-filter (global GMM/{divisor:.0f}): "
+                          + ", ".join(f"ch{k}={v:.1f}" for k, v in sorted(gmm_thresholds.items())),
+                          flush=True)
+            else:
+                # Fallback: fit per-tile GMM
+                from sklearn.mixture import GaussianMixture as _GaussianMixture
 
-                norm_vals = np.clip((raw_vals - lo) / (hi - lo), 0, 1)
-                try:
-                    otsu_t = float(_threshold_otsu(norm_vals))
-                except (ValueError, IndexError):
-                    otsu_t = 0.5
+                for ch_idx in marker_chs:
+                    raw_vals = np.array([c['marker_means'].get(ch_idx, 0) for c in quick_data])
+                    raw_pos = raw_vals[raw_vals > 0]
+                    if len(raw_pos) < 50:
+                        continue
 
-                med = float(np.median(norm_vals))
-                mad = float(np.median(np.abs(norm_vals - med)))
-                mad3_t = med + 3 * 1.4826 * mad
+                    log_vals = np.log1p(raw_pos).reshape(-1, 1)
+                    gmm = _GaussianMixture(n_components=2, random_state=42, max_iter=200)
+                    gmm.fit(log_vals)
 
-                n_otsu = int(np.sum(norm_vals > otsu_t))
-                otsu_pct = 100 * n_otsu / max(len(raw_vals), 1)
-                if otsu_pct <= 15:
-                    auto_t = otsu_t
-                    method = 'otsu'
-                else:
-                    auto_t = mad3_t
-                    method = 'med+3MAD'
+                    signal_idx = int(np.argmax(gmm.means_.flatten()))
+                    bg_mean = float(np.exp(gmm.means_.flatten()[1 - signal_idx]))
+                    sig_mean = float(np.exp(gmm.means_.flatten()[signal_idx]))
 
-                divisor = max(self.marker_signal_factor, 0.01)
-                raw_cutoff = lo + (auto_t / divisor) * (hi - lo)
-                otsu_thresholds[ch_idx] = raw_cutoff
+                    # Find raw threshold where P(signal) = 0.5 via binary search
+                    lo_raw, hi_raw = 0.0, float(raw_vals.max())
+                    for _ in range(50):
+                        mid = (lo_raw + hi_raw) / 2
+                        p = gmm.predict_proba(np.log1p(np.array([[mid]])))
+                        if p[0, signal_idx] > 0.5:
+                            hi_raw = mid
+                        else:
+                            lo_raw = mid
+                    gmm_threshold = (lo_raw + hi_raw) / 2
+                    raw_cutoff = gmm_threshold / divisor
+                    gmm_thresholds[ch_idx] = raw_cutoff
 
-                n_above = int(np.sum(raw_vals > raw_cutoff))
-                logger.info(f"  ch{ch_idx}: {method} norm_t={auto_t:.3f}, "
-                            f"pre-filter={auto_t/divisor:.3f} (raw={raw_cutoff:.1f}), "
-                            f"{n_above}/{len(raw_vals)} pass")
+                    n_above = int(np.sum(raw_vals > raw_cutoff))
+                    logger.info(f"  ch{ch_idx}: tile GMM bg={bg_mean:.0f}, sig={sig_mean:.0f}, "
+                                f"P50={gmm_threshold:.0f}, pre-filter={raw_cutoff:.0f} "
+                                f"(/{divisor:.1f}), {n_above}/{len(raw_vals)} pass")
 
-            if otsu_thresholds:
-                print(f"[islet] Pre-filter (Otsu/2): "
-                      + ", ".join(f"ch{k}={v:.1f}" for k, v in sorted(otsu_thresholds.items())),
-                      flush=True)
+                if gmm_thresholds:
+                    print(f"[islet] Pre-filter (tile GMM/{divisor:.0f}): "
+                          + ", ".join(f"ch{k}={v:.1f}" for k, v in sorted(gmm_thresholds.items())),
+                          flush=True)
 
-        # Split cells into promising (any marker > Otsu/2) vs background
+        # Split cells into promising (any marker > GMM threshold) vs background
         promising_indices = []
         background_indices = []
         for i, cell in enumerate(quick_data):
-            if otsu_thresholds:
+            if gmm_thresholds:
                 passes = any(
-                    cell['marker_means'].get(ch, 0) > otsu_thresholds[ch]
-                    for ch in otsu_thresholds
+                    cell['marker_means'].get(ch, 0) > gmm_thresholds[ch]
+                    for ch in gmm_thresholds
                 )
             else:
                 passes = True  # no thresholds → keep all
