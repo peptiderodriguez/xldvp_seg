@@ -2386,7 +2386,7 @@ def run_pipeline(args):
             # Merge across scales (contour-based IoU dedup)
             logger.info(f"Merging {len(all_scale_detections)} detections across scales...")
             merged_detections = merge_detections_across_scales(
-                all_scale_detections, iou_threshold=iou_threshold, prefer_larger=True,
+                all_scale_detections, iou_threshold=iou_threshold,
             )
             logger.info(f"After merge: {len(merged_detections)} vessels")
 

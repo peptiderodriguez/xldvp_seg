@@ -240,13 +240,12 @@ def compute_iou_from_masks(mask1: np.ndarray, mask2: np.ndarray) -> float:
 def merge_detections_across_scales(
     detections: List[Dict],
     iou_threshold: float = 0.3,
-    prefer_larger: bool = True
 ) -> List[Dict]:
     """
     Merge detections from different scales, removing duplicates.
 
-    When the same vessel is detected at multiple scales, keeps the
-    detection with the larger outer contour area (more complete).
+    Sorted by area descending — the largest detection is kept when duplicates
+    overlap above iou_threshold.
 
     Uses spatial grid indexing for O(n*k) performance instead of O(n^2),
     where k is the average number of nearby detections per grid cell.
@@ -255,7 +254,7 @@ def merge_detections_across_scales(
         detections: List of detection dicts, each with 'outer' contour
                    and 'scale_detected' field
         iou_threshold: IoU above which detections are considered duplicates
-        prefer_larger: If True (default), keep larger contour area detection
+        (Always keeps larger contour area detection)
 
     Returns:
         Deduplicated list of detections
@@ -359,7 +358,7 @@ def merge_detections_across_scales(
     logger.info(
         f"Merged {len(detections)} detections → {len(merged)} "
         f"(removed {len(detections) - len(merged)} duplicates, "
-        f"{iou_checks} IoU checks vs {len(prepared) * len(merged) // 2} brute-force)"
+        f"{iou_checks} IoU checks vs {len(prepared) * (len(prepared) - 1) // 2} brute-force)"
     )
 
     return merged
@@ -590,7 +589,6 @@ def run_multiscale_detection(
     merged = merge_detections_across_scales(
         all_detections,
         iou_threshold=iou_threshold,
-        prefer_larger=True
     )
 
     return merged
