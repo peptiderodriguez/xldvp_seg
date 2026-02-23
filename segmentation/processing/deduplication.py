@@ -153,28 +153,63 @@ def deduplicate_by_mask_overlap(detections, tiles_dir, min_overlap_fraction=0.1,
     else:
         det_info.sort(key=lambda x: x[0].get('features', {}).get('area', 0), reverse=True)
 
-    # Greedy deduplication: keep detection if it doesn't significantly overlap with any kept detection
+    # Greedy deduplication with spatial grid acceleration.
+    # Duplicates only exist in tile overlap zones, so we partition detections
+    # into grid cells and only check neighbors. O(n*k) instead of O(n*kept).
+
+    # Choose grid cell size: max bbox dimension across all detections, or fallback 500px.
+    # This ensures each detection spans at most 2x2 grid cells.
+    max_dim = 0
+    for _, bbox, _ in det_info:
+        if bbox is not None:
+            w = bbox[2] - bbox[0]
+            h = bbox[3] - bbox[1]
+            max_dim = max(max_dim, w, h)
+    grid_cell = max(max_dim + 1, 500)
+    print(f"[dedup] Spatial grid cell size: {grid_cell} px", flush=True)
+
+    from collections import defaultdict
+    grid = defaultdict(list)  # (gx, gy) -> list of indices into kept_data
+    kept_data = []  # parallel to kept: (bbox, encoded_coords)
+
+    def _grid_cells(bbox):
+        """Return all grid cells that a bbox touches."""
+        gx0 = bbox[0] // grid_cell
+        gy0 = bbox[1] // grid_cell
+        gx1 = bbox[2] // grid_cell
+        gy1 = bbox[3] // grid_cell
+        for gx in range(gx0, gx1 + 1):
+            for gy in range(gy0, gy1 + 1):
+                yield (gx, gy)
+
     kept = []
-    kept_info = []  # (bbox, encoded_coords) for kept detections
 
     for i, (det, bbox, coords) in enumerate(det_info):
-        if i % 10000 == 0 and i > 0:
+        if i % 50000 == 0 and i > 0:
             print(f"[dedup] Overlap check: {i}/{n_total} processed, {len(kept)} kept", flush=True)
 
         if bbox is None or coords is None:
-            # Can't check overlap, keep it
             kept.append(det)
+            kept_data.append((None, None))
             continue
 
-        # Check overlap with all kept detections
+        # Collect candidate indices from neighboring grid cells (deduplicated)
+        candidate_indices = set()
+        for cell in _grid_cells(bbox):
+            for idx in grid[cell]:
+                candidate_indices.add(idx)
+
         is_duplicate = False
-        for kept_bbox, kept_coords in kept_info:
-            # Quick bbox overlap check first
+        for idx in candidate_indices:
+            kept_bbox, kept_coords = kept_data[idx]
+            if kept_bbox is None:
+                continue
+            # Bbox overlap check
             if (bbox[0] > kept_bbox[2] or bbox[2] < kept_bbox[0] or
                     bbox[1] > kept_bbox[3] or bbox[3] < kept_bbox[1]):
                 continue
 
-            # Fast numpy intersection on sorted int64 arrays
+            # Pixel-level intersection
             overlap = len(np.intersect1d(coords, kept_coords, assume_unique=True))
             smaller_size = min(len(coords), len(kept_coords))
 
@@ -183,8 +218,12 @@ def deduplicate_by_mask_overlap(detections, tiles_dir, min_overlap_fraction=0.1,
                 break
 
         if not is_duplicate:
+            kept_idx = len(kept)
             kept.append(det)
-            kept_info.append((bbox, coords))
+            kept_data.append((bbox, coords))
+            # Insert into all grid cells this detection touches
+            for cell in _grid_cells(bbox):
+                grid[cell].append(kept_idx)
 
     n_removed = len(detections) - len(kept)
     if n_removed > 0:
