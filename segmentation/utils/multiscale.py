@@ -240,6 +240,7 @@ def compute_iou_from_masks(mask1: np.ndarray, mask2: np.ndarray) -> float:
 def merge_detections_across_scales(
     detections: List[Dict],
     iou_threshold: float = 0.3,
+    tile_size: int = 3000,
 ) -> List[Dict]:
     """
     Merge detections from different scales, removing duplicates.
@@ -255,11 +256,14 @@ def merge_detections_across_scales(
                    and 'scale_detected' field
         iou_threshold: IoU above which detections are considered duplicates
         (Always keeps larger contour area detection)
+        tile_size: Tile size in pixels (grid cell = 10% of tile_size)
 
     Returns:
         Deduplicated list of detections
     """
-    from collections import defaultdict
+    import time
+import sys
+from collections import defaultdict
 
     if not detections:
         return []
@@ -285,14 +289,11 @@ def merge_detections_across_scales(
     # Sort by area descending (largest first = highest priority)
     prepared.sort(key=lambda t: t[3], reverse=True)
 
-    # Determine grid cell size: use median bounding box diagonal as cell size
-    # This balances between too-fine (many cells per detection) and too-coarse (all in one cell)
-    if len(prepared) > 10:
-        diags = [np.sqrt(b[2]**2 + b[3]**2) for _, _, b, _ in prepared[:1000]]
-        cell_size = max(500, int(np.median(diags) * 3))
-    else:
-        cell_size = 2000
-    logger.info(f"Merge: grid cell size = {cell_size}px")
+    # Grid cell size = 10% of tile size. Detections larger than this span multiple
+    # cells (fine — they get inserted into all cells they touch). What matters is
+    # that each cell contains few detections for fast neighbor lookups.
+    cell_size = max(300, tile_size // 10)
+    logger.info(f"Merge: grid cell size = {cell_size}px (tile_size={tile_size})")
 
     def _bbox_cells(bbox):
         """Return set of grid cell keys that a bounding box overlaps."""
@@ -317,13 +318,23 @@ def merge_detections_across_scales(
     merged_contours = []  # parallel list of (contour_cv2, bbox)
     duplicate_count = 0
     iou_checks = 0
+    
+    # Progress tracking for large merge operations
+    total_start = time.time()
+    progress_interval = max(100, len(prepared) // 100) if len(prepared) > 0 else 100
+    max_detections_per_cell = 0
+    cell_with_max = None
 
-    for det, contour, bbox, area in prepared:
+    for det_idx, (det, contour, bbox, area) in enumerate(prepared):
         cells = _bbox_cells(bbox)
 
         # Collect candidate indices from overlapping grid cells (deduplicate)
         candidate_indices = set()
         for cell in cells:
+            cell_size_check = len(grid[cell])
+            if cell_size_check > max_detections_per_cell:
+                max_detections_per_cell = cell_size_check
+                cell_with_max = cell
             for idx in grid[cell]:
                 candidate_indices.add(idx)
 
@@ -353,8 +364,27 @@ def merge_detections_across_scales(
             merged_contours.append((contour, bbox))
             for cell in cells:
                 grid[cell].append(new_idx)
+        
+        # Progress logging
+        if (det_idx + 1) % progress_interval == 0:
+            elapsed = time.time() - total_start
+            rate = (det_idx + 1) / elapsed if elapsed > 0 else 0
+            remaining = len(prepared) - (det_idx + 1)
+            eta = remaining / rate if rate > 0 else 0
+            logger.info(
+                f"Merge progress: {det_idx + 1}/{len(prepared)} ({100.0*(det_idx+1)/len(prepared):.1f}%) — "
+                f"{iou_checks} IoU checks, {len(merged)} kept, {elapsed:.1f}s elapsed, ETA {eta:.1f}s"
+            )
 
     logger.debug(f"Skipped {skipped_no_outer} detections with no outer contour")
+    
+    # Summary statistics
+    elapsed_total = time.time() - total_start
+    avg_checks_per_det = iou_checks / len(prepared) if len(prepared) > 0 else 0
+    logger.info(
+        f"Merge completed: {iou_checks} total IoU checks in {elapsed_total:.1f}s "
+        f"({iou_checks/elapsed_total:.0f} checks/s, {avg_checks_per_det:.1f} checks/detection)"
+    )
     logger.info(
         f"Merged {len(detections)} detections → {len(merged)} "
         f"(removed {len(detections) - len(merged)} duplicates, "
@@ -589,6 +619,7 @@ def run_multiscale_detection(
     merged = merge_detections_across_scales(
         all_detections,
         iou_threshold=iou_threshold,
+        tile_size=tile_size,
     )
 
     return merged

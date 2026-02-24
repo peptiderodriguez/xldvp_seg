@@ -1,5 +1,10 @@
 #!/usr/bin/env python3
 """
+DEPRECATED: Use scripts/regenerate_html.py instead (consolidated all-cell-type version).
+
+    python scripts/regenerate_html.py --output-dir DIR --czi-path CZI --cell-type vessel
+
+---
 Regenerate HTML viewer for detection results with sorting options.
 
 This script regenerates the HTML annotation interface from existing detections,
@@ -11,6 +16,13 @@ allowing you to:
 Usage:
     python regenerate_html.py --output-dir /path/to/output --sort-by area --sort-order desc
 """
+
+import warnings
+warnings.warn(
+    "regenerate_html.py (root) is deprecated. Use scripts/regenerate_html.py instead:\n"
+    "  python scripts/regenerate_html.py --output-dir DIR --czi-path CZI",
+    DeprecationWarning, stacklevel=1,
+)
 
 import argparse
 import json

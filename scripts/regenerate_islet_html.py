@@ -1,10 +1,24 @@
 #!/usr/bin/env python3
-"""Regenerate islet HTML with marker-colored contours from existing detections.
+"""
+DEPRECATED: Use scripts/regenerate_html.py instead (consolidated all-cell-type version).
+
+    python scripts/regenerate_html.py --output-dir DIR --czi-path CZI --cell-type islet \\
+        --display-channels 2,3,5 --islet-marker-channels gcg:2,ins:3,sst:5
+
+---
+Regenerate islet HTML with marker-colored contours from existing detections.
 
 Reads saved features + masks, loads only the display channels from CZI,
 computes population-level marker thresholds, and regenerates HTML with
 colored contours by marker type.
 """
+import warnings
+warnings.warn(
+    "regenerate_islet_html.py is deprecated. Use scripts/regenerate_html.py instead:\n"
+    "  python scripts/regenerate_html.py --output-dir DIR --czi-path CZI --cell-type islet",
+    DeprecationWarning, stacklevel=1,
+)
+
 import argparse
 import json
 import sys

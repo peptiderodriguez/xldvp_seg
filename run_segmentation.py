@@ -121,6 +121,419 @@ class NumpyEncoder(json.JSONEncoder):
         return super().default(obj)
 
 
+def detect_resume_stage(slide_output_dir, cell_type):
+    """Detect which pipeline stages have completed in an existing run directory.
+
+    Returns dict with:
+        has_tiles: bool - tile directories with masks/features exist
+        tile_count: int - number of tile directories found
+        has_detections: bool - deduped detections JSON exists
+        detection_count: int - number of detections in JSON (0 if no file)
+        has_html: bool - html/index.html exists
+    """
+    slide_output_dir = Path(slide_output_dir)
+    tiles_dir = slide_output_dir / "tiles"
+    det_file = slide_output_dir / f"{cell_type}_detections.json"
+    html_index = slide_output_dir / "html" / "index.html"
+
+    # Count tile directories with valid outputs
+    tile_count = 0
+    if tiles_dir.exists():
+        for td in tiles_dir.iterdir():
+            if td.is_dir() and td.name.startswith("tile_"):
+                mask_file = td / f"{cell_type}_masks.h5"
+                feat_file = td / f"{cell_type}_features.json"
+                if mask_file.exists() and feat_file.exists():
+                    tile_count += 1
+
+    # Check detections JSON
+    detection_count = 0
+    has_detections = det_file.exists()
+    if has_detections:
+        try:
+            with open(det_file) as f:
+                dets = json.load(f)
+            detection_count = len(dets)
+        except (json.JSONDecodeError, IOError):
+            has_detections = False
+
+    return {
+        'has_tiles': tile_count > 0,
+        'tile_count': tile_count,
+        'has_detections': has_detections,
+        'detection_count': detection_count,
+        'has_html': html_index.exists(),
+    }
+
+
+def reload_detections_from_tiles(tiles_dir, cell_type):
+    """Reload all detections from per-tile feature JSON files.
+
+    Iterates tile_*/ directories, loads {cell_type}_features.json from each,
+    and returns the merged list (same format as all_detections in pipeline).
+    """
+    tiles_dir = Path(tiles_dir)
+    all_detections = []
+
+    tile_dirs = sorted(
+        [d for d in tiles_dir.iterdir() if d.is_dir() and d.name.startswith("tile_")],
+        key=lambda d: d.name,
+    )
+
+    for td in tile_dirs:
+        feat_file = td / f"{cell_type}_features.json"
+        if feat_file.exists():
+            try:
+                with open(feat_file) as f:
+                    features_list = json.load(f)
+                all_detections.extend(features_list)
+            except (json.JSONDecodeError, IOError) as e:
+                logger.warning(f"Failed to load {feat_file}: {e}")
+
+    return all_detections
+
+
+def _resume_generate_html_samples(args, all_detections, tiles_dir,
+                                  all_channel_data, loader, pixel_size_um,
+                                  slide_name, x_start, y_start):
+    """Generate HTML samples from saved tile masks + CZI data (resume path).
+
+    Groups detections by tile_origin, loads masks from HDF5, composes tile RGB
+    from CZI channels, and creates HTML crops — same output as the normal path.
+    """
+    from collections import defaultdict
+
+    cell_type = args.cell_type
+
+    # Determine display channels
+    if cell_type == 'islet':
+        display_chs = getattr(args, 'islet_display_chs', [2, 3, 5])
+    elif cell_type == 'tissue_pattern':
+        display_chs = [int(x) for x in args.tp_display_channels.split(',')]
+    else:
+        display_chs = sorted(all_channel_data.keys())[:3]
+
+    # Group detections by tile
+    tile_groups = defaultdict(list)
+    for det in all_detections:
+        to = det.get('tile_origin')
+        if to is None:
+            continue
+        tile_key = f"tile_{to[0]}_{to[1]}"
+        tile_groups[tile_key].append(det)
+
+    # Islet marker thresholds (population-level, needed before generating crops)
+    marker_thresholds = None
+    _islet_mm = None
+    if cell_type == 'islet':
+        _islet_mm = getattr(args, 'islet_marker_map', None)
+        _marker_top_pct = getattr(args, 'marker_top_pct', 5)
+        _pct_chs_str = getattr(args, 'marker_pct_channels', 'sst')
+        _pct_channels = set(s.strip() for s in _pct_chs_str.split(',')) if _pct_chs_str else set()
+        _gmm_p = getattr(args, 'gmm_p_cutoff', 0.75)
+        _ratio_min = getattr(args, 'ratio_min', 1.5)
+        marker_thresholds = compute_islet_marker_thresholds(
+            all_detections, marker_map=_islet_mm,
+            marker_top_pct=_marker_top_pct,
+            pct_channels=_pct_channels,
+            gmm_p_cutoff=_gmm_p,
+            ratio_min=_ratio_min) if all_detections else None
+        if marker_thresholds:
+            counts = {}
+            for det in all_detections:
+                mc, _ = classify_islet_marker(
+                    det.get('features', {}), marker_thresholds, marker_map=_islet_mm)
+                det['marker_class'] = mc
+                counts[mc] = counts.get(mc, 0) + 1
+            logger.info(f"Islet marker classification (resume): {counts}")
+
+    # Sample if max_html_samples set
+    _max_html = getattr(args, 'max_html_samples', 0)
+
+    # Process tiles
+    all_samples = []
+    try:
+        import hdf5plugin  # noqa: F401
+    except ImportError:
+        pass
+    from tqdm import tqdm as tqdm_progress
+    for tile_key, tile_dets in tqdm_progress(tile_groups.items(), desc="Resume HTML"):
+        # Check max_html cap BEFORE expensive I/O
+        if _max_html > 0 and len(all_samples) >= _max_html:
+            break
+
+        tile_dir = tiles_dir / tile_key
+        mask_file = tile_dir / f"{cell_type}_masks.h5"
+
+        if not mask_file.exists():
+            continue
+        with h5py.File(mask_file, 'r') as hf:
+            if 'masks' in hf:
+                masks = hf['masks'][:]
+            elif 'labels' in hf:
+                masks = hf['labels'][:]
+            else:
+                continue
+            if masks.ndim == 3 and masks.shape[0] == 1:
+                masks = masks[0]
+
+        # Get tile origin
+        tile_origin = tile_dets[0].get('tile_origin', [0, 0])
+        tile_x, tile_y = tile_origin[0], tile_origin[1]
+
+        # Compose tile RGB — match normal path: direct channel extraction, /256 for uint16
+        rel_tx = tile_x - x_start
+        rel_ty = tile_y - y_start
+        tile_h, tile_w = masks.shape[:2]
+        ch_keys = sorted(all_channel_data.keys())
+        n_channels = len(ch_keys)
+
+        if cell_type in ('islet', 'tissue_pattern'):
+            # Use configured display channels (keep uint16 for low-signal fluorescence)
+            rgb_channels = []
+            for ch_idx in display_chs[:3]:
+                if ch_idx in all_channel_data:
+                    rgb_channels.append(
+                        all_channel_data[ch_idx][rel_ty:rel_ty+tile_h, rel_tx:rel_tx+tile_w])
+                else:
+                    _dtype = next(iter(all_channel_data.values())).dtype
+                    rgb_channels.append(np.zeros((tile_h, tile_w), dtype=_dtype))
+            tile_rgb = np.stack(rgb_channels, axis=-1)
+        elif n_channels >= 3:
+            # Standard 3-channel: first 3 loaded channels → R,G,B
+            tile_rgb = np.stack([
+                all_channel_data[ch_keys[i]][rel_ty:rel_ty+tile_h, rel_tx:rel_tx+tile_w]
+                for i in range(3)
+            ], axis=-1)
+        else:
+            # Single channel: duplicate to RGB
+            tile_rgb = np.stack([
+                all_channel_data[ch_keys[0]][rel_ty:rel_ty+tile_h, rel_tx:rel_tx+tile_w]
+            ] * 3, axis=-1)
+
+        if tile_rgb.size == 0:
+            continue
+
+        # Convert uint16→uint8 for non-islet/tissue_pattern (matches normal path: /256)
+        if tile_rgb.dtype == np.uint16 and cell_type not in ('islet', 'tissue_pattern'):
+            tile_rgb = (tile_rgb / 256).astype(np.uint8)
+
+        tile_pct = _compute_tile_percentiles(tile_rgb) if getattr(args, 'html_normalization', 'crop') == 'tile' else None
+
+        # Generate crops for each detection in this tile
+        html_samples = filter_and_create_html_samples(
+            tile_dets, tile_x, tile_y, tile_rgb, masks,
+            pixel_size_um, slide_name, cell_type,
+            args.html_score_threshold,
+            tile_percentiles=tile_pct,
+            marker_thresholds=marker_thresholds,
+            marker_map=_islet_mm,
+            candidate_mode=getattr(args, 'candidate_mode', False),
+        )
+        all_samples.extend(html_samples)
+
+        del masks, tile_rgb
+        gc.collect()
+
+    return all_samples
+
+
+def _finish_pipeline(args, all_detections, all_samples, slide_output_dir, tiles_dir,
+                     pixel_size_um, slide_name, mosaic_info, run_timestamp, pct,
+                     skip_html=False, all_tiles=None, tissue_tiles=None, sampled_tiles=None):
+    """Shared post-processing: HTML export, CSV, summary (used by both normal and resume paths)."""
+    cell_type = args.cell_type
+    czi_path = Path(args.czi_path)
+
+    # Sort samples: classifier runs → RF score descending; else → area ascending
+    _has_classifier = (
+        (cell_type == 'nmj' and getattr(args, 'nmj_classifier', None)) or
+        (cell_type == 'islet' and getattr(args, 'islet_classifier', None)) or
+        (cell_type == 'tissue_pattern' and getattr(args, 'tp_classifier', None))
+    )
+    if _has_classifier:
+        all_samples.sort(key=lambda x: x['stats'].get('rf_prediction') or 0, reverse=True)
+    else:
+        all_samples.sort(key=lambda x: x['stats'].get('area_um2', 0))
+
+    # Export to HTML (unless skipped)
+    if not skip_html and all_samples:
+        logger.info(f"Exporting to HTML ({len(all_samples)} samples)...")
+        html_dir = slide_output_dir / "html"
+
+        # Channel legend from CZI metadata
+        channel_legend = None
+        try:
+            _czi_meta = get_czi_metadata(czi_path, scene=args.scene)
+
+            def _channel_label(ch_idx):
+                for ch in _czi_meta['channels']:
+                    if ch['index'] == ch_idx:
+                        name = ch['name']
+                        em = f" ({ch['emission_nm']:.0f}nm)" if ch.get('emission_nm') else ''
+                        return f'{name}{em}'
+                return f'Ch{ch_idx}'
+
+            if cell_type == 'islet':
+                _islet_disp = getattr(args, 'islet_display_chs', [2, 3, 5])
+                channel_legend = {
+                    'red': _channel_label(_islet_disp[0]) if len(_islet_disp) > 0 else 'none',
+                    'green': _channel_label(_islet_disp[1]) if len(_islet_disp) > 1 else 'none',
+                    'blue': _channel_label(_islet_disp[2]) if len(_islet_disp) > 2 else 'none',
+                }
+            elif cell_type == 'tissue_pattern':
+                tp_disp = [int(x) for x in args.tp_display_channels.split(',')]
+                channel_legend = {
+                    'red': _channel_label(tp_disp[0]) if len(tp_disp) > 0 else 'none',
+                    'green': _channel_label(tp_disp[1]) if len(tp_disp) > 1 else 'none',
+                    'blue': _channel_label(tp_disp[2]) if len(tp_disp) > 2 else 'none',
+                }
+            elif cell_type == 'nmj' and getattr(args, 'all_channels', False):
+                channel_legend = {
+                    'red': _channel_label(0),
+                    'green': _channel_label(1),
+                    'blue': _channel_label(2),
+                }
+            else:
+                channel_legend = {
+                    'red': _channel_label(0),
+                    'green': _channel_label(1),
+                    'blue': _channel_label(2),
+                }
+        except Exception:
+            channel_legend = None
+
+        prior_ann = getattr(args, 'prior_annotations', None)
+        experiment_name = f"{slide_name}_{run_timestamp}_{pct}pct"
+        export_samples_to_html(
+            all_samples,
+            html_dir,
+            cell_type,
+            samples_per_page=args.samples_per_page,
+            title=f"{cell_type.upper()} Annotation Review (resumed)",
+            page_prefix=f'{cell_type}_page',
+            experiment_name=experiment_name,
+            file_name=f"{czi_path.name}",
+            pixel_size_um=pixel_size_um,
+            tiles_processed=len(sampled_tiles) if sampled_tiles else 0,
+            tiles_total=len(all_tiles) if all_tiles else 0,
+            channel_legend=channel_legend,
+            prior_annotations=prior_ann,
+        )
+    elif skip_html:
+        logger.info("HTML export skipped (already exists)")
+
+    # Add tile_mask_label and global_id
+    for det in all_detections:
+        det['tile_mask_label'] = det.get('mask_label', 0)
+        _gc = det.get('global_center', det.get('center', [0, 0]))
+        det['global_id'] = f"{int(round(_gc[0]))}_{int(round(_gc[1]))}"
+
+    # Save detections JSON
+    detections_file = slide_output_dir / f'{cell_type}_detections.json'
+    with open(detections_file, 'w') as f:
+        json.dump(all_detections, f, indent=2, cls=NumpyEncoder)
+    logger.info(f"  Saved {len(all_detections)} detections to {detections_file}")
+
+    # Export CSV
+    csv_file = slide_output_dir / f'{cell_type}_coordinates.csv'
+    with open(csv_file, 'w') as f:
+        if cell_type == 'vessel':
+            f.write('uid,global_x_px,global_y_px,global_x_um,global_y_um,outer_diameter_um,wall_thickness_um,confidence\n')
+            for det in all_detections:
+                g_center = det.get('global_center')
+                g_center_um = det.get('global_center_um')
+                if g_center is None or g_center_um is None:
+                    continue
+                if len(g_center) < 2 or g_center[0] is None or g_center[1] is None:
+                    continue
+                if len(g_center_um) < 2 or g_center_um[0] is None or g_center_um[1] is None:
+                    continue
+                feat = det.get('features', {})
+                f.write(f"{det['uid']},{g_center[0]:.1f},{g_center[1]:.1f},"
+                        f"{g_center_um[0]:.2f},{g_center_um[1]:.2f},"
+                        f"{feat.get('outer_diameter_um', 0):.2f},{feat.get('wall_thickness_mean_um', 0):.2f},"
+                        f"{feat.get('confidence', 'unknown')}\n")
+        else:
+            f.write('uid,global_x_px,global_y_px,global_x_um,global_y_um,area_um2\n')
+            for det in all_detections:
+                g_center = det.get('global_center')
+                g_center_um = det.get('global_center_um')
+                if g_center is None or g_center_um is None:
+                    continue
+                if len(g_center) < 2 or g_center[0] is None or g_center[1] is None:
+                    continue
+                if len(g_center_um) < 2 or g_center_um[0] is None or g_center_um[1] is None:
+                    continue
+                feat = det.get('features', {})
+                area_um2 = feat.get('area', 0) * (pixel_size_um ** 2)
+                f.write(f"{det['uid']},{g_center[0]:.1f},{g_center[1]:.1f},"
+                        f"{g_center_um[0]:.2f},{g_center_um[1]:.2f},{area_um2:.2f}\n")
+    logger.info(f"  Saved coordinates to {csv_file}")
+
+    # Save summary
+    summary = {
+        'slide_name': slide_name,
+        'cell_type': cell_type,
+        'pixel_size_um': pixel_size_um,
+        'mosaic_width': mosaic_info['width'],
+        'mosaic_height': mosaic_info['height'],
+        'total_tiles': len(all_tiles) if all_tiles else 0,
+        'tissue_tiles': len(tissue_tiles) if tissue_tiles else 0,
+        'sampled_tiles': len(sampled_tiles) if sampled_tiles else 0,
+        'total_detections': len(all_detections),
+        'html_displayed': len(all_samples),
+        'resumed': True,
+        'params': {},
+        'detections_file': str(detections_file),
+        'coordinates_file': str(csv_file),
+    }
+    with open(slide_output_dir / 'summary.json', 'w') as f:
+        json.dump(summary, f, indent=2, cls=NumpyEncoder)
+
+    # Export mesothelium LMD XML if applicable
+    if cell_type == 'mesothelium' and len(all_detections) > 0:
+        logger.info("Exporting to Leica LMD XML format...")
+        lmd_file = slide_output_dir / f'{cell_type}_chunks.xml'
+        export_to_leica_lmd(
+            all_detections,
+            lmd_file,
+            pixel_size_um,
+            image_height_px=mosaic_info['height'],
+            image_width_px=mosaic_info['width'],
+            add_fiducials=getattr(args, 'add_fiducials', True),
+            flip_y=True,
+        )
+
+    logger.info("=" * 60)
+    logger.info("COMPLETE (resumed)")
+    logger.info("=" * 60)
+    logger.info(f"Total detections: {len(all_detections)}")
+    logger.info(f"Displayed in HTML: {len(all_samples)}")
+    logger.info(f"Output: {slide_output_dir}")
+
+    # Start HTTP server (same logic as normal path)
+    html_dir = slide_output_dir / "html"
+    no_serve = getattr(args, 'no_serve', False)
+    serve_foreground = getattr(args, 'serve', False)
+    serve_background = getattr(args, 'serve_background', True)
+    port = getattr(args, 'port', 8081)
+
+    if not no_serve and html_dir.exists() and not skip_html:
+        if serve_foreground:
+            http_proc, tunnel_proc, tunnel_url = start_server_and_tunnel(
+                html_dir, port, background=False,
+                slide_name=slide_name, cell_type=cell_type)
+            if http_proc is not None:
+                wait_for_server_shutdown(http_proc, tunnel_proc)
+        elif serve_background:
+            start_server_and_tunnel(
+                html_dir, port, background=True,
+                slide_name=slide_name, cell_type=cell_type)
+            print("")
+            show_server_status()
+
+
 # Global list to track spawned processes for cleanup (foreground mode only)
 _spawned_processes = []
 
@@ -1917,6 +2330,50 @@ def run_pipeline(args):
         logger.info("Multi-marker mode: ENABLED (auto-enabled --all-channels and --parallel-detection)")
     logger.info("=" * 60)
 
+    # ---- Resume early-exit: skip CZI loading if ALL stages are done ----
+    if getattr(args, 'resume', None):
+        resume_dir = Path(args.resume)
+        resume_info = detect_resume_stage(resume_dir, args.cell_type)
+        _has_det = resume_info['has_detections'] and not getattr(args, 'force_detect', False)
+        _has_html = resume_info['has_html'] and not getattr(args, 'force_html', False)
+        _has_tiles = resume_info['has_tiles'] and not getattr(args, 'force_detect', False)
+
+        logger.info(f"Resume state: tiles={resume_info['tile_count']}, "
+                     f"detections={'yes' if resume_info['has_detections'] else 'no'}"
+                     f" ({resume_info['detection_count']}), "
+                     f"html={'yes' if resume_info['has_html'] else 'no'}")
+
+        if _has_det and _has_html:
+            # Everything done — just regenerate CSV/summary without loading CZI
+            logger.info("All stages complete — regenerating CSV and summary only (no CZI load needed)")
+            slide_output_dir = resume_dir
+            det_file = slide_output_dir / f"{args.cell_type}_detections.json"
+            with open(det_file) as f:
+                all_detections = json.load(f)
+
+            # Load pipeline config for metadata
+            config_file = slide_output_dir / 'pipeline_config.json'
+            if config_file.exists():
+                with open(config_file) as f:
+                    cfg = json.load(f)
+                pixel_size_um = cfg.get('pixel_size_um', 0.1725)
+                mosaic_info = {'width': cfg.get('width', 0), 'height': cfg.get('height', 0),
+                               'x': cfg.get('x_start', 0), 'y': cfg.get('y_start', 0)}
+            else:
+                # Minimal load: just metadata from CZI
+                loader = get_loader(czi_path, load_to_ram=False, channel=args.channel, scene=args.scene)
+                pixel_size_um = loader.get_pixel_size()
+                mosaic_info = {'width': loader.mosaic_size[0], 'height': loader.mosaic_size[1],
+                               'x': loader.mosaic_origin[0], 'y': loader.mosaic_origin[1]}
+
+            pct = int(args.sample_fraction * 100)
+            _finish_pipeline(
+                args, all_detections, [], slide_output_dir, slide_output_dir / "tiles",
+                pixel_size_um, slide_name, mosaic_info, run_timestamp, pct,
+                skip_html=True,
+            )
+            return
+
     # RAM-first architecture: Load CZI channel into RAM ONCE at pipeline start
     # This eliminates repeated network I/O for files on network mounts
     # Default is RAM loading for single slides (best performance on network mounts)
@@ -2159,14 +2616,19 @@ def run_pipeline(args):
         logger.info(f"Tissue pattern: using nuclear (ch{tissue_channel}) for tissue detection")
 
     # Calibrate tissue threshold on the SAME channel used for filtering
-    logger.info("Calibrating tissue threshold...")
-    variance_threshold = calibrate_tissue_threshold(
-        all_tiles,
-        calibration_samples=min(50, len(all_tiles)),
-        channel=tissue_channel,
-        tile_size=args.tile_size,
-        loader=loader,  # Loader handles mosaic origin offset correctly
-    )
+    manual_threshold = getattr(args, 'variance_threshold', None)
+    if manual_threshold is not None:
+        variance_threshold = manual_threshold
+        logger.info(f"Using manual variance threshold: {variance_threshold:.1f} (skipping K-means calibration)")
+    else:
+        logger.info("Calibrating tissue threshold...")
+        variance_threshold = calibrate_tissue_threshold(
+            all_tiles,
+            calibration_samples=min(50, len(all_tiles)),
+            channel=tissue_channel,
+            tile_size=args.tile_size,
+            loader=loader,  # Loader handles mosaic origin offset correctly
+        )
     logger.info("Filtering to tissue-containing tiles...")
     tissue_tiles = filter_tissue_tiles(
         all_tiles,
@@ -2189,7 +2651,10 @@ def run_pipeline(args):
 
     # Setup output directories (timestamped to avoid overwriting previous runs)
     pct = int(args.sample_fraction * 100)
-    if getattr(args, 'resume_from', None):
+    if getattr(args, 'resume', None):
+        slide_output_dir = Path(args.resume)
+        logger.info(f"Resuming into existing output directory: {slide_output_dir}")
+    elif getattr(args, 'resume_from', None):
         slide_output_dir = Path(args.resume_from)
         logger.info(f"Resuming into existing output directory: {slide_output_dir}")
     else:
@@ -2197,6 +2662,97 @@ def run_pipeline(args):
     tiles_dir = slide_output_dir / "tiles"
     tiles_dir.mkdir(parents=True, exist_ok=True)
 
+    # ---- Resume: detect completed stages and set skip flags ----
+    skip_detection = False
+    skip_dedup = False
+    skip_html = False
+
+    if getattr(args, 'resume', None):
+        resume_info = detect_resume_stage(slide_output_dir, args.cell_type)
+        logger.info(f"Resume state: tiles={resume_info['tile_count']}, "
+                     f"detections={'yes' if resume_info['has_detections'] else 'no'}"
+                     f" ({resume_info['detection_count']}), "
+                     f"html={'yes' if resume_info['has_html'] else 'no'}")
+
+        if resume_info['has_detections'] and not getattr(args, 'force_detect', False):
+            skip_detection = True
+            skip_dedup = True
+            det_file = slide_output_dir / f"{args.cell_type}_detections.json"
+            with open(det_file) as f:
+                all_detections = json.load(f)
+            logger.info(f"Loaded {len(all_detections)} detections from {det_file} (skipping detection + dedup)")
+        elif resume_info['has_tiles'] and not getattr(args, 'force_detect', False):
+            skip_detection = True
+            all_detections = reload_detections_from_tiles(tiles_dir, args.cell_type)
+            logger.info(f"Reloaded {len(all_detections)} detections from {resume_info['tile_count']} tile dirs (skipping detection, will dedup)")
+
+        if resume_info['has_html'] and not getattr(args, 'force_html', False):
+            skip_html = True
+            logger.info("HTML exists — skipping HTML generation (use --force-html to regenerate)")
+
+    # Save pipeline config for resume/regeneration
+    pipeline_config = {
+        'czi_path': str(czi_path),
+        'cell_type': args.cell_type,
+        'tile_size': args.tile_size,
+        'pixel_size_um': pixel_size_um,
+        'scene': args.scene,
+        'width': width,
+        'height': height,
+        'x_start': x_start,
+        'y_start': y_start,
+        'sample_fraction': args.sample_fraction,
+        'tile_overlap': getattr(args, 'tile_overlap', 0.0),
+        'channel': args.channel,
+    }
+    # Add display channel config
+    if args.cell_type == 'islet':
+        pipeline_config['display_channels'] = getattr(args, 'islet_display_chs', [2, 3, 5])
+        pipeline_config['marker_channels'] = getattr(args, 'islet_marker_channels', 'gcg:2,ins:3,sst:5')
+    elif args.cell_type == 'tissue_pattern':
+        pipeline_config['display_channels'] = [int(x) for x in args.tp_display_channels.split(',')]
+    config_file = slide_output_dir / 'pipeline_config.json'
+    if not config_file.exists() or not getattr(args, 'resume', None):
+        with open(config_file, 'w') as f:
+            json.dump(pipeline_config, f, indent=2)
+
+    # ---- Resume fast-path: skip detection, go straight to dedup/HTML/CSV ----
+    if skip_detection:
+        is_multiscale = args.cell_type == 'vessel' and getattr(args, 'multi_scale', False)
+
+        # Run dedup if reloaded from tiles (not from deduped detections JSON)
+        if not skip_dedup and getattr(args, 'tile_overlap', 0) > 0 and len(all_detections) > 0 and not is_multiscale:
+            from segmentation.processing.deduplication import deduplicate_by_mask_overlap
+            pre_dedup = len(all_detections)
+            mask_fn = f'{args.cell_type}_masks.h5'
+            dedup_sort = 'confidence' if getattr(args, 'dedup_by_confidence', False) else 'area'
+            all_detections = deduplicate_by_mask_overlap(
+                all_detections, tiles_dir, min_overlap_fraction=0.1,
+                mask_filename=mask_fn, sort_by=dedup_sort,
+            )
+            logger.info(f"Dedup (resume): {pre_dedup} → {len(all_detections)}")
+
+        # Regenerate HTML if needed (requires CZI + tile masks)
+        all_samples = []
+        if not skip_html:
+            logger.info(f"Regenerating HTML for {len(all_detections)} detections from saved tiles...")
+            all_samples = _resume_generate_html_samples(
+                args, all_detections, tiles_dir,
+                all_channel_data, loader, pixel_size_um, slide_name,
+                x_start, y_start,
+            )
+            logger.info(f"Generated {len(all_samples)} HTML samples from resume path")
+
+        # Run the same post-processing as the normal path (HTML export, CSV, summary)
+        _finish_pipeline(
+            args, all_detections, all_samples, slide_output_dir, tiles_dir,
+            pixel_size_um, slide_name, mosaic_info, run_timestamp, pct,
+            skip_html=skip_html,
+            all_tiles=all_tiles, tissue_tiles=tissue_tiles, sampled_tiles=sampled_tiles,
+        )
+        return
+
+    # ---- Normal path: full detection pipeline ----
     # Initialize detector
     # Use CellDetector + strategy pattern for all cell types
     logger.info("Initializing detector...")
@@ -2711,6 +3267,7 @@ def run_pipeline(args):
             logger.info(f"Merging {len(all_scale_detections)} detections across scales...")
             merged_detections = merge_detections_across_scales(
                 all_scale_detections, iou_threshold=iou_threshold,
+                tile_size=args.tile_size,
             )
             logger.info(f"After merge: {len(merged_detections)} vessels")
 
@@ -3411,6 +3968,14 @@ def main():
     parser.add_argument('--resume-from', type=str, default=None,
                         help='Resume multiscale run from checkpoints in a previous run directory. '
                              'Skips already-completed scales and reuses the output directory.')
+    parser.add_argument('--resume', type=str, default=None,
+                        help='Resume pipeline from an existing run directory. '
+                             'Auto-detects completed stages (tiles, detections, HTML) and skips them. '
+                             'Requires --czi-path (for HTML crop rendering unless everything is done).')
+    parser.add_argument('--force-html', action='store_true', default=False,
+                        help='Force HTML regeneration even if html/ exists (use with --resume)')
+    parser.add_argument('--force-detect', action='store_true', default=False,
+                        help='Force re-detection even if tiles/ has data (use with --resume)')
 
     # Mesothelium parameters (for LMD chunking)
     parser.add_argument('--target-chunk-area', type=float, default=1500,
@@ -3473,6 +4038,12 @@ def main():
                         help='Minimum cell area in um² for tissue_pattern (default 20)')
     parser.add_argument('--tp-max-area', type=float, default=300.0,
                         help='Maximum cell area in um² for tissue_pattern (default 300)')
+
+    # Tissue detection
+    parser.add_argument('--variance-threshold', type=float, default=None,
+                        help='Manual variance threshold for tissue detection, overriding K-means calibration. '
+                             'Use when auto-calibration is too strict (e.g. out-of-focus scenes). '
+                             'Check logs for calibrated values to guide manual setting.')
 
     # Channel selection
     parser.add_argument('--channels', type=str, default=None,
@@ -3594,6 +4165,14 @@ def main():
 
     # --multi-gpu is always True now (kept for backward compatibility)
     args.multi_gpu = True
+
+    # Handle --resume: also set resume_from for multiscale backward compat
+    if args.resume:
+        if not Path(args.resume).exists():
+            parser.error(f"--resume directory does not exist: {args.resume}")
+        # Set resume_from so multiscale checkpoint logic also picks it up
+        if args.resume_from is None:
+            args.resume_from = args.resume
 
     run_pipeline(args)
 

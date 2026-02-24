@@ -1,20 +1,29 @@
 # Project Plan and Task Tracking
-Last Updated: 2026-02-23 09:28
+Last Updated: 2026-02-24 09:23 UTC
 
 ## Current Objectives
-- Review `merge_detections_across_scales` (lines 240-365) and `compute_iou_contours` (lines 146-217) in multiscale.py
-- Check for bugs, edge cases, inefficiencies, format compatibility
+- Review scripts/generate_expr_spatial_viewer.py for correctness, security, edge cases
 
 ## Completed Tasks
-- [x] Read multiscale.py in full - 2026-02-23 09:27
-- [x] Read callers in run_segmentation.py (checkpoint resume, multi-GPU path) - 2026-02-23 09:28
-- [x] Read callers in vessel.py (detect_multiscale, detect_multiscale_medsam) - 2026-02-23 09:28
+- [x] Read full script (763 lines) - 2026-02-24 09:23
+- [x] Read project documentation (CLAUDE.md, MEMORY.md) - 2026-02-24 09:23
+- [x] Read upstream data pipeline (assign_tissue_zones.py) for schema understanding - 2026-02-24 09:23
+- [x] Read related scripts (spatial_frequency_analysis, generate_tissue_overlay, html_export) - 2026-02-24 09:23
 
 ## Pending Tasks
-- [ ] Complete line-by-line analysis of both functions - high
-- [ ] Write review findings as numbered list with severity - high
+- [ ] Line-by-line review of expression group classification logic - high
+- [ ] Review convex hull computation (scipy) - high
+- [ ] Review HTML/JS correctness (canvas, events, memory) - high
+- [ ] Assess XSS risks in JSON/data serialization - high
+- [ ] Check edge cases (empty scenes, missing data, large clusters) - high
+- [ ] Write comprehensive review report - high
 
 ## Notes and Observations
-- Checkpoint resume (run_segmentation.py:2228-2233) loads JSON -> lists, then converts back to np.array(int32). This means `merge_detections_across_scales` receives proper numpy arrays.
-- After `convert_detection_to_full_res`, `det['outer']` is int32 numpy (line 471). So `merge_detections_across_scales` always gets numpy for non-resumed detections.
-- The `np.asarray(outer).reshape(-1,1,2)` at line 277 is safe for both numpy and list inputs.
+- Script generates self-contained HTML with canvas-based 2x4 scene grid
+- Brain FISH: 4 markers (Slc17a7, Htr2a, Ntrk2, Gad1), 4 CZIs x 2 scenes = 8 panels
+- Expression groups: 2^4=16 combos, minus quad-neg = 15, but script maps to 12
+  (Slc17a7+/Gad1+ is 1 group regardless of Htr2a/Ntrk2)
+
+## Previous Session (Resume Pipeline Review)
+- Reviewed run_segmentation.py resume implementation
+- Open issues: M1 double normalization, L1 no-load-to-ram guard, N1/N2 minor

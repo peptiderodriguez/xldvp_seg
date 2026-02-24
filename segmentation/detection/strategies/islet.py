@@ -101,13 +101,13 @@ class IsletStrategy(CellStrategy):
                 Higher = more permissive (2.0 = half the classification threshold).
                 Set to 0 to disable pre-filtering. (default 2.0)
             gmm_prefilter_thresholds: Pre-computed global GMM thresholds from pilot
-                calibration phase. Dict mapping channel index → raw threshold value.
+                calibration phase. Dict mapping channel index -> raw threshold value.
                 If provided, uses these instead of per-tile GMM fitting.
                 (default None = fit per-tile GMM)
         """
         super().__init__(
-            min_area_um=20,     # permissive safety net in filter() (um²)
-            max_area_um=2000,   # permissive safety net in filter() (um²)
+            min_area_um=20,     # permissive safety net in filter() (um^2)
+            max_area_um=2000,   # permissive safety net in filter() (um^2)
             overlap_threshold=overlap_threshold,
             min_mask_pixels=min_mask_pixels,
             extract_deep_features=extract_deep_features,
@@ -125,7 +125,7 @@ class IsletStrategy(CellStrategy):
 
     def filter(
         self,
-        masks: List[np.ndarray],
+        masks: List[Optional[np.ndarray]],
         features: List[Dict[str, Any]],
         pixel_size_um: float
     ) -> List[Detection]:
@@ -133,24 +133,24 @@ class IsletStrategy(CellStrategy):
         Convert masks to Detection objects (no area filtering).
 
         Computes area_um2, extracts centroid, creates Detection with id/score.
-        No size filtering — Cellpose determines what constitutes a cell.
+        No size filtering -- Cellpose determines what constitutes a cell.
+        Supports mask=None (compact mode) -- uses pre-computed area from features.
         """
-        if not masks:
+        if not features:
             return []
 
         pixel_area_um2 = pixel_size_um ** 2
 
         detections = []
         for i, (mask, feat) in enumerate(zip(masks, features)):
-            area_px = mask.sum()
+            # Get area from mask or pre-computed feature
+            if mask is not None:
+                area_px = mask.sum()
+            else:
+                area_px = feat.get('area', 0)
 
-            # Get centroid
             centroid = feat.get('centroid', [0, 0])
-
-            # Compute area in microns
             area_um2 = area_px * pixel_area_um2
-
-            # Add computed area to features
             feat['area_um2'] = area_um2
 
             detections.append(Detection(
@@ -173,13 +173,11 @@ class IsletStrategy(CellStrategy):
         """
         Segment islet cells using 2-channel Cellpose (membrane + nuclear).
 
-        SAM2 refinement is intentionally SKIPPED for islet because dense
-        islet tissue causes SAM2 point prompts to return whole-tissue regions
-        (100K+ px) instead of individual cells. Cellpose with membrane+nuclear
-        already produces high-quality individual cell masks.
+        WARNING: This method creates full-tile boolean masks for each cell.
+        For dense tiles (17K+ cells on 4000x4000), this uses ~260 GB.
+        Use detect() instead, which uses compact mask representations.
 
-        SAM2 embeddings are still extracted per-cell in detect() for downstream
-        classification features.
+        This method is kept for backward compatibility / external callers.
 
         Args:
             tile: RGB image array (HxWx3, uint8)
@@ -216,7 +214,7 @@ class IsletStrategy(CellStrategy):
         membrane_u8 = _percentile_normalize_channel(membrane_raw)
         nuclear_u8 = _percentile_normalize_channel(nuclear_raw)
 
-        # Cache for detect() to reuse (avoids double normalization — E7)
+        # Cache for detect() to reuse (avoids double normalization)
         self._membrane_u8 = membrane_u8
 
         # Stack as 2-channel input: (H, W, 2)
@@ -233,8 +231,6 @@ class IsletStrategy(CellStrategy):
         print(f"[islet] Cellpose found {len(cellpose_ids)} cells", flush=True)
 
         # Extract individual boolean masks from Cellpose label array using find_objects
-        # No area filtering — let Cellpose decide what's a cell, only reject
-        # fragments smaller than min_mask_pixels (noise).
         slices = ndimage.find_objects(cellpose_masks)
         accepted_masks = []
         n_tiny = 0
@@ -333,9 +329,11 @@ class IsletStrategy(CellStrategy):
         extra_channels: Dict[int, np.ndarray] = None,
     ) -> Tuple[np.ndarray, List['Detection']]:
         """
-        Complete islet detection pipeline.
+        Complete islet detection pipeline with compact mask representation.
 
-        Overrides CellStrategy.detect() to pass extra_channels into segment().
+        Uses Cellpose label array + find_objects slices instead of full-tile
+        boolean masks per cell. This reduces memory from O(n_cells * tile_area)
+        to O(tile_area), preventing OOM on dense tiles (17K+ cells).
 
         Args:
             tile: RGB image array (uint8)
@@ -349,39 +347,88 @@ class IsletStrategy(CellStrategy):
         """
         import torch
 
+        cellpose = models.get('cellpose')
         sam2_predictor = models.get('sam2_predictor')
 
-        if models.get('cellpose') is None:
+        if cellpose is None:
             raise RuntimeError("Cellpose model required for islet detection")
 
-        # Generate masks using our 2-channel segment()
-        masks = self.segment(tile, models, extra_channels=extra_channels)
+        # =================================================================
+        # Cellpose segmentation (compact mode — NO full-tile boolean masks)
+        # =================================================================
+        if extra_channels is None or self.membrane_channel not in extra_channels:
+            raise ValueError(
+                f"IsletStrategy requires extra_channels with membrane_channel={self.membrane_channel}. "
+                f"Available: {list(extra_channels.keys()) if extra_channels else 'None'}"
+            )
 
-        if not masks:
+        membrane_raw = extra_channels.get(self.membrane_channel)
+        nuclear_raw = extra_channels.get(self.nuclear_channel)
+
+        if membrane_raw is None or nuclear_raw is None:
+            raise ValueError(
+                f"IsletStrategy requires both membrane (ch{self.membrane_channel}) and nuclear "
+                f"(ch{self.nuclear_channel}) channels. Got membrane={membrane_raw is not None}, "
+                f"nuclear={nuclear_raw is not None}. Available: {list(extra_channels.keys())}"
+            )
+
+        membrane_u8 = _percentile_normalize_channel(membrane_raw)
+        nuclear_u8 = _percentile_normalize_channel(nuclear_raw)
+        self._membrane_u8 = membrane_u8
+
+        cellpose_input = np.stack([membrane_u8, nuclear_u8], axis=-1)
+        cellpose_masks, _, _ = cellpose.eval(cellpose_input, channels=[1, 2])
+
+        cellpose_ids = np.unique(cellpose_masks)
+        cellpose_ids = cellpose_ids[cellpose_ids > 0]
+
+        logger.info(f"Cellpose found {len(cellpose_ids)} cells")
+        print(f"[islet] Cellpose found {len(cellpose_ids)} cells", flush=True)
+
+        # find_objects gives bbox slices for each label — O(bbox) access per cell
+        cp_slices = ndimage.find_objects(cellpose_masks)
+
+        # Filter tiny fragments using compact masks (no full-tile booleans)
+        accepted_ids = []
+        n_tiny = 0
+        for cp_id in cellpose_ids:
+            sl = cp_slices[cp_id - 1]
+            if sl is None:
+                n_tiny += 1
+                continue
+            n_px = int(np.sum(cellpose_masks[sl] == cp_id))
+            if n_px < self.min_mask_pixels:
+                n_tiny += 1
+                continue
+            accepted_ids.append(int(cp_id))
+        if n_tiny > 0:
+            logger.info(f"  Rejected {n_tiny} fragments < {self.min_mask_pixels} pixels")
+
+        del cellpose_input, nuclear_u8
+        gc.collect()
+
+        tile_shape = tile.shape[:2]
+
+        if not accepted_ids:
+            del cellpose_masks, cp_slices
             if sam2_predictor is not None:
                 sam2_predictor.reset_predictor()
             if torch.cuda.is_available():
                 torch.cuda.empty_cache()
-            return np.zeros(tile.shape[:2], dtype=np.uint32), []
+            return np.zeros(tile_shape, dtype=np.uint32), []
 
-        # Set SAM2 image for embedding extraction (segment() no longer uses SAM2)
-        # Reuse cached membrane_u8 from segment() to avoid double percentile normalization (E7)
+        # Set SAM2 image for embedding extraction
         if self.extract_sam2_embeddings and sam2_predictor is not None:
-            membrane_u8 = getattr(self, '_membrane_u8', None)
-            if membrane_u8 is not None:
-                sam2_rgb = np.stack([membrane_u8, membrane_u8, membrane_u8], axis=-1)
-            else:
-                sam2_rgb = tile  # fallback to tile RGB
+            sam2_rgb = np.stack([membrane_u8, membrane_u8, membrane_u8], axis=-1)
             sam2_predictor.set_image(sam2_rgb)
 
-        # Feature extraction loop (reuse CellStrategy pattern)
+        # Feature extraction prep
         valid_detections = []
         crops_for_resnet = []
         crops_for_resnet_context = []
         crop_indices = []
 
         # Convert tile to uint8 for morphological feature extraction
-        # (extract_morphological_features assumes uint8 for HSV, dark_fraction, etc.)
         if tile.dtype != np.uint8:
             tile_u8 = np.zeros_like(tile, dtype=np.uint8)
             for ch in range(tile.shape[2] if tile.ndim == 3 else 1):
@@ -394,7 +441,6 @@ class IsletStrategy(CellStrategy):
                             tile_u8[:, :, ch] = np.clip((ch_data.astype(np.float32) - p1) / (p99 - p1) * 255, 0, 255).astype(np.uint8)
                         else:
                             tile_u8 = np.clip((ch_data.astype(np.float32) - p1) / (p99 - p1) * 255, 0, 255).astype(np.uint8)
-                    # Preserve zero pixels (CZI padding)
                     if tile.ndim == 3:
                         tile_u8[:, :, ch][ch_data == 0] = 0
                     else:
@@ -402,7 +448,7 @@ class IsletStrategy(CellStrategy):
         else:
             tile_u8 = tile
 
-        # Precompute tile_global_mean once (avoids recomputing per cell in extract_morphological_features)
+        # Precompute tile_global_mean once
         if tile_u8.ndim == 3:
             global_valid = np.max(tile_u8, axis=2) > 0
             tile_global_mean = float(np.mean(tile_u8[global_valid])) if global_valid.any() else 0
@@ -424,37 +470,46 @@ class IsletStrategy(CellStrategy):
             }
 
         # ====================================================================
-        # Phase 0: Quick marker means for ALL cells (~0.01ms/cell)
-        # Just enough to compute Otsu/2 thresholds for pre-filtering.
+        # Phase 0: Quick marker means using COMPACT masks (slice-based)
+        # Uses only local bbox-sized masks (~30x30 per cell, ~1 KB each)
+        # instead of full-tile booleans (4000x4000, 15 MB each).
+        # Memory: 17K cells x ~1 KB = ~17 MB vs 17K x 15 MB = 260 GB
         # ====================================================================
-        n_masks = len(masks)
-        quick_data = []  # list of {mask, centroid, marker_means}
-        for idx, mask in enumerate(masks):
-            if idx % 2000 == 0:
-                print(f"[islet] Phase 0 (marker scan) {idx}/{n_masks}", flush=True)
+        n_cells = len(accepted_ids)
+        quick_data = []
 
-            # Centroid
-            ys, xs = np.where(mask)
-            if len(ys) == 0:
+        for idx, cp_id in enumerate(accepted_ids):
+            if idx % 2000 == 0:
+                print(f"[islet] Phase 0 (marker scan) {idx}/{n_cells}", flush=True)
+
+            sl = cp_slices[cp_id - 1]
+            local_mask = (cellpose_masks[sl] == cp_id)
+
+            # Centroid in tile coordinates (offset by slice start)
+            local_ys, local_xs = np.where(local_mask)
+            if len(local_ys) == 0:
                 continue
-            cx_val, cy_val = float(np.mean(xs)), float(np.mean(ys))
+            cx_val = float(np.mean(local_xs) + sl[1].start)
+            cy_val = float(np.mean(local_ys) + sl[0].start)
 
             # Quick marker channel means (raw uint16, zero-excluded)
             marker_means = {}
             for ch_idx in marker_chs:
-                ch_data = extra_channels.get(ch_idx)
-                if ch_data is not None:
-                    masked_vals = ch_data[mask]
+                ch_arr = extra_channels.get(ch_idx)
+                if ch_arr is not None:
+                    masked_vals = ch_arr[sl][local_mask]
                     nonzero = masked_vals[masked_vals > 0]
                     marker_means[ch_idx] = float(np.mean(nonzero)) if len(nonzero) > 0 else 0.0
 
             quick_data.append({
-                'mask': mask,
+                'cp_id': cp_id,
+                'n_pixels': int(local_mask.sum()),
                 'centroid': [cx_val, cy_val],
                 'marker_means': marker_means,
             })
+            # local_mask is bbox-sized (~30x30), auto-freed on next iteration
 
-        print(f"[islet] Phase 0 done: {len(quick_data)}/{n_masks} cells scanned", flush=True)
+        print(f"[islet] Phase 0 done: {len(quick_data)}/{n_cells} cells scanned", flush=True)
 
         # ====================================================================
         # GMM pre-filter: use global thresholds from pilot calibration if
@@ -531,7 +586,7 @@ class IsletStrategy(CellStrategy):
                     for ch in gmm_thresholds
                 )
             else:
-                passes = True  # no thresholds → keep all
+                passes = True  # no thresholds -> keep all
             if passes:
                 promising_indices.append(i)
             else:
@@ -546,29 +601,64 @@ class IsletStrategy(CellStrategy):
 
         # ====================================================================
         # Phase 1: Full features for PROMISING cells only
-        # (morph + all 6 channels + SAM2 + deep features)
+        # Uses padded bbox crops (2x bbox area) instead of full-tile masks.
+        # A typical cell bbox is ~30x30, padded crop ~60x60 = ~3.6 KB.
+        # Peak memory: ~4 KB per cell instead of 15 MB (full-tile boolean).
         # ====================================================================
         n_sam2_extracted = 0
+        H, W = tile_shape
 
         for pi, cell_idx in enumerate(promising_indices):
             if pi % 500 == 0:
                 print(f"[islet] Featurizing cell {pi}/{n_promising}", flush=True)
             cell = quick_data[cell_idx]
-            mask = cell['mask']
+            cp_id = cell['cp_id']
+            sl = cp_slices[cp_id - 1]
             cx_val, cy_val = cell['centroid']
 
-            feat = extract_morphological_features(mask, tile_u8, tile_global_mean=tile_global_mean)
+            # Padded bbox: expand by 50% on each side (100% more area)
+            by0, by1 = sl[0].start, sl[0].stop
+            bx0, bx1 = sl[1].start, sl[1].stop
+            bh, bw = by1 - by0, bx1 - bx0
+            pad_y, pad_x = bh // 2, bw // 2
+            py0 = max(0, by0 - pad_y)
+            py1 = min(H, by1 + pad_y)
+            px0 = max(0, bx0 - pad_x)
+            px1 = min(W, bx1 + pad_x)
+            pad_sl = (slice(py0, py1), slice(px0, px1))
+
+            # Local mask within padded bbox (small: e.g. 60x60)
+            local_mask = (cellpose_masks[pad_sl] == cp_id)
+
+            # Crop tile_u8 to padded bbox for morph features
+            tile_crop = tile_u8[pad_sl] if tile_u8.ndim == 2 else tile_u8[py0:py1, px0:px1]
+
+            feat = extract_morphological_features(local_mask, tile_crop, tile_global_mean=tile_global_mean)
             if not feat:
                 continue
 
-            # Per-channel features from all 6 channels
+            # Per-channel features: crop each channel to padded bbox
             if channels_dict:
-                multichannel_feats = self.extract_multichannel_features(mask, channels_dict)
+                cropped_channels = {
+                    name: ch_arr[pad_sl] for name, ch_arr in channels_dict.items()
+                    if ch_arr is not None
+                }
+                multichannel_feats = self.extract_multichannel_features(local_mask, cropped_channels)
                 feat.update(multichannel_feats)
+
+            # Deep features crops (use original bbox, not padded)
+            if self.extract_deep_features:
+                crop_context = tile[by0:by1, bx0:bx1].copy()
+                orig_local_mask = (cellpose_masks[sl] == cp_id)
+                crop_masked = crop_context.copy()
+                crop_masked[~orig_local_mask] = 0
+                crops_for_resnet.append(crop_masked)
+                crops_for_resnet_context.append(crop_context)
+                crop_indices.append(len(valid_detections))
 
             feat['centroid'] = [cx_val, cy_val]
 
-            # SAM2 embeddings (256D)
+            # SAM2 embeddings (256D) — only needs centroid, not mask
             if self.extract_sam2_embeddings and sam2_predictor is not None:
                 sam2_emb = self._extract_sam2_embedding(sam2_predictor, cy_val, cx_val)
                 for si, v in enumerate(sam2_emb):
@@ -578,22 +668,8 @@ class IsletStrategy(CellStrategy):
                 for si in range(256):
                     feat[f'sam2_{si}'] = 0.0
 
-            # Deep features (opt-in)
-            if self.extract_deep_features:
-                ys, xs = np.where(mask)
-                if len(ys) > 0:
-                    y1, y2 = ys.min(), ys.max()
-                    x1, x2 = xs.min(), xs.max()
-                    crop_context = tile[y1:y2+1, x1:x2+1].copy()
-                    crop_masked = crop_context.copy()
-                    crop_mask = mask[y1:y2+1, x1:x2+1]
-                    crop_masked[~crop_mask] = 0
-                    crops_for_resnet.append(crop_masked)
-                    crops_for_resnet_context.append(crop_context)
-                    crop_indices.append(len(valid_detections))
-
             valid_detections.append({
-                'mask': mask,
+                'cp_id': cp_id,
                 'centroid': [cx_val, cy_val],
                 'features': feat,
             })
@@ -601,15 +677,15 @@ class IsletStrategy(CellStrategy):
         # ====================================================================
         # Phase 2: Minimal features for BACKGROUND cells
         # (marker means from Phase 0 + centroid + area — no morph, no SAM2)
+        # No mask needed — uses pre-computed n_pixels from Phase 0.
         # ====================================================================
         for cell_idx in background_indices:
             cell = quick_data[cell_idx]
-            mask = cell['mask']
             cx_val, cy_val = cell['centroid']
 
             feat = {
                 'centroid': [cx_val, cy_val],
-                'area': int(mask.sum()),
+                'area': cell['n_pixels'],
             }
             # Store the quick marker means as ch{idx}_mean features
             for ch_idx, val in cell['marker_means'].items():
@@ -621,13 +697,20 @@ class IsletStrategy(CellStrategy):
                     feat[f'sam2_{si}'] = 0.0
 
             valid_detections.append({
-                'mask': mask,
+                'cp_id': cell['cp_id'],
                 'centroid': [cx_val, cy_val],
                 'features': feat,
             })
 
-        # Free quick_data (masks are now referenced by valid_detections)
+        # Free quick_data
         del quick_data
+
+        if n_background > 0:
+            n_valid = len(valid_detections)
+            print(f"[islet] Pre-filter saved: {n_promising} full + {n_background} minimal "
+                  f"({100*n_background/n_valid:.0f}% skipped, "
+                  f"~{n_background * 1.8 / 3600:.1f}h SAM2 time saved)", flush=True)
+        print(f"[islet] Feature extraction done: {len(valid_detections)}/{n_cells} valid", flush=True)
 
         # Batch deep feature extraction
         if self.extract_deep_features:
@@ -686,27 +769,42 @@ class IsletStrategy(CellStrategy):
                     for i in range(1024):
                         det['features'][f'dinov2_ctx_{i}'] = 0.0
 
-        if n_background > 0:
-            print(f"[islet] Pre-filter saved: {n_promising} full + {n_background} minimal "
-                  f"({100*n_background/len(valid_detections):.0f}% skipped, "
-                  f"~{n_background * 1.8 / 3600:.1f}h SAM2 time saved)", flush=True)
-        print(f"[islet] Feature extraction done: {len(valid_detections)}/{n_masks} valid", flush=True)
+        # ====================================================================
+        # Build label array directly from Cellpose labels (no full masks needed)
+        # ====================================================================
+        label_array = np.zeros(tile_shape, dtype=np.uint32)
+        for det_idx, vd in enumerate(valid_detections, start=1):
+            cp_id = vd['cp_id']
+            sl = cp_slices[cp_id - 1]
+            label_array[sl][cellpose_masks[sl] == cp_id] = det_idx
 
-        # Reset predictor state and clean up cached membrane_u8
+        # Free Cellpose label array and slices (no longer needed)
+        del cellpose_masks, cp_slices
+        gc.collect()
+
+        # Build Detection objects (mask=None — label_array IS the mask)
+        pixel_area_um2 = pixel_size_um ** 2
+        detections = []
+        for i, vd in enumerate(valid_detections):
+            feat = vd['features']
+            area_px = feat.get('area', 0)
+            feat['area_um2'] = area_px * pixel_area_um2
+            detections.append(Detection(
+                mask=None,
+                centroid=feat.get('centroid', vd['centroid']),
+                features=feat,
+                id=f'{self.name}_{i}',
+                score=feat.get('sam2_score', feat.get('solidity', 0.0)),
+            ))
+
+        del valid_detections
+
+        # Cleanup
         self._membrane_u8 = None
         if sam2_predictor is not None:
             sam2_predictor.reset_predictor()
         if torch.cuda.is_available():
             torch.cuda.empty_cache()
-
-        # Build Detection objects and filter by size
-        features_list = [det['features'] for det in valid_detections]
-        masks_list = [det['mask'] for det in valid_detections]
-
-        detections = self.filter(masks_list, features_list, pixel_size_um)
-
-        if not detections:
-            return np.zeros(tile.shape[:2], dtype=np.uint32), []
 
         # Optional RF classifier scoring
         if 'classifier' in models:
@@ -718,11 +816,5 @@ class IsletStrategy(CellStrategy):
                 detections = self.classify_rf(
                     detections, classifier, scaler, feature_names
                 )
-
-        # Build label array
-        label_array = np.zeros(tile.shape[:2], dtype=np.uint32)
-        for i, det in enumerate(detections, start=1):
-            if det.mask is not None:
-                label_array[det.mask] = i
 
         return label_array, detections

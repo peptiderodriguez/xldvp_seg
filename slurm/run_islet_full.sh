@@ -11,7 +11,8 @@
 #SBATCH --error=/fs/gpfs41/lv12/fileset02/pool/pool-mann-edwin/code_bin/xldvp_seg/slurm/logs/islet_full_%j.err
 
 # Islet 100% run — 4 GPUs
-# BS-100 slide: 14 tissue tiles, ~7K cells/tile, ~4h expected
+# BS-100 slide: 14 tissue tiles, ~7-17K cells/tile, ~4h expected
+# Memory: compact mask repr (Feb 2026 fix) — no longer O(n_cells*tile_area)
 
 set -euo pipefail
 

@@ -92,9 +92,15 @@ python run_segmentation.py \
     --no-serve \
     --output-dir "$OUTPUT"
 
-DETECTIONS="$OUTPUT/tissue_pattern_detections.json"
+# Find the detections JSON (pipeline creates a timestamped subdirectory)
+DETECTIONS=$(find "$OUTPUT" -name "tissue_pattern_detections.json" -type f | head -1)
+if [ -z "$DETECTIONS" ]; then
+    echo "ERROR: No detections JSON found in $OUTPUT"
+    exit 1
+fi
 N_DET=$(python -c "import json; d=json.load(open('$DETECTIONS')); print(len(d) if isinstance(d,list) else len(d.get('detections',[])))" 2>/dev/null || echo '0')
 echo "=== Detection complete at $(date): $N_DET cells ==="
+echo "Detections file: $DETECTIONS"
 
 # --- Post-processing: clustering by expression (exclude Hoechst ch4) ---
 echo "=== Starting clustering at $(date) ==="
@@ -110,7 +116,7 @@ python scripts/cluster_by_features.py \
 echo "=== Clustering complete at $(date) ==="
 
 # --- Post-processing: tissue zone assignment (exclude Hoechst ch4) ---
-CLUSTERED="$OUTPUT/clustering/clustered_detections.json"
+CLUSTERED="$OUTPUT/clustering/detections_clustered.json"
 if [ -f "$CLUSTERED" ]; then
     echo "=== Starting zone assignment at $(date) ==="
     python scripts/assign_tissue_zones.py \

@@ -1,5 +1,5 @@
 #!/bin/bash
-#SBATCH --job-name=psilo_full
+#SBATCH --job-name=wm_pm_full
 #SBATCH --partition=p.hpcl93
 #SBATCH --nodes=1
 #SBATCH --ntasks=1
@@ -7,11 +7,11 @@
 #SBATCH --mem=500G
 #SBATCH --time=72:00:00
 #SBATCH --gres=gpu:l40s:4
-#SBATCH --output=/fs/gpfs41/lv12/fileset02/pool/pool-mann-edwin/code_bin/xldvp_seg/logs/psilo_full_%j.out
-#SBATCH --error=/fs/gpfs41/lv12/fileset02/pool/pool-mann-edwin/code_bin/xldvp_seg/logs/psilo_full_%j.err
+#SBATCH --output=/fs/gpfs41/lv12/fileset02/pool/pool-mann-edwin/code_bin/xldvp_seg/logs/wm_pm_full_%j.out
+#SBATCH --error=/fs/gpfs41/lv12/fileset02/pool/pool-mann-edwin/code_bin/xldvp_seg/logs/wm_pm_full_%j.err
 
 # =============================================================================
-# MPIP psilocybin coronal — tissue_pattern FULL 100% run
+# Whole Mouse PM — tissue_pattern FULL 100% run
 # 4-channel CZI (252K x 107K px, 1728 tiles at 4000px):
 #   ch0: AF488 (nuc488)    — nuclear
 #   ch1: AF647 (PM647)     — plasma membrane (detection)
@@ -31,6 +31,7 @@ echo "Job ID: $SLURM_JOB_ID"
 echo "Node:   $SLURMD_NODENAME"
 echo "CZI:    $CZI"
 echo "Output: $OUTPUT"
+echo "Project: Whole Mouse PM"
 echo "Mode:   tissue_pattern, 100% tiles, 4x L40S"
 echo "============================================================"
 

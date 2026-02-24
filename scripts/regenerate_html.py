@@ -1,228 +1,521 @@
 #!/usr/bin/env python3
 """
-Regenerate vessel HTML from saved crops without re-reading CZI.
+Consolidated HTML regeneration from existing detections.
+
+Replaces all cell-type-specific regenerate scripts with a single generic version
+that handles NMJ, MK, vessel, islet, tissue_pattern, and any future cell types.
+
+Reads per-tile masks (HDF5) and the deduped detections JSON, loads CZI display
+channels, composes RGB crops, and generates the full HTML annotation interface.
 
 Usage:
-    python regenerate_html.py --input-dir /path/to/vessel_output [--thickness 10] [--inner-dotted]
+    # Tissue pattern
+    python scripts/regenerate_html.py \\
+        --output-dir /path/to/run_output \\
+        --czi-path /path/to/slide.czi \\
+        --display-channels 1,2,0 \\
+        --max-samples 15000
+
+    # Islet with marker coloring
+    python scripts/regenerate_html.py \\
+        --output-dir /path/to/run_output \\
+        --czi-path /path/to/slide.czi \\
+        --cell-type islet \\
+        --display-channels 2,3,5 \\
+        --islet-marker-channels gcg:2,ins:3,sst:5
+
+    # Vessel with quality filter
+    python scripts/regenerate_html.py \\
+        --output-dir /path/to/run_output \\
+        --czi-path /path/to/slide.czi \\
+        --cell-type vessel \\
+        --vessel-quality-filter
+
+    # NMJ sorted by RF score
+    python scripts/regenerate_html.py \\
+        --output-dir /path/to/run_output \\
+        --czi-path /path/to/slide.czi \\
+        --cell-type nmj \\
+        --sort-by rf_prediction --sort-order desc
 """
 
-import sys
-
-import json
 import argparse
-import numpy as np
-import cv2
+import json
+import gc
+import sys
 from pathlib import Path
-from tqdm import tqdm
+from collections import defaultdict
 
+import numpy as np
+import h5py
+
+# HDF5 LZ4 support
+try:
+    import hdf5plugin  # noqa: F401
+except ImportError:
+    pass
+
+# Add repo root to path
+REPO = Path(__file__).resolve().parent.parent
+sys.path.insert(0, str(REPO))
+
+from segmentation.io.czi_loader import get_loader
 from segmentation.io.html_export import (
     export_samples_to_html,
+    percentile_normalize,
     draw_mask_contour,
     image_to_base64,
 )
+from segmentation.utils.logging import get_logger, setup_logging
+from PIL import Image
+
+logger = get_logger(__name__)
 
 
-def regenerate_from_crops(
-    detections_json: Path,
-    crops_dir: Path,
-    output_dir: Path,
-    thickness: int = 10,
-    inner_dotted: bool = False,
-    outer_dotted: bool = False,
-    pixel_size_um: float = None,
-    channel_legend: dict = None,
-):
-    """Regenerate HTML from saved crops with configurable contour style.
-
-    Args:
-        channel_legend: Optional dict mapping colors to channel names,
-            e.g., {"red": "SMA (647)", "green": "CD31 (555)", "blue": "Nuclear (488)"}.
-            If None, auto-detected from detection JSON metadata or slide name.
-    """
-
-    # Load detections
-    with open(detections_json) as f:
-        data = json.load(f)
-
-    vessels = data.get('detections', data.get('vessels', []))
-    slide_name = data.get('slide_name', 'unknown')
-
-    # Read pixel_size from detection metadata; CLI arg takes priority
-    if pixel_size_um is None:
-        pixel_size_um = data.get('pixel_size_um')
-        if pixel_size_um is None:
-            # Try nested metadata
-            pixel_size_um = data.get('metadata', {}).get('pixel_size_um')
-        if pixel_size_um is None:
-            print("WARNING: pixel_size_um not found in detection data and not provided via --pixel-size. "
-                  "Defaulting to 0.1725 um/px.")
-            pixel_size_um = 0.1725
-
-    # Auto-detect channel legend from metadata if not provided via CLI
-    if channel_legend is None:
-        channel_legend = data.get('channel_legend')
-    if channel_legend is None:
-        # Try to parse from slide_name using the standard parser
+def create_sample(tile_rgb, masks, feat, pixel_size_um, slide_name, cell_type,
+                  tile_percentiles=None, marker_thresholds=None, marker_map=None,
+                  contour_thickness=2):
+    """Create an HTML sample dict from a detection with mask-bounded crop."""
+    mask_label = feat.get('tile_mask_label', feat.get('mask_label', 0))
+    if mask_label == 0:
         try:
-            from run_segmentation import parse_channel_legend_from_filename
-            channel_legend = parse_channel_legend_from_filename(slide_name)
-        except (ImportError, Exception):
-            pass
+            mask_label = int(feat['id'].split('_')[-1])
+        except (KeyError, ValueError, IndexError):
+            return None
 
-    print(f"Loaded {len(vessels)} vessels from {detections_json}")
-    print(f"Crops directory: {crops_dir}")
-    print(f"Contour style: thickness={thickness}, inner_dotted={inner_dotted}")
+    mask = masks == mask_label
+    if mask.sum() == 0:
+        return None
 
-    samples = []
-    missing_crops = 0
+    # Get centroid from features (local tile coords)
+    center = feat.get('center', None)
+    if center is None:
+        ys, xs = np.where(mask)
+        cx, cy = float(np.mean(xs)), float(np.mean(ys))
+    else:
+        cx, cy = center[0], center[1]
 
-    for vessel in tqdm(vessels, desc="Processing crops"):
-        uid = vessel['uid']
-        crop_path = crops_dir / f"{uid}.jpg"
+    # Mask bounding box for dynamic crop size
+    ys, xs = np.where(mask)
+    if len(ys) == 0:
+        return None
+    mask_h = ys.max() - ys.min()
+    mask_w = xs.max() - xs.min()
+    mask_size = max(mask_h, mask_w)
 
-        if not crop_path.exists():
-            missing_crops += 1
-            continue
+    # Crop = 2x mask size, clamped to [224, 800]
+    crop_size = max(224, min(800, int(mask_size * 2)))
+    half = crop_size // 2
 
-        # Load raw crop
-        crop_bgr = cv2.imread(str(crop_path))
-        if crop_bgr is None:
-            missing_crops += 1
-            continue
-        crop_rgb = cv2.cvtColor(crop_bgr, cv2.COLOR_BGR2RGB)
+    y1_ideal = int(cy) - half
+    y2_ideal = int(cy) + half
+    x1_ideal = int(cx) - half
+    x2_ideal = int(cx) + half
 
-        # Get shifted contours (may not exist in older JSONs)
-        outer_shifted = vessel.get('outer_contour_shifted')
-        inner_shifted = vessel.get('inner_contour_shifted')
+    y1 = max(0, y1_ideal)
+    y2 = min(tile_rgb.shape[0], y2_ideal)
+    x1 = max(0, x1_ideal)
+    x2 = min(tile_rgb.shape[1], x2_ideal)
 
-        # If no shifted contours, just use the crop as-is (no contour overlay)
-        if outer_shifted is None:
-            img_b64, mime_type = image_to_base64(crop_rgb, format='JPEG', quality=85)
-            sample = {
-                'uid': uid,
-                'image': img_b64,
-                'mime_type': mime_type,
-                'stats': vessel.get('stats', {}),
-                'features': vessel.get('features', {}),
-            }
-            samples.append(sample)
-            continue
+    if y2 <= y1 or x2 <= x1:
+        return None
 
-        outer_shifted = np.array(outer_shifted, dtype=np.int32)
+    crop = tile_rgb[y1:y2, x1:x2].copy()
+    crop_mask = mask[y1:y2, x1:x2]
 
-        # Create mask for outer contour
-        h, w = crop_rgb.shape[:2]
-        mask = np.zeros((h, w), dtype=np.uint8)
-        cv2.drawContours(mask, [outer_shifted], 0, 255, -1)
+    # Pad if clamped at edges
+    pad_top = max(0, y1 - y1_ideal)
+    pad_bottom = max(0, y2_ideal - y2)
+    pad_left = max(0, x1 - x1_ideal)
+    pad_right = max(0, x2_ideal - x2)
 
-        # Draw outer contour
-        crop_with_contour = draw_mask_contour(
-            crop_rgb,
-            mask > 0,
-            color=(255, 255, 255),
-            thickness=thickness,
-            dotted=outer_dotted
-        )
+    if pad_top > 0 or pad_bottom > 0 or pad_left > 0 or pad_right > 0:
+        crop = np.pad(crop, ((pad_top, pad_bottom), (pad_left, pad_right), (0, 0)),
+                      mode='constant', constant_values=0)
+        crop_mask = np.pad(crop_mask, ((pad_top, pad_bottom), (pad_left, pad_right)),
+                          mode='constant', constant_values=False)
 
-        # Draw inner contour if exists
-        if inner_shifted is not None:
-            inner_shifted = np.array(inner_shifted, dtype=np.int32)
-            inner_mask = np.zeros((h, w), dtype=np.uint8)
-            cv2.drawContours(inner_mask, [inner_shifted], 0, 255, -1)
-            crop_with_contour = draw_mask_contour(
-                crop_with_contour,
-                inner_mask > 0,
-                color=(255, 255, 255),
-                thickness=thickness,
-                dotted=inner_dotted
-            )
+    # Determine contour color
+    features = feat.get('features', {})
+    contour_color = (0, 255, 0)  # default green
+    marker_class = None
+    if cell_type == 'islet' and marker_thresholds is not None:
+        from run_segmentation import classify_islet_marker
+        marker_class, contour_color = classify_islet_marker(
+            features, marker_thresholds, marker_map=marker_map)
 
-        # Convert to base64
-        img_b64, mime_type = image_to_base64(crop_with_contour, format='JPEG', quality=85)
+    # Normalize and draw contour
+    crop_norm = percentile_normalize(crop, p_low=1, p_high=99.5, global_percentiles=tile_percentiles)
+    _bw = (cell_type == 'islet')
+    crop_with_contour = draw_mask_contour(
+        crop_norm, crop_mask, color=contour_color, thickness=contour_thickness, bw_dashed=_bw)
 
-        # Build sample dict (copy stats from original)
-        sample = {
-            'uid': uid,
-            'image': img_b64,
-            'mime_type': mime_type,
-            'stats': vessel.get('stats', {}),
-            'features': vessel.get('features', {}),
-            'outer_contour': vessel.get('outer_contour'),
-            'inner_contour': vessel.get('inner_contour'),
-        }
-        samples.append(sample)
+    pil_img = Image.fromarray(crop_with_contour)
+    img_b64, mime = image_to_base64(pil_img, format='PNG')
 
-    if missing_crops > 0:
-        print(f"Warning: {missing_crops} crops missing or invalid")
+    # Build UID from global center
+    tile_origin = feat.get('tile_origin', [0, 0])
+    global_cx = tile_origin[0] + cx
+    global_cy = tile_origin[1] + cy
+    uid = feat.get('uid', f"{slide_name}_{cell_type}_{int(round(global_cx))}_{int(round(global_cy))}")
 
-    print(f"Generating HTML for {len(samples)} vessels...")
+    area_um2 = features.get('area', 0) * (pixel_size_um ** 2)
 
-    # Export HTML
-    html_dir = output_dir / "html"
-    html_dir.mkdir(parents=True, exist_ok=True)
+    stats = {
+        'area_um2': area_um2,
+        'area_px': features.get('area', 0),
+    }
 
-    export_samples_to_html(
-        samples=samples,
-        output_dir=html_dir,
-        cell_type='vessel',
-        samples_per_page=200,
-        experiment_name=f"{slide_name} - Lumen-First Detection",
-        channel_legend=channel_legend,
-    )
+    if marker_class is not None:
+        stats['marker_class'] = marker_class
+        stats['marker_color'] = f'#{contour_color[0]:02x}{contour_color[1]:02x}{contour_color[2]:02x}'
+    if 'elongation' in features:
+        stats['elongation'] = features['elongation']
+    if 'sam2_iou' in features:
+        stats['confidence'] = features['sam2_iou']
+    if 'rf_prediction' in feat and feat['rf_prediction'] is not None:
+        stats['rf_prediction'] = feat['rf_prediction']
+    if 'detection_method' in features:
+        dm = features['detection_method']
+        stats['detection_method'] = ', '.join(dm) if isinstance(dm, list) else dm
+    # Vessel-specific
+    for vk in ('ring_completeness', 'circularity', 'wall_thickness_mean_um',
+               'outer_diameter_um', 'vessel_type'):
+        if vk in features:
+            stats[vk] = features[vk]
 
-    print(f"HTML exported to: {html_dir}")
+    return {
+        'uid': uid,
+        'image': img_b64,
+        'mime_type': mime,
+        'stats': stats,
+    }
 
 
 def main():
-    parser = argparse.ArgumentParser(description='Regenerate vessel HTML from saved crops')
-    parser.add_argument('--input-dir', type=Path, required=True,
-                        help='Directory with vessel_detections.json and crops/')
-    parser.add_argument('--thickness', type=int, default=10,
-                        help='Contour line thickness (default: 10)')
-    parser.add_argument('--inner-dotted', action='store_true',
-                        help='Use dotted line for inner contour')
-    parser.add_argument('--outer-dotted', action='store_true',
-                        help='Use dotted line for outer contour')
+    parser = argparse.ArgumentParser(
+        description='Regenerate HTML from existing detections (all cell types)')
+
+    # Required
+    parser.add_argument('--output-dir', required=True,
+                        help='Path to existing run output directory (contains tiles/ and *_detections.json)')
+    parser.add_argument('--czi-path', required=True,
+                        help='Path to CZI file')
+
+    # General
+    parser.add_argument('--cell-type', default=None,
+                        help='Cell type (auto-detected from detections filename if omitted)')
+    parser.add_argument('--display-channels', default=None,
+                        help='Comma-separated channel indices for R,G,B display (default: auto)')
+    parser.add_argument('--channels', default=None,
+                        help='Comma-separated channel indices to load (default: auto from display-channels)')
+    parser.add_argument('--scene', type=int, default=0,
+                        help='CZI scene index (default: 0)')
+    parser.add_argument('--tile-size', type=int, default=None,
+                        help='Tile size used during detection (auto-detected from masks if omitted)')
     parser.add_argument('--pixel-size', type=float, default=None,
-                        help='Pixel size in micrometers (overrides value from detection JSON)')
-    parser.add_argument('--channel-legend', type=str, default=None,
-                        help='Channel legend as JSON string, e.g., '
-                             '\'{"red": "SMA (647)", "green": "CD31 (555)", "blue": "Nuclear (488)"}\'. '
-                             'If not provided, auto-detected from detection JSON metadata or slide name.')
+                        help='Pixel size in um (auto-detected from CZI if not specified)')
+    parser.add_argument('--max-samples', type=int, default=0,
+                        help='Max HTML samples to generate (0=all, default: 0)')
+    parser.add_argument('--samples-per-page', type=int, default=300,
+                        help='Samples per HTML page (default: 300)')
+    parser.add_argument('--sort-by', default='area',
+                        help='Sort key: area, rf_prediction, elongation, confidence (default: area)')
+    parser.add_argument('--sort-order', default='asc',
+                        help='Sort order: asc or desc (default: asc)')
+    parser.add_argument('--contour-thickness', type=int, default=2,
+                        help='Contour line thickness (default: 2)')
+
+    # Vessel-specific
+    parser.add_argument('--vessel-quality-filter', action='store_true', default=False,
+                        help='Apply vessel quality filter (ring>=0.30, circ>=0.15, wall>=1.5um)')
+
+    # Islet-specific
+    parser.add_argument('--islet-marker-channels', type=str, default='gcg:2,ins:3,sst:5',
+                        help='Marker-to-channel mapping for islet classification (default: gcg:2,ins:3,sst:5)')
+    parser.add_argument('--gmm-p-cutoff', type=float, default=0.75,
+                        help='GMM posterior probability cutoff for marker classification (default: 0.75)')
+    parser.add_argument('--ratio-min', type=float, default=1.5,
+                        help='Dominant marker must be >= ratio_min * runner-up (default: 1.5)')
+    parser.add_argument('--marker-top-pct', type=float, default=5,
+                        help='For percentile-method channels, top N%% as positive (default: 5)')
+    parser.add_argument('--marker-pct-channels', type=str, default='sst',
+                        help='Comma-separated marker names using percentile thresholding (default: sst)')
 
     args = parser.parse_args()
+    setup_logging(level="INFO")
 
-    # Parse channel legend from CLI arg if provided
-    cli_channel_legend = None
-    if args.channel_legend:
-        try:
-            cli_channel_legend = json.loads(args.channel_legend)
-        except json.JSONDecodeError:
-            print(f"Error: --channel-legend must be valid JSON. Got: {args.channel_legend}")
+    output_dir = Path(args.output_dir)
+    tiles_dir = output_dir / "tiles"
+    html_dir = output_dir / "html"
+    czi_path = Path(args.czi_path)
+    slide_name = czi_path.stem
+
+    # Auto-detect cell type from detections filename
+    cell_type = args.cell_type
+    if cell_type is None:
+        det_files = list(output_dir.glob("*_detections.json"))
+        if det_files:
+            # Parse cell type from filename: {cell_type}_detections.json
+            cell_type = det_files[0].stem.replace('_detections', '')
+            logger.info(f"Auto-detected cell type: {cell_type}")
+        else:
+            logger.error("No detections JSON found and no --cell-type specified")
             sys.exit(1)
 
-    detections_json = args.input_dir / 'vessel_detections.json'
-    crops_dir = args.input_dir / 'crops'
+    # Load pipeline config if available
+    config_file = output_dir / 'pipeline_config.json'
+    pipeline_config = {}
+    if config_file.exists():
+        with open(config_file) as f:
+            pipeline_config = json.load(f)
+        logger.info(f"Loaded pipeline config from {config_file}")
 
-    if not detections_json.exists():
-        print(f"Error: {detections_json} not found")
-        sys.exit(1)
+    # Resolve display channels
+    if args.display_channels:
+        display_channels = [int(x.strip()) for x in args.display_channels.split(',')]
+    elif 'display_channels' in pipeline_config:
+        display_channels = pipeline_config['display_channels']
+        logger.info(f"Using display channels from pipeline config: {display_channels}")
+    elif cell_type == 'islet':
+        display_channels = [2, 3, 5]
+    elif cell_type == 'tissue_pattern':
+        display_channels = [1, 2, 0]
+    else:
+        display_channels = [0, 1, 2]
 
-    if not crops_dir.exists():
-        print(f"Error: {crops_dir} not found")
-        print("Run the main detection script first to save crops.")
-        sys.exit(1)
+    # Resolve tile size
+    tile_size = args.tile_size or pipeline_config.get('tile_size', 4000)
 
-    regenerate_from_crops(
-        detections_json=detections_json,
-        crops_dir=crops_dir,
-        output_dir=args.input_dir,
-        thickness=args.thickness,
-        inner_dotted=args.inner_dotted,
-        outer_dotted=args.outer_dotted,
-        pixel_size_um=args.pixel_size,
-        channel_legend=cli_channel_legend,
+    # Determine channels to load
+    if args.channels:
+        channels_to_load = [int(x.strip()) for x in args.channels.split(',')]
+    else:
+        channels_to_load = sorted(set(display_channels))
+
+    # Load detections JSON
+    det_file = output_dir / f"{cell_type}_detections.json"
+    if not det_file.exists():
+        det_files = list(output_dir.glob("*_detections.json"))
+        if det_files:
+            det_file = det_files[0]
+        else:
+            logger.error(f"No detections JSON found in {output_dir}")
+            sys.exit(1)
+
+    logger.info(f"Loading detections from {det_file}...")
+    with open(det_file) as f:
+        all_detections = json.load(f)
+    logger.info(f"Loaded {len(all_detections):,} detections")
+
+    # Apply vessel quality filter
+    if args.vessel_quality_filter and cell_type == 'vessel':
+        pre_filter = len(all_detections)
+        filtered = []
+        for det in all_detections:
+            feat = det.get('features', {})
+            if feat.get('ring_completeness', 1.0) < 0.30:
+                continue
+            if feat.get('circularity', 1.0) < 0.15:
+                continue
+            wt = feat.get('wall_thickness_mean_um')
+            if wt is not None and wt < 1.5:
+                continue
+            filtered.append(det)
+        all_detections = filtered
+        logger.info(f"Vessel quality filter: {pre_filter} → {len(all_detections)}")
+
+    # Sample if needed
+    if args.max_samples > 0 and len(all_detections) > args.max_samples:
+        indices = np.random.default_rng(42).choice(
+            len(all_detections), args.max_samples, replace=False)
+        sampled = [all_detections[i] for i in indices]
+        logger.info(f"Sampled {len(sampled):,} / {len(all_detections):,} detections for HTML")
+    else:
+        sampled = all_detections
+
+    # Group sampled detections by tile
+    tile_groups = defaultdict(list)
+    for det in sampled:
+        to = det.get('tile_origin')
+        if to is None:
+            continue
+        tile_key = f"tile_{to[0]}_{to[1]}"
+        tile_groups[tile_key].append(det)
+
+    logger.info(f"{len(sampled):,} detections across {len(tile_groups)} tiles")
+
+    # Load CZI channels to RAM
+    logger.info(f"Loading CZI channels {channels_to_load} to RAM...")
+    loader = get_loader(czi_path, load_to_ram=True, channel=channels_to_load[0],
+                        scene=args.scene)
+    x_start = loader.x_start
+    y_start = loader.y_start
+    mosaic_w = loader.width
+    mosaic_h = loader.height
+    pixel_size_um = args.pixel_size or loader.get_pixel_size()
+
+    channel_arrays = {}
+    channel_arrays[channels_to_load[0]] = loader.channel_data
+    logger.info(f"  Channel {channels_to_load[0]} loaded: {loader.channel_data.nbytes / 1e9:.1f} GB")
+
+    for ch in channels_to_load[1:]:
+        ch_loader = get_loader(czi_path, load_to_ram=True, channel=ch, scene=args.scene)
+        channel_arrays[ch] = ch_loader.channel_data
+        logger.info(f"  Channel {ch} loaded: {ch_loader.channel_data.nbytes / 1e9:.1f} GB")
+
+    # Islet marker thresholds
+    marker_thresholds = None
+    marker_map = None
+    if cell_type == 'islet':
+        marker_map = {}
+        for pair in args.islet_marker_channels.split(','):
+            name, ch = pair.strip().split(':')
+            marker_map[name.strip()] = int(ch.strip())
+
+        from run_segmentation import compute_islet_marker_thresholds, classify_islet_marker
+        _pct_channels = set(s.strip() for s in args.marker_pct_channels.split(',')) if args.marker_pct_channels else set()
+        marker_thresholds = compute_islet_marker_thresholds(
+            all_detections,
+            marker_map=marker_map,
+            marker_top_pct=args.marker_top_pct,
+            pct_channels=_pct_channels,
+            gmm_p_cutoff=args.gmm_p_cutoff,
+            ratio_min=args.ratio_min,
+        ) if all_detections else None
+
+        if marker_thresholds:
+            counts = {}
+            for det in all_detections:
+                mc, _ = classify_islet_marker(
+                    det.get('features', {}), marker_thresholds, marker_map=marker_map)
+                det['marker_class'] = mc
+                counts[mc] = counts.get(mc, 0) + 1
+            logger.info(f"Islet marker classification: {counts}")
+
+    # Channel legend from CZI metadata
+    channel_legend = None
+    try:
+        from run_segmentation import get_czi_metadata
+        meta = get_czi_metadata(czi_path, scene=args.scene)
+
+        def _ch_label(idx):
+            for ch in meta['channels']:
+                if ch['index'] == idx:
+                    em = f" ({ch['emission_nm']:.0f}nm)" if ch.get('emission_nm') else ''
+                    return f"{ch['name']}{em}"
+            return f'Ch{idx}'
+
+        channel_legend = {
+            'red': _ch_label(display_channels[0]) if len(display_channels) > 0 else 'none',
+            'green': _ch_label(display_channels[1]) if len(display_channels) > 1 else 'none',
+            'blue': _ch_label(display_channels[2]) if len(display_channels) > 2 else 'none',
+        }
+        logger.info(f"Channel legend: {channel_legend}")
+    except Exception as e:
+        logger.warning(f"Could not extract channel legend: {e}")
+
+    # Process tiles and generate samples
+    logger.info(f"Generating HTML crops for {len(sampled):,} detections...")
+    all_samples = []
+    tiles_processed = 0
+
+    from tqdm import tqdm
+    for tile_key, tile_dets in tqdm(tile_groups.items(), desc="Tiles"):
+        tile_dir = tiles_dir / tile_key
+        mask_file = tile_dir / f"{cell_type}_masks.h5"
+
+        if not mask_file.exists():
+            logger.warning(f"No mask file for {tile_key}, skipping {len(tile_dets)} detections")
+            continue
+
+        # Load masks
+        with h5py.File(mask_file, 'r') as hf:
+            if 'masks' in hf:
+                masks = hf['masks'][:]
+            elif 'labels' in hf:
+                masks = hf['labels'][:]
+            else:
+                logger.warning(f"No masks dataset in {mask_file}")
+                continue
+            if masks.ndim == 3 and masks.shape[0] == 1:
+                masks = masks[0]
+
+        # Parse tile origin from first detection
+        tile_origin = tile_dets[0].get('tile_origin', [0, 0])
+        tile_x, tile_y = tile_origin[0], tile_origin[1]
+
+        # Extract tile RGB directly from channel arrays (avoids double normalization
+        # that would occur if compose_tile_rgb() was used — it normalizes to uint8,
+        # then create_sample() would normalize again via percentile_normalize())
+        rel_tx = tile_x - x_start
+        rel_ty = tile_y - y_start
+        tile_h, tile_w = masks.shape[:2]
+        rgb_channels = []
+        for ch_idx in display_channels[:3]:
+            if ch_idx in channel_arrays:
+                rgb_channels.append(
+                    channel_arrays[ch_idx][rel_ty:rel_ty+tile_h, rel_tx:rel_tx+tile_w])
+            else:
+                _dtype = next(iter(channel_arrays.values())).dtype
+                rgb_channels.append(np.zeros((tile_h, tile_w), dtype=_dtype))
+        if not rgb_channels:
+            continue
+        tile_rgb = np.stack(rgb_channels, axis=-1)
+
+        # Generate crop for each detection in this tile
+        for det in tile_dets:
+            sample = create_sample(
+                tile_rgb, masks, det, pixel_size_um, slide_name, cell_type,
+                marker_thresholds=marker_thresholds,
+                marker_map=marker_map,
+                contour_thickness=args.contour_thickness,
+            )
+            if sample:
+                all_samples.append(sample)
+
+        tiles_processed += 1
+        del masks, tile_rgb
+        if tiles_processed % 100 == 0:
+            gc.collect()
+
+    logger.info(f"Generated {len(all_samples):,} HTML samples from {tiles_processed} tiles")
+
+    # Sort
+    sort_key = args.sort_by
+    reverse = (args.sort_order == 'desc')
+    if sort_key == 'rf_prediction':
+        all_samples.sort(key=lambda x: x['stats'].get('rf_prediction') or 0, reverse=reverse)
+    elif sort_key == 'area':
+        all_samples.sort(key=lambda x: x['stats'].get('area_um2', 0), reverse=reverse)
+    elif sort_key == 'elongation':
+        all_samples.sort(key=lambda x: x['stats'].get('elongation', 0), reverse=reverse)
+    elif sort_key == 'confidence':
+        all_samples.sort(key=lambda x: x['stats'].get('confidence', 0), reverse=reverse)
+    else:
+        all_samples.sort(key=lambda x: x['stats'].get(sort_key, 0), reverse=reverse)
+
+    # Export HTML
+    experiment_name = f"{slide_name}_regen"
+
+    export_samples_to_html(
+        all_samples,
+        html_dir,
+        cell_type,
+        samples_per_page=args.samples_per_page,
+        title=f"{cell_type.upper()} Annotation Review (regenerated)",
+        page_prefix=f'{cell_type}_page',
+        experiment_name=experiment_name,
+        file_name=f"{slide_name}.czi",
+        pixel_size_um=pixel_size_um,
+        tiles_processed=tiles_processed,
+        tiles_total=len(tile_groups),
+        channel_legend=channel_legend,
     )
+
+    logger.info(f"HTML exported to {html_dir}")
+    logger.info(f"  {len(all_samples):,} samples, "
+                f"{(len(all_samples) + args.samples_per_page - 1) // args.samples_per_page} pages")
 
 
 if __name__ == '__main__':

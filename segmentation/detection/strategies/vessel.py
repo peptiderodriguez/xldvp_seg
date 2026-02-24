@@ -4435,6 +4435,7 @@ class VesselStrategy(DetectionStrategy, MultiChannelFeatureMixin):
         merged_detections = merge_detections_across_scales(
             all_detections,
             iou_threshold=iou_threshold,
+            tile_size=tile_size,
         )
 
         # Convert back to Detection objects if needed
@@ -4663,6 +4664,7 @@ class VesselStrategy(DetectionStrategy, MultiChannelFeatureMixin):
         merged_detections = merge_detections_across_scales(
             all_detections,
             iou_threshold=iou_threshold,
+            tile_size=tile_size,
         )
 
         # Convert to Detection objects

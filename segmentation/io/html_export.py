@@ -1631,6 +1631,64 @@ def export_samples_to_html(
 
 
 # =============================================================================
+# TILE RGB COMPOSITION (shared by pipeline resume + regenerate_html.py)
+# =============================================================================
+
+
+def compose_tile_rgb(channel_arrays, tile_x, tile_y, tile_size, display_channels,
+                     x_start, y_start, mosaic_h, mosaic_w):
+    """Extract a tile region and compose RGB from display channels.
+
+    Args:
+        channel_arrays: List of 2D arrays indexed by channel number (None for missing).
+        tile_x, tile_y: Tile origin in mosaic (global) coordinates.
+        tile_size: Tile dimension in pixels.
+        display_channels: List of channel indices for [R, G, B].
+        x_start, y_start: Mosaic origin offset.
+        mosaic_h, mosaic_w: Mosaic array dimensions.
+
+    Returns:
+        (h, w, 3) uint8 array with per-channel percentile normalization,
+        or None if tile is entirely outside bounds.
+    """
+    import numpy as np
+
+    # Convert to array coordinates (subtract mosaic origin)
+    ay = tile_y - y_start
+    ax = tile_x - x_start
+
+    # Clamp to array bounds
+    ay_end = min(ay + tile_size, mosaic_h)
+    ax_end = min(ax + tile_size, mosaic_w)
+    ay = max(0, ay)
+    ax = max(0, ax)
+
+    if ay_end <= ay or ax_end <= ax:
+        return None
+
+    h = ay_end - ay
+    w = ax_end - ax
+    rgb = np.zeros((h, w, 3), dtype=np.uint8)
+
+    for i, ch_idx in enumerate(display_channels[:3]):
+        if ch_idx < len(channel_arrays) and channel_arrays[ch_idx] is not None:
+            ch_data = channel_arrays[ch_idx][ay:ay_end, ax:ax_end]
+            # Percentile normalize to uint8 (non-zero pixels only)
+            valid = ch_data > 0
+            if valid.any():
+                p1 = np.percentile(ch_data[valid], 1)
+                p99 = np.percentile(ch_data[valid], 99.5)
+                if p99 > p1:
+                    norm = np.clip(
+                        (ch_data.astype(np.float32) - p1) / (p99 - p1) * 255,
+                        0, 255,
+                    ).astype(np.uint8)
+                    norm[~valid] = 0
+                    rgb[:, :, i] = norm
+    return rgb
+
+
+# =============================================================================
 # MK/HSPC BATCH HTML EXPORT (RAM-based)
 # =============================================================================
 # These functions support batch processing of MK and HSPC cell types,

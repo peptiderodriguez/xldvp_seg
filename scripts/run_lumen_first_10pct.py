@@ -604,6 +604,7 @@ def run_multiscale_detection_on_tile(
         merged = merge_detections_across_scales(
             all_detections,
             iou_threshold=iou_threshold,
+            tile_size=tile_size,
         )
     else:
         merged = all_detections

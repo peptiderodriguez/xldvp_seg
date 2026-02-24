@@ -1,10 +1,23 @@
 #!/usr/bin/env python3
 """
+DEPRECATED: Use scripts/regenerate_html.py instead (consolidated all-cell-type version).
+
+    python scripts/regenerate_html.py --output-dir DIR --czi-path CZI --cell-type nmj \\
+        --sort-by rf_prediction --sort-order desc
+
+---
 Regenerate NMJ HTML sorted by classifier score (descending).
 
 Loads the detections JSON, sorts by score, loads tile data from CZI,
 generates crops, and exports HTML pages.
 """
+import warnings
+warnings.warn(
+    "regenerate_nmj_html_sorted.py is deprecated. Use scripts/regenerate_html.py instead:\n"
+    "  python scripts/regenerate_html.py --output-dir DIR --czi-path CZI --cell-type nmj --sort-by rf_prediction --sort-order desc",
+    DeprecationWarning, stacklevel=1,
+)
+
 import argparse
 import json
 import sys

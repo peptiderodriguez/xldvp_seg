@@ -638,6 +638,59 @@ def auto_label_zones(zone_metadata, channel_keys, channel_names=None,
             zone['dominant_z'] = 0.0
 
 
+def gate_label_zones(zone_metadata, channel_keys, channel_names, features_raw,
+                     gate_thresholds=None, method='otsu', percentile=75):
+    """Label zones by +/- marker combination using intensity thresholds.
+
+    For each zone, checks whether the zone's mean expression for each marker
+    exceeds the threshold. Labels like "Slc17a7+/Htr2a+/Ntrk2-/Gad1-".
+
+    Args:
+        zone_metadata: List from characterize_zones()
+        channel_keys: Channel feature keys (e.g. ['ch0_mean', ...])
+        channel_names: Friendly names (e.g. ['Slc17a7', 'Htr2a', ...])
+        features_raw: (N, n_channels) raw marker values (all cells, for threshold calc)
+        gate_thresholds: Optional dict {marker_name: threshold}. Missing → auto.
+        method: 'otsu' or 'percentile' (default: 'otsu')
+        percentile: Percentile cutoff when method='percentile' (default: 75,
+            meaning top 25% of cells are positive).
+    """
+    if gate_thresholds is None:
+        gate_thresholds = {}
+
+    ch_names = [k.replace('_mean', '') for k in channel_keys]
+
+    # Compute thresholds on all cells
+    thresholds = {}
+    for j, (key, name) in enumerate(zip(channel_keys, channel_names)):
+        if name in gate_thresholds:
+            thresholds[name] = gate_thresholds[name]
+            src = 'manual'
+        elif method == 'percentile':
+            thresholds[name] = float(np.percentile(features_raw[:, j], percentile))
+            src = f'p{percentile}'
+        else:
+            thresholds[name] = otsu_threshold(features_raw[:, j])
+            src = 'otsu'
+        n_pos = int((features_raw[:, j] > thresholds[name]).sum())
+        pct = 100.0 * n_pos / len(features_raw)
+        print(f"  {name}: threshold = {thresholds[name]:.1f} ({src}), "
+              f"{n_pos}/{len(features_raw)} positive ({pct:.1f}%)")
+
+    # Label each zone by combination
+    for zone in zone_metadata:
+        parts = []
+        for j, (ch_name, name) in enumerate(zip(ch_names, channel_names)):
+            zone_mean = zone['marker_profile'][ch_name]['mean']
+            is_pos = zone_mean > thresholds[name]
+            parts.append(f"{name}{'+'if is_pos else '-'}")
+        zone['zone_label'] = '/'.join(parts)
+        zone['gate_thresholds'] = {name: float(thresholds[name])
+                                    for name in channel_names}
+
+    return thresholds
+
+
 # ── Marker Gating ────────────────────────────────────────────────────
 
 def otsu_threshold(values):
@@ -665,7 +718,7 @@ def otsu_threshold(values):
 
 
 def gate_cells(features_raw, channel_keys, channel_names, gate_markers,
-               gate_thresholds=None):
+               gate_thresholds=None, method='otsu', percentile=75):
     """Classify cells into +/- groups by marker thresholds.
 
     Args:
@@ -674,7 +727,9 @@ def gate_cells(features_raw, channel_keys, channel_names, gate_markers,
         channel_names: Friendly names (e.g. ['Slc17a7', ...])
         gate_markers: List of marker names to gate on (must match channel_names)
         gate_thresholds: Optional dict of {marker_name: threshold}.
-            Missing markers get Otsu auto-threshold.
+            Missing markers get auto-threshold via method.
+        method: 'otsu' or 'percentile' (default: 'otsu')
+        percentile: Percentile cutoff when method='percentile' (default: 75).
 
     Returns:
         labels: (N,) integer labels for each group
@@ -717,10 +772,20 @@ def gate_cells(features_raw, channel_keys, channel_names, gate_markers,
             thresholds[friendly] = gate_thresholds[friendly]
         elif marker in gate_thresholds:
             thresholds[friendly] = gate_thresholds[marker]
+        elif method == 'percentile':
+            thresh = float(np.percentile(features_raw[:, idx], percentile))
+            thresholds[friendly] = thresh
+            n_pos = int((features_raw[:, idx] > thresh).sum())
+            print(f"  {friendly}: p{percentile} threshold = {thresh:.1f} "
+                  f"({n_pos}/{len(features_raw)} positive, "
+                  f"{100*n_pos/len(features_raw):.1f}%)")
         else:
             thresh = otsu_threshold(features_raw[:, idx])
             thresholds[friendly] = thresh
-            print(f"  {friendly}: Otsu threshold = {thresh:.1f}")
+            n_pos = int((features_raw[:, idx] > thresh).sum())
+            print(f"  {friendly}: Otsu threshold = {thresh:.1f} "
+                  f"({n_pos}/{len(features_raw)} positive, "
+                  f"{100*n_pos/len(features_raw):.1f}%)")
 
     if not gate_indices:
         print("ERROR: No valid gate markers found")
@@ -941,6 +1006,87 @@ def find_structures_per_type(positions, labels, zone_metadata, eps_um=None,
     return structure_labels, structure_metadata
 
 
+def merge_rare_groups(labels, zone_metadata, positions, features_raw,
+                      channel_keys, min_group_cells=24):
+    """Merge expression groups with fewer total cells into 'other'.
+
+    Operates BEFORE find_structures — merges rare gated groups so DBSCAN
+    isn't run on tiny populations. After merging, relabels and rebuilds
+    zone_metadata.
+
+    Args:
+        labels: (N,) zone_id per cell
+        zone_metadata: list of zone dicts from gate_cells()
+        positions: (N,2) positions in um
+        features_raw: (N, n_channels) raw feature matrix
+        channel_keys: list of feature keys
+        min_group_cells: groups with fewer cells are merged into 'other'
+
+    Returns:
+        labels, zone_metadata (updated in-place label array + new metadata)
+    """
+    # Count cells per group
+    keep = []
+    merge_ids = []
+    for z in zone_metadata:
+        if z['n_cells'] >= min_group_cells:
+            keep.append(z)
+        else:
+            merge_ids.append(z['zone_id'])
+
+    if not merge_ids:
+        return labels, zone_metadata
+
+    n_merged = sum(z['n_cells'] for z in zone_metadata if z['zone_id'] in merge_ids)
+    merge_set = set(merge_ids)
+    print(f"  Merging {len(merge_ids)} rare groups ({n_merged} cells) into 'other'")
+
+    # Assign a new "other" zone_id
+    other_id = max(z['zone_id'] for z in zone_metadata) + 1
+    for i in range(len(labels)):
+        if labels[i] in merge_set:
+            labels[i] = other_id
+
+    # Build "other" metadata
+    other_mask = labels == other_id
+    other_pos = positions[other_mask]
+    other_feats = features_raw[other_mask]
+    other_meta = {
+        'zone_id': other_id,
+        'zone_label': 'other',
+        'n_cells': int(other_mask.sum()),
+        'centroid_um': [float(other_pos[:, 0].mean()),
+                        float(other_pos[:, 1].mean())] if other_mask.any() else [0, 0],
+        'extent_um': [float(np.ptp(other_pos[:, 0])),
+                      float(np.ptp(other_pos[:, 1]))] if other_mask.any() else [0, 0],
+        'marker_profile': {},
+    }
+    for j, key in enumerate(channel_keys):
+        ch_name = key.replace('_mean', '')
+        vals = other_feats[:, j]
+        other_meta['marker_profile'][ch_name] = {
+            'mean': float(vals.mean()) if len(vals) > 0 else 0.0,
+            'std': float(vals.std()) if len(vals) > 0 else 0.0,
+            'median': float(np.median(vals)) if len(vals) > 0 else 0.0,
+        }
+
+    # Renumber: keep zones get 0..N-1, other gets N
+    new_meta = []
+    old_to_new = {}
+    for new_id, z in enumerate(keep):
+        old_to_new[z['zone_id']] = new_id
+        z['zone_id'] = new_id
+        new_meta.append(z)
+    old_to_new[other_id] = len(new_meta)
+    other_meta['zone_id'] = len(new_meta)
+    new_meta.append(other_meta)
+
+    new_labels = np.array([old_to_new.get(int(lbl), other_meta['zone_id'])
+                           for lbl in labels])
+
+    return new_labels, new_meta
+
+
 # ── Output ────────────────────────────────────────────────────────────
 
 def assign_and_save(detections, labels, zone_metadata, output_path):
@@ -971,8 +1117,19 @@ def get_zone_cmap(n_zones):
     return ListedColormap(colors)
 
 
-def plot_zone_map(positions, labels, zone_metadata, output_path, title='Tissue Zones'):
-    """Scatter plot of cells colored by zone with legend."""
+def plot_zone_map(positions, labels, zone_metadata, output_path, title='Tissue Zones',
+                  color_by_group=False):
+    """Scatter plot of cells colored by zone with legend.
+
+    Args:
+        color_by_group: If True, color by expression group (cell_type field)
+            instead of individual structure. Structures within the same
+            expression group share a color. Useful for gate+structures mode.
+    """
+    if color_by_group and zone_metadata and 'cell_type' in zone_metadata[0]:
+        _plot_zone_map_by_group(positions, labels, zone_metadata, output_path, title)
+        return
+
     n_zones = len(zone_metadata)
     cmap = get_zone_cmap(n_zones)
 
@@ -990,6 +1147,53 @@ def plot_zone_map(positions, labels, zone_metadata, output_path, title='Tissue Z
     ax.set_aspect('equal')
     ax.invert_yaxis()
     ax.legend(fontsize=7, loc='upper left', bbox_to_anchor=(1.02, 1), markerscale=3,
+              borderaxespad=0)
+
+    plt.savefig(output_path, dpi=200, bbox_inches='tight')
+    plt.close(fig)
+    print(f"  Saved: {output_path}")
+
+
+def _plot_zone_map_by_group(positions, labels, zone_metadata, output_path, title):
+    """Zone map colored by expression group, not individual structure."""
+    # Collect unique expression groups (cell_type)
+    groups = []
+    seen = set()
+    for z in zone_metadata:
+        ct = z.get('cell_type', z['zone_label'])
+        if ct not in seen:
+            groups.append(ct)
+            seen.add(ct)
+
+    n_groups = len(groups)
+    cmap = get_zone_cmap(n_groups)
+    group_to_color = {g: cmap(i / max(n_groups - 1, 1)) for i, g in enumerate(groups)}
+
+    # Build per-group masks (merging all structures of same expression type)
+    group_cells = {g: 0 for g in groups}
+    group_masks = {g: np.zeros(len(positions), dtype=bool) for g in groups}
+    for z in zone_metadata:
+        ct = z.get('cell_type', z['zone_label'])
+        mask = labels == z['zone_id']
+        group_masks[ct] |= mask
+        group_cells[ct] += z['n_cells']
+
+    fig, ax = plt.subplots(figsize=(14, 10))
+    for g in groups:
+        mask = group_masks[g]
+        if not mask.any():
+            continue
+        color = group_to_color[g]
+        n = group_cells[g]
+        ax.scatter(positions[mask, 0], positions[mask, 1],
+                   c=[color], s=3, alpha=0.6, label=f"{g} (n={n})")
+
+    ax.set_xlabel('X (um)')
+    ax.set_ylabel('Y (um)')
+    ax.set_title(title)
+    ax.set_aspect('equal')
+    ax.invert_yaxis()
+    ax.legend(fontsize=8, loc='upper left', bbox_to_anchor=(1.02, 1), markerscale=3,
               borderaxespad=0)
 
     plt.savefig(output_path, dpi=200, bbox_inches='tight')
@@ -1030,14 +1234,12 @@ def plot_marker_profiles(zone_metadata, channel_keys, channel_names, output_path
 
 
 def plot_zone_map_with_density(positions, labels, zone_metadata, output_path,
-                               bin_size_um=50, sigma_bins=1.5):
+                               bin_size_um=50, sigma_bins=1.5,
+                               color_by_group=False):
     """Zone map overlaid on cell density heatmap."""
     from scipy.ndimage import gaussian_filter
 
-    n_zones = len(zone_metadata)
-    cmap = get_zone_cmap(n_zones)
-
-    fig, ax = plt.subplots(figsize=(12, 10))
+    fig, ax = plt.subplots(figsize=(14, 10))
 
     # Density heatmap background
     xs, ys = positions[:, 0], positions[:, 1]
@@ -1049,19 +1251,48 @@ def plot_zone_map_with_density(positions, labels, zone_metadata, output_path,
     ax.imshow(heatmap.T, origin='upper', extent=extent, cmap='Greys', alpha=0.4,
               aspect='equal', interpolation='bilinear')
 
-    # Zone scatter on top
-    for zone in zone_metadata:
-        zid = zone['zone_id']
-        mask = labels == zid
-        color = cmap(zid / max(n_zones - 1, 1))
-        ax.scatter(positions[mask, 0], positions[mask, 1],
-                   c=[color], s=3, alpha=0.5, label=f"Z{zid}: {zone['zone_label']}")
+    # Zone scatter on top — color by group if structures mode
+    if color_by_group and zone_metadata and 'cell_type' in zone_metadata[0]:
+        groups = []
+        seen = set()
+        for z in zone_metadata:
+            ct = z.get('cell_type', z['zone_label'])
+            if ct not in seen:
+                groups.append(ct)
+                seen.add(ct)
+        n_groups = len(groups)
+        cmap = get_zone_cmap(n_groups)
+        group_to_color = {g: cmap(i / max(n_groups - 1, 1)) for i, g in enumerate(groups)}
+
+        group_masks = {g: np.zeros(len(positions), dtype=bool) for g in groups}
+        group_cells = {g: 0 for g in groups}
+        for z in zone_metadata:
+            ct = z.get('cell_type', z['zone_label'])
+            group_masks[ct] |= (labels == z['zone_id'])
+            group_cells[ct] += z['n_cells']
+
+        for g in groups:
+            mask = group_masks[g]
+            if not mask.any():
+                continue
+            ax.scatter(positions[mask, 0], positions[mask, 1],
+                       c=[group_to_color[g]], s=3, alpha=0.5,
+                       label=f"{g} (n={group_cells[g]})")
+    else:
+        n_zones = len(zone_metadata)
+        cmap = get_zone_cmap(n_zones)
+        for zone in zone_metadata:
+            zid = zone['zone_id']
+            mask = labels == zid
+            color = cmap(zid / max(n_zones - 1, 1))
+            ax.scatter(positions[mask, 0], positions[mask, 1],
+                       c=[color], s=3, alpha=0.5, label=f"Z{zid}: {zone['zone_label']}")
 
     ax.set_xlabel('X (um)')
     ax.set_ylabel('Y (um)')
     ax.set_title('Tissue Zones over Density')
     ax.set_aspect('equal')
-    ax.legend(fontsize=7, loc='upper left', bbox_to_anchor=(1.02, 1), markerscale=3,
+    ax.legend(fontsize=8, loc='upper left', bbox_to_anchor=(1.02, 1), markerscale=3,
               borderaxespad=0)
 
     plt.savefig(output_path, dpi=200, bbox_inches='tight')
@@ -1255,6 +1486,25 @@ def main():
                              'Auto-set to 50 when --all-features or --morph-sam2 and '
                              'feature count > 50. Set 0 to disable.')
 
+    # Zone labeling
+    parser.add_argument('--label-by-gate', action='store_true',
+                        help='Label spatial zones by +/- marker combination instead '
+                             'of single dominant marker. Runs spatial agglomerative '
+                             'clustering for zone boundaries, then applies Otsu '
+                             'thresholds to each zone mean to assign +/- labels. '
+                             'E.g. "Slc17a7+/Htr2a+/Ntrk2-/Gad1-".')
+    parser.add_argument('--label-gate-thresholds', type=str, default=None,
+                        help='Manual thresholds for --label-by-gate (comma-sep, same '
+                             'order as --channel-names). Default: auto via --gate-method.')
+    parser.add_argument('--gate-method', type=str, default='percentile',
+                        choices=['otsu', 'percentile'],
+                        help='Threshold method for --label-by-gate and --gate. '
+                             '"percentile" = top N%% positive (default). '
+                             '"otsu" = Otsu bimodal split.')
+    parser.add_argument('--gate-percentile', type=float, default=75,
+                        help='Percentile cutoff when --gate-method=percentile. '
+                             'Default: 75 (top 25%% are positive).')
+
     # Marker gating mode
     parser.add_argument('--gate', type=str, default=None,
                         help='Gate markers (comma-sep). Classifies cells into +/- '
@@ -1278,6 +1528,9 @@ def main():
     parser.add_argument('--structure-eps-scale', type=float, default=1.0,
                         help='Scale factor for auto eps (e.g. 0.5 = half elbow, '
                              '2.0 = double). Only used when --structure-eps is not set.')
+    parser.add_argument('--min-group-cells', type=int, default=24,
+                        help='Merge expression groups with fewer total cells into '
+                             '"other" for cleaner visualization (default: 24)')
 
     # Visualization
     parser.add_argument('--visualize', action='store_true',
@@ -1385,6 +1638,7 @@ def main():
         labels, zone_metadata, thresholds = gate_cells(
             features_raw, char_keys, char_names,
             gate_markers, gate_thresholds,
+            method=args.gate_method, percentile=args.gate_percentile,
         )
         # Add marker profiles to gated groups
         for z in zone_metadata:
@@ -1436,9 +1690,23 @@ def main():
 
         # Characterize (always based on channel means for interpretability)
         zone_metadata = characterize_zones(labels, positions, features_raw, char_keys)
-        auto_label_zones(zone_metadata, char_keys, char_names,
-                         features_raw=features_raw)
-        thresholds = None
+
+        if args.label_by_gate:
+            # Label zones by +/- combination (Otsu on zone means)
+            print("\nLabeling zones by marker combination (+/-)...")
+            label_gate_thresholds = None
+            if args.label_gate_thresholds:
+                thresh_vals = [float(t) for t in args.label_gate_thresholds.split(',')]
+                label_gate_thresholds = dict(zip(char_names, thresh_vals))
+            thresholds = gate_label_zones(
+                zone_metadata, char_keys, char_names, features_raw,
+                gate_thresholds=label_gate_thresholds,
+                method=args.gate_method, percentile=args.gate_percentile,
+            )
+        else:
+            auto_label_zones(zone_metadata, char_keys, char_names,
+                             features_raw=features_raw)
+            thresholds = None
 
     # ── Positive-only filter (gate mode) ──────────────────────────
     if gate_markers and args.positive_only:
@@ -1469,6 +1737,13 @@ def main():
     for z in zone_metadata:
         print(f"  Zone {z['zone_id']}: {z['zone_label']:30s} "
               f"n={z['n_cells']:5d}  centroid=({z['centroid_um'][0]:.0f}, {z['centroid_um'][1]:.0f})")
+
+    # ── Merge rare expression groups ──────────────────────────────
+    if gate_markers and args.min_group_cells > 0:
+        labels, zone_metadata = merge_rare_groups(
+            labels, zone_metadata, positions, features_raw,
+            char_keys, min_group_cells=args.min_group_cells)
+        n_zones = len(zone_metadata)
 
     # ── Find spatial structures within each type ──────────────────
     kdist_data = None
@@ -1544,6 +1819,9 @@ def main():
     if gate_markers:
         meta_output['gate_markers'] = gate_markers
         meta_output['gate_thresholds'] = {k: float(v) for k, v in thresholds.items()}
+    if args.label_by_gate and thresholds:
+        meta_output['label_by_gate'] = True
+        meta_output['gate_thresholds'] = {k: float(v) for k, v in thresholds.items()}
     if elbow_info is not None:
         meta_output['elbow'] = {
             'natural_k': int(elbow_info['natural_k']),
@@ -1559,20 +1837,23 @@ def main():
     # ── Visualize ─────────────────────────────────────────────────
     print("\nGenerating visualizations...")
 
-    if gate_markers and args.find_structures:
+    is_structures = gate_markers and args.find_structures
+    if is_structures:
         title = f'Spatial Structures: {", ".join(gate_markers)} ({n_zones} structures)'
     elif gate_markers:
         title = f'Marker Gating: {", ".join(gate_markers)} ({n_zones} groups)'
     else:
         title = f'Tissue Zones ({n_zones} zones, spatial_weight={args.spatial_weight})'
     plot_zone_map(positions, labels, zone_metadata,
-                  output_dir / 'zone_map.png', title=title)
+                  output_dir / 'zone_map.png', title=title,
+                  color_by_group=is_structures)
 
     plot_marker_profiles(zone_metadata, char_keys, char_names,
                          output_dir / 'zone_marker_profiles.png')
 
     plot_zone_map_with_density(positions, labels, zone_metadata,
-                               output_dir / 'zone_map_with_density.png')
+                               output_dir / 'zone_map_with_density.png',
+                               color_by_group=is_structures)
 
     if elbow_info is not None:
         plot_dendrogram_elbow(elbow_info, n_zones_pre_merge,
@@ -1581,6 +1862,11 @@ def main():
     if gate_markers and thresholds:
         plot_gate_histograms(features_raw_all, char_keys, char_names,
                              gate_markers, thresholds,
+                             output_dir / 'gate_histograms.png')
+
+    if args.label_by_gate and thresholds:
+        plot_gate_histograms(features_raw_all, char_keys, char_names,
+                             char_names, thresholds,
                              output_dir / 'gate_histograms.png')
 
     if kdist_data:
