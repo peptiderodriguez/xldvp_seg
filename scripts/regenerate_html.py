@@ -59,6 +59,8 @@ except ImportError:
 REPO = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(REPO))
 
+import cv2
+
 from segmentation.io.czi_loader import get_loader
 from segmentation.io.html_export import (
     export_samples_to_html,
@@ -192,6 +194,157 @@ def create_sample(tile_rgb, masks, feat, pixel_size_um, slide_name, cell_type,
     }
 
 
+def create_sample_from_contours(det, channel_arrays, display_channels, x_start, y_start,
+                                mosaic_h, mosaic_w, pixel_size_um, slide_name, cell_type,
+                                contour_thickness=2, max_crop_px=800, min_crop_px=300):
+    """Create an HTML sample by cropping from CZI around a detection's center.
+
+    Generic alternative to create_sample() — works for any cell type where detections
+    have global coordinates and optionally contour data, but no per-tile HDF5 masks.
+    Used for multiscale vessel, or any resumed run where masks were not saved.
+
+    Draws contour outlines (inner/outer) if present in the detection dict.
+    """
+    features = det.get('features', {})
+
+    # Get center in full-res CZI-global pixel coords
+    # NOTE: 'center' has full-res coords; 'global_center' may be downscaled (multiscale)
+    center = det.get('center')
+    if center is None or len(center) < 2:
+        return None
+    cx, cy = float(center[0]), float(center[1])
+
+    # Determine crop size — use contour bounding box when available
+    # so the entire detection (including large vessels) is always visible
+    contour_keys = ['inner_contour_global', 'outer_contour_global', 'sma_contour_global']
+    all_contour_pts = []
+    for ck in contour_keys:
+        cd = det.get(ck)
+        if cd is not None:
+            pts = np.array(cd, dtype=np.float64)
+            if pts.ndim == 2 and pts.shape[0] >= 3:
+                all_contour_pts.append(pts)
+
+    if all_contour_pts:
+        combined = np.concatenate(all_contour_pts, axis=0)
+        # Center on contour centroid (det['center'] can be wrong for multiscale)
+        cx = float(np.mean(combined[:, 0]))
+        cy = float(np.mean(combined[:, 1]))
+        bbox_w = np.ptp(combined[:, 0])
+        bbox_h = np.ptp(combined[:, 1])
+        # 2x padding around the contour bounding box to ensure full visibility
+        desired_crop = int(max(bbox_w, bbox_h) * 2.0)
+    else:
+        diameter_um = features.get('outer_diameter_um', 0)
+        if diameter_um > 0:
+            desired_crop = int((diameter_um / pixel_size_um) * 2)
+        else:
+            area_px = features.get('area', 0)
+            if area_px > 0:
+                desired_crop = int(2 * np.sqrt(area_px / np.pi) * 2)
+            else:
+                desired_crop = min_crop_px
+
+    desired_crop = max(min_crop_px, desired_crop)
+    # If the desired crop is larger than display max, we'll extract full-size and downscale
+    scale_factor = 1.0
+    extract_size = desired_crop
+    if desired_crop > max_crop_px:
+        scale_factor = max_crop_px / desired_crop
+        # Keep extract_size as the full desired size for CZI extraction
+    half = extract_size // 2
+
+    # Convert to array-relative coords
+    rel_cx = cx - x_start
+    rel_cy = cy - y_start
+
+    y1 = max(0, int(rel_cy) - half)
+    x1 = max(0, int(rel_cx) - half)
+    y2 = min(mosaic_h, int(rel_cy) + half)
+    x2 = min(mosaic_w, int(rel_cx) + half)
+
+    if y2 <= y1 or x2 <= x1:
+        return None
+
+    # Compose RGB crop from channel arrays
+    rgb_channels = []
+    for ch_idx in display_channels[:3]:
+        if ch_idx in channel_arrays:
+            rgb_channels.append(channel_arrays[ch_idx][y1:y2, x1:x2])
+        else:
+            _dtype = next(iter(channel_arrays.values())).dtype
+            rgb_channels.append(np.zeros((y2 - y1, x2 - x1), dtype=_dtype))
+    crop = np.stack(rgb_channels, axis=-1)
+
+    if crop.size == 0:
+        return None
+
+    # Percentile normalize
+    crop_norm = percentile_normalize(crop, p_low=1, p_high=99.5)
+
+    # Downscale if needed (show entire vessel at lower resolution)
+    if scale_factor < 1.0:
+        target_h = max(1, int(crop_norm.shape[0] * scale_factor))
+        target_w = max(1, int(crop_norm.shape[1] * scale_factor))
+        crop_norm = cv2.resize(crop_norm, (target_w, target_h), interpolation=cv2.INTER_AREA)
+
+    # Draw contours if available (generic: look for any *_contour_global keys)
+    contour_colors = {
+        'inner_contour_global': (0, 255, 255),    # cyan — lumen
+        'outer_contour_global': (0, 255, 0),       # green — outer boundary
+        'sma_contour_global': (255, 0, 255),        # magenta — SMA ring
+    }
+    for contour_key, color in contour_colors.items():
+        contour_data = det.get(contour_key)
+        if contour_data is None:
+            continue
+        contour_pts = np.array(contour_data, dtype=np.float64)
+        if contour_pts.ndim != 2 or contour_pts.shape[0] < 3:
+            continue
+        # Shift global contour coords to crop-local: subtract (x1+x_start, y1+y_start)
+        contour_pts[:, 0] -= (x1 + x_start)
+        contour_pts[:, 1] -= (y1 + y_start)
+        # Apply downscale factor
+        if scale_factor < 1.0:
+            contour_pts *= scale_factor
+        contour_int = contour_pts.astype(np.int32).reshape(-1, 1, 2)
+        cv2.drawContours(crop_norm, [contour_int], -1, color, contour_thickness)
+
+    uid = det.get('uid', f"{slide_name}_{cell_type}_{int(round(cx))}_{int(round(cy))}")
+    pil_img = Image.fromarray(crop_norm)
+    img_b64, mime = image_to_base64(pil_img, format='PNG')
+
+    area_um2 = features.get('area', 0) * (pixel_size_um ** 2)
+    stats = {
+        'area_um2': area_um2,
+        'area_px': features.get('area', 0),
+    }
+    if 'elongation' in features:
+        stats['elongation'] = features['elongation']
+    if 'sam2_iou' in features:
+        stats['confidence'] = features['sam2_iou']
+    if 'rf_prediction' in det and det['rf_prediction'] is not None:
+        stats['rf_prediction'] = det['rf_prediction']
+    if 'detection_method' in features:
+        dm = features['detection_method']
+        stats['detection_method'] = ', '.join(dm) if isinstance(dm, list) else dm
+    if 'scale_detected' in det:
+        stats['scale_detected'] = det['scale_detected']
+    # Vessel-specific stats
+    for vk in ('ring_completeness', 'circularity', 'wall_thickness_mean_um',
+               'outer_diameter_um', 'vessel_type', 'has_sma_ring',
+               'cd31_score', 'sma_thickness_mean_um'):
+        if vk in features:
+            stats[vk] = features[vk]
+
+    return {
+        'uid': uid,
+        'image': img_b64,
+        'mime_type': mime,
+        'stats': stats,
+    }
+
+
 def main():
     parser = argparse.ArgumentParser(
         description='Regenerate HTML from existing detections (all cell types)')
@@ -203,6 +356,8 @@ def main():
                         help='Path to CZI file')
 
     # General
+    parser.add_argument('--detections', default=None,
+                        help='Path to detections JSON file (overrides auto-detection from output-dir)')
     parser.add_argument('--cell-type', default=None,
                         help='Cell type (auto-detected from detections filename if omitted)')
     parser.add_argument('--display-channels', default=None,
@@ -225,6 +380,12 @@ def main():
                         help='Sort order: asc or desc (default: asc)')
     parser.add_argument('--contour-thickness', type=int, default=2,
                         help='Contour line thickness (default: 2)')
+    parser.add_argument('--score-threshold', type=float, default=0.0,
+                        help='Min rf_prediction to show (default: 0.0 = all)')
+    parser.add_argument('--prior-annotations', default=None,
+                        help='Path to prior annotations JSON (pre-loaded into HTML localStorage)')
+    parser.add_argument('--html-dir', default=None,
+                        help='Custom HTML output directory (default: <output-dir>/html)')
 
     # Vessel-specific
     parser.add_argument('--vessel-quality-filter', action='store_true', default=False,
@@ -247,9 +408,14 @@ def main():
 
     output_dir = Path(args.output_dir)
     tiles_dir = output_dir / "tiles"
-    html_dir = output_dir / "html"
+    html_dir = Path(args.html_dir) if args.html_dir else output_dir / "html"
     czi_path = Path(args.czi_path)
     slide_name = czi_path.stem
+
+    # Validate prior-annotations path early (before expensive CZI load)
+    if args.prior_annotations and not Path(args.prior_annotations).exists():
+        logger.error(f"Prior annotations file not found: {args.prior_annotations}")
+        sys.exit(1)
 
     # Auto-detect cell type from detections filename
     cell_type = args.cell_type
@@ -293,15 +459,26 @@ def main():
     else:
         channels_to_load = sorted(set(display_channels))
 
-    # Load detections JSON
-    det_file = output_dir / f"{cell_type}_detections.json"
-    if not det_file.exists():
-        det_files = list(output_dir.glob("*_detections.json"))
-        if det_files:
-            det_file = det_files[0]
-        else:
-            logger.error(f"No detections JSON found in {output_dir}")
+    # Load detections JSON — explicit path or auto-detect
+    if args.detections:
+        det_file = Path(args.detections)
+        if not det_file.exists():
+            logger.error(f"Specified detections file not found: {det_file}")
             sys.exit(1)
+    else:
+        det_file = output_dir / f"{cell_type}_detections.json"
+        multiscale_file = output_dir / f"{cell_type}_detections_multiscale.json"
+        if not det_file.exists():
+            if multiscale_file.exists():
+                det_file = multiscale_file
+            else:
+                det_files = list(output_dir.glob("*_detections*.json"))
+                det_files = [f for f in det_files if 'checkpoint' not in f.name]
+                if det_files:
+                    det_file = det_files[0]
+                else:
+                    logger.error(f"No detections JSON found in {output_dir}")
+                    sys.exit(1)
 
     logger.info(f"Loading detections from {det_file}...")
     with open(det_file) as f:
@@ -325,6 +502,13 @@ def main():
         all_detections = filtered
         logger.info(f"Vessel quality filter: {pre_filter} → {len(all_detections)}")
 
+    # Score threshold filter (rf_prediction)
+    if args.score_threshold > 0:
+        pre_filter = len(all_detections)
+        all_detections = [d for d in all_detections
+                          if (d.get('rf_prediction') or 0) >= args.score_threshold]
+        logger.info(f"Score filter (>= {args.score_threshold}): {pre_filter:,} -> {len(all_detections):,}")
+
     # Sample if needed
     if args.max_samples > 0 and len(all_detections) > args.max_samples:
         indices = np.random.default_rng(42).choice(
@@ -334,16 +518,24 @@ def main():
     else:
         sampled = all_detections
 
-    # Group sampled detections by tile
-    tile_groups = defaultdict(list)
-    for det in sampled:
-        to = det.get('tile_origin')
-        if to is None:
-            continue
-        tile_key = f"tile_{to[0]}_{to[1]}"
-        tile_groups[tile_key].append(det)
-
-    logger.info(f"{len(sampled):,} detections across {len(tile_groups)} tiles")
+    # Decide crop mode: tile+mask (HDF5) vs contour-based (direct CZI crop)
+    # Contour mode is used when tile masks aren't available — e.g. multiscale vessel,
+    # or any run where masks weren't saved. Works for any cell type.
+    has_tile_masks = tiles_dir.exists() and any(tiles_dir.glob(f"tile_*/{cell_type}_masks.h5"))
+    use_contour_mode = not has_tile_masks
+    tile_groups = {}
+    if use_contour_mode:
+        logger.info("No per-tile HDF5 masks found — using contour-based cropping from CZI")
+    else:
+        # Group sampled detections by tile for tile+mask mode
+        tile_groups = defaultdict(list)
+        for det in sampled:
+            to = det.get('tile_origin')
+            if to is None:
+                continue
+            tile_key = f"tile_{to[0]}_{to[1]}"
+            tile_groups[tile_key].append(det)
+        logger.info(f"{len(sampled):,} detections across {len(tile_groups)} tiles")
 
     # Load CZI channels to RAM
     logger.info(f"Loading CZI channels {channels_to_load} to RAM...")
@@ -415,69 +607,92 @@ def main():
     except Exception as e:
         logger.warning(f"Could not extract channel legend: {e}")
 
-    # Process tiles and generate samples
+    # Generate samples — two modes
     logger.info(f"Generating HTML crops for {len(sampled):,} detections...")
     all_samples = []
     tiles_processed = 0
 
     from tqdm import tqdm
-    for tile_key, tile_dets in tqdm(tile_groups.items(), desc="Tiles"):
-        tile_dir = tiles_dir / tile_key
-        mask_file = tile_dir / f"{cell_type}_masks.h5"
 
-        if not mask_file.exists():
-            logger.warning(f"No mask file for {tile_key}, skipping {len(tile_dets)} detections")
-            continue
+    if use_contour_mode:
+        # ---- Contour mode: crop directly from CZI around each detection ----
+        # Parallelize with ThreadPool (I/O + numpy, releases GIL)
+        from concurrent.futures import ThreadPoolExecutor
+        import os
+        n_workers = min(int(os.environ.get('SLURM_CPUS_PER_TASK', os.cpu_count() or 1)), 32)
+        logger.info(f"Using {n_workers} threads for contour crop generation")
 
-        # Load masks
-        with h5py.File(mask_file, 'r') as hf:
-            if 'masks' in hf:
-                masks = hf['masks'][:]
-            elif 'labels' in hf:
-                masks = hf['labels'][:]
-            else:
-                logger.warning(f"No masks dataset in {mask_file}")
-                continue
-            if masks.ndim == 3 and masks.shape[0] == 1:
-                masks = masks[0]
-
-        # Parse tile origin from first detection
-        tile_origin = tile_dets[0].get('tile_origin', [0, 0])
-        tile_x, tile_y = tile_origin[0], tile_origin[1]
-
-        # Extract tile RGB directly from channel arrays (avoids double normalization
-        # that would occur if compose_tile_rgb() was used — it normalizes to uint8,
-        # then create_sample() would normalize again via percentile_normalize())
-        rel_tx = tile_x - x_start
-        rel_ty = tile_y - y_start
-        tile_h, tile_w = masks.shape[:2]
-        rgb_channels = []
-        for ch_idx in display_channels[:3]:
-            if ch_idx in channel_arrays:
-                rgb_channels.append(
-                    channel_arrays[ch_idx][rel_ty:rel_ty+tile_h, rel_tx:rel_tx+tile_w])
-            else:
-                _dtype = next(iter(channel_arrays.values())).dtype
-                rgb_channels.append(np.zeros((tile_h, tile_w), dtype=_dtype))
-        if not rgb_channels:
-            continue
-        tile_rgb = np.stack(rgb_channels, axis=-1)
-
-        # Generate crop for each detection in this tile
-        for det in tile_dets:
-            sample = create_sample(
-                tile_rgb, masks, det, pixel_size_um, slide_name, cell_type,
-                marker_thresholds=marker_thresholds,
-                marker_map=marker_map,
+        def _make_sample(det):
+            return create_sample_from_contours(
+                det, channel_arrays, display_channels,
+                x_start, y_start, mosaic_h, mosaic_w,
+                pixel_size_um, slide_name, cell_type,
                 contour_thickness=args.contour_thickness,
             )
-            if sample:
-                all_samples.append(sample)
 
-        tiles_processed += 1
-        del masks, tile_rgb
-        if tiles_processed % 100 == 0:
-            gc.collect()
+        with ThreadPoolExecutor(max_workers=n_workers) as pool:
+            results = list(tqdm(pool.map(_make_sample, sampled),
+                                total=len(sampled), desc="Detections"))
+        all_samples = [s for s in results if s is not None]
+        tiles_processed = len(sampled)  # each detection is its own "tile"
+
+    else:
+        # ---- Tile+mask mode: group by tile, load HDF5 masks ----
+        for tile_key, tile_dets in tqdm(tile_groups.items(), desc="Tiles"):
+            tile_dir = tiles_dir / tile_key
+            mask_file = tile_dir / f"{cell_type}_masks.h5"
+
+            if not mask_file.exists():
+                logger.warning(f"No mask file for {tile_key}, skipping {len(tile_dets)} detections")
+                continue
+
+            # Load masks
+            with h5py.File(mask_file, 'r') as hf:
+                if 'masks' in hf:
+                    masks = hf['masks'][:]
+                elif 'labels' in hf:
+                    masks = hf['labels'][:]
+                else:
+                    logger.warning(f"No masks dataset in {mask_file}")
+                    continue
+                if masks.ndim == 3 and masks.shape[0] == 1:
+                    masks = masks[0]
+
+            # Parse tile origin from first detection
+            tile_origin = tile_dets[0].get('tile_origin', [0, 0])
+            tile_x, tile_y = tile_origin[0], tile_origin[1]
+
+            # Extract tile RGB directly from channel arrays
+            rel_tx = tile_x - x_start
+            rel_ty = tile_y - y_start
+            tile_h, tile_w = masks.shape[:2]
+            rgb_channels = []
+            for ch_idx in display_channels[:3]:
+                if ch_idx in channel_arrays:
+                    rgb_channels.append(
+                        channel_arrays[ch_idx][rel_ty:rel_ty+tile_h, rel_tx:rel_tx+tile_w])
+                else:
+                    _dtype = next(iter(channel_arrays.values())).dtype
+                    rgb_channels.append(np.zeros((tile_h, tile_w), dtype=_dtype))
+            if not rgb_channels:
+                continue
+            tile_rgb = np.stack(rgb_channels, axis=-1)
+
+            # Generate crop for each detection in this tile
+            for det in tile_dets:
+                sample = create_sample(
+                    tile_rgb, masks, det, pixel_size_um, slide_name, cell_type,
+                    marker_thresholds=marker_thresholds,
+                    marker_map=marker_map,
+                    contour_thickness=args.contour_thickness,
+                )
+                if sample:
+                    all_samples.append(sample)
+
+            tiles_processed += 1
+            del masks, tile_rgb
+            if tiles_processed % 100 == 0:
+                gc.collect()
 
     logger.info(f"Generated {len(all_samples):,} HTML samples from {tiles_processed} tiles")
 
@@ -511,6 +726,7 @@ def main():
         tiles_processed=tiles_processed,
         tiles_total=len(tile_groups),
         channel_legend=channel_legend,
+        prior_annotations=args.prior_annotations,
     )
 
     logger.info(f"HTML exported to {html_dir}")
