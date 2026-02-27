@@ -86,14 +86,20 @@ def classify_gmm(values: np.ndarray) -> tuple[float, np.ndarray]:
     # Identify which component has the higher mean
     high_idx = int(np.argmax(gmm.means_.flatten()))
 
+    # Check if components are well-separated (warn if unimodal)
+    means = gmm.means_.flatten()
+    stds = np.sqrt(gmm.covariances_.flatten())
+    separation = abs(means[1] - means[0]) / max(stds[0] + stds[1], 1e-6)
+    if separation < 0.5:
+        logger.warning(f"GMM components poorly separated (separation={separation:.2f}). "
+                       f"Data may be unimodal. Consider otsu_half method instead.")
+
     # Posterior probability for the high component
     probs = gmm.predict_proba(log_vals)[:, high_idx]
     positive = probs >= 0.75
 
-    # Approximate threshold: find the crossing point in log space, convert back
-    means = gmm.means_.flatten()
-    stds = np.sqrt(gmm.covariances_.flatten())
-    # Midpoint between means weighted by std (simple approximation)
+    # Approximate threshold: crossing point in log space, convert back
+    # Formula is symmetric in component indices (weighted midpoint)
     log_threshold = (means[0] * stds[1] + means[1] * stds[0]) / (stds[0] + stds[1])
     threshold = float(np.expm1(log_threshold))
 

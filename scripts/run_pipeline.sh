@@ -145,30 +145,26 @@ build_seg_cmd() {
 }
 
 # ---------------------------------------------------------------------------
-# Build marker classification commands
+# Build comma-separated marker args for single classify_markers.py invocation
 # ---------------------------------------------------------------------------
-build_marker_cmds() {
-    local det_json="$1"
-    local out_dir="$2"
-    "$MKSEG_PYTHON" -c "
+MARKER_CHANNELS=$("$MKSEG_PYTHON" -c "
 import json
 markers = json.loads('$MARKERS_JSON')
-for m in markers:
-    ch = m['channel']
-    name = m['name']
-    method = m.get('method', 'otsu_half')
-    print(f'$MKSEG_PYTHON $REPO/scripts/classify_markers.py --detections {det_json} --marker-channel {ch} --marker-name {name} --method {method} --output-dir {out_dir}')
-"
-}
+print(','.join(str(m['channel']) for m in markers))
+" 2>/dev/null || echo "")
 
-# ---------------------------------------------------------------------------
-# Build spatial analysis command
-# ---------------------------------------------------------------------------
-build_spatial_cmd() {
-    local det_json="$1"
-    local out_dir="$2"
-    echo "$MKSEG_PYTHON $REPO/scripts/spatial_cell_analysis.py --detections $det_json --output-dir $out_dir --marker-filter $SPATIAL_FILTER --max-edge-distance $SPATIAL_EDGE --min-component-cells $SPATIAL_MIN_COMP"
-}
+MARKER_NAMES=$("$MKSEG_PYTHON" -c "
+import json
+markers = json.loads('$MARKERS_JSON')
+print(','.join(m['name'] for m in markers))
+" 2>/dev/null || echo "")
+
+MARKER_METHOD=$("$MKSEG_PYTHON" -c "
+import json
+markers = json.loads('$MARKERS_JSON')
+methods = set(m.get('method', 'otsu_half') for m in markers)
+print(methods.pop() if len(methods) == 1 else 'otsu_half')
+" 2>/dev/null || echo "otsu_half")
 
 # ---------------------------------------------------------------------------
 # Write sbatch script
@@ -229,17 +225,10 @@ SBATCH_FILE="/tmp/pipeline_${NAME}.sbatch"
         echo "    DET_JSON=\"\${SLIDE_OUT}/${CELL_TYPE}_detections.json\""
         echo "    if [[ -f \"\$DET_JSON\" ]]; then"
 
-        # Emit marker commands
-        "$MKSEG_PYTHON" -c "
-import json
-markers = json.loads('$MARKERS_JSON')
-for m in markers:
-    ch = m['channel']
-    name = m['name']
-    method = m.get('method', 'otsu_half')
-    print(f'        echo \"  Classifying marker: {name} (ch{ch})\"')
-    print(f'        \$MKSEG_PYTHON $REPO/scripts/classify_markers.py --detections \"\$DET_JSON\" --marker-channel {ch} --marker-name {name} --method {method} --output-dir \"\$SLIDE_OUT\"')
-"
+        if [[ -n "$MARKER_CHANNELS" ]]; then
+            echo "        echo \"  Classifying markers: $MARKER_NAMES\""
+            echo "        \$MKSEG_PYTHON $REPO/scripts/classify_markers.py --detections \"\$DET_JSON\" --marker-channel $MARKER_CHANNELS --marker-name $MARKER_NAMES --method $MARKER_METHOD --output-dir \"\$SLIDE_OUT\""
+        fi
 
         if [[ "$SPATIAL_ENABLED" == "true" ]]; then
             echo ""
@@ -266,16 +255,10 @@ for m in markers:
         echo "DET_JSON=\"\${SLIDE_OUT}/${CELL_TYPE}_detections.json\""
         echo "if [[ -f \"\$DET_JSON\" ]]; then"
 
-        "$MKSEG_PYTHON" -c "
-import json
-markers = json.loads('$MARKERS_JSON')
-for m in markers:
-    ch = m['channel']
-    name = m['name']
-    method = m.get('method', 'otsu_half')
-    print(f'    echo \"Classifying marker: {name} (ch{ch})\"')
-    print(f'    \$MKSEG_PYTHON $REPO/scripts/classify_markers.py --detections \"\$DET_JSON\" --marker-channel {ch} --marker-name {name} --method {method} --output-dir \"\$SLIDE_OUT\"')
-"
+        if [[ -n "$MARKER_CHANNELS" ]]; then
+            echo "    echo \"Classifying markers: $MARKER_NAMES\""
+            echo "    \$MKSEG_PYTHON $REPO/scripts/classify_markers.py --detections \"\$DET_JSON\" --marker-channel $MARKER_CHANNELS --marker-name $MARKER_NAMES --method $MARKER_METHOD --output-dir \"\$SLIDE_OUT\""
+        fi
 
         if [[ "$SPATIAL_ENABLED" == "true" ]]; then
             echo ""

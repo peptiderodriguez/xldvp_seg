@@ -83,6 +83,20 @@ class CellStrategy(DetectionStrategy, MultiChannelFeatureMixin):
         self.resnet_batch_size = resnet_batch_size
         self.cellpose_input_channels = cellpose_input_channels
 
+    @staticmethod
+    def _percentile_normalize(arr: np.ndarray) -> np.ndarray:
+        """Percentile-normalize a uint16 channel to uint8 for Cellpose input."""
+        if arr.dtype != np.uint16:
+            return arr.astype(np.uint8)
+        nonzero = arr[arr > 0]
+        if len(nonzero) == 0:
+            return np.zeros_like(arr, dtype=np.uint8)
+        p_low, p_high = np.percentile(nonzero, [1, 99.5])
+        if p_high <= p_low:
+            return np.zeros_like(arr, dtype=np.uint8)
+        result = np.clip((arr.astype(np.float32) - p_low) / (p_high - p_low) * 255, 0, 255)
+        return result.astype(np.uint8)
+
     @property
     def name(self) -> str:
         return "cell"
@@ -133,17 +147,17 @@ class CellStrategy(DetectionStrategy, MultiChannelFeatureMixin):
             cyto_ch = extra_channels.get(cyto_idx)
             nuc_ch = extra_channels.get(nuc_idx)
             if cyto_ch is not None and nuc_ch is not None:
-                # Build RGB: R=cyto, G=nuc, B=zeros
-                def _to_uint8(arr):
-                    if arr.dtype == np.uint16:
-                        return (arr / 256).astype(np.uint8)
-                    return arr.astype(np.uint8)
-                cp_tile = np.stack([_to_uint8(cyto_ch), _to_uint8(nuc_ch),
-                                   np.zeros_like(_to_uint8(cyto_ch))], axis=-1)
+                # Percentile-normalize each channel to uint8 (matches islet.py)
+                cyto_u8 = self._percentile_normalize(cyto_ch)
+                nuc_u8 = self._percentile_normalize(nuc_ch)
+                cp_tile = np.stack([cyto_u8, nuc_u8], axis=-1)
                 cellpose_masks, _, _ = cellpose.eval(cp_tile, channels=[1, 2])
                 logger.info(f"Cellpose 2-channel: cyto=ch{cyto_idx}, nuc=ch{nuc_idx}, "
                             f"found {len(np.unique(cellpose_masks)) - 1} cells")
             else:
+                logger.warning(f"Cellpose 2-channel requested but ch{cyto_idx} or ch{nuc_idx} "
+                               f"not in extra_channels (keys: {list(extra_channels.keys())}). "
+                               f"Falling back to grayscale.")
                 cellpose_masks, _, _ = cellpose.eval(tile, channels=[0, 0])
         else:
             cellpose_masks, _, _ = cellpose.eval(tile, channels=[0, 0])
