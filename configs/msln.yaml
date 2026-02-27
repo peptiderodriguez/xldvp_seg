@@ -17,7 +17,7 @@ markers:
 
 spatial_network:
   enabled: true
-  marker_filter: "ch2_mean>0"     # MSLN+ cells form bands
+  marker_filter: "MSLN_class==positive"   # from Otsu/2 classification
   max_edge_distance: 50
   min_component_cells: 3
 

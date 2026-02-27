@@ -15,7 +15,7 @@ markers:
   - {channel: 2, name: tdTomato, method: otsu_half}
 
 spatial_network:
-  marker_filter: "ch2_mean>0"     # tdTomato+ cells (any signal)
+  marker_filter: "tdTomato_class==positive"  # from Otsu/2 classification
   max_edge_distance: 50
   min_component_cells: 3
 
