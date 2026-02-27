@@ -1,0 +1,311 @@
+#!/usr/bin/env python3
+"""
+Post-detection marker classification.
+
+Classifies cells as marker-positive or marker-negative based on per-channel
+intensity features already present in the detections JSON.
+
+Methods:
+  otsu_half  Otsu threshold / 2 (permissive, default)
+  gmm        2-component GMM on log1p intensities (P >= 0.75 = positive)
+
+Usage:
+    python scripts/classify_markers.py \
+        --detections cell_detections.json \
+        --marker-channel 2 --marker-name tdTomato
+
+    python scripts/classify_markers.py \
+        --detections cell_detections.json \
+        --marker-channel 1,3 --marker-name SMA,CD31 \
+        --method gmm --output-dir output/
+"""
+
+import argparse
+import csv
+import json
+import sys
+from pathlib import Path
+
+import matplotlib
+matplotlib.use('Agg')
+import matplotlib.pyplot as plt
+import numpy as np
+
+REPO = Path(__file__).resolve().parent.parent
+sys.path.insert(0, str(REPO))
+
+from segmentation.utils.logging import get_logger, setup_logging
+from segmentation.utils.json_utils import NumpyEncoder
+
+logger = get_logger(__name__)
+
+
+# ---------------------------------------------------------------------------
+# Classification methods
+# ---------------------------------------------------------------------------
+
+def classify_otsu_half(values: np.ndarray) -> tuple[float, np.ndarray]:
+    """Otsu threshold / 2 on raw intensity values.
+
+    Returns (threshold, boolean mask where True = positive).
+    """
+    from skimage.filters import threshold_otsu
+
+    nonzero = values[values > 0]
+    if len(nonzero) < 10:
+        logger.warning("Too few non-zero values for Otsu; defaulting threshold to 0")
+        return 0.0, np.zeros(len(values), dtype=bool)
+
+    otsu_t = threshold_otsu(nonzero)
+    threshold = otsu_t / 2.0
+    positive = values >= threshold
+    return float(threshold), positive
+
+
+def classify_gmm(values: np.ndarray) -> tuple[float, np.ndarray]:
+    """2-component GMM on log1p intensities.
+
+    The component with the higher mean is treated as the 'high' (signal) class.
+    Cells with posterior probability >= 0.75 for that component are positive.
+
+    Returns (threshold, boolean mask where True = positive).
+    The threshold is the value where the two component posteriors cross
+    (approximate decision boundary), used for display only.
+    """
+    from sklearn.mixture import GaussianMixture
+
+    if len(values) < 20:
+        logger.warning("Too few values for GMM; defaulting all to negative")
+        return 0.0, np.zeros(len(values), dtype=bool)
+
+    log_vals = np.log1p(values).reshape(-1, 1)
+
+    gmm = GaussianMixture(n_components=2, random_state=42, max_iter=200)
+    gmm.fit(log_vals)
+
+    # Identify which component has the higher mean
+    high_idx = int(np.argmax(gmm.means_.flatten()))
+
+    # Posterior probability for the high component
+    probs = gmm.predict_proba(log_vals)[:, high_idx]
+    positive = probs >= 0.75
+
+    # Approximate threshold: find the crossing point in log space, convert back
+    means = gmm.means_.flatten()
+    stds = np.sqrt(gmm.covariances_.flatten())
+    # Midpoint between means weighted by std (simple approximation)
+    log_threshold = (means[0] * stds[1] + means[1] * stds[0]) / (stds[0] + stds[1])
+    threshold = float(np.expm1(log_threshold))
+
+    return threshold, positive
+
+
+# ---------------------------------------------------------------------------
+# Plotting
+# ---------------------------------------------------------------------------
+
+def plot_distribution(values: np.ndarray, threshold: float, marker_name: str,
+                      method: str, n_positive: int, n_negative: int,
+                      output_path: Path) -> None:
+    """Histogram of marker values with threshold line."""
+    fig, ax = plt.subplots(figsize=(8, 5))
+
+    # Use log1p scale for x-axis if range is large
+    use_log = values.max() > 10 * max(np.median(values), 1)
+    plot_vals = np.log1p(values) if use_log else values
+    plot_thresh = np.log1p(threshold) if use_log else threshold
+
+    n_bins = min(100, max(30, len(values) // 20))
+    ax.hist(plot_vals, bins=n_bins, color='steelblue', alpha=0.7, edgecolor='white',
+            linewidth=0.5)
+    ax.axvline(plot_thresh, color='red', linestyle='--', linewidth=2,
+               label=f'Threshold = {threshold:.1f}')
+
+    pct = 100 * n_positive / max(n_positive + n_negative, 1)
+    ax.set_title(f'{marker_name} classification ({method})\n'
+                 f'{n_positive:,} positive ({pct:.1f}%) / {n_negative:,} negative')
+    ax.set_xlabel('log1p(intensity)' if use_log else 'Intensity')
+    ax.set_ylabel('Count')
+    ax.legend()
+
+    fig.tight_layout()
+    fig.savefig(output_path, dpi=150)
+    plt.close(fig)
+    logger.info(f"  Saved distribution plot: {output_path}")
+
+
+# ---------------------------------------------------------------------------
+# Core processing
+# ---------------------------------------------------------------------------
+
+def extract_marker_values(detections: list[dict], channel: int) -> np.ndarray:
+    """Extract ch{N}_mean from each detection's features dict."""
+    key = f'ch{channel}_mean'
+    values = np.array([
+        d.get('features', {}).get(key, 0.0) for d in detections
+    ], dtype=np.float64)
+    return values
+
+
+def classify_single_marker(detections: list[dict], channel: int,
+                           marker_name: str, method: str,
+                           output_dir: Path) -> dict:
+    """Classify detections for one marker. Returns summary row dict.
+
+    Mutates detections in-place: adds {marker}_class, {marker}_value,
+    {marker}_threshold to each detection's features dict.
+    """
+    logger.info(f"Classifying marker '{marker_name}' (ch{channel}) with method '{method}'")
+
+    values = extract_marker_values(detections, channel)
+    logger.info(f"  Extracted {len(values):,} values, "
+                f"range [{values.min():.1f}, {values.max():.1f}], "
+                f"median {np.median(values):.1f}")
+
+    # Classify
+    if method == 'otsu_half':
+        threshold, positive_mask = classify_otsu_half(values)
+    elif method == 'gmm':
+        threshold, positive_mask = classify_gmm(values)
+    else:
+        raise ValueError(f"Unknown method: {method}")
+
+    n_positive = int(positive_mask.sum())
+    n_negative = len(positive_mask) - n_positive
+    pct = 100 * n_positive / max(len(positive_mask), 1)
+
+    logger.info(f"  Threshold: {threshold:.2f}")
+    logger.info(f"  Positive: {n_positive:,} ({pct:.1f}%)  "
+                f"Negative: {n_negative:,} ({100 - pct:.1f}%)")
+
+    # Enrich detections in-place
+    class_key = f'{marker_name}_class'
+    value_key = f'{marker_name}_value'
+    thresh_key = f'{marker_name}_threshold'
+
+    for i, det in enumerate(detections):
+        feat = det.setdefault('features', {})
+        feat[class_key] = 'positive' if positive_mask[i] else 'negative'
+        feat[value_key] = float(values[i])
+        feat[thresh_key] = float(threshold)
+
+    # Plot
+    plot_path = output_dir / f'{marker_name}_distribution.png'
+    plot_distribution(values, threshold, marker_name, method,
+                      n_positive, n_negative, plot_path)
+
+    return {
+        'marker': marker_name,
+        'method': method,
+        'threshold': threshold,
+        'n_positive': n_positive,
+        'n_negative': n_negative,
+        'pct_positive': round(pct, 2),
+    }
+
+
+# ---------------------------------------------------------------------------
+# CLI
+# ---------------------------------------------------------------------------
+
+def parse_args() -> argparse.Namespace:
+    parser = argparse.ArgumentParser(
+        description='Post-detection marker classification',
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog=__doc__,
+    )
+    parser.add_argument('--detections', required=True,
+                        help='Path to detections JSON file')
+    parser.add_argument('--marker-channel', required=True,
+                        help='Comma-separated channel indices (e.g. 2 or 1,3)')
+    parser.add_argument('--marker-name', required=True,
+                        help='Comma-separated marker names matching channels '
+                             '(e.g. tdTomato or SMA,CD31)')
+    parser.add_argument('--method', default='otsu_half',
+                        choices=['otsu_half', 'gmm'],
+                        help='Classification method (default: otsu_half)')
+    parser.add_argument('--output-dir', default=None,
+                        help='Output directory (default: same dir as detections)')
+    return parser.parse_args()
+
+
+def main():
+    args = parse_args()
+    setup_logging(level="INFO")
+
+    # Validate paths
+    det_path = Path(args.detections)
+    if not det_path.exists():
+        logger.error(f"Detections file not found: {det_path}")
+        sys.exit(1)
+
+    output_dir = Path(args.output_dir) if args.output_dir else det_path.parent
+    output_dir.mkdir(parents=True, exist_ok=True)
+
+    # Parse marker channels and names
+    try:
+        channels = [int(c.strip()) for c in args.marker_channel.split(',')]
+    except ValueError:
+        logger.error(f"Invalid --marker-channel: {args.marker_channel!r} "
+                     f"(expected comma-separated integers)")
+        sys.exit(1)
+
+    names = [n.strip() for n in args.marker_name.split(',')]
+
+    if len(channels) != len(names):
+        logger.error(f"Mismatch: {len(channels)} channel(s) but {len(names)} name(s). "
+                     f"Channels: {channels}, Names: {names}")
+        sys.exit(1)
+
+    # Load detections
+    logger.info(f"Loading detections from {det_path}...")
+    with open(det_path) as f:
+        detections = json.load(f)
+    logger.info(f"Loaded {len(detections):,} detections")
+
+    if not detections:
+        logger.error("No detections found in file")
+        sys.exit(1)
+
+    # Verify that requested channels have data
+    sample_feat = detections[0].get('features', {})
+    for ch, name in zip(channels, names):
+        key = f'ch{ch}_mean'
+        if key not in sample_feat:
+            available = [k for k in sample_feat if k.startswith('ch') and k.endswith('_mean')]
+            logger.warning(f"Channel key '{key}' not found in first detection's features. "
+                           f"Available: {available}. Values will default to 0.")
+
+    # Process each marker
+    summaries = []
+    for ch, name in zip(channels, names):
+        row = classify_single_marker(detections, ch, name, args.method, output_dir)
+        summaries.append(row)
+
+    # Save enriched detections
+    out_json = output_dir / f'{det_path.stem}_classified.json'
+    logger.info(f"Saving classified detections to {out_json}...")
+    with open(out_json, 'w') as f:
+        json.dump(detections, f, cls=NumpyEncoder)
+    logger.info(f"  Wrote {len(detections):,} detections")
+
+    # Save summary CSV
+    summary_path = output_dir / 'marker_summary.csv'
+    with open(summary_path, 'w', newline='') as f:
+        writer = csv.DictWriter(f, fieldnames=[
+            'marker', 'method', 'threshold', 'n_positive', 'n_negative', 'pct_positive',
+        ])
+        writer.writeheader()
+        writer.writerows(summaries)
+    logger.info(f"  Wrote summary: {summary_path}")
+
+    # Final summary
+    logger.info("--- Classification complete ---")
+    for row in summaries:
+        logger.info(f"  {row['marker']}: {row['n_positive']:,} positive "
+                     f"({row['pct_positive']:.1f}%), "
+                     f"threshold={row['threshold']:.2f} ({row['method']})")
+
+
+if __name__ == '__main__':
+    main()

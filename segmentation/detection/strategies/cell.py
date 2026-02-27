@@ -55,7 +55,8 @@ class CellStrategy(DetectionStrategy, MultiChannelFeatureMixin):
         min_mask_pixels: int = 10,
         extract_deep_features: bool = False,
         extract_sam2_embeddings: bool = True,
-        resnet_batch_size: int = 32
+        resnet_batch_size: int = 32,
+        cellpose_input_channels: list = None
     ):
         """
         Initialize cell detection strategy.
@@ -68,6 +69,10 @@ class CellStrategy(DetectionStrategy, MultiChannelFeatureMixin):
             extract_deep_features: Whether to extract ResNet+DINOv2 features (default False, opt-in)
             extract_sam2_embeddings: Whether to extract 256D SAM2 embeddings (default True)
             resnet_batch_size: Batch size for ResNet feature extraction (default 32)
+            cellpose_input_channels: List of [cyto_channel_idx, nuclear_channel_idx] for
+                2-channel Cellpose mode. When provided along with extra_channels in segment(),
+                builds an RGB input with cyto=R, nuc=G for channels=[1,2]. Default None
+                uses grayscale mode channels=[0,0].
         """
         self.min_area_um = min_area_um
         self.max_area_um = max_area_um
@@ -76,6 +81,7 @@ class CellStrategy(DetectionStrategy, MultiChannelFeatureMixin):
         self.extract_deep_features = extract_deep_features
         self.extract_sam2_embeddings = extract_sam2_embeddings
         self.resnet_batch_size = resnet_batch_size
+        self.cellpose_input_channels = cellpose_input_channels
 
     @property
     def name(self) -> str:
@@ -85,13 +91,14 @@ class CellStrategy(DetectionStrategy, MultiChannelFeatureMixin):
         self,
         tile: np.ndarray,
         models: Dict[str, Any],
+        extra_channels: Dict[int, np.ndarray] = None,
         **kwargs
     ) -> List[np.ndarray]:
         """
         Generate cell candidate masks using Cellpose + SAM2 refinement.
 
         This method performs:
-        1. Cellpose detection on the tile (grayscale mode, auto size)
+        1. Cellpose detection on the tile (grayscale or 2-channel mode)
         2. For each Cellpose detection, use its centroid as a SAM2 point prompt
         3. Take the best SAM2 mask (highest confidence)
         4. Filter by overlap with existing masks
@@ -99,6 +106,8 @@ class CellStrategy(DetectionStrategy, MultiChannelFeatureMixin):
         Args:
             tile: RGB image array (HxWx3)
             models: Dict with 'cellpose' and 'sam2_predictor'
+            extra_channels: Dict mapping channel index to 2D array. Used for
+                2-channel Cellpose when cellpose_input_channels is set.
 
         Returns:
             List of boolean masks, sorted by SAM2 confidence score
@@ -117,8 +126,27 @@ class CellStrategy(DetectionStrategy, MultiChannelFeatureMixin):
         else:
             tile_uint8 = tile
 
-        # Step 1: Cellpose detection (grayscale mode for nuclei)
-        cellpose_masks, _, _ = cellpose.eval(tile, channels=[0, 0])
+        # Step 1: Cellpose detection
+        # Build Cellpose input
+        if self.cellpose_input_channels and extra_channels:
+            cyto_idx, nuc_idx = self.cellpose_input_channels
+            cyto_ch = extra_channels.get(cyto_idx)
+            nuc_ch = extra_channels.get(nuc_idx)
+            if cyto_ch is not None and nuc_ch is not None:
+                # Build RGB: R=cyto, G=nuc, B=zeros
+                def _to_uint8(arr):
+                    if arr.dtype == np.uint16:
+                        return (arr / 256).astype(np.uint8)
+                    return arr.astype(np.uint8)
+                cp_tile = np.stack([_to_uint8(cyto_ch), _to_uint8(nuc_ch),
+                                   np.zeros_like(_to_uint8(cyto_ch))], axis=-1)
+                cellpose_masks, _, _ = cellpose.eval(cp_tile, channels=[1, 2])
+                logger.info(f"Cellpose 2-channel: cyto=ch{cyto_idx}, nuc=ch{nuc_idx}, "
+                            f"found {len(np.unique(cellpose_masks)) - 1} cells")
+            else:
+                cellpose_masks, _, _ = cellpose.eval(tile, channels=[0, 0])
+        else:
+            cellpose_masks, _, _ = cellpose.eval(tile, channels=[0, 0])
 
         # Get unique mask IDs (exclude background 0)
         cellpose_ids = np.unique(cellpose_masks)
@@ -274,7 +302,7 @@ class CellStrategy(DetectionStrategy, MultiChannelFeatureMixin):
             raise RuntimeError("Cellpose and SAM2 predictor required for cell detection")
 
         # Generate masks using segment()
-        masks = self.segment(tile, models)
+        masks = self.segment(tile, models, extra_channels=extra_channels)
 
         if not masks:
             # Reset predictor state

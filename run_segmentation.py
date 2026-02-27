@@ -65,8 +65,6 @@ import h5py
 import torch
 # Note: torchvision imports (tv_models, tv_transforms) are loaded lazily inside
 # CellDetector strategy classes to avoid loading them when not needed.
-from PIL import Image
-
 # Import segmentation modules
 from segmentation.detection.tissue import (
     calibrate_tissue_threshold,
@@ -83,13 +81,8 @@ from segmentation.io.html_export import (
     HDF5_COMPRESSION_NAME,
 )
 from segmentation.utils.logging import get_logger, setup_logging, log_parameters
-from segmentation.utils.feature_extraction import (
-    extract_resnet_features_batch,
-    preprocess_crop_for_resnet,
-    extract_morphological_features as _shared_extract_morphological_features,  # Import shared version
-    compute_hsv_features,
-)
-from segmentation.io.czi_loader import get_loader, CZILoader
+from segmentation.io.czi_loader import get_loader, CZILoader, get_czi_metadata, print_czi_metadata
+from segmentation.utils.islet_utils import classify_islet_marker, compute_islet_marker_thresholds
 
 # Import new CellDetector and strategies
 from segmentation.detection.cell_detector import CellDetector
@@ -108,17 +101,7 @@ from segmentation.classification.vessel_type_classifier import VesselTypeClassif
 logger = get_logger(__name__)
 
 
-class NumpyEncoder(json.JSONEncoder):
-    """JSON encoder that handles numpy types."""
-
-    def default(self, obj):
-        if isinstance(obj, np.integer):
-            return int(obj)
-        elif isinstance(obj, np.floating):
-            return float(obj)
-        elif isinstance(obj, np.ndarray):
-            return obj.tolist()
-        return super().default(obj)
+from segmentation.utils.json_utils import NumpyEncoder
 
 
 def detect_resume_stage(slide_output_dir, cell_type):
@@ -209,7 +192,7 @@ def _resume_generate_html_samples(args, all_detections, tiles_dir,
     if cell_type == 'islet':
         display_chs = getattr(args, 'islet_display_chs', [2, 3, 5])
     elif cell_type == 'tissue_pattern':
-        display_chs = [int(x) for x in args.tp_display_channels.split(',')]
+        display_chs = getattr(args, 'tp_display_channels_list', [0, 3, 1])
     else:
         display_chs = sorted(all_channel_data.keys())[:3]
 
@@ -340,10 +323,76 @@ def _resume_generate_html_samples(args, all_detections, tiles_dir,
     return all_samples
 
 
+def _build_channel_legend(cell_type, args, czi_path, slide_name=None):
+    """Build channel legend dict from CZI metadata for HTML export.
+
+    Args:
+        cell_type: Detection cell type string
+        args: Parsed arguments (for display channel config)
+        czi_path: Path to CZI file (for metadata extraction)
+        slide_name: Slide name (fallback for NMJ filename parsing)
+
+    Returns:
+        Dict with 'red', 'green', 'blue' keys, or None on failure.
+    """
+    try:
+        _czi_meta = get_czi_metadata(czi_path, scene=getattr(args, 'scene', 0))
+
+        def _channel_label(ch_idx):
+            for ch in _czi_meta['channels']:
+                if ch['index'] == ch_idx:
+                    name = ch['name']
+                    em = f" ({ch['emission_nm']:.0f}nm)" if ch.get('emission_nm') else ''
+                    return f'{name}{em}'
+            return f'Ch{ch_idx}'
+
+        if cell_type == 'islet':
+            _islet_disp = getattr(args, 'islet_display_chs', [2, 3, 5])
+            return {
+                'red': _channel_label(_islet_disp[0]) if len(_islet_disp) > 0 else 'none',
+                'green': _channel_label(_islet_disp[1]) if len(_islet_disp) > 1 else 'none',
+                'blue': _channel_label(_islet_disp[2]) if len(_islet_disp) > 2 else 'none',
+            }
+        elif cell_type == 'tissue_pattern':
+            tp_disp = getattr(args, 'tp_display_channels_list', [0, 3, 1])
+            return {
+                'red': _channel_label(tp_disp[0]) if len(tp_disp) > 0 else 'none',
+                'green': _channel_label(tp_disp[1]) if len(tp_disp) > 1 else 'none',
+                'blue': _channel_label(tp_disp[2]) if len(tp_disp) > 2 else 'none',
+            }
+        elif cell_type == 'nmj' and getattr(args, 'all_channels', False):
+            try:
+                return {
+                    'red': _channel_label(0),
+                    'green': _channel_label(1),
+                    'blue': _channel_label(2),
+                }
+            except Exception:
+                return parse_channel_legend_from_filename(slide_name) if slide_name else None
+        else:
+            return {
+                'red': _channel_label(0),
+                'green': _channel_label(1),
+                'blue': _channel_label(2),
+            }
+    except Exception:
+        return None
+
+
 def _finish_pipeline(args, all_detections, all_samples, slide_output_dir, tiles_dir,
                      pixel_size_um, slide_name, mosaic_info, run_timestamp, pct,
-                     skip_html=False, all_tiles=None, tissue_tiles=None, sampled_tiles=None):
-    """Shared post-processing: HTML export, CSV, summary (used by both normal and resume paths)."""
+                     skip_html=False, all_tiles=None, tissue_tiles=None, sampled_tiles=None,
+                     resumed=False, params=None, classifier_loaded=False,
+                     is_multiscale=False, detector=None):
+    """Shared post-processing: HTML export, CSV, summary, server (used by both normal and resume paths).
+
+    Args:
+        resumed: Whether this is a resumed pipeline run (affects title/summary).
+        params: Detection parameters dict (for summary, normal path only).
+        classifier_loaded: Whether a classifier was loaded (for sort order, normal path).
+        is_multiscale: Whether multiscale mode was used (for checkpoint cleanup).
+        detector: CellDetector instance to cleanup (normal path only).
+    """
     cell_type = args.cell_type
     czi_path = Path(args.czi_path)
 
@@ -356,12 +405,16 @@ def _finish_pipeline(args, all_detections, all_samples, slide_output_dir, tiles_
         det['global_id'] = f"{int(round(_gc[0]))}_{int(round(_gc[1]))}"
 
     detections_file = slide_output_dir / f'{cell_type}_detections.json'
-    with open(detections_file, 'w') as f:
+    from segmentation.utils.timestamps import timestamped_path, _update_symlink
+    ts_detections = timestamped_path(detections_file)
+    with open(ts_detections, 'w') as f:
         json.dump(all_detections, f, cls=NumpyEncoder)
-    logger.info(f"Saved {len(all_detections)} detections to {detections_file}")
+    _update_symlink(detections_file, ts_detections)
+    logger.info(f"Saved {len(all_detections)} detections to {ts_detections}")
 
     csv_file = slide_output_dir / f'{cell_type}_coordinates.csv'
-    with open(csv_file, 'w') as f:
+    ts_csv = timestamped_path(csv_file)
+    with open(ts_csv, 'w') as f:
         if cell_type == 'vessel':
             f.write('uid,global_x_px,global_y_px,global_x_um,global_y_um,outer_diameter_um,wall_thickness_um,confidence\n')
             for det in all_detections:
@@ -393,10 +446,11 @@ def _finish_pipeline(args, all_detections, all_samples, slide_output_dir, tiles_
                 area_um2 = feat.get('area', 0) * (pixel_size_um ** 2)
                 f.write(f"{det['uid']},{g_center[0]:.1f},{g_center[1]:.1f},"
                         f"{g_center_um[0]:.2f},{g_center_um[1]:.2f},{area_um2:.2f}\n")
-    logger.info(f"Saved coordinates to {csv_file}")
+    _update_symlink(csv_file, ts_csv)
+    logger.info(f"Saved coordinates to {ts_csv}")
 
     # Sort samples: classifier runs → RF score descending; else → area ascending
-    _has_classifier = (
+    _has_classifier = classifier_loaded or (
         (cell_type == 'nmj' and getattr(args, 'nmj_classifier', None)) or
         (cell_type == 'islet' and getattr(args, 'islet_classifier', None)) or
         (cell_type == 'tissue_pattern' and getattr(args, 'tp_classifier', None))
@@ -408,62 +462,26 @@ def _finish_pipeline(args, all_detections, all_samples, slide_output_dir, tiles_
 
     # Export to HTML (unless skipped)
     if not skip_html and all_samples:
+        if cell_type in ('nmj', 'islet', 'tissue_pattern') and len(all_detections) > len(all_samples):
+            logger.info(f"Total detections (all scores): {len(all_detections)}, "
+                         f"shown in HTML (rf_prediction >= {args.html_score_threshold}): {len(all_samples)}")
         logger.info(f"Exporting to HTML ({len(all_samples)} samples)...")
         html_dir = slide_output_dir / "html"
 
-        # Channel legend from CZI metadata
-        channel_legend = None
-        try:
-            _czi_meta = get_czi_metadata(czi_path, scene=args.scene)
-
-            def _channel_label(ch_idx):
-                for ch in _czi_meta['channels']:
-                    if ch['index'] == ch_idx:
-                        name = ch['name']
-                        em = f" ({ch['emission_nm']:.0f}nm)" if ch.get('emission_nm') else ''
-                        return f'{name}{em}'
-                return f'Ch{ch_idx}'
-
-            if cell_type == 'islet':
-                _islet_disp = getattr(args, 'islet_display_chs', [2, 3, 5])
-                channel_legend = {
-                    'red': _channel_label(_islet_disp[0]) if len(_islet_disp) > 0 else 'none',
-                    'green': _channel_label(_islet_disp[1]) if len(_islet_disp) > 1 else 'none',
-                    'blue': _channel_label(_islet_disp[2]) if len(_islet_disp) > 2 else 'none',
-                }
-            elif cell_type == 'tissue_pattern':
-                tp_disp = [int(x) for x in args.tp_display_channels.split(',')]
-                channel_legend = {
-                    'red': _channel_label(tp_disp[0]) if len(tp_disp) > 0 else 'none',
-                    'green': _channel_label(tp_disp[1]) if len(tp_disp) > 1 else 'none',
-                    'blue': _channel_label(tp_disp[2]) if len(tp_disp) > 2 else 'none',
-                }
-            elif cell_type == 'nmj' and getattr(args, 'all_channels', False):
-                channel_legend = {
-                    'red': _channel_label(0),
-                    'green': _channel_label(1),
-                    'blue': _channel_label(2),
-                }
-            else:
-                channel_legend = {
-                    'red': _channel_label(0),
-                    'green': _channel_label(1),
-                    'blue': _channel_label(2),
-                }
-        except Exception:
-            channel_legend = None
+        channel_legend = _build_channel_legend(cell_type, args, czi_path, slide_name=slide_name)
 
         prior_ann = getattr(args, 'prior_annotations', None)
         experiment_name = f"{slide_name}_{run_timestamp}_{pct}pct"
+        _title_suffix = " (resumed)" if resumed else ""
         export_samples_to_html(
             all_samples,
             html_dir,
             cell_type,
             samples_per_page=args.samples_per_page,
-            title=f"{cell_type.upper()} Annotation Review (resumed)",
+            title=f"{cell_type.upper()} Annotation Review{_title_suffix}",
             page_prefix=f'{cell_type}_page',
             experiment_name=experiment_name,
-            file_name=f"{czi_path.name}",
+            file_name=f"{czi_path.name}" if resumed else f"{slide_name}.czi",
             pixel_size_um=pixel_size_um,
             tiles_processed=len(sampled_tiles) if sampled_tiles else 0,
             tiles_total=len(all_tiles) if all_tiles else 0,
@@ -473,25 +491,13 @@ def _finish_pipeline(args, all_detections, all_samples, slide_output_dir, tiles_
     elif skip_html:
         logger.info("HTML export skipped (already exists)")
 
-    # Save summary
-    summary = {
-        'slide_name': slide_name,
-        'cell_type': cell_type,
-        'pixel_size_um': pixel_size_um,
-        'mosaic_width': mosaic_info['width'],
-        'mosaic_height': mosaic_info['height'],
-        'total_tiles': len(all_tiles) if all_tiles else 0,
-        'tissue_tiles': len(tissue_tiles) if tissue_tiles else 0,
-        'sampled_tiles': len(sampled_tiles) if sampled_tiles else 0,
-        'total_detections': len(all_detections),
-        'html_displayed': len(all_samples),
-        'resumed': True,
-        'params': {},
-        'detections_file': str(detections_file),
-        'coordinates_file': str(csv_file),
-    }
-    with open(slide_output_dir / 'summary.json', 'w') as f:
-        json.dump(summary, f, cls=NumpyEncoder)
+    # Clean up multiscale checkpoints after successful completion
+    if is_multiscale:
+        checkpoint_dir = slide_output_dir / "checkpoints"
+        if checkpoint_dir.exists():
+            import shutil
+            shutil.rmtree(checkpoint_dir)
+            logger.info("Multiscale checkpoints cleaned up after successful completion")
 
     # Export mesothelium LMD XML if applicable
     if cell_type == 'mesothelium' and len(all_detections) > 0:
@@ -507,21 +513,50 @@ def _finish_pipeline(args, all_detections, all_samples, slide_output_dir, tiles_
             flip_y=True,
         )
 
+    # Save summary
+    summary = {
+        'slide_name': slide_name,
+        'cell_type': cell_type,
+        'pixel_size_um': pixel_size_um,
+        'mosaic_width': mosaic_info['width'],
+        'mosaic_height': mosaic_info['height'],
+        'total_tiles': len(all_tiles) if all_tiles else 0,
+        'tissue_tiles': len(tissue_tiles) if tissue_tiles else 0,
+        'sampled_tiles': len(sampled_tiles) if sampled_tiles else 0,
+        'total_detections': len(all_detections),
+        'html_displayed': len(all_samples),
+        'resumed': resumed,
+        'params': params if params else {},
+        'detections_file': str(detections_file),
+        'coordinates_file': str(csv_file),
+    }
+    with open(slide_output_dir / 'summary.json', 'w') as f:
+        json.dump(summary, f, cls=NumpyEncoder)
+
+    # Cleanup detector resources
+    if detector is not None:
+        detector.cleanup()
+
+    _status_label = "COMPLETE (resumed)" if resumed else "COMPLETE"
     logger.info("=" * 60)
-    logger.info("COMPLETE (resumed)")
+    logger.info(_status_label)
     logger.info("=" * 60)
     logger.info(f"Total detections: {len(all_detections)}")
-    logger.info(f"Displayed in HTML: {len(all_samples)}")
+    logger.info(f"Displayed in HTML: {len(all_samples)} (score >= {args.html_score_threshold})")
     logger.info(f"Output: {slide_output_dir}")
-
-    # Start HTTP server (same logic as normal path)
     html_dir = slide_output_dir / "html"
+    if html_dir.exists():
+        logger.info(f"HTML viewer: {html_dir / 'index.html'}")
+
+    # Start HTTP server
     no_serve = getattr(args, 'no_serve', False)
     serve_foreground = getattr(args, 'serve', False)
     serve_background = getattr(args, 'serve_background', True)
     port = getattr(args, 'port', 8081)
 
-    if not no_serve and html_dir.exists() and not skip_html:
+    if no_serve:
+        logger.info("Server disabled (--no-serve)")
+    elif html_dir.exists() and not skip_html:
         if serve_foreground:
             http_proc, tunnel_proc, tunnel_url = start_server_and_tunnel(
                 html_dir, port, background=False,
@@ -564,8 +599,6 @@ def parse_channel_legend_from_filename(filename: str) -> dict:
         Dict with 'red', 'green', 'blue' keys mapping to channel names,
         or None if no channels detected.
     """
-    import re
-
     channels = []
 
     # Specific channel patterns - use original text from filename
@@ -676,16 +709,18 @@ atexit.register(_cleanup_processes)
 
 
 def stop_background_server():
-    """Stop any running background server using saved PID file."""
-    if not SERVER_PID_FILE.exists():
-        logger.info("No background server running (no PID file found)")
+    """Stop all running background servers using _get_all_servers()."""
+    servers = _get_all_servers()
+
+    if not servers:
+        logger.info("No background server running (no PID files found)")
         return False
 
-    try:
-        data = json.loads(SERVER_PID_FILE.read_text())
+    stopped = False
+    for data in servers:
         http_pid = data.get('http_pid')
         tunnel_pid = data.get('tunnel_pid')
-        stopped = False
+        pid_file = data.get('_pid_file')
 
         for name, pid in [('HTTP server', http_pid), ('Cloudflare tunnel', tunnel_pid)]:
             if pid:
@@ -698,11 +733,14 @@ def stop_background_server():
                 except PermissionError:
                     logger.error(f"Permission denied stopping {name} (PID {pid})")
 
-        SERVER_PID_FILE.unlink()
-        return stopped
-    except Exception as e:
-        logger.error(f"Error stopping server: {e}")
-        return False
+        # Clean up PID file
+        if pid_file and pid_file.exists():
+            try:
+                pid_file.unlink()
+            except OSError:
+                pass
+
+    return stopped
 
 
 def show_server_status():
@@ -908,17 +946,19 @@ def start_server_and_tunnel(html_dir: Path, port: int = 8081, background: bool =
             # Create a log file for tunnel output
             tunnel_log = html_dir / '.tunnel.log'
             tunnel_log_file = open(tunnel_log, 'w')
-            tunnel_proc = subprocess.Popen(
-                [cloudflared_path, 'tunnel', '--url', f'http://localhost:{port}'],
-                stdout=tunnel_log_file,
-                stderr=subprocess.STDOUT,
-                start_new_session=True,
-                stdin=subprocess.DEVNULL,
-            )
-            # Wait briefly and parse log for URL
-            time.sleep(5)
-            tunnel_log_file.flush()
-            tunnel_log_file.close()
+            try:
+                tunnel_proc = subprocess.Popen(
+                    [cloudflared_path, 'tunnel', '--url', f'http://localhost:{port}'],
+                    stdout=tunnel_log_file,
+                    stderr=subprocess.STDOUT,
+                    start_new_session=True,
+                    stdin=subprocess.DEVNULL,
+                )
+                # Wait briefly and parse log for URL
+                time.sleep(5)
+                tunnel_log_file.flush()
+            finally:
+                tunnel_log_file.close()
             tunnel_url = None
             try:
                 log_content = tunnel_log.read_text()
@@ -1030,78 +1070,14 @@ def create_strategy_for_cell_type(cell_type, params, pixel_size_um):
     Raises:
         ValueError: If cell_type is not supported by the new strategy pattern
     """
-    if cell_type == 'nmj':
-        return NMJStrategy(
-            intensity_percentile=params.get('intensity_percentile', 98.0),
-            min_area_px=params.get('min_area', 150),
-            min_skeleton_length=params.get('min_skeleton_length', 30),
-            max_solidity=params.get('max_solidity', 0.85),
-            extract_deep_features=params.get('extract_deep_features', False),
-            extract_sam2_embeddings=params.get('extract_sam2_embeddings', True),
-        )
-    elif cell_type == 'mk':
-        return MKStrategy(
-            min_area_um=params.get('mk_min_area', 200.0),
-            max_area_um=params.get('mk_max_area', 2000.0),
-            extract_deep_features=params.get('extract_deep_features', False),
-            extract_sam2_embeddings=params.get('extract_sam2_embeddings', True),
-        )
-    elif cell_type == 'cell':
-        return CellStrategy(
-            min_area_um=params.get('min_area_um', 50),
-            max_area_um=params.get('max_area_um', 200),
-            extract_deep_features=params.get('extract_deep_features', False),
-            extract_sam2_embeddings=params.get('extract_sam2_embeddings', True),
-        )
-    elif cell_type == 'vessel':
-        return VesselStrategy(
-            min_diameter_um=params.get('min_vessel_diameter_um', 10),
-            max_diameter_um=params.get('max_vessel_diameter_um', 1000),
-            min_wall_thickness_um=params.get('min_wall_thickness_um', 2),
-            max_aspect_ratio=params.get('max_aspect_ratio', 4.0),
-            min_circularity=params.get('min_circularity', 0.3),
-            min_ring_completeness=params.get('min_ring_completeness', 0.5),
-            classify_vessel_types=params.get('classify_vessel_types', False),
-            candidate_mode=params.get('candidate_mode', False),
-            lumen_first=params.get('lumen_first', False),
-            ring_only=params.get('ring_only', False),
-            parallel_detection=params.get('parallel_detection', False),
-            parallel_workers=params.get('parallel_workers', 3),
-            multi_marker=params.get('multi_marker', False),
-            extract_deep_features=params.get('extract_deep_features', False),
-            extract_sam2_embeddings=params.get('extract_sam2_embeddings', True),
-            smooth_contours=params.get('smooth_contours', True),
-            smooth_contours_factor=params.get('smooth_contours_factor', 3.0),
-        )
-    elif cell_type == 'mesothelium':
-        return MesotheliumStrategy(
-            target_chunk_area_um2=params.get('target_chunk_area_um2', 1500.0),
-            min_ribbon_width_um=params.get('min_ribbon_width_um', 5.0),
-            max_ribbon_width_um=params.get('max_ribbon_width_um', 30.0),
-            min_fragment_area_um2=params.get('min_fragment_area_um2', 1500.0),
-            pixel_size_um=pixel_size_um,
-        )
-    elif cell_type == 'islet':
-        return IsletStrategy(
-            membrane_channel=params.get('membrane_channel', 1),
-            nuclear_channel=params.get('nuclear_channel', 4),
-            extract_deep_features=params.get('extract_deep_features', False),
-            extract_sam2_embeddings=params.get('extract_sam2_embeddings', True),
-            marker_signal_factor=params.get('marker_signal_factor', 2.0),
-            gmm_prefilter_thresholds=params.get('gmm_prefilter_thresholds'),
-        )
-    elif cell_type == 'tissue_pattern':
-        return TissuePatternStrategy(
-            detection_channels=params.get('detection_channels', [0, 3]),
-            nuclear_channel=params.get('nuclear_channel', 4),
-            min_area_um=params.get('min_area_um', 20),
-            max_area_um=params.get('max_area_um', 300),
-            extract_deep_features=params.get('extract_deep_features', False),
-            extract_sam2_embeddings=params.get('extract_sam2_embeddings', True),
-        )
-    else:
-        raise ValueError(f"Cell type '{cell_type}' does not have a strategy implementation. "
-                         f"Supported types: nmj, mk, cell, vessel, mesothelium, islet, tissue_pattern")
+    from segmentation.processing.strategy_factory import create_strategy
+    return create_strategy(
+        cell_type=cell_type,
+        strategy_params=params,
+        extract_deep_features=params.get('extract_deep_features', False),
+        extract_sam2_embeddings=params.get('extract_sam2_embeddings', True),
+        pixel_size_um=pixel_size_um,
+    )
 
 
 # Import from canonical location (segmentation.processing.tile_processing)
@@ -1159,77 +1135,12 @@ def _compute_tile_percentiles(tile_rgb, p_low=1, p_high=99.5):
     return percentiles if percentiles else None
 
 
-def classify_islet_marker(features_dict, marker_thresholds=None, marker_map=None):
-    """Classify an islet cell by dominant hormone marker.
-
-    Uses NORMALIZED channel values (same as HTML display) so contour color
-    matches what the user sees. Marker channels are defined by marker_map.
-
-    Args:
-        features_dict: dict with 'ch{N}_mean' feature keys
-        marker_thresholds: (norm_ranges, ch_thresholds, ratio_min) from compute_islet_marker_thresholds()
-        marker_map: dict mapping marker name → CZI channel index, e.g. {'gcg': 2, 'ins': 3, 'sst': 5}
-
-    Returns (class_name, contour_color_rgb).
-    """
-    if marker_map is None:
-        marker_map = {'gcg': 2, 'ins': 3, 'sst': 5}
-
-    # Build ordered marker list with colors (R, G, B for first 3 markers)
-    _marker_colors = [(255, 50, 50), (50, 255, 50), (50, 50, 255)]
-    marker_names = list(marker_map.keys())
-    marker_vals = {}
-    for name in marker_names:
-        ch_idx = marker_map[name]
-        marker_vals[name] = features_dict.get(f'ch{ch_idx}_mean', 0)
-
-    if marker_thresholds is None:
-        return 'none', (128, 128, 128)
-
-    norm_ranges, ch_thresholds, ratio_min = marker_thresholds
-
-    # Normalize to 0-1 using same percentiles as HTML display
-    def _norm(val, ch_key):
-        lo, hi = norm_ranges.get(ch_key, (0, 1))
-        if hi <= lo:
-            return 0.0
-        return max(0.0, min(1.0, (val - lo) / (hi - lo)))
-
-    normed = {}
-    positive = {}
-    for name in marker_names:
-        ch_key = f'ch{marker_map[name]}'
-        normed[name] = _norm(marker_vals[name], ch_key)
-        positive[name] = normed[name] >= ch_thresholds.get(ch_key, 0.5)
-
-    # Gate: must exceed at least one channel's threshold
-    if not any(positive.values()):
-        return 'none', (128, 128, 128)
-
-    # Ratio classification — only among channels that are actually positive
-    pos_markers = []
-    for i, name in enumerate(marker_names):
-        if positive[name]:
-            color = _marker_colors[i] if i < len(_marker_colors) else (200, 200, 200)
-            pos_markers.append((name, normed[name], color))
-
-    if len(pos_markers) == 1:
-        return pos_markers[0][0], pos_markers[0][2]
-
-    # Multiple positive channels — check ratio among them
-    pos_markers.sort(key=lambda x: x[1], reverse=True)
-    best_name, best_val, best_color = pos_markers[0]
-    second_val = pos_markers[1][1] if len(pos_markers) > 1 else 0
-
-    if second_val > 0 and best_val / second_val < ratio_min:
-        return 'multi', (255, 170, 0)  # orange
-
-    return best_name, best_color
+# classify_islet_marker() moved to segmentation/utils/islet_utils.py (imported at top)
 
 
 def calibrate_islet_marker_gmm(pilot_tiles, loader, all_channel_data, slide_shm_arr,
                                ch_to_slot, marker_channels, membrane_channel=1,
-                               nuclear_channel=4, tile_size=4000, pixel_size_um=0.325,
+                               nuclear_channel=4, tile_size=4000, pixel_size_um=None,
                                nuclei_only=False, mosaic_origin=(0, 0)):
     """Run Cellpose on pilot tiles to calibrate global GMM pre-filter thresholds.
 
@@ -1257,6 +1168,8 @@ def calibrate_islet_marker_gmm(pilot_tiles, loader, all_channel_data, slide_shm_
         dict mapping channel_idx → raw GMM threshold (P(signal) = 0.5),
         or empty dict if calibration fails.
     """
+    if pixel_size_um is None:
+        raise ValueError("pixel_size_um is required — must come from CZI metadata")
     from sklearn.mixture import GaussianMixture
 
     if not pilot_tiles:
@@ -1432,149 +1345,7 @@ def calibrate_islet_marker_gmm(pilot_tiles, loader, all_channel_data, slide_shm_
     return gmm_thresholds
 
 
-def compute_islet_marker_thresholds(all_detections, vis_threshold_overrides=None, ratio_min=1.5,
-                                    marker_map=None, marker_top_pct=5,
-                                    pct_channels=None, gmm_p_cutoff=0.75,
-                                    threshold_factor=1.0):
-    """Compute per-channel thresholds for islet marker classification.
-
-    Two methods, selectable per channel:
-    - **GMM** (default): 2-component Gaussian Mixture on log-transformed intensities.
-      Finds the natural boundary between background and signal populations.
-    - **Percentile** (for specified channels): top N% of the intensity distribution
-      = positive. Simple, interpretable, biologically grounded for channels where
-      GMM separation is too poor to be reliable.
-
-    Args:
-        all_detections: list of detection dicts with features
-        vis_threshold_overrides: optional dict {ch_key: float} to manually override
-            per-channel thresholds (e.g. {'ch5': 0.6})
-        ratio_min: dominant marker must be >= ratio_min * second-highest
-            to be classified as single-marker. Otherwise → "multi".
-        marker_map: dict mapping marker name → CZI channel index,
-            e.g. {'gcg': 2, 'ins': 3, 'sst': 5}
-        marker_top_pct: for pct_channels, classify the top N% of cells
-            as marker-positive (default 5 = 95th percentile)
-        pct_channels: set of marker names that should use percentile-based
-            thresholding instead of GMM (default {'sst'})
-        gmm_p_cutoff: GMM posterior probability cutoff for signal classification.
-            Higher = stricter (fewer false positives). (default 0.75)
-        threshold_factor: Divisor for the raw threshold. Values > 1 make
-            classification more permissive (e.g. 2.0 halves the threshold).
-            Matches the pipeline pre-filter's marker_signal_factor. (default 1.0)
-
-    Returns (norm_ranges, ch_thresholds, ratio_min) for classify_islet_marker(),
-        or None if too few detections for reliable thresholds.
-    """
-    if marker_map is None:
-        marker_map = {'gcg': 2, 'ins': 3, 'sst': 5}
-    if pct_channels is None:
-        pct_channels = {'sst'}
-
-    if len(all_detections) < 10:
-        logger.warning(f"Only {len(all_detections)} detections — too few for reliable "
-                       "marker thresholds. Skipping marker classification.")
-        return None
-
-    from sklearn.mixture import GaussianMixture
-
-    # Build arrays from features using marker_map channel indices
-    marker_arrays = {}
-    for name, ch_idx in marker_map.items():
-        marker_arrays[name] = np.array([
-            d.get('features', {}).get(f'ch{ch_idx}_mean', 0) for d in all_detections
-        ])
-
-    norm_ranges = {}
-    ch_thresholds = {}
-
-    for name, ch_idx in marker_map.items():
-        ch_key = f'ch{ch_idx}'
-        ch_name = name.capitalize()
-        arr = marker_arrays[name]
-        # Exclude zero-valued entries (cells with no signal or missing features)
-        arr_pos = arr[arr > 0]
-        if len(arr_pos) < 10:
-            logger.warning(f"Only {len(arr_pos)} cells with nonzero {ch_name} — using full array for percentiles")
-            arr_pos = arr
-        lo = float(np.percentile(arr_pos, 1))
-        hi = float(np.percentile(arr_pos, 99.5))
-        norm_ranges[ch_key] = (lo, hi)
-
-        if name in pct_channels:
-            # --- Percentile-based threshold (for channels with poor GMM separation) ---
-            # threshold_factor widens the top-N%: factor=2 → top 5% becomes top 10%
-            effective_pct = min(marker_top_pct * threshold_factor, 50)
-            method = f'top-{effective_pct:.0f}%'
-            pct_cutoff = 100 - effective_pct
-            raw_cutoff = float(np.percentile(arr_pos, pct_cutoff))
-            bg_mean = sig_mean = separation = 0  # not computed for percentile channels
-            logger.info(f"  {ch_name}: using top {effective_pct:.0f}% "
-                        f"(p{pct_cutoff:.0f}={raw_cutoff:.0f})")
-        else:
-            # --- GMM on log-transformed intensities ---
-            # Log1p compresses dynamic range, making background vs signal more Gaussian.
-            log_arr = np.log1p(arr_pos).reshape(-1, 1)
-
-            gmm = GaussianMixture(n_components=2, random_state=42, max_iter=200)
-            gmm.fit(log_arr)
-
-            signal_idx = int(np.argmax(gmm.means_.flatten()))
-            bg_idx = 1 - signal_idx
-            bg_mean = float(np.exp(gmm.means_.flatten()[bg_idx]))
-            sig_mean = float(np.exp(gmm.means_.flatten()[signal_idx]))
-
-            means = gmm.means_.flatten()
-            stds = np.sqrt(gmm.covariances_.flatten())
-            separation = abs(means[signal_idx] - means[bg_idx]) / max(stds[bg_idx], stds[signal_idx])
-
-            method = f'GMM(P≥{gmm_p_cutoff})'
-            # Find raw threshold where P(signal) = gmm_p_cutoff via binary search.
-            # Higher than P=0.5 crossover — requires stronger evidence of signal,
-            # reducing false positives and multi-marker misclassification.
-            lo_raw, hi_raw = 0.0, float(arr.max())
-            for _ in range(50):
-                mid = (lo_raw + hi_raw) / 2
-                p = gmm.predict_proba(np.log1p(np.array([[mid]])))
-                if p[0, signal_idx] > gmm_p_cutoff:
-                    hi_raw = mid
-                else:
-                    lo_raw = mid
-            raw_cutoff = (lo_raw + hi_raw) / 2
-
-        # Apply threshold_factor to GMM channels only (>1 = more permissive).
-        # Percentile channels already incorporate threshold_factor via widened percentage.
-        if threshold_factor > 1.0 and name not in pct_channels:
-            raw_cutoff = raw_cutoff / threshold_factor
-
-        # Convert raw threshold to normalized [0,1] for classify_islet_marker()
-        if hi > lo:
-            auto_t = float(np.clip((raw_cutoff - lo) / (hi - lo), 0.0, 1.0))
-        else:
-            auto_t = 0.5
-
-        # Count positive cells
-        n_pos = int(np.sum(arr > raw_cutoff))
-        pos_pct = 100 * n_pos / len(arr) if len(arr) > 0 else 0
-
-        # Allow manual override
-        if vis_threshold_overrides and ch_key in vis_threshold_overrides:
-            ch_thresholds[ch_key] = vis_threshold_overrides[ch_key]
-            override_raw = lo + vis_threshold_overrides[ch_key] * (hi - lo)
-            n_override = int(np.sum(arr > override_raw))
-            logger.info(f"Islet {ch_name}({ch_key}): {method} bg={bg_mean:.0f}, sig={sig_mean:.0f}, "
-                        f"sep={separation:.2f}σ, auto={auto_t:.3f} (raw={raw_cutoff:.0f}, {pos_pct:.1f}%), "
-                        f"OVERRIDE={vis_threshold_overrides[ch_key]:.3f} "
-                        f"({100*n_override/len(arr):.1f}%)")
-        else:
-            ch_thresholds[ch_key] = auto_t
-            logger.info(f"Islet {ch_name}({ch_key}): p1={lo:.1f}, p99.5={hi:.1f}, "
-                        f"{method} bg={bg_mean:.0f}, sig={sig_mean:.0f}, sep={separation:.2f}σ, "
-                        f"threshold={auto_t:.3f} (raw>{raw_cutoff:.0f})")
-            logger.info(f"  {ch_name}-positive: {n_pos} cells ({pos_pct:.1f}%)")
-
-    logger.info(f"Islet marker ratio_min: {ratio_min}x (dominant must be >= {ratio_min}x runner-up)")
-    return (norm_ranges, ch_thresholds, ratio_min)
+# compute_islet_marker_thresholds() moved to segmentation/utils/islet_utils.py (imported at top)
 
 
 def filter_and_create_html_samples(
@@ -1620,270 +1391,10 @@ def filter_and_create_html_samples(
     return samples
 
 
-def detections_to_label_array(detections, shape):
-    """
-    Convert a list of Detection objects to a label array.
-
-    Args:
-        detections: List of Detection objects
-        shape: (height, width) tuple for the output array
-
-    Returns:
-        uint32 array with labels
-    """
-    label_array = np.zeros(shape, dtype=np.uint32)
-    for i, det in enumerate(detections, start=1):
-        label_array[det.mask] = i
-    return label_array
-
-
-# NOTE: HDF5 compression utilities (create_hdf5_dataset, HDF5_COMPRESSION_KWARGS, HDF5_COMPRESSION_NAME)
-# are now imported from segmentation.io.html_export (Issue #7 - consolidated)
-# Alias for backwards compatibility
-HDF5_COMPRESSION = HDF5_COMPRESSION_KWARGS
-
-
-# =============================================================================
-# FEATURE EXTRACTION (shared across all cell types)
-# =============================================================================
-# NOTE: extract_morphological_features is now imported from
-# segmentation.utils.feature_extraction (Issue #7 - consolidated from 7 files)
-# This alias preserves backwards compatibility for code in this file.
-extract_morphological_features = _shared_extract_morphological_features
-
-
-
 # =============================================================================
 # CZI LOADING
 # =============================================================================
-
-def get_czi_metadata(czi_path, scene: int = 0):
-    """
-    Extract metadata from CZI file without loading image data.
-
-    Args:
-        czi_path: Path to CZI file
-        scene: Scene index (0-based, default 0). Pass None for global bbox.
-
-    Returns dict with:
-        - channels: list of channel info (name, wavelength, fluor)
-        - pixel_size_um: pixel size in microns
-        - mosaic_size: (width, height) in pixels for the specified scene
-        - n_channels: number of channels
-        - n_scenes: number of scenes in the CZI
-    """
-    import xml.etree.ElementTree as ET
-
-    czi_path = str(czi_path)
-    metadata = {
-        'channels': [],
-        'pixel_size_um': 0.22,  # default
-        'mosaic_size': None,
-        'n_channels': 0,
-        'n_scenes': 1,
-    }
-
-    n_data_channels = None  # actual channel count from file dimensions
-
-    # Try pylibCZIrw first (better for large files)
-    try:
-        from pylibCZIrw import czi as pylibczi
-
-        with pylibczi.open_czi(czi_path) as czidoc:
-            # Get per-scene dimensions if available
-            try:
-                scene_bbox = czidoc.scenes_bounding_rectangle
-                if scene_bbox and len(scene_bbox) > 0:
-                    metadata['n_scenes'] = len(scene_bbox)
-                    if scene is not None and scene in scene_bbox:
-                        rect = scene_bbox[scene]
-                        metadata['mosaic_size'] = (rect.w, rect.h)
-                    else:
-                        # Fallback to total bounding box
-                        dims = czidoc.total_bounding_box
-                        metadata['mosaic_size'] = (dims['X'][1] - dims['X'][0], dims['Y'][1] - dims['Y'][0])
-                else:
-                    dims = czidoc.total_bounding_box
-                    metadata['mosaic_size'] = (dims['X'][1] - dims['X'][0], dims['Y'][1] - dims['Y'][0])
-            except (AttributeError, Exception):
-                # Older pylibCZIrw without scenes_bounding_rectangle
-                dims = czidoc.total_bounding_box
-                metadata['mosaic_size'] = (dims['X'][1] - dims['X'][0], dims['Y'][1] - dims['Y'][0])
-
-            # Get metadata XML
-            meta_xml = czidoc.raw_metadata
-            root = ET.fromstring(meta_xml)
-
-    except ImportError:
-        # Fall back to aicspylibczi
-        from aicspylibczi import CziFile
-        reader = CziFile(czi_path)
-
-        # Query scene count and channel count from dims_shape
-        # dims_shape returns a list with one entry per scene
-        n_data_channels = None
-        try:
-            dims_shape_list = reader.get_dims_shape()
-            metadata['n_scenes'] = len(dims_shape_list)
-            if 'C' in dims_shape_list[0]:
-                n_data_channels = dims_shape_list[0]['C'][1] - dims_shape_list[0]['C'][0]
-        except Exception:
-            pass
-
-        # Get per-scene bounding box
-        if scene is not None:
-            bbox = reader.get_mosaic_scene_bounding_box(index=scene)
-        else:
-            bbox = reader.get_mosaic_bounding_box()
-        metadata['mosaic_size'] = (bbox.w, bbox.h)
-
-        meta_xml = reader.meta
-        if isinstance(meta_xml, str):
-            root = ET.fromstring(meta_xml)
-        else:
-            root = meta_xml
-
-    # Parse XML for channel info.
-    # CZI XML may contain duplicate <Channel> entries across sections (e.g.
-    # EDFvar files have 3x5=15 entries for 5 actual channels). We collect
-    # all entries indexed by Channel:N id, merging metadata from the richest
-    # entry per index. Then limit to actual data channel count from dims_shape.
-    channel_map = {}  # index -> ch_info dict
-    for channel in root.iter('Channel'):
-        ch_id = channel.get('Id', '')
-        name = channel.get('Name', '')
-
-        # Extract channel index from Id like "Channel:0", "Channel:1", etc.
-        ch_idx = None
-        if ch_id and ch_id.startswith('Channel:'):
-            try:
-                ch_idx = int(ch_id.split(':')[1])
-            except (ValueError, IndexError) as e:
-                logger.debug(f"Could not parse channel index from '{ch_id}': {e}")
-
-        fluor = channel.find('.//Fluor')
-        fluor_text = fluor.text if fluor is not None else 'N/A'
-        emission = channel.find('.//EmissionWavelength')
-        emission_nm = float(emission.text) if emission is not None and emission.text else None
-        excitation = channel.find('.//ExcitationWavelength')
-        excitation_nm = float(excitation.text) if excitation is not None and excitation.text else None
-        dye_name = channel.find('.//DyeName')
-        dye = dye_name.text if dye_name is not None else fluor_text
-
-        if ch_idx is not None:
-            existing = channel_map.get(ch_idx)
-            if existing is None:
-                channel_map[ch_idx] = {
-                    'index': ch_idx, 'name': name, 'id': ch_id,
-                    'fluorophore': fluor_text, 'emission_nm': emission_nm,
-                    'excitation_nm': excitation_nm, 'dye': dye,
-                }
-            else:
-                # Merge: prefer non-null/non-default values
-                if fluor_text and fluor_text != 'N/A' and existing['fluorophore'] == 'N/A':
-                    existing['fluorophore'] = fluor_text
-                if emission_nm and not existing['emission_nm']:
-                    existing['emission_nm'] = emission_nm
-                if excitation_nm and not existing['excitation_nm']:
-                    existing['excitation_nm'] = excitation_nm
-                if dye and dye != 'N/A' and existing['dye'] in ('N/A', existing['fluorophore']):
-                    existing['dye'] = dye
-
-    # Build sorted channel list
-    channels = [channel_map[k] for k in sorted(channel_map.keys())]
-
-    # Limit to actual data channel count if known (from dims_shape)
-    if n_data_channels is not None and len(channels) > n_data_channels:
-        channels = channels[:n_data_channels]
-
-    metadata['channels'] = channels
-    metadata['n_channels'] = len(channels)
-
-    # Parse pixel size
-    for scaling in root.iter('Scaling'):
-        for items in scaling.iter('Items'):
-            for distance in items.iter('Distance'):
-                if distance.get('Id') == 'X':
-                    value = distance.find('Value')
-                    if value is not None and value.text:
-                        metadata['pixel_size_um'] = float(value.text) * 1e6
-                        break
-
-    return metadata
-
-
-def print_czi_metadata(czi_path, scene: int = 0):
-    """Print CZI metadata in human-readable format."""
-    logger.info(f"CZI Metadata: {Path(czi_path).name}")
-    logger.info("=" * 60)
-
-    try:
-        meta = get_czi_metadata(czi_path, scene=scene)
-
-        if meta['mosaic_size']:
-            w, h = meta['mosaic_size']
-            logger.info(f"Mosaic size: {w:,} x {h:,} px")
-
-        logger.info(f"Pixel size: {meta['pixel_size_um']:.4f} µm/px")
-        logger.info(f"Number of channels: {meta['n_channels']}")
-
-        logger.info("Channels:")
-        logger.info("-" * 60)
-        for ch in meta['channels']:
-            ex = f"{ch['excitation_nm']:.0f}" if ch['excitation_nm'] else "N/A"
-            em = f"{ch['emission_nm']:.0f}" if ch['emission_nm'] else "N/A"
-            logger.info(f"  [{ch['index']}] {ch['name']}")
-            logger.info(f"      Fluorophore: {ch['fluorophore']}")
-            logger.info(f"      Excitation: {ex} nm | Emission: {em} nm")
-
-        logger.info("=" * 60)
-        return meta
-
-    except Exception as e:
-        logger.error(f"ERROR reading metadata: {e}")
-        logger.error("  File may be on slow network mount - try copying locally first")
-        return None
-
-
-def load_czi(czi_path):
-    """
-    Load CZI file and return reader + metadata.
-
-    DEPRECATED: Use CZILoader from shared.czi_loader instead for RAM-first architecture.
-    This function is kept for backwards compatibility with external scripts.
-    """
-    from aicspylibczi import CziFile
-
-    logger.info(f"Loading CZI: {czi_path}")
-    reader = CziFile(str(czi_path))
-
-    bbox = reader.get_mosaic_bounding_box()
-    mosaic_info = {
-        'x': bbox.x,
-        'y': bbox.y,
-        'width': bbox.w,
-        'height': bbox.h,
-    }
-    logger.info(f"  Mosaic: {mosaic_info['width']:,} x {mosaic_info['height']:,} px")
-
-    # Get pixel size from pre-parsed metadata or parse now
-    pixel_size_um = 0.22
-    try:
-        meta = get_czi_metadata(czi_path)
-        pixel_size_um = meta['pixel_size_um']
-
-        # Print channel info
-        if meta['channels']:
-            logger.info(f"  Channels: {len(meta['channels'])}")
-            for ch in meta['channels']:
-                em = f"{ch['emission_nm']:.0f}nm" if ch['emission_nm'] else ""
-                logger.info(f"    [{ch['index']}] {ch['name']} {em}")
-    except Exception as e:
-        logger.warning(f"Could not parse metadata ({e}), using defaults")
-
-    logger.info(f"  Pixel size: {pixel_size_um:.4f} µm/px")
-
-    return reader, mosaic_info, pixel_size_um
+# get_czi_metadata() and print_czi_metadata() moved to segmentation/io/czi_loader.py (imported at top)
 
 
 def generate_tile_grid(mosaic_info, tile_size, overlap_fraction=0.0):
@@ -1912,90 +1423,6 @@ def generate_tile_grid(mosaic_info, tile_size, overlap_fraction=0.0):
             tiles.append({'x': x, 'y': y})
 
     return tiles
-
-
-def load_all_channels_to_ram(reader, mosaic_info, n_channels=None, strip_height=2000):
-    """
-    Load ALL channels into RAM as numpy array using strip-based loading.
-
-    DEPRECATED: Use CZILoader from shared.czi_loader with load_to_ram=True instead.
-    This function is kept for backwards compatibility with external scripts.
-
-    For large network-mounted files, this reads in horizontal strips (rows)
-    to show progress and be more robust than one huge read.
-
-    Args:
-        reader: CziFile reader
-        mosaic_info: Dict with x, y, width, height
-        n_channels: Number of channels (auto-detect if None)
-        strip_height: Height of each strip to read (default 2000 rows)
-
-    Returns:
-        Dict mapping channel index to numpy array of shape (height, width)
-    """
-    import time
-
-    x_start = mosaic_info['x']
-    y_start = mosaic_info['y']
-    width = mosaic_info['width']
-    height = mosaic_info['height']
-
-    # Auto-detect number of channels
-    if n_channels is None:
-        dims = reader.get_dims_shape()
-        for dim in dims:
-            if 'C' in dim:
-                n_channels = dim['C'][1]
-                break
-        if n_channels is None:
-            n_channels = 1
-
-    logger.info(f"  Loading {n_channels} channels into RAM (strip-based)...")
-    per_channel_gb = width * height * 2 / 1e9
-    total_gb = per_channel_gb * n_channels
-    logger.info(f"  Size: {width:,} x {height:,} px x {n_channels} channels = {total_gb:.1f} GB")
-
-    n_strips = (height + strip_height - 1) // strip_height
-    logger.info(f"  Reading in {n_strips} strips of {strip_height} rows each")
-
-    start_time = time.time()
-
-    channels = {}
-    for c in range(n_channels):
-        logger.info(f"    Channel {c}:")
-        ch_start = time.time()
-
-        # Pre-allocate full array for this channel
-        arr = np.empty((height, width), dtype=np.uint16)
-
-        # Read in strips
-        for strip_idx in range(n_strips):
-            y_off = strip_idx * strip_height
-            h = min(strip_height, height - y_off)
-
-            strip_start = time.time()
-            strip = reader.read_mosaic(
-                region=(x_start, y_start + y_off, width, h),
-                scale_factor=1,
-                C=c
-            )
-            strip = np.squeeze(strip)
-            arr[y_off:y_off + h, :] = strip
-
-            strip_elapsed = time.time() - strip_start
-            strip_mb = width * h * 2 / 1e6
-            pct = (strip_idx + 1) * 100 // n_strips
-            logger.debug(f"      Strip {strip_idx + 1}/{n_strips} ({pct}%): {strip_mb:.0f} MB in {strip_elapsed:.1f}s ({strip_mb / strip_elapsed:.0f} MB/s)")
-
-        channels[c] = arr
-
-        ch_elapsed = time.time() - ch_start
-        logger.info(f"    Channel {c} done: {per_channel_gb:.1f} GB in {ch_elapsed:.1f}s ({per_channel_gb * 1000 / ch_elapsed:.1f} MB/s)")
-
-    elapsed = time.time() - start_time
-    logger.info(f"  Total load time: {elapsed:.1f}s ({total_gb * 1000 / elapsed:.1f} MB/s)")
-
-    return channels
 
 
 # =============================================================================
@@ -2272,16 +1699,14 @@ def create_sample_from_detection(tile_x, tile_y, tile_rgb, masks, feat, pixel_si
     crop_with_contour = draw_mask_contour(crop_norm, crop_mask, color=contour_color, thickness=2, bw_dashed=_bw)
 
     # Keep at 224x224 (same as classifier input) - already correct size from crop
-    pil_img = Image.fromarray(crop_with_contour)
-
-    img_b64, mime = image_to_base64(pil_img, format='PNG')
+    img_b64, mime = image_to_base64(crop_with_contour, format='PNG')
 
     # Create unique ID using global coordinates (consistent with detection JSON)
     # Global center = tile origin + local center
     local_cx, local_cy = feat['center'][0], feat['center'][1]
     global_cx = tile_x + local_cx
     global_cy = tile_y + local_cy
-    uid = f"{slide_name}_{cell_type}_{int(round(global_cx))}_{int(round(global_cy))}"
+    uid = f"{slide_name}_{cell_type}_{int(global_cx)}_{int(global_cy)}"
 
     # Get stats from features
     area_um2 = features.get('area', 0) * (pixel_size_um ** 2)
@@ -2390,7 +1815,12 @@ def run_pipeline(args):
             if config_file.exists():
                 with open(config_file) as f:
                     cfg = json.load(f)
-                pixel_size_um = cfg.get('pixel_size_um', 0.1725)
+                pixel_size_um = cfg.get('pixel_size_um')
+                if pixel_size_um is None:
+                    raise ValueError(
+                        f"pipeline_config.json is missing 'pixel_size_um'. "
+                        f"Re-run detection or add pixel_size_um to {config_file}"
+                    )
                 mosaic_info = {'width': cfg.get('width', 0), 'height': cfg.get('height', 0),
                                'x': cfg.get('x_start', 0), 'y': cfg.get('y_start', 0)}
             else:
@@ -2404,7 +1834,7 @@ def run_pipeline(args):
             _finish_pipeline(
                 args, all_detections, [], slide_output_dir, slide_output_dir / "tiles",
                 pixel_size_um, slide_name, mosaic_info, run_timestamp, pct,
-                skip_html=True,
+                skip_html=True, resumed=True,
             )
             return
 
@@ -2558,7 +1988,6 @@ def run_pipeline(args):
 
     # Apply Reinhard normalization if params file provided (whole-slide, before tiling)
     if getattr(args, 'norm_params_file', None) and use_ram:
-        import json as _json
         from segmentation.preprocessing.stain_normalization import apply_reinhard_normalization_MEDIAN
 
         logger.info(f"\n{'='*70}")
@@ -2567,7 +1996,7 @@ def run_pipeline(args):
         logger.info(f"Loading params from: {args.norm_params_file}")
 
         with open(args.norm_params_file, 'r') as f:
-            norm_params = _json.load(f)
+            norm_params = json.load(f)
 
         # Validate required keys
         required_keys = {'L_median', 'L_mad', 'a_median', 'a_mad', 'b_median', 'b_mad'}
@@ -2836,7 +2265,7 @@ def run_pipeline(args):
         pipeline_config['display_channels'] = getattr(args, 'islet_display_chs', [2, 3, 5])
         pipeline_config['marker_channels'] = getattr(args, 'islet_marker_channels', 'gcg:2,ins:3,sst:5')
     elif args.cell_type == 'tissue_pattern':
-        pipeline_config['display_channels'] = [int(x) for x in args.tp_display_channels.split(',')]
+        pipeline_config['display_channels'] = getattr(args, 'tp_display_channels_list', [0, 3, 1])
     config_file = slide_output_dir / 'pipeline_config.json'
     if not config_file.exists() or not getattr(args, 'resume', None):
         with open(config_file, 'w') as f:
@@ -2873,7 +2302,7 @@ def run_pipeline(args):
         _finish_pipeline(
             args, all_detections, all_samples, slide_output_dir, tiles_dir,
             pixel_size_um, slide_name, mosaic_info, run_timestamp, pct,
-            skip_html=skip_html,
+            skip_html=skip_html, resumed=True,
             all_tiles=all_tiles, tissue_tiles=tissue_tiles, sampled_tiles=sampled_tiles,
         )
         return
@@ -2883,72 +2312,69 @@ def run_pipeline(args):
     # Use CellDetector + strategy pattern for all cell types
     logger.info("Initializing detector...")
 
-    # All cell types use the CellDetector + strategy pattern
-    if True:  # All cell types supported
-        # New CellDetector with strategy pattern
-        # Note: mesothelium strategy doesn't need SAM2 (uses ridge detection)
-        detector = CellDetector(device="cuda")
-        segmenter = None  # Not used for these cell types
+    # CellDetector with strategy pattern
+    # Note: mesothelium strategy doesn't need SAM2 (uses ridge detection)
+    detector = CellDetector(device="cuda")
+    segmenter = None  # Not used for these cell types
 
-        # Load NMJ classifier if provided (supports CNN .pth or RF .pkl)
-        classifier_loaded = False
-        if args.cell_type == 'nmj' and getattr(args, 'nmj_classifier', None):
-            from segmentation.detection.strategies.nmj import load_classifier
+    # Load NMJ classifier if provided (supports CNN .pth or RF .pkl)
+    classifier_loaded = False
+    if args.cell_type == 'nmj' and getattr(args, 'nmj_classifier', None):
+        from segmentation.detection.strategies.nmj import load_classifier
 
-            logger.info(f"Loading NMJ classifier from {args.nmj_classifier}...")
-            classifier_data = load_classifier(args.nmj_classifier, device=detector.device)
+        logger.info(f"Loading NMJ classifier from {args.nmj_classifier}...")
+        classifier_data = load_classifier(args.nmj_classifier, device=detector.device)
 
-            if classifier_data['type'] == 'cnn':
-                # CNN classifier - use transform pipeline
-                from torchvision import transforms
-                classifier_transform = transforms.Compose([
-                    transforms.Resize((224, 224)),
-                    transforms.ToTensor(),
-                    transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])
-                ])
-                detector.models['classifier'] = classifier_data['model']
-                detector.models['classifier_type'] = 'cnn'
-                detector.models['transform'] = classifier_transform
-                detector.models['device'] = classifier_data['device']
-                logger.info("CNN classifier loaded successfully")
-                classifier_loaded = True
+        if classifier_data['type'] == 'cnn':
+            # CNN classifier - use transform pipeline
+            from torchvision import transforms
+            classifier_transform = transforms.Compose([
+                transforms.Resize((224, 224)),
+                transforms.ToTensor(),
+                transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])
+            ])
+            detector.models['classifier'] = classifier_data['model']
+            detector.models['classifier_type'] = 'cnn'
+            detector.models['transform'] = classifier_transform
+            detector.models['device'] = classifier_data['device']
+            logger.info("CNN classifier loaded successfully")
+            classifier_loaded = True
+        else:
+            # RF classifier - use features directly
+            # New format uses 'pipeline', legacy uses 'model'
+            if 'pipeline' in classifier_data:
+                detector.models['classifier'] = classifier_data['pipeline']
+                detector.models['scaler'] = None  # Pipeline handles scaling internally
             else:
-                # RF classifier - use features directly
-                # New format uses 'pipeline', legacy uses 'model'
-                if 'pipeline' in classifier_data:
-                    detector.models['classifier'] = classifier_data['pipeline']
-                    detector.models['scaler'] = None  # Pipeline handles scaling internally
-                else:
-                    detector.models['classifier'] = classifier_data['model']
-                    detector.models['scaler'] = classifier_data.get('scaler')
-                detector.models['classifier_type'] = 'rf'
-                detector.models['feature_names'] = classifier_data['feature_names']
-                logger.info(f"RF classifier loaded successfully ({len(classifier_data['feature_names'])} features)")
-                classifier_loaded = True
-        # Load islet classifier if provided (generic RF loading)
-        elif args.cell_type == 'islet' and getattr(args, 'islet_classifier', None):
-            from segmentation.detection.strategies.nmj import load_nmj_rf_classifier
-            logger.info(f"Loading islet RF classifier from {args.islet_classifier}...")
-            classifier_data = load_nmj_rf_classifier(args.islet_classifier)
-            # load_nmj_rf_classifier always returns 'pipeline' key (wraps legacy format)
-            detector.models['classifier'] = classifier_data['pipeline']
-            detector.models['scaler'] = None
+                detector.models['classifier'] = classifier_data['model']
+                detector.models['scaler'] = classifier_data.get('scaler')
             detector.models['classifier_type'] = 'rf'
             detector.models['feature_names'] = classifier_data['feature_names']
-            logger.info(f"Islet RF classifier loaded ({len(classifier_data['feature_names'])} features)")
+            logger.info(f"RF classifier loaded successfully ({len(classifier_data['feature_names'])} features)")
             classifier_loaded = True
-        # Load tissue_pattern classifier if provided (generic RF loading)
-        elif args.cell_type == 'tissue_pattern' and getattr(args, 'tp_classifier', None):
-            from segmentation.detection.strategies.nmj import load_nmj_rf_classifier
-            logger.info(f"Loading tissue_pattern RF classifier from {args.tp_classifier}...")
-            classifier_data = load_nmj_rf_classifier(args.tp_classifier)
-            detector.models['classifier'] = classifier_data['pipeline']
-            detector.models['scaler'] = None
-            detector.models['classifier_type'] = 'rf'
-            detector.models['feature_names'] = classifier_data['feature_names']
-            logger.info(f"Tissue pattern RF classifier loaded ({len(classifier_data['feature_names'])} features)")
-            classifier_loaded = True
-
+    # Load islet classifier if provided (generic RF loading)
+    elif args.cell_type == 'islet' and getattr(args, 'islet_classifier', None):
+        from segmentation.detection.strategies.nmj import load_nmj_rf_classifier
+        logger.info(f"Loading islet RF classifier from {args.islet_classifier}...")
+        classifier_data = load_nmj_rf_classifier(args.islet_classifier)
+        # load_nmj_rf_classifier always returns 'pipeline' key (wraps legacy format)
+        detector.models['classifier'] = classifier_data['pipeline']
+        detector.models['scaler'] = None
+        detector.models['classifier_type'] = 'rf'
+        detector.models['feature_names'] = classifier_data['feature_names']
+        logger.info(f"Islet RF classifier loaded ({len(classifier_data['feature_names'])} features)")
+        classifier_loaded = True
+    # Load tissue_pattern classifier if provided (generic RF loading)
+    elif args.cell_type == 'tissue_pattern' and getattr(args, 'tp_classifier', None):
+        from segmentation.detection.strategies.nmj import load_nmj_rf_classifier
+        logger.info(f"Loading tissue_pattern RF classifier from {args.tp_classifier}...")
+        classifier_data = load_nmj_rf_classifier(args.tp_classifier)
+        detector.models['classifier'] = classifier_data['pipeline']
+        detector.models['scaler'] = None
+        detector.models['classifier_type'] = 'rf'
+        detector.models['feature_names'] = classifier_data['feature_names']
+        logger.info(f"Tissue pattern RF classifier loaded ({len(classifier_data['feature_names'])} features)")
+        classifier_loaded = True
 
     # Auto-detect annotation run: no classifier → show ALL candidates in HTML
     # Must happen BEFORE tile processing so filter_and_create_html_samples uses threshold=0.0
@@ -2973,7 +2399,16 @@ def run_pipeline(args):
             'mk_max_area': args.mk_max_area,
         }
     elif args.cell_type == 'cell':
-        params = {}
+        params = {
+            'min_area_um': args.min_cell_area,
+            'max_area_um': args.max_cell_area,
+        }
+        if args.cellpose_input_channels:
+            try:
+                parts = args.cellpose_input_channels.split(',')
+                params['cellpose_input_channels'] = [int(parts[0]), int(parts[1])]
+            except (ValueError, IndexError):
+                raise ValueError(f"--cellpose-input-channels must be two integers like '1,0', got '{args.cellpose_input_channels}'")
     elif args.cell_type == 'vessel':
         params = {
             'min_vessel_diameter_um': args.min_vessel_diameter,
@@ -3024,11 +2459,9 @@ def run_pipeline(args):
 
     logger.info(f"Detection params: {params}")
 
-    # Create strategy for new detector pattern
-    strategy = None
-    if use_new_detector:
-        strategy = create_strategy_for_cell_type(args.cell_type, params, pixel_size_um)
-        logger.info(f"Using {strategy.name} strategy: {strategy.get_config()}")
+    # Create strategy for detector
+    strategy = create_strategy_for_cell_type(args.cell_type, params, pixel_size_um)
+    logger.info(f"Using {strategy.name} strategy: {strategy.get_config()}")
 
     # Load vessel classifier if ML classification requested
     vessel_classifier = None
@@ -3110,7 +2543,13 @@ def run_pipeline(args):
         islet_gmm_thresholds = {}
         if args.cell_type == 'islet':
             marker_chs_str = getattr(args, 'islet_marker_channels', 'gcg:2,ins:3,sst:5')
-            marker_chs_list = [int(pair.split(':')[1]) for pair in marker_chs_str.split(',')]
+            try:
+                marker_chs_list = [int(pair.split(':')[1]) for pair in marker_chs_str.split(',')]
+            except (ValueError, IndexError) as e:
+                raise ValueError(
+                    f"Invalid --islet-marker-channels format: '{marker_chs_str}'. "
+                    f"Expected 'name:ch_idx,...' e.g. 'gcg:2,ins:3,sst:5'. Error: {e}"
+                )
             n_pilot = max(1, int(len(sampled_tiles) * 0.05))
             pilot_indices = np.random.choice(len(sampled_tiles), n_pilot, replace=False)
             pilot_tiles = [sampled_tiles[i] for i in pilot_indices]
@@ -3567,7 +3006,7 @@ def run_pipeline(args):
                             elif args.cell_type == 'tissue_pattern':
                                 # Tissue pattern: configurable R/G/B display channels
                                 # Handles any number of display channels (1, 2, or 3+), always produces (h, w, 3)
-                                tp_disp = [int(x) for x in args.tp_display_channels.split(',')]
+                                tp_disp = getattr(args, 'tp_display_channels_list', [0, 3, 1])
                                 _shm_dtype = slide_shm_arr.dtype
                                 rgb_channels = []
                                 for _ci in range(3):
@@ -3734,209 +3173,14 @@ def run_pipeline(args):
 
     # (annotation threshold override already applied before tile loop)
 
-    # ---- Save detections JSON + CSV BEFORE HTML (crash-safe) ----
-    # Ensures dedup results persist even if HTML generation crashes/hangs.
-    for det in all_detections:
-        det['tile_mask_label'] = det.get('mask_label', 0)
-        _gc = det.get('global_center', det.get('center', [0, 0]))
-        det['global_id'] = f"{int(round(_gc[0]))}_{int(round(_gc[1]))}"
-
-    detections_file = slide_output_dir / f'{args.cell_type}_detections.json'
-    with open(detections_file, 'w') as f:
-        json.dump(all_detections, f, cls=NumpyEncoder)
-    logger.info(f"Saved {len(all_detections)} detections to {detections_file}")
-
-    csv_file = slide_output_dir / f'{args.cell_type}_coordinates.csv'
-    with open(csv_file, 'w') as f:
-        if args.cell_type == 'vessel':
-            f.write('uid,global_x_px,global_y_px,global_x_um,global_y_um,outer_diameter_um,wall_thickness_um,confidence\n')
-            for det in all_detections:
-                g_center = det.get('global_center')
-                g_center_um = det.get('global_center_um')
-                if g_center is None or g_center_um is None:
-                    continue
-                if len(g_center) < 2 or g_center[0] is None or g_center[1] is None:
-                    continue
-                if len(g_center_um) < 2 or g_center_um[0] is None or g_center_um[1] is None:
-                    continue
-                feat = det.get('features', {})
-                f.write(f"{det['uid']},{g_center[0]:.1f},{g_center[1]:.1f},"
-                        f"{g_center_um[0]:.2f},{g_center_um[1]:.2f},"
-                        f"{feat.get('outer_diameter_um', 0):.2f},{feat.get('wall_thickness_mean_um', 0):.2f},"
-                        f"{feat.get('confidence', 'unknown')}\n")
-        else:
-            f.write('uid,global_x_px,global_y_px,global_x_um,global_y_um,area_um2\n')
-            for det in all_detections:
-                g_center = det.get('global_center')
-                g_center_um = det.get('global_center_um')
-                if g_center is None or g_center_um is None:
-                    continue
-                if len(g_center) < 2 or g_center[0] is None or g_center[1] is None:
-                    continue
-                if len(g_center_um) < 2 or g_center_um[0] is None or g_center_um[1] is None:
-                    continue
-                feat = det.get('features', {})
-                area_um2 = feat.get('area', 0) * (pixel_size_um ** 2)
-                f.write(f"{det['uid']},{g_center[0]:.1f},{g_center[1]:.1f},"
-                        f"{g_center_um[0]:.2f},{g_center_um[1]:.2f},{area_um2:.2f}\n")
-    logger.info(f"Saved coordinates to {csv_file}")
-
-    # Sort samples: with classifier → descending RF score; without → ascending area
-    if args.cell_type in ('nmj', 'islet', 'tissue_pattern') and classifier_loaded:
-        all_samples.sort(key=lambda x: x['stats'].get('rf_prediction') or 0, reverse=True)
-    else:
-        all_samples.sort(key=lambda x: x['stats'].get('area_um2', 0))
-
-    # Export to HTML
-    if args.cell_type in ('nmj', 'islet', 'tissue_pattern') and len(all_detections) > len(all_samples):
-        logger.info(f"Total detections (all scores): {len(all_detections)}, "
-                     f"shown in HTML (rf_prediction >= {args.html_score_threshold}): {len(all_samples)}")
-    logger.info(f"Exporting to HTML ({len(all_samples)} samples)...")
-    html_dir = slide_output_dir / "html"
-
-    # Channel legend for multi-channel images — derived from CZI metadata when available
-    channel_legend = None
-
-    def _channel_label(ch_idx):
-        """Get human-readable label for a channel index from CZI metadata."""
-        try:
-            for ch in _czi_meta['channels']:
-                if ch['index'] == ch_idx:
-                    name = ch['name']
-                    em = f" ({ch['emission_nm']:.0f}nm)" if ch.get('emission_nm') else ''
-                    return f'{name}{em}'
-        except (NameError, TypeError, KeyError):
-            pass
-        return f'Ch{ch_idx}'
-
-    if args.cell_type == 'nmj' and getattr(args, 'all_channels', False):
-        # Try CZI metadata first, fall back to filename parsing
-        try:
-            channel_legend = {
-                'red': _channel_label(0),
-                'green': _channel_label(1),
-                'blue': _channel_label(2),
-            }
-        except Exception:
-            channel_legend = parse_channel_legend_from_filename(slide_name)
-    elif args.cell_type == 'islet':
-        _islet_disp = getattr(args, 'islet_display_chs', [2, 3, 5])
-        channel_legend = {
-            'red': _channel_label(_islet_disp[0]) if len(_islet_disp) > 0 else 'none',
-            'green': _channel_label(_islet_disp[1]) if len(_islet_disp) > 1 else 'none',
-            'blue': _channel_label(_islet_disp[2]) if len(_islet_disp) > 2 else 'none',
-        }
-    elif args.cell_type == 'tissue_pattern':
-        tp_disp = [int(x) for x in args.tp_display_channels.split(',')]
-        channel_legend = {
-            'red': _channel_label(tp_disp[0]) if len(tp_disp) > 0 else 'none',
-            'green': _channel_label(tp_disp[1]) if len(tp_disp) > 1 else 'none',
-            'blue': _channel_label(tp_disp[2]) if len(tp_disp) > 2 else 'none',
-        }
-
-    # Use slide_name + timestamp as experiment_name so each run gets its own
-    # localStorage namespace (prevents stale annotations from prior runs).
-    # The timestamp ensures re-runs of the same slide don't collide.
-    # For round-2 (--prior-annotations), prior labels come from the preload JS
-    # file (not localStorage), so a unique key is safe for all runs.
-    prior_ann = getattr(args, 'prior_annotations', None)
-    experiment_name = f"{slide_name}_{run_timestamp}_{pct}pct"
-
-    export_samples_to_html(
-        all_samples,
-        html_dir,
-        args.cell_type,
-        samples_per_page=args.samples_per_page,
-        title=f"{args.cell_type.upper()} Annotation Review",
-        page_prefix=f'{args.cell_type}_page',
-        experiment_name=experiment_name,
-        file_name=f"{slide_name}.czi",
-        pixel_size_um=pixel_size_um,
-        tiles_processed=len(sampled_tiles),
-        tiles_total=len(all_tiles),
-        channel_legend=channel_legend,
-        prior_annotations=prior_ann,
+    # ---- Shared post-processing: CSV, JSON, HTML, summary, server ----
+    _finish_pipeline(
+        args, all_detections, all_samples, slide_output_dir, tiles_dir,
+        pixel_size_um, slide_name, mosaic_info, run_timestamp, pct,
+        all_tiles=all_tiles, tissue_tiles=tissue_tiles, sampled_tiles=sampled_tiles,
+        resumed=False, params=params, classifier_loaded=classifier_loaded,
+        is_multiscale=is_multiscale, detector=detector,
     )
-
-    # Clean up multiscale checkpoints after successful completion
-    if is_multiscale:
-        checkpoint_dir = slide_output_dir / "checkpoints"
-        if checkpoint_dir.exists():
-            import shutil
-            shutil.rmtree(checkpoint_dir)
-            logger.info("Multiscale checkpoints cleaned up after successful completion")
-
-    # Export to Leica LMD format for mesothelium
-    if args.cell_type == 'mesothelium' and len(all_detections) > 0:
-        logger.info("Exporting to Leica LMD XML format...")
-        lmd_file = slide_output_dir / f'{args.cell_type}_chunks.xml'
-        export_to_leica_lmd(
-            all_detections,
-            lmd_file,
-            pixel_size_um,
-            image_height_px=mosaic_info['height'],
-            image_width_px=mosaic_info['width'],
-            add_fiducials=args.add_fiducials,
-            flip_y=True,
-        )
-
-    # Save summary
-    summary = {
-        'slide_name': slide_name,
-        'cell_type': args.cell_type,
-        'pixel_size_um': pixel_size_um,
-        'mosaic_width': mosaic_info['width'],
-        'mosaic_height': mosaic_info['height'],
-        'total_tiles': len(all_tiles),
-        'tissue_tiles': len(tissue_tiles),
-        'sampled_tiles': len(sampled_tiles),
-        'total_detections': len(all_detections),
-        'html_displayed': len(all_samples),
-        'params': params,
-        'detections_file': str(detections_file),
-        'coordinates_file': str(csv_file),
-    }
-
-    with open(slide_output_dir / 'summary.json', 'w') as f:
-        json.dump(summary, f, cls=NumpyEncoder)
-
-    # Cleanup detector resources
-    if use_new_detector and detector is not None:
-        detector.cleanup()
-
-    logger.info("=" * 60)
-    logger.info("COMPLETE")
-    logger.info("=" * 60)
-    logger.info(f"Total detections: {len(all_detections)}")
-    logger.info(f"Displayed in HTML: {len(all_samples)} (score >= {args.html_score_threshold})")
-    logger.info(f"Output: {slide_output_dir}")
-    logger.info(f"HTML viewer: {html_dir / 'index.html'}")
-
-    # Start HTTP server and Cloudflare tunnel if requested
-    no_serve = getattr(args, 'no_serve', False)
-    serve_foreground = getattr(args, 'serve', False)
-    serve_background = getattr(args, 'serve_background', True)
-    port = getattr(args, 'port', 8081)
-
-    if no_serve:
-        logger.info("Server disabled (--no-serve)")
-    elif serve_foreground:
-        # Foreground mode: start and wait for Ctrl+C
-        http_proc, tunnel_proc, tunnel_url = start_server_and_tunnel(
-            html_dir, port, background=False,
-            slide_name=slide_name, cell_type=args.cell_type
-        )
-        if http_proc is not None:
-            wait_for_server_shutdown(http_proc, tunnel_proc)
-    elif serve_background:
-        # Background mode: start and exit script
-        start_server_and_tunnel(
-            html_dir, port, background=True,
-            slide_name=slide_name, cell_type=args.cell_type
-        )
-        # Show final server status
-        print("")
-        show_server_status()
 
 
 def main():
@@ -4017,6 +3261,15 @@ def main():
                         help='Minimum MK area in um² (default 200)')
     parser.add_argument('--mk-max-area', type=float, default=2000.0,
                         help='Maximum MK area in um² (default 2000)')
+
+    # Cell strategy parameters
+    parser.add_argument('--cellpose-input-channels', type=str, default=None,
+                        help='Two CZI channel indices for 2-channel Cellpose: CYTO,NUC (e.g., 1,0). '
+                             'Cyto = plasma membrane/cytoplasmic marker, Nuc = nuclear stain.')
+    parser.add_argument('--min-cell-area', type=float, default=50.0,
+                        help='Minimum cell area in um² for --cell-type cell (default 50)')
+    parser.add_argument('--max-cell-area', type=float, default=200.0,
+                        help='Maximum cell area in um² for --cell-type cell (default 200)')
 
     # Vessel parameters
     parser.add_argument('--min-vessel-diameter', type=float, default=10,
@@ -4286,6 +3539,11 @@ def main():
                 args.channel = int(args.tp_detection_channels.split(',')[0])
             except (ValueError, IndexError):
                 parser.error(f"--tp-detection-channels: first entry must be integer, got '{args.tp_detection_channels}'")
+        elif args.cell_type == 'cell' and args.cellpose_input_channels:
+            try:
+                args.channel = int(args.cellpose_input_channels.split(',')[0])
+            except (ValueError, IndexError):
+                parser.error(f"--cellpose-input-channels: first entry must be integer, got '{args.cellpose_input_channels}'")
         else:
             args.channel = 0
 
@@ -4306,9 +3564,10 @@ def main():
             except ValueError:
                 parser.error(f"--islet-marker-channels: channel must be integer, got '{ch.strip()}' in '{pair}'")
 
-    # Handle --cell-type tissue_pattern: auto-enable all-channels
+    # Handle --cell-type tissue_pattern: auto-enable all-channels, parse display channels
     if args.cell_type == 'tissue_pattern':
         args.all_channels = True
+        args.tp_display_channels_list = [int(x) for x in args.tp_display_channels.split(',')]
 
     # Handle --multi-marker: automatically enable dependent flags
     if getattr(args, 'multi_marker', False):

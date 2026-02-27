@@ -1,0 +1,28 @@
+name: msln_bands
+czi_path: /fs/pool/pool-mann-axioscan/01_Users/EdRo_axioscan/xDVP/20251114_Pdgfra546_Msln750_PM647_nuc488-EDFvar-1.czi
+output_dir: /fs/pool/pool-mann-edwin/msln_cell_output/
+
+channels: {0: nuc488, 1: PM647, 2: Msln750, 3: Pdgfra546}
+cell_type: cell
+cellpose_input_channels: [1, 0]   # cyto=PM647 (plasma membrane), nuc=nuc488
+min_area_um: 0                    # no size filter - find all cells
+max_area_um: 100000
+photobleach_correction: true
+all_channels: true
+num_gpus: 4
+
+markers:
+  - {channel: 2, name: MSLN, method: otsu_half}
+
+spatial_network:
+  enabled: true
+  marker_filter: "ch2_mean"       # MSLN+ cells form bands
+  max_edge_distance: 50
+  min_component_cells: 3
+
+slurm:
+  partition: p.hpcl93
+  cpus: 128
+  mem_gb: 500
+  gpus: "l40s:4"
+  time: "3-00:00:00"

@@ -1,0 +1,28 @@
+name: senescence_tdTomato
+czi_dir: /fs/pool/pool-mann-axioscan/01_Users/EdwinMarc/senescence2026/
+czi_glob: "20260213_*-stitch.czi"
+output_dir: /fs/pool/pool-mann-edwin/senescence_output/
+
+channels: {0: nuc488, 1: NeuN647, 2: tdTomato555}
+cell_type: cell
+cellpose_input_channels: [1, 0]   # cyto=NeuN647, nuc=nuc488
+photobleach_correction: true
+all_channels: true
+num_gpus: 2
+
+markers:
+  - {channel: 2, name: tdTomato, method: otsu_half}
+
+spatial_network:
+  marker_filter: "ch2_mean"       # tdTomato+ cells
+  max_edge_distance: 50
+  min_component_cells: 3
+
+slurm:
+  partition: p.hpcl8
+  cpus: 24
+  mem_gb: 350
+  gpus: "rtx5000:2"
+  time: "2-00:00:00"
+  slides_per_job: 6
+  num_jobs: 4

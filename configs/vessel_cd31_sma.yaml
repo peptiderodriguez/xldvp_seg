@@ -1,0 +1,29 @@
+name: vessel_cd31_sma
+czi_path: /fs/pool/pool-mann-axioscan/01_Users/EdRo_axioscan/xDVP/20251106_Fig2_nuc488_CD31_555_SMA647_PM750-EDFvar-stitch.czi
+output_dir: /fs/pool/pool-mann-edwin/vessel_cell_output/
+
+channels: {0: nuc488, 1: SMA647, 2: PM750, 3: CD31_555}
+cell_type: cell
+cellpose_input_channels: [2, 0]   # cyto=PM750 (plasma membrane), nuc=nuc488
+min_area_um: 0                    # no size filter - find all cells
+max_area_um: 100000
+photobleach_correction: true
+all_channels: true
+num_gpus: 4
+
+markers:
+  - {channel: 1, name: SMA, method: otsu_half}
+  - {channel: 3, name: CD31, method: otsu_half}
+
+spatial_network:
+  enabled: true
+  marker_filter: "ch1_mean"       # SMA+ cells form vessel walls
+  max_edge_distance: 50
+  min_component_cells: 5
+
+slurm:
+  partition: p.hpcl93
+  cpus: 128
+  mem_gb: 500
+  gpus: "l40s:4"
+  time: "3-00:00:00"
