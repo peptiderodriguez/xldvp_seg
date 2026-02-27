@@ -363,11 +363,13 @@ class NMJStrategy(DetectionStrategy, MultiChannelFeatureMixin):
         for i, det in enumerate(detections):
             if i in results:
                 det.score = results[i]
-                det.features['prob_nmj'] = results[i]
+                det.features['rf_prediction'] = results[i]
+                det.features['prob_nmj'] = results[i]  # backward compat
                 det.features['confidence'] = results[i]
             else:
                 det.score = 0.0
-                det.features['prob_nmj'] = 0.0
+                det.features['rf_prediction'] = 0.0
+                det.features['prob_nmj'] = 0.0  # backward compat
                 det.features['confidence'] = 0.0
 
         n_above = sum(1 for d in detections if d.score >= self.classifier_threshold)
@@ -441,14 +443,16 @@ class NMJStrategy(DetectionStrategy, MultiChannelFeatureMixin):
         for j, (idx, prob) in enumerate(zip(valid_indices, probs)):
             det = detections[idx]
             det.score = prob
-            det.features['prob_nmj'] = prob
+            det.features['rf_prediction'] = prob
+            det.features['prob_nmj'] = prob  # backward compat
             det.features['confidence'] = prob
 
         # Set score=0 for detections that couldn't be classified (missing features)
         for i, det in enumerate(detections):
             if det.score is None:
                 det.score = 0.0
-                det.features['prob_nmj'] = 0.0
+                det.features['rf_prediction'] = 0.0
+                det.features['prob_nmj'] = 0.0  # backward compat
                 det.features['confidence'] = 0.0
 
         n_above = sum(1 for d in detections if d.score >= self.classifier_threshold)

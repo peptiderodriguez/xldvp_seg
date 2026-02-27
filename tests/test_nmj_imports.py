@@ -115,15 +115,6 @@ class TestHTMLExportImports:
 class TestEntryPointScriptImports:
     """Test that entry point scripts can be imported."""
 
-    def test_run_nmj_segmentation_import(self):
-        """Test that run_nmj_segmentation module can be imported."""
-        import run_nmj_segmentation
-        assert run_nmj_segmentation is not None
-        # Check main functions exist
-        assert hasattr(run_nmj_segmentation, 'detect_nmjs')
-        assert hasattr(run_nmj_segmentation, 'process_czi_for_nmj')
-        assert hasattr(run_nmj_segmentation, 'main')
-
     def test_run_segmentation_import(self):
         """Test that run_segmentation module can be imported."""
         import run_segmentation

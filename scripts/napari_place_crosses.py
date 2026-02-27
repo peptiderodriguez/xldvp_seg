@@ -278,7 +278,7 @@ class CrossPlacer:
         }
 
         with open(self.output_path, 'w') as f:
-            json.dump(data, f, indent=2)
+            json.dump(data, f)
 
         show_info(f"Saved {len(crosses)} crosses to: {self.output_path}")
         print(f"Saved {len(crosses)} reference crosses to: {self.output_path}")

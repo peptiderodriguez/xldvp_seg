@@ -170,7 +170,7 @@ class BatchResult:
         path = Path(path)
 
         with open(path, 'w') as f:
-            json.dump(self.to_dict(), f, indent=2)
+            json.dump(self.to_dict(), f)
 
         logger.info(f"Batch results saved to: {path}")
         return path

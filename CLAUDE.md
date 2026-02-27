@@ -68,8 +68,21 @@ python run_segmentation.py \
 ```bash
 --load-to-ram       # Load all channels into RAM (default, faster for network mounts)
 --sequential        # Process one tile at a time (safer memory usage)
---multi-gpu         # Enable multi-GPU mode (cluster)
---num-gpus 4        # Number of GPUs
+--num-gpus 4        # Number of GPUs (always multi-GPU, even with 1)
+```
+
+### Multi-Node Sharding
+```bash
+# Split detection across 4 nodes (each processes 1/4 of tiles)
+python run_segmentation.py --czi-path slide.czi --cell-type nmj \
+    --tile-shard 0/4 --resume /shared/output/dir  # node 0
+    --tile-shard 1/4 --resume /shared/output/dir  # node 1
+    # ... etc
+
+# Merge all shards (auto-detects shard manifests, checkpointed)
+python run_segmentation.py --czi-path slide.czi --cell-type nmj \
+    --resume /shared/output/dir --merge-shards
+# Checkpoints: merged_detections.json → detections.json → HTML
 ```
 
 ### View Results
@@ -80,19 +93,18 @@ python -m http.server 8080 --directory /home/dude/mk_output/project/html
 
 ---
 
-## NMJ Pipeline (19-Step Workflow)
+## NMJ Pipeline (Detect Once, Classify Later)
 
 1. Import full CZI into RAM (`--load-to-ram`, default)
 2. Tile with 10% overlap (`--tile-overlap 0.10`)
-3. Sample 10% of tiles (`--sample-fraction 0.10`)
+3. Detect 100% of tiles (or multi-node with `--tile-shard`)
 4. Segment: 98th percentile intensity threshold + morphology + watershed
 5. Extract features: morph + SAM2 (always), ResNet + DINOv2 (opt-in `--extract-deep-features`)
-6. Deduplicate overlapping masks (>10% pixel overlap)
-7. Display ALL candidates in HTML for annotation (auto-detected, threshold → 0.0)
-8. Train RF classifier with annotations (`train_nmj_classifier_features.py`, balanced classes)
-9. Run 100% tiles with classifier — scores ALL, keeps ALL in JSON
-10. Deduplicate again
-11. Show rf_prediction >= 0.5 in HTML (`--html-score-threshold 0.5`, `--prior-annotations` for continuity)
+6. Deduplicate overlapping masks (>10% pixel overlap) — or `--merge-shards` for multi-node
+7. Generate annotation HTML (subsample 1500 via `scripts/regenerate_html.py --max-samples 1500`)
+8. Train RF classifier with annotations (`train_classifier.py`, balanced classes)
+9. Score ALL detections: `scripts/apply_classifier.py` (CPU, seconds — no re-detection)
+10. Generate filtered HTML: `scripts/regenerate_html.py --score-threshold 0.5`
 12. Dilate +0.5 um, RDP simplify (epsilon=5 px)
 13. Two-stage clustering: Round 1 = 500 um, Round 2 = 1000 um, target 375-425 um²
 14. Unclustered = singles
@@ -127,7 +139,7 @@ python -m http.server 8080 --directory /home/dude/mk_output/project/html
 | resnet_context | 2048 | 0.836 |
 | sam2 | 256 | 0.728 |
 
-Use `train_nmj_classifier_features.py --feature-set` to compare subsets and pick the best for your final RF classifier. Morph-only (78 features) is nearly as good as all 6478 combined.
+Use `train_classifier.py --feature-set` to compare subsets and pick the best for your final RF classifier. Morph-only (78 features) is nearly as good as all 6478 combined.
 
 ---
 
@@ -147,14 +159,15 @@ UID format: `{slide}_{celltype}_{x}_{y}`
 
 | Script | Use Case |
 |--------|----------|
-| `run_segmentation.py` | Unified entry point (recommended) |
+| `run_segmentation.py` | Unified entry point: detect, dedup, HTML, CSV (recommended) |
 | `run_lmd_export.py` | Export to Leica LMD format (any cell type) |
+| `train_classifier.py` | Train RF classifier from annotated detections |
+| `scripts/apply_classifier.py` | Score existing detections with trained classifier (no re-detection) |
+| `scripts/regenerate_html.py` | Regenerate HTML viewer from saved detections (all cell types) |
 | `scripts/czi_to_ome_zarr.py` | Convert CZI to OME-Zarr with pyramids |
 | `scripts/napari_place_crosses.py` | Interactive reference cross placement |
 | `scripts/cluster_detections.py` | Biological clustering for LMD well assignment |
 | `scripts/napari_view_lmd_export.py` | View LMD export overlaid on slide |
-| `scripts/add_sma_ring.py` | Retroactively add SMA ring + full-res refinement to vessel detections |
-| `scripts/regenerate_vessel_crops.py` | Regenerate vessel crop images from saved JSON |
 
 ---
 
@@ -168,12 +181,11 @@ UID format: `{slide}_{celltype}_{x}_{y}`
 | Cell | `segmentation/detection/strategies/cell.py` |
 | Vessel | `segmentation/detection/strategies/vessel.py` |
 
-### Multi-GPU Processing
+### Multi-GPU Processing (always used, even with --num-gpus 1)
 | Module | Purpose |
 |--------|---------|
-| `segmentation/processing/multigpu_worker.py` | Generic worker (all cell types) |
-| `segmentation/processing/multigpu_nmj.py` | NMJ-specific wrapper (backward compat) |
-| `segmentation/processing/multigpu_shm.py` | Shared memory manager |
+| `segmentation/processing/multigpu_worker.py` | Generic GPU worker (all cell types) |
+| `segmentation/processing/multigpu_shm.py` | Shared memory manager (SIGTERM cleanup) |
 | `segmentation/processing/tile_processing.py` | Shared `process_single_tile()` |
 
 ### LMD Export
@@ -188,7 +200,6 @@ UID format: `{slide}_{celltype}_{x}_{y}`
 |--------|---------|
 | `compute_normalization_params.py` | Phase 1: compute cross-slide LAB stats |
 | `segmentation/preprocessing/stain_normalization.py` | Phase 2: apply Reinhard per-slide |
-| `visualize_normalization.py` | Visual verification of normalization |
 
 Tissue detection in normalization uses calibrated threshold / 10 for permissive detection.
 
@@ -220,25 +231,18 @@ Tissue detection in normalization uses calibrated threshold / 10 for permissive 
 --min-sma-intensity 30  # Min SMA signal to attempt ring detection
 ```
 
-### Post-processing
-```bash
-# Add SMA ring to existing detections (retroactive)
-python scripts/add_sma_ring.py --input /path/to/vessel_detections_multiscale.json
-python scripts/add_sma_ring.py --skip-crops --min-sma-intensity 20  # fast tuning
-```
-
 ### Multi-Marker (6-type classification)
 artery, arteriole, vein, capillary, lymphatic, collecting_lymphatic
 
 ---
 
-## Hardware
-- **CPU:** 48 cores, **RAM:** 432 GB, **GPU:** NVIDIA RTX 4090 (24 GB)
-- **Storage:** Network mount at `/mnt/x/`
+## Hardware (SLURM Cluster)
+- **p.hpcl8:** 55 nodes, 24 CPUs, 380G RAM, 2x RTX 5000 (interactive dev)
+- **p.hpcl93:** 19 nodes, 64 CPUs, 500G RAM, 4x L40S (batch GPU jobs)
 
 ## Troubleshooting
 
-### OOM: `--sequential`, reduce `--num-workers`, reduce `--tile-size`
+### OOM: reduce `--num-gpus`, reduce tile size
 ### CUDA Boolean: `mask = mask.astype(bool)` for SAM2
 ### SAM2 _orig_hw: `img_h, img_w = sam2_predictor._orig_hw[0]` (list of tuple)
 ### HDF5 LZ4: `import hdf5plugin` before `h5py`

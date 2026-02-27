@@ -212,7 +212,7 @@ def main(base_dir: Path, tiles_dir: Path, clusters_path: Path,
     print("\n[5/5] Saving results...")
     output_path.parent.mkdir(parents=True, exist_ok=True)
     with open(output_path, 'w') as f:
-        json.dump(results, f, indent=2)
+        json.dump(results, f)
     print(f"  Saved to: {output_path}")
 
     # Print area statistics

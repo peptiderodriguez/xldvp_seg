@@ -301,7 +301,7 @@ def main():
 
     output_file = Path(args.output) if args.output else Path("/viper/ptmp2/edrod/xldvp_seg_fresh/reinhard_params_16slides_MEDIAN_NEW.json")
     with open(output_file, 'w') as f:
-        json.dump(params, f, indent=2)
+        json.dump(params, f)
 
     logger.info(f"\nSaved to: {output_file}")
 

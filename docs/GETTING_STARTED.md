@@ -135,11 +135,18 @@ python run_segmentation.py \
 
 The `--all-channels` flag extracts features from all 3 channels (nuclear, BTX, NFL) including ResNet embeddings and inter-channel ratios. Use `--load-to-ram` for faster processing on network mounts.
 
-**Inference with trained classifier:**
+**Inference with trained classifier (detect once, classify later):**
 ```bash
-python run_nmj_inference.py \
-    --czi-path /path/to/muscle.czi \
-    --model-path /path/to/nmj_classifier.pth
+# 1. Score existing detections with trained RF classifier
+python scripts/apply_classifier.py \
+    --detections /path/to/detections.json \
+    --classifier /path/to/rf_classifier.pkl \
+    --output /path/to/detections_scored.json
+
+# 2. Regenerate HTML with score threshold
+python scripts/regenerate_html.py \
+    --detections /path/to/detections_scored.json \
+    --score-threshold 0.5
 ```
 
 ### Vessel Detection
@@ -260,10 +267,10 @@ Click "Export" button to download `annotations.json`:
 ### 4. Train/Retrain Classifier
 
 ```bash
-python train_nmj_classifier.py \
+python train_classifier.py \
     --detections /path/to/detections.json \
     --annotations /path/to/annotations.json \
-    --output-model /path/to/classifier.pth
+    --output-dir /path/to/classifier_output
 ```
 
 ---

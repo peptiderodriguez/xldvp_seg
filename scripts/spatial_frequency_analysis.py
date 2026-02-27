@@ -547,7 +547,7 @@ def main():
 
     # Save transects for reproducibility
     with open(output_dir / 'transects_used.json', 'w') as f:
-        json.dump({'transects': transects}, f, indent=2)
+        json.dump({'transects': transects}, f)
 
     # ── Per-transect analysis ───────────────────────────────────────
 
@@ -657,10 +657,10 @@ def main():
     }
 
     with open(output_dir / 'boundaries.json', 'w') as f:
-        json.dump({'boundaries': all_boundaries}, f, indent=2)
+        json.dump({'boundaries': all_boundaries}, f)
 
     with open(output_dir / 'analysis_summary.json', 'w') as f:
-        json.dump(summary, f, indent=2, default=str)
+        json.dump(summary, f, default=str)
 
     print(f"\nDone. Outputs in {output_dir}/")
     print(f"  Total boundaries detected: {sum(len(b['positions_um']) for b in all_boundaries.values())}")

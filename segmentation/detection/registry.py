@@ -23,6 +23,8 @@ from .strategies import (
     CellStrategy,
     VesselStrategy,
     MesotheliumStrategy,
+    IsletStrategy,
+    TissuePatternStrategy,
 )
 
 
@@ -131,3 +133,5 @@ StrategyRegistry.register('mk', MKStrategy)
 StrategyRegistry.register('cell', CellStrategy)
 StrategyRegistry.register('vessel', VesselStrategy)
 StrategyRegistry.register('mesothelium', MesotheliumStrategy)
+StrategyRegistry.register('islet', IsletStrategy)
+StrategyRegistry.register('tissue_pattern', TissuePatternStrategy)

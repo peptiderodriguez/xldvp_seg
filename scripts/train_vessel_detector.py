@@ -739,7 +739,7 @@ Examples:
     # Save feature importance
     importance_path = output_dir / 'feature_importance.json'
     with open(importance_path, 'w') as f:
-        json.dump(importance, f, indent=2)
+        json.dump(importance, f)
     logger.info(f"\nFeature importance saved to: {importance_path}")
 
     # Save metrics
@@ -764,7 +764,7 @@ Examples:
 
     metrics_path = output_dir / 'training_metrics.json'
     with open(metrics_path, 'w') as f:
-        json.dump(metrics, f, indent=2, default=str)
+        json.dump(metrics, f, default=str)
     logger.info(f"Training metrics saved to: {metrics_path}")
 
     # Generate visualizations

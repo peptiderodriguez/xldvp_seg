@@ -84,20 +84,20 @@ def main():
     feature_names = clf_data['feature_names']
     logger.info(f"Classifier has {len(feature_names)} features")
 
-    # Extract feature matrix
-    X = []
+    # Extract feature matrix (pre-allocated numpy array)
+    n_det = len(detections)
+    n_feat = len(feature_names)
+    X_full = np.zeros((n_det, n_feat), dtype=np.float32)
     valid_indices = []
     for i, det in enumerate(detections):
         features = det.get('features', {})
         if not features:
             continue
-        row = []
-        for fn in feature_names:
+        for j, fn in enumerate(feature_names):
             val = features.get(fn, 0)
             if isinstance(val, (list, tuple)):
                 val = 0
-            row.append(float(val) if val is not None else 0.0)
-        X.append(row)
+            X_full[i, j] = float(val) if val is not None else 0.0
         valid_indices.append(i)
 
     logger.info(f"Extracted features for {len(valid_indices):,} / {len(detections):,} detections")
@@ -114,12 +114,12 @@ def main():
                 logger.warning(f"  >50% features missing — scores may be unreliable. "
                                f"Was the classifier trained on a different feature set?")
 
-    if not X:
+    if not valid_indices:
         logger.warning("No detections have features — setting all rf_prediction = 0.0")
         for det in detections:
             det['rf_prediction'] = 0.0
     else:
-        X = np.array(X, dtype=np.float32)
+        X = X_full[valid_indices]
         X = np.nan_to_num(X, nan=0, posinf=0, neginf=0)
 
         # Score

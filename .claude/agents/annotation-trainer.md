@@ -51,18 +51,10 @@ Candidate Detection → HTML Annotation → Export JSON → Train Classifier →
 
 ## Training Scripts
 
-### NMJ Classifier (ResNet18 or Random Forest)
+### Classifier (Random Forest on features)
 ```bash
-# ResNet18 on images
-python train_nmj_classifier.py \
-    --czi-path /path/to/slide.czi \
-    --detections nmj_detections.json \
-    --annotations nmj_annotations.json \
-    --output-dir /home/dude/nmj_output/classifier
-
-# Random Forest on features
-python train_nmj_classifier_features.py \
-    --detections nmj_detections.json \
+python train_classifier.py \
+    --detections detections.json \
     --annotations annotations.json \
     --output-dir /path/to/output
 ```
@@ -85,20 +77,19 @@ python scripts/prepare_rf_training_data.py \
     --stratify-by-size
 ```
 
-## Running Inference with Trained Model
+## Scoring Detections with Trained Model
 
 ```bash
-# NMJ
-python run_nmj_inference.py \
-    --czi-path /path/to/slide.czi \
-    --model-path nmj_classifier.pth
+# Apply RF classifier to existing detections (no re-detection needed)
+python scripts/apply_classifier.py \
+    --detections detections.json \
+    --classifier rf_classifier.pkl \
+    --output detections_scored.json
 
-# Vessel full pipeline
-python scripts/run_full_pipeline.py \
-    --input candidates.json \
-    --vessel-detector vessel_detector.joblib \
-    --artery-vein artery_vein.joblib \
-    --output final_results.json
+# Regenerate HTML with score threshold
+python scripts/regenerate_html.py \
+    --detections detections_scored.json \
+    --score-threshold 0.5
 ```
 
 ## Evaluation Checklist

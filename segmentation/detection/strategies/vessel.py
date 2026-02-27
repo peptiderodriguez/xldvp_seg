@@ -953,10 +953,7 @@ class VesselStrategy(DetectionStrategy, MultiChannelFeatureMixin):
             lumen_mean = np.mean(lumen_pixels)
             wall_mean = np.mean(wall_pixels)
 
-            if lumen_mean > 0:
-                wall_lumen_ratio = wall_mean / lumen_mean
-            else:
-                wall_lumen_ratio = wall_mean / 0.01
+            wall_lumen_ratio = wall_mean / max(lumen_mean, 1e-6)
 
             if wall_lumen_ratio < min_wall_brightness_ratio:
                 continue

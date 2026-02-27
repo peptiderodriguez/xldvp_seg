@@ -75,7 +75,7 @@ Example:
     output_path = Path(args.output)
     output_path.parent.mkdir(parents=True, exist_ok=True)
     with open(output_path, 'w') as f:
-        json.dump(result, f, indent=2)
+        json.dump(result, f)
 
     # Summary
     s = result['summary']

@@ -46,7 +46,7 @@ def main():
                     'index': s,
                     'mosaic_size': s_meta['mosaic_size'],
                 })
-        print(json.dumps(meta, indent=2, default=str))
+        print(json.dumps(meta, default=str))
         return
 
     print(f"\n{'=' * 60}")

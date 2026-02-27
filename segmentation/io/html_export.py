@@ -308,13 +308,17 @@ def image_to_base64(img_array, format='JPEG', quality=85):
     else:
         pil_img = img_array
 
+    # Use JPEG for opaque images (smaller, faster). PNG only for transparency.
+    has_alpha = pil_img.mode in ('RGBA', 'LA', 'PA')
     buffer = BytesIO()
-    if format.upper() == 'JPEG':
-        pil_img.save(buffer, format='JPEG', quality=quality)
-        mime_type = 'jpeg'
-    else:
+    if has_alpha:
         pil_img.save(buffer, format='PNG', optimize=True)
         mime_type = 'png'
+    else:
+        if pil_img.mode != 'RGB' and format.upper() == 'JPEG':
+            pil_img = pil_img.convert('RGB')
+        pil_img.save(buffer, format='JPEG', quality=quality)
+        mime_type = 'jpeg'
 
     return base64.b64encode(buffer.getvalue()).decode('utf-8'), mime_type
 
@@ -771,6 +775,62 @@ def get_js(cell_type, total_pages, experiment_name=None, page_num=1):
             URL.revokeObjectURL(url);
         }}
 
+        function importAnnotations() {{
+            const input = document.createElement('input');
+            input.type = 'file';
+            input.accept = '.json';
+            input.onchange = (e) => {{
+                const file = e.target.files[0];
+                if (!file) return;
+                const reader = new FileReader();
+                reader.onload = (ev) => {{
+                    try {{
+                        const data = JSON.parse(ev.target.result);
+                        let imported = {{}};
+                        if (data.annotations) {{
+                            for (const [uid, val] of Object.entries(data.annotations)) {{
+                                if (val === 'yes' || val === 1) imported[uid] = 1;
+                                else if (val === 'no' || val === 0) imported[uid] = 0;
+                                else if (val === 'unsure' || val === 2) imported[uid] = 2;
+                            }}
+                        }} else {{
+                            (data.positive || []).forEach(uid => imported[uid] = 1);
+                            (data.negative || []).forEach(uid => imported[uid] = 0);
+                            (data.unsure || []).forEach(uid => imported[uid] = 2);
+                        }}
+                        let existing = {{}};
+                        try {{
+                            const gs = localStorage.getItem(GLOBAL_STORAGE_KEY);
+                            if (gs) existing = JSON.parse(gs);
+                        }} catch(ex) {{}}
+                        const merged = {{...imported, ...existing}};
+                        localStorage.setItem(GLOBAL_STORAGE_KEY, JSON.stringify(merged));
+                        for (const [uid, val] of Object.entries(imported)) {{
+                            if (labels[uid] === undefined) labels[uid] = val;
+                        }}
+                        saveLabels();
+                        cards.forEach(card => {{
+                            const uid = card.id;
+                            if (labels[uid] !== undefined) {{
+                                card.classList.remove('labeled-yes', 'labeled-no', 'labeled-unsure');
+                                if (labels[uid] === 1) card.classList.add('labeled-yes');
+                                else if (labels[uid] === 0) card.classList.add('labeled-no');
+                                else if (labels[uid] === 2) card.classList.add('labeled-unsure');
+                                card.dataset.label = labels[uid];
+                            }}
+                        }});
+                        updateStats();
+                        const n = Object.keys(imported).length;
+                        alert('Imported ' + n + ' annotations (' + Object.keys(merged).length + ' total after merge)');
+                    }} catch(err) {{
+                        alert('Error importing: ' + err.message);
+                    }}
+                }};
+                reader.readAsText(file);
+            }};
+            input.click();
+        }}
+
         function clearPage() {{
             if (!confirm('Clear annotations on this page?')) return;
             cards.forEach(card => {{
@@ -789,7 +849,6 @@ def get_js(cell_type, total_pages, experiment_name=None, page_num=1):
             if (!confirm('Clear ALL annotations across ALL pages? This cannot be undone.')) return;
             labels = {{}};
             saveLabels();
-            // Also clear all other page-specific keys for this experiment
             for (let i = 1; i <= TOTAL_PAGES; i++) {{
                 localStorage.setItem(PAGE_KEY_PREFIX + i, JSON.stringify({{}}));
             }}
@@ -983,6 +1042,7 @@ def generate_annotation_page(
                 <div class="stat negative">No: <span id="globalNo">0</span></div>
             </div>
             <button class="btn btn-export" onclick="exportAnnotations()">Export</button>
+            <button class="btn" onclick="importAnnotations()">Import</button>
             <button class="btn" onclick="clearPage()">Clear Page</button>
             <button class="btn btn-danger" onclick="clearAll()">Clear All</button>
             {channel_legend_html}
@@ -1088,14 +1148,13 @@ def generate_index_page(
     <title>{title}</title>
     <style>
         * {{ box-sizing: border-box; margin: 0; padding: 0; }}
-        body {{ font-family: monospace; background: #0a0a0a; color: #ddd; padding: 20px; }}
+        body {{ font-family: monospace; background: #0a0a0a; color: #ddd; padding: 20px; text-align: center; }}
 
         .header {{
             background: #111;
             padding: 30px;
             border: 1px solid #333;
             margin-bottom: 20px;
-            text-align: center;
         }}
 
         h1 {{
@@ -1128,7 +1187,6 @@ def generate_index_page(
             padding: 15px 30px;
             background: #1a1a1a;
             border: 1px solid #333;
-            text-align: center;
         }}
 
         .stat .number {{
@@ -1194,6 +1252,7 @@ def generate_index_page(
 
     <div class="section">
         <button class="btn btn-export" onclick="exportAnnotations()">Export Annotations</button>
+        <button class="btn" onclick="importAnnotations()">Import Annotations</button>
         <button class="btn btn-danger" onclick="clearAll()">Clear All</button>
     </div>
 
@@ -1232,10 +1291,50 @@ def generate_index_page(
             URL.revokeObjectURL(url);
         }}
 
+        function importAnnotations() {{
+            const input = document.createElement('input');
+            input.type = 'file';
+            input.accept = '.json';
+            input.onchange = (e) => {{
+                const file = e.target.files[0];
+                if (!file) return;
+                const reader = new FileReader();
+                reader.onload = (ev) => {{
+                    try {{
+                        const data = JSON.parse(ev.target.result);
+                        let imported = {{}};
+                        if (data.annotations) {{
+                            for (const [uid, val] of Object.entries(data.annotations)) {{
+                                if (val === 'yes' || val === 1) imported[uid] = 1;
+                                else if (val === 'no' || val === 0) imported[uid] = 0;
+                                else if (val === 'unsure' || val === 2) imported[uid] = 2;
+                            }}
+                        }} else {{
+                            (data.positive || []).forEach(uid => imported[uid] = 1);
+                            (data.negative || []).forEach(uid => imported[uid] = 0);
+                            (data.unsure || []).forEach(uid => imported[uid] = 2);
+                        }}
+                        let existing = {{}};
+                        try {{
+                            const gs = localStorage.getItem(STORAGE_KEY);
+                            if (gs) existing = JSON.parse(gs);
+                        }} catch(ex) {{}}
+                        const merged = {{...imported, ...existing}};
+                        localStorage.setItem(STORAGE_KEY, JSON.stringify(merged));
+                        const n = Object.keys(imported).length;
+                        alert('Imported ' + n + ' annotations (' + Object.keys(merged).length + ' total after merge)');
+                    }} catch(err) {{
+                        alert('Error importing: ' + err.message);
+                    }}
+                }};
+                reader.readAsText(file);
+            }};
+            input.click();
+        }}
+
         function clearAll() {{
             if (!confirm('Clear ALL annotations across ALL pages? This cannot be undone.')) return;
             localStorage.setItem(STORAGE_KEY, JSON.stringify({{}}));
-            // Also clear page-specific keys for this experiment
             for (let i = 0; i < localStorage.length; i++) {{
                 const key = localStorage.key(i);
                 if (key && key.startsWith(PAGE_KEY_PREFIX)) {{

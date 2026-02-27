@@ -623,7 +623,7 @@ def save_tile_outputs(
         # Save features to JSON
         features_path = tile_out_dir / f"{cell_type}_features.json"
         with open(features_path, 'w') as f:
-            json.dump(features_list, f, indent=2)
+            json.dump(features_list, f)
 
         result['features_path'] = str(features_path)
         result['success'] = True

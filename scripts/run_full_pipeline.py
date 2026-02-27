@@ -400,7 +400,7 @@ def save_results(
         output_data['rejected'] = results['rejected']
 
     with open(output_path, 'w') as f:
-        json.dump(output_data, f, indent=2)
+        json.dump(output_data, f)
 
     logger.info(f"Results saved to: {output_path}")
 

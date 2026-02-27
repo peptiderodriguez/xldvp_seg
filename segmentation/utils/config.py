@@ -463,7 +463,7 @@ def save_config(
     config_path = experiment_dir / config_filename
 
     with open(config_path, 'w') as f:
-        json.dump(config, f, indent=2, cls=_NumpyEncoder)
+        json.dump(config, f, cls=_NumpyEncoder)
 
     return config_path
 

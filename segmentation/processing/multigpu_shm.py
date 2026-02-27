@@ -39,6 +39,7 @@ import atexit
 import os
 import gc
 import queue
+import signal
 import traceback
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple, Any, Set
@@ -74,6 +75,14 @@ def _cleanup_shared_memory_on_exit():
 
 # Register cleanup on normal exit
 atexit.register(_cleanup_shared_memory_on_exit)
+
+# Register cleanup on SIGTERM (e.g., SLURM job cancellation, timeout)
+def _signal_cleanup(signum, frame):
+    """Clean up shared memory on SIGTERM/SIGINT before exiting."""
+    _cleanup_shared_memory_on_exit()
+    raise SystemExit(128 + signum)
+
+signal.signal(signal.SIGTERM, _signal_cleanup)
 
 
 class SharedSlideManager:

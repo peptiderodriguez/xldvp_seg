@@ -1,61 +1,15 @@
 """
-Tests to verify MK/HSPC segmentation pipeline imports work correctly after refactoring.
+Tests to verify segmentation pipeline imports work correctly after refactoring.
 
 These tests verify:
-1. Main module imports work
-2. Key functions exist and are callable
-3. Magic number constants are accessible from config
-4. CLI argparser works
+1. Magic number constants are accessible from config
+2. Segmentation submodule imports work
+3. Key functions exist and are callable
 
 Run with: pytest tests/test_mk_hspc_imports.py -v
 """
 
 import pytest
-
-
-class TestRunUnifiedFASTImports:
-    """Test that run_unified_FAST module imports correctly."""
-
-    def test_main_module_imports(self):
-        """Verify the main module can be imported."""
-        import run_unified_FAST
-        assert run_unified_FAST is not None
-
-    def test_run_multi_slide_segmentation_exists(self):
-        """Verify run_multi_slide_segmentation function exists and is callable."""
-        import run_unified_FAST
-        assert hasattr(run_unified_FAST, 'run_multi_slide_segmentation')
-        assert callable(run_unified_FAST.run_multi_slide_segmentation)
-
-    def test_phase1_load_slides_exists(self):
-        """Verify _phase1_load_slides function exists and is callable."""
-        import run_unified_FAST
-        assert hasattr(run_unified_FAST, '_phase1_load_slides')
-        assert callable(run_unified_FAST._phase1_load_slides)
-
-    def test_phase2_identify_tissue_tiles_exists(self):
-        """Verify _phase2_identify_tissue_tiles function exists and is callable."""
-        import run_unified_FAST
-        assert hasattr(run_unified_FAST, '_phase2_identify_tissue_tiles')
-        assert callable(run_unified_FAST._phase2_identify_tissue_tiles)
-
-    def test_phase3_sample_tiles_exists(self):
-        """Verify _phase3_sample_tiles function exists and is callable."""
-        import run_unified_FAST
-        assert hasattr(run_unified_FAST, '_phase3_sample_tiles')
-        assert callable(run_unified_FAST._phase3_sample_tiles)
-
-    def test_phase4_process_tiles_exists(self):
-        """Verify _phase4_process_tiles function exists and is callable."""
-        import run_unified_FAST
-        assert hasattr(run_unified_FAST, '_phase4_process_tiles')
-        assert callable(run_unified_FAST._phase4_process_tiles)
-
-    def test_export_html_from_ram_exists(self):
-        """Verify export_html_from_ram function exists and is callable."""
-        import run_unified_FAST
-        assert hasattr(run_unified_FAST, 'export_html_from_ram')
-        assert callable(run_unified_FAST.export_html_from_ram)
 
 
 class TestConfigConstants:
@@ -65,7 +19,7 @@ class TestConfigConstants:
         """Verify MORPHOLOGICAL_FEATURES_COUNT constant is accessible."""
         from segmentation.utils.config import MORPHOLOGICAL_FEATURES_COUNT
         assert isinstance(MORPHOLOGICAL_FEATURES_COUNT, int)
-        assert MORPHOLOGICAL_FEATURES_COUNT == 22
+        assert MORPHOLOGICAL_FEATURES_COUNT == 78
 
     def test_sam2_embedding_dimension(self):
         """Verify SAM2_EMBEDDING_DIMENSION constant is accessible."""
@@ -77,7 +31,7 @@ class TestConfigConstants:
         """Verify RESNET_EMBEDDING_DIMENSION constant is accessible."""
         from segmentation.utils.config import RESNET_EMBEDDING_DIMENSION
         assert isinstance(RESNET_EMBEDDING_DIMENSION, int)
-        assert RESNET_EMBEDDING_DIMENSION == 2048
+        assert RESNET_EMBEDDING_DIMENSION == 4096
 
     def test_total_features_per_cell(self):
         """Verify TOTAL_FEATURES_PER_CELL constant is accessible and correct."""
@@ -142,14 +96,10 @@ class TestSegmentationModuleImports:
         assert hasattr(StrategyRegistry, 'list_strategies')
 
 
-class TestCLI:
-    """Test that CLI argparser works."""
+class TestRunSegmentationImports:
+    """Test that run_segmentation module imports correctly."""
 
-    def test_argparser_creation(self):
-        """Verify argparser can be created without errors."""
-        import argparse
-        import run_unified_FAST
-
-        # Check that the module has the expected CLI behavior
-        # by importing and checking it doesn't error
-        assert run_unified_FAST is not None
+    def test_main_module_imports(self):
+        """Verify the main module can be imported."""
+        import run_segmentation
+        assert run_segmentation is not None

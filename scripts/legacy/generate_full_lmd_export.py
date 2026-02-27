@@ -414,7 +414,7 @@ def main():
     # Save
     output_path = OUTPUT_DIR / "lmd_export_full.json"
     with open(output_path, 'w') as f:
-        json.dump(export_data, f, indent=2)
+        json.dump(export_data, f)
     print(f"  Saved: {output_path}")
 
     # Print summary

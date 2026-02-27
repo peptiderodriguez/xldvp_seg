@@ -468,6 +468,25 @@ def run_clustering(args):
     detections = load_detections(args.detections, threshold=args.threshold)
     print(f"  {len(detections)} RF-positive detections (threshold >= {args.threshold})")
 
+    # Expression gating — filter to cells above a percentile of a channel mean
+    if args.gate_channel is not None:
+        gate_key = f'ch{args.gate_channel}_mean'
+        gate_values = []
+        for d in detections:
+            v = d.get('features', {}).get(gate_key)
+            if v is not None:
+                gate_values.append(float(v))
+        if not gate_values:
+            print(f"ERROR: No detections have feature '{gate_key}' — cannot gate")
+            sys.exit(1)
+        gate_cutoff = float(np.percentile(gate_values, args.gate_percentile))
+        before = len(detections)
+        detections = [d for d in detections
+                      if float(d.get('features', {}).get(gate_key, 0)) >= gate_cutoff]
+        print(f"  Gated on {gate_key} >= p{args.gate_percentile:.0f} ({gate_cutoff:.1f}): "
+              f"{before} -> {len(detections)} detections "
+              f"(top {100 - args.gate_percentile:.0f}%)")
+
     if len(detections) < args.min_cluster_size:
         print(f"ERROR: Not enough detections ({len(detections)}) for clustering "
               f"(need at least {args.min_cluster_size})")
@@ -555,15 +574,36 @@ def run_clustering(args):
     # Replace NaN/inf with 0
     X_scaled = np.nan_to_num(X_scaled, nan=0.0, posinf=0.0, neginf=0.0)
 
+    # Optional PCA pre-reduction for large feature sets
+    if X_scaled.shape[1] > 50:
+        from sklearn.decomposition import PCA
+        pca_target = 0.95
+        print(f"  PCA pre-reduction: {X_scaled.shape[1]} dims -> {pca_target:.0%} variance...")
+        pca = PCA(n_components=pca_target, random_state=42)
+        X_umap = pca.fit_transform(X_scaled)
+        total_var = pca.explained_variance_ratio_.sum()
+        if total_var < pca_target:
+            print(f"  WARNING: All {X_umap.shape[1]} components kept but only "
+                  f"{total_var:.1%} variance explained (< {pca_target:.0%} target)")
+        else:
+            print(f"  PCA: {X_scaled.shape[1]} -> {X_umap.shape[1]} dims "
+                  f"({total_var:.1%} variance)")
+    else:
+        X_umap = X_scaled
+
     # UMAP embedding
-    print(f"Running UMAP (n_neighbors={args.n_neighbors}, min_dist={args.min_dist})...")
+    import os
+    n_jobs = int(os.environ.get('SLURM_CPUS_PER_TASK', os.cpu_count() or 1))
+    print(f"Running UMAP (n_neighbors={args.n_neighbors}, min_dist={args.min_dist}, n_jobs={n_jobs})...")
     reducer = umap.UMAP(
         n_neighbors=args.n_neighbors,
         min_dist=args.min_dist,
         n_components=2,
         random_state=42,
+        n_jobs=n_jobs,
+        low_memory=True,
     )
-    embedding = reducer.fit_transform(X_scaled)
+    embedding = reducer.fit_transform(X_umap)
     print(f"  UMAP embedding: {embedding.shape}")
 
     # HDBSCAN clustering
@@ -605,7 +645,7 @@ def run_clustering(args):
     # Save enriched detections
     clustered_path = output_dir / 'detections_clustered.json'
     with open(clustered_path, 'w') as f:
-        json.dump(sanitize_for_json(detections), f, indent=2)
+        json.dump(sanitize_for_json(detections), f)
     print(f"  Saved: {clustered_path}")
 
     # Build summary DataFrame
@@ -768,7 +808,7 @@ def run_clustering(args):
         # Re-save detections with subcluster fields
         clustered_path = output_dir / 'detections_clustered.json'
         with open(clustered_path, 'w') as f:
-            json.dump(sanitize_for_json(detections), f, indent=2)
+            json.dump(sanitize_for_json(detections), f)
         print(f"  Updated: {clustered_path} (with subcluster fields)")
 
 
@@ -1098,6 +1138,12 @@ def main():
                         help='Feature groups for subclustering (default: "shape,sam2")')
     parser.add_argument('--subcluster-min-size', type=int, default=50,
                         help='HDBSCAN min_cluster_size for sub-clusters (default: 50)')
+    parser.add_argument('--gate-channel', type=int, default=None,
+                        help='Gate on this channel index before clustering '
+                        '(e.g., 2 for Msln). Keeps cells above --gate-percentile.')
+    parser.add_argument('--gate-percentile', type=float, default=90,
+                        help='Percentile threshold for --gate-channel: keep cells above '
+                        'this percentile of chN_mean (default: 90 = top 10%%)')
     args = parser.parse_args()
 
     if args.subcluster_input:
@@ -1135,7 +1181,7 @@ def main():
         # Save enriched detections
         out_path = output_dir / 'detections_subclustered.json'
         with open(out_path, 'w') as f:
-            json.dump(sanitize_for_json(detections), f, indent=2)
+            json.dump(sanitize_for_json(detections), f)
         print(f"\nSaved: {out_path}")
         return
 

@@ -48,8 +48,10 @@ def _cleanup_shared_memory_on_exit():
             shm = SharedMemory(name=shm_name)
             shm.close()
             shm.unlink()
-        except Exception:
-            pass
+        except FileNotFoundError:
+            pass  # Already cleaned up
+        except Exception as e:
+            logger.debug(f"Shared memory cleanup warning for {shm_name}: {e}")
     _shm_registry.clear()
 
 
@@ -344,7 +346,7 @@ def _gpu_worker(
                     'error': f'Unknown slide: {slide_name}'
                 })
                 tiles_processed += 1
-                if tiles_processed % 5 == 0:
+                if tiles_processed % 2 == 0:
                     gc.collect()
                 continue
 
@@ -389,7 +391,7 @@ def _gpu_worker(
                     'slide_name': slide_name, 'tile': tile,
                 })
                 tiles_processed += 1
-                if tiles_processed % 5 == 0:
+                if tiles_processed % 2 == 0:
                     gc.collect()
                 continue
 
@@ -449,7 +451,7 @@ def _gpu_worker(
                     'slide_name': slide_name, 'tile': tile,
                 })
                 tiles_processed += 1
-                if tiles_processed % 5 == 0:
+                if tiles_processed % 2 == 0:
                     gc.collect()
                 continue
 
@@ -519,7 +521,7 @@ def _gpu_worker(
                 })
 
             tiles_processed += 1
-            if tiles_processed % 5 == 0:
+            if tiles_processed % 2 == 0:
                 gc.collect()
                 torch.cuda.empty_cache()
 

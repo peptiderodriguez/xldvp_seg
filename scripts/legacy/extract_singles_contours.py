@@ -200,7 +200,7 @@ def main():
     # Save results
     print("\n[5/5] Saving results...")
     with open(OUTPUT_PATH, 'w') as f:
-        json.dump(results, f, indent=2)
+        json.dump(results, f)
     print(f"  Saved to: {OUTPUT_PATH}")
 
     # Print area statistics

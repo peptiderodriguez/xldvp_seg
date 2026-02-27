@@ -22,7 +22,7 @@ from segmentation.utils.logging import get_logger
 logger = get_logger(__name__)
 
 # Encode (x, y) as single int64 for fast numpy set intersection
-_COORD_STRIDE = 300000  # Must exceed max slide dimension in pixels
+_COORD_STRIDE = 1000000  # Must exceed max slide dimension in pixels (large mosaics can be 250K+)
 
 
 def deduplicate_by_mask_overlap(detections, tiles_dir, min_overlap_fraction=0.1,

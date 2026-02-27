@@ -61,13 +61,15 @@ class IsletStrategy(CellStrategy):
     Pancreatic islet cell detection using Cellpose (membrane+nuclear) + SAM2.
 
     Extends CellStrategy with:
-    - 2-channel Cellpose input (membrane + nuclear) instead of grayscale
+    - 2-channel Cellpose input (membrane + nuclear) or nuclei-only mode
     - Area pre-filter in segment() (no count cap)
     - 6-channel feature extraction
 
     Detection pipeline:
-    1. Construct 2-channel input: membrane (AF633) + nuclear (DAPI)
-    2. Cellpose detection with channels=[1,2] (cytoplasm + nucleus)
+    1. Construct Cellpose input:
+       - PM+nuclei mode: membrane + nuclear, channels=[1,2]
+       - Nuclei-only mode (membrane_channel=None): DAPI only, channels=[0,0]
+    2. Cellpose detection
     3. SAM2 refinement using centroids as point prompts
     4. Overlap filtering
     5. Feature extraction from all 6 channels (mask-only, zero-excluded)
@@ -75,7 +77,7 @@ class IsletStrategy(CellStrategy):
 
     def __init__(
         self,
-        membrane_channel: int = 1,
+        membrane_channel: Optional[int] = 1,
         nuclear_channel: int = 4,
         overlap_threshold: float = 0.5,
         min_mask_pixels: int = 10,
@@ -89,7 +91,8 @@ class IsletStrategy(CellStrategy):
         Initialize islet detection strategy.
 
         Args:
-            membrane_channel: CZI channel index for membrane marker (default 1, AF633)
+            membrane_channel: CZI channel index for membrane marker (default 1, AF633).
+                Set to None for nuclei-only mode (DAPI grayscale, channels=[0,0]).
             nuclear_channel: CZI channel index for nuclear marker (default 4, DAPI)
             overlap_threshold: Skip masks with overlap > this fraction (default 0.5)
             min_mask_pixels: Minimum mask size in pixels (default 10)
@@ -193,35 +196,35 @@ class IsletStrategy(CellStrategy):
         if cellpose is None:
             raise RuntimeError("Cellpose model required for islet detection")
 
-        # --- Build 2-channel Cellpose input from extra_channels ---
-        if extra_channels is None or self.membrane_channel not in extra_channels:
+        # --- Build Cellpose input from extra_channels ---
+        nuclear_raw = extra_channels.get(self.nuclear_channel) if extra_channels else None
+        if nuclear_raw is None:
             raise ValueError(
-                f"IsletStrategy requires extra_channels with membrane_channel={self.membrane_channel}. "
+                f"IsletStrategy requires extra_channels with nuclear_channel={self.nuclear_channel}. "
                 f"Available: {list(extra_channels.keys()) if extra_channels else 'None'}"
             )
 
-        membrane_raw = extra_channels.get(self.membrane_channel)
-        nuclear_raw = extra_channels.get(self.nuclear_channel)
-
-        if membrane_raw is None or nuclear_raw is None:
-            raise ValueError(
-                f"IsletStrategy requires both membrane (ch{self.membrane_channel}) and nuclear "
-                f"(ch{self.nuclear_channel}) channels. Got membrane={membrane_raw is not None}, "
-                f"nuclear={nuclear_raw is not None}. Available: {list(extra_channels.keys())}"
-            )
-
-        # Percentile-normalize uint16 -> uint8 per channel
-        membrane_u8 = _percentile_normalize_channel(membrane_raw)
         nuclear_u8 = _percentile_normalize_channel(nuclear_raw)
 
-        # Cache for detect() to reuse (avoids double normalization)
-        self._membrane_u8 = membrane_u8
+        if self.membrane_channel is not None:
+            # PM + nuclei mode: 2-channel Cellpose input
+            membrane_raw = extra_channels.get(self.membrane_channel) if extra_channels else None
+            if membrane_raw is None:
+                raise ValueError(
+                    f"IsletStrategy requires extra_channels with membrane_channel={self.membrane_channel}. "
+                    f"Available: {list(extra_channels.keys()) if extra_channels else 'None'}"
+                )
+            membrane_u8 = _percentile_normalize_channel(membrane_raw)
+            self._membrane_u8 = membrane_u8
+            cellpose_input = np.stack([membrane_u8, nuclear_u8], axis=-1)
+            cellpose_channels = [1, 2]  # ch0=cytoplasm, ch1=nucleus
+        else:
+            # Nuclei-only mode: grayscale DAPI
+            self._membrane_u8 = nuclear_u8  # SAM2 uses this for embeddings
+            cellpose_input = nuclear_u8
+            cellpose_channels = [0, 0]  # grayscale/nuclei
 
-        # Stack as 2-channel input: (H, W, 2)
-        cellpose_input = np.stack([membrane_u8, nuclear_u8], axis=-1)
-
-        # Cellpose: channels=[1,2] means ch0 of input=cytoplasm, ch1=nucleus
-        cellpose_masks, _, _ = cellpose.eval(cellpose_input, channels=[1, 2])
+        cellpose_masks, _, _ = cellpose.eval(cellpose_input, channels=cellpose_channels)
 
         # Get unique mask IDs (exclude background 0)
         cellpose_ids = np.unique(cellpose_masks)
@@ -356,28 +359,34 @@ class IsletStrategy(CellStrategy):
         # =================================================================
         # Cellpose segmentation (compact mode — NO full-tile boolean masks)
         # =================================================================
-        if extra_channels is None or self.membrane_channel not in extra_channels:
+        nuclear_raw = extra_channels.get(self.nuclear_channel) if extra_channels else None
+        if nuclear_raw is None:
             raise ValueError(
-                f"IsletStrategy requires extra_channels with membrane_channel={self.membrane_channel}. "
+                f"IsletStrategy requires extra_channels with nuclear_channel={self.nuclear_channel}. "
                 f"Available: {list(extra_channels.keys()) if extra_channels else 'None'}"
             )
 
-        membrane_raw = extra_channels.get(self.membrane_channel)
-        nuclear_raw = extra_channels.get(self.nuclear_channel)
-
-        if membrane_raw is None or nuclear_raw is None:
-            raise ValueError(
-                f"IsletStrategy requires both membrane (ch{self.membrane_channel}) and nuclear "
-                f"(ch{self.nuclear_channel}) channels. Got membrane={membrane_raw is not None}, "
-                f"nuclear={nuclear_raw is not None}. Available: {list(extra_channels.keys())}"
-            )
-
-        membrane_u8 = _percentile_normalize_channel(membrane_raw)
         nuclear_u8 = _percentile_normalize_channel(nuclear_raw)
-        self._membrane_u8 = membrane_u8
 
-        cellpose_input = np.stack([membrane_u8, nuclear_u8], axis=-1)
-        cellpose_masks, _, _ = cellpose.eval(cellpose_input, channels=[1, 2])
+        if self.membrane_channel is not None:
+            # PM + nuclei mode: 2-channel Cellpose input
+            membrane_raw = extra_channels.get(self.membrane_channel) if extra_channels else None
+            if membrane_raw is None:
+                raise ValueError(
+                    f"IsletStrategy requires extra_channels with membrane_channel={self.membrane_channel}. "
+                    f"Available: {list(extra_channels.keys()) if extra_channels else 'None'}"
+                )
+            membrane_u8 = _percentile_normalize_channel(membrane_raw)
+            self._membrane_u8 = membrane_u8
+            cellpose_input = np.stack([membrane_u8, nuclear_u8], axis=-1)
+            cellpose_channels = [1, 2]
+        else:
+            # Nuclei-only mode: grayscale DAPI
+            self._membrane_u8 = nuclear_u8
+            cellpose_input = nuclear_u8
+            cellpose_channels = [0, 0]
+
+        cellpose_masks, _, _ = cellpose.eval(cellpose_input, channels=cellpose_channels)
 
         cellpose_ids = np.unique(cellpose_masks)
         cellpose_ids = cellpose_ids[cellpose_ids > 0]
@@ -418,8 +427,10 @@ class IsletStrategy(CellStrategy):
             return np.zeros(tile_shape, dtype=np.uint32), []
 
         # Set SAM2 image for embedding extraction
+        # Uses _membrane_u8 (membrane in PM+nuc mode, DAPI in nuclei-only mode)
         if self.extract_sam2_embeddings and sam2_predictor is not None:
-            sam2_rgb = np.stack([membrane_u8, membrane_u8, membrane_u8], axis=-1)
+            sam2_img = self._membrane_u8
+            sam2_rgb = np.stack([sam2_img, sam2_img, sam2_img], axis=-1)
             sam2_predictor.set_image(sam2_rgb)
 
         # Feature extraction prep
@@ -458,7 +469,9 @@ class IsletStrategy(CellStrategy):
         del global_valid
 
         # Determine marker channels (all except bright=0, membrane, nuclear)
-        non_marker_chs = {0, self.membrane_channel, self.nuclear_channel}
+        non_marker_chs = {0, self.nuclear_channel}
+        if self.membrane_channel is not None:
+            non_marker_chs.add(self.membrane_channel)
         marker_chs = sorted(set(extra_channels.keys()) - non_marker_chs) if extra_channels else []
 
         # Build channels_dict once (reused for every cell)

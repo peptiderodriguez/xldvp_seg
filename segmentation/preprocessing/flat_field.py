@@ -23,6 +23,7 @@ Usage:
         profile.correct_channel_inplace(data, ch)
 """
 
+import gc
 import logging
 from typing import Dict
 
@@ -114,6 +115,7 @@ class IlluminationProfile:
             data[row_start:row_end] = result
 
         del correction_field, full_illum
+        gc.collect()
 
         logger.info(
             "Channel %d correction range: [%.3f, %.3f]",

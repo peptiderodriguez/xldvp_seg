@@ -29,7 +29,7 @@ echo "Output: $OUTPUT_DIR"
 echo "=========================================="
 
 cd $REPO
-PYTHONPATH=$REPO $PYTHON train_nmj_classifier_features.py \
+PYTHONPATH=$REPO $PYTHON train_classifier.py \
     --detections "$DETECTIONS" \
     --annotations "$ANNOTATIONS" \
     --output-dir "$OUTPUT_DIR" \

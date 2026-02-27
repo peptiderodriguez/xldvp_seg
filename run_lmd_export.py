@@ -1430,7 +1430,7 @@ Examples:
                 'shapes': partial_shapes,
             }
             with open(partial_path, 'w') as f:
-                json.dump(partial_data, f, indent=2)
+                json.dump(partial_data, f)
             print(f"  Partial results saved to: {partial_path}")
             print(f"  (shapes without well assignments — prune list and re-run)")
             return
@@ -1457,7 +1457,7 @@ Examples:
         # Save JSON
         json_path = output_dir / f"{args.output_name}_with_controls.json"
         with open(json_path, 'w') as f:
-            json.dump(export_data, f, indent=2)
+            json.dump(export_data, f)
         print(f"\n  Saved export JSON: {json_path}")
 
         # Save CSV summary

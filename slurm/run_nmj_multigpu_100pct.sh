@@ -19,8 +19,9 @@ set -euo pipefail
 REPO=/fs/gpfs41/lv12/fileset02/pool/pool-mann-edwin/code_bin/xldvp_seg
 CZI="/fs/pool/pool-mann-axioscan/01_Users/EdRo_axioscan/xDVP/20251107_Fig5_nuc488_Bgtx647_NfL750-1-EDFvar-stitch.czi"
 OUTPUT_DIR=/fs/pool/pool-mann-edwin/nmj_output
-CLASSIFIER=/fs/pool/pool-mann-edwin/nmj_output/20251107_Fig5_nuc488_Bgtx647_NfL750-1-EDFvar-stitch_20260210_112830/classifier/nmj_classifier_rf.pkl
-ANNOTATIONS=/fs/pool/pool-mann-edwin/nmj_output/20251107_Fig5_nuc488_Bgtx647_NfL750-1-EDFvar-stitch_20260210_112830/nmj_20251107_Fig5_nuc488_Bgtx647_NfL750-1-EDFvar-stitch_1770728512_annotations.json
+# UPDATE THESE after 10% annotation + classifier training:
+CLASSIFIER=/fs/pool/pool-mann-edwin/nmj_output/FILL_IN_10PCT_DIR/classifier/nmj_classifier_rf.pkl
+ANNOTATIONS=/fs/pool/pool-mann-edwin/nmj_output/FILL_IN_10PCT_DIR/FILL_IN_ANNOTATIONS.json
 PYTHON=/fs/gpfs41/lv07/fileset03/home/b_mann/rodriguez/miniforge3/envs/mkseg/bin/python
 
 export PYTHONPATH=$REPO

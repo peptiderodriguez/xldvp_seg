@@ -1,8 +1,9 @@
 #!/usr/bin/env python3
 """Spatial analysis of pancreatic islets from a completed islet detection run.
 
-Defines islets as the union of marker-positive (bright) cells within a spatial
-buffer, recruits nearby unclassified cells, then computes per-islet features:
+Finds islets by tissue-level signal: sums percentile-normalized marker channels
+(Gcg, Ins, Sst), Otsu-thresholds the endocrine signal image, then takes all
+Cellpose-detected cells inside each region.  Per-islet features:
   - Morphometry: area, perimeter, circularity, elongation (PCA)
   - Composition: per-marker counts/fractions, Shannon entropy, dominant type
   - Spatial: nearest-neighbor distances between marker types, radial distribution,
@@ -38,8 +39,6 @@ from scipy.spatial import ConvexHull, cKDTree
 # Add repo root to path
 REPO = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(REPO))
-
-from run_segmentation import classify_islet_marker, compute_islet_marker_thresholds
 
 try:
     import hdf5plugin  # noqa: F401 — registers LZ4 codec for h5py
@@ -111,7 +110,131 @@ def build_marker_colors(marker_map):
 
 
 # ---------------------------------------------------------------------------
-# 1. Islet definition
+# 1. Median-based marker classification
+# ---------------------------------------------------------------------------
+
+def compute_cell_medians(detections, tiles_dir, ch_data, marker_map, x_start, y_start):
+    """Compute per-cell median intensity for each marker channel from HDF5 masks + CZI.
+
+    Groups detections by tile_origin, loads the per-tile HDF5 mask, extracts
+    the masked region from the full-slide CZI channel arrays, and stores
+    ``ch{idx}_median`` in each detection's features dict.
+    """
+    from scipy import ndimage
+
+    tile_groups = {}
+    for i, det in enumerate(detections):
+        to = det.get('tile_origin')
+        if to is None:
+            continue
+        key = (int(to[0]), int(to[1]))
+        tile_groups.setdefault(key, []).append(i)
+
+    n_processed = 0
+    for (tx, ty), det_indices in tile_groups.items():
+        td = tiles_dir / f'tile_{tx}_{ty}'
+        mask_path = td / 'islet_masks.h5'
+        if not mask_path.exists():
+            continue
+
+        with h5py.File(mask_path, 'r') as f:
+            masks = f['masks'][:]
+
+        slices = ndimage.find_objects(masks)
+        th, tw = masks.shape[:2]
+
+        # Tile position relative to CZI mosaic origin
+        rel_tx = tx - x_start
+        rel_ty = ty - y_start
+
+        for i in det_indices:
+            det = detections[i]
+            ml = det.get('tile_mask_label', det.get('mask_label'))
+            if ml is None or ml <= 0 or ml > len(slices):
+                continue
+            sl = slices[ml - 1]  # 1-indexed
+            if sl is None:
+                continue
+
+            feats = det.setdefault('features', {})
+            y_sl, x_sl = sl
+            cell_mask = masks[sl] == ml
+
+            for name, ch_idx in marker_map.items():
+                if ch_idx not in ch_data:
+                    continue
+                ch_region = ch_data[ch_idx][rel_ty + y_sl.start:rel_ty + y_sl.stop,
+                                            rel_tx + x_sl.start:rel_tx + x_sl.stop]
+                vals = ch_region[cell_mask]
+                vals = vals[vals > 0]  # exclude CZI padding zeros
+                feats[f'ch{ch_idx}_median'] = float(np.median(vals)) if len(vals) > 0 else 0.0
+
+            n_processed += 1
+
+        del masks
+
+    print(f"  Computed medians for {n_processed}/{len(detections)} cells "
+          f"across {len(tile_groups)} tiles")
+
+
+def classify_by_percentile(detections, marker_map, percentile=95):
+    """Classify cells by marker channel median intensity using a percentile threshold.
+
+    For each marker channel, the threshold is ``np.percentile(all_medians, percentile)``.
+    A cell above threshold for exactly one marker gets that marker name.
+    If two markers are within 1.5x of each other: ``'multi'``.
+    Below all thresholds: ``'none'``.
+
+    Returns:
+        thresholds: dict {marker_name: float} for downstream use.
+    """
+    # Collect all non-zero medians per channel
+    ch_vals = {}
+    for name, ch_idx in marker_map.items():
+        key = f'ch{ch_idx}_median'
+        vals = [d.get('features', {}).get(key) for d in detections]
+        ch_vals[name] = [v for v in vals if v is not None and v > 0]
+
+    thresholds = {}
+    for name, vals in ch_vals.items():
+        thresholds[name] = float(np.percentile(vals, percentile)) if vals else float('inf')
+
+    print(f"  Percentile thresholds (p{percentile}):")
+    for name, t in thresholds.items():
+        ch_idx = marker_map[name]
+        n_above = sum(1 for v in ch_vals[name] if v >= t)
+        print(f"    {name} (ch{ch_idx}): {t:.1f}  ({n_above} cells above)")
+
+    counts = Counter()
+    for det in detections:
+        feats = det.get('features', {})
+        above = {}
+        for name, ch_idx in marker_map.items():
+            val = feats.get(f'ch{ch_idx}_median', 0)
+            if val >= thresholds[name]:
+                above[name] = val
+
+        if not above:
+            det['marker_class'] = 'none'
+        elif len(above) == 1:
+            det['marker_class'] = next(iter(above))
+        else:
+            sorted_markers = sorted(above.items(), key=lambda x: x[1], reverse=True)
+            dominant_val = sorted_markers[0][1]
+            runner_up_val = sorted_markers[1][1]
+            if runner_up_val > 0 and dominant_val < 1.5 * runner_up_val:
+                det['marker_class'] = 'multi'
+            else:
+                det['marker_class'] = sorted_markers[0][0]
+
+        counts[det['marker_class']] += 1
+
+    print(f"  Classification: {dict(counts)}")
+    return thresholds
+
+
+# ---------------------------------------------------------------------------
+# 2. Islet definition
 # ---------------------------------------------------------------------------
 
 def load_detections(run_dir):
@@ -126,138 +249,224 @@ def load_detections(run_dir):
     return dets
 
 
-def classify_all(detections, marker_map, marker_top_pct=5, pct_channels=None,
-                 gmm_p_cutoff=0.75, ratio_min=1.5, threshold_factor=1.0):
-    """Classify all detections by marker type. Modifies in place."""
-    marker_thresholds = compute_islet_marker_thresholds(
-        detections, marker_map=marker_map, marker_top_pct=marker_top_pct,
-        pct_channels=pct_channels, gmm_p_cutoff=gmm_p_cutoff,
-        ratio_min=ratio_min, threshold_factor=threshold_factor)
-    counts = Counter()
-    for det in detections:
-        mc, _ = classify_islet_marker(det.get('features', {}), marker_thresholds, marker_map=marker_map)
-        det['marker_class'] = mc
-        counts[mc] += 1
-    print(f"Marker classification: {dict(counts)}")
-    return marker_thresholds
+def find_islet_regions(ch_data, marker_map, pixel_size, downsample=4,
+                       blur_sigma_um=10.0, close_um=10.0,
+                       min_area_um2=500.0, buffer_um=25.0,
+                       otsu_multiplier=1.5):
+    """Find islet regions from tissue-level endocrine signal.
 
+    Sums percentile-normalized marker channels to produce a total endocrine
+    signal image, then Otsu-thresholds and extracts connected components.
 
-def define_islets(detections, pixel_size, buffer_um=25.0, min_cells=5, no_recruit=False):
-    """Define islets as the union of marker-positive (bright) cells + spatial buffer.
+    Args:
+        ch_data: {ch_idx: np.ndarray} full-res channel arrays
+        marker_map: {name: ch_idx} marker channel mapping
+        pixel_size: um per pixel at full resolution
+        downsample: downsampling factor (default 8)
+        blur_sigma_um: Gaussian blur sigma in um (~1 cell diameter)
+        close_um: morphological closing kernel in um
+        min_area_um2: minimum region area in um^2
+        buffer_um: dilation buffer in um (capture border cells)
+        otsu_multiplier: multiply Otsu threshold by this (>1 = stricter)
 
-    Simple approach:
-    1. Take all marker+ cells (any endocrine marker above threshold)
-    2. Group them into connected components: two marker+ cells within buffer_um
-       belong to the same islet (single-linkage via KDTree)
-    3. Recruit 'none' cells within buffer_um of any marker+ cell in the islet
-    4. Filter by min_cells
-
-    Returns islet_groups: {islet_id: [det_indices]}
+    Returns:
+        (region_labels, downsample) where region_labels is a labeled 2D array
+        at downsampled resolution. Label 0 = background, 1..N = islet regions.
     """
-    from scipy.sparse.csgraph import connected_components
-    from scipy.sparse import coo_matrix
+    from scipy.ndimage import gaussian_filter, label as ndi_label
+    from scipy.ndimage import binary_closing, binary_dilation
+    from skimage.filters import threshold_otsu
+    from skimage.morphology import remove_small_objects
 
-    # Separate marker+ vs none
-    endocrine_idx = []
-    none_idx = []
+    ds_pixel_size = pixel_size * downsample
+
+    # Downsample each marker channel and percentile-normalize to [0, 1]
+    normalized = []
+    for name, ch_idx in marker_map.items():
+        if ch_idx not in ch_data:
+            continue
+        full = ch_data[ch_idx]
+        arr = full[::downsample, ::downsample].astype(np.float32)
+        nonzero = arr[arr > 0]
+        if len(nonzero) == 0:
+            normalized.append(np.zeros_like(arr))
+            continue
+        p1, p99 = np.percentile(nonzero, [1, 99])
+        if p99 > p1:
+            arr = np.clip((arr - p1) / (p99 - p1), 0, 1)
+        else:
+            arr = np.zeros_like(arr)
+        # Re-zero CZI padding pixels (downsample may alias, re-check from full)
+        arr[full[::downsample, ::downsample] == 0] = 0
+        normalized.append(arr)
+        print(f"    {name} (ch{ch_idx}): p1={p1:.0f} p99={p99:.0f}")
+
+    if not normalized:
+        print("  WARNING: No marker channels available for tissue-level finding")
+        return np.zeros((1, 1), dtype=np.int32), downsample, np.zeros((1, 1), dtype=np.float32)
+
+    # Sum normalized channels → total endocrine signal
+    signal = np.sum(normalized, axis=0)
+
+    # Gaussian blur (sigma in downsampled pixels)
+    sigma_px = blur_sigma_um / ds_pixel_size
+    signal = gaussian_filter(signal, sigma=sigma_px)
+
+    # Otsu on non-zero pixels
+    nonzero_signal = signal[signal > 0]
+    if len(nonzero_signal) < 100:
+        print("  WARNING: Too few non-zero pixels for Otsu thresholding")
+        return np.zeros(signal.shape, dtype=np.int32), downsample, signal
+
+    otsu_raw = threshold_otsu(nonzero_signal)
+    otsu_t = otsu_raw * otsu_multiplier
+    binary = signal >= otsu_t
+
+    # Morphological close (fill inter-cell gaps)
+    close_px = max(1, int(round(close_um / ds_pixel_size)))
+    struct = np.ones((close_px * 2 + 1, close_px * 2 + 1), dtype=bool)
+    binary = binary_closing(binary, structure=struct)
+
+    # Remove small regions
+    min_area_px = max(1, int(round(min_area_um2 / (ds_pixel_size ** 2))))
+    binary = remove_small_objects(binary, min_size=min_area_px)
+
+    # Dilate by buffer_um (capture border cells)
+    buffer_px = max(1, int(round(buffer_um / ds_pixel_size)))
+    buf_struct = np.ones((buffer_px * 2 + 1, buffer_px * 2 + 1), dtype=bool)
+    binary = binary_dilation(binary, structure=buf_struct)
+
+    # Label connected components
+    region_labels, n_regions = ndi_label(binary)
+
+    print(f"  Tissue-level islet finding: {signal.shape} downsampled image "
+          f"({ds_pixel_size:.2f} um/px)")
+    print(f"    Otsu: raw={otsu_raw:.3f} x{otsu_multiplier} = {otsu_t:.3f}, "
+          f"{n_regions} candidate regions")
+    print(f"    blur={sigma_px:.1f}px close={close_px}px "
+          f"min_area={min_area_px}px buffer={buffer_px}px")
+
+    return region_labels, downsample, signal
+
+
+def assign_cells_to_regions(detections, region_labels, downsample,
+                            x_start, y_start, min_cells=5):
+    """Assign detections to labeled islet regions by spatial lookup.
+
+    Each detection's global_center is mapped to the downsampled region label
+    image. Regions with fewer than min_cells detections are dropped.
+
+    Returns:
+        islet_groups: {region_id: [det_indices]}
+    """
+    h, w = region_labels.shape
+    groups = {}
+
     for i, det in enumerate(detections):
         gc = det.get('global_center', det.get('center'))
         if gc is None:
+            det['islet_id'] = -1
             continue
-        mc = det.get('marker_class', 'none')
-        if mc != 'none':  # 'multi' cells are endocrine and should seed islets
-            endocrine_idx.append(i)
+
+        # Global mosaic coords → array coords → downsampled coords
+        ax = round(gc[0]) - x_start
+        ay = round(gc[1]) - y_start
+        dx = ax // downsample
+        dy = ay // downsample
+
+        # Bounds check
+        if 0 <= dx < w and 0 <= dy < h:
+            rid = int(region_labels[dy, dx])
         else:
-            none_idx.append(i)
+            rid = 0
 
-    if not endocrine_idx:
-        print("No endocrine cells found — cannot define islets")
-        return {}
-
-    print(f"Defining islets from {len(endocrine_idx)} marker+ cells (buffer={buffer_um} um)...")
-
-    # Build coordinates in um
-    endo_coords_um = np.array([
-        [detections[i].get('global_center', detections[i].get('center', [0, 0]))[0] * pixel_size,
-         detections[i].get('global_center', detections[i].get('center', [0, 0]))[1] * pixel_size]
-        for i in endocrine_idx
-    ])
-
-    # Connected components: marker+ cells within buffer_um are in the same islet
-    tree = cKDTree(endo_coords_um)
-    pairs = tree.query_pairs(r=buffer_um)
-
-    n = len(endocrine_idx)
-    if pairs:
-        rows, cols = zip(*pairs)
-        rows, cols = list(rows), list(cols)
-        # Symmetric: add both (i,j) and (j,i)
-        data = [True] * len(rows) * 2
-        all_rows = rows + cols
-        all_cols = cols + rows
-        adj = coo_matrix((data, (all_rows, all_cols)), shape=(n, n), dtype=bool)
-    else:
-        adj = coo_matrix((n, n), dtype=bool)
-
-    n_components, labels = connected_components(adj, directed=False)
-
-    # Assign islet_id to endocrine cells
-    for row_i, det_i in enumerate(endocrine_idx):
-        detections[det_i]['islet_id'] = int(labels[row_i])
-
-    # Count per component
-    component_sizes = Counter(labels)
-    valid_components = {c for c, sz in component_sizes.items() if sz >= min_cells}
-    n_singletons = sum(1 for c, sz in component_sizes.items() if sz < min_cells)
-    print(f"  {len(valid_components)} islets (>= {min_cells} marker+ cells), "
-          f"{n_singletons} small groups discarded")
-
-    # Mark small-component cells as unassigned
-    for row_i, det_i in enumerate(endocrine_idx):
-        if labels[row_i] not in valid_components:
-            detections[det_i]['islet_id'] = -1
-
-    # Recruit 'none' cells within buffer_um of any islet's marker+ cells
-    if no_recruit:
-        for i in none_idx:
-            detections[i]['islet_id'] = -1
-    elif none_idx and valid_components:
-        # Build KDTree of valid endocrine cells only
-        valid_mask = np.array([labels[r] in valid_components for r in range(n)])
-        valid_coords = endo_coords_um[valid_mask]
-        valid_labels = labels[valid_mask]
-
-        if len(valid_coords) > 0:
-            valid_tree = cKDTree(valid_coords)
-            none_coords_um = np.array([
-                [detections[i].get('global_center', detections[i].get('center', [0, 0]))[0] * pixel_size,
-                 detections[i].get('global_center', detections[i].get('center', [0, 0]))[1] * pixel_size]
-                for i in none_idx
-            ])
-            dists, indices = valid_tree.query(none_coords_um)
-            recruited = 0
-            for j, (d, idx) in enumerate(zip(dists, indices)):
-                if d <= buffer_um:
-                    detections[none_idx[j]]['islet_id'] = int(valid_labels[idx])
-                    recruited += 1
-                else:
-                    detections[none_idx[j]]['islet_id'] = -1
-            print(f"  Recruited {recruited}/{len(none_idx)} none cells into islets")
+        if rid > 0:
+            det['islet_id'] = rid
+            groups.setdefault(rid, []).append(i)
         else:
-            for i in none_idx:
-                detections[i]['islet_id'] = -1
-    else:
-        for i in none_idx:
+            det['islet_id'] = -1
+
+    # Filter by min_cells
+    small = [rid for rid, indices in groups.items() if len(indices) < min_cells]
+    for rid in small:
+        for i in groups[rid]:
             detections[i]['islet_id'] = -1
+        del groups[rid]
 
-    # Build islet groups
-    islet_groups = {}
-    for i, det in enumerate(detections):
-        iid = det.get('islet_id', -1)
-        if iid >= 0:
-            islet_groups.setdefault(iid, []).append(i)
+    n_assigned = sum(len(v) for v in groups.values())
+    print(f"  Assigned {n_assigned}/{len(detections)} cells to "
+          f"{len(groups)} islet regions "
+          f"(dropped {len(small)} regions with < {min_cells} cells)")
 
-    return islet_groups
+    return groups
+
+
+def save_region_diagnostic(endocrine_signal, region_labels, islet_features,
+                           quality_dropped_ids, ds_pixel_size, output_path):
+    """Save diagnostic PNG showing all candidate regions on endocrine signal.
+
+    Green = kept by quality filter, red = dropped by quality filter,
+    yellow = too few cells (never analyzed).
+    """
+    import matplotlib
+    matplotlib.use('Agg')
+    import matplotlib.pyplot as plt
+
+    h, w = endocrine_signal.shape
+    n_regions = region_labels.max()
+
+    # Build kept set
+    kept_ids = {f['islet_id'] for f in islet_features}
+
+    # RGB canvas from endocrine signal (grayscale)
+    sig_norm = endocrine_signal.copy()
+    if sig_norm.max() > 0:
+        sig_norm = sig_norm / sig_norm.max()
+    rgb = np.stack([sig_norm, sig_norm, sig_norm], axis=-1)
+
+    # Draw region boundaries by finding edges of each label, dilated for visibility
+    from scipy.ndimage import binary_erosion, binary_dilation
+    thickness = 5  # pixels
+    thick_struct = np.ones((thickness * 2 + 1, thickness * 2 + 1), dtype=bool)
+    for rid in range(1, n_regions + 1):
+        mask = region_labels == rid
+        eroded = binary_erosion(mask)
+        boundary = mask & ~eroded
+        if not boundary.any():
+            continue
+        # Thicken boundary
+        boundary = binary_dilation(boundary, structure=thick_struct)
+
+        if rid in kept_ids:
+            color = [0, 1, 0]       # green = kept
+        elif rid in quality_dropped_ids:
+            color = [1, 0, 0]       # red = dropped by quality filter
+        else:
+            color = [1, 1, 0]       # yellow = too few cells
+
+        rgb[boundary] = color
+
+    # Plot with scale bar
+    fig, ax = plt.subplots(1, 1, figsize=(w / 100, h / 100), dpi=150)
+    ax.imshow(rgb, origin='upper')
+    n_yellow = n_regions - len(kept_ids) - len(quality_dropped_ids)
+    ax.set_title(f'Tissue-level islet candidates: '
+                 f'{len(kept_ids)} kept (green), '
+                 f'{len(quality_dropped_ids)} dropped (red), '
+                 f'{n_yellow} <min_cells (yellow)',
+                 fontsize=10)
+    ax.axis('off')
+
+    # Scale bar: 500 um
+    bar_px = 500.0 / ds_pixel_size
+    ax.plot([w - bar_px - 20, w - 20], [h - 30, h - 30], 'w-', linewidth=3)
+    ax.text(w - bar_px / 2 - 20, h - 40, '500 um', color='white',
+            ha='center', va='bottom', fontsize=8)
+
+    fig.tight_layout()
+    fig.savefig(output_path, dpi=150, bbox_inches='tight')
+    plt.close(fig)
+    print(f"  Saved region diagnostic: {output_path}")
 
 
 # ---------------------------------------------------------------------------
@@ -520,17 +729,15 @@ def compute_cell_type_sizes(cells, pixel_size, marker_map):
     return result
 
 
-def compute_coexpression(cells, marker_map, marker_thresholds):
+def compute_coexpression(cells, marker_map, thresholds):
     """Quantify co-expression patterns among 'multi' cells.
 
-    marker_thresholds is (norm_ranges, ch_thresholds, ratio_min) tuple from
-    compute_islet_marker_thresholds(), or None.
-    Checks which channels exceed their normalized threshold for each multi cell,
+    thresholds: dict {marker_name: threshold_value} from classify_by_percentile().
+    For each multi cell, checks which marker channels exceed their threshold,
     then counts co-expression pairs (e.g. coexpr_gcg_ins).
     """
-    if not marker_thresholds:
+    if not thresholds:
         return {}
-    norm_ranges, ch_thresholds, _ratio_min = marker_thresholds
     n_multi_cells = 0
     pair_counts = Counter()
     for c in cells:
@@ -540,12 +747,8 @@ def compute_coexpression(cells, marker_map, marker_thresholds):
         feats = c.get('features', {})
         above = []
         for name, ch_idx in marker_map.items():
-            ch_key = f'ch{ch_idx}'
-            lo, hi = norm_ranges.get(ch_key, (0, 1))
-            raw_val = feats.get(f'{ch_key}_mean', 0)
-            norm_val = max(0.0, min(1.0, (raw_val - lo) / (hi - lo))) if hi > lo else 0.0
-            threshold = ch_thresholds.get(ch_key, 0.5)
-            if norm_val >= threshold:
+            val = feats.get(f'ch{ch_idx}_median', 0)
+            if val >= thresholds.get(name, float('inf')):
                 above.append(name)
         for ai in range(len(above)):
             for bi in range(ai + 1, len(above)):
@@ -751,7 +954,7 @@ def compute_packing_density(cells, pixel_size):
 # ---------------------------------------------------------------------------
 
 def analyze_all_islets(detections, islet_groups, pixel_size, marker_map,
-                       marker_thresholds=None):
+                       thresholds=None):
     """Run all analyses on all islets. Returns list of islet feature dicts."""
     marker_names = list(marker_map.keys())
     results = []
@@ -774,14 +977,14 @@ def analyze_all_islets(detections, islet_groups, pixel_size, marker_map,
                 mc = c['marker_class']
                 ch_idx = marker_map.get(mc)
                 if ch_idx is not None:
-                    dom_vals.append(c.get('features', {}).get(f'ch{ch_idx}_mean', 0))
+                    dom_vals.append(c.get('features', {}).get(f'ch{ch_idx}_median', 0))
             row['mean_marker_intensity'] = float(np.mean(dom_vals)) if dom_vals else 0.0
         else:
             row['mean_marker_intensity'] = 0.0
         spatial = compute_spatial_metrics(cells, pixel_size, marker_map)
         row.update(spatial)
         row.update(compute_cell_type_sizes(cells, pixel_size, marker_map))
-        row.update(compute_coexpression(cells, marker_map, marker_thresholds))
+        row.update(compute_coexpression(cells, marker_map, thresholds))
         row.update(compute_border_core(cells, pixel_size, marker_map))
         row.update(compute_density_gradient(cells, pixel_size))
         row.update(compute_radial_profile(cells, pixel_size, marker_map))
@@ -933,7 +1136,7 @@ def export_detections(detections, output_path):
     """Export enriched detections JSON (with islet_id + marker_class)."""
     clean = sanitize_for_json(detections)
     with open(output_path, 'w') as f:
-        json.dump(clean, f, indent=1)
+        json.dump(clean, f)
     print(f"Saved enriched detections: {output_path}")
 
 
@@ -1012,8 +1215,7 @@ def render_islet_card(islet_feat, cells, masks, tile_vis, tile_x, tile_y,
     if not has_marker_cells:
         return None
 
-    # Union mask of MARKER+ cells only for islet boundary
-    # (using all cells including recruited 'none' makes boundary too broad)
+    # Union mask of marker+ cells only for islet boundary
     mh, mw = masks.shape[:2]
     union_mask = np.zeros((mh, mw), dtype=np.uint8)
     for _cx, _cy, ml, mc in cell_info:
@@ -1021,11 +1223,20 @@ def render_islet_card(islet_feat, cells, masks, tile_vis, tile_x, tile_y,
             continue
         union_mask |= (masks == ml).astype(np.uint8)
 
-    # Mild dilation (7px ≈ 2µm) to close small gaps between adjacent cells
-    kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (7, 7))
-    dilated = cv2.dilate(union_mask, kernel)
+    # Morphological close + dilate → single cohesive boundary
+    close_k = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (11, 11))
+    boundary = cv2.morphologyEx(union_mask, cv2.MORPH_CLOSE, close_k)
+    dilate_k = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (20, 20))
+    boundary = cv2.dilate(boundary, dilate_k)
 
-    ys, xs = np.where(dilated > 0)
+    # Keep only the largest connected component
+    n_labels, cc_labels, cc_stats, _ = cv2.connectedComponentsWithStats(boundary)
+    if n_labels > 1:
+        # Label 0 is background; find largest foreground component
+        largest = 1 + np.argmax(cc_stats[1:, cv2.CC_STAT_AREA])
+        boundary = (cc_labels == largest).astype(np.uint8)
+
+    ys, xs = np.where(boundary > 0)
     if len(xs) == 0:
         return None
 
@@ -1036,19 +1247,19 @@ def render_islet_card(islet_feat, cells, masks, tile_vis, tile_x, tile_y,
 
     crop = tile_vis[y_min:y_max, x_min:x_max].copy()
 
-    # Draw dashed contours for marker+ cells only (skip 'none' — exocrine clutter)
+    # Draw dashed contours for marker+ cells only
     for _cx, _cy, ml, mc in cell_info:
-        if mc == 'none':
+        if mc == 'none' or ml is None or ml <= 0:
             continue
+        mask_crop = (masks[y_min:y_max, x_min:x_max] == ml).astype(np.uint8)
+        if not mask_crop.any():
+            continue
+        cnts, _ = cv2.findContours(mask_crop, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_NONE)
         color = marker_colors.get(mc, (128, 128, 128))
-        if ml is not None and ml > 0:
-            mask_crop = (masks[y_min:y_max, x_min:x_max] == ml).astype(np.uint8)
-            if mask_crop.any():
-                cnts, _ = cv2.findContours(mask_crop, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_NONE)
-                draw_dashed_contours(crop, cnts, color, thickness=2)
+        draw_dashed_contours(crop, cnts, color, thickness=2)
 
-    # Solid pink islet boundary
-    boundary_crop = dilated[y_min:y_max, x_min:x_max]
+    # Solid pink islet boundary (single cohesive shape)
+    boundary_crop = boundary[y_min:y_max, x_min:x_max]
     cnts, _ = cv2.findContours(boundary_crop, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
     cv2.drawContours(crop, cnts, -1, PINK, 2, cv2.LINE_AA)
 
@@ -1445,38 +1656,34 @@ def main():
     parser.add_argument('--run-dir', required=True,
                         help='Path to completed islet run output directory')
     parser.add_argument('--czi-path', required=True,
-                        help='Path to CZI file (for loading display channels)')
+                        help='Path to CZI file (for loading marker + display channels)')
     parser.add_argument('--buffer-um', type=float, default=25.0,
-                        help='Buffer distance in um: marker+ cells within this distance '
-                             'are grouped into the same islet, and none/multi cells within '
-                             'this distance are recruited (default: 25)')
+                        help='Dilation buffer in um applied to tissue-level islet '
+                             'regions to capture border cells (default: 25)')
+    parser.add_argument('--blur-sigma-um', type=float, default=10.0,
+                        help='Gaussian blur sigma in um for tissue signal smoothing '
+                             '(default: 10, ~1 cell diameter)')
+    parser.add_argument('--close-um', type=float, default=10.0,
+                        help='Morphological closing kernel in um to fill inter-cell '
+                             'gaps within islets (default: 10)')
+    parser.add_argument('--min-area-um2', type=float, default=500.0,
+                        help='Minimum islet region area in um^2 (default: 500)')
+    parser.add_argument('--otsu-multiplier', type=float, default=1.5,
+                        help='Multiply Otsu threshold by this factor (>1 = stricter, '
+                             'default: 1.5)')
     parser.add_argument('--min-cells', type=int, default=5,
-                        help='Minimum marker+ cells to form an islet (default: 5)')
+                        help='Minimum cells per islet region (default: 5)')
     parser.add_argument('--display-channels', type=str, default='2,3,5',
                         help='R,G,B channel indices for display (default: 2,3,5)')
     parser.add_argument('--marker-channels', type=str, default='gcg:2,ins:3,sst:5',
                         help='Marker-to-channel mapping (default: gcg:2,ins:3,sst:5)')
-    parser.add_argument('--marker-top-pct', type=float, default=5,
-                        help='For percentile-method channels, classify the top N%% '
-                             'of cells as marker-positive (default 5)')
-    parser.add_argument('--marker-pct-channels', type=str, default='sst',
-                        help='Comma-separated marker names that use percentile-based '
-                             'thresholding instead of GMM (default: sst)')
-    parser.add_argument('--gmm-p-cutoff', type=float, default=0.75,
-                        help='GMM posterior probability cutoff for marker classification (default 0.75)')
-    parser.add_argument('--ratio-min', type=float, default=1.5,
-                        help='Dominant marker must be >= ratio_min * runner-up (default 1.5)')
-    parser.add_argument('--threshold-factor', type=float, default=2.0,
-                        help='Divide GMM threshold by this factor (>1 = more permissive, '
-                             'matches pipeline pre-filter). Default: 2.0')
-    parser.add_argument('--no-recruit', action='store_true',
-                        help='Do not recruit marker-negative cells into islets (show only marker+ and multi)')
-    parser.add_argument('--quality-filter', choices=['none', 'otsu'], default='otsu',
-                        help='Filter dim islets by mean marker intensity. '
-                             'otsu=Otsu threshold on per-islet mean (default: otsu)')
-    parser.add_argument('--quality-factor', type=float, default=0.5,
-                        help='Multiply Otsu threshold by this factor (<1 = more permissive). '
-                             'Default: 0.5 (divide Otsu by 2)')
+    parser.add_argument('--marker-percentile', type=float, default=95,
+                        help='Percentile threshold for marker classification: cells with '
+                             'median intensity above this percentile are marker-positive '
+                             '(default: 95 = top 5%%)')
+    parser.add_argument('--quality-filter', choices=['none', 'q25'], default='q25',
+                        help='Filter regions by marker-positive cell fraction. '
+                             'q25=drop bottom quartile (default: q25)')
     parser.add_argument('--no-html', action='store_true',
                         help='Skip HTML generation (just CSV + JSON)')
     args = parser.parse_args()
@@ -1500,71 +1707,108 @@ def main():
         print("No detections — exiting")
         sys.exit(0)
 
-    # 2. Classify markers (need enough detections for reliable thresholds)
-    _pct_channels = set(s.strip() for s in args.marker_pct_channels.split(',')) if args.marker_pct_channels else set()
-    marker_thresholds = classify_all(detections, marker_map,
-                                     marker_top_pct=args.marker_top_pct,
-                                     pct_channels=_pct_channels,
-                                     gmm_p_cutoff=args.gmm_p_cutoff,
-                                     ratio_min=args.ratio_min,
-                                     threshold_factor=args.threshold_factor)
-    n_endocrine = sum(1 for d in detections if d.get('marker_class', 'none') != 'none')
-    if n_endocrine == 0:
-        print("ERROR: No marker-positive cells found. Cannot define islets.")
-        sys.exit(1)
-
-    # 3. Get pixel size from CZI and pre-load display channels
-    print(f"Loading CZI metadata from {czi_path}...")
-    pixel_size, x_start, y_start, ch_data = load_czi_direct(czi_path, display_chs)
+    # 2. Load CZI channels (marker + display, deduplicated)
+    all_chs = sorted(set(display_chs) | set(marker_map.values()))
+    print(f"Loading CZI channels {all_chs} from {czi_path}...")
+    pixel_size, x_start, y_start, ch_data = load_czi_direct(czi_path, all_chs)
     print(f"  pixel_size={pixel_size:.4f} um/px")
 
-    # 4. Define islets (union of bright cells + buffer)
-    islet_groups = define_islets(detections, pixel_size,
-                                buffer_um=args.buffer_um,
-                                min_cells=args.min_cells,
-                                no_recruit=args.no_recruit)
+    # 3. Find islet regions from tissue-level signal
+    print("Finding islet regions from tissue signal...")
+    region_labels, ds, endocrine_signal = find_islet_regions(
+        ch_data, marker_map, pixel_size, buffer_um=args.buffer_um,
+        blur_sigma_um=args.blur_sigma_um, close_um=args.close_um,
+        min_area_um2=args.min_area_um2, otsu_multiplier=args.otsu_multiplier)
+
+    # 4. Assign cells to regions
+    islet_groups = assign_cells_to_regions(
+        detections, region_labels, ds, x_start, y_start,
+        min_cells=args.min_cells)
 
     if not islet_groups:
-        print("No islets defined — exiting")
+        print("No islet regions found — exiting")
         sys.exit(0)
 
-    print(f"{len(islet_groups)} islets defined")
+    print(f"{len(islet_groups)} islet regions with cells")
 
-    # 5. Analyze all islets
+    # 5. Compute per-cell median intensity from HDF5 masks + CZI
+    tiles_dir = run_dir / 'tiles'
+    print("Computing per-cell median intensities...")
+    compute_cell_medians(detections, tiles_dir, ch_data, marker_map, x_start, y_start)
+
+    # 6. Classify by percentile threshold (all cells, whole-population)
+    print(f"Classifying markers (p{args.marker_percentile})...")
+    thresholds = classify_by_percentile(detections, marker_map,
+                                        percentile=args.marker_percentile)
+
+    # 7. Clear non-islet marker classifications (background noise)
+    islet_cell_indices = set()
+    for indices in islet_groups.values():
+        islet_cell_indices.update(indices)
+
+    n_cleared = 0
+    for i, det in enumerate(detections):
+        if i not in islet_cell_indices and det.get('marker_class', 'none') != 'none':
+            det['marker_class'] = 'none'
+            n_cleared += 1
+    if n_cleared:
+        print(f"  Cleared {n_cleared} non-islet marker classifications")
+    final_counts = Counter(d.get('marker_class', 'none') for d in detections)
+    print(f"  Final classification: {dict(final_counts)}")
+
+    # 8. Analyze all islets
     print("Computing islet features...")
     islet_features = analyze_all_islets(detections, islet_groups, pixel_size, marker_map,
-                                        marker_thresholds=marker_thresholds)
+                                        thresholds=thresholds)
     print(f"  {len(islet_features)} islets analyzed")
 
-    # 5a. Quality filter: drop dim islets by mean marker intensity
-    if args.quality_filter == 'otsu' and len(islet_features) >= 3:
-        intensities = np.array([f['mean_marker_intensity'] for f in islet_features])
-        from skimage.filters import threshold_otsu
-        try:
-            otsu_raw = threshold_otsu(intensities)
-            otsu_t = otsu_raw * args.quality_factor
-            n_before = len(islet_features)
-            bright = [f for f in islet_features if f['mean_marker_intensity'] >= otsu_t]
-            dim = [f for f in islet_features if f['mean_marker_intensity'] < otsu_t]
-            if dim:
-                dim_ids = {f['islet_id'] for f in dim}
-                for iid in dim_ids:
-                    islet_groups.pop(iid, None)
-                for d in detections:
-                    if d.get('islet_id', -1) in dim_ids:
-                        d['islet_id'] = -1
-                islet_features = bright
-                dim_vals = ', '.join(str(round(f['mean_marker_intensity'])) for f in dim)
-                print(f"  Quality filter (Otsu): raw={otsu_raw:.0f}, "
-                      f"adjusted={otsu_t:.0f} (x{args.quality_factor}), "
-                      f"kept {len(bright)}/{n_before} islets, "
-                      f"dropped {len(dim)} dim (intensities: {dim_vals})")
-            else:
-                print(f"  Quality filter (Otsu): all {n_before} islets above threshold={otsu_t:.0f}")
-        except ValueError:
-            print("  Quality filter: Otsu failed (all same value?), skipping")
+    # 9. Quality filter: keep islets with above-median tissue endocrine signal
+    #    Per-region median of the summed+normalized endocrine image (same as diagnostic).
+    #    Median is robust to bright-pixel outliers within a region.
+    quality_dropped_ids = set()
+    if args.quality_filter != 'none' and len(islet_features) >= 4:
+        n_before = len(islet_features)
 
-    # 5b. Tissue-level analysis
+        # Compute median endocrine signal per region from the tissue image
+        for f in islet_features:
+            rid = f['islet_id']
+            region_mask = region_labels == rid
+            region_vals = endocrine_signal[region_mask]
+            f['_median_signal'] = float(np.median(region_vals)) if len(region_vals) > 0 else 0.0
+
+        signals = [f['_median_signal'] for f in islet_features]
+        cutoff = float(np.median(signals))
+        keep = [f for f in islet_features if f['_median_signal'] >= cutoff]
+        drop = [f for f in islet_features if f['_median_signal'] < cutoff]
+
+        if drop:
+            quality_dropped_ids = {f['islet_id'] for f in drop}
+            for iid in quality_dropped_ids:
+                islet_groups.pop(iid, None)
+            for d in detections:
+                if d.get('islet_id', -1) in quality_dropped_ids:
+                    d['islet_id'] = -1
+            islet_features = keep
+            drop_info = ', '.join(
+                f"{f['islet_id']}({f['_median_signal']:.3f})"
+                for f in drop)
+            print(f"  Quality filter (median tissue signal, cutoff={cutoff:.3f}): "
+                  f"kept {len(keep)}/{n_before}, dropped {len(drop)} "
+                  f"(id/signal: {drop_info})")
+        else:
+            print(f"  Quality filter: all {n_before} islets above median={cutoff:.3f}")
+
+        # Clean up temp key
+        for f in islet_features:
+            f.pop('_median_signal', None)
+
+    # 9b. Save region diagnostic image
+    ds_pixel_size = pixel_size * ds
+    diag_path = run_dir / 'islet_regions_diagnostic.png'
+    save_region_diagnostic(endocrine_signal, region_labels, islet_features,
+                           quality_dropped_ids, ds_pixel_size, diag_path)
+
+    # 10. Tissue-level analysis
     print("Computing tissue-level metrics...")
     tissue_stats = compute_tissue_level(islet_features, detections, pixel_size)
 
@@ -1598,19 +1842,18 @@ def main():
         if mii is not None:
             print(f"  Inter-islet distance: median {mii:.0f} um")
 
-    # 6. Export CSV
+    # 11. Export CSV
     csv_path = run_dir / 'islet_summary.csv'
     export_csv(islet_features, csv_path)
 
-    # 7. Export enriched detections
+    # 12. Export enriched detections
     det_out = run_dir / 'islet_detections_analyzed.json'
     export_detections(detections, det_out)
 
-    # 8. HTML visualization
+    # 13. HTML visualization
     if not args.no_html:
         print("\nGenerating HTML visualization...")
 
-        tiles_dir = run_dir / 'tiles'
         if not tiles_dir.exists():
             print(f"Tiles directory not found: {tiles_dir} — skipping HTML")
         else:
@@ -1631,8 +1874,6 @@ def main():
             if not tile_info:
                 print("No tile directories found — skipping HTML")
             else:
-                # ch_data already loaded by load_czi_direct() above
-
                 # Get tile dimensions from first tile
                 first_td = next(iter(tile_info.values()))
                 mask_path = first_td / 'islet_masks.h5'
@@ -1651,6 +1892,27 @@ def main():
                             if tx <= gc[0] < tx + tile_w and ty <= gc[1] < ty + tile_h:
                                 needed_tiles.add((tx, ty))
                                 break
+
+                # Compute normalization ranges from islet region pixels only
+                # so marker signal is visible (whole-slide p99.5 is too wide)
+                islet_mask = region_labels > 0
+                pop_ranges = []
+                for ch in display_chs[:3]:
+                    if ch in ch_data:
+                        ds_arr = ch_data[ch][::ds, ::ds]
+                        h = min(ds_arr.shape[0], islet_mask.shape[0])
+                        w = min(ds_arr.shape[1], islet_mask.shape[1])
+                        vals = ds_arr[:h, :w][islet_mask[:h, :w]]
+                        vals = vals[vals > 0]
+                        if len(vals) > 0:
+                            lo = float(np.percentile(vals, 1))
+                            hi = float(np.percentile(vals, 95))
+                            pop_ranges.append((lo, hi))
+                        else:
+                            pop_ranges.append(None)
+                    else:
+                        pop_ranges.append(None)
+                print(f"  Islet-region normalization ranges: {pop_ranges}")
 
                 tile_masks_cache = {}
                 tile_vis_cache = {}
@@ -1675,19 +1937,8 @@ def main():
                             rgb_chs.append(np.zeros((th, tw), dtype=np.uint16))
                     while len(rgb_chs) < 3:
                         rgb_chs.append(np.zeros((th, tw), dtype=np.uint16))
-                    # Use population-level percentiles (from classification thresholds)
-                    # so display brightness matches classification decisions across all tiles
-                    pop_ranges = []
-                    if marker_thresholds is not None:
-                        norm_ranges = marker_thresholds[0]  # {ch_key: (lo, hi)}
-                        for ch in display_chs[:3]:
-                            ch_key = f'ch{ch}'
-                            if ch_key in norm_ranges:
-                                pop_ranges.append(norm_ranges[ch_key])
-                            else:
-                                pop_ranges.append(None)
-                    tile_vis_cache[(tx, ty)] = pct_norm(np.stack(rgb_chs, axis=-1),
-                                                        pop_ranges=pop_ranges or None)
+                    tile_vis_cache[(tx, ty)] = pct_norm(
+                        np.stack(rgb_chs, axis=-1), pop_ranges=pop_ranges)
                     print(f"  Loaded tile ({tx},{ty})")
 
                 marker_colors = build_marker_colors(marker_map)

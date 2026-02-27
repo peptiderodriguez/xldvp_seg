@@ -68,7 +68,7 @@ def main():
 
     det_file = RUN_DIR / f"{CELL_TYPE}_detections.json"
     with open(det_file, 'w') as f:
-        json.dump(all_detections, f, indent=2, cls=NumpyEncoder)
+        json.dump(all_detections, f, cls=NumpyEncoder)
     print(f"  Saved {len(all_detections)} detections to {det_file}")
 
     # 5. Save CSV

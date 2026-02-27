@@ -204,7 +204,7 @@ def preflight_check(
             region=(test_x, test_y, test_w, test_h),
             scale_factor=1,
             C=channels[0],
-            S=mosaic_info.get('scene', 0)
+            # Note: do NOT pass S= to read_mosaic on mosaic CZIs — use region= instead
         )
         test_data = np.squeeze(test_data)
 

@@ -146,19 +146,24 @@ def scale_point(point: Tuple[float, float], scale_factor: int) -> Tuple[float, f
 def compute_iou_contours(
     contour1: np.ndarray,
     contour2: np.ndarray,
-    image_shape: Optional[Tuple[int, int]] = None
+    image_shape: Optional[Tuple[int, int]] = None,
+    max_render_size: int = 512,
 ) -> float:
     """
     Compute Intersection over Union (IoU) between two contours.
 
     Uses mask-based IoU computation by rendering contours to binary masks.
-    Contours are translated to local coordinates to avoid huge mask images
-    when working with global mosaic coordinates.
+    Contours are translated to local coordinates and downsampled so the
+    combined bounding box fits within max_render_size pixels on each axis.
+    IoU is scale-invariant, so downsampling preserves accuracy while
+    keeping mask allocation bounded (max ~512x512 = 262K pixels vs
+    potentially millions for large vessels at full resolution).
 
     Args:
         contour1: First contour (N, 1, 2) or (N, 2)
         contour2: Second contour (M, 1, 2) or (M, 2)
         image_shape: (height, width) for mask rendering. If None, computed from contours.
+        max_render_size: Maximum pixels per axis for mask rendering (default 512).
 
     Returns:
         IoU value between 0 and 1
@@ -179,32 +184,43 @@ def compute_iou_contours(
         return 0.0
 
     # Translate contours to local coordinates (origin at min of both bounding boxes)
-    # This avoids creating huge mask images when coordinates are in global mosaic space
     min_x = min(x1, x2)
     min_y = min(y1, y2)
 
-    c1_local = c1.copy()
-    c2_local = c2.copy()
+    local_w = max(x1 + w1, x2 + w2) - min_x + 2
+    local_h = max(y1 + h1, y2 + h2) - min_y + 2
+
+    c1_local = c1.copy().astype(np.float64)
+    c2_local = c2.copy().astype(np.float64)
     c1_local[:, :, 0] -= min_x
     c1_local[:, :, 1] -= min_y
     c2_local[:, :, 0] -= min_x
     c2_local[:, :, 1] -= min_y
 
-    # Determine image shape for mask rendering (now in local coordinates)
-    if image_shape is None:
-        local_max_x = max(x1 + w1, x2 + w2) - min_x + 10
-        local_max_y = max(y1 + h1, y2 + h2) - min_y + 10
-        image_shape = (local_max_y, local_max_x)
+    # Downsample if combined bbox exceeds max_render_size — IoU is scale-invariant
+    scale = 1.0
+    if local_w > max_render_size or local_h > max_render_size:
+        scale = min(max_render_size / local_w, max_render_size / local_h)
+        c1_local = (c1_local * scale).astype(np.int32)
+        c2_local = (c2_local * scale).astype(np.int32)
+        local_w = int(local_w * scale) + 2
+        local_h = int(local_h * scale) + 2
+    else:
+        c1_local = c1_local.astype(np.int32)
+        c2_local = c2_local.astype(np.int32)
+
+    # Always use local (possibly downsampled) dimensions — ignore image_shape
+    # since contours have been translated to local coordinates
+    render_shape = (local_h, local_w)
 
     # Create masks
-    mask1 = np.zeros(image_shape, dtype=np.uint8)
-    mask2 = np.zeros(image_shape, dtype=np.uint8)
+    mask1 = np.zeros(render_shape, dtype=np.uint8)
+    mask2 = np.zeros(render_shape, dtype=np.uint8)
 
     try:
-        cv2.drawContours(mask1, [c1_local], -1, 1, -1)  # Filled
-        cv2.drawContours(mask2, [c2_local], -1, 1, -1)  # Filled
+        cv2.drawContours(mask1, [c1_local], -1, 1, -1)
+        cv2.drawContours(mask2, [c2_local], -1, 1, -1)
     except cv2.error:
-        # Contours may be invalid or outside image bounds
         return 0.0
 
     # Compute IoU
@@ -262,8 +278,8 @@ def merge_detections_across_scales(
         Deduplicated list of detections
     """
     import time
-import sys
-from collections import defaultdict
+    import sys
+    from collections import defaultdict
 
     if not detections:
         return []

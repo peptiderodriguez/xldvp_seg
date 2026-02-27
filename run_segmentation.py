@@ -296,6 +296,8 @@ def _resume_generate_html_samples(args, all_detections, tiles_dir,
                     rgb_channels.append(
                         all_channel_data[ch_idx][rel_ty:rel_ty+tile_h, rel_tx:rel_tx+tile_w])
                 else:
+                    if not all_channel_data:
+                        raise ValueError("No channel data loaded — check --channel and CZI file")
                     _dtype = next(iter(all_channel_data.values())).dtype
                     rgb_channels.append(np.zeros((tile_h, tile_w), dtype=_dtype))
             tile_rgb = np.stack(rgb_channels, axis=-1)
@@ -314,9 +316,9 @@ def _resume_generate_html_samples(args, all_detections, tiles_dir,
         if tile_rgb.size == 0:
             continue
 
-        # Convert uint16→uint8 for non-islet/tissue_pattern (matches normal path: /256)
-        if tile_rgb.dtype == np.uint16 and cell_type not in ('islet', 'tissue_pattern'):
-            tile_rgb = (tile_rgb / 256).astype(np.uint8)
+        # Keep uint16 for percentile_normalize — it handles float32 conversion
+        # internally with full 16-bit precision. The old /256 uint8 conversion
+        # caused visible banding/blur after flat-field correction.
 
         tile_pct = _compute_tile_percentiles(tile_rgb) if getattr(args, 'html_normalization', 'crop') == 'tile' else None
 
@@ -344,6 +346,54 @@ def _finish_pipeline(args, all_detections, all_samples, slide_output_dir, tiles_
     """Shared post-processing: HTML export, CSV, summary (used by both normal and resume paths)."""
     cell_type = args.cell_type
     czi_path = Path(args.czi_path)
+
+    # ---- Save detections JSON + CSV FIRST (before HTML) ----
+    # This ensures dedup results are persisted even if HTML generation crashes/hangs.
+    # On resume, the pipeline will find the detections JSON and skip detection+dedup.
+    for det in all_detections:
+        det['tile_mask_label'] = det.get('mask_label', 0)
+        _gc = det.get('global_center', det.get('center', [0, 0]))
+        det['global_id'] = f"{int(round(_gc[0]))}_{int(round(_gc[1]))}"
+
+    detections_file = slide_output_dir / f'{cell_type}_detections.json'
+    with open(detections_file, 'w') as f:
+        json.dump(all_detections, f, cls=NumpyEncoder)
+    logger.info(f"Saved {len(all_detections)} detections to {detections_file}")
+
+    csv_file = slide_output_dir / f'{cell_type}_coordinates.csv'
+    with open(csv_file, 'w') as f:
+        if cell_type == 'vessel':
+            f.write('uid,global_x_px,global_y_px,global_x_um,global_y_um,outer_diameter_um,wall_thickness_um,confidence\n')
+            for det in all_detections:
+                g_center = det.get('global_center')
+                g_center_um = det.get('global_center_um')
+                if g_center is None or g_center_um is None:
+                    continue
+                if len(g_center) < 2 or g_center[0] is None or g_center[1] is None:
+                    continue
+                if len(g_center_um) < 2 or g_center_um[0] is None or g_center_um[1] is None:
+                    continue
+                feat = det.get('features', {})
+                f.write(f"{det['uid']},{g_center[0]:.1f},{g_center[1]:.1f},"
+                        f"{g_center_um[0]:.2f},{g_center_um[1]:.2f},"
+                        f"{feat.get('outer_diameter_um', 0):.2f},{feat.get('wall_thickness_mean_um', 0):.2f},"
+                        f"{feat.get('confidence', 'unknown')}\n")
+        else:
+            f.write('uid,global_x_px,global_y_px,global_x_um,global_y_um,area_um2\n')
+            for det in all_detections:
+                g_center = det.get('global_center')
+                g_center_um = det.get('global_center_um')
+                if g_center is None or g_center_um is None:
+                    continue
+                if len(g_center) < 2 or g_center[0] is None or g_center[1] is None:
+                    continue
+                if len(g_center_um) < 2 or g_center_um[0] is None or g_center_um[1] is None:
+                    continue
+                feat = det.get('features', {})
+                area_um2 = feat.get('area', 0) * (pixel_size_um ** 2)
+                f.write(f"{det['uid']},{g_center[0]:.1f},{g_center[1]:.1f},"
+                        f"{g_center_um[0]:.2f},{g_center_um[1]:.2f},{area_um2:.2f}\n")
+    logger.info(f"Saved coordinates to {csv_file}")
 
     # Sort samples: classifier runs → RF score descending; else → area ascending
     _has_classifier = (
@@ -423,54 +473,6 @@ def _finish_pipeline(args, all_detections, all_samples, slide_output_dir, tiles_
     elif skip_html:
         logger.info("HTML export skipped (already exists)")
 
-    # Add tile_mask_label and global_id
-    for det in all_detections:
-        det['tile_mask_label'] = det.get('mask_label', 0)
-        _gc = det.get('global_center', det.get('center', [0, 0]))
-        det['global_id'] = f"{int(round(_gc[0]))}_{int(round(_gc[1]))}"
-
-    # Save detections JSON
-    detections_file = slide_output_dir / f'{cell_type}_detections.json'
-    with open(detections_file, 'w') as f:
-        json.dump(all_detections, f, indent=2, cls=NumpyEncoder)
-    logger.info(f"  Saved {len(all_detections)} detections to {detections_file}")
-
-    # Export CSV
-    csv_file = slide_output_dir / f'{cell_type}_coordinates.csv'
-    with open(csv_file, 'w') as f:
-        if cell_type == 'vessel':
-            f.write('uid,global_x_px,global_y_px,global_x_um,global_y_um,outer_diameter_um,wall_thickness_um,confidence\n')
-            for det in all_detections:
-                g_center = det.get('global_center')
-                g_center_um = det.get('global_center_um')
-                if g_center is None or g_center_um is None:
-                    continue
-                if len(g_center) < 2 or g_center[0] is None or g_center[1] is None:
-                    continue
-                if len(g_center_um) < 2 or g_center_um[0] is None or g_center_um[1] is None:
-                    continue
-                feat = det.get('features', {})
-                f.write(f"{det['uid']},{g_center[0]:.1f},{g_center[1]:.1f},"
-                        f"{g_center_um[0]:.2f},{g_center_um[1]:.2f},"
-                        f"{feat.get('outer_diameter_um', 0):.2f},{feat.get('wall_thickness_mean_um', 0):.2f},"
-                        f"{feat.get('confidence', 'unknown')}\n")
-        else:
-            f.write('uid,global_x_px,global_y_px,global_x_um,global_y_um,area_um2\n')
-            for det in all_detections:
-                g_center = det.get('global_center')
-                g_center_um = det.get('global_center_um')
-                if g_center is None or g_center_um is None:
-                    continue
-                if len(g_center) < 2 or g_center[0] is None or g_center[1] is None:
-                    continue
-                if len(g_center_um) < 2 or g_center_um[0] is None or g_center_um[1] is None:
-                    continue
-                feat = det.get('features', {})
-                area_um2 = feat.get('area', 0) * (pixel_size_um ** 2)
-                f.write(f"{det['uid']},{g_center[0]:.1f},{g_center[1]:.1f},"
-                        f"{g_center_um[0]:.2f},{g_center_um[1]:.2f},{area_um2:.2f}\n")
-    logger.info(f"  Saved coordinates to {csv_file}")
-
     # Save summary
     summary = {
         'slide_name': slide_name,
@@ -489,7 +491,7 @@ def _finish_pipeline(args, all_detections, all_samples, slide_output_dir, tiles_
         'coordinates_file': str(csv_file),
     }
     with open(slide_output_dir / 'summary.json', 'w') as f:
-        json.dump(summary, f, indent=2, cls=NumpyEncoder)
+        json.dump(summary, f, cls=NumpyEncoder)
 
     # Export mesothelium LMD XML if applicable
     if cell_type == 'mesothelium' and len(all_detections) > 0:
@@ -916,6 +918,7 @@ def start_server_and_tunnel(html_dir: Path, port: int = 8081, background: bool =
             # Wait briefly and parse log for URL
             time.sleep(5)
             tunnel_log_file.flush()
+            tunnel_log_file.close()
             tunnel_url = None
             try:
                 log_content = tunnel_log.read_text()
@@ -1203,14 +1206,20 @@ def classify_islet_marker(features_dict, marker_thresholds=None, marker_map=None
     if not any(positive.values()):
         return 'none', (128, 128, 128)
 
-    # Ratio classification among gated cells
-    markers = []
+    # Ratio classification — only among channels that are actually positive
+    pos_markers = []
     for i, name in enumerate(marker_names):
-        color = _marker_colors[i] if i < len(_marker_colors) else (200, 200, 200)
-        markers.append((name, normed[name], color))
-    markers.sort(key=lambda x: x[1], reverse=True)
-    best_name, best_val, best_color = markers[0]
-    second_val = markers[1][1] if len(markers) > 1 else 0
+        if positive[name]:
+            color = _marker_colors[i] if i < len(_marker_colors) else (200, 200, 200)
+            pos_markers.append((name, normed[name], color))
+
+    if len(pos_markers) == 1:
+        return pos_markers[0][0], pos_markers[0][2]
+
+    # Multiple positive channels — check ratio among them
+    pos_markers.sort(key=lambda x: x[1], reverse=True)
+    best_name, best_val, best_color = pos_markers[0]
+    second_val = pos_markers[1][1] if len(pos_markers) > 1 else 0
 
     if second_val > 0 and best_val / second_val < ratio_min:
         return 'multi', (255, 170, 0)  # orange
@@ -1220,7 +1229,8 @@ def classify_islet_marker(features_dict, marker_thresholds=None, marker_map=None
 
 def calibrate_islet_marker_gmm(pilot_tiles, loader, all_channel_data, slide_shm_arr,
                                ch_to_slot, marker_channels, membrane_channel=1,
-                               nuclear_channel=4, tile_size=4000, pixel_size_um=0.325):
+                               nuclear_channel=4, tile_size=4000, pixel_size_um=0.325,
+                               nuclei_only=False, mosaic_origin=(0, 0)):
     """Run Cellpose on pilot tiles to calibrate global GMM pre-filter thresholds.
 
     Similar to calibrate_tissue_threshold(): samples a few tiles to estimate
@@ -1287,26 +1297,34 @@ def calibrate_islet_marker_gmm(pilot_tiles, loader, all_channel_data, slide_shm_
     all_marker_means = {ch: [] for ch in marker_channels}
     total_cells = 0
 
+    ox, oy = mosaic_origin
     for ti, tile in enumerate(pilot_tiles):
-        tx, ty = tile['x'], tile['y']
-        logger.info(f"  Pilot tile {ti+1}/{len(pilot_tiles)} at ({tx}, {ty})...")
+        tx, ty = tile['x'] - ox, tile['y'] - oy
+        logger.info(f"  Pilot tile {ti+1}/{len(pilot_tiles)} at ({tile['x']}, {tile['y']})...")
 
-        # Read membrane + nuclear channels for Cellpose
-        membrane = _read_channel(membrane_channel, tx, ty, tile_size, tile_size)
+        # Read channels for Cellpose
         nuclear = _read_channel(nuclear_channel, tx, ty, tile_size, tile_size)
-        if membrane is None or nuclear is None:
-            logger.warning(f"  Skipping tile ({tx},{ty}): missing channels")
+        if nuclear is None:
+            logger.warning(f"  Skipping tile ({tx},{ty}): missing nuclear channel")
             continue
-
-        # Normalize to uint8 for Cellpose
-        mem_u8 = _pct_norm(membrane)
         nuc_u8 = _pct_norm(nuclear)
-        cellpose_input = np.stack([mem_u8, nuc_u8], axis=-1)
+
+        if nuclei_only:
+            cellpose_input = nuc_u8
+            cellpose_channels = [0, 0]
+        else:
+            membrane = _read_channel(membrane_channel, tx, ty, tile_size, tile_size)
+            if membrane is None:
+                logger.warning(f"  Skipping tile ({tx},{ty}): missing membrane channel")
+                continue
+            mem_u8 = _pct_norm(membrane)
+            cellpose_input = np.stack([mem_u8, nuc_u8], axis=-1)
+            cellpose_channels = [1, 2]
 
         # Run Cellpose
         try:
             masks, _, _ = cellpose_model.eval(
-                cellpose_input, channels=[1, 2],
+                cellpose_input, channels=cellpose_channels,
                 diameter=None, flow_threshold=0.4,
             )
         except Exception as e:
@@ -1485,12 +1503,14 @@ def compute_islet_marker_thresholds(all_detections, vis_threshold_overrides=None
 
         if name in pct_channels:
             # --- Percentile-based threshold (for channels with poor GMM separation) ---
-            method = f'top-{marker_top_pct}%'
-            pct_cutoff = 100 - marker_top_pct
+            # threshold_factor widens the top-N%: factor=2 → top 5% becomes top 10%
+            effective_pct = min(marker_top_pct * threshold_factor, 50)
+            method = f'top-{effective_pct:.0f}%'
+            pct_cutoff = 100 - effective_pct
             raw_cutoff = float(np.percentile(arr_pos, pct_cutoff))
             bg_mean = sig_mean = separation = 0  # not computed for percentile channels
-            logger.info(f"  {ch_name}: using top {marker_top_pct}% "
-                        f"(p{pct_cutoff}={raw_cutoff:.0f})")
+            logger.info(f"  {ch_name}: using top {effective_pct:.0f}% "
+                        f"(p{pct_cutoff:.0f}={raw_cutoff:.0f})")
         else:
             # --- GMM on log-transformed intensities ---
             # Log1p compresses dynamic range, making background vs signal more Gaussian.
@@ -1522,8 +1542,9 @@ def compute_islet_marker_thresholds(all_detections, vis_threshold_overrides=None
                     lo_raw = mid
             raw_cutoff = (lo_raw + hi_raw) / 2
 
-        # Apply threshold_factor (>1 = more permissive, matches pipeline pre-filter)
-        if threshold_factor > 1.0:
+        # Apply threshold_factor to GMM channels only (>1 = more permissive).
+        # Percentile channels already incorporate threshold_factor via widened percentage.
+        if threshold_factor > 1.0 and name not in pct_channels:
             raw_cutoff = raw_cutoff / threshold_factor
 
         # Convert raw threshold to normalized [0,1] for classify_islet_marker()
@@ -1737,8 +1758,8 @@ def get_czi_metadata(czi_path, scene: int = 0):
         if ch_id and ch_id.startswith('Channel:'):
             try:
                 ch_idx = int(ch_id.split(':')[1])
-            except (ValueError, IndexError):
-                pass
+            except (ValueError, IndexError) as e:
+                logger.debug(f"Could not parse channel index from '{ch_id}': {e}")
 
         fluor = channel.find('.//Fluor')
         fluor_text = fluor.text if fluor is not None else 'N/A'
@@ -2288,11 +2309,14 @@ def create_sample_from_detection(tile_x, tile_y, tile_rgb, masks, feat, pixel_si
     if 'sam2_score' in features:
         stats['confidence'] = features['sam2_score']
 
-    # Add classifier score if available (from NMJ multi-GPU pipeline)
-    if 'rf_prediction' in feat and feat['rf_prediction'] is not None:
-        stats['rf_prediction'] = feat['rf_prediction']
-    elif 'score' in feat and feat['score'] is not None:
-        stats['rf_prediction'] = feat['score']
+    # Add classifier score if available (from multi-GPU pipeline)
+    rf_pred = feat.get('rf_prediction')
+    if rf_pred is not None:
+        stats['rf_prediction'] = rf_pred
+    else:
+        score = feat.get('score')
+        if score is not None:
+            stats['rf_prediction'] = score
 
     return {
         'uid': uid,
@@ -2317,6 +2341,10 @@ def run_pipeline(args):
     slide_name = czi_path.stem
     run_timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
 
+    # Set random seed early — ensures all multi-node shards get identical
+    # tissue calibration and tile sampling (same tile list on every node)
+    np.random.seed(getattr(args, 'random_seed', 42))
+
     logger.info("=" * 60)
     logger.info("UNIFIED SEGMENTATION PIPELINE")
     logger.info("=" * 60)
@@ -2328,6 +2356,12 @@ def run_pipeline(args):
         logger.info(f"Scene: {args.scene}")
     if getattr(args, 'multi_marker', False):
         logger.info("Multi-marker mode: ENABLED (auto-enabled --all-channels and --parallel-detection)")
+    if getattr(args, 'tile_shard', None):
+        shard_idx, shard_total = args.tile_shard
+        logger.info(f"Tile shard: {shard_idx}/{shard_total} (detection-only)")
+    elif getattr(args, 'detection_only', False):
+        logger.info("Detection-only mode (skipping dedup/HTML/CSV)")
+    logger.info(f"Random seed: {getattr(args, 'random_seed', 42)}")
     logger.info("=" * 60)
 
     # ---- Resume early-exit: skip CZI loading if ALL stages are done ----
@@ -2649,6 +2683,10 @@ def run_pipeline(args):
 
     logger.info(f"Sampled {len(sampled_tiles)} tiles ({args.sample_fraction*100:.0f}% of {len(tissue_tiles)} tissue tiles)")
 
+    # Sort sampled tiles deterministically (by position) before sharding
+    # so all nodes agree on the same ordering regardless of np.random.choice order
+    sampled_tiles.sort(key=lambda t: (t['y'], t['x']))  # sort by (y, x)
+
     # Setup output directories (timestamped to avoid overwriting previous runs)
     pct = int(args.sample_fraction * 100)
     if getattr(args, 'resume', None):
@@ -2662,19 +2700,107 @@ def run_pipeline(args):
     tiles_dir = slide_output_dir / "tiles"
     tiles_dir.mkdir(parents=True, exist_ok=True)
 
+    # Multi-node tile list sharing: write/read sampled_tiles.json so all shards
+    # process the exact same tile list even if tissue calibration diverges slightly.
+    # Tiles are dicts with 'x' and 'y' keys.
+    if getattr(args, 'tile_shard', None):
+        tile_list_file = slide_output_dir / 'sampled_tiles.json'
+        if tile_list_file.exists():
+            # Another shard already wrote the tile list — use it
+            with open(tile_list_file) as f:
+                sampled_tiles = json.load(f)
+            logger.info(f"Loaded shared tile list from {tile_list_file} ({len(sampled_tiles)} tiles)")
+        else:
+            # First shard to arrive — write the tile list (atomic via rename)
+            import tempfile
+            tmp_fd, tmp_path = tempfile.mkstemp(dir=slide_output_dir, suffix='.json')
+            try:
+                with os.fdopen(tmp_fd, 'w') as f:
+                    json.dump(sampled_tiles, f)
+                os.rename(tmp_path, tile_list_file)
+                logger.info(f"Wrote shared tile list to {tile_list_file} ({len(sampled_tiles)} tiles)")
+            except OSError:
+                # Another shard beat us in a race — read theirs
+                try:
+                    os.unlink(tmp_path)
+                except OSError:
+                    pass
+                if tile_list_file.exists():
+                    with open(tile_list_file) as f:
+                        sampled_tiles = json.load(f)
+                    logger.info(f"Race: loaded shared tile list from {tile_list_file} ({len(sampled_tiles)} tiles)")
+
+        # Round-robin shard assignment
+        shard_idx, shard_total = args.tile_shard
+        total_before = len(sampled_tiles)
+        sampled_tiles = [t for i, t in enumerate(sampled_tiles) if i % shard_total == shard_idx]
+        logger.info(f"Tile shard {shard_idx}/{shard_total}: processing {len(sampled_tiles)}/{total_before} tiles")
+
+        # Write shard manifest for auditability
+        manifest = {
+            'shard_idx': shard_idx, 'shard_total': shard_total,
+            'tiles': sampled_tiles,
+            'total_sampled': total_before,
+            'random_seed': getattr(args, 'random_seed', 42),
+        }
+        manifest_file = slide_output_dir / f'shard_{shard_idx}_manifest.json'
+        with open(manifest_file, 'w') as f:
+            json.dump(manifest, f)
+
     # ---- Resume: detect completed stages and set skip flags ----
     skip_detection = False
     skip_dedup = False
     skip_html = False
 
-    if getattr(args, 'resume', None):
+    if getattr(args, 'resume', None) and not getattr(args, 'detection_only', False):
         resume_info = detect_resume_stage(slide_output_dir, args.cell_type)
         logger.info(f"Resume state: tiles={resume_info['tile_count']}, "
                      f"detections={'yes' if resume_info['has_detections'] else 'no'}"
                      f" ({resume_info['detection_count']}), "
                      f"html={'yes' if resume_info['has_html'] else 'no'}")
 
-        if resume_info['has_detections'] and not getattr(args, 'force_detect', False):
+        # --merge-shards: always reload from tiles (shard detections are pre-dedup),
+        # always run dedup, always generate HTML. Checkpointed at each stage.
+        if getattr(args, 'merge_shards', False):
+            # Validate shard completeness
+            shard_manifests = list(slide_output_dir.glob('shard_*_manifest.json'))
+            if shard_manifests:
+                with open(shard_manifests[0]) as f:
+                    m0 = json.load(f)
+                expected_shards = m0.get('shard_total', len(shard_manifests))
+                if len(shard_manifests) < expected_shards:
+                    logger.warning(f"Only {len(shard_manifests)}/{expected_shards} shard manifests found — "
+                                   f"some shards may not have completed. Merge will use available data only.")
+
+            merged_det_file = slide_output_dir / f'{args.cell_type}_detections_merged.json'
+            deduped_det_file = slide_output_dir / f'{args.cell_type}_detections.json'
+
+            # Checkpoint 1: merged detections (all shards concatenated)
+            if merged_det_file.exists() and not getattr(args, 'force_detect', False):
+                with open(merged_det_file) as f:
+                    all_detections = json.load(f)
+                logger.info(f"Checkpoint: loaded {len(all_detections)} merged detections from {merged_det_file.name}")
+            elif resume_info['has_tiles']:
+                all_detections = reload_detections_from_tiles(tiles_dir, args.cell_type)
+                logger.info(f"Merged {len(all_detections)} detections from {resume_info['tile_count']} tile dirs")
+                # Save checkpoint
+                with open(merged_det_file, 'w') as f:
+                    json.dump(all_detections, f, cls=NumpyEncoder)
+                logger.info(f"Checkpoint saved: {merged_det_file.name}")
+            else:
+                logger.error("No tile dirs found — nothing to merge")
+                return
+
+            # Checkpoint 2: deduped detections
+            if deduped_det_file.exists() and not getattr(args, 'force_detect', False):
+                with open(deduped_det_file) as f:
+                    all_detections = json.load(f)
+                logger.info(f"Checkpoint: loaded {len(all_detections)} deduped detections from {deduped_det_file.name}")
+                skip_dedup = True
+            skip_detection = True
+            skip_html = False  # Always regenerate HTML for merge
+            args.force_html = True
+        elif resume_info['has_detections'] and not getattr(args, 'force_detect', False):
             skip_detection = True
             skip_dedup = True
             det_file = slide_output_dir / f"{args.cell_type}_detections.json"
@@ -2714,7 +2840,7 @@ def run_pipeline(args):
     config_file = slide_output_dir / 'pipeline_config.json'
     if not config_file.exists() or not getattr(args, 'resume', None):
         with open(config_file, 'w') as f:
-            json.dump(pipeline_config, f, indent=2)
+            json.dump(pipeline_config, f)
 
     # ---- Resume fast-path: skip detection, go straight to dedup/HTML/CSV ----
     if skip_detection:
@@ -2757,10 +2883,8 @@ def run_pipeline(args):
     # Use CellDetector + strategy pattern for all cell types
     logger.info("Initializing detector...")
 
-    # All cell types now use the new CellDetector pattern
-    use_new_detector = args.cell_type in ('nmj', 'mk', 'cell', 'vessel', 'mesothelium', 'islet', 'tissue_pattern')
-
-    if use_new_detector:
+    # All cell types use the CellDetector + strategy pattern
+    if True:  # All cell types supported
         # New CellDetector with strategy pattern
         # Note: mesothelium strategy doesn't need SAM2 (uses ridge detection)
         detector = CellDetector(device="cuda")
@@ -2825,9 +2949,6 @@ def run_pipeline(args):
             logger.info(f"Tissue pattern RF classifier loaded ({len(classifier_data['feature_names'])} features)")
             classifier_loaded = True
 
-    else:
-        # All cell types use CellDetector with strategy classes
-        raise ValueError(f"Unknown cell type: {args.cell_type}")
 
     # Auto-detect annotation run: no classifier → show ALL candidates in HTML
     # Must happen BEFORE tile processing so filter_and_create_html_samples uses threshold=0.0
@@ -2883,8 +3004,9 @@ def run_pipeline(args):
             'pixel_size_um': pixel_size_um,
         }
     elif args.cell_type == 'islet':
+        nuclei_only = getattr(args, 'nuclei_only', False)
         params = {
-            'membrane_channel': getattr(args, 'membrane_channel', 1),
+            'membrane_channel': None if nuclei_only else getattr(args, 'membrane_channel', 1),
             'nuclear_channel': getattr(args, 'nuclear_channel', 4),
             'extract_deep_features': getattr(args, 'extract_deep_features', False),
             'marker_signal_factor': getattr(args, 'marker_signal_factor', 2.0),
@@ -2992,6 +3114,9 @@ def run_pipeline(args):
             n_pilot = max(1, int(len(sampled_tiles) * 0.05))
             pilot_indices = np.random.choice(len(sampled_tiles), n_pilot, replace=False)
             pilot_tiles = [sampled_tiles[i] for i in pilot_indices]
+            nuclei_only = getattr(args, 'nuclei_only', False)
+            nuc_ch = getattr(args, 'nuclear_channel', 4)
+            mem_ch = nuc_ch if nuclei_only else getattr(args, 'membrane_channel', 1)
             islet_gmm_thresholds = calibrate_islet_marker_gmm(
                 pilot_tiles=pilot_tiles,
                 loader=loader,
@@ -2999,10 +3124,12 @@ def run_pipeline(args):
                 slide_shm_arr=None,  # Use all_channel_data directly (still in RAM)
                 ch_to_slot=None,
                 marker_channels=marker_chs_list,
-                membrane_channel=getattr(args, 'membrane_channel', 1),
-                nuclear_channel=getattr(args, 'nuclear_channel', 4),
+                membrane_channel=mem_ch,
+                nuclear_channel=nuc_ch,
                 tile_size=args.tile_size,
                 pixel_size_um=pixel_size_um,
+                nuclei_only=nuclei_only,
+                mosaic_origin=(x_start, y_start),
             )
 
         # Free original channel data — everything is now in shared memory
@@ -3113,8 +3240,11 @@ def run_pipeline(args):
                                         det[key] = np.array(det[key], dtype=np.int32)
                             for cf in checkpoint_files:
                                 # Parse scale from filename like "scale_32x.json"
-                                s = int(cf.stem.split('_')[1].rstrip('x'))
-                                completed_scales.add(s)
+                                try:
+                                    s = int(cf.stem.split('_')[1].rstrip('x'))
+                                    completed_scales.add(s)
+                                except (IndexError, ValueError):
+                                    logger.warning(f"Skipping unrecognized checkpoint file: {cf.name}")
                             logger.info(
                                 f"Resumed from {latest}: {len(all_scale_detections)} detections, "
                                 f"completed scales: {sorted(completed_scales)}"
@@ -3457,11 +3587,9 @@ def run_pipeline(args):
                                 tile_rgb_html = np.stack([
                                     slide_shm_arr[rel_ty:rel_ty+tile_h, rel_tx:rel_tx+tile_w, 0]
                                 ] * 3, axis=-1)
-                            # Convert uint16→uint8 for non-islet (NMJ/MK channels are high-signal, /256 works).
-                            # For islet: keep uint16 — low-signal fluorescence (Gcg mean=16.7)
-                            # would become all-zero after /256. percentile_normalize() handles uint16.
-                            if tile_rgb_html.dtype == np.uint16 and args.cell_type not in ('islet', 'tissue_pattern'):
-                                tile_rgb_html = (tile_rgb_html / 256).astype(np.uint8)
+                            # Keep uint16 for percentile_normalize — it handles float32 conversion
+                            # internally with full 16-bit precision. The old /256 uint8 conversion
+                            # caused visible banding/blur after flat-field correction.
 
                             tile_pct = _compute_tile_percentiles(tile_rgb_html) if getattr(args, 'html_normalization', 'crop') == 'tile' else None
 
@@ -3571,6 +3699,14 @@ def run_pipeline(args):
 
     logger.info(f"Total detections (pre-dedup): {len(all_detections)}")
 
+    # Detection-only mode: skip dedup, HTML, CSV — just save per-tile results and exit
+    if getattr(args, 'detection_only', False):
+        logger.info(f"Detection-only mode: {len(all_detections)} detections saved to tile dirs. Exiting.")
+        if getattr(args, 'tile_shard', None):
+            shard_idx, shard_total = args.tile_shard
+            logger.info(f"Shard {shard_idx}/{shard_total} complete.")
+        return
+
     # Deduplication: tile overlap causes same detection in adjacent tiles
     # Uses actual mask pixel overlap (loads HDF5 mask files) for accurate dedup
     # Skip for multiscale — already deduped by contour IoU in merge_detections_across_scales()
@@ -3597,6 +3733,53 @@ def run_pipeline(args):
         all_samples = unique_samples
 
     # (annotation threshold override already applied before tile loop)
+
+    # ---- Save detections JSON + CSV BEFORE HTML (crash-safe) ----
+    # Ensures dedup results persist even if HTML generation crashes/hangs.
+    for det in all_detections:
+        det['tile_mask_label'] = det.get('mask_label', 0)
+        _gc = det.get('global_center', det.get('center', [0, 0]))
+        det['global_id'] = f"{int(round(_gc[0]))}_{int(round(_gc[1]))}"
+
+    detections_file = slide_output_dir / f'{args.cell_type}_detections.json'
+    with open(detections_file, 'w') as f:
+        json.dump(all_detections, f, cls=NumpyEncoder)
+    logger.info(f"Saved {len(all_detections)} detections to {detections_file}")
+
+    csv_file = slide_output_dir / f'{args.cell_type}_coordinates.csv'
+    with open(csv_file, 'w') as f:
+        if args.cell_type == 'vessel':
+            f.write('uid,global_x_px,global_y_px,global_x_um,global_y_um,outer_diameter_um,wall_thickness_um,confidence\n')
+            for det in all_detections:
+                g_center = det.get('global_center')
+                g_center_um = det.get('global_center_um')
+                if g_center is None or g_center_um is None:
+                    continue
+                if len(g_center) < 2 or g_center[0] is None or g_center[1] is None:
+                    continue
+                if len(g_center_um) < 2 or g_center_um[0] is None or g_center_um[1] is None:
+                    continue
+                feat = det.get('features', {})
+                f.write(f"{det['uid']},{g_center[0]:.1f},{g_center[1]:.1f},"
+                        f"{g_center_um[0]:.2f},{g_center_um[1]:.2f},"
+                        f"{feat.get('outer_diameter_um', 0):.2f},{feat.get('wall_thickness_mean_um', 0):.2f},"
+                        f"{feat.get('confidence', 'unknown')}\n")
+        else:
+            f.write('uid,global_x_px,global_y_px,global_x_um,global_y_um,area_um2\n')
+            for det in all_detections:
+                g_center = det.get('global_center')
+                g_center_um = det.get('global_center_um')
+                if g_center is None or g_center_um is None:
+                    continue
+                if len(g_center) < 2 or g_center[0] is None or g_center[1] is None:
+                    continue
+                if len(g_center_um) < 2 or g_center_um[0] is None or g_center_um[1] is None:
+                    continue
+                feat = det.get('features', {})
+                area_um2 = feat.get('area', 0) * (pixel_size_um ** 2)
+                f.write(f"{det['uid']},{g_center[0]:.1f},{g_center[1]:.1f},"
+                        f"{g_center_um[0]:.2f},{g_center_um[1]:.2f},{area_um2:.2f}\n")
+    logger.info(f"Saved coordinates to {csv_file}")
 
     # Sort samples: with classifier → descending RF score; without → ascending area
     if args.cell_type in ('nmj', 'islet', 'tissue_pattern') and classifier_loaded:
@@ -3675,20 +3858,6 @@ def run_pipeline(args):
         prior_annotations=prior_ann,
     )
 
-    # Add tile_mask_label (copy of per-tile integer label for HDF5 lookups)
-    # and global_id (centroid-based string for spatial identification).
-    # Keep mask_label as the original integer — needed for dedup and mask operations.
-    for det in all_detections:
-        det['tile_mask_label'] = det.get('mask_label', 0)
-        _gc = det.get('global_center', det.get('center', [0, 0]))
-        det['global_id'] = f"{int(round(_gc[0]))}_{int(round(_gc[1]))}"
-
-    # Save all detections with universal IDs and global coordinates
-    detections_file = slide_output_dir / f'{args.cell_type}_detections.json'
-    with open(detections_file, 'w') as f:
-        json.dump(all_detections, f, indent=2, cls=NumpyEncoder)
-    logger.info(f"  Saved {len(all_detections)} detections to {detections_file}")
-
     # Clean up multiscale checkpoints after successful completion
     if is_multiscale:
         checkpoint_dir = slide_output_dir / "checkpoints"
@@ -3696,45 +3865,6 @@ def run_pipeline(args):
             import shutil
             shutil.rmtree(checkpoint_dir)
             logger.info("Multiscale checkpoints cleaned up after successful completion")
-
-    # Export CSV with contour coordinates for easy import
-    csv_file = slide_output_dir / f'{args.cell_type}_coordinates.csv'
-    with open(csv_file, 'w') as f:
-        # Header
-        if args.cell_type == 'vessel':
-            f.write('uid,global_x_px,global_y_px,global_x_um,global_y_um,outer_diameter_um,wall_thickness_um,confidence\n')
-            for det in all_detections:
-                # Skip detections with missing or invalid global coordinates
-                g_center = det.get('global_center')
-                g_center_um = det.get('global_center_um')
-                if g_center is None or g_center_um is None:
-                    continue
-                if len(g_center) < 2 or g_center[0] is None or g_center[1] is None:
-                    continue
-                if len(g_center_um) < 2 or g_center_um[0] is None or g_center_um[1] is None:
-                    continue
-                feat = det.get('features', {})
-                f.write(f"{det['uid']},{g_center[0]:.1f},{g_center[1]:.1f},"
-                        f"{g_center_um[0]:.2f},{g_center_um[1]:.2f},"
-                        f"{feat.get('outer_diameter_um', 0):.2f},{feat.get('wall_thickness_mean_um', 0):.2f},"
-                        f"{feat.get('confidence', 'unknown')}\n")
-        else:
-            f.write('uid,global_x_px,global_y_px,global_x_um,global_y_um,area_um2\n')
-            for det in all_detections:
-                # Skip detections with missing or invalid global coordinates
-                g_center = det.get('global_center')
-                g_center_um = det.get('global_center_um')
-                if g_center is None or g_center_um is None:
-                    continue
-                if len(g_center) < 2 or g_center[0] is None or g_center[1] is None:
-                    continue
-                if len(g_center_um) < 2 or g_center_um[0] is None or g_center_um[1] is None:
-                    continue
-                feat = det.get('features', {})
-                area_um2 = feat.get('area', 0) * (pixel_size_um ** 2)
-                f.write(f"{det['uid']},{g_center[0]:.1f},{g_center[1]:.1f},"
-                        f"{g_center_um[0]:.2f},{g_center_um[1]:.2f},{area_um2:.2f}\n")
-    logger.info(f"  Saved coordinates to {csv_file}")
 
     # Export to Leica LMD format for mesothelium
     if args.cell_type == 'mesothelium' and len(all_detections) > 0:
@@ -3768,7 +3898,7 @@ def run_pipeline(args):
     }
 
     with open(slide_output_dir / 'summary.json', 'w') as f:
-        json.dump(summary, f, indent=2, cls=NumpyEncoder)
+        json.dump(summary, f, cls=NumpyEncoder)
 
     # Cleanup detector resources
     if use_new_detector and detector is not None:
@@ -4004,6 +4134,9 @@ def main():
     parser.add_argument('--islet-marker-channels', type=str, default='gcg:2,ins:3,sst:5',
                         help='Marker-to-channel mapping for islet classification, as name:index pairs. '
                              'Format: "gcg:2,ins:3,sst:5". Names are used in logs and legends.')
+    parser.add_argument('--nuclei-only', action='store_true', default=False,
+                        help='Nuclei-only mode for islet: use DAPI grayscale for Cellpose '
+                             '(channels=[0,0]) instead of membrane+nuclear. SAM2 still runs.')
     parser.add_argument('--marker-signal-factor', type=float, default=2.0,
                         help='Pre-filter divisor for GMM threshold. Cells need marker '
                              'signal > auto_threshold/N to get full features + SAM2. '
@@ -4081,6 +4214,22 @@ def main():
                         help='Start HTTP server in background and exit (default: True)')
     parser.add_argument('--no-serve', action='store_true',
                         help='Do not start server after processing')
+
+    # Multi-node sharding
+    parser.add_argument('--tile-shard', type=str, default=None,
+                        help='Tile shard specification as INDEX/TOTAL (e.g. "0/4" = shard 0 of 4). '
+                             'Round-robin assignment: tile i goes to shard i%%TOTAL. '
+                             'Implies --detection-only (skips dedup/HTML/CSV).')
+    parser.add_argument('--detection-only', action='store_true',
+                        help='Skip dedup, HTML generation, and CSV export after tile processing. '
+                             'Useful for multi-node runs where a separate merge step handles post-processing.')
+    parser.add_argument('--merge-shards', action='store_true', default=False,
+                        help='Merge multi-node shard outputs: load all tile detections, dedup, '
+                             'generate HTML+CSV. Auto-enabled when --resume finds shard manifests. '
+                             'Uses checkpoints so crashes can be resumed.')
+    parser.add_argument('--random-seed', type=int, default=42,
+                        help='Random seed for np.random before tissue calibration and tile sampling. '
+                             'Ensures all nodes get the same tile list (default: 42).')
     parser.add_argument('--port', type=int, default=8081,
                         help='Port for HTTP server (default: 8081)')
     parser.add_argument('--stop-server', action='store_true',
@@ -4125,10 +4274,18 @@ def main():
         if args.cell_type == 'nmj':
             args.channel = 1
         elif args.cell_type == 'islet':
-            args.channel = getattr(args, 'membrane_channel', 1)
+            if getattr(args, 'nuclei_only', False):
+                args.channel = getattr(args, 'nuclear_channel', 4)
+            else:
+                args.channel = getattr(args, 'membrane_channel', 1)
         elif args.cell_type == 'tissue_pattern':
             # Primary channel = first detection channel (for tissue loading)
-            args.channel = int(args.tp_detection_channels.split(',')[0])
+            if not getattr(args, 'tp_detection_channels', None):
+                parser.error("--tp-detection-channels is required for tissue_pattern cell type")
+            try:
+                args.channel = int(args.tp_detection_channels.split(',')[0])
+            except (ValueError, IndexError):
+                parser.error(f"--tp-detection-channels: first entry must be integer, got '{args.tp_detection_channels}'")
         else:
             args.channel = 0
 
@@ -4140,8 +4297,14 @@ def main():
         # Parse --islet-marker-channels into dict: {name: channel_index}
         args.islet_marker_map = {}
         for pair in args.islet_marker_channels.split(','):
-            name, ch = pair.strip().split(':')
-            args.islet_marker_map[name.strip()] = int(ch.strip())
+            pair = pair.strip()
+            if ':' not in pair:
+                parser.error(f"--islet-marker-channels: each entry must be NAME:CHANNEL, got '{pair}'")
+            name, ch = pair.split(':', 1)
+            try:
+                args.islet_marker_map[name.strip()] = int(ch.strip())
+            except ValueError:
+                parser.error(f"--islet-marker-channels: channel must be integer, got '{ch.strip()}' in '{pair}'")
 
     # Handle --cell-type tissue_pattern: auto-enable all-channels
     if args.cell_type == 'tissue_pattern':
@@ -4166,6 +4329,22 @@ def main():
     # --multi-gpu is always True now (kept for backward compatibility)
     args.multi_gpu = True
 
+    # Handle --tile-shard: parse "INDEX/TOTAL" into tuple, implies --detection-only
+    if args.tile_shard is not None:
+        try:
+            parts = args.tile_shard.split('/')
+            shard_idx, shard_total = int(parts[0]), int(parts[1])
+            if shard_idx < 0 or shard_idx >= shard_total or shard_total < 1:
+                parser.error(f"--tile-shard: INDEX must be 0..TOTAL-1, got {shard_idx}/{shard_total}")
+            args.tile_shard = (shard_idx, shard_total)
+        except (ValueError, IndexError):
+            parser.error(f"--tile-shard must be INDEX/TOTAL (e.g. '0/4'), got '{args.tile_shard}'")
+        args.detection_only = True  # sharding implies detection-only
+        args.no_serve = True  # no server for detection shards
+        if not args.resume and not args.resume_from:
+            print("WARNING: --tile-shard without --resume: each node will create its own directory. "
+                  "Use --resume <shared-dir> so all shards write to the same location.", flush=True)
+
     # Handle --resume: also set resume_from for multiscale backward compat
     if args.resume:
         if not Path(args.resume).exists():
@@ -4173,6 +4352,15 @@ def main():
         # Set resume_from so multiscale checkpoint logic also picks it up
         if args.resume_from is None:
             args.resume_from = args.resume
+        # Auto-detect shard manifests → enable merge-shards
+        shard_manifests = list(Path(args.resume).glob('shard_*_manifest.json'))
+        if shard_manifests and not args.merge_shards:
+            print(f"Auto-detected {len(shard_manifests)} shard manifests — enabling --merge-shards", flush=True)
+            args.merge_shards = True
+
+    # --merge-shards requires --resume
+    if args.merge_shards and not args.resume:
+        parser.error("--merge-shards requires --resume <shared-output-dir>")
 
     run_pipeline(args)
 

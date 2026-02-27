@@ -108,6 +108,7 @@ def cluster_detections_greedy_area(
         cluster = [seed]
         unclustered.remove(seed)
         total_area = areas[seed]
+        cluster_centroid = coords[seed].copy()
 
         # Grow cluster
         while True:
@@ -118,12 +119,8 @@ def cluster_detections_greedy_area(
             best_idx = None
             best_dist = float('inf')
 
-            # Use cluster centroid for distance
-            cluster_coords = coords[cluster]
-            centroid = cluster_coords.mean(axis=0)
-
             for idx in unclustered:
-                dist = np.linalg.norm(coords[idx] - centroid)
+                dist = np.linalg.norm(coords[idx] - cluster_centroid)
                 if dist < best_dist and dist <= dist_threshold:
                     best_dist = dist
                     best_idx = idx
@@ -138,6 +135,9 @@ def cluster_detections_greedy_area(
                 cluster.append(best_idx)
                 unclustered.remove(best_idx)
                 total_area = new_total
+                # Update centroid incrementally
+                n = len(cluster)
+                cluster_centroid = (cluster_centroid * (n - 1) + coords[best_idx]) / n
             else:
                 # Adding would overshoot beyond midpoint benefit - stop this cluster
                 break

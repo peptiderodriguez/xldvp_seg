@@ -1099,7 +1099,7 @@ def assign_and_save(detections, labels, zone_metadata, output_path):
         det['zone_label'] = label_lookup.get(int(zone_id), f'zone_{zone_id}')
 
     with open(output_path, 'w') as f:
-        json.dump(detections, f, indent=2)
+        json.dump(detections, f)
 
     print(f"Saved {len(detections)} zoned detections to {output_path}")
 
@@ -1496,11 +1496,11 @@ def main():
     parser.add_argument('--label-gate-thresholds', type=str, default=None,
                         help='Manual thresholds for --label-by-gate (comma-sep, same '
                              'order as --channel-names). Default: auto via --gate-method.')
-    parser.add_argument('--gate-method', type=str, default='percentile',
+    parser.add_argument('--gate-method', type=str, default='otsu',
                         choices=['otsu', 'percentile'],
                         help='Threshold method for --label-by-gate and --gate. '
-                             '"percentile" = top N%% positive (default). '
-                             '"otsu" = Otsu bimodal split.')
+                             '"otsu" = Otsu bimodal split (default). '
+                             '"percentile" = top N%% positive.')
     parser.add_argument('--gate-percentile', type=float, default=75,
                         help='Percentile cutoff when --gate-method=percentile. '
                              'Default: 75 (top 25%% are positive).')
@@ -1831,7 +1831,7 @@ def main():
     meta_output['parameters']['max_direct_cells'] = args.max_direct_cells
     meta_output['parameters']['n_zones_scale'] = args.n_zones_scale
     with open(output_dir / 'zone_metadata.json', 'w') as f:
-        json.dump(meta_output, f, indent=2)
+        json.dump(meta_output, f)
     print(f"  Saved: {output_dir / 'zone_metadata.json'}")
 
     # ── Visualize ─────────────────────────────────────────────────
