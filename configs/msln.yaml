@@ -5,6 +5,7 @@ output_dir: /fs/pool/pool-mann-edwin/msln_cell_output/
 channels: {0: nuc488, 1: PM647, 2: Msln750, 3: Pdgfra546}
 cell_type: cell
 cellpose_input_channels: [1, 0]   # cyto=PM647 (plasma membrane), nuc=nuc488
+pixel_size_um: 0.1725            # from CZI metadata (Axioscan 20x)
 min_area_um: 0                    # no size filter - find all cells
 max_area_um: 100000
 photobleach_correction: true
@@ -16,7 +17,7 @@ markers:
 
 spatial_network:
   enabled: true
-  marker_filter: "ch2_mean"       # MSLN+ cells form bands
+  marker_filter: "ch2_mean>0"     # MSLN+ cells form bands
   max_edge_distance: 50
   min_component_cells: 3
 

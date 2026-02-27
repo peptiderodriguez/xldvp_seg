@@ -96,6 +96,7 @@ SPATIAL_ENABLED=$(read_yaml spatial_network.enabled "")
 SPATIAL_FILTER=$(read_yaml spatial_network.marker_filter "")
 SPATIAL_EDGE=$(read_yaml spatial_network.max_edge_distance 50)
 SPATIAL_MIN_COMP=$(read_yaml spatial_network.min_component_cells 3)
+PIXEL_SIZE=$(read_yaml pixel_size_um "")
 # If spatial_network section exists but enabled is not explicitly set, treat as enabled
 if [[ -n "$SPATIAL_FILTER" && -z "$SPATIAL_ENABLED" ]]; then
     SPATIAL_ENABLED="true"
@@ -130,7 +131,7 @@ build_seg_cmd() {
     fi
 
     if [[ "$PHOTOBLEACH" == "true" ]]; then
-        cmd+=" --photobleach-correction"
+        cmd+=" --photobleaching-correction"
     fi
     if [[ "$ALL_CHANNELS" == "true" ]]; then
         cmd+=" --all-channels"
@@ -234,7 +235,7 @@ SBATCH_FILE="/tmp/pipeline_${NAME}.sbatch"
             echo ""
             echo "        # Step 3: Spatial analysis"
             echo "        echo \"  Running spatial analysis...\""
-            echo "        \$MKSEG_PYTHON $REPO/scripts/spatial_cell_analysis.py --detections \"\$DET_JSON\" --output-dir \"\$SLIDE_OUT\" --marker-filter $SPATIAL_FILTER --max-edge-distance $SPATIAL_EDGE --min-component-cells $SPATIAL_MIN_COMP"
+            echo "        \$MKSEG_PYTHON $REPO/scripts/spatial_cell_analysis.py --detections \"\$DET_JSON\" --output-dir \"\$SLIDE_OUT\" --spatial-network --marker-filter $SPATIAL_FILTER --max-edge-distance $SPATIAL_EDGE --min-component-cells $SPATIAL_MIN_COMP --pixel-size $PIXEL_SIZE"
         fi
 
         echo "    else"
@@ -264,7 +265,7 @@ SBATCH_FILE="/tmp/pipeline_${NAME}.sbatch"
             echo ""
             echo "    # Step 3: Spatial analysis"
             echo "    echo \"Running spatial analysis...\""
-            echo "    \$MKSEG_PYTHON $REPO/scripts/spatial_cell_analysis.py --detections \"\$DET_JSON\" --output-dir \"\$SLIDE_OUT\" --marker-filter $SPATIAL_FILTER --max-edge-distance $SPATIAL_EDGE --min-component-cells $SPATIAL_MIN_COMP"
+            echo "    \$MKSEG_PYTHON $REPO/scripts/spatial_cell_analysis.py --detections \"\$DET_JSON\" --output-dir \"\$SLIDE_OUT\" --spatial-network --marker-filter $SPATIAL_FILTER --max-edge-distance $SPATIAL_EDGE --min-component-cells $SPATIAL_MIN_COMP --pixel-size $PIXEL_SIZE"
         fi
 
         echo "else"

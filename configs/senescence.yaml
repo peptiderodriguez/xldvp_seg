@@ -6,6 +6,7 @@ output_dir: /fs/pool/pool-mann-edwin/senescence_output/
 channels: {0: nuc488, 1: NeuN647, 2: tdTomato555}
 cell_type: cell
 cellpose_input_channels: [1, 0]   # cyto=NeuN647, nuc=nuc488
+pixel_size_um: 0.1725            # from CZI metadata (Axioscan 20x)
 photobleach_correction: true
 all_channels: true
 num_gpus: 2
@@ -14,7 +15,7 @@ markers:
   - {channel: 2, name: tdTomato, method: otsu_half}
 
 spatial_network:
-  marker_filter: "ch2_mean"       # tdTomato+ cells
+  marker_filter: "ch2_mean>0"     # tdTomato+ cells (any signal)
   max_edge_distance: 50
   min_component_cells: 3
 
