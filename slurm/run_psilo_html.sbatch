@@ -1,10 +1,10 @@
 #!/bin/bash
 #SBATCH --job-name=wm_pm_html
-#SBATCH --partition=p.hpcl93
+#SBATCH --partition=p.hpcl8
 #SBATCH --nodes=1
 #SBATCH --ntasks=1
 #SBATCH --cpus-per-task=16
-#SBATCH --mem=400G
+#SBATCH --mem=350G
 #SBATCH --time=08:00:00
 #SBATCH --output=/fs/gpfs41/lv12/fileset02/pool/pool-mann-edwin/code_bin/xldvp_seg/logs/wm_pm_html_%j.out
 #SBATCH --error=/fs/gpfs41/lv12/fileset02/pool/pool-mann-edwin/code_bin/xldvp_seg/logs/wm_pm_html_%j.err

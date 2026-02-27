@@ -1,11 +1,10 @@
 #!/bin/bash
 #SBATCH --job-name=islet_analyze
-#SBATCH --partition=p.hpcl93
+#SBATCH --partition=p.hpcl8
 #SBATCH --nodes=1
 #SBATCH --ntasks=1
 #SBATCH --cpus-per-task=16
 #SBATCH --mem=64G
-#SBATCH --gres=gpu:l40s:0
 #SBATCH --time=2:00:00
 #SBATCH --output=/fs/gpfs41/lv12/fileset02/pool/pool-mann-edwin/code_bin/xldvp_seg/slurm/logs/islet_analyze_%j.out
 #SBATCH --error=/fs/gpfs41/lv12/fileset02/pool/pool-mann-edwin/code_bin/xldvp_seg/slurm/logs/islet_analyze_%j.err

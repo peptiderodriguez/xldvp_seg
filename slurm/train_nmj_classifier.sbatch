@@ -1,9 +1,9 @@
 #!/bin/bash
 #SBATCH --job-name=nmj_clf
-#SBATCH --partition=p.hpcl93
+#SBATCH --partition=p.hpcl8
 #SBATCH --nodes=1
 #SBATCH --ntasks=1
-#SBATCH --cpus-per-task=64
+#SBATCH --cpus-per-task=24
 #SBATCH --mem=64G
 #SBATCH --time=00:30:00
 #SBATCH --output=/fs/gpfs41/lv12/fileset02/pool/pool-mann-edwin/code_bin/xldvp_seg/slurm/logs/nmj_clf_%j.out
