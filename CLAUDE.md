@@ -237,8 +237,9 @@ artery, arteriole, vein, capillary, lymphatic, collecting_lymphatic
 ---
 
 ## Hardware (SLURM Cluster)
-- **p.hpcl8:** 55 nodes, 24 CPUs, 380G RAM, 2x RTX 5000 (interactive dev)
-- **p.hpcl93:** 19 nodes, 64 CPUs, 500G RAM, 4x L40S (batch GPU jobs)
+- **p.hpcl8:** 55 nodes, 24 CPUs, 380G RAM, 2x RTX 5000 each (interactive dev, CPU jobs)
+- **p.hpcl93:** 19 nodes, 256 CPUs, 760G RAM, 4x L40S each (heavy GPU batch jobs, requires `--gres=gpu:`)
+- Time limit: 42 days on both partitions
 
 ## Troubleshooting
 

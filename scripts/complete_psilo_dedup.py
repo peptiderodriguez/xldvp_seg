@@ -7,20 +7,57 @@ in the O(n*kept) dedup loop at 190K/443K. This script uses the new spatial
 grid dedup to finish in minutes.
 """
 
+import argparse
 import json
 import sys
 from pathlib import Path
 
+import numpy as np
+
 REPO = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(REPO))
 
-RUN_DIR = Path("/fs/pool/pool-mann-edwin/psilo_output/tp_full/"
-               "20251114_Pdgfra546_Msln750_PM647_nuc488-EDFvar-1-stitch-1_20260223_094916_100pct")
-TILES_DIR = RUN_DIR / "tiles"
-CELL_TYPE = "tissue_pattern"
-PIXEL_SIZE = 0.1725  # um/px
+
+class NumpyEncoder(json.JSONEncoder):
+    """JSON encoder that handles numpy types."""
+    def default(self, obj):
+        if isinstance(obj, (np.integer,)):
+            return int(obj)
+        if isinstance(obj, (np.floating,)):
+            return float(obj)
+        if isinstance(obj, np.ndarray):
+            return obj.tolist()
+        return super().default(obj)
+
+
+DEFAULT_RUN_DIR = ("/fs/pool/pool-mann-edwin/psilo_output/tp_full/"
+                   "20251114_Pdgfra546_Msln750_PM647_nuc488-EDFvar-1-stitch-1_20260223_094916_100pct")
+DEFAULT_CELL_TYPE = "tissue_pattern"
+DEFAULT_PIXEL_SIZE = 0.1725  # um/px
+
+
+def parse_args():
+    parser = argparse.ArgumentParser(
+        description="Reassemble per-tile detections and run spatial-grid dedup."
+    )
+    parser.add_argument('--run-dir', type=str, default=DEFAULT_RUN_DIR,
+                        help='Run output directory containing tiles/')
+    parser.add_argument('--tiles-dir', type=str, default=None,
+                        help='Tiles directory (default: <run-dir>/tiles)')
+    parser.add_argument('--cell-type', type=str, default=DEFAULT_CELL_TYPE,
+                        help='Cell type string for filenames (default: tissue_pattern)')
+    parser.add_argument('--pixel-size', type=float, default=DEFAULT_PIXEL_SIZE,
+                        help='Pixel size in um/px (default: 0.1725)')
+    return parser.parse_args()
+
 
 def main():
+    args = parse_args()
+    RUN_DIR = Path(args.run_dir)
+    TILES_DIR = Path(args.tiles_dir) if args.tiles_dir else RUN_DIR / "tiles"
+    CELL_TYPE = args.cell_type
+    PIXEL_SIZE = args.pixel_size
+
     # 1. Reassemble all detections from per-tile feature JSONs
     print(f"Reassembling detections from {TILES_DIR}...")
     all_detections = []
@@ -54,18 +91,6 @@ def main():
         det['global_id'] = f"{int(round(gc[0]))}_{int(round(gc[1]))}"
 
     # 4. Save final JSON
-    # Use a custom encoder for numpy types
-    class NumpyEncoder(json.JSONEncoder):
-        def default(self, obj):
-            import numpy as np
-            if isinstance(obj, (np.integer,)):
-                return int(obj)
-            if isinstance(obj, (np.floating,)):
-                return float(obj)
-            if isinstance(obj, np.ndarray):
-                return obj.tolist()
-            return super().default(obj)
-
     det_file = RUN_DIR / f"{CELL_TYPE}_detections.json"
     with open(det_file, 'w') as f:
         json.dump(all_detections, f, cls=NumpyEncoder)

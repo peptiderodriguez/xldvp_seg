@@ -396,21 +396,7 @@ class CellStrategy(DetectionStrategy, MultiChannelFeatureMixin):
                         valid_detections[crop_idx]['features'][f'dinov2_ctx_{i}'] = float(v)
 
             # Fill zeros for detections that failed crop extraction
-            for det in valid_detections:
-                if 'resnet_0' not in det['features']:
-                    logger.warning("Detection missing ResNet features - zero-filling")
-                    for i in range(2048):
-                        det['features'][f'resnet_{i}'] = 0.0
-                if 'resnet_ctx_0' not in det['features']:
-                    for i in range(2048):
-                        det['features'][f'resnet_ctx_{i}'] = 0.0
-                if dinov2 is not None and 'dinov2_0' not in det['features']:
-                    logger.warning("Detection missing DINOv2 features - zero-filling")
-                    for i in range(1024):
-                        det['features'][f'dinov2_{i}'] = 0.0
-                if dinov2 is not None and 'dinov2_ctx_0' not in det['features']:
-                    for i in range(1024):
-                        det['features'][f'dinov2_ctx_{i}'] = 0.0
+            self._zero_fill_deep_features(valid_detections, has_dinov2=(dinov2 is not None))
 
         # Reset predictor state
         sam2_predictor.reset_predictor()

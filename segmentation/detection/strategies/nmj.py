@@ -377,88 +377,9 @@ class NMJStrategy(DetectionStrategy, MultiChannelFeatureMixin):
 
         return detections
 
-    def classify_rf(
-        self,
-        detections: List[Detection],
-        classifier,
-        scaler,
-        feature_names: List[str]
-    ) -> List[Detection]:
-        """
-        Classify NMJ candidates using trained Random Forest model.
-
-        Supports two formats:
-        1. Separate classifier and scaler objects (legacy)
-        2. sklearn Pipeline with scaler+RF combined (new format)
-           - Pass pipeline as 'classifier', scaler=None
-
-        Args:
-            detections: List of Detection objects to classify
-            classifier: Trained sklearn RandomForest model OR sklearn Pipeline
-            scaler: StandardScaler for feature normalization (None if using Pipeline)
-            feature_names: List of feature names expected by classifier
-
-        Returns:
-            List of Detection objects that pass classification
-        """
-        from sklearn.pipeline import Pipeline
-
-        if not detections:
-            return []
-
-        # Extract features for each detection
-        X = []
-        valid_indices = []
-
-        for i, det in enumerate(detections):
-            if det.features:
-                row = []
-                for fn in feature_names:
-                    val = det.features.get(fn, 0)
-                    # Handle non-scalars
-                    if isinstance(val, (list, tuple)):
-                        val = 0
-                    row.append(float(val) if val is not None else 0)
-                X.append(row)
-                valid_indices.append(i)
-
-        if not X:
-            return detections
-
-        # Convert to numpy
-        X = np.array(X, dtype=np.float32)
-        X = np.nan_to_num(X, nan=0, posinf=0, neginf=0)
-
-        # Handle Pipeline vs separate scaler+classifier
-        if isinstance(classifier, Pipeline):
-            # Pipeline handles scaling internally
-            probs = classifier.predict_proba(X)[:, 1]
-        else:
-            # Legacy: apply scaler separately
-            if scaler is not None:
-                X = scaler.transform(X)
-            probs = classifier.predict_proba(X)[:, 1]
-
-        # Update detections with scores (keep ALL - filter post-hoc by rf_prediction)
-        for j, (idx, prob) in enumerate(zip(valid_indices, probs)):
-            det = detections[idx]
-            det.score = prob
-            det.features['rf_prediction'] = prob
-            det.features['prob_nmj'] = prob  # backward compat
-            det.features['confidence'] = prob
-
-        # Set score=0 for detections that couldn't be classified (missing features)
-        for i, det in enumerate(detections):
-            if det.score is None:
-                det.score = 0.0
-                det.features['rf_prediction'] = 0.0
-                det.features['prob_nmj'] = 0.0  # backward compat
-                det.features['confidence'] = 0.0
-
-        n_above = sum(1 for d in detections if d.score >= self.classifier_threshold)
-        logger.debug(f"RF classifier: {n_above}/{len(detections)} above threshold ({self.classifier_threshold}), keeping all")
-
-        return detections
+    def _post_classify_rf_detection(self, det: Detection, prob: float) -> None:
+        """Set prob_nmj for backward compatibility with legacy NMJ workflows."""
+        det.features['prob_nmj'] = float(prob)
 
     def detect(
         self,
@@ -656,23 +577,9 @@ class NMJStrategy(DetectionStrategy, MultiChannelFeatureMixin):
                 for i, v in enumerate(dino_feats):
                     valid_detections[crop_idx]['features'][f'dinov2_ctx_{i}'] = float(v)
 
-        # Fill zeros for detections that failed crop extraction (warn so it's not silent)
+        # Fill zeros for detections that failed crop extraction
         if extract_features and self.extract_deep_features:
-            for det in valid_detections:
-                if 'resnet_0' not in det['features']:
-                    logger.warning("Detection missing ResNet features - zero-filling")
-                    for i in range(2048):
-                        det['features'][f'resnet_{i}'] = 0.0
-                if 'resnet_ctx_0' not in det['features']:
-                    for i in range(2048):
-                        det['features'][f'resnet_ctx_{i}'] = 0.0
-                if dinov2 is not None and 'dinov2_0' not in det['features']:
-                    logger.warning("Detection missing DINOv2 features - zero-filling")
-                    for i in range(1024):
-                        det['features'][f'dinov2_{i}'] = 0.0
-                if dinov2 is not None and 'dinov2_ctx_0' not in det['features']:
-                    for i in range(1024):
-                        det['features'][f'dinov2_ctx_{i}'] = 0.0
+            self._zero_fill_deep_features(valid_detections, has_dinov2=(dinov2 is not None))
 
         # Reset SAM2 predictor
         if sam2_predictor is not None and self.extract_sam2_embeddings:

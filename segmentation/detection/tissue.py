@@ -603,6 +603,17 @@ def filter_tissue_tiles(
             if result is not None:
                 tissue_tiles.append(result)
 
+    # Sort by tile coordinates for deterministic order — as_completed() returns
+    # results in completion order which varies between runs, making deduplication
+    # and sampling non-reproducible.
+    def _tile_sort_key(tile):
+        if isinstance(tile, dict):
+            return (tile.get('x', tile.get('tile_x', 0)),
+                    tile.get('y', tile.get('tile_y', 0)))
+        return tuple(tile)
+
+    tissue_tiles.sort(key=_tile_sort_key)
+
     logger.info(f"  Tissue tiles: {len(tissue_tiles)} / {len(tiles)} ({100*len(tissue_tiles)/len(tiles):.1f}%)")
 
     return tissue_tiles

@@ -2560,43 +2560,77 @@ class VesselStrategy(DetectionStrategy, MultiChannelFeatureMixin):
         contour1: np.ndarray,
         contour2: np.ndarray,
         shape: Tuple[int, int],
+        max_render_size: int = 512,
     ) -> float:
         """
         Compute Intersection over Union (IoU) between two contours.
 
-        Creates binary masks from the contours and computes the standard
-        IoU metric: intersection_area / union_area.
+        Translates contours to local coordinates (combined bounding box)
+        and downsamples so the render area fits within max_render_size
+        pixels per axis. IoU is scale-invariant so this approximation
+        is accurate while capping memory at ~512x512 = 262K pixels
+        instead of potentially millions for large vessels.
 
         Args:
             contour1: First contour as Nx1x2 or Nx2 array
             contour2: Second contour as Mx1x2 or Mx2 array
-            shape: Image shape (height, width) for mask creation
+            shape: Image shape (height, width) — used as fallback only
+            max_render_size: Maximum pixels per axis for mask rendering
 
         Returns:
             IoU value between 0 and 1
         """
-        h, w = shape
-
         # Ensure contours are in the correct format for cv2.drawContours
-        if contour1.ndim == 2:
-            contour1 = contour1.reshape(-1, 1, 2)
-        if contour2.ndim == 2:
-            contour2 = contour2.reshape(-1, 1, 2)
+        c1 = contour1.reshape(-1, 1, 2) if contour1.ndim == 2 else contour1
+        c2 = contour2.reshape(-1, 1, 2) if contour2.ndim == 2 else contour2
 
-        # Ensure integer type
-        contour1 = contour1.astype(np.int32)
-        contour2 = contour2.astype(np.int32)
+        # Compute bounding boxes
+        x1, y1, w1, h1 = cv2.boundingRect(c1)
+        x2, y2, w2, h2 = cv2.boundingRect(c2)
 
-        # Create binary masks
-        mask1 = np.zeros((h, w), dtype=np.uint8)
-        mask2 = np.zeros((h, w), dtype=np.uint8)
+        # Quick rejection if bounding boxes don't overlap
+        if (x1 + w1 < x2 or x2 + w2 < x1 or y1 + h1 < y2 or y2 + h2 < y1):
+            return 0.0
 
-        cv2.drawContours(mask1, [contour1], 0, 1, -1)
-        cv2.drawContours(mask2, [contour2], 0, 1, -1)
+        # Translate contours to local coordinates (origin at min of both bboxes)
+        min_x = min(x1, x2)
+        min_y = min(y1, y2)
+
+        local_w = max(x1 + w1, x2 + w2) - min_x + 2
+        local_h = max(y1 + h1, y2 + h2) - min_y + 2
+
+        c1_local = c1.copy().astype(np.float64)
+        c2_local = c2.copy().astype(np.float64)
+        c1_local[:, :, 0] -= min_x
+        c1_local[:, :, 1] -= min_y
+        c2_local[:, :, 0] -= min_x
+        c2_local[:, :, 1] -= min_y
+
+        # Downsample if combined bbox exceeds max_render_size — IoU is scale-invariant
+        if local_w > max_render_size or local_h > max_render_size:
+            scale = min(max_render_size / local_w, max_render_size / local_h)
+            c1_local = (c1_local * scale).astype(np.int32)
+            c2_local = (c2_local * scale).astype(np.int32)
+            local_w = int(local_w * scale) + 2
+            local_h = int(local_h * scale) + 2
+        else:
+            c1_local = c1_local.astype(np.int32)
+            c2_local = c2_local.astype(np.int32)
+
+        # Create masks at local (possibly downsampled) size
+        render_shape = (local_h, local_w)
+        mask1 = np.zeros(render_shape, dtype=np.uint8)
+        mask2 = np.zeros(render_shape, dtype=np.uint8)
+
+        try:
+            cv2.drawContours(mask1, [c1_local], -1, 1, -1)
+            cv2.drawContours(mask2, [c2_local], -1, 1, -1)
+        except cv2.error:
+            return 0.0
 
         # Compute intersection and union
-        intersection = np.logical_and(mask1, mask2).sum()
-        union = np.logical_or(mask1, mask2).sum()
+        intersection = np.sum(mask1 & mask2)
+        union = np.sum(mask1 | mask2)
 
         if union == 0:
             return 0.0
@@ -4163,23 +4197,9 @@ class VesselStrategy(DetectionStrategy, MultiChannelFeatureMixin):
                 for i, v in enumerate(dino_feats):
                     valid_candidates[crop_idx]['features'][f'dinov2_ctx_{i}'] = float(v)
 
-        # Fill zeros for candidates that failed crop extraction (warn so it's not silent)
+        # Fill zeros for candidates that failed crop extraction
         if extract_features and self.extract_deep_features:
-            for cand in valid_candidates:
-                if 'resnet_0' not in cand['features']:
-                    logger.warning("Detection missing ResNet features - zero-filling")
-                    for i in range(2048):
-                        cand['features'][f'resnet_{i}'] = 0.0
-                if 'resnet_ctx_0' not in cand['features']:
-                    for i in range(2048):
-                        cand['features'][f'resnet_ctx_{i}'] = 0.0
-                if dinov2 is not None and 'dinov2_0' not in cand['features']:
-                    logger.warning("Detection missing DINOv2 features - zero-filling")
-                    for i in range(1024):
-                        cand['features'][f'dinov2_{i}'] = 0.0
-                if dinov2 is not None and 'dinov2_ctx_0' not in cand['features']:
-                    for i in range(1024):
-                        cand['features'][f'dinov2_ctx_{i}'] = 0.0
+            self._zero_fill_deep_features(valid_candidates, has_dinov2=(dinov2 is not None))
 
         # Reset SAM2 predictor
         if sam2_predictor is not None and self.extract_sam2_embeddings:

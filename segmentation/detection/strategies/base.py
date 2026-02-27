@@ -215,6 +215,142 @@ class DetectionStrategy(ABC):
                if not k.startswith('_') and not callable(v)}
         }
 
+    # ===== Shared classifier and feature methods =====
+    # These methods are used by multiple strategies and are provided here
+    # to avoid code duplication.
+
+    def classify_rf(
+        self,
+        detections: List[Detection],
+        classifier,
+        scaler,
+        feature_names: List[str]
+    ) -> List[Detection]:
+        """
+        Classify candidates using trained Random Forest model.
+
+        Supports two formats:
+        1. Separate classifier and scaler objects (legacy)
+        2. sklearn Pipeline with scaler+RF combined (new format)
+           - Pass pipeline as 'classifier', scaler=None
+
+        Args:
+            detections: List of Detection objects to classify
+            classifier: Trained sklearn RandomForest model OR sklearn Pipeline
+            scaler: StandardScaler for feature normalization (None if using Pipeline)
+            feature_names: List of feature names expected by classifier
+
+        Returns:
+            List of Detection objects with updated scores (keeps ALL)
+        """
+        from sklearn.pipeline import Pipeline
+
+        if not detections:
+            return []
+
+        # Extract features for each detection
+        X = []
+        valid_indices = []
+
+        for i, det in enumerate(detections):
+            if det.features:
+                row = []
+                for fn in feature_names:
+                    val = det.features.get(fn, 0)
+                    # Handle non-scalars
+                    if isinstance(val, (list, tuple)):
+                        val = 0
+                    row.append(float(val) if val is not None else 0)
+                X.append(row)
+                valid_indices.append(i)
+
+        if not X:
+            return detections
+
+        # Convert to numpy
+        X = np.array(X, dtype=np.float32)
+        X = np.nan_to_num(X, nan=0, posinf=0, neginf=0)
+
+        # Handle Pipeline vs separate scaler+classifier
+        if isinstance(classifier, Pipeline):
+            # Pipeline handles scaling internally
+            probs = classifier.predict_proba(X)[:, 1]
+        else:
+            # Legacy: apply scaler separately
+            if scaler is not None:
+                X = scaler.transform(X)
+            probs = classifier.predict_proba(X)[:, 1]
+
+        # Update detections with scores (keep ALL - filter post-hoc by rf_prediction)
+        for j, (idx, prob) in enumerate(zip(valid_indices, probs)):
+            det = detections[idx]
+            det.score = float(prob)
+            det.features['rf_prediction'] = float(prob)
+            det.features['confidence'] = float(prob)
+            # Strategy-specific extras (e.g., NMJ sets prob_nmj)
+            self._post_classify_rf_detection(det, prob)
+
+        # Set score=0 for detections that couldn't be classified (missing features)
+        for i, det in enumerate(detections):
+            if det.score is None:
+                det.score = 0.0
+                det.features['rf_prediction'] = 0.0
+                det.features['confidence'] = 0.0
+                self._post_classify_rf_detection(det, 0.0)
+
+        threshold = getattr(self, 'classifier_threshold', 0.5)
+        n_above = sum(1 for d in detections if d.score >= threshold)
+        logger.debug(f"RF classifier: {n_above}/{len(detections)} above {threshold}, keeping all")
+
+        return detections
+
+    def _post_classify_rf_detection(self, det: Detection, prob: float) -> None:
+        """
+        Hook for strategy-specific post-classification updates.
+
+        Override in subclasses to set additional feature keys after RF
+        classification (e.g., NMJ sets 'prob_nmj' for backward compat).
+
+        Args:
+            det: Detection object that was just scored
+            prob: The RF probability assigned to this detection
+        """
+        pass
+
+    @staticmethod
+    def _zero_fill_deep_features(
+        detection_dicts: list,
+        has_dinov2: bool = False,
+    ) -> None:
+        """
+        Zero-fill missing deep feature vectors (ResNet, DINOv2) on detection dicts.
+
+        Call this after batch deep-feature extraction to ensure every detection
+        has a consistent feature vector length, even if crop extraction failed
+        for some detections.
+
+        Args:
+            detection_dicts: List of dicts, each with a 'features' sub-dict.
+                Supports both {'features': {...}} dicts and Detection objects
+                (via duck-typing on ['features'] access).
+            has_dinov2: Whether DINOv2 features are expected (controls whether
+                dinov2_* keys get zero-filled).
+        """
+        for det in detection_dicts:
+            feats = det['features']
+            if 'resnet_0' not in feats:
+                for i in range(RESNET50_FEATURE_DIM):
+                    feats[f'resnet_{i}'] = 0.0
+            if 'resnet_ctx_0' not in feats:
+                for i in range(RESNET50_FEATURE_DIM):
+                    feats[f'resnet_ctx_{i}'] = 0.0
+            if has_dinov2 and 'dinov2_0' not in feats:
+                for i in range(DINOV2_FEATURE_DIM):
+                    feats[f'dinov2_{i}'] = 0.0
+            if has_dinov2 and 'dinov2_ctx_0' not in feats:
+                for i in range(DINOV2_FEATURE_DIM):
+                    feats[f'dinov2_ctx_{i}'] = 0.0
+
     # ===== Shared feature extraction methods =====
     # These methods are used by multiple strategies (NMJ, MK, Vessel, Cell)
     # and are provided here to avoid code duplication.

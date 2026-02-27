@@ -257,71 +257,7 @@ class IsletStrategy(CellStrategy):
 
         return accepted_masks
 
-    def classify_rf(
-        self,
-        detections: list,
-        classifier,
-        scaler,
-        feature_names: list,
-    ) -> list:
-        """
-        Classify islet candidates using trained Random Forest.
-
-        load_nmj_rf_classifier() always wraps into a Pipeline, so classifier
-        is always a Pipeline that handles scaling internally.
-
-        Args:
-            detections: List of Detection objects to classify
-            classifier: sklearn Pipeline (or bare RF model)
-            scaler: Unused (Pipeline handles scaling), kept for interface compat
-            feature_names: List of feature names expected by classifier
-
-        Returns:
-            List of Detection objects with updated scores (keeps ALL)
-        """
-        if not detections:
-            return []
-
-        X = []
-        valid_indices = []
-
-        for i, det in enumerate(detections):
-            if det.features:
-                row = []
-                for fn in feature_names:
-                    val = det.features.get(fn, 0)
-                    if isinstance(val, (list, tuple)):
-                        val = 0
-                    row.append(float(val) if val is not None else 0)
-                X.append(row)
-                valid_indices.append(i)
-
-        if not X:
-            return detections
-
-        X = np.array(X, dtype=np.float32)
-        X = np.nan_to_num(X, nan=0, posinf=0, neginf=0)
-
-        probs = classifier.predict_proba(X)[:, 1]
-
-        # Update detections with RF probability (keep ALL — filter post-hoc in HTML)
-        for j, (idx, prob) in enumerate(zip(valid_indices, probs)):
-            det = detections[idx]
-            det.score = float(prob)
-            det.features['rf_prediction'] = float(prob)
-            det.features['confidence'] = float(prob)
-
-        # Set score=0 for detections that couldn't be classified (missing features)
-        for i, det in enumerate(detections):
-            if det.score is None:
-                det.score = 0.0
-                det.features['rf_prediction'] = 0.0
-                det.features['confidence'] = 0.0
-
-        n_above = sum(1 for d in detections if d.score >= 0.5)
-        logger.debug(f"RF classifier: {n_above}/{len(detections)} above 0.5, keeping all")
-
-        return detections
+    # classify_rf() inherited from DetectionStrategy base class
 
     def detect(
         self,
@@ -768,19 +704,7 @@ class IsletStrategy(CellStrategy):
                         valid_detections[crop_idx]['features'][f'dinov2_ctx_{i}'] = float(v)
 
             # Fill zeros for missing deep features
-            for det in valid_detections:
-                if 'resnet_0' not in det['features']:
-                    for i in range(2048):
-                        det['features'][f'resnet_{i}'] = 0.0
-                if 'resnet_ctx_0' not in det['features']:
-                    for i in range(2048):
-                        det['features'][f'resnet_ctx_{i}'] = 0.0
-                if dinov2 is not None and 'dinov2_0' not in det['features']:
-                    for i in range(1024):
-                        det['features'][f'dinov2_{i}'] = 0.0
-                if dinov2 is not None and 'dinov2_ctx_0' not in det['features']:
-                    for i in range(1024):
-                        det['features'][f'dinov2_ctx_{i}'] = 0.0
+            self._zero_fill_deep_features(valid_detections, has_dinov2=(dinov2 is not None))
 
         # ====================================================================
         # Build label array directly from Cellpose labels (no full masks needed)
