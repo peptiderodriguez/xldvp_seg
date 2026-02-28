@@ -1717,7 +1717,7 @@ def create_sample_from_detection(tile_x, tile_y, tile_rgb, masks, feat, pixel_si
     local_cx, local_cy = feat['center'][0], feat['center'][1]
     global_cx = tile_x + local_cx
     global_cy = tile_y + local_cy
-    uid = f"{slide_name}_{cell_type}_{int(global_cx)}_{int(global_cy)}"
+    uid = f"{slide_name}_{cell_type}_{int(round(global_cx))}_{int(round(global_cy))}"
 
     # Get stats from features
     area_um2 = features.get('area', 0) * (pixel_size_um ** 2)
@@ -1951,7 +1951,7 @@ def run_pipeline(args):
                        f"col_cv={severity_before['col_cv']:.1f}% ({severity_before['severity']})")
 
             # Apply row/column normalization to fix banding
-            # Note: uses float64 internally, may need ~4x memory temporarily
+            # Note: uses float32 internally, may need ~2x memory temporarily
             corrected = normalize_rows_columns(ch_data)
 
             # Convert back to original dtype (in-place clip to avoid extra copy)
@@ -1997,7 +1997,10 @@ def run_pipeline(args):
 
         for ch in all_channel_data:
             illumination_profile.correct_channel_inplace(all_channel_data[ch], ch)
-            if ch == args.channel:
+            # Sync corrected data back to loader for all channels
+            if hasattr(loader, 'set_channel_data'):
+                loader.set_channel_data(ch, all_channel_data[ch])
+            elif ch == args.channel:
                 loader.channel_data = all_channel_data[ch]
 
         gc.collect()
@@ -3605,6 +3608,8 @@ def main():
                 args.channel = int(args.cellpose_input_channels.split(',')[0])
             except (ValueError, IndexError):
                 parser.error(f"--cellpose-input-channels: first entry must be integer, got '{args.cellpose_input_channels}'")
+            # 2-channel Cellpose needs both channels loaded into shared memory
+            args.all_channels = True
         else:
             args.channel = 0
 

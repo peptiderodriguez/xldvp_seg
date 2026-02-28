@@ -37,7 +37,7 @@ class IlluminationProfile:
     """Stores a smoothed coarse illumination grid per channel and applies correction.
 
     Attributes:
-        grids: Dict mapping channel index to 2D float64 array of smoothed
+        grids: Dict mapping channel index to 2D float32 array of smoothed
                block medians (one value per block_size x block_size region).
         block_size: Side length of each block in pixels.
         slide_means: Dict mapping channel index to the global mean intensity
@@ -65,7 +65,7 @@ class IlluminationProfile:
         temporary memory small. Zero pixels (CZI padding) are preserved.
 
         Args:
-            data: 2D uint16 array (H, W) — modified in-place.
+            data: 2D array (H, W) of any integer dtype (uint8, uint16) — modified in-place.
             channel: Channel index into ``self.grids`` / ``self.slide_means``.
         """
         grid = self.grids[channel]
@@ -76,16 +76,24 @@ class IlluminationProfile:
         # Floor to avoid extreme correction in very dark regions
         illum_floor = slide_mean * 0.1
 
+        # Determine clip range based on input dtype
+        input_dtype = data.dtype
+        if np.issubdtype(input_dtype, np.integer):
+            dtype_max = float(np.iinfo(input_dtype).max)
+        else:
+            dtype_max = 65535.0  # fallback for float data
+
         logger.info(
-            "Correcting channel %d: grid %s, slide_mean=%.1f, illum_floor=%.1f",
-            channel, grid.shape, slide_mean, illum_floor,
+            "Correcting channel %d: grid %s, slide_mean=%.1f, illum_floor=%.1f, dtype=%s",
+            channel, grid.shape, slide_mean, illum_floor, input_dtype,
         )
 
         # Upscale coarse grid to full slide resolution via bilinear interpolation.
         # zoom() maps grid centers to pixel centers automatically, so no manual
         # coordinate offset is needed. Memory: one float32 array of (H, W).
+        # Grid is float32, so zoom() outputs float32 directly (no float64 intermediate).
         zoom_factors = (H / grid.shape[0], W / grid.shape[1])
-        full_illum = zoom(grid, zoom_factors, order=1, mode="nearest").astype(np.float32)
+        full_illum = zoom(grid, zoom_factors, order=1, mode="nearest")
 
         # Clamp illumination to floor
         np.maximum(full_illum, illum_floor, out=full_illum)
@@ -107,10 +115,10 @@ class IlluminationProfile:
 
             # Apply: float32 intermediate to save memory vs float64
             corrected = strip.astype(np.float32) * correction_field[row_start:row_end]
-            np.clip(corrected, 0, 65535, out=corrected)
+            np.clip(corrected, 0, dtype_max, out=corrected)
 
             # Write back and restore zero padding
-            result = corrected.astype(np.uint16)
+            result = corrected.astype(input_dtype)
             result[zero_mask] = 0
             data[row_start:row_end] = result
 
@@ -147,7 +155,7 @@ def estimate_illumination_profile(
         H, W = data.shape
         n_rows = int(np.ceil(H / block_size))
         n_cols = int(np.ceil(W / block_size))
-        coarse = np.full((n_rows, n_cols), np.nan, dtype=np.float64)
+        coarse = np.full((n_rows, n_cols), np.nan, dtype=np.float32)
 
         for r in range(n_rows):
             y0 = r * block_size

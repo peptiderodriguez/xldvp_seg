@@ -219,9 +219,9 @@ class DetectionStrategy(ABC):
 
         # Get intensity image
         if tile.ndim == 3:
-            gray = np.mean(tile[:, :, :3], axis=2)
+            gray = np.mean(tile[:, :, :3].astype(np.float32), axis=2)
         else:
-            gray = tile.astype(float)
+            gray = tile.astype(np.float32)
 
         # Use largest connected component for shape features (solidity, eccentricity)
         # to avoid picking a small fragment when mask has disconnected components
@@ -648,7 +648,7 @@ class DetectionStrategy(ABC):
         if p_high_val <= p_low_val:
             return np.zeros_like(image, dtype=np.uint8)
 
-        normalized = (image.astype(float) - p_low_val) / (p_high_val - p_low_val)
+        normalized = (image.astype(np.float32) - p_low_val) / (p_high_val - p_low_val)
         normalized = np.clip(normalized * 255, 0, 255).astype(np.uint8)
 
         return normalized

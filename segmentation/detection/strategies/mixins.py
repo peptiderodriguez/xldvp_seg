@@ -84,7 +84,7 @@ class MultiChannelFeatureMixin:
             return {}
 
         # Get masked pixels, excluding zeros (CZI padding)
-        masked_pixels = channel_data[mask].astype(float)
+        masked_pixels = channel_data[mask].astype(np.float32)
         masked_pixels = masked_pixels[masked_pixels > 0]
         if len(masked_pixels) == 0:
             return {f'{channel_name}_{stat}': 0.0 for stat in
@@ -330,7 +330,7 @@ class MultiChannelFeatureMixin:
         if channel_data.shape != mask.shape:
             return {}
 
-        masked_pixels = channel_data[mask].astype(float)
+        masked_pixels = channel_data[mask].astype(np.float32)
         # Exclude zero pixels (CZI padding)
         masked_pixels = masked_pixels[masked_pixels > 0]
         if len(masked_pixels) == 0:

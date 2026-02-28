@@ -471,7 +471,7 @@ def _gpu_worker(
                 })
 
             tiles_processed += 1
-            if tiles_processed % 2 == 0:
+            if tiles_processed % 20 == 0:
                 gc.collect()
                 torch.cuda.empty_cache()
 

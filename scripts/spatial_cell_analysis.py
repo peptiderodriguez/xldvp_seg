@@ -453,7 +453,7 @@ def run_spatial_network(detections, output_dir, *,
     output_dir.mkdir(parents=True, exist_ok=True)
 
     # Filter detections if marker_filter provided
-    if marker_filter is not None:
+    if marker_filter is not None and marker_filter.strip():
         pred = parse_marker_filter(marker_filter)
         filtered_idx = [i for i, d in enumerate(detections) if pred(d)]
         logger.info(f"Marker filter '{marker_filter}': {len(detections):,} -> {len(filtered_idx):,}")
@@ -501,14 +501,17 @@ def run_spatial_network(detections, output_dir, *,
                     a, b = b, a
                 edge_set.add((a, b))
 
-    # Add edges with distance, prune by max_edge_distance
+    # Add edges with distance, prune by max_edge_distance (vectorized)
     n_total_edges = len(edge_set)
-    n_kept = 0
-    for a, b in edge_set:
-        dist = np.linalg.norm(positions[a] - positions[b])
-        if dist <= max_edge_distance:
-            G.add_edge(a, b, weight=float(dist))
-            n_kept += 1
+    if n_total_edges == 0:
+        logger.warning("No edges from Delaunay triangulation. Skipping network.")
+        return detections
+    edges_arr = np.array(list(edge_set), dtype=np.int64)
+    dists = np.linalg.norm(positions[edges_arr[:, 0]] - positions[edges_arr[:, 1]], axis=1)
+    mask = dists <= max_edge_distance
+    n_kept = int(mask.sum())
+    for (a, b), d in zip(edges_arr[mask], dists[mask]):
+        G.add_edge(int(a), int(b), weight=float(d))
 
     logger.info(f"  Delaunay edges: {n_total_edges:,} total, {n_kept:,} kept "
                 f"(<= {max_edge_distance} um)")
@@ -522,6 +525,7 @@ def run_spatial_network(detections, output_dir, *,
 
     # Per-component metrics
     comp_rows = []
+    ch_pattern = re.compile(r'^ch\d+_mean$')  # compile once, reuse
     for comp_id, comp_nodes in enumerate(large_components):
         comp_nodes = sorted(comp_nodes)
         subgraph = G.subgraph(comp_nodes)
@@ -542,14 +546,25 @@ def run_spatial_network(detections, output_dir, *,
         density = n_cells / hull_area if hull_area > 0 else float('nan')
 
         # Graph diameter (longest shortest path)
-        try:
-            diameter = nx.diameter(subgraph)
-        except nx.NetworkXError:
-            diameter = 0
+        # Use double-BFS approximation for large components to avoid O(N^2)
+        if n_cells <= 1000:
+            try:
+                diameter = nx.diameter(subgraph)
+            except nx.NetworkXError:
+                diameter = 0
+        else:
+            # Approximate: BFS from arbitrary node, then BFS from farthest
+            try:
+                source = next(iter(comp_nodes))
+                lengths = dict(nx.single_source_shortest_path_length(subgraph, source))
+                farthest = max(lengths, key=lengths.get)
+                lengths2 = dict(nx.single_source_shortest_path_length(subgraph, farthest))
+                diameter = max(lengths2.values())
+            except Exception:
+                diameter = 0
 
         # Mean channel features for the component
         ch_means = {}
-        ch_pattern = re.compile(r'^ch\d+_mean$')
         for node in comp_nodes:
             det = detections[G.nodes[node]['det_idx']]
             feats = det.get('features', {})

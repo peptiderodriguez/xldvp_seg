@@ -98,7 +98,10 @@ SPATIAL_EDGE=$(read_yaml spatial_network.max_edge_distance 50)
 SPATIAL_MIN_COMP=$(read_yaml spatial_network.min_component_cells 3)
 PIXEL_SIZE=$(read_yaml pixel_size_um "")
 # If spatial_network section exists but enabled is not explicitly set, treat as enabled
-if [[ -n "$SPATIAL_FILTER" && -z "$SPATIAL_ENABLED" ]]; then
+# But respect explicit enabled: false
+if [[ "$SPATIAL_ENABLED" == "false" ]]; then
+    : # Explicitly disabled, do nothing
+elif [[ -n "$SPATIAL_FILTER" && -z "$SPATIAL_ENABLED" ]]; then
     SPATIAL_ENABLED="true"
 fi
 
@@ -187,10 +190,23 @@ if len(methods) > 1:
 print(methods.pop())
 " "$MARKERS_JSON" || echo "")
 
+# Validate: if markers are defined but method/channels extraction failed, abort
+if [[ -n "$MARKERS_JSON" && "$MARKERS_JSON" != "[]" ]]; then
+    if [[ -n "$MARKER_CHANNELS" && -z "$MARKER_METHOD" ]]; then
+        echo "Error: markers defined but method could not be determined. Check for mixed methods in config." >&2
+        exit 1
+    fi
+    if [[ -z "$MARKER_CHANNELS" && -n "$MARKER_NAMES" ]] || [[ -n "$MARKER_CHANNELS" && -z "$MARKER_NAMES" ]]; then
+        echo "Error: marker channels/names mismatch. Check markers section in config." >&2
+        exit 1
+    fi
+fi
+
 # ---------------------------------------------------------------------------
 # Write sbatch script
 # ---------------------------------------------------------------------------
-SBATCH_FILE="/tmp/pipeline_${NAME}_$$.sbatch"
+mkdir -p "$OUTPUT_DIR"
+SBATCH_FILE="${OUTPUT_DIR}/pipeline_${NAME}_$$.sbatch"
 
 {
     echo "#!/bin/bash"

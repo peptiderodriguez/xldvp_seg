@@ -2,7 +2,7 @@ name: msln_bands
 czi_path: /fs/pool/pool-mann-axioscan/01_Users/EdRo_axioscan/xDVP/20251114_Pdgfra546_Msln750_PM647_nuc488-EDFvar-1.czi
 output_dir: /fs/pool/pool-mann-edwin/msln_cell_output/
 
-channels: {0: nuc488, 1: PM647, 2: Msln750, 3: Pdgfra546}
+channels: {0: nuc488, 1: PM647, 2: Msln750}  # ch3 Pdgfra546 dropped (stain failed)
 cell_type: cell
 cellpose_input_channels: [1, 0]   # cyto=PM647 (plasma membrane), nuc=nuc488
 pixel_size_um: 0.1725            # from CZI metadata (Axioscan 20x)
@@ -20,6 +20,11 @@ spatial_network:
   marker_filter: "MSLN_class==positive"   # from Otsu/2 classification
   max_edge_distance: 50
   min_component_cells: 3
+
+spatial_viewer:
+  enabled: true
+  group_field: MSLN_class
+  title: "Mesothelium MSLN Spatial Overview"
 
 slurm:
   partition: p.hpcl93

@@ -56,11 +56,15 @@ def classify_otsu_half(values: np.ndarray) -> tuple[float, np.ndarray]:
         logger.warning("Too few non-zero values for Otsu; defaulting threshold to 0")
         return 0.0, np.zeros(len(values), dtype=bool)
 
+    if np.std(nonzero) < 1e-6:
+        logger.warning("Near-zero variance in marker values; all cells classified as negative")
+        return 0.0, np.zeros(len(values), dtype=bool)
+
     otsu_t = threshold_otsu(nonzero)
     # Otsu/2: permissive cutoff to capture weakly-expressing marker-positive cells,
     # reducing false negatives at the cost of more false positives.
     threshold = otsu_t / 2.0
-    positive = values >= threshold
+    positive = (values >= threshold) & (values > 0)
     return float(threshold), positive
 
 
@@ -175,6 +179,11 @@ def classify_single_marker(detections: list[dict], channel: int,
     logger.info(f"Classifying marker '{marker_name}' (ch{channel}) with method '{method}'")
 
     values = extract_marker_values(detections, channel)
+    if len(values) == 0:
+        logger.warning(f"No values extracted for marker '{marker_name}' — skipping")
+        return {'marker': marker_name, 'method': method, 'threshold': 0,
+                'n_positive': 0, 'n_negative': 0, 'pct_positive': 0}
+
     logger.info(f"  Extracted {len(values):,} values, "
                 f"range [{values.min():.1f}, {values.max():.1f}], "
                 f"median {np.median(values):.1f}")
@@ -298,6 +307,27 @@ def main():
     for ch, name in zip(channels, names):
         row = classify_single_marker(detections, ch, name, args.method, output_dir)
         summaries.append(row)
+
+    # Create combined marker_profile when multiple markers are classified
+    if len(names) > 1:
+        logger.info("Creating combined marker_profile field...")
+        class_keys = [f'{name}_class' for name in names]
+        profile_counts = {}
+        for det in detections:
+            feat = det.get('features', {})
+            parts = []
+            for name, key in zip(names, class_keys):
+                cls = feat.get(key, 'negative')
+                symbol = '+' if cls == 'positive' else '-'
+                parts.append(f'{name}{symbol}')
+            profile = '/'.join(parts)
+            feat['marker_profile'] = profile
+            profile_counts[profile] = profile_counts.get(profile, 0) + 1
+
+        logger.info("  Marker profiles:")
+        for profile, count in sorted(profile_counts.items(), key=lambda x: -x[1]):
+            pct = 100 * count / len(detections)
+            logger.info(f"    {profile}: {count:,} ({pct:.1f}%)")
 
     # Save enriched detections
     out_json = output_dir / f'{det_path.stem}_classified.json'

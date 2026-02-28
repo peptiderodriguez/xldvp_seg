@@ -42,11 +42,18 @@ def preprocess_crop_for_resnet(crop: np.ndarray) -> np.ndarray:
     if crop.size == 0:
         return np.zeros((224, 224, 3), dtype=np.uint8)
 
-    # Convert uint16 to uint8 if needed (CZI images are often 16-bit)
-    if crop.dtype == np.uint16:
+    # Convert to uint8 safely (handles float32 [0,1], uint16, etc.)
+    if crop.dtype == np.uint8:
+        pass
+    elif crop.dtype == np.uint16:
         crop = (crop / 256).astype(np.uint8)
-    elif crop.dtype != np.uint8:
-        crop = crop.astype(np.uint8)
+    elif crop.dtype in (np.float32, np.float64):
+        if crop.max() <= 1.0 + 1e-6:
+            crop = (crop * 255).clip(0, 255).astype(np.uint8)
+        else:
+            crop = crop.clip(0, 255).astype(np.uint8)
+    else:
+        crop = crop.clip(0, 255).astype(np.uint8)
 
     # Ensure RGB format (3 channels)
     if crop.ndim == 2:
@@ -121,9 +128,10 @@ def extract_resnet_features_batch(
                 features = features.cpu().numpy()
 
             # Map features back to correct indices
+            valid_indices_set = set(valid_indices)
             feature_idx = 0
             for idx in range(len(batch_crops)):
-                if idx in valid_indices:
+                if idx in valid_indices_set:
                     all_features.append(features[feature_idx])
                     feature_idx += 1
                 else:
@@ -383,7 +391,7 @@ def extract_morphological_features(mask: np.ndarray, image: np.ndarray, tile_glo
         blue_mean, blue_std = float(np.mean(masked_pixels[:, 2])), float(np.std(masked_pixels[:, 2]))
         gray = np.mean(masked_pixels, axis=1)
     else:
-        gray = image[mask].astype(float)
+        gray = image[mask].astype(np.float32)
         # Exclude zero pixels (CZI padding)
         gray = gray[gray > 0]
         if len(gray) == 0:

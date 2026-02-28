@@ -22,6 +22,11 @@ spatial_network:
   max_edge_distance: 50
   min_component_cells: 5
 
+spatial_viewer:
+  enabled: true
+  group_field: marker_profile    # combined SMA/CD31 classification
+  title: "Vessel CD31+SMA Spatial Overview"
+
 slurm:
   partition: p.hpcl93
   cpus: 128

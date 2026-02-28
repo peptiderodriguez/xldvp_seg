@@ -97,6 +97,15 @@ class CellStrategy(DetectionStrategy, MultiChannelFeatureMixin):
         result = np.clip((arr.astype(np.float32) - p_low) / (p_high - p_low) * 255, 0, 255)
         return result.astype(np.uint8)
 
+    def _grayscale_cellpose_eval(self, tile: np.ndarray, cellpose) -> np.ndarray:
+        """Run Cellpose in grayscale mode, handling any input dtype safely."""
+        if tile.ndim == 3:
+            gray = _safe_to_uint8(np.mean(tile[:, :, :3].astype(np.float32), axis=2))
+            masks, _, _ = cellpose.eval(gray, channels=[0, 0])
+        else:
+            masks, _, _ = cellpose.eval(_safe_to_uint8(tile), channels=[0, 0])
+        return masks
+
     @property
     def name(self) -> str:
         return "cell"
@@ -155,19 +164,9 @@ class CellStrategy(DetectionStrategy, MultiChannelFeatureMixin):
                 logger.warning(f"Cellpose 2-channel requested but ch{cyto_idx} or ch{nuc_idx} "
                                f"not in extra_channels (keys: {list(extra_channels.keys())}). "
                                f"Falling back to grayscale.")
-                # Grayscale fallback: use mean of all channels, not just R
-                if tile.ndim == 3:
-                    gray = np.mean(tile[:, :, :3], axis=2).astype(np.uint8) if tile.dtype == np.uint8 else self._percentile_normalize(np.mean(tile[:, :, :3].astype(np.float32), axis=2))
-                    cellpose_masks, _, _ = cellpose.eval(gray, channels=[0, 0])
-                else:
-                    cellpose_masks, _, _ = cellpose.eval(tile, channels=[0, 0])
+                cellpose_masks = self._grayscale_cellpose_eval(tile, cellpose)
         else:
-            # Grayscale fallback: use mean of all channels, not just R
-            if tile.ndim == 3:
-                gray = np.mean(tile[:, :, :3], axis=2).astype(np.uint8) if tile.dtype == np.uint8 else self._percentile_normalize(np.mean(tile[:, :, :3].astype(np.float32), axis=2))
-                cellpose_masks, _, _ = cellpose.eval(gray, channels=[0, 0])
-            else:
-                cellpose_masks, _, _ = cellpose.eval(tile, channels=[0, 0])
+            cellpose_masks = self._grayscale_cellpose_eval(tile, cellpose)
 
         # Get unique mask IDs (exclude background 0)
         cellpose_ids = np.unique(cellpose_masks)
@@ -332,12 +331,8 @@ class CellStrategy(DetectionStrategy, MultiChannelFeatureMixin):
                 torch.cuda.empty_cache()
             return np.zeros(tile.shape[:2], dtype=np.uint32), []
 
-        # Ensure SAM2 predictor has the correct image state for embedding extraction
-        # segment() calls set_image() internally, but we re-set explicitly here
-        # so detect() does not silently depend on segment()'s internal state.
-        tile_uint8 = _safe_to_uint8(tile)
-        if sam2_predictor is not None:
-            sam2_predictor.set_image(tile_uint8)
+        # SAM2 predictor already has the image set from segment() above.
+        # Do NOT call set_image() again — it's the most expensive SAM2 operation.
 
         # Compute features for each mask
         valid_detections = []
@@ -357,7 +352,7 @@ class CellStrategy(DetectionStrategy, MultiChannelFeatureMixin):
         n_masks = len(masks)
         for idx, mask in enumerate(masks):
             if idx % 500 == 0:
-                print(f"[cell] Featurizing cell {idx}/{n_masks}", flush=True)
+                logger.info(f"Featurizing cell {idx}/{n_masks}")
             # Basic morphological features
             feat = extract_morphological_features(mask, tile, tile_global_mean=tile_global_mean)
             if not feat:
