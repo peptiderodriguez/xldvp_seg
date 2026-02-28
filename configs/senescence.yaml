@@ -9,9 +9,9 @@ cellpose_input_channels: [1, 0]   # cyto=NeuN647, nuc=nuc488
 pixel_size_um: 0.1725            # from CZI metadata (Axioscan 20x)
 min_area_um: 45                  # LMD-practical cell range
 max_area_um: 1000
-photobleach_correction: true
+photobleach_correction: false
 all_channels: true
-num_gpus: 2
+num_gpus: 4
 
 markers:
   - {channel: 2, name: tdTomato, method: otsu_half}
@@ -28,10 +28,10 @@ spatial_viewer:
   title: "Senescence tdTomato Spatial Overview"
 
 slurm:
-  partition: p.hpcl8
-  cpus: 24
-  mem_gb: 350
-  gpus: "rtx5000:2"
-  time: "2-00:00:00"
-  slides_per_job: 6
-  num_jobs: 4
+  partition: p.hpcl93
+  cpus: 128
+  mem_gb: 500
+  gpus: "l40s:4"
+  time: "3-00:00:00"
+  slides_per_job: 4
+  num_jobs: 6

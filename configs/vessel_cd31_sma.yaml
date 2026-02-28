@@ -8,7 +8,7 @@ cellpose_input_channels: [2, 0]   # cyto=PM750 (plasma membrane), nuc=nuc488
 pixel_size_um: 0.1725            # from CZI metadata (Axioscan 20x)
 min_area_um: 45                   # LMD-practical cell range
 max_area_um: 1000
-photobleach_correction: true
+photobleach_correction: false
 all_channels: true
 num_gpus: 4
 

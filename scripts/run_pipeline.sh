@@ -313,7 +313,7 @@ SBATCH_FILE="${OUTPUT_DIR}/pipeline_${NAME}_$$.sbatch"
             echo ""
             echo "    # Step 4: Spatial viewer"
             echo "    echo \"Generating spatial viewer...\""
-            echo "    \$MKSEG_PYTHON $REPO/scripts/generate_multi_slide_spatial_viewer.py --detections \"\$DET_JSON\" --group-field \"$VIEWER_GROUP_FIELD\" --title \"$VIEWER_TITLE\" --output \"\${SLIDE_OUT}/spatial_viewer.html\""
+            echo "    \$MKSEG_PYTHON $REPO/scripts/generate_multi_slide_spatial_viewer.py --input-dir \"\$SLIDE_OUT\" --group-field \"$VIEWER_GROUP_FIELD\" --title \"$VIEWER_TITLE\" --output \"\${SLIDE_OUT}/spatial_viewer.html\""
         fi
 
         echo "else"
