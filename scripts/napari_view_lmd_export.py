@@ -16,9 +16,13 @@ Usage:
 
 import argparse
 import json
+import logging
+import sys
 from pathlib import Path
 
 import numpy as np
+
+logger = logging.getLogger(__name__)
 
 try:
     import napari
@@ -33,14 +37,8 @@ except ImportError:
     print("ERROR: ome-zarr not installed. Install with: pip install ome-zarr")
     exit(1)
 
-# Default paths (set via CLI args)
-DEFAULT_ZARR = None
-DEFAULT_EXPORT = None
 
-PIXEL_SIZE_UM = 0.1725
-
-
-def load_export_shapes(export_path: Path):
+def load_export_shapes(export_path: Path, pixel_size_override=None):
     """Load shapes from unified LMD export JSON.
 
     Reads the 'shapes' list with 'type' field:
@@ -49,12 +47,25 @@ def load_export_shapes(export_path: Path):
     - cluster: multiple contours_um
     - cluster_control: multiple contours_um
 
+    Args:
+        export_path: Path to export JSON.
+        pixel_size_override: If provided, use this instead of metadata value.
+
     Returns dict with lists of (contour_px, tooltip) tuples per category.
     """
     with open(export_path) as f:
         data = json.load(f)
 
-    pixel_size = data.get("metadata", {}).get("pixel_size_um", PIXEL_SIZE_UM)
+    metadata_pixel_size = data.get("metadata", {}).get("pixel_size_um")
+
+    if pixel_size_override is not None:
+        pixel_size = pixel_size_override
+    elif metadata_pixel_size is not None:
+        pixel_size = metadata_pixel_size
+    else:
+        logger.error("No pixel_size_um found in export metadata. "
+                      "Provide --pixel-size to specify the pixel size.")
+        sys.exit(1)
 
     singles = []
     single_controls = []
@@ -102,7 +113,12 @@ def main():
                         help="Path to OME-Zarr pyramid")
     parser.add_argument("--export", type=str, required=True,
                         help="Path to LMD export JSON (lmd_export_with_controls.json)")
+    parser.add_argument("--pixel-size", type=float, default=None,
+                        help="Pixel size in um/px. If omitted, read from export metadata. "
+                             "Required if metadata does not contain pixel_size_um.")
     args = parser.parse_args()
+
+    logging.basicConfig(level=logging.INFO, format='%(levelname)s: %(message)s')
 
     zarr_path = Path(args.zarr)
     export_path = Path(args.export)
@@ -131,7 +147,7 @@ def main():
 
     # Load export shapes
     print(f"Loading export: {export_path}")
-    shapes = load_export_shapes(export_path)
+    shapes = load_export_shapes(export_path, pixel_size_override=args.pixel_size)
 
     n_s = len(shapes['singles'])
     n_sc = len(shapes['single_controls'])

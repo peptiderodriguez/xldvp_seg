@@ -230,19 +230,29 @@ def percentile_normalize_rgb(
     """
     Simple per-slide percentile normalization (no cross-slide reference).
 
+    Thin wrapper around :func:`segmentation.io.html_export.percentile_normalize`,
+    which is the canonical implementation. This wrapper preserves the original
+    call signature for backward compatibility.
+
     Args:
-        image: RGB image
+        image: RGB image (H, W, 3) or grayscale (H, W)
         p_low: Lower percentile to clip
         p_high: Upper percentile to clip
-        target_range: Output range (default 0-255)
+        target_range: Output range (default 0-255). Only (0, 255) is supported;
+            other ranges fall back to the legacy normalize_to_percentiles path.
 
     Returns:
-        Normalized image
+        Normalized uint8 image
     """
-    target_low = np.full(3, target_range[0], dtype=np.float32)
-    target_high = np.full(3, target_range[1], dtype=np.float32)
+    # The canonical percentile_normalize always maps to [0, 255].
+    # If caller requests a non-default target_range, fall back to the old path.
+    if target_range != (0, 255):
+        target_low = np.full(3, target_range[0], dtype=np.float32)
+        target_high = np.full(3, target_range[1], dtype=np.float32)
+        return normalize_to_percentiles(image, target_low, target_high, p_low, p_high)
 
-    return normalize_to_percentiles(image, target_low, target_high, p_low, p_high)
+    from segmentation.io.html_export import percentile_normalize
+    return percentile_normalize(image, p_low=p_low, p_high=p_high)
 
 
 # ============================================================================
@@ -326,13 +336,9 @@ compute_reinhard_params_from_samples_MEDIAN = compute_reinhard_params_from_sampl
 def apply_reinhard_normalization_MEDIAN(
     image: np.ndarray,
     params: Dict[str, float],
-    variance_threshold: float = 15.0,
-    tile_size: int = 10000,
-    block_size: int = 7,
-    precomputed_variance_threshold: float = None,
-    precomputed_intensity_threshold: float = None,
     otsu_threshold: float = None,
     slide_lab_stats: Dict[str, float] = None,
+    **_legacy_kwargs,
 ) -> np.ndarray:
     """
     Apply Reinhard normalization with pixel-level tissue masking.
@@ -345,16 +351,15 @@ def apply_reinhard_normalization_MEDIAN(
         image: RGB image (H, W, 3) in range [0, 255], dtype uint8
         params: Dictionary with global target Lab statistics from Phase 1
                 Must contain: L_median, L_mad, a_median, a_mad, b_median, b_mad
-        variance_threshold: (unused, kept for API compatibility)
-        tile_size: (unused, kept for API compatibility)
-        block_size: (unused, kept for API compatibility)
-        precomputed_variance_threshold: (unused, kept for API compatibility)
-        precomputed_intensity_threshold: (unused, kept for API compatibility)
         otsu_threshold: Per-slide Otsu threshold from step 1 JSON.
             If None, computed from image.
         slide_lab_stats: Per-slide LAB stats dict from step 1 JSON with keys:
             L_median, L_mad, a_median, a_mad, b_median, b_mad.
             If None, computed from image by sampling tissue pixels.
+        **_legacy_kwargs: Accepts (and ignores) former dead parameters
+            ``variance_threshold``, ``tile_size``, ``block_size``,
+            ``precomputed_variance_threshold``, ``precomputed_intensity_threshold``
+            for backward compatibility.
 
     Returns:
         Normalized RGB image (H, W, 3), dtype uint8
@@ -465,17 +470,17 @@ def apply_reinhard_normalization_MEDIAN(
             block_lab[:, :, 2] = block_lab[:, :, 2] - 128.0
 
             # Normalize ONLY tissue pixels
-            if L_src_mad > 1.0:
+            if L_src_mad > 1e-6:
                 block_lab[:, :, 0][tissue_mask] = (block_lab[:, :, 0][tissue_mask] - L_src_median) / L_src_mad * params['L_mad'] + params['L_median']
             else:
                 block_lab[:, :, 0][tissue_mask] = params['L_median']
 
-            if a_src_mad > 1.0:
+            if a_src_mad > 1e-6:
                 block_lab[:, :, 1][tissue_mask] = (block_lab[:, :, 1][tissue_mask] - a_src_median) / a_src_mad * params['a_mad'] + params['a_median']
             else:
                 block_lab[:, :, 1][tissue_mask] = params['a_median']
 
-            if b_src_mad > 1.0:
+            if b_src_mad > 1e-6:
                 block_lab[:, :, 2][tissue_mask] = (block_lab[:, :, 2][tissue_mask] - b_src_median) / b_src_mad * params['b_mad'] + params['b_median']
             else:
                 block_lab[:, :, 2][tissue_mask] = params['b_median']
@@ -499,13 +504,9 @@ def apply_reinhard_normalization_MEDIAN(
 def apply_reinhard_normalization(
     image: np.ndarray,
     params: Dict[str, float],
-    variance_threshold: float = 15.0,
-    tile_size: int = 10000,
-    block_size: int = 7,
-    precomputed_variance_threshold: float = None,
-    precomputed_intensity_threshold: float = None,
     otsu_threshold: float = None,
     slide_lab_stats: Dict[str, float] = None,
+    **_legacy_kwargs,
 ) -> np.ndarray:
     """
     Apply Reinhard normalization with pixel-level tissue masking.
@@ -515,13 +516,10 @@ def apply_reinhard_normalization(
     Args:
         image: RGB image (H, W, 3) in range [0, 255], dtype uint8
         params: Dictionary with global target Lab statistics
-        variance_threshold: (unused, kept for API compatibility)
-        tile_size: (unused, kept for API compatibility)
-        block_size: (unused, kept for API compatibility)
-        precomputed_variance_threshold: (unused, kept for API compatibility)
-        precomputed_intensity_threshold: (unused, kept for API compatibility)
         otsu_threshold: Per-slide Otsu threshold from step 1 JSON
         slide_lab_stats: Per-slide LAB source stats from step 1 JSON
+        **_legacy_kwargs: Accepts (and ignores) former dead parameters
+            for backward compatibility.
 
     Returns:
         Normalized RGB image (H, W, 3), dtype uint8

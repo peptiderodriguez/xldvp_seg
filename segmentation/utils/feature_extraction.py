@@ -343,7 +343,12 @@ def extract_morphological_features(mask: np.ndarray, image: np.ndarray, tile_glo
     """
     from skimage import measure
 
+    # Ensure boolean dtype for correct array indexing (uint8 0/1 would do
+    # integer fancy-indexing instead of boolean masking)
+    mask = mask.astype(bool)
+
     if not mask.any():
+        logger.debug("All-zero mask at detection — returning empty features")
         return {}
 
     area = int(mask.sum())
@@ -371,6 +376,7 @@ def extract_morphological_features(mask: np.ndarray, image: np.ndarray, tile_glo
         valid = np.max(masked_pixels, axis=1) > 0
         masked_pixels = masked_pixels[valid]
         if len(masked_pixels) == 0:
+            logger.debug("All-zero mask (CZI padding) at detection — returning empty features")
             return {}
         red_mean, red_std = float(np.mean(masked_pixels[:, 0])), float(np.std(masked_pixels[:, 0]))
         green_mean, green_std = float(np.mean(masked_pixels[:, 1])), float(np.std(masked_pixels[:, 1]))
@@ -381,6 +387,7 @@ def extract_morphological_features(mask: np.ndarray, image: np.ndarray, tile_glo
         # Exclude zero pixels (CZI padding)
         gray = gray[gray > 0]
         if len(gray) == 0:
+            logger.debug("All-zero mask (CZI padding) at detection — returning empty features")
             return {}
         red_mean = green_mean = blue_mean = float(np.mean(gray))
         red_std = green_std = blue_std = float(np.std(gray))
@@ -400,16 +407,28 @@ def extract_morphological_features(mask: np.ndarray, image: np.ndarray, tile_glo
     # Texture features
     # Exclude zero pixels from global mean (CZI padding)
     if tile_global_mean is None:
-        # Compute it (backward compat) — expensive for large tiles
+        import warnings
+        warnings.warn(
+            "tile_global_mean not provided — computing from full image. "
+            "Pass precomputed value for O(1) per-mask cost.",
+            stacklevel=2,
+        )
         if image.ndim == 3:
             global_valid = np.max(image, axis=2) > 0
-            tile_global_mean = float(np.mean(image[global_valid])) if global_valid.any() else 0
+            tile_global_mean = float(np.mean(image[global_valid])) if global_valid.any() else 0.0
         else:
             global_valid = image > 0
-            tile_global_mean = float(np.mean(image[global_valid])) if global_valid.any() else 0
+            tile_global_mean = float(np.mean(image[global_valid])) if global_valid.any() else 0.0
     relative_brightness = gray_mean - tile_global_mean
     intensity_variance = float(np.var(gray))
-    dark_fraction = float(np.mean(gray < 100))
+    # Scale threshold to image dtype range
+    if image.dtype == np.uint16:
+        dark_threshold = 100.0 * 65535.0 / 255.0  # ~25700
+    elif image.dtype == np.float32 or image.dtype == np.float64:
+        dark_threshold = 100.0 / 255.0 if image.max() <= 1.0 else 100.0
+    else:
+        dark_threshold = 100.0
+    dark_fraction = float(np.mean(gray < dark_threshold))
     nuclear_complexity = gray_std
 
     return {

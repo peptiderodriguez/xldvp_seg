@@ -78,7 +78,7 @@ def detections_to_features_list(detections, cell_type):
         elif 'prob_nmj' in det.features:
             feat_dict['rf_prediction'] = det.features['prob_nmj']
         else:
-            feat_dict['rf_prediction'] = det.score
+            feat_dict['rf_prediction'] = det.score if det.score is not None else 0.0
 
         # For vessels, lift contours from features to top level
         if cell_type == 'vessel':
@@ -168,18 +168,11 @@ def process_single_tile(
                     masks = None
             break  # Success
 
-        except (torch.cuda.OutOfMemoryError, RuntimeError) as cuda_err:
-            err_str = str(cuda_err).lower()
-            is_cuda_error = (
-                isinstance(cuda_err, torch.cuda.OutOfMemoryError) or
-                'cuda' in err_str or
-                'out of memory' in err_str or
-                'device-side assert' in err_str
-            )
-            if is_cuda_error and attempt < max_retries - 1:
+        except torch.cuda.OutOfMemoryError as oom_err:
+            if attempt < max_retries - 1:
                 logger.warning(
-                    f"CUDA error on tile ({tile_x}, {tile_y}) attempt "
-                    f"{attempt + 1}/{max_retries}: {cuda_err}"
+                    f"CUDA OOM on tile ({tile_x}, {tile_y}) attempt "
+                    f"{attempt + 1}/{max_retries}: {oom_err}"
                 )
                 gc.collect()
                 torch.cuda.empty_cache()
@@ -189,6 +182,27 @@ def process_single_tile(
                 continue
             else:
                 logger.error(f"All {max_retries} CUDA retries failed for tile ({tile_x}, {tile_y})")
+                raise
+
+        except RuntimeError as rt_err:
+            err_str = str(rt_err).lower()
+            is_cuda_error = (
+                'cuda' in err_str or
+                'out of memory' in err_str or
+                'device-side assert' in err_str
+            )
+            if is_cuda_error and attempt < max_retries - 1:
+                logger.warning(
+                    f"CUDA RuntimeError on tile ({tile_x}, {tile_y}) attempt "
+                    f"{attempt + 1}/{max_retries}: {rt_err}"
+                )
+                gc.collect()
+                torch.cuda.empty_cache()
+                if torch.cuda.is_available():
+                    torch.cuda.synchronize()
+                time.sleep(1.0 * (attempt + 1))
+                continue
+            else:
                 raise
 
     # --- Step 2: Convert detections to features_list format ---
@@ -516,6 +530,7 @@ def enrich_detection_features(
         ]
         feat['tile_origin'] = [tile_x, tile_y]
         feat['slide_name'] = slide_name
+        feat['pixel_size_um'] = float(pixel_size_um)
 
         # Handle vessel-specific contour transformations
         if cell_type == 'vessel':
@@ -622,8 +637,9 @@ def save_tile_outputs(
 
         # Save features to JSON
         features_path = tile_out_dir / f"{cell_type}_features.json"
+        from segmentation.utils.json_utils import NumpyEncoder
         with open(features_path, 'w') as f:
-            json.dump(features_list, f)
+            json.dump(features_list, f, cls=NumpyEncoder)
 
         result['features_path'] = str(features_path)
         result['success'] = True

@@ -17,8 +17,14 @@ Usage:
 
 import argparse
 import json
-import numpy as np
+import sys
 from pathlib import Path
+
+import numpy as np
+
+# Add repo root to path
+REPO = Path(__file__).resolve().parent.parent
+sys.path.insert(0, str(REPO))
 
 from segmentation.lmd.clustering import two_stage_clustering
 
@@ -36,8 +42,8 @@ Example:
     )
     parser.add_argument('--detections', type=str, required=True,
                         help='Path to detections JSON')
-    parser.add_argument('--pixel-size', type=float, default=0.1725,
-                        help='Pixel size in um (default: 0.1725)')
+    parser.add_argument('--pixel-size', type=float, required=True,
+                        help='Pixel size in um/px (must match CZI metadata)')
     parser.add_argument('--area-min', type=float, default=375.0,
                         help='Cluster area lower bound in um2 (default: 375)')
     parser.add_argument('--area-max', type=float, default=425.0,

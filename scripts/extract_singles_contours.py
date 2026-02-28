@@ -251,8 +251,8 @@ if __name__ == '__main__':
                         help='Path to detections JSON (default: <base-dir>/nmj_detections_classified_v2.json)')
     parser.add_argument('--output', type=Path, default=None,
                         help='Output path for results JSON (default: <base-dir>/lmd_export/singles_with_contours.json)')
-    parser.add_argument('--pixel-size', type=float, default=0.1725,
-                        help='Pixel size in micrometers (default: 0.1725)')
+    parser.add_argument('--pixel-size', type=float, required=True,
+                        help='Pixel size in micrometers (from CZI metadata)')
     args = parser.parse_args()
 
     clusters_path = args.clusters if args.clusters else args.base_dir / "nmj_clusters_375_425_500_1000.json"

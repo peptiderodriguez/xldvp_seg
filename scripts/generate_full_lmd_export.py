@@ -177,8 +177,10 @@ def extract_contour_from_mask(mask: np.ndarray, label: int) -> Optional[np.ndarr
 
 
 def extract_contours_for_detections(detections: List[Dict], tiles_dir: Path,
-                                    pixel_size_um: float = 0.1725) -> Dict[str, Dict]:
+                                    pixel_size_um: float = None) -> Dict[str, Dict]:
     """Extract and process contours for a list of detections."""
+    if pixel_size_um is None:
+        raise ValueError("pixel_size_um is required — get from CZI metadata")
     # Group by tile
     by_tile = {}
     for det in detections:
@@ -487,8 +489,8 @@ if __name__ == '__main__':
                         help='Path to clusters JSON (default: <base-dir>/nmj_clusters_375_425_500_1000.json)')
     parser.add_argument('--detections', type=Path, default=None,
                         help='Path to detections JSON (default: <base-dir>/nmj_detections_classified_v2.json)')
-    parser.add_argument('--pixel-size', type=float, default=0.1725,
-                        help='Pixel size in micrometers (default: 0.1725)')
+    parser.add_argument('--pixel-size', type=float, required=True,
+                        help='Pixel size in micrometers (from CZI metadata)')
     args = parser.parse_args()
 
     clusters_path = args.clusters if args.clusters else args.base_dir / "nmj_clusters_375_425_500_1000.json"

@@ -21,8 +21,10 @@ from segmentation.utils.logging import get_logger
 
 logger = get_logger(__name__)
 
-# Encode (x, y) as single int64 for fast numpy set intersection
-_COORD_STRIDE = 1000000  # Must exceed max slide dimension in pixels (large mosaics can be 250K+)
+# Default stride for encoding (x, y) as single int64 for fast numpy set
+# intersection.  This is overridden dynamically in the dedup loop below when
+# the actual data exceeds this value.
+_COORD_STRIDE_DEFAULT = 1_000_000
 
 
 def deduplicate_by_mask_overlap(detections, tiles_dir, min_overlap_fraction=0.1,
@@ -61,8 +63,13 @@ def deduplicate_by_mask_overlap(detections, tiles_dir, min_overlap_fraction=0.1,
     n_total = len(detections)
     print(f"[dedup] Starting dedup for {n_total} detections...", flush=True)
 
-    # Load all masks and compute global bounding boxes
-    det_info = []  # List of (det, global_bbox, encoded_coords)
+    # Load all masks and compute global bounding boxes.
+    # We collect raw (global_xs, global_ys) first, then encode after the loop
+    # using a dynamically computed stride to avoid coordinate collisions on
+    # mosaics wider than 1M pixels.
+    det_info_raw = []  # List of (det, global_bbox, global_xs, global_ys) or (det, None, None, None)
+    observed_max_x = 0  # Track actual max x coordinate across all detections
+    n_maskless = 0  # Count detections without valid mask data
 
     # Cache: tile_id -> (masks_array, find_objects_slices)
     mask_cache = {}
@@ -76,14 +83,18 @@ def deduplicate_by_mask_overlap(detections, tiles_dir, min_overlap_fraction=0.1,
         tile_id = f"tile_{tile_x}_{tile_y}"
         mask_label = det.get('mask_label')
 
-        if mask_label is None:
+        if mask_label is None or mask_label == 0:
             # Try to extract from ID as fallback
             det_id = det.get('id', '')
             try:
                 mask_label = int(det_id.split('_')[-1])
             except (ValueError, IndexError):
-                det_info.append((det, None, None))
+                n_maskless += 1
+                det_info_raw.append((det, None, None, None))
                 continue
+
+        # Ensure int (JSON deserialization can produce float, e.g. 3.0)
+        mask_label = int(mask_label)
 
         # Load masks + precompute find_objects if not cached
         if tile_id not in mask_cache:
@@ -102,23 +113,27 @@ def deduplicate_by_mask_overlap(detections, tiles_dir, min_overlap_fraction=0.1,
 
         cached = mask_cache.get(tile_id)
         if cached is None:
-            det_info.append((det, None, None))
+            n_maskless += 1
+            det_info_raw.append((det, None, None, None))
             continue
 
         masks_array, slices = cached
 
         # Extract mask coordinates via find_objects bbox (O(bbox) not O(H×W))
         if mask_label < 1 or mask_label > len(slices):
-            det_info.append((det, None, None))
+            n_maskless += 1
+            det_info_raw.append((det, None, None, None))
             continue
         sl = slices[mask_label - 1]  # find_objects is 1-indexed
         if sl is None:
-            det_info.append((det, None, None))
+            n_maskless += 1
+            det_info_raw.append((det, None, None, None))
             continue
 
         local_ys, local_xs = np.where(masks_array[sl] == mask_label)
         if len(local_ys) == 0:
-            det_info.append((det, None, None))
+            n_maskless += 1
+            det_info_raw.append((det, None, None, None))
             continue
 
         # Adjust for slice offset + convert to global coords
@@ -129,13 +144,33 @@ def deduplicate_by_mask_overlap(detections, tiles_dir, min_overlap_fraction=0.1,
         bbox = (int(global_xs.min()), int(global_ys.min()),
                 int(global_xs.max()), int(global_ys.max()))
 
-        # Encode coords as sorted int64 array for fast numpy intersection
-        encoded = np.sort(global_ys.astype(np.int64) * _COORD_STRIDE + global_xs.astype(np.int64))
+        # Track max x for dynamic stride computation
+        observed_max_x = max(observed_max_x, int(global_xs.max()))
 
-        det_info.append((det, bbox, encoded))
+        det_info_raw.append((det, bbox, global_xs, global_ys))
 
     # Free mask cache — no longer needed
     del mask_cache
+
+    if n_maskless > 0:
+        logger.warning(f"{n_maskless}/{n_total} detections have no valid mask data; "
+                       f"kept without overlap check")
+
+    # Compute dynamic stride: must exceed max x coordinate to avoid collisions.
+    # Use at least _COORD_STRIDE_DEFAULT (1M) for safety on small images.
+    coord_stride = max(observed_max_x + 1, _COORD_STRIDE_DEFAULT)
+    if coord_stride > _COORD_STRIDE_DEFAULT:
+        logger.info(f"Coordinate stride increased to {coord_stride} (max x={observed_max_x})")
+
+    # Encode all coordinates using the consistent stride
+    det_info = []  # List of (det, global_bbox, encoded_coords)
+    for det, bbox, gxs, gys in det_info_raw:
+        if bbox is None:
+            det_info.append((det, None, None))
+        else:
+            encoded = np.sort(gys.astype(np.int64) * coord_stride + gxs.astype(np.int64))
+            det_info.append((det, bbox, encoded))
+    del det_info_raw
 
     print(f"[dedup] Masks loaded. Running overlap check...", flush=True)
 
@@ -189,6 +224,8 @@ def deduplicate_by_mask_overlap(detections, tiles_dir, min_overlap_fraction=0.1,
             print(f"[dedup] Overlap check: {i}/{n_total} processed, {len(kept)} kept", flush=True)
 
         if bbox is None or coords is None:
+            # No mask data — keep detection without overlap check.
+            # Summary warning already logged above; skip per-detection spam.
             kept.append(det)
             kept_data.append((None, None))
             continue

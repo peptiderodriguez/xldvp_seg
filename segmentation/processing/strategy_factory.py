@@ -62,6 +62,7 @@ def create_strategy(
             use_classifier=has_classifier,
             extract_deep_features=extract_deep_features,
             extract_sam2_embeddings=extract_sam2_embeddings,
+            resnet_batch_size=strategy_params.get('resnet_batch_size', 32),
         )
     elif cell_type == 'mk':
         from segmentation.detection.strategies.mk import MKStrategy
@@ -70,6 +71,7 @@ def create_strategy(
             max_area_um=strategy_params.get('mk_max_area', 2000.0),
             extract_deep_features=extract_deep_features,
             extract_sam2_embeddings=extract_sam2_embeddings,
+            resnet_batch_size=strategy_params.get('resnet_batch_size', 32),
         )
     elif cell_type == 'cell':
         from segmentation.detection.strategies.cell import CellStrategy
@@ -78,6 +80,7 @@ def create_strategy(
             max_area_um=strategy_params.get('max_area_um', 200),
             extract_deep_features=extract_deep_features,
             extract_sam2_embeddings=extract_sam2_embeddings,
+            resnet_batch_size=strategy_params.get('resnet_batch_size', 32),
             cellpose_input_channels=strategy_params.get('cellpose_input_channels'),
         )
     elif cell_type == 'islet':
@@ -87,6 +90,7 @@ def create_strategy(
             nuclear_channel=strategy_params.get('nuclear_channel', 4),
             extract_deep_features=extract_deep_features,
             extract_sam2_embeddings=extract_sam2_embeddings,
+            resnet_batch_size=strategy_params.get('resnet_batch_size', 32),
             marker_signal_factor=strategy_params.get('marker_signal_factor', 2.0),
             gmm_prefilter_thresholds=strategy_params.get('gmm_prefilter_thresholds'),
         )
@@ -99,6 +103,7 @@ def create_strategy(
             max_area_um=strategy_params.get('max_area_um', 300),
             extract_deep_features=extract_deep_features,
             extract_sam2_embeddings=extract_sam2_embeddings,
+            resnet_batch_size=strategy_params.get('resnet_batch_size', 32),
         )
     elif cell_type == 'vessel':
         from segmentation.detection.strategies.vessel import VesselStrategy
@@ -118,8 +123,10 @@ def create_strategy(
             parallel_detection=strategy_params.get('parallel_detection', False),
             parallel_workers=strategy_params.get('parallel_workers', 3),
             multi_marker=strategy_params.get('multi_marker', False),
+            merge_iou_threshold=strategy_params.get('merge_iou_threshold', 0.5),
             extract_deep_features=extract_deep_features,
             extract_sam2_embeddings=extract_sam2_embeddings,
+            resnet_batch_size=strategy_params.get('resnet_batch_size', 32),
         )
     elif cell_type == 'mesothelium':
         from segmentation.detection.strategies.mesothelium import MesotheliumStrategy

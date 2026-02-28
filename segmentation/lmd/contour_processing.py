@@ -11,22 +11,25 @@ Works with any cell type (NMJ, MK, vessel, mesothelium, etc.).
 Usage:
     from segmentation.lmd.contour_processing import process_contour, process_contours_batch
 
-    # Single contour
-    processed = process_contour(contour_px, pixel_size_um=0.1725)
+    # Single contour (pixel_size_um from CZI metadata)
+    processed = process_contour(contour_px, pixel_size_um=pixel_size)
 
     # Batch processing
-    results = process_contours_batch(contours_px, pixel_size_um=0.1725)
+    results = process_contours_batch(contours_px, pixel_size_um=pixel_size)
 """
 
+import logging
 import numpy as np
 import cv2
 from typing import List, Optional, Tuple, Dict, Any
 from shapely.geometry import Polygon
 from shapely.validation import make_valid
 
+logger = logging.getLogger(__name__)
+
 
 # Default parameters
-DEFAULT_PIXEL_SIZE_UM = 0.1725  # um per pixel
+# Removed: DEFAULT_PIXEL_SIZE_UM — pixel_size_um must come from CZI metadata
 DEFAULT_DILATION_UM = 0.5      # Dilate by 0.5um
 DEFAULT_RDP_EPSILON = 5        # RDP epsilon in pixels
 
@@ -126,7 +129,7 @@ def dilate_contour(contour_um: np.ndarray, dilation_um: float) -> Optional[np.nd
 
 def process_contour(
     contour_px: List[List[float]],
-    pixel_size_um: float = DEFAULT_PIXEL_SIZE_UM,
+    pixel_size_um: float = None,
     dilation_um: float = DEFAULT_DILATION_UM,
     rdp_epsilon: float = DEFAULT_RDP_EPSILON,
     return_stats: bool = False
@@ -156,6 +159,8 @@ def process_contour(
             - area_before_um2: original area
             - area_after_um2: final area
     """
+    if pixel_size_um is None:
+        raise ValueError("pixel_size_um is required — must come from CZI metadata")
     stats = {
         'points_before': 0,
         'points_after': 0,
@@ -221,7 +226,7 @@ def process_contour(
 
 def process_contours_batch(
     contours_px: List[List[List[float]]],
-    pixel_size_um: float = DEFAULT_PIXEL_SIZE_UM,
+    pixel_size_um: float = None,
     dilation_um: float = DEFAULT_DILATION_UM,
     rdp_epsilon: float = DEFAULT_RDP_EPSILON,
     verbose: bool = True
@@ -248,6 +253,8 @@ def process_contours_batch(
             - mean_area_after_um2: Mean final area
             - area_increase_pct: Percentage increase in area (from dilation)
     """
+    if pixel_size_um is None:
+        raise ValueError("pixel_size_um is required — must come from CZI metadata")
     results = {
         'contours_um': [],
         'valid_count': 0,
@@ -265,7 +272,7 @@ def process_contours_batch(
 
     for i, contour_px in enumerate(contours_px):
         if verbose and (i + 1) % 100 == 0:
-            print(f"  Processing contour {i + 1}/{len(contours_px)}...")
+            logger.info(f"  Processing contour {i + 1}/{len(contours_px)}...")
 
         processed, stats = process_contour(
             contour_px,
@@ -311,7 +318,7 @@ def process_contours_batch(
 def process_detection_contours(
     detections: List[Dict],
     contour_key: str = 'outer_contour_global',
-    pixel_size_um: float = DEFAULT_PIXEL_SIZE_UM,
+    pixel_size_um: float = None,
     dilation_um: float = DEFAULT_DILATION_UM,
     rdp_epsilon: float = DEFAULT_RDP_EPSILON,
     verbose: bool = True
@@ -330,12 +337,14 @@ def process_detection_contours(
     Returns:
         Tuple of (processed_contours, stats_dict)
     """
+    if pixel_size_um is None:
+        raise ValueError("pixel_size_um is required — must come from CZI metadata")
     contours_px = [d.get(contour_key) for d in detections]
 
     if verbose:
-        print(f"Processing {len(contours_px)} contours...")
-        print(f"  Dilation: +{dilation_um} um")
-        print(f"  RDP epsilon: {rdp_epsilon} px")
+        logger.info(f"Processing {len(contours_px)} contours...")
+        logger.info(f"  Dilation: +{dilation_um} um")
+        logger.info(f"  RDP epsilon: {rdp_epsilon} px")
 
     results = process_contours_batch(
         contours_px,
@@ -346,8 +355,8 @@ def process_detection_contours(
     )
 
     if verbose:
-        print(f"  Valid: {results['valid_count']}, Skipped: {results['skipped_count']}")
-        print(f"  Point reduction: {results['point_reduction_pct']:.1f}%")
-        print(f"  Area change: {results['mean_area_before_um2']:.1f} -> {results['mean_area_after_um2']:.1f} um2 ({results['area_increase_pct']:+.1f}%)")
+        logger.info(f"  Valid: {results['valid_count']}, Skipped: {results['skipped_count']}")
+        logger.info(f"  Point reduction: {results['point_reduction_pct']:.1f}%")
+        logger.info(f"  Area change: {results['mean_area_before_um2']:.1f} -> {results['mean_area_after_um2']:.1f} um2 ({results['area_increase_pct']:+.1f}%)")
 
     return results['contours_um'], results

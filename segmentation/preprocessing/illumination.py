@@ -54,16 +54,23 @@ def normalize_rows_columns(
 
     # Use global mean as target if not specified
     if target_mean is None:
-        target_mean = float(np.mean(img))
+        target_mean = float(np.mean(img, dtype=np.float32))
+
+    # Guard against all-black images (target_mean ≈ 0 → division by zero → NaN)
+    if target_mean < 1e-6:
+        return img
 
     # Step 1: Normalize rows (in-place to save memory)
-    row_means = np.mean(img, axis=1, keepdims=True)
-    row_means = np.where(row_means > 0, row_means, 1)
+    # Use a minimum threshold to prevent extreme amplification in zero-padding regions.
+    # Rows/columns with mean below 10% of target_mean are treated as padding and left unchanged.
+    min_mean = target_mean * 0.1  # Don't amplify more than 10x
+    row_means = np.mean(img, axis=1, keepdims=True, dtype=np.float32)
+    row_means = np.where(row_means > min_mean, row_means, target_mean)
     img *= (target_mean / row_means)  # In-place multiplication
 
     # Step 2: Normalize columns (in-place)
-    col_means = np.mean(img, axis=0, keepdims=True)
-    col_means = np.where(col_means > 0, col_means, 1)
+    col_means = np.mean(img, axis=0, keepdims=True, dtype=np.float32)
+    col_means = np.where(col_means > min_mean, col_means, target_mean)
     img *= (target_mean / col_means)  # In-place multiplication
 
     return img
@@ -86,13 +93,13 @@ def morphological_background_subtraction(
                     Typical range: 51-201 pixels.
 
     Returns:
-        Background-subtracted image (float64)
+        Background-subtracted image (float32)
 
     Example:
         >>> # Remove large-scale illumination gradients
         >>> corrected = morphological_background_subtraction(tile, kernel_size=101)
     """
-    img = image.astype(np.float64)
+    img = image.astype(np.float32)
 
     # Ensure kernel size is odd
     if kernel_size % 2 == 0:
@@ -108,16 +115,16 @@ def morphological_background_subtraction(
     # Opening = erosion followed by dilation
     # This removes bright structures smaller than the kernel
     background = cv2.morphologyEx(
-        img.astype(np.float32),
+        img,
         cv2.MORPH_OPEN,
         kernel
     )
 
     # Subtract background
-    corrected = img - background.astype(np.float64)
+    corrected = img - background
 
     # Shift to positive values (add global mean of background)
-    corrected = corrected + np.mean(background)
+    corrected = corrected + np.float32(np.mean(background, dtype=np.float32))
 
     return corrected
 
@@ -144,7 +151,7 @@ def correct_photobleaching(
         target_mean: Target mean for normalization (None = use global mean)
 
     Returns:
-        Corrected image (float64)
+        Corrected image (float32)
 
     Example:
         >>> from segmentation.preprocessing import correct_photobleaching
@@ -158,7 +165,7 @@ def correct_photobleaching(
         >>> # Custom kernel for larger-scale gradients
         >>> corrected = correct_photobleaching(tile, morph_kernel_size=151)
     """
-    corrected = image.astype(np.float64)
+    corrected = image.astype(np.float32)
 
     if row_col_normalize:
         corrected = normalize_rows_columns(corrected, target_mean=target_mean)
@@ -192,13 +199,15 @@ def estimate_band_severity(image: np.ndarray) -> Dict[str, float]:
         >>> stats = estimate_band_severity(tile)
         >>> print(f"Row CV: {stats['row_cv']:.1f}%, Severity: {stats['severity']}")
     """
-    img = image.astype(np.float64)
+    img = image.astype(np.float32)
 
-    row_means = np.mean(img, axis=1)
-    col_means = np.mean(img, axis=0)
+    row_means = np.mean(img, axis=1, dtype=np.float32)
+    col_means = np.mean(img, axis=0, dtype=np.float32)
 
-    row_cv = np.std(row_means) / np.mean(row_means) * 100 if np.mean(row_means) > 0 else 0
-    col_cv = np.std(col_means) / np.mean(col_means) * 100 if np.mean(col_means) > 0 else 0
+    row_mean_of_means = float(np.mean(row_means, dtype=np.float32))
+    col_mean_of_means = float(np.mean(col_means, dtype=np.float32))
+    row_cv = float(np.std(row_means, dtype=np.float32)) / row_mean_of_means * 100 if row_mean_of_means > 0 else 0.0
+    col_cv = float(np.std(col_means, dtype=np.float32)) / col_mean_of_means * 100 if col_mean_of_means > 0 else 0.0
 
     # Determine overall severity
     max_cv = max(row_cv, col_cv)
@@ -265,7 +274,7 @@ def apply_clahe(
         >>> enhanced = apply_clahe(tile, clip_limit=3.0)  # More contrast
     """
     # Normalize to uint8
-    img = image.astype(np.float64)
+    img = image.astype(np.float32)
     img_min, img_max = img.min(), img.max()
     if img_max - img_min > 1e-8:
         img_uint8 = ((img - img_min) / (img_max - img_min) * 255).astype(np.uint8)

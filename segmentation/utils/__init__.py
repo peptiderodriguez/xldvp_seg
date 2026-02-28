@@ -66,6 +66,22 @@ from .vessel_features import (
     CROSS_CHANNEL_RATIO_NAMES,
 )
 
+from .json_utils import (
+    NumpyEncoder,
+    sanitize_for_json,
+)
+
+from .timestamps import (
+    timestamped_path,
+    save_with_timestamp,
+    RUN_TIMESTAMP,
+)
+
+from .detection_utils import (
+    load_detections,
+    extract_feature_matrix,
+)
+
 # Schemas require pydantic - import separately if needed
 # from segmentation.utils.schemas import Detection, DetectionFile, Config, Annotations
 
@@ -120,4 +136,14 @@ __all__ = [
     'MULTICHANNEL_WALL_FEATURES',
     'MULTICHANNEL_LUMEN_FEATURES',
     'CROSS_CHANNEL_RATIO_NAMES',
+    # JSON utilities
+    'NumpyEncoder',
+    'sanitize_for_json',
+    # Detection utilities
+    'load_detections',
+    'extract_feature_matrix',
+    # Timestamps
+    'timestamped_path',
+    'save_with_timestamp',
+    'RUN_TIMESTAMP',
 ]

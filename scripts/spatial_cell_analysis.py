@@ -123,7 +123,7 @@ def parse_marker_filter(filter_str):
     Returns a function that takes a detection dict and returns bool.
     """
     # Try numeric pattern first: feature_name operator number
-    m = re.match(r'^(\w+)\s*([><=!]+)\s*([0-9.eE+-]+)$', filter_str.strip())
+    m = re.match(r'^(\w+)\s*(>=|<=|!=|==|>|<)\s*([0-9.eE+-]+)$', filter_str.strip())
     if m:
         feat_name, op, val_str = m.group(1), m.group(2), m.group(3)
         threshold = float(val_str)
@@ -151,7 +151,7 @@ def parse_marker_filter(filter_str):
         return predicate
 
     # Try string pattern: feature_name == or != string_value
-    m = re.match(r'^(\w+)\s*(==|!=)\s*(\w+)$', filter_str.strip())
+    m = re.match(r'^(\w+)\s*(==|!=)\s*([\w./-]+)$', filter_str.strip())
     if m:
         feat_name, op, str_val = m.group(1), m.group(2), m.group(3)
 

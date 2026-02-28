@@ -19,6 +19,36 @@ DINOV2_FEATURE_DIM = 1024
 logger = logging.getLogger(__name__)
 
 
+def _safe_to_uint8(arr: np.ndarray) -> np.ndarray:
+    """
+    Safely convert any numeric array to uint8 [0, 255].
+
+    Handles float32/float64 tiles that may be in [0, 1] range (e.g., after
+    photobleaching correction or normalization), uint16 tiles, and already-uint8.
+    Bare ``.astype(np.uint8)`` on float [0, 1] data truncates everything to 0.
+
+    Args:
+        arr: Input array of any numeric dtype.
+
+    Returns:
+        uint8 array with values in [0, 255].
+    """
+    if arr.dtype == np.uint8:
+        return arr
+    if arr.dtype == np.uint16:
+        return (arr / 256).astype(np.uint8)
+    if arr.dtype in (np.float32, np.float64):
+        if arr.size == 0:
+            return arr.astype(np.uint8)
+        arr_max = arr.max()
+        if arr_max <= 1.0 + 1e-6:
+            return (arr * 255).clip(0, 255).astype(np.uint8)
+        else:
+            return arr.clip(0, 255).astype(np.uint8)
+    # Fallback for other int types (int32, int64, etc.)
+    return arr.clip(0, 255).astype(np.uint8)
+
+
 @dataclass
 class Detection:
     """
@@ -40,6 +70,8 @@ class Detection:
     @property
     def area(self) -> int:
         """Area in pixels."""
+        if self.mask is None:
+            return self._area if hasattr(self, '_area') else int(self.features.get('area', 0))
         return int(self.mask.sum())
 
     def to_dict(self) -> Dict[str, Any]:
@@ -168,6 +200,10 @@ class DetectionStrategy(ABC):
         Default implementation computes basic morphological features.
         Override in subclasses for strategy-specific features.
 
+        Uses the largest connected component for shape features (solidity,
+        eccentricity) to avoid picking a small fragment when the mask has
+        disconnected components. Area is computed from the full mask.
+
         Args:
             mask: Binary mask
             tile: Original tile image
@@ -175,6 +211,7 @@ class DetectionStrategy(ABC):
         Returns:
             Dictionary of features
         """
+        from scipy import ndimage as ndi
         from skimage.measure import regionprops
 
         if mask.sum() == 0:
@@ -186,16 +223,29 @@ class DetectionStrategy(ABC):
         else:
             gray = tile.astype(float)
 
-        # Use regionprops for basic features
-        props = regionprops(mask.astype(int), intensity_image=gray)
+        # Use largest connected component for shape features (solidity, eccentricity)
+        # to avoid picking a small fragment when mask has disconnected components
+        bool_mask = mask.astype(bool)
+        labeled, num_features = ndi.label(bool_mask)
+        if num_features > 1:
+            component_sizes = ndi.sum(bool_mask, labeled, range(1, num_features + 1))
+            largest_label = np.argmax(component_sizes) + 1
+            shape_mask = (labeled == largest_label).astype(np.int32)
+        else:
+            shape_mask = mask.astype(np.int32)
+
+        props = regionprops(shape_mask, intensity_image=gray, cache=False)
 
         if not props:
             return {}
 
         prop = props[0]
 
+        # Area from FULL mask (not just largest component)
+        full_area = int(bool_mask.sum())
+
         return {
-            'area': int(prop.area),
+            'area': full_area,
             'centroid': [float(prop.centroid[1]), float(prop.centroid[0])],  # [x, y]
             'eccentricity': float(prop.eccentricity),
             'solidity': float(prop.solidity),
@@ -443,11 +493,8 @@ class DetectionStrategy(ABC):
             # Preprocess each crop
             for idx, crop in enumerate(batch_crops):
                 try:
-                    # Handle uint16 images
-                    if crop.dtype == np.uint16:
-                        crop = (crop / 256).astype(np.uint8)
-                    elif crop.dtype != np.uint8:
-                        crop = crop.astype(np.uint8)
+                    # Safe float/uint16 -> uint8 conversion
+                    crop = _safe_to_uint8(crop)
 
                     # Ensure RGB format
                     if crop.ndim == 2:
@@ -474,9 +521,11 @@ class DetectionStrategy(ABC):
                     features = features.cpu().numpy()
 
                 # Map features back to correct indices
+                # Convert to set for O(1) lookup instead of O(n) list scan
+                valid_indices_set = set(valid_indices)
                 feature_idx = 0
                 for idx in range(len(batch_crops)):
-                    if idx in valid_indices:
+                    if idx in valid_indices_set:
                         all_features.append(features[feature_idx])
                         feature_idx += 1
                     else:
@@ -526,10 +575,8 @@ class DetectionStrategy(ABC):
 
             for idx, crop in enumerate(batch_crops):
                 try:
-                    if crop.dtype == np.uint16:
-                        crop = (crop / 256).astype(np.uint8)
-                    elif crop.dtype != np.uint8:
-                        crop = crop.astype(np.uint8)
+                    # Safe float/uint16 -> uint8 conversion
+                    crop = _safe_to_uint8(crop)
 
                     if crop.ndim == 2:
                         crop = np.stack([crop, crop, crop], axis=-1)
@@ -553,9 +600,11 @@ class DetectionStrategy(ABC):
                     # DINOv2 returns CLS token features directly
                     features = model(batch_tensor).cpu().numpy()
 
+                # Convert to set for O(1) lookup instead of O(n) list scan
+                valid_indices_set = set(valid_indices)
                 feature_idx = 0
                 for idx in range(len(batch_crops)):
-                    if idx in valid_indices:
+                    if idx in valid_indices_set:
                         all_features.append(features[feature_idx])
                         feature_idx += 1
                     else:
@@ -573,7 +622,7 @@ class DetectionStrategy(ABC):
         p_high: float = 99.5
     ) -> np.ndarray:
         """
-        Normalize image using percentiles.
+        Normalize image using percentiles, excluding zero pixels (CZI padding).
 
         Args:
             image: Input image array
@@ -586,7 +635,15 @@ class DetectionStrategy(ABC):
         if image.dtype == np.uint8:
             return image
 
-        p_low_val, p_high_val = np.percentile(image, [p_low, p_high])
+        # Exclude zero pixels (CZI padding) from percentile computation
+        nonzero_mask = image > 0
+        if image.ndim == 3:
+            nonzero_mask = np.max(image, axis=2) > 0
+        nonzero = image[nonzero_mask] if image.ndim == 2 else image[nonzero_mask].flatten()
+        if len(nonzero) == 0:
+            return np.zeros_like(image, dtype=np.uint8)
+
+        p_low_val, p_high_val = np.percentile(nonzero, [p_low, p_high])
 
         if p_high_val <= p_low_val:
             return np.zeros_like(image, dtype=np.uint8)
@@ -649,11 +706,8 @@ class DetectionStrategy(ABC):
         else:
             tile_rgb = tile[:, :, :3]
 
-        # Ensure uint8 format
-        if tile_rgb.dtype == np.uint16:
-            tile_rgb = (tile_rgb / 256).astype(np.uint8)
-        elif tile_rgb.dtype != np.uint8:
-            tile_rgb = tile_rgb.astype(np.uint8)
+        # Ensure uint8 format (safe for float32 tiles in [0,1] range)
+        tile_rgb = _safe_to_uint8(tile_rgb)
 
         # Get models
         sam2_predictor = models.get('sam2_predictor')

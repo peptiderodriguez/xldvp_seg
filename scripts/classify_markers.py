@@ -57,6 +57,8 @@ def classify_otsu_half(values: np.ndarray) -> tuple[float, np.ndarray]:
         return 0.0, np.zeros(len(values), dtype=bool)
 
     otsu_t = threshold_otsu(nonzero)
+    # Otsu/2: permissive cutoff to capture weakly-expressing marker-positive cells,
+    # reducing false negatives at the cost of more false positives.
     threshold = otsu_t / 2.0
     positive = values >= threshold
     return float(threshold), positive
@@ -80,6 +82,10 @@ def classify_gmm(values: np.ndarray) -> tuple[float, np.ndarray]:
 
     log_vals = np.log1p(values).reshape(-1, 1)
 
+    if np.std(log_vals) < 1e-6:
+        logger.warning(f"Near-zero variance in log1p values; all cells classified as negative")
+        return 0.0, np.zeros(len(values), dtype=bool)
+
     gmm = GaussianMixture(n_components=2, random_state=42, max_iter=200)
     gmm.fit(log_vals)
 
@@ -88,7 +94,8 @@ def classify_gmm(values: np.ndarray) -> tuple[float, np.ndarray]:
 
     # Check if components are well-separated (warn if unimodal)
     means = gmm.means_.flatten()
-    stds = np.sqrt(gmm.covariances_.flatten())
+    variances = gmm.covariances_.reshape(2, -1)[:, 0]
+    stds = np.sqrt(variances)
     separation = abs(means[1] - means[0]) / max(stds[0] + stds[1], 1e-6)
     if separation < 0.5:
         logger.warning(f"GMM components poorly separated (separation={separation:.2f}). "
@@ -98,8 +105,9 @@ def classify_gmm(values: np.ndarray) -> tuple[float, np.ndarray]:
     probs = gmm.predict_proba(log_vals)[:, high_idx]
     positive = probs >= 0.75
 
-    # Approximate threshold: crossing point in log space, convert back
-    # Formula is symmetric in component indices (weighted midpoint)
+    # Approximate threshold: crossing point in log space, convert back.
+    # This weighted-midpoint formula is exact for equal priors (weights)
+    # and approximate for unequal priors.
     log_threshold = (means[0] * stds[1] + means[1] * stds[0]) / (stds[0] + stds[1])
     threshold = float(np.expm1(log_threshold))
 
@@ -114,6 +122,9 @@ def plot_distribution(values: np.ndarray, threshold: float, marker_name: str,
                       method: str, n_positive: int, n_negative: int,
                       output_path: Path) -> None:
     """Histogram of marker values with threshold line."""
+    if len(values) == 0:
+        return
+
     fig, ax = plt.subplots(figsize=(8, 5))
 
     # Use log1p scale for x-axis if range is large

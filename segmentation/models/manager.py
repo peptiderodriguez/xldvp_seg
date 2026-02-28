@@ -5,7 +5,6 @@ Provides a singleton ModelManager that handles lazy loading, caching, and cleanu
 of all ML models used in the segmentation pipeline.
 
 This module consolidates model loading logic that was previously duplicated in:
-- run_unified_FAST.py
 - run_segmentation.py
 - segmentation/detection/cell_detector.py
 - segmentation/cli.py

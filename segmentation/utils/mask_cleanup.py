@@ -144,7 +144,7 @@ def cleanup_mask(
 def recompute_mask_features(
     mask: np.ndarray,
     image: Optional[np.ndarray] = None,
-    pixel_size_um: float = 0.1725,
+    pixel_size_um: float = None,
 ) -> Dict[str, Any]:
     """
     Recompute mask features after cleanup.
@@ -158,11 +158,13 @@ def recompute_mask_features(
     Args:
         mask: Binary mask (2D array)
         image: Optional RGB image for intensity features
-        pixel_size_um: Pixel size in micrometers (default 0.1725)
+        pixel_size_um: Pixel size in micrometers (from CZI metadata)
 
     Returns:
         Dictionary with recomputed features
     """
+    if pixel_size_um is None:
+        raise ValueError("pixel_size_um is required — get from CZI metadata")
     features = {}
 
     if not mask.any():
@@ -218,11 +220,12 @@ def apply_cleanup_to_detection(
     feat: Dict[str, Any],
     label_array: np.ndarray,
     det_id: int,
-    pixel_size_um: float = 0.1725,
+    pixel_size_um: float = None,
     keep_largest: bool = True,
     fill_internal_holes: bool = True,
     max_hole_area_fraction: float = 0.5,
     image: Optional[np.ndarray] = None,
+    tile_global_mean: Optional[float] = None,
 ) -> np.ndarray:
     """
     Apply cleanup to a single detection and update the label array and features.
@@ -240,10 +243,16 @@ def apply_cleanup_to_detection(
         fill_internal_holes: If True, fill internal holes
         max_hole_area_fraction: Max hole size to fill as fraction of mask area
         image: Optional RGB/grayscale image for recomputing ALL morphological features
+        tile_global_mean: Precomputed tile-wide mean intensity (excluding zero pixels).
+            Pass this when calling in a loop over many masks from the same tile to
+            avoid recomputing the full-tile mean per mask (O(N*H*W) -> O(H*W) once).
 
     Returns:
         Cleaned mask (label_array is also updated in place)
     """
+    if pixel_size_um is None:
+        raise ValueError("pixel_size_um is required for area conversion — get from CZI metadata")
+
     # Apply cleanup
     cleaned_mask = cleanup_mask(
         mask,
@@ -252,9 +261,14 @@ def apply_cleanup_to_detection(
         max_hole_area_fraction=max_hole_area_fraction,
     )
 
+    # Ensure boolean dtype for correct array indexing (uint8 0/1 would do
+    # integer fancy-indexing instead of boolean masking)
+    mask = mask.astype(bool)
+    cleaned_mask = cleaned_mask.astype(bool)
+
     # Update label array
     label_array[mask] = 0  # Clear original
-    label_array[cleaned_mask.astype(bool)] = det_id  # Set cleaned
+    label_array[cleaned_mask] = det_id  # Set cleaned
 
     # Recompute ALL morphological features from cleaned mask
     if image is not None and 'features' in feat:
@@ -281,7 +295,7 @@ def apply_cleanup_to_detection(
             feat['features']['circularity'] = 4 * np.pi * area / (perimeter ** 2) if perimeter > 0 else 0
             feat['features']['solidity'] = props.solidity if hasattr(props, 'solidity') else 0
 
-            # Aspect ratio / elongation
+            # Aspect ratio
             major_axis = getattr(props, 'axis_major_length', None)
             if major_axis is None:
                 major_axis = getattr(props, 'major_axis_length', 0)
@@ -290,7 +304,6 @@ def apply_cleanup_to_detection(
                 minor_axis = getattr(props, 'minor_axis_length', 0)
             if minor_axis > 0:
                 feat['features']['aspect_ratio'] = major_axis / minor_axis
-                feat['features']['elongation'] = 1.0 - (minor_axis / major_axis) if major_axis > 0 else 0
 
             feat['features']['extent'] = props.extent if hasattr(props, 'extent') else 0
             equiv_diameter = getattr(props, 'equivalent_diameter_area', None)
@@ -316,21 +329,13 @@ def apply_cleanup_to_detection(
                 feat['features']['blue_std'] = float(np.std(masked_pixels[:, 2]))
                 gray = np.mean(masked_pixels, axis=1)
 
-                # HSV features — subsample for efficiency, exclude zeros
-                import cv2
-                mask_ys, mask_xs = np.where(cleaned_mask)
-                step = max(1, len(mask_ys) // 1000)
-                sub_ys, sub_xs = mask_ys[::step], mask_xs[::step]
-                hsv_pixels = cv2.cvtColor(image[sub_ys.min():sub_ys.max()+1, sub_xs.min():sub_xs.max()+1].astype(np.uint8), cv2.COLOR_RGB2HSV)
-                local_mask = cleaned_mask[sub_ys.min():sub_ys.max()+1, sub_xs.min():sub_xs.max()+1]
-                hsv_masked = hsv_pixels[local_mask]
-                # Exclude zero-pixel HSV values
-                hsv_valid = np.max(image[sub_ys.min():sub_ys.max()+1, sub_xs.min():sub_xs.max()+1][local_mask], axis=1) > 0
-                hsv_masked = hsv_masked[hsv_valid]
-                if len(hsv_masked) > 0:
-                    feat['features']['hue_mean'] = float(np.mean(hsv_masked[:, 0]))
-                    feat['features']['saturation_mean'] = float(np.mean(hsv_masked[:, 1]))
-                    feat['features']['value_mean'] = float(np.mean(hsv_masked[:, 2]))
+                # HSV features — use canonical implementation from feature_extraction
+                from segmentation.utils.feature_extraction import compute_hsv_features
+                # masked_pixels already has zero pixels excluded (valid filter above)
+                hsv_feats = compute_hsv_features(masked_pixels, sample_size=100)
+                feat['features']['hue_mean'] = hsv_feats['hue_mean']
+                feat['features']['saturation_mean'] = hsv_feats['saturation_mean']
+                feat['features']['value_mean'] = hsv_feats['value_mean']
             else:
                 gray = image[cleaned_mask].astype(float)
                 # Exclude zero pixels
@@ -345,15 +350,24 @@ def apply_cleanup_to_detection(
 
             # Recompute derived features (match extract_morphological_features)
             # Use tile_global_mean excluding zeros for relative_brightness
-            if image.ndim == 3:
-                img_nonzero = image[np.max(image, axis=2) > 0]
-                tile_mean = float(np.mean(img_nonzero)) if len(img_nonzero) > 0 else 0
-            else:
-                img_nonzero = image[image > 0]
-                tile_mean = float(np.mean(img_nonzero)) if len(img_nonzero) > 0 else 0
-            feat['features']['relative_brightness'] = feat['features']['gray_mean'] - tile_mean
+            if tile_global_mean is None:
+                # Compute once (caller should pass this to avoid per-mask recomputation)
+                if image.ndim == 3:
+                    img_nonzero = image[np.max(image, axis=2) > 0]
+                    tile_global_mean = float(np.mean(img_nonzero)) if len(img_nonzero) > 0 else 0
+                else:
+                    img_nonzero = image[image > 0]
+                    tile_global_mean = float(np.mean(img_nonzero)) if len(img_nonzero) > 0 else 0
+            feat['features']['relative_brightness'] = feat['features']['gray_mean'] - tile_global_mean
             feat['features']['intensity_variance'] = feat['features']['gray_std'] ** 2
-            feat['features']['dark_fraction'] = float(np.mean(gray < 100)) if len(gray) > 0 else 0
+            # Scale dark threshold to image dtype range (matches feature_extraction.py)
+            if image.dtype == np.uint16:
+                dark_threshold = 100.0 * 65535.0 / 255.0  # ~25700
+            elif image.dtype == np.float32 or image.dtype == np.float64:
+                dark_threshold = 100.0 / 255.0 if image.max() <= 1.0 else 100.0
+            else:
+                dark_threshold = 100.0
+            feat['features']['dark_fraction'] = float(np.mean(gray < dark_threshold)) if len(gray) > 0 else 0
             feat['features']['nuclear_complexity'] = feat['features']['gray_std']  # Simplified
     else:
         # Fallback: just update area and center (old behavior)

@@ -45,6 +45,8 @@ try:
 except ImportError:
     pass
 
+from segmentation.utils.json_utils import sanitize_for_json
+
 logger = logging.getLogger(__name__)
 
 
@@ -64,8 +66,8 @@ def load_czi_direct(czi_path, channels, strip_height=4096):
     bbox = reader.get_mosaic_scene_bounding_box(index=0)
     x_start, y_start, width, height = bbox.x, bbox.y, bbox.w, bbox.h
 
-    # Pixel size from metadata
-    pixel_size = 0.22
+    # Pixel size from CZI metadata (no hardcoded fallback)
+    pixel_size = None
     try:
         scaling = reader.meta.find('.//Scaling/Items/Distance[@Id="X"]/Value')
         if scaling is not None:
@@ -76,7 +78,7 @@ def load_czi_direct(czi_path, channels, strip_height=4096):
     ch_data = {}
     n_strips = (height + strip_height - 1) // strip_height
     for ch in channels:
-        print(f"  Loading channel {ch}...")
+        logger.info("  Loading channel %d...", ch)
         arr = np.empty((height, width), dtype=np.uint16)
         for i in range(n_strips):
             y_off = i * strip_height
@@ -87,7 +89,7 @@ def load_czi_direct(czi_path, channels, strip_height=4096):
             )
             arr[y_off:y_off + h, :] = np.squeeze(strip)
         ch_data[ch] = arr
-        print(f"  Channel {ch} loaded: {arr.nbytes / 1e9:.2f} GB")
+        logger.info("  Channel %d loaded: %.2f GB", ch, arr.nbytes / 1e9)
 
     return pixel_size, x_start, y_start, ch_data
 
@@ -173,8 +175,8 @@ def compute_cell_medians(detections, tiles_dir, ch_data, marker_map, x_start, y_
 
         del masks
 
-    print(f"  Computed medians for {n_processed}/{len(detections)} cells "
-          f"across {len(tile_groups)} tiles")
+    logger.info("  Computed medians for %d/%d cells across %d tiles",
+                n_processed, len(detections), len(tile_groups))
 
 
 def classify_by_percentile(detections, marker_map, percentile=95):
@@ -199,11 +201,11 @@ def classify_by_percentile(detections, marker_map, percentile=95):
     for name, vals in ch_vals.items():
         thresholds[name] = float(np.percentile(vals, percentile)) if vals else float('inf')
 
-    print(f"  Percentile thresholds (p{percentile}):")
+    logger.info("  Percentile thresholds (p%s):", percentile)
     for name, t in thresholds.items():
         ch_idx = marker_map[name]
         n_above = sum(1 for v in ch_vals[name] if v >= t)
-        print(f"    {name} (ch{ch_idx}): {t:.1f}  ({n_above} cells above)")
+        logger.info("    %s (ch%d): %.1f  (%d cells above)", name, ch_idx, t, n_above)
 
     counts = Counter()
     for det in detections:
@@ -229,7 +231,7 @@ def classify_by_percentile(detections, marker_map, percentile=95):
 
         counts[det['marker_class']] += 1
 
-    print(f"  Classification: {dict(counts)}")
+    logger.info("  Classification: %s", dict(counts))
     return thresholds
 
 
@@ -245,7 +247,7 @@ def load_detections(run_dir):
         sys.exit(1)
     with open(det_path) as f:
         dets = json.load(f)
-    print(f"Loaded {len(dets)} detections from {det_path}")
+    logger.info("Loaded %d detections from %s", len(dets), det_path)
     return dets
 
 
@@ -299,10 +301,10 @@ def find_islet_regions(ch_data, marker_map, pixel_size, downsample=4,
         # Re-zero CZI padding pixels (downsample may alias, re-check from full)
         arr[full[::downsample, ::downsample] == 0] = 0
         normalized.append(arr)
-        print(f"    {name} (ch{ch_idx}): p1={p1:.0f} p99={p99:.0f}")
+        logger.info("    %s (ch%d): p1=%.0f p99=%.0f", name, ch_idx, p1, p99)
 
     if not normalized:
-        print("  WARNING: No marker channels available for tissue-level finding")
+        logger.warning("  No marker channels available for tissue-level finding")
         return np.zeros((1, 1), dtype=np.int32), downsample, np.zeros((1, 1), dtype=np.float32)
 
     # Sum normalized channels → total endocrine signal
@@ -315,7 +317,7 @@ def find_islet_regions(ch_data, marker_map, pixel_size, downsample=4,
     # Otsu on non-zero pixels
     nonzero_signal = signal[signal > 0]
     if len(nonzero_signal) < 100:
-        print("  WARNING: Too few non-zero pixels for Otsu thresholding")
+        logger.warning("  Too few non-zero pixels for Otsu thresholding")
         return np.zeros(signal.shape, dtype=np.int32), downsample, signal
 
     otsu_raw = threshold_otsu(nonzero_signal)
@@ -339,12 +341,12 @@ def find_islet_regions(ch_data, marker_map, pixel_size, downsample=4,
     # Label connected components
     region_labels, n_regions = ndi_label(binary)
 
-    print(f"  Tissue-level islet finding: {signal.shape} downsampled image "
-          f"({ds_pixel_size:.2f} um/px)")
-    print(f"    Otsu: raw={otsu_raw:.3f} x{otsu_multiplier} = {otsu_t:.3f}, "
-          f"{n_regions} candidate regions")
-    print(f"    blur={sigma_px:.1f}px close={close_px}px "
-          f"min_area={min_area_px}px buffer={buffer_px}px")
+    logger.info("  Tissue-level islet finding: %s downsampled image (%.2f um/px)",
+                signal.shape, ds_pixel_size)
+    logger.info("    Otsu: raw=%.3f x%s = %.3f, %d candidate regions",
+                otsu_raw, otsu_multiplier, otsu_t, n_regions)
+    logger.info("    blur=%.1fpx close=%dpx min_area=%dpx buffer=%dpx",
+                sigma_px, close_px, min_area_px, buffer_px)
 
     return region_labels, downsample, signal
 
@@ -394,9 +396,9 @@ def assign_cells_to_regions(detections, region_labels, downsample,
         del groups[rid]
 
     n_assigned = sum(len(v) for v in groups.values())
-    print(f"  Assigned {n_assigned}/{len(detections)} cells to "
-          f"{len(groups)} islet regions "
-          f"(dropped {len(small)} regions with < {min_cells} cells)")
+    logger.info("  Assigned %d/%d cells to %d islet regions "
+                "(dropped %d regions with < %d cells)",
+                n_assigned, len(detections), len(groups), len(small), min_cells)
 
     return groups
 
@@ -466,7 +468,7 @@ def save_region_diagnostic(endocrine_signal, region_labels, islet_features,
     fig.tight_layout()
     fig.savefig(output_path, dpi=150, bbox_inches='tight')
     plt.close(fig)
-    print(f"  Saved region diagnostic: {output_path}")
+    logger.info("  Saved region diagnostic: %s", output_path)
 
 
 # ---------------------------------------------------------------------------
@@ -1091,7 +1093,7 @@ def export_csv(islet_features, output_path):
     """Export islet features to CSV. Does not mutate input."""
     import csv
     if not islet_features:
-        print("No islets to export")
+        logger.info("No islets to export")
         return
 
     # Work on copies to avoid mutating shared data
@@ -1109,27 +1111,10 @@ def export_csv(islet_features, output_path):
         writer = csv.DictWriter(f, fieldnames=fieldnames)
         writer.writeheader()
         writer.writerows(rows)
-    print(f"Saved CSV: {output_path} ({len(rows)} islets)")
+    logger.info("Saved CSV: %s (%d islets)", output_path, len(rows))
 
 
-def sanitize_for_json(obj):
-    """Recursively replace NaN/Inf floats with None for JSON serialization."""
-    if isinstance(obj, float):
-        if math.isnan(obj) or math.isinf(obj):
-            return None
-        return obj
-    if isinstance(obj, dict):
-        return {k: sanitize_for_json(v) for k, v in obj.items()}
-    if isinstance(obj, (list, tuple)):
-        return [sanitize_for_json(v) for v in obj]
-    if isinstance(obj, np.integer):
-        return int(obj)
-    if isinstance(obj, np.floating):
-        v = float(obj)
-        return None if (math.isnan(v) or math.isinf(v)) else v
-    if isinstance(obj, np.ndarray):
-        return sanitize_for_json(obj.tolist())
-    return obj
+# sanitize_for_json imported from segmentation.utils.json_utils
 
 
 def export_detections(detections, output_path):
@@ -1137,7 +1122,7 @@ def export_detections(detections, output_path):
     clean = sanitize_for_json(detections)
     with open(output_path, 'w') as f:
         json.dump(clean, f)
-    print(f"Saved enriched detections: {output_path}")
+    logger.info("Saved enriched detections: %s", output_path)
 
 
 # ---------------------------------------------------------------------------
@@ -1579,7 +1564,7 @@ h1 {{ font-family: sans-serif; }}
     Path(output_path).parent.mkdir(parents=True, exist_ok=True)
     with open(output_path, 'w') as f:
         f.write(html)
-    print(f"Saved HTML: {output_path} ({len(html)/1024:.0f} KB)")
+    logger.info("Saved HTML: %s (%.0f KB)", output_path, len(html) / 1024)
 
 
 def _make_histogram_svg(values, title, width=300, height=100, n_bins=15):
@@ -1684,6 +1669,9 @@ def main():
     parser.add_argument('--quality-filter', choices=['none', 'q25'], default='q25',
                         help='Filter regions by marker-positive cell fraction. '
                              'q25=drop bottom quartile (default: q25)')
+    parser.add_argument('--pixel-size', type=float, default=None,
+                        help='Pixel size in um/px. If omitted, read from CZI metadata. '
+                             'If CZI metadata is missing, an error is raised.')
     parser.add_argument('--no-html', action='store_true',
                         help='Skip HTML generation (just CSV + JSON)')
     args = parser.parse_args()
@@ -1704,17 +1692,28 @@ def main():
     # 1. Load detections
     detections = load_detections(run_dir)
     if not detections:
-        print("No detections — exiting")
+        logger.warning("No detections — exiting")
         sys.exit(0)
 
     # 2. Load CZI channels (marker + display, deduplicated)
     all_chs = sorted(set(display_chs) | set(marker_map.values()))
-    print(f"Loading CZI channels {all_chs} from {czi_path}...")
-    pixel_size, x_start, y_start, ch_data = load_czi_direct(czi_path, all_chs)
-    print(f"  pixel_size={pixel_size:.4f} um/px")
+    logger.info("Loading CZI channels %s from %s...", all_chs, czi_path)
+    czi_pixel_size, x_start, y_start, ch_data = load_czi_direct(czi_path, all_chs)
+    if args.pixel_size is not None:
+        pixel_size = args.pixel_size
+        if czi_pixel_size is not None:
+            logger.info("  Overriding CZI pixel_size=%.4f with --pixel-size=%.4f",
+                         czi_pixel_size, pixel_size)
+    elif czi_pixel_size is not None:
+        pixel_size = czi_pixel_size
+    else:
+        logger.error("pixel_size must be provided via --pixel-size or read from "
+                      "--czi-path metadata (CZI metadata did not contain pixel size)")
+        sys.exit(1)
+    logger.info("  pixel_size=%.4f um/px", pixel_size)
 
     # 3. Find islet regions from tissue-level signal
-    print("Finding islet regions from tissue signal...")
+    logger.info("Finding islet regions from tissue signal...")
     region_labels, ds, endocrine_signal = find_islet_regions(
         ch_data, marker_map, pixel_size, buffer_um=args.buffer_um,
         blur_sigma_um=args.blur_sigma_um, close_um=args.close_um,
@@ -1726,18 +1725,18 @@ def main():
         min_cells=args.min_cells)
 
     if not islet_groups:
-        print("No islet regions found — exiting")
+        logger.warning("No islet regions found — exiting")
         sys.exit(0)
 
-    print(f"{len(islet_groups)} islet regions with cells")
+    logger.info("%d islet regions with cells", len(islet_groups))
 
     # 5. Compute per-cell median intensity from HDF5 masks + CZI
     tiles_dir = run_dir / 'tiles'
-    print("Computing per-cell median intensities...")
+    logger.info("Computing per-cell median intensities...")
     compute_cell_medians(detections, tiles_dir, ch_data, marker_map, x_start, y_start)
 
     # 6. Classify by percentile threshold (all cells, whole-population)
-    print(f"Classifying markers (p{args.marker_percentile})...")
+    logger.info("Classifying markers (p%s)...", args.marker_percentile)
     thresholds = classify_by_percentile(detections, marker_map,
                                         percentile=args.marker_percentile)
 
@@ -1752,15 +1751,15 @@ def main():
             det['marker_class'] = 'none'
             n_cleared += 1
     if n_cleared:
-        print(f"  Cleared {n_cleared} non-islet marker classifications")
+        logger.info("  Cleared %d non-islet marker classifications", n_cleared)
     final_counts = Counter(d.get('marker_class', 'none') for d in detections)
-    print(f"  Final classification: {dict(final_counts)}")
+    logger.info("  Final classification: %s", dict(final_counts))
 
     # 8. Analyze all islets
-    print("Computing islet features...")
+    logger.info("Computing islet features...")
     islet_features = analyze_all_islets(detections, islet_groups, pixel_size, marker_map,
                                         thresholds=thresholds)
-    print(f"  {len(islet_features)} islets analyzed")
+    logger.info("  %d islets analyzed", len(islet_features))
 
     # 9. Quality filter: keep islets with above-median tissue endocrine signal
     #    Per-region median of the summed+normalized endocrine image (same as diagnostic).
@@ -1792,11 +1791,12 @@ def main():
             drop_info = ', '.join(
                 f"{f['islet_id']}({f['_median_signal']:.3f})"
                 for f in drop)
-            print(f"  Quality filter (median tissue signal, cutoff={cutoff:.3f}): "
-                  f"kept {len(keep)}/{n_before}, dropped {len(drop)} "
-                  f"(id/signal: {drop_info})")
+            logger.info("  Quality filter (median tissue signal, cutoff=%.3f): "
+                        "kept %d/%d, dropped %d (id/signal: %s)",
+                        cutoff, len(keep), n_before, len(drop), drop_info)
         else:
-            print(f"  Quality filter: all {n_before} islets above median={cutoff:.3f}")
+            logger.info("  Quality filter: all %d islets above median=%.3f",
+                        n_before, cutoff)
 
         # Clean up temp key
         for f in islet_features:
@@ -1809,7 +1809,7 @@ def main():
                            quality_dropped_ids, ds_pixel_size, diag_path)
 
     # 10. Tissue-level analysis
-    print("Computing tissue-level metrics...")
+    logger.info("Computing tissue-level metrics...")
     tissue_stats = compute_tissue_level(islet_features, detections, pixel_size)
 
     # Print summary
@@ -1817,30 +1817,32 @@ def main():
         areas = [f['area_um2'] for f in islet_features]
         cells_per = [f['n_cells'] for f in islet_features]
         n_flagged = sum(1 for f in islet_features if f.get('n_flags', 0) > 0)
-        print(f"\n--- Summary ---")
-        print(f"  Islets: {len(islet_features)}")
-        print(f"  Cells: {sum(cells_per)} total, median {np.median(cells_per):.0f}/islet")
-        print(f"  Area: median {np.median(areas):.0f} um2, range {min(areas):.0f}-{max(areas):.0f}")
-        print(f"  Flagged atypical: {n_flagged}")
+        logger.info("--- Summary ---")
+        logger.info("  Islets: %d", len(islet_features))
+        logger.info("  Cells: %d total, median %.0f/islet",
+                     sum(cells_per), np.median(cells_per))
+        logger.info("  Area: median %.0f um2, range %.0f-%.0f",
+                     np.median(areas), min(areas), max(areas))
+        logger.info("  Flagged atypical: %d", n_flagged)
         for name in marker_names:
             fracs = [f.get(f'frac_{name}', 0) for f in islet_features]
-            print(f"  {name}: median frac {np.median(fracs):.2f}")
+            logger.info("  %s: median frac %.2f", name, np.median(fracs))
         mcis = [f.get('mantle_core_index') for f in islet_features if f.get('mantle_core_index') is not None]
         if mcis:
-            print(f"  Mantle-core index: median {np.median(mcis):.3f}")
+            logger.info("  Mantle-core index: median %.3f", np.median(mcis))
         mixes = [f.get('mixing_index') for f in islet_features if f.get('mixing_index') is not None]
         if mixes:
-            print(f"  Mixing index: median {np.median(mixes):.3f}")
+            logger.info("  Mixing index: median %.3f", np.median(mixes))
         # Tissue-level
         eaf = tissue_stats.get('endocrine_area_fraction')
         if eaf is not None:
-            print(f"  Endocrine area fraction: {eaf:.2%}")
+            logger.info("  Endocrine area fraction: %.2f%%", eaf * 100)
         idmm = tissue_stats.get('islet_density_per_mm2')
         if idmm is not None:
-            print(f"  Islet density: {idmm:.1f} /mm2")
+            logger.info("  Islet density: %.1f /mm2", idmm)
         mii = tissue_stats.get('median_inter_islet_um')
         if mii is not None:
-            print(f"  Inter-islet distance: median {mii:.0f} um")
+            logger.info("  Inter-islet distance: median %.0f um", mii)
 
     # 11. Export CSV
     csv_path = run_dir / 'islet_summary.csv'
@@ -1852,10 +1854,10 @@ def main():
 
     # 13. HTML visualization
     if not args.no_html:
-        print("\nGenerating HTML visualization...")
+        logger.info("Generating HTML visualization...")
 
         if not tiles_dir.exists():
-            print(f"Tiles directory not found: {tiles_dir} — skipping HTML")
+            logger.warning("Tiles directory not found: %s — skipping HTML", tiles_dir)
         else:
             # Discover tiles
             tile_info = {}
@@ -1872,7 +1874,7 @@ def main():
                     continue
 
             if not tile_info:
-                print("No tile directories found — skipping HTML")
+                logger.warning("No tile directories found — skipping HTML")
             else:
                 # Get tile dimensions from first tile
                 first_td = next(iter(tile_info.values()))
@@ -1912,7 +1914,7 @@ def main():
                             pop_ranges.append(None)
                     else:
                         pop_ranges.append(None)
-                print(f"  Islet-region normalization ranges: {pop_ranges}")
+                logger.info("  Islet-region normalization ranges: %s", pop_ranges)
 
                 tile_masks_cache = {}
                 tile_vis_cache = {}
@@ -1939,7 +1941,7 @@ def main():
                         rgb_chs.append(np.zeros((th, tw), dtype=np.uint16))
                     tile_vis_cache[(tx, ty)] = pct_norm(
                         np.stack(rgb_chs, axis=-1), pop_ranges=pop_ranges)
-                    print(f"  Loaded tile ({tx},{ty})")
+                    logger.info("  Loaded tile (%d,%d)", tx, ty)
 
                 marker_colors = build_marker_colors(marker_map)
                 html_path = run_dir / 'html' / 'islet_analysis.html'
@@ -1948,7 +1950,7 @@ def main():
                               marker_colors, czi_path.stem, tile_h, tile_w, html_path,
                               tissue_stats=tissue_stats)
 
-    print("\nDone!")
+    logger.info("Done!")
 
 
 if __name__ == '__main__':

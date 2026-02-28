@@ -16,7 +16,7 @@ from pathlib import Path
 # Allow running from repo root or scripts/
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from run_segmentation import get_czi_metadata
+from segmentation.io.czi_loader import get_czi_metadata
 
 
 def main():

@@ -18,24 +18,12 @@ REPO = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(REPO))
 
 
-class NumpyEncoder(json.JSONEncoder):
-    """JSON encoder that handles numpy types."""
-    def default(self, obj):
-        if isinstance(obj, (np.integer,)):
-            return int(obj)
-        if isinstance(obj, (np.floating,)):
-            return float(obj)
-        if isinstance(obj, np.ndarray):
-            return obj.tolist()
-        return super().default(obj)
+from segmentation.utils.json_utils import NumpyEncoder
 
 
 DEFAULT_RUN_DIR = ("/fs/pool/pool-mann-edwin/psilo_output/tp_full/"
                    "20251114_Pdgfra546_Msln750_PM647_nuc488-EDFvar-1-stitch-1_20260223_094916_100pct")
 DEFAULT_CELL_TYPE = "tissue_pattern"
-DEFAULT_PIXEL_SIZE = 0.1725  # um/px
-
-
 def parse_args():
     parser = argparse.ArgumentParser(
         description="Reassemble per-tile detections and run spatial-grid dedup."
@@ -46,8 +34,8 @@ def parse_args():
                         help='Tiles directory (default: <run-dir>/tiles)')
     parser.add_argument('--cell-type', type=str, default=DEFAULT_CELL_TYPE,
                         help='Cell type string for filenames (default: tissue_pattern)')
-    parser.add_argument('--pixel-size', type=float, default=DEFAULT_PIXEL_SIZE,
-                        help='Pixel size in um/px (default: 0.1725)')
+    parser.add_argument('--pixel-size', type=float, required=True,
+                        help='Pixel size in um/px (from CZI metadata)')
     return parser.parse_args()
 
 

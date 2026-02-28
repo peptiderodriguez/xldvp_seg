@@ -9,9 +9,16 @@ Architecture is identical to multigpu_nmj.py:
 Supports all cell types: nmj, mk, cell, vessel, mesothelium.
 
 Coordinate System:
-    Workers receive tiles with RELATIVE coordinates (array indices), NOT global CZI.
+    Workers receive tiles with GLOBAL CZI coordinates. The worker converts to
+    relative array indices by subtracting the mosaic origin.
+
     Tile dict format:
-        tile = {'x': 0, 'y': 0, 'w': 3000, 'h': 3000}
+        tile = {'x': 45000, 'y': 12000, 'w': 3000, 'h': 3000}
+
+    Conversion to array indices:
+        mosaic_ox, mosaic_oy = slide_info[slide_name].get('mosaic_origin', (0, 0))
+        y_rel = tile['y'] - mosaic_oy
+        x_rel = tile['x'] - mosaic_ox
 
     Global coordinates for UIDs:
         global_cx = tile['x'] + local_cx
@@ -21,7 +28,6 @@ Coordinate System:
 import atexit
 import os
 import gc
-import json
 import queue
 import shutil
 import time
@@ -201,16 +207,16 @@ def _gpu_worker(
     # --- Load deep feature models if requested ---
     if extract_deep_features:
         try:
-            from segmentation.models.manager import load_resnet_feature_extractor, load_dinov2
-            resnet, resnet_transform = load_resnet_feature_extractor(device)
+            from segmentation.models.manager import ModelManager
+            device_str = str(device)
+            mgr = ModelManager(device=device_str)
+            resnet, resnet_transform = mgr.get_resnet()
             models['resnet'] = resnet
             models['resnet_transform'] = resnet_transform
-            logger.info(f"[{worker_name}] ResNet50 loaded")
-
-            dinov2, dinov2_transform = load_dinov2(device)
+            dinov2, dinov2_transform = mgr.get_dinov2()
             models['dinov2'] = dinov2
             models['dinov2_transform'] = dinov2_transform
-            logger.info(f"[{worker_name}] DINOv2 loaded")
+            logger.info(f"[{worker_name}] ResNet50 + DINOv2 loaded via ModelManager")
         except Exception as e:
             logger.warning(f"[{worker_name}] Failed to load deep feature models: {e}")
 
@@ -234,87 +240,16 @@ def _gpu_worker(
         except Exception as e:
             logger.warning(f"[{worker_name}] Failed to load classifier: {e}")
 
-    # --- Create strategy ---
-    from segmentation.detection.strategies.nmj import NMJStrategy
-    from segmentation.detection.strategies.mk import MKStrategy
-    from segmentation.detection.strategies.cell import CellStrategy
-
-    if cell_type == 'nmj':
-        strategy = NMJStrategy(
-            intensity_percentile=strategy_params.get('intensity_percentile', 98.0),
-            max_solidity=strategy_params.get('max_solidity', 0.85),
-            min_skeleton_length=strategy_params.get('min_skeleton_length', 30),
-            min_area_px=strategy_params.get('min_area', 150),
-            min_area_um=strategy_params.get('min_area_um', 25.0),
-            classifier_threshold=strategy_params.get('classifier_threshold', 0.5),
-            use_classifier='classifier' in models,
-            extract_deep_features=extract_deep_features,
-            extract_sam2_embeddings=extract_sam2_embeddings,
-        )
-    elif cell_type == 'mk':
-        strategy = MKStrategy(
-            min_area_um=strategy_params.get('mk_min_area', 200.0),
-            max_area_um=strategy_params.get('mk_max_area', 2000.0),
-            extract_deep_features=extract_deep_features,
-            extract_sam2_embeddings=extract_sam2_embeddings,
-        )
-    elif cell_type == 'cell':
-        strategy = CellStrategy(
-            min_area_um=strategy_params.get('min_area_um', 50),
-            max_area_um=strategy_params.get('max_area_um', 200),
-            extract_deep_features=extract_deep_features,
-            extract_sam2_embeddings=extract_sam2_embeddings,
-        )
-    elif cell_type == 'islet':
-        from segmentation.detection.strategies.islet import IsletStrategy
-        strategy = IsletStrategy(
-            membrane_channel=strategy_params.get('membrane_channel', 1),
-            nuclear_channel=strategy_params.get('nuclear_channel', 4),
-            extract_deep_features=extract_deep_features,
-            extract_sam2_embeddings=extract_sam2_embeddings,
-            marker_signal_factor=strategy_params.get('marker_signal_factor', 2.0),
-            gmm_prefilter_thresholds=strategy_params.get('gmm_prefilter_thresholds'),
-        )
-    elif cell_type == 'tissue_pattern':
-        from segmentation.detection.strategies.tissue_pattern import TissuePatternStrategy
-        strategy = TissuePatternStrategy(
-            detection_channels=strategy_params.get('detection_channels', [0, 3]),
-            nuclear_channel=strategy_params.get('nuclear_channel', 4),
-            min_area_um=strategy_params.get('min_area_um', 20),
-            max_area_um=strategy_params.get('max_area_um', 300),
-            extract_deep_features=extract_deep_features,
-            extract_sam2_embeddings=extract_sam2_embeddings,
-        )
-    elif cell_type == 'vessel':
-        from segmentation.detection.strategies.vessel import VesselStrategy
-        strategy = VesselStrategy(
-            min_diameter_um=strategy_params.get('min_vessel_diameter_um', 10),
-            max_diameter_um=strategy_params.get('max_vessel_diameter_um', 1000),
-            min_wall_thickness_um=strategy_params.get('min_wall_thickness_um', 2),
-            max_aspect_ratio=strategy_params.get('max_aspect_ratio', 4.0),
-            min_circularity=strategy_params.get('min_circularity', 0.3),
-            min_ring_completeness=strategy_params.get('min_ring_completeness', 0.5),
-            classify_vessel_types=strategy_params.get('classify_vessel_types', False),
-            candidate_mode=strategy_params.get('candidate_mode', False),
-            lumen_first=strategy_params.get('lumen_first', False),
-            ring_only=strategy_params.get('ring_only', False),
-            smooth_contours=strategy_params.get('smooth_contours', True),
-            smooth_contours_factor=strategy_params.get('smooth_contours_factor', 3.0),
-            parallel_detection=strategy_params.get('parallel_detection', False),
-            parallel_workers=strategy_params.get('parallel_workers', 3),
-            multi_marker=strategy_params.get('multi_marker', False),
-            extract_deep_features=extract_deep_features,
-            extract_sam2_embeddings=extract_sam2_embeddings,
-        )
-    else:
-        from segmentation.detection.strategies.mesothelium import MesotheliumStrategy
-        meso_params = {k: v for k, v in strategy_params.items() if k != 'pixel_size_um'}
-        strategy = MesotheliumStrategy(
-            pixel_size_um=pixel_size_um,
-            extract_deep_features=extract_deep_features,
-            extract_sam2_embeddings=extract_sam2_embeddings,
-            **meso_params,
-        )
+    # --- Create strategy via factory (shared with run_segmentation.py) ---
+    from segmentation.processing.strategy_factory import create_strategy
+    strategy = create_strategy(
+        cell_type=cell_type,
+        strategy_params=strategy_params,
+        extract_deep_features=extract_deep_features,
+        extract_sam2_embeddings=extract_sam2_embeddings,
+        pixel_size_um=pixel_size_um,
+        has_classifier='classifier' in models,
+    )
 
     logger.info(f"[{worker_name}] {cell_type} strategy created: {strategy.get_config()}")
 
@@ -336,6 +271,9 @@ def _gpu_worker(
                 break
 
             slide_name, tile = work_item
+            # Shallow copy to avoid mutating the original dict from the queue
+            # (tile['h'] and tile['w'] may be overwritten for strided reads below)
+            tile = dict(tile)
             tid = tile.get('id', f"{tile['x']}_{tile['y']}")
 
             if slide_name not in shared_slides:
@@ -364,6 +302,12 @@ def _gpu_worker(
             x_rel = tile['x'] - mosaic_ox
             tile_h, tile_w = tile['h'], tile['w']
 
+            if y_rel < 0 or x_rel < 0:
+                logger.error(f"[{worker_name}] Tile {tid} has negative relative coords "
+                             f"(x_rel={x_rel}, y_rel={y_rel}), skipping")
+                output_queue.put({'status': 'error', 'tid': tid, 'error': 'negative_coords'})
+                continue
+
             y_end = min(y_rel + tile_h, slide_arr.shape[0])
             x_end = min(x_rel + tile_w, slide_arr.shape[1])
 
@@ -372,6 +316,11 @@ def _gpu_worker(
             if slide_arr.ndim == 3:
                 # Strided read: reads only 1/sf² pixels (nearest-neighbor downscale)
                 tile_raw = slide_arr[y_rel:y_end:sf, x_rel:x_end:sf, :].copy()
+                # Update tile dims to reflect actual strided shape
+                # Store original-scale dims so coordinate conversion still works
+                actual_h, actual_w = tile_raw.shape[:2]
+                tile['h'] = actual_h * sf
+                tile['w'] = actual_w * sf
                 n_ch = tile_raw.shape[2]
                 if n_ch >= 3:
                     tile_rgb = tile_raw[:, :, :3]
@@ -433,7 +382,8 @@ def _gpu_worker(
             try:
                 det_ch = extra_channel_tiles.get(detection_channel, tile_rgb[:, :, 0]) if extra_channel_tiles else tile_rgb[:, :, 0]
                 has_tissue_flag, _ = has_tissue(det_ch, variance_threshold=variance_threshold, block_size=512)
-            except Exception:
+            except Exception as e:
+                logger.warning(f"[{worker_name}] has_tissue() failed: {e}, assuming tissue present")
                 has_tissue_flag = True
 
             # Convert to uint8 for visual models
@@ -496,7 +446,7 @@ def _gpu_worker(
                     output_queue.put({
                         'status': 'success', 'tid': tid,
                         'slide_name': slide_name, 'tile': tile,
-                        'masks': np.zeros(tile_rgb.shape[:2], dtype=np.uint32),
+                        'masks': None,  # No detections — avoid serializing 64MB zero array
                         'features_list': [],
                         'scale_factor': sf,
                     })
@@ -652,7 +602,6 @@ class MultiGPUTileProcessor:
         self.output_queue = Queue()
         self.stop_event = Event()
 
-        ready_count = 0
         errors = []
 
         for gpu_id in range(self.num_gpus):
@@ -685,23 +634,33 @@ class MultiGPUTileProcessor:
             self.workers.append(p)
             logger.info(f"Started {self.cell_type} worker GPU-{gpu_id} (PID: {p.pid})")
 
+        # Collect init messages from all workers, matching by gpu_id
+        ready_gpus = set()
+        deadline = time.time() + 120 * self.num_gpus
+        while len(ready_gpus) + len(errors) < self.num_gpus:
+            remaining = max(1, deadline - time.time())
             try:
-                msg = self.output_queue.get(timeout=120)
-                if msg.get('status') == 'ready':
-                    ready_count += 1
-                    logger.info(f"Worker GPU-{msg['gpu_id']} ready ({ready_count}/{self.num_gpus})")
-                elif msg.get('status') == 'init_error':
-                    errors.append(f"GPU-{msg['gpu_id']}: {msg['error']}")
+                msg = self.output_queue.get(timeout=remaining)
             except queue.Empty:
-                errors.append(f"GPU-{gpu_id}: timeout")
+                # Timeout — report which GPUs never responded
+                all_gpus = set(range(self.num_gpus))
+                missing = all_gpus - ready_gpus - {int(e.split(':')[0].split('-')[1]) for e in errors if 'GPU-' in e}
+                for gpu_id in missing:
+                    errors.append(f"GPU-{gpu_id}: timeout")
+                break
+            if msg.get('status') == 'ready':
+                ready_gpus.add(msg.get('gpu_id'))
+                logger.info(f"Worker GPU-{msg['gpu_id']} ready ({len(ready_gpus)}/{self.num_gpus})")
+            elif msg.get('status') == 'init_error':
+                errors.append(f"GPU-{msg.get('gpu_id')}: {msg.get('error')}")
 
         if errors:
             self.stop()
             raise RuntimeError(f"Worker init errors: {errors}")
 
-        if ready_count < self.num_gpus:
+        if len(ready_gpus) < self.num_gpus:
             self.stop()
-            raise RuntimeError(f"Only {ready_count}/{self.num_gpus} workers ready")
+            raise RuntimeError(f"Only {len(ready_gpus)}/{self.num_gpus} workers ready")
 
         logger.info(f"All {self.num_gpus} workers ready")
         self._workers_started = True
@@ -733,6 +692,10 @@ class MultiGPUTileProcessor:
                     remaining = timeout - (time.time() - start)
                     if remaining <= 0:
                         return None
+                # Check if all workers have died (prevents infinite loop when timeout=None)
+                if all(not p.is_alive() for p in self.workers):
+                    logger.error("All GPU workers have died, no more results expected")
+                    return None
                 continue
         return None
 

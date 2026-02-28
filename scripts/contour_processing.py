@@ -16,7 +16,6 @@ from segmentation.lmd.contour_processing import (  # noqa: F401
     process_contour,
     process_contours_batch,
     process_detection_contours,
-    DEFAULT_PIXEL_SIZE_UM,
     DEFAULT_DILATION_UM,
     DEFAULT_RDP_EPSILON,
 )

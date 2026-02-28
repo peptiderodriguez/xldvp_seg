@@ -37,7 +37,7 @@ REPO = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(REPO))
 
 from segmentation.io.czi_loader import get_loader
-from run_segmentation import classify_islet_marker, compute_islet_marker_thresholds
+from segmentation.utils.islet_utils import classify_islet_marker, compute_islet_marker_thresholds
 
 try:
     import hdf5plugin  # noqa: F401 — registers LZ4 codec for h5py
@@ -316,7 +316,7 @@ def main():
     for ch in display_chs:
         print(f"  Loading channel {ch}...")
         loader.load_channel(ch)
-        ch_data[ch] = loader._channel_data[ch]
+        ch_data[ch] = loader.get_channel_data(ch)
 
     # ---------------------------------------------------------------
     # 4. DBSCAN spatial clustering on endocrine cell coordinates

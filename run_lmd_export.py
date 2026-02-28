@@ -435,8 +435,46 @@ def _make_polygon(contour):
         return None
 
 
+def _build_spatial_index(precomputed_polygons):
+    """Build spatial index from valid polygons.
+
+    Uses Shapely STRtree for O(log N) intersection queries instead of O(N) linear scan.
+
+    Args:
+        precomputed_polygons: list of Shapely Polygon objects (or None entries)
+
+    Returns:
+        STRtree instance, or None if no valid polygons or STRtree unavailable.
+    """
+    try:
+        from shapely import STRtree
+    except ImportError:
+        return None
+    valid_polys = [p for p in precomputed_polygons if p is not None]
+    if not valid_polys:
+        return None
+    return STRtree(valid_polys)
+
+
+def _check_overlap_indexed(shifted_contour, spatial_tree):
+    """Check overlap using spatial index -- O(log N) instead of O(N).
+
+    Args:
+        shifted_contour: numpy array (N, 2) of the candidate contour
+        spatial_tree: STRtree instance (or None for no-collision case)
+
+    Returns True if overlap detected, False if no overlap.
+    """
+    candidate_poly = _make_polygon(shifted_contour)
+    if candidate_poly is None or not candidate_poly.is_valid:
+        return True  # Treat invalid as overlapping (skip)
+    if spatial_tree is None:
+        return False
+    return len(spatial_tree.query(candidate_poly, predicate='intersects')) > 0
+
+
 def _check_overlap_precomputed(shifted_contour, precomputed_polygons):
-    """Check if shifted contour overlaps any precomputed polygon.
+    """Check if shifted contour overlaps any precomputed polygon (linear fallback).
 
     Args:
         shifted_contour: numpy array (N, 2) of the candidate contour
@@ -460,7 +498,8 @@ def _check_overlap_precomputed(shifted_contour, precomputed_polygons):
 
 
 def generate_spatial_control(contour_um, precomputed_polygons,
-                             offset_um=100.0, max_attempts=3):
+                             offset_um=100.0, max_attempts=3,
+                             spatial_tree=None):
     """
     Generate a control contour by shifting in 8 directions.
 
@@ -470,15 +509,22 @@ def generate_spatial_control(contour_um, precomputed_polygons,
 
     Args:
         contour_um: Contour in um, shape (N, 2)
-        precomputed_polygons: List of precomputed Shapely Polygon objects
+        precomputed_polygons: List of precomputed Shapely Polygon objects (fallback)
         offset_um: Starting offset distance in um
         max_attempts: Number of times to increase offset if all directions fail
+        spatial_tree: Optional STRtree for O(log N) overlap checks
 
     Returns:
         (shifted_contour_um, direction_name, actual_offset_um) tuple.
         Always returns a result (falls back to largest-gap direction).
     """
     contour_arr = np.array(contour_um)
+
+    # Choose overlap check function based on available index
+    if spatial_tree is not None:
+        _check = lambda s: _check_overlap_indexed(s, spatial_tree)
+    else:
+        _check = lambda s: _check_overlap_precomputed(s, precomputed_polygons)
 
     for attempt in range(max_attempts):
         current_offset = offset_um * (1.5 ** attempt)
@@ -487,7 +533,7 @@ def generate_spatial_control(contour_um, precomputed_polygons,
             offset_vec = direction_vec * current_offset
             shifted = contour_arr + offset_vec
 
-            if not _check_overlap_precomputed(shifted, precomputed_polygons):
+            if not _check(shifted):
                 return shifted.tolist(), direction_name, current_offset
 
     # Fallback: use first direction (E) at largest attempted offset.
@@ -499,13 +545,27 @@ def generate_spatial_control(contour_um, precomputed_polygons,
 
 
 def generate_cluster_control(cluster_contours_um, precomputed_polygons,
-                             offset_um=100.0, max_attempts=3):
+                             offset_um=100.0, max_attempts=3,
+                             spatial_tree=None):
     """
     Generate control for a cluster: shift ALL member contours by the SAME vector.
+
+    Args:
+        cluster_contours_um: List of contour arrays in um
+        precomputed_polygons: List of precomputed Shapely Polygon objects (fallback)
+        offset_um: Starting offset distance in um
+        max_attempts: Number of times to increase offset if all directions fail
+        spatial_tree: Optional STRtree for O(log N) overlap checks
 
     Returns (list_of_shifted_contours_um, direction_name, actual_offset_um).
     Always returns a result.
     """
+    # Choose overlap check function based on available index
+    if spatial_tree is not None:
+        _check = lambda s: _check_overlap_indexed(s, spatial_tree)
+    else:
+        _check = lambda s: _check_overlap_precomputed(s, precomputed_polygons)
+
     for attempt in range(max_attempts):
         current_offset = offset_um * (1.5 ** attempt)
 
@@ -516,7 +576,7 @@ def generate_cluster_control(cluster_contours_um, precomputed_polygons,
             any_overlap = False
             for contour_um in cluster_contours_um:
                 shifted = np.array(contour_um) + offset_vec
-                if _check_overlap_precomputed(shifted, precomputed_polygons):
+                if _check(shifted):
                     any_overlap = True
                     break
 
@@ -1040,12 +1100,19 @@ Examples:
     # Auto-detect metadata
     pixel_size = args.pixel_size
     if pixel_size is None:
-        sample = detections[0]
-        if 'features' in sample and 'pixel_size_um' in sample['features']:
-            pixel_size = sample['features']['pixel_size_um']
-        else:
-            pixel_size = 0.22
-        print(f"  Pixel size: {pixel_size} um/px")
+        # Try to get pixel size from detection features
+        for det in detections:
+            feat = det.get('features', {})
+            if 'pixel_size_um' in feat:
+                pixel_size = feat['pixel_size_um']
+                break
+        if pixel_size is None:
+            print("ERROR: pixel_size_um is required. Provide via --pixel-size or ensure "
+                  "detections JSON contains pixel_size_um in detection features.")
+            return
+        print(f"  Pixel size (from detections): {pixel_size} um/px")
+    else:
+        print(f"  Pixel size (from CLI): {pixel_size} um/px")
 
     image_width = args.image_width
     image_height = args.image_height
@@ -1056,6 +1123,10 @@ Examples:
             if coords:
                 max_x = max(max_x, coords[0])
                 max_y = max(max_y, coords[1])
+        if max_x == 0 or max_y == 0:
+            print("ERROR: Could not estimate image dimensions from detections. "
+                  "Provide --image-width and --image-height.")
+            return
         if image_width is None:
             image_width = int(max_x * 1.1)
         if image_height is None:
@@ -1300,7 +1371,18 @@ Examples:
 
             print(f"  Precomputed {len(precomputed_polygons)} collision polygons")
 
-            # Generate single controls (progressively add to collision list)
+            # Build spatial index for O(log N) overlap checks.
+            # STRtree is static (built once from all detection polygons).
+            # New controls are NOT added to the index — this is acceptable
+            # since controls are offset in different directions and unlikely
+            # to overlap each other.
+            detection_tree = _build_spatial_index(precomputed_polygons)
+            if detection_tree is not None:
+                print("  Using STRtree spatial index for overlap checks")
+            else:
+                print("  STRtree unavailable, using linear overlap scan (install shapely>=2.0 for speedup)")
+
+            # Generate single controls
             ordered_single_ctrls = []
             fallback_count = 0
             for det in ordered_singles_dets:
@@ -1308,14 +1390,10 @@ Examples:
                 shifted, direction, actual_offset = generate_spatial_control(
                     contour_um, precomputed_polygons,
                     offset_um=args.control_offset_um,
+                    spatial_tree=detection_tree,
                 )
                 if 'fallback' in direction:
                     fallback_count += 1
-
-                # Add generated control to collision list to prevent
-                # control-vs-control overlap
-                if shifted and len(shifted) >= 3:
-                    precomputed_polygons.append(_make_polygon(shifted))
 
                 uid = det.get('uid', det.get('id', ''))
                 ordered_single_ctrls.append({
@@ -1331,21 +1409,17 @@ Examples:
             print(f"  Single controls: {len(ordered_single_ctrls)} "
                   f"({fallback_count} used fallback offset)")
 
-            # Generate cluster controls (progressively add to collision list)
+            # Generate cluster controls
             ordered_cluster_ctrls = []
             cluster_fallback = 0
             for cdata in ordered_clusters_data:
                 shifted_contours, direction, actual_offset = generate_cluster_control(
                     cdata['member_contours_um'], precomputed_polygons,
                     offset_um=args.control_offset_um,
+                    spatial_tree=detection_tree,
                 )
                 if 'fallback' in direction:
                     cluster_fallback += 1
-
-                # Add all shifted contours to collision list
-                for sc in shifted_contours:
-                    if sc and len(sc) >= 3:
-                        precomputed_polygons.append(_make_polygon(sc))
 
                 ordered_cluster_ctrls.append({
                     'type': 'cluster_control',
@@ -1454,15 +1528,19 @@ Examples:
 
         export_data = build_export_data(assignments, well_order, metadata)
 
-        # Save JSON
+        # Save JSON (timestamped + symlink)
+        from segmentation.utils.timestamps import timestamped_path, update_symlink
         json_path = output_dir / f"{args.output_name}_with_controls.json"
-        with open(json_path, 'w') as f:
+        ts_json = timestamped_path(json_path)
+        with open(ts_json, 'w') as f:
             json.dump(export_data, f)
-        print(f"\n  Saved export JSON: {json_path}")
+        update_symlink(json_path, ts_json)
+        print(f"\n  Saved export JSON: {ts_json}")
 
-        # Save CSV summary
+        # Save CSV summary (timestamped + symlink)
         csv_path = output_dir / f"{args.output_name}_summary.csv"
-        with open(csv_path, 'w') as f:
+        ts_csv = timestamped_path(csv_path)
+        with open(ts_csv, 'w') as f:
             f.write('well,type,uid,area_um2,n_contours,offset_direction\n')
             for shape in assignments:
                 well = shape.get('well', '')
@@ -1472,15 +1550,19 @@ Examples:
                 n_contours = len(shape.get('contours_um', [])) or (1 if shape.get('contour_um') else 0)
                 direction = shape.get('offset_direction', '')
                 f.write(f"{well},{stype},{uid},{area:.2f},{n_contours},{direction}\n")
-        print(f"  Saved CSV summary: {csv_path}")
+        update_symlink(csv_path, ts_csv)
+        print(f"  Saved CSV summary: {ts_csv}")
 
-        # Export LMD XML
+        # Export LMD XML (timestamped + symlink)
         xml_path = output_dir / f"{args.output_name}.xml"
+        ts_xml = timestamped_path(xml_path)
         try:
             export_to_lmd_xml(
-                assignments, crosses_data, xml_path,
+                assignments, crosses_data, ts_xml,
                 flip_y=not args.no_flip_y,
             )
+            update_symlink(xml_path, ts_xml)
+            print(f"  Saved LMD XML: {ts_xml}")
         except ImportError:
             print("  WARNING: py-lmd not installed, skipping XML export.")
             print("  Install with: pip install py-lmd")

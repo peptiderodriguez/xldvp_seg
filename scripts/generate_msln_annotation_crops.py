@@ -249,8 +249,8 @@ def main():
     bbox = reader.get_mosaic_scene_bounding_box(index=0)
     print(f"  Mosaic bbox: x={bbox.x}, y={bbox.y}, w={bbox.w:,}, h={bbox.h:,}")
 
-    # Get pixel size from metadata
-    pixel_size_um = 0.22  # default
+    # Get pixel size from CZI metadata
+    pixel_size_um = None
     try:
         metadata = reader.meta
         scaling = metadata.find('.//Scaling/Items/Distance[@Id="X"]/Value')
@@ -258,6 +258,9 @@ def main():
             pixel_size_um = float(scaling.text) * 1e6
     except Exception:
         pass
+    if pixel_size_um is None:
+        print("WARNING: Could not read pixel size from CZI metadata, falling back to 0.22 um/px")
+        pixel_size_um = 0.22
     print(f"  Pixel size: {pixel_size_um:.4f} um")
 
     # 5. Generate crops — read each crop directly from CZI (no RAM)

@@ -267,7 +267,7 @@ def parse_uid(uid: str) -> Dict[str, Any]:
         {'slide_name': 'slide_01', 'cell_type': 'mk', 'global_x': None, 'global_y': None, 'global_id': 123, 'is_spatial': False}
     """
     # Known cell types
-    cell_types = ['mk', 'hspc', 'nmj', 'vessel', 'cell', 'mesothelium']
+    cell_types = ['mk', 'hspc', 'nmj', 'vessel', 'cell', 'mesothelium', 'islet', 'tissue_pattern']
 
     # Try to find the cell type in the UID
     cell_type = None
@@ -624,6 +624,7 @@ def convert_detections_to_spatial_uids(
         'slide_01_mk_1000_2000'
     """
     result = []
+    uid_counts = {}  # Track UID collisions from round() on dense detections
 
     for det in detections:
         det_copy = det.copy()
@@ -642,8 +643,14 @@ def convert_detections_to_spatial_uids(
             result.append(det_copy)
             continue
 
-        # Generate spatial UID
-        det_copy['uid'] = generate_uid(slide_name, cell_type, global_x, global_y)
+        # Generate spatial UID with collision detection
+        base_uid = generate_uid(slide_name, cell_type, global_x, global_y)
+        if base_uid in uid_counts:
+            uid_counts[base_uid] += 1
+            det_copy['uid'] = f"{base_uid}_{uid_counts[base_uid]}"
+        else:
+            uid_counts[base_uid] = 0
+            det_copy['uid'] = base_uid
 
         # Keep legacy global_id for backwards compatibility if present
         if 'global_id' in det:

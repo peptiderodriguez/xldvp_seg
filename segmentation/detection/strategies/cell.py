@@ -14,7 +14,7 @@ from typing import Dict, Any, List, Optional, Tuple
 from scipy import ndimage
 from skimage.measure import regionprops
 
-from .base import DetectionStrategy, Detection
+from .base import DetectionStrategy, Detection, _safe_to_uint8
 from .mixins import MultiChannelFeatureMixin
 from segmentation.utils.logging import get_logger
 from segmentation.utils.feature_extraction import (
@@ -85,9 +85,9 @@ class CellStrategy(DetectionStrategy, MultiChannelFeatureMixin):
 
     @staticmethod
     def _percentile_normalize(arr: np.ndarray) -> np.ndarray:
-        """Percentile-normalize a uint16 channel to uint8 for Cellpose input."""
-        if arr.dtype != np.uint16:
-            return arr.astype(np.uint8)
+        """Percentile-normalize any numeric array to uint8 [0, 255]."""
+        if arr.dtype == np.uint8:
+            return arr
         nonzero = arr[arr > 0]
         if len(nonzero) == 0:
             return np.zeros_like(arr, dtype=np.uint8)
@@ -134,11 +134,8 @@ class CellStrategy(DetectionStrategy, MultiChannelFeatureMixin):
         if sam2_predictor is None:
             raise RuntimeError("SAM2 predictor required for cell detection")
 
-        # Ensure proper image format for SAM2
-        if tile.dtype != np.uint8:
-            tile_uint8 = (tile / 256).astype(np.uint8) if tile.dtype == np.uint16 else tile.astype(np.uint8)
-        else:
-            tile_uint8 = tile
+        # Ensure proper image format for SAM2 (safe for float32 tiles in [0,1] range)
+        tile_uint8 = _safe_to_uint8(tile)
 
         # Step 1: Cellpose detection
         # Build Cellpose input
@@ -158,9 +155,19 @@ class CellStrategy(DetectionStrategy, MultiChannelFeatureMixin):
                 logger.warning(f"Cellpose 2-channel requested but ch{cyto_idx} or ch{nuc_idx} "
                                f"not in extra_channels (keys: {list(extra_channels.keys())}). "
                                f"Falling back to grayscale.")
-                cellpose_masks, _, _ = cellpose.eval(tile, channels=[0, 0])
+                # Grayscale fallback: use mean of all channels, not just R
+                if tile.ndim == 3:
+                    gray = np.mean(tile[:, :, :3], axis=2).astype(np.uint8) if tile.dtype == np.uint8 else self._percentile_normalize(np.mean(tile[:, :, :3].astype(np.float32), axis=2))
+                    cellpose_masks, _, _ = cellpose.eval(gray, channels=[0, 0])
+                else:
+                    cellpose_masks, _, _ = cellpose.eval(tile, channels=[0, 0])
         else:
-            cellpose_masks, _, _ = cellpose.eval(tile, channels=[0, 0])
+            # Grayscale fallback: use mean of all channels, not just R
+            if tile.ndim == 3:
+                gray = np.mean(tile[:, :, :3], axis=2).astype(np.uint8) if tile.dtype == np.uint8 else self._percentile_normalize(np.mean(tile[:, :, :3].astype(np.float32), axis=2))
+                cellpose_masks, _, _ = cellpose.eval(gray, channels=[0, 0])
+            else:
+                cellpose_masks, _, _ = cellpose.eval(tile, channels=[0, 0])
 
         # Get unique mask IDs (exclude background 0)
         cellpose_ids = np.unique(cellpose_masks)
@@ -324,6 +331,13 @@ class CellStrategy(DetectionStrategy, MultiChannelFeatureMixin):
             if torch.cuda.is_available():
                 torch.cuda.empty_cache()
             return np.zeros(tile.shape[:2], dtype=np.uint32), []
+
+        # Ensure SAM2 predictor has the correct image state for embedding extraction
+        # segment() calls set_image() internally, but we re-set explicitly here
+        # so detect() does not silently depend on segment()'s internal state.
+        tile_uint8 = _safe_to_uint8(tile)
+        if sam2_predictor is not None:
+            sam2_predictor.set_image(tile_uint8)
 
         # Compute features for each mask
         valid_detections = []

@@ -27,20 +27,10 @@ sys.path.insert(0, str(REPO))
 
 from segmentation.detection.strategies.nmj import load_nmj_rf_classifier
 from segmentation.utils.logging import get_logger, setup_logging
+from segmentation.utils.json_utils import NumpyEncoder
+from segmentation.utils.detection_utils import extract_feature_matrix
 
 logger = get_logger(__name__)
-
-
-class NumpyEncoder(json.JSONEncoder):
-    """JSON encoder that handles numpy types."""
-    def default(self, obj):
-        if isinstance(obj, (np.integer,)):
-            return int(obj)
-        if isinstance(obj, (np.floating,)):
-            return float(obj)
-        if isinstance(obj, np.ndarray):
-            return obj.tolist()
-        return super().default(obj)
 
 
 def main():
@@ -85,20 +75,7 @@ def main():
     logger.info(f"Classifier has {len(feature_names)} features")
 
     # Extract feature matrix (pre-allocated numpy array)
-    n_det = len(detections)
-    n_feat = len(feature_names)
-    X_full = np.zeros((n_det, n_feat), dtype=np.float32)
-    valid_indices = []
-    for i, det in enumerate(detections):
-        features = det.get('features', {})
-        if not features:
-            continue
-        for j, fn in enumerate(feature_names):
-            val = features.get(fn, 0)
-            if isinstance(val, (list, tuple)):
-                val = 0
-            X_full[i, j] = float(val) if val is not None else 0.0
-        valid_indices.append(i)
+    X_valid, valid_indices = extract_feature_matrix(detections, feature_names)
 
     logger.info(f"Extracted features for {len(valid_indices):,} / {len(detections):,} detections")
 
@@ -119,8 +96,7 @@ def main():
         for det in detections:
             det['rf_prediction'] = 0.0
     else:
-        X = X_full[valid_indices]
-        X = np.nan_to_num(X, nan=0, posinf=0, neginf=0)
+        X = X_valid
 
         # Score
         scores = pipeline.predict_proba(X)[:, 1]
@@ -143,10 +119,13 @@ def main():
             n_above = (all_scores >= thresh).sum()
             logger.info(f"  >= {thresh}: {n_above:,} ({100*n_above/len(all_scores):.1f}%)")
 
-    # Save
-    logger.info(f"Saving scored detections to {out_path}...")
-    with open(out_path, 'w') as f:
+    # Save with timestamp
+    from segmentation.utils.timestamps import timestamped_path, update_symlink
+    ts_out = timestamped_path(out_path)
+    logger.info(f"Saving scored detections to {ts_out}...")
+    with open(ts_out, 'w') as f:
         json.dump(detections, f, cls=NumpyEncoder)
+    update_symlink(out_path, ts_out)
     logger.info(f"Done. {len(detections):,} detections scored.")
 
 

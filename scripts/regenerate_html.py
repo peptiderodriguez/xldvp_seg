@@ -61,7 +61,7 @@ sys.path.insert(0, str(REPO))
 
 import cv2
 
-from segmentation.io.czi_loader import get_loader
+from segmentation.io.czi_loader import get_loader, get_czi_metadata
 from segmentation.io.html_export import (
     export_samples_to_html,
     percentile_normalize,
@@ -69,6 +69,7 @@ from segmentation.io.html_export import (
     image_to_base64,
 )
 from segmentation.utils.logging import get_logger, setup_logging
+from segmentation.utils.islet_utils import classify_islet_marker, compute_islet_marker_thresholds
 from PIL import Image
 
 logger = get_logger(__name__)
@@ -142,7 +143,6 @@ def create_sample(tile_rgb, masks, feat, pixel_size_um, slide_name, cell_type,
     contour_color = (0, 255, 0)  # default green
     marker_class = None
     if cell_type == 'islet' and marker_thresholds is not None:
-        from run_segmentation import classify_islet_marker
         marker_class, contour_color = classify_islet_marker(
             features, marker_thresholds, marker_map=marker_map)
 
@@ -161,7 +161,7 @@ def create_sample(tile_rgb, masks, feat, pixel_size_um, slide_name, cell_type,
     global_cy = tile_origin[1] + cy
     uid = feat.get('uid', f"{slide_name}_{cell_type}_{int(round(global_cx))}_{int(round(global_cy))}")
 
-    area_um2 = features.get('area', 0) * (pixel_size_um ** 2)
+    area_um2 = features.get('area_um2', features.get('area', 0) * (pixel_size_um ** 2))
 
     stats = {
         'area_um2': area_um2,
@@ -182,7 +182,8 @@ def create_sample(tile_rgb, masks, feat, pixel_size_um, slide_name, cell_type,
         stats['detection_method'] = ', '.join(dm) if isinstance(dm, list) else dm
     # Vessel-specific
     for vk in ('ring_completeness', 'circularity', 'wall_thickness_mean_um',
-               'outer_diameter_um', 'vessel_type'):
+               'outer_diameter_um', 'vessel_type', 'has_sma_ring',
+               'cd31_score', 'sma_thickness_mean_um'):
         if vk in features:
             stats[vk] = features[vk]
 
@@ -298,7 +299,7 @@ def create_sample_from_contours(det, channel_arrays, display_channels, x_start, 
         contour_data = det.get(contour_key)
         if contour_data is None:
             continue
-        contour_pts = np.array(contour_data, dtype=np.float64)
+        contour_pts = np.array(contour_data, dtype=np.float64).copy()
         if contour_pts.ndim != 2 or contour_pts.shape[0] < 3:
             continue
         # Shift global contour coords to crop-local: subtract (x1+x_start, y1+y_start)
@@ -314,7 +315,7 @@ def create_sample_from_contours(det, channel_arrays, display_channels, x_start, 
     pil_img = Image.fromarray(crop_norm)
     img_b64, mime = image_to_base64(pil_img, format='PNG')
 
-    area_um2 = features.get('area', 0) * (pixel_size_um ** 2)
+    area_um2 = features.get('area_um2', features.get('area', 0) * (pixel_size_um ** 2))
     stats = {
         'area_um2': area_um2,
         'area_px': features.get('area', 0),
@@ -565,7 +566,6 @@ def main():
             name, ch = pair.strip().split(':')
             marker_map[name.strip()] = int(ch.strip())
 
-        from run_segmentation import compute_islet_marker_thresholds, classify_islet_marker
         _pct_channels = set(s.strip() for s in args.marker_pct_channels.split(',')) if args.marker_pct_channels else set()
         marker_thresholds = compute_islet_marker_thresholds(
             all_detections,
@@ -588,7 +588,6 @@ def main():
     # Channel legend from CZI metadata
     channel_legend = None
     try:
-        from run_segmentation import get_czi_metadata
         meta = get_czi_metadata(czi_path, scene=args.scene)
 
         def _ch_label(idx):
@@ -724,7 +723,7 @@ def main():
         file_name=f"{slide_name}.czi",
         pixel_size_um=pixel_size_um,
         tiles_processed=tiles_processed,
-        tiles_total=len(tile_groups),
+        tiles_total=len(tile_groups) if tile_groups else len(sampled),
         channel_legend=channel_legend,
         prior_annotations=args.prior_annotations,
     )

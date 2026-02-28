@@ -97,9 +97,9 @@ class TestConfigImports(unittest.TestCase):
         assert TOTAL_FEATURES_PER_CELL == 6478  # 78 + 256 + 4096 + 2048
 
     def test_pixel_size_constant(self):
-        """Test that default pixel size constant can be imported."""
-        from segmentation.utils.config import DEFAULT_PIXEL_SIZE_UM
-        assert DEFAULT_PIXEL_SIZE_UM == 0.1725
+        """Test that legacy pixel size constant exists (deprecated — use CZI metadata)."""
+        from segmentation.utils.config import _LEGACY_PIXEL_SIZE_UM
+        assert _LEGACY_PIXEL_SIZE_UM == 0.1725
 
     def test_helper_functions(self):
         """Test that helper functions can be imported and called."""

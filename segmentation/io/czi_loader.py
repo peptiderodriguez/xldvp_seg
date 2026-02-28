@@ -24,6 +24,19 @@ from aicspylibczi import CziFile
 
 logger = logging.getLogger(__name__)
 
+
+def _squeeze_batch_dims(arr: np.ndarray) -> np.ndarray:
+    """Remove leading singleton (batch) dimensions, preserving 2D or 3D (H, W, 3) spatial data.
+
+    Handles shapes like (1, H, W), (1, H, W, 3), and (1, 1, H, W).
+    """
+    while arr.ndim > 3 or (arr.ndim == 3 and arr.shape[0] == 1 and arr.shape[-1] != 3):
+        if arr.shape[0] != 1:
+            break
+        arr = arr.squeeze(axis=0)
+    return arr
+
+
 # Global cache for CZILoader instances with thread-safe access
 _image_cache: Dict[str, 'CZILoader'] = {}
 _image_cache_lock = threading.Lock()
@@ -116,6 +129,193 @@ def get_cached_paths() -> List[str]:
     """Return list of paths currently in the cache."""
     with _image_cache_lock:
         return list(_image_cache.keys())
+
+
+def get_czi_metadata(czi_path, scene: int = 0):
+    """
+    Extract metadata from CZI file without loading image data.
+
+    Args:
+        czi_path: Path to CZI file
+        scene: Scene index (0-based, default 0). Pass None for global bbox.
+
+    Returns dict with:
+        - channels: list of channel info (name, wavelength, fluor)
+        - pixel_size_um: pixel size in microns
+        - mosaic_size: (width, height) in pixels for the specified scene
+        - n_channels: number of channels
+        - n_scenes: number of scenes in the CZI
+    """
+    import xml.etree.ElementTree as ET
+
+    czi_path = str(czi_path)
+    metadata = {
+        'channels': [],
+        'pixel_size_um': 0.22,  # default
+        'mosaic_size': None,
+        'n_channels': 0,
+        'n_scenes': 1,
+    }
+
+    n_data_channels = None  # actual channel count from file dimensions
+
+    # Try pylibCZIrw first (better for large files)
+    try:
+        from pylibCZIrw import czi as pylibczi
+
+        with pylibczi.open_czi(czi_path) as czidoc:
+            # Get per-scene dimensions if available
+            try:
+                scene_bbox = czidoc.scenes_bounding_rectangle
+                if scene_bbox and len(scene_bbox) > 0:
+                    metadata['n_scenes'] = len(scene_bbox)
+                    if scene is not None and scene in scene_bbox:
+                        rect = scene_bbox[scene]
+                        metadata['mosaic_size'] = (rect.w, rect.h)
+                    else:
+                        # Fallback to total bounding box
+                        dims = czidoc.total_bounding_box
+                        metadata['mosaic_size'] = (dims['X'][1] - dims['X'][0], dims['Y'][1] - dims['Y'][0])
+                else:
+                    dims = czidoc.total_bounding_box
+                    metadata['mosaic_size'] = (dims['X'][1] - dims['X'][0], dims['Y'][1] - dims['Y'][0])
+            except (AttributeError, Exception):
+                # Older pylibCZIrw without scenes_bounding_rectangle
+                dims = czidoc.total_bounding_box
+                metadata['mosaic_size'] = (dims['X'][1] - dims['X'][0], dims['Y'][1] - dims['Y'][0])
+
+            # Get metadata XML
+            meta_xml = czidoc.raw_metadata
+            root = ET.fromstring(meta_xml)
+
+    except ImportError:
+        # Fall back to aicspylibczi
+        reader = CziFile(czi_path)
+
+        # Query scene count and channel count from dims_shape
+        # dims_shape returns a list with one entry per scene
+        n_data_channels = None
+        try:
+            dims_shape_list = reader.get_dims_shape()
+            metadata['n_scenes'] = len(dims_shape_list)
+            if 'C' in dims_shape_list[0]:
+                n_data_channels = dims_shape_list[0]['C'][1] - dims_shape_list[0]['C'][0]
+        except Exception:
+            pass
+
+        # Get per-scene bounding box
+        if scene is not None:
+            bbox = reader.get_mosaic_scene_bounding_box(index=scene)
+        else:
+            bbox = reader.get_mosaic_bounding_box()
+        metadata['mosaic_size'] = (bbox.w, bbox.h)
+
+        meta_xml = reader.meta
+        if isinstance(meta_xml, str):
+            root = ET.fromstring(meta_xml)
+        else:
+            root = meta_xml
+
+    # Parse XML for channel info.
+    # CZI XML may contain duplicate <Channel> entries across sections (e.g.
+    # EDFvar files have 3x5=15 entries for 5 actual channels). We collect
+    # all entries indexed by Channel:N id, merging metadata from the richest
+    # entry per index. Then limit to actual data channel count from dims_shape.
+    channel_map = {}  # index -> ch_info dict
+    for channel in root.iter('Channel'):
+        ch_id = channel.get('Id', '')
+        name = channel.get('Name', '')
+
+        # Extract channel index from Id like "Channel:0", "Channel:1", etc.
+        ch_idx = None
+        if ch_id and ch_id.startswith('Channel:'):
+            try:
+                ch_idx = int(ch_id.split(':')[1])
+            except (ValueError, IndexError) as e:
+                logger.debug(f"Could not parse channel index from '{ch_id}': {e}")
+
+        fluor = channel.find('.//Fluor')
+        fluor_text = fluor.text if fluor is not None else 'N/A'
+        emission = channel.find('.//EmissionWavelength')
+        emission_nm = float(emission.text) if emission is not None and emission.text else None
+        excitation = channel.find('.//ExcitationWavelength')
+        excitation_nm = float(excitation.text) if excitation is not None and excitation.text else None
+        dye_name = channel.find('.//DyeName')
+        dye = dye_name.text if dye_name is not None else fluor_text
+
+        if ch_idx is not None:
+            existing = channel_map.get(ch_idx)
+            if existing is None:
+                channel_map[ch_idx] = {
+                    'index': ch_idx, 'name': name, 'id': ch_id,
+                    'fluorophore': fluor_text, 'emission_nm': emission_nm,
+                    'excitation_nm': excitation_nm, 'dye': dye,
+                }
+            else:
+                # Merge: prefer non-null/non-default values
+                if fluor_text and fluor_text != 'N/A' and existing['fluorophore'] == 'N/A':
+                    existing['fluorophore'] = fluor_text
+                if emission_nm and not existing['emission_nm']:
+                    existing['emission_nm'] = emission_nm
+                if excitation_nm and not existing['excitation_nm']:
+                    existing['excitation_nm'] = excitation_nm
+                if dye and dye != 'N/A' and existing['dye'] in ('N/A', existing['fluorophore']):
+                    existing['dye'] = dye
+
+    # Build sorted channel list
+    channels = [channel_map[k] for k in sorted(channel_map.keys())]
+
+    # Limit to actual data channel count if known (from dims_shape)
+    if n_data_channels is not None and len(channels) > n_data_channels:
+        channels = channels[:n_data_channels]
+
+    metadata['channels'] = channels
+    metadata['n_channels'] = len(channels)
+
+    # Parse pixel size
+    for scaling in root.iter('Scaling'):
+        for items in scaling.iter('Items'):
+            for distance in items.iter('Distance'):
+                if distance.get('Id') == 'X':
+                    value = distance.find('Value')
+                    if value is not None and value.text:
+                        metadata['pixel_size_um'] = float(value.text) * 1e6
+                        break
+
+    return metadata
+
+
+def print_czi_metadata(czi_path, scene: int = 0):
+    """Print CZI metadata in human-readable format."""
+    logger.info(f"CZI Metadata: {Path(czi_path).name}")
+    logger.info("=" * 60)
+
+    try:
+        meta = get_czi_metadata(czi_path, scene=scene)
+
+        if meta['mosaic_size']:
+            w, h = meta['mosaic_size']
+            logger.info(f"Mosaic size: {w:,} x {h:,} px")
+
+        logger.info(f"Pixel size: {meta['pixel_size_um']:.4f} um/px")
+        logger.info(f"Number of channels: {meta['n_channels']}")
+
+        logger.info("Channels:")
+        logger.info("-" * 60)
+        for ch in meta['channels']:
+            ex = f"{ch['excitation_nm']:.0f}" if ch['excitation_nm'] else "N/A"
+            em = f"{ch['emission_nm']:.0f}" if ch['emission_nm'] else "N/A"
+            logger.info(f"  [{ch['index']}] {ch['name']}")
+            logger.info(f"      Fluorophore: {ch['fluorophore']}")
+            logger.info(f"      Excitation: {ex} nm | Emission: {em} nm")
+
+        logger.info("=" * 60)
+        return meta
+
+    except Exception as e:
+        logger.error(f"ERROR reading metadata: {e}")
+        logger.error("  File may be on slow network mount - try copying locally first")
+        return None
 
 
 class CZILoader:
@@ -213,7 +413,8 @@ class CZILoader:
                 if channels_to_load:
                     self._primary_channel = channels_to_load[0]
         except Exception:
-            self.reader.close()
+            del self.reader
+            self.reader = None
             raise
 
     def _load_channel_to_ram(self, channel: int, strip_height: int):
@@ -242,7 +443,7 @@ class CZILoader:
             scale_factor=1,
             C=channel,
         )
-        test_strip = np.squeeze(test_strip)
+        test_strip = _squeeze_batch_dims(test_strip)
         is_rgb = len(test_strip.shape) == 3 and test_strip.shape[-1] == 3
 
         if is_rgb:
@@ -263,11 +464,14 @@ class CZILoader:
                 scale_factor=1,
                 C=channel,
             )
-            strip = np.squeeze(strip)
+            strip = _squeeze_batch_dims(strip)
             if is_rgb:
-                # Ensure RGB data is uint8
-                if strip.dtype != np.uint8:
-                    strip = (strip / strip.max() * 255).astype(np.uint8) if strip.max() > 0 else strip.astype(np.uint8)
+                # Ensure RGB data is uint8 using dtype-based normalization
+                # (per-strip max normalization causes visible banding at strip boundaries)
+                if strip.dtype == np.uint16:
+                    strip = (strip >> 8).astype(np.uint8)  # Fast bit-shift, consistent across all strips
+                elif strip.dtype not in (np.uint8,):
+                    strip = np.clip(strip, 0, 255).astype(np.uint8)
                 channel_array[y_off:y_off+h, :, :] = strip
             else:
                 channel_array[y_off:y_off+h, :] = strip
@@ -357,7 +561,7 @@ class CZILoader:
                 scale_factor=1,
                 C=channel,
             )
-            strip = np.squeeze(strip)
+            strip = _squeeze_batch_dims(strip)
 
             # Validate shape after squeeze to catch dimension issues early
             if is_rgb_data:
@@ -368,19 +572,22 @@ class CZILoader:
                     raise ValueError(f"Expected grayscale strip shape (h, w), got {strip.shape}")
 
             if is_rgb_data:
-                # Ensure RGB data is uint8
-                if strip.dtype != np.uint8:
-                    strip = (strip / strip.max() * 255).astype(np.uint8) if strip.max() > 0 else strip.astype(np.uint8)
+                # Ensure RGB data is uint8 using dtype-based normalization
+                # (per-strip max normalization causes visible banding at strip boundaries)
+                if strip.dtype == np.uint16:
+                    strip = (strip >> 8).astype(np.uint8)  # Fast bit-shift, consistent across all strips
+                elif strip.dtype not in (np.uint8,):
+                    strip = np.clip(strip, 0, 255).astype(np.uint8)
                 shm_buffer[y_off:y_off + h, :, :] = strip
             else:
                 shm_buffer[y_off:y_off + h, :] = strip
 
-            # Free memory after each strip
+            # Free memory after each strip (del is sufficient for non-cyclic numpy arrays)
             del strip
-            gc.collect()
 
-            # Log memory status every 5 strips
-            if (i + 1) % 5 == 0:
+            # Log memory status every 10 strips
+            if (i + 1) % 10 == 0:
+                gc.collect()  # Only GC periodically, not every strip
                 from segmentation.processing.memory import log_memory_status
                 log_memory_status(f"Loaded strip {i + 1}/{n_strips}")
 
@@ -405,7 +612,7 @@ class CZILoader:
             scale_factor=1,
             C=channel,
         )
-        test_region = np.squeeze(test_region)
+        test_region = _squeeze_batch_dims(test_region)
         return len(test_region.shape) == 3 and test_region.shape[-1] == 3
 
     def load_channel(self, channel: int, strip_height: Optional[int] = None):
@@ -475,6 +682,26 @@ class CZILoader:
             numpy array with channel data, or None if not loaded
         """
         return self._channel_data.get(channel)
+
+    def set_channel_data(self, channel: int, data: np.ndarray) -> None:
+        """Set the RAM data for a specific channel.
+
+        Use this to update channel data after preprocessing (e.g., illumination
+        correction) without accessing the private _channel_data dict directly.
+
+        Args:
+            channel: Channel number
+            data: numpy array with channel data
+        """
+        self._channel_data[channel] = data
+
+    def clear_all_channels(self) -> None:
+        """Release all loaded channel data from RAM.
+
+        Clears the internal channel data dict. Use this instead of accessing
+        _channel_data.clear() directly.
+        """
+        self._channel_data.clear()
 
     def _get_array_memory_gb(self, arr: np.ndarray) -> float:
         """Calculate memory usage of a numpy array in GB."""
@@ -655,6 +882,10 @@ class CZILoader:
         Raises:
             ValueError: If scale_factor is not positive
         """
+        if self.reader is None:
+            raise RuntimeError("CZI reader has been released. Cannot read tiles from disk. "
+                               "Use --load-to-ram or reload the CZI file.")
+
         if scale_factor <= 0:
             raise ValueError(f"scale_factor must be positive, got {scale_factor}")
 
@@ -674,9 +905,7 @@ class CZILoader:
         if tile_data is None or tile_data.size == 0:
             return None
 
-        # Remove only the batch dimension (axis 0), not spatial singletons
-        if tile_data.ndim > 0 and tile_data.shape[0] == 1:
-            tile_data = tile_data.squeeze(axis=0)
+        tile_data = _squeeze_batch_dims(tile_data)
 
         # Accept both grayscale (2D) and RGB (3D) data
         if tile_data.ndim not in (2, 3):
@@ -691,14 +920,21 @@ class CZILoader:
         Returns:
             Pixel size in um/px (default 0.22 if not found in metadata)
         """
-        pixel_size = 0.22  # Default
+        pixel_size = None
         try:
             metadata = self.reader.meta
+            if isinstance(metadata, str):
+                import xml.etree.ElementTree as ET
+                metadata = ET.fromstring(metadata)
             scaling = metadata.find('.//Scaling/Items/Distance[@Id="X"]/Value')
             if scaling is not None:
                 pixel_size = float(scaling.text) * 1e6
         except Exception as e:
-            logger.debug(f"Could not read pixel size from metadata: {e}")
+            logger.warning(f"Could not read pixel size from CZI metadata: {e}")
+        if pixel_size is None:
+            logger.warning("pixel_size_um not found in CZI metadata — falling back to 0.22 um/px. "
+                           "Verify this matches your microscope configuration.")
+            pixel_size = 0.22
         return pixel_size
 
     @property

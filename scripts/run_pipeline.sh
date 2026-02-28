@@ -37,9 +37,9 @@ read_yaml() {
     local val
     val=$("$MKSEG_PYTHON" -c "
 import yaml, sys
-with open('$CONFIG') as f:
+with open(sys.argv[1]) as f:
     cfg = yaml.safe_load(f)
-keys = '$key'.split('.')
+keys = sys.argv[2].split('.')
 v = cfg
 for k in keys:
     if v is None:
@@ -47,14 +47,14 @@ for k in keys:
         break
     v = v.get(k) if isinstance(v, dict) else None
 if v is None:
-    print('$default')
+    print(sys.argv[3])
 elif isinstance(v, list):
     print(' '.join(str(x) for x in v))
 elif isinstance(v, bool):
     print('true' if v else 'false')
 else:
     print(v)
-")
+" "$CONFIG" "$key" "$default")
     echo "$val"
 }
 
@@ -85,11 +85,11 @@ NUM_JOBS=$(read_yaml slurm.num_jobs 1)
 
 # Markers (parsed as JSON list)
 MARKERS_JSON=$("$MKSEG_PYTHON" -c "
-import yaml, json
-with open('$CONFIG') as f:
+import yaml, json, sys
+with open(sys.argv[1]) as f:
     cfg = yaml.safe_load(f)
 print(json.dumps(cfg.get('markers', [])))
-")
+" "$CONFIG")
 
 # Spatial network
 SPATIAL_ENABLED=$(read_yaml spatial_network.enabled "")
@@ -100,6 +100,12 @@ PIXEL_SIZE=$(read_yaml pixel_size_um "")
 # If spatial_network section exists but enabled is not explicitly set, treat as enabled
 if [[ -n "$SPATIAL_FILTER" && -z "$SPATIAL_ENABLED" ]]; then
     SPATIAL_ENABLED="true"
+fi
+
+# Validate pixel_size_um is set when spatial analysis is enabled
+if [[ "$SPATIAL_ENABLED" == "true" && -z "$PIXEL_SIZE" ]]; then
+    echo "Error: spatial_network requires pixel_size_um in config" >&2
+    exit 1
 fi
 
 # ---------------------------------------------------------------------------
@@ -117,10 +123,10 @@ build_seg_cmd() {
     local czi_arg="$1"
     local out_arg="$2"
     local cmd="$MKSEG_PYTHON $REPO/run_segmentation.py"
-    cmd+=" --czi-path $czi_arg"
-    cmd+=" --cell-type $CELL_TYPE"
-    cmd+=" --output-dir $out_arg"
-    cmd+=" --num-gpus $NUM_GPUS"
+    cmd+=" --czi-path \"$czi_arg\""
+    cmd+=" --cell-type \"$CELL_TYPE\""
+    cmd+=" --output-dir \"$out_arg\""
+    cmd+=" --num-gpus \"$NUM_GPUS\""
 
     # Cellpose input channels: passed as "cyto,nuc" to --cellpose-input-channels
     if [[ -n "$CP_CHANNELS" ]]; then
@@ -149,28 +155,31 @@ build_seg_cmd() {
 # Build comma-separated marker args for single classify_markers.py invocation
 # ---------------------------------------------------------------------------
 MARKER_CHANNELS=$("$MKSEG_PYTHON" -c "
-import json
-markers = json.loads('$MARKERS_JSON')
+import json, sys
+markers = json.loads(sys.argv[1])
 print(','.join(str(m['channel']) for m in markers))
-" 2>/dev/null || echo "")
+" "$MARKERS_JSON" || echo "")
 
 MARKER_NAMES=$("$MKSEG_PYTHON" -c "
-import json
-markers = json.loads('$MARKERS_JSON')
+import json, sys
+markers = json.loads(sys.argv[1])
 print(','.join(m['name'] for m in markers))
-" 2>/dev/null || echo "")
+" "$MARKERS_JSON" || echo "")
 
 MARKER_METHOD=$("$MKSEG_PYTHON" -c "
-import json
-markers = json.loads('$MARKERS_JSON')
+import json, sys
+markers = json.loads(sys.argv[1])
 methods = set(m.get('method', 'otsu_half') for m in markers)
-print(methods.pop() if len(methods) == 1 else 'otsu_half')
-" 2>/dev/null || echo "otsu_half")
+if len(methods) > 1:
+    print(f'ERROR: Mixed marker methods not supported in single invocation: {methods}', file=sys.stderr)
+    sys.exit(1)
+print(methods.pop())
+" "$MARKERS_JSON")
 
 # ---------------------------------------------------------------------------
 # Write sbatch script
 # ---------------------------------------------------------------------------
-SBATCH_FILE="/tmp/pipeline_${NAME}.sbatch"
+SBATCH_FILE="/tmp/pipeline_${NAME}_$$.sbatch"
 
 {
     echo "#!/bin/bash"
@@ -180,8 +189,8 @@ SBATCH_FILE="/tmp/pipeline_${NAME}.sbatch"
     echo "#SBATCH --mem=${MEM_GB}G"
     echo "#SBATCH --gres=gpu:${GPUS}"
     echo "#SBATCH --time=${TIME}"
-    echo "#SBATCH --output=/tmp/slurm_${NAME}_%A_%a.out"
-    echo "#SBATCH --error=/tmp/slurm_${NAME}_%A_%a.err"
+    echo "#SBATCH --output=${OUTPUT_DIR}/slurm_${NAME}_%A_%a.out"
+    echo "#SBATCH --error=${OUTPUT_DIR}/slurm_${NAME}_%A_%a.err"
 
     if [[ "$MULTI_SLIDE" == "true" ]]; then
         echo "#SBATCH --array=0-$((NUM_JOBS - 1))"
@@ -228,14 +237,15 @@ SBATCH_FILE="/tmp/pipeline_${NAME}.sbatch"
 
         if [[ -n "$MARKER_CHANNELS" ]]; then
             echo "        echo \"  Classifying markers: $MARKER_NAMES\""
-            echo "        \$MKSEG_PYTHON $REPO/scripts/classify_markers.py --detections \"\$DET_JSON\" --marker-channel $MARKER_CHANNELS --marker-name $MARKER_NAMES --method $MARKER_METHOD --output-dir \"\$SLIDE_OUT\""
+            echo "        \$MKSEG_PYTHON $REPO/scripts/classify_markers.py --detections \"\$DET_JSON\" --marker-channel \"$MARKER_CHANNELS\" --marker-name \"$MARKER_NAMES\" --method \"$MARKER_METHOD\" --output-dir \"\$SLIDE_OUT\""
+            echo "        DET_JSON=\"\${SLIDE_OUT}/${CELL_TYPE}_detections_classified.json\""
         fi
 
         if [[ "$SPATIAL_ENABLED" == "true" ]]; then
             echo ""
             echo "        # Step 3: Spatial analysis"
             echo "        echo \"  Running spatial analysis...\""
-            echo "        \$MKSEG_PYTHON $REPO/scripts/spatial_cell_analysis.py --detections \"\$DET_JSON\" --output-dir \"\$SLIDE_OUT\" --spatial-network --marker-filter $SPATIAL_FILTER --max-edge-distance $SPATIAL_EDGE --min-component-cells $SPATIAL_MIN_COMP --pixel-size $PIXEL_SIZE"
+            echo "        \$MKSEG_PYTHON $REPO/scripts/spatial_cell_analysis.py --detections \"\$DET_JSON\" --output-dir \"\$SLIDE_OUT\" --spatial-network --marker-filter \"$SPATIAL_FILTER\" --max-edge-distance \"$SPATIAL_EDGE\" --min-component-cells \"$SPATIAL_MIN_COMP\" --pixel-size \"$PIXEL_SIZE\""
         fi
 
         echo "    else"
@@ -258,14 +268,15 @@ SBATCH_FILE="/tmp/pipeline_${NAME}.sbatch"
 
         if [[ -n "$MARKER_CHANNELS" ]]; then
             echo "    echo \"Classifying markers: $MARKER_NAMES\""
-            echo "    \$MKSEG_PYTHON $REPO/scripts/classify_markers.py --detections \"\$DET_JSON\" --marker-channel $MARKER_CHANNELS --marker-name $MARKER_NAMES --method $MARKER_METHOD --output-dir \"\$SLIDE_OUT\""
+            echo "    \$MKSEG_PYTHON $REPO/scripts/classify_markers.py --detections \"\$DET_JSON\" --marker-channel \"$MARKER_CHANNELS\" --marker-name \"$MARKER_NAMES\" --method \"$MARKER_METHOD\" --output-dir \"\$SLIDE_OUT\""
+            echo "    DET_JSON=\"\${SLIDE_OUT}/${CELL_TYPE}_detections_classified.json\""
         fi
 
         if [[ "$SPATIAL_ENABLED" == "true" ]]; then
             echo ""
             echo "    # Step 3: Spatial analysis"
             echo "    echo \"Running spatial analysis...\""
-            echo "    \$MKSEG_PYTHON $REPO/scripts/spatial_cell_analysis.py --detections \"\$DET_JSON\" --output-dir \"\$SLIDE_OUT\" --spatial-network --marker-filter $SPATIAL_FILTER --max-edge-distance $SPATIAL_EDGE --min-component-cells $SPATIAL_MIN_COMP --pixel-size $PIXEL_SIZE"
+            echo "    \$MKSEG_PYTHON $REPO/scripts/spatial_cell_analysis.py --detections \"\$DET_JSON\" --output-dir \"\$SLIDE_OUT\" --spatial-network --marker-filter \"$SPATIAL_FILTER\" --max-edge-distance \"$SPATIAL_EDGE\" --min-component-cells \"$SPATIAL_MIN_COMP\" --pixel-size \"$PIXEL_SIZE\""
         fi
 
         echo "else"
@@ -297,4 +308,5 @@ echo "SLURM:    $PARTITION | ${CPUS} CPUs | ${MEM_GB}G RAM | gpu:${GPUS} | ${TIM
 echo "================================================"
 echo ""
 echo "Submitting job..."
+mkdir -p "$OUTPUT_DIR"
 sbatch "$SBATCH_FILE"

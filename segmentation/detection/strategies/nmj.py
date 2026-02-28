@@ -935,63 +935,6 @@ def load_classifier(model_path: str, device=None):
         }
 
 
-def _expand_to_signal_edge_simple(
-    mask: np.ndarray,
-    intensity_image: np.ndarray,
-    low_threshold_percentile: float = 95.0,
-    max_area_growth: float = 1.0
-) -> np.ndarray:
-    """
-    Expand mask to signal boundaries using watershed.
-
-    Standalone version for use with detect_nmjs_simple().
-
-    Args:
-        mask: Initial binary mask (seeds)
-        intensity_image: Grayscale intensity image
-        low_threshold_percentile: Lower threshold for expansion region (default 95)
-        max_area_growth: Maximum fractional growth of mask area (default 1.0 = 100% growth)
-
-    Returns:
-        Expanded binary mask
-    """
-    from skimage.segmentation import watershed
-
-    if mask.sum() == 0:
-        return mask.astype(bool)
-
-    # Calculate max expansion radius based on proportional area growth
-    original_area = mask.sum()
-    effective_radius = np.sqrt(original_area / np.pi)
-    max_expansion_radius = int(np.ceil(effective_radius * (np.sqrt(1 + max_area_growth) - 1)))
-    max_expansion_radius = max(max_expansion_radius, 2)  # At least 2 pixels
-
-    # Create expansion region with lower threshold
-    # Percentile on non-zero pixels only; exclude zeros from expansion
-    valid_intensity = intensity_image[intensity_image > 0]
-    if len(valid_intensity) == 0:
-        return mask.astype(bool)
-    low_threshold = np.percentile(valid_intensity, low_threshold_percentile)
-    expansion_region = (intensity_image > low_threshold) & (intensity_image > 0)
-
-    # Limit expansion to max_expansion_radius from original mask
-    max_reach = binary_dilation(mask, disk(max_expansion_radius))
-    expansion_region = expansion_region & max_reach
-
-    # Negative intensity as elevation (high intensity = low elevation)
-    elevation = -intensity_image.astype(float)
-
-    # Markers: 1 = seed, 2 = background
-    markers = np.zeros_like(mask, dtype=np.int32)
-    markers[mask] = 1
-    markers[~expansion_region] = 2
-
-    # Watershed expansion
-    labels = watershed(elevation, markers, mask=expansion_region)
-
-    return (labels == 1).astype(bool)
-
-
 def detect_nmjs_simple(
     image: np.ndarray,
     intensity_percentile: float = 98,
@@ -1065,7 +1008,8 @@ def detect_nmjs_simple(
             smoothed = binary_opening(smoothed, disk(2))
 
             # Adaptive expansion: grow until signal drops
-            expanded = _expand_to_signal_edge_simple(smoothed, gray)
+            # Reuse the NMJStrategy class method to avoid code duplication
+            expanded = NMJStrategy()._expand_to_signal_edge(smoothed, gray)
 
             # Final smoothing to clean up watershed edges
             final = binary_closing(expanded, disk(1))

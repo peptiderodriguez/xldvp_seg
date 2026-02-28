@@ -127,7 +127,8 @@ def get_pixel_size_um(czi: CziFile) -> float:
             return float(scaling.text) * 1e6  # Convert meters to micrometers
     except Exception as e:
         logger.warning(f"Could not read pixel size from metadata: {e}")
-    return 0.22  # Default pixel size
+    logger.warning("Falling back to default pixel size 0.22 um/px — verify against CZI metadata!")
+    return 0.22  # Default fallback — caller should verify
 
 
 def preflight_check(

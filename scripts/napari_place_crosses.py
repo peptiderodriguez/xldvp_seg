@@ -90,7 +90,7 @@ def load_ome_zarr(zarr_path: str):
     data = node.data  # List of dask arrays for each pyramid level
 
     # Extract pixel size from zarr metadata
-    pixel_size_um = 0.1725  # Default fallback
+    pixel_size_um = None  # Will be read from zarr metadata
 
     try:
         root = zarr.open(zarr_path, mode='r')
@@ -394,6 +394,11 @@ Examples:
     # Override pixel size if provided
     if args.pixel_size is not None:
         pixel_size_um = args.pixel_size
+
+    if pixel_size_um is None:
+        print("ERROR: Could not read pixel size from OME-Zarr metadata. "
+              "Please provide --pixel-size explicitly.")
+        sys.exit(1)
 
     image_height_px, image_width_px = image_shape
 

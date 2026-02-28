@@ -75,7 +75,6 @@ from .multigpu_worker import (
 
 from .multigpu_shm import (
     SharedSlideManager,
-    MultiGPUTileProcessorSHM,
 )
 
 __all__ = [
@@ -132,5 +131,4 @@ __all__ = [
     'MultiGPUTileProcessor',
     # Multi-GPU shared memory
     'SharedSlideManager',
-    'MultiGPUTileProcessorSHM',
 ]

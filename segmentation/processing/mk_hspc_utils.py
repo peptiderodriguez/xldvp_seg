@@ -1,9 +1,8 @@
 """
 MK/HSPC-specific utilities for tile processing and worker functions.
 
-This module provides utility functions shared by the three tile worker functions
-in run_unified_FAST.py, reducing code duplication while maintaining backward
-compatibility with existing pipelines.
+This module provides utility functions shared by tile worker functions,
+reducing code duplication while maintaining backward compatibility.
 
 Functions:
     ensure_rgb_array: Convert image to RGB format

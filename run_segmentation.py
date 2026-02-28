@@ -52,6 +52,7 @@ Usage:
 import os
 import gc
 import re
+import sys
 import json
 import argparse
 import subprocess
@@ -306,6 +307,11 @@ def _resume_generate_html_samples(args, all_detections, tiles_dir,
         tile_pct = _compute_tile_percentiles(tile_rgb) if getattr(args, 'html_normalization', 'crop') == 'tile' else None
 
         # Generate crops for each detection in this tile
+        _vp = {
+            'min_ring_completeness': getattr(args, 'min_ring_completeness', 0.3),
+            'min_circularity': getattr(args, 'min_circularity', 0.15),
+            'min_wall_thickness_um': getattr(args, 'min_wall_thickness', 1.5),
+        } if cell_type == 'vessel' else None
         html_samples = filter_and_create_html_samples(
             tile_dets, tile_x, tile_y, tile_rgb, masks,
             pixel_size_um, slide_name, cell_type,
@@ -314,6 +320,7 @@ def _resume_generate_html_samples(args, all_detections, tiles_dir,
             marker_thresholds=marker_thresholds,
             marker_map=_islet_mm,
             candidate_mode=getattr(args, 'candidate_mode', False),
+            vessel_params=_vp,
         )
         all_samples.extend(html_samples)
 
@@ -405,11 +412,11 @@ def _finish_pipeline(args, all_detections, all_samples, slide_output_dir, tiles_
         det['global_id'] = f"{int(round(_gc[0]))}_{int(round(_gc[1]))}"
 
     detections_file = slide_output_dir / f'{cell_type}_detections.json'
-    from segmentation.utils.timestamps import timestamped_path, _update_symlink
+    from segmentation.utils.timestamps import timestamped_path, update_symlink
     ts_detections = timestamped_path(detections_file)
     with open(ts_detections, 'w') as f:
         json.dump(all_detections, f, cls=NumpyEncoder)
-    _update_symlink(detections_file, ts_detections)
+    update_symlink(detections_file, ts_detections)
     logger.info(f"Saved {len(all_detections)} detections to {ts_detections}")
 
     csv_file = slide_output_dir / f'{cell_type}_coordinates.csv'
@@ -446,7 +453,7 @@ def _finish_pipeline(args, all_detections, all_samples, slide_output_dir, tiles_
                 area_um2 = feat.get('area', 0) * (pixel_size_um ** 2)
                 f.write(f"{det['uid']},{g_center[0]:.1f},{g_center[1]:.1f},"
                         f"{g_center_um[0]:.2f},{g_center_um[1]:.2f},{area_um2:.2f}\n")
-    _update_symlink(csv_file, ts_csv)
+    update_symlink(csv_file, ts_csv)
     logger.info(f"Saved coordinates to {ts_csv}")
 
     # Sort samples: classifier runs → RF score descending; else → area ascending
@@ -1352,7 +1359,7 @@ def filter_and_create_html_samples(
     features_list, tile_x, tile_y, tile_rgb, masks, pixel_size_um,
     slide_name, cell_type, html_score_threshold, min_area_um2=25.0,
     tile_percentiles=None, marker_thresholds=None, marker_map=None,
-    candidate_mode=False,
+    candidate_mode=False, vessel_params=None,
 ):
     """Filter detections by quality and create HTML samples.
 
@@ -1373,12 +1380,16 @@ def filter_and_create_html_samples(
             continue
 
         if cell_type == 'vessel' and not candidate_mode:
-            if features_dict.get('ring_completeness', 1.0) < 0.30:
+            vp = vessel_params or {}
+            min_ring = vp.get('min_ring_completeness', 0.3)
+            min_circ = vp.get('min_circularity', 0.15)
+            min_wt = vp.get('min_wall_thickness_um', 1.5)
+            if features_dict.get('ring_completeness', 1.0) < min_ring:
                 continue
-            if features_dict.get('circularity', 1.0) < 0.15:
+            if features_dict.get('circularity', 1.0) < min_circ:
                 continue
             wt = features_dict.get('wall_thickness_mean_um')
-            if wt is not None and wt < 1.5:
+            if wt is not None and wt < min_wt:
                 continue
 
         sample = create_sample_from_detection(
@@ -1699,7 +1710,7 @@ def create_sample_from_detection(tile_x, tile_y, tile_rgb, masks, feat, pixel_si
     crop_with_contour = draw_mask_contour(crop_norm, crop_mask, color=contour_color, thickness=2, bw_dashed=_bw)
 
     # Keep at 224x224 (same as classifier input) - already correct size from crop
-    img_b64, mime = image_to_base64(crop_with_contour, format='PNG')
+    img_b64, mime = image_to_base64(crop_with_contour, format='JPEG')
 
     # Create unique ID using global coordinates (consistent with detection JSON)
     # Global center = tile origin + local center
@@ -1843,6 +1854,11 @@ def run_pipeline(args):
     # Default is RAM loading for single slides (best performance on network mounts)
     use_ram = args.load_to_ram  # Default True for single slide processing
 
+    if not use_ram:
+        logger.error("--no-ram is not supported with the multi-GPU pipeline. "
+                     "The pipeline requires --load-to-ram (default). Remove --no-ram flag.")
+        sys.exit(1)
+
     logger.info("Loading CZI file with get_loader() (RAM-first architecture)...")
     loader = get_loader(
         czi_path,
@@ -1938,26 +1954,30 @@ def run_pipeline(args):
             # Note: uses float64 internally, may need ~4x memory temporarily
             corrected = normalize_rows_columns(ch_data)
 
-            # Convert back to original dtype
+            # Convert back to original dtype (in-place clip to avoid extra copy)
             if original_dtype == np.uint16:
-                corrected = np.clip(corrected, 0, 65535).astype(np.uint16)
+                np.clip(corrected, 0, 65535, out=corrected)
+                corrected = corrected.astype(np.uint16)
             elif original_dtype == np.uint8:
-                corrected = np.clip(corrected, 0, 255).astype(np.uint8)
+                np.clip(corrected, 0, 255, out=corrected)
+                corrected = corrected.astype(np.uint8)
             else:
-                # Keep as float but match original dtype if possible
                 corrected = corrected.astype(original_dtype)
 
-            # Update in-place
+            # Update all_channel_data AND loader's internal cache to free stale data.
+            # Without this, the loader holds the old pre-correction array
+            # (~45 GB per channel) even after all_channel_data is updated.
             all_channel_data[ch] = corrected
-
-            # Also update loader.channel_data if this is the primary channel
-            if ch == args.channel:
-                loader.channel_data = corrected
+            if hasattr(loader, 'set_channel_data'):
+                loader.set_channel_data(ch, corrected)
 
             # Report severity after
             severity_after = estimate_band_severity(corrected)
             logger.info(f"  Channel {ch} after:  row_cv={severity_after['row_cv']:.1f}%, "
                        f"col_cv={severity_after['col_cv']:.1f}% ({severity_after['severity']})")
+
+            # Drop the local reference so GC can free any intermediate float64 arrays
+            del corrected
 
             # Force garbage collection after each channel to free float64 intermediate
             gc.collect()
@@ -2016,20 +2036,27 @@ def run_pipeline(args):
         # Build RGB image for normalization
         primary_data = loader.channel_data
         if primary_data.ndim == 3 and primary_data.shape[2] >= 3:
-            # Already RGB (or more channels) — use first 3
-            rgb_for_norm = primary_data[:, :, :3].copy()
+            # Already RGB (or more channels) — use first 3 (view, not copy)
+            rgb_for_norm = primary_data[:, :, :3]
+            # Convert to uint8 if needed (Reinhard expects uint8)
+            if rgb_for_norm.dtype == np.uint16:
+                logger.info(f"  Converting uint16 → uint8 for normalization ({rgb_for_norm.nbytes / 1e9:.1f} GB)")
+                rgb_for_norm = (rgb_for_norm >> 8).astype(np.uint8)
+            elif rgb_for_norm.dtype != np.uint8:
+                rgb_for_norm = rgb_for_norm.astype(np.uint8)
         elif primary_data.ndim == 2:
-            # Single channel — stack 3x (same as compute_normalization_params.py)
-            rgb_for_norm = np.stack([primary_data] * 3, axis=-1)
+            # Single channel: convert to uint8 FIRST, then stack 3x.
+            # This avoids creating a 3-channel uint16 copy (3x memory waste).
+            single_u8 = primary_data
+            if single_u8.dtype == np.uint16:
+                logger.info(f"  Converting single-channel uint16 → uint8 before stacking ({single_u8.nbytes / 1e9:.1f} GB)")
+                single_u8 = (single_u8 >> 8).astype(np.uint8)
+            elif single_u8.dtype != np.uint8:
+                single_u8 = single_u8.astype(np.uint8)
+            rgb_for_norm = np.stack([single_u8] * 3, axis=-1)
+            del single_u8
         else:
             raise ValueError(f"Unexpected channel data shape for normalization: {primary_data.shape}")
-
-        # Convert to uint8 if needed (Reinhard expects uint8)
-        if rgb_for_norm.dtype == np.uint16:
-            logger.info(f"  Converting uint16 → uint8 for normalization ({rgb_for_norm.nbytes / 1e9:.1f} GB)")
-            rgb_for_norm = (rgb_for_norm / 256).astype(np.uint8)
-        elif rgb_for_norm.dtype != np.uint8:
-            rgb_for_norm = rgb_for_norm.astype(np.uint8)
 
         logger.info(f"  RGB shape: {rgb_for_norm.shape}, dtype: {rgb_for_norm.dtype} ({rgb_for_norm.nbytes / 1e9:.1f} GB)")
         logger.info(f"  Applying Reinhard normalization (this normalizes tissue blocks, preserves background)...")
@@ -2040,13 +2067,15 @@ def run_pipeline(args):
 
         # Update channel data with normalized values
         if primary_data.ndim == 3 and primary_data.shape[2] >= 3:
-            # Replace the 3 RGB channels
+            # Only split normalized RGB back to individual channels if all_channel_data
+            # was built from a single 3-channel loader (channels 0,1,2 from RGB CZI)
             loader.channel_data = normalized_rgb
             all_channel_data[args.channel] = normalized_rgb
-            # Also update individual extra channels if loaded
+            # Only update individual channels if they came from the RGB decomposition
             ch_keys = sorted(all_channel_data.keys())
-            for i, ch_key in enumerate(ch_keys[:3]):
-                all_channel_data[ch_key] = normalized_rgb[:, :, i]
+            if len(ch_keys) >= 3 and ch_keys[:3] == [0, 1, 2]:
+                for i in range(3):
+                    all_channel_data[i] = normalized_rgb[:, :, i]
         else:
             # Single channel — take first channel from normalized RGB
             normalized_single = normalized_rgb[:, :, 0].copy()
@@ -2315,7 +2344,6 @@ def run_pipeline(args):
     # CellDetector with strategy pattern
     # Note: mesothelium strategy doesn't need SAM2 (uses ridge detection)
     detector = CellDetector(device="cuda")
-    segmenter = None  # Not used for these cell types
 
     # Load NMJ classifier if provided (supports CNN .pth or RF .pkl)
     classifier_loaded = False
@@ -2574,7 +2602,11 @@ def run_pipeline(args):
         # Free original channel data — everything is now in shared memory
         mem_freed_gb = sum(arr.nbytes for arr in all_channel_data.values()) / (1024**3)
         del all_channel_data
-        loader.channel_data = None
+        # Clear ALL loader channel data (not just primary) to free memory
+        if hasattr(loader, 'clear_all_channels'):
+            loader.clear_all_channels()
+        else:
+            loader.channel_data = None
         gc.collect()
         logger.info(f"Freed all_channel_data ({mem_freed_gb:.1f} GB) — using shared memory for all reads")
 
@@ -2743,75 +2775,82 @@ def run_pipeline(args):
                         pbar.update(1)
 
                         if result['status'] == 'success':
-                            tile_dict = result['tile']
-                            features_list = result['features_list']
-                            sf = result.get('scale_factor', scale)
-                            tx_s = tile_dict.get('tile_x_scaled', 0)
-                            ty_s = tile_dict.get('tile_y_scaled', 0)
+                            try:
+                                tile_dict = result['tile']
+                                features_list = result['features_list']
+                                sf = result.get('scale_factor', scale)
+                                tx_s = tile_dict.get('tile_x_scaled', 0)
+                                ty_s = tile_dict.get('tile_y_scaled', 0)
 
-                            # Apply vessel classifiers
-                            apply_vessel_classifiers(features_list, vessel_classifier, vessel_type_classifier)
+                                # Apply vessel classifiers
+                                apply_vessel_classifiers(features_list, vessel_classifier, vessel_type_classifier)
 
-                            # Convert each detection from downscaled-local to full-res global
-                            for feat in features_list:
-                                # FIX 1: Promote contour keys — detections_to_features_list
-                                # outputs 'outer_contour'/'inner_contour' but
-                                # convert_detection_to_full_res expects 'outer'/'inner'
-                                if 'outer_contour' in feat and 'outer' not in feat:
-                                    feat['outer'] = feat.pop('outer_contour')
-                                if 'inner_contour' in feat and 'inner' not in feat:
-                                    feat['inner'] = feat.pop('inner_contour')
-                                if feat.get('features', {}).get('detection_type') == 'arc':
-                                    feat['is_arc'] = True
+                                # Convert each detection from downscaled-local to full-res global
+                                for feat in features_list:
+                                    # FIX 1: Promote contour keys — detections_to_features_list
+                                    # outputs 'outer_contour'/'inner_contour' but
+                                    # convert_detection_to_full_res expects 'outer'/'inner'
+                                    if 'outer_contour' in feat and 'outer' not in feat:
+                                        feat['outer'] = feat.pop('outer_contour')
+                                    if 'inner_contour' in feat and 'inner' not in feat:
+                                        feat['inner'] = feat.pop('inner_contour')
+                                    if feat.get('features', {}).get('detection_type') == 'arc':
+                                        feat['is_arc'] = True
 
-                                det_fullres = convert_detection_to_full_res(
-                                    feat, sf, tx_s, ty_s,
-                                    smooth=True,
-                                    smooth_base_factor=getattr(args, 'smooth_contours_factor', 3.0),
-                                )
+                                    det_fullres = convert_detection_to_full_res(
+                                        feat, sf, tx_s, ty_s,
+                                        smooth=True,
+                                        smooth_base_factor=getattr(args, 'smooth_contours_factor', 3.0),
+                                    )
 
-                                # FIX 2: Add mosaic origin — convert_detection_to_full_res
-                                # produces mosaic-relative coords (0-indexed into shm).
-                                # Add (x_start, y_start) for CZI-global coords matching
-                                # the regular pipeline.
-                                for key in ('center', 'centroid'):
-                                    if key in det_fullres:
-                                        det_fullres[key][0] += x_start
-                                        det_fullres[key][1] += y_start
-                                feats_d = det_fullres.get('features', {})
-                                if isinstance(feats_d, dict):
-                                    # features['center'] not scaled by convert_detection_to_full_res
-                                    if 'center' in feats_d and feats_d['center'] is not None:
-                                        fc = feats_d['center']
-                                        feats_d['center'] = [
-                                            (fc[0] + tx_s) * sf + x_start,
-                                            (fc[1] + ty_s) * sf + y_start,
-                                        ]
-                                    # outer_center/inner_center already scaled, add mosaic origin
-                                    for ck in ('outer_center', 'inner_center'):
-                                        if ck in feats_d and feats_d[ck] is not None:
-                                            feats_d[ck][0] += x_start
-                                            feats_d[ck][1] += y_start
-                                mosaic_offset = np.array([x_start, y_start], dtype=np.int32)
-                                if 'outer' in det_fullres and det_fullres['outer'] is not None:
-                                    det_fullres['outer'] = det_fullres['outer'] + mosaic_offset
-                                if 'inner' in det_fullres and det_fullres['inner'] is not None:
-                                    det_fullres['inner'] = det_fullres['inner'] + mosaic_offset
+                                    # FIX 2: Add mosaic origin — convert_detection_to_full_res
+                                    # produces mosaic-relative coords (0-indexed into shm).
+                                    # Add (x_start, y_start) for CZI-global coords matching
+                                    # the regular pipeline.
+                                    for key in ('center', 'centroid'):
+                                        if key in det_fullres:
+                                            det_fullres[key][0] += x_start
+                                            det_fullres[key][1] += y_start
+                                    feats_d = det_fullres.get('features', {})
+                                    if isinstance(feats_d, dict):
+                                        # features['center'] not scaled by convert_detection_to_full_res
+                                        if 'center' in feats_d and feats_d['center'] is not None:
+                                            fc = feats_d['center']
+                                            feats_d['center'] = [
+                                                (fc[0] + tx_s) * sf + x_start,
+                                                (fc[1] + ty_s) * sf + y_start,
+                                            ]
+                                        # outer_center/inner_center already scaled, add mosaic origin
+                                        for ck in ('outer_center', 'inner_center'):
+                                            if ck in feats_d and feats_d[ck] is not None:
+                                                feats_d[ck][0] += x_start
+                                                feats_d[ck][1] += y_start
+                                    mosaic_offset = np.array([x_start, y_start], dtype=np.int32)
+                                    if 'outer' in det_fullres and det_fullres['outer'] is not None:
+                                        det_fullres['outer'] = det_fullres['outer'] + mosaic_offset
+                                    if 'inner' in det_fullres and det_fullres['inner'] is not None:
+                                        det_fullres['inner'] = det_fullres['inner'] + mosaic_offset
 
-                                # FIX 3: Rebuild outer_contour/outer_contour_global from
-                                # scaled+offset contours (worker created these in downscaled
-                                # local space with tile_x=0, tile_y=0)
-                                for ckey in ('outer', 'inner'):
-                                    if ckey in det_fullres and det_fullres[ckey] is not None:
-                                        det_fullres[f'{ckey}_contour'] = det_fullres[ckey]
-                                        det_fullres[f'{ckey}_contour_global'] = [
-                                            [int(pt[0][0]), int(pt[0][1])]
-                                            for pt in det_fullres[ckey]
-                                        ]
+                                    # FIX 3: Rebuild outer_contour/outer_contour_global from
+                                    # scaled+offset contours (worker created these in downscaled
+                                    # local space with tile_x=0, tile_y=0)
+                                    for ckey in ('outer', 'inner'):
+                                        if ckey in det_fullres and det_fullres[ckey] is not None:
+                                            det_fullres[f'{ckey}_contour'] = det_fullres[ckey]
+                                            det_fullres[f'{ckey}_contour_global'] = [
+                                                [int(pt[0][0]), int(pt[0][1])]
+                                                for pt in det_fullres[ckey]
+                                            ]
 
-                                det_fullres['scale_detected'] = sf
-                                all_scale_detections.append(det_fullres)
-                                scale_det_count += 1
+                                    det_fullres['scale_detected'] = sf
+                                    all_scale_detections.append(det_fullres)
+                                    scale_det_count += 1
+
+                            except Exception as e:
+                                import traceback
+                                _tid = result.get('tid', '?')
+                                logger.error(f"Error post-processing multiscale tile {_tid}: {e}")
+                                logger.error(f"Traceback:\n{traceback.format_exc()}")
 
                         elif result['status'] == 'error':
                             logger.warning(f"Tile {result['tid']} error: {result.get('error', 'unknown')}")
@@ -2962,6 +3001,10 @@ def run_pipeline(args):
                             masks = result['masks']
                             features_list = result['features_list']
 
+                            # Skip tiles with no detections (masks=None from worker)
+                            if masks is None or len(features_list) == 0:
+                                continue
+
                             # Apply vessel classifier post-processing BEFORE saving
                             if args.cell_type == 'vessel':
                                 apply_vessel_classifiers(features_list, vessel_classifier, vessel_type_classifier)
@@ -3060,6 +3103,7 @@ def run_pipeline(args):
                                         args.html_score_threshold,
                                         tile_percentiles=tile_pct,
                                         candidate_mode=args.candidate_mode,
+                                        vessel_params=params if args.cell_type == 'vessel' else None,
                                     )
                                     all_samples.extend(html_samples)
                                 total_detections += len(features_list)
@@ -3101,34 +3145,51 @@ def run_pipeline(args):
                         logger.info(f"Islet marker classification: {counts}")
                     # Build UID→marker_class lookup for injecting into reloaded features
                     uid_to_marker = {d.get('uid', ''): d.get('marker_class') for d in all_detections}
-                    for dt in deferred_html_tiles:
-                        # Reload tile data from disk (one at a time to control memory)
-                        _td = Path(dt['tile_dir'])
-                        _tile_rgb = np.load(_td / 'tile_rgb_html.npy')
-                        with h5py.File(_td / f'{args.cell_type}_masks.h5', 'r') as _hf:
-                            _tile_masks = _hf['masks'][:]
-                        with open(_td / f'{args.cell_type}_features.json', 'r') as _ff:
-                            _tile_feats = json.load(_ff)
-                        # Inject marker_class into reloaded features
-                        for _feat in _tile_feats:
-                            _mc = uid_to_marker.get(_feat.get('uid', ''))
-                            if _mc:
-                                _feat['marker_class'] = _mc
-                        html_samples = filter_and_create_html_samples(
-                            _tile_feats, dt['tile_x'], dt['tile_y'],
-                            _tile_rgb, _tile_masks,
-                            pixel_size_um, slide_name, args.cell_type,
-                            args.html_score_threshold,
-                            tile_percentiles=dt['tile_pct'],
-                            marker_thresholds=marker_thresholds,
-                            marker_map=_islet_mm,
-                            candidate_mode=args.candidate_mode,
-                        )
-                        all_samples.extend(html_samples)
-                        del _tile_rgb, _tile_masks, _tile_feats
-                        gc.collect()
-                    deferred_html_tiles = []  # clear metadata
-                    gc.collect()  # free ~1.6 GB of retained tile data
+                    try:
+                        for dt in deferred_html_tiles:
+                            # Reload tile data from disk (one at a time to control memory)
+                            _td = Path(dt['tile_dir'])
+                            _tile_rgb = np.load(_td / 'tile_rgb_html.npy')
+                            with h5py.File(_td / f'{args.cell_type}_masks.h5', 'r') as _hf:
+                                _tile_masks = _hf['masks'][:]
+                            with open(_td / f'{args.cell_type}_features.json', 'r') as _ff:
+                                _tile_feats = json.load(_ff)
+                            # Inject marker_class into reloaded features
+                            for _feat in _tile_feats:
+                                _mc = uid_to_marker.get(_feat.get('uid', ''))
+                                if _mc:
+                                    _feat['marker_class'] = _mc
+                            html_samples = filter_and_create_html_samples(
+                                _tile_feats, dt['tile_x'], dt['tile_y'],
+                                _tile_rgb, _tile_masks,
+                                pixel_size_um, slide_name, args.cell_type,
+                                args.html_score_threshold,
+                                tile_percentiles=dt['tile_pct'],
+                                marker_thresholds=marker_thresholds,
+                                marker_map=_islet_mm,
+                                candidate_mode=args.candidate_mode,
+                                vessel_params=params if args.cell_type == 'vessel' else None,
+                            )
+                            all_samples.extend(html_samples)
+                            # Clean up deferred temp files
+                            _npy_path = _td / 'tile_rgb_html.npy'
+                            if _npy_path.exists():
+                                _npy_path.unlink()
+                            _pct_path = _td / 'tile_pct.json'
+                            if _pct_path.exists():
+                                _pct_path.unlink()
+                            del _tile_rgb, _tile_masks, _tile_feats
+                            gc.collect()
+                    finally:
+                        # Ensure ALL deferred .npy files are cleaned up even on error
+                        for dt in deferred_html_tiles:
+                            _td = Path(dt['tile_dir'])
+                            for _tmp in ('tile_rgb_html.npy', 'tile_pct.json'):
+                                _p = _td / _tmp
+                                if _p.exists():
+                                    _p.unlink()
+                        deferred_html_tiles = []
+                    gc.collect()
 
             logger.info(f"Processing complete: {total_detections} {args.cell_type} detections from {results_collected} tiles")
 

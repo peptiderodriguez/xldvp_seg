@@ -13,6 +13,7 @@ Provides a consistent dark-themed annotation interface for all cell types
 import base64
 import html as html_mod
 import json
+import warnings
 from io import BytesIO
 from pathlib import Path
 from PIL import Image
@@ -279,14 +280,14 @@ def draw_mask_contour(img_array, mask, color=(0, 255, 0), thickness=2, dotted=Fa
         return img_out
 
     if dotted:
-        for i, (y, x) in enumerate(zip(ys, xs)):
-            if i % 3 == 0:  # Every 3rd pixel for dotted effect
-                if 0 <= y < img_out.shape[0] and 0 <= x < img_out.shape[1]:
-                    img_out[y, x] = color
+        # Subsample every 3rd pixel for dotted effect
+        dot_mask = np.zeros(len(ys), dtype=bool)
+        dot_mask[::3] = True
+        ys_draw, xs_draw = ys[dot_mask], xs[dot_mask]
     else:
-        for y, x in zip(ys, xs):
-            if 0 <= y < img_out.shape[0] and 0 <= x < img_out.shape[1]:
-                img_out[y, x] = color
+        ys_draw, xs_draw = ys, xs
+    valid = (ys_draw >= 0) & (ys_draw < img_out.shape[0]) & (xs_draw >= 0) & (xs_draw < img_out.shape[1])
+    img_out[ys_draw[valid], xs_draw[valid]] = color
 
     return img_out
 
@@ -954,6 +955,8 @@ def generate_annotation_page(
         uid = _esc(sample['uid'])
         img_b64 = sample['image']
         mime = sample.get('mime_type', 'jpeg')
+        if mime not in ('jpeg', 'png'):
+            mime = 'jpeg'  # Safe default
         stats = sample.get('stats', {})
 
         # Format stats line
@@ -2423,7 +2426,7 @@ def export_mk_hspc_html_from_ram(slide_data, output_base, html_output_dir, sampl
     all_mk_samples = []
     all_hspc_samples = []
 
-    PIXEL_SIZE_UM = 0.1725  # Default pixel size
+    _LEGACY_PIXEL_SIZE_UM = 0.1725  # DEPRECATED: Only used as last-resort fallback
 
     for slide_name, data in slide_data.items():
         slide_dir = output_base / slide_name
@@ -2435,13 +2438,19 @@ def export_mk_hspc_html_from_ram(slide_data, output_base, html_output_dir, sampl
 
         # Get pixel size from summary
         summary_file = slide_dir / "summary.json"
-        pixel_size_um = PIXEL_SIZE_UM
+        pixel_size_um = _LEGACY_PIXEL_SIZE_UM
         if summary_file.exists():
             with open(summary_file) as f:
                 summary = json.load(f)
                 ps = summary.get('pixel_size_um')
                 if ps:
                     pixel_size_um = ps[0] if isinstance(ps, list) else ps
+        if pixel_size_um == _LEGACY_PIXEL_SIZE_UM:
+            warnings.warn(
+                f"Using legacy fallback pixel size {_LEGACY_PIXEL_SIZE_UM} um/px. "
+                "Provide pixel_size_um in summary.json for accurate results.",
+                stacklevel=2,
+            )
 
         slide_image = data['image']
 
@@ -2474,7 +2483,7 @@ def export_mk_hspc_html_from_ram(slide_data, output_base, html_output_dir, sampl
             logger.info(f"    {len(mk_samples)} MKs, {len(hspc_samples)} HSPCs")
 
     # Filter MK by size
-    um_to_px_factor = PIXEL_SIZE_UM ** 2
+    um_to_px_factor = _LEGACY_PIXEL_SIZE_UM ** 2
     mk_min_px = int(mk_min_area_um / um_to_px_factor)
     mk_max_px = int(mk_max_area_um / um_to_px_factor)
 
@@ -3569,6 +3578,8 @@ def generate_vessel_annotation_page(
         img_b64 = sample['image']
         img_raw_b64 = sample.get('image_raw')  # Raw image without contours
         mime = sample.get('mime_type', 'jpeg')
+        if mime not in ('jpeg', 'png'):
+            mime = 'jpeg'  # Safe default
         feat = sample.get('features', {})
 
         # Format stats line with vessel-specific features

@@ -33,23 +33,7 @@ from typing import Dict, Any, Optional, List, Union, TypedDict, Tuple
 import numpy as np
 
 
-class _NumpyEncoder(json.JSONEncoder):
-    """JSON encoder that handles numpy types.
-
-    numpy integers, floats, booleans, and arrays are converted to their
-    Python equivalents so that ``json.dump`` does not raise a TypeError.
-    """
-
-    def default(self, obj):
-        if isinstance(obj, np.integer):
-            return int(obj)
-        if isinstance(obj, np.floating):
-            return float(obj)
-        if isinstance(obj, np.bool_):
-            return bool(obj)
-        if isinstance(obj, np.ndarray):
-            return obj.tolist()
-        return super().default(obj)
+from segmentation.utils.json_utils import NumpyEncoder as _NumpyEncoder
 
 
 # =============================================================================
@@ -968,7 +952,7 @@ def get_config_summary(
 
 
 # =============================================================================
-# EXTRACTED MAGIC NUMBERS FROM run_unified_FAST.py
+# EXTRACTED MAGIC NUMBERS (detection pipeline constants)
 # =============================================================================
 
 # Feature extraction dimensions — FULL PIPELINE values.
@@ -988,17 +972,23 @@ def get_config_summary(
 #   (Exact count varies by cell type and number of channels; 78 is the empirical
 #    value from the 3-channel NMJ classifier training.)
 #
-# SAM2: 256D embedding vectors (always extracted)
-# ResNet50: 2x 2048D = 4096 (masked + context, opt-in via --extract-deep-features)
-# DINOv2-L: 2x 1024D = 2048 (masked + context, opt-in via --extract-deep-features)
+# Full-pipeline feature dimensions.
+# These are the TOTAL dimensions produced by the detection pipeline (masked + context
+# crops combined). The per-function "single-pass" constants live in
+# segmentation/utils/feature_extraction.py:
+#   feature_extraction.MORPHOLOGICAL_FEATURE_COUNT = 22  (base only; 78 after NMJ + multi-ch)
+#   feature_extraction.SAM2_EMBEDDING_DIM = 256          (same — no doubling for SAM2)
+#   feature_extraction.RESNET50_FEATURE_DIM = 2048       (single pass; doubled here for masked+ctx)
+#   (DINOv2 ViT-L/14 produces 1024 per pass; doubled here for masked+ctx)
 MORPHOLOGICAL_FEATURES_COUNT = 78      # Full-pipeline morphological features (see breakdown above)
-SAM2_EMBEDDING_DIMENSION = 256         # SAM2 256D embedding vectors
-RESNET_EMBEDDING_DIMENSION = 4096      # ResNet50 2x2048D (masked + context)
+SAM2_EMBEDDING_DIMENSION = 256         # SAM2 256D embedding vectors (= feature_extraction.SAM2_EMBEDDING_DIM)
+RESNET_EMBEDDING_DIMENSION = 4096      # ResNet50 2x2048D (= 2 * feature_extraction.RESNET50_FEATURE_DIM)
 DINOV2_EMBEDDING_DIMENSION = 2048      # DINOv2-L 2x1024D (masked + context)
 TOTAL_FEATURES_PER_CELL = 6478         # Total: 78 + 256 + 4096 + 2048
 
-# Pixel size constants (lines 649, 660, 696, 3364, 3365)
-DEFAULT_PIXEL_SIZE_UM = 0.1725         # Default pixel size in micrometers per pixel
+# DEPRECATED: Do not use. Always read pixel_size from CZI metadata via loader.get_pixel_size().
+# Retained only so old test assertions don't break. All production code must use CZI metadata.
+_LEGACY_PIXEL_SIZE_UM = 0.1725
 
 # Batch processing sizes (lines 1119, 1128, 1138, 1185, 1195)
 RESNET_INFERENCE_BATCH_SIZE = 16       # Default batch size for ResNet inference

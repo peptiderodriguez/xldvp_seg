@@ -16,8 +16,12 @@ Usage:
     result = two_stage_clustering(detections, pixel_size=0.1725)
 """
 
+import logging
 import numpy as np
+from scipy.spatial import cKDTree
 from typing import List, Dict, Tuple, Optional
+
+logger = logging.getLogger(__name__)
 
 
 def get_detection_area_um2(det: Dict, pixel_size: float) -> float:
@@ -92,8 +96,11 @@ def cluster_detections_greedy_area(
     failed_seeds = set()  # Seeds that couldn't grow - prevent infinite loop
     clusters = []
 
+    # Build spatial index for O(log N) nearest-neighbor queries
+    tree = cKDTree(coords)
+
     # Sort by position (top-left to bottom-right) for deterministic seeding
-    sort_order = np.argsort(coords[:, 0] + coords[:, 1])
+    sort_order = np.lexsort((coords[:, 1], coords[:, 0]))
 
     while unclustered - failed_seeds:
         # Pick first unclustered (non-failed) in sorted order as seed
@@ -115,13 +122,15 @@ def cluster_detections_greedy_area(
             if total_area >= area_max:
                 break
 
-            # Find nearest unclustered within distance threshold
+            # Find nearest unclustered within distance threshold using cKDTree
+            candidates = tree.query_ball_point(cluster_centroid, dist_threshold)
             best_idx = None
             best_dist = float('inf')
-
-            for idx in unclustered:
+            for idx in candidates:
+                if idx not in unclustered:
+                    continue
                 dist = np.linalg.norm(coords[idx] - cluster_centroid)
-                if dist < best_dist and dist <= dist_threshold:
+                if dist < best_dist:
                     best_dist = dist
                     best_idx = idx
 
@@ -135,9 +144,22 @@ def cluster_detections_greedy_area(
                 cluster.append(best_idx)
                 unclustered.remove(best_idx)
                 total_area = new_total
-                # Update centroid incrementally
-                n = len(cluster)
-                cluster_centroid = (cluster_centroid * (n - 1) + coords[best_idx]) / n
+                # Area-weighted centroid update — heavier detections pull
+                # the centroid more, producing shorter LMD laser paths.
+                if areas is not None:
+                    total_area_before = sum(areas[i] for i in cluster[:-1]) if len(cluster) > 1 else 0
+                    new_area = areas[best_idx]
+                    total_area_w = total_area_before + new_area
+                    if total_area_w > 0:
+                        cluster_centroid = (cluster_centroid * total_area_before + coords[best_idx] * new_area) / total_area_w
+                    else:
+                        # Fallback to unweighted
+                        n = len(cluster)
+                        cluster_centroid = (cluster_centroid * (n - 1) + coords[best_idx]) / n
+                else:
+                    # No areas available, use unweighted
+                    n = len(cluster)
+                    cluster_centroid = (cluster_centroid * (n - 1) + coords[best_idx]) / n
             else:
                 # Adding would overshoot beyond midpoint benefit - stop this cluster
                 break
@@ -225,15 +247,15 @@ def two_stage_clustering(
     local_indices = list(range(len(valid_indices)))
 
     # Round 1: tight distance
-    print(f"  Round 1: dist_threshold={dist_round1} um ...")
+    logger.info(f"  Round 1: dist_threshold={dist_round1} um ...")
     clusters_r1, remaining_r1 = cluster_detections_greedy_area(
         local_indices, coords_arr, areas_arr,
         dist_threshold=dist_round1, area_min=area_min, area_max=area_max,
     )
-    print(f"    Clusters: {len(clusters_r1)}, Remaining: {len(remaining_r1)}")
+    logger.info(f"    Clusters: {len(clusters_r1)}, Remaining: {len(remaining_r1)}")
 
     # Round 2: looser distance on remaining
-    print(f"  Round 2: dist_threshold={dist_round2} um ...")
+    logger.info(f"  Round 2: dist_threshold={dist_round2} um ...")
     if remaining_r1:
         remaining_coords = coords_arr[remaining_r1]
         remaining_areas = areas_arr[remaining_r1]
@@ -248,7 +270,7 @@ def two_stage_clustering(
         clusters_r2 = []
         remaining_final = []
 
-    print(f"    Clusters: {len(clusters_r2)}, Remaining: {len(remaining_final)}")
+    logger.info(f"    Clusters: {len(clusters_r2)}, Remaining: {len(remaining_final)}")
 
     all_clusters = clusters_r1 + clusters_r2
 

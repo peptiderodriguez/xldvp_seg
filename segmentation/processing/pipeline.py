@@ -54,6 +54,7 @@ from segmentation.processing.coordinates import (
     extract_crop,
 )
 from segmentation.io.html_export import export_samples_to_html
+from segmentation.utils.json_utils import NumpyEncoder
 
 
 class DetectionPipeline:
@@ -126,6 +127,11 @@ class DetectionPipeline:
 
         # Get pixel size
         self.pixel_size = self.loader.get_pixel_size()
+        if self.pixel_size is None:
+            raise ValueError(
+                f"CZI file has no pixel size metadata. "
+                f"Provide --pixel-size-um on the command line."
+            )
 
         # Storage for results
         self.detections: List[Dict[str, Any]] = []
@@ -294,7 +300,7 @@ class DetectionPipeline:
         }
 
         with open(output_path, 'w') as f:
-            json.dump(data, f)
+            json.dump(data, f, cls=NumpyEncoder)
 
         if not self.quiet:
             print(f"Results saved to: {output_path}")

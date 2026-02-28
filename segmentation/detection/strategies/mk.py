@@ -251,7 +251,7 @@ class MKStrategy(DetectionStrategy, MultiChannelFeatureMixin):
     def detect(self,
                tile: np.ndarray,
                models: Dict[str, Any],
-               pixel_size_um: float = 0.22,
+               pixel_size_um: float = None,
                extract_features: bool = True,
                extra_channels: Dict[int, np.ndarray] = None) -> Tuple[np.ndarray, List[Detection]]:
         """
@@ -273,7 +273,7 @@ class MKStrategy(DetectionStrategy, MultiChannelFeatureMixin):
                 - 'resnet': ResNet model (for features)
                 - 'resnet_transform': torchvision transform
                 - 'mk_classifier': Optional classifier model
-            pixel_size_um: Pixel size in micrometers (default 0.22)
+            pixel_size_um: Pixel size in micrometers (required, from CZI metadata)
             extract_features: Whether to extract full features
             extra_channels: Dict mapping channel index to 2D uint16 array for
                 per-channel feature extraction (optional)
@@ -283,6 +283,9 @@ class MKStrategy(DetectionStrategy, MultiChannelFeatureMixin):
         """
         import torch
         from scipy import ndimage
+
+        if pixel_size_um is None:
+            raise ValueError("pixel_size_um is required for MK area filtering — do not rely on defaults")
 
         # Convert area thresholds from um^2 to pixels
         min_area_px = self.min_area_um / (pixel_size_um ** 2)

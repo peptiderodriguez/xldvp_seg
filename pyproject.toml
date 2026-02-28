@@ -53,7 +53,7 @@ dev = [
 
 [project.scripts]
 # Main entry points
-mkseg = "run_unified_FAST:main"
+mkseg = "run_segmentation:main"
 mkseg-nmj = "run_segmentation:main"
 mkseg-serve = "serve_html:main"
 
@@ -63,12 +63,11 @@ mkseg-serve = "serve_html:main"
 
 [tool.setuptools]
 py-modules = [
-    "run_unified_FAST",
     "run_segmentation",
-    "run_nmj_segmentation",
-    "run_nmj_inference",
     "run_lmd_export",
     "serve_html",
+    "train_classifier",
+    "compute_normalization_params",
 ]
 
 [tool.setuptools.packages.find]

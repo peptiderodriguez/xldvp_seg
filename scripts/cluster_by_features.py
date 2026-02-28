@@ -53,8 +53,14 @@ import re
 import sys
 from pathlib import Path
 
+# Add repo root to path
+REPO = Path(__file__).resolve().parent.parent
+sys.path.insert(0, str(REPO))
+
 import numpy as np
 import pandas as pd
+
+from segmentation.utils.json_utils import sanitize_for_json
 
 
 # Default islet marker mapping (backward compatibility)
@@ -65,25 +71,7 @@ _ISLET_MARKER_DEFAULTS = {
 }
 
 
-def sanitize_for_json(obj):
-    """Recursively replace NaN/inf with None in nested structures.
-
-    json.dump(default=) only fires for non-serializable types.
-    Python float NaN IS serializable (outputs non-standard "NaN" token),
-    so we must walk the structure recursively to catch them.
-    """
-    if isinstance(obj, dict):
-        return {k: sanitize_for_json(v) for k, v in obj.items()}
-    if isinstance(obj, (list, tuple)):
-        return [sanitize_for_json(v) for v in obj]
-    if isinstance(obj, (float, np.floating)):
-        v = float(obj)
-        return None if (math.isnan(v) or math.isinf(v)) else v
-    if isinstance(obj, np.integer):
-        return int(obj)
-    if isinstance(obj, np.ndarray):
-        return sanitize_for_json(obj.tolist())
-    return obj
+# sanitize_for_json imported from segmentation.utils.json_utils
 
 
 def parse_marker_channels(marker_str):
@@ -264,7 +252,11 @@ def select_feature_names(detections, feature_groups, exclude_channels=None):
 
 
 def load_detections(detections_path, threshold=0.5):
-    """Load RF-positive detections above threshold."""
+    """Load RF-positive detections above threshold.
+
+    Wraps the shared load_detections with this script's original filtering
+    logic: includes ALL detections that lack a score (no classifier).
+    """
     with open(detections_path) as f:
         all_dets = json.load(f)
 
@@ -283,15 +275,17 @@ def load_detections(detections_path, threshold=0.5):
 def extract_feature_matrix(detections, feature_names):
     """Extract feature matrix from detections using explicit feature name list.
 
+    Strict mode: skips detections with any missing/non-finite feature value.
+
     Returns:
-        X: numpy array (n_cells, n_features)
+        X: numpy array (n_cells, n_features) or None if empty
         feature_names: list of feature name strings (same as input, for convenience)
         valid_indices: indices of detections with complete features
     """
     if not feature_names:
         return None, [], []
 
-    # Build matrix
+    # Build matrix — strict: skip rows with any missing/non-finite value
     rows = []
     valid_indices = []
     for i, det in enumerate(detections):

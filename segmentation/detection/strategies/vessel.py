@@ -394,7 +394,7 @@ class VesselStrategy(DetectionStrategy, MultiChannelFeatureMixin):
             tile: RGB or grayscale image (SMA channel)
             models: Dict of models (not used for vessel detection)
             **kwargs: Strategy-specific parameters:
-                - pixel_size_um (float): Pixel size in microns (default 0.22)
+                - pixel_size_um (float): Pixel size in microns (required, from CZI metadata)
                 - cd31_channel (np.ndarray): Optional CD31 channel for validation
                 - tile_x (int): X coordinate of tile origin
                 - tile_y (int): Y coordinate of tile origin
@@ -402,7 +402,9 @@ class VesselStrategy(DetectionStrategy, MultiChannelFeatureMixin):
         Returns:
             List of binary masks (each HxW boolean array)
         """
-        pixel_size_um = kwargs.get('pixel_size_um', 0.22)
+        pixel_size_um = kwargs.get('pixel_size_um')
+        if pixel_size_um is None:
+            raise ValueError("pixel_size_um is required in kwargs — must come from CZI metadata")
         cd31_channel = kwargs.get('cd31_channel', None)
         tile_x = kwargs.get('tile_x', 0)
         tile_y = kwargs.get('tile_y', 0)
@@ -439,7 +441,7 @@ class VesselStrategy(DetectionStrategy, MultiChannelFeatureMixin):
         self,
         tile: np.ndarray,
         models: Dict[str, Any],
-        pixel_size_um: float = 0.22,
+        pixel_size_um: float = None,
         cd31_channel: Optional[np.ndarray] = None,
         tile_x: int = 0,
         tile_y: int = 0,
@@ -464,6 +466,8 @@ class VesselStrategy(DetectionStrategy, MultiChannelFeatureMixin):
             List of ring candidate dicts with 'outer', 'inner', 'all_inner' contours,
             plus boundary information if applicable
         """
+        if pixel_size_um is None:
+            raise ValueError("pixel_size_um is required — read from CZI metadata")
         h, w = tile.shape[:2]
 
         # Convert to grayscale
@@ -802,7 +806,7 @@ class VesselStrategy(DetectionStrategy, MultiChannelFeatureMixin):
     def _detect_lumen_first(
         self,
         tile: np.ndarray,
-        pixel_size_um: float = 0.1725,
+        pixel_size_um: float = None,
         min_lumen_area_um2: float = 50,
         max_lumen_area_um2: float = None,
         min_ellipse_fit: float = 0.40,
@@ -834,6 +838,8 @@ class VesselStrategy(DetectionStrategy, MultiChannelFeatureMixin):
         Returns:
             List of candidate dicts with 'outer', 'inner', 'lumen_contour' keys
         """
+        if pixel_size_um is None:
+            raise ValueError("pixel_size_um is required — must come from CZI metadata")
         h, w = tile.shape[:2]
 
         # Compute max lumen area from tile dimensions if not specified
@@ -1231,7 +1237,7 @@ class VesselStrategy(DetectionStrategy, MultiChannelFeatureMixin):
         self,
         cd31_channel: np.ndarray,
         sma_channel: np.ndarray,
-        pixel_size_um: float = 0.22,
+        pixel_size_um: float = None,
         intensity_percentile: float = 95,
         min_tubularity: float = 3.0,
         min_diameter_um: float = 3,
@@ -1258,7 +1264,7 @@ class VesselStrategy(DetectionStrategy, MultiChannelFeatureMixin):
         Args:
             cd31_channel: CD31 channel image (2D grayscale, uint8 or uint16)
             sma_channel: SMA channel image (2D grayscale, uint8 or uint16)
-            pixel_size_um: Pixel size in microns (default: 0.22)
+            pixel_size_um: Pixel size in microns (must come from CZI metadata)
             intensity_percentile: Percentile for CD31 thresholding (default: 95)
             min_tubularity: Minimum aspect ratio to be considered tubular (default: 3.0)
             min_diameter_um: Minimum minor axis diameter in microns (default: 3)
@@ -1278,6 +1284,8 @@ class VesselStrategy(DetectionStrategy, MultiChannelFeatureMixin):
             - 'center': (cx, cy) center coordinates
             - 'orientation': angle in degrees
         """
+        if pixel_size_um is None:
+            raise ValueError("pixel_size_um is required — must come from CZI metadata")
         capillary_candidates = []
 
         # Normalize channels to uint8 if needed
@@ -1504,21 +1512,37 @@ class VesselStrategy(DetectionStrategy, MultiChannelFeatureMixin):
 
             # CD31 tubular detection (for capillaries without SMA)
             if cd31_channel is not None:
+                # Build 2D SMA fallback: handle uint16 tiles (np.mean can exceed 255)
+                if isinstance(sma_channel, np.ndarray) and sma_channel.ndim == 2:
+                    sma_for_cd31 = sma_channel
+                elif tile.ndim == 3:
+                    sma_mean = np.mean(tile[:, :, :3], axis=2)
+                    if tile.dtype == np.uint16:
+                        sma_for_cd31 = (sma_mean / 256).astype(np.uint8)
+                    else:
+                        sma_for_cd31 = sma_mean.astype(np.uint8)
+                else:
+                    sma_for_cd31 = tile
                 futures[executor.submit(
                     self._detect_cd31_tubular,
                     cd31_channel,
-                    sma_channel if isinstance(sma_channel, np.ndarray) and sma_channel.ndim == 2 else (
-                        np.mean(tile[:, :, :3], axis=2).astype(np.uint8) if tile.ndim == 3 else tile
-                    ),
+                    sma_for_cd31,
                     pixel_size_um,
                 )] = 'cd31'
 
             # LYVE1 detection (for lymphatics)
             if lyve1_channel is not None:
-                # Get 2D SMA for comparison
-                sma_2d = sma_channel if isinstance(sma_channel, np.ndarray) and sma_channel.ndim == 2 else (
-                    np.mean(tile[:, :, :3], axis=2).astype(np.uint8) if tile.ndim == 3 else tile
-                )
+                # Get 2D SMA for comparison: handle uint16 tiles (np.mean can exceed 255)
+                if isinstance(sma_channel, np.ndarray) and sma_channel.ndim == 2:
+                    sma_2d = sma_channel
+                elif tile.ndim == 3:
+                    sma_mean = np.mean(tile[:, :, :3], axis=2)
+                    if tile.dtype == np.uint16:
+                        sma_2d = (sma_mean / 256).astype(np.uint8)
+                    else:
+                        sma_2d = sma_mean.astype(np.uint8)
+                else:
+                    sma_2d = tile
                 futures[executor.submit(
                     self._detect_lyve1_structures,
                     lyve1_channel,
@@ -1804,7 +1828,7 @@ class VesselStrategy(DetectionStrategy, MultiChannelFeatureMixin):
         lyve1_channel: np.ndarray,
         cd31_channel: Optional[np.ndarray],
         sma_channel: np.ndarray,
-        pixel_size_um: float = 0.22,
+        pixel_size_um: float = None,
         intensity_percentile: float = 92,
         min_diameter_um: float = 10,
         max_diameter_um: float = 500,
@@ -1849,6 +1873,8 @@ class VesselStrategy(DetectionStrategy, MultiChannelFeatureMixin):
             - 'cd31_score': intensity score (0-1, should be low for lymphatics)
             - 'sma_score': intensity score (0-1, high indicates collecting lymphatic)
         """
+        if pixel_size_um is None:
+            raise ValueError("pixel_size_um is required — must come from CZI metadata")
         candidates = []
 
         # Convert LYVE1 channel to grayscale if needed
@@ -2790,6 +2816,10 @@ class VesselStrategy(DetectionStrategy, MultiChannelFeatureMixin):
             f"(merged {n - len(merged_candidates)} duplicates)"
         )
 
+        # Release binary mask references to allow GC of tile-sized arrays
+        for cand in merged_candidates:
+            cand.pop('binary', None)
+
         return merged_candidates
 
     def _merge_candidate_group(
@@ -2893,7 +2923,7 @@ class VesselStrategy(DetectionStrategy, MultiChannelFeatureMixin):
         ring_candidate: Dict[str, Any],
         tile: np.ndarray,
         models: Dict[str, Any],
-        pixel_size_um: float = 0.22,
+        pixel_size_um: float = None,
         cd31_channel: Optional[np.ndarray] = None,
     ) -> Optional[Dict[str, Any]]:
         """
@@ -2914,7 +2944,7 @@ class VesselStrategy(DetectionStrategy, MultiChannelFeatureMixin):
                 - 'source_tiles': List of source tile coordinates
             tile: Original image for intensity measurements
             models: Dict of models (not used)
-            pixel_size_um: Pixel size in microns
+            pixel_size_um: Pixel size in microns (must come from CZI metadata)
             cd31_channel: Optional CD31 channel for validation
 
         Returns:
@@ -2927,6 +2957,8 @@ class VesselStrategy(DetectionStrategy, MultiChannelFeatureMixin):
             - 'source_tiles': list of [x, y] coordinates
             - 'detection_type': 'complete' | 'partial' | 'merged'
         """
+        if pixel_size_um is None:
+            raise ValueError("pixel_size_um is required — must come from CZI metadata")
         from scipy.ndimage import distance_transform_edt
         from skimage.morphology import skeletonize
 
@@ -3480,7 +3512,7 @@ class VesselStrategy(DetectionStrategy, MultiChannelFeatureMixin):
         ring_candidate: Dict[str, Any],
         tile: np.ndarray,
         models: Dict[str, Any],
-        pixel_size_um: float = 0.22,
+        pixel_size_um: float = None,
         cd31_channel: Optional[np.ndarray] = None,
     ) -> Optional[Dict[str, Any]]:
         """
@@ -3501,13 +3533,15 @@ class VesselStrategy(DetectionStrategy, MultiChannelFeatureMixin):
             ring_candidate: Dict with 'outer', 'inner', 'all_inner' contours
             tile: Original image for intensity measurements
             models: Dict of models (not used)
-            pixel_size_um: Pixel size in microns
+            pixel_size_um: Pixel size in microns (must come from CZI metadata)
             cd31_channel: Optional CD31 channel for validation
 
         Returns:
             Dict of features with 'is_vessel' and 'rejection_reasons' fields,
             or None only if ellipse fitting completely fails
         """
+        if pixel_size_um is None:
+            raise ValueError("pixel_size_um is required — must come from CZI metadata")
         from scipy.ndimage import distance_transform_edt
         from skimage.morphology import skeletonize
 
@@ -3639,7 +3673,14 @@ class VesselStrategy(DetectionStrategy, MultiChannelFeatureMixin):
         ring_points = 0
         ring_positive = 0
         if binary is not None:
-            for theta in np.linspace(0, 2 * np.pi, 72):
+            # SIZE-ADAPTIVE SAMPLING: match extract_features() approach
+            # 1 sample per 2 pixels of mid-wall perimeter, clamped to [24, 360]
+            avg_diameter = (max(major_out, minor_out) + max(major_in, minor_in)) / 2
+            approx_perimeter_px = np.pi * avg_diameter
+            adaptive_samples = int(approx_perimeter_px / 2)
+            adaptive_samples = max(24, min(360, adaptive_samples))
+
+            for theta in np.linspace(0, 2 * np.pi, adaptive_samples):
                 a_out, b_out = major_out / 2, minor_out / 2
                 a_in, b_in = major_in / 2, minor_in / 2
                 angle_out_rad = np.radians(angle_out)
@@ -3656,7 +3697,7 @@ class VesselStrategy(DetectionStrategy, MultiChannelFeatureMixin):
                         ring_positive += 1
 
         ring_completeness = ring_positive / (ring_points + 1e-8)
-        if ring_completeness < 0.5:
+        if ring_completeness < self.min_ring_completeness:
             rejection_reasons.append(f'incomplete_ring:{ring_completeness:.2f}')
             is_vessel = False
 
@@ -3802,7 +3843,7 @@ class VesselStrategy(DetectionStrategy, MultiChannelFeatureMixin):
         self,
         tile: np.ndarray,
         models: Dict[str, Any],
-        pixel_size_um: float = 0.22,
+        pixel_size_um: float = None,
         cd31_channel: Optional[np.ndarray] = None,
         extract_features: bool = True,
         tile_x: int = 0,
@@ -3891,6 +3932,8 @@ class VesselStrategy(DetectionStrategy, MultiChannelFeatureMixin):
             - 'is_merged': bool
             - 'source_tiles': list of tile coordinates
         """
+        if pixel_size_um is None:
+            raise ValueError("pixel_size_um is required — read from CZI metadata")
         import torch
 
         # === Phase 1: Primary detection ===
@@ -4289,7 +4332,7 @@ class VesselStrategy(DetectionStrategy, MultiChannelFeatureMixin):
         mosaic_height: int,
         tile_size: int = 4000,
         scales: List[int] = None,
-        pixel_size_um: float = 0.17,
+        pixel_size_um: float = None,
         channel: int = 0,
         iou_threshold: float = 0.3,
         sample_fraction: float = 1.0,
@@ -4331,9 +4374,12 @@ class VesselStrategy(DetectionStrategy, MultiChannelFeatureMixin):
                 mosaic_width=loader.width,
                 mosaic_height=loader.height,
                 scales=[32, 16, 8, 4, 2],
-                pixel_size_um=0.17,
+                pixel_size_um=loader.get_pixel_size(),
             )
         """
+        if pixel_size_um is None:
+            raise ValueError("pixel_size_um is required — must come from CZI metadata")
+
         from segmentation.utils.multiscale import (
             get_scale_params,
             generate_tile_grid_at_scale,
@@ -4496,7 +4542,7 @@ class VesselStrategy(DetectionStrategy, MultiChannelFeatureMixin):
         mosaic_height: int,
         tile_size: int = 4000,
         scales: List[int] = None,
-        pixel_size_um: float = 0.17,
+        pixel_size_um: float = None,
         channel: int = 0,
         iou_threshold: float = 0.3,
         sample_fraction: float = 1.0,
@@ -4534,6 +4580,9 @@ class VesselStrategy(DetectionStrategy, MultiChannelFeatureMixin):
         Returns:
             Tuple of (list of mask info dicts, list of Detection objects)
         """
+        if pixel_size_um is None:
+            raise ValueError("pixel_size_um is required — must come from CZI metadata")
+
         import torch
         from segment_anything import sam_model_registry, SamAutomaticMaskGenerator
         from segmentation.utils.multiscale import (
