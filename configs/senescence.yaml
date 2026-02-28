@@ -7,6 +7,8 @@ channels: {0: nuc488, 1: NeuN647, 2: tdTomato555}
 cell_type: cell
 cellpose_input_channels: [1, 0]   # cyto=NeuN647, nuc=nuc488
 pixel_size_um: 0.1725            # from CZI metadata (Axioscan 20x)
+min_area_um: 45                  # LMD-practical cell range
+max_area_um: 1000
 photobleach_correction: true
 all_channels: true
 num_gpus: 2
@@ -15,9 +17,15 @@ markers:
   - {channel: 2, name: tdTomato, method: otsu_half}
 
 spatial_network:
+  enabled: true
   marker_filter: "tdTomato_class==positive"  # from Otsu/2 classification
   max_edge_distance: 50
   min_component_cells: 3
+
+spatial_viewer:
+  enabled: true
+  group_field: tdTomato_class
+  title: "Senescence tdTomato Spatial Overview"
 
 slurm:
   partition: p.hpcl8

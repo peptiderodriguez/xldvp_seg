@@ -6,8 +6,8 @@ channels: {0: nuc488, 1: SMA647, 2: PM750, 3: CD31_555}
 cell_type: cell
 cellpose_input_channels: [2, 0]   # cyto=PM750 (plasma membrane), nuc=nuc488
 pixel_size_um: 0.1725            # from CZI metadata (Axioscan 20x)
-min_area_um: 0                    # no size filter - find all cells
-max_area_um: 100000
+min_area_um: 45                   # LMD-practical cell range
+max_area_um: 1000
 photobleach_correction: true
 all_channels: true
 num_gpus: 4

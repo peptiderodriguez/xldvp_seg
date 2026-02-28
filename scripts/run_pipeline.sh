@@ -102,6 +102,11 @@ if [[ -n "$SPATIAL_FILTER" && -z "$SPATIAL_ENABLED" ]]; then
     SPATIAL_ENABLED="true"
 fi
 
+# Spatial viewer
+VIEWER_ENABLED=$(read_yaml spatial_viewer.enabled false)
+VIEWER_GROUP_FIELD=$(read_yaml spatial_viewer.group_field "")
+VIEWER_TITLE=$(read_yaml spatial_viewer.title "Multi-Slide Spatial Viewer")
+
 # Validate pixel_size_um is set when spatial analysis is enabled
 if [[ "$SPATIAL_ENABLED" == "true" && -z "$PIXEL_SIZE" ]]; then
     echo "Error: spatial_network requires pixel_size_um in config" >&2
@@ -114,6 +119,9 @@ fi
 MULTI_SLIDE=false
 if [[ -n "$CZI_DIR" && -n "$CZI_GLOB" ]]; then
     MULTI_SLIDE=true
+elif [[ -z "$CZI_PATH" ]]; then
+    echo "Error: config must provide either czi_dir+czi_glob (multi-slide) or czi_path (single-slide)" >&2
+    exit 1
 fi
 
 # ---------------------------------------------------------------------------
@@ -127,6 +135,7 @@ build_seg_cmd() {
     cmd+=" --cell-type \"$CELL_TYPE\""
     cmd+=" --output-dir \"$out_arg\""
     cmd+=" --num-gpus \"$NUM_GPUS\""
+    cmd+=" --no-serve"
 
     # Cellpose input channels: passed as "cyto,nuc" to --cellpose-input-channels
     if [[ -n "$CP_CHANNELS" ]]; then
@@ -169,12 +178,14 @@ print(','.join(m['name'] for m in markers))
 MARKER_METHOD=$("$MKSEG_PYTHON" -c "
 import json, sys
 markers = json.loads(sys.argv[1])
+if not markers:
+    sys.exit(0)
 methods = set(m.get('method', 'otsu_half') for m in markers)
 if len(methods) > 1:
     print(f'ERROR: Mixed marker methods not supported in single invocation: {methods}', file=sys.stderr)
     sys.exit(1)
 print(methods.pop())
-" "$MARKERS_JSON")
+" "$MARKERS_JSON" || echo "")
 
 # ---------------------------------------------------------------------------
 # Write sbatch script
@@ -189,11 +200,13 @@ SBATCH_FILE="/tmp/pipeline_${NAME}_$$.sbatch"
     echo "#SBATCH --mem=${MEM_GB}G"
     echo "#SBATCH --gres=gpu:${GPUS}"
     echo "#SBATCH --time=${TIME}"
-    echo "#SBATCH --output=${OUTPUT_DIR}/slurm_${NAME}_%A_%a.out"
-    echo "#SBATCH --error=${OUTPUT_DIR}/slurm_${NAME}_%A_%a.err"
-
     if [[ "$MULTI_SLIDE" == "true" ]]; then
+        echo "#SBATCH --output=${OUTPUT_DIR}/slurm_${NAME}_%A_%a.out"
+        echo "#SBATCH --error=${OUTPUT_DIR}/slurm_${NAME}_%A_%a.err"
         echo "#SBATCH --array=0-$((NUM_JOBS - 1))"
+    else
+        echo "#SBATCH --output=${OUTPUT_DIR}/slurm_${NAME}_%j.out"
+        echo "#SBATCH --error=${OUTPUT_DIR}/slurm_${NAME}_%j.err"
     fi
 
     echo ""
@@ -279,6 +292,14 @@ SBATCH_FILE="/tmp/pipeline_${NAME}_$$.sbatch"
             echo "    \$MKSEG_PYTHON $REPO/scripts/spatial_cell_analysis.py --detections \"\$DET_JSON\" --output-dir \"\$SLIDE_OUT\" --spatial-network --marker-filter \"$SPATIAL_FILTER\" --max-edge-distance \"$SPATIAL_EDGE\" --min-component-cells \"$SPATIAL_MIN_COMP\" --pixel-size \"$PIXEL_SIZE\""
         fi
 
+        # Step 4: Spatial viewer (single-slide, inline)
+        if [[ "$VIEWER_ENABLED" == "true" && -n "$VIEWER_GROUP_FIELD" ]]; then
+            echo ""
+            echo "    # Step 4: Spatial viewer"
+            echo "    echo \"Generating spatial viewer...\""
+            echo "    \$MKSEG_PYTHON $REPO/scripts/generate_multi_slide_spatial_viewer.py --detections \"\$DET_JSON\" --group-field \"$VIEWER_GROUP_FIELD\" --title \"$VIEWER_TITLE\" --output \"\${SLIDE_OUT}/spatial_viewer.html\""
+        fi
+
         echo "else"
         echo "    echo \"WARNING: ${CELL_TYPE}_detections.json not found, skipping marker/spatial steps\""
         echo "fi"
@@ -309,4 +330,46 @@ echo "================================================"
 echo ""
 echo "Submitting job..."
 mkdir -p "$OUTPUT_DIR"
-sbatch "$SBATCH_FILE"
+MAIN_JOB_OUTPUT=$(sbatch "$SBATCH_FILE") || { echo "Error: sbatch submission failed" >&2; exit 1; }
+echo "$MAIN_JOB_OUTPUT"
+MAIN_JOB_ID=$(echo "$MAIN_JOB_OUTPUT" | grep -oP 'Submitted batch job \K\d+') || true
+if [[ -z "$MAIN_JOB_ID" ]]; then
+    echo "Error: could not parse job ID from: $MAIN_JOB_OUTPUT" >&2
+    exit 1
+fi
+
+# ---------------------------------------------------------------------------
+# Step 4: Submit dependent spatial viewer job (multi-slide only)
+# ---------------------------------------------------------------------------
+if [[ "$MULTI_SLIDE" == "true" && "$VIEWER_ENABLED" == "true" && -n "$VIEWER_GROUP_FIELD" ]]; then
+    VIEWER_SBATCH="/tmp/pipeline_${NAME}_viewer_$$.sbatch"
+    {
+        echo "#!/bin/bash"
+        echo "#SBATCH --job-name=${NAME}_viewer"
+        echo "#SBATCH --partition=p.hpcl8"
+        echo "#SBATCH --cpus-per-task=4"
+        echo "#SBATCH --mem=32G"
+        echo "#SBATCH --time=00:30:00"
+        echo "#SBATCH --output=${OUTPUT_DIR}/slurm_${NAME}_viewer_%j.out"
+        echo "#SBATCH --error=${OUTPUT_DIR}/slurm_${NAME}_viewer_%j.err"
+        echo ""
+        echo "set -euo pipefail"
+        echo "export PYTHONPATH=\"$REPO\""
+        echo "MKSEG_PYTHON=\"$MKSEG_PYTHON\""
+        echo ""
+        echo "echo \"Generating multi-slide spatial viewer...\""
+        echo "\$MKSEG_PYTHON $REPO/scripts/generate_multi_slide_spatial_viewer.py \\"
+        echo "    --input-dir \"$OUTPUT_DIR\" \\"
+        echo "    --detection-glob \"${CELL_TYPE}_detections_classified.json\" \\"
+        echo "    --group-field \"$VIEWER_GROUP_FIELD\" \\"
+        echo "    --title \"$VIEWER_TITLE\" \\"
+        echo "    --output \"${OUTPUT_DIR}/spatial_viewer.html\""
+        echo ""
+        echo "echo \"Spatial viewer saved to ${OUTPUT_DIR}/spatial_viewer.html\""
+    } > "$VIEWER_SBATCH"
+    chmod +x "$VIEWER_SBATCH"
+
+    echo ""
+    echo "Submitting viewer job (depends on $MAIN_JOB_ID)..."
+    sbatch --dependency=afterok:"$MAIN_JOB_ID" "$VIEWER_SBATCH"
+fi
