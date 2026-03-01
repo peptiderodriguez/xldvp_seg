@@ -6,10 +6,23 @@ Classifies cells as marker-positive or marker-negative based on per-channel
 intensity features already present in the detections JSON.
 
 Methods:
-  otsu_half  Otsu threshold / 2 (permissive, default)
+  otsu       Otsu threshold on background-subtracted intensities (recommended)
+  otsu_half  Otsu threshold / 2 (permissive, no background subtraction)
   gmm        2-component GMM on log1p intensities (P >= 0.75 = positive)
 
+Background subtraction (--background-subtract, default with 'otsu' method):
+  For each cell, estimates local background as the median intensity of the
+  k=30 nearest neighboring cells. Subtracts this per-cell background from
+  the cell's own intensity, then thresholds on the corrected values.
+  This removes local autofluorescence variation and improves signal separation.
+
 Usage:
+    # Recommended: background-subtracted Otsu for NeuN + tdTomato
+    python scripts/classify_markers.py \
+        --detections cell_detections.json \
+        --marker-channel 1,2 --marker-name NeuN,tdTomato \
+        --method otsu
+
     python scripts/classify_markers.py \
         --detections cell_detections.json \
         --marker-channel 2 --marker-name tdTomato
@@ -41,8 +54,78 @@ logger = get_logger(__name__)
 
 
 # ---------------------------------------------------------------------------
+# Background subtraction
+# ---------------------------------------------------------------------------
+
+def local_background_subtract(values: np.ndarray,
+                              centroids: np.ndarray,
+                              n_neighbors: int = 30) -> tuple[np.ndarray, np.ndarray]:
+    """Per-cell local background subtraction using neighboring cells.
+
+    For each cell, finds the n_neighbors nearest cells and uses their
+    median intensity as the local background estimate. Subtracts this
+    from the cell's own intensity.
+
+    Args:
+        values: 1D array of marker intensities per cell.
+        centroids: Nx2 array of [x, y] coordinates per cell.
+        n_neighbors: Number of nearest neighbors for background estimate.
+
+    Returns:
+        (corrected_values, per_cell_background). Corrected values clipped >= 0.
+    """
+    from scipy.spatial import cKDTree
+
+    n = len(values)
+    if n < n_neighbors + 1:
+        # Too few cells — fall back to global median as background
+        bg = np.median(values)
+        logger.warning(f"Too few cells ({n}) for local background (need {n_neighbors}+1). "
+                       f"Using global median {bg:.1f}")
+        corrected = np.maximum(values - bg, 0.0)
+        return corrected, np.full(n, bg)
+
+    tree = cKDTree(centroids)
+    # Query k+1 because the closest neighbor is the cell itself
+    _, indices = tree.query(centroids, k=n_neighbors + 1)
+
+    # For each cell, compute median of neighbor intensities (excluding self)
+    # indices[:, 0] is always the cell itself (distance 0)
+    neighbor_indices = indices[:, 1:]  # exclude self
+    neighbor_values = values[neighbor_indices]  # shape: (n, n_neighbors)
+    per_cell_bg = np.median(neighbor_values, axis=1)
+
+    corrected = np.maximum(values - per_cell_bg, 0.0)
+    return corrected, per_cell_bg
+
+
+# ---------------------------------------------------------------------------
 # Classification methods
 # ---------------------------------------------------------------------------
+
+def classify_otsu(values: np.ndarray) -> tuple[float, np.ndarray]:
+    """Full Otsu threshold on (background-subtracted) intensity values.
+
+    Use after background subtraction — the noise floor is already removed,
+    so the full Otsu threshold cleanly separates signal from residual noise.
+
+    Returns (threshold, boolean mask where True = positive).
+    """
+    from skimage.filters import threshold_otsu
+
+    nonzero = values[values > 0]
+    if len(nonzero) < 10:
+        logger.warning("Too few non-zero values for Otsu; defaulting threshold to 0")
+        return 0.0, np.zeros(len(values), dtype=bool)
+
+    if np.std(nonzero) < 1e-6:
+        logger.warning("Near-zero variance in marker values; all cells classified as negative")
+        return 0.0, np.zeros(len(values), dtype=bool)
+
+    threshold = float(threshold_otsu(nonzero))
+    positive = (values >= threshold) & (values > 0)
+    return threshold, positive
+
 
 def classify_otsu_half(values: np.ndarray) -> tuple[float, np.ndarray]:
     """Otsu threshold / 2 on raw intensity values.
@@ -168,28 +251,65 @@ def extract_marker_values(detections: list[dict], channel: int) -> np.ndarray:
     return values
 
 
+def extract_centroids(detections: list[dict]) -> np.ndarray:
+    """Extract [x, y] centroids from detections."""
+    centroids = []
+    for d in detections:
+        feat = d.get('features', {})
+        c = feat.get('centroid', d.get('centroid', [0, 0]))
+        centroids.append(c)
+    return np.array(centroids, dtype=np.float64)
+
+
 def classify_single_marker(detections: list[dict], channel: int,
                            marker_name: str, method: str,
-                           output_dir: Path) -> dict:
+                           output_dir: Path,
+                           bg_subtract: bool = False,
+                           centroids: np.ndarray | None = None,
+                           n_neighbors: int = 30) -> dict:
     """Classify detections for one marker. Returns summary row dict.
 
     Mutates detections in-place: adds {marker}_class, {marker}_value,
-    {marker}_threshold to each detection's features dict.
+    {marker}_threshold, and optionally {marker}_background and {marker}_snr
+    to each detection's features dict.
     """
-    logger.info(f"Classifying marker '{marker_name}' (ch{channel}) with method '{method}'")
+    logger.info(f"Classifying marker '{marker_name}' (ch{channel}) with method '{method}'"
+                f"{f' + local background subtraction (k={n_neighbors})' if bg_subtract else ''}")
 
-    values = extract_marker_values(detections, channel)
-    if len(values) == 0:
+    raw_values = extract_marker_values(detections, channel)
+    if len(raw_values) == 0:
         logger.warning(f"No values extracted for marker '{marker_name}' — skipping")
         return {'marker': marker_name, 'method': method, 'threshold': 0,
-                'n_positive': 0, 'n_negative': 0, 'pct_positive': 0}
+                'n_positive': 0, 'n_negative': 0, 'pct_positive': 0,
+                'background_median': 0}
 
-    logger.info(f"  Extracted {len(values):,} values, "
-                f"range [{values.min():.1f}, {values.max():.1f}], "
-                f"median {np.median(values):.1f}")
+    logger.info(f"  Extracted {len(raw_values):,} values, "
+                f"range [{raw_values.min():.1f}, {raw_values.max():.1f}], "
+                f"median {np.median(raw_values):.1f}")
+
+    # Local background subtraction using neighboring cells
+    per_cell_bg = None
+    if bg_subtract:
+        if centroids is None:
+            centroids = extract_centroids(detections)
+        values, per_cell_bg = local_background_subtract(raw_values, centroids, n_neighbors)
+        median_bg = float(np.median(per_cell_bg))
+        logger.info(f"  Local background: median {median_bg:.1f}, "
+                    f"range [{per_cell_bg.min():.1f}, {per_cell_bg.max():.1f}]")
+        nonzero_corrected = values[values > 0]
+        if len(nonzero_corrected) > 0:
+            logger.info(f"  After subtraction: {(nonzero_corrected > 0).sum():,} cells with signal, "
+                        f"range [{nonzero_corrected.min():.1f}, {nonzero_corrected.max():.1f}], "
+                        f"median {np.median(nonzero_corrected):.1f}")
+        else:
+            logger.warning(f"  All values zero after background subtraction")
+    else:
+        values = raw_values
 
     # Classify
-    if method == 'otsu_half':
+    if method == 'otsu':
+        threshold, positive_mask = classify_otsu(values)
+    elif method == 'otsu_half':
         threshold, positive_mask = classify_otsu_half(values)
     elif method == 'gmm':
         threshold, positive_mask = classify_gmm(values)
@@ -200,30 +320,41 @@ def classify_single_marker(detections: list[dict], channel: int,
     n_negative = len(positive_mask) - n_positive
     pct = 100 * n_positive / max(len(positive_mask), 1)
 
-    logger.info(f"  Threshold: {threshold:.2f}")
+    logger.info(f"  Threshold: {threshold:.2f}"
+                f"{' (on bg-subtracted values)' if bg_subtract else ''}")
     logger.info(f"  Positive: {n_positive:,} ({pct:.1f}%)  "
                 f"Negative: {n_negative:,} ({100 - pct:.1f}%)")
 
     # Enrich detections in-place
     class_key = f'{marker_name}_class'
     value_key = f'{marker_name}_value'
+    raw_key = f'{marker_name}_raw'
     thresh_key = f'{marker_name}_threshold'
+    bg_key = f'{marker_name}_background'
+    snr_key = f'{marker_name}_snr'
 
     for i, det in enumerate(detections):
         feat = det.setdefault('features', {})
         feat[class_key] = 'positive' if positive_mask[i] else 'negative'
-        feat[value_key] = float(values[i])
+        feat[value_key] = float(values[i])  # bg-subtracted if enabled
         feat[thresh_key] = float(threshold)
+        if bg_subtract and per_cell_bg is not None:
+            feat[raw_key] = float(raw_values[i])
+            feat[bg_key] = float(per_cell_bg[i])
+            # SNR = signal / background
+            feat[snr_key] = float(raw_values[i] / per_cell_bg[i]) if per_cell_bg[i] > 0 else 0.0
 
-    # Plot
+    # Plot (use bg-subtracted values for the histogram)
     plot_path = output_dir / f'{marker_name}_distribution.png'
-    plot_distribution(values, threshold, marker_name, method,
+    plot_distribution(values, threshold, marker_name,
+                      f'{method}+bgsub' if bg_subtract else method,
                       n_positive, n_negative, plot_path)
 
     return {
         'marker': marker_name,
         'method': method,
         'threshold': threshold,
+        'background_median': float(np.median(per_cell_bg)) if per_cell_bg is not None else 0,
         'n_positive': n_positive,
         'n_negative': n_negative,
         'pct_positive': round(pct, 2),
@@ -254,12 +385,25 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument('--marker-name', required=True,
                         help='Comma-separated marker names matching channels '
                              '(e.g. tdTomato or SMA,CD31)')
-    parser.add_argument('--method', default='otsu_half',
-                        choices=['otsu_half', 'gmm'],
-                        help='Classification method (default: otsu_half)')
+    parser.add_argument('--method', default='otsu',
+                        choices=['otsu', 'otsu_half', 'gmm'],
+                        help='Classification method (default: otsu)')
+    parser.add_argument('--background-subtract', action='store_true', default=None,
+                        help='Subtract estimated background before thresholding. '
+                             'Default: on for otsu, off for otsu_half/gmm.')
+    parser.add_argument('--no-background-subtract', action='store_true',
+                        help='Disable background subtraction even for otsu method.')
     parser.add_argument('--output-dir', default=None,
                         help='Output directory (default: same dir as detections)')
     args = parser.parse_args()
+
+    # Background subtraction: default on for otsu, off for others
+    if args.no_background_subtract:
+        args.bg_subtract = False
+    elif args.background_subtract is not None:
+        args.bg_subtract = args.background_subtract
+    else:
+        args.bg_subtract = (args.method == 'otsu')
 
     # Validate: must have either --marker-channel or --marker-wavelength
     if not args.marker_channel and not args.marker_wavelength:
@@ -330,10 +474,18 @@ def main():
             logger.warning(f"Channel key '{key}' not found in first detection's features. "
                            f"Available: {available}. Values will default to 0.")
 
+    # Extract centroids once if background subtraction is enabled
+    centroids = None
+    if args.bg_subtract:
+        centroids = extract_centroids(detections)
+        logger.info(f"Extracted {len(centroids):,} centroids for local background subtraction")
+
     # Process each marker
     summaries = []
     for ch, name in zip(channels, names):
-        row = classify_single_marker(detections, ch, name, args.method, output_dir)
+        row = classify_single_marker(detections, ch, name, args.method, output_dir,
+                                     bg_subtract=args.bg_subtract,
+                                     centroids=centroids)
         summaries.append(row)
 
     # Create combined marker_profile when multiple markers are classified
@@ -367,7 +519,8 @@ def main():
     summary_path = output_dir / 'marker_summary.csv'
     with open(summary_path, 'w', newline='') as f:
         writer = csv.DictWriter(f, fieldnames=[
-            'marker', 'method', 'threshold', 'n_positive', 'n_negative', 'pct_positive',
+            'marker', 'method', 'threshold', 'background_median',
+            'n_positive', 'n_negative', 'pct_positive',
         ])
         writer.writeheader()
         writer.writerows(summaries)
@@ -376,9 +529,10 @@ def main():
     # Final summary
     logger.info("--- Classification complete ---")
     for row in summaries:
+        bg_info = f", bg={row['background_median']:.1f}" if row.get('background_median') else ''
         logger.info(f"  {row['marker']}: {row['n_positive']:,} positive "
                      f"({row['pct_positive']:.1f}%), "
-                     f"threshold={row['threshold']:.2f} ({row['method']})")
+                     f"threshold={row['threshold']:.2f} ({row['method']}{bg_info})")
 
 
 if __name__ == '__main__':
