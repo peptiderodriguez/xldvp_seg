@@ -75,7 +75,7 @@ Check:
 
 Offer to view the export in Napari:
 ```bash
-$MKSEG_PYTHON $REPO/scripts/napari_view_lmd_export.py <output>/lmd
+$MKSEG_PYTHON $REPO/scripts/napari_view_lmd_export.py --zarr <slide>.zarr --export <output>/lmd
 ```
 
 ---
