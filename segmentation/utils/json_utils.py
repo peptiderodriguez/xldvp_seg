@@ -1,4 +1,4 @@
-"""JSON utilities: numpy-safe encoding and NaN/Inf sanitization.
+"""JSON utilities: numpy-safe encoding, NaN/Inf sanitization, and atomic writes.
 
 These were duplicated across run_segmentation.py, apply_classifier.py,
 spatial_cell_analysis.py, analyze_islets.py, and cluster_by_features.py.
@@ -6,6 +6,9 @@ spatial_cell_analysis.py, analyze_islets.py, and cluster_by_features.py.
 
 import json
 import math
+import os
+import tempfile
+from pathlib import Path
 
 import numpy as np
 
@@ -66,3 +69,39 @@ def sanitize_for_json(obj):
     if isinstance(obj, np.ndarray):
         return sanitize_for_json(obj.tolist())
     return obj
+
+
+def atomic_json_dump(data, filepath, cls=NumpyEncoder, sanitize=True):
+    """Write JSON atomically: temp file + os.replace() to prevent partial writes.
+
+    A SLURM timeout or OOM during a direct json.dump() leaves a partially-written
+    file. On resume, the pipeline finds the corrupt file and either crashes or
+    silently loses hours of work. This function writes to a temp file first,
+    then atomically replaces the target — so the file either contains the complete
+    data or does not exist at all.
+
+    Args:
+        data: Python object to serialize.
+        filepath: Target path (str or Path).
+        cls: JSON encoder class (default: NumpyEncoder).
+        sanitize: If True, run sanitize_for_json() first to replace Python
+            float('nan')/float('inf') with None (default: True).
+    """
+    filepath = Path(filepath)
+    filepath.parent.mkdir(parents=True, exist_ok=True)
+
+    if sanitize:
+        data = sanitize_for_json(data)
+
+    fd, tmp_path = tempfile.mkstemp(dir=filepath.parent, suffix='.tmp')
+    try:
+        with os.fdopen(fd, 'w') as f:
+            json.dump(data, f, cls=cls)
+        os.replace(tmp_path, filepath)
+    except BaseException:
+        # Clean up temp file on any failure (including KeyboardInterrupt)
+        try:
+            os.unlink(tmp_path)
+        except OSError:
+            pass
+        raise

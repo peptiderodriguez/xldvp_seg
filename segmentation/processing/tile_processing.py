@@ -512,7 +512,11 @@ def enrich_detection_features(
     """
     for feat in features_list:
         # Extract local center coordinates
-        local_cx, local_cy = feat['center']
+        center = feat.get('center')
+        if center is None or len(center) < 2:
+            logger.warning(f"Detection missing 'center' key, skipping enrichment")
+            continue
+        local_cx, local_cy = center
 
         # Calculate global coordinates
         global_cx = tile_x + local_cx

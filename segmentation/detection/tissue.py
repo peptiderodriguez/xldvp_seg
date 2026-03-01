@@ -618,6 +618,8 @@ def filter_tissue_tiles(
 
     tissue_tiles.sort(key=_tile_sort_key)
 
-    logger.info(f"  Tissue tiles: {len(tissue_tiles)} / {len(tiles)} ({100*len(tissue_tiles)/len(tiles):.1f}%)")
+    n_total = len(tiles)
+    pct = 100 * len(tissue_tiles) / n_total if n_total > 0 else 0
+    logger.info(f"  Tissue tiles: {len(tissue_tiles)} / {n_total} ({pct:.1f}%)")
 
     return tissue_tiles

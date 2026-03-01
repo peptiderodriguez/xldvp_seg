@@ -333,6 +333,12 @@ def postprocess_args(args, parser):
     Returns:
         args: Modified args namespace
     """
+    # Validate range-limited arguments
+    if args.tile_overlap < 0 or args.tile_overlap > 0.5:
+        parser.error("--tile-overlap must be between 0.0 and 0.5")
+    if args.sample_fraction <= 0 or args.sample_fraction > 1.0:
+        parser.error("--sample-fraction must be in (0.0, 1.0]")
+
     # Cell-type-dependent defaults for output-dir and channel
     if args.output_dir is None:
         args.output_dir = str(Path.cwd() / 'output')
@@ -431,6 +437,15 @@ def postprocess_args(args, parser):
         if shard_manifests and not args.merge_shards:
             print(f"Auto-detected {len(shard_manifests)} shard manifests -- enabling --merge-shards", flush=True)
             args.merge_shards = True
+
+    # Validate --scales early (before it fails deep in processing)
+    if getattr(args, 'multi_scale', False) and getattr(args, 'scales', None):
+        try:
+            args.scales_list = [int(x.strip()) for x in args.scales.split(',')]
+            if not all(s > 0 for s in args.scales_list):
+                parser.error("--scales must contain positive integers")
+        except ValueError:
+            parser.error(f"--scales must be comma-separated integers, got '{args.scales}'")
 
     # --merge-shards requires --resume
     if args.merge_shards and not args.resume:

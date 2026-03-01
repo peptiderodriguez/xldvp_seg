@@ -181,6 +181,10 @@ def _resume_generate_html_samples(args, all_detections, tiles_dir,
         # Compose tile RGB -- match normal path: direct channel extraction, /256 for uint16
         rel_tx = tile_x - x_start
         rel_ty = tile_y - y_start
+        if rel_tx < 0 or rel_ty < 0:
+            logger.warning(f"Tile origin ({tile_x}, {tile_y}) is outside mosaic bounds "
+                           f"({x_start}, {y_start}), skipping HTML for this tile")
+            continue
         tile_h, tile_w = masks.shape[:2]
         ch_keys = sorted(all_channel_data.keys())
         n_channels = len(ch_keys)

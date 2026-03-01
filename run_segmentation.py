@@ -70,7 +70,7 @@ from segmentation.io.html_export import (
 from segmentation.utils.logging import get_logger, setup_logging
 from segmentation.io.czi_loader import get_loader, get_czi_metadata, print_czi_metadata
 from segmentation.utils.islet_utils import classify_islet_marker, compute_islet_marker_thresholds
-from segmentation.utils.json_utils import NumpyEncoder
+from segmentation.utils.json_utils import NumpyEncoder, atomic_json_dump
 from segmentation.detection.cell_detector import CellDetector
 # tile_processing functions now called from within pipeline modules
 
@@ -226,10 +226,27 @@ def run_pipeline(args):
             _em = f"{_ch['emission_nm']:.0f}" if _ch['emission_nm'] else "?"
             _label = _ch['fluorophore'] if _ch['fluorophore'] != 'N/A' else _ch['name']
             logger.info(f"    [{_ch['index']}] {_ch['name']:<20s}  Ex {_ex} -> Em {_em} nm  ({_label})")
+        # Validate --channel against actual CZI channel count
+        n_czi_channels = _czi_meta['n_channels']
+        _channels_to_check = [('--channel', args.channel)]
+        if getattr(args, 'cd31_channel', None) is not None:
+            _channels_to_check.append(('--cd31-channel', args.cd31_channel))
+        if getattr(args, 'membrane_channel', None) is not None:
+            _channels_to_check.append(('--membrane-channel', args.membrane_channel))
+        if getattr(args, 'nuclear_channel', None) is not None:
+            _channels_to_check.append(('--nuclear-channel', args.nuclear_channel))
+        for _flag, _ch_val in _channels_to_check:
+            if _ch_val >= n_czi_channels:
+                logger.error(f"{_flag} {_ch_val} is out of range: CZI has {n_czi_channels} channels (0-{n_czi_channels - 1})")
+                import sys
+                sys.exit(1)
     except Exception as _e:
         logger.warning(f"  Could not read channel metadata: {_e}")
 
     # Load additional channels if --all-channels specified (for NMJ specificity checking)
+    if loader.channel_data is None:
+        logger.error(f"Failed to load channel {args.channel} to RAM -- check CZI file integrity")
+        return
     all_channel_data = {args.channel: loader.channel_data}  # Primary channel
     if getattr(args, 'all_channels', False) and use_ram:
         # Determine which channels to load
@@ -309,8 +326,9 @@ def run_pipeline(args):
     )
 
     if len(tissue_tiles) == 0:
-        logger.error("No tissue-containing tiles found!")
-        return
+        logger.error("No tissue-containing tiles found! Check CZI file and tissue detection thresholds.")
+        import sys
+        sys.exit(1)
 
     # Sample from tissue tiles
     n_sample = max(1, int(len(tissue_tiles) * args.sample_fraction))
@@ -422,9 +440,8 @@ def run_pipeline(args):
             elif resume_info['has_tiles']:
                 all_detections = reload_detections_from_tiles(tiles_dir, args.cell_type)
                 logger.info(f"Merged {len(all_detections)} detections from {resume_info['tile_count']} tile dirs")
-                # Save checkpoint
-                with open(merged_det_file, 'w') as f:
-                    json.dump(all_detections, f, cls=NumpyEncoder)
+                # Save checkpoint (atomic to prevent corruption on SLURM timeout)
+                atomic_json_dump(all_detections, merged_det_file)
                 logger.info(f"Checkpoint saved: {merged_det_file.name}")
             else:
                 logger.error("No tile dirs found -- nothing to merge")
@@ -873,8 +890,7 @@ def run_pipeline(args):
                     checkpoint_dir = slide_output_dir / "checkpoints"
                     checkpoint_dir.mkdir(exist_ok=True)
                     checkpoint_file = checkpoint_dir / f"scale_{scale}x.json"
-                    with open(checkpoint_file, 'w') as f:
-                        json.dump(all_scale_detections, f, cls=NumpyEncoder)
+                    atomic_json_dump(all_scale_detections, checkpoint_file)
                     logger.info(f"Checkpoint saved: {checkpoint_file} ({len(all_scale_detections)} detections)")
 
             # Merge across scales (contour-based IoU dedup)
@@ -1022,8 +1038,7 @@ def run_pipeline(args):
                                 create_hdf5_dataset(f, 'masks', masks)
 
                             # Save features (includes vessel classification if applicable)
-                            with open(tile_out / f"{args.cell_type}_features.json", 'w') as f:
-                                json.dump(features_list, f, cls=NumpyEncoder)
+                            atomic_json_dump(features_list, tile_out / f"{args.cell_type}_features.json")
 
                             # Add detections to global list
                             for feat in features_list:

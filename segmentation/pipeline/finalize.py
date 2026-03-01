@@ -11,7 +11,7 @@ import json
 from pathlib import Path
 
 from segmentation.utils.logging import get_logger
-from segmentation.utils.json_utils import NumpyEncoder
+from segmentation.utils.json_utils import NumpyEncoder, atomic_json_dump
 from segmentation.utils.timestamps import timestamped_path, update_symlink
 from segmentation.io.czi_loader import get_czi_metadata
 from segmentation.io.html_export import export_samples_to_html
@@ -184,8 +184,7 @@ def _finish_pipeline(args, all_detections, all_samples, slide_output_dir, tiles_
 
     detections_file = slide_output_dir / f'{cell_type}_detections.json'
     ts_detections = timestamped_path(detections_file)
-    with open(ts_detections, 'w') as f:
-        json.dump(all_detections, f, cls=NumpyEncoder)
+    atomic_json_dump(all_detections, ts_detections)
     update_symlink(detections_file, ts_detections)
     logger.info(f"Saved {len(all_detections)} detections to {ts_detections}")
 
@@ -293,8 +292,7 @@ def _finish_pipeline(args, all_detections, all_samples, slide_output_dir, tiles_
         'detections_file': str(detections_file),
         'coordinates_file': str(csv_file),
     }
-    with open(slide_output_dir / 'summary.json', 'w') as f:
-        json.dump(summary, f, cls=NumpyEncoder)
+    atomic_json_dump(summary, slide_output_dir / 'summary.json')
 
     # Cleanup detector resources
     if detector is not None:

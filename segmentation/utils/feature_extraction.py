@@ -20,6 +20,7 @@ from typing import List, Optional, Callable
 import torchvision.transforms as tv_transforms
 
 from segmentation.utils.logging import get_logger
+from segmentation.utils.detection_utils import safe_to_uint8
 
 logger = get_logger(__name__)
 
@@ -42,18 +43,8 @@ def preprocess_crop_for_resnet(crop: np.ndarray) -> np.ndarray:
     if crop.size == 0:
         return np.zeros((224, 224, 3), dtype=np.uint8)
 
-    # Convert to uint8 safely (handles float32 [0,1], uint16, etc.)
-    if crop.dtype == np.uint8:
-        pass
-    elif crop.dtype == np.uint16:
-        crop = (crop / 256).astype(np.uint8)
-    elif crop.dtype in (np.float32, np.float64):
-        if crop.max() <= 1.0 + 1e-6:
-            crop = (crop * 255).clip(0, 255).astype(np.uint8)
-        else:
-            crop = crop.clip(0, 255).astype(np.uint8)
-    else:
-        crop = crop.clip(0, 255).astype(np.uint8)
+    # Convert to uint8 safely using centralized safe_to_uint8()
+    crop = safe_to_uint8(crop)
 
     # Ensure RGB format (3 channels)
     if crop.ndim == 2:
