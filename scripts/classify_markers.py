@@ -263,57 +263,120 @@ def extract_centroids(detections: list[dict]) -> np.ndarray:
 
 def correct_all_channels(detections: list[dict], centroids: np.ndarray,
                          n_neighbors: int = 30) -> list[int]:
-    """Background-correct all ch{N}_mean features in-place.
+    """Background-correct all per-channel intensity features in-place.
 
-    For each channel found in the detections, applies local background
-    subtraction using neighboring cells. Stores:
-      ch{N}_mean        -> overwritten with corrected value
-      ch{N}_mean_raw    -> original raw value
-      ch{N}_background  -> local background estimate
-      ch{N}_snr         -> raw / background
+    For each channel, estimates per-cell local background from ch{N}_mean
+    of neighboring cells, then:
+
+    Corrected (bg subtracted, clipped >= 0):
+      ch{N}_mean, ch{N}_median, ch{N}_min, ch{N}_max,
+      ch{N}_p5, ch{N}_p25, ch{N}_p75, ch{N}_p95
+
+    Recomputed from corrected values:
+      ch{N}_cv  (std / corrected_mean)
+      ch{N}_ch{M}_ratio, ch{N}_ch{M}_diff  (from corrected means)
+
+    Unchanged (shape/spread invariant to shift):
+      ch{N}_std, ch{N}_variance, ch{N}_iqr, ch{N}_dynamic_range,
+      ch{N}_skewness, ch{N}_kurtosis
+
+    Added:
+      ch{N}_mean_raw, ch{N}_background, ch{N}_snr
 
     Returns list of channel indices that were corrected.
     """
-    # Discover all channel keys
+    # Intensity features to subtract background from
+    INTENSITY_SUFFIXES = ['mean', 'median', 'min', 'max', 'p5', 'p25', 'p75', 'p95']
+
+    # Discover channels from ch{N}_mean keys
     sample_feat = detections[0].get('features', {})
-    ch_keys = sorted([k for k in sample_feat if k.startswith('ch') and k.endswith('_mean')])
-    if not ch_keys:
+    ch_mean_keys = sorted([k for k in sample_feat if k.startswith('ch') and k.endswith('_mean')])
+    if not ch_mean_keys:
         logger.warning("No ch{N}_mean keys found in detections")
         return []
 
     channels = []
-    for key in ch_keys:
-        # Parse channel index from 'ch0_mean' -> 0
+    for key in ch_mean_keys:
         ch_str = key.replace('ch', '').replace('_mean', '')
         try:
             channels.append(int(ch_str))
         except ValueError:
             continue
 
-    logger.info(f"Background-correcting all {len(channels)} channels: {channels}")
+    logger.info(f"Background-correcting {len(channels)} channels: {channels}")
+    n_det = len(detections)
+
+    # Step 1: Compute per-cell background from ch{N}_mean for each channel
+    channel_bg = {}  # ch -> per_cell_bg array
+    channel_corrected_mean = {}  # ch -> corrected mean array (for ratio/cv recompute)
 
     for ch in channels:
-        key = f'ch{ch}_mean'
-        raw_key = f'ch{ch}_mean_raw'
-        bg_key = f'ch{ch}_background'
-        snr_key = f'ch{ch}_snr'
-
-        values = np.array([d.get('features', {}).get(key, 0.0) for d in detections],
+        mean_key = f'ch{ch}_mean'
+        values = np.array([d.get('features', {}).get(mean_key, 0.0) for d in detections],
                           dtype=np.float64)
-        corrected, per_cell_bg = local_background_subtract(values, centroids, n_neighbors)
+        corrected_mean, per_cell_bg = local_background_subtract(values, centroids, n_neighbors)
+        channel_bg[ch] = per_cell_bg
+        channel_corrected_mean[ch] = corrected_mean
 
         median_bg = float(np.median(per_cell_bg))
-        nonzero = corrected[corrected > 0]
+        nonzero = corrected_mean[corrected_mean > 0]
         logger.info(f"  ch{ch}: bg median={median_bg:.1f}, "
-                    f"{len(nonzero):,}/{len(corrected):,} cells with signal after correction")
+                    f"{len(nonzero):,}/{n_det:,} cells with signal after correction")
 
-        # Write back to detections
+    # Step 2: Correct all intensity features and write back
+    for ch in channels:
+        per_cell_bg = channel_bg[ch]
+
+        for suffix in INTENSITY_SUFFIXES:
+            key = f'ch{ch}_{suffix}'
+            if key not in sample_feat:
+                continue
+
+            values = np.array([d.get('features', {}).get(key, 0.0) for d in detections],
+                              dtype=np.float64)
+            corrected = np.maximum(values - per_cell_bg, 0.0)
+
+            raw_key = f'ch{ch}_{suffix}_raw'
+            for i, det in enumerate(detections):
+                feat = det['features']
+                feat[raw_key] = float(values[i])
+                feat[key] = float(corrected[i])
+
+        # Write background and SNR (based on mean)
+        mean_raw = np.array([d['features'].get(f'ch{ch}_mean_raw', 0.0) for d in detections],
+                            dtype=np.float64)
         for i, det in enumerate(detections):
-            feat = det.setdefault('features', {})
-            feat[raw_key] = float(values[i])
-            feat[key] = float(corrected[i])  # overwrite with corrected
-            feat[bg_key] = float(per_cell_bg[i])
-            feat[snr_key] = float(values[i] / per_cell_bg[i]) if per_cell_bg[i] > 0 else 0.0
+            feat = det['features']
+            feat[f'ch{ch}_background'] = float(per_cell_bg[i])
+            feat[f'ch{ch}_snr'] = float(mean_raw[i] / per_cell_bg[i]) if per_cell_bg[i] > 0 else 0.0
+
+        # Recompute cv = std / corrected_mean
+        if f'ch{ch}_cv' in sample_feat and f'ch{ch}_std' in sample_feat:
+            for i, det in enumerate(detections):
+                feat = det['features']
+                corr_mean = channel_corrected_mean[ch][i]
+                std = feat.get(f'ch{ch}_std', 0.0)
+                feat[f'ch{ch}_cv'] = float(std / corr_mean) if corr_mean > 0 else 0.0
+
+    # Step 3: Recompute cross-channel ratios and diffs from corrected means
+    for ch_a in channels:
+        for ch_b in channels:
+            if ch_a == ch_b:
+                continue
+            ratio_key = f'ch{ch_a}_ch{ch_b}_ratio'
+            diff_key = f'ch{ch_a}_ch{ch_b}_diff'
+            if ratio_key in sample_feat:
+                for i, det in enumerate(detections):
+                    feat = det['features']
+                    a = channel_corrected_mean[ch_a][i]
+                    b = channel_corrected_mean[ch_b][i]
+                    feat[ratio_key] = float(a / b) if b > 0 else 0.0
+            if diff_key in sample_feat:
+                for i, det in enumerate(detections):
+                    feat = det['features']
+                    a = channel_corrected_mean[ch_a][i]
+                    b = channel_corrected_mean[ch_b][i]
+                    feat[diff_key] = float(a - b)
 
     return channels
 
