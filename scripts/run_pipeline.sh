@@ -73,6 +73,21 @@ ALL_CHANNELS=$(read_yaml all_channels false)
 NUM_GPUS=$(read_yaml num_gpus 1)
 MIN_AREA=$(read_yaml min_area_um "")
 MAX_AREA=$(read_yaml max_area_um "")
+
+# Channel map (wavelength/name-based channel specs, resolved at runtime)
+# Supported YAML keys: channel_map.detect, channel_map.cyto, channel_map.nuc
+CHANNEL_SPEC=$("$MKSEG_PYTHON" -c "
+import yaml, sys
+with open(sys.argv[1]) as f:
+    cfg = yaml.safe_load(f)
+cm = cfg.get('channel_map')
+if not cm or not isinstance(cm, dict):
+    sys.exit(0)
+pairs = []
+for role, spec in cm.items():
+    pairs.append(f'{role}={spec}')
+print(','.join(pairs))
+" "$CONFIG" || echo "")
 SAMPLE_FRACTION=$(read_yaml sample_fraction "")
 
 # SLURM settings
@@ -84,7 +99,7 @@ TIME=$(read_yaml slurm.time "2-00:00:00")
 SLIDES_PER_JOB=$(read_yaml slurm.slides_per_job 1)
 NUM_JOBS=$(read_yaml slurm.num_jobs 1)
 
-# Markers (parsed as JSON list)
+# Markers (parsed as JSON list, supports both 'channel' and 'wavelength' keys)
 MARKERS_JSON=$("$MKSEG_PYTHON" -c "
 import yaml, json, sys
 with open(sys.argv[1]) as f:
@@ -174,16 +189,41 @@ build_seg_cmd() {
     if [[ -n "$SAMPLE_FRACTION" ]]; then
         cmd+=" --sample-fraction $SAMPLE_FRACTION"
     fi
+    if [[ -n "$CHANNEL_SPEC" ]]; then
+        cmd+=" --channel-spec \"$CHANNEL_SPEC\""
+    fi
     echo "$cmd"
 }
 
 # ---------------------------------------------------------------------------
 # Build comma-separated marker args for single classify_markers.py invocation
 # ---------------------------------------------------------------------------
+# Markers can use 'channel' (index) or 'wavelength' (resolved at runtime)
+MARKER_USE_WAVELENGTH=$("$MKSEG_PYTHON" -c "
+import json, sys
+markers = json.loads(sys.argv[1])
+if not markers:
+    sys.exit(0)
+# If any marker uses 'wavelength' key instead of 'channel', use wavelength mode
+if any('wavelength' in m for m in markers):
+    print('true')
+else:
+    print('false')
+" "$MARKERS_JSON" || echo "false")
+
 MARKER_CHANNELS=$("$MKSEG_PYTHON" -c "
 import json, sys
 markers = json.loads(sys.argv[1])
-print(','.join(str(m['channel']) for m in markers))
+if not markers:
+    sys.exit(0)
+# Support both 'channel' and 'wavelength' keys
+parts = []
+for m in markers:
+    if 'channel' in m:
+        parts.append(str(m['channel']))
+    elif 'wavelength' in m:
+        parts.append(str(m['wavelength']))
+print(','.join(parts))
 " "$MARKERS_JSON" || echo "")
 
 MARKER_NAMES=$("$MKSEG_PYTHON" -c "
@@ -281,7 +321,11 @@ SBATCH_FILE="${OUTPUT_DIR}/pipeline_${NAME}_$$.sbatch"
 
         if [[ -n "$MARKER_CHANNELS" ]]; then
             echo "        echo \"  Classifying markers: $MARKER_NAMES\""
-            echo "        \$MKSEG_PYTHON $REPO/scripts/classify_markers.py --detections \"\$DET_JSON\" --marker-channel \"$MARKER_CHANNELS\" --marker-name \"$MARKER_NAMES\" --method \"$MARKER_METHOD\" --output-dir \"\$RUN_DIR\""
+            if [[ "$MARKER_USE_WAVELENGTH" == "true" ]]; then
+                echo "        \$MKSEG_PYTHON $REPO/scripts/classify_markers.py --detections \"\$DET_JSON\" --marker-wavelength \"$MARKER_CHANNELS\" --marker-name \"$MARKER_NAMES\" --method \"$MARKER_METHOD\" --czi-path \"\$CZI_FILE\" --output-dir \"\$RUN_DIR\""
+            else
+                echo "        \$MKSEG_PYTHON $REPO/scripts/classify_markers.py --detections \"\$DET_JSON\" --marker-channel \"$MARKER_CHANNELS\" --marker-name \"$MARKER_NAMES\" --method \"$MARKER_METHOD\" --output-dir \"\$RUN_DIR\""
+            fi
             echo "        DET_JSON=\"\${RUN_DIR}${CELL_TYPE}_detections_classified.json\""
         fi
 
@@ -332,7 +376,11 @@ SBATCH_FILE="${OUTPUT_DIR}/pipeline_${NAME}_$$.sbatch"
 
         if [[ -n "$MARKER_CHANNELS" ]]; then
             echo "    echo \"Classifying markers: $MARKER_NAMES\""
-            echo "    \$MKSEG_PYTHON $REPO/scripts/classify_markers.py --detections \"\$DET_JSON\" --marker-channel \"$MARKER_CHANNELS\" --marker-name \"$MARKER_NAMES\" --method \"$MARKER_METHOD\" --output-dir \"\$RUN_DIR\""
+            if [[ "$MARKER_USE_WAVELENGTH" == "true" ]]; then
+                echo "    \$MKSEG_PYTHON $REPO/scripts/classify_markers.py --detections \"\$DET_JSON\" --marker-wavelength \"$MARKER_CHANNELS\" --marker-name \"$MARKER_NAMES\" --method \"$MARKER_METHOD\" --czi-path \"$CZI_PATH\" --output-dir \"\$RUN_DIR\""
+            else
+                echo "    \$MKSEG_PYTHON $REPO/scripts/classify_markers.py --detections \"\$DET_JSON\" --marker-channel \"$MARKER_CHANNELS\" --marker-name \"$MARKER_NAMES\" --method \"$MARKER_METHOD\" --output-dir \"\$RUN_DIR\""
+            fi
             echo "    DET_JSON=\"\${RUN_DIR}${CELL_TYPE}_detections_classified.json\""
         fi
 

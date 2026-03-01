@@ -45,11 +45,10 @@ Tell the user: *"You can ask me to run any of these at any time, or just describ
 
 **Step 5 — Inspect the CZI.** Run `$MKSEG_PYTHON $REPO/scripts/czi_info.py <path>` (human-readable). Show the channel table with wavelengths.
 
-**Step 5b — Build the channel map (CRITICAL).** CZI channel order ≠ filename order. Always do a 2-step lookup:
-1. Parse the **filename** for antibody→wavelength hints (e.g., `SMA647` = SMA on 647nm, `nuc488` = nuclear on 488nm)
-2. Match wavelengths to **CZI channel indices** from the `czi_info.py` output (e.g., 647nm excitation = ch1)
+**Step 5b — Build the channel map (CRITICAL).** CZI channel order ≠ filename order. Use the automated 2-step resolver:
 
-Show the user a table like:
+1. Run `$MKSEG_PYTHON -c "from segmentation.io.czi_loader import get_czi_metadata, parse_markers_from_filename; import json; meta = get_czi_metadata('<czi_path>'); markers = parse_markers_from_filename('<czi_filename>'); print(json.dumps({'channels': meta['channels'], 'filename_markers': markers}, indent=2, default=str))"` to auto-parse both CZI metadata and filename markers.
+2. Build and show the user a table like:
 ```
 Channel  Wavelength  Antibody/Marker   Role
 ch0      488nm       Nuclear           Cellpose nuc input
@@ -57,8 +56,14 @@ ch1      647nm       SMA               Marker classification
 ch2      750nm       PM                Cellpose cyto input (membrane)
 ch3      555nm       CD31              Marker classification
 ```
+3. **Ask the user to confirm** this mapping before proceeding. Never start detection without confirmation.
 
-Use this table for ALL subsequent `--channel`, `--cellpose-input-channels`, and `--marker-channel` parameters. Never guess indices from filename order alone.
+Use `--channel-spec` for all pipeline commands to resolve channels automatically:
+- `--channel-spec "detect=SMA"` (resolves SMA→647nm→ch1)
+- `--channel-spec "cyto=PM,nuc=488"` (resolves both at startup)
+- `--channel-spec "detect=647"` (direct wavelength)
+
+This replaces manual `--channel`, `--cellpose-input-channels`, and `--marker-channel` index lookups. The pipeline resolves specs against CZI metadata at startup and prints the resolved mapping.
 
 ---
 
@@ -74,7 +79,8 @@ Use this table for ALL subsequent `--channel`, `--cellpose-input-channels`, and 
 **Step 7 — Offer preprocessing preview.** Ask: *"Want to preview flat-field or photobleach correction before the full run?"* If yes, run `scripts/preview_preprocessing.py --czi-path <path> --channel <N> --preprocessing all --output-dir <output>/preview/` and show the output paths.
 
 **Step 8 — Configure parameters.** Set up:
-- Detection channel (`--channel`)
+- Detection channel: use `--channel-spec "detect=<marker_or_wavelength>"` (preferred) or `--channel <index>`
+- For 2-channel Cellpose: `--channel-spec "cyto=<marker>,nuc=<marker>"` (preferred) or `--cellpose-input-channels <cyto>,<nuc>`
 - Multi-channel features (`--all-channels` if >1 channel relevant)
 - Deep features (`--extract-deep-features` for ResNet+DINOv2, only if user needs max accuracy)
 - Sample fraction: explain 0.01=quick test, 0.10=annotation round, 1.0=full run
@@ -96,6 +102,11 @@ cell_type: <type>
 num_gpus: <from system_info recommended.gpus>
 all_channels: <true/false>
 pixel_size_um: <from czi_info>
+# Channel map — resolved automatically against CZI metadata at runtime
+channel_map:
+  detect: SMA         # or wavelength like 647, or index like 1
+  # cyto: PM          # for Cellpose 2-channel input
+  # nuc: 488          # nuclear channel
 spatialdata:
   enabled: true
   extract_shapes: true
@@ -115,10 +126,14 @@ For **local**: Build and run the `run_segmentation.py` command directly:
 PYTHONPATH=$REPO $MKSEG_PYTHON $REPO/run_segmentation.py \
     --czi-path <path> \
     --cell-type <type> \
-    --channel <N> \
+    --channel-spec "detect=<marker>" \
     --num-gpus <recommended.gpus> \
     --output-dir <output> \
     [--all-channels] [--photobleaching-correction]
+```
+For 2-channel Cellpose (generic cell detection):
+```bash
+    --channel-spec "cyto=<marker>,nuc=<nuclear_marker>"
 ```
 
 **Step 10 — Monitor until complete.** On SLURM, use `squeue -u $USER` to check status. Offer to tail the log file. On local, the command runs directly.
@@ -166,6 +181,15 @@ PYTHONPATH=$REPO $MKSEG_PYTHON $REPO/scripts/regenerate_html.py \
 
 **Step 15 — Marker classification** (if multi-channel):
 ```bash
+# By wavelength (preferred — auto-resolves via CZI metadata):
+PYTHONPATH=$REPO $MKSEG_PYTHON $REPO/scripts/classify_markers.py \
+    --detections <detections.json> \
+    --marker-wavelength 647,555 \
+    --marker-name SMA,CD31 \
+    --czi-path <czi_path> \
+    --method otsu_half
+
+# Or by channel index (legacy):
 PYTHONPATH=$REPO $MKSEG_PYTHON $REPO/scripts/classify_markers.py \
     --detections <detections.json> \
     --marker-channel <channel_indices> \

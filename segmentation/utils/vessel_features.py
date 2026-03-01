@@ -970,8 +970,10 @@ def vessel_features_to_vector(
 # MULTI-CHANNEL FEATURE EXTRACTION
 # =============================================================================
 
-# Channel name mapping for common 4-channel vessel slides
-# Note: This is slide-specific; actual mapping should be passed from CZI metadata
+# Legacy channel name mapping for common 4-channel vessel slides.
+# DEPRECATED: Do not use as a runtime fallback. Callers must always pass
+# channel_names from CZI metadata / CLI args. Kept only because existing
+# detection JSONs reference these names in feature keys.
 DEFAULT_CHANNEL_NAMES = {
     0: 'nuclear',    # AF488 - Nuclear stain
     1: 'sma',        # AF647 - Smooth muscle actin (primary detection)
@@ -1009,7 +1011,7 @@ def extract_multichannel_intensity_features(
     wall_mask: np.ndarray,
     lumen_mask: Optional[np.ndarray],
     channels_data: Dict[int, np.ndarray],
-    channel_names: Optional[Dict[int, str]] = None,
+    channel_names: Dict[int, str] = None,
 ) -> Dict[str, float]:
     """
     Extract intensity features from multiple channels.
@@ -1022,8 +1024,8 @@ def extract_multichannel_intensity_features(
         wall_mask: Boolean mask of vessel wall region
         lumen_mask: Boolean mask of lumen region (optional)
         channels_data: Dict mapping channel index to channel image array
-        channel_names: Optional dict mapping channel index to name
-                      (default: DEFAULT_CHANNEL_NAMES)
+        channel_names: Dict mapping channel index to name. Required —
+                      must be provided by the caller from CZI metadata.
 
     Returns:
         Dictionary with per-channel intensity features, e.g.:
@@ -1033,9 +1035,15 @@ def extract_multichannel_intensity_features(
             'nuclear_wall_intensity_mean': 45.2,  # Named alias
             ...
         }
+
+    Raises:
+        ValueError: If channel_names is None
     """
     if channel_names is None:
-        channel_names = DEFAULT_CHANNEL_NAMES
+        raise ValueError(
+            "channel_names is required for multi-channel feature extraction. "
+            "Pass --channel-names on the CLI or use --channel-spec for automatic resolution."
+        )
 
     features = {}
 
@@ -1097,7 +1105,7 @@ def extract_multichannel_intensity_features(
 
 def compute_channel_ratios(
     multichannel_features: Dict[str, float],
-    channel_names: Optional[Dict[int, str]] = None,
+    channel_names: Dict[int, str] = None,
 ) -> Dict[str, float]:
     """
     Compute biologically meaningful ratios between channels.
@@ -1110,13 +1118,20 @@ def compute_channel_ratios(
     Args:
         multichannel_features: Dict with per-channel features from
                               extract_multichannel_intensity_features
-        channel_names: Optional channel name mapping
+        channel_names: Dict mapping channel index to name. Required —
+                      must be provided by the caller from CZI metadata.
 
     Returns:
         Dictionary with cross-channel ratio features
+
+    Raises:
+        ValueError: If channel_names is None
     """
     if channel_names is None:
-        channel_names = DEFAULT_CHANNEL_NAMES
+        raise ValueError(
+            "channel_names is required for cross-channel ratio computation. "
+            "Pass --channel-names on the CLI or use --channel-spec for automatic resolution."
+        )
 
     ratios = {}
 

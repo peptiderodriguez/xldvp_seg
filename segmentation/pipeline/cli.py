@@ -52,6 +52,14 @@ def build_parser():
     parser.add_argument('--sample-fraction', type=float, default=1.0, help='Fraction of tissue tiles to process (default: 100%%)')
     parser.add_argument('--channel', type=int, default=None,
                         help='Primary channel index for detection (default: 1 for NMJ, 0 for MK/vessel/cell)')
+    parser.add_argument('--channel-spec', type=str, default=None,
+                        help='Channel specification as ROLE=SPEC pairs, comma-separated. '
+                             'SPEC can be a wavelength (e.g., 647), marker name (e.g., SMA), '
+                             'or channel index (e.g., 1). '
+                             'Roles: detect (primary detection), nuc (nuclear), cyto (cytoplasm). '
+                             'Example: --channel-spec "cyto=PM,nuc=488,detect=SMA" '
+                             'Resolved against CZI metadata at startup. '
+                             'Overrides --channel, --cellpose-input-channels when provided.')
     parser.add_argument('--all-channels', action='store_true',
                         help='Load all channels for multi-channel analysis (NMJ specificity checking)')
     parser.add_argument('--channel-names', type=str, default=None,
@@ -338,6 +346,57 @@ def postprocess_args(args, parser):
         parser.error("--tile-overlap must be between 0.0 and 0.5")
     if args.sample_fraction <= 0 or args.sample_fraction > 1.0:
         parser.error("--sample-fraction must be in (0.0, 1.0]")
+
+    # Resolve --channel-spec (wavelength/name-based channel selection)
+    if getattr(args, 'channel_spec', None) and args.czi_path:
+        from segmentation.io.czi_loader import (
+            get_czi_metadata, resolve_channel_indices, ChannelResolutionError,
+        )
+        try:
+            meta = get_czi_metadata(args.czi_path, scene=args.scene)
+            filename = Path(args.czi_path).stem
+
+            # Parse ROLE=SPEC pairs
+            specs = {}
+            for pair in args.channel_spec.split(','):
+                pair = pair.strip()
+                if '=' not in pair:
+                    parser.error(f"--channel-spec: each entry must be ROLE=SPEC, got '{pair}'")
+                role, spec = pair.split('=', 1)
+                specs[role.strip().lower()] = spec.strip()
+
+            # Resolve all specs to channel indices
+            all_specs = list(specs.values())
+            resolved = resolve_channel_indices(meta, all_specs, filename)
+
+            # Apply resolved indices to the appropriate args
+            if 'detect' in specs:
+                args.channel = resolved[specs['detect']]
+            if 'cyto' in specs and 'nuc' in specs:
+                cyto_idx = resolved[specs['cyto']]
+                nuc_idx = resolved[specs['nuc']]
+                args.cellpose_input_channels = f"{cyto_idx},{nuc_idx}"
+            elif 'cyto' in specs:
+                args.channel = resolved[specs['cyto']]
+            elif 'nuc' in specs:
+                # For islet/tissue_pattern nuclear channel
+                nuc_idx = resolved[specs['nuc']]
+                if args.cell_type == 'islet':
+                    args.nuclear_channel = nuc_idx
+                elif args.cell_type == 'tissue_pattern':
+                    args.tp_nuclear_channel = nuc_idx
+
+            # Log the resolved mapping
+            print(f"Channel spec resolved:", flush=True)
+            for role, spec in specs.items():
+                idx = resolved[spec]
+                ch_info = meta['channels'][idx] if idx < len(meta['channels']) else {}
+                ex = ch_info.get('excitation_nm')
+                ex_str = f" ({ex:.0f}nm)" if ex else ""
+                print(f"  {role} = {spec} -> ch{idx}{ex_str}", flush=True)
+
+        except ChannelResolutionError as e:
+            parser.error(f"--channel-spec resolution failed: {e}")
 
     # Cell-type-dependent defaults for output-dir and channel
     if args.output_dir is None:

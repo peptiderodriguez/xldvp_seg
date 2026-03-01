@@ -50,33 +50,31 @@ source ~/miniforge3/etc/profile.d/conda.sh && conda activate mkseg
 
 ### Unified Segmentation
 ```bash
-# NMJ detection (10% annotation run — shows ALL candidates)
+# NMJ detection — resolve BTX channel automatically from filename
 python run_segmentation.py \
-    --czi-path /path/to/slide.czi \
+    --czi-path /path/to/nuc488_BTX647_NFL750.czi \
     --cell-type nmj \
-    --channel 1 \
+    --channel-spec "detect=BTX" \
     --sample-fraction 0.10
 
-# NMJ with classifier (100% run — shows rf_prediction >= 0.5)
+# Generic cell with 2-channel Cellpose — resolve by marker name
+python run_segmentation.py \
+    --czi-path /path/to/nuc488_NeuN647_tdTom555.czi \
+    --cell-type cell \
+    --channel-spec "cyto=NeuN,nuc=nuc"
+
+# Vessel detection (raw index still works)
 python run_segmentation.py \
     --czi-path /path/to/slide.czi \
-    --cell-type nmj \
-    --channel 1 \
-    --nmj-classifier path/to/rf_classifier.pkl \
-    --prior-annotations path/to/round1_annotations.json
+    --cell-type vessel \
+    --channel 0 \
+    --candidate-mode
 
 # MK detection
 python run_segmentation.py \
     --czi-path /path/to/slide.czi \
     --cell-type mk \
     --channel 0
-
-# Vessel detection
-python run_segmentation.py \
-    --czi-path /path/to/slide.czi \
-    --cell-type vessel \
-    --channel 0 \
-    --candidate-mode
 ```
 
 ### Performance Options
@@ -132,11 +130,31 @@ python -m http.server 8080 --directory /home/dude/mk_output/project/html
 ### Channel Mapping
 
 **CRITICAL: CZI channel order ≠ filename order.** CZI files sort channels by wavelength,
-not by the order antibodies appear in the filename. Always do a 2-step lookup:
-1. **Filename** → antibody-to-wavelength (e.g., `SMA647` means SMA is on 647nm)
-2. **`czi_info.py`** → wavelength-to-channel-index (e.g., 647nm excitation = ch1)
+not by the order antibodies appear in the filename. The pipeline automates the 2-step lookup:
 
-Never assume channel indices from the filename alone. Always run `czi_info.py` first.
+**Automated resolution via `--channel-spec`** (preferred):
+```bash
+# Specify channels by marker name or wavelength — resolved at startup
+python run_segmentation.py --czi-path slide.czi --cell-type nmj \
+    --channel-spec "detect=BTX"            # name from filename
+
+python run_segmentation.py --czi-path slide.czi --cell-type cell \
+    --channel-spec "cyto=PM,nuc=488"       # mix of name and wavelength
+```
+
+Resolution order: integer index → wavelength (±10nm) → marker name (via filename parsing) → CZI metadata name.
+
+**For `classify_markers.py`**: Use `--marker-wavelength 647,555 --czi-path slide.czi` instead of `--marker-channel 1,2`.
+
+**For YAML configs** (`run_pipeline.sh`): Add a `channel_map:` section:
+```yaml
+channel_map:
+  detect: SMA       # resolved to CZI channel index at runtime
+  cyto: PM
+  nuc: 488
+```
+
+**Manual fallback**: Raw indices (`--channel 1`, `--marker-channel 1,3`) still work.
 
 **NMJ example (3-channel):**
 - ch0: Nuclear (488nm)

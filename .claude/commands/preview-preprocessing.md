@@ -6,7 +6,7 @@ You are previewing preprocessing effects on CZI microscopy data for the xldvp_se
 
 **Step 1 — Get inputs.** If not provided in arguments, ask:
 - CZI file path
-- Channel index (or "all" to preview every channel)
+- Channel: can be an index (e.g., 1), wavelength (e.g., 647), marker name (e.g., SMA), or "all". If the user gives a name/wavelength, resolve it using `parse_markers_from_filename()` + `resolve_channel_indices()` from `segmentation.io.czi_loader`.
 - Which preprocessing: flat-field, photobleach, row/column normalization, or all
 
 **Step 2 — Detect system** (silently):

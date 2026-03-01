@@ -242,8 +242,15 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument('--detections', required=True,
                         help='Path to detections JSON file')
-    parser.add_argument('--marker-channel', required=True,
-                        help='Comma-separated channel indices (e.g. 2 or 1,3)')
+    parser.add_argument('--marker-channel', default=None,
+                        help='Comma-separated channel indices (e.g. 2 or 1,3). '
+                             'Required unless --marker-wavelength is used.')
+    parser.add_argument('--marker-wavelength', default=None,
+                        help='Comma-separated wavelengths instead of indices (e.g. "647,555"). '
+                             'Resolved to channel indices via CZI metadata. '
+                             'Requires --czi-path. Alternative to --marker-channel.')
+    parser.add_argument('--czi-path', default=None,
+                        help='CZI file path (required for --marker-wavelength resolution)')
     parser.add_argument('--marker-name', required=True,
                         help='Comma-separated marker names matching channels '
                              '(e.g. tdTomato or SMA,CD31)')
@@ -252,7 +259,15 @@ def parse_args() -> argparse.Namespace:
                         help='Classification method (default: otsu_half)')
     parser.add_argument('--output-dir', default=None,
                         help='Output directory (default: same dir as detections)')
-    return parser.parse_args()
+    args = parser.parse_args()
+
+    # Validate: must have either --marker-channel or --marker-wavelength
+    if not args.marker_channel and not args.marker_wavelength:
+        parser.error("Either --marker-channel or --marker-wavelength is required")
+    if args.marker_wavelength and not args.czi_path:
+        parser.error("--marker-wavelength requires --czi-path for wavelength-to-index resolution")
+
+    return args
 
 
 def main():
@@ -268,13 +283,26 @@ def main():
     output_dir = Path(args.output_dir) if args.output_dir else det_path.parent
     output_dir.mkdir(parents=True, exist_ok=True)
 
-    # Parse marker channels and names
-    try:
-        channels = [int(c.strip()) for c in args.marker_channel.split(',')]
-    except ValueError:
-        logger.error(f"Invalid --marker-channel: {args.marker_channel!r} "
-                     f"(expected comma-separated integers)")
-        sys.exit(1)
+    # Parse marker channels — resolve wavelengths if specified
+    if args.marker_wavelength:
+        from segmentation.io.czi_loader import get_czi_metadata, resolve_channel_indices, ChannelResolutionError
+        try:
+            meta = get_czi_metadata(args.czi_path)
+            wavelengths = [w.strip() for w in args.marker_wavelength.split(',')]
+            filename = Path(args.czi_path).stem
+            resolved = resolve_channel_indices(meta, wavelengths, filename)
+            channels = [resolved[w] for w in wavelengths]
+            logger.info(f"Resolved wavelengths {wavelengths} -> channel indices {channels}")
+        except ChannelResolutionError as e:
+            logger.error(f"Wavelength resolution failed: {e}")
+            sys.exit(1)
+    else:
+        try:
+            channels = [int(c.strip()) for c in args.marker_channel.split(',')]
+        except ValueError:
+            logger.error(f"Invalid --marker-channel: {args.marker_channel!r} "
+                         f"(expected comma-separated integers)")
+            sys.exit(1)
 
     names = [n.strip() for n in args.marker_name.split(',')]
 

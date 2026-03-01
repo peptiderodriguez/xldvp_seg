@@ -21,9 +21,207 @@ from typing import Dict, List, Tuple, Optional, Union
 from tqdm import tqdm
 from aicspylibczi import CziFile
 
+import re as _re
+
 from segmentation.utils.logging import get_logger
 
 logger = get_logger(__name__)
+
+
+class ChannelResolutionError(ValueError):
+    """Raised when a channel spec cannot be resolved to a CZI channel index."""
+
+
+def parse_markers_from_filename(filename: str) -> list:
+    """Extract antibody/marker to wavelength mappings from a CZI filename.
+
+    Handles patterns:
+      - SMA647  -> {"name": "SMA", "wavelength": 647}
+      - nuc488  -> {"name": "nuc", "wavelength": 488}
+      - CD31_555 -> {"name": "CD31", "wavelength": 555}
+      - 488Slc17a7 -> {"name": "Slc17a7", "wavelength": 488}
+      - PM750   -> {"name": "PM", "wavelength": 750}
+      - NeuN647 -> {"name": "NeuN", "wavelength": 647}
+      - tdTom555 -> {"name": "tdTom", "wavelength": 555}
+      - Bgtx647  -> {"name": "Bgtx", "wavelength": 647}
+
+    Returns list of dicts sorted by position in filename.
+    """
+    stem = Path(filename).stem if '.' in filename else filename
+    results = []
+    seen_positions = set()
+
+    # Pattern 1: name followed by wavelength (e.g., SMA647, nuc488, NeuN647, tdTom555)
+    for m in _re.finditer(r'(?<![0-9])([A-Za-z][A-Za-z0-9]*?)(\d{3})(?![0-9])', stem):
+        name, wl = m.group(1), int(m.group(2))
+        if 350 <= wl <= 900:  # valid fluorescence wavelength range
+            results.append({'name': name, 'wavelength': wl, '_pos': m.start()})
+            seen_positions.add(m.start())
+
+    # Pattern 2: name_wavelength (e.g., CD31_555)
+    # Negative lookahead prevents matching NAME_WL when WL is followed by a letter
+    # (e.g., Slc17a7_647Gad1 — 647 belongs to Gad1 via Pattern 3, not to Slc17a7)
+    for m in _re.finditer(r'([A-Za-z][A-Za-z0-9]*)_(\d{3})(?![0-9A-Za-z])', stem):
+        if m.start() not in seen_positions:
+            name, wl = m.group(1), int(m.group(2))
+            if 350 <= wl <= 900:
+                results.append({'name': name, 'wavelength': wl, '_pos': m.start()})
+                seen_positions.add(m.start())
+
+    # Pattern 3: wavelength before name (e.g., 488Slc17a7)
+    for m in _re.finditer(r'(?<![0-9A-Za-z])(\d{3})([A-Z][A-Za-z0-9]+)', stem):
+        if m.start() not in seen_positions:
+            wl, name = int(m.group(1)), m.group(2)
+            if 350 <= wl <= 900:
+                results.append({'name': name, 'wavelength': wl, '_pos': m.start()})
+                seen_positions.add(m.start())
+
+    # Sort by position in filename, strip internal _pos key
+    results.sort(key=lambda x: x['_pos'])
+    for r in results:
+        del r['_pos']
+
+    return results
+
+
+def resolve_channel_indices(
+    czi_metadata: dict,
+    marker_specs: list,
+    filename: str = None,
+) -> dict:
+    """Resolve marker names/wavelengths to CZI channel indices.
+
+    2-step lookup:
+      1. If spec is an integer index, validate it exists
+      2. If spec is a wavelength (3-digit number), match to CZI metadata
+      3. If spec is a name, use filename to get wavelength, then match
+
+    Args:
+        czi_metadata: From get_czi_metadata() — has channels[].excitation_nm
+        marker_specs: List like ["SMA", "CD31"] or ["647", "555"] or ["1", "3"]
+        filename: CZI filename for name→wavelength lookup (optional)
+
+    Returns:
+        Dict mapping each spec to its resolved channel index:
+        {"SMA": 1, "CD31": 3} or {"647": 1, "555": 3}
+
+    Raises:
+        ChannelResolutionError: If wavelength not found or ambiguous
+    """
+    channels = czi_metadata.get('channels', [])
+    n_channels = czi_metadata.get('n_channels', len(channels))
+
+    # Build wavelength→index lookup from CZI metadata
+    wl_to_idx = {}
+    for ch in channels:
+        ex = ch.get('excitation_nm')
+        if ex is not None:
+            wl_to_idx[float(ex)] = ch['index']
+
+    # Parse filename markers if provided
+    filename_markers = {}
+    if filename:
+        parsed = parse_markers_from_filename(filename)
+        for entry in parsed:
+            filename_markers[entry['name'].lower()] = entry['wavelength']
+
+    def _available_channels_str():
+        """Format available channels for error messages."""
+        parts = []
+        for ch in channels:
+            ex = ch.get('excitation_nm')
+            ex_str = f"{ex:.0f}nm" if ex else "N/A"
+            parts.append(f"ch{ch['index']}={ex_str} ({ch.get('name', '?')})")
+        return ', '.join(parts) if parts else '(no channel metadata)'
+
+    def _match_wavelength(target_wl: float) -> int:
+        """Find channel index matching a target wavelength (±10nm tolerance)."""
+        exact = wl_to_idx.get(target_wl)
+        if exact is not None:
+            return exact
+
+        # Fuzzy match within ±10nm
+        matches = []
+        for wl, idx in wl_to_idx.items():
+            if abs(wl - target_wl) <= 10:
+                matches.append((abs(wl - target_wl), idx, wl))
+
+        if len(matches) == 1:
+            _, idx, actual_wl = matches[0]
+            logger.debug(f"Fuzzy wavelength match: {target_wl}nm -> {actual_wl}nm (ch{idx})")
+            return idx
+        elif len(matches) > 1:
+            matches.sort()
+            raise ChannelResolutionError(
+                f"Ambiguous wavelength {target_wl}nm: matches multiple channels "
+                f"{[(wl, f'ch{idx}') for _, idx, wl in matches]}. "
+                f"Available: {_available_channels_str()}"
+            )
+        else:
+            raise ChannelResolutionError(
+                f"No channel found for wavelength {target_wl:.0f}nm. "
+                f"Available: {_available_channels_str()}"
+            )
+
+    resolved = {}
+    for spec in marker_specs:
+        spec_str = str(spec).strip()
+
+        # 1. Try as integer index
+        try:
+            idx = int(spec_str)
+            # Could be an index (0-5) or a wavelength (400-900)
+            if 0 <= idx < n_channels and idx < 100:
+                # Looks like a channel index
+                resolved[spec_str] = idx
+                logger.debug(f"Channel spec '{spec_str}' -> index {idx} (integer passthrough)")
+                continue
+            # If it's a 3-digit number in wavelength range, treat as wavelength
+            if 350 <= idx <= 900:
+                resolved[spec_str] = _match_wavelength(float(idx))
+                logger.debug(f"Channel spec '{spec_str}' -> wavelength {idx}nm -> ch{resolved[spec_str]}")
+                continue
+            # Otherwise treat as index if valid
+            if 0 <= idx < n_channels:
+                resolved[spec_str] = idx
+                continue
+            raise ChannelResolutionError(
+                f"Channel index {idx} out of range (0..{n_channels - 1}). "
+                f"Available: {_available_channels_str()}"
+            )
+        except ValueError:
+            pass
+
+        # 2. Try as marker name via filename lookup
+        name_lower = spec_str.lower()
+        if name_lower in filename_markers:
+            wl = filename_markers[name_lower]
+            resolved[spec_str] = _match_wavelength(float(wl))
+            logger.debug(
+                f"Channel spec '{spec_str}' -> {wl}nm (from filename) -> ch{resolved[spec_str]}"
+            )
+            continue
+
+        # 3. Try as marker name matching CZI channel metadata names
+        for ch in channels:
+            ch_name = (ch.get('name') or '').lower()
+            ch_dye = (ch.get('dye') or '').lower()
+            ch_fluor = (ch.get('fluorophore') or '').lower()
+            if name_lower in (ch_name, ch_dye, ch_fluor):
+                resolved[spec_str] = ch['index']
+                logger.debug(
+                    f"Channel spec '{spec_str}' -> ch{ch['index']} (matched CZI metadata name)"
+                )
+                break
+        else:
+            raise ChannelResolutionError(
+                f"Cannot resolve channel spec '{spec_str}'. "
+                f"Not a valid index, wavelength, or known marker name. "
+                f"Available: {_available_channels_str()}"
+                + (f"\nFilename markers: {filename_markers}" if filename_markers else "")
+            )
+
+    return resolved
 
 
 def _squeeze_batch_dims(arr: np.ndarray) -> np.ndarray:

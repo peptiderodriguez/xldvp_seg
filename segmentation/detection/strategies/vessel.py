@@ -32,7 +32,6 @@ from segmentation.utils.feature_extraction import (
 from segmentation.utils.vessel_features import (
     extract_vessel_features,
     extract_all_vessel_features_multichannel,
-    DEFAULT_CHANNEL_NAMES,
 )
 
 logger = get_logger(__name__)
@@ -4106,8 +4105,13 @@ class VesselStrategy(DetectionStrategy, MultiChannelFeatureMixin):
             try:
                 if extra_channels is not None and len(extra_channels) > 0:
                     # Multi-channel feature extraction (standard + per-channel + ratios)
-                    # Use provided channel_names or fall back to defaults
-                    effective_channel_names = channel_names if channel_names is not None else DEFAULT_CHANNEL_NAMES
+                    # channel_names must be provided by caller (from --channel-names or --channel-spec)
+                    if channel_names is None:
+                        raise ValueError(
+                            "channel_names is required for multi-channel vessel feature extraction. "
+                            "Pass --channel-names on the CLI (e.g., --channel-names nuclear,sma,pm,cd31) "
+                            "or use --channel-spec for automatic resolution from CZI metadata."
+                        )
                     vessel_specific_feat = extract_all_vessel_features_multichannel(
                         wall_mask=wall_mask,
                         lumen_mask=lumen_mask,
@@ -4116,7 +4120,7 @@ class VesselStrategy(DetectionStrategy, MultiChannelFeatureMixin):
                         inner_contour=cand.get('inner'),
                         pixel_size_um=pixel_size_um,
                         channels_data=extra_channels,
-                        channel_names=effective_channel_names,
+                        channel_names=channel_names,
                         binary_mask=cand.get('binary'),
                     )
                 else:
