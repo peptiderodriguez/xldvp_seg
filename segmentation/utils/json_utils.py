@@ -12,6 +12,12 @@ from pathlib import Path
 
 import numpy as np
 
+try:
+    import orjson
+    _HAS_ORJSON = True
+except ImportError:
+    _HAS_ORJSON = False
+
 
 class NumpyEncoder(json.JSONEncoder):
     """JSON encoder that handles numpy types.
@@ -95,8 +101,14 @@ def atomic_json_dump(data, filepath, cls=NumpyEncoder, sanitize=True):
 
     fd, tmp_path = tempfile.mkstemp(dir=filepath.parent, suffix='.tmp')
     try:
-        with os.fdopen(fd, 'w') as f:
-            json.dump(data, f, cls=cls)
+        if _HAS_ORJSON:
+            # orjson handles numpy types natively and is 3-5x faster.
+            # It writes bytes, not str, so open in binary mode.
+            with os.fdopen(fd, 'wb') as f:
+                f.write(orjson.dumps(data, option=orjson.OPT_SERIALIZE_NUMPY))
+        else:
+            with os.fdopen(fd, 'w') as f:
+                json.dump(data, f, cls=cls)
         os.replace(tmp_path, filepath)
     except BaseException:
         # Clean up temp file on any failure (including KeyboardInterrupt)
@@ -105,3 +117,12 @@ def atomic_json_dump(data, filepath, cls=NumpyEncoder, sanitize=True):
         except OSError:
             pass
         raise
+
+
+def fast_json_load(filepath):
+    """Load JSON file using orjson if available (2-3x faster for large files)."""
+    filepath = Path(filepath)
+    if _HAS_ORJSON:
+        return orjson.loads(filepath.read_bytes())
+    with open(filepath) as f:
+        return json.load(f)

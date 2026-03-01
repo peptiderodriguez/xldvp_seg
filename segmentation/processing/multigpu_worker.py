@@ -74,6 +74,7 @@ def _gpu_worker(
     variance_threshold: float = 1000.0,
     channel_keys: Optional[List[int]] = None,
     islet_display_channels: Optional[List[int]] = None,
+    tiles_dir: Optional[str] = None,
 ):
     """
     Generic GPU worker for any cell type.
@@ -102,6 +103,7 @@ def _gpu_worker(
         sam2_config: SAM2 config file
         cd31_channel: Optional channel index for CD31 (vessel validation)
         channel_names: Optional channel name mapping for vessels
+        tiles_dir: Output tiles directory for saving masks to disk (avoids sending through queue)
     """
     os.environ['CUDA_VISIBLE_DEVICES'] = str(gpu_id)
 
@@ -303,7 +305,7 @@ def _gpu_worker(
             tile_raw = None
             if slide_arr.ndim == 3:
                 # Strided read: reads only 1/sf² pixels (nearest-neighbor downscale)
-                tile_raw = slide_arr[y_rel:y_end:sf, x_rel:x_end:sf, :].copy()
+                tile_raw = np.ascontiguousarray(slide_arr[y_rel:y_end:sf, x_rel:x_end:sf, :])
                 # Update tile dims to reflect actual strided shape
                 # Store original-scale dims so coordinate conversion still works
                 actual_h, actual_w = tile_raw.shape[:2]
@@ -318,7 +320,7 @@ def _gpu_worker(
                 else:
                     tile_rgb = np.stack([tile_raw[:, :, 0]] * 3, axis=-1)
             else:
-                tile_gray = slide_arr[y_rel:y_end:sf, x_rel:x_end:sf].copy()
+                tile_gray = np.ascontiguousarray(slide_arr[y_rel:y_end:sf, x_rel:x_end:sf])
                 tile_rgb = np.stack([tile_gray] * 3, axis=-1)
 
             # Validate tile
@@ -444,20 +446,45 @@ def _gpu_worker(
                     out = {
                         'status': 'success', 'tid': tid,
                         'slide_name': slide_name, 'tile': tile,
-                        'masks': None,
+                        'masks_saved': False,
                         'features_list': [],
                         'scale_factor': sf,
                     }
                 else:
                     masks, features_list = result
                     detections_found += len(features_list)
+
+                    # Save masks to disk to avoid sending ~36MB arrays through queue
+                    masks_saved = False
+                    tile_out_str = None
+                    if tiles_dir is not None and masks is not None:
+                        try:
+                            import h5py
+                            tile_id = f"tile_{tile['x']}_{tile['y']}"
+                            tile_out = Path(tiles_dir) / tile_id
+                            tile_out.mkdir(exist_ok=True)
+                            masks_file = tile_out / f"{cell_type}_masks.h5"
+                            with h5py.File(masks_file, 'w') as f:
+                                from segmentation.io.html_export import create_hdf5_dataset
+                                create_hdf5_dataset(f, 'masks', masks)
+                            masks_saved = True
+                            tile_out_str = str(tile_out)
+                        except Exception as e:
+                            logger.warning(f"[{worker_name}] Failed to save masks to disk for {tid}: {e}, sending through queue")
+
                     out = {
                         'status': 'success', 'tid': tid,
                         'slide_name': slide_name, 'tile': tile,
-                        'masks': masks,
                         'features_list': features_list,
                         'scale_factor': sf,
                     }
+                    if masks_saved:
+                        out['masks_saved'] = True
+                        out['tile_out'] = tile_out_str
+                    else:
+                        # Fallback: send masks through queue (original behavior)
+                        out['masks'] = masks
+                        out['masks_saved'] = False
                 if partial_vessels:
                     out['partial_vessels'] = partial_vessels
                 output_queue.put(out)
@@ -528,6 +555,7 @@ class MultiGPUTileProcessor:
         variance_threshold: float = 1000.0,
         channel_keys: Optional[List[int]] = None,
         islet_display_channels: Optional[List[int]] = None,
+        tiles_dir: Optional[str] = None,
     ):
         self.num_gpus = num_gpus
         self.slide_info = slide_info
@@ -545,6 +573,7 @@ class MultiGPUTileProcessor:
         self.variance_threshold = variance_threshold
         self.channel_keys = channel_keys
         self.islet_display_channels = islet_display_channels
+        self.tiles_dir = tiles_dir
 
         self.workers: List[Process] = []
         self.input_queue: Optional[Queue] = None
@@ -600,7 +629,7 @@ class MultiGPUTileProcessor:
         local_checkpoint = self._copy_checkpoint_to_local() if self.extract_sam2_embeddings else None
 
         self.input_queue = Queue()
-        self.output_queue = Queue()
+        self.output_queue = Queue(maxsize=self.num_gpus * 4)
         self.stop_event = Event()
 
         errors = []
@@ -628,6 +657,7 @@ class MultiGPUTileProcessor:
                     self.variance_threshold,
                     self.channel_keys,
                     self.islet_display_channels,
+                    self.tiles_dir,
                 ),
                 daemon=True,
             )

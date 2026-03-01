@@ -14,6 +14,7 @@ import numpy as np
 import h5py
 
 from segmentation.utils.logging import get_logger
+from segmentation.utils.json_utils import fast_json_load
 from segmentation.utils.islet_utils import classify_islet_marker, compute_islet_marker_thresholds
 from segmentation.pipeline.samples import _compute_tile_percentiles, filter_and_create_html_samples
 
@@ -50,8 +51,7 @@ def detect_resume_stage(slide_output_dir, cell_type):
     has_detections = det_file.exists()
     if has_detections:
         try:
-            with open(det_file) as f:
-                dets = json.load(f)
+            dets = fast_json_load(det_file)
             detection_count = len(dets)
         except (json.JSONDecodeError, IOError):
             has_detections = False
@@ -83,8 +83,7 @@ def reload_detections_from_tiles(tiles_dir, cell_type):
         feat_file = td / f"{cell_type}_features.json"
         if feat_file.exists():
             try:
-                with open(feat_file) as f:
-                    features_list = json.load(f)
+                features_list = fast_json_load(feat_file)
                 all_detections.extend(features_list)
             except (json.JSONDecodeError, IOError) as e:
                 logger.warning(f"Failed to load {feat_file}: {e}")

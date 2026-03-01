@@ -70,7 +70,7 @@ from segmentation.io.html_export import (
 from segmentation.utils.logging import get_logger, setup_logging
 from segmentation.io.czi_loader import get_loader, get_czi_metadata, print_czi_metadata
 from segmentation.utils.islet_utils import classify_islet_marker, compute_islet_marker_thresholds
-from segmentation.utils.json_utils import NumpyEncoder, atomic_json_dump
+from segmentation.utils.json_utils import NumpyEncoder, atomic_json_dump, fast_json_load
 from segmentation.detection.cell_detector import CellDetector
 # tile_processing functions now called from within pipeline modules
 
@@ -150,8 +150,7 @@ def run_pipeline(args):
             logger.info("All stages complete -- regenerating CSV and summary only (no CZI load needed)")
             slide_output_dir = resume_dir
             det_file = slide_output_dir / f"{args.cell_type}_detections.json"
-            with open(det_file) as f:
-                all_detections = json.load(f)
+            all_detections = fast_json_load(det_file)
 
             # Load pipeline config for metadata
             config_file = slide_output_dir / 'pipeline_config.json'
@@ -434,8 +433,7 @@ def run_pipeline(args):
 
             # Checkpoint 1: merged detections (all shards concatenated)
             if merged_det_file.exists() and not getattr(args, 'force_detect', False):
-                with open(merged_det_file) as f:
-                    all_detections = json.load(f)
+                all_detections = fast_json_load(merged_det_file)
                 logger.info(f"Checkpoint: loaded {len(all_detections)} merged detections from {merged_det_file.name}")
             elif resume_info['has_tiles']:
                 all_detections = reload_detections_from_tiles(tiles_dir, args.cell_type)
@@ -449,8 +447,7 @@ def run_pipeline(args):
 
             # Checkpoint 2: deduped detections
             if deduped_det_file.exists() and not getattr(args, 'force_detect', False):
-                with open(deduped_det_file) as f:
-                    all_detections = json.load(f)
+                all_detections = fast_json_load(deduped_det_file)
                 logger.info(f"Checkpoint: loaded {len(all_detections)} deduped detections from {deduped_det_file.name}")
                 skip_dedup = True
             skip_detection = True
@@ -460,8 +457,7 @@ def run_pipeline(args):
             skip_detection = True
             skip_dedup = True
             det_file = slide_output_dir / f"{args.cell_type}_detections.json"
-            with open(det_file) as f:
-                all_detections = json.load(f)
+            all_detections = fast_json_load(det_file)
             logger.info(f"Loaded {len(all_detections)} detections from {det_file} (skipping detection + dedup)")
         elif resume_info['has_tiles'] and not getattr(args, 'force_detect', False):
             skip_detection = True
@@ -725,6 +721,7 @@ def run_pipeline(args):
                 channel_names=mgpu_channel_names,
                 variance_threshold=variance_threshold,
                 channel_keys=ch_keys,
+                tiles_dir=str(tiles_dir),
             ) as processor:
 
                 all_scale_detections = []  # Accumulate full-res detections across scales
@@ -742,8 +739,7 @@ def run_pipeline(args):
                         )
                         if checkpoint_files:
                             latest = checkpoint_files[-1]
-                            with open(latest) as f:
-                                all_scale_detections = json.load(f)
+                            all_scale_detections = fast_json_load(latest)
                             # Restore numpy arrays for contours (json.load produces lists)
                             for det in all_scale_detections:
                                 for key in ('outer', 'inner', 'outer_contour', 'inner_contour'):
@@ -987,6 +983,7 @@ def run_pipeline(args):
                 variance_threshold=variance_threshold,
                 channel_keys=ch_keys,
                 islet_display_channels=getattr(args, 'islet_display_chs', None),
+                tiles_dir=str(tiles_dir),
             ) as processor:
 
                 # Submit all tiles (add tile dimensions for worker)
@@ -1020,7 +1017,6 @@ def run_pipeline(args):
                         try:
                             tile = result['tile']
                             tile_x, tile_y = tile['x'], tile['y']
-                            masks = result['masks']
                             features_list = result['features_list']
 
                             # Collect partial vessels from worker for cross-tile merge
@@ -1030,6 +1026,16 @@ def run_pipeline(args):
                                     if tk not in collected_partial_vessels:
                                         collected_partial_vessels[tk] = []
                                     collected_partial_vessels[tk].extend(pvl)
+
+                            # Get masks: either from disk (worker saved) or from result dict (fallback)
+                            masks_already_saved = result.get('masks_saved', False)
+                            if masks_already_saved:
+                                tile_out = Path(result['tile_out'])
+                                masks_file = tile_out / f"{args.cell_type}_masks.h5"
+                                with h5py.File(masks_file, 'r') as hf:
+                                    masks = hf['masks'][:]
+                            else:
+                                masks = result.get('masks')
 
                             # Skip tiles with no detections (masks=None from worker)
                             if masks is None or len(features_list) == 0:
@@ -1044,9 +1050,10 @@ def run_pipeline(args):
                             tile_out = tiles_dir / tile_id
                             tile_out.mkdir(exist_ok=True)
 
-                            # Save masks
-                            with h5py.File(tile_out / f"{args.cell_type}_masks.h5", 'w') as f:
-                                create_hdf5_dataset(f, 'masks', masks)
+                            # Save masks (skip if worker already saved to disk)
+                            if not masks_already_saved:
+                                with h5py.File(tile_out / f"{args.cell_type}_masks.h5", 'w') as f:
+                                    create_hdf5_dataset(f, 'masks', masks)
 
                             # Save features (includes vessel classification if applicable)
                             atomic_json_dump(features_list, tile_out / f"{args.cell_type}_features.json")
@@ -1112,7 +1119,7 @@ def run_pipeline(args):
                                     'tile_pct': tile_pct,
                                 })
                                 del masks, tile_rgb_html, features_list
-                                result['masks'] = None
+                                result.pop('masks', None)
                                 result['features_list'] = None
                                 gc.collect()
                             else:

@@ -331,9 +331,10 @@ def merge_detections_across_scales(
     # Spatial grid: cell_key -> list of (index_in_merged, bbox, contour)
     grid = defaultdict(list)
     merged = []
-    merged_contours = []  # parallel list of (contour_cv2, bbox)
+    merged_contours = []  # parallel list of (contour_cv2, bbox, area)
     duplicate_count = 0
     iou_checks = 0
+    area_ratio_skips = 0
     
     # Progress tracking for large merge operations
     total_start = time.time()
@@ -356,10 +357,18 @@ def merge_detections_across_scales(
 
         is_duplicate = False
         for idx in candidate_indices:
-            existing_c, existing_bbox = merged_contours[idx]
+            existing_c, existing_bbox, existing_area = merged_contours[idx]
             # Fast bbox pre-check before expensive IoU
             if not _bboxes_overlap(bbox, existing_bbox):
                 continue
+            # Cheap area ratio pre-filter: if areas differ by >3x, IoU
+            # cannot be high (a shape 3x larger has at most ~33% overlap
+            # with the smaller one). Avoids expensive mask rendering.
+            if area > 0 and existing_area > 0:
+                ratio = max(area, existing_area) / min(area, existing_area)
+                if ratio > 3.0:
+                    area_ratio_skips += 1
+                    continue
             iou_checks += 1
             iou = compute_iou_contours(contour, existing_c)
             if iou > iou_threshold:
@@ -377,7 +386,7 @@ def merge_detections_across_scales(
         if not is_duplicate:
             new_idx = len(merged)
             merged.append(det)
-            merged_contours.append((contour, bbox))
+            merged_contours.append((contour, bbox, area))
             for cell in cells:
                 grid[cell].append(new_idx)
         
@@ -399,7 +408,8 @@ def merge_detections_across_scales(
     avg_checks_per_det = iou_checks / len(prepared) if len(prepared) > 0 else 0
     logger.info(
         f"Merge completed: {iou_checks} total IoU checks in {elapsed_total:.1f}s "
-        f"({iou_checks/elapsed_total:.0f} checks/s, {avg_checks_per_det:.1f} checks/detection)"
+        f"({iou_checks/elapsed_total:.0f} checks/s, {avg_checks_per_det:.1f} checks/detection), "
+        f"{area_ratio_skips} skipped by area ratio pre-filter"
     )
     logger.info(
         f"Merged {len(detections)} detections → {len(merged)} "
