@@ -1027,20 +1027,21 @@ def run_pipeline(args):
                                         collected_partial_vessels[tk] = []
                                     collected_partial_vessels[tk].extend(pvl)
 
-                            # Get masks: prefer disk (worker saved) over Queue copy
-                            masks_already_saved = result.get('masks_saved', False)
-                            masks = result.get('masks')  # always available (backward compat)
-                            if masks_already_saved:
-                                tile_out = Path(result['tile_out'])
+                            # Masks: worker saves to disk when tiles_dir provided,
+                            # sends None through Queue to keep it lightweight.
+                            # Read from disk for HTML generation.
+                            tile_id = f"tile_{tile_x}_{tile_y}"
+                            tile_out = tiles_dir / tile_id
+                            masks = result['masks']
+
+                            if masks is None and len(features_list) > 0:
+                                # Worker saved to disk — read back for HTML
                                 masks_file = tile_out / f"{args.cell_type}_masks.h5"
                                 if masks_file.exists():
                                     with h5py.File(masks_file, 'r') as hf:
                                         masks = hf['masks'][:]
-                                elif masks is None:
-                                    logger.warning(f"Masks file missing and no Queue fallback for tile ({tile_x}, {tile_y})")
-                                    continue
 
-                            # Skip tiles with no detections (masks=None from worker)
+                            # Skip tiles with no detections
                             if masks is None or len(features_list) == 0:
                                 continue
 
@@ -1048,14 +1049,11 @@ def run_pipeline(args):
                             if args.cell_type == 'vessel':
                                 apply_vessel_classifiers(features_list, vessel_classifier, vessel_type_classifier)
 
-                            # Save tile outputs
-                            tile_id = f"tile_{tile_x}_{tile_y}"
-                            tile_out = tiles_dir / tile_id
+                            # Save tile masks (skip if worker already saved)
                             tile_out.mkdir(exist_ok=True)
-
-                            # Save masks (skip if worker already saved to disk)
-                            if not masks_already_saved:
-                                with h5py.File(tile_out / f"{args.cell_type}_masks.h5", 'w') as f:
+                            masks_file = tile_out / f"{args.cell_type}_masks.h5"
+                            if not masks_file.exists():
+                                with h5py.File(masks_file, 'w') as f:
                                     create_hdf5_dataset(f, 'masks', masks)
 
                             # Save features (includes vessel classification if applicable)

@@ -446,7 +446,7 @@ def _gpu_worker(
                     out = {
                         'status': 'success', 'tid': tid,
                         'slide_name': slide_name, 'tile': tile,
-                        'masks_saved': False,
+                        'masks': None,
                         'features_list': [],
                         'scale_factor': sf,
                     }
@@ -454,9 +454,15 @@ def _gpu_worker(
                     masks, features_list = result
                     detections_found += len(features_list)
 
-                    # Save masks to disk to avoid sending ~36MB arrays through queue
-                    masks_saved = False
-                    tile_out_str = None
+                    # Save masks to disk when tiles_dir available.
+                    # Keeps Queue lightweight (~100 bytes vs ~36MB per tile).
+                    # Main process reads masks from disk for HTML generation.
+                    out = {
+                        'status': 'success', 'tid': tid,
+                        'slide_name': slide_name, 'tile': tile,
+                        'features_list': features_list,
+                        'scale_factor': sf,
+                    }
                     if tiles_dir is not None and masks is not None:
                         try:
                             import h5py
@@ -467,26 +473,12 @@ def _gpu_worker(
                             with h5py.File(masks_file, 'w') as f:
                                 from segmentation.io.html_export import create_hdf5_dataset
                                 create_hdf5_dataset(f, 'masks', masks)
-                            masks_saved = True
-                            tile_out_str = str(tile_out)
+                            out['masks'] = None  # saved to disk, don't send through Queue
                         except Exception as e:
-                            logger.warning(f"[{worker_name}] Failed to save masks to disk for {tid}: {e}, sending through queue")
-
-                    out = {
-                        'status': 'success', 'tid': tid,
-                        'slide_name': slide_name, 'tile': tile,
-                        'features_list': features_list,
-                        'scale_factor': sf,
-                        # Always include masks for backward compat with old main process
-                        # code that does result['masks'] directly. New main process code
-                        # checks masks_saved and reads from disk instead.
-                        'masks': masks,
-                    }
-                    if masks_saved:
-                        out['masks_saved'] = True
-                        out['tile_out'] = tile_out_str
+                            logger.warning(f"[{worker_name}] Failed to save masks to disk for {tid}: {e}")
+                            out['masks'] = masks  # fallback: send through Queue
                     else:
-                        out['masks_saved'] = False
+                        out['masks'] = masks  # no tiles_dir: send through Queue
                 if partial_vessels:
                     out['partial_vessels'] = partial_vessels
                 output_queue.put(out)
