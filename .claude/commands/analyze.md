@@ -27,7 +27,7 @@ Use this info throughout to set `--num-gpus`, SLURM `--mem`, `--cpus-per-task`, 
 | **Features** | Morph (78D), SAM2 (256D), ResNet (4096D), DINOv2 (2048D), per-channel stats (15/ch) | `--extract-deep-features`, `--all-channels` |
 | **Annotate** | HTML viewer with pos/neg annotation, JSON export | `scripts/regenerate_html.py`, `serve_html.py` |
 | **Classify** | RF training, feature comparison (5-fold CV), batch scoring | `train_classifier.py`, `scripts/compare_feature_sets.py`, `scripts/apply_classifier.py` |
-| **Markers** | Otsu/GMM per-channel marker classification | `scripts/classify_markers.py` |
+| **Markers** | Otsu (with local background subtraction) / GMM marker classification | `scripts/classify_markers.py` |
 | **Explore** | UMAP, PCA, HDBSCAN clustering, AnnData/scanpy export | `scripts/cluster_by_features.py` |
 | **Spatial** | Delaunay networks, community detection, cell neighborhoods | `scripts/spatial_cell_analysis.py` |
 | **Visualize** | Multi-slide scrollable HTML with ROI drawing + stats | `scripts/generate_multi_slide_spatial_viewer.py` |
@@ -109,6 +109,10 @@ channel_map:
   detect: SMA         # or wavelength like 647, or index like 1
   # cyto: PM          # for Cellpose 2-channel input
   # nuc: 488          # nuclear channel
+markers:                          # post-detection marker classification
+  - {channel: 1, name: NeuN, method: otsu}
+  - {channel: 2, name: tdTomato, method: otsu}
+correct_all_channels: true        # background-correct ALL ch{N} features (default: true)
 spatialdata:
   enabled: true
   extract_shapes: true
@@ -182,22 +186,51 @@ PYTHONPATH=$REPO $MKSEG_PYTHON $REPO/scripts/regenerate_html.py \
 ## Phase 4: Spatial Analysis + Exploration
 
 **Step 15 — Marker classification** (if multi-channel):
+
+Ask: *"Which channels are markers you want to classify as positive/negative?"*
+
+The default method (`otsu`) uses **local background subtraction**: for each cell, the median intensity of its 30 nearest neighbors is subtracted before Otsu thresholding. This removes autofluorescence and improves signal separation. Use `--correct-all-channels` (default in YAML pipelines) to background-correct ALL per-channel features (mean, median, percentiles, ratios), not just the classified markers.
+
 ```bash
-# By wavelength (preferred — auto-resolves via CZI metadata):
+# Recommended: background-corrected Otsu with all-channel correction
+PYTHONPATH=$REPO $MKSEG_PYTHON $REPO/scripts/classify_markers.py \
+    --detections <detections.json> \
+    --marker-channel 1,2 \
+    --marker-name NeuN,tdTomato \
+    --correct-all-channels
+
+# By wavelength (auto-resolves via CZI metadata):
 PYTHONPATH=$REPO $MKSEG_PYTHON $REPO/scripts/classify_markers.py \
     --detections <detections.json> \
     --marker-wavelength 647,555 \
-    --marker-name SMA,CD31 \
+    --marker-name NeuN,tdTomato \
     --czi-path <czi_path> \
-    --method otsu_half
+    --correct-all-channels
 
-# Or by channel index (legacy):
+# Legacy (no background subtraction):
 PYTHONPATH=$REPO $MKSEG_PYTHON $REPO/scripts/classify_markers.py \
     --detections <detections.json> \
     --marker-channel <channel_indices> \
     --marker-name <names> \
     --method otsu_half
 ```
+
+**Methods:**
+| Method | Background subtraction | Description |
+|--------|----------------------|-------------|
+| `otsu` (default) | Local (k=30 neighbors) | Full Otsu on bg-subtracted values. Recommended. |
+| `otsu_half` | None | Otsu / 2 on raw values. Permissive, legacy. |
+| `gmm` | None | 2-component GMM on log1p values. |
+
+**`--correct-all-channels`** (default `true` in YAML): Corrects ALL `ch{N}_*` intensity features (mean, median, min, max, percentiles), recomputes cv and cross-channel ratios/diffs. Stores originals as `ch{N}_*_raw`. This ensures downstream RF classifiers and spatial analyses use background-corrected features.
+
+Per-detection output fields (for each marker):
+- `{marker}_class`: positive / negative
+- `{marker}_value`: background-subtracted intensity
+- `{marker}_raw`: original raw intensity
+- `{marker}_background`: local background estimate
+- `{marker}_snr`: signal-to-noise ratio (raw / background)
+- `marker_profile`: combined (e.g., `NeuN+/tdTomato-`) when multiple markers
 
 **Step 16 — Spatial network analysis:**
 ```bash

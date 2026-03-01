@@ -18,6 +18,31 @@ Ask: *"Do you have annotations already, or do you need to create them first?"*
 
 ---
 
+## Step 1b: Background Correction (recommended before any classification)
+
+Ask: *"Do you want to background-correct the per-channel intensity features first? This is recommended for all multi-channel data."*
+
+**Local background subtraction** removes autofluorescence by subtracting each cell's local neighborhood signal. For each cell, the median intensity of the 30 nearest neighboring cells is used as the background estimate. This is applied to ALL per-channel features: mean, median, min, max, percentiles. Cross-channel ratios and diffs are recomputed from corrected values.
+
+This happens automatically when using `--method otsu` (default) or `--correct-all-channels`:
+```bash
+$MKSEG_PYTHON $REPO/scripts/classify_markers.py \
+    --detections <detections.json> \
+    --marker-channel 1,2 --marker-name NeuN,tdTomato \
+    --correct-all-channels
+```
+
+**What gets corrected:**
+| Corrected (bg subtracted) | Unchanged (shift-invariant) | Recomputed |
+|---|---|---|
+| mean, median, min, max | std, variance | cv = std / corrected_mean |
+| p5, p25, p75, p95 | iqr, dynamic_range | cross-channel ratios/diffs |
+| | skewness, kurtosis | |
+
+Originals saved as `ch{N}_*_raw`. Each cell also gets `ch{N}_background` and `ch{N}_snr`.
+
+---
+
 ## Step 2: Feature Selection
 
 Explain the available feature subsets and help the user choose:
