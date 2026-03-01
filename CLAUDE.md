@@ -183,6 +183,7 @@ UID format: `{slide}_{celltype}_{x}_{y}`
 | `scripts/napari_place_crosses.py` | Interactive reference cross placement |
 | `scripts/cluster_detections.py` | Biological clustering for LMD well assignment |
 | `scripts/napari_view_lmd_export.py` | View LMD export overlaid on slide |
+| `scripts/convert_to_spatialdata.py` | Convert detections to SpatialData zarr (scverse ecosystem) |
 
 ---
 
@@ -285,6 +286,45 @@ python run_lmd_export.py \
 ```
 
 Max 308 wells per plate. Early capacity check warns before expensive processing.
+
+---
+
+## SpatialData Integration (scverse ecosystem)
+
+Pipeline detections are automatically exported to SpatialData format (zarr) for use with squidpy, scanpy, and the broader scverse ecosystem.
+
+### Automatic Export
+Every pipeline run exports `{celltype}_spatialdata.zarr` alongside the JSON/CSV/HTML outputs. Requires spatialdata/anndata/geopandas (installed by default).
+
+### Standalone Converter
+```bash
+# Convert any existing detection JSON
+python scripts/convert_to_spatialdata.py \
+    --detections /path/to/cell_detections.json \
+    --output /path/to/output.zarr \
+    --tiles-dir /path/to/tiles/ \
+    --run-squidpy --squidpy-cluster-key tdTomato_class
+```
+
+### YAML Config (run_pipeline.sh)
+```yaml
+spatialdata:
+  enabled: true
+  extract_shapes: true
+  run_squidpy: true
+  squidpy_cluster_key: tdTomato_class
+```
+
+### Load in Python
+```python
+import spatialdata as sd
+sdata = sd.read_zarr("output.zarr")
+adata = sdata["table"]  # AnnData with spatial coords, features, embeddings
+
+import squidpy as sq
+sq.gr.spatial_neighbors(adata)
+sq.pl.spatial_scatter(adata, color="tdTomato_class")
+```
 
 ---
 

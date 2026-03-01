@@ -147,12 +147,22 @@ import cellpose
 import numpy
 import cv2
 import h5py
+import anndata
+import scanpy
+import spatialdata
+import squidpy
+import geopandas
 from segmentation.processing.multigpu_worker import MultiGPUTileProcessor
 print('All imports successful!')
 print(f'  torch: {torch.__version__}')
 print(f'  cellpose: {cellpose.__version__}')
 print(f'  numpy: {numpy.__version__}')
 print(f'  cv2: {cv2.__version__}')
+print(f'  anndata: {anndata.__version__}')
+print(f'  scanpy: {scanpy.__version__}')
+print(f'  spatialdata: {spatialdata.__version__}')
+print(f'  squidpy: {squidpy.__version__}')
+print(f'  geopandas: {geopandas.__version__}')
 print(f'  CUDA: {torch.cuda.is_available()}')
 if torch.cuda.is_available():
     print(f'  GPU: {torch.cuda.get_device_name(0)}')

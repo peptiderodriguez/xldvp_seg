@@ -157,6 +157,44 @@ def _build_channel_legend(cell_type, args, czi_path, slide_name=None):
         return None
 
 
+def _export_spatialdata(args, all_detections, cell_type, pixel_size_um,
+                        slide_output_dir, tiles_dir):
+    """Export detections to SpatialData format if dependencies are available.
+
+    Silently skips if spatialdata/anndata/geopandas are not installed.
+    """
+    try:
+        import spatialdata  # noqa: F401
+    except ImportError:
+        return
+
+    try:
+        from scripts.convert_to_spatialdata import export_spatialdata
+
+        output_zarr = slide_output_dir / f'{cell_type}_spatialdata.zarr'
+        tiles_path = str(tiles_dir) if tiles_dir and Path(tiles_dir).exists() else None
+
+        # Check for OME-Zarr image next to the CZI
+        zarr_image = None
+        czi_path = Path(args.czi_path)
+        candidate_zarr = czi_path.with_suffix('.ome.zarr')
+        if candidate_zarr.exists():
+            zarr_image = str(candidate_zarr)
+
+        export_spatialdata(
+            detections=all_detections,
+            output_path=output_zarr,
+            cell_type=cell_type,
+            tiles_dir=tiles_path,
+            zarr_image=zarr_image,
+            pixel_size_um=pixel_size_um,
+            run_squidpy=False,
+            overwrite=True,
+        )
+    except Exception as e:
+        logger.warning("SpatialData export failed (non-fatal): %s", e)
+
+
 def _finish_pipeline(args, all_detections, all_samples, slide_output_dir, tiles_dir,
                      pixel_size_um, slide_name, mosaic_info, run_timestamp, pct,
                      skip_html=False, all_tiles=None, tissue_tiles=None, sampled_tiles=None,
@@ -308,6 +346,10 @@ def _finish_pipeline(args, all_detections, all_samples, slide_output_dir, tiles_
     html_dir = slide_output_dir / "html"
     if html_dir.exists():
         logger.info(f"HTML viewer: {html_dir / 'index.html'}")
+
+    # SpatialData export (optional — skipped silently if deps not installed)
+    _export_spatialdata(args, all_detections, cell_type, pixel_size_um,
+                        slide_output_dir, tiles_dir)
 
     # Start HTTP server
     no_serve = getattr(args, 'no_serve', False)

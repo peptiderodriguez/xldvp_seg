@@ -109,6 +109,12 @@ elif [[ -n "$SPATIAL_FILTER" && -z "$SPATIAL_ENABLED" ]]; then
     SPATIAL_ENABLED="true"
 fi
 
+# SpatialData export
+SPATIALDATA_ENABLED=$(read_yaml spatialdata.enabled true)
+SPATIALDATA_SHAPES=$(read_yaml spatialdata.extract_shapes true)
+SPATIALDATA_SQUIDPY=$(read_yaml spatialdata.run_squidpy false)
+SPATIALDATA_CLUSTER_KEY=$(read_yaml spatialdata.squidpy_cluster_key "")
+
 # Spatial viewer
 VIEWER_ENABLED=$(read_yaml spatial_viewer.enabled false)
 VIEWER_GROUP_FIELD=$(read_yaml spatial_viewer.group_field "")
@@ -286,6 +292,25 @@ SBATCH_FILE="${OUTPUT_DIR}/pipeline_${NAME}_$$.sbatch"
             echo "        \$MKSEG_PYTHON $REPO/scripts/spatial_cell_analysis.py --detections \"\$DET_JSON\" --output-dir \"\$RUN_DIR\" --spatial-network --marker-filter \"$SPATIAL_FILTER\" --max-edge-distance \"$SPATIAL_EDGE\" --min-component-cells \"$SPATIAL_MIN_COMP\" --pixel-size \"$PIXEL_SIZE\""
         fi
 
+        if [[ "$SPATIALDATA_ENABLED" == "true" ]]; then
+            echo ""
+            echo "        # SpatialData export"
+            echo "        echo \"  Exporting to SpatialData...\""
+            sd_cmd="        \$MKSEG_PYTHON $REPO/scripts/convert_to_spatialdata.py --detections \"\$DET_JSON\" --output \"\${RUN_DIR}${CELL_TYPE}_spatialdata.zarr\" --cell-type \"$CELL_TYPE\" --overwrite"
+            if [[ "$SPATIALDATA_SHAPES" == "true" ]]; then
+                sd_cmd+=" --tiles-dir \"\${RUN_DIR}tiles\""
+            else
+                sd_cmd+=" --no-shapes"
+            fi
+            if [[ "$SPATIALDATA_SQUIDPY" == "true" ]]; then
+                sd_cmd+=" --run-squidpy"
+                if [[ -n "$SPATIALDATA_CLUSTER_KEY" ]]; then
+                    sd_cmd+=" --squidpy-cluster-key \"$SPATIALDATA_CLUSTER_KEY\""
+                fi
+            fi
+            echo "$sd_cmd"
+        fi
+
         echo "    else"
         echo "        echo \"  WARNING: ${CELL_TYPE}_detections.json not found, skipping marker/spatial steps\""
         echo "    fi"
@@ -316,6 +341,25 @@ SBATCH_FILE="${OUTPUT_DIR}/pipeline_${NAME}_$$.sbatch"
             echo "    # Step 3: Spatial analysis"
             echo "    echo \"Running spatial analysis...\""
             echo "    \$MKSEG_PYTHON $REPO/scripts/spatial_cell_analysis.py --detections \"\$DET_JSON\" --output-dir \"\$RUN_DIR\" --spatial-network --marker-filter \"$SPATIAL_FILTER\" --max-edge-distance \"$SPATIAL_EDGE\" --min-component-cells \"$SPATIAL_MIN_COMP\" --pixel-size \"$PIXEL_SIZE\""
+        fi
+
+        if [[ "$SPATIALDATA_ENABLED" == "true" ]]; then
+            echo ""
+            echo "    # SpatialData export"
+            echo "    echo \"Exporting to SpatialData...\""
+            sd_cmd="    \$MKSEG_PYTHON $REPO/scripts/convert_to_spatialdata.py --detections \"\$DET_JSON\" --output \"\${RUN_DIR}${CELL_TYPE}_spatialdata.zarr\" --cell-type \"$CELL_TYPE\" --overwrite"
+            if [[ "$SPATIALDATA_SHAPES" == "true" ]]; then
+                sd_cmd+=" --tiles-dir \"\${RUN_DIR}tiles\""
+            else
+                sd_cmd+=" --no-shapes"
+            fi
+            if [[ "$SPATIALDATA_SQUIDPY" == "true" ]]; then
+                sd_cmd+=" --run-squidpy"
+                if [[ -n "$SPATIALDATA_CLUSTER_KEY" ]]; then
+                    sd_cmd+=" --squidpy-cluster-key \"$SPATIALDATA_CLUSTER_KEY\""
+                fi
+            fi
+            echo "$sd_cmd"
         fi
 
         # Step 4: Spatial viewer (single-slide, inline)
