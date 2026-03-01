@@ -20,17 +20,20 @@ Ask: *"Do you have annotations already, or do you need to create them first?"*
 
 ## Step 1b: Background Correction
 
-**For new pipeline runs (Mar 2026+):** Background correction is now done automatically during detection (post-dedup phase). All `ch{N}_*` features are extracted from background-corrected pixels. Originals are stored as `ch{N}_*_raw`. Each cell gets `ch{N}_background` and `ch{N}_snr`. `classify_markers.py` auto-detects this and skips its own `--correct-all-channels` step.
+**Background correction is automatic.** The pipeline performs pixel-level background correction during detection (post-dedup phase). All `ch{N}_*` features (mean, std, percentiles, etc.) are extracted from corrected pixels. Each cell has:
+- `ch{N}_background` — local background estimate (median of k=30 nearest neighbors)
+- `ch{N}_snr` — signal-to-noise ratio
+- `ch{N}_mean_raw`, `ch{N}_std_raw`, etc. — uncorrected originals
 
-**For older detections (pre-Mar 2026):** Ask *"Do you want to background-correct the per-channel intensity features first?"* If yes, use `--correct-all-channels`:
+**Double correction is impossible.** `classify_markers.py` auto-detects pipeline-corrected data (via `ch{N}_background` keys) and disables ALL its own bg subtraction — both `--correct-all-channels` and per-marker `bg_subtract` (including the `otsu` method's default). No user action needed.
+
+**For older detections (pre-Mar 2026) only:** Use `--correct-all-channels`:
 ```bash
 $MKSEG_PYTHON $REPO/scripts/classify_markers.py \
     --detections <detections.json> \
     --marker-channel 1,2 --marker-name NeuN,tdTomato \
     --correct-all-channels
 ```
-
-**How it works:** Local background subtraction removes autofluorescence by subtracting each cell's local neighborhood signal. For each cell, the median intensity of the 30 nearest neighboring cells is the background estimate. Applied to ALL per-channel features (mean, median, min, max, percentiles). Cross-channel ratios/diffs recomputed from corrected values.
 
 ---
 

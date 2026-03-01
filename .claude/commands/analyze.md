@@ -112,7 +112,6 @@ channel_map:
 markers:                          # post-detection marker classification
   - {channel: 1, name: NeuN, method: otsu}
   - {channel: 2, name: tdTomato, method: otsu}
-correct_all_channels: false       # pipeline does bg correction automatically; only enable for legacy re-runs
 spatialdata:
   enabled: true
   extract_shapes: true
@@ -189,12 +188,10 @@ PYTHONPATH=$REPO $MKSEG_PYTHON $REPO/scripts/regenerate_html.py \
 
 Ask: *"Which channels are markers you want to classify as positive/negative?"*
 
-**Note on background correction:** The pipeline now performs background correction automatically during detection (post-dedup phase). If the detections have `ch{N}_background` keys, `classify_markers.py` will detect this and skip its own `--correct-all-channels` step to avoid double-correction. All `ch{N}_*` features in the output are already background-corrected, with originals stored as `ch{N}_*_raw`.
-
-The default marker classification method (`otsu`) still uses **local background subtraction** per-marker for thresholding, which is separate from the pipeline-level all-channel correction.
+**Background correction is automatic.** The pipeline performs pixel-level background correction during detection (post-dedup phase). All `ch{N}_*` features are already corrected. `classify_markers.py` auto-detects this (via `ch{N}_background` keys) and disables ALL its own background subtraction — both `--correct-all-channels` and per-marker `bg_subtract`. **Double correction is impossible.** The user does NOT need `--correct-all-channels` or any special flags.
 
 ```bash
-# Standard usage (pipeline already bg-corrected all features):
+# Standard usage — just classify, bg correction already done by pipeline:
 PYTHONPATH=$REPO $MKSEG_PYTHON $REPO/scripts/classify_markers.py \
     --detections <detections.json> \
     --marker-channel 1,2 \
@@ -207,36 +204,31 @@ PYTHONPATH=$REPO $MKSEG_PYTHON $REPO/scripts/classify_markers.py \
     --marker-name NeuN,tdTomato \
     --czi-path <czi_path>
 
-# For older detections without pipeline bg correction, add --correct-all-channels:
+# For OLDER detections (pre-Mar 2026) without pipeline bg correction:
 PYTHONPATH=$REPO $MKSEG_PYTHON $REPO/scripts/classify_markers.py \
     --detections <detections.json> \
     --marker-channel 1,2 \
     --marker-name NeuN,tdTomato \
     --correct-all-channels
-
-# Legacy (no background subtraction):
-PYTHONPATH=$REPO $MKSEG_PYTHON $REPO/scripts/classify_markers.py \
-    --detections <detections.json> \
-    --marker-channel <channel_indices> \
-    --marker-name <names> \
-    --method otsu_half
 ```
 
 **Methods:**
-| Method | Background subtraction | Description |
-|--------|----------------------|-------------|
-| `otsu` (default) | Local (k=30 neighbors) | Full Otsu on bg-subtracted values. Recommended. |
-| `otsu_half` | None | Otsu / 2 on raw values. Permissive, legacy. |
-| `gmm` | None | 2-component GMM on log1p values. |
+| Method | Description |
+|--------|-------------|
+| `otsu` (default) | Otsu threshold on corrected values. Per-marker bg_subtract auto-disabled for pipeline-corrected data. |
+| `otsu_half` | Otsu / 2. Permissive, legacy. |
+| `gmm` | 2-component GMM on log1p values. |
 
-**`--correct-all-channels`**: Corrects ALL `ch{N}_*` intensity features. **Only needed for detections from older pipeline runs** that don't have pipeline-level bg correction. The pipeline now does this automatically; `classify_markers.py` auto-detects pre-corrected data and skips.
+**Pipeline-level background correction** (written during detection):
+- `ch{N}_background`: per-cell local background estimate (median of k=30 nearest neighbors)
+- `ch{N}_snr`: signal-to-noise ratio (raw / background)
+- `ch{N}_mean_raw`, `ch{N}_std_raw`, etc.: uncorrected feature values
+- All `ch{N}_mean`, `ch{N}_std`, etc.: corrected values (extracted from bg-subtracted pixels)
 
-Per-detection output fields (for each marker):
+**Per-marker output fields** (written by `classify_markers.py`):
 - `{marker}_class`: positive / negative
-- `{marker}_value`: background-subtracted intensity
-- `{marker}_raw`: original raw intensity
-- `{marker}_background`: local background estimate
-- `{marker}_snr`: signal-to-noise ratio (raw / background)
+- `{marker}_value`: corrected intensity (same as `ch{N}_mean` for pipeline-corrected data)
+- `{marker}_threshold`: Otsu threshold used
 - `marker_profile`: combined (e.g., `NeuN+/tdTomato-`) when multiple markers
 
 **Step 16 — Spatial network analysis:**

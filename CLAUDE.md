@@ -171,7 +171,7 @@ python run_segmentation.py --czi-path slide.czi --cell-type cell \
 
 Resolution order: integer index → wavelength (±10nm) → marker name (via filename parsing) → CZI metadata name.
 
-**For `classify_markers.py`**: Use `--marker-wavelength 647,555 --czi-path slide.czi` instead of `--marker-channel 1,2`.
+**For `classify_markers.py`**: Use `--marker-wavelength 647,555 --czi-path slide.czi` instead of `--marker-channel 1,2`. No `--correct-all-channels` needed — pipeline does bg correction automatically, and `classify_markers.py` auto-detects this to prevent double correction.
 
 **For YAML configs** (`run_pipeline.sh`): Add a `channel_map:` section:
 ```yaml
@@ -241,6 +241,7 @@ UID format: `{slide}_{celltype}_{x}_{y}`
 | `run_lmd_export.py` | Export to Leica LMD format (any cell type) |
 | `train_classifier.py` | Train RF classifier from annotated detections |
 | `scripts/apply_classifier.py` | Score existing detections with trained classifier (no re-detection) |
+| `scripts/classify_markers.py` | Marker classification (Otsu/GMM). Auto-detects pipeline bg correction, no double-correction. |
 | `scripts/regenerate_html.py` | Regenerate HTML viewer from saved detections (all cell types) |
 | `scripts/czi_to_ome_zarr.py` | Convert CZI to OME-Zarr with pyramids |
 | `scripts/napari_place_crosses.py` | Interactive reference cross placement |
