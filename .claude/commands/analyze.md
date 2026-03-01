@@ -43,7 +43,22 @@ Tell the user: *"You can ask me to run any of these at any time, or just describ
 
 **Step 4 — Ask for the CZI file(s).** Accept a single path or a directory.
 
-**Step 5 — Inspect the CZI.** Run `$MKSEG_PYTHON $REPO/scripts/czi_info.py <path>` (human-readable). Show the channel table and recommend which channels map to what (nuclear, marker, detection).
+**Step 5 — Inspect the CZI.** Run `$MKSEG_PYTHON $REPO/scripts/czi_info.py <path>` (human-readable). Show the channel table with wavelengths.
+
+**Step 5b — Build the channel map (CRITICAL).** CZI channel order ≠ filename order. Always do a 2-step lookup:
+1. Parse the **filename** for antibody→wavelength hints (e.g., `SMA647` = SMA on 647nm, `nuc488` = nuclear on 488nm)
+2. Match wavelengths to **CZI channel indices** from the `czi_info.py` output (e.g., 647nm excitation = ch1)
+
+Show the user a table like:
+```
+Channel  Wavelength  Antibody/Marker   Role
+ch0      488nm       Nuclear           Cellpose nuc input
+ch1      647nm       SMA               Marker classification
+ch2      750nm       PM                Cellpose cyto input (membrane)
+ch3      555nm       CD31              Marker classification
+```
+
+Use this table for ALL subsequent `--channel`, `--cellpose-input-channels`, and `--marker-channel` parameters. Never guess indices from filename order alone.
 
 ---
 

@@ -129,10 +129,19 @@ python -m http.server 8080 --directory /home/dude/mk_output/project/html
 18. OME-Zarr pyramid for Napari viewing
 19. XML export with reference crosses
 
-### Channel Mapping (3-channel slides)
-- R (ch0): Nuclear (488nm)
-- G (ch1): BTX (647nm) — NMJ marker (detection channel)
-- B (ch2): NFL (750nm)
+### Channel Mapping
+
+**CRITICAL: CZI channel order ≠ filename order.** CZI files sort channels by wavelength,
+not by the order antibodies appear in the filename. Always do a 2-step lookup:
+1. **Filename** → antibody-to-wavelength (e.g., `SMA647` means SMA is on 647nm)
+2. **`czi_info.py`** → wavelength-to-channel-index (e.g., 647nm excitation = ch1)
+
+Never assume channel indices from the filename alone. Always run `czi_info.py` first.
+
+**NMJ example (3-channel):**
+- ch0: Nuclear (488nm)
+- ch1: BTX (647nm) — NMJ marker (detection channel)
+- ch2: NFL (750nm)
 
 ### Feature Hierarchy
 | Feature Set | Dimensions | When |
