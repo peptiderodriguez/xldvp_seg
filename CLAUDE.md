@@ -124,9 +124,9 @@ python -m http.server 8080 --directory /home/dude/mk_output/project/html
 5. Initial feature extraction: morph + SAM2 (always), ResNet + DINOv2 (opt-in `--extract-deep-features`)
 6. Deduplicate overlapping masks (>10% pixel overlap) — or `--merge-shards` for multi-node
 7. **Post-dedup processing** (default ON, runs in main pipeline):
-   - Dilate contours +0.5 um (`--dilation-um`), RDP simplify (`--rdp-epsilon 5`)
-   - Re-extract morph + per-channel features on the **dilated** mask
-   - Local background correction (KD-tree, k=30 neighbors, `--bg-neighbors`)
+   - Phase 1: Dilate contours +0.5 um (`--dilation-um`), RDP simplify (`--rdp-epsilon 5`), extract quick means
+   - Phase 2: Local background estimation (KD-tree, k=30 global neighbors, `--bg-neighbors`)
+   - Phase 3: Subtract per-cell background from pixels, then extract all features on corrected data
    - Disable with `--no-contour-processing` / `--no-background-correction`
 8. Generate annotation HTML (subsample 1500 via `scripts/regenerate_html.py --max-samples 1500`)
 9. Train RF classifier with annotations (`train_classifier.py`, balanced classes)
