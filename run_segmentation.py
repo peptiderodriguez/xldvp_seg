@@ -510,6 +510,52 @@ def run_pipeline(args):
             )
             logger.info(f"Dedup (resume): {pre_dedup} -> {len(all_detections)}")
 
+        # Post-dedup processing (resume path) — skip already-completed steps
+        _has_bg = False
+        _has_contour = False
+        if all_detections:
+            _sample_feat = all_detections[0].get('features', {})
+            _has_bg = any(k.endswith('_background') for k in _sample_feat)
+            _has_contour = all_detections[0].get('contour_dilated_px') is not None
+
+        _want_contour = getattr(args, 'contour_processing', True) and not _has_contour
+        _want_bg = getattr(args, 'background_correction', True) and not _has_bg
+
+        if len(all_detections) > 0 and (_want_contour or _want_bg):
+            from segmentation.pipeline.post_detection import process_detections_post_dedup
+            mask_fn = f'{args.cell_type}_masks.h5'
+            _display_chs = None
+            if args.cell_type == 'islet':
+                _display_chs = getattr(args, 'islet_display_chs', [2, 3, 5])
+            elif args.cell_type == 'tissue_pattern':
+                _display_chs = getattr(args, 'tp_display_channels_list', [0, 3, 1])
+
+            # Channel indices for loader-based extraction (no SHM in resume path)
+            _ch_indices = sorted(all_channel_data.keys()) if all_channel_data else []
+
+            if _has_contour and not _has_bg:
+                logger.info("Contours already processed — running background correction only")
+            elif _has_bg and not _has_contour:
+                logger.info("Background already corrected — running contour processing only")
+
+            process_detections_post_dedup(
+                all_detections,
+                tiles_dir,
+                pixel_size_um,
+                mask_filename=mask_fn,
+                loader=loader,
+                ch_indices=_ch_indices,
+                tile_size=args.tile_size,
+                display_channels=_display_chs,
+                contour_processing=_want_contour,
+                dilation_um=getattr(args, 'dilation_um', 0.5),
+                rdp_epsilon=getattr(args, 'rdp_epsilon', 5.0),
+                background_correction=_want_bg,
+                bg_neighbors=getattr(args, 'bg_neighbors', 30),
+            )
+        elif _has_bg and _has_contour:
+            logger.info("Detections already post-processed — skipping")
+
         # Regenerate HTML if needed (requires CZI + tile masks)
         all_samples = []
         if not skip_html:
@@ -1303,6 +1349,36 @@ def run_pipeline(args):
                 unique_samples.append(s)
         logger.info(f"Dedup: {len(all_samples)} HTML samples -> {len(unique_samples)} (removed {len(all_samples) - len(unique_samples)} duplicate UIDs)")
         all_samples = unique_samples
+
+    # ---- Post-dedup: contour dilation + feature re-extraction + bg correction ----
+    if len(all_detections) > 0 and (
+        getattr(args, 'contour_processing', True) or getattr(args, 'background_correction', True)
+    ):
+        from segmentation.pipeline.post_detection import process_detections_post_dedup
+        mask_fn = f'{args.cell_type}_masks.h5'
+        # Determine display channels for RGB morph extraction
+        _display_chs = None
+        if args.cell_type == 'islet':
+            _display_chs = getattr(args, 'islet_display_chs', [2, 3, 5])
+        elif args.cell_type == 'tissue_pattern':
+            _display_chs = getattr(args, 'tp_display_channels_list', [0, 3, 1])
+
+        process_detections_post_dedup(
+            all_detections,
+            tiles_dir,
+            pixel_size_um,
+            mask_filename=mask_fn,
+            slide_shm_arr=slide_shm_arr,
+            ch_to_slot=ch_to_slot,
+            x_start=x_start,
+            y_start=y_start,
+            display_channels=_display_chs,
+            contour_processing=getattr(args, 'contour_processing', True),
+            dilation_um=getattr(args, 'dilation_um', 0.5),
+            rdp_epsilon=getattr(args, 'rdp_epsilon', 5.0),
+            background_correction=getattr(args, 'background_correction', True),
+            bg_neighbors=getattr(args, 'bg_neighbors', 30),
+        )
 
     # ---- Shared post-processing: CSV, JSON, HTML, summary, server ----
     _finish_pipeline(

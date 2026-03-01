@@ -283,6 +283,24 @@ def build_parser():
     parser.add_argument('--skip-deep-features', action='store_true',
                         help='Deprecated: deep features are off by default now. Use --extract-deep-features to enable.')
 
+    # Post-dedup contour processing (default ON)
+    parser.add_argument('--no-contour-processing', dest='contour_processing',
+                        action='store_false', default=True,
+                        help='Disable post-dedup contour dilation + RDP simplification. '
+                             'When enabled (default), masks are dilated and features re-extracted '
+                             'from the dilated mask region.')
+    parser.add_argument('--dilation-um', type=float, default=0.5,
+                        help='Contour dilation in micrometers (default: 0.5)')
+    parser.add_argument('--rdp-epsilon', type=float, default=5.0,
+                        help='RDP simplification epsilon in pixels (default: 5)')
+
+    # Post-dedup background correction (default ON)
+    parser.add_argument('--no-background-correction', dest='background_correction',
+                        action='store_false', default=True,
+                        help='Disable local background subtraction on per-channel intensity features')
+    parser.add_argument('--bg-neighbors', type=int, default=30,
+                        help='KD-tree neighbors for local background estimation (default: 30)')
+
     # GPU processing (always uses multi-GPU infrastructure, even with 1 GPU)
     parser.add_argument('--multi-gpu', action='store_true', default=True,
                         help='[DEPRECATED - always enabled] Multi-GPU processing is now the only code path. '

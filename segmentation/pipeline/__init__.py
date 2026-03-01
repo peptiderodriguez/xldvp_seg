@@ -9,4 +9,6 @@ Submodules:
     detection_setup: Strategy creation, classifier loading, parameter building
     preprocessing: Photobleach, flat-field, Reinhard normalization
     cli: Argument parser construction and postprocessing
+    background: Local background correction (KD-tree based)
+    post_detection: Post-dedup pipeline (dilate, re-extract features, bg correct)
 """

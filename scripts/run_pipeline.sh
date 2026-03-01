@@ -89,8 +89,15 @@ for role, spec in cm.items():
     pairs.append(f'{role}={spec}')
 print(','.join(pairs))
 " "$CONFIG" || echo "")
-CORRECT_ALL_CHANNELS=$(read_yaml correct_all_channels true)
+CORRECT_ALL_CHANNELS=$(read_yaml correct_all_channels false)
 SAMPLE_FRACTION=$(read_yaml sample_fraction "")
+
+# Post-dedup processing (contour dilation + background correction)
+BACKGROUND_CORRECTION=$(read_yaml background_correction true)
+CONTOUR_PROCESSING=$(read_yaml contour_processing true)
+DILATION_UM=$(read_yaml dilation_um "")
+RDP_EPSILON=$(read_yaml rdp_epsilon "")
+BG_NEIGHBORS=$(read_yaml bg_neighbors "")
 
 # SLURM settings
 PARTITION=$(read_yaml slurm.partition p.hpcl8)
@@ -196,6 +203,22 @@ build_seg_cmd() {
     fi
     if [[ -n "$CHANNEL_SPEC" ]]; then
         cmd+=" --channel-spec \"$CHANNEL_SPEC\""
+    fi
+    # Post-dedup processing flags
+    if [[ "$BACKGROUND_CORRECTION" == "false" ]]; then
+        cmd+=" --no-background-correction"
+    fi
+    if [[ "$CONTOUR_PROCESSING" == "false" ]]; then
+        cmd+=" --no-contour-processing"
+    fi
+    if [[ -n "$DILATION_UM" ]]; then
+        cmd+=" --dilation-um $DILATION_UM"
+    fi
+    if [[ -n "$RDP_EPSILON" ]]; then
+        cmd+=" --rdp-epsilon $RDP_EPSILON"
+    fi
+    if [[ -n "$BG_NEIGHBORS" ]]; then
+        cmd+=" --bg-neighbors $BG_NEIGHBORS"
     fi
     echo "$cmd"
 }

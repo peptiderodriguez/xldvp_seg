@@ -314,6 +314,11 @@ def _finish_pipeline(args, all_detections, all_samples, slide_output_dir, tiles_
             logger.info("Multiscale checkpoints cleaned up after successful completion")
 
     # Save summary
+    # Check if post-dedup processing was applied
+    _sample_feat = all_detections[0].get('features', {}) if all_detections else {}
+    _bg_corrected = any(k.endswith('_background') for k in _sample_feat)
+    _contour_processed = any(d.get('contour_dilated_px') is not None for d in all_detections[:1])
+
     summary = {
         'slide_name': slide_name,
         'cell_type': cell_type,
@@ -329,6 +334,8 @@ def _finish_pipeline(args, all_detections, all_samples, slide_output_dir, tiles_
         'params': params if params else {},
         'detections_file': str(detections_file),
         'coordinates_file': str(csv_file),
+        'background_corrected': _bg_corrected,
+        'contour_processed': _contour_processed,
     }
     atomic_json_dump(summary, slide_output_dir / 'summary.json')
 

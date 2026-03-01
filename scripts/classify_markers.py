@@ -49,54 +49,12 @@ sys.path.insert(0, str(REPO))
 
 from segmentation.utils.logging import get_logger, setup_logging
 from segmentation.utils.json_utils import NumpyEncoder, atomic_json_dump
+from segmentation.pipeline.background import (
+    local_background_subtract,
+    correct_all_channels,
+)
 
 logger = get_logger(__name__)
-
-
-# ---------------------------------------------------------------------------
-# Background subtraction
-# ---------------------------------------------------------------------------
-
-def local_background_subtract(values: np.ndarray,
-                              centroids: np.ndarray,
-                              n_neighbors: int = 30) -> tuple[np.ndarray, np.ndarray]:
-    """Per-cell local background subtraction using neighboring cells.
-
-    For each cell, finds the n_neighbors nearest cells and uses their
-    median intensity as the local background estimate. Subtracts this
-    from the cell's own intensity.
-
-    Args:
-        values: 1D array of marker intensities per cell.
-        centroids: Nx2 array of [x, y] coordinates per cell.
-        n_neighbors: Number of nearest neighbors for background estimate.
-
-    Returns:
-        (corrected_values, per_cell_background). Corrected values clipped >= 0.
-    """
-    from scipy.spatial import cKDTree
-
-    n = len(values)
-    if n < n_neighbors + 1:
-        # Too few cells — fall back to global median as background
-        bg = np.median(values)
-        logger.warning(f"Too few cells ({n}) for local background (need {n_neighbors}+1). "
-                       f"Using global median {bg:.1f}")
-        corrected = np.maximum(values - bg, 0.0)
-        return corrected, np.full(n, bg)
-
-    tree = cKDTree(centroids)
-    # Query k+1 because the closest neighbor is the cell itself
-    _, indices = tree.query(centroids, k=n_neighbors + 1)
-
-    # For each cell, compute median of neighbor intensities (excluding self)
-    # indices[:, 0] is always the cell itself (distance 0)
-    neighbor_indices = indices[:, 1:]  # exclude self
-    neighbor_values = values[neighbor_indices]  # shape: (n, n_neighbors)
-    per_cell_bg = np.median(neighbor_values, axis=1)
-
-    corrected = np.maximum(values - per_cell_bg, 0.0)
-    return corrected, per_cell_bg
 
 
 # ---------------------------------------------------------------------------
@@ -252,133 +210,13 @@ def extract_marker_values(detections: list[dict], channel: int) -> np.ndarray:
 
 
 def extract_centroids(detections: list[dict]) -> np.ndarray:
-    """Extract [x, y] centroids from detections."""
-    centroids = []
-    for d in detections:
-        feat = d.get('features', {})
-        c = feat.get('centroid', d.get('centroid', [0, 0]))
-        centroids.append(c)
-    return np.array(centroids, dtype=np.float64)
+    """Extract **global** [x, y] centroids from detections.
 
-
-def correct_all_channels(detections: list[dict], centroids: np.ndarray,
-                         n_neighbors: int = 30) -> list[int]:
-    """Background-correct all per-channel intensity features in-place.
-
-    For each channel, estimates per-cell local background from ch{N}_mean
-    of neighboring cells, then:
-
-    Corrected (bg subtracted, clipped >= 0):
-      ch{N}_mean, ch{N}_median, ch{N}_min, ch{N}_max,
-      ch{N}_p5, ch{N}_p25, ch{N}_p75, ch{N}_p95
-
-    Recomputed from corrected values:
-      ch{N}_cv  (std / corrected_mean)
-      ch{N}_ch{M}_ratio, ch{N}_ch{M}_diff  (from corrected means)
-
-    Unchanged (shape/spread invariant to shift):
-      ch{N}_std, ch{N}_variance, ch{N}_iqr, ch{N}_dynamic_range,
-      ch{N}_skewness, ch{N}_kurtosis
-
-    Added:
-      ch{N}_mean_raw, ch{N}_background, ch{N}_snr
-
-    Returns list of channel indices that were corrected.
+    Uses ``global_center`` (slide-level), NOT ``features["centroid"]``
+    (tile-local).  Imported ``_extract_centroids`` is the canonical impl.
     """
-    # Intensity features to subtract background from
-    INTENSITY_SUFFIXES = ['mean', 'median', 'min', 'max', 'p5', 'p25', 'p75', 'p95']
-
-    # Discover channels from ch{N}_mean keys
-    sample_feat = detections[0].get('features', {})
-    ch_mean_keys = sorted([k for k in sample_feat if k.startswith('ch') and k.endswith('_mean')])
-    if not ch_mean_keys:
-        logger.warning("No ch{N}_mean keys found in detections")
-        return []
-
-    channels = []
-    for key in ch_mean_keys:
-        ch_str = key.replace('ch', '').replace('_mean', '')
-        try:
-            channels.append(int(ch_str))
-        except ValueError:
-            continue
-
-    logger.info(f"Background-correcting {len(channels)} channels: {channels}")
-    n_det = len(detections)
-
-    # Step 1: Compute per-cell background from ch{N}_mean for each channel
-    channel_bg = {}  # ch -> per_cell_bg array
-    channel_corrected_mean = {}  # ch -> corrected mean array (for ratio/cv recompute)
-
-    for ch in channels:
-        mean_key = f'ch{ch}_mean'
-        values = np.array([d.get('features', {}).get(mean_key, 0.0) for d in detections],
-                          dtype=np.float64)
-        corrected_mean, per_cell_bg = local_background_subtract(values, centroids, n_neighbors)
-        channel_bg[ch] = per_cell_bg
-        channel_corrected_mean[ch] = corrected_mean
-
-        median_bg = float(np.median(per_cell_bg))
-        nonzero = corrected_mean[corrected_mean > 0]
-        logger.info(f"  ch{ch}: bg median={median_bg:.1f}, "
-                    f"{len(nonzero):,}/{n_det:,} cells with signal after correction")
-
-    # Step 2: Correct all intensity features and write back
-    for ch in channels:
-        per_cell_bg = channel_bg[ch]
-
-        for suffix in INTENSITY_SUFFIXES:
-            key = f'ch{ch}_{suffix}'
-            if key not in sample_feat:
-                continue
-
-            values = np.array([d.get('features', {}).get(key, 0.0) for d in detections],
-                              dtype=np.float64)
-            corrected = np.maximum(values - per_cell_bg, 0.0)
-
-            raw_key = f'ch{ch}_{suffix}_raw'
-            for i, det in enumerate(detections):
-                feat = det['features']
-                feat[raw_key] = float(values[i])
-                feat[key] = float(corrected[i])
-
-        # Write background and SNR (based on mean)
-        mean_raw = np.array([d['features'].get(f'ch{ch}_mean_raw', 0.0) for d in detections],
-                            dtype=np.float64)
-        for i, det in enumerate(detections):
-            feat = det['features']
-            feat[f'ch{ch}_background'] = float(per_cell_bg[i])
-            feat[f'ch{ch}_snr'] = float(mean_raw[i] / per_cell_bg[i]) if per_cell_bg[i] > 0 else 0.0
-
-        # Recompute cv = std / corrected_mean
-        if f'ch{ch}_cv' in sample_feat and f'ch{ch}_std' in sample_feat:
-            for i, det in enumerate(detections):
-                feat = det['features']
-                corr_mean = channel_corrected_mean[ch][i]
-                std = feat.get(f'ch{ch}_std', 0.0)
-                feat[f'ch{ch}_cv'] = float(std / corr_mean) if corr_mean > 0 else 0.0
-
-    # Step 3: Recompute cross-channel ratios and diffs from corrected means
-    for ch_a in channels:
-        for ch_b in channels:
-            if ch_a == ch_b:
-                continue
-            ratio_key = f'ch{ch_a}_ch{ch_b}_ratio'
-            diff_key = f'ch{ch_a}_ch{ch_b}_diff'
-            if ratio_key in sample_feat:
-                for i, det in enumerate(detections):
-                    feat = det['features']
-                    a = channel_corrected_mean[ch_a][i]
-                    b = channel_corrected_mean[ch_b][i]
-                    feat[ratio_key] = float(a / b) if b > 0 else 0.0
-            if diff_key in sample_feat:
-                for i, det in enumerate(detections):
-                    feat = det['features']
-                    a = channel_corrected_mean[ch_a][i]
-                    b = channel_corrected_mean[ch_b][i]
-                    feat[diff_key] = float(a - b)
-
-    return channels
+    from segmentation.pipeline.background import _extract_centroids
+    return _extract_centroids(detections)
 
 
 def classify_single_marker(detections: list[dict], channel: int,
@@ -604,12 +442,18 @@ def main():
         logger.info(f"Extracted {len(centroids):,} centroids for local background subtraction")
 
     # Background-correct ALL channels if requested (before marker classification)
+    # Guard: skip if pipeline already did background correction
     if args.correct_all_channels:
-        corrected_channels = correct_all_channels(detections, centroids)
-        logger.info(f"Corrected {len(corrected_channels)} channels: {corrected_channels}")
-        # Marker classification will now operate on already-corrected ch{N}_mean values,
-        # so disable per-marker background subtraction to avoid double-correction
-        args.bg_subtract = False
+        sample_feat = detections[0].get('features', {})
+        if any(k.endswith('_background') for k in sample_feat):
+            logger.info("Detections already background-corrected by pipeline -- skipping correct_all_channels")
+            args.bg_subtract = False
+        else:
+            corrected_channels = correct_all_channels(detections, centroids=centroids)
+            logger.info(f"Corrected {len(corrected_channels)} channels: {corrected_channels}")
+            # Marker classification will now operate on already-corrected ch{N}_mean values,
+            # so disable per-marker background subtraction to avoid double-correction
+            args.bg_subtract = False
 
     # Process each marker
     summaries = []

@@ -1205,6 +1205,15 @@ Examples:
         for cg in cluster_groups:
             all_dets_needing_contours.extend(cg['members'])
 
+        # Promote pipeline-processed contours: contour_dilated_um -> contour_um
+        _promoted = 0
+        for d in all_dets_needing_contours:
+            if d.get('contour_um') is None and d.get('contour_dilated_um') is not None:
+                d['contour_um'] = d['contour_dilated_um']
+                _promoted += 1
+        if _promoted:
+            print(f"  Used {_promoted} pre-processed contours from pipeline (contour_dilated_um)")
+
         need_extraction = any(
             d.get('contour_um') is None and d.get('outer_contour_global') is None
             for d in all_dets_needing_contours
