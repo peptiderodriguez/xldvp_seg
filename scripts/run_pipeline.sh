@@ -89,7 +89,7 @@ for role, spec in cm.items():
     pairs.append(f'{role}={spec}')
 print(','.join(pairs))
 " "$CONFIG" || echo "")
-CORRECT_ALL_CHANNELS=$(read_yaml correct_all_channels false)
+CORRECT_ALL_CHANNELS=$(read_yaml correct_all_channels true)
 SAMPLE_FRACTION=$(read_yaml sample_fraction "")
 
 # SLURM settings
