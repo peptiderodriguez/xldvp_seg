@@ -366,6 +366,10 @@ def parse_args() -> argparse.Namespace:
     else:
         args.bg_subtract = (args.method == 'otsu')
 
+    # Auto-detect pipeline-corrected detections and disable bg subtraction
+    # to prevent double correction.  This is set after loading detections
+    # (see below, before marker classification loop).
+
     # Validate: must have either --marker-channel or --marker-wavelength
     if not args.marker_channel and not args.marker_wavelength:
         parser.error("Either --marker-channel or --marker-wavelength is required")
@@ -441,18 +445,29 @@ def main():
         centroids = extract_centroids(detections)
         logger.info(f"Extracted {len(centroids):,} centroids for local background subtraction")
 
-    # Background-correct ALL channels if requested (before marker classification)
-    # Guard: skip if pipeline already did background correction
-    if args.correct_all_channels:
+    # Guard: detect pipeline-corrected detections and disable ALL bg subtraction
+    # to prevent double correction.  Pipeline post-dedup writes ch{N}_background keys.
+    _pipeline_corrected = False
+    if detections:
         sample_feat = detections[0].get('features', {})
-        if any(k.endswith('_background') for k in sample_feat):
-            logger.info("Detections already background-corrected by pipeline -- skipping correct_all_channels")
+        _pipeline_corrected = any(k.endswith('_background') for k in sample_feat)
+    if _pipeline_corrected:
+        if args.bg_subtract:
+            logger.info("Detections already background-corrected by pipeline — "
+                        "disabling per-marker bg subtraction to prevent double correction")
             args.bg_subtract = False
-        else:
-            corrected_channels = correct_all_channels(detections, centroids=centroids)
+        if args.correct_all_channels:
+            logger.info("Detections already background-corrected by pipeline — "
+                        "skipping --correct-all-channels")
+            args.correct_all_channels = False
+
+    # Background-correct ALL channels if requested (for older detections only)
+    if args.correct_all_channels:
+        corrected_channels = correct_all_channels(detections, centroids=centroids)
+        if corrected_channels:
             logger.info(f"Corrected {len(corrected_channels)} channels: {corrected_channels}")
-            # Marker classification will now operate on already-corrected ch{N}_mean values,
-            # so disable per-marker background subtraction to avoid double-correction
+            # Marker classification now operates on corrected ch{N}_mean values,
+            # so disable per-marker bg subtraction to avoid double-correction
             args.bg_subtract = False
 
     # Process each marker

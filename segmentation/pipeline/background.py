@@ -123,6 +123,15 @@ def correct_all_channels(
     if not detections:
         return []
 
+    # Guard: refuse to double-correct
+    sample_feat = detections[0].get("features", {})
+    if any(k.endswith("_background") for k in sample_feat):
+        logger.info(
+            "Detections already background-corrected (found *_background keys) "
+            "— skipping correct_all_channels to prevent double correction"
+        )
+        return []
+
     if centroids is None:
         centroids = _extract_centroids(detections)
 

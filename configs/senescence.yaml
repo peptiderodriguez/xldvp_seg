@@ -16,7 +16,7 @@ num_gpus: 4
 markers:
   - {channel: 1, name: NeuN, method: otsu}
   - {channel: 2, name: tdTomato, method: otsu}
-correct_all_channels: true    # background-correct ALL ch{N}_mean features before classification
+correct_all_channels: false   # pipeline does bg correction automatically during detection
 
 spatial_network:
   enabled: true
