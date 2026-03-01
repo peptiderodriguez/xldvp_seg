@@ -348,7 +348,7 @@ SBATCH_FILE="${OUTPUT_DIR}/pipeline_${NAME}_$$.sbatch"
         echo "    if [[ -n \"\$RUN_DIR\" && -f \"\$DET_JSON\" ]]; then"
 
         if [[ -n "$MARKER_CHANNELS" ]]; then
-            local classify_extra=""
+            classify_extra=""
             if [[ "$CORRECT_ALL_CHANNELS" == "true" ]]; then
                 classify_extra+=" --correct-all-channels"
             fi
@@ -407,7 +407,7 @@ SBATCH_FILE="${OUTPUT_DIR}/pipeline_${NAME}_$$.sbatch"
         echo "if [[ -n \"\$RUN_DIR\" && -f \"\$DET_JSON\" ]]; then"
 
         if [[ -n "$MARKER_CHANNELS" ]]; then
-            local classify_extra=""
+            classify_extra=""
             if [[ "$CORRECT_ALL_CHANNELS" == "true" ]]; then
                 classify_extra+=" --correct-all-channels"
             fi
