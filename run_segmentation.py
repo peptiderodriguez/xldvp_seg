@@ -1027,15 +1027,18 @@ def run_pipeline(args):
                                         collected_partial_vessels[tk] = []
                                     collected_partial_vessels[tk].extend(pvl)
 
-                            # Get masks: either from disk (worker saved) or from result dict (fallback)
+                            # Get masks: prefer disk (worker saved) over Queue copy
                             masks_already_saved = result.get('masks_saved', False)
+                            masks = result.get('masks')  # always available (backward compat)
                             if masks_already_saved:
                                 tile_out = Path(result['tile_out'])
                                 masks_file = tile_out / f"{args.cell_type}_masks.h5"
-                                with h5py.File(masks_file, 'r') as hf:
-                                    masks = hf['masks'][:]
-                            else:
-                                masks = result.get('masks')
+                                if masks_file.exists():
+                                    with h5py.File(masks_file, 'r') as hf:
+                                        masks = hf['masks'][:]
+                                elif masks is None:
+                                    logger.warning(f"Masks file missing and no Queue fallback for tile ({tile_x}, {tile_y})")
+                                    continue
 
                             # Skip tiles with no detections (masks=None from worker)
                             if masks is None or len(features_list) == 0:

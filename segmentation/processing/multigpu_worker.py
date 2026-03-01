@@ -477,13 +477,15 @@ def _gpu_worker(
                         'slide_name': slide_name, 'tile': tile,
                         'features_list': features_list,
                         'scale_factor': sf,
+                        # Always include masks for backward compat with old main process
+                        # code that does result['masks'] directly. New main process code
+                        # checks masks_saved and reads from disk instead.
+                        'masks': masks,
                     }
                     if masks_saved:
                         out['masks_saved'] = True
                         out['tile_out'] = tile_out_str
                     else:
-                        # Fallback: send masks through queue (original behavior)
-                        out['masks'] = masks
                         out['masks_saved'] = False
                 if partial_vessels:
                     out['partial_vessels'] = partial_vessels
