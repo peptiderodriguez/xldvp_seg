@@ -536,8 +536,32 @@ def run_pipeline(args):
             elif args.cell_type == 'tissue_pattern':
                 _display_chs = getattr(args, 'tp_display_channels_list', [0, 3, 1])
 
-            # Channel indices for loader-based extraction (no SHM in resume path)
-            _ch_indices = sorted(all_channel_data.keys()) if all_channel_data else []
+            # Ensure all channels from the original run are loaded (not just primary).
+            # Discover channels from detection features (ch{N}_mean keys).
+            _needed_channels: set[int] = set()
+            _sample_keys = all_detections[0].get('features', {}).keys()
+            for _k in _sample_keys:
+                if _k.startswith('ch') and _k.endswith('_mean'):
+                    _ch_str = _k[2:].replace('_mean', '')
+                    try:
+                        _needed_channels.add(int(_ch_str))
+                    except ValueError:
+                        pass
+            if not _needed_channels:
+                # Fallback: at least load all CZI channels
+                try:
+                    _dims = loader.reader.get_dims_shape()[0]
+                    _n_ch = _dims.get('C', (0, 3))[1]
+                    _needed_channels = set(range(_n_ch))
+                except Exception:
+                    _needed_channels = {args.channel}
+
+            for _ch in sorted(_needed_channels):
+                if _ch not in all_channel_data:
+                    logger.info(f"  Loading channel {_ch} for post-dedup processing (resume)...")
+                    loader.load_channel(_ch)
+                    all_channel_data[_ch] = loader.get_channel_data(_ch)
+            _ch_indices = sorted(all_channel_data.keys())
 
             if _has_contour and not _has_bg:
                 logger.info("Contours already processed — running background correction only")

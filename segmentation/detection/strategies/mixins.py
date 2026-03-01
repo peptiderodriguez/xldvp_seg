@@ -136,7 +136,8 @@ class MultiChannelFeatureMixin:
         mask: np.ndarray,
         channels_dict: Dict[str, np.ndarray],
         primary_channel: Optional[str] = None,
-        compute_ratios: bool = True
+        compute_ratios: bool = True,
+        _include_zeros: bool = False,
     ) -> Dict[str, float]:
         """
         Extract features from all channels and compute inter-channel ratios.
@@ -156,6 +157,8 @@ class MultiChannelFeatureMixin:
                 If None, no specificity metrics are computed.
             compute_ratios: Whether to compute inter-channel ratios (default True).
                 Set to False for speed when only per-channel stats are needed.
+            _include_zeros: If True, include zero-intensity pixels.  Set True
+                for background-corrected data where zeros are legitimate signal.
 
         Returns:
             Flat dictionary containing:
@@ -198,7 +201,9 @@ class MultiChannelFeatureMixin:
                 continue
 
             # Extract stats for this channel
-            channel_stats = self.extract_channel_stats(mask, channel_data, channel_name)
+            channel_stats = self.extract_channel_stats(
+                mask, channel_data, channel_name, _include_zeros=_include_zeros,
+            )
             features.update(channel_stats)
 
             # Store mean for ratio calculations

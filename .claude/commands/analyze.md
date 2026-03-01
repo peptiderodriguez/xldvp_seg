@@ -112,7 +112,7 @@ channel_map:
 markers:                          # post-detection marker classification
   - {channel: 1, name: NeuN, method: otsu}
   - {channel: 2, name: tdTomato, method: otsu}
-correct_all_channels: true        # background-correct ALL ch{N} features (default: true)
+correct_all_channels: false       # pipeline does bg correction automatically; only enable for legacy re-runs
 spatialdata:
   enabled: true
   extract_shapes: true
@@ -189,22 +189,29 @@ PYTHONPATH=$REPO $MKSEG_PYTHON $REPO/scripts/regenerate_html.py \
 
 Ask: *"Which channels are markers you want to classify as positive/negative?"*
 
-The default method (`otsu`) uses **local background subtraction**: for each cell, the median intensity of its 30 nearest neighbors is subtracted before Otsu thresholding. This removes autofluorescence and improves signal separation. Use `--correct-all-channels` (default in YAML pipelines) to background-correct ALL per-channel features (mean, median, percentiles, ratios), not just the classified markers.
+**Note on background correction:** The pipeline now performs background correction automatically during detection (post-dedup phase). If the detections have `ch{N}_background` keys, `classify_markers.py` will detect this and skip its own `--correct-all-channels` step to avoid double-correction. All `ch{N}_*` features in the output are already background-corrected, with originals stored as `ch{N}_*_raw`.
+
+The default marker classification method (`otsu`) still uses **local background subtraction** per-marker for thresholding, which is separate from the pipeline-level all-channel correction.
 
 ```bash
-# Recommended: background-corrected Otsu with all-channel correction
+# Standard usage (pipeline already bg-corrected all features):
 PYTHONPATH=$REPO $MKSEG_PYTHON $REPO/scripts/classify_markers.py \
     --detections <detections.json> \
     --marker-channel 1,2 \
-    --marker-name NeuN,tdTomato \
-    --correct-all-channels
+    --marker-name NeuN,tdTomato
 
 # By wavelength (auto-resolves via CZI metadata):
 PYTHONPATH=$REPO $MKSEG_PYTHON $REPO/scripts/classify_markers.py \
     --detections <detections.json> \
     --marker-wavelength 647,555 \
     --marker-name NeuN,tdTomato \
-    --czi-path <czi_path> \
+    --czi-path <czi_path>
+
+# For older detections without pipeline bg correction, add --correct-all-channels:
+PYTHONPATH=$REPO $MKSEG_PYTHON $REPO/scripts/classify_markers.py \
+    --detections <detections.json> \
+    --marker-channel 1,2 \
+    --marker-name NeuN,tdTomato \
     --correct-all-channels
 
 # Legacy (no background subtraction):
@@ -222,7 +229,7 @@ PYTHONPATH=$REPO $MKSEG_PYTHON $REPO/scripts/classify_markers.py \
 | `otsu_half` | None | Otsu / 2 on raw values. Permissive, legacy. |
 | `gmm` | None | 2-component GMM on log1p values. |
 
-**`--correct-all-channels`** (default `true` in YAML): Corrects ALL `ch{N}_*` intensity features (mean, median, min, max, percentiles), recomputes cv and cross-channel ratios/diffs. Stores originals as `ch{N}_*_raw`. This ensures downstream RF classifiers and spatial analyses use background-corrected features.
+**`--correct-all-channels`**: Corrects ALL `ch{N}_*` intensity features. **Only needed for detections from older pipeline runs** that don't have pipeline-level bg correction. The pipeline now does this automatically; `classify_markers.py` auto-detects pre-corrected data and skips.
 
 Per-detection output fields (for each marker):
 - `{marker}_class`: positive / negative

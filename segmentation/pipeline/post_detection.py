@@ -99,15 +99,22 @@ def _rasterize_contour(contour_local: np.ndarray, tile_h: int, tile_w: int) -> n
 def _extract_intensity_features(
     dilated_mask: np.ndarray,
     tile_channels: dict[int, np.ndarray],
+    *,
+    include_zeros: bool = False,
 ) -> dict[str, float]:
     """Extract per-channel intensity features from *tile_channels* within *dilated_mask*.
 
     Uses ``MultiChannelFeatureMixin.extract_multichannel_features()`` which
     produces 15 features per channel plus inter-channel ratios.
+
+    Args:
+        include_zeros: Pass True for background-corrected data where
+            zero-valued pixels are real signal (not CZI padding).
     """
     channels_dict = {f"ch{ch}": data for ch, data in sorted(tile_channels.items())}
     return _channel_mixin.extract_multichannel_features(
         dilated_mask, channels_dict, compute_ratios=True,
+        _include_zeros=include_zeros,
     )
 
 
@@ -318,6 +325,10 @@ def process_detections_post_dedup(
     logger.info("  Background correction: %s (k=%d)", background_correction, bg_neighbors)
     logger.info("  Data source: %s", "shared memory" if use_shm else ("CZI loader" if loader else "NONE"))
 
+    # Assign stable indices before grouping (survives across phases)
+    for i, det in enumerate(detections):
+        det["_postdedup_idx"] = i
+
     # --- Group detections by tile ---
     by_tile: dict[str, list[dict]] = {}
     for det in detections:
@@ -406,11 +417,13 @@ def process_detections_post_dedup(
                 n_contour_ok += 1
 
             # Quick mean per channel (for background estimation)
+            # Exclude zero pixels — CZI tiles have zero-padding at boundaries
             quick_means = {}
             if tile_channels and dilated_mask.any():
                 for ch, data in tile_channels.items():
                     pixels = data[dilated_mask].astype(np.float32)
-                    quick_means[ch] = float(np.mean(pixels)) if len(pixels) > 0 else 0.0
+                    nonzero = pixels[pixels > 0]
+                    quick_means[ch] = float(np.mean(nonzero)) if len(nonzero) > 0 else 0.0
             det["_bg_quick_means"] = quick_means
 
         del masks_arr
@@ -460,8 +473,7 @@ def process_detections_post_dedup(
     logger.info("-" * 40)
     logger.info("Phase 3: Feature extraction on corrected pixels")
 
-    # Build detection-index lookup
-    det_to_idx = {id(det): i for i, det in enumerate(detections)}
+    # No id()-based lookup needed — each detection carries _postdedup_idx
 
     for tile_idx, (tile_key, tile_dets) in enumerate(by_tile.items()):
         tile_x, tile_y = _parse_tile_key(tile_key)
@@ -505,7 +517,7 @@ def process_detections_post_dedup(
 
         # Process each detection
         for det in tile_dets:
-            det_idx = det_to_idx[id(det)]
+            det_idx = det["_postdedup_idx"]
             label = det.get("mask_label")
             if label is None:
                 n_features_fail += 1
@@ -536,26 +548,49 @@ def process_detections_post_dedup(
 
             bg = per_cell_bg.get(det_idx, {})
             feat = det.setdefault("features", {})
+            has_bg = bool(bg)
 
-            # --- Intensity features from bg-corrected pixel crops ---
-            corrected_crops: dict[int, np.ndarray] = {}
+            # --- Raw intensity features (uncorrected) ---
+            raw_crops: dict[int, np.ndarray] = {}
             for ch, data in tile_channels.items():
-                crop = data[r0:r1, c0:c1].astype(np.float32)
-                ch_bg = bg.get(ch, 0.0)
-                if ch_bg > 0:
-                    crop[crop_mask] = np.maximum(crop[crop_mask] - ch_bg, 0.0)
-                corrected_crops[ch] = crop
+                raw_crops[ch] = data[r0:r1, c0:c1].astype(np.float32)
 
-            intensity_feats = _extract_intensity_features(crop_mask, corrected_crops)
+            if has_bg:
+                # Extract uncorrected features and store intensity stats as _raw.
+                # Only per-channel intensity keys (ch{N}_{suffix}) — not ratios
+                # or diffs which are derived and would add noise.
+                raw_feats = _extract_intensity_features(crop_mask, raw_crops)
+                for k, v in raw_feats.items():
+                    # Store e.g. ch0_mean_raw, ch0_p95_raw — skip ch0_ch1_ratio etc.
+                    if "_ratio" not in k and "_diff" not in k and "_specificity" not in k:
+                        feat[f"{k}_raw"] = v
+
+            # --- Background-corrected intensity features ---
+            if has_bg:
+                corrected_crops: dict[int, np.ndarray] = {}
+                for ch, crop in raw_crops.items():
+                    ch_bg = bg.get(ch, 0.0)
+                    if ch_bg > 0:
+                        corrected = crop.copy()
+                        corrected[crop_mask] = np.maximum(corrected[crop_mask] - ch_bg, 0.0)
+                        corrected_crops[ch] = corrected
+                    else:
+                        corrected_crops[ch] = crop
+                # Corrected: include zeros (real signal after subtraction)
+                intensity_feats = _extract_intensity_features(
+                    crop_mask, corrected_crops, include_zeros=True,
+                )
+            else:
+                # No bg correction — extract from raw
+                intensity_feats = _extract_intensity_features(crop_mask, raw_crops)
+
             feat.update(intensity_feats)
 
-            # Store raw means and background metadata
-            quick_means = det.get("_bg_quick_means", {})
+            # Background metadata
             for ch in tile_channels:
-                raw_mean = quick_means.get(ch, 0.0)
                 ch_bg = bg.get(ch, 0.0)
-                feat[f"ch{ch}_mean_raw"] = raw_mean
                 if ch_bg > 0:
+                    raw_mean = feat.get(f"ch{ch}_mean_raw", 0.0)
                     feat[f"ch{ch}_background"] = ch_bg
                     feat[f"ch{ch}_snr"] = float(raw_mean / ch_bg) if ch_bg > 0 else 0.0
 
@@ -574,6 +609,7 @@ def process_detections_post_dedup(
     # --- Cleanup temporary keys ---
     for det in detections:
         det.pop("_bg_quick_means", None)
+        det.pop("_postdedup_idx", None)
 
     # --- Summary ---
     # Compute corrected channels list for metadata
