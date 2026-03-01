@@ -1,5 +1,20 @@
 # xldvp_seg - Image Analysis Pipelines
 
+## Quick Start (Claude Code)
+
+Type `/analyze` to begin. Claude will detect your system, inspect your data,
+and guide you through the full pipeline — detection through LMD export.
+
+| Command | What it does |
+|---------|-------------|
+| `/analyze` | Full pipeline: detect, annotate, classify, spatial analysis, LMD export |
+| `/status` | Check running SLURM jobs, tail logs, monitor progress |
+| `/czi-info` | Inspect CZI metadata — channels, dimensions, pixel size |
+| `/preview-preprocessing` | Preview flat-field / photobleach correction on any channel |
+| `/classify` | Train RF classifier from annotations, compare feature sets, explore features |
+| `/lmd-export` | Export detections for laser microdissection (contours, wells, XML) |
+| `/view-results` | Launch HTML result viewer with Cloudflare tunnel |
+
 ## Quick Start
 
 **Pipelines available:**
