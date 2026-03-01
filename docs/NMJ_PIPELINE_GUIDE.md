@@ -124,8 +124,10 @@ Deduplication should be applied in post-processing before LMD export.
 
 ### OOM Errors
 ```bash
-# Use sequential processing (slower but uses less memory)
---sequential
+# Reduce to single GPU (slower but uses less memory)
+--num-gpus 1
+# Or reduce tile size
+--tile-size 2000
 ```
 
 ### Slow Network Mount

@@ -82,8 +82,8 @@ python run_segmentation.py \
 ### Performance Options
 ```bash
 --load-to-ram       # Load all channels into RAM (default, faster for network mounts)
---sequential        # Process one tile at a time (safer memory usage)
 --num-gpus 4        # Number of GPUs (always multi-GPU, even with 1)
+--num-gpus 1        # Single GPU — safer memory usage for large slides
 ```
 
 ### Multi-Node Sharding

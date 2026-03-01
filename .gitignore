@@ -16,6 +16,9 @@ output/
 unified_*/
 seg_tohtml*/
 
+# Archive (deprecated scripts, old conversation logs, review notes)
+archive/
+
 # Python
 __pycache__/
 *.py[cod]

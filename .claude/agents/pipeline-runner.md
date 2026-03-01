@@ -14,7 +14,7 @@ Before running any pipeline or command, use AskUserQuestion to confirm:
 2. **Input file** - Which CZI file(s)?
 3. **Output location** - Where to save results?
 4. **Sample fraction** - What percentage of tiles? (0.01 for testing, 0.10 typical, 1.0 for full)
-5. **Special flags** - Need `--load-to-ram`, `--sequential`, `--candidate-mode`?
+5. **Special flags** - Need `--load-to-ram`, `--candidate-mode`? How many GPUs?
 
 For monitoring tasks, ask:
 - Which project/output directory to monitor?
@@ -56,8 +56,8 @@ python run_segmentation.py \
     --output-dir /home/dude/{type}_output/project_name
 
 # Performance flags
---load-to-ram       # For network mounts
---sequential        # Safer memory usage
+--load-to-ram       # For network mounts (default: on)
+--num-gpus 1        # Single GPU — safer memory usage
 --candidate-mode    # Vessel: relaxed thresholds
 --multi-marker      # Vessel: SMA+CD31+LYVE1
 ```
@@ -80,7 +80,7 @@ ls -la /home/dude/*_output/project_name/
 
 ## Common Issues
 
-- **OOM:** Add `--sequential`, reduce `--tile-size` to 3000
+- **OOM:** Use `--num-gpus 1`, reduce `--tile-size` to 2000
 - **Network hang:** Check `/mnt/x/` connectivity
 - **CUDA error:** Ensure `mask.astype(bool)` for SAM2
 - **HDF5 errors:** Set `HDF5_USE_FILE_LOCKING=FALSE`

@@ -373,8 +373,8 @@ with `--num-gpus 1`. Tiles are dispatched round-robin to GPU workers via shared
 memory (`multigpu_shm.py`).
 
 ```bash
---num-gpus 4         # Use 4 GPUs on this node (auto-detected if not specified)
---sequential         # Process one tile at a time (lower memory, slower)
+--num-gpus 4         # Use 4 GPUs on this node
+--num-gpus 1         # Single GPU — lower memory usage, slower
 ```
 
 ### Multi-Node Sharding
