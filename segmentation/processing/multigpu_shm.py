@@ -83,6 +83,16 @@ if multiprocessing.current_process().name == 'MainProcess':
     signal.signal(signal.SIGTERM, _signal_cleanup)
 
 
+def register_shm_for_cleanup(name: str):
+    """Register a shared memory name for emergency cleanup on process exit."""
+    _shm_registry.add(name)
+
+
+def unregister_shm_for_cleanup(name: str):
+    """Remove a shared memory name from the cleanup registry."""
+    _shm_registry.discard(name)
+
+
 class SharedSlideManager:
     """Manages shared memory for slide data."""
 

@@ -116,6 +116,7 @@ def cluster_detections_greedy_area(
         unclustered.remove(seed)
         total_area = areas[seed]
         cluster_centroid = coords[seed].copy()
+        centroid_weight = areas[seed]
 
         # Grow cluster
         while True:
@@ -146,20 +147,12 @@ def cluster_detections_greedy_area(
                 total_area = new_total
                 # Area-weighted centroid update — heavier detections pull
                 # the centroid more, producing shorter LMD laser paths.
-                if areas is not None:
-                    total_area_before = sum(areas[i] for i in cluster[:-1]) if len(cluster) > 1 else 0
-                    new_area = areas[best_idx]
-                    total_area_w = total_area_before + new_area
-                    if total_area_w > 0:
-                        cluster_centroid = (cluster_centroid * total_area_before + coords[best_idx] * new_area) / total_area_w
-                    else:
-                        # Fallback to unweighted
-                        n = len(cluster)
-                        cluster_centroid = (cluster_centroid * (n - 1) + coords[best_idx]) / n
-                else:
-                    # No areas available, use unweighted
-                    n = len(cluster)
-                    cluster_centroid = (cluster_centroid * (n - 1) + coords[best_idx]) / n
+                # Uses running centroid_weight to avoid O(n) re-sum per step
+                # and prevent floating-point drift from repeated summation.
+                new_weight = centroid_weight + areas[best_idx]
+                if new_weight > 0:
+                    cluster_centroid = (cluster_centroid * centroid_weight + coords[best_idx] * areas[best_idx]) / new_weight
+                centroid_weight = new_weight
             else:
                 # Adding would overshoot beyond midpoint benefit - stop this cluster
                 break

@@ -20,7 +20,7 @@ import logging
 from typing import List, Dict, Any, Optional, Tuple
 import numpy as np
 
-from .base import DetectionStrategy, Detection
+from .base import DetectionStrategy, Detection, _safe_to_uint8
 from .mixins import MultiChannelFeatureMixin
 from segmentation.utils.feature_extraction import (
     extract_morphological_features,
@@ -126,12 +126,7 @@ class MKStrategy(DetectionStrategy, MultiChannelFeatureMixin):
             raise RuntimeError("SAM2 automatic mask generator not loaded - required for MK detection")
 
         # SAM2 expects uint8 RGB image
-        if tile.dtype == np.uint16:
-            sam2_img = (tile / 256).astype(np.uint8)
-        elif tile.dtype != np.uint8:
-            sam2_img = tile.astype(np.uint8)
-        else:
-            sam2_img = tile
+        sam2_img = _safe_to_uint8(tile)
 
         # Generate all candidate masks
         sam2_results = sam2_auto.generate(sam2_img)
@@ -354,7 +349,7 @@ class MKStrategy(DetectionStrategy, MultiChannelFeatureMixin):
             # Set image for SAM2 embeddings if predictor available
             sam2_predictor = models.get('sam2_predictor')
             if sam2_predictor is not None and self.extract_sam2_embeddings:
-                sam2_img = tile if tile.dtype == np.uint8 else (tile / 256).astype(np.uint8)
+                sam2_img = _safe_to_uint8(tile)
                 sam2_predictor.set_image(sam2_img)
 
             # First pass: Extract morphological and SAM2 features, collect crops
@@ -505,6 +500,7 @@ class MKStrategy(DetectionStrategy, MultiChannelFeatureMixin):
         return label_array, detections
 
     # _extract_sam2_embedding inherited from DetectionStrategy base class
+    # SAM2 embeddings are extracted in detect() at line ~374 (set_image + per-detection embedding).
     # _extract_resnet_features_batch inherited from DetectionStrategy base class
 
     def _apply_classifier(self,

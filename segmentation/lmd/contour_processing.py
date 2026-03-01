@@ -90,29 +90,32 @@ def validate_polygon(poly: Polygon) -> Optional[Polygon]:
         return None
 
 
-def dilate_contour(contour_um: np.ndarray, dilation_um: float) -> Optional[np.ndarray]:
+def dilate_contour(contour: np.ndarray, dilation: float) -> Optional[np.ndarray]:
     """
     Dilate a contour by a specified amount.
 
+    Works in any coordinate system (pixels or micrometers) — just pass
+    consistent units for contour and dilation.
+
     Args:
-        contour_um: Contour points in micrometers, shape (N, 2)
-        dilation_um: Dilation amount in micrometers
+        contour: Contour points, shape (N, 2)
+        dilation: Dilation amount (same units as contour)
 
     Returns:
-        Dilated contour points in micrometers, or None if invalid
+        Dilated contour points, or None if invalid
     """
-    if len(contour_um) < 3:
+    if len(contour) < 3:
         return None
 
     # Create polygon
-    poly = Polygon(contour_um)
+    poly = Polygon(contour)
     poly = validate_polygon(poly)
 
     if poly is None or poly.is_empty or poly.area < 0.1:
         return None
 
     # Dilate
-    poly_dilated = poly.buffer(dilation_um)
+    poly_dilated = poly.buffer(dilation)
 
     if poly_dilated.is_empty:
         return None
@@ -137,12 +140,10 @@ def process_contour(
     """
     Process a single contour: validate, dilate, and simplify.
 
-    Processing order:
-    1. Convert pixels to micrometers
-    2. Validate/fix polygon geometry
-    3. Dilate by specified amount
-    4. Apply RDP simplification
-    5. Return in micrometers
+    Processing order (all in pixel space to avoid precision loss):
+    1. Dilate in pixel space (validates/fixes polygon geometry)
+    2. Apply RDP simplification in pixel space
+    3. Convert to micrometers only at the end
 
     Args:
         contour_px: Contour points in pixels, list of [x, y] pairs
@@ -177,25 +178,26 @@ def process_contour(
     contour_px = np.array(contour_px)
     stats['points_before'] = len(contour_px)
 
-    # Convert to micrometers
-    contour_um = contour_px * pixel_size_um
-
-    # Calculate original area
-    orig_poly = Polygon(contour_um)
+    # Calculate original area in um2
+    contour_um_orig = contour_px * pixel_size_um
+    orig_poly = Polygon(contour_um_orig)
     orig_poly = validate_polygon(orig_poly)
     if orig_poly is not None and not orig_poly.is_empty:
         stats['area_before_um2'] = orig_poly.area
 
-    # Step 1: Dilate
-    dilated_um = dilate_contour(contour_um, dilation_um)
-    if dilated_um is None:
+    # All operations in pixel space to avoid precision loss from
+    # repeated px->um->px conversions.
+    # Step 1: Dilate in pixel space
+    dilation_px = dilation_um / pixel_size_um
+    dilated_px = dilate_contour(contour_px, dilation_px)
+    if dilated_px is None:
         if return_stats:
             return None, stats
         return None
 
-    # Step 2: Apply RDP in pixel space (for consistent epsilon behavior)
-    dilated_px = dilated_um / pixel_size_um
+    # Step 2: RDP simplify in pixel space
     simplified_px = rdp_simplify(dilated_px, rdp_epsilon)
+    # Convert to microns only at the end
     simplified_um = simplified_px * pixel_size_um
 
     if len(simplified_um) < 3:

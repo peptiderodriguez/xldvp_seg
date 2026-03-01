@@ -28,7 +28,7 @@ from scipy import ndimage
 from skimage.morphology import skeletonize, remove_small_objects, binary_opening, binary_closing, binary_dilation, disk
 from skimage.measure import label, regionprops
 
-from .base import DetectionStrategy, Detection
+from .base import DetectionStrategy, Detection, _safe_to_uint8
 from .mixins import MultiChannelFeatureMixin
 from segmentation.utils.logging import get_logger
 from segmentation.utils.feature_extraction import (
@@ -437,12 +437,8 @@ class NMJStrategy(DetectionStrategy, MultiChannelFeatureMixin):
         else:
             tile_rgb = tile[:, :, :3]
 
-        # Ensure uint8 format
-        if tile_rgb.dtype != np.uint8:
-            if tile_rgb.dtype == np.uint16:
-                tile_rgb = (tile_rgb / 256).astype(np.uint8)
-            else:
-                tile_rgb = tile_rgb.astype(np.uint8)
+        # Ensure uint8 format (safe for float tiles in [0,1] or intermediate ranges)
+        tile_rgb = _safe_to_uint8(tile_rgb)
 
         # Get models - only load ResNet/DINOv2 if we'll use them
         sam2_predictor = models.get('sam2_predictor')

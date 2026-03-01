@@ -506,20 +506,6 @@ def _finish_pipeline(args, all_detections, all_samples, slide_output_dir, tiles_
             shutil.rmtree(checkpoint_dir)
             logger.info("Multiscale checkpoints cleaned up after successful completion")
 
-    # Export mesothelium LMD XML if applicable
-    if cell_type == 'mesothelium' and len(all_detections) > 0:
-        logger.info("Exporting to Leica LMD XML format...")
-        lmd_file = slide_output_dir / f'{cell_type}_chunks.xml'
-        export_to_leica_lmd(
-            all_detections,
-            lmd_file,
-            pixel_size_um,
-            image_height_px=mosaic_info['height'],
-            image_width_px=mosaic_info['width'],
-            add_fiducials=getattr(args, 'add_fiducials', True),
-            flip_y=True,
-        )
-
     # Save summary
     summary = {
         'slide_name': slide_name,
@@ -1441,191 +1427,6 @@ def generate_tile_grid(mosaic_info, tile_size, overlap_fraction=0.0):
 # =============================================================================
 
 # =============================================================================
-# LMD EXPORT (for mesothelium)
-# =============================================================================
-
-def export_to_leica_lmd(detections, output_path, pixel_size_um, image_height_px,
-                        image_width_px=None, calibration_points=None,
-                        add_fiducials=True, fiducial_positions=None,
-                        flip_y=True):
-    """
-    Export mesothelium chunks to Leica LMD XML format using py-lmd library.
-
-    Args:
-        detections: List of detection dicts with 'polygon_image' (pixel coords)
-        output_path: Path to save XML file
-        pixel_size_um: Microns per pixel
-        image_height_px: Image height in pixels (for Y flip)
-        image_width_px: Image width in pixels (for calibration)
-        calibration_points: Optional 3x2 array of calibration points in µm
-        add_fiducials: Whether to add calibration cross markers
-        fiducial_positions: List of (x, y) positions in µm for fiducial crosses
-                           If None and add_fiducials=True, uses image corners
-        flip_y: Whether to flip Y axis for stage coordinates
-
-    Returns:
-        Path to saved file, also saves metadata CSV with both coordinate systems
-    """
-    try:
-        from lmd.lib import Collection, Shape
-        from lmd.tools import makeCross
-        has_pylmd = True
-    except ImportError:
-        logger.warning("py-lmd not installed. Install with: pip install py-lmd")
-        logger.warning("  Falling back to simple XML export...")
-        has_pylmd = False
-
-    if image_width_px is None:
-        image_width_px = 10000 / pixel_size_um  # Default estimate
-
-    img_width_um = image_width_px * pixel_size_um
-    img_height_um = image_height_px * pixel_size_um
-
-    # Default calibration points (corners of image in µm)
-    if calibration_points is None:
-        calibration_points = np.array([
-            [0, 0],
-            [0, img_height_um],
-            [img_width_um, img_height_um]
-        ])
-
-    # Default fiducial positions (corners + center)
-    if fiducial_positions is None and add_fiducials:
-        margin = 500  # µm margin from edges
-        fiducial_positions = [
-            (margin, margin),  # Top-left
-            (img_width_um - margin, margin),  # Top-right
-            (margin, img_height_um - margin),  # Bottom-left
-            (img_width_um - margin, img_height_um - margin),  # Bottom-right
-        ]
-
-    if not has_pylmd:
-        return _export_lmd_simple(detections, output_path, pixel_size_um,
-                                  image_height_px, flip_y, fiducial_positions)
-
-    # Create collection
-    collection = Collection(calibration_points=calibration_points)
-
-    # Add fiducial crosses
-    if add_fiducials and fiducial_positions:
-        for i, (fx, fy) in enumerate(fiducial_positions):
-            # makeCross creates a cross shape at specified location
-            cross = makeCross(
-                center=np.array([fx, fy]),
-                arm_length=100,  # µm
-                arm_width=10,    # µm
-            )
-            collection.add_shape(Shape(
-                points=cross,
-                well="CAL",  # Special well for calibration
-                name=f"Fiducial_{i+1}"
-            ))
-
-    # Add each chunk as a shape
-    for i, det in enumerate(detections):
-        if 'polygon_image' not in det:
-            continue
-
-        polygon_px = np.array(det['polygon_image'])
-
-        # Convert to µm coordinates
-        polygon_um = polygon_px * pixel_size_um
-
-        # Flip Y if needed (image Y increases down, stage Y may increase up)
-        if flip_y:
-            polygon_um[:, 1] = img_height_um - polygon_um[:, 1]
-
-        # Close polygon if not already closed
-        if not np.allclose(polygon_um[0], polygon_um[-1]):
-            polygon_um = np.vstack([polygon_um, polygon_um[0]])
-
-        # Add to collection
-        chunk_name = det.get('uid', det.get('id', f'Chunk_{i+1:04d}'))
-        collection.new_shape(polygon_um, well="A1", name=chunk_name)
-
-    # Save to XML
-    collection.save(str(output_path))
-    logger.info(f"  Exported {len(detections)} chunks to LMD XML: {output_path}")
-    if add_fiducials:
-        logger.info(f"  Added {len(fiducial_positions)} fiducial crosses for calibration")
-
-    # Also save metadata CSV with both coordinate systems
-    csv_path = output_path.with_suffix('.csv')
-    with open(csv_path, 'w') as f:
-        f.write('chunk_name,centroid_x_px,centroid_y_px,centroid_x_um,centroid_y_um,area_um2,n_vertices\n')
-        for det in detections:
-            if 'polygon_image' not in det:
-                continue
-            name = det.get('uid', det.get('id', ''))
-            cx_px, cy_px = det['center']
-            cx_um = cx_px * pixel_size_um
-            cy_um = cy_px * pixel_size_um
-            if flip_y:
-                cy_um = img_height_um - cy_um
-            area = det['features'].get('area_um2', 0)
-            n_verts = det['features'].get('n_vertices', len(det.get('polygon_image', [])))
-            f.write(f'{name},{cx_px:.1f},{cy_px:.1f},{cx_um:.2f},{cy_um:.2f},{area:.2f},{n_verts}\n')
-    logger.info(f"  Saved coordinates CSV: {csv_path}")
-
-    return output_path
-
-
-def _export_lmd_simple(detections, output_path, pixel_size_um, image_height_px,
-                       flip_y=True, fiducial_positions=None):
-    """
-    Simple XML export fallback when py-lmd is not installed.
-    """
-    import xml.etree.ElementTree as ET
-    from xml.dom import minidom
-
-    root = ET.Element("ImageData")
-
-    # Global coordinates
-    global_coords = ET.SubElement(root, "GlobalCoordinates")
-    ET.SubElement(global_coords, "OffsetX").text = "0"
-    ET.SubElement(global_coords, "OffsetY").text = "0"
-
-    # Shape list
-    shape_list = ET.SubElement(root, "ShapeList")
-
-    for i, det in enumerate(detections):
-        if 'polygon_image' not in det:
-            continue
-
-        polygon_px = np.array(det['polygon_image'])
-
-        # Convert to µm
-        polygon_um = polygon_px * pixel_size_um
-
-        # Flip Y if needed
-        if flip_y:
-            polygon_um[:, 1] = (image_height_px * pixel_size_um) - polygon_um[:, 1]
-
-        shape = ET.SubElement(shape_list, "Shape")
-
-        # Name
-        name = det.get('uid', det.get('id', f'Chunk_{i+1:04d}'))
-        ET.SubElement(shape, "Name").text = name
-        ET.SubElement(shape, "ShapeType").text = "Polygon"
-
-        # Points
-        point_list = ET.SubElement(shape, "PointList")
-        for x, y in polygon_um:
-            point = ET.SubElement(point_list, "Point")
-            ET.SubElement(point, "X").text = f"{x:.2f}"
-            ET.SubElement(point, "Y").text = f"{y:.2f}"
-
-    # Pretty print
-    xml_str = minidom.parseString(ET.tostring(root)).toprettyxml(indent="  ")
-
-    with open(output_path, 'w') as f:
-        f.write(xml_str)
-
-    logger.info(f"  Exported {len(detections)} chunks to simple XML: {output_path}")
-    return output_path
-
-
-# =============================================================================
 # SAMPLE CREATION FOR HTML
 # =============================================================================
 
@@ -1852,12 +1653,10 @@ def run_pipeline(args):
     # RAM-first architecture: Load CZI channel into RAM ONCE at pipeline start
     # This eliminates repeated network I/O for files on network mounts
     # Default is RAM loading for single slides (best performance on network mounts)
-    use_ram = args.load_to_ram  # Default True for single slide processing
-
-    if not use_ram:
-        logger.error("--no-ram is not supported with the multi-GPU pipeline. "
-                     "The pipeline requires --load-to-ram (default). Remove --no-ram flag.")
-        sys.exit(1)
+    if not args.load_to_ram:
+        logger.warning("--no-ram is deprecated and ignored. All data is loaded to RAM.")
+        args.load_to_ram = True
+    use_ram = True
 
     logger.info("Loading CZI file with get_loader() (RAM-first architecture)...")
     loader = get_loader(
@@ -2006,9 +1805,6 @@ def run_pipeline(args):
         gc.collect()
         logger.info("Flat-field correction complete.")
 
-    elif getattr(args, 'normalize_features', True) and not use_ram:
-        logger.warning("--normalize-features requires --load-to-ram. Skipping flat-field correction.")
-
     # Apply Reinhard normalization if params file provided (whole-slide, before tiling)
     if getattr(args, 'norm_params_file', None) and use_ram:
         from segmentation.preprocessing.stain_normalization import apply_reinhard_normalization_MEDIAN
@@ -2090,9 +1886,6 @@ def run_pipeline(args):
         gc.collect()
 
         logger.info("  Reinhard normalization complete.")
-
-    elif getattr(args, 'norm_params_file', None) and not use_ram:
-        logger.warning("--norm-params-file requires --load-to-ram (whole-slide normalization). Skipping normalization.")
 
     # Generate tile grid (using global coordinates)
     overlap = getattr(args, 'tile_overlap', 0.0)
@@ -2192,6 +1985,9 @@ def run_pipeline(args):
                     logger.info(f"Race: loaded shared tile list from {tile_list_file} ({len(sampled_tiles)} tiles)")
 
         # Round-robin shard assignment
+        # NOTE: Per-tile resume not implemented for shard mode.
+        # If a shard crashes, it re-processes all tiles in its shard.
+        # For large slides, consider using smaller shard counts.
         shard_idx, shard_total = args.tile_shard
         total_before = len(sampled_tiles)
         sampled_tiles = [t for i, t in enumerate(sampled_tiles) if i % shard_total == shard_idx]
@@ -2322,6 +2118,19 @@ def run_pipeline(args):
         # Regenerate HTML if needed (requires CZI + tile masks)
         all_samples = []
         if not skip_html:
+            # Ensure all channels are loaded for HTML generation
+            if args.all_channels or (cell_type == 'cell' and hasattr(args, 'cellpose_input_channels')):
+                try:
+                    dims = loader.reader.get_dims_shape()[0]
+                    _n_ch = dims.get('C', (0, 3))[1]
+                except Exception:
+                    _n_ch = 3
+                for ch in range(_n_ch):
+                    if ch not in all_channel_data:
+                        logger.info(f"  Loading channel {ch} for HTML generation (resume)...")
+                        loader.load_channel(ch)
+                        all_channel_data[ch] = loader.get_channel_data(ch)
+
             logger.info(f"Regenerating HTML for {len(all_detections)} detections from saved tiles...")
             all_samples = _resume_generate_html_samples(
                 args, all_detections, tiles_dir,
@@ -2502,7 +2311,11 @@ def run_pipeline(args):
             try:
                 vessel_classifier = VesselClassifier.load(classifier_path)
                 logger.info(f"Loaded vessel classifier from: {classifier_path}")
-                logger.info(f"  CV accuracy: {vessel_classifier.metrics.get('cv_accuracy_mean', 'N/A'):.4f}")
+                _cv_acc = vessel_classifier.metrics.get('cv_accuracy_mean', 'N/A')
+                if isinstance(_cv_acc, (int, float)):
+                    logger.info(f"  CV accuracy: {_cv_acc:.4f}")
+                else:
+                    logger.info(f"  CV accuracy: {_cv_acc}")
             except Exception as e:
                 logger.warning(f"Failed to load vessel classifier: {e}")
                 logger.warning("Falling back to rule-based classification")
@@ -2536,7 +2349,6 @@ def run_pipeline(args):
     logger.info("Processing tiles...")
     all_samples = []
     all_detections = []  # Universal list with global coordinates
-    total_detections = 0
     deferred_html_tiles = []  # For islet: defer HTML until marker thresholds computed
     is_multiscale = args.cell_type == 'vessel' and getattr(args, 'multi_scale', False)
 
@@ -2900,8 +2712,6 @@ def run_pipeline(args):
                 det['global_center_um'] = [cx * pixel_size_um, cy * pixel_size_um]
                 all_detections.append(det)
 
-            total_detections = len(all_detections)
-
             # Generate HTML crops from shared memory with percentile normalization
             logger.info(f"Generating HTML crops for {len(all_detections)} multiscale detections...")
             from segmentation.io.html_export import image_to_base64
@@ -2944,7 +2754,7 @@ def run_pipeline(args):
                 }
                 all_samples.append(sample)
 
-            logger.info(f"Multi-scale mode: {total_detections} detections, {len(all_samples)} HTML samples "
+            logger.info(f"Multi-scale mode: {len(all_detections)} detections, {len(all_samples)} HTML samples "
                         f"from {total_tiles_submitted} tiles on {num_gpus} GPUs")
 
         # ---- Regular (non-multiscale) tile processing ----
@@ -3090,7 +2900,6 @@ def run_pipeline(args):
                                     'tile_x': tile_x, 'tile_y': tile_y,
                                     'tile_pct': tile_pct,
                                 })
-                                total_detections += len(features_list)
                                 del masks, tile_rgb_html, features_list
                                 result['masks'] = None  # Release array ref from result dict
                                 result['features_list'] = None
@@ -3109,7 +2918,6 @@ def run_pipeline(args):
                                         vessel_params=params if args.cell_type == 'vessel' else None,
                                     )
                                     all_samples.extend(html_samples)
-                                total_detections += len(features_list)
 
                         except Exception as e:
                             import traceback
@@ -3194,7 +3002,7 @@ def run_pipeline(args):
                         deferred_html_tiles = []
                     gc.collect()
 
-            logger.info(f"Processing complete: {total_detections} {args.cell_type} detections from {results_collected} tiles")
+            logger.info(f"Processing complete: {len(all_detections)} {args.cell_type} detections from {results_collected} tiles")
 
     finally:
         # Cleanup shared memory
@@ -3272,16 +3080,16 @@ def main():
     parser.add_argument('--load-to-ram', action='store_true', default=True,
                         help='Load entire channel into RAM first (default: True for best performance on network mounts)')
     parser.add_argument('--no-ram', dest='load_to_ram', action='store_false',
-                        help='Disable RAM loading (use on-demand tile reading instead)')
+                        help='[DEPRECATED - ignored] RAM loading is always used. This flag is kept for backward compatibility only.')
 
     # Output
     parser.add_argument('--output-dir', type=str, default=None,
-                        help='Output directory (default: ~/nmj_output for NMJ, ~/mk_output for MK, ~/vessel_output for vessel)')
+                        help='Output directory (default: ./output)')
 
     # Tile processing
     parser.add_argument('--tile-size', type=int, default=3000, help='Tile size in pixels')
     parser.add_argument('--tile-overlap', type=float, default=0.10, help='Tile overlap fraction (0.0-0.5, default: 0.10 = 10%% overlap)')
-    parser.add_argument('--sample-fraction', type=float, default=0.10, help='Fraction of tissue tiles (default: 10%%)')
+    parser.add_argument('--sample-fraction', type=float, default=1.0, help='Fraction of tissue tiles to process (default: 100%%)')
     parser.add_argument('--channel', type=int, default=None,
                         help='Primary channel index for detection (default: 1 for NMJ, 0 for MK/vessel/cell)')
     parser.add_argument('--all-channels', action='store_true',
@@ -3502,8 +3310,6 @@ def main():
                              'Use with multi-channel CZIs that have EDF/processing layers to avoid loading unnecessary data.')
 
     # Feature extraction options
-    parser.add_argument('--extract-full-features', action='store_true',
-                        help='Extract full features including SAM2 embeddings')
     parser.add_argument('--extract-deep-features', action='store_true',
                         help='Extract ResNet and DINOv2 features (opt-in, default morph+SAM2 only)')
     parser.add_argument('--skip-deep-features', action='store_true',
@@ -3582,11 +3388,7 @@ def main():
 
     # Cell-type-dependent defaults for output-dir and channel
     if args.output_dir is None:
-        default_dirs = {'nmj': '/home/dude/nmj_output', 'mk': '/home/dude/mk_output',
-                        'vessel': '/home/dude/vessel_output', 'cell': '/home/dude/cell_output',
-                        'mesothelium': '/home/dude/mesothelium_output',
-                        'islet': '/home/dude/islet_output'}
-        args.output_dir = default_dirs.get(args.cell_type, f'/home/dude/{args.cell_type}_output')
+        args.output_dir = str(Path.cwd() / 'output')
     if args.channel is None:
         if args.cell_type == 'nmj':
             args.channel = 1

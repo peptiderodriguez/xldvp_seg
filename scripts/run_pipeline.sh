@@ -73,6 +73,7 @@ ALL_CHANNELS=$(read_yaml all_channels false)
 NUM_GPUS=$(read_yaml num_gpus 1)
 MIN_AREA=$(read_yaml min_area_um "")
 MAX_AREA=$(read_yaml max_area_um "")
+SAMPLE_FRACTION=$(read_yaml sample_fraction "")
 
 # SLURM settings
 PARTITION=$(read_yaml slurm.partition p.hpcl8)
@@ -99,6 +100,9 @@ SPATIAL_MIN_COMP=$(read_yaml spatial_network.min_component_cells 3)
 PIXEL_SIZE=$(read_yaml pixel_size_um "")
 # If spatial_network section exists but enabled is not explicitly set, treat as enabled
 # But respect explicit enabled: false
+# Note: SPATIAL_EDGE and SPATIAL_MIN_COMP always have defaults (50, 3) so they can't
+# distinguish "user set a value" from "default". Only marker_filter has empty default,
+# so it's the reliable signal that spatial_network was intentionally configured.
 if [[ "$SPATIAL_ENABLED" == "false" ]]; then
     : # Explicitly disabled, do nothing
 elif [[ -n "$SPATIAL_FILTER" && -z "$SPATIAL_ENABLED" ]]; then
@@ -109,6 +113,7 @@ fi
 VIEWER_ENABLED=$(read_yaml spatial_viewer.enabled false)
 VIEWER_GROUP_FIELD=$(read_yaml spatial_viewer.group_field "")
 VIEWER_TITLE=$(read_yaml spatial_viewer.title "Multi-Slide Spatial Viewer")
+VIEWER_TITLE_ESC="${VIEWER_TITLE//\"/\\\"}"
 
 # Validate pixel_size_um is set when spatial analysis is enabled
 if [[ "$SPATIAL_ENABLED" == "true" && -z "$PIXEL_SIZE" ]]; then
@@ -159,6 +164,9 @@ build_seg_cmd() {
     fi
     if [[ -n "$MAX_AREA" ]]; then
         cmd+=" --max-cell-area $MAX_AREA"
+    fi
+    if [[ -n "$SAMPLE_FRACTION" ]]; then
+        cmd+=" --sample-fraction $SAMPLE_FRACTION"
     fi
     echo "$cmd"
 }
@@ -260,21 +268,22 @@ SBATCH_FILE="${OUTPUT_DIR}/pipeline_${NAME}_$$.sbatch"
         echo "    # Step 1: Segmentation"
         echo "    $(build_seg_cmd '${CZI_FILE}' '${SLIDE_OUT}')"
         echo ""
-        echo "    # Step 2: Marker classification"
-        echo "    DET_JSON=\"\${SLIDE_OUT}/${CELL_TYPE}_detections.json\""
-        echo "    if [[ -f \"\$DET_JSON\" ]]; then"
+        echo "    # Step 2: Find detection JSON in latest run subdir"
+        echo "    RUN_DIR=\$(ls -td \"\${SLIDE_OUT}\"/*/  2>/dev/null | head -1)"
+        echo "    DET_JSON=\"\${RUN_DIR}${CELL_TYPE}_detections.json\""
+        echo "    if [[ -n \"\$RUN_DIR\" && -f \"\$DET_JSON\" ]]; then"
 
         if [[ -n "$MARKER_CHANNELS" ]]; then
             echo "        echo \"  Classifying markers: $MARKER_NAMES\""
-            echo "        \$MKSEG_PYTHON $REPO/scripts/classify_markers.py --detections \"\$DET_JSON\" --marker-channel \"$MARKER_CHANNELS\" --marker-name \"$MARKER_NAMES\" --method \"$MARKER_METHOD\" --output-dir \"\$SLIDE_OUT\""
-            echo "        DET_JSON=\"\${SLIDE_OUT}/${CELL_TYPE}_detections_classified.json\""
+            echo "        \$MKSEG_PYTHON $REPO/scripts/classify_markers.py --detections \"\$DET_JSON\" --marker-channel \"$MARKER_CHANNELS\" --marker-name \"$MARKER_NAMES\" --method \"$MARKER_METHOD\" --output-dir \"\$RUN_DIR\""
+            echo "        DET_JSON=\"\${RUN_DIR}${CELL_TYPE}_detections_classified.json\""
         fi
 
         if [[ "$SPATIAL_ENABLED" == "true" ]]; then
             echo ""
             echo "        # Step 3: Spatial analysis"
             echo "        echo \"  Running spatial analysis...\""
-            echo "        \$MKSEG_PYTHON $REPO/scripts/spatial_cell_analysis.py --detections \"\$DET_JSON\" --output-dir \"\$SLIDE_OUT\" --spatial-network --marker-filter \"$SPATIAL_FILTER\" --max-edge-distance \"$SPATIAL_EDGE\" --min-component-cells \"$SPATIAL_MIN_COMP\" --pixel-size \"$PIXEL_SIZE\""
+            echo "        \$MKSEG_PYTHON $REPO/scripts/spatial_cell_analysis.py --detections \"\$DET_JSON\" --output-dir \"\$RUN_DIR\" --spatial-network --marker-filter \"$SPATIAL_FILTER\" --max-edge-distance \"$SPATIAL_EDGE\" --min-component-cells \"$SPATIAL_MIN_COMP\" --pixel-size \"$PIXEL_SIZE\""
         fi
 
         echo "    else"
@@ -291,21 +300,22 @@ SBATCH_FILE="${OUTPUT_DIR}/pipeline_${NAME}_$$.sbatch"
         echo "# Step 1: Segmentation"
         echo "$(build_seg_cmd "$CZI_PATH" '${SLIDE_OUT}')"
         echo ""
-        echo "# Step 2: Marker classification"
-        echo "DET_JSON=\"\${SLIDE_OUT}/${CELL_TYPE}_detections.json\""
-        echo "if [[ -f \"\$DET_JSON\" ]]; then"
+        echo "# Step 2: Find detection JSON in latest run subdir"
+        echo "RUN_DIR=\$(ls -td \"\${SLIDE_OUT}\"/*/  2>/dev/null | head -1)"
+        echo "DET_JSON=\"\${RUN_DIR}${CELL_TYPE}_detections.json\""
+        echo "if [[ -n \"\$RUN_DIR\" && -f \"\$DET_JSON\" ]]; then"
 
         if [[ -n "$MARKER_CHANNELS" ]]; then
             echo "    echo \"Classifying markers: $MARKER_NAMES\""
-            echo "    \$MKSEG_PYTHON $REPO/scripts/classify_markers.py --detections \"\$DET_JSON\" --marker-channel \"$MARKER_CHANNELS\" --marker-name \"$MARKER_NAMES\" --method \"$MARKER_METHOD\" --output-dir \"\$SLIDE_OUT\""
-            echo "    DET_JSON=\"\${SLIDE_OUT}/${CELL_TYPE}_detections_classified.json\""
+            echo "    \$MKSEG_PYTHON $REPO/scripts/classify_markers.py --detections \"\$DET_JSON\" --marker-channel \"$MARKER_CHANNELS\" --marker-name \"$MARKER_NAMES\" --method \"$MARKER_METHOD\" --output-dir \"\$RUN_DIR\""
+            echo "    DET_JSON=\"\${RUN_DIR}${CELL_TYPE}_detections_classified.json\""
         fi
 
         if [[ "$SPATIAL_ENABLED" == "true" ]]; then
             echo ""
             echo "    # Step 3: Spatial analysis"
             echo "    echo \"Running spatial analysis...\""
-            echo "    \$MKSEG_PYTHON $REPO/scripts/spatial_cell_analysis.py --detections \"\$DET_JSON\" --output-dir \"\$SLIDE_OUT\" --spatial-network --marker-filter \"$SPATIAL_FILTER\" --max-edge-distance \"$SPATIAL_EDGE\" --min-component-cells \"$SPATIAL_MIN_COMP\" --pixel-size \"$PIXEL_SIZE\""
+            echo "    \$MKSEG_PYTHON $REPO/scripts/spatial_cell_analysis.py --detections \"\$DET_JSON\" --output-dir \"\$RUN_DIR\" --spatial-network --marker-filter \"$SPATIAL_FILTER\" --max-edge-distance \"$SPATIAL_EDGE\" --min-component-cells \"$SPATIAL_MIN_COMP\" --pixel-size \"$PIXEL_SIZE\""
         fi
 
         # Step 4: Spatial viewer (single-slide, inline)
@@ -313,7 +323,7 @@ SBATCH_FILE="${OUTPUT_DIR}/pipeline_${NAME}_$$.sbatch"
             echo ""
             echo "    # Step 4: Spatial viewer"
             echo "    echo \"Generating spatial viewer...\""
-            echo "    \$MKSEG_PYTHON $REPO/scripts/generate_multi_slide_spatial_viewer.py --input-dir \"\$SLIDE_OUT\" --group-field \"$VIEWER_GROUP_FIELD\" --title \"$VIEWER_TITLE\" --output \"\${SLIDE_OUT}/spatial_viewer.html\""
+            echo "    \$MKSEG_PYTHON $REPO/scripts/generate_multi_slide_spatial_viewer.py --input-dir \"\$SLIDE_OUT\" --group-field \"$VIEWER_GROUP_FIELD\" --title \"$VIEWER_TITLE_ESC\" --output \"\${SLIDE_OUT}/spatial_viewer.html\""
         fi
 
         echo "else"
@@ -358,7 +368,7 @@ fi
 # Step 4: Submit dependent spatial viewer job (multi-slide only)
 # ---------------------------------------------------------------------------
 if [[ "$MULTI_SLIDE" == "true" && "$VIEWER_ENABLED" == "true" && -n "$VIEWER_GROUP_FIELD" ]]; then
-    VIEWER_SBATCH="/tmp/pipeline_${NAME}_viewer_$$.sbatch"
+    VIEWER_SBATCH="${OUTPUT_DIR}/pipeline_${NAME}_viewer_$$.sbatch"
     {
         echo "#!/bin/bash"
         echo "#SBATCH --job-name=${NAME}_viewer"
@@ -378,7 +388,7 @@ if [[ "$MULTI_SLIDE" == "true" && "$VIEWER_ENABLED" == "true" && -n "$VIEWER_GRO
         echo "    --input-dir \"$OUTPUT_DIR\" \\"
         echo "    --detection-glob \"${CELL_TYPE}_detections_classified.json\" \\"
         echo "    --group-field \"$VIEWER_GROUP_FIELD\" \\"
-        echo "    --title \"$VIEWER_TITLE\" \\"
+        echo "    --title \"$VIEWER_TITLE_ESC\" \\"
         echo "    --output \"${OUTPUT_DIR}/spatial_viewer.html\""
         echo ""
         echo "echo \"Spatial viewer saved to ${OUTPUT_DIR}/spatial_viewer.html\""

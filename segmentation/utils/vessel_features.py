@@ -897,16 +897,16 @@ def extract_vessel_features_batch(
         inner = cand.get('inner')
         binary = cand.get('binary')
 
-        # Create masks
-        wall_mask = np.zeros((h, w), dtype=bool)
+        # Create masks (use uint8 for cv2.drawContours, then convert to bool)
+        wall_mask = np.zeros((h, w), dtype=np.uint8)
         lumen_mask = None
 
-        cv2.drawContours(wall_mask.view(np.uint8), [outer], 0, 1, -1)
+        cv2.drawContours(wall_mask, [outer], 0, 1, -1)
         wall_mask = wall_mask.astype(bool)
 
         if inner is not None:
-            lumen_mask = np.zeros((h, w), dtype=bool)
-            cv2.drawContours(lumen_mask.view(np.uint8), [inner], 0, 1, -1)
+            lumen_mask = np.zeros((h, w), dtype=np.uint8)
+            cv2.drawContours(lumen_mask, [inner], 0, 1, -1)
             lumen_mask = lumen_mask.astype(bool)
 
             # Wall is outer minus lumen
@@ -958,7 +958,7 @@ def vessel_features_to_vector(
     vector = []
     for name in feature_names:
         val = features.get(name)
-        if val is None or np.isnan(val) if isinstance(val, float) else False:
+        if val is None or (isinstance(val, (float, np.floating)) and (np.isnan(val) or np.isinf(val))):
             vector.append(0.0)
         else:
             vector.append(float(val))

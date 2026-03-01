@@ -81,10 +81,7 @@ def create_sample(tile_rgb, masks, feat, pixel_size_um, slide_name, cell_type,
     """Create an HTML sample dict from a detection with mask-bounded crop."""
     mask_label = feat.get('tile_mask_label', feat.get('mask_label', 0))
     if mask_label == 0:
-        try:
-            mask_label = int(feat['id'].split('_')[-1])
-        except (KeyError, ValueError, IndexError):
-            return None
+        return None  # No mask label available, skip this detection
 
     mask = masks == mask_label
     if mask.sum() == 0:

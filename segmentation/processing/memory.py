@@ -20,7 +20,6 @@ Usage:
 
 from typing import Dict, List, Any
 import psutil
-import torch
 
 from segmentation.utils.logging import get_logger
 from segmentation.utils.config import get_memory_threshold
@@ -85,7 +84,12 @@ def validate_system_resources(num_workers: int, tile_size: int) -> Dict[str, Any
         result['recommended_workers'] = max_safe_workers
 
     # Check GPU memory (all available GPUs, not just device 0)
-    if torch.cuda.is_available():
+    try:
+        import torch
+    except ImportError:
+        torch = None
+        logger.info("PyTorch not available, skipping GPU validation")
+    if torch is not None and torch.cuda.is_available():
         try:
             num_gpus_check = min(torch.cuda.device_count(), num_workers if num_workers else 1)
             min_gpu_available = float('inf')
@@ -176,7 +180,12 @@ def get_memory_usage() -> Dict[str, float]:
         'ram_used_percent': mem.percent,
     }
 
-    if torch.cuda.is_available():
+    try:
+        import torch
+        _has_cuda = torch.cuda.is_available()
+    except ImportError:
+        _has_cuda = False
+    if _has_cuda:
         try:
             num_gpus = torch.cuda.device_count()
             # Report per-GPU stats and aggregate totals

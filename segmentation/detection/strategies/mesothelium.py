@@ -183,8 +183,6 @@ class MesotheliumStrategy(DetectionStrategy):
         self.max_ribbon_width_um = max_ribbon_width_um
         self.min_fragment_area_um2 = min_fragment_area_um2
         self.pixel_size_um = pixel_size_um
-        # Side-channel metadata populated by segment(), consumed by filter()/detect()
-        self._last_segment_metadata: List[Dict[str, Any]] = []
 
     def _segment_ribbons(
         self,
@@ -404,8 +402,8 @@ class MesotheliumStrategy(DetectionStrategy):
         Segment mesothelial ribbons and divide into chunks.
 
         Complies with the base class interface: returns a list of binary masks.
-        Mesothelium-specific metadata (polygons, path info, etc.) is stored
-        in self._last_segment_metadata for use by filter() and detect().
+        Mesothelium-specific metadata is returned alongside masks via
+        _segment_ribbons_with_metadata() for thread-safe usage in detect().
 
         Args:
             tile: RGB image array
@@ -416,17 +414,33 @@ class MesotheliumStrategy(DetectionStrategy):
         """
         raw_detections = self._segment_ribbons(tile, models)
 
-        # Store metadata side-channel for filter()/detect() to consume
-        self._last_segment_metadata = raw_detections
-
         # Return just the binary masks per base class interface
         return [det['mask'] for det in raw_detections]
+
+    def _segment_ribbons_with_metadata(
+        self,
+        tile: np.ndarray,
+        models: Dict[str, Any]
+    ) -> Tuple[List[np.ndarray], List[Dict[str, Any]]]:
+        """
+        Segment ribbons and return both masks and metadata (thread-safe).
+
+        Unlike segment(), this returns the raw detection metadata alongside
+        masks so that detect() does not need to store state on self.
+
+        Returns:
+            Tuple of (list of binary masks, list of metadata dicts)
+        """
+        raw_detections = self._segment_ribbons(tile, models)
+        masks = [det['mask'] for det in raw_detections]
+        return masks, raw_detections
 
     def filter(
         self,
         masks: List[np.ndarray],
         features: List[Dict[str, Any]],
-        pixel_size_um: float
+        pixel_size_um: float,
+        metadata_list: Optional[List[Dict[str, Any]]] = None
     ) -> List[Detection]:
         """
         Filter and classify candidate masks.
@@ -434,18 +448,21 @@ class MesotheliumStrategy(DetectionStrategy):
         Mesothelium chunks are already filtered during segmentation, so this
         applies no additional filtering. It creates Detection objects by
         combining the masks, computed features, and mesothelium-specific
-        metadata stored during segment().
+        metadata passed via metadata_list.
 
         Args:
             masks: List of candidate masks from segment()
             features: List of feature dictionaries (one per mask)
             pixel_size_um: Pixel size for area calculations
+            metadata_list: Optional list of metadata dicts from _segment_ribbons().
+                When provided, polygon and path info are stored in detection features.
 
         Returns:
             List of Detection objects (all candidates pass for mesothelium)
         """
         detections = []
-        metadata_list = self._last_segment_metadata
+        if metadata_list is None:
+            metadata_list = []
 
         for i, (mask, feat) in enumerate(zip(masks, features)):
             if not feat:
@@ -464,6 +481,10 @@ class MesotheliumStrategy(DetectionStrategy):
                 feat.setdefault('n_vertices', len(meta.get('polygon', [])))
                 feat.setdefault('branch_id', meta.get('branch_id', -1))
                 det_id = meta.get('det_id', i + 1)
+                # Store polygon in features dict for LMD export (thread-safe)
+                polygon = meta.get('polygon')
+                if polygon is not None:
+                    feat['polygon'] = polygon
             else:
                 det_id = i + 1
 
@@ -473,10 +494,6 @@ class MesotheliumStrategy(DetectionStrategy):
                 centroid=list(centroid),
                 features=feat,
             )
-
-            # Store polygon for LMD export (not in standard Detection but useful)
-            if i < len(metadata_list):
-                detection.polygon = metadata_list[i].get('polygon')
 
             detections.append(detection)
 
@@ -503,8 +520,8 @@ class MesotheliumStrategy(DetectionStrategy):
         if pixel_size_um is not None:
             self.pixel_size_um = pixel_size_um
 
-        # Segment (populates self._last_segment_metadata as side-channel)
-        masks = self.segment(tile, models)
+        # Segment with metadata (thread-safe: no state stored on self)
+        masks, metadata_list = self._segment_ribbons_with_metadata(tile, models)
 
         if not masks:
             return np.zeros(tile.shape[:2], dtype=np.uint32), []
@@ -512,20 +529,9 @@ class MesotheliumStrategy(DetectionStrategy):
         # Compute features for each mask
         features = [self.compute_features(m, tile) for m in masks]
 
-        # Enrich features with mesothelium-specific metadata
-        for i, feat in enumerate(features):
-            if i < len(self._last_segment_metadata):
-                meta = self._last_segment_metadata[i]
-                feat['area_um2'] = meta.get('area_um2', 0.0)
-                feat['path_length_um'] = float(
-                    len(meta.get('path_points', [])) * self.pixel_size_um)
-                feat['mean_width_um'] = float(
-                    np.mean(meta.get('widths_px', [0])) * self.pixel_size_um)
-                feat['n_vertices'] = len(meta.get('polygon', []))
-                feat['branch_id'] = meta.get('branch_id', -1)
-
-        # Filter (creates Detection objects; minimal filtering for mesothelium)
-        detections = self.filter(masks, features, self.pixel_size_um)
+        # Filter (creates Detection objects; metadata merged into features)
+        detections = self.filter(masks, features, self.pixel_size_um,
+                                 metadata_list=metadata_list)
 
         logger.debug(f"Mesothelium: {len(detections)} chunks detected")
 

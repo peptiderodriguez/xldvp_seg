@@ -485,6 +485,11 @@ def apply_reinhard_normalization_MEDIAN(
             else:
                 block_lab[:, :, 2][tissue_mask] = params['b_median']
 
+            # Clamp to physical LAB ranges before encoding
+            block_lab[:, :, 0] = np.clip(block_lab[:, :, 0], 0, 100)
+            block_lab[:, :, 1] = np.clip(block_lab[:, :, 1], -128, 127)
+            block_lab[:, :, 2] = np.clip(block_lab[:, :, 2], -128, 127)
+
             # Convert back to RGB — only tissue pixels changed, background preserved
             block_lab[:, :, 0] = block_lab[:, :, 0] * 255.0 / 100.0
             block_lab[:, :, 1] = block_lab[:, :, 1] + 128.0

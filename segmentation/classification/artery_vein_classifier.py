@@ -153,6 +153,8 @@ class ArteryVeinClassifier:
             n_jobs=-1,
         )
 
+        # NOTE: StandardScaler is unnecessary for RF (scale-invariant) but kept
+        # for backward compatibility with previously trained/serialized models.
         self.scaler = StandardScaler()
         self.label_encoder = LabelEncoder()
         self.label_encoder.fit(self.LABELS)
@@ -731,7 +733,8 @@ class ArteryVeinClassifier:
         instance.trained = True
 
         logger.info(f"Model loaded from: {path}")
-        logger.info(f"  F1 Score: {instance.metrics.get('f1_score', 'N/A'):.4f}")
+        f1 = instance.metrics.get('f1_score')
+        logger.info(f"  F1 Score: {f1:.4f}" if f1 is not None else "  F1 Score: N/A")
         logger.info(f"  Features: {len(instance.feature_names)}")
 
         return instance

@@ -6,7 +6,6 @@ and apply_classifier.py.
 
 import json
 import logging
-import sys
 from pathlib import Path
 
 import numpy as np
@@ -28,8 +27,7 @@ def load_detections(path, score_threshold=None):
     """
     path = Path(path)
     if not path.exists():
-        logger.error("Detections file not found: %s", path)
-        sys.exit(1)
+        raise FileNotFoundError(f"Detections file not found: {path}")
 
     logger.info("Loading detections from %s...", path)
     with open(path) as f:

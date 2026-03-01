@@ -38,12 +38,16 @@ class ColoredFormatter(logging.Formatter):
     RESET = '\033[0m'
 
     def format(self, record: logging.LogRecord) -> str:
-        # Add color to levelname
+        # Add color to levelname, but restore original afterward so
+        # other handlers (e.g., file handler) see the unmodified name
+        orig = record.levelname
         if record.levelname in self.COLORS:
             record.levelname = (
                 f"{self.COLORS[record.levelname]}{record.levelname}{self.RESET}"
             )
-        return super().format(record)
+        result = super().format(record)
+        record.levelname = orig
+        return result
 
 
 # Module-level logger cache

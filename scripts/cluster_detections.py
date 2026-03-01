@@ -80,8 +80,9 @@ Example:
     # Save
     output_path = Path(args.output)
     output_path.parent.mkdir(parents=True, exist_ok=True)
+    from segmentation.utils.json_utils import NumpyEncoder
     with open(output_path, 'w') as f:
-        json.dump(result, f)
+        json.dump(result, f, cls=NumpyEncoder)
 
     # Summary
     s = result['summary']

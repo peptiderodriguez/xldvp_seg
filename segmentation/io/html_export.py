@@ -103,11 +103,13 @@ def generate_preload_annotations_js(annotations_path: str, cell_type: str, exper
         global_key = _esc(f"{cell_type}_annotations")
         page_key_prefix = _esc(f"{cell_type}_labels_page")
 
+    # Escape </ sequences to prevent </script> injection in inline JS
+    safe_json = json.dumps(ls_format).replace('</', r'<\/')
     js_content = f'''// Pre-loaded annotations from {_esc(annotations_path.name)}
 // Generated automatically during HTML export
 // These are EXISTING annotations - new annotations take precedence
 
-const PRELOADED_ANNOTATIONS = {json.dumps(ls_format)};
+const PRELOADED_ANNOTATIONS = {safe_json};
 
 // Merge: preloaded as base, existing localStorage on top (so new annotations aren't overwritten)
 // Write to BOTH the global key and any existing page-specific keys

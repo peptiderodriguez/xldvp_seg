@@ -191,7 +191,7 @@ def generate_uid(
     Returns:
         Unique identifier string
     """
-    return f"{slide_name}_{cell_type}_{round(global_x)}_{round(global_y)}"
+    return f"{slide_name}_{cell_type}_{int(round(global_x))}_{int(round(global_y))}"
 
 
 def mask_to_crop_coords(

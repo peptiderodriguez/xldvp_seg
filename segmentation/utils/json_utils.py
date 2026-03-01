@@ -24,9 +24,17 @@ class NumpyEncoder(json.JSONEncoder):
         if isinstance(obj, np.integer):
             return int(obj)
         if isinstance(obj, np.floating):
-            return float(obj)
+            v = float(obj)
+            if math.isnan(v) or math.isinf(v):
+                return None
+            return v
         if isinstance(obj, np.ndarray):
             return obj.tolist()
+        # Regular Python float NaN/Inf can reach default() via subclasses
+        if isinstance(obj, float):
+            if math.isnan(obj) or math.isinf(obj):
+                return None
+            return obj
         return super().default(obj)
 
 

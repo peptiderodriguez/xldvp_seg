@@ -248,6 +248,8 @@ class VesselTypeClassifier:
             n_jobs=-1,
         )
 
+        # NOTE: StandardScaler is unnecessary for RF (scale-invariant) but kept
+        # for backward compatibility with previously trained/serialized models.
         self.scaler = StandardScaler()
         self.label_encoder = LabelEncoder()
         self.label_encoder.fit(VESSEL_TYPES)
@@ -275,20 +277,20 @@ class VesselTypeClassifier:
         else:
             features['wall_thickness_ratio'] = 0
 
-        # SMA/CD31 wall ratio
+        # SMA/CD31 wall ratio (capped at 10.0 to avoid unbounded values)
         sma_wall = features.get('sma_wall_mean', 0)
         cd31_wall = features.get('cd31_wall_mean', 0)
-        if cd31_wall is not None and cd31_wall > 0:
-            features['sma_cd31_wall_ratio'] = sma_wall / cd31_wall if sma_wall is not None else 0
+        if sma_wall is not None and sma_wall > 0:
+            features['sma_cd31_wall_ratio'] = min(sma_wall / max(cd31_wall if cd31_wall else 0, 1e-6), 10.0)
         else:
-            features['sma_cd31_wall_ratio'] = 1000.0 if sma_wall and sma_wall > 0 else 0
+            features['sma_cd31_wall_ratio'] = 0
 
-        # LYVE1/CD31 ratio (for lymphatic detection)
+        # LYVE1/CD31 ratio (for lymphatic detection, capped at 10.0)
         lyve1_wall = features.get('lyve1_wall_mean', 0)
-        if cd31_wall is not None and cd31_wall > 0:
-            features['lyve1_cd31_ratio'] = lyve1_wall / cd31_wall if lyve1_wall is not None else 0
+        if lyve1_wall is not None and lyve1_wall > 0:
+            features['lyve1_cd31_ratio'] = min(lyve1_wall / max(cd31_wall if cd31_wall else 0, 1e-6), 10.0)
         else:
-            features['lyve1_cd31_ratio'] = 1000.0 if lyve1_wall and lyve1_wall > 0 else 0
+            features['lyve1_cd31_ratio'] = 0
 
         # SMA wall-lumen contrast
         sma_lumen = features.get('sma_lumen_mean', 0)
@@ -970,8 +972,10 @@ class VesselTypeClassifier:
         instance.trained = True
 
         logger.info(f"Model loaded from: {path}")
-        logger.info(f"  Accuracy: {instance.metrics.get('cv_accuracy_mean', 'N/A'):.4f}")
-        logger.info(f"  F1 Score: {instance.metrics.get('f1_score', 'N/A'):.4f}")
+        acc = instance.metrics.get('cv_accuracy_mean')
+        logger.info(f"  Accuracy: {acc:.4f}" if acc is not None else "  Accuracy: N/A")
+        f1 = instance.metrics.get('f1_score')
+        logger.info(f"  F1 Score: {f1:.4f}" if f1 is not None else "  F1 Score: N/A")
         logger.info(f"  Features: {len(instance.feature_names)}")
         logger.info(f"  Classes: {len(instance.label_encoder.classes_)}")
 

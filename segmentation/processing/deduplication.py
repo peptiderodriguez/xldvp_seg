@@ -149,7 +149,15 @@ def deduplicate_by_mask_overlap(detections, tiles_dir, min_overlap_fraction=0.1,
 
         det_info_raw.append((det, bbox, global_xs, global_ys))
 
-    # Free mask cache — no longer needed
+    # Free mask cache — no longer needed.
+    # Note: peak memory is O(all_tiles) because we cache all mask arrays
+    # during coordinate extraction. Future improvement: count detections
+    # per tile and evict tiles once all their detections are processed,
+    # reducing peak memory to O(active_tiles).
+    for _tid in list(mask_cache):
+        cached = mask_cache.pop(_tid)
+        if cached is not None:
+            del cached
     del mask_cache
 
     if n_maskless > 0:
@@ -247,7 +255,7 @@ def deduplicate_by_mask_overlap(detections, tiles_dir, min_overlap_fraction=0.1,
                 continue
 
             # Pixel-level intersection
-            overlap = len(np.intersect1d(coords, kept_coords, assume_unique=True))
+            overlap = len(np.intersect1d(coords, kept_coords))
             smaller_size = min(len(coords), len(kept_coords))
 
             if smaller_size > 0 and overlap / smaller_size >= min_overlap_fraction:

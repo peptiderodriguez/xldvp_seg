@@ -145,6 +145,8 @@ class VesselClassifier:
             n_jobs=-1,
         )
 
+        # NOTE: StandardScaler is unnecessary for RF (scale-invariant) but kept
+        # for backward compatibility with previously trained/serialized models.
         self.scaler = StandardScaler()
         self.label_encoder = LabelEncoder()
         self.feature_names = feature_names or DEFAULT_FEATURES.copy()
@@ -565,7 +567,8 @@ class VesselClassifier:
         instance.trained = True
 
         logger.info(f"Model loaded from: {path}")
-        logger.info(f"  Accuracy: {instance.metrics.get('cv_accuracy_mean', 'N/A'):.4f}")
+        acc = instance.metrics.get('cv_accuracy_mean')
+        logger.info(f"  Accuracy: {acc:.4f}" if acc is not None else "  Accuracy: N/A")
         logger.info(f"  Features: {len(instance.feature_names)}")
 
         return instance

@@ -21,7 +21,6 @@ from pathlib import Path
 from sklearn.ensemble import RandomForestClassifier
 from sklearn.model_selection import train_test_split, cross_val_score
 from sklearn.metrics import classification_report, confusion_matrix
-from sklearn.pipeline import Pipeline
 import joblib
 
 from segmentation.utils.logging import get_logger, setup_logging
@@ -249,16 +248,15 @@ def main():
         logger.info(f"  {i+1}. {feature_names[idx]}: {importances[idx]:.4f}")
 
     # --- Step 4: Save model (no scaler!) ---
-    # Wrap RF in a Pipeline for consistency with load_nmj_rf_classifier expectations
-    final_pipeline = Pipeline([('rf', final_clf)])
-
+    # Save raw RF classifier directly — no Pipeline wrapping needed since RF
+    # is scale-invariant. load_nmj_rf_classifier() handles wrapping if needed.
     output_dir = Path(args.output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
 
     timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
     model_path = output_dir / f"nmj_classifier_rf_{timestamp}.pkl"
     joblib.dump({
-        'model': final_pipeline,
+        'model': final_clf,
         'classifier': final_clf,  # Legacy key for backward compat
         'feature_names': feature_names,
         'feature_set': args.feature_set,
@@ -283,14 +281,14 @@ def main():
     # --- Step 5: Self-test — load and verify the saved model ---
     logger.info("\nSelf-test: loading saved model and verifying predictions...")
     loaded = joblib.load(model_path)
-    loaded_pipeline = loaded['model']
+    loaded_model = loaded['model']
     loaded_names = loaded['feature_names']
 
     assert len(loaded_names) == len(feature_names), \
         f"Feature name mismatch: {len(loaded_names)} vs {len(feature_names)}"
 
-    # Verify predictions match on a subset (via pipeline)
-    test_probs = loaded_pipeline.predict_proba(X[:10])[:, 1]
+    # Verify predictions match on a subset
+    test_probs = loaded_model.predict_proba(X[:10])[:, 1]
     expected_probs = final_clf.predict_proba(X[:10])[:, 1]
     assert np.allclose(test_probs, expected_probs), "Saved model predictions don't match!"
 

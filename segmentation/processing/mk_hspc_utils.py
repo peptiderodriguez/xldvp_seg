@@ -52,11 +52,14 @@ def ensure_rgb_array(img_data: np.ndarray) -> np.ndarray:
     if img_data.ndim == 2:
         # Grayscale -> RGB
         return np.stack([img_data] * 3, axis=-1)
+    elif img_data.shape[2] == 1:
+        # Single-channel (H, W, 1) -> RGB
+        return np.stack([img_data[:, :, 0]] * 3, axis=-1)
     elif img_data.shape[2] == 4:
         # RGBA -> RGB (drop alpha)
         return img_data[:, :, :3]
     else:
-        # Already RGB
+        # Already RGB (or 2-channel, keep as-is)
         return img_data
 
 
@@ -202,14 +205,19 @@ def build_mk_hspc_result(
 
 def extract_tile_from_shared_memory(
     shared_image: np.ndarray,
-    tile: Dict[str, Any]
+    tile: Dict[str, Any],
+    mosaic_origin: Tuple[int, int] = (0, 0)
 ) -> Tuple[Optional[np.ndarray], Optional[str]]:
     """
     Extract tile region from shared memory array.
 
+    Tile coordinates are global CZI mosaic coordinates. The mosaic_origin
+    is subtracted to convert to 0-indexed array coordinates.
+
     Args:
         shared_image: Shared memory array containing full image.
-        tile: Tile dict with 'x', 'y', 'w', 'h' keys.
+        tile: Tile dict with 'x', 'y', 'w', 'h' keys (global coords).
+        mosaic_origin: (ox, oy) mosaic origin to subtract for array indexing.
 
     Returns:
         Tuple of (image_data, error_message):
@@ -228,9 +236,10 @@ def extract_tile_from_shared_memory(
         return None, "Shared memory not available"
 
     try:
+        ox, oy = mosaic_origin
         img = shared_image[
-            tile['y']:tile['y'] + tile['h'],
-            tile['x']:tile['x'] + tile['w']
+            tile['y'] - oy:tile['y'] - oy + tile['h'],
+            tile['x'] - ox:tile['x'] - ox + tile['w']
         ]
         if img.size == 0:
             return None, f"Empty crop extracted from tile {tile.get('id', 'unknown')}"

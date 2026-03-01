@@ -25,7 +25,6 @@ Coordinate System:
         uid = f"{slide_name}_{cell_type}_{global_cx}_{global_cy}"
 """
 
-import atexit
 import os
 import gc
 import queue
@@ -34,34 +33,18 @@ import time
 import traceback
 from contextlib import nullcontext
 from pathlib import Path
-from typing import Dict, List, Optional, Tuple, Any, Set
+from typing import Dict, List, Optional, Tuple, Any
 import multiprocessing as mp
 from multiprocessing.shared_memory import SharedMemory
 import numpy as np
 
 from segmentation.utils.logging import get_logger
+from segmentation.processing.multigpu_shm import (
+    register_shm_for_cleanup,
+    unregister_shm_for_cleanup,
+)
 
 logger = get_logger(__name__)
-
-# Global registry of shared memory names for crash cleanup
-_shm_registry: Set[str] = set()
-
-
-def _cleanup_shared_memory_on_exit():
-    """Emergency cleanup of shared memory on process exit."""
-    for shm_name in list(_shm_registry):
-        try:
-            shm = SharedMemory(name=shm_name)
-            shm.close()
-            shm.unlink()
-        except FileNotFoundError:
-            pass  # Already cleaned up
-        except Exception as e:
-            logger.debug(f"Shared memory cleanup warning for {shm_name}: {e}")
-    _shm_registry.clear()
-
-
-atexit.register(_cleanup_shared_memory_on_exit)
 
 # Use 'spawn' start method for CUDA compatibility in subprocesses
 _mp_context = mp.get_context('spawn')
@@ -139,6 +122,9 @@ def _gpu_worker(
             arr = np.ndarray(info['shape'], dtype=np.dtype(info['dtype']), buffer=shm.buf)
             shared_slides[slide_name] = (shm, arr)
     except Exception as e:
+        # Clean up any already-attached segments before returning
+        for shm, _ in shared_slides.values():
+            shm.close()
         logger.error(f"[{worker_name}] Failed to attach shared memory: {e}")
         output_queue.put({'status': 'init_error', 'gpu_id': gpu_id, 'error': str(e)})
         return
@@ -305,7 +291,8 @@ def _gpu_worker(
             if y_rel < 0 or x_rel < 0:
                 logger.error(f"[{worker_name}] Tile {tid} has negative relative coords "
                              f"(x_rel={x_rel}, y_rel={y_rel}), skipping")
-                output_queue.put({'status': 'error', 'tid': tid, 'error': 'negative_coords'})
+                output_queue.put({'status': 'error', 'tid': tid, 'slide_name': slide_name, 'tile': tile, 'error': 'negative_coords'})
+                tiles_processed += 1
                 continue
 
             y_end = min(y_rel + tile_h, slide_arr.shape[0])
@@ -386,13 +373,12 @@ def _gpu_worker(
                 logger.warning(f"[{worker_name}] has_tissue() failed: {e}, assuming tissue present")
                 has_tissue_flag = True
 
-            # Convert to uint8 for visual models
-            # For islet: skip /256 truncation — low-signal fluorescence (Gcg mean=16.7)
-            # would become all-zero. Downstream handles uint16.
+            # Always convert tile_rgb to uint8 for SAM2/visual models.
+            # For islet: extra_channel_tiles retains uint16 for downstream analysis.
             if tile_rgb.dtype != np.uint8:
-                if tile_rgb.dtype == np.uint16 and cell_type not in ('islet',):
+                if tile_rgb.dtype == np.uint16:
                     tile_rgb = (tile_rgb / 256).astype(np.uint8)
-                elif tile_rgb.dtype != np.uint16:
+                else:
                     tile_rgb = tile_rgb.astype(np.uint8)
 
             if not has_tissue_flag:
@@ -453,6 +439,10 @@ def _gpu_worker(
                 else:
                     masks, features_list = result
                     detections_found += len(features_list)
+                    # Compress masks: full tile mask arrays (~36MB each) are pickled
+                    # through the multiprocessing Queue, which is a performance bottleneck.
+                    # TODO: Consider saving masks to disk per-tile or using shared memory
+                    # for mask transfer instead of pickling through the Queue.
                     output_queue.put({
                         'status': 'success', 'tid': tid,
                         'slide_name': slide_name, 'tile': tile,
@@ -594,7 +584,7 @@ class MultiGPUTileProcessor:
         for info in self.slide_info.values():
             shm_name = info.get('shm_name')
             if shm_name:
-                _shm_registry.add(shm_name)
+                register_shm_for_cleanup(shm_name)
 
         local_checkpoint = self._copy_checkpoint_to_local() if self.extract_sam2_embeddings else None
 
@@ -722,7 +712,7 @@ class MultiGPUTileProcessor:
         for info in self.slide_info.values():
             shm_name = info.get('shm_name')
             if shm_name:
-                _shm_registry.discard(shm_name)
+                unregister_shm_for_cleanup(shm_name)
 
     def __enter__(self):
         self.start()

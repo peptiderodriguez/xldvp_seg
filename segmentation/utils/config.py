@@ -490,6 +490,12 @@ def create_run_config(
     # Apply any overrides
     config.update(kwargs)
 
+    # Validate critical keys
+    if 'pixel_size_um' in kwargs:
+        ps = kwargs['pixel_size_um']
+        if ps is not None and (not isinstance(ps, (int, float)) or ps <= 0):
+            raise ValueError(f"Invalid pixel_size_um: {ps}")
+
     return config
 
 

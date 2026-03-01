@@ -329,6 +329,8 @@ class VesselStrategy(DetectionStrategy, MultiChannelFeatureMixin):
 
         # Storage for partial vessels pending merge (tile coords -> list of PartialVessel)
         self._partial_vessels: Dict[Tuple[int, int], List[PartialVessel]] = {}
+        # Lock protecting _partial_vessels dict in multi-GPU mode
+        self._partial_vessels_lock = threading.Lock()
 
         # Parallel detection settings
         self.parallel_detection = parallel_detection
@@ -354,7 +356,8 @@ class VesselStrategy(DetectionStrategy, MultiChannelFeatureMixin):
         # Ring-only mode: disable supplementary lumen-first pass
         self.ring_only = ring_only
 
-        # Lock for detect_multiscale which temporarily mutates diameter bounds
+        # Lock for detect_multiscale which temporarily mutates diameter bounds.
+        # _scale_override context manager acquires this lock, making it thread-safe.
         self._scale_lock = threading.Lock()
 
     @contextmanager
@@ -1735,11 +1738,12 @@ class VesselStrategy(DetectionStrategy, MultiChannelFeatureMixin):
                 is_outer=True,  # Assume outer until matched
             )
 
-            # Store in partial vessels cache
+            # Store in partial vessels cache (thread-safe)
             tile_key = (tile_x, tile_y)
-            if tile_key not in self._partial_vessels:
-                self._partial_vessels[tile_key] = []
-            self._partial_vessels[tile_key].append(partial_vessel)
+            with self._partial_vessels_lock:
+                if tile_key not in self._partial_vessels:
+                    self._partial_vessels[tile_key] = []
+                self._partial_vessels[tile_key].append(partial_vessel)
 
             # Create candidate dict for this partial vessel
             partial_candidates.append({
@@ -1819,9 +1823,10 @@ class VesselStrategy(DetectionStrategy, MultiChannelFeatureMixin):
             )
 
             tile_key = (tile_x, tile_y)
-            if tile_key not in self._partial_vessels:
-                self._partial_vessels[tile_key] = []
-            self._partial_vessels[tile_key].append(partial_vessel)
+            with self._partial_vessels_lock:
+                if tile_key not in self._partial_vessels:
+                    self._partial_vessels[tile_key] = []
+                self._partial_vessels[tile_key].append(partial_vessel)
 
     def _detect_lyve1_structures(
         self,
@@ -2551,12 +2556,13 @@ class VesselStrategy(DetectionStrategy, MultiChannelFeatureMixin):
         Returns:
             Dict mapping tile coordinates to lists of PartialVessel objects
         """
-        if tile_x is not None and tile_y is not None:
-            key = (tile_x, tile_y)
-            if key in self._partial_vessels:
-                return {key: self._partial_vessels[key]}
-            return {}
-        return self._partial_vessels.copy()
+        with self._partial_vessels_lock:
+            if tile_x is not None and tile_y is not None:
+                key = (tile_x, tile_y)
+                if key in self._partial_vessels:
+                    return {key: list(self._partial_vessels[key])}
+                return {}
+            return {k: list(v) for k, v in self._partial_vessels.items()}
 
     def clear_partial_vessels(
         self,
@@ -2570,12 +2576,13 @@ class VesselStrategy(DetectionStrategy, MultiChannelFeatureMixin):
             tile_x: Optional X coordinate to clear
             tile_y: Optional Y coordinate to clear
         """
-        if tile_x is not None and tile_y is not None:
-            key = (tile_x, tile_y)
-            if key in self._partial_vessels:
-                del self._partial_vessels[key]
-        else:
-            self._partial_vessels.clear()
+        with self._partial_vessels_lock:
+            if tile_x is not None and tile_y is not None:
+                key = (tile_x, tile_y)
+                if key in self._partial_vessels:
+                    del self._partial_vessels[key]
+            else:
+                self._partial_vessels.clear()
 
     # =====================================================================
     # Multi-Marker Candidate Merging Methods

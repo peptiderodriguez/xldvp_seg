@@ -353,7 +353,7 @@ class CellDetector:
         self,
         tile: np.ndarray,
         strategies: List[DetectionStrategy],
-        pixel_size_um: float = 0.22
+        pixel_size_um: float = None
     ) -> Dict[str, List[Detection]]:
         """
         Run detection for multiple cell types in one pass.
@@ -361,11 +361,14 @@ class CellDetector:
         Args:
             tile: RGB image tile as numpy array (H, W, 3)
             strategies: List of detection strategies to run
-            pixel_size_um: Pixel size for area conversion (default 0.22 um/px)
+            pixel_size_um: Pixel size for area conversion (from CZI metadata, required)
 
         Returns:
             Dict mapping cell type name to list of Detection objects
         """
+        if pixel_size_um is None:
+            raise ValueError("pixel_size_um must be provided (from CZI metadata)")
+
         results = {}
 
         for strategy in strategies:

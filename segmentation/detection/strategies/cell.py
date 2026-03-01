@@ -84,7 +84,7 @@ class CellStrategy(DetectionStrategy, MultiChannelFeatureMixin):
         self.cellpose_input_channels = cellpose_input_channels
 
     @staticmethod
-    def _percentile_normalize(arr: np.ndarray) -> np.ndarray:
+    def _percentile_normalize_single(arr: np.ndarray) -> np.ndarray:
         """Percentile-normalize any numeric array to uint8 [0, 255]."""
         if arr.dtype == np.uint8:
             return arr
@@ -154,8 +154,8 @@ class CellStrategy(DetectionStrategy, MultiChannelFeatureMixin):
             nuc_ch = extra_channels.get(nuc_idx)
             if cyto_ch is not None and nuc_ch is not None:
                 # Percentile-normalize each channel to uint8 (matches islet.py)
-                cyto_u8 = self._percentile_normalize(cyto_ch)
-                nuc_u8 = self._percentile_normalize(nuc_ch)
+                cyto_u8 = self._percentile_normalize_single(cyto_ch)
+                nuc_u8 = self._percentile_normalize_single(nuc_ch)
                 cp_tile = np.stack([cyto_u8, nuc_u8], axis=-1)
                 cellpose_masks, _, _ = cellpose.eval(cp_tile, channels=[1, 2])
                 logger.info(f"Cellpose 2-channel: cyto=ch{cyto_idx}, nuc=ch{nuc_idx}, "

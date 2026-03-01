@@ -50,6 +50,18 @@ from segmentation.utils.json_utils import sanitize_for_json
 logger = logging.getLogger(__name__)
 
 
+def _get_global_center(det):
+    """Get global center for a detection, adding tile_origin to center if needed."""
+    gc = det.get('global_center')
+    if gc is not None:
+        return gc
+    tc = det.get('center')
+    if tc is None:
+        return None
+    to = det.get('tile_origin', [0, 0])
+    return [tc[0] + to[0], tc[1] + to[1]]
+
+
 def load_czi_direct(czi_path, channels, strip_height=4096):
     """Load CZI channels directly using aicspylibczi, bypassing CZILoader.
 
@@ -74,6 +86,9 @@ def load_czi_direct(czi_path, channels, strip_height=4096):
             pixel_size = float(scaling.text) * 1e6
     except Exception:
         pass
+
+    if pixel_size is None:
+        raise ValueError(f"Could not extract pixel size from CZI metadata: {czi_path}")
 
     ch_data = {}
     n_strips = (height + strip_height - 1) // strip_height
@@ -365,7 +380,7 @@ def assign_cells_to_regions(detections, region_labels, downsample,
     groups = {}
 
     for i, det in enumerate(detections):
-        gc = det.get('global_center', det.get('center'))
+        gc = _get_global_center(det)
         if gc is None:
             det['islet_id'] = -1
             continue
@@ -481,8 +496,8 @@ def compute_islet_shape(cells, pixel_size):
     Returns dict with area_um2, perimeter_um, circularity, elongation, centroid_um.
     """
     coords_um = np.array([
-        [c.get('global_center', c.get('center', [0, 0]))[0] * pixel_size,
-         c.get('global_center', c.get('center', [0, 0]))[1] * pixel_size]
+        [(_get_global_center(c) or [0, 0])[0] * pixel_size,
+         (_get_global_center(c) or [0, 0])[1] * pixel_size]
         for c in cells
     ])
 
@@ -597,7 +612,7 @@ def compute_spatial_metrics(cells, pixel_size, marker_map):
     all_coords = []
     all_types = []
     for c in cells:
-        gc = c.get('global_center', c.get('center'))
+        gc = _get_global_center(c)
         if gc is None:
             continue
         xy_um = np.array([gc[0] * pixel_size, gc[1] * pixel_size])
@@ -773,7 +788,7 @@ def compute_border_core(cells, pixel_size, marker_map):
     coords = []
     types = []
     for c in cells:
-        gc = c.get('global_center', c.get('center'))
+        gc = _get_global_center(c)
         if gc is None:
             continue
         coords.append([gc[0] * pixel_size, gc[1] * pixel_size])
@@ -808,7 +823,7 @@ def compute_density_gradient(cells, pixel_size):
     """
     coords = []
     for c in cells:
-        gc = c.get('global_center', c.get('center'))
+        gc = _get_global_center(c)
         if gc is None:
             continue
         coords.append([gc[0] * pixel_size, gc[1] * pixel_size])
@@ -843,7 +858,7 @@ def compute_radial_profile(cells, pixel_size, marker_map, n_bins=5):
     coords = []
     types = []
     for c in cells:
-        gc = c.get('global_center', c.get('center'))
+        gc = _get_global_center(c)
         if gc is None:
             continue
         coords.append([gc[0] * pixel_size, gc[1] * pixel_size])
@@ -886,7 +901,7 @@ def compute_homogeneity(cells, pixel_size, marker_map):
     coords = []
     types = []
     for c in cells:
-        gc = c.get('global_center', c.get('center'))
+        gc = _get_global_center(c)
         if gc is None:
             continue
         coords.append([gc[0] * pixel_size, gc[1] * pixel_size])
@@ -927,7 +942,7 @@ def compute_packing_density(cells, pixel_size):
     cell_areas_um2 = []
     px2 = pixel_size ** 2
     for c in cells:
-        gc = c.get('global_center', c.get('center'))
+        gc = _get_global_center(c)
         if gc is None:
             continue
         coords.append([gc[0] * pixel_size, gc[1] * pixel_size])
@@ -1037,7 +1052,7 @@ def compute_tissue_level(islet_features, detections, pixel_size):
     # Tissue area from convex hull of ALL cell positions
     all_coords = []
     for d in detections:
-        gc = d.get('global_center', d.get('center'))
+        gc = _get_global_center(d)
         if gc is not None:
             all_coords.append([gc[0] * pixel_size, gc[1] * pixel_size])
     if len(all_coords) >= 3:
@@ -1187,7 +1202,7 @@ def render_islet_card(islet_feat, cells, masks, tile_vis, tile_x, tile_y,
     cell_info = []
     has_marker_cells = False
     for d in cells:
-        gc = d.get('global_center', d.get('center', [0, 0]))
+        gc = _get_global_center(d) or [0, 0]
         cx_rel = gc[0] - tile_x
         cy_rel = gc[1] - tile_y
         # Use tile_mask_label for HDF5 lookup (new data), fall back to mask_label (old data)
@@ -1430,7 +1445,7 @@ def generate_html(islet_features, detections, islet_groups, tile_info, tile_mask
     for iid in islet_groups:
         cells = [detections[i] for i in islet_groups[iid]]
         coords = np.array([
-            c.get('global_center', c.get('center', [0, 0])) for c in cells
+            _get_global_center(c) or [0, 0] for c in cells
         ])
         xmin, ymin = coords.min(axis=0)
         xmax, ymax = coords.max(axis=0)
@@ -1889,7 +1904,7 @@ def main():
                 for iid in islet_groups:
                     cells = [detections[i] for i in islet_groups[iid]]
                     for c in cells:
-                        gc = c.get('global_center', c.get('center', [0, 0]))
+                        gc = _get_global_center(c) or [0, 0]
                         for (tx, ty) in tile_info:
                             if tx <= gc[0] < tx + tile_w and ty <= gc[1] < ty + tile_h:
                                 needed_tiles.add((tx, ty))

@@ -37,16 +37,17 @@ def _safe_to_uint8(arr: np.ndarray) -> np.ndarray:
         return arr
     if arr.dtype == np.uint16:
         return (arr / 256).astype(np.uint8)
-    if arr.dtype in (np.float32, np.float64):
-        if arr.size == 0:
-            return arr.astype(np.uint8)
-        arr_max = arr.max()
-        if arr_max <= 1.0 + 1e-6:
-            return (arr * 255).clip(0, 255).astype(np.uint8)
-        else:
-            return arr.clip(0, 255).astype(np.uint8)
-    # Fallback for other int types (int32, int64, etc.)
-    return arr.clip(0, 255).astype(np.uint8)
+    arr = arr.astype(np.float32)
+    arr_max = arr.max()
+    if arr_max <= 0:
+        return np.zeros(arr.shape[:2] + ((3,) if arr.ndim == 3 else ()), dtype=np.uint8)
+    if arr_max <= 1.0 + 1e-6:
+        return (arr * 255).clip(0, 255).astype(np.uint8)
+    elif arr_max <= 255.0:
+        # Rescale to full uint8 range instead of clipping
+        return (arr * (255.0 / arr_max)).clip(0, 255).astype(np.uint8)
+    else:
+        return arr.clip(0, 255).astype(np.uint8)
 
 
 @dataclass

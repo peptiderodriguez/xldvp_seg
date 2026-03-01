@@ -49,8 +49,8 @@ def normalize_rows_columns(
         >>> corrected = normalize_rows_columns(tile)
         >>> # Row and column means will now be uniform
     """
-    # Use float32 for memory efficiency on large images
-    img = image.astype(np.float32)
+    # Use float32 for memory efficiency on large images (np.array guarantees a copy)
+    img = np.array(image, dtype=np.float32)
 
     # Use global mean as target if not specified
     if target_mean is None:

@@ -42,7 +42,8 @@ class MultiChannelFeatureMixin:
         self,
         mask: np.ndarray,
         channel_data: np.ndarray,
-        channel_name: str
+        channel_name: str,
+        _include_zeros: bool = False
     ) -> Dict[str, float]:
         """
         Extract intensity statistics for a single channel within a mask region.
@@ -55,6 +56,10 @@ class MultiChannelFeatureMixin:
             mask: Binary mask defining the region of interest (HxW boolean)
             channel_data: 2D array of intensity values for this channel (HxW)
             channel_name: Name prefix for the output features (e.g., 'ch0', 'btx')
+            _include_zeros: If True, include zero-intensity pixels in statistics.
+                If False (default), exclude zeros to avoid bias from CZI zero-padding
+                at tile boundaries. This is a backward-compat parameter; set True
+                when you know the tile has no zero-padding.
 
         Returns:
             Dictionary of features with keys prefixed by channel_name:
@@ -83,9 +88,13 @@ class MultiChannelFeatureMixin:
         if channel_data.shape != mask.shape:
             return {}
 
-        # Get masked pixels, excluding zeros (CZI padding)
+        # Get masked pixels (spatial mask only)
         masked_pixels = channel_data[mask].astype(np.float32)
-        masked_pixels = masked_pixels[masked_pixels > 0]
+        if not _include_zeros:
+            # Exclude zero-intensity pixels to avoid bias from CZI zero-padding
+            # at tile boundaries. Legitimate zero-intensity pixels inside tissue
+            # are rare and excluding them has negligible effect on statistics.
+            masked_pixels = masked_pixels[masked_pixels > 0]
         if len(masked_pixels) == 0:
             return {f'{channel_name}_{stat}': 0.0 for stat in
                     ['mean', 'std', 'max', 'min', 'median', 'p5', 'p25', 'p75', 'p95',
@@ -301,7 +310,8 @@ class MultiChannelFeatureMixin:
         self,
         mask: np.ndarray,
         channel_data: np.ndarray,
-        channel_name: str
+        channel_name: str,
+        _include_zeros: bool = False
     ) -> Dict[str, float]:
         """
         Extract basic intensity statistics for a single channel (lightweight version).
@@ -315,6 +325,8 @@ class MultiChannelFeatureMixin:
             mask: Binary mask defining the region of interest (HxW boolean)
             channel_data: 2D array of intensity values for this channel (HxW)
             channel_name: Name prefix for the output features
+            _include_zeros: If True, include zero-intensity pixels. Default False
+                excludes zeros (CZI zero-padding at tile boundaries).
 
         Returns:
             Dictionary with basic intensity features (5 features):
@@ -331,8 +343,9 @@ class MultiChannelFeatureMixin:
             return {}
 
         masked_pixels = channel_data[mask].astype(np.float32)
-        # Exclude zero pixels (CZI padding)
-        masked_pixels = masked_pixels[masked_pixels > 0]
+        if not _include_zeros:
+            # Exclude zero pixels (CZI zero-padding at tile boundaries)
+            masked_pixels = masked_pixels[masked_pixels > 0]
         if len(masked_pixels) == 0:
             return {}
 

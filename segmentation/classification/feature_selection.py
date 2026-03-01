@@ -88,8 +88,8 @@ def analyze_feature_importance(
 
     results = {}
 
-    # Scale data for analysis (fit on all data is acceptable for feature
-    # importance analysis since we're not reporting generalization scores)
+    # NOTE: StandardScaler is unnecessary for RF (scale-invariant) but kept
+    # for backward compatibility with previously trained/serialized models.
     scaler = StandardScaler()
     X_scaled = scaler.fit_transform(X)
 
@@ -214,8 +214,8 @@ def select_optimal_features(
         class_weight='balanced'
     )
 
-    # Scale data for methods that need pre-scaled input (threshold, top_n)
-    # RFECV and RFE use Pipeline internally to avoid leakage
+    # NOTE: StandardScaler is unnecessary for RF (scale-invariant) but kept
+    # for backward compatibility with previously trained/serialized models.
     scaler = StandardScaler()
     X_scaled = scaler.fit_transform(X)
 

@@ -86,6 +86,8 @@ def detections_to_features_list(detections, cell_type):
                 feat_dict['outer_contour'] = feat_dict['features'].pop('outer_contour')
             if 'inner_contour' in feat_dict['features']:
                 feat_dict['inner_contour'] = feat_dict['features'].pop('inner_contour')
+            if 'sma_contour' in feat_dict['features']:
+                feat_dict['sma_contour'] = feat_dict['features'].pop('sma_contour')
 
         features_list.append(feat_dict)
     return features_list
@@ -571,6 +573,14 @@ def _transform_vessel_contours(
             for pt in feat['inner_contour']
         ]
 
+    # Transform SMA contour
+    if feat.get('sma_contour') is not None:
+        feat['sma_contour_global'] = [
+            [pt[0] + tile_x, pt[1] + tile_y] if isinstance(pt[0], (int, float))
+            else [pt[0][0] + tile_x, pt[0][1] + tile_y]
+            for pt in feat['sma_contour']
+        ]
+
 
 def save_tile_outputs(
     tile_out_dir: Union[str, Path],
@@ -741,5 +751,6 @@ def process_tile_complete(
         }
 
     except Exception as e:
-        logger.error(f"Error processing tile ({tile_x}, {tile_y}): {e}")
+        import traceback
+        logger.error(f"Error processing tile ({tile_x}, {tile_y}): {e}\n{traceback.format_exc()}")
         return None

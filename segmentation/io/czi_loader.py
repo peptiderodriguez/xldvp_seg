@@ -94,12 +94,34 @@ def get_loader(
 
         return existing
 
-    # Create new loader (constructor may be slow, but path is unique so no contention)
+    # Create new loader outside the lock to avoid blocking other threads
+    # Use a threading.Event as a sentinel so concurrent callers wait
     with _image_cache_lock:
         # Double-check after re-acquiring lock
-        if key in _image_cache:
-            return _image_cache[key]
+        cached = _image_cache.get(key)
+        if cached is not None:
+            if isinstance(cached, threading.Event):
+                # Another thread is already building this loader — wait below
+                event = cached
+            else:
+                return cached
+        else:
+            # We will build it — insert event as placeholder
+            event = threading.Event()
+            _image_cache[key] = event
+            cached = None  # signals we are the builder
 
+    if cached is not None:
+        # Another thread is building — wait for it to finish
+        event.wait()
+        with _image_cache_lock:
+            result = _image_cache.get(key)
+            if result is None or isinstance(result, threading.Event):
+                raise RuntimeError(f"Loader construction failed for {key}")
+            return result
+
+    # We are the builder — construct outside the lock
+    try:
         logger.debug(f"Creating new loader for {Path(czi_path).name} scene={scene}")
         loader = CZILoader(
             czi_path,
@@ -110,8 +132,15 @@ def get_loader(
             quiet=quiet,
             scene=scene
         )
-        _image_cache[key] = loader
+        with _image_cache_lock:
+            _image_cache[key] = loader
+        event.set()
         return loader
+    except Exception:
+        with _image_cache_lock:
+            del _image_cache[key]
+        event.set()
+        raise
 
 
 def clear_cache():
@@ -120,6 +149,8 @@ def clear_cache():
     with _image_cache_lock:
         for key in list(_image_cache.keys()):
             loader = _image_cache[key]
+            if isinstance(loader, threading.Event):
+                continue  # Skip sentinels from in-progress construction
             loader.close()
         _image_cache.clear()
     logger.info("Image cache cleared")
