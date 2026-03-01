@@ -228,12 +228,12 @@ def run_pipeline(args):
         # Validate --channel against actual CZI channel count
         n_czi_channels = _czi_meta['n_channels']
         _channels_to_check = [('--channel', args.channel)]
+        # Only validate cell-type-specific channels when that cell type is active
         if getattr(args, 'cd31_channel', None) is not None:
             _channels_to_check.append(('--cd31-channel', args.cd31_channel))
-        if getattr(args, 'membrane_channel', None) is not None:
-            _channels_to_check.append(('--membrane-channel', args.membrane_channel))
-        if getattr(args, 'nuclear_channel', None) is not None:
-            _channels_to_check.append(('--nuclear-channel', args.nuclear_channel))
+        if args.cell_type == 'islet':
+            _channels_to_check.append(('--membrane-channel', getattr(args, 'membrane_channel', 1)))
+            _channels_to_check.append(('--nuclear-channel', getattr(args, 'nuclear_channel', 4)))
         for _flag, _ch_val in _channels_to_check:
             if _ch_val >= n_czi_channels:
                 logger.error(f"{_flag} {_ch_val} is out of range: CZI has {n_czi_channels} channels (0-{n_czi_channels - 1})")
