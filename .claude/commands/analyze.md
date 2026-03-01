@@ -32,6 +32,7 @@ Use this info throughout to set `--num-gpus`, SLURM `--mem`, `--cpus-per-task`, 
 | **Spatial** | Delaunay networks, community detection, cell neighborhoods | `scripts/spatial_cell_analysis.py` |
 | **Visualize** | Multi-slide scrollable HTML with ROI drawing + stats | `scripts/generate_multi_slide_spatial_viewer.py` |
 | **LMD** | Contour dilation+RDP, clustering, well assignment, XML export | `run_lmd_export.py` |
+| **SpatialData** | Export to scverse ecosystem (squidpy, scanpy, anndata) | `scripts/convert_to_spatialdata.py` |
 | **Convert** | CZI to OME-Zarr pyramids for Napari | `scripts/czi_to_ome_zarr.py` |
 
 Tell the user: *"You can ask me to run any of these at any time, or just describe what you want to do."*
@@ -80,6 +81,11 @@ cell_type: <type>
 num_gpus: <from system_info recommended.gpus>
 all_channels: <true/false>
 pixel_size_um: <from czi_info>
+spatialdata:
+  enabled: true
+  extract_shapes: true
+  run_squidpy: false            # true to auto-run spatial stats
+  squidpy_cluster_key: ""       # e.g., tdTomato_class (after marker classification)
 slurm:
   partition: <from system_info recommended.partition>
   cpus: <from system_info recommended.cpus>
@@ -178,6 +184,67 @@ python scripts/generate_multi_slide_spatial_viewer.py \
     --group-field <marker_class_field> \
     --title "Spatial Overview" \
     --output <output>/spatial_viewer.html
+```
+
+---
+
+## Phase 4.5: SpatialData Export (scverse ecosystem)
+
+*SpatialData export runs automatically at the end of detection (if deps installed). This phase covers standalone conversion for existing runs, squidpy analysis, and verification.*
+
+**Step 18b — Check if SpatialData was auto-generated.**
+Look for `*_spatialdata.zarr` in the output directory. If it exists, tell the user: *"A SpatialData zarr store was automatically generated during detection."*
+
+If it doesn't exist (e.g., older run), offer to generate it:
+```bash
+$MKSEG_PYTHON $REPO/scripts/convert_to_spatialdata.py \
+    --detections <detections.json> \
+    --output <output>/<celltype>_spatialdata.zarr \
+    --tiles-dir <output>/tiles \
+    --cell-type <celltype> \
+    --overwrite
+```
+
+**Step 18c — Ask about squidpy spatial analyses.**
+*"Want to run scverse spatial statistics on this data? This computes neighborhood enrichment, co-occurrence patterns, Moran's I spatial autocorrelation, and Ripley's L function."*
+
+If the user has marker classifications (e.g., from `classify_markers.py`), ask which column to use:
+*"Which classification column should squidpy analyze? (e.g., tdTomato_class, GFP_class)"*
+
+```bash
+$MKSEG_PYTHON $REPO/scripts/convert_to_spatialdata.py \
+    --detections <detections.json> \
+    --output <output>/<celltype>_spatialdata.zarr \
+    --tiles-dir <output>/tiles \
+    --cell-type <celltype> \
+    --run-squidpy \
+    --squidpy-cluster-key <marker_class> \
+    --overwrite
+```
+
+Outputs:
+- `*_spatialdata.zarr/` — zarr store loadable via `spatialdata.read_zarr()`
+- `*_spatialdata_squidpy/morans_i.csv` — features ranked by spatial autocorrelation
+- `*_spatialdata_squidpy/nhood_enrichment.png` — cell type co-location patterns
+- `*_spatialdata_squidpy/co_occurrence.png` — co-occurrence at multiple distances
+
+**Step 18d — Show how to use the output.** For beginners:
+*"The SpatialData zarr store integrates with the entire scverse ecosystem. You can load it in Python for custom analysis:"*
+```python
+import spatialdata as sd
+sdata = sd.read_zarr("<output>/<celltype>_spatialdata.zarr")
+adata = sdata["table"]  # AnnData with spatial coords, features, embeddings
+
+# Spatial statistics
+import squidpy as sq
+sq.gr.spatial_neighbors(adata)
+sq.pl.spatial_scatter(adata, color="tdTomato_class")
+
+# Dimensionality reduction
+import scanpy as sc
+sc.pp.pca(adata)
+sc.tl.umap(adata)
+sc.pl.umap(adata, color=["area", "rf_prediction"])
 ```
 
 ---

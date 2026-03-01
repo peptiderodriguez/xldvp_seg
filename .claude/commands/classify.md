@@ -103,6 +103,32 @@ For beginners: *"UMAP is a way to project high-dimensional features into 2D so y
 
 ---
 
+## Step 5: SpatialData Export (optional)
+
+Ask: *"Want to export the classified detections to SpatialData for scverse ecosystem analysis (squidpy, scanpy)?"*
+
+This is especially useful after classification because the marker classes (e.g., `tdTomato_class`) enable neighborhood enrichment and co-occurrence analyses.
+
+```bash
+$MKSEG_PYTHON $REPO/scripts/convert_to_spatialdata.py \
+    --detections <scored_or_classified_detections.json> \
+    --output <output>/<celltype>_spatialdata.zarr \
+    --tiles-dir <output>/tiles \
+    --run-squidpy \
+    --squidpy-cluster-key <marker_class_column> \
+    --overwrite
+```
+
+Outputs:
+- `*_spatialdata.zarr/` — SpatialData zarr store with AnnData table, polygon shapes, embeddings
+- `*_spatialdata_squidpy/morans_i.csv` — spatially autocorrelated features
+- `*_spatialdata_squidpy/nhood_enrichment.png` — which cell types co-locate
+- `*_spatialdata_squidpy/co_occurrence.png` — type co-occurrence at multiple distances
+
+For beginners: *"SpatialData is the standard format for the scverse spatial analysis ecosystem. It lets you use squidpy for spatial statistics and scanpy for single-cell-style analysis on your detections."*
+
+---
+
 ## Rules
 
 - Use `$MKSEG_PYTHON` as the Python interpreter and set `PYTHONPATH=$REPO`.

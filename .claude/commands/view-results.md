@@ -39,6 +39,19 @@ $MKSEG_PYTHON $REPO/serve_html.py <html_dir>
 
 **Step 5 — Display the tunnel URL.** Tell the user: *"Open this URL in your browser to view and annotate detections."*
 
+**Step 5b — Check for SpatialData outputs.**
+Look for `*_spatialdata.zarr` alongside the HTML:
+```bash
+ls -d <output_dir>/*_spatialdata.zarr 2>/dev/null
+```
+If found, tell the user: *"A SpatialData zarr store is also available for scverse analysis:"*
+```python
+import spatialdata as sd
+sdata = sd.read_zarr("<path>")
+adata = sdata["table"]
+```
+Also check for squidpy outputs (`*_squidpy/morans_i.csv`, `*_squidpy/*.png`) and show paths if they exist.
+
 For beginners, explain the annotation interface:
 - Each card shows a detection crop with overlay
 - Green checkmark = real detection (positive)

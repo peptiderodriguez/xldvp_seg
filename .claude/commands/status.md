@@ -36,6 +36,8 @@ ps aux | grep run_segmentation | grep -v grep
 
 4. **Check HTML status** — Does `<output_dir>/html/index.html` exist?
 
+5. **Check SpatialData status** — Does `<output_dir>/*_spatialdata.zarr` exist? If so, report the zarr store path and mention it's ready for scverse analysis.
+
 **Step 3 — If a job failed:**
 
 1. Find the `.err` file and show the last 100 lines
