@@ -539,10 +539,8 @@ class CellDetector:
 
             # Ensure uint8 format
             if image.dtype != np.uint8:
-                if image.dtype == np.uint16:
-                    image = (image / 256).astype(np.uint8)
-                else:
-                    image = image.astype(np.uint8)
+                from segmentation.utils.detection_utils import safe_to_uint8
+                image = safe_to_uint8(image)
             self._sam2_predictor.set_image(image)
 
     def reset_predictor(self):

@@ -39,6 +39,7 @@ from multiprocessing.shared_memory import SharedMemory
 import numpy as np
 
 from segmentation.utils.logging import get_logger
+from segmentation.utils.detection_utils import safe_to_uint8 as _safe_to_uint8
 from segmentation.processing.multigpu_shm import (
     register_shm_for_cleanup,
     unregister_shm_for_cleanup,
@@ -376,10 +377,7 @@ def _gpu_worker(
             # Always convert tile_rgb to uint8 for SAM2/visual models.
             # For islet: extra_channel_tiles retains uint16 for downstream analysis.
             if tile_rgb.dtype != np.uint8:
-                if tile_rgb.dtype == np.uint16:
-                    tile_rgb = (tile_rgb / 256).astype(np.uint8)
-                else:
-                    tile_rgb = tile_rgb.astype(np.uint8)
+                tile_rgb = _safe_to_uint8(tile_rgb)
 
             if not has_tissue_flag:
                 output_queue.put({

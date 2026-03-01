@@ -190,7 +190,8 @@ def percentile_normalize(image, p_low=1, p_high=99.5, global_percentiles=None):
             return result
         if image.dtype == np.uint16:
             return (image / 256).astype(np.uint8)
-        return image.astype(np.uint8)
+        from segmentation.utils.detection_utils import safe_to_uint8
+        return safe_to_uint8(image)
     else:
         # Multi-channel: valid pixel = any channel > 0
         h, w, c = image.shape
@@ -213,7 +214,8 @@ def percentile_normalize(image, p_low=1, p_high=99.5, global_percentiles=None):
                 if image.dtype == np.uint16:
                     result[:, :, ch] = (ch_data / 256).astype(np.uint8)
                 else:
-                    result[:, :, ch] = ch_data.astype(np.uint8)
+                    from segmentation.utils.detection_utils import safe_to_uint8
+                    result[:, :, ch] = safe_to_uint8(ch_data)
         # Keep padding pixels black
         result[~valid_mask] = 0
         return result

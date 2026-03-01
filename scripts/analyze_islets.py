@@ -156,6 +156,8 @@ def compute_cell_medians(detections, tiles_dir, ch_data, marker_map, x_start, y_
 
         with h5py.File(mask_path, 'r') as f:
             masks = f['masks'][:]
+        if masks.ndim == 3 and masks.shape[0] == 1:
+            masks = masks[0]
 
         slices = ndimage.find_objects(masks)
         th, tw = masks.shape[:2]
@@ -333,6 +335,10 @@ def find_islet_regions(ch_data, marker_map, pixel_size, downsample=4,
     nonzero_signal = signal[signal > 0]
     if len(nonzero_signal) < 100:
         logger.warning("  Too few non-zero pixels for Otsu thresholding")
+        return np.zeros(signal.shape, dtype=np.int32), downsample, signal
+
+    if np.std(nonzero_signal) < 1e-6:
+        logger.warning("  Near-zero variance in endocrine signal; cannot threshold")
         return np.zeros(signal.shape, dtype=np.int32), downsample, signal
 
     otsu_raw = threshold_otsu(nonzero_signal)
@@ -1896,6 +1902,8 @@ def main():
                 mask_path = first_td / 'islet_masks.h5'
                 with h5py.File(mask_path, 'r') as f:
                     first_masks = f['masks'][:]
+                if first_masks.ndim == 3 and first_masks.shape[0] == 1:
+                    first_masks = first_masks[0]
                 tile_h, tile_w = first_masks.shape[:2]
                 del first_masks
 
@@ -1942,6 +1950,8 @@ def main():
                         continue
                     with h5py.File(mp, 'r') as f:
                         masks = f['masks'][:]
+                    if masks.ndim == 3 and masks.shape[0] == 1:
+                        masks = masks[0]
                     tile_masks_cache[(tx, ty)] = masks
                     th, tw = masks.shape[:2]
                     rel_tx = tx - x_start

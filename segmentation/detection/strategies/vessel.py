@@ -24,7 +24,7 @@ import numpy as np
 import cv2
 from PIL import Image
 
-from .base import DetectionStrategy, Detection
+from .base import DetectionStrategy, Detection, _safe_to_uint8
 from .mixins import MultiChannelFeatureMixin
 from segmentation.utils.logging import get_logger
 from segmentation.utils.feature_extraction import (
@@ -869,7 +869,7 @@ class VesselStrategy(DetectionStrategy, MultiChannelFeatureMixin):
             else:
                 return []
             if img_max - img_min > 1e-8:
-                img_norm = np.clip((gray.astype(np.float64) - img_min) / (img_max - img_min) * 255, 0, 255).astype(np.uint8)
+                img_norm = np.clip((gray.astype(np.float32) - img_min) / (img_max - img_min) * 255, 0, 255).astype(np.uint8)
             else:
                 return []
         else:
@@ -1292,15 +1292,8 @@ class VesselStrategy(DetectionStrategy, MultiChannelFeatureMixin):
         capillary_candidates = []
 
         # Normalize channels to uint8 if needed
-        if cd31_channel.dtype == np.uint16:
-            cd31_norm = (cd31_channel / 256).astype(np.uint8)
-        else:
-            cd31_norm = cd31_channel.astype(np.uint8)
-
-        if sma_channel.dtype == np.uint16:
-            sma_norm = (sma_channel / 256).astype(np.uint8)
-        else:
-            sma_norm = sma_channel.astype(np.uint8)
+        cd31_norm = _safe_to_uint8(cd31_channel)
+        sma_norm = _safe_to_uint8(sma_channel)
 
         # Step 1: Threshold CD31 channel at intensity_percentile
         cd31_nonzero = cd31_norm[cd31_norm > 0]
@@ -1517,15 +1510,11 @@ class VesselStrategy(DetectionStrategy, MultiChannelFeatureMixin):
             if cd31_channel is not None:
                 # Build 2D SMA fallback: handle uint16 tiles (np.mean can exceed 255)
                 if isinstance(sma_channel, np.ndarray) and sma_channel.ndim == 2:
-                    sma_for_cd31 = sma_channel
+                    sma_for_cd31 = _safe_to_uint8(sma_channel)
                 elif tile.ndim == 3:
-                    sma_mean = np.mean(tile[:, :, :3], axis=2)
-                    if tile.dtype == np.uint16:
-                        sma_for_cd31 = (sma_mean / 256).astype(np.uint8)
-                    else:
-                        sma_for_cd31 = sma_mean.astype(np.uint8)
+                    sma_for_cd31 = _safe_to_uint8(np.mean(tile[:, :, :3], axis=2))
                 else:
-                    sma_for_cd31 = tile
+                    sma_for_cd31 = _safe_to_uint8(tile)
                 futures[executor.submit(
                     self._detect_cd31_tubular,
                     cd31_channel,
@@ -1537,15 +1526,11 @@ class VesselStrategy(DetectionStrategy, MultiChannelFeatureMixin):
             if lyve1_channel is not None:
                 # Get 2D SMA for comparison: handle uint16 tiles (np.mean can exceed 255)
                 if isinstance(sma_channel, np.ndarray) and sma_channel.ndim == 2:
-                    sma_2d = sma_channel
+                    sma_2d = _safe_to_uint8(sma_channel)
                 elif tile.ndim == 3:
-                    sma_mean = np.mean(tile[:, :, :3], axis=2)
-                    if tile.dtype == np.uint16:
-                        sma_2d = (sma_mean / 256).astype(np.uint8)
-                    else:
-                        sma_2d = sma_mean.astype(np.uint8)
+                    sma_2d = _safe_to_uint8(np.mean(tile[:, :, :3], axis=2))
                 else:
-                    sma_2d = tile
+                    sma_2d = _safe_to_uint8(tile)
                 futures[executor.submit(
                     self._detect_lyve1_structures,
                     lyve1_channel,
@@ -2268,14 +2253,19 @@ class VesselStrategy(DetectionStrategy, MultiChannelFeatureMixin):
             (current_tile_x, current_tile_y + tile_size),  # Bottom
         ]
 
-        # Get partial vessels from current tile
-        current_partials = self._partial_vessels.get((current_tile_x, current_tile_y), [])
+        # Snapshot partial vessels under lock to avoid races with concurrent writers
+        with self._partial_vessels_lock:
+            current_partials = list(self._partial_vessels.get((current_tile_x, current_tile_y), []))
+            adj_partials_map = {}
+            for adj_tile in adjacent_tiles:
+                if adj_tile in self._partial_vessels:
+                    adj_partials_map[adj_tile] = list(self._partial_vessels[adj_tile])
 
         for adj_tile in adjacent_tiles:
-            if adj_tile not in self._partial_vessels:
+            if adj_tile not in adj_partials_map:
                 continue
 
-            adj_partials = self._partial_vessels[adj_tile]
+            adj_partials = adj_partials_map[adj_tile]
 
             # Determine which edge connects these tiles
             dx = adj_tile[0] - current_tile_x
@@ -2822,10 +2812,6 @@ class VesselStrategy(DetectionStrategy, MultiChannelFeatureMixin):
             f"Candidate merging: {n} -> {len(merged_candidates)} "
             f"(merged {n - len(merged_candidates)} duplicates)"
         )
-
-        # Release binary mask references to allow GC of tile-sized arrays
-        for cand in merged_candidates:
-            cand.pop('binary', None)
 
         return merged_candidates
 
@@ -4031,10 +4017,7 @@ class VesselStrategy(DetectionStrategy, MultiChannelFeatureMixin):
 
         # Ensure uint8 format
         if tile_rgb.dtype != np.uint8:
-            if tile_rgb.dtype == np.uint16:
-                tile_rgb = (tile_rgb / 256).astype(np.uint8)
-            else:
-                tile_rgb = tile_rgb.astype(np.uint8)
+            tile_rgb = _safe_to_uint8(tile_rgb)
 
         # Get models
         sam2_predictor = models.get('sam2_predictor')
@@ -4204,6 +4187,11 @@ class VesselStrategy(DetectionStrategy, MultiChannelFeatureMixin):
             dm = valid_candidates[-1]['detection_method']
             if isinstance(dm, str):
                 valid_candidates[-1]['detection_method'] = [dm]
+
+        # Release binary mask references from candidates to allow GC of tile-sized arrays.
+        # Done AFTER feature extraction loop (which reads cand['binary'] for ring completeness).
+        for cand in ring_candidates:
+            cand.pop('binary', None)
 
         # Batch deep feature extraction (ResNet + DINOv2, masked + context)
         # ResNet masked
@@ -4682,10 +4670,7 @@ class VesselStrategy(DetectionStrategy, MultiChannelFeatureMixin):
 
                 # Normalize to uint8 if needed
                 if tile_rgb.dtype != np.uint8:
-                    if tile_rgb.max() > 255:
-                        tile_rgb = ((tile_rgb - tile_rgb.min()) / (tile_rgb.max() - tile_rgb.min() + 1e-8) * 255).astype(np.uint8)
-                    else:
-                        tile_rgb = tile_rgb.astype(np.uint8)
+                    tile_rgb = _safe_to_uint8(tile_rgb)
 
                 # Run MedSAM automatic mask generation
                 try:
@@ -5092,7 +5077,12 @@ class VesselStrategy(DetectionStrategy, MultiChannelFeatureMixin):
             logger.info("Cross-tile merging disabled in config")
             return []
 
-        if not self._partial_vessels:
+        # Snapshot under lock (merge_cross_tile_vessels is called after all tiles,
+        # but lock ensures visibility of all writes from worker threads)
+        with self._partial_vessels_lock:
+            partial_snapshot = {k: list(v) for k, v in self._partial_vessels.items()}
+
+        if not partial_snapshot:
             logger.info("No partial vessels stored for merging")
             return []
 
@@ -5103,7 +5093,7 @@ class VesselStrategy(DetectionStrategy, MultiChannelFeatureMixin):
         merged_partial_ids: Set[Tuple[Tuple[int, int], int]] = set()  # (tile_coords, idx)
 
         # Collect all tile coordinates that have partial vessels
-        tile_coords = list(self._partial_vessels.keys())
+        tile_coords = list(partial_snapshot.keys())
         logger.info(
             f"Starting cross-tile merge: {len(tile_coords)} tiles with partial vessels, "
             f"tile_size={tile_size}, overlap={overlap}, threshold={match_threshold}"
@@ -5113,7 +5103,7 @@ class VesselStrategy(DetectionStrategy, MultiChannelFeatureMixin):
         # Key: (tile_x, tile_y, edge) -> List[(partial_idx, PartialVessel)]
         edge_lookup: Dict[Tuple[int, int, BoundaryEdge], List[Tuple[int, PartialVessel]]] = {}
 
-        for tile_key, partials in self._partial_vessels.items():
+        for tile_key, partials in partial_snapshot.items():
             tile_x, tile_y = tile_key
             for idx, partial in enumerate(partials):
                 for edge in partial.boundary_edges:
@@ -5135,7 +5125,7 @@ class VesselStrategy(DetectionStrategy, MultiChannelFeatureMixin):
         # Iterate through all tiles and their partial vessels
         for tile1_key in tile_coords:
             tile1_x, tile1_y = tile1_key
-            partials1 = self._partial_vessels[tile1_key]
+            partials1 = partial_snapshot[tile1_key]
 
             for idx1, partial1 in enumerate(partials1):
                 partial1_id = (tile1_key, idx1)
@@ -5240,7 +5230,9 @@ class VesselStrategy(DetectionStrategy, MultiChannelFeatureMixin):
                 - 'features': dict of extracted features
         """
         unmerged = []
-        for tile_key, partials in self._partial_vessels.items():
+        with self._partial_vessels_lock:
+            snapshot = {k: list(v) for k, v in self._partial_vessels.items()}
+        for tile_key, partials in snapshot.items():
             tile_x, tile_y = tile_key
             for partial in partials:
                 # Convert contour to global coordinates
@@ -5274,8 +5266,11 @@ class VesselStrategy(DetectionStrategy, MultiChannelFeatureMixin):
                 - 'partials_by_edge': count of partials touching each edge
                 - 'tiles_with_partials': list of (tile_x, tile_y) tuples
         """
+        with self._partial_vessels_lock:
+            snapshot = {k: list(v) for k, v in self._partial_vessels.items()}
+
         stats = {
-            'total_tiles': len(self._partial_vessels),
+            'total_tiles': len(snapshot),
             'total_partials': 0,
             'partials_by_edge': {
                 'top': 0,
@@ -5283,10 +5278,10 @@ class VesselStrategy(DetectionStrategy, MultiChannelFeatureMixin):
                 'left': 0,
                 'right': 0,
             },
-            'tiles_with_partials': list(self._partial_vessels.keys()),
+            'tiles_with_partials': list(snapshot.keys()),
         }
 
-        for partials in self._partial_vessels.values():
+        for partials in snapshot.values():
             stats['total_partials'] += len(partials)
             for partial in partials:
                 for edge in partial.boundary_edges:

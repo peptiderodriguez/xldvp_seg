@@ -172,9 +172,11 @@ def compute_pixel_level_tissue_mask(
             gray_raw = image
         gray, _ = _normalize_to_uint8(gray_raw)
     elif image.ndim == 3:
-        gray = cv2.cvtColor(image.astype(np.uint8), cv2.COLOR_RGB2GRAY)
+        from segmentation.utils.detection_utils import safe_to_uint8
+        gray = cv2.cvtColor(safe_to_uint8(image), cv2.COLOR_RGB2GRAY)
     else:
-        gray = image.astype(np.uint8)
+        from segmentation.utils.detection_utils import safe_to_uint8
+        gray = safe_to_uint8(image)
 
     # Compute local variance using uniform filter
     # This is equivalent to computing variance in each block_size×block_size neighborhood
@@ -240,9 +242,11 @@ def has_tissue(tile_image, variance_threshold, min_tissue_fraction=0.10, block_s
         if not ok:
             return False, 0.0
     elif tile_image.ndim == 3:
-        gray = cv2.cvtColor(tile_image.astype(np.uint8), cv2.COLOR_RGB2GRAY)
+        from segmentation.utils.detection_utils import safe_to_uint8
+        gray = cv2.cvtColor(safe_to_uint8(tile_image), cv2.COLOR_RGB2GRAY)
     else:
-        gray = tile_image.astype(np.uint8)
+        from segmentation.utils.detection_utils import safe_to_uint8
+        gray = safe_to_uint8(tile_image)
 
     # Count tissue blocks using shared is_tissue_block() logic
     height, width = gray.shape

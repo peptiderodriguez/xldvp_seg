@@ -51,7 +51,14 @@ def update_symlink(link_path, target_path):
             link_path.unlink()
         link_path.symlink_to(target_path.name)
     except OSError as e:
-        logger.debug(f"Could not create symlink {link_path} -> {target_path.name}: {e}")
+        logger.warning(f"Could not create symlink {link_path} -> {target_path.name}: {e}")
+        # Fall back to file copy so the canonical name still exists
+        import shutil
+        try:
+            shutil.copy2(str(target_path), str(link_path))
+            logger.info(f"Copied {target_path.name} -> {link_path.name} (symlink fallback)")
+        except OSError as copy_err:
+            logger.warning(f"Symlink fallback copy also failed: {copy_err}")
 
 
 def save_with_timestamp(base_path, data, fmt="json", json_encoder=None):

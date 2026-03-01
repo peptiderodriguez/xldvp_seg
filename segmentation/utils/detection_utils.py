@@ -13,6 +13,35 @@ import numpy as np
 logger = logging.getLogger(__name__)
 
 
+def safe_to_uint8(arr: np.ndarray) -> np.ndarray:
+    """Safely convert any numeric array to uint8 [0, 255].
+
+    Handles float32/float64 tiles that may be in [0, 1] range (e.g., after
+    photobleaching correction or normalization), uint16 tiles, and already-uint8.
+    Bare ``.astype(np.uint8)`` on float [0, 1] data truncates everything to 0.
+
+    Args:
+        arr: Input array of any numeric dtype.
+
+    Returns:
+        uint8 array with values in [0, 255].
+    """
+    if arr.dtype == np.uint8:
+        return arr
+    if arr.dtype == np.uint16:
+        return (arr / 256).astype(np.uint8)
+    arr = arr.astype(np.float32)
+    arr_max = arr.max()
+    if arr_max <= 0:
+        return np.zeros(arr.shape[:2] + ((3,) if arr.ndim == 3 else ()), dtype=np.uint8)
+    if arr_max <= 1.0 + 1e-6:
+        return (arr * 255).clip(0, 255).astype(np.uint8)
+    elif arr_max <= 255.0:
+        return (arr * (255.0 / arr_max)).clip(0, 255).astype(np.uint8)
+    else:
+        return arr.clip(0, 255).astype(np.uint8)
+
+
 def load_detections(path, score_threshold=None):
     """Load detections JSON, optionally filtering by rf_prediction.
 

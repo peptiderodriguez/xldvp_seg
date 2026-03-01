@@ -201,8 +201,15 @@ def load_slide_data(path, group_field):
 def discover_slides(input_dir, detection_glob):
     """Discover per-slide detection files in subdirectories.
 
-    Also checks for a detection file directly in input_dir (single-slide
-    case).
+    Searches recursively with ``**/<detection_glob>`` so that detection files
+    nested under timestamp subdirectories are found.  The pipeline produces
+    ``output_dir/slide_name/<run_timestamp>/cell_detections_classified.json``,
+    so a depth-1 search is insufficient for multi-slide mode.
+
+    For each found file, the slide name is inferred from the deepest ancestor
+    directory that is a direct child of *input_dir* (i.e. the slide subdirectory).
+    If the file is directly inside *input_dir*, the slide name comes from
+    *input_dir* itself.
 
     Returns list of (slide_name, detection_path) tuples.
     """
@@ -210,24 +217,31 @@ def discover_slides(input_dir, detection_glob):
     results = []
     seen_paths = set()
 
-    # Check for file directly in input_dir
-    direct = list(input_dir.glob(detection_glob))
-    if direct:
-        rp = direct[0].resolve()
-        if rp not in seen_paths:
-            seen_paths.add(rp)
-            results.append((input_dir.name, direct[0]))
-
-    # Check subdirectories
-    for subdir in sorted(input_dir.iterdir()):
-        if not subdir.is_dir():
+    # Recursive search: finds files at any depth under input_dir
+    for match in sorted(input_dir.rglob(detection_glob)):
+        if not match.is_file():
             continue
-        matches = list(subdir.glob(detection_glob))
-        if matches:
-            rp = matches[0].resolve()
-            if rp not in seen_paths:
-                seen_paths.add(rp)
-                results.append((subdir.name, matches[0]))
+        rp = match.resolve()
+        if rp in seen_paths:
+            continue
+        seen_paths.add(rp)
+
+        # Determine slide name: the first directory component relative to
+        # input_dir.  E.g. for input_dir/slideA/run_123/det.json → "slideA".
+        # For input_dir/det.json → input_dir.name.
+        try:
+            rel = match.relative_to(input_dir)
+        except ValueError:
+            continue
+        parts = rel.parts  # e.g. ('slideA', 'run_123', 'det.json')
+        if len(parts) <= 1:
+            # File directly in input_dir
+            slide_name = input_dir.name
+        else:
+            # First subdirectory component is the slide name
+            slide_name = parts[0]
+
+        results.append((slide_name, match))
 
     return results
 
@@ -1565,6 +1579,7 @@ window.addEventListener('resize', () => {
 
     html_content = ''.join(html_parts)
 
+    Path(output_path).parent.mkdir(parents=True, exist_ok=True)
     with open(output_path, 'w', encoding='utf-8') as f:
         f.write(html_content)
 

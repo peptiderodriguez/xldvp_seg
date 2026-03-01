@@ -1842,7 +1842,8 @@ def run_pipeline(args):
                 logger.info(f"  Converting uint16 → uint8 for normalization ({rgb_for_norm.nbytes / 1e9:.1f} GB)")
                 rgb_for_norm = (rgb_for_norm >> 8).astype(np.uint8)
             elif rgb_for_norm.dtype != np.uint8:
-                rgb_for_norm = rgb_for_norm.astype(np.uint8)
+                from segmentation.utils.detection_utils import safe_to_uint8
+                rgb_for_norm = safe_to_uint8(rgb_for_norm)
         elif primary_data.ndim == 2:
             # Single channel: convert to uint8 FIRST, then stack 3x.
             # This avoids creating a 3-channel uint16 copy (3x memory waste).
@@ -1851,7 +1852,8 @@ def run_pipeline(args):
                 logger.info(f"  Converting single-channel uint16 → uint8 before stacking ({single_u8.nbytes / 1e9:.1f} GB)")
                 single_u8 = (single_u8 >> 8).astype(np.uint8)
             elif single_u8.dtype != np.uint8:
-                single_u8 = single_u8.astype(np.uint8)
+                from segmentation.utils.detection_utils import safe_to_uint8
+                single_u8 = safe_to_uint8(single_u8)
             rgb_for_norm = np.stack([single_u8] * 3, axis=-1)
             del single_u8
         else:
@@ -2119,7 +2121,7 @@ def run_pipeline(args):
         all_samples = []
         if not skip_html:
             # Ensure all channels are loaded for HTML generation
-            if args.all_channels or (cell_type == 'cell' and hasattr(args, 'cellpose_input_channels')):
+            if args.all_channels or (args.cell_type == 'cell' and getattr(args, 'cellpose_input_channels', None)):
                 try:
                     dims = loader.reader.get_dims_shape()[0]
                     _n_ch = dims.get('C', (0, 3))[1]
@@ -3281,7 +3283,7 @@ def main():
                              'single-marker classification. Below → "multi". (default 1.5)')
     parser.add_argument('--dedup-by-confidence', action='store_true', default=False,
                         help='Sort by confidence (score) instead of area during deduplication. '
-                             'Automatically enabled for islet cell type.')
+                             'Default: sort by area (largest mask wins overlap).')
 
     # Tissue pattern parameters
     parser.add_argument('--tp-detection-channels', type=str, default='0,3',

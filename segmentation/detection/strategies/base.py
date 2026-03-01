@@ -12,42 +12,12 @@ import numpy as np
 import logging
 
 from segmentation.utils.feature_extraction import SAM2_EMBEDDING_DIM, RESNET50_FEATURE_DIM
+from segmentation.utils.detection_utils import safe_to_uint8 as _safe_to_uint8  # noqa: F401 — re-exported for mk/nmj/cell imports
 
 # DINOv2 ViT-L/14 feature dimension
 DINOV2_FEATURE_DIM = 1024
 
 logger = logging.getLogger(__name__)
-
-
-def _safe_to_uint8(arr: np.ndarray) -> np.ndarray:
-    """
-    Safely convert any numeric array to uint8 [0, 255].
-
-    Handles float32/float64 tiles that may be in [0, 1] range (e.g., after
-    photobleaching correction or normalization), uint16 tiles, and already-uint8.
-    Bare ``.astype(np.uint8)`` on float [0, 1] data truncates everything to 0.
-
-    Args:
-        arr: Input array of any numeric dtype.
-
-    Returns:
-        uint8 array with values in [0, 255].
-    """
-    if arr.dtype == np.uint8:
-        return arr
-    if arr.dtype == np.uint16:
-        return (arr / 256).astype(np.uint8)
-    arr = arr.astype(np.float32)
-    arr_max = arr.max()
-    if arr_max <= 0:
-        return np.zeros(arr.shape[:2] + ((3,) if arr.ndim == 3 else ()), dtype=np.uint8)
-    if arr_max <= 1.0 + 1e-6:
-        return (arr * 255).clip(0, 255).astype(np.uint8)
-    elif arr_max <= 255.0:
-        # Rescale to full uint8 range instead of clipping
-        return (arr * (255.0 / arr_max)).clip(0, 255).astype(np.uint8)
-    else:
-        return arr.clip(0, 255).astype(np.uint8)
 
 
 @dataclass
