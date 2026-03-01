@@ -89,6 +89,7 @@ for role, spec in cm.items():
     pairs.append(f'{role}={spec}')
 print(','.join(pairs))
 " "$CONFIG" || echo "")
+CORRECT_ALL_CHANNELS=$(read_yaml correct_all_channels false)
 SAMPLE_FRACTION=$(read_yaml sample_fraction "")
 
 # SLURM settings
@@ -324,11 +325,15 @@ SBATCH_FILE="${OUTPUT_DIR}/pipeline_${NAME}_$$.sbatch"
         echo "    if [[ -n \"\$RUN_DIR\" && -f \"\$DET_JSON\" ]]; then"
 
         if [[ -n "$MARKER_CHANNELS" ]]; then
+            local classify_extra=""
+            if [[ "$CORRECT_ALL_CHANNELS" == "true" ]]; then
+                classify_extra+=" --correct-all-channels"
+            fi
             echo "        echo \"  Classifying markers: $MARKER_NAMES\""
             if [[ "$MARKER_USE_WAVELENGTH" == "true" ]]; then
-                echo "        \$MKSEG_PYTHON $REPO/scripts/classify_markers.py --detections \"\$DET_JSON\" --marker-wavelength \"$MARKER_CHANNELS\" --marker-name \"$MARKER_NAMES\" --method \"$MARKER_METHOD\" --czi-path \"\$CZI_FILE\" --output-dir \"\$RUN_DIR\""
+                echo "        \$MKSEG_PYTHON $REPO/scripts/classify_markers.py --detections \"\$DET_JSON\" --marker-wavelength \"$MARKER_CHANNELS\" --marker-name \"$MARKER_NAMES\" --method \"$MARKER_METHOD\" --czi-path \"\$CZI_FILE\" --output-dir \"\$RUN_DIR\"${classify_extra}"
             else
-                echo "        \$MKSEG_PYTHON $REPO/scripts/classify_markers.py --detections \"\$DET_JSON\" --marker-channel \"$MARKER_CHANNELS\" --marker-name \"$MARKER_NAMES\" --method \"$MARKER_METHOD\" --output-dir \"\$RUN_DIR\""
+                echo "        \$MKSEG_PYTHON $REPO/scripts/classify_markers.py --detections \"\$DET_JSON\" --marker-channel \"$MARKER_CHANNELS\" --marker-name \"$MARKER_NAMES\" --method \"$MARKER_METHOD\" --output-dir \"\$RUN_DIR\"${classify_extra}"
             fi
             echo "        DET_JSON=\"\${RUN_DIR}${CELL_TYPE}_detections_classified.json\""
         fi
@@ -379,11 +384,15 @@ SBATCH_FILE="${OUTPUT_DIR}/pipeline_${NAME}_$$.sbatch"
         echo "if [[ -n \"\$RUN_DIR\" && -f \"\$DET_JSON\" ]]; then"
 
         if [[ -n "$MARKER_CHANNELS" ]]; then
+            local classify_extra=""
+            if [[ "$CORRECT_ALL_CHANNELS" == "true" ]]; then
+                classify_extra+=" --correct-all-channels"
+            fi
             echo "    echo \"Classifying markers: $MARKER_NAMES\""
             if [[ "$MARKER_USE_WAVELENGTH" == "true" ]]; then
-                echo "    \$MKSEG_PYTHON $REPO/scripts/classify_markers.py --detections \"\$DET_JSON\" --marker-wavelength \"$MARKER_CHANNELS\" --marker-name \"$MARKER_NAMES\" --method \"$MARKER_METHOD\" --czi-path \"$CZI_PATH\" --output-dir \"\$RUN_DIR\""
+                echo "    \$MKSEG_PYTHON $REPO/scripts/classify_markers.py --detections \"\$DET_JSON\" --marker-wavelength \"$MARKER_CHANNELS\" --marker-name \"$MARKER_NAMES\" --method \"$MARKER_METHOD\" --czi-path \"$CZI_PATH\" --output-dir \"\$RUN_DIR\"${classify_extra}"
             else
-                echo "    \$MKSEG_PYTHON $REPO/scripts/classify_markers.py --detections \"\$DET_JSON\" --marker-channel \"$MARKER_CHANNELS\" --marker-name \"$MARKER_NAMES\" --method \"$MARKER_METHOD\" --output-dir \"\$RUN_DIR\""
+                echo "    \$MKSEG_PYTHON $REPO/scripts/classify_markers.py --detections \"\$DET_JSON\" --marker-channel \"$MARKER_CHANNELS\" --marker-name \"$MARKER_NAMES\" --method \"$MARKER_METHOD\" --output-dir \"\$RUN_DIR\"${classify_extra}"
             fi
             echo "    DET_JSON=\"\${RUN_DIR}${CELL_TYPE}_detections_classified.json\""
         fi

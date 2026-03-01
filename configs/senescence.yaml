@@ -14,11 +14,13 @@ all_channels: true
 num_gpus: 4
 
 markers:
-  - {channel: 2, name: tdTomato, method: otsu_half}
+  - {channel: 1, name: NeuN, method: otsu}
+  - {channel: 2, name: tdTomato, method: otsu}
+correct_all_channels: true    # background-correct ALL ch{N}_mean features before classification
 
 spatial_network:
   enabled: true
-  marker_filter: "tdTomato_class==positive"  # from Otsu/2 classification
+  marker_filter: "NeuN_class==positive"  # neurons first, then tdTomato subset
   max_edge_distance: 50
   min_component_cells: 3
 

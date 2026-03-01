@@ -261,6 +261,63 @@ def extract_centroids(detections: list[dict]) -> np.ndarray:
     return np.array(centroids, dtype=np.float64)
 
 
+def correct_all_channels(detections: list[dict], centroids: np.ndarray,
+                         n_neighbors: int = 30) -> list[int]:
+    """Background-correct all ch{N}_mean features in-place.
+
+    For each channel found in the detections, applies local background
+    subtraction using neighboring cells. Stores:
+      ch{N}_mean        -> overwritten with corrected value
+      ch{N}_mean_raw    -> original raw value
+      ch{N}_background  -> local background estimate
+      ch{N}_snr         -> raw / background
+
+    Returns list of channel indices that were corrected.
+    """
+    # Discover all channel keys
+    sample_feat = detections[0].get('features', {})
+    ch_keys = sorted([k for k in sample_feat if k.startswith('ch') and k.endswith('_mean')])
+    if not ch_keys:
+        logger.warning("No ch{N}_mean keys found in detections")
+        return []
+
+    channels = []
+    for key in ch_keys:
+        # Parse channel index from 'ch0_mean' -> 0
+        ch_str = key.replace('ch', '').replace('_mean', '')
+        try:
+            channels.append(int(ch_str))
+        except ValueError:
+            continue
+
+    logger.info(f"Background-correcting all {len(channels)} channels: {channels}")
+
+    for ch in channels:
+        key = f'ch{ch}_mean'
+        raw_key = f'ch{ch}_mean_raw'
+        bg_key = f'ch{ch}_background'
+        snr_key = f'ch{ch}_snr'
+
+        values = np.array([d.get('features', {}).get(key, 0.0) for d in detections],
+                          dtype=np.float64)
+        corrected, per_cell_bg = local_background_subtract(values, centroids, n_neighbors)
+
+        median_bg = float(np.median(per_cell_bg))
+        nonzero = corrected[corrected > 0]
+        logger.info(f"  ch{ch}: bg median={median_bg:.1f}, "
+                    f"{len(nonzero):,}/{len(corrected):,} cells with signal after correction")
+
+        # Write back to detections
+        for i, det in enumerate(detections):
+            feat = det.setdefault('features', {})
+            feat[raw_key] = float(values[i])
+            feat[key] = float(corrected[i])  # overwrite with corrected
+            feat[bg_key] = float(per_cell_bg[i])
+            feat[snr_key] = float(values[i] / per_cell_bg[i]) if per_cell_bg[i] > 0 else 0.0
+
+    return channels
+
+
 def classify_single_marker(detections: list[dict], channel: int,
                            marker_name: str, method: str,
                            output_dir: Path,
@@ -393,6 +450,9 @@ def parse_args() -> argparse.Namespace:
                              'Default: on for otsu, off for otsu_half/gmm.')
     parser.add_argument('--no-background-subtract', action='store_true',
                         help='Disable background subtraction even for otsu method.')
+    parser.add_argument('--correct-all-channels', action='store_true',
+                        help='Background-correct ALL ch{N}_mean features (not just marker channels). '
+                             'Overwrites ch{N}_mean with corrected values, saves originals as ch{N}_mean_raw.')
     parser.add_argument('--output-dir', default=None,
                         help='Output directory (default: same dir as detections)')
     args = parser.parse_args()
@@ -474,11 +534,19 @@ def main():
             logger.warning(f"Channel key '{key}' not found in first detection's features. "
                            f"Available: {available}. Values will default to 0.")
 
-    # Extract centroids once if background subtraction is enabled
+    # Extract centroids if any background subtraction is needed
     centroids = None
-    if args.bg_subtract:
+    if args.bg_subtract or args.correct_all_channels:
         centroids = extract_centroids(detections)
         logger.info(f"Extracted {len(centroids):,} centroids for local background subtraction")
+
+    # Background-correct ALL channels if requested (before marker classification)
+    if args.correct_all_channels:
+        corrected_channels = correct_all_channels(detections, centroids)
+        logger.info(f"Corrected {len(corrected_channels)} channels: {corrected_channels}")
+        # Marker classification will now operate on already-corrected ch{N}_mean values,
+        # so disable per-marker background subtraction to avoid double-correction
+        args.bg_subtract = False
 
     # Process each marker
     summaries = []
