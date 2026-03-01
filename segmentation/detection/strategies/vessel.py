@@ -22,23 +22,16 @@ from enum import Enum
 from typing import List, Dict, Any, Optional, Tuple, Set
 import numpy as np
 import cv2
-from PIL import Image
 
 from .base import DetectionStrategy, Detection, _safe_to_uint8
 from .mixins import MultiChannelFeatureMixin
 from segmentation.utils.logging import get_logger
 from segmentation.utils.feature_extraction import (
     extract_morphological_features,
-    SAM2_EMBEDDING_DIM,
-    RESNET50_FEATURE_DIM,
 )
 from segmentation.utils.vessel_features import (
     extract_vessel_features,
     extract_all_vessel_features_multichannel,
-    extract_multichannel_intensity_features,
-    compute_channel_ratios,
-    VESSEL_FEATURE_NAMES,
-    VESSEL_FEATURE_COUNT,
     DEFAULT_CHANNEL_NAMES,
 )
 

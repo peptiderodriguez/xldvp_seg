@@ -14,11 +14,11 @@ Usage:
     class_name, color = classify_islet_marker(features_dict, thresholds, marker_map={'gcg': 2, 'ins': 3, 'sst': 5})
 """
 
-import logging
 import numpy as np
-from typing import Dict, List, Optional, Set, Tuple, Any
 
-logger = logging.getLogger(__name__)
+from segmentation.utils.logging import get_logger
+
+logger = get_logger(__name__)
 
 
 def classify_islet_marker(features_dict, marker_thresholds=None, marker_map=None):

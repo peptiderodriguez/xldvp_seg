@@ -12,7 +12,6 @@ import xml.etree.ElementTree as ET
 from xml.dom import minidom
 from pathlib import Path
 from typing import List, Dict, Optional
-import numpy as np
 
 
 def _extract_crosses_list(reference_crosses):

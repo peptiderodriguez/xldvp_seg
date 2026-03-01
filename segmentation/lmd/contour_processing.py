@@ -18,14 +18,15 @@ Usage:
     results = process_contours_batch(contours_px, pixel_size_um=pixel_size)
 """
 
-import logging
 import numpy as np
 import cv2
 from typing import List, Optional, Tuple, Dict, Any
 from shapely.geometry import Polygon
 from shapely.validation import make_valid
 
-logger = logging.getLogger(__name__)
+from segmentation.utils.logging import get_logger
+
+logger = get_logger(__name__)
 
 
 # Default parameters

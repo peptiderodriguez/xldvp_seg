@@ -27,7 +27,7 @@ REPO = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(REPO))
 
 from segmentation.io.czi_loader import get_loader, get_czi_metadata
-from segmentation.preprocessing.illumination import normalize_rows_columns, estimate_band_severity
+from segmentation.preprocessing.illumination import estimate_band_severity
 from segmentation.preprocessing.flat_field import estimate_illumination_profile
 
 

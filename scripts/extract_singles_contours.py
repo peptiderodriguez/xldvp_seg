@@ -21,10 +21,9 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 import json
 import argparse
 import numpy as np
-import hdf5plugin  # Must import BEFORE h5py to register LZ4 filter
 import h5py
 import cv2
-from typing import List, Dict, Tuple, Optional
+from typing import Tuple, Optional
 
 from segmentation.lmd.contour_processing import process_contour
 

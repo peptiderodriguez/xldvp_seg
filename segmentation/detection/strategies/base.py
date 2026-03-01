@@ -9,15 +9,15 @@ from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
 from typing import Dict, Any, List, Optional, Tuple
 import numpy as np
-import logging
 
+from segmentation.utils.logging import get_logger
 from segmentation.utils.feature_extraction import SAM2_EMBEDDING_DIM, RESNET50_FEATURE_DIM
 from segmentation.utils.detection_utils import safe_to_uint8 as _safe_to_uint8  # noqa: F401 — re-exported for mk/nmj/cell imports
 
 # DINOv2 ViT-L/14 feature dimension
 DINOV2_FEATURE_DIM = 1024
 
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 
 @dataclass

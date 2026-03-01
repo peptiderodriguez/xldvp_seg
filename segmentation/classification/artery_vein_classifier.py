@@ -28,7 +28,6 @@ Usage:
 """
 
 import json
-import logging
 from pathlib import Path
 from typing import Dict, List, Tuple, Optional, Union, Any
 
@@ -48,7 +47,9 @@ from sklearn.metrics import (
     precision_recall_fscore_support,
 )
 
-logger = logging.getLogger(__name__)
+from segmentation.utils.logging import get_logger
+
+logger = get_logger(__name__)
 
 
 # Features specifically relevant for artery vs vein classification

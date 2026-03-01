@@ -28,17 +28,14 @@ Usage:
 from __future__ import annotations
 
 import json
-from concurrent.futures import ThreadPoolExecutor, as_completed
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Callable, Dict, Generator, List, Optional, Union
+from typing import Any, Callable, Dict, List, Optional, Union
 
-from tqdm import tqdm
 
-from segmentation.utils.logging import get_logger, log_parameters, ProcessingTimer
-from segmentation.utils.config import get_output_dir, DEFAULT_PATHS
-from segmentation.io.czi_loader import CZILoader
+from segmentation.utils.logging import get_logger, log_parameters
+from segmentation.utils.config import get_output_dir
 from segmentation.processing.pipeline import DetectionPipeline
 
 logger = get_logger(__name__)

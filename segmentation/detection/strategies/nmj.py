@@ -24,7 +24,6 @@ import numpy as np
 from typing import Dict, Any, List, Optional, Tuple
 from PIL import Image
 
-from scipy import ndimage
 from skimage.morphology import skeletonize, remove_small_objects, binary_opening, binary_closing, binary_dilation, disk
 from skimage.measure import label, regionprops
 
@@ -33,8 +32,6 @@ from .mixins import MultiChannelFeatureMixin
 from segmentation.utils.logging import get_logger
 from segmentation.utils.feature_extraction import (
     extract_morphological_features,
-    SAM2_EMBEDDING_DIM,
-    RESNET50_FEATURE_DIM,
 )
 
 logger = get_logger(__name__)
@@ -881,7 +878,6 @@ def load_nmj_rf_classifier(model_path: str):
         # Legacy format: dict with model, scaler, feature_names
         # Wrap in pipeline-like structure for consistent interface
         from sklearn.pipeline import Pipeline
-        from sklearn.preprocessing import StandardScaler
 
         # Support both 'model' key (legacy) and 'classifier' key (train_nmj_classifier_features.py)
         rf_model = model_data.get('model', model_data.get('classifier'))

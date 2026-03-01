@@ -18,7 +18,6 @@ os.environ['HDF5_USE_FILE_LOCKING'] = 'FALSE'
 
 import json
 import numpy as np
-import hdf5plugin
 import h5py
 import cv2
 from pathlib import Path

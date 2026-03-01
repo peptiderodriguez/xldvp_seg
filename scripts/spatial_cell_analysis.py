@@ -21,7 +21,6 @@ Dependencies: umap-learn, networkx, scipy, matplotlib, scikit-learn
 
 import argparse
 import csv
-import json
 import math
 import os
 import re

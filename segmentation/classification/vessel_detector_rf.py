@@ -26,7 +26,6 @@ Usage:
 """
 
 import json
-import logging
 from pathlib import Path
 from typing import Dict, List, Tuple, Optional, Union, Any
 
@@ -37,7 +36,6 @@ from sklearn.ensemble import RandomForestClassifier
 from sklearn.model_selection import (
     cross_val_score,
     StratifiedKFold,
-    train_test_split,
 )
 from sklearn.metrics import (
     classification_report,
@@ -46,7 +44,9 @@ from sklearn.metrics import (
     roc_auc_score,
 )
 
-logger = logging.getLogger(__name__)
+from segmentation.utils.logging import get_logger
+
+logger = get_logger(__name__)
 
 # =============================================================================
 # SIZE CLASS DEFINITIONS FOR STRATIFIED SAMPLING

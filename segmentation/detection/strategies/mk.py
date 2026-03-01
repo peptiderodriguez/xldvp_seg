@@ -16,19 +16,18 @@ The detection pipeline:
 """
 
 import gc
-import logging
-from typing import List, Dict, Any, Optional, Tuple
+from typing import List, Dict, Any, Tuple
 import numpy as np
 
 from .base import DetectionStrategy, Detection, _safe_to_uint8
 from .mixins import MultiChannelFeatureMixin
 from segmentation.utils.feature_extraction import (
     extract_morphological_features,
-    SAM2_EMBEDDING_DIM,
-    RESNET50_FEATURE_DIM,
 )
 
-logger = logging.getLogger(__name__)
+from segmentation.utils.logging import get_logger
+
+logger = get_logger(__name__)
 
 
 # Issue #7: Local extract_morphological_features removed - now imported from shared module

@@ -14,9 +14,6 @@ from typing import Any, Dict, List, Optional, Union
 from .stats import (
     VesselStatistics,
     compute_summary_statistics,
-    compute_diameter_distribution,
-    compute_vessel_type_breakdown,
-    compute_quality_metrics,
     compute_batch_comparison,
 )
 from .plots import (
@@ -29,7 +26,6 @@ from .plots import (
     create_ring_completeness_histogram,
     create_batch_comparison_bar,
     create_batch_comparison_violin,
-    create_multi_panel_summary,
     PLOTLY_AVAILABLE,
 )
 

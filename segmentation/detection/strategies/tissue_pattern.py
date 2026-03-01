@@ -196,7 +196,6 @@ class TissuePatternStrategy(CellStrategy):
             Tuple of (label_array, list of Detection objects)
         """
         import torch
-        from .base import Detection
 
         sam2_predictor = models.get('sam2_predictor')
 

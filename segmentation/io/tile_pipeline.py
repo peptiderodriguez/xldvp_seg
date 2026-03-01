@@ -51,13 +51,11 @@ from typing import (
     Any,
     Callable,
     Dict,
-    Generator,
     Iterator,
     List,
     Optional,
     Tuple,
     TypeVar,
-    Union,
 )
 
 import numpy as np

@@ -55,12 +55,9 @@ from segmentation.classification.vessel_classifier import (
     VESSEL_CORE_FEATURES,
     MORPHOLOGICAL_FEATURES,
     DEFAULT_FEATURES,
-    SAM2_FEATURES,
-    RESNET_FEATURES,
     FULL_FEATURES,
 )
 from segmentation.classification.feature_selection import (
-    analyze_feature_importance,
     select_optimal_features,
     compare_feature_sets,
 )

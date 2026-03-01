@@ -30,7 +30,7 @@ spatial_viewer:
 slurm:
   partition: p.hpcl93
   cpus: 128
-  mem_gb: 500
+  mem_gb: 700
   gpus: "l40s:4"
   time: "3-00:00:00"
   slides_per_job: 4

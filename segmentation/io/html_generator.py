@@ -1229,19 +1229,15 @@ class HTMLPageGenerator:
 import base64
 import h5py
 import json
-import logging
 import re
 from io import BytesIO
 
 import numpy as np
 from PIL import Image
 
-# Get logger (may not be initialized if imported standalone)
-try:
-    from segmentation.utils.logging import get_logger
-    _logger = get_logger(__name__)
-except ImportError:
-    _logger = logging.getLogger(__name__)
+from segmentation.utils.logging import get_logger
+
+_logger = get_logger(__name__)
 
 
 def load_samples_from_ram(tiles_dir, slide_image, pixel_size_um, cell_type='mk', max_samples=None):

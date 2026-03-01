@@ -21,7 +21,6 @@ Usage:
     scores = cross_validate_features(X, y, feature_subset)
 """
 
-import logging
 from typing import Dict, List, Tuple, Optional, Any
 import numpy as np
 
@@ -41,7 +40,9 @@ from sklearn.pipeline import Pipeline
 from sklearn.preprocessing import StandardScaler, LabelEncoder
 from sklearn.inspection import permutation_importance
 
-logger = logging.getLogger(__name__)
+from segmentation.utils.logging import get_logger
+
+logger = get_logger(__name__)
 
 
 def analyze_feature_importance(

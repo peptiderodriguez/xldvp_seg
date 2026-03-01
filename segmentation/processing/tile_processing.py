@@ -217,7 +217,6 @@ def process_single_tile(
 
     # Build label array if not returned by strategy
     if masks is None:
-        from segmentation.detection.strategies.base import Detection
         h, w = tile_rgb.shape[:2]
         masks = np.zeros((h, w), dtype=np.uint32)
         for i, det in enumerate(detections, start=1):

@@ -13,12 +13,13 @@ Scale factors:
 - 8: 1/8 resolution (1.38 µm/px)
 """
 
-import logging
 from typing import Dict, List, Tuple, Optional, Callable
 import numpy as np
 import cv2
 
-logger = logging.getLogger(__name__)
+from segmentation.utils.logging import get_logger
+
+logger = get_logger(__name__)
 
 
 # Scale-specific detection parameters
@@ -278,7 +279,6 @@ def merge_detections_across_scales(
         Deduplicated list of detections
     """
     import time
-    import sys
     from collections import defaultdict
 
     if not detections:

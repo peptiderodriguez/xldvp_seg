@@ -17,7 +17,6 @@ import sys
 from pathlib import Path
 from collections import defaultdict
 
-import cv2
 import h5py
 import hdf5plugin  # noqa: F401 — enables LZ4 codec for h5py
 import numpy as np
@@ -31,7 +30,7 @@ sys.path.insert(0, str(REPO))
 
 from segmentation.io.html_generator import HTMLPageGenerator
 from segmentation.io.html_export import (
-    percentile_normalize, image_to_base64, draw_mask_contour,
+    image_to_base64, draw_mask_contour,
 )
 
 # ---------------------------------------------------------------------------

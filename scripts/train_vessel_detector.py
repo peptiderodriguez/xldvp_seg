@@ -239,7 +239,6 @@ def stratified_sample_by_size(
     size_classes = np.array([get_size_class(d) for d in diameters_valid])
 
     # Count per class (separately for positive and negative)
-    from collections import Counter
     class_pos_counts = {}
     class_neg_counts = {}
     for class_id in range(3):

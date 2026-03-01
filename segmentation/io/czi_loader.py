@@ -13,7 +13,6 @@ Features:
 """
 
 import gc
-import logging
 import threading
 import numpy as np
 import cv2
@@ -22,7 +21,9 @@ from typing import Dict, List, Tuple, Optional, Union
 from tqdm import tqdm
 from aicspylibczi import CziFile
 
-logger = logging.getLogger(__name__)
+from segmentation.utils.logging import get_logger
+
+logger = get_logger(__name__)
 
 
 def _squeeze_batch_dims(arr: np.ndarray) -> np.ndarray:

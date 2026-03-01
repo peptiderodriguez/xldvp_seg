@@ -10,17 +10,14 @@ A general-purpose cell detection pipeline:
 
 import gc
 import numpy as np
-from typing import Dict, Any, List, Optional, Tuple
+from typing import Dict, Any, List, Tuple
 from scipy import ndimage
-from skimage.measure import regionprops
 
 from .base import DetectionStrategy, Detection, _safe_to_uint8
 from .mixins import MultiChannelFeatureMixin
 from segmentation.utils.logging import get_logger
 from segmentation.utils.feature_extraction import (
     extract_morphological_features,
-    SAM2_EMBEDDING_DIM,
-    RESNET50_FEATURE_DIM,
 )
 
 logger = get_logger(__name__)

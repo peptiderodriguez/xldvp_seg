@@ -16,7 +16,6 @@ import cv2
 import numpy as np
 from typing import Dict, Any, List, Optional, Tuple
 from scipy import ndimage
-from scipy.ndimage import distance_transform_edt
 
 from .base import DetectionStrategy, Detection
 from segmentation.utils.logging import get_logger
@@ -30,7 +29,6 @@ def _trace_skeleton_paths(skeleton: np.ndarray) -> List[np.ndarray]:
 
     Returns list of paths, each path is Nx2 array of (row, col) coordinates.
     """
-    from collections import deque
 
     # Find endpoints and branch points
     kernel = np.array([[1, 1, 1], [1, 0, 1], [1, 1, 1]])
@@ -213,7 +211,7 @@ class MesotheliumStrategy(DetectionStrategy):
                 - branch_id: index of the skeleton branch
         """
         from skimage.morphology import (
-            skeletonize, medial_axis, remove_small_objects,
+            medial_axis, remove_small_objects,
             binary_closing, binary_opening, disk
         )
         from skimage.filters import meijering, threshold_local

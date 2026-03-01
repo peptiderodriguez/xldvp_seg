@@ -32,7 +32,7 @@ Usage:
 
 import numpy as np
 import cv2
-from typing import Dict, Any, Optional, List, Tuple
+from typing import Dict, Any, Optional, List
 from scipy.ndimage import distance_transform_edt, sobel
 from scipy.spatial import ConvexHull
 from skimage.morphology import skeletonize

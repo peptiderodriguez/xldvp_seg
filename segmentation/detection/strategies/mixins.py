@@ -5,7 +5,7 @@ These mixins provide reusable functionality that can be composed into
 different detection strategies without code duplication.
 """
 
-from typing import Dict, Any, Optional
+from typing import Dict, Optional
 import numpy as np
 from scipy.stats import skew, kurtosis
 

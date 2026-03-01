@@ -6,12 +6,13 @@ distributions across multiple slides, correcting for staining variation and
 scanner differences.
 """
 
-import logging
 import numpy as np
 import cv2
 from typing import Tuple, Dict
 
-logger = logging.getLogger(__name__)
+from segmentation.utils.logging import get_logger
+
+logger = get_logger(__name__)
 
 _LAB_KEYS = ('L_median', 'L_mad', 'a_median', 'a_mad', 'b_median', 'b_mad')
 

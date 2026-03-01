@@ -23,7 +23,6 @@ import threading
 from pathlib import Path
 from typing import Dict, Optional, Tuple, Any
 
-import numpy as np
 import torch
 import torchvision.models as tv_models
 import torchvision.transforms as tv_transforms

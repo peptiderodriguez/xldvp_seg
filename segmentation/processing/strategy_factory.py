@@ -17,7 +17,7 @@ Usage:
     )
 """
 
-from typing import Any, Dict, Optional
+from typing import Any, Dict
 
 from segmentation.utils.logging import get_logger
 

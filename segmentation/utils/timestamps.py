@@ -16,12 +16,12 @@ Usage:
     save_with_timestamp("output/detections.json", data, fmt="json")
 """
 import json
-import logging
-import os
 from datetime import datetime
 from pathlib import Path
 
-logger = logging.getLogger(__name__)
+from segmentation.utils.logging import get_logger
+
+logger = get_logger(__name__)
 
 # Set once per process — all files in a single run share the same timestamp
 RUN_TIMESTAMP = datetime.now().strftime('%Y%m%d_%H%M%S')

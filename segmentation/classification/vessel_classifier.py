@@ -21,7 +21,6 @@ Usage:
     predictions, confidence = classifier.predict(features)
 """
 
-import logging
 from pathlib import Path
 from typing import Dict, List, Tuple, Optional, Union, Any
 import numpy as np
@@ -33,7 +32,9 @@ from sklearn.preprocessing import StandardScaler, LabelEncoder
 from sklearn.model_selection import cross_val_score, StratifiedKFold
 from sklearn.metrics import classification_report, confusion_matrix
 
-logger = logging.getLogger(__name__)
+from segmentation.utils.logging import get_logger
+
+logger = get_logger(__name__)
 
 
 # Vessel type labels

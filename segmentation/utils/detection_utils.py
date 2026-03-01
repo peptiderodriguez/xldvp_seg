@@ -5,12 +5,13 @@ and apply_classifier.py.
 """
 
 import json
-import logging
 from pathlib import Path
 
 import numpy as np
 
-logger = logging.getLogger(__name__)
+from segmentation.utils.logging import get_logger
+
+logger = get_logger(__name__)
 
 
 def safe_to_uint8(arr: np.ndarray) -> np.ndarray:

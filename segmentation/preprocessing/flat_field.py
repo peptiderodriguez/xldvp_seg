@@ -24,13 +24,14 @@ Usage:
 """
 
 import gc
-import logging
 from typing import Dict
 
 import numpy as np
 from scipy.ndimage import distance_transform_edt, gaussian_filter, zoom
 
-logger = logging.getLogger(__name__)
+from segmentation.utils.logging import get_logger
+
+logger = get_logger(__name__)
 
 
 class IlluminationProfile:

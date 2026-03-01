@@ -33,19 +33,13 @@ Coordinate System:
 """
 
 import atexit
-import os
-import gc
-import queue
 import signal
-import traceback
-from pathlib import Path
-from typing import Dict, List, Optional, Tuple, Any, Set
+from typing import Dict, Any, Set
 import multiprocessing
 from multiprocessing.shared_memory import SharedMemory
 import numpy as np
 
 from segmentation.utils.logging import get_logger
-from segmentation.preprocessing.stain_normalization import apply_reinhard_normalization, extract_slide_norm_params
 
 logger = get_logger(__name__)
 

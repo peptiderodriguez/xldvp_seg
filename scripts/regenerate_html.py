@@ -65,131 +65,14 @@ from segmentation.io.czi_loader import get_loader, get_czi_metadata
 from segmentation.io.html_export import (
     export_samples_to_html,
     percentile_normalize,
-    draw_mask_contour,
     image_to_base64,
 )
 from segmentation.utils.logging import get_logger, setup_logging
 from segmentation.utils.islet_utils import classify_islet_marker, compute_islet_marker_thresholds
+from segmentation.pipeline.samples import create_sample_from_detection
 from PIL import Image
 
 logger = get_logger(__name__)
-
-
-def create_sample(tile_rgb, masks, feat, pixel_size_um, slide_name, cell_type,
-                  tile_percentiles=None, marker_thresholds=None, marker_map=None,
-                  contour_thickness=2):
-    """Create an HTML sample dict from a detection with mask-bounded crop."""
-    mask_label = feat.get('tile_mask_label', feat.get('mask_label', 0))
-    if mask_label == 0:
-        return None  # No mask label available, skip this detection
-
-    mask = masks == mask_label
-    if mask.sum() == 0:
-        return None
-
-    # Get centroid from features (local tile coords)
-    center = feat.get('center', None)
-    if center is None:
-        ys, xs = np.where(mask)
-        cx, cy = float(np.mean(xs)), float(np.mean(ys))
-    else:
-        cx, cy = center[0], center[1]
-
-    # Mask bounding box for dynamic crop size
-    ys, xs = np.where(mask)
-    if len(ys) == 0:
-        return None
-    mask_h = ys.max() - ys.min()
-    mask_w = xs.max() - xs.min()
-    mask_size = max(mask_h, mask_w)
-
-    # Crop = 2x mask size, clamped to [224, 800]
-    crop_size = max(224, min(800, int(mask_size * 2)))
-    half = crop_size // 2
-
-    y1_ideal = int(cy) - half
-    y2_ideal = int(cy) + half
-    x1_ideal = int(cx) - half
-    x2_ideal = int(cx) + half
-
-    y1 = max(0, y1_ideal)
-    y2 = min(tile_rgb.shape[0], y2_ideal)
-    x1 = max(0, x1_ideal)
-    x2 = min(tile_rgb.shape[1], x2_ideal)
-
-    if y2 <= y1 or x2 <= x1:
-        return None
-
-    crop = tile_rgb[y1:y2, x1:x2].copy()
-    crop_mask = mask[y1:y2, x1:x2]
-
-    # Pad if clamped at edges
-    pad_top = max(0, y1 - y1_ideal)
-    pad_bottom = max(0, y2_ideal - y2)
-    pad_left = max(0, x1 - x1_ideal)
-    pad_right = max(0, x2_ideal - x2)
-
-    if pad_top > 0 or pad_bottom > 0 or pad_left > 0 or pad_right > 0:
-        crop = np.pad(crop, ((pad_top, pad_bottom), (pad_left, pad_right), (0, 0)),
-                      mode='constant', constant_values=0)
-        crop_mask = np.pad(crop_mask, ((pad_top, pad_bottom), (pad_left, pad_right)),
-                          mode='constant', constant_values=False)
-
-    # Determine contour color
-    features = feat.get('features', {})
-    contour_color = (0, 255, 0)  # default green
-    marker_class = None
-    if cell_type == 'islet' and marker_thresholds is not None:
-        marker_class, contour_color = classify_islet_marker(
-            features, marker_thresholds, marker_map=marker_map)
-
-    # Normalize and draw contour
-    crop_norm = percentile_normalize(crop, p_low=1, p_high=99.5, global_percentiles=tile_percentiles)
-    _bw = (cell_type == 'islet')
-    crop_with_contour = draw_mask_contour(
-        crop_norm, crop_mask, color=contour_color, thickness=contour_thickness, bw_dashed=_bw)
-
-    pil_img = Image.fromarray(crop_with_contour)
-    img_b64, mime = image_to_base64(pil_img, format='PNG')
-
-    # Build UID from global center
-    tile_origin = feat.get('tile_origin', [0, 0])
-    global_cx = tile_origin[0] + cx
-    global_cy = tile_origin[1] + cy
-    uid = feat.get('uid', f"{slide_name}_{cell_type}_{int(round(global_cx))}_{int(round(global_cy))}")
-
-    area_um2 = features.get('area_um2', features.get('area', 0) * (pixel_size_um ** 2))
-
-    stats = {
-        'area_um2': area_um2,
-        'area_px': features.get('area', 0),
-    }
-
-    if marker_class is not None:
-        stats['marker_class'] = marker_class
-        stats['marker_color'] = f'#{contour_color[0]:02x}{contour_color[1]:02x}{contour_color[2]:02x}'
-    if 'elongation' in features:
-        stats['elongation'] = features['elongation']
-    if 'sam2_iou' in features:
-        stats['confidence'] = features['sam2_iou']
-    if 'rf_prediction' in feat and feat['rf_prediction'] is not None:
-        stats['rf_prediction'] = feat['rf_prediction']
-    if 'detection_method' in features:
-        dm = features['detection_method']
-        stats['detection_method'] = ', '.join(dm) if isinstance(dm, list) else dm
-    # Vessel-specific
-    for vk in ('ring_completeness', 'circularity', 'wall_thickness_mean_um',
-               'outer_diameter_um', 'vessel_type', 'has_sma_ring',
-               'cd31_score', 'sma_thickness_mean_um'):
-        if vk in features:
-            stats[vk] = features[vk]
-
-    return {
-        'uid': uid,
-        'image': img_b64,
-        'mime_type': mime,
-        'stats': stats,
-    }
 
 
 def create_sample_from_contours(det, channel_arrays, display_channels, x_start, y_start,
@@ -675,12 +558,15 @@ def main():
             tile_rgb = np.stack(rgb_channels, axis=-1)
 
             # Generate crop for each detection in this tile
+            tile_origin = tile_dets[0].get('tile_origin', [tile_x, tile_y])
             for det in tile_dets:
-                sample = create_sample(
-                    tile_rgb, masks, det, pixel_size_um, slide_name, cell_type,
+                sample = create_sample_from_detection(
+                    tile_origin[0], tile_origin[1], tile_rgb, masks, det,
+                    pixel_size_um, slide_name, cell_type=cell_type,
                     marker_thresholds=marker_thresholds,
                     marker_map=marker_map,
                     contour_thickness=args.contour_thickness,
+                    image_format='PNG',
                 )
                 if sample:
                     all_samples.append(sample)

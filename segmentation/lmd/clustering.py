@@ -16,12 +16,13 @@ Usage:
     result = two_stage_clustering(detections, pixel_size=0.1725)
 """
 
-import logging
 import numpy as np
 from scipy.spatial import cKDTree
 from typing import List, Dict, Tuple, Optional
 
-logger = logging.getLogger(__name__)
+from segmentation.utils.logging import get_logger
+
+logger = get_logger(__name__)
 
 
 def get_detection_area_um2(det: Dict, pixel_size: float) -> float:

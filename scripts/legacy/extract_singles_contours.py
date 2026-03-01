@@ -14,11 +14,10 @@ os.environ['HDF5_USE_FILE_LOCKING'] = 'FALSE'
 
 import json
 import numpy as np
-import hdf5plugin  # Must import BEFORE h5py to register LZ4 filter
 import h5py
 import cv2
 from pathlib import Path
-from typing import List, Dict, Tuple, Optional
+from typing import Tuple, Optional
 
 from scripts.contour_processing import process_contour
 

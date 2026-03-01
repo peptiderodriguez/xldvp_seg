@@ -20,7 +20,7 @@ Usage:
 """
 
 import numpy as np
-from typing import Any, Dict, List, Optional, Tuple, Union
+from typing import Any, Dict, List, Optional, Tuple
 
 
 def ensure_rgb_array(img_data: np.ndarray) -> np.ndarray:

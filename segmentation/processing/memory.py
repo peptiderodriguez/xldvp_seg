@@ -18,7 +18,7 @@ Usage:
     safe_workers = get_safe_worker_count(requested_workers=8, tile_size=3000)
 """
 
-from typing import Dict, List, Any
+from typing import Dict, Any
 import psutil
 
 from segmentation.utils.logging import get_logger

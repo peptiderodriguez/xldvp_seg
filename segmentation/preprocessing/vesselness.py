@@ -16,8 +16,8 @@ Usage:
 """
 
 import numpy as np
-from typing import Tuple, Union, Optional, Sequence
-from skimage.filters import frangi, hessian
+from typing import Tuple, Optional, Sequence
+from skimage.filters import frangi
 
 
 def compute_vesselness(

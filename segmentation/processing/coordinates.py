@@ -20,9 +20,8 @@ UID Format:
 See docs/COORDINATE_SYSTEM.md for full specification.
 """
 
-import re
 import numpy as np
-from typing import Tuple, List, Union, Optional, Dict, Any
+from typing import Tuple, List, Optional, Dict, Any
 
 
 def regionprop_centroid_to_xy(prop) -> List[float]:

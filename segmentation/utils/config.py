@@ -30,7 +30,6 @@ import os
 from pathlib import Path
 from typing import Dict, Any, Optional, List, Union, TypedDict, Tuple
 
-import numpy as np
 
 
 from segmentation.utils.json_utils import NumpyEncoder as _NumpyEncoder
