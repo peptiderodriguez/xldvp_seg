@@ -152,6 +152,9 @@ def process_single_tile(
                     cd31_channel=cd31_channel_data,
                     extra_channels=extra_channel_tiles,
                     channel_names=channel_names,
+                    tile_x=tile_x,
+                    tile_y=tile_y,
+                    tile_size=tile_rgb.shape[0],
                 )
             elif cell_type in ('nmj', 'mk', 'cell', 'islet', 'tissue_pattern'):
                 masks, detections = strategy.detect(

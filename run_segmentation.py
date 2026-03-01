@@ -598,13 +598,26 @@ def run_pipeline(args):
         slide_shm_arr = shm_manager.create_slide_buffer(
             slide_name, (h, w, n_channels), all_channel_data[ch_keys[0]].dtype
         )
+        # Copy channels to SHM one at a time, freeing each immediately to avoid
+        # 2x peak memory (all_channel_data + SHM simultaneously).
+        mem_freed_gb = 0
         for i, ch_key in enumerate(ch_keys):
             slide_shm_arr[:, :, i] = all_channel_data[ch_key]
-            logger.info(f"  Loaded channel {ch_key} to shared memory slot {i}")
+            mem_freed_gb += all_channel_data[ch_key].nbytes / (1024**3)
+            del all_channel_data[ch_key]
+            logger.info(f"  Loaded channel {ch_key} to shared memory slot {i} (freed original)")
+        del all_channel_data
+        # Clear ALL loader channel data (not just primary) to free memory
+        if hasattr(loader, 'clear_all_channels'):
+            loader.clear_all_channels()
+        else:
+            loader.channel_data = None
+        gc.collect()
+        logger.info(f"Freed all channel data ({mem_freed_gb:.1f} GB) -- using shared memory for all reads")
 
         ch_to_slot = {ch_key: i for i, ch_key in enumerate(ch_keys)}
 
-        # --- Islet marker calibration (pilot phase, before freeing channel data) ---
+        # --- Islet marker calibration (pilot phase, using shared memory) ---
         islet_gmm_thresholds = {}
         if args.cell_type == 'islet':
             marker_chs_str = getattr(args, 'islet_marker_channels', 'gcg:2,ins:3,sst:5')
@@ -624,9 +637,9 @@ def run_pipeline(args):
             islet_gmm_thresholds = calibrate_islet_marker_gmm(
                 pilot_tiles=pilot_tiles,
                 loader=loader,
-                all_channel_data=all_channel_data,
-                slide_shm_arr=None,  # Use all_channel_data directly (still in RAM)
-                ch_to_slot=None,
+                all_channel_data=None,
+                slide_shm_arr=slide_shm_arr,
+                ch_to_slot=ch_to_slot,
                 marker_channels=marker_chs_list,
                 membrane_channel=mem_ch,
                 nuclear_channel=nuc_ch,
@@ -635,17 +648,6 @@ def run_pipeline(args):
                 nuclei_only=nuclei_only,
                 mosaic_origin=(x_start, y_start),
             )
-
-        # Free original channel data -- everything is now in shared memory
-        mem_freed_gb = sum(arr.nbytes for arr in all_channel_data.values()) / (1024**3)
-        del all_channel_data
-        # Clear ALL loader channel data (not just primary) to free memory
-        if hasattr(loader, 'clear_all_channels'):
-            loader.clear_all_channels()
-        else:
-            loader.channel_data = None
-        gc.collect()
-        logger.info(f"Freed all_channel_data ({mem_freed_gb:.1f} GB) -- using shared memory for all reads")
 
         # Build strategy parameters from the already-constructed params dict
         strategy_params = dict(params)
@@ -674,6 +676,7 @@ def run_pipeline(args):
                 logger.info("No --tp-classifier specified -- will return all candidates (annotation run)")
 
         extract_deep = getattr(args, 'extract_deep_features', False)
+        collected_partial_vessels = {}  # For cross-tile vessel merge (populated by workers)
 
         # Vessel-specific params for multi-GPU
         mgpu_cd31_channel = getattr(args, 'cd31_channel', None) if args.cell_type == 'vessel' else None
@@ -1020,6 +1023,14 @@ def run_pipeline(args):
                             masks = result['masks']
                             features_list = result['features_list']
 
+                            # Collect partial vessels from worker for cross-tile merge
+                            pv = result.get('partial_vessels')
+                            if pv:
+                                for tk, pvl in pv.items():
+                                    if tk not in collected_partial_vessels:
+                                        collected_partial_vessels[tk] = []
+                                    collected_partial_vessels[tk].extend(pvl)
+
                             # Skip tiles with no detections (masks=None from worker)
                             if masks is None or len(features_list) == 0:
                                 continue
@@ -1206,6 +1217,51 @@ def run_pipeline(args):
         shm_manager.cleanup()
 
     logger.info(f"Total detections (pre-dedup): {len(all_detections)}")
+
+    # Cross-tile vessel merge: reconstruct partial vessels from all workers and merge
+    if (args.cell_type == 'vessel' and not is_multiscale
+            and collected_partial_vessels):
+        from segmentation.detection.strategies.vessel import VesselStrategy
+        n_partials = sum(len(v) for v in collected_partial_vessels.values())
+        n_tiles_with = len(collected_partial_vessels)
+        logger.info(f"Cross-tile vessel merge: {n_partials} partial vessels from {n_tiles_with} tiles")
+        merge_strategy = VesselStrategy()
+        merge_strategy.import_partial_vessels(collected_partial_vessels)
+        tile_overlap_px = int(args.tile_size * getattr(args, 'tile_overlap', 0.10))
+        merged_vessels = merge_strategy.merge_cross_tile_vessels(
+            tile_size=args.tile_size,
+            overlap=tile_overlap_px,
+            match_threshold=0.6,
+        )
+        if merged_vessels:
+            logger.info(f"Cross-tile merge produced {len(merged_vessels)} merged vessels")
+            # Add merged vessels as new detections with proper UIDs
+            for mv in merged_vessels:
+                outer = mv.get('outer')
+                if outer is None:
+                    continue
+                pts = outer.reshape(-1, 2)
+                cx, cy = float(pts[:, 0].mean()), float(pts[:, 1].mean())
+                uid = f"{slide_name}_vessel_{int(round(cx))}_{int(round(cy))}"
+                feat = mv.get('features', {})
+                feat['center'] = [cx, cy]
+                feat['is_cross_tile_merged'] = True
+                feat['merge_score'] = mv.get('merge_score', 0)
+                det = {
+                    'uid': uid,
+                    'slide_name': slide_name,
+                    'global_center': [cx, cy],
+                    'global_center_um': [cx * pixel_size_um, cy * pixel_size_um],
+                    'features': feat,
+                    'tile_origin': list(mv.get('source_tiles', [(0, 0)])[0]),
+                    'is_cross_tile_merged': True,
+                }
+                all_detections.append(det)
+            logger.info(f"Total detections after cross-tile merge: {len(all_detections)}")
+        else:
+            logger.info("Cross-tile merge: no matches found")
+        del merge_strategy, collected_partial_vessels
+        gc.collect()
 
     # Detection-only mode: skip dedup, HTML, CSV -- just save per-tile results and exit
     if getattr(args, 'detection_only', False):

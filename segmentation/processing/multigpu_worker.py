@@ -426,28 +426,41 @@ def _gpu_worker(
                         max_retries=3,
                     )
 
+                # Extract partial vessels from worker's strategy for cross-tile merge.
+                # Each worker has its own strategy instance, so partials must be sent
+                # back to the main process via the result queue.
+                partial_vessels = None
+                if (cell_type == 'vessel' and sf == 1
+                        and hasattr(strategy, 'get_partial_vessels')):
+                    tile_key = (tile_x_for_detect, tile_y_for_detect)
+                    pv = strategy.get_partial_vessels(
+                        tile_x=tile_key[0], tile_y=tile_key[1])
+                    if pv:
+                        partial_vessels = pv
+                    strategy.clear_partial_vessels(
+                        tile_x=tile_key[0], tile_y=tile_key[1])
+
                 if result is None:
-                    output_queue.put({
+                    out = {
                         'status': 'success', 'tid': tid,
                         'slide_name': slide_name, 'tile': tile,
-                        'masks': None,  # No detections — avoid serializing 64MB zero array
+                        'masks': None,
                         'features_list': [],
                         'scale_factor': sf,
-                    })
+                    }
                 else:
                     masks, features_list = result
                     detections_found += len(features_list)
-                    # Compress masks: full tile mask arrays (~36MB each) are pickled
-                    # through the multiprocessing Queue, which is a performance bottleneck.
-                    # TODO: Consider saving masks to disk per-tile or using shared memory
-                    # for mask transfer instead of pickling through the Queue.
-                    output_queue.put({
+                    out = {
                         'status': 'success', 'tid': tid,
                         'slide_name': slide_name, 'tile': tile,
                         'masks': masks,
                         'features_list': features_list,
                         'scale_factor': sf,
-                    })
+                    }
+                if partial_vessels:
+                    out['partial_vessels'] = partial_vessels
+                output_queue.put(out)
 
             except Exception as e:
                 logger.error(f"[{worker_name}] Error on tile {tid}: {e}")

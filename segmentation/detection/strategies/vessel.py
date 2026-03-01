@@ -2567,6 +2567,32 @@ class VesselStrategy(DetectionStrategy, MultiChannelFeatureMixin):
             else:
                 self._partial_vessels.clear()
 
+    def import_partial_vessels(
+        self,
+        partials_dict: Dict[Tuple[int, int], List[PartialVessel]],
+    ) -> int:
+        """Import partial vessels collected from external sources (e.g., multi-GPU workers).
+
+        In multi-GPU mode, each worker has its own strategy instance with its own
+        _partial_vessels dict. After all tiles are processed, the main process collects
+        partial vessels from all workers and imports them into a single strategy for
+        cross-tile merging.
+
+        Args:
+            partials_dict: Dict mapping (tile_x, tile_y) to list of PartialVessel objects.
+
+        Returns:
+            Total number of partial vessels imported.
+        """
+        count = 0
+        with self._partial_vessels_lock:
+            for tile_key, partials in partials_dict.items():
+                if tile_key not in self._partial_vessels:
+                    self._partial_vessels[tile_key] = []
+                self._partial_vessels[tile_key].extend(partials)
+                count += len(partials)
+        return count
+
     # =====================================================================
     # Multi-Marker Candidate Merging Methods
     # =====================================================================
