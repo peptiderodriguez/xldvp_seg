@@ -31,7 +31,7 @@ ps aux | grep run_segmentation | grep -v grep
    # Count tile directories
    ls -d <output_dir>/*/tiles/tile_* 2>/dev/null | wc -l
    # Count detections in JSON (if exists)
-   python -c "import json; d=json.load(open('<detections.json>')); print(f'{len(d)} detections')"
+   $MKSEG_PYTHON -c "import json; d=json.load(open('<detections.json>')); print(f'{len(d)} detections')"
    ```
 
 4. **Check HTML status** — Does `<output_dir>/html/index.html` exist?

@@ -57,6 +57,7 @@ ch2      750nm       PM                Cellpose cyto input (membrane)
 ch3      555nm       CD31              Marker classification
 ```
 3. **Ask the user to confirm** this mapping before proceeding. Never start detection without confirmation.
+4. **Ask which channels to include.** *"Are there any channels you want to **exclude** from loading? (e.g., failed stains, irrelevant channels, EDF processing layers)"* If yes, note which to skip and use `--channels "0,1,2"` (CLI) or `load_channels: "0,1,2"` (YAML) to restrict loading. This saves RAM and flat-field preprocessing time.
 
 Use `--channel-spec` for all pipeline commands to resolve channels automatically:
 - `--channel-spec "detect=SMA"` (resolves SMA→647nm→ch1)
@@ -81,7 +82,7 @@ This replaces manual `--channel`, `--cellpose-input-channels`, and `--marker-cha
 **Step 8 — Configure parameters.** Set up:
 - Detection channel: use `--channel-spec "detect=<marker_or_wavelength>"` (preferred) or `--channel <index>`
 - For 2-channel Cellpose: `--channel-spec "cyto=<marker>,nuc=<marker>"` (preferred) or `--cellpose-input-channels <cyto>,<nuc>`
-- Multi-channel features (`--all-channels` if >1 channel relevant)
+- Multi-channel features (`--all-channels` if >1 channel relevant; add `--channels "0,1,2"` to skip unwanted channels)
 - Deep features (`--extract-deep-features` for ResNet+DINOv2, only if user needs max accuracy)
 - Sample fraction: explain 0.01=quick test, 0.10=annotation round, 1.0=full run
 - Output directory
@@ -101,6 +102,7 @@ output_dir: <output_path>
 cell_type: <type>
 num_gpus: <from system_info recommended.gpus>
 all_channels: <true/false>
+load_channels: "<comma-separated indices>"  # omit to load all; e.g., "0,1,2" to skip ch3
 pixel_size_um: <from czi_info>
 # Channel map — resolved automatically against CZI metadata at runtime
 channel_map:

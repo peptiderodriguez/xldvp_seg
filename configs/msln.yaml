@@ -3,6 +3,7 @@ czi_path: /fs/pool/pool-mann-axioscan/01_Users/EdRo_axioscan/xDVP/20251114_Pdgfr
 output_dir: /fs/pool/pool-mann-edwin/msln_cell_output/
 
 channels: {0: nuc488, 1: PM647, 2: Msln750}  # ch3 Pdgfra546 dropped (stain failed)
+load_channels: "0,1,2"   # skip ch3 PDGFRa (stain failed)
 cell_type: cell
 cellpose_input_channels: [1, 0]   # cyto=PM647 (plasma membrane), nuc=nuc488
 pixel_size_um: 0.1725            # from CZI metadata (Axioscan 20x)

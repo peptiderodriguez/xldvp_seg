@@ -26,7 +26,7 @@ Explain the available feature subsets and help the user choose:
 |----------------------|-----------|-----------------|-------------|
 | `morph` | ~78 | Shape, size, intensity, texture | **Default** — nearly as good as all (F1=0.900 on NMJ benchmark) |
 | `morph_sam2` | ~334 | + learned visual embeddings from SAM2 | When morphology alone isn't enough |
-| `channel_stats` | ~78 + 15/ch | + per-channel intensity distributions | When marker expression matters (needs `--all-channels`) |
+| `channel_stats` | ~15/ch | Per-channel intensity distributions only | When marker expression matters (needs `--all-channels`) |
 | `all` | ~6,478 | Everything: morph + SAM2 + ResNet + DINOv2 | Maximum accuracy (F1=0.909). Needs `--extract-deep-features` during detection |
 
 **Ask:** *"Which features were extracted during detection?"*

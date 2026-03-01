@@ -35,7 +35,7 @@ REPO = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(REPO))
 
 from segmentation.utils.logging import get_logger, setup_logging
-from segmentation.utils.json_utils import NumpyEncoder
+from segmentation.utils.json_utils import NumpyEncoder, atomic_json_dump
 
 logger = get_logger(__name__)
 
@@ -360,8 +360,7 @@ def main():
     # Save enriched detections
     out_json = output_dir / f'{det_path.stem}_classified.json'
     logger.info(f"Saving classified detections to {out_json}...")
-    with open(out_json, 'w') as f:
-        json.dump(detections, f, cls=NumpyEncoder)
+    atomic_json_dump(detections, out_json)
     logger.info(f"  Wrote {len(detections):,} detections")
 
     # Save summary CSV

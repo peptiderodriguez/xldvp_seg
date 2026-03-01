@@ -26,6 +26,8 @@ $MKSEG_PYTHON -c "from segmentation.io.czi_loader import parse_markers_from_file
 ```
 Show the parsed marker→wavelength mappings alongside the CZI metadata to build the complete channel table. Ask the user to confirm the mapping.
 
+**Step 3c — Ask about channel exclusions.** *"Do any channels have failed stains or should be excluded from analysis? (e.g., a PDGFRa channel where the stain didn't work, or EDF processing layers)"* If yes, note which channels to skip — this feeds into `--channels "0,1,2"` (CLI) or `load_channels: "0,1,2"` (YAML) when running the pipeline.
+
 **Step 4 — Recommend a pipeline.** Based on channels, suggest `--channel-spec` (preferred) or raw indices:
 - Has BTX channel → "This looks like an NMJ slide. Use `--cell-type nmj --channel-spec 'detect=BTX'`" (or `--channel <BTX_index>`)
 - Has SMA + CD31 → "This looks like a vessel slide. Use `--cell-type vessel --channel-spec 'detect=SMA'`"

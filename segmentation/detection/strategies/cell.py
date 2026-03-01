@@ -1,11 +1,14 @@
 """
-Generic cell detection strategy using Cellpose + SAM2.
+Generic cell detection strategy using Cellpose-SAM + SAM2 embeddings.
 
 A general-purpose cell detection pipeline:
-1. Cellpose nuclei detection (auto-size detection)
-2. SAM2 refinement using nuclei centroids as point prompts
-3. Overlap filtering to avoid duplicate detections
-4. Feature extraction (morphological + SAM2 embeddings + ResNet)
+1. Cellpose-SAM detection (cpsam model — uses SAM internally for segmentation)
+2. Area filtering
+3. Feature extraction (morphological + SAM2 embeddings + ResNet/DINOv2)
+
+SAM2 is used for embedding extraction only — cpsam already produces high-quality
+masks so a separate SAM2 re-segmentation step is unnecessary and can degrade
+results when channel normalization differs between Cellpose and SAM2 inputs.
 """
 
 import gc
@@ -23,23 +26,20 @@ from segmentation.utils.feature_extraction import (
 logger = get_logger(__name__)
 
 
-# Issue #7: Local extract_morphological_features removed - now imported from shared module
-
-
 class CellStrategy(DetectionStrategy, MultiChannelFeatureMixin):
     """
-    Generic cell detection strategy using Cellpose + SAM2 refinement.
+    Generic cell detection strategy using Cellpose-SAM (cpsam).
 
-    A general-purpose pipeline for detecting cells in microscopy images.
     Detection pipeline:
-    1. Cellpose nuclei detection (auto size detection)
-    2. SAM2 refinement using nuclei centroids as point prompts
-    3. Overlap filtering (skip masks with >50% overlap with existing detections)
-    4. Full feature extraction (78 morph + 256 SAM2 + 4096 ResNet + 2048 DINOv2 = 6478 features)
+    1. Cellpose-SAM detection (auto size, 1-channel or 2-channel input)
+    2. Area filtering (min/max um²)
+    3. Feature extraction (78 morph + 256 SAM2 + optional ResNet/DINOv2)
+
+    SAM2 is used solely for 256D embedding extraction, not for re-segmentation.
 
     Required models in detect():
         - 'cellpose': CellposeModel with cpsam pretrained model
-        - 'sam2_predictor': SAM2ImagePredictor for point prompts
+        - 'sam2_predictor': SAM2ImagePredictor (for embedding extraction)
         - 'resnet': ResNet model for deep features (optional)
         - 'resnet_transform': Transform for ResNet (optional)
     """
@@ -61,15 +61,13 @@ class CellStrategy(DetectionStrategy, MultiChannelFeatureMixin):
         Args:
             min_area_um: Minimum area in square microns (default 50)
             max_area_um: Maximum area in square microns (default 200)
-            overlap_threshold: Skip masks with overlap > this fraction (default 0.5)
+            overlap_threshold: Kept for API compat (unused — Cellpose masks don't overlap)
             min_mask_pixels: Minimum mask size in pixels (default 10)
-            extract_deep_features: Whether to extract ResNet+DINOv2 features (default False, opt-in)
+            extract_deep_features: Whether to extract ResNet+DINOv2 features (default False)
             extract_sam2_embeddings: Whether to extract 256D SAM2 embeddings (default True)
             resnet_batch_size: Batch size for ResNet feature extraction (default 32)
             cellpose_input_channels: List of [cyto_channel_idx, nuclear_channel_idx] for
-                2-channel Cellpose mode. When provided along with extra_channels in segment(),
-                builds an RGB input with cyto=R, nuc=G for channels=[1,2]. Default None
-                uses grayscale mode channels=[0,0].
+                2-channel Cellpose mode. Default None uses grayscale mode.
         """
         self.min_area_um = min_area_um
         self.max_area_um = max_area_um
@@ -115,42 +113,30 @@ class CellStrategy(DetectionStrategy, MultiChannelFeatureMixin):
         **kwargs
     ) -> List[np.ndarray]:
         """
-        Generate cell candidate masks using Cellpose + SAM2 refinement.
+        Generate cell masks using Cellpose-SAM (cpsam).
 
-        This method performs:
-        1. Cellpose detection on the tile (grayscale or 2-channel mode)
-        2. For each Cellpose detection, use its centroid as a SAM2 point prompt
-        3. Take the best SAM2 mask (highest confidence)
-        4. Filter by overlap with existing masks
+        Cellpose-SAM already uses SAM internally, producing high-quality masks.
+        No additional SAM2 re-segmentation is needed.
 
         Args:
             tile: RGB image array (HxWx3)
-            models: Dict with 'cellpose' and 'sam2_predictor'
+            models: Dict with 'cellpose'
             extra_channels: Dict mapping channel index to 2D array. Used for
                 2-channel Cellpose when cellpose_input_channels is set.
 
         Returns:
-            List of boolean masks, sorted by SAM2 confidence score
+            List of boolean masks
         """
         cellpose = models.get('cellpose')
-        sam2_predictor = models.get('sam2_predictor')
-
         if cellpose is None:
             raise RuntimeError("Cellpose model required for cell detection")
-        if sam2_predictor is None:
-            raise RuntimeError("SAM2 predictor required for cell detection")
 
-        # Ensure proper image format for SAM2 (safe for float32 tiles in [0,1] range)
-        tile_uint8 = _safe_to_uint8(tile)
-
-        # Step 1: Cellpose detection
-        # Build Cellpose input
+        # Run Cellpose (2-channel or grayscale)
         if self.cellpose_input_channels and extra_channels:
             cyto_idx, nuc_idx = self.cellpose_input_channels
             cyto_ch = extra_channels.get(cyto_idx)
             nuc_ch = extra_channels.get(nuc_idx)
             if cyto_ch is not None and nuc_ch is not None:
-                # Percentile-normalize each channel to uint8 (matches islet.py)
                 cyto_u8 = self._percentile_normalize_single(cyto_ch)
                 nuc_u8 = self._percentile_normalize_single(nuc_ch)
                 cp_tile = np.stack([cyto_u8, nuc_u8], axis=-1)
@@ -165,73 +151,19 @@ class CellStrategy(DetectionStrategy, MultiChannelFeatureMixin):
         else:
             cellpose_masks = self._grayscale_cellpose_eval(tile, cellpose)
 
-        # Get unique mask IDs (exclude background 0)
-        cellpose_ids = np.unique(cellpose_masks)
-        cellpose_ids = cellpose_ids[cellpose_ids > 0]
-
-        # Step 2: Set image for SAM2 predictor
-        sam2_predictor.set_image(tile_uint8)
-
-        # Step 3: Collect candidates with SAM2 refinement
-        candidates = []
-        for cp_id in cellpose_ids:
-            cp_mask = cellpose_masks == cp_id
-            cy, cx = ndimage.center_of_mass(cp_mask)
-
-            # Use centroid as SAM2 point prompt
-            point_coords = np.array([[cx, cy]])
-            point_labels = np.array([1])
-
-            masks_pred, scores, _ = sam2_predictor.predict(
-                point_coords=point_coords,
-                point_labels=point_labels,
-                multimask_output=True
-            )
-
-            # Take best mask (highest confidence)
-            best_idx = np.argmax(scores)
-            sam2_mask = masks_pred[best_idx]
-
-            # Ensure boolean type
-            if sam2_mask.dtype != bool:
-                sam2_mask = (sam2_mask > 0.5).astype(bool)
-
-            # Skip tiny masks
-            if sam2_mask.sum() < self.min_mask_pixels:
+        # Convert label array to list of boolean masks
+        masks = []
+        for cp_id in np.unique(cellpose_masks):
+            if cp_id == 0:
                 continue
+            mask = cellpose_masks == cp_id
+            if mask.sum() >= self.min_mask_pixels:
+                masks.append(mask)
 
-            candidates.append({
-                'mask': sam2_mask,
-                'score': float(scores[best_idx]),
-                'center': (cx, cy),
-                'cellpose_id': int(cp_id)
-            })
-
-        # Sort by SAM2 confidence score (most confident first)
-        candidates.sort(key=lambda x: x['score'], reverse=True)
-
-        # Step 4: Filter overlaps
-        accepted_masks = []
-        combined_mask = np.zeros(tile.shape[:2], dtype=bool)
-
-        for cand in candidates:
-            sam2_mask = cand['mask']
-
-            # Check overlap with existing masks
-            if combined_mask.any():
-                overlap = (sam2_mask & combined_mask).sum()
-                if overlap > self.overlap_threshold * sam2_mask.sum():
-                    continue
-
-            # Accept this mask
-            accepted_masks.append(sam2_mask)
-            combined_mask |= sam2_mask
-
-        # Clean up
-        del candidates, cellpose_masks
+        del cellpose_masks
         gc.collect()
 
-        return accepted_masks
+        return masks
 
     def filter(
         self,
@@ -295,7 +227,11 @@ class CellStrategy(DetectionStrategy, MultiChannelFeatureMixin):
         """
         Complete cell detection pipeline with full feature extraction.
 
-        This overrides the base detect() to add SAM2 embeddings and ResNet features.
+        Pipeline:
+        1. Cellpose-SAM produces masks (via segment())
+        2. SAM2 set_image for embedding extraction (properly normalized)
+        3. Morphological + per-channel + SAM2 embedding + deep feature extraction
+        4. Area filtering
 
         Args:
             tile: RGB image array
@@ -315,23 +251,38 @@ class CellStrategy(DetectionStrategy, MultiChannelFeatureMixin):
         sam2_predictor = models.get('sam2_predictor')
         device = models.get('device', torch.device('cuda' if torch.cuda.is_available() else 'cpu'))
 
-        if cellpose is None or sam2_predictor is None:
-            raise RuntimeError("Cellpose and SAM2 predictor required for cell detection")
+        if cellpose is None:
+            raise RuntimeError("Cellpose model required for cell detection")
 
-        # Generate masks using segment()
+        # Step 1: Generate masks using Cellpose-SAM
         masks = self.segment(tile, models, extra_channels=extra_channels)
 
         if not masks:
-            # Reset predictor state
-            sam2_predictor.reset_predictor()
+            if sam2_predictor:
+                sam2_predictor.reset_predictor()
             if torch.cuda.is_available():
                 torch.cuda.empty_cache()
             return np.zeros(tile.shape[:2], dtype=np.uint32), []
 
-        # SAM2 predictor already has the image set from segment() above.
-        # Do NOT call set_image() again — it's the most expensive SAM2 operation.
+        # Step 2: Set SAM2 image for embedding extraction
+        # When using 2-channel Cellpose, build a properly normalized RGB so SAM2
+        # embeddings are computed on visible signal (not dim uint16/256 bitshift).
+        if self.extract_sam2_embeddings and sam2_predictor is not None:
+            if self.cellpose_input_channels and extra_channels:
+                cyto_idx, nuc_idx = self.cellpose_input_channels
+                cyto_ch = extra_channels.get(cyto_idx)
+                nuc_ch = extra_channels.get(nuc_idx)
+                if cyto_ch is not None and nuc_ch is not None:
+                    cyto_u8 = self._percentile_normalize_single(cyto_ch)
+                    nuc_u8 = self._percentile_normalize_single(nuc_ch)
+                    sam2_rgb = np.stack([cyto_u8, nuc_u8, cyto_u8], axis=-1)
+                    sam2_predictor.set_image(sam2_rgb)
+                else:
+                    sam2_predictor.set_image(_safe_to_uint8(tile))
+            else:
+                sam2_predictor.set_image(_safe_to_uint8(tile))
 
-        # Compute features for each mask
+        # Step 3: Compute features for each mask
         valid_detections = []
         crops_for_resnet = []
         crops_for_resnet_context = []
@@ -348,7 +299,7 @@ class CellStrategy(DetectionStrategy, MultiChannelFeatureMixin):
 
         n_masks = len(masks)
         for idx, mask in enumerate(masks):
-            if idx % 500 == 0:
+            if idx % 500 == 0 and idx > 0:
                 logger.info(f"Featurizing cell {idx}/{n_masks}")
             # Basic morphological features
             feat = extract_morphological_features(mask, tile, tile_global_mean=tile_global_mean)
@@ -368,7 +319,7 @@ class CellStrategy(DetectionStrategy, MultiChannelFeatureMixin):
             cx_val, cy_val = float(np.mean(xs)), float(np.mean(ys))
             feat['centroid'] = [cx_val, cy_val]
 
-            # SAM2 embeddings (256D)
+            # SAM2 embeddings (256D) — embedding extraction only, no re-segmentation
             if self.extract_sam2_embeddings and sam2_predictor is not None:
                 sam2_emb = self._extract_sam2_embedding(sam2_predictor, cy_val, cx_val)
                 for i, v in enumerate(sam2_emb):
@@ -447,7 +398,8 @@ class CellStrategy(DetectionStrategy, MultiChannelFeatureMixin):
             self._zero_fill_deep_features(valid_detections, has_dinov2=(dinov2 is not None))
 
         # Reset predictor state
-        sam2_predictor.reset_predictor()
+        if sam2_predictor is not None:
+            sam2_predictor.reset_predictor()
         if torch.cuda.is_available():
             torch.cuda.empty_cache()
 

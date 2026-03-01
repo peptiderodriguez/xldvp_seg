@@ -118,14 +118,14 @@ python -m http.server 8080 --directory /home/dude/mk_output/project/html
 8. Train RF classifier with annotations (`train_classifier.py`, balanced classes)
 9. Score ALL detections: `scripts/apply_classifier.py` (CPU, seconds — no re-detection)
 10. Generate filtered HTML: `scripts/regenerate_html.py --score-threshold 0.5`
-12. Dilate +0.5 um, RDP simplify (epsilon=5 px)
-13. Two-stage clustering: Round 1 = 500 um, Round 2 = 1000 um, target 375-425 um²
-14. Unclustered = singles
-15. Controls: 100 um offset, 8 directions, cluster controls preserve arrangement
-16. Napari visualization (4 colors: singles/controls/clusters/cluster-controls)
-17. 384-well plate serpentine B2 → B3 → C3 → C2 (max 308 wells)
-18. OME-Zarr pyramid for Napari viewing
-19. XML export with reference crosses
+11. Dilate +0.5 um, RDP simplify (epsilon=5 px)
+12. Two-stage clustering: Round 1 = 500 um, Round 2 = 1000 um, target 375-425 um²
+13. Unclustered = singles
+14. Controls: 100 um offset, 8 directions, cluster controls preserve arrangement
+15. Napari visualization (4 colors: singles/controls/clusters/cluster-controls)
+16. 384-well plate serpentine B2 → B3 → C3 → C2 (max 308 wells)
+17. OME-Zarr pyramid for Napari viewing
+18. XML export with reference crosses
 
 ### Channel Mapping
 
@@ -267,11 +267,11 @@ Tissue detection in normalization uses calibrated threshold / 10 for permissive 
 
 ### CLI Options (Vessel-specific)
 ```bash
---no-refine             # Skip full-res refinement (use tile-scale contours)
---spline                # Enable spline smoothing (off by default)
---spline-smoothing 3.0  # Spline smoothing factor
---dilation-mode adaptive|uniform  # Dilation mode for CD31+SMA (default: adaptive)
---min-sma-intensity 30  # Min SMA signal to attempt ring detection
+--candidate-mode               # Relaxed thresholds for training data generation
+--ring-only                    # Disable supplementary lumen-first pass
+--no-smooth-contours           # Disable B-spline contour smoothing (on by default)
+--smooth-contours-factor 3.0   # Spline smoothing factor (default: 3.0)
+--multi-scale                  # Multi-scale detection (coarse to fine)
 ```
 
 ### Multi-Marker (6-type classification)

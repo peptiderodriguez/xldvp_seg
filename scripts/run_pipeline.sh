@@ -70,6 +70,7 @@ CELL_TYPE=$(read_yaml cell_type cell)
 CP_CHANNELS=$(read_yaml cellpose_input_channels "")
 PHOTOBLEACH=$(read_yaml photobleach_correction false)
 ALL_CHANNELS=$(read_yaml all_channels false)
+LOAD_CHANNELS=$(read_yaml load_channels "")
 NUM_GPUS=$(read_yaml num_gpus 1)
 MIN_AREA=$(read_yaml min_area_um "")
 MAX_AREA=$(read_yaml max_area_um "")
@@ -179,6 +180,9 @@ build_seg_cmd() {
     fi
     if [[ "$ALL_CHANNELS" == "true" ]]; then
         cmd+=" --all-channels"
+    fi
+    if [[ -n "$LOAD_CHANNELS" ]]; then
+        cmd+=" --channels \"$LOAD_CHANNELS\""
     fi
     if [[ -n "$MIN_AREA" ]]; then
         cmd+=" --min-cell-area $MIN_AREA"
