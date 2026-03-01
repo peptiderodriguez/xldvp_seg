@@ -84,6 +84,15 @@ python run_segmentation.py \
 --num-gpus 1        # Single GPU — safer memory usage for large slides
 ```
 
+### Post-Dedup Processing Options
+```bash
+--no-contour-processing     # Skip contour dilation + RDP (default ON)
+--dilation-um 0.5           # Contour dilation in micrometers (default: 0.5)
+--rdp-epsilon 5.0           # RDP simplification epsilon in pixels (default: 5)
+--no-background-correction  # Skip local background subtraction (default ON)
+--bg-neighbors 30           # KD-tree neighbors for background (default: 30)
+```
+
 ### Multi-Node Sharding
 ```bash
 # Split detection across 4 nodes (each processes 1/4 of tiles)
@@ -112,13 +121,17 @@ python -m http.server 8080 --directory /home/dude/mk_output/project/html
 2. Tile with 10% overlap (`--tile-overlap 0.10`)
 3. Detect 100% of tiles (or multi-node with `--tile-shard`)
 4. Segment: 98th percentile intensity threshold + morphology + watershed
-5. Extract features: morph + SAM2 (always), ResNet + DINOv2 (opt-in `--extract-deep-features`)
+5. Initial feature extraction: morph + SAM2 (always), ResNet + DINOv2 (opt-in `--extract-deep-features`)
 6. Deduplicate overlapping masks (>10% pixel overlap) — or `--merge-shards` for multi-node
-7. Generate annotation HTML (subsample 1500 via `scripts/regenerate_html.py --max-samples 1500`)
-8. Train RF classifier with annotations (`train_classifier.py`, balanced classes)
-9. Score ALL detections: `scripts/apply_classifier.py` (CPU, seconds — no re-detection)
-10. Generate filtered HTML: `scripts/regenerate_html.py --score-threshold 0.5`
-11. Dilate +0.5 um, RDP simplify (epsilon=5 px)
+7. **Post-dedup processing** (default ON, runs in main pipeline):
+   - Dilate contours +0.5 um (`--dilation-um`), RDP simplify (`--rdp-epsilon 5`)
+   - Re-extract morph + per-channel features on the **dilated** mask
+   - Local background correction (KD-tree, k=30 neighbors, `--bg-neighbors`)
+   - Disable with `--no-contour-processing` / `--no-background-correction`
+8. Generate annotation HTML (subsample 1500 via `scripts/regenerate_html.py --max-samples 1500`)
+9. Train RF classifier with annotations (`train_classifier.py`, balanced classes)
+10. Score ALL detections: `scripts/apply_classifier.py` (CPU, seconds — no re-detection)
+11. Generate filtered HTML: `scripts/regenerate_html.py --score-threshold 0.5`
 12. Two-stage clustering: Round 1 = 500 um, Round 2 = 1000 um, target 375-425 um²
 13. Unclustered = singles
 14. Controls: 100 um offset, 8 directions, cluster controls preserve arrangement
@@ -126,6 +139,20 @@ python -m http.server 8080 --directory /home/dude/mk_output/project/html
 16. 384-well plate serpentine B2 → B3 → C3 → C2 (max 308 wells)
 17. OME-Zarr pyramid for Napari viewing
 18. XML export with reference crosses
+
+### Pipeline Checkpoints (resume with `--resume`)
+
+| Stage | Checkpoint file | What's saved |
+|-------|----------------|--------------|
+| Detection | Per-tile dirs (`tile_X_Y/`) | Masks (HDF5) + per-tile detections (JSON) |
+| Merge shards | `{celltype}_detections_merged.json` | All shard detections concatenated |
+| Dedup | `{celltype}_detections.json` | Deduplicated detections (merge-shards only) |
+| Post-dedup | `{celltype}_detections_postdedup.json` | Contours + features + bg correction |
+| Finalize | `{celltype}_detections.json` + HTML/CSV | Final output |
+
+On `--resume`, the pipeline loads the most advanced checkpoint and skips completed steps.
+Contour processing and background correction are checked independently — if contours were
+processed but bg correction wasn't, only bg correction runs on resume.
 
 ### Channel Mapping
 
@@ -155,6 +182,15 @@ channel_map:
 ```
 
 **Manual fallback**: Raw indices (`--channel 1`, `--marker-channel 1,3`) still work.
+
+**Post-dedup processing YAML keys:**
+```yaml
+background_correction: true    # default ON — local KD-tree bg subtraction
+contour_processing: true       # default ON — dilate + RDP contours
+dilation_um: 0.5               # contour dilation in micrometers
+rdp_epsilon: 5                 # RDP simplification epsilon in pixels
+bg_neighbors: 30               # KD-tree neighbor count
+```
 
 **NMJ example (3-channel):**
 - ch0: Nuclear (488nm)
@@ -230,6 +266,12 @@ UID format: `{slide}_{celltype}_{x}_{y}`
 | `segmentation/processing/multigpu_worker.py` | Generic GPU worker (all cell types) |
 | `segmentation/processing/multigpu_shm.py` | Shared memory manager (SIGTERM cleanup) |
 | `segmentation/processing/tile_processing.py` | Shared `process_single_tile()` |
+
+### Post-Dedup Processing
+| Module | Purpose |
+|--------|---------|
+| `segmentation/pipeline/post_detection.py` | Contour dilation + feature re-extraction + bg correction |
+| `segmentation/pipeline/background.py` | KD-tree local background correction (shared w/ classify_markers) |
 
 ### LMD Export
 | Module | Purpose |

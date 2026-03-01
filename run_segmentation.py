@@ -446,7 +446,13 @@ def run_pipeline(args):
                 return
 
             # Checkpoint 2: deduped detections
-            if deduped_det_file.exists() and not getattr(args, 'force_detect', False):
+            # Checkpoint 3: post-dedup processed detections (contours + bg correction)
+            postdedup_file = slide_output_dir / f'{args.cell_type}_detections_postdedup.json'
+            if postdedup_file.exists() and not getattr(args, 'force_detect', False):
+                all_detections = fast_json_load(postdedup_file)
+                logger.info(f"Checkpoint: loaded {len(all_detections)} post-dedup detections from {postdedup_file.name}")
+                skip_dedup = True
+            elif deduped_det_file.exists() and not getattr(args, 'force_detect', False):
                 all_detections = fast_json_load(deduped_det_file)
                 logger.info(f"Checkpoint: loaded {len(all_detections)} deduped detections from {deduped_det_file.name}")
                 skip_dedup = True
@@ -553,6 +559,11 @@ def run_pipeline(args):
                 background_correction=_want_bg,
                 bg_neighbors=getattr(args, 'bg_neighbors', 30),
             )
+
+            # Checkpoint: save post-processed detections
+            _postdedup_file = slide_output_dir / f'{args.cell_type}_detections_postdedup.json'
+            atomic_json_dump(all_detections, _postdedup_file)
+            logger.info(f"Checkpoint: saved {len(all_detections)} post-dedup detections to {_postdedup_file.name}")
         elif _has_bg and _has_contour:
             logger.info("Detections already post-processed — skipping")
 
@@ -1379,6 +1390,11 @@ def run_pipeline(args):
             background_correction=getattr(args, 'background_correction', True),
             bg_neighbors=getattr(args, 'bg_neighbors', 30),
         )
+
+        # Checkpoint: save post-processed detections before HTML/CSV generation
+        _postdedup_file = slide_output_dir / f'{args.cell_type}_detections_postdedup.json'
+        atomic_json_dump(all_detections, _postdedup_file)
+        logger.info(f"Checkpoint: saved {len(all_detections)} post-dedup detections to {_postdedup_file.name}")
 
     # ---- Shared post-processing: CSV, JSON, HTML, summary, server ----
     _finish_pipeline(
