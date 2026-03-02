@@ -166,7 +166,21 @@ processed but bg correction wasn't, only bg correction runs on resume.
 ### Channel Mapping
 
 **CRITICAL: CZI channel order ≠ filename order.** CZI files sort channels by wavelength,
-not by the order antibodies appear in the filename. The pipeline automates the 2-step lookup:
+not by the order antibodies appear in the filename. **Always verify against CZI metadata.**
+
+**Standard pre-flight check** — run before writing any YAML config or channel flags:
+```python
+python << 'EOF'
+import aicspylibczi
+czi = aicspylibczi.CziFile('/path/to/slide.czi')
+channels = [(int(ch.findtext('EmissionWavelength','0')), ch.findtext('Fluor',''))
+            for ch in czi.meta.iter('Channel') if ch.findtext('Fluor','')]
+for i, (em, fluor) in enumerate(sorted(channels)):
+    print(f"  C={i}: {fluor} (em={em}nm)")
+EOF
+```
+Use the emission wavelength + fluorophore name to match each C index to your markers.
+Then cross-check with the filename (e.g. `PM647` in filename → Alexa Fluor 647 → C=2 in a 4-channel slide sorted 488/555/647/750).
 
 **Automated resolution via `--channel-spec`** (preferred):
 ```bash

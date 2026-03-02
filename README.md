@@ -167,7 +167,7 @@ This generates an sbatch script with the right flags, submits to SLURM, and chai
 - **Start with 10% sample** (`--sample-fraction 0.10`) for annotation, then run 100% for full detection
 - **Use `--channel-spec`** instead of raw channel indices — automatically resolves marker names against CZI metadata
 - **Check `scripts/system_info.py`** before launching — it detects your system and recommends partition, GPU count, and memory settings
-- **Inspect your CZI first** with `/czi-info` or `run_segmentation.py --show-metadata --czi-path <file>` — CZI channel order (sorted by wavelength) often differs from filename order
+- **Always verify channel order from CZI metadata** before writing configs — CZI sorts channels by emission wavelength, which may differ from filename order. Run the pre-flight check in CLAUDE.md or use `/czi-info` to confirm each C index maps to the right marker before setting `cellpose_input_channels`, `marker-channel`, or YAML `channels:`
 - **For SLURM restarts**: add `resume_dir: /path/to/run_dir` to your YAML config, then re-run `scripts/run_pipeline.sh` — per-tile checkpoints are used automatically when `--resume` is passed. Without `resume_dir:` in the YAML, re-running starts a fresh full-detection run
 
 ## Citation
