@@ -2,28 +2,28 @@ name: msln_bands
 czi_path: /fs/pool/pool-mann-axioscan/01_Users/EdRo_axioscan/xDVP/20251114_Pdgfra546_Msln750_PM647_nuc488-EDFvar-1.czi
 output_dir: /fs/pool/pool-mann-edwin/msln_cell_output/
 
-# CZI channels verified from metadata (sorted by emission wavelength):
-#   C=0: Alexa Fluor 488 em=517 → nuc488
-#   C=1: Alexa Fluor 555 em=568 → Pdgfra546  (BAD STAIN - excluded)
-#   C=2: Alexa Fluor 647 em=668 → PM647
-#   C=3: Alexa Fluor 750 em=779 → Msln750
-channels: {0: nuc488, 2: PM647, 3: Msln750}  # ch1 Pdgfra546 excluded (stain failed)
-load_channels: "0,2,3"   # skip C=1 Pdgfra546 (stain failed)
+# CZI channels verified via czi_info.py (authoritative — NOT wavelength-sorted):
+#   [0] AF488 Ex493 Em517 → nuc488
+#   [1] AF647 Ex653 Em668 → PM647
+#   [2] AF750 Ex752 Em779 → Msln750
+#   [3] AF555 Ex553 Em568 → Pdgfra546  (BAD STAIN - excluded)
+channels: {0: nuc488, 1: PM647, 2: Msln750}  # C=3 Pdgfra546 excluded (stain failed)
+load_channels: "0,1,2"   # skip C=3 Pdgfra546 (stain failed)
 cell_type: cell
-cellpose_input_channels: [2, 0]   # cyto=PM647 (plasma membrane), nuc=nuc488
+cellpose_input_channels: [1, 0]   # cyto=PM647(C=1), nuc=nuc488(C=0)
 pixel_size_um: 0.1725            # from CZI metadata (Axioscan 20x)
-min_area_um: 45                   # LMD-practical cell range
+min_area_um: 45
 max_area_um: 1000
 photobleach_correction: false
 all_channels: true
 num_gpus: 4
 
 markers:
-  - {channel: 3, name: MSLN, method: otsu_half}
+  - {channel: 2, name: MSLN, method: otsu_half}   # Msln750 = C=2 (AF750)
 
 spatial_network:
   enabled: true
-  marker_filter: "MSLN_class==positive"   # from Otsu/2 classification
+  marker_filter: "MSLN_class==positive"
   max_edge_distance: 50
   min_component_cells: 3
 
