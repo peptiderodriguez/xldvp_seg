@@ -265,7 +265,7 @@ UID format: `{slide}_{celltype}_{x}_{y}`
 | `scripts/cluster_detections.py` | Biological clustering for LMD well assignment |
 | `scripts/napari_view_lmd_export.py` | View LMD export overlaid on slide |
 | `scripts/convert_to_spatialdata.py` | Convert detections to SpatialData zarr (scverse ecosystem) |
-| `scripts/generate_multi_slide_spatial_viewer.py` | Unified spatial viewer: DBSCAN clustering, convex hulls, ROI drawing, focus view |
+| `scripts/generate_multi_slide_spatial_viewer.py` | Unified spatial viewer: KDE contours, graph-pattern regions, DBSCAN + hulls, ROI, focus view |
 | `scripts/view_slide.py` | One-command visualization: classify + spatial cluster + interactive viewer |
 | `scripts/spatial_cell_analysis.py` | Spatial network analysis (connected components, graph metrics) |
 | `scripts/preview_preprocessing.py` | Preview flat-field / photobleach correction at reduced resolution |
