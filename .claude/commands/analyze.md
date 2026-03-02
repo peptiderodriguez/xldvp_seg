@@ -45,19 +45,30 @@ Tell the user: *"You can ask me to run any of these at any time, or just describ
 
 **Step 5 — Inspect the CZI.** Run `$MKSEG_PYTHON $REPO/scripts/czi_info.py <path>` (human-readable). Show the channel table with wavelengths.
 
-**Step 5b — Build the channel map (CRITICAL).** CZI channel order ≠ filename order. Use the automated 2-step resolver:
+**Step 5b — Build the channel map (CRITICAL — do not skip).** CZI channel order ≠ filename order and is NOT sorted by wavelength. The only authoritative source is `czi_info.py`:
 
-1. Run `$MKSEG_PYTHON -c "from segmentation.io.czi_loader import get_czi_metadata, parse_markers_from_filename; import json; meta = get_czi_metadata('<czi_path>'); markers = parse_markers_from_filename('<czi_filename>'); print(json.dumps({'channels': meta['channels'], 'filename_markers': markers}, indent=2, default=str))"` to auto-parse both CZI metadata and filename markers.
-2. Build and show the user a table like:
+```bash
+$MKSEG_PYTHON $REPO/scripts/czi_info.py <czi_path>
 ```
-Channel  Wavelength  Antibody/Marker   Role
-ch0      488nm       Nuclear           Cellpose nuc input
-ch1      647nm       SMA               Marker classification
-ch2      750nm       PM                Cellpose cyto input (membrane)
-ch3      555nm       CD31              Marker classification
+
+This prints the actual channel index → fluorophore → excitation/emission for every channel. Use this output — never manually sort by wavelength, never assume from filename alone.
+
+Then also parse the filename markers to match antibody names to the fluorophores:
+```bash
+$MKSEG_PYTHON -c "from segmentation.io.czi_loader import parse_markers_from_filename; import json; print(json.dumps(parse_markers_from_filename('<czi_filename>'), indent=2))"
 ```
-3. **Ask the user to confirm** this mapping before proceeding. Never start detection without confirmation.
-4. **Ask which channels to include.** *"Are there any channels you want to **exclude** from loading? (e.g., failed stains, irrelevant channels, EDF processing layers)"* If yes, note which to skip and use `--channels "0,1,2"` (CLI) or `load_channels: "0,1,2"` (YAML) to restrict loading. This saves RAM and flat-field preprocessing time.
+
+Build and show the user a confirmed table, for example:
+```
+Index  Ex→Em      Fluorophore        Marker (from filename)   Role
+[0]    493→517nm  Alexa Fluor 488    nuc488                   Cellpose nuc input
+[1]    653→668nm  Alexa Fluor 647    SMA647                   Marker classification
+[2]    752→779nm  Alexa Fluor 750    PM750                    Cellpose cyto input
+[3]    553→568nm  Alexa Fluor 555    CD31_555                 Marker classification
+```
+
+3. **Show this table to the user and ask them to confirm** before proceeding. Never write channel indices into a config without this confirmation.
+4. **Ask which channels to exclude.** *"Are there any channels with failed stains or that should be skipped? (e.g., a PDGFRa channel where the stain didn't work)"* If yes, use `load_channels: "0,1,2"` (YAML) or `--channels "0,1,2"` (CLI) to restrict loading.
 
 Use `--channel-spec` for all pipeline commands to resolve channels automatically:
 - `--channel-spec "detect=SMA"` (resolves SMA→647nm→ch1)

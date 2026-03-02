@@ -10,25 +10,27 @@ PYTHONPATH=$REPO $MKSEG_PYTHON $REPO/scripts/czi_info.py <path>
 ```
 Where `$REPO` is the repo root and `$MKSEG_PYTHON` is the mkseg Python binary.
 
-**Step 3 — Interpret the results.** For each channel, suggest what it likely is:
-- Wavelengths around 405-488nm with names like "DAPI", "Hoechst", "nuc" → Nuclear stain
-- 488nm with "GFP", "Alexa488" → Green fluorescent marker
-- 555nm with "tdTomato", "Cy3" → Red fluorescent marker
-- 647nm with "BTX", "bungarotoxin" → NMJ detection channel (BTX labels acetylcholine receptors)
-- 647nm with "Alexa647" → Far-red marker
-- 750nm with "NFL", "neurofilament" → Nerve fiber marker
-- Channels with "SMA" or smooth muscle → Vessel SMA channel
-- Channels with "CD31" or endothelial → Vessel CD31 channel
+**Step 3 — Build the confirmed channel table.** The `czi_info.py` output is the authoritative channel order — CZI indices are NOT wavelength-sorted and cannot be inferred from the filename alone.
 
-**Step 3b — Auto-parse filename markers.** Run:
+Also parse the filename to match antibody names to fluorophores:
 ```bash
 $MKSEG_PYTHON -c "from segmentation.io.czi_loader import parse_markers_from_filename; import json; print(json.dumps(parse_markers_from_filename('<filename>'), indent=2))"
 ```
-Show the parsed marker→wavelength mappings alongside the CZI metadata to build the complete channel table. Ask the user to confirm the mapping.
 
-**Step 3c — Ask about channel exclusions.** *"Do any channels have failed stains or should be excluded from analysis? (e.g., a PDGFRa channel where the stain didn't work, or EDF processing layers)"* If yes, note which channels to skip — this feeds into `--channels "0,1,2"` (CLI) or `load_channels: "0,1,2"` (YAML) when running the pipeline.
+Combine both outputs into a table and **show it to the user for confirmation before doing anything else**:
+```
+Index  Ex→Em      Fluorophore        Marker (from filename)   Role
+[0]    493→517nm  Alexa Fluor 488    nuc488                   nuclear (nuc input)
+[1]    653→668nm  Alexa Fluor 647    SMA647                   marker classification
+[2]    752→779nm  Alexa Fluor 750    PM750                    cytoplasm (cyto input)
+[3]    553→568nm  Alexa Fluor 555    CD31_555                 marker classification
+```
 
-**Step 4 — Recommend a pipeline.** Based on channels, suggest `--channel-spec` (preferred) or raw indices:
+Use the Em wavelength column to match fluorophores to markers (e.g. Em=668nm = AF647 = whatever 647nm marker is in the filename). Do not assume — verify each row.
+
+**Step 3b — Ask about channel exclusions.** *"Do any channels have failed stains or should be excluded? (e.g., a PDGFRa channel where the antibody didn't work)"* If yes, note the index — this feeds into `load_channels: "0,1,2"` (YAML) or `--channels "0,1,2"` (CLI).
+
+**Step 4 — Recommend a pipeline.** Based on the confirmed channel table, suggest `--channel-spec` (preferred) or explicit indices:
 - Has BTX channel → "This looks like an NMJ slide. Use `--cell-type nmj --channel-spec 'detect=BTX'`" (or `--channel <BTX_index>`)
 - Has SMA + CD31 → "This looks like a vessel slide. Use `--cell-type vessel --channel-spec 'detect=SMA'`"
 - Has nuclear + marker → "Generic cell detection with Cellpose. Use `--cell-type cell --channel-spec 'cyto=<marker>,nuc=<nuclear>'`" (or `--cellpose-input-channels <cyto>,<nuc>`)

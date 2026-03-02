@@ -165,22 +165,33 @@ processed but bg correction wasn't, only bg correction runs on resume.
 
 ### Channel Mapping
 
-**CRITICAL: CZI channel order ≠ filename order.** CZI files sort channels by wavelength,
-not by the order antibodies appear in the filename. **Always verify against CZI metadata.**
+**CRITICAL: CZI channel order ≠ filename order, and is NOT simply sorted by wavelength.**
+Channel indices are determined by acquisition/detector assignment in the CZI file.
+**Always run `czi_info.py` first — it is the only authoritative source.**
 
-**Standard pre-flight check** — run before writing any YAML config or channel flags:
-```python
-python << 'EOF'
-import aicspylibczi
-czi = aicspylibczi.CziFile('/path/to/slide.czi')
-channels = [(int(ch.findtext('EmissionWavelength','0')), ch.findtext('Fluor',''))
-            for ch in czi.meta.iter('Channel') if ch.findtext('Fluor','')]
-for i, (em, fluor) in enumerate(sorted(channels)):
-    print(f"  C={i}: {fluor} (em={em}nm)")
-EOF
+**Step 1 — Run czi_info.py (mandatory before any config):**
+```bash
+PYTHONPATH=$REPO $MKSEG_PYTHON $REPO/scripts/czi_info.py /path/to/slide.czi
 ```
-Use the emission wavelength + fluorophore name to match each C index to your markers.
-Then cross-check with the filename (e.g. `PM647` in filename → Alexa Fluor 647 → C=2 in a 4-channel slide sorted 488/555/647/750).
+Output example:
+```
+  [0] AF488    Ex 493 → Em 517 nm  Alexa Fluor 488   ← nuc488
+  [1] AF647    Ex 653 → Em 668 nm  Alexa Fluor 647   ← SMA647
+  [2] AF750    Ex 752 → Em 779 nm  Alexa Fluor 750   ← PM750
+  [3] AF555    Ex 553 → Em 568 nm  Alexa Fluor 555   ← CD31_555
+```
+Note: [1]=647nm comes before [3]=555nm — this is NOT wavelength-sorted.
+Never guess the order. Never sort by wavelength manually. Always use this output.
+
+**Step 2 — Match indices to markers using filename + fluorophore name:**
+Cross-reference the `Alexa Fluor NNN` name with the marker wavelengths in the filename
+(e.g. `SMA647` → Alexa647 → whichever index shows `Em 668nm`).
+
+**Step 3 — Build your channel assignments:**
+- `cellpose_input_channels: [cyto_idx, nuc_idx]` — use PM/membrane channel as cyto
+- `markers: [{channel: idx, name: MARKER}]` — one entry per marker to classify
+- `load_channels: "0,1,2"` — exclude failed stains (e.g. bad PDGFRa)
+- Document the verified mapping as a comment in the YAML (see `configs/` examples)
 
 **Automated resolution via `--channel-spec`** (preferred):
 ```bash
