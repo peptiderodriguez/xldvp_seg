@@ -135,17 +135,23 @@ def run_pipeline(args):
     # ---- Resume early-exit: skip CZI loading if ALL stages are done ----
     if getattr(args, 'resume', None):
         resume_dir = Path(args.resume)
-        # If resume dir is a slide-level dir (no tiles/ directly), find the most recent run subdir
-        if not (resume_dir / 'tiles').exists():
-            _subdirs = sorted(
-                [d for d in resume_dir.iterdir() if d.is_dir() and (d / 'tiles').exists()],
-                key=lambda d: d.stat().st_mtime,
-                reverse=True,
-            )
-            if _subdirs:
+        # If resume dir has timestamped run subdirs with tiles, prefer the one with most tiles
+        _subdirs = sorted(
+            [d for d in resume_dir.iterdir()
+             if d.is_dir() and (d / 'tiles').exists() and d.name != 'tiles'],
+            key=lambda d: d.stat().st_mtime,
+            reverse=True,
+        )
+        if _subdirs:
+            # Count tiles in top-level vs best subdir
+            _top_tiles = sum(1 for t in (resume_dir / 'tiles').iterdir()
+                             if t.is_dir() and t.name.startswith('tile_')) if (resume_dir / 'tiles').exists() else 0
+            _sub_tiles = sum(1 for t in (_subdirs[0] / 'tiles').iterdir()
+                             if t.is_dir() and t.name.startswith('tile_'))
+            if _sub_tiles > _top_tiles:
                 resume_dir = _subdirs[0]
                 args.resume = str(resume_dir)
-                logger.info(f"Resume: using most recent run directory: {resume_dir.name}")
+                logger.info(f"Resume: using run directory with most tiles ({_sub_tiles}): {resume_dir.name}")
         resume_info = detect_resume_stage(resume_dir, args.cell_type)
         _has_det = resume_info['has_detections'] and not getattr(args, 'force_detect', False)
         _has_html = resume_info['has_html'] and not getattr(args, 'force_html', False)
