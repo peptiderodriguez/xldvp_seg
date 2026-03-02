@@ -129,6 +129,8 @@ This generates an sbatch script with the right flags, submits to SLURM, and chai
 - **Pixel-level background correction**: KD-tree local background estimation, automatic during detection
 - **Checkpoint/resume**: Per-tile checkpoints, dedup checkpoint, post-dedup checkpoint. `--resume` skips completed work
 - **SpatialData integration**: Auto-exports to scverse ecosystem (squidpy, scanpy)
+- **Interactive spatial viewer**: KDE density contours, multi-scale graph-pattern region detection, DBSCAN clustering with convex hulls, ROI drawing
+- **Direct-to-SHM loading**: CZI channels loaded directly into shared memory (no RAM intermediate), ~9 GB savings for 3-channel slides
 - **LMD export**: Contour dilation, clustering, 384-well serpentine layout, XML for Leica instruments
 
 ---
@@ -145,6 +147,9 @@ This generates an sbatch script with the right flags, submits to SLURM, and chai
 | `scripts/run_pipeline.sh` | YAML config-driven SLURM batch launcher |
 | `run_lmd_export.py` | Export to Leica LMD format |
 | `scripts/convert_to_spatialdata.py` | Convert detections to SpatialData zarr |
+| `scripts/generate_multi_slide_spatial_viewer.py` | Interactive spatial viewer: KDE contours, graph-pattern regions, DBSCAN clustering |
+| `scripts/view_slide.py` | One-command visualization: classify + spatial analysis + viewer + serve |
+| `serve_html.py` | HTTP server + Cloudflare tunnel for remote viewing |
 
 ---
 
