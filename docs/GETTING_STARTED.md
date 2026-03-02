@@ -11,7 +11,8 @@ for laser microdissection.
 
 1. [Installation](#installation)
 2. [Pipeline Overview](#pipeline-overview)
-3. [Step 1 -- Import CZI](#step-1----import-czi)
+3. [Step 0 — Inspect the CZI (ALWAYS do this first)](#step-0--inspect-the-czi-always-do-this-first)
+4. [Step 1 -- Import CZI](#step-1----import-czi)
 4. [Step 2 -- Tissue Detection and Sampling](#step-2----tissue-detection-and-sampling)
 5. [Step 3 -- Segmentation](#step-3----segmentation)
 6. [Step 4 -- Mask Post-Processing](#step-4----mask-post-processing)
@@ -93,22 +94,58 @@ CZI Image (20-180 GB)
 
 ---
 
+## Step 0 — Inspect the CZI (ALWAYS do this first)
+
+**CZI channel indices are NOT sorted by wavelength and cannot be inferred from
+the filename.** The only authoritative source is `scripts/czi_info.py`.
+
+```bash
+PYTHONPATH=$REPO $MKSEG_PYTHON $REPO/scripts/czi_info.py /path/to/slide.czi
+```
+
+Example output:
+```
+  [0] AF488    Ex 493 → Em 517 nm  Alexa Fluor 488   ← nuc488
+  [1] AF647    Ex 653 → Em 668 nm  Alexa Fluor 647   ← SMA647
+  [2] AF750    Ex 752 → Em 779 nm  Alexa Fluor 750   ← PM750
+  [3] AF555    Ex 553 → Em 568 nm  Alexa Fluor 555   ← CD31_555
+```
+
+Notice: `[1]=647nm` comes **before** `[3]=555nm` — this is **not** wavelength-sorted.
+Never guess the order. Never sort by wavelength manually. Always use this output.
+
+**Then match each index to its role:**
+- Use the Em wavelength + filename marker names to confirm every assignment
+- For 2-channel Cellpose segmentation: use plasma membrane (PM) as `cyto`, nuclear as `nuc`
+- Build a table and verify before writing any config or CLI flags
+
+**Preferred: use `--channel-spec` to resolve by name/wavelength automatically:**
+```bash
+python run_segmentation.py --czi-path slide.czi --cell-type cell \
+    --channel-spec "cyto=PM,nuc=488"   # resolved to CZI indices at startup
+```
+
+**Or use `--marker-wavelength` for `classify_markers.py`:**
+```bash
+python scripts/classify_markers.py --czi-path slide.czi \
+    --marker-wavelength 647,750 --marker-names SMA,MSLN
+```
+
+**Manual indices still work** (e.g. `--channel 2`) but require `czi_info.py` verification first.
+
+---
+
 ## Step 1 -- Import CZI
 
 The pipeline reads Zeiss CZI files via `aicspylibczi`. By default, the entire
-slide is loaded into RAM (`--load-to-ram`, which is ON by default) for fast
-tile access, especially important on network mounts.
+slide is loaded directly to shared memory (`--load-to-ram`, ON by default) for
+fast tile access with no RAM intermediate — especially important on network mounts.
 
 **Key metadata is always read from the CZI file itself:**
 - `pixel_size_um` -- physical pixel size in microns (never hardcoded)
 - Channel names and fluorophore wavelengths
 - Mosaic bounding box (global coordinate origin)
 - Scene count (for multi-scene slides, select with `--scene N`)
-
-```bash
-# Inspect a slide without processing
-python run_segmentation.py --czi-path /path/to/slide.czi --show-metadata
-```
 
 ### Image Preprocessing (all optional)
 
