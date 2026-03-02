@@ -2,7 +2,7 @@
 
 After deduplication the surviving detections go through three phases:
 
-**Phase 1 — Contour dilation + quick means** (per-tile):
+**Phase 1 — Contour dilation + quick means** (per-tile, parallelized):
     Extract contour from HDF5 mask, dilate + RDP, compute quick mean
     intensity per channel from the dilated mask region.
 
@@ -10,17 +10,20 @@ After deduplication the surviving detections go through three phases:
     Build KD-tree from global cell positions and the quick means,
     estimate per-cell local background for each channel.
 
-**Phase 3 — Feature extraction on corrected pixels** (per-tile):
+**Phase 3 — Feature extraction on corrected pixels** (per-tile, parallelized):
     Subtract per-cell background from the pixel data within each
     detection's dilated mask, *then* extract all features (morph +
     per-channel intensity) from the corrected pixels.  This ensures
     every feature — including std, percentiles, etc. — reflects the
     background-corrected signal.
 
-The two tile passes both read from shared memory (essentially free) or
-the CZI loader (acceptable cost on resume).
+Phases 1 and 3 are parallelized with ThreadPoolExecutor (auto-detects CPU
+count from SLURM_CPUS_PER_TASK or os.cpu_count()).  Thread-safety: SHM is
+read-only, HDF5 reads are independent per-tile, per-detection mutations are
+on unique objects, and NumPy/cv2 release the GIL.
 """
 
+import os
 import cv2
 import numpy as np
 import h5py
@@ -41,6 +44,15 @@ logger = get_logger(__name__)
 
 # Re-use a singleton mixin instance for channel stats extraction
 _channel_mixin = MultiChannelFeatureMixin()
+
+# Thread pool sizing: SLURM_CPUS_PER_TASK or os.cpu_count(), capped at 32
+# Thread-safety: MultiChannelFeatureMixin has NO instance state — all methods
+# are pure functions.  If instance state is ever added, this singleton must be
+# replaced with per-thread instances or a lock.
+try:
+    _MAX_WORKERS = min(int(os.environ.get('SLURM_CPUS_PER_TASK', '')), 32)
+except (ValueError, TypeError):
+    _MAX_WORKERS = min(os.cpu_count() or 4, 32)
 
 
 # ---------------------------------------------------------------------------
@@ -229,6 +241,227 @@ def _parse_tile_key(tile_key: str) -> tuple[int, int]:
 
 
 # ---------------------------------------------------------------------------
+# Per-tile worker functions (for ThreadPoolExecutor)
+# ---------------------------------------------------------------------------
+
+def _phase1_tile(
+    tile_key: str,
+    tile_dets: list[dict],
+    tiles_dir,
+    mask_filename: str,
+    use_shm: bool,
+    slide_shm_arr,
+    ch_to_slot,
+    x_start: int,
+    y_start: int,
+    loader,
+    ch_indices: list[int],
+    tile_size: int,
+    has_data_source: bool,
+    contour_processing: bool,
+    dilation_px: float,
+    rdp_epsilon: float,
+    pixel_size_um: float,
+) -> tuple[int, int]:
+    """Process one tile for Phase 1 (contour dilation + quick means).
+
+    Returns ``(n_ok, n_fail)``.
+    """
+    import hdf5plugin  # noqa: F401 — register LZ4 codec
+
+    tile_x, tile_y = _parse_tile_key(tile_key)
+    tile_name = f"tile_{tile_x}_{tile_y}"
+    n_ok = 0
+    n_fail = 0
+
+    mask_path = tiles_dir / tile_name / mask_filename
+    if not mask_path.exists():
+        return 0, len(tile_dets)
+
+    with h5py.File(mask_path, "r") as hf:
+        masks_arr = hf["masks"][:]
+    tile_h, tile_w = masks_arr.shape[:2]
+
+    tile_channels: dict[int, np.ndarray] = {}
+    if has_data_source:
+        tile_channels = _load_tile_channels(
+            use_shm, slide_shm_arr, ch_to_slot, tile_x, tile_y,
+            tile_h, tile_w, x_start, y_start, loader, ch_indices, tile_size,
+        )
+
+    for det in tile_dets:
+        label = det.get("mask_label")
+        if label is None:
+            n_fail += 1
+            continue
+
+        contour_local = _contour_from_mask(masks_arr, label)
+        if contour_local is None:
+            n_fail += 1
+            continue
+
+        if contour_processing and dilation_px > 0:
+            dilated_contour, dilated_mask = _dilated_mask_from_contour(
+                contour_local, tile_h, tile_w, dilation_px,
+            )
+            if dilated_contour is None:
+                dilated_mask = (masks_arr == label).astype(bool)
+                dilated_contour = rdp_simplify(contour_local.astype(np.float32), rdp_epsilon)
+            else:
+                dilated_contour = rdp_simplify(dilated_contour.astype(np.float32), rdp_epsilon)
+            n_ok += 1
+
+            origin = det.get("tile_origin", [0, 0])
+            contour_global = dilated_contour.copy()
+            contour_global[:, 0] += origin[0]
+            contour_global[:, 1] += origin[1]
+            det["contour_dilated_px"] = contour_global.tolist()
+            det["contour_dilated_um"] = (contour_global * pixel_size_um).tolist()
+        else:
+            dilated_mask = (masks_arr == label).astype(bool)
+            n_ok += 1
+
+        quick_means = {}
+        if tile_channels and dilated_mask.any():
+            for ch, data in tile_channels.items():
+                pixels = data[dilated_mask].astype(np.float32)
+                nonzero = pixels[pixels > 0]
+                quick_means[ch] = float(np.mean(nonzero)) if len(nonzero) > 0 else 0.0
+        det["_bg_quick_means"] = quick_means
+
+    return n_ok, n_fail
+
+
+def _phase3_tile(
+    tile_key: str,
+    tile_dets: list[dict],
+    tiles_dir,
+    mask_filename: str,
+    use_shm: bool,
+    slide_shm_arr,
+    ch_to_slot,
+    x_start: int,
+    y_start: int,
+    loader,
+    ch_indices: list[int],
+    tile_size: int,
+    has_data_source: bool,
+    per_cell_bg: dict[int, dict[int, float]],
+    display_channels: list[int] | None,
+    pixel_size_um: float,
+) -> tuple[int, int]:
+    """Process one tile for Phase 3 (feature extraction on corrected pixels).
+
+    Returns ``(n_ok, n_fail)``.
+    """
+    import hdf5plugin  # noqa: F401
+
+    tile_x, tile_y = _parse_tile_key(tile_key)
+    tile_name = f"tile_{tile_x}_{tile_y}"
+    n_ok = 0
+    n_fail = 0
+
+    mask_path = tiles_dir / tile_name / mask_filename
+    if not mask_path.exists():
+        return 0, len(tile_dets)
+
+    with h5py.File(mask_path, "r") as hf:
+        masks_arr = hf["masks"][:]
+    tile_h, tile_w = masks_arr.shape[:2]
+
+    if not has_data_source:
+        return 0, len(tile_dets)
+
+    tile_channels = _load_tile_channels(
+        use_shm, slide_shm_arr, ch_to_slot, tile_x, tile_y,
+        tile_h, tile_w, x_start, y_start, loader, ch_indices, tile_size,
+    )
+    if not tile_channels:
+        return 0, len(tile_dets)
+
+    tile_rgb = _tile_rgb_from_channels(tile_channels, display_channels)
+    valid = np.max(tile_rgb, axis=2) > 0
+    tile_global_mean = float(np.mean(tile_rgb[valid])) if valid.any() else 0.0
+
+    for det in tile_dets:
+        det_idx = det["_postdedup_idx"]
+        label = det.get("mask_label")
+        if label is None:
+            n_fail += 1
+            continue
+
+        if det.get("contour_dilated_px") is not None:
+            contour_global = np.array(det["contour_dilated_px"])
+            origin = det.get("tile_origin", [0, 0])
+            contour_local = contour_global.copy()
+            contour_local[:, 0] -= origin[0]
+            contour_local[:, 1] -= origin[1]
+            dilated_mask = _rasterize_contour(contour_local, tile_h, tile_w)
+        else:
+            dilated_mask = (masks_arr == label).astype(bool)
+
+        if not dilated_mask.any():
+            n_fail += 1
+            continue
+
+        rows = np.where(dilated_mask.any(axis=1))[0]
+        cols = np.where(dilated_mask.any(axis=0))[0]
+        r0, r1 = rows[0], rows[-1] + 1
+        c0, c1 = cols[0], cols[-1] + 1
+        crop_mask = dilated_mask[r0:r1, c0:c1]
+
+        bg = per_cell_bg.get(det_idx, {})
+        feat = det.setdefault("features", {})
+        has_bg = bool(bg)
+
+        raw_crops: dict[int, np.ndarray] = {}
+        for ch, data in tile_channels.items():
+            raw_crops[ch] = data[r0:r1, c0:c1].astype(np.float32)
+
+        if has_bg:
+            raw_feats = _extract_intensity_features(crop_mask, raw_crops)
+            for k, v in raw_feats.items():
+                if "_ratio" not in k and "_diff" not in k and "_specificity" not in k:
+                    feat[f"{k}_raw"] = v
+
+        if has_bg:
+            corrected_crops: dict[int, np.ndarray] = {}
+            for ch, crop in raw_crops.items():
+                ch_bg = bg.get(ch, 0.0)
+                if ch_bg > 0:
+                    corrected = crop.copy()
+                    corrected[crop_mask] = np.maximum(corrected[crop_mask] - ch_bg, 0.0)
+                    corrected_crops[ch] = corrected
+                else:
+                    corrected_crops[ch] = crop
+            intensity_feats = _extract_intensity_features(
+                crop_mask, corrected_crops, include_zeros=True,
+            )
+        else:
+            intensity_feats = _extract_intensity_features(crop_mask, raw_crops)
+
+        feat.update(intensity_feats)
+
+        for ch in tile_channels:
+            ch_bg = bg.get(ch, 0.0)
+            if ch_bg > 0:
+                raw_mean = feat.get(f"ch{ch}_mean_raw", 0.0)
+                feat[f"ch{ch}_background"] = ch_bg
+                feat[f"ch{ch}_snr"] = float(raw_mean / ch_bg) if ch_bg > 0 else 0.0
+
+        crop_rgb = tile_rgb[r0:r1, c0:c1]
+        morph_feats = _extract_morph_features(crop_mask, crop_rgb, tile_global_mean)
+        if morph_feats:
+            for k, v in morph_feats.items():
+                feat[k] = v
+            feat["area_um2"] = float(morph_feats.get("area", 0) * pixel_size_um ** 2)
+
+        n_ok += 1
+
+    return n_ok, n_fail
+
+
+# ---------------------------------------------------------------------------
 # Public API
 # ---------------------------------------------------------------------------
 
@@ -311,6 +544,12 @@ def process_detections_post_dedup(
     if not use_shm and loader is not None and not _ch_indices:
         logger.warning("Loader provided but no ch_indices — feature re-extraction will be skipped")
 
+    # CZI loader read_mosaic is NOT thread-safe — cap workers to 1 when using loader fallback
+    effective_workers = _MAX_WORKERS
+    if not use_shm and loader is not None:
+        effective_workers = 1
+        logger.info("CZI loader path is not thread-safe — using single-threaded post-dedup")
+
     dilation_px = dilation_um / pixel_size_um if contour_processing else 0.0
 
     logger.info("=" * 50)
@@ -346,89 +585,35 @@ def process_detections_post_dedup(
     n_features_fail = 0
 
     # ==================================================================
-    # PHASE 1: Contour dilation + quick mean extraction
+    # PHASE 1: Contour dilation + quick mean extraction (parallelized)
     # ==================================================================
     logger.info("-" * 40)
-    logger.info("Phase 1: Contour dilation + quick mean extraction")
+    logger.info("Phase 1: Contour dilation + quick mean extraction (%d workers)", effective_workers)
 
-    for tile_idx, (tile_key, tile_dets) in enumerate(by_tile.items()):
-        tile_x, tile_y = _parse_tile_key(tile_key)
-        tile_name = f"tile_{tile_x}_{tile_y}"
+    from concurrent.futures import ThreadPoolExecutor, as_completed
+    from tqdm import tqdm as _tqdm
 
-        if (tile_idx + 1) % 50 == 0 or tile_idx == 0:
-            logger.info(
-                "  [P1] Tile %d/%d (%s, %d detections)",
-                tile_idx + 1, n_tiles, tile_name, len(tile_dets),
-            )
-
-        # Load masks from HDF5
-        mask_path = tiles_dir / tile_name / mask_filename
-        if not mask_path.exists():
-            logger.warning("Mask file not found: %s — skipping %d detections", mask_path, len(tile_dets))
-            n_contour_fail += len(tile_dets)
-            continue
-
-        with h5py.File(mask_path, "r") as hf:
-            masks_arr = hf["masks"][:]
-        tile_h, tile_w = masks_arr.shape[:2]
-
-        # Load tile channels for quick means
-        tile_channels: dict[int, np.ndarray] = {}
-        if has_data_source:
-            tile_channels = _load_tile_channels(
-                use_shm, slide_shm_arr, ch_to_slot, tile_x, tile_y,
-                tile_h, tile_w, x_start, y_start, loader, _ch_indices, tile_size,
-            )
-
-        # Process each detection
-        for det in tile_dets:
-            label = det.get("mask_label")
-            if label is None:
-                n_contour_fail += 1
-                continue
-
-            # Extract contour from original mask
-            contour_local = _contour_from_mask(masks_arr, label)
-            if contour_local is None:
-                n_contour_fail += 1
-                continue
-
-            # Dilate contour (or use original)
-            if contour_processing and dilation_px > 0:
-                dilated_contour, dilated_mask = _dilated_mask_from_contour(
-                    contour_local, tile_h, tile_w, dilation_px,
-                )
-                if dilated_contour is None:
-                    dilated_mask = (masks_arr == label).astype(bool)
-                    dilated_contour = rdp_simplify(contour_local.astype(np.float32), rdp_epsilon)
-                else:
-                    dilated_contour = rdp_simplify(dilated_contour.astype(np.float32), rdp_epsilon)
-                n_contour_ok += 1
-
-                # Store dilated contour (global coordinates)
-                origin = det.get("tile_origin", [0, 0])
-                contour_global = dilated_contour.copy()
-                contour_global[:, 0] += origin[0]
-                contour_global[:, 1] += origin[1]
-                det["contour_dilated_px"] = contour_global.tolist()
-                det["contour_dilated_um"] = (contour_global * pixel_size_um).tolist()
-            else:
-                dilated_mask = (masks_arr == label).astype(bool)
-                n_contour_ok += 1
-
-            # Quick mean per channel (for background estimation)
-            # Exclude zero pixels — CZI tiles have zero-padding at boundaries
-            quick_means = {}
-            if tile_channels and dilated_mask.any():
-                for ch, data in tile_channels.items():
-                    pixels = data[dilated_mask].astype(np.float32)
-                    nonzero = pixels[pixels > 0]
-                    quick_means[ch] = float(np.mean(nonzero)) if len(nonzero) > 0 else 0.0
-            det["_bg_quick_means"] = quick_means
-
-        del masks_arr
-        if tile_channels:
-            del tile_channels
+    with ThreadPoolExecutor(max_workers=effective_workers) as pool:
+        futures = {
+            pool.submit(
+                _phase1_tile, k, v, tiles_dir, mask_filename,
+                use_shm, slide_shm_arr, ch_to_slot, x_start, y_start,
+                loader, _ch_indices, tile_size, has_data_source,
+                contour_processing, dilation_px, rdp_epsilon, pixel_size_um,
+            ): k
+            for k, v in by_tile.items()
+        }
+        with _tqdm(total=len(futures), desc="Phase 1") as pbar:
+            for f in as_completed(futures):
+                tile_key = futures[f]
+                try:
+                    ok, fail = f.result()
+                    n_contour_ok += ok
+                    n_contour_fail += fail
+                except Exception:
+                    logger.error("Phase 1 failed for tile %s", tile_key, exc_info=True)
+                    n_contour_fail += len(by_tile[tile_key])
+                pbar.update(1)
 
     logger.info("  Phase 1 complete: %d contours ok, %d failed", n_contour_ok, n_contour_fail)
 
@@ -468,143 +653,32 @@ def process_detections_post_dedup(
         logger.info("Phase 2: Background correction disabled or no data source — skipping")
 
     # ==================================================================
-    # PHASE 3: Feature extraction on background-corrected pixels
+    # PHASE 3: Feature extraction on background-corrected pixels (parallelized)
     # ==================================================================
     logger.info("-" * 40)
-    logger.info("Phase 3: Feature extraction on corrected pixels")
+    logger.info("Phase 3: Feature extraction on corrected pixels (%d workers)", effective_workers)
 
-    # No id()-based lookup needed — each detection carries _postdedup_idx
-
-    for tile_idx, (tile_key, tile_dets) in enumerate(by_tile.items()):
-        tile_x, tile_y = _parse_tile_key(tile_key)
-        tile_name = f"tile_{tile_x}_{tile_y}"
-
-        if (tile_idx + 1) % 50 == 0 or tile_idx == 0:
-            logger.info(
-                "  [P3] Tile %d/%d (%s, %d detections)",
-                tile_idx + 1, n_tiles, tile_name, len(tile_dets),
-            )
-
-        # Need HDF5 masks for non-dilation fallback
-        mask_path = tiles_dir / tile_name / mask_filename
-        if not mask_path.exists():
-            n_features_fail += len(tile_dets)
-            continue
-
-        with h5py.File(mask_path, "r") as hf:
-            masks_arr = hf["masks"][:]
-        tile_h, tile_w = masks_arr.shape[:2]
-
-        # Load tile channels
-        if not has_data_source:
-            n_features_fail += len(tile_dets)
-            del masks_arr
-            continue
-
-        tile_channels = _load_tile_channels(
-            use_shm, slide_shm_arr, ch_to_slot, tile_x, tile_y,
-            tile_h, tile_w, x_start, y_start, loader, _ch_indices, tile_size,
-        )
-        if not tile_channels:
-            n_features_fail += len(tile_dets)
-            del masks_arr
-            continue
-
-        # Build RGB tile for morph features (uncorrected — shape features unaffected)
-        tile_rgb = _tile_rgb_from_channels(tile_channels, display_channels)
-        valid = np.max(tile_rgb, axis=2) > 0
-        tile_global_mean = float(np.mean(tile_rgb[valid])) if valid.any() else 0.0
-
-        # Process each detection
-        for det in tile_dets:
-            det_idx = det["_postdedup_idx"]
-            label = det.get("mask_label")
-            if label is None:
-                n_features_fail += 1
-                continue
-
-            # Reconstruct dilated mask
-            if det.get("contour_dilated_px") is not None:
-                # Rasterize from stored contour (convert global → local)
-                contour_global = np.array(det["contour_dilated_px"])
-                origin = det.get("tile_origin", [0, 0])
-                contour_local = contour_global.copy()
-                contour_local[:, 0] -= origin[0]
-                contour_local[:, 1] -= origin[1]
-                dilated_mask = _rasterize_contour(contour_local, tile_h, tile_w)
-            else:
-                dilated_mask = (masks_arr == label).astype(bool)
-
-            if not dilated_mask.any():
-                n_features_fail += 1
-                continue
-
-            # Get bounding box for efficient crop-based correction
-            rows = np.where(dilated_mask.any(axis=1))[0]
-            cols = np.where(dilated_mask.any(axis=0))[0]
-            r0, r1 = rows[0], rows[-1] + 1
-            c0, c1 = cols[0], cols[-1] + 1
-            crop_mask = dilated_mask[r0:r1, c0:c1]
-
-            bg = per_cell_bg.get(det_idx, {})
-            feat = det.setdefault("features", {})
-            has_bg = bool(bg)
-
-            # --- Raw intensity features (uncorrected) ---
-            raw_crops: dict[int, np.ndarray] = {}
-            for ch, data in tile_channels.items():
-                raw_crops[ch] = data[r0:r1, c0:c1].astype(np.float32)
-
-            if has_bg:
-                # Extract uncorrected features and store intensity stats as _raw.
-                # Only per-channel intensity keys (ch{N}_{suffix}) — not ratios
-                # or diffs which are derived and would add noise.
-                raw_feats = _extract_intensity_features(crop_mask, raw_crops)
-                for k, v in raw_feats.items():
-                    # Store e.g. ch0_mean_raw, ch0_p95_raw — skip ch0_ch1_ratio etc.
-                    if "_ratio" not in k and "_diff" not in k and "_specificity" not in k:
-                        feat[f"{k}_raw"] = v
-
-            # --- Background-corrected intensity features ---
-            if has_bg:
-                corrected_crops: dict[int, np.ndarray] = {}
-                for ch, crop in raw_crops.items():
-                    ch_bg = bg.get(ch, 0.0)
-                    if ch_bg > 0:
-                        corrected = crop.copy()
-                        corrected[crop_mask] = np.maximum(corrected[crop_mask] - ch_bg, 0.0)
-                        corrected_crops[ch] = corrected
-                    else:
-                        corrected_crops[ch] = crop
-                # Corrected: include zeros (real signal after subtraction)
-                intensity_feats = _extract_intensity_features(
-                    crop_mask, corrected_crops, include_zeros=True,
-                )
-            else:
-                # No bg correction — extract from raw
-                intensity_feats = _extract_intensity_features(crop_mask, raw_crops)
-
-            feat.update(intensity_feats)
-
-            # Background metadata
-            for ch in tile_channels:
-                ch_bg = bg.get(ch, 0.0)
-                if ch_bg > 0:
-                    raw_mean = feat.get(f"ch{ch}_mean_raw", 0.0)
-                    feat[f"ch{ch}_background"] = ch_bg
-                    feat[f"ch{ch}_snr"] = float(raw_mean / ch_bg) if ch_bg > 0 else 0.0
-
-            # --- Morphological features from uncorrected RGB crop ---
-            crop_rgb = tile_rgb[r0:r1, c0:c1]
-            morph_feats = _extract_morph_features(crop_mask, crop_rgb, tile_global_mean)
-            if morph_feats:
-                for k, v in morph_feats.items():
-                    feat[k] = v
-                feat["area_um2"] = float(morph_feats.get("area", 0) * pixel_size_um ** 2)
-
-            n_features_ok += 1
-
-        del masks_arr, tile_channels, tile_rgb
+    with ThreadPoolExecutor(max_workers=effective_workers) as pool:
+        futures = {
+            pool.submit(
+                _phase3_tile, k, v, tiles_dir, mask_filename,
+                use_shm, slide_shm_arr, ch_to_slot, x_start, y_start,
+                loader, _ch_indices, tile_size, has_data_source,
+                per_cell_bg, display_channels, pixel_size_um,
+            ): k
+            for k, v in by_tile.items()
+        }
+        with _tqdm(total=len(futures), desc="Phase 3") as pbar:
+            for f in as_completed(futures):
+                tile_key = futures[f]
+                try:
+                    ok, fail = f.result()
+                    n_features_ok += ok
+                    n_features_fail += fail
+                except Exception:
+                    logger.error("Phase 3 failed for tile %s", tile_key, exc_info=True)
+                    n_features_fail += len(by_tile[tile_key])
+                pbar.update(1)
 
     # --- Cleanup temporary keys ---
     for det in detections:

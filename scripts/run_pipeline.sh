@@ -91,6 +91,7 @@ print(','.join(pairs))
 " "$CONFIG" || echo "")
 CORRECT_ALL_CHANNELS=$(read_yaml correct_all_channels false)
 SAMPLE_FRACTION=$(read_yaml sample_fraction "")
+HTML_SAMPLE_FRACTION=$(read_yaml html_sample_fraction "")
 
 # Post-dedup processing (contour dilation + background correction)
 BACKGROUND_CORRECTION=$(read_yaml background_correction true)
@@ -219,6 +220,9 @@ build_seg_cmd() {
     fi
     if [[ -n "$BG_NEIGHBORS" ]]; then
         cmd+=" --bg-neighbors $BG_NEIGHBORS"
+    fi
+    if [[ -n "$HTML_SAMPLE_FRACTION" ]]; then
+        cmd+=" --html-sample-fraction $HTML_SAMPLE_FRACTION"
     fi
     echo "$cmd"
 }

@@ -312,9 +312,13 @@ def build_parser():
 
     # HTML export
     parser.add_argument('--samples-per-page', type=int, default=300)
-    parser.add_argument('--max-html-samples', type=int, default=0,
-                        help='Maximum HTML samples to keep in memory (0=unlimited). '
-                             'For full runs with 500K+ cells, set to e.g. 5000 to avoid OOM from base64 crop accumulation.')
+    parser.add_argument('--max-html-samples', type=int, default=20000,
+                        help='Maximum HTML samples to keep in memory during per-tile accumulation (default: 20000). '
+                             'Hard OOM safety cap. Set to 0 for unlimited.')
+    parser.add_argument('--html-sample-fraction', type=float, default=0,
+                        help='After detection, subsample HTML samples to this fraction of total detections '
+                             '(e.g. 0.10 = 10%%). Applied after dedup, before HTML export. '
+                             '0 = no subsampling (keep all, subject to --max-html-samples cap).')
 
     # Server options
     parser.add_argument('--serve', action='store_true', default=False,
@@ -364,6 +368,8 @@ def postprocess_args(args, parser):
         parser.error("--tile-overlap must be between 0.0 and 0.5")
     if args.sample_fraction <= 0 or args.sample_fraction > 1.0:
         parser.error("--sample-fraction must be in (0.0, 1.0]")
+    if getattr(args, 'html_sample_fraction', 0) < 0 or getattr(args, 'html_sample_fraction', 0) > 1.0:
+        parser.error("--html-sample-fraction must be between 0.0 and 1.0")
 
     # Resolve --channel-spec (wavelength/name-based channel selection)
     if getattr(args, 'channel_spec', None) and args.czi_path:

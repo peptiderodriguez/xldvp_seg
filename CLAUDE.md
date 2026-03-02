@@ -79,9 +79,11 @@ python run_segmentation.py \
 
 ### Performance Options
 ```bash
---load-to-ram       # Load all channels into RAM (default, faster for network mounts)
+--load-to-ram       # [Default] Direct-to-SHM loading (channels loaded from CZI directly into shared memory)
 --num-gpus 4        # Number of GPUs (always multi-GPU, even with 1)
 --num-gpus 1        # Single GPU — safer memory usage for large slides
+--html-sample-fraction 0.10  # Subsample HTML to 10% of detections (saves RAM on large slides)
+--max-html-samples 20000     # Hard OOM cap during per-tile accumulation (default: 20000)
 ```
 
 ### Post-Dedup Processing Options
@@ -92,6 +94,8 @@ python run_segmentation.py \
 --no-background-correction  # Skip local background subtraction (default ON)
 --bg-neighbors 30           # KD-tree neighbors for background (default: 30)
 ```
+
+Post-dedup phases 1 and 3 are parallelized with ThreadPoolExecutor (auto-detects CPU count).
 
 ### Multi-Node Sharding
 ```bash
@@ -117,34 +121,36 @@ python -m http.server 8080 --directory /home/dude/mk_output/project/html
 
 ## NMJ Pipeline (Detect Once, Classify Later)
 
-1. Import full CZI into RAM (`--load-to-ram`, default)
-2. Tile with 10% overlap (`--tile-overlap 0.10`)
-3. Detect 100% of tiles (or multi-node with `--tile-shard`)
-4. Segment: 98th percentile intensity threshold + morphology + watershed
-5. Initial feature extraction: morph + SAM2 (always), ResNet + DINOv2 (opt-in `--extract-deep-features`)
-6. Deduplicate overlapping masks (>10% pixel overlap) — or `--merge-shards` for multi-node
-7. **Post-dedup processing** (default ON, runs in main pipeline):
+1. Load CZI channels directly into shared memory (no RAM intermediate, `--load-to-ram` default)
+2. Preprocessing on SHM views (flat-field, photobleach correction)
+3. Tile with 10% overlap (`--tile-overlap 0.10`)
+4. Detect 100% of tiles (or multi-node with `--tile-shard`)
+5. Segment: 98th percentile intensity threshold + morphology + watershed
+6. Initial feature extraction: morph + SAM2 (always), ResNet + DINOv2 (opt-in `--extract-deep-features`)
+7. HTML crops cached to disk per-tile (fast resume — `{tile_dir}/{celltype}_html_samples.json`)
+8. Deduplicate overlapping masks (>10% pixel overlap) — or `--merge-shards` for multi-node
+9. **Post-dedup processing** (default ON, parallelized with ThreadPoolExecutor):
    - Phase 1: Dilate contours +0.5 um (`--dilation-um`), RDP simplify (`--rdp-epsilon 5`), extract quick means
    - Phase 2: Local background estimation (KD-tree, k=30 global neighbors, `--bg-neighbors`)
    - Phase 3: Subtract per-cell background from pixels, then extract all features on corrected data
    - Disable with `--no-contour-processing` / `--no-background-correction`
-8. Generate annotation HTML (subsample 1500 via `scripts/regenerate_html.py --max-samples 1500`)
-9. Train RF classifier with annotations (`train_classifier.py`, balanced classes)
-10. Score ALL detections: `scripts/apply_classifier.py` (CPU, seconds — no re-detection)
-11. Generate filtered HTML: `scripts/regenerate_html.py --score-threshold 0.5`
-12. Two-stage clustering: Round 1 = 500 um, Round 2 = 1000 um, target 375-425 um²
-13. Unclustered = singles
-14. Controls: 100 um offset, 8 directions, cluster controls preserve arrangement
-15. Napari visualization (4 colors: singles/controls/clusters/cluster-controls)
-16. 384-well plate serpentine B2 → B3 → C3 → C2 (max 308 wells)
-17. OME-Zarr pyramid for Napari viewing
-18. XML export with reference crosses
+10. Generate annotation HTML (subsample via `--html-sample-fraction 0.10` or `scripts/regenerate_html.py --max-samples 1500`)
+11. Train RF classifier with annotations (`train_classifier.py`, balanced classes)
+12. Score ALL detections: `scripts/apply_classifier.py` (CPU, seconds — no re-detection)
+13. Generate filtered HTML: `scripts/regenerate_html.py --score-threshold 0.5`
+14. Two-stage clustering: Round 1 = 500 um, Round 2 = 1000 um, target 375-425 um²
+15. Unclustered = singles
+16. Controls: 100 um offset, 8 directions, cluster controls preserve arrangement
+17. Napari visualization (4 colors: singles/controls/clusters/cluster-controls)
+18. 384-well plate serpentine B2 → B3 → C3 → C2 (max 308 wells)
+19. OME-Zarr pyramid for Napari viewing
+20. XML export with reference crosses
 
 ### Pipeline Checkpoints (resume with `--resume`)
 
 | Stage | Checkpoint file | What's saved |
 |-------|----------------|--------------|
-| Detection | Per-tile dirs (`tile_X_Y/`) | Masks (HDF5) + per-tile detections (JSON) |
+| Detection | Per-tile dirs (`tile_X_Y/`) | Masks (HDF5) + per-tile detections (JSON) + HTML cache |
 | Merge shards | `{celltype}_detections_merged.json` | All shard detections concatenated |
 | Dedup | `{celltype}_detections.json` | Deduplicated detections (merge-shards only) |
 | Post-dedup | `{celltype}_detections_postdedup.json` | Contours + features + bg correction |
@@ -190,6 +196,14 @@ contour_processing: true       # default ON — dilate + RDP contours
 dilation_um: 0.5               # contour dilation in micrometers
 rdp_epsilon: 5                 # RDP simplification epsilon in pixels
 bg_neighbors: 30               # KD-tree neighbor count
+html_sample_fraction: 0.10     # subsample HTML to 10% of detections (saves RAM)
+```
+
+**SLURM recommended defaults:**
+```yaml
+slurm:
+  slides_per_job: 1    # 1 slide per SLURM task (better cluster scheduling)
+  num_jobs: 24          # one job per slide
 ```
 
 **NMJ example (3-channel):**

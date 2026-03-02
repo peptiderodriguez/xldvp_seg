@@ -144,21 +144,40 @@ def _resume_generate_html_samples(args, all_detections, tiles_dir,
             logger.info(f"Islet marker classification (resume): {counts}")
 
     # Sample if max_html_samples set
-    _max_html = getattr(args, 'max_html_samples', 0)
+    _max_html = getattr(args, 'max_html_samples', 20000)
+    _use_cache = not getattr(args, 'force_html', False) and not getattr(args, 'force_detect', False)
 
-    # Process tiles
+    # Process tiles (sorted for deterministic ordering when capped)
     all_samples = []
+    n_cached = 0
+    n_cached_samples = 0
     try:
         import hdf5plugin  # noqa: F401
     except ImportError:
         pass
     from tqdm import tqdm as tqdm_progress
-    for tile_key, tile_dets in tqdm_progress(tile_groups.items(), desc="Resume HTML"):
+    for tile_key, tile_dets in tqdm_progress(sorted(tile_groups.items()), desc="Resume HTML"):
         # Check max_html cap BEFORE expensive I/O
         if _max_html > 0 and len(all_samples) >= _max_html:
+            logger.info(f"HTML sample cap reached ({_max_html}). "
+                        f"Use --max-html-samples 0 for unlimited.")
             break
 
         tile_dir = tiles_dir / tile_key
+
+        # Fast path: load cached HTML samples from previous run
+        if _use_cache:
+            cache_path = tile_dir / f"{cell_type}_html_samples.json"
+            if cache_path.exists():
+                try:
+                    cached = fast_json_load(cache_path)
+                    all_samples.extend(cached)
+                    n_cached += 1
+                    n_cached_samples += len(cached)
+                    continue  # skip expensive re-rendering
+                except Exception as e:
+                    logger.debug(f"Failed to load HTML cache {cache_path}: {e}, re-rendering")
+
         mask_file = tile_dir / f"{cell_type}_masks.h5"
 
         if not mask_file.exists():
@@ -242,5 +261,9 @@ def _resume_generate_html_samples(args, all_detections, tiles_dir,
 
         del masks, tile_rgb
         gc.collect()
+
+    if n_cached > 0:
+        logger.info(f"Loaded {n_cached_samples} cached HTML samples from {n_cached}/{len(tile_groups)} tiles, "
+                    f"{len(all_samples) - n_cached_samples} freshly rendered")
 
     return all_samples

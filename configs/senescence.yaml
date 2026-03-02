@@ -29,11 +29,13 @@ spatial_viewer:
   group_field: tdTomato_class
   title: "Senescence tdTomato Spatial Overview"
 
+html_sample_fraction: 0.10   # 10% of detections as HTML samples (saves RAM on large slides)
+
 slurm:
   partition: p.hpcl93
   cpus: 128
   mem_gb: 700
   gpus: "l40s:4"
   time: "3-00:00:00"
-  slides_per_job: 4
-  num_jobs: 6
+  slides_per_job: 1
+  num_jobs: 23

@@ -111,7 +111,10 @@ def run_pipeline(args):
 
     # Set random seed early -- ensures all multi-node shards get identical
     # tissue calibration and tile sampling (same tile list on every node)
-    np.random.seed(getattr(args, 'random_seed', 42))
+    import random as _random_mod
+    _seed = getattr(args, 'random_seed', 42)
+    np.random.seed(_seed)
+    _random_mod.seed(_seed)
 
     logger.info("=" * 60)
     logger.info("UNIFIED SEGMENTATION PIPELINE")
@@ -180,18 +183,16 @@ def run_pipeline(args):
             )
             return
 
-    # RAM-first architecture: Load CZI channel into RAM ONCE at pipeline start
-    # This eliminates repeated network I/O for files on network mounts
-    # Default is RAM loading for single slides (best performance on network mounts)
+    # Direct-to-SHM architecture: Load CZI channels directly into shared memory,
+    # bypassing RAM allocation. Eliminates the RAM→SHM copy step and reduces peak memory.
     if not args.load_to_ram:
-        logger.warning("--no-ram is deprecated and ignored. All data is loaded to RAM.")
+        logger.warning("--no-ram is deprecated and ignored. All data is loaded to shared memory.")
         args.load_to_ram = True
-    use_ram = True
 
-    logger.info("Loading CZI file with get_loader() (RAM-first architecture)...")
+    logger.info("Loading CZI metadata (direct-to-SHM architecture)...")
     loader = get_loader(
         czi_path,
-        load_to_ram=use_ram,
+        load_to_ram=False,  # metadata only — channels loaded directly to SHM below
         channel=args.channel,
         quiet=False,
         scene=args.scene
@@ -213,8 +214,6 @@ def run_pipeline(args):
     logger.info(f"  Mosaic: {mosaic_info['width']} x {mosaic_info['height']} px")
     logger.info(f"  Origin: ({mosaic_info['x']}, {mosaic_info['y']})")
     logger.info(f"  Pixel size: {pixel_size_um:.4f} um/px")
-    if use_ram:
-        logger.info(f"  Channel {args.channel} loaded to RAM")
 
     # Always log channel metadata so the log is self-documenting
     try:
@@ -242,47 +241,53 @@ def run_pipeline(args):
     except Exception as _e:
         logger.warning(f"  Could not read channel metadata: {_e}")
 
-    # Load additional channels if --all-channels specified (for NMJ specificity checking)
-    if loader.channel_data is None:
-        logger.error(f"Failed to load channel {args.channel} to RAM -- check CZI file integrity")
-        return
-    all_channel_data = {args.channel: loader.channel_data}  # Primary channel
-    if getattr(args, 'all_channels', False) and use_ram:
-        # Determine which channels to load
+    # Determine all channels to load
+    ch_list = [args.channel]
+    if getattr(args, 'all_channels', False):
         if getattr(args, 'channels', None):
             ch_list = [int(x.strip()) for x in args.channels.split(',')]
-            logger.info(f"Loading specified channels {ch_list} for multi-channel analysis...")
+            logger.info(f"Will load specified channels {ch_list} for multi-channel analysis...")
         else:
-            # Load all channels from CZI
             try:
                 dims = loader.reader.get_dims_shape()[0]
-                n_channels = dims.get('C', (0, 3))[1]  # Default to 3 channels
+                _n_ch = dims.get('C', (0, 3))[1]
             except Exception:
-                n_channels = 3  # Fallback
-            ch_list = list(range(n_channels))
-            logger.info(f"Loading all {len(ch_list)} channels for multi-channel analysis...")
-
-        for ch in ch_list:
-            if ch != args.channel:
-                logger.info(f"  Loading channel {ch}...")
-                ch_loader = get_loader(czi_path, load_to_ram=True, channel=ch, quiet=True, scene=args.scene)
-                all_channel_data[ch] = ch_loader.get_channel_data(ch)
-        logger.info(f"  Loaded channels: {sorted(all_channel_data.keys())}")
-
-    # Also load CD31 channel to RAM if specified (for vessel validation)
-    # Note: get_loader() with the same path returns the cached loader and just adds the new channel
+                _n_ch = 3
+            ch_list = list(range(_n_ch))
+            logger.info(f"Will load all {len(ch_list)} channels for multi-channel analysis...")
+    # Also include CD31 channel for vessel validation
     if args.cell_type == 'vessel' and args.cd31_channel is not None:
-        logger.info(f"Loading CD31 channel {args.cd31_channel} to RAM...")
-        # Use get_loader to add channel to the same cached loader instance
-        loader = get_loader(
-            czi_path,
-            load_to_ram=use_ram,
-            channel=args.cd31_channel,
-            quiet=False,
-            scene=args.scene
-        )
+        if args.cd31_channel not in ch_list:
+            ch_list.append(args.cd31_channel)
+    ch_list = sorted(set(ch_list))
 
-    # Apply slide-wide preprocessing (photobleach, flat-field, Reinhard)
+    # ---- Direct-to-SHM: create shared memory and load channels in one pass ----
+    from segmentation.processing.multigpu_shm import SharedSlideManager
+
+    shm_manager = SharedSlideManager()
+    h, w = loader.height, loader.width
+    n_ch_total = len(ch_list)
+    logger.info(f"Creating shared memory for {n_ch_total} channels ({h}x{w})...")
+    logger.info(f"  Channel list: {ch_list}")
+
+    slide_shm_arr = shm_manager.create_slide_buffer(
+        slide_name, (h, w, n_ch_total), np.uint16
+    )
+    ch_to_slot = {ch: i for i, ch in enumerate(ch_list)}
+
+    # Load each channel directly from CZI into SHM slot (no RAM intermediate)
+    for ch in ch_list:
+        slot = ch_to_slot[ch]
+        shm_view = slide_shm_arr[:, :, slot]
+        loader.load_to_shared_memory(ch, shm_view)
+        # Register the SHM view as the loader's channel data (for get_tile, tissue detection)
+        loader.set_channel_data(ch, shm_view)
+    logger.info(f"  All {n_ch_total} channels loaded directly to shared memory")
+
+    # Build all_channel_data as views into SHM (for preprocessing, resume HTML, etc.)
+    all_channel_data = {ch: slide_shm_arr[:, :, ch_to_slot[ch]] for ch in ch_list}
+
+    # Apply slide-wide preprocessing on SHM views (modifies data in-place)
     apply_slide_preprocessing(args, all_channel_data, loader)
 
     # Generate tile grid (using global coordinates)
@@ -561,7 +566,14 @@ def run_pipeline(args):
                     logger.info(f"  Loading channel {_ch} for post-dedup processing (resume)...")
                     loader.load_channel(_ch)
                     all_channel_data[_ch] = loader.get_channel_data(_ch)
-            _ch_indices = sorted(all_channel_data.keys())
+
+            # If extra channels were loaded outside SHM, fall back to loader
+            # (SHM reader only sees channels in ch_to_slot)
+            _extra_loaded = _needed_channels - set(ch_to_slot.keys())
+            _use_shm = not _extra_loaded
+            if _extra_loaded:
+                logger.info(f"  Extra channels {sorted(_extra_loaded)} loaded to RAM (not SHM). "
+                            f"Using loader fallback for post-dedup.")
 
             if _has_contour and not _has_bg:
                 logger.info("Contours already processed — running background correction only")
@@ -573,8 +585,12 @@ def run_pipeline(args):
                 tiles_dir,
                 pixel_size_um,
                 mask_filename=mask_fn,
+                slide_shm_arr=slide_shm_arr if _use_shm else None,
+                ch_to_slot=ch_to_slot if _use_shm else None,
+                x_start=x_start,
+                y_start=y_start,
                 loader=loader,
-                ch_indices=_ch_indices,
+                ch_indices=sorted(all_channel_data.keys()),
                 tile_size=args.tile_size,
                 display_channels=_display_chs,
                 contour_processing=_want_contour,
@@ -615,13 +631,25 @@ def run_pipeline(args):
             )
             logger.info(f"Generated {len(all_samples)} HTML samples from resume path")
 
+        # Subsample HTML by fraction if configured
+        _html_frac = getattr(args, 'html_sample_fraction', 0)
+        if _html_frac > 0 and len(all_samples) > 0 and len(all_detections) > 0:
+            import random
+            target = max(100, int(len(all_detections) * _html_frac))
+            if len(all_samples) > target:
+                logger.info(f"HTML sample fraction {_html_frac}: subsampling {len(all_samples)} -> {target}")
+                all_samples = random.sample(all_samples, target)
+
         # Run the same post-processing as the normal path (HTML export, CSV, summary)
-        _finish_pipeline(
-            args, all_detections, all_samples, slide_output_dir, tiles_dir,
-            pixel_size_um, slide_name, mosaic_info, run_timestamp, pct,
-            skip_html=skip_html, resumed=True,
-            all_tiles=all_tiles, tissue_tiles=tissue_tiles, sampled_tiles=sampled_tiles,
-        )
+        try:
+            _finish_pipeline(
+                args, all_detections, all_samples, slide_output_dir, tiles_dir,
+                pixel_size_um, slide_name, mosaic_info, run_timestamp, pct,
+                skip_html=skip_html, resumed=True,
+                all_tiles=all_tiles, tissue_tiles=tissue_tiles, sampled_tiles=sampled_tiles,
+            )
+        finally:
+            shm_manager.cleanup()
         return
 
     # ---- Normal path: full detection pipeline ----
@@ -653,46 +681,26 @@ def run_pipeline(args):
     deferred_html_tiles = []  # For islet: defer HTML until marker thresholds computed
     is_multiscale = args.cell_type == 'vessel' and getattr(args, 'multi_scale', False)
 
-    # ---- Shared memory creation (used by BOTH regular and multiscale paths) ----
+    # ---- SHM already populated (direct-to-SHM loading above) ----
     num_gpus = getattr(args, 'num_gpus', 1)
+    n_channels = len(ch_to_slot)
+    ch_keys = ch_list  # CZI channel indices in SHM slot order
 
-    if len(all_channel_data) < 2:
+    if n_channels < 2:
         logger.warning("Pipeline works best with --all-channels for multi-channel features")
 
-    from segmentation.processing.multigpu_shm import SharedSlideManager
     from segmentation.processing.multigpu_worker import MultiGPUTileProcessor
 
-    shm_manager = SharedSlideManager()
-
     try:
-        # Load ALL channels to shared memory (RGB display uses first 3, feature extraction needs all)
-        ch_keys = sorted(all_channel_data.keys())
-        n_channels = len(ch_keys)
-        h, w = all_channel_data[ch_keys[0]].shape
-        logger.info(f"Creating shared memory for {n_channels} channels ({h}x{w})...")
-        logger.info(f"  Channel mapping: {ch_keys}")
-
-        slide_shm_arr = shm_manager.create_slide_buffer(
-            slide_name, (h, w, n_channels), all_channel_data[ch_keys[0]].dtype
-        )
-        # Copy channels to SHM one at a time, freeing each immediately to avoid
-        # 2x peak memory (all_channel_data + SHM simultaneously).
-        mem_freed_gb = 0
-        for i, ch_key in enumerate(ch_keys):
-            slide_shm_arr[:, :, i] = all_channel_data[ch_key]
-            mem_freed_gb += all_channel_data[ch_key].nbytes / (1024**3)
-            del all_channel_data[ch_key]
-            logger.info(f"  Loaded channel {ch_key} to shared memory slot {i} (freed original)")
-        del all_channel_data
-        # Clear ALL loader channel data (not just primary) to free memory
+        # SHM is already created and populated from the direct-to-SHM loading above.
+        # Loader channel_data points to SHM views (set during loading).
+        # Clear loader references now — workers use SHM directly.
         if hasattr(loader, 'clear_all_channels'):
             loader.clear_all_channels()
         else:
             loader.channel_data = None
         gc.collect()
-        logger.info(f"Freed all channel data ({mem_freed_gb:.1f} GB) -- using shared memory for all reads")
-
-        ch_to_slot = {ch_key: i for i, ch_key in enumerate(ch_keys)}
+        logger.info(f"Shared memory ready: {n_channels} channels, {slide_shm_arr.nbytes / (1024**3):.1f} GB")
 
         # --- Islet marker calibration (pilot phase, using shared memory) ---
         islet_gmm_thresholds = {}
@@ -1205,9 +1213,12 @@ def run_pipeline(args):
                                 result['features_list'] = None
                                 gc.collect()
                             else:
-                                _max_html = getattr(args, 'max_html_samples', 0)
+                                _max_html = getattr(args, 'max_html_samples', 20000)
                                 if _max_html > 0 and len(all_samples) >= _max_html:
-                                    pass  # Skip HTML crop generation -- cap reached
+                                    if len(all_samples) == _max_html:
+                                        logger.info(f"HTML sample cap reached ({_max_html}). "
+                                                    f"Remaining tiles will not have HTML crops. "
+                                                    f"Use --max-html-samples 0 for unlimited.")
                                 else:
                                     html_samples = filter_and_create_html_samples(
                                         features_list, tile_x, tile_y, tile_rgb_html, masks,
@@ -1218,6 +1229,10 @@ def run_pipeline(args):
                                         vessel_params=params if args.cell_type == 'vessel' else None,
                                     )
                                     all_samples.extend(html_samples)
+                                    # Cache HTML samples to disk for fast resume
+                                    if html_samples:
+                                        _cache_path = tile_out / f'{args.cell_type}_html_samples.json'
+                                        atomic_json_dump(html_samples, _cache_path)
 
                         except Exception as e:
                             import traceback
@@ -1279,6 +1294,9 @@ def run_pipeline(args):
                                 vessel_params=params if args.cell_type == 'vessel' else None,
                             )
                             all_samples.extend(html_samples)
+                            # Cache HTML samples to disk for fast resume
+                            if html_samples:
+                                atomic_json_dump(html_samples, _td / f'{args.cell_type}_html_samples.json')
                             # Clean up deferred temp files
                             _npy_path = _td / 'tile_rgb_html.npy'
                             if _npy_path.exists():
@@ -1362,6 +1380,7 @@ def run_pipeline(args):
         if getattr(args, 'tile_shard', None):
             shard_idx, shard_total = args.tile_shard
             logger.info(f"Shard {shard_idx}/{shard_total} complete.")
+        shm_manager.cleanup()
         return
 
     # Deduplication: tile overlap causes same detection in adjacent tiles
@@ -1423,6 +1442,16 @@ def run_pipeline(args):
         _postdedup_file = slide_output_dir / f'{args.cell_type}_detections_postdedup.json'
         atomic_json_dump(all_detections, _postdedup_file)
         logger.info(f"Checkpoint: saved {len(all_detections)} post-dedup detections to {_postdedup_file.name}")
+
+    # ---- Subsample HTML samples by fraction (after dedup, before export) ----
+    _html_frac = getattr(args, 'html_sample_fraction', 0)
+    if _html_frac > 0 and len(all_samples) > 0 and len(all_detections) > 0:
+        import random
+        target = max(100, int(len(all_detections) * _html_frac))
+        if len(all_samples) > target:
+            logger.info(f"HTML sample fraction {_html_frac}: subsampling {len(all_samples)} -> {target} "
+                        f"({_html_frac*100:.0f}% of {len(all_detections)} detections)")
+            all_samples = random.sample(all_samples, target)
 
     # ---- Shared post-processing: CSV, JSON, HTML, summary, server ----
     try:

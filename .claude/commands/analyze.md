@@ -117,12 +117,15 @@ spatialdata:
   extract_shapes: true
   run_squidpy: false            # true to auto-run spatial stats
   squidpy_cluster_key: ""       # e.g., tdTomato_class (after marker classification)
+html_sample_fraction: 0.10    # subsample HTML to 10% of detections (saves RAM on large slides)
 slurm:
   partition: <from system_info recommended.partition>
   cpus: <from system_info recommended.cpus>
   mem_gb: <from system_info recommended.mem_gb>
   gpus: "<gpu_type>:<count>"
   time: "3-00:00:00"
+  slides_per_job: 1           # 1 slide per SLURM task (best cluster scheduling)
+  num_jobs: <number of slides>
 ```
 Then run: `scripts/run_pipeline.sh configs/<name>.yaml`
 
