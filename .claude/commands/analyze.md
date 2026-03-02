@@ -98,8 +98,8 @@ This replaces manual `--channel`, `--cellpose-input-channels`, and `--marker-cha
   - *Why?* Each channel adds ~15 intensity features per cell (mean, std, percentiles, SNR). Without `--all-channels`, marker expression is not captured in features and the RF classifier has no intensity signal to work with.
 - Deep features: `--extract-deep-features` adds ResNet+DINOv2 (6,144 dims). Off by default.
   - *Why off by default?* Morphological features alone reach F1=0.900 on the NMJ benchmark vs F1=0.909 with all 6,478 features. Deep features triple detection time and rarely change the result for typical slides. Use only if morph+SAM2 underperforms after annotation.
-- Sample fraction: `0.01` = quick sanity check (seconds), `0.10` = annotation round (see ~10% of all detections), `1.0` = full production run.
-  - *Why not 100% first?* Run 10% to annotate and train a classifier before committing hours to full detection — if the detector has a systematic flaw, you catch it cheaply.
+- Sample fraction: always `1.0` (the default) — detect 100% of tissue tiles. Use `0.01` only for a quick sanity-check that the pipeline runs correctly on a new slide.
+  - *Why always 100%?* Detection is checkpointed per-tile and the classifier is applied post-hoc — you never re-detect. Annotate from the HTML subsample (`html_sample_fraction: 0.10`) which shows 10% of *detections* in the browser, then train and score all detections without re-running anything.
 - Preprocessing flags: `--photobleaching-correction` for sequential tile scans with intensity decay. Flat-field is ON by default (`--no-normalize-features` to disable).
   - *Why flat-field on by default?* Tiled mosaic acquisitions almost always have uneven illumination (bright center, dark edges). Correcting this prevents false intensity gradients across the slide from affecting feature extraction.
   - *When to use photobleach correction?* Only if you see a visible intensity gradient across scan direction. Check with `/preview-preprocessing`.
@@ -193,7 +193,7 @@ PYTHONPATH=$REPO $MKSEG_PYTHON $REPO/run_segmentation.py \
 
 ## Phase 3: Annotation + Classification
 
-*Only needed if sample_fraction < 1.0 on first run, or if user wants to train a classifier.*
+*Only needed if the user wants to train a classifier. Detection already ran on 100% of tiles.*
 
 **Step 11 — Serve HTML results.** Run `$MKSEG_PYTHON $REPO/serve_html.py <output_dir>` to start the viewer. Show the Cloudflare tunnel URL.
 

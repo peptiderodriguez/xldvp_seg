@@ -192,15 +192,14 @@ optionally subsamples them:
    intensity histograms
 2. **Filtering** -- Score all tiles against the calibrated threshold, keep tiles
    with tissue above the detection threshold
-3. **Sampling** -- Randomly select `--sample-fraction` of tissue tiles for
-   processing (default 10%)
+3. **Sampling** -- Always process 100% of tissue tiles (`--sample-fraction 1.0` is the default). Use `--html-sample-fraction 0.10` to subsample the HTML viewer (not detection) when slides have 100k+ cells.
 
 ```bash
---sample-fraction 0.10     # Process 10% of tissue tiles (annotation runs)
---sample-fraction 1.0      # Process 100% of tissue tiles (production runs)
+--sample-fraction 1.0      # [Default] Process 100% of tissue tiles — always use this
 --skip-tissue-detection    # Process ALL tiles regardless of tissue content
 --calibration-samples 50   # Number of tiles for threshold calibration
 --random-seed 42           # Deterministic tile sampling
+--html-sample-fraction 0.10  # Show 10% of detections in HTML viewer (saves RAM on large slides)
 ```
 
 Tiles are generated with configurable overlap:
@@ -233,23 +232,18 @@ uses intensity thresholding, morphological filtering (low solidity = branched sh
 and watershed expansion.
 
 ```bash
-# 10% annotation run (shows ALL candidates for labeling)
+# Full detection run (100% of tiles — always the default)
 python run_segmentation.py \
     --czi-path /path/to/muscle.czi \
     --cell-type nmj \
-    --channel 1 \
-    --sample-fraction 0.10
-
-# 100% production run with trained RF classifier
-python run_segmentation.py \
-    --czi-path /path/to/muscle.czi \
-    --cell-type nmj \
-    --channel 1 \
-    --sample-fraction 1.0 \
+    --channel-spec "detect=BTX" \
     --all-channels \
-    --nmj-classifier /path/to/rf_classifier.pkl \
-    --prior-annotations /path/to/round1_annotations.json \
+    --html-sample-fraction 0.10 \
     --num-gpus 4
+
+# After annotating in HTML and training RF classifier:
+# Apply classifier to scored detections (no re-detection needed)
+# python scripts/apply_classifier.py --detections ... --classifier rf_classifier.pkl
 ```
 
 NMJ-specific parameters:
@@ -274,8 +268,7 @@ python run_segmentation.py \
     --cell-type mk \
     --channel 0 \
     --mk-min-area 200 \
-    --mk-max-area 2000 \
-    --sample-fraction 0.10
+    --mk-max-area 2000
 ```
 
 ### Cell (HSPC) Detection
@@ -286,8 +279,8 @@ Generic Cellpose + SAM2 pipeline for hematopoietic stem/progenitor cells.
 python run_segmentation.py \
     --czi-path /path/to/bonemarrow.czi \
     --cell-type cell \
-    --channel 0 \
-    --sample-fraction 0.10
+    --channel-spec "cyto=PM,nuc=488" \
+    --all-channels
 ```
 
 ### Vessel Detection
@@ -616,15 +609,15 @@ python scripts/regenerate_html.py \
 
 ### Multiple Rounds of Annotation
 
-The pipeline supports iterative refinement:
+The pipeline supports iterative refinement without re-detection:
 
-1. Run 10% annotation run (all candidates, no classifier)
-2. Annotate in HTML, export `annotations.json`
-3. Train RF classifier
-4. Apply classifier to 100% run
+1. Run **100% detection** (default) — detection is checkpointed per-tile
+2. Annotate in HTML viewer (`--html-sample-fraction 0.10` keeps browser fast), export `annotations.json`
+3. Train RF classifier: `python train_classifier.py`
+4. Apply classifier to all detections: `python scripts/apply_classifier.py` (CPU, seconds — no re-detection)
 5. Regenerate HTML with `--score-threshold 0.5` and `--prior-annotations round1.json`
 6. Review round-2, export more annotations
-7. Re-train with combined annotations
+7. Merge annotation rounds and re-train classifier
 
 ---
 

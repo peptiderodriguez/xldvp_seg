@@ -57,8 +57,7 @@ source ~/miniforge3/etc/profile.d/conda.sh && conda activate mkseg
 python run_segmentation.py \
     --czi-path /path/to/nuc488_BTX647_NFL750.czi \
     --cell-type nmj \
-    --channel-spec "detect=BTX" \
-    --sample-fraction 0.10
+    --channel-spec "detect=BTX"
 
 # Generic cell with 2-channel Cellpose — resolve by marker name
 python run_segmentation.py \

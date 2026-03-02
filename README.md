@@ -168,7 +168,7 @@ This generates an sbatch script with the right flags, submits to SLURM, and chai
 ## Best Practices
 
 - **Always use `--all-channels`** for multi-channel slides — enables per-channel feature extraction and cross-channel ratios
-- **Start with 10% sample** (`--sample-fraction 0.10`) for annotation, then run 100% for full detection
+- **Always run 100% detection** (default) — detection is checkpointed per-tile; annotate from the HTML subsample (`--html-sample-fraction 0.10`) and apply the classifier post-hoc without re-detecting
 - **Use `--channel-spec`** instead of raw channel indices — automatically resolves marker names against CZI metadata
 - **Check `scripts/system_info.py`** before launching — it detects your system and recommends partition, GPU count, and memory settings
 - **Always run `czi_info.py` before writing any channel config** — CZI channel indices follow acquisition/detector order, which is **NOT** sorted by wavelength and cannot be inferred from the filename. `scripts/czi_info.py /path/to/slide.czi` is the only authoritative source. Never sort by wavelength manually. Use `/czi-info` inside Claude Code, or run it directly before setting `cellpose_input_channels`, `--channel`, `--marker-channel`, or any YAML `channels:` block
