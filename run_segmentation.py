@@ -261,6 +261,39 @@ def run_pipeline(args):
             ch_list.append(args.cd31_channel)
     ch_list = sorted(set(ch_list))
 
+    # ---- Channel assignment summary — prominent, self-documenting ----
+    logger.info("=" * 70)
+    logger.info("CHANNEL ASSIGNMENTS")
+    logger.info("=" * 70)
+    _ch_label_map = {}
+    try:
+        for _ch in _czi_meta['channels']:
+            em = _ch.get('emission_nm')
+            fluor = (_ch.get('fluorophore') or _ch.get('name') or '').strip()
+            em_str = f" em={em:.0f}nm" if em else ""
+            _ch_label_map[_ch['index']] = f"{fluor}{em_str}"
+    except Exception:
+        pass
+
+    def _ch_lbl(idx):
+        return f"C={idx} ({_ch_label_map.get(idx, '?')})"
+
+    if args.cell_type == 'cell' and getattr(args, 'cellpose_input_channels', None):
+        _parts = str(args.cellpose_input_channels).split(',')
+        _cyto = int(_parts[0].strip())
+        _nuc = int(_parts[1].strip()) if len(_parts) > 1 else None
+        logger.info(f"  Segmentation (Cellpose):  cyto={_ch_lbl(_cyto)}"
+                    + (f"  |  nuc={_ch_lbl(_nuc)}" if _nuc is not None else ""))
+    elif args.cell_type == 'islet':
+        _mem = getattr(args, 'membrane_channel', 1)
+        _nuc = getattr(args, 'nuclear_channel', 4)
+        logger.info(f"  Segmentation (Cellpose islet):  membrane={_ch_lbl(_mem)}  |  nuc={_ch_lbl(_nuc)}")
+    else:
+        logger.info(f"  Segmentation:  primary={_ch_lbl(args.channel)}")
+
+    logger.info(f"  Loaded channels:  {', '.join(_ch_lbl(c) for c in ch_list)}")
+    logger.info("=" * 70)
+
     # ---- Direct-to-SHM: create shared memory and load channels in one pass ----
     from segmentation.processing.multigpu_shm import SharedSlideManager
 

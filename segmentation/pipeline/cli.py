@@ -5,9 +5,12 @@ which applies cell-type-dependent defaults, parses compound args, and validates.
 """
 
 import argparse
+import logging
 from pathlib import Path
 
 import torch
+
+_logger = logging.getLogger(__name__)
 
 
 def build_parser():
@@ -411,13 +414,14 @@ def postprocess_args(args, parser):
                     args.tp_nuclear_channel = nuc_idx
 
             # Log the resolved mapping
-            print(f"Channel spec resolved:", flush=True)
+            _logger.info("Channel spec resolved:")
             for role, spec in specs.items():
                 idx = resolved[spec]
                 ch_info = meta['channels'][idx] if idx < len(meta['channels']) else {}
-                ex = ch_info.get('excitation_nm')
-                ex_str = f" ({ex:.0f}nm)" if ex else ""
-                print(f"  {role} = {spec} -> ch{idx}{ex_str}", flush=True)
+                fluor = (ch_info.get('fluorophore') or ch_info.get('name') or '').strip()
+                em = ch_info.get('emission_nm')
+                detail = f"{fluor} em={em:.0f}nm" if em else (fluor or '?')
+                _logger.info(f"  {role} = {spec!r} -> C={idx} ({detail})")
 
         except ChannelResolutionError as e:
             parser.error(f"--channel-spec resolution failed: {e}")

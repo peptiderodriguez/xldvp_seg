@@ -420,6 +420,28 @@ def main():
                      f"Channels: {channels}, Names: {names}")
         sys.exit(1)
 
+    # Build channel label map from CZI metadata (if available)
+    _czi_ch_labels = {}
+    if args.czi_path:
+        try:
+            from segmentation.io.czi_loader import get_czi_metadata
+            _meta = get_czi_metadata(args.czi_path)
+            for _ch in _meta['channels']:
+                fluor = (_ch.get('fluorophore') or _ch.get('name') or '').strip()
+                em = _ch.get('emission_nm')
+                _czi_ch_labels[_ch['index']] = f"{fluor} em={em:.0f}nm" if em else fluor
+        except Exception as _e:
+            logger.debug(f"Could not load CZI channel metadata: {_e}")
+
+    # Print marker classification summary
+    logger.info("=" * 70)
+    logger.info("MARKER CLASSIFICATION")
+    logger.info("=" * 70)
+    for ch, name in zip(channels, names):
+        ch_detail = _czi_ch_labels.get(ch, '?')
+        logger.info(f"  '{name}':  C={ch} ({ch_detail})  method={args.method}")
+    logger.info("=" * 70)
+
     # Load detections
     logger.info(f"Loading detections from {det_path}...")
     with open(det_path) as f:
