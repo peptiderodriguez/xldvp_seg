@@ -143,6 +143,26 @@ For 2-channel Cellpose (generic cell detection):
 
 **Step 10 — Monitor until complete.** On SLURM, use `squeue -u $USER` to check status. Offer to tail the log file. On local, the command runs directly.
 
+**Step 10b — Restarting / Resuming (if job crashed or was cancelled).**
+
+`run_pipeline.sh` automatically detects existing run directories and bakes the exact absolute resume path into the sbatch at generation time. Just re-run:
+```bash
+scripts/run_pipeline.sh configs/<name>.yaml
+```
+It will:
+1. Find the most recent run subdir with `tiles/` for each slide
+2. Bake the full absolute path as `--resume <path>` into the sbatch
+3. On the compute node, the pipeline skips all completed tiles and picks up from dedup/post-dedup
+
+For **local runs**, pass `--resume` with the exact run directory (the timestamped subdir containing `tiles/`):
+```bash
+PYTHONPATH=$REPO $MKSEG_PYTHON $REPO/run_segmentation.py \
+    --czi-path <path> --cell-type <type> \
+    --resume /path/to/output/slide_name/slide_name_20260302_060105_100pct \
+    [other flags]
+```
+**IMPORTANT**: `--resume` must point to the exact run directory (with `tiles/` directly inside), NOT the slide-level directory. Check with `ls <path>/tiles/` to confirm.
+
 ---
 
 ## Phase 3: Annotation + Classification
