@@ -1301,9 +1301,13 @@ def run_pipeline(args):
 
             logger.info(f"Processing complete: {len(all_detections)} {args.cell_type} detections from {results_collected} tiles")
 
-    finally:
-        # Cleanup shared memory
+    except Exception:
+        # Cleanup shared memory on detection failure before re-raising
         shm_manager.cleanup()
+        raise
+
+    # NOTE: shared memory is still alive here — post-dedup and HTML generation need it.
+    # Cleanup is deferred to after _finish_pipeline().
 
     logger.info(f"Total detections (pre-dedup): {len(all_detections)}")
 
@@ -1421,13 +1425,17 @@ def run_pipeline(args):
         logger.info(f"Checkpoint: saved {len(all_detections)} post-dedup detections to {_postdedup_file.name}")
 
     # ---- Shared post-processing: CSV, JSON, HTML, summary, server ----
-    _finish_pipeline(
-        args, all_detections, all_samples, slide_output_dir, tiles_dir,
-        pixel_size_um, slide_name, mosaic_info, run_timestamp, pct,
-        all_tiles=all_tiles, tissue_tiles=tissue_tiles, sampled_tiles=sampled_tiles,
-        resumed=False, params=params, classifier_loaded=classifier_loaded,
-        is_multiscale=is_multiscale, detector=detector,
-    )
+    try:
+        _finish_pipeline(
+            args, all_detections, all_samples, slide_output_dir, tiles_dir,
+            pixel_size_um, slide_name, mosaic_info, run_timestamp, pct,
+            all_tiles=all_tiles, tissue_tiles=tissue_tiles, sampled_tiles=sampled_tiles,
+            resumed=False, params=params, classifier_loaded=classifier_loaded,
+            is_multiscale=is_multiscale, detector=detector,
+        )
+    finally:
+        # All SHM-dependent work is done — safe to free shared memory
+        shm_manager.cleanup()
 
 
 def main():
