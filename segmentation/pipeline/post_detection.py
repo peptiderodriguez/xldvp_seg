@@ -318,7 +318,18 @@ def _phase1_tile(
             det["contour_dilated_px"] = contour_global.tolist()
             det["contour_dilated_um"] = (contour_global * pixel_size_um).tolist()
         else:
-            dilated_mask = (masks_arr == label).astype(bool)
+            # No contour processing this run — but if the detection already
+            # has a dilated contour (from a previous run), rasterize it so
+            # quick_means use the same region as the original run.
+            if det.get("contour_dilated_px") is not None:
+                contour_global = np.array(det["contour_dilated_px"])
+                origin = det.get("tile_origin", [0, 0])
+                contour_local_prev = contour_global.copy()
+                contour_local_prev[:, 0] -= origin[0]
+                contour_local_prev[:, 1] -= origin[1]
+                dilated_mask = _rasterize_contour(contour_local_prev, tile_h, tile_w)
+            else:
+                dilated_mask = (masks_arr == label).astype(bool)
             n_ok += 1
 
         quick_means = {}

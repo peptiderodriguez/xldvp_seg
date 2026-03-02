@@ -499,7 +499,9 @@ def apply_reinhard_normalization_MEDIAN(
             block_lab = np.clip(block_lab, 0, 255).astype(np.uint8)
             block_rgb = cv2.cvtColor(block_lab, cv2.COLOR_LAB2RGB)
 
-            result[by:by_end, bx:bx_end] = block_rgb
+            # Only write back tissue pixels to avoid RGB→LAB→RGB roundtrip
+            # errors on non-tissue pixels (background should stay unchanged)
+            result[by:by_end, bx:bx_end][tissue_mask] = block_rgb[tissue_mask]
             del block_lab, block_rgb
 
     logger.info(f"  Normalized {tissue_px_count:,} tissue pixels ({100*tissue_px_count/max(total_px_count,1):.1f}% of image)")
