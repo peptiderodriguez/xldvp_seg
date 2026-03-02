@@ -135,6 +135,17 @@ def run_pipeline(args):
     # ---- Resume early-exit: skip CZI loading if ALL stages are done ----
     if getattr(args, 'resume', None):
         resume_dir = Path(args.resume)
+        # If resume dir is a slide-level dir (no tiles/ directly), find the most recent run subdir
+        if not (resume_dir / 'tiles').exists():
+            _subdirs = sorted(
+                [d for d in resume_dir.iterdir() if d.is_dir() and (d / 'tiles').exists()],
+                key=lambda d: d.stat().st_mtime,
+                reverse=True,
+            )
+            if _subdirs:
+                resume_dir = _subdirs[0]
+                args.resume = str(resume_dir)
+                logger.info(f"Resume: using most recent run directory: {resume_dir.name}")
         resume_info = detect_resume_stage(resume_dir, args.cell_type)
         _has_det = resume_info['has_detections'] and not getattr(args, 'force_detect', False)
         _has_html = resume_info['has_html'] and not getattr(args, 'force_html', False)
