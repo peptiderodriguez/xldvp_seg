@@ -75,6 +75,8 @@ Other useful commands:
 | `/classify` | Train RF classifier from annotations, compare feature sets |
 | `/lmd-export` | Export detections for laser microdissection |
 | `/view-results` | Launch HTML result viewer with Cloudflare tunnel |
+| `/spatialdata` | Export to SpatialData zarr + squidpy spatial analysis |
+| `/preview-preprocessing` | Preview flat-field/photobleach correction before running |
 
 ---
 
@@ -162,7 +164,8 @@ This generates an sbatch script with the right flags, submits to SLURM, and chai
 - **[CLAUDE.md](CLAUDE.md)** - Complete technical reference (CLI args, architecture, modules)
 - **[docs/GETTING_STARTED.md](docs/GETTING_STARTED.md)** - Detailed user guide with examples
 - **[docs/NMJ_PIPELINE_GUIDE.md](docs/NMJ_PIPELINE_GUIDE.md)** - NMJ-specific guide
-- **[docs/LMD_EXPORT_GUIDE.md](docs/LMD_EXPORT_GUIDE.md)** - LMD export workflow
+- **[docs/NMJ_LMD_EXPORT_WORKFLOW.md](docs/NMJ_LMD_EXPORT_WORKFLOW.md)** - NMJ full LMD export workflow
+- **[docs/LMD_EXPORT_GUIDE.md](docs/LMD_EXPORT_GUIDE.md)** - LMD export reference
 - **[docs/COORDINATE_SYSTEM.md](docs/COORDINATE_SYSTEM.md)** - Coordinate conventions
 
 ## Best Practices
