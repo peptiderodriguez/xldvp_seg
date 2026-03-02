@@ -36,6 +36,39 @@ from datetime import datetime
 from pathlib import Path
 
 import numpy as np
+from scipy.spatial import KDTree
+
+
+# ---------------------------------------------------------------------------
+# Auto-eps via KNN knee method
+# ---------------------------------------------------------------------------
+
+def compute_auto_eps(positions, k=10):
+    """Compute optimal DBSCAN eps using KNN distance knee/elbow method.
+
+    Builds a KDTree, queries the Kth nearest-neighbor distance for every point,
+    sorts ascending, and finds the elbow (max deviation from the diagonal).
+    """
+    n = len(positions)
+    if n < k + 1:
+        return None
+
+    tree = KDTree(positions)
+    dists, _ = tree.query(positions, k=k + 1)  # +1 because self is distance 0
+    knn_dists = np.sort(dists[:, -1])  # Kth neighbor distance, sorted ascending
+
+    # Kneedle-style elbow: max perpendicular distance from line connecting
+    # first point (0, knn_dists[0]) to last point (1, knn_dists[-1])
+    x_norm = np.linspace(0, 1, n)
+    y_range = knn_dists[-1] - knn_dists[0]
+    if y_range < 1e-9:
+        return max(float(knn_dists[0]), 1.0)  # floor at 1 um
+    y_norm = (knn_dists - knn_dists[0]) / y_range
+
+    # Distance from diagonal (0,0)->(1,1) = (y - x) / sqrt(2), max of that
+    diffs = y_norm - x_norm
+    elbow_idx = int(np.argmax(diffs))
+    return float(knn_dists[elbow_idx])
 
 
 # ---------------------------------------------------------------------------
@@ -91,6 +124,234 @@ def _hsl_to_hex(h, s, l):
     gi = int((g + m) * 255)
     bi = int((b + m) * 255)
     return f'#{ri:02x}{gi:02x}{bi:02x}'
+
+
+# ---------------------------------------------------------------------------
+# Graph-based spatial pattern detection (for --graph-patterns)
+# ---------------------------------------------------------------------------
+
+def compute_graph_patterns(positions, types, type_labels, type_colors,
+                           connect_radius_um=150, min_cluster_cells=8,
+                           boundary_dilate_um=50):
+    """Detect spatial patterns via graph-based connected components.
+
+    Per type: KDTree -> connect cells within connect_radius_um, connected
+    components -> discrete clusters, classify pattern (linear/arc/ring/cluster),
+    boundary via rasterise -> dilate -> findContours -> RDP simplify.
+
+    Returns list of region dicts with boundary polygons, composition, pattern.
+    """
+    import cv2
+    from scipy.spatial import cKDTree
+    from scipy.sparse import csr_matrix
+    from scipy.sparse.csgraph import connected_components
+
+    n = len(positions)
+    if n == 0:
+        return []
+
+    unique_types = np.unique(types)
+    regions = []
+
+    for ti in unique_types:
+        type_mask = types == ti
+        n_type = int(type_mask.sum())
+        idx = int(ti)
+        label = type_labels[idx] if idx < len(type_labels) else f'type_{idx}'
+        color = type_colors[idx] if idx < len(type_colors) else '#888888'
+
+        if n_type < min_cluster_cells:
+            continue
+
+        tp = positions[type_mask]  # (n_type, 2)
+
+        tree = cKDTree(tp)
+        pairs = tree.query_pairs(r=connect_radius_um)
+
+        if not pairs:
+            continue
+
+        rows, cols = zip(*pairs)
+        rows = np.array(rows, dtype=np.int32)
+        cols = np.array(cols, dtype=np.int32)
+        data = np.ones(len(rows), dtype=np.float32)
+        adj = csr_matrix((data, (rows, cols)), shape=(n_type, n_type))
+        adj = adj + adj.T
+
+        n_components, comp_labels = connected_components(adj, directed=False)
+
+        for ci in range(n_components):
+            cmask = comp_labels == ci
+            nc = int(cmask.sum())
+            if nc < min_cluster_cells:
+                continue
+
+            pts = tp[cmask]
+            cx_mean = pts[:, 0].mean()
+            cy_mean = pts[:, 1].mean()
+
+            # Pattern classification via PCA
+            centered = pts - pts.mean(axis=0)
+            cov = np.cov(centered.T) if nc > 2 else np.eye(2)
+            eigvals = np.sort(np.linalg.eigvalsh(cov))[::-1]
+            lam1 = max(eigvals[0], 1e-10)
+            lam2 = max(eigvals[1], 1e-10)
+            elongation = np.sqrt(lam1 / lam2)
+
+            # Circle fit
+            radii = np.sqrt((pts[:, 0] - cx_mean)**2 +
+                            (pts[:, 1] - cy_mean)**2)
+            mean_r = radii.mean()
+            circularity = (1.0 - radii.std() / mean_r) if mean_r > 1e-6 else 0.0
+            hollowness = np.median(radii) / max(radii.max(), 1e-6)
+
+            # Curvature check
+            has_curvature = False
+            if nc > 5 and elongation > 2.5:
+                eigvecs = np.linalg.eigh(cov)[1]
+                pc1 = eigvecs[:, -1]
+                pc2 = eigvecs[:, -2]
+                proj1 = centered @ pc1
+                proj2 = centered @ pc2
+                coeffs = np.polyfit(proj1, proj2, 2)
+                pred = np.polyval(coeffs, proj1)
+                ss_res = ((proj2 - pred)**2).sum()
+                ss_tot = ((proj2 - proj2.mean())**2).sum()
+                r2 = 1 - ss_res / max(ss_tot, 1e-10)
+                if r2 > 0.3 and abs(coeffs[0]) > 1e-6:
+                    has_curvature = True
+
+            if elongation > 4 and not has_curvature:
+                pattern = 'linear'
+            elif elongation > 3 and has_curvature:
+                pattern = 'arc'
+            elif circularity > 0.65 and hollowness > 0.55 and elongation < 3:
+                pattern = 'ring'
+            else:
+                pattern = 'cluster'
+
+            # Boundary via rasterisation
+            pad = boundary_dilate_um
+            bx_min = pts[:, 0].min() - pad
+            bx_max = pts[:, 0].max() + pad
+            by_min = pts[:, 1].min() - pad
+            by_max = pts[:, 1].max() + pad
+            bw = bx_max - bx_min
+            bh = by_max - by_min
+
+            target_px = max(64, min(512, int(max(bw, bh) / 5)))
+            if bw >= bh:
+                rnx = target_px
+                rny = max(1, int(target_px * bh / bw))
+            else:
+                rny = target_px
+                rnx = max(1, int(target_px * bw / bh))
+
+            rpx = bw / max(rnx, 1)
+            rpy = bh / max(rny, 1)
+
+            px = np.clip(((pts[:, 0] - bx_min) / bw * rnx).astype(int), 0, rnx - 1)
+            py = np.clip(((pts[:, 1] - by_min) / bh * rny).astype(int), 0, rny - 1)
+            raster = np.zeros((rny, rnx), dtype=np.uint8)
+            raster[py, px] = 255
+
+            dilate_px = max(2, int(connect_radius_um / rpx * 0.5))
+            kern = cv2.getStructuringElement(
+                cv2.MORPH_ELLIPSE, (dilate_px * 2 + 1, dilate_px * 2 + 1))
+            raster = cv2.dilate(raster, kern)
+            close_kern = cv2.getStructuringElement(
+                cv2.MORPH_ELLIPSE, (dilate_px + 1, dilate_px + 1))
+            raster = cv2.morphologyEx(raster, cv2.MORPH_CLOSE, close_kern)
+
+            contours, _ = cv2.findContours(
+                raster, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+            if not contours:
+                continue
+
+            contour = max(contours, key=cv2.contourArea)
+            epsilon = max(1.0, 0.008 * cv2.arcLength(contour, True))
+            contour = cv2.approxPolyDP(contour, epsilon, True)
+            if len(contour) < 3:
+                continue
+
+            boundary = []
+            for pt in contour.reshape(-1, 2):
+                boundary.append({
+                    'x': round(float(pt[0] * rpx + bx_min), 1),
+                    'y': round(float(pt[1] * rpy + by_min), 1),
+                })
+
+            # Composition: count all cell types inside boundary
+            cmask_img = np.zeros((rny, rnx), dtype=np.uint8)
+            cv2.drawContours(cmask_img, [contour], 0, 255, -1)
+            all_px = np.clip(
+                ((positions[:, 0] - bx_min) / bw * rnx).astype(int), 0, rnx - 1)
+            all_py = np.clip(
+                ((positions[:, 1] - by_min) / bh * rny).astype(int), 0, rny - 1)
+            inside_all = cmask_img[all_py, all_px] > 0
+            n_inside_total = int(inside_all.sum())
+
+            composition = {}
+            for tj in unique_types:
+                count = int((inside_all & (types == tj)).sum())
+                if count > 0:
+                    composition[type_labels[int(tj)]] = count
+
+            if n_inside_total == 0:
+                n_inside_total = nc
+                composition = {label: nc}
+
+            dominant = max(composition, key=composition.get)
+            dominant_frac = composition[dominant] / max(n_inside_total, 1)
+
+            # Normalize composition to fractions
+            composition = {k: round(v / max(n_inside_total, 1), 3)
+                           for k, v in composition.items()}
+
+            contour_area_px = cv2.contourArea(contour)
+            area_um2 = round(contour_area_px * rpx * rpy, 0)
+
+            moments = cv2.moments(contour)
+            if moments['m00'] > 0:
+                mu20 = moments['mu20'] / moments['m00']
+                mu02 = moments['mu02'] / moments['m00']
+                mu11 = moments['mu11'] / moments['m00']
+                d = np.sqrt(4 * mu11**2 + (mu20 - mu02)**2)
+                major = mu20 + mu02 + d
+                minor = mu20 + mu02 - d
+                cont_elong = round(
+                    np.sqrt(max(major, 1e-9) / max(minor, 1e-9)), 2)
+            else:
+                cont_elong = round(elongation, 2)
+
+            regions.append({
+                'id': len(regions),
+                'type': label,
+                'label': f'{label} ({pattern}, n={nc})',
+                'color': color,
+                'pattern': pattern,
+                'composition': composition,
+                'n_cells': n_inside_total,
+                'area_um2': area_um2,
+                'elongation': cont_elong,
+                'dominant_frac': round(dominant_frac, 3),
+                'boundary': boundary,
+            })
+
+    # Sort by area descending, re-index
+    regions.sort(key=lambda r: r['area_um2'], reverse=True)
+    for i, r in enumerate(regions):
+        r['id'] = i
+
+    n_types_found = len(set(r['type'] for r in regions)) if regions else 0
+    patterns_summary = {}
+    for r in regions:
+        p = r['pattern']
+        patterns_summary[p] = patterns_summary.get(p, 0) + 1
+    pat_str = ', '.join(f'{v} {k}' for k, v in sorted(patterns_summary.items()))
+    print(f'Graph patterns (r={connect_radius_um}um): {len(regions)} regions '
+          f'from {n_types_found} types (>={min_cluster_cells} cells): {pat_str}')
+    return regions
 
 
 # ---------------------------------------------------------------------------
@@ -180,11 +441,13 @@ def load_slide_data(path, group_field):
     groups_out = []
     for label, cells in sorted(group_cells.items()):
         arr = np.array(cells, dtype=np.float32)
+        auto_eps = compute_auto_eps(arr, k=10) if len(cells) >= 11 else None
         groups_out.append({
             'label': label,
             'n': len(cells),
             'x': arr[:, 0],
             'y': arr[:, 1],
+            'auto_eps': auto_eps,
         })
 
     all_x = np.concatenate([g['x'] for g in groups_out])
@@ -284,6 +547,59 @@ def assign_group_colors(slides_data):
     return color_map
 
 
+def apply_top_n_filtering(slides_data, top_n, exclude_groups):
+    """Apply top-N filtering and group exclusion across all slides.
+
+    Groups in exclude_groups are dropped entirely.  If top_n is set, only the
+    top_n most populous groups (by global cell count) are kept; the rest are
+    merged into an 'other' group with recomputed auto_eps.
+    """
+    if exclude_groups:
+        exc = set(exclude_groups)
+        for _, data in slides_data:
+            data['groups'] = [g for g in data['groups'] if g['label'] not in exc]
+            data['n_cells'] = sum(g['n'] for g in data['groups'])
+
+    if top_n is None:
+        return
+
+    # Count cells per group globally
+    global_counts = {}
+    for _, data in slides_data:
+        for g in data['groups']:
+            global_counts[g['label']] = global_counts.get(g['label'], 0) + g['n']
+
+    sorted_groups = sorted(global_counts.items(), key=lambda x: -x[1])
+    top_labels = {lbl for i, (lbl, _) in enumerate(sorted_groups) if i < top_n}
+
+    # Merge non-top groups into "other" per slide
+    for _, data in slides_data:
+        new_groups = []
+        other_x = []
+        other_y = []
+        other_n = 0
+        for g in data['groups']:
+            if g['label'] in top_labels:
+                new_groups.append(g)
+            else:
+                other_x.append(g['x'])
+                other_y.append(g['y'])
+                other_n += g['n']
+        if other_n > 0:
+            ox = np.concatenate(other_x)
+            oy = np.concatenate(other_y)
+            positions = np.column_stack([ox, oy])
+            new_groups.append({
+                'label': 'other',
+                'n': other_n,
+                'x': ox,
+                'y': oy,
+                'auto_eps': compute_auto_eps(positions, k=10) if other_n >= 11 else None,
+            })
+        data['groups'] = new_groups
+        data['n_cells'] = sum(g['n'] for g in new_groups)
+
+
 # ---------------------------------------------------------------------------
 # Binary data encoding
 # ---------------------------------------------------------------------------
@@ -310,8 +626,10 @@ def safe_json(obj):
 # HTML generation
 # ---------------------------------------------------------------------------
 
-def generate_html(slides_data, output_path, color_map, title, group_field):
-    """Generate self-contained scrollable HTML with focus view and ROI drawing.
+def generate_html(slides_data, output_path, color_map, title, group_field,
+                   default_min_cells=10, min_hull_cells=24,
+                   has_regions=False, has_multiscale=False, scale_keys=None):
+    """Generate self-contained scrollable HTML with focus view, ROI, and DBSCAN clustering.
 
     Data is embedded as base64-encoded TypedArrays for compact transfer.
     Each slide stores a single Float32Array of interleaved [x0,y0,x1,y1,...]
@@ -323,6 +641,8 @@ def generate_html(slides_data, output_path, color_map, title, group_field):
         color_map: Dict of group_label -> hex color.
         title: Page title.
         group_field: Group field name (for metadata export).
+        default_min_cells: Default DBSCAN min_samples for clustering.
+        min_hull_cells: Min cells in cluster to draw convex hull.
     """
     title_escaped = html_mod.escape(title)
 
@@ -336,7 +656,8 @@ def generate_html(slides_data, output_path, color_map, title, group_field):
         for _, data in slides_data:
             for g in data['groups']:
                 all_counts[g['label']] = all_counts.get(g['label'], 0) + g['n']
-        top_labels = sorted(all_counts, key=all_counts.get, reverse=True)[:254]
+        top_labels = [lbl for lbl in sorted(all_counts, key=all_counts.get, reverse=True)
+                      if lbl != 'other'][:254]
         group_labels = sorted(top_labels) + ['other']
         # Re-map collapsed groups in color_map
         other_color = '#808080'
@@ -354,10 +675,15 @@ def generate_html(slides_data, output_path, color_map, title, group_field):
         all_y = []
         all_gi = []
         for g in data['groups']:
+            if g['n'] == 0:
+                continue
             gi = group_to_idx.get(g['label'], group_to_idx.get('other', 0))
             all_x.append(g['x'])
             all_y.append(g['y'])
             all_gi.append(np.full(g['n'], gi, dtype=np.uint8))
+
+        if not all_x:
+            continue  # skip slide with no remaining cells
 
         all_x = np.concatenate(all_x)
         all_y = np.concatenate(all_y)
@@ -379,6 +705,46 @@ def generate_html(slides_data, output_path, color_map, title, group_field):
             'yr': [float(data['y_range'][0]), float(data['y_range'][1])],
         })
 
+    # Build per-slide per-group auto_eps for DBSCAN clustering
+    slides_auto_eps = []
+    for _, data in slides_data:
+        group_eps = {}
+        for g in data['groups']:
+            eps_val = g.get('auto_eps')
+            group_eps[g['label']] = eps_val if eps_val is not None else 100.0
+        eps_arr = [group_eps.get(lbl, 100.0) for lbl in group_labels]
+        slides_auto_eps.append(eps_arr)
+
+    # Serialize region data per-slide (compact format for embedding)
+    def _compact_regions(reg_list):
+        """Convert region dicts to compact JS-friendly format (JSON-safe)."""
+        compact = []
+        for r in reg_list:
+            compact.append({
+                'id': int(r['id']),
+                'type': str(r.get('type', '')),
+                'label': str(r['label']),
+                'color': str(r['color']),
+                'pat': str(r.get('pattern', '')),
+                'n': int(r['n_cells']),
+                'area': float(r['area_um2']),
+                'elong': float(r['elongation']),
+                'dfrac': float(r['dominant_frac']),
+                'comp': {str(k): float(v) for k, v in r['composition'].items()},
+                'bnd': [[float(p['x']), float(p['y'])] for p in r['boundary']],
+            })
+        return compact
+
+    slides_region_data = []
+    for _, data in slides_data:
+        entry = {'regions': _compact_regions(data.get('regions', []))}
+        rs = data.get('region_scales')
+        if rs:
+            entry['regionScales'] = {
+                k: _compact_regions(v) for k, v in rs.items()
+            }
+        slides_region_data.append(entry)
+
     # Build legend info
     legend_items = []
     total_counts = {}
@@ -396,6 +762,38 @@ def generate_html(slides_data, output_path, color_map, title, group_field):
     n_slides = len(slides_data)
     is_single = n_slides == 1
     timestamp = datetime.now().isoformat(timespec='seconds')
+
+    # --- Build conditional sidebar sections ---
+    # Build regions sidebar (conditional on --graph-patterns)
+    regions_sidebar_html = ''
+    if has_regions:
+        scale_slider_html = ''
+        if has_multiscale and scale_keys:
+            mid = len(scale_keys) // 2
+            scale_slider_html = (
+                '      <div class="ctrl-row">\n'
+                '        <label>Scale</label>\n'
+                f'        <input type="range" id="region-scale" min="0" max="{len(scale_keys)-1}" value="{mid}" step="1">\n'
+                f'        <span class="val" id="region-scale-val">{scale_keys[mid]} &micro;m</span>\n'
+                '      </div>\n'
+            )
+        regions_sidebar_html = (
+            '    <!-- Regions (graph patterns) -->\n'
+            '    <div class="sidebar-section">\n'
+            '      <h3>Regions</h3>\n'
+            '      <div class="ctrl-row">\n'
+            '        <label style="min-width:auto"><input type="checkbox" id="show-regions" checked> Show</label>\n'
+            '        <label style="min-width:auto"><input type="checkbox" id="show-region-labels" checked> Labels</label>\n'
+            '        <label style="min-width:auto"><input type="checkbox" id="show-region-bnd" checked> Borders</label>\n'
+            '      </div>\n'
+            '      <div class="ctrl-row">\n'
+            '        <label>Opacity</label>\n'
+            '        <input type="range" id="region-opacity" min="0" max="0.8" value="0.25" step="0.05">\n'
+            '        <span class="val" id="region-op-val">0.25</span>\n'
+            '      </div>\n'
+            + scale_slider_html +
+            '    </div>\n'
+        )
 
     # --- Build the HTML ---
     html_parts = []
@@ -579,6 +977,54 @@ def generate_html(slides_data, output_path, color_map, title, group_field):
       </div>
     </div>
 
+    <!-- KDE Density -->
+    <div class="sidebar-section">
+      <h3>KDE Density</h3>
+      <div class="ctrl-row">
+        <label style="min-width:auto"><input type="checkbox" id="show-kde" checked> Show</label>
+      </div>
+      <div class="ctrl-row">
+        <label>Bandwidth</label>
+        <input type="range" id="kde-bw" min="0" max="9" value="3" step="1">
+        <span class="val" id="kde-bw-val">300 &micro;m</span>
+      </div>
+      <div class="ctrl-row">
+        <label>Levels</label>
+        <input type="range" id="kde-levels" min="1" max="6" value="3" step="1">
+        <span class="val" id="kde-levels-val">3</span>
+      </div>
+      <div class="ctrl-row">
+        <label>Opacity</label>
+        <input type="range" id="kde-opacity" min="0.1" max="1.0" value="0.5" step="0.05">
+        <span class="val" id="kde-op-val">0.50</span>
+      </div>
+      <div class="ctrl-row">
+        <label style="min-width:auto"><input type="checkbox" id="kde-fill" checked> Fill</label>
+        <label style="min-width:auto"><input type="checkbox" id="kde-lines" checked> Lines</label>
+      </div>
+    </div>
+
+{regions_sidebar_html}
+    <!-- Clustering -->
+    <div class="sidebar-section">
+      <h3>Clustering</h3>
+      <div class="ctrl-row">
+        <label>Eps scale</label>
+        <input type="range" id="eps-slider" min="0.25" max="3.0" value="1.0" step="0.05">
+        <span class="val" id="eps-val">1.00</span><span>x</span>
+      </div>
+      <div class="ctrl-row">
+        <label>Min cells</label>
+        <input type="range" id="min-cells" min="3" max="50" value="{default_min_cells}" step="1">
+        <span class="val" id="min-cells-val">{default_min_cells}</span>
+      </div>
+      <div class="ctrl-row">
+        <label style="min-width:auto"><input type="checkbox" id="show-hulls" checked> Hulls</label>
+        <label style="min-width:auto"><input type="checkbox" id="show-labels" checked> Labels</label>
+      </div>
+      <div id="cluster-status" style="font-size:10px;color:#777;"></div>
+    </div>
+
     <!-- ROI Drawing -->
     <div class="sidebar-section">
       <h3>ROI Drawing</h3>
@@ -649,6 +1095,12 @@ const IS_SINGLE = {'true' if is_single else 'false'};
 const GENERATED = {safe_json(timestamp)};
 const GROUP_FIELD = {safe_json(group_field)};
 const TITLE = {safe_json(title)};
+const AUTO_EPS = {safe_json(slides_auto_eps)};
+const MIN_HULL = {min_hull_cells};
+const REGION_DATA = {safe_json(slides_region_data)};
+const HAS_REGIONS = {'true' if has_regions else 'false'};
+const HAS_MULTISCALE = {'true' if has_multiscale else 'false'};
+const SCALE_KEYS = {safe_json(scale_keys or [])};
 """)
 
     # Emit base64 data arrays
@@ -669,6 +1121,7 @@ const TITLE = {safe_json(title)};
 const SLIDES = SLIDE_META.map((meta, i) => {
   const pos = b64toF32(SLIDE_POS_B64[i]);
   const grp = b64toU8(SLIDE_GRP_B64[i]);
+  const rd = REGION_DATA[i] || {};
   return {
     name: meta.name,
     n: meta.n,
@@ -676,6 +1129,8 @@ const SLIDES = SLIDE_META.map((meta, i) => {
     yr: meta.yr,
     pos: pos,  // interleaved [x0,y0,x1,y1,...] Float32Array
     grp: grp,  // group index per cell Uint8Array
+    regions: rd.regions || [],
+    regionScales: rd.regionScales || null,
   };
 });
 
@@ -688,7 +1143,21 @@ SLIDE_GRP_B64.length = 0;
 // ===================================================================
 const hidden = new Set();
 let dotSize = 3, dotAlpha = 0.7;
+let showHulls = true, showLabels = true;
 let drawMode = 'pan';  // pan | circle | rect | polygon
+
+// KDE state
+const KDE_RADII = [50, 100, 200, 300, 400, 500, 600, 700, 800, 1000];
+let showKDE = true, kdeBWIdx = 3, kdeLevels = 3, kdeAlpha = 0.5, kdeFill = true, kdeLines = true;
+const kdeCache = new Map();  // slideIdx -> {bwIdx, levels, hiddenKey, data}
+let kdeDebounceTimer = null;
+
+// Region state
+let showRegions = HAS_REGIONS, showRegionLabels = HAS_REGIONS, showRegionBnd = HAS_REGIONS;
+let regionAlpha = 0.25;
+
+// Clustering state
+const clusterData = new Array(SLIDES.length).fill(null);  // per-slide cluster results
 
 // ROI storage
 const rois = [];
@@ -789,6 +1258,569 @@ function screenToData(p, sx, sy) {
 
 function dataToScreen(p, dx, dy) {
   return [dx * p.zoom + p.panX, dy * p.zoom + p.panY];
+}
+
+// ===================================================================
+// DBSCAN with grid spatial index
+// ===================================================================
+function dbscan(x, y, n, eps, minPts) {
+  const labels = new Int32Array(n).fill(-1);
+  if (n === 0 || eps <= 0) return labels;
+
+  const grid = new Map();
+  for (let i = 0; i < n; i++) {
+    const gx = Math.floor(x[i] / eps);
+    const gy = Math.floor(y[i] / eps);
+    const key = gx + ',' + gy;
+    let cell = grid.get(key);
+    if (!cell) { cell = []; grid.set(key, cell); }
+    cell.push(i);
+  }
+
+  const eps2 = eps * eps;
+  function getNeighbors(idx) {
+    const px = x[idx], py = y[idx];
+    const gx = Math.floor(px / eps);
+    const gy = Math.floor(py / eps);
+    const result = [];
+    for (let dx = -1; dx <= 1; dx++) {
+      for (let dy = -1; dy <= 1; dy++) {
+        const cell = grid.get((gx + dx) + ',' + (gy + dy));
+        if (!cell) continue;
+        for (let k = 0; k < cell.length; k++) {
+          const j = cell[k];
+          const ddx = x[j] - px, ddy = y[j] - py;
+          if (ddx * ddx + ddy * ddy <= eps2) result.push(j);
+        }
+      }
+    }
+    return result;
+  }
+
+  let clusterId = 0;
+  const visited = new Uint8Array(n);
+
+  for (let i = 0; i < n; i++) {
+    if (visited[i]) continue;
+    visited[i] = 1;
+    const nbrs = getNeighbors(i);
+    if (nbrs.length < minPts) continue;
+
+    labels[i] = clusterId;
+    const queue = [];
+    for (let k = 0; k < nbrs.length; k++) {
+      if (nbrs[k] !== i) queue.push(nbrs[k]);
+    }
+    let qi = 0;
+    while (qi < queue.length) {
+      const j = queue[qi++];
+      if (!visited[j]) {
+        visited[j] = 1;
+        const jnbrs = getNeighbors(j);
+        if (jnbrs.length >= minPts) {
+          for (let k = 0; k < jnbrs.length; k++) {
+            if (!visited[jnbrs[k]]) queue.push(jnbrs[k]);
+          }
+        }
+      }
+      if (labels[j] === -1) labels[j] = clusterId;
+    }
+    clusterId++;
+  }
+  return labels;
+}
+
+// ===================================================================
+// Convex hull (Andrew's monotone chain)
+// ===================================================================
+function convexHull(points) {
+  const n = points.length;
+  if (n < 3) return points.slice();
+  points.sort((a, b) => a[0] - b[0] || a[1] - b[1]);
+
+  const pts = [points[0]];
+  for (let i = 1; i < n; i++) {
+    if (points[i][0] !== points[i-1][0] || points[i][1] !== points[i-1][1])
+      pts.push(points[i]);
+  }
+  if (pts.length < 3) return pts;
+
+  function cross(O, A, B) {
+    return (A[0] - O[0]) * (B[1] - O[1]) - (A[1] - O[1]) * (B[0] - O[0]);
+  }
+  const lower = [];
+  for (const p of pts) {
+    while (lower.length >= 2 && cross(lower[lower.length-2], lower[lower.length-1], p) <= 0)
+      lower.pop();
+    lower.push(p);
+  }
+  const upper = [];
+  for (let i = pts.length - 1; i >= 0; i--) {
+    const p = pts[i];
+    while (upper.length >= 2 && cross(upper[upper.length-2], upper[upper.length-1], p) <= 0)
+      upper.pop();
+    upper.push(p);
+  }
+  lower.pop();
+  upper.pop();
+  return lower.concat(upper);
+}
+
+// ===================================================================
+// Per-group position extraction (lazy, for DBSCAN)
+// ===================================================================
+function getGroupPositions(slideIdx) {
+  const slide = SLIDES[slideIdx];
+  if (slide._groupPos) return slide._groupPos;
+  const gp = new Array(N_GROUPS).fill(null).map(() => ({xi:[], yi:[]}));
+  for (let i = 0; i < slide.n; i++) {
+    const gi = slide.grp[i];
+    gp[gi].xi.push(slide.pos[i*2]);
+    gp[gi].yi.push(slide.pos[i*2+1]);
+  }
+  slide._groupPos = gp.map(g => ({
+    x: new Float32Array(g.xi),
+    y: new Float32Array(g.yi),
+    n: g.xi.length,
+  }));
+  return slide._groupPos;
+}
+
+// ===================================================================
+// Hex color to RGB
+// ===================================================================
+function hexToRgb(hex) {
+  const h = hex.replace('#', '');
+  return [parseInt(h.substring(0,2),16), parseInt(h.substring(2,4),16), parseInt(h.substring(4,6),16)];
+}
+
+// ===================================================================
+// KDE: Histogram2D + Gaussian blur + Marching Squares
+// ===================================================================
+
+function computeHistogram2D(x, y, w, nx, ny, xr, yr) {
+  const grid = new Float32Array(ny * nx);
+  const sx = nx / (xr[1] - xr[0]);
+  const sy = ny / (yr[1] - yr[0]);
+  const n = x.length;
+  for (let i = 0; i < n; i++) {
+    const gx = Math.min(Math.floor((x[i] - xr[0]) * sx), nx - 1);
+    const gy = Math.min(Math.floor((y[i] - yr[0]) * sy), ny - 1);
+    if (gx >= 0 && gy >= 0) {
+      grid[gy * nx + gx] += (w ? w[i] : 1);
+    }
+  }
+  return grid;
+}
+
+function gaussianBlur1D(src, nx, ny, sigma, horizontal) {
+  const radius = Math.ceil(sigma * 3);
+  const kernel = new Float32Array(2 * radius + 1);
+  let ksum = 0;
+  for (let i = -radius; i <= radius; i++) {
+    kernel[i + radius] = Math.exp(-0.5 * (i / sigma) * (i / sigma));
+    ksum += kernel[i + radius];
+  }
+  for (let i = 0; i < kernel.length; i++) kernel[i] /= ksum;
+
+  const dst = new Float32Array(ny * nx);
+
+  if (horizontal) {
+    for (let row = 0; row < ny; row++) {
+      for (let col = 0; col < nx; col++) {
+        let sum = 0;
+        for (let k = -radius; k <= radius; k++) {
+          const c = Math.min(Math.max(col + k, 0), nx - 1);
+          sum += src[row * nx + c] * kernel[k + radius];
+        }
+        dst[row * nx + col] = sum;
+      }
+    }
+  } else {
+    for (let col = 0; col < nx; col++) {
+      for (let row = 0; row < ny; row++) {
+        let sum = 0;
+        for (let k = -radius; k <= radius; k++) {
+          const r = Math.min(Math.max(row + k, 0), ny - 1);
+          sum += src[r * nx + col] * kernel[k + radius];
+        }
+        dst[row * nx + col] = sum;
+      }
+    }
+  }
+  return dst;
+}
+
+function gaussianBlur(grid, nx, ny, sigma) {
+  if (sigma < 0.5) return grid;
+  const tmp = gaussianBlur1D(grid, nx, ny, sigma, true);
+  return gaussianBlur1D(tmp, nx, ny, sigma, false);
+}
+
+function marchingSquares(grid, nx, ny, threshold, xr, yr) {
+  const stepX = (xr[1] - xr[0]) / nx;
+  const stepY = (yr[1] - yr[0]) / ny;
+
+  function lerp(v1, v2) {
+    const d = v2 - v1;
+    return Math.abs(d) < 1e-10 ? 0.5 : (threshold - v1) / d;
+  }
+
+  const segments = [];
+  for (let row = 0; row < ny - 1; row++) {
+    for (let col = 0; col < nx - 1; col++) {
+      const tl = grid[row * nx + col] >= threshold ? 1 : 0;
+      const tr = grid[row * nx + col + 1] >= threshold ? 1 : 0;
+      const br = grid[(row + 1) * nx + col + 1] >= threshold ? 1 : 0;
+      const bl = grid[(row + 1) * nx + col] >= threshold ? 1 : 0;
+      let code = (tl << 3) | (tr << 2) | (br << 1) | bl;
+
+      if (code === 0 || code === 15) continue;
+
+      const x0 = xr[0] + col * stepX;
+      const y0 = yr[0] + row * stepY;
+      const vTL = grid[row * nx + col];
+      const vTR = grid[row * nx + col + 1];
+      const vBR = grid[(row + 1) * nx + col + 1];
+      const vBL = grid[(row + 1) * nx + col];
+
+      const top = [x0 + lerp(vTL, vTR) * stepX, y0];
+      const right = [x0 + stepX, y0 + lerp(vTR, vBR) * stepY];
+      const bottom = [x0 + lerp(vBL, vBR) * stepX, y0 + stepY];
+      const left = [x0, y0 + lerp(vTL, vBL) * stepY];
+
+      if (code === 5 || code === 10) {
+        const center = (vTL + vTR + vBR + vBL) / 4;
+        if (center >= threshold) {
+          if (code === 5) code = 17;
+          else code = 18;
+        }
+      }
+
+      let segs;
+      switch (code) {
+        case 1:  segs = [[left, bottom]]; break;
+        case 2:  segs = [[bottom, right]]; break;
+        case 3:  segs = [[left, right]]; break;
+        case 4:  segs = [[right, top]]; break;
+        case 5:  segs = [[left, top], [bottom, right]]; break;
+        case 17: segs = [[left, bottom], [top, right]]; break;
+        case 6:  segs = [[bottom, top]]; break;
+        case 7:  segs = [[left, top]]; break;
+        case 8:  segs = [[top, left]]; break;
+        case 9:  segs = [[top, bottom]]; break;
+        case 10: segs = [[top, right], [left, bottom]]; break;
+        case 18: segs = [[top, left], [bottom, right]]; break;
+        case 11: segs = [[top, right]]; break;
+        case 12: segs = [[right, left]]; break;
+        case 13: segs = [[right, bottom]]; break;
+        case 14: segs = [[bottom, left]]; break;
+        default: segs = null;
+      }
+
+      if (segs) {
+        for (const seg of segs) segments.push(seg);
+      }
+    }
+  }
+
+  if (segments.length === 0) return [];
+
+  const eps = stepX * 0.01;
+  const eps2 = eps * eps;
+
+  function ptKey(p) {
+    return Math.round(p[0] / eps) + ',' + Math.round(p[1] / eps);
+  }
+
+  const endHash = new Map();
+  for (let i = 0; i < segments.length; i++) {
+    for (let e = 0; e < 2; e++) {
+      const k = ptKey(segments[i][e]);
+      if (!endHash.has(k)) endHash.set(k, []);
+      endHash.get(k).push({ si: i, ei: e });
+    }
+  }
+
+  function dist2(a, b) {
+    const dx = a[0] - b[0], dy = a[1] - b[1];
+    return dx * dx + dy * dy;
+  }
+
+  const polys = [];
+  const used = new Uint8Array(segments.length);
+
+  for (let start = 0; start < segments.length; start++) {
+    if (used[start]) continue;
+    used[start] = 1;
+    const poly = [segments[start][0], segments[start][1]];
+
+    let found = true;
+    while (found) {
+      found = false;
+      const tail = poly[poly.length - 1];
+      const rx = Math.round(tail[0] / eps);
+      const ry = Math.round(tail[1] / eps);
+      for (let dx = -1; dx <= 1; dx++) {
+        for (let dy = -1; dy <= 1; dy++) {
+          const bucket = endHash.get((rx + dx) + ',' + (ry + dy));
+          if (!bucket) continue;
+          for (const entry of bucket) {
+            if (used[entry.si]) continue;
+            const seg = segments[entry.si];
+            if (dist2(tail, seg[entry.ei]) < eps2) {
+              poly.push(seg[1 - entry.ei]);
+              used[entry.si] = 1;
+              found = true;
+              break;
+            }
+            if (dist2(tail, seg[1 - entry.ei]) < eps2) {
+              poly.push(seg[entry.ei]);
+              used[entry.si] = 1;
+              found = true;
+              break;
+            }
+          }
+          if (found) break;
+        }
+        if (found) break;
+      }
+    }
+    if (poly.length >= 3) polys.push(poly);
+  }
+
+  return polys;
+}
+
+function computeKDE(slideIdx, bandwidthUm, nLevels) {
+  const slide = SLIDES[slideIdx];
+  const xr = slide.xr, yr = slide.yr;
+  const dataW = xr[1] - xr[0], dataH = yr[1] - yr[0];
+  if (dataW <= 0 || dataH <= 0) return null;
+
+  const nxGrid = 200, nyGrid = 200;
+  const pixelSize = Math.max(dataW, dataH) / Math.max(nxGrid, nyGrid);
+  const sigma = bandwidthUm / pixelSize;
+
+  let nx, ny;
+  if (dataW > dataH) {
+    nx = nxGrid;
+    ny = Math.max(1, Math.round(nxGrid * dataH / dataW));
+  } else {
+    ny = nyGrid;
+    nx = Math.max(1, Math.round(nyGrid * dataW / dataH));
+  }
+
+  const gpos = getGroupPositions(slideIdx);
+  const result = [];
+
+  for (let gi = 0; gi < N_GROUPS; gi++) {
+    if (hidden.has(GROUP_LABELS[gi])) continue;
+    const gp = gpos[gi];
+    if (gp.n < 5) continue;
+
+    const hist = computeHistogram2D(gp.x, gp.y, null, nx, ny, xr, yr);
+    const blurred = gaussianBlur(hist, nx, ny, sigma);
+
+    let maxD = 0;
+    for (let i = 0; i < blurred.length; i++) {
+      if (blurred[i] > maxD) maxD = blurred[i];
+    }
+    if (maxD <= 0) continue;
+
+    const contours = [];
+    for (let li = 1; li <= nLevels; li++) {
+      const frac = li / (nLevels + 1);
+      const threshold = maxD * frac;
+      const polys = marchingSquares(blurred, nx, ny, threshold, xr, yr);
+      contours.push({ level: frac, polys });
+    }
+
+    result.push({ gi, color: GROUP_COLORS[gi], contours });
+  }
+
+  return result;
+}
+
+function getKDE(slideIdx) {
+  const hiddenKey = Array.from(hidden).sort().join('|');
+  const cached = kdeCache.get(slideIdx);
+  if (cached && cached.bwIdx === kdeBWIdx && cached.levels === kdeLevels && cached.hiddenKey === hiddenKey) {
+    return cached.data;
+  }
+  const bw = KDE_RADII[kdeBWIdx];
+  const data = computeKDE(slideIdx, bw, kdeLevels);
+  kdeCache.set(slideIdx, { bwIdx: kdeBWIdx, levels: kdeLevels, hiddenKey, data });
+  return data;
+}
+
+function drawKDEContours(ctx, kdeData, panZoom, opacity, fill, lines) {
+  if (!kdeData) return;
+
+  for (const entry of kdeData) {
+    const color = entry.color;
+    const [r, g, b] = hexToRgb(color);
+
+    for (let li = entry.contours.length - 1; li >= 0; li--) {
+      const { level, polys } = entry.contours[li];
+
+      for (const poly of polys) {
+        if (poly.length < 3) continue;
+
+        const path = new Path2D();
+        path.moveTo(poly[0][0], poly[0][1]);
+        for (let i = 1; i < poly.length; i++) {
+          path.lineTo(poly[i][0], poly[i][1]);
+        }
+        path.closePath();
+
+        if (fill) {
+          ctx.globalAlpha = opacity * (1 - level) * 0.6;
+          ctx.fillStyle = 'rgba(' + r + ',' + g + ',' + b + ',1)';
+          ctx.fill(path);
+        }
+
+        if (lines) {
+          ctx.globalAlpha = opacity;
+          ctx.strokeStyle = color;
+          ctx.lineWidth = (1.5 - level * 0.5) / panZoom;
+          ctx.stroke(path);
+        }
+      }
+    }
+  }
+}
+
+// ===================================================================
+// Draw precomputed regions
+// ===================================================================
+function drawRegions(ctx, regions, panZoom, opacity, showLbl, showBnd) {
+  if (!regions || regions.length === 0) return;
+
+  for (const reg of regions) {
+    if (reg.bnd.length < 3) continue;
+    if (reg.type && hidden.has(reg.type)) continue;
+
+    const path = new Path2D();
+    path.moveTo(reg.bnd[0][0], reg.bnd[0][1]);
+    for (let i = 1; i < reg.bnd.length; i++) {
+      path.lineTo(reg.bnd[i][0], reg.bnd[i][1]);
+    }
+    path.closePath();
+
+    ctx.globalAlpha = opacity;
+    ctx.fillStyle = reg.color;
+    ctx.fill(path);
+
+    if (showBnd) {
+      ctx.globalAlpha = Math.min(opacity * 3, 0.9);
+      ctx.strokeStyle = reg.color;
+      ctx.lineWidth = 2.5 / panZoom;
+      ctx.stroke(path);
+      ctx.strokeStyle = '#fff';
+      ctx.lineWidth = 1.0 / panZoom;
+      ctx.stroke(path);
+    }
+
+    if (showLbl) {
+      let cx = 0, cy = 0;
+      for (const pt of reg.bnd) { cx += pt[0]; cy += pt[1]; }
+      cx /= reg.bnd.length;
+      cy /= reg.bnd.length;
+
+      const fontSize = 11 / panZoom;
+      ctx.font = 'bold ' + fontSize + 'px system-ui';
+      ctx.textAlign = 'center';
+      ctx.textBaseline = 'middle';
+      ctx.globalAlpha = 0.9;
+
+      const line1 = reg.label;
+      const line2 = reg.n + ' cells (' + (reg.dfrac * 100).toFixed(0) + '%)';
+      const lh = fontSize * 1.3;
+
+      ctx.fillStyle = '#000';
+      ctx.fillText(line1, cx + 0.8/panZoom, cy - lh/2 + 0.8/panZoom);
+      ctx.fillText(line2, cx + 0.8/panZoom, cy + lh/2 + 0.8/panZoom);
+      ctx.fillStyle = '#fff';
+      ctx.fillText(line1, cx, cy - lh/2);
+      ctx.fillText(line2, cx, cy + lh/2);
+    }
+  }
+}
+
+// ===================================================================
+// Re-cluster all groups in all slides
+// ===================================================================
+function reclusterAll() {
+  const mult = parseFloat(document.getElementById('eps-slider').value);
+  const minCells = parseInt(document.getElementById('min-cells').value);
+  let totalClusters = 0, totalHulls = 0;
+  let epsMin = Infinity, epsMax = 0;
+  const t0 = performance.now();
+
+  for (let si = 0; si < SLIDES.length; si++) {
+    const gpos = getGroupPositions(si);
+    const slideClusters = [];
+
+    for (let gi = 0; gi < N_GROUPS; gi++) {
+      if (hidden.has(GROUP_LABELS[gi])) { slideClusters.push([]); continue; }
+      const gp = gpos[gi];
+      if (gp.n === 0) { slideClusters.push([]); continue; }
+
+      const eps = AUTO_EPS[si][gi] * mult;
+      if (eps < epsMin) epsMin = eps;
+      if (eps > epsMax) epsMax = eps;
+      const labels = dbscan(gp.x, gp.y, gp.n, eps, minCells);
+
+      const clusterMap = new Map();
+      for (let i = 0; i < gp.n; i++) {
+        const cl = labels[i];
+        if (cl === -1) continue;
+        let arr = clusterMap.get(cl);
+        if (!arr) { arr = []; clusterMap.set(cl, arr); }
+        arr.push(i);
+      }
+
+      const groupClusters = [];
+      let num = 0;
+      for (const [clId, indices] of clusterMap) {
+        num++;
+        totalClusters++;
+        const pts = [];
+        let sx = 0, sy = 0;
+        for (const idx of indices) {
+          const px = gp.x[idx], py = gp.y[idx];
+          pts.push([px, py]);
+          sx += px; sy += py;
+        }
+        const cx = sx / indices.length;
+        const cy = sy / indices.length;
+
+        let hull = [];
+        if (indices.length >= MIN_HULL) {
+          hull = convexHull(pts);
+          if (hull.length >= 3) totalHulls++;
+          else hull = [];
+        }
+
+        groupClusters.push({
+          label: GROUP_LABELS[gi] + ' #' + num,
+          n: indices.length,
+          hull: hull,
+          cx: cx,
+          cy: cy,
+        });
+      }
+      slideClusters.push(groupClusters);
+    }
+    clusterData[si] = slideClusters;
+  }
+
+  const dt = (performance.now() - t0).toFixed(0);
+  const epsRange = epsMin === Infinity ? '' :
+    ' | eps ' + Math.round(epsMin) + '-' + Math.round(epsMax) + ' um';
+  document.getElementById('cluster-status').textContent =
+    totalClusters + ' clusters (' + totalHulls + ' hulls) ' + dt + 'ms' + epsRange;
 }
 
 // ===================================================================
@@ -1135,6 +2167,18 @@ function renderPanel(p) {
   ctx.translate(p.panX, p.panY);
   ctx.scale(p.zoom, p.zoom);
 
+  // Layer 1: Regions (lowest)
+  if (showRegions && p.slide.regions && p.slide.regions.length > 0) {
+    drawRegions(ctx, p.slide.regions, p.zoom, regionAlpha, showRegionLabels, showRegionBnd);
+  }
+
+  // Layer 2: KDE contours
+  if (showKDE) {
+    const kdeData = getKDE(p.idx);
+    drawKDEContours(ctx, kdeData, p.zoom, kdeAlpha, kdeFill, kdeLines);
+  }
+
+  // Layer 3: Cell dots
   const r = dotSize / p.zoom;
   const halfR = r / 2;
   const slide = p.slide;
@@ -1143,7 +2187,6 @@ function renderPanel(p) {
   const n = slide.n;
   let total = 0;
 
-  // For performance with >50k cells, batch by group
   const useROIFilter = roiFilterActive && rois.length > 0;
 
   for (let gi = 0; gi < N_GROUPS; gi++) {
@@ -1158,6 +2201,50 @@ function renderPanel(p) {
       if (useROIFilter && !cellPassesROIFilter(x, y, p.idx)) continue;
       ctx.fillRect(x - halfR, y - halfR, r, r);
       total++;
+    }
+  }
+
+  // Layer 4: Cluster hulls (top)
+  const sc = clusterData[p.idx];
+  if (sc) {
+    for (let gi = 0; gi < N_GROUPS; gi++) {
+      if (hidden.has(GROUP_LABELS[gi])) continue;
+      const groupClusters = sc[gi];
+      if (!groupClusters) continue;
+
+      for (const cl of groupClusters) {
+        if (showHulls && cl.hull && cl.hull.length >= 3) {
+          ctx.globalAlpha = 1;
+          const path = new Path2D();
+          path.moveTo(cl.hull[0][0], cl.hull[0][1]);
+          for (let i = 1; i < cl.hull.length; i++) {
+            path.lineTo(cl.hull[i][0], cl.hull[i][1]);
+          }
+          path.closePath();
+
+          ctx.setLineDash([6/p.zoom, 4/p.zoom]);
+          ctx.strokeStyle = '#000';
+          ctx.lineWidth = 2.5 / p.zoom;
+          ctx.stroke(path);
+          ctx.strokeStyle = '#fff';
+          ctx.lineWidth = 1.2 / p.zoom;
+          ctx.stroke(path);
+          ctx.setLineDash([]);
+        }
+
+        if (showLabels && cl.hull && cl.hull.length >= 3) {
+          ctx.globalAlpha = 1;
+          const fontSize = 11 / p.zoom;
+          ctx.font = fontSize + 'px system-ui';
+          ctx.textAlign = 'center';
+          ctx.textBaseline = 'middle';
+          const line1 = cl.n + ' cells';
+          ctx.fillStyle = '#000';
+          ctx.fillText(line1, cl.cx + 0.5/p.zoom, cl.cy + 0.5/p.zoom);
+          ctx.fillStyle = '#fff';
+          ctx.fillText(line1, cl.cx, cl.cy);
+        }
+      }
     }
   }
 
@@ -1452,6 +2539,8 @@ function initLegend() {
         hidden.add(lbl);
         item.classList.add('hidden');
       }
+      kdeCache.clear();
+      reclusterAll();
       scheduleRenderAll();
     };
     legDiv.appendChild(item);
@@ -1480,11 +2569,15 @@ function initControls() {
   document.getElementById('btn-show-all').onclick = () => {
     hidden.clear();
     document.querySelectorAll('.leg-item').forEach(el => el.classList.remove('hidden'));
+    kdeCache.clear();
+    reclusterAll();
     scheduleRenderAll();
   };
   document.getElementById('btn-hide-all').onclick = () => {
     GROUP_LABELS.forEach(l => hidden.add(l));
     document.querySelectorAll('.leg-item').forEach(el => el.classList.add('hidden'));
+    kdeCache.clear();
+    reclusterAll();
     scheduleRenderAll();
   };
 
@@ -1542,6 +2635,84 @@ function initControls() {
     roiFilterActive = e.target.checked;
     scheduleRenderAll();
   };
+
+  // Clustering controls
+  const epsSlider = document.getElementById('eps-slider');
+  const minCellsSlider = document.getElementById('min-cells');
+  epsSlider.oninput = e => {
+    document.getElementById('eps-val').textContent = parseFloat(e.target.value).toFixed(2);
+  };
+  epsSlider.onchange = () => { reclusterAll(); scheduleRenderAll(); };
+  minCellsSlider.oninput = e => {
+    document.getElementById('min-cells-val').textContent = e.target.value;
+  };
+  minCellsSlider.onchange = () => { reclusterAll(); scheduleRenderAll(); };
+  document.getElementById('show-hulls').onchange = e => {
+    showHulls = e.target.checked;
+    scheduleRenderAll();
+  };
+  document.getElementById('show-labels').onchange = e => {
+    showLabels = e.target.checked;
+    scheduleRenderAll();
+  };
+
+  // KDE controls
+  const showKDECb = document.getElementById('show-kde');
+  if (showKDECb) {
+    showKDECb.onchange = e => { showKDE = e.target.checked; scheduleRenderAll(); };
+
+    function kdeDebounced() {
+      if (kdeDebounceTimer) clearTimeout(kdeDebounceTimer);
+      kdeDebounceTimer = setTimeout(() => { kdeCache.clear(); scheduleRenderAll(); }, 200);
+    }
+
+    document.getElementById('kde-bw').oninput = e => {
+      kdeBWIdx = parseInt(e.target.value);
+      document.getElementById('kde-bw-val').textContent = KDE_RADII[kdeBWIdx] + ' \\u00b5m';
+      kdeDebounced();
+    };
+    document.getElementById('kde-levels').oninput = e => {
+      kdeLevels = parseInt(e.target.value);
+      document.getElementById('kde-levels-val').textContent = kdeLevels;
+      kdeDebounced();
+    };
+    document.getElementById('kde-opacity').oninput = e => {
+      kdeAlpha = parseFloat(e.target.value);
+      document.getElementById('kde-op-val').textContent = kdeAlpha.toFixed(2);
+      scheduleRenderAll();
+    };
+    document.getElementById('kde-fill').onchange = e => { kdeFill = e.target.checked; scheduleRenderAll(); };
+    document.getElementById('kde-lines').onchange = e => { kdeLines = e.target.checked; scheduleRenderAll(); };
+  }
+
+  // Region controls
+  const showRegCb = document.getElementById('show-regions');
+  if (showRegCb) {
+    showRegCb.onchange = e => { showRegions = e.target.checked; scheduleRenderAll(); };
+    document.getElementById('show-region-labels').onchange = e => { showRegionLabels = e.target.checked; scheduleRenderAll(); };
+    document.getElementById('show-region-bnd').onchange = e => { showRegionBnd = e.target.checked; scheduleRenderAll(); };
+    document.getElementById('region-opacity').oninput = e => {
+      regionAlpha = parseFloat(e.target.value);
+      document.getElementById('region-op-val').textContent = regionAlpha.toFixed(2);
+      scheduleRenderAll();
+    };
+
+    // Scale slider (multi-scale regions)
+    const scaleSlider = document.getElementById('region-scale');
+    if (scaleSlider) {
+      scaleSlider.oninput = e => {
+        const idx = parseInt(e.target.value);
+        const key = String(SCALE_KEYS[idx]);
+        document.getElementById('region-scale-val').textContent = key + ' \\u00b5m';
+        for (const slide of SLIDES) {
+          if (slide.regionScales && slide.regionScales[key]) {
+            slide.regions = slide.regionScales[key];
+          }
+        }
+        scheduleRenderAll();
+      };
+    }
+  }
 }
 
 // ===================================================================
@@ -1554,6 +2725,7 @@ initControls();
 function fullInit() {
   resizePanels();
   panels.forEach(fitPanel);
+  reclusterAll();
   scheduleRenderAll();
 }
 
@@ -1609,6 +2781,21 @@ def main():
                         help='HTML page title')
     parser.add_argument('--output', default=None,
                         help='Output HTML path (default: {input-dir}/spatial_viewer.html)')
+    parser.add_argument('--top-n', type=int, default=None,
+                        help='Keep top N groups by cell count, lump rest into "other"')
+    parser.add_argument('--exclude-groups', default=None,
+                        help='Comma-separated group labels to exclude entirely')
+    parser.add_argument('--default-min-cells', type=int, default=10,
+                        help='Default DBSCAN min_samples (default: 10)')
+    parser.add_argument('--min-hull-cells', type=int, default=24,
+                        help='Min cells in cluster to draw convex hull (default: 24)')
+    parser.add_argument('--no-graph-patterns', action='store_true',
+                        help='Disable graph-based spatial pattern regions (enabled by default)')
+    parser.add_argument('--connect-radius', type=float, nargs='+',
+                        default=[50, 100, 200, 300, 400, 500, 600, 700, 800, 1000],
+                        help='Connection radii in um for graph patterns (default: 10 scales)')
+    parser.add_argument('--min-region-cells', type=int, default=8,
+                        help='Min cells per connected component for regions (default: 8)')
     args = parser.parse_args()
 
     if not args.input_dir and not args.detections:
@@ -1652,16 +2839,73 @@ def main():
         print("Error: no valid slide data loaded", file=sys.stderr)
         sys.exit(1)
 
+    # Apply top-N filtering and exclusions
+    exclude_groups = set()
+    if args.exclude_groups:
+        exclude_groups = {s.strip() for s in args.exclude_groups.split(',')}
+    if args.top_n or exclude_groups:
+        apply_top_n_filtering(slides_data, args.top_n, exclude_groups)
+
     # Assign colors
     color_map = assign_group_colors(slides_data)
     print(f"\nGroups: {', '.join(f'{k} ({v})' for k, v in sorted(color_map.items()))}")
+
+    # Compute graph-pattern regions if requested
+    has_regions = False
+    has_multiscale = False
+    scale_keys = None
+    if not args.no_graph_patterns:
+        radii = sorted(args.connect_radius)
+        scale_keys = [str(int(r)) for r in radii]
+        has_multiscale = len(radii) > 1
+        mid_idx = len(radii) // 2
+
+        for name, data in slides_data:
+            # Build position/type arrays from groups
+            pos_list = []
+            type_list = []
+            type_labels = []
+            type_colors = []
+            for gi, g in enumerate(data['groups']):
+                type_labels.append(g['label'])
+                type_colors.append(g['color'])
+                pos_list.append(np.column_stack([g['x'], g['y']]))
+                type_list.append(np.full(g['n'], gi, dtype=np.int32))
+
+            positions = np.vstack(pos_list)
+            types_arr = np.concatenate(type_list)
+
+            print(f"  Computing graph patterns for {name}...")
+            if has_multiscale:
+                scales = {}
+                for r in radii:
+                    scales[str(int(r))] = compute_graph_patterns(
+                        positions, types_arr, type_labels, type_colors,
+                        connect_radius_um=r,
+                        min_cluster_cells=args.min_region_cells,
+                        boundary_dilate_um=r * 0.4)
+                data['region_scales'] = scales
+                data['regions'] = scales[str(int(radii[mid_idx]))]
+            else:
+                data['regions'] = compute_graph_patterns(
+                    positions, types_arr, type_labels, type_colors,
+                    connect_radius_um=radii[0],
+                    min_cluster_cells=args.min_region_cells,
+                    boundary_dilate_um=radii[0] * 0.4)
+
+        has_regions = any(data.get('regions') for _, data in slides_data)
 
     # Generate HTML
     total_cells = sum(d['n_cells'] for _, d in slides_data)
     print(f"\nGenerating HTML for {len(slides_data)} slides, "
           f"{total_cells:,} total cells...")
     generate_html(slides_data, args.output, color_map,
-                  title=args.title, group_field=args.group_field)
+                  title=args.title, group_field=args.group_field,
+                  default_min_cells=args.default_min_cells,
+                  min_hull_cells=args.min_hull_cells,
+                  has_regions=has_regions,
+                  has_multiscale=has_multiscale,
+                  scale_keys=scale_keys)
 
 
 if __name__ == '__main__':

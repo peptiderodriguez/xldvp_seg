@@ -183,6 +183,24 @@ def _pid_exists(pid):
         return False
 
 
+def _find_cloudflared() -> str | None:
+    """Search common locations for the cloudflared binary."""
+    import shutil
+    # 1. Check PATH (includes ~/.local/bin if configured)
+    found = shutil.which('cloudflared')
+    if found:
+        return found
+    # 2. Explicit common locations
+    for candidate in [
+        Path.home() / '.local' / 'bin' / 'cloudflared',
+        Path.home() / 'cloudflared',
+        Path('/usr/local/bin/cloudflared'),
+    ]:
+        if candidate.is_file() and os.access(candidate, os.X_OK):
+            return str(candidate)
+    return None
+
+
 def start_server_and_tunnel(html_dir: Path, port: int = 8081, background: bool = False,
                             slide_name: str = None, cell_type: str = None) -> tuple:
     """Start HTTP server and Cloudflare tunnel for viewing results.
@@ -286,11 +304,11 @@ def start_server_and_tunnel(html_dir: Path, port: int = 8081, background: bool =
             'cell_type': cell_type,
         }))
     else:
-        # Need to start a new tunnel
-        cloudflared_path = os.path.expanduser('~/cloudflared')
-        if not os.path.exists(cloudflared_path):
-            logger.warning("Cloudflare tunnel not found at ~/cloudflared")
-            logger.info("Install with: curl -L https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-amd64 -o ~/cloudflared && chmod +x ~/cloudflared")
+        # Need to start a new tunnel — search common locations
+        cloudflared_path = _find_cloudflared()
+        if cloudflared_path is None:
+            logger.warning("cloudflared not found in PATH, ~/.local/bin, or ~/")
+            logger.info("Install with: curl -L https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-amd64 -o ~/.local/bin/cloudflared && chmod +x ~/.local/bin/cloudflared")
             if background:
                 # Save HTTP server PID even without tunnel
                 SERVER_PID_FILE.write_text(json.dumps({

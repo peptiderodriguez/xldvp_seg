@@ -14,8 +14,8 @@ all_channels: true
 num_gpus: 4
 
 markers:
-  - {channel: 1, name: NeuN, method: otsu}
-  - {channel: 2, name: tdTomato, method: otsu}
+  - {channel: 1, name: NeuN, method: otsu_half}
+  - {channel: 2, name: tdTomato, method: otsu_half}
 correct_all_channels: false   # pipeline does bg correction automatically during detection
 
 spatial_network:

@@ -20,8 +20,11 @@ and guide you through the full pipeline — detection through LMD export.
 **Pipelines available:**
 1. **MK/HSPC** - Bone marrow cell segmentation (Megakaryocytes + Stem Cells)
 2. **NMJ** - Neuromuscular junction detection in muscle tissue
-3. **Vessel** - Blood vessel morphometry (SMA+ ring detection)
-4. **Mesothelium** - Mesothelial ribbon detection for laser microdissection
+3. **Cell** - Generic 2-channel Cellpose segmentation (e.g. NeuN+nuc, senescence)
+4. **Vessel** - Blood vessel morphometry (SMA+ ring detection)
+5. **Mesothelium** - Mesothelial ribbon detection for laser microdissection
+6. **Islet** - Pancreatic islet cell detection (nuclear + membrane channels)
+7. **Tissue Pattern** - Whole-mount tissue detection (brain FISH, coronal sections)
 
 ### Documentation
 - **[GETTING_STARTED.md](docs/GETTING_STARTED.md)** - Full user guide
@@ -262,6 +265,12 @@ UID format: `{slide}_{celltype}_{x}_{y}`
 | `scripts/cluster_detections.py` | Biological clustering for LMD well assignment |
 | `scripts/napari_view_lmd_export.py` | View LMD export overlaid on slide |
 | `scripts/convert_to_spatialdata.py` | Convert detections to SpatialData zarr (scverse ecosystem) |
+| `scripts/generate_multi_slide_spatial_viewer.py` | Unified spatial viewer: DBSCAN clustering, convex hulls, ROI drawing, focus view |
+| `scripts/view_slide.py` | One-command visualization: classify + spatial cluster + interactive viewer |
+| `scripts/spatial_cell_analysis.py` | Spatial network analysis (connected components, graph metrics) |
+| `scripts/preview_preprocessing.py` | Preview flat-field / photobleach correction at reduced resolution |
+| `scripts/run_pipeline.sh` | YAML config-driven multi-slide SLURM launcher |
+| `scripts/system_info.py` | Environment detection + resource recommendation for SLURM |
 
 ---
 
@@ -274,6 +283,9 @@ UID format: `{slide}_{celltype}_{x}_{y}`
 | MK | `segmentation/detection/strategies/mk.py` |
 | Cell | `segmentation/detection/strategies/cell.py` |
 | Vessel | `segmentation/detection/strategies/vessel.py` |
+| Islet | `segmentation/detection/strategies/islet.py` |
+| Mesothelium | `segmentation/detection/strategies/mesothelium.py` |
+| Tissue Pattern | `segmentation/detection/strategies/tissue_pattern.py` |
 
 ### Multi-GPU Processing (always used, even with --num-gpus 1)
 | Module | Purpose |

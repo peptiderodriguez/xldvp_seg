@@ -1,124 +1,98 @@
 #!/usr/bin/env python3
 """
-Serve HTML detection viewer with Cloudflare tunnel.
+Serve any HTML directory with Cloudflare tunnel.
 
 Starts a local HTTP server and creates a Cloudflare tunnel for remote access.
+Uses the pipeline's server module (proper cloudflared discovery, PID tracking).
 
 Usage:
     python serve_html.py /path/to/output/html
     python serve_html.py /path/to/output/html --port 8081
+    python serve_html.py /path/to/spatial_viewer.html          # serve parent dir
+    python serve_html.py /path/to/output --background          # detach
+    python serve_html.py --stop                                 # kill all servers
+    python serve_html.py --status                               # show running servers
 """
 
 import argparse
-import subprocess
 import sys
-import os
 from pathlib import Path
-import http.server
-import socketserver
-import threading
-import time
 
-
-def start_http_server(directory, port):
-    """Start a simple HTTP server in a thread."""
-    os.chdir(directory)
-    handler = http.server.SimpleHTTPRequestHandler
-    handler.extensions_map.update({
-        '.html': 'text/html',
-        '.json': 'application/json',
-        '.js': 'application/javascript',
-        '.css': 'text/css',
-    })
-
-    with socketserver.TCPServer(("", port), handler) as httpd:
-        print(f"HTTP server running at http://localhost:{port}")
-        httpd.serve_forever()
-
-
-def start_cloudflare_tunnel(port):
-    """Start cloudflared tunnel."""
-    cloudflared = Path.home() / "cloudflared"
-    if not cloudflared.exists():
-        cloudflared = "cloudflared"  # Try system path
-
-    cmd = [str(cloudflared), "tunnel", "--url", f"http://localhost:{port}"]
-
-    print(f"\nStarting Cloudflare tunnel...")
-    print(f"Command: {' '.join(cmd)}\n")
-
-    try:
-        process = subprocess.Popen(
-            cmd,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.STDOUT,
-            text=True,
-            bufsize=1,
-        )
-
-        # Read output and look for the URL
-        for line in process.stdout:
-            print(line, end='')
-            if "trycloudflare.com" in line:
-                # URL found - continue running
-                pass
-
-        process.wait()
-    except KeyboardInterrupt:
-        print("\nShutting down...")
-        process.terminate()
-    except FileNotFoundError:
-        print("ERROR: cloudflared not found!")
-        print("Install with: curl -L https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-amd64 -o ~/cloudflared && chmod +x ~/cloudflared")
-        sys.exit(1)
+REPO = Path(__file__).resolve().parent
+sys.path.insert(0, str(REPO))
 
 
 def main():
-    parser = argparse.ArgumentParser(description='Serve HTML viewer with Cloudflare tunnel')
-    parser.add_argument('directory', help='Path to HTML directory')
-    parser.add_argument('--port', type=int, default=8080, help='Port for HTTP server (default: 8080)')
-    parser.add_argument('--no-tunnel', action='store_true', help='Only start HTTP server, no Cloudflare tunnel')
+    parser = argparse.ArgumentParser(description='Serve HTML with Cloudflare tunnel')
+    parser.add_argument('path', nargs='?', help='Directory or HTML file to serve')
+    parser.add_argument('--port', type=int, default=8081, help='Port (default: 8081)')
+    parser.add_argument('--no-tunnel', action='store_true', help='HTTP only, no tunnel')
+    parser.add_argument('--background', action='store_true', help='Detach server processes')
+    parser.add_argument('--stop', action='store_true', help='Stop all background servers')
+    parser.add_argument('--status', action='store_true', help='Show running servers')
 
     args = parser.parse_args()
 
-    directory = Path(args.directory)
-    if not directory.exists():
-        print(f"ERROR: Directory not found: {directory}")
+    from segmentation.pipeline.server import (
+        start_server_and_tunnel, wait_for_server_shutdown,
+        stop_background_server, show_server_status,
+    )
+
+    if args.stop:
+        stop_background_server()
+        return
+
+    if args.status:
+        show_server_status()
+        return
+
+    if not args.path:
+        parser.error('path is required (unless using --stop or --status)')
+
+    path = Path(args.path).resolve()
+
+    # Accept an HTML file — serve its parent directory
+    if path.is_file():
+        directory = path.parent
+    elif path.is_dir():
+        directory = path
+        # Check for html/ subdir
+        if (directory / 'html').is_dir() and not (directory / 'spatial_viewer.html').exists():
+            directory = directory / 'html'
+    else:
+        print(f"ERROR: Not found: {path}", file=sys.stderr)
         sys.exit(1)
 
-    # Find html subdirectory if needed
-    if (directory / "html").exists():
-        directory = directory / "html"
+    slide_name = directory.name
 
-    index_file = directory / "index.html"
-    if not index_file.exists():
-        print(f"ERROR: No index.html found in {directory}")
-        sys.exit(1)
+    if args.no_tunnel:
+        # HTTP only — just start and block
+        import subprocess, time
+        proc = subprocess.Popen(
+            ['python', '-m', 'http.server', str(args.port)],
+            cwd=str(directory),
+        )
+        print(f"Serving {directory} at http://localhost:{args.port}")
+        print("Press Ctrl+C to stop")
+        try:
+            proc.wait()
+        except KeyboardInterrupt:
+            proc.terminate()
+        return
 
     print(f"Serving: {directory}")
     print(f"Port: {args.port}")
 
-    # Start HTTP server in background thread
-    server_thread = threading.Thread(
-        target=start_http_server,
-        args=(str(directory), args.port),
-        daemon=True
+    http_proc, tunnel_proc, tunnel_url = start_server_and_tunnel(
+        directory, port=args.port, background=args.background,
+        slide_name=slide_name, cell_type='serve_html',
     )
-    server_thread.start()
+    if http_proc is None:
+        print("ERROR: Failed to start server", file=sys.stderr)
+        sys.exit(1)
 
-    time.sleep(1)  # Give server time to start
-
-    if args.no_tunnel:
-        print(f"\nView at: http://localhost:{args.port}")
-        print("Press Ctrl+C to stop")
-        try:
-            while True:
-                time.sleep(1)
-        except KeyboardInterrupt:
-            print("\nShutting down...")
-    else:
-        # Start Cloudflare tunnel (blocking)
-        start_cloudflare_tunnel(args.port)
+    if not args.background:
+        wait_for_server_shutdown(http_proc, tunnel_proc)
 
 
 if __name__ == '__main__':
