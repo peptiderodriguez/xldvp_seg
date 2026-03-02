@@ -220,8 +220,6 @@ build_seg_cmd() {
     if [[ -n "$BG_NEIGHBORS" ]]; then
         cmd+=" --bg-neighbors $BG_NEIGHBORS"
     fi
-    # Always resume — pipeline auto-detects existing checkpoints and skips completed work
-    cmd+=" --resume \"$out_arg\""
     echo "$cmd"
 }
 
@@ -317,13 +315,34 @@ SBATCH_FILE="${OUTPUT_DIR}/pipeline_${NAME}_$$.sbatch"
     echo ""
 
     if [[ "$MULTI_SLIDE" == "true" ]]; then
-        # Multi-slide array job: each task processes a slice of the slide list
-        echo "# Discover slides matching glob"
-        echo "mapfile -t ALL_SLIDES < <(find \"$CZI_DIR\" -maxdepth 1 -name '$CZI_GLOB' -type f | sort)"
-        echo "TOTAL_SLIDES=\${#ALL_SLIDES[@]}"
+        # Multi-slide array job: pre-compute slide list and resume paths at generation time
+        mapfile -t _GEN_SLIDES < <(find "$CZI_DIR" -maxdepth 1 -name "$CZI_GLOB" -type f | sort)
+        _N_SLIDES=${#_GEN_SLIDES[@]}
+
+        # Bake slide list into sbatch as a fixed array (no runtime glob)
+        echo "ALL_SLIDES=("
+        for _s in "${_GEN_SLIDES[@]}"; do
+            echo "    \"$_s\""
+        done
+        echo ")"
+        echo "TOTAL_SLIDES=${_N_SLIDES}"
         echo ""
+
+        # Bake resume paths: for each slide, find the most recent run dir with tiles/
+        echo "# Pre-computed resume paths (absolute, resolved at sbatch generation time)"
+        echo "declare -A RESUME_PATHS"
+        for _s in "${_GEN_SLIDES[@]}"; do
+            _sname=$(basename "$_s" .czi)
+            _slide_dir="${OUTPUT_DIR}/${_sname}"
+            _resume_dir=$(ls -td "${_slide_dir}"/*/tiles 2>/dev/null | head -1 | sed 's|/tiles$||')
+            if [[ -n "$_resume_dir" ]]; then
+                echo "RESUME_PATHS[$_sname]=\"$_resume_dir\""
+            fi
+        done
+        echo ""
+
         echo "if [[ \$TOTAL_SLIDES -eq 0 ]]; then"
-        echo "    echo \"Error: no slides matched glob '$CZI_GLOB' in $CZI_DIR\""
+        echo "    echo \"Error: no slides found\""
         echo "    exit 1"
         echo "fi"
         echo ""
@@ -341,8 +360,10 @@ SBATCH_FILE="${OUTPUT_DIR}/pipeline_${NAME}_$$.sbatch"
         echo "    mkdir -p \"\$SLIDE_OUT\""
         echo "    echo \"=== Processing slide \$((i+1))/\$TOTAL_SLIDES: \$CZI_FILE ===\""
         echo ""
-        echo "    # Step 1: Segmentation"
-        echo "    $(build_seg_cmd '${CZI_FILE}' '${SLIDE_OUT}')"
+        echo "    # Step 1: Segmentation (resume from pre-computed path if available)"
+        echo "    RESUME_FLAG=\"\""
+        echo "    if [[ -n \"\${RESUME_PATHS[\$SLIDE_NAME]:-}\" ]]; then RESUME_FLAG=\"--resume \${RESUME_PATHS[\$SLIDE_NAME]}\"; fi"
+        echo "    $(build_seg_cmd '${CZI_FILE}' '${SLIDE_OUT}') \$RESUME_FLAG"
         echo ""
         echo "    # Step 2: Find detection JSON in latest run subdir"
         echo "    RUN_DIR=\$(ls -td \"\${SLIDE_OUT}\"/*/  2>/dev/null | head -1)"
@@ -400,8 +421,14 @@ SBATCH_FILE="${OUTPUT_DIR}/pipeline_${NAME}_$$.sbatch"
         echo "SLIDE_OUT=\"${OUTPUT_DIR}\""
         echo "mkdir -p \"\$SLIDE_OUT\""
         echo ""
+        # Pre-compute resume path at generation time
+        _single_resume=$(ls -td "${OUTPUT_DIR}"/*/tiles 2>/dev/null | head -1 | sed 's|/tiles$||')
         echo "# Step 1: Segmentation"
-        echo "$(build_seg_cmd "$CZI_PATH" '${SLIDE_OUT}')"
+        if [[ -n "$_single_resume" ]]; then
+            echo "$(build_seg_cmd "$CZI_PATH" '${SLIDE_OUT}') --resume \"$_single_resume\""
+        else
+            echo "$(build_seg_cmd "$CZI_PATH" '${SLIDE_OUT}')"
+        fi
         echo ""
         echo "# Step 2: Find detection JSON in latest run subdir"
         echo "RUN_DIR=\$(ls -td \"\${SLIDE_OUT}\"/*/  2>/dev/null | head -1)"
