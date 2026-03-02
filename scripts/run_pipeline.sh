@@ -220,6 +220,8 @@ build_seg_cmd() {
     if [[ -n "$BG_NEIGHBORS" ]]; then
         cmd+=" --bg-neighbors $BG_NEIGHBORS"
     fi
+    # Always resume — pipeline auto-detects existing checkpoints and skips completed work
+    cmd+=" --resume \"$out_arg\""
     echo "$cmd"
 }
 
