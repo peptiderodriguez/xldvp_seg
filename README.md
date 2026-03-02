@@ -168,7 +168,7 @@ This generates an sbatch script with the right flags, submits to SLURM, and chai
 - **Use `--channel-spec`** instead of raw channel indices — automatically resolves marker names against CZI metadata
 - **Check `scripts/system_info.py`** before launching — it detects your system and recommends partition, GPU count, and memory settings
 - **Inspect your CZI first** with `/czi-info` or `run_segmentation.py --show-metadata --czi-path <file>` — CZI channel order (sorted by wavelength) often differs from filename order
-- **For SLURM restarts**: just re-run `scripts/run_pipeline.sh` — it auto-detects existing tile checkpoints and resumes from where it left off
+- **For SLURM restarts**: add `resume_dir: /path/to/run_dir` to your YAML config, then re-run `scripts/run_pipeline.sh` — per-tile checkpoints are used automatically when `--resume` is passed. Without `resume_dir:` in the YAML, re-running starts a fresh full-detection run
 
 ## Citation
 

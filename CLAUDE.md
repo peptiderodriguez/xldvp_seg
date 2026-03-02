@@ -209,6 +209,11 @@ slurm:
   num_jobs: 24          # one job per slide
 ```
 
+**Resume with `run_pipeline.sh`**: add `resume_dir: /path/to/run_dir` to YAML. Without it, re-running always starts fresh (auto-discovery removed to prevent accidentally resuming old test/sample runs).
+```yaml
+resume_dir: /fs/pool/pool-mann-edwin/my_output/slide_20260302_121345_100pct
+```
+
 **NMJ example (3-channel):**
 - ch0: Nuclear (488nm)
 - ch1: BTX (647nm) — NMJ marker (detection channel)
