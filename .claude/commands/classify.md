@@ -39,30 +39,28 @@ $MKSEG_PYTHON $REPO/scripts/classify_markers.py \
 
 ## Step 2: Feature Selection
 
-Explain the available feature subsets and help the user choose:
+*Why this matters:* The RF classifier only sees the features that were extracted at detection time. Choosing a larger feature set isn't always better — 78 morphological features reach F1=0.900, while the full 6,478-feature set reaches F1=0.909 on the NMJ benchmark. The extra complexity rarely justifies itself unless morph alone is clearly failing.
 
 | `--feature-set` value | Dimensions | What it captures | When to use |
 |----------------------|-----------|-----------------|-------------|
-| `morph` | ~78 | Shape, size, intensity, texture | **Default** — nearly as good as all (F1=0.900 on NMJ benchmark) |
-| `morph_sam2` | ~334 | + learned visual embeddings from SAM2 | When morphology alone isn't enough |
-| `channel_stats` | ~15/ch | Per-channel intensity distributions only | When marker expression matters (needs `--all-channels`) |
-| `all` | ~6,478 | Everything: morph + SAM2 + ResNet + DINOv2 | Maximum accuracy (F1=0.909). Needs `--extract-deep-features` during detection |
+| `morph` | ~78 | Shape, size, intensity, texture | **Start here** — fast to train (~10s), nearly as accurate as everything else |
+| `morph_sam2` | ~334 | + SAM2 visual embeddings (global shape context) | When cells look similar in size/shape but differ visually |
+| `channel_stats` | ~15/ch | Per-channel intensity distributions | When marker expression (bright vs dim) is the key discriminator — needs `--all-channels` |
+| `all` | ~6,478 | Everything: morph + SAM2 + ResNet + DINOv2 | When nothing else works; needs `--extract-deep-features` during detection |
 
-**Ask:** *"Which features were extracted during detection?"*
-- SAM2 embeddings: always extracted (256D)
-- Per-channel stats: only if `--all-channels` was used
-- ResNet + DINOv2: only if `--extract-deep-features` was used
+**Check what was extracted:**
+- SAM2 (256D): always present
+- Per-channel stats (~15/ch): only if `--all-channels` was used during detection
+- ResNet (4096D) + DINOv2 (2048D): only if `--extract-deep-features` was used — if not, `all` falls back to morph+SAM2
 
-**Offer comparison:** *"Want to run a systematic comparison of feature subsets? This takes ~1 minute and shows which combination works best for your data."*
-
-If yes:
+**Run a 1-minute comparison first** — this tells you definitively whether SAM2 or channel features help for *your specific data* before committing to a feature set:
 ```bash
 $MKSEG_PYTHON $REPO/scripts/compare_feature_sets.py \
     --detections <detections.json> \
     --annotations <annotations.json> \
     --output-dir <output>/feature_comparison
 ```
-This runs 5-fold CV on each feature combination and outputs a ranked table of F1/precision/recall.
+Outputs a ranked table of F1/precision/recall per subset. If `morph` and `morph_sam2` are within 0.01 F1 of each other, use `morph` — simpler is more robust on new slides.
 
 ---
 
@@ -95,6 +93,7 @@ $MKSEG_PYTHON $REPO/scripts/regenerate_html.py \
     --output-dir <output> \
     --score-threshold 0.5
 ```
+*Why 0.5?* The RF outputs a probability (0=definitely false positive, 1=definitely real). 0.5 is the natural decision boundary. Increase to 0.7–0.8 if you want higher precision (fewer false positives, but miss some real cells). Decrease to 0.3 if recall matters more (catch everything, accept more noise). Check the score distribution first: `$MKSEG_PYTHON -c "import json; d=json.load(open('<scored.json>')); scores=[x.get('rf_prediction',0) for x in d]; print(f'mean={sum(scores)/len(scores):.2f}, >0.5: {sum(1 for s in scores if s>0.5)}/{len(scores)}')`
 
 ---
 

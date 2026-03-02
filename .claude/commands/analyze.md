@@ -93,12 +93,17 @@ This replaces manual `--channel`, `--cellpose-input-channels`, and `--marker-cha
 **Step 8 — Configure parameters.** Set up:
 - Detection channel: use `--channel-spec "detect=<marker_or_wavelength>"` (preferred) or `--channel <index>`
 - For 2-channel Cellpose: `--channel-spec "cyto=<marker>,nuc=<marker>"` (preferred) or `--cellpose-input-channels <cyto>,<nuc>`
-- Multi-channel features (`--all-channels` if >1 channel relevant; add `--channels "0,1,2"` to skip unwanted channels)
-- Deep features (`--extract-deep-features` for ResNet+DINOv2, only if user needs max accuracy)
-- Sample fraction: explain 0.01=quick test, 0.10=annotation round, 1.0=full run
-- Output directory
-- Preprocessing flags (`--photobleaching-correction`; flat-field is ON by default, use `--no-normalize-features` to disable)
-- Area filters if relevant (`--min-cell-area`, `--max-cell-area` in um²)
+  - *Why PM+nuc?* PM (plasma membrane) labels all cell bodies regardless of lineage; nuclear is the second Cellpose channel that sharpens borders. Detect everything with morphology, then separate cell types by marker intensity post-detection.
+- Multi-channel features: `--all-channels` if >1 channel is relevant. Add `--channels "0,1,2"` to skip failed stains.
+  - *Why?* Each channel adds ~15 intensity features per cell (mean, std, percentiles, SNR). Without `--all-channels`, marker expression is not captured in features and the RF classifier has no intensity signal to work with.
+- Deep features: `--extract-deep-features` adds ResNet+DINOv2 (6,144 dims). Off by default.
+  - *Why off by default?* Morphological features alone reach F1=0.900 on the NMJ benchmark vs F1=0.909 with all 6,478 features. Deep features triple detection time and rarely change the result for typical slides. Use only if morph+SAM2 underperforms after annotation.
+- Sample fraction: `0.01` = quick sanity check (seconds), `0.10` = annotation round (see ~10% of all detections), `1.0` = full production run.
+  - *Why not 100% first?* Run 10% to annotate and train a classifier before committing hours to full detection — if the detector has a systematic flaw, you catch it cheaply.
+- Preprocessing flags: `--photobleaching-correction` for sequential tile scans with intensity decay. Flat-field is ON by default (`--no-normalize-features` to disable).
+  - *Why flat-field on by default?* Tiled mosaic acquisitions almost always have uneven illumination (bright center, dark edges). Correcting this prevents false intensity gradients across the slide from affecting feature extraction.
+  - *When to use photobleach correction?* Only if you see a visible intensity gradient across scan direction. Check with `/preview-preprocessing`.
+- Area filters (`--min-cell-area`, `--max-cell-area` in µm²) if the cell type has a known size range — cuts debris and giant artifacts before feature extraction.
 
 **Step 9 — Generate YAML config + launch.**
 
@@ -112,8 +117,8 @@ czi_path: <path>              # single slide
 output_dir: <output_path>
 cell_type: <type>
 num_gpus: <from system_info recommended.gpus>
-all_channels: <true/false>
-load_channels: "<comma-separated indices>"  # omit to load all; e.g., "0,1,2" to skip ch3
+all_channels: true    # always true for multi-channel slides — enables per-channel feature extraction
+load_channels: "<comma-separated indices>"  # omit to load all; e.g., "0,1,2" to skip ch3 (failed stains waste RAM)
 pixel_size_um: <from czi_info, or omit — auto-detected from CZI metadata>
 # Channel map — resolved automatically against CZI metadata at runtime
 channel_map:
@@ -128,14 +133,14 @@ spatialdata:
   extract_shapes: true
   run_squidpy: false            # true to auto-run spatial stats
   squidpy_cluster_key: ""       # e.g., tdTomato_class (after marker classification)
-html_sample_fraction: 0.10    # subsample HTML to 10% of detections (saves RAM on large slides)
+html_sample_fraction: 0.10    # 10% keeps HTML fast — large slides have 100k+ crops, loading all crashes the browser
 slurm:
   partition: <from system_info recommended.partition>
   cpus: <from system_info recommended.cpus>
   mem_gb: <from system_info recommended.mem_gb>
   gpus: "<gpu_type>:<count>"
   time: "3-00:00:00"
-  slides_per_job: 1           # 1 slide per SLURM task (best cluster scheduling)
+  slides_per_job: 1           # 1 slide/job = parallel SLURM array tasks, not sequential — much faster throughput
   num_jobs: <number of slides>
 ```
 Then run: `scripts/run_pipeline.sh configs/<name>.yaml`
@@ -253,12 +258,13 @@ PYTHONPATH=$REPO $MKSEG_PYTHON $REPO/scripts/classify_markers.py \
     --correct-all-channels
 ```
 
-**Methods:**
-| Method | Description |
-|--------|-------------|
-| `otsu` (default) | Otsu threshold on corrected values. Per-marker bg_subtract auto-disabled for pipeline-corrected data. |
-| `otsu_half` | Otsu / 2. Permissive, legacy. |
-| `gmm` | 2-component GMM on log1p values. |
+**Methods** — *why Otsu?* Otsu automatically finds the threshold that maximally separates two intensity populations (positive vs negative). It adapts to each slide's signal level so you don't have to pick a number. Use `gmm` when the two populations overlap significantly in log space (e.g., weak marker with high background); use `otsu_half` only for legacy compatibility.
+
+| Method | Description | When |
+|--------|-------------|------|
+| `otsu` (default) | Auto threshold maximizing inter-class variance. Background correction already done by pipeline. | Default for all markers |
+| `otsu_half` | Otsu / 2 — more permissive, calls more cells positive | Very sparse marker expression where true positives are dim |
+| `gmm` | 2-component Gaussian mixture model on log1p intensities | Overlapping distributions, weak signal markers |
 
 **Pipeline-level background correction** (written during detection):
 - `ch{N}_background`: per-cell local background estimate (median of k=30 nearest neighbors)
