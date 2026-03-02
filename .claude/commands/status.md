@@ -14,11 +14,11 @@ ps aux | grep run_segmentation | grep -v grep
 
 **Step 2 — For each active job, offer to:**
 
-1. **Tail the log** — Find the `.out` file:
+1. **Find the log** — Use scontrol to get the exact log path, then tail it:
    ```bash
-   ls -t <output_dir>/slurm_*.out | head -1
+   scontrol show job <JOB_ID> | grep StdOut
+   tail -50 <path_from_stdout>
    ```
-   Then show the last 50 lines.
 
 2. **Check GPU usage** — On SLURM:
    ```bash
@@ -26,12 +26,12 @@ ps aux | grep run_segmentation | grep -v grep
    ```
    On local: `nvidia-smi`
 
-3. **Show detection progress** — Count completed tiles and detections:
+3. **Show detection progress** — Get the run dir from the log path, then count:
    ```bash
-   # Count tile directories
-   ls -d <output_dir>/*/tiles/tile_* 2>/dev/null | wc -l
-   # Count detections in JSON (if exists)
-   $MKSEG_PYTHON -c "import json; d=json.load(open('<detections.json>')); print(f'{len(d)} detections')"
+   # Run dir is the timestamped subdir containing tiles/ (get from scontrol StdOut path or ls)
+   ls -d <run_dir>/tiles/tile_* 2>/dev/null | wc -l
+   # Count detections in JSON (if dedup completed)
+   $MKSEG_PYTHON -c "import json; d=json.load(open('<run_dir>/<celltype>_detections.json')); print(f'{len(d)} detections')"
    ```
 
 4. **Check HTML status** — Does `<output_dir>/html/index.html` exist?

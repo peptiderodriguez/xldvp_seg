@@ -85,6 +85,6 @@ $MKSEG_PYTHON $REPO/scripts/napari_view_lmd_export.py --zarr <slide>.zarr --expo
 - Use `$MKSEG_PYTHON` as interpreter, `PYTHONPATH=$REPO`.
 - All coordinates in this pipeline are [x, y] (horizontal, vertical).
 - Never run heavy processing on the SLURM login node — use `sbatch` for the export if the slide is large.
-- The LMD export agent (`.claude/agents/lmd-export.md`) has additional details for complex cases like quadrant selection and custom well ordering.
+- Max 308 wells per 384-well plate — the pipeline warns early if this limit would be exceeded.
 
 $ARGUMENTS

@@ -115,8 +115,8 @@ Available feature groups: `morph`, `shape`, `color`, `sam2`, `channel`, `deep`
 Outputs:
 - `umap_plot.png` — 2D projection colored by cluster
 - `cluster_summary.csv` — per-cluster statistics
-- `spatial.h5ad` — AnnData format for scanpy
 - `detections_clustered.json` — detections with cluster assignments
+- SpatialData zarr also auto-exported from detection — see Step 5
 
 For beginners: *"UMAP is a way to project high-dimensional features into 2D so you can see if cells form natural groups. HDBSCAN automatically finds those groups (clusters). This helps you discover cell subtypes you might not have known about."*
 

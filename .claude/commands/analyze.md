@@ -114,7 +114,7 @@ cell_type: <type>
 num_gpus: <from system_info recommended.gpus>
 all_channels: <true/false>
 load_channels: "<comma-separated indices>"  # omit to load all; e.g., "0,1,2" to skip ch3
-pixel_size_um: <from czi_info>
+pixel_size_um: <from czi_info, or omit — auto-detected from CZI metadata>
 # Channel map — resolved automatically against CZI metadata at runtime
 channel_map:
   detect: SMA         # or wavelength like 647, or index like 1
@@ -159,23 +159,30 @@ For 2-channel Cellpose (generic cell detection):
 
 **Step 10b — Restarting / Resuming (if job crashed or was cancelled).**
 
-`run_pipeline.sh` automatically detects existing run directories and bakes the exact absolute resume path into the sbatch at generation time. Just re-run:
+**For SLURM (`run_pipeline.sh`):** Add `resume_dir:` to the YAML config pointing to the exact timestamped run directory, then re-run:
+```yaml
+# In configs/<name>.yaml — add this line:
+resume_dir: /path/to/output/slide_name/slide_name_20260302_060105_100pct
+```
 ```bash
 scripts/run_pipeline.sh configs/<name>.yaml
 ```
-It will:
-1. Find the most recent run subdir with `tiles/` for each slide
-2. Bake the full absolute path as `--resume <path>` into the sbatch
-3. On the compute node, the pipeline skips all completed tiles and picks up from dedup/post-dedup
+`run_pipeline.sh` only adds `--resume` when `resume_dir:` is explicitly set. **Without it, re-running always starts a fresh full-detection run.** (Auto-discovery was removed to prevent accidentally resuming old test/sample runs.)
 
-For **local runs**, pass `--resume` with the exact run directory (the timestamped subdir containing `tiles/`):
+Find the run directory to resume from:
+```bash
+ls -t <output_dir>/<slide_name>/  # most recent timestamped subdir
+ls <output_dir>/<slide_name>/<timestamp>/tiles/ | head -3  # confirm tiles/ is inside
+```
+
+**For local runs**, pass `--resume` directly:
 ```bash
 PYTHONPATH=$REPO $MKSEG_PYTHON $REPO/run_segmentation.py \
     --czi-path <path> --cell-type <type> \
     --resume /path/to/output/slide_name/slide_name_20260302_060105_100pct \
     [other flags]
 ```
-**IMPORTANT**: `--resume` must point to the exact run directory (with `tiles/` directly inside), NOT the slide-level directory. Check with `ls <path>/tiles/` to confirm.
+**IMPORTANT**: `--resume` must point to the exact run directory (the timestamped subdir with `tiles/` directly inside), NOT the slide-level directory. Check with `ls <path>/tiles/` to confirm.
 
 ---
 

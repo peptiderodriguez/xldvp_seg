@@ -52,6 +52,24 @@ adata = sdata["table"]
 ```
 Also check for squidpy outputs (`*_squidpy/morans_i.csv`, `*_squidpy/*.png`) and show paths if they exist.
 
+**Step 5c — One-command full visualization** (classify + spatial clustering + interactive viewer):
+```bash
+$MKSEG_PYTHON $REPO/scripts/view_slide.py \
+    --detections <detections.json> \
+    --czi-path <czi_path> \
+    --output-dir <output>
+```
+This chains marker classification → spatial clustering → viewer generation → serves HTML with Cloudflare tunnel in one call. Useful after detection completes.
+
+**Step 5d — Multi-slide spatial viewer** (KDE density contours, graph-pattern regions, DBSCAN clustering):
+```bash
+$MKSEG_PYTHON $REPO/scripts/generate_multi_slide_spatial_viewer.py \
+    --input-dir <output> \
+    --group-field <marker_class_field> \
+    --output <output>/spatial_viewer.html
+```
+Client-side KDE bandwidth slider (50–1000 µm), multi-scale graph-pattern classification (linear/arc/ring/cluster), DBSCAN with convex hulls, ROI drawing.
+
 For beginners, explain the annotation interface:
 - Each card shows a detection crop with overlay
 - Green checkmark = real detection (positive)
