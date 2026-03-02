@@ -78,8 +78,8 @@ def save_with_timestamp(base_path, data, fmt="json", json_encoder=None):
     base.parent.mkdir(parents=True, exist_ok=True)
 
     if fmt == "json":
-        with open(ts_path, 'w') as f:
-            json.dump(data, f, cls=json_encoder)
+        from segmentation.utils.json_utils import atomic_json_dump
+        atomic_json_dump(data, ts_path, cls=json_encoder)
     elif fmt == "text":
         with open(ts_path, 'w') as f:
             f.write(data if isinstance(data, str) else str(data))

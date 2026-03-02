@@ -595,9 +595,9 @@ class IsletStrategy(CellStrategy):
                 multichannel_feats = self.extract_multichannel_features(local_mask, cropped_channels)
                 feat.update(multichannel_feats)
 
-            # Deep features crops (use original bbox, not padded)
+            # Deep features crops (use tile_u8 for proper normalization)
             if self.extract_deep_features:
-                crop_context = tile[by0:by1, bx0:bx1].copy()
+                crop_context = tile_u8[by0:by1, bx0:bx1].copy()
                 orig_local_mask = (cellpose_masks[sl] == cp_id)
                 crop_masked = crop_context.copy()
                 crop_masked[~orig_local_mask] = 0

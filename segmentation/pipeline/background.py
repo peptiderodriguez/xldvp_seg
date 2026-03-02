@@ -85,7 +85,7 @@ def _extract_centroids(detections: list[dict]) -> np.ndarray:
     """
     centroids = []
     for d in detections:
-        c = d.get("global_center", d.get("center", [0, 0]))
+        c = d.get("global_center") or d.get("center") or [0, 0]
         centroids.append(c)
     return np.array(centroids, dtype=np.float64)
 

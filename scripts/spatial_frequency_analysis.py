@@ -223,11 +223,15 @@ def build_density_profile(distances, transect_length, bin_width_um, weights=None
 
     try:
         # Bandwidth: ~3 bin widths of smoothing in data units
+        # bw_method scalar is a factor on Silverman bandwidth (n^{-1/5} * std),
+        # so convert our desired bandwidth in data units to a Silverman factor
         dist_std = np.std(distances)
-        if dist_std > 0:
-            bw = bin_width_um * 3.0 / dist_std
+        n_pts = len(distances)
+        if dist_std > 0 and n_pts > 1:
+            silverman_bw = n_pts ** (-0.2) * dist_std
+            bw = (bin_width_um * 3.0) / silverman_bw
         else:
-            bw = 0.1  # fallback
+            bw = 1.0  # fallback to default Silverman
         kde = gaussian_kde(distances, bw_method=bw, weights=weights)
         density = kde(positions)
     except (np.linalg.LinAlgError, ValueError):

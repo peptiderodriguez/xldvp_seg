@@ -240,10 +240,10 @@ def build_anndata(detections, cell_type):
                 val = feats.get(f"{prefix}{d}", 0.0)
                 embeddings[obsm_key][i, d] = float(val) if val is not None else 0.0
 
-        # Spatial coordinates
-        gc = det.get('global_center', [0, 0])
+        # Spatial coordinates — check both top-level and features sub-dict
+        gc = det.get('global_center') or feats.get('global_center') or [0, 0]
         spatial_px[i] = [gc[0] if gc[0] is not None else 0, gc[1] if gc[1] is not None else 0]
-        gc_um = det.get('global_center_um', [0, 0])
+        gc_um = det.get('global_center_um') or feats.get('global_center_um') or [0, 0]
         spatial_um[i] = [gc_um[0] if gc_um[0] is not None else 0, gc_um[1] if gc_um[1] is not None else 0]
 
         # Obs metadata

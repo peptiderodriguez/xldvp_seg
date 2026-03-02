@@ -75,6 +75,7 @@ def _signal_cleanup(signum, frame):
 
 if multiprocessing.current_process().name == 'MainProcess':
     signal.signal(signal.SIGTERM, _signal_cleanup)
+    signal.signal(signal.SIGINT, _signal_cleanup)
 
 
 def register_shm_for_cleanup(name: str):

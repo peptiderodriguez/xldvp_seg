@@ -375,7 +375,7 @@ def run_pipeline(args):
             try:
                 with os.fdopen(tmp_fd, 'w') as f:
                     json.dump(sampled_tiles, f)
-                os.rename(tmp_path, tile_list_file)
+                os.replace(tmp_path, tile_list_file)
                 logger.info(f"Wrote shared tile list to {tile_list_file} ({len(sampled_tiles)} tiles)")
             except OSError:
                 # Another shard beat us in a race -- read theirs

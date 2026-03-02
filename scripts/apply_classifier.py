@@ -98,8 +98,13 @@ def main():
     else:
         X = X_valid
 
-        # Score
-        scores = pipeline.predict_proba(X)[:, 1]
+        # Score — handle edge case where classifier has only 1 class
+        proba = pipeline.predict_proba(X)
+        if proba.shape[1] == 1:
+            logger.warning("Classifier has only 1 class — all scores set to 0.0")
+            scores = np.zeros(len(X))
+        else:
+            scores = proba[:, 1]
 
         # Apply scores to valid detections
         for idx, score in zip(valid_indices, scores):

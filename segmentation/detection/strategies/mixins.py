@@ -81,12 +81,15 @@ class MultiChannelFeatureMixin:
 
             Returns empty dict if mask is empty or shapes don't match.
         """
+        _zero_stats = {f'{channel_name}_{stat}': 0.0 for stat in
+                       ['mean', 'std', 'max', 'min', 'median', 'p5', 'p25', 'p75', 'p95',
+                        'variance', 'skewness', 'kurtosis', 'iqr', 'dynamic_range', 'cv']}
         if mask.sum() == 0:
-            return {}
+            return _zero_stats
 
         # Validate shape match
         if channel_data.shape != mask.shape:
-            return {}
+            return _zero_stats
 
         # Get masked pixels (spatial mask only)
         masked_pixels = channel_data[mask].astype(np.float32)
@@ -352,7 +355,8 @@ class MultiChannelFeatureMixin:
             # Exclude zero pixels (CZI zero-padding at tile boundaries)
             masked_pixels = masked_pixels[masked_pixels > 0]
         if len(masked_pixels) == 0:
-            return {}
+            return {f'{channel_name}_{stat}': 0.0 for stat in
+                    ['mean', 'std', 'max', 'min', 'median']}
 
         return {
             f'{channel_name}_mean': float(np.mean(masked_pixels)),

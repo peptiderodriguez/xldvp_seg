@@ -82,7 +82,7 @@ class IlluminationProfile:
         if np.issubdtype(input_dtype, np.integer):
             dtype_max = float(np.iinfo(input_dtype).max)
         else:
-            dtype_max = 65535.0  # fallback for float data
+            dtype_max = float(np.finfo(input_dtype).max)
 
         logger.info(
             "Correcting channel %d: grid %s, slide_mean=%.1f, illum_floor=%.1f, dtype=%s",

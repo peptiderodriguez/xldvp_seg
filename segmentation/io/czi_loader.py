@@ -1125,10 +1125,11 @@ class CZILoader:
         full_tile_size = tile_size * scale_factor
 
         # Use aicspylibczi's native scale_factor parameter
-        # Note: aicspylibczi reads the region at full-res coords, then downsamples
+        # Note: aicspylibczi expects fractional scale (0.125 = 1/8 res),
+        # while our pipeline uses integer scale (8 = downsample by 8x)
         tile_data = self.reader.read_mosaic(
             region=(full_tile_x, full_tile_y, full_tile_size, full_tile_size),
-            scale_factor=scale_factor,
+            scale_factor=1.0 / scale_factor,
             C=channel,
         )
 

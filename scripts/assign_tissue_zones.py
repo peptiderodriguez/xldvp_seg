@@ -700,8 +700,8 @@ def otsu_threshold(values):
     best_thresh = sorted_vals[n // 2]  # fallback to median
     best_var = 0
 
-    # Test ~200 candidate thresholds spanning the data range
-    candidates = np.linspace(np.percentile(values, 5), np.percentile(values, 95), 200)
+    # Test ~200 candidate thresholds spanning the full data range
+    candidates = np.linspace(sorted_vals[0], sorted_vals[-1], 200)
     for t in candidates:
         lo = values[values <= t]
         hi = values[values > t]

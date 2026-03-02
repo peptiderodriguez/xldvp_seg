@@ -1512,8 +1512,8 @@ Examples:
                 },
                 'shapes': partial_shapes,
             }
-            with open(partial_path, 'w') as f:
-                json.dump(partial_data, f)
+            from segmentation.utils.json_utils import atomic_json_dump
+            atomic_json_dump(partial_data, partial_path)
             print(f"  Partial results saved to: {partial_path}")
             print(f"  (shapes without well assignments — prune list and re-run)")
             return
