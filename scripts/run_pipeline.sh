@@ -92,6 +92,7 @@ print(','.join(pairs))
 CORRECT_ALL_CHANNELS=$(read_yaml correct_all_channels false)
 SAMPLE_FRACTION=$(read_yaml sample_fraction "")
 HTML_SAMPLE_FRACTION=$(read_yaml html_sample_fraction "")
+RESUME_DIR=$(read_yaml resume_dir "")   # Explicit resume path — no auto-discovery
 
 # Post-dedup processing (contour dilation + background correction)
 BACKGROUND_CORRECTION=$(read_yaml background_correction true)
@@ -332,17 +333,15 @@ SBATCH_FILE="${OUTPUT_DIR}/pipeline_${NAME}_$$.sbatch"
         echo "TOTAL_SLIDES=${_N_SLIDES}"
         echo ""
 
-        # Bake resume paths: for each slide, find the most recent run dir with tiles/
-        echo "# Pre-computed resume paths (absolute, resolved at sbatch generation time)"
+        # Resume paths: only if explicitly set in YAML (no auto-discovery)
+        echo "# Resume paths (only set if resume_dir explicitly configured in YAML)"
         echo "declare -A RESUME_PATHS"
-        for _s in "${_GEN_SLIDES[@]}"; do
-            _sname=$(basename "$_s" .czi)
-            _slide_dir="${OUTPUT_DIR}/${_sname}"
-            _resume_dir=$(ls -td "${_slide_dir}"/*/tiles 2>/dev/null | head -1 | sed 's|/tiles$||')
-            if [[ -n "$_resume_dir" ]]; then
-                echo "RESUME_PATHS[$_sname]=\"$_resume_dir\""
-            fi
-        done
+        if [[ -n "$RESUME_DIR" ]]; then
+            for _s in "${_GEN_SLIDES[@]}"; do
+                _sname=$(basename "$_s" .czi)
+                echo "RESUME_PATHS[$_sname]=\"$RESUME_DIR\""
+            done
+        fi
         echo ""
 
         echo "if [[ \$TOTAL_SLIDES -eq 0 ]]; then"
@@ -425,11 +424,9 @@ SBATCH_FILE="${OUTPUT_DIR}/pipeline_${NAME}_$$.sbatch"
         echo "SLIDE_OUT=\"${OUTPUT_DIR}\""
         echo "mkdir -p \"\$SLIDE_OUT\""
         echo ""
-        # Pre-compute resume path at generation time
-        _single_resume=$(ls -td "${OUTPUT_DIR}"/*/tiles 2>/dev/null | head -1 | sed 's|/tiles$||')
         echo "# Step 1: Segmentation"
-        if [[ -n "$_single_resume" ]]; then
-            echo "$(build_seg_cmd "$CZI_PATH" '${SLIDE_OUT}') --resume \"$_single_resume\""
+        if [[ -n "$RESUME_DIR" ]]; then
+            echo "$(build_seg_cmd "$CZI_PATH" '${SLIDE_OUT}') --resume \"$RESUME_DIR\""
         else
             echo "$(build_seg_cmd "$CZI_PATH" '${SLIDE_OUT}')"
         fi
