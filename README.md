@@ -83,7 +83,10 @@ Other useful commands:
 ```bash
 conda activate mkseg
 
-# Run detection
+# Step 0: Inspect CZI channels FIRST (channel order is NOT wavelength-sorted)
+python scripts/czi_info.py /path/to/slide.czi
+
+# Step 1: Run detection (use --channel-spec to resolve by marker name)
 python run_segmentation.py \
     --czi-path /path/to/slide.czi \
     --cell-type cell \
@@ -139,6 +142,7 @@ This generates an sbatch script with the right flags, submits to SLURM, and chai
 
 | Script | Purpose |
 |--------|---------|
+| `scripts/czi_info.py` | **Run first** — inspect CZI channels, dimensions, pixel size (authoritative channel order) |
 | `run_segmentation.py` | Unified detection pipeline (all cell types) |
 | `train_classifier.py` | Train RF classifier from annotations |
 | `scripts/apply_classifier.py` | Score detections with trained classifier |
@@ -167,7 +171,7 @@ This generates an sbatch script with the right flags, submits to SLURM, and chai
 - **Start with 10% sample** (`--sample-fraction 0.10`) for annotation, then run 100% for full detection
 - **Use `--channel-spec`** instead of raw channel indices — automatically resolves marker names against CZI metadata
 - **Check `scripts/system_info.py`** before launching — it detects your system and recommends partition, GPU count, and memory settings
-- **Always verify channel order from CZI metadata** before writing configs — CZI sorts channels by emission wavelength, which may differ from filename order. Run the pre-flight check in CLAUDE.md or use `/czi-info` to confirm each C index maps to the right marker before setting `cellpose_input_channels`, `marker-channel`, or YAML `channels:`
+- **Always run `czi_info.py` before writing any channel config** — CZI channel indices follow acquisition/detector order, which is **NOT** sorted by wavelength and cannot be inferred from the filename. `scripts/czi_info.py /path/to/slide.czi` is the only authoritative source. Never sort by wavelength manually. Use `/czi-info` inside Claude Code, or run it directly before setting `cellpose_input_channels`, `--channel`, `--marker-channel`, or any YAML `channels:` block
 - **For SLURM restarts**: add `resume_dir: /path/to/run_dir` to your YAML config, then re-run `scripts/run_pipeline.sh` — per-tile checkpoints are used automatically when `--resume` is passed. Without `resume_dir:` in the YAML, re-running starts a fresh full-detection run
 
 ## Citation
