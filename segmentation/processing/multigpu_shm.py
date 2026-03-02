@@ -147,7 +147,7 @@ class SharedSlideManager:
         _shm_registry.add(shm.name)
 
         self.shared_memories[name] = shm
-        self.slide_info[name] = {'shm_name': shm.name, 'shape': shape, 'dtype': str(dtype)}
+        self.slide_info[name] = {'shm_name': shm.name, 'shape': shape, 'dtype': str(np.dtype(dtype))}
 
         logger.info(f"Created shared memory for {name}: {size/1e9:.2f} GB")
         return arr
