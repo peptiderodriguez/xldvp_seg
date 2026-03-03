@@ -129,20 +129,45 @@ def load_ome_zarr_image(zarr_path):
         (data_list, pixel_size_um, full_res_shape) where data_list is list of
         dask arrays (pyramid levels) and full_res_shape is (H, W)
     """
+    import dask.array as da
     import zarr as zarr_lib
-    from ome_zarr.io import parse_url
-    from ome_zarr.reader import Reader
 
-    store = parse_url(Path(zarr_path), mode="r")
-    if store is None:
-        raise ValueError(f"Could not parse OME-Zarr: {zarr_path}")
+    # Try ome-zarr reader first (works with zarr v2 stores)
+    data = None
+    try:
+        from ome_zarr.io import parse_url
+        from ome_zarr.reader import Reader
 
-    reader = Reader(store)
-    nodes = list(reader())
-    if not nodes:
-        raise ValueError(f"No data in OME-Zarr: {zarr_path}")
+        store = parse_url(Path(zarr_path), mode="r")
+        if store is not None:
+            reader = Reader(store)
+            nodes = list(reader())
+            if nodes:
+                data = nodes[0].data
+    except Exception:
+        pass
 
-    data = nodes[0].data  # list of dask arrays (pyramid)
+    # Fallback: direct zarr + dask loading (zarr v3 compatible)
+    if data is None:
+        print("  ome-zarr reader failed, using direct zarr loading...")
+        root = zarr_lib.open_group(str(zarr_path), mode='r')
+
+        # Find pyramid levels from multiscales metadata or numbered arrays
+        level_paths = []
+        if 'multiscales' in root.attrs:
+            ms = root.attrs['multiscales'][0]
+            level_paths = [ds['path'] for ds in ms.get('datasets', [])]
+        if not level_paths:
+            # Auto-detect numbered arrays: 0, 1, 2, ...
+            level_paths = sorted(
+                [k for k in root.keys() if k.isdigit()],
+                key=int,
+            )
+        if not level_paths:
+            raise ValueError(f"No pyramid levels found in: {zarr_path}")
+
+        data = [da.from_zarr(str(Path(zarr_path) / p)) for p in level_paths]
+        print(f"  Loaded {len(data)} pyramid levels")
 
     # Read pixel size from metadata
     pixel_size_um = None
