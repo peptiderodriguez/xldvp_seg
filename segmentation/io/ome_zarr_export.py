@@ -113,7 +113,7 @@ def export_shm_to_ome_zarr(
         Path to the created zarr store, or None on failure.
     """
     import zarr
-    from zarr.codecs import BloscCodec
+    import numcodecs
 
     output_path = Path(output_path)
     start_time = time.time()
@@ -165,9 +165,10 @@ def export_shm_to_ome_zarr(
     if channel_names is None:
         channel_names = [f"Channel {czi_ch}" for czi_ch, _ in sorted_channels]
 
-    # Create zarr store (mode='w' overwrites if exists)
-    compressor = BloscCodec(cname='zstd', clevel=3, shuffle='bitshuffle')
-    root = zarr.open_group(str(output_path), mode='w')
+    # Create zarr v2 store (compatible with ome-zarr, napari, spatialdata)
+    compressor = numcodecs.Blosc(cname='zstd', clevel=3, shuffle=numcodecs.Blosc.BITSHUFFLE)
+    store = zarr.DirectoryStore(str(output_path))
+    root = zarr.group(store, overwrite=True)
 
     # Create pyramid arrays
     shape = (n_channels, height, width)
@@ -177,12 +178,12 @@ def export_shm_to_ome_zarr(
     for level in range(pyramid_levels):
         level_chunks = tuple(min(c, s) for c, s in zip((1, chunk_size, chunk_size), current_shape))
 
-        root.create_array(
+        root.create_dataset(
             str(level),
             shape=current_shape,
             chunks=level_chunks,
             dtype=shm_array.dtype,
-            compressors=[compressor],
+            compressor=compressor,
             fill_value=0,
         )
         actual_levels += 1

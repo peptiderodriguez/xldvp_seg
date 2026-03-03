@@ -32,8 +32,8 @@ from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 
 import numpy as np
+import numcodecs
 import zarr
-from zarr.codecs import BloscCodec
 from tqdm import tqdm
 
 try:
@@ -346,10 +346,11 @@ def create_zarr_store(
                 f"Output path exists: {output_path}. Use --overwrite to replace."
             )
 
-    # Create store with Blosc compression
-    compressor = BloscCodec(cname='zstd', clevel=3, shuffle='bitshuffle')
+    # Create zarr v2 store with Blosc compression
+    compressor = numcodecs.Blosc(cname='zstd', clevel=3, shuffle=numcodecs.Blosc.BITSHUFFLE)
 
-    root = zarr.open_group(str(output_path), mode='w')
+    store = zarr.DirectoryStore(str(output_path))
+    root = zarr.group(store, overwrite=True)
 
     # Create arrays for each pyramid level
     current_shape = shape
@@ -359,12 +360,12 @@ def create_zarr_store(
             min(c, s) for c, s in zip(chunks, current_shape)
         )
 
-        arr = root.create_array(
+        arr = root.create_dataset(
             str(level),
             shape=current_shape,
             chunks=level_chunks,
             dtype=dtype,
-            compressors=[compressor],
+            compressor=compressor,
             fill_value=0,
         )
         logger.info(
