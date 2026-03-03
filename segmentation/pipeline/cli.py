@@ -323,6 +323,14 @@ def build_parser():
                              '(e.g. 0.10 = 10%%). Applied after dedup, before HTML export. '
                              '0 = no subsampling (keep all, subject to --max-html-samples cap).')
 
+    # OME-Zarr export (auto-generated at end of pipeline)
+    parser.add_argument('--no-zarr', dest='ome_zarr', action='store_false', default=True,
+                        help='Skip OME-Zarr generation at end of pipeline')
+    parser.add_argument('--force-zarr', action='store_true', default=False,
+                        help='Overwrite existing OME-Zarr (default: skip if exists)')
+    parser.add_argument('--zarr-levels', type=int, default=5,
+                        help='Number of pyramid levels for OME-Zarr (default: 5)')
+
     # Server options
     parser.add_argument('--serve', action='store_true', default=False,
                         help='Start HTTP server and wait for Ctrl+C (foreground mode)')

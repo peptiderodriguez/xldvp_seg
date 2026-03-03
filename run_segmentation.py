@@ -682,6 +682,23 @@ def run_pipeline(args):
                 all_tiles=all_tiles, tissue_tiles=tissue_tiles, sampled_tiles=sampled_tiles,
             )
         finally:
+            # OME-Zarr export before SHM cleanup
+            if getattr(args, 'ome_zarr', True):
+                try:
+                    from segmentation.io.ome_zarr_export import export_shm_to_ome_zarr
+                    zarr_path = slide_output_dir / f"{slide_name}.ome.zarr"
+                    export_shm_to_ome_zarr(
+                        shm_array=slide_shm_arr,
+                        ch_to_slot=ch_to_slot,
+                        pixel_size_um=pixel_size_um,
+                        output_path=zarr_path,
+                        czi_path=str(czi_path),
+                        pyramid_levels=getattr(args, 'zarr_levels', 5),
+                        overwrite=getattr(args, 'force_zarr', False),
+                    )
+                except Exception as e:
+                    logger.warning(f"OME-Zarr export failed (non-fatal): {e}")
+
             shm_manager.cleanup()
         return
 
@@ -1496,6 +1513,23 @@ def run_pipeline(args):
             is_multiscale=is_multiscale, detector=detector,
         )
     finally:
+        # OME-Zarr export before SHM cleanup (reads preprocessed data from SHM)
+        if getattr(args, 'ome_zarr', True):
+            try:
+                from segmentation.io.ome_zarr_export import export_shm_to_ome_zarr
+                zarr_path = slide_output_dir / f"{slide_name}.ome.zarr"
+                export_shm_to_ome_zarr(
+                    shm_array=slide_shm_arr,
+                    ch_to_slot=ch_to_slot,
+                    pixel_size_um=pixel_size_um,
+                    output_path=zarr_path,
+                    czi_path=str(czi_path),
+                    pyramid_levels=getattr(args, 'zarr_levels', 5),
+                    overwrite=getattr(args, 'force_zarr', False),
+                )
+            except Exception as e:
+                logger.warning(f"OME-Zarr export failed (non-fatal): {e}")
+
         # All SHM-dependent work is done — safe to free shared memory
         shm_manager.cleanup()
 

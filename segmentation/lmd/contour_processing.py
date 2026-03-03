@@ -131,26 +131,112 @@ def dilate_contour(contour: np.ndarray, dilation: float) -> Optional[np.ndarray]
     return coords
 
 
+def erode_contour(contour: np.ndarray, erosion: float) -> Optional[np.ndarray]:
+    """
+    Erode a contour by a specified amount (negative Shapely buffer).
+
+    Works in any coordinate system (pixels or micrometers) — just pass
+    consistent units for contour and erosion.
+
+    Args:
+        contour: Contour points, shape (N, 2)
+        erosion: Erosion amount (same units as contour). Must be positive.
+
+    Returns:
+        Eroded contour points, or None if the polygon collapsed to nothing.
+    """
+    if erosion <= 0:
+        return contour
+    if len(contour) < 3:
+        return None
+
+    poly = Polygon(contour)
+    poly = validate_polygon(poly)
+
+    if poly is None or poly.is_empty or poly.area < 0.1:
+        return None
+
+    # Negative buffer = erosion
+    poly_eroded = poly.buffer(-erosion)
+
+    if poly_eroded.is_empty:
+        return None
+
+    # Handle MultiPolygon (erosion can split a polygon)
+    if poly_eroded.geom_type == 'MultiPolygon':
+        poly_eroded = max(poly_eroded.geoms, key=lambda p: p.area)
+
+    if poly_eroded.area < 0.1:
+        return None
+
+    # Get coordinates (remove duplicate closing point)
+    coords = np.array(poly_eroded.exterior.coords)[:-1]
+    return coords
+
+
+def erode_contour_percent(contour: np.ndarray, erode_pct: float) -> Optional[np.ndarray]:
+    """
+    Erode a contour by a percentage of its characteristic size (sqrt(area)).
+
+    Args:
+        contour: Contour points, shape (N, 2)
+        erode_pct: Erosion fraction (e.g. 0.05 = 5% of sqrt(area))
+
+    Returns:
+        Eroded contour points, or None if the polygon collapsed.
+    """
+    if erode_pct <= 0:
+        return contour
+    if len(contour) < 3:
+        return None
+
+    poly = Polygon(contour)
+    poly = validate_polygon(poly)
+
+    if poly is None or poly.is_empty or poly.area < 0.1:
+        return None
+
+    erosion = np.sqrt(poly.area) * erode_pct
+
+    # Apply erosion directly (avoid re-creating Polygon in erode_contour)
+    poly_eroded = poly.buffer(-erosion)
+    if poly_eroded.is_empty:
+        return None
+    if poly_eroded.geom_type == 'MultiPolygon':
+        poly_eroded = max(poly_eroded.geoms, key=lambda p: p.area)
+    if poly_eroded.area < 0.1:
+        return None
+    return np.array(poly_eroded.exterior.coords)[:-1]
+
+
 def process_contour(
     contour_px: List[List[float]],
     pixel_size_um: float = None,
     dilation_um: float = DEFAULT_DILATION_UM,
     rdp_epsilon: float = DEFAULT_RDP_EPSILON,
+    erosion_um: float = 0.0,
+    erode_pct: float = 0.0,
     return_stats: bool = False
 ) -> Optional[np.ndarray] | Tuple[Optional[np.ndarray], Dict[str, Any]]:
     """
-    Process a single contour: validate, dilate, and simplify.
+    Process a single contour: validate, dilate, simplify, and optionally erode.
 
     Processing order (all in pixel space to avoid precision loss):
     1. Dilate in pixel space (validates/fixes polygon geometry)
     2. Apply RDP simplification in pixel space
-    3. Convert to micrometers only at the end
+    3. Erode in pixel space (if erosion_um > 0 or erode_pct > 0)
+    4. Convert to micrometers only at the end
 
     Args:
         contour_px: Contour points in pixels, list of [x, y] pairs
         pixel_size_um: Pixel size in micrometers
         dilation_um: Dilation amount in micrometers (default 0.5)
         rdp_epsilon: RDP simplification epsilon in pixels (default 5)
+        erosion_um: Erosion amount in micrometers (default 0.0 = no erosion).
+            Applied AFTER dilation and RDP, in pixel space.
+        erode_pct: Erosion as fraction of sqrt(area) (default 0.0 = no erosion).
+            Applied AFTER dilation and RDP. If both erosion_um and erode_pct
+            are set, erosion_um takes priority.
         return_stats: If True, return (contour, stats_dict)
 
     Returns:
@@ -198,6 +284,24 @@ def process_contour(
 
     # Step 2: RDP simplify in pixel space
     simplified_px = rdp_simplify(dilated_px, rdp_epsilon)
+
+    # Step 3: Erode in pixel space (if requested)
+    if erosion_um > 0:
+        erosion_px = erosion_um / pixel_size_um
+        eroded_px = erode_contour(simplified_px, erosion_px)
+        if eroded_px is None:
+            if return_stats:
+                return None, stats
+            return None
+        simplified_px = eroded_px
+    elif erode_pct > 0:
+        eroded_px = erode_contour_percent(simplified_px, erode_pct)
+        if eroded_px is None:
+            if return_stats:
+                return None, stats
+            return None
+        simplified_px = eroded_px
+
     # Convert to microns only at the end
     simplified_um = simplified_px * pixel_size_um
 
@@ -232,6 +336,8 @@ def process_contours_batch(
     pixel_size_um: float = None,
     dilation_um: float = DEFAULT_DILATION_UM,
     rdp_epsilon: float = DEFAULT_RDP_EPSILON,
+    erosion_um: float = 0.0,
+    erode_pct: float = 0.0,
     verbose: bool = True
 ) -> Dict[str, Any]:
     """
@@ -242,6 +348,8 @@ def process_contours_batch(
         pixel_size_um: Pixel size in micrometers
         dilation_um: Dilation amount in micrometers
         rdp_epsilon: RDP simplification epsilon in pixels
+        erosion_um: Erosion amount in micrometers (default 0.0)
+        erode_pct: Erosion as fraction of sqrt(area) (default 0.0)
         verbose: Print progress
 
     Returns:
@@ -254,7 +362,7 @@ def process_contours_batch(
             - point_reduction_pct: Percentage reduction in points
             - mean_area_before_um2: Mean original area
             - mean_area_after_um2: Mean final area
-            - area_increase_pct: Percentage increase in area (from dilation)
+            - area_change_pct: Percentage increase in area (from dilation)
     """
     if pixel_size_um is None:
         raise ValueError("pixel_size_um is required — must come from CZI metadata")
@@ -267,7 +375,7 @@ def process_contours_batch(
         'point_reduction_pct': 0,
         'mean_area_before_um2': 0,
         'mean_area_after_um2': 0,
-        'area_increase_pct': 0,
+        'area_change_pct': 0,
     }
 
     areas_before = []
@@ -282,6 +390,8 @@ def process_contours_batch(
             pixel_size_um=pixel_size_um,
             dilation_um=dilation_um,
             rdp_epsilon=rdp_epsilon,
+            erosion_um=erosion_um,
+            erode_pct=erode_pct,
             return_stats=True
         )
 
@@ -310,7 +420,7 @@ def process_contours_batch(
         results['mean_area_after_um2'] = np.mean(areas_after)
 
     if results['mean_area_before_um2'] > 0:
-        results['area_increase_pct'] = (
+        results['area_change_pct'] = (
             results['mean_area_after_um2'] / results['mean_area_before_um2'] - 1
         ) * 100
 
@@ -324,6 +434,8 @@ def process_detection_contours(
     pixel_size_um: float = None,
     dilation_um: float = DEFAULT_DILATION_UM,
     rdp_epsilon: float = DEFAULT_RDP_EPSILON,
+    erosion_um: float = 0.0,
+    erode_pct: float = 0.0,
     verbose: bool = True
 ) -> Tuple[List[Optional[np.ndarray]], Dict[str, Any]]:
     """
@@ -335,6 +447,8 @@ def process_detection_contours(
         pixel_size_um: Pixel size in micrometers
         dilation_um: Dilation amount in micrometers
         rdp_epsilon: RDP simplification epsilon in pixels
+        erosion_um: Erosion amount in micrometers (default 0.0)
+        erode_pct: Erosion as fraction of sqrt(area) (default 0.0)
         verbose: Print progress
 
     Returns:
@@ -348,18 +462,24 @@ def process_detection_contours(
         logger.info(f"Processing {len(contours_px)} contours...")
         logger.info(f"  Dilation: +{dilation_um} um")
         logger.info(f"  RDP epsilon: {rdp_epsilon} px")
+        if erosion_um > 0:
+            logger.info(f"  Erosion: -{erosion_um} um")
+        if erode_pct > 0:
+            logger.info(f"  Erosion: {erode_pct*100:.1f}% of sqrt(area)")
 
     results = process_contours_batch(
         contours_px,
         pixel_size_um=pixel_size_um,
         dilation_um=dilation_um,
         rdp_epsilon=rdp_epsilon,
+        erosion_um=erosion_um,
+        erode_pct=erode_pct,
         verbose=verbose
     )
 
     if verbose:
         logger.info(f"  Valid: {results['valid_count']}, Skipped: {results['skipped_count']}")
         logger.info(f"  Point reduction: {results['point_reduction_pct']:.1f}%")
-        logger.info(f"  Area change: {results['mean_area_before_um2']:.1f} -> {results['mean_area_after_um2']:.1f} um2 ({results['area_increase_pct']:+.1f}%)")
+        logger.info(f"  Area change: {results['mean_area_before_um2']:.1f} -> {results['mean_area_after_um2']:.1f} um2 ({results['area_change_pct']:+.1f}%)")
 
     return results['contours_um'], results

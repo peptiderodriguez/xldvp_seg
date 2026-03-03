@@ -6,12 +6,13 @@ The export pipeline is fully automated — 384-well plate, serpentine well order
 
 ## Default Behavior (always automatic)
 
-- **Plate**: 384-well, serpentine order (B2→B3→C3→C2), skipping edge wells — 308 usable wells
+- **Plate**: 384-well, serpentine order (B2->B3->C3->C2), skipping edge wells — 308 usable wells
 - **Well ordering**: nearest-neighbor path optimization minimizes stage travel on slide
-- **Clustering**: two-stage greedy (Round 1=500µm, Round 2=1000µm, target 375–425µm²). Unclustered = singles (1 NMJ/well). Clusters = grouped cells (all in one well)
-- **Controls**: negative control regions at 100µm offset (8 directions), cluster controls preserve spatial arrangement
-- **Contours**: pre-dilated (+0.5µm) + RDP-simplified during detection post-dedup. Export uses them as-is
+- **Clustering**: two-stage greedy (Round 1=500um, Round 2=1000um, target 375-425um2). Unclustered = singles (1 NMJ/well). Clusters = grouped cells (all in one well)
+- **Controls**: negative control regions at 100um offset (8 directions), cluster controls preserve spatial arrangement
+- **Contours**: pre-dilated (+0.5um) + RDP-simplified during detection post-dedup. Export uses them as-is
 - **Capacity check**: pipeline warns early if detection count would exceed 308 wells before expensive processing
+- **OME-Zarr**: auto-generated at end of pipeline (no separate conversion step needed)
 
 ---
 
@@ -21,14 +22,14 @@ The export pipeline is fully automated — 384-well plate, serpentine well order
 ```bash
 ls <output_dir>/*_detections*.json 2>/dev/null
 ```
-If missing → redirect to `/analyze` first.
+If missing -> redirect to `/analyze` first.
 
 **Check if RF classifier was run** (look for `rf_prediction` in detections):
 ```bash
 $MKSEG_PYTHON -c "import json; d=json.load(open('<detections.json>')); print('rf_prediction' in (d[0].get('features') or d[0]))"
 ```
-If True → default `--min-score 0.5` filters to high-confidence detections.
-If False → export all detections (no filter).
+If True -> default `--min-score 0.5` filters to high-confidence detections.
+If False -> export all detections (no filter).
 
 **Check for reference crosses:**
 ```bash
@@ -41,20 +42,45 @@ ls <output_dir>/crosses*.json <output_dir>/reference_crosses.json 2>/dev/null
 
 Reference crosses are physical marks on the slide visible both in the microscope image and on the LMD stage. They register slide coordinates to stage coordinates.
 
-**Option A — Interactive Napari** (requires display):
+**Option A — CZI-native Napari** (recommended, no conversion needed):
 ```bash
-# Convert CZI to OME-Zarr (lazy pyramids, no RAM issue)
+# Place 3 RGB-coded crosses directly on CZI
+PYTHONPATH=$REPO $MKSEG_PYTHON $REPO/scripts/napari_place_crosses.py \
+    -i <czi_path> --channel 0 -o <crosses.json>
+
+# With LMD7 display orientation (tissue-down + rotated)
+PYTHONPATH=$REPO $MKSEG_PYTHON $REPO/scripts/napari_place_crosses.py \
+    -i <czi_path> --flip-horizontal --rotate-cw-90 -o <crosses.json>
+
+# Start fresh (ignore existing crosses)
+PYTHONPATH=$REPO $MKSEG_PYTHON $REPO/scripts/napari_place_crosses.py \
+    -i <czi_path> --fresh -o <crosses.json>
+```
+
+**Option B — OME-Zarr Napari** (for very large slides):
+```bash
+PYTHONPATH=$REPO $MKSEG_PYTHON $REPO/scripts/napari_place_crosses.py \
+    -i <output>.ome.zarr -o <crosses.json>
+```
+
+The OME-Zarr is auto-generated at the end of the pipeline run. Or convert manually:
+```bash
 PYTHONPATH=$REPO $MKSEG_PYTHON $REPO/scripts/czi_to_ome_zarr.py <czi_path> <output>.zarr
-
-# Place 3–4 crosses at tissue corners/landmarks
-PYTHONPATH=$REPO $MKSEG_PYTHON $REPO/scripts/napari_place_crosses.py <output>.zarr --output <crosses.json>
 ```
 
-**Option B — Manual JSON** (SSH/headless):
+**Option C — Manual JSON** (SSH/headless):
 ```json
-{"crosses": [[x1, y1], [x2, y2], [x3, y3]]}
+{"crosses": [{"id": 1, "x_px": 1000, "y_px": 2000}, {"id": 2, "x_px": 5000, "y_px": 2000}, {"id": 3, "x_px": 3000, "y_px": 8000}], "image_width_px": 10000, "image_height_px": 10000, "pixel_size_um": 0.22}
 ```
-Coordinates in mosaic pixel space (same as detection centroids). 3 crosses minimum.
+Coordinates in mosaic pixel space (same as detection centroids). 3 crosses required.
+
+**Batch mode** (multiple slides):
+```bash
+PYTHONPATH=$REPO $MKSEG_PYTHON $REPO/scripts/napari_place_crosses.py \
+    --czi-dir /data/slides --slides SlideA SlideB SlideC \
+    --output-dir crosses/ --flip-horizontal --rotate-cw-90
+```
+Produces `{slide}_crosses.json` per slide. Skips slides with existing crosses unless `--fresh`.
 
 ---
 
@@ -72,15 +98,35 @@ PYTHONPATH=$REPO $MKSEG_PYTHON $REPO/run_lmd_export.py \
 
 Drop `--min-score 0.5` if no RF classifier was run.
 
+**Optional: erosion at export time** (shrink contours so laser cuts inside the target):
+```bash
+# Erode by 5% of sqrt(area)
+--erode-pct 0.05
+
+# Erode by absolute distance (0.2 um)
+--erosion-um 0.2
+```
+
+**Multi-slide batch export:**
+```bash
+PYTHONPATH=$REPO $MKSEG_PYTHON $REPO/run_lmd_export.py \
+    --input-dir /path/to/runs \
+    --crosses-dir /path/to/crosses \
+    --output-dir /path/to/lmd_batch \
+    --generate-controls --min-score 0.5 --export
+```
+Discovers `*_detections.json` + matching `*_crosses.json`, exports per-slide, writes `batch_summary.json`.
+
 **What the pipeline does automatically:**
 1. Filters detections by score (if `--min-score` set)
 2. Early capacity check — warns if >308 detections before any processing
 3. Uses pre-computed contours from post-dedup phase
-4. Two-stage clustering (500µm → 1000µm)
-5. Serpentine well assignment (B2→B3→C3→C2, 384-well, 308 max)
-6. Nearest-neighbor ordering on slide to minimize stage travel
-7. Generates spatial controls (100µm offset, 8 directions)
-8. Writes Leica LMD XML
+4. Applies export-time erosion (if `--erosion-um` or `--erode-pct`)
+5. Two-stage clustering (500um -> 1000um)
+6. Serpentine well assignment (B2->B3->C3->C2, 384-well, 308 max)
+7. Nearest-neighbor ordering on slide to minimize stage travel
+8. Generates spatial controls (100um offset, 8 directions)
+9. Writes Leica LMD XML
 
 ---
 
@@ -92,13 +138,13 @@ ls -la <output>/lmd/
 
 Show:
 - XML file path (transfer this to LMD computer)
-- Summary: N detections → N wells (singles + clusters + controls)
+- Summary: N detections -> N wells (singles + clusters + controls)
 - Warn if well count approaches 308
 
 **Optional: verify in Napari:**
 ```bash
 PYTHONPATH=$REPO $MKSEG_PYTHON $REPO/scripts/napari_view_lmd_export.py \
-    --zarr <slide>.zarr --export <output>/lmd
+    --zarr <slide>.ome.zarr --export <output>/lmd
 ```
 
 ---
@@ -125,5 +171,7 @@ PYTHONPATH=$REPO $MKSEG_PYTHON $REPO/run_lmd_export.py \
 - All coordinates are [x, y] (horizontal, vertical)
 - LMD export is CPU-only and fast (~seconds). No GPU or SLURM needed
 - The XML must be transferred to the LMD instrument computer — confirm the transfer path
+- CZI-native cross placement is the recommended default (no OME-Zarr conversion needed)
+- OME-Zarr is auto-generated at end of pipeline runs (for viewing/verification)
 
 $ARGUMENTS

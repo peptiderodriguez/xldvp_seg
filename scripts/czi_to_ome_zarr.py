@@ -33,7 +33,7 @@ from typing import Dict, List, Optional, Tuple
 
 import numpy as np
 import zarr
-from numcodecs import Blosc
+from zarr.codecs import BloscCodec
 from tqdm import tqdm
 
 try:
@@ -347,10 +347,9 @@ def create_zarr_store(
             )
 
     # Create store with Blosc compression
-    compressor = Blosc(cname='zstd', clevel=3, shuffle=Blosc.BITSHUFFLE)
+    compressor = BloscCodec(cname='zstd', clevel=3, shuffle='bitshuffle')
 
-    store = zarr.DirectoryStore(str(output_path))
-    root = zarr.group(store=store, overwrite=True)
+    root = zarr.open_group(str(output_path), mode='w')
 
     # Create arrays for each pyramid level
     current_shape = shape
@@ -360,23 +359,23 @@ def create_zarr_store(
             min(c, s) for c, s in zip(chunks, current_shape)
         )
 
-        arr = root.create_dataset(
+        arr = root.create_array(
             str(level),
             shape=current_shape,
             chunks=level_chunks,
             dtype=dtype,
-            compressor=compressor,
+            compressors=[compressor],
             fill_value=0,
         )
         logger.info(
             f"Created level {level}: shape={current_shape}, chunks={level_chunks}"
         )
 
-        # Calculate next level shape (downsample by 2)
+        # Calculate next level shape (downsample by 2, ceil division)
         current_shape = (
             current_shape[0],  # Keep channels
-            max(1, current_shape[1] // 2),
-            max(1, current_shape[2] // 2),
+            max(1, (current_shape[1] + 1) // 2),
+            max(1, (current_shape[2] + 1) // 2),
         )
 
         # Stop if we've reached a small enough size

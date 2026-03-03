@@ -26,15 +26,15 @@ Never use edge wells (row A, row P, column 1, column 24).
 
 | Quadrant | Rows | Columns | Pattern |
 |----------|------|---------|---------|
-| **B2** | B,D,F,H,J,L,N (even rows) | 2,4,6...22 (even cols) | 7×11=77 |
-| **B3** | B,D,F,H,J,L,N (even rows) | 3,5,7...23 (odd cols)  | 7×11=77 |
-| **C2** | C,E,G,I,K,M,O (odd rows)  | 2,4,6...22 (even cols) | 7×11=77 |
-| **C3** | C,E,G,I,K,M,O (odd rows)  | 3,5,7...23 (odd cols)  | 7×11=77 |
+| **B2** | B,D,F,H,J,L,N (even rows) | 2,4,6...22 (even cols) | 7x11=77 |
+| **B3** | B,D,F,H,J,L,N (even rows) | 3,5,7...23 (odd cols)  | 7x11=77 |
+| **C2** | C,E,G,I,K,M,O (odd rows)  | 2,4,6...22 (even cols) | 7x11=77 |
+| **C3** | C,E,G,I,K,M,O (odd rows)  | 3,5,7...23 (odd cols)  | 7x11=77 |
 
 **Serpentine order (minimizes plate robot movement):**
-- B quadrants fill top→bottom, alternating left→right and right→left per row
-- C quadrants fill bottom→top, alternating
-- Transition: end of B2 → start C2 at closest corner
+- B quadrants fill top->bottom, alternating left->right and right->left per row
+- C quadrants fill bottom->top, alternating
+- Transition: end of B2 -> start C2 at closest corner
 
 **Stage path (minimizes slide movement):**
 - Greedy nearest-neighbor from tissue corner
@@ -62,40 +62,79 @@ Drop `--min-score 0.5` if no RF classifier was run.
 | `--generate-controls` | off | Generate spatial negative controls |
 | `--min-score` | none | Filter by rf_prediction (use 0.5 when classifier was run) |
 | `--dilation-um` | 0.5 | Extra contour dilation beyond post-dedup (usually leave at default) |
+| `--erosion-um` | 0.0 | Shrink contours by absolute distance in um (applied after dilation+RDP) |
+| `--erode-pct` | 0.0 | Shrink contours by % of sqrt(area) (e.g. 0.05 = 5%) |
 | `--control-offset-um` | 100 | Distance for control regions |
 | `--no-flip-y` | off | Disable Y-axis flip for stage coordinates (rarely needed) |
-
-**96-well plate** (rare — only if user explicitly requests):
-Add `--plate-format 96` (not a real flag — the pipeline currently only supports 384-well natively; ask the user to confirm before claiming 96-well support).
+| `--input-dir` | none | Batch mode: directory with per-slide detection files |
+| `--crosses-dir` | none | Batch mode: directory with per-slide crosses files |
 
 ---
 
 ## Reference Cross Placement
 
-Crosses are physical marks on the slide that register microscope pixel coordinates to LMD stage coordinates. 3 minimum, 4 recommended.
+Crosses are physical marks on the slide that register microscope pixel coordinates to LMD stage coordinates. Exactly 3 crosses required (Red, Green, Blue).
 
-**Napari (interactive):**
+**CZI-native (recommended, fast):**
 ```bash
-PYTHONPATH=$REPO $MKSEG_PYTHON $REPO/scripts/czi_to_ome_zarr.py <czi_path> <output>.zarr
-PYTHONPATH=$REPO $MKSEG_PYTHON $REPO/scripts/napari_place_crosses.py <output>.zarr --output <crosses.json>
+# Direct CZI loading at 1/8 resolution — no OME-Zarr conversion needed
+PYTHONPATH=$REPO $MKSEG_PYTHON $REPO/scripts/napari_place_crosses.py \
+    -i <czi_path> --channel 0 -o <crosses.json>
+
+# With LMD7 display transforms (tissue-down + rotated)
+PYTHONPATH=$REPO $MKSEG_PYTHON $REPO/scripts/napari_place_crosses.py \
+    -i <czi_path> --flip-horizontal --rotate-cw-90 -o <crosses.json>
+
+# Start fresh (ignore existing crosses)
+PYTHONPATH=$REPO $MKSEG_PYTHON $REPO/scripts/napari_place_crosses.py \
+    -i <czi_path> --fresh -o <crosses.json>
+```
+
+**OME-Zarr (for very large slides):**
+```bash
+PYTHONPATH=$REPO $MKSEG_PYTHON $REPO/scripts/napari_place_crosses.py \
+    -i <slide>.ome.zarr -o <crosses.json>
+```
+OME-Zarr is auto-generated at the end of pipeline runs. Or convert manually with `czi_to_ome_zarr.py`.
+
+**Batch cross placement:**
+```bash
+PYTHONPATH=$REPO $MKSEG_PYTHON $REPO/scripts/napari_place_crosses.py \
+    --czi-dir /data/slides --slides SlideA SlideB SlideC \
+    --output-dir crosses/ --flip-horizontal --rotate-cw-90
 ```
 
 **Manual JSON** (headless/SSH):
 ```json
-{"crosses": [[x1, y1], [x2, y2], [x3, y3]]}
+{"crosses": [{"id": 1, "x_px": 1000, "y_px": 2000, "x_um": 220, "y_um": 440}, ...], "image_width_px": 50000, "image_height_px": 40000, "pixel_size_um": 0.22}
 ```
 Coordinates in mosaic pixel space (same as detection centroids in `*_detections.json`).
+
+---
+
+## Batch Export (multiple slides)
+
+```bash
+PYTHONPATH=$REPO $MKSEG_PYTHON $REPO/run_lmd_export.py \
+    --input-dir /path/to/detection_dirs \
+    --crosses-dir /path/to/crosses \
+    --output-dir /path/to/lmd_batch \
+    --generate-controls --min-score 0.5 --export
+```
+
+Discovers `*_detections.json` files, matches to `*_crosses.json`, exports per-slide.
+Writes `batch_summary.json` with per-slide status.
 
 ---
 
 ## Clustering (always automatic)
 
 Two-stage greedy clustering built into `run_lmd_export.py`:
-- **Round 1**: 500µm radius → groups nearby cells
-- **Round 2**: 1000µm radius → merges remaining groups
-- **Target**: 375–425µm² cluster area
-- **Singles**: unclustered cells → 1 cell per well
-- **Clusters**: grouped cells → all in one well
+- **Round 1**: 500um radius -> groups nearby cells
+- **Round 2**: 1000um radius -> merges remaining groups
+- **Target**: 375-425um2 cluster area
+- **Singles**: unclustered cells -> 1 cell per well
+- **Clusters**: grouped cells -> all in one well
 
 Controls mirror the clustering: singles get individual controls, cluster controls preserve spatial arrangement (offsets from cluster centroid).
 
@@ -103,9 +142,13 @@ Controls mirror the clustering: singles get individual controls, cluster control
 
 ## Contour Processing
 
-Contours are **pre-computed during detection post-dedup** (dilation +0.5µm, RDP epsilon=5px). Export uses them as-is — no re-processing. If the user ran `--no-contour-processing`, contours are extracted fresh during export.
+Contours are **pre-computed during detection post-dedup** (dilation +0.5um, RDP epsilon=5px). Export uses them as-is — no re-processing. If the user ran `--no-contour-processing`, contours are extracted fresh during export.
 
-Typical area increase from dilation: ~35%.
+**Export-time erosion** (optional): shrink contours so the laser cuts inside the target:
+- `--erosion-um 0.2` — shrink by 0.2 um (absolute)
+- `--erode-pct 0.05` — shrink by 5% of sqrt(area) (proportional)
+
+Pipeline warns if contours were already processed during detection and additional processing is applied at export time.
 
 ---
 
@@ -116,12 +159,13 @@ Typical area increase from dilation: ~35%.
 | `lmd_export.xml` / `shapes_with_controls.xml` | **Transfer this to LMD computer** |
 | `lmd_export.json` | Full export with contours + well assignments |
 | `well_assignment_384.json` | Well plate mapping |
+| `batch_summary.json` | Batch mode: per-slide export status |
 
 ---
 
 ## Capacity
 
-- 384-well plate: 308 usable wells (4 quadrants × 77)
+- 384-well plate: 308 usable wells (4 quadrants x 77)
 - Pipeline warns early (before expensive processing) if detection count > 308
 - If over capacity: increase `--min-score` threshold, or consider two separate export runs
 
@@ -134,11 +178,11 @@ After export, check:
 ls -la <output>/lmd/
 ```
 - XML file exists
-- Total wells ≤ 308
-- Show summary: N detections → N wells (N singles + N clusters + N controls)
+- Total wells <= 308
+- Show summary: N detections -> N wells (N singles + N clusters + N controls)
 
 Optional Napari view:
 ```bash
 PYTHONPATH=$REPO $MKSEG_PYTHON $REPO/scripts/napari_view_lmd_export.py \
-    --zarr <slide>.zarr --export <output>/lmd
+    --zarr <slide>.ome.zarr --export <output>/lmd
 ```

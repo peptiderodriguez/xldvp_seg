@@ -981,8 +981,8 @@ Examples:
     )
 
     # Input files
-    parser.add_argument('--detections', type=str, required=True,
-                        help='Path to detections JSON file')
+    parser.add_argument('--detections', type=str, required=False, default=None,
+                        help='Path to detections JSON file (required for single-slide mode)')
     parser.add_argument('--cell-type', type=str, default=None,
                         help='Cell type (nmj, mk, vessel, mesothelium). '
                              'Auto-derives mask filename if --mask-filename not set.')
@@ -1040,6 +1040,18 @@ Examples:
                         help='Contour dilation in um (default: 0.5)')
     parser.add_argument('--rdp-epsilon', type=float, default=5.0,
                         help='RDP simplification epsilon in pixels (default: 5)')
+    parser.add_argument('--erosion-um', type=float, default=0.0,
+                        help='Shrink contours by absolute distance in um (default: 0, no erosion). '
+                             'Applied after dilation+RDP.')
+    parser.add_argument('--erode-pct', type=float, default=0.0,
+                        help='Shrink contours by percentage of sqrt(area) (default: 0, no erosion). '
+                             'E.g. 0.05 = 5%% erosion. Applied after dilation+RDP.')
+
+    # Multi-slide batch mode
+    parser.add_argument('--input-dir', type=str, default=None,
+                        help='Batch mode: directory with per-slide *_detections.json files')
+    parser.add_argument('--crosses-dir', type=str, default=None,
+                        help='Batch mode: directory with per-slide *_crosses.json files')
 
     # Options
     parser.add_argument('--no-flip-y', action='store_true',
@@ -1055,8 +1067,19 @@ Examples:
             args.mask_filename = 'nmj_masks.h5'  # backward-compatible default
 
     # -----------------------------------------------------------------------
-    # Load detections
+    # Batch mode dispatch
     # -----------------------------------------------------------------------
+    if getattr(args, 'input_dir', None):
+        run_batch_export(args)
+        return
+
+    # -----------------------------------------------------------------------
+    # Load detections (single-slide mode)
+    # -----------------------------------------------------------------------
+    if args.detections is None:
+        print("ERROR: --detections is required (or use --input-dir for batch mode)")
+        return
+
     print(f"Loading detections from: {args.detections}")
     all_detections = load_detections(args.detections)
     print(f"  Loaded {len(all_detections)} detections")
@@ -1164,6 +1187,21 @@ Examples:
         if args.image_height:
             crosses_data['image_height_px'] = args.image_height
 
+        # Handle display_transform in crosses JSON (from napari_place_crosses.py)
+        # Cross coordinates in JSON are already in slide pixel space (inverse
+        # transform applied during placement). The display_transform field is
+        # informational only — no further conversion needed here.
+        _dt = crosses_data.get('display_transform')
+        if _dt:
+            _transforms = []
+            if _dt.get('flip_horizontal'):
+                _transforms.append('flip_horizontal')
+            if _dt.get('rotate_cw_90'):
+                _transforms.append('rotate_cw_90')
+            if _transforms:
+                print(f"  Crosses placed with display transforms: {', '.join(_transforms)}")
+                print(f"  (coordinates already in slide pixel space)")
+
         # -------------------------------------------------------------------
         # Step 1: Separate singles vs clustered detections
         # -------------------------------------------------------------------
@@ -1214,6 +1252,24 @@ Examples:
         if _promoted:
             print(f"  Used {_promoted} pre-processed contours from pipeline (contour_dilated_um)")
 
+        # Warn if contours were already processed during pipeline
+        _has_erosion = (
+            getattr(args, 'erosion_um', 0) > 0 or getattr(args, 'erode_pct', 0) > 0
+        )
+        if _promoted > 0 and _has_erosion:
+            _sample_det = next(
+                (d for d in all_dets_needing_contours
+                 if d.get('contour_dilated_um') is not None), None
+            )
+            _pipe_dilation = _sample_det.get('contour_dilation_um', 0.5) if _sample_det else 0.5
+            _pipe_rdp = _sample_det.get('contour_rdp_epsilon', 5.0) if _sample_det else 5.0
+            print(f"\n  NOTE: Contours were already dilated during pipeline "
+                  f"(dilation={_pipe_dilation}um, rdp={_pipe_rdp}).")
+            print(f"  Applying export-time erosion to pre-processed contours.")
+        if _promoted > 0 and (args.dilation_um != 0.5 or args.rdp_epsilon != 5.0):
+            print(f"\n  NOTE: --dilation-um and --rdp-epsilon only affect newly extracted "
+                  f"contours, not pre-processed pipeline contours ({_promoted} promoted).")
+
         need_extraction = any(
             d.get('contour_um') is None and d.get('outer_contour_global') is None
             for d in all_dets_needing_contours
@@ -1246,6 +1302,8 @@ Examples:
                 contour_px = det.get('outer_contour_global')
                 if contour_px is None:
                     continue
+                # Note: erosion is NOT applied here — Step 2b handles it
+                # uniformly for all contours (promoted, H5-extracted, and fresh)
                 processed, stats = process_contour(
                     contour_px, pixel_size_um=pixel_size,
                     dilation_um=args.dilation_um,
@@ -1257,6 +1315,43 @@ Examples:
                     det['area_um2'] = stats['area_after_um2']
                     processed_count += 1
             print(f"  Processed {processed_count} contours")
+
+        # -------------------------------------------------------------------
+        # Step 2b: Apply export-time erosion to existing contours (if requested)
+        # -------------------------------------------------------------------
+        _erosion_um = getattr(args, 'erosion_um', 0.0)
+        _erode_pct = getattr(args, 'erode_pct', 0.0)
+        if (_erosion_um > 0 or _erode_pct > 0):
+            from segmentation.lmd.contour_processing import erode_contour, erode_contour_percent
+            from shapely.geometry import Polygon
+
+            erode_label = (f"{_erosion_um}um" if _erosion_um > 0
+                          else f"{_erode_pct*100:.1f}% of sqrt(area)")
+            print(f"\nApplying export-time erosion ({erode_label}) to all contours...")
+            _eroded_count = 0
+            _collapsed_count = 0
+            for det in all_dets_needing_contours:
+                contour_um = det.get('contour_um')
+                if contour_um is None or len(contour_um) < 3:
+                    continue
+
+                pts = np.array(contour_um, dtype=np.float64)
+                if _erosion_um > 0:
+                    result = erode_contour(pts, _erosion_um)
+                else:
+                    result = erode_contour_percent(pts, _erode_pct)
+
+                if result is not None:
+                    det['contour_um'] = result.tolist()
+                    poly = Polygon(result)
+                    det['area_um2'] = poly.area if poly.is_valid else 0
+                    _eroded_count += 1
+                else:
+                    # Contour collapsed — remove it
+                    det['contour_um'] = None
+                    _collapsed_count += 1
+
+            print(f"  Eroded {_eroded_count} contours, {_collapsed_count} collapsed (removed)")
 
         # -------------------------------------------------------------------
         # Step 3: Order singles by nearest-neighbor path
@@ -1593,6 +1688,270 @@ Examples:
 
     if not args.generate_cross_html and not args.export:
         print("No action specified. Use --generate-cross-html or --export")
+
+
+def run_batch_export(args):
+    """Run LMD export for multiple slides discovered from --input-dir."""
+    import copy
+    import re
+
+    input_dir = Path(args.input_dir)
+    crosses_dir = Path(args.crosses_dir) if args.crosses_dir else input_dir
+    output_dir = Path(args.output_dir)
+    output_dir.mkdir(parents=True, exist_ok=True)
+
+    # Discover detection files
+    det_files = sorted(input_dir.glob('*_detections.json'))
+    if not det_files:
+        det_files = sorted(input_dir.glob('*_detections_postdedup.json'))
+    if not det_files:
+        print(f"ERROR: No *_detections.json files found in {input_dir}")
+        return
+
+    print(f"Batch mode: found {len(det_files)} detection files in {input_dir}")
+
+    batch_results = []
+    for det_file in det_files:
+        # Extract slide name from filename (e.g., "nmj_detections.json" -> "nmj")
+        slide_prefix = re.sub(r'_(detections|postdedup)+', '', det_file.stem)
+
+        # Find matching crosses file (prefer slide-specific, fall back to shared)
+        crosses_file = None
+        for pattern in [f'{slide_prefix}_crosses.json', f'{slide_prefix}*crosses*.json']:
+            matches = list(crosses_dir.glob(pattern))
+            if matches:
+                crosses_file = matches[0]
+                break
+
+        # Shared fallback — warn the user
+        if crosses_file is None:
+            for pattern in ['reference_crosses.json', 'crosses.json']:
+                matches = list(crosses_dir.glob(pattern))
+                if matches:
+                    crosses_file = matches[0]
+                    print(f"  NOTE: Using shared crosses file {crosses_file.name} for {slide_prefix}")
+                    break
+
+        if crosses_file is None and args.crosses:
+            crosses_file = Path(args.crosses)
+
+        if crosses_file is None or not crosses_file.exists():
+            print(f"\n  WARNING: No crosses file for {slide_prefix}, skipping")
+            batch_results.append({
+                'slide': slide_prefix, 'status': 'skipped', 'reason': 'no crosses file'
+            })
+            continue
+
+        slide_output = output_dir / slide_prefix
+        slide_output.mkdir(parents=True, exist_ok=True)
+
+        print(f"\n{'='*60}")
+        print(f"Slide: {slide_prefix}")
+        print(f"  Detections: {det_file}")
+        print(f"  Crosses: {crosses_file}")
+        print(f"  Output: {slide_output}")
+        print(f"{'='*60}")
+
+        # Create per-slide args
+        slide_args = copy.deepcopy(args)
+        slide_args.detections = str(det_file)
+        slide_args.crosses = str(crosses_file)
+        slide_args.output_dir = str(slide_output)
+        # Remove batch flags to avoid recursion
+        slide_args.input_dir = None
+
+        try:
+            run_single_slide_export(slide_args)
+            batch_results.append({'slide': slide_prefix, 'status': 'success'})
+        except Exception as e:
+            print(f"  ERROR: {e}")
+            batch_results.append({
+                'slide': slide_prefix, 'status': 'failed', 'reason': str(e)
+            })
+
+    # Write batch summary
+    summary_path = output_dir / 'batch_summary.json'
+    with open(summary_path, 'w') as f:
+        json.dump({
+            'n_slides': len(det_files),
+            'n_success': sum(1 for r in batch_results if r['status'] == 'success'),
+            'n_failed': sum(1 for r in batch_results if r['status'] == 'failed'),
+            'n_skipped': sum(1 for r in batch_results if r['status'] == 'skipped'),
+            'results': batch_results,
+        }, f)
+
+    print(f"\n{'='*60}")
+    print(f"BATCH SUMMARY: {summary_path}")
+    print(f"{'='*60}")
+    for r in batch_results:
+        status = r['status'].upper()
+        reason = f" ({r.get('reason', '')})" if r.get('reason') else ''
+        print(f"  {r['slide']}: {status}{reason}")
+    print(f"{'='*60}")
+
+
+def run_single_slide_export(args):
+    """Run the export pipeline for a single slide (called from batch mode).
+
+    Re-enters main() with args.input_dir=None to prevent recursion.
+    The args namespace should already have detections, crosses, output_dir set.
+    """
+    # Auto-derive mask filename
+    if getattr(args, 'mask_filename', None) is None:
+        if args.cell_type:
+            args.mask_filename = f'{args.cell_type}_masks.h5'
+        else:
+            args.mask_filename = 'nmj_masks.h5'
+
+    # Re-enter main() from the "Load detections" section onward
+    # Since input_dir is None, it won't recurse into batch mode
+    print(f"Loading detections from: {args.detections}")
+    all_detections = load_detections(args.detections)
+    print(f"  Loaded {len(all_detections)} detections")
+
+    # Minimal single-slide export: load crosses and export
+    if not args.export:
+        print("  Batch mode: --export not set, skipping XML generation")
+        return
+
+    if not args.crosses:
+        print("  ERROR: no crosses file for this slide")
+        return
+
+    with open(args.crosses, 'r') as f:
+        crosses_data = json.load(f)
+
+    # Auto-detect pixel size
+    pixel_size = getattr(args, 'pixel_size', None)
+    if pixel_size is None:
+        for det in all_detections:
+            feat = det.get('features', {})
+            if 'pixel_size_um' in feat:
+                pixel_size = feat['pixel_size_um']
+                break
+    if pixel_size is None:
+        print("  ERROR: pixel_size_um not found")
+        return
+
+    crosses_data.setdefault('pixel_size_um', pixel_size)
+
+    # Estimate image dimensions if not in crosses
+    if 'image_width_px' not in crosses_data or 'image_height_px' not in crosses_data:
+        max_x = max_y = 0
+        for det in all_detections:
+            coords = get_detection_coordinates(det)
+            if coords:
+                max_x = max(max_x, coords[0])
+                max_y = max(max_y, coords[1])
+        if max_x == 0 or max_y == 0:
+            print("  ERROR: Could not estimate image dimensions from detection coordinates")
+            return
+        crosses_data.setdefault('image_width_px', int(max_x * 1.1))
+        crosses_data.setdefault('image_height_px', int(max_y * 1.1))
+
+    # Filter
+    detections = list(all_detections)
+    if args.min_score is not None:
+        detections = filter_detections(detections, min_score=args.min_score)
+        print(f"  Score filter: {len(all_detections)} -> {len(detections)}")
+
+    if not detections:
+        print("  No detections after filtering, skipping")
+        return
+
+    # Promote pipeline contours
+    for d in detections:
+        if d.get('contour_um') is None and d.get('contour_dilated_um') is not None:
+            d['contour_um'] = d['contour_dilated_um']
+
+    # Apply export-time erosion
+    _erosion_um = getattr(args, 'erosion_um', 0.0)
+    _erode_pct = getattr(args, 'erode_pct', 0.0)
+    if _erosion_um > 0 or _erode_pct > 0:
+        from segmentation.lmd.contour_processing import erode_contour, erode_contour_percent
+        from shapely.geometry import Polygon as _Polygon
+        for det in detections:
+            contour_um = det.get('contour_um')
+            if contour_um is None or len(contour_um) < 3:
+                continue
+            pts = np.array(contour_um, dtype=np.float64)
+            result = (erode_contour(pts, _erosion_um) if _erosion_um > 0
+                      else erode_contour_percent(pts, _erode_pct))
+            if result is not None:
+                det['contour_um'] = result.tolist()
+                poly = _Polygon(result)
+                det['area_um2'] = poly.area if poly.is_valid else 0
+            else:
+                det['contour_um'] = None
+
+    # Warn about features not supported in batch mode
+    if getattr(args, 'generate_controls', False):
+        print("  NOTE: --generate-controls not yet supported in batch mode, skipping controls")
+    if getattr(args, 'clusters', None):
+        print("  NOTE: --clusters not yet supported in batch mode, treating all as singles")
+
+    # Simple export: all detections as singles (no clustering in batch)
+    singles = [d for d in detections if d.get('contour_um') is not None]
+    if not singles:
+        print("  No contours available, skipping")
+        return
+
+    # Order by nearest neighbor
+    positions = []
+    for det in singles:
+        coords = get_detection_coordinates(det)
+        positions.append(coords if coords else (0, 0))
+
+    nn_order = nearest_neighbor_order(positions)
+    ordered = [singles[i] for i in nn_order]
+
+    # Build shapes
+    ordered_singles = []
+    for det in ordered:
+        uid = det.get('uid', det.get('id', ''))
+        ordered_singles.append({
+            'type': 'single',
+            'uid': uid,
+            'contour_um': det.get('contour_um'),
+            'area_um2': det.get('area_um2', 0),
+            'global_center': det.get('global_center'),
+        })
+
+    # Well assignment (no controls in batch for simplicity)
+    n_wells = len(ordered_singles)
+    if n_wells > 308:
+        print(f"  WARNING: {n_wells} wells needed, 308 max. Truncating.")
+        ordered_singles = ordered_singles[:308]
+        n_wells = 308
+
+    wells = generate_wells_serpentine_4_quadrants(n_wells)
+    for i, shape in enumerate(ordered_singles):
+        shape['well'] = wells[i]
+
+    # Export XML
+    output_dir = Path(args.output_dir)
+    output_dir.mkdir(parents=True, exist_ok=True)
+    output_name = getattr(args, 'output_name', 'shapes')
+
+    try:
+        xml_path = output_dir / f"{output_name}.xml"
+        export_to_lmd_xml(ordered_singles, crosses_data, xml_path,
+                          flip_y=not getattr(args, 'no_flip_y', False))
+    except Exception as e:
+        print(f"  XML export failed: {e}")
+
+    # Save JSON summary
+    summary = {
+        'n_detections': len(all_detections),
+        'n_exported': len(ordered_singles),
+        'n_wells': len(wells),
+        'pixel_size_um': pixel_size,
+    }
+    summary_path = output_dir / f"{output_name}_summary.json"
+    with open(summary_path, 'w') as f:
+        json.dump(summary, f)
+
+    print(f"  Exported {len(ordered_singles)} shapes to {output_dir}")
 
 
 if __name__ == '__main__':

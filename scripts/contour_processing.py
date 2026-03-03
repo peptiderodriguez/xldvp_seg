@@ -13,6 +13,8 @@ from segmentation.lmd.contour_processing import (  # noqa: F401
     rdp_simplify,
     validate_polygon,
     dilate_contour,
+    erode_contour,
+    erode_contour_percent,
     process_contour,
     process_contours_batch,
     process_detection_contours,
@@ -34,7 +36,7 @@ if __name__ == '__main__':
         [100, 200],
     ]
 
-    result, stats = process_contour(test_contour_px, return_stats=True)
+    result, stats = process_contour(test_contour_px, pixel_size_um=0.3, return_stats=True)
 
     print(f"Input: {len(test_contour_px)} points")
     print(f"Output: {stats['points_after']} points")
