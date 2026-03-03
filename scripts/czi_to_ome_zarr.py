@@ -36,6 +36,8 @@ import numcodecs
 import zarr
 from tqdm import tqdm
 
+_ZARR_V3 = int(zarr.__version__.split('.')[0]) >= 3
+
 try:
     from aicspylibczi import CziFile
 except ImportError:
@@ -346,11 +348,20 @@ def create_zarr_store(
                 f"Output path exists: {output_path}. Use --overwrite to replace."
             )
 
-    # Create zarr v2 store with Blosc compression
+    # Create zarr v2-format store with Blosc compression
     compressor = numcodecs.Blosc(cname='zstd', clevel=3, shuffle=numcodecs.Blosc.BITSHUFFLE)
 
-    store = zarr.DirectoryStore(str(output_path))
-    root = zarr.group(store, overwrite=True)
+    if _ZARR_V3:
+        root = zarr.open_group(str(output_path), mode='w', zarr_format=2)
+    else:
+        store = zarr.DirectoryStore(str(output_path))
+        root = zarr.group(store, overwrite=True)
+
+    def _create_arr(name, **kwargs):
+        if _ZARR_V3:
+            return root.create_array(name, compressors=[kwargs.pop('compressor')], **kwargs)
+        else:
+            return root.create_dataset(name, **kwargs)
 
     # Create arrays for each pyramid level
     current_shape = shape
@@ -360,7 +371,7 @@ def create_zarr_store(
             min(c, s) for c, s in zip(chunks, current_shape)
         )
 
-        arr = root.create_dataset(
+        arr = _create_arr(
             str(level),
             shape=current_shape,
             chunks=level_chunks,
