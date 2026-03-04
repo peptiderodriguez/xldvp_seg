@@ -592,6 +592,17 @@ def main():
     else:
         all_samples.sort(key=lambda x: x['stats'].get(sort_key, 0), reverse=reverse)
 
+    # Build classifier subtitle for HTML header
+    clf_subtitle = None
+    from segmentation.utils.classifier_registry import extract_classifier_info
+    _scored, _prov, _clf_info = extract_classifier_info(all_detections)
+    if _scored > 0 and _clf_info:
+        _f1 = _clf_info.get('cv_f1')
+        _f1_str = f", F1={_f1:.3f}" if _f1 else ""
+        clf_subtitle = f"Classifier: {_clf_info.get('classifier_name', 'unknown')}{_f1_str}"
+    elif _scored > 0:
+        clf_subtitle = "Classifier: unknown (no provenance)"
+
     # Export HTML
     experiment_name = f"{slide_name}_regen"
 
@@ -601,6 +612,7 @@ def main():
         cell_type,
         samples_per_page=args.samples_per_page,
         title=f"{cell_type.upper()} Annotation Review (regenerated)",
+        subtitle=clf_subtitle,
         page_prefix=f'{cell_type}_page',
         experiment_name=experiment_name,
         file_name=f"{slide_name}.czi",

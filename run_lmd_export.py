@@ -1120,6 +1120,20 @@ def _run_single_slide(args):
         detections = [d for d in detections if d.get('zone_id') not in exclude_ids]
         print(f"  Zone exclude ({exclude_ids}): {before} -> {len(detections)}")
 
+    # Log classifier provenance
+    from segmentation.utils.classifier_registry import extract_classifier_info
+    _scored, _prov, _clf_info = extract_classifier_info(detections)
+    if _scored > 0:
+        if _clf_info:
+            _f1 = _clf_info.get('cv_f1')
+            _f1_str = f" (F1={_f1:.3f})" if _f1 else ""
+            _thresh_str = f", threshold={args.min_score}" if args.min_score else ""
+            print(f"  LMD export using {len(detections)} detections scored by "
+                  f"{_clf_info.get('classifier_name', 'unknown')}{_f1_str}{_thresh_str}")
+        else:
+            print(f"  WARNING: Detections have {_scored} RF scores with unknown provenance. "
+                  f"Verify before cutting.")
+
     if len(detections) == 0:
         print("ERROR: No detections to export!")
         return

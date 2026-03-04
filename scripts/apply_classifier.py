@@ -50,9 +50,12 @@ def main():
         logger.error(f"Detections file not found: {det_path}")
         sys.exit(1)
 
-    clf_path = Path(args.classifier)
-    if not clf_path.exists():
-        logger.error(f"Classifier file not found: {clf_path}")
+    # Resolve classifier: registry name or file path
+    from segmentation.utils.classifier_registry import resolve_classifier
+    try:
+        clf_path = resolve_classifier(args.classifier)
+    except FileNotFoundError as e:
+        logger.error(str(e))
         sys.exit(1)
 
     # Default output path
@@ -73,6 +76,13 @@ def main():
     pipeline = clf_data['pipeline']
     feature_names = clf_data['feature_names']
     logger.info(f"Classifier has {len(feature_names)} features")
+
+    # Build provenance info from the already-loaded clf_data (avoids double pkl load)
+    from segmentation.utils.classifier_registry import build_classifier_info
+    classifier_info = build_classifier_info(clf_path, clf_data.get('raw_meta', {}))
+    logger.info(f"Classifier: {classifier_info['classifier_name']} "
+                f"(features={classifier_info['feature_set']}, "
+                f"F1={classifier_info.get('cv_f1', '?')})")
 
     # Extract feature matrix (pre-allocated numpy array)
     X_valid, valid_indices = extract_feature_matrix(detections, feature_names)
@@ -95,6 +105,7 @@ def main():
         logger.warning("No detections have features — setting all rf_prediction = 0.0")
         for det in detections:
             det['rf_prediction'] = 0.0
+            det['classifier_info'] = classifier_info
     else:
         X = X_valid
 
@@ -109,11 +120,13 @@ def main():
         # Apply scores to valid detections
         for idx, score in zip(valid_indices, scores):
             detections[idx]['rf_prediction'] = float(score)
+            detections[idx]['classifier_info'] = classifier_info
 
         # Set 0.0 for detections without features
         for i, det in enumerate(detections):
             if 'rf_prediction' not in det or det['rf_prediction'] is None:
                 det['rf_prediction'] = 0.0
+                det['classifier_info'] = classifier_info
 
         # Score distribution summary
         all_scores = np.array([det['rf_prediction'] for det in detections])
@@ -131,6 +144,13 @@ def main():
     with open(ts_out, 'w') as f:
         json.dump(detections, f, cls=NumpyEncoder)
     update_symlink(out_path, ts_out)
+
+    # Write sidecar provenance file
+    from segmentation.utils.json_utils import atomic_json_dump
+    sidecar_path = ts_out.parent / 'classifier_info.json'
+    atomic_json_dump(classifier_info, sidecar_path)
+    logger.info(f"Classifier provenance written to {sidecar_path}")
+
     logger.info(f"Done. {len(detections):,} detections scored.")
 
 

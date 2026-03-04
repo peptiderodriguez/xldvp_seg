@@ -130,13 +130,25 @@ def _finish_pipeline(args, all_detections, all_samples, slide_output_dir, tiles_
     update_symlink(detections_file, ts_detections)
     logger.info(f"Saved {len(all_detections)} detections to {ts_detections}")
 
+    # Log classifier provenance status
+    from segmentation.utils.classifier_registry import extract_classifier_info
+    scored_count, prov_count, sample_clf_info = extract_classifier_info(all_detections)
+    if scored_count > 0:
+        logger.info(f"Classifier scores present on {scored_count}/{len(all_detections)} detections")
+        if prov_count > 0 and sample_clf_info:
+            logger.info(f"  Classifier: {sample_clf_info.get('classifier_name', 'unknown')} "
+                        f"(F1={sample_clf_info.get('cv_f1', '?')}, "
+                        f"scored {sample_clf_info.get('scored_at', '?')})")
+        elif prov_count == 0:
+            logger.warning("Scores have NO provenance -- origin unknown")
+
     csv_file = slide_output_dir / f'{cell_type}_coordinates.csv'
     ts_csv = timestamped_path(csv_file)
     with open(ts_csv, 'w') as f:
         if cell_type == 'vessel':
-            f.write('uid,global_x_px,global_y_px,global_x_um,global_y_um,outer_diameter_um,wall_thickness_um,confidence\n')
+            f.write('uid,global_x_px,global_y_px,global_x_um,global_y_um,outer_diameter_um,wall_thickness_um,confidence,classifier\n')
         else:
-            f.write('uid,global_x_px,global_y_px,global_x_um,global_y_um,area_um2\n')
+            f.write('uid,global_x_px,global_y_px,global_x_um,global_y_um,area_um2,classifier\n')
         for det in all_detections:
             g_center = det.get('global_center')
             g_center_um = det.get('global_center_um')
@@ -147,15 +159,18 @@ def _finish_pipeline(args, all_detections, all_samples, slide_output_dir, tiles_
             if len(g_center_um) < 2 or g_center_um[0] is None or g_center_um[1] is None:
                 continue
             feat = det.get('features', {})
+            _clf_name = det.get('classifier_info', {}).get('classifier_name', '')
+            if not _clf_name and det.get('rf_prediction') is not None:
+                _clf_name = 'unknown'
             base = (f"{det['uid']},{g_center[0]:.1f},{g_center[1]:.1f},"
                     f"{g_center_um[0]:.2f},{g_center_um[1]:.2f}")
             if cell_type == 'vessel':
                 f.write(f"{base},"
                         f"{feat.get('outer_diameter_um', 0):.2f},{feat.get('wall_thickness_mean_um', 0):.2f},"
-                        f"{feat.get('confidence', 'unknown')}\n")
+                        f"{feat.get('confidence', 'unknown')},{_clf_name}\n")
             else:
                 area_um2 = feat.get('area', 0) * (pixel_size_um ** 2)
-                f.write(f"{base},{area_um2:.2f}\n")
+                f.write(f"{base},{area_um2:.2f},{_clf_name}\n")
     update_symlink(csv_file, ts_csv)
     logger.info(f"Saved coordinates to {ts_csv}")
 
@@ -183,12 +198,18 @@ def _finish_pipeline(args, all_detections, all_samples, slide_output_dir, tiles_
         prior_ann = getattr(args, 'prior_annotations', None)
         experiment_name = f"{slide_name}_{run_timestamp}_{pct}pct"
         _title_suffix = " (resumed)" if resumed else ""
+        _clf_subtitle = None
+        if sample_clf_info:
+            _f1 = sample_clf_info.get('cv_f1')
+            _f1_str = f", F1={_f1:.3f}" if _f1 else ""
+            _clf_subtitle = f"Classifier: {sample_clf_info.get('classifier_name', 'unknown')}{_f1_str}"
         export_samples_to_html(
             all_samples,
             html_dir,
             cell_type,
             samples_per_page=args.samples_per_page,
             title=f"{cell_type.upper()} Annotation Review{_title_suffix}",
+            subtitle=_clf_subtitle,
             page_prefix=f'{cell_type}_page',
             experiment_name=experiment_name,
             file_name=f"{czi_path.name}" if resumed else f"{slide_name}.czi",
@@ -233,6 +254,13 @@ def _finish_pipeline(args, all_detections, all_samples, slide_output_dir, tiles_
         'background_corrected': _bg_corrected,
         'contour_processed': _contour_processed,
     }
+    if sample_clf_info:
+        summary['classifier'] = {
+            'name': sample_clf_info.get('classifier_name'),
+            'feature_set': sample_clf_info.get('feature_set'),
+            'cv_f1': sample_clf_info.get('cv_f1'),
+            'scored_at': sample_clf_info.get('scored_at'),
+        }
     atomic_json_dump(summary, slide_output_dir / 'summary.json')
 
     # Cleanup detector resources

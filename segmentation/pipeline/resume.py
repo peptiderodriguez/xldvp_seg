@@ -163,6 +163,28 @@ def reload_detections_from_tiles(tiles_dir, cell_type):
             except (json.JSONDecodeError, IOError) as e:
                 logger.warning(f"Failed to load {feat_file}: {e}")
 
+    # Warn about pre-existing classifier scores
+    if all_detections:
+        from segmentation.utils.classifier_registry import extract_classifier_info
+        scored_count, prov_count, sample_info = extract_classifier_info(all_detections)
+        if scored_count > 0:
+            if prov_count > 0 and sample_info:
+                logger.warning(
+                    "Loaded %d detections with pre-existing RF scores "
+                    "(classifier: %s, F1=%s, scored %s)",
+                    scored_count,
+                    sample_info.get('classifier_name', 'unknown'),
+                    sample_info.get('cv_f1', '?'),
+                    sample_info.get('scored_at', '?'),
+                )
+            else:
+                logger.warning(
+                    "Loaded %d detections with RF scores but NO provenance metadata. "
+                    "These scores are from an unknown classifier -- they may be stale "
+                    "or from a different run. Consider re-scoring with apply_classifier.py.",
+                    scored_count,
+                )
+
     return all_detections
 
 

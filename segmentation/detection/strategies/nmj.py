@@ -786,7 +786,8 @@ def load_nmj_rf_classifier(model_path: str):
         result = {
             'pipeline': pipeline,
             'feature_names': feature_names,
-            'type': 'rf'
+            'type': 'rf',
+            'raw_meta': {},  # Legacy Pipeline format has no metadata
         }
         logger.info(f"Loaded RF Pipeline classifier with {len(feature_names)} features")
 
@@ -808,7 +809,8 @@ def load_nmj_rf_classifier(model_path: str):
         result = {
             'pipeline': pipeline,
             'feature_names': model_data.get('feature_names', []),
-            'type': 'rf'
+            'type': 'rf',
+            'raw_meta': model_data,  # Preserve training metadata for provenance
         }
         logger.info(f"Loaded RF classifier (legacy format) with {len(result['feature_names'])} features")
         if 'accuracy' in model_data:

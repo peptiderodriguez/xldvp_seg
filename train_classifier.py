@@ -15,6 +15,7 @@ Feature sets:
 
 import argparse
 import json
+import os
 import numpy as np
 from datetime import datetime
 from pathlib import Path
@@ -159,21 +160,48 @@ def load_features_and_annotations(detections_path, annotations_path, feature_set
 
 def main():
     parser = argparse.ArgumentParser(description='Train NMJ Feature Classifier')
-    parser.add_argument('--detections', type=str, required=True,
-                        help='Path to nmj_detections.json')
-    parser.add_argument('--annotations', type=str, required=True,
-                        help='Path to annotations JSON')
-    parser.add_argument('--output-dir', type=str, required=True,
-                        help='Output directory for model')
+    parser.add_argument('--detections', type=str, default=None,
+                        help='Path to nmj_detections.json (required for training)')
+    parser.add_argument('--annotations', type=str, default=None,
+                        help='Path to annotations JSON (required for training)')
+    parser.add_argument('--output-dir', type=str, default=None,
+                        help='Output directory for model (required for training)')
     parser.add_argument('--n-estimators', type=int, default=200,
                         help='Number of trees in Random Forest')
     parser.add_argument('--feature-set', type=str, default='all',
                         choices=['morph', 'morph_sam2', 'channel_stats', 'all'],
                         help='Feature subset to use (default: all). '
                              'channel_stats: per-channel intensity features only (ch*_ prefixed)')
+    parser.add_argument('--name', type=str, default=None,
+                        help='Classifier name (e.g. "vessel_v1"). Auto-generated if not provided.')
+    parser.add_argument('--register', action='store_true',
+                        help='Register classifier in registry after training. Implied when --name is provided.')
+    parser.add_argument('--list-classifiers', action='store_true',
+                        help='List available classifiers from registry and exit (no training).')
+    parser.add_argument('--cell-type', type=str, default='unknown',
+                        help='Cell type for metadata (default: "unknown").')
+    parser.add_argument('--description', type=str, default='',
+                        help='Optional description string for the classifier.')
     args = parser.parse_args()
 
     setup_logging()
+
+    # List classifiers and exit if requested
+    if args.list_classifiers:
+        from segmentation.utils.classifier_registry import list_classifiers
+        list_classifiers()
+        return
+
+    # Validate required args for training
+    missing = []
+    if not args.detections:
+        missing.append('--detections')
+    if not args.annotations:
+        missing.append('--annotations')
+    if not args.output_dir:
+        missing.append('--output-dir')
+    if missing:
+        parser.error(f"the following arguments are required for training: {', '.join(missing)}")
 
     # Load data
     logger.info("Loading features and annotations...")
@@ -252,6 +280,7 @@ def main():
 
     timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
     model_path = output_dir / f"nmj_classifier_rf_{timestamp}.pkl"
+    clf_name = args.name or f"rf_{args.feature_set}_{datetime.now().strftime('%Y%m%d')}"
     joblib.dump({
         'model': final_clf,
         'classifier': final_clf,  # Legacy key for backward compat
@@ -263,6 +292,11 @@ def main():
         'n_positive': int(y.sum()),
         'n_negative': int(len(y) - y.sum()),
         'n_total': len(y),
+        'name': clf_name,
+        'trained_at': datetime.now().isoformat(),
+        'training_annotations_path': os.path.abspath(args.annotations),
+        'cell_type': getattr(args, 'cell_type', 'unknown') or 'unknown',
+        'description': getattr(args, 'description', '') or '',
     }, model_path)
 
     # Symlink latest classifier for easy reference
@@ -274,6 +308,25 @@ def main():
     except OSError:
         pass
     logger.info(f"\nModel saved to: {model_path}")
+
+    # Auto-register if --register or --name provided
+    if args.register or args.name:
+        from segmentation.utils.classifier_registry import register_classifier
+        # Derive training slide name from detections path (e.g. .../slide_name/run_dir/det.json)
+        _det_path = Path(args.detections).resolve()
+        _training_slide = _det_path.parent.parent.name if _det_path.parent.parent.exists() else None
+        reg_meta = {
+            'feature_set': args.feature_set,
+            'cv_f1_mean': float(cv_scores.mean()),
+            'n_positive': int(y.sum()),
+            'n_negative': int(len(y) - y.sum()),
+            'cell_type': getattr(args, 'cell_type', 'unknown') or 'unknown',
+            'trained_at': datetime.now().isoformat(),
+            'training_slide': _training_slide,
+            'training_annotations_path': os.path.abspath(args.annotations),
+            'description': getattr(args, 'description', '') or '',
+        }
+        register_classifier(clf_name, model_path, reg_meta)
 
     # --- Step 5: Self-test — load and verify the saved model ---
     logger.info("\nSelf-test: loading saved model and verifying predictions...")
