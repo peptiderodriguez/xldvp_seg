@@ -195,11 +195,10 @@ optionally subsamples them:
 3. **Sampling** -- Always process 100% of tissue tiles (`--sample-fraction 1.0` is the default). Use `--html-sample-fraction 0.10` to subsample the HTML viewer (not detection) when slides have 100k+ cells.
 
 ```bash
---sample-fraction 1.0      # [Default] Process 100% of tissue tiles — always use this
---skip-tissue-detection    # Process ALL tiles regardless of tissue content
---calibration-samples 50   # Number of tiles for threshold calibration
---random-seed 42           # Deterministic tile sampling
+--sample-fraction 1.0        # [Default] Process 100% of tissue tiles — always use this
+--random-seed 42             # Deterministic tile sampling
 --html-sample-fraction 0.10  # Show 10% of detections in HTML viewer (saves RAM on large slides)
+--max-html-samples 20000     # Hard OOM cap during per-tile HTML accumulation (default: 20000)
 ```
 
 Tiles are generated with configurable overlap:
@@ -290,7 +289,6 @@ Detects blood vessel cross-sections via SMA+ ring structures with a 3-contour sy
 - **Lumen** (cyan): Inner boundary from SAM2/threshold segmentation
 - **CD31** (green): Endothelial outer boundary via adaptive dilation on CD31 channel
 - **SMA** (magenta): Smooth muscle ring via adaptive dilation on SMA channel, expanding from lumen
-- `has_sma_ring`: True when SMA expansion > 5% larger than lumen (veins/capillaries lack SMA)
 
 ```bash
 # Basic vessel detection
@@ -526,6 +524,27 @@ deduplication module (`segmentation/processing/deduplication.py`) resolves this:
 For multi-node runs, `--merge-shards` first combines per-node shard manifests into
 a single merged detection list, then runs the standard dedup pass.
 
+### Post-Dedup Processing (automatic)
+
+After dedup, a 3-phase post-processing pipeline runs automatically:
+
+| Phase | What it does | Parallelization |
+|-------|-------------|-----------------|
+| Phase 1 | Contour dilation (+0.5 um) + RDP simplification + quick mean extraction | ThreadPoolExecutor (32 workers) |
+| Phase 2 | Local background estimation (KD-tree, k=30 nearest neighbors) | Single-threaded (global) |
+| Phase 3 | Intensity feature re-extraction on background-corrected pixels | ThreadPoolExecutor (32 workers) |
+
+Phase 3 extracts **intensity features only** (per-channel stats). Morphological features from initial detection are preserved unchanged.
+
+```bash
+# Control post-dedup processing:
+--no-contour-processing      # Skip contour dilation + RDP
+--no-background-correction   # Skip local background subtraction
+--dilation-um 0.5            # Contour dilation in micrometers (default: 0.5)
+--rdp-epsilon 5.0            # RDP simplification epsilon in pixels (default: 5)
+--bg-neighbors 30            # KD-tree neighbors for background (default: 30)
+```
+
 ---
 
 ## Step 7 -- Annotation and Classification
@@ -722,11 +741,19 @@ Export detection contours to Leica LMD XML format for laser microdissection.
 ### Full Workflow
 
 ```bash
-# 1. Convert CZI to OME-Zarr for Napari viewing
-python scripts/czi_to_ome_zarr.py slide.czi slide.zarr
+# 1. OME-Zarr is auto-generated at end of pipeline (from SHM, fast).
+#    Only needed manually if you skipped it or are converting standalone:
+# python scripts/czi_to_ome_zarr.py slide.czi slide.zarr
 
 # 2. Place reference crosses in Napari (3+ calibration points)
-python scripts/napari_place_crosses.py slide.zarr --output crosses.json
+#    CZI-native (recommended — no conversion needed):
+python scripts/napari_place_crosses.py -i slide.czi --channel 0 -o crosses.json
+
+#    With LMD7 display transforms (tissue-down + rotated):
+# python scripts/napari_place_crosses.py -i slide.czi --flip-horizontal --rotate-cw-90 -o crosses.json
+
+#    Or use OME-Zarr (for very large slides):
+# python scripts/napari_place_crosses.py -i slide.zarr -o crosses.json
 
 # 3. Cluster detections for well assignment
 python scripts/cluster_detections.py \
@@ -763,6 +790,7 @@ python scripts/napari_view_lmd_export.py \
 | Two-stage clustering | Round 1: 500 um radius, Round 2: 1000 um radius. Target 375-425 um^2 per cluster |
 | Singles | Unclustered detections become individual wells |
 | Controls | 100 um offset in 8 compass directions. Cluster controls preserve spatial arrangement |
+| Erosion (optional) | Shrink contours at export (`--erosion-um 0.2` or `--erode-pct 0.05`) |
 | Well assignment | 384-well plate, serpentine ordering: B2 -> B3 -> C3 -> C2 (max 308 wells) |
 | Capacity check | Early warning if detections exceed plate capacity (before expensive processing) |
 | XML export | Leica LMD XML format with reference crosses for slide alignment |
@@ -947,7 +975,7 @@ quantifies endothelial and smooth muscle contributions separately.
 | `scripts/apply_classifier.py` | Score existing detections with trained classifier (no re-detection) |
 | `scripts/regenerate_html.py` | Regenerate HTML viewer from saved detections (all cell types) |
 | `scripts/czi_to_ome_zarr.py` | Convert CZI to OME-Zarr with pyramids |
-| `scripts/napari_place_crosses.py` | Interactive reference cross placement |
+| `scripts/napari_place_crosses.py` | Interactive cross placement (CZI + OME-Zarr, RGB crosses, flip/rotate, contour overlay) |
 | `scripts/cluster_detections.py` | Biological clustering for LMD well assignment |
 | `scripts/cluster_by_features.py` | UMAP + HDBSCAN clustering with auto-labeling |
 | `scripts/spatial_cell_analysis.py` | RF embedding, morph UMAP, spatial network analysis |
@@ -1107,7 +1135,7 @@ repeated network I/O.
 
 - Verify channel index matches fluorescence target (`--show-metadata`)
 - Check that `--sample-fraction` is not too low for sparse structures
-- Ensure tissue detection threshold is appropriate (try `--skip-tissue-detection` to test)
+- Ensure tissue detection threshold is appropriate (check with `scripts/preview_preprocessing.py`)
 
 ### Slow Processing
 

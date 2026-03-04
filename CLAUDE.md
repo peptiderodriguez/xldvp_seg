@@ -36,10 +36,8 @@ and guide you through the full pipeline — detection through LMD export.
 ### Key Locations
 | What | Where |
 |------|-------|
-| This repo | `/home/dude/code/xldvp_seg_repo/` |
-| MK/HSPC output | `/home/dude/mk_output/` |
-| NMJ output | `/home/dude/nmj_output/` |
-| Vessel output | `/home/dude/vessel_output/` |
+| This repo | `$REPO` (auto-detected, or set `REPO=/path/to/xldvp_seg`) |
+| Output dirs | `<output_dir>/<slide_name>/<timestamp>/` (timestamped per run) |
 | Conda env | `mkseg` |
 
 **Activate environment:**
@@ -143,7 +141,7 @@ python -m http.server 8080 --directory /home/dude/mk_output/project/html
 9. **Post-dedup processing** (default ON, parallelized with ThreadPoolExecutor):
    - Phase 1: Dilate contours +0.5 um (`--dilation-um`), RDP simplify (`--rdp-epsilon 5`), extract quick means
    - Phase 2: Local background estimation (KD-tree, k=30 global neighbors, `--bg-neighbors`)
-   - Phase 3: Subtract per-cell background from pixels, then extract all features on corrected data
+   - Phase 3: Subtract per-cell background from pixels, then extract intensity features on corrected data (morph features preserved from detection)
    - Disable with `--no-contour-processing` / `--no-background-correction`
 10. Generate annotation HTML (subsample via `--html-sample-fraction 0.10` or `scripts/regenerate_html.py --max-samples 1500`)
 11. Train RF classifier with annotations (`train_classifier.py`, balanced classes)
@@ -375,7 +373,6 @@ Tissue detection in normalization uses calibrated threshold / 10 for permissive 
 - **Lumen** (cyan): Inner boundary from SAM2/threshold segmentation
 - **CD31** (green): Endothelial outer boundary via adaptive dilation on CD31 channel
 - **SMA** (magenta): Smooth muscle ring via adaptive dilation on SMA channel, expanding from lumen (not from CD31 boundary, since CD31 and SMA intermingle)
-- `has_sma_ring`: True when SMA expansion > 5% larger than lumen. Veins/capillaries lack SMA, so SMA contour collapses to lumen boundary.
 
 ### CLI Options (Vessel-specific)
 ```bash

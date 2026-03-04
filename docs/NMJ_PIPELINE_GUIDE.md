@@ -38,8 +38,6 @@ python run_segmentation.py \
     --sample-fraction 1.0 \
     --all-channels \
     --load-to-ram \
-    --extract-full-features \
-    --skip-deep-features \
     --tile-overlap 0.1 \
     --nmj-classifier checkpoints/nmj_classifier_morph_sam2.joblib \
     --no-serve
@@ -56,9 +54,7 @@ python run_segmentation.py \
 | `--intensity-percentile` | `97` | Threshold percentile for detection |
 | `--sample-fraction` | `1.0` | Process 100% of tiles |
 | `--all-channels` | flag | Load all 3 channels for multi-channel features |
-| `--load-to-ram` | flag | Load channels to RAM (faster for network mounts) |
-| `--extract-full-features` | flag | Extract all features (morph + SAM2) |
-| `--skip-deep-features` | flag | Skip ResNet/DINOv2 (use morph+SAM2 only) |
+| `--load-to-ram` | flag | Load channels directly to shared memory (default ON) |
 | `--tile-overlap` | `0.1` | 10% tile overlap to catch boundary NMJs |
 | `--nmj-classifier` | `checkpoints/...` | Pre-trained classifier |
 | `--no-serve` | flag | Don't start HTTP server after completion |
@@ -112,13 +108,14 @@ Processing is ~120-150 sec/tile due to:
 
 ## Memory Requirements
 
-- **RAM**: ~140 GB (3 channels × 44 GB each)
+- **RAM**: ~60-80 GB (direct-to-SHM loading, no RAM intermediate)
 - **GPU VRAM**: ~2-3 GB (SAM2 inference)
 
 ## Post-Processing Notes
 
 With `--tile-overlap 0.1`, NMJs at tile boundaries may be detected twice.
-Deduplication should be applied in post-processing before LMD export.
+Deduplication is applied automatically after detection (mask-overlap based, >10% threshold).
+Post-dedup processing (contour dilation, background correction, intensity re-extraction) also runs automatically.
 
 ## Troubleshooting
 

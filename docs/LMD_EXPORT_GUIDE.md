@@ -25,27 +25,33 @@ After running segmentation and annotating candidates (yes/no), this tool exports
 
 ## Workflow
 
-### Step 1: Generate Cross Placement HTML
+### Step 1: Place Reference Crosses in Napari
 
 Reference crosses are calibration points that align the microscope stage coordinates with your image. Place them at identifiable landmarks visible under the LMD microscope.
 
 ```bash
-python run_lmd_export.py \
-    --detections /path/to/detections.json \
-    --annotations /path/to/annotations.json \
-    --output-dir /path/to/output \
-    --generate-cross-html
+# CZI-native (recommended — no OME-Zarr conversion needed)
+python scripts/napari_place_crosses.py \
+    -i /path/to/slide.czi --channel 0 \
+    -o /path/to/output/reference_crosses.json
+
+# With LMD7 display transforms (tissue-down + rotated)
+python scripts/napari_place_crosses.py \
+    -i /path/to/slide.czi --channel 0 \
+    --flip-horizontal --rotate-cw-90 \
+    -o /path/to/output/reference_crosses.json
+
+# With contour overlay
+python scripts/napari_place_crosses.py \
+    -i /path/to/slide.czi --channel 0 \
+    --contours /path/to/detections.json --color-by well \
+    -o /path/to/output/reference_crosses.json
 ```
 
-This creates `place_crosses.html`. Open it in a browser:
-
-1. Green dots show your detection locations
-2. Click to place reference crosses (minimum 3 required)
-3. Place crosses at tissue corners or distinctive features
-4. Click "Save Crosses" to download `reference_crosses.json`
+Keybinds: R/G/B select cross color, Space places at cursor, S saves, Q saves+quits. Minimum 3 crosses required.
 
 **Tips for cross placement:**
-- Choose landmarks visible in both the overview image and under the LMD microscope
+- Choose landmarks visible in both Napari and under the LMD microscope
 - Spread crosses across the tissue area for better calibration
 - Avoid placing crosses directly on cells you want to collect
 
@@ -64,43 +70,41 @@ python run_lmd_export.py \
 
 ## Spatial Clustering
 
-For collecting many cells, group them into wells automatically. Each cluster becomes one well on the collection plate.
+Clustering is done as a separate step before LMD export using `scripts/cluster_detections.py`:
 
 ```bash
+# Step 1: Cluster detections biologically (area-based grouping)
+python scripts/cluster_detections.py \
+    --detections detections.json \
+    --pixel-size 0.1725 \
+    --area-min 375 --area-max 425 \
+    --dist-round1 500 --dist-round2 1000 \
+    --min-score 0.5 \
+    --output clusters.json
+
+# Step 2: Export with clustering and controls
 python run_lmd_export.py \
     --detections detections.json \
-    --annotations annotations.json \
     --crosses reference_crosses.json \
+    --clusters clusters.json \
+    --tiles-dir /path/to/tiles \
     --output-dir output/lmd \
-    --export \
-    --cluster-size 100 \
-    --plate-format 384
+    --export --generate-controls
 ```
 
-### Clustering Options
+### Contour Processing at Export
 
-| Option | Description |
-|--------|-------------|
-| `--cluster-size N` | Target detections per well (e.g., 100) |
-| `--plate-format {384,96}` | Well plate format |
-| `--clustering-method {greedy,kmeans,dbscan}` | Algorithm for grouping |
-
-### Clustering Methods
-
-- **greedy** (default) - Builds clusters by adding nearest neighbors iteratively. Produces compact, spatially coherent clusters.
-
-- **kmeans** - Standard K-means clustering. Good for evenly distributed detections.
-
-- **dbscan** - Density-based clustering. Good when detections form natural groups with gaps between them.
+| Option | Default | Description |
+|--------|---------|-------------|
+| `--dilation-um` | 0.5 | Expand contours so laser cuts outside the cell |
+| `--rdp-epsilon` | 5 | RDP simplification (reduce vertex count for LMD hardware) |
+| `--erosion-um` | 0 | Shrink contours by absolute distance (um) |
+| `--erode-pct` | 0 | Shrink contours by % of sqrt(area) |
 
 ### Well Assignment
 
-Clusters are sorted spatially (top-to-bottom, left-to-right) and assigned wells in column-major order:
-
-```
-384-well plate: A1, B1, C1, ... P1, A2, B2, ... P24
-96-well plate:  A1, B1, C1, ... H1, A2, B2, ... H12
-```
+384-well plate, 4 quadrants, serpentine ordering: B2 -> B3 -> C3 -> C2 (max 308 wells).
+Singles are assigned before clusters. Every sample gets a paired control well.
 
 ## Output Files
 
@@ -155,24 +159,25 @@ python run_segmentation.py \
 # 2. Annotate in HTML viewer (open output/html/index.html)
 #    Mark cells as Yes/No, export annotations
 
-# 3. Generate cross placement HTML
+# 3. Place reference crosses in Napari (3+ at tissue landmarks)
+python scripts/napari_place_crosses.py \
+    -i /path/to/mesothelin.czi --channel 0 \
+    -o /path/to/output/lmd/reference_crosses.json
+
+# 4. Cluster detections
+python scripts/cluster_detections.py \
+    --detections /path/to/output/mesothelium_detections.json \
+    --pixel-size 0.1725 \
+    --output /path/to/output/lmd/clusters.json
+
+# 5. Export to LMD XML with controls
 python run_lmd_export.py \
     --detections /path/to/output/mesothelium_detections.json \
-    --annotations /path/to/output/annotations.json \
-    --output-dir /path/to/output/lmd \
-    --generate-cross-html
-
-# 4. Open place_crosses.html, place 3+ crosses, save JSON
-
-# 5. Export with clustering (100 cells per well)
-python run_lmd_export.py \
-    --detections /path/to/output/mesothelium_detections.json \
-    --annotations /path/to/output/annotations.json \
     --crosses /path/to/output/lmd/reference_crosses.json \
+    --clusters /path/to/output/lmd/clusters.json \
+    --tiles-dir /path/to/output/slide_name/tiles \
     --output-dir /path/to/output/lmd \
-    --export \
-    --cluster-size 100 \
-    --plate-format 384
+    --export --generate-controls
 
 # 6. Load shapes.xml into Leica LMD software
 ```
@@ -197,9 +202,9 @@ Place at least 3 crosses in the HTML tool before saving.
 - Ensure crosses are placed at the same landmarks visible in LMD software
 
 ### Clustering produces uneven cluster sizes
-- Try different `--clustering-method` options
-- DBSCAN may produce more natural groupings for clustered data
-- Greedy method tends to produce more uniform sizes
+- Adjust `--area-min` and `--area-max` targets in `cluster_detections.py`
+- Try different `--dist-round1` and `--dist-round2` distance thresholds
+- Use `--min-score` to pre-filter low-confidence detections
 
 ### Import errors for py-lmd
 ```bash

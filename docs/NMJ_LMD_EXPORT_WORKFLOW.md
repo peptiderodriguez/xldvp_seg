@@ -65,8 +65,6 @@ python run_segmentation.py \
     --intensity-percentile 98 \
     --all-channels \
     --load-to-ram \
-    --extract-full-features \
-    --skip-deep-features \
     --tile-overlap 0.1 \
     --nmj-classifier checkpoints/nmj_classifier_morph_sam2.joblib
 ```
@@ -109,6 +107,8 @@ python scripts/cluster_detections.py \
 
 ### Step 4: Create OME-Zarr Pyramid
 
+OME-Zarr is auto-generated at the end of the pipeline run (from SHM, fast). If you need to generate it separately:
+
 ```bash
 python scripts/czi_to_ome_zarr.py \
     /path/to/slide.czi \
@@ -119,14 +119,26 @@ python scripts/czi_to_ome_zarr.py \
 
 ### Step 5: Place Reference Crosses in Napari
 
+CZI-native cross placement (recommended — no OME-Zarr conversion needed):
+
 ```bash
 python scripts/napari_place_crosses.py \
-    /path/to/pyramid.zarr \
-    --output reference_crosses.json \
-    --detections nmj_detections.json
+    -i /path/to/slide.czi --channel 0 \
+    -o reference_crosses.json
+
+# With LMD7 display transforms (tissue-down + rotated)
+python scripts/napari_place_crosses.py \
+    -i /path/to/slide.czi --channel 0 \
+    --flip-horizontal --rotate-cw-90 \
+    -o reference_crosses.json
+
+# Or use OME-Zarr (for very large slides)
+python scripts/napari_place_crosses.py \
+    -i /path/to/pyramid.zarr \
+    -o reference_crosses.json
 ```
 
-Minimum 3 crosses at identifiable tissue landmarks.
+Minimum 3 crosses at identifiable tissue landmarks. Keybinds: R/G/B to select color, Space to place, S to save, Q to save+quit.
 
 ### Step 6: Run Unified LMD Export
 
@@ -154,6 +166,8 @@ python run_lmd_export.py \
 | `--control-offset-um` | 100 | Control offset distance in um |
 | `--dilation-um` | 0.5 | Contour dilation buffer in um |
 | `--rdp-epsilon` | 5 | RDP simplification epsilon (pixels) |
+| `--erosion-um` | 0 | Shrink contours by absolute distance (um) |
+| `--erode-pct` | 0 | Shrink contours by % of sqrt(area) |
 | `--min-score` | - | Filter detections by rf_prediction score |
 
 **Output files:**

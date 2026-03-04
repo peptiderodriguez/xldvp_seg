@@ -111,7 +111,7 @@ Controlled by `--no-contour-processing` and `--no-background-correction`.
 - **CD31** (green): endothelial outer boundary via adaptive dilation on CD31 channel
 - **SMA** (magenta): smooth muscle ring via adaptive dilation, expanding from lumen
 
-`has_sma_ring=True` when SMA expansion > 5% larger than lumen. Veins/capillaries lack SMA.
+SMA contour expands from lumen; veins/capillaries lack SMA so the SMA contour collapses to the lumen boundary.
 
 Key vessel methods in `strategies/vessel.py`:
 - `_detect_sma_rings()` — main ring detection via contour hierarchy
