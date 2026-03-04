@@ -1,5 +1,29 @@
 # xldvp_seg - Image Analysis Pipelines
 
+## Session Behaviors
+
+These behaviors apply throughout every Claude Code session on this project:
+
+**Context management:**
+- When context reaches ~15% remaining, proactively: (1) update your auto-memory files with anything learned this session (patterns, bugs found, architectural decisions), (2) update any code documentation that changed, (3) commit uncommitted work with a descriptive message. Tell the user you're doing this so they're not surprised.
+- When starting a continued session (context was compacted), read your memory files first to rebuild context before diving into work.
+
+**Code hygiene:**
+- After completing any significant code change (new feature, bug fix, refactor), review what you wrote before moving on. Catch your own mistakes.
+- After modifying pipeline code, check if CLAUDE.md, the relevant docs/*.md, or slash commands need updating. Keep documentation in sync with code — don't let them drift.
+- When you fix a bug, check if the same pattern exists elsewhere in the codebase. Fix all instances, not just the one the user pointed out.
+
+**Communication:**
+- When running long operations (SLURM jobs, large file reads, multi-agent reviews), give the user a brief status update rather than going silent.
+- When you encounter something unexpected (a file that doesn't match docs, a function that behaves differently than expected), flag it to the user — don't silently work around it.
+- After completing a multi-step task, give a concise summary: what changed, how many files, any notable findings.
+
+**Pipeline-specific:**
+- Always run `czi_info.py` before writing any channel configuration. No exceptions.
+- Never hardcode pixel sizes, channel indices, or file paths that should come from CZI metadata.
+- When writing SLURM configs, check partition busyness first (`system_info.py`).
+- Prefer `--channel-spec "detect=MARKER"` over raw `--channel N` in all examples and configs.
+
 ## Quick Start (Claude Code)
 
 Type `/analyze` to begin. Claude will detect your system, inspect your data,
