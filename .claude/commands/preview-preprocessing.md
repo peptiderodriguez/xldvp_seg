@@ -44,4 +44,22 @@ $MKSEG_PYTHON $REPO/scripts/visualize_corrections.py \
 
 Recommend which corrections to enable in the full pipeline run based on the preview results.
 
+---
+
+## Adaptive Guidance
+
+**After showing preview results (Step 4):**
+- If flat-field correction shows clear improvement (dark corners become uniform): *"Flat-field is making a clear difference — keep it enabled (it's on by default). This is especially important for tiled acquisitions where edge tiles are dimmer."*
+- If flat-field looks marginal (already uniform): *"The slide already has fairly uniform illumination. Flat-field won't hurt but also won't help much. Leave it on for consistency."*
+- If photobleach correction shows gradient removal: *"Photobleach correction is helping — you can see the intensity gradient across the scan direction was removed. Enable with --photobleaching-correction."*
+- If photobleach correction has no visible effect: *"No obvious photobleaching pattern. This is common for short acquisitions or modern microscopes with good laser stability. You can skip this one."*
+- If row/column normalization removes visible banding: *"Clear banding artifact detected and corrected. Worth enabling for this slide."*
+- If row/column normalization has no visible effect: *"No banding artifacts visible — skip row/column normalization for this slide."*
+
+**General recommendations:**
+- *"Flat-field is almost always worth it for mosaic CZI data — it's the most impactful correction."*
+- *"Photobleach correction matters most for large slides where acquisition took a long time (many tiles scanned sequentially)."*
+- *"These corrections affect detection sensitivity: uncorrected illumination gradients can cause the detector to miss cells in dim regions or false-positive in bright regions."*
+- If user is unsure: *"Try running detection at 1% sample fraction with and without the correction to see if it changes detection count in edge tiles."*
+
 $ARGUMENTS

@@ -210,6 +210,29 @@ sc.tl.umap(adata_sam2)
 
 ---
 
+## Adaptive Guidance
+
+**After prerequisite check:**
+- If SpatialData zarr already exists: *"An existing zarr store was found. You can re-export with --overwrite to add squidpy analyses, or load the existing one directly."*
+- If no marker classifications found: *"No marker classifications detected. Squidpy co-occurrence and neighborhood enrichment need a categorical grouping variable. Run /classify first for marker-based analysis, or use 'leiden' clustering within scanpy as an alternative."*
+- If marker classifications exist: *"Found marker classes: [list]. These are good candidates for --squidpy-cluster-key to analyze which cell types co-locate."*
+
+**After export (Step 4):**
+- Report observation count and feature dimensions
+- If spatial range is suspiciously small (all cells in <100 um): *"Spatial coordinates look very tight — are these from a single tile? For whole-slide spatial analysis, make sure you're using the main detections file (not a per-tile file)."*
+- If >50k detections: *"Large dataset — squidpy spatial neighbors will take a minute. The zarr store itself was fast to write."*
+
+**After squidpy analyses:**
+- If Moran's I results exist: *"Check morans_i.csv — features with high I values (>0.3) are spatially clustered. These are biologically interesting: cells with similar values tend to be neighbors."*
+- If neighborhood enrichment shows strong signal: *"The enrichment plot shows which cell types co-locate (red) or avoid each other (blue). Strong red diagonal means cells of the same type cluster together."*
+- If enrichment is mostly noise: *"Neighborhood enrichment doesn't show strong patterns. This could mean cell types are spatially intermixed (no spatial preference) — which is itself an interesting result."*
+
+**Suggesting next steps:**
+- After successful export: *"You can now use this with the full scverse ecosystem — scanpy for clustering, squidpy for spatial stats, napari-spatialdata for visualization."*
+- If user seems new to scverse: Provide the copy-paste snippets from Step 5. *"These are the building blocks — spatial scatter to see where cells are, Moran's I to find spatially autocorrelated features, neighborhood enrichment to see which types co-locate."*
+
+---
+
 ## Rules
 
 - Use `$MKSEG_PYTHON` as interpreter, `PYTHONPATH=$REPO`.
@@ -219,5 +242,6 @@ sc.tl.umap(adata_sam2)
 - The zarr store is self-contained — it can be copied/shared without the original CZI.
 - For vessel cell type, shape extraction uses JSON contour fields (no tiles directory needed).
 - If the user hasn't run detection yet, redirect to `/analyze`.
+- Guide the user through interpreting spatial results — enrichment plots and Moran's I are powerful but not always intuitive.
 
 $ARGUMENTS

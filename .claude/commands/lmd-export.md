@@ -164,6 +164,32 @@ PYTHONPATH=$REPO $MKSEG_PYTHON $REPO/run_lmd_export.py \
 
 ---
 
+## Adaptive Guidance
+
+After each step, review results and give targeted feedback:
+
+**After input check (Step 1):**
+- If RF scores exist: *"Classifier was run. Default --min-score 0.5 keeps high-confidence detections. Adjust lower (0.3) if you want more cells per well, or higher (0.7) for precision."*
+- If no RF scores: *"No classifier was applied — all detections will be exported. If you have too many false positives, consider running /classify first to filter."*
+- If detection count > 250: *"You have N detections — getting close to the 308-well capacity limit. With controls, each detection uses ~2 wells. Consider a score threshold or clustering to stay within plate capacity."*
+- If detection count > 500: *"That's N detections — this will exceed the 308-well plate. You'll need a score threshold or clustering to reduce to ~150 detections (each needs a control well)."*
+
+**After cross placement (Step 2):**
+- If user places crosses very close together: *"Those crosses are clustered in one area. Spreading them across the tissue gives better calibration accuracy across the whole slide."*
+- If using --flip-horizontal --rotate-cw-90: *"Good — LMD7 display transforms applied. The coordinate inversion is handled automatically at export. Make sure the tissue orientation in Napari matches what you'll see on the LMD stage."*
+
+**After export (Step 3):**
+- Report well utilization: *"Used N of 308 wells (X% capacity). N singles, N clustered, N controls."*
+- If wells > 280: *"Running tight on plate capacity. If you need to re-export later with more detections, consider increasing --min-score to free up wells."*
+- If clustering produced very uneven clusters (some >200 cells, some <10): *"Cluster sizes are quite uneven. This is normal for spatially irregular tissue. The small clusters may be isolated cells that didn't merge with neighbors."*
+- Always confirm: *"Transfer the XML to the LMD computer and verify cross alignment before cutting."*
+
+**Erosion guidance:**
+- If user doesn't specify erosion: *"No erosion applied — contours include the 0.5 um dilation from post-dedup. The laser will cut at the dilated boundary. Add --erosion-um 0.2 or --erode-pct 0.05 if you want to cut inside the cell boundary."*
+- If user sets both erosion flags: *"Both --erosion-um and --erode-pct are set. They'll be applied sequentially (absolute first, then percentage). Usually one or the other is enough."*
+
+---
+
 ## Rules
 
 - 384-well + serpentine + controls + clustering are always on by default — don't ask about them unless the user specifically wants to change something
@@ -173,5 +199,6 @@ PYTHONPATH=$REPO $MKSEG_PYTHON $REPO/run_lmd_export.py \
 - The XML must be transferred to the LMD instrument computer — confirm the transfer path
 - CZI-native cross placement is the recommended default (no OME-Zarr conversion needed)
 - OME-Zarr is auto-generated at end of pipeline runs (for viewing/verification)
+- Give helpful guidance about plate capacity, erosion tradeoffs, and cross placement quality — but don't block the export
 
 $ARGUMENTS

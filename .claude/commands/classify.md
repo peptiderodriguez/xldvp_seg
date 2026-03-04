@@ -147,11 +147,39 @@ For beginners: *"SpatialData is the standard format for the scverse spatial anal
 
 ---
 
+## Adaptive Guidance
+
+After each step, review the results and give targeted feedback:
+
+**After annotation check (Step 1):**
+- < 100 annotations: *"That's a small training set. Aim for 200+ with balanced pos/neg for a reliable classifier. More annotations almost always help."*
+- Highly imbalanced (>80% one class): *"Your annotations are pretty skewed. The RF handles imbalance well, but try to annotate more of the minority class if possible."*
+
+**After feature comparison (Step 2):**
+- If `morph` and `morph_sam2` are within 0.01 F1: recommend `morph` — simpler, faster, more robust across slides.
+- If `morph_sam2` is >0.02 better: recommend it — SAM2 embeddings capture visual context that shape stats miss.
+- If all sets underperform (F1 < 0.80): suggest more annotations, check for annotation noise, or consider `--extract-deep-features` for the next detection run.
+
+**After training (Step 3):**
+- F1 > 0.90: *"Excellent classifier. Proceed to scoring."*
+- F1 0.85-0.90: *"Solid. This should work well for filtering."*
+- F1 0.80-0.85: *"Decent but there's room to improve. Consider annotating another 100-200 detections, especially borderline cases."*
+- F1 < 0.80: Diagnose — is it too few annotations, class imbalance, or genuinely hard cases? Suggest concrete next steps.
+- Check precision vs recall: if precision >> recall, suggest lowering score threshold (0.3 instead of 0.5). If recall >> precision, suggest a second annotation round on false positives.
+
+**After scoring (Step 3):**
+- Check score distribution. If bimodal (peaks near 0 and 1): good separation. If most scores cluster around 0.5: the classifier is uncertain — more annotations or better features needed.
+- Report: *"X detections scored > 0.5 out of Y total (Z%)."*
+
+**General:**
+- If the user wants to try deep features and detection was run without `--extract-deep-features`: explain they'd need to re-run detection (checkpointed, so it resumes from dedup). Don't gatekeep — it's a reasonable thing to try.
+- If exploring features with UMAP reveals unexpected clusters: *"Interesting — there might be morphological subtypes here. Want to annotate by cluster to see if there are biologically meaningful groups?"*
+
 ## Rules
 
 - Use `$MKSEG_PYTHON` as the Python interpreter and set `PYTHONPATH=$REPO`.
 - All file paths should be absolute.
 - If the user hasn't run detection yet, redirect them to `/analyze`.
-- If detection was run without `--extract-deep-features`, don't offer deep feature sets — explain they'd need to re-run detection to get those.
+- If detection was run without `--extract-deep-features`, don't block — explain re-detection is needed but it resumes from checkpoints.
 
 $ARGUMENTS

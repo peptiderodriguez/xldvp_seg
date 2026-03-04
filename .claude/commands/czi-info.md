@@ -43,4 +43,26 @@ Use the Em wavelength column to match fluorophores to markers (e.g. Em=668nm = A
 - Approximate memory needed (pixels x 2 bytes for uint16)
 - Estimated processing time (rough: ~1 min/1000 tiles at 4 GPUs)
 
+---
+
+## Adaptive Guidance
+
+**After showing channel table (Step 3):**
+- If a channel has very low emission wavelength separation from another (<20nm difference): *"Channels [X] and [Y] have close emission wavelengths — check for spectral bleedthrough if results look noisy."*
+- If filename markers don't match fluorophore assignments cleanly: *"Some markers in the filename couldn't be confidently matched to CZI channels. Please confirm the mapping above before proceeding."*
+- Always emphasize: *"CZI channel order is set by the acquisition software, NOT by wavelength. The table above is the ground truth."*
+
+**After channel exclusion check (Step 3b):**
+- If user reports a failed stain: *"Got it — excluding channel [X]. This saves memory and prevents the failed stain from confusing marker classification. Use --channels 'N,N,N' to load only the good channels."*
+- If all channels look good: *"All channels look usable. The pipeline will load all of them by default."*
+
+**After pipeline recommendation (Step 4):**
+- If the slide matches multiple pipelines (e.g., has both BTX and cell markers): *"This slide could work with either NMJ or generic cell detection, depending on what you're looking for. NMJ detection is tuned for neuromuscular junction morphology; cell detection uses Cellpose for general segmentation."*
+- If the slide has only 1 channel: *"Single-channel slide — MK detection or NMJ (if it's a BTX stain) are your options. Cell detection needs at least 2 channels (cyto + nuc)."*
+- If many channels (>4): *"Rich multi-channel slide — --all-channels will extract per-channel intensity features for all loaded channels, which helps the classifier distinguish marker combinations."*
+
+**After memory estimate (Step 5):**
+- If estimated memory > 200 GB: *"This is a large slide. Direct-to-SHM loading keeps peak memory manageable, but consider --num-gpus 1 if RAM is tight."*
+- If < 50 GB: *"Moderate-sized slide — should run comfortably on a single node with default settings."*
+
 $ARGUMENTS

@@ -78,4 +78,26 @@ For beginners, explain the annotation interface:
 - "Export" button saves annotations as JSON for classifier training
 - Annotations persist in browser localStorage (per-experiment, won't collide between runs)
 
+---
+
+## Adaptive Guidance
+
+**After finding results:**
+- If multiple HTML directories exist: help user pick the right one based on modification time and cell type. *"The most recent run is usually what you want. Here they are sorted by date."*
+- If HTML is missing but detections exist: *"Detection JSON exists but HTML wasn't generated — this can happen if the run was interrupted. Regenerate with: `$MKSEG_PYTHON $REPO/scripts/regenerate_html.py --detections <json> --czi-path <czi>`"*
+
+**When user starts annotating:**
+- *"Aim for 200+ annotations, roughly balanced between positive and negative. The more you annotate, the better the classifier — but diminishing returns kick in after ~500."*
+- *"Focus on borderline cases — the classifier already handles the obvious ones well. When you're unsure, that's exactly the kind of cell the classifier needs to learn about."*
+- If score-filtered HTML (--score-threshold in the filename): *"This HTML is pre-filtered by classifier score. Good for reviewing the classifier's decisions, but for training a new classifier, annotate from unfiltered HTML."*
+
+**After annotation export:**
+- Check annotation count and balance: *"Exported N annotations (X positive, Y negative). That's a good training set."* or *"Only N annotations — consider annotating more for a robust classifier."*
+- If highly imbalanced (>80% one class): *"Your annotations are skewed toward [positives/negatives]. The RF handles imbalance, but more [minority class] examples would help."*
+- Suggest next step: *"Ready for classifier training? Use /classify to train an RF model on these annotations."*
+
+**For spatial viewer:**
+- If KDE contours show clear hotspots: *"The density map shows spatial clustering — these hotspots are regions of high detection density."*
+- If graph patterns are enabled: *"Graph-pattern analysis classifies spatial arrangements into linear (along a boundary), arc/ring (around a structure), or cluster (focal group)."*
+
 $ARGUMENTS
