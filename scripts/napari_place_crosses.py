@@ -234,9 +234,87 @@ def transform_contour_coords(pts_yx, orig_h, orig_w, flip_h, rot90):
     return np.column_stack([y, x])
 
 
+GROUP_COLORS = [
+    ('lime',       [0.0, 1.0, 0.0, 1.0]),
+    ('hotpink',    [1.0, 0.2, 0.6, 1.0]),
+    ('cyan',       [0.0, 1.0, 1.0, 1.0]),
+    ('orange',     [1.0, 0.6, 0.0, 1.0]),
+    ('yellow',     [1.0, 1.0, 0.0, 1.0]),
+    ('magenta',    [1.0, 0.0, 1.0, 1.0]),
+    ('dodgerblue', [0.1, 0.5, 1.0, 1.0]),
+    ('white',      [1.0, 1.0, 1.0, 1.0]),
+]
+
+
+def _get_group_value(det, field):
+    """Extract a grouping value from a detection dict.
+
+    Checks top-level keys first, then features dict.
+    """
+    if field in det:
+        return det[field]
+    feat = det.get('features', {})
+    if field in feat:
+        return feat[field]
+    return None
+
+
+def _polygon_to_dashes(pts_yx, dash_len=30, gap_len=15):
+    """Convert a closed polygon into dash segments (list of short paths).
+
+    Works in world coords, so dash_len/gap_len are in world pixels.
+    """
+    # Close the polygon
+    closed = np.vstack([pts_yx, pts_yx[0:1]])
+    # Cumulative arc length
+    diffs = np.diff(closed, axis=0)
+    seg_lens = np.sqrt(diffs[:, 0]**2 + diffs[:, 1]**2)
+    cum = np.concatenate([[0], np.cumsum(seg_lens)])
+    total = cum[-1]
+    if total < dash_len:
+        return [pts_yx]  # too small to dash, return as-is
+
+    dashes = []
+    cycle = dash_len + gap_len
+    pos = 0.0
+    while pos < total:
+        d_start = pos
+        d_end = min(pos + dash_len, total)
+        # Interpolate points along the perimeter
+        seg_pts = []
+        for t in np.linspace(d_start, d_end, max(2, int((d_end - d_start) / 5) + 2)):
+            idx = np.searchsorted(cum, t, side='right') - 1
+            idx = min(idx, len(closed) - 2)
+            frac = (t - cum[idx]) / seg_lens[idx] if seg_lens[idx] > 0 else 0
+            pt = closed[idx] + frac * (closed[idx + 1] - closed[idx])
+            seg_pts.append(pt)
+        if len(seg_pts) >= 2:
+            dashes.append(np.array(seg_pts))
+        pos += cycle
+    return dashes
+
+
+def _parse_contour(det, orig_h, orig_w, contour_flip, contour_rot90, world_scale):
+    """Extract and transform a contour from a detection dict. Returns pts_yx or None."""
+    contour_yx = det.get('contour_yx')
+    if contour_yx is not None and len(contour_yx) >= 3:
+        pts = np.array(contour_yx, dtype=np.float64)
+        pts = transform_contour_coords(pts, orig_h, orig_w, contour_flip, contour_rot90)
+        return pts / world_scale
+
+    contour_px = det.get('outer_contour_global')
+    if contour_px is not None and len(contour_px) >= 3:
+        pts_xy = np.array(contour_px, dtype=np.float64)
+        pts_yx = pts_xy[:, ::-1]
+        pts_yx = transform_contour_coords(pts_yx, orig_h, orig_w, contour_flip, contour_rot90)
+        return pts_yx / world_scale
+
+    return None
+
+
 def load_contour_overlay(viewer, contours_path, slide_filter,
                          orig_h, orig_w, flip_h, rot90, world_scale,
-                         zarr_meta=None):
+                         zarr_meta=None, color_by=None):
     """Load contour polygons and display as napari Shapes.
 
     Args:
@@ -245,6 +323,8 @@ def load_contour_overlay(viewer, contours_path, slide_filter,
         world_scale: Divide contour native coords by this to get world coords.
             CZI mode: 1.0 (world = CZI native). Zarr mode: e.g. 2.0 (zarr = CZI/2).
         zarr_meta: Zarr metadata dict, used to detect baked-in transforms.
+        color_by: Field name to group contours by (e.g. 'group', 'classification',
+            'score_class'). Each unique value gets a distinct color layer.
     """
     with open(contours_path) as f:
         data = json.load(f)
@@ -255,7 +335,6 @@ def load_contour_overlay(viewer, contours_path, slide_filter,
         first_val = next(iter(data.values()), None)
         if isinstance(first_val, list) and first_val and isinstance(first_val[0], dict) \
                 and 'contour_yx' in first_val[0]:
-            # BM per-slide format
             if slide_filter:
                 for key, entries in data.items():
                     if slide_filter in key or key in slide_filter:
@@ -286,40 +365,86 @@ def load_contour_overlay(viewer, contours_path, slide_filter,
         if 'rot90' in desc:
             contour_rot90 = True
 
-    shapes = []
-    for det in detections:
-        contour_yx = det.get('contour_yx')
-        if contour_yx is not None and len(contour_yx) >= 3:
-            pts = np.array(contour_yx, dtype=np.float64)
-            pts = transform_contour_coords(pts, orig_h, orig_w,
-                                           contour_flip, contour_rot90)
-            pts = pts / world_scale
-            shapes.append(pts)
-            continue
+    if color_by:
+        # Group contours by field value, keep per-contour labels
+        groups = {}
+        label_centroids = []
+        label_texts = []
+        label_colors = []
+        for det in detections:
+            pts = _parse_contour(det, orig_h, orig_w, contour_flip, contour_rot90, world_scale)
+            if pts is None:
+                continue
+            val = _get_group_value(det, color_by)
+            if val is None:
+                val = 'unknown'
+            key = str(val)
+            groups.setdefault(key, []).append(pts)
+            # Centroid for label
+            centroid = pts.mean(axis=0)
+            label_centroids.append(centroid)
+            label_texts.append(key)
 
-        # Pipeline format: outer_contour_global in [x, y]
-        contour_px = det.get('outer_contour_global')
-        if contour_px is not None and len(contour_px) >= 3:
-            pts_xy = np.array(contour_px, dtype=np.float64)
-            # Convert [x, y] → [y, x]
-            pts_yx = pts_xy[:, ::-1]
-            pts_yx = transform_contour_coords(pts_yx, orig_h, orig_w,
-                                              contour_flip, contour_rot90)
-            pts_yx = pts_yx / world_scale
-            shapes.append(pts_yx)
+        if not groups:
+            print("  Warning: no valid contours for overlay")
+            return
 
-    if shapes:
-        lyr = viewer.add_shapes(
-            shapes, shape_type='polygon',
-            edge_color='lime', edge_width=2,
-            face_color=[0, 0, 0, 0],
-            name='Contours', opacity=0.7,
-        )
-        lyr.mouse_pan = False
-        lyr.mouse_zoom = False
-        print(f"  Overlay: {len(shapes)} contours")
+        color_map = {}
+        for i, (group_name, polys) in enumerate(sorted(groups.items())):
+            color_name, color_rgba = GROUP_COLORS[i % len(GROUP_COLORS)]
+            color_map[group_name] = color_rgba
+            dashes = []
+            for poly in polys:
+                dashes.extend(_polygon_to_dashes(poly))
+            lyr = viewer.add_shapes(
+                dashes, shape_type='path',
+                edge_color=color_rgba, edge_width=3,
+                face_color=[0, 0, 0, 0],
+                name=f'{group_name} ({len(polys)})', opacity=0.8,
+            )
+            lyr.mouse_pan = False
+            lyr.mouse_zoom = False
+            print(f"  {color_name:12s} {group_name}: {len(polys)} contours ({len(dashes)} dashes)")
+
+        # Add text labels at contour centroids
+        if label_centroids:
+            pts_arr = np.array(label_centroids)
+            per_point_colors = [color_map.get(t, [1, 1, 1, 1]) for t in label_texts]
+            text_props = {
+                'string': label_texts,
+                'color': per_point_colors,
+                'size': 10,
+                'anchor': 'center',
+            }
+            lyr = viewer.add_points(
+                pts_arr, size=0.01, face_color=[0, 0, 0, 0],
+                text=text_props, name='Labels',
+            )
+            lyr.mouse_pan = False
+            lyr.mouse_zoom = False
     else:
-        print("  Warning: no valid contours for overlay")
+        # Single layer, all lime
+        polys = []
+        for det in detections:
+            pts = _parse_contour(det, orig_h, orig_w, contour_flip, contour_rot90, world_scale)
+            if pts is not None:
+                polys.append(pts)
+
+        if polys:
+            dashes = []
+            for poly in polys:
+                dashes.extend(_polygon_to_dashes(poly))
+            lyr = viewer.add_shapes(
+                dashes, shape_type='path',
+                edge_color='lime', edge_width=3,
+                face_color=[0, 0, 0, 0],
+                name='Contours', opacity=0.7,
+            )
+            lyr.mouse_pan = False
+            lyr.mouse_zoom = False
+            print(f"  Overlay: {len(polys)} contours ({len(dashes)} dashes)")
+        else:
+            print("  Warning: no valid contours for overlay")
 
 
 # ---------------------------------------------------------------------------
@@ -432,6 +557,7 @@ def run_single_slide(args, input_path=None, output_path=None):
                 flip_h=flip_h, rot90=rotate,
                 world_scale=contour_world_scale,
                 zarr_meta=zarr_meta,
+                color_by=getattr(args, 'color_by', None),
             )
         except Exception as e:
             print(f"  Warning: contour load failed: {e}")
@@ -687,6 +813,9 @@ def main():
                         help='Contour JSON for overlay')
     parser.add_argument('--slide', type=str, default=None,
                         help='Slide name filter for per-slide contour files')
+    parser.add_argument('--color-by', type=str, default=None,
+                        help='Color contours by field (e.g. group, classification, '
+                             'score_class, tdTomato_class)')
 
     # Other
     parser.add_argument('--pixel-size', type=float, default=None,
