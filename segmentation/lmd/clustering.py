@@ -56,8 +56,6 @@ def get_detection_center(det: Dict) -> Optional[Tuple[float, float]]:
     Get (x, y) center coordinates from detection, in PIXELS.
 
     Returns pixel coordinates from 'global_center' or 'center' fields.
-    Callers (e.g. two_stage_clustering) are responsible for converting
-    to microns by multiplying by pixel_size before distance calculations.
     """
     if 'global_center' in det:
         gc = det['global_center']
@@ -81,9 +79,9 @@ def cluster_detections_greedy_area(
 
     Args:
         indices: Detection indices to cluster
-        coords: Array (N, 2) of [x, y] positions in um
+        coords: Array (N, 2) of [x, y] positions (any consistent unit)
         areas: Array (N,) of areas in um2
-        dist_threshold: Max distance in um to add to cluster
+        dist_threshold: Max distance to add to cluster (same units as coords)
         area_min: Target area lower bound
         area_max: Target area upper bound
 
@@ -206,8 +204,8 @@ def two_stage_clustering(
             'outliers': [],
         }
 
-    # Compute coordinates (in um) and areas
-    coords_um = []
+    # Compute coordinates (in pixels) and areas (in um2)
+    coords_px = []
     areas_um2 = []
     valid_indices = []
 
@@ -217,7 +215,7 @@ def two_stage_clustering(
         if center is None:
             continue
         area = get_detection_area_um2(det, pixel_size)
-        coords_um.append((center[0] * pixel_size, center[1] * pixel_size))
+        coords_px.append((center[0], center[1]))
         areas_um2.append(area)
         valid_indices.append(i)
 
@@ -234,8 +232,12 @@ def two_stage_clustering(
             'outliers': [],
         }
 
-    coords_arr = np.array(coords_um)
+    coords_arr = np.array(coords_px)
     areas_arr = np.array(areas_um2)
+
+    # Convert distance thresholds from um to pixels (avoids px->um->px roundtrip)
+    dist_round1_px = dist_round1 / pixel_size
+    dist_round2_px = dist_round2 / pixel_size
 
     # Local indices for clustering (0..N-1 within valid set)
     local_indices = list(range(len(valid_indices)))
@@ -244,7 +246,7 @@ def two_stage_clustering(
     logger.info(f"  Round 1: dist_threshold={dist_round1} um ...")
     clusters_r1, remaining_r1 = cluster_detections_greedy_area(
         local_indices, coords_arr, areas_arr,
-        dist_threshold=dist_round1, area_min=area_min, area_max=area_max,
+        dist_threshold=dist_round1_px, area_min=area_min, area_max=area_max,
     )
     logger.info(f"    Clusters: {len(clusters_r1)}, Remaining: {len(remaining_r1)}")
 
@@ -255,7 +257,7 @@ def two_stage_clustering(
         remaining_areas = areas_arr[remaining_r1]
         clusters_r2_local, remaining_r2_local = cluster_detections_greedy_area(
             list(range(len(remaining_r1))), remaining_coords, remaining_areas,
-            dist_threshold=dist_round2, area_min=area_min, area_max=area_max,
+            dist_threshold=dist_round2_px, area_min=area_min, area_max=area_max,
         )
         # Map back to valid_indices
         clusters_r2 = [[remaining_r1[j] for j in cl] for cl in clusters_r2_local]
@@ -279,8 +281,8 @@ def two_stage_clustering(
         main_clusters.append({
             'id': cid,
             'detection_indices': member_global_idxs,
-            'cx': float(cx / pixel_size),  # Back to pixel coords for consistency
-            'cy': float(cy / pixel_size),
+            'cx': float(cx),
+            'cy': float(cy),
             'n': len(member_global_idxs),
             'total_area_um2': float(cluster_areas.sum()),
         })

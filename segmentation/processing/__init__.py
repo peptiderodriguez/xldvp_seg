@@ -47,11 +47,8 @@ from .coordinates import (
 )
 
 from .tile_processing import (
-    build_detection_params,
-    load_and_validate_tile,
     enrich_detection_features,
     save_tile_outputs,
-    process_tile_complete,
 )
 
 from .memory import (
@@ -111,11 +108,8 @@ __all__ = [
     'format_coordinates_for_export',
     'convert_detections_to_spatial_uids',
     # Tile processing
-    'build_detection_params',
-    'load_and_validate_tile',
     'enrich_detection_features',
     'save_tile_outputs',
-    'process_tile_complete',
     # Memory management
     'validate_system_resources',
     'get_safe_worker_count',

@@ -184,59 +184,6 @@ class NMJStrategy(DetectionStrategy, MultiChannelFeatureMixin):
 
         return nmj_masks
 
-    def compute_features(
-        self,
-        mask: np.ndarray,
-        tile: np.ndarray
-    ) -> Dict[str, Any]:
-        """
-        Compute NMJ-specific features including skeleton-based metrics.
-
-        In addition to standard morphological features, computes:
-        - skeleton_length: Length of medial axis in pixels
-        - solidity: Area / convex hull area (low = branched)
-
-        Args:
-            mask: Binary mask of the NMJ
-            tile: Original tile image
-
-        Returns:
-            Dictionary of features
-        """
-        if mask.sum() == 0:
-            return {}
-
-        # Get intensity image — use BTX channel (ch1) for NMJ, consistent with segment()
-        if tile.ndim == 3 and tile.shape[2] > 1:
-            gray = tile[:, :, 1].astype(float)
-        elif tile.ndim == 3:
-            gray = tile[:, :, 0].astype(float)
-        else:
-            gray = tile.astype(float)
-
-        # Compute skeleton
-        skeleton = skeletonize(mask)
-        skeleton_length = int(skeleton.sum())
-
-        # Get regionprops
-        props = regionprops(mask.astype(int), intensity_image=gray)
-
-        if not props:
-            return {}
-
-        prop = props[0]
-
-        return {
-            'area': int(prop.area),
-            'centroid': [float(prop.centroid[1]), float(prop.centroid[0])],  # [x, y]
-            'skeleton_length': skeleton_length,
-            'eccentricity': float(prop.eccentricity),
-            'solidity': float(prop.solidity),
-            'mean_intensity': float(prop.mean_intensity),
-            'perimeter': float(prop.perimeter),
-            'bbox': list(prop.bbox),  # [min_row, min_col, max_row, max_col]
-        }
-
     def filter(
         self,
         masks: List[np.ndarray],
@@ -789,16 +736,6 @@ class NMJStrategy(DetectionStrategy, MultiChannelFeatureMixin):
 
 
 def load_nmj_classifier(model_path: str, device=None):
-    """
-    Load a trained NMJ ResNet18 classifier.
-
-    Args:
-        model_path: Path to checkpoint (.pth file)
-        device: Torch device (default: CUDA if available)
-
-    Returns:
-        Tuple of (model, transform, device)
-    """
     import torch
     import torch.nn as nn
     from torchvision import models, transforms
@@ -806,17 +743,14 @@ def load_nmj_classifier(model_path: str, device=None):
     if device is None:
         device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 
-    # Create model
     model = models.resnet18(weights=None)
     model.fc = nn.Linear(model.fc.in_features, 2)
 
-    # Load weights
     checkpoint = torch.load(model_path, map_location=device, weights_only=False)
     model.load_state_dict(checkpoint['model_state_dict'])
     model = model.to(device)
     model.eval()
 
-    # Create transform
     transform = transforms.Compose([
         transforms.Resize((224, 224)),
         transforms.ToTensor(),
@@ -827,20 +761,6 @@ def load_nmj_classifier(model_path: str, device=None):
 
 
 def load_nmj_rf_classifier(model_path: str):
-    """
-    Load a trained NMJ Random Forest classifier.
-
-    Supports two formats:
-    1. Dict with 'model', 'scaler', 'feature_names' keys (legacy)
-    2. sklearn Pipeline with scaler + RF (new format from train_morph_sam2_classifier.py)
-       - Feature names loaded from companion JSON file
-
-    Args:
-        model_path: Path to pickle/joblib file (.pkl or .joblib)
-
-    Returns:
-        Dict with 'pipeline' (sklearn Pipeline), 'feature_names', 'type'='rf'
-    """
     import joblib
     import json
     from pathlib import Path
@@ -848,12 +768,9 @@ def load_nmj_rf_classifier(model_path: str):
 
     model_data = joblib.load(model_path)
 
-    # Check if it's a Pipeline (new format) or dict (legacy format)
     if isinstance(model_data, Pipeline):
-        # New format: Pipeline saved directly, feature names in companion JSON
         pipeline = model_data
 
-        # Look for companion feature names file
         model_dir = Path(model_path).parent
         feature_names_path = model_dir / "nmj_classifier_feature_names.json"
 
@@ -862,7 +779,6 @@ def load_nmj_rf_classifier(model_path: str):
                 feature_names = json.load(f)
             logger.info(f"Loaded feature names from {feature_names_path}")
         else:
-            # Try to infer feature count from model
             n_features = pipeline.named_steps['rf'].n_features_in_
             feature_names = [f"feature_{i}" for i in range(n_features)]
             logger.warning(f"No feature names file found, using generic names for {n_features} features")
@@ -875,11 +791,8 @@ def load_nmj_rf_classifier(model_path: str):
         logger.info(f"Loaded RF Pipeline classifier with {len(feature_names)} features")
 
     else:
-        # Legacy format: dict with model, scaler, feature_names
-        # Wrap in pipeline-like structure for consistent interface
         from sklearn.pipeline import Pipeline
 
-        # Support both 'model' key (legacy) and 'classifier' key (train_nmj_classifier_features.py)
         rf_model = model_data.get('model', model_data.get('classifier'))
         if rf_model is None:
             raise ValueError(f"Classifier file has no 'model' or 'classifier' key. Keys: {list(model_data.keys())}")
@@ -905,16 +818,6 @@ def load_nmj_rf_classifier(model_path: str):
 
 
 def load_classifier(model_path: str, device=None):
-    """
-    Load NMJ classifier - auto-detects CNN (.pth) vs RF (.pkl/.joblib).
-
-    Args:
-        model_path: Path to model file
-        device: Torch device (for CNN only)
-
-    Returns:
-        Dict with classifier info and 'type' key ('cnn' or 'rf')
-    """
     if model_path.endswith('.pkl') or model_path.endswith('.joblib'):
         return load_nmj_rf_classifier(model_path)
     else:
@@ -925,102 +828,3 @@ def load_classifier(model_path: str, device=None):
             'device': device,
             'type': 'cnn'
         }
-
-
-def detect_nmjs_simple(
-    image: np.ndarray,
-    intensity_percentile: float = 98,
-    min_area: int = 150,
-    min_skeleton_length: int = 30,
-    max_solidity: float = 0.85
-) -> tuple:
-    """
-    Simple NMJ detection function (standalone, no class).
-
-    This is the original detect_nmjs() function from run_nmj_segmentation.py,
-    kept for backwards compatibility.
-
-    Args:
-        image: RGB or grayscale image
-        intensity_percentile: Percentile for bright region threshold (default 98)
-        min_area: Minimum NMJ area in pixels
-        min_skeleton_length: Minimum skeleton length in pixels
-        max_solidity: Maximum solidity (default 0.85, lower = more branched)
-
-    Returns:
-        Tuple of (nmj_masks, nmj_features):
-        - nmj_masks: Label array with NMJ IDs (0 = background)
-        - nmj_features: List of feature dictionaries
-    """
-    # Convert to grayscale — use BTX channel (ch1) for NMJ detection
-    if image.ndim == 3 and image.shape[2] > 1:
-        gray = image[:, :, 1].astype(float)  # BTX channel = NMJ marker
-    elif image.ndim == 3:
-        gray = image[:, :, 0].astype(float)
-    else:
-        gray = image.astype(float)
-
-    # Check for empty image
-    if gray.max() == 0:
-        return np.zeros(image.shape[:2], dtype=np.uint32), []
-
-    # Threshold bright regions
-    # Exclude zero pixels (CZI padding) from percentile
-    valid = gray[gray > 0]
-    if len(valid) == 0:
-        return np.zeros(image.shape[:2], dtype=np.uint32), []
-    threshold = np.percentile(valid, intensity_percentile)
-    bright_mask = gray > threshold
-
-    # Morphological cleanup
-    bright_mask = binary_opening(bright_mask, disk(1))
-    bright_mask = binary_closing(bright_mask, disk(2))
-    bright_mask = remove_small_objects(bright_mask, min_size=min_area)
-
-    # Label connected components
-    labeled = label(bright_mask)
-    props = regionprops(labeled, intensity_image=gray)
-
-    # Filter by solidity (branched structures have low solidity)
-    nmj_masks = np.zeros(image.shape[:2], dtype=np.uint32)
-    nmj_features = []
-    nmj_id = 1
-
-    for prop in props:
-        if prop.area < min_area:
-            continue
-
-        region_mask = labeled == prop.label
-        skeleton = skeletonize(region_mask)
-        skeleton_length = skeleton.sum()
-
-        if skeleton_length >= min_skeleton_length and prop.solidity <= max_solidity:
-            # Smooth mask: closing then opening
-            smoothed = binary_closing(region_mask, disk(2))
-            smoothed = binary_opening(smoothed, disk(2))
-
-            # Adaptive expansion: grow until signal drops
-            # Reuse the NMJStrategy class method to avoid code duplication
-            expanded = NMJStrategy()._expand_to_signal_edge(smoothed, gray)
-
-            # Final smoothing to clean up watershed edges
-            final = binary_closing(expanded, disk(1))
-            final = binary_opening(final, disk(1))
-
-            nmj_masks[final] = nmj_id
-
-            nmj_features.append({
-                'id': f'nmj_{nmj_id}',
-                'area': int(prop.area),
-                'skeleton_length': int(skeleton_length),
-                'eccentricity': float(prop.eccentricity),
-                'mean_intensity': float(prop.mean_intensity),
-                'centroid': [float(prop.centroid[1]), float(prop.centroid[0])],  # x, y
-                'bbox': list(prop.bbox),
-                'perimeter': float(prop.perimeter),
-                'solidity': float(prop.solidity),
-            })
-
-            nmj_id += 1
-
-    return nmj_masks, nmj_features

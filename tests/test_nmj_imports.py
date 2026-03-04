@@ -48,12 +48,6 @@ class TestNMJStrategyImports:
         assert callable(load_nmj_rf_classifier)
         assert callable(load_classifier)
 
-    def test_nmj_simple_detection_function(self):
-        """Test that simple detection function can be imported."""
-        from segmentation.detection.strategies.nmj import detect_nmjs_simple
-        assert callable(detect_nmjs_simple)
-
-
 class TestStrategyRegistryImports:
     """Test that NMJ strategy is registered in the registry."""
 
@@ -89,7 +83,7 @@ class TestMultiChannelMixinImports:
         from segmentation.detection.strategies.mixins import MultiChannelFeatureMixin
         assert hasattr(MultiChannelFeatureMixin, 'extract_channel_stats')
         assert hasattr(MultiChannelFeatureMixin, 'extract_multichannel_features')
-        assert hasattr(MultiChannelFeatureMixin, 'extract_channel_intensity_simple')
+        assert hasattr(MultiChannelFeatureMixin, 'extract_multichannel_features')
 
 
 class TestHTMLExportImports:

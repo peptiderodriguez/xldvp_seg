@@ -10,12 +10,11 @@ After deduplication the surviving detections go through three phases:
     Build KD-tree from global cell positions and the quick means,
     estimate per-cell local background for each channel.
 
-**Phase 3 — Feature extraction on corrected pixels** (per-tile, parallelized):
+**Phase 3 — Intensity feature extraction on corrected pixels** (per-tile, parallelized):
     Subtract per-cell background from the pixel data within each
-    detection's dilated mask, *then* extract all features (morph +
-    per-channel intensity) from the corrected pixels.  This ensures
-    every feature — including std, percentiles, etc. — reflects the
-    background-corrected signal.
+    detection's dilated mask, then extract per-channel intensity
+    features from the corrected pixels.  Morphological features
+    (computed during initial detection) are preserved unchanged.
 
 Phases 1 and 3 are parallelized with ThreadPoolExecutor (auto-detects CPU
 count from SLURM_CPUS_PER_TASK or os.cpu_count()).  Thread-safety: SHM is
@@ -29,8 +28,6 @@ import numpy as np
 import h5py
 
 from segmentation.utils.logging import get_logger
-from segmentation.utils.detection_utils import safe_to_uint8
-from segmentation.utils.feature_extraction import extract_morphological_features
 from segmentation.detection.strategies.mixins import MultiChannelFeatureMixin
 from segmentation.lmd.contour_processing import (
     dilate_contour,
@@ -130,15 +127,6 @@ def _extract_intensity_features(
     )
 
 
-def _extract_morph_features(
-    dilated_mask: np.ndarray,
-    tile_rgb: np.ndarray,
-    tile_global_mean: float | None = None,
-) -> dict[str, float]:
-    """Extract 22 base morphological features from *tile_rgb* within *dilated_mask*."""
-    return extract_morphological_features(dilated_mask, tile_rgb, tile_global_mean)
-
-
 # ---------------------------------------------------------------------------
 # Tile data readers
 # ---------------------------------------------------------------------------
@@ -202,36 +190,6 @@ def _load_tile_channels(
             if ca.shape[0] > tile_h or ca.shape[1] > tile_w:
                 tile_channels[ck] = ca[:tile_h, :tile_w]
     return tile_channels
-
-
-def _tile_rgb_from_channels(
-    tile_channels: dict[int, np.ndarray],
-    display_channels: list[int] | None = None,
-) -> np.ndarray:
-    """Build an RGB uint8 tile from up to 3 channel arrays for morph features.
-
-    If *display_channels* is given (list of CZI channel indices for R, G, B),
-    use those.  Otherwise use the first 3 channel indices available.
-    """
-    ch_keys = sorted(tile_channels.keys())
-    if display_channels:
-        rgb_keys = display_channels[:3]
-    else:
-        rgb_keys = ch_keys[:3]
-
-    layers = []
-    for k in rgb_keys:
-        arr = tile_channels.get(k)
-        if arr is not None:
-            layers.append(safe_to_uint8(arr))
-        else:
-            layers.append(np.zeros_like(next(iter(tile_channels.values())), dtype=np.uint8))
-
-    # Pad to 3 if fewer channels
-    while len(layers) < 3:
-        layers.append(np.zeros_like(layers[0]))
-
-    return np.stack(layers, axis=-1)
 
 
 def _parse_tile_key(tile_key: str) -> tuple[int, int]:
@@ -358,7 +316,6 @@ def _phase3_tile(
     tile_size: int,
     has_data_source: bool,
     per_cell_bg: dict[int, dict[int, float]],
-    display_channels: list[int] | None,
     pixel_size_um: float,
 ) -> tuple[int, int]:
     """Process one tile for Phase 3 (feature extraction on corrected pixels).
@@ -389,10 +346,6 @@ def _phase3_tile(
     )
     if not tile_channels:
         return 0, len(tile_dets)
-
-    tile_rgb = _tile_rgb_from_channels(tile_channels, display_channels)
-    valid = np.max(tile_rgb, axis=2) > 0
-    tile_global_mean = float(np.mean(tile_rgb[valid])) if valid.any() else 0.0
 
     for det in tile_dets:
         det_idx = det["_postdedup_idx"]
@@ -434,19 +387,12 @@ def _phase3_tile(
             for k, v in raw_feats.items():
                 if "_ratio" not in k and "_diff" not in k and "_specificity" not in k:
                     feat[f"{k}_raw"] = v
-
-        if has_bg:
-            corrected_crops: dict[int, np.ndarray] = {}
             for ch, crop in raw_crops.items():
                 ch_bg = bg.get(ch, 0.0)
                 if ch_bg > 0:
-                    corrected = crop.copy()
-                    corrected[crop_mask] = np.maximum(corrected[crop_mask] - ch_bg, 0.0)
-                    corrected_crops[ch] = corrected
-                else:
-                    corrected_crops[ch] = crop
+                    crop[crop_mask] = np.maximum(crop[crop_mask] - ch_bg, 0.0)
             intensity_feats = _extract_intensity_features(
-                crop_mask, corrected_crops, include_zeros=True,
+                crop_mask, raw_crops, include_zeros=True,
             )
         else:
             intensity_feats = _extract_intensity_features(crop_mask, raw_crops)
@@ -458,14 +404,10 @@ def _phase3_tile(
             if ch_bg > 0:
                 raw_mean = feat.get(f"ch{ch}_mean_raw", 0.0)
                 feat[f"ch{ch}_background"] = ch_bg
-                feat[f"ch{ch}_snr"] = float(raw_mean / ch_bg) if ch_bg > 0 else 0.0
+                feat[f"ch{ch}_snr"] = float(raw_mean / ch_bg)
 
-        crop_rgb = tile_rgb[r0:r1, c0:c1]
-        morph_feats = _extract_morph_features(crop_mask, crop_rgb, tile_global_mean)
-        if morph_feats:
-            for k, v in morph_feats.items():
-                feat[k] = v
-            feat["area_um2"] = float(morph_feats.get("area", 0) * pixel_size_um ** 2)
+        if det.get("contour_dilated_px") is not None:
+            feat["area_um2"] = float(int(crop_mask.sum()) * pixel_size_um ** 2)
 
         n_ok += 1
 
@@ -490,7 +432,6 @@ def process_detections_post_dedup(
     loader=None,
     ch_indices: list[int] | None = None,
     tile_size: int = 3000,
-    display_channels: list[int] | None = None,
     # Processing toggles
     contour_processing: bool = True,
     dilation_um: float = DEFAULT_DILATION_UM,
@@ -506,11 +447,9 @@ def process_detections_post_dedup(
        masks, dilate + RDP, compute quick mean intensity per channel.
     2. **Background estimation** — KD-tree on global cell positions,
        estimate per-cell local background for each channel.
-    3. **Feature extraction on corrected pixels** — subtract per-cell
-       background from the pixel data, then extract all features.
-
-    All features (intensity, morph) are computed on background-corrected
-    pixel data, so std, percentiles, etc. all reflect the corrected signal.
+    3. **Intensity feature extraction on corrected pixels** — subtract
+       per-cell background, then extract per-channel intensity features.
+       Morphological features from initial detection are preserved.
 
     Args:
         detections: Deduped detection dicts (mutated in-place).
@@ -675,7 +614,7 @@ def process_detections_post_dedup(
                 _phase3_tile, k, v, tiles_dir, mask_filename,
                 use_shm, slide_shm_arr, ch_to_slot, x_start, y_start,
                 loader, _ch_indices, tile_size, has_data_source,
-                per_cell_bg, display_channels, pixel_size_um,
+                per_cell_bg, pixel_size_um,
             ): k
             for k, v in by_tile.items()
         }

@@ -664,20 +664,10 @@ class CZILoader:
 
         n_strips = (self.height + strip_height - 1) // strip_height
 
-        # Read a small test strip to detect if this is RGB data
-        # Scene selection is implicit: self.x_start/y_start come from
-        # get_mosaic_scene_bounding_box(index=self.scene), so the region
-        # coordinates naturally read from the correct scene.
-        test_strip = self.reader.read_mosaic(
-            region=(self.x_start, self.y_start, min(100, self.width), min(100, self.height)),
-            scale_factor=1,
-            C=channel,
-        )
-        test_strip = _squeeze_batch_dims(test_strip)
-        is_rgb = len(test_strip.shape) == 3 and test_strip.shape[-1] == 3
+        is_rgb = self.is_channel_rgb(channel)
 
         if is_rgb:
-            logger.info(f"  Detected RGB data (shape: {test_strip.shape})")
+            logger.info(f"  Detected RGB data for channel {channel}")
             channel_array = np.empty((self.height, self.width, 3), dtype=np.uint8)
         else:
             channel_array = np.empty((self.height, self.width), dtype=np.uint16)
@@ -812,12 +802,7 @@ class CZILoader:
             else:
                 shm_buffer[y_off:y_off + h, :] = strip
 
-            # Free memory after each strip (del is sufficient for non-cyclic numpy arrays)
-            del strip
-
-            # Log memory status every 10 strips
             if (i + 1) % 10 == 0:
-                gc.collect()  # Only GC periodically, not every strip
                 from segmentation.processing.memory import log_memory_status
                 log_memory_status(f"Loaded strip {i + 1}/{n_strips}")
 
@@ -890,16 +875,6 @@ class CZILoader:
             else:
                 self._channel_data[0] = value
                 self._primary_channel = 0
-
-    @property
-    def loaded_channel(self) -> Optional[int]:
-        """Backward compatibility: return primary loaded channel."""
-        return self._primary_channel
-
-    @loaded_channel.setter
-    def loaded_channel(self, value):
-        """Backward compatibility setter."""
-        self._primary_channel = value
 
     def get_channel_data(self, channel: int) -> Optional[np.ndarray]:
         """

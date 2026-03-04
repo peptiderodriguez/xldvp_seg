@@ -91,85 +91,56 @@ def validate_polygon(poly: Polygon) -> Optional[Polygon]:
         return None
 
 
-def dilate_contour(contour: np.ndarray, dilation: float) -> Optional[np.ndarray]:
-    """
-    Dilate a contour by a specified amount.
-
-    Works in any coordinate system (pixels or micrometers) — just pass
-    consistent units for contour and dilation.
-
-    Args:
-        contour: Contour points, shape (N, 2)
-        dilation: Dilation amount (same units as contour)
-
-    Returns:
-        Dilated contour points, or None if invalid
-    """
+def dilate_contour(contour: np.ndarray, dilation: float,
+                   _poly: Polygon = None) -> Optional[np.ndarray]:
     if len(contour) < 3:
         return None
 
-    # Create polygon
-    poly = Polygon(contour)
-    poly = validate_polygon(poly)
+    if _poly is None:
+        _poly = Polygon(contour)
+        _poly = validate_polygon(_poly)
 
-    if poly is None or poly.is_empty or poly.area < 0.1:
+    if _poly is None or _poly.is_empty or _poly.area < 0.1:
         return None
 
-    # Dilate
-    poly_dilated = poly.buffer(dilation)
+    poly_dilated = _poly.buffer(dilation)
 
     if poly_dilated.is_empty:
         return None
 
-    # Handle MultiPolygon from dilation
     if poly_dilated.geom_type == 'MultiPolygon':
         poly_dilated = max(poly_dilated.geoms, key=lambda p: p.area)
 
-    # Get coordinates (remove duplicate closing point)
     coords = np.array(poly_dilated.exterior.coords)[:-1]
 
     return coords
 
 
-def erode_contour(contour: np.ndarray, erosion: float) -> Optional[np.ndarray]:
-    """
-    Erode a contour by a specified amount (negative Shapely buffer).
-
-    Works in any coordinate system (pixels or micrometers) — just pass
-    consistent units for contour and erosion.
-
-    Args:
-        contour: Contour points, shape (N, 2)
-        erosion: Erosion amount (same units as contour). Must be positive.
-
-    Returns:
-        Eroded contour points, or None if the polygon collapsed to nothing.
-    """
+def erode_contour(contour: np.ndarray, erosion: float,
+                  _poly: Polygon = None) -> Optional[np.ndarray]:
     if erosion <= 0:
         return contour
     if len(contour) < 3:
         return None
 
-    poly = Polygon(contour)
-    poly = validate_polygon(poly)
+    if _poly is None:
+        _poly = Polygon(contour)
+        _poly = validate_polygon(_poly)
 
-    if poly is None or poly.is_empty or poly.area < 0.1:
+    if _poly is None or _poly.is_empty or _poly.area < 0.1:
         return None
 
-    # Negative buffer = erosion
-    poly_eroded = poly.buffer(-erosion)
+    poly_eroded = _poly.buffer(-erosion)
 
     if poly_eroded.is_empty:
         return None
 
-    # Handle MultiPolygon (erosion can split a polygon)
     if poly_eroded.geom_type == 'MultiPolygon':
         poly_eroded = max(poly_eroded.geoms, key=lambda p: p.area)
 
     if poly_eroded.area < 0.1:
         return None
 
-    # Get coordinates (remove duplicate closing point)
     coords = np.array(poly_eroded.exterior.coords)[:-1]
     return coords
 
@@ -265,18 +236,17 @@ def process_contour(
     contour_px = np.array(contour_px)
     stats['points_before'] = len(contour_px)
 
-    # Calculate original area in um2
-    contour_um_orig = contour_px * pixel_size_um
-    orig_poly = Polygon(contour_um_orig)
-    orig_poly = validate_polygon(orig_poly)
-    if orig_poly is not None and not orig_poly.is_empty:
-        stats['area_before_um2'] = orig_poly.area
+    # Construct pixel polygon once, reuse for area and dilation
+    px_poly = Polygon(contour_px)
+    px_poly = validate_polygon(px_poly)
+    if px_poly is not None and not px_poly.is_empty:
+        stats['area_before_um2'] = px_poly.area * pixel_size_um * pixel_size_um
 
     # All operations in pixel space to avoid precision loss from
     # repeated px->um->px conversions.
     # Step 1: Dilate in pixel space
     dilation_px = dilation_um / pixel_size_um
-    dilated_px = dilate_contour(contour_px, dilation_px)
+    dilated_px = dilate_contour(contour_px, dilation_px, _poly=px_poly)
     if dilated_px is None:
         if return_stats:
             return None, stats
@@ -302,27 +272,26 @@ def process_contour(
             return None
         simplified_px = eroded_px
 
-    # Convert to microns only at the end
-    simplified_um = simplified_px * pixel_size_um
-
-    if len(simplified_um) < 3:
+    if len(simplified_px) < 3:
         if return_stats:
             return None, stats
         return None
 
-    stats['points_after'] = len(simplified_um)
+    stats['points_after'] = len(simplified_px)
 
-    # Calculate final area (fix self-intersecting post-RDP polygons)
-    final_poly = Polygon(simplified_um)
-    if not final_poly.is_valid:
-        final_poly = make_valid(final_poly)
-        if final_poly.geom_type != 'Polygon':
-            # Take largest polygon from geometry collection
-            polys = [g for g in getattr(final_poly, 'geoms', []) if g.geom_type == 'Polygon']
+    # Calculate final area in pixel space (fix self-intersecting post-RDP polygons)
+    final_poly_px = Polygon(simplified_px)
+    if not final_poly_px.is_valid:
+        final_poly_px = make_valid(final_poly_px)
+        if final_poly_px.geom_type != 'Polygon':
+            polys = [g for g in getattr(final_poly_px, 'geoms', []) if g.geom_type == 'Polygon']
             if polys:
-                final_poly = max(polys, key=lambda p: p.area)
-    if not final_poly.is_empty:
-        stats['area_after_um2'] = final_poly.area
+                final_poly_px = max(polys, key=lambda p: p.area)
+    if not final_poly_px.is_empty:
+        stats['area_after_um2'] = final_poly_px.area * pixel_size_um * pixel_size_um
+
+    # Convert to microns only at the end
+    simplified_um = simplified_px * pixel_size_um
 
     stats['valid'] = True
 

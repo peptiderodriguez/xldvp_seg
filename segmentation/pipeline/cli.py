@@ -283,8 +283,6 @@ def build_parser():
     # Feature extraction options
     parser.add_argument('--extract-deep-features', action='store_true',
                         help='Extract ResNet and DINOv2 features (opt-in, default morph+SAM2 only)')
-    parser.add_argument('--skip-deep-features', action='store_true',
-                        help='Deprecated: deep features are off by default now. Use --extract-deep-features to enable.')
 
     # Post-dedup contour processing (default ON)
     parser.add_argument('--no-contour-processing', dest='contour_processing',
@@ -379,7 +377,7 @@ def postprocess_args(args, parser):
         parser.error("--tile-overlap must be between 0.0 and 0.5")
     if args.sample_fraction <= 0 or args.sample_fraction > 1.0:
         parser.error("--sample-fraction must be in (0.0, 1.0]")
-    if getattr(args, 'html_sample_fraction', 0) < 0 or getattr(args, 'html_sample_fraction', 0) > 1.0:
+    if args.html_sample_fraction < 0 or args.html_sample_fraction > 1.0:
         parser.error("--html-sample-fraction must be between 0.0 and 1.0")
 
     # Resolve --channel-spec (wavelength/name-based channel selection)

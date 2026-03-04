@@ -1,47 +1,34 @@
 #!/usr/bin/env python3
 """
-Napari-based interactive reference cross placement for LMD export.
+Place 3 reference crosses on a CZI or OME-Zarr slide for LMD calibration.
 
-Supports both CZI (direct read_mosaic) and OME-Zarr pyramid inputs.
-Places exactly 3 RGB-coded reference crosses with zoom-adaptive filled rectangles.
+Loads 2 resolution levels as numpy arrays and displays as napari multiscale.
+scale=(base, base) makes world coords = full-res reference pixels, so cursor
+position IS the saved coordinate — no coordinate conversion needed.
 
-Features:
-- CZI mode: aicspylibczi read_mosaic with scale_factor for fast reduced-res loading
-- OME-Zarr mode: lazy dask pyramid loading (best for very large slides)
-- Display transforms: --flip-horizontal, --rotate-cw-90 for LMD7 orientation
-- RGB keybind crosses: R=red, G=green, B=blue with auto-advance
-- Auto-save when all 3 placed, auto-load existing crosses on startup
-- --fresh flag to ignore existing crosses
-- Contour overlay from detection JSON
-- Batch mode: --czi-dir + --slides for multiple slides
-
-Keyboard Shortcuts:
-    R / G / B - Select cross color (auto-advances to next unplaced)
-    Space / P - Place cross at cursor position
-    S         - Save crosses to JSON
-    U         - Undo last cross
-    C         - Clear all crosses
-    Q         - Save + quit
+Keys:
+  R/G/B   = select cross (red/green/cyan)
+  Space/P = place at cursor
+  S       = save  |  U = undo  |  C = clear  |  Q = save+quit
 
 Usage:
-    # CZI (fast, reduced resolution)
-    python napari_place_crosses.py -i /path/to/slide.czi --channel 0
+  # CZI with LMD7 transforms (2-level pyramid from read_mosaic)
+  python napari_place_crosses.py -i slide.czi --flip-horizontal --rotate-cw-90
 
-    # OME-Zarr (lazy pyramids)
-    python napari_place_crosses.py -i /path/to/image.zarr
+  # OME-Zarr (loads 2 pyramid levels as numpy)
+  python napari_place_crosses.py -i slide.ome.zarr
 
-    # With LMD7 display transforms
-    python napari_place_crosses.py -i slide.czi --flip-horizontal --rotate-cw-90
+  # With contour overlay
+  python napari_place_crosses.py -i slide.czi --contours mk_contours_overlay.json --slide FGC3
 
-    # Batch mode
-    python napari_place_crosses.py --czi-dir /data/slides --slides A B C --output-dir crosses/
-
-Author: xldvp_seg pipeline
+  # Batch mode
+  python napari_place_crosses.py --czi-dir /data --slides A B --output-dir crosses/
 """
 
 import argparse
 import json
 import sys
+from datetime import datetime
 from pathlib import Path
 
 import numpy as np
@@ -50,872 +37,681 @@ try:
     import napari
     from napari.utils.notifications import show_info, show_warning
 except ImportError:
-    print("ERROR: napari not installed. Install with: pip install napari[all]")
-    sys.exit(1)
+    sys.exit("pip install 'napari[all]'")
 
-
-# Cross colors: RGB order
-CROSS_COLORS = [
-    ('red', [1, 0, 0, 1]),
-    ('green', [0, 1, 0, 1]),
-    ('blue', [0, 0.4, 1, 1]),
-]
-CROSS_NAMES = ['Red', 'Green', 'Blue']
-THICKNESS_FRAC = 0.012  # Cross arm thickness as fraction of view extent
+CROSS_COLORS = ['red', 'lime', 'cyan']
+CROSS_LABELS = ['Cross 1 (RED)', 'Cross 2 (GREEN)', 'Cross 3 (CYAN)']
+SCREEN_PX = 80        # cross arm = 80 screen pixels
+THICKNESS_FRAC = 0.02  # bar thickness = 2% of arm length
 
 
 # ---------------------------------------------------------------------------
-# Image loading
+# Image loading — always returns (pyramid, full_w, full_h, pixel_size_um, ...)
 # ---------------------------------------------------------------------------
 
-def load_czi_image(czi_path, channel=0, scale_factor=8):
-    """Load a single channel from CZI at reduced resolution via read_mosaic.
+def load_czi_pyramid(czi_path, channel=0, scale_factors=(2, 8),
+                     flip_horizontal=False, rotate_cw_90=False):
+    """Load CZI at 2+ scales as uint8 RGB numpy arrays.
 
-    Args:
-        czi_path: Path to CZI file
-        channel: Channel index to display
-        scale_factor: Downsampling factor (8 = 1/8 resolution)
+    Transforms (fliplr, rot90) are baked into the data.
+    With scale=(base, base), world coords = full-res CZI pixels (post-transform).
 
     Returns:
-        (image_2d, pixel_size_um, full_res_shape) where full_res_shape is (H, W)
+        pyramid: list of (H, W, 3) uint8 arrays
+        full_w, full_h: CZI bounding box dimensions (pre-transform)
+        pixel_size_um: from CZI metadata or None
     """
     from aicspylibczi import CziFile
 
     czi = CziFile(str(czi_path))
-
-    # Get pixel size
-    pixel_size_um = None
-    try:
-        scaling = czi.meta.find('.//Scaling/Items/Distance[@Id="X"]/Value')
-        if scaling is not None:
-            pixel_size_um = float(scaling.text) * 1e6
-    except Exception:
-        pass
-    if pixel_size_um is None:
-        print("  WARNING: Could not read pixel size from CZI metadata. Use --pixel-size.")
-
-    # Get full-res bounding box
     try:
         bbox = czi.get_mosaic_scene_bounding_box(index=0)
     except TypeError:
         bbox = czi.get_mosaic_bounding_box()
 
-    full_h, full_w = bbox.h, bbox.w
+    fw, fh = bbox.w, bbox.h
+    x0, y0 = bbox.x, bbox.y
 
-    print(f"  Full resolution: {full_w} x {full_h}")
-    print(f"  Loading at 1/{scale_factor}x ({full_w // scale_factor} x {full_h // scale_factor})...")
-
-    # Read at reduced resolution
-    data = czi.read_mosaic(
-        region=(bbox.x, bbox.y, bbox.w, bbox.h),
-        scale_factor=1.0 / scale_factor,
-        C=channel,
-    )
-    img = np.squeeze(data)
-
-    # Handle multi-dimensional output
-    if img.ndim == 3:
-        img = img[0] if img.shape[0] == 1 else img[..., 0]
-
-    print(f"  Loaded shape: {img.shape}, dtype={img.dtype}")
-
-    return img, pixel_size_um, (full_h, full_w)
-
-
-def load_ome_zarr_image(zarr_path):
-    """Load OME-Zarr pyramid for Napari viewing.
-
-    Returns:
-        (data_list, pixel_size_um, full_res_shape) where data_list is list of
-        dask arrays (pyramid levels) and full_res_shape is (H, W)
-    """
-    import dask.array as da
-    import zarr as zarr_lib
-
-    # Try ome-zarr reader first (works with zarr v2 stores)
-    data = None
-    try:
-        from ome_zarr.io import parse_url
-        from ome_zarr.reader import Reader
-
-        store = parse_url(Path(zarr_path), mode="r")
-        if store is not None:
-            reader = Reader(store)
-            nodes = list(reader())
-            if nodes:
-                data = nodes[0].data
-    except Exception:
-        pass
-
-    # Fallback: direct zarr + dask loading (zarr v3 compatible)
-    if data is None:
-        print("  ome-zarr reader failed, using direct zarr loading...")
-        root = zarr_lib.open_group(str(zarr_path), mode='r')
-
-        # Find pyramid levels from multiscales metadata or numbered arrays
-        level_paths = []
-        if 'multiscales' in root.attrs:
-            ms = root.attrs['multiscales'][0]
-            level_paths = [ds['path'] for ds in ms.get('datasets', [])]
-        if not level_paths:
-            # Auto-detect numbered arrays: 0, 1, 2, ...
-            level_paths = sorted(
-                [k for k in root.keys() if k.isdigit()],
-                key=int,
-            )
-        if not level_paths:
-            raise ValueError(f"No pyramid levels found in: {zarr_path}")
-
-        data = [da.from_zarr(str(Path(zarr_path) / p)) for p in level_paths]
-        print(f"  Loaded {len(data)} pyramid levels")
-
-    # Read pixel size from metadata
     pixel_size_um = None
     try:
-        root = zarr_lib.open(zarr_path, mode='r')
-        if 'multiscales' in root.attrs:
-            ms = root.attrs['multiscales'][0]
-            for ds in ms.get('datasets', []):
-                for t in ds.get('coordinateTransformations', []):
-                    if t.get('type') == 'scale':
-                        scale = t.get('scale', [])
-                        if len(scale) >= 2:
-                            pixel_size_um = scale[-1]
-                            break
-                if pixel_size_um is not None:
-                    break
+        s = czi.meta.find('.//Scaling/Items/Distance[@Id="X"]/Value')
+        if s is not None:
+            pixel_size_um = float(s.text) * 1e6
     except Exception:
         pass
 
-    # Get full-res shape
-    full_res = data[0]
-    full_res_shape = full_res.shape[-2:]  # (H, W)
+    print(f"  Full: {fw:,} x {fh:,} px, pixel_size={pixel_size_um}")
 
-    return data, pixel_size_um, full_res_shape
+    pyramid = []
+    for sf in scale_factors:
+        print(f"  Loading 1/{sf}...", end=" ", flush=True)
+        img = np.squeeze(czi.read_mosaic(
+            region=(x0, y0, fw, fh), scale_factor=1.0 / sf, C=channel))
 
+        # Ensure RGB uint8
+        if img.ndim == 2:
+            img = np.stack([img] * 3, axis=-1)
+        elif img.ndim == 3 and img.shape[0] in (1, 3) and img.shape[-1] != 3:
+            img = np.moveaxis(img, 0, -1)
 
-# ---------------------------------------------------------------------------
-# Display transforms
-# ---------------------------------------------------------------------------
-
-def apply_display_transforms(img, flip_horizontal=False, rotate_cw_90=False):
-    """Apply display transforms to image array.
-
-    Args:
-        img: 2D numpy array (H, W) or list of dask arrays (pyramid)
-        flip_horizontal: Mirror left-right
-        rotate_cw_90: 90° clockwise rotation
-
-    Returns:
-        Transformed image (same type as input)
-    """
-    if isinstance(img, list):
-        # Pyramid: transform each level
-        result = []
-        for level in img:
-            arr = level
-            if flip_horizontal:
-                arr = arr[..., ::-1]
-            if rotate_cw_90:
-                # For dask arrays with shape (..., Y, X), rotate last 2 dims
-                # np.rot90 k=-1 means CW 90°
-                import dask.array as da
-                if hasattr(arr, 'dask'):
-                    arr = da.rot90(arr, k=-1, axes=(-2, -1))
-                else:
-                    arr = np.rot90(arr, k=-1, axes=(-2, -1))
-            result.append(arr)
-        return result
-    else:
-        # Single array
-        if flip_horizontal:
-            img = np.fliplr(img)
-        if rotate_cw_90:
-            img = np.rot90(img, k=-1)
-        return img
-
-
-def display_to_slide_coords(display_y, display_x, image_shape,
-                            flip_horizontal=False, rotate_cw_90=False,
-                            scale_factor=1):
-    """Convert display (Napari) coordinates back to full-resolution slide pixels.
-
-    Applies inverse transforms in reverse order, then scales up.
-
-    Args:
-        display_y, display_x: Coordinates in Napari display space
-        image_shape: (H, W) of the DISPLAYED image (after transforms)
-        flip_horizontal: Whether display was flipped
-        rotate_cw_90: Whether display was rotated CW 90°
-        scale_factor: Downsampling factor used for CZI loading
-
-    Returns:
-        (slide_x, slide_y) in full-resolution pixel coordinates [x, y] format
-    """
-    y, x = display_y, display_x
-    disp_h, disp_w = image_shape
-
-    # Undo transforms in reverse order
-    if rotate_cw_90:
-        # Inverse of CW 90° = CCW 90°
-        # CW 90° maps (y, x) -> (x, H-1-y) in the original frame
-        # So inverse: (y, x) in rotated -> (disp_w - 1 - x, y) in pre-rotation
-        new_y = disp_w - 1 - x
-        new_x = y
-        y, x = new_y, new_x
-        # After undoing rotation, the image shape is (disp_w, disp_h)
-        disp_h, disp_w = disp_w, disp_h
-
-    if flip_horizontal:
-        x = disp_w - 1 - x
-
-    # Scale up to full resolution
-    slide_x = x * scale_factor
-    slide_y = y * scale_factor
-
-    return float(slide_x), float(slide_y)
-
-
-def slide_to_display_coords(slide_x, slide_y, image_shape,
-                            flip_horizontal=False, rotate_cw_90=False,
-                            scale_factor=1):
-    """Convert full-resolution slide pixel coordinates to display (Napari) coords.
-
-    Args:
-        slide_x, slide_y: Full-resolution slide pixel coordinates [x, y]
-        image_shape: (H, W) of the image BEFORE transforms (at reduced resolution)
-        flip_horizontal: Whether display is flipped
-        rotate_cw_90: Whether display is rotated CW 90°
-        scale_factor: Downsampling factor used for CZI loading
-
-    Returns:
-        (display_y, display_x) in Napari coordinate space [row, col]
-    """
-    # Scale down
-    x = slide_x / scale_factor
-    y = slide_y / scale_factor
-    pre_h, pre_w = image_shape
-
-    # Apply transforms in order
-    if flip_horizontal:
-        x = pre_w - 1 - x
-
-    if rotate_cw_90:
-        # CW 90°: (y, x) -> (x, pre_h - 1 - y)
-        new_y = x
-        new_x = pre_h - 1 - y
-        y, x = new_y, new_x
-
-    return float(y), float(x)
-
-
-# ---------------------------------------------------------------------------
-# Cross placer
-# ---------------------------------------------------------------------------
-
-class RGBCrossPlacer:
-    """Interactive RGB cross placement manager for Napari.
-
-    Places exactly 3 crosses (Red, Green, Blue) with zoom-adaptive
-    filled rectangle rendering.
-    """
-
-    def __init__(self, viewer, pixel_size_um, image_shape_display,
-                 image_shape_pre_transform, full_res_shape, output_path,
-                 flip_horizontal=False, rotate_cw_90=False, scale_factor=1,
-                 is_zarr=False):
-        self.viewer = viewer
-        self.pixel_size_um = pixel_size_um
-        self.full_res_shape = full_res_shape  # (H, W) at full resolution
-        self.image_shape_display = image_shape_display  # (H, W) after transforms
-        self.image_shape_pre_transform = image_shape_pre_transform
-        self.output_path = output_path
-        self.flip_horizontal = flip_horizontal
-        self.rotate_cw_90 = rotate_cw_90
-        self.scale_factor = scale_factor if not is_zarr else 1
-        self.is_zarr = is_zarr
-
-        # 3 crosses: None = not placed, (display_y, display_x) = placed
-        self.crosses = [None, None, None]
-        self.active_idx = 0  # Which cross to place next (0=R, 1=G, 2=B)
-
-        # Shapes layer for cross rendering
-        self.shapes_layer = viewer.add_shapes(
-            name='Reference Crosses',
-            edge_width=0,
-            face_color='red',
-        )
-
-        self._bind_shortcuts()
-        self._update_title()
-
-        # Re-render on zoom
-        viewer.camera.events.zoom.connect(self._on_zoom)
-
-    def _bind_shortcuts(self):
-        @self.viewer.bind_key('r', overwrite=True)
-        def select_red(viewer):
-            self.active_idx = 0
-            self._update_title()
-            show_info("Active: RED cross")
-
-        @self.viewer.bind_key('g', overwrite=True)
-        def select_green(viewer):
-            self.active_idx = 1
-            self._update_title()
-            show_info("Active: GREEN cross")
-
-        @self.viewer.bind_key('b', overwrite=True)
-        def select_blue(viewer):
-            self.active_idx = 2
-            self._update_title()
-            show_info("Active: BLUE cross")
-
-        @self.viewer.bind_key('Space', overwrite=True)
-        def place_cross(viewer):
-            self._place_at_cursor()
-
-        @self.viewer.bind_key('p', overwrite=True)
-        def place_cross_p(viewer):
-            self._place_at_cursor()
-
-        @self.viewer.bind_key('s', overwrite=True)
-        def save(viewer):
-            self.save_crosses()
-
-        @self.viewer.bind_key('u', overwrite=True)
-        def undo(viewer):
-            self.undo_last()
-
-        @self.viewer.bind_key('c', overwrite=True)
-        def clear(viewer):
-            self.clear_all()
-
-        @self.viewer.bind_key('q', overwrite=True)
-        def quit_save(viewer):
-            if self._all_placed():
-                self.save_crosses()
-                viewer.close()
+        if img.dtype != np.uint8:
+            mx = img.max()
+            if mx > 0:
+                p99 = np.percentile(img[img > 0], 99.5) if np.any(img > 0) else mx
+                img = np.clip(img.astype(np.float32) / p99 * 255, 0, 255).astype(np.uint8)
             else:
-                show_warning(f"Need all 3 crosses placed. Missing: {self._missing_str()}")
+                img = img.astype(np.uint8)
 
-    def _place_at_cursor(self):
-        """Place the active cross at the current cursor position."""
-        # Get cursor position from the viewer
-        cursor_pos = self.viewer.cursor.position
-        if cursor_pos is None or len(cursor_pos) < 2:
-            show_warning("Move cursor over the image first")
-            return
+        if flip_horizontal:
+            img = np.ascontiguousarray(np.fliplr(img))
+        if rotate_cw_90:
+            img = np.ascontiguousarray(np.rot90(img, k=-1))
 
-        display_y, display_x = cursor_pos[-2], cursor_pos[-1]
-        self.crosses[self.active_idx] = (display_y, display_x)
+        pyramid.append(img)
+        print(f"{img.shape} ({img.nbytes // 1_000_000} MB)")
 
-        self._render_crosses()
+    return pyramid, fw, fh, pixel_size_um
 
-        color_name = CROSS_NAMES[self.active_idx]
-        show_info(f"Placed {color_name} cross at ({display_x:.0f}, {display_y:.0f})")
 
-        # Auto-advance to next unplaced
-        for i in range(3):
-            next_idx = (self.active_idx + 1 + i) % 3
-            if self.crosses[next_idx] is None:
-                self.active_idx = next_idx
+def load_zarr_pyramid(zarr_path, level_indices=(1, 3),
+                      flip_horizontal=False, rotate_cw_90=False):
+    """Load OME-Zarr pyramid levels as uint8 RGB numpy arrays.
+
+    Transforms (fliplr, rot90) are applied if requested (on top of any baked-in).
+    With scale=(2^first_level, 2^first_level), world coords = zarr level 0 pixels.
+
+    Returns:
+        pyramid, full_w, full_h, pixel_size_um, zarr_meta, base_scale
+    """
+    import zarr as zarr_lib
+
+    root = zarr_lib.open(str(zarr_path), mode='r')
+
+    avail = sorted([k for k in root.keys() if k.isdigit()], key=int)
+    if not avail:
+        raise ValueError(f"No pyramid levels in {zarr_path}")
+
+    # Read metadata
+    pixel_size_um = None
+    zarr_meta = None
+    if 'multiscales' in root.attrs:
+        ms = root.attrs['multiscales'][0]
+        zarr_meta = ms.get('metadata')
+        for ds in ms.get('datasets', []):
+            if ds.get('path') == '0':
+                for t in ds.get('coordinateTransformations', []):
+                    if t.get('type') == 'scale':
+                        sc = t.get('scale', [])
+                        if len(sc) >= 2:
+                            pixel_size_um = sc[-1]
                 break
 
-        self._update_title()
+    # Level 0 shape for reference
+    level0_shape = root['0'].shape[-2:]
+    full_h, full_w = level0_shape
 
-        # Auto-save when all 3 placed
-        if self._all_placed():
-            self.save_crosses()
-            show_info("All 3 crosses placed! Auto-saved. Press Q to quit.")
+    # Pick levels to load (fallback to available)
+    to_load = []
+    for li in level_indices:
+        key = str(li)
+        if key in root:
+            to_load.append(li)
+        elif avail:
+            closest = min([int(k) for k in avail], key=lambda k: abs(k - li))
+            if closest not in to_load:
+                to_load.append(closest)
 
-    def _all_placed(self):
-        return all(c is not None for c in self.crosses)
+    if not to_load:
+        to_load = [int(avail[0])]
+    # Always include a coarser level for overview
+    if len(to_load) < 2 and len(avail) > 1:
+        coarsest = int(avail[-1])
+        if coarsest not in to_load:
+            to_load.append(coarsest)
+    to_load = sorted(to_load)
 
-    def _missing_str(self):
-        missing = [CROSS_NAMES[i] for i in range(3) if self.crosses[i] is None]
-        return ', '.join(missing)
+    pyramid = []
+    for li in to_load:
+        print(f"  Loading level {li}...", end=" ", flush=True)
+        arr = np.array(root[str(li)])
 
-    def _update_title(self):
-        placed = sum(1 for c in self.crosses if c is not None)
-        active = CROSS_NAMES[self.active_idx]
-        status_parts = []
-        for i, name in enumerate(CROSS_NAMES):
-            mark = "+" if self.crosses[i] is not None else "-"
-            status_parts.append(f"{name[0]}:{mark}")
-        status = ' '.join(status_parts)
-        self.viewer.title = (
-            f"LMD Crosses [{status}] | Active: {active} | "
-            f"R/G/B=select Space=place S=save U=undo Q=quit"
-        )
+        # Channel handling
+        if arr.ndim == 3 and arr.shape[0] == 1:
+            arr = arr[0]
+        elif arr.ndim == 3 and arr.shape[0] == 3:
+            arr = np.moveaxis(arr, 0, -1)  # (3,H,W) → (H,W,3)
 
-    def _on_zoom(self, event=None):
-        self._render_crosses()
+        # To uint8 RGB
+        if arr.ndim == 2:
+            if arr.dtype != np.uint8:
+                mx = arr.max()
+                if mx > 0:
+                    p99 = np.percentile(arr[arr > 0], 99.5) if np.any(arr > 0) else mx
+                    arr = np.clip(arr.astype(np.float32) / p99 * 255, 0, 255).astype(np.uint8)
+                else:
+                    arr = arr.astype(np.uint8)
+            arr = np.stack([arr] * 3, axis=-1)
+        elif arr.ndim == 3 and arr.shape[-1] == 3 and arr.dtype != np.uint8:
+            mx = arr.max()
+            if mx > 0:
+                arr = np.clip(arr.astype(np.float32) / mx * 255, 0, 255).astype(np.uint8)
+            else:
+                arr = arr.astype(np.uint8)
 
-    def _render_crosses(self):
-        """Re-render all placed crosses as zoom-adaptive filled rectangles."""
-        shapes = []
-        colors = []
+        if flip_horizontal:
+            arr = np.ascontiguousarray(np.fliplr(arr))
+        if rotate_cw_90:
+            arr = np.ascontiguousarray(np.rot90(arr, k=-1))
 
-        # Calculate cross size based on current view extent
-        camera = self.viewer.camera
-        # View extent in data coordinates
-        extent = max(self.image_shape_display) / max(camera.zoom, 0.01)
-        thickness = extent * THICKNESS_FRAC
-        arm_length = thickness * 6
+        pyramid.append(arr)
+        print(f"{arr.shape} ({arr.nbytes // 1_000_000} MB)")
 
-        for i, pos in enumerate(self.crosses):
-            if pos is None:
-                continue
+    base_scale = 2 ** to_load[0]
 
-            cy, cx = pos
-            color = CROSS_COLORS[i][1]
-
-            # Horizontal bar
-            h_rect = np.array([
-                [cy - thickness / 2, cx - arm_length],
-                [cy - thickness / 2, cx + arm_length],
-                [cy + thickness / 2, cx + arm_length],
-                [cy + thickness / 2, cx - arm_length],
-            ])
-            shapes.append(h_rect)
-            colors.append(color)
-
-            # Vertical bar
-            v_rect = np.array([
-                [cy - arm_length, cx - thickness / 2],
-                [cy - arm_length, cx + thickness / 2],
-                [cy + arm_length, cx + thickness / 2],
-                [cy + arm_length, cx - thickness / 2],
-            ])
-            shapes.append(v_rect)
-            colors.append(color)
-
-        if shapes:
-            self.shapes_layer.data = shapes
-            self.shapes_layer.face_color = colors
-            self.shapes_layer.edge_width = 0
-        else:
-            self.shapes_layer.data = []
-
-    def save_crosses(self) -> bool:
-        """Save crosses to JSON with full-resolution slide coordinates."""
-        if not self._all_placed():
-            show_warning(f"Need all 3 crosses. Missing: {self._missing_str()}")
-            return False
-
-        full_h, full_w = self.full_res_shape
-        crosses_list = []
-
-        for i, (dy, dx) in enumerate(self.crosses):
-            slide_x, slide_y = display_to_slide_coords(
-                dy, dx, self.image_shape_display,
-                flip_horizontal=self.flip_horizontal,
-                rotate_cw_90=self.rotate_cw_90,
-                scale_factor=self.scale_factor,
-            )
-            crosses_list.append({
-                'id': i + 1,
-                'color': CROSS_NAMES[i].lower(),
-                'x_px': slide_x,
-                'y_px': slide_y,
-                'x_um': slide_x * self.pixel_size_um,
-                'y_um': slide_y * self.pixel_size_um,
-            })
-
-        data = {
-            'image_width_px': full_w,
-            'image_height_px': full_h,
-            'pixel_size_um': self.pixel_size_um,
-            'display_transform': {
-                'flip_horizontal': self.flip_horizontal,
-                'rotate_cw_90': self.rotate_cw_90,
-            },
-            'crosses': crosses_list,
-        }
-
-        # Atomic write: temp file + rename to prevent corruption on crash
-        import tempfile, os
-        dir_name = os.path.dirname(self.output_path) or '.'
-        fd, tmp_path = tempfile.mkstemp(dir=dir_name, suffix='.json.tmp')
-        try:
-            with os.fdopen(fd, 'w') as f:
-                json.dump(data, f)
-            os.replace(tmp_path, self.output_path)
-        except Exception:
-            os.unlink(tmp_path)
-            raise
-
-        print(f"Saved 3 reference crosses to: {self.output_path}")
-        show_info(f"Saved to: {self.output_path}")
-        return True
-
-    def undo_last(self):
-        """Remove the most recently placed cross."""
-        # Find last placed
-        for i in reversed(range(3)):
-            if self.crosses[i] is not None:
-                name = CROSS_NAMES[i]
-                self.crosses[i] = None
-                self.active_idx = i
-                self._render_crosses()
-                self._update_title()
-                show_info(f"Removed {name} cross")
-                return
-        show_warning("No crosses to remove")
-
-    def clear_all(self):
-        """Remove all crosses."""
-        if any(c is not None for c in self.crosses):
-            self.crosses = [None, None, None]
-            self.active_idx = 0
-            self._render_crosses()
-            self._update_title()
-            show_info("Cleared all crosses")
-        else:
-            show_warning("No crosses to clear")
-
-    def load_existing(self, crosses_data):
-        """Load existing crosses from JSON data."""
-        crosses = crosses_data.get('crosses', [])
-        transform = crosses_data.get('display_transform', {})
-
-        for c in crosses[:3]:
-            idx = c.get('id', 1) - 1
-            if idx < 0 or idx >= 3:
-                continue
-
-            slide_x = c['x_px']
-            slide_y = c['y_px']
-
-            dy, dx = slide_to_display_coords(
-                slide_x, slide_y, self.image_shape_pre_transform,
-                flip_horizontal=self.flip_horizontal,
-                rotate_cw_90=self.rotate_cw_90,
-                scale_factor=self.scale_factor,
-            )
-            self.crosses[idx] = (dy, dx)
-
-        # Advance to first unplaced
-        for i in range(3):
-            if self.crosses[i] is None:
-                self.active_idx = i
-                break
-
-        self._render_crosses()
-        self._update_title()
-        placed = sum(1 for c in self.crosses if c is not None)
-        print(f"  Loaded {placed} existing crosses")
+    return pyramid, full_w, full_h, pixel_size_um, zarr_meta, base_scale
 
 
 # ---------------------------------------------------------------------------
 # Contour overlay
 # ---------------------------------------------------------------------------
 
-def load_contour_overlay(viewer, contours_path, image_shape_pre_transform,
-                         flip_horizontal=False, rotate_cw_90=False,
-                         scale_factor=1, slide_filter=None):
-    """Load detection contours as a Napari Shapes overlay.
+def transform_contour_coords(pts_yx, orig_h, orig_w, flip_h, rot90):
+    """Transform contour [y, x] from native pixel coords to display world coords.
 
-    Supports two formats:
-      - Pipeline format: list of dicts with 'outer_contour_global' in [x, y] px
-      - BM/overlay format: dict of {slide: [{contour_yx: [[y,x], ...]}]}
+    Applies the same transforms that were applied to the image data.
+    Must be called BEFORE dividing by world_scale.
+    """
+    y = pts_yx[:, 0].astype(np.float64)
+    x = pts_yx[:, 1].astype(np.float64)
+
+    if flip_h:
+        x = orig_w - x
+    if rot90:
+        y_new = x.copy()
+        x_new = orig_h - y
+        y, x = y_new, x_new
+
+    return np.column_stack([y, x])
+
+
+def load_contour_overlay(viewer, contours_path, slide_filter,
+                         orig_h, orig_w, flip_h, rot90, world_scale,
+                         zarr_meta=None):
+    """Load contour polygons and display as napari Shapes.
 
     Args:
-        slide_filter: Optional slide name to select from per-slide dict format.
+        orig_h, orig_w: Native image dimensions (CZI H, W) for coordinate transforms.
+        flip_h, rot90: What transforms were applied to image (explicit + baked-in).
+        world_scale: Divide contour native coords by this to get world coords.
+            CZI mode: 1.0 (world = CZI native). Zarr mode: e.g. 2.0 (zarr = CZI/2).
+        zarr_meta: Zarr metadata dict, used to detect baked-in transforms.
     """
     with open(contours_path) as f:
         data = json.load(f)
 
-    # Detect format: per-slide dict of lists (BM overlay format)
-    # vs pipeline detection format (list or dict with 'detections' key)
+    # Detect format
     detections = []
-    is_per_slide = False
     if isinstance(data, dict):
-        # Check if values are lists of dicts with contour_yx (BM format)
         first_val = next(iter(data.values()), None)
         if isinstance(first_val, list) and first_val and isinstance(first_val[0], dict) \
                 and 'contour_yx' in first_val[0]:
-            is_per_slide = True
+            # BM per-slide format
             if slide_filter:
-                # Match by exact name or substring
                 for key, entries in data.items():
                     if slide_filter in key or key in slide_filter:
                         detections = entries
-                        print(f"  Contours: matched slide '{key}' ({len(entries)} contours)")
+                        print(f"  Contours: matched '{key}' ({len(entries)})")
                         break
                 if not detections:
-                    print(f"  Warning: slide '{slide_filter}' not found in contours file")
+                    print(f"  Warning: slide '{slide_filter}' not in contours file")
             else:
-                # Flatten all slides
                 for entries in data.values():
                     detections.extend(entries)
         else:
-            detections = data.get('detections', data.get('shapes', list(data.values())))
-            if isinstance(detections, dict):
-                detections = list(detections.values())
+            detections = data.get('detections', data.get('shapes', []))
     else:
         detections = data
 
+    if not detections:
+        print("  Warning: no contours found")
+        return
+
+    # Detect baked-in transforms from zarr metadata
+    contour_flip = flip_h
+    contour_rot90 = rot90
+    if zarr_meta is not None:
+        desc = zarr_meta.get('description', '').lower()
+        if 'fliplr' in desc:
+            contour_flip = True
+        if 'rot90' in desc:
+            contour_rot90 = True
+
     shapes = []
     for det in detections:
-        # BM overlay format: contour_yx in [y, x] pixel coords
         contour_yx = det.get('contour_yx')
         if contour_yx is not None and len(contour_yx) >= 3:
-            pts_yx = np.array(contour_yx, dtype=np.float64)
-            # Already [row, col] — just apply scale
-            if scale_factor != 1:
-                pts_yx = pts_yx / scale_factor
-            shapes.append(pts_yx)
+            pts = np.array(contour_yx, dtype=np.float64)
+            pts = transform_contour_coords(pts, orig_h, orig_w,
+                                           contour_flip, contour_rot90)
+            pts = pts / world_scale
+            shapes.append(pts)
             continue
 
-        # Pipeline format: outer_contour_global in [x, y] pixel coords
+        # Pipeline format: outer_contour_global in [x, y]
         contour_px = det.get('outer_contour_global')
         if contour_px is not None and len(contour_px) >= 3:
-            pts = np.array(contour_px, dtype=np.float64)
-        elif det.get('contour_um') is not None or det.get('contour_dilated_um') is not None:
-            # um-valued contours can't be displayed without pixel_size conversion
-            continue
-        else:
-            continue
-
-        # Convert [x, y] to display coords [row, col]
-        display_pts = []
-        for pt in pts:
-            dy, dx = slide_to_display_coords(
-                pt[0], pt[1], image_shape_pre_transform,
-                flip_horizontal=flip_horizontal,
-                rotate_cw_90=rotate_cw_90,
-                scale_factor=scale_factor,
-            )
-            display_pts.append([dy, dx])
-
-        shapes.append(np.array(display_pts))
+            pts_xy = np.array(contour_px, dtype=np.float64)
+            # Convert [x, y] → [y, x]
+            pts_yx = pts_xy[:, ::-1]
+            pts_yx = transform_contour_coords(pts_yx, orig_h, orig_w,
+                                              contour_flip, contour_rot90)
+            pts_yx = pts_yx / world_scale
+            shapes.append(pts_yx)
 
     if shapes:
-        viewer.add_shapes(
-            shapes,
-            shape_type='polygon',
-            edge_color='lime',
-            edge_width=1,
+        lyr = viewer.add_shapes(
+            shapes, shape_type='polygon',
+            edge_color='lime', edge_width=2,
             face_color=[0, 0, 0, 0],
-            name='Contours',
-            opacity=0.6,
+            name='Contours', opacity=0.7,
         )
+        lyr.mouse_pan = False
+        lyr.mouse_zoom = False
         print(f"  Overlay: {len(shapes)} contours")
     else:
-        print("  Warning: no valid contours found for overlay")
+        print("  Warning: no valid contours for overlay")
 
 
 # ---------------------------------------------------------------------------
-# Main
+# Main viewer
 # ---------------------------------------------------------------------------
 
 def run_single_slide(args, input_path=None, output_path=None):
-    """Run cross placement for a single slide."""
-    input_path = input_path or args.input
-    output_path = output_path or args.output
-
-    if input_path is None:
-        print("ERROR: --input / -i is required")
-        sys.exit(1)
-
-    input_path = Path(input_path)
+    """Load image, place crosses, save."""
+    input_path = Path(input_path or args.input)
     if not input_path.exists():
-        print(f"ERROR: Input not found: {input_path}")
-        sys.exit(1)
+        sys.exit(f"Not found: {input_path}")
 
-    output_path = Path(output_path or 'reference_crosses.json')
+    slide_name = input_path.stem.replace('_rotated', '')
+    output_path = Path(output_path or args.output or f"{slide_name}_crosses.json")
+    output_path.parent.mkdir(parents=True, exist_ok=True)
 
-    # Auto-detect format
     is_zarr = input_path.suffix == '.zarr' or (input_path / '.zattrs').exists()
     is_czi = input_path.suffix.lower() == '.czi'
-
     if not is_zarr and not is_czi:
-        print(f"ERROR: Unsupported format: {input_path.suffix}. Use .czi or .zarr")
-        sys.exit(1)
+        sys.exit(f"Unsupported format: {input_path.suffix}")
 
     flip_h = getattr(args, 'flip_horizontal', False)
     rotate = getattr(args, 'rotate_cw_90', False)
-    scale = getattr(args, 'scale_factor', 8)
-    channel = getattr(args, 'channel', 0)
     fresh = getattr(args, 'fresh', False)
 
-    # Load image
+    print(f"\n{'='*60}\n{slide_name}\n{'='*60}")
+
+    zarr_meta = None
+
     if is_czi:
-        print(f"Loading CZI: {input_path}")
-        img, pixel_size_um, full_res_shape = load_czi_image(
-            input_path, channel=channel, scale_factor=scale
+        sf = getattr(args, 'scale_factor', 2)
+        # Build 2-level pyramid: fine (sf) + coarse (sf*4)
+        scale_factors = tuple(sorted(set([sf, sf * 4])))
+        pyramid, fw, fh, pxum = load_czi_pyramid(
+            input_path, channel=getattr(args, 'channel', 0),
+            scale_factors=scale_factors,
+            flip_horizontal=flip_h, rotate_cw_90=rotate,
         )
-        pre_transform_shape = img.shape[:2]  # (H, W) before transforms
-        img = apply_display_transforms(img, flip_h, rotate)
-        display_shape = img.shape[:2]
-        multiscale = False
+        base_scale = scale_factors[0]
+        # For contour overlay: CZI native dimensions, world_scale = 1
+        contour_orig_h, contour_orig_w = fh, fw
+        contour_world_scale = 1.0
     else:
-        print(f"Loading OME-Zarr: {input_path}")
-        data, pixel_size_um, full_res_shape = load_ome_zarr_image(str(input_path))
-        pre_transform_shape = full_res_shape
-        data = apply_display_transforms(data, flip_h, rotate)
-        if rotate:
-            display_shape = (full_res_shape[1], full_res_shape[0])
+        # Parse --level to pick which zarr levels to load
+        level_str = getattr(args, 'level', '1/2') or '1/2'
+        fraction_to_level = {'1/2': 1, '1/4': 2, '1/8': 3, '1/16': 4, '1': 0, '1/1': 0}
+        if level_str in fraction_to_level:
+            base_level = fraction_to_level[level_str]
+        elif level_str.isdigit():
+            base_level = int(level_str)
         else:
-            display_shape = full_res_shape
-        img = data
-        multiscale = True
-        scale = 1  # zarr handles its own resolution
+            sys.exit(f"Invalid --level '{level_str}'. Use: 1/2, 1/4, 1/8, or integer")
+
+        # Load base level + a coarser one for overview
+        coarse = min(base_level + 2, 4)
+        level_indices = (base_level, coarse)
+
+        pyramid, fw, fh, pxum, zarr_meta, base_scale = load_zarr_pyramid(
+            input_path, level_indices=level_indices,
+            flip_horizontal=flip_h, rotate_cw_90=rotate,
+        )
+        # For contour overlay: detect original CZI dims from zarr metadata
+        contour_orig_h, contour_orig_w = fh, fw
+        if zarr_meta:
+            oh = zarr_meta.get('original_height')
+            ow = zarr_meta.get('original_width')
+            if oh and ow:
+                contour_orig_h, contour_orig_w = oh, ow
+        # Auto-detect contour scale (CZI native vs zarr level 0)
+        contour_world_scale = 1.0
+        if contour_orig_h > fh * 1.3 or contour_orig_w > fw * 1.3:
+            ratio = max(contour_orig_h / fh, contour_orig_w / fw)
+            contour_world_scale = round(ratio)
+            print(f"  Contour scale: {contour_world_scale}x (CZI native → zarr level 0)")
 
     # Override pixel size from CLI
     if getattr(args, 'pixel_size', None):
-        pixel_size_um = args.pixel_size
+        pxum = args.pixel_size
+    if pxum is None:
+        sys.exit("Could not determine pixel size. Use --pixel-size.")
 
-    if pixel_size_um is None:
-        print("ERROR: Could not determine pixel size. Use --pixel-size.")
-        sys.exit(1)
+    transforms = []
+    if flip_h:
+        transforms.append("flip-H")
+    if rotate:
+        transforms.append("rot-CW-90")
+    print(f"  Pixel size: {pxum:.4f} um/px")
+    if transforms:
+        print(f"  Transforms: {', '.join(transforms)}")
 
-    print(f"  Pixel size: {pixel_size_um:.4f} um/px")
-    if flip_h or rotate:
-        transforms = []
-        if flip_h:
-            transforms.append("flip-H")
-        if rotate:
-            transforms.append("rot-CW-90")
-        print(f"  Display transforms: {', '.join(transforms)}")
+    # ── Display ──────────────────────────────────────────────────
+    viewer = napari.Viewer(title=slide_name)
 
-    # Create viewer
-    viewer = napari.Viewer(title="LMD Cross Placement - Loading...")
-
-    if multiscale:
-        viewer.add_image(img, name=input_path.stem, multiscale=True)
-    else:
-        viewer.add_image(img, name=input_path.stem)
-
-    # Create cross placer
-    placer = RGBCrossPlacer(
-        viewer=viewer,
-        pixel_size_um=pixel_size_um,
-        image_shape_display=display_shape,
-        image_shape_pre_transform=pre_transform_shape,
-        full_res_shape=full_res_shape,
-        output_path=str(output_path),
-        flip_horizontal=flip_h,
-        rotate_cw_90=rotate,
-        scale_factor=scale,
-        is_zarr=is_zarr,
+    # scale=(base, base) → world coords = full-res reference pixels
+    viewer.add_image(
+        pyramid, name=slide_name, multiscale=True,
+        contrast_limits=[0, 255], scale=(base_scale, base_scale),
     )
+    print(f"  Display: {len(pyramid)} levels, base_scale={base_scale}")
 
-    # Auto-load existing crosses (unless --fresh)
+    # ── Contour overlay ─────────────────────────────────────────
+    contours_path = getattr(args, 'contours', None)
+    if contours_path and Path(contours_path).exists():
+        print(f"  Loading contours: {contours_path}")
+        try:
+            load_contour_overlay(
+                viewer, str(contours_path),
+                slide_filter=getattr(args, 'slide', None),
+                orig_h=contour_orig_h, orig_w=contour_orig_w,
+                flip_h=flip_h, rot90=rotate,
+                world_scale=contour_world_scale,
+                zarr_meta=zarr_meta,
+            )
+        except Exception as e:
+            print(f"  Warning: contour load failed: {e}")
+
+    # ── Cross placement ─────────────────────────────────────────
+    positions = [None, None, None]
+    active = [0]
+
+    # 3 separate shape layers (one per cross color, like reference)
+    cross_layers = []
+    for i in range(3):
+        dummy = [np.array([[-1e8, -1e8], [-1e8, -1e8+1],
+                           [-1e8+1, -1e8+1], [-1e8+1, -1e8]])]
+        lyr = viewer.add_shapes(
+            dummy, shape_type='polygon', name=CROSS_LABELS[i],
+            face_color=CROSS_COLORS[i], edge_color=CROSS_COLORS[i],
+            edge_width=0, opacity=1.0,
+        )
+        lyr.mouse_pan = False
+        lyr.mouse_zoom = False
+        cross_layers.append(lyr)
+
+    # CRITICAL: keep image layer active so shapes layers don't eat keypresses
+    img_layer = viewer.layers[slide_name]
+    viewer.layers.selection.active = img_layer
+
+    def _keep_image_active(event=None):
+        if viewer.layers.selection.active in cross_layers:
+            viewer.layers.selection.active = img_layer
+    viewer.layers.selection.events.active.connect(_keep_image_active)
+
+    def get_arm():
+        zoom = viewer.camera.zoom
+        return SCREEN_PX / zoom if zoom > 0 else 3000
+
+    def draw_cross(i, y, x):
+        a = get_arm()
+        t = a * THICKNESS_FRAC
+        h_bar = np.array([[y-t, x-a], [y-t, x+a], [y+t, x+a], [y+t, x-a]])
+        v_bar = np.array([[y-a, x-t], [y-a, x+t], [y+a, x+t], [y+a, x-t]])
+        cross_layers[i].data = [h_bar, v_bar]
+
+    def redraw_all(event=None):
+        for i in range(3):
+            if positions[i] is not None:
+                draw_cross(i, *positions[i])
+
+    viewer.camera.events.zoom.connect(redraw_all)
+
+    def update_title():
+        tags = []
+        for i in range(3):
+            if positions[i] is not None:
+                tags.append(f"{i+1}:OK")
+            elif i == active[0]:
+                tags.append(f"{i+1}:>>")
+            else:
+                tags.append(f"{i+1}:..")
+        n = sum(p is not None for p in positions)
+        extra = " S=save Q=quit" if n == 3 else ""
+        viewer.title = f"[{' | '.join(tags)}]{extra}  Space=place R/G/B=select"
+
+    def save_crosses():
+        n = sum(p is not None for p in positions)
+        if n < 3:
+            show_warning(f"Need 3 crosses, have {n}")
+            return False
+        crosses = []
+        for i in range(3):
+            y, x = positions[i]
+            crosses.append({
+                'id': i + 1,
+                'color': ['red', 'green', 'blue'][i],
+                'x_px': float(x),
+                'y_px': float(y),
+                'x_um': float(x * pxum),
+                'y_um': float(y * pxum),
+            })
+        data = {
+            'image_width_px': fw,
+            'image_height_px': fh,
+            'pixel_size_um': pxum,
+            'display_transform': {
+                'flip_horizontal': flip_h,
+                'rotate_cw_90': rotate,
+            },
+            'timestamp': datetime.now().strftime('%Y-%m-%d_%H%M%S'),
+            'crosses': crosses,
+        }
+        import tempfile, os
+        d = str(output_path.parent) if output_path.parent.exists() else '.'
+        fd, tmp = tempfile.mkstemp(dir=d, suffix='.json.tmp')
+        try:
+            with os.fdopen(fd, 'w') as f:
+                json.dump(data, f)
+            os.replace(tmp, str(output_path))
+        except Exception:
+            os.unlink(tmp)
+            raise
+        show_info(f"Saved to {output_path}")
+        print(f"  Saved: {output_path}")
+        return True
+
+    def place():
+        pos = viewer.cursor.position
+        if pos is None or len(pos) < 2:
+            show_warning("Move cursor over image first")
+            return
+        y, x = float(pos[-2]), float(pos[-1])
+        i = active[0]
+        positions[i] = (y, x)
+        draw_cross(i, y, x)
+        show_info(f"Placed {CROSS_LABELS[i]}")
+        print(f"  Placed {CROSS_LABELS[i]} at ({x:.0f}, {y:.0f})")
+        # Auto-advance
+        for j in range(3):
+            if positions[j] is None:
+                active[0] = j
+                break
+        update_title()
+        # Auto-save when all 3
+        if all(p is not None for p in positions):
+            save_crosses()
+
+    # ── Keybindings ─────────────────────────────────────────────
+    @viewer.bind_key('r', overwrite=True)
+    def _(v):
+        active[0] = 0
+        show_info(f"Selected {CROSS_LABELS[0]}")
+        update_title()
+
+    @viewer.bind_key('g', overwrite=True)
+    def _(v):
+        active[0] = 1
+        show_info(f"Selected {CROSS_LABELS[1]}")
+        update_title()
+
+    @viewer.bind_key('b', overwrite=True)
+    def _(v):
+        active[0] = 2
+        show_info(f"Selected {CROSS_LABELS[2]}")
+        update_title()
+
+    @viewer.bind_key('Space', overwrite=True)
+    def _(v):
+        place()
+
+    @viewer.bind_key('p', overwrite=True)
+    def _(v):
+        place()
+
+    @viewer.bind_key('s', overwrite=True)
+    def _(v):
+        save_crosses()
+
+    @viewer.bind_key('u', overwrite=True)
+    def _(v):
+        # Undo: remove last placed
+        for i in reversed(range(3)):
+            if positions[i] is not None:
+                positions[i] = None
+                cross_layers[i].data = [np.array([[-1e8, -1e8], [-1e8, -1e8+1],
+                                                   [-1e8+1, -1e8+1], [-1e8+1, -1e8]])]
+                active[0] = i
+                show_info(f"Removed {CROSS_LABELS[i]}")
+                update_title()
+                return
+        show_warning("Nothing to undo")
+
+    @viewer.bind_key('c', overwrite=True)
+    def _(v):
+        for i in range(3):
+            positions[i] = None
+            cross_layers[i].data = [np.array([[-1e8, -1e8], [-1e8, -1e8+1],
+                                               [-1e8+1, -1e8+1], [-1e8+1, -1e8]])]
+        active[0] = 0
+        show_info("Cleared all")
+        update_title()
+
+    @viewer.bind_key('q', overwrite=True)
+    def _(v):
+        n = sum(p is not None for p in positions)
+        if n == 3:
+            save_crosses()
+        elif n > 0:
+            show_warning(f"Only {n}/3 crosses placed — not saved")
+        v.close()
+
+    # ── Load existing crosses ───────────────────────────────────
     if not fresh and output_path.exists():
-        print(f"  Auto-loading existing crosses from: {output_path}")
         try:
             with open(output_path) as f:
                 existing = json.load(f)
-            placer.load_existing(existing)
+            for c in existing.get('crosses', []):
+                i = c.get('id', 1) - 1
+                if 0 <= i < 3 and 'x_px' in c and 'y_px' in c:
+                    positions[i] = (c['y_px'], c['x_px'])
+                    draw_cross(i, c['y_px'], c['x_px'])
+            placed = sum(p is not None for p in positions)
+            if placed:
+                print(f"  Loaded {placed} existing crosses from {output_path}")
+                # Advance to first empty
+                for j in range(3):
+                    if positions[j] is None:
+                        active[0] = j
+                        break
         except Exception as e:
-            print(f"  Warning: Could not load existing crosses: {e}")
+            print(f"  Warning: could not load existing crosses: {e}")
 
-    # Contour overlay
-    contours_path = getattr(args, 'contours', None)
-    if contours_path:
-        contours_path = Path(contours_path)
-        if contours_path.exists():
-            print(f"Loading contour overlay: {contours_path}")
-            try:
-                load_contour_overlay(
-                    viewer, str(contours_path), pre_transform_shape,
-                    flip_horizontal=flip_h, rotate_cw_90=rotate,
-                    scale_factor=scale,
-                    slide_filter=getattr(args, 'slide', None),
-                )
-            except Exception as e:
-                print(f"  Warning: Could not load contours: {e}")
-
-    print("\n" + "=" * 60)
-    print("CROSS PLACEMENT (3 crosses: Red, Green, Blue)")
-    print("=" * 60)
-    print("  R/G/B  = select cross color")
-    print("  Space  = place cross at cursor")
-    print("  S      = save    U = undo    C = clear    Q = save+quit")
-    print("=" * 60 + "\n")
-
+    update_title()
+    print("\n  R=red  G=green  B=cyan  |  Space=place  S=save  U=undo  C=clear  Q=quit\n")
     napari.run()
 
 
+# ---------------------------------------------------------------------------
+# CLI
+# ---------------------------------------------------------------------------
+
 def main():
     parser = argparse.ArgumentParser(
-        description='Interactive RGB cross placement for LMD export (CZI or OME-Zarr)',
+        description='Place 3 LMD reference crosses on CZI or OME-Zarr',
         formatter_class=argparse.RawDescriptionHelpFormatter,
-        epilog='''
-Keyboard:  R/G/B=select  Space=place  S=save  U=undo  C=clear  Q=save+quit
-
-Examples:
-  # CZI with LMD7 transforms
-  python napari_place_crosses.py -i slide.czi --flip-horizontal --rotate-cw-90
-
-  # OME-Zarr
-  python napari_place_crosses.py -i slide.zarr -o crosses.json
-
-  # Batch mode
-  python napari_place_crosses.py --czi-dir /data --slides A B --output-dir crosses/
-''',
+        epilog='Keys: R/G/B=select  Space=place  S=save  U=undo  C=clear  Q=quit',
     )
 
-    # Single-slide input
     parser.add_argument('--input', '-i', type=str, default=None,
-                        help='CZI or OME-Zarr path (auto-detect from extension)')
-    # Backward compat: positional arg
+                        help='CZI or OME-Zarr path')
     parser.add_argument('zarr_path', nargs='?', type=str, default=None,
-                        help='[Deprecated] OME-Zarr path (use -i instead)')
-
-    parser.add_argument('--output', '-o', type=str, default='reference_crosses.json',
-                        help='Output crosses JSON path (default: reference_crosses.json)')
+                        help='[Deprecated] Use -i instead')
+    parser.add_argument('--output', '-o', type=str, default=None,
+                        help='Output crosses JSON')
 
     # CZI options
     parser.add_argument('--channel', type=int, default=0,
-                        help='CZI channel index for display (default: 0)')
-    parser.add_argument('--scale-factor', type=int, default=8,
-                        help='CZI downsampling factor (default: 8 = 1/8 resolution)')
+                        help='CZI channel (default: 0)')
+    parser.add_argument('--scale-factor', type=int, default=2,
+                        help='CZI base downsampling (default: 2 = 1/2 res). '
+                             'Second level is auto 4x coarser.')
+
+    # Zarr options
+    parser.add_argument('--level', type=str, default='1/2',
+                        help='Zarr pyramid level: "1/2", "1/4", "1/8", or integer '
+                             '(default: 1/2)')
 
     # Display transforms
     parser.add_argument('--flip-horizontal', action='store_true',
-                        help='Mirror image horizontally (tissue-down LMD7 view)')
+                        help='Mirror horizontally (tissue-down for LMD7)')
     parser.add_argument('--rotate-cw-90', action='store_true',
-                        help='Rotate image 90° clockwise (LMD7 orientation)')
+                        help='Rotate 90 degrees clockwise')
 
     # Overlays
     parser.add_argument('--contours', type=str, default=None,
-                        help='Path to detection/contour JSON for overlay')
+                        help='Contour JSON for overlay')
     parser.add_argument('--slide', type=str, default=None,
                         help='Slide name filter for per-slide contour files')
 
-    # Pixel size override
+    # Other
     parser.add_argument('--pixel-size', type=float, default=None,
-                        help='Pixel size in um (auto-detected if not set)')
-
-    # Auto-load control
+                        help='Pixel size um (auto-detected if not set)')
     parser.add_argument('--fresh', action='store_true',
-                        help="Don't auto-load existing crosses (start from scratch)")
+                        help="Don't auto-load existing crosses")
 
     # Batch mode
     parser.add_argument('--czi-dir', type=str, default=None,
-                        help='Batch mode: directory containing CZI files')
+                        help='Batch: directory of CZIs')
     parser.add_argument('--slides', nargs='+', default=None,
-                        help='Batch mode: slide name prefixes to process')
+                        help='Batch: slide name prefixes')
     parser.add_argument('--output-dir', type=str, default=None,
-                        help='Batch mode: output directory for per-slide crosses')
+                        help='Batch: output directory')
 
     # Backward compat
     parser.add_argument('--detections', '-d', type=str, default=None,
-                        help='[Deprecated] Use --contours instead')
+                        help='[Deprecated] Use --contours')
     parser.add_argument('--load-existing', type=str, default=None,
-                        help='[Deprecated] Auto-load is now default; use --fresh to disable')
+                        help='[Deprecated] Auto-load is default; use --fresh')
 
     args = parser.parse_args()
 
-    # Handle backward compat: positional zarr_path -> --input
     if args.input is None and args.zarr_path:
         args.input = args.zarr_path
-
-    # Handle deprecated --detections -> --contours
     if args.contours is None and args.detections:
         args.contours = args.detections
 
@@ -925,37 +721,28 @@ Examples:
         output_dir = Path(args.output_dir or 'crosses')
         output_dir.mkdir(parents=True, exist_ok=True)
 
-        # Collect slides to process
         slides_to_process = []
         for slide_name in args.slides:
             matches = list(czi_dir.glob(f"{slide_name}*.czi"))
             if not matches:
-                print(f"WARNING: No CZI found for slide '{slide_name}' in {czi_dir}")
+                print(f"WARNING: No CZI for '{slide_name}' in {czi_dir}")
                 continue
-
             czi_path = matches[0]
             out_path = output_dir / f"{czi_path.stem}_crosses.json"
-
-            # Skip if already done (unless --fresh)
             if out_path.exists() and not args.fresh:
-                print(f"Skipping {czi_path.stem} (crosses exist: {out_path})")
+                print(f"Skipping {czi_path.stem} (exists: {out_path})")
                 continue
-
             slides_to_process.append((czi_path, out_path))
 
-        # Process slides sequentially — each gets its own viewer
-        # napari.run() starts the Qt event loop; it returns when the viewer
-        # is closed. Creating a new Viewer + run() works across slides as
-        # long as we don't call QApplication.quit().
         for i, (czi_path, out_path) in enumerate(slides_to_process):
             print(f"\n{'='*60}")
             print(f"Slide {i+1}/{len(slides_to_process)}: {czi_path.stem}")
-            print(f"{'='*60}")
-
             run_single_slide(args, input_path=str(czi_path), output_path=str(out_path))
         return
 
-    # Single-slide mode
+    # Single slide
+    if args.input is None:
+        parser.error("--input / -i is required (or use --czi-dir + --slides for batch)")
     run_single_slide(args)
 
 

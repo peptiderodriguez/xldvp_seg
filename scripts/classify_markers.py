@@ -52,6 +52,7 @@ from segmentation.utils.json_utils import NumpyEncoder, atomic_json_dump
 from segmentation.pipeline.background import (
     local_background_subtract,
     correct_all_channels,
+    _extract_centroids,
 )
 
 logger = get_logger(__name__)
@@ -209,16 +210,6 @@ def extract_marker_values(detections: list[dict], channel: int) -> np.ndarray:
     return values
 
 
-def extract_centroids(detections: list[dict]) -> np.ndarray:
-    """Extract **global** [x, y] centroids from detections.
-
-    Uses ``global_center`` (slide-level), NOT ``features["centroid"]``
-    (tile-local).  Imported ``_extract_centroids`` is the canonical impl.
-    """
-    from segmentation.pipeline.background import _extract_centroids
-    return _extract_centroids(detections)
-
-
 def classify_single_marker(detections: list[dict], channel: int,
                            marker_name: str, method: str,
                            output_dir: Path,
@@ -249,7 +240,7 @@ def classify_single_marker(detections: list[dict], channel: int,
     per_cell_bg = None
     if bg_subtract:
         if centroids is None:
-            centroids = extract_centroids(detections)
+            centroids = _extract_centroids(detections)
         values, per_cell_bg = local_background_subtract(raw_values, centroids, n_neighbors)
         median_bg = float(np.median(per_cell_bg))
         logger.info(f"  Local background: median {median_bg:.1f}, "
@@ -393,8 +384,8 @@ def main():
     output_dir.mkdir(parents=True, exist_ok=True)
 
     # Parse marker channels — resolve wavelengths if specified
+    from segmentation.io.czi_loader import get_czi_metadata, resolve_channel_indices, ChannelResolutionError
     if args.marker_wavelength:
-        from segmentation.io.czi_loader import get_czi_metadata, resolve_channel_indices, ChannelResolutionError
         try:
             meta = get_czi_metadata(args.czi_path)
             wavelengths = [w.strip() for w in args.marker_wavelength.split(',')]
@@ -424,7 +415,6 @@ def main():
     _czi_ch_labels = {}
     if args.czi_path:
         try:
-            from segmentation.io.czi_loader import get_czi_metadata
             _meta = get_czi_metadata(args.czi_path)
             for _ch in _meta['channels']:
                 fluor = (_ch.get('fluorophore') or _ch.get('name') or '').strip()
@@ -464,7 +454,7 @@ def main():
     # Extract centroids if any background subtraction is needed
     centroids = None
     if args.bg_subtract or args.correct_all_channels:
-        centroids = extract_centroids(detections)
+        centroids = _extract_centroids(detections)
         logger.info(f"Extracted {len(centroids):,} centroids for local background subtraction")
 
     # Guard: detect pipeline-corrected detections and disable ALL bg subtraction

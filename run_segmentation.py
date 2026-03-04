@@ -69,7 +69,6 @@ from segmentation.io.html_export import (
 )
 from segmentation.utils.logging import get_logger, setup_logging
 from segmentation.io.czi_loader import get_loader, get_czi_metadata, print_czi_metadata
-from segmentation.utils.islet_utils import classify_islet_marker, compute_islet_marker_thresholds
 from segmentation.utils.json_utils import NumpyEncoder, atomic_json_dump, fast_json_load
 from segmentation.detection.cell_detector import CellDetector
 # tile_processing functions now called from within pipeline modules
@@ -78,6 +77,7 @@ from segmentation.detection.cell_detector import CellDetector
 from segmentation.pipeline.server import stop_background_server, show_server_status
 from segmentation.pipeline.resume import (
     detect_resume_stage, reload_detections_from_tiles, _resume_generate_html_samples,
+    compose_tile_rgb, compute_and_apply_islet_markers,
 )
 from segmentation.pipeline.samples import (
     _compute_tile_percentiles, calibrate_islet_marker_gmm,
@@ -85,13 +85,38 @@ from segmentation.pipeline.samples import (
 )
 from segmentation.pipeline.finalize import _finish_pipeline
 from segmentation.pipeline.detection_setup import (
-    create_strategy_for_cell_type, apply_vessel_classifiers,
+    apply_vessel_classifiers,
     load_classifier_into_detector, build_detection_params, load_vessel_classifiers,
 )
+from segmentation.processing.strategy_factory import create_strategy
 from segmentation.pipeline.preprocessing import apply_slide_preprocessing
 from segmentation.pipeline.cli import build_parser, postprocess_args
 
 logger = get_logger(__name__)
+
+
+# =============================================================================
+# HELPERS
+# =============================================================================
+
+def _maybe_export_ome_zarr(args, slide_shm_arr, ch_to_slot, pixel_size_um,
+                           slide_output_dir, slide_name, czi_path):
+    if not getattr(args, 'ome_zarr', True):
+        return
+    try:
+        from segmentation.io.ome_zarr_export import export_shm_to_ome_zarr
+        zarr_path = slide_output_dir / f"{slide_name}.ome.zarr"
+        export_shm_to_ome_zarr(
+            shm_array=slide_shm_arr,
+            ch_to_slot=ch_to_slot,
+            pixel_size_um=pixel_size_um,
+            output_path=zarr_path,
+            czi_path=str(czi_path),
+            pyramid_levels=getattr(args, 'zarr_levels', 5),
+            overwrite=getattr(args, 'force_zarr', False),
+        )
+    except Exception as e:
+        logger.warning(f"OME-Zarr export failed (non-fatal): {e}")
 
 
 # =============================================================================
@@ -136,12 +161,14 @@ def run_pipeline(args):
     logger.info("=" * 60)
 
     # ---- Resume early-exit: skip CZI loading if ALL stages are done ----
+    _cached_resume_info = None
     if getattr(args, 'resume', None):
         resume_dir = Path(args.resume)
         resume_info = detect_resume_stage(resume_dir, args.cell_type)
-        _has_det = resume_info['has_detections'] and not getattr(args, 'force_detect', False)
-        _has_html = resume_info['has_html'] and not getattr(args, 'force_html', False)
-        _has_tiles = resume_info['has_tiles'] and not getattr(args, 'force_detect', False)
+        _cached_resume_info = resume_info
+        _has_det = resume_info['has_detections'] and not args.force_detect
+        _has_html = resume_info['has_html'] and not args.force_html
+        _has_tiles = resume_info['has_tiles'] and not args.force_detect
 
         logger.info(f"Resume state: tiles={resume_info['tile_count']}, "
                      f"detections={'yes' if resume_info['has_detections'] else 'no'}"
@@ -324,7 +351,7 @@ def run_pipeline(args):
     apply_slide_preprocessing(args, all_channel_data, loader)
 
     # Generate tile grid (using global coordinates)
-    overlap = getattr(args, 'tile_overlap', 0.0)
+    overlap = args.tile_overlap
     logger.info(f"Generating tile grid (size={args.tile_size}, overlap={overlap*100:.0f}%)...")
     all_tiles = generate_tile_grid(mosaic_info, args.tile_size, overlap_fraction=overlap)
     logger.info(f"  Total tiles: {len(all_tiles)}")
@@ -447,7 +474,7 @@ def run_pipeline(args):
     skip_html = False
 
     if getattr(args, 'resume', None) and not getattr(args, 'detection_only', False):
-        resume_info = detect_resume_stage(slide_output_dir, args.cell_type)
+        resume_info = _cached_resume_info if _cached_resume_info is not None else detect_resume_stage(slide_output_dir, args.cell_type)
         logger.info(f"Resume state: tiles={resume_info['tile_count']}, "
                      f"detections={'yes' if resume_info['has_detections'] else 'no'}"
                      f" ({resume_info['detection_count']}), "
@@ -470,7 +497,7 @@ def run_pipeline(args):
             deduped_det_file = slide_output_dir / f'{args.cell_type}_detections.json'
 
             # Checkpoint 1: merged detections (all shards concatenated)
-            if merged_det_file.exists() and not getattr(args, 'force_detect', False):
+            if merged_det_file.exists() and not args.force_detect:
                 all_detections = fast_json_load(merged_det_file)
                 logger.info(f"Checkpoint: loaded {len(all_detections)} merged detections from {merged_det_file.name}")
             elif resume_info['has_tiles']:
@@ -486,29 +513,29 @@ def run_pipeline(args):
             # Checkpoint 2: deduped detections
             # Checkpoint 3: post-dedup processed detections (contours + bg correction)
             postdedup_file = slide_output_dir / f'{args.cell_type}_detections_postdedup.json'
-            if postdedup_file.exists() and not getattr(args, 'force_detect', False):
+            if postdedup_file.exists() and not args.force_detect:
                 all_detections = fast_json_load(postdedup_file)
                 logger.info(f"Checkpoint: loaded {len(all_detections)} post-dedup detections from {postdedup_file.name}")
                 skip_dedup = True
-            elif deduped_det_file.exists() and not getattr(args, 'force_detect', False):
+            elif deduped_det_file.exists() and not args.force_detect:
                 all_detections = fast_json_load(deduped_det_file)
                 logger.info(f"Checkpoint: loaded {len(all_detections)} deduped detections from {deduped_det_file.name}")
                 skip_dedup = True
             skip_detection = True
             skip_html = False  # Always regenerate HTML for merge
             args.force_html = True
-        elif resume_info['has_detections'] and not getattr(args, 'force_detect', False):
+        elif resume_info['has_detections'] and not args.force_detect:
             skip_detection = True
             skip_dedup = True
             det_file = slide_output_dir / f"{args.cell_type}_detections.json"
             all_detections = fast_json_load(det_file)
             logger.info(f"Loaded {len(all_detections)} detections from {det_file} (skipping detection + dedup)")
-        elif resume_info['has_tiles'] and not getattr(args, 'force_detect', False):
+        elif resume_info['has_tiles'] and not args.force_detect:
             skip_detection = True
             all_detections = reload_detections_from_tiles(tiles_dir, args.cell_type)
             logger.info(f"Reloaded {len(all_detections)} detections from {resume_info['tile_count']} tile dirs (skipping detection, will dedup)")
 
-        if resume_info['has_html'] and not getattr(args, 'force_html', False):
+        if resume_info['has_html'] and not args.force_html:
             skip_html = True
             logger.info("HTML exists -- skipping HTML generation (use --force-html to regenerate)")
 
@@ -524,7 +551,7 @@ def run_pipeline(args):
         'x_start': x_start,
         'y_start': y_start,
         'sample_fraction': args.sample_fraction,
-        'tile_overlap': getattr(args, 'tile_overlap', 0.0),
+        'tile_overlap': args.tile_overlap,
         'channel': args.channel,
     }
     # Add display channel config
@@ -543,7 +570,7 @@ def run_pipeline(args):
         is_multiscale = args.cell_type == 'vessel' and getattr(args, 'multi_scale', False)
 
         # Run dedup if reloaded from tiles (not from deduped detections JSON)
-        if not skip_dedup and getattr(args, 'tile_overlap', 0) > 0 and len(all_detections) > 0 and not is_multiscale:
+        if not skip_dedup and args.tile_overlap > 0 and len(all_detections) > 0 and not is_multiscale:
             from segmentation.processing.deduplication import deduplicate_by_mask_overlap
             pre_dedup = len(all_detections)
             mask_fn = f'{args.cell_type}_masks.h5'
@@ -562,8 +589,8 @@ def run_pipeline(args):
             _has_bg = any(k.endswith('_background') for k in _sample_feat)
             _has_contour = all_detections[0].get('contour_dilated_px') is not None
 
-        _want_contour = getattr(args, 'contour_processing', True) and not _has_contour
-        _want_bg = getattr(args, 'background_correction', True) and not _has_bg
+        _want_contour = args.contour_processing and not _has_contour
+        _want_bg = args.background_correction and not _has_bg
 
         if len(all_detections) > 0 and (_want_contour or _want_bg):
             from segmentation.pipeline.post_detection import process_detections_post_dedup
@@ -625,7 +652,6 @@ def run_pipeline(args):
                 loader=loader,
                 ch_indices=sorted(all_channel_data.keys()),
                 tile_size=args.tile_size,
-                display_channels=_display_chs,
                 contour_processing=_want_contour,
                 dilation_um=getattr(args, 'dilation_um', 0.5),
                 rdp_epsilon=getattr(args, 'rdp_epsilon', 5.0),
@@ -665,7 +691,7 @@ def run_pipeline(args):
             logger.info(f"Generated {len(all_samples)} HTML samples from resume path")
 
         # Subsample HTML by fraction if configured
-        _html_frac = getattr(args, 'html_sample_fraction', 0)
+        _html_frac = args.html_sample_fraction
         if _html_frac > 0 and len(all_samples) > 0 and len(all_detections) > 0:
             import random
             target = max(100, int(len(all_detections) * _html_frac))
@@ -682,23 +708,8 @@ def run_pipeline(args):
                 all_tiles=all_tiles, tissue_tiles=tissue_tiles, sampled_tiles=sampled_tiles,
             )
         finally:
-            # OME-Zarr export before SHM cleanup
-            if getattr(args, 'ome_zarr', True):
-                try:
-                    from segmentation.io.ome_zarr_export import export_shm_to_ome_zarr
-                    zarr_path = slide_output_dir / f"{slide_name}.ome.zarr"
-                    export_shm_to_ome_zarr(
-                        shm_array=slide_shm_arr,
-                        ch_to_slot=ch_to_slot,
-                        pixel_size_um=pixel_size_um,
-                        output_path=zarr_path,
-                        czi_path=str(czi_path),
-                        pyramid_levels=getattr(args, 'zarr_levels', 5),
-                        overwrite=getattr(args, 'force_zarr', False),
-                    )
-                except Exception as e:
-                    logger.warning(f"OME-Zarr export failed (non-fatal): {e}")
-
+            _maybe_export_ome_zarr(args, slide_shm_arr, ch_to_slot, pixel_size_um,
+                                   slide_output_dir, slide_name, czi_path)
             shm_manager.cleanup()
         return
 
@@ -719,7 +730,13 @@ def run_pipeline(args):
     params = build_detection_params(args, pixel_size_um)
     logger.info(f"Detection params: {params}")
 
-    strategy = create_strategy_for_cell_type(args.cell_type, params, pixel_size_um)
+    strategy = create_strategy(
+        cell_type=args.cell_type,
+        strategy_params=params,
+        extract_deep_features=params.get('extract_deep_features', False),
+        extract_sam2_embeddings=params.get('extract_sam2_embeddings', True),
+        pixel_size_um=pixel_size_um,
+    )
     logger.info(f"Using {strategy.name} strategy: {strategy.get_config()}")
 
     vessel_classifier, vessel_type_classifier = load_vessel_classifiers(args)
@@ -974,19 +991,25 @@ def run_pipeline(args):
                                     )
 
                                     # Add mosaic origin for CZI-global coords
-                                    for key in ('center', 'centroid'):
-                                        if key in det_fullres:
-                                            det_fullres[key][0] += x_start
-                                            det_fullres[key][1] += y_start
+                                    # convert_detection_to_full_res already scaled
+                                    # det['center'], det['centroid'], feats['outer_center'],
+                                    # feats['inner_center'] to full-res array-local coords.
+                                    # feats['center'] is NOT scaled by that function, so
+                                    # scale it here first to match.
                                     feats_d = det_fullres.get('features', {})
                                     if isinstance(feats_d, dict):
                                         if 'center' in feats_d and feats_d['center'] is not None:
                                             fc = feats_d['center']
                                             feats_d['center'] = [
-                                                (fc[0] + tx_s) * sf + x_start,
-                                                (fc[1] + ty_s) * sf + y_start,
+                                                (fc[0] + tx_s) * sf,
+                                                (fc[1] + ty_s) * sf,
                                             ]
-                                        for ck in ('outer_center', 'inner_center'):
+                                    for key in ('center', 'centroid'):
+                                        if key in det_fullres:
+                                            det_fullres[key][0] += x_start
+                                            det_fullres[key][1] += y_start
+                                    if isinstance(feats_d, dict):
+                                        for ck in ('center', 'outer_center', 'inner_center'):
                                             if ck in feats_d and feats_d[ck] is not None:
                                                 feats_d[ck][0] += x_start
                                                 feats_d[ck][1] += y_start
@@ -1077,12 +1100,9 @@ def run_pipeline(args):
                 y2 = min(h, rel_cy + half)
                 x2 = min(w, rel_cx + half)
 
-                if n_channels >= 3:
-                    crop_rgb = np.stack([
-                        slide_shm_arr[y1:y2, x1:x2, i] for i in range(3)
-                    ], axis=-1)
-                else:
-                    crop_rgb = np.stack([slide_shm_arr[y1:y2, x1:x2, 0]] * 3, axis=-1)
+                crop_rgb = compose_tile_rgb(
+                    None, (y1, x1, y2 - y1, x2 - x1), args.cell_type,
+                    slide_shm_arr=slide_shm_arr, ch_to_slot=ch_to_slot)
 
                 if crop_rgb.size == 0:
                     continue
@@ -1209,41 +1229,14 @@ def run_pipeline(args):
                             # Use masks.shape to handle edge tiles (smaller than tile_size at boundaries)
                             tile_h, tile_w = masks.shape[:2]
                             # Read HTML crops from shared memory (all_channel_data freed after shm creation)
-                            if args.cell_type == 'islet' and hasattr(args, 'islet_display_chs'):
-                                # Islet: display channels from --islet-display-channels (R, G, B)
-                                _islet_disp = args.islet_display_chs
-                                _shm_dtype = slide_shm_arr.dtype
-                                rgb_channels = []
-                                for _ci in range(3):
-                                    if _ci < len(_islet_disp) and _islet_disp[_ci] in ch_to_slot:
-                                        rgb_channels.append(
-                                            slide_shm_arr[rel_ty:rel_ty+tile_h, rel_tx:rel_tx+tile_w, ch_to_slot[_islet_disp[_ci]]]
-                                        )
-                                    else:
-                                        rgb_channels.append(np.zeros((tile_h, tile_w), dtype=_shm_dtype))
-                                tile_rgb_html = np.stack(rgb_channels, axis=-1)
+                            _disp_chs = None
+                            if args.cell_type == 'islet':
+                                _disp_chs = getattr(args, 'islet_display_chs', None)
                             elif args.cell_type == 'tissue_pattern':
-                                # Tissue pattern: configurable R/G/B display channels
-                                tp_disp = getattr(args, 'tp_display_channels_list', [0, 3, 1])
-                                _shm_dtype = slide_shm_arr.dtype
-                                rgb_channels = []
-                                for _ci in range(3):
-                                    if _ci < len(tp_disp) and tp_disp[_ci] in ch_to_slot:
-                                        rgb_channels.append(
-                                            slide_shm_arr[rel_ty:rel_ty+tile_h, rel_tx:rel_tx+tile_w, ch_to_slot[tp_disp[_ci]]]
-                                        )
-                                    else:
-                                        rgb_channels.append(np.zeros((tile_h, tile_w), dtype=_shm_dtype))
-                                tile_rgb_html = np.stack(rgb_channels, axis=-1)
-                            elif n_channels >= 3:
-                                tile_rgb_html = np.stack([
-                                    slide_shm_arr[rel_ty:rel_ty+tile_h, rel_tx:rel_tx+tile_w, i]
-                                    for i in range(3)
-                                ], axis=-1)
-                            else:
-                                tile_rgb_html = np.stack([
-                                    slide_shm_arr[rel_ty:rel_ty+tile_h, rel_tx:rel_tx+tile_w, 0]
-                                ] * 3, axis=-1)
+                                _disp_chs = getattr(args, 'tp_display_channels_list', [0, 3, 1])
+                            tile_rgb_html = compose_tile_rgb(
+                                _disp_chs, (rel_ty, rel_tx, tile_h, tile_w), args.cell_type,
+                                slide_shm_arr=slide_shm_arr, ch_to_slot=ch_to_slot)
 
                             tile_pct = _compute_tile_percentiles(tile_rgb_html) if getattr(args, 'html_normalization', 'crop') == 'tile' else None
 
@@ -1263,7 +1256,7 @@ def run_pipeline(args):
                                 result['features_list'] = None
                                 gc.collect()
                             else:
-                                _max_html = getattr(args, 'max_html_samples', 20000)
+                                _max_html = args.max_html_samples
                                 if _max_html > 0 and len(all_samples) >= _max_html:
                                     if len(all_samples) == _max_html:
                                         logger.info(f"HTML sample cap reached ({_max_html}). "
@@ -1298,27 +1291,8 @@ def run_pipeline(args):
 
                 # Deferred HTML generation for islet (needs population-level marker thresholds)
                 if deferred_html_tiles and args.cell_type == 'islet':
-                    _islet_mm = getattr(args, 'islet_marker_map', None)
-                    _marker_top_pct = getattr(args, 'marker_top_pct', 5)
-                    _pct_chs_str = getattr(args, 'marker_pct_channels', 'sst')
-                    _pct_channels = set(s.strip() for s in _pct_chs_str.split(',')) if _pct_chs_str else set()
-                    _gmm_p = getattr(args, 'gmm_p_cutoff', 0.75)
-                    _ratio_min = getattr(args, 'ratio_min', 1.5)
-                    marker_thresholds = compute_islet_marker_thresholds(
-                        all_detections, marker_map=_islet_mm,
-                        marker_top_pct=_marker_top_pct,
-                        pct_channels=_pct_channels,
-                        gmm_p_cutoff=_gmm_p,
-                        ratio_min=_ratio_min) if all_detections else None
-                    # Add marker_class to each detection for JSON export
-                    if marker_thresholds:
-                        counts = {}
-                        for det in all_detections:
-                            mc, _ = classify_islet_marker(
-                                det.get('features', {}), marker_thresholds, marker_map=_islet_mm)
-                            det['marker_class'] = mc
-                            counts[mc] = counts.get(mc, 0) + 1
-                        logger.info(f"Islet marker classification: {counts}")
+                    marker_thresholds, _islet_mm = compute_and_apply_islet_markers(
+                        args, all_detections)
                     uid_to_marker = {d.get('uid', ''): d.get('marker_class') for d in all_detections}
                     try:
                         for dt in deferred_html_tiles:
@@ -1388,7 +1362,7 @@ def run_pipeline(args):
         logger.info(f"Cross-tile vessel merge: {n_partials} partial vessels from {n_tiles_with} tiles")
         merge_strategy = VesselStrategy()
         merge_strategy.import_partial_vessels(collected_partial_vessels)
-        tile_overlap_px = int(args.tile_size * getattr(args, 'tile_overlap', 0.10))
+        tile_overlap_px = int(args.tile_size * args.tile_overlap)
         merged_vessels = merge_strategy.merge_cross_tile_vessels(
             tile_size=args.tile_size,
             overlap=tile_overlap_px,
@@ -1436,7 +1410,7 @@ def run_pipeline(args):
     # Deduplication: tile overlap causes same detection in adjacent tiles
     # Uses actual mask pixel overlap (loads HDF5 mask files) for accurate dedup
     # Skip for multiscale -- already deduped by contour IoU in merge_detections_across_scales()
-    if not is_multiscale and getattr(args, 'tile_overlap', 0) > 0 and len(all_detections) > 0:
+    if not is_multiscale and args.tile_overlap > 0 and len(all_detections) > 0:
         from segmentation.processing.deduplication import deduplicate_by_mask_overlap
         pre_dedup = len(all_detections)
         mask_fn = f'{args.cell_type}_masks.h5'
@@ -1460,7 +1434,7 @@ def run_pipeline(args):
 
     # ---- Post-dedup: contour dilation + feature re-extraction + bg correction ----
     if len(all_detections) > 0 and (
-        getattr(args, 'contour_processing', True) or getattr(args, 'background_correction', True)
+        args.contour_processing or args.background_correction
     ):
         from segmentation.pipeline.post_detection import process_detections_post_dedup
         mask_fn = f'{args.cell_type}_masks.h5'
@@ -1480,11 +1454,10 @@ def run_pipeline(args):
             ch_to_slot=ch_to_slot,
             x_start=x_start,
             y_start=y_start,
-            display_channels=_display_chs,
-            contour_processing=getattr(args, 'contour_processing', True),
+            contour_processing=args.contour_processing,
             dilation_um=getattr(args, 'dilation_um', 0.5),
             rdp_epsilon=getattr(args, 'rdp_epsilon', 5.0),
-            background_correction=getattr(args, 'background_correction', True),
+            background_correction=args.background_correction,
             bg_neighbors=getattr(args, 'bg_neighbors', 30),
         )
 
@@ -1494,7 +1467,7 @@ def run_pipeline(args):
         logger.info(f"Checkpoint: saved {len(all_detections)} post-dedup detections to {_postdedup_file.name}")
 
     # ---- Subsample HTML samples by fraction (after dedup, before export) ----
-    _html_frac = getattr(args, 'html_sample_fraction', 0)
+    _html_frac = args.html_sample_fraction
     if _html_frac > 0 and len(all_samples) > 0 and len(all_detections) > 0:
         import random
         target = max(100, int(len(all_detections) * _html_frac))
@@ -1513,23 +1486,8 @@ def run_pipeline(args):
             is_multiscale=is_multiscale, detector=detector,
         )
     finally:
-        # OME-Zarr export before SHM cleanup (reads preprocessed data from SHM)
-        if getattr(args, 'ome_zarr', True):
-            try:
-                from segmentation.io.ome_zarr_export import export_shm_to_ome_zarr
-                zarr_path = slide_output_dir / f"{slide_name}.ome.zarr"
-                export_shm_to_ome_zarr(
-                    shm_array=slide_shm_arr,
-                    ch_to_slot=ch_to_slot,
-                    pixel_size_um=pixel_size_um,
-                    output_path=zarr_path,
-                    czi_path=str(czi_path),
-                    pyramid_levels=getattr(args, 'zarr_levels', 5),
-                    overwrite=getattr(args, 'force_zarr', False),
-                )
-            except Exception as e:
-                logger.warning(f"OME-Zarr export failed (non-fatal): {e}")
-
+        _maybe_export_ome_zarr(args, slide_shm_arr, ch_to_slot, pixel_size_um,
+                               slide_output_dir, slide_name, czi_path)
         # All SHM-dependent work is done — safe to free shared memory
         shm_manager.cleanup()
 

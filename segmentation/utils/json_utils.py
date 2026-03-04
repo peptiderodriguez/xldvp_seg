@@ -77,21 +77,15 @@ def sanitize_for_json(obj):
     return obj
 
 
-def atomic_json_dump(data, filepath, cls=NumpyEncoder, sanitize=True):
+def atomic_json_dump(data, filepath, sanitize=True):
     """Write JSON atomically: temp file + os.replace() to prevent partial writes.
-
-    A SLURM timeout or OOM during a direct json.dump() leaves a partially-written
-    file. On resume, the pipeline finds the corrupt file and either crashes or
-    silently loses hours of work. This function writes to a temp file first,
-    then atomically replaces the target — so the file either contains the complete
-    data or does not exist at all.
 
     Args:
         data: Python object to serialize.
         filepath: Target path (str or Path).
-        cls: JSON encoder class (default: NumpyEncoder).
         sanitize: If True, run sanitize_for_json() first to replace Python
-            float('nan')/float('inf') with None (default: True).
+            float('nan')/float('inf') with None and convert numpy types
+            (default: True).
     """
     filepath = Path(filepath)
     filepath.parent.mkdir(parents=True, exist_ok=True)
@@ -102,16 +96,13 @@ def atomic_json_dump(data, filepath, cls=NumpyEncoder, sanitize=True):
     fd, tmp_path = tempfile.mkstemp(dir=filepath.parent, suffix='.tmp')
     try:
         if _HAS_ORJSON:
-            # orjson handles numpy types natively and is 3-5x faster.
-            # It writes bytes, not str, so open in binary mode.
             with os.fdopen(fd, 'wb') as f:
                 f.write(orjson.dumps(data, option=orjson.OPT_SERIALIZE_NUMPY))
         else:
             with os.fdopen(fd, 'w') as f:
-                json.dump(data, f, cls=cls)
+                json.dump(data, f, cls=None if sanitize else NumpyEncoder)
         os.replace(tmp_path, filepath)
     except BaseException:
-        # Clean up temp file on any failure (including KeyboardInterrupt)
         try:
             os.unlink(tmp_path)
         except OSError:

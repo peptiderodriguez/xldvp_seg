@@ -59,52 +59,25 @@ def _gpu_worker(
     input_queue,
     output_queue,
     stop_event,
-    slide_info: Dict[str, Dict[str, Any]],
-    cell_type: str,
-    strategy_params: Dict[str, Any],
-    classifier_path: Optional[str],
-    pixel_size_um: float,
-    extract_deep_features: bool = False,
-    extract_sam2_embeddings: bool = True,
-    detection_channel: int = 1,
-    sam2_checkpoint: Optional[str] = None,
-    sam2_config: str = "configs/sam2.1/sam2.1_hiera_l.yaml",
-    cd31_channel: Optional[int] = None,
-    channel_names: Optional[Dict[int, str]] = None,
-    variance_threshold: float = 1000.0,
-    channel_keys: Optional[List[int]] = None,
-    islet_display_channels: Optional[List[int]] = None,
-    tiles_dir: Optional[str] = None,
+    config: Dict[str, Any],
 ):
-    """
-    Generic GPU worker for any cell type.
+    slide_info = config['slide_info']
+    cell_type = config['cell_type']
+    strategy_params = config['strategy_params']
+    classifier_path = config.get('classifier_path')
+    pixel_size_um = config['pixel_size_um']
+    extract_deep_features = config.get('extract_deep_features', False)
+    extract_sam2_embeddings = config.get('extract_sam2_embeddings', True)
+    detection_channel = config.get('detection_channel', 1)
+    sam2_checkpoint = config.get('sam2_checkpoint')
+    sam2_config = config.get('sam2_config', "configs/sam2.1/sam2.1_hiera_l.yaml")
+    cd31_channel = config.get('cd31_channel')
+    channel_names = config.get('channel_names')
+    variance_threshold = config.get('variance_threshold', 1000.0)
+    channel_keys = config.get('channel_keys')
+    islet_display_channels = config.get('islet_display_channels')
+    tiles_dir = config.get('tiles_dir')
 
-    Each worker:
-    1. Pins to assigned GPU
-    2. Loads models appropriate for the cell type
-    3. Creates strategy via create_strategy_for_cell_type()
-    4. Processes tiles from shared memory via queue using process_single_tile()
-
-    Args:
-        gpu_id: Which GPU this worker owns
-        input_queue: Queue of (slide_name, tile_dict) tuples
-        output_queue: Queue for results
-        stop_event: Event to signal shutdown
-        slide_info: Dict mapping slide_name -> {shm_name, shape, dtype}
-        cell_type: 'nmj', 'mk', 'cell', 'vessel', 'mesothelium'
-        strategy_params: Strategy-specific parameters
-        classifier_path: Path to classifier (.pkl/.joblib/.pth), or None
-        pixel_size_um: Pixel size for area calculations
-        extract_deep_features: Whether to load ResNet+DINOv2 (default False)
-        extract_sam2_embeddings: Whether to extract SAM2 embeddings
-        detection_channel: Which channel for tissue detection (default 1)
-        sam2_checkpoint: Path to SAM2 checkpoint
-        variance_threshold: Variance threshold for tissue detection (default 1000.0)
-        sam2_config: SAM2 config file
-        cd31_channel: Optional channel index for CD31 (vessel validation)
-        channel_names: Optional channel name mapping for vessels
-        tiles_dir: Output tiles directory for saving masks to disk (avoids sending through queue)
-    """
     os.environ['CUDA_VISIBLE_DEVICES'] = str(gpu_id)
 
     import torch
@@ -628,6 +601,25 @@ class MultiGPUTileProcessor:
 
         errors = []
 
+        worker_config = {
+            'slide_info': self.slide_info,
+            'cell_type': self.cell_type,
+            'strategy_params': self.strategy_params,
+            'classifier_path': self.classifier_path,
+            'pixel_size_um': self.pixel_size_um,
+            'extract_deep_features': self.extract_deep_features,
+            'extract_sam2_embeddings': self.extract_sam2_embeddings,
+            'detection_channel': self.detection_channel,
+            'sam2_checkpoint': local_checkpoint,
+            'sam2_config': self.sam2_config,
+            'cd31_channel': self.cd31_channel,
+            'channel_names': self.channel_names,
+            'variance_threshold': self.variance_threshold,
+            'channel_keys': self.channel_keys,
+            'islet_display_channels': self.islet_display_channels,
+            'tiles_dir': self.tiles_dir,
+        }
+
         for gpu_id in range(self.num_gpus):
             p = Process(
                 target=_gpu_worker,
@@ -636,22 +628,7 @@ class MultiGPUTileProcessor:
                     self.input_queue,
                     self.output_queue,
                     self.stop_event,
-                    self.slide_info,
-                    self.cell_type,
-                    self.strategy_params,
-                    self.classifier_path,
-                    self.pixel_size_um,
-                    self.extract_deep_features,
-                    self.extract_sam2_embeddings,
-                    self.detection_channel,
-                    local_checkpoint,
-                    self.sam2_config,
-                    self.cd31_channel,
-                    self.channel_names,
-                    self.variance_threshold,
-                    self.channel_keys,
-                    self.islet_display_channels,
-                    self.tiles_dir,
+                    worker_config,
                 ),
                 daemon=True,
             )

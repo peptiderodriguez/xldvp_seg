@@ -140,21 +140,6 @@ def preflight_check(
     pyramid_levels: int,
     chunk_size: int,
 ) -> Dict:
-    """
-    Pre-flight validation of CZI before conversion.
-
-    Performs:
-    1. Structure validation
-    2. Test read of a small region
-    3. Output size estimation
-    4. Disk space check
-
-    Returns:
-        Dict with validation results and estimates
-
-    Raises:
-        ValueError: If validation fails
-    """
     results = {
         'valid': True,
         'warnings': [],
@@ -163,14 +148,6 @@ def preflight_check(
     }
 
     bbox = mosaic_info['bbox']
-    n_channels = len(channels)
-
-    logger.info("=" * 60)
-    logger.info("PRE-FLIGHT CHECK")
-    logger.info("=" * 60)
-
-    # 1. Validate mosaic structure
-    logger.info("\n[1/4] Validating mosaic structure...")
 
     if bbox['w'] <= 0 or bbox['h'] <= 0:
         results['errors'].append(f"Invalid bounding box: {bbox['w']}x{bbox['h']}")
@@ -180,138 +157,28 @@ def preflight_check(
         results['errors'].append("No mosaic tiles found")
         results['valid'] = False
 
-    # Check for unusually small/large dimensions
-    if bbox['w'] > 500000 or bbox['h'] > 500000:
-        results['warnings'].append(
-            f"Very large image ({bbox['w']}x{bbox['h']}). "
-            "Conversion may take several hours."
-        )
-
-    logger.info(f"  Mosaic: {bbox['w']:,} x {bbox['h']:,} pixels")
-    logger.info(f"  Tiles: {mosaic_info['n_tiles']} ({mosaic_info['tiles_per_row']}x{mosaic_info['tiles_per_col']})")
-    logger.info(f"  Tile size: {mosaic_info['nominal_tile_size']}")
-    logger.info(f"  Channels to convert: {channels}")
-
-    # 2. Test read a small region
-    logger.info("\n[2/4] Testing read_mosaic()...")
-
-    test_size = 512
-    test_x = bbox['x']
-    test_y = bbox['y']
-    test_w = min(test_size, bbox['w'])
-    test_h = min(test_size, bbox['h'])
-
+    # Test read a small region to verify CZI is readable
+    test_w = min(512, bbox['w'])
+    test_h = min(512, bbox['h'])
     try:
         test_data = czi.read_mosaic(
-            region=(test_x, test_y, test_w, test_h),
+            region=(bbox['x'], bbox['y'], test_w, test_h),
             scale_factor=1,
             C=channels[0],
-            # Note: do NOT pass S= to read_mosaic on mosaic CZIs — use region= instead
         )
         test_data = np.squeeze(test_data)
-
-        logger.info(f"  Test read successful: {test_data.shape}, dtype={test_data.dtype}")
-
-        # Validate dtype
-        if test_data.dtype not in [np.uint8, np.uint16, np.float32]:
-            results['warnings'].append(
-                f"Unusual dtype: {test_data.dtype}. May need adjustment."
-            )
-
-        # Check for all-zero data (potential read issue)
-        if test_data.max() == 0:
-            results['warnings'].append(
-                "Test region is all zeros. May indicate read issue or empty region."
-            )
-
+        logger.info(f"  Test read OK: {test_data.shape}, dtype={test_data.dtype}")
     except Exception as e:
         results['errors'].append(f"Test read failed: {e}")
         results['valid'] = False
-        logger.error(f"  Test read FAILED: {e}")
 
-    # 3. Estimate output size
-    logger.info("\n[3/4] Estimating output size...")
-
-    # Determine dtype size
-    pixel_type = str(mosaic_info['pixel_type']).lower()
-    if 'uint16' in pixel_type or 'gray16' in pixel_type:
-        bytes_per_pixel = 2
-    elif 'uint8' in pixel_type or 'gray8' in pixel_type:
-        bytes_per_pixel = 1
-    else:
-        bytes_per_pixel = 2  # Default
-
-    # Raw size
-    raw_size_bytes = bbox['w'] * bbox['h'] * n_channels * bytes_per_pixel
-
-    # Pyramid overhead (~33% extra for all levels)
-    pyramid_overhead = 1.33
-
-    # Compression ratio estimate (zstd typically 2-4x for microscopy)
-    compression_ratio = 2.5
-
-    estimated_size_bytes = int(raw_size_bytes * pyramid_overhead / compression_ratio)
-
-    results['estimates'] = {
-        'raw_size_gb': raw_size_bytes / (1024**3),
-        'estimated_output_gb': estimated_size_bytes / (1024**3),
-        'n_strips': (bbox['h'] + 5000 - 1) // 5000,  # Default strip height
-        'n_pyramid_levels': pyramid_levels,
-    }
-
-    logger.info(f"  Raw data size: {results['estimates']['raw_size_gb']:.1f} GB")
-    logger.info(f"  Estimated output: {results['estimates']['estimated_output_gb']:.1f} GB (compressed)")
-    logger.info(f"  Processing strips: {results['estimates']['n_strips']}")
-
-    # 4. Check output path
-    logger.info("\n[4/4] Checking output path...")
-
-    output_parent = output_path.parent
-    if not output_parent.exists():
-        results['errors'].append(f"Output directory does not exist: {output_parent}")
+    if not output_path.parent.exists():
+        results['errors'].append(f"Output directory does not exist: {output_path.parent}")
         results['valid'] = False
-    else:
-        # Check available disk space
-        try:
-            import shutil
-            total, used, free = shutil.disk_usage(output_parent)
-            free_gb = free / (1024**3)
-            needed_gb = results['estimates']['estimated_output_gb'] * 1.2  # 20% buffer
-
-            logger.info(f"  Output directory: {output_parent}")
-            logger.info(f"  Free space: {free_gb:.1f} GB")
-            logger.info(f"  Estimated need: {needed_gb:.1f} GB")
-
-            if free_gb < needed_gb:
-                results['warnings'].append(
-                    f"Low disk space: {free_gb:.1f} GB free, need ~{needed_gb:.1f} GB"
-                )
-        except Exception as e:
-            results['warnings'].append(f"Could not check disk space: {e}")
-
-    if output_path.exists():
-        results['warnings'].append(f"Output path exists: {output_path}")
-
-    # Summary
-    logger.info("\n" + "=" * 60)
 
     if results['errors']:
-        logger.error("ERRORS:")
         for err in results['errors']:
-            logger.error(f"  - {err}")
-        results['valid'] = False
-
-    if results['warnings']:
-        logger.warning("WARNINGS:")
-        for warn in results['warnings']:
-            logger.warning(f"  - {warn}")
-
-    if results['valid']:
-        logger.info("PRE-FLIGHT CHECK: PASSED")
-    else:
-        logger.error("PRE-FLIGHT CHECK: FAILED")
-
-    logger.info("=" * 60 + "\n")
+            logger.error(f"  {err}")
 
     return results
 
@@ -447,7 +314,7 @@ def write_ome_ngff_metadata(
         "name": "image",
         "axes": axes,
         "datasets": datasets,
-        "type": "gaussian",  # Downsampling method
+        "type": "local_mean",
         "metadata": {
             "method": "skimage.transform.downscale_local_mean",
             "version": "0.4"

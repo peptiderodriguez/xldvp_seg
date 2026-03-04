@@ -116,7 +116,6 @@ def create_strategy(
             min_ring_completeness=strategy_params.get('min_ring_completeness', 0.5),
             classify_vessel_types=strategy_params.get('classify_vessel_types', False),
             candidate_mode=strategy_params.get('candidate_mode', False),
-            lumen_first=strategy_params.get('lumen_first', False),
             ring_only=strategy_params.get('ring_only', False),
             smooth_contours=strategy_params.get('smooth_contours', True),
             smooth_contours_factor=strategy_params.get('smooth_contours_factor', 3.0),

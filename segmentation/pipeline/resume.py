@@ -21,6 +21,81 @@ from segmentation.pipeline.samples import _compute_tile_percentiles, filter_and_
 logger = get_logger(__name__)
 
 
+def compose_tile_rgb(display_channels, region, cell_type,
+                     slide_shm_arr=None, ch_to_slot=None,
+                     all_channel_data=None):
+    rel_ty, rel_tx, tile_h, tile_w = region
+    if slide_shm_arr is not None:
+        n_slots = slide_shm_arr.shape[2]
+        if cell_type in ('islet', 'tissue_pattern') and display_channels:
+            dtype = slide_shm_arr.dtype
+            rgb_channels = []
+            for i in range(3):
+                if i < len(display_channels) and display_channels[i] in ch_to_slot:
+                    rgb_channels.append(
+                        slide_shm_arr[rel_ty:rel_ty+tile_h, rel_tx:rel_tx+tile_w, ch_to_slot[display_channels[i]]])
+                else:
+                    rgb_channels.append(np.zeros((tile_h, tile_w), dtype=dtype))
+            return np.stack(rgb_channels, axis=-1)
+        elif n_slots >= 3:
+            return np.stack([
+                slide_shm_arr[rel_ty:rel_ty+tile_h, rel_tx:rel_tx+tile_w, i]
+                for i in range(3)
+            ], axis=-1)
+        else:
+            return np.stack([
+                slide_shm_arr[rel_ty:rel_ty+tile_h, rel_tx:rel_tx+tile_w, 0]
+            ] * 3, axis=-1)
+    else:
+        ch_keys = sorted(all_channel_data.keys())
+        n_channels = len(ch_keys)
+        if cell_type in ('islet', 'tissue_pattern') and display_channels:
+            rgb_channels = []
+            for ch_idx in display_channels[:3]:
+                if ch_idx in all_channel_data:
+                    rgb_channels.append(
+                        all_channel_data[ch_idx][rel_ty:rel_ty+tile_h, rel_tx:rel_tx+tile_w])
+                else:
+                    if not all_channel_data:
+                        raise ValueError("No channel data loaded -- check --channel and CZI file")
+                    dtype = next(iter(all_channel_data.values())).dtype
+                    rgb_channels.append(np.zeros((tile_h, tile_w), dtype=dtype))
+            return np.stack(rgb_channels, axis=-1)
+        elif n_channels >= 3:
+            return np.stack([
+                all_channel_data[ch_keys[i]][rel_ty:rel_ty+tile_h, rel_tx:rel_tx+tile_w]
+                for i in range(3)
+            ], axis=-1)
+        else:
+            return np.stack([
+                all_channel_data[ch_keys[0]][rel_ty:rel_ty+tile_h, rel_tx:rel_tx+tile_w]
+            ] * 3, axis=-1)
+
+
+def compute_and_apply_islet_markers(args, all_detections, label=""):
+    marker_map = getattr(args, 'islet_marker_map', None)
+    top_pct = getattr(args, 'marker_top_pct', 5)
+    pct_chs_str = getattr(args, 'marker_pct_channels', 'sst')
+    pct_channels = set(s.strip() for s in pct_chs_str.split(',')) if pct_chs_str else set()
+    gmm_p = getattr(args, 'gmm_p_cutoff', 0.75)
+    ratio_min = getattr(args, 'ratio_min', 1.5)
+    thresholds = compute_islet_marker_thresholds(
+        all_detections, marker_map=marker_map,
+        marker_top_pct=top_pct,
+        pct_channels=pct_channels,
+        gmm_p_cutoff=gmm_p,
+        ratio_min=ratio_min) if all_detections else None
+    if thresholds:
+        counts = {}
+        for det in all_detections:
+            mc, _ = classify_islet_marker(
+                det.get('features', {}), thresholds, marker_map=marker_map)
+            det['marker_class'] = mc
+            counts[mc] = counts.get(mc, 0) + 1
+        logger.info(f"Islet marker classification{label}: {counts}")
+    return thresholds, marker_map
+
+
 def detect_resume_stage(slide_output_dir, cell_type):
     """Detect which pipeline stages have completed in an existing run directory.
 
@@ -122,26 +197,8 @@ def _resume_generate_html_samples(args, all_detections, tiles_dir,
     marker_thresholds = None
     _islet_mm = None
     if cell_type == 'islet':
-        _islet_mm = getattr(args, 'islet_marker_map', None)
-        _marker_top_pct = getattr(args, 'marker_top_pct', 5)
-        _pct_chs_str = getattr(args, 'marker_pct_channels', 'sst')
-        _pct_channels = set(s.strip() for s in _pct_chs_str.split(',')) if _pct_chs_str else set()
-        _gmm_p = getattr(args, 'gmm_p_cutoff', 0.75)
-        _ratio_min = getattr(args, 'ratio_min', 1.5)
-        marker_thresholds = compute_islet_marker_thresholds(
-            all_detections, marker_map=_islet_mm,
-            marker_top_pct=_marker_top_pct,
-            pct_channels=_pct_channels,
-            gmm_p_cutoff=_gmm_p,
-            ratio_min=_ratio_min) if all_detections else None
-        if marker_thresholds:
-            counts = {}
-            for det in all_detections:
-                mc, _ = classify_islet_marker(
-                    det.get('features', {}), marker_thresholds, marker_map=_islet_mm)
-                det['marker_class'] = mc
-                counts[mc] = counts.get(mc, 0) + 1
-            logger.info(f"Islet marker classification (resume): {counts}")
+        marker_thresholds, _islet_mm = compute_and_apply_islet_markers(
+            args, all_detections, label=" (resume)")
 
     # Sample if max_html_samples set
     _max_html = getattr(args, 'max_html_samples', 20000)
@@ -204,33 +261,10 @@ def _resume_generate_html_samples(args, all_detections, tiles_dir,
                            f"({x_start}, {y_start}), skipping HTML for this tile")
             continue
         tile_h, tile_w = masks.shape[:2]
-        ch_keys = sorted(all_channel_data.keys())
-        n_channels = len(ch_keys)
 
-        if cell_type in ('islet', 'tissue_pattern'):
-            # Use configured display channels (keep uint16 for low-signal fluorescence)
-            rgb_channels = []
-            for ch_idx in display_chs[:3]:
-                if ch_idx in all_channel_data:
-                    rgb_channels.append(
-                        all_channel_data[ch_idx][rel_ty:rel_ty+tile_h, rel_tx:rel_tx+tile_w])
-                else:
-                    if not all_channel_data:
-                        raise ValueError("No channel data loaded -- check --channel and CZI file")
-                    _dtype = next(iter(all_channel_data.values())).dtype
-                    rgb_channels.append(np.zeros((tile_h, tile_w), dtype=_dtype))
-            tile_rgb = np.stack(rgb_channels, axis=-1)
-        elif n_channels >= 3:
-            # Standard 3-channel: first 3 loaded channels -> R,G,B
-            tile_rgb = np.stack([
-                all_channel_data[ch_keys[i]][rel_ty:rel_ty+tile_h, rel_tx:rel_tx+tile_w]
-                for i in range(3)
-            ], axis=-1)
-        else:
-            # Single channel: duplicate to RGB
-            tile_rgb = np.stack([
-                all_channel_data[ch_keys[0]][rel_ty:rel_ty+tile_h, rel_tx:rel_tx+tile_w]
-            ] * 3, axis=-1)
+        tile_rgb = compose_tile_rgb(
+            display_chs, (rel_ty, rel_tx, tile_h, tile_w), cell_type,
+            all_channel_data=all_channel_data)
 
         if tile_rgb.size == 0:
             continue

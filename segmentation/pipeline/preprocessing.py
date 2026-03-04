@@ -138,31 +138,21 @@ def _apply_reinhard_normalization(args, all_channel_data, loader):
         logger.info(f"  Computed from {norm_params['n_slides']} slides, {norm_params.get('n_total_pixels', '?')} pixels")
 
     # Build RGB image for normalization
+    # Loader produces individual 2D channels — primary_data is always 2D.
     primary_data = loader.channel_data
-    if primary_data.ndim == 3 and primary_data.shape[2] >= 3:
-        # Already RGB (or more channels) -- use first 3 (view, not copy)
-        rgb_for_norm = primary_data[:, :, :3]
-        # Convert to uint8 if needed (Reinhard expects uint8)
-        if rgb_for_norm.dtype == np.uint16:
-            logger.info(f"  Converting uint16 -> uint8 for normalization ({rgb_for_norm.nbytes / 1e9:.1f} GB)")
-            rgb_for_norm = (rgb_for_norm >> 8).astype(np.uint8)
-        elif rgb_for_norm.dtype != np.uint8:
-            from segmentation.utils.detection_utils import safe_to_uint8
-            rgb_for_norm = safe_to_uint8(rgb_for_norm)
-    elif primary_data.ndim == 2:
-        # Single channel: convert to uint8 FIRST, then stack 3x.
-        # This avoids creating a 3-channel uint16 copy (3x memory waste).
-        single_u8 = primary_data
-        if single_u8.dtype == np.uint16:
-            logger.info(f"  Converting single-channel uint16 -> uint8 before stacking ({single_u8.nbytes / 1e9:.1f} GB)")
-            single_u8 = (single_u8 >> 8).astype(np.uint8)
-        elif single_u8.dtype != np.uint8:
-            from segmentation.utils.detection_utils import safe_to_uint8
-            single_u8 = safe_to_uint8(single_u8)
-        rgb_for_norm = np.stack([single_u8] * 3, axis=-1)
-        del single_u8
-    else:
+    if primary_data.ndim != 2:
         raise ValueError(f"Unexpected channel data shape for normalization: {primary_data.shape}")
+    # Single channel: convert to uint8 FIRST, then stack 3x.
+    # This avoids creating a 3-channel uint16 copy (3x memory waste).
+    single_u8 = primary_data
+    if single_u8.dtype == np.uint16:
+        logger.info(f"  Converting single-channel uint16 -> uint8 before stacking ({single_u8.nbytes / 1e9:.1f} GB)")
+        single_u8 = (single_u8 >> 8).astype(np.uint8)
+    elif single_u8.dtype != np.uint8:
+        from segmentation.utils.detection_utils import safe_to_uint8
+        single_u8 = safe_to_uint8(single_u8)
+    rgb_for_norm = np.stack([single_u8] * 3, axis=-1)
+    del single_u8
 
     logger.info(f"  RGB shape: {rgb_for_norm.shape}, dtype: {rgb_for_norm.dtype} ({rgb_for_norm.nbytes / 1e9:.1f} GB)")
     logger.info(f"  Applying Reinhard normalization (this normalizes tissue blocks, preserves background)...")
@@ -173,27 +163,12 @@ def _apply_reinhard_normalization(args, all_channel_data, loader):
 
     # Update channel data with normalized values.
     # Use np.copyto to write back into existing arrays (may be SHM views).
-    if primary_data.ndim == 3 and primary_data.shape[2] >= 3:
-        # RGB CZI: split normalized RGB back to individual 2D SHM views.
-        # Cannot copyto a 3D array into a 2D view — must split channels.
-        ch_keys_r = sorted(all_channel_data.keys())
-        if len(ch_keys_r) >= 3 and ch_keys_r[:3] == [0, 1, 2]:
-            for i in range(3):
-                np.copyto(all_channel_data[i], normalized_rgb[:, :, i])
-                if hasattr(loader, 'set_channel_data'):
-                    loader.set_channel_data(i, all_channel_data[i])
-        else:
-            # Fallback: write first RGB channel to primary channel
-            np.copyto(all_channel_data[args.channel], normalized_rgb[:, :, 0])
-            if hasattr(loader, 'set_channel_data'):
-                loader.set_channel_data(args.channel, all_channel_data[args.channel])
-    else:
-        # Single channel -- take first channel from normalized RGB
-        normalized_single = normalized_rgb[:, :, 0]
-        np.copyto(all_channel_data[args.channel], normalized_single)
-        if hasattr(loader, 'set_channel_data'):
-            loader.set_channel_data(args.channel, all_channel_data[args.channel])
-        del normalized_single
+    # Single channel -- take first channel from normalized RGB
+    normalized_single = normalized_rgb[:, :, 0]
+    np.copyto(all_channel_data[args.channel], normalized_single)
+    if hasattr(loader, 'set_channel_data'):
+        loader.set_channel_data(args.channel, all_channel_data[args.channel])
+    del normalized_single
 
     del normalized_rgb
     gc.collect()

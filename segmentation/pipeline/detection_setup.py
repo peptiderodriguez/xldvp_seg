@@ -12,30 +12,6 @@ from segmentation.utils.logging import get_logger
 logger = get_logger(__name__)
 
 
-def create_strategy_for_cell_type(cell_type, params, pixel_size_um):
-    """Create the appropriate detection strategy for a cell type.
-
-    Args:
-        cell_type: One of 'nmj', 'mk', 'cell', 'vessel', 'mesothelium', 'islet', 'tissue_pattern'
-        params: Cell-type specific parameters dict
-        pixel_size_um: Pixel size in microns
-
-    Returns:
-        DetectionStrategy instance
-
-    Raises:
-        ValueError: If cell_type is not supported by the new strategy pattern
-    """
-    from segmentation.processing.strategy_factory import create_strategy
-    return create_strategy(
-        cell_type=cell_type,
-        strategy_params=params,
-        extract_deep_features=params.get('extract_deep_features', False),
-        extract_sam2_embeddings=params.get('extract_sam2_embeddings', True),
-        pixel_size_um=pixel_size_um,
-    )
-
-
 def apply_vessel_classifiers(features_list, vessel_classifier, vessel_type_classifier):
     """Apply vessel binary + 6-class classifiers to detection features in-place."""
     from segmentation.classification.vessel_classifier import VesselClassifier
@@ -197,7 +173,6 @@ def build_detection_params(args, pixel_size_um):
             'use_ml_classification': args.use_ml_classification,
             'vessel_classifier_path': args.vessel_classifier_path,
             'candidate_mode': args.candidate_mode,
-            'lumen_first': getattr(args, 'lumen_first', False),
             'ring_only': getattr(args, 'ring_only', False),
             'parallel_detection': getattr(args, 'parallel_detection', False),
             'parallel_workers': getattr(args, 'parallel_workers', 3),

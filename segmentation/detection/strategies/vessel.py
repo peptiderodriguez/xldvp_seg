@@ -268,15 +268,12 @@ class VesselStrategy(DetectionStrategy, MultiChannelFeatureMixin):
         multi_marker: bool = False,
         # IoU threshold for merging overlapping candidates from different markers
         merge_iou_threshold: float = 0.5,
-        # Lumen-first detection mode - finds dark lumens first, validates bright wall
-        lumen_first: bool = False,
         # Disable supplementary lumen-first pass (ring detection only)
         ring_only: bool = False,
         # Contour smoothing - removes stair-step artifacts from coarse-scale detection
         smooth_contours: bool = True,
         smooth_contours_factor: float = 3.0,
     ):
-        self._lumen_first = lumen_first
         self.candidate_mode = candidate_mode
         self.smooth_contours = smooth_contours
         self.smooth_contours_factor = smooth_contours_factor
@@ -336,14 +333,6 @@ class VesselStrategy(DetectionStrategy, MultiChannelFeatureMixin):
         if multi_marker and not parallel_detection:
             self.parallel_detection = True
             logger.info("Multi-marker mode: auto-enabled parallel_detection")
-
-        # Legacy lumen-first flag: now a no-op since supplementary lumen-first always runs
-        if self._lumen_first:
-            logger.info(
-                "--lumen-first is deprecated: supplementary lumen-first detection runs by default. "
-                "Use --ring-only to disable it."
-            )
-        self.lumen_first = False  # No longer used for branching
 
         # Ring-only mode: disable supplementary lumen-first pass
         self.ring_only = ring_only

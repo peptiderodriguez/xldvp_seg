@@ -354,22 +354,15 @@ def create_sample_from_detection(tile_x, tile_y, tile_rgb, masks, feat, pixel_si
         return None
 
     mask = masks == det_num
-    if mask.sum() == 0:
+    ys, xs = np.where(mask)
+    if len(ys) == 0:
         return None
 
-    # Get centroid (with fallback to mask centroid)
     center = feat.get('center')
     if center is not None and len(center) >= 2:
         cx, cy = float(center[0]), float(center[1])
     else:
-        ys, xs = np.where(mask)
         cx, cy = float(np.mean(xs)), float(np.mean(ys))
-
-    # Calculate crop size based on mask bounding box
-    # Crop should be 100% larger than mask (mask fills ~50% of crop)
-    ys, xs = np.where(mask)
-    if len(ys) == 0 or len(xs) == 0:
-        return None
     mask_h = ys.max() - ys.min()
     mask_w = xs.max() - xs.min()
     mask_size = max(mask_h, mask_w)

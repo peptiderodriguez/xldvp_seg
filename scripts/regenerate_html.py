@@ -429,13 +429,13 @@ def main():
     pixel_size_um = args.pixel_size or loader.get_pixel_size()
 
     channel_arrays = {}
-    channel_arrays[channels_to_load[0]] = loader.channel_data
-    logger.info(f"  Channel {channels_to_load[0]} loaded: {loader.channel_data.nbytes / 1e9:.1f} GB")
+    channel_arrays[channels_to_load[0]] = loader.get_channel_data(channels_to_load[0])
+    logger.info(f"  Channel {channels_to_load[0]} loaded: {channel_arrays[channels_to_load[0]].nbytes / 1e9:.1f} GB")
 
     for ch in channels_to_load[1:]:
-        ch_loader = get_loader(czi_path, load_to_ram=True, channel=ch, scene=args.scene)
-        channel_arrays[ch] = ch_loader.channel_data
-        logger.info(f"  Channel {ch} loaded: {ch_loader.channel_data.nbytes / 1e9:.1f} GB")
+        get_loader(czi_path, load_to_ram=True, channel=ch, scene=args.scene)
+        channel_arrays[ch] = loader.get_channel_data(ch)
+        logger.info(f"  Channel {ch} loaded: {channel_arrays[ch].nbytes / 1e9:.1f} GB")
 
     # Islet marker thresholds
     marker_thresholds = None

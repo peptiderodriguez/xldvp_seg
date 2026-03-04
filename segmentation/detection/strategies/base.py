@@ -419,40 +419,24 @@ class DetectionStrategy(ABC):
             logger.debug(f"Failed to extract SAM2 embedding at ({cx}, {cy}): {e}")
             return np.zeros(SAM2_EMBEDDING_DIM)
 
-    def _extract_resnet_features_batch(
+    def _extract_embedding_batch(
         self,
         crops: List[np.ndarray],
         model,
         transform,
         device,
-        batch_size: int = 32
+        feature_dim: int,
+        batch_size: int = 32,
+        squeeze_spatial: bool = False,
     ) -> List[np.ndarray]:
-        """
-        Extract ResNet features for multiple crops in batches.
-
-        Batch processing improves GPU utilization by processing multiple
-        crops at once rather than one at a time.
-
-        Args:
-            crops: List of image crops as numpy arrays
-            model: ResNet model (nn.Sequential ending before FC layer)
-            transform: Torchvision transform for preprocessing
-            device: Torch device to use
-            batch_size: Batch size for processing
-
-        Returns:
-            List of 2048D feature vectors as numpy arrays
-        """
         import torch
         from PIL import Image
 
         if not crops:
             return []
 
-        # Validate batch_size
         if batch_size is None or batch_size < 1:
             batch_size = 32
-            logger.debug(f"Invalid batch_size, using default: {batch_size}")
 
         all_features = []
 
@@ -461,13 +445,10 @@ class DetectionStrategy(ABC):
             batch_tensors = []
             valid_indices = []
 
-            # Preprocess each crop
             for idx, crop in enumerate(batch_crops):
                 try:
-                    # Safe float/uint16 -> uint8 conversion
                     crop = _safe_to_uint8(crop)
 
-                    # Ensure RGB format
                     if crop.ndim == 2:
                         crop = np.stack([crop, crop, crop], axis=-1)
                     elif crop.shape[-1] != 3:
@@ -488,24 +469,38 @@ class DetectionStrategy(ABC):
 
                 with torch.no_grad():
                     features = model(batch_tensor)
-                    features = features.squeeze(-1).squeeze(-1)
+                    if squeeze_spatial:
+                        features = features.squeeze(-1).squeeze(-1)
                     features = features.cpu().numpy()
 
-                # Map features back to correct indices
-                # Convert to set for O(1) lookup instead of O(n) list scan
-                valid_indices_set = set(valid_indices)
+                valid_set = set(valid_indices)
                 feature_idx = 0
                 for idx in range(len(batch_crops)):
-                    if idx in valid_indices_set:
+                    if idx in valid_set:
                         all_features.append(features[feature_idx])
                         feature_idx += 1
                     else:
-                        all_features.append(np.zeros(RESNET50_FEATURE_DIM))
+                        all_features.append(np.zeros(feature_dim))
             else:
                 for _ in batch_crops:
-                    all_features.append(np.zeros(RESNET50_FEATURE_DIM))
+                    all_features.append(np.zeros(feature_dim))
 
         return all_features
+
+    def _extract_resnet_features_batch(
+        self,
+        crops: List[np.ndarray],
+        model,
+        transform,
+        device,
+        batch_size: int = 32
+    ) -> List[np.ndarray]:
+        return self._extract_embedding_batch(
+            crops, model, transform, device,
+            feature_dim=RESNET50_FEATURE_DIM,
+            batch_size=batch_size,
+            squeeze_spatial=True,
+        )
 
     def _extract_dinov2_features_batch(
         self,
@@ -515,76 +510,12 @@ class DetectionStrategy(ABC):
         device,
         batch_size: int = 32
     ) -> List[np.ndarray]:
-        """
-        Extract DINOv2 features for multiple crops in batches.
-
-        Args:
-            crops: List of image crops as numpy arrays
-            model: DINOv2 model
-            transform: Torchvision transform for preprocessing
-            device: Torch device to use
-            batch_size: Batch size for processing
-
-        Returns:
-            List of 1024D feature vectors as numpy arrays (for ViT-L/14)
-        """
-        import torch
-        from PIL import Image
-
-        if not crops:
-            return []
-
-        if batch_size is None or batch_size < 1:
-            batch_size = 32
-
-        all_features = []
-
-        for i in range(0, len(crops), batch_size):
-            batch_crops = crops[i:i + batch_size]
-            batch_tensors = []
-            valid_indices = []
-
-            for idx, crop in enumerate(batch_crops):
-                try:
-                    # Safe float/uint16 -> uint8 conversion
-                    crop = _safe_to_uint8(crop)
-
-                    if crop.ndim == 2:
-                        crop = np.stack([crop, crop, crop], axis=-1)
-                    elif crop.shape[-1] != 3:
-                        crop = np.ascontiguousarray(crop[..., :3])
-
-                    if crop.size == 0:
-                        continue
-
-                    pil_img = Image.fromarray(crop, mode='RGB')
-                    tensor = transform(pil_img)
-                    batch_tensors.append(tensor)
-                    valid_indices.append(idx)
-                except Exception as e:
-                    logger.debug(f"Failed to preprocess crop for DINOv2 {idx}: {e}")
-
-            if batch_tensors:
-                batch_tensor = torch.stack(batch_tensors).to(device)
-
-                with torch.no_grad():
-                    # DINOv2 returns CLS token features directly
-                    features = model(batch_tensor).cpu().numpy()
-
-                # Convert to set for O(1) lookup instead of O(n) list scan
-                valid_indices_set = set(valid_indices)
-                feature_idx = 0
-                for idx in range(len(batch_crops)):
-                    if idx in valid_indices_set:
-                        all_features.append(features[feature_idx])
-                        feature_idx += 1
-                    else:
-                        all_features.append(np.zeros(DINOV2_FEATURE_DIM))
-            else:
-                for _ in batch_crops:
-                    all_features.append(np.zeros(DINOV2_FEATURE_DIM))
-
-        return all_features
+        return self._extract_embedding_batch(
+            crops, model, transform, device,
+            feature_dim=DINOV2_FEATURE_DIM,
+            batch_size=batch_size,
+            squeeze_spatial=False,
+        )
 
     def _percentile_normalize(
         self,

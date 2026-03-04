@@ -34,7 +34,7 @@ REPO = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(REPO))
 
 from segmentation.utils.logging import get_logger, setup_logging
-from segmentation.utils.json_utils import NumpyEncoder
+
 from segmentation.utils.detection_utils import (
     load_detections,
     extract_feature_matrix,
@@ -174,7 +174,7 @@ def parse_marker_filter(filter_str):
 def save_enriched_detections(detections, output_path):
     """Save detections with enriched fields to JSON (no indent, timestamped)."""
     from segmentation.utils.timestamps import save_with_timestamp
-    save_with_timestamp(output_path, detections, fmt='json', json_encoder=NumpyEncoder)
+    save_with_timestamp(output_path, detections, fmt='json')
     logger.info(f"Saved enriched detections ({len(detections):,} entries)")
 
 
@@ -545,20 +545,14 @@ def run_spatial_network(detections, output_dir, *,
         density = n_cells / hull_area if hull_area > 0 else float('nan')
 
         # Graph diameter (longest shortest path)
-        # Use double-BFS approximation for large components to avoid O(N^2)
-        if n_cells <= 1000:
+        if n_cells <= 500:
             try:
                 diameter = nx.diameter(subgraph)
             except nx.NetworkXError:
                 diameter = 0
         else:
-            # Approximate: BFS from arbitrary node, then BFS from farthest
             try:
-                source = next(iter(comp_nodes))
-                lengths = dict(nx.single_source_shortest_path_length(subgraph, source))
-                farthest = max(lengths, key=lengths.get)
-                lengths2 = dict(nx.single_source_shortest_path_length(subgraph, farthest))
-                diameter = max(lengths2.values())
+                diameter = nx.approximation.diameter(subgraph)
             except Exception:
                 diameter = 0
 

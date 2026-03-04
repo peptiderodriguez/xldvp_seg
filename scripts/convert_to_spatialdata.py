@@ -116,7 +116,7 @@ def _discover_features(detections):
     channel_stat_names = set()
     embedding_counts = {}  # prefix -> max index seen
 
-    for det in detections:
+    for det in detections[:10]:
         feats = det.get('features', {})
         for key in feats:
             val = feats[key]
@@ -171,7 +171,7 @@ def _discover_features(detections):
 def _discover_obs_classes(detections):
     """Discover classification columns (e.g., tdTomato_class, GFP_class) from detections."""
     class_cols = set()
-    for det in detections:
+    for det in detections[:10]:
         feats = det.get('features', {})
         for key, val in feats.items():
             if key.endswith('_class') and isinstance(val, str):
@@ -319,16 +319,7 @@ def _extract_shapes_from_hdf5(detections, tiles_dir, cell_type):
 
     tiles_dir = Path(tiles_dir)
 
-    # Determine mask filename
-    mask_filenames = {
-        'nmj': 'nmj_masks.h5',
-        'mk': 'mk_masks.h5',
-        'cell': 'cell_masks.h5',
-        'islet': 'islet_masks.h5',
-        'mesothelium': 'mesothelium_masks.h5',
-        'tissue_pattern': 'tissue_pattern_masks.h5',
-    }
-    mask_filename = mask_filenames.get(cell_type, f'{cell_type}_masks.h5')
+    mask_filename = f'{cell_type}_masks.h5'
 
     # Group detections by tile
     by_tile = {}
@@ -562,12 +553,26 @@ def link_zarr_image(zarr_path):
             arr = da.from_zarr(str(zarr_path))
 
         # Ensure (C, Y, X) ordering for SpatialData
-        if arr.ndim == 2:
-            arr = arr[np.newaxis, ...]  # (Y, X) -> (1, Y, X)
+        # Try reading axis order from OME-NGFF metadata first
+        root = zarr.open(str(zarr_path), mode='r')
+        axes_meta = None
+        try:
+            axes_meta = root.attrs['multiscales'][0]['axes']
+        except (KeyError, IndexError, TypeError):
+            pass
+
+        if axes_meta and arr.ndim == len(axes_meta):
+            axis_names = [a['name'] if isinstance(a, dict) else a for a in axes_meta]
+            if 'c' in axis_names and 'y' in axis_names and 'x' in axis_names:
+                c_pos = axis_names.index('c')
+                if c_pos != 0:
+                    arr = da.moveaxis(arr, c_pos, 0)
+            elif arr.ndim == 2:
+                arr = arr[np.newaxis, ...]
+        elif arr.ndim == 2:
+            arr = arr[np.newaxis, ...]
         elif arr.ndim == 3:
-            # Could be (C, Y, X) or (Y, X, C)
             if arr.shape[-1] <= 10 and arr.shape[0] > 10:
-                # Likely (Y, X, C)
                 arr = da.moveaxis(arr, -1, 0)
 
         image = Image2DModel.parse(arr, dims=("c", "y", "x"))

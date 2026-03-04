@@ -61,14 +61,13 @@ def update_symlink(link_path, target_path):
             logger.warning(f"Symlink fallback copy also failed: {copy_err}")
 
 
-def save_with_timestamp(base_path, data, fmt="json", json_encoder=None):
+def save_with_timestamp(base_path, data, fmt="json"):
     """Save data to a timestamped file and create a symlink from base_path.
 
     Args:
         base_path: The canonical path (e.g., "output/detections.json")
         data: Data to save (dict/list for json, str for text)
         fmt: "json" or "text"
-        json_encoder: Custom JSON encoder class (default: None)
 
     Returns:
         Path: The actual timestamped file that was written
@@ -79,7 +78,7 @@ def save_with_timestamp(base_path, data, fmt="json", json_encoder=None):
 
     if fmt == "json":
         from segmentation.utils.json_utils import atomic_json_dump
-        atomic_json_dump(data, ts_path, cls=json_encoder)
+        atomic_json_dump(data, ts_path)
     elif fmt == "text":
         with open(ts_path, 'w') as f:
             f.write(data if isinstance(data, str) else str(data))

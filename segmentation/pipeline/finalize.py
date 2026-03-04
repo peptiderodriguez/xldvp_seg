@@ -6,12 +6,11 @@ post-detection output: detections JSON, coordinates CSV, HTML export, summary
 JSON, and HTTP server startup.
 """
 
-import re
 import json
 from pathlib import Path
 
 from segmentation.utils.logging import get_logger
-from segmentation.utils.json_utils import NumpyEncoder, atomic_json_dump
+from segmentation.utils.json_utils import atomic_json_dump
 from segmentation.utils.timestamps import timestamped_path, update_symlink
 from segmentation.io.czi_loader import get_czi_metadata
 from segmentation.io.html_export import export_samples_to_html
@@ -20,85 +19,6 @@ from segmentation.pipeline.server import (
 )
 
 logger = get_logger(__name__)
-
-
-def parse_channel_legend_from_filename(filename: str) -> dict:
-    """Parse channel information from filename to create legend.
-
-    Looks for patterns like:
-    - nuc488, nuc405 -> nuclear stain (keeps original like 'nuc488')
-    - Bgtx647, BTX647 -> bungarotoxin (keeps original)
-    - NfL750, NFL750 -> neurofilament (keeps original)
-    - DAPI -> nuclear
-    - SMA -> smooth muscle actin
-    - _647_ -> standalone wavelength
-
-    Args:
-        filename: Slide filename (e.g., '20251107_Fig5_nuc488_Bgtx647_NfL750-1-EDFvar-stitch')
-
-    Returns:
-        Dict with 'red', 'green', 'blue' keys mapping to channel names,
-        or None if no channels detected.
-    """
-    channels = []
-
-    # Specific channel patterns - use original text from filename
-    # Order: patterns that include wavelength first, then standalone wavelengths
-    patterns = [
-        # Patterns with wavelength embedded (capture the whole thing)
-        r'nuc\d{3}',           # nuc488, nuc405
-        r'bgtx\d{3}',          # Bgtx647
-        r'btx\d{3}',           # BTX647
-        r'nfl?\d{3}',          # NfL750, NFL750
-        r'sma\d*',             # SMA, SMA488
-        r'cd\d+',              # CD31, CD34
-        # Named stains without wavelength
-        r'dapi',
-        r'bungarotoxin',
-        r'neurofilament',
-        # Standalone wavelengths (must be bounded by _ or - or start/end)
-        r'(?:^|[_-])(\d{3})(?:[_-]|$)',  # _647_, -488-
-    ]
-
-    # Find all channel mentions with their positions
-    found = []
-    for pattern in patterns:
-        for match in re.finditer(pattern, filename, re.IGNORECASE):
-            # For grouped patterns, use group(1) if it exists
-            if match.lastindex:
-                text = match.group(1)
-                pos = match.start(1)
-            else:
-                text = match.group(0)
-                pos = match.start()
-            found.append((pos, text))
-
-    # Sort by position in filename and deduplicate
-    found.sort(key=lambda x: x[0])
-    seen = set()
-    for pos, name in found:
-        name_lower = name.lower()
-        if name_lower not in seen:
-            channels.append(name)
-            seen.add(name_lower)
-
-    if len(channels) >= 3:
-        return {
-            'red': channels[0],
-            'green': channels[1],
-            'blue': channels[2]
-        }
-    elif len(channels) == 2:
-        return {
-            'red': channels[0],
-            'green': channels[1]
-        }
-    elif len(channels) == 1:
-        return {
-            'green': channels[0]  # Single channel shown as green
-        }
-
-    return None
 
 
 def _build_channel_legend(cell_type, args, czi_path, slide_name=None):
@@ -125,35 +45,19 @@ def _build_channel_legend(cell_type, args, czi_path, slide_name=None):
             return f'Ch{ch_idx}'
 
         if cell_type == 'islet':
-            _islet_disp = getattr(args, 'islet_display_chs', [2, 3, 5])
-            return {
-                'red': _channel_label(_islet_disp[0]) if len(_islet_disp) > 0 else 'none',
-                'green': _channel_label(_islet_disp[1]) if len(_islet_disp) > 1 else 'none',
-                'blue': _channel_label(_islet_disp[2]) if len(_islet_disp) > 2 else 'none',
-            }
+            disp = getattr(args, 'islet_display_chs', [2, 3, 5])
         elif cell_type == 'tissue_pattern':
-            tp_disp = getattr(args, 'tp_display_channels_list', [0, 3, 1])
-            return {
-                'red': _channel_label(tp_disp[0]) if len(tp_disp) > 0 else 'none',
-                'green': _channel_label(tp_disp[1]) if len(tp_disp) > 1 else 'none',
-                'blue': _channel_label(tp_disp[2]) if len(tp_disp) > 2 else 'none',
-            }
-        elif cell_type == 'nmj' and getattr(args, 'all_channels', False):
-            try:
-                return {
-                    'red': _channel_label(0),
-                    'green': _channel_label(1),
-                    'blue': _channel_label(2),
-                }
-            except Exception:
-                return parse_channel_legend_from_filename(slide_name) if slide_name else None
+            disp = getattr(args, 'tp_display_channels_list', [0, 3, 1])
         else:
-            return {
-                'red': _channel_label(0),
-                'green': _channel_label(1),
-                'blue': _channel_label(2),
-            }
-    except Exception:
+            disp = [0, 1, 2]
+
+        color_names = ('red', 'green', 'blue')
+        return {
+            color_names[i]: _channel_label(disp[i]) if i < len(disp) else 'none'
+            for i in range(3)
+        }
+    except (IOError, OSError, KeyError, IndexError) as e:
+        logger.warning("Could not build channel legend from CZI metadata: %s", e)
         return None
 
 
@@ -231,35 +135,27 @@ def _finish_pipeline(args, all_detections, all_samples, slide_output_dir, tiles_
     with open(ts_csv, 'w') as f:
         if cell_type == 'vessel':
             f.write('uid,global_x_px,global_y_px,global_x_um,global_y_um,outer_diameter_um,wall_thickness_um,confidence\n')
-            for det in all_detections:
-                g_center = det.get('global_center')
-                g_center_um = det.get('global_center_um')
-                if g_center is None or g_center_um is None:
-                    continue
-                if len(g_center) < 2 or g_center[0] is None or g_center[1] is None:
-                    continue
-                if len(g_center_um) < 2 or g_center_um[0] is None or g_center_um[1] is None:
-                    continue
-                feat = det.get('features', {})
-                f.write(f"{det['uid']},{g_center[0]:.1f},{g_center[1]:.1f},"
-                        f"{g_center_um[0]:.2f},{g_center_um[1]:.2f},"
-                        f"{feat.get('outer_diameter_um', 0):.2f},{feat.get('wall_thickness_mean_um', 0):.2f},"
-                        f"{feat.get('confidence', 'unknown')}\n")
         else:
             f.write('uid,global_x_px,global_y_px,global_x_um,global_y_um,area_um2\n')
-            for det in all_detections:
-                g_center = det.get('global_center')
-                g_center_um = det.get('global_center_um')
-                if g_center is None or g_center_um is None:
-                    continue
-                if len(g_center) < 2 or g_center[0] is None or g_center[1] is None:
-                    continue
-                if len(g_center_um) < 2 or g_center_um[0] is None or g_center_um[1] is None:
-                    continue
-                feat = det.get('features', {})
+        for det in all_detections:
+            g_center = det.get('global_center')
+            g_center_um = det.get('global_center_um')
+            if g_center is None or g_center_um is None:
+                continue
+            if len(g_center) < 2 or g_center[0] is None or g_center[1] is None:
+                continue
+            if len(g_center_um) < 2 or g_center_um[0] is None or g_center_um[1] is None:
+                continue
+            feat = det.get('features', {})
+            base = (f"{det['uid']},{g_center[0]:.1f},{g_center[1]:.1f},"
+                    f"{g_center_um[0]:.2f},{g_center_um[1]:.2f}")
+            if cell_type == 'vessel':
+                f.write(f"{base},"
+                        f"{feat.get('outer_diameter_um', 0):.2f},{feat.get('wall_thickness_mean_um', 0):.2f},"
+                        f"{feat.get('confidence', 'unknown')}\n")
+            else:
                 area_um2 = feat.get('area', 0) * (pixel_size_um ** 2)
-                f.write(f"{det['uid']},{g_center[0]:.1f},{g_center[1]:.1f},"
-                        f"{g_center_um[0]:.2f},{g_center_um[1]:.2f},{area_um2:.2f}\n")
+                f.write(f"{base},{area_um2:.2f}\n")
     update_symlink(csv_file, ts_csv)
     logger.info(f"Saved coordinates to {ts_csv}")
 

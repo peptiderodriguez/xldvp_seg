@@ -110,9 +110,6 @@ def load_features_and_annotations(detections_path, annotations_path, feature_set
         if uid:
             det_by_id[uid] = det
 
-        # Also store by just nmj_id for fallback
-        det_by_id[nmj_id] = det
-
     # Extract features for annotated samples
     X = []
     y = []

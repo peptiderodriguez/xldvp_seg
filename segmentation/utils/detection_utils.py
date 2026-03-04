@@ -37,8 +37,6 @@ def safe_to_uint8(arr: np.ndarray) -> np.ndarray:
         return np.zeros_like(arr, dtype=np.uint8)
     if arr_max <= 1.0 + 1e-6:
         return (arr * 255).clip(0, 255).astype(np.uint8)
-    elif arr_max <= 255.0:
-        return (arr * (255.0 / arr_max)).clip(0, 255).astype(np.uint8)
     else:
         return arr.clip(0, 255).astype(np.uint8)
 
