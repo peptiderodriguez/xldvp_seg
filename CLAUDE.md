@@ -37,6 +37,7 @@ and guide you through the full pipeline — detection through LMD export.
 | `/preview-preprocessing` | Preview flat-field / photobleach correction on any channel |
 | `/classify` | Train RF classifier from annotations, compare feature sets, explore features |
 | `/lmd-export` | Export detections for laser microdissection (contours, wells, XML) |
+| `/vessel-analysis` | Multi-scale vessel structure detection + spatial viewer |
 | `/view-results` | Launch HTML result viewer with Cloudflare tunnel |
 
 ## Quick Start
@@ -327,6 +328,7 @@ UID format: `{slide}_{celltype}_{x}_{y}`
 | `scripts/convert_to_spatialdata.py` | Convert detections to SpatialData zarr (scverse ecosystem) |
 | `scripts/generate_multi_slide_spatial_viewer.py` | Unified spatial viewer: KDE contours, graph-pattern regions, DBSCAN + hulls, ROI, focus view |
 | `scripts/view_slide.py` | One-command visualization: classify + spatial cluster + interactive viewer |
+| `scripts/vessel_community_analysis.py` | Multi-scale vessel structure detection (connected components + morphology + SNR) |
 | `scripts/spatial_cell_analysis.py` | Spatial network analysis (connected components, graph metrics) |
 | `scripts/preview_preprocessing.py` | Preview flat-field / photobleach correction at reduced resolution |
 | `scripts/run_pipeline.sh` | YAML config-driven multi-slide SLURM launcher |
@@ -416,6 +418,24 @@ artery, arteriole, vein, capillary, lymphatic, collecting_lymphatic
 - **p.hpcl8:** 55 nodes, 24 CPUs, 380G RAM, 2x RTX 5000 each (interactive dev, CPU jobs)
 - **p.hpcl93:** 19 nodes, 256 CPUs, 760G RAM, 4x L40S each (heavy GPU batch jobs, requires `--gres=gpu:`)
 - Time limit: 42 days on both partitions
+
+## MPS Support (Apple Silicon)
+
+The pipeline supports Apple Silicon GPUs via PyTorch's MPS backend. Device selection is automatic — the pipeline detects `cuda`, `mps`, or `cpu` and configures accordingly.
+
+**Central utility:** `segmentation/utils/device.py` — use `get_default_device()`, `set_device_for_worker()`, `empty_cache()`, `device_supports_gpu()`.
+
+**Key behaviors on MPS:**
+- `--num-gpus` defaults to 1 (Apple Silicon has one GPU)
+- Multi-worker subprocess architecture still works (1 spawned worker)
+- All 4 ML models confirmed working: SAM2, Cellpose-SAM, ResNet50, DINOv2
+- Memory validation reports unified memory (GPU shares system RAM)
+- `empty_cache()` calls `torch.mps.synchronize()` before clearing
+
+**Do NOT:**
+- Hardcode `device="cuda"` — use `device=None` or `get_default_device()`
+- Use `torch.cuda.is_available()` for Cellpose `gpu=` flag — use `device_supports_gpu()`
+- Use bare `torch.cuda.empty_cache()` — use `empty_cache()` from `segmentation.utils.device`
 
 ## Troubleshooting
 

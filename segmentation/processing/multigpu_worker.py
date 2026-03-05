@@ -78,17 +78,20 @@ def _gpu_worker(
     islet_display_channels = config.get('islet_display_channels')
     tiles_dir = config.get('tiles_dir')
 
-    os.environ['CUDA_VISIBLE_DEVICES'] = str(gpu_id)
-
     import torch
     import sys
     sys.path.insert(0, str(Path(__file__).parent.parent.parent))
 
+    from segmentation.utils.device import set_device_for_worker, empty_cache
     from segmentation.detection.tissue import has_tissue
     from segmentation.processing.tile_processing import process_single_tile
 
+    # Configure device for this worker (sets CUDA_VISIBLE_DEVICES on CUDA,
+    # returns 'mps' on Apple Silicon, 'cpu' otherwise)
+    device = set_device_for_worker(gpu_id)
+
     worker_name = f"GPU-{gpu_id}"
-    logger.info(f"[{worker_name}] Starting {cell_type} worker...")
+    logger.info(f"[{worker_name}] Starting {cell_type} worker on {device}...")
 
     # --- Attach to shared memory ---
     shared_slides: Dict[str, Tuple[SharedMemory, np.ndarray]] = {}
@@ -104,8 +107,6 @@ def _gpu_worker(
         logger.error(f"[{worker_name}] Failed to attach shared memory: {e}")
         output_queue.put({'status': 'init_error', 'gpu_id': gpu_id, 'error': str(e)})
         return
-
-    device = torch.device('cuda:0')
     models: Dict[str, Any] = {'device': device}
 
     # --- Load SAM2 predictor ---
@@ -160,7 +161,9 @@ def _gpu_worker(
     if cell_type in ('cell', 'islet', 'tissue_pattern'):
         try:
             from cellpose import models as cellpose_models
-            cellpose_model = cellpose_models.CellposeModel(gpu=True, pretrained_model='cpsam')
+            from segmentation.utils.device import device_supports_gpu
+            cellpose_model = cellpose_models.CellposeModel(
+                gpu=device_supports_gpu(device), pretrained_model='cpsam')
             models['cellpose'] = cellpose_model
             logger.info(f"[{worker_name}] Cellpose loaded")
         except Exception as e:
@@ -468,7 +471,7 @@ def _gpu_worker(
             tiles_processed += 1
             if tiles_processed % 20 == 0:
                 gc.collect()
-                torch.cuda.empty_cache()
+                empty_cache()
 
         except Exception as e:
             logger.error(f"[{worker_name}] Worker loop error: {e}")
@@ -476,7 +479,7 @@ def _gpu_worker(
 
     logger.info(f"[{worker_name}] Done, processed {tiles_processed} tiles, found {detections_found} detections")
     gc.collect()
-    torch.cuda.empty_cache()
+    empty_cache()
 
     for shm, _ in shared_slides.values():
         shm.close()

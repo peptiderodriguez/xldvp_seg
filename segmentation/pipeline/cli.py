@@ -494,10 +494,16 @@ def postprocess_args(args, parser):
 
     # Auto-detect number of GPUs if not specified
     if args.num_gpus is None:
-        try:
-            args.num_gpus = max(1, torch.cuda.device_count())
-        except Exception:
-            args.num_gpus = 1
+        from segmentation.utils.device import get_device_count, get_default_device
+        n = get_device_count()
+        args.num_gpus = max(1, n)
+        detected_device = get_default_device()
+        if detected_device == 'mps':
+            _logger.info("Detected Apple Silicon MPS backend (1 GPU)")
+        elif detected_device == 'cpu':
+            _logger.info("No GPU detected, running on CPU (num_gpus=1 worker)")
+        else:
+            _logger.info(f"Detected {args.num_gpus} CUDA GPU(s)")
 
     # --multi-gpu is always True now (kept for backward compatibility)
     args.multi_gpu = True

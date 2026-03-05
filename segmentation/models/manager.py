@@ -12,7 +12,7 @@ This module consolidates model loading logic that was previously duplicated in:
 Usage:
     from segmentation.models import get_model_manager
 
-    manager = get_model_manager(device="cuda")
+    manager = get_model_manager()
     sam2_predictor, sam2_auto = manager.get_sam2()
     manager.cleanup()
 """
@@ -101,7 +101,7 @@ _manager_cache: Dict[str, 'ModelManager'] = {}
 _manager_cache_lock = threading.Lock()
 
 
-def get_model_manager(device: str = "cuda") -> 'ModelManager':
+def get_model_manager(device: str = None) -> 'ModelManager':
     """
     Get or create a ModelManager for the specified device.
 
@@ -113,6 +113,9 @@ def get_model_manager(device: str = "cuda") -> 'ModelManager':
     Returns:
         ModelManager instance for the device
     """
+    if device is None:
+        from segmentation.utils.device import get_default_device
+        device = get_default_device()
     device_key = str(device)
     with _manager_cache_lock:
         if device_key not in _manager_cache:
@@ -146,7 +149,7 @@ class ModelManager:
         dinov2: Loaded DINOv2 feature extractor (or None)
 
     Example:
-        manager = ModelManager(device="cuda")
+        manager = ModelManager()
         sam2_pred, sam2_auto = manager.get_sam2()
         cellpose = manager.get_cellpose()
         resnet, transform = manager.get_resnet()
@@ -154,13 +157,17 @@ class ModelManager:
         manager.cleanup()
     """
 
-    def __init__(self, device: str = "cuda"):
+    def __init__(self, device: str = None):
         """
         Initialize ModelManager.
 
         Args:
-            device: Device for model inference ('cuda', 'cpu', or specific GPU)
+            device: Device for model inference ('cuda', 'mps', 'cpu', or specific GPU).
+                    If None, auto-detects best available.
         """
+        if device is None:
+            from segmentation.utils.device import get_default_device
+            device = get_default_device()
         if isinstance(device, str):
             self.device = torch.device(device)
         else:
@@ -315,9 +322,10 @@ class ModelManager:
         from cellpose.models import CellposeModel
 
         logger.info("Loading Cellpose-SAM...")
+        from segmentation.utils.device import device_supports_gpu
         self._cellpose = CellposeModel(
             pretrained_model='cpsam',
-            gpu=torch.cuda.is_available() and self.device.type == 'cuda',
+            gpu=device_supports_gpu(self.device),
             device=self.device
         )
         logger.info("Cellpose loaded successfully")
@@ -418,8 +426,8 @@ class ModelManager:
         gc.collect()
 
         # Clear GPU cache
-        if torch.cuda.is_available():
-            torch.cuda.empty_cache()
+        from segmentation.utils.device import empty_cache
+        empty_cache()
 
         logger.info("ModelManager cleanup complete")
 

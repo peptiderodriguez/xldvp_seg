@@ -155,7 +155,8 @@ def process_single_tile(
                     f"{attempt + 1}/{max_retries}: {oom_err}"
                 )
                 gc.collect()
-                torch.cuda.empty_cache()
+                from segmentation.utils.device import empty_cache as _empty_cache
+                _empty_cache()
                 if torch.cuda.is_available():
                     torch.cuda.synchronize()
                 time.sleep(1.0 * (attempt + 1))
@@ -166,18 +167,20 @@ def process_single_tile(
 
         except RuntimeError as rt_err:
             err_str = str(rt_err).lower()
-            is_cuda_error = (
+            is_gpu_error = (
                 'cuda' in err_str or
+                'mps' in err_str or
                 'out of memory' in err_str or
                 'device-side assert' in err_str
             )
-            if is_cuda_error and attempt < max_retries - 1:
+            if is_gpu_error and attempt < max_retries - 1:
                 logger.warning(
-                    f"CUDA RuntimeError on tile ({tile_x}, {tile_y}) attempt "
+                    f"GPU RuntimeError on tile ({tile_x}, {tile_y}) attempt "
                     f"{attempt + 1}/{max_retries}: {rt_err}"
                 )
                 gc.collect()
-                torch.cuda.empty_cache()
+                from segmentation.utils.device import empty_cache as _empty_cache
+                _empty_cache()
                 if torch.cuda.is_available():
                     torch.cuda.synchronize()
                 time.sleep(1.0 * (attempt + 1))

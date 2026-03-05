@@ -4034,7 +4034,7 @@ class VesselStrategy(DetectionStrategy, MultiChannelFeatureMixin):
         else:
             resnet = None
             resnet_transform = None
-        device = models.get('device', torch.device('cuda' if torch.cuda.is_available() else 'cpu'))
+        device = models.get('device', torch.device('cuda' if torch.cuda.is_available() else ('mps' if hasattr(torch.backends, 'mps') and torch.backends.mps.is_available() else 'cpu')))
 
         # Set image for SAM2 embeddings if available
         if sam2_predictor is not None and self.extract_sam2_embeddings and extract_features:
@@ -4620,7 +4620,7 @@ class VesselStrategy(DetectionStrategy, MultiChannelFeatureMixin):
                 raise FileNotFoundError("MedSAM checkpoint not found. Please provide medsam_checkpoint path.")
 
         # Load MedSAM
-        device = "cuda" if torch.cuda.is_available() else "cpu"
+        device = "cuda" if torch.cuda.is_available() else ("mps" if hasattr(torch.backends, 'mps') and torch.backends.mps.is_available() else "cpu")
         logger.info(f"Loading MedSAM from {medsam_checkpoint} on {device}...")
         sam = sam_model_registry["vit_b"](checkpoint=medsam_checkpoint)
         sam.to(device)
@@ -4726,7 +4726,10 @@ class VesselStrategy(DetectionStrategy, MultiChannelFeatureMixin):
 
         # Cleanup MedSAM model
         del sam, mask_generator
-        torch.cuda.empty_cache()
+        if torch.cuda.is_available():
+            torch.cuda.empty_cache()
+        elif hasattr(torch, 'mps') and hasattr(torch.mps, 'empty_cache'):
+            torch.mps.empty_cache()
         gc.collect()
 
         # Merge detections across scales (keep larger/more complete detection)

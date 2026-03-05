@@ -139,13 +139,13 @@ def extract_resnet_features_batch(
         # Clear GPU memory periodically (every 10 batches) to prevent OOM on long runs
         batch_num = i // batch_size
         if batch_num > 0 and batch_num % 10 == 0:
-            if torch.cuda.is_available():
-                torch.cuda.empty_cache()
+            from segmentation.utils.device import empty_cache as _empty_cache
+            _empty_cache()
             gc.collect()
 
     # Final cleanup after all batches processed
-    if torch.cuda.is_available():
-        torch.cuda.empty_cache()
+    from segmentation.utils.device import empty_cache as _empty_cache
+    _empty_cache()
     gc.collect()
 
     return all_features

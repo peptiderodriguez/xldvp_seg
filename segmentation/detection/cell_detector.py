@@ -12,7 +12,7 @@ Usage:
     from segmentation.detection.strategies import NMJStrategy
 
     # Create detector with lazy-loaded models
-    detector = CellDetector(device="cuda")
+    detector = CellDetector()
 
     # Run detection with one or more strategies
     results = detector.detect(tile, [NMJStrategy()], pixel_size_um=0.22)
@@ -21,7 +21,7 @@ Usage:
     detector.cleanup()
 
     # Or use as context manager for automatic cleanup
-    with CellDetector(device="cuda") as detector:
+    with CellDetector() as detector:
         results = detector.detect(tile, strategies)
 """
 
@@ -113,12 +113,12 @@ class CellDetector:
 
     Example:
         # Basic usage
-        detector = CellDetector(device="cuda")
+        detector = CellDetector()
         results = detector.detect(tile, [MKStrategy()], pixel_size_um=0.22)
         detector.cleanup()
 
         # Context manager usage (auto cleanup)
-        with CellDetector(device="cuda") as detector:
+        with CellDetector() as detector:
             results = detector.detect(tile, strategies)
     """
 
@@ -128,7 +128,7 @@ class CellDetector:
         sam2_config: str = "configs/sam2.1/sam2.1_hiera_l.yaml",
         cellpose_model: str = "cpsam",
         resnet_checkpoint: Optional[str] = None,
-        device: str = "cuda"
+        device: str = None
     ):
         """
         Initialize detector with shared models.
@@ -142,9 +142,12 @@ class CellDetector:
             cellpose_model: Cellpose model name (default: 'cpsam')
             resnet_checkpoint: Path to custom ResNet checkpoint. If None, uses
                                pretrained ImageNet weights.
-            device: Device for inference ('cuda', 'cpu', or specific GPU)
+            device: Device for inference ('cuda', 'mps', 'cpu', or specific GPU).
+                    If None, auto-detects best available.
         """
-        # Convert device string to torch.device
+        from segmentation.utils.device import get_default_device
+        if device is None:
+            device = get_default_device()
         if isinstance(device, str):
             self.device = torch.device(device)
         else:
@@ -317,9 +320,10 @@ class CellDetector:
 
         logger.info(f"Loading Cellpose ({self._cellpose_model}) on {self.device}...")
 
+        from segmentation.utils.device import device_supports_gpu
         self._cellpose = CellposeModel(
             pretrained_model=self._cellpose_model,
-            gpu=True,
+            gpu=device_supports_gpu(self.device),
             device=self.device
         )
 
@@ -566,8 +570,8 @@ class CellDetector:
         self._dinov2_transform = None
 
         gc.collect()
-        if torch.cuda.is_available():
-            torch.cuda.empty_cache()
+        from segmentation.utils.device import empty_cache
+        empty_cache()
 
         logger.info("Cleanup complete")
 

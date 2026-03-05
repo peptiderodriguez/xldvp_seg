@@ -282,13 +282,13 @@ def detect_roi(roi, ch_data, display_chs, strategy, models, pixel_size,
 def _init_gpu(gpu_id):
     """Initialize CellDetector on a specific GPU. Called once per GPU."""
     import torch
-    torch.cuda.set_device(gpu_id)
+    from segmentation.utils.device import set_device_for_worker
+    device = set_device_for_worker(gpu_id)
 
     from segmentation.detection.cell_detector import CellDetector
 
-    device = f"cuda:{gpu_id}"
     print(f"  [GPU-{gpu_id}] Loading models on {device}...", flush=True)
-    detector = CellDetector(device=device)
+    detector = CellDetector(device=str(device))
     # Trigger lazy load of Cellpose + SAM2
     _ = detector.models['cellpose']
     _ = detector.models['sam2_predictor']
@@ -307,7 +307,8 @@ def _gpu_worker(gpu_id, detector, assigned_rois, ch_data, display_chs,
         list of detection dicts from all assigned ROIs
     """
     import torch
-    torch.cuda.set_device(gpu_id)
+    from segmentation.utils.device import set_device_for_worker
+    set_device_for_worker(gpu_id)
 
     from segmentation.detection.strategies.islet import IsletStrategy
 
@@ -687,7 +688,8 @@ def main():
     import torch
     for det in detectors:
         det.cleanup()
-    torch.cuda.empty_cache()
+    from segmentation.utils.device import empty_cache
+    empty_cache()
 
     print("Step 7: Saving outputs...")
     for mode_name, dets in results.items():

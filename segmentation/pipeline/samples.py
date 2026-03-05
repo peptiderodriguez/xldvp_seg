@@ -231,8 +231,8 @@ def calibrate_islet_marker_gmm(pilot_tiles, loader, all_channel_data, slide_shm_
     del cellpose_model
     gc.collect()
     try:
-        import torch
-        torch.cuda.empty_cache()
+        from segmentation.utils.device import empty_cache
+        empty_cache()
     except Exception:
         pass
 

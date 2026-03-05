@@ -716,7 +716,7 @@ def run_pipeline(args):
     # ---- Normal path: full detection pipeline ----
     # Initialize detector + classifiers + params
     logger.info("Initializing detector...")
-    detector = CellDetector(device="cuda")
+    detector = CellDetector()
 
     classifier_loaded = load_classifier_into_detector(args, detector)
 
@@ -1045,7 +1045,8 @@ def run_pipeline(args):
                     logger.info(f"Scale 1/{scale}x: {scale_det_count} detections")
 
                     gc.collect()
-                    torch.cuda.empty_cache()
+                    from segmentation.utils.device import empty_cache
+                    empty_cache()
 
                     # Save checkpoint after each scale
                     checkpoint_dir = slide_output_dir / "checkpoints"

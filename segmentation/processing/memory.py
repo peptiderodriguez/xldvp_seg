@@ -86,33 +86,39 @@ def validate_system_resources(num_workers: int, tile_size: int) -> Dict[str, Any
     # Check GPU memory (all available GPUs, not just device 0)
     try:
         import torch
+        from segmentation.utils.device import get_default_device
     except ImportError:
         torch = None
         logger.info("PyTorch not available, skipping GPU validation")
-    if torch is not None and torch.cuda.is_available():
-        try:
-            num_gpus_check = min(torch.cuda.device_count(), num_workers if num_workers else 1)
-            min_gpu_available = float('inf')
-            for gpu_id in range(num_gpus_check):
-                gpu_total = torch.cuda.get_device_properties(gpu_id).total_memory / (1024**3)
-                gpu_reserved = torch.cuda.memory_reserved(gpu_id) / (1024**3)
-                gpu_available = gpu_total - gpu_reserved
-                logger.info(f"GPU {gpu_id} memory: {gpu_available:.1f} GB available / {gpu_total:.1f} GB total")
-                min_gpu_available = min(min_gpu_available, gpu_available)
 
-            # SAM2 + ResNet need ~6-8 GB minimum per GPU
-            if min_gpu_available < min_gpu_gb:
-                result['warnings'].append(
-                    f"WARNING: GPU with only {min_gpu_available:.1f} GB memory available. "
-                    f"SAM2 + ResNet need ~{min_gpu_gb:.0f}-8 GB. May cause CUDA OOM errors."
-                )
+    if torch is not None:
+        detected_device = get_default_device()
+        if detected_device == 'cuda':
+            try:
+                num_gpus_check = min(torch.cuda.device_count(), num_workers if num_workers else 1)
+                min_gpu_available = float('inf')
+                for gpu_id in range(num_gpus_check):
+                    gpu_total = torch.cuda.get_device_properties(gpu_id).total_memory / (1024**3)
+                    gpu_reserved = torch.cuda.memory_reserved(gpu_id) / (1024**3)
+                    gpu_available = gpu_total - gpu_reserved
+                    logger.info(f"GPU {gpu_id} memory: {gpu_available:.1f} GB available / {gpu_total:.1f} GB total")
+                    min_gpu_available = min(min_gpu_available, gpu_available)
 
-            # Tip for monitoring
-            logger.info("TIP: Monitor GPU in another terminal: nvidia-smi -l 1")
-        except Exception as e:
-            logger.warning(f"Could not check GPU memory: {e}")
-    else:
-        result['warnings'].append("WARNING: No CUDA GPU detected. Processing will be very slow.")
+                if min_gpu_available < min_gpu_gb:
+                    result['warnings'].append(
+                        f"WARNING: GPU with only {min_gpu_available:.1f} GB memory available. "
+                        f"SAM2 + ResNet need ~{min_gpu_gb:.0f}-8 GB. May cause CUDA OOM errors."
+                    )
+                logger.info("TIP: Monitor GPU in another terminal: nvidia-smi -l 1")
+            except Exception as e:
+                logger.warning(f"Could not check GPU memory: {e}")
+        elif detected_device == 'mps':
+            # MPS (Apple Silicon) — no per-device memory API, use system RAM as proxy
+            # Unified memory means GPU shares system RAM
+            logger.info(f"Apple Silicon MPS backend detected. "
+                        f"Unified memory: {total_gb:.0f} GB total, {available_gb:.0f} GB available")
+        else:
+            result['warnings'].append("WARNING: No GPU detected (CUDA or MPS). Processing will be slow.")
 
     # Critical memory threshold - abort if less than min_ram_gb available
     if available_gb < min_ram_gb:
@@ -182,13 +188,14 @@ def get_memory_usage() -> Dict[str, float]:
 
     try:
         import torch
-        _has_cuda = torch.cuda.is_available()
+        from segmentation.utils.device import get_default_device
+        _device_type = get_default_device()
     except ImportError:
-        _has_cuda = False
-    if _has_cuda:
+        _device_type = 'cpu'
+
+    if _device_type == 'cuda':
         try:
             num_gpus = torch.cuda.device_count()
-            # Report per-GPU stats and aggregate totals
             total_gpu_total = 0
             total_gpu_allocated = 0
             total_gpu_reserved = 0
@@ -210,6 +217,12 @@ def get_memory_usage() -> Dict[str, float]:
             result['gpu_count'] = num_gpus
         except Exception:
             pass
+    elif _device_type == 'mps':
+        # MPS uses unified memory — report system RAM as GPU memory
+        result['gpu_type'] = 'mps'
+        result['gpu_count'] = 1
+        result['gpu_total_gb'] = result['ram_total_gb']
+        result['gpu_available_gb'] = result['ram_available_gb']
 
     return result
 

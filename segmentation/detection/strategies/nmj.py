@@ -386,7 +386,7 @@ class NMJStrategy(DetectionStrategy, MultiChannelFeatureMixin):
 
         # Get models - only load ResNet/DINOv2 if we'll use them
         sam2_predictor = models.get('sam2_predictor')
-        device = models.get('device', torch.device('cuda' if torch.cuda.is_available() else 'cpu'))
+        device = models.get('device', torch.device('cuda' if torch.cuda.is_available() else ('mps' if hasattr(torch.backends, 'mps') and torch.backends.mps.is_available() else 'cpu')))
 
         # Only access ResNet/DINOv2 if extract_deep_features is enabled (avoids triggering lazy load)
         if self.extract_deep_features:
@@ -741,7 +741,7 @@ def load_nmj_classifier(model_path: str, device=None):
     from torchvision import models, transforms
 
     if device is None:
-        device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+        device = torch.device('cuda' if torch.cuda.is_available() else ('mps' if hasattr(torch.backends, 'mps') and torch.backends.mps.is_available() else 'cpu'))
 
     model = models.resnet18(weights=None)
     model.fc = nn.Linear(model.fc.in_features, 2)

@@ -10,7 +10,7 @@ Usage:
     from segmentation.models import get_model_manager
 
     # Get singleton manager instance
-    manager = get_model_manager(device="cuda")
+    manager = get_model_manager()
 
     # Lazy-load models
     sam2_predictor, sam2_auto = manager.get_sam2()
@@ -21,7 +21,7 @@ Usage:
     manager.cleanup()
 
     # Or use as context manager
-    with get_model_manager("cuda") as manager:
+    with get_model_manager() as manager:
         sam2_predictor, sam2_auto = manager.get_sam2()
         # ... do work
     # Automatic cleanup on exit

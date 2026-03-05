@@ -299,9 +299,6 @@ def _gpu_worker_nuclear_features(gpu_id, start_idx, end_idx, crops_file_path,
     3. For each crop: Otsu nuclear seg → SAM2 + ResNet features on nucleus
     4. Saves partial results to output_path
     """
-    # MUST set CUDA_VISIBLE_DEVICES before importing torch
-    os.environ['CUDA_VISIBLE_DEVICES'] = str(gpu_id)
-
     import torch
     import torchvision.models as tv_models
     import torchvision.transforms as tv_transforms
@@ -309,12 +306,14 @@ def _gpu_worker_nuclear_features(gpu_id, start_idx, end_idx, crops_file_path,
     from scipy.ndimage import binary_fill_holes
     from skimage.measure import regionprops, label as sk_label
     from skimage.morphology import remove_small_objects
+    from segmentation.utils.device import set_device_for_worker, empty_cache
+
+    # Configure device for this worker (CUDA_VISIBLE_DEVICES on CUDA, MPS on Apple Silicon)
+    device = set_device_for_worker(gpu_id)
 
     # Configure logging for subprocess
     logging.basicConfig(level=logging.INFO, format='%(asctime)s %(levelname)s %(message)s')
     sub_logger = logging.getLogger(f'gpu_worker_{gpu_id}')
-
-    device = torch.device('cuda:0')
     sub_logger.info(f"GPU {gpu_id}: processing indices {start_idx}-{end_idx} "
                     f"({end_idx - start_idx} crops)")
 
@@ -501,7 +500,7 @@ def _gpu_worker_nuclear_features(gpu_id, start_idx, end_idx, crops_file_path,
             sub_logger.info(f"GPU {gpu_id}: {local_i + 1}/{chunk_size} "
                             f"({(local_i+1)/chunk_size*100:.0f}%, {n_valid} valid)")
             # Periodic GPU memory cleanup (SAM2 set_image accumulates tensors)
-            torch.cuda.empty_cache()
+            empty_cache()
 
     n_valid = valid.sum()
     sub_logger.info(f"GPU {gpu_id}: Done. {n_valid}/{chunk_size} valid "

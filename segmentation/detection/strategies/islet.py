@@ -663,7 +663,7 @@ class IsletStrategy(CellStrategy):
 
         # Batch deep feature extraction
         if self.extract_deep_features:
-            device = models.get('device', torch.device('cuda' if torch.cuda.is_available() else 'cpu'))
+            device = models.get('device', torch.device('cuda' if torch.cuda.is_available() else ('mps' if hasattr(torch.backends, 'mps') and torch.backends.mps.is_available() else 'cpu')))
             resnet = models.get('resnet')
             resnet_transform = models.get('resnet_transform')
 

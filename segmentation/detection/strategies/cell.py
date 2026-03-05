@@ -249,7 +249,7 @@ class CellStrategy(DetectionStrategy, MultiChannelFeatureMixin):
         # Get models
         cellpose = models.get('cellpose')
         sam2_predictor = models.get('sam2_predictor')
-        device = models.get('device', torch.device('cuda' if torch.cuda.is_available() else 'cpu'))
+        device = models.get('device', torch.device('cuda' if torch.cuda.is_available() else ('mps' if hasattr(torch.backends, 'mps') and torch.backends.mps.is_available() else 'cpu')))
 
         if cellpose is None:
             raise RuntimeError("Cellpose model required for cell detection")
