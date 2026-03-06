@@ -17,6 +17,8 @@ These behaviors apply throughout every Claude Code session on this project:
 - When running long operations (SLURM jobs, large file reads, multi-agent reviews), give the user a brief status update rather than going silent.
 - When you encounter something unexpected (a file that doesn't match docs, a function that behaves differently than expected), flag it to the user — don't silently work around it.
 - After completing a multi-step task, give a concise summary: what changed, how many files, any notable findings.
+- **Always use the AskUserQuestion tool** when you need to ask questions — never list questions inline in text responses.
+- **Always enter plan mode first** for implementation tasks — design the approach and get approval before writing code.
 
 **Pipeline-specific:**
 - Always run `czi_info.py` before writing any channel configuration. No exceptions.
