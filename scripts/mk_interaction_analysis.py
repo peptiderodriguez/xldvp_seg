@@ -46,7 +46,7 @@ MORPH_FEATURES = [
     'area', 'area_um2', 'perimeter', 'circularity', 'solidity',
     'aspect_ratio', 'eccentricity', 'elongation', 'equiv_diameter', 'extent',
 ]
-DENSITY_FEATURES = ['n_cells', 'density_per_mm2']
+DENSITY_FEATURES = ['density_per_mm2']
 
 EXCLUDE_SLIDES = {'2025_11_18_FGC3'}
 
@@ -163,27 +163,28 @@ def load_and_prepare_data(score_threshold=0.75):
     features = [f for f in MORPH_FEATURES + DENSITY_FEATURES if f in available]
     print(f"  Features for analysis: {features}")
 
-    # IQR outlier filtering
-    keep_rules = {('n_cells', 'FHU2', 'femur'), ('n_cells', 'FHU4', 'femur')}
+    # MAD outlier filtering (more robust than IQR with small n)
+    # MAD threshold of 3.5 is conservative; equivalent to ~±3.5 SD for normal data
+    MAD_THRESHOLD = 3.5
     n_removed = 0
     for feat in features:
         vals = agg_df[feat].dropna()
-        if len(vals) < 4:
+        if len(vals) < 6:
             continue
-        q1, q3 = vals.quantile(0.25), vals.quantile(0.75)
-        iqr = q3 - q1
-        if iqr == 0:
+        median = vals.median()
+        mad = np.median(np.abs(vals - median))
+        if mad < 1e-9:
             continue
-        lo, hi = q1 - 1.5 * iqr, q3 + 1.5 * iqr
-        outliers = ((agg_df[feat] < lo) | (agg_df[feat] > hi)).fillna(False)
-        for idx in agg_df[outliers].index:
-            row = agg_df.loc[idx]
-            if (feat, row['short'], row['bone']) in keep_rules:
-                outliers.at[idx] = False
+        # Modified Z-score: 0.6745 is the 0.75th quantile of the standard normal
+        modified_z = 0.6745 * (agg_df[feat] - median) / mad
+        outliers = (np.abs(modified_z) > MAD_THRESHOLD).fillna(False)
         n_out = outliers.sum()
         if n_out > 0:
             n_removed += n_out
-            print(f"    IQR: {feat} -- removed {n_out} outlier(s)")
+            for idx in agg_df[outliers].index:
+                row = agg_df.loc[idx]
+                print(f"    MAD: {feat} -- {row['short']} {row['bone']} "
+                      f"(z={modified_z.loc[idx]:.1f})")
             agg_df.loc[outliers, feat] = np.nan
 
     if n_removed:
@@ -586,7 +587,8 @@ def _compute_hu_effects(agg_df, features):
 def generate_summary_dashboard(agg_df, features, anova_results, results_df, output_path):
     """Generate 3x3 biological summary dashboard.
 
-    Row 1: Sex x Treatment interaction (collapsed across bones) — line plots
+    Row 1: Sex x Treatment interaction, both bones overlaid — line plots
+           (solid + circle = femur/unloaded, dashed + triangle = humerus/overloaded)
     Row 2: Bone attenuation (HU effect by bone) — grouped delta bars
     Row 3: Attenuation ratios, bone concordance scatter, ANOVA heatmap
     """
@@ -604,11 +606,6 @@ def generate_summary_dashboard(agg_df, features, anova_results, results_df, outp
     all_feats = list(set(features) | set(KEY_FEATS))
     hu_effects = _compute_hu_effects(agg_df, [f for f in all_feats if f in agg_df.columns])
 
-    # Slide-level means collapsed across bones
-    slide_collapsed = agg_df.groupby(
-        ['slide', 'short', 'sex', 'treatment', 'replicate']
-    )[KEY_FEATS].mean().reset_index()
-
     fig = plt.figure(figsize=(17, 15))
     gs = fig.add_gridspec(3, 3, hspace=0.42, wspace=0.35,
                           left=0.07, right=0.95, top=0.92, bottom=0.06)
@@ -617,57 +614,80 @@ def generate_summary_dashboard(agg_df, features, anova_results, results_df, outp
     panels = 'ABCDEFGHI'
     rng = np.random.default_rng(42)
 
-    # ── ROW 1: Sex x Treatment interaction (collapsed across bones) ────
+    # Bone styling: femur = solid/circle, humerus = dashed/triangle
+    BONE_STYLE = {
+        'femur': {'linestyle': '-', 'marker': 'o', 'label_suffix': 'fem'},
+        'humerus': {'linestyle': '--', 'marker': '^', 'label_suffix': 'hum'},
+    }
+    BONE_LONG = {'femur': 'Femur (unloaded)', 'humerus': 'Humerus (overloaded)'}
+
+    # ── ROW 1: Sex x Treatment interaction, both bones overlaid ──────
     for ci, feat in enumerate(KEY_FEATS):
         ax = fig.add_subplot(gs[0, ci])
 
-        for sex in ['F', 'M']:
-            means, ses = [], []
-            for trt in ['GC', 'HU']:
-                vals = slide_collapsed[
-                    (slide_collapsed['sex'] == sex) &
-                    (slide_collapsed['treatment'] == trt)
-                ][feat].dropna()
-                means.append(vals.mean() if len(vals) > 0 else np.nan)
-                ses.append(vals.std(ddof=1) / np.sqrt(len(vals)) if len(vals) > 1 else 0)
-            ax.errorbar([0, 1], means, yerr=ses, marker='o', markersize=8,
-                        color=LINE_COLORS[sex], linewidth=2.5, capsize=5,
-                        label=sex, zorder=3)
+        for bone in ['femur', 'humerus']:
+            bs = BONE_STYLE[bone]
+            bone_data = agg_df[agg_df['bone'] == bone]
+            for sex in ['F', 'M']:
+                means, ses = [], []
+                for trt in ['GC', 'HU']:
+                    vals = bone_data[
+                        (bone_data['sex'] == sex) &
+                        (bone_data['treatment'] == trt)
+                    ][feat].dropna()
+                    means.append(vals.mean() if len(vals) > 0 else np.nan)
+                    ses.append(vals.std(ddof=1) / np.sqrt(len(vals)) if len(vals) > 1 else 0)
+                ax.errorbar([0, 1], means, yerr=ses, marker=bs['marker'],
+                            markersize=7, color=LINE_COLORS[sex],
+                            linewidth=2.0 if bone == 'femur' else 1.5,
+                            linestyle=bs['linestyle'], capsize=4,
+                            label=f'{sex} {bs["label_suffix"]}', zorder=3)
 
-        # Individual slide dots
-        for sex in ['F', 'M']:
-            for ti, trt in enumerate(['GC', 'HU']):
-                vals = slide_collapsed[
-                    (slide_collapsed['sex'] == sex) &
-                    (slide_collapsed['treatment'] == trt)
-                ][feat].dropna().values
-                if len(vals) > 0:
-                    jitter = rng.uniform(-0.06, 0.06, len(vals))
-                    ax.scatter(np.full(len(vals), ti) + jitter, vals,
-                               color=LINE_COLORS[sex], alpha=0.5, s=25,
-                               edgecolors='black', linewidth=0.5, zorder=2)
+            # Individual slide dots
+            for sex in ['F', 'M']:
+                for ti, trt in enumerate(['GC', 'HU']):
+                    vals = bone_data[
+                        (bone_data['sex'] == sex) &
+                        (bone_data['treatment'] == trt)
+                    ][feat].dropna().values
+                    if len(vals) > 0:
+                        jitter = rng.uniform(-0.06, 0.06, len(vals))
+                        ax.scatter(np.full(len(vals), ti) + jitter, vals,
+                                   color=LINE_COLORS[sex],
+                                   alpha=0.35 if bone == 'humerus' else 0.5,
+                                   s=20, marker=bs['marker'],
+                                   edgecolors='black', linewidth=0.4, zorder=2)
 
-        # % change annotations
-        for si, sex in enumerate(['F', 'M']):
-            eff = hu_effects[feat][sex]['collapsed']
-            pct = eff['pct_change']
-            if np.isnan(pct):
-                continue
-            sign = '+' if pct > 0 else ''
-            y_pos = eff['hu_mean']
-            x_off = 0.22 if si == 0 else -0.30
-            ax.annotate(f'{sign}{pct:.0f}%', xy=(1, y_pos),
-                        xytext=(1 + x_off, y_pos),
-                        fontsize=10, fontweight='bold', color=LINE_COLORS[sex],
-                        arrowprops=dict(arrowstyle='->', color=LINE_COLORS[sex],
-                                        lw=1.2, shrinkA=3, shrinkB=3),
-                        ha='center', va='center')
+        # % change annotations (one per sex × bone, positioned to avoid overlap)
+        annot_count = 0
+        for sex in ['F', 'M']:
+            for bone in ['femur', 'humerus']:
+                eff = hu_effects[feat][sex][bone]
+                pct = eff['pct_change']
+                if np.isnan(pct):
+                    continue
+                sign = '+' if pct > 0 else ''
+                bs = BONE_STYLE[bone]
+                # Stagger annotations vertically
+                y_pos = eff['hu_mean']
+                side = 1 if sex == 'F' else -1
+                x_off = side * (0.20 + 0.15 * (bone == 'humerus'))
+                ax.annotate(f'{sign}{pct:.0f}%',
+                            xy=(1, y_pos), xytext=(1 + x_off, y_pos),
+                            fontsize=8, fontweight='bold', color=LINE_COLORS[sex],
+                            fontstyle='italic' if bone == 'humerus' else 'normal',
+                            arrowprops=dict(arrowstyle='->', color=LINE_COLORS[sex],
+                                            lw=0.8, shrinkA=2, shrinkB=2),
+                            ha='center', va='center')
+                annot_count += 1
 
         ax.set_xticks([0, 1])
         ax.set_xticklabels(['GC', 'HU'], fontsize=10)
         ax.set_title(f'{panels[ci]}: {FEAT_LABELS[feat]}',
                      fontsize=11, fontweight='bold')
-        ax.legend(fontsize=9, loc='best')
+        # Compact legend: 2 cols
+        ax.legend(fontsize=7, loc='best', ncol=2,
+                  handlelength=2.5, columnspacing=1)
         ax.set_xlabel('Treatment', fontsize=9)
 
     # ── ROW 2: Bone attenuation (delta bars by bone) ──────────────────
@@ -739,7 +759,10 @@ def generate_summary_dashboard(agg_df, features, anova_results, results_df, outp
         for sex, slabel in [('M', 'M'), ('F', 'F')]:
             afd = abs(hu_effects[feat][sex]['femur']['delta'])
             ahd = abs(hu_effects[feat][sex]['humerus']['delta'])
-            if afd > 1e-9 and ahd > 1e-9:
+            # Skip if either delta is negligible (ratio would be meaningless)
+            gc_mean = hu_effects[feat][sex]['femur']['gc_mean']
+            min_delta = abs(gc_mean) * 0.02 if not np.isnan(gc_mean) else 1e-9
+            if afd > min_delta and ahd > min_delta:
                 ratio_items.append({'label': f'{label} ({slabel})',
                                     'ratio': afd / ahd,
                                     'color': LINE_COLORS[sex],
