@@ -885,7 +885,22 @@ def main():
     parser = argparse.ArgumentParser(description='ART Interaction Effects Analysis')
     parser.add_argument('--score-threshold', type=float, default=0.75,
                         help='Minimum mk_score to include (default: 0.75)')
+    parser.add_argument('--detections-full', type=Path, default=None,
+                        help='Override full detections JSON (with features)')
+    parser.add_argument('--detections-bone', type=Path, default=None,
+                        help='Override bone-assigned detections JSON')
+    parser.add_argument('--no-exclude', action='store_true',
+                        help='Include all slides (no exclusions)')
     args = parser.parse_args()
+
+    # Override globals if CLI args provided
+    global DETECTIONS_FULL, DETECTIONS_BONE, EXCLUDE_SLIDES
+    if args.detections_full:
+        DETECTIONS_FULL = args.detections_full
+    if args.detections_bone:
+        DETECTIONS_BONE = args.detections_bone
+    if args.no_exclude:
+        EXCLUDE_SLIDES = set()
 
     score_thresh = args.score_threshold
     # Tag for output filenames (e.g. 0.80 -> "080")
