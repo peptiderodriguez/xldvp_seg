@@ -27,31 +27,36 @@ Reinhard normalization, then hand-annotated separately and merged via `merge_rej
 5. Rerun ANOVA dashboard with consistent thresholding
 
 ### SAM2 Extraction (NEXT STEP)
-Original 13 slides' tile features at `unified_2026-02-11_100pct_2gpu/` have `sam2_0..sam2_255`
-keys but ALL ZEROS. Rescued slides (in `mk_clf084_dataset/{slide}/mk/tiles/`) have real SAM2 values.
+SAM2 features (`sam2_0..sam2_255`) are **ALL ZEROS for all 16 slides** — both the original 13
+(in `unified_2026-02-11_100pct_2gpu/`) and the 3 rescued slides (in `mk_clf084_dataset/`).
+GPU re-extraction from CZI tiles is needed for all.
 
 **To run on cluster**:
 ```bash
 cd ~/xldvp_seg && git pull
 # Verify paths in scripts/slurm_extract_sam2.sh, then:
 sbatch scripts/slurm_extract_sam2.sh
-```
-
-After extraction:
-```bash
-python scripts/extract_sam2_embeddings.py merge \
-    --target /path/to/all_mks_with_rejected3_full.json \
-    --embeddings sam2_embeddings_original13.json
+# Produces: sam2_embeddings_original13.json + sam2_embeddings_rescued3.json
 ```
 
 ### After SAM2 Extraction: Retrain + Re-score
-TODO: Write `scripts/retrain_mk_classifier.py` that:
-1. Loads original training data (`mk_training_data_2026-02-11.json`, 1725 samples)
-2. Loads rescued slide features (positives from full JSON, negatives from tile features)
-3. Merges into unified training set (2458 samples, all with real SAM2 embeddings)
-4. Retrains RF with same hyperparams (1000 trees, balanced, max_features=0.1)
-5. Re-scores all 3808 cells in `all_mks_with_rejected3_full.json`
-6. Outputs updated JSON with new `mk_score` values
+`scripts/retrain_mk_classifier.py` handles the full pipeline:
+
+```bash
+# Step 1: Train (merges original 1725 + rescued 617 samples, adds SAM2)
+python scripts/retrain_mk_classifier.py train \
+    --original-training mk_training_data_2026-02-11.json \
+    --rescued-base-dir mk_clf084_dataset \
+    --rescued-annotations mk_annotations_2026-03-06_rejected3_unnorm_100pct.json \
+    --sam2-embeddings sam2_embeddings_original13.json sam2_embeddings_rescued3.json \
+    --output-dir retrained_classifier/
+
+# Step 2: Re-score all 3808 cells uniformly
+python scripts/retrain_mk_classifier.py score \
+    --classifier retrained_classifier/mk_classifier_YYYY-MM-DD.pkl \
+    --full-detections all_mks_with_rejected3_full.json \
+    --output all_mks_rescored.json
+```
 
 Then rerun: `python scripts/mk_interaction_analysis.py --score-threshold 0.80`
 
