@@ -495,6 +495,15 @@ PYTHONPATH=$REPO $MKSEG_PYTHON $REPO/run_lmd_export.py \
 
 **Step 23 — Validate.** Check the output XML exists, display well count, show the path for transfer to the LMD instrument.
 
+**Step 24 — Replicate building (proteomics).** For experiments collecting area-normalized replicates (e.g., DVP with multiple cell-equivalents per well):
+```bash
+# Generic: use segmentation.lmd.selection.select_cells_for_lmd() in Python
+# MK-specific wrapper with multi-plate well assignment:
+PYTHONPATH=$REPO $MKSEG_PYTHON $REPO/scripts/select_mks_for_lmd.py \
+    --score-threshold 0.80 --target-area 10000 --max-replicates 4
+```
+Multi-plate support: `segmentation.lmd.well_plate` handles automatic overflow to additional 384-well plates when >308 wells are needed. Empty QC wells (10% of samples) are inserted evenly across all plates. Well ordering: serpentine within quadrants (B2→B3→C3→C2), nearest-corner transitions between quadrants to minimize laser head travel.
+
 ---
 
 ## Rules
