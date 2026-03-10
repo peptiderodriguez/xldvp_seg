@@ -11,18 +11,26 @@ Keys:
   Space/P = place at cursor
   S       = save  |  U = undo  |  C = clear  |  Q = save+quit
 
+Files needed (copy from server):
+  - CZI slide files
+  - lmd_replicates_full.json  (from select_mks_for_lmd.py — replicate/well assignments)
+  - mk_contours_overlay.json  (from extract contours step — cell outlines for overlay)
+
 Usage:
-  # CZI with LMD7 transforms (2-level pyramid from read_mosaic)
-  python napari_place_crosses.py -i slide.czi --flip-horizontal --rotate-cw-90
+  # Single slide (LMD7 orientation: flip + rotate is default)
+  python napari_place_crosses.py -i slide.czi --flip-horizontal
 
-  # OME-Zarr (loads 2 pyramid levels as numpy)
+  # Batch with replicate overlay
+  python napari_place_crosses.py --czi-dir /data --slides A B \
+      --sampling-results lmd_replicates_full.json \
+      --contours mk_contours_overlay.json \
+      --flip-horizontal --pyramid-levels 2 8 --output-dir crosses/ --fresh
+
+  # Without rotation (e.g. non-LMD viewing)
+  python napari_place_crosses.py -i slide.czi --no-rotate-cw-90
+
+  # OME-Zarr
   python napari_place_crosses.py -i slide.ome.zarr
-
-  # With contour overlay
-  python napari_place_crosses.py -i slide.czi --contours mk_contours_overlay.json --slide FGC3
-
-  # Batch mode
-  python napari_place_crosses.py --czi-dir /data --slides A B --output-dir crosses/
 """
 
 import argparse
@@ -925,8 +933,11 @@ def main():
     # Display transforms
     parser.add_argument('--flip-horizontal', action='store_true',
                         help='Mirror horizontally (tissue-down for LMD7)')
-    parser.add_argument('--rotate-cw-90', action='store_true',
-                        help='Rotate 90 degrees clockwise')
+    parser.add_argument('--rotate-cw-90', action='store_true', default=True,
+                        help='Rotate 90 degrees clockwise (default: on for LMD7)')
+    parser.add_argument('--no-rotate-cw-90', dest='rotate_cw_90',
+                        action='store_false',
+                        help='Disable 90-degree clockwise rotation')
 
     # Overlays
     parser.add_argument('--contours', type=str, default=None,
@@ -966,6 +977,28 @@ def main():
         args.input = args.zarr_path
     if args.contours is None and args.detections:
         args.contours = args.detections
+
+    # Guidance: check overlay files exist
+    transforms = []
+    if args.flip_horizontal:
+        transforms.append('flip-H')
+    if args.rotate_cw_90:
+        transforms.append('rot-CW-90')
+    print(f"\nDisplay transforms: {', '.join(transforms) if transforms else 'none'}")
+
+    missing = []
+    if args.sampling_results and not Path(args.sampling_results).exists():
+        missing.append(('--sampling-results', args.sampling_results,
+                        'replicate/well assignments (from select_mks_for_lmd.py)'))
+    if args.contours and not Path(args.contours).exists():
+        missing.append(('--contours', args.contours,
+                        'cell outlines for overlay'))
+    if missing:
+        print("\nMissing overlay files — copy from server first:")
+        for flag, path, desc in missing:
+            print(f"  {flag} {path}")
+            print(f"    ({desc})")
+        sys.exit(1)
 
     # Batch mode
     if args.czi_dir and args.slides:
