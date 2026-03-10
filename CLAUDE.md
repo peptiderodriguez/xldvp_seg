@@ -335,6 +335,7 @@ UID format: `{slide}_{celltype}_{x}_{y}`
 | `scripts/preview_preprocessing.py` | Preview flat-field / photobleach correction at reduced resolution |
 | `scripts/run_pipeline.sh` | YAML config-driven multi-slide SLURM launcher |
 | `scripts/select_mks_for_lmd.py` | MK-specific LMD replicate selection + multi-plate well assignment |
+| `scripts/lmd_export_replicates.py` | Replicate-based LMD XML export (pre-assigned wells + contours) |
 | `scripts/system_info.py` | Environment detection + resource recommendation for SLURM |
 
 ---

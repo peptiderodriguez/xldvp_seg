@@ -44,6 +44,14 @@ CROSS_LABELS = ['Cross 1 (RED)', 'Cross 2 (GREEN)', 'Cross 3 (CYAN)']
 SCREEN_PX = 80        # cross arm = 80 screen pixels
 THICKNESS_FRAC = 0.02  # bar thickness = 2% of arm length
 
+REP_COLORS = [
+    (0.12, 0.56, 1.0, 0.9),   # dodgerblue
+    (1.0, 0.39, 0.28, 0.9),   # tomato
+    (0.20, 0.80, 0.20, 0.9),  # limegreen
+    (1.0, 0.84, 0.0, 0.9),    # gold
+    (0.58, 0.44, 0.86, 0.9),  # mediumpurple
+]
+
 
 # ---------------------------------------------------------------------------
 # Image loading — always returns (pyramid, full_w, full_h, pixel_size_um, ...)
@@ -448,6 +456,91 @@ def load_contour_overlay(viewer, contours_path, slide_filter,
 
 
 # ---------------------------------------------------------------------------
+# Sampling results overlay (replicate dots/contours)
+# ---------------------------------------------------------------------------
+
+def load_sampling_overlay(viewer, path, slide_name, image_width_px,
+                          pixel_size_um, flip_h, rot90, world_scale,
+                          orig_h=None, orig_w=None):
+    """Overlay colored sized dots per replicate/well on the slide.
+
+    Loads replicate JSON, filters by slide name, adds one add_points layer
+    per replicate with per-cell sized discs.
+
+    Args:
+        path: Path to replicate JSON (lmd_replicates_full.json).
+        slide_name: Key to look up in the JSON.
+        image_width_px: CZI bounding box width for flip transforms.
+        pixel_size_um: For converting area_um2 to pixel diameter.
+        flip_h, rot90: Display transforms applied to image.
+        world_scale: Divisor to convert native px to world coords.
+        orig_h, orig_w: Native image dimensions for rot90 transform.
+    """
+    with open(path) as f:
+        data = json.load(f)
+
+    if slide_name not in data:
+        # Try substring match
+        matched = [k for k in data if slide_name in k or k in slide_name]
+        if len(matched) == 1:
+            slide_name = matched[0]
+            print(f"  Sampling: matched slide key '{slide_name}'")
+        elif matched:
+            print(f"  Warning: ambiguous slide match: {matched}")
+            return
+        else:
+            print(f"  Warning: slide '{slide_name}' not in sampling results")
+            return
+
+    slide_data = data[slide_name]
+    replicates = slide_data.get('replicates', [])
+    if not replicates:
+        print(f"  Warning: no replicates for '{slide_name}'")
+        return
+
+    for i, rep in enumerate(replicates):
+        cells = rep.get('cells', [])
+        if not cells:
+            continue
+
+        pts = []
+        sizes = []
+        for c in cells:
+            cx, cy = c['center_x'], c['center_y']
+
+            # Apply same transforms as image
+            if flip_h:
+                cx = image_width_px - cx
+            if rot90:
+                # CW 90: (x, y) -> (y, orig_h - x) in napari [row, col]
+                new_row = cx
+                new_col = (orig_h or image_width_px) - cy
+                pts.append((new_row / world_scale, new_col / world_scale))
+            else:
+                pts.append((cy / world_scale, cx / world_scale))
+
+            # Diameter in full-res pixels from area_um2
+            area_um2 = c.get('area_um2', 100)
+            diam_px = 2 * (area_um2 / 3.14159) ** 0.5 / pixel_size_um
+            sizes.append(diam_px / world_scale)
+
+        color = REP_COLORS[i % len(REP_COLORS)]
+        rep_num = rep.get('replicate', i + 1)
+        well = rep.get('well', '?')
+
+        lyr = viewer.add_points(
+            np.array(pts), name=f"Rep{rep_num} ({well})",
+            symbol='disc', size=np.array(sizes),
+            face_color=np.array([color]),
+            edge_color=np.array([color]), opacity=0.4,
+        )
+        lyr.mouse_pan = False
+        lyr.mouse_zoom = False
+
+    print(f"  Sampling overlay: {len(replicates)} replicates")
+
+
+# ---------------------------------------------------------------------------
 # Main viewer
 # ---------------------------------------------------------------------------
 
@@ -475,9 +568,13 @@ def run_single_slide(args, input_path=None, output_path=None):
     zarr_meta = None
 
     if is_czi:
-        sf = getattr(args, 'scale_factor', 2)
-        # Build 2-level pyramid: fine (sf) + coarse (sf*4)
-        scale_factors = tuple(sorted(set([sf, sf * 4])))
+        # Use --pyramid-levels if specified, otherwise compute from --scale-factor
+        pyramid_levels = getattr(args, 'pyramid_levels', None)
+        if pyramid_levels:
+            scale_factors = tuple(sorted(set(pyramid_levels)))
+        else:
+            sf = getattr(args, 'scale_factor', 2)
+            scale_factors = tuple(sorted(set([sf, sf * 4])))
         pyramid, fw, fh, pxum = load_czi_pyramid(
             input_path, channel=getattr(args, 'channel', 0),
             scale_factors=scale_factors,
@@ -561,6 +658,26 @@ def run_single_slide(args, input_path=None, output_path=None):
             )
         except Exception as e:
             print(f"  Warning: contour load failed: {e}")
+
+    # ── Sampling results overlay ────────────────────────────────
+    sampling_path = getattr(args, 'sampling_results', None)
+    if sampling_path and Path(sampling_path).exists():
+        print(f"  Loading sampling results: {sampling_path}")
+        try:
+            slide_filter = getattr(args, 'slide', None) or slide_name
+            # Sampling points (center_x/y) are in CZI native pixels — same
+            # coordinate space as contours, so use same transform parameters.
+            load_sampling_overlay(
+                viewer, str(sampling_path),
+                slide_name=slide_filter,
+                image_width_px=contour_orig_w,
+                pixel_size_um=pxum,
+                flip_h=flip_h, rot90=rotate,
+                world_scale=contour_world_scale,
+                orig_h=contour_orig_h, orig_w=contour_orig_w,
+            )
+        except Exception as e:
+            print(f"  Warning: sampling overlay failed: {e}")
 
     # ── Cross placement ─────────────────────────────────────────
     positions = [None, None, None]
@@ -796,6 +913,9 @@ def main():
     parser.add_argument('--scale-factor', type=int, default=2,
                         help='CZI base downsampling (default: 2 = 1/2 res). '
                              'Second level is auto 4x coarser.')
+    parser.add_argument('--pyramid-levels', type=int, nargs='+', default=None,
+                        help='CZI downsampling factors (e.g. --pyramid-levels 2 8). '
+                             'Overrides --scale-factor.')
 
     # Zarr options
     parser.add_argument('--level', type=str, default='1/2',
@@ -816,6 +936,9 @@ def main():
     parser.add_argument('--color-by', type=str, default=None,
                         help='Color contours by field (e.g. group, classification, '
                              'score_class, tdTomato_class)')
+    parser.add_argument('--sampling-results', type=str, default=None,
+                        help='Replicate JSON (lmd_replicates_full.json) — overlay '
+                             'colored dots per replicate/well')
 
     # Other
     parser.add_argument('--pixel-size', type=float, default=None,

@@ -1,31 +1,33 @@
 # Project Plan and Task Tracking
-Last Updated: 2026-03-07 21:54
+Last Updated: 2026-03-10
 
-## Current Task: Code Review - SAM2 MK Extraction + Classifier Retrain Scripts
+## Active To-Do
 
-### Files Under Review
-1. `scripts/extract_sam2_for_mk.py` - Multi-GPU SAM2 embedding extraction from CZI
-2. `scripts/slurm_extract_sam2_array.sh` - SLURM array job (4 nodes, 4 GPUs each)
-3. `scripts/retrain_mk_classifier.py` - Retrain RF classifier with SAM2 embeddings
+### MK Hindlimb Unloading
+- [ ] Place reference crosses on remaining 15 slides (only FGC3 has crosses)
+- [ ] Generate LMD XML export from replicate assignments (need crosses first)
 
-### Review Status
-- [x] Read all 3 scripts
-- [x] Traced coordinate conventions through pipeline
-- [x] Verified read_mosaic region parameter convention
-- [x] Checked SAM2 embedding extraction pattern vs base.py
-- [x] Analyzed feature alignment across 3 training data sources
-- [x] Compiled findings by severity
-- [x] Delivered review report
+### Pipeline (Low Priority)
+- [ ] Per-tile resume for shard mode
+- [ ] `compute_normalization_params.py` — remove hardcoded CZI directory path
+- [ ] `serve_html.py` — use handler `directory` param instead of `os.chdir()`
+- [ ] Cross-tile vessel merge — generate HTML crops for merged vessels
+
+## Recently Completed (Mar 2026)
+- [x] Multi-plate 384-well `well_plate.py` module (consolidated from 3 duplicates)
+- [x] LMD replicate builder with area normalization, multi-plate, 10% QC empties
+- [x] SAM2 extraction for all 16 MK slides (SLURM array, outputs in `sam2_embeddings/`)
+- [x] MK classifier retrained (morph-only, morph+SAM2, morph-nocolor variants)
+- [x] MK mask refinement dry-run (`mask_refinement_comparison.html`)
+- [x] MK ANOVA significance analysis (ART, BH correction, dual-pathway model)
+- [x] Publication dashboard with shape panel (circularity, maturation arrest)
+- [x] n45 liver 5-channel Cellpose pipeline (detected, classified, exported)
+- [x] Vessel community analysis script
+- [x] Spatial viewer updates (KDE contours, graph-pattern regions)
+- [x] All docs updated (CLAUDE.md, /analyze, /lmd-export, memory files)
 
 ## Previous Tasks
-- SAM2 MK extraction + retrain review (completed 2026-03-07)
-- Round 12: Processing Modules Deep Dive (completed)
-- Round 11: run_segmentation.py End-to-End Review (completed)
-- Round 10: Detection Strategies and Strategy Factory (completed)
-- Round 9: IO and Preprocessing Modules (completed)
-- Round 8: Utils, LMD, and Scripts (completed)
-- Round 7: Unified Cell Analysis Pipeline (completed)
-- Round 6d: Preprocessing and Utility Modules (completed)
-- Round 6c: Detection, Deduplication, Output Paths (completed)
-- Round 6b: Memory and Data Flow Review (completed)
-- Round 6: run_pipeline.sh bugs (completed 2026-02-27)
+- Code review rounds 1-14 (completed)
+- Pipeline modularization (completed 2026-03-01)
+- SpatialData integration (completed 2026-03-02)
+- Direct-to-SHM loading + perf optimizations (completed 2026-03-02)

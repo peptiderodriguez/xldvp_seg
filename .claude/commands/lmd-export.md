@@ -190,6 +190,50 @@ After each step, review results and give targeted feedback:
 
 ---
 
+## Replicate-Based Export (Pre-Assigned Wells)
+
+For the MK proteomics workflow where replicates and well assignments are already computed
+(via `select_mks_for_lmd.py`), use the replicate export script instead:
+
+### Step R1: Build replicates
+```bash
+PYTHONPATH=$REPO $MKSEG_PYTHON $REPO/scripts/select_mks_for_lmd.py \
+    --detections <detections.json> \
+    --output-dir <output>/replicates
+```
+Produces `lmd_replicates_full.json` with per-cell well assignments.
+
+### Step R2: Place crosses with replicate overlay
+```bash
+PYTHONPATH=$REPO $MKSEG_PYTHON $REPO/scripts/napari_place_crosses.py \
+    -i <czi_path> --flip-horizontal \
+    --contours <contours.json> --slide <slide_name> \
+    --sampling-results <replicates.json> \
+    --pyramid-levels 2 8 \
+    -o <crosses.json>
+```
+Shows colored dots per replicate/well so you can verify cell assignments while placing crosses.
+
+### Step R3: Export XML from replicates
+```bash
+PYTHONPATH=$REPO $MKSEG_PYTHON $REPO/scripts/lmd_export_replicates.py \
+    --sampling-results lmd_replicates_full.json \
+    --contours-json mk_contours_overlay.json \
+    --crosses-dir ./crosses \
+    --output-dir ./xml
+```
+
+Produces per-slide `{slide}_lmd.xml` + `{slide}_summary.json`. Pixel size is read from
+crosses JSON (auto-detected from CZI metadata during cross placement).
+
+### Step R4: Verify
+```bash
+PYTHONPATH=$REPO $MKSEG_PYTHON $REPO/scripts/napari_view_lmd_export.py \
+    --zarr <slide>.ome.zarr --export ./xml
+```
+
+---
+
 ## Rules
 
 - 384-well + serpentine + controls + clustering are always on by default — don't ask about them unless the user specifically wants to change something
