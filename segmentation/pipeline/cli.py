@@ -104,6 +104,9 @@ def build_parser():
                         help='Minimum MK area in um^2 (default 200)')
     parser.add_argument('--mk-max-area', type=float, default=2000.0,
                         help='Maximum MK area in um^2 (default 2000)')
+    parser.add_argument('--refine-masks', action='store_true',
+                        help='Refine SAM2 masks: morphological opening + intensity-based '
+                             'boundary trim to remove marrow bleed (MK only)')
 
     # Cell strategy parameters
     parser.add_argument('--cellpose-input-channels', type=str, default=None,

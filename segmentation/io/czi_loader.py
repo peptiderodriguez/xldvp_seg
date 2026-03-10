@@ -203,16 +203,41 @@ def resolve_channel_indices(
             continue
 
         # 3. Try as marker name matching CZI channel metadata names
+        #    Supports exact match AND substring match (e.g., "hoechst" matches "hoechst 33258")
+        exact_match = None
+        substring_matches = []
         for ch in channels:
             ch_name = (ch.get('name') or '').lower()
             ch_dye = (ch.get('dye') or '').lower()
             ch_fluor = (ch.get('fluorophore') or '').lower()
-            if name_lower in (ch_name, ch_dye, ch_fluor):
-                resolved[spec_str] = ch['index']
-                logger.debug(
-                    f"Channel spec '{spec_str}' -> ch{ch['index']} (matched CZI metadata name)"
-                )
+            meta_fields = (ch_name, ch_dye, ch_fluor)
+            if name_lower in meta_fields:
+                exact_match = ch['index']
                 break
+            # Substring: spec is contained in a metadata field, or vice versa
+            # Require >= 3 chars to avoid short specs matching everything
+            if len(name_lower) >= 3:
+                for field in meta_fields:
+                    if field and (name_lower in field or field in name_lower):
+                        substring_matches.append(ch['index'])
+                        break
+        if exact_match is not None:
+            resolved[spec_str] = exact_match
+            logger.debug(
+                f"Channel spec '{spec_str}' -> ch{exact_match} (matched CZI metadata name)"
+            )
+        elif len(substring_matches) == 1:
+            resolved[spec_str] = substring_matches[0]
+            logger.debug(
+                f"Channel spec '{spec_str}' -> ch{substring_matches[0]} (substring match in CZI metadata)"
+            )
+        elif len(substring_matches) > 1:
+            raise ChannelResolutionError(
+                f"Ambiguous channel spec '{spec_str}': substring-matches multiple channels "
+                f"{[f'ch{i}' for i in substring_matches]}. "
+                f"Use a more specific name or wavelength. "
+                f"Available: {_available_channels_str()}"
+            )
         else:
             raise ChannelResolutionError(
                 f"Cannot resolve channel spec '{spec_str}'. "

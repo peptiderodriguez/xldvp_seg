@@ -1,26 +1,25 @@
 # Project Plan and Task Tracking
-Last Updated: 2026-02-28 15:30
+Last Updated: 2026-03-07 21:54
 
-## Current Task: Code Review Round 12 - Processing Modules Deep Dive
+## Current Task: Code Review - SAM2 MK Extraction + Classifier Retrain Scripts
 
 ### Files Under Review
-1. `segmentation/processing/multigpu_worker.py` - GPU worker processes
-2. `segmentation/processing/multigpu_shm.py` - Shared memory manager
-3. `segmentation/processing/tile_processing.py` - Tile processing helpers
-4. `segmentation/processing/deduplication.py` - Overlap-based deduplication
-5. `segmentation/processing/coordinates.py` - Coordinate conversion
-6. `segmentation/processing/memory.py` - Memory management utilities
-7. `segmentation/processing/pipeline.py` - Detection pipeline orchestration
-8. `segmentation/processing/batch.py` - Batch processing
+1. `scripts/extract_sam2_for_mk.py` - Multi-GPU SAM2 embedding extraction from CZI
+2. `scripts/slurm_extract_sam2_array.sh` - SLURM array job (4 nodes, 4 GPUs each)
+3. `scripts/retrain_mk_classifier.py` - Retrain RF classifier with SAM2 embeddings
 
 ### Review Status
-- [x] Read all target files
-- [x] Read support files (strategy_factory.py, base.py, config.py, tissue.py, __init__.py, COORDINATE_SYSTEM.md)
-- [x] Line-by-line analysis
-- [x] Compile findings by severity
-- [x] Write final review report
+- [x] Read all 3 scripts
+- [x] Traced coordinate conventions through pipeline
+- [x] Verified read_mosaic region parameter convention
+- [x] Checked SAM2 embedding extraction pattern vs base.py
+- [x] Analyzed feature alignment across 3 training data sources
+- [x] Compiled findings by severity
+- [x] Delivered review report
 
 ## Previous Tasks
+- SAM2 MK extraction + retrain review (completed 2026-03-07)
+- Round 12: Processing Modules Deep Dive (completed)
 - Round 11: run_segmentation.py End-to-End Review (completed)
 - Round 10: Detection Strategies and Strategy Factory (completed)
 - Round 9: IO and Preprocessing Modules (completed)

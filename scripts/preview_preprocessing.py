@@ -51,7 +51,6 @@ def downsample(img, factor):
 
 def load_channel(czi_path, channel, scale_factor):
     """Load a single channel, optionally downsampled."""
-    loader = get_loader(str(czi_path))
     meta = get_czi_metadata(czi_path)
     n_channels = meta["n_channels"]
     if channel < 0 or channel >= n_channels:
@@ -59,7 +58,8 @@ def load_channel(czi_path, channel, scale_factor):
         sys.exit(1)
 
     print(f"Loading channel {channel} from {czi_path.name}...")
-    data = loader.load_channel_to_ram(channel)
+    loader = get_loader(str(czi_path), load_to_ram=True, channel=channel)
+    data = loader.get_channel_data(channel)
     if scale_factor > 1:
         print(f"  Downsampling {scale_factor}x: {data.shape} -> ", end="")
         data = downsample(data.astype(np.float32), scale_factor)

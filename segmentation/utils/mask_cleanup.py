@@ -215,6 +215,106 @@ def recompute_mask_features(
     return features
 
 
+def refine_mask_intensity(
+    mask: np.ndarray,
+    tile: np.ndarray,
+    opening_radius: int = 3,
+    bright_percentile: float = 90,
+    peel_iterations: int = 3,
+    min_area_fraction: float = 0.5,
+) -> np.ndarray:
+    """
+    Refine a SAM2 mask by removing scraggly protrusions and bright boundary bleed.
+
+    SAM2 masks for MKs often bleed into bright white marrow interstitial space.
+    This function applies:
+    1. Morphological opening to remove thin protrusions
+    2. Iterative intensity-based boundary peeling — removes boundary pixels
+       that are brighter than the mask interior (marrow bleed)
+    3. Largest connected component extraction
+    4. Size guard — returns original if refined mask is too small
+
+    Args:
+        mask: Binary mask (2D boolean or uint8 array)
+        tile: Image tile (H, W, 3) RGB or (H, W) grayscale, used for intensity check
+        opening_radius: Disk radius for morphological opening (default 3)
+        bright_percentile: Percentile of mask-interior intensity used as threshold
+            for boundary pixel removal (default 90)
+        peel_iterations: Number of boundary-peeling iterations (default 3)
+        min_area_fraction: If refined mask < this fraction of original area,
+            return original mask unchanged (default 0.5)
+
+    Returns:
+        Refined binary mask (same dtype as input)
+    """
+    from skimage.morphology import opening, disk
+
+    if not mask.any():
+        return mask.copy()
+
+    orig_dtype = mask.dtype
+    mask_bool = mask.astype(bool)
+    orig_area = mask_bool.sum()
+
+    # Step 1: Morphological opening — removes scraggly thin protrusions
+    if opening_radius > 0:
+        selem = disk(opening_radius)
+        refined = opening(mask_bool, selem)
+        # If opening removed everything, skip it
+        if not refined.any():
+            refined = mask_bool.copy()
+        else:
+            refined = refined.copy()
+    else:
+        refined = mask_bool.copy()
+
+    # Convert tile to grayscale for intensity comparison
+    if tile.ndim == 3:
+        gray = np.mean(tile.astype(np.float32), axis=2)
+    else:
+        gray = tile.astype(np.float32)
+
+    # Step 2: Iterative intensity-based boundary peeling
+    for _ in range(peel_iterations):
+        if not refined.any():
+            break
+
+        # Create 1-pixel boundary ring: dilated minus current mask
+        dilated = ndimage.binary_dilation(refined, iterations=1)
+        boundary = dilated & ~refined
+        # Actually we want inner boundary: eroded subtracted from mask
+        eroded = ndimage.binary_erosion(refined, iterations=1)
+        inner_boundary = refined & ~eroded
+
+        if not inner_boundary.any():
+            break
+
+        # Compute intensity threshold from mask interior (non-boundary pixels)
+        interior = refined & eroded
+        if not interior.any():
+            break
+
+        interior_intensities = gray[interior]
+        threshold = np.percentile(interior_intensities, bright_percentile)
+
+        # Remove boundary pixels that are brighter than the threshold
+        bright_boundary = inner_boundary & (gray > threshold)
+        if not bright_boundary.any():
+            break  # No bright boundary pixels — converged
+
+        refined[bright_boundary] = False
+
+    # Step 3: Largest connected component
+    if refined.any():
+        refined = get_largest_connected_component(refined)
+
+    # Step 4: Size guard — if refinement was too aggressive, return original
+    if refined.sum() < min_area_fraction * orig_area:
+        return mask.copy()
+
+    return refined.astype(orig_dtype)
+
+
 def apply_cleanup_to_detection(
     mask: np.ndarray,
     feat: Dict[str, Any],

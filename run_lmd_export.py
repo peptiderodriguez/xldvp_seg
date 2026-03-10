@@ -297,106 +297,11 @@ def nearest_neighbor_order(points, start_idx=None):
 # Serpentine well generation (384-well plate, 4 quadrants)
 # ---------------------------------------------------------------------------
 
-def generate_quadrant_serpentine(quadrant, start_corner='auto'):
-    """Generate wells for a 384-well quadrant in serpentine order."""
-    even_rows = ['B', 'D', 'F', 'H', 'J', 'L', 'N']
-    odd_rows = ['C', 'E', 'G', 'I', 'K', 'M', 'O']
-    even_cols = [2, 4, 6, 8, 10, 12, 14, 16, 18, 20, 22]
-    odd_cols = [3, 5, 7, 9, 11, 13, 15, 17, 19, 21, 23]
-
-    if quadrant == 'B2':
-        rows, cols = even_rows, even_cols
-    elif quadrant == 'B3':
-        rows, cols = even_rows, odd_cols
-    elif quadrant == 'C2':
-        rows, cols = odd_rows, even_cols
-    elif quadrant == 'C3':
-        rows, cols = odd_rows, odd_cols
-    else:
-        raise ValueError(f"Unknown quadrant: {quadrant}")
-
-    if start_corner == 'auto':
-        start_corner = 'TL' if quadrant.startswith('B') else 'BR'
-
-    if start_corner == 'TL':
-        row_order = rows
-        first_row_left_to_right = True
-    elif start_corner == 'TR':
-        row_order = rows
-        first_row_left_to_right = False
-    elif start_corner == 'BL':
-        row_order = list(reversed(rows))
-        first_row_left_to_right = True
-    elif start_corner == 'BR':
-        row_order = list(reversed(rows))
-        first_row_left_to_right = False
-    else:
-        raise ValueError(f"Unknown start_corner: {start_corner}")
-
-    wells = []
-    for i, row in enumerate(row_order):
-        if i % 2 == 0:
-            col_order = cols if first_row_left_to_right else list(reversed(cols))
-        else:
-            col_order = list(reversed(cols)) if first_row_left_to_right else cols
-        for col in col_order:
-            wells.append(f"{row}{col}")
-
-    return wells
-
-
-def generate_wells_serpentine_4_quadrants(n_wells):
-    """
-    Generate wells in serpentine order across 4 quadrants: B2 -> B3 -> C3 -> C2.
-
-    Uses auto start corners that minimize travel between quadrants:
-      B2: TL start (B2 -> ... -> N22)
-      B3: determined from last well of B2
-      C3: determined from last well of B3
-      C2: determined from last well of C3
-
-    Each quadrant has 77 wells (7 rows x 11 cols). Total = 308 wells.
-    """
-    if n_wells <= 0:
-        return []
-
-    MAX_WELLS = 308  # 4 quadrants x 77 wells each
-    if n_wells > MAX_WELLS:
-        raise ValueError(
-            f"Requested {n_wells} wells but 384-well plate only has {MAX_WELLS} usable wells "
-            f"(4 quadrants x 77). Reduce the number of detections or split across multiple plates."
-        )
-
-    quadrant_order = ['B2', 'B3', 'C3', 'C2']
-    all_wells = []
-
-    for i, quad in enumerate(quadrant_order):
-        if i == 0:
-            wells = generate_quadrant_serpentine(quad, start_corner='TL')
-        else:
-            # Determine start corner from last well of previous quadrant
-            prev_well = all_wells[-1]
-            prev_row, prev_col = prev_well[0], int(prev_well[1:])
-            top_rows = set('BCDEFGH')
-            is_top = prev_row in top_rows
-            is_left = prev_col <= 12
-
-            if is_top and is_left:
-                start = 'TL'
-            elif is_top and not is_left:
-                start = 'TR'
-            elif not is_top and is_left:
-                start = 'BL'
-            else:
-                start = 'BR'
-
-            wells = generate_quadrant_serpentine(quad, start_corner=start)
-
-        all_wells.extend(wells)
-        if len(all_wells) >= n_wells:
-            return all_wells[:n_wells]
-
-    return all_wells[:n_wells]
+from segmentation.lmd.well_plate import (
+    generate_plate_wells,
+    generate_multiplate_wells,
+    WELLS_PER_PLATE,
+)
 
 
 # ---------------------------------------------------------------------------
@@ -609,7 +514,7 @@ def assign_wells_with_controls(ordered_singles, ordered_single_ctrls,
     """
     # Total wells needed: 2 per single + 2 per cluster
     n_wells = 2 * len(ordered_singles) + 2 * len(ordered_clusters)
-    wells = generate_wells_serpentine_4_quadrants(n_wells)
+    wells = generate_plate_wells(n_wells)
 
     assignments = []
     well_idx = 0
@@ -1451,10 +1356,9 @@ def _run_single_slide(args):
         # -------------------------------------------------------------------
         # Well capacity check (before expensive control generation)
         # -------------------------------------------------------------------
-        MAX_WELLS = 308  # 4 quadrants x 77 wells each on 384-well plate
         n_items = len(ordered_singles_dets) + len(ordered_clusters_data)
         n_wells_needed = n_items * 2 if args.generate_controls else n_items
-        if n_wells_needed > MAX_WELLS:
+        if n_wells_needed > WELLS_PER_PLATE:
             print(f"\n{'='*70}")
             print(f"WELL CAPACITY EXCEEDED")
             print(f"{'='*70}")
@@ -1462,8 +1366,8 @@ def _run_single_slide(args):
             print(f"  Clusters: {len(ordered_clusters_data)}")
             print(f"  Controls: {'yes (x2)' if args.generate_controls else 'no'}")
             print(f"  Wells needed: {n_wells_needed}")
-            print(f"  Wells available: {MAX_WELLS} (384-well plate, 4 quadrants)")
-            print(f"  Overflow: {n_wells_needed - MAX_WELLS} wells")
+            print(f"  Wells available: {WELLS_PER_PLATE} (384-well plate, 4 quadrants)")
+            print(f"  Overflow: {n_wells_needed - WELLS_PER_PLATE} wells")
             print(f"\nOptions:")
             print(f"  1. Increase --min-score to reduce detections")
             print(f"  2. Split detections across multiple plates")
@@ -1606,7 +1510,7 @@ def _run_single_slide(args):
                 # No controls: just assign sequentially
                 all_shapes = ordered_singles + ordered_clusters
                 n_wells = len(all_shapes)
-                well_order = generate_wells_serpentine_4_quadrants(n_wells)
+                well_order = generate_plate_wells(n_wells)
                 for i, shape in enumerate(all_shapes):
                     shape['well'] = well_order[i] if i < len(well_order) else f"overflow_{i}"
                 assignments = all_shapes

@@ -165,7 +165,8 @@ def merge_sam2(samples, embeddings_path):
         print(f"  WARNING: {n_missing} samples still have zero SAM2 embeddings")
 
 
-def train_classifier(samples, output_dir, n_estimators=500, feature_set="all"):
+def train_classifier(samples, output_dir, n_estimators=500, feature_set="all",
+                     exclude_color=False):
     """Train RF classifier on unified training data."""
     from sklearn.ensemble import RandomForestClassifier
     from sklearn.model_selection import (
@@ -174,6 +175,14 @@ def train_classifier(samples, output_dir, n_estimators=500, feature_set="all"):
         train_test_split,
     )
     from sklearn.metrics import classification_report, confusion_matrix
+
+    # Color/intensity features derived from RGB crop rendering — not biologically meaningful
+    COLOR_FEATURES = {
+        "red_mean", "red_std", "green_mean", "green_std", "blue_mean", "blue_std",
+        "hue_mean", "saturation_mean", "value_mean", "gray_mean", "gray_std",
+        "relative_brightness", "intensity_variance", "dark_fraction",
+        "dark_region_fraction",
+    }
 
     output_dir = Path(output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
@@ -199,6 +208,11 @@ def train_classifier(samples, output_dir, n_estimators=500, feature_set="all"):
         )
     else:  # "all"
         feature_names = sorted(all_feature_names)
+
+    if exclude_color:
+        before = len(feature_names)
+        feature_names = [f for f in feature_names if f not in COLOR_FEATURES]
+        print(f"Excluded {before - len(feature_names)} color features")
 
     print(f"\nFeature set '{feature_set}': {len(feature_names)} features")
 
@@ -445,6 +459,10 @@ def main():
         "--feature-set", choices=["all", "morph", "morph_sam2"], default="all",
         help="Feature subset to use (default: all)",
     )
+    tr.add_argument(
+        "--exclude-color", action="store_true",
+        help="Exclude RGB/HSV crop color features (red_mean, hue_mean, etc.)",
+    )
 
     # Score command
     sc = sub.add_parser(
@@ -518,6 +536,7 @@ def main():
             args.output_dir,
             n_estimators=args.n_estimators,
             feature_set=args.feature_set,
+            exclude_color=args.exclude_color,
         )
 
     elif args.command == "score":

@@ -11,7 +11,6 @@ Usage:
 import argparse
 import json
 import re
-import string
 import sys
 from pathlib import Path
 
@@ -20,6 +19,7 @@ import numpy as np
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from segmentation.lmd.selection import select_cells_for_lmd
+from segmentation.lmd.well_plate import generate_multiplate_wells, insert_empty_wells, WELLS_PER_PLATE
 
 DATASET_DIR = Path("/Volumes/pool-mann-edwin/bm_lmd_feb2026/mk_clf084_dataset")
 BONE_JSON = DATASET_DIR / "all_mks_with_rejected3.json"
@@ -32,43 +32,6 @@ def parse_slide_metadata(slide: str) -> dict:
     sex = tag[0]
     treatment = re.match(r"[FM]([A-Z]+)", tag).group(1)[:2]
     return {"sex": sex, "treatment": treatment}
-
-
-def serpentine_wells_384():
-    """Generate 384-well positions across quadrants with alternating serpentine.
-
-    Rules (fixed for all LMD experiments):
-    - No outer wells ever (row A, row P, col 1, col 24)
-    - Quadrant order: B2 → B3 → C3 → C2
-      (named by first usable well; B3 = even rows/odd cols,
-       C3 = odd rows/odd cols, C2 = odd rows/even cols)
-    - First quadrant (B2): top-left → bottom-right serpentine
-    - Second quadrant (B3): bottom-right → top-left serpentine
-    - Alternates direction each quadrant
-    - 7 rows × 11 cols = 77 usable wells per quadrant, 308 total
-    """
-    # (row_parity, col_parity): 0=odd(A-row/1-col), 1=even(B-row/2-col)
-    # B2(even,even) → B3(even,odd) → C3(odd,odd) → C2(odd,even)
-    quadrant_order = [(1, 1), (1, 0), (0, 0), (0, 1)]
-
-    for q_idx, (row_par, col_par) in enumerate(quadrant_order):
-        all_rows = [string.ascii_uppercase[i] for i in range(row_par, 16, 2)]
-        all_cols = list(range(col_par + 1, 25, 2))  # +1: cols are 1-based
-
-        rows = [r for r in all_rows if r not in ("A", "P")]
-        cols = [c for c in all_cols if c not in (1, 24)]
-
-        # Odd quadrants: reverse rows (bottom-right → top-left)
-        if q_idx % 2 == 1:
-            rows = list(reversed(rows))
-
-        for i, row in enumerate(rows):
-            if q_idx % 2 == 0:
-                c = cols if i % 2 == 0 else list(reversed(cols))
-            else:
-                c = list(reversed(cols)) if i % 2 == 0 else cols
-            for col in c:
-                yield f"{row}{col}"
 
 
 def main():
@@ -153,26 +116,28 @@ def main():
             rng.shuffle(g["replicates"])
             results.append(g)
 
-    # Assign wells — serpentine across quadrants (B2→B1→A2→A1, 308 max)
+    # Assign wells — serpentine across quadrants (B2→B3→C3→C2, multi-plate)
     # Insert 10% blank wells randomly distributed for QC
     total_reps = sum(len(g["replicates"]) for g in results)
     n_blanks = int(np.ceil(total_reps * 0.10))
     total_wells = total_reps + n_blanks
-    if total_wells > 308:
-        print(f"WARNING: {total_wells} wells needed ({total_reps} samples + "
-              f"{n_blanks} blanks) exceeds 308-well capacity")
+    if total_wells > WELLS_PER_PLATE:
+        n_plates = -(-total_wells // WELLS_PER_PLATE)
+        print(f"NOTE: {total_wells} wells needed ({total_reps} samples + "
+              f"{n_blanks} blanks) — using {n_plates} plate(s)")
 
-    wells = list(zip(range(total_wells), serpentine_wells_384()))
-    blank_positions = set(rng.choice(total_wells, size=n_blanks, replace=False))
+    plate_wells = generate_multiplate_wells(total_wells)
+    _, blank_positions = insert_empty_wells(plate_wells, total_reps, empty_pct=10.0, seed=args.seed)
 
     blanks_list = []
     rep_iter = iter([(g, rep) for g in results for rep in g["replicates"]])
-    for pos, well in wells:
+    for pos, (plate_num, well) in enumerate(plate_wells):
         if pos in blank_positions:
             blanks_list.append(well)
         else:
             _, rep = next(rep_iter)
             rep["well"] = well
+            rep["plate"] = plate_num
 
     output = {
         "params": {
@@ -204,7 +169,7 @@ def main():
     print(f"\nWrote selections to {out_path}")
 
     # Build flat list of all wells in serpentine (collection) order
-    well_order = {w: i for i, (_, w) in enumerate(wells)}
+    well_order = {w: i for i, (_, w) in enumerate(plate_wells)}
     all_wells = []
     for g in results:
         for rep in g["replicates"]:

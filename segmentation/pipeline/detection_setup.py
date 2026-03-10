@@ -148,6 +148,7 @@ def build_detection_params(args, pixel_size_um):
         params = {
             'mk_min_area': args.mk_min_area,
             'mk_max_area': args.mk_max_area,
+            'refine_masks': getattr(args, 'refine_masks', False),
         }
     elif args.cell_type == 'cell':
         params = {

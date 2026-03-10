@@ -584,13 +584,32 @@ def _compute_hu_effects(agg_df, features):
 
 
 # ── Summary dashboard ──────────────────────────────────────────────────
+def _decompose_systemic_local(hu_effects, feat):
+    """Decompose HU response into systemic (avg) and local (bone-divergence) components."""
+    result = {}
+    for sex in ['F', 'M']:
+        fem_pct = hu_effects[feat][sex]['femur']['pct_change']
+        hum_pct = hu_effects[feat][sex]['humerus']['pct_change']
+        if np.isnan(fem_pct) or np.isnan(hum_pct):
+            result[sex] = {'systemic': np.nan, 'local': np.nan,
+                           'femur_pct': fem_pct, 'humerus_pct': hum_pct}
+            continue
+        result[sex] = {
+            'systemic': (fem_pct + hum_pct) / 2,
+            'local': (fem_pct - hum_pct) / 2,
+            'femur_pct': fem_pct,
+            'humerus_pct': hum_pct,
+        }
+    return result
+
+
 def generate_summary_dashboard(agg_df, features, anova_results, results_df, output_path):
     """Generate 3x3 biological summary dashboard.
 
     Row 1: Sex x Treatment interaction, both bones overlaid — line plots
-           (solid + circle = femur/unloaded, dashed + triangle = humerus/overloaded)
-    Row 2: Bone attenuation (HU effect by bone) — grouped delta bars
-    Row 3: Attenuation ratios, bone concordance scatter, ANOVA heatmap
+           with significance annotations and effect hierarchy
+    Row 2: Systemic vs Local decomposition — the key mechanistic panel
+    Row 3: Bone concordance scatter, effect hierarchy waterfall, ANOVA heatmap
     """
     KEY_FEATS = ['area_um2', 'elongation', 'density_per_mm2']
     FEAT_LABELS = {
@@ -606,10 +625,10 @@ def generate_summary_dashboard(agg_df, features, anova_results, results_df, outp
     all_feats = list(set(features) | set(KEY_FEATS))
     hu_effects = _compute_hu_effects(agg_df, [f for f in all_feats if f in agg_df.columns])
 
-    fig = plt.figure(figsize=(17, 15))
+    fig = plt.figure(figsize=(17, 16))
     gs = fig.add_gridspec(3, 3, hspace=0.42, wspace=0.35,
                           left=0.07, right=0.95, top=0.92, bottom=0.06)
-    fig.suptitle('MK Response to Hindlimb Unloading: Sex-Dimorphic Niche Modulation',
+    fig.suptitle('MK Response to Hindlimb Unloading: Two-Pathway Regulation',
                  fontsize=14, fontweight='bold')
     panels = 'ABCDEFGHI'
     rng = np.random.default_rng(42)
@@ -619,7 +638,6 @@ def generate_summary_dashboard(agg_df, features, anova_results, results_df, outp
         'femur': {'linestyle': '-', 'marker': 'o', 'label_suffix': 'fem'},
         'humerus': {'linestyle': '--', 'marker': '^', 'label_suffix': 'hum'},
     }
-    BONE_LONG = {'femur': 'Femur (unloaded)', 'humerus': 'Humerus (overloaded)'}
 
     # ── ROW 1: Sex x Treatment interaction, both bones overlaid ──────
     for ci, feat in enumerate(KEY_FEATS):
@@ -658,8 +676,7 @@ def generate_summary_dashboard(agg_df, features, anova_results, results_df, outp
                                    s=20, marker=bs['marker'],
                                    edgecolors='black', linewidth=0.4, zorder=2)
 
-        # % change annotations (one per sex × bone, positioned to avoid overlap)
-        annot_count = 0
+        # % change annotations
         for sex in ['F', 'M']:
             for bone in ['femur', 'humerus']:
                 eff = hu_effects[feat][sex][bone]
@@ -668,7 +685,6 @@ def generate_summary_dashboard(agg_df, features, anova_results, results_df, outp
                     continue
                 sign = '+' if pct > 0 else ''
                 bs = BONE_STYLE[bone]
-                # Stagger annotations vertically
                 y_pos = eff['hu_mean']
                 side = 1 if sex == 'F' else -1
                 x_off = side * (0.20 + 0.15 * (bone == 'humerus'))
@@ -679,203 +695,246 @@ def generate_summary_dashboard(agg_df, features, anova_results, results_df, outp
                             arrowprops=dict(arrowstyle='->', color=LINE_COLORS[sex],
                                             lw=0.8, shrinkA=2, shrinkB=2),
                             ha='center', va='center')
-                annot_count += 1
+
+        # Significance box: show top ANOVA effects for this feature
+        sig_texts = []
+        for eff_name in ['treatment', 'sex', 'sex:treatment', 'treatment:bone']:
+            mask = (results_df['feature'] == feat) & (results_df['effect'] == eff_name)
+            r = results_df[mask]
+            if len(r) > 0:
+                p = r.iloc[0]['art_p']
+                eta = r.iloc[0]['art_partial_eta2']
+                q = r.iloc[0].get('art_p_bh', p)
+                if p < 0.10:
+                    stars = '***' if p < 0.001 else '**' if p < 0.01 else '*' if p < 0.05 else '\u2020'
+                    eff_short = eff_name.replace('treatment', 'Trt').replace('sex', 'Sex').replace('bone', 'Bone').replace(':', '\u00d7')
+                    bh_note = ' (BH)' if q < 0.05 else ''
+                    sig_texts.append(f'{eff_short}: \u03b7\u00b2={eta:.2f} {stars}{bh_note}')
+        if sig_texts:
+            ax.text(0.02, 0.98, '\n'.join(sig_texts), transform=ax.transAxes,
+                    fontsize=6.5, va='top', ha='left',
+                    bbox=dict(boxstyle='round,pad=0.3', facecolor='lightyellow',
+                              edgecolor='#ccc', alpha=0.9))
 
         ax.set_xticks([0, 1])
         ax.set_xticklabels(['GC', 'HU'], fontsize=10)
         ax.set_title(f'{panels[ci]}: {FEAT_LABELS[feat]}',
                      fontsize=11, fontweight='bold')
-        # Compact legend: 2 cols
         ax.legend(fontsize=7, loc='best', ncol=2,
                   handlelength=2.5, columnspacing=1)
         ax.set_xlabel('Treatment', fontsize=9)
 
-    # ── ROW 2: Bone attenuation (delta bars by bone) ──────────────────
-    for ci, feat in enumerate(KEY_FEATS):
-        ax = fig.add_subplot(gs[1, ci])
-
-        x = np.arange(2)
-        width = 0.35
-        fem_d, hum_d = [], []
-        for sex in ['F', 'M']:
-            fem_d.append(hu_effects[feat][sex]['femur']['delta'])
-            hum_d.append(hu_effects[feat][sex]['humerus']['delta'])
-
-        ax.bar(x - width / 2, fem_d, width, label='Femur',
-               color=LINE_COLORS['femur'], alpha=0.8, edgecolor='white')
-        ax.bar(x + width / 2, hum_d, width, label='Humerus',
-               color=LINE_COLORS['humerus'], alpha=0.8, edgecolor='white')
-        ax.axhline(0, color='gray', linewidth=0.8, linestyle='--')
-
-        # Overlay individual slide-level deltas
+    # ── ROW 2: Systemic vs Local decomposition ──────────────────────
+    # Panel D: Decomposition bar chart
+    ax_d = fig.add_subplot(gs[1, 0:2])
+    sex_colors = {'F': LINE_COLORS['F'], 'M': LINE_COLORS['M']}
+    decomp_feats = [('area_um2', 'Area'), ('elongation', 'Elongation'),
+                    ('density_per_mm2', 'Density')]
+    bar_width = 0.18
+    for fi, (feat_key, feat_label) in enumerate(decomp_feats):
+        decomp = _decompose_systemic_local(hu_effects, feat_key)
+        cx = fi * 1.3
         for si, sex in enumerate(['F', 'M']):
-            for bi, bone in enumerate(['femur', 'humerus']):
-                bone_color = LINE_COLORS[bone]
-                x_center = si + (bi - 0.5) * width
-                # Get per-slide values for HU and GC
-                mask_sex_bone = (agg_df['sex'] == sex) & (agg_df['bone'] == bone)
-                gc_vals = agg_df[mask_sex_bone & (agg_df['treatment'] == 'GC')][feat].dropna().values
-                hu_vals = agg_df[mask_sex_bone & (agg_df['treatment'] == 'HU')][feat].dropna().values
-                gc_mean = np.mean(gc_vals) if len(gc_vals) > 0 else np.nan
-                if np.isnan(gc_mean):
-                    continue
-                # Each HU slide's delta from the GC mean
-                slide_deltas = hu_vals - gc_mean
-                if len(slide_deltas) > 0:
-                    jitter = rng.uniform(-0.04, 0.04, len(slide_deltas))
-                    ax.scatter(np.full(len(slide_deltas), x_center) + jitter,
-                               slide_deltas, color=bone_color, alpha=0.6, s=22,
-                               edgecolors='black', linewidth=0.5, zorder=4)
-
-        ax.set_xticks(x)
-        ax.set_xticklabels(['Female', 'Male'], fontsize=10)
-        ax.set_title(f'{panels[ci + 3]}: {FEAT_LABELS[feat]} \u2014 by bone',
-                     fontsize=11, fontweight='bold')
-        ax.legend(fontsize=8, loc='best')
-        ax.set_ylabel('\u0394 (HU \u2212 GC)', fontsize=9)
-
-        # Attenuation ratio annotation
-        for si, sex in enumerate(['F', 'M']):
-            afd = abs(hu_effects[feat][sex]['femur']['delta'])
-            ahd = abs(hu_effects[feat][sex]['humerus']['delta'])
-            if afd < 1e-9 or ahd < 1e-9:
+            syst = decomp[sex]['systemic']
+            local = abs(decomp[sex]['local'])
+            if np.isnan(syst) or np.isnan(local):
                 continue
-            ratio = afd / ahd
-            ratio_str = f'{ratio:.1f}:1' if ratio >= 1 else f'1:{1 / ratio:.1f}'
-            y_vals = [fem_d[si], hum_d[si]]
-            y_top = max(y_vals) if max(y_vals) > 0 else min(y_vals)
-            offset = abs(max(y_vals) - min(y_vals)) * 0.25 + abs(y_top) * 0.08
-            y_pos = y_top + offset if y_top >= 0 else y_top - offset
-            ax.text(si, y_pos, f'F:H {ratio_str}', ha='center', fontsize=8,
-                    style='italic', color='#555555')
+            base = cx - 2 * bar_width - 0.03 + si * (2 * bar_width + 0.06)
+            x_syst = base
+            x_local = base + bar_width
+            ax_d.bar(x_syst, syst, bar_width, color=sex_colors[sex], alpha=0.8,
+                     edgecolor='white', linewidth=0.5)
+            ax_d.bar(x_local, local, bar_width, color=sex_colors[sex], alpha=0.35,
+                     edgecolor=sex_colors[sex], linewidth=1.2, hatch='///')
+            # Value labels
+            for xp, val in [(x_syst, syst), (x_local, local)]:
+                if abs(val) >= 1:
+                    y_off = 1.5 if abs(val) > 3 else 0.8
+                    va = 'bottom' if val >= 0 else 'top'
+                    y_pos = val + y_off if val >= 0 else val - y_off
+                    ax_d.text(xp, y_pos, f'{val:+.0f}',
+                              ha='center', va=va, fontsize=7, color='#555',
+                              fontweight='bold')
+
+    ax_d.set_xticks([fi * 1.3 for fi in range(len(decomp_feats))])
+    ax_d.set_xticklabels([fl for _, fl in decomp_feats], fontsize=10, fontweight='bold')
+    ax_d.set_ylabel('% change (HU vs GC)', fontsize=9)
+    ax_d.axhline(0, color='#999', linewidth=0.8)
+    ax_d.set_title(f'{panels[3]}: Pathway Decomposition \u2014 Systemic vs Local',
+                   fontsize=11, fontweight='bold')
+    ymin, ymax = ax_d.get_ylim()
+    ax_d.set_ylim(min(ymin - 5, -15), max(ymax + 10, 55))
+    from matplotlib.patches import Patch
+    legend_elems = [
+        Patch(facecolor='#999', alpha=0.8, label='Systemic (avg both bones)'),
+        Patch(facecolor='#999', alpha=0.35, edgecolor='#999', hatch='///',
+              label='Local (|femur \u2212 humerus|/2)'),
+        Patch(facecolor=sex_colors['F'], alpha=0.8, label='Female'),
+        Patch(facecolor=sex_colors['M'], alpha=0.8, label='Male'),
+    ]
+    ax_d.legend(handles=legend_elems, fontsize=7, loc='upper left', framealpha=0.9, ncol=2)
+    ax_d.spines['top'].set_visible(False)
+    ax_d.spines['right'].set_visible(False)
+
+    # Panel E: Effect hierarchy waterfall
+    ax_e = fig.add_subplot(gs[1, 2])
+    # Show top effects sorted by eta-squared for area_um2 (representative)
+    hierarchy_effects = ['treatment', 'sex', 'sex:treatment', 'treatment:bone',
+                         'bone', 'sex:bone', 'sex:treatment:bone']
+    eff_labels_short = {
+        'treatment': 'Treatment\n(systemic)',
+        'sex': 'Sex\n(baseline)',
+        'sex:treatment': 'Sex\u00d7Trt\n(response)',
+        'treatment:bone': 'Trt\u00d7Bone\n(local)',
+        'bone': 'Bone',
+        'sex:bone': 'Sex\u00d7Bone',
+        'sex:treatment:bone': '3-way',
+    }
+    etas, ps, colors_h = [], [], []
+    for eff in hierarchy_effects:
+        mask = (results_df['feature'] == 'area_um2') & (results_df['effect'] == eff)
+        r = results_df[mask]
+        if len(r) > 0:
+            etas.append(r.iloc[0]['art_partial_eta2'])
+            ps.append(r.iloc[0]['art_p'])
+            q = r.iloc[0].get('art_p_bh', 1.0)
+            if q < 0.05:
+                colors_h.append('#1565c0')
+            elif r.iloc[0]['art_p'] < 0.05:
+                colors_h.append('#42a5f5')
+            elif r.iloc[0]['art_p'] < 0.10:
+                colors_h.append('#90caf9')
+            else:
+                colors_h.append('#e0e0e0')
+        else:
+            etas.append(0)
+            ps.append(1)
+            colors_h.append('#e0e0e0')
+
+    y_pos = np.arange(len(hierarchy_effects))
+    ax_e.barh(y_pos, etas, color=colors_h, edgecolor='white', height=0.6)
+    ax_e.set_yticks(y_pos)
+    ax_e.set_yticklabels([eff_labels_short[e] for e in hierarchy_effects], fontsize=8)
+    ax_e.invert_yaxis()
+    ax_e.set_xlabel('Partial \u03b7\u00b2 (area)', fontsize=9)
+    ax_e.set_title(f'{panels[4]}: Effect Hierarchy (area)',
+                   fontsize=11, fontweight='bold')
+    # Add p-value annotations
+    for i, (eta, p) in enumerate(zip(etas, ps)):
+        stars = '***' if p < 0.001 else '**' if p < 0.01 else '*' if p < 0.05 else '\u2020' if p < 0.10 else 'n.s.'
+        ax_e.text(eta + 0.01, i, f'\u03b7\u00b2={eta:.2f} {stars}', va='center',
+                  fontsize=7, fontweight='bold' if p < 0.05 else 'normal')
+    ax_e.spines['top'].set_visible(False)
+    ax_e.spines['right'].set_visible(False)
+    # Legend for colors
+    from matplotlib.patches import Patch as Patch2
+    ax_e.legend(handles=[
+        Patch2(facecolor='#1565c0', label='BH q<0.05'),
+        Patch2(facecolor='#42a5f5', label='p<0.05'),
+        Patch2(facecolor='#90caf9', label='p<0.10'),
+        Patch2(facecolor='#e0e0e0', label='n.s.'),
+    ], fontsize=6, loc='lower right', framealpha=0.9)
 
     # ── ROW 3 ─────────────────────────────────────────────────────────
 
-    # Panel G: Attenuation ratio summary (horizontal bars, all split by sex)
-    ax_g = fig.add_subplot(gs[2, 0])
-    ratio_items = []
-    for feat, label in [('area_um2', 'Size'), ('elongation', 'Shape'),
-                         ('density_per_mm2', 'Density')]:
-        for sex, slabel in [('M', 'M'), ('F', 'F')]:
-            afd = abs(hu_effects[feat][sex]['femur']['delta'])
-            ahd = abs(hu_effects[feat][sex]['humerus']['delta'])
-            # Skip if either delta is negligible (ratio would be meaningless)
-            gc_mean = hu_effects[feat][sex]['femur']['gc_mean']
-            min_delta = abs(gc_mean) * 0.02 if not np.isnan(gc_mean) else 1e-9
-            if afd > min_delta and ahd > min_delta:
-                ratio_items.append({'label': f'{label} ({slabel})',
-                                    'ratio': afd / ahd,
-                                    'color': LINE_COLORS[sex],
-                                    'feat': feat, 'sex': sex})
-
-    if ratio_items:
-        y_r = np.arange(len(ratio_items))
-        ax_g.barh(y_r, [r['ratio'] for r in ratio_items],
-                  color=[r['color'] for r in ratio_items], alpha=0.7, height=0.55)
-        # Per-slide ratio dots
-        for i, r in enumerate(ratio_items):
-            feat, sex = r['feat'], r['sex']
-            mask_sex = agg_df['sex'] == sex
-            gc_fem = agg_df[mask_sex & (agg_df['treatment'] == 'GC') &
-                            (agg_df['bone'] == 'femur')][feat].dropna().values
-            gc_hum = agg_df[mask_sex & (agg_df['treatment'] == 'GC') &
-                            (agg_df['bone'] == 'humerus')][feat].dropna().values
-            gc_fem_mean = np.mean(gc_fem) if len(gc_fem) > 0 else np.nan
-            gc_hum_mean = np.mean(gc_hum) if len(gc_hum) > 0 else np.nan
-            if np.isnan(gc_fem_mean) or np.isnan(gc_hum_mean):
-                continue
-            # For each HU slide, compute per-slide ratio
-            hu_slides = agg_df[mask_sex & (agg_df['treatment'] == 'HU')]['slide'].unique()
-            slide_ratios = []
-            for sl in hu_slides:
-                fv = agg_df[(agg_df['slide'] == sl) & (agg_df['bone'] == 'femur')][feat].dropna().values
-                hv = agg_df[(agg_df['slide'] == sl) & (agg_df['bone'] == 'humerus')][feat].dropna().values
-                if len(fv) == 0 or len(hv) == 0:
-                    continue
-                fd = abs(fv[0] - gc_fem_mean)
-                hd = abs(hv[0] - gc_hum_mean)
-                if hd > 1e-9:
-                    slide_ratios.append(fd / hd)
-            if slide_ratios:
-                jitter = rng.uniform(-0.12, 0.12, len(slide_ratios))
-                ax_g.scatter(slide_ratios, np.full(len(slide_ratios), i) + jitter,
-                             color=r['color'], alpha=0.6, s=20,
-                             edgecolors='black', linewidth=0.5, zorder=4)
-        ax_g.set_yticks(y_r)
-        ax_g.set_yticklabels([r['label'] for r in ratio_items], fontsize=9)
-        ax_g.axvline(1.0, color='gray', linewidth=1, linestyle='--', alpha=0.6)
-        for i, r in enumerate(ratio_items):
-            v = r['ratio']
-            txt = f'{v:.1f}:1' if v >= 1 else f'1:{1 / v:.1f}'
-            ax_g.text(v + 0.12, i, txt, va='center', fontsize=9, fontweight='bold')
-        ax_g.set_xlabel('Femur : Humerus  |effect| ratio', fontsize=9)
-    ax_g.set_title(f'{panels[6]}: Bone attenuation ratios', fontsize=11, fontweight='bold')
-
-    # Panel H: Within-sex bone concordance (% change scatter)
-    ax_h = fig.add_subplot(gs[2, 1])
+    # Panel F: Bone concordance scatter (same as before)
+    ax_f = fig.add_subplot(gs[2, 0])
     morph_feats = [f for f in features if f in hu_effects and f not in DENSITY_FEATURES]
 
     for sex in ['F', 'M']:
-        fem_pcts, hum_pcts = [], []
+        fem_pcts, hum_pcts, feat_labels_pts = [], [], []
         for feat in morph_feats:
             fp = hu_effects[feat][sex]['femur']['pct_change']
             hp = hu_effects[feat][sex]['humerus']['pct_change']
             if not (np.isnan(fp) or np.isnan(hp)):
                 fem_pcts.append(fp)
                 hum_pcts.append(hp)
+                feat_labels_pts.append(feat)
 
         if len(fem_pcts) < 3:
             continue
-        ax_h.scatter(fem_pcts, hum_pcts, color=LINE_COLORS[sex], s=55, alpha=0.75,
+        ax_f.scatter(fem_pcts, hum_pcts, color=LINE_COLORS[sex], s=55, alpha=0.75,
                      label=sex, zorder=3, edgecolors='black', linewidth=0.5)
         r_val = np.corrcoef(fem_pcts, hum_pcts)[0, 1]
-        # Regression line
         fa, ha_arr = np.array(fem_pcts), np.array(hum_pcts)
         slope, intercept = np.polyfit(fa, ha_arr, 1)
         x_line = np.linspace(fa.min(), fa.max(), 50)
-        ax_h.plot(x_line, slope * x_line + intercept, color=LINE_COLORS[sex],
+        ax_f.plot(x_line, slope * x_line + intercept, color=LINE_COLORS[sex],
                   linestyle='--', alpha=0.5, linewidth=1.5)
         y_anchor = 0.95 if sex == 'F' else 0.85
-        ax_h.text(0.05, y_anchor, f'{sex}: r={r_val:.2f}',
-                  transform=ax_h.transAxes, fontsize=9, color=LINE_COLORS[sex],
+        ax_f.text(0.05, y_anchor, f'{sex}: r={r_val:.2f}',
+                  transform=ax_f.transAxes, fontsize=9, color=LINE_COLORS[sex],
                   fontweight='bold', va='top')
 
-    # Identity line
-    all_pcts = []
-    for sex in ['F', 'M']:
-        for feat in morph_feats:
-            if feat in hu_effects:
-                for bone in ['femur', 'humerus']:
-                    p = hu_effects[feat][sex][bone]['pct_change']
-                    if not np.isnan(p):
-                        all_pcts.append(p)
-    ax_h.plot([-20, 40], [-20, 40], 'k--', alpha=0.25, linewidth=0.8)
-    ax_h.set_xlim(-20, 40)
-    ax_h.set_ylim(-20, 40)
-    ax_h.axhline(0, color='gray', linewidth=0.5, alpha=0.3)
-    ax_h.axvline(0, color='gray', linewidth=0.5, alpha=0.3)
-    ax_h.set_xlabel('Femur % change (HU vs GC)', fontsize=9)
-    ax_h.set_ylabel('Humerus % change (HU vs GC)', fontsize=9)
-    ax_h.set_title(f'{panels[7]}: Bone concordance (morphology)',
+    ax_f.plot([-25, 45], [-25, 45], 'k--', alpha=0.25, linewidth=0.8)
+    ax_f.set_xlim(-25, 45)
+    ax_f.set_ylim(-25, 45)
+    ax_f.axhline(0, color='gray', linewidth=0.5, alpha=0.3)
+    ax_f.axvline(0, color='gray', linewidth=0.5, alpha=0.3)
+    ax_f.set_xlabel('Femur % change (HU vs GC)', fontsize=9)
+    ax_f.set_ylabel('Humerus % change (HU vs GC)', fontsize=9)
+    ax_f.set_title(f'{panels[5]}: Bone concordance (morphology)',
                    fontsize=11, fontweight='bold')
-    ax_h.legend(fontsize=8)
+    ax_f.legend(fontsize=8)
 
-    # Panel I: ANOVA effect size heatmap (compact)
-    ax_i = fig.add_subplot(gs[2, 2])
-    eta_mat = np.full((len(KEY_FEATS), len(ALL_EFFECTS)), np.nan)
+    # Panel G: Feature dissociation — size vs density bone response
+    ax_g = fig.add_subplot(gs[2, 1])
+    dissoc_feats = [('area_um2', 'Size'), ('density_per_mm2', 'Density')]
+    x_pos = np.arange(len(dissoc_feats))
+    width = 0.2
+    for si, sex in enumerate(['F', 'M']):
+        for fi, (fk, fl) in enumerate(dissoc_feats):
+            fem_pct = hu_effects[fk][sex]['femur']['pct_change']
+            hum_pct = hu_effects[fk][sex]['humerus']['pct_change']
+            if np.isnan(fem_pct) or np.isnan(hum_pct):
+                continue
+            offset = (si - 0.5) * (2 * width + 0.05)
+            ax_g.bar(fi + offset - width / 2, fem_pct, width,
+                     color=LINE_COLORS[sex], alpha=0.8, edgecolor='white')
+            ax_g.bar(fi + offset + width / 2, hum_pct, width,
+                     color=LINE_COLORS[sex], alpha=0.4, hatch='\\\\',
+                     edgecolor=LINE_COLORS[sex])
+    ax_g.axhline(0, color='#999', linewidth=0.8)
+    ax_g.set_xticks(x_pos)
+    ax_g.set_xticklabels([fl for _, fl in dissoc_feats], fontsize=10, fontweight='bold')
+    ax_g.set_ylabel('% change (HU vs GC)', fontsize=9)
+    ax_g.set_title(f'{panels[6]}: Size vs Density \u2014 Pathway Dissociation',
+                   fontsize=11, fontweight='bold')
+    ax_g.legend(handles=[
+        Patch(facecolor='#999', alpha=0.8, label='Femur (unloaded)'),
+        Patch(facecolor='#999', alpha=0.4, hatch='\\\\', edgecolor='#999',
+              label='Humerus (overloaded)'),
+        Patch(facecolor=LINE_COLORS['F'], alpha=0.8, label='Female'),
+        Patch(facecolor=LINE_COLORS['M'], alpha=0.8, label='Male'),
+    ], fontsize=6.5, loc='best', framealpha=0.9, ncol=2)
+    ax_g.spines['top'].set_visible(False)
+    ax_g.spines['right'].set_visible(False)
+    # Annotation: size = systemic, density = local
+    ax_g.text(0, ax_g.get_ylim()[1] * 0.85, 'Both bones \u2191\nSYSTEMIC',
+              ha='center', fontsize=8, color='#1565c0', fontweight='bold',
+              fontstyle='italic')
+    ax_g.text(1, ax_g.get_ylim()[0] * 0.5, 'Bones diverge\nLOCAL',
+              ha='center', fontsize=8, color='#e65100', fontweight='bold',
+              fontstyle='italic')
+
+    # Panel H: ANOVA effect size heatmap (all features × key effects)
+    ax_h = fig.add_subplot(gs[2, 2])
+    heatmap_effects = ['treatment', 'sex', 'sex:treatment', 'treatment:bone']
+    heatmap_feats = [f for f in features if f in set(results_df['feature'])]
+    eta_mat = np.full((len(heatmap_feats), len(heatmap_effects)), np.nan)
     p_mat = np.full_like(eta_mat, np.nan)
-    for fi, feat in enumerate(KEY_FEATS):
-        for ei, eff in enumerate(ALL_EFFECTS):
+    for fi, feat in enumerate(heatmap_feats):
+        for ei, eff in enumerate(heatmap_effects):
             mask = (results_df['feature'] == feat) & (results_df['effect'] == eff)
-            rows = results_df[mask]
-            if len(rows) > 0:
-                eta_mat[fi, ei] = rows.iloc[0]['art_partial_eta2']
-                p_mat[fi, ei] = rows.iloc[0]['art_p']
+            r = results_df[mask]
+            if len(r) > 0:
+                eta_mat[fi, ei] = r.iloc[0]['art_partial_eta2']
+                p_mat[fi, ei] = r.iloc[0]['art_p']
 
-    im = ax_i.imshow(eta_mat, aspect='auto', cmap='Blues', interpolation='nearest',
+    im = ax_h.imshow(eta_mat, aspect='auto', cmap='Blues', interpolation='nearest',
                      vmin=0, vmax=max(0.5, np.nanmax(eta_mat) * 1.1))
-    for fi in range(len(KEY_FEATS)):
-        for ei in range(len(ALL_EFFECTS)):
+    for fi in range(len(heatmap_feats)):
+        for ei in range(len(heatmap_effects)):
             eta = eta_mat[fi, ei]
             p = p_mat[fi, ei]
             if np.isnan(eta):
@@ -883,20 +942,20 @@ def generate_summary_dashboard(agg_df, features, anova_results, results_df, outp
             stars = ('***' if p < 0.001 else '**' if p < 0.01
                      else '*' if p < 0.05 else '\u2020' if p < 0.10 else '')
             txt = f'{eta:.2f}\n{stars}' if stars else f'{eta:.2f}'
-            ax_i.text(ei, fi, txt, ha='center', va='center', fontsize=7,
+            ax_h.text(ei, fi, txt, ha='center', va='center', fontsize=6.5,
                       fontweight='bold' if p < 0.05 else 'normal',
                       color='white' if eta > 0.4 else 'black')
 
-    # Divider between main effects and interactions
-    ax_i.axvline(2.5, color='white', linewidth=2)
-    ax_i.set_xticks(range(len(ALL_EFFECTS)))
-    eff_labels = [e.replace(':', '\n\u00d7\n') for e in ALL_EFFECTS]
-    ax_i.set_xticklabels(eff_labels, fontsize=7)
-    ax_i.set_yticks(range(len(KEY_FEATS)))
-    ax_i.set_yticklabels([FEAT_LABELS[f] for f in KEY_FEATS], fontsize=9)
-    ax_i.set_title(f'{panels[8]}: Partial \u03b7\u00b2 (ART ANOVA)',
+    ax_h.axvline(1.5, color='white', linewidth=2)  # divider: main vs interactions
+    ax_h.set_xticks(range(len(heatmap_effects)))
+    eff_labels_h = ['Treatment\n(systemic)', 'Sex\n(baseline)',
+                    'Sex\u00d7Trt\n(response)', 'Trt\u00d7Bone\n(local)']
+    ax_h.set_xticklabels(eff_labels_h, fontsize=7)
+    ax_h.set_yticks(range(len(heatmap_feats)))
+    ax_h.set_yticklabels(heatmap_feats, fontsize=7)
+    ax_h.set_title(f'{panels[7]}: Partial \u03b7\u00b2 (ART ANOVA)',
                    fontsize=11, fontweight='bold')
-    plt.colorbar(im, ax=ax_i, shrink=0.7, label='Partial \u03b7\u00b2')
+    plt.colorbar(im, ax=ax_h, shrink=0.7, label='Partial \u03b7\u00b2')
 
     plt.savefig(output_path, dpi=150, bbox_inches='tight', facecolor='white')
     plt.close()
@@ -914,14 +973,22 @@ def main():
                         help='Override bone-assigned detections JSON')
     parser.add_argument('--no-exclude', action='store_true',
                         help='Include all slides (no exclusions)')
+    parser.add_argument('--tissue-areas', type=Path, default=None,
+                        help='Override tissue areas JSON')
+    parser.add_argument('--output-dir', type=Path, default=None,
+                        help='Override output directory')
     args = parser.parse_args()
 
     # Override globals if CLI args provided
-    global DETECTIONS_FULL, DETECTIONS_BONE, EXCLUDE_SLIDES
+    global DETECTIONS_FULL, DETECTIONS_BONE, EXCLUDE_SLIDES, TISSUE_AREAS, OUTPUT_DIR
     if args.detections_full:
         DETECTIONS_FULL = args.detections_full
     if args.detections_bone:
         DETECTIONS_BONE = args.detections_bone
+    if args.tissue_areas:
+        TISSUE_AREAS = args.tissue_areas
+    if args.output_dir:
+        OUTPUT_DIR = args.output_dir
     if args.no_exclude:
         EXCLUDE_SLIDES = set()
 

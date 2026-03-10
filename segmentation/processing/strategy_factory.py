@@ -72,6 +72,7 @@ def create_strategy(
             extract_deep_features=extract_deep_features,
             extract_sam2_embeddings=extract_sam2_embeddings,
             resnet_batch_size=strategy_params.get('resnet_batch_size', 32),
+            refine_masks=strategy_params.get('refine_masks', False),
         )
     elif cell_type == 'cell':
         from segmentation.detection.strategies.cell import CellStrategy

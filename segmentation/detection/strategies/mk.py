@@ -58,7 +58,8 @@ class MKStrategy(DetectionStrategy, MultiChannelFeatureMixin):
                  overlap_threshold: float = 0.5,
                  extract_deep_features: bool = False,
                  extract_sam2_embeddings: bool = True,
-                 resnet_batch_size: int = 32):
+                 resnet_batch_size: int = 32,
+                 refine_masks: bool = False):
         """
         Initialize MK detection strategy.
 
@@ -70,6 +71,7 @@ class MKStrategy(DetectionStrategy, MultiChannelFeatureMixin):
             extract_deep_features: Whether to extract ResNet+DINOv2 features (default False, opt-in)
             extract_sam2_embeddings: Whether to extract 256D SAM2 embeddings
             resnet_batch_size: Batch size for ResNet feature extraction
+            refine_masks: Whether to apply intensity-based mask refinement (default False)
         """
         self.min_area_um = min_area_um
         self.max_area_um = max_area_um
@@ -78,6 +80,7 @@ class MKStrategy(DetectionStrategy, MultiChannelFeatureMixin):
         self.extract_deep_features = extract_deep_features
         self.extract_sam2_embeddings = extract_sam2_embeddings
         self.resnet_batch_size = resnet_batch_size
+        self.refine_masks = refine_masks
 
     @property
     def name(self) -> str:
@@ -314,6 +317,14 @@ class MKStrategy(DetectionStrategy, MultiChannelFeatureMixin):
             # Ensure boolean type (critical for NVIDIA CUDA compatibility)
             if mask.dtype != bool:
                 mask = (mask > 0.5).astype(bool)
+
+            # Optional mask refinement: morphological opening + intensity trim
+            if self.refine_masks:
+                from segmentation.utils.mask_cleanup import refine_mask_intensity
+                mask = refine_mask_intensity(mask, tile)
+                if mask.sum() < min_area_px:
+                    continue  # Refinement shrunk below minimum
+                result['area'] = int(mask.sum())
 
             # Check overlap with already-accepted masks
             if label_array.max() > 0:

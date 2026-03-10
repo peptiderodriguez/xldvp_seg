@@ -19,4 +19,5 @@ __all__ = [
     "clustering",
     "contour_processing",
     "selection",
+    "well_plate",
 ]

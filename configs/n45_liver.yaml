@@ -1,0 +1,24 @@
+name: n45_liver_cellpose
+czi_path: /fs/pool/pool-mann-axioscan/01_Users/EdRo_axioscan/xDVP/20260304_n45_Hoechst_DCN488_GluI546_Pck1-647_PM750-EDFvar-stitch.czi
+output_dir: /fs/pool/pool-mann-edwin/n45_output
+cell_type: cell
+num_gpus: 4
+all_channels: true
+# Channel map: [0]=DCN488, [1]=Pck1-647, [2]=PM750, [3]=GluI546, [4]=Hoechst
+# Confirmed via czi_info.py — NOT wavelength sorted
+channel_map:
+  cyto: PM
+  nuc: Hoechst
+html_sample_fraction: 0.10
+spatialdata:
+  enabled: true
+  extract_shapes: true
+  run_squidpy: false
+slurm:
+  partition: p.hpcl93
+  cpus: 128
+  mem_gb: 700
+  gpus: "l40s:4"
+  time: "3-00:00:00"
+  slides_per_job: 1
+  num_jobs: 1
