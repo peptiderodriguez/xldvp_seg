@@ -236,7 +236,7 @@ python run_segmentation.py --czi-path slide.czi --cell-type cell \
     --channel-spec "cyto=PM,nuc=488"       # mix of name and wavelength
 ```
 
-Resolution order: integer index → wavelength (±10nm) → marker name (via filename parsing) → CZI metadata name.
+Resolution order: integer index → wavelength (±10nm) → marker name (via filename parsing) → CZI metadata name (exact match, then substring match for ≥3-char specs, e.g., "Hoechst" matches "Hoechst 33258").
 
 **For `classify_markers.py`**: Use `--marker-wavelength 647,555 --czi-path slide.czi` instead of `--marker-channel 1,2`. No `--correct-all-channels` needed — pipeline does bg correction automatically, and `classify_markers.py` auto-detects this to prevent double correction.
 
@@ -334,6 +334,7 @@ UID format: `{slide}_{celltype}_{x}_{y}`
 | `scripts/spatial_cell_analysis.py` | Spatial network analysis (connected components, graph metrics) |
 | `scripts/preview_preprocessing.py` | Preview flat-field / photobleach correction at reduced resolution |
 | `scripts/run_pipeline.sh` | YAML config-driven multi-slide SLURM launcher |
+| `scripts/select_mks_for_lmd.py` | MK-specific LMD replicate selection + multi-plate well assignment |
 | `scripts/system_info.py` | Environment detection + resource recommendation for SLURM |
 
 ---
@@ -370,6 +371,8 @@ UID format: `{slide}_{celltype}_{x}_{y}`
 | `run_lmd_export.py` | Unified pipeline: contours, controls, wells, XML (single + batch mode) |
 | `segmentation/lmd/clustering.py` | Two-stage greedy clustering |
 | `segmentation/lmd/contour_processing.py` | Dilation + RDP + erosion (absolute + percent) |
+| `segmentation/lmd/selection.py` | Generic cell selection for area-normalized LMD replicates |
+| `segmentation/lmd/well_plate.py` | Multi-plate 384-well serpentine well generation + QC empty wells |
 
 ### OME-Zarr Export
 | Module | Purpose |
@@ -487,7 +490,7 @@ python run_lmd_export.py \
     --generate-controls --min-score 0.5 --export
 ```
 
-Max 308 wells per plate. Early capacity check warns before expensive processing.
+Max 308 wells per plate. Early capacity check warns before expensive processing. For >308 wells, use `generate_multiplate_wells()` from `segmentation.lmd.well_plate` for automatic overflow to additional plates. Empty QC wells (default 10% of samples) inserted evenly via `insert_empty_wells()`. For proteomics replicates, use `segmentation.lmd.selection.select_cells_for_lmd()` to build area-normalized replicates, then `scripts/select_mks_for_lmd.py` (MK-specific wrapper) for full plate assignment.
 
 ---
 
