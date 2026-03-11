@@ -661,7 +661,7 @@ def run_single_slide(args, input_path=None, output_path=None):
         try:
             load_contour_overlay(
                 viewer, str(contours_path),
-                slide_filter=getattr(args, 'slide', None),
+                slide_filter=getattr(args, 'slide', None) or slide_name,
                 orig_h=contour_orig_h, orig_w=contour_orig_w,
                 flip_h=flip_h, rot90=rotate,
                 world_scale=contour_world_scale,
