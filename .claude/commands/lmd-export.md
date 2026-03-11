@@ -43,18 +43,17 @@ ls <output_dir>/crosses*.json <output_dir>/reference_crosses.json 2>/dev/null
 Reference crosses are physical marks on the slide visible both in the microscope image and on the LMD stage. They register slide coordinates to stage coordinates.
 
 **Option A — CZI-native Napari** (recommended, no conversion needed):
-```bash
-# Place 3 RGB-coded crosses directly on CZI
-PYTHONPATH=$REPO $MKSEG_PYTHON $REPO/scripts/napari_place_crosses.py \
-    -i <czi_path> --channel 0 -o <crosses.json>
 
-# With LMD7 display orientation (tissue-down + rotated)
+The viewer opens with LMD7 orientation (rotate CW 90 is ON by default). All layers are locked so the image can't be accidentally dragged. Keys: **1/2/3** (or R/G/B) to select cross, **Space** to place, **S** to save, **Q** to quit.
+
+```bash
+# Place 3 crosses (rotate-cw-90 is default ON)
 PYTHONPATH=$REPO $MKSEG_PYTHON $REPO/scripts/napari_place_crosses.py \
-    -i <czi_path> --flip-horizontal --rotate-cw-90 -o <crosses.json>
+    -i <czi_path> --flip-horizontal -o <crosses.json>
 
 # Start fresh (ignore existing crosses)
 PYTHONPATH=$REPO $MKSEG_PYTHON $REPO/scripts/napari_place_crosses.py \
-    -i <czi_path> --fresh -o <crosses.json>
+    -i <czi_path> --flip-horizontal --fresh -o <crosses.json>
 ```
 
 **Option B — OME-Zarr Napari** (for very large slides):
@@ -78,9 +77,12 @@ Coordinates in mosaic pixel space (same as detection centroids). 3 crosses requi
 ```bash
 PYTHONPATH=$REPO $MKSEG_PYTHON $REPO/scripts/napari_place_crosses.py \
     --czi-dir /data/slides --slides SlideA SlideB SlideC \
-    --output-dir crosses/ --flip-horizontal --rotate-cw-90
+    --sampling-results lmd_replicates_full.json \
+    --contours mk_contours_overlay.json \
+    --output-dir crosses/ --flip-horizontal --fresh
 ```
 Produces `{slide}_crosses.json` per slide. Skips slides with existing crosses unless `--fresh`.
+Shows colored replicate dots + contour outlines when `--sampling-results` and `--contours` are provided.
 
 ---
 

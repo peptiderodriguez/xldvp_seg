@@ -7,9 +7,13 @@ scale=(base, base) makes world coords = full-res reference pixels, so cursor
 position IS the saved coordinate — no coordinate conversion needed.
 
 Keys:
-  R/G/B   = select cross (red/green/cyan)
+  1/R = select cross 1 (red)
+  2/G = select cross 2 (green)
+  3/B = select cross 3 (cyan)
   Space/P = place at cursor
-  S       = save  |  U = undo  |  C = clear  |  Q = save+quit
+  S = save  |  U = undo  |  C = clear  |  Q = save+quit
+
+All layers are locked (non-draggable). Rotate CW 90 is ON by default for LMD7.
 
 Files needed (copy from server):
   - CZI slide files
