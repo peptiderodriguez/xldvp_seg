@@ -581,8 +581,8 @@ def run_single_slide(args, input_path=None, output_path=None):
     zarr_meta = None
 
     if is_czi:
-        # Load two resolution levels as a proper multiscale pyramid.
-        # Use dask to enable tiled rendering (avoids GL_MAX_TEXTURE_SIZE
+        # Load CZI at requested resolution, then build a local zarr
+        # pyramid so napari can lazy-load tiles (avoids GL_MAX_TEXTURE_SIZE
         # limit that causes image to disappear at high zoom).
         pyramid_levels = getattr(args, 'pyramid_levels', None)
         if pyramid_levels:
@@ -650,18 +650,27 @@ def run_single_slide(args, input_path=None, output_path=None):
     # ── Display ──────────────────────────────────────────────────
     viewer = napari.Viewer(title=slide_name)
 
-    # Wrap arrays as dask chunks so napari uses tiled rendering.
-    # This avoids GL_MAX_TEXTURE_SIZE (16384) limit that causes large
-    # images to disappear at high zoom.
+    # Build temporary zarr store from loaded arrays so napari can
+    # lazy-load tiles — avoids GL_MAX_TEXTURE_SIZE (16384) limit.
     import dask.array as da
-    TILE = 4096
-    dask_pyramid = [da.from_array(img, chunks=(TILE, TILE, 3)) for img in pyramid]
+    import zarr as zarr_lib
+    CHUNK = 2048
+    zarr_levels = []
+    img = pyramid[0]
+    while True:
+        z = zarr_lib.zeros(img.shape, chunks=(CHUNK, CHUNK, 3), dtype=img.dtype)
+        z[:] = img
+        zarr_levels.append(da.from_zarr(z))
+        print(f"  Pyramid: {img.shape}")
+        if max(img.shape[:2]) <= CHUNK:
+            break
+        img = img[::2, ::2]  # 2x downsample
 
     viewer.add_image(
-        dask_pyramid, name=slide_name, multiscale=True,
+        zarr_levels, name=slide_name, multiscale=True,
         contrast_limits=[0, 255], scale=(base_scale, base_scale),
     )
-    print(f"  Display: {len(pyramid)} levels, base_scale={base_scale}, tiled={TILE}")
+    print(f"  Display: {len(zarr_levels)} levels, scale={base_scale}")
 
     # ── Contour overlay ─────────────────────────────────────────
     contours_path = getattr(args, 'contours', None)
