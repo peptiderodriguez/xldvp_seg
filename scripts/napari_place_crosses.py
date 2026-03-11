@@ -72,13 +72,19 @@ REP_COLORS = [
 
 def load_czi_pyramid(czi_path, channel=0, scale_factors=(2, 8),
                      flip_horizontal=False, rotate_cw_90=False):
-    """Load CZI at 2+ scales as uint8 RGB numpy arrays.
+    """Load CZI mosaic and downsample to a single RGB array.
 
-    Transforms (fliplr, rot90) are baked into the data.
-    With scale=(base, base), world coords = full-res CZI pixels (post-transform).
+    Reads full-resolution strips via read_mosaic(region=...) and downsamples
+    by slicing.  This avoids tile-position rounding artefacts produced by
+    aicspylibczi when scale_factor < 1.0 (mosaic tile positions are rounded
+    to integer pixels at the reduced scale, causing parts of the image to
+    shift by ±1 px).
+
+    Only the finest (smallest) scale_factor is produced; additional pyramid
+    levels are built later by 2x downsampling for the in-memory zarr display.
 
     Returns:
-        pyramid: list of (H, W, 3) uint8 arrays
+        pyramid: list with one (H, W, 3) uint8 array
         full_w, full_h: CZI bounding box dimensions (pre-transform)
         pixel_size_um: from CZI metadata or None
     """
@@ -103,35 +109,93 @@ def load_czi_pyramid(czi_path, channel=0, scale_factors=(2, 8),
 
     print(f"  Full: {fw:,} x {fh:,} px, pixel_size={pixel_size_um}")
 
-    pyramid = []
-    for sf in scale_factors:
-        print(f"  Loading 1/{sf}...", end=" ", flush=True)
-        img = np.squeeze(czi.read_mosaic(
-            region=(x0, y0, fw, fh), scale_factor=1.0 / sf, C=channel))
+    sf = min(scale_factors)
+    oh = fh // sf
+    ow = fw // sf
 
-        # Ensure RGB uint8
-        if img.ndim == 2:
-            img = np.stack([img] * 3, axis=-1)
-        elif img.ndim == 3 and img.shape[0] in (1, 3) and img.shape[-1] != 3:
-            img = np.moveaxis(img, 0, -1)
+    # Read full-res strips and downsample ourselves to avoid tile-stitching
+    # artefacts from aicspylibczi's fractional scale_factor.
+    # Strip height is a multiple of sf so downsampled rows align exactly.
+    STRIP_H = 8192 - (8192 % sf)
+    n_strips = (fh + STRIP_H - 1) // STRIP_H
+    print(f"  Loading 1/{sf} via {n_strips} full-res strips...", flush=True)
 
-        if img.dtype != np.uint8:
-            mx = img.max()
-            if mx > 0:
-                p99 = np.percentile(img[img > 0], 99.5) if np.any(img > 0) else mx
-                img = np.clip(img.astype(np.float32) / p99 * 255, 0, 255).astype(np.uint8)
-            else:
-                img = img.astype(np.uint8)
+    # Peek at first strip to detect data format (uint8 RGB vs uint16 mono)
+    peek = np.squeeze(czi.read_mosaic(
+        region=(x0, y0, fw, min(STRIP_H, fh)), scale_factor=1.0, C=channel))
+    if peek.ndim == 3 and peek.shape[0] in (1, 3, 4) and peek.shape[-1] != 3:
+        peek = np.moveaxis(peek, 0, -1)
+    is_rgb = peek.ndim == 3 and peek.shape[-1] in (3, 4)
+    is_uint8 = peek.dtype == np.uint8
+    del peek
 
-        if flip_horizontal:
-            img = np.ascontiguousarray(np.fliplr(img))
-        if rotate_cw_90:
-            img = np.ascontiguousarray(np.rot90(img, k=-1))
+    if is_rgb and is_uint8:
+        # CZI returns composited uint8 RGB — store directly, no normalization
+        buf = np.zeros((oh, ow, 3), dtype=np.uint8)
+    else:
+        # Single-channel uint16 — accumulate then normalize
+        buf = np.zeros((oh, ow), dtype=np.uint16)
 
-        pyramid.append(img)
-        print(f"{img.shape} ({img.nbytes // 1_000_000} MB)")
+    for i, row_start in enumerate(range(0, fh, STRIP_H)):
+        h = min(STRIP_H, fh - row_start)
+        strip = np.squeeze(czi.read_mosaic(
+            region=(x0, y0 + row_start, fw, h), scale_factor=1.0, C=channel))
 
-    return pyramid, fw, fh, pixel_size_um
+        # Normalize shape
+        if strip.ndim == 3 and strip.shape[0] in (1, 3, 4) and strip.shape[-1] != 3:
+            strip = np.moveaxis(strip, 0, -1)
+
+        if is_rgb and is_uint8:
+            # Keep RGB as-is
+            if strip.ndim == 3 and strip.shape[-1] == 4:
+                strip = strip[..., :3]
+        else:
+            # Reduce to single channel
+            if strip.ndim == 3:
+                strip = strip[..., 0] if strip.shape[-1] in (3, 4) else strip[0]
+
+        ds = strip[::sf, ::sf]
+        del strip
+        # Clip to output bounds (handles rounding at edges)
+        rr = row_start // sf
+        ds_h = min(ds.shape[0], oh - rr)
+        ds_w = min(ds.shape[1], ow)
+        if is_rgb and is_uint8:
+            buf[rr:rr + ds_h, :ds_w] = ds[:ds_h, :ds_w]
+        else:
+            buf[rr:rr + ds_h, :ds_w] = ds[:ds_h, :ds_w]
+        del ds
+        if (i + 1) % 5 == 0 or i == n_strips - 1:
+            print(f"    strip {i + 1}/{n_strips}", flush=True)
+
+    if is_rgb and is_uint8:
+        img = buf
+    else:
+        # Percentile-normalize uint16 to uint8 (chunk-wise to limit memory)
+        sample = buf.ravel()[::97]
+        nz = sample[sample > 0]
+        p99 = float(np.percentile(nz, 99.5)) if len(nz) > 0 else 1.0
+        del sample, nz
+        scale_val = 255.0 / max(p99, 1.0)
+
+        img = np.empty((oh, ow), dtype=np.uint8)
+        NORM_ROWS = 4096
+        for r in range(0, oh, NORM_ROWS):
+            end = min(r + NORM_ROWS, oh)
+            chunk = buf[r:end].astype(np.float32)
+            chunk *= scale_val
+            np.clip(chunk, 0, 255, out=chunk)
+            img[r:end] = chunk.astype(np.uint8)
+        del buf
+        img = np.stack([img, img, img], axis=-1)
+
+    if flip_horizontal:
+        img = np.ascontiguousarray(np.fliplr(img))
+    if rotate_cw_90:
+        img = np.ascontiguousarray(np.rot90(img, k=-1))
+
+    print(f"  Result: {img.shape} ({img.nbytes // 1_000_000} MB)")
+    return [img], fw, fh, pixel_size_um
 
 
 def load_zarr_pyramid(zarr_path, level_indices=(1, 3),

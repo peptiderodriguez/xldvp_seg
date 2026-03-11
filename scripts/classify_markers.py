@@ -201,12 +201,31 @@ def plot_distribution(values: np.ndarray, threshold: float, marker_name: str,
 # Core processing
 # ---------------------------------------------------------------------------
 
-def extract_marker_values(detections: list[dict], channel: int) -> np.ndarray:
-    """Extract ch{N}_mean from each detection's features dict."""
-    key = f'ch{channel}_mean'
+def extract_marker_values(detections: list[dict], channel: int,
+                          feature: str = 'mean',
+                          use_raw: bool = False) -> np.ndarray:
+    """Extract per-cell intensity values from detection features.
+
+    Args:
+        channel: CZI channel index.
+        feature: Intensity statistic — 'mean', 'median', 'p75', 'p95', etc.
+        use_raw: If True, read ``ch{N}_{feature}_raw`` (pre-bg-correction).
+    """
+    suffix = f'{feature}_raw' if use_raw else feature
+    key = f'ch{channel}_{suffix}'
     values = np.array([
         d.get('features', {}).get(key, 0.0) for d in detections
     ], dtype=np.float64)
+
+    # Warn if all zeros (likely missing feature key)
+    if values.max() == 0:
+        fallback_key = f'ch{channel}_{feature}'
+        if use_raw:
+            logger.warning(f"Key '{key}' not found or all zeros — "
+                           f"falling back to '{fallback_key}'")
+            values = np.array([
+                d.get('features', {}).get(fallback_key, 0.0) for d in detections
+            ], dtype=np.float64)
     return values
 
 
@@ -214,32 +233,62 @@ def classify_single_marker(detections: list[dict], channel: int,
                            marker_name: str, method: str,
                            output_dir: Path,
                            bg_subtract: bool = False,
+                           global_background: bool = False,
                            centroids: np.ndarray | None = None,
                            n_neighbors: int = 30,
-                           snr_threshold: float = 1.5) -> dict:
+                           snr_threshold: float = 1.5,
+                           intensity_feature: str = 'mean',
+                           use_raw: bool = False,
+                           cv_max: float | None = None) -> dict:
     """Classify detections for one marker. Returns summary row dict.
 
     Mutates detections in-place: adds {marker}_class, {marker}_value,
     {marker}_threshold, and optionally {marker}_background and {marker}_snr
     to each detection's features dict.
-    """
-    logger.info(f"Classifying marker '{marker_name}' (ch{channel}) with method '{method}'"
-                f"{f' + local background subtraction (k={n_neighbors})' if bg_subtract else ''}")
 
-    raw_values = extract_marker_values(detections, channel)
+    Args:
+        intensity_feature: Which stat to threshold on ('mean', 'median', 'p75', 'p95').
+        use_raw: Use pre-bg-correction values (``ch{N}_{feat}_raw``).
+        global_background: Subtract slide-wide median (not local neighbors).
+            Avoids inflating background in expression zones.
+        cv_max: If set, cells with ``ch{N}_cv > cv_max`` are classified negative
+            regardless of intensity (filters out particulate noise).
+    """
+    feat_label = f"{intensity_feature}{'_raw' if use_raw else ''}"
+    bg_label = (' + global bg subtraction' if global_background
+                else f' + local bg subtraction (k={n_neighbors})' if bg_subtract
+                else '')
+    logger.info(f"Classifying marker '{marker_name}' (ch{channel}) with method '{method}' "
+                f"on {feat_label}{bg_label}"
+                f"{f' + CV filter (max={cv_max})' if cv_max else ''}")
+
+    raw_values = extract_marker_values(detections, channel,
+                                       feature=intensity_feature, use_raw=use_raw)
     if len(raw_values) == 0:
         logger.warning(f"No values extracted for marker '{marker_name}' — skipping")
         return {'marker': marker_name, 'method': method, 'threshold': 0,
                 'n_positive': 0, 'n_negative': 0, 'pct_positive': 0,
-                'background_median': 0}
+                'background_median': 0, 'cv_filtered': 0}
 
     logger.info(f"  Extracted {len(raw_values):,} values, "
                 f"range [{raw_values.min():.1f}, {raw_values.max():.1f}], "
                 f"median {np.median(raw_values):.1f}")
 
-    # Local background subtraction using neighboring cells
+    # Background subtraction
     per_cell_bg = None
-    if bg_subtract:
+    if global_background:
+        # Global: subtract slide-wide median from all cells.
+        # Avoids local-neighbor inflation for regional markers.
+        global_bg = float(np.median(raw_values))
+        values = np.maximum(raw_values - global_bg, 0.0)
+        per_cell_bg = np.full(len(raw_values), global_bg)
+        nonzero = values[values > 0]
+        logger.info(f"  Global background: {global_bg:.1f} (slide-wide median)")
+        logger.info(f"  After subtraction: {len(nonzero):,}/{len(values):,} cells with signal, "
+                    f"range [{nonzero.min():.1f}, {nonzero.max():.1f}], "
+                    f"median {np.median(nonzero):.1f}" if len(nonzero) > 0 else
+                    "  All values zero after subtraction")
+    elif bg_subtract:
         if centroids is None:
             centroids = _extract_centroids(detections)
         values, per_cell_bg = local_background_subtract(raw_values, centroids, n_neighbors)
@@ -255,6 +304,26 @@ def classify_single_marker(detections: list[dict], channel: int,
             logger.warning(f"  All values zero after background subtraction")
     else:
         values = raw_values
+
+    # CV filter: read coefficient of variation for this channel
+    cv_mask = None
+    n_cv_filtered = 0
+    if cv_max is not None:
+        cv_suffix = 'cv_raw' if use_raw else 'cv'
+        cv_key = f'ch{channel}_{cv_suffix}'
+        cv_values = np.array([
+            d.get('features', {}).get(cv_key, 0.0) for d in detections
+        ], dtype=np.float64)
+        # Fallback: if _raw version missing, try plain cv
+        if cv_values.max() == 0 and use_raw:
+            cv_key = f'ch{channel}_cv'
+            cv_values = np.array([
+                d.get('features', {}).get(cv_key, 0.0) for d in detections
+            ], dtype=np.float64)
+        cv_mask = cv_values <= cv_max
+        n_cv_filtered = int((~cv_mask).sum())
+        logger.info(f"  CV filter: {n_cv_filtered:,} cells with CV > {cv_max:.1f} "
+                    f"(will be forced negative)")
 
     # Classify
     if method == 'snr':
@@ -285,6 +354,10 @@ def classify_single_marker(detections: list[dict], channel: int,
     else:
         raise ValueError(f"Unknown method: {method}")
 
+    # Apply CV filter (force high-CV cells to negative)
+    if cv_mask is not None:
+        positive_mask = positive_mask & cv_mask
+
     n_positive = int(positive_mask.sum())
     n_negative = len(positive_mask) - n_positive
     pct = 100 * n_positive / max(len(positive_mask), 1)
@@ -292,7 +365,8 @@ def classify_single_marker(detections: list[dict], channel: int,
     logger.info(f"  Threshold: {threshold:.2f}"
                 f"{' (on bg-subtracted values)' if bg_subtract else ''}")
     logger.info(f"  Positive: {n_positive:,} ({pct:.1f}%)  "
-                f"Negative: {n_negative:,} ({100 - pct:.1f}%)")
+                f"Negative: {n_negative:,} ({100 - pct:.1f}%)"
+                f"{f'  (CV filtered: {n_cv_filtered:,})' if n_cv_filtered else ''}")
 
     # Enrich detections in-place
     class_key = f'{marker_name}_class'
@@ -310,23 +384,26 @@ def classify_single_marker(detections: list[dict], channel: int,
         if bg_subtract and per_cell_bg is not None:
             feat[raw_key] = float(raw_values[i])
             feat[bg_key] = float(per_cell_bg[i])
-            # SNR = signal / background
             feat[snr_key] = float(raw_values[i] / per_cell_bg[i]) if per_cell_bg[i] > 0 else 0.0
 
-    # Plot (use bg-subtracted values for the histogram)
+    # Plot (use the values that were actually thresholded)
     plot_path = output_dir / f'{marker_name}_distribution.png'
     plot_distribution(values, threshold, marker_name,
-                      f'{method}+bgsub' if bg_subtract else method,
+                      f'{method} on {feat_label}'
+                      + ('+bgsub' if bg_subtract else '')
+                      + (f'+cv<={cv_max}' if cv_max else ''),
                       n_positive, n_negative, plot_path)
 
     return {
         'marker': marker_name,
         'method': method,
+        'feature': feat_label,
         'threshold': threshold,
         'background_median': float(np.median(per_cell_bg)) if per_cell_bg is not None else 0,
         'n_positive': n_positive,
         'n_negative': n_negative,
         'pct_positive': round(pct, 2),
+        'cv_filtered': n_cv_filtered,
     }
 
 
@@ -356,8 +433,12 @@ def parse_args() -> argparse.Namespace:
                              '(e.g. tdTomato or SMA,CD31)')
     parser.add_argument('--method', default='otsu',
                         choices=['otsu', 'otsu_half', 'gmm', 'snr'],
-                        help='Classification method (default: otsu). '
-                             '"snr" classifies by signal-to-noise ratio (requires --snr-threshold).')
+                        help='Default classification method (default: otsu). '
+                             'Override per-marker with --methods.')
+    parser.add_argument('--methods', default=None,
+                        help='Per-marker methods, comma-separated matching --marker-name order '
+                             '(e.g. "snr,otsu,otsu"). Choices: otsu, otsu_half, gmm, snr. '
+                             'Falls back to --method for unspecified.')
     parser.add_argument('--snr-threshold', type=float, default=1.5,
                         help='Default SNR threshold for --method snr (default: 1.5). '
                              'Overridden per-marker by --snr-thresholds if provided.')
@@ -365,8 +446,26 @@ def parse_args() -> argparse.Namespace:
                         help='Per-marker SNR thresholds, comma-separated matching --marker-name order '
                              '(e.g. "3.0,4.0,2.5" for DCN>=3, GluI>=4, Pck1>=2.5). '
                              'Falls back to --snr-threshold for any unspecified markers.')
+    parser.add_argument('--intensity-feature', default='mean',
+                        choices=['mean', 'median', 'p25', 'p75', 'p95'],
+                        help='Default intensity statistic to threshold on (default: mean). '
+                             'Override per-marker with --intensity-features.')
+    parser.add_argument('--intensity-features', default=None,
+                        help='Per-marker intensity features, comma-separated matching --marker-name '
+                             '(e.g. "p95,median,p95"). Choices: mean, median, p25, p75, p95.')
+    parser.add_argument('--use-raw', action='store_true',
+                        help='Use pre-bg-correction values (ch{N}_*_raw). '
+                             'Avoids local background inflation for regional markers.')
+    parser.add_argument('--cv-max', type=float, default=None,
+                        help='Max coefficient of variation — cells with CV above this '
+                             'are forced negative (filters particulate noise). '
+                             'Typical: 1.0-2.0 for diffuse markers.')
+    parser.add_argument('--global-background', action='store_true',
+                        help='Subtract slide-wide median (global) instead of local neighbors. '
+                             'Avoids inflating background for regional markers (e.g. GluI, Pck1). '
+                             'Best combined with --use-raw --intensity-feature median.')
     parser.add_argument('--background-subtract', action='store_true', default=None,
-                        help='Subtract estimated background before thresholding. '
+                        help='Subtract local (k-nearest neighbor) background before thresholding. '
                              'Default: on for otsu, off for otsu_half/gmm.')
     parser.add_argument('--no-background-subtract', action='store_true',
                         help='Disable background subtraction even for otsu method.')
@@ -377,8 +476,9 @@ def parse_args() -> argparse.Namespace:
                         help='Output directory (default: same dir as detections)')
     args = parser.parse_args()
 
-    # Background subtraction: default on for otsu and snr, off for others
-    if args.no_background_subtract:
+    # Background subtraction: default on for otsu and snr, off for others.
+    # --use-raw implies no bg subtraction (raw values are pre-correction).
+    if args.no_background_subtract or args.use_raw:
         args.bg_subtract = False
     elif args.background_subtract is not None:
         args.bg_subtract = args.background_subtract
@@ -455,15 +555,19 @@ def main():
     logger.info("=" * 70)
     logger.info("MARKER CLASSIFICATION")
     logger.info("=" * 70)
+    feat_label = f"{args.intensity_feature}{'_raw' if args.use_raw else ''}"
+    logger.info(f"  Feature: {feat_label}")
+    if args.cv_max:
+        logger.info(f"  CV filter: max {args.cv_max}")
     for ch, name in zip(channels, names):
         ch_detail = _czi_ch_labels.get(ch, '?')
         logger.info(f"  '{name}':  C={ch} ({ch_detail})  method={args.method}")
     logger.info("=" * 70)
 
-    # Load detections
+    # Load detections (use fast_json_load for large files — orjson is 3-5x faster)
+    from segmentation.utils.json_utils import fast_json_load
     logger.info(f"Loading detections from {det_path}...")
-    with open(det_path) as f:
-        detections = json.load(f)
+    detections = fast_json_load(det_path)
     logger.info(f"Loaded {len(detections):,} detections")
 
     if not detections:
@@ -472,12 +576,13 @@ def main():
 
     # Verify that requested channels have data
     sample_feat = detections[0].get('features', {})
+    feat_suffix = f'{args.intensity_feature}_raw' if args.use_raw else args.intensity_feature
     for ch, name in zip(channels, names):
-        key = f'ch{ch}_mean'
+        key = f'ch{ch}_{feat_suffix}'
         if key not in sample_feat:
-            available = [k for k in sample_feat if k.startswith('ch') and k.endswith('_mean')]
+            available = [k for k in sample_feat if k.startswith(f'ch{ch}_')]
             logger.warning(f"Channel key '{key}' not found in first detection's features. "
-                           f"Available: {available}. Values will default to 0.")
+                           f"Available ch{ch}_* keys: {available}. Values will default to 0.")
 
     # Extract centroids if any background subtraction is needed
     centroids = None
@@ -520,14 +625,60 @@ def main():
         per_marker_snr = dict(zip(names, snr_vals))
         logger.info(f"Per-marker SNR thresholds: {per_marker_snr}")
 
+    # Parse per-marker methods
+    per_marker_method = {}
+    if args.methods:
+        method_list = [m.strip() for m in args.methods.split(',')]
+        if len(method_list) != len(names):
+            raise ValueError(f"--methods has {len(method_list)} values but "
+                             f"--marker-name has {len(names)} markers: {names}")
+        valid_methods = {'otsu', 'otsu_half', 'gmm', 'snr'}
+        for m in method_list:
+            if m not in valid_methods:
+                raise ValueError(f"Invalid method '{m}' in --methods. Choices: {valid_methods}")
+        per_marker_method = dict(zip(names, method_list))
+        logger.info(f"Per-marker methods: {per_marker_method}")
+
+    # Parse per-marker intensity features
+    per_marker_feature = {}
+    if args.intensity_features:
+        feat_list = [f.strip() for f in args.intensity_features.split(',')]
+        if len(feat_list) != len(names):
+            raise ValueError(f"--intensity-features has {len(feat_list)} values but "
+                             f"--marker-name has {len(names)} markers: {names}")
+        valid_feats = {'mean', 'median', 'p25', 'p75', 'p95'}
+        for f in feat_list:
+            if f not in valid_feats:
+                raise ValueError(f"Invalid feature '{f}' in --intensity-features. Choices: {valid_feats}")
+        per_marker_feature = dict(zip(names, feat_list))
+        logger.info(f"Per-marker intensity features: {per_marker_feature}")
+
     # Process each marker
     summaries = []
     for ch, name in zip(channels, names):
         marker_snr = per_marker_snr.get(name, args.snr_threshold)
-        row = classify_single_marker(detections, ch, name, args.method, output_dir,
-                                     bg_subtract=args.bg_subtract,
+        marker_method = per_marker_method.get(name, args.method)
+        marker_feature = per_marker_feature.get(name, args.intensity_feature)
+
+        # For SNR method, disable bg_subtract (uses pipeline SNR directly)
+        # For otsu with --use-raw, disable local bg_subtract (raw values bypass correction)
+        # Global bg is always allowed (it's a simple slide-wide median)
+        marker_bg_subtract = args.bg_subtract
+        marker_global_bg = args.global_background
+        if marker_method == 'snr':
+            marker_bg_subtract = False  # SNR reads from pipeline features
+            marker_global_bg = False    # SNR has its own bg handling
+        elif args.use_raw and not args.global_background:
+            marker_bg_subtract = False  # raw values are pre-correction
+
+        row = classify_single_marker(detections, ch, name, marker_method, output_dir,
+                                     bg_subtract=marker_bg_subtract,
+                                     global_background=marker_global_bg,
                                      centroids=centroids,
-                                     snr_threshold=marker_snr)
+                                     snr_threshold=marker_snr,
+                                     intensity_feature=marker_feature,
+                                     use_raw=args.use_raw,
+                                     cv_max=args.cv_max)
         summaries.append(row)
 
     # Create combined marker_profile when multiple markers are classified
@@ -565,8 +716,8 @@ def main():
     summary_path = output_dir / 'marker_summary.csv'
     with open(summary_path, 'w', newline='') as f:
         writer = csv.DictWriter(f, fieldnames=[
-            'marker', 'method', 'threshold', 'background_median',
-            'n_positive', 'n_negative', 'pct_positive',
+            'marker', 'method', 'feature', 'threshold', 'background_median',
+            'n_positive', 'n_negative', 'pct_positive', 'cv_filtered',
         ])
         writer.writeheader()
         writer.writerows(summaries)
