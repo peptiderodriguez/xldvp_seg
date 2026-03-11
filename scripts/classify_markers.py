@@ -215,7 +215,8 @@ def classify_single_marker(detections: list[dict], channel: int,
                            output_dir: Path,
                            bg_subtract: bool = False,
                            centroids: np.ndarray | None = None,
-                           n_neighbors: int = 30) -> dict:
+                           n_neighbors: int = 30,
+                           snr_threshold: float = 1.5) -> dict:
     """Classify detections for one marker. Returns summary row dict.
 
     Mutates detections in-place: adds {marker}_class, {marker}_value,
@@ -256,7 +257,26 @@ def classify_single_marker(detections: list[dict], channel: int,
         values = raw_values
 
     # Classify
-    if method == 'otsu':
+    if method == 'snr':
+        # SNR-based: positive if channel SNR >= snr_threshold
+        # First try pipeline-computed ch{N}_snr, then compute from raw/bg
+        snr_key_ch = f'ch{channel}_snr'
+        pipeline_snr = np.array([
+            d.get('features', {}).get(snr_key_ch, 0.0) for d in detections
+        ], dtype=np.float64)
+        if np.any(pipeline_snr > 0):
+            snr_values = pipeline_snr
+            logger.info(f"  Using pipeline-computed {snr_key_ch} for SNR classification")
+        elif per_cell_bg is not None:
+            snr_values = np.where(per_cell_bg > 0, raw_values / per_cell_bg, 0.0)
+            logger.info(f"  Computing SNR from raw_values / per_cell_bg")
+        else:
+            raise ValueError(
+                f"SNR method requires either pipeline bg correction (ch{channel}_snr in features) "
+                "or --background-subtract. Neither found.")
+        threshold = snr_threshold
+        positive_mask = snr_values >= snr_threshold
+    elif method == 'otsu':
         threshold, positive_mask = classify_otsu(values)
     elif method == 'otsu_half':
         threshold, positive_mask = classify_otsu_half(values)
@@ -335,8 +355,16 @@ def parse_args() -> argparse.Namespace:
                         help='Comma-separated marker names matching channels '
                              '(e.g. tdTomato or SMA,CD31)')
     parser.add_argument('--method', default='otsu',
-                        choices=['otsu', 'otsu_half', 'gmm'],
-                        help='Classification method (default: otsu)')
+                        choices=['otsu', 'otsu_half', 'gmm', 'snr'],
+                        help='Classification method (default: otsu). '
+                             '"snr" classifies by signal-to-noise ratio (requires --snr-threshold).')
+    parser.add_argument('--snr-threshold', type=float, default=1.5,
+                        help='Default SNR threshold for --method snr (default: 1.5). '
+                             'Overridden per-marker by --snr-thresholds if provided.')
+    parser.add_argument('--snr-thresholds', default=None,
+                        help='Per-marker SNR thresholds, comma-separated matching --marker-name order '
+                             '(e.g. "3.0,4.0,2.5" for DCN>=3, GluI>=4, Pck1>=2.5). '
+                             'Falls back to --snr-threshold for any unspecified markers.')
     parser.add_argument('--background-subtract', action='store_true', default=None,
                         help='Subtract estimated background before thresholding. '
                              'Default: on for otsu, off for otsu_half/gmm.')
@@ -349,13 +377,13 @@ def parse_args() -> argparse.Namespace:
                         help='Output directory (default: same dir as detections)')
     args = parser.parse_args()
 
-    # Background subtraction: default on for otsu, off for others
+    # Background subtraction: default on for otsu and snr, off for others
     if args.no_background_subtract:
         args.bg_subtract = False
     elif args.background_subtract is not None:
         args.bg_subtract = args.background_subtract
     else:
-        args.bg_subtract = (args.method == 'otsu')
+        args.bg_subtract = (args.method in ('otsu', 'snr'))
 
     # Auto-detect pipeline-corrected detections and disable bg subtraction
     # to prevent double correction.  This is set after loading detections
@@ -482,12 +510,24 @@ def main():
             # so disable per-marker bg subtraction to avoid double-correction
             args.bg_subtract = False
 
+    # Parse per-marker SNR thresholds
+    per_marker_snr = {}
+    if args.snr_thresholds:
+        snr_vals = [float(x.strip()) for x in args.snr_thresholds.split(',')]
+        if len(snr_vals) != len(names):
+            raise ValueError(f"--snr-thresholds has {len(snr_vals)} values but "
+                             f"--marker-name has {len(names)} markers: {names}")
+        per_marker_snr = dict(zip(names, snr_vals))
+        logger.info(f"Per-marker SNR thresholds: {per_marker_snr}")
+
     # Process each marker
     summaries = []
     for ch, name in zip(channels, names):
+        marker_snr = per_marker_snr.get(name, args.snr_threshold)
         row = classify_single_marker(detections, ch, name, args.method, output_dir,
                                      bg_subtract=args.bg_subtract,
-                                     centroids=centroids)
+                                     centroids=centroids,
+                                     snr_threshold=marker_snr)
         summaries.append(row)
 
     # Create combined marker_profile when multiple markers are classified
