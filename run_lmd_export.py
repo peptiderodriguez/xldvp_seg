@@ -584,44 +584,73 @@ def build_export_data(assignments, well_order, metadata):
 # LMD XML export
 # ---------------------------------------------------------------------------
 
+def _transform_native_to_display(pts_xy_um, orig_w_um, orig_h_um,
+                                  flip_h, rot90):
+    """Transform contour [x, y] um from native CZI space to display space.
+
+    Applies the same transforms that napari_place_crosses.py applied to the
+    image, so contours end up in the same coordinate system as the crosses.
+
+    In [x, y] coordinates:
+      flip_h:  x' = orig_w - x,  y' = y
+      rot90:   x' = orig_h - y,  y' = x   (CW 90 deg)
+    """
+    pts = pts_xy_um.copy()
+    if flip_h:
+        pts[:, 0] = orig_w_um - pts[:, 0]
+    if rot90:
+        x_new = orig_h_um - pts[:, 1]
+        y_new = pts[:, 0].copy()
+        pts[:, 0] = x_new
+        pts[:, 1] = y_new
+    return pts
+
+
 def export_to_lmd_xml(shapes, crosses_data, output_path, flip_y=True):
     """
     Export shapes to Leica LMD XML via py-lmd.
 
     Handles single contours (single, single_control) and
     multi-contour shapes (cluster, cluster_control).
+
+    Reads display_transform from crosses_data to apply the same coordinate
+    transforms (flip_horizontal, rotate_cw_90) to contours so they match
+    the cross calibration space.
     """
-    from lmd.lib import Collection, Shape
-    from lmd.tools import makeCross
+    from lmd.lib import Collection
 
     pixel_size = crosses_data['pixel_size_um']
-    image_height_um = crosses_data['image_height_px'] * pixel_size
+    orig_w_um = crosses_data['image_width_px'] * pixel_size
+    orig_h_um = crosses_data['image_height_px'] * pixel_size
+
+    # Read display transforms from crosses metadata
+    dt = crosses_data.get('display_transform', {})
+    flip_h = dt.get('flip_horizontal', False)
+    rot90 = dt.get('rotate_cw_90', False)
+
+    # After rotation, display dimensions swap
+    display_h_um = orig_w_um if rot90 else orig_h_um
+
+    if flip_h or rot90:
+        print(f"  Display transforms: flip_h={flip_h}, rot90={rot90}")
+        print(f"  Display height for LMD Y-flip: {display_h_um:.0f} um")
 
     # Calibration from first 3 crosses
     crosses = crosses_data['crosses']
     if len(crosses) < 3:
         raise ValueError("Need at least 3 reference crosses for calibration")
 
+    # Crosses are already in display space; Y-flip for LMD convention
     calibration_points = np.array([
-        [c['x_um'], c['y_um'] if not flip_y else image_height_um - c['y_um']]
+        [c['x_um'], c['y_um'] if not flip_y else display_h_um - c['y_um']]
         for c in crosses[:3]
     ])
 
     collection = Collection(calibration_points=calibration_points)
+    # Note: calibration points in the XML header are sufficient for LMD.
+    # Visual cross shapes are NOT added — they confuse the LMD software.
 
-    # Add reference crosses
-    for c in crosses:
-        x_um = c['x_um']
-        y_um = c['y_um'] if not flip_y else image_height_um - c['y_um']
-        cross = makeCross(
-            center=np.array([x_um, y_um]),
-            arm_length=100, arm_width=10,
-        )
-        collection.add_shape(Shape(
-            points=cross, well="CAL", name=f"RefCross_{c['id']}"
-        ))
-
-    # Add shapes
+    # Add shapes — transform contours from native CZI space to display space
     for shape in shapes:
         well = shape.get('well', 'A1')
         shape_type = shape.get('type', 'single')
@@ -638,9 +667,11 @@ def export_to_lmd_xml(shapes, crosses_data, output_path, flip_y=True):
                 contours_um.append(np.array(c))
 
         for idx, polygon_um in enumerate(contours_um):
-            polygon_um = polygon_um.copy()
+            # Apply display transforms to match cross coordinate space
+            polygon_um = _transform_native_to_display(
+                np.array(polygon_um), orig_w_um, orig_h_um, flip_h, rot90)
             if flip_y:
-                polygon_um[:, 1] = image_height_um - polygon_um[:, 1]
+                polygon_um[:, 1] = display_h_um - polygon_um[:, 1]
 
             # Close polygon
             if not np.allclose(polygon_um[0], polygon_um[-1]):

@@ -495,6 +495,8 @@ python run_lmd_export.py \
     --generate-controls --min-score 0.5 --export
 ```
 
+**Coordinate transforms:** `napari_place_crosses.py` saves cross coordinates in display space (after `--flip-horizontal` + `--rotate-cw-90`) and stores the active transforms as `display_transform` in the crosses JSON. Both `run_lmd_export.py` and `lmd_export_replicates.py` read `display_transform` and apply the same flip/rotation to native CZI contours via `_transform_native_to_display()` before the LMD Y-flip. After 90-degree rotation, the display height equals the original CZI width. Slides without exactly 3 crosses are skipped.
+
 Max 308 wells per plate. Early capacity check warns before expensive processing. For >308 wells, use `generate_multiplate_wells()` from `segmentation.lmd.well_plate` for automatic overflow to additional plates. Empty QC wells (default 10% of samples) inserted evenly via `insert_empty_wells()`. For proteomics replicates, use `segmentation.lmd.selection.select_cells_for_lmd()` to build area-normalized replicates, then `scripts/select_mks_for_lmd.py` (MK-specific wrapper) for full plate assignment.
 
 **Replicate-based export** (pre-assigned wells, e.g. MK proteomics):

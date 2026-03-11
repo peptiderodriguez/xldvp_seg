@@ -10,8 +10,10 @@ are already made (e.g. via select_mks_for_lmd.py). It takes:
 
 Coordinate conventions:
   - Contours are in native CZI pixel space [y, x] -> converted to [x, y] um
-  - Crosses are in flipped display space (tissue-down) from napari
-  - XML output: X flipped (tissue-down) + Y flipped (LMD convention)
+  - Crosses are in display space (after flip_h + rotate_cw_90) from napari
+  - Export applies the same display transforms to contours so they match
+    the crosses, then Y-flips for LMD convention
+  - display_transform metadata in crosses JSON drives the coordinate mapping
 
 Usage:
     python lmd_export_replicates.py \
@@ -82,6 +84,28 @@ def get_pixel_size(crosses_data, slide_data):
     return DEFAULT_PIXEL_SIZE_UM
 
 
+def _transform_native_to_display(pts_xy_um, orig_w_um, orig_h_um,
+                                  flip_h, rot90):
+    """Transform contour [x, y] um from native CZI space to display space.
+
+    Applies the same transforms that napari_place_crosses.py applied to the
+    image, so contours end up in the same coordinate system as the crosses.
+
+    In [x, y] coordinates:
+      flip_h:  x' = orig_w - x,  y' = y
+      rot90:   x' = orig_h - y,  y' = x   (CW 90 deg)
+    """
+    pts = pts_xy_um.copy()
+    if flip_h:
+        pts[:, 0] = orig_w_um - pts[:, 0]
+    if rot90:
+        x_new = orig_h_um - pts[:, 1]
+        y_new = pts[:, 0].copy()
+        pts[:, 0] = x_new
+        pts[:, 1] = y_new
+    return pts
+
+
 def export_slide_xml(shapes_by_well, slide_name, output_path,
                      pixel_size_um, image_width_px, image_height_px,
                      crosses_data=None):
@@ -93,55 +117,63 @@ def export_slide_xml(shapes_by_well, slide_name, output_path,
         slide_name: for logging.
         output_path: where to save the XML.
         pixel_size_um: for coordinate transforms.
-        image_width_px, image_height_px: CZI bounding box dimensions.
+        image_width_px, image_height_px: CZI bounding box dimensions (original).
         crosses_data: dict from crosses JSON (napari), or None.
     """
     from lmd.lib import Collection
-    from lmd.tools import makeCross
 
-    img_w_um = image_width_px * pixel_size_um
-    img_h_um = image_height_px * pixel_size_um
+    orig_w_um = image_width_px * pixel_size_um
+    orig_h_um = image_height_px * pixel_size_um
+
+    # Read display transforms from crosses metadata
+    flip_h = False
+    rot90 = False
+    if crosses_data:
+        dt = crosses_data.get('display_transform', {})
+        flip_h = dt.get('flip_horizontal', False)
+        rot90 = dt.get('rotate_cw_90', False)
+
+    # After rotation, display dimensions swap
+    if rot90:
+        display_h_um = orig_w_um   # original width becomes display height
+    else:
+        display_h_um = orig_h_um
 
     if crosses_data:
-        # Cross positions: X already flipped by napari (tissue-down),
-        # flip Y for LMD convention
+        # Crosses are already in display space; Y-flip for LMD convention
         calibration_points = np.array([
-            [c['x_um'], img_h_um - c['y_um']]
+            [c['x_um'], display_h_um - c['y_um']]
             for c in crosses_data['crosses']
         ])
         log.info(f"  Calibration: user-placed crosses")
+        log.info(f"  Display transforms: flip_h={flip_h}, rot90={rot90}")
+        log.info(f"  Display height for LMD Y-flip: {display_h_um:.0f} um")
         for c in crosses_data['crosses']:
             log.info(f"    Cross {c.get('id', '?')}: napari ({c['x_um']:.0f}, "
                      f"{c['y_um']:.0f}) um -> XML ({c['x_um']:.0f}, "
-                     f"{img_h_um - c['y_um']:.0f}) um")
+                     f"{display_h_um - c['y_um']:.0f}) um")
     else:
-        # Fallback: corners of slide extent
+        # Fallback: corners of slide extent (no transforms)
         calibration_points = np.array([
             [0, 0],
-            [img_w_um, 0],
-            [0, img_h_um],
+            [orig_w_um, 0],
+            [0, orig_h_um],
         ])
         log.warning(f"  Calibration: NO CROSSES - using dummy corner points")
 
     collection = Collection(calibration_points=calibration_points)
+    # Note: calibration points in the XML header are sufficient for LMD.
+    # Visual cross shapes are NOT added — they have no well assignment and
+    # confuse the LMD software (shows as extra shapes with 100/1000 um² area).
 
-    # Add calibration crosses
-    for cx, cy in calibration_points:
-        cross_col = makeCross(
-            center=np.array([cx, cy]),
-            arms=[100, 100, 100, 100], width=10, dist=5,
-        )
-        collection.join(cross_col)
-
-    # Add shapes: flip to LMD coordinate system
-    # Contours are in native CZI [x, y] um
-    # LMD needs: flip X (tissue-down) + flip Y (LMD convention)
+    # Transform contours from native CZI space to display space (matching
+    # crosses), then Y-flip for LMD convention
     n_shapes = 0
     for well, cell_list in shapes_by_well.items():
         for uid, contour_um in cell_list:
-            polygon = contour_um.copy()
-            polygon[:, 0] = img_w_um - polygon[:, 0]   # flip X (tissue-down)
-            polygon[:, 1] = img_h_um - polygon[:, 1]   # flip Y (LMD convention)
+            polygon = _transform_native_to_display(
+                contour_um, orig_w_um, orig_h_um, flip_h, rot90)
+            polygon[:, 1] = display_h_um - polygon[:, 1]   # Y-flip for LMD
 
             # Close polygon
             if not np.allclose(polygon[0], polygon[-1]):
@@ -194,7 +226,7 @@ def main():
     if args.crosses_dir:
         log.info(f"Crosses dir: {args.crosses_dir}")
     else:
-        log.warning("No --crosses-dir - XMLs will have dummy calibration points")
+        log.warning("No --crosses-dir provided - all slides will be skipped")
 
     slides = args.slides or list(all_results.keys())
 
@@ -204,35 +236,36 @@ def main():
             continue
 
         slide_data = all_results[slide_name]
-        log.info(f"\n{'='*60}")
-        log.info(f"Slide: {slide_name}")
-        log.info(f"{'='*60}")
 
-        # Find crosses
+        # Find crosses — skip slides without 3 reference crosses
         crosses_data = None
         crosses_path = find_slide_crosses(args.crosses_dir, slide_name)
         if crosses_path:
             with open(crosses_path) as f:
                 crosses_data = json.load(f)
-            log.info(f"  Crosses: {crosses_path.name} "
-                     f"(saved {crosses_data.get('timestamp', '?')})")
-        elif args.crosses_dir:
-            log.warning(f"  Crosses: NONE FOUND for {slide_name}")
+            n_crosses = len(crosses_data.get('crosses', []))
+            if n_crosses < 3:
+                log.warning(f"Slide '{slide_name}': only {n_crosses} crosses "
+                            f"(need 3) - skipping")
+                continue
         else:
-            log.info(f"  Crosses: none (no --crosses-dir)")
+            log.info(f"Slide '{slide_name}': no crosses file - skipping")
+            continue
+
+        log.info(f"\n{'='*60}")
+        log.info(f"Slide: {slide_name}")
+        log.info(f"{'='*60}")
+        log.info(f"  Crosses: {crosses_path.name} "
+                 f"(saved {crosses_data.get('timestamp', '?')})")
 
         # Get pixel size
         pixel_size_um = get_pixel_size(crosses_data, slide_data)
         log.info(f"  Pixel size: {pixel_size_um:.4f} um/px")
 
-        # Get image dimensions from crosses (most reliable)
-        if crosses_data:
-            image_width_px = crosses_data['image_width_px']
-            image_height_px = crosses_data['image_height_px']
-        else:
-            # Estimate from contour extents
-            image_width_px = 0
-            image_height_px = 0
+        # Image dimensions from crosses (always available — slides without
+        # crosses are skipped above)
+        image_width_px = crosses_data['image_width_px']
+        image_height_px = crosses_data['image_height_px']
 
         # Build shapes from contours
         slide_contours = contours_by_slide.get(slide_name, [])
@@ -271,12 +304,6 @@ def main():
                 max_y = max(max_y, pts_yx[:, 0].max())
 
         log.info(f"  Contours matched: {n_ok}, missing: {n_miss}")
-
-        # Use estimated extents if no crosses
-        if not crosses_data:
-            image_width_px = int(max_x + 1000)
-            image_height_px = int(max_y + 1000)
-            log.info(f"  Estimated image extent: {image_width_px} x {image_height_px} px")
 
         # Export XML
         xml_path = output_dir / f"{slide_name}_lmd.xml"
