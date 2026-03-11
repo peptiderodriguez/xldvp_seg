@@ -2,7 +2,8 @@
 """
 Place 3 reference crosses on a CZI or OME-Zarr slide for LMD calibration.
 
-Loads 2 resolution levels as numpy arrays and displays as napari multiscale.
+Loads a single CZI resolution level and displays in napari (not multiscale,
+which has a rendering bug causing image to disappear at high zoom).
 scale=(base, base) makes world coords = full-res reference pixels, so cursor
 position IS the saved coordinate — no coordinate conversion needed.
 
@@ -28,7 +29,7 @@ Usage:
   python napari_place_crosses.py --czi-dir /data --slides A B \
       --sampling-results lmd_replicates_full.json \
       --contours mk_contours_overlay.json \
-      --flip-horizontal --pyramid-levels 2 8 --output-dir crosses/ --fresh
+      --flip-horizontal --output-dir crosses/ --fresh
 
   # Without rotation (e.g. non-LMD viewing)
   python napari_place_crosses.py -i slide.czi --no-rotate-cw-90
@@ -580,7 +581,9 @@ def run_single_slide(args, input_path=None, output_path=None):
     zarr_meta = None
 
     if is_czi:
-        # Use --pyramid-levels if specified, otherwise compute from --scale-factor
+        # Load two resolution levels as a proper multiscale pyramid.
+        # Use dask to enable tiled rendering (avoids GL_MAX_TEXTURE_SIZE
+        # limit that causes image to disappear at high zoom).
         pyramid_levels = getattr(args, 'pyramid_levels', None)
         if pyramid_levels:
             scale_factors = tuple(sorted(set(pyramid_levels)))
@@ -647,12 +650,18 @@ def run_single_slide(args, input_path=None, output_path=None):
     # ── Display ──────────────────────────────────────────────────
     viewer = napari.Viewer(title=slide_name)
 
-    # scale=(base, base) → world coords = full-res reference pixels
+    # Wrap arrays as dask chunks so napari uses tiled rendering.
+    # This avoids GL_MAX_TEXTURE_SIZE (16384) limit that causes large
+    # images to disappear at high zoom.
+    import dask.array as da
+    TILE = 4096
+    dask_pyramid = [da.from_array(img, chunks=(TILE, TILE, 3)) for img in pyramid]
+
     viewer.add_image(
-        pyramid, name=slide_name, multiscale=True,
+        dask_pyramid, name=slide_name, multiscale=True,
         contrast_limits=[0, 255], scale=(base_scale, base_scale),
     )
-    print(f"  Display: {len(pyramid)} levels, base_scale={base_scale}")
+    print(f"  Display: {len(pyramid)} levels, base_scale={base_scale}, tiled={TILE}")
 
     # ── Contour overlay ─────────────────────────────────────────
     contours_path = getattr(args, 'contours', None)
