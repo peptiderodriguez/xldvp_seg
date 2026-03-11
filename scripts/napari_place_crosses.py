@@ -705,6 +705,10 @@ def run_single_slide(args, input_path=None, output_path=None):
         lyr.mouse_zoom = False
         cross_layers.append(lyr)
 
+    # Lock ALL layers so nothing can be accidentally dragged/transformed
+    for lyr in viewer.layers:
+        lyr.editable = False
+
     # CRITICAL: keep image layer active so shapes layers don't eat keypresses
     img_layer = viewer.layers[slide_name]
     viewer.layers.selection.active = img_layer
@@ -743,7 +747,7 @@ def run_single_slide(args, input_path=None, output_path=None):
                 tags.append(f"{i+1}:..")
         n = sum(p is not None for p in positions)
         extra = " S=save Q=quit" if n == 3 else ""
-        viewer.title = f"[{' | '.join(tags)}]{extra}  Space=place R/G/B=select"
+        viewer.title = f"[{' | '.join(tags)}]{extra}  Space=place 1/2/3=select"
 
     def save_crosses():
         n = sum(p is not None for p in positions)
@@ -808,23 +812,29 @@ def run_single_slide(args, input_path=None, output_path=None):
             save_crosses()
 
     # ── Keybindings ─────────────────────────────────────────────
-    @viewer.bind_key('r', overwrite=True)
-    def _(v):
-        active[0] = 0
-        show_info(f"Selected {CROSS_LABELS[0]}")
+    def _select_cross(idx):
+        active[0] = idx
+        show_info(f"Selected {CROSS_LABELS[idx]}")
         update_title()
+
+    @viewer.bind_key('r', overwrite=True)
+    def _(v): _select_cross(0)
 
     @viewer.bind_key('g', overwrite=True)
-    def _(v):
-        active[0] = 1
-        show_info(f"Selected {CROSS_LABELS[1]}")
-        update_title()
+    def _(v): _select_cross(1)
 
     @viewer.bind_key('b', overwrite=True)
-    def _(v):
-        active[0] = 2
-        show_info(f"Selected {CROSS_LABELS[2]}")
-        update_title()
+    def _(v): _select_cross(2)
+
+    # Number keys (override napari's layer-switch)
+    @viewer.bind_key('1', overwrite=True)
+    def _(v): _select_cross(0)
+
+    @viewer.bind_key('2', overwrite=True)
+    def _(v): _select_cross(1)
+
+    @viewer.bind_key('3', overwrite=True)
+    def _(v): _select_cross(2)
 
     @viewer.bind_key('Space', overwrite=True)
     def _(v):
@@ -893,7 +903,7 @@ def run_single_slide(args, input_path=None, output_path=None):
             print(f"  Warning: could not load existing crosses: {e}")
 
     update_title()
-    print("\n  R=red  G=green  B=cyan  |  Space=place  S=save  U=undo  C=clear  Q=quit\n")
+    print("\n  1/R=red  2/G=green  3/B=cyan  |  Space=place  S=save  U=undo  C=clear  Q=quit\n")
     napari.run()
 
 
