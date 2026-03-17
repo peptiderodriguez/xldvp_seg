@@ -20,8 +20,8 @@ set -euo pipefail
 REPO="${REPO:-/path/to/xldvp_seg}"
 CZI="/path/to/data/19022026_gold_fish_ctrl_veh_488Slc17a7_555Gad1_647Htr2a_750Ntrk2_Hoechst-EDFvar-stitch.czi"
 OUTPUT_DIR=/path/to/output/brain_tissue_pattern
-MKSEG_PYTHON="${MKSEG_PYTHON:-python}"
-PYTHON="$MKSEG_PYTHON"
+XLDVP_PYTHON="${XLDVP_PYTHON:-${MKSEG_PYTHON:-python}}"
+PYTHON="$XLDVP_PYTHON"
 
 export PYTHONPATH=$REPO
 export PYTHONUNBUFFERED=1

@@ -17,7 +17,7 @@
 # Expected runtime: ~5-10 minutes per node (100-400 cells per slide,
 # ~10-50 virtual tiles per slide, SAM2 encoder is fast on L40S).
 
-MKSEG_PYTHON="${MKSEG_PYTHON:-python}"
+XLDVP_PYTHON="${XLDVP_PYTHON:-${MKSEG_PYTHON:-python}}"
 REPO="${REPO:-/path/to/xldvp_seg}"
 
 DETECTIONS=/path/to/output/bm_lmd_feb2026/mk_clf084_dataset/all_mks_with_rejected3_full.json
@@ -35,7 +35,7 @@ echo "=========================================="
 
 cd "$REPO"
 
-PYTHONPATH="$REPO" "$MKSEG_PYTHON" scripts/extract_sam2_for_mk.py extract \
+PYTHONPATH="$REPO" "$XLDVP_PYTHON" scripts/extract_sam2_for_mk.py extract \
     --detections "$DETECTIONS" \
     --training-data "$TRAINING" \
     --czi-dir "$CZI_DIR" \

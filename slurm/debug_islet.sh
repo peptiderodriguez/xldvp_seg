@@ -11,8 +11,8 @@
 #SBATCH --error=slurm/logs/islet_debug_%j.err
 
 REPO="${REPO:-/path/to/xldvp_seg}"
-MKSEG_PYTHON="${MKSEG_PYTHON:-python}"
-PYTHON="$MKSEG_PYTHON"
+XLDVP_PYTHON="${XLDVP_PYTHON:-${MKSEG_PYTHON:-python}}"
+PYTHON="$XLDVP_PYTHON"
 
 export PYTHONPATH=$REPO
 export PYTHONUNBUFFERED=1

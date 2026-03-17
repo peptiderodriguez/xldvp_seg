@@ -9,7 +9,7 @@
 #SBATCH --mem=500G
 
 # Environment
-MKSEG_PYTHON="${MKSEG_PYTHON:-python}"
+XLDVP_PYTHON="${XLDVP_PYTHON:-${MKSEG_PYTHON:-python}}"
 REPO="${REPO:-/path/to/xldvp_seg}"
 cd "$REPO"
 
@@ -24,7 +24,7 @@ free -h
 
 # Run multi-GPU NMJ full run with 10% tile overlap
 echo "=== Starting multi-GPU NMJ full run (4 GPUs, 100% tiles, 10% overlap) ==="
-$MKSEG_PYTHON run_segmentation.py \
+$XLDVP_PYTHON run_segmentation.py \
     --czi-path /path/to/data/20251107_Fig5_nuc488_Bgtx647_NfL750-1-EDFvar-stitch.czi \
     --cell-type nmj \
     --channel 1 \

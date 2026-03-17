@@ -37,7 +37,7 @@ echo "============================================================"
 
 cd /path/to/output
 
-MKSEG_PYTHON="${MKSEG_PYTHON:-python}"
+XLDVP_PYTHON="${XLDVP_PYTHON:-${MKSEG_PYTHON:-python}}"
 export PYTHONUNBUFFERED=1
 
 python generate_combined_html.py \

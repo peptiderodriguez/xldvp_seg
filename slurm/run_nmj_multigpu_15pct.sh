@@ -16,11 +16,11 @@
 
 set -euo pipefail
 
-MKSEG_PYTHON="${MKSEG_PYTHON:-python}"
+XLDVP_PYTHON="${XLDVP_PYTHON:-${MKSEG_PYTHON:-python}}"
 REPO="${REPO:-/path/to/xldvp_seg}"
 CZI="/path/to/data/20251107_Fig5_nuc488_Bgtx647_NfL750-1-EDFvar-stitch.czi"
 OUTPUT_DIR=/path/to/output/nmj_output
-PYTHON="$MKSEG_PYTHON"
+PYTHON="$XLDVP_PYTHON"
 
 export PYTHONPATH=$REPO
 export PYTHONUNBUFFERED=1

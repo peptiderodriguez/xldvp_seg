@@ -17,7 +17,7 @@ echo "============================================================"
 echo ""
 
 # Environment
-MKSEG_PYTHON="${MKSEG_PYTHON:-python}"
+XLDVP_PYTHON="${XLDVP_PYTHON:-${MKSEG_PYTHON:-python}}"
 
 cd /path/to/output
 python visualize_normalization.py

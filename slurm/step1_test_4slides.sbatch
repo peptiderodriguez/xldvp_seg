@@ -17,7 +17,7 @@ echo "Job ID: $SLURM_JOB_ID"
 echo "Start time: $(date)"
 echo ""
 
-MKSEG_PYTHON="${MKSEG_PYTHON:-python}"
+XLDVP_PYTHON="${XLDVP_PYTHON:-${MKSEG_PYTHON:-python}}"
 
 export PYTHONUNBUFFERED=1
 export HDF5_USE_FILE_LOCKING=FALSE

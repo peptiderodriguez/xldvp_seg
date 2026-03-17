@@ -48,9 +48,9 @@
 
 set -euo pipefail
 
-MKSEG_PYTHON="${MKSEG_PYTHON:-python}"
+XLDVP_PYTHON="${XLDVP_PYTHON:-${MKSEG_PYTHON:-python}}"
 REPO="${REPO:-/path/to/xldvp_seg}"
-PYTHON="$MKSEG_PYTHON"
+PYTHON="$XLDVP_PYTHON"
 LOG_DIR="$REPO/slurm/logs"
 mkdir -p "$LOG_DIR"
 

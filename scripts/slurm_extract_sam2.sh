@@ -12,7 +12,7 @@
 # Two extraction passes: one per base directory.
 
 source ~/miniforge3/etc/profile.d/conda.sh
-conda activate mkseg
+conda activate xldvp_seg
 
 REPO=/home/edrod/xldvp_seg
 CZI_DIR=/path/to/data/bonemarrow/2025_11_18

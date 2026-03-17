@@ -12,7 +12,7 @@
 # Re-extract SAM2 for 3 rescued slides (FGC2, FGC4, MHU4).
 # Single node — completed slides are auto-skipped via resume check.
 
-MKSEG_PYTHON="${MKSEG_PYTHON:-python}"
+XLDVP_PYTHON="${XLDVP_PYTHON:-${MKSEG_PYTHON:-python}}"
 REPO="${REPO:-/path/to/xldvp_seg}"
 
 DETECTIONS=/path/to/output/bm_lmd_feb2026/mk_clf084_dataset/all_mks_with_rejected3_full.json
@@ -30,7 +30,7 @@ echo "=========================================="
 cd "$REPO"
 
 # Run all 16 slides on 1 node — 13 completed will be skipped via resume check
-PYTHONPATH="$REPO" "$MKSEG_PYTHON" scripts/extract_sam2_for_mk.py extract \
+PYTHONPATH="$REPO" "$XLDVP_PYTHON" scripts/extract_sam2_for_mk.py extract \
     --detections "$DETECTIONS" \
     --training-data "$TRAINING" \
     --czi-dir "$CZI_DIR" \

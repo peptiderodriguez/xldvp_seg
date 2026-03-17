@@ -10,7 +10,7 @@
 #SBATCH --output=logs/norm_validate_%j.out
 #SBATCH --error=logs/norm_validate_%j.err
 
-MKSEG_PYTHON="${MKSEG_PYTHON:-python}"
+XLDVP_PYTHON="${XLDVP_PYTHON:-${MKSEG_PYTHON:-python}}"
 
 export PYTHONUNBUFFERED=1
 export HDF5_USE_FILE_LOCKING=FALSE

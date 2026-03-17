@@ -9,7 +9,7 @@
 #SBATCH --output=logs/stain_consensus_%j.out
 #SBATCH --error=logs/stain_consensus_%j.err
 
-MKSEG_PYTHON="${MKSEG_PYTHON:-python}"
+XLDVP_PYTHON="${XLDVP_PYTHON:-${MKSEG_PYTHON:-python}}"
 
 cd /path/to/output
 

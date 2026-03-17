@@ -10,9 +10,9 @@
 #SBATCH --error=/path/to/xldvp_seg/slurm/logs/nmj_clf_%j.err
 
 # Paths
-MKSEG_PYTHON="${MKSEG_PYTHON:-python}"
+XLDVP_PYTHON="${XLDVP_PYTHON:-${MKSEG_PYTHON:-python}}"
 REPO="${REPO:-/path/to/xldvp_seg}"
-PYTHON="$MKSEG_PYTHON"
+PYTHON="$XLDVP_PYTHON"
 RUN_DIR=/path/to/output/nmj_output/RUN_DIR
 
 DETECTIONS=$RUN_DIR/nmj_detections.json

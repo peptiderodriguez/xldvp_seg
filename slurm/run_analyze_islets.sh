@@ -14,9 +14,9 @@
 
 set -euo pipefail
 
-MKSEG_PYTHON="${MKSEG_PYTHON:-python}"
+XLDVP_PYTHON="${XLDVP_PYTHON:-${MKSEG_PYTHON:-python}}"
 REPO="${REPO:-/path/to/xldvp_seg}"
-PYTHON="$MKSEG_PYTHON"
+PYTHON="$XLDVP_PYTHON"
 CZI="${1:?Usage: sbatch run_analyze_islets.sh <czi_path> <run_dir>}"
 RUN_DIR="${2:?Usage: sbatch run_analyze_islets.sh <czi_path> <run_dir>}"
 

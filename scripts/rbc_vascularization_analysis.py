@@ -12,7 +12,7 @@ Workflow:
   4. --report  : Generate summary figures and ANOVA table
 
 Usage:
-    PYTHONPATH=$REPO $MKSEG_PYTHON $REPO/scripts/rbc_vascularization_analysis.py \
+    PYTHONPATH=$REPO $XLDVP_PYTHON $REPO/scripts/rbc_vascularization_analysis.py \
         --train --score --analyze \
         --annotations rbc_annotations.json \
         --unfiltered-dir per_slide_unfiltered/ \

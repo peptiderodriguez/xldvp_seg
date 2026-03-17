@@ -17,7 +17,7 @@ echo "Start time: $(date)"
 echo ""
 
 # Environment
-MKSEG_PYTHON="${MKSEG_PYTHON:-python}"
+XLDVP_PYTHON="${XLDVP_PYTHON:-${MKSEG_PYTHON:-python}}"
 cd /path/to/output
 
 OUTPUT_DIR="/path/to/output/unified_10pct"

@@ -35,7 +35,7 @@ echo "Project: Whole Mouse PM"
 echo "Mode:   tissue_pattern, 10% tiles, 4x L40S"
 echo "============================================================"
 
-MKSEG_PYTHON="${MKSEG_PYTHON:-python}"
+XLDVP_PYTHON="${XLDVP_PYTHON:-${MKSEG_PYTHON:-python}}"
 REPO="${REPO:-/path/to/xldvp_seg}"
 cd "$REPO"
 

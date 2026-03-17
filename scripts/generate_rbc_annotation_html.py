@@ -11,7 +11,7 @@ The crop_b64 images are already present in the unfiltered JSON, so no CZI loadin
 is needed -- the script is fast and lightweight.
 
 Usage:
-    PYTHONPATH=$REPO $MKSEG_PYTHON $REPO/scripts/generate_rbc_annotation_html.py \
+    PYTHONPATH=$REPO $XLDVP_PYTHON $REPO/scripts/generate_rbc_annotation_html.py \
         --input-dir /path/to/output/bm_lmd_feb2026/mk_clf084_dataset/per_slide_unfiltered/ \
         --output /path/to/output/bm_lmd_feb2026/mk_clf084_dataset/rbc_annotation/index.html \
         --max-samples 200 \
@@ -19,7 +19,7 @@ Usage:
         --min-area 100
 
     # Specific slides only:
-    PYTHONPATH=$REPO $MKSEG_PYTHON $REPO/scripts/generate_rbc_annotation_html.py \
+    PYTHONPATH=$REPO $XLDVP_PYTHON $REPO/scripts/generate_rbc_annotation_html.py \
         --input-dir /path/to/per_slide_unfiltered/ \
         --output /path/to/output/index.html \
         --slides FGC1 FGC2 MHU3

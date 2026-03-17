@@ -23,7 +23,7 @@ echo "Slides: ALL 16 slides (complete cohort)"
 echo "Method: Tissue-aware sampling (500k pixels per slide)"
 echo ""
 
-MKSEG_PYTHON="${MKSEG_PYTHON:-python}"
+XLDVP_PYTHON="${XLDVP_PYTHON:-${MKSEG_PYTHON:-python}}"
 export PYTHONUNBUFFERED=1
 
 cd /path/to/output

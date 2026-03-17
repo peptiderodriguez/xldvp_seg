@@ -27,7 +27,7 @@ echo "Project: Whole Mouse PM — Feature Clustering"
 echo "Detections: $DETECTIONS"
 echo "============================================================"
 
-MKSEG_PYTHON="${MKSEG_PYTHON:-python}"
+XLDVP_PYTHON="${XLDVP_PYTHON:-${MKSEG_PYTHON:-python}}"
 REPO="${REPO:-/path/to/xldvp_seg}"
 cd "$REPO"
 

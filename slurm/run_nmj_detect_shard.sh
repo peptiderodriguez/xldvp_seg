@@ -21,10 +21,10 @@
 
 set -euo pipefail
 
-MKSEG_PYTHON="${MKSEG_PYTHON:-python}"
+XLDVP_PYTHON="${XLDVP_PYTHON:-${MKSEG_PYTHON:-python}}"
 REPO="${REPO:-/path/to/xldvp_seg}"
 CZI="/path/to/data/20251107_Fig5_nuc488_Bgtx647_NfL750-1-EDFvar-stitch.czi"
-PYTHON="$MKSEG_PYTHON"
+PYTHON="$XLDVP_PYTHON"
 
 OUTPUT_DIR="${1:?ERROR: OUTPUT_DIR required as first argument}"
 SAMPLE_FRACTION="${2:?ERROR: SAMPLE_FRACTION required as second argument}"

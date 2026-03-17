@@ -20,7 +20,7 @@ from pathlib import Path
 
 REPO = Path(__file__).resolve().parent.parent
 XLDVP_PYTHON = Path(
-    os.environ.get("XLDVP_PYTHON", os.environ.get("XLDVP_PYTHON", "python"))
+    os.environ.get("XLDVP_PYTHON", os.environ.get("MKSEG_PYTHON", "python"))
 )
 
 

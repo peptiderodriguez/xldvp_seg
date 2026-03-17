@@ -11,7 +11,7 @@
 #SBATCH --error=logs/validate_norm_%j.err
 
 # Load modules
-MKSEG_PYTHON="${MKSEG_PYTHON:-python}"
+XLDVP_PYTHON="${XLDVP_PYTHON:-${MKSEG_PYTHON:-python}}"
 
 # Run validation script
 export PYTHONUNBUFFERED=1
@@ -20,7 +20,7 @@ export HSA_OVERRIDE_GFX_VERSION=9.4.2
 
 cd /path/to/output
 
-$MKSEG_PYTHON validate_median_reinhard.py
+$XLDVP_PYTHON validate_median_reinhard.py
 
 echo ""
 echo "Validation complete! Images saved to:"

@@ -17,12 +17,12 @@
 
 set -euo pipefail
 
-MKSEG_PYTHON="${MKSEG_PYTHON:-python}"
+XLDVP_PYTHON="${XLDVP_PYTHON:-${MKSEG_PYTHON:-python}}"
 REPO="${REPO:-/path/to/xldvp_seg}"
 CZI="${1:?Usage: sbatch run_islet_multigpu.sh <czi_path> [classifier_path]}"
 CLASSIFIER="${2:-}"
 OUTPUT_DIR=/path/to/output/islet_output
-PYTHON="$MKSEG_PYTHON"
+PYTHON="$XLDVP_PYTHON"
 
 export PYTHONPATH=$REPO
 export PYTHONUNBUFFERED=1
