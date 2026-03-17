@@ -43,7 +43,7 @@ Run `$MKSEG_PYTHON $REPO/scripts/system_info.py --json` (where `$REPO` is the re
 - SLURM cluster or local workstation?
 - Available GPUs, RAM, CPUs, partitions
 - **Partition busyness**: `nodes_idle` vs `nodes_allocated` per partition. Briefly tell the user which partitions have space.
-- Recommended resources (the script computes these: 100% on SLURM, 75% on local). On SLURM, prefer GPU partitions with idle nodes — if `p.hpcl93` has idle nodes use that (4x L40S, 256 CPUs, 742G RAM), but if it's fully busy and `p.hpcl8` has idle nodes, suggest that instead (2x RTX 5000, 24 CPUs, 371G RAM) as long as the slide fits in memory.
+- Recommended resources (the script computes these: ~75% of node CPUs/RAM on SLURM to leave headroom for other users, 75% on local). On SLURM, prefer GPU partitions with idle nodes. Use `system_info.py` output — don't hardcode partition names or specs.
 
 Use this info throughout to set `--num-gpus`, SLURM `--mem`, `--cpus-per-task`, `--gres`, etc.
 

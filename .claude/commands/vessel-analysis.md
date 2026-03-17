@@ -61,7 +61,7 @@ Check the outputs:
 
 If `--generate-viewer` was used, serve the HTML:
 ```bash
-python $REPO/serve_html.py --directory $RUN_DIR/vessel_analysis/
+$MKSEG_PYTHON $REPO/serve_html.py --directory $RUN_DIR/vessel_analysis/
 ```
 
 The viewer supports zoom/pan, cell coloring by vessel_type or vessel_morphology.

@@ -89,8 +89,7 @@ PYTHONPATH=$REPO $MKSEG_PYTHON $REPO/run_segmentation.py \
 **Performance flags:**
 ```bash
 --num-gpus 1           # Safer for low-RAM jobs
---sample-fraction 0.10 # 10% for annotation round; 1.0 for full run
---html-sample-fraction 0.10  # Subsample HTML to 10% of detections
+--html-sample-fraction 0.10  # Subsample HTML to 10% of detections (detection is always 100%)
 --tile-shard 0/4       # Multi-node: process 1/4 of tiles on this node
 ```
 

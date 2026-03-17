@@ -60,6 +60,6 @@ Recommend which corrections to enable in the full pipeline run based on the prev
 - *"Flat-field is almost always worth it for mosaic CZI data — it's the most impactful correction."*
 - *"Photobleach correction matters most for large slides where acquisition took a long time (many tiles scanned sequentially)."*
 - *"These corrections affect detection sensitivity: uncorrected illumination gradients can cause the detector to miss cells in dim regions or false-positive in bright regions."*
-- If user is unsure: *"Try running detection at 1% sample fraction with and without the correction to see if it changes detection count in edge tiles."*
+- If user is unsure: *"Run full detection with and without the correction — it's checkpointed per-tile so you can compare edge tiles from the first few. Use `--html-sample-fraction 0.10` to keep the viewer fast."*
 
 $ARGUMENTS
