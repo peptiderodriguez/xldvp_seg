@@ -290,6 +290,32 @@ Based on what you see, give targeted recommendations:
 
 Don't overwhelm — pick the 1-2 most relevant observations and mention them conversationally.
 
+**Step 10d — Nuclear counting (optional, after detection completes).** Ask: *"Want to count nuclei per cell? This runs Cellpose again on just the nuclear channel to segment individual nuclei, then counts how many fall inside each cell."*
+
+Two ways to run:
+- **Pipeline-integrated** (for future runs, zero extra I/O — reuses SHM + models):
+  ```bash
+  python run_segmentation.py --cell-type cell \
+      --channel-spec "cyto=PM,nuc=Hoechst" --count-nuclei --all-channels
+  ```
+- **Standalone** (for existing runs — loads CZI + masks + models separately):
+  ```bash
+  $XLDVP_PYTHON $REPO/scripts/count_nuclei_per_cell.py \
+      --detections <detections.json> \
+      --czi-path <czi> \
+      --tiles-dir <tiles> \
+      --channel-spec "nuc=Hoechst" \
+      --output <detections_with_nuclei.json>
+  ```
+  Add `--extract-deep-features` for ResNet+DINOv2 per nucleus.
+
+**Features per cell:** `n_nuclei`, `nuclear_area_um2`, `nuclear_area_fraction` (N:C ratio), `largest_nucleus_um2`, `nuclear_solidity`, `nuclear_eccentricity`. Per-nucleus detail list (morph + SAM2 embeddings) stored at `det["nuclei"]` (not in `features` — avoids JSON bloat and keeps features flat for classifier).
+
+**When to suggest:** After cell detection on any multi-channel slide with a nuclear stain. Particularly valuable for:
+- Identifying multinucleated cells (hepatocytes, MKs)
+- Distinguishing dividing cells (n_nuclei=2) from quiescent (n_nuclei=1)
+- N:C ratio as a morphological feature for UMAP clustering
+
 ---
 
 ## Phase 3: Annotation + Classification

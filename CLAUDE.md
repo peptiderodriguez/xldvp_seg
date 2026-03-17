@@ -350,10 +350,11 @@ CZI file → czi_loader.py (channel resolution, tiling)
            → Feature extraction (morph + SAM2 + optional ResNet/DINOv2)
            → Per-tile HTML cache + HDF5 masks + JSON detections
          → Deduplication (>10% pixel overlap)
-         → Post-dedup 3-phase pipeline (post_detection.py):
+         → Post-dedup pipeline (post_detection.py):
            Phase 1: contour dilation + RDP + quick means (ThreadPool)
            Phase 2: KD-tree background estimation (single-thread)
            Phase 3: bg-corrected intensity features (ThreadPool)
+           Phase 4: nuclear counting (optional, --count-nuclei, single-thread GPU)
          → Finalize: JSON + CSV + HTML + OME-Zarr + SpatialData
 ```
 
