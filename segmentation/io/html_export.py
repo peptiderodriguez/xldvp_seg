@@ -1287,10 +1287,29 @@ def generate_index_page(
     <div class="section">
         <button class="btn btn-export" onclick="exportAnnotations()">Export Annotations</button>
         <button class="btn" onclick="importAnnotations()">Import Annotations</button>
+        <button class="btn" id="toggleContourBtn" onclick="toggleContours()" style="background:#2a5a2a">Contours: ON</button>
         <button class="btn btn-danger" onclick="clearAll()">Clear All</button>
     </div>
 
     <script>
+        let contoursVisible = true;
+        function toggleContours() {{
+            contoursVisible = !contoursVisible;
+            const btn = document.getElementById('toggleContourBtn');
+            document.querySelectorAll('.card img, .sample-img').forEach(img => {{
+                if (contoursVisible) {{
+                    const s = img.getAttribute('data-img-contour');
+                    if (s) img.src = s;
+                }} else {{
+                    const s = img.getAttribute('data-img-clean');
+                    if (s) img.src = s;
+                }}
+            }});
+            if (btn) {{
+                btn.textContent = contoursVisible ? 'Contours: ON' : 'Contours: OFF';
+                btn.style.background = contoursVisible ? '#2a5a2a' : '#555';
+            }}
+        }}
         const CELL_TYPE = '{_esc(cell_type)}';
         const EXPERIMENT_NAME = '{_esc(experiment_name or "")}';
         const STORAGE_KEY = EXPERIMENT_NAME ? CELL_TYPE + '_' + EXPERIMENT_NAME + '_annotations' : CELL_TYPE + '_annotations';
