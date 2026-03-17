@@ -1,8 +1,10 @@
 # xldvp_seg — Image Analysis & DVP Pipeline
 
-Automated cell detection, annotation, classification, spatial analysis, and LMD export for whole-slide CZI microscopy images. Designed for Deep Visual Proteomics (DVP) workflows where laser-microdissected cells go into mass spec analysis.
+Automated cell detection, annotation, classification, spatial analysis, and LMD (laser microdissection) export for whole-slide CZI microscopy images. Built for the DVP (Deep Visual Proteomics) workflow: find cells on a slide, classify them by type and marker expression, then export selected cells for laser cutting and mass spec analysis.
 
-Runs on SLURM GPU clusters or local workstations (CUDA, Apple Silicon MPS, or CPU). Claude Code provides an interactive AI assistant that guides you through the entire pipeline.
+Runs on SLURM GPU clusters or local workstations (NVIDIA CUDA, Apple Silicon MPS, or CPU-only). Works with or without [Claude Code](https://claude.ai/claude-code) — an optional AI assistant that can guide you through the entire pipeline interactively.
+
+**Key terms:** CZI = Zeiss microscopy image format. Channels = different fluorescent stains in your image (e.g., nuclear, membrane, antibody markers). SAM2/Cellpose = AI models for cell segmentation. SLURM = cluster job scheduler.
 
 ## Supported Cell Types
 
@@ -21,8 +23,8 @@ Runs on SLURM GPU clusters or local workstations (CUDA, Apple Silicon MPS, or CP
 ## Prerequisites
 
 - **Conda** or **Miniforge** ([install miniforge](https://github.com/conda-forge/miniforge#miniforge3))
-- **GPU** (recommended): NVIDIA with CUDA 11.8+, or Apple Silicon. CPU-only mode available.
-- **Node.js 18+** (only for Claude Code): `conda install -c conda-forge nodejs` or [nodejs.org](https://nodejs.org/)
+- **GPU** (recommended): NVIDIA with CUDA 11.8+ and 8+ GB VRAM (16+ GB for large slides). Apple Silicon also supported. CPU-only mode available but slow.
+- **Node.js 18+** (optional — only needed if you want Claude Code): `conda install -c conda-forge nodejs`
 
 ---
 
@@ -36,7 +38,7 @@ cd xldvp_seg
 conda create -n mkseg python=3.11 -y && conda activate mkseg
 ```
 
-### Step 2: Install everything
+### Step 2: Install everything (~10-15 min)
 
 ```bash
 ./install.sh  # Auto-detects CUDA, installs all dependencies + downloads models
@@ -86,36 +88,18 @@ On first launch, Claude reads `CLAUDE.md` and `.claude/commands/` to understand 
 
 ## Getting Started
 
-### With Claude Code (recommended)
+The pipeline works the same whether you use Claude Code or run commands directly. Claude Code just automates the configuration and guides you through each step.
 
-Inside Claude Code, type:
+### Option A: With Claude Code
 
 ```
-/analyze
+claude          # start Claude Code in the repo directory
+/analyze        # type this to begin — Claude walks you through everything
 ```
 
-Claude will:
-1. Detect your system (local GPU, SLURM cluster, available partitions)
-2. Ask for your CZI file(s) and inspect channel metadata
-3. Build the channel map, confirm with you, and configure detection
-4. Write a YAML config and launch the pipeline (SLURM or local)
-5. Monitor progress, diagnose failures, guide annotation/classification/export
+Other Claude Code commands: `/status` (monitor jobs), `/czi-info` (inspect channels), `/classify` (train classifier), `/lmd-export` (LMD XML), `/view-results` (HTML viewer), `/spatialdata` (scverse export).
 
-Other commands:
-
-| Command | What it does |
-|---------|-------------|
-| `/analyze` | Full pipeline: detect → annotate → classify → spatial → LMD export |
-| `/status` | Check SLURM jobs, tail logs, monitor progress |
-| `/czi-info` | Inspect CZI metadata — channels, dimensions, pixel size |
-| `/classify` | Train RF classifier from annotations, compare feature sets |
-| `/lmd-export` | Export detections for laser microdissection |
-| `/vessel-analysis` | Multi-scale vessel structure detection |
-| `/view-results` | Launch HTML result viewer with tunnel |
-| `/spatialdata` | Export to SpatialData zarr + squidpy spatial analysis |
-| `/preview-preprocessing` | Preview flat-field/photobleach correction |
-
-### Without Claude Code
+### Option B: Command line
 
 ```bash
 conda activate mkseg
