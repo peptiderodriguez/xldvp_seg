@@ -640,25 +640,43 @@ def run_pipeline(args):
             elif _has_bg and not _has_contour:
                 logger.info("Background already corrected — running contour processing only")
 
-            # Nuclear counting: resolve channel and get models if --count-nuclei
+            # Nuclear counting: resolve channel and load models if --count-nuclei
+            # Models are loaded in GPU worker subprocesses, not the main process,
+            # so we need to load them here explicitly for Phase 4.
             _count_nuclei = getattr(args, 'count_nuclei', False)
             _nuc_ch_for_counting = getattr(args, 'nuc_channel_for_counting', None)
             _cp_model_for_nuc = None
             _sam2_for_nuc = None
+            _nuc_model_mgr = None
             if _count_nuclei:
-                # Auto-detect nuclear channel from channel-spec if not explicit
+                # Auto-detect nuclear channel: check explicit arg first,
+                # then cellpose_input_channels (2nd element = nuc),
+                # then cell-type-specific defaults
                 if _nuc_ch_for_counting is None:
-                    for k in ('nuclear_channel', 'tp_nuclear_channel'):
-                        v = getattr(args, k, None)
-                        if v is not None:
-                            _nuc_ch_for_counting = v
-                            break
+                    cp_input = getattr(args, 'cellpose_input_channels', None)
+                    if cp_input:
+                        parts = str(cp_input).split(',')
+                        if len(parts) >= 2:
+                            try:
+                                _nuc_ch_for_counting = int(parts[1].strip())
+                            except ValueError:
+                                pass
+                if _nuc_ch_for_counting is None and args.cell_type == 'islet':
+                    _nuc_ch_for_counting = getattr(args, 'nuclear_channel', None)
+                if _nuc_ch_for_counting is None and args.cell_type == 'tissue_pattern':
+                    _nuc_ch_for_counting = getattr(args, 'tp_nuclear_channel', None)
+
                 if _nuc_ch_for_counting is not None:
-                    _cp_model_for_nuc = models.get('cellpose')
-                    _sam2_for_nuc = models.get('sam2_predictor')
+                    from segmentation.models.manager import ModelManager
+                    _nuc_model_mgr = ModelManager()
+                    _cp_model_for_nuc = _nuc_model_mgr.cellpose
+                    _sam2_for_nuc = _nuc_model_mgr.sam2_predictor
                     logger.info(f"Nuclear counting enabled: nuc_channel={_nuc_ch_for_counting}")
                 else:
-                    logger.warning("--count-nuclei requires --nuc-channel-for-counting or --channel-spec with nuc=...")
+                    logger.warning(
+                        "--count-nuclei requires --nuc-channel-for-counting or "
+                        "--channel-spec with nuc=... to identify the nuclear channel"
+                    )
 
             process_detections_post_dedup(
                 all_detections,
@@ -683,6 +701,13 @@ def run_pipeline(args):
                 cellpose_model=_cp_model_for_nuc,
                 sam2_predictor=_sam2_for_nuc,
             )
+
+            # Cleanup nuclear counting models (free GPU memory before HTML generation)
+            if _nuc_model_mgr is not None:
+                _nuc_model_mgr.cleanup()
+                _nuc_model_mgr = None
+                _cp_model_for_nuc = None
+                _sam2_for_nuc = None
 
             # Checkpoint: save post-processed detections
             _postdedup_file = slide_output_dir / f'{args.cell_type}_detections_postdedup.json'
@@ -1471,6 +1496,36 @@ def run_pipeline(args):
         elif args.cell_type == 'tissue_pattern':
             _display_chs = getattr(args, 'tp_display_channels_list', [0, 3, 1])
 
+        # Nuclear counting on normal detection path: load models in main process
+        _count_nuclei_normal = getattr(args, 'count_nuclei', False)
+        _nuc_ch_normal = getattr(args, 'nuc_channel_for_counting', None)
+        _cp_model_normal = None
+        _sam2_normal = None
+        _nuc_mgr_normal = None
+        if _count_nuclei_normal:
+            # Auto-detect nuclear channel from cellpose input or cell-type defaults
+            if _nuc_ch_normal is None:
+                cp_input = getattr(args, 'cellpose_input_channels', None)
+                if cp_input:
+                    parts = str(cp_input).split(',')
+                    if len(parts) >= 2:
+                        try:
+                            _nuc_ch_normal = int(parts[1].strip())
+                        except ValueError:
+                            pass
+            if _nuc_ch_normal is None and args.cell_type == 'islet':
+                _nuc_ch_normal = getattr(args, 'nuclear_channel', None)
+            if _nuc_ch_normal is None and args.cell_type == 'tissue_pattern':
+                _nuc_ch_normal = getattr(args, 'tp_nuclear_channel', None)
+            if _nuc_ch_normal is not None:
+                from segmentation.models.manager import ModelManager
+                _nuc_mgr_normal = ModelManager()
+                _cp_model_normal = _nuc_mgr_normal.cellpose
+                _sam2_normal = _nuc_mgr_normal.sam2_predictor
+                logger.info(f"Nuclear counting enabled: nuc_channel={_nuc_ch_normal}")
+            else:
+                logger.warning("--count-nuclei: could not determine nuclear channel")
+
         process_detections_post_dedup(
             all_detections,
             tiles_dir,
@@ -1485,8 +1540,15 @@ def run_pipeline(args):
             rdp_epsilon=getattr(args, 'rdp_epsilon', 5.0),
             background_correction=args.background_correction,
             bg_neighbors=getattr(args, 'bg_neighbors', 30),
-            # Nuclear counting not supported in resume path (no models loaded)
+            count_nuclei=_count_nuclei_normal,
+            nuc_channel_idx=_nuc_ch_normal,
+            min_nuclear_area=getattr(args, 'min_nuclear_area', 50),
+            cellpose_model=_cp_model_normal,
+            sam2_predictor=_sam2_normal,
         )
+
+        if _nuc_mgr_normal is not None:
+            _nuc_mgr_normal.cleanup()
 
         # Checkpoint: save post-processed detections before HTML/CSV generation
         _postdedup_file = slide_output_dir / f'{args.cell_type}_detections_postdedup.json'

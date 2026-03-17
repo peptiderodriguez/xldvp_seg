@@ -675,7 +675,7 @@ def process_detections_post_dedup(
                     slot,
                 ]
             elif loader is not None:
-                nuc_tile = loader.get_tile(nuc_channel_idx, tile_x, tile_y, tile_size, tile_size)
+                nuc_tile = loader.get_tile(tile_x, tile_y, tile_size, channel=nuc_channel_idx)
                 if nuc_tile is not None:
                     nuc_tile = nuc_tile[:tile_h, :tile_w]
             else:
@@ -703,12 +703,21 @@ def process_detections_post_dedup(
                 except Exception:
                     pass
 
-            # Enrich detections
+            # Enrich detections: summary metrics in features, per-nucleus list at top-level
             for det in tile_dets:
                 mask_label = det.get("tile_mask_label", det.get("mask_label"))
                 if mask_label is not None and int(mask_label) in results:
                     nuc_feats = results[int(mask_label)]
-                    det.setdefault("features", {}).update(nuc_feats)
+                    features = det.setdefault("features", {})
+                    # Summary metrics go in features (flat, classifier-compatible)
+                    for k in ("n_nuclei", "nuclear_area_um2", "nuclear_area_fraction",
+                              "largest_nucleus_um2", "nuclear_solidity", "nuclear_eccentricity"):
+                        if k in nuc_feats:
+                            features[k] = nuc_feats[k]
+                    # Per-nucleus detail list at top-level (not in features — avoids JSON bloat
+                    # and doesn't break flat-feature assumptions in train_classifier.py)
+                    if "nuclei" in nuc_feats and nuc_feats["nuclei"]:
+                        det["nuclei"] = nuc_feats["nuclei"]
                     n_nuclei_counted += 1
 
         logger.info("  Phase 4 complete: %d cells enriched with nuclear counts", n_nuclei_counted)

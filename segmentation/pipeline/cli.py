@@ -423,11 +423,14 @@ def postprocess_args(args, parser):
                 cyto_idx = resolved[specs['cyto']]
                 nuc_idx = resolved[specs['nuc']]
                 args.cellpose_input_channels = f"{cyto_idx},{nuc_idx}"
+                # Also set nuc_channel_for_counting so --count-nuclei auto-detects
+                args.nuc_channel_for_counting = nuc_idx
             elif 'cyto' in specs:
                 args.channel = resolved[specs['cyto']]
             elif 'nuc' in specs:
                 # For islet/tissue_pattern nuclear channel
                 nuc_idx = resolved[specs['nuc']]
+                args.nuc_channel_for_counting = nuc_idx
                 if args.cell_type == 'islet':
                     args.nuclear_channel = nuc_idx
                 elif args.cell_type == 'tissue_pattern':
