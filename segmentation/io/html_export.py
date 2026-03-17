@@ -1317,8 +1317,17 @@ def generate_index_page(
         <button class="btn btn-export" onclick="exportAnnotations()">Export Annotations</button>
         <button class="btn" onclick="importAnnotations()">Import Annotations</button>
         <button class="btn" id="toggleContourBtn" onclick="toggleContours()" style="background:#2a5a2a">Contours: ON</button>
+        <button class="btn" id="togglePMBtn" onclick="toggleChannel('red')" style="background:#8b2222">PM: ON</button>
+        <button class="btn" id="toggleNucBtn" onclick="toggleChannel('green')" style="background:#228b22">Nuc: ON</button>
         <button class="btn btn-danger" onclick="clearAll()">Clear All</button>
     </div>
+
+    <!-- SVG filters for channel toggling -->
+    <svg style="display:none">
+        <filter id="no-red"><feColorMatrix type="matrix" values="0 0 0 0 0  0 1 0 0 0  0 0 1 0 0  0 0 0 1 0"/></filter>
+        <filter id="no-green"><feColorMatrix type="matrix" values="1 0 0 0 0  0 0 0 0 0  0 0 1 0 0  0 0 0 1 0"/></filter>
+        <filter id="no-red-green"><feColorMatrix type="matrix" values="0 0 0 0 0  0 0 0 0 0  0 0 1 0 0  0 0 0 1 0"/></filter>
+    </svg>
 
     <script>
         let contoursVisible = true;
@@ -1338,6 +1347,24 @@ def generate_index_page(
                 btn.textContent = contoursVisible ? 'Contours: ON' : 'Contours: OFF';
                 btn.style.background = contoursVisible ? '#2a5a2a' : '#555';
             }}
+        }}
+        let channelState = {{ red: true, green: true }};
+        function toggleChannel(ch) {{
+            channelState[ch] = !channelState[ch];
+            const btnId = ch === 'red' ? 'togglePMBtn' : 'toggleNucBtn';
+            const btn = document.getElementById(btnId);
+            const label = ch === 'red' ? 'PM' : 'Nuc';
+            if (btn) {{
+                btn.textContent = channelState[ch] ? label + ': ON' : label + ': OFF';
+                btn.style.background = channelState[ch] ? (ch === 'red' ? '#8b2222' : '#228b22') : '#555';
+            }}
+            let filterVal = 'none';
+            if (!channelState.red && !channelState.green) filterVal = 'url(#no-red-green)';
+            else if (!channelState.red) filterVal = 'url(#no-red)';
+            else if (!channelState.green) filterVal = 'url(#no-green)';
+            document.querySelectorAll('.card img, .sample-img').forEach(img => {{
+                img.style.filter = filterVal;
+            }});
         }}
         const CELL_TYPE = '{_esc(cell_type)}';
         const EXPERIMENT_NAME = '{_esc(experiment_name or "")}';
