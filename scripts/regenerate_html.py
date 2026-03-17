@@ -77,7 +77,8 @@ logger = get_logger(__name__)
 
 def create_sample_from_contours(det, channel_arrays, display_channels, x_start, y_start,
                                 mosaic_h, mosaic_w, pixel_size_um, slide_name, cell_type,
-                                contour_thickness=2, max_crop_px=800, min_crop_px=300):
+                                contour_thickness=2, max_crop_px=800, min_crop_px=300,
+                                dashed_contour=False):
     """Create an HTML sample by cropping from CZI around a detection's center.
 
     Generic alternative to create_sample() — works for any cell type where detections
@@ -189,7 +190,16 @@ def create_sample_from_contours(det, channel_arrays, display_channels, x_start, 
         if scale_factor < 1.0:
             contour_pts *= scale_factor
         contour_int = contour_pts.astype(np.int32).reshape(-1, 1, 2)
-        cv2.drawContours(crop_norm, [contour_int], -1, color, contour_thickness)
+        if dashed_contour:
+            # Draw alternating black/white dashed contour — visible on any background
+            pts_flat = contour_int.reshape(-1, 2)
+            dash_len, gap_len = 6, 4
+            cycle = dash_len + gap_len
+            for i, pt in enumerate(pts_flat):
+                c = (0, 0, 0) if (i % cycle) < dash_len else (255, 255, 255)
+                cv2.circle(crop_norm, tuple(pt), 0, c, contour_thickness)
+        else:
+            cv2.drawContours(crop_norm, [contour_int], -1, color, contour_thickness)
 
     uid = det.get('uid', f"{slide_name}_{cell_type}_{int(round(cx))}_{int(round(cy))}")
     pil_img = Image.fromarray(crop_norm)
@@ -261,6 +271,8 @@ def main():
                         help='Sort order: asc or desc (default: asc)')
     parser.add_argument('--contour-thickness', type=int, default=2,
                         help='Contour line thickness (default: 2)')
+    parser.add_argument('--dashed-contour', action='store_true',
+                        help='Draw dashed black/white contour outlines (visible on any background)')
     parser.add_argument('--score-threshold', type=float, default=0.0,
                         help='Min rf_prediction to show (default: 0.0 = all)')
     parser.add_argument('--prior-annotations', default=None,
@@ -507,6 +519,7 @@ def main():
                 x_start, y_start, mosaic_h, mosaic_w,
                 pixel_size_um, slide_name, cell_type,
                 contour_thickness=args.contour_thickness,
+                dashed_contour=args.dashed_contour,
             )
 
         with ThreadPoolExecutor(max_workers=n_workers) as pool:
@@ -567,6 +580,7 @@ def main():
                     marker_map=marker_map,
                     contour_thickness=args.contour_thickness,
                     image_format='PNG',
+                    dashed_contour=args.dashed_contour,
                 )
                 if sample:
                     all_samples.append(sample)

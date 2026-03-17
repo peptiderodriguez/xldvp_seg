@@ -305,6 +305,17 @@ def build_parser():
     parser.add_argument('--bg-neighbors', type=int, default=30,
                         help='KD-tree neighbors for local background estimation (default: 30)')
 
+    # Nuclear counting (optional post-dedup phase)
+    parser.add_argument('--count-nuclei', action='store_true', default=False,
+                        help='Count nuclei per cell by running Cellpose on the nuclear channel '
+                             'in single-channel mode. Adds n_nuclei, nuclear_area_um2, '
+                             'nuclear_area_fraction, and per-nucleus feature list to each detection.')
+    parser.add_argument('--nuc-channel-for-counting', type=int, default=None,
+                        help='Nuclear channel index for --count-nuclei (auto-detected from '
+                             'channel-spec "nuc=..." if available, otherwise must be specified)')
+    parser.add_argument('--min-nuclear-area', type=int, default=50,
+                        help='Minimum nuclear area in pixels to count (default: 50)')
+
     # GPU processing (always uses multi-GPU infrastructure, even with 1 GPU)
     parser.add_argument('--multi-gpu', action='store_true', default=True,
                         help='[DEPRECATED - always enabled] Multi-GPU processing is now the only code path. '

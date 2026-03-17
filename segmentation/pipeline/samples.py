@@ -318,7 +318,7 @@ def create_sample_from_detection(tile_x, tile_y, tile_rgb, masks, feat, pixel_si
                                  slide_name, cell_type='nmj', crop_size=None,
                                  tile_percentiles=None, marker_thresholds=None,
                                  marker_map=None, contour_thickness=2,
-                                 image_format='JPEG'):
+                                 image_format='JPEG', dashed_contour=False):
     """Create an HTML sample from a detection.
 
     Crop size is calculated dynamically to be 100% larger than the mask,
@@ -411,7 +411,7 @@ def create_sample_from_detection(tile_x, tile_y, tile_rgb, masks, feat, pixel_si
 
     # Normalize and draw contour
     crop_norm = percentile_normalize(crop, p_low=1, p_high=99.5, global_percentiles=tile_percentiles)
-    _bw = (cell_type == 'islet')
+    _bw = dashed_contour or (cell_type == 'islet')
     crop_with_contour = draw_mask_contour(crop_norm, crop_mask, color=contour_color, thickness=contour_thickness, bw_dashed=_bw)
 
     img_b64, mime = image_to_base64(crop_with_contour, format=image_format)
