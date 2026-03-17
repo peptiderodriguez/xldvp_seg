@@ -191,13 +191,19 @@ def create_sample_from_contours(det, channel_arrays, display_channels, x_start, 
             contour_pts *= scale_factor
         contour_int = contour_pts.astype(np.int32).reshape(-1, 1, 2)
         if dashed_contour:
-            # Draw alternating black/white dashed contour — visible on any background
+            # Thin green dashed line: draw line segments with gaps
             pts_flat = contour_int.reshape(-1, 2)
-            dash_len, gap_len = 6, 4
+            dash_len, gap_len = 8, 5
             cycle = dash_len + gap_len
-            for i, pt in enumerate(pts_flat):
-                c = (0, 0, 0) if (i % cycle) < dash_len else (255, 255, 255)
-                cv2.circle(crop_norm, tuple(pt), 0, c, contour_thickness)
+            n_pts = len(pts_flat)
+            i = 0
+            while i < n_pts:
+                # Draw a dash segment
+                j = min(i + dash_len, n_pts - 1)
+                if j > i:
+                    cv2.line(crop_norm, tuple(pts_flat[i]), tuple(pts_flat[j]),
+                             (0, 255, 0), max(1, contour_thickness - 1))
+                i += cycle
         else:
             cv2.drawContours(crop_norm, [contour_int], -1, color, contour_thickness)
 

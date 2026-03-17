@@ -247,21 +247,25 @@ def draw_mask_contour(img_array, mask, color=(0, 255, 0), thickness=2, dotted=Fa
         img_out = img_array.copy()
 
     if bw_dashed:
-        # Alternating black/white dashed contour — visible on any background
+        # Thin green dashed contour line
         contours, _ = cv2.findContours(
             mask.astype(np.uint8),
             cv2.RETR_EXTERNAL,
             cv2.CHAIN_APPROX_NONE
         )
-        dash_len, gap_len = 6, 4
+        dash_len, gap_len = 8, 5
+        line_thickness = max(1, thickness - 1)
         for cnt in contours:
             pts = cnt.reshape(-1, 2)
             cycle = dash_len + gap_len
-            for i, pt in enumerate(pts):
-                if (i % cycle) < dash_len:
-                    cv2.circle(img_out, tuple(pt), 0, (0, 0, 0), thickness)
-                else:
-                    cv2.circle(img_out, tuple(pt), 0, (255, 255, 255), thickness)
+            n_pts = len(pts)
+            i = 0
+            while i < n_pts:
+                j = min(i + dash_len, n_pts - 1)
+                if j > i:
+                    cv2.line(img_out, tuple(pts[i]), tuple(pts[j]),
+                             (0, 255, 0), line_thickness)
+                i += cycle
         return img_out
 
     if use_cv2 and not dotted:
