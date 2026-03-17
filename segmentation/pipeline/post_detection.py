@@ -438,6 +438,12 @@ def process_detections_post_dedup(
     rdp_epsilon: float = DEFAULT_RDP_EPSILON,
     background_correction: bool = True,
     bg_neighbors: int = 30,
+    # Nuclear counting (Phase 4)
+    count_nuclei: bool = False,
+    nuc_channel_idx: int | None = None,
+    min_nuclear_area: int = 50,
+    cellpose_model=None,
+    sam2_predictor=None,
 ) -> dict:
     """Run all post-dedup processing on *detections* **in-place**.
 
@@ -635,6 +641,83 @@ def process_detections_post_dedup(
         det.pop("_bg_quick_means", None)
         det.pop("_postdedup_idx", None)
 
+    # ==================================================================
+    # PHASE 4: Nuclear counting (optional, single-threaded — uses GPU)
+    # ==================================================================
+    n_nuclei_counted = 0
+    if count_nuclei and nuc_channel_idx is not None and cellpose_model is not None:
+        logger.info("-" * 40)
+        logger.info("Phase 4: Nuclear counting (Cellpose on nuclear channel)")
+
+        from segmentation.analysis.nuclear_count import (
+            count_nuclei_for_tile,
+            _percentile_normalize_to_uint8,
+        )
+
+        for tile_key, tile_dets in by_tile.items():
+            tile_x, tile_y = _parse_tile_key(tile_key)
+
+            # Load cell masks for this tile
+            tile_dir = tiles_dir / f"tile_{tile_x}_{tile_y}"
+            mask_path = tile_dir / mask_filename
+            if not mask_path.exists():
+                continue
+            with h5py.File(str(mask_path), "r") as hf:
+                cell_masks = hf["masks"][:]
+            tile_h, tile_w = cell_masks.shape[:2]
+
+            # Get nuclear channel tile from SHM or loader
+            if use_shm and nuc_channel_idx in ch_to_slot:
+                slot = ch_to_slot[nuc_channel_idx]
+                nuc_tile = slide_shm_arr[
+                    tile_y - y_start:tile_y - y_start + tile_h,
+                    tile_x - x_start:tile_x - x_start + tile_w,
+                    slot,
+                ]
+            elif loader is not None:
+                nuc_tile = loader.get_tile(nuc_channel_idx, tile_x, tile_y, tile_size, tile_size)
+                if nuc_tile is not None:
+                    nuc_tile = nuc_tile[:tile_h, :tile_w]
+            else:
+                continue
+
+            if nuc_tile is None or nuc_tile.size == 0:
+                continue
+
+            # Set SAM2 image if available (nuclear channel only)
+            if sam2_predictor is not None:
+                nuc_uint8 = _percentile_normalize_to_uint8(nuc_tile)
+                nuc_rgb = np.stack([nuc_uint8] * 3, axis=-1)
+                sam2_predictor.set_image(nuc_rgb)
+
+            results, n_nuc = count_nuclei_for_tile(
+                cell_masks, nuc_tile, cellpose_model,
+                pixel_size_um, min_nuclear_area,
+                tile_x, tile_y,
+                sam2_predictor=sam2_predictor,
+            )
+
+            if sam2_predictor is not None:
+                try:
+                    sam2_predictor.reset_predictor()
+                except Exception:
+                    pass
+
+            # Enrich detections
+            for det in tile_dets:
+                mask_label = det.get("tile_mask_label", det.get("mask_label"))
+                if mask_label is not None and int(mask_label) in results:
+                    nuc_feats = results[int(mask_label)]
+                    det.setdefault("features", {}).update(nuc_feats)
+                    n_nuclei_counted += 1
+
+        logger.info("  Phase 4 complete: %d cells enriched with nuclear counts", n_nuclei_counted)
+    elif count_nuclei:
+        logger.warning(
+            "Phase 4 skipped: count_nuclei=True but missing nuc_channel_idx=%s, "
+            "cellpose_model=%s", nuc_channel_idx, cellpose_model is not None
+        )
+
     # --- Summary ---
     # Compute corrected channels list for metadata
     corrected_channels = sorted({
@@ -654,6 +737,8 @@ def process_detections_post_dedup(
         "background_correction": background_correction,
         "bg_neighbors": bg_neighbors,
         "corrected_channels": corrected_channels,
+        "count_nuclei": count_nuclei,
+        "n_nuclei_counted": n_nuclei_counted,
     }
 
     logger.info("=" * 50)

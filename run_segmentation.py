@@ -640,6 +640,26 @@ def run_pipeline(args):
             elif _has_bg and not _has_contour:
                 logger.info("Background already corrected — running contour processing only")
 
+            # Nuclear counting: resolve channel and get models if --count-nuclei
+            _count_nuclei = getattr(args, 'count_nuclei', False)
+            _nuc_ch_for_counting = getattr(args, 'nuc_channel_for_counting', None)
+            _cp_model_for_nuc = None
+            _sam2_for_nuc = None
+            if _count_nuclei:
+                # Auto-detect nuclear channel from channel-spec if not explicit
+                if _nuc_ch_for_counting is None:
+                    for k in ('nuclear_channel', 'tp_nuclear_channel'):
+                        v = getattr(args, k, None)
+                        if v is not None:
+                            _nuc_ch_for_counting = v
+                            break
+                if _nuc_ch_for_counting is not None:
+                    _cp_model_for_nuc = models.get('cellpose')
+                    _sam2_for_nuc = models.get('sam2_predictor')
+                    logger.info(f"Nuclear counting enabled: nuc_channel={_nuc_ch_for_counting}")
+                else:
+                    logger.warning("--count-nuclei requires --nuc-channel-for-counting or --channel-spec with nuc=...")
+
             process_detections_post_dedup(
                 all_detections,
                 tiles_dir,
@@ -657,6 +677,11 @@ def run_pipeline(args):
                 rdp_epsilon=getattr(args, 'rdp_epsilon', 5.0),
                 background_correction=_want_bg,
                 bg_neighbors=getattr(args, 'bg_neighbors', 30),
+                count_nuclei=_count_nuclei,
+                nuc_channel_idx=_nuc_ch_for_counting,
+                min_nuclear_area=getattr(args, 'min_nuclear_area', 50),
+                cellpose_model=_cp_model_for_nuc,
+                sam2_predictor=_sam2_for_nuc,
             )
 
             # Checkpoint: save post-processed detections
@@ -1460,6 +1485,7 @@ def run_pipeline(args):
             rdp_epsilon=getattr(args, 'rdp_epsilon', 5.0),
             background_correction=args.background_correction,
             bg_neighbors=getattr(args, 'bg_neighbors', 30),
+            # Nuclear counting not supported in resume path (no models loaded)
         )
 
         # Checkpoint: save post-processed detections before HTML/CSV generation
