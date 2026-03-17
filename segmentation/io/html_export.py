@@ -869,6 +869,26 @@ def get_js(cell_type, total_pages, experiment_name=None, page_num=1):
             alert('All annotations cleared.');
         }}
 
+        let contoursVisible = true;
+        function toggleContours() {{
+            contoursVisible = !contoursVisible;
+            const btn = document.getElementById('toggleContourBtn');
+            const imgs = document.querySelectorAll('.card img');
+            imgs.forEach(img => {{
+                if (contoursVisible) {{
+                    const contourSrc = img.getAttribute('data-img-contour');
+                    if (contourSrc) img.src = contourSrc;
+                }} else {{
+                    const cleanSrc = img.getAttribute('data-img-clean');
+                    if (cleanSrc) img.src = cleanSrc;
+                }}
+            }});
+            if (btn) {{
+                btn.textContent = contoursVisible ? 'Contours: ON' : 'Contours: OFF';
+                btn.style.background = contoursVisible ? '#2a5a2a' : '#555';
+            }}
+        }}
+
         document.addEventListener('keydown', (e) => {{
             // Navigation
             if (e.key === 'ArrowRight' || e.key === 'ArrowDown') {{
@@ -1006,10 +1026,12 @@ def generate_annotation_page(
 
         stats_str = ' | '.join(stats_parts) if stats_parts else ''
 
+        img_clean_b64 = sample.get('image_clean', '')
+        clean_attr = f' data-img-clean="data:image/{mime};base64,{img_clean_b64}"' if img_clean_b64 else ''
         cards_html += f'''
         <div class="card" id="{uid}" data-label="-1">
             <div class="card-img-container">
-                <img src="data:image/{mime};base64,{img_b64}" alt="{uid}">
+                <img src="data:image/{mime};base64,{img_b64}" data-img-contour="data:image/{mime};base64,{img_b64}"{clean_attr} alt="{uid}">
             </div>
             <div class="card-info">
                 <div class="card-meta">
@@ -1054,6 +1076,7 @@ def generate_annotation_page(
             </div>
             <button class="btn btn-export" onclick="exportAnnotations()">Export</button>
             <button class="btn" onclick="importAnnotations()">Import</button>
+            <button class="btn" id="toggleContourBtn" onclick="toggleContours()" style="background:#2a5a2a">Contours: ON</button>
             <button class="btn" onclick="clearPage()">Clear Page</button>
             <button class="btn btn-danger" onclick="clearAll()">Clear All</button>
             {channel_legend_html}

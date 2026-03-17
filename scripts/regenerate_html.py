@@ -170,6 +170,9 @@ def create_sample_from_contours(det, channel_arrays, display_channels, x_start, 
         target_w = max(1, int(crop_norm.shape[1] * scale_factor))
         crop_norm = cv2.resize(crop_norm, (target_w, target_h), interpolation=cv2.INTER_AREA)
 
+    # Save clean version BEFORE drawing contours (for toggle button)
+    crop_clean = crop_norm.copy()
+
     # Draw contours if available (generic: look for any *_contour_global keys)
     contour_colors = {
         'inner_contour_global': (0, 255, 255),    # cyan — lumen
@@ -234,9 +237,14 @@ def create_sample_from_contours(det, channel_arrays, display_channels, x_start, 
         if vk in features:
             stats[vk] = features[vk]
 
+    # Also encode clean version (no contours) for toggle
+    pil_clean = Image.fromarray(crop_clean)
+    img_b64_clean, _ = image_to_base64(pil_clean, format='PNG')
+
     return {
         'uid': uid,
         'image': img_b64,
+        'image_clean': img_b64_clean,
         'mime_type': mime,
         'stats': stats,
     }
