@@ -876,17 +876,37 @@ def get_js(cell_type, total_pages, experiment_name=None, page_num=1):
             const imgs = document.querySelectorAll('.card img');
             imgs.forEach(img => {{
                 if (contoursVisible) {{
-                    const contourSrc = img.getAttribute('data-img-contour');
-                    if (contourSrc) img.src = contourSrc;
+                    const s = img.getAttribute('data-img-contour');
+                    if (s) img.src = s;
                 }} else {{
-                    const cleanSrc = img.getAttribute('data-img-clean');
-                    if (cleanSrc) img.src = cleanSrc;
+                    const s = img.getAttribute('data-img-clean');
+                    if (s) img.src = s;
                 }}
             }});
             if (btn) {{
                 btn.textContent = contoursVisible ? 'Contours: ON' : 'Contours: OFF';
                 btn.style.background = contoursVisible ? '#2a5a2a' : '#555';
             }}
+        }}
+
+        let channelState = {{ red: true, green: true }};
+        function toggleChannel(ch) {{
+            channelState[ch] = !channelState[ch];
+            const btnId = ch === 'red' ? 'togglePMBtn' : 'toggleNucBtn';
+            const btn = document.getElementById(btnId);
+            const label = ch === 'red' ? 'PM' : 'Nuc';
+            if (btn) {{
+                btn.textContent = channelState[ch] ? label + ': ON' : label + ': OFF';
+                btn.style.background = channelState[ch] ? (ch === 'red' ? '#8b2222' : '#228b22') : '#555';
+            }}
+            // Apply CSS SVG filter based on channel state
+            let filterVal = 'none';
+            if (!channelState.red && !channelState.green) filterVal = 'url(#no-red-green)';
+            else if (!channelState.red) filterVal = 'url(#no-red)';
+            else if (!channelState.green) filterVal = 'url(#no-green)';
+            document.querySelectorAll('.card img').forEach(img => {{
+                img.style.filter = filterVal;
+            }});
         }}
 
         document.addEventListener('keydown', (e) => {{
@@ -1077,11 +1097,20 @@ def generate_annotation_page(
             <button class="btn btn-export" onclick="exportAnnotations()">Export</button>
             <button class="btn" onclick="importAnnotations()">Import</button>
             <button class="btn" id="toggleContourBtn" onclick="toggleContours()" style="background:#2a5a2a">Contours: ON</button>
+            <button class="btn" id="togglePMBtn" onclick="toggleChannel('red')" style="background:#8b2222">PM: ON</button>
+            <button class="btn" id="toggleNucBtn" onclick="toggleChannel('green')" style="background:#228b22">Nuc: ON</button>
             <button class="btn" onclick="clearPage()">Clear Page</button>
             <button class="btn btn-danger" onclick="clearAll()">Clear All</button>
             {channel_legend_html}
         </div>
     </div>
+
+    <!-- SVG filters for channel toggling -->
+    <svg style="display:none">
+        <filter id="no-red"><feColorMatrix type="matrix" values="0 0 0 0 0  0 1 0 0 0  0 0 1 0 0  0 0 0 1 0"/></filter>
+        <filter id="no-green"><feColorMatrix type="matrix" values="1 0 0 0 0  0 0 0 0 0  0 0 1 0 0  0 0 0 1 0"/></filter>
+        <filter id="no-red-green"><feColorMatrix type="matrix" values="0 0 0 0 0  0 0 0 0 0  0 0 1 0 0  0 0 0 1 0"/></filter>
+    </svg>
 
     <div class="content">
         <div class="grid">{cards_html}</div>

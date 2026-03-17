@@ -411,6 +411,10 @@ def create_sample_from_detection(tile_x, tile_y, tile_rgb, masks, feat, pixel_si
 
     # Normalize and draw contour
     crop_norm = percentile_normalize(crop, p_low=1, p_high=99.5, global_percentiles=tile_percentiles)
+
+    # Save clean version before drawing contours (for toggle button)
+    img_b64_clean, _ = image_to_base64(crop_norm, format=image_format)
+
     _bw = dashed_contour or (cell_type == 'islet')
     crop_with_contour = draw_mask_contour(crop_norm, crop_mask, color=contour_color, thickness=contour_thickness, bw_dashed=_bw)
 
@@ -470,6 +474,7 @@ def create_sample_from_detection(tile_x, tile_y, tile_rgb, masks, feat, pixel_si
     return {
         'uid': uid,
         'image': img_b64,
+        'image_clean': img_b64_clean,
         'mime_type': mime,
         'stats': stats,
     }
