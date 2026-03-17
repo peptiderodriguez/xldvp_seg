@@ -21,7 +21,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from segmentation.lmd.selection import select_cells_for_lmd
 from segmentation.lmd.well_plate import generate_multiplate_wells, insert_empty_wells, WELLS_PER_PLATE
 
-DATASET_DIR = Path("/Volumes/pool-mann-edwin/bm_lmd_feb2026/mk_clf084_dataset")
+DATASET_DIR = Path("/path/to/data/bm_lmd_feb2026/mk_clf084_dataset")
 BONE_JSON = DATASET_DIR / "all_mks_with_rejected3.json"
 EXCLUDE_SLIDES = set()  # FGC3 excluded from ANOVA but collected for proteomics
 

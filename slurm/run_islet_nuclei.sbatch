@@ -7,8 +7,8 @@
 #SBATCH --mem=350G
 #SBATCH --gres=gpu:rtx5000:2
 #SBATCH --time=4:00:00
-#SBATCH --output=/fs/gpfs41/lv12/fileset02/pool/pool-mann-edwin/code_bin/xldvp_seg/slurm/logs/islet_nuc_%j.out
-#SBATCH --error=/fs/gpfs41/lv12/fileset02/pool/pool-mann-edwin/code_bin/xldvp_seg/slurm/logs/islet_nuc_%j.err
+#SBATCH --output=/path/to/xldvp_seg/slurm/logs/islet_nuc_%j.out
+#SBATCH --error=/path/to/xldvp_seg/slurm/logs/islet_nuc_%j.err
 
 # =============================================================================
 # Islet segmentation — NUCLEI ONLY (DAPI ch4, Cellpose channels=[0,0])
@@ -18,10 +18,11 @@
 
 set -euo pipefail
 
-REPO=/fs/gpfs41/lv12/fileset02/pool/pool-mann-edwin/code_bin/xldvp_seg
-CZI="/fs/pool/pool-mann-edwin/marvin_test/2025_09_03_30610012_BS-100.czi"
-OUTPUT_DIR=/fs/pool/pool-mann-edwin/islet_output/BS100_nuclei_only
-PYTHON=/fs/gpfs41/lv07/fileset03/home/b_mann/rodriguez/miniforge3/envs/mkseg/bin/python
+MKSEG_PYTHON="${MKSEG_PYTHON:-python}"
+REPO="${REPO:-/path/to/xldvp_seg}"
+CZI="/path/to/data/2025_09_03_30610012_BS-100.czi"
+OUTPUT_DIR=/path/to/output/islet_output/BS100_nuclei_only
+PYTHON="$MKSEG_PYTHON"
 
 export PYTHONPATH=$REPO
 export PYTHONUNBUFFERED=1

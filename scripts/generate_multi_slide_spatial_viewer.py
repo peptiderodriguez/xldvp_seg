@@ -1032,6 +1032,9 @@ def generate_html(slides_data, output_path, color_map, title, group_field,
     border-radius: 2px;
   }}
   .roi-item .roi-name:focus {{ outline: 1px solid #555; background: #1a1a2e; }}
+  .roi-item .roi-category {{ font-size:9px; color:#8a8; cursor:text; padding:1px 3px; border-radius:2px; max-width:55px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; border:1px dashed #444; margin:0 3px; }}
+  .roi-item .roi-category:empty::before {{ content:'cat'; color:#555; }}
+  .roi-item .roi-category:focus {{ outline:1px solid #555; background:#1a1a2e; }}
   .roi-item .roi-stats {{ color: #888; font-size: 10px; white-space: nowrap; }}
   .roi-del {{ cursor: pointer; color: #a55; font-size: 14px; line-height: 1; }}
   .roi-del:hover {{ color: #f66; }}
@@ -1143,10 +1146,11 @@ def generate_html(slides_data, output_path, color_map, title, group_field,
         <button class="btn mode-btn" id="mode-circle" data-mode="circle">Circle</button>
         <button class="btn mode-btn" id="mode-rect" data-mode="rect">Rect</button>
         <button class="btn mode-btn" id="mode-poly" data-mode="polygon">Poly</button>
+        <button class="btn mode-btn" id="mode-path" data-mode="path">Path</button>
       </div>
       <div style="font-size:10px;color:#555;margin:4px 0;">
-        Circle: click+drag &middot; Rect: click+drag<br>
-        Polygon: click vertices, dbl-click to close
+        Circle/Rect: click+drag &middot; Poly: click, dbl-click close<br>
+        Path: click waypoints, dbl-click to finish (open)
       </div>
       <div id="roi-list"></div>
       <div class="btn-row" style="margin-top:6px;">
@@ -1157,6 +1161,11 @@ def generate_html(slides_data, output_path, color_map, title, group_field,
         <span style="font-size:11px;">Filter by ROIs</span>
       </div>
       <div id="roi-stats" style="font-size:10px;color:#777;"></div>
+      <div class="ctrl-row" id="corridor-row" style="display:none;">
+        <label>Corridor</label>
+        <input type="range" id="corridor-slider" min="25" max="500" value="100" step="25">
+        <span class="val" id="corridor-val">100</span><span>&micro;m</span>
+      </div>
     </div>
 
     <!-- Help -->
@@ -1281,6 +1290,7 @@ let polyVerts = [];
 // Drag/draw in-progress
 let drawStart = null;
 let drawCurrent = null;
+let corridorWidth = 100;
 
 // Panel state
 const panels = [];
@@ -1340,6 +1350,23 @@ function pointInPolygon(px, py, verts) {
   return inside;
 }
 
+function pointNearPath(px, py, waypoints, halfWidth) {
+  const hw2 = halfWidth * halfWidth;
+  for (let i = 0; i < waypoints.length - 1; i++) {
+    const [ax, ay] = waypoints[i];
+    const [bx, by] = waypoints[i + 1];
+    const dx = bx - ax, dy = by - ay;
+    const len2 = dx * dx + dy * dy;
+    if (len2 < 1e-12) continue;
+    let t = ((px - ax) * dx + (py - ay) * dy) / len2;
+    t = Math.max(0, Math.min(1, t));
+    const projX = ax + t * dx, projY = ay + t * dy;
+    const distSq = (px - projX) * (px - projX) + (py - projY) * (py - projY);
+    if (distSq <= hw2) return true;
+  }
+  return false;
+}
+
 function pointInROI(px, py, roi) {
   if (roi.type === 'circle') {
     return pointInCircle(px, py, roi.data.cx, roi.data.cy, roi.data.r);
@@ -1347,6 +1374,8 @@ function pointInROI(px, py, roi) {
     return pointInRect(px, py, roi.data.x1, roi.data.y1, roi.data.x2, roi.data.y2);
   } else if (roi.type === 'polygon') {
     return pointInPolygon(px, py, roi.data.verts);
+  } else if (roi.type === 'path') {
+    return pointNearPath(px, py, roi.data.waypoints, (roi.data.corridorWidth || corridorWidth) / 2);
   }
   return false;
 }
@@ -2023,7 +2052,7 @@ function initPanels() {
       const sy = e.clientY - rect.top;
       const [dx, dy] = screenToData(state, sx, sy);
 
-      if (drawMode === 'polygon') {
+      if (drawMode === 'polygon' || drawMode === 'path') {
         if (polySlideIdx !== idx) {
           polySlideIdx = idx;
           polyVerts = [];
@@ -2037,61 +2066,16 @@ function initPanels() {
       e.preventDefault();
     });
 
-    drawCanvas.addEventListener('mousemove', e => {
-      if (drawMode === 'pan') return;
-      if (drawStart && drawStart.panel === state) {
-        const rect = div.getBoundingClientRect();
-        const sx = e.clientX - rect.left;
-        const sy = e.clientY - rect.top;
-        const [dx, dy] = screenToData(state, sx, sy);
-        drawCurrent = { x: dx, y: dy };
-
-        // Show measurement while dragging
-        if (drawMode === 'circle') {
-          const ddx = dx - drawStart.x, ddy = dy - drawStart.y;
-          const r = Math.sqrt(ddx * ddx + ddy * ddy);
-          measureEl.style.display = 'block';
-          measureEl.textContent = 'r = ' + r.toFixed(0) + ' \\u00b5m';
-        } else if (drawMode === 'rect') {
-          const w = Math.abs(dx - drawStart.x);
-          const h = Math.abs(dy - drawStart.y);
-          measureEl.style.display = 'block';
-          measureEl.textContent = w.toFixed(0) + ' \\u00d7 ' + h.toFixed(0) + ' \\u00b5m';
-        }
-        renderDrawOverlay(state);
-      }
-    });
-
-    drawCanvas.addEventListener('mouseup', e => {
-      if (drawMode === 'pan' || drawMode === 'polygon') return;
-      if (!drawStart || drawStart.panel !== state) return;
-      const rect = div.getBoundingClientRect();
-      const sx = e.clientX - rect.left;
-      const sy = e.clientY - rect.top;
-      const [dx, dy] = screenToData(state, sx, sy);
-
-      if (drawMode === 'circle') {
-        const cdx = dx - drawStart.x, cdy = dy - drawStart.y;
-        const r = Math.sqrt(cdx * cdx + cdy * cdy);
-        if (r > 1) {
-          addROI(idx, 'circle', { cx: drawStart.x, cy: drawStart.y, r });
-        }
-      } else if (drawMode === 'rect') {
-        const w = Math.abs(dx - drawStart.x), h = Math.abs(dy - drawStart.y);
-        if (w > 1 && h > 1) {
-          addROI(idx, 'rect', { x1: drawStart.x, y1: drawStart.y, x2: dx, y2: dy });
-        }
-      }
-      drawStart = null;
-      drawCurrent = null;
-      measureEl.style.display = 'none';
-      renderDrawOverlay(state);
-    });
+    // mousemove/mouseup for draw are handled at window level (below)
+    // to avoid losing events when mouse leaves the canvas during drag
 
     drawCanvas.addEventListener('dblclick', e => {
-      if (drawMode !== 'polygon') return;
-      if (polySlideIdx === idx && polyVerts.length >= 3) {
+      if (drawMode === 'polygon' && polySlideIdx === idx && polyVerts.length >= 3) {
         addROI(idx, 'polygon', { verts: polyVerts.slice() });
+      } else if (drawMode === 'path' && polySlideIdx === idx && polyVerts.length >= 2) {
+        addROI(idx, 'path', { waypoints: polyVerts.slice(), corridorWidth: corridorWidth });
+      } else {
+        return;
       }
       polyVerts = [];
       polySlideIdx = -1;
@@ -2126,15 +2110,61 @@ function initPanels() {
 
   // Global mouse handlers for pan drag
   window.addEventListener('mousemove', e => {
-    if (!activePanel) return;
-    activePanel.panX = activePanel.panStartX + (e.clientX - activePanel.dragStartX);
-    activePanel.panY = activePanel.panStartY + (e.clientY - activePanel.dragStartY);
-    scheduleRender(activePanel);
+    // Pan drag
+    if (activePanel) {
+      activePanel.panX = activePanel.panStartX + (e.clientX - activePanel.dragStartX);
+      activePanel.panY = activePanel.panStartY + (e.clientY - activePanel.dragStartY);
+      scheduleRender(activePanel);
+      return;
+    }
+    // Draw drag (circle/rect) — handled at window level so mouse leaving canvas doesn't break it
+    if (drawStart && drawMode !== 'pan') {
+      const p = drawStart.panel;
+      const rect = p.div.getBoundingClientRect();
+      const sx = e.clientX - rect.left;
+      const sy = e.clientY - rect.top;
+      const [dx, dy] = screenToData(p, sx, sy);
+      drawCurrent = { x: dx, y: dy };
+      if (drawMode === 'circle') {
+        const ddx = dx - drawStart.x, ddy = dy - drawStart.y;
+        const r = Math.sqrt(ddx * ddx + ddy * ddy);
+        p.measureEl.style.display = 'block';
+        p.measureEl.textContent = 'r = ' + r.toFixed(0) + ' \\u00b5m';
+      } else if (drawMode === 'rect') {
+        const w = Math.abs(dx - drawStart.x);
+        const h = Math.abs(dy - drawStart.y);
+        p.measureEl.style.display = 'block';
+        p.measureEl.textContent = w.toFixed(0) + ' \\u00d7 ' + h.toFixed(0) + ' \\u00b5m';
+      }
+      renderDrawOverlay(p);
+    }
   });
-  window.addEventListener('mouseup', () => {
+  window.addEventListener('mouseup', e => {
+    // Pan drag end
     if (activePanel) {
       activePanel.div.classList.remove('dragging');
       activePanel = null;
+      return;
+    }
+    // Draw drag end (circle/rect)
+    if (drawStart && drawMode !== 'pan' && drawMode !== 'polygon' && drawMode !== 'path') {
+      const p = drawStart.panel;
+      const rect = p.div.getBoundingClientRect();
+      const sx = e.clientX - rect.left;
+      const sy = e.clientY - rect.top;
+      const [dx, dy] = screenToData(p, sx, sy);
+      if (drawMode === 'circle') {
+        const cdx = dx - drawStart.x, cdy = dy - drawStart.y;
+        const r = Math.sqrt(cdx * cdx + cdy * cdy);
+        if (r > 1) addROI(p.idx, 'circle', { cx: drawStart.x, cy: drawStart.y, r });
+      } else if (drawMode === 'rect') {
+        const w = Math.abs(dx - drawStart.x), h = Math.abs(dy - drawStart.y);
+        if (w > 1 && h > 1) addROI(p.idx, 'rect', { x1: drawStart.x, y1: drawStart.y, x2: dx, y2: dy });
+      }
+      drawStart = null;
+      drawCurrent = null;
+      p.measureEl.style.display = 'none';
+      renderDrawOverlay(p);
     }
   });
 }
@@ -2402,6 +2432,42 @@ function renderDrawOverlay(p) {
       }
       dctx.closePath();
       dctx.stroke();
+    } else if (roi.type === 'path') {
+      // Corridor fill
+      dctx.save();
+      dctx.globalAlpha = 0.12;
+      dctx.strokeStyle = '#ffcc00';
+      dctx.lineWidth = roi.data.corridorWidth || corridorWidth;
+      dctx.lineCap = 'round';
+      dctx.lineJoin = 'round';
+      dctx.setLineDash([]);
+      dctx.beginPath();
+      dctx.moveTo(roi.data.waypoints[0][0], roi.data.waypoints[0][1]);
+      for (let i = 1; i < roi.data.waypoints.length; i++) {
+        dctx.lineTo(roi.data.waypoints[i][0], roi.data.waypoints[i][1]);
+      }
+      dctx.stroke();
+      dctx.restore();
+      // Centerline
+      dctx.beginPath();
+      dctx.moveTo(roi.data.waypoints[0][0], roi.data.waypoints[0][1]);
+      for (let i = 1; i < roi.data.waypoints.length; i++) {
+        dctx.lineTo(roi.data.waypoints[i][0], roi.data.waypoints[i][1]);
+      }
+      dctx.stroke();
+      // Endpoint markers: green=start(CV), red=end(PV)
+      const er = 4 / p.zoom;
+      dctx.globalAlpha = 1;
+      dctx.setLineDash([]);
+      dctx.fillStyle = '#00ff00';
+      dctx.beginPath();
+      dctx.arc(roi.data.waypoints[0][0], roi.data.waypoints[0][1], er, 0, Math.PI * 2);
+      dctx.fill();
+      dctx.fillStyle = '#ff4444';
+      const last = roi.data.waypoints[roi.data.waypoints.length - 1];
+      dctx.beginPath();
+      dctx.arc(last[0], last[1], er, 0, Math.PI * 2);
+      dctx.fill();
     }
     dctx.setLineDash([]);
 
@@ -2419,9 +2485,12 @@ function renderDrawOverlay(p) {
     } else if (roi.type === 'rect') {
       labelX = Math.min(roi.data.x1, roi.data.x2);
       labelY = Math.min(roi.data.y1, roi.data.y2) - fontSize * 1.3;
-    } else {
+    } else if (roi.type === 'polygon') {
       labelX = roi.data.verts[0][0];
       labelY = roi.data.verts[0][1] - fontSize * 1.3;
+    } else if (roi.type === 'path') {
+      labelX = roi.data.waypoints[0][0];
+      labelY = roi.data.waypoints[0][1] - fontSize * 1.3;
     }
     dctx.fillText(roi.name, labelX, labelY);
   }
@@ -2462,8 +2531,8 @@ function renderDrawOverlay(p) {
     dctx.setLineDash([]);
   }
 
-  // Draw in-progress polygon
-  if (drawMode === 'polygon' && polySlideIdx === p.idx && polyVerts.length > 0) {
+  // Draw in-progress polygon/path
+  if ((drawMode === 'polygon' || drawMode === 'path') && polySlideIdx === p.idx && polyVerts.length > 0) {
     dctx.strokeStyle = '#00ff88';
     dctx.lineWidth = lw;
     dctx.globalAlpha = 0.7;
@@ -2502,12 +2571,14 @@ function addROI(slideIdx, type, data) {
     type,
     data,
     name: 'ROI_' + roiCounter,
+    category: '',
   };
   rois.push(roi);
   updateROIList();
   updateROIStats();
   panels.forEach(p => renderDrawOverlay(p));
   if (roiFilterActive) scheduleRenderAll();
+  updateCorridorVisibility();
 }
 
 function deleteROI(id) {
@@ -2517,6 +2588,7 @@ function deleteROI(id) {
   updateROIStats();
   panels.forEach(p => renderDrawOverlay(p));
   if (roiFilterActive) scheduleRenderAll();
+  updateCorridorVisibility();
 }
 
 function updateROIList() {
@@ -2534,6 +2606,14 @@ function updateROIList() {
     nameSpan.onblur = () => { roi.name = nameSpan.textContent.trim() || roi.id; };
     nameSpan.onkeydown = (e) => { if (e.key === 'Enter') { e.preventDefault(); nameSpan.blur(); } };
 
+    const catSpan = document.createElement('span');
+    catSpan.className = 'roi-category';
+    catSpan.contentEditable = true;
+    catSpan.textContent = roi.category || '';
+    catSpan.title = 'Category: e.g. central_vein, portal_vein, liver';
+    catSpan.onblur = () => { roi.category = catSpan.textContent.trim(); };
+    catSpan.onkeydown = (e) => { if (e.key === 'Enter') { e.preventDefault(); catSpan.blur(); } };
+
     const statsSpan = document.createElement('span');
     statsSpan.className = 'roi-stats';
     statsSpan.dataset.roiId = roi.id;
@@ -2544,6 +2624,7 @@ function updateROIList() {
     delBtn.onclick = () => deleteROI(roi.id);
 
     item.appendChild(nameSpan);
+    item.appendChild(catSpan);
     item.appendChild(statsSpan);
     item.appendChild(delBtn);
     div.appendChild(item);
@@ -2573,6 +2654,11 @@ function updateROIStats() {
   }
 }
 
+function updateCorridorVisibility() {
+  const hasPath = rois.some(r => r.type === 'path');
+  document.getElementById('corridor-row').style.display = hasPath ? 'flex' : 'none';
+}
+
 function downloadROIs() {
   const out = {
     rois: [],
@@ -2585,6 +2671,7 @@ function downloadROIs() {
   for (const roi of rois) {
     const slideName = SLIDES[roi.slideIdx].name;
     const entry = { id: roi.id, slide: slideName, type: roi.type, name: roi.name };
+    entry.category = roi.category || '';
     if (roi.type === 'circle') {
       entry.center_um = [roi.data.cx, roi.data.cy];
       entry.radius_um = roi.data.r;
@@ -2593,6 +2680,9 @@ function downloadROIs() {
       entry.max_um = [Math.max(roi.data.x1, roi.data.x2), Math.max(roi.data.y1, roi.data.y2)];
     } else if (roi.type === 'polygon') {
       entry.vertices_um = roi.data.verts;
+    } else if (roi.type === 'path') {
+      entry.waypoints_um = roi.data.waypoints;
+      entry.corridor_um = roi.data.corridorWidth || corridorWidth;
     }
     out.rois.push(entry);
   }
@@ -2728,7 +2818,7 @@ function initControls() {
       // Clear in-progress drawing
       drawStart = null;
       drawCurrent = null;
-      if (drawMode !== 'polygon') {
+      if (drawMode !== 'polygon' && drawMode !== 'path') {
         polyVerts = [];
         polySlideIdx = -1;
       }
@@ -2744,6 +2834,14 @@ function initControls() {
   document.getElementById('roi-filter').onchange = e => {
     roiFilterActive = e.target.checked;
     scheduleRenderAll();
+  };
+  document.getElementById('corridor-slider').oninput = e => {
+    corridorWidth = parseFloat(e.target.value);
+    document.getElementById('corridor-val').textContent = corridorWidth;
+    rois.forEach(r => { if (r.type === 'path') r.data.corridorWidth = corridorWidth; });
+    panels.forEach(p => renderDrawOverlay(p));
+    updateROIStats();
+    if (roiFilterActive) scheduleRenderAll();
   };
 
   // Clustering controls

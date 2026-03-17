@@ -20,7 +20,7 @@ sys.path.insert(0, str(REPO))
 from segmentation.utils.json_utils import NumpyEncoder
 
 
-DEFAULT_RUN_DIR = ("/fs/pool/pool-mann-edwin/psilo_output/tp_full/"
+DEFAULT_RUN_DIR = ("/path/to/output/psilo_output/tp_full/"
                    "20251114_Pdgfra546_Msln750_PM647_nuc488-EDFvar-1-stitch-1_20260223_094916_100pct")
 DEFAULT_CELL_TYPE = "tissue_pattern"
 def parse_args():

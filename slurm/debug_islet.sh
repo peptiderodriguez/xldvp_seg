@@ -7,11 +7,12 @@
 #SBATCH --mem=50G
 #SBATCH --gres=gpu:l40s:1
 #SBATCH --time=0:30:00
-#SBATCH --output=/fs/gpfs41/lv12/fileset02/pool/pool-mann-edwin/code_bin/xldvp_seg/slurm/logs/islet_debug_%j.out
-#SBATCH --error=/fs/gpfs41/lv12/fileset02/pool/pool-mann-edwin/code_bin/xldvp_seg/slurm/logs/islet_debug_%j.err
+#SBATCH --output=slurm/logs/islet_debug_%j.out
+#SBATCH --error=slurm/logs/islet_debug_%j.err
 
-REPO=/fs/gpfs41/lv12/fileset02/pool/pool-mann-edwin/code_bin/xldvp_seg
-PYTHON=/fs/gpfs41/lv07/fileset03/home/b_mann/rodriguez/miniforge3/envs/mkseg/bin/python
+REPO="${REPO:-/path/to/xldvp_seg}"
+MKSEG_PYTHON="${MKSEG_PYTHON:-python}"
+PYTHON="$MKSEG_PYTHON"
 
 export PYTHONPATH=$REPO
 export PYTHONUNBUFFERED=1

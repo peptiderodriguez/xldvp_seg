@@ -8,8 +8,8 @@
 
 set -euo pipefail
 
-REPO=/fs/gpfs41/lv12/fileset02/pool/pool-mann-edwin/code_bin/xldvp_seg
-OUTPUT_BASE=/fs/pool/pool-mann-edwin/nmj_output
+REPO="${REPO:-/path/to/xldvp_seg}"
+OUTPUT_BASE=/path/to/output/nmj_output
 SLIDE_NAME="20251107_Fig5_nuc488_Bgtx647_NfL750-1-EDFvar-stitch"
 SAMPLE_FRACTION=0.15
 NUM_NODES=4

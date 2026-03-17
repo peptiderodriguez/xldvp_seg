@@ -18,9 +18,9 @@ from collections import Counter
 from shapely.geometry import Point, Polygon
 from shapely.prepared import prep
 
-BASE = Path("/Volumes/pool-mann-edwin/bm_lmd_feb2026/mk_clf084_dataset")
+BASE = Path("/path/to/data/bm_lmd_feb2026/mk_clf084_dataset")
 ANNOT_FILE = BASE / "mk_annotations_2026-03-06_rejected3_unnorm_100pct.json"
-REGIONS_FILE = Path("/Volumes/pool-mann-edwin/bm_lmd_feb2026/bone_regions.json")
+REGIONS_FILE = Path("/path/to/data/bm_lmd_feb2026/bone_regions.json")
 EXISTING_JSON = BASE / "all_mks_clf075_with_bone.json"
 EXISTING_FULL_JSON = BASE / "all_mks_clf075_light.json"
 OUTPUT_JSON = BASE / "all_mks_with_rejected3.json"

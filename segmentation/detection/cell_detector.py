@@ -270,7 +270,7 @@ class CellDetector:
         checkpoint_candidates = [
             script_dir / "checkpoints" / "sam2.1_hiera_large.pt",
             script_dir / "checkpoints" / "sam2.1_hiera_l.pt",
-            Path("/ptmp/edrod/MKsegmentation/checkpoints/sam2.1_hiera_large.pt"),
+            Path("/path/to/checkpoints/sam2.1_hiera_large.pt"),
         ]
 
         for cp in checkpoint_candidates:

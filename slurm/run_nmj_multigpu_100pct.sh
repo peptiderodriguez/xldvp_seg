@@ -7,8 +7,8 @@
 #SBATCH --mem=500G
 #SBATCH --gres=gpu:l40s:4
 #SBATCH --time=36:00:00
-#SBATCH --output=/fs/gpfs41/lv12/fileset02/pool/pool-mann-edwin/code_bin/xldvp_seg/slurm/logs/nmj_100pct_%j.out
-#SBATCH --error=/fs/gpfs41/lv12/fileset02/pool/pool-mann-edwin/code_bin/xldvp_seg/slurm/logs/nmj_100pct_%j.err
+#SBATCH --output=/path/to/xldvp_seg/slurm/logs/nmj_100pct_%j.out
+#SBATCH --error=/path/to/xldvp_seg/slurm/logs/nmj_100pct_%j.err
 
 # NMJ multi-GPU segmentation — 100% with classifier
 # Slide: 20251107_Fig5 (3-channel: nuc488, Bgtx647, NfL750)
@@ -16,13 +16,14 @@
 
 set -euo pipefail
 
-REPO=/fs/gpfs41/lv12/fileset02/pool/pool-mann-edwin/code_bin/xldvp_seg
-CZI="/fs/pool/pool-mann-axioscan/01_Users/EdRo_axioscan/xDVP/20251107_Fig5_nuc488_Bgtx647_NfL750-1-EDFvar-stitch.czi"
-OUTPUT_DIR=/fs/pool/pool-mann-edwin/nmj_output
+MKSEG_PYTHON="${MKSEG_PYTHON:-python}"
+REPO="${REPO:-/path/to/xldvp_seg}"
+CZI="/path/to/data/20251107_Fig5_nuc488_Bgtx647_NfL750-1-EDFvar-stitch.czi"
+OUTPUT_DIR=/path/to/output/nmj_output
 # UPDATE THESE after 10% annotation + classifier training:
-CLASSIFIER=/fs/pool/pool-mann-edwin/nmj_output/FILL_IN_10PCT_DIR/classifier/nmj_classifier_rf.pkl
-ANNOTATIONS=/fs/pool/pool-mann-edwin/nmj_output/FILL_IN_10PCT_DIR/FILL_IN_ANNOTATIONS.json
-PYTHON=/fs/gpfs41/lv07/fileset03/home/b_mann/rodriguez/miniforge3/envs/mkseg/bin/python
+CLASSIFIER=/path/to/output/nmj_output/FILL_IN_10PCT_DIR/classifier/nmj_classifier_rf.pkl
+ANNOTATIONS=/path/to/output/nmj_output/FILL_IN_10PCT_DIR/FILL_IN_ANNOTATIONS.json
+PYTHON="$MKSEG_PYTHON"
 
 export PYTHONPATH=$REPO
 export PYTHONUNBUFFERED=1

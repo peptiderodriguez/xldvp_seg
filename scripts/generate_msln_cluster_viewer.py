@@ -15,8 +15,8 @@ import html as html_mod
 import os
 from collections import Counter
 
-DEFAULT_INPUT = "/fs/pool/pool-mann-edwin/psilo_output/tp_full/20251114_Pdgfra546_Msln750_PM647_nuc488-EDFvar-1-stitch-1_20260223_094916_100pct/msln_plus/detections_clustered.json"
-DEFAULT_OUTPUT = "/fs/pool/pool-mann-edwin/psilo_output/tp_full/20251114_Pdgfra546_Msln750_PM647_nuc488-EDFvar-1-stitch-1_20260223_094916_100pct/msln_plus/interactive_clusters.html"
+DEFAULT_INPUT = "/path/to/output/psilo_output/tp_full/20251114_Pdgfra546_Msln750_PM647_nuc488-EDFvar-1-stitch-1_20260223_094916_100pct/msln_plus/detections_clustered.json"
+DEFAULT_OUTPUT = "/path/to/output/psilo_output/tp_full/20251114_Pdgfra546_Msln750_PM647_nuc488-EDFvar-1-stitch-1_20260223_094916_100pct/msln_plus/interactive_clusters.html"
 
 
 def parse_args():

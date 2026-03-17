@@ -28,11 +28,11 @@ import numpy as np
 
 
 DEFAULT_INPUT = (
-    '/fs/pool/pool-mann-edwin/psilo_output/tp_full/'
+    '/path/to/output/psilo_output/tp_full/'
     '20251114_Pdgfra546_Msln750_PM647_nuc488-EDFvar-1-stitch-1_20260223_094916_100pct/'
     'detections_msln_bg_subtracted.json'
 )
-DEFAULT_OUTPUT = '/fs/pool/pool-mann-edwin/brain_fish_output/msln_annotation.html'
+DEFAULT_OUTPUT = '/path/to/output/brain_fish_output/msln_annotation.html'
 
 
 def main():

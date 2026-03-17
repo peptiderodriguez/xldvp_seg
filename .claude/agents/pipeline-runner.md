@@ -10,8 +10,8 @@ You are a pipeline execution specialist for the xldvp_seg image analysis pipelin
 ## Environment
 
 ```bash
-REPO=/fs/gpfs41/lv12/fileset02/pool/pool-mann-edwin/code_bin/xldvp_seg
-MKSEG_PYTHON=/fs/gpfs41/lv07/fileset03/home/b_mann/rodriguez/miniforge3/envs/mkseg/bin/python
+REPO="${REPO:-$(git rev-parse --show-toplevel 2>/dev/null || pwd)}"
+MKSEG_PYTHON="${MKSEG_PYTHON:-python}"
 ```
 
 **DO NOT use `conda activate`** — it hangs on this system. Use `$MKSEG_PYTHON` directly with `PYTHONPATH=$REPO`.

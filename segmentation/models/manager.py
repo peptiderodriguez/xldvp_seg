@@ -40,19 +40,16 @@ CHECKPOINT_PATHS = {
     'sam2': [
         Path(__file__).parent.parent.parent / "checkpoints" / "sam2.1_hiera_large.pt",
         Path.home() / ".cache" / "sam2" / "sam2.1_hiera_large.pt",
-        Path("/ptmp/edrod/MKsegmentation/checkpoints/sam2.1_hiera_large.pt"),
     ],
     'cellpose': [
         Path(__file__).parent.parent.parent / "checkpoints" / "cpsam",
         Path.home() / ".cache" / "cellpose" / "cpsam",
     ],
     'resnet': [
-        # ResNet uses pretrained weights by default, but custom checkpoints can be added
         Path(__file__).parent.parent.parent / "checkpoints" / "resnet50_custom.pth",
     ],
     'mk_classifier': [
         Path(__file__).parent.parent.parent / "checkpoints" / "best_model.pth",
-        Path("/ptmp/edrod/MKsegmentation/checkpoints/best_model.pth"),
     ],
 }
 

@@ -136,9 +136,81 @@ else
     pip install -e .
 fi
 
+# Install optional but recommended packages
+echo ""
+echo "Step 4: Installing optional packages..."
+echo "------------------------------------------------------------"
+echo "Installing orjson (3-5x faster JSON parsing for large detection files)..."
+if ! pip install orjson; then
+    echo ""
+    echo "  WARNING: orjson failed to install."
+    echo "  Impact: JSON loading will use stdlib (slower for files >100MB)."
+    echo "  Fix: pip install orjson  (requires Rust compiler on some platforms)"
+    echo ""
+fi
+
+echo "Installing napari (interactive viewer for cross placement + LMD overlay)..."
+if ! pip install napari[all]; then
+    echo ""
+    echo "  WARNING: napari failed to install."
+    echo "  Impact: Cross placement (napari_place_crosses.py) and LMD overlay"
+    echo "          (napari_view_lmd_export.py) will not work. Detection, classification,"
+    echo "          and HTML viewers are unaffected."
+    echo "  Fix: pip install 'napari[all]'  (requires Qt backend — try: conda install napari -c conda-forge)"
+    echo ""
+fi
+
+# Download SAM2 checkpoint
+echo ""
+echo "Step 5: Downloading SAM2 checkpoint (~890 MB)..."
+echo "------------------------------------------------------------"
+
+CHECKPOINT_DIR="$(cd "$(dirname "$0")" && pwd)/checkpoints"
+CHECKPOINT_FILE="$CHECKPOINT_DIR/sam2.1_hiera_large.pt"
+
+if [ -f "$CHECKPOINT_FILE" ]; then
+    echo "SAM2 checkpoint already exists at $CHECKPOINT_FILE — skipping download."
+else
+    mkdir -p "$CHECKPOINT_DIR"
+    if command -v wget &> /dev/null; then
+        wget -O "$CHECKPOINT_FILE" \
+            https://dl.fbaipublicfiles.com/segment_anything_2/092824/sam2.1_hiera_large.pt
+    elif command -v curl &> /dev/null; then
+        curl -L -o "$CHECKPOINT_FILE" \
+            https://dl.fbaipublicfiles.com/segment_anything_2/092824/sam2.1_hiera_large.pt
+    else
+        echo "WARNING: Neither wget nor curl found. Download the SAM2 checkpoint manually:"
+        echo "  mkdir -p $CHECKPOINT_DIR"
+        echo "  wget -O $CHECKPOINT_FILE https://dl.fbaipublicfiles.com/segment_anything_2/092824/sam2.1_hiera_large.pt"
+    fi
+fi
+
+# Install cloudflared for remote HTML viewing (optional)
+echo ""
+echo "Step 6: Installing cloudflared (for remote viewing)..."
+echo "------------------------------------------------------------"
+
+if command -v cloudflared &> /dev/null; then
+    echo "cloudflared already installed — skipping."
+elif [ "$(uname -s)" = "Linux" ] && [ "$(uname -m)" = "x86_64" ]; then
+    mkdir -p ~/.local/bin
+    curl -sL https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-amd64 \
+        -o ~/.local/bin/cloudflared && chmod +x ~/.local/bin/cloudflared
+    echo "Installed cloudflared to ~/.local/bin/cloudflared"
+elif [ "$(uname -s)" = "Darwin" ]; then
+    if command -v brew &> /dev/null; then
+        brew install cloudflared 2>/dev/null || echo "Note: brew install cloudflared failed (optional)"
+    else
+        echo "Note: Install cloudflared manually (brew install cloudflared) for remote HTML viewing"
+    fi
+else
+    echo "Note: Install cloudflared manually for remote HTML viewing"
+    echo "  See: https://developers.cloudflare.com/cloudflare-one/connections/connect-networks/downloads/"
+fi
+
 # Verify installation
 echo ""
-echo "Step 4: Verifying installation..."
+echo "Step 7: Verifying installation..."
 echo "------------------------------------------------------------"
 
 python -c "
@@ -168,21 +240,34 @@ if torch.cuda.is_available():
     print(f'  GPU: {torch.cuda.get_device_name(0)}')
 "
 
+# Check SAM2 checkpoint
+if [ -f "$CHECKPOINT_FILE" ]; then
+    echo "  SAM2 checkpoint: OK ($CHECKPOINT_FILE)"
+else
+    echo "  SAM2 checkpoint: MISSING — download it before running detection"
+fi
+
+# Check cloudflared
+if command -v cloudflared &> /dev/null || [ -f ~/.local/bin/cloudflared ]; then
+    echo "  cloudflared: OK"
+else
+    echo "  cloudflared: not installed (optional — needed for remote HTML viewing)"
+fi
+
 echo ""
 echo "============================================================"
 echo "Installation complete!"
 echo "============================================================"
 echo ""
-echo "Usage:"
-echo "  # NMJ detection (single node, 2 GPUs):"
-echo "  python run_segmentation.py --czi-path /path/to/slide.czi --cell-type nmj --channel 1 --num-gpus 2"
+echo "Quick start:"
+echo "  # With Claude Code (recommended):"
+echo "  npm install -g @anthropic-ai/claude-code && claude"
+echo "  # Then type: /analyze"
 echo ""
-echo "  # MK detection (single node, 4 GPUs):"
-echo "  python run_segmentation.py --czi-path /path/to/slide.czi --cell-type mk --channel 0 --num-gpus 4"
+echo "  # Without Claude Code:"
+echo "  python scripts/czi_info.py /path/to/slide.czi    # inspect channels first"
+echo "  python run_segmentation.py --czi-path /path/to/slide.czi --cell-type cell --channel-spec 'cyto=PM,nuc=488' --all-channels"
 echo ""
-echo "  # Vessel detection:"
-echo "  python run_segmentation.py --czi-path /path/to/slide.czi --cell-type vessel --channel 0 --candidate-mode"
-echo ""
-echo "  # SLURM chain launcher (multi-node):"
-echo "  bash slurm/launch_pipeline.sh --czi /path/to/slide.czi --cell-type nmj --channel 1 --nodes 4 --steps detect,merge,html"
+echo "  # SLURM batch:"
+echo "  scripts/run_pipeline.sh configs/my_experiment.yaml"
 echo ""

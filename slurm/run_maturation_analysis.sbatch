@@ -5,8 +5,8 @@
 #SBATCH --mem=96G
 #SBATCH --time=4:00:00
 #SBATCH --gres=gpu:2
-#SBATCH --output=/viper/ptmp2/edrod/xldvp_seg_fresh/slurm/logs/maturation_v2_%j.out
-#SBATCH --error=/viper/ptmp2/edrod/xldvp_seg_fresh/slurm/logs/maturation_v2_%j.err
+#SBATCH --output=/path/to/output/slurm/logs/maturation_v2_%j.out
+#SBATCH --error=/path/to/output/slurm/logs/maturation_v2_%j.err
 
 # MK Maturation Staging v2 — Nuclear Deep Features (inv. blue + Otsu)
 # Runs: load → nuclear features (GPU) → cluster → validation/plots
@@ -15,11 +15,11 @@
 
 set -euo pipefail
 
-cd /viper/ptmp2/edrod/xldvp_seg_fresh
-source mkseg_rocm_env/bin/activate
+MKSEG_PYTHON="${MKSEG_PYTHON:-python}"
+cd /path/to/output
 
-INPUT_DIR="/viper/ptmp2/edrod/unified_2026-02-11_100pct_2gpu"
-OUTPUT_BASE="/viper/ptmp2/edrod/maturation_analysis_v2"
+INPUT_DIR="/path/to/output/unified_detections"
+OUTPUT_BASE="/path/to/output/maturation_analysis"
 mkdir -p "${OUTPUT_BASE}"
 
 DATA_FILE="${OUTPUT_BASE}/maturation_data.npz"
@@ -27,7 +27,7 @@ NUCLEAR_FILE="${OUTPUT_BASE}/nuclear_deep_features.npz"
 CLUSTERS_FILE="${OUTPUT_BASE}/maturation_clusters.npz"
 RESULTS_DIR="${OUTPUT_BASE}/results"
 
-SAM2_CHECKPOINT="/ptmp/edrod/MKsegmentation/checkpoints/sam2.1_hiera_large.pt"
+SAM2_CHECKPOINT="/path/to/checkpoints/sam2.1_hiera_large.pt"
 SAM2_CONFIG="configs/sam2.1/sam2.1_hiera_l.yaml"
 NUM_GPUS=2
 

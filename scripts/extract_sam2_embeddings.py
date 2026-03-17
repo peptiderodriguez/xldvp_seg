@@ -109,7 +109,7 @@ def extract_from_czi(base_dir, czi_dir, slides=None):
     checkpoint_candidates = [
         repo_root / "checkpoints" / "sam2.1_hiera_large.pt",
         repo_root / "checkpoints" / "sam2.1_hiera_l.pt",
-        Path("/ptmp/edrod/MKsegmentation/checkpoints/sam2.1_hiera_large.pt"),
+        Path("/path/to/checkpoints/sam2.1_hiera_large.pt"),
     ]
     checkpoint = None
     for cp in checkpoint_candidates:

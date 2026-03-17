@@ -6,8 +6,8 @@
 #SBATCH --cpus-per-task=24
 #SBATCH --mem=350G
 #SBATCH --time=4:00:00
-#SBATCH --output=/fs/gpfs41/lv12/fileset02/pool/pool-mann-edwin/code_bin/xldvp_seg/logs/vessel_html_%j.out
-#SBATCH --error=/fs/gpfs41/lv12/fileset02/pool/pool-mann-edwin/code_bin/xldvp_seg/logs/vessel_html_%j.err
+#SBATCH --output=/path/to/xldvp_seg/logs/vessel_html_%j.out
+#SBATCH --error=/path/to/xldvp_seg/logs/vessel_html_%j.err
 
 # =============================================================================
 # Vessel Multiscale — HTML regeneration (no GPU needed)
@@ -20,8 +20,8 @@
 
 set -e
 
-CZI="/fs/pool/pool-mann-axioscan/01_Users/EdRo_axioscan/xDVP/20251106_Fig2_nuc488_CD31_555_SMA647_PM750-EDFvar-stitch.czi"
-OUTPUT="/fs/pool/pool-mann-edwin/vessel_output/multiscale/20251106_Fig2_nuc488_CD31_555_SMA647_PM750-EDFvar-stitch_20260223_093915_100pct"
+CZI="/path/to/data/20251106_Fig2_nuc488_CD31_555_SMA647_PM750-EDFvar-stitch.czi"
+OUTPUT="/path/to/output/vessel_output/multiscale/20251106_Fig2_nuc488_CD31_555_SMA647_PM750-EDFvar-stitch_20260223_093915_100pct"
 
 echo "============================================================"
 echo "Job ID: $SLURM_JOB_ID"
@@ -32,10 +32,9 @@ echo "Project: Vessel Multiscale"
 echo "Mode:   HTML regeneration only (contour-based, no GPU)"
 echo "============================================================"
 
-source /fs/gpfs41/lv07/fileset03/home/b_mann/rodriguez/miniforge3/etc/profile.d/conda.sh
-conda activate mkseg
-
-cd /fs/gpfs41/lv12/fileset02/pool/pool-mann-edwin/code_bin/xldvp_seg
+MKSEG_PYTHON="${MKSEG_PYTHON:-python}"
+REPO="${REPO:-/path/to/xldvp_seg}"
+cd "$REPO"
 
 echo "CPUs: $(nproc), RAM: $(free -h | awk '/^Mem:/{print $2}')"
 

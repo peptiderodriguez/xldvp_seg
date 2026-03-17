@@ -20,10 +20,7 @@ from pathlib import Path
 
 REPO = Path(__file__).resolve().parent.parent
 MKSEG_PYTHON = Path(
-    os.environ.get(
-        "MKSEG_PYTHON",
-        "/fs/gpfs41/lv07/fileset03/home/b_mann/rodriguez/miniforge3/envs/mkseg/bin/python",
-    )
+    os.environ.get("MKSEG_PYTHON", "python")
 )
 
 
@@ -199,7 +196,7 @@ def detect_local_gpus():
 def detect_disk_space(paths=None):
     """Check disk space on relevant mount points."""
     if paths is None:
-        paths = ["/fs/pool/pool-mann-edwin", "/tmp"]
+        paths = [str(REPO), "/tmp"]
     result = {}
     for p in paths:
         try:
@@ -238,10 +235,9 @@ def detect_git_info():
 def recommend(slurm_info, local_gpus, total_ram_gb):
     """Build recommended resource allocation.
 
-    SLURM cluster: 100% of node resources (max allocation).
-    Prefer GPU partitions with idle nodes.  If the best GPU partition is
-    fully allocated but a smaller GPU partition has idle nodes, recommend
-    the one with availability (the job can actually start sooner).
+    SLURM cluster: 75% of node CPUs/RAM to leave headroom for other users
+    on shared nodes.  Request all GPUs (GPU jobs typically get exclusive
+    GPU access anyway).  Prefer GPU partitions with idle nodes.
     Local workstation: 75% of CPUs/RAM, all GPUs.
     """
     rec = {}
@@ -262,8 +258,8 @@ def recommend(slurm_info, local_gpus, total_ram_gb):
 
         rec["environment"] = "slurm"
         rec["partition"] = best["name"]
-        rec["cpus"] = best["cpus_per_node"]
-        rec["mem_gb"] = best["mem_gb_per_node"]
+        rec["cpus"] = int(best["cpus_per_node"] * 0.75)
+        rec["mem_gb"] = int(best["mem_gb_per_node"] * 0.75)
         rec["gpus"] = best["gpus_per_node"]
         rec["gpu_type"] = best.get("gpu_type", "")
         rec["gres"] = f"{rec.get('gpu_type', 'gpu')}:{rec['gpus']}" if rec["gpus"] else ""

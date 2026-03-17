@@ -7,7 +7,7 @@ You are helping the user view pipeline results from the xldvp_seg image analysis
 **Step 1 — Find output directories with HTML.**
 Search for `index.html` files in common output locations:
 ```bash
-find /fs/pool/pool-mann-edwin/ -maxdepth 5 -name "index.html" -path "*/html/*" 2>/dev/null | head -20
+find "${REPO:-$(pwd)}/../" -maxdepth 5 -name "index.html" -path "*/html/*" 2>/dev/null | head -20
 ```
 
 Also check if the user specified a path in arguments.

@@ -6,8 +6,8 @@
 #SBATCH --mem=128G
 #SBATCH --gres=gpu:2
 #SBATCH --time=02:00:00
-#SBATCH --output=/viper/ptmp2/edrod/xldvp_seg_fresh/logs/validate_median_reinhard_%j.out
-#SBATCH --error=/viper/ptmp2/edrod/xldvp_seg_fresh/logs/validate_median_reinhard_%j.err
+#SBATCH --output=/path/to/output/logs/validate_median_reinhard_%j.out
+#SBATCH --error=/path/to/output/logs/validate_median_reinhard_%j.err
 
 echo "============================================================"
 echo "Job ID: $SLURM_JOB_ID"
@@ -16,11 +16,10 @@ echo "Start time: $(date)"
 echo "============================================================"
 echo ""
 
-# Activate conda environment
-source /viper/ptmp2/edrod/xldvp_seg_fresh/mkseg_rocm_env/bin/activate
+# Environment
+MKSEG_PYTHON="${MKSEG_PYTHON:-python}"
 
-# Run validation
-cd /viper/u2/edrod
+cd /path/to/output
 python validate_median_reinhard.py
 
 echo ""
@@ -29,7 +28,7 @@ echo "Complete!"
 echo "End time: $(date)"
 echo "============================================================"
 echo ""
-echo "Output directory: /viper/ptmp2/edrod/xldvp_seg_fresh/validation_median_vs_mean"
+echo "Output directory: /path/to/output/validation_median_vs_mean"
 echo ""
 echo "To view results:"
-echo "  ls -lh /viper/ptmp2/edrod/xldvp_seg_fresh/validation_median_vs_mean/"
+echo "  ls -lh /path/to/output/validation_median_vs_mean/"

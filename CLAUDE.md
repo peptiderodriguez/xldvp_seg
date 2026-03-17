@@ -1,4 +1,8 @@
-# xldvp_seg - Image Analysis Pipelines
+# CLAUDE.md
+
+This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
+
+# xldvp_seg — Image Analysis & DVP Pipelines
 
 ## Session Behaviors
 
@@ -26,14 +30,61 @@ These behaviors apply throughout every Claude Code session on this project:
 - When writing SLURM configs, check partition busyness first (`system_info.py`).
 - Prefer `--channel-spec "detect=MARKER"` over raw `--channel N` in all examples and configs.
 
-## Quick Start (Claude Code)
+---
 
-Type `/analyze` to begin. Claude will detect your system, inspect your data,
-and guide you through the full pipeline — detection through LMD export.
+## Development Commands
+
+```bash
+# Environment
+export REPO="$(cd "$(dirname "${BASH_SOURCE[0]:-$0}")"; pwd)"  # or set manually
+export MKSEG_PYTHON="${MKSEG_PYTHON:-$(which python)}"          # mkseg conda env python
+
+# Run all tests
+PYTHONPATH=$REPO $MKSEG_PYTHON -m pytest tests/ -v --tb=short
+
+# Run single test file
+PYTHONPATH=$REPO $MKSEG_PYTHON -m pytest tests/test_coordinates.py -v
+
+# Run single test class
+PYTHONPATH=$REPO $MKSEG_PYTHON -m pytest tests/test_coordinates.py::TestCoordinateConversion -v
+
+# Lint
+PYTHONPATH=$REPO $MKSEG_PYTHON -m ruff check .
+
+# Format check
+PYTHONPATH=$REPO $MKSEG_PYTHON -m black --check .
+
+# Inspect CZI metadata (mandatory before any channel config)
+PYTHONPATH=$REPO $MKSEG_PYTHON $REPO/scripts/czi_info.py /path/to/slide.czi
+```
+
+**Style:** Black (line-length 100), Ruff (E/F/W/I/N/UP/B/C4, E501 ignored). Python 3.10+.
+
+### Tests
+
+Tests are in `tests/` using pytest. Fixtures in `conftest.py`: `sample_tile` (512×512 RGB), `sample_mask` (boolean circle), `mock_loader` (mocked CZI loader), `temp_output_dir`, `sample_tile_uint16`, `mock_regionprop`.
+
+| Test file | What it validates |
+|-----------|------------------|
+| `test_coordinates.py` | [x,y] coordinate conversion, UID parsing, spatial validation |
+| `test_detection_base.py` | `Detection` dataclass, mask area calculations |
+| `test_feature_extraction.py` | Feature dimensions: morph=78, SAM2=256, ResNet=4096, DINOv2=2048, total=6478 |
+| `test_utils.py` | Config module, `get_feature_dimensions()` |
+| `test_module_imports.py` | HTML export functions, MK/HSPC module imports |
+| `test_mk_hspc_imports.py` | Feature dimension constants match config |
+| `test_nmj_imports.py` | NMJ strategy class methods, classifier loaders |
+
+Tests use `sys.path.insert(0, ...)` before importing `segmentation.*` to handle CWD reset.
+
+---
+
+## Quick Start
+
+Type `/analyze` inside Claude Code to begin — it detects your system, inspects your data, and walks you through the full pipeline.
 
 | Command | What it does |
 |---------|-------------|
-| `/analyze` | Full pipeline: detect, annotate, classify, spatial analysis, LMD export |
+| `/analyze` | Full pipeline: detect → annotate → classify → spatial analysis → LMD export |
 | `/status` | Check running SLURM jobs, tail logs, monitor progress |
 | `/czi-info` | Inspect CZI metadata — channels, dimensions, pixel size |
 | `/preview-preprocessing` | Preview flat-field / photobleach correction on any channel |
@@ -41,168 +92,43 @@ and guide you through the full pipeline — detection through LMD export.
 | `/lmd-export` | Export detections for laser microdissection (contours, wells, XML) |
 | `/vessel-analysis` | Multi-scale vessel structure detection + spatial viewer |
 | `/view-results` | Launch HTML result viewer with Cloudflare tunnel |
+| `/spatialdata` | Export to SpatialData zarr + squidpy spatial analysis |
 
-## Quick Start
+All commands are in `.claude/commands/`. Documentation: `docs/GETTING_STARTED.md`, `docs/NMJ_PIPELINE_GUIDE.md`, `docs/LMD_EXPORT_GUIDE.md`, `docs/COORDINATE_SYSTEM.md`, `docs/VESSEL_COMMUNITY_ANALYSIS.md`.
 
 **Pipelines available:**
-1. **MK/HSPC** - Bone marrow cell segmentation (Megakaryocytes + Stem Cells)
-2. **NMJ** - Neuromuscular junction detection in muscle tissue
-3. **Cell** - Generic 2-channel Cellpose segmentation (e.g. NeuN+nuc, senescence)
-4. **Vessel** - Blood vessel morphometry (SMA+ ring detection)
-5. **Mesothelium** - Mesothelial ribbon detection for laser microdissection
-6. **Islet** - Pancreatic islet cell detection (nuclear + membrane channels)
-7. **Tissue Pattern** - Whole-mount tissue detection (brain FISH, coronal sections)
 
-### Documentation
-- **[GETTING_STARTED.md](docs/GETTING_STARTED.md)** - Full user guide
-- **[NMJ_PIPELINE_GUIDE.md](docs/NMJ_PIPELINE_GUIDE.md)** - NMJ detection with classifier
-- **[NMJ_LMD_EXPORT_WORKFLOW.md](docs/NMJ_LMD_EXPORT_WORKFLOW.md)** - Full LMD export workflow
-- **[LMD_EXPORT_GUIDE.md](docs/LMD_EXPORT_GUIDE.md)** - Basic LMD export
-- **[COORDINATE_SYSTEM.md](docs/COORDINATE_SYSTEM.md)** - Coordinate conventions
-
-### Key Locations
-| What | Where |
-|------|-------|
-| This repo | `$REPO` (auto-detected, or set `REPO=/path/to/xldvp_seg`) |
-| Output dirs | `<output_dir>/<slide_name>/<timestamp>/` (timestamped per run) |
-| Conda env | `mkseg` |
-
-**Activate environment:**
-```bash
-source ~/miniforge3/etc/profile.d/conda.sh && conda activate mkseg
-```
+| Type | Detection Method | Use Case |
+|------|-----------------|----------|
+| **Cell** | Cellpose 2-channel (cyto+nuc) + SAM2 embeddings | Generic cell detection (e.g. NeuN+nuc, senescence) |
+| **NMJ** | 98th percentile threshold + morphology + watershed | Neuromuscular junction detection in muscle |
+| **MK** | SAM2 auto-mask + size filter | Bone marrow megakaryocytes + stem cells |
+| **Vessel** | SMA+ ring detection, 3-contour hierarchy, adaptive dilation | Blood vessel morphometry |
+| **Islet** | Cellpose membrane+nuclear + marker classification | Pancreatic islet cells |
+| **Mesothelium** | Ridge detection for ribbon structures | Mesothelial ribbon for LMD |
+| **Tissue Pattern** | Cellpose + spatial frequency analysis | Whole-mount tissue (brain FISH, coronal) |
 
 ---
 
-## Common Commands
+## Pipeline Workflow: CZI → Detection → Classification → LMD
 
-### Unified Segmentation
-```bash
-# NMJ detection — resolve BTX channel automatically from filename
-python run_segmentation.py \
-    --czi-path /path/to/nuc488_BTX647_NFL750.czi \
-    --cell-type nmj \
-    --channel-spec "detect=BTX"
+This is the DVP (Deep Visual Proteomics) workflow — spatial proteomics where LMD-cut cells go into mass spec analysis.
 
-# Generic cell with 2-channel Cellpose — resolve by marker name
-python run_segmentation.py \
-    --czi-path /path/to/nuc488_NeuN647_tdTom555.czi \
-    --cell-type cell \
-    --channel-spec "cyto=NeuN,nuc=nuc"
+### Overview (for beginners)
 
-# Vessel detection (raw index still works)
-python run_segmentation.py \
-    --czi-path /path/to/slide.czi \
-    --cell-type vessel \
-    --channel 0 \
-    --candidate-mode
+1. **Inspect** — Look at your slide's channels (which stains are in which position). Seconds.
+2. **Detect** — AI models (SAM2 + custom segmentation) scan every tile to find all cells. Each gets a contour outline and features (shape, size, brightness, AI embeddings). 1–3 hours on GPU.
+3. **Review** — Open a web viewer, click yes/no on ~200+ cell crops to teach the system what's real vs false positive.
+4. **Classify** — A random forest trains on your annotations and scores every detection in seconds — no re-detection needed.
+5. **Markers** — Classify each cell as positive/negative for each fluorescent marker (e.g., NeuN+ neurons vs NeuN- glia). Uses automatic intensity thresholding.
+6. **Explore** — UMAP/clustering can reveal cell subtypes from the feature space. Spatial network analysis shows neighborhood patterns.
+7. **Export for LMD** — Package selected cells into XML for the laser microdissection machine with 384-well plate assignment + controls.
+8. **DVP** — LMD cuts cells → mass spec spatial proteomics.
 
-# MK detection
-python run_segmentation.py \
-    --czi-path /path/to/slide.czi \
-    --cell-type mk \
-    --channel 0
-```
+### Phase 1: Data Inspection
 
-### Performance Options
-```bash
---load-to-ram       # [Default] Direct-to-SHM loading (channels loaded from CZI directly into shared memory)
---num-gpus 4        # Number of GPUs (always multi-GPU, even with 1)
---num-gpus 1        # Single GPU — safer memory usage for large slides
---html-sample-fraction 0.10  # Subsample HTML to 10% of detections (saves RAM on large slides)
---max-html-samples 20000     # Hard OOM cap during per-tile accumulation (default: 20000)
-```
+**CRITICAL: CZI channel order ≠ filename order and is NOT wavelength-sorted.** Channel indices are determined by acquisition/detector assignment. Always run `czi_info.py` first — it is the only authoritative source.
 
-### Post-Dedup Processing Options
-```bash
---no-contour-processing     # Skip contour dilation + RDP (default ON)
---dilation-um 0.5           # Contour dilation in micrometers (default: 0.5)
---rdp-epsilon 5.0           # RDP simplification epsilon in pixels (default: 5)
---no-background-correction  # Skip local background subtraction (default ON)
---bg-neighbors 30           # KD-tree neighbors for background (default: 30)
-```
-
-### OME-Zarr Generation
-```bash
---no-zarr                   # Skip OME-Zarr generation at end of pipeline (default ON)
---force-zarr                # Overwrite existing OME-Zarr (default: skip if exists)
---zarr-levels 5             # Number of pyramid levels (default: 5)
-```
-
-OME-Zarr is auto-generated at the end of every pipeline run from SHM data (fast, no CZI re-read). Used for cross placement and Napari visualization.
-
-Post-dedup phases 1 and 3 are parallelized with ThreadPoolExecutor (auto-detects CPU count).
-
-### Multi-Node Sharding
-```bash
-# Split detection across 4 nodes (each processes 1/4 of tiles)
-python run_segmentation.py --czi-path slide.czi --cell-type nmj \
-    --tile-shard 0/4 --resume /shared/output/dir  # node 0
-    --tile-shard 1/4 --resume /shared/output/dir  # node 1
-    # ... etc
-
-# Merge all shards (auto-detects shard manifests, checkpointed)
-python run_segmentation.py --czi-path slide.czi --cell-type nmj \
-    --resume /shared/output/dir --merge-shards
-# Checkpoints: merged_detections.json → detections.json → HTML
-```
-
-### View Results
-```bash
-python -m http.server 8080 --directory /home/dude/mk_output/project/html
-~/cloudflared tunnel --url http://localhost:8080
-```
-
----
-
-## NMJ Pipeline (Detect Once, Classify Later)
-
-1. Load CZI channels directly into shared memory (no RAM intermediate, `--load-to-ram` default)
-2. Preprocessing on SHM views (flat-field, photobleach correction)
-3. Tile with 10% overlap (`--tile-overlap 0.10`)
-4. Detect 100% of tiles (or multi-node with `--tile-shard`)
-5. Segment: 98th percentile intensity threshold + morphology + watershed
-6. Initial feature extraction: morph + SAM2 (always), ResNet + DINOv2 (opt-in `--extract-deep-features`)
-7. HTML crops cached to disk per-tile (fast resume — `{tile_dir}/{celltype}_html_samples.json`)
-8. Deduplicate overlapping masks (>10% pixel overlap) — or `--merge-shards` for multi-node
-9. **Post-dedup processing** (default ON, parallelized with ThreadPoolExecutor):
-   - Phase 1: Dilate contours +0.5 um (`--dilation-um`), RDP simplify (`--rdp-epsilon 5`), extract quick means
-   - Phase 2: Local background estimation (KD-tree, k=30 global neighbors, `--bg-neighbors`)
-   - Phase 3: Subtract per-cell background from pixels, then extract intensity features on corrected data (morph features preserved from detection)
-   - Disable with `--no-contour-processing` / `--no-background-correction`
-10. Generate annotation HTML (subsample via `--html-sample-fraction 0.10` or `scripts/regenerate_html.py --max-samples 1500`)
-11. Train RF classifier with annotations (`train_classifier.py`, balanced classes)
-12. Score ALL detections: `scripts/apply_classifier.py` (CPU, seconds — no re-detection)
-13. Generate filtered HTML: `scripts/regenerate_html.py --score-threshold 0.5`
-14. Two-stage clustering: Round 1 = 500 um, Round 2 = 1000 um, target 375-425 um²
-15. Unclustered = singles
-16. Controls: 100 um offset, 8 directions, cluster controls preserve arrangement
-17. Napari visualization (4 colors: singles/controls/clusters/cluster-controls)
-18. 384-well plate serpentine B2 → B3 → C3 → C2 (max 308 wells)
-19. OME-Zarr pyramid for Napari viewing
-20. XML export with reference crosses
-
-### Pipeline Checkpoints (resume with `--resume`)
-
-| Stage | Checkpoint file | What's saved |
-|-------|----------------|--------------|
-| Detection | Per-tile dirs (`tile_X_Y/`) | Masks (HDF5) + per-tile detections (JSON) + HTML cache |
-| Merge shards | `{celltype}_detections_merged.json` | All shard detections concatenated |
-| Dedup | `{celltype}_detections.json` | Deduplicated detections (merge-shards only) |
-| Post-dedup | `{celltype}_detections_postdedup.json` | Contours + features + bg correction |
-| Finalize | `{celltype}_detections.json` + HTML/CSV | Final output |
-
-On `--resume`, the pipeline loads the most advanced checkpoint and skips completed steps.
-Contour processing and background correction are checked independently — if contours were
-processed but bg correction wasn't, only bg correction runs on resume.
-
-### Channel Mapping
-
-**CRITICAL: CZI channel order ≠ filename order, and is NOT simply sorted by wavelength.**
-Channel indices are determined by acquisition/detector assignment in the CZI file.
-**Always run `czi_info.py` first — it is the only authoritative source.**
-
-**Step 1 — Run czi_info.py (mandatory before any config):**
 ```bash
 PYTHONPATH=$REPO $MKSEG_PYTHON $REPO/scripts/czi_info.py /path/to/slide.czi
 ```
@@ -213,34 +139,17 @@ Output example:
   [2] AF750    Ex 752 → Em 779 nm  Alexa Fluor 750   ← PM750
   [3] AF555    Ex 553 → Em 568 nm  Alexa Fluor 555   ← CD31_555
 ```
-Note: [1]=647nm comes before [3]=555nm — this is NOT wavelength-sorted.
-Never guess the order. Never sort by wavelength manually. Always use this output.
+Note: [1]=647nm before [3]=555nm. Never sort by wavelength. Always confirm this table with the user before proceeding.
 
-**Step 2 — Match indices to markers using filename + fluorophore name:**
-Cross-reference the `Alexa Fluor NNN` name with the marker wavelengths in the filename
-(e.g. `SMA647` → Alexa647 → whichever index shows `Em 668nm`).
-
-**Step 3 — Build your channel assignments:**
-- `cellpose_input_channels: [cyto_idx, nuc_idx]` — use PM/membrane channel as cyto
-- `markers: [{channel: idx, name: MARKER}]` — one entry per marker to classify
-- `load_channels: "0,1,2"` — exclude failed stains (e.g. bad PDGFRa)
-- Document the verified mapping as a comment in the YAML (see `configs/` examples)
-
-**Automated resolution via `--channel-spec`** (preferred):
+**Use `--channel-spec`** to resolve channels by name or wavelength automatically:
 ```bash
-# Specify channels by marker name or wavelength — resolved at startup
-python run_segmentation.py --czi-path slide.czi --cell-type nmj \
-    --channel-spec "detect=BTX"            # name from filename
-
-python run_segmentation.py --czi-path slide.czi --cell-type cell \
-    --channel-spec "cyto=PM,nuc=488"       # mix of name and wavelength
+--channel-spec "detect=BTX"          # marker name from filename
+--channel-spec "cyto=PM,nuc=488"     # mix of name and wavelength
+--channel-spec "detect=647"          # direct wavelength
 ```
+Resolution order: integer index → wavelength (±10nm) → marker name (filename parsing) → CZI metadata name (substring match for ≥3-char specs, e.g., "Hoechst" matches "Hoechst 33258"). Raw indices (`--channel 1`) still work as fallback.
 
-Resolution order: integer index → wavelength (±10nm) → marker name (via filename parsing) → CZI metadata name (exact match, then substring match for ≥3-char specs, e.g., "Hoechst" matches "Hoechst 33258").
-
-**For `classify_markers.py`**: Use `--marker-wavelength 647,555 --czi-path slide.czi` instead of `--marker-channel 1,2`. No `--correct-all-channels` needed — pipeline does bg correction automatically, and `classify_markers.py` auto-detects this to prevent double correction.
-
-**For YAML configs** (`run_pipeline.sh`): Add a `channel_map:` section:
+For YAML configs (`run_pipeline.sh`), use `channel_map:` section:
 ```yaml
 channel_map:
   detect: SMA       # resolved to CZI channel index at runtime
@@ -248,312 +157,385 @@ channel_map:
   nuc: 488
 ```
 
-**Manual fallback**: Raw indices (`--channel 1`, `--marker-channel 1,3`) still work.
+### Phase 2: Detection
 
-**Post-dedup processing YAML keys:**
-```yaml
-background_correction: true    # default ON — local KD-tree bg subtraction
-contour_processing: true       # default ON — dilate + RDP contours
-dilation_um: 0.5               # contour dilation in micrometers
-rdp_epsilon: 5                 # RDP simplification epsilon in pixels
-bg_neighbors: 30               # KD-tree neighbor count
-html_sample_fraction: 0.10     # subsample HTML to 10% of detections (saves RAM)
-```
+**Check cluster first:** `$MKSEG_PYTHON $REPO/scripts/system_info.py` shows partition availability and recommends resources.
 
-**SLURM recommended defaults:**
+**Key parameters:**
+- `--cell-type {nmj,mk,vessel,mesothelium,islet,tissue_pattern,cell}`
+- `--all-channels` — enables per-channel intensity features (~15/channel). Always use for multi-channel slides.
+- `--channels "0,1,2"` — skip failed stains to save RAM
+- `--extract-deep-features` — adds ResNet+DINOv2 (6,144 dims). Off by default; morph-only (78 features) is often competitive with all 6,478. Worth trying if morph F1 < 0.85 after annotation.
+- `--photobleaching-correction` (with `-ing`) — for sequential tile scans with intensity decay
+- Flat-field ON by default (`--no-normalize-features` to disable; no `--flat-field-correction` flag)
+- `--html-sample-fraction 0.10` — subsample HTML viewer to 10% of detections (browser-friendly)
+- `--sample-fraction` is ALWAYS 1.0 — detect 100%, never suggest partial detection
+
+**SLURM launch (YAML config):**
 ```yaml
+name: my_experiment
+czi_path: /path/to/slide.czi     # single slide
+# czi_dir: /path/to/slides       # OR directory for multi-slide
+output_dir: /path/to/output
+cell_type: cell
+channel_map:
+  cyto: PM
+  nuc: 488
+all_channels: true
+html_sample_fraction: 0.10
 slurm:
-  slides_per_job: 1    # 1 slide per SLURM task (better cluster scheduling)
-  num_jobs: 24          # one job per slide
+  partition: p.hpcl93
+  cpus: 256
+  mem_gb: 742
+  gpus: "l40s:4"
+  time: "3-00:00:00"
+  slides_per_job: 1             # 1 slide/job = parallel SLURM array tasks
+  num_jobs: 1
+```
+```bash
+scripts/run_pipeline.sh configs/my_experiment.yaml
 ```
 
-**Resume with `run_pipeline.sh`**: add `resume_dir: /path/to/run_dir` to YAML. Without it, re-running always starts fresh (auto-discovery removed to prevent accidentally resuming old test/sample runs).
-```yaml
-resume_dir: /fs/pool/pool-mann-edwin/my_output/slide_20260302_121345_100pct
+**Local launch:**
+```bash
+PYTHONPATH=$REPO $MKSEG_PYTHON $REPO/run_segmentation.py \
+    --czi-path /path/to/slide.czi \
+    --cell-type cell \
+    --channel-spec "cyto=PM,nuc=488" \
+    --all-channels --num-gpus 2 \
+    --output-dir /path/to/output
 ```
 
-**NMJ example (3-channel):**
-- ch0: Nuclear (488nm)
-- ch1: BTX (647nm) — NMJ marker (detection channel)
-- ch2: NFL (750nm)
+**Resume crashed/cancelled runs:**
+- SLURM: add `resume_dir: /path/to/exact/timestamped/run_dir` to YAML, re-run `run_pipeline.sh`. Without it, always starts fresh.
+- Local: `--resume /path/to/exact/timestamped/run_dir` (must contain `tiles/` directly — NOT the slide-level dir)
+- Pipeline auto-detects the most advanced checkpoint and skips completed stages.
 
-### Feature Hierarchy
-| Feature Set | Dimensions | When |
-|-------------|-----------|------|
-| Morphological | ~78 | Always |
-| Per-channel stats | ~50 | When `--all-channels` + 2+ channels |
-| SAM2 embeddings | 256 | Always (default) |
-| ResNet50 (masked + context) | 4,096 | `--extract-deep-features` |
-| DINOv2-L (masked + context) | 2,048 | `--extract-deep-features` |
+**Pipeline checkpoints:**
 
-**Feature comparison (3-channel, 844 annotated detections):**
+| Stage | Checkpoint file | What's saved |
+|-------|----------------|--------------|
+| Detection | Per-tile dirs (`tile_X_Y/`) | Masks (HDF5) + detections (JSON) + HTML cache |
+| Merge shards | `{celltype}_detections_merged.json` | All shard detections concatenated |
+| Dedup | `{celltype}_detections.json` | Deduplicated detections |
+| Post-dedup | `{celltype}_detections_postdedup.json` | Contours + features + bg correction |
+| Finalize | `{celltype}_detections.json` + HTML/CSV | Final output |
 
-| Feature Set | n | F1 |
-|-------------|---|-----|
-| **all_features** | 6478 | **0.909** |
-| morph+dinov2_combined | 2126 | 0.901 |
-| morphological | 78 | 0.900 |
-| dinov2_context | 1024 | 0.843 |
-| resnet_context | 2048 | 0.836 |
-| sam2 | 256 | 0.728 |
+Contour processing and background correction are checked independently on resume.
 
-Use `train_classifier.py --feature-set` to compare subsets and pick the best for your final RF classifier. Morph-only (78 features) is nearly as good as all 6478 combined.
+### Phase 3: Annotation & Classification
+
+**Step 1 — Serve results:** `$MKSEG_PYTHON $REPO/serve_html.py <output_dir>` — opens HTML viewer via Cloudflare tunnel. Click green ✓ for real detections, red ✗ for false positives. Export annotations via the Export button.
+
+**Step 2 — Train classifier:**
+```bash
+PYTHONPATH=$REPO $MKSEG_PYTHON $REPO/train_classifier.py \
+    --detections <detections.json> \
+    --annotations <annotations.json> \
+    --output-dir <output> \
+    --feature-set morph   # or morph_sam2, channel_stats, all
+```
+Feature sets: `morph` (78D, fast), `morph_sam2` (334D), `channel_stats` (per-channel intensities), `all` (6,478D). Use `train_classifier.py --feature-set` to compare — performance varies by cell type and staining.
+
+**Step 3 — Score all detections + regenerate filtered HTML:**
+```bash
+PYTHONPATH=$REPO $MKSEG_PYTHON $REPO/scripts/apply_classifier.py \
+    --detections <detections.json> \
+    --classifier <rf_classifier.pkl> \
+    --output <scored_detections.json>
+
+PYTHONPATH=$REPO $MKSEG_PYTHON $REPO/scripts/regenerate_html.py \
+    --detections <scored_detections.json> \
+    --czi-path <path> --output-dir <output> \
+    --score-threshold 0.5
+```
+
+### Phase 4: Marker Classification
+
+For multi-channel slides — classify each cell as positive/negative per fluorescent marker.
+
+**Background correction is automatic.** The pipeline does pixel-level bg correction during detection. `classify_markers.py` auto-detects this (via `ch{N}_background` keys) and skips its own correction. No `--correct-all-channels` needed.
+
+```bash
+# By wavelength (preferred — auto-resolves via CZI metadata):
+PYTHONPATH=$REPO $MKSEG_PYTHON $REPO/scripts/classify_markers.py \
+    --detections <detections.json> \
+    --marker-wavelength 647,555 \
+    --marker-name NeuN,tdTomato \
+    --czi-path <czi_path>
+
+# By channel index:
+    --marker-channel 1,2 --marker-name NeuN,tdTomato
+```
+
+**Methods:** `otsu` (default — auto-threshold maximizing inter-class variance), `otsu_half` (more permissive for dim markers), `gmm` (2-component Gaussian for overlapping distributions).
+
+**Output fields:** `{marker}_class` (positive/negative), `{marker}_value`, `{marker}_threshold`, `marker_profile` (e.g., `NeuN+/tdTomato-`). Pipeline also stores `ch{N}_background`, `ch{N}_snr`, `ch{N}_mean_raw` in features.
+
+### Phase 5: Spatial Analysis & Exploration
+
+See **Available Analyses** section below for the full catalog.
+
+### Phase 6: LMD Export
+
+**Step 1 — Place 3 reference crosses** in Napari:
+```bash
+PYTHONPATH=$REPO $MKSEG_PYTHON $REPO/scripts/napari_place_crosses.py \
+    -i <czi_path> --flip-horizontal -o <crosses.json>
+```
+Keybinds: R/G/B = cross color, Space = place, S = save, U = undo, Q = save+quit. `--rotate-cw-90` is ON by default (LMD7 orientation). Crosses JSON stores `display_transform`; export scripts apply matching transforms to contours.
+
+**Step 2 — Export XML:**
+```bash
+PYTHONPATH=$REPO $MKSEG_PYTHON $REPO/run_lmd_export.py \
+    --detections <detections.json> \
+    --crosses <crosses.json> \
+    --output-dir <output>/lmd \
+    --generate-controls --min-score 0.5 --export
+    # Optional: --erosion-um 0.2  or  --erode-pct 0.05 (shrink contours for laser)
+```
+Batch: `--input-dir <runs> --crosses-dir <crosses>`. Max 308 wells/plate; multi-plate overflow is automatic. Empty QC wells (10%) inserted evenly. Slides without exactly 3 crosses are skipped.
+
+**Replicate-based export** (DVP proteomics, area-normalized replicates):
+```bash
+PYTHONPATH=$REPO $MKSEG_PYTHON $REPO/scripts/select_mks_for_lmd.py \
+    --score-threshold 0.80 --target-area 10000 --max-replicates 4
+
+PYTHONPATH=$REPO $MKSEG_PYTHON $REPO/scripts/lmd_export_replicates.py \
+    --sampling-results lmd_replicates_full.json \
+    --contours-json contours.json \
+    --crosses-dir ./crosses --output-dir ./xml
+```
 
 ---
 
-## Coordinate System
+## Available Analyses
 
-**All coordinates are [x, y] (horizontal, vertical).**
+Beyond the core detect → classify → LMD workflow, the pipeline supports:
 
-UID format: `{slide}_{celltype}_{x}_{y}`
+| Analysis | Script | What it does |
+|----------|--------|-------------|
+| **RF classifier training** | `train_classifier.py` | Train random forest from annotations, 5-fold CV, feature set comparison |
+| **Batch scoring** | `scripts/apply_classifier.py` | Score all detections with trained classifier (CPU, seconds) |
+| **Marker classification** | `scripts/classify_markers.py` | Otsu/GMM pos/neg per channel, auto bg correction, SNR |
+| **Feature exploration** | `scripts/cluster_by_features.py` | UMAP + HDBSCAN on morph/SAM2/deep features — discover cell subtypes |
+| **Spatial network** | `scripts/spatial_cell_analysis.py` | Delaunay graphs, connected components, community detection, neighborhoods |
+| **Interactive spatial viewer** | `scripts/generate_multi_slide_spatial_viewer.py` | KDE density contours, graph-pattern regions (linear/arc/ring/cluster), DBSCAN + convex hulls, ROI drawing + stats |
+| **Vessel community analysis** | `scripts/vessel_community_analysis.py` | Multi-scale vessel structure detection (connected components + morphology + SNR) |
+| **SpatialData / scverse** | `scripts/convert_to_spatialdata.py` | Export to zarr for squidpy (spatial stats), scanpy (dim reduction), anndata |
+| **One-command viz** | `scripts/view_slide.py` | Classify → spatial cluster → interactive viewer → serve (all in one) |
+| **Preprocessing preview** | `scripts/preview_preprocessing.py` | Before/after flat-field, photobleach correction at 1/8 resolution |
+| **LMD clustering** | `scripts/cluster_detections.py` | Two-stage biological clustering for well assignment |
 
-**Mosaic origin:** CZI tiles use global coordinates. RAM arrays are 0-indexed.
-- `loader.get_tile()` handles the offset correctly
-- Direct `all_channel_data` indexing must subtract `x_start, y_start`
+**SpatialData** is auto-exported at end of every pipeline run (`{celltype}_spatialdata.zarr`). Load with `spatialdata.read_zarr()`. Run squidpy spatial stats (neighborhood enrichment, co-occurrence, Moran's I) via `--run-squidpy --squidpy-cluster-key <marker_class>`.
+
+**OME-Zarr** is auto-generated at end of every pipeline run from SHM (fast, no CZI re-read). Used for Napari viewing and cross placement. Flags: `--no-zarr` to skip, `--force-zarr` to overwrite, `--zarr-levels 5`.
+
+---
+
+## Architecture
+
+### Data Flow
+
+```
+CZI file → czi_loader.py (channel resolution, tiling)
+         → Direct-to-SHM loading (no RAM intermediate)
+         → Preprocessing (flat-field, photobleach) on SHM views
+         → Multi-GPU tile processing (multigpu_worker.py)
+           → Strategy.detect_in_tile() per tile
+           → Feature extraction (morph + SAM2 + optional ResNet/DINOv2)
+           → Per-tile HTML cache + HDF5 masks + JSON detections
+         → Deduplication (>10% pixel overlap)
+         → Post-dedup 3-phase pipeline (post_detection.py):
+           Phase 1: contour dilation + RDP + quick means (ThreadPool)
+           Phase 2: KD-tree background estimation (single-thread)
+           Phase 3: bg-corrected intensity features (ThreadPool)
+         → Finalize: JSON + CSV + HTML + OME-Zarr + SpatialData
+```
+
+### Pipeline Package (`segmentation/pipeline/`)
+
+`run_segmentation.py` is a ~1400-line orchestrator importing from 8 pipeline modules:
+
+| Module | Purpose |
+|--------|---------|
+| `cli.py` | Argparse + postprocess_args() + channel-spec resolution |
+| `preprocessing.py` | Photobleach, flat-field, Reinhard normalization |
+| `detection_setup.py` | `build_detection_params()` — strategy config |
+| `samples.py` | HTML sample creation, tile grid, islet GMM calibration |
+| `resume.py` | Checkpoint detection, tile reload, `compose_tile_rgb()` |
+| `post_detection.py` | 3-phase post-dedup (contour, bg, intensity) — ThreadPool parallelized |
+| `finalize.py` | Channel legend, CSV/JSON/HTML export, summary |
+| `server.py` | HTTP server + Cloudflare tunnel |
+| `background.py` | KD-tree local background correction (shared with classify_markers.py) |
+
+**Dependency DAG** (no cycles): `resume → samples`, `finalize → server`, `post_detection → background → standalone`, all others standalone.
+
+### Detection Strategies (`segmentation/detection/strategies/`)
+
+All inherit from `base.py`, use `MultiChannelFeatureMixin` (from `mixins.py`), implement `detect_in_tile()`. Selection via `strategy_factory.py`.
+
+### Multi-GPU Processing (`segmentation/processing/`)
+
+**Always multi-GPU** (even `--num-gpus 1`). No separate single-GPU path.
+- `multigpu_worker.py` — generic worker for ALL cell types, config dict (not positional args)
+- `multigpu_shm.py` — shared memory with SIGTERM cleanup handler
+- `tile_processing.py` — shared `process_single_tile()`
+- Multi-node: `--tile-shard INDEX/TOTAL` round-robin, `--merge-shards` on resume
+
+---
+
+## Critical Code Patterns
+
+### Device Handling
+
+Never hardcode `device="cuda"`. Use from `segmentation.utils.device`:
+- `get_default_device()` — detects cuda/mps/cpu automatically
+- `device_supports_gpu()` — for Cellpose `gpu=` flag (not `torch.cuda.is_available()`)
+- `empty_cache()` — handles cuda (clear cache), mps (synchronize + clear), and cpu (no-op)
+
+### SHM Lifetime
+
+`shm_manager.cleanup()` MUST be deferred until after post-dedup AND `_finish_pipeline()` — both read pixel data from SHM. Detection try block uses `except Exception: cleanup(); raise` for crash safety.
+
+### Zero-Pixel Handling
+
+- Uncorrected data → exclude zeros (CZI padding bias)
+- Bg-corrected data → include zeros (real signal)
+- Controlled via `_include_zeros` param on `MultiChannelFeatureMixin.extract_multichannel_features()`
+
+### JSON I/O
+
+Always use `atomic_json_dump()` from `segmentation.utils.json_utils` — temp file + `os.replace()`, auto-sanitizes NaN/Inf, uses orjson when available. Use `fast_json_load()` for large detection JSON. No `indent=2` anywhere.
+
+### safe_to_uint8
+
+Canonical in `segmentation/utils/detection_utils.py`. For uint16: simple `arr/256` — very dim for low-signal channels. Use `_percentile_normalize_single()` for proper normalization. Float >1.0 clipped to [0,255].
+
+### Centroids
+
+Background correction KD-tree MUST use `global_center` (slide-level), NOT `features["centroid"]` (tile-local). Canonical: `_extract_centroids()` in `background.py`.
+
+### Logging
+
+`get_logger(__name__)` from `segmentation.utils.logging` everywhere. No bare `logging.getLogger`.
+
+### Coordinate System
+
+All coordinates are [x, y] (horizontal, vertical). UID format: `{slide}_{celltype}_{x}_{y}`. CZI tiles use global coordinates; RAM arrays are 0-indexed. `loader.get_tile()` handles offsets; direct `all_channel_data` indexing must subtract `x_start, y_start`. See `docs/COORDINATE_SYSTEM.md`.
+
+---
+
+## CLI Reference
+
+### Flag Gotchas
+
+- `--no-normalize-features` disables flat-field (no `--flat-field-correction` flag exists)
+- `--photobleaching-correction` (with `-ing`)
+- `--sequential` does NOT exist — use `--num-gpus 1`
+- `--nuclear-channel` / `--membrane-channel` are islet-only (validated only for `cell_type=='islet'`)
+- `--sample-fraction` is ALWAYS 1.0 — detect 100%, use `--html-sample-fraction` to subsample HTML only
+
+### Post-Dedup Processing (default ON)
+
+```bash
+--no-contour-processing     # Skip contour dilation + RDP
+--dilation-um 0.5           # Contour dilation in micrometers (default: 0.5)
+--rdp-epsilon 5.0           # RDP simplification epsilon (default: 5)
+--no-background-correction  # Skip local background subtraction
+--bg-neighbors 30           # KD-tree neighbors (default: 30)
+```
+
+YAML equivalents: `contour_processing`, `background_correction`, `dilation_um`, `rdp_epsilon`, `bg_neighbors`.
+
+### Performance Options
+
+```bash
+--load-to-ram               # [Default] Direct-to-SHM loading
+--num-gpus 4                # Number of GPUs (always multi-GPU architecture)
+--html-sample-fraction 0.10 # Subsample HTML to 10% of detections
+--max-html-samples 20000    # Hard OOM cap during per-tile accumulation
+```
+
+### Vessel-Specific Flags
+
+```bash
+--candidate-mode               # Relaxed thresholds for training data
+--ring-only                    # Disable supplementary lumen-first pass
+--no-smooth-contours           # Disable B-spline smoothing
+--smooth-contours-factor 3.0   # Spline smoothing factor (default: 3.0)
+--multi-scale                  # Multi-scale detection (coarse to fine)
+```
+
+Vessel 3-contour system: lumen (cyan, inner boundary), CD31 (green, endothelial outer), SMA (magenta, smooth muscle ring expanding from lumen). 6-type classification: artery, arteriole, vein, capillary, lymphatic, collecting_lymphatic.
+
+### Multi-Node Sharding
+
+```bash
+# Split detection across 4 nodes
+python run_segmentation.py --czi-path slide.czi --cell-type nmj \
+    --tile-shard 0/4 --resume /shared/output/dir  # node 0
+    --tile-shard 1/4 --resume /shared/output/dir  # node 1
+
+# Merge all shards
+python run_segmentation.py --czi-path slide.czi --cell-type nmj \
+    --resume /shared/output/dir --merge-shards
+```
+
+---
+
+## Hardware (SLURM Cluster)
+
+- **p.hpcl93:** 19 nodes, 256 CPUs, 760G RAM, 4x L40S each — heavy GPU jobs (requires `--gres=gpu:`)
+- **p.hpcl8:** 55 nodes, 24 CPUs, 380G RAM, 2x RTX 5000 each — interactive dev, CPU jobs
+- Time limit: 42 days on both partitions
+- Run `$MKSEG_PYTHON $REPO/scripts/system_info.py` to check live availability and get recommendations
+
+**Resource policy:** On shared SLURM clusters, request ~75% of node CPUs/RAM to leave headroom for other users. `system_info.py` applies this automatically. Request all GPUs (GPU scheduling is typically exclusive per device). Use `--exclusive` only when you genuinely need the full node.
+
+## Troubleshooting
+
+| Symptom | Fix |
+|---------|-----|
+| OOM | Reduce `--num-gpus`, reduce tile size |
+| CUDA boolean error | `mask = mask.astype(bool)` for SAM2 |
+| SAM2 `_orig_hw` | `img_h, img_w = sam2_predictor._orig_hw[0]` (list of tuple) |
+| HDF5 LZ4 error | `import hdf5plugin` before `h5py` |
+| Network mount timeout | Socket timeout 60s automatic. Check with `ls /mnt/x/` |
 
 ---
 
 ## Entry Points
 
-| Script | Use Case |
-|--------|----------|
-| `run_segmentation.py` | Unified entry point: detect, dedup, HTML, CSV (recommended) |
-| `run_lmd_export.py` | Export to Leica LMD format (any cell type) |
-| `train_classifier.py` | Train RF classifier from annotated detections |
-| `scripts/apply_classifier.py` | Score existing detections with trained classifier (no re-detection) |
-| `scripts/classify_markers.py` | Marker classification (Otsu/GMM). Auto-detects pipeline bg correction, no double-correction. |
-| `scripts/regenerate_html.py` | Regenerate HTML viewer from saved detections (all cell types) |
-| `scripts/czi_to_ome_zarr.py` | Convert CZI to OME-Zarr with pyramids |
-| `scripts/napari_place_crosses.py` | Interactive cross placement (CZI + OME-Zarr, RGB crosses, flip/rotate, batch) |
-| `scripts/cluster_detections.py` | Biological clustering for LMD well assignment |
-| `scripts/napari_view_lmd_export.py` | View LMD export overlaid on slide |
-| `scripts/convert_to_spatialdata.py` | Convert detections to SpatialData zarr (scverse ecosystem) |
-| `scripts/generate_multi_slide_spatial_viewer.py` | Unified spatial viewer: KDE contours, graph-pattern regions, DBSCAN + hulls, ROI, focus view |
-| `scripts/view_slide.py` | One-command visualization: classify + spatial cluster + interactive viewer |
-| `scripts/vessel_community_analysis.py` | Multi-scale vessel structure detection (connected components + morphology + SNR) |
-| `scripts/spatial_cell_analysis.py` | Spatial network analysis (connected components, graph metrics) |
-| `scripts/preview_preprocessing.py` | Preview flat-field / photobleach correction at reduced resolution |
-| `scripts/run_pipeline.sh` | YAML config-driven multi-slide SLURM launcher |
-| `scripts/select_mks_for_lmd.py` | MK-specific LMD replicate selection + multi-plate well assignment |
-| `scripts/lmd_export_replicates.py` | Replicate-based LMD XML export (pre-assigned wells + contours) |
-| `scripts/system_info.py` | Environment detection + resource recommendation for SLURM |
-
----
-
-## Module Reference
-
-### Detection Strategies (all support MultiChannelFeatureMixin)
-| Strategy | File |
-|----------|------|
-| NMJ | `segmentation/detection/strategies/nmj.py` |
-| MK | `segmentation/detection/strategies/mk.py` |
-| Cell | `segmentation/detection/strategies/cell.py` |
-| Vessel | `segmentation/detection/strategies/vessel.py` |
-| Islet | `segmentation/detection/strategies/islet.py` |
-| Mesothelium | `segmentation/detection/strategies/mesothelium.py` |
-| Tissue Pattern | `segmentation/detection/strategies/tissue_pattern.py` |
-
-### Multi-GPU Processing (always used, even with --num-gpus 1)
-| Module | Purpose |
+| Script | Purpose |
 |--------|---------|
-| `segmentation/processing/multigpu_worker.py` | Generic GPU worker (all cell types) |
-| `segmentation/processing/multigpu_shm.py` | Shared memory manager (SIGTERM cleanup) |
-| `segmentation/processing/tile_processing.py` | Shared `process_single_tile()` |
-
-### Post-Dedup Processing
-| Module | Purpose |
-|--------|---------|
-| `segmentation/pipeline/post_detection.py` | Contour dilation + feature re-extraction + bg correction |
-| `segmentation/pipeline/background.py` | KD-tree local background correction (shared w/ classify_markers) |
-
-### LMD Export
-| Module | Purpose |
-|--------|---------|
-| `run_lmd_export.py` | Unified pipeline: contours, controls, wells, XML (single + batch mode) |
-| `segmentation/lmd/clustering.py` | Two-stage greedy clustering |
-| `segmentation/lmd/contour_processing.py` | Dilation + RDP + erosion (absolute + percent) |
-| `segmentation/lmd/selection.py` | Generic cell selection for area-normalized LMD replicates |
-| `segmentation/lmd/well_plate.py` | Multi-plate 384-well serpentine well generation + QC empty wells |
-
-### OME-Zarr Export
-| Module | Purpose |
-|--------|---------|
-| `segmentation/io/ome_zarr_export.py` | SHM-to-zarr with pyramid generation (auto at end of pipeline) |
-
-### Normalization
-| Module | Purpose |
-|--------|---------|
-| `compute_normalization_params.py` | Phase 1: compute cross-slide LAB stats |
-| `segmentation/preprocessing/stain_normalization.py` | Phase 2: apply Reinhard per-slide |
-
-Tissue detection in normalization uses calibrated threshold / 10 for permissive detection.
-
----
-
-## Vessel Pipeline
-
-### Detection Method
-1. Adaptive + Otsu thresholding for SMA+ regions
-2. Contour hierarchy analysis (find rings)
-3. Ellipse fitting, wall thickness at 36 angles
-4. **3-contour system**: lumen (cyan), CD31 outer (green), SMA ring (magenta)
-5. Adaptive per-pixel dilation on CD31 and SMA channels (irregular contours following signal)
-6. Full-resolution contour refinement (reads CZI ROI at native res per vessel)
-7. Full-resolution crop rendering for HTML
-
-### 3-Contour Ring Detection
-- **Lumen** (cyan): Inner boundary from SAM2/threshold segmentation
-- **CD31** (green): Endothelial outer boundary via adaptive dilation on CD31 channel
-- **SMA** (magenta): Smooth muscle ring via adaptive dilation on SMA channel, expanding from lumen (not from CD31 boundary, since CD31 and SMA intermingle)
-
-### CLI Options (Vessel-specific)
-```bash
---candidate-mode               # Relaxed thresholds for training data generation
---ring-only                    # Disable supplementary lumen-first pass
---no-smooth-contours           # Disable B-spline contour smoothing (on by default)
---smooth-contours-factor 3.0   # Spline smoothing factor (default: 3.0)
---multi-scale                  # Multi-scale detection (coarse to fine)
-```
-
-### Multi-Marker (6-type classification)
-artery, arteriole, vein, capillary, lymphatic, collecting_lymphatic
-
----
-
-## Hardware (SLURM Cluster)
-- **p.hpcl8:** 55 nodes, 24 CPUs, 380G RAM, 2x RTX 5000 each (interactive dev, CPU jobs)
-- **p.hpcl93:** 19 nodes, 256 CPUs, 760G RAM, 4x L40S each (heavy GPU batch jobs, requires `--gres=gpu:`)
-- Time limit: 42 days on both partitions
-
-## MPS Support (Apple Silicon)
-
-The pipeline supports Apple Silicon GPUs via PyTorch's MPS backend. Device selection is automatic — the pipeline detects `cuda`, `mps`, or `cpu` and configures accordingly.
-
-**Central utility:** `segmentation/utils/device.py` — use `get_default_device()`, `set_device_for_worker()`, `empty_cache()`, `device_supports_gpu()`.
-
-**Key behaviors on MPS:**
-- `--num-gpus` defaults to 1 (Apple Silicon has one GPU)
-- Multi-worker subprocess architecture still works (1 spawned worker)
-- All 4 ML models confirmed working: SAM2, Cellpose-SAM, ResNet50, DINOv2
-- Memory validation reports unified memory (GPU shares system RAM)
-- `empty_cache()` calls `torch.mps.synchronize()` before clearing
-
-**Do NOT:**
-- Hardcode `device="cuda"` — use `device=None` or `get_default_device()`
-- Use `torch.cuda.is_available()` for Cellpose `gpu=` flag — use `device_supports_gpu()`
-- Use bare `torch.cuda.empty_cache()` — use `empty_cache()` from `segmentation.utils.device`
-
-## Troubleshooting
-
-### OOM: reduce `--num-gpus`, reduce tile size
-### CUDA Boolean: `mask = mask.astype(bool)` for SAM2
-### SAM2 _orig_hw: `img_h, img_w = sam2_predictor._orig_hw[0]` (list of tuple)
-### HDF5 LZ4: `import hdf5plugin` before `h5py`
-### Network Mounts: Socket timeout 60s automatic. Check with `ls /mnt/x/`
-
----
-
-## OME-Zarr / LMD Export Workflow
-
-OME-Zarr is auto-generated at the end of every pipeline run (from SHM, fast). No separate conversion step needed. Use `--no-zarr` to skip.
-
-```bash
-# 1. Place reference crosses (CZI-native recommended, no conversion needed)
-# rotate-cw-90 is ON by default (LMD7 orientation)
-python scripts/napari_place_crosses.py \
-    -i slide.czi --flip-horizontal -o crosses.json
-
-# Batch with replicate overlay (shows colored dots per well)
-python scripts/napari_place_crosses.py \
-    --czi-dir /data --slides SlideA SlideB \
-    --sampling-results lmd_replicates_full.json \
-    --contours mk_contours_overlay.json \
-    --flip-horizontal --pyramid-levels 2 8 --output-dir crosses/ --fresh
-
-# Or use OME-Zarr (auto-generated by pipeline, for very large slides)
-python scripts/napari_place_crosses.py \
-    -i slide.ome.zarr -o crosses.json
-
-# 2. Export to LMD (with controls + erosion)
-python run_lmd_export.py \
-    --detections detections.json \
-    --crosses crosses.json \
-    --output-dir lmd_export \
-    --generate-controls \
-    --min-score 0.5 \
-    --export
-
-# Optional: erosion at export time (shrink contours so laser cuts inside)
-    --erosion-um 0.2      # Absolute distance (um)
-    --erode-pct 0.05      # Percent of sqrt(area)
-
-# Batch export (multiple slides)
-python run_lmd_export.py \
-    --input-dir /path/to/runs \
-    --crosses-dir /path/to/crosses \
-    --output-dir lmd_batch \
-    --generate-controls --min-score 0.5 --export
-```
-
-**Coordinate transforms:** `napari_place_crosses.py` saves cross coordinates in display space (after `--flip-horizontal` + `--rotate-cw-90`) and stores the active transforms as `display_transform` in the crosses JSON. Both `run_lmd_export.py` and `lmd_export_replicates.py` read `display_transform` and apply the same flip/rotation to native CZI contours via `_transform_native_to_display()` before the LMD Y-flip. After 90-degree rotation, the display height equals the original CZI width. Slides without exactly 3 crosses are skipped.
-
-Max 308 wells per plate. Early capacity check warns before expensive processing. For >308 wells, use `generate_multiplate_wells()` from `segmentation.lmd.well_plate` for automatic overflow to additional plates. Empty QC wells (default 10% of samples) inserted evenly via `insert_empty_wells()`. For proteomics replicates, use `segmentation.lmd.selection.select_cells_for_lmd()` to build area-normalized replicates, then `scripts/select_mks_for_lmd.py` (MK-specific wrapper) for full plate assignment.
-
-**Replicate-based export** (pre-assigned wells, e.g. MK proteomics):
-```bash
-# Export XML from replicate JSON + contours + crosses
-python scripts/lmd_export_replicates.py \
-    --sampling-results lmd_replicates_full.json \
-    --contours-json mk_contours_overlay.json \
-    --crosses-dir ./crosses \
-    --output-dir ./xml
-```
-
----
-
-## SpatialData Integration (scverse ecosystem)
-
-Pipeline detections are automatically exported to SpatialData format (zarr) for use with squidpy, scanpy, and the broader scverse ecosystem.
-
-### Automatic Export
-Every pipeline run exports `{celltype}_spatialdata.zarr` alongside the JSON/CSV/HTML outputs. Requires spatialdata/anndata/geopandas (installed by default).
-
-### Standalone Converter
-```bash
-# Convert any existing detection JSON
-python scripts/convert_to_spatialdata.py \
-    --detections /path/to/cell_detections.json \
-    --output /path/to/output.zarr \
-    --tiles-dir /path/to/tiles/ \
-    --run-squidpy --squidpy-cluster-key tdTomato_class
-```
-
-### YAML Config (run_pipeline.sh)
-```yaml
-spatialdata:
-  enabled: true
-  extract_shapes: true
-  run_squidpy: true
-  squidpy_cluster_key: tdTomato_class
-```
-
-### Load in Python
-```python
-import spatialdata as sd
-sdata = sd.read_zarr("output.zarr")
-adata = sdata["table"]  # AnnData with spatial coords, features, embeddings
-
-import squidpy as sq
-sq.gr.spatial_neighbors(adata)
-sq.pl.spatial_scatter(adata, color="tdTomato_class")
-```
-
----
-
-## Installation
-
-```bash
-conda create -n mkseg python=3.11 -y && conda activate mkseg
-git clone https://github.com/peptiderodriguez/xldvp_seg.git && cd xldvp_seg
-./install.sh  # Auto-detects CUDA
-```
+| `run_segmentation.py` | Unified detection pipeline (all cell types) |
+| `run_lmd_export.py` | LMD XML export (single + batch) |
+| `train_classifier.py` | Train RF classifier from annotations |
+| `scripts/apply_classifier.py` | Score detections with trained classifier |
+| `scripts/classify_markers.py` | Marker pos/neg classification (Otsu/GMM) |
+| `scripts/regenerate_html.py` | Regenerate HTML viewer from saved detections |
+| `scripts/czi_info.py` | CZI channel metadata (run first!) |
+| `scripts/run_pipeline.sh` | YAML config-driven SLURM launcher |
+| `scripts/napari_place_crosses.py` | Interactive cross placement for LMD |
+| `scripts/generate_multi_slide_spatial_viewer.py` | Unified spatial viewer with ROI + stats |
+| `scripts/convert_to_spatialdata.py` | Export to SpatialData zarr (scverse) |
+| `scripts/view_slide.py` | One-command: classify + spatial + viewer + serve |
+| `scripts/vessel_community_analysis.py` | Multi-scale vessel structure detection |
+| `scripts/spatial_cell_analysis.py` | Spatial network analysis |
+| `scripts/cluster_by_features.py` | UMAP + HDBSCAN feature exploration |
+| `scripts/compare_feature_sets.py` | Compare RF feature subsets via stratified CV |
+| `scripts/cluster_detections.py` | Biological clustering for LMD wells |
+| `scripts/generate_tissue_overlay.py` | Fluorescence image + cell overlay + ROI viewer |
+| `scripts/assign_tissue_zones.py` | Spatially-constrained marker-based zone discovery |
+| `scripts/zonation_transect.py` | Pericentral → periportal gradient analysis |
+| `scripts/calculate_tissue_areas.py` | Variance-based tissue area measurement |
+| `scripts/annotate_bone_regions.py` | Interactive HTML bone region annotation |
+| `scripts/maturation_analysis.py` | MK maturation staging (nuclear deep features) |
+| `scripts/mk_comprehensive_analysis.py` | Multi-dimensional MK feature analysis |
+| `scripts/analyze_islets.py` | Spatial analysis of pancreatic islets |
+| `scripts/select_mks_for_lmd.py` | MK replicate selection + multi-plate wells |
+| `scripts/lmd_export_replicates.py` | Replicate-based LMD XML export |
+| `scripts/system_info.py` | Environment detection + SLURM recommendations |
+| `scripts/preview_preprocessing.py` | Correction preview at reduced resolution |
+| `serve_html.py` | HTTP server + Cloudflare tunnel |

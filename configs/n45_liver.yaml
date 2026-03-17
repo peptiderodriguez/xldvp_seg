@@ -1,6 +1,7 @@
+# Example config — update paths for your environment
 name: n45_liver_cellpose
-czi_path: /fs/pool/pool-mann-axioscan/01_Users/EdRo_axioscan/xDVP/20260304_n45_Hoechst_DCN488_GluI546_Pck1-647_PM750-EDFvar-stitch.czi
-output_dir: /fs/pool/pool-mann-edwin/n45_output
+czi_path: /path/to/data/20260304_n45_Hoechst_DCN488_GluI546_Pck1-647_PM750-EDFvar-stitch.czi
+output_dir: /path/to/output/n45_output
 cell_type: cell
 num_gpus: 4
 all_channels: true

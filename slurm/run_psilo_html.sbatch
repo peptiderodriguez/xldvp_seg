@@ -6,8 +6,8 @@
 #SBATCH --cpus-per-task=16
 #SBATCH --mem=350G
 #SBATCH --time=08:00:00
-#SBATCH --output=/fs/gpfs41/lv12/fileset02/pool/pool-mann-edwin/code_bin/xldvp_seg/logs/wm_pm_html_%j.out
-#SBATCH --error=/fs/gpfs41/lv12/fileset02/pool/pool-mann-edwin/code_bin/xldvp_seg/logs/wm_pm_html_%j.err
+#SBATCH --output=/path/to/xldvp_seg/logs/wm_pm_html_%j.out
+#SBATCH --error=/path/to/xldvp_seg/logs/wm_pm_html_%j.err
 
 # =============================================================================
 # Whole Mouse PM — regenerate HTML (366K detections, HTML never generated)
@@ -22,8 +22,8 @@
 
 set -e
 
-CZI="/fs/pool/pool-mann-axioscan/01_Users/EdRo_axioscan/MPIP_psilo/20251114_Pdgfra546_Msln750_PM647_nuc488-EDFvar-1-stitch-1.czi"
-OUTPUT="/fs/pool/pool-mann-edwin/psilo_output/tp_full/20251114_Pdgfra546_Msln750_PM647_nuc488-EDFvar-1-stitch-1_20260223_094916_100pct"
+CZI="/path/to/data/MPIP_psilo/20251114_Pdgfra546_Msln750_PM647_nuc488-EDFvar-1-stitch-1.czi"
+OUTPUT="/path/to/output/psilo_output/tp_full/20251114_Pdgfra546_Msln750_PM647_nuc488-EDFvar-1-stitch-1_20260223_094916_100pct"
 
 echo "============================================================"
 echo "Job ID: $SLURM_JOB_ID"
@@ -34,10 +34,9 @@ echo "Project: Whole Mouse PM"
 echo "Mode:   HTML regeneration only (no detection)"
 echo "============================================================"
 
-source /fs/gpfs41/lv07/fileset03/home/b_mann/rodriguez/miniforge3/etc/profile.d/conda.sh
-conda activate mkseg
-
-cd /fs/gpfs41/lv12/fileset02/pool/pool-mann-edwin/code_bin/xldvp_seg
+MKSEG_PYTHON="${MKSEG_PYTHON:-python}"
+REPO="${REPO:-/path/to/xldvp_seg}"
+cd "$REPO"
 
 echo "CPUs: $(nproc), RAM: $(free -h | awk '/^Mem:/{print $2}')"
 

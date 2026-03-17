@@ -6,16 +6,17 @@
 #SBATCH --cpus-per-task=16
 #SBATCH --mem=64G
 #SBATCH --time=2:00:00
-#SBATCH --output=/fs/gpfs41/lv12/fileset02/pool/pool-mann-edwin/code_bin/xldvp_seg/slurm/logs/islet_analyze_%j.out
-#SBATCH --error=/fs/gpfs41/lv12/fileset02/pool/pool-mann-edwin/code_bin/xldvp_seg/slurm/logs/islet_analyze_%j.err
+#SBATCH --output=/path/to/xldvp_seg/slurm/logs/islet_analyze_%j.out
+#SBATCH --error=/path/to/xldvp_seg/slurm/logs/islet_analyze_%j.err
 
 # Islet analysis: reclassify markers + generate HTML overview
 # No GPU needed — CPU only (classification + HTML rendering)
 
 set -euo pipefail
 
-REPO=/fs/gpfs41/lv12/fileset02/pool/pool-mann-edwin/code_bin/xldvp_seg
-PYTHON=/fs/gpfs41/lv07/fileset03/home/b_mann/rodriguez/miniforge3/envs/mkseg/bin/python
+MKSEG_PYTHON="${MKSEG_PYTHON:-python}"
+REPO="${REPO:-/path/to/xldvp_seg}"
+PYTHON="$MKSEG_PYTHON"
 CZI="${1:?Usage: sbatch run_analyze_islets.sh <czi_path> <run_dir>}"
 RUN_DIR="${2:?Usage: sbatch run_analyze_islets.sh <czi_path> <run_dir>}"
 

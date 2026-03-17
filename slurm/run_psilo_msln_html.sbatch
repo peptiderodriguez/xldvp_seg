@@ -6,8 +6,8 @@
 #SBATCH --cpus-per-task=24
 #SBATCH --mem=150G
 #SBATCH --time=04:00:00
-#SBATCH --output=/fs/gpfs41/lv12/fileset02/pool/pool-mann-edwin/code_bin/xldvp_seg/logs/msln_html_%j.out
-#SBATCH --error=/fs/gpfs41/lv12/fileset02/pool/pool-mann-edwin/code_bin/xldvp_seg/logs/msln_html_%j.err
+#SBATCH --output=/path/to/xldvp_seg/logs/msln_html_%j.out
+#SBATCH --error=/path/to/xldvp_seg/logs/msln_html_%j.err
 
 # =============================================================================
 # Whole Mouse PM — Msln+ HTML annotation viewer
@@ -22,8 +22,8 @@
 
 set -e
 
-CZI="/fs/pool/pool-mann-axioscan/lm_data/MPIP_Psilo/20251114_Pdgfra546_Msln750_PM647_nuc488-EDFvar-1-stitch-1.czi"
-OUTPUT="/fs/pool/pool-mann-edwin/psilo_output/tp_full/20251114_Pdgfra546_Msln750_PM647_nuc488-EDFvar-1-stitch-1_20260223_094916_100pct/msln_plus"
+CZI="/path/to/data/MPIP_Psilo/20251114_Pdgfra546_Msln750_PM647_nuc488-EDFvar-1-stitch-1.czi"
+OUTPUT="/path/to/output/psilo_output/tp_full/20251114_Pdgfra546_Msln750_PM647_nuc488-EDFvar-1-stitch-1_20260223_094916_100pct/msln_plus"
 DETECTIONS="${OUTPUT}/detections_clustered.json"
 
 echo "============================================================"
@@ -36,10 +36,9 @@ echo "Project: Whole Mouse PM — Msln+ HTML"
 echo "Mode:   HTML regeneration only (no detection)"
 echo "============================================================"
 
-source /fs/gpfs41/lv07/fileset03/home/b_mann/rodriguez/miniforge3/etc/profile.d/conda.sh
-conda activate mkseg
-
-cd /fs/gpfs41/lv12/fileset02/pool/pool-mann-edwin/code_bin/xldvp_seg
+MKSEG_PYTHON="${MKSEG_PYTHON:-python}"
+REPO="${REPO:-/path/to/xldvp_seg}"
+cd "$REPO"
 
 echo "CPUs: $(nproc), RAM: $(free -h | awk '/^Mem:/{print $2}')"
 

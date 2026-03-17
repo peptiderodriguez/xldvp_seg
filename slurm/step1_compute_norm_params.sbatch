@@ -7,8 +7,8 @@
 #SBATCH --cpus-per-task=16
 #SBATCH --mem=200G
 #SBATCH --time=4:00:00
-#SBATCH --output=/viper/ptmp2/edrod/xldvp_seg_fresh/logs/compute_norm_params_%j.out
-#SBATCH --error=/viper/ptmp2/edrod/xldvp_seg_fresh/logs/compute_norm_params_%j.err
+#SBATCH --output=/path/to/output/logs/compute_norm_params_%j.out
+#SBATCH --error=/path/to/output/logs/compute_norm_params_%j.err
 
 echo "============================================================"
 echo "STEP 1: Compute Global Normalization Parameters"
@@ -18,11 +18,10 @@ echo "Node: $SLURM_NODELIST"
 echo "Start time: $(date)"
 echo ""
 
-module load python-waterboa/2024.06
-source /viper/ptmp2/edrod/xldvp_seg_fresh/mkseg_rocm_env/bin/activate
+MKSEG_PYTHON="${MKSEG_PYTHON:-python}"
 export PYTHONUNBUFFERED=1
 
-cd /viper/ptmp2/edrod/xldvp_seg_fresh
+cd /path/to/output
 
 python compute_normalization_params.py
 

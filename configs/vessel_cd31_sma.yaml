@@ -1,6 +1,7 @@
+# Example config — update paths for your environment
 name: vessel_cd31_sma
-czi_path: /fs/pool/pool-mann-axioscan/01_Users/EdRo_axioscan/xDVP/20251106_Fig2_nuc488_CD31_555_SMA647_PM750-EDFvar-stitch.czi
-output_dir: /fs/pool/pool-mann-edwin/vessel_cell_output/
+czi_path: /path/to/data/20251106_Fig2_nuc488_CD31_555_SMA647_PM750-EDFvar-stitch.czi
+output_dir: /path/to/output/vessel_cell_output/
 
 # CZI channels verified via czi_info.py (authoritative — NOT wavelength-sorted):
 #   [0] AF488 Ex493 Em517 → nuc488

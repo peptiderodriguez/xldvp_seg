@@ -1501,7 +1501,7 @@ def main():
     p2 = subparsers.add_parser('phase2_nuclear', help='Otsu nuclear seg + SAM2/ResNet deep features (GPU)')
     p2.add_argument('--input', required=True, help='Phase 1 output .npz')
     p2.add_argument('--num-gpus', type=int, default=2, help='Number of GPUs')
-    p2.add_argument('--sam2-checkpoint', default='/ptmp/edrod/MKsegmentation/checkpoints/sam2.1_hiera_large.pt',
+    p2.add_argument('--sam2-checkpoint', default='/path/to/checkpoints/sam2.1_hiera_large.pt',
                     help='SAM2 checkpoint path')
     p2.add_argument('--sam2-config', default='configs/sam2.1/sam2.1_hiera_l.yaml',
                     help='SAM2 config name')

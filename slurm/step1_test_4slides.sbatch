@@ -7,8 +7,8 @@
 #SBATCH --gres=gpu:2
 #SBATCH --mem=200G
 #SBATCH --time=1:30:00
-#SBATCH --output=/viper/ptmp2/edrod/xldvp_seg_fresh/logs/reinhard_test4_%j.out
-#SBATCH --error=/viper/ptmp2/edrod/xldvp_seg_fresh/logs/reinhard_test4_%j.err
+#SBATCH --output=/path/to/output/logs/reinhard_test4_%j.out
+#SBATCH --error=/path/to/output/logs/reinhard_test4_%j.err
 
 echo "============================================================"
 echo "QUICK TEST: Reinhard params on 4 slides (Otsu-only pipeline)"
@@ -17,13 +17,12 @@ echo "Job ID: $SLURM_JOB_ID"
 echo "Start time: $(date)"
 echo ""
 
-module load python-waterboa/2024.06
-source /viper/ptmp2/edrod/xldvp_seg_fresh/mkseg_rocm_env/bin/activate
+MKSEG_PYTHON="${MKSEG_PYTHON:-python}"
 
 export PYTHONUNBUFFERED=1
 export HDF5_USE_FILE_LOCKING=FALSE
 
-cd /viper/ptmp2/edrod/xldvp_seg_fresh
+cd /path/to/output
 
 python compute_normalization_params.py \
     --n-slides 4 \

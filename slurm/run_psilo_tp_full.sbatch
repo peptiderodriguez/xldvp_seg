@@ -7,8 +7,8 @@
 #SBATCH --mem=500G
 #SBATCH --time=72:00:00
 #SBATCH --gres=gpu:l40s:4
-#SBATCH --output=/fs/gpfs41/lv12/fileset02/pool/pool-mann-edwin/code_bin/xldvp_seg/logs/wm_pm_full_%j.out
-#SBATCH --error=/fs/gpfs41/lv12/fileset02/pool/pool-mann-edwin/code_bin/xldvp_seg/logs/wm_pm_full_%j.err
+#SBATCH --output=/path/to/output/code_bin/xldvp_seg/logs/wm_pm_full_%j.out
+#SBATCH --error=/path/to/output/code_bin/xldvp_seg/logs/wm_pm_full_%j.err
 
 # =============================================================================
 # Whole Mouse PM — tissue_pattern FULL 100% run
@@ -23,8 +23,8 @@
 
 set -e
 
-CZI="/fs/pool/pool-mann-axioscan/01_Users/EdRo_axioscan/MPIP_psilo/20251114_Pdgfra546_Msln750_PM647_nuc488-EDFvar-1-stitch-1.czi"
-OUTPUT="/fs/gpfs41/lv12/fileset02/pool/pool-mann-edwin/psilo_output/tp_full"
+CZI="/path/to/data/MPIP_psilo/20251114_Pdgfra546_Msln750_PM647_nuc488-EDFvar-1-stitch-1.czi"
+OUTPUT="/path/to/output/psilo_output/tp_full"
 
 echo "============================================================"
 echo "Job ID: $SLURM_JOB_ID"
@@ -35,10 +35,9 @@ echo "Project: Whole Mouse PM"
 echo "Mode:   tissue_pattern, 100% tiles, 4x L40S"
 echo "============================================================"
 
-source /fs/gpfs41/lv07/fileset03/home/b_mann/rodriguez/miniforge3/etc/profile.d/conda.sh
-conda activate mkseg
-
-cd /fs/gpfs41/lv12/fileset02/pool/pool-mann-edwin/code_bin/xldvp_seg
+MKSEG_PYTHON="${MKSEG_PYTHON:-python}"
+REPO="${REPO:-/path/to/xldvp_seg}"
+cd "$REPO"
 
 nvidia-smi -L
 echo "CPUs: $(nproc), RAM: $(free -h | awk '/^Mem:/{print $2}')"

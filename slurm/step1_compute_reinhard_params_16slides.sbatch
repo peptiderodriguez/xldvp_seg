@@ -7,8 +7,8 @@
 #SBATCH --gres=gpu:2
 #SBATCH --mem=200G
 #SBATCH --time=2:00:00
-#SBATCH --output=/viper/ptmp2/edrod/xldvp_seg_fresh/logs/reinhard_params_16slides_%j.out
-#SBATCH --error=/viper/ptmp2/edrod/xldvp_seg_fresh/logs/reinhard_params_16slides_%j.err
+#SBATCH --output=/path/to/output/logs/reinhard_params_16slides_%j.out
+#SBATCH --error=/path/to/output/logs/reinhard_params_16slides_%j.err
 
 echo "============================================================"
 echo "STEP 1: Compute Reinhard Normalization Parameters (16 slides)"
@@ -23,11 +23,10 @@ echo "Slides: ALL 16 slides (complete cohort)"
 echo "Method: Tissue-aware sampling (500k pixels per slide)"
 echo ""
 
-module load python-waterboa/2024.06
-source /viper/ptmp2/edrod/xldvp_seg_fresh/mkseg_rocm_env/bin/activate
+MKSEG_PYTHON="${MKSEG_PYTHON:-python}"
 export PYTHONUNBUFFERED=1
 
-cd /viper/ptmp2/edrod/xldvp_seg_fresh
+cd /path/to/output
 
 python compute_reinhard_params_8slides.py
 

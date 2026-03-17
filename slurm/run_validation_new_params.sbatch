@@ -11,19 +11,17 @@
 #SBATCH --error=logs/validate_norm_%j.err
 
 # Load modules
-module load python-waterboa/2024.06
-module load rocm/6.3
-source /viper/ptmp2/edrod/xldvp_seg_fresh/mkseg_rocm_env/bin/activate
+MKSEG_PYTHON="${MKSEG_PYTHON:-python}"
 
 # Run validation script
 export PYTHONUNBUFFERED=1
 export HDF5_USE_FILE_LOCKING=FALSE
 export HSA_OVERRIDE_GFX_VERSION=9.4.2
 
-cd /viper/ptmp2/edrod/xldvp_seg_fresh
+cd /path/to/output
 
-python /u/edrod/validate_median_reinhard.py
+$MKSEG_PYTHON validate_median_reinhard.py
 
 echo ""
 echo "Validation complete! Images saved to:"
-echo "/viper/ptmp2/edrod/xldvp_seg_fresh/validation_median_vs_mean/"
+echo "/path/to/output/validation_median_vs_mean/"

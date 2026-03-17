@@ -34,10 +34,10 @@ import statsmodels.formula.api as smf
 from statsmodels.stats.anova import anova_lm
 
 # ── Config ──────────────────────────────────────────────────────────────
-DETECTIONS_FULL = Path('/Volumes/pool-mann-edwin/bm_lmd_feb2026/mk_clf084_dataset/all_mks_clf075_light.json')
-DETECTIONS_BONE = Path('/Volumes/pool-mann-edwin/bm_lmd_feb2026/mk_clf084_dataset/all_mks_clf075_with_bone.json')
-TISSUE_AREAS = Path('/Volumes/pool-mann-edwin/bm_lmd_feb2026/mk_clf084_dataset/tissue_areas_by_bone.json')
-OUTPUT_DIR = Path('/Volumes/pool-mann-edwin/bm_lmd_feb2026/mk_clf084_dataset')
+DETECTIONS_FULL = Path('/path/to/data/bm_lmd_feb2026/mk_clf084_dataset/all_mks_clf075_light.json')
+DETECTIONS_BONE = Path('/path/to/data/bm_lmd_feb2026/mk_clf084_dataset/all_mks_clf075_with_bone.json')
+TISSUE_AREAS = Path('/path/to/data/bm_lmd_feb2026/mk_clf084_dataset/tissue_areas_by_bone.json')
+OUTPUT_DIR = Path('/path/to/data/bm_lmd_feb2026/mk_clf084_dataset')
 
 SKIP_PREFIXES = ('sam2_', 'resnet_', 'dinov2_')
 

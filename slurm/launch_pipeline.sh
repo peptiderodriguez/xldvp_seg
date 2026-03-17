@@ -48,8 +48,9 @@
 
 set -euo pipefail
 
-REPO=/fs/gpfs41/lv12/fileset02/pool/pool-mann-edwin/code_bin/xldvp_seg
-PYTHON=/fs/gpfs41/lv07/fileset03/home/b_mann/rodriguez/miniforge3/envs/mkseg/bin/python
+MKSEG_PYTHON="${MKSEG_PYTHON:-python}"
+REPO="${REPO:-/path/to/xldvp_seg}"
+PYTHON="$MKSEG_PYTHON"
 LOG_DIR="$REPO/slurm/logs"
 mkdir -p "$LOG_DIR"
 
@@ -231,7 +232,7 @@ fi
 if [[ -z "$OUTPUT_DIR" ]]; then
     # Create timestamped output directory
     if [[ -z "$OUTPUT_BASE" ]]; then
-        OUTPUT_BASE="/fs/pool/pool-mann-edwin/${CELL_TYPE}_output"
+        OUTPUT_BASE="/path/to/output/${CELL_TYPE}_output"
     fi
     SLIDE_NAME=$(basename "$CZI" .czi)
     TIMESTAMP=$(date +%Y%m%d_%H%M%S)

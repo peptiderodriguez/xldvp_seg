@@ -15,12 +15,12 @@ source ~/miniforge3/etc/profile.d/conda.sh
 conda activate mkseg
 
 REPO=/home/edrod/xldvp_seg
-CZI_DIR=/fs/pool/pool-mann-axioscan/01_Users/EdRo_axioscan/bonemarrow/2025_11_18
-OUTDIR=/viper/ptmp2/edrod
+CZI_DIR=/path/to/data/bonemarrow/2025_11_18
+OUTDIR=/path/to/output
 
 # Base dirs for the two slide groups
-BASE_ORIGINAL=/viper/ptmp2/edrod/unified_2026-02-11_100pct_2gpu
-BASE_RESCUED=/fs/pool/pool-mann-edwin/bm_lmd_feb2026/mk_clf084_dataset
+BASE_ORIGINAL=/path/to/output/unified_2026-02-11_100pct_2gpu
+BASE_RESCUED=/path/to/output/bm_lmd_feb2026/mk_clf084_dataset
 
 cd $REPO
 

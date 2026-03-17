@@ -106,9 +106,27 @@ def _transform_native_to_display(pts_xy_um, orig_w_um, orig_h_um,
     return pts
 
 
+def _build_serpentine_index():
+    """Build well→index mapping for 384-well serpentine order."""
+    from segmentation.lmd.well_plate import generate_plate_wells
+    wells = generate_plate_wells(308)
+    return {w: i for i, w in enumerate(wells)}
+
+
+_SERPENTINE_INDEX = None
+
+
+def _well_sort_key(well):
+    """Sort key for 384-well serpentine order (B2→B3→C3→C2)."""
+    global _SERPENTINE_INDEX
+    if _SERPENTINE_INDEX is None:
+        _SERPENTINE_INDEX = _build_serpentine_index()
+    return _SERPENTINE_INDEX.get(well, 999)
+
+
 def export_slide_xml(shapes_by_well, slide_name, output_path,
                      pixel_size_um, image_width_px, image_height_px,
-                     crosses_data=None):
+                     crosses_data=None, y_offset_um=0.0):
     """Export shapes to Leica LMD XML via py-lmd.
 
     Args:
@@ -119,6 +137,9 @@ def export_slide_xml(shapes_by_well, slide_name, output_path,
         pixel_size_um: for coordinate transforms.
         image_width_px, image_height_px: CZI bounding box dimensions (original).
         crosses_data: dict from crosses JSON (napari), or None.
+        y_offset_um: calibration correction added to contour Y in LMD space
+            (compensates for systematic laser-to-calibration offset; crosses
+            define the reference frame and are NOT shifted).
     """
     from lmd.lib import Collection
 
@@ -143,7 +164,7 @@ def export_slide_xml(shapes_by_well, slide_name, output_path,
         # Crosses are already in display space; Y-flip for LMD convention
         calibration_points = np.array([
             [c['x_um'], display_h_um - c['y_um']]
-            for c in crosses_data['crosses']
+            for c in crosses_data['crosses'][:3]
         ])
         log.info(f"  Calibration: user-placed crosses")
         log.info(f"  Display transforms: flip_h={flip_h}, rot90={rot90}")
@@ -166,14 +187,37 @@ def export_slide_xml(shapes_by_well, slide_name, output_path,
     # Visual cross shapes are NOT added — they have no well assignment and
     # confuse the LMD software (shows as extra shapes with 100/1000 um² area).
 
+    # Bright colors for wells (RGBDef = R + G*256 + B*65536)
+    WELL_COLORS = [
+        (255,   0,   0),  # red
+        (  0, 255,   0),  # green
+        (  0, 100, 255),  # blue
+        (255, 255,   0),  # yellow
+        (255,   0, 255),  # magenta
+        (  0, 255, 255),  # cyan
+        (255, 128,   0),  # orange
+        (128,   0, 255),  # purple
+        (  0, 255, 128),  # spring green
+        (255,   0, 128),  # rose
+        (128, 255,   0),  # lime
+        (  0, 128, 255),  # sky blue
+    ]
+
     # Transform contours from native CZI space to display space (matching
-    # crosses), then Y-flip for LMD convention
+    # crosses), then Y-flip for LMD convention.
+    # Wells are sorted in serpentine order so the LMD processes them
+    # in the same sequence as the plate layout.
     n_shapes = 0
-    for well, cell_list in shapes_by_well.items():
+    sorted_wells = sorted(shapes_by_well.keys(), key=_well_sort_key)
+    for wi, well in enumerate(sorted_wells):
+        r, g, b = WELL_COLORS[wi % len(WELL_COLORS)]
+        cell_list = shapes_by_well[well]
         for uid, contour_um in cell_list:
             polygon = _transform_native_to_display(
                 contour_um, orig_w_um, orig_h_um, flip_h, rot90)
             polygon[:, 1] = display_h_um - polygon[:, 1]   # Y-flip for LMD
+            if y_offset_um != 0:
+                polygon[:, 1] += y_offset_um               # calibration correction
 
             # Close polygon
             if not np.allclose(polygon[0], polygon[-1]):
@@ -183,7 +227,39 @@ def export_slide_xml(shapes_by_well, slide_name, output_path,
             n_shapes += 1
 
     collection.save(str(output_path))
-    log.info(f"  Exported {n_shapes} shapes to {output_path}")
+
+    # Patch RGBDef into saved XML — insert right after CapID element
+    # (compatible with all py-lmd versions)
+    import xml.etree.ElementTree as ET
+    tree = ET.parse(str(output_path))
+    root = tree.getroot()
+    shape_idx = 0
+    for wi, well in enumerate(sorted_wells):
+        r, g, b = WELL_COLORS[wi % len(WELL_COLORS)]
+        rgb_def = r + g * 256 + b * 65536
+        for _ in shapes_by_well[well]:
+            shape_idx += 1
+            shape_el = root.find(f'Shape_{shape_idx}')
+            if shape_el is not None:
+                rgb_el = ET.Element('RGBDef')
+                rgb_el.text = str(rgb_def)
+                # Insert after CapID (index 1) so LMD reads it before points
+                cap_idx = None
+                for ci, child in enumerate(shape_el):
+                    if child.tag == 'CapID':
+                        cap_idx = ci
+                        break
+                insert_pos = (cap_idx + 1) if cap_idx is not None else 1
+                shape_el.insert(insert_pos, rgb_el)
+    if shape_idx > 0:
+        test_el = root.find('Shape_1')
+        if test_el is None or test_el.find('RGBDef') is None:
+            log.warning("  RGBDef patching may have failed — verify py-lmd XML format")
+    tree.write(str(output_path), encoding='utf-8', xml_declaration=True)
+    log.info(f"  Exported {n_shapes} shapes in {len(sorted_wells)} wells "
+             f"(serpentine order) to {output_path}")
+    if y_offset_um != 0:
+        log.info(f"  Y offset correction: {y_offset_um:+.2f} um")
     return n_shapes
 
 
@@ -210,6 +286,8 @@ def main():
                         help='Where to save XML files')
     parser.add_argument('--slides', nargs='+', default=None,
                         help='Process only these slides (default: all)')
+    parser.add_argument('--y-offset-um', type=float, default=0.0,
+                        help='Y calibration correction in um (default: 0, compensates laser-to-calibration offset)')
     args = parser.parse_args()
 
     output_dir = Path(args.output_dir)
@@ -310,7 +388,7 @@ def main():
         n_shapes = export_slide_xml(
             shapes_by_well, slide_name, xml_path,
             pixel_size_um, image_width_px, image_height_px,
-            crosses_data,
+            crosses_data, y_offset_um=args.y_offset_um,
         )
 
         # Summary JSON

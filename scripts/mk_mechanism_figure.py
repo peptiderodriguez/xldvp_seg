@@ -14,7 +14,7 @@ from matplotlib.patches import Ellipse, FancyBboxPatch
 import numpy as np
 from pathlib import Path
 
-OUTPUT = Path('/Volumes/pool-mann-edwin/bm_lmd_feb2026/mk_clf084_dataset/mk_mechanism_figure.png')
+OUTPUT = Path('/path/to/output/bm_lmd_feb2026/mk_clf084_dataset/mk_mechanism_figure.png')
 
 # ── Actual data (median of slide medians, score >= 0.80) ────────────
 DATA = {

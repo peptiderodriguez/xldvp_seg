@@ -12,13 +12,13 @@
 # Re-extract SAM2 for 3 rescued slides (FGC2, FGC4, MHU4).
 # Single node — completed slides are auto-skipped via resume check.
 
-REPO=/fs/gpfs41/lv12/fileset02/pool/pool-mann-edwin/code_bin/xldvp_seg
-MKSEG_PYTHON=/fs/gpfs41/lv07/fileset03/home/b_mann/rodriguez/miniforge3/envs/mkseg/bin/python
+MKSEG_PYTHON="${MKSEG_PYTHON:-python}"
+REPO="${REPO:-/path/to/xldvp_seg}"
 
-DETECTIONS=/fs/pool/pool-mann-edwin/bm_lmd_feb2026/mk_clf084_dataset/all_mks_with_rejected3_full.json
-TRAINING=/fs/pool/pool-mann-edwin/bm_lmd_feb2026/mk_clf084_dataset/mk_clf_export_2026-02-11/mk_training_data_2026-02-11.json
-CZI_DIR=/fs/pool/pool-mann-axioscan/01_Users/EdRo_axioscan/bonemarrow/2025_11_18
-OUTPUT_DIR=/fs/pool/pool-mann-edwin/bm_lmd_feb2026/mk_clf084_dataset/sam2_embeddings
+DETECTIONS=/path/to/output/bm_lmd_feb2026/mk_clf084_dataset/all_mks_with_rejected3_full.json
+TRAINING=/path/to/output/bm_lmd_feb2026/mk_clf084_dataset/mk_clf_export_2026-02-11/mk_training_data_2026-02-11.json
+CZI_DIR=/path/to/data/bonemarrow/2025_11_18
+OUTPUT_DIR=/path/to/output/bm_lmd_feb2026/mk_clf084_dataset/sam2_embeddings
 
 echo "=========================================="
 echo "SAM2 MK Extraction — Rescued slides fix"

@@ -35,10 +35,9 @@ echo "Node:            $SLURM_NODELIST"
 echo "Start time:      $(date)"
 echo "============================================================"
 
-cd /viper/ptmp2/edrod/xldvp_seg_fresh
+cd /path/to/output
 
-module load python-waterboa/2024.06
-source /viper/ptmp2/edrod/xldvp_seg_fresh/mkseg_rocm_env/bin/activate
+MKSEG_PYTHON="${MKSEG_PYTHON:-python}"
 export PYTHONUNBUFFERED=1
 
 python generate_combined_html.py \

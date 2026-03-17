@@ -1,7 +1,8 @@
+# Example config — update paths for your environment
 name: senescence_tdTomato
-czi_dir: /fs/pool/pool-mann-axioscan/01_Users/EdwinMarc/senescence2026/
+czi_dir: /path/to/data/senescence2026/
 czi_glob: "20260213_*-stitch.czi"
-output_dir: /fs/pool/pool-mann-edwin/senescence_output/
+output_dir: /path/to/output/senescence_output/
 
 channels: {0: nuc488, 1: NeuN647, 2: tdTomato555}
 cell_type: cell

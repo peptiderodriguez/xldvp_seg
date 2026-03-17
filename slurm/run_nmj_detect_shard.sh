@@ -7,8 +7,8 @@
 #SBATCH --mem=500G
 #SBATCH --gres=gpu:l40s:4
 #SBATCH --time=12:00:00
-#SBATCH --output=/fs/gpfs41/lv12/fileset02/pool/pool-mann-edwin/code_bin/xldvp_seg/slurm/logs/nmj_shard_%A_%a.out
-#SBATCH --error=/fs/gpfs41/lv12/fileset02/pool/pool-mann-edwin/code_bin/xldvp_seg/slurm/logs/nmj_shard_%A_%a.err
+#SBATCH --output=/path/to/xldvp_seg/slurm/logs/nmj_shard_%A_%a.out
+#SBATCH --error=/path/to/xldvp_seg/slurm/logs/nmj_shard_%A_%a.err
 
 # NMJ detection shard — called by array job
 # Usage: sbatch --array=0-3 run_nmj_detect_shard.sh <OUTPUT_DIR> <SAMPLE_FRACTION> [CLASSIFIER] [ANNOTATIONS]
@@ -21,9 +21,10 @@
 
 set -euo pipefail
 
-REPO=/fs/gpfs41/lv12/fileset02/pool/pool-mann-edwin/code_bin/xldvp_seg
-CZI="/fs/pool/pool-mann-axioscan/01_Users/EdRo_axioscan/xDVP/20251107_Fig5_nuc488_Bgtx647_NfL750-1-EDFvar-stitch.czi"
-PYTHON=/fs/gpfs41/lv07/fileset03/home/b_mann/rodriguez/miniforge3/envs/mkseg/bin/python
+MKSEG_PYTHON="${MKSEG_PYTHON:-python}"
+REPO="${REPO:-/path/to/xldvp_seg}"
+CZI="/path/to/data/20251107_Fig5_nuc488_Bgtx647_NfL750-1-EDFvar-stitch.czi"
+PYTHON="$MKSEG_PYTHON"
 
 OUTPUT_DIR="${1:?ERROR: OUTPUT_DIR required as first argument}"
 SAMPLE_FRACTION="${2:?ERROR: SAMPLE_FRACTION required as second argument}"

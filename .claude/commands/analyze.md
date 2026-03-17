@@ -22,11 +22,11 @@ You serve three roles throughout the workflow:
 
 **Adaptive recommendations after results come in:**
 - After detection: check detection count. If >200K, suggest `--html-sample-fraction 0.05` for the viewer. If <500, suggest lowering the detection threshold.
-- After classification: check F1 and class balance. If morph F1 < 0.85, suggest trying `--feature-set morph_sam2` or `--extract-deep-features` on the next round — deep features are worth exploring when basic features underperform.
+- After classification: check F1 and class balance. If morph F1 is low, suggest trying `--feature-set morph_sam2` or `--extract-deep-features` on the next round — deep features are worth exploring when basic features underperform.
 - After marker classification: check positive/negative ratios. If a marker shows <1% or >99% positive, flag it as potentially mis-thresholded and suggest reviewing with a different method (gmm vs otsu).
 
-**Feature recommendations:** Morph-only (78 features) is the pragmatic default — fast, nearly as good as all 6,478 combined (F1=0.900 vs 0.909 on NMJ benchmark). But deep features are worth trying when:
-- Morph+SAM2 underperforms after annotation (F1 < 0.85)
+**Feature recommendations:** Morph-only (78 features) is the pragmatic default — fast, often competitive with all 6,478 combined. But optimal feature sets vary by cell type and staining — always run `compare_feature_sets.py` on your specific data. Deep features are worth trying when:
+- Morph+SAM2 underperforms after annotation
 - The cell type has subtle visual differences not captured by shape (e.g., maturation states)
 - The user wants to explore — it's a reasonable experiment, not a waste of resources
 
@@ -57,9 +57,9 @@ Use this info throughout to set `--num-gpus`, SLURM `--mem`, `--cpus-per-task`, 
 1. **Inspect** — We look at your slide's channels (which stains/fluorophores are in which position). This takes seconds.
 2. **Detect** — The pipeline scans every tile of your slide with AI models (SAM2 + custom segmentation) to find all the cells. Each cell gets a precise contour outline and a set of **features** — measurements of its shape, size, brightness in each channel, and visual embeddings from AI models. This runs on GPUs and takes 1-3 hours depending on slide size.
 3. **Review** — You open a web viewer showing cropped images of detected cells. You click yes (real cell) or no (false positive) on ~200+ of them. This teaches the system what you're looking for.
-4. **Classify** — A random forest classifier trains on your annotations using those features to automatically score every detection on the whole slide (thousands of cells) in seconds — no re-detection needed. Features matter here: shape features alone get ~90% accuracy, but adding channel intensity or deep learning embeddings can help for subtle distinctions.
+4. **Classify** — A random forest classifier trains on your annotations using those features to automatically score every detection on the whole slide (thousands of cells) in seconds — no re-detection needed. Features matter here: shape features alone often work well, but adding channel intensity or deep learning embeddings can help for subtle distinctions.
 5. **Markers** — If you have multiple fluorescent channels (e.g., different antibodies), we classify each cell as positive/negative for each marker. This tells you cell types (e.g., NeuN+ neurons vs NeuN- glia).
-6. **Explore** (optional) — The features can also reveal cell subtypes you didn't know about. UMAP dimensionality reduction + clustering can show natural groupings in your data — morphological subtypes, maturation states, etc.
+6. **Explore** (optional) — The features can also reveal cell subtypes you didn't know about. UMAP dimensionality reduction + clustering can show natural groupings in your data — morphological subtypes, maturation states, etc. Spatial analysis can map tissue zones and cell neighborhoods.
 7. **Export for LMD** — The pipeline packages your selected cells into an XML file that the laser microdissection machine reads. It assigns cells to wells on a 384-well plate, adds control regions, and optimizes the cutting path.
 8. **DVP** — The LMD cuts out your cells, and they go into the spatial proteomics pipeline for mass spec analysis."*
 
@@ -78,10 +78,40 @@ This gives beginners the full context so they understand why each step matters �
 | **Markers** | Otsu (with local background subtraction) / GMM marker classification | `scripts/classify_markers.py` |
 | **Explore** | UMAP, PCA, HDBSCAN clustering, AnnData/scanpy export | `scripts/cluster_by_features.py` |
 | **Spatial** | Delaunay networks, community detection, cell neighborhoods | `scripts/spatial_cell_analysis.py` |
+| **Tissue zones** | Spatially-constrained zone discovery, transects, bone region annotation | `scripts/assign_tissue_zones.py`, `scripts/zonation_transect.py`, `scripts/annotate_bone_regions.py` |
+| **Tissue area** | Variance-based tissue detection, area measurement from CZI | `scripts/calculate_tissue_areas.py` |
 | **Visualize** | Multi-slide scrollable HTML with ROI drawing + stats | `scripts/generate_multi_slide_spatial_viewer.py` |
+| **Tissue overlay** | Fluorescence image + cell overlay + ROI + LMD export in one viewer | `scripts/generate_tissue_overlay.py` |
 | **LMD** | Contour dilation+RDP, clustering, well assignment, XML export | `run_lmd_export.py` |
 | **SpatialData** | Export to scverse ecosystem (squidpy, scanpy, anndata) | `scripts/convert_to_spatialdata.py` |
 | **Convert** | CZI to OME-Zarr pyramids for Napari | `scripts/czi_to_ome_zarr.py` |
+| **One-command** | Classify → spatial cluster → viewer → serve (all in one) | `scripts/view_slide.py` |
+
+**Cell-type-specific analysis scripts** (mention when relevant to the user's cell type):
+
+| Cell type | Script | What it does |
+|-----------|--------|-------------|
+| **MK** | `scripts/maturation_analysis.py` | MK maturation staging using nuclear deep features |
+| **MK** | `scripts/mk_comprehensive_analysis.py` | Comprehensive MK analysis across all feature dimensions |
+| **MK** | `scripts/mk_interaction_analysis.py` | ART interaction effects for MK morphological features |
+| **MK** | `scripts/mk_mechanism_figure.py` | Generate mechanosensing figure with data-faithful cells |
+| **MK** | `scripts/split_detections_by_bone.py` | Split detections by bone region (femur/humerus) |
+| **MK** | `scripts/select_mks_for_lmd.py` | MK replicate selection + multi-plate wells |
+| **Vessel** | `scripts/vessel_community_analysis.py` | Multi-scale vessel structure detection |
+| **Vessel** | `scripts/train_vessel_detector.py` | Train vessel RF detector |
+| **Vessel** | `scripts/train_vessel_classifier.py` | Train vessel type classifier (6 types) |
+| **Vessel** | `scripts/rbc_vascularization_analysis.py` | RBC vascularization analysis for MK HU project |
+| **Islet** | `scripts/analyze_islets.py` | Spatial analysis of pancreatic islets |
+| **Islet** | `scripts/segment_islet_regions.py` | ROI-based islet segmentation (nuc vs PM+nuc comparison) |
+| **Islet** | `scripts/generate_islet_overview.py` | HTML islet overview from completed run |
+| **Mesothelium** | `scripts/generate_msln_annotation.py` | Reclassify Msln+ cells into tiers (HTML tool) |
+| **Mesothelium** | `scripts/generate_msln_cluster_viewer.py` | Msln+ clustering results viewer |
+| **Mesothelium** | `scripts/generate_msln_annotation_crops.py` | Msln crop generation for annotation |
+| **Any** | `scripts/expand_nuclei_masks.py` | Expand nuclei-only masks to approximate cell body |
+| **Any** | `scripts/extract_sam2_embeddings.py` | Extract SAM2 embeddings for existing detections |
+| **Any** | `scripts/generate_rbc_annotation_html.py` | RBC cluster candidate annotation HTML |
+| **Any** | `scripts/generate_cluster_gallery.py` | Visual gallery of clustered detections |
+| **Any** | `scripts/compare_tissue_vs_bone_outlines.py` | Compare tissue detection vs manual bone region annotations |
 
 Tell the user: *"You can ask me to run any of these at any time, or just describe what you want to do."*
 
@@ -134,6 +164,8 @@ This replaces manual `--channel`, `--cellpose-input-channels`, and `--marker-cha
 - MK/HSPC (bone marrow, large cells)
 - Vessel (needs SMA + CD31 channels)
 - Mesothelium (ribbon-like structures)
+- Islet (pancreatic, needs nuclear + membrane channels)
+- Tissue Pattern (brain FISH, coronal sections)
 - Generic cell (Cellpose, any tissue) — ask which channels for cyto/nuc input
 
 **Step 7 — Offer preprocessing preview.** Ask: *"Want to preview flat-field or photobleach correction before the full run?"* If yes, run `scripts/preview_preprocessing.py --czi-path <path> --channel <N> --preprocessing all --output-dir <output>/preview/` and show the output paths.
@@ -145,7 +177,7 @@ This replaces manual `--channel`, `--cellpose-input-channels`, and `--marker-cha
 - Multi-channel features: `--all-channels` if >1 channel is relevant. Add `--channels "0,1,2"` to skip failed stains.
   - *Why?* Each channel adds ~15 intensity features per cell (mean, std, percentiles, SNR). Without `--all-channels`, marker expression is not captured in features and the RF classifier has no intensity signal to work with.
 - Deep features: `--extract-deep-features` adds ResNet+DINOv2 (6,144 dims). Off by default.
-  - *Why off by default?* Morphological features alone reach F1=0.900 on the NMJ benchmark. Deep features increase detection time but can help for cell types where shape alone isn't discriminative enough (maturation states, subtle phenotypes). Worth trying if morph+SAM2 gives F1 < 0.85 after annotation, or if you just want to explore what the model can see.
+  - *Why off by default?* Morphological features alone are often sufficient. Deep features increase detection time but can help for cell types where shape alone isn't discriminative enough (maturation states, subtle phenotypes). Always run `compare_feature_sets.py` on your specific data to find the best combination — performance varies by cell type and staining.
 - Sample fraction: always `1.0` (the default) — detect 100% of tissue tiles. Use `0.01` only for a quick sanity-check that the pipeline runs correctly on a new slide.
   - *Why always 100%?* Detection is checkpointed per-tile and the classifier is applied post-hoc — you never re-detect. Annotate from the HTML subsample (`html_sample_fraction: 0.10`) which shows 10% of *detections* in the browser, then train and score all detections without re-running anything.
 - Preprocessing flags: `--photobleaching-correction` for sequential tile scans with intensity decay. Flat-field is ON by default (`--no-normalize-features` to disable).
@@ -269,13 +301,13 @@ PYTHONPATH=$REPO $MKSEG_PYTHON $REPO/train_classifier.py \
     --detections <detections.json> \
     --annotations <annotations.json> \
     --output-dir <output> \
-    --feature-set morph  # or morph_sam2, all
+    --feature-set morph  # or morph_sam2, channel_stats, all
 ```
 
-Offer to run `scripts/compare_feature_sets.py` first to find the best feature combination.
+Offer to run `scripts/compare_feature_sets.py` first to find the best feature combination for this specific data.
 
 **Step 13b — Review classifier results (adaptive).** After training, check the metrics:
-- **F1 > 0.90**: Great — morph features are working well. Proceed to scoring.
+- **F1 > 0.90**: Great — proceed to scoring.
 - **F1 0.80-0.90**: Solid. If you want to push higher, try `--feature-set morph_sam2` or even `all`. Worth the experiment.
 - **F1 < 0.80**: The classifier is struggling. Possible causes:
   - Too few annotations (< 100 per class) — annotate more
@@ -301,7 +333,7 @@ PYTHONPATH=$REPO $MKSEG_PYTHON $REPO/scripts/regenerate_html.py \
 
 ---
 
-## Phase 4: Spatial Analysis + Exploration
+## Phase 4: Marker Classification + Spatial Analysis
 
 **Step 15 — Marker classification** (if multi-channel):
 
@@ -351,7 +383,31 @@ PYTHONPATH=$REPO $MKSEG_PYTHON $REPO/scripts/classify_markers.py \
 - `{marker}_threshold`: Otsu threshold used
 - `marker_profile`: combined (e.g., `NeuN+/tdTomato-`) when multiple markers
 
-**Step 16 — Spatial network analysis:**
+**Step 16 — Tissue zone assignment** (for multi-marker slides with spatial organization):
+
+If the slide has multiple markers that define tissue zones (e.g., hepatic zonation with GluI/Pck1, or bone marrow regions):
+```bash
+# Automatic spatially-constrained zone discovery
+PYTHONPATH=$REPO $MKSEG_PYTHON $REPO/scripts/assign_tissue_zones.py \
+    --detections <detections.json> \
+    --output-dir <output>/zones
+
+# Hepatic zonation transect analysis (pericentral → periportal gradients)
+PYTHONPATH=$REPO $MKSEG_PYTHON $REPO/scripts/zonation_transect.py \
+    --detections <detections.json> \
+    --output-dir <output>/transects
+
+# Bone region annotation (interactive HTML tool)
+PYTHONPATH=$REPO $MKSEG_PYTHON $REPO/scripts/annotate_bone_regions.py \
+    --detections <detections.json> \
+    --output <output>/bone_regions.json
+
+# Calculate tissue areas from CZI (variance-based tissue detection)
+PYTHONPATH=$REPO $MKSEG_PYTHON $REPO/scripts/calculate_tissue_areas.py \
+    --czi-path <czi_path> --output-dir <output>
+```
+
+**Step 17 — Spatial network analysis:**
 ```bash
 PYTHONPATH=$REPO $MKSEG_PYTHON $REPO/scripts/spatial_cell_analysis.py \
     --detections <detections.json> \
@@ -362,7 +418,7 @@ PYTHONPATH=$REPO $MKSEG_PYTHON $REPO/scripts/spatial_cell_analysis.py \
     --pixel-size <from czi_info>
 ```
 
-**Step 17 — Feature exploration.** Offer UMAP/HDBSCAN clustering:
+**Step 18 — Feature exploration.** Offer UMAP/HDBSCAN clustering:
 ```bash
 PYTHONPATH=$REPO $MKSEG_PYTHON $REPO/scripts/cluster_by_features.py \
     --detections <detections.json> \
@@ -370,7 +426,7 @@ PYTHONPATH=$REPO $MKSEG_PYTHON $REPO/scripts/cluster_by_features.py \
     --feature-groups "morph,sam2"  # or morph,sam2,channel,deep
 ```
 
-**Step 18 — Interactive spatial viewer:**
+**Step 19 — Interactive spatial viewer:**
 ```bash
 PYTHONPATH=$REPO $MKSEG_PYTHON $REPO/scripts/generate_multi_slide_spatial_viewer.py \
     --input-dir <output> \
@@ -379,13 +435,83 @@ PYTHONPATH=$REPO $MKSEG_PYTHON $REPO/scripts/generate_multi_slide_spatial_viewer
     --output <output>/spatial_viewer.html
 ```
 
+Or use the tissue overlay viewer (fluorescence image + cell overlay + ROI + LMD export):
+```bash
+PYTHONPATH=$REPO $MKSEG_PYTHON $REPO/scripts/generate_tissue_overlay.py \
+    --detections <detections.json> \
+    --czi-path <czi_path> \
+    --output <output>/tissue_overlay.html
+```
+
+Or the all-in-one command:
+```bash
+PYTHONPATH=$REPO $MKSEG_PYTHON $REPO/scripts/view_slide.py \
+    --detections <detections.json> \
+    --czi-path <czi_path> \
+    --output-dir <output>
+```
+This chains: classify_markers → spatial_cell_analysis → generate_multi_slide_spatial_viewer → serve_html.
+
+**Step 19b — Cell-type-specific analyses.**
+
+For **MK** detections, offer these additional analyses:
+```bash
+# Maturation staging using nuclear deep features
+PYTHONPATH=$REPO $MKSEG_PYTHON $REPO/scripts/maturation_analysis.py \
+    --detections <detections.json> --output-dir <output>/maturation
+
+# Comprehensive multi-dimensional analysis
+PYTHONPATH=$REPO $MKSEG_PYTHON $REPO/scripts/mk_comprehensive_analysis.py \
+    --detections <detections.json> --output-dir <output>/comprehensive
+
+# Split by bone region (femur/humerus) after bone annotation
+PYTHONPATH=$REPO $MKSEG_PYTHON $REPO/scripts/split_detections_by_bone.py \
+    --detections <detections.json> \
+    --bone-regions <bone_regions.json> \
+    --output-dir <output>
+```
+
+For **vessel** detections:
+```bash
+# Multi-scale vessel community analysis
+PYTHONPATH=$REPO $MKSEG_PYTHON $REPO/scripts/vessel_community_analysis.py \
+    --detections <detections.json> \
+    --output-dir <output>/vessel_communities
+
+# RBC vascularization analysis
+PYTHONPATH=$REPO $MKSEG_PYTHON $REPO/scripts/rbc_vascularization_analysis.py \
+    --detections <detections.json> --output-dir <output>/rbc
+```
+
+For **islet** detections:
+```bash
+# Spatial islet analysis
+PYTHONPATH=$REPO $MKSEG_PYTHON $REPO/scripts/analyze_islets.py \
+    --detections <detections.json> --output-dir <output>/islets
+
+# HTML overview
+PYTHONPATH=$REPO $MKSEG_PYTHON $REPO/scripts/generate_islet_overview.py \
+    --detections <detections.json> --output <output>/islet_overview.html
+```
+
+For **mesothelium** detections:
+```bash
+# Tier reclassification HTML tool
+PYTHONPATH=$REPO $MKSEG_PYTHON $REPO/scripts/generate_msln_annotation.py \
+    --detections <detections.json> --output <output>/msln_annotation.html
+
+# Cluster viewer
+PYTHONPATH=$REPO $MKSEG_PYTHON $REPO/scripts/generate_msln_cluster_viewer.py \
+    --detections <detections.json> --output <output>/msln_clusters.html
+```
+
 ---
 
 ## Phase 4.5: SpatialData Export (scverse ecosystem)
 
 *SpatialData export runs automatically at the end of detection (if deps installed). This phase covers standalone conversion for existing runs, squidpy analysis, and verification.*
 
-**Step 18b — Check if SpatialData was auto-generated.**
+**Step 20 — Check if SpatialData was auto-generated.**
 Look for `*_spatialdata.zarr` in the output directory. If it exists, tell the user: *"A SpatialData zarr store was automatically generated during detection."*
 
 If it doesn't exist (e.g., older run), offer to generate it:
@@ -398,7 +524,7 @@ $MKSEG_PYTHON $REPO/scripts/convert_to_spatialdata.py \
     --overwrite
 ```
 
-**Step 18c — Ask about squidpy spatial analyses.**
+**Step 21 — Ask about squidpy spatial analyses.**
 *"Want to run scverse spatial statistics on this data? This computes neighborhood enrichment, co-occurrence patterns, Moran's I spatial autocorrelation, and Ripley's L function."*
 
 If the user has marker classifications (e.g., from `classify_markers.py`), ask which column to use:
@@ -421,7 +547,7 @@ Outputs:
 - `*_spatialdata_squidpy/nhood_enrichment.png` — cell type co-location patterns
 - `*_spatialdata_squidpy/co_occurrence.png` — co-occurrence at multiple distances
 
-**Step 18d — Show how to use the output.** For beginners:
+**Step 22 — Show how to use the output.** For beginners:
 *"The SpatialData zarr store integrates with the entire scverse ecosystem. You can load it in Python for custom analysis:"*
 ```python
 import spatialdata as sd
@@ -444,14 +570,14 @@ sc.pl.umap(adata, color=["area", "rf_prediction"])
 
 ## Phase 5: LMD Export
 
-**Step 19 — Ask about LMD.** *"Do you want to export for laser microdissection?"* If no, stop here.
+**Step 23 — Ask about LMD.** *"Do you want to export for laser microdissection?"* If no, stop here.
 
-**Step 20 — OME-Zarr** is auto-generated at the end of every pipeline run (from SHM, fast). No separate conversion needed. Use `--no-zarr` to skip, `--force-zarr` to overwrite existing. Only needed manually for standalone CZI conversion:
+**Step 24 — OME-Zarr** is auto-generated at the end of every pipeline run (from SHM, fast). No separate conversion needed. Use `--no-zarr` to skip, `--force-zarr` to overwrite existing. Only needed manually for standalone CZI conversion:
 ```bash
 PYTHONPATH=$REPO $MKSEG_PYTHON $REPO/scripts/czi_to_ome_zarr.py <czi_path> <output>.zarr
 ```
 
-**Step 21 — Place reference crosses** in Napari. CZI-native is recommended (no OME-Zarr conversion needed):
+**Step 25 — Place reference crosses** in Napari. CZI-native is recommended (no OME-Zarr conversion needed):
 ```bash
 # CZI-native (recommended)
 PYTHONPATH=$REPO $MKSEG_PYTHON $REPO/scripts/napari_place_crosses.py \
@@ -472,7 +598,7 @@ PYTHONPATH=$REPO $MKSEG_PYTHON $REPO/scripts/napari_place_crosses.py \
 
 Keybinds: R/G/B to select cross color, Space to place, S to save, U to undo, Q to save+quit. Use `--fresh` to ignore previously saved crosses.
 
-**Step 22 — Run LMD export:**
+**Step 26 — Run LMD export:**
 ```bash
 PYTHONPATH=$REPO $MKSEG_PYTHON $REPO/run_lmd_export.py \
     --detections <detections.json> \
@@ -493,9 +619,9 @@ PYTHONPATH=$REPO $MKSEG_PYTHON $REPO/run_lmd_export.py \
     --generate-controls --export
 ```
 
-**Step 23 — Validate.** Check the output XML exists, display well count, show the path for transfer to the LMD instrument.
+**Step 27 — Validate.** Check the output XML exists, display well count, show the path for transfer to the LMD instrument.
 
-**Step 24 — Replicate building (proteomics).** For experiments collecting area-normalized replicates (e.g., DVP with multiple cell-equivalents per well):
+**Step 28 — Replicate building (proteomics).** For experiments collecting area-normalized replicates (e.g., DVP with multiple cell-equivalents per well):
 ```bash
 # Generic: use segmentation.lmd.selection.select_cells_for_lmd() in Python
 # MK-specific wrapper with multi-plate well assignment:

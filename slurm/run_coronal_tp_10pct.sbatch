@@ -7,8 +7,8 @@
 #SBATCH --mem=500G
 #SBATCH --time=12:00:00
 #SBATCH --gres=gpu:l40s:4
-#SBATCH --output=/fs/gpfs41/lv12/fileset02/pool/pool-mann-edwin/code_bin/xldvp_seg/logs/coronal_tp10_%j.out
-#SBATCH --error=/fs/gpfs41/lv12/fileset02/pool/pool-mann-edwin/code_bin/xldvp_seg/logs/coronal_tp10_%j.err
+#SBATCH --output=/path/to/output/code_bin/xldvp_seg/logs/coronal_tp10_%j.out
+#SBATCH --error=/path/to/output/code_bin/xldvp_seg/logs/coronal_tp10_%j.err
 
 # =============================================================================
 # Whole-mount coronal section — tissue_pattern 10% test run
@@ -18,8 +18,8 @@
 
 set -e
 
-CZI="/fs/pool/pool-mann-axioscan/01_Users/EdRo_axioscan/xDVP/20250905_xlDVP_PM647_conjugatedAbs_nuc488_test-EDFvar-stitch.czi"
-OUTPUT="/fs/gpfs41/lv12/fileset02/pool/pool-mann-edwin/coronal_output/tp_10pct"
+CZI="/path/to/data/20250905_xlDVP_PM647_conjugatedAbs_nuc488_test-EDFvar-stitch.czi"
+OUTPUT="/path/to/output/coronal_output/tp_10pct"
 
 echo "============================================================"
 echo "Job ID: $SLURM_JOB_ID"
@@ -29,10 +29,9 @@ echo "Output: $OUTPUT"
 echo "Mode:   tissue_pattern, 10% tiles, 4x L40S"
 echo "============================================================"
 
-source /fs/gpfs41/lv07/fileset03/home/b_mann/rodriguez/miniforge3/etc/profile.d/conda.sh
-conda activate mkseg
-
-cd /fs/gpfs41/lv12/fileset02/pool/pool-mann-edwin/code_bin/xldvp_seg
+MKSEG_PYTHON="${MKSEG_PYTHON:-python}"
+REPO="${REPO:-/path/to/xldvp_seg}"
+cd "$REPO"
 
 nvidia-smi -L
 echo "CPUs: $(nproc), RAM: $(free -h | awk '/^Mem:/{print $2}')"

@@ -1,6 +1,7 @@
+# Example config — update paths for your environment
 name: msln_bands
-czi_path: /fs/pool/pool-mann-axioscan/01_Users/EdRo_axioscan/xDVP/20251114_Pdgfra546_Msln750_PM647_nuc488-EDFvar-1.czi
-output_dir: /fs/pool/pool-mann-edwin/msln_cell_output/
+czi_path: /path/to/data/20251114_Pdgfra546_Msln750_PM647_nuc488-EDFvar-1.czi
+output_dir: /path/to/output/msln_cell_output/
 
 # CZI channels verified via czi_info.py (authoritative — NOT wavelength-sorted):
 #   [0] AF488 Ex493 Em517 → nuc488

@@ -8,8 +8,8 @@
 #SBATCH --time=24:00:00
 #SBATCH --gres=gpu:l40s:4
 #SBATCH --array=0-7
-#SBATCH --output=/fs/gpfs41/lv12/fileset02/pool/pool-mann-edwin/code_bin/xldvp_seg/logs/brain_10pct_%A_%a.out
-#SBATCH --error=/fs/gpfs41/lv12/fileset02/pool/pool-mann-edwin/code_bin/xldvp_seg/logs/brain_10pct_%A_%a.err
+#SBATCH --output=/path/to/output/code_bin/xldvp_seg/logs/brain_10pct_%A_%a.out
+#SBATCH --error=/path/to/output/code_bin/xldvp_seg/logs/brain_10pct_%A_%a.err
 
 # =============================================================================
 # Brain FISH (goldfish) — tissue_pattern 10% test
@@ -27,8 +27,8 @@
 set -e
 
 # Map array index -> CZI + scene
-CZI_DIR="/fs/pool/pool-mann-axioscan/01_Users/EdRo_axioscan/MPIP_psilo"
-OUT_BASE="/fs/gpfs41/lv12/fileset02/pool/pool-mann-edwin/brain_fish_output"
+CZI_DIR="/path/to/data/MPIP_psilo"
+OUT_BASE="/path/to/output/brain_fish_output"
 
 CZIS=(
     "19022026_gold_fish_ctrl_psil_488Slc17a7_555Gad1_647Htr2a_750Ntrk2_Hoechst-EDFvar-stitch.czi"
@@ -61,10 +61,9 @@ echo "Output: $OUTPUT"
 echo "Mode:   tissue_pattern, 10% tiles, 4x L40S"
 echo "============================================================"
 
-source /fs/gpfs41/lv07/fileset03/home/b_mann/rodriguez/miniforge3/etc/profile.d/conda.sh
-conda activate mkseg
-
-cd /fs/gpfs41/lv12/fileset02/pool/pool-mann-edwin/code_bin/xldvp_seg
+MKSEG_PYTHON="${MKSEG_PYTHON:-python}"
+REPO="${REPO:-/path/to/xldvp_seg}"
+cd "$REPO"
 
 nvidia-smi -L
 echo "CPUs: $(nproc), RAM: $(free -h | awk '/^Mem:/{print $2}')"

@@ -6,8 +6,8 @@
 #SBATCH --cpus-per-task=16
 #SBATCH --mem=64G
 #SBATCH --time=1:00:00
-#SBATCH --output=/fs/gpfs41/lv12/fileset02/pool/pool-mann-edwin/code_bin/xldvp_seg/logs/islet_analysis_%j.out
-#SBATCH --error=/fs/gpfs41/lv12/fileset02/pool/pool-mann-edwin/code_bin/xldvp_seg/logs/islet_analysis_%j.err
+#SBATCH --output=/path/to/xldvp_seg/logs/islet_analysis_%j.out
+#SBATCH --error=/path/to/xldvp_seg/logs/islet_analysis_%j.err
 
 # =============================================================================
 # Islet Analysis — BS-100 (84,610 cells)
@@ -17,8 +17,8 @@
 
 set -e
 
-RUN_DIR="/fs/pool/pool-mann-edwin/islet_output/2025_09_03_30610012_BS-100_20260224_084344_100pct"
-CZI="/fs/pool/pool-mann-edwin/marvin_test/2025_09_03_30610012_BS-100.czi"
+RUN_DIR="/path/to/output/islet_output/2025_09_03_30610012_BS-100_20260224_084344_100pct"
+CZI="/path/to/output/marvin_test/2025_09_03_30610012_BS-100.czi"
 
 echo "============================================================"
 echo "Job ID: $SLURM_JOB_ID"
@@ -27,10 +27,9 @@ echo "Project: Islet Analysis — BS-100"
 echo "Run dir: $RUN_DIR"
 echo "============================================================"
 
-source /fs/gpfs41/lv07/fileset03/home/b_mann/rodriguez/miniforge3/etc/profile.d/conda.sh
-conda activate mkseg
-
-cd /fs/gpfs41/lv12/fileset02/pool/pool-mann-edwin/code_bin/xldvp_seg
+MKSEG_PYTHON="${MKSEG_PYTHON:-python}"
+REPO="${REPO:-/path/to/xldvp_seg}"
+cd "$REPO"
 
 echo "CPUs: $(nproc), RAM: $(free -h | awk '/^Mem:/{print $2}')"
 

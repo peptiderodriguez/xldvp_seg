@@ -5,8 +5,8 @@
 #SBATCH --cpus-per-task=16
 #SBATCH --mem=64G
 #SBATCH --time=4:00:00
-#SBATCH --output=/viper/ptmp2/edrod/xldvp_seg_fresh/logs/html_combined_%j.out
-#SBATCH --error=/viper/ptmp2/edrod/xldvp_seg_fresh/logs/html_combined_%j.err
+#SBATCH --output=/path/to/output/logs/html_combined_%j.out
+#SBATCH --error=/path/to/output/logs/html_combined_%j.err
 
 echo "============================================================"
 echo "Generate Combined HTML for All 16 Slides"
@@ -16,13 +16,12 @@ echo "Node: $SLURM_NODELIST"
 echo "Start time: $(date)"
 echo ""
 
-# Activate environment
-source /viper/ptmp2/edrod/xldvp_seg_fresh/activate_env.sh
+# Environment
+MKSEG_PYTHON="${MKSEG_PYTHON:-python}"
+cd /path/to/output
 
-cd /viper/ptmp2/edrod/xldvp_seg_fresh
-
-OUTPUT_DIR="/viper/ptmp2/edrod/unified_10pct_mi300a"
-CZI_DIR="/viper/ptmp2/edrod/2025_11_18"
+OUTPUT_DIR="/path/to/output/unified_10pct"
+CZI_DIR="/path/to/data/czi_slides"
 
 echo "============================================================"
 echo "Processing MK detections..."

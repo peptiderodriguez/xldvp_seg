@@ -37,17 +37,17 @@ from segmentation.io.html_export import (
 # Default paths (overridable via CLI)
 # ---------------------------------------------------------------------------
 DEFAULT_DETECTIONS_PATH = (
-    "/fs/pool/pool-mann-edwin/psilo_output/tp_full/"
+    "/path/to/output/psilo_output/tp_full/"
     "20251114_Pdgfra546_Msln750_PM647_nuc488-EDFvar-1-stitch-1_20260223_094916_100pct/"
     "detections_msln_density_normalized.json"
 )
 DEFAULT_CZI_PATH = (
-    "/fs/pool/pool-mann-axioscan/01_Users/EdRo_axioscan/MPIP_psilo/"
+    "/path/to/data/MPIP_psilo/"
     "20251114_Pdgfra546_Msln750_PM647_nuc488-EDFvar-1-stitch-1.czi"
 )
-DEFAULT_OUTPUT_DIR = "/fs/pool/pool-mann-edwin/brain_fish_output/msln_annotation_crops"
+DEFAULT_OUTPUT_DIR = "/path/to/output/brain_fish_output/msln_annotation_crops"
 DEFAULT_TILES_DIR = (
-    "/fs/pool/pool-mann-edwin/psilo_output/tp_full/"
+    "/path/to/output/psilo_output/tp_full/"
     "20251114_Pdgfra546_Msln750_PM647_nuc488-EDFvar-1-stitch-1_20260223_094916_100pct/"
     "tiles"
 )

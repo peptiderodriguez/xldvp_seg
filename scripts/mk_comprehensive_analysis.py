@@ -31,10 +31,10 @@ import pandas as pd
 from scipy.stats import mannwhitneyu, kruskal, rankdata
 
 # ── Config ──────────────────────────────────────────────────────────────
-DETECTIONS_FULL = Path('/Volumes/pool-mann-edwin/bm_lmd_feb2026/mk_clf084_dataset/all_mks_clf075_light.json')
-DETECTIONS_BONE = Path('/Volumes/pool-mann-edwin/bm_lmd_feb2026/mk_clf084_dataset/all_mks_clf075_with_bone.json')
-TISSUE_AREAS = Path('/Volumes/pool-mann-edwin/bm_lmd_feb2026/mk_clf084_dataset/tissue_areas_by_bone.json')
-OUTPUT_DIR = Path('/Volumes/pool-mann-edwin/bm_lmd_feb2026/mk_clf084_dataset')
+DETECTIONS_FULL = Path('/path/to/data/bm_lmd_feb2026/mk_clf084_dataset/all_mks_clf075_light.json')
+DETECTIONS_BONE = Path('/path/to/data/bm_lmd_feb2026/mk_clf084_dataset/all_mks_clf075_with_bone.json')
+TISSUE_AREAS = Path('/path/to/data/bm_lmd_feb2026/mk_clf084_dataset/tissue_areas_by_bone.json')
+OUTPUT_DIR = Path('/path/to/data/bm_lmd_feb2026/mk_clf084_dataset')
 
 # Features to skip (embeddings are high-dim, not interpretable individually)
 SKIP_PREFIXES = ('sam2_', 'resnet_', 'dinov2_')

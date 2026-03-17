@@ -18,7 +18,7 @@ echo ""
 echo "============================================================"
 echo ""
 
-cd /viper/ptmp2/edrod/xldvp_seg_fresh
+cd /path/to/output
 
 # Step 1: Submit normalization parameter computation
 echo "STEP 1: Submitting normalization parameter computation..."
@@ -50,7 +50,7 @@ while true; do
 done
 
 # Check if normalization params file was created
-NORM_PARAMS="/viper/ptmp2/edrod/xldvp_seg_fresh/normalization_params_all16.json"
+NORM_PARAMS="/path/to/output/normalization_params_all16.json"
 if [ ! -f "$NORM_PARAMS" ]; then
     echo ""
     echo "ERROR: Normalization parameters file not found!"
@@ -103,4 +103,4 @@ echo "WORKFLOW COMPLETE!"
 echo "============================================================"
 echo ""
 echo "Monitor progress with: squeue -u \$USER"
-echo "Output will be in: /viper/ptmp2/edrod/unified_10pct_mi300a_normalized/"
+echo "Output will be in: /path/to/output/unified_10pct_normalized/"

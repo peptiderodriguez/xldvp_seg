@@ -7,8 +7,8 @@
 #SBATCH --mem=500G
 #SBATCH --gres=gpu:l40s:4
 #SBATCH --time=48:00:00
-#SBATCH --output=/fs/gpfs41/lv12/fileset02/pool/pool-mann-edwin/code_bin/xldvp_seg/slurm/logs/islet_%j.out
-#SBATCH --error=/fs/gpfs41/lv12/fileset02/pool/pool-mann-edwin/code_bin/xldvp_seg/slurm/logs/islet_%j.err
+#SBATCH --output=/path/to/xldvp_seg/slurm/logs/islet_%j.out
+#SBATCH --error=/path/to/xldvp_seg/slurm/logs/islet_%j.err
 
 # Islet multi-GPU segmentation
 # 6-channel CZI: Bright(0), AF633/membrane(1), AF555/Gcg(2), AF488/Ins(3), DAPI(4), Cy7/Sst(5)
@@ -17,11 +17,12 @@
 
 set -euo pipefail
 
-REPO=/fs/gpfs41/lv12/fileset02/pool/pool-mann-edwin/code_bin/xldvp_seg
+MKSEG_PYTHON="${MKSEG_PYTHON:-python}"
+REPO="${REPO:-/path/to/xldvp_seg}"
 CZI="${1:?Usage: sbatch run_islet_multigpu.sh <czi_path> [classifier_path]}"
 CLASSIFIER="${2:-}"
-OUTPUT_DIR=/fs/pool/pool-mann-edwin/islet_output
-PYTHON=/fs/gpfs41/lv07/fileset03/home/b_mann/rodriguez/miniforge3/envs/mkseg/bin/python
+OUTPUT_DIR=/path/to/output/islet_output
+PYTHON="$MKSEG_PYTHON"
 
 export PYTHONPATH=$REPO
 export PYTHONUNBUFFERED=1

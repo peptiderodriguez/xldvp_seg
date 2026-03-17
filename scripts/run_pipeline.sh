@@ -10,7 +10,7 @@ set -euo pipefail
 # ---------------------------------------------------------------------------
 # Defaults
 # ---------------------------------------------------------------------------
-MKSEG_PYTHON="${MKSEG_PYTHON:-/fs/gpfs41/lv07/fileset03/home/b_mann/rodriguez/miniforge3/envs/mkseg/bin/python}"
+MKSEG_PYTHON="${MKSEG_PYTHON:-python}"
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO="${REPO:-$(dirname "$SCRIPT_DIR")}"
 

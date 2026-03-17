@@ -13,6 +13,7 @@ Pipeline:
 
 import argparse
 import gc
+import os
 import cv2
 import numpy as np
 import json
@@ -185,7 +186,7 @@ def main():
     logger.info("COMPUTING GLOBAL NORMALIZATION PARAMETERS (Otsu-only)")
     logger.info("="*70)
 
-    czi_dir = Path("/viper/ptmp2/edrod/2025_11_18")
+    czi_dir = Path(os.environ.get("CZI_DIR", "/path/to/czi_slides"))
     slides = sorted(czi_dir.glob("2025_11_18_*.czi"))
 
     logger.info(f"Found {len(slides)} slides total")
@@ -299,7 +300,7 @@ def main():
         'rejection_criterion': 'any of L/a/b median outside 1*MAD of global',
     }
 
-    output_file = Path(args.output) if args.output else Path("/viper/ptmp2/edrod/xldvp_seg_fresh/reinhard_params_16slides_MEDIAN_NEW.json")
+    output_file = Path(args.output) if args.output else Path("reinhard_params_MEDIAN.json")
     with open(output_file, 'w') as f:
         json.dump(params, f)
 
