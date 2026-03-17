@@ -238,7 +238,7 @@ def main():
 
             # Large detection — split
             mask_label = det.get("tile_mask_label", det.get("mask_label"))
-            if mask_label is None:
+            if mask_label is None or int(mask_label) == 0:
                 output_detections.append(det)
                 n_kept += 1
                 continue
@@ -261,7 +261,13 @@ def main():
             pieces = split_region(cell_mask, n_pieces, seed=args.seed + i)
             n_split += 1
 
-            slide_stem = det.get("slide_name", det.get("uid", "").split("_")[0])
+            # Extract slide stem from detection (full slide name, not just first UID token)
+            slide_stem = det.get("slide_name", "")
+            if not slide_stem:
+                uid = det.get("uid", "")
+                # UIDs are {slide}_{celltype}_{x}_{y} — strip last 3 tokens
+                parts = uid.rsplit("_", 3)
+                slide_stem = parts[0] if len(parts) >= 4 else uid
             cell_type = args.cell_type
 
             for piece_id, piece in enumerate(pieces):
