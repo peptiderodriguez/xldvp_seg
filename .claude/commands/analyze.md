@@ -84,6 +84,7 @@ Explain each step **as you reach it**, not all upfront. Define jargon inline whe
 | **Tissue area** | Variance-based tissue detection, area measurement from CZI | `scripts/calculate_tissue_areas.py` |
 | **Visualize** | Multi-slide scrollable HTML with ROI drawing + stats | `scripts/generate_multi_slide_spatial_viewer.py` |
 | **Tissue overlay** | Fluorescence image + cell overlay + ROI + LMD export in one viewer | `scripts/generate_tissue_overlay.py` |
+| **Nuclear count** | Count nuclei per cell (Cellpose 2nd pass on nuclear channel), morph+SAM2+optional deep features per nucleus | `scripts/count_nuclei_per_cell.py` |
 | **Region splitting** | Threshold bright channel → watershed split into equal-area pieces → LMD | `scripts/split_regions_for_lmd.py` |
 | **Replicate sampling** | Area-matched or spatially-clustered replicates, marker/cluster stratification, 384-well assignment | `scripts/paper_figure_sampling.py` |
 | **Transect selection** | Select cells along zonation transect paths for LMD | `scripts/select_transect_cells_for_lmd.py` |
@@ -112,6 +113,7 @@ Explain each step **as you reach it**, not all upfront. Define jargon inline whe
 | **Mesothelium** | `scripts/generate_msln_annotation.py` | Reclassify Msln+ cells into tiers (HTML tool) |
 | **Mesothelium** | `scripts/generate_msln_cluster_viewer.py` | Msln+ clustering results viewer |
 | **Mesothelium** | `scripts/generate_msln_annotation_crops.py` | Msln crop generation for annotation |
+| **Any** | `scripts/count_nuclei_per_cell.py` | Count nuclei per cell: 2nd Cellpose pass on nuclear channel, per-nucleus morph+SAM2 features |
 | **Any** | `scripts/expand_nuclei_masks.py` | Expand nuclei-only masks to approximate cell body |
 | **Any** | `scripts/extract_sam2_embeddings.py` | Extract SAM2 embeddings for existing detections |
 | **Any** | `scripts/generate_rbc_annotation_html.py` | RBC cluster candidate annotation HTML |

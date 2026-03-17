@@ -325,6 +325,10 @@ Beyond the core detect → classify → LMD workflow, the pipeline supports:
 | **SpatialData / scverse** | `scripts/convert_to_spatialdata.py` | Export to zarr for squidpy (spatial stats), scanpy (dim reduction), anndata |
 | **One-command viz** | `scripts/view_slide.py` | Classify → spatial cluster → interactive viewer → serve (all in one) |
 | **Preprocessing preview** | `scripts/preview_preprocessing.py` | Before/after flat-field, photobleach correction at 1/8 resolution |
+| **Nuclear counting** | `scripts/count_nuclei_per_cell.py` | Count nuclei per cell (Cellpose 2nd pass on nuclear channel), per-nucleus morph+SAM2 features |
+| **Region splitting** | `scripts/split_regions_for_lmd.py` | Threshold bright channel, watershed split into equal-area pieces for LMD |
+| **Replicate sampling** | `scripts/paper_figure_sampling.py` | Area-matched or spatially-clustered replicate building, 384-well assignment |
+| **Transect selection** | `scripts/select_transect_cells_for_lmd.py` | Select cells along zonation transect paths for LMD export |
 | **LMD clustering** | `scripts/cluster_detections.py` | Two-stage biological clustering for well assignment |
 
 **SpatialData** is auto-exported at end of every pipeline run (`{celltype}_spatialdata.zarr`). Load with `spatialdata.read_zarr()`. Run squidpy spatial stats (neighborhood enrichment, co-occurrence, Moran's I) via `--run-squidpy --squidpy-cluster-key <marker_class>`.
@@ -525,6 +529,10 @@ python run_segmentation.py --czi-path slide.czi --cell-type nmj \
 | `scripts/spatial_cell_analysis.py` | Spatial network analysis |
 | `scripts/cluster_by_features.py` | UMAP + HDBSCAN feature exploration |
 | `scripts/compare_feature_sets.py` | Compare RF feature subsets via stratified CV |
+| `scripts/count_nuclei_per_cell.py` | Count nuclei per cell (Cellpose 2nd pass + per-nucleus features) |
+| `scripts/split_regions_for_lmd.py` | Threshold + watershed split regions for LMD |
+| `scripts/paper_figure_sampling.py` | Replicate sampling (area-matched or spatial) with 384-well assignment |
+| `scripts/select_transect_cells_for_lmd.py` | Select zonation transect cells for LMD |
 | `scripts/cluster_detections.py` | Biological clustering for LMD wells |
 | `scripts/generate_tissue_overlay.py` | Fluorescence image + cell overlay + ROI viewer |
 | `scripts/assign_tissue_zones.py` | Spatially-constrained marker-based zone discovery |
