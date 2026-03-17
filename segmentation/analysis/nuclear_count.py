@@ -27,9 +27,27 @@ import numpy as np
 from skimage.measure import regionprops
 
 from segmentation.utils.logging import get_logger
-from segmentation.utils.detection_utils import safe_to_uint8
+from segmentation.utils.detection_utils import safe_to_uint8  # noqa: F401 — kept as fallback
 
 logger = get_logger(__name__)
+
+
+def _percentile_normalize_to_uint8(arr: np.ndarray) -> np.ndarray:
+    """Percentile-normalize any numeric array to uint8 [0, 255].
+
+    Uses 1st-99.5th percentile on nonzero pixels for proper dynamic range.
+    Much better than safe_to_uint8() which does arr/256 for uint16 (very dim).
+    """
+    if arr.dtype == np.uint8:
+        return arr
+    nonzero = arr[arr > 0]
+    if len(nonzero) == 0:
+        return np.zeros_like(arr, dtype=np.uint8)
+    p_low, p_high = np.percentile(nonzero, [1, 99.5])
+    if p_high <= p_low:
+        return np.zeros_like(arr, dtype=np.uint8)
+    result = np.clip((arr.astype(np.float32) - p_low) / (p_high - p_low) * 255, 0, 255)
+    return result.astype(np.uint8)
 
 
 def count_nuclei_in_cells(
@@ -68,7 +86,7 @@ def count_nuclei_in_cells(
     px2 = pixel_size_um ** 2
 
     # --- Step 1: Segment nuclei with Cellpose single-channel mode ---
-    nuc_uint8 = safe_to_uint8(nuclear_channel)
+    nuc_uint8 = _percentile_normalize_to_uint8(nuclear_channel)
     nuclear_masks, _, _ = cellpose_model.eval(nuc_uint8, channels=[0, 0])
 
     # --- Step 2: Compute nuclear properties (with intensity for mean_intensity) ---
