@@ -86,40 +86,6 @@ def find_tile_dirs(tiles_dir: Path) -> list:
     return tiles
 
 
-def build_uid_to_tile_label_map(detections: list, tiles_dir: Path) -> dict:
-    """Build mapping from detection UID to (tile_x, tile_y, mask_label).
-
-    Reads per-tile feature JSONs to find the tile_mask_label for each detection.
-    Falls back to parsing the UID for tile coordinates.
-    """
-    uid_map = {}
-
-    for det in detections:
-        uid = det.get("uid", "")
-        # Try to get tile info from detection
-        tile_origin = det.get("tile_origin")
-        mask_label = det.get("tile_mask_label", det.get("mask_label"))
-
-        if tile_origin and mask_label:
-            uid_map[uid] = {
-                "tile_x": int(tile_origin[0]),
-                "tile_y": int(tile_origin[1]),
-                "mask_label": int(mask_label),
-            }
-        else:
-            # Parse from UID: {slide}_{celltype}_{global_x}_{global_y}
-            # We'll match to tiles by checking which tile contains the global center
-            center = det.get("global_center")
-            if center:
-                uid_map[uid] = {
-                    "global_x": int(center[0]),
-                    "global_y": int(center[1]),
-                    "mask_label": int(mask_label) if mask_label else None,
-                }
-
-    return uid_map
-
-
 def main():
     parser = argparse.ArgumentParser(
         description="Count nuclei per cell using Cellpose on the nuclear channel",
@@ -139,6 +105,10 @@ def main():
                         help="Output JSON path (enriched detections)")
     parser.add_argument("--min-nuclear-area", type=int, default=50,
                         help="Minimum nuclear area in pixels (default: 50)")
+    parser.add_argument("--extract-deep-features", action="store_true",
+                        help="Extract ResNet + DINOv2 features per nucleus (slower, higher dimensional)")
+    parser.add_argument("--no-sam2", action="store_true",
+                        help="Skip SAM2 embedding extraction (not recommended — SAM2 is default)")
     parser.add_argument("--gpu-device", type=int, default=0,
                         help="GPU device index (default: 0)")
     parser.add_argument("--tile-size", type=int, default=None,
@@ -193,12 +163,34 @@ def main():
         sys.exit(1)
     logger.info(f"  Nuclear channel: {nuc_data.shape}, pixel_size={pixel_size_um:.4f} µm/px")
 
-    # --- Load Cellpose ---
-    device_str = f"cuda:{args.gpu_device}" if args.gpu_device >= 0 else "cpu"
+    # --- Load models ---
     import torch
-    if not torch.cuda.is_available():
-        device_str = "cpu"
-    cellpose_model = load_cellpose_cpsam(device=device_str)
+    device_str = f"cuda:{args.gpu_device}" if args.gpu_device >= 0 and torch.cuda.is_available() else "cpu"
+    device = torch.device(device_str)
+
+    cellpose_model = load_cellpose_cpsam(device=device)
+
+    # SAM2 (default ON — same as cell detection)
+    sam2_predictor = None
+    manager = None
+    if not args.no_sam2:
+        from segmentation.models.manager import ModelManager
+        logger.info("Loading SAM2 for nuclear embeddings...")
+        manager = ModelManager(device=device)
+        sam2_predictor = manager.sam2_predictor  # lazy-loads via property
+        logger.info("  SAM2 ready")
+
+    # Deep features (optional — ResNet + DINOv2)
+    resnet_model, resnet_transform = None, None
+    dinov2_model, dinov2_transform = None, None
+    if args.extract_deep_features:
+        if manager is None:
+            from segmentation.models.manager import ModelManager
+            manager = ModelManager(device=device)
+        logger.info("Loading ResNet + DINOv2 for deep nuclear features...")
+        resnet_model, resnet_transform = manager.get_resnet()
+        dinov2_model, dinov2_transform = manager.get_dinov2()
+        logger.info("  ResNet + DINOv2 ready")
 
     # --- Process tiles ---
     logger.info("Processing tiles...")
@@ -224,6 +216,8 @@ def main():
     total_nuclei = 0
     tiles_processed = 0
     cells_enriched = 0
+    tiles_with_dets = sum(1 for tx, ty, _, _ in tile_dirs if (tx, ty) in tile_to_dets)
+    logger.info(f"  {tiles_with_dets} tiles have detections (of {len(tile_dirs)} total)")
 
     for tile_x, tile_y, tile_dir, mask_path in tile_dirs:
         tile_key = (tile_x, tile_y)
@@ -242,19 +236,43 @@ def main():
         nuc_tile = nuc_data[tile_y:tile_y + tile_h, tile_x:tile_x + tile_w]
 
         if nuc_tile.shape != cell_masks.shape:
-            # Edge tile may be smaller
+            logger.warning(
+                f"Tile ({tile_x}, {tile_y}): shape mismatch nuc={nuc_tile.shape} "
+                f"vs masks={cell_masks.shape}, cropping to common region"
+            )
             h = min(nuc_tile.shape[0], cell_masks.shape[0])
             w = min(nuc_tile.shape[1], cell_masks.shape[1])
             nuc_tile = nuc_tile[:h, :w]
             cell_masks = cell_masks[:h, :w]
 
-        # Run nuclear counting
+        # Set SAM2 image for this tile — nuclear channel only (not the cyto+nuc
+        # composite used in cell detection; this gives nuclear-specific embeddings)
+        if sam2_predictor is not None:
+            from segmentation.analysis.nuclear_count import _percentile_normalize_to_uint8
+            nuc_uint8 = _percentile_normalize_to_uint8(nuc_tile)
+            nuc_rgb = np.stack([nuc_uint8] * 3, axis=-1)
+            sam2_predictor.set_image(nuc_rgb)
+
+        # Run nuclear counting with feature extraction
         results, n_nuc = count_nuclei_for_tile(
             cell_masks, nuc_tile, cellpose_model,
             pixel_size_um, args.min_nuclear_area,
             tile_x, tile_y,
+            sam2_predictor=sam2_predictor,
+            resnet_model=resnet_model,
+            resnet_transform=resnet_transform,
+            device=device,
+            dinov2_model=dinov2_model,
+            dinov2_transform=dinov2_transform,
         )
         total_nuclei += n_nuc
+
+        # Free SAM2 cached features for this tile
+        if sam2_predictor is not None:
+            try:
+                sam2_predictor.reset_predictor()
+            except Exception:
+                pass
 
         # Enrich detections with nuclear features
         for det_idx in det_indices:
@@ -276,7 +294,7 @@ def main():
         if tiles_processed % 50 == 0:
             elapsed = time.time() - t_start
             logger.info(
-                f"  {tiles_processed}/{len(tile_dirs)} tiles, "
+                f"  {tiles_processed}/{tiles_with_dets} tiles, "
                 f"{cells_enriched:,} cells enriched, "
                 f"{total_nuclei:,} nuclei, "
                 f"{elapsed:.0f}s elapsed"
@@ -306,6 +324,13 @@ def main():
     args.output.parent.mkdir(parents=True, exist_ok=True)
     atomic_json_dump(detections, str(args.output))
     logger.info(f"Wrote enriched detections: {args.output}")
+
+    # --- Cleanup GPU resources ---
+    if manager is not None:
+        manager.cleanup()
+    del cellpose_model
+    from segmentation.utils.device import empty_cache
+    empty_cache()
 
 
 if __name__ == "__main__":
