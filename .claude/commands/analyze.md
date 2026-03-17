@@ -50,7 +50,7 @@ Use this info throughout to set `--num-gpus`, SLURM `--mem`, `--cpus-per-task`, 
 **Step 2 — Determine the user's experience level.** Infer from context (e.g., "first time on terminal" = beginner, jumping straight to channel specs = advanced), or ask if unclear. The user can switch at any time by saying "beginner mode" or "advanced mode" — acknowledge the switch and adjust immediately.
 
 - **Beginner**: Explain what each step does and why before running it. Define jargon (CZI, channels, features, contours, Cellpose, SAM2, Otsu, etc.). Show expected outputs. Give the full DVP workflow overview (see below).
-- **Advanced**: Concise mode. Show the command, ask "looks good?", run it. Skip explanations unless something is unusual.
+- **Advanced**: Concise mode. Show the command, ask "looks good?", run it. Skip explanations unless something is unusual. If they ask "what can this do?" or want the full toolbox, show the analysis table from Step 3 — but don't show it unprompted.
 
 **For beginners, give a brief overview** (3-4 sentences max, not the full 8-step list):
 
