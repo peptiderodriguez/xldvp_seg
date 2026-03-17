@@ -53,6 +53,11 @@ def load_transect_csv(csv_path):
     records = {}
     with open(csv_path, newline='') as f:
         reader = csv.DictReader(f)
+        if 'cell_uid' not in (reader.fieldnames or []):
+            raise ValueError(
+                f"CSV missing required column 'cell_uid'. "
+                f"Found columns: {reader.fieldnames}"
+            )
         for row in reader:
             uid = row['cell_uid']
             entry = {
@@ -152,6 +157,12 @@ def _stratified_sample(uids, transect_records, n_target, seed=42):
         k = min(allocations[pid], len(puids))
         if k > 0:
             selected.extend(rng.sample(puids, k))
+
+    if len(selected) < n_target:
+        logger.warning(
+            f"Stratified sample yielded {len(selected)} cells "
+            f"(requested {n_target}) due to per-path capacity limits"
+        )
 
     return selected
 
@@ -278,6 +289,9 @@ def main():
     # Step 3: Load detections JSON — single pass, build UID lookup
     # -----------------------------------------------------------------------
     det_path = Path(args.detections)
+    if not det_path.exists():
+        logger.error(f"Detections file not found: {det_path}")
+        sys.exit(1)
     logger.info(f"Loading detections: {det_path} "
                 f"({det_path.stat().st_size / 1e9:.1f} GB)")
     raw = fast_json_load(str(det_path))
