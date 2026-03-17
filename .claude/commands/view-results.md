@@ -16,7 +16,7 @@ Also check if the user specified a path in arguments.
 
 **Step 3 — Detect environment** (silently):
 ```bash
-$MKSEG_PYTHON $REPO/scripts/system_info.py --json
+$XLDVP_PYTHON $REPO/scripts/system_info.py --json
 ```
 
 **Step 4 — Launch the viewer.**
@@ -28,13 +28,13 @@ sbatch --job-name=html_viewer \
     --cpus-per-task=1 \
     --mem=4G \
     --time=4:00:00 \
-    --wrap="PYTHONPATH=$REPO $MKSEG_PYTHON $REPO/serve_html.py <html_dir>"
+    --wrap="PYTHONPATH=$REPO $XLDVP_PYTHON $REPO/serve_html.py <html_dir>"
 ```
 Then tail the output log to find the Cloudflare tunnel URL.
 
 **On local:** Run directly:
 ```bash
-$MKSEG_PYTHON $REPO/serve_html.py <html_dir>
+$XLDVP_PYTHON $REPO/serve_html.py <html_dir>
 ```
 
 **Step 5 — Display the tunnel URL.** Tell the user: *"Open this URL in your browser to view and annotate detections."*
@@ -54,7 +54,7 @@ Also check for squidpy outputs (`*_squidpy/morans_i.csv`, `*_squidpy/*.png`) and
 
 **Step 5c — One-command full visualization** (classify + spatial clustering + interactive viewer):
 ```bash
-$MKSEG_PYTHON $REPO/scripts/view_slide.py \
+$XLDVP_PYTHON $REPO/scripts/view_slide.py \
     --detections <detections.json> \
     --czi-path <czi_path> \
     --output-dir <output>
@@ -63,7 +63,7 @@ This chains marker classification → spatial clustering → viewer generation �
 
 **Step 5d — Multi-slide spatial viewer** (KDE density contours, graph-pattern regions, DBSCAN clustering):
 ```bash
-$MKSEG_PYTHON $REPO/scripts/generate_multi_slide_spatial_viewer.py \
+$XLDVP_PYTHON $REPO/scripts/generate_multi_slide_spatial_viewer.py \
     --input-dir <output> \
     --group-field <marker_class_field> \
     --output <output>/spatial_viewer.html
@@ -84,7 +84,7 @@ For beginners, explain the annotation interface:
 
 **After finding results:**
 - If multiple HTML directories exist: help user pick the right one based on modification time and cell type. *"The most recent run is usually what you want. Here they are sorted by date."*
-- If HTML is missing but detections exist: *"Detection JSON exists but HTML wasn't generated — this can happen if the run was interrupted. Regenerate with: `$MKSEG_PYTHON $REPO/scripts/regenerate_html.py --detections <json> --czi-path <czi>`"*
+- If HTML is missing but detections exist: *"Detection JSON exists but HTML wasn't generated — this can happen if the run was interrupted. Regenerate with: `$XLDVP_PYTHON $REPO/scripts/regenerate_html.py --detections <json> --czi-path <czi>`"*
 
 **When user starts annotating:**
 - *"Aim for 200+ annotations, roughly balanced between positive and negative. The more you annotate, the better the classifier — but diminishing returns kick in after ~500."*

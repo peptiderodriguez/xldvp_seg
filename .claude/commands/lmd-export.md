@@ -26,7 +26,7 @@ If missing -> redirect to `/analyze` first.
 
 **Check if RF classifier was run** (look for `rf_prediction` in detections):
 ```bash
-$MKSEG_PYTHON -c "import json; d=json.load(open('<detections.json>')); print('rf_prediction' in (d[0].get('features') or d[0]))"
+$XLDVP_PYTHON -c "import json; d=json.load(open('<detections.json>')); print('rf_prediction' in (d[0].get('features') or d[0]))"
 ```
 If True -> default `--min-score 0.5` filters to high-confidence detections.
 If False -> export all detections (no filter).
@@ -48,23 +48,23 @@ The viewer opens with LMD7 orientation (rotate CW 90 is ON by default). All laye
 
 ```bash
 # Place 3 crosses (rotate-cw-90 is default ON)
-PYTHONPATH=$REPO $MKSEG_PYTHON $REPO/scripts/napari_place_crosses.py \
+PYTHONPATH=$REPO $XLDVP_PYTHON $REPO/scripts/napari_place_crosses.py \
     -i <czi_path> --flip-horizontal -o <crosses.json>
 
 # Start fresh (ignore existing crosses)
-PYTHONPATH=$REPO $MKSEG_PYTHON $REPO/scripts/napari_place_crosses.py \
+PYTHONPATH=$REPO $XLDVP_PYTHON $REPO/scripts/napari_place_crosses.py \
     -i <czi_path> --flip-horizontal --fresh -o <crosses.json>
 ```
 
 **Option B — OME-Zarr Napari** (for very large slides):
 ```bash
-PYTHONPATH=$REPO $MKSEG_PYTHON $REPO/scripts/napari_place_crosses.py \
+PYTHONPATH=$REPO $XLDVP_PYTHON $REPO/scripts/napari_place_crosses.py \
     -i <output>.ome.zarr -o <crosses.json>
 ```
 
 The OME-Zarr is auto-generated at the end of the pipeline run. Or convert manually:
 ```bash
-PYTHONPATH=$REPO $MKSEG_PYTHON $REPO/scripts/czi_to_ome_zarr.py <czi_path> <output>.zarr
+PYTHONPATH=$REPO $XLDVP_PYTHON $REPO/scripts/czi_to_ome_zarr.py <czi_path> <output>.zarr
 ```
 
 **Option C — Manual JSON** (SSH/headless):
@@ -75,7 +75,7 @@ Coordinates in mosaic pixel space (same as detection centroids). 3 crosses requi
 
 **Batch mode** (multiple slides):
 ```bash
-PYTHONPATH=$REPO $MKSEG_PYTHON $REPO/scripts/napari_place_crosses.py \
+PYTHONPATH=$REPO $XLDVP_PYTHON $REPO/scripts/napari_place_crosses.py \
     --czi-dir /data/slides --slides SlideA SlideB SlideC \
     --sampling-results lmd_replicates_full.json \
     --contours mk_contours_overlay.json \
@@ -89,7 +89,7 @@ Shows colored replicate dots + contour outlines when `--sampling-results` and `-
 ## Step 3: Run Export
 
 ```bash
-PYTHONPATH=$REPO $MKSEG_PYTHON $REPO/run_lmd_export.py \
+PYTHONPATH=$REPO $XLDVP_PYTHON $REPO/run_lmd_export.py \
     --detections <detections.json> \
     --crosses <crosses.json> \
     --output-dir <output>/lmd \
@@ -111,7 +111,7 @@ Drop `--min-score 0.5` if no RF classifier was run.
 
 **Multi-slide batch export:**
 ```bash
-PYTHONPATH=$REPO $MKSEG_PYTHON $REPO/run_lmd_export.py \
+PYTHONPATH=$REPO $XLDVP_PYTHON $REPO/run_lmd_export.py \
     --input-dir /path/to/runs \
     --crosses-dir /path/to/crosses \
     --output-dir /path/to/lmd_batch \
@@ -145,7 +145,7 @@ Show:
 
 **Optional: verify in Napari:**
 ```bash
-PYTHONPATH=$REPO $MKSEG_PYTHON $REPO/scripts/napari_view_lmd_export.py \
+PYTHONPATH=$REPO $XLDVP_PYTHON $REPO/scripts/napari_view_lmd_export.py \
     --zarr <slide>.ome.zarr --export <output>/lmd
 ```
 
@@ -155,11 +155,11 @@ PYTHONPATH=$REPO $MKSEG_PYTHON $REPO/scripts/napari_view_lmd_export.py \
 
 Each cell type gets its own export:
 ```bash
-PYTHONPATH=$REPO $MKSEG_PYTHON $REPO/run_lmd_export.py \
+PYTHONPATH=$REPO $XLDVP_PYTHON $REPO/run_lmd_export.py \
     --detections <output>/nmj_detections.json --crosses <crosses.json> \
     --output-dir <output>/lmd_nmj --generate-controls --min-score 0.5 --export
 
-PYTHONPATH=$REPO $MKSEG_PYTHON $REPO/run_lmd_export.py \
+PYTHONPATH=$REPO $XLDVP_PYTHON $REPO/run_lmd_export.py \
     --detections <output>/cell_detections.json --crosses <crosses.json> \
     --output-dir <output>/lmd_cell --generate-controls --min-score 0.5 --export
 ```
@@ -199,7 +199,7 @@ For the MK proteomics workflow where replicates and well assignments are already
 
 ### Step R1: Build replicates
 ```bash
-PYTHONPATH=$REPO $MKSEG_PYTHON $REPO/scripts/select_mks_for_lmd.py \
+PYTHONPATH=$REPO $XLDVP_PYTHON $REPO/scripts/select_mks_for_lmd.py \
     --detections <detections.json> \
     --output-dir <output>/replicates
 ```
@@ -207,7 +207,7 @@ Produces `lmd_replicates_full.json` with per-cell well assignments.
 
 ### Step R2: Place crosses with replicate overlay
 ```bash
-PYTHONPATH=$REPO $MKSEG_PYTHON $REPO/scripts/napari_place_crosses.py \
+PYTHONPATH=$REPO $XLDVP_PYTHON $REPO/scripts/napari_place_crosses.py \
     -i <czi_path> --flip-horizontal \
     --contours <contours.json> --slide <slide_name> \
     --sampling-results <replicates.json> \
@@ -218,7 +218,7 @@ Shows colored dots per replicate/well so you can verify cell assignments while p
 
 ### Step R3: Export XML from replicates
 ```bash
-PYTHONPATH=$REPO $MKSEG_PYTHON $REPO/scripts/lmd_export_replicates.py \
+PYTHONPATH=$REPO $XLDVP_PYTHON $REPO/scripts/lmd_export_replicates.py \
     --sampling-results lmd_replicates_full.json \
     --contours-json mk_contours_overlay.json \
     --crosses-dir ./crosses \
@@ -230,7 +230,7 @@ crosses JSON (auto-detected from CZI metadata during cross placement).
 
 ### Step R4: Verify
 ```bash
-PYTHONPATH=$REPO $MKSEG_PYTHON $REPO/scripts/napari_view_lmd_export.py \
+PYTHONPATH=$REPO $XLDVP_PYTHON $REPO/scripts/napari_view_lmd_export.py \
     --zarr <slide>.ome.zarr --export ./xml
 ```
 
@@ -241,7 +241,7 @@ PYTHONPATH=$REPO $MKSEG_PYTHON $REPO/scripts/napari_view_lmd_export.py \
 - 384-well + serpentine + controls + clustering are always on by default — don't ask about them unless the user specifically wants to change something
 - Multi-plate: >308 wells overflow automatically to additional plates via `segmentation.lmd.well_plate`. For proteomics replicates, use `segmentation.lmd.selection.select_cells_for_lmd()` with `scripts/select_mks_for_lmd.py` as an MK-specific example
 - Empty QC wells: `insert_empty_wells()` from `segmentation.lmd.well_plate` inserts ceil(10% of samples) evenly across all used quadrants/plates
-- Use `$MKSEG_PYTHON` as interpreter, `PYTHONPATH=$REPO`
+- Use `$XLDVP_PYTHON` as interpreter, `PYTHONPATH=$REPO`
 - All coordinates are [x, y] (horizontal, vertical)
 - LMD export is CPU-only and fast (~seconds). No GPU or SLURM needed
 - The XML must be transferred to the LMD instrument computer — confirm the transfer path

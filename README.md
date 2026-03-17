@@ -35,7 +35,7 @@ Runs on SLURM GPU clusters or local workstations (NVIDIA CUDA, Apple Silicon MPS
 ```bash
 git clone https://github.com/peptiderodriguez/xldvp_seg.git
 cd xldvp_seg
-conda create -n mkseg python=3.11 -y && conda activate mkseg
+conda create -n xldvp_seg python=3.11 -y && conda activate xldvp_seg
 ```
 
 ### Step 2: Install everything (~10-15 min)
@@ -63,7 +63,7 @@ This single command installs:
 ### Step 3: Verify
 
 ```bash
-conda activate mkseg
+conda activate xldvp_seg
 python -c "import torch; print(f'PyTorch {torch.__version__}, CUDA: {torch.cuda.is_available()}')"
 python -c "import cellpose; print(f'Cellpose {cellpose.__version__}')"
 python -c "from sam2.build_sam import build_sam2; print('SAM2 OK')"
@@ -102,7 +102,7 @@ Other Claude Code commands: `/status` (monitor jobs), `/czi-info` (inspect chann
 ### Option B: Command line
 
 ```bash
-conda activate mkseg
+conda activate xldvp_seg
 
 # Step 0: ALWAYS inspect CZI channels first (order is NOT wavelength-sorted)
 python scripts/czi_info.py /path/to/slide.czi

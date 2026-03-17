@@ -8,7 +8,7 @@ Ask: *"Do you have annotations already, or do you need to create them first?"*
 
 **If no annotations yet:**
 1. Find the detection HTML in the output directory (`<output>/html/index.html`)
-2. Serve it: `$MKSEG_PYTHON $REPO/serve_html.py <output_dir>`
+2. Serve it: `$XLDVP_PYTHON $REPO/serve_html.py <output_dir>`
 3. Explain the annotation interface:
    - Click green checkmark = real detection (positive)
    - Click red X = false positive (negative)
@@ -29,7 +29,7 @@ Ask: *"Do you have annotations already, or do you need to create them first?"*
 
 **For older detections (pre-Mar 2026) only:** Use `--correct-all-channels`:
 ```bash
-$MKSEG_PYTHON $REPO/scripts/classify_markers.py \
+$XLDVP_PYTHON $REPO/scripts/classify_markers.py \
     --detections <detections.json> \
     --marker-channel 1,2 --marker-name NeuN,tdTomato \
     --correct-all-channels
@@ -55,7 +55,7 @@ $MKSEG_PYTHON $REPO/scripts/classify_markers.py \
 
 **Run a 1-minute comparison first** — this tells you definitively whether SAM2 or channel features help for *your specific data* before committing to a feature set:
 ```bash
-$MKSEG_PYTHON $REPO/scripts/compare_feature_sets.py \
+$XLDVP_PYTHON $REPO/scripts/compare_feature_sets.py \
     --detections <detections.json> \
     --annotations <annotations.json> \
     --output-dir <output>/feature_comparison
@@ -68,7 +68,7 @@ Outputs a ranked table of F1/precision/recall per subset. If `morph` and `morph_
 
 **Train the RF classifier:**
 ```bash
-$MKSEG_PYTHON $REPO/train_classifier.py \
+$XLDVP_PYTHON $REPO/train_classifier.py \
     --detections <detections.json> \
     --annotations <annotations.json> \
     --output-dir <output> \
@@ -79,7 +79,7 @@ Show the output: cross-validation scores, top 20 feature importances, saved mode
 
 **Apply to all detections:**
 ```bash
-$MKSEG_PYTHON $REPO/scripts/apply_classifier.py \
+$XLDVP_PYTHON $REPO/scripts/apply_classifier.py \
     --detections <detections.json> \
     --classifier <output>/rf_classifier.pkl \
     --output <output>/<celltype>_detections_scored.json
@@ -87,13 +87,13 @@ $MKSEG_PYTHON $REPO/scripts/apply_classifier.py \
 
 **Regenerate HTML with threshold:**
 ```bash
-$MKSEG_PYTHON $REPO/scripts/regenerate_html.py \
+$XLDVP_PYTHON $REPO/scripts/regenerate_html.py \
     --detections <output>/<celltype>_detections_scored.json \
     --czi-path <czi_path> \
     --output-dir <output> \
     --score-threshold 0.5
 ```
-*Why 0.5?* The RF outputs a probability (0=definitely false positive, 1=definitely real). 0.5 is the natural decision boundary. Increase to 0.7–0.8 if you want higher precision (fewer false positives, but miss some real cells). Decrease to 0.3 if recall matters more (catch everything, accept more noise). Check the score distribution first: `$MKSEG_PYTHON -c "import json; d=json.load(open('<scored.json>')); scores=[x.get('rf_prediction',0) for x in d]; print(f'mean={sum(scores)/len(scores):.2f}, >0.5: {sum(1 for s in scores if s>0.5)}/{len(scores)}')`
+*Why 0.5?* The RF outputs a probability (0=definitely false positive, 1=definitely real). 0.5 is the natural decision boundary. Increase to 0.7–0.8 if you want higher precision (fewer false positives, but miss some real cells). Decrease to 0.3 if recall matters more (catch everything, accept more noise). Check the score distribution first: `$XLDVP_PYTHON -c "import json; d=json.load(open('<scored.json>')); scores=[x.get('rf_prediction',0) for x in d]; print(f'mean={sum(scores)/len(scores):.2f}, >0.5: {sum(1 for s in scores if s>0.5)}/{len(scores)}')`
 
 ---
 
@@ -103,7 +103,7 @@ Ask: *"Want to explore the feature space with dimensionality reduction?"*
 
 **UMAP + HDBSCAN clustering:**
 ```bash
-$MKSEG_PYTHON $REPO/scripts/cluster_by_features.py \
+$XLDVP_PYTHON $REPO/scripts/cluster_by_features.py \
     --detections <detections.json> \
     --output-dir <output>/clustering \
     --feature-groups "morph,sam2"
@@ -128,7 +128,7 @@ Ask: *"Want to export the classified detections to SpatialData for scverse ecosy
 This is especially useful after classification because the marker classes (e.g., `tdTomato_class`) enable neighborhood enrichment and co-occurrence analyses.
 
 ```bash
-$MKSEG_PYTHON $REPO/scripts/convert_to_spatialdata.py \
+$XLDVP_PYTHON $REPO/scripts/convert_to_spatialdata.py \
     --detections <scored_or_classified_detections.json> \
     --output <output>/<celltype>_spatialdata.zarr \
     --tiles-dir <output>/tiles \
@@ -177,7 +177,7 @@ After each step, review the results and give targeted feedback:
 
 ## Rules
 
-- Use `$MKSEG_PYTHON` as the Python interpreter and set `PYTHONPATH=$REPO`.
+- Use `$XLDVP_PYTHON` as the Python interpreter and set `PYTHONPATH=$REPO`.
 - All file paths should be absolute.
 - If the user hasn't run detection yet, redirect them to `/analyze`.
 - If detection was run without `--extract-deep-features`, don't block — explain re-detection is needed but it resumes from checkpoints.

@@ -45,6 +45,8 @@ wheels/
 venv/
 env/
 ENV/
+xldvp_seg_env/
+xldvp_seg_rocm_env/
 mkseg_env/
 mkseg_rocm_env/
 

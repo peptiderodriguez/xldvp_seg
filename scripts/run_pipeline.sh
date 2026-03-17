@@ -10,9 +10,28 @@ set -euo pipefail
 # ---------------------------------------------------------------------------
 # Defaults
 # ---------------------------------------------------------------------------
-MKSEG_PYTHON="${MKSEG_PYTHON:-python}"
+XLDVP_PYTHON="${XLDVP_PYTHON:-${MKSEG_PYTHON:-python}}"
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO="${REPO:-$(dirname "$SCRIPT_DIR")}"
+
+# Auto-detect xldvp_seg python if not set or if bare "python" lacks torch
+if [ -z "$XLDVP_PYTHON" ] || [ "$XLDVP_PYTHON" = "python" ]; then
+    if ! "$XLDVP_PYTHON" -c "import torch" 2>/dev/null; then
+        # Try common conda env paths
+        for _p in "$HOME/miniforge3/envs/xldvp_seg/bin/python" \
+                  "$HOME/miniconda3/envs/xldvp_seg/bin/python" \
+                  "$HOME/anaconda3/envs/xldvp_seg/bin/python" \
+                  "$HOME/miniforge3/envs/mkseg/bin/python" \
+                  "$HOME/miniconda3/envs/mkseg/bin/python" \
+                  "$HOME/anaconda3/envs/mkseg/bin/python"; do
+            if [ -x "$_p" ] && "$_p" -c "import torch" 2>/dev/null; then
+                XLDVP_PYTHON="$_p"
+                echo "Auto-detected xldvp_seg python: $XLDVP_PYTHON"
+                break
+            fi
+        done
+    fi
+fi
 
 # ---------------------------------------------------------------------------
 # Argument check
@@ -35,7 +54,7 @@ read_yaml() {
     local key="$1"
     local default="${2:-}"
     local val
-    val=$("$MKSEG_PYTHON" -c "
+    val=$("$XLDVP_PYTHON" -c "
 import yaml, sys
 with open(sys.argv[1]) as f:
     cfg = yaml.safe_load(f)
@@ -77,7 +96,7 @@ MAX_AREA=$(read_yaml max_area_um "")
 
 # Channel map (wavelength/name-based channel specs, resolved at runtime)
 # Supported YAML keys: channel_map.detect, channel_map.cyto, channel_map.nuc
-CHANNEL_SPEC=$("$MKSEG_PYTHON" -c "
+CHANNEL_SPEC=$("$XLDVP_PYTHON" -c "
 import yaml, sys
 with open(sys.argv[1]) as f:
     cfg = yaml.safe_load(f)
@@ -105,13 +124,24 @@ BG_NEIGHBORS=$(read_yaml bg_neighbors "")
 PARTITION=$(read_yaml slurm.partition p.hpcl8)
 CPUS=$(read_yaml slurm.cpus 24)
 MEM_GB=$(read_yaml slurm.mem_gb 350)
+# GPUS: the gres suffix (e.g. "l40s:4" or "rtx5000:2").  On GPU partitions we
+# always request all 4 GPUs so SLURM doesn't place us on a non-GPU node.
+# The Python code's --num-gpus controls how many GPUs it actually uses.
 GPUS=$(read_yaml slurm.gpus "rtx5000:2")
+# Ensure GPU gres always requests all 4 GPUs: replace a trailing :N with :4
+# (keeps the GPU type, e.g. "l40s:4" instead of "l40s:2")
+if [[ "$GPUS" =~ ^[a-zA-Z0-9_]+:[0-9]+$ ]]; then
+    GPU_TYPE="${GPUS%:*}"
+    GPUS="${GPU_TYPE}:4"
+elif [[ "$GPUS" =~ ^[0-9]+$ ]]; then
+    GPUS="4"
+fi
 TIME=$(read_yaml slurm.time "2-00:00:00")
 SLIDES_PER_JOB=$(read_yaml slurm.slides_per_job 1)
 NUM_JOBS=$(read_yaml slurm.num_jobs 1)
 
 # Markers (parsed as JSON list, supports both 'channel' and 'wavelength' keys)
-MARKERS_JSON=$("$MKSEG_PYTHON" -c "
+MARKERS_JSON=$("$XLDVP_PYTHON" -c "
 import yaml, json, sys
 with open(sys.argv[1]) as f:
     cfg = yaml.safe_load(f)
@@ -170,7 +200,7 @@ fi
 build_seg_cmd() {
     local czi_arg="$1"
     local out_arg="$2"
-    local cmd="$MKSEG_PYTHON $REPO/run_segmentation.py"
+    local cmd="$XLDVP_PYTHON $REPO/run_segmentation.py"
     cmd+=" --czi-path \"$czi_arg\""
     cmd+=" --cell-type \"$CELL_TYPE\""
     cmd+=" --output-dir \"$out_arg\""
@@ -232,7 +262,7 @@ build_seg_cmd() {
 # Build comma-separated marker args for single classify_markers.py invocation
 # ---------------------------------------------------------------------------
 # Markers can use 'channel' (index) or 'wavelength' (resolved at runtime)
-MARKER_USE_WAVELENGTH=$("$MKSEG_PYTHON" -c "
+MARKER_USE_WAVELENGTH=$("$XLDVP_PYTHON" -c "
 import json, sys
 markers = json.loads(sys.argv[1])
 if not markers:
@@ -244,7 +274,7 @@ else:
     print('false')
 " "$MARKERS_JSON" || echo "false")
 
-MARKER_CHANNELS=$("$MKSEG_PYTHON" -c "
+MARKER_CHANNELS=$("$XLDVP_PYTHON" -c "
 import json, sys
 markers = json.loads(sys.argv[1])
 if not markers:
@@ -259,13 +289,13 @@ for m in markers:
 print(','.join(parts))
 " "$MARKERS_JSON" || echo "")
 
-MARKER_NAMES=$("$MKSEG_PYTHON" -c "
+MARKER_NAMES=$("$XLDVP_PYTHON" -c "
 import json, sys
 markers = json.loads(sys.argv[1])
 print(','.join(m['name'] for m in markers))
 " "$MARKERS_JSON" || echo "")
 
-MARKER_METHOD=$("$MKSEG_PYTHON" -c "
+MARKER_METHOD=$("$XLDVP_PYTHON" -c "
 import json, sys
 markers = json.loads(sys.argv[1])
 if not markers:
@@ -299,6 +329,7 @@ SBATCH_FILE="${OUTPUT_DIR}/pipeline_${NAME}_$$.sbatch"
     echo "#!/bin/bash"
     echo "#SBATCH --job-name=${NAME}"
     echo "#SBATCH --partition=${PARTITION}"
+    echo "#SBATCH --nodes=1"
     echo "#SBATCH --cpus-per-task=${CPUS}"
     echo "#SBATCH --mem=${MEM_GB}G"
     echo "#SBATCH --gres=gpu:${GPUS}"
@@ -316,7 +347,7 @@ SBATCH_FILE="${OUTPUT_DIR}/pipeline_${NAME}_$$.sbatch"
     echo "set -euo pipefail"
     echo ""
     echo "export PYTHONPATH=\"$REPO\""
-    echo "MKSEG_PYTHON=\"$MKSEG_PYTHON\""
+    echo "XLDVP_PYTHON=\"$XLDVP_PYTHON\""
     echo ""
 
     if [[ "$MULTI_SLIDE" == "true" ]]; then
@@ -380,9 +411,9 @@ SBATCH_FILE="${OUTPUT_DIR}/pipeline_${NAME}_$$.sbatch"
             fi
             echo "        echo \"  Classifying markers: $MARKER_NAMES\""
             if [[ "$MARKER_USE_WAVELENGTH" == "true" ]]; then
-                echo "        \$MKSEG_PYTHON $REPO/scripts/classify_markers.py --detections \"\$DET_JSON\" --marker-wavelength \"$MARKER_CHANNELS\" --marker-name \"$MARKER_NAMES\" --method \"$MARKER_METHOD\" --czi-path \"\$CZI_FILE\" --output-dir \"\$RUN_DIR\"${classify_extra}"
+                echo "        \$XLDVP_PYTHON $REPO/scripts/classify_markers.py --detections \"\$DET_JSON\" --marker-wavelength \"$MARKER_CHANNELS\" --marker-name \"$MARKER_NAMES\" --method \"$MARKER_METHOD\" --czi-path \"\$CZI_FILE\" --output-dir \"\$RUN_DIR\"${classify_extra}"
             else
-                echo "        \$MKSEG_PYTHON $REPO/scripts/classify_markers.py --detections \"\$DET_JSON\" --marker-channel \"$MARKER_CHANNELS\" --marker-name \"$MARKER_NAMES\" --method \"$MARKER_METHOD\" --output-dir \"\$RUN_DIR\"${classify_extra}"
+                echo "        \$XLDVP_PYTHON $REPO/scripts/classify_markers.py --detections \"\$DET_JSON\" --marker-channel \"$MARKER_CHANNELS\" --marker-name \"$MARKER_NAMES\" --method \"$MARKER_METHOD\" --output-dir \"\$RUN_DIR\"${classify_extra}"
             fi
             echo "        DET_JSON=\"\${RUN_DIR}${CELL_TYPE}_detections_classified.json\""
         fi
@@ -391,14 +422,14 @@ SBATCH_FILE="${OUTPUT_DIR}/pipeline_${NAME}_$$.sbatch"
             echo ""
             echo "        # Step 3: Spatial analysis"
             echo "        echo \"  Running spatial analysis...\""
-            echo "        \$MKSEG_PYTHON $REPO/scripts/spatial_cell_analysis.py --detections \"\$DET_JSON\" --output-dir \"\$RUN_DIR\" --spatial-network --marker-filter \"$SPATIAL_FILTER\" --max-edge-distance \"$SPATIAL_EDGE\" --min-component-cells \"$SPATIAL_MIN_COMP\" --pixel-size \"$PIXEL_SIZE\""
+            echo "        \$XLDVP_PYTHON $REPO/scripts/spatial_cell_analysis.py --detections \"\$DET_JSON\" --output-dir \"\$RUN_DIR\" --spatial-network --marker-filter \"$SPATIAL_FILTER\" --max-edge-distance \"$SPATIAL_EDGE\" --min-component-cells \"$SPATIAL_MIN_COMP\" --pixel-size \"$PIXEL_SIZE\""
         fi
 
         if [[ "$SPATIALDATA_ENABLED" == "true" ]]; then
             echo ""
             echo "        # SpatialData export"
             echo "        echo \"  Exporting to SpatialData...\""
-            sd_cmd="        \$MKSEG_PYTHON $REPO/scripts/convert_to_spatialdata.py --detections \"\$DET_JSON\" --output \"\${RUN_DIR}${CELL_TYPE}_spatialdata.zarr\" --cell-type \"$CELL_TYPE\" --overwrite"
+            sd_cmd="        \$XLDVP_PYTHON $REPO/scripts/convert_to_spatialdata.py --detections \"\$DET_JSON\" --output \"\${RUN_DIR}${CELL_TYPE}_spatialdata.zarr\" --cell-type \"$CELL_TYPE\" --overwrite"
             if [[ "$SPATIALDATA_SHAPES" == "true" ]]; then
                 sd_cmd+=" --tiles-dir \"\${RUN_DIR}tiles\""
             else
@@ -443,9 +474,9 @@ SBATCH_FILE="${OUTPUT_DIR}/pipeline_${NAME}_$$.sbatch"
             fi
             echo "    echo \"Classifying markers: $MARKER_NAMES\""
             if [[ "$MARKER_USE_WAVELENGTH" == "true" ]]; then
-                echo "    \$MKSEG_PYTHON $REPO/scripts/classify_markers.py --detections \"\$DET_JSON\" --marker-wavelength \"$MARKER_CHANNELS\" --marker-name \"$MARKER_NAMES\" --method \"$MARKER_METHOD\" --czi-path \"$CZI_PATH\" --output-dir \"\$RUN_DIR\"${classify_extra}"
+                echo "    \$XLDVP_PYTHON $REPO/scripts/classify_markers.py --detections \"\$DET_JSON\" --marker-wavelength \"$MARKER_CHANNELS\" --marker-name \"$MARKER_NAMES\" --method \"$MARKER_METHOD\" --czi-path \"$CZI_PATH\" --output-dir \"\$RUN_DIR\"${classify_extra}"
             else
-                echo "    \$MKSEG_PYTHON $REPO/scripts/classify_markers.py --detections \"\$DET_JSON\" --marker-channel \"$MARKER_CHANNELS\" --marker-name \"$MARKER_NAMES\" --method \"$MARKER_METHOD\" --output-dir \"\$RUN_DIR\"${classify_extra}"
+                echo "    \$XLDVP_PYTHON $REPO/scripts/classify_markers.py --detections \"\$DET_JSON\" --marker-channel \"$MARKER_CHANNELS\" --marker-name \"$MARKER_NAMES\" --method \"$MARKER_METHOD\" --output-dir \"\$RUN_DIR\"${classify_extra}"
             fi
             echo "    DET_JSON=\"\${RUN_DIR}${CELL_TYPE}_detections_classified.json\""
         fi
@@ -454,14 +485,14 @@ SBATCH_FILE="${OUTPUT_DIR}/pipeline_${NAME}_$$.sbatch"
             echo ""
             echo "    # Step 3: Spatial analysis"
             echo "    echo \"Running spatial analysis...\""
-            echo "    \$MKSEG_PYTHON $REPO/scripts/spatial_cell_analysis.py --detections \"\$DET_JSON\" --output-dir \"\$RUN_DIR\" --spatial-network --marker-filter \"$SPATIAL_FILTER\" --max-edge-distance \"$SPATIAL_EDGE\" --min-component-cells \"$SPATIAL_MIN_COMP\" --pixel-size \"$PIXEL_SIZE\""
+            echo "    \$XLDVP_PYTHON $REPO/scripts/spatial_cell_analysis.py --detections \"\$DET_JSON\" --output-dir \"\$RUN_DIR\" --spatial-network --marker-filter \"$SPATIAL_FILTER\" --max-edge-distance \"$SPATIAL_EDGE\" --min-component-cells \"$SPATIAL_MIN_COMP\" --pixel-size \"$PIXEL_SIZE\""
         fi
 
         if [[ "$SPATIALDATA_ENABLED" == "true" ]]; then
             echo ""
             echo "    # SpatialData export"
             echo "    echo \"Exporting to SpatialData...\""
-            sd_cmd="    \$MKSEG_PYTHON $REPO/scripts/convert_to_spatialdata.py --detections \"\$DET_JSON\" --output \"\${RUN_DIR}${CELL_TYPE}_spatialdata.zarr\" --cell-type \"$CELL_TYPE\" --overwrite"
+            sd_cmd="    \$XLDVP_PYTHON $REPO/scripts/convert_to_spatialdata.py --detections \"\$DET_JSON\" --output \"\${RUN_DIR}${CELL_TYPE}_spatialdata.zarr\" --cell-type \"$CELL_TYPE\" --overwrite"
             if [[ "$SPATIALDATA_SHAPES" == "true" ]]; then
                 sd_cmd+=" --tiles-dir \"\${RUN_DIR}tiles\""
             else
@@ -481,7 +512,7 @@ SBATCH_FILE="${OUTPUT_DIR}/pipeline_${NAME}_$$.sbatch"
             echo ""
             echo "    # Step 4: Spatial viewer"
             echo "    echo \"Generating spatial viewer...\""
-            echo "    \$MKSEG_PYTHON $REPO/scripts/generate_multi_slide_spatial_viewer.py --input-dir \"\$SLIDE_OUT\" --group-field \"$VIEWER_GROUP_FIELD\" --title \"$VIEWER_TITLE_ESC\" --output \"\${SLIDE_OUT}/spatial_viewer.html\""
+            echo "    \$XLDVP_PYTHON $REPO/scripts/generate_multi_slide_spatial_viewer.py --input-dir \"\$SLIDE_OUT\" --group-field \"$VIEWER_GROUP_FIELD\" --title \"$VIEWER_TITLE_ESC\" --output \"\${SLIDE_OUT}/spatial_viewer.html\""
         fi
 
         echo "else"
@@ -539,10 +570,10 @@ if [[ "$MULTI_SLIDE" == "true" && "$VIEWER_ENABLED" == "true" && -n "$VIEWER_GRO
         echo ""
         echo "set -euo pipefail"
         echo "export PYTHONPATH=\"$REPO\""
-        echo "MKSEG_PYTHON=\"$MKSEG_PYTHON\""
+        echo "XLDVP_PYTHON=\"$XLDVP_PYTHON\""
         echo ""
         echo "echo \"Generating multi-slide spatial viewer...\""
-        echo "\$MKSEG_PYTHON $REPO/scripts/generate_multi_slide_spatial_viewer.py \\"
+        echo "\$XLDVP_PYTHON $REPO/scripts/generate_multi_slide_spatial_viewer.py \\"
         echo "    --input-dir \"$OUTPUT_DIR\" \\"
         echo "    --detection-glob \"${CELL_TYPE}_detections_classified.json\" \\"
         echo "    --group-field \"$VIEWER_GROUP_FIELD\" \\"

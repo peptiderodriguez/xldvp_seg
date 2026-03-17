@@ -11,7 +11,7 @@ You are previewing preprocessing effects on CZI microscopy data for the xldvp_se
 
 **Step 2 — Detect system** (silently):
 ```bash
-$MKSEG_PYTHON $REPO/scripts/system_info.py --json
+$XLDVP_PYTHON $REPO/scripts/system_info.py --json
 ```
 
 **Step 3 — Run the preview.**
@@ -19,7 +19,7 @@ $MKSEG_PYTHON $REPO/scripts/system_info.py --json
 This is lightweight and OK to run on a SLURM login node (uses 1/8 resolution by default):
 
 ```bash
-$MKSEG_PYTHON $REPO/scripts/preview_preprocessing.py \
+$XLDVP_PYTHON $REPO/scripts/preview_preprocessing.py \
     --czi-path <path> \
     --channel <N> \
     --preprocessing <flat_field|photobleach|rowcol|all> \
@@ -29,7 +29,7 @@ $MKSEG_PYTHON $REPO/scripts/preview_preprocessing.py \
 
 For a more detailed comparison with illumination profiles and row/column mean plots:
 ```bash
-$MKSEG_PYTHON $REPO/scripts/visualize_corrections.py \
+$XLDVP_PYTHON $REPO/scripts/visualize_corrections.py \
     --czi-path <path> \
     --channel <N> \
     --output-dir <output_dir>/corrections/

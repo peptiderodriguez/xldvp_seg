@@ -30,7 +30,7 @@ After running segmentation and scoring detections with a trained classifier, thi
 Three calibration crosses align the microscope stage coordinates with your image. Place them at landmarks visible under the LMD microscope.
 
 ```bash
-PYTHONPATH=$REPO $MKSEG_PYTHON $REPO/scripts/napari_place_crosses.py \
+PYTHONPATH=$REPO $XLDVP_PYTHON $REPO/scripts/napari_place_crosses.py \
     -i /path/to/slide.czi --flip-horizontal \
     -o /path/to/output/reference_crosses.json
 ```
@@ -62,7 +62,7 @@ The saved JSON stores image dimensions, pixel size (from CZI metadata), cross co
 #### Single-slide export
 
 ```bash
-PYTHONPATH=$REPO $MKSEG_PYTHON $REPO/run_lmd_export.py \
+PYTHONPATH=$REPO $XLDVP_PYTHON $REPO/run_lmd_export.py \
     --detections /path/to/scored_detections.json \
     --crosses /path/to/reference_crosses.json \
     --output-dir /path/to/output/lmd \
@@ -79,7 +79,7 @@ Key flags:
 #### Batch export (multiple slides)
 
 ```bash
-PYTHONPATH=$REPO $MKSEG_PYTHON $REPO/run_lmd_export.py \
+PYTHONPATH=$REPO $XLDVP_PYTHON $REPO/run_lmd_export.py \
     --input-dir /path/to/runs \
     --crosses-dir /path/to/crosses \
     --output-dir /path/to/output/lmd \
@@ -114,12 +114,12 @@ When `--generate-controls` is enabled, empty QC wells (~10%) are inserted evenly
 To group nearby detections into shared wells:
 
 ```bash
-PYTHONPATH=$REPO $MKSEG_PYTHON $REPO/scripts/cluster_detections.py \
+PYTHONPATH=$REPO $XLDVP_PYTHON $REPO/scripts/cluster_detections.py \
     --detections /path/to/scored_detections.json \
     --min-score 0.5 \
     --output /path/to/clusters.json
 
-PYTHONPATH=$REPO $MKSEG_PYTHON $REPO/run_lmd_export.py \
+PYTHONPATH=$REPO $XLDVP_PYTHON $REPO/run_lmd_export.py \
     --detections /path/to/scored_detections.json \
     --crosses /path/to/reference_crosses.json \
     --clusters /path/to/clusters.json \
@@ -144,7 +144,7 @@ For proteomics workflows requiring area-normalized biological replicates across 
 
 **Step 1 -- Select cells and assign replicates:**
 ```bash
-PYTHONPATH=$REPO $MKSEG_PYTHON $REPO/scripts/select_mks_for_lmd.py \
+PYTHONPATH=$REPO $XLDVP_PYTHON $REPO/scripts/select_mks_for_lmd.py \
     --score-threshold 0.80 \
     --target-area 10000 \
     --max-replicates 4
@@ -154,7 +154,7 @@ This produces `lmd_replicates_full.json` with per-cell well assignments and repl
 
 **Step 2 -- Export XML from pre-assigned wells:**
 ```bash
-PYTHONPATH=$REPO $MKSEG_PYTHON $REPO/scripts/lmd_export_replicates.py \
+PYTHONPATH=$REPO $XLDVP_PYTHON $REPO/scripts/lmd_export_replicates.py \
     --sampling-results lmd_replicates_full.json \
     --contours-json mk_contours_overlay.json \
     --crosses-dir ./crosses \
@@ -186,29 +186,29 @@ After CW90 rotation, the display height equals the original CZI width. The expor
 
 ```bash
 # 1. Detect
-PYTHONPATH=$REPO $MKSEG_PYTHON $REPO/run_segmentation.py \
+PYTHONPATH=$REPO $XLDVP_PYTHON $REPO/run_segmentation.py \
     --czi-path /path/to/slide.czi \
     --cell-type cell --channel-spec "cyto=PM,nuc=488" \
     --all-channels --output-dir /path/to/output
 
 # 2. Annotate in HTML viewer, then train + score
-$MKSEG_PYTHON $REPO/serve_html.py /path/to/output
+$XLDVP_PYTHON $REPO/serve_html.py /path/to/output
 # ... annotate ~200 cells, export annotations ...
-$MKSEG_PYTHON $REPO/train_classifier.py \
+$XLDVP_PYTHON $REPO/train_classifier.py \
     --detections /path/to/output/cell_detections.json \
     --annotations annotations.json --output-dir /path/to/output
-$MKSEG_PYTHON $REPO/scripts/apply_classifier.py \
+$XLDVP_PYTHON $REPO/scripts/apply_classifier.py \
     --detections /path/to/output/cell_detections.json \
     --classifier /path/to/output/rf_classifier.pkl \
     --output /path/to/output/cell_detections_scored.json
 
 # 3. Place 3 reference crosses in Napari
-$MKSEG_PYTHON $REPO/scripts/napari_place_crosses.py \
+$XLDVP_PYTHON $REPO/scripts/napari_place_crosses.py \
     -i /path/to/slide.czi --flip-horizontal \
     -o /path/to/output/lmd/reference_crosses.json
 
 # 4. Export to LMD XML
-PYTHONPATH=$REPO $MKSEG_PYTHON $REPO/run_lmd_export.py \
+PYTHONPATH=$REPO $XLDVP_PYTHON $REPO/run_lmd_export.py \
     --detections /path/to/output/cell_detections_scored.json \
     --crosses /path/to/output/lmd/reference_crosses.json \
     --output-dir /path/to/output/lmd \

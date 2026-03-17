@@ -39,13 +39,20 @@ You serve three roles throughout the workflow:
 ## Phase 0: System Detection + Toolbox
 
 **Step 1 — Detect the environment (do this silently, no need to ask):**
-Run `$MKSEG_PYTHON $REPO/scripts/system_info.py --json` (where `$REPO` is the repo root). Parse the JSON to determine:
+Run `$XLDVP_PYTHON $REPO/scripts/system_info.py --json` (where `$REPO` is the repo root). Parse the JSON to determine:
 - SLURM cluster or local workstation?
 - Available GPUs, RAM, CPUs, partitions
-- **Partition busyness**: `nodes_idle` vs `nodes_allocated` per partition. Briefly tell the user which partitions have space.
-- Recommended resources (the script computes these: ~75% of node CPUs/RAM on SLURM to leave headroom for other users, 75% on local). On SLURM, prefer GPU partitions with idle nodes. Use `system_info.py` output — don't hardcode partition names or specs.
+- **Per-node availability**: `system_info.py` queries actual idle CPUs, free memory, and GPU allocation per node — not just partition specs. It recommends resources based on what's *currently schedulable*.
+- Recommended resources: capped at 128 CPUs max (reliably schedulable on busy clusters even when nodes are partially allocated). Memory at ~65% of node spec. All 4 GPUs on GPU partitions. Use `system_info.py` output — don't hardcode partition names or specs.
 
-Use this info throughout to set `--num-gpus`, SLURM `--mem`, `--cpus-per-task`, `--gres`, etc.
+**Tell the user what's available and let them choose.** Example: *"p.hpcl93 (4x L40S): 3 nodes have 4 free GPUs. Best node has 212 idle CPUs and 728G free. Recommending 128 CPUs, 500G, 4 GPUs."*
+
+If the preferred GPU partition is fully busy, **don't silently fall back** — present it as a choice:
+*"p.hpcl93 is fully loaded right now (all GPUs allocated). Options: (1) submit and queue — you'll get a node when one frees up, (2) use p.hpcl8 (2x RTX 5000, 24 CPUs, 380G — smaller but available now), (3) wait and check back later. Which do you prefer?"*
+
+Many users prefer to queue on the better partition rather than run on weaker hardware.
+
+Use this info throughout to set `--num-gpus`, SLURM `--mem`, `--cpus-per-task`, `--gres`, etc. On GPU partitions, **always request all 4 GPUs** (GPU scheduling is per-device exclusive) and `--nodes=1`.
 
 **Step 2 — Determine the user's experience level.** Infer from context (e.g., "first time on terminal" = beginner, jumping straight to channel specs = advanced), or ask if unclear. The user can switch at any time by saying "beginner mode" or "advanced mode" — acknowledge the switch and adjust immediately.
 
@@ -77,6 +84,9 @@ Explain each step **as you reach it**, not all upfront. Define jargon inline whe
 | **Tissue area** | Variance-based tissue detection, area measurement from CZI | `scripts/calculate_tissue_areas.py` |
 | **Visualize** | Multi-slide scrollable HTML with ROI drawing + stats | `scripts/generate_multi_slide_spatial_viewer.py` |
 | **Tissue overlay** | Fluorescence image + cell overlay + ROI + LMD export in one viewer | `scripts/generate_tissue_overlay.py` |
+| **Region splitting** | Threshold bright channel → watershed split into equal-area pieces → LMD | `scripts/split_regions_for_lmd.py` |
+| **Replicate sampling** | Area-matched or spatially-clustered replicates, marker/cluster stratification, 384-well assignment | `scripts/paper_figure_sampling.py` |
+| **Transect selection** | Select cells along zonation transect paths for LMD | `scripts/select_transect_cells_for_lmd.py` |
 | **LMD** | Contour dilation+RDP, clustering, well assignment, XML export | `run_lmd_export.py` |
 | **SpatialData** | Export to scverse ecosystem (squidpy, scanpy, anndata) | `scripts/convert_to_spatialdata.py` |
 | **Convert** | CZI to OME-Zarr pyramids for Napari | `scripts/czi_to_ome_zarr.py` |
@@ -116,19 +126,19 @@ Don't list these tables to the user. Just ask what they want to analyze.
 
 **Step 4 — Ask for the CZI file(s).** Accept a single path or a directory.
 
-**Step 5 — Inspect the CZI.** Run `$MKSEG_PYTHON $REPO/scripts/czi_info.py <path>` (human-readable). Show the channel table with wavelengths.
+**Step 5 — Inspect the CZI.** Run `$XLDVP_PYTHON $REPO/scripts/czi_info.py <path>` (human-readable). Show the channel table with wavelengths.
 
 **Step 5b — Build the channel map (CRITICAL — do not skip).** CZI channel order ≠ filename order and is NOT sorted by wavelength. The only authoritative source is `czi_info.py`:
 
 ```bash
-$MKSEG_PYTHON $REPO/scripts/czi_info.py <czi_path>
+$XLDVP_PYTHON $REPO/scripts/czi_info.py <czi_path>
 ```
 
 This prints the actual channel index → fluorophore → excitation/emission for every channel. Use this output — never manually sort by wavelength, never assume from filename alone.
 
 Then also parse the filename markers to match antibody names to the fluorophores:
 ```bash
-$MKSEG_PYTHON -c "from segmentation.io.czi_loader import parse_markers_from_filename; import json; print(json.dumps(parse_markers_from_filename('<czi_filename>'), indent=2))"
+$XLDVP_PYTHON -c "from segmentation.io.czi_loader import parse_markers_from_filename; import json; print(json.dumps(parse_markers_from_filename('<czi_filename>'), indent=2))"
 ```
 
 Build and show the user a confirmed table, for example:
@@ -191,7 +201,7 @@ czi_path: <path>              # single slide
 # czi_glob: "*.czi"
 output_dir: <output_path>
 cell_type: <type>
-num_gpus: <from system_info recommended.gpus>
+num_gpus: 4                 # always use all GPUs on GPU partitions
 all_channels: true    # always true for multi-channel slides — enables per-channel feature extraction
 load_channels: "<comma-separated indices>"  # omit to load all; e.g., "0,1,2" to skip ch3 (failed stains waste RAM)
 pixel_size_um: <from czi_info, or omit — auto-detected from CZI metadata>
@@ -211,9 +221,9 @@ spatialdata:
 html_sample_fraction: 0.10    # 10% keeps HTML fast — large slides have 100k+ crops, loading all crashes the browser
 slurm:
   partition: <from system_info recommended.partition>
-  cpus: <from system_info recommended.cpus>
-  mem_gb: <from system_info recommended.mem_gb>
-  gpus: "<gpu_type>:<count>"
+  cpus: 128                     # capped at 128 for reliable scheduling on busy clusters
+  mem_gb: <from system_info recommended.mem_gb, typically ~500>
+  gpus: "<gpu_type>:4"          # always request all GPUs on GPU partitions
   time: "3-00:00:00"
   slides_per_job: 1           # 1 slide/job = parallel SLURM array tasks, not sequential — much faster throughput
   num_jobs: <number of slides>
@@ -222,7 +232,7 @@ Then run: `scripts/run_pipeline.sh configs/<name>.yaml`
 
 For **local**: Build and run the `run_segmentation.py` command directly:
 ```bash
-PYTHONPATH=$REPO $MKSEG_PYTHON $REPO/run_segmentation.py \
+PYTHONPATH=$REPO $XLDVP_PYTHON $REPO/run_segmentation.py \
     --czi-path <path> \
     --cell-type <type> \
     --channel-spec "detect=<marker>" \
@@ -257,7 +267,7 @@ ls <output_dir>/<slide_name>/<timestamp>/tiles/ | head -3  # confirm tiles/ is i
 
 **For local runs**, pass `--resume` directly:
 ```bash
-PYTHONPATH=$REPO $MKSEG_PYTHON $REPO/run_segmentation.py \
+PYTHONPATH=$REPO $XLDVP_PYTHON $REPO/run_segmentation.py \
     --czi-path <path> --cell-type <type> \
     --resume /path/to/output/slide_name/slide_name_20260302_060105_100pct \
     [other flags]
@@ -267,7 +277,7 @@ PYTHONPATH=$REPO $MKSEG_PYTHON $REPO/run_segmentation.py \
 **Step 10c — Review detection results (adaptive).** After detection completes, check the output:
 ```bash
 # Quick summary
-$MKSEG_PYTHON -c "import json; d=json.load(open('<detections.json>')); print(f'{len(d)} detections')"
+$XLDVP_PYTHON -c "import json; d=json.load(open('<detections.json>')); print(f'{len(d)} detections')"
 ```
 
 Based on what you see, give targeted recommendations:
@@ -284,7 +294,7 @@ Don't overwhelm — pick the 1-2 most relevant observations and mention them con
 
 *Only needed if the user wants to train a classifier. Detection already ran on 100% of tiles.*
 
-**Step 11 — Serve HTML results.** Run `$MKSEG_PYTHON $REPO/serve_html.py <output_dir>` to start the viewer. Show the Cloudflare tunnel URL.
+**Step 11 — Serve HTML results.** Run `$XLDVP_PYTHON $REPO/serve_html.py <output_dir>` to start the viewer. Show the Cloudflare tunnel URL.
 
 For beginners, explain: *"Open the URL in your browser. You'll see detection crops. Click the green checkmark for real detections, red X for false positives. Your annotations are saved in the browser."*
 
@@ -292,7 +302,7 @@ For beginners, explain: *"Open the URL in your browser. You'll see detection cro
 
 **Step 13 — Train classifier.** Run:
 ```bash
-PYTHONPATH=$REPO $MKSEG_PYTHON $REPO/train_classifier.py \
+PYTHONPATH=$REPO $XLDVP_PYTHON $REPO/train_classifier.py \
     --detections <detections.json> \
     --annotations <annotations.json> \
     --output-dir <output> \
@@ -314,12 +324,12 @@ Offer to run `scripts/compare_feature_sets.py` first to find the best feature co
 
 **Step 14 — Apply classifier + regenerate HTML.**
 ```bash
-PYTHONPATH=$REPO $MKSEG_PYTHON $REPO/scripts/apply_classifier.py \
+PYTHONPATH=$REPO $XLDVP_PYTHON $REPO/scripts/apply_classifier.py \
     --detections <detections.json> \
     --classifier <rf_classifier.pkl> \
     --output <scored_detections.json>
 
-PYTHONPATH=$REPO $MKSEG_PYTHON $REPO/scripts/regenerate_html.py \
+PYTHONPATH=$REPO $XLDVP_PYTHON $REPO/scripts/regenerate_html.py \
     --detections <scored_detections.json> \
     --czi-path <path> \
     --output-dir <output> \
@@ -338,20 +348,20 @@ Ask: *"Which channels are markers you want to classify as positive/negative?"*
 
 ```bash
 # Standard usage — just classify, bg correction already done by pipeline:
-PYTHONPATH=$REPO $MKSEG_PYTHON $REPO/scripts/classify_markers.py \
+PYTHONPATH=$REPO $XLDVP_PYTHON $REPO/scripts/classify_markers.py \
     --detections <detections.json> \
     --marker-channel 1,2 \
     --marker-name NeuN,tdTomato
 
 # By wavelength (auto-resolves via CZI metadata):
-PYTHONPATH=$REPO $MKSEG_PYTHON $REPO/scripts/classify_markers.py \
+PYTHONPATH=$REPO $XLDVP_PYTHON $REPO/scripts/classify_markers.py \
     --detections <detections.json> \
     --marker-wavelength 647,555 \
     --marker-name NeuN,tdTomato \
     --czi-path <czi_path>
 
 # For OLDER detections (pre-Mar 2026) without pipeline bg correction:
-PYTHONPATH=$REPO $MKSEG_PYTHON $REPO/scripts/classify_markers.py \
+PYTHONPATH=$REPO $XLDVP_PYTHON $REPO/scripts/classify_markers.py \
     --detections <detections.json> \
     --marker-channel 1,2 \
     --marker-name NeuN,tdTomato \
@@ -383,28 +393,28 @@ PYTHONPATH=$REPO $MKSEG_PYTHON $REPO/scripts/classify_markers.py \
 If the slide has multiple markers that define tissue zones (e.g., hepatic zonation with GluI/Pck1, or bone marrow regions):
 ```bash
 # Automatic spatially-constrained zone discovery
-PYTHONPATH=$REPO $MKSEG_PYTHON $REPO/scripts/assign_tissue_zones.py \
+PYTHONPATH=$REPO $XLDVP_PYTHON $REPO/scripts/assign_tissue_zones.py \
     --detections <detections.json> \
     --output-dir <output>/zones
 
 # Hepatic zonation transect analysis (pericentral → periportal gradients)
-PYTHONPATH=$REPO $MKSEG_PYTHON $REPO/scripts/zonation_transect.py \
+PYTHONPATH=$REPO $XLDVP_PYTHON $REPO/scripts/zonation_transect.py \
     --detections <detections.json> \
     --output-dir <output>/transects
 
 # Bone region annotation (interactive HTML tool)
-PYTHONPATH=$REPO $MKSEG_PYTHON $REPO/scripts/annotate_bone_regions.py \
+PYTHONPATH=$REPO $XLDVP_PYTHON $REPO/scripts/annotate_bone_regions.py \
     --detections <detections.json> \
     --output <output>/bone_regions.json
 
 # Calculate tissue areas from CZI (variance-based tissue detection)
-PYTHONPATH=$REPO $MKSEG_PYTHON $REPO/scripts/calculate_tissue_areas.py \
+PYTHONPATH=$REPO $XLDVP_PYTHON $REPO/scripts/calculate_tissue_areas.py \
     --czi-path <czi_path> --output-dir <output>
 ```
 
 **Step 17 — Spatial network analysis:**
 ```bash
-PYTHONPATH=$REPO $MKSEG_PYTHON $REPO/scripts/spatial_cell_analysis.py \
+PYTHONPATH=$REPO $XLDVP_PYTHON $REPO/scripts/spatial_cell_analysis.py \
     --detections <detections.json> \
     --output-dir <output> \
     --spatial-network \
@@ -415,7 +425,7 @@ PYTHONPATH=$REPO $MKSEG_PYTHON $REPO/scripts/spatial_cell_analysis.py \
 
 **Step 18 — Feature exploration.** Offer UMAP/HDBSCAN clustering:
 ```bash
-PYTHONPATH=$REPO $MKSEG_PYTHON $REPO/scripts/cluster_by_features.py \
+PYTHONPATH=$REPO $XLDVP_PYTHON $REPO/scripts/cluster_by_features.py \
     --detections <detections.json> \
     --output-dir <output>/clustering \
     --feature-groups "morph,sam2"  # or morph,sam2,channel,deep
@@ -423,7 +433,7 @@ PYTHONPATH=$REPO $MKSEG_PYTHON $REPO/scripts/cluster_by_features.py \
 
 **Step 19 — Interactive spatial viewer:**
 ```bash
-PYTHONPATH=$REPO $MKSEG_PYTHON $REPO/scripts/generate_multi_slide_spatial_viewer.py \
+PYTHONPATH=$REPO $XLDVP_PYTHON $REPO/scripts/generate_multi_slide_spatial_viewer.py \
     --input-dir <output> \
     --group-field <marker_class_field> \
     --title "Spatial Overview" \
@@ -432,7 +442,7 @@ PYTHONPATH=$REPO $MKSEG_PYTHON $REPO/scripts/generate_multi_slide_spatial_viewer
 
 Or use the tissue overlay viewer (fluorescence image + cell overlay + ROI + LMD export):
 ```bash
-PYTHONPATH=$REPO $MKSEG_PYTHON $REPO/scripts/generate_tissue_overlay.py \
+PYTHONPATH=$REPO $XLDVP_PYTHON $REPO/scripts/generate_tissue_overlay.py \
     --detections <detections.json> \
     --czi-path <czi_path> \
     --output <output>/tissue_overlay.html
@@ -440,7 +450,7 @@ PYTHONPATH=$REPO $MKSEG_PYTHON $REPO/scripts/generate_tissue_overlay.py \
 
 Or the all-in-one command:
 ```bash
-PYTHONPATH=$REPO $MKSEG_PYTHON $REPO/scripts/view_slide.py \
+PYTHONPATH=$REPO $XLDVP_PYTHON $REPO/scripts/view_slide.py \
     --detections <detections.json> \
     --czi-path <czi_path> \
     --output-dir <output>
@@ -452,15 +462,15 @@ This chains: classify_markers → spatial_cell_analysis → generate_multi_slide
 For **MK** detections, offer these additional analyses:
 ```bash
 # Maturation staging using nuclear deep features
-PYTHONPATH=$REPO $MKSEG_PYTHON $REPO/scripts/maturation_analysis.py \
+PYTHONPATH=$REPO $XLDVP_PYTHON $REPO/scripts/maturation_analysis.py \
     --detections <detections.json> --output-dir <output>/maturation
 
 # Comprehensive multi-dimensional analysis
-PYTHONPATH=$REPO $MKSEG_PYTHON $REPO/scripts/mk_comprehensive_analysis.py \
+PYTHONPATH=$REPO $XLDVP_PYTHON $REPO/scripts/mk_comprehensive_analysis.py \
     --detections <detections.json> --output-dir <output>/comprehensive
 
 # Split by bone region (femur/humerus) after bone annotation
-PYTHONPATH=$REPO $MKSEG_PYTHON $REPO/scripts/split_detections_by_bone.py \
+PYTHONPATH=$REPO $XLDVP_PYTHON $REPO/scripts/split_detections_by_bone.py \
     --detections <detections.json> \
     --bone-regions <bone_regions.json> \
     --output-dir <output>
@@ -469,34 +479,34 @@ PYTHONPATH=$REPO $MKSEG_PYTHON $REPO/scripts/split_detections_by_bone.py \
 For **vessel** detections:
 ```bash
 # Multi-scale vessel community analysis
-PYTHONPATH=$REPO $MKSEG_PYTHON $REPO/scripts/vessel_community_analysis.py \
+PYTHONPATH=$REPO $XLDVP_PYTHON $REPO/scripts/vessel_community_analysis.py \
     --detections <detections.json> \
     --output-dir <output>/vessel_communities
 
 # RBC vascularization analysis
-PYTHONPATH=$REPO $MKSEG_PYTHON $REPO/scripts/rbc_vascularization_analysis.py \
+PYTHONPATH=$REPO $XLDVP_PYTHON $REPO/scripts/rbc_vascularization_analysis.py \
     --detections <detections.json> --output-dir <output>/rbc
 ```
 
 For **islet** detections:
 ```bash
 # Spatial islet analysis
-PYTHONPATH=$REPO $MKSEG_PYTHON $REPO/scripts/analyze_islets.py \
+PYTHONPATH=$REPO $XLDVP_PYTHON $REPO/scripts/analyze_islets.py \
     --detections <detections.json> --output-dir <output>/islets
 
 # HTML overview
-PYTHONPATH=$REPO $MKSEG_PYTHON $REPO/scripts/generate_islet_overview.py \
+PYTHONPATH=$REPO $XLDVP_PYTHON $REPO/scripts/generate_islet_overview.py \
     --detections <detections.json> --output <output>/islet_overview.html
 ```
 
 For **mesothelium** detections:
 ```bash
 # Tier reclassification HTML tool
-PYTHONPATH=$REPO $MKSEG_PYTHON $REPO/scripts/generate_msln_annotation.py \
+PYTHONPATH=$REPO $XLDVP_PYTHON $REPO/scripts/generate_msln_annotation.py \
     --detections <detections.json> --output <output>/msln_annotation.html
 
 # Cluster viewer
-PYTHONPATH=$REPO $MKSEG_PYTHON $REPO/scripts/generate_msln_cluster_viewer.py \
+PYTHONPATH=$REPO $XLDVP_PYTHON $REPO/scripts/generate_msln_cluster_viewer.py \
     --detections <detections.json> --output <output>/msln_clusters.html
 ```
 
@@ -511,7 +521,7 @@ Look for `*_spatialdata.zarr` in the output directory. If it exists, tell the us
 
 If it doesn't exist (e.g., older run), offer to generate it:
 ```bash
-$MKSEG_PYTHON $REPO/scripts/convert_to_spatialdata.py \
+$XLDVP_PYTHON $REPO/scripts/convert_to_spatialdata.py \
     --detections <detections.json> \
     --output <output>/<celltype>_spatialdata.zarr \
     --tiles-dir <output>/tiles \
@@ -526,7 +536,7 @@ If the user has marker classifications (e.g., from `classify_markers.py`), ask w
 *"Which classification column should squidpy analyze? (e.g., tdTomato_class, GFP_class)"*
 
 ```bash
-$MKSEG_PYTHON $REPO/scripts/convert_to_spatialdata.py \
+$XLDVP_PYTHON $REPO/scripts/convert_to_spatialdata.py \
     --detections <detections.json> \
     --output <output>/<celltype>_spatialdata.zarr \
     --tiles-dir <output>/tiles \
@@ -569,25 +579,25 @@ sc.pl.umap(adata, color=["area", "rf_prediction"])
 
 **Step 24 — OME-Zarr** is auto-generated at the end of every pipeline run (from SHM, fast). No separate conversion needed. Use `--no-zarr` to skip, `--force-zarr` to overwrite existing. Only needed manually for standalone CZI conversion:
 ```bash
-PYTHONPATH=$REPO $MKSEG_PYTHON $REPO/scripts/czi_to_ome_zarr.py <czi_path> <output>.zarr
+PYTHONPATH=$REPO $XLDVP_PYTHON $REPO/scripts/czi_to_ome_zarr.py <czi_path> <output>.zarr
 ```
 
 **Step 25 — Place reference crosses** in Napari. CZI-native is recommended (no OME-Zarr conversion needed):
 ```bash
 # CZI-native (recommended)
-PYTHONPATH=$REPO $MKSEG_PYTHON $REPO/scripts/napari_place_crosses.py \
+PYTHONPATH=$REPO $XLDVP_PYTHON $REPO/scripts/napari_place_crosses.py \
     -i <czi_path> --channel 0 -o <crosses.json>
 
 # With LMD7 display transforms (tissue-down + rotated)
-PYTHONPATH=$REPO $MKSEG_PYTHON $REPO/scripts/napari_place_crosses.py \
+PYTHONPATH=$REPO $XLDVP_PYTHON $REPO/scripts/napari_place_crosses.py \
     -i <czi_path> --channel 0 --flip-horizontal --rotate-cw-90 -o <crosses.json>
 
 # With contour overlay (colored by field)
-PYTHONPATH=$REPO $MKSEG_PYTHON $REPO/scripts/napari_place_crosses.py \
+PYTHONPATH=$REPO $XLDVP_PYTHON $REPO/scripts/napari_place_crosses.py \
     -i <czi_path> --channel 0 --contours <detections.json> --color-by well -o <crosses.json>
 
 # Or use OME-Zarr for very large slides
-PYTHONPATH=$REPO $MKSEG_PYTHON $REPO/scripts/napari_place_crosses.py \
+PYTHONPATH=$REPO $XLDVP_PYTHON $REPO/scripts/napari_place_crosses.py \
     -i <output>.zarr -o <crosses.json>
 ```
 
@@ -595,7 +605,7 @@ Keybinds: R/G/B to select cross color, Space to place, S to save, U to undo, Q t
 
 **Step 26 — Run LMD export:**
 ```bash
-PYTHONPATH=$REPO $MKSEG_PYTHON $REPO/run_lmd_export.py \
+PYTHONPATH=$REPO $XLDVP_PYTHON $REPO/run_lmd_export.py \
     --detections <detections.json> \
     --crosses <crosses.json> \
     --output-dir <output>/lmd \
@@ -608,7 +618,7 @@ PYTHONPATH=$REPO $MKSEG_PYTHON $REPO/run_lmd_export.py \
     --erode-pct 0.05      # Percent of sqrt(area)
 
 # Batch export (multiple slides)
-PYTHONPATH=$REPO $MKSEG_PYTHON $REPO/run_lmd_export.py \
+PYTHONPATH=$REPO $XLDVP_PYTHON $REPO/run_lmd_export.py \
     --input-dir <runs_dir> \
     --crosses-dir <crosses_dir> \
     --output-dir <output>/lmd_batch \
@@ -621,7 +631,7 @@ PYTHONPATH=$REPO $MKSEG_PYTHON $REPO/run_lmd_export.py \
 ```bash
 # Generic: use segmentation.lmd.selection.select_cells_for_lmd() in Python
 # MK-specific wrapper with multi-plate well assignment:
-PYTHONPATH=$REPO $MKSEG_PYTHON $REPO/scripts/select_mks_for_lmd.py \
+PYTHONPATH=$REPO $XLDVP_PYTHON $REPO/scripts/select_mks_for_lmd.py \
     --score-threshold 0.80 --target-area 10000 --max-replicates 4
 ```
 Multi-plate support: `segmentation.lmd.well_plate` handles automatic overflow to additional 384-well plates when >308 wells are needed. Empty QC wells (10% of samples) are inserted evenly across all plates. Well ordering: serpentine within quadrants (B2→B3→C3→C2), nearest-corner transitions between quadrants to minimize laser head travel.
@@ -632,7 +642,7 @@ Multi-plate support: `segmentation.lmd.well_plate` handles automatic overflow to
 
 - Each phase ends with *"Ready for the next step?"* — the user can stop at any phase.
 - Use `$REPO` = the repo root path throughout. Set `PYTHONPATH=$REPO` before commands.
-- Use `$MKSEG_PYTHON` (from system_info) as the Python interpreter, not bare `python`.
+- Use `$XLDVP_PYTHON` (from system_info) as the Python interpreter, not bare `python`.
 - On SLURM: always `sbatch`, never run heavy compute on the login node. Previews and `czi_info` are OK on login.
 - All paths should be absolute.
 - **When something fails — diagnose first.** Read the last 50 lines of the log. Common patterns:

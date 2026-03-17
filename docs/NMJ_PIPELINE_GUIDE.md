@@ -7,7 +7,7 @@ Detect neuromuscular junctions (NMJs) in CZI muscle tissue slides using 98th-per
 ```bash
 # Environment
 export REPO=/path/to/xldvp_seg
-export MKSEG_PYTHON=/path/to/miniforge3/envs/mkseg/bin/python
+export XLDVP_PYTHON=/path/to/miniforge3/envs/xldvp_seg/bin/python
 
 # Install dependencies (auto-detects CUDA)
 ./install.sh
@@ -20,7 +20,7 @@ SAM2.1 Large checkpoint (`checkpoints/sam2.1_hiera_large.pt`) is required for em
 **Always run `czi_info.py` first.** CZI channel order is NOT wavelength-sorted and cannot be inferred from the filename.
 
 ```bash
-PYTHONPATH=$REPO $MKSEG_PYTHON $REPO/scripts/czi_info.py /path/to/slide.czi
+PYTHONPATH=$REPO $XLDVP_PYTHON $REPO/scripts/czi_info.py /path/to/slide.czi
 ```
 
 Example output for a 3-channel NMJ slide:
@@ -41,7 +41,7 @@ Use `--channel-spec` to resolve channels by marker name or wavelength -- never h
 ### Local launch
 
 ```bash
-PYTHONPATH=$REPO $MKSEG_PYTHON $REPO/run_segmentation.py \
+PYTHONPATH=$REPO $XLDVP_PYTHON $REPO/run_segmentation.py \
     --czi-path /path/to/slide.czi \
     --output-dir /path/to/output \
     --cell-type nmj \
@@ -69,7 +69,7 @@ Detection always processes 100% of tiles. Do not change `--sample-fraction`.
 
 ### SLURM launch (YAML config)
 
-Check cluster availability first: `$MKSEG_PYTHON $REPO/scripts/system_info.py`
+Check cluster availability first: `$XLDVP_PYTHON $REPO/scripts/system_info.py`
 
 Create a YAML config (e.g., `configs/nmj_experiment.yaml`):
 ```yaml
@@ -120,7 +120,7 @@ Point `--resume` at the exact timestamped run directory containing `tiles/`:
 
 ```bash
 # Local
-PYTHONPATH=$REPO $MKSEG_PYTHON $REPO/run_segmentation.py \
+PYTHONPATH=$REPO $XLDVP_PYTHON $REPO/run_segmentation.py \
     --czi-path /path/to/slide.czi \
     --cell-type nmj \
     --channel-spec "detect=BTX" \
@@ -138,7 +138,7 @@ The pipeline auto-detects the most advanced checkpoint and skips completed stage
 Serve the HTML viewer and annotate NMJs:
 
 ```bash
-$MKSEG_PYTHON $REPO/serve_html.py /path/to/output
+$XLDVP_PYTHON $REPO/serve_html.py /path/to/output
 ```
 
 This opens a Cloudflare tunnel to the HTML viewer. Click green checkmark for real NMJs, red X for false positives. Annotate 200+ detections for good classifier performance. Export annotations via the Export button.
@@ -146,7 +146,7 @@ This opens a Cloudflare tunnel to the HTML viewer. Click green checkmark for rea
 ## Step 5: Train Classifier
 
 ```bash
-PYTHONPATH=$REPO $MKSEG_PYTHON $REPO/train_classifier.py \
+PYTHONPATH=$REPO $XLDVP_PYTHON $REPO/train_classifier.py \
     --detections /path/to/output/nmj_detections.json \
     --annotations /path/to/annotations.json \
     --output-dir /path/to/output/classifier \
@@ -160,7 +160,7 @@ Feature sets: `morph` (78D, fast -- often sufficient), `morph_sam2` (334D), `cha
 Apply the trained classifier to score every detection (CPU, seconds):
 
 ```bash
-PYTHONPATH=$REPO $MKSEG_PYTHON $REPO/scripts/apply_classifier.py \
+PYTHONPATH=$REPO $XLDVP_PYTHON $REPO/scripts/apply_classifier.py \
     --detections /path/to/output/nmj_detections.json \
     --classifier /path/to/output/classifier/rf_classifier.pkl \
     --output /path/to/output/nmj_detections_scored.json
@@ -169,7 +169,7 @@ PYTHONPATH=$REPO $MKSEG_PYTHON $REPO/scripts/apply_classifier.py \
 Regenerate the HTML viewer filtered by score:
 
 ```bash
-PYTHONPATH=$REPO $MKSEG_PYTHON $REPO/scripts/regenerate_html.py \
+PYTHONPATH=$REPO $XLDVP_PYTHON $REPO/scripts/regenerate_html.py \
     --detections /path/to/output/nmj_detections_scored.json \
     --czi-path /path/to/slide.czi \
     --output-dir /path/to/output \
@@ -182,7 +182,7 @@ For multi-channel NMJ slides, classify each detection as positive/negative per f
 
 ```bash
 # By wavelength (preferred -- auto-resolves via CZI metadata):
-PYTHONPATH=$REPO $MKSEG_PYTHON $REPO/scripts/classify_markers.py \
+PYTHONPATH=$REPO $XLDVP_PYTHON $REPO/scripts/classify_markers.py \
     --detections /path/to/output/nmj_detections_scored.json \
     --marker-wavelength 647,750 \
     --marker-name BTX,NFL \
@@ -199,13 +199,13 @@ Export scored NMJs for laser microdissection.
 
 **Place 3 reference crosses** in Napari:
 ```bash
-PYTHONPATH=$REPO $MKSEG_PYTHON $REPO/scripts/napari_place_crosses.py \
+PYTHONPATH=$REPO $XLDVP_PYTHON $REPO/scripts/napari_place_crosses.py \
     -i /path/to/slide.czi --flip-horizontal -o /path/to/crosses.json
 ```
 
 **Export XML:**
 ```bash
-PYTHONPATH=$REPO $MKSEG_PYTHON $REPO/run_lmd_export.py \
+PYTHONPATH=$REPO $XLDVP_PYTHON $REPO/run_lmd_export.py \
     --detections /path/to/output/nmj_detections_scored.json \
     --crosses /path/to/crosses.json \
     --output-dir /path/to/output/lmd \

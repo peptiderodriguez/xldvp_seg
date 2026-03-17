@@ -77,7 +77,7 @@ from . import mytype
 
 3. **Test at 1% sample:**
 ```bash
-PYTHONPATH=$REPO $MKSEG_PYTHON $REPO/run_segmentation.py \
+PYTHONPATH=$REPO $XLDVP_PYTHON $REPO/run_segmentation.py \
     --czi-path /path/to/slide.czi \
     --cell-type mytype \
     --sample-fraction 0.01 \

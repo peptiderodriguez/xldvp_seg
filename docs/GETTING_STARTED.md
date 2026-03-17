@@ -34,7 +34,7 @@ for laser microdissection.
 ## Installation
 
 ```bash
-conda create -n mkseg python=3.11 -y && conda activate mkseg
+conda create -n xldvp_seg python=3.11 -y && conda activate xldvp_seg
 git clone https://github.com/peptiderodriguez/xldvp_seg.git && cd xldvp_seg
 ./install.sh   # Auto-detects CUDA version and installs PyTorch + SAM2 + Cellpose
 ```
@@ -42,7 +42,7 @@ git clone https://github.com/peptiderodriguez/xldvp_seg.git && cd xldvp_seg
 Verify the environment:
 
 ```bash
-source ~/miniforge3/etc/profile.d/conda.sh && conda activate mkseg
+source ~/miniforge3/etc/profile.d/conda.sh && conda activate xldvp_seg
 python -c "import torch; print(f'PyTorch: {torch.__version__}, CUDA: {torch.cuda.is_available()}')"
 ```
 
@@ -100,7 +100,7 @@ CZI Image (20-180 GB)
 the filename.** The only authoritative source is `scripts/czi_info.py`.
 
 ```bash
-PYTHONPATH=$REPO $MKSEG_PYTHON $REPO/scripts/czi_info.py /path/to/slide.czi
+PYTHONPATH=$REPO $XLDVP_PYTHON $REPO/scripts/czi_info.py /path/to/slide.czi
 ```
 
 Example output:

@@ -11,14 +11,14 @@ You are a pipeline execution specialist for the xldvp_seg image analysis pipelin
 
 ```bash
 REPO="${REPO:-$(git rev-parse --show-toplevel 2>/dev/null || pwd)}"
-MKSEG_PYTHON="${MKSEG_PYTHON:-python}"
+XLDVP_PYTHON="${XLDVP_PYTHON:-python}"
 ```
 
-**DO NOT use `conda activate`** — it hangs on this system. Use `$MKSEG_PYTHON` directly with `PYTHONPATH=$REPO`.
+**DO NOT use `conda activate`** — it hangs on this system. Use `$XLDVP_PYTHON` directly with `PYTHONPATH=$REPO`.
 
 **This is a SLURM cluster** (p.hpcl8 + p.hpcl93). Always check partition busyness before recommending resources:
 ```bash
-$MKSEG_PYTHON $REPO/scripts/system_info.py --json
+$XLDVP_PYTHON $REPO/scripts/system_info.py --json
 ```
 
 ---
@@ -74,10 +74,10 @@ slurm:
 
 ```bash
 # Run czi_info.py FIRST — always
-PYTHONPATH=$REPO $MKSEG_PYTHON $REPO/scripts/czi_info.py /path/to/slide.czi
+PYTHONPATH=$REPO $XLDVP_PYTHON $REPO/scripts/czi_info.py /path/to/slide.czi
 
 # Then detect
-PYTHONPATH=$REPO $MKSEG_PYTHON $REPO/run_segmentation.py \
+PYTHONPATH=$REPO $XLDVP_PYTHON $REPO/run_segmentation.py \
     --czi-path /path/to/slide.czi \
     --cell-type <type> \
     --channel-spec "cyto=PM,nuc=488" \
@@ -156,7 +156,7 @@ ls -la <output_dir>/
 #   tiles/<cell_type>_detections.csv   (per-tile, for debugging)
 
 # Quick detection count
-PYTHONPATH=$REPO $MKSEG_PYTHON -c "import json; d=json.load(open('<detections.json>')); print(f'{len(d)} detections')"
+PYTHONPATH=$REPO $XLDVP_PYTHON -c "import json; d=json.load(open('<detections.json>')); print(f'{len(d)} detections')"
 ```
 
 ---

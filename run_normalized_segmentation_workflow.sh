@@ -77,7 +77,7 @@ echo "  - Generate intensity distribution plots"
 echo "  - Confirm normalization parameters are correct"
 echo ""
 
-source mkseg_rocm_env/bin/activate
+source xldvp_seg_rocm_env/bin/activate
 python validate_normalization.py
 
 if [ $? -ne 0 ]; then

@@ -19,8 +19,8 @@ import sys
 from pathlib import Path
 
 REPO = Path(__file__).resolve().parent.parent
-MKSEG_PYTHON = Path(
-    os.environ.get("MKSEG_PYTHON", "python")
+XLDVP_PYTHON = Path(
+    os.environ.get("XLDVP_PYTHON", os.environ.get("XLDVP_PYTHON", "python"))
 )
 
 
@@ -210,8 +210,8 @@ def detect_disk_space(paths=None):
 
 
 def detect_conda_env():
-    """Check if mkseg conda env exists."""
-    return MKSEG_PYTHON.exists()
+    """Check if xldvp_seg conda env exists."""
+    return XLDVP_PYTHON.exists()
 
 
 def detect_git_info():
@@ -229,15 +229,137 @@ def detect_git_info():
 
 
 # ---------------------------------------------------------------------------
+# Per-node availability query
+# ---------------------------------------------------------------------------
+
+MAX_RECOMMENDED_CPUS = 128  # Cap CPU recommendation at this value for schedulability
+
+
+def query_per_node_availability(partition):
+    """Query per-node idle CPUs, free memory (MB), GPU allocation, and state.
+
+    Runs: sinfo -p <partition> -N -o "%n %C %e %G %T" --noheader
+
+    %C format: "allocated/idle/other/total"
+    %e: free memory in MB
+    %G: GRES (e.g. "gpu:l40s:4(IDX:0,1,2,3)" or "(null)")
+    %T: node state (idle, allocated, mixed, down, drain, etc.)
+
+    Returns a list of dicts with keys: node, idle_cpus, free_mem_mb,
+    gpus_total, gpus_allocated, state.  Returns [] on failure.
+    """
+    raw = _run(["sinfo", "-p", partition, "-N", "-o", "%n %C %e %G %T", "--noheader"])
+    if not raw:
+        return []
+
+    nodes = []
+    for line in raw.splitlines():
+        parts = line.split()
+        if len(parts) < 5:
+            continue
+        node = parts[0]
+        cpu_str = parts[1]   # "allocated/idle/other/total"
+        mem_str = parts[2]   # free MB (or "N/A")
+        gres_str = parts[3]  # e.g. "gpu:l40s:4(IDX:...)" or "(null)"
+        state = parts[4]
+
+        # Parse CPU counts
+        idle_cpus = 0
+        cpu_parts = cpu_str.split("/")
+        if len(cpu_parts) == 4:
+            try:
+                idle_cpus = int(cpu_parts[1])
+            except ValueError:
+                pass
+
+        # Parse free memory
+        free_mem_mb = 0
+        try:
+            free_mem_mb = int(mem_str)
+        except ValueError:
+            pass
+
+        # Parse GPU total from GRES
+        gpus_total = 0
+        if gres_str not in ("(null)", "N/A", ""):
+            # Strip "(IDX:...)" or "(S:...)" suffix
+            if "(" in gres_str:
+                gres_str = gres_str[:gres_str.index("(")]
+            gparts = gres_str.split(":")
+            if len(gparts) >= 3:
+                try:
+                    gpus_total = int(gparts[-1])
+                except ValueError:
+                    pass
+            elif len(gparts) == 2:
+                try:
+                    gpus_total = int(gparts[-1])
+                except ValueError:
+                    pass
+
+        nodes.append({
+            "node": node,
+            "idle_cpus": idle_cpus,
+            "free_mem_mb": free_mem_mb,
+            "gpus_total": gpus_total,
+            "state": state,
+        })
+
+    return nodes
+
+
+def _best_schedulable_resources(partition_info, per_node):
+    """Given partition info and per-node data, return (cpus, mem_gb) that
+    reflect what is actually schedulable right now on a single node.
+
+    Strategy:
+    - Find nodes in 'idle' or 'mixed' state
+    - Among those, pick the node with the most idle CPUs
+    - Cap at MAX_RECOMMENDED_CPUS and 75% of node spec
+    - Fall back to 75% of partition spec (capped) if no per-node data
+    """
+    cpus_spec = partition_info["cpus_per_node"]
+    mem_spec = partition_info["mem_gb_per_node"]
+
+    # Filter to schedulable nodes (idle or mixed)
+    schedulable = [n for n in per_node if n["state"] in ("idle", "mixed", "idle~", "mixed~")]
+
+    if schedulable:
+        # Sort by idle CPUs descending
+        schedulable.sort(key=lambda n: n["idle_cpus"], reverse=True)
+        best_node = schedulable[0]
+        # Use min(idle_cpus, 75% of spec) to avoid requesting more than the node has
+        raw_cpus = min(best_node["idle_cpus"], int(cpus_spec * 0.75))
+        raw_mem = best_node["free_mem_mb"] // 1024  # MB → GB
+        if raw_mem == 0:
+            raw_mem = int(mem_spec * 0.75)
+    else:
+        # No per-node data or no schedulable nodes: fall back to 75% of spec
+        raw_cpus = int(cpus_spec * 0.75)
+        raw_mem = int(mem_spec * 0.75)
+
+    # Always cap CPUs at MAX_RECOMMENDED_CPUS
+    cpus = min(raw_cpus, MAX_RECOMMENDED_CPUS)
+    # Ensure at least 1 CPU
+    cpus = max(cpus, 1)
+    # Ensure reasonable memory
+    mem_gb = max(raw_mem, 1)
+
+    return cpus, mem_gb
+
+
+# ---------------------------------------------------------------------------
 # Recommendation logic
 # ---------------------------------------------------------------------------
 
 def recommend(slurm_info, local_gpus, total_ram_gb):
     """Build recommended resource allocation.
 
-    SLURM cluster: 75% of node CPUs/RAM to leave headroom for other users
-    on shared nodes.  Request all GPUs (GPU jobs typically get exclusive
-    GPU access anyway).  Prefer GPU partitions with idle nodes.
+    SLURM cluster: use per-node availability (sinfo -N) to recommend
+    resources based on what is *currently schedulable*, capped at
+    MAX_RECOMMENDED_CPUS (128) for reliability on mixed/busy nodes.
+    Always request all GPUs on GPU partitions.  Prefer GPU partitions
+    with idle nodes.
     Local workstation: 75% of CPUs/RAM, all GPUs.
     """
     rec = {}
@@ -256,17 +378,28 @@ def recommend(slurm_info, local_gpus, total_ram_gb):
         else:
             best = slurm_info["partitions"][0]
 
+        # Query per-node availability for the selected partition
+        per_node = query_per_node_availability(best["name"])
+        cpus, mem_gb = _best_schedulable_resources(best, per_node)
+
         rec["environment"] = "slurm"
         rec["partition"] = best["name"]
-        rec["cpus"] = int(best["cpus_per_node"] * 0.75)
-        rec["mem_gb"] = int(best["mem_gb_per_node"] * 0.75)
+        rec["cpus"] = cpus
+        rec["mem_gb"] = mem_gb
         rec["gpus"] = best["gpus_per_node"]
         rec["gpu_type"] = best.get("gpu_type", "")
-        rec["gres"] = f"{rec.get('gpu_type', 'gpu')}:{rec['gpus']}" if rec["gpus"] else ""
+        # Always include a GPU gres on GPU partitions (even if gpus==0 due to parse failure)
+        if best["gpus_per_node"] > 0:
+            gpu_type = best.get("gpu_type", "")
+            gres_type = f"gpu:{gpu_type}" if gpu_type else "gpu"
+            rec["gres"] = f"{gres_type}:{best['gpus_per_node']}"
+        else:
+            rec["gres"] = ""
+        rec["per_node_data"] = per_node
     else:
         rec["environment"] = "local"
         cpus = os.cpu_count() or 1
-        rec["cpus"] = math.floor(cpus * 0.75)
+        rec["cpus"] = min(math.floor(cpus * 0.75), MAX_RECOMMENDED_CPUS)
         rec["mem_gb"] = math.floor(total_ram_gb * 0.75)
         rec["gpus"] = len(local_gpus)
         if local_gpus:
@@ -288,8 +421,8 @@ def gather():
     info = {
         "environment": "slurm" if slurm else "local",
         "repo_path": str(REPO),
-        "mkseg_python": str(MKSEG_PYTHON),
-        "mkseg_available": detect_conda_env(),
+        "xldvp_python": str(XLDVP_PYTHON),
+        "xldvp_available": detect_conda_env(),
         "cpus": os.cpu_count(),
         "ram_total_gb": total_ram,
         "ram_available_gb": avail_ram,
@@ -316,7 +449,7 @@ def print_human(info):
     git = info.get("git", {})
     if git:
         print(f"  Git:          {git.get('branch', '?')} @ {git.get('head_sha', '?')}")
-    print(f"  mkseg env:    {'OK' if info['mkseg_available'] else 'NOT FOUND'}")
+    print(f"  xldvp_seg env: {'OK' if info['xldvp_available'] else 'NOT FOUND'}")
     print(f"  CPUs:         {info['cpus']}")
     print(f"  RAM:          {info['ram_total_gb']:.0f} GB total, {info['ram_available_gb']:.0f} GB available")
 
@@ -353,10 +486,18 @@ def print_human(info):
     print(f"\n  Recommended Resources:")
     if rec.get("partition"):
         print(f"    Partition:  {rec['partition']}")
-        print(f"    --gres=gpu:{rec['gres']}")
-    print(f"    CPUs:       {rec['cpus']}")
+        if rec.get("gres"):
+            print(f"    --gres={rec['gres']}")
+    print(f"    CPUs:       {rec['cpus']}  (capped at {MAX_RECOMMENDED_CPUS} for schedulability)")
     print(f"    RAM:        {rec['mem_gb']} GB")
     print(f"    GPUs:       {rec['gpus']}")
+    # Show per-node availability summary for the recommended partition
+    per_node = rec.get("per_node_data", [])
+    if per_node:
+        schedulable = [n for n in per_node if n["state"] in ("idle", "mixed", "idle~", "mixed~")]
+        max_idle_cpus = max((n["idle_cpus"] for n in schedulable), default=0)
+        print(f"    Node avail: {len(schedulable)}/{len(per_node)} nodes schedulable, "
+              f"max {max_idle_cpus} idle CPUs on best node")
     print(f"{'=' * 60}\n")
 
 

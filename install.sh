@@ -1,17 +1,17 @@
 #!/bin/bash
 # =============================================================================
-# MKSeg Installation Script
+# xldvp_seg Installation Script
 # =============================================================================
 #
-# This script installs the mkseg package and all dependencies including:
+# This script installs the xldvp_seg package and all dependencies including:
 # - PyTorch with CUDA support
 # - SAM2 (Segment Anything Model 2) from Facebook Research
 # - All other Python dependencies
 #
 # Usage:
 #   # Create conda environment first (recommended):
-#   conda create -n mkseg python=3.11 -y
-#   conda activate mkseg
+#   conda create -n xldvp_seg python=3.11 -y
+#   conda activate xldvp_seg
 #
 #   # Then run this script:
 #   ./install.sh
@@ -59,7 +59,7 @@ while [[ $# -gt 0 ]]; do
 done
 
 echo "============================================================"
-echo "MKSeg Installation"
+echo "xldvp_seg Installation"
 echo "============================================================"
 
 # Detect CUDA version if not specified
@@ -127,7 +127,7 @@ pip install git+https://github.com/facebookresearch/segment-anything-2.git
 
 # Install this package
 echo ""
-echo "Step 3: Installing mkseg package..."
+echo "Step 3: Installing xldvp_seg package..."
 echo "------------------------------------------------------------"
 
 if [ "$DEV" = true ]; then

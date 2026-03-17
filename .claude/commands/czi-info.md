@@ -6,15 +6,15 @@ You are inspecting CZI microscopy files for the xldvp_seg pipeline.
 
 **Step 2 — Run czi_info.** For each CZI file:
 ```bash
-PYTHONPATH=$REPO $MKSEG_PYTHON $REPO/scripts/czi_info.py <path>
+PYTHONPATH=$REPO $XLDVP_PYTHON $REPO/scripts/czi_info.py <path>
 ```
-Where `$REPO` is the repo root and `$MKSEG_PYTHON` is the mkseg Python binary.
+Where `$REPO` is the repo root and `$XLDVP_PYTHON` is the xldvp_seg Python binary.
 
 **Step 3 — Build the confirmed channel table.** The `czi_info.py` output is the authoritative channel order — CZI indices are NOT wavelength-sorted and cannot be inferred from the filename alone.
 
 Also parse the filename to match antibody names to fluorophores:
 ```bash
-$MKSEG_PYTHON -c "from segmentation.io.czi_loader import parse_markers_from_filename; import json; print(json.dumps(parse_markers_from_filename('<filename>'), indent=2))"
+$XLDVP_PYTHON -c "from segmentation.io.czi_loader import parse_markers_from_filename; import json; print(json.dumps(parse_markers_from_filename('<filename>'), indent=2))"
 ```
 
 Combine both outputs into a table and **show it to the user for confirmation before doing anything else**:

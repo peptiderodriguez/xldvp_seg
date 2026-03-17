@@ -31,7 +31,7 @@ ps aux | grep run_segmentation | grep -v grep
    # Run dir is the timestamped subdir containing tiles/ (get from scontrol StdOut path or ls)
    ls -d <run_dir>/tiles/tile_* 2>/dev/null | wc -l
    # Count detections in JSON (if dedup completed)
-   $MKSEG_PYTHON -c "import json; d=json.load(open('<run_dir>/<celltype>_detections.json')); print(f'{len(d)} detections')"
+   $XLDVP_PYTHON -c "import json; d=json.load(open('<run_dir>/<celltype>_detections.json')); print(f'{len(d)} detections')"
    ```
 
 4. **Check HTML status** — Does `<output_dir>/html/index.html` exist?

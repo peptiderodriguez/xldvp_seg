@@ -11,10 +11,10 @@ The end-to-end NMJ → LMD workflow:
 
 ```bash
 # 1. Inspect channels
-PYTHONPATH=$REPO $MKSEG_PYTHON $REPO/scripts/czi_info.py /path/to/slide.czi
+PYTHONPATH=$REPO $XLDVP_PYTHON $REPO/scripts/czi_info.py /path/to/slide.czi
 
 # 2. Detect (always 100%, checkpointed per-tile)
-PYTHONPATH=$REPO $MKSEG_PYTHON $REPO/run_segmentation.py \
+PYTHONPATH=$REPO $XLDVP_PYTHON $REPO/run_segmentation.py \
     --czi-path /path/to/slide.czi \
     --cell-type nmj \
     --channel-spec "detect=BTX" \
@@ -22,20 +22,20 @@ PYTHONPATH=$REPO $MKSEG_PYTHON $REPO/run_segmentation.py \
     --output-dir /path/to/output
 
 # 3. Annotate in HTML viewer, train classifier, score detections
-PYTHONPATH=$REPO $MKSEG_PYTHON $REPO/train_classifier.py \
+PYTHONPATH=$REPO $XLDVP_PYTHON $REPO/train_classifier.py \
     --detections <detections.json> --annotations <annotations.json> \
     --output-dir <output> --feature-set morph
 
-PYTHONPATH=$REPO $MKSEG_PYTHON $REPO/scripts/apply_classifier.py \
+PYTHONPATH=$REPO $XLDVP_PYTHON $REPO/scripts/apply_classifier.py \
     --detections <detections.json> --classifier <rf_classifier.pkl> \
     --output <scored_detections.json>
 
 # 4. Place crosses in Napari
-PYTHONPATH=$REPO $MKSEG_PYTHON $REPO/scripts/napari_place_crosses.py \
+PYTHONPATH=$REPO $XLDVP_PYTHON $REPO/scripts/napari_place_crosses.py \
     -i /path/to/slide.czi --flip-horizontal -o crosses.json
 
 # 5. Export to LMD
-PYTHONPATH=$REPO $MKSEG_PYTHON $REPO/run_lmd_export.py \
+PYTHONPATH=$REPO $XLDVP_PYTHON $REPO/run_lmd_export.py \
     --detections <scored_detections.json> \
     --crosses crosses.json \
     --output-dir lmd_export \

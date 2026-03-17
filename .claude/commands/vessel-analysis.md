@@ -10,7 +10,7 @@ You are guiding the user through **vessel community analysis** for the xldvp_seg
 2. **Check if marker classification is done** — look for `cell_detections_classified.json` with `SMA_class` and `CD31_class` fields
 3. If not classified yet, run `classify_markers.py` first:
    ```bash
-   PYTHONPATH=$REPO $MKSEG_PYTHON $REPO/scripts/classify_markers.py \
+   PYTHONPATH=$REPO $XLDVP_PYTHON $REPO/scripts/classify_markers.py \
        --detections $RUN_DIR/cell_detections.json \
        --marker-wavelength 647,555 \
        --czi-path $CZI \
@@ -22,7 +22,7 @@ You are guiding the user through **vessel community analysis** for the xldvp_seg
 ### Step 2: Run Vessel Community Analysis
 
 ```bash
-PYTHONPATH=$REPO $MKSEG_PYTHON $REPO/scripts/vessel_community_analysis.py \
+PYTHONPATH=$REPO $XLDVP_PYTHON $REPO/scripts/vessel_community_analysis.py \
     --detections $RUN_DIR/cell_detections_classified.json \
     --radii 25,50,100,200 \
     --min-cells 3 \
@@ -61,7 +61,7 @@ Check the outputs:
 
 If `--generate-viewer` was used, serve the HTML:
 ```bash
-$MKSEG_PYTHON $REPO/serve_html.py --directory $RUN_DIR/vessel_analysis/
+$XLDVP_PYTHON $REPO/serve_html.py --directory $RUN_DIR/vessel_analysis/
 ```
 
 The viewer supports zoom/pan, cell coloring by vessel_type or vessel_morphology.

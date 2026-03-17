@@ -45,7 +45,7 @@ Never use edge wells (row A, row P, column 1, column 24).
 ## Standard Export Command
 
 ```bash
-PYTHONPATH=$REPO $MKSEG_PYTHON $REPO/run_lmd_export.py \
+PYTHONPATH=$REPO $XLDVP_PYTHON $REPO/run_lmd_export.py \
     --detections <detections.json> \
     --crosses <crosses.json> \
     --output-dir <output>/lmd \
@@ -78,28 +78,28 @@ Crosses are physical marks on the slide that register microscope pixel coordinat
 **CZI-native (recommended, fast):**
 ```bash
 # Direct CZI loading at 1/8 resolution — no OME-Zarr conversion needed
-PYTHONPATH=$REPO $MKSEG_PYTHON $REPO/scripts/napari_place_crosses.py \
+PYTHONPATH=$REPO $XLDVP_PYTHON $REPO/scripts/napari_place_crosses.py \
     -i <czi_path> --channel 0 -o <crosses.json>
 
 # With LMD7 display transforms (tissue-down + rotated)
-PYTHONPATH=$REPO $MKSEG_PYTHON $REPO/scripts/napari_place_crosses.py \
+PYTHONPATH=$REPO $XLDVP_PYTHON $REPO/scripts/napari_place_crosses.py \
     -i <czi_path> --flip-horizontal --rotate-cw-90 -o <crosses.json>
 
 # Start fresh (ignore existing crosses)
-PYTHONPATH=$REPO $MKSEG_PYTHON $REPO/scripts/napari_place_crosses.py \
+PYTHONPATH=$REPO $XLDVP_PYTHON $REPO/scripts/napari_place_crosses.py \
     -i <czi_path> --fresh -o <crosses.json>
 ```
 
 **OME-Zarr (for very large slides):**
 ```bash
-PYTHONPATH=$REPO $MKSEG_PYTHON $REPO/scripts/napari_place_crosses.py \
+PYTHONPATH=$REPO $XLDVP_PYTHON $REPO/scripts/napari_place_crosses.py \
     -i <slide>.ome.zarr -o <crosses.json>
 ```
 OME-Zarr is auto-generated at the end of pipeline runs. Or convert manually with `czi_to_ome_zarr.py`.
 
 **Batch cross placement:**
 ```bash
-PYTHONPATH=$REPO $MKSEG_PYTHON $REPO/scripts/napari_place_crosses.py \
+PYTHONPATH=$REPO $XLDVP_PYTHON $REPO/scripts/napari_place_crosses.py \
     --czi-dir /data/slides --slides SlideA SlideB SlideC \
     --output-dir crosses/ --flip-horizontal --rotate-cw-90
 ```
@@ -115,7 +115,7 @@ Coordinates in mosaic pixel space (same as detection centroids in `*_detections.
 ## Batch Export (multiple slides)
 
 ```bash
-PYTHONPATH=$REPO $MKSEG_PYTHON $REPO/run_lmd_export.py \
+PYTHONPATH=$REPO $XLDVP_PYTHON $REPO/run_lmd_export.py \
     --input-dir /path/to/detection_dirs \
     --crosses-dir /path/to/crosses \
     --output-dir /path/to/lmd_batch \
@@ -183,6 +183,6 @@ ls -la <output>/lmd/
 
 Optional Napari view:
 ```bash
-PYTHONPATH=$REPO $MKSEG_PYTHON $REPO/scripts/napari_view_lmd_export.py \
+PYTHONPATH=$REPO $XLDVP_PYTHON $REPO/scripts/napari_view_lmd_export.py \
     --zarr <slide>.ome.zarr --export <output>/lmd
 ```

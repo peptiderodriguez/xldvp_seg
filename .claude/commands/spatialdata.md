@@ -10,7 +10,7 @@ You are guiding the user through SpatialData export and scverse ecosystem analys
 
 3. **Check deps are installed:**
 ```bash
-$MKSEG_PYTHON -c "import spatialdata, anndata, squidpy, geopandas; print('All scverse deps OK')"
+$XLDVP_PYTHON -c "import spatialdata, anndata, squidpy, geopandas; print('All scverse deps OK')"
 ```
 If missing: `pip install spatialdata anndata scanpy squidpy geopandas`
 
@@ -51,7 +51,7 @@ For squidpy analyses, **a cluster key is required** — this should be a categor
 
 Available columns can be discovered from the detections:
 ```bash
-$MKSEG_PYTHON -c "
+$XLDVP_PYTHON -c "
 import json
 d = json.load(open('<detections.json>'))
 feats = d[0].get('features', {}) if d else {}
@@ -67,7 +67,7 @@ print('Top-level keys:', [k for k in d[0] if k.endswith('_class')]) if d else No
 
 **Basic conversion (table + shapes, no squidpy):**
 ```bash
-PYTHONPATH=$REPO $MKSEG_PYTHON $REPO/scripts/convert_to_spatialdata.py \
+PYTHONPATH=$REPO $XLDVP_PYTHON $REPO/scripts/convert_to_spatialdata.py \
     --detections <detections.json> \
     --output <output>/<celltype>_spatialdata.zarr \
     --cell-type <celltype> \
@@ -77,7 +77,7 @@ PYTHONPATH=$REPO $MKSEG_PYTHON $REPO/scripts/convert_to_spatialdata.py \
 
 **With squidpy analyses:**
 ```bash
-PYTHONPATH=$REPO $MKSEG_PYTHON $REPO/scripts/convert_to_spatialdata.py \
+PYTHONPATH=$REPO $XLDVP_PYTHON $REPO/scripts/convert_to_spatialdata.py \
     --detections <detections.json> \
     --output <output>/<celltype>_spatialdata.zarr \
     --cell-type <celltype> \
@@ -89,7 +89,7 @@ PYTHONPATH=$REPO $MKSEG_PYTHON $REPO/scripts/convert_to_spatialdata.py \
 
 **With OME-Zarr image link:**
 ```bash
-PYTHONPATH=$REPO $MKSEG_PYTHON $REPO/scripts/convert_to_spatialdata.py \
+PYTHONPATH=$REPO $XLDVP_PYTHON $REPO/scripts/convert_to_spatialdata.py \
     --detections <detections.json> \
     --output <output>/<celltype>_spatialdata.zarr \
     --cell-type <celltype> \
@@ -102,7 +102,7 @@ PYTHONPATH=$REPO $MKSEG_PYTHON $REPO/scripts/convert_to_spatialdata.py \
 
 **Vessel pipeline** (uses JSON contour fields, no HDF5 masks needed):
 ```bash
-PYTHONPATH=$REPO $MKSEG_PYTHON $REPO/scripts/convert_to_spatialdata.py \
+PYTHONPATH=$REPO $XLDVP_PYTHON $REPO/scripts/convert_to_spatialdata.py \
     --detections <vessel_detections.json> \
     --output <output>/vessel_spatialdata.zarr \
     --cell-type vessel \
@@ -116,7 +116,7 @@ Vessel produces 3 shape layers: `vessel_outer` (CD31 boundary), `vessel_lumen` (
 
 Check the zarr store:
 ```bash
-$MKSEG_PYTHON -c "
+$XLDVP_PYTHON -c "
 import spatialdata as sd
 sdata = sd.read_zarr('<output>.zarr')
 print(sdata)
@@ -235,7 +235,7 @@ sc.tl.umap(adata_sam2)
 
 ## Rules
 
-- Use `$MKSEG_PYTHON` as interpreter, `PYTHONPATH=$REPO`.
+- Use `$XLDVP_PYTHON` as interpreter, `PYTHONPATH=$REPO`.
 - All file paths should be absolute.
 - SpatialData export is lightweight (CPU-only, ~30 seconds for 50k detections). No need for GPU or SLURM for the conversion itself.
 - Squidpy analyses add ~1-2 minutes for typical datasets.

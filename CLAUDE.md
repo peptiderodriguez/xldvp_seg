@@ -37,25 +37,25 @@ These behaviors apply throughout every Claude Code session on this project:
 ```bash
 # Environment
 export REPO="$(cd "$(dirname "${BASH_SOURCE[0]:-$0}")"; pwd)"  # or set manually
-export MKSEG_PYTHON="${MKSEG_PYTHON:-$(which python)}"          # mkseg conda env python
+export XLDVP_PYTHON="${XLDVP_PYTHON:-$(which python)}"          # xldvp_seg conda env python
 
 # Run all tests
-PYTHONPATH=$REPO $MKSEG_PYTHON -m pytest tests/ -v --tb=short
+PYTHONPATH=$REPO $XLDVP_PYTHON -m pytest tests/ -v --tb=short
 
 # Run single test file
-PYTHONPATH=$REPO $MKSEG_PYTHON -m pytest tests/test_coordinates.py -v
+PYTHONPATH=$REPO $XLDVP_PYTHON -m pytest tests/test_coordinates.py -v
 
 # Run single test class
-PYTHONPATH=$REPO $MKSEG_PYTHON -m pytest tests/test_coordinates.py::TestCoordinateConversion -v
+PYTHONPATH=$REPO $XLDVP_PYTHON -m pytest tests/test_coordinates.py::TestCoordinateConversion -v
 
 # Lint
-PYTHONPATH=$REPO $MKSEG_PYTHON -m ruff check .
+PYTHONPATH=$REPO $XLDVP_PYTHON -m ruff check .
 
 # Format check
-PYTHONPATH=$REPO $MKSEG_PYTHON -m black --check .
+PYTHONPATH=$REPO $XLDVP_PYTHON -m black --check .
 
 # Inspect CZI metadata (mandatory before any channel config)
-PYTHONPATH=$REPO $MKSEG_PYTHON $REPO/scripts/czi_info.py /path/to/slide.czi
+PYTHONPATH=$REPO $XLDVP_PYTHON $REPO/scripts/czi_info.py /path/to/slide.czi
 ```
 
 **Style:** Black (line-length 100), Ruff (E/F/W/I/N/UP/B/C4, E501 ignored). Python 3.10+.
@@ -130,7 +130,7 @@ This is the DVP (Deep Visual Proteomics) workflow — spatial proteomics where L
 **CRITICAL: CZI channel order ≠ filename order and is NOT wavelength-sorted.** Channel indices are determined by acquisition/detector assignment. Always run `czi_info.py` first — it is the only authoritative source.
 
 ```bash
-PYTHONPATH=$REPO $MKSEG_PYTHON $REPO/scripts/czi_info.py /path/to/slide.czi
+PYTHONPATH=$REPO $XLDVP_PYTHON $REPO/scripts/czi_info.py /path/to/slide.czi
 ```
 Output example:
 ```
@@ -159,7 +159,7 @@ channel_map:
 
 ### Phase 2: Detection
 
-**Check cluster first:** `$MKSEG_PYTHON $REPO/scripts/system_info.py` shows partition availability and recommends resources.
+**Check cluster first:** `$XLDVP_PYTHON $REPO/scripts/system_info.py` shows partition availability and recommends resources.
 
 **Key parameters:**
 - `--cell-type {nmj,mk,vessel,mesothelium,islet,tissue_pattern,cell}`
@@ -198,7 +198,7 @@ scripts/run_pipeline.sh configs/my_experiment.yaml
 
 **Local launch:**
 ```bash
-PYTHONPATH=$REPO $MKSEG_PYTHON $REPO/run_segmentation.py \
+PYTHONPATH=$REPO $XLDVP_PYTHON $REPO/run_segmentation.py \
     --czi-path /path/to/slide.czi \
     --cell-type cell \
     --channel-spec "cyto=PM,nuc=488" \
@@ -225,11 +225,11 @@ Contour processing and background correction are checked independently on resume
 
 ### Phase 3: Annotation & Classification
 
-**Step 1 — Serve results:** `$MKSEG_PYTHON $REPO/serve_html.py <output_dir>` — opens HTML viewer via Cloudflare tunnel. Click green ✓ for real detections, red ✗ for false positives. Export annotations via the Export button.
+**Step 1 — Serve results:** `$XLDVP_PYTHON $REPO/serve_html.py <output_dir>` — opens HTML viewer via Cloudflare tunnel. Click green ✓ for real detections, red ✗ for false positives. Export annotations via the Export button.
 
 **Step 2 — Train classifier:**
 ```bash
-PYTHONPATH=$REPO $MKSEG_PYTHON $REPO/train_classifier.py \
+PYTHONPATH=$REPO $XLDVP_PYTHON $REPO/train_classifier.py \
     --detections <detections.json> \
     --annotations <annotations.json> \
     --output-dir <output> \
@@ -239,12 +239,12 @@ Feature sets: `morph` (78D, fast), `morph_sam2` (334D), `channel_stats` (per-cha
 
 **Step 3 — Score all detections + regenerate filtered HTML:**
 ```bash
-PYTHONPATH=$REPO $MKSEG_PYTHON $REPO/scripts/apply_classifier.py \
+PYTHONPATH=$REPO $XLDVP_PYTHON $REPO/scripts/apply_classifier.py \
     --detections <detections.json> \
     --classifier <rf_classifier.pkl> \
     --output <scored_detections.json>
 
-PYTHONPATH=$REPO $MKSEG_PYTHON $REPO/scripts/regenerate_html.py \
+PYTHONPATH=$REPO $XLDVP_PYTHON $REPO/scripts/regenerate_html.py \
     --detections <scored_detections.json> \
     --czi-path <path> --output-dir <output> \
     --score-threshold 0.5
@@ -258,7 +258,7 @@ For multi-channel slides — classify each cell as positive/negative per fluores
 
 ```bash
 # By wavelength (preferred — auto-resolves via CZI metadata):
-PYTHONPATH=$REPO $MKSEG_PYTHON $REPO/scripts/classify_markers.py \
+PYTHONPATH=$REPO $XLDVP_PYTHON $REPO/scripts/classify_markers.py \
     --detections <detections.json> \
     --marker-wavelength 647,555 \
     --marker-name NeuN,tdTomato \
@@ -280,14 +280,14 @@ See **Available Analyses** section below for the full catalog.
 
 **Step 1 — Place 3 reference crosses** in Napari:
 ```bash
-PYTHONPATH=$REPO $MKSEG_PYTHON $REPO/scripts/napari_place_crosses.py \
+PYTHONPATH=$REPO $XLDVP_PYTHON $REPO/scripts/napari_place_crosses.py \
     -i <czi_path> --flip-horizontal -o <crosses.json>
 ```
 Keybinds: R/G/B = cross color, Space = place, S = save, U = undo, Q = save+quit. `--rotate-cw-90` is ON by default (LMD7 orientation). Crosses JSON stores `display_transform`; export scripts apply matching transforms to contours.
 
 **Step 2 — Export XML:**
 ```bash
-PYTHONPATH=$REPO $MKSEG_PYTHON $REPO/run_lmd_export.py \
+PYTHONPATH=$REPO $XLDVP_PYTHON $REPO/run_lmd_export.py \
     --detections <detections.json> \
     --crosses <crosses.json> \
     --output-dir <output>/lmd \
@@ -298,10 +298,10 @@ Batch: `--input-dir <runs> --crosses-dir <crosses>`. Max 308 wells/plate; multi-
 
 **Replicate-based export** (DVP proteomics, area-normalized replicates):
 ```bash
-PYTHONPATH=$REPO $MKSEG_PYTHON $REPO/scripts/select_mks_for_lmd.py \
+PYTHONPATH=$REPO $XLDVP_PYTHON $REPO/scripts/select_mks_for_lmd.py \
     --score-threshold 0.80 --target-area 10000 --max-replicates 4
 
-PYTHONPATH=$REPO $MKSEG_PYTHON $REPO/scripts/lmd_export_replicates.py \
+PYTHONPATH=$REPO $XLDVP_PYTHON $REPO/scripts/lmd_export_replicates.py \
     --sampling-results lmd_replicates_full.json \
     --contours-json contours.json \
     --crosses-dir ./crosses --output-dir ./xml
@@ -489,7 +489,7 @@ python run_segmentation.py --czi-path slide.czi --cell-type nmj \
 - **p.hpcl93:** 19 nodes, 256 CPUs, 760G RAM, 4x L40S each — heavy GPU jobs (requires `--gres=gpu:`)
 - **p.hpcl8:** 55 nodes, 24 CPUs, 380G RAM, 2x RTX 5000 each — interactive dev, CPU jobs
 - Time limit: 42 days on both partitions
-- Run `$MKSEG_PYTHON $REPO/scripts/system_info.py` to check live availability and get recommendations
+- Run `$XLDVP_PYTHON $REPO/scripts/system_info.py` to check live availability and get recommendations
 
 **Resource policy:** On shared SLURM clusters, request ~75% of node CPUs/RAM to leave headroom for other users. `system_info.py` applies this automatically. Request all GPUs (GPU scheduling is typically exclusive per device). Use `--exclusive` only when you genuinely need the full node.
 

@@ -26,7 +26,7 @@ Ask or check:
 
 Check annotation counts before training — warn if severely imbalanced:
 ```bash
-$MKSEG_PYTHON -c "
+$XLDVP_PYTHON -c "
 import json
 ann = json.load(open('<annotations.json>'))
 pos = ann.get('positive', [])
@@ -49,7 +49,7 @@ Aim for ≥200 total annotations, balanced ±3:1.
 
 **Offer comparison first:**
 ```bash
-PYTHONPATH=$REPO $MKSEG_PYTHON $REPO/scripts/compare_feature_sets.py \
+PYTHONPATH=$REPO $XLDVP_PYTHON $REPO/scripts/compare_feature_sets.py \
     --detections <detections.json> \
     --annotations <annotations.json> \
     --output-dir <output>/feature_comparison
@@ -61,7 +61,7 @@ Runs 5-fold CV on each subset, outputs ranked F1/precision/recall table (~1 minu
 ## Step 3: Train
 
 ```bash
-PYTHONPATH=$REPO $MKSEG_PYTHON $REPO/train_classifier.py \
+PYTHONPATH=$REPO $XLDVP_PYTHON $REPO/train_classifier.py \
     --detections <detections.json> \
     --annotations <annotations.json> \
     --output-dir <output> \
@@ -75,7 +75,7 @@ Output: `rf_classifier.pkl`, cross-val scores, top 20 feature importances.
 ## Step 4: Score All Detections
 
 ```bash
-PYTHONPATH=$REPO $MKSEG_PYTHON $REPO/scripts/apply_classifier.py \
+PYTHONPATH=$REPO $XLDVP_PYTHON $REPO/scripts/apply_classifier.py \
     --detections <detections.json> \
     --classifier <output>/rf_classifier.pkl \
     --output <output>/<celltype>_detections_scored.json
@@ -88,7 +88,7 @@ CPU-only, seconds for any size dataset.
 ## Step 5: Regenerate HTML with Score Threshold
 
 ```bash
-PYTHONPATH=$REPO $MKSEG_PYTHON $REPO/scripts/regenerate_html.py \
+PYTHONPATH=$REPO $XLDVP_PYTHON $REPO/scripts/regenerate_html.py \
     --detections <output>/<celltype>_detections_scored.json \
     --czi-path <czi_path> \
     --output-dir <output> \
@@ -103,14 +103,14 @@ For vessel type classification (artery/arteriole/vein/capillary/lymphatic/collec
 
 ```bash
 # Train vessel type classifier
-PYTHONPATH=$REPO $MKSEG_PYTHON $REPO/scripts/train_vessel_detector.py \
+PYTHONPATH=$REPO $XLDVP_PYTHON $REPO/scripts/train_vessel_detector.py \
     --annotations <vessel_annotations.json> \
     --detections <vessel_detections.json> \
     --output-dir <output>/vessel_classifier \
     --stratify-by-size
 
 # Prepare RF training data (separate step)
-PYTHONPATH=$REPO $MKSEG_PYTHON $REPO/scripts/prepare_rf_training_data.py \
+PYTHONPATH=$REPO $XLDVP_PYTHON $REPO/scripts/prepare_rf_training_data.py \
     --annotations <vessel_annotations.json> \
     --detections <vessel_detections.json> \
     --output-dir <output>/rf_training_data \
@@ -126,7 +126,7 @@ Use `--stratify-by-size` to prevent size bias in vessel type classification.
 Marker classification (SMA+/−, MSLN+/−, etc.) is handled by `classify_markers.py`, not by the RF classifier. This is a separate step after detection:
 
 ```bash
-PYTHONPATH=$REPO $MKSEG_PYTHON $REPO/scripts/classify_markers.py \
+PYTHONPATH=$REPO $XLDVP_PYTHON $REPO/scripts/classify_markers.py \
     --detections <detections.json> \
     --marker-wavelength 647,555 \
     --marker-name SMA,CD31 \
@@ -152,7 +152,7 @@ Background correction is automatic (pipeline already corrected data in post-dedu
 Train on round 1 → score all → review in HTML → add round 2 annotations → retrain:
 ```bash
 # Merge annotation rounds
-PYTHONPATH=$REPO $MKSEG_PYTHON -c "
+PYTHONPATH=$REPO $XLDVP_PYTHON -c "
 import json
 a1 = json.load(open('annotations_round1.json'))
 a2 = json.load(open('annotations_round2.json'))
