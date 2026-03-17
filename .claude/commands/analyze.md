@@ -600,6 +600,7 @@ PYTHONPATH=$REPO $MKSEG_PYTHON $REPO/run_lmd_export.py \
     --crosses <crosses.json> \
     --output-dir <output>/lmd \
     --generate-controls \
+    --min-score 0.5 \
     --export
 
 # Optional: erosion at export time (shrink contours so laser cuts inside)
@@ -611,7 +612,7 @@ PYTHONPATH=$REPO $MKSEG_PYTHON $REPO/run_lmd_export.py \
     --input-dir <runs_dir> \
     --crosses-dir <crosses_dir> \
     --output-dir <output>/lmd_batch \
-    --generate-controls --export
+    --generate-controls --min-score 0.5 --export
 ```
 
 **Step 27 — Validate.** Check the output XML exists, display well count, show the path for transfer to the LMD instrument.

@@ -83,9 +83,9 @@ channel_map:
 all_channels: true
 html_sample_fraction: 0.10
 slurm:
-  partition: p.hpcl93
-  cpus: 256
-  mem_gb: 742
+  partition: <from system_info.py>
+  cpus: 192                    # ~75% of node
+  mem_gb: 556
   gpus: "l40s:4"
   time: "3-00:00:00"
   slides_per_job: 1

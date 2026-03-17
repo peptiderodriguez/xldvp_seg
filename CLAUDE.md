@@ -184,9 +184,9 @@ channel_map:
 all_channels: true
 html_sample_fraction: 0.10
 slurm:
-  partition: p.hpcl93
-  cpus: 256
-  mem_gb: 742
+  partition: p.hpcl93          # from system_info.py
+  cpus: 192                    # ~75% of node (leaves headroom for other users)
+  mem_gb: 556
   gpus: "l40s:4"
   time: "3-00:00:00"
   slides_per_job: 1             # 1 slide/job = parallel SLURM array tasks
@@ -355,7 +355,7 @@ CZI file → czi_loader.py (channel resolution, tiling)
 
 ### Pipeline Package (`segmentation/pipeline/`)
 
-`run_segmentation.py` is a ~1400-line orchestrator importing from 8 pipeline modules:
+`run_segmentation.py` is a ~1400-line orchestrator importing from 9 pipeline modules:
 
 | Module | Purpose |
 |--------|---------|

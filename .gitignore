@@ -86,6 +86,7 @@ test_*.py
 # Session logs and internal notes
 conversation_*.md
 plan.md
+docs/MK_ANALYSIS_STATUS.md
 
 # Claude Code local settings (contains command history)
 .claude/settings.local.json

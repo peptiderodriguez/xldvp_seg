@@ -140,6 +140,15 @@ fi
 echo ""
 echo "Step 4: Installing optional packages..."
 echo "------------------------------------------------------------"
+echo "Installing py-lmd (required for LMD XML export)..."
+if ! pip install py-lmd; then
+    echo ""
+    echo "  WARNING: py-lmd failed to install."
+    echo "  Impact: LMD export (run_lmd_export.py) will not work."
+    echo "  Fix: pip install py-lmd"
+    echo ""
+fi
+
 echo "Installing orjson (3-5x faster JSON parsing for large detection files)..."
 if ! pip install orjson; then
     echo ""

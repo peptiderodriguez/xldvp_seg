@@ -57,9 +57,9 @@ html_sample_fraction: 0.10
 spatialdata:
   enabled: true
 slurm:
-  partition: p.hpcl93
-  cpus: 256
-  mem_gb: 700
+  partition: <from system_info.py>
+  cpus: 192                    # ~75% of node
+  mem_gb: 556
   gpus: "L40S:4"
   time: "3-00:00:00"
   slides_per_job: 1
