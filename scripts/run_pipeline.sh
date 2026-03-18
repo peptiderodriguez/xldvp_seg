@@ -136,7 +136,7 @@ if [[ "$GPUS" =~ ^[a-zA-Z0-9_]+:[0-9]+$ ]]; then
 elif [[ "$GPUS" =~ ^[0-9]+$ ]]; then
     GPUS="4"
 fi
-TIME=$(read_yaml slurm.time "2-00:00:00")
+TIME=$(read_yaml slurm.time "3-00:00:00")
 SLIDES_PER_JOB=$(read_yaml slurm.slides_per_job 1)
 NUM_JOBS=$(read_yaml slurm.num_jobs 1)
 
