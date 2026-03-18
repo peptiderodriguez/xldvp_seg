@@ -691,6 +691,8 @@ def _collect_contour(det, contours_raw, score_threshold):
     contour = det.get('outer_contour_global')
     if contour is None:
         contour = feat.get('outer_contour_global')
+    if contour is None:
+        contour = det.get('contour_dilated_px')  # split_regions output
     if contour is None or len(contour) < 3:
         return
 
