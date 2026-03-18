@@ -143,13 +143,13 @@ def parse_args():
                         help="Tiles directory with HDF5 masks")
     parser.add_argument("--output", required=True, type=Path,
                         help="Output JSON path")
-    parser.add_argument("--target-area-um2", type=float, default=200.0,
-                        help="Target area per piece in um^2 (default: 200)")
-    parser.add_argument("--min-area-um2", type=float, default=None,
-                        help="Minimum detection area to keep in um^2 (default: use --min-area-percentile)")
-    parser.add_argument("--min-area-percentile", type=float, default=75.0,
-                        help="Keep detections above this percentile of area distribution (default: 75 = top quartile). "
-                             "Ignored if --min-area-um2 is set explicitly.")
+    parser.add_argument("--target-area-um2", type=float, default=None,
+                        help="Target area per piece in um^2. If not set, computed from --target-area-percentile.")
+    parser.add_argument("--target-area-percentile", type=float, default=75.0,
+                        help="Use this percentile of detection area as both the target piece size "
+                             "and minimum cutoff (default: 75 = p75). Detections below this are "
+                             "discarded, detections above are split into pieces of this size. "
+                             "Ignored if --target-area-um2 is set explicitly.")
     parser.add_argument("--seed", type=int, default=42,
                         help="Random seed for watershed seeding")
     parser.add_argument("--cell-type", default="nmj",
@@ -188,11 +188,10 @@ def main():
     logger.info(f"  Pixel size: {pixel_size_um:.4f} um/px")
 
     px2 = pixel_size_um ** 2
-    target_area_px = max(1, int(args.target_area_um2 / px2))
 
-    # Determine minimum area cutoff
-    if args.min_area_um2 is not None:
-        min_area_um2 = args.min_area_um2
+    # Determine target area (= piece size AND minimum cutoff)
+    if args.target_area_um2 is not None:
+        target_area_um2 = args.target_area_um2
     else:
         # Compute from percentile of detection area distribution
         all_areas = [
@@ -201,14 +200,20 @@ def main():
         ]
         all_areas = [a for a in all_areas if a > 0]
         if all_areas:
-            min_area_um2 = float(np.percentile(all_areas, args.min_area_percentile))
-            logger.info(f"  Area p{args.min_area_percentile:.0f} = {min_area_um2:.1f} um2 "
-                        f"(keeping top {100 - args.min_area_percentile:.0f}% of {len(all_areas):,} detections)")
+            target_area_um2 = float(np.percentile(all_areas, args.target_area_percentile))
+            logger.info(f"  Area p{args.target_area_percentile:.0f} = {target_area_um2:.1f} um2 "
+                        f"(from {len(all_areas):,} detections)")
         else:
-            min_area_um2 = 200.0
+            target_area_um2 = 200.0
             logger.warning("No valid areas found, using default 200 um2")
-    min_area_px = max(1, int(min_area_um2 / px2))
-    logger.info(f"  Min area cutoff: {min_area_um2:.1f} um2 ({min_area_px} px)")
+
+    # p75 is both the target piece size AND the minimum cutoff:
+    # detections < p75 are discarded, detections > p75 are split into p75-sized pieces
+    min_area_um2 = target_area_um2
+    target_area_px = max(1, int(target_area_um2 / px2))
+    min_area_px = target_area_px
+    logger.info(f"  Target piece size: {target_area_um2:.1f} um2 ({target_area_px} px)")
+    logger.info(f"  Min area cutoff: {min_area_um2:.1f} um2 (same as target — discard smaller)")
 
     # --- Group detections by tile ---
     by_tile = {}  # (tile_x, tile_y) -> [det_indices]
@@ -247,15 +252,20 @@ def main():
             features = det.get("features", {})
             area_um2 = features.get("area_um2", features.get("area", 0) * px2)
 
-            # Too small — skip
-            if area_um2 < min_area_um2:
+            # Too small — discard (below target)
+            if area_um2 < min_area_um2 * 0.90:
                 n_too_small += 1
                 continue
 
-            # Below target — keep as-is
-            if area_um2 <= args.target_area_um2 * 1.5:
+            # Within ±10% of target — keep as-is (already the right size)
+            if abs(area_um2 - target_area_um2) <= target_area_um2 * 0.10:
                 output_detections.append(det)
                 n_kept += 1
+                continue
+
+            # Between 90% and 150% of target but not within ±10% — too big to keep, too small to split
+            if area_um2 < target_area_um2 * 1.5:
+                n_too_small += 1
                 continue
 
             # Large detection — split
@@ -305,6 +315,10 @@ def main():
                 cy = float(piece_ys.mean()) + tile_y
                 p_area_px = int(piece.sum())
                 p_area_um2 = p_area_px * px2
+
+                # Discard pieces not within ±10% of target size
+                if abs(p_area_um2 - target_area_um2) > target_area_um2 * 0.10:
+                    continue
 
                 uid = f"{slide_stem}_{cell_type}_{int(round(cx))}_{int(round(cy))}"
 
