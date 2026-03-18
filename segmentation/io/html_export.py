@@ -877,26 +877,27 @@ def get_js(cell_type, total_pages, experiment_name=None, page_num=1):
                 img.style.display = contoursVisible ? '' : 'none';
             }});
             if (btn) {{
-                btn.textContent = contoursVisible ? 'Contours: ON' : 'Contours: OFF';
                 btn.style.background = contoursVisible ? '#2a5a2a' : '#555';
+                btn.style.opacity = contoursVisible ? '1' : '0.5';
             }}
         }}
 
-        let channelState = {{ red: true, green: true }};
+        const chState = {{ r: true, g: true, b: true }};
+        const chColors = {{ r: '#8b2222', g: '#228b22', b: '#22228b' }};
+        const chBtnIds = {{ r: 'toggleChRBtn', g: 'toggleChGBtn', b: 'toggleChBBtn' }};
         function toggleChannel(ch) {{
-            channelState[ch] = !channelState[ch];
-            const btnId = ch === 'red' ? 'togglePMBtn' : 'toggleNucBtn';
-            const btn = document.getElementById(btnId);
-            const label = ch === 'red' ? 'PM' : 'Nuc';
+            chState[ch] = !chState[ch];
+            const btn = document.getElementById(chBtnIds[ch]);
             if (btn) {{
-                btn.textContent = channelState[ch] ? label + ': ON' : label + ': OFF';
-                btn.style.background = channelState[ch] ? (ch === 'red' ? '#8b2222' : '#228b22') : '#555';
+                btn.style.background = chState[ch] ? chColors[ch] : '#555';
+                btn.style.opacity = chState[ch] ? '1' : '0.5';
             }}
-            // Channel filters apply to base image only — contour layer is unaffected
-            let filterVal = 'none';
-            if (!channelState.red && !channelState.green) filterVal = 'url(#no-red-green)';
-            else if (!channelState.red) filterVal = 'url(#no-red)';
-            else if (!channelState.green) filterVal = 'url(#no-green)';
+            // Build filter ID from off-channels
+            let off = '';
+            if (!chState.r) off += 'r';
+            if (!chState.g) off += 'g';
+            if (!chState.b) off += 'b';
+            const filterVal = off ? 'url(#no-' + off + ')' : 'none';
             document.querySelectorAll('.img-base').forEach(img => {{
                 img.style.filter = filterVal;
             }});
@@ -975,6 +976,19 @@ def generate_annotation_page(
 
     # Build channel legend HTML if provided
     channel_legend_html = ''
+    ch_r_label = channel_legend.get('red', 'Ch-R') if channel_legend else 'Ch-R'
+    ch_g_label = channel_legend.get('green', 'Ch-G') if channel_legend else 'Ch-G'
+    ch_b_label = channel_legend.get('blue', 'Ch-B') if channel_legend else 'Ch-B'
+    # Shorten labels for buttons (take first word or first 8 chars)
+    for attr in ('ch_r_label', 'ch_g_label', 'ch_b_label'):
+        val = locals()[attr]
+        if val and len(val) > 10:
+            val = val.split()[0][:10]
+            locals()[attr]  # can't reassign via locals — do it directly
+    ch_r_label = ch_r_label.split('(')[0].strip()[:10] if ch_r_label else 'Ch-R'
+    ch_g_label = ch_g_label.split('(')[0].strip()[:10] if ch_g_label else 'Ch-G'
+    ch_b_label = ch_b_label.split('(')[0].strip()[:10] if ch_b_label else 'Ch-B'
+
     if channel_legend:
         channel_legend_html = '<div class="channel-legend"><span class="stats-label">Channels:</span>'
         if 'red' in channel_legend:
@@ -1099,20 +1113,25 @@ def generate_annotation_page(
             </div>
             <button class="btn btn-export" onclick="exportAnnotations()">Export</button>
             <button class="btn" onclick="importAnnotations()">Import</button>
-            <button class="btn" id="toggleContourBtn" onclick="toggleContours()" style="background:#2a5a2a">Contours: ON</button>
-            <button class="btn" id="togglePMBtn" onclick="toggleChannel('red')" style="background:#8b2222">PM: ON</button>
-            <button class="btn" id="toggleNucBtn" onclick="toggleChannel('green')" style="background:#228b22">Nuc: ON</button>
+            <button class="btn" id="toggleContourBtn" onclick="toggleContours()" style="background:#2a5a2a;min-width:90px">Contours</button>
+            <button class="btn" id="toggleChRBtn" onclick="toggleChannel('r')" style="background:#8b2222;min-width:70px">{ch_r_label}</button>
+            <button class="btn" id="toggleChGBtn" onclick="toggleChannel('g')" style="background:#228b22;min-width:70px">{ch_g_label}</button>
+            <button class="btn" id="toggleChBBtn" onclick="toggleChannel('b')" style="background:#22228b;min-width:70px">{ch_b_label}</button>
             <button class="btn" onclick="clearPage()">Clear Page</button>
             <button class="btn btn-danger" onclick="clearAll()">Clear All</button>
             {channel_legend_html}
         </div>
     </div>
 
-    <!-- SVG filters for channel toggling -->
+    <!-- SVG filters for channel toggling (all 7 combinations of 3 channels off) -->
     <svg style="display:none">
-        <filter id="no-red"><feColorMatrix type="matrix" values="0 0 0 0 0  0 1 0 0 0  0 0 1 0 0  0 0 0 1 0"/></filter>
-        <filter id="no-green"><feColorMatrix type="matrix" values="1 0 0 0 0  0 0 0 0 0  0 0 1 0 0  0 0 0 1 0"/></filter>
-        <filter id="no-red-green"><feColorMatrix type="matrix" values="0 0 0 0 0  0 0 0 0 0  0 0 1 0 0  0 0 0 1 0"/></filter>
+        <filter id="no-r"><feColorMatrix type="matrix" values="0 0 0 0 0  0 1 0 0 0  0 0 1 0 0  0 0 0 1 0"/></filter>
+        <filter id="no-g"><feColorMatrix type="matrix" values="1 0 0 0 0  0 0 0 0 0  0 0 1 0 0  0 0 0 1 0"/></filter>
+        <filter id="no-b"><feColorMatrix type="matrix" values="1 0 0 0 0  0 1 0 0 0  0 0 0 0 0  0 0 0 1 0"/></filter>
+        <filter id="no-rg"><feColorMatrix type="matrix" values="0 0 0 0 0  0 0 0 0 0  0 0 1 0 0  0 0 0 1 0"/></filter>
+        <filter id="no-rb"><feColorMatrix type="matrix" values="0 0 0 0 0  0 1 0 0 0  0 0 0 0 0  0 0 0 1 0"/></filter>
+        <filter id="no-gb"><feColorMatrix type="matrix" values="1 0 0 0 0  0 0 0 0 0  0 0 0 0 0  0 0 0 1 0"/></filter>
+        <filter id="no-rgb"><feColorMatrix type="matrix" values="0 0 0 0 0  0 0 0 0 0  0 0 0 0 0  0 0 0 1 0"/></filter>
     </svg>
 
     <div class="content">
@@ -1327,9 +1346,13 @@ def generate_index_page(
 
     <!-- SVG filters for channel toggling -->
     <svg style="display:none">
-        <filter id="no-red"><feColorMatrix type="matrix" values="0 0 0 0 0  0 1 0 0 0  0 0 1 0 0  0 0 0 1 0"/></filter>
-        <filter id="no-green"><feColorMatrix type="matrix" values="1 0 0 0 0  0 0 0 0 0  0 0 1 0 0  0 0 0 1 0"/></filter>
-        <filter id="no-red-green"><feColorMatrix type="matrix" values="0 0 0 0 0  0 0 0 0 0  0 0 1 0 0  0 0 0 1 0"/></filter>
+        <filter id="no-r"><feColorMatrix type="matrix" values="0 0 0 0 0  0 1 0 0 0  0 0 1 0 0  0 0 0 1 0"/></filter>
+        <filter id="no-g"><feColorMatrix type="matrix" values="1 0 0 0 0  0 0 0 0 0  0 0 1 0 0  0 0 0 1 0"/></filter>
+        <filter id="no-b"><feColorMatrix type="matrix" values="1 0 0 0 0  0 1 0 0 0  0 0 0 0 0  0 0 0 1 0"/></filter>
+        <filter id="no-rg"><feColorMatrix type="matrix" values="0 0 0 0 0  0 0 0 0 0  0 0 1 0 0  0 0 0 1 0"/></filter>
+        <filter id="no-rb"><feColorMatrix type="matrix" values="0 0 0 0 0  0 1 0 0 0  0 0 0 0 0  0 0 0 1 0"/></filter>
+        <filter id="no-gb"><feColorMatrix type="matrix" values="1 0 0 0 0  0 0 0 0 0  0 0 0 0 0  0 0 0 1 0"/></filter>
+        <filter id="no-rgb"><feColorMatrix type="matrix" values="0 0 0 0 0  0 0 0 0 0  0 0 0 0 0  0 0 0 1 0"/></filter>
     </svg>
 
     <script>
@@ -1341,24 +1364,25 @@ def generate_index_page(
                 img.style.display = contoursVisible ? '' : 'none';
             }});
             if (btn) {{
-                btn.textContent = contoursVisible ? 'Contours: ON' : 'Contours: OFF';
                 btn.style.background = contoursVisible ? '#2a5a2a' : '#555';
+                btn.style.opacity = contoursVisible ? '1' : '0.5';
             }}
         }}
-        let channelState = {{ red: true, green: true }};
+        const chState = {{ r: true, g: true, b: true }};
+        const chColors = {{ r: '#8b2222', g: '#228b22', b: '#22228b' }};
+        const chBtnIds = {{ r: 'toggleChRBtn', g: 'toggleChGBtn', b: 'toggleChBBtn' }};
         function toggleChannel(ch) {{
-            channelState[ch] = !channelState[ch];
-            const btnId = ch === 'red' ? 'togglePMBtn' : 'toggleNucBtn';
-            const btn = document.getElementById(btnId);
-            const label = ch === 'red' ? 'PM' : 'Nuc';
+            chState[ch] = !chState[ch];
+            const btn = document.getElementById(chBtnIds[ch]);
             if (btn) {{
-                btn.textContent = channelState[ch] ? label + ': ON' : label + ': OFF';
-                btn.style.background = channelState[ch] ? (ch === 'red' ? '#8b2222' : '#228b22') : '#555';
+                btn.style.background = chState[ch] ? chColors[ch] : '#555';
+                btn.style.opacity = chState[ch] ? '1' : '0.5';
             }}
-            let filterVal = 'none';
-            if (!channelState.red && !channelState.green) filterVal = 'url(#no-red-green)';
-            else if (!channelState.red) filterVal = 'url(#no-red)';
-            else if (!channelState.green) filterVal = 'url(#no-green)';
+            let off = '';
+            if (!chState.r) off += 'r';
+            if (!chState.g) off += 'g';
+            if (!chState.b) off += 'b';
+            const filterVal = off ? 'url(#no-' + off + ')' : 'none';
             document.querySelectorAll('.img-base').forEach(img => {{
                 img.style.filter = filterVal;
             }});

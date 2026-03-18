@@ -318,7 +318,7 @@ def create_sample_from_detection(tile_x, tile_y, tile_rgb, masks, feat, pixel_si
                                  slide_name, cell_type='nmj', crop_size=None,
                                  tile_percentiles=None, marker_thresholds=None,
                                  marker_map=None, contour_thickness=2,
-                                 image_format='JPEG', dashed_contour=False):
+                                 image_format='JPEG', dashed_contour=True):
     """Create an HTML sample from a detection.
 
     Crop size is calculated dynamically to be 100% larger than the mask,
