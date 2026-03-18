@@ -213,6 +213,12 @@ def main():
                         help='Feature key for RF score (default: rf_prediction)')
     parser.add_argument('--path-filter', default=None,
                         help='Only include specific paths (comma-separated path_ids)')
+    parser.add_argument('--top-paths', type=int, default=None,
+                        help='Use only the top N paths ranked by gradient quality × cell count. '
+                             'Gradient = Spearman correlation of markers vs fractional position.')
+    parser.add_argument('--gradient-markers', default=None,
+                        help='Comma-separated marker pair for gradient scoring (default: auto-detect '
+                             'from CSV columns, excluding cell_uid/path_id/fractional_pos)')
     parser.add_argument('--frac-range', default=None,
                         help='Fractional position range, e.g. "0.0,1.0" (default: all)')
     parser.add_argument('--max-cells', type=int, default=None,
@@ -255,6 +261,53 @@ def main():
     global_scores = load_zonation_scores(args.zonation_scores_csv)
     if global_scores:
         logger.info(f"Loaded global zonation scores for {len(global_scores):,} cells")
+
+    # -----------------------------------------------------------------------
+    # Step 1b: Rank paths by gradient quality and select top N (if requested)
+    # -----------------------------------------------------------------------
+    if args.top_paths is not None:
+        from scipy.stats import spearmanr
+
+        # Group cells by path
+        by_path = {}
+        for uid, rec in transect_records.items():
+            by_path.setdefault(rec['path_id'], []).append(rec)
+
+        # Detect marker columns for gradient scoring
+        skip_cols = {'path_id', 'path_name', 'fractional_pos'}
+        sample_rec = next(iter(transect_records.values()))
+        if args.gradient_markers:
+            marker_cols = [m.strip() for m in args.gradient_markers.split(',')]
+        else:
+            marker_cols = [k for k in sample_rec if k not in skip_cols
+                          and isinstance(sample_rec[k], (int, float))]
+
+        # Score each path: gradient strength × cell count
+        path_scores = []
+        for pid, cells in by_path.items():
+            n = len(cells)
+            if n < 10:
+                continue
+            fpos = [c['fractional_pos'] for c in cells]
+            rhos = []
+            for mk in marker_cols:
+                vals = [c.get(mk, 0) for c in cells]
+                if all(isinstance(v, (int, float)) for v in vals):
+                    rho, _ = spearmanr(fpos, vals)
+                    rhos.append(abs(rho))
+            gradient = float(sum(rhos) / len(rhos)) if rhos else 0.0
+            path_scores.append((pid, n, gradient, gradient * n))
+
+        path_scores.sort(key=lambda x: x[3], reverse=True)
+        top_pids = {s[0] for s in path_scores[:args.top_paths]}
+
+        before = len(transect_records)
+        transect_records = {uid: rec for uid, rec in transect_records.items()
+                           if rec['path_id'] in top_pids}
+        logger.info(f"Top {args.top_paths} paths (by gradient × size): "
+                    f"{before:,} -> {len(transect_records):,} cells")
+        for pid, n, grad, score in path_scores[:args.top_paths]:
+            logger.info(f"    {pid}: {n} cells, gradient={grad:.3f}")
 
     # -----------------------------------------------------------------------
     # Step 2: Apply pre-filters to the transect records
