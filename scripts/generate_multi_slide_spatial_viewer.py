@@ -78,14 +78,21 @@ def read_czi_thumbnail_channels(czi_path, display_channels, scale_factor=0.0625,
 
     czi = CziFile(str(czi_path))
 
-    # Get pixel size from metadata
+    # Get pixel size from metadata — try CZILoader first (more robust), then aicspylibczi
     pixel_size_um = None
     try:
-        scaling = czi.get_scaling()
-        if scaling and len(scaling) >= 1:
-            pixel_size_um = scaling[0] * 1e6  # m -> um
+        from segmentation.io.czi_loader import CZILoader
+        loader = CZILoader(str(czi_path))
+        pixel_size_um = loader.get_pixel_size()
     except Exception:
         pass
+    if pixel_size_um is None:
+        try:
+            scaling = czi.get_scaling()
+            if scaling and len(scaling) >= 1:
+                pixel_size_um = scaling[0] * 1e6  # m -> um
+        except Exception:
+            pass
 
     # Get mosaic bounding box for the scene
     try:
@@ -3671,9 +3678,17 @@ def main():
                 continue
 
             if pixel_size is None:
-                print(f"  WARNING: could not read pixel size for '{name}', skipping",
-                      file=sys.stderr)
-                continue
+                # Try to derive from detection features (area vs area_um2)
+                import math as _math
+                for _det in (data.get('_raw_detections') or [])[:100]:
+                    _f = _det.get('features', {})
+                    if _f.get('area') and _f.get('area_um2') and _f['area'] > 0:
+                        pixel_size = _math.sqrt(_f['area_um2'] / _f['area'])
+                        break
+                if pixel_size is None:
+                    pixel_size = 0.1725  # common default for 20x Axioscan
+                    print(f"  WARNING: could not read pixel size for '{name}', "
+                          f"using default {pixel_size} um/px", file=sys.stderr)
 
             # Determine channel names from CZI filename markers
             from segmentation.io.czi_loader import parse_markers_from_filename
