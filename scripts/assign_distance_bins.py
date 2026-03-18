@@ -25,7 +25,7 @@ Usage:
         --bin-edges 0,50,100,150,200 \\
         --output-dir rings_pv/
 
-    # Both + normalized ratio r = d_PV / (d_PV + d_CV) for model comparison
+    # Both + normalized ratio r = d_CV / (d_CV + d_PV): 0=pericentral, 1=periportal
     python scripts/assign_distance_bins.py \\
         --detections cell_detections_classified.json \\
         --landmarks zonation_landmarks.json \\
@@ -43,6 +43,8 @@ import argparse
 import numpy as np
 from scipy.spatial import cKDTree
 
+from collections import Counter
+
 from segmentation.utils.json_utils import fast_json_load, atomic_json_dump
 from segmentation.utils.logging import get_logger
 
@@ -52,30 +54,34 @@ logger = get_logger(__name__)
 def load_landmarks(landmarks_path):
     """Load CV and PV centroids from zonation_landmarks.json.
 
+    Format from zonation_transect.py:
+        {"cv_centroids": [[x,y], ...], "pv_centroids": [[x,y], ...]}
+
     Returns (cv_coords_um, pv_coords_um) as numpy arrays of shape (N, 2).
     """
     data = fast_json_load(str(landmarks_path))
 
-    cv_coords = []
-    pv_coords = []
+    cv_raw = data.get("cv_centroids", [])
+    pv_raw = data.get("pv_centroids", [])
 
-    # Format from zonation_transect.py: {"cv_clusters": [...], "pv_clusters": [...]}
-    for cluster in data.get("cv_clusters", []):
-        cx = cluster.get("centroid_um", cluster.get("centroid", [0, 0]))
-        cv_coords.append([float(cx[0]), float(cx[1])])
+    if not cv_raw or not pv_raw:
+        raise ValueError(
+            f"Expected 'cv_centroids' and 'pv_centroids' in landmarks JSON, "
+            f"got keys: {list(data.keys())}"
+        )
 
-    for cluster in data.get("pv_clusters", []):
-        cx = cluster.get("centroid_um", cluster.get("centroid", [0, 0]))
-        pv_coords.append([float(cx[0]), float(cx[1])])
+    cv_coords = np.array([[float(c[0]), float(c[1])] for c in cv_raw])
+    pv_coords = np.array([[float(c[0]), float(c[1])] for c in pv_raw])
 
-    return np.array(cv_coords), np.array(pv_coords)
+    return cv_coords, pv_coords
 
 
 def compute_distances(cell_coords_um, cv_coords_um, pv_coords_um):
     """Compute distance to nearest CV and PV for each cell.
 
     Returns (d_cv, d_pv, ratio, nearest_cv_idx, nearest_pv_idx) arrays.
-    ratio = d_pv / (d_pv + d_cv), where 0 = at PV, 1 = at CV.
+    ratio = d_cv / (d_cv + d_pv): 0 = pericentral (at CV), 1 = periportal (at PV).
+    Matches zonation_transect.py convention.
     """
     cv_tree = cKDTree(cv_coords_um)
     pv_tree = cKDTree(pv_coords_um)
@@ -83,9 +89,10 @@ def compute_distances(cell_coords_um, cv_coords_um, pv_coords_um):
     d_cv, nearest_cv = cv_tree.query(cell_coords_um)
     d_pv, nearest_pv = pv_tree.query(cell_coords_um)
 
-    # Normalized ratio: 0 = at PV (periportal), 1 = at CV (pericentral)
-    total = d_pv + d_cv
-    ratio = np.where(total > 0, d_pv / total, 0.5)
+    # Normalized ratio: 0 = pericentral (at CV), 1 = periportal (at PV)
+    # Matches zonation_transect.py: score = d_cv / (d_cv + d_pv)
+    total = d_cv + d_pv
+    ratio = np.where(total > 0, d_cv / total, 0.5)
 
     return d_cv, d_pv, ratio, nearest_cv, nearest_pv
 
@@ -157,14 +164,21 @@ def main():
     cell_coords = []
     valid_indices = []
     for i, det in enumerate(detections):
-        gc_um = det.get("global_center_um")
-        if gc_um and len(gc_um) >= 2:
-            # Score filter
-            score = det.get(args.score_key) or det.get("features", {}).get(args.score_key)
-            if score is not None and float(score) < args.score_threshold:
-                continue
-            cell_coords.append([float(gc_um[0]), float(gc_um[1])])
-            valid_indices.append(i)
+        gc_um = det.get("global_center_um") or det.get("features", {}).get("global_center_um")
+        if not gc_um or len(gc_um) < 2:
+            continue
+        # Score filter (careful: score=0.0 is valid, don't short-circuit with `or`)
+        score = det.get(args.score_key)
+        if score is None:
+            score = det.get("features", {}).get(args.score_key)
+        if score is not None and float(score) < args.score_threshold:
+            continue
+        cell_coords.append([float(gc_um[0]), float(gc_um[1])])
+        valid_indices.append(i)
+
+    if not cell_coords:
+        logger.error("No cells passed coordinate + score filter")
+        sys.exit(1)
 
     cell_coords = np.array(cell_coords)
     logger.info(f"  {len(cell_coords):,} cells with coordinates (after score filter)")
@@ -249,7 +263,6 @@ def main():
         "per_bin_counts": {},
     }
     for ct, data in results.items():
-        from collections import Counter
         counts = Counter(data["labels"])
         summary["per_bin_counts"][ct] = {k: v for k, v in sorted(counts.items())}
 
