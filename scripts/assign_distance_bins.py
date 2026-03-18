@@ -74,20 +74,20 @@ def load_landmarks(landmarks_path):
 def compute_distances(cell_coords_um, cv_coords_um, pv_coords_um):
     """Compute distance to nearest CV and PV for each cell.
 
-    Returns (d_cv, d_pv, ratio) arrays.
+    Returns (d_cv, d_pv, ratio, nearest_cv_idx, nearest_pv_idx) arrays.
     ratio = d_pv / (d_pv + d_cv), where 0 = at PV, 1 = at CV.
     """
     cv_tree = cKDTree(cv_coords_um)
     pv_tree = cKDTree(pv_coords_um)
 
-    d_cv, _ = cv_tree.query(cell_coords_um)
-    d_pv, _ = pv_tree.query(cell_coords_um)
+    d_cv, nearest_cv = cv_tree.query(cell_coords_um)
+    d_pv, nearest_pv = pv_tree.query(cell_coords_um)
 
     # Normalized ratio: 0 = at PV (periportal), 1 = at CV (pericentral)
     total = d_pv + d_cv
     ratio = np.where(total > 0, d_pv / total, 0.5)
 
-    return d_cv, d_pv, ratio
+    return d_cv, d_pv, ratio, nearest_cv, nearest_pv
 
 
 def bin_distances(distances, bin_edges):
@@ -127,6 +127,9 @@ def main():
     parser.add_argument("--score-key", default="rf_prediction")
     parser.add_argument("--every-nth", type=int, default=None,
                         help="Subsample every Nth cell per bin (for LMD well count control)")
+    parser.add_argument("--max-per-landmark", type=int, default=None,
+                        help="Max cells per bin per landmark. Ensures spatial distribution "
+                             "across multiple lobules instead of clustering near one CV/PV.")
 
     args = parser.parse_args()
     args.output_dir.mkdir(parents=True, exist_ok=True)
@@ -167,26 +170,29 @@ def main():
     logger.info(f"  {len(cell_coords):,} cells with coordinates (after score filter)")
 
     # --- Compute distances ---
-    d_cv, d_pv, ratio = compute_distances(cell_coords, cv_coords, pv_coords)
+    d_cv, d_pv, ratio, nearest_cv, nearest_pv = compute_distances(cell_coords, cv_coords, pv_coords)
 
     # --- Bin cells ---
     results = {}
 
     if args.center in ("cv", "both"):
         cv_labels, cv_bins = bin_distances(d_cv, bin_edges)
-        results["cv"] = {"labels": cv_labels, "bins": cv_bins, "distances": d_cv}
+        results["cv"] = {"labels": cv_labels, "bins": cv_bins, "distances": d_cv,
+                         "nearest_landmark": nearest_cv}
 
     if args.center in ("pv", "both"):
         pv_labels, pv_bins = bin_distances(d_pv, bin_edges)
-        results["pv"] = {"labels": pv_labels, "bins": pv_bins, "distances": d_pv}
+        results["pv"] = {"labels": pv_labels, "bins": pv_bins, "distances": d_pv,
+                         "nearest_landmark": nearest_pv}
 
     # --- Enrich detections and build per-bin outputs ---
     for center_type, data in results.items():
         labels = data["labels"]
         distances = data["distances"]
+        nearest_lm = data["nearest_landmark"]
 
-        # Group by bin
-        bins = {}
+        # Group by (bin, landmark) for spatially distributed sampling
+        bin_landmark = {}  # (label, landmark_idx) -> [det]
         for j, idx in enumerate(valid_indices):
             det = detections[idx]
             label = labels[j]
@@ -200,11 +206,22 @@ def main():
             features["d_pv_um"] = round(float(d_pv[j]), 2)
             features["zonation_ratio"] = round(float(ratio[j]), 4)
             features[f"{center_type}_ring"] = label
+            features[f"nearest_{center_type}_idx"] = int(nearest_lm[j])
             det["features"] = features
 
-            bins.setdefault(label, []).append(det)
+            lm_idx = int(nearest_lm[j])
+            bin_landmark.setdefault((label, lm_idx), []).append(det)
 
-        # Subsample if requested
+        # Flatten with spatial distribution: max N cells per landmark per bin
+        bins = {}
+        for (label, lm_idx), dets in bin_landmark.items():
+            if args.max_per_landmark and len(dets) > args.max_per_landmark:
+                # Take evenly spaced subset from this landmark's cells
+                step = max(1, len(dets) // args.max_per_landmark)
+                dets = dets[::step][:args.max_per_landmark]
+            bins.setdefault(label, []).extend(dets)
+
+        # Additional global subsampling if requested
         if args.every_nth and args.every_nth > 1:
             for label in bins:
                 bins[label] = bins[label][::args.every_nth]
