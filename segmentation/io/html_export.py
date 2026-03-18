@@ -1040,11 +1040,21 @@ def generate_annotation_page(
         stats_str = ' | '.join(stats_parts) if stats_parts else ''
 
         img_clean_b64 = sample.get('image_clean', '')
+        img_contour_only_b64 = sample.get('image_contour_only', '')
+        # Base layer: clean image (gets channel SVG filters)
+        # Contour layer: green on black with mix-blend-mode:lighten (always visible)
+        base_src = img_clean_b64 or img_b64
+        contour_src = img_contour_only_b64 or ''
+        contour_img = (
+            f'<img class="img-contour" src="data:image/{mime};base64,{contour_src}" '
+            f'style="position:absolute;top:0;left:0;width:100%;height:100%;'
+            f'mix-blend-mode:lighten;pointer-events:none;object-fit:contain" alt="">'
+        ) if contour_src else ''
         cards_html += f'''
         <div class="card" id="{uid}" data-label="-1">
             <div class="card-img-container" style="position:relative">
-                <img class="img-base" src="data:image/{mime};base64,{img_clean_b64 or img_b64}" alt="{uid}">
-                <img class="img-contour" src="data:image/{mime};base64,{img_b64}" style="position:absolute;top:0;left:0;width:100%;height:100%;mix-blend-mode:lighten;pointer-events:none" alt="">
+                <img class="img-base" src="data:image/{mime};base64,{base_src}" alt="{uid}">
+                {contour_img}
             </div>
             <div class="card-info">
                 <div class="card-meta">

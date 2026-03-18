@@ -412,13 +412,18 @@ def create_sample_from_detection(tile_x, tile_y, tile_rgb, masks, feat, pixel_si
     # Normalize and draw contour
     crop_norm = percentile_normalize(crop, p_low=1, p_high=99.5, global_percentiles=tile_percentiles)
 
-    # Save clean version before drawing contours (for toggle button)
+    # Save clean version before drawing contours (for channel toggle base layer)
     img_b64_clean, _ = image_to_base64(crop_norm, format=image_format)
 
+    # Draw contours on the image
     _bw = dashed_contour or (cell_type == 'islet')
     crop_with_contour = draw_mask_contour(crop_norm, crop_mask, color=contour_color, thickness=contour_thickness, bw_dashed=_bw)
-
     img_b64, mime = image_to_base64(crop_with_contour, format=image_format)
+
+    # Contour-only image (green on black) for overlay with mix-blend-mode:lighten
+    contour_only = np.zeros_like(crop_norm)
+    contour_only = draw_mask_contour(contour_only, crop_mask, color=contour_color, thickness=contour_thickness, bw_dashed=_bw)
+    img_b64_contour_only, _ = image_to_base64(contour_only, format=image_format)
 
     # Use existing UID if available, otherwise construct from global coords
     if 'uid' in feat:
@@ -475,6 +480,7 @@ def create_sample_from_detection(tile_x, tile_y, tile_rgb, masks, feat, pixel_si
         'uid': uid,
         'image': img_b64,
         'image_clean': img_b64_clean,
+        'image_contour_only': img_b64_contour_only,
         'mime_type': mime,
         'stats': stats,
     }

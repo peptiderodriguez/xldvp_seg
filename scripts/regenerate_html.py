@@ -170,8 +170,10 @@ def create_sample_from_contours(det, channel_arrays, display_channels, x_start, 
         target_w = max(1, int(crop_norm.shape[1] * scale_factor))
         crop_norm = cv2.resize(crop_norm, (target_w, target_h), interpolation=cv2.INTER_AREA)
 
-    # Save clean version BEFORE drawing contours (for toggle button)
+    # Save clean version BEFORE drawing contours (for channel toggle)
     crop_clean = crop_norm.copy()
+    # Also create contour-only image (green on black) for overlay layer
+    contour_only = np.zeros_like(crop_norm)
 
     # Draw contours if available (generic: look for any *_contour_global keys)
     contour_colors = {
@@ -194,21 +196,22 @@ def create_sample_from_contours(det, channel_arrays, display_channels, x_start, 
             contour_pts *= scale_factor
         contour_int = contour_pts.astype(np.int32).reshape(-1, 1, 2)
         if dashed_contour:
-            # Thin green dashed line: draw line segments with gaps
             pts_flat = contour_int.reshape(-1, 2)
             dash_len, gap_len = 8, 5
             cycle = dash_len + gap_len
             n_pts = len(pts_flat)
             i = 0
             while i < n_pts:
-                # Draw a dash segment
                 j = min(i + dash_len, n_pts - 1)
                 if j > i:
                     cv2.line(crop_norm, tuple(pts_flat[i]), tuple(pts_flat[j]),
                              (0, 255, 0), contour_thickness)
+                    cv2.line(contour_only, tuple(pts_flat[i]), tuple(pts_flat[j]),
+                             (0, 255, 0), contour_thickness)
                 i += cycle
         else:
             cv2.drawContours(crop_norm, [contour_int], -1, color, contour_thickness)
+            cv2.drawContours(contour_only, [contour_int], -1, color, contour_thickness)
 
     uid = det.get('uid', f"{slide_name}_{cell_type}_{int(round(cx))}_{int(round(cy))}")
     pil_img = Image.fromarray(crop_norm)
@@ -237,14 +240,19 @@ def create_sample_from_contours(det, channel_arrays, display_channels, x_start, 
         if vk in features:
             stats[vk] = features[vk]
 
-    # Also encode clean version (no contours) for toggle
+    # Clean version (no contours) for base layer
     pil_clean = Image.fromarray(crop_clean)
     img_b64_clean, _ = image_to_base64(pil_clean, format='PNG')
+
+    # Contour-only (green on black) for overlay layer with mix-blend-mode:lighten
+    pil_contour_only = Image.fromarray(contour_only)
+    img_b64_contour_only, _ = image_to_base64(pil_contour_only, format='PNG')
 
     return {
         'uid': uid,
         'image': img_b64,
         'image_clean': img_b64_clean,
+        'image_contour_only': img_b64_contour_only,
         'mime_type': mime,
         'stats': stats,
     }
