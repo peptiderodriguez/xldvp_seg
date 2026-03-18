@@ -81,6 +81,7 @@ Explain each step **as you reach it**, not all upfront. Define jargon inline whe
 | **Explore** | UMAP, PCA, HDBSCAN clustering, AnnData/scanpy export | `scripts/cluster_by_features.py` |
 | **Spatial** | Delaunay networks, community detection, cell neighborhoods | `scripts/spatial_cell_analysis.py` |
 | **Tissue zones** | Spatially-constrained zone discovery, transects, bone region annotation | `scripts/assign_tissue_zones.py`, `scripts/zonation_transect.py`, `scripts/annotate_bone_regions.py` |
+| **Distance bins** | Concentric rings around landmarks (CV/PV), distance + ratio features, model comparison | `scripts/assign_distance_bins.py` |
 | **Tissue area** | Variance-based tissue detection, area measurement from CZI | `scripts/calculate_tissue_areas.py` |
 | **Visualize** | Multi-slide scrollable HTML with ROI drawing + stats | `scripts/generate_multi_slide_spatial_viewer.py` |
 | **Tissue overlay** | Fluorescence image + cell overlay + ROI + LMD export in one viewer | `scripts/generate_tissue_overlay.py` |
