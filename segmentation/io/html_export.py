@@ -254,7 +254,7 @@ def draw_mask_contour(img_array, mask, color=(0, 255, 0), thickness=2, dotted=Fa
             cv2.CHAIN_APPROX_NONE
         )
         dash_len, gap_len = 8, 5
-        line_thickness = max(1, thickness - 1)
+        line_thickness = thickness
         for cnt in contours:
             pts = cnt.reshape(-1, 2)
             cycle = dash_len + gap_len

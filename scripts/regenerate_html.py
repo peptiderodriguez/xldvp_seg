@@ -205,7 +205,7 @@ def create_sample_from_contours(det, channel_arrays, display_channels, x_start, 
                 j = min(i + dash_len, n_pts - 1)
                 if j > i:
                     cv2.line(crop_norm, tuple(pts_flat[i]), tuple(pts_flat[j]),
-                             (0, 255, 0), max(1, contour_thickness - 1))
+                             (0, 255, 0), contour_thickness)
                 i += cycle
         else:
             cv2.drawContours(crop_norm, [contour_int], -1, color, contour_thickness)
