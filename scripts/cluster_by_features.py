@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Feature-based clustering of cell detections using UMAP + HDBSCAN.
+Feature-based clustering of cell detections using UMAP and/or t-SNE + HDBSCAN.
 
 Works with ANY cell type's channel features. Auto-discovers channel features
 from detections (keys matching ch\\d+_*) and labels clusters by dominant marker.
@@ -22,9 +22,11 @@ Auto-labels clusters by dominant marker:
   - Mixed/low -> "other"
 
 Outputs:
-  - detections_clustered.json   -- detections + cluster_id, cluster_label, umap_x, umap_y
+  - detections_clustered.json   -- detections + cluster_id, cluster_label, umap_x, umap_y, tsne_x, tsne_y
   - cluster_summary.csv         -- per-cluster stats
-  - umap_plot.png               -- UMAP colored by cluster
+  - umap_plot.png               -- UMAP colored by cluster (when --methods umap or both)
+  - tsne_plot.png               -- t-SNE colored by cluster (when --methods tsne or both)
+  - umap_tsne_plot.png          -- side-by-side UMAP + t-SNE (when --methods both)
   - marker_violin.png           -- marker intensity distributions per cluster
   - spatial.h5ad                -- AnnData format for scanpy
   - spatial.csv                 -- flat CSV with coords + clusters
@@ -43,7 +45,19 @@ Usage:
       --exclude-channels "3" \\
       --feature-groups "morph,sam2,channel"
 
-Dependencies: umap-learn, hdbscan, anndata, matplotlib, pandas
+  # UMAP only (original behavior)
+  python scripts/cluster_by_features.py \\
+      --detections /path/to/detections.json \\
+      --output-dir /path/to/output \\
+      --methods umap
+
+  # t-SNE only
+  python scripts/cluster_by_features.py \\
+      --detections /path/to/detections.json \\
+      --output-dir /path/to/output \\
+      --methods tsne --perplexity 50
+
+Dependencies: umap-learn, hdbscan, anndata, matplotlib, pandas, scikit-learn
 """
 
 import argparse
@@ -585,20 +599,41 @@ def run_clustering(args):
     else:
         X_umap = X_scaled
 
-    # UMAP embedding
+    # Dimensionality reduction (UMAP and/or t-SNE)
     import os
     n_jobs = int(os.environ.get('SLURM_CPUS_PER_TASK', os.cpu_count() or 1))
-    print(f"Running UMAP (n_neighbors={args.n_neighbors}, min_dist={args.min_dist}, n_jobs={n_jobs})...")
-    reducer = umap.UMAP(
-        n_neighbors=args.n_neighbors,
-        min_dist=args.min_dist,
-        n_components=2,
-        random_state=42,
-        n_jobs=n_jobs,
-        low_memory=True,
-    )
-    embedding = reducer.fit_transform(X_umap)
-    print(f"  UMAP embedding: {embedding.shape}")
+
+    umap_embedding = None
+    tsne_embedding = None
+
+    if args.methods in ('umap', 'both'):
+        print(f"Running UMAP (n_neighbors={args.n_neighbors}, min_dist={args.min_dist}, n_jobs={n_jobs})...")
+        reducer = umap.UMAP(
+            n_neighbors=args.n_neighbors,
+            min_dist=args.min_dist,
+            n_components=2,
+            random_state=42,
+            n_jobs=n_jobs,
+            low_memory=True,
+        )
+        umap_embedding = reducer.fit_transform(X_umap)
+        print(f"  UMAP embedding: {umap_embedding.shape}")
+
+    if args.methods in ('tsne', 'both'):
+        from sklearn.manifold import TSNE
+        print(f"Running t-SNE (perplexity={args.perplexity}, n_iter={args.tsne_n_iter}, n_jobs={n_jobs})...")
+        tsne = TSNE(
+            perplexity=args.perplexity,
+            n_iter=args.tsne_n_iter,
+            random_state=42,
+            n_jobs=n_jobs,
+        )
+        tsne_embedding = tsne.fit_transform(X_umap)
+        print(f"  t-SNE embedding: {tsne_embedding.shape}")
+
+    # For HDBSCAN, prefer UMAP embedding (better for density-based clustering)
+    # Fall back to t-SNE if UMAP wasn't run
+    cluster_embedding = umap_embedding if umap_embedding is not None else tsne_embedding
 
     # HDBSCAN clustering
     print(f"Running HDBSCAN (min_cluster_size={args.min_cluster_size})...")
@@ -606,7 +641,7 @@ def run_clustering(args):
         min_cluster_size=args.min_cluster_size,
         min_samples=args.min_samples,
     )
-    labels = clusterer.fit_predict(embedding)
+    labels = clusterer.fit_predict(cluster_embedding)
 
     n_clusters = len(set(labels)) - (1 if -1 in labels else 0)
     n_noise = (labels == -1).sum()
@@ -625,16 +660,24 @@ def run_clustering(args):
         cl = int(labels[i])
         det['cluster_id'] = cl
         det['cluster_label'] = cluster_label_map.get(cl, 'other')
-        det['umap_x'] = float(embedding[i, 0])
-        det['umap_y'] = float(embedding[i, 1])
+        if umap_embedding is not None:
+            det['umap_x'] = float(umap_embedding[i, 0])
+            det['umap_y'] = float(umap_embedding[i, 1])
+        if tsne_embedding is not None:
+            det['tsne_x'] = float(tsne_embedding[i, 0])
+            det['tsne_y'] = float(tsne_embedding[i, 1])
 
     # Add sentinel values for non-clustered detections (missing features)
     for i, det in enumerate(detections):
         if i not in valid_set and 'cluster_id' not in det:
             det['cluster_id'] = None
             det['cluster_label'] = 'unclassified'
-            det['umap_x'] = None
-            det['umap_y'] = None
+            if umap_embedding is not None:
+                det['umap_x'] = None
+                det['umap_y'] = None
+            if tsne_embedding is not None:
+                det['tsne_x'] = None
+                det['tsne_y'] = None
 
     # Save enriched detections
     clustered_path = output_dir / 'detections_clustered.json'
@@ -654,9 +697,13 @@ def run_clustering(args):
             'y': gc[1] if isinstance(gc, (list, tuple)) else 0,
             'cluster_id': det.get('cluster_id', -1),
             'cluster_label': det.get('cluster_label', 'other'),
-            'umap_x': det.get('umap_x', 0),
-            'umap_y': det.get('umap_y', 0),
         }
+        if umap_embedding is not None:
+            row['umap_x'] = det.get('umap_x', 0)
+            row['umap_y'] = det.get('umap_y', 0)
+        if tsne_embedding is not None:
+            row['tsne_x'] = det.get('tsne_x', 0)
+            row['tsne_y'] = det.get('tsne_y', 0)
         # Add marker intensities
         feats = det.get('features', {})
         for marker_name, key in marker_mean_pairs:
@@ -701,7 +748,10 @@ def run_clustering(args):
             obs=obs_df.set_index('uid'),
         )
         adata.var_names = feature_names
-        adata.obsm['X_umap'] = embedding
+        if umap_embedding is not None:
+            adata.obsm['X_umap'] = umap_embedding
+        if tsne_embedding is not None:
+            adata.obsm['X_tsne'] = tsne_embedding
         h5ad_path = output_dir / 'spatial.h5ad'
         adata.write(h5ad_path)
         print(f"  Saved: {h5ad_path}")
@@ -713,6 +763,7 @@ def run_clustering(args):
         import matplotlib
         matplotlib.use('Agg')
         import matplotlib.pyplot as plt
+        from scipy.spatial import ConvexHull
 
         # Build dynamic color map for cluster labels
         # Use a colormap that supports many labels
@@ -733,23 +784,72 @@ def run_clustering(args):
                 color_map[label_name] = tab_colors[color_idx % len(tab_colors)]
                 color_idx += 1
 
-        # UMAP plot
-        fig, ax = plt.subplots(figsize=(10, 8))
-        for label_name in all_label_names:
-            mask = df['cluster_label'] == label_name
-            color = color_map.get(label_name, 'gray')
-            ax.scatter(
-                df.loc[mask, 'umap_x'], df.loc[mask, 'umap_y'],
-                c=[color], label=label_name, s=5, alpha=0.6,
+        def _plot_embedding(ax, emb_x, emb_y, df, color_map, all_label_names,
+                            title, xlabel, ylabel):
+            """Plot a single embedding with dashed convex hull outlines per cluster."""
+            for label_name in all_label_names:
+                mask = df['cluster_label'] == label_name
+                color = color_map.get(label_name, 'gray')
+                ax.scatter(
+                    emb_x[mask], emb_y[mask],
+                    c=[color], label=label_name, s=5, alpha=0.6,
+                )
+                # Draw cluster outline (convex hull, dashed, no fill)
+                if label_name not in ('noise', 'unclassified', 'other') and mask.sum() >= 3:
+                    pts = np.column_stack([emb_x[mask].values, emb_y[mask].values])
+                    try:
+                        hull = ConvexHull(pts)
+                        hull_pts = pts[hull.vertices]
+                        hull_pts = np.vstack([hull_pts, hull_pts[0]])  # close polygon
+                        ax.plot(hull_pts[:, 0], hull_pts[:, 1],
+                                color=color, linewidth=1.5, linestyle='--', alpha=0.8)
+                    except Exception:
+                        pass  # Degenerate hull (collinear points)
+            ax.legend(markerscale=4, fontsize=8)
+            ax.set_xlabel(xlabel)
+            ax.set_ylabel(ylabel)
+            ax.set_title(title)
+
+        main_title = f'Cell Clustering ({len(df)} cells, {n_clusters} clusters)'
+
+        if umap_embedding is not None:
+            fig, ax = plt.subplots(figsize=(10, 8))
+            _plot_embedding(
+                ax, df['umap_x'], df['umap_y'], df, color_map, all_label_names,
+                main_title, 'UMAP 1', 'UMAP 2',
             )
-        ax.legend(markerscale=4)
-        ax.set_xlabel('UMAP 1')
-        ax.set_ylabel('UMAP 2')
-        ax.set_title(f'Cell Clustering ({len(df)} cells, {n_clusters} clusters)')
-        umap_path = output_dir / 'umap_plot.png'
-        fig.savefig(umap_path, dpi=150, bbox_inches='tight')
-        plt.close(fig)
-        print(f"  Saved: {umap_path}")
+            umap_path = output_dir / 'umap_plot.png'
+            fig.savefig(umap_path, dpi=150, bbox_inches='tight')
+            plt.close(fig)
+            print(f"  Saved: {umap_path}")
+
+        if tsne_embedding is not None:
+            fig, ax = plt.subplots(figsize=(10, 8))
+            _plot_embedding(
+                ax, df['tsne_x'], df['tsne_y'], df, color_map, all_label_names,
+                main_title, 't-SNE 1', 't-SNE 2',
+            )
+            tsne_path = output_dir / 'tsne_plot.png'
+            fig.savefig(tsne_path, dpi=150, bbox_inches='tight')
+            plt.close(fig)
+            print(f"  Saved: {tsne_path}")
+
+        if umap_embedding is not None and tsne_embedding is not None:
+            fig, (ax_u, ax_t) = plt.subplots(1, 2, figsize=(20, 8))
+            _plot_embedding(
+                ax_u, df['umap_x'], df['umap_y'], df, color_map, all_label_names,
+                'UMAP', 'UMAP 1', 'UMAP 2',
+            )
+            _plot_embedding(
+                ax_t, df['tsne_x'], df['tsne_y'], df, color_map, all_label_names,
+                't-SNE', 't-SNE 1', 't-SNE 2',
+            )
+            fig.suptitle(main_title)
+            fig.tight_layout()
+            combined_path = output_dir / 'umap_tsne_plot.png'
+            fig.savefig(combined_path, dpi=150, bbox_inches='tight')
+            plt.close(fig)
+            print(f"  Saved: {combined_path}")
 
         # Violin plot of marker intensities per cluster
         if marker_mean_pairs:
@@ -1138,6 +1238,13 @@ def main():
     parser.add_argument('--gate-percentile', type=float, default=90,
                         help='Percentile threshold for --gate-channel: keep cells above '
                         'this percentile of chN_mean (default: 90 = top 10%%)')
+    parser.add_argument('--methods', type=str, default='both',
+                        choices=['umap', 'tsne', 'both'],
+                        help='Dimensionality reduction method(s): umap, tsne, or both (default: both)')
+    parser.add_argument('--perplexity', type=int, default=30,
+                        help='t-SNE perplexity (default: 30)')
+    parser.add_argument('--tsne-n-iter', type=int, default=1000,
+                        help='t-SNE iterations (default: 1000)')
     args = parser.parse_args()
 
     if args.subcluster_input:

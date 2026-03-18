@@ -324,10 +324,11 @@ def image_to_base64(img_array, format='JPEG', quality=85):
         pil_img.save(buffer, format='PNG', optimize=True)
         mime_type = 'png'
     else:
-        if pil_img.mode != 'RGB' and format.upper() == 'JPEG':
+        out_format = format.upper() if format else 'JPEG'
+        if pil_img.mode != 'RGB' and out_format == 'JPEG':
             pil_img = pil_img.convert('RGB')
-        pil_img.save(buffer, format='JPEG', quality=quality)
-        mime_type = 'jpeg'
+        pil_img.save(buffer, format=out_format, quality=quality)
+        mime_type = out_format.lower()
 
     return base64.b64encode(buffer.getvalue()).decode('utf-8'), mime_type
 
@@ -2609,13 +2610,10 @@ def export_mk_hspc_html_from_ram(slide_data, output_base, html_output_dir, sampl
         if logger:
             logger.info(f"    {len(mk_samples)} MKs, {len(hspc_samples)} HSPCs")
 
-    # Filter MK by size
-    um_to_px_factor = _LEGACY_PIXEL_SIZE_UM ** 2
-    mk_min_px = int(mk_min_area_um / um_to_px_factor)
-    mk_max_px = int(mk_max_area_um / um_to_px_factor)
-
+    # Filter MK by size (use um² directly to avoid pixel_size dependency)
     mk_before = len(all_mk_samples)
-    all_mk_samples = [s for s in all_mk_samples if mk_min_px <= s.get('area_px', 0) <= mk_max_px]
+    all_mk_samples = [s for s in all_mk_samples
+                      if mk_min_area_um <= s.get('area_um2', 0) <= mk_max_area_um]
     if logger:
         logger.info(f"  MK size filter: {mk_before} -> {len(all_mk_samples)}")
 

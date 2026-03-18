@@ -161,7 +161,7 @@ class IsletStrategy(CellStrategy):
                 centroid=centroid,
                 features=feat,
                 id=f'{self.name}_{i}',
-                score=feat.get('sam2_score', feat.get('solidity', 0.0))
+                score=feat.get('sam2_score')  # None when no classifier; avoids solidity alias
             ))
 
         return detections
@@ -731,7 +731,7 @@ class IsletStrategy(CellStrategy):
                 centroid=feat.get('centroid', vd['centroid']),
                 features=feat,
                 id=f'{self.name}_{i}',
-                score=feat.get('sam2_score', feat.get('solidity', 0.0)),
+                score=feat.get('sam2_score'),  # None when no classifier; avoids solidity alias
             ))
 
         del valid_detections

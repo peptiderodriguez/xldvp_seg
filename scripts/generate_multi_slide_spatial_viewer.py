@@ -30,6 +30,7 @@ Usage:
 import argparse
 import base64
 import html as html_mod
+import io
 import json
 import sys
 from datetime import datetime
@@ -37,6 +38,96 @@ from pathlib import Path
 
 import numpy as np
 from scipy.spatial import KDTree
+
+
+# ---------------------------------------------------------------------------
+# Fluorescence background loading
+# ---------------------------------------------------------------------------
+
+def _encode_channel_b64(ch_array):
+    """Encode a single-channel uint8 array as PNG base64 string."""
+    from PIL import Image
+
+    img = Image.fromarray(ch_array, mode='L')
+    buf = io.BytesIO()
+    img.save(buf, format='PNG', optimize=True)
+    b64 = base64.b64encode(buf.getvalue()).decode('ascii')
+    del buf
+    return b64
+
+
+def read_czi_thumbnail_channels(czi_path, display_channels, scale_factor=0.0625, scene=0):
+    """Read CZI mosaic channels at low resolution, return per-channel uint8 arrays.
+
+    Uses aicspylibczi read_mosaic(scale_factor=...) for memory-efficient loading.
+    Each channel is percentile-normalised to uint8 independently.
+
+    Args:
+        czi_path: Path to CZI file (str or Path).
+        display_channels: List of channel indices to read (up to 3).
+        scale_factor: Downsampling factor (default 1/16 = 0.0625).
+        scene: CZI scene index (0-based, default 0).
+
+    Returns:
+        channel_arrays: list of uint8 arrays, one per channel (height x width).
+        pixel_size_um: pixel size in um at full resolution, or None.
+        mosaic_x: mosaic origin x in full-resolution pixels.
+        mosaic_y: mosaic origin y in full-resolution pixels.
+    """
+    from aicspylibczi import CziFile
+
+    czi = CziFile(str(czi_path))
+
+    # Get pixel size from metadata
+    pixel_size_um = None
+    try:
+        scaling = czi.get_scaling()
+        if scaling and len(scaling) >= 1:
+            pixel_size_um = scaling[0] * 1e6  # m -> um
+    except Exception:
+        pass
+
+    # Get mosaic bounding box for the scene
+    try:
+        bbox = czi.get_mosaic_scene_bounding_box(index=scene)
+    except Exception:
+        bbox = czi.get_mosaic_bounding_box()
+    region = (bbox.x, bbox.y, bbox.w, bbox.h)
+    mosaic_x = bbox.x
+    mosaic_y = bbox.y
+    print(f"    CZI scene {scene}: {bbox.w}x{bbox.h} px at ({bbox.x},{bbox.y}), "
+          f"scale={scale_factor}", flush=True)
+
+    channel_arrays = []
+    for ch in display_channels:
+        print(f"    Reading channel {ch}...", end='', flush=True)
+        try:
+            img = czi.read_mosaic(C=ch, region=region, scale_factor=scale_factor)
+            img = np.squeeze(img)
+            print(f" {img.shape} {img.dtype}", flush=True)
+        except Exception as exc:
+            print(f" FAILED ({exc})", flush=True)
+            channel_arrays.append(None)
+            continue
+
+        # Percentile-normalise to uint8 (exclude zeros which are CZI padding)
+        valid = img[img > 0] if img.dtype != np.uint8 else img.ravel()
+        if len(valid) == 0:
+            channel_arrays.append(np.zeros(img.shape[:2], dtype=np.uint8))
+            continue
+        p_low = float(np.percentile(valid, 1))
+        p_high = float(np.percentile(valid, 99.5))
+        if p_high <= p_low:
+            p_high = p_low + 1.0
+        norm = np.clip(
+            (img.astype(np.float32) - p_low) / (p_high - p_low), 0.0, 1.0
+        )
+        result = (norm * 255).astype(np.uint8)
+        if img.dtype != np.uint8:
+            result[img == 0] = 0  # preserve CZI padding as black
+        channel_arrays.append(result)
+
+    return channel_arrays, pixel_size_um, mosaic_x, mosaic_y
 
 
 # ---------------------------------------------------------------------------
@@ -488,7 +579,7 @@ def _stream_detections_mmap(filepath):
         mm.close()
 
 
-def load_slide_data(path, group_field):
+def load_slide_data(path, group_field, include_contours=False, score_threshold=None):
     """Load a classified detection JSON and extract positions + groups.
 
     For large files (>500 MB), uses mmap streaming to avoid loading the
@@ -497,6 +588,10 @@ def load_slide_data(path, group_field):
     Args:
         path: Path to classified detection JSON.
         group_field: Field name to group by.
+        include_contours: If True, also collect outer_contour_global (pixel coords)
+            and pixel_size_um for contour rendering.
+        score_threshold: If set, only include detections with score >= threshold
+            in contours (positions are always included regardless).
 
     Returns:
         Dict with slide data, or None if no valid data.
@@ -510,6 +605,7 @@ def load_slide_data(path, group_field):
     use_streaming = file_size > 500_000_000  # >500 MB
 
     group_cells = {}  # group_label -> list of (x, y)
+    contours_raw = []  # list of (outer_contour_global, pixel_size_um) when include_contours
 
     if use_streaming:
         print(f" streaming ({file_size / 1e9:.1f} GB)...", end='', flush=True)
@@ -520,6 +616,8 @@ def load_slide_data(path, group_field):
                 continue
             group = extract_group(det, group_field)
             group_cells.setdefault(group, []).append(pos)
+            if include_contours:
+                _collect_contour(det, contours_raw, score_threshold)
             n_parsed += 1
             if n_parsed % 100000 == 0:
                 print(f" {n_parsed // 1000}k...", end='', flush=True)
@@ -543,6 +641,8 @@ def load_slide_data(path, group_field):
                 continue
             group = extract_group(det, group_field)
             group_cells.setdefault(group, []).append(pos)
+            if include_contours:
+                _collect_contour(det, contours_raw, score_threshold)
         del detections
 
     if not group_cells:
@@ -563,12 +663,42 @@ def load_slide_data(path, group_field):
     all_x = np.concatenate([g['x'] for g in groups_out])
     all_y = np.concatenate([g['y'] for g in groups_out])
 
-    return {
+    result = {
         'groups': groups_out,
         'n_cells': sum(g['n'] for g in groups_out),
         'x_range': [float(all_x.min()), float(all_x.max())],
         'y_range': [float(all_y.min()), float(all_y.max())],
     }
+    if include_contours and contours_raw:
+        result['contours_raw'] = contours_raw
+    return result
+
+
+def _collect_contour(det, contours_raw, score_threshold):
+    """Extract contour from a detection dict and append to contours_raw.
+
+    Only collects detections that have outer_contour_global and pixel_size_um.
+    If score_threshold is set, filters by features['score'] >= threshold.
+    """
+    feat = det.get('features', {})
+    if score_threshold is not None:
+        score = feat.get('score')
+        if score is None:
+            score = det.get('score')
+        if score is not None and float(score) < score_threshold:
+            return
+
+    contour = det.get('outer_contour_global')
+    if contour is None:
+        contour = feat.get('outer_contour_global')
+    if contour is None or len(contour) < 3:
+        return
+
+    pixel_size = feat.get('pixel_size_um')
+    if pixel_size is None or not isinstance(pixel_size, (int, float)):
+        return
+
+    contours_raw.append((contour, float(pixel_size)))
 
 
 def discover_slides(input_dir, detection_glob):
@@ -732,13 +862,66 @@ def safe_json(obj):
     return json.dumps(obj).replace('</', '<\\/')
 
 
+def build_contour_js_data(contours_raw, max_contours=100_000):
+    """Convert raw pixel-coordinate contours to compact um-coordinate JS objects.
+
+    Each contour becomes:
+      { pts: Float32Array([x0,y0,x1,y1,...]), bx1, by1, bx2, by2 }
+
+    Coordinates are converted from pixels to um using per-detection pixel_size_um.
+    Bounding boxes enable fast viewport culling in renderPanel().
+
+    Args:
+        contours_raw: list of (contour_pts, pixel_size_um) from _collect_contour().
+        max_contours: cap to avoid huge HTML files.
+
+    Returns:
+        List of compact dicts ready for JSON embedding.
+    """
+    if not contours_raw:
+        return []
+
+    out = []
+    step = max(1, len(contours_raw) // max_contours)
+    for i in range(0, len(contours_raw), step):
+        contour, pixel_size = contours_raw[i]
+        try:
+            pts = np.asarray(contour, dtype=np.float32)
+            # Contour may be [[x,y],...] or [[x,y,z],...] — take only x,y
+            if pts.ndim == 2 and pts.shape[1] >= 2:
+                pts = pts[:, :2]
+            elif pts.ndim == 1 and len(pts) % 2 == 0:
+                pts = pts.reshape(-1, 2)
+            else:
+                continue
+            if len(pts) < 3:
+                continue
+            pts_um = pts * pixel_size
+            flat = pts_um.ravel().tolist()
+            bx1 = float(pts_um[:, 0].min())
+            bx2 = float(pts_um[:, 0].max())
+            by1 = float(pts_um[:, 1].min())
+            by2 = float(pts_um[:, 1].max())
+            out.append({
+                'pts': flat,
+                'bx1': round(bx1, 1),
+                'by1': round(by1, 1),
+                'bx2': round(bx2, 1),
+                'by2': round(by2, 1),
+            })
+        except Exception:
+            continue
+    return out
+
+
 # ---------------------------------------------------------------------------
 # HTML generation
 # ---------------------------------------------------------------------------
 
 def generate_html(slides_data, output_path, color_map, title, group_field,
                    default_min_cells=10, min_hull_cells=24,
-                   has_regions=False, has_multiscale=False, scale_keys=None):
+                   has_regions=False, has_multiscale=False, scale_keys=None,
+                   fluor_data=None, contour_data=None, ch_names=None):
     """Generate self-contained scrollable HTML with focus view, ROI, and DBSCAN clustering.
 
     Data is embedded as base64-encoded TypedArrays for compact transfer.
@@ -753,6 +936,14 @@ def generate_html(slides_data, output_path, color_map, title, group_field,
         group_field: Group field name (for metadata export).
         default_min_cells: Default DBSCAN min_samples for clustering.
         min_hull_cells: Min cells in cluster to draw convex hull.
+        fluor_data: Optional dict {slide_name: {'channels': [b64_png,...],
+            'names': [...], 'width': w, 'height': h, 'scale': s,
+            'mosaic_x': mx, 'mosaic_y': my, 'pixel_size': ps}}.
+            Images are greyscale PNGs, composited additively in RGB order.
+        contour_data: Optional dict {slide_name: list of contour dicts}
+            from build_contour_js_data(). Coordinates are in um.
+        ch_names: Optional list of 3 channel names for toggle button labels
+            (e.g. ['PM', 'nuc', 'SMA']). Defaults to ['Ch0','Ch1','Ch2'].
     """
     title_escaped = html_mod.escape(title)
 
@@ -815,6 +1006,10 @@ def generate_html(slides_data, output_path, color_map, title, group_field,
             'yr': [float(data['y_range'][0]), float(data['y_range'][1])],
         })
 
+    # Ordered slide names for fluor/contour index alignment
+    # (must match slides_meta — skips slides with 0 cells after filtering)
+    slide_names_ordered = [m['name'] for m in slides_meta]
+
     # Build per-slide per-group auto_eps for DBSCAN clustering
     slides_auto_eps = []
     for _, data in slides_data:
@@ -873,6 +1068,13 @@ def generate_html(slides_data, output_path, color_map, title, group_field,
     is_single = n_slides == 1
     timestamp = datetime.now().isoformat(timespec='seconds')
 
+    # Resolve channel names (default Ch0/Ch1/Ch2)
+    has_fluor = bool(fluor_data)
+    has_contours = bool(contour_data)
+    if ch_names is None:
+        ch_names = ['Ch0', 'Ch1', 'Ch2']
+    ch_names = (list(ch_names) + ['Ch0', 'Ch1', 'Ch2'])[:3]
+
     # --- Build conditional sidebar sections ---
     # Build regions sidebar (conditional on --graph-patterns)
     regions_sidebar_html = ''
@@ -904,6 +1106,44 @@ def generate_html(slides_data, output_path, color_map, title, group_field,
             + scale_slider_html +
             '    </div>\n'
         )
+
+    # Build fluorescence/contour sidebar (conditional on --czi-path/--czi-dir/--contours)
+    fluor_sidebar_html = ''
+    if has_fluor or has_contours:
+        ch0_name = html_mod.escape(ch_names[0])
+        ch1_name = html_mod.escape(ch_names[1])
+        ch2_name = html_mod.escape(ch_names[2])
+        fluor_sidebar_html = '    <!-- Fluorescence & Contours -->\n'
+        fluor_sidebar_html += '    <div class="sidebar-section">\n'
+        fluor_sidebar_html += '      <h3>Fluorescence</h3>\n'
+        if has_fluor:
+            fluor_sidebar_html += (
+                '      <div class="ctrl-row">\n'
+                '        <label style="min-width:auto"><input type="checkbox" id="show-fluor" checked> Show</label>\n'
+                '      </div>\n'
+                '      <div class="ctrl-row">\n'
+                '        <label>Opacity</label>\n'
+                '        <input type="range" id="fluor-opacity" min="0" max="1" value="0.8" step="0.05">\n'
+                '        <span class="val" id="fluor-op-val">0.80</span>\n'
+                '      </div>\n'
+                '      <div class="btn-row" style="margin:4px 0;">\n'
+                f'        <button class="btn active" id="btn-ch0" style="border-left:3px solid #ff4444">{ch0_name}</button>\n'
+                f'        <button class="btn active" id="btn-ch1" style="border-left:3px solid #44ff44">{ch1_name}</button>\n'
+                f'        <button class="btn active" id="btn-ch2" style="border-left:3px solid #4488ff">{ch2_name}</button>\n'
+                '      </div>\n'
+            )
+        if has_contours:
+            fluor_sidebar_html += (
+                '      <div class="ctrl-row">\n'
+                '        <label style="min-width:auto"><input type="checkbox" id="show-contours" checked> Contours</label>\n'
+                '      </div>\n'
+            )
+        fluor_sidebar_html += (
+            '      <div class="ctrl-row">\n'
+            '        <label style="min-width:auto"><input type="checkbox" id="show-dots" checked> Dots</label>\n'
+            '      </div>\n'
+        )
+        fluor_sidebar_html += '    </div>\n'
 
     # --- Build the HTML ---
     html_parts = []
@@ -1118,6 +1358,7 @@ def generate_html(slides_data, output_path, color_map, title, group_field,
     </div>
 
 {regions_sidebar_html}
+{fluor_sidebar_html}
     <!-- Clustering -->
     <div class="sidebar-section">
       <h3>Clustering</h3>
@@ -1235,6 +1476,60 @@ const SCALE_KEYS = {safe_json(scale_keys or [])};
         html_parts.append(f'  "{b64}"{comma}\n')
     html_parts.append("];\n")
 
+    # Fluorescence channel images: one entry per slide, null if no data for that slide
+    html_parts.append("// Fluorescence channel data (grayscale PNG base64, one entry per slide)\n")
+    html_parts.append("const FLUOR_META = [\n")
+    for i, name in enumerate(slide_names_ordered):
+        comma = ',' if i < len(slide_names_ordered) - 1 else ''
+        fd = (fluor_data or {}).get(name)
+        if fd is None:
+            html_parts.append(f'  null{comma}\n')
+        else:
+            entry = {
+                'w': fd['width'],
+                'h': fd['height'],
+                'scale': fd['scale'],
+                'mx': fd.get('mosaic_x', 0),
+                'my': fd.get('mosaic_y', 0),
+                'pixel_size': fd.get('pixel_size', 0.22),
+                'names': fd.get('names', ['Ch0', 'Ch1', 'Ch2']),
+            }
+            html_parts.append(f'  {safe_json(entry)}{comma}\n')
+    html_parts.append("];\n")
+
+    # Emit channel image base64 data as a flat array (3 images * n_slides)
+    # Layout: FLUOR_CH_B64[slideIdx * 3 + channelIdx] = b64string or ''
+    html_parts.append("const FLUOR_CH_B64 = [\n")
+    for i, name in enumerate(slide_names_ordered):
+        fd = (fluor_data or {}).get(name)
+        for ci in range(3):
+            is_last = (i == len(slide_names_ordered) - 1) and ci == 2
+            comma = '' if is_last else ','
+            if fd is None or ci >= len(fd['channels']) or not fd['channels'][ci]:
+                html_parts.append(f'  ""{comma}\n')
+            else:
+                html_parts.append(f'  "{fd["channels"][ci]}"{comma}\n')
+    html_parts.append("];\n")
+
+    # Contour data: one entry per slide
+    html_parts.append("// Detection contours in um coordinates\n")
+    html_parts.append("const CONTOUR_DATA = [\n")
+    for i, name in enumerate(slide_names_ordered):
+        comma = ',' if i < len(slide_names_ordered) - 1 else ''
+        cd = (contour_data or {}).get(name)
+        if not cd:
+            html_parts.append(f'  []{comma}\n')
+        else:
+            # Emit as JSON; pts arrays are plain lists (will become JS arrays)
+            html_parts.append(f'  {safe_json(cd)}{comma}\n')
+    html_parts.append("];\n")
+
+    html_parts.append(f"""
+const HAS_FLUOR = {'true' if has_fluor else 'false'};
+const HAS_CONTOURS = {'true' if has_contours else 'false'};
+const CH_NAMES = {safe_json(ch_names)};
+""")
+
     html_parts.append("""
 // Decode binary data into per-slide arrays
 const SLIDES = SLIDE_META.map((meta, i) => {
@@ -1257,6 +1552,35 @@ const SLIDES = SLIDE_META.map((meta, i) => {
 SLIDE_POS_B64.length = 0;
 SLIDE_GRP_B64.length = 0;
 
+// Build fluorescence image objects (decoded lazily on first render)
+const fluorImages = SLIDES.map((_, si) => {
+  const meta = FLUOR_META[si];
+  if (!meta) return null;
+  const imgs = [null, null, null];
+  let loadedCount = 0;
+  const result = { meta, imgs, ready: false, _canvas: null, _dirty: true };
+  for (let ci = 0; ci < 3; ci++) {
+    const b64 = FLUOR_CH_B64[si * 3 + ci];
+    if (!b64) { loadedCount++; if (loadedCount === 3) result.ready = true; continue; }
+    const img = new Image();
+    img.onload = () => {
+      imgs[ci] = img;
+      result._dirty = true;
+      loadedCount++;
+      if (loadedCount === 3) {
+        result.ready = true;
+        // Re-render all panels once images are ready
+        scheduleRenderAll();
+      }
+    };
+    img.src = 'data:image/png;base64,' + b64;
+  }
+  return result;
+});
+
+// Free large base64 channel strings
+FLUOR_CH_B64.length = 0;
+
 // ===================================================================
 // State
 // ===================================================================
@@ -1274,6 +1598,15 @@ let kdeDebounceTimer = null;
 // Region state
 let showRegions = HAS_REGIONS, showRegionLabels = HAS_REGIONS, showRegionBnd = HAS_REGIONS;
 let regionAlpha = 0.25;
+
+// Fluorescence + contour state
+let showFluor = HAS_FLUOR, fluorAlpha = 0.8;
+let chEnabled = [true, true, true];
+let showContours = HAS_CONTOURS;
+let showDots = true;
+
+// Channel tint colors: R, G, B for additive compositing
+const CH_TINTS = [[255,0,0], [0,255,0], [0,100,255]];
 
 // Clustering state
 const clusterData = new Array(SLIDES.length).fill(null);  // per-slide cluster results
@@ -1531,6 +1864,107 @@ function getGroupPositions(slideIdx) {
 function hexToRgb(hex) {
   const h = hex.replace('#', '');
   return [parseInt(h.substring(0,2),16), parseInt(h.substring(2,4),16), parseInt(h.substring(4,6),16)];
+}
+
+// ===================================================================
+// Fluorescence rendering
+// ===================================================================
+
+function drawFluorescence(ctx, slideIdx, panZoom) {
+  const fd = fluorImages[slideIdx];
+  if (!fd || !fd.ready) return;
+
+  const meta = fd.meta;
+  const iw = meta.w, ih = meta.h;
+  // Scale factor maps thumbnail pixels -> full-resolution pixels.
+  // The viewer coordinate space is in um, so we also multiply by pixel_size.
+  // thumbnail_pixel = full_res_pixel * scale
+  // um = full_res_pixel * pixel_size
+  // => full_res_pixel = thumbnail_pixel / scale
+  // => um = (thumbnail_pixel / scale) * pixel_size
+  // => thumbnail_pixel = um / pixel_size * scale
+  // Draw position in um space: mosaic origin in full-res pixels -> um
+  const mx_um = meta.mx * meta.pixel_size;
+  const my_um = meta.my * meta.pixel_size;
+  const scale_inv = 1.0 / meta.scale;  // thumbnail pixel -> full-res pixel
+  const draw_w = iw * scale_inv * meta.pixel_size;  // um
+  const draw_h = ih * scale_inv * meta.pixel_size;  // um
+
+  // Rebuild composite offscreen canvas only when needed
+  if (fd._dirty || !fd._canvas) {
+    if (!fd._canvas) {
+      fd._canvas = document.createElement('canvas');
+      fd._canvas.width = iw;
+      fd._canvas.height = ih;
+    }
+    const fctx = fd._canvas.getContext('2d', { willReadFrequently: true });
+    // Additive channel compositing via pixel-level blend
+    const result = new Uint8ClampedArray(iw * ih * 4);
+    for (let ci = 0; ci < 3; ci++) {
+      if (!chEnabled[ci] || !fd.imgs[ci]) continue;
+      // Draw grayscale channel to temp canvas, read pixels
+      const tmp = document.createElement('canvas');
+      tmp.width = iw; tmp.height = ih;
+      const tctx = tmp.getContext('2d');
+      tctx.drawImage(fd.imgs[ci], 0, 0);
+      const px = tctx.getImageData(0, 0, iw, ih).data;
+      const [tr, tg, tb] = CH_TINTS[ci];
+      for (let i = 0; i < iw * ih; i++) {
+        const v = px[i * 4] / 255;
+        result[i * 4]     = Math.min(255, result[i * 4]     + tr * v);
+        result[i * 4 + 1] = Math.min(255, result[i * 4 + 1] + tg * v);
+        result[i * 4 + 2] = Math.min(255, result[i * 4 + 2] + tb * v);
+        result[i * 4 + 3] = 255;
+      }
+    }
+    fctx.putImageData(new ImageData(result, iw, ih), 0, 0);
+    fd._dirty = false;
+  }
+
+  ctx.globalAlpha = fluorAlpha;
+  ctx.drawImage(fd._canvas, mx_um, my_um, draw_w, draw_h);
+  ctx.globalAlpha = 1;
+}
+
+// ===================================================================
+// Detection contour rendering
+// ===================================================================
+
+function drawContours(ctx, p, panZoom) {
+  const contours = CONTOUR_DATA[p.idx];
+  if (!contours || contours.length === 0) return;
+
+  // Compute visible data bounds (in um) for viewport culling
+  // Panel transform: screen = data * zoom + pan => data = (screen - pan) / zoom
+  const vx1 = (0 - p.panX) / p.zoom;
+  const vy1 = (0 - p.panY) / p.zoom;
+  const vx2 = (p.cw - p.panX) / p.zoom;
+  const vy2 = (p.ch - p.panY) / p.zoom;
+
+  ctx.strokeStyle = '#00ff00';
+  ctx.lineWidth = 1.5 / panZoom;
+  ctx.setLineDash([6 / panZoom, 4 / panZoom]);
+  ctx.globalAlpha = 0.85;
+
+  for (let ci = 0; ci < contours.length; ci++) {
+    const c = contours[ci];
+    // Viewport culling via pre-computed bounding box
+    if (c.bx2 < vx1 || c.bx1 > vx2 || c.by2 < vy1 || c.by1 > vy2) continue;
+
+    const pts = c.pts;
+    if (!pts || pts.length < 6) continue;  // at least 3 points (6 floats)
+
+    const path = new Path2D();
+    path.moveTo(pts[0], pts[1]);
+    for (let j = 2; j < pts.length; j += 2) {
+      path.lineTo(pts[j], pts[j + 1]);
+    }
+    path.closePath();
+    ctx.stroke(path);
+  }
+
+  ctx.setLineDash([]);
+  ctx.globalAlpha = 1;
 }
 
 // ===================================================================
@@ -2307,6 +2741,11 @@ function renderPanel(p) {
   ctx.translate(p.panX, p.panY);
   ctx.scale(p.zoom, p.zoom);
 
+  // Layer 0: Fluorescence background
+  if (showFluor && HAS_FLUOR) {
+    drawFluorescence(ctx, p.idx, p.zoom);
+  }
+
   // Layer 1: Regions (lowest)
   if (showRegions && p.slide.regions && p.slide.regions.length > 0) {
     drawRegions(ctx, p.slide.regions, p.zoom, regionAlpha, showRegionLabels, showRegionBnd);
@@ -2316,6 +2755,11 @@ function renderPanel(p) {
   if (showKDE) {
     const kdeData = getKDE(p.idx);
     drawKDEContours(ctx, kdeData, p.zoom, kdeAlpha, kdeFill, kdeLines);
+  }
+
+  // Layer 2.5: Detection contours
+  if (showContours && HAS_CONTOURS) {
+    drawContours(ctx, p, p.zoom);
   }
 
   // Layer 3: Cell dots
@@ -2329,17 +2773,28 @@ function renderPanel(p) {
 
   const useROIFilter = roiFilterActive && rois.length > 0;
 
-  for (let gi = 0; gi < N_GROUPS; gi++) {
-    if (hidden.has(GROUP_LABELS[gi])) continue;
-    ctx.globalAlpha = dotAlpha;
-    ctx.fillStyle = GROUP_COLORS[gi];
+  if (showDots) {
+    for (let gi = 0; gi < N_GROUPS; gi++) {
+      if (hidden.has(GROUP_LABELS[gi])) continue;
+      ctx.globalAlpha = dotAlpha;
+      ctx.fillStyle = GROUP_COLORS[gi];
 
+      for (let i = 0; i < n; i++) {
+        if (grp[i] !== gi) continue;
+        const x = pos[i * 2];
+        const y = pos[i * 2 + 1];
+        if (useROIFilter && !cellPassesROIFilter(x, y, p.idx)) continue;
+        ctx.fillRect(x - halfR, y - halfR, r, r);
+        total++;
+      }
+    }
+  } else {
+    // Count visible cells even when dots are hidden
+    const useFilter = roiFilterActive && rois.length > 0;
     for (let i = 0; i < n; i++) {
-      if (grp[i] !== gi) continue;
-      const x = pos[i * 2];
-      const y = pos[i * 2 + 1];
-      if (useROIFilter && !cellPassesROIFilter(x, y, p.idx)) continue;
-      ctx.fillRect(x - halfR, y - halfR, r, r);
+      const gi = grp[i];
+      if (hidden.has(GROUP_LABELS[gi])) continue;
+      if (useFilter && !cellPassesROIFilter(pos[i*2], pos[i*2+1], p.idx)) continue;
       total++;
     }
   }
@@ -2921,6 +3376,40 @@ function initControls() {
       };
     }
   }
+
+  // Fluorescence controls
+  const showFluorCb = document.getElementById('show-fluor');
+  if (showFluorCb) {
+    showFluorCb.onchange = e => { showFluor = e.target.checked; scheduleRenderAll(); };
+  }
+  const fluorOpSlider = document.getElementById('fluor-opacity');
+  if (fluorOpSlider) {
+    fluorOpSlider.oninput = e => {
+      fluorAlpha = parseFloat(e.target.value);
+      document.getElementById('fluor-op-val').textContent = fluorAlpha.toFixed(2);
+      scheduleRenderAll();
+    };
+  }
+  for (let ci = 0; ci < 3; ci++) {
+    const btn = document.getElementById('btn-ch' + ci);
+    if (btn) {
+      btn.onclick = () => {
+        chEnabled[ci] = !chEnabled[ci];
+        btn.classList.toggle('active', chEnabled[ci]);
+        // Invalidate composited canvas for all slides
+        fluorImages.forEach(fd => { if (fd) fd._dirty = true; });
+        scheduleRenderAll();
+      };
+    }
+  }
+  const showContoursCb = document.getElementById('show-contours');
+  if (showContoursCb) {
+    showContoursCb.onchange = e => { showContours = e.target.checked; scheduleRenderAll(); };
+  }
+  const showDotsCb = document.getElementById('show-dots');
+  if (showDotsCb) {
+    showDotsCb.onchange = e => { showDots = e.target.checked; scheduleRenderAll(); };
+  }
 }
 
 // ===================================================================
@@ -3004,6 +3493,25 @@ def main():
                         help='Connection radii in um for graph patterns (default: 10 scales)')
     parser.add_argument('--min-region-cells', type=int, default=8,
                         help='Min cells per connected component for regions (default: 8)')
+    # Fluorescence background
+    parser.add_argument('--czi-path',
+                        help='CZI file for fluorescence background (single slide or matched '
+                             'to all slides)')
+    parser.add_argument('--czi-dir',
+                        help='Directory of CZI files matched to slides by stem name')
+    parser.add_argument('--display-channels', default=None,
+                        help='Channel indices for R,G,B display (e.g. "1,2,0"). '
+                             'Default: first 3 channels (0,1,2).')
+    parser.add_argument('--scale-factor', type=float, default=0.0625,
+                        help='CZI downsample factor for background image (default: 1/16)')
+    # Detection contours (on by default)
+    parser.add_argument('--no-contours', action='store_true',
+                        help='Disable detection contour embedding (enabled by default when '
+                             'detections have outer_contour_global)')
+    parser.add_argument('--contour-score-threshold', type=float, default=None,
+                        help='Only embed contours for detections with score >= threshold')
+    parser.add_argument('--max-contours', type=int, default=100_000,
+                        help='Maximum contours to embed per slide (default: 100000)')
     args = parser.parse_args()
 
     if not args.input_dir and not args.detections:
@@ -3032,16 +3540,21 @@ def main():
             slide_files.append((name, path))
 
     # Load data
+    want_contours = not args.no_contours
     slides_data = []
     for name, path in slide_files:
         print(f"  Loading {name}...", end='', flush=True)
-        data = load_slide_data(path, args.group_field)
+        data = load_slide_data(path, args.group_field,
+                               include_contours=want_contours,
+                               score_threshold=args.contour_score_threshold)
         if data is None:
             print(" skipped (no data)")
             continue
         groups_str = ', '.join(f"{g['label']}:{g['n']}" for g in data['groups'])
         slides_data.append((name, data))
-        print(f" {data['n_cells']} cells [{groups_str}]")
+        n_contours = len(data.get('contours_raw', []))
+        extra = f", {n_contours} contours" if want_contours else ""
+        print(f" {data['n_cells']} cells [{groups_str}]{extra}")
 
     if not slides_data:
         print("Error: no valid slide data loaded", file=sys.stderr)
@@ -3105,6 +3618,103 @@ def main():
 
         has_regions = any(data.get('regions') for _, data in slides_data)
 
+    # Build contour data per slide
+    contour_data = None
+    if want_contours:
+        contour_data = {}
+        for name, data in slides_data:
+            raw = data.pop('contours_raw', [])
+            if raw:
+                cd = build_contour_js_data(raw, max_contours=args.max_contours)
+                contour_data[name] = cd
+                print(f"  Contours for {name}: {len(raw)} raw -> {len(cd)} embedded")
+
+    # Load fluorescence backgrounds from CZI files
+    fluor_data = None
+    ch_names = None
+    if args.czi_path or args.czi_dir:
+        display_channels = [0, 1, 2]
+        if args.display_channels:
+            display_channels = [int(x.strip()) for x in args.display_channels.split(',')]
+        display_channels = display_channels[:3]
+
+        # Build CZI path map: slide_name -> Path (or '*' for single CZI)
+        czi_map = {}
+        if args.czi_path:
+            czi_map['*'] = Path(args.czi_path)
+        elif args.czi_dir:
+            for czi_file in sorted(Path(args.czi_dir).glob('*.czi')):
+                czi_map[czi_file.stem] = czi_file
+
+        fluor_data = {}
+        ch_names_collected = None
+        for name, _ in slides_data:
+            # Find matching CZI: exact stem match, then wildcard, then fuzzy
+            czi_path = czi_map.get(name) or czi_map.get('*')
+            if czi_path is None:
+                for stem, path in czi_map.items():
+                    if stem != '*' and (name in stem or stem in name):
+                        czi_path = path
+                        break
+            if czi_path is None:
+                print(f"  No CZI found for slide '{name}', skipping fluorescence")
+                continue
+
+            print(f"  Loading fluorescence for '{name}' from {czi_path.name}...")
+            try:
+                ch_arrays, pixel_size, mx, my = read_czi_thumbnail_channels(
+                    czi_path, display_channels, scale_factor=args.scale_factor)
+            except Exception as exc:
+                print(f"  WARNING: failed to load CZI for '{name}': {exc}", file=sys.stderr)
+                continue
+
+            if pixel_size is None:
+                print(f"  WARNING: could not read pixel size for '{name}', skipping",
+                      file=sys.stderr)
+                continue
+
+            # Determine channel names from CZI filename markers
+            from segmentation.io.czi_loader import parse_markers_from_filename
+            markers = parse_markers_from_filename(czi_path.name)
+            this_ch_names = []
+            for ch_idx in display_channels:
+                # Try to find the name for this channel index by positional order
+                if ch_idx < len(markers):
+                    this_ch_names.append(markers[ch_idx]['name'])
+                else:
+                    this_ch_names.append(f'Ch{ch_idx}')
+            if ch_names_collected is None:
+                ch_names_collected = this_ch_names
+
+            # Encode channels as base64 PNGs
+            ch_b64 = []
+            for ch_arr in ch_arrays:
+                if ch_arr is None:
+                    ch_b64.append('')
+                else:
+                    ch_b64.append(_encode_channel_b64(ch_arr))
+            while len(ch_b64) < 3:
+                ch_b64.append('')
+
+            h, w = ch_arrays[0].shape if ch_arrays[0] is not None else (0, 0)
+            fluor_data[name] = {
+                'channels': ch_b64,
+                'names': this_ch_names,
+                'width': w,
+                'height': h,
+                'scale': args.scale_factor,
+                'mosaic_x': mx,
+                'mosaic_y': my,
+                'pixel_size': pixel_size,
+            }
+            print(f"    Encoded {sum(1 for b in ch_b64 if b)} channels "
+                  f"({w}x{h} px thumbnail)", flush=True)
+
+        ch_names = ch_names_collected
+        if not fluor_data:
+            fluor_data = None
+            print("  No fluorescence data loaded")
+
     # Generate HTML
     total_cells = sum(d['n_cells'] for _, d in slides_data)
     print(f"\nGenerating HTML for {len(slides_data)} slides, "
@@ -3115,7 +3725,10 @@ def main():
                   min_hull_cells=args.min_hull_cells,
                   has_regions=has_regions,
                   has_multiscale=has_multiscale,
-                  scale_keys=scale_keys)
+                  scale_keys=scale_keys,
+                  fluor_data=fluor_data,
+                  contour_data=contour_data,
+                  ch_names=ch_names)
 
 
 if __name__ == '__main__':

@@ -99,20 +99,19 @@ def compute_distances(cell_coords_um, cv_coords_um, pv_coords_um):
 
 def bin_distances(distances, bin_edges):
     """Assign each distance to a bin. Returns bin labels (str) and bin indices."""
+    distances = np.asarray(distances, dtype=np.float64)
+    bin_edges = np.asarray(bin_edges, dtype=np.float64)
+    # np.digitize returns 1-indexed bin: 0=below first edge, len(edges)=above last
+    raw_idx = np.digitize(distances, bin_edges) - 1  # 0-indexed
+    # Mark out-of-range (below first or at/above last edge) as -1
+    raw_idx[(raw_idx < 0) | (raw_idx >= len(bin_edges) - 1)] = -1
     labels = []
-    indices = []
-    for d in distances:
-        assigned = False
-        for i in range(len(bin_edges) - 1):
-            if bin_edges[i] <= d < bin_edges[i + 1]:
-                labels.append(f"{int(bin_edges[i])}-{int(bin_edges[i+1])}um")
-                indices.append(i)
-                assigned = True
-                break
-        if not assigned:
+    for idx in raw_idx:
+        if idx == -1:
             labels.append("outside")
-            indices.append(-1)
-    return labels, indices
+        else:
+            labels.append(f"{int(bin_edges[idx])}-{int(bin_edges[idx + 1])}um")
+    return labels, raw_idx.tolist()
 
 
 def main():

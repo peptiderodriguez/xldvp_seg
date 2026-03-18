@@ -397,6 +397,10 @@ def assign_wells(rep_list: list, *, empty_pct: float, seed: int) -> tuple[list, 
     if not rep_list:
         return rep_list, []
 
+    # Shuffle replicates to avoid systematic plate-position bias in mass spec
+    rng = np.random.default_rng(seed)
+    rng.shuffle(rep_list)
+
     n_reps = len(rep_list)
     n_blanks = max(1, math.ceil(n_reps * empty_pct / 100))
     total_wells = n_reps + n_blanks

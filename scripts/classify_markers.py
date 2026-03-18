@@ -663,7 +663,13 @@ def main():
         # For SNR method, disable bg_subtract (uses pipeline SNR directly)
         # For otsu with --use-raw, disable local bg_subtract (raw values bypass correction)
         # Global bg is always allowed (it's a simple slide-wide median)
-        marker_bg_subtract = args.bg_subtract
+        # Derive bg_subtract from per-marker method, not global default
+        if args.no_background_subtract or args.use_raw:
+            marker_bg_subtract = False
+        elif args.background_subtract is not None:
+            marker_bg_subtract = args.background_subtract
+        else:
+            marker_bg_subtract = (marker_method in ('otsu', 'snr'))
         marker_global_bg = args.global_background
         if marker_method == 'snr':
             marker_bg_subtract = False  # SNR reads from pipeline features

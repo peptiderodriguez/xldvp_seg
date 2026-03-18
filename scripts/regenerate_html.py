@@ -78,7 +78,7 @@ logger = get_logger(__name__)
 def create_sample_from_contours(det, channel_arrays, display_channels, x_start, y_start,
                                 mosaic_h, mosaic_w, pixel_size_um, slide_name, cell_type,
                                 contour_thickness=2, max_crop_px=800, min_crop_px=300,
-                                dashed_contour=False):
+                                dashed_contour=True):
     """Create an HTML sample by cropping from CZI around a detection's center.
 
     Generic alternative to create_sample() — works for any cell type where detections
@@ -205,9 +205,9 @@ def create_sample_from_contours(det, channel_arrays, display_channels, x_start, 
                 j = min(i + dash_len, n_pts - 1)
                 if j > i:
                     cv2.line(crop_norm, tuple(pts_flat[i]), tuple(pts_flat[j]),
-                             (0, 255, 0), contour_thickness)
+                             color, contour_thickness)
                     cv2.line(contour_only, tuple(pts_flat[i]), tuple(pts_flat[j]),
-                             (0, 255, 0), contour_thickness)
+                             color, contour_thickness)
                 i += cycle
         else:
             cv2.drawContours(crop_norm, [contour_int], -1, color, contour_thickness)
@@ -421,7 +421,9 @@ def main():
     if args.score_threshold > 0:
         pre_filter = len(all_detections)
         all_detections = [d for d in all_detections
-                          if (d.get('rf_prediction') or 0) >= args.score_threshold]
+                          if (d.get('rf_prediction') is not None
+                              and d.get('rf_prediction') >= args.score_threshold)
+                          or d.get('rf_prediction') is None]  # keep unscored
         logger.info(f"Score filter (>= {args.score_threshold}): {pre_filter:,} -> {len(all_detections):,}")
 
     # Sample if needed

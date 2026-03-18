@@ -1589,8 +1589,7 @@ def _run_single_slide(args):
         from segmentation.utils.timestamps import timestamped_path, update_symlink
         json_path = output_dir / f"{args.output_name}_with_controls.json"
         ts_json = timestamped_path(json_path)
-        with open(ts_json, 'w') as f:
-            json.dump(export_data, f)
+        atomic_json_dump(export_data, ts_json)
         update_symlink(json_path, ts_json)
         print(f"\n  Saved export JSON: {ts_json}")
 
@@ -1724,14 +1723,14 @@ def run_batch_export(args):
 
     # Write batch summary
     summary_path = output_dir / 'batch_summary.json'
-    with open(summary_path, 'w') as f:
-        json.dump({
-            'n_slides': len(det_files),
-            'n_success': sum(1 for r in batch_results if r['status'] == 'success'),
-            'n_failed': sum(1 for r in batch_results if r['status'] == 'failed'),
-            'n_skipped': sum(1 for r in batch_results if r['status'] == 'skipped'),
-            'results': batch_results,
-        }, f)
+    from segmentation.utils.json_utils import atomic_json_dump
+    atomic_json_dump({
+        'n_slides': len(det_files),
+        'n_success': sum(1 for r in batch_results if r['status'] == 'success'),
+        'n_failed': sum(1 for r in batch_results if r['status'] == 'failed'),
+        'n_skipped': sum(1 for r in batch_results if r['status'] == 'skipped'),
+        'results': batch_results,
+    }, summary_path)
 
     print(f"\n{'='*60}")
     print(f"BATCH SUMMARY: {summary_path}")

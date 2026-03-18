@@ -211,7 +211,7 @@ class CellStrategy(DetectionStrategy, MultiChannelFeatureMixin):
                 centroid=centroid,
                 features=feat,
                 id=f'{self.name}_{i}',
-                score=feat.get('sam2_score', feat.get('solidity', 0.0))
+                score=feat.get('sam2_score')  # None when no classifier; avoids solidity alias
             ))
 
         return detections
