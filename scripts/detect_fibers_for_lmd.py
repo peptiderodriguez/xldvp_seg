@@ -55,7 +55,7 @@ def load_channel_reduced(czi_path, channel_idx, scale_factor, scene=0):
         mosaic_x, mosaic_y: mosaic origin in full-res pixels
         full_h, full_w: full-resolution dimensions
     """
-    from skimage.transform import resize
+    from skimage.measure import block_reduce
 
     logger.info(f"Loading CZI: {Path(czi_path).name}")
     loader = CZILoader(str(czi_path))
@@ -70,11 +70,12 @@ def load_channel_reduced(czi_path, channel_idx, scale_factor, scene=0):
     full_img = loader.get_channel_data(channel_idx)
     logger.info(f"  Full res: {full_img.shape}, dtype: {full_img.dtype}")
 
-    # Downsample
-    new_h = max(1, int(full_img.shape[0] * scale_factor))
-    new_w = max(1, int(full_img.shape[1] * scale_factor))
-    logger.info(f"  Downsampling to {new_w}x{new_h} ({scale_factor:.0%})...")
-    img = resize(full_img, (new_h, new_w), preserve_range=True, anti_aliasing=True).astype(np.uint16)
+    # Fast downsample via block_reduce (mean pooling, no anti-alias interpolation)
+    block = int(round(1.0 / scale_factor))
+    logger.info(f"  Downsampling {block}x via block_reduce (mean)...")
+    img = block_reduce(full_img, block_size=(block, block), func=np.mean).astype(np.uint16)
+    # Adjust scale_factor to actual block size
+    scale_factor = 1.0 / block
 
     # Free full-res
     del full_img
