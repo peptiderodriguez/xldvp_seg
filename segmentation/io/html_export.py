@@ -873,15 +873,8 @@ def get_js(cell_type, total_pages, experiment_name=None, page_num=1):
         function toggleContours() {{
             contoursVisible = !contoursVisible;
             const btn = document.getElementById('toggleContourBtn');
-            const imgs = document.querySelectorAll('.card img');
-            imgs.forEach(img => {{
-                if (contoursVisible) {{
-                    const s = img.getAttribute('data-img-contour');
-                    if (s) img.src = s;
-                }} else {{
-                    const s = img.getAttribute('data-img-clean');
-                    if (s) img.src = s;
-                }}
+            document.querySelectorAll('.img-contour').forEach(img => {{
+                img.style.display = contoursVisible ? '' : 'none';
             }});
             if (btn) {{
                 btn.textContent = contoursVisible ? 'Contours: ON' : 'Contours: OFF';
@@ -899,12 +892,12 @@ def get_js(cell_type, total_pages, experiment_name=None, page_num=1):
                 btn.textContent = channelState[ch] ? label + ': ON' : label + ': OFF';
                 btn.style.background = channelState[ch] ? (ch === 'red' ? '#8b2222' : '#228b22') : '#555';
             }}
-            // Apply CSS SVG filter based on channel state
+            // Channel filters apply to base image only — contour layer is unaffected
             let filterVal = 'none';
             if (!channelState.red && !channelState.green) filterVal = 'url(#no-red-green)';
             else if (!channelState.red) filterVal = 'url(#no-red)';
             else if (!channelState.green) filterVal = 'url(#no-green)';
-            document.querySelectorAll('.card img').forEach(img => {{
+            document.querySelectorAll('.img-base').forEach(img => {{
                 img.style.filter = filterVal;
             }});
         }}
@@ -1047,11 +1040,11 @@ def generate_annotation_page(
         stats_str = ' | '.join(stats_parts) if stats_parts else ''
 
         img_clean_b64 = sample.get('image_clean', '')
-        clean_attr = f' data-img-clean="data:image/{mime};base64,{img_clean_b64}"' if img_clean_b64 else ''
         cards_html += f'''
         <div class="card" id="{uid}" data-label="-1">
-            <div class="card-img-container">
-                <img src="data:image/{mime};base64,{img_b64}" data-img-contour="data:image/{mime};base64,{img_b64}"{clean_attr} alt="{uid}">
+            <div class="card-img-container" style="position:relative">
+                <img class="img-base" src="data:image/{mime};base64,{img_clean_b64 or img_b64}" alt="{uid}">
+                <img class="img-contour" src="data:image/{mime};base64,{img_b64}" style="position:absolute;top:0;left:0;width:100%;height:100%;mix-blend-mode:lighten;pointer-events:none" alt="">
             </div>
             <div class="card-info">
                 <div class="card-meta">
@@ -1334,14 +1327,8 @@ def generate_index_page(
         function toggleContours() {{
             contoursVisible = !contoursVisible;
             const btn = document.getElementById('toggleContourBtn');
-            document.querySelectorAll('.card img, .sample-img').forEach(img => {{
-                if (contoursVisible) {{
-                    const s = img.getAttribute('data-img-contour');
-                    if (s) img.src = s;
-                }} else {{
-                    const s = img.getAttribute('data-img-clean');
-                    if (s) img.src = s;
-                }}
+            document.querySelectorAll('.img-contour').forEach(img => {{
+                img.style.display = contoursVisible ? '' : 'none';
             }});
             if (btn) {{
                 btn.textContent = contoursVisible ? 'Contours: ON' : 'Contours: OFF';
@@ -1362,7 +1349,7 @@ def generate_index_page(
             if (!channelState.red && !channelState.green) filterVal = 'url(#no-red-green)';
             else if (!channelState.red) filterVal = 'url(#no-red)';
             else if (!channelState.green) filterVal = 'url(#no-green)';
-            document.querySelectorAll('.card img, .sample-img').forEach(img => {{
+            document.querySelectorAll('.img-base').forEach(img => {{
                 img.style.filter = filterVal;
             }});
         }}
