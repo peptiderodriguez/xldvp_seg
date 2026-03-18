@@ -60,9 +60,8 @@ def load_channel_reduced(czi_path, channel_idx, scale_factor, scene=0):
     logger.info(f"Loading CZI: {Path(czi_path).name}")
     loader = CZILoader(str(czi_path))
     pixel_size_um = loader.get_pixel_size()
-    mosaic = loader.get_mosaic_info()
-    full_h, full_w = mosaic['height'], mosaic['width']
-    mosaic_x, mosaic_y = mosaic['x'], mosaic['y']
+    full_w, full_h = loader.mosaic_size
+    mosaic_x, mosaic_y = loader.mosaic_origin
 
     logger.info(f"  Mosaic: {full_w}x{full_h} px at ({mosaic_x},{mosaic_y}), "
                 f"pixel_size={pixel_size_um:.4f} um/px")
