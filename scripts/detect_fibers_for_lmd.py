@@ -289,10 +289,28 @@ def main():
     if args.channel is not None:
         channel_idx = args.channel
     elif args.channel_spec:
+        # Parse "detect=750" or "detect=NfL" and resolve via CZILoader
         loader = CZILoader(args.czi_path)
-        from segmentation.io.czi_loader import resolve_channel_indices
-        mapping = resolve_channel_indices(args.channel_spec, loader)
-        channel_idx = mapping.get('detect', list(mapping.values())[0])
+        spec_val = args.channel_spec.split('=', 1)[-1].strip()
+        # Try as integer index first
+        try:
+            channel_idx = int(spec_val)
+        except ValueError:
+            # Try as wavelength (nm)
+            try:
+                wl = float(spec_val)
+                channel_idx = loader.resolve_wavelength(wl)
+            except (ValueError, AttributeError):
+                # Try as marker name from filename
+                from segmentation.io.czi_loader import parse_markers_from_filename
+                markers = parse_markers_from_filename(Path(args.czi_path).name)
+                channel_idx = None
+                for m in markers:
+                    if spec_val.lower() in m.get('name', '').lower():
+                        channel_idx = markers.index(m)
+                        break
+                if channel_idx is None:
+                    parser.error(f"Could not resolve channel spec '{args.channel_spec}'")
         logger.info(f"Resolved channel spec '{args.channel_spec}' → channel {channel_idx}")
     else:
         parser.error("Provide --channel or --channel-spec")
