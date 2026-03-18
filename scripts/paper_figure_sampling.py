@@ -128,7 +128,11 @@ def _get_area_um2(det: dict) -> float:
 
 
 def _auto_pixel_size(detections: list) -> float:
-    """Try to infer pixel size from detection features."""
+    """Try to infer pixel size from detection features.
+
+    First checks pixel_size_um directly. Falls back to deriving from
+    area (px) and area_um2 if both are present: pixel_size = sqrt(area_um2 / area).
+    """
     for det in detections[:200]:
         ps = _get_field(det, "pixel_size_um")
         if ps is not None:
@@ -136,6 +140,14 @@ def _auto_pixel_size(detections: list) -> float:
                 return float(ps)
             except (TypeError, ValueError):
                 pass
+    # Fallback: derive from area vs area_um2
+    for det in detections[:200]:
+        feat = det.get("features", {})
+        area_px = feat.get("area")
+        area_um2 = feat.get("area_um2")
+        if area_px and area_um2 and area_px > 0 and area_um2 > 0:
+            import math
+            return math.sqrt(area_um2 / area_px)
     return None
 
 
