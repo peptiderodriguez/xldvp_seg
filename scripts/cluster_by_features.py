@@ -621,10 +621,10 @@ def run_clustering(args):
 
     if args.methods in ('tsne', 'both'):
         from sklearn.manifold import TSNE
-        print(f"Running t-SNE (perplexity={args.perplexity}, n_iter={args.tsne_n_iter}, n_jobs={n_jobs})...")
+        print(f"Running t-SNE (perplexity={args.perplexity}, max_iter={args.tsne_n_iter}, n_jobs={n_jobs})...")
         tsne = TSNE(
             perplexity=args.perplexity,
-            n_iter=args.tsne_n_iter,
+            max_iter=args.tsne_n_iter,
             random_state=42,
             n_jobs=n_jobs,
         )
