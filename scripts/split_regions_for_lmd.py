@@ -145,8 +145,11 @@ def parse_args():
                         help="Output JSON path")
     parser.add_argument("--target-area-um2", type=float, default=200.0,
                         help="Target area per piece in um^2 (default: 200)")
-    parser.add_argument("--min-area-um2", type=float, default=200.0,
-                        help="Minimum detection area to keep (default: 200)")
+    parser.add_argument("--min-area-um2", type=float, default=None,
+                        help="Minimum detection area to keep in um^2 (default: use --min-area-percentile)")
+    parser.add_argument("--min-area-percentile", type=float, default=75.0,
+                        help="Keep detections above this percentile of area distribution (default: 75 = top quartile). "
+                             "Ignored if --min-area-um2 is set explicitly.")
     parser.add_argument("--seed", type=int, default=42,
                         help="Random seed for watershed seeding")
     parser.add_argument("--cell-type", default="nmj",
@@ -186,7 +189,26 @@ def main():
 
     px2 = pixel_size_um ** 2
     target_area_px = max(1, int(args.target_area_um2 / px2))
-    min_area_px = max(1, int(args.min_area_um2 / px2))
+
+    # Determine minimum area cutoff
+    if args.min_area_um2 is not None:
+        min_area_um2 = args.min_area_um2
+    else:
+        # Compute from percentile of detection area distribution
+        all_areas = [
+            det.get("features", {}).get("area_um2", det.get("features", {}).get("area", 0) * px2)
+            for det in detections
+        ]
+        all_areas = [a for a in all_areas if a > 0]
+        if all_areas:
+            min_area_um2 = float(np.percentile(all_areas, args.min_area_percentile))
+            logger.info(f"  Area p{args.min_area_percentile:.0f} = {min_area_um2:.1f} um2 "
+                        f"(keeping top {100 - args.min_area_percentile:.0f}% of {len(all_areas):,} detections)")
+        else:
+            min_area_um2 = 200.0
+            logger.warning("No valid areas found, using default 200 um2")
+    min_area_px = max(1, int(min_area_um2 / px2))
+    logger.info(f"  Min area cutoff: {min_area_um2:.1f} um2 ({min_area_px} px)")
 
     # --- Group detections by tile ---
     by_tile = {}  # (tile_x, tile_y) -> [det_indices]
@@ -226,7 +248,7 @@ def main():
             area_um2 = features.get("area_um2", features.get("area", 0) * px2)
 
             # Too small — skip
-            if area_um2 < args.min_area_um2:
+            if area_um2 < min_area_um2:
                 n_too_small += 1
                 continue
 

@@ -217,6 +217,9 @@ def main():
                         help='Fractional position range, e.g. "0.0,1.0" (default: all)')
     parser.add_argument('--max-cells', type=int, default=None,
                         help='Max cells to select (randomly sampled, default: unlimited)')
+    parser.add_argument('--every-nth', type=int, default=None,
+                        help='Take every Nth cell along each path (e.g., 3 = every 3rd cell). '
+                             'Applied after sorting by fractional position within each path.')
     parser.add_argument('--seed', type=int, default=42,
                         help='Random seed for subsampling (default: 42)')
     parser.add_argument('--empty-pct', type=float, default=10.0,
@@ -353,6 +356,18 @@ def main():
         transect_records[u]['path_id'],
         transect_records[u]['fractional_pos'],
     ))
+
+    # Take every Nth cell per path (preserves spatial distribution along gradient)
+    if args.every_nth is not None and args.every_nth > 1:
+        before = len(selected_uids)
+        by_path = {}
+        for u in selected_uids:
+            pid = transect_records[u]['path_id']
+            by_path.setdefault(pid, []).append(u)
+        selected_uids = []
+        for pid in sorted(by_path):
+            selected_uids.extend(by_path[pid][::args.every_nth])
+        logger.info(f"Every-{args.every_nth} subsampling: {before:,} -> {len(selected_uids):,} cells")
 
     n_selected = len(selected_uids)
     logger.info(f"Final selection: {n_selected:,} cells")
