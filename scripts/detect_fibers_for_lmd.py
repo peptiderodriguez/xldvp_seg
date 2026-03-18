@@ -46,32 +46,42 @@ logger = get_logger(__name__)
 def load_channel_reduced(czi_path, channel_idx, scale_factor, scene=0):
     """Load a single CZI channel at reduced resolution.
 
+    Uses CZILoader (full-res) then downsamples, avoiding aicspylibczi
+    read_mosaic which can hang on some compute nodes.
+
     Returns:
-        channel_array: 2D uint16 array (height x width)
+        channel_array: 2D uint16 array (height x width) at reduced resolution
         pixel_size_um: full-resolution pixel size in um
         mosaic_x, mosaic_y: mosaic origin in full-res pixels
         full_h, full_w: full-resolution dimensions
     """
-    from aicspylibczi import CziFile
+    from skimage.transform import resize
 
+    logger.info(f"Loading CZI: {Path(czi_path).name}")
     loader = CZILoader(str(czi_path))
     pixel_size_um = loader.get_pixel_size()
+    mosaic = loader.get_mosaic_info()
+    full_h, full_w = mosaic['height'], mosaic['width']
+    mosaic_x, mosaic_y = mosaic['x'], mosaic['y']
 
-    czi = CziFile(str(czi_path))
-    try:
-        bbox = czi.get_mosaic_scene_bounding_box(index=scene)
-    except Exception:
-        bbox = czi.get_mosaic_bounding_box()
+    logger.info(f"  Mosaic: {full_w}x{full_h} px at ({mosaic_x},{mosaic_y}), "
+                f"pixel_size={pixel_size_um:.4f} um/px")
+    logger.info(f"  Loading channel {channel_idx} to RAM...")
+    loader.load_channel(channel_idx)
+    full_img = loader.get_channel_data(channel_idx)
+    logger.info(f"  Full res: {full_img.shape}, dtype: {full_img.dtype}")
 
-    region = (bbox.x, bbox.y, bbox.w, bbox.h)
-    logger.info(f"CZI scene {scene}: {bbox.w}x{bbox.h} px, pixel_size={pixel_size_um:.4f} um/px")
-    logger.info(f"Reading channel {channel_idx} at {scale_factor:.0%} scale...")
+    # Downsample
+    new_h = max(1, int(full_img.shape[0] * scale_factor))
+    new_w = max(1, int(full_img.shape[1] * scale_factor))
+    logger.info(f"  Downsampling to {new_w}x{new_h} ({scale_factor:.0%})...")
+    img = resize(full_img, (new_h, new_w), preserve_range=True, anti_aliasing=True).astype(np.uint16)
 
-    img = czi.read_mosaic(C=channel_idx, region=region, scale_factor=scale_factor)
-    img = np.squeeze(img)
-    logger.info(f"  Shape: {img.shape}, dtype: {img.dtype}")
+    # Free full-res
+    del full_img
+    logger.info(f"  Reduced shape: {img.shape}")
 
-    return img, pixel_size_um, bbox.x, bbox.y, bbox.h, bbox.w
+    return img, pixel_size_um, mosaic_x, mosaic_y, full_h, full_w
 
 
 def detect_fibers(channel, pixel_size_um, scale_factor, fiber_width_um=(2, 10),
