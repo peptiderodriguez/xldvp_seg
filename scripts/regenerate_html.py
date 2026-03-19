@@ -78,7 +78,7 @@ logger = get_logger(__name__)
 def create_sample_from_contours(det, channel_arrays, display_channels, x_start, y_start,
                                 mosaic_h, mosaic_w, pixel_size_um, slide_name, cell_type,
                                 contour_thickness=2, max_crop_px=800, min_crop_px=300,
-                                dashed_contour=True):
+                                dashed_contour=True, crop_context_factor=2.0):
     """Create an HTML sample by cropping from CZI around a detection's center.
 
     Generic alternative to create_sample() — works for any cell type where detections
@@ -114,8 +114,8 @@ def create_sample_from_contours(det, channel_arrays, display_channels, x_start, 
         cy = float(np.mean(combined[:, 1]))
         bbox_w = np.ptp(combined[:, 0])
         bbox_h = np.ptp(combined[:, 1])
-        # 2x padding around the contour bounding box to ensure full visibility
-        desired_crop = int(max(bbox_w, bbox_h) * 2.0)
+        # Padding around the contour bounding box for context
+        desired_crop = int(max(bbox_w, bbox_h) * crop_context_factor)
     else:
         diameter_um = features.get('outer_diameter_um', 0)
         if diameter_um > 0:
@@ -297,6 +297,10 @@ def main():
                         help='Draw dashed black/white contour outlines (visible on any background)')
     parser.add_argument('--score-threshold', type=float, default=0.0,
                         help='Min rf_prediction to show (default: 0.0 = all)')
+    parser.add_argument('--crop-context-factor', type=float, default=2.0,
+                        help='Crop size as multiple of mask bounding box '
+                        '(default: 2.0 = 2x mask size). Use sqrt(N) for Nx area context, '
+                        'e.g. 2.74 for 7.5x area context.')
     parser.add_argument('--prior-annotations', default=None,
                         help='Path to prior annotations JSON (pre-loaded into HTML localStorage)')
     parser.add_argument('--html-dir', default=None,
@@ -544,6 +548,7 @@ def main():
                 pixel_size_um, slide_name, cell_type,
                 contour_thickness=args.contour_thickness,
                 dashed_contour=args.dashed_contour,
+                crop_context_factor=args.crop_context_factor,
             )
 
         with ThreadPoolExecutor(max_workers=n_workers) as pool:
