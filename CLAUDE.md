@@ -326,7 +326,8 @@ Beyond the core detect → classify → LMD workflow, the pipeline supports:
 | **One-command viz** | `scripts/view_slide.py` | Classify → spatial cluster → interactive viewer → serve (all in one) |
 | **Preprocessing preview** | `scripts/preview_preprocessing.py` | Before/after flat-field, photobleach correction at 1/8 resolution |
 | **Nuclear counting** | `scripts/count_nuclei_per_cell.py` | Count nuclei per cell (Cellpose 2nd pass on nuclear channel), per-nucleus morph+SAM2 features |
-| **Region splitting** | `scripts/split_regions_for_lmd.py` | Threshold bright channel, watershed split into equal-area pieces for LMD |
+| **Region detection** | `scripts/detect_regions_for_lmd.py` | Percentile-threshold any channel → morph cleanup → split → full features (morph+channel+SAM2) |
+| **Region splitting** | `scripts/split_regions_for_lmd.py` | Post-process pipeline detections → watershed split large regions |
 | **Replicate sampling** | `scripts/paper_figure_sampling.py` | Area-matched or spatially-clustered replicate building, 384-well assignment |
 | **Transect selection** | `scripts/select_transect_cells_for_lmd.py` | Select cells along zonation transect paths for LMD export |
 | **Distance bins** | `scripts/assign_distance_bins.py` | Concentric rings around vascular landmarks, distance features, spatial model comparison |
@@ -532,7 +533,8 @@ python run_segmentation.py --czi-path slide.czi --cell-type nmj \
 | `scripts/cluster_by_features.py` | UMAP + HDBSCAN feature exploration |
 | `scripts/compare_feature_sets.py` | Compare RF feature subsets via stratified CV |
 | `scripts/count_nuclei_per_cell.py` | Count nuclei per cell (Cellpose 2nd pass + per-nucleus features) |
-| `scripts/split_regions_for_lmd.py` | Threshold + watershed split regions for LMD |
+| `scripts/detect_regions_for_lmd.py` | Percentile-threshold channel → split → full features (morph+channel+SAM2) |
+| `scripts/split_regions_for_lmd.py` | Post-process pipeline detections → watershed split large regions |
 | `scripts/paper_figure_sampling.py` | Replicate sampling (area-matched or spatial) with 384-well assignment |
 | `scripts/select_transect_cells_for_lmd.py` | Select zonation transect cells for LMD |
 | `scripts/cluster_detections.py` | Biological clustering for LMD wells |

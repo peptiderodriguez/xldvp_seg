@@ -86,7 +86,8 @@ Explain each step **as you reach it**, not all upfront. Define jargon inline whe
 | **Visualize** | Multi-slide scrollable HTML with ROI drawing + stats | `scripts/generate_multi_slide_spatial_viewer.py` |
 | **Tissue overlay** | Fluorescence image + cell overlay + ROI + LMD export in one viewer | `scripts/generate_tissue_overlay.py` |
 | **Nuclear count** | Count nuclei per cell (Cellpose 2nd pass on nuclear channel), morph+SAM2+optional deep features per nucleus | `scripts/count_nuclei_per_cell.py` |
-| **Region splitting** | Threshold bright channel → watershed split into equal-area pieces → LMD | `scripts/split_regions_for_lmd.py` |
+| **Region detection** | Percentile-threshold any channel → morphological cleanup → split into equal-area pieces → full features (morph+channel+SAM2) → LMD | `scripts/detect_regions_for_lmd.py` |
+| **Region splitting** | Post-process existing pipeline detections → watershed split large regions | `scripts/split_regions_for_lmd.py` |
 | **Replicate sampling** | Area-matched or spatially-clustered replicates, marker/cluster stratification, 384-well assignment | `scripts/paper_figure_sampling.py` |
 | **Transect selection** | Select cells along zonation transect paths for LMD | `scripts/select_transect_cells_for_lmd.py` |
 | **LMD** | Contour dilation+RDP, clustering, well assignment, XML export | `run_lmd_export.py` |
