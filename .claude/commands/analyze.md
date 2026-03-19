@@ -291,6 +291,21 @@ Based on what you see, give targeted recommendations:
 
 Don't overwhelm — pick the 1-2 most relevant observations and mention them conversationally.
 
+**Step 10c2 — Generate annotation HTML (standard for every run).** After detection completes, always generate the annotation HTML viewer with fluorescence channel toggles and contour overlays:
+```bash
+PYTHONPATH=$REPO $XLDVP_PYTHON $REPO/scripts/regenerate_html.py \
+    --detections <detections.json> \
+    --output-dir <run_dir> \
+    --czi-path <czi_path> \
+    --display-channels <R,G,B> \
+    --dashed-contour \
+    --max-samples 5000 \
+    --html-dir <output>/html_annotation
+```
+The viewer includes per-channel R/G/B toggle buttons, contour overlay toggle, and keyboard navigation (Y/N/U for annotation). This is the standard visualization for all pipeline outputs.
+
+For small detections (NfL pieces, region splits), use `--crop-context-factor 4.0 --contour-thickness 3` for more tissue context and visible contours. For standard cells, the default `2.0` context factor works well.
+
 **Step 10d — Nuclear counting (optional, after detection completes).** Ask: *"Want to count nuclei per cell? This runs Cellpose again on just the nuclear channel to segment individual nuclei, then counts how many fall inside each cell."*
 
 Two ways to run:
