@@ -635,17 +635,30 @@ def run_clustering(args):
     # Fall back to t-SNE if UMAP wasn't run
     cluster_embedding = umap_embedding if umap_embedding is not None else tsne_embedding
 
-    # HDBSCAN clustering
-    print(f"Running HDBSCAN (min_cluster_size={args.min_cluster_size})...")
-    clusterer = hdbscan.HDBSCAN(
-        min_cluster_size=args.min_cluster_size,
-        min_samples=args.min_samples,
-    )
-    labels = clusterer.fit_predict(cluster_embedding)
+    # Clustering
+    if args.clustering == 'leiden':
+        print(f"Running Leiden clustering (resolution={args.resolution})...")
+        import scanpy as sc
+        import anndata as ad
+        adata_tmp = ad.AnnData(X=cluster_embedding)
+        sc.pp.neighbors(adata_tmp, n_neighbors=args.n_neighbors, use_rep='X')
+        sc.tl.leiden(adata_tmp, resolution=args.resolution, random_state=42)
+        labels = adata_tmp.obs['leiden'].astype(int).values
+        n_clusters = len(set(labels))
+        n_noise = 0
+        print(f"  Found {n_clusters} clusters (Leiden resolution={args.resolution})")
+        del adata_tmp
+    else:
+        print(f"Running HDBSCAN (min_cluster_size={args.min_cluster_size})...")
+        clusterer = hdbscan.HDBSCAN(
+            min_cluster_size=args.min_cluster_size,
+            min_samples=args.min_samples,
+        )
+        labels = clusterer.fit_predict(cluster_embedding)
 
-    n_clusters = len(set(labels)) - (1 if -1 in labels else 0)
-    n_noise = (labels == -1).sum()
-    print(f"  Found {n_clusters} clusters, {n_noise} noise points")
+        n_clusters = len(set(labels)) - (1 if -1 in labels else 0)
+        n_noise = (labels == -1).sum()
+        print(f"  Found {n_clusters} clusters, {n_noise} noise points")
 
     # Auto-label clusters
     cluster_label_map = auto_label_clusters(
@@ -1245,6 +1258,11 @@ def main():
                         help='t-SNE perplexity (default: 30)')
     parser.add_argument('--tsne-n-iter', type=int, default=1000,
                         help='t-SNE iterations (default: 1000)')
+    parser.add_argument('--clustering', type=str, default='leiden',
+                        choices=['hdbscan', 'leiden'],
+                        help='Clustering algorithm: hdbscan or leiden (default: leiden)')
+    parser.add_argument('--resolution', type=float, default=1.0,
+                        help='Leiden resolution parameter (default: 1.0, higher = more clusters)')
     args = parser.parse_args()
 
     if args.subcluster_input:
