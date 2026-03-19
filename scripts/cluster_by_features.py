@@ -414,18 +414,18 @@ def auto_label_clusters(detections, labels, valid_indices, marker_channels,
                 mean_val = (mean_val - pmean) / pstd
             marker_means[label] = mean_val
 
-        if not marker_means or max(marker_means.values()) == 0:
-            cluster_labels[cl] = 'other'
-        else:
+        # Label as "C{id}" with marker annotation if one is enriched
+        enriched = None
+        if marker_means and max(marker_means.values()) > 0:
             best = max(marker_means, key=marker_means.get)
-            # Only label if dominant marker is clearly above baseline
-            if norm_ranges and marker_means[best] < 0.1:
-                cluster_labels[cl] = 'other'
-            elif not norm_ranges and marker_means[best] < 0.5:
-                # z-score < 0.5 SD above mean — not distinctive
-                cluster_labels[cl] = 'other'
-            else:
-                cluster_labels[cl] = best
+            threshold = 0.1 if norm_ranges else 0.5
+            if marker_means[best] >= threshold:
+                enriched = best
+
+        if enriched:
+            cluster_labels[cl] = f'C{cl} ({enriched}-high)'
+        else:
+            cluster_labels[cl] = f'C{cl}'
 
     cluster_labels[-1] = 'noise'
     return cluster_labels
