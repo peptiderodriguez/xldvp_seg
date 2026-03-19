@@ -41,7 +41,6 @@ Usage:
 
 import argparse
 import math
-import os
 import sys
 from pathlib import Path
 
@@ -55,11 +54,11 @@ from skimage.measure import (
 from skimage.morphology import remove_small_objects, closing, dilation, erosion, disk
 from skimage.segmentation import watershed
 from skimage.feature import peak_local_max
-from skimage.draw import polygon as skpolygon
 
-from segmentation.io.czi_loader import CZILoader
+from segmentation.io.czi_loader import CZILoader, get_czi_metadata
 from segmentation.utils.json_utils import atomic_json_dump
 from segmentation.utils.logging import get_logger, setup_logging
+from segmentation.analysis.nuclear_count import _percentile_normalize_to_uint8
 
 logger = get_logger(__name__)
 
@@ -275,7 +274,6 @@ def extract_sam2_embeddings(detections, czi_path, loader, device='cuda'):
     import torch
     from sam2.build_sam import build_sam2
     from sam2.sam2_image_predictor import SAM2ImagePredictor
-    from segmentation.utils.detection_utils import _percentile_normalize_single
 
     repo = Path(__file__).resolve().parent.parent
     checkpoint = str(repo / 'checkpoints' / 'sam2.1_hiera_large.pt')
@@ -291,14 +289,14 @@ def extract_sam2_embeddings(detections, czi_path, loader, device='cuda'):
 
     # Need full-res channels for SAM2 crops
     mx, my = loader.mosaic_origin
-    n_channels = loader.get_num_channels()
 
     # Use first 2 loaded channels for RGB (detect channel = R, first other = G)
-    loaded = list(loader.loaded_channels())
+    # loaded_channels is a @property, not a method
+    loaded = loader.loaded_channels
     if len(loaded) < 1:
         logger.warning("No channels loaded for SAM2, skipping")
         return
-    ch_r = loaded[0] if loaded else 0
+    ch_r = loaded[0]
     ch_g = loaded[1] if len(loaded) > 1 else loaded[0]
     data_r = loader.get_channel_data(ch_r)
     data_g = loader.get_channel_data(ch_g)
@@ -311,22 +309,24 @@ def extract_sam2_embeddings(detections, czi_path, loader, device='cuda'):
         gc = det.get('global_center')
         if gc is None:
             continue
-        cx, cy = int(gc[0]), int(gc[1])
+        # global_center includes mosaic origin; subtract to get array indices
+        cx_arr, cy_arr = int(gc[0]) - mx, int(gc[1]) - my
 
-        y1 = max(0, cy - half)
-        y2 = min(data_r.shape[0], cy + half)
-        x1 = max(0, cx - half)
-        x2 = min(data_r.shape[1], cx + half)
+        y1 = max(0, cy_arr - half)
+        y2 = min(data_r.shape[0], cy_arr + half)
+        x1 = max(0, cx_arr - half)
+        x2 = min(data_r.shape[1], cx_arr + half)
         if y2 - y1 < 64 or x2 - x1 < 64:
             continue
 
-        crop_r = _percentile_normalize_single(data_r[y1:y2, x1:x2])
-        crop_g = _percentile_normalize_single(data_g[y1:y2, x1:x2])
+        crop_r = _percentile_normalize_to_uint8(data_r[y1:y2, x1:x2])
+        crop_g = _percentile_normalize_to_uint8(data_g[y1:y2, x1:x2])
         rgb = np.stack([crop_r, crop_g, np.zeros_like(crop_r)], axis=-1)
 
         with torch.inference_mode():
             predictor.set_image(rgb)
-            img_embed = predictor.get_image_embedding()
+            # SAM2 stores embeddings in predictor._features after set_image()
+            img_embed = predictor._features["image_embed"]
             embed = img_embed.mean(dim=(2, 3)).squeeze().cpu().numpy()
 
         for si in range(256):
@@ -351,28 +351,27 @@ def detect_regions(args):
     output_dir.mkdir(parents=True, exist_ok=True)
 
     # Resolve channel
-    loader = CZILoader(args.czi_path)
+    loader = CZILoader(args.czi_path, scene=args.scene)
     pixel_size = loader.get_pixel_size()
     full_w, full_h = loader.mosaic_size
     mosaic_x, mosaic_y = loader.mosaic_origin
+    czi_meta = get_czi_metadata(args.czi_path, scene=args.scene)
+    n_channels = czi_meta['n_channels']
 
     if args.channel is not None:
         detect_ch = args.channel
     elif args.channel_spec:
+        from segmentation.io.czi_loader import resolve_channel_indices, ChannelResolutionError
+        # Parse "detect=NfL" or "detect=750" format
         spec_val = args.channel_spec.split('=', 1)[-1].strip()
         try:
-            detect_ch = int(spec_val)
-        except ValueError:
-            from segmentation.io.czi_loader import parse_markers_from_filename
-            markers = parse_markers_from_filename(Path(args.czi_path).name)
-            detect_ch = None
-            for i, m in enumerate(markers):
-                if spec_val.lower() in m.get('name', '').lower():
-                    detect_ch = i
-                    break
-            if detect_ch is None:
-                logger.error(f"Could not resolve channel spec '{args.channel_spec}'")
-                sys.exit(1)
+            resolved = resolve_channel_indices(
+                czi_meta, [spec_val], filename=Path(args.czi_path).name
+            )
+            detect_ch = list(resolved.values())[0]
+        except ChannelResolutionError as e:
+            logger.error(f"Could not resolve channel spec '{args.channel_spec}': {e}")
+            sys.exit(1)
         logger.info(f"Resolved channel spec → channel {detect_ch}")
     else:
         logger.error("Provide --channel or --channel-spec")
@@ -383,11 +382,11 @@ def detect_regions(args):
     logger.info(f"  Detect channel: {detect_ch}")
 
     block = args.block_size
-    scale = 1.0 / block
-    reduced_ps = pixel_size / scale
 
     # Step 1: Load + downsample detect channel
     detect_reduced, full_shape, scale = load_channel_reduced(loader, detect_ch, block)
+    # Pixel size at reduced resolution: each reduced pixel covers block x block native pixels
+    reduced_ps = pixel_size * block
 
     # Step 2: Threshold + morphological cleanup
     labeled, n_regions = threshold_and_clean(
@@ -477,7 +476,7 @@ def detect_regions(args):
     # Step 4: Per-channel intensity features
     logger.info("  Loading all channels for intensity features...")
     channel_arrays = {}
-    for ch_idx in range(loader.get_num_channels()):
+    for ch_idx in range(n_channels):
         if ch_idx == detect_ch:
             channel_arrays[ch_idx] = detect_reduced
         else:
