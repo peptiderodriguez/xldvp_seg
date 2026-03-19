@@ -509,6 +509,10 @@ def main():
         sys.exit(1)
 
     output_dir = Path(args.output_dir) if args.output_dir else det_path.parent
+    # Guard: if output_dir looks like a JSON file path, use its parent instead
+    if output_dir.suffix == '.json':
+        logger.warning(f"--output-dir looks like a file path ({output_dir}), using parent dir")
+        output_dir = output_dir.parent
     output_dir.mkdir(parents=True, exist_ok=True)
 
     # Parse marker channels — resolve wavelengths if specified
