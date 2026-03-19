@@ -42,7 +42,7 @@ except ImportError:
 from segmentation.analysis.nuclear_count import count_nuclei_for_tile
 from segmentation.io.czi_loader import CZILoader, get_czi_metadata, resolve_channel_indices
 from segmentation.utils.json_utils import fast_json_load, atomic_json_dump
-from segmentation.utils.logging import get_logger
+from segmentation.utils.logging import get_logger, setup_logging
 from segmentation.utils.device import get_default_device, device_supports_gpu
 
 logger = get_logger(__name__)
@@ -115,6 +115,7 @@ def main():
                         help="Tile size in pixels (auto-detected from masks if omitted)")
 
     args = parser.parse_args()
+    setup_logging(level="INFO")
 
     # --- Resolve nuclear channel ---
     nuc_ch = args.nuclear_channel

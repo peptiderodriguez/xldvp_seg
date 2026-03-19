@@ -34,7 +34,7 @@ REPO = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(REPO))
 
 from segmentation.utils.json_utils import atomic_json_dump, fast_json_load
-from segmentation.utils.logging import get_logger
+from segmentation.utils.logging import get_logger, setup_logging
 
 logger = get_logger(__name__)
 
@@ -804,6 +804,7 @@ def parse_args():
 
 def main():
     args = parse_args()
+    setup_logging(level="INFO")
 
     # Setup
     det_path = Path(args.detections)
