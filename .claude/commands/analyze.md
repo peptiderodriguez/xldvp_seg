@@ -351,8 +351,22 @@ PYTHONPATH=$REPO $XLDVP_PYTHON $REPO/train_classifier.py \
     --detections <detections.json> \
     --annotations <annotations.json> \
     --output-dir <output> \
-    --feature-set morph  # or morph_sam2, channel_stats, all
+    --feature-set morph \  # or morph_sam2, channel_stats, all
+    --register \           # add to classifiers/registry.json
+    --cell-type <type> \   # e.g., nmj, cell, vessel
+    --description "staining: PM+nuc, slide: n44, detect: PM647"
 ```
+
+**Always `--register`** classifiers so they ship with the package. The registry at `classifiers/registry.json` stores full provenance: staining, detect channel, slide name, annotation counts (pos/neg), feature set, CV F1, pixel size. This lets users reuse classifiers on similar slides without re-annotating.
+
+**Alternative: quality filter** — for clean slides (PM+nuc with low background), skip annotation entirely and use morphological heuristics:
+```bash
+PYTHONPATH=$REPO $XLDVP_PYTHON $REPO/scripts/quality_filter_detections.py \
+    --detections <detections.json> \
+    --output <filtered.json> \
+    --min-area-um2 50 --max-area-um2 2000 --min-solidity 0.85
+```
+This sets `rf_prediction=1.0` for passing cells, `0.0` for rejected. Suitable when Cellpose quality is high and you don't need a trained RF.
 
 Offer to run `scripts/compare_feature_sets.py` first to find the best feature combination for this specific data.
 
