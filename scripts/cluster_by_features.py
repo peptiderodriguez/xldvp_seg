@@ -797,9 +797,63 @@ def run_clustering(args):
                 color_map[label_name] = tab_colors[color_idx % len(tab_colors)]
                 color_idx += 1
 
+        # --- Marker ring colors ---
+        # Fixed warm palette distinct from the cluster tab10/tab20 colors.
+        # Assigned in order of marker_mean_pairs (sorted by channel index).
+        _MARKER_RING_PALETTE = [
+            '#e6194b',  # red
+            '#f58231',  # orange
+            '#ffe119',  # yellow
+            '#f032e6',  # magenta
+            '#42d4f4',  # cyan
+            '#bfef45',  # lime
+            '#dcbeff',  # lavender
+            '#fabed4',  # pink
+        ]
+        # Build {marker_name: ring_color}
+        marker_ring_palette = {}
+        use_marker_rings = getattr(args, 'marker_rings', True) and bool(marker_mean_pairs)
+        if use_marker_rings:
+            for i, (mname, _key) in enumerate(marker_mean_pairs):
+                marker_ring_palette[mname] = _MARKER_RING_PALETTE[i % len(_MARKER_RING_PALETTE)]
+
+            # Compute per-cell dominant marker via z-score (threshold > 1.0 SD).
+            # z-score is computed across all cells in the plot.
+            marker_cols = [key for _name, key in marker_mean_pairs if key in df.columns]
+            if marker_cols:
+                marker_vals = df[marker_cols].values.astype(float)
+                col_mean = marker_vals.mean(axis=0)
+                col_std = marker_vals.std(axis=0)
+                col_std[col_std == 0] = 1.0  # avoid divide-by-zero for constant channels
+                zscores = (marker_vals - col_mean) / col_std  # shape: (n_cells, n_markers)
+
+                # For each cell: find the marker with the highest z-score above 1.0
+                dominant_ring = []
+                for row_z in zscores:
+                    best_i = int(np.argmax(row_z))
+                    if row_z[best_i] > 1.0:
+                        col_key = marker_cols[best_i]
+                        # Resolve col_key back to marker name
+                        mname = next(
+                            (n for n, k in marker_mean_pairs if k == col_key), None
+                        )
+                        dominant_ring.append(
+                            marker_ring_palette.get(mname) if mname else None
+                        )
+                    else:
+                        dominant_ring.append(None)
+                df['_marker_ring_color'] = dominant_ring
+            else:
+                use_marker_rings = False
+
         def _plot_embedding(ax, emb_x, emb_y, df, color_map, all_label_names,
-                            title, xlabel, ylabel):
-            """Plot a single embedding with dashed convex hull outlines per cluster."""
+                            title, xlabel, ylabel, marker_ring_palette=None):
+            """Plot a single embedding with dashed convex hull outlines per cluster.
+
+            If marker_ring_palette is provided (non-empty dict) and df contains a
+            '_marker_ring_color' column, a second scatter pass draws hollow rings
+            around dots colored by the cell's dominant marker channel.
+            """
             for label_name in all_label_names:
                 mask = df['cluster_label'] == label_name
                 color = color_map.get(label_name, 'gray')
@@ -818,18 +872,53 @@ def run_clustering(args):
                                 color=color, linewidth=1.5, linestyle='--', alpha=0.8)
                     except Exception:
                         pass  # Degenerate hull (collinear points)
-            ax.legend(markerscale=4, fontsize=8)
+
+            # Marker rings: second scatter pass, one per marker color
+            ring_handles = []
+            if marker_ring_palette and '_marker_ring_color' in df.columns:
+                for mname, ring_color in marker_ring_palette.items():
+                    ring_mask = df['_marker_ring_color'] == ring_color
+                    if not ring_mask.any():
+                        continue
+                    ax.scatter(
+                        emb_x[ring_mask], emb_y[ring_mask],
+                        facecolors='none', edgecolors=ring_color,
+                        linewidths=0.5, s=18, alpha=0.85, zorder=3,
+                    )
+                    # Proxy artist for legend entry
+                    import matplotlib.lines as mlines
+                    handle = mlines.Line2D(
+                        [], [], marker='o', color='none',
+                        markerfacecolor='none', markeredgecolor=ring_color,
+                        markeredgewidth=0.8, markersize=6, label=mname,
+                    )
+                    ring_handles.append(handle)
+
+            # Cluster legend (existing)
+            cluster_legend = ax.legend(markerscale=4, fontsize=8, loc='upper left')
+
+            # Marker ring legend (second legend, lower left)
+            if ring_handles:
+                ax.add_artist(cluster_legend)  # keep cluster legend visible
+                ax.legend(
+                    handles=ring_handles, title='Dominant marker',
+                    fontsize=7, title_fontsize=7,
+                    loc='lower left', framealpha=0.7,
+                )
+
             ax.set_xlabel(xlabel)
             ax.set_ylabel(ylabel)
             ax.set_title(title)
 
         main_title = f'Cell Clustering ({len(df)} cells, {n_clusters} clusters)'
+        _ring_palette_arg = marker_ring_palette if use_marker_rings else {}
 
         if umap_embedding is not None:
             fig, ax = plt.subplots(figsize=(10, 8))
             _plot_embedding(
                 ax, df['umap_x'], df['umap_y'], df, color_map, all_label_names,
                 main_title, 'UMAP 1', 'UMAP 2',
+                marker_ring_palette=_ring_palette_arg,
             )
             umap_path = output_dir / 'umap_plot.png'
             fig.savefig(umap_path, dpi=150, bbox_inches='tight')
@@ -841,6 +930,7 @@ def run_clustering(args):
             _plot_embedding(
                 ax, df['tsne_x'], df['tsne_y'], df, color_map, all_label_names,
                 main_title, 't-SNE 1', 't-SNE 2',
+                marker_ring_palette=_ring_palette_arg,
             )
             tsne_path = output_dir / 'tsne_plot.png'
             fig.savefig(tsne_path, dpi=150, bbox_inches='tight')
@@ -852,10 +942,12 @@ def run_clustering(args):
             _plot_embedding(
                 ax_u, df['umap_x'], df['umap_y'], df, color_map, all_label_names,
                 'UMAP', 'UMAP 1', 'UMAP 2',
+                marker_ring_palette=_ring_palette_arg,
             )
             _plot_embedding(
                 ax_t, df['tsne_x'], df['tsne_y'], df, color_map, all_label_names,
                 't-SNE', 't-SNE 1', 't-SNE 2',
+                marker_ring_palette=_ring_palette_arg,
             )
             fig.suptitle(main_title)
             fig.tight_layout()
@@ -1263,6 +1355,9 @@ def main():
                         help='Clustering algorithm: hdbscan or leiden (default: leiden)')
     parser.add_argument('--resolution', type=float, default=1.0,
                         help='Leiden resolution parameter (default: 1.0, higher = more clusters)')
+    parser.add_argument('--marker-rings', action=argparse.BooleanOptionalAction, default=True,
+                        help='Draw colored rings around dots based on dominant marker expression '
+                        '(default: True). Disable with --no-marker-rings.')
     args = parser.parse_args()
 
     if args.subcluster_input:

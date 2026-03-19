@@ -419,6 +419,13 @@ def main():
                         'also: subcluster_label)')
     parser.add_argument('--scene', type=int, default=0,
                         help='CZI scene index (0-based, default 0)')
+    parser.add_argument('--annotation-viewer', action='store_true',
+                        help='Use full annotation viewer (channel toggles + contour overlay) '
+                        'per cluster via regenerate_html.py instead of simple gallery')
+    parser.add_argument('--crop-context-factor', type=float, default=2.0,
+                        help='Crop context factor for annotation viewer mode (default: 2.0)')
+    parser.add_argument('--channels', default=None,
+                        help='Channels to load in annotation viewer mode')
     args = parser.parse_args()
 
     output_dir = Path(args.output_dir)
@@ -479,6 +486,90 @@ def main():
 
     print(f"  {len(clusters)} unique clusters (field: {cluster_field})", flush=True)
 
+    # --- Annotation viewer mode: shell out to regenerate_html.py per cluster ---
+    if args.annotation_viewer:
+        import subprocess
+        repo = Path(__file__).resolve().parent.parent
+        regen_script = str(repo / 'scripts' / 'regenerate_html.py')
+        python = sys.executable
+        rng = np.random.default_rng(42)
+
+        # Need the full detections (not slimmed) for regenerate_html
+        print("Reloading full detections for annotation viewer mode...", flush=True)
+        detections_full = json.load(open(args.detections))
+        clusters_full = defaultdict(list)
+        for det in detections_full:
+            label = det.get(cluster_field)
+            if label:
+                clusters_full[label].append(det)
+
+        def _run_regen(name, subset, html_dir):
+            n = min(args.n_per_cluster, len(subset))
+            if n == 0:
+                return
+            sampled = list(rng.choice(subset, size=n, replace=False))
+            print(f"  {name}: {n} / {len(subset)} cells", flush=True)
+
+            tmp_json = output_dir / f'_tmp_{name}.json'
+            from segmentation.utils.json_utils import atomic_json_dump
+            atomic_json_dump(sampled, tmp_json)
+
+            cmd = [
+                python, regen_script,
+                '--detections', str(tmp_json),
+                '--output-dir', str(output_dir),
+                '--czi-path', args.czi_path,
+                '--cell-type', 'cell',
+                '--display-channels', args.display_channels or ','.join(str(c) for c in display_channels),
+                '--dashed-contour',
+                '--crop-context-factor', str(args.crop_context_factor),
+                '--max-samples', str(n),
+                '--samples-per-page', str(min(n, 300)),
+                '--html-dir', str(html_dir),
+            ]
+            if args.channels:
+                cmd.extend(['--channels', args.channels])
+
+            result = subprocess.run(cmd, capture_output=True, text=True)
+            if result.returncode != 0:
+                print(f"  ERROR: {result.stderr[-300:]}", flush=True)
+            tmp_json.unlink(missing_ok=True)
+
+        # Per-cluster galleries
+        for label in sorted(clusters_full.keys()):
+            if label in ('noise', 'unclassified'):
+                continue
+            if len(clusters_full[label]) < args.min_cluster_cells:
+                continue
+            safe = label.replace(' ', '_').replace('(', '').replace(')', '').replace('/', '_')
+            _run_regen(label, clusters_full[label], output_dir / f'cluster_{safe}')
+
+        # Random-all gallery
+        all_cells = [d for d in detections_full
+                     if d.get(cluster_field) not in ('noise', 'unclassified', None)]
+        _run_regen('random_all', all_cells, output_dir / 'random_all')
+
+        # Index page
+        index = '<html><head><title>Cluster Galleries</title>'
+        index += '<style>body{font-family:monospace;background:#111;color:#ddd;padding:20px}'
+        index += 'a{color:#4af;font-size:16px}li{margin:8px 0}</style></head><body>'
+        index += '<h1>Cluster Galleries (annotation viewer)</h1><ul>'
+        index += f'<li><a href="random_all/index.html">Random All ({min(args.n_per_cluster, len(all_cells))})</a></li>'
+        for label in sorted(clusters_full.keys()):
+            if label in ('noise', 'unclassified'):
+                continue
+            if len(clusters_full[label]) < args.min_cluster_cells:
+                continue
+            safe = label.replace(' ', '_').replace('(', '').replace(')', '').replace('/', '_')
+            n = len(clusters_full[label])
+            index += f'<li><a href="cluster_{safe}/index.html">{label} ({n} cells)</a></li>'
+        index += '</ul></body></html>'
+        (output_dir / 'index.html').write_text(index)
+        print(f"\nIndex: {output_dir / 'index.html'}", flush=True)
+        print("Done!", flush=True)
+        return
+
+    # --- Standard gallery mode (original code path) ---
     # Generate spatial map
     print("\nGenerating spatial cluster map...", flush=True)
     spatial_path = generate_spatial_map(detections, output_dir)
