@@ -1,0 +1,20 @@
+{
+  "classifiers": [
+    {
+      "name": "nmj_btx_all",
+      "version": 1,
+      "cell_type": "nmj",
+      "feature_set": "all",
+      "cv_f1": 0.8013,
+      "n_positive": 318,
+      "n_negative": 1286,
+      "staining": "nuc488 + BTX647 + NfL750",
+      "detect_channel": "BTX (AF647, ch1)",
+      "slide": "20251107_Fig5_nuc488_Bgtx647_NfL750-1-EDFvar-stitch",
+      "pixel_size_um": 0.1725,
+      "trained_at": "2026-03-18T10:02:45",
+      "path": "/fs/pool/pool-mann-edwin/nmj_output/20251107_Fig5_nuc488_Bgtx647_NfL750-1-EDFvar-stitch_20260210_112830/classifier/nmj_classifier_rf.pkl",
+      "description": "NMJ detection on BTX647 channel, 3-channel muscle slide. 98th percentile threshold + morphology + watershed."
+    }
+  ]
+}
