@@ -158,6 +158,16 @@ if ! pip install orjson; then
     echo ""
 fi
 
+echo "Installing plotly (interactive UMAP/t-SNE HTML viewer with hover)..."
+if ! pip install plotly; then
+    echo ""
+    echo "  WARNING: plotly failed to install."
+    echo "  Impact: Interactive UMAP HTML (cluster_by_features.py --interactive) will not"
+    echo "          be generated. Static PNG plots still work."
+    echo "  Fix: pip install plotly"
+    echo ""
+fi
+
 echo "Installing napari (interactive viewer for cross placement + LMD overlay)..."
 if ! pip install napari[all]; then
     echo ""
