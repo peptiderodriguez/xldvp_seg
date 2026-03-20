@@ -318,7 +318,7 @@ Beyond the core detect → classify → LMD workflow, the pipeline supports:
 | **RF classifier training** | `train_classifier.py` | Train random forest from annotations, 5-fold CV, feature set comparison |
 | **Batch scoring** | `scripts/apply_classifier.py` | Score all detections with trained classifier (CPU, seconds) |
 | **Marker classification** | `scripts/classify_markers.py` | Otsu/GMM pos/neg per channel, auto bg correction, SNR |
-| **Feature exploration** | `scripts/cluster_by_features.py` | UMAP + HDBSCAN on morph/SAM2/deep features — discover cell subtypes |
+| **Feature exploration** | `scripts/cluster_by_features.py` | UMAP/t-SNE + Leiden/HDBSCAN clustering, interactive plotly HTML, marker rings |
 | **Spatial network** | `scripts/spatial_cell_analysis.py` | Delaunay graphs, connected components, community detection, neighborhoods |
 | **Interactive spatial viewer** | `scripts/generate_multi_slide_spatial_viewer.py` | KDE density contours, graph-pattern regions (linear/arc/ring/cluster), DBSCAN + convex hulls, ROI drawing + stats |
 | **Vessel community analysis** | `scripts/vessel_community_analysis.py` | Multi-scale vessel structure detection (connected components + morphology + SNR) |
@@ -326,6 +326,7 @@ Beyond the core detect → classify → LMD workflow, the pipeline supports:
 | **One-command viz** | `scripts/view_slide.py` | Classify → spatial cluster → interactive viewer → serve (all in one) |
 | **Preprocessing preview** | `scripts/preview_preprocessing.py` | Before/after flat-field, photobleach correction at 1/8 resolution |
 | **Nuclear counting** | `scripts/count_nuclei_per_cell.py` | Count nuclei per cell (Cellpose 2nd pass on nuclear channel), per-nucleus morph+SAM2 features |
+| **Quality filter** | `scripts/quality_filter_detections.py` | Heuristic area+solidity+channel filter as RF alternative for clean slides |
 | **Region detection** | `scripts/detect_regions_for_lmd.py` | Percentile-threshold any channel → morph cleanup → split → full features (morph+channel+SAM2) |
 | **Region splitting** | `scripts/split_regions_for_lmd.py` | Post-process pipeline detections → watershed split large regions |
 | **Replicate sampling** | `scripts/paper_figure_sampling.py` | Area-matched or spatially-clustered replicate building, 384-well assignment |
@@ -530,10 +531,11 @@ python run_segmentation.py --czi-path slide.czi --cell-type nmj \
 | `scripts/view_slide.py` | One-command: classify + spatial + viewer + serve |
 | `scripts/vessel_community_analysis.py` | Multi-scale vessel structure detection |
 | `scripts/spatial_cell_analysis.py` | Spatial network analysis |
-| `scripts/cluster_by_features.py` | UMAP + HDBSCAN feature exploration |
+| `scripts/cluster_by_features.py` | UMAP/t-SNE + Leiden/HDBSCAN, interactive plotly, marker rings |
 | `scripts/compare_feature_sets.py` | Compare RF feature subsets via stratified CV |
 | `scripts/count_nuclei_per_cell.py` | Count nuclei per cell (Cellpose 2nd pass + per-nucleus features) |
 | `scripts/detect_regions_for_lmd.py` | Percentile-threshold channel → split → full features (morph+channel+SAM2) |
+| `scripts/quality_filter_detections.py` | Heuristic area+solidity+channel filter (RF alternative) |
 | `scripts/split_regions_for_lmd.py` | Post-process pipeline detections → watershed split large regions |
 | `scripts/paper_figure_sampling.py` | Replicate sampling (area-matched or spatial) with 384-well assignment |
 | `scripts/select_transect_cells_for_lmd.py` | Select zonation transect cells for LMD |
