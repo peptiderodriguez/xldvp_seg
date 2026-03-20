@@ -859,7 +859,7 @@ def run_clustering(args):
                 color = color_map.get(label_name, 'gray')
                 ax.scatter(
                     emb_x[mask], emb_y[mask],
-                    c=[color], label=label_name, s=5, alpha=0.6,
+                    c=[color], label=label_name, s=1, alpha=0.3,
                 )
                 # Draw cluster outline (convex hull, dashed, no fill)
                 if label_name not in ('noise', 'unclassified', 'other') and mask.sum() >= 3:
