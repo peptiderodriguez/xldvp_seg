@@ -1033,11 +1033,26 @@ def run_clustering(args):
                     hovertemplate='%{text}<extra>' + str(label) + '</extra>' if has_uid else None,
                     visible='legendonly',
                 ))
+            # "Show All" / "Hide All" buttons
+            n_traces = len(fig.data)
             fig.update_layout(
                 template='plotly_dark', title=title,
                 xaxis_title=xlabel, yaxis_title=ylabel,
                 width=1400, height=900,
                 legend=dict(itemsizing='constant', font=dict(size=9)),
+                updatemenus=[dict(
+                    type='buttons',
+                    direction='left',
+                    x=0.0, y=1.12,
+                    buttons=[
+                        dict(label='Show All',
+                             method='update',
+                             args=[{'visible': [True] * n_traces}]),
+                        dict(label='Hide All',
+                             method='update',
+                             args=[{'visible': [True] + ['legendonly'] * (n_traces - 1)}]),
+                    ],
+                )],
             )
             pio.write_html(fig, str(out_path))
             print(f"  Saved: {out_path}")
