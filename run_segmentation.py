@@ -524,52 +524,15 @@ def run_pipeline(args):
             skip_detection = True
             skip_html = False  # Always regenerate HTML for merge
             args.force_html = True
-        elif resume_info['has_detections'] and not args.force_detect:
-            # Validate tile completeness before trusting checkpoint
-            # Estimate expected tiles from mosaic dimensions
-            _expected = 0
-            if 'sampled_tiles' in dir():
-                _expected = len(sampled_tiles)
-            elif 'width' in dir() and 'height' in dir() and args.tile_size > 0:
-                _expected = ((width // args.tile_size) + 1) * ((height // args.tile_size) + 1)
-            actual_tiles = resume_info['tile_count']
-            if _expected > 0 and actual_tiles < _expected * 0.95:
-                logger.warning(
-                    f"Resume checkpoint has only {actual_tiles}/{_expected} tiles "
-                    f"({100*actual_tiles/_expected:.0f}% coverage). "
-                    f"Will detect missing tiles on resume."
-                )
-                # Don't skip detection — per-tile resume will handle missing tiles
-                skip_detection = False
-                skip_dedup = False
-                all_detections = []
-            else:
-                skip_detection = True
-                skip_dedup = True
-                det_file = slide_output_dir / f"{args.cell_type}_detections.json"
-                all_detections = fast_json_load(det_file)
-                logger.info(f"Loaded {len(all_detections)} detections from {det_file} (skipping detection + dedup)")
-        elif resume_info['has_tiles'] and not args.force_detect:
-            # Validate tile completeness
-            _expected = 0
-            if 'sampled_tiles' in dir():
-                _expected = len(sampled_tiles)
-            elif 'width' in dir() and 'height' in dir() and args.tile_size > 0:
-                _expected = ((width // args.tile_size) + 1) * ((height // args.tile_size) + 1)
-            actual_tiles = resume_info['tile_count']
-            if _expected > 0 and actual_tiles < _expected * 0.95:
-                logger.warning(
-                    f"Resume has only {actual_tiles}/{_expected} tiles "
-                    f"({100*actual_tiles/_expected:.0f}% coverage). "
-                    f"Will detect missing tiles on resume."
-                )
-                # Don't skip — per-tile resume will process only missing tiles
-                skip_detection = False
-                all_detections = []
-            else:
-                skip_detection = True
-                all_detections = reload_detections_from_tiles(tiles_dir, args.cell_type)
-                logger.info(f"Reloaded {len(all_detections)} detections from {resume_info['tile_count']} tile dirs (skipping detection, will dedup)")
+        elif (resume_info['has_detections'] or resume_info['has_tiles']) and not args.force_detect:
+            # Always fall through to detection — per-tile resume will skip
+            # completed tiles and only process missing ones. This prevents
+            # trusting incomplete checkpoint JSONs from partial runs.
+            skip_detection = False
+            skip_dedup = False
+            all_detections = []
+            logger.info(f"Resume: {resume_info['tile_count']} tiles found. "
+                        f"Per-tile check will skip completed tiles and detect missing ones.")
 
         if resume_info['has_html'] and not args.force_html:
             skip_html = True
