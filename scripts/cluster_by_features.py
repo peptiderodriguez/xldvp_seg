@@ -1164,7 +1164,7 @@ def run_clustering(args):
             sc.pp.neighbors(adata, n_neighbors=args.n_neighbors, use_rep='X')
 
             print("  Computing diffusion map...")
-            sc.tl.diffusion_map(adata)
+            sc.tl.diffmap(adata)
 
             print("  Computing PAGA...")
             sc.tl.paga(adata, groups='cluster_label')
