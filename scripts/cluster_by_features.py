@@ -1006,8 +1006,13 @@ def run_clustering(args):
             '#dcbeff', '#00ffff', '#ff6347', '#7cfc00',
         ]
 
-        def _build_interactive(df, x_col, y_col, title, xlabel, ylabel, out_path):
-            """Build plotly interactive with white bg + click-to-highlight clusters."""
+        def _build_interactive(df, x_col, y_col, title, xlabel, ylabel, out_path,
+                               detections=None):
+            """Build plotly interactive with white bg + click-to-highlight clusters.
+
+            Also adds marker profile traces (single+, double+) if detections have
+            marker_profile or *_class fields.
+            """
             fig = go.Figure()
             # Background: all points as white dots (shows UMAP structure)
             fig.add_trace(go.Scattergl(
@@ -1033,6 +1038,48 @@ def run_clustering(args):
                     hovertemplate='%{text}<extra>' + str(label) + '</extra>' if has_uid else None,
                     visible='legendonly',
                 ))
+
+            # Marker profile traces (double+, single+)
+            if detections is not None:
+                # Find marker_profile or *_class fields
+                sample_feat = detections[0].get('features', {}) if detections else {}
+                class_keys = [k for k in sample_feat if k.endswith('_class')]
+                marker_names = [k.replace('_class', '') for k in class_keys]
+
+                if marker_names and len(df) == len(detections):
+                    # Build marker profile column
+                    profiles = []
+                    for det in detections:
+                        feat = det.get('features', {})
+                        parts = []
+                        for m in marker_names:
+                            cls = feat.get(f'{m}_class', 'negative')
+                            parts.append(f'{m}+' if cls == 'positive' else f'{m}-')
+                        profiles.append('/'.join(parts))
+                    df['_marker_profile'] = profiles
+
+                    # Add traces for positive profiles
+                    _MARKER_COLORS = {
+                        'double+': '#ff0000',
+                        'single+': '#ffaa00',
+                    }
+                    profile_counts = df['_marker_profile'].value_counts()
+                    for profile, count in profile_counts.items():
+                        n_pos = profile.count('+')
+                        if n_pos == 0:
+                            continue  # skip all-negative
+                        mask = df['_marker_profile'] == profile
+                        color = '#ff0000' if n_pos >= 2 else '#ffaa00'
+                        fig.add_trace(go.Scattergl(
+                            x=df.loc[mask, x_col], y=df.loc[mask, y_col],
+                            mode='markers',
+                            marker=dict(size=4, color=color, opacity=0.7,
+                                        symbol='diamond' if n_pos >= 2 else 'circle'),
+                            name=f'📍 {profile} ({count})',
+                            text=df.loc[mask, 'uid'] if has_uid else None,
+                            hovertemplate='%{text}<extra>' + profile + '</extra>' if has_uid else None,
+                            visible='legendonly',
+                        ))
             # "Show All" / "Hide All" buttons
             n_traces = len(fig.data)
             fig.update_layout(
@@ -1057,12 +1104,16 @@ def run_clustering(args):
             pio.write_html(fig, str(out_path))
             print(f"  Saved: {out_path}")
 
+        # Pass detections for marker profile overlays (only valid_indices subset)
+        valid_dets = [detections[i] for i in valid_indices] if valid_indices else None
+
         if umap_embedding is not None and 'umap_x' in df.columns:
             _build_interactive(
                 df, 'umap_x', 'umap_y',
                 f'{main_title} — click legend to highlight',
                 'UMAP 1', 'UMAP 2',
                 output_dir / 'umap_interactive.html',
+                detections=valid_dets,
             )
 
         if tsne_embedding is not None and 'tsne_x' in df.columns:
@@ -1071,6 +1122,7 @@ def run_clustering(args):
                 f'{main_title} (t-SNE) — click legend to highlight',
                 't-SNE 1', 't-SNE 2',
                 output_dir / 'tsne_interactive.html',
+                detections=valid_dets,
             )
 
     except ImportError:
@@ -1092,6 +1144,120 @@ def run_clustering(args):
         with open(clustered_path, 'w') as f:
             json.dump(sanitize_for_json(detections), f)
         print(f"  Updated: {clustered_path} (with subcluster fields)")
+
+    # Trajectory analysis (optional)
+    if args.trajectory:
+        try:
+            import scanpy as sc
+            import anndata as ad
+
+            print("\n--- Trajectory Analysis ---")
+            X_clean = np.nan_to_num(X, nan=0.0, posinf=0.0, neginf=0.0)
+            adata = ad.AnnData(X=X_clean)
+            adata.var_names = feature_names
+            adata.obs['cluster_label'] = [detections[i].get('cluster_label', 'unknown') for i in valid_indices]
+            adata.obs['cluster_label'] = adata.obs['cluster_label'].astype('category')
+            if umap_embedding is not None:
+                adata.obsm['X_umap'] = umap_embedding
+
+            print(f"  Computing neighbors (n_neighbors={args.n_neighbors})...")
+            sc.pp.neighbors(adata, n_neighbors=args.n_neighbors, use_rep='X')
+
+            print("  Computing diffusion map...")
+            sc.tl.diffusion_map(adata)
+
+            print("  Computing PAGA...")
+            sc.tl.paga(adata, groups='cluster_label')
+
+            print("  Computing force-directed layout...")
+            sc.tl.draw_graph(adata, init_pos='paga')
+
+            # Diffusion pseudotime
+            root_cluster = args.root_cluster
+            if root_cluster is None:
+                root_cluster = adata.obs['cluster_label'].value_counts().index[0]
+            root_mask = adata.obs['cluster_label'] == root_cluster
+            has_dpt = False
+            if root_mask.any():
+                adata.uns['iroot'] = int(np.where(root_mask)[0][0])
+                print(f"  Computing diffusion pseudotime (root: {root_cluster})...")
+                sc.tl.dpt(adata)
+                has_dpt = True
+
+            h5ad_path = output_dir / 'trajectory.h5ad'
+            adata.write(h5ad_path)
+            print(f"  Saved: {h5ad_path}")
+
+            # Enrich detections
+            for i, idx in enumerate(valid_indices):
+                det = detections[idx]
+                if has_dpt and 'dpt_pseudotime' in adata.obs.columns:
+                    det['dpt_pseudotime'] = float(adata.obs['dpt_pseudotime'].iloc[i])
+                if 'X_diffmap' in adata.obsm:
+                    for dc in range(min(3, adata.obsm['X_diffmap'].shape[1])):
+                        det[f'diffmap_{dc}'] = float(adata.obsm['X_diffmap'][i, dc])
+                if 'X_draw_graph_fa' in adata.obsm:
+                    det['fa_x'] = float(adata.obsm['X_draw_graph_fa'][i, 0])
+                    det['fa_y'] = float(adata.obsm['X_draw_graph_fa'][i, 1])
+
+            atomic_json_dump(sanitize_for_json(detections), output_dir / 'detections_clustered.json')
+
+            # Plots
+            import matplotlib
+            matplotlib.use('Agg')
+            import matplotlib.pyplot as plt
+
+            fig, ax = plt.subplots(figsize=(10, 8))
+            sc.pl.paga(adata, ax=ax, show=False, fontsize=8)
+            ax.set_title('PAGA: Cluster Connectivity')
+            fig.savefig(output_dir / 'paga.png', dpi=150, bbox_inches='tight')
+            plt.close(fig)
+            print(f"  Saved: paga.png")
+
+            if 'X_draw_graph_fa' in adata.obsm:
+                fig, ax = plt.subplots(figsize=(10, 8))
+                sc.pl.draw_graph(adata, color='cluster_label', ax=ax, show=False, size=1, alpha=0.3)
+                fig.savefig(output_dir / 'force_directed.png', dpi=150, bbox_inches='tight')
+                plt.close(fig)
+                print(f"  Saved: force_directed.png")
+
+            if has_dpt and umap_embedding is not None:
+                fig, ax = plt.subplots(figsize=(10, 8))
+                sc.pl.umap(adata, color='dpt_pseudotime', ax=ax, show=False, size=1, alpha=0.3, color_map='viridis')
+                fig.savefig(output_dir / 'pseudotime_umap.png', dpi=150, bbox_inches='tight')
+                plt.close(fig)
+                print(f"  Saved: pseudotime_umap.png")
+
+            if 'X_diffmap' in adata.obsm:
+                fig, ax = plt.subplots(figsize=(10, 8))
+                sc.pl.diffmap(adata, color='cluster_label', ax=ax, show=False, size=1, alpha=0.3)
+                fig.savefig(output_dir / 'diffusion_map.png', dpi=150, bbox_inches='tight')
+                plt.close(fig)
+                print(f"  Saved: diffusion_map.png")
+
+            # Interactive pseudotime
+            if has_dpt and umap_embedding is not None:
+                try:
+                    import plotly.express as px
+                    import plotly.io as pio
+                    df['dpt_pseudotime'] = adata.obs['dpt_pseudotime'].values
+                    fig_pt = px.scatter(df, x='umap_x', y='umap_y', color='dpt_pseudotime',
+                                        hover_data=['uid', 'cluster_label'] if 'uid' in df.columns else ['cluster_label'],
+                                        title='Diffusion Pseudotime on UMAP', color_continuous_scale='viridis', opacity=0.4)
+                    fig_pt.update_traces(marker=dict(size=2))
+                    fig_pt.update_layout(template='plotly_dark', width=1400, height=900)
+                    pio.write_html(fig_pt, str(output_dir / 'pseudotime_interactive.html'))
+                    print(f"  Saved: pseudotime_interactive.html")
+                except ImportError:
+                    pass
+
+            print("  Trajectory analysis complete!")
+        except ImportError as e:
+            print(f"  Skipping trajectory analysis ({e})")
+        except Exception as e:
+            print(f"  WARNING: Trajectory analysis failed: {e}")
+            import traceback
+            traceback.print_exc()
 
 
 def run_subclustering(detections, output_dir, marker_channels, exclude_channels,
@@ -1441,6 +1607,12 @@ def main():
     parser.add_argument('--marker-rings', action=argparse.BooleanOptionalAction, default=True,
                         help='Draw colored rings around dots based on dominant marker expression '
                         '(default: True). Disable with --no-marker-rings.')
+    parser.add_argument('--trajectory', action='store_true',
+                        help='Run trajectory analysis: diffusion map, pseudotime, PAGA, '
+                        'force-directed layout')
+    parser.add_argument('--root-cluster', default=None,
+                        help='Cluster label to use as pseudotime root '
+                        '(default: auto-detect largest)')
     args = parser.parse_args()
 
     if args.subcluster_input:
