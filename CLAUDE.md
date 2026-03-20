@@ -318,7 +318,7 @@ Beyond the core detect → classify → LMD workflow, the pipeline supports:
 | **RF classifier training** | `train_classifier.py` | Train random forest from annotations, 5-fold CV, feature set comparison |
 | **Batch scoring** | `scripts/apply_classifier.py` | Score all detections with trained classifier (CPU, seconds) |
 | **Marker classification** | `scripts/classify_markers.py` | Otsu/GMM pos/neg per channel, auto bg correction, SNR |
-| **Feature exploration** | `scripts/cluster_by_features.py` | UMAP/t-SNE + Leiden/HDBSCAN clustering, interactive plotly HTML, marker rings |
+| **Feature exploration** | `scripts/cluster_by_features.py` | UMAP/t-SNE + Leiden/HDBSCAN, interactive plotly, --trajectory (diffusion map, pseudotime, PAGA, force-directed layout) |
 | **Spatial network** | `scripts/spatial_cell_analysis.py` | Delaunay graphs, connected components, community detection, neighborhoods |
 | **Interactive spatial viewer** | `scripts/generate_multi_slide_spatial_viewer.py` | KDE density contours, graph-pattern regions (linear/arc/ring/cluster), DBSCAN + convex hulls, ROI drawing + stats |
 | **Vessel community analysis** | `scripts/vessel_community_analysis.py` | Multi-scale vessel structure detection (connected components + morphology + SNR) |
@@ -531,7 +531,7 @@ python run_segmentation.py --czi-path slide.czi --cell-type nmj \
 | `scripts/view_slide.py` | One-command: classify + spatial + viewer + serve |
 | `scripts/vessel_community_analysis.py` | Multi-scale vessel structure detection |
 | `scripts/spatial_cell_analysis.py` | Spatial network analysis |
-| `scripts/cluster_by_features.py` | UMAP/t-SNE + Leiden/HDBSCAN, interactive plotly, marker rings |
+| `scripts/cluster_by_features.py` | UMAP/t-SNE + Leiden/HDBSCAN, interactive plotly, --trajectory (diffmap, pseudotime, PAGA, force-directed) |
 | `scripts/compare_feature_sets.py` | Compare RF feature subsets via stratified CV |
 | `scripts/count_nuclei_per_cell.py` | Count nuclei per cell (Cellpose 2nd pass + per-nucleus features) |
 | `scripts/detect_regions_for_lmd.py` | Percentile-threshold channel → split → full features (morph+channel+SAM2) |
