@@ -537,8 +537,9 @@ def run_pipeline(args):
                 logger.warning(
                     f"Resume checkpoint has only {actual_tiles}/{_expected} tiles "
                     f"({100*actual_tiles/_expected:.0f}% coverage). "
-                    f"Incomplete previous run — forcing full re-detection."
+                    f"Will detect missing tiles on resume."
                 )
+                # Don't skip detection — per-tile resume will handle missing tiles
                 skip_detection = False
                 skip_dedup = False
                 all_detections = []
@@ -560,8 +561,9 @@ def run_pipeline(args):
                 logger.warning(
                     f"Resume has only {actual_tiles}/{_expected} tiles "
                     f"({100*actual_tiles/_expected:.0f}% coverage). "
-                    f"Incomplete previous run — forcing full re-detection."
+                    f"Will detect missing tiles on resume."
                 )
+                # Don't skip — per-tile resume will process only missing tiles
                 skip_detection = False
                 all_detections = []
             else:
@@ -1230,10 +1232,32 @@ def run_pipeline(args):
                 tiles_dir=str(tiles_dir),
             ) as processor:
 
-                # Submit all tiles (add tile dimensions for worker)
-                logger.info(f"Submitting {len(sampled_tiles)} tiles to {num_gpus} GPUs...")
+                # Filter to incomplete tiles on resume (skip tiles with existing features)
                 tile_size = args.tile_size
-                for tile in sampled_tiles:
+                tiles_to_process = sampled_tiles
+                if getattr(args, 'resume', None) and tiles_dir.exists():
+                    completed = 0
+                    remaining = []
+                    feat_name = f'{args.cell_type}_features.json'
+                    for tile in sampled_tiles:
+                        tile_feat = tiles_dir / f"tile_{tile['x']}_{tile['y']}" / feat_name
+                        if tile_feat.exists():
+                            completed += 1
+                        else:
+                            remaining.append(tile)
+                    if completed > 0:
+                        logger.info(f"Resume: {completed}/{len(sampled_tiles)} tiles already completed, "
+                                    f"processing {len(remaining)} remaining")
+                        tiles_to_process = remaining
+                    if not remaining:
+                        logger.info("All tiles already completed — skipping to dedup")
+                        # Reload from tiles instead of re-processing
+                        all_detections = reload_detections_from_tiles(tiles_dir, args.cell_type)
+                        skip_detection = True
+
+                # Submit tiles (add tile dimensions for worker)
+                logger.info(f"Submitting {len(tiles_to_process)} tiles to {num_gpus} GPUs...")
+                for tile in tiles_to_process:
                     # Worker expects 'x', 'y', 'w', 'h' keys
                     tile_with_dims = {
                         'x': tile['x'],
@@ -1245,7 +1269,7 @@ def run_pipeline(args):
 
                 # Collect results with progress bar
                 from tqdm import tqdm as tqdm_progress
-                pbar = tqdm_progress(total=len(sampled_tiles), desc="Processing tiles")
+                pbar = tqdm_progress(total=len(tiles_to_process), desc="Processing tiles")
 
                 results_collected = 0
                 while results_collected < len(sampled_tiles):
