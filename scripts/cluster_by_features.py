@@ -1032,7 +1032,7 @@ def run_clustering(args):
                 fig.add_trace(go.Scattergl(
                     x=df.loc[mask, x_col], y=df.loc[mask, y_col],
                     mode='markers',
-                    marker=dict(size=3, color=_PLOTLY_COLORS[i % len(_PLOTLY_COLORS)], opacity=0.6),
+                    marker=dict(size=2, color=_PLOTLY_COLORS[i % len(_PLOTLY_COLORS)], opacity=0.3),
                     name=f'{label} ({n})',
                     text=df.loc[mask, 'uid'] if has_uid else None,
                     hovertemplate='%{text}<extra>' + str(label) + '</extra>' if has_uid else None,
