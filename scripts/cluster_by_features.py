@@ -993,6 +993,50 @@ def run_clustering(args):
     except ImportError:
         print("  Skipping plots (matplotlib not installed)")
 
+    # Interactive HTML (plotly) — hover to highlight clusters
+    try:
+        import plotly.express as px
+        import plotly.io as pio
+
+        if umap_embedding is not None and 'umap_x' in df.columns:
+            fig_plotly = px.scatter(
+                df, x='umap_x', y='umap_y', color='cluster_label',
+                hover_data=['uid'] if 'uid' in df.columns else None,
+                title=main_title,
+                labels={'umap_x': 'UMAP 1', 'umap_y': 'UMAP 2', 'cluster_label': 'Cluster'},
+                opacity=0.5,
+            )
+            fig_plotly.update_traces(marker=dict(size=3))
+            fig_plotly.update_layout(
+                template='plotly_dark',
+                width=1200, height=800,
+                legend=dict(itemsizing='constant', font=dict(size=10)),
+            )
+            html_path = output_dir / 'umap_interactive.html'
+            pio.write_html(fig_plotly, str(html_path))
+            print(f"  Saved: {html_path}")
+
+        if tsne_embedding is not None and 'tsne_x' in df.columns:
+            fig_plotly = px.scatter(
+                df, x='tsne_x', y='tsne_y', color='cluster_label',
+                hover_data=['uid'] if 'uid' in df.columns else None,
+                title=main_title.replace('Clustering', 't-SNE'),
+                labels={'tsne_x': 't-SNE 1', 'tsne_y': 't-SNE 2', 'cluster_label': 'Cluster'},
+                opacity=0.5,
+            )
+            fig_plotly.update_traces(marker=dict(size=3))
+            fig_plotly.update_layout(
+                template='plotly_dark',
+                width=1200, height=800,
+                legend=dict(itemsizing='constant', font=dict(size=10)),
+            )
+            html_path = output_dir / 'tsne_interactive.html'
+            pio.write_html(fig_plotly, str(html_path))
+            print(f"  Saved: {html_path}")
+
+    except ImportError:
+        print("  Skipping interactive plots (plotly not installed)")
+
     print(f"\nDone! {n_clusters} clusters found in {len(valid_indices)} cells.")
 
     # Sub-clustering (optional)
