@@ -993,46 +993,70 @@ def run_clustering(args):
     except ImportError:
         print("  Skipping plots (matplotlib not installed)")
 
-    # Interactive HTML (plotly) — hover to highlight clusters
+    # Interactive HTML (plotly) — white background, click legend to highlight clusters
     try:
-        import plotly.express as px
+        import plotly.graph_objects as go
         import plotly.io as pio
 
+        _PLOTLY_COLORS = [
+            '#e6194b', '#3cb44b', '#4363d8', '#f58231', '#911eb4',
+            '#42d4f4', '#f032e6', '#bfef45', '#fabebe', '#469990',
+            '#e6beff', '#9a6324', '#ffe119', '#aaffc3', '#800000',
+            '#ffd8b1', '#000075', '#a9a9a9', '#808000', '#ff69b4',
+            '#dcbeff', '#00ffff', '#ff6347', '#7cfc00',
+        ]
+
+        def _build_interactive(df, x_col, y_col, title, xlabel, ylabel, out_path):
+            """Build plotly interactive with white bg + click-to-highlight clusters."""
+            fig = go.Figure()
+            # Background: all points as white dots (shows UMAP structure)
+            fig.add_trace(go.Scattergl(
+                x=df[x_col], y=df[y_col],
+                mode='markers',
+                marker=dict(size=2, color='rgba(255,255,255,0.15)'),
+                name='all cells', hoverinfo='skip', showlegend=False,
+            ))
+            # Per-cluster colored traces (start hidden, click legend to show)
+            labels = sorted(df['cluster_label'].unique())
+            has_uid = 'uid' in df.columns
+            for i, label in enumerate(labels):
+                if label == 'noise':
+                    continue
+                mask = df['cluster_label'] == label
+                n = mask.sum()
+                fig.add_trace(go.Scattergl(
+                    x=df.loc[mask, x_col], y=df.loc[mask, y_col],
+                    mode='markers',
+                    marker=dict(size=3, color=_PLOTLY_COLORS[i % len(_PLOTLY_COLORS)], opacity=0.6),
+                    name=f'{label} ({n})',
+                    text=df.loc[mask, 'uid'] if has_uid else None,
+                    hovertemplate='%{text}<extra>' + str(label) + '</extra>' if has_uid else None,
+                    visible='legendonly',
+                ))
+            fig.update_layout(
+                template='plotly_dark', title=title,
+                xaxis_title=xlabel, yaxis_title=ylabel,
+                width=1400, height=900,
+                legend=dict(itemsizing='constant', font=dict(size=9)),
+            )
+            pio.write_html(fig, str(out_path))
+            print(f"  Saved: {out_path}")
+
         if umap_embedding is not None and 'umap_x' in df.columns:
-            fig_plotly = px.scatter(
-                df, x='umap_x', y='umap_y', color='cluster_label',
-                hover_data=['uid'] if 'uid' in df.columns else None,
-                title=main_title,
-                labels={'umap_x': 'UMAP 1', 'umap_y': 'UMAP 2', 'cluster_label': 'Cluster'},
-                opacity=0.5,
+            _build_interactive(
+                df, 'umap_x', 'umap_y',
+                f'{main_title} — click legend to highlight',
+                'UMAP 1', 'UMAP 2',
+                output_dir / 'umap_interactive.html',
             )
-            fig_plotly.update_traces(marker=dict(size=3))
-            fig_plotly.update_layout(
-                template='plotly_dark',
-                width=1200, height=800,
-                legend=dict(itemsizing='constant', font=dict(size=10)),
-            )
-            html_path = output_dir / 'umap_interactive.html'
-            pio.write_html(fig_plotly, str(html_path))
-            print(f"  Saved: {html_path}")
 
         if tsne_embedding is not None and 'tsne_x' in df.columns:
-            fig_plotly = px.scatter(
-                df, x='tsne_x', y='tsne_y', color='cluster_label',
-                hover_data=['uid'] if 'uid' in df.columns else None,
-                title=main_title.replace('Clustering', 't-SNE'),
-                labels={'tsne_x': 't-SNE 1', 'tsne_y': 't-SNE 2', 'cluster_label': 'Cluster'},
-                opacity=0.5,
+            _build_interactive(
+                df, 'tsne_x', 'tsne_y',
+                f'{main_title} (t-SNE) — click legend to highlight',
+                't-SNE 1', 't-SNE 2',
+                output_dir / 'tsne_interactive.html',
             )
-            fig_plotly.update_traces(marker=dict(size=3))
-            fig_plotly.update_layout(
-                template='plotly_dark',
-                width=1200, height=800,
-                legend=dict(itemsizing='constant', font=dict(size=10)),
-            )
-            html_path = output_dir / 'tsne_interactive.html'
-            pio.write_html(fig_plotly, str(html_path))
-            print(f"  Saved: {html_path}")
 
     except ImportError:
         print("  Skipping interactive plots (plotly not installed)")
