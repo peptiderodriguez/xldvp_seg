@@ -422,7 +422,13 @@ Canonical in `segmentation/utils/detection_utils.py`. For uint16: simple `arr/25
 
 ### Centroids
 
-Background correction KD-tree MUST use `global_center` (slide-level), NOT `features["centroid"]` (tile-local). Canonical: `_extract_centroids()` in `background.py`.
+Background correction KD-tree MUST use `global_center` (slide-level), NOT `features["centroid"]` (tile-local). Canonical: `_extract_centroids()` in `background.py`. KD-tree is built once and cached across channels via `tree_and_indices` parameter (4x speedup on 4-channel slides).
+
+### Shared Utilities (`segmentation/utils/detection_utils.py`)
+
+- `extract_positions_um(detections, pixel_size_um=None)` — canonical position extraction with 3-level fallback: `global_center_um` → `global_center * pixel_size` → `global_x/y * pixel_size`. Auto-infers pixel_size from `area/area_um2`. Use instead of writing inline position extraction.
+- `load_rf_classifier(model_path)` — generic RF classifier loader (replaces NMJ-specific `load_nmj_rf_classifier`). Handles Pipeline and dict formats, tries multiple sidecar feature-name files.
+- `transform_native_to_display()` in `segmentation/lmd/contour_processing.py` — canonical LMD coordinate transform (flip_h, rot90). Single source of truth for both `run_lmd_export.py` and `lmd_export_replicates.py`.
 
 ### Logging
 

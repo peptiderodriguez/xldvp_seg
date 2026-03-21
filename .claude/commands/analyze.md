@@ -78,7 +78,7 @@ Explain each step **as you reach it**, not all upfront. Define jargon inline whe
 | **Annotate** | HTML viewer with pos/neg annotation, JSON export | `scripts/regenerate_html.py`, `serve_html.py` |
 | **Classify** | RF training, feature comparison (5-fold CV), batch scoring | `train_classifier.py`, `scripts/compare_feature_sets.py`, `scripts/apply_classifier.py` |
 | **Markers** | Otsu (with local background subtraction) / GMM marker classification | `scripts/classify_markers.py` |
-| **Explore** | UMAP, PCA, HDBSCAN clustering, AnnData/scanpy export | `scripts/cluster_by_features.py` |
+| **Explore** | UMAP + t-SNE, Leiden/HDBSCAN clustering, trajectory (diffmap, PAGA, pseudotime), interactive plotly | `scripts/cluster_by_features.py` |
 | **Spatial** | Delaunay networks, community detection, cell neighborhoods | `scripts/spatial_cell_analysis.py` |
 | **Tissue zones** | Spatially-constrained zone discovery, transects, bone region annotation | `scripts/assign_tissue_zones.py`, `scripts/zonation_transect.py`, `scripts/annotate_bone_regions.py` |
 | **Distance bins** | Concentric rings around landmarks (CV/PV), distance + ratio features, model comparison | `scripts/assign_distance_bins.py` |
@@ -482,12 +482,34 @@ PYTHONPATH=$REPO $XLDVP_PYTHON $REPO/scripts/spatial_cell_analysis.py \
     --pixel-size <from czi_info>
 ```
 
-**Step 18 — Feature exploration.** Offer UMAP/HDBSCAN clustering:
+**Step 18 — Feature exploration.** Offer UMAP/t-SNE + Leiden clustering:
 ```bash
 PYTHONPATH=$REPO $XLDVP_PYTHON $REPO/scripts/cluster_by_features.py \
     --detections <detections.json> \
     --output-dir <output>/clustering \
-    --feature-groups "morph,sam2"  # or morph,sam2,channel,deep
+    --feature-groups "morph" \
+    --methods both \              # UMAP + t-SNE side by side
+    --clustering leiden \          # Leiden (default), or hdbscan
+    --resolution 0.1 \            # 0.1 for all-cell (~30 clusters), 0.03 for marker subsets (~5-8)
+    --n-neighbors 15 --min-dist 0.05 \  # tighter UMAP for cell separation
+    --no-marker-rings \           # cleaner plots for dense data
+    --marker-channels "nuc:0,PM:1,SMA:2,CD31:3" \  # label channels by name
+    --trajectory                  # diffusion map, PAGA, pseudotime, force-directed layout
+```
+
+**Trajectory analysis** (`--trajectory`): Computes diffusion map, PAGA graph, force-directed layout (requires `fa2-modified`), and diffusion pseudotime. Use `--root-cluster C0` to set the pseudotime root. Outputs: `trajectory.h5ad`, `trajectory_plots.png`.
+
+**Interactive plotly viewer**: Generated automatically. ScatterGL with size=2, opacity=0.3 for dense data. Show All / Hide All buttons. Marker profile traces (double+/single+ populations). White background.
+
+**Marker-positive subsets**: For focused analysis of marker+ populations, filter first then cluster with lower resolution:
+```bash
+# Example: cluster only SMA+ cells, excluding the SMA channel from features
+PYTHONPATH=$REPO $XLDVP_PYTHON $REPO/scripts/cluster_by_features.py \
+    --detections <SMA_positive.json> \
+    --output-dir <output>/SMA_positive_clustering \
+    --threshold 0.0 --feature-groups morph --methods both \
+    --clustering leiden --resolution 0.03 \
+    --exclude-channels "1" --marker-channels "nuc:0,PM:2,CD31:3"
 ```
 
 **Step 19 — Interactive spatial viewer:**
