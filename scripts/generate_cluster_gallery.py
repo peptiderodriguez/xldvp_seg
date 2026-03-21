@@ -25,8 +25,8 @@ Usage:
 
 import argparse
 import base64
+import html as html_module
 import io
-import json
 import sys
 from collections import defaultdict
 from pathlib import Path
@@ -69,7 +69,7 @@ def spatial_stratified_sample(cells, n, grid_bins=10):
         bins[(xb, yb)].append(i)
 
     # Sample proportionally from each bin
-    rng = np.random.RandomState(42)
+    rng = np.random.default_rng(42)
     n_bins = len(bins)
     per_bin = max(1, n // n_bins)
     sampled = []
@@ -279,7 +279,7 @@ def generate_spatial_map(detections, output_dir):
 
 def _esc(s):
     """HTML-escape a string."""
-    return str(s).replace('&', '&amp;').replace('<', '&lt;').replace('>', '&gt;').replace('"', '&quot;')
+    return html_module.escape(str(s), quote=True)
 
 
 def generate_cluster_html(cluster_label, cells, crops_b64, output_dir,
@@ -448,8 +448,8 @@ def main():
     # Load detections — strip features to reduce memory
     # (we only need coords, cluster labels, and a few feature keys for stats)
     print(f"Loading detections from {args.detections}...", flush=True)
-    with open(args.detections) as f:
-        detections = json.load(f)
+    from segmentation.utils.json_utils import fast_json_load
+    detections = fast_json_load(str(args.detections))
     print(f"  {len(detections)} detections", flush=True)
 
     # Slim down detections: keep only what we need
@@ -496,7 +496,7 @@ def main():
 
         # Need the full detections (not slimmed) for regenerate_html
         print("Reloading full detections for annotation viewer mode...", flush=True)
-        detections_full = json.load(open(args.detections))
+        detections_full = fast_json_load(str(args.detections))
         clusters_full = defaultdict(list)
         for det in detections_full:
             label = det.get(cluster_field)

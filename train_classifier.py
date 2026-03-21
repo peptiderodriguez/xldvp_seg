@@ -14,7 +14,6 @@ Feature sets:
 """
 
 import argparse
-import json
 import os
 import numpy as np
 from datetime import datetime
@@ -24,6 +23,7 @@ from sklearn.model_selection import train_test_split, cross_val_score
 from sklearn.metrics import classification_report, confusion_matrix
 import joblib
 
+from segmentation.utils.json_utils import fast_json_load
 from segmentation.utils.logging import get_logger, setup_logging
 
 logger = get_logger(__name__)
@@ -81,13 +81,11 @@ def load_features_and_annotations(detections_path, annotations_path, feature_set
         feature_names: List of feature names
     """
     # Load detections
-    with open(detections_path) as f:
-        detections = json.load(f)
+    detections = fast_json_load(str(detections_path))
     logger.info(f"Loaded {len(detections)} detections")
 
     # Load annotations
-    with open(annotations_path) as f:
-        annotations = json.load(f)
+    annotations = fast_json_load(str(annotations_path))
 
     positive_ids = set(annotations.get('positive', []))
     negative_ids = set(annotations.get('negative', []))

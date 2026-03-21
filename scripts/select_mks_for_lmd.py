@@ -9,7 +9,6 @@ Usage:
 """
 
 import argparse
-import json
 import re
 import sys
 from pathlib import Path
@@ -20,6 +19,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from segmentation.lmd.selection import select_cells_for_lmd
 from segmentation.lmd.well_plate import generate_multiplate_wells, insert_empty_wells, WELLS_PER_PLATE
+from segmentation.utils.json_utils import fast_json_load, atomic_json_dump
 
 DATASET_DIR = Path("/path/to/data/bm_lmd_feb2026/mk_clf084_dataset")
 BONE_JSON = DATASET_DIR / "all_mks_with_rejected3.json"
@@ -48,8 +48,7 @@ def main():
     args = parser.parse_args()
 
     # Load detections with bone assignments
-    with open(args.bone_json) as f:
-        all_cells = json.load(f)
+    all_cells = fast_json_load(str(args.bone_json))
     print(f"Loaded {len(all_cells)} detections from {args.bone_json.name}")
 
     # MK-specific callables
@@ -164,8 +163,7 @@ def main():
     # Write output
     args.output_dir.mkdir(parents=True, exist_ok=True)
     out_path = args.output_dir / "mk_lmd_selections.json"
-    with open(out_path, "w") as f:
-        json.dump(output, f, indent=2)
+    atomic_json_dump(output, str(out_path))
     print(f"\nWrote selections to {out_path}")
 
     # Build flat list of all wells in serpentine (collection) order

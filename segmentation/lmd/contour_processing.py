@@ -35,6 +35,28 @@ DEFAULT_DILATION_UM = 0.5      # Dilate by 0.5um
 DEFAULT_RDP_EPSILON = 5        # RDP epsilon in pixels
 
 
+def transform_native_to_display(pts_xy_um, orig_w_um, orig_h_um,
+                                flip_h, rot90):
+    """Transform contour [x, y] um from native CZI space to display space.
+
+    Applies the same transforms that napari_place_crosses.py applied to the
+    image, so contours end up in the same coordinate system as the crosses.
+
+    In [x, y] coordinates:
+      flip_h:  x' = orig_w - x,  y' = y
+      rot90:   x' = orig_h - y,  y' = x   (CW 90 deg)
+    """
+    pts = pts_xy_um.copy()
+    if flip_h:
+        pts[:, 0] = orig_w_um - pts[:, 0]
+    if rot90:
+        x_new = orig_h_um - pts[:, 1]
+        y_new = pts[:, 0].copy()
+        pts[:, 0] = x_new
+        pts[:, 1] = y_new
+    return pts
+
+
 def rdp_simplify(points: np.ndarray, epsilon: float) -> np.ndarray:
     """
     Apply Ramer-Douglas-Peucker simplification using OpenCV.

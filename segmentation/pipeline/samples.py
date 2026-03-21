@@ -421,9 +421,10 @@ def create_sample_from_detection(tile_x, tile_y, tile_rgb, masks, feat, pixel_si
     img_b64, mime = image_to_base64(crop_with_contour, format=image_format)
 
     # Contour-only image (green on black) for overlay with mix-blend-mode:lighten
+    # Use PNG to avoid JPEG artifacts on thin colored lines against black background
     contour_only = np.zeros_like(crop_norm)
     contour_only = draw_mask_contour(contour_only, crop_mask, color=contour_color, thickness=contour_thickness, bw_dashed=_bw)
-    img_b64_contour_only, _ = image_to_base64(contour_only, format=image_format)
+    img_b64_contour_only, _ = image_to_base64(contour_only, format='PNG')
 
     # Use existing UID if available, otherwise construct from global coords
     if 'uid' in feat:

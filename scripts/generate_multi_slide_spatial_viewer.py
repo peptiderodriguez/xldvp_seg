@@ -3686,16 +3686,21 @@ def main():
                         pixel_size = _math.sqrt(_f['area_um2'] / _f['area'])
                         break
                 if pixel_size is None:
-                    pixel_size = 0.1725  # common default for 20x Axioscan
-                    print(f"  WARNING: could not read pixel size for '{name}', "
-                          f"using default {pixel_size} um/px", file=sys.stderr)
+                    raise ValueError(
+                        f"Could not determine pixel size for '{name}': "
+                        f"no area/area_um2 features found in detections. "
+                        f"Ensure detections have both 'area' and 'area_um2' features."
+                    )
 
-            # Determine channel names from CZI filename markers
+            # Determine channel names from CZI filename markers.
+            # NOTE: This is best-effort — filename marker order may NOT match CZI
+            # channel order (which is determined by detector/acquisition config).
+            # For accurate names, use czi_info.py metadata. Here we fall back to
+            # generic names (Ch0, Ch1...) when marker count doesn't cover the index.
             from segmentation.io.czi_loader import parse_markers_from_filename
             markers = parse_markers_from_filename(czi_path.name)
             this_ch_names = []
             for ch_idx in display_channels:
-                # Try to find the name for this channel index by positional order
                 if ch_idx < len(markers):
                     this_ch_names.append(markers[ch_idx]['name'])
                 else:

@@ -69,7 +69,7 @@ def main():
         # HTTP only — just start and block
         import subprocess, time
         proc = subprocess.Popen(
-            ['python', '-m', 'http.server', str(args.port)],
+            [sys.executable, '-m', 'http.server', str(args.port)],
             cwd=str(directory),
         )
         print(f"Serving {directory} at http://localhost:{args.port}")

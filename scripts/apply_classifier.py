@@ -25,10 +25,9 @@ import numpy as np
 REPO = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(REPO))
 
-from segmentation.detection.strategies.nmj import load_nmj_rf_classifier
 from segmentation.utils.logging import get_logger, setup_logging
-from segmentation.utils.json_utils import NumpyEncoder
-from segmentation.utils.detection_utils import extract_feature_matrix
+from segmentation.utils.json_utils import NumpyEncoder, atomic_json_dump
+from segmentation.utils.detection_utils import extract_feature_matrix, load_rf_classifier
 
 logger = get_logger(__name__)
 
@@ -72,7 +71,7 @@ def main():
 
     # Load classifier
     logger.info(f"Loading classifier from {clf_path}...")
-    clf_data = load_nmj_rf_classifier(str(clf_path))
+    clf_data = load_rf_classifier(str(clf_path))
     pipeline = clf_data['pipeline']
     feature_names = clf_data['feature_names']
     logger.info(f"Classifier has {len(feature_names)} features")
@@ -141,12 +140,10 @@ def main():
     from segmentation.utils.timestamps import timestamped_path, update_symlink
     ts_out = timestamped_path(out_path)
     logger.info(f"Saving scored detections to {ts_out}...")
-    with open(ts_out, 'w') as f:
-        json.dump(detections, f, cls=NumpyEncoder)
+    atomic_json_dump(detections, str(ts_out))
     update_symlink(out_path, ts_out)
 
     # Write sidecar provenance file
-    from segmentation.utils.json_utils import atomic_json_dump
     sidecar_path = ts_out.parent / 'classifier_info.json'
     atomic_json_dump(classifier_info, sidecar_path)
     logger.info(f"Classifier provenance written to {sidecar_path}")

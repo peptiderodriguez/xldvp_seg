@@ -168,6 +168,16 @@ if ! pip install plotly; then
     echo ""
 fi
 
+echo "Installing fa2-modified (fast ForceAtlas2 layout for trajectory analysis)..."
+if ! pip install fa2-modified; then
+    echo ""
+    echo "  WARNING: fa2-modified failed to install."
+    echo "  Impact: Trajectory force-directed layout (cluster_by_features.py --trajectory)"
+    echo "          will fall back to slow Fruchterman-Reingold layout."
+    echo "  Fix: pip install fa2-modified"
+    echo ""
+fi
+
 echo "Installing napari (interactive viewer for cross placement + LMD overlay)..."
 if ! pip install napari[all]; then
     echo ""

@@ -190,8 +190,8 @@ def run_rf_embedding(detections, classifier_path, output_dir, *,
 
     # Load classifier
     logger.info(f"Loading classifier from {classifier_path}...")
-    from segmentation.detection.strategies.nmj import load_nmj_rf_classifier
-    clf_data = load_nmj_rf_classifier(str(classifier_path))
+    from segmentation.utils.detection_utils import load_rf_classifier
+    clf_data = load_rf_classifier(str(classifier_path))
     pipeline = clf_data['pipeline']
     feature_names = clf_data['feature_names']
 

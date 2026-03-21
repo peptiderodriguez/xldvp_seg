@@ -980,12 +980,7 @@ def generate_annotation_page(
     ch_r_label = channel_legend.get('red', 'Ch-R') if channel_legend else 'Ch-R'
     ch_g_label = channel_legend.get('green', 'Ch-G') if channel_legend else 'Ch-G'
     ch_b_label = channel_legend.get('blue', 'Ch-B') if channel_legend else 'Ch-B'
-    # Shorten labels for buttons (take first word or first 8 chars)
-    for attr in ('ch_r_label', 'ch_g_label', 'ch_b_label'):
-        val = locals()[attr]
-        if val and len(val) > 10:
-            val = val.split()[0][:10]
-            locals()[attr]  # can't reassign via locals — do it directly
+    # Shorten labels for buttons
     ch_r_label = ch_r_label.split('(')[0].strip()[:10] if ch_r_label else 'Ch-R'
     ch_g_label = ch_g_label.split('(')[0].strip()[:10] if ch_g_label else 'Ch-G'
     ch_b_label = ch_b_label.split('(')[0].strip()[:10] if ch_b_label else 'Ch-B'
@@ -1993,7 +1988,14 @@ def load_samples_from_ram(tiles_dir, slide_image, pixel_size_um, cell_type='mk',
 
         # Load segmentation masks
         with h5py.File(seg_file, 'r') as f:
-            masks = f['labels'][0]  # Shape: (H, W)
+            if 'labels' in f:
+                masks = f['labels'][0]  # Shape: (H, W)
+            elif 'masks' in f:
+                masks = f['masks'][:]
+            else:
+                if logger:
+                    logger.warning(f"No masks/labels dataset in {seg_file}")
+                continue
 
         # For HSPCs, sort by solidity (higher = more confident/solid shape)
         if cell_type == 'hspc':

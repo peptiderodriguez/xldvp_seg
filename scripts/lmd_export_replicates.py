@@ -40,11 +40,14 @@ except ImportError:
     log = logging.getLogger(__name__)
 
 try:
-    from segmentation.utils.json_utils import atomic_json_dump
+    from segmentation.utils.json_utils import atomic_json_dump, fast_json_load
 except ImportError:
     def atomic_json_dump(data, path, **kwargs):
         with open(path, 'w') as f:
             json.dump(data, f)
+    def fast_json_load(path):
+        with open(path) as f:
+            return json.load(f)
 
 
 DEFAULT_PIXEL_SIZE_UM = 0.1725
@@ -84,26 +87,20 @@ def get_pixel_size(crosses_data, slide_data):
     return DEFAULT_PIXEL_SIZE_UM
 
 
-def _transform_native_to_display(pts_xy_um, orig_w_um, orig_h_um,
-                                  flip_h, rot90):
-    """Transform contour [x, y] um from native CZI space to display space.
-
-    Applies the same transforms that napari_place_crosses.py applied to the
-    image, so contours end up in the same coordinate system as the crosses.
-
-    In [x, y] coordinates:
-      flip_h:  x' = orig_w - x,  y' = y
-      rot90:   x' = orig_h - y,  y' = x   (CW 90 deg)
-    """
-    pts = pts_xy_um.copy()
-    if flip_h:
-        pts[:, 0] = orig_w_um - pts[:, 0]
-    if rot90:
-        x_new = orig_h_um - pts[:, 1]
-        y_new = pts[:, 0].copy()
-        pts[:, 0] = x_new
-        pts[:, 1] = y_new
-    return pts
+try:
+    from segmentation.lmd.contour_processing import transform_native_to_display as _transform_native_to_display
+except ImportError:
+    def _transform_native_to_display(pts_xy_um, orig_w_um, orig_h_um, flip_h, rot90):
+        """Fallback when segmentation package is not on PYTHONPATH."""
+        pts = pts_xy_um.copy()
+        if flip_h:
+            pts[:, 0] = orig_w_um - pts[:, 0]
+        if rot90:
+            x_new = orig_h_um - pts[:, 1]
+            y_new = pts[:, 0].copy()
+            pts[:, 0] = x_new
+            pts[:, 1] = y_new
+        return pts
 
 
 def _build_serpentine_index():
@@ -293,11 +290,9 @@ def main():
     output_dir = Path(args.output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
 
-    with open(args.sampling_results) as f:
-        all_results = json.load(f)
+    all_results = fast_json_load(str(args.sampling_results))
 
-    with open(args.contours_json) as f:
-        contours_by_slide = json.load(f)
+    contours_by_slide = fast_json_load(str(args.contours_json))
 
     log.info(f"Replicate data: {len(all_results)} slides")
     log.info(f"Contour data: {len(contours_by_slide)} slides")
@@ -319,8 +314,7 @@ def main():
         crosses_data = None
         crosses_path = find_slide_crosses(args.crosses_dir, slide_name)
         if crosses_path:
-            with open(crosses_path) as f:
-                crosses_data = json.load(f)
+            crosses_data = fast_json_load(str(crosses_path))
             n_crosses = len(crosses_data.get('crosses', []))
             if n_crosses < 3:
                 log.warning(f"Slide '{slide_name}': only {n_crosses} crosses "

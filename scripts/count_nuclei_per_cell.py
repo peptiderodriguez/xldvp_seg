@@ -158,6 +158,7 @@ def main():
     logger.info(f"Loading nuclear channel {nuc_ch} from CZI...")
     loader = CZILoader(str(args.czi_path), load_to_ram=True, channel=nuc_ch)
     pixel_size_um = loader.get_pixel_size()
+    x_start, y_start = loader.mosaic_origin
     nuc_data = loader.get_channel_data(nuc_ch)
     if nuc_data is None:
         logger.error(f"Failed to load channel {nuc_ch}")
@@ -234,7 +235,7 @@ def main():
         # Extract nuclear channel tile region
         # tile_x, tile_y are global pixel coordinates of tile origin
         # CZI data is in (H, W) = (rows, cols) format
-        nuc_tile = nuc_data[tile_y:tile_y + tile_h, tile_x:tile_x + tile_w]
+        nuc_tile = nuc_data[tile_y - y_start:tile_y - y_start + tile_h, tile_x - x_start:tile_x - x_start + tile_w]
 
         if nuc_tile.shape != cell_masks.shape:
             logger.warning(

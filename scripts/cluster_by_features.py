@@ -61,7 +61,6 @@ Dependencies: umap-learn, hdbscan, anndata, matplotlib, pandas, scikit-learn
 """
 
 import argparse
-import json
 import math
 import re
 import sys
@@ -74,7 +73,7 @@ sys.path.insert(0, str(REPO))
 import numpy as np
 import pandas as pd
 
-from segmentation.utils.json_utils import sanitize_for_json
+from segmentation.utils.json_utils import atomic_json_dump, fast_json_load, sanitize_for_json
 
 
 # Default islet marker mapping (backward compatibility)
@@ -142,10 +141,14 @@ def discover_channels_from_features(detections):
     ch_pattern = re.compile(r'^ch(\d+)_')
     for det in detections:
         feats = det.get('features', {})
+        if not feats:
+            continue
         for key in feats:
             m = ch_pattern.match(key)
             if m:
                 ch_indices.add(int(m.group(1)))
+        if ch_indices:
+            break
     return sorted(ch_indices)
 
 
@@ -239,13 +242,17 @@ def select_feature_names(detections, feature_groups, exclude_channels=None):
         expanded.add('shape')
         expanded.add('color')
 
-    # Collect all numeric feature names from detections
+    # Collect all numeric feature names from first detection with features
     all_names = set()
     for det in detections:
         feats = det.get('features', {})
+        if not feats:
+            continue
         for k, v in feats.items():
-            if isinstance(v, (int, float)):
+            if isinstance(v, (int, float)) and not isinstance(v, bool):
                 all_names.add(k)
+        if all_names:
+            break
 
     # Filter by group and exclusions
     selected = []
@@ -271,8 +278,7 @@ def load_detections(detections_path, threshold=0.5):
     Wraps the shared load_detections with this script's original filtering
     logic: includes ALL detections that lack a score (no classifier).
     """
-    with open(detections_path) as f:
-        all_dets = json.load(f)
+    all_dets = fast_json_load(str(detections_path))
 
     positive = []
     for det in all_dets:
@@ -694,8 +700,7 @@ def run_clustering(args):
 
     # Save enriched detections
     clustered_path = output_dir / 'detections_clustered.json'
-    with open(clustered_path, 'w') as f:
-        json.dump(sanitize_for_json(detections), f)
+    atomic_json_dump(sanitize_for_json(detections), str(clustered_path))
     print(f"  Saved: {clustered_path}")
 
     # Build summary DataFrame
@@ -1141,8 +1146,7 @@ def run_clustering(args):
         )
         # Re-save detections with subcluster fields
         clustered_path = output_dir / 'detections_clustered.json'
-        with open(clustered_path, 'w') as f:
-            json.dump(sanitize_for_json(detections), f)
+        atomic_json_dump(sanitize_for_json(detections), str(clustered_path))
         print(f"  Updated: {clustered_path} (with subcluster fields)")
 
     # Trajectory analysis (optional)
@@ -1168,6 +1172,8 @@ def run_clustering(args):
 
             print("  Computing PAGA...")
             sc.tl.paga(adata, groups='cluster_label')
+            # Compute PAGA node positions (required before draw_graph with init_pos='paga')
+            sc.pl.paga(adata, show=False)
 
             print("  Computing force-directed layout...")
             sc.tl.draw_graph(adata, init_pos='paga')
@@ -1629,8 +1635,7 @@ def main():
         exclude_channels = parse_exclude_channels(args.exclude_channels)
 
         print(f"Loading pre-clustered detections from {args.subcluster_input}...")
-        with open(args.subcluster_input) as f:
-            detections = json.load(f)
+        detections = fast_json_load(str(args.subcluster_input))
         print(f"  {len(detections)} detections")
 
         if marker_channels is None:
@@ -1649,8 +1654,7 @@ def main():
 
         # Save enriched detections
         out_path = output_dir / 'detections_subclustered.json'
-        with open(out_path, 'w') as f:
-            json.dump(sanitize_for_json(detections), f)
+        atomic_json_dump(sanitize_for_json(detections), str(out_path))
         print(f"\nSaved: {out_path}")
         return
 

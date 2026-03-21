@@ -25,7 +25,8 @@ def local_background_subtract(
     values: np.ndarray,
     centroids: np.ndarray,
     n_neighbors: int = 30,
-) -> tuple[np.ndarray, np.ndarray]:
+    tree_and_indices: tuple | None = None,
+) -> tuple[np.ndarray, np.ndarray, tuple]:
     """Per-cell local background subtraction using neighboring cells.
 
     For each cell, finds the *n_neighbors* nearest cells and uses their
@@ -36,10 +37,15 @@ def local_background_subtract(
         values: 1-D array of marker intensities per cell.
         centroids: (N, 2) array of ``[x, y]`` coordinates per cell.
         n_neighbors: Number of nearest neighbors for background estimate.
+        tree_and_indices: Optional ``(tree, indices)`` tuple from a previous
+            call.  When provided the KD-tree build and query are skipped,
+            which avoids redundant O(N log N) work when correcting multiple
+            channels on the same set of detections.
 
     Returns:
-        ``(corrected_values, per_cell_background)``.
-        Corrected values are clipped >= 0.
+        ``(corrected_values, per_cell_background, (tree, indices))``.
+        Corrected values are clipped >= 0.  The third element can be
+        passed as *tree_and_indices* to subsequent calls.
     """
     from scipy.spatial import cKDTree
 
@@ -52,17 +58,20 @@ def local_background_subtract(
             n, n_neighbors, bg,
         )
         corrected = np.maximum(values - bg, 0.0)
-        return corrected, np.full(n, bg)
+        return corrected, np.full(n, bg), tree_and_indices
 
-    tree = cKDTree(centroids)
-    # k+1 because the closest neighbor is the cell itself (distance 0)
-    _, indices = tree.query(centroids, k=n_neighbors + 1)
+    if tree_and_indices is not None:
+        tree, indices = tree_and_indices
+    else:
+        tree = cKDTree(centroids)
+        # k+1 because the closest neighbor is the cell itself (distance 0)
+        _, indices = tree.query(centroids, k=n_neighbors + 1)
 
     neighbor_values = values[indices[:, 1:]]          # (n, n_neighbors)
     per_cell_bg = np.median(neighbor_values, axis=1)
 
     corrected = np.maximum(values - per_cell_bg, 0.0)
-    return corrected, per_cell_bg
+    return corrected, per_cell_bg, (tree, indices)
 
 
 # ---------------------------------------------------------------------------
@@ -84,8 +93,15 @@ def _extract_centroids(detections: list[dict]) -> np.ndarray:
     cells.
     """
     centroids = []
-    for d in detections:
-        c = d.get("global_center") or d.get("center") or [0, 0]
+    for i, d in enumerate(detections):
+        c = d.get("global_center") or d.get("center")
+        if c is None:
+            logger.warning(
+                "Detection %d has no global_center or center — falling back to [0, 0], "
+                "which may corrupt KD-tree neighbor estimation",
+                i,
+            )
+            c = [0, 0]
         centroids.append(c)
     return np.array(centroids, dtype=np.float64)
 
@@ -123,9 +139,11 @@ def correct_all_channels(
     if not detections:
         return []
 
-    # Guard: refuse to double-correct
-    sample_feat = detections[0].get("features", {})
-    if any(k.endswith("_background") for k in sample_feat):
+    # Guard: refuse to double-correct — scan first 10 detections
+    sample_keys: set[str] = set()
+    for d in detections[:10]:
+        sample_keys.update(d.get("features", {}).keys())
+    if any(k.endswith("_background") for k in sample_keys):
         logger.info(
             "Detections already background-corrected (found *_background keys) "
             "— skipping correct_all_channels to prevent double correction"
@@ -135,16 +153,18 @@ def correct_all_channels(
     if centroids is None:
         centroids = _extract_centroids(detections)
 
-    # Discover channels
-    sample_feat = detections[0].get("features", {})
-    channels: list[int] = []
-    for key in sorted(sample_feat):
-        if key.startswith("ch") and key.endswith("_mean"):
-            ch_str = key[2:].replace("_mean", "")
-            try:
-                channels.append(int(ch_str))
-            except ValueError:
-                continue
+    # Discover channels — scan first 10 detections and take the union of keys
+    # in case the first detection has incomplete features
+    channels_set: set[int] = set()
+    for d in detections[:10]:
+        for key in d.get("features", {}):
+            if key.startswith("ch") and key.endswith("_mean"):
+                ch_str = key[2:].replace("_mean", "")
+                try:
+                    channels_set.add(int(ch_str))
+                except ValueError:
+                    continue
+    channels: list[int] = sorted(channels_set)
 
     if not channels:
         logger.warning("No ch{N}_mean keys found in detections")
@@ -157,14 +177,18 @@ def correct_all_channels(
     channel_bg: dict[int, np.ndarray] = {}
     channel_corrected_mean: dict[int, np.ndarray] = {}
 
+    # Build the KD-tree once and reuse across all channels
+    _cached_tree_and_indices = None
+
     for ch in channels:
         mean_key = f"ch{ch}_mean"
         values = np.array(
             [d.get("features", {}).get(mean_key, 0.0) for d in detections],
             dtype=np.float64,
         )
-        corrected_mean, per_cell_bg = local_background_subtract(
+        corrected_mean, per_cell_bg, _cached_tree_and_indices = local_background_subtract(
             values, centroids, n_neighbors,
+            tree_and_indices=_cached_tree_and_indices,
         )
         channel_bg[ch] = per_cell_bg
         channel_corrected_mean[ch] = corrected_mean
@@ -182,7 +206,7 @@ def correct_all_channels(
 
         for suffix in _INTENSITY_SUFFIXES:
             key = f"ch{ch}_{suffix}"
-            if key not in sample_feat:
+            if key not in sample_keys:
                 continue
 
             values = np.array(
@@ -210,7 +234,7 @@ def correct_all_channels(
             )
 
         # cv = std / corrected_mean
-        if f"ch{ch}_cv" in sample_feat and f"ch{ch}_std" in sample_feat:
+        if f"ch{ch}_cv" in sample_keys and f"ch{ch}_std" in sample_keys:
             for i, det in enumerate(detections):
                 feat = det["features"]
                 corr_mean = channel_corrected_mean[ch][i]
@@ -220,7 +244,7 @@ def correct_all_channels(
     # --- Step 2b: recompute dynamic_range from corrected min/max ---
     for ch in channels:
         dr_key = f"ch{ch}_dynamic_range"
-        if dr_key in sample_feat:
+        if dr_key in sample_keys:
             for det in detections:
                 feat = det["features"]
                 cmin = feat.get(f"ch{ch}_min", 0.0)
@@ -234,13 +258,13 @@ def correct_all_channels(
                 continue
             ratio_key = f"ch{ch_a}_ch{ch_b}_ratio"
             diff_key = f"ch{ch_a}_ch{ch_b}_diff"
-            if ratio_key in sample_feat:
+            if ratio_key in sample_keys:
                 for i, det in enumerate(detections):
                     feat = det["features"]
                     a = channel_corrected_mean[ch_a][i]
                     b = channel_corrected_mean[ch_b][i]
                     feat[ratio_key] = float(a / b) if b > 0 else 0.0
-            if diff_key in sample_feat:
+            if diff_key in sample_keys:
                 for i, det in enumerate(detections):
                     feat = det["features"]
                     a = channel_corrected_mean[ch_a][i]

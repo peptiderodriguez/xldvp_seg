@@ -74,6 +74,8 @@ def sanitize_for_json(obj):
         return int(obj)
     if isinstance(obj, np.ndarray):
         return sanitize_for_json(obj.tolist())
+    if isinstance(obj, set):
+        return [sanitize_for_json(v) for v in obj]
     return obj
 
 

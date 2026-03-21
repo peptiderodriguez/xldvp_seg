@@ -291,7 +291,7 @@ def classify_single_marker(detections: list[dict], channel: int,
     elif bg_subtract:
         if centroids is None:
             centroids = _extract_centroids(detections)
-        values, per_cell_bg = local_background_subtract(raw_values, centroids, n_neighbors)
+        values, per_cell_bg, _ = local_background_subtract(raw_values, centroids, n_neighbors)
         median_bg = float(np.median(per_cell_bg))
         logger.info(f"  Local background: median {median_bg:.1f}, "
                     f"range [{per_cell_bg.min():.1f}, {per_cell_bg.max():.1f}]")
@@ -381,7 +381,7 @@ def classify_single_marker(detections: list[dict], channel: int,
         feat[class_key] = 'positive' if positive_mask[i] else 'negative'
         feat[value_key] = float(values[i])  # bg-subtracted if enabled
         feat[thresh_key] = float(threshold)
-        if bg_subtract and per_cell_bg is not None:
+        if per_cell_bg is not None:
             feat[raw_key] = float(raw_values[i])
             feat[bg_key] = float(per_cell_bg[i])
             feat[snr_key] = float(raw_values[i] / per_cell_bg[i]) if per_cell_bg[i] > 0 else 0.0

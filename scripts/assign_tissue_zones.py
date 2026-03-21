@@ -33,6 +33,11 @@ import json
 import sys
 from pathlib import Path
 
+REPO = Path(__file__).resolve().parent.parent
+sys.path.insert(0, str(REPO))
+
+from segmentation.utils.json_utils import atomic_json_dump, fast_json_load
+
 import matplotlib
 matplotlib.use('Agg')
 import matplotlib.pyplot as plt
@@ -137,8 +142,7 @@ def load_and_prepare(detections_path, marker_channels=None, min_score=0.0,
         features: (N, n_features) array of z-scored (and optionally PCA'd) features
         channel_keys: List of feature key names used
     """
-    with open(detections_path) as f:
-        data = json.load(f)
+    data = fast_json_load(str(detections_path))
 
     # Handle both flat list and wrapped format
     if isinstance(data, dict):
@@ -1098,8 +1102,7 @@ def assign_and_save(detections, labels, zone_metadata, output_path):
         det['zone_id'] = int(zone_id)
         det['zone_label'] = label_lookup.get(int(zone_id), f'zone_{zone_id}')
 
-    with open(output_path, 'w') as f:
-        json.dump(detections, f)
+    atomic_json_dump(detections, str(output_path))
 
     print(f"Saved {len(detections)} zoned detections to {output_path}")
 
@@ -1830,8 +1833,7 @@ def main():
         }
     meta_output['parameters']['max_direct_cells'] = args.max_direct_cells
     meta_output['parameters']['n_zones_scale'] = args.n_zones_scale
-    with open(output_dir / 'zone_metadata.json', 'w') as f:
-        json.dump(meta_output, f)
+    atomic_json_dump(meta_output, str(output_dir / 'zone_metadata.json'))
     print(f"  Saved: {output_dir / 'zone_metadata.json'}")
 
     # ── Visualize ─────────────────────────────────────────────────

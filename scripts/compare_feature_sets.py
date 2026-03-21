@@ -20,7 +20,6 @@ Usage:
 """
 
 import argparse
-import json
 import re
 import sys
 from datetime import datetime
@@ -29,8 +28,7 @@ from pathlib import Path
 import numpy as np
 from sklearn.ensemble import RandomForestClassifier
 from sklearn.model_selection import StratifiedKFold
-from sklearn.preprocessing import StandardScaler
-
+from segmentation.utils.json_utils import fast_json_load, atomic_json_dump
 from segmentation.utils.logging import get_logger, setup_logging
 
 logger = get_logger(__name__)
@@ -91,8 +89,7 @@ def load_annotations(annotations_path):
     Returns:
         (positive_ids: set, negative_ids: set)
     """
-    with open(annotations_path) as f:
-        annotations = json.load(f)
+    annotations = fast_json_load(str(annotations_path))
 
     # Format 1: explicit positive/negative lists
     if "positive" in annotations or "negative" in annotations:
@@ -149,8 +146,7 @@ def load_features_and_labels(detections_path, annotations_path):
         n_positive: int
         n_negative: int
     """
-    with open(detections_path) as f:
-        detections = json.load(f)
+    detections = fast_json_load(str(detections_path))
     logger.info(f"Loaded {len(detections)} detections")
 
     positive_ids, negative_ids = load_annotations(annotations_path)
@@ -217,10 +213,6 @@ def evaluate_feature_set(X, y, feature_indices, n_folds, n_estimators):
     for train_idx, test_idx in skf.split(X_sub, y):
         X_train, X_test = X_sub[train_idx], X_sub[test_idx]
         y_train, y_test = y[train_idx], y[test_idx]
-
-        scaler = StandardScaler()
-        X_train = scaler.fit_transform(X_train)
-        X_test = scaler.transform(X_test)
 
         clf = RandomForestClassifier(
             n_estimators=n_estimators,
@@ -376,8 +368,7 @@ def main():
     }
 
     output_path = output_dir / "feature_comparison.json"
-    with open(output_path, "w") as f:
-        json.dump(output_data, f)
+    atomic_json_dump(output_data, str(output_path))
 
     logger.info(f"Results saved to: {output_path}")
 

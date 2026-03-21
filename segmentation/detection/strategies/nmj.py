@@ -761,62 +761,13 @@ def load_nmj_classifier(model_path: str, device=None):
 
 
 def load_nmj_rf_classifier(model_path: str):
-    import joblib
-    import json
-    from pathlib import Path
-    from sklearn.pipeline import Pipeline
+    """Load an RF classifier.  Delegates to the shared utility.
 
-    model_data = joblib.load(model_path)
-
-    if isinstance(model_data, Pipeline):
-        pipeline = model_data
-
-        model_dir = Path(model_path).parent
-        feature_names_path = model_dir / "nmj_classifier_feature_names.json"
-
-        if feature_names_path.exists():
-            with open(feature_names_path) as f:
-                feature_names = json.load(f)
-            logger.info(f"Loaded feature names from {feature_names_path}")
-        else:
-            n_features = pipeline.named_steps['rf'].n_features_in_
-            feature_names = [f"feature_{i}" for i in range(n_features)]
-            logger.warning(f"No feature names file found, using generic names for {n_features} features")
-
-        result = {
-            'pipeline': pipeline,
-            'feature_names': feature_names,
-            'type': 'rf',
-            'raw_meta': {},  # Legacy Pipeline format has no metadata
-        }
-        logger.info(f"Loaded RF Pipeline classifier with {len(feature_names)} features")
-
-    else:
-        from sklearn.pipeline import Pipeline
-
-        rf_model = model_data.get('model', model_data.get('classifier'))
-        if rf_model is None:
-            raise ValueError(f"Classifier file has no 'model' or 'classifier' key. Keys: {list(model_data.keys())}")
-
-        if 'scaler' in model_data:
-            pipeline = Pipeline([
-                ('scaler', model_data['scaler']),
-                ('rf', rf_model)
-            ])
-        else:
-            pipeline = rf_model
-
-        result = {
-            'pipeline': pipeline,
-            'feature_names': model_data.get('feature_names', []),
-            'type': 'rf',
-            'raw_meta': model_data,  # Preserve training metadata for provenance
-        }
-        logger.info(f"Loaded RF classifier (legacy format) with {len(result['feature_names'])} features")
-        if 'accuracy' in model_data:
-            logger.info(f"  Accuracy: {model_data['accuracy']}")
-
-    return result
+    Kept for backward compatibility — callers that import from here
+    (e.g. older scripts) continue to work.
+    """
+    from segmentation.utils.detection_utils import load_rf_classifier
+    return load_rf_classifier(model_path)
 
 
 def load_classifier(model_path: str, device=None):

@@ -116,7 +116,7 @@ def _discover_features(detections):
     channel_stat_names = set()
     embedding_counts = {}  # prefix -> max index seen
 
-    for det in detections[:10]:
+    for det in detections[:100]:
         feats = det.get('features', {})
         for key in feats:
             val = feats[key]

@@ -275,6 +275,18 @@ def _phase1_tile(
             contour_global[:, 1] += origin[1]
             det["contour_dilated_px"] = contour_global.tolist()
             det["contour_dilated_um"] = (contour_global * pixel_size_um).tolist()
+        elif contour_processing and dilation_px <= 0:
+            # No dilation, but still apply RDP simplification
+            simplified = rdp_simplify(contour_local.astype(np.float32), rdp_epsilon)
+            dilated_mask = _rasterize_contour(simplified, tile_h, tile_w)
+
+            origin = det.get("tile_origin", [0, 0])
+            contour_global = simplified.copy()
+            contour_global[:, 0] += origin[0]
+            contour_global[:, 1] += origin[1]
+            det["contour_dilated_px"] = contour_global.tolist()
+            det["contour_dilated_um"] = (contour_global * pixel_size_um).tolist()
+            n_ok += 1
         else:
             # No contour processing this run — but if the detection already
             # has a dilated contour (from a previous run), rasterize it so
@@ -469,7 +481,6 @@ def process_detections_post_dedup(
         ch_indices: CZI channel indices for loader fallback (required when
             using loader without ch_to_slot).
         tile_size: Tile edge length in pixels (used with loader fallback).
-        display_channels: CZI channel indices for R/G/B morph extraction.
         contour_processing: Whether to dilate + RDP contours.
         dilation_um, rdp_epsilon: Contour processing parameters.
         background_correction: Whether to run local bg subtraction.
@@ -591,12 +602,18 @@ def process_detections_post_dedup(
             bg_channels.update(det.get("_bg_quick_means", {}).keys())
         bg_channels_sorted = sorted(bg_channels)
 
+        # Build the KD-tree once and reuse across all channels
+        _cached_tree_and_indices = None
+
         for ch in bg_channels_sorted:
             values = np.array(
                 [d.get("_bg_quick_means", {}).get(ch, 0.0) for d in detections],
                 dtype=np.float64,
             )
-            _, ch_bg = local_background_subtract(values, centroids, bg_neighbors)
+            _, ch_bg, _cached_tree_and_indices = local_background_subtract(
+                values, centroids, bg_neighbors,
+                tree_and_indices=_cached_tree_and_indices,
+            )
 
             for i in range(len(detections)):
                 per_cell_bg.setdefault(i, {})[ch] = float(ch_bg[i])

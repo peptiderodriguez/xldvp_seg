@@ -35,11 +35,12 @@ Usage:
 import os
 os.environ['HDF5_USE_FILE_LOCKING'] = 'FALSE'
 
-import json
 import argparse
 import numpy as np
 from pathlib import Path
 from typing import List, Dict, Tuple, Optional
+
+from segmentation.utils.json_utils import fast_json_load
 
 
 # ---------------------------------------------------------------------------
@@ -48,8 +49,7 @@ from typing import List, Dict, Tuple, Optional
 
 def load_detections(detections_path):
     """Load detections from JSON file."""
-    with open(detections_path, 'r') as f:
-        return json.load(f)
+    return fast_json_load(str(detections_path))
 
 
 def load_annotations(annotations_path):
@@ -61,8 +61,7 @@ def load_annotations(annotations_path):
     - {"annotations": {"uid": "yes/no", ...}}
     - Plain list of UIDs
     """
-    with open(annotations_path, 'r') as f:
-        data = json.load(f)
+    data = fast_json_load(str(annotations_path))
 
     positive_uids = set()
 
@@ -100,8 +99,7 @@ def filter_detections(detections, positive_uids=None, min_score=None):
 
 def load_clusters(clusters_path):
     """Load and validate clusters JSON from cluster_detections.py."""
-    with open(clusters_path, 'r') as f:
-        data = json.load(f)
+    data = fast_json_load(str(clusters_path))
 
     if 'main_clusters' not in data or 'outliers' not in data:
         raise ValueError(f"Invalid clusters file: missing 'main_clusters' or 'outliers' keys")
@@ -584,26 +582,7 @@ def build_export_data(assignments, well_order, metadata):
 # LMD XML export
 # ---------------------------------------------------------------------------
 
-def _transform_native_to_display(pts_xy_um, orig_w_um, orig_h_um,
-                                  flip_h, rot90):
-    """Transform contour [x, y] um from native CZI space to display space.
-
-    Applies the same transforms that napari_place_crosses.py applied to the
-    image, so contours end up in the same coordinate system as the crosses.
-
-    In [x, y] coordinates:
-      flip_h:  x' = orig_w - x,  y' = y
-      rot90:   x' = orig_h - y,  y' = x   (CW 90 deg)
-    """
-    pts = pts_xy_um.copy()
-    if flip_h:
-        pts[:, 0] = orig_w_um - pts[:, 0]
-    if rot90:
-        x_new = orig_h_um - pts[:, 1]
-        y_new = pts[:, 0].copy()
-        pts[:, 0] = x_new
-        pts[:, 1] = y_new
-    return pts
+from segmentation.lmd.contour_processing import transform_native_to_display as _transform_native_to_display
 
 
 def export_to_lmd_xml(shapes, crosses_data, output_path, flip_y=True):
@@ -1130,8 +1109,7 @@ def _run_single_slide(args):
             return
 
         print(f"\nLoading crosses from: {args.crosses}")
-        with open(args.crosses, 'r') as f:
-            crosses_data = json.load(f)
+        crosses_data = fast_json_load(str(args.crosses))
 
         # Override metadata from CLI
         if args.pixel_size:

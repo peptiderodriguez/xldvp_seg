@@ -67,6 +67,7 @@ from segmentation.io.html_export import (
     percentile_normalize,
     image_to_base64,
 )
+from segmentation.utils.json_utils import fast_json_load
 from segmentation.utils.logging import get_logger, setup_logging
 from segmentation.utils.islet_utils import classify_islet_marker, compute_islet_marker_thresholds
 from segmentation.pipeline.samples import create_sample_from_detection
@@ -400,8 +401,7 @@ def main():
                     sys.exit(1)
 
     logger.info(f"Loading detections from {det_file}...")
-    with open(det_file) as f:
-        all_detections = json.load(f)
+    all_detections = fast_json_load(str(det_file))
     logger.info(f"Loaded {len(all_detections):,} detections")
 
     # Apply vessel quality filter

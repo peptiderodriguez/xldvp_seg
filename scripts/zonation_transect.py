@@ -669,7 +669,7 @@ def main():
     if args.score_threshold is not None:
         before = len(detections)
         detections = [d for d in detections if
-                      d.get('features', {}).get('rf_score', d.get('rf_score', 1.0))
+                      d.get('features', {}).get('rf_prediction', d.get('rf_prediction', 1.0))
                       >= args.score_threshold]
         logger.info(f"Score filter >= {args.score_threshold}: {before:,} -> {len(detections):,}")
 

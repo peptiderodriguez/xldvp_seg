@@ -856,10 +856,15 @@ def main():
     logger.info(f"Class keys: {class_keys}")
 
     # Extract positions (global_center_um)
-    positions = np.array([
-        d.get('global_center_um', d.get('global_center', [0, 0]))
-        for d in detections
-    ], dtype=np.float64)
+    def _get_position_um(d):
+        pos = d.get('global_center_um')
+        if pos is not None:
+            return pos
+        gc = d.get('global_center', [0, 0])
+        ps = d.get('features', {}).get('pixel_size_um', d.get('pixel_size_um', 1.0))
+        return [gc[0] * ps, gc[1] * ps]
+
+    positions = np.array([_get_position_um(d) for d in detections], dtype=np.float64)
 
     # Filter to positive cells
     marker_field = args.marker_field
@@ -940,8 +945,7 @@ def main():
         slim = []
         for d in detections:
             slim.append({
-                'global_center_um': d.get('global_center_um',
-                                          d.get('global_center', [0, 0])),
+                'global_center_um': _get_position_um(d),
                 'features': {k: v for k, v in d.get('features', {}).items()
                              if k in keep_keys},
             })

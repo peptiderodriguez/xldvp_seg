@@ -183,8 +183,9 @@ def main():
                 pixel_size_um = gc_um[0] / gc[0]
                 break
     if pixel_size_um is None:
-        pixel_size_um = 0.1725  # common default
-        logger.warning(f"Could not detect pixel size, using default {pixel_size_um}")
+        from segmentation.utils.config import _LEGACY_PIXEL_SIZE_UM
+        pixel_size_um = _LEGACY_PIXEL_SIZE_UM
+        logger.warning(f"Could not detect pixel size, using legacy fallback {pixel_size_um}")
     logger.info(f"  Pixel size: {pixel_size_um:.4f} um/px")
 
     px2 = pixel_size_um ** 2
@@ -245,7 +246,16 @@ def main():
             continue
 
         with h5py.File(str(mask_files[0]), "r") as hf:
-            masks = hf["masks"][:]
+            if "masks" in hf:
+                masks = hf["masks"][:]
+            elif "labels" in hf:
+                masks = hf["labels"][:]
+            else:
+                logger.warning(f"No masks/labels dataset in {mask_files[0]}")
+                for i in det_indices:
+                    output_detections.append(detections[i])
+                    n_kept += 1
+                continue
 
         for i in det_indices:
             det = detections[i]

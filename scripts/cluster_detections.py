@@ -16,7 +16,6 @@ Usage:
 """
 
 import argparse
-import json
 import sys
 from pathlib import Path
 
@@ -27,6 +26,7 @@ REPO = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(REPO))
 
 from segmentation.lmd.clustering import two_stage_clustering
+from segmentation.utils.json_utils import fast_json_load, atomic_json_dump
 
 
 def main():
@@ -61,8 +61,7 @@ Example:
 
     # Load detections
     print(f"Loading detections from: {args.detections}")
-    with open(args.detections, 'r') as f:
-        detections = json.load(f)
+    detections = fast_json_load(args.detections)
     print(f"  Total detections: {len(detections)}")
 
     # Run clustering
@@ -80,9 +79,7 @@ Example:
     # Save
     output_path = Path(args.output)
     output_path.parent.mkdir(parents=True, exist_ok=True)
-    from segmentation.utils.json_utils import NumpyEncoder
-    with open(output_path, 'w') as f:
-        json.dump(result, f, cls=NumpyEncoder)
+    atomic_json_dump(result, str(output_path))
 
     # Summary
     s = result['summary']

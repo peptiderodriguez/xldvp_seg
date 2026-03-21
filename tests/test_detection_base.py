@@ -259,8 +259,12 @@ class TestDetectionStrategyDetect:
                 return []
 
         strategy = EmptyStrategy()
-        detections = strategy.detect(sample_tile, {}, pixel_size_um=0.22)
+        result = strategy.detect(sample_tile, {}, pixel_size_um=0.22)
 
+        # detect() returns (label_array, detections_list)
+        assert isinstance(result, tuple)
+        label_array, detections = result
+        assert isinstance(label_array, np.ndarray)
         assert detections == []
 
     def test_strategy_detect_with_masks(self, sample_tile, sample_mask):
@@ -288,8 +292,11 @@ class TestDetectionStrategyDetect:
                 ]
 
         strategy = SimpleStrategy(sample_mask)
-        detections = strategy.detect(sample_tile, {}, pixel_size_um=0.22)
+        result = strategy.detect(sample_tile, {}, pixel_size_um=0.22)
 
+        # detect() returns (label_array, detections_list)
+        assert isinstance(result, tuple)
+        label_array, detections = result
         assert len(detections) == 1
         assert isinstance(detections[0], Detection)
         assert detections[0].area > 0
