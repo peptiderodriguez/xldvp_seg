@@ -609,7 +609,7 @@ def convert_detections_to_spatial_uids(
     based on the detection's coordinates.
 
     Args:
-        detections: List of detection dicts with 'global_x'/'global_y' or 'center' fields
+        detections: List of detection dicts with 'global_center' or 'global_x'/'global_y' fields
         slide_name: Slide name for UID generation
         cell_type: Cell type for UID generation
 
@@ -617,7 +617,7 @@ def convert_detections_to_spatial_uids(
         Updated list of detections with 'uid' field using spatial format
 
     Examples:
-        >>> dets = [{'global_id': 123, 'center': [1000, 2000]}]
+        >>> dets = [{'global_id': 123, 'global_center': [1000, 2000]}]
         >>> result = convert_detections_to_spatial_uids(dets, "slide_01", "mk")
         >>> result[0]['uid']
         'slide_01_mk_1000_2000'
@@ -628,15 +628,11 @@ def convert_detections_to_spatial_uids(
     for det in detections:
         det_copy = det.copy()
 
-        # Get coordinates
-        if 'center' in det:
-            global_x, global_y = det['center'][0], det['center'][1]
+        # Get coordinates — prefer global_center (slide-level), never tile-local center
+        if 'global_center' in det:
+            global_x, global_y = det['global_center'][0], det['global_center'][1]
         elif 'global_x' in det and 'global_y' in det:
             global_x, global_y = det['global_x'], det['global_y']
-        elif 'global_center' in det:
-            global_x, global_y = det['global_center'][0], det['global_center'][1]
-        elif 'centroid' in det:
-            global_x, global_y = det['centroid'][0], det['centroid'][1]
         else:
             # No coordinates available, skip UID generation
             result.append(det_copy)

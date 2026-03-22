@@ -485,21 +485,44 @@ def build_shapes(detections, cell_type, tiles_dir=None, pixel_size_um=1.0):
     # Non-vessel: single shape layer
     logger.info("Extracting shapes for %s...", cell_type)
 
-    polygons = None
-    if tiles_dir:
-        polygons = _extract_shapes_from_hdf5(detections, tiles_dir, cell_type)
+    # First, try to use contour_dilated_px from detections (cell pipeline post-dedup)
+    from shapely.geometry import Polygon as _Polygon
+    polygons = [None] * len(detections)
+    _from_json = 0
+    for i, det in enumerate(detections):
+        contour_px = det.get('contour_dilated_px')
+        if contour_px is not None and len(contour_px) >= 3:
+            try:
+                poly = _Polygon(contour_px)
+                if poly.is_valid:
+                    polygons[i] = poly
+                    _from_json += 1
+            except Exception:
+                pass
+    if _from_json > 0:
+        logger.info("  Used %d/%d contours from contour_dilated_px", _from_json, len(detections))
+
+    # Fill remaining Nones from HDF5 or circle fallback
+    n_missing = sum(1 for p in polygons if p is None)
+    if n_missing > 0 and tiles_dir:
+        hdf5_polygons = _extract_shapes_from_hdf5(detections, tiles_dir, cell_type)
+        for i in range(len(polygons)):
+            if polygons[i] is None and hdf5_polygons[i] is not None:
+                polygons[i] = hdf5_polygons[i]
         n_valid = sum(1 for p in polygons if p is not None)
         if n_valid < len(detections) * 0.5:
-            logger.warning("Only %d/%d detections had mask contours, using circle fallback for remainder",
+            logger.warning("Only %d/%d detections had contours, using circle fallback for remainder",
                           n_valid, len(detections))
-            # Fill gaps with circles
             circles = _make_circle_fallback(detections, pixel_size_um)
             for i in range(len(polygons)):
                 if polygons[i] is None:
                     polygons[i] = circles[i]
-    else:
-        logger.info("No tiles-dir provided, using circle fallback for all shapes")
-        polygons = _make_circle_fallback(detections, pixel_size_um)
+    elif n_missing > 0:
+        logger.info("No tiles-dir provided, using circle fallback for %d shapes without contour", n_missing)
+        circles = _make_circle_fallback(detections, pixel_size_um)
+        for i in range(len(polygons)):
+            if polygons[i] is None:
+                polygons[i] = circles[i]
 
     # Build single GeoDataFrame
     valid = [(i, p) for i, p in enumerate(polygons) if p is not None]

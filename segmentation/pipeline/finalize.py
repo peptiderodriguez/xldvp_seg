@@ -121,7 +121,7 @@ def _finish_pipeline(args, all_detections, all_samples, slide_output_dir, tiles_
     # On resume, the pipeline will find the detections JSON and skip detection+dedup.
     for det in all_detections:
         det['tile_mask_label'] = det.get('mask_label', 0)
-        _gc = det.get('global_center', det.get('center', [0, 0]))
+        _gc = det.get('global_center', [0, 0])
         det['global_id'] = f"{int(round(_gc[0]))}_{int(round(_gc[1]))}"
 
     detections_file = slide_output_dir / f'{cell_type}_detections.json'

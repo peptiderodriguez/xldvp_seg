@@ -51,15 +51,12 @@ logger = logging.getLogger(__name__)
 
 
 def _get_global_center(det):
-    """Get global center for a detection, adding tile_origin to center if needed."""
-    gc = det.get('global_center')
-    if gc is not None:
-        return gc
-    tc = det.get('center')
-    if tc is None:
-        return None
-    to = det.get('tile_origin', [0, 0])
-    return [tc[0] + to[0], tc[1] + to[1]]
+    """Get global center for a detection.
+
+    Uses ``global_center`` (slide-level coordinates) only.
+    Never falls back to tile-local ``center``.
+    """
+    return det.get('global_center')
 
 
 def load_czi_direct(czi_path, channels, strip_height=4096):

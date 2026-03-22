@@ -53,16 +53,14 @@ def get_detection_area_um2(det: Dict, pixel_size: float) -> float:
 
 def get_detection_center(det: Dict) -> Optional[Tuple[float, float]]:
     """
-    Get (x, y) center coordinates from detection, in PIXELS.
+    Get (x, y) center coordinates from detection, in global PIXELS.
 
-    Returns pixel coordinates from 'global_center' or 'center' fields.
+    Uses ``global_center`` (slide-level coordinates) only.
+    Never falls back to ``center`` which is tile-local.
     """
     if 'global_center' in det:
         gc = det['global_center']
         return (float(gc[0]), float(gc[1]))
-    if 'center' in det:
-        c = det['center']
-        return (float(c[0]), float(c[1]))
     return None
 
 

@@ -128,7 +128,7 @@ def render_islet_card(islet_id, cells, masks, tile_vis, tile_x, tile_y,
     cell_info = []
     mask_labels = []
     for d in cells:
-        gc = d.get('global_center', d.get('center', [0, 0]))
+        gc = d.get('global_center', [0, 0])
         cx_rel = gc[0] - tile_x
         cy_rel = gc[1] - tile_y
         ml = d.get('mask_label')
@@ -328,7 +328,7 @@ def main():
         mc = det.get('marker_class', 'none')
         if args.marker_only and mc == 'none':
             continue
-        gc = det.get('global_center', det.get('center'))
+        gc = det.get('global_center')
         if gc is None:
             continue
         coords.append([gc[0] * pixel_size, gc[1] * pixel_size])  # convert to um
@@ -458,7 +458,7 @@ def main():
         cell_coords = []
         for det_idx in islet_groups[iid]:
             det = all_dets[det_idx]
-            gc = det.get('global_center', det.get('center', [0, 0]))
+            gc = det.get('global_center', [0, 0])
             cell_coords.append(gc)
         if not cell_coords:
             continue
@@ -554,7 +554,7 @@ def main():
         all_islet_cells = [all_dets[i] for i in islet_groups[iid]]
         cells = []
         for det in all_islet_cells:
-            gc = det.get('global_center', det.get('center', [0, 0]))
+            gc = det.get('global_center', [0, 0])
             if tx <= gc[0] < tx + tw and ty <= gc[1] < ty + th:
                 cells.append(det)
         if not cells:

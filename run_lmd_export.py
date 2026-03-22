@@ -108,11 +108,13 @@ def load_clusters(clusters_path):
 
 
 def get_detection_coordinates(det):
-    """Extract (x, y) pixel coordinates from detection."""
+    """Extract (x, y) global pixel coordinates from detection.
+
+    Uses ``global_center`` (slide-level coordinates) only.
+    Never falls back to ``center`` which is tile-local.
+    """
     if 'global_center' in det:
         return det['global_center']
-    if 'center' in det:
-        return det['center']
     return None
 
 
@@ -1203,7 +1205,9 @@ def _run_single_slide(args):
                   f"contours, not pre-processed pipeline contours ({_promoted} promoted).")
 
         need_extraction = any(
-            d.get('contour_um') is None and d.get('outer_contour_global') is None
+            d.get('contour_um') is None
+            and d.get('outer_contour_global') is None
+            and d.get('contour_dilated_px') is None
             for d in all_dets_needing_contours
         )
 
@@ -1224,14 +1228,14 @@ def _run_single_slide(args):
                     det['contour_um'] = contour_results[uid]['contour_um']
                     det['area_um2'] = contour_results[uid]['area_um2']
         elif need_extraction and not args.tiles_dir:
-            # Try to process existing outer_contour_global
+            # Try to process existing pixel-coord contours (vessel or cell pipeline)
             from segmentation.lmd.contour_processing import process_contour
             print("\nProcessing existing contours (dilation + RDP)...")
             processed_count = 0
             for det in all_dets_needing_contours:
                 if det.get('contour_um') is not None:
                     continue
-                contour_px = det.get('outer_contour_global')
+                contour_px = det.get('outer_contour_global') or det.get('contour_dilated_px')
                 if contour_px is None:
                     continue
                 # Note: erosion is NOT applied here — Step 2b handles it

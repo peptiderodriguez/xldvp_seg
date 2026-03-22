@@ -94,11 +94,12 @@ def _extract_centroids(detections: list[dict]) -> np.ndarray:
     """
     centroids = []
     for i, d in enumerate(detections):
-        c = d.get("global_center") or d.get("center")
+        c = d.get("global_center")
         if c is None:
             logger.warning(
-                "Detection %d has no global_center or center — falling back to [0, 0], "
-                "which may corrupt KD-tree neighbor estimation",
+                "Detection %d has no global_center — falling back to [0, 0], "
+                "which may corrupt KD-tree neighbor estimation.  "
+                "Do NOT fall back to 'center' (tile-local).",
                 i,
             )
             c = [0, 0]

@@ -708,7 +708,7 @@ def run_clustering(args):
     rows = []
     for i, idx in enumerate(valid_indices):
         det = detections[idx]
-        gc = det.get('global_center', det.get('center', [0, 0]))
+        gc = det.get('global_center', [0, 0])
         row = {
             'uid': det.get('uid', det.get('id', f'cell_{i}')),
             'x': gc[0] if isinstance(gc, (list, tuple)) else 0,

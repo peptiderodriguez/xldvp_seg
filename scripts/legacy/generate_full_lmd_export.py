@@ -293,7 +293,7 @@ def main():
                 'detection': det,
                 'contour_data': singles_contours[uid]
             })
-            center = det.get('global_center', det.get('center', [0, 0]))
+            center = det.get('global_center', [0, 0])
             singles_positions.append((center[0], center[1]))
 
     if singles_positions:

@@ -74,7 +74,7 @@ def main():
     # 3. Add tile_mask_label + global_id (same as run_segmentation.py lines 3129-3132)
     for det in all_detections:
         det['tile_mask_label'] = det.get('mask_label', 0)
-        gc = det.get('global_center', det.get('center', [0, 0]))
+        gc = det.get('global_center', [0, 0])
         det['global_id'] = f"{int(round(gc[0]))}_{int(round(gc[1]))}"
 
     # 4. Save final JSON

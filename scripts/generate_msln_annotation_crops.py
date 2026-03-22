@@ -268,11 +268,12 @@ def main():
     samples = []
     skipped = 0
     for det in tqdm(selected, desc="Crops"):
-        # Global pixel center = tile_origin + local center
-        tile_origin = det.get('tile_origin', [0, 0])
-        center = det.get('center', [0, 0])
-        global_cx = tile_origin[0] + center[0]
-        global_cy = tile_origin[1] + center[1]
+        # Global pixel center
+        gc = det.get('global_center')
+        if gc is None:
+            skipped += 1
+            continue
+        global_cx, global_cy = gc[0], gc[1]
 
         crop_norm = read_crop_from_czi(
             reader, global_cx, global_cy, CROP_SIZE
@@ -283,9 +284,11 @@ def main():
 
         # Overlay dashed B/W cell contour from mask
         mask_label = det.get('tile_mask_label') or det.get('mask_label')
+        tile_origin = det.get('tile_origin', [0, 0])
+        center_local = det.get('center', [global_cx - tile_origin[0], global_cy - tile_origin[1]])
         if mask_label is not None:
             cell_mask = get_cell_mask_crop(
-                tile_origin, center, int(mask_label), CROP_SIZE
+                tile_origin, center_local, int(mask_label), CROP_SIZE
             )
             if cell_mask is not None and cell_mask.any():
                 crop_norm = draw_mask_contour(
