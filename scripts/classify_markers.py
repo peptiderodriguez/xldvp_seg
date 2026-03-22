@@ -689,19 +689,19 @@ def main():
     normalize_snr = None
     if args.normalize_channel:
         nc = args.normalize_channel.strip()
-        if nc.isdigit():
-            normalize_ch = int(nc)
-        else:
-            # Resolve wavelength via CZI metadata
-            if not czi_meta:
-                logger.error("--normalize-channel with wavelength requires --czi-path")
-                sys.exit(1)
+        # Always resolve through CZI metadata (handles both index and wavelength)
+        if czi_meta:
             try:
                 nc_resolved = resolve_channel_indices(czi_meta, [nc], Path(args.czi_path).stem)
                 normalize_ch = nc_resolved[nc]
             except ChannelResolutionError as e:
                 logger.error(f"Cannot resolve --normalize-channel '{nc}': {e}")
                 sys.exit(1)
+        elif nc.isdigit() and int(nc) < 20:
+            normalize_ch = int(nc)
+        else:
+            logger.error("--normalize-channel requires --czi-path for wavelength resolution")
+            sys.exit(1)
         logger.info(f"  Normalize channel: ch{normalize_ch} "
                      f"({_czi_ch_labels.get(normalize_ch, '?')})")
         # Extract normalize channel SNR for all detections
