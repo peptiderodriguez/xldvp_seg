@@ -197,19 +197,34 @@ def create_sample_from_contours(det, channel_arrays, display_channels, x_start, 
             contour_pts *= scale_factor
         contour_int = contour_pts.astype(np.int32).reshape(-1, 1, 2)
         if dashed_contour:
+            # Interpolate along polygon edges to create evenly-spaced dash points
             pts_flat = contour_int.reshape(-1, 2)
-            dash_len, gap_len = 8, 5
-            cycle = dash_len + gap_len
-            n_pts = len(pts_flat)
-            i = 0
-            while i < n_pts:
-                j = min(i + dash_len, n_pts - 1)
-                if j > i:
-                    cv2.line(crop_norm, tuple(pts_flat[i]), tuple(pts_flat[j]),
-                             color, contour_thickness)
-                    cv2.line(contour_only, tuple(pts_flat[i]), tuple(pts_flat[j]),
-                             color, contour_thickness)
-                i += cycle
+            # Close the polygon
+            if not np.array_equal(pts_flat[0], pts_flat[-1]):
+                pts_flat = np.vstack([pts_flat, pts_flat[0:1]])
+            # Walk along edges, accumulating pixel distance
+            interp_pts = []
+            for k in range(len(pts_flat) - 1):
+                p0, p1 = pts_flat[k].astype(float), pts_flat[k + 1].astype(float)
+                seg_len = np.linalg.norm(p1 - p0)
+                if seg_len < 1:
+                    continue
+                n_interp = max(2, int(seg_len / 2))  # ~2px spacing
+                for t in np.linspace(0, 1, n_interp, endpoint=False):
+                    interp_pts.append((p0 + t * (p1 - p0)).astype(np.int32))
+            if len(interp_pts) < 2:
+                cv2.drawContours(crop_norm, [contour_int], -1, color, contour_thickness)
+                cv2.drawContours(contour_only, [contour_int], -1, color, contour_thickness)
+            else:
+                dash_len, gap_len = 8, 5
+                cycle = dash_len + gap_len
+                for idx in range(0, len(interp_pts), cycle):
+                    end = min(idx + dash_len, len(interp_pts) - 1)
+                    if end > idx:
+                        cv2.line(crop_norm, tuple(interp_pts[idx]), tuple(interp_pts[end]),
+                                 color, contour_thickness)
+                        cv2.line(contour_only, tuple(interp_pts[idx]), tuple(interp_pts[end]),
+                                 color, contour_thickness)
         else:
             cv2.drawContours(crop_norm, [contour_int], -1, color, contour_thickness)
             cv2.drawContours(contour_only, [contour_int], -1, color, contour_thickness)
