@@ -77,7 +77,7 @@ Explain each step **as you reach it**, not all upfront. Define jargon inline whe
 | **Features** | Morph (78D), SAM2 (256D), ResNet (4096D), DINOv2 (2048D), per-channel stats (15/ch) | `--extract-deep-features`, `--all-channels` |
 | **Annotate** | HTML viewer with pos/neg annotation, JSON export | `scripts/regenerate_html.py`, `serve_html.py` |
 | **Classify** | RF training, feature comparison (5-fold CV), batch scoring | `train_classifier.py`, `scripts/compare_feature_sets.py`, `scripts/apply_classifier.py` |
-| **Markers** | Otsu (with local background subtraction) / GMM marker classification | `scripts/classify_markers.py` |
+| **Markers** | Median-based SNR thresholding (default ≥1.5) / Otsu / GMM | `scripts/classify_markers.py` |
 | **Explore** | UMAP + t-SNE, Leiden/HDBSCAN clustering, trajectory (diffmap, PAGA, pseudotime), interactive plotly | `scripts/cluster_by_features.py` |
 | **Spatial** | Delaunay networks, community detection, cell neighborhoods | `scripts/spatial_cell_analysis.py` |
 | **Tissue zones** | Spatially-constrained zone discovery, transects, bone region annotation | `scripts/assign_tissue_zones.py`, `scripts/zonation_transect.py`, `scripts/annotate_bone_regions.py` |
@@ -403,48 +403,39 @@ PYTHONPATH=$REPO $XLDVP_PYTHON $REPO/scripts/regenerate_html.py \
 
 Ask: *"Which channels are markers you want to classify as positive/negative?"*
 
-**Background correction is automatic.** The pipeline performs pixel-level background correction during detection (post-dedup phase). All `ch{N}_*` features are already corrected. `classify_markers.py` auto-detects this (via `ch{N}_background` keys) and disables ALL its own background subtraction — both `--correct-all-channels` and per-marker `bg_subtract`. **Double correction is impossible.** The user does NOT need `--correct-all-channels` or any special flags.
+**Background correction is automatic.** The pipeline computes median-based local background during detection (post-dedup phase). SNR = median_raw / median_of_neighbor_medians. `classify_markers.py` uses these pre-computed SNR values directly.
 
 ```bash
-# Standard usage — just classify, bg correction already done by pipeline:
-PYTHONPATH=$REPO $XLDVP_PYTHON $REPO/scripts/classify_markers.py \
-    --detections <detections.json> \
-    --marker-channel 1,2 \
-    --marker-name NeuN,tdTomato
-
-# By wavelength (auto-resolves via CZI metadata):
+# Standard usage — median SNR >= 1.5 (default):
 PYTHONPATH=$REPO $XLDVP_PYTHON $REPO/scripts/classify_markers.py \
     --detections <detections.json> \
     --marker-wavelength 647,555 \
-    --marker-name NeuN,tdTomato \
+    --marker-name SMA,CD31 \
     --czi-path <czi_path>
 
-# For OLDER detections (pre-Mar 2026) without pipeline bg correction:
-PYTHONPATH=$REPO $XLDVP_PYTHON $REPO/scripts/classify_markers.py \
-    --detections <detections.json> \
-    --marker-channel 1,2 \
-    --marker-name NeuN,tdTomato \
-    --correct-all-channels
-```
+# Adjust threshold per marker:
+    --snr-thresholds "2.0,1.5"  # SMA>=2.0, CD31>=1.5
 
-**Methods** — *why Otsu?* Otsu automatically finds the threshold that maximally separates two intensity populations (positive vs negative). It adapts to each slide's signal level so you don't have to pick a number. Use `gmm` when the two populations overlap significantly in log space (e.g., weak marker with high background); use `otsu_half` only for legacy compatibility.
+# Fallback to Otsu (if SNR doesn't work for a marker):
+    --method otsu
+```
 
 | Method | Description | When |
 |--------|-------------|------|
-| `otsu` (default) | Auto threshold maximizing inter-class variance. Background correction already done by pipeline. | Default for all markers |
-| `otsu_half` | Otsu / 2 — more permissive, calls more cells positive | Very sparse marker expression where true positives are dim |
+| `snr` (default) | Median-based SNR >= threshold (default 1.5). Robust to bright outlier pixels. | Default for all markers |
+| `otsu` | Auto threshold maximizing inter-class variance on bg-corrected intensities | Fallback when SNR is too strict/permissive |
 | `gmm` | 2-component Gaussian mixture model on log1p intensities | Overlapping distributions, weak signal markers |
 
-**Pipeline-level background correction** (written during detection):
-- `ch{N}_background`: per-cell local background estimate (median of k=30 nearest neighbors)
-- `ch{N}_snr`: signal-to-noise ratio (raw / background)
-- `ch{N}_mean_raw`, `ch{N}_std_raw`, etc.: uncorrected feature values
-- All `ch{N}_mean`, `ch{N}_std`, etc.: corrected values (extracted from bg-subtracted pixels)
+**Pipeline-level background correction** (median-based, written during detection):
+- `ch{N}_background`: per-cell local background (median of k=30 nearest neighbors' medians)
+- `ch{N}_snr`: signal-to-noise ratio (median_raw / background)
+- `ch{N}_median_raw`, `ch{N}_mean_raw`, etc.: uncorrected feature values
+- All `ch{N}_median`, `ch{N}_mean`, etc.: corrected values (bg-subtracted)
 
 **Per-marker output fields** (written by `classify_markers.py`):
 - `{marker}_class`: positive / negative
-- `{marker}_value`: corrected intensity (same as `ch{N}_mean` for pipeline-corrected data)
-- `{marker}_threshold`: Otsu threshold used
+- `{marker}_value`: SNR value used for classification
+- `{marker}_threshold`: SNR threshold used
 - `marker_profile`: combined (e.g., `NeuN+/tdTomato-`) when multiple markers
 
 **Step 16 — Tissue zone assignment** (for multi-marker slides with spatial organization):
