@@ -182,10 +182,13 @@ def correct_all_channels(
     _cached_tree_and_indices = None
 
     for ch in channels:
-        # Use median for background estimation (robust to bright outlier pixels)
-        median_key = f"ch{ch}_median"
+        # Use raw median for background estimation (uncorrected — before bg subtraction)
+        # On first run, ch{N}_median is raw (no _raw copy yet). On re-run, use _raw.
+        raw_key = f"ch{ch}_median_raw"
+        fallback_key = f"ch{ch}_median"
         values = np.array(
-            [d.get("features", {}).get(median_key, 0.0) for d in detections],
+            [d.get("features", {}).get(raw_key, d.get("features", {}).get(fallback_key, 0.0))
+             for d in detections],
             dtype=np.float64,
         )
         corrected_median, per_cell_bg, _cached_tree_and_indices = local_background_subtract(
