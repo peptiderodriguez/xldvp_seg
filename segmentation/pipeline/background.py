@@ -182,23 +182,24 @@ def correct_all_channels(
     _cached_tree_and_indices = None
 
     for ch in channels:
-        mean_key = f"ch{ch}_mean"
+        # Use median for background estimation (robust to bright outlier pixels)
+        median_key = f"ch{ch}_median"
         values = np.array(
-            [d.get("features", {}).get(mean_key, 0.0) for d in detections],
+            [d.get("features", {}).get(median_key, 0.0) for d in detections],
             dtype=np.float64,
         )
-        corrected_mean, per_cell_bg, _cached_tree_and_indices = local_background_subtract(
+        corrected_median, per_cell_bg, _cached_tree_and_indices = local_background_subtract(
             values, centroids, n_neighbors,
             tree_and_indices=_cached_tree_and_indices,
         )
         channel_bg[ch] = per_cell_bg
-        channel_corrected_mean[ch] = corrected_mean
+        channel_corrected_mean[ch] = corrected_median
 
-        median_bg = float(np.median(per_cell_bg))
-        nonzero = corrected_mean[corrected_mean > 0]
+        bg_median_val = float(np.median(per_cell_bg))
+        nonzero = corrected_median[corrected_median > 0]
         logger.info(
             "  ch%d: bg median=%.1f, %d/%d cells with signal after correction",
-            ch, median_bg, len(nonzero), n_det,
+            ch, bg_median_val, len(nonzero), n_det,
         )
 
     # --- Step 2: correct intensity features & write back ---
@@ -222,16 +223,16 @@ def correct_all_channels(
                 feat[raw_key] = float(values[i])
                 feat[key] = float(corrected[i])
 
-        # background & SNR (based on mean)
-        mean_raw = np.array(
-            [d["features"].get(f"ch{ch}_mean_raw", 0.0) for d in detections],
+        # background & SNR (median / median — robust to bright outlier pixels)
+        median_raw = np.array(
+            [d["features"].get(f"ch{ch}_median_raw", 0.0) for d in detections],
             dtype=np.float64,
         )
         for i, det in enumerate(detections):
             feat = det["features"]
             feat[f"ch{ch}_background"] = float(per_cell_bg[i])
             feat[f"ch{ch}_snr"] = (
-                float(mean_raw[i] / per_cell_bg[i]) if per_cell_bg[i] > 0 else 0.0
+                float(median_raw[i] / per_cell_bg[i]) if per_cell_bg[i] > 0 else 0.0
             )
 
         # cv = std / corrected_mean
