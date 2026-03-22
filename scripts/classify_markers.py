@@ -243,7 +243,8 @@ def classify_single_marker(detections: list[dict], channel: int,
                            snr_threshold: float = 1.5,
                            intensity_feature: str = 'mean',
                            use_raw: bool = False,
-                           cv_max: float | None = None) -> dict:
+                           cv_max: float | None = None,
+                           normalize_snr: np.ndarray | None = None) -> dict:
     """Classify detections for one marker. Returns summary row dict.
 
     Mutates detections in-place: adds {marker}_class, {marker}_value,
@@ -282,7 +283,13 @@ def classify_single_marker(detections: list[dict], channel: int,
     per_cell_bg = None
     if intensity_feature == 'snr':
         values = raw_values
-        logger.info("  SNR mode — skipping background subtraction (already signal/background ratio)")
+        if normalize_snr is not None:
+            values = values / normalize_snr
+            logger.info(f"  SNR normalized by reference channel: "
+                         f"median={np.median(values):.3f}, p95={np.percentile(values, 95):.3f}, "
+                         f"max={values.max():.3f}")
+        else:
+            logger.info("  SNR mode — skipping background subtraction (already signal/background ratio)")
     elif global_background:
         # Global: subtract slide-wide median from all cells.
         # Avoids local-neighbor inflation for regional markers.
@@ -476,6 +483,11 @@ def parse_args() -> argparse.Namespace:
                              'Default: on for otsu, off for otsu_half/gmm.')
     parser.add_argument('--no-background-subtract', action='store_true',
                         help='Disable background subtraction even for otsu method.')
+    parser.add_argument('--normalize-channel', default=None,
+                        help='Normalize each marker SNR by this channel\'s SNR before thresholding. '
+                             'Use wavelength (e.g. "647") or index (e.g. "1"). Requires --czi-path '
+                             'for wavelength resolution. Effective metric: marker_snr / normalize_snr. '
+                             'Filters autofluorescent cells that are bright in all channels.')
     parser.add_argument('--correct-all-channels', action='store_true',
                         help='Background-correct ALL ch{N}_mean features (not just marker channels). '
                              'Overwrites ch{N}_mean with corrected values, saves originals as ch{N}_mean_raw.')
@@ -664,6 +676,40 @@ def main():
         per_marker_feature = dict(zip(names, feat_list))
         logger.info(f"Per-marker intensity features: {per_marker_feature}")
 
+    # Resolve normalize channel (for SNR normalization against a reference like PM)
+    normalize_ch = None
+    normalize_snr = None
+    if args.normalize_channel:
+        nc = args.normalize_channel.strip()
+        if nc.isdigit():
+            normalize_ch = int(nc)
+        else:
+            # Resolve wavelength via CZI metadata
+            if not args.czi_path:
+                logger.error("--normalize-channel with wavelength requires --czi-path")
+                sys.exit(1)
+            try:
+                nc_resolved = resolve_channel_indices(meta if 'meta' in dir() else get_czi_metadata(args.czi_path),
+                                                      [nc], Path(args.czi_path).stem)
+                normalize_ch = nc_resolved[nc]
+            except ChannelResolutionError as e:
+                logger.error(f"Cannot resolve --normalize-channel '{nc}': {e}")
+                sys.exit(1)
+        logger.info(f"  Normalize channel: ch{normalize_ch} "
+                     f"({_czi_ch_labels.get(normalize_ch, '?')})")
+        # Extract normalize channel SNR for all detections
+        norm_snr_key = f"ch{normalize_ch}_snr"
+        normalize_snr = np.array(
+            [d.get('features', {}).get(norm_snr_key, 0.0) for d in detections],
+            dtype=np.float64,
+        )
+        # Avoid div by zero: where normalize SNR is 0, set to 1 (no normalization)
+        normalize_snr = np.where(normalize_snr > 0, normalize_snr, 1.0)
+        logger.info(f"  Normalize SNR (ch{normalize_ch}): "
+                     f"median={np.median(normalize_snr):.2f}, "
+                     f"p95={np.percentile(normalize_snr, 95):.2f}, "
+                     f"max={np.max(normalize_snr):.2f}")
+
     # Process each marker
     summaries = []
     for ch, name in zip(channels, names):
@@ -695,7 +741,8 @@ def main():
                                      snr_threshold=marker_snr,
                                      intensity_feature=marker_feature,
                                      use_raw=args.use_raw,
-                                     cv_max=args.cv_max)
+                                     cv_max=args.cv_max,
+                                     normalize_snr=normalize_snr)
         summaries.append(row)
 
     # Create combined marker_profile when multiple markers are classified
