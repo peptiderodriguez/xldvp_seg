@@ -120,7 +120,7 @@ This is the DVP (Deep Visual Proteomics) workflow — spatial proteomics where L
 2. **Detect** — AI models (SAM2 + custom segmentation) scan every tile to find all cells. Each gets a contour outline and features (shape, size, brightness, AI embeddings). 1–3 hours on GPU.
 3. **Review** — Open a web viewer, click yes/no on ~200+ cell crops to teach the system what's real vs false positive.
 4. **Classify** — A random forest trains on your annotations and scores every detection in seconds — no re-detection needed.
-5. **Markers** — Classify each cell as positive/negative for each fluorescent marker (e.g., NeuN+ neurons vs NeuN- glia). Uses automatic intensity thresholding.
+5. **Markers** — Classify each cell as positive/negative for each fluorescent marker (e.g., NeuN+ neurons vs NeuN- glia). Default: median-based SNR thresholding (SNR >= 1.5).
 6. **Explore** — UMAP/clustering can reveal cell subtypes from the feature space. Spatial network analysis shows neighborhood patterns.
 7. **Export for LMD** — Package selected cells into XML for the laser microdissection machine with 384-well plate assignment + controls.
 8. **DVP** — LMD cuts cells → mass spec spatial proteomics.
@@ -268,9 +268,9 @@ PYTHONPATH=$REPO $XLDVP_PYTHON $REPO/scripts/classify_markers.py \
     --marker-channel 1,2 --marker-name NeuN,tdTomato
 ```
 
-**Methods:** `otsu` (default — auto-threshold maximizing inter-class variance), `otsu_half` (more permissive for dim markers), `gmm` (2-component Gaussian for overlapping distributions).
+**Methods:** `snr` (default — median-based SNR >= 1.5, robust to membrane stains with median=0 inside cells), `otsu` (auto-threshold maximizing inter-class variance), `otsu_half` (more permissive for dim markers), `gmm` (2-component Gaussian for overlapping distributions). Optional `--normalize-channel` normalizes per-channel intensities before thresholding, but is NOT recommended as default because PM membrane stains have median=0 inside cells.
 
-**Output fields:** `{marker}_class` (positive/negative), `{marker}_value`, `{marker}_threshold`, `marker_profile` (e.g., `NeuN+/tdTomato-`). Pipeline also stores `ch{N}_background`, `ch{N}_snr`, `ch{N}_mean_raw` in features.
+**Output fields:** `{marker}_class` (positive/negative), `{marker}_value`, `{marker}_threshold`, `marker_profile` (e.g., `NeuN+/tdTomato-`). Pipeline also stores `ch{N}_background`, `ch{N}_snr`, `ch{N}_median_raw` in features.
 
 ### Phase 5: Spatial Analysis & Exploration
 
@@ -317,7 +317,7 @@ Beyond the core detect → classify → LMD workflow, the pipeline supports:
 |----------|--------|-------------|
 | **RF classifier training** | `train_classifier.py` | Train random forest from annotations, 5-fold CV, feature set comparison |
 | **Batch scoring** | `scripts/apply_classifier.py` | Score all detections with trained classifier (CPU, seconds) |
-| **Marker classification** | `scripts/classify_markers.py` | Otsu/GMM pos/neg per channel, auto bg correction, SNR |
+| **Marker classification** | `scripts/classify_markers.py` | SNR/Otsu/GMM pos/neg per channel, auto bg correction (median-based) |
 | **Feature exploration** | `scripts/cluster_by_features.py` | UMAP/t-SNE + Leiden/HDBSCAN, interactive plotly, --trajectory (diffusion map, pseudotime, PAGA, force-directed layout) |
 | **Spatial network** | `scripts/spatial_cell_analysis.py` | Delaunay graphs, connected components, community detection, neighborhoods |
 | **Interactive spatial viewer** | `scripts/generate_multi_slide_spatial_viewer.py` | KDE density contours, graph-pattern regions (linear/arc/ring/cluster), DBSCAN + convex hulls, ROI drawing + stats |
@@ -325,7 +325,7 @@ Beyond the core detect → classify → LMD workflow, the pipeline supports:
 | **SpatialData / scverse** | `scripts/convert_to_spatialdata.py` | Export to zarr for squidpy (spatial stats), scanpy (dim reduction), anndata |
 | **One-command viz** | `scripts/view_slide.py` | Classify → spatial cluster → interactive viewer → serve (all in one) |
 | **Preprocessing preview** | `scripts/preview_preprocessing.py` | Before/after flat-field, photobleach correction at 1/8 resolution |
-| **Nuclear counting** | `scripts/count_nuclei_per_cell.py` | Count nuclei per cell (Cellpose 2nd pass on nuclear channel), per-nucleus morph+SAM2 features |
+| **Nuclear counting** | `scripts/count_nuclei_per_cell.py` | Count nuclei per cell (Cellpose 2nd pass on nuclear channel), per-nucleus morph+SAM2 features. Use unfiltered `cell_detections.json` (pre-classifier) for consistency across slides. |
 | **Quality filter** | `scripts/quality_filter_detections.py` | Heuristic area+solidity+channel filter as RF alternative for clean slides |
 | **Region detection** | `scripts/detect_regions_for_lmd.py` | Percentile-threshold any channel → morph cleanup → split → full features (morph+channel+SAM2) |
 | **Region splitting** | `scripts/split_regions_for_lmd.py` | Post-process pipeline detections → watershed split large regions |
@@ -422,7 +422,7 @@ Canonical in `segmentation/utils/detection_utils.py`. For uint16: simple `arr/25
 
 ### Centroids
 
-Background correction KD-tree MUST use `global_center` (slide-level), NOT `features["centroid"]` (tile-local). Canonical: `_extract_centroids()` in `background.py`. KD-tree is built once and cached across channels via `tree_and_indices` parameter (4x speedup on 4-channel slides).
+Background correction KD-tree MUST use `global_center` (slide-level), NOT `features["centroid"]` (tile-local). Canonical: `_extract_centroids()` in `background.py`. KD-tree is built once and cached across channels via `tree_and_indices` parameter (4x speedup on 4-channel slides). Background estimate is median-based: per-cell background = median of neighbor median intensities. SNR = median_raw / median_of_neighbor_medians.
 
 ### Shared Utilities (`segmentation/utils/detection_utils.py`)
 
@@ -527,7 +527,7 @@ python run_segmentation.py --czi-path slide.czi --cell-type nmj \
 | `run_lmd_export.py` | LMD XML export (single + batch) |
 | `train_classifier.py` | Train RF classifier from annotations |
 | `scripts/apply_classifier.py` | Score detections with trained classifier |
-| `scripts/classify_markers.py` | Marker pos/neg classification (Otsu/GMM) |
+| `scripts/classify_markers.py` | Marker pos/neg classification (SNR/Otsu/GMM) |
 | `scripts/regenerate_html.py` | Regenerate HTML viewer from saved detections |
 | `scripts/czi_info.py` | CZI channel metadata (run first!) |
 | `scripts/run_pipeline.sh` | YAML config-driven SLURM launcher |

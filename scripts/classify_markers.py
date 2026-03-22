@@ -357,6 +357,13 @@ def classify_single_marker(detections: list[dict], channel: int,
             raise ValueError(
                 f"SNR method requires either pipeline bg correction (ch{channel}_snr in features) "
                 "or --background-subtract. Neither found.")
+        # Apply normalize-channel if provided
+        if normalize_snr is not None:
+            snr_values = snr_values / normalize_snr
+            logger.info(f"  SNR normalized by reference channel: "
+                         f"median={np.median(snr_values):.3f}, "
+                         f"p95={np.percentile(snr_values, 95):.3f}, "
+                         f"max={snr_values.max():.3f}")
         threshold = snr_threshold
         positive_mask = snr_values >= snr_threshold
     elif method == 'otsu':
@@ -536,9 +543,11 @@ def main():
 
     # Parse marker channels — resolve wavelengths if specified
     from segmentation.io.czi_loader import get_czi_metadata, resolve_channel_indices, ChannelResolutionError
+    # Load CZI metadata once (used for wavelength resolution, channel labels, normalize-channel)
+    czi_meta = get_czi_metadata(args.czi_path) if args.czi_path else None
     if args.marker_wavelength:
         try:
-            meta = get_czi_metadata(args.czi_path)
+            meta = czi_meta
             wavelengths = [w.strip() for w in args.marker_wavelength.split(',')]
             filename = Path(args.czi_path).stem
             resolved = resolve_channel_indices(meta, wavelengths, filename)
@@ -564,10 +573,9 @@ def main():
 
     # Build channel label map from CZI metadata (if available)
     _czi_ch_labels = {}
-    if args.czi_path:
+    if czi_meta:
         try:
-            _meta = get_czi_metadata(args.czi_path)
-            for _ch in _meta['channels']:
+            for _ch in czi_meta['channels']:
                 fluor = (_ch.get('fluorophore') or _ch.get('name') or '').strip()
                 em = _ch.get('emission_nm')
                 _czi_ch_labels[_ch['index']] = f"{fluor} em={em:.0f}nm" if em else fluor
@@ -685,12 +693,11 @@ def main():
             normalize_ch = int(nc)
         else:
             # Resolve wavelength via CZI metadata
-            if not args.czi_path:
+            if not czi_meta:
                 logger.error("--normalize-channel with wavelength requires --czi-path")
                 sys.exit(1)
             try:
-                nc_resolved = resolve_channel_indices(meta if 'meta' in dir() else get_czi_metadata(args.czi_path),
-                                                      [nc], Path(args.czi_path).stem)
+                nc_resolved = resolve_channel_indices(czi_meta, [nc], Path(args.czi_path).stem)
                 normalize_ch = nc_resolved[nc]
             except ChannelResolutionError as e:
                 logger.error(f"Cannot resolve --normalize-channel '{nc}': {e}")
@@ -734,6 +741,11 @@ def main():
         elif args.use_raw and not args.global_background:
             marker_bg_subtract = False  # raw values are pre-correction
 
+        # Skip normalization if this marker IS the normalize channel (self-normalization = degenerate)
+        marker_normalize = None if (normalize_ch is not None and ch == normalize_ch) else normalize_snr
+        if normalize_ch is not None and ch == normalize_ch:
+            logger.warning(f"  Skipping normalization for '{name}' (ch{ch}) — same as normalize channel")
+
         row = classify_single_marker(detections, ch, name, marker_method, output_dir,
                                      bg_subtract=marker_bg_subtract,
                                      global_background=marker_global_bg,
@@ -742,7 +754,7 @@ def main():
                                      intensity_feature=marker_feature,
                                      use_raw=args.use_raw,
                                      cv_max=args.cv_max,
-                                     normalize_snr=normalize_snr)
+                                     normalize_snr=marker_normalize)
         summaries.append(row)
 
     # Create combined marker_profile when multiple markers are classified
