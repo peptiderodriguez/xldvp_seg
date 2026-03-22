@@ -23,16 +23,16 @@ Usage:
 """
 
 import argparse
-import os
 import sys
 import time
-from pathlib import Path
 from collections import Counter
+from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-import numpy as np
 import h5py
+import numpy as np
+from skimage.draw import polygon as skimage_polygon
 
 try:
     import hdf5plugin  # noqa: F401 — register LZ4 codec before h5py reads
@@ -41,9 +41,9 @@ except ImportError:
 
 from segmentation.analysis.nuclear_count import count_nuclei_for_tile
 from segmentation.io.czi_loader import CZILoader, get_czi_metadata, resolve_channel_indices
-from segmentation.utils.json_utils import fast_json_load, atomic_json_dump
+from segmentation.utils.device import device_supports_gpu, get_default_device
+from segmentation.utils.json_utils import atomic_json_dump, fast_json_load
 from segmentation.utils.logging import get_logger, setup_logging
-from segmentation.utils.device import get_default_device, device_supports_gpu
 
 logger = get_logger(__name__)
 
@@ -201,10 +201,75 @@ def main():
     # Build a map: for each detection, find which tile it belongs to
     # by matching tile_origin or global_center to tile coordinates
     det_tile_map = {}  # uid -> (tile_x, tile_y)
+    n_from_tile_origin = 0
+    n_from_global_center = 0
     for det in detections:
         tile_origin = det.get("tile_origin")
         if tile_origin:
             det_tile_map[det["uid"]] = (int(tile_origin[0]), int(tile_origin[1]))
+            n_from_tile_origin += 1
+
+    # Fallback: for detections without tile_origin, compute tile from global_center.
+    # This handles detections from detect_regions_for_lmd.py and similar scripts.
+    dets_without_tile = [det for det in detections if det["uid"] not in det_tile_map]
+    if dets_without_tile:
+        # Build set of known tile origins from tile directories
+        tile_origins_set = {(tx, ty) for tx, ty, _, _ in tile_dirs}
+
+        # Infer tile size from the tile grid spacing (or use --tile-size if provided)
+        tile_size = args.tile_size
+        if tile_size is None:
+            # Find minimum positive gap between sorted unique tile X and Y coordinates
+            tile_xs = sorted({tx for tx, _, _, _ in tile_dirs})
+            tile_ys = sorted({ty for _, ty, _, _ in tile_dirs})
+            x_gaps = [tile_xs[i + 1] - tile_xs[i] for i in range(len(tile_xs) - 1) if tile_xs[i + 1] > tile_xs[i]]
+            y_gaps = [tile_ys[i + 1] - tile_ys[i] for i in range(len(tile_ys) - 1) if tile_ys[i + 1] > tile_ys[i]]
+            if x_gaps or y_gaps:
+                tile_size = min(x_gaps + y_gaps)
+                logger.info(f"  Inferred tile_size={tile_size} from tile grid spacing")
+            else:
+                # Single tile — read its mask to get the size
+                _, _, _, first_mask = tile_dirs[0]
+                with h5py.File(str(first_mask), "r") as hf:
+                    th, tw = hf["masks"].shape[:2]
+                tile_size = max(th, tw)
+                logger.info(f"  Single tile — inferred tile_size={tile_size} from mask shape")
+
+        for det in dets_without_tile:
+            gc = det.get("global_center")
+            if gc is None:
+                continue
+            cx, cy = float(gc[0]), float(gc[1])
+            # Compute expected tile origin by snapping to grid
+            candidate_tx = int(cx // tile_size) * tile_size
+            candidate_ty = int(cy // tile_size) * tile_size
+            candidate = (candidate_tx, candidate_ty)
+            if candidate in tile_origins_set:
+                det_tile_map[det["uid"]] = candidate
+                n_from_global_center += 1
+            else:
+                # Grid snap didn't match — find closest tile whose bounding box
+                # could contain this point (within tile_size of origin)
+                best = None
+                best_dist = float("inf")
+                for otx, oty in tile_origins_set:
+                    if otx <= cx < otx + tile_size * 1.1 and oty <= cy < oty + tile_size * 1.1:
+                        dist = (cx - otx) ** 2 + (cy - oty) ** 2
+                        if dist < best_dist:
+                            best_dist = dist
+                            best = (otx, oty)
+                if best is not None:
+                    det_tile_map[det["uid"]] = best
+                    n_from_global_center += 1
+
+        if n_from_global_center > 0:
+            logger.info(
+                f"  Tile mapping: {n_from_tile_origin} from tile_origin, "
+                f"{n_from_global_center} from global_center fallback"
+            )
+        unmapped = len(detections) - len(det_tile_map)
+        if unmapped > 0:
+            logger.warning(f"  {unmapped} detections could not be mapped to any tile")
 
     # Group detections by tile
     tile_to_dets = {}  # (tile_x, tile_y) -> [det_indices]
@@ -221,7 +286,7 @@ def main():
     tiles_with_dets = sum(1 for tx, ty, _, _ in tile_dirs if (tx, ty) in tile_to_dets)
     logger.info(f"  {tiles_with_dets} tiles have detections (of {len(tile_dirs)} total)")
 
-    for tile_x, tile_y, tile_dir, mask_path in tile_dirs:
+    for tile_x, tile_y, _tile_dir, mask_path in tile_dirs:
         tile_key = (tile_x, tile_y)
         det_indices = tile_to_dets.get(tile_key, [])
         if not det_indices:
@@ -232,12 +297,55 @@ def main():
             cell_masks = hf["masks"][:]
         tile_h, tile_w = cell_masks.shape[:2]
 
+        # For detections without mask_label (e.g., from detect_regions_for_lmd.py),
+        # rasterize their outer_contour_global into the cell_masks array with
+        # synthetic labels so count_nuclei_for_tile can process them.
+        synthetic_label_map = {}  # det_idx -> synthetic mask label
+        next_label = int(cell_masks.max()) + 1 if cell_masks.size > 0 else 1
+        # Check if any contour-based detections need synthetic labels
+        has_contour_dets = any(
+            detections[di].get("tile_mask_label") is None
+            and detections[di].get("mask_label") is None
+            and detections[di].get("outer_contour_global") is not None
+            for di in det_indices
+        )
+        # Ensure dtype can hold new synthetic labels
+        if has_contour_dets and np.issubdtype(cell_masks.dtype, np.integer):
+            max_needed = next_label + len(det_indices)
+            if max_needed > np.iinfo(cell_masks.dtype).max:
+                cell_masks = cell_masks.astype(np.int32)
+        for det_idx in det_indices:
+            det = detections[det_idx]
+            if det.get("tile_mask_label") is not None or det.get("mask_label") is not None:
+                continue  # has a real mask label — skip
+            contour = det.get("outer_contour_global")
+            if contour is None:
+                continue
+            # Convert global contour to tile-local coordinates
+            try:
+                pts = np.array(contour, dtype=np.float64)
+                if pts.ndim != 2 or pts.shape[1] != 2:
+                    continue
+                # Contour points are [x, y] in global pixel coords
+                local_x = pts[:, 0] - tile_x
+                local_y = pts[:, 1] - tile_y
+                # Rasterize polygon into tile mask (row=y, col=x)
+                rr, cc = skimage_polygon(local_y, local_x, shape=(tile_h, tile_w))
+                if len(rr) == 0:
+                    continue
+                cell_masks[rr, cc] = next_label
+                synthetic_label_map[det_idx] = next_label
+                next_label += 1
+            except Exception as e:
+                logger.debug(f"Failed to rasterize contour for {det.get('uid')}: {e}")
+                continue
+
         # Extract nuclear channel tile region
         # tile_x, tile_y are global pixel coordinates of tile origin
         # CZI data is in (H, W) = (rows, cols) format
         nuc_tile = nuc_data[tile_y - y_start:tile_y - y_start + tile_h, tile_x - x_start:tile_x - x_start + tile_w]
 
-        if nuc_tile.shape != cell_masks.shape:
+        if nuc_tile.shape != cell_masks.shape[:2]:
             logger.warning(
                 f"Tile ({tile_x}, {tile_y}): shape mismatch nuc={nuc_tile.shape} "
                 f"vs masks={cell_masks.shape}, cropping to common region"
@@ -279,7 +387,10 @@ def main():
         # Enrich detections with nuclear features
         for det_idx in det_indices:
             det = detections[det_idx]
-            mask_label = det.get("tile_mask_label", det.get("mask_label"))
+            # Use synthetic label for contour-based detections, or real mask_label
+            mask_label = synthetic_label_map.get(det_idx)
+            if mask_label is None:
+                mask_label = det.get("tile_mask_label", det.get("mask_label"))
             if mask_label is None:
                 continue
             mask_label = int(mask_label)
