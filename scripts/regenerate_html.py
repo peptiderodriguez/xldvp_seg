@@ -91,8 +91,7 @@ def create_sample_from_contours(det, channel_arrays, display_channels, x_start, 
     features = det.get('features', {})
 
     # Get center in full-res CZI-global pixel coords
-    # Prefer global_center (slide-level), fall back to center (may be tile-local for some detections)
-    center = det.get('global_center') or det.get('center')
+    center = det.get('global_center')
     if center is None or len(center) < 2:
         return None
     cx, cy = float(center[0]), float(center[1])
