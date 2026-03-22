@@ -211,8 +211,12 @@ def extract_marker_values(detections: list[dict], channel: int,
         feature: Intensity statistic — 'mean', 'median', 'p75', 'p95', etc.
         use_raw: If True, read ``ch{N}_{feature}_raw`` (pre-bg-correction).
     """
-    suffix = f'{feature}_raw' if use_raw else feature
-    key = f'ch{channel}_{suffix}'
+    # SNR is already a ratio — use_raw doesn't apply
+    if feature == 'snr':
+        key = f'ch{channel}_snr'
+    else:
+        suffix = f'{feature}_raw' if use_raw else feature
+        key = f'ch{channel}_{suffix}'
     values = np.array([
         d.get('features', {}).get(key, 0.0) for d in detections
     ], dtype=np.float64)
@@ -274,9 +278,12 @@ def classify_single_marker(detections: list[dict], channel: int,
                 f"range [{raw_values.min():.1f}, {raw_values.max():.1f}], "
                 f"median {np.median(raw_values):.1f}")
 
-    # Background subtraction
+    # Background subtraction (skip for SNR — already a ratio)
     per_cell_bg = None
-    if global_background:
+    if intensity_feature == 'snr':
+        values = raw_values
+        logger.info("  SNR mode — skipping background subtraction (already signal/background ratio)")
+    elif global_background:
         # Global: subtract slide-wide median from all cells.
         # Avoids local-neighbor inflation for regional markers.
         global_bg = float(np.median(raw_values))
@@ -446,8 +453,8 @@ def parse_args() -> argparse.Namespace:
                         help='Per-marker SNR thresholds, comma-separated matching --marker-name order '
                              '(e.g. "3.0,4.0,2.5" for DCN>=3, GluI>=4, Pck1>=2.5). '
                              'Falls back to --snr-threshold for any unspecified markers.')
-    parser.add_argument('--intensity-feature', default='mean',
-                        choices=['mean', 'median', 'p25', 'p75', 'p95'],
+    parser.add_argument('--intensity-feature', default='snr',
+                        choices=['snr', 'mean', 'median', 'p25', 'p75', 'p95'],
                         help='Default intensity statistic to threshold on (default: mean). '
                              'Override per-marker with --intensity-features.')
     parser.add_argument('--intensity-features', default=None,
@@ -650,7 +657,7 @@ def main():
         if len(feat_list) != len(names):
             raise ValueError(f"--intensity-features has {len(feat_list)} values but "
                              f"--marker-name has {len(names)} markers: {names}")
-        valid_feats = {'mean', 'median', 'p25', 'p75', 'p95'}
+        valid_feats = {'snr', 'mean', 'median', 'p25', 'p75', 'p95'}
         for f in feat_list:
             if f not in valid_feats:
                 raise ValueError(f"Invalid feature '{f}' in --intensity-features. Choices: {valid_feats}")
