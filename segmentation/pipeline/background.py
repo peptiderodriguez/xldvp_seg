@@ -182,13 +182,13 @@ def correct_all_channels(
     _cached_tree_and_indices = None
 
     for ch in channels:
-        # Use raw median for background estimation (uncorrected — before bg subtraction)
-        # On first run, ch{N}_median is raw (no _raw copy yet). On re-run, use _raw.
-        raw_key = f"ch{ch}_median_raw"
-        fallback_key = f"ch{ch}_median"
+        # Read raw (uncorrected) median pixel intensity for background estimation.
+        # After correct_all_channels runs: ch{N}_median = corrected, ch{N}_median_raw = original.
+        # Before correct_all_channels (first pipeline run): ch{N}_median = original, no _raw yet.
+        has_raw = f"ch{ch}_median_raw" in detections[0].get("features", {}) if detections else False
+        value_key = f"ch{ch}_median_raw" if has_raw else f"ch{ch}_median"
         values = np.array(
-            [d.get("features", {}).get(raw_key, d.get("features", {}).get(fallback_key, 0.0))
-             for d in detections],
+            [d.get("features", {}).get(value_key, 0.0) for d in detections],
             dtype=np.float64,
         )
         corrected_median, per_cell_bg, _cached_tree_and_indices = local_background_subtract(
