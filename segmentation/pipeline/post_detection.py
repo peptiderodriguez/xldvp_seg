@@ -302,13 +302,12 @@ def _phase1_tile(
                 dilated_mask = (masks_arr == label).astype(bool)
             n_ok += 1
 
-        quick_means = {}
+        quick_medians = {}
         if tile_channels and dilated_mask.any():
             for ch, data in tile_channels.items():
                 pixels = data[dilated_mask].astype(np.float32)
-                nonzero = pixels[pixels > 0]
-                quick_means[ch] = float(np.mean(nonzero)) if len(nonzero) > 0 else 0.0
-        det["_bg_quick_means"] = quick_means
+                quick_medians[ch] = float(np.median(pixels))
+        det["_bg_quick_means"] = quick_medians  # key name kept for compatibility
 
     return n_ok, n_fail
 
@@ -414,9 +413,9 @@ def _phase3_tile(
         for ch in tile_channels:
             ch_bg = bg.get(ch, 0.0)
             if ch_bg > 0:
-                raw_mean = feat.get(f"ch{ch}_mean_raw", 0.0)
+                raw_median = feat.get(f"ch{ch}_median_raw", 0.0)
                 feat[f"ch{ch}_background"] = ch_bg
-                feat[f"ch{ch}_snr"] = float(raw_mean / ch_bg)
+                feat[f"ch{ch}_snr"] = float(raw_median / ch_bg)
 
         if det.get("contour_dilated_px") is not None:
             feat["area_um2"] = float(int(crop_mask.sum()) * pixel_size_um ** 2)

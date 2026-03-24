@@ -14,9 +14,9 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO="${REPO:-$(dirname "$SCRIPT_DIR")}"
 
 # Find xldvp_seg python: explicit env var > conda env detection > common paths
-if [ -n "$XLDVP_PYTHON" ] && [ -x "$XLDVP_PYTHON" ]; then
+if [ -n "${XLDVP_PYTHON:-}" ] && [ -x "${XLDVP_PYTHON:-}" ]; then
     : # User-specified, use as-is
-elif [ -n "$MKSEG_PYTHON" ] && [ -x "$MKSEG_PYTHON" ]; then
+elif [ -n "${MKSEG_PYTHON:-}" ] && [ -x "${MKSEG_PYTHON:-}" ]; then
     XLDVP_PYTHON="$MKSEG_PYTHON"
 else
     XLDVP_PYTHON=""
@@ -30,8 +30,7 @@ else
     done
     # Fallback: search common paths (HOME may differ from actual conda location)
     if [ -z "$XLDVP_PYTHON" ]; then
-        for _base in "$HOME" /fs/gpfs41/lv07/fileset03/home/*/rodriguez \
-                     /fs/gpfs41/lv07/fileset03/home/*; do
+        for _base in "$HOME" "$(getent passwd "$(whoami)" 2>/dev/null | cut -d: -f6)"; do
             for _env in xldvp_seg mkseg; do
                 for _mgr in miniforge3 miniconda3 anaconda3 mambaforge; do
                     _p="$_base/$_mgr/envs/$_env/bin/python"

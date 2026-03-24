@@ -127,7 +127,8 @@ def correct_all_channels(
       ``ch{N}_std``, ``_variance``, ``_iqr``, ``_dynamic_range``,
       ``_skewness``, ``_kurtosis``
     * **Added**:
-      ``ch{N}_mean_raw``, ``ch{N}_background``, ``ch{N}_snr``
+      ``ch{N}_{stat}_raw`` (raw copies), ``ch{N}_background`` (local bg),
+      ``ch{N}_snr`` (median_raw / background)
 
     Args:
         detections: List of detection dicts (mutated in-place).
@@ -174,9 +175,9 @@ def correct_all_channels(
     logger.info("Background-correcting %d channels: %s", len(channels), channels)
     n_det = len(detections)
 
-    # --- Step 1: per-cell background from ch{N}_mean ---
+    # --- Step 1: per-cell background from ch{N}_median (or median_raw on re-run) ---
     channel_bg: dict[int, np.ndarray] = {}
-    channel_corrected_mean: dict[int, np.ndarray] = {}
+    channel_corrected_median: dict[int, np.ndarray] = {}
 
     # Build the KD-tree once and reuse across all channels
     _cached_tree_and_indices = None
@@ -196,7 +197,7 @@ def correct_all_channels(
             tree_and_indices=_cached_tree_and_indices,
         )
         channel_bg[ch] = per_cell_bg
-        channel_corrected_mean[ch] = corrected_median
+        channel_corrected_median[ch] = corrected_median
 
         bg_median_val = float(np.median(per_cell_bg))
         nonzero = corrected_median[corrected_median > 0]
@@ -238,11 +239,11 @@ def correct_all_channels(
                 float(median_raw[i] / per_cell_bg[i]) if per_cell_bg[i] > 0 else 0.0
             )
 
-        # cv = std / corrected_mean
+        # cv = std / corrected_mean (CV is defined as std/mean, not std/median)
         if f"ch{ch}_cv" in sample_keys and f"ch{ch}_std" in sample_keys:
             for i, det in enumerate(detections):
                 feat = det["features"]
-                corr_mean = channel_corrected_mean[ch][i]
+                corr_mean = feat.get(f"ch{ch}_mean", 0.0)
                 std = feat.get(f"ch{ch}_std", 0.0)
                 feat[f"ch{ch}_cv"] = float(std / corr_mean) if corr_mean > 0 else 0.0
 
@@ -266,14 +267,14 @@ def correct_all_channels(
             if ratio_key in sample_keys:
                 for i, det in enumerate(detections):
                     feat = det["features"]
-                    a = channel_corrected_mean[ch_a][i]
-                    b = channel_corrected_mean[ch_b][i]
+                    a = channel_corrected_median[ch_a][i]
+                    b = channel_corrected_median[ch_b][i]
                     feat[ratio_key] = float(a / b) if b > 0 else 0.0
             if diff_key in sample_keys:
                 for i, det in enumerate(detections):
                     feat = det["features"]
-                    a = channel_corrected_mean[ch_a][i]
-                    b = channel_corrected_mean[ch_b][i]
+                    a = channel_corrected_median[ch_a][i]
+                    b = channel_corrected_median[ch_b][i]
                     feat[diff_key] = float(a - b)
 
     return channels

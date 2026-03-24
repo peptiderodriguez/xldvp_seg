@@ -469,7 +469,7 @@ def parse_args() -> argparse.Namespace:
                              'Falls back to --snr-threshold for any unspecified markers.')
     parser.add_argument('--intensity-feature', default='snr',
                         choices=['snr', 'mean', 'median', 'p25', 'p75', 'p95'],
-                        help='Default intensity statistic to threshold on (default: mean). '
+                        help='Default intensity statistic to threshold on (default: snr). '
                              'Override per-marker with --intensity-features.')
     parser.add_argument('--intensity-features', default=None,
                         help='Per-marker intensity features, comma-separated matching --marker-name '

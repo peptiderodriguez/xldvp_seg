@@ -98,7 +98,7 @@ def create_sample_from_contours(det, channel_arrays, display_channels, x_start, 
 
     # Determine crop size — use contour bounding box when available
     # so the entire detection (including large vessels) is always visible
-    contour_keys = ['inner_contour_global', 'outer_contour_global', 'sma_contour_global']
+    contour_keys = ['inner_contour_global', 'outer_contour_global', 'sma_contour_global', 'contour_dilated_px']
     all_contour_pts = []
     for ck in contour_keys:
         cd = det.get(ck)
