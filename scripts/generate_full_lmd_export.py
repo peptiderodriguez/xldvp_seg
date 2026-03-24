@@ -16,9 +16,6 @@ import sys
 from pathlib import Path
 os.environ['HDF5_USE_FILE_LOCKING'] = 'FALSE'
 
-# Ensure repo root is on sys.path for imports
-sys.path.insert(0, str(Path(__file__).parent.parent))
-
 import json
 import argparse
 import numpy as np

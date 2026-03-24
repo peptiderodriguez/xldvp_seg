@@ -13,7 +13,6 @@ within each tier.
 
 import argparse
 import json
-import sys
 from pathlib import Path
 from collections import defaultdict
 
@@ -23,10 +22,6 @@ import numpy as np
 from PIL import Image
 from tqdm import tqdm
 from aicspylibczi import CziFile
-
-# Add repo root to path
-REPO = Path(__file__).resolve().parent.parent
-sys.path.insert(0, str(REPO))
 
 from segmentation.io.html_generator import HTMLPageGenerator
 from segmentation.io.html_export import (

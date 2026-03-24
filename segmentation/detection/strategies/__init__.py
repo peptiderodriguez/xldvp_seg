@@ -5,13 +5,17 @@ Each strategy encapsulates the complete detection pipeline for a specific cell t
 - segment(): Initial mask generation (thresholding, model inference, etc.)
 - filter(): Post-processing and classification
 
+Strategies self-register with the StrategyRegistry via @register_strategy decorators.
+Importing this package triggers all registrations.
+
 Available strategies:
-- MKStrategy: Megakaryocyte detection (SAM2 auto mask + size filter + optional classifier)
-- CellStrategy: Generic cell detection (Cellpose + SAM2 refinement)
-- NMJStrategy: Neuromuscular junction detection (intensity threshold + elongation + ResNet)
-- VesselStrategy: Blood vessel detection (ring structures via contour hierarchy + ellipse fitting)
-- MesotheliumStrategy: Mesothelial ribbon detection for laser microdissection
-- IsletStrategy: Pancreatic islet cell detection (Cellpose membrane+nuclear + SAM2)
+- NMJStrategy: Neuromuscular junction detection (intensity threshold + morphology + watershed)
+- MKStrategy: Megakaryocyte detection (SAM2 auto-mask + size filter)
+- CellStrategy: Generic cell detection (Cellpose 2-channel cyto+nuc + SAM2 embeddings)
+- VesselStrategy: Blood vessel detection (SMA+ ring detection, 3-contour hierarchy)
+- IsletStrategy: Pancreatic islet cell detection (Cellpose membrane+nuclear + marker classification)
+- TissuePatternStrategy: Whole-mount tissue pattern detection (Cellpose + spatial frequency)
+- MesotheliumStrategy: Mesothelial ribbon detection (ridge detection for ribbon structures)
 
 Mixins:
 - MultiChannelFeatureMixin: Extract per-channel features from multi-channel images

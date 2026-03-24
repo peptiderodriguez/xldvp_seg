@@ -44,9 +44,6 @@ import math
 import sys
 from pathlib import Path
 
-# Allow running as a standalone script regardless of CWD
-sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
-
 import numpy as np
 
 from segmentation.lmd.selection import select_cells_for_lmd

@@ -9,10 +9,6 @@ import pytest
 import numpy as np
 from unittest.mock import MagicMock
 
-import sys
-from pathlib import Path
-sys.path.insert(0, str(Path(__file__).parent.parent))
-
 from segmentation.processing.coordinates import (
     regionprop_centroid_to_xy,
     xy_to_array_index,

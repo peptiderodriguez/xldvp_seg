@@ -27,9 +27,6 @@ import cv2
 import numpy as np
 import matplotlib.pyplot as plt
 
-# Add project root to path
-sys.path.insert(0, str(Path(__file__).parent.parent))
-
 from segmentation.io.czi_loader import CZILoader
 from segmentation.preprocessing import (
     correct_photobleaching,

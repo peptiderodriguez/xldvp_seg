@@ -570,14 +570,22 @@ def run_pipeline(args):
 
         # Run dedup if reloaded from tiles (not from deduped detections JSON)
         if not skip_dedup and args.tile_overlap > 0 and len(all_detections) > 0 and not is_multiscale:
-            from segmentation.processing.deduplication import deduplicate_by_mask_overlap
             pre_dedup = len(all_detections)
             mask_fn = f'{args.cell_type}_masks.h5'
             dedup_sort = 'confidence' if getattr(args, 'dedup_by_confidence', False) else 'area'
-            all_detections = deduplicate_by_mask_overlap(
-                all_detections, tiles_dir, min_overlap_fraction=0.1,
-                mask_filename=mask_fn, sort_by=dedup_sort,
-            )
+            if getattr(args, 'dedup_method', 'mask_overlap') == 'iou_nms':
+                from segmentation.processing.deduplication import deduplicate_by_iou_nms
+                all_detections = deduplicate_by_iou_nms(
+                    all_detections, tiles_dir,
+                    iou_threshold=getattr(args, 'iou_threshold', 0.2),
+                    mask_filename=mask_fn, sort_by=dedup_sort,
+                )
+            else:
+                from segmentation.processing.deduplication import deduplicate_by_mask_overlap
+                all_detections = deduplicate_by_mask_overlap(
+                    all_detections, tiles_dir, min_overlap_fraction=0.1,
+                    mask_filename=mask_fn, sort_by=dedup_sort,
+                )
             logger.info(f"Dedup (resume): {pre_dedup} -> {len(all_detections)}")
 
         # Post-dedup processing (resume path) — skip already-completed steps
@@ -1483,14 +1491,22 @@ def run_pipeline(args):
     # Uses actual mask pixel overlap (loads HDF5 mask files) for accurate dedup
     # Skip for multiscale -- already deduped by contour IoU in merge_detections_across_scales()
     if not is_multiscale and args.tile_overlap > 0 and len(all_detections) > 0:
-        from segmentation.processing.deduplication import deduplicate_by_mask_overlap
         pre_dedup = len(all_detections)
         mask_fn = f'{args.cell_type}_masks.h5'
         dedup_sort = 'confidence' if getattr(args, 'dedup_by_confidence', False) else 'area'
-        all_detections = deduplicate_by_mask_overlap(
-            all_detections, tiles_dir, min_overlap_fraction=0.1,
-            mask_filename=mask_fn, sort_by=dedup_sort,
-        )
+        if getattr(args, 'dedup_method', 'mask_overlap') == 'iou_nms':
+            from segmentation.processing.deduplication import deduplicate_by_iou_nms
+            all_detections = deduplicate_by_iou_nms(
+                all_detections, tiles_dir,
+                iou_threshold=getattr(args, 'iou_threshold', 0.2),
+                mask_filename=mask_fn, sort_by=dedup_sort,
+            )
+        else:
+            from segmentation.processing.deduplication import deduplicate_by_mask_overlap
+            all_detections = deduplicate_by_mask_overlap(
+                all_detections, tiles_dir, min_overlap_fraction=0.1,
+                mask_filename=mask_fn, sort_by=dedup_sort,
+            )
 
         # Filter HTML samples to match deduped detections and remove duplicate UIDs
         deduped_uids = {det.get('uid', det.get('id', '')) for det in all_detections}

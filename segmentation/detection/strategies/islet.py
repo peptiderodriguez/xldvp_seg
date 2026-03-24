@@ -21,6 +21,7 @@ from scipy import ndimage
 
 from .cell import CellStrategy
 from .base import Detection
+from segmentation.detection.registry import register_strategy
 from segmentation.utils.logging import get_logger
 from segmentation.utils.feature_extraction import extract_morphological_features
 
@@ -56,6 +57,11 @@ def _percentile_normalize_channel(channel: np.ndarray) -> np.ndarray:
     return result
 
 
+@register_strategy(
+    "islet",
+    description="Pancreatic islet cell detection (Cellpose membrane+nuclear + marker classification)",
+    channels=["membrane", "nuclear"],
+)
 class IsletStrategy(CellStrategy):
     """
     Pancreatic islet cell detection using Cellpose (membrane+nuclear) + SAM2.

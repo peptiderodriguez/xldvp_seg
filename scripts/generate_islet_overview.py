@@ -32,10 +32,6 @@ import h5py
 import numpy as np
 from sklearn.cluster import DBSCAN
 
-# Add repo root to path
-REPO = Path(__file__).resolve().parent.parent
-sys.path.insert(0, str(REPO))
-
 from segmentation.io.czi_loader import get_loader
 from segmentation.utils.islet_utils import classify_islet_marker, compute_islet_marker_thresholds
 

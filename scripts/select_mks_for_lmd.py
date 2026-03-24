@@ -15,8 +15,6 @@ from pathlib import Path
 
 import numpy as np
 
-sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
-
 from segmentation.lmd.selection import select_cells_for_lmd
 from segmentation.lmd.well_plate import generate_multiplate_wells, insert_empty_wells, WELLS_PER_PLATE
 from segmentation.utils.json_utils import fast_json_load, atomic_json_dump

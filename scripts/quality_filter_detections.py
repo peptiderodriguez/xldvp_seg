@@ -46,8 +46,6 @@ import math
 import sys
 from pathlib import Path
 
-sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
-
 from segmentation.utils.json_utils import atomic_json_dump, fast_json_load
 from segmentation.utils.logging import get_logger, setup_logging
 from segmentation.utils.timestamps import timestamped_path, update_symlink

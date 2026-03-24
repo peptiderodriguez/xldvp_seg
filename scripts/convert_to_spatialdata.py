@@ -43,11 +43,6 @@ from pathlib import Path
 
 import numpy as np
 
-# Ensure repo root is on PYTHONPATH
-_repo = Path(__file__).resolve().parent.parent
-if str(_repo) not in sys.path:
-    sys.path.insert(0, str(_repo))
-
 from segmentation.utils.logging import get_logger, setup_logging
 from segmentation.utils.json_utils import fast_json_load
 from segmentation.utils.detection_utils import load_detections

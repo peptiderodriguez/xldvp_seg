@@ -22,12 +22,18 @@ from typing import Dict, Any, List, Optional, Tuple
 
 from .cell import CellStrategy
 from .islet import _percentile_normalize_channel
+from segmentation.detection.registry import register_strategy
 from segmentation.utils.logging import get_logger
 from segmentation.utils.feature_extraction import extract_morphological_features
 
 logger = get_logger(__name__)
 
 
+@register_strategy(
+    "tissue_pattern",
+    description="Whole-mount tissue pattern detection (Cellpose + spatial frequency analysis)",
+    channels=[],
+)
 class TissuePatternStrategy(CellStrategy):
     """
     Tissue pattern cell detection using Cellpose on summed channels.

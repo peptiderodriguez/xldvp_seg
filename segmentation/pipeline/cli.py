@@ -256,6 +256,15 @@ def build_parser():
     parser.add_argument('--dedup-by-confidence', action='store_true', default=False,
                         help='Sort by confidence (score) instead of area during deduplication. '
                              'Default: sort by area (largest mask wins overlap).')
+    parser.add_argument('--dedup-method', type=str, default='mask_overlap',
+                        choices=['mask_overlap', 'iou_nms'],
+                        help='Deduplication method: mask_overlap (pixel-exact, default; uses '
+                             'fraction of smaller mask overlap >= 0.1) or iou_nms (contour-based '
+                             'IoU with STRtree, faster + less memory but may miss size-mismatched '
+                             'overlaps). Benchmark both before switching default.')
+    parser.add_argument('--iou-threshold', type=float, default=0.2,
+                        help='IoU threshold for iou_nms dedup (default: 0.2). '
+                             'IoU = intersection/union of contour polygons.')
 
     # Tissue pattern parameters
     parser.add_argument('--tp-detection-channels', type=str, default='0,3',

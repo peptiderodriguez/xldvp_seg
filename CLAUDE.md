@@ -42,12 +42,15 @@ These behaviors apply throughout every Claude Code session on this project:
 ## Development Commands
 
 ```bash
-# Environment
+# Install (editable, registers xlseg CLI + segmentation package)
+pip install -e .
+
+# Environment (for scripts that are not yet xlseg subcommands)
 export REPO="$(cd "$(dirname "${BASH_SOURCE[0]:-$0}")"; pwd)"  # or set manually
 export XLDVP_PYTHON="${XLDVP_PYTHON:-$(which python)}"          # xldvp_seg conda env python
 
 # Run all tests
-PYTHONPATH=$REPO $XLDVP_PYTHON -m pytest tests/ -v --tb=short
+$XLDVP_PYTHON -m pytest tests/ -v --tb=short
 
 # Run single test file
 PYTHONPATH=$REPO $XLDVP_PYTHON -m pytest tests/test_coordinates.py -v
@@ -81,11 +84,26 @@ Tests are in `tests/` using pytest. Fixtures in `conftest.py`: `sample_tile` (51
 | `test_mk_hspc_imports.py` | Feature dimension constants match config |
 | `test_nmj_imports.py` | NMJ strategy class methods, classifier loaders |
 
-Tests use `sys.path.insert(0, ...)` before importing `segmentation.*` to handle CWD reset.
+Tests rely on `pip install -e .` (or `PYTHONPATH=$REPO`) for `segmentation.*` imports.
 
 ---
 
 ## Quick Start
+
+After `pip install -e .`, the `xlseg` CLI is available:
+
+```bash
+xlseg info /path/to/slide.czi           # Inspect CZI metadata
+xlseg detect --czi-path slide.czi ...   # Run detection pipeline
+xlseg classify --detections ...          # Train RF classifier
+xlseg markers --detections ...           # Marker pos/neg classification
+xlseg score --detections ... --classifier ... # Score detections
+xlseg export-lmd --detections ...        # LMD export
+xlseg serve /path/to/html               # Serve HTML viewer
+xlseg system                             # Show system info
+xlseg strategies                         # List detection strategies
+xlseg models                             # List model checkpoints
+```
 
 Type `/analyze` inside Claude Code to begin — it detects your system, inspects your data, and walks you through the full pipeline.
 
@@ -388,7 +406,11 @@ CZI file → czi_loader.py (channel resolution, tiling)
 
 ### Detection Strategies (`segmentation/detection/strategies/`)
 
-All inherit from `base.py`, use `MultiChannelFeatureMixin` (from `mixins.py`), implement `detect_in_tile()`. Selection via `strategy_factory.py`.
+All inherit from `base.py`, use `MultiChannelFeatureMixin` (from `mixins.py`), implement `detect_in_tile()`. Strategies self-register via `@register_strategy` decorator in `segmentation/detection/registry.py`. Selection via `strategy_factory.py` (registry lookup + per-strategy kwargs builder).
+
+### Model Registry (`segmentation/models/registry.py`)
+
+Metadata catalog for all models (feature extractors + segmenters). Tracks name, feature_dim, modality (fluorescence/brightfield/both), license, HuggingFace URL, and gated status. Does NOT handle loading — that stays in `ModelManager`. Use `list_models(modality="brightfield")` to filter. Brightfield FMs (UNI2, Virchow2, CONCH, Phikon-v2) are gated on HuggingFace — download via `xlseg download-models --brightfield`.
 
 ### Multi-GPU Processing (`segmentation/processing/`)
 
@@ -456,6 +478,16 @@ All coordinates are [x, y] (horizontal, vertical). UID format: `{slide}_{celltyp
 - `--sequential` does NOT exist — use `--num-gpus 1`
 - `--nuclear-channel` / `--membrane-channel` are islet-only (validated only for `cell_type=='islet'`)
 - `--sample-fraction` is ALWAYS 1.0 — detect 100%, use `--html-sample-fraction` to subsample HTML only
+
+### Deduplication
+
+```bash
+--dedup-method mask_overlap  # [Default] Pixel-exact mask overlap (>10% of smaller mask)
+--dedup-method iou_nms       # Contour-based IoU NMS with Shapely STRtree (faster, less memory)
+--iou-threshold 0.2          # IoU threshold for iou_nms method (default: 0.2)
+```
+
+YAML equivalents: `dedup_method`, `iou_threshold`. Note: IoU and overlap-fraction are different metrics — IoU may miss size-mismatched overlaps. Benchmark both before switching default.
 
 ### Post-Dedup Processing (default ON)
 

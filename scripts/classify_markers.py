@@ -46,9 +46,6 @@ matplotlib.use('Agg')
 import matplotlib.pyplot as plt
 import numpy as np
 
-REPO = Path(__file__).resolve().parent.parent
-sys.path.insert(0, str(REPO))
-
 from segmentation.utils.logging import get_logger, setup_logging
 from segmentation.utils.json_utils import NumpyEncoder, atomic_json_dump
 from segmentation.pipeline.background import (

@@ -999,7 +999,6 @@ def main():
         # Try to get from CZI filename
         czi_name = Path(args.czi_path).stem
         try:
-            sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
             from segmentation.io.czi_loader import parse_markers_from_filename
             markers = parse_markers_from_filename(czi_name)
             # Map display channel index to marker name

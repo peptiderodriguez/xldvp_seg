@@ -39,9 +39,6 @@ from sklearn.metrics import (
 )
 from sklearn.model_selection import StratifiedKFold
 
-REPO = Path(__file__).resolve().parent.parent
-sys.path.insert(0, str(REPO))
-
 from segmentation.utils.logging import get_logger, setup_logging
 from segmentation.utils.json_utils import atomic_json_dump, fast_json_load
 

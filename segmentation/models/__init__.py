@@ -34,9 +34,22 @@ from .manager import (
     CHECKPOINT_PATHS,
 )
 
+from .registry import (
+    ModelRegistry,
+    ModelMeta,
+    list_models,
+    get_model_info,
+    register_model,
+)
+
 __all__ = [
     'ModelManager',
     'get_model_manager',
     'find_checkpoint',
     'CHECKPOINT_PATHS',
+    'ModelRegistry',
+    'ModelMeta',
+    'list_models',
+    'get_model_info',
+    'register_model',
 ]

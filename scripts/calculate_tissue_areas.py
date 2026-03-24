@@ -35,8 +35,6 @@ from scipy import ndimage
 from skimage.draw import polygon as draw_polygon
 from skimage.morphology import closing, dilation, disk, erosion, remove_small_objects
 
-# Use the pipeline's own tissue detection
-sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from segmentation.detection.tissue import (
     _normalize_to_uint8,
     calculate_block_variances,

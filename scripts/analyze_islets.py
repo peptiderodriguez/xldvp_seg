@@ -36,10 +36,6 @@ import h5py
 import numpy as np
 from scipy.spatial import ConvexHull, cKDTree
 
-# Add repo root to path
-REPO = Path(__file__).resolve().parent.parent
-sys.path.insert(0, str(REPO))
-
 try:
     import hdf5plugin  # noqa: F401 — registers LZ4 codec for h5py
 except ImportError:

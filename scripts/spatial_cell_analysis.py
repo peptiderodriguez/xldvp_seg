@@ -29,10 +29,6 @@ from pathlib import Path
 
 import numpy as np
 
-# Add repo root to path
-REPO = Path(__file__).resolve().parent.parent
-sys.path.insert(0, str(REPO))
-
 from segmentation.utils.logging import get_logger, setup_logging
 
 from segmentation.utils.detection_utils import (

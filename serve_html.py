@@ -18,9 +18,6 @@ import argparse
 import sys
 from pathlib import Path
 
-REPO = Path(__file__).resolve().parent
-sys.path.insert(0, str(REPO))
-
 
 def main():
     parser = argparse.ArgumentParser(description='Serve HTML with Cloudflare tunnel')

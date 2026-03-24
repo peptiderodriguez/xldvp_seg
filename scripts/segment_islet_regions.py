@@ -41,9 +41,7 @@ from pathlib import Path
 import numpy as np
 from scipy import ndimage
 
-# Add repo root to path
 REPO = Path(__file__).resolve().parent.parent
-sys.path.insert(0, str(REPO))
 
 try:
     import hdf5plugin  # noqa: F401 — registers LZ4 codec for h5py

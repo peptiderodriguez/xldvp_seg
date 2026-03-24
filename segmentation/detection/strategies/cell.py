@@ -18,6 +18,7 @@ from scipy import ndimage
 
 from .base import DetectionStrategy, Detection, _safe_to_uint8
 from .mixins import MultiChannelFeatureMixin
+from segmentation.detection.registry import register_strategy
 from segmentation.utils.logging import get_logger
 from segmentation.utils.feature_extraction import (
     extract_morphological_features,
@@ -26,6 +27,11 @@ from segmentation.utils.feature_extraction import (
 logger = get_logger(__name__)
 
 
+@register_strategy(
+    "cell",
+    description="Generic cell detection (Cellpose 2-channel cyto+nuc + SAM2 embeddings)",
+    channels=["cyto", "nuc"],
+)
 class CellStrategy(DetectionStrategy, MultiChannelFeatureMixin):
     """
     Generic cell detection strategy using Cellpose-SAM (cpsam).

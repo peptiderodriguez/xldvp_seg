@@ -38,10 +38,6 @@ import cv2
 import numpy as np
 from PIL import Image
 
-# Add repo root to path
-REPO = Path(__file__).resolve().parent.parent
-sys.path.insert(0, str(REPO))
-
 from segmentation.utils.logging import get_logger, setup_logging
 
 logger = get_logger(__name__)

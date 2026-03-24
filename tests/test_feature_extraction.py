@@ -30,15 +30,10 @@ Test categories:
 6. Combined feature vector tests
 """
 
-import sys
 import unittest
-from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 import numpy as np
-
-# Path setup to allow imports from repo root
-sys.path.insert(0, str(Path(__file__).parent.parent))
 
 
 def _check_torch_available():

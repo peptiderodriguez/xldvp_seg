@@ -18,6 +18,7 @@ from typing import Dict, Any, List, Optional, Tuple
 from scipy import ndimage
 
 from .base import DetectionStrategy, Detection
+from segmentation.detection.registry import register_strategy
 from segmentation.utils.logging import get_logger
 
 logger = get_logger(__name__)
@@ -146,6 +147,11 @@ def _skeleton_chunk_to_polygon(
     return polygon
 
 
+@register_strategy(
+    "mesothelium",
+    description="Mesothelial ribbon detection (ridge detection for ribbon structures)",
+    channels=[],
+)
 class MesotheliumStrategy(DetectionStrategy):
     """
     Detection strategy for mesothelial ribbon structures.

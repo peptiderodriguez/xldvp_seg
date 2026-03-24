@@ -28,6 +28,7 @@ from skimage.morphology import skeletonize, remove_small_objects, binary_opening
 from skimage.measure import label, regionprops
 
 from .base import DetectionStrategy, Detection, _safe_to_uint8
+from segmentation.detection.registry import register_strategy
 from .mixins import MultiChannelFeatureMixin
 from segmentation.utils.logging import get_logger
 from segmentation.utils.feature_extraction import (
@@ -40,6 +41,11 @@ logger = get_logger(__name__)
 # Issue #7: Local extract_morphological_features removed - now imported from shared module
 
 
+@register_strategy(
+    "nmj",
+    description="Neuromuscular junction detection (intensity threshold + morphology + watershed)",
+    channels=["BTX"],
+)
 class NMJStrategy(DetectionStrategy, MultiChannelFeatureMixin):
     """
     NMJ detection strategy using intensity threshold + solidity filtering.

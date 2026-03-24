@@ -16,14 +16,9 @@ Usage:
 """
 
 import argparse
-import sys
 from pathlib import Path
 
 import numpy as np
-
-# Add repo root to path
-REPO = Path(__file__).resolve().parent.parent
-sys.path.insert(0, str(REPO))
 
 from segmentation.lmd.clustering import two_stage_clustering
 from segmentation.utils.json_utils import fast_json_load, atomic_json_dump

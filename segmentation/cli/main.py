@@ -1,0 +1,127 @@
+"""xlseg CLI: unified entry point for the xldvp_seg pipeline.
+
+Provides subcommands that delegate to the underlying scripts,
+so users can run ``xlseg detect ...`` instead of
+``python run_segmentation.py ...``.
+"""
+
+import argparse
+import runpy
+import sys
+from pathlib import Path
+
+# Repo root -- two levels up from segmentation/cli/main.py
+_REPO = Path(__file__).resolve().parent.parent.parent
+
+
+# ---------------------------------------------------------------------------
+# Dispatch helpers
+# ---------------------------------------------------------------------------
+
+def _run_script(script_relpath: str, remaining: list[str]) -> None:
+    """Run a script via runpy.run_path, forwarding remaining CLI args."""
+    script = _REPO / script_relpath
+    sys.argv = [str(script)] + remaining
+    runpy.run_path(str(script), run_name="__main__")
+
+
+def _run_detect(remaining):
+    sys.argv = ["xlseg detect"] + remaining
+    from run_segmentation import main
+    main()
+
+
+def _run_classify(remaining):
+    sys.argv = ["xlseg classify"] + remaining
+    from train_classifier import main
+    main()
+
+
+def _run_export_lmd(remaining):
+    sys.argv = ["xlseg export-lmd"] + remaining
+    from run_lmd_export import main
+    main()
+
+
+def _run_serve(remaining):
+    sys.argv = ["xlseg serve"] + remaining
+    from serve_html import main
+    main()
+
+
+def _run_info(remaining):
+    _run_script("scripts/czi_info.py", remaining)
+
+
+def _run_markers(remaining):
+    _run_script("scripts/classify_markers.py", remaining)
+
+
+def _run_score(remaining):
+    _run_script("scripts/apply_classifier.py", remaining)
+
+
+def _run_system(remaining):
+    _run_script("scripts/system_info.py", remaining)
+
+
+def _run_models(remaining):
+    """Print registered models from the model registry."""
+    from segmentation.models.registry import ModelRegistry
+    ModelRegistry.print_models()
+
+
+def _run_strategies(remaining):
+    """Print registered detection strategies."""
+    import segmentation.detection.strategies  # noqa: F401 — trigger registration
+    from segmentation.detection.registry import StrategyRegistry
+    StrategyRegistry.print_strategies()
+
+
+# ---------------------------------------------------------------------------
+# Dispatch table
+# ---------------------------------------------------------------------------
+
+_DISPATCH = {
+    "info": _run_info,
+    "detect": _run_detect,
+    "classify": _run_classify,
+    "markers": _run_markers,
+    "score": _run_score,
+    "export-lmd": _run_export_lmd,
+    "serve": _run_serve,
+    "system": _run_system,
+    "models": _run_models,
+    "strategies": _run_strategies,
+}
+
+
+# ---------------------------------------------------------------------------
+# Entry point
+# ---------------------------------------------------------------------------
+
+def cli():
+    parser = argparse.ArgumentParser(
+        prog="xlseg",
+        description="xldvp_seg: spatial cell segmentation & DVP pipeline",
+    )
+    subparsers = parser.add_subparsers(dest="command", help="Available commands")
+
+    subparsers.add_parser("info", help="Inspect CZI metadata (channels, dimensions)")
+    subparsers.add_parser("detect", help="Run cell detection pipeline")
+    subparsers.add_parser("classify", help="Train RF classifier from annotations")
+    subparsers.add_parser("markers", help="Classify marker pos/neg per channel")
+    subparsers.add_parser("score", help="Score detections with trained classifier")
+    subparsers.add_parser("export-lmd", help="Export for laser microdissection")
+    subparsers.add_parser("serve", help="Serve HTML viewer with tunnel")
+    subparsers.add_parser("system", help="Show system info and SLURM recommendations")
+    subparsers.add_parser("models", help="List registered model checkpoints")
+    subparsers.add_parser("strategies", help="List registered detection strategies")
+
+    args, remaining = parser.parse_known_args()
+
+    if args.command is None:
+        parser.print_help()
+        sys.exit(0)
+
+    _DISPATCH[args.command](remaining)

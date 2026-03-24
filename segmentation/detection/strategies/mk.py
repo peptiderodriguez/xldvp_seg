@@ -21,6 +21,7 @@ import numpy as np
 
 from .base import DetectionStrategy, Detection, _safe_to_uint8
 from .mixins import MultiChannelFeatureMixin
+from segmentation.detection.registry import register_strategy
 from segmentation.utils.feature_extraction import (
     extract_morphological_features,
 )
@@ -33,6 +34,11 @@ logger = get_logger(__name__)
 # Issue #7: Local extract_morphological_features removed - now imported from shared module
 
 
+@register_strategy(
+    "mk",
+    description="Megakaryocyte detection (SAM2 auto-mask + size filter)",
+    channels=[],
+)
 class MKStrategy(DetectionStrategy, MultiChannelFeatureMixin):
     """
     Megakaryocyte detection strategy.

@@ -1,17 +1,25 @@
 """
-Mask-overlap deduplication for detections.
+Deduplication for detections from tiled image processing.
 
-Removes duplicate detections caused by tile overlap by comparing actual mask
-pixels in global coordinates. When two masks overlap significantly, the larger
-detection is kept.
+Removes duplicate detections caused by tile overlap. Two methods:
 
-Works with any cell type (NMJ, MK, vessel, mesothelium, etc.).
+1. **mask_overlap** (default): Loads full mask pixels from HDF5, encodes as
+   frozenset of global coordinates, checks pixel-level overlap. Accurate but
+   memory-intensive for large detections.
+
+2. **iou_nms**: Extracts contour polygons from HDF5 masks, builds a Shapely
+   STRtree for O(n log n) spatial queries, then runs greedy NMS based on
+   contour IoU. Uses ~100x less memory per detection (polygon vs pixel
+   frozenset) and is faster for large slides.
+
+Both methods work with any cell type (NMJ, MK, vessel, mesothelium, etc.).
 
 Performance optimizations:
 - Batch HDF5 file handles: all tile HDF5 files are opened upfront and kept
   open for the duration of mask loading, avoiding repeated open/close on GPFS.
-- Set-based intersection with early exit: overlap checking uses Python sets
-  with counting up to threshold, avoiding full intersection computation.
+- Set-based intersection with early exit (mask_overlap): overlap checking uses
+  Python sets with counting up to threshold, avoiding full intersection.
+- STRtree spatial index (iou_nms): O(n log n) candidate finding vs O(n^2).
 - Mask cache eviction: tiles are evicted from the mask cache once all their
   detections have been processed, reducing peak memory from O(all_tiles) to
   O(active_tiles).
@@ -369,3 +377,319 @@ def deduplicate_by_mask_overlap(detections, tiles_dir, min_overlap_fraction=0.1,
     print(f"[dedup] Done: {len(detections)} -> {len(kept)} ({n_removed} removed)", flush=True)
 
     return kept
+
+
+def deduplicate_by_iou_nms(
+    detections,
+    tiles_dir,
+    iou_threshold=0.2,
+    mask_filename=None,
+    sort_by="area",
+):
+    """Remove duplicate detections using contour IoU with Shapely STRtree NMS.
+
+    For each pair of spatially overlapping detections (found via STRtree),
+    computes IoU from contour polygons extracted from HDF5 masks. When
+    IoU > threshold, keeps the higher-priority detection.
+
+    This is an alternative to deduplicate_by_mask_overlap() that uses
+    ~100x less memory per detection (polygon vs pixel frozenset) and
+    O(n log n) spatial queries via STRtree.
+
+    Args:
+        detections: List of detection dicts with tile_origin, mask_label
+        tiles_dir: Path to tiles directory with HDF5 mask files
+        iou_threshold: IoU threshold for suppression (default: 0.2)
+        mask_filename: Name of HDF5 mask file in each tile dir
+        sort_by: Priority ordering - 'area' (larger wins) or 'confidence'
+                 (higher rf_prediction/score wins)
+
+    Returns:
+        Deduplicated list of detections.
+    """
+    import cv2
+    from collections import Counter
+    from pathlib import Path
+    from shapely import STRtree
+    from shapely.geometry import Polygon, Point
+
+    if not detections:
+        return []
+
+    if mask_filename is None:
+        raise ValueError(
+            "mask_filename must be provided (e.g. '{cell_type}_masks.h5'). "
+            "No default is assumed to avoid cell-type-specific assumptions."
+        )
+
+    tiles_dir = Path(tiles_dir)
+    n_total = len(detections)
+    print(f"[dedup-iou] Starting IoU NMS dedup for {n_total} detections "
+          f"(threshold={iou_threshold})...", flush=True)
+
+    # --- Count detections per tile for cache eviction ---
+    tile_det_counts = Counter()
+    for det in detections:
+        tile_origin = tuple(det.get("tile_origin", [0, 0]))
+        tile_x, tile_y = tile_origin
+        tile_id = f"tile_{tile_x}_{tile_y}"
+        tile_det_counts[tile_id] += 1
+
+    # --- Batch-open all HDF5 file handles upfront ---
+    unique_tile_ids = set(tile_det_counts.keys())
+    h5_handles = {}
+    for tile_id in unique_tile_ids:
+        masks_file = tiles_dir / tile_id / mask_filename
+        if masks_file.exists():
+            try:
+                h5_handles[tile_id] = h5py.File(masks_file, "r")
+            except Exception as e:
+                logger.warning(f"Failed to open HDF5 file {masks_file}: {e}")
+                h5_handles[tile_id] = None
+        else:
+            h5_handles[tile_id] = None
+    print(
+        f"[dedup-iou] Opened {sum(1 for v in h5_handles.values() if v is not None)} "
+        f"HDF5 files out of {len(unique_tile_ids)} tiles",
+        flush=True,
+    )
+
+    # --- Load masks and extract contour polygons ---
+    # Cache: tile_id -> (masks_array, find_objects_slices)
+    mask_cache = {}
+    polygons = []  # Shapely polygons, one per detection (or None)
+    n_maskless = 0
+
+    for i, det in enumerate(detections):
+        if i % 5000 == 0 and i > 0:
+            print(f"[dedup-iou] Extracting contours: {i}/{n_total}", flush=True)
+
+        tile_origin = tuple(det.get("tile_origin", [0, 0]))
+        tile_x, tile_y = tile_origin
+        tile_id = f"tile_{tile_x}_{tile_y}"
+        mask_label = det.get("mask_label")
+
+        if mask_label is None or mask_label == 0:
+            det_id = det.get("id", "")
+            try:
+                mask_label = int(det_id.split("_")[-1])
+            except (ValueError, IndexError):
+                n_maskless += 1
+                polygons.append(None)
+                tile_det_counts[tile_id] -= 1
+                if tile_det_counts[tile_id] <= 0 and tile_id in mask_cache:
+                    del mask_cache[tile_id]
+                continue
+
+        mask_label = int(mask_label)
+
+        # Load masks + precompute find_objects if not cached
+        if tile_id not in mask_cache:
+            h5f = h5_handles.get(tile_id)
+            if h5f is not None:
+                try:
+                    masks_array = h5f["masks"][:]
+                    slices = ndimage.find_objects(masks_array)
+                    mask_cache[tile_id] = (masks_array, slices)
+                except Exception as e:
+                    logger.warning(f"Failed to load masks from tile {tile_id}: {e}")
+                    mask_cache[tile_id] = None
+            else:
+                mask_cache[tile_id] = None
+
+        cached = mask_cache.get(tile_id)
+        if cached is None:
+            n_maskless += 1
+            polygons.append(None)
+            tile_det_counts[tile_id] -= 1
+            if tile_det_counts[tile_id] <= 0 and tile_id in mask_cache:
+                del mask_cache[tile_id]
+            continue
+
+        masks_array, slices = cached
+
+        if mask_label < 1 or mask_label > len(slices):
+            n_maskless += 1
+            polygons.append(None)
+            tile_det_counts[tile_id] -= 1
+            if tile_det_counts[tile_id] <= 0 and tile_id in mask_cache:
+                del mask_cache[tile_id]
+            continue
+
+        sl = slices[mask_label - 1]
+        if sl is None:
+            n_maskless += 1
+            polygons.append(None)
+            tile_det_counts[tile_id] -= 1
+            if tile_det_counts[tile_id] <= 0 and tile_id in mask_cache:
+                del mask_cache[tile_id]
+            continue
+
+        # Extract binary mask for this label within its bounding box
+        local_mask = (masks_array[sl] == mask_label).astype(np.uint8)
+        if local_mask.sum() == 0:
+            n_maskless += 1
+            polygons.append(None)
+            tile_det_counts[tile_id] -= 1
+            if tile_det_counts[tile_id] <= 0 and tile_id in mask_cache:
+                del mask_cache[tile_id]
+            continue
+
+        # Extract contour from binary mask
+        contours, _ = cv2.findContours(local_mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+        if not contours:
+            n_maskless += 1
+            polygons.append(None)
+            tile_det_counts[tile_id] -= 1
+            if tile_det_counts[tile_id] <= 0 and tile_id in mask_cache:
+                del mask_cache[tile_id]
+            continue
+
+        # Use largest contour (by area) if multiple fragments exist
+        contour = max(contours, key=cv2.contourArea)
+        contour = contour.squeeze()  # (N, 1, 2) -> (N, 2)
+
+        if contour.ndim != 2 or len(contour) < 3:
+            # Fewer than 3 points: degenerate mask, treat as maskless
+            n_maskless += 1
+            polygons.append(None)
+            tile_det_counts[tile_id] -= 1
+            if tile_det_counts[tile_id] <= 0 and tile_id in mask_cache:
+                del mask_cache[tile_id]
+            continue
+        else:
+            # Convert local contour coords to global coordinates
+            # cv2 contour format is (x_local, y_local) within the slice bbox
+            global_coords = [
+                (float(pt[0]) + sl[1].start + tile_x,
+                 float(pt[1]) + sl[0].start + tile_y)
+                for pt in contour
+            ]
+            poly = Polygon(global_coords)
+            if not poly.is_valid:
+                poly = poly.buffer(0)
+                # buffer(0) can produce MultiPolygon from self-intersecting shapes
+                if poly.geom_type == "MultiPolygon":
+                    poly = max(poly.geoms, key=lambda g: g.area)
+            if poly.is_empty or poly.area == 0:
+                n_maskless += 1
+                polygons.append(None)
+                tile_det_counts[tile_id] -= 1
+                if tile_det_counts[tile_id] <= 0 and tile_id in mask_cache:
+                    del mask_cache[tile_id]
+                continue
+
+        polygons.append(poly)
+
+        # Evict tile from cache if all its detections have been processed
+        tile_det_counts[tile_id] -= 1
+        if tile_det_counts[tile_id] <= 0 and tile_id in mask_cache:
+            del mask_cache[tile_id]
+
+    # --- Close all HDF5 file handles ---
+    for tile_id, h5f in h5_handles.items():
+        if h5f is not None:
+            try:
+                h5f.close()
+            except Exception:
+                pass
+    del h5_handles
+
+    # Free remaining mask cache
+    for _tid in list(mask_cache):
+        cached = mask_cache.pop(_tid)
+        if cached is not None:
+            del cached
+    del mask_cache
+    del tile_det_counts
+
+    if n_maskless > 0:
+        logger.warning(
+            f"{n_maskless}/{n_total} detections have no valid mask/contour; "
+            f"kept without overlap check"
+        )
+
+    # --- Build STRtree from valid polygons ---
+    # STRtree needs a list of geometries; we map index -> detection index
+    valid_indices = [i for i, p in enumerate(polygons) if p is not None]
+    valid_polygons = [polygons[i] for i in valid_indices]
+
+    if not valid_polygons:
+        logger.info("No valid polygons for IoU NMS; returning all detections unchanged")
+        return detections
+
+    tree = STRtree(valid_polygons)
+    # Mapping: valid_indices[pos] = det_idx (list is O(1) by position)
+    det_idx_to_valid_pos = {det_idx: pos for pos, det_idx in enumerate(valid_indices)}
+
+    print(f"[dedup-iou] Contours loaded. Built STRtree with {len(valid_polygons)} polygons. "
+          f"Running NMS...", flush=True)
+
+    # --- Sort by priority ---
+    if sort_by == "confidence":
+        def _confidence_key(idx):
+            det = detections[idx]
+            score = det.get("rf_prediction")
+            if score is None:
+                score = det.get("score")
+            if score is None:
+                score = det.get("features", {}).get("sam2_score", 0)
+            return score if score is not None else 0
+
+        priority_order = sorted(valid_indices, key=_confidence_key, reverse=True)
+    else:
+        # Sort by area descending (larger detections win)
+        priority_order = sorted(
+            valid_indices,
+            key=lambda idx: detections[idx].get("features", {}).get("area", 0),
+            reverse=True,
+        )
+
+    # --- Greedy NMS ---
+    kept = set()
+    suppressed = set()
+
+    for i in priority_order:
+        if i in suppressed:
+            continue
+        kept.add(i)
+
+        # Query STRtree for candidates whose bounding boxes overlap this polygon
+        valid_pos = det_idx_to_valid_pos[i]
+        candidate_positions = tree.query(valid_polygons[valid_pos])
+
+        for j_pos in candidate_positions:
+            j = valid_indices[j_pos]
+            if j == i or j in kept or j in suppressed:
+                continue
+
+            # Compute IoU between the two polygons
+            poly_i = valid_polygons[valid_pos]
+            poly_j = valid_polygons[j_pos]
+            try:
+                intersection_area = poly_i.intersection(poly_j).area
+            except Exception:
+                # Geometry errors (rare): skip this pair
+                continue
+            if intersection_area == 0:
+                continue
+            union_area = poly_i.area + poly_j.area - intersection_area
+            if union_area > 0 and intersection_area / union_area > iou_threshold:
+                suppressed.add(j)
+
+    # Include maskless detections (kept without overlap check)
+    maskless_indices = {i for i, p in enumerate(polygons) if p is None}
+
+    # Build final result preserving original order
+    keep_set = kept | maskless_indices
+    result = [det for idx, det in enumerate(detections) if idx in keep_set]
+
+    n_removed = n_total - len(result)
+    if n_removed > 0:
+        logger.info(
+            f"IoU NMS dedup: {n_total} -> {len(result)} "
+            f"({n_removed} duplicates removed, threshold={iou_threshold})"
+        )
+    print(f"[dedup-iou] Done: {n_total} -> {len(result)} ({n_removed} removed)", flush=True)
+
+    return result

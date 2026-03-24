@@ -55,10 +55,6 @@ try:
 except ImportError:
     pass
 
-# Add repo root to path
-REPO = Path(__file__).resolve().parent.parent
-sys.path.insert(0, str(REPO))
-
 import cv2
 
 from segmentation.io.czi_loader import get_loader, get_czi_metadata

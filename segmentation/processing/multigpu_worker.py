@@ -79,8 +79,6 @@ def _gpu_worker(
     tiles_dir = config.get('tiles_dir')
 
     import torch
-    import sys
-    sys.path.insert(0, str(Path(__file__).parent.parent.parent))
 
     from segmentation.utils.device import set_device_for_worker, empty_cache
     from segmentation.detection.tissue import has_tissue

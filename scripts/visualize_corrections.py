@@ -15,16 +15,12 @@ Usage:
 """
 
 import argparse
-import sys
 from pathlib import Path
 
 import matplotlib
 matplotlib.use('Agg')
 import matplotlib.pyplot as plt
 import numpy as np
-
-REPO = Path(__file__).resolve().parent.parent
-sys.path.insert(0, str(REPO))
 
 from segmentation.io.czi_loader import get_loader, get_czi_metadata
 from segmentation.preprocessing.illumination import estimate_band_severity

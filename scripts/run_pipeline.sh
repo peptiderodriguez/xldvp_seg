@@ -152,6 +152,10 @@ DILATION_UM=$(read_yaml dilation_um "")
 RDP_EPSILON=$(read_yaml rdp_epsilon "")
 BG_NEIGHBORS=$(read_yaml bg_neighbors "")
 
+# Deduplication method
+DEDUP_METHOD=$(read_yaml dedup_method "")
+IOU_THRESHOLD=$(read_yaml iou_threshold "")
+
 # SLURM settings
 PARTITION=$(read_yaml slurm.partition p.hpcl8)
 CPUS=$(read_yaml slurm.cpus 24)
@@ -286,6 +290,13 @@ build_seg_cmd() {
     fi
     if [[ -n "$HTML_SAMPLE_FRACTION" ]]; then
         cmd+=" --html-sample-fraction $HTML_SAMPLE_FRACTION"
+    fi
+    # Dedup method
+    if [[ -n "$DEDUP_METHOD" ]]; then
+        cmd+=" --dedup-method $DEDUP_METHOD"
+    fi
+    if [[ -n "$IOU_THRESHOLD" ]]; then
+        cmd+=" --iou-threshold $IOU_THRESHOLD"
     fi
     echo "$cmd"
 }

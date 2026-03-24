@@ -29,9 +29,7 @@ from scipy.sparse import csr_matrix
 from scipy.sparse.csgraph import connected_components
 from scipy.spatial import ConvexHull, cKDTree
 
-# Add repo to path
 REPO = Path(__file__).resolve().parent.parent
-sys.path.insert(0, str(REPO))
 
 from segmentation.utils.json_utils import atomic_json_dump, fast_json_load
 from segmentation.utils.logging import get_logger, setup_logging

@@ -54,9 +54,6 @@ from datetime import datetime
 
 import numpy as np
 
-# Add parent directory to path for imports
-sys.path.insert(0, str(Path(__file__).parent.parent))
-
 from segmentation.classification.vessel_detector_rf import VesselDetectorRF
 from segmentation.classification.artery_vein_classifier import ArteryVeinClassifier
 

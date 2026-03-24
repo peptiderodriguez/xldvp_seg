@@ -26,10 +26,6 @@ import random
 import argparse
 from pathlib import Path
 
-REPO = Path(__file__).resolve().parent.parent
-if str(REPO) not in sys.path:
-    sys.path.insert(0, str(REPO))
-
 from segmentation.lmd.well_plate import generate_multiplate_wells, insert_empty_wells
 from segmentation.utils.json_utils import fast_json_load, atomic_json_dump
 from segmentation.utils.logging import get_logger, setup_logging

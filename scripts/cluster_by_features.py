@@ -66,10 +66,6 @@ import re
 import sys
 from pathlib import Path
 
-# Add repo root to path
-REPO = Path(__file__).resolve().parent.parent
-sys.path.insert(0, str(REPO))
-
 import numpy as np
 import pandas as pd
 

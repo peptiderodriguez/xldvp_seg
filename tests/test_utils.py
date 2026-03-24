@@ -10,18 +10,13 @@ Tests the following modules:
 Run with: pytest tests/test_utils.py -v
 """
 
-import sys
 import os
-from pathlib import Path
 from unittest import TestCase
 from unittest.mock import MagicMock, patch
 import tempfile
 import json
 
 import numpy as np
-
-# Add repo root to path for imports
-sys.path.insert(0, str(Path(__file__).parent.parent))
 
 
 # =============================================================================

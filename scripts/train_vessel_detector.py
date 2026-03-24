@@ -50,9 +50,6 @@ from typing import Dict, List, Any
 
 import numpy as np
 
-# Add parent directory to path for imports
-sys.path.insert(0, str(Path(__file__).parent.parent))
-
 from segmentation.classification.vessel_detector_rf import (
     VesselDetectorRF,
     VESSEL_DETECTION_FEATURES,

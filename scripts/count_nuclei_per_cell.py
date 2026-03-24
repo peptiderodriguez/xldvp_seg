@@ -28,8 +28,6 @@ import time
 from collections import Counter
 from pathlib import Path
 
-sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
-
 import h5py
 import numpy as np
 from skimage.draw import polygon as skimage_polygon

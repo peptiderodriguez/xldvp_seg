@@ -138,12 +138,13 @@ Don't list these tables to the user. Just ask what they want to analyze.
 
 **Step 4 — Ask for the CZI file(s).** Accept a single path or a directory.
 
-**Step 5 — Inspect the CZI.** Run `$XLDVP_PYTHON $REPO/scripts/czi_info.py <path>` (human-readable). Show the channel table with wavelengths.
+**Step 5 — Inspect the CZI.** Run `xlseg info <path>` (or `$XLDVP_PYTHON $REPO/scripts/czi_info.py <path>`). Show the channel table with wavelengths.
 
 **Step 5b — Build the channel map (CRITICAL — do not skip).** CZI channel order ≠ filename order and is NOT sorted by wavelength. The only authoritative source is `czi_info.py`:
 
 ```bash
-$XLDVP_PYTHON $REPO/scripts/czi_info.py <czi_path>
+xlseg info <czi_path>
+# or: $XLDVP_PYTHON $REPO/scripts/czi_info.py <czi_path>
 ```
 
 This prints the actual channel index → fluorophore → excitation/emission for every channel. Use this output — never manually sort by wavelength, never assume from filename alone.

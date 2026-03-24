@@ -25,6 +25,7 @@ import cv2
 
 from .base import DetectionStrategy, Detection, _safe_to_uint8
 from .mixins import MultiChannelFeatureMixin
+from segmentation.detection.registry import register_strategy
 from segmentation.utils.logging import get_logger
 from segmentation.utils.feature_extraction import (
     extract_morphological_features,
@@ -151,6 +152,11 @@ def smooth_contour_spline(contour, smoothing=3.0, n_points=0, force_closed=None)
         return np.array(contour).reshape(-1, 1, 2).astype(np.int32)
 
 
+@register_strategy(
+    "vessel",
+    description="Blood vessel detection (SMA+ ring detection, 3-contour hierarchy)",
+    channels=["SMA", "CD31"],
+)
 class VesselStrategy(DetectionStrategy, MultiChannelFeatureMixin):
     """
     Vessel detection strategy for ring structures.
