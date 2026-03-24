@@ -17,6 +17,7 @@ Runs on SLURM GPU clusters or local workstations (NVIDIA CUDA, Apple Silicon MPS
 | **Islet** | Cellpose membrane+nuclear + marker classification | Pancreatic islet cells |
 | **Tissue Pattern** | Cellpose + spatial frequency analysis | Brain FISH cell typing |
 | **Mesothelium** | Ridge detection | Mesothelial ribbon for LMD |
+| **InstanSeg** | InstanSeg 3.8M-param lightweight segmenter | Alternative to Cellpose (`--segmenter instanseg`) |
 
 ---
 
@@ -38,10 +39,19 @@ cd xldvp_seg
 conda create -n xldvp_seg python=3.11 -y && conda activate xldvp_seg
 ```
 
-### Step 2: Install everything (~10-15 min)
+### Step 2: Install the package
 
 ```bash
-./install.sh  # Auto-detects CUDA, installs all dependencies + downloads models
+pip install -e .          # Core install (fluorescence pipeline)
+pip install -e .[dev]     # + dev tools (pytest, black, ruff)
+pip install -e .[instanseg]   # + InstanSeg alternative segmenter
+pip install -e .[brightfield] # + brightfield foundation models (timm, transformers)
+```
+
+### Step 2b: Install PyTorch + SAM2 (~10-15 min)
+
+```bash
+./install.sh  # Auto-detects CUDA, installs PyTorch + SAM2 checkpoint
 ```
 
 This single command installs:
@@ -99,25 +109,32 @@ claude          # start Claude Code in the repo directory
 
 Other Claude Code commands: `/status` (monitor jobs), `/czi-info` (inspect channels), `/classify` (train classifier), `/lmd-export` (LMD XML), `/view-results` (HTML viewer), `/spatialdata` (scverse export).
 
-### Option B: Command line
+### Option B: Command line (`xlseg` CLI)
 
 ```bash
 conda activate xldvp_seg
 
-# Step 0: ALWAYS inspect CZI channels first (order is NOT wavelength-sorted)
-python scripts/czi_info.py /path/to/slide.czi
+# Inspect channels (ALWAYS first — order is NOT wavelength-sorted)
+xlseg info /path/to/slide.czi
 
-# Step 1: Detect cells (use --channel-spec to resolve by marker name)
-python run_segmentation.py \
-    --czi-path /path/to/slide.czi \
+# Detect cells
+xlseg detect --czi-path /path/to/slide.czi \
     --cell-type cell \
-    --channel-spec "cyto=NeuN,nuc=488" \
-    --all-channels \
-    --num-gpus 4 \
+    --channel-spec "cyto=PM,nuc=488" \
+    --all-channels --num-gpus 4 \
     --output-dir /path/to/output
 
-# Step 2: View results
-python serve_html.py /path/to/output
+# View results
+xlseg serve /path/to/output
+
+# Other commands
+xlseg classify --detections det.json --annotations ann.json
+xlseg markers --detections det.json --marker-wavelength 647 --marker-name NeuN
+xlseg score --detections det.json --classifier rf.pkl
+xlseg export-lmd --detections det.json --crosses crosses.json
+xlseg models              # list registered models
+xlseg strategies          # list detection strategies
+xlseg download-models --brightfield  # download gated HF models
 ```
 
 ### SLURM batch pipeline
@@ -143,7 +160,7 @@ The core workflow for Deep Visual Proteomics — from slide to mass spec:
 5. **Train** — `train_classifier.py` trains RF classifier in seconds. Use `scripts/compare_feature_sets.py` to find the best feature combination for your data.
 6. **Score** — `scripts/apply_classifier.py` scores every detection (CPU, seconds — no re-detection)
 7. **Filter** — `scripts/regenerate_html.py --score-threshold 0.5` shows only confident detections
-8. **Markers** — `scripts/classify_markers.py` classifies pos/neg per fluorescent channel (Otsu/GMM)
+8. **Markers** — `scripts/classify_markers.py` classifies pos/neg per fluorescent channel (median SNR ≥ 1.5 default, Otsu/GMM alternatives)
 9. **Explore** — Spatial analysis, UMAP clustering, tissue zonation (see Available Analyses below)
 10. **Export** — `run_lmd_export.py` generates XML for the Leica LMD with 384-well plate assignment
 
@@ -179,16 +196,27 @@ SpatialData zarr is auto-exported at the end of every detection run. Load with `
 
 ## Features
 
+- **`xlseg` CLI**: Unified command-line interface with 11 subcommands (info, detect, classify, markers, score, export-lmd, serve, system, models, strategies, download-models)
+- **Python API**: Scanpy-style `segmentation.api` module (`pp`, `tl`, `pl`, `io`) + `SlideAnalysis` central state object for notebook workflows
+- **8 detection strategies**: Cell (Cellpose), NMJ, MK, Vessel, Islet, Tissue Pattern, Mesothelium, InstanSeg — all self-registered via `@register_strategy` decorator
+- **Model registry**: Metadata catalog tracking 9+ models with modality (fluorescence/brightfield/both), license, and HuggingFace URLs. Brightfield FMs: UNI2, Virchow2, CONCH, Phikon-v2.
 - **Multi-GPU always-on**: Even `--num-gpus 1` uses the multi-GPU code path
 - **Multi-node sharding**: `--tile-shard INDEX/TOTAL` for splitting across SLURM array tasks
 - **Automatic channel resolution**: `--channel-spec "detect=BTX"` resolves marker names from CZI metadata
 - **Up to 6,478 features per detection**: Morphological (78) + per-channel stats + SAM2 (256) + ResNet (4,096) + DINOv2 (2,048)
+- **Median-based SNR marker classification**: Default method for pos/neg per channel (SNR ≥ 1.5), with Otsu and GMM alternatives
+- **Feature-gated spatial smoothing**: `--spatial-smooth` weights neighbors by both proximity AND feature similarity
+- **IoU NMS deduplication**: Contour-based alternative to mask-overlap dedup (`--dedup-method iou_nms`)
+- **Segmentation metrics**: IoU, Dice, Panoptic Quality, Hungarian matching for benchmarking
 - **Pixel-level background correction**: KD-tree local background estimation, automatic during detection
-- **Checkpoint/resume**: Per-tile checkpoints, dedup checkpoint, post-dedup checkpoint. `--resume` skips completed work
-- **Direct-to-SHM loading**: CZI channels loaded directly into shared memory (~9 GB savings for 3-channel slides)
+- **Checkpoint/resume**: Per-tile checkpoints, dedup, post-dedup. `--resume` skips completed work
+- **Direct-to-SHM loading**: CZI channels loaded directly into shared memory (~9 GB savings)
 - **SpatialData integration**: Auto-exports to scverse ecosystem (squidpy, scanpy)
+- **Cohort analysis**: Slide-level feature aggregation for multi-slide experiments
+- **Multi-omic linking**: Bridge morphological features to mass-spec proteomics (OmicLinker)
 - **Interactive viewers**: HTML spatial viewer with KDE contours, ROI drawing, tissue overlay
 - **LMD export**: Contour dilation, clustering, 384-well serpentine layout, multi-plate overflow, XML for Leica
+- **GitHub Actions CI**: Automated testing on Python 3.10 + 3.12
 
 ---
 
@@ -207,6 +235,20 @@ SpatialData zarr is auto-exported at the end of every detection run. Load with `
 | `scripts/system_info.py` | Detect environment + recommend SLURM resources |
 | `scripts/view_slide.py` | One-command: classify → spatial → viewer → serve |
 | `serve_html.py` | HTTP server + Cloudflare tunnel |
+
+### Python API (for notebooks)
+
+```python
+from segmentation.core import SlideAnalysis
+from segmentation.api import tl
+
+slide = SlideAnalysis.load("output/my_slide/run_20260324/")
+tl.markers(slide, marker_channels=[1, 2], marker_names=["NeuN", "tdTomato"])
+tl.score(slide, classifier="classifiers/rf_morph.pkl")
+tl.cluster(slide, methods="both", output_dir="clustering/")
+slide.save("scored_detections.json")
+adata = slide.to_anndata()  # export to AnnData for scanpy
+```
 
 ---
 
