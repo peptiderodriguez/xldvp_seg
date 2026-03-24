@@ -156,6 +156,24 @@ BG_NEIGHBORS=$(read_yaml bg_neighbors "")
 DEDUP_METHOD=$(read_yaml dedup_method "")
 IOU_THRESHOLD=$(read_yaml iou_threshold "")
 
+# Multi-node sharding
+NUM_SHARDS=$(read_yaml sharding.num_shards 0)
+
+# Downstream steps (each is a separate SLURM job with dependency)
+DS_QUALITY_FILTER=$(read_yaml downstream.quality_filter.enabled false)
+DS_QF_MIN_AREA=$(read_yaml downstream.quality_filter.min_area_um2 50)
+DS_QF_MAX_AREA=$(read_yaml downstream.quality_filter.max_area_um2 2000)
+DS_QF_MIN_SOLIDITY=$(read_yaml downstream.quality_filter.min_solidity 0.85)
+DS_NUCLEI=$(read_yaml downstream.nuclei.enabled false)
+DS_NUC_CHANNEL_SPEC=$(read_yaml downstream.nuclei.channel_spec "")
+DS_HTML=$(read_yaml downstream.annotation_html.enabled false)
+DS_HTML_MAX_SAMPLES=$(read_yaml downstream.annotation_html.max_samples 5000)
+DS_HTML_DISPLAY_CHANNELS=$(read_yaml downstream.annotation_html.display_channels "")
+DS_CLUSTERING=$(read_yaml downstream.clustering.enabled false)
+DS_CLUSTERING_FEATURES=$(read_yaml downstream.clustering.feature_groups "morph")
+DS_CLUSTERING_METHODS=$(read_yaml downstream.clustering.methods "both")
+DS_CLUSTERING_RESOLUTION=$(read_yaml downstream.clustering.resolution "0.1")
+
 # SLURM settings
 PARTITION=$(read_yaml slurm.partition p.hpcl8)
 CPUS=$(read_yaml slurm.cpus 24)
@@ -588,12 +606,245 @@ echo "================================================"
 echo ""
 echo "Submitting job..."
 mkdir -p "$OUTPUT_DIR"
-MAIN_JOB_OUTPUT=$(sbatch "$SBATCH_FILE") || { echo "Error: sbatch submission failed" >&2; exit 1; }
-echo "$MAIN_JOB_OUTPUT"
-MAIN_JOB_ID=$(echo "$MAIN_JOB_OUTPUT" | grep -oP 'Submitted batch job \K\d+') || true
+
+# ---------------------------------------------------------------------------
+# Multi-node sharding: generate shard array + merge job
+# ---------------------------------------------------------------------------
+if [[ "$NUM_SHARDS" -gt 1 && "$MULTI_SLIDE" == "false" ]]; then
+    echo "Multi-node sharding: $NUM_SHARDS shards"
+
+    # Shard detection array
+    SHARD_SBATCH="${OUTPUT_DIR}/pipeline_${NAME}_shards_$$.sbatch"
+    {
+        echo "#!/bin/bash"
+        echo "#SBATCH --job-name=${NAME}_shard"
+        echo "#SBATCH --partition=${PARTITION}"
+        echo "#SBATCH --nodes=1"
+        echo "#SBATCH --cpus-per-task=${CPUS}"
+        echo "#SBATCH --mem=${MEM_GB}G"
+        echo "#SBATCH --gres=gpu:${GPUS}"
+        echo "#SBATCH --time=${TIME}"
+        echo "#SBATCH --output=${OUTPUT_DIR}/slurm_${NAME}_s%a_%j.out"
+        echo "#SBATCH --error=${OUTPUT_DIR}/slurm_${NAME}_s%a_%j.err"
+        echo "#SBATCH --array=0-$((NUM_SHARDS - 1))"
+        echo ""
+        echo "set -euo pipefail"
+        echo "export PYTHONPATH=\"$REPO\""
+        echo "XLDVP_PYTHON=\"$XLDVP_PYTHON\""
+        echo ""
+        echo "$(build_seg_cmd "$CZI_PATH" "$OUTPUT_DIR") --tile-shard \${SLURM_ARRAY_TASK_ID}/${NUM_SHARDS}"
+    } > "$SHARD_SBATCH"
+    chmod +x "$SHARD_SBATCH"
+
+    SHARD_OUTPUT=$(sbatch "$SHARD_SBATCH")
+    SHARD_JOB_ID=$(echo "$SHARD_OUTPUT" | grep -oP 'Submitted batch job \K\d+')
+    echo "  Shard array job: $SHARD_JOB_ID (${NUM_SHARDS} tasks)"
+
+    # Merge job (MUST include --resume — without it, argparse errors silently)
+    MERGE_SBATCH="${OUTPUT_DIR}/pipeline_${NAME}_merge_$$.sbatch"
+    {
+        echo "#!/bin/bash"
+        echo "#SBATCH --job-name=${NAME}_merge"
+        echo "#SBATCH --partition=${PARTITION}"
+        echo "#SBATCH --nodes=1"
+        echo "#SBATCH --cpus-per-task=${CPUS}"
+        echo "#SBATCH --mem=${MEM_GB}G"
+        echo "#SBATCH --gres=gpu:${GPUS}"
+        echo "#SBATCH --time=${TIME}"
+        echo "#SBATCH --output=${OUTPUT_DIR}/slurm_${NAME}_merge_%j.out"
+        echo "#SBATCH --error=${OUTPUT_DIR}/slurm_${NAME}_merge_%j.err"
+        echo ""
+        echo "set -euo pipefail"
+        echo "export PYTHONPATH=\"$REPO\""
+        echo "XLDVP_PYTHON=\"$XLDVP_PYTHON\""
+        echo ""
+        echo "# Find the run directory (created by first shard)"
+        echo "RUN_DIR=\$(ls -td \"${OUTPUT_DIR}\"/*/  2>/dev/null | head -1)"
+        echo "if [[ -z \"\$RUN_DIR\" ]]; then echo 'ERROR: No run directory found'; exit 1; fi"
+        echo "echo \"Merging shards in \$RUN_DIR\""
+        echo ""
+        echo "# CRITICAL: --merge-shards REQUIRES --resume"
+        echo "$(build_seg_cmd "$CZI_PATH" "$OUTPUT_DIR") --resume \"\$RUN_DIR\" --merge-shards"
+    } > "$MERGE_SBATCH"
+    chmod +x "$MERGE_SBATCH"
+
+    MERGE_OUTPUT=$(sbatch --dependency=afterok:"$SHARD_JOB_ID" "$MERGE_SBATCH")
+    MAIN_JOB_ID=$(echo "$MERGE_OUTPUT" | grep -oP 'Submitted batch job \K\d+')
+    echo "  Merge job: $MAIN_JOB_ID (dep: $SHARD_JOB_ID)"
+
+else
+    # Standard single-job submission
+    MAIN_JOB_OUTPUT=$(sbatch "$SBATCH_FILE") || { echo "Error: sbatch submission failed" >&2; exit 1; }
+    echo "$MAIN_JOB_OUTPUT"
+    MAIN_JOB_ID=$(echo "$MAIN_JOB_OUTPUT" | grep -oP 'Submitted batch job \K\d+') || true
+fi
+
 if [[ -z "$MAIN_JOB_ID" ]]; then
-    echo "Error: could not parse job ID from: $MAIN_JOB_OUTPUT" >&2
+    echo "Error: could not parse job ID" >&2
     exit 1
+fi
+
+# ---------------------------------------------------------------------------
+# Downstream dependent jobs (quality filter, nuclei, HTML, clustering)
+# Each is a separate lightweight SLURM job with correct dependency.
+# This eliminates the need to write manual sbatch scripts.
+# ---------------------------------------------------------------------------
+DETECT_JOB_ID="$MAIN_JOB_ID"
+LAST_DET_JSON="\${RUN_DIR}${CELL_TYPE}_detections.json"
+
+# For single-slide: determine CZI path for downstream steps
+DS_CZI_PATH="${CZI_PATH}"
+
+# Quality filter (CPU, depends on detection)
+if [[ "$DS_QUALITY_FILTER" == "true" ]]; then
+    QF_SBATCH="${OUTPUT_DIR}/pipeline_${NAME}_qf_$$.sbatch"
+    {
+        echo "#!/bin/bash"
+        echo "#SBATCH --job-name=${NAME}_qf"
+        echo "#SBATCH --partition=p.hpcl8"
+        echo "#SBATCH --cpus-per-task=4"
+        echo "#SBATCH --mem=32G"
+        echo "#SBATCH --time=00:30:00"
+        echo "#SBATCH --output=${OUTPUT_DIR}/slurm_${NAME}_qf_%j.out"
+        echo "#SBATCH --error=${OUTPUT_DIR}/slurm_${NAME}_qf_%j.err"
+        echo ""
+        echo "set -euo pipefail"
+        echo "export PYTHONPATH=\"$REPO\""
+        echo "XLDVP_PYTHON=\"$XLDVP_PYTHON\""
+        echo "RUN_DIR=\$(ls -td \"${OUTPUT_DIR}\"/*/  2>/dev/null | head -1)"
+        echo "DET=\"\${RUN_DIR}${CELL_TYPE}_detections.json\""
+        echo "echo \"=== \$(date): Quality filter ===\""
+        echo "\$XLDVP_PYTHON $REPO/scripts/quality_filter_detections.py \\"
+        echo "    --detections \"\$DET\" \\"
+        echo "    --output \"\${RUN_DIR}${CELL_TYPE}_detections_filtered.json\" \\"
+        echo "    --min-area-um2 $DS_QF_MIN_AREA --max-area-um2 $DS_QF_MAX_AREA --min-solidity $DS_QF_MIN_SOLIDITY"
+        echo "echo \"=== \$(date): Done ===\""
+    } > "$QF_SBATCH"
+    chmod +x "$QF_SBATCH"
+    QF_OUTPUT=$(sbatch --dependency=afterok:"$DETECT_JOB_ID" "$QF_SBATCH")
+    QF_JOB_ID=$(echo "$QF_OUTPUT" | grep -oP 'Submitted batch job \K\d+')
+    echo "  Quality filter job: $QF_JOB_ID (dep: $DETECT_JOB_ID)"
+    LAST_DET_JSON="\${RUN_DIR}${CELL_TYPE}_detections_filtered.json"
+    DETECT_JOB_ID="$QF_JOB_ID"
+fi
+
+# Marker classification (CPU, depends on detection or quality filter)
+# Already handled inline for the main detection sbatch above.
+# But if downstream.markers is explicitly set AND markers weren't in the inline pipeline,
+# we skip here since markers are already handled.
+
+# Nuclear counting (GPU, depends on detection — uses UNFILTERED detections)
+if [[ "$DS_NUCLEI" == "true" ]]; then
+    NUC_SBATCH="${OUTPUT_DIR}/pipeline_${NAME}_nuc_$$.sbatch"
+    {
+        echo "#!/bin/bash"
+        echo "#SBATCH --job-name=${NAME}_nuc"
+        echo "#SBATCH --partition=p.hpcl93"
+        echo "#SBATCH --nodes=1"
+        echo "#SBATCH --cpus-per-task=64"
+        echo "#SBATCH --mem=300G"
+        echo "#SBATCH --gres=gpu:l40s:1"
+        echo "#SBATCH --time=6:00:00"
+        echo "#SBATCH --output=${OUTPUT_DIR}/slurm_${NAME}_nuc_%j.out"
+        echo "#SBATCH --error=${OUTPUT_DIR}/slurm_${NAME}_nuc_%j.err"
+        echo ""
+        echo "set -euo pipefail"
+        echo "export PYTHONPATH=\"$REPO\""
+        echo "XLDVP_PYTHON=\"$XLDVP_PYTHON\""
+        echo "RUN_DIR=\$(ls -td \"${OUTPUT_DIR}\"/*/  2>/dev/null | head -1)"
+        echo "echo \"=== \$(date): Nuclear counting ===\""
+        echo "\$XLDVP_PYTHON $REPO/scripts/count_nuclei_per_cell.py \\"
+        echo "    --detections \"\${RUN_DIR}${CELL_TYPE}_detections.json\" \\"
+        echo "    --czi-path \"$DS_CZI_PATH\" \\"
+        echo "    --tiles-dir \"\${RUN_DIR}tiles\" \\"
+        if [[ -n "$DS_NUC_CHANNEL_SPEC" ]]; then
+            echo "    --channel-spec \"$DS_NUC_CHANNEL_SPEC\" \\"
+        fi
+        echo "    --output \"\${RUN_DIR}${CELL_TYPE}_detections_nuclei.json\""
+        echo "echo \"=== \$(date): Done ===\""
+    } > "$NUC_SBATCH"
+    chmod +x "$NUC_SBATCH"
+    NUC_OUTPUT=$(sbatch --dependency=afterok:"$MAIN_JOB_ID" "$NUC_SBATCH")
+    NUC_JOB_ID=$(echo "$NUC_OUTPUT" | grep -oP 'Submitted batch job \K\d+')
+    echo "  Nuclear counting job: $NUC_JOB_ID (dep: $MAIN_JOB_ID)"
+fi
+
+# Annotation HTML (CPU, depends on markers if markers ran, else detection)
+if [[ "$DS_HTML" == "true" ]]; then
+    HTML_SBATCH="${OUTPUT_DIR}/pipeline_${NAME}_html_$$.sbatch"
+    HTML_DEP_ID="$DETECT_JOB_ID"
+    {
+        echo "#!/bin/bash"
+        echo "#SBATCH --job-name=${NAME}_html"
+        echo "#SBATCH --partition=p.hpcl8"
+        echo "#SBATCH --cpus-per-task=8"
+        echo "#SBATCH --mem=64G"
+        echo "#SBATCH --time=2:00:00"
+        echo "#SBATCH --output=${OUTPUT_DIR}/slurm_${NAME}_html_%j.out"
+        echo "#SBATCH --error=${OUTPUT_DIR}/slurm_${NAME}_html_%j.err"
+        echo ""
+        echo "set -euo pipefail"
+        echo "export PYTHONPATH=\"$REPO\""
+        echo "XLDVP_PYTHON=\"$XLDVP_PYTHON\""
+        echo "RUN_DIR=\$(ls -td \"${OUTPUT_DIR}\"/*/  2>/dev/null | head -1)"
+        # Use classified detections if markers ran, else filtered, else raw
+        echo "DET=\"\${RUN_DIR}${CELL_TYPE}_detections.json\""
+        echo "for _f in \"\${RUN_DIR}${CELL_TYPE}_detections_classified.json\" \"\${RUN_DIR}${CELL_TYPE}_detections_filtered.json\"; do"
+        echo "    if [[ -f \"\$_f\" ]]; then DET=\"\$_f\"; break; fi"
+        echo "done"
+        echo "echo \"=== \$(date): Annotation HTML from \$DET ===\""
+        echo "\$XLDVP_PYTHON $REPO/scripts/regenerate_html.py \\"
+        echo "    --detections \"\$DET\" \\"
+        echo "    --output-dir \"\$RUN_DIR\" \\"
+        echo "    --czi-path \"$DS_CZI_PATH\" \\"
+        if [[ -n "$DS_HTML_DISPLAY_CHANNELS" ]]; then
+            echo "    --display-channels \"$DS_HTML_DISPLAY_CHANNELS\" \\"
+        fi
+        echo "    --dashed-contour \\"
+        echo "    --max-samples $DS_HTML_MAX_SAMPLES \\"
+        echo "    --html-dir \"\${RUN_DIR}html_annotation\""
+        echo "echo \"=== \$(date): Done ===\""
+    } > "$HTML_SBATCH"
+    chmod +x "$HTML_SBATCH"
+    HTML_OUTPUT=$(sbatch --dependency=afterok:"$HTML_DEP_ID" "$HTML_SBATCH")
+    HTML_JOB_ID=$(echo "$HTML_OUTPUT" | grep -oP 'Submitted batch job \K\d+')
+    echo "  Annotation HTML job: $HTML_JOB_ID (dep: $HTML_DEP_ID)"
+fi
+
+# Clustering (CPU, depends on markers)
+if [[ "$DS_CLUSTERING" == "true" ]]; then
+    CLUST_SBATCH="${OUTPUT_DIR}/pipeline_${NAME}_cluster_$$.sbatch"
+    {
+        echo "#!/bin/bash"
+        echo "#SBATCH --job-name=${NAME}_cluster"
+        echo "#SBATCH --partition=p.hpcl8"
+        echo "#SBATCH --cpus-per-task=24"
+        echo "#SBATCH --mem=200G"
+        echo "#SBATCH --time=2:00:00"
+        echo "#SBATCH --output=${OUTPUT_DIR}/slurm_${NAME}_cluster_%j.out"
+        echo "#SBATCH --error=${OUTPUT_DIR}/slurm_${NAME}_cluster_%j.err"
+        echo ""
+        echo "set -euo pipefail"
+        echo "export PYTHONPATH=\"$REPO\""
+        echo "XLDVP_PYTHON=\"$XLDVP_PYTHON\""
+        echo "RUN_DIR=\$(ls -td \"${OUTPUT_DIR}\"/*/  2>/dev/null | head -1)"
+        echo "DET=\"\${RUN_DIR}${CELL_TYPE}_detections.json\""
+        echo "for _f in \"\${RUN_DIR}${CELL_TYPE}_detections_classified.json\" \"\${RUN_DIR}${CELL_TYPE}_detections_filtered.json\"; do"
+        echo "    if [[ -f \"\$_f\" ]]; then DET=\"\$_f\"; break; fi"
+        echo "done"
+        echo "echo \"=== \$(date): Clustering ===\""
+        echo "\$XLDVP_PYTHON $REPO/scripts/cluster_by_features.py \\"
+        echo "    --detections \"\$DET\" \\"
+        echo "    --output-dir \"\${RUN_DIR}clustering\" \\"
+        echo "    --feature-groups \"$DS_CLUSTERING_FEATURES\" \\"
+        echo "    --methods \"$DS_CLUSTERING_METHODS\" \\"
+        echo "    --clustering leiden --resolution $DS_CLUSTERING_RESOLUTION"
+        echo "echo \"=== \$(date): Done ===\""
+    } > "$CLUST_SBATCH"
+    chmod +x "$CLUST_SBATCH"
+    CLUST_OUTPUT=$(sbatch --dependency=afterok:"$DETECT_JOB_ID" "$CLUST_SBATCH")
+    CLUST_JOB_ID=$(echo "$CLUST_OUTPUT" | grep -oP 'Submitted batch job \K\d+')
+    echo "  Clustering job: $CLUST_JOB_ID (dep: $DETECT_JOB_ID)"
 fi
 
 # ---------------------------------------------------------------------------
