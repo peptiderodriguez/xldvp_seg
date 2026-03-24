@@ -30,6 +30,12 @@ These behaviors apply throughout every Claude Code session on this project:
 - When writing SLURM configs, check partition busyness first (`system_info.py`).
 - Prefer `--channel-spec "detect=MARKER"` over raw `--channel N` in all examples and configs.
 
+**SLURM job submission (MANDATORY — no exceptions):**
+- Before EVERY `sbatch` submission: read the sbatch, verify `--dependency` job IDs are correct and not cancelled/stale, verify `--num-gpus` matches SLURM allocation, verify python path, verify input file paths exist.
+- After EVERY submission: check first output lines within 30 seconds to confirm correct startup (GPU worker count, input file loaded).
+- When cancelling and resubmitting: cancel ALL downstream jobs, update ALL dependency IDs, verify ALL sbatch files before resubmitting. Never submit before verifying.
+- Never run heavy compute on login nodes — always SLURM.
+
 ---
 
 ## Development Commands
