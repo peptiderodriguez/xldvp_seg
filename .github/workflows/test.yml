@@ -31,6 +31,7 @@ jobs:
           pytest tests/test_registry.py tests/test_sample_dataset.py \
                  tests/test_metrics.py tests/test_cli.py \
                  tests/test_utils.py tests/test_coordinates.py \
+                 tests/test_detection_base.py tests/test_module_imports.py \
                  -v --tb=short
         env:
           PYTHONPATH: .

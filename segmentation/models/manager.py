@@ -571,6 +571,9 @@ class ModelManager:
         self._dinov2 = None
         self._dinov2_transform = None
 
+        # Clear MK classifier
+        self._mk_classifier = None
+
         # Clear brightfield FMs
         self._uni2 = None
         self._uni2_transform = None

@@ -228,7 +228,7 @@ SpatialData zarr is auto-exported at the end of every detection run. Load with `
 | `run_segmentation.py` | Unified detection pipeline (all cell types) |
 | `train_classifier.py` | Train RF classifier from annotations |
 | `scripts/apply_classifier.py` | Score detections with trained classifier |
-| `scripts/classify_markers.py` | Marker pos/neg classification (Otsu/GMM) |
+| `scripts/classify_markers.py` | Marker pos/neg classification (SNR/Otsu/GMM) |
 | `scripts/regenerate_html.py` | Regenerate HTML viewer from saved detections |
 | `scripts/run_pipeline.sh` | YAML config-driven SLURM batch launcher |
 | `run_lmd_export.py` | Export to Leica LMD format |

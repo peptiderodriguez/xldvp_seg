@@ -72,7 +72,7 @@ PYTHONPATH=$REPO $XLDVP_PYTHON $REPO/scripts/czi_info.py /path/to/slide.czi
 
 ### Tests
 
-Tests are in `tests/` using pytest. Fixtures in `conftest.py`: `sample_tile` (512×512 RGB), `sample_mask` (boolean circle), `mock_loader` (mocked CZI loader), `temp_output_dir`, `sample_tile_uint16`, `mock_regionprop`.
+Tests are in `tests/` using pytest. Fixtures in `conftest.py`: `sample_tile` (512×512 RGB), `sample_mask` (boolean circle), `mock_loader` (mocked CZI loader), `temp_output_dir`, `sample_tile_uint16`, `mock_regionprop`, `empty_mask`, `simple_rectangular_mask`, `sample_tile_grayscale`.
 
 | Test file | What it validates |
 |-----------|------------------|
