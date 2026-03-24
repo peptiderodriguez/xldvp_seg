@@ -779,6 +779,7 @@ def run_pipeline(args):
         args.html_score_threshold = 0.0
 
     params = build_detection_params(args, pixel_size_um)
+    params['segmenter'] = getattr(args, 'segmenter', 'cellpose')
     logger.info(f"Detection params: {params}")
 
     strategy = create_strategy(

@@ -37,15 +37,22 @@ class InstanSegStrategy(CellStrategy):
         self,
         instanseg_model: str = "fluorescence_nuclei_and_cells",
         min_mask_pixels: int = 10,
+        pixel_size_um: float = None,
         **kwargs,
     ):
         super().__init__(min_mask_pixels=min_mask_pixels, **kwargs)
         self.instanseg_model_name = instanseg_model
+        self._pixel_size_um = pixel_size_um
         self._instanseg = None
 
     @property
     def name(self) -> str:
         return "instanseg"
+
+    def detect(self, tile, models, pixel_size_um, **kwargs):
+        """Override to capture pixel_size_um before CellStrategy.detect() calls segment()."""
+        self._pixel_size_um = pixel_size_um
+        return super().detect(tile, models, pixel_size_um, **kwargs)
 
     def _ensure_instanseg(self):
         """Lazy-load the InstanSeg model."""
@@ -105,10 +112,10 @@ class InstanSegStrategy(CellStrategy):
 
             # Run InstanSeg: eval_small_image returns (labeled_masks, image_tensor)
             # labeled_masks shape: (1, n_types, H, W) where n_types=2 (nuclei+cells)
-            pixel_size = kwargs.get('pixel_size_um', None)
+            pixel_size = self._pixel_size_um or kwargs.get('pixel_size_um', None)
             if pixel_size is None:
                 raise ValueError(
-                    "InstanSeg requires pixel_size_um — pass it via kwargs or strategy params"
+                    "InstanSeg requires pixel_size_um — set in constructor or pass via kwargs"
                 )
             result = self._instanseg.eval_small_image(
                 input_tensor,

@@ -174,10 +174,11 @@ def _build_kwargs_instanseg(
     strategy_params: Dict[str, Any],
     extract_deep_features: bool,
     extract_sam2_embeddings: bool,
+    pixel_size_um: Optional[float] = None,
     **_ignored,
 ) -> Dict[str, Any]:
     """Build constructor kwargs for InstanSegStrategy."""
-    return dict(
+    kwargs = dict(
         instanseg_model=strategy_params.get("instanseg_model", "fluorescence_nuclei_and_cells"),
         min_area_um=strategy_params.get("min_area_um", 50),
         max_area_um=strategy_params.get("max_area_um", 200),
@@ -185,6 +186,12 @@ def _build_kwargs_instanseg(
         extract_sam2_embeddings=extract_sam2_embeddings,
         resnet_batch_size=strategy_params.get("resnet_batch_size", 32),
     )
+    if pixel_size_um is not None:
+        kwargs["pixel_size_um"] = pixel_size_um
+    # Pass cellpose_input_channels if set (inherited from cell params)
+    if strategy_params.get("cellpose_input_channels"):
+        kwargs["cellpose_input_channels"] = strategy_params["cellpose_input_channels"]
+    return kwargs
 
 
 # Map cell_type -> kwargs builder function
@@ -243,21 +250,27 @@ def create_strategy(
             )
         _validated = True
 
+    # Determine actual strategy type: --segmenter instanseg overrides cell -> instanseg
+    effective_type = cell_type
+    segmenter = strategy_params.get("segmenter", "cellpose")
+    if cell_type == "cell" and segmenter == "instanseg":
+        effective_type = "instanseg"
+
     # Look up strategy class from registry
     try:
-        strategy_class = StrategyRegistry.get_strategy_class(cell_type)
+        strategy_class = StrategyRegistry.get_strategy_class(effective_type)
     except KeyError:
         available = ", ".join(sorted(StrategyRegistry.list_strategies()))
         raise ValueError(
-            f"Unknown cell_type: '{cell_type}'. Supported types: {available}"
+            f"Unknown cell_type: '{effective_type}'. Supported types: {available}"
         )
 
     # Build strategy-specific kwargs
-    kwargs_builder = _KWARGS_BUILDERS.get(cell_type)
+    kwargs_builder = _KWARGS_BUILDERS.get(effective_type)
     if kwargs_builder is None:
         raise ValueError(
-            f"No parameter builder for cell_type '{cell_type}'. "
-            f"Add a _build_kwargs_{cell_type}() function and register it in _KWARGS_BUILDERS."
+            f"No parameter builder for cell_type '{effective_type}'. "
+            f"Add a _build_kwargs_{effective_type}() function and register it in _KWARGS_BUILDERS."
         )
 
     kwargs = kwargs_builder(

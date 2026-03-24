@@ -514,9 +514,10 @@ def postprocess_args(args, parser):
         args.all_channels = True
         args.tp_display_channels_list = [int(x) for x in args.tp_display_channels.split(',')]
 
-    # Map --segmenter instanseg to the registered instanseg strategy
-    if getattr(args, 'segmenter', 'cellpose') == 'instanseg' and args.cell_type == 'cell':
-        args.cell_type = 'instanseg'
+    # Keep cell_type='cell' even with --segmenter instanseg.
+    # The segmenter choice is passed to strategy_factory separately.
+    if not hasattr(args, 'segmenter'):
+        args.segmenter = 'cellpose'
 
     # Handle --multi-marker: automatically enable dependent flags
     if getattr(args, 'multi_marker', False):
