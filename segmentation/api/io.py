@@ -24,31 +24,6 @@ def export_lmd(slide, crosses, output_dir=None, min_score=0.5,
     Returns:
         Path to output directory with XML files.
     """
-    import sys
-    sys.path.insert(0, str(Path(__file__).resolve().parent.parent.parent))
-
-    from segmentation.utils.json_utils import fast_json_load
-
-    if output_dir is None:
-        output_dir = str(slide.output_dir / "lmd") if slide.output_dir else "lmd_export"
-    output_dir = Path(output_dir)
-    output_dir.mkdir(parents=True, exist_ok=True)
-
-    # Filter by score
-    detections = [d for d in slide.detections
-                  if d.get("rf_prediction", 0) >= min_score]
-    logger.info("LMD export: %d detections above score %.2f", len(detections), min_score)
-
-    if not detections:
-        logger.warning("No detections above score threshold")
-        return output_dir
-
-    # Load crosses
-    crosses_data = fast_json_load(str(crosses))
-
-    # This chains several functions from run_lmd_export.py
-    # For the full pipeline (contour extraction, clustering, well assignment, XML),
-    # use run_lmd_export.py directly
     raise NotImplementedError(
         f"Full LMD export pipeline requires contour extraction from HDF5 masks.\n"
         f"Use: xlseg export-lmd --detections {slide.detections_path} "

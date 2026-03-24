@@ -5,7 +5,7 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "xldvp_seg"
 version = "2.0.0"
-description = "Unified cell segmentation pipeline for microscopy images (MK, HSPC, NMJ, Vessel)"
+description = "Spatial cell segmentation and DVP pipeline for CZI microscopy (8 detection strategies, multi-GPU, LMD export)"
 readme = "README.md"
 license = {text = "MIT"}
 requires-python = ">=3.10"

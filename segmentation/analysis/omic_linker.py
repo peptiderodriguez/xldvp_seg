@@ -170,7 +170,9 @@ class OmicLinker:
             pooled_var = ((n_a - 1) * vals_a.var() + (n_b - 1) * vals_b.var()) / max(n_a + n_b - 2, 1)
             pooled_std = np.sqrt(pooled_var) + 1e-10
             effect = (vals_a.mean() - vals_b.mean()) / pooled_std
-            log2fc = np.log2((vals_a.mean() + 1e-10) / (vals_b.mean() + 1e-10))
+            mean_a_pos = max(vals_a.mean(), 1e-10)
+            mean_b_pos = max(vals_b.mean(), 1e-10)
+            log2fc = np.log2(mean_a_pos / mean_b_pos)
             results.append({
                 "feature": col, "statistic": stat, "p_value": pval,
                 "effect_size": effect, "log2fc": log2fc,

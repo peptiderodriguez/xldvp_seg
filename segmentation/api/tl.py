@@ -174,8 +174,6 @@ def train(slide, annotations, feature_set="morph", output_path=None, **kwargs):
 
     from sklearn.ensemble import RandomForestClassifier
     from sklearn.model_selection import cross_val_score
-    from sklearn.pipeline import Pipeline
-    from sklearn.preprocessing import StandardScaler
     import numpy as np
     import joblib
 
@@ -212,7 +210,7 @@ def train(slide, annotations, feature_set="morph", output_path=None, **kwargs):
     output_path.parent.mkdir(parents=True, exist_ok=True)
 
     joblib.dump({
-        "pipeline": rf,
+        "model": rf,
         "feature_names": feature_names,
         "feature_set": feature_set,
         "cv_f1_mean": float(cv_scores.mean()),
@@ -331,7 +329,7 @@ def spatial(slide, output_dir=None, pixel_size=None,
     Path(output_dir).mkdir(parents=True, exist_ok=True)
 
     detections = slide.detections
-    px = pixel_size or slide.pixel_size_um or None
+    px = pixel_size if pixel_size is not None else (slide.pixel_size_um or None)
 
     result_detections = run_spatial_network(
         detections, output_dir,

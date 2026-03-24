@@ -144,6 +144,8 @@ class InstanSegStrategy(CellStrategy):
 
             logger.debug("InstanSeg: %d cells detected in tile", len(masks))
 
+        except (ValueError, RuntimeError):
+            raise  # propagate config/setup errors (pixel_size, model loading)
         except Exception as e:
             logger.warning("InstanSeg failed on tile: %s", e)
             masks = []

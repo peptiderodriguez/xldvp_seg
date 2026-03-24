@@ -341,9 +341,13 @@ class SlideAnalysis:
             adata.obsm["X_sam2"] = sam2_vals
 
         # ResNet and DINOv2 embeddings in obsm
-        for prefix, key in [("resnet_", "X_resnet"), ("dinov2_", "X_dinov2"),
-                             ("resnet_ctx_", "X_resnet_ctx"), ("dinov2_ctx_", "X_dinov2_ctx")]:
-            cols = sorted([c for c in df.columns if c.startswith(prefix)])
+        # Process longer prefixes first to avoid resnet_ matching resnet_ctx_
+        resnet_ctx = sorted([c for c in df.columns if c.startswith("resnet_ctx_")])
+        resnet = sorted([c for c in df.columns if c.startswith("resnet_") and not c.startswith("resnet_ctx_")])
+        dinov2_ctx = sorted([c for c in df.columns if c.startswith("dinov2_ctx_")])
+        dinov2 = sorted([c for c in df.columns if c.startswith("dinov2_") and not c.startswith("dinov2_ctx_")])
+        for cols, key in [(resnet, "X_resnet"), (resnet_ctx, "X_resnet_ctx"),
+                          (dinov2, "X_dinov2"), (dinov2_ctx, "X_dinov2_ctx")]:
             if cols:
                 vals = df[cols].values.astype(np.float32)
                 vals = np.nan_to_num(vals, nan=0.0, posinf=0.0, neginf=0.0)

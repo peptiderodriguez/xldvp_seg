@@ -173,8 +173,8 @@ Beyond the core detection → LMD workflow, the pipeline provides:
 | Analysis | Script | What it does |
 |----------|--------|-------------|
 | **Feature comparison** | `scripts/compare_feature_sets.py` | Compare morph/SAM2/deep feature subsets via 5-fold CV |
-| **Marker classification** | `scripts/classify_markers.py` | Otsu/GMM pos/neg per marker, auto bg correction |
-| **Feature exploration** | `scripts/cluster_by_features.py` | UMAP + HDBSCAN clustering — discover cell subtypes |
+| **Marker classification** | `scripts/classify_markers.py` | Median SNR (default ≥1.5) / Otsu / GMM pos/neg per marker |
+| **Feature exploration** | `scripts/cluster_by_features.py` | UMAP/t-SNE + Leiden/HDBSCAN, spatial smoothing, trajectory |
 | **Spatial network** | `scripts/spatial_cell_analysis.py` | Delaunay graphs, community detection, neighborhoods |
 | **Interactive spatial viewer** | `scripts/generate_multi_slide_spatial_viewer.py` | KDE contours, graph-pattern regions, DBSCAN + hulls, ROI drawing |
 | **Tissue overlay viewer** | `scripts/generate_tissue_overlay.py` | Fluorescence image + cell overlay + ROI + LMD export |

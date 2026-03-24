@@ -79,7 +79,7 @@ def deduplicate_by_mask_overlap(detections, tiles_dir, min_overlap_fraction=0.1,
 
     tiles_dir = Path(tiles_dir)
     n_total = len(detections)
-    print(f"[dedup] Starting dedup for {n_total} detections...", flush=True)
+    logger.info("Starting dedup for {n_total} detections...")
 
     # --- Fix 3 (part 1): Count detections per tile for cache eviction ---
     tile_det_counts = Counter()
@@ -105,8 +105,8 @@ def deduplicate_by_mask_overlap(detections, tiles_dir, min_overlap_fraction=0.1,
                 h5_handles[tile_id] = None
         else:
             h5_handles[tile_id] = None
-    print(f"[dedup] Opened {sum(1 for v in h5_handles.values() if v is not None)} "
-          f"HDF5 files out of {len(unique_tile_ids)} tiles", flush=True)
+    logger.info("Opened {sum(1 for v in h5_handles.values() if v is not None)} "
+          f"HDF5 files out of {len(unique_tile_ids)} tiles")
 
     # Load all masks and compute global bounding boxes.
     # We collect raw (global_xs, global_ys) first, then encode after the loop
@@ -121,7 +121,7 @@ def deduplicate_by_mask_overlap(detections, tiles_dir, min_overlap_fraction=0.1,
 
     for i, det in enumerate(detections):
         if i % 5000 == 0 and i > 0:
-            print(f"[dedup] Loading masks: {i}/{n_total}", flush=True)
+            logger.info("Loading masks: {i}/{n_total}")
 
         tile_origin = tuple(det.get('tile_origin', [0, 0]))
         tile_x, tile_y = tile_origin
@@ -257,7 +257,7 @@ def deduplicate_by_mask_overlap(detections, tiles_dir, min_overlap_fraction=0.1,
             det_info.append((det, bbox, frozenset(encoded.tolist()), len(encoded)))
     del det_info_raw
 
-    print(f"[dedup] Masks loaded. Running overlap check...", flush=True)
+    logger.info("Masks loaded. Running overlap check...")
 
     # Sort by priority descending (keep higher-priority ones)
     if sort_by == 'confidence':
@@ -286,7 +286,7 @@ def deduplicate_by_mask_overlap(detections, tiles_dir, min_overlap_fraction=0.1,
             h = bbox[3] - bbox[1]
             max_dim = max(max_dim, w, h)
     grid_cell = max(max_dim + 1, 500)
-    print(f"[dedup] Spatial grid cell size: {grid_cell} px", flush=True)
+    logger.info("Spatial grid cell size: {grid_cell} px")
 
     from collections import defaultdict
     grid = defaultdict(list)  # (gx, gy) -> list of indices into kept_data
@@ -307,7 +307,7 @@ def deduplicate_by_mask_overlap(detections, tiles_dir, min_overlap_fraction=0.1,
 
     for i, (det, bbox, coord_set, n_coords) in enumerate(det_info):
         if i % 50000 == 0 and i > 0:
-            print(f"[dedup] Overlap check: {i}/{n_total} processed, {len(kept)} kept", flush=True)
+            logger.info("Overlap check: {i}/{n_total} processed, {len(kept)} kept")
 
         if bbox is None or coord_set is None:
             # No mask data — keep detection without overlap check.
@@ -374,7 +374,7 @@ def deduplicate_by_mask_overlap(detections, tiles_dir, min_overlap_fraction=0.1,
     n_removed = len(detections) - len(kept)
     if n_removed > 0:
         logger.info(f"Mask overlap dedup: {len(detections)} -> {len(kept)} ({n_removed} duplicates removed)")
-    print(f"[dedup] Done: {len(detections)} -> {len(kept)} ({n_removed} removed)", flush=True)
+    logger.info("Done: {len(detections)} -> {len(kept)} ({n_removed} removed)")
 
     return kept
 
@@ -424,8 +424,8 @@ def deduplicate_by_iou_nms(
 
     tiles_dir = Path(tiles_dir)
     n_total = len(detections)
-    print(f"[dedup-iou] Starting IoU NMS dedup for {n_total} detections "
-          f"(threshold={iou_threshold})...", flush=True)
+    logger.info("Starting IoU NMS dedup for {n_total} detections "
+          f"(threshold={iou_threshold})...")
 
     # --- Count detections per tile for cache eviction ---
     tile_det_counts = Counter()
@@ -462,7 +462,7 @@ def deduplicate_by_iou_nms(
 
     for i, det in enumerate(detections):
         if i % 5000 == 0 and i > 0:
-            print(f"[dedup-iou] Extracting contours: {i}/{n_total}", flush=True)
+            logger.info("Extracting contours: {i}/{n_total}")
 
         tile_origin = tuple(det.get("tile_origin", [0, 0]))
         tile_x, tile_y = tile_origin
@@ -622,8 +622,8 @@ def deduplicate_by_iou_nms(
     # Mapping: valid_indices[pos] = det_idx (list is O(1) by position)
     det_idx_to_valid_pos = {det_idx: pos for pos, det_idx in enumerate(valid_indices)}
 
-    print(f"[dedup-iou] Contours loaded. Built STRtree with {len(valid_polygons)} polygons. "
-          f"Running NMS...", flush=True)
+    logger.info("Contours loaded. Built STRtree with {len(valid_polygons)} polygons. "
+          f"Running NMS...")
 
     # --- Sort by priority ---
     if sort_by == "confidence":
@@ -690,6 +690,6 @@ def deduplicate_by_iou_nms(
             f"IoU NMS dedup: {n_total} -> {len(result)} "
             f"({n_removed} duplicates removed, threshold={iou_threshold})"
         )
-    print(f"[dedup-iou] Done: {n_total} -> {len(result)} ({n_removed} removed)", flush=True)
+    logger.info("Done: {n_total} -> {len(result)} ({n_removed} removed)")
 
     return result

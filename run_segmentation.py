@@ -185,8 +185,7 @@ def run_pipeline(args):
             # Load pipeline config for metadata
             config_file = slide_output_dir / 'pipeline_config.json'
             if config_file.exists():
-                with open(config_file) as f:
-                    cfg = json.load(f)
+                cfg = fast_json_load(config_file)
                 pixel_size_um = cfg.get('pixel_size_um')
                 if pixel_size_um is None:
                     raise ValueError(
@@ -425,8 +424,7 @@ def run_pipeline(args):
         tile_list_file = slide_output_dir / 'sampled_tiles.json'
         if tile_list_file.exists():
             # Another shard already wrote the tile list -- use it
-            with open(tile_list_file) as f:
-                sampled_tiles = json.load(f)
+            sampled_tiles = fast_json_load(tile_list_file)
             logger.info(f"Loaded shared tile list from {tile_list_file} ({len(sampled_tiles)} tiles)")
         else:
             # First shard to arrive -- write the tile list (atomic via rename)
@@ -444,8 +442,7 @@ def run_pipeline(args):
                 except OSError:
                     pass
                 if tile_list_file.exists():
-                    with open(tile_list_file) as f:
-                        sampled_tiles = json.load(f)
+                    sampled_tiles = fast_json_load(tile_list_file)
                     logger.info(f"Race: loaded shared tile list from {tile_list_file} ({len(sampled_tiles)} tiles)")
 
         # Round-robin shard assignment
@@ -465,8 +462,7 @@ def run_pipeline(args):
             'random_seed': getattr(args, 'random_seed', 42),
         }
         manifest_file = slide_output_dir / f'shard_{shard_idx}_manifest.json'
-        with open(manifest_file, 'w') as f:
-            json.dump(manifest, f)
+        atomic_json_dump(manifest, manifest_file)
 
     # ---- Resume: detect completed stages and set skip flags ----
     skip_detection = False
@@ -486,8 +482,7 @@ def run_pipeline(args):
             # Validate shard completeness
             shard_manifests = list(slide_output_dir.glob('shard_*_manifest.json'))
             if shard_manifests:
-                with open(shard_manifests[0]) as f:
-                    m0 = json.load(f)
+                m0 = fast_json_load(shard_manifests[0])
                 expected_shards = m0.get('shard_total', len(shard_manifests))
                 if len(shard_manifests) < expected_shards:
                     logger.warning(f"Only {len(shard_manifests)}/{expected_shards} shard manifests found -- "
@@ -561,8 +556,7 @@ def run_pipeline(args):
         pipeline_config['display_channels'] = getattr(args, 'tp_display_channels_list', [0, 3, 1])
     config_file = slide_output_dir / 'pipeline_config.json'
     if not config_file.exists() or not getattr(args, 'resume', None):
-        with open(config_file, 'w') as f:
-            json.dump(pipeline_config, f)
+        atomic_json_dump(pipeline_config, config_file)
 
     # ---- Resume fast-path: skip detection, go straight to dedup/HTML/CSV ----
     if skip_detection:
@@ -1243,7 +1237,7 @@ def run_pipeline(args):
                 pbar = tqdm_progress(total=len(tiles_to_process), desc="Processing tiles")
 
                 results_collected = 0
-                while results_collected < len(sampled_tiles):
+                while results_collected < len(tiles_to_process):
                     result = processor.collect_result(timeout=14400)  # 4h timeout per tile
                     if result is None:
                         logger.warning("Timeout waiting for result")
@@ -1380,8 +1374,7 @@ def run_pipeline(args):
                             _tile_rgb = np.load(_td / 'tile_rgb_html.npy')
                             with h5py.File(_td / f'{args.cell_type}_masks.h5', 'r') as _hf:
                                 _tile_masks = _hf['masks'][:]
-                            with open(_td / f'{args.cell_type}_features.json', 'r') as _ff:
-                                _tile_feats = json.load(_ff)
+                            _tile_feats = fast_json_load(_td / f'{args.cell_type}_features.json')
                             for _feat in _tile_feats:
                                 _mc = uid_to_marker.get(_feat.get('uid', ''))
                                 if _mc:
