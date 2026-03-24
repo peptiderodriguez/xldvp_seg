@@ -77,15 +77,15 @@ def find_checkpoint(model_name: str) -> Optional[Path]:
         Path to checkpoint if found, None otherwise
     """
     if model_name not in CHECKPOINT_PATHS:
-        logger.warning(f"Unknown model name: {model_name}")
+        logger.warning("Unknown model name: %s", model_name)
         return None
 
     for path in CHECKPOINT_PATHS[model_name]:
         if path.exists():
-            logger.debug(f"Found {model_name} checkpoint at {path}")
+            logger.debug("Found %s checkpoint at %s", model_name, path)
             return path
 
-    logger.debug(f"No checkpoint found for {model_name}")
+    logger.debug("No checkpoint found for %s", model_name)
     return None
 
 
@@ -170,7 +170,7 @@ class ModelManager:
         else:
             self.device = device
 
-        logger.info(f"ModelManager initialized for device: {self.device}")
+        logger.info("ModelManager initialized for device: %s", self.device)
 
         # Lazy-loaded model storage
         self._sam2_predictor = None
@@ -195,8 +195,7 @@ class ModelManager:
     @staticmethod
     def _get_hf_token():
         """Read HuggingFace token from standard locations."""
-        import os as _os
-        token = _os.environ.get("HF_TOKEN") or _os.environ.get("HUGGING_FACE_HUB_TOKEN")
+        token = os.environ.get("HF_TOKEN") or os.environ.get("HUGGING_FACE_HUB_TOKEN")
         if token:
             return token
         token_path = Path.home() / ".cache" / "huggingface" / "token"
@@ -330,7 +329,7 @@ class ModelManager:
                 "\n".join(f"  - {p}" for p in CHECKPOINT_PATHS['sam2'])
             )
 
-        logger.info(f"Loading SAM2 from {checkpoint_path}...")
+        logger.info("Loading SAM2 from %s...", checkpoint_path)
         self._sam2_model = build_sam2(SAM2_CONFIG, str(checkpoint_path), device=self.device)
 
         # Auto mask generator for MK detection
@@ -400,7 +399,7 @@ class ModelManager:
 
             logger.info("DINOv2 loaded successfully (1024D features)")
         except Exception as e:
-            logger.warning(f"Failed to load DINOv2: {e}. DINOv2 features will be zeros.")
+            logger.warning("Failed to load DINOv2: %s. DINOv2 features will be zeros.", e)
             self._dinov2 = None
             self._dinov2_transform = None
 
@@ -439,13 +438,14 @@ class ModelManager:
             self._uni2 = timm.create_model(
                 "hf-hub:MahmoodLab/UNI2-h", pretrained=True,
             ).eval().to(self.device)
-            from torchvision import transforms as tv_transforms
             self._uni2_transform = tv_transforms.Compose([
                 tv_transforms.Resize(224), tv_transforms.CenterCrop(224),
                 tv_transforms.ToTensor(),
                 tv_transforms.Normalize([0.485, 0.456, 0.406], [0.229, 0.224, 0.225]),
             ])
             logger.info("UNI2 loaded (1536D features)")
+        except RuntimeError:
+            raise  # propagate auth error with instructions
         except Exception as e:
             logger.warning("Failed to load UNI2: %s", e)
             self._uni2 = None
@@ -460,13 +460,14 @@ class ModelManager:
             self._virchow2 = timm.create_model(
                 "hf-hub:paige-ai/Virchow2", pretrained=True,
             ).eval().to(self.device)
-            from torchvision import transforms as tv_transforms
             self._virchow2_transform = tv_transforms.Compose([
                 tv_transforms.Resize(224), tv_transforms.CenterCrop(224),
                 tv_transforms.ToTensor(),
                 tv_transforms.Normalize([0.485, 0.456, 0.406], [0.229, 0.224, 0.225]),
             ])
             logger.info("Virchow2 loaded (2560D features)")
+        except RuntimeError:
+            raise  # propagate auth error with instructions
         except Exception as e:
             logger.warning("Failed to load Virchow2: %s", e)
             self._virchow2 = None
@@ -484,11 +485,13 @@ class ModelManager:
                 )
                 self._conch = model.eval().to(self.device)
                 self._conch_transform = transform
+                logger.info("CONCH loaded (512D features)")
             except ImportError:
                 logger.warning("CONCH requires 'conch' package: pip install conch-ai")
                 self._conch = None
                 self._conch_transform = None
-            logger.info("CONCH loaded (512D features)")
+        except RuntimeError:
+            raise  # propagate auth error with instructions
         except Exception as e:
             logger.warning("Failed to load CONCH: %s", e)
             self._conch = None
@@ -504,7 +507,6 @@ class ModelManager:
                 "owkin/phikon-v2",
             ).eval().to(self.device)
             processor = AutoImageProcessor.from_pretrained("owkin/phikon-v2")
-            from torchvision import transforms as tv_transforms
             self._phikon_v2_transform = tv_transforms.Compose([
                 tv_transforms.Resize(224), tv_transforms.CenterCrop(224),
                 tv_transforms.ToTensor(),
@@ -513,6 +515,8 @@ class ModelManager:
                 ),
             ])
             logger.info("Phikon-v2 loaded (1024D features)")
+        except RuntimeError:
+            raise  # propagate auth error with instructions
         except Exception as e:
             logger.warning("Failed to load Phikon-v2: %s", e)
             self._phikon_v2 = None

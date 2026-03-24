@@ -75,14 +75,13 @@ def markers(slide, marker_channels, marker_names, method="snr",
                      summary.get("n_negative", 0),
                      summary.get("threshold", 0))
 
-    # Build marker_profile from all markers
-    if len(marker_names) > 1:
-        for det in detections:
-            parts = []
-            for name in marker_names:
-                cls = det.get(f"{name}_class", "")
-                parts.append(f"{name}+" if cls == "positive" else f"{name}-")
-            det["marker_profile"] = "/".join(parts)
+    # Build marker_profile from all markers (even for single marker)
+    for det in detections:
+        parts = []
+        for name in marker_names:
+            cls = det.get(f"{name}_class", "")
+            parts.append(f"{name}+" if cls == "positive" else f"{name}-")
+        det["marker_profile"] = "/".join(parts)
 
     # Invalidate cached features_df since detections changed
     slide._features_df = None
@@ -138,7 +137,12 @@ def score(slide, classifier, score_field="rf_prediction", **kwargs):
         return slide
 
     X = np.array(X_rows)
-    scores = pipeline.predict_proba(X)[:, 1]
+    proba = pipeline.predict_proba(X)
+    if proba.shape[1] == 1:
+        # Single class in training data — no positive class probability
+        scores = np.zeros(len(X))
+    else:
+        scores = proba[:, 1]
 
     for idx, s in zip(valid_indices, scores):
         detections[idx][score_field] = float(s)
@@ -170,6 +174,8 @@ def train(slide, annotations, feature_set="morph", output_path=None, **kwargs):
 
     from sklearn.ensemble import RandomForestClassifier
     from sklearn.model_selection import cross_val_score
+    from sklearn.pipeline import Pipeline
+    from sklearn.preprocessing import StandardScaler
     import numpy as np
     import joblib
 
@@ -184,7 +190,7 @@ def train(slide, annotations, feature_set="morph", output_path=None, **kwargs):
     if len(X) == 0:
         raise ValueError("No annotated detections found matching the detections file.")
 
-    # Train RF
+    # Train RF directly — no scaler needed (RF is invariant to monotonic transforms)
     rf = RandomForestClassifier(
         n_estimators=kwargs.get("n_estimators", 200),
         max_depth=kwargs.get("max_depth", 20),
@@ -192,7 +198,7 @@ def train(slide, annotations, feature_set="morph", output_path=None, **kwargs):
         n_jobs=-1,
     )
 
-    # Cross-validation
+    # CV on the bare RF — this is exactly what gets saved, so scores match
     cv_scores = cross_val_score(rf, X, y, cv=5, scoring="f1")
     logger.info("5-fold CV F1: %.3f +/- %.3f", cv_scores.mean(), cv_scores.std())
 
@@ -205,13 +211,8 @@ def train(slide, annotations, feature_set="morph", output_path=None, **kwargs):
     output_path = Path(output_path)
     output_path.parent.mkdir(parents=True, exist_ok=True)
 
-    from sklearn.pipeline import Pipeline
-    from sklearn.preprocessing import StandardScaler
-    pipe = Pipeline([("scaler", StandardScaler()), ("rf", rf)])
-    pipe.fit(X, y)
-
     joblib.dump({
-        "pipeline": pipe,
+        "pipeline": rf,
         "feature_names": feature_names,
         "feature_set": feature_set,
         "cv_f1_mean": float(cv_scores.mean()),
@@ -275,13 +276,22 @@ def cluster(slide, feature_groups="morph", methods="both", resolution=0.1,
         min_cluster_size=kwargs.get("min_cluster_size", 15),
         marker_channels=kwargs.get("marker_channels", ""),
         exclude_channels=kwargs.get("exclude_channels", ""),
-        no_marker_rings=kwargs.get("no_marker_rings", False),
+        marker_rings=not kwargs.get("no_marker_rings", False),
         trajectory=kwargs.get("trajectory", False),
         root_cluster=kwargs.get("root_cluster", None),
         spatial_smooth=kwargs.get("spatial_smooth", False),
         smooth_k=kwargs.get("smooth_k", 15),
         smooth_sim_threshold=kwargs.get("smooth_sim_threshold", 0.5),
         marker_only=kwargs.get("marker_only", False),
+        gate_channel=kwargs.get("gate_channel", None),
+        gate_percentile=kwargs.get("gate_percentile", 90),
+        perplexity=kwargs.get("perplexity", 30),
+        tsne_n_iter=kwargs.get("tsne_n_iter", 1000),
+        min_samples=kwargs.get("min_samples", None),
+        subcluster=kwargs.get("subcluster", False),
+        subcluster_features=kwargs.get("subcluster_features", "shape,sam2"),
+        subcluster_min_size=kwargs.get("subcluster_min_size", 50),
+        subcluster_input=None,
     )
 
     run_clustering(args)

@@ -179,6 +179,8 @@ def _build_kwargs_instanseg(
     """Build constructor kwargs for InstanSegStrategy."""
     return dict(
         instanseg_model=strategy_params.get("instanseg_model", "fluorescence_nuclei_and_cells"),
+        min_area_um=strategy_params.get("min_area_um", 50),
+        max_area_um=strategy_params.get("max_area_um", 200),
         extract_deep_features=extract_deep_features,
         extract_sam2_embeddings=extract_sam2_embeddings,
         resnet_batch_size=strategy_params.get("resnet_batch_size", 32),
@@ -197,15 +199,7 @@ _KWARGS_BUILDERS = {
     "instanseg": _build_kwargs_instanseg,
 }
 
-# Validate that all registered strategies have kwargs builders
-_registered = set(StrategyRegistry.list_strategies())
-_missing = _registered - set(_KWARGS_BUILDERS.keys())
-if _missing:
-    logger.warning(
-        "Strategies registered without kwargs builders: %s. "
-        "create_strategy() will fail for these types.",
-        ", ".join(sorted(_missing)),
-    )
+_validated = False
 
 
 def create_strategy(
@@ -237,6 +231,18 @@ def create_strategy(
     Raises:
         ValueError: If cell_type is not recognized
     """
+    global _validated
+    if not _validated:
+        registered = set(StrategyRegistry.list_strategies())
+        missing = registered - set(_KWARGS_BUILDERS.keys())
+        if missing:
+            logger.warning(
+                "Strategies registered without kwargs builders: %s. "
+                "create_strategy() will fail for these types.",
+                ", ".join(sorted(missing)),
+            )
+        _validated = True
+
     # Look up strategy class from registry
     try:
         strategy_class = StrategyRegistry.get_strategy_class(cell_type)

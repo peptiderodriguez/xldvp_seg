@@ -82,7 +82,11 @@ def sample(
         # Morphological features (with noise around cluster center)
         for key, centers in cluster_morph.items():
             noise_scale = centers[c] * 0.15
-            features[key] = max(0.01, centers[c] + rng.randn() * noise_scale)
+            val = max(0.01, centers[c] + rng.randn() * noise_scale)
+            # Clamp eccentricity to valid range [0, 1]
+            if key == "eccentricity":
+                val = min(1.0, max(0.0, val))
+            features[key] = val
 
         features["area_um2"] = features["area"] * pixel_size_um**2
 
@@ -110,6 +114,7 @@ def sample(
 
         det: Dict[str, Any] = {
             "id": f"sample_cell_{i}",
+            "uid": f"sample_cell_{i}",
             "global_center": [float(x), float(y)],
             "global_center_um": [float(x * pixel_size_um), float(y * pixel_size_um)],
             "features": features,

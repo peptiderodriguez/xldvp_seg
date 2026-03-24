@@ -70,6 +70,8 @@ class ModelRegistry:
         Args:
             meta: ModelMeta instance with model properties
         """
+        if meta.name in cls._registry:
+            logger.warning("Overwriting model '%s'", meta.name)
         cls._registry[meta.name] = meta
         logger.debug("Registered model: %s (task=%s, dim=%d)", meta.name, meta.task, meta.feature_dim)
 
@@ -185,9 +187,9 @@ register_model(
 register_model(
     "resnet50",
     "embedding",
-    2048,
+    4096,
     "both",
-    description="ResNet-50 ImageNet features (masked + context = 4096D)",
+    description="ResNet-50 ImageNet features (2x2048D: masked + context)",
     license="BSD-3",
     installed=True,
 )
@@ -195,9 +197,9 @@ register_model(
 register_model(
     "dinov2_vitl14",
     "embedding",
-    1024,
+    2048,
     "both",
-    description="DINOv2 ViT-L/14 features (masked + context = 2048D)",
+    description="DINOv2 ViT-L/14 features (2x1024D: masked + context)",
     license="Apache-2.0",
     installed=True,
 )

@@ -5,12 +5,13 @@ which applies cell-type-dependent defaults, parses compound args, and validates.
 """
 
 import argparse
-import logging
 from pathlib import Path
 
 import torch
 
-_logger = logging.getLogger(__name__)
+from segmentation.utils.logging import get_logger
+
+_logger = get_logger(__name__)
 
 
 def build_parser():
@@ -512,6 +513,10 @@ def postprocess_args(args, parser):
     if args.cell_type == 'tissue_pattern':
         args.all_channels = True
         args.tp_display_channels_list = [int(x) for x in args.tp_display_channels.split(',')]
+
+    # Map --segmenter instanseg to the registered instanseg strategy
+    if getattr(args, 'segmenter', 'cellpose') == 'instanseg' and args.cell_type == 'cell':
+        args.cell_type = 'instanseg'
 
     # Handle --multi-marker: automatically enable dependent flags
     if getattr(args, 'multi_marker', False):

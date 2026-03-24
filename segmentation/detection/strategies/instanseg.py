@@ -7,7 +7,6 @@ features) is inherited from CellStrategy.
 Requires: pip install instanseg-torch
 """
 
-import gc
 import numpy as np
 from typing import Dict, Any, List
 
@@ -106,9 +105,14 @@ class InstanSegStrategy(CellStrategy):
 
             # Run InstanSeg: eval_small_image returns (labeled_masks, image_tensor)
             # labeled_masks shape: (1, n_types, H, W) where n_types=2 (nuclei+cells)
+            pixel_size = kwargs.get('pixel_size_um', None)
+            if pixel_size is None:
+                raise ValueError(
+                    "InstanSeg requires pixel_size_um — pass it via kwargs or strategy params"
+                )
             result = self._instanseg.eval_small_image(
                 input_tensor,
-                pixel_size=getattr(self, 'pixel_size_um', 0.5),
+                pixel_size=pixel_size,
             )
 
             # Extract labeled mask from result tuple: (labeled_masks, image_tensor)
@@ -144,5 +148,4 @@ class InstanSegStrategy(CellStrategy):
             logger.warning("InstanSeg failed on tile: %s", e)
             masks = []
 
-        gc.collect()
         return masks

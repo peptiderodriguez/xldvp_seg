@@ -29,11 +29,27 @@ class OmicLinker:
     """Links morphological features to mass-spec proteomics data."""
 
     def __init__(self, features_df=None, detections=None):
-        self._features_df = features_df
+        self.__features_df = features_df
         self._detections = detections
         self._proteomics = None
         self._well_mapping = None
         self._linked = None
+
+    @property
+    def _features_df(self):
+        """Lazily build features DataFrame from detections if needed."""
+        if self.__features_df is None and self._detections is not None:
+            rows = []
+            for det in self._detections:
+                row = dict(det.get("features", {}))
+                row["uid"] = det.get("uid") or det.get("id", "")
+                rows.append(row)
+            self.__features_df = pd.DataFrame(rows).set_index("uid")
+        return self.__features_df
+
+    @_features_df.setter
+    def _features_df(self, value):
+        self.__features_df = value
 
     @classmethod
     def from_slide(cls, slide):
@@ -95,6 +111,12 @@ class OmicLinker:
         df = self._features_df.copy()
         df["well"] = df.index.map(self._well_mapping)
         df = df.dropna(subset=["well"])
+        if len(df) == 0:
+            logger.warning(
+                "No detections matched well mapping keys. "
+                "Check UID format consistency between detections and well mapping."
+            )
+            return pd.DataFrame()
 
         morph_cols = [c for c in df.columns
                       if c != "well" and not c.endswith("_class")]
@@ -144,11 +166,14 @@ class OmicLinker:
                 )
             else:
                 stat, pval = stats.ttest_ind(vals_a, vals_b)
-            pooled_std = vals_a.std() + vals_b.std() + 1e-10
-            effect = (vals_a.mean() - vals_b.mean()) / pooled_std * 2
+            n_a, n_b = len(vals_a), len(vals_b)
+            pooled_var = ((n_a - 1) * vals_a.var() + (n_b - 1) * vals_b.var()) / max(n_a + n_b - 2, 1)
+            pooled_std = np.sqrt(pooled_var) + 1e-10
+            effect = (vals_a.mean() - vals_b.mean()) / pooled_std
+            log2fc = np.log2((vals_a.mean() + 1e-10) / (vals_b.mean() + 1e-10))
             results.append({
                 "feature": col, "statistic": stat, "p_value": pval,
-                "effect_size": effect,
+                "effect_size": effect, "log2fc": log2fc,
                 "mean_a": vals_a.mean(), "mean_b": vals_b.mean(),
             })
 
@@ -181,18 +206,17 @@ class OmicLinker:
         corr_matrix = pd.DataFrame(
             index=morph_features, columns=proteins, dtype=float
         )
+        if method == "spearman":
+            from scipy.stats import spearmanr as _corr_func
+        else:
+            from scipy.stats import pearsonr as _corr_func
         for mf in morph_features:
             for prot in proteins:
                 vals = self._linked[[mf, prot]].dropna()
                 if len(vals) < 5:
                     corr_matrix.loc[mf, prot] = np.nan
                     continue
-                if method == "spearman":
-                    from scipy.stats import spearmanr
-                    r, _ = spearmanr(vals[mf], vals[prot])
-                else:
-                    from scipy.stats import pearsonr
-                    r, _ = pearsonr(vals[mf], vals[prot])
+                r, _ = _corr_func(vals[mf], vals[prot])
                 corr_matrix.loc[mf, prot] = r
         return corr_matrix
 
@@ -202,12 +226,12 @@ class OmicLinker:
             raise ValueError("Call link() first.")
         prot_cols = set(self._proteomics.columns) if self._proteomics is not None else set()
         proteins = [c for c in self._linked.columns if c in prot_cols]
+        from scipy.stats import spearmanr
         correlations = []
         for prot in proteins:
             vals = self._linked[[morph_feature, prot]].dropna()
             if len(vals) < 5:
                 continue
-            from scipy.stats import spearmanr
             r, p = spearmanr(vals[morph_feature], vals[prot])
             correlations.append({"protein": prot, "correlation": r, "p_value": p})
         return pd.DataFrame(correlations).sort_values(

@@ -47,6 +47,7 @@ class SlideAnalysis:
         self._config = None
         self._features_df = None
         self._positions_um = None
+        self._contours = None
         self._pixel_size_um_cached = None
         # Discovered file paths
         self._detections_path = None
@@ -195,14 +196,12 @@ class SlideAnalysis:
     @property
     def contours(self) -> list:
         """List of contour arrays (contour_dilated_px or contour_um per detection)."""
-        result = []
-        for det in self.detections:
-            c = det.get("contour_dilated_px") or det.get("contour_um")
-            if c is not None:
-                result.append(np.array(c))
-            else:
-                result.append(None)
-        return result
+        if self._contours is None:
+            self._contours = []
+            for det in self.detections:
+                c = det.get("contour_dilated_px") or det.get("contour_um")
+                self._contours.append(np.array(c) if c is not None else None)
+        return self._contours
 
     # --- Metadata properties ---
 
@@ -341,6 +340,15 @@ class SlideAnalysis:
             sam2_vals = np.nan_to_num(sam2_vals, nan=0.0, posinf=0.0, neginf=0.0)
             adata.obsm["X_sam2"] = sam2_vals
 
+        # ResNet and DINOv2 embeddings in obsm
+        for prefix, key in [("resnet_", "X_resnet"), ("dinov2_", "X_dinov2"),
+                             ("resnet_ctx_", "X_resnet_ctx"), ("dinov2_ctx_", "X_dinov2_ctx")]:
+            cols = sorted([c for c in df.columns if c.startswith(prefix)])
+            if cols:
+                vals = df[cols].values.astype(np.float32)
+                vals = np.nan_to_num(vals, nan=0.0, posinf=0.0, neginf=0.0)
+                adata.obsm[key] = vals
+
         # Spatial coordinates
         pos = self.positions_um
         if pos is not None and len(pos) == adata.n_obs:
@@ -351,11 +359,21 @@ class SlideAnalysis:
     # --- Repr ---
 
     def __repr__(self) -> str:
-        px = self.pixel_size_um
+        # Use cached data to avoid triggering lazy loading from repr
+        n = len(self._detections) if self._detections is not None else "?"
+        summary = self._summary or {}
+        config = self._config or {}
+        name = summary.get(
+            "slide_name", self._output_dir.name if self._output_dir else "unknown"
+        )
+        ct = summary.get("cell_type", config.get("cell_type", "unknown"))
+        px = self._pixel_size_um_cached or summary.get(
+            "pixel_size_um", config.get("pixel_size_um", 0.0)
+        )
         px_str = f"{px:.4f}" if px else "?"
         return (
-            f"SlideAnalysis(slide='{self.slide_name}', cell_type='{self.cell_type}', "
-            f"n={self.n_detections}, px={px_str} um)"
+            f"SlideAnalysis(slide='{name}', cell_type='{ct}', "
+            f"n={n}, px={px_str} um)"
         )
 
     def __len__(self) -> int:

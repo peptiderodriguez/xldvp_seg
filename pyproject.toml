@@ -28,6 +28,7 @@ classifiers = [
 # Core dependencies (PyTorch and SAM2 installed separately - see install.sh)
 dependencies = [
     "numpy>=1.24",
+    "pandas>=1.5",
     "opencv-python>=4.8",
     "scipy>=1.10",
     "scikit-learn>=1.0",
@@ -41,11 +42,6 @@ dependencies = [
     "psutil>=5.8",
     "joblib>=1.2",
     "cellpose>=3.0",
-    "instanseg-torch>=0.1",
-    # Model loading (brightfield FMs, feature extractors)
-    "timm>=0.9",
-    "transformers>=4.30",
-    "huggingface-hub>=0.20",
     # SpatialData / scverse ecosystem
     "spatialdata>=0.1",
     "anndata>=0.10",
@@ -61,6 +57,14 @@ dev = [
     "pytest-cov>=4.0",
     "black>=23.0",
     "ruff>=0.1",
+]
+brightfield = [
+    "timm>=0.9",
+    "transformers>=4.30",
+    "huggingface-hub>=0.20",
+]
+instanseg = [
+    "instanseg-torch>=0.1",
 ]
 
 [project.scripts]

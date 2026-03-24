@@ -46,9 +46,16 @@ def aggregate_slide(slide, group_by=None):
         agg.columns = [f"{col}_{stat}" for col, stat in agg.columns]
         return agg
     else:
-        result = df[summary_cols].agg(["mean", "median", "std"]).T
-        result["count"] = len(df)
-        result["slide_name"] = slide.slide_name
+        stats = {}
+        for col in summary_cols:
+            vals = df[col].dropna()
+            if len(vals) > 0:
+                stats[f"{col}_mean"] = vals.mean()
+                stats[f"{col}_median"] = vals.median()
+                stats[f"{col}_std"] = vals.std()
+                stats[f"{col}_count"] = len(vals)
+        result = pd.DataFrame([stats])
+        result.index = [slide.slide_name]
         return result
 
 
@@ -100,6 +107,14 @@ def cohort_to_anndata(cohort_df, metadata=None):
 
     numeric_cols = cohort_df.select_dtypes(include=[np.number]).columns
     X = cohort_df[numeric_cols].values.astype(np.float32)
+    nan_counts = np.isnan(X).sum(axis=0)
+    if nan_counts.any():
+        nan_features = [numeric_cols[i] for i in range(len(nan_counts)) if nan_counts[i] > 0]
+        logger.warning(
+            "NaN values in %d features replaced with 0: %s",
+            len(nan_features),
+            nan_features[:5],
+        )
     X = np.nan_to_num(X, nan=0.0)
 
     obs = pd.DataFrame(index=cohort_df.index)

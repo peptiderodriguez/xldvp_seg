@@ -21,32 +21,52 @@ _REPO = Path(__file__).resolve().parent.parent.parent
 def _run_script(script_relpath: str, remaining: list[str]) -> None:
     """Run a script via runpy.run_path, forwarding remaining CLI args."""
     script = _REPO / script_relpath
-    sys.argv = [str(script)] + remaining
-    runpy.run_path(str(script), run_name="__main__")
+    old_argv = sys.argv
+    try:
+        sys.argv = [str(script)] + remaining
+        runpy.run_path(str(script), run_name="__main__")
+    finally:
+        sys.argv = old_argv
 
 
 def _run_detect(remaining):
-    sys.argv = ["xlseg detect"] + remaining
-    from run_segmentation import main
-    main()
+    old_argv = sys.argv
+    try:
+        sys.argv = ["xlseg detect"] + remaining
+        from run_segmentation import main
+        main()
+    finally:
+        sys.argv = old_argv
 
 
 def _run_classify(remaining):
-    sys.argv = ["xlseg classify"] + remaining
-    from train_classifier import main
-    main()
+    old_argv = sys.argv
+    try:
+        sys.argv = ["xlseg classify"] + remaining
+        from train_classifier import main
+        main()
+    finally:
+        sys.argv = old_argv
 
 
 def _run_export_lmd(remaining):
-    sys.argv = ["xlseg export-lmd"] + remaining
-    from run_lmd_export import main
-    main()
+    old_argv = sys.argv
+    try:
+        sys.argv = ["xlseg export-lmd"] + remaining
+        from run_lmd_export import main
+        main()
+    finally:
+        sys.argv = old_argv
 
 
 def _run_serve(remaining):
-    sys.argv = ["xlseg serve"] + remaining
-    from serve_html import main
-    main()
+    old_argv = sys.argv
+    try:
+        sys.argv = ["xlseg serve"] + remaining
+        from serve_html import main
+        main()
+    finally:
+        sys.argv = old_argv
 
 
 def _run_info(remaining):
@@ -90,7 +110,7 @@ def _run_download_models(remaining):
                         help="Download a specific model by name")
     args = parser.parse_args(remaining)
     from segmentation.models.manager import get_model_manager
-    manager = get_model_manager()
+    manager = get_model_manager(device="cpu")
     models_to_load = []
     if args.brightfield or args.all:
         models_to_load = ["uni2", "virchow2", "conch", "phikon_v2"]

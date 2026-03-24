@@ -411,7 +411,7 @@ def deduplicate_by_iou_nms(
     from collections import Counter
     from pathlib import Path
     from shapely import STRtree
-    from shapely.geometry import Polygon, Point
+    from shapely.geometry import Polygon
 
     if not detections:
         return []
