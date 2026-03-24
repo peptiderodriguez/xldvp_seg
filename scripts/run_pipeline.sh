@@ -332,7 +332,7 @@ import json, sys
 markers = json.loads(sys.argv[1])
 if not markers:
     sys.exit(0)
-methods = set(m.get('method', 'otsu_half') for m in markers)
+methods = set(m.get('method', 'snr') for m in markers)
 if len(methods) > 1:
     print(f'ERROR: Mixed marker methods not supported in single invocation: {methods}', file=sys.stderr)
     sys.exit(1)

@@ -6,7 +6,9 @@ Classifies cells as marker-positive or marker-negative based on per-channel
 intensity features already present in the detections JSON.
 
 Methods:
-  otsu       Otsu threshold on background-subtracted intensities (recommended)
+  snr        Median-based SNR >= threshold (default 1.5). Recommended.
+             SNR = median_raw / median_of_neighbor_medians.
+  otsu       Otsu threshold on background-subtracted intensities (fallback)
   otsu_half  Otsu threshold / 2 (permissive, no background subtraction)
   gmm        2-component GMM on log1p intensities (P >= 0.75 = positive)
 
@@ -452,9 +454,9 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument('--marker-name', required=True,
                         help='Comma-separated marker names matching channels '
                              '(e.g. tdTomato or SMA,CD31)')
-    parser.add_argument('--method', default='otsu',
-                        choices=['otsu', 'otsu_half', 'gmm', 'snr'],
-                        help='Default classification method (default: otsu). '
+    parser.add_argument('--method', default='snr',
+                        choices=['snr', 'otsu', 'otsu_half', 'gmm'],
+                        help='Default classification method (default: snr). '
                              'Override per-marker with --methods.')
     parser.add_argument('--methods', default=None,
                         help='Per-marker methods, comma-separated matching --marker-name order '

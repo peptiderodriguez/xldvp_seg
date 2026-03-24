@@ -215,8 +215,8 @@ channel_map:
   # cyto: PM          # for Cellpose 2-channel input
   # nuc: 488          # nuclear channel
 markers:                          # post-detection marker classification
-  - {channel: 1, name: NeuN, method: otsu}
-  - {channel: 2, name: tdTomato, method: otsu}
+  - {channel: 1, name: NeuN}
+  - {channel: 2, name: tdTomato}
 spatialdata:
   enabled: true
   extract_shapes: true
@@ -233,6 +233,8 @@ slurm:
   num_jobs: <number of slides>
 ```
 Then run: `scripts/run_pipeline.sh configs/<name>.yaml`
+
+**IMPORTANT**: After `run_pipeline.sh` generates the sbatch, **read the generated sbatch file** and verify `--num-gpus` matches your GPU allocation, the Python path is correct, and all flags are as expected. Then check Step 10 verification after the job starts.
 
 For **local**: Build and run the `run_segmentation.py` command directly:
 ```bash
@@ -321,6 +323,8 @@ The viewer includes per-channel R/G/B toggle buttons, contour overlay toggle, an
 For small detections (NfL pieces, region splits), use `--crop-context-factor 4.0 --contour-thickness 3` for more tissue context and visible contours. For standard cells, the default `2.0` context factor works well.
 
 **Step 10d — Nuclear counting (optional, after detection completes).** Ask: *"Want to count nuclei per cell? This runs Cellpose again on just the nuclear channel to segment individual nuclei, then counts how many fall inside each cell."*
+
+**IMPORTANT**: Use the **unfiltered** `cell_detections.json` (pre-classifier, pre-quality-filter) for nuclear counting. This ensures consistency across slides — the same cell set gets nuclei regardless of downstream filtering.
 
 Two ways to run:
 - **Pipeline-integrated** (for future runs, zero extra I/O — reuses SHM + models):
@@ -444,6 +448,8 @@ PYTHONPATH=$REPO $XLDVP_PYTHON $REPO/scripts/classify_markers.py \
 - `ch{N}_snr`: signal-to-noise ratio (median_raw / background)
 - `ch{N}_median_raw`, `ch{N}_mean_raw`, etc.: uncorrected feature values
 - All `ch{N}_median`, `ch{N}_mean`, etc.: corrected values (bg-subtracted)
+
+**`--normalize-channel`** (optional): Divides each marker's SNR by a reference channel's SNR before thresholding, filtering autofluorescent cells that are bright in all channels. **Not recommended for membrane stains** (PM) — median pixel inside membrane-stained cells is near zero, making the normalization a no-op. May be useful with cytoplasmic reference channels.
 
 **Per-marker output fields** (written by `classify_markers.py`):
 - `{marker}_class`: positive / negative
