@@ -234,7 +234,7 @@ slurm:
 ```
 Then run: `scripts/run_pipeline.sh configs/<name>.yaml`
 
-**IMPORTANT**: After `run_pipeline.sh` generates the sbatch, **read the generated sbatch file** and verify `--num-gpus` matches your GPU allocation, the Python path is correct, and all flags are as expected. Then check Step 10 verification after the job starts.
+For a new YAML template, verify the generated sbatch once (`--num-gpus`, Python path, all flags). Once verified, the template can be reused without re-checking. Always check Step 10 verification after the job starts.
 
 For **local**: Build and run the `run_segmentation.py` command directly:
 ```bash

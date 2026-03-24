@@ -31,7 +31,8 @@ These behaviors apply throughout every Claude Code session on this project:
 - Prefer `--channel-spec "detect=MARKER"` over raw `--channel N` in all examples and configs.
 
 **SLURM job submission (MANDATORY — no exceptions):**
-- Before EVERY `sbatch` submission: read the sbatch, verify `--dependency` job IDs are correct and not cancelled/stale, verify `--num-gpus` matches SLURM allocation, verify python path, verify input file paths exist.
+- Use `run_pipeline.sh` + YAML configs as the standard workflow. Verify the generated sbatch ONCE for a new template, then reuse. Do NOT rewrite sbatch from scratch each time — that leads to errors.
+- Before EVERY `sbatch` submission: verify `--dependency` job IDs are correct and not cancelled/stale, verify `--num-gpus` matches SLURM allocation, verify python path, verify input file paths exist.
 - After EVERY submission: check first output lines within 30 seconds to confirm correct startup (GPU worker count, input file loaded).
 - When cancelling and resubmitting: cancel ALL downstream jobs, update ALL dependency IDs, verify ALL sbatch files before resubmitting. Never submit before verifying.
 - Never run heavy compute on login nodes — always SLURM.
