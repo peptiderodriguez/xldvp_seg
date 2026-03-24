@@ -480,11 +480,11 @@ class TestFormatCoordinatesForExport:
 class TestConvertDetectionsToSpatialUIDs:
     """Tests for convert_detections_to_spatial_uids function."""
 
-    def test_convert_with_center_field(self):
-        """Test conversion when detections have center field."""
+    def test_convert_with_global_center(self):
+        """Test conversion when detections have global_center field."""
         detections = [
-            {'global_id': 123, 'center': [1000, 2000]},
-            {'global_id': 456, 'center': [3000, 4000]},
+            {'global_id': 123, 'global_center': [1000, 2000]},
+            {'global_id': 456, 'global_center': [3000, 4000]},
         ]
         result = convert_detections_to_spatial_uids(detections, "slide_01", "mk")
 
@@ -493,7 +493,7 @@ class TestConvertDetectionsToSpatialUIDs:
 
     def test_preserves_legacy_global_id(self):
         """Test that legacy global_id is preserved."""
-        detections = [{'global_id': 123, 'center': [1000, 2000]}]
+        detections = [{'global_id': 123, 'global_center': [1000, 2000]}]
         result = convert_detections_to_spatial_uids(detections, "slide", "mk")
 
         assert result[0]['legacy_global_id'] == 123
