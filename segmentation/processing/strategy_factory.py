@@ -178,7 +178,7 @@ def _build_kwargs_instanseg(
 ) -> Dict[str, Any]:
     """Build constructor kwargs for InstanSegStrategy."""
     return dict(
-        instanseg_model=strategy_params.get("instanseg_model", "fluorescence_multichannel_general"),
+        instanseg_model=strategy_params.get("instanseg_model", "fluorescence_nuclei_and_cells"),
         extract_deep_features=extract_deep_features,
         extract_sam2_embeddings=extract_sam2_embeddings,
         resnet_batch_size=strategy_params.get("resnet_batch_size", 32),

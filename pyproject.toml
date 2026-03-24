@@ -41,6 +41,11 @@ dependencies = [
     "psutil>=5.8",
     "joblib>=1.2",
     "cellpose>=3.0",
+    "instanseg-torch>=0.1",
+    # Model loading (brightfield FMs, feature extractors)
+    "timm>=0.9",
+    "transformers>=4.30",
+    "huggingface-hub>=0.20",
     # SpatialData / scverse ecosystem
     "spatialdata>=0.1",
     "anndata>=0.10",

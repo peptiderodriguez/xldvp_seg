@@ -36,7 +36,7 @@ class InstanSegStrategy(CellStrategy):
 
     def __init__(
         self,
-        instanseg_model: str = "fluorescence_multichannel_general",
+        instanseg_model: str = "fluorescence_nuclei_and_cells",
         min_mask_pixels: int = 10,
         **kwargs,
     ):
@@ -82,8 +82,9 @@ class InstanSegStrategy(CellStrategy):
         self._ensure_instanseg()
 
         try:
-            # InstanSeg expects (H, W, C) RGB or multichannel input
-            # Use 2-channel input if available (same as Cellpose 2-channel mode)
+            import torch
+
+            # Build input: 2-channel (cyto+nuc) or RGB
             if self.cellpose_input_channels and extra_channels:
                 cyto_idx, nuc_idx = self.cellpose_input_channels
                 cyto_ch = extra_channels.get(cyto_idx)
@@ -91,26 +92,46 @@ class InstanSegStrategy(CellStrategy):
                 if cyto_ch is not None and nuc_ch is not None:
                     cyto_u8 = self._percentile_normalize_single(cyto_ch)
                     nuc_u8 = self._percentile_normalize_single(nuc_ch)
-                    input_img = np.stack([cyto_u8, nuc_u8], axis=-1)
+                    # InstanSeg expects (C, H, W) tensor
+                    input_tensor = torch.from_numpy(
+                        np.stack([cyto_u8, nuc_u8], axis=0)
+                    ).float()
                 else:
-                    input_img = tile
+                    input_tensor = torch.from_numpy(
+                        tile.transpose(2, 0, 1)
+                    ).float()
             else:
-                input_img = tile
+                # RGB tile (H, W, 3) -> (3, H, W) tensor
+                input_tensor = torch.from_numpy(tile.transpose(2, 0, 1)).float()
 
-            # Run InstanSeg -- returns labeled mask (H, W)
-            labeled_mask = self._instanseg(input_img)
+            # Run InstanSeg: eval_small_image returns (labeled_masks, image_tensor)
+            # labeled_masks shape: (1, n_types, H, W) where n_types=2 (nuclei+cells)
+            result = self._instanseg.eval_small_image(
+                input_tensor,
+                pixel_size=getattr(self, 'pixel_size_um', 0.5),
+            )
 
-            # Handle various return types
-            if hasattr(labeled_mask, "numpy"):
-                labeled_mask = labeled_mask.numpy()
-            if isinstance(labeled_mask, tuple):
-                labeled_mask = labeled_mask[0]
-            labeled_mask = np.squeeze(labeled_mask)
+            # Extract labeled mask from result tuple: (labeled_masks, image_tensor)
+            if isinstance(result, tuple):
+                labeled_tensor = result[0]
+            else:
+                labeled_tensor = result
+            # Shape: (1, n_types, H, W). For "fluorescence_nuclei_and_cells":
+            #   channel 0 = nuclei instances, channel 1 = cell instances
+            # Use cell channel (index 1) for whole-cell segmentation.
+            if labeled_tensor.dim() == 4 and labeled_tensor.shape[1] >= 2:
+                labeled_mask = labeled_tensor[0, 1].cpu().numpy()  # cell channel
+            elif labeled_tensor.dim() == 4:
+                labeled_mask = labeled_tensor[0, 0].cpu().numpy()
+            else:
+                labeled_mask = labeled_tensor.squeeze().cpu().numpy()
+
+            labeled_mask = labeled_mask.astype(np.int32)
 
             # Convert labeled mask to list of boolean masks
             masks = []
             unique_labels = np.unique(labeled_mask)
-            unique_labels = unique_labels[unique_labels > 0]  # exclude background
+            unique_labels = unique_labels[unique_labels > 0]
 
             for label_id in unique_labels:
                 binary_mask = labeled_mask == label_id
