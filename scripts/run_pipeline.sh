@@ -115,7 +115,15 @@ CP_CHANNELS=$(read_yaml cellpose_input_channels "")
 PHOTOBLEACH=$(read_yaml photobleach_correction false)
 ALL_CHANNELS=$(read_yaml all_channels false)
 LOAD_CHANNELS=$(read_yaml load_channels "")
-NUM_GPUS=$(read_yaml num_gpus 1)
+# Default num_gpus from SLURM GPU count (e.g. "l40s:4" -> 4)
+_slurm_gpus=$(read_yaml slurm.gpus "")
+_default_ngpu=1
+if [[ "$_slurm_gpus" =~ :([0-9]+)$ ]]; then
+    _default_ngpu="${BASH_REMATCH[1]}"
+elif [[ "$_slurm_gpus" =~ ^[0-9]+$ ]]; then
+    _default_ngpu="$_slurm_gpus"
+fi
+NUM_GPUS=$(read_yaml num_gpus "$_default_ngpu")
 MIN_AREA=$(read_yaml min_area_um "")
 MAX_AREA=$(read_yaml max_area_um "")
 
