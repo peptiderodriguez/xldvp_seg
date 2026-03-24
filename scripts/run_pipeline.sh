@@ -610,10 +610,36 @@ mkdir -p "$OUTPUT_DIR"
 # ---------------------------------------------------------------------------
 # Multi-node sharding: generate shard array + merge job
 # ---------------------------------------------------------------------------
+# Warn if sharding + multi-slide (not supported)
+if [[ "$NUM_SHARDS" -gt 1 && "$MULTI_SLIDE" == "true" ]]; then
+    echo "WARNING: sharding.num_shards=$NUM_SHARDS ignored in multi-slide mode." >&2
+    echo "Multi-node sharding is only supported for single-slide configs." >&2
+    NUM_SHARDS=0
+fi
+
+# Block downstream jobs in multi-slide mode (CZI_PATH is empty)
+if [[ "$MULTI_SLIDE" == "true" ]]; then
+    for _ds_flag in "$DS_QUALITY_FILTER" "$DS_NUCLEI" "$DS_HTML" "$DS_CLUSTERING"; do
+        if [[ "$_ds_flag" == "true" ]]; then
+            echo "Error: downstream jobs not supported in multi-slide mode." >&2
+            echo "Use per-slide configs or run downstream steps manually." >&2
+            exit 1
+        fi
+    done
+fi
+
 if [[ "$NUM_SHARDS" -gt 1 && "$MULTI_SLIDE" == "false" ]]; then
     echo "Multi-node sharding: $NUM_SHARDS shards"
 
-    # Shard detection array
+    # Pre-create shared run directory so all shards write to the same place
+    _slide_name=$(basename "$CZI_PATH" .czi)
+    _slide_dir="${OUTPUT_DIR}/${_slide_name}"
+    mkdir -p "$_slide_dir"
+    SHARED_RUN_DIR="${_slide_dir}/${_slide_name}_$(date +%Y%m%d_%H%M%S)_100pct"
+    mkdir -p "$SHARED_RUN_DIR"
+    echo "  Shared run dir: $SHARED_RUN_DIR"
+
+    # Shard detection array — all shards --resume into the shared dir
     SHARD_SBATCH="${OUTPUT_DIR}/pipeline_${NAME}_shards_$$.sbatch"
     {
         echo "#!/bin/bash"
@@ -632,7 +658,8 @@ if [[ "$NUM_SHARDS" -gt 1 && "$MULTI_SLIDE" == "false" ]]; then
         echo "export PYTHONPATH=\"$REPO\""
         echo "XLDVP_PYTHON=\"$XLDVP_PYTHON\""
         echo ""
-        echo "$(build_seg_cmd "$CZI_PATH" "$OUTPUT_DIR") --tile-shard \${SLURM_ARRAY_TASK_ID}/${NUM_SHARDS}"
+        echo "# All shards write to the same shared directory"
+        echo "$(build_seg_cmd "$CZI_PATH" "$_slide_dir") --resume \"$SHARED_RUN_DIR\" --tile-shard \${SLURM_ARRAY_TASK_ID}/${NUM_SHARDS}"
     } > "$SHARD_SBATCH"
     chmod +x "$SHARD_SBATCH"
 
@@ -640,7 +667,8 @@ if [[ "$NUM_SHARDS" -gt 1 && "$MULTI_SLIDE" == "false" ]]; then
     SHARD_JOB_ID=$(echo "$SHARD_OUTPUT" | grep -oP 'Submitted batch job \K\d+')
     echo "  Shard array job: $SHARD_JOB_ID (${NUM_SHARDS} tasks)"
 
-    # Merge job (MUST include --resume — without it, argparse errors silently)
+    # Merge job — uses the known shared dir (no ls -td discovery)
+    # Only needs 1 GPU for post-dedup processing
     MERGE_SBATCH="${OUTPUT_DIR}/pipeline_${NAME}_merge_$$.sbatch"
     {
         echo "#!/bin/bash"
@@ -649,7 +677,7 @@ if [[ "$NUM_SHARDS" -gt 1 && "$MULTI_SLIDE" == "false" ]]; then
         echo "#SBATCH --nodes=1"
         echo "#SBATCH --cpus-per-task=${CPUS}"
         echo "#SBATCH --mem=${MEM_GB}G"
-        echo "#SBATCH --gres=gpu:${GPUS}"
+        echo "#SBATCH --gres=gpu:${GPU_TYPE}:1"
         echo "#SBATCH --time=${TIME}"
         echo "#SBATCH --output=${OUTPUT_DIR}/slurm_${NAME}_merge_%j.out"
         echo "#SBATCH --error=${OUTPUT_DIR}/slurm_${NAME}_merge_%j.err"
@@ -658,13 +686,10 @@ if [[ "$NUM_SHARDS" -gt 1 && "$MULTI_SLIDE" == "false" ]]; then
         echo "export PYTHONPATH=\"$REPO\""
         echo "XLDVP_PYTHON=\"$XLDVP_PYTHON\""
         echo ""
-        echo "# Find the run directory (created by first shard)"
-        echo "RUN_DIR=\$(ls -td \"${OUTPUT_DIR}\"/*/  2>/dev/null | head -1)"
-        echo "if [[ -z \"\$RUN_DIR\" ]]; then echo 'ERROR: No run directory found'; exit 1; fi"
-        echo "echo \"Merging shards in \$RUN_DIR\""
+        echo "echo \"Merging shards in $SHARED_RUN_DIR\""
         echo ""
-        echo "# CRITICAL: --merge-shards REQUIRES --resume"
-        echo "$(build_seg_cmd "$CZI_PATH" "$OUTPUT_DIR") --resume \"\$RUN_DIR\" --merge-shards"
+        echo "# CRITICAL: --merge-shards REQUIRES --resume (without it, argparse errors silently)"
+        echo "$(build_seg_cmd "$CZI_PATH" "$_slide_dir") --resume \"$SHARED_RUN_DIR\" --merge-shards"
     } > "$MERGE_SBATCH"
     chmod +x "$MERGE_SBATCH"
 
@@ -672,8 +697,12 @@ if [[ "$NUM_SHARDS" -gt 1 && "$MULTI_SLIDE" == "false" ]]; then
     MAIN_JOB_ID=$(echo "$MERGE_OUTPUT" | grep -oP 'Submitted batch job \K\d+')
     echo "  Merge job: $MAIN_JOB_ID (dep: $SHARD_JOB_ID)"
 
+    # For downstream jobs, set the known run dir
+    KNOWN_RUN_DIR="$SHARED_RUN_DIR"
+
 else
     # Standard single-job submission
+    KNOWN_RUN_DIR=""  # will be discovered at runtime
     MAIN_JOB_OUTPUT=$(sbatch "$SBATCH_FILE") || { echo "Error: sbatch submission failed" >&2; exit 1; }
     echo "$MAIN_JOB_OUTPUT"
     MAIN_JOB_ID=$(echo "$MAIN_JOB_OUTPUT" | grep -oP 'Submitted batch job \K\d+') || true
@@ -711,8 +740,13 @@ if [[ "$DS_QUALITY_FILTER" == "true" ]]; then
         echo "set -euo pipefail"
         echo "export PYTHONPATH=\"$REPO\""
         echo "XLDVP_PYTHON=\"$XLDVP_PYTHON\""
-        echo "RUN_DIR=\$(ls -td \"${OUTPUT_DIR}\"/*/  2>/dev/null | head -1)"
+        if [[ -n "$KNOWN_RUN_DIR" ]]; then
+            echo "RUN_DIR=\"${KNOWN_RUN_DIR}/\""
+        else
+            echo "RUN_DIR=\$(ls -td \"${OUTPUT_DIR}\"/*/  2>/dev/null | head -1)"
+        fi
         echo "DET=\"\${RUN_DIR}${CELL_TYPE}_detections.json\""
+        echo "if [[ -z \"\$RUN_DIR\" || ! -f \"\$DET\" ]]; then echo 'ERROR: Detection output not found'; exit 1; fi"
         echo "echo \"=== \$(date): Quality filter ===\""
         echo "\$XLDVP_PYTHON $REPO/scripts/quality_filter_detections.py \\"
         echo "    --detections \"\$DET\" \\"
@@ -751,7 +785,12 @@ if [[ "$DS_NUCLEI" == "true" ]]; then
         echo "set -euo pipefail"
         echo "export PYTHONPATH=\"$REPO\""
         echo "XLDVP_PYTHON=\"$XLDVP_PYTHON\""
-        echo "RUN_DIR=\$(ls -td \"${OUTPUT_DIR}\"/*/  2>/dev/null | head -1)"
+        if [[ -n "$KNOWN_RUN_DIR" ]]; then
+            echo "RUN_DIR=\"${KNOWN_RUN_DIR}/\""
+        else
+            echo "RUN_DIR=\$(ls -td \"${OUTPUT_DIR}\"/*/  2>/dev/null | head -1)"
+        fi
+        echo "if [[ -z \"\$RUN_DIR\" || ! -f \"\${RUN_DIR}${CELL_TYPE}_detections.json\" ]]; then echo 'ERROR: Detection output not found'; exit 1; fi"
         echo "echo \"=== \$(date): Nuclear counting ===\""
         echo "\$XLDVP_PYTHON $REPO/scripts/count_nuclei_per_cell.py \\"
         echo "    --detections \"\${RUN_DIR}${CELL_TYPE}_detections.json\" \\"
@@ -786,7 +825,12 @@ if [[ "$DS_HTML" == "true" ]]; then
         echo "set -euo pipefail"
         echo "export PYTHONPATH=\"$REPO\""
         echo "XLDVP_PYTHON=\"$XLDVP_PYTHON\""
-        echo "RUN_DIR=\$(ls -td \"${OUTPUT_DIR}\"/*/  2>/dev/null | head -1)"
+        if [[ -n "$KNOWN_RUN_DIR" ]]; then
+            echo "RUN_DIR=\"${KNOWN_RUN_DIR}/\""
+        else
+            echo "RUN_DIR=\$(ls -td \"${OUTPUT_DIR}\"/*/  2>/dev/null | head -1)"
+        fi
+        echo "if [[ -z \"\$RUN_DIR\" ]]; then echo 'ERROR: Run directory not found'; exit 1; fi"
         # Use classified detections if markers ran, else filtered, else raw
         echo "DET=\"\${RUN_DIR}${CELL_TYPE}_detections.json\""
         echo "for _f in \"\${RUN_DIR}${CELL_TYPE}_detections_classified.json\" \"\${RUN_DIR}${CELL_TYPE}_detections_filtered.json\"; do"
@@ -827,8 +871,13 @@ if [[ "$DS_CLUSTERING" == "true" ]]; then
         echo "set -euo pipefail"
         echo "export PYTHONPATH=\"$REPO\""
         echo "XLDVP_PYTHON=\"$XLDVP_PYTHON\""
-        echo "RUN_DIR=\$(ls -td \"${OUTPUT_DIR}\"/*/  2>/dev/null | head -1)"
+        if [[ -n "$KNOWN_RUN_DIR" ]]; then
+            echo "RUN_DIR=\"${KNOWN_RUN_DIR}/\""
+        else
+            echo "RUN_DIR=\$(ls -td \"${OUTPUT_DIR}\"/*/  2>/dev/null | head -1)"
+        fi
         echo "DET=\"\${RUN_DIR}${CELL_TYPE}_detections.json\""
+        echo "if [[ -z \"\$RUN_DIR\" || ! -f \"\$DET\" ]]; then echo 'ERROR: Detection output not found'; exit 1; fi"
         echo "for _f in \"\${RUN_DIR}${CELL_TYPE}_detections_classified.json\" \"\${RUN_DIR}${CELL_TYPE}_detections_filtered.json\"; do"
         echo "    if [[ -f \"\$_f\" ]]; then DET=\"\$_f\"; break; fi"
         echo "done"
