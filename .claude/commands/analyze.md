@@ -249,7 +249,20 @@ For 2-channel Cellpose (generic cell detection):
     --channel-spec "cyto=<marker>,nuc=<nuclear_marker>"
 ```
 
-**Step 10 — Monitor until complete.** On SLURM, use `squeue -u $USER` to check status. Offer to tail the log file. On local, the command runs directly.
+**Step 10 — Verify and monitor.**
+
+**Immediately after submission (within 30 seconds):**
+1. Read the generated sbatch — verify `--num-gpus` matches SLURM GPU allocation (e.g., 4 GPUs allocated = `--num-gpus 4`)
+2. Verify the Python path is the mkseg conda python, not bare `python`
+3. Verify `--dependency` job IDs (if chained) point to the correct jobs that haven't been cancelled
+4. Verify input file paths exist and are from the correct pipeline run
+
+**After the job starts running:**
+1. Check the log for GPU worker count: `grep "Starting.*GPU workers" <log>`. Must show the correct number (e.g., "Starting 4 GPU workers").
+2. Check tile processing speed: first few tiles should be ~3-15s each (not 2 min — that means only 1 GPU is working).
+3. If anything is wrong, cancel immediately and fix before resubmitting.
+
+On SLURM, use `squeue -u $USER` to check status. Tail the log file to monitor progress.
 
 **Step 10b — Restarting / Resuming (if job crashed or was cancelled).**
 
