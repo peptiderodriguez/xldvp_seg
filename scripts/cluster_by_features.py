@@ -444,6 +444,74 @@ def get_marker_mean_keys(marker_channels):
     )
 
 
+def spatial_smooth_features(X, positions_um, k=15, sim_threshold=0.5, n_pca=50):
+    """Feature-gated spatial smoothing.
+
+    For each cell, replaces its features with a weighted average of its
+    spatial neighbors' features, where weight = cosine_similarity(cell, neighbor)
+    in PCA space. Only neighbors above sim_threshold contribute.
+
+    This prevents smoothing across tissue boundaries (e.g., hepatocyte next to
+    endothelial cell) and preserves rare cell types that differ from their
+    spatial neighbors in feature space.
+
+    Args:
+        X: Feature matrix (n_cells, n_features), already scaled.
+        positions_um: Cell positions in microns (n_cells, 2).
+        k: Number of spatial nearest neighbors.
+        sim_threshold: Minimum cosine similarity to include neighbor (0-1).
+        n_pca: PCA dimensions for similarity computation.
+
+    Returns:
+        X_smooth: Smoothed feature matrix (same shape as X).
+    """
+    from scipy.spatial import KDTree
+    from sklearn.decomposition import PCA
+    from sklearn.preprocessing import normalize
+
+    n_cells = X.shape[0]
+    if n_cells < k + 1:
+        return X.copy()
+
+    # PCA for similarity computation (faster than full feature space)
+    n_components = min(n_pca, X.shape[1], n_cells - 1)
+    X_pca = PCA(n_components=n_components).fit_transform(X)
+    # L2-normalize for cosine similarity via dot product
+    X_pca_norm = normalize(X_pca, norm='l2')
+
+    # Build spatial KD-tree
+    tree = KDTree(positions_um)
+    distances, indices = tree.query(positions_um, k=k + 1)  # +1 includes self
+
+    X_smooth = np.zeros_like(X, dtype=np.float64)
+    n_smoothed = 0
+
+    for i in range(n_cells):
+        neighbor_idx = indices[i, 1:]  # exclude self
+
+        # Cosine similarity in PCA space
+        sims = X_pca_norm[neighbor_idx] @ X_pca_norm[i]
+
+        # Gate: only neighbors above threshold
+        mask = sims >= sim_threshold
+        if mask.sum() == 0:
+            # No similar neighbors -- keep original features
+            X_smooth[i] = X[i]
+            continue
+
+        # Weighted average: weight = cosine similarity
+        weights = sims[mask]
+        weights = weights / weights.sum()  # normalize
+
+        X_smooth[i] = weights @ X[neighbor_idx[mask]]
+        n_smoothed += 1
+
+    print(f"[spatial-smooth] {n_smoothed}/{n_cells} cells smoothed "
+          f"(k={k}, sim_threshold={sim_threshold})")
+
+    return X_smooth
+
+
 def run_clustering(args):
     """Main clustering pipeline."""
     from sklearn.preprocessing import StandardScaler
@@ -583,6 +651,25 @@ def run_clustering(args):
 
     # Replace NaN/inf with 0
     X_scaled = np.nan_to_num(X_scaled, nan=0.0, posinf=0.0, neginf=0.0)
+
+    # Feature-gated spatial smoothing (opt-in)
+    if args.spatial_smooth:
+        from segmentation.utils.detection_utils import extract_positions_um
+
+        # Extract positions only for valid detections (aligned with X_scaled rows)
+        valid_dets_for_positions = [detections[i] for i in valid_indices]
+        positions, _px_size = extract_positions_um(valid_dets_for_positions)
+        if positions is not None and len(positions) == X_scaled.shape[0]:
+            X_original = X_scaled.copy()  # keep unsmoothed for comparison
+            X_scaled = spatial_smooth_features(
+                X_scaled, positions,
+                k=args.smooth_k,
+                sim_threshold=args.smooth_sim_threshold,
+            )
+        else:
+            n_pos = len(positions) if positions is not None else 0
+            print(f"[spatial-smooth] WARNING: Could not extract positions for all cells "
+                  f"({n_pos}/{X_scaled.shape[0]}), skipping smoothing")
 
     # Optional PCA pre-reduction for large feature sets
     if X_scaled.shape[1] > 50:
@@ -1570,6 +1657,15 @@ def main():
     parser.add_argument('--marker-only', action='store_true',
                         help='Use only normalized marker channel _mean features '
                         '(population p1-p99.5 percentile stretch)')
+    parser.add_argument('--spatial-smooth', action='store_true', default=False,
+                        help='Apply feature-gated spatial smoothing before dim reduction. '
+                             'Weights neighbors by spatial proximity AND feature similarity '
+                             '(cosine in PCA space). Preserves tissue boundaries and rare cell types.')
+    parser.add_argument('--smooth-k', type=int, default=15,
+                        help='Number of spatial neighbors for smoothing (default: 15)')
+    parser.add_argument('--smooth-sim-threshold', type=float, default=0.5,
+                        help='Minimum cosine similarity to include a neighbor in smoothing '
+                             '(default: 0.5, range 0-1). Higher = more conservative.')
     parser.add_argument('--n-neighbors', type=int, default=30,
                         help='UMAP n_neighbors (default: 30)')
     parser.add_argument('--min-dist', type=float, default=0.1,
