@@ -539,10 +539,12 @@ python run_segmentation.py --czi-path slide.czi --cell-type nmj \
     --tile-shard 0/4 --resume /shared/output/dir  # node 0
     --tile-shard 1/4 --resume /shared/output/dir  # node 1
 
-# Merge all shards
+# Merge all shards (MUST include --resume — without it, argparse errors out silently)
 python run_segmentation.py --czi-path slide.czi --cell-type nmj \
     --resume /shared/output/dir --merge-shards
 ```
+
+**CRITICAL**: `--merge-shards` REQUIRES `--resume <shared-output-dir>`. Without `--resume`, the command prints argparse help and exits with error code 0 — which means SLURM reports "COMPLETED" even though nothing was merged. Always verify the merge log shows actual detection counts, not just argparse output.
 
 ---
 
