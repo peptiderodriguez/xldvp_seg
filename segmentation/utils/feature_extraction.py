@@ -311,6 +311,12 @@ MORPHOLOGICAL_FEATURE_COUNT = 22
 # This is re-exported here for convenience
 VESSEL_FEATURE_COUNT = 28  # Approx count, see vessel_features.py for exact list
 
+# Brightfield foundation model dimensions (per-pass, not including context crops)
+UNI2_FEATURE_DIM = 1536
+VIRCHOW2_FEATURE_DIM = 2560
+CONCH_FEATURE_DIM = 512
+PHIKON_V2_FEATURE_DIM = 1024
+
 
 def extract_morphological_features(mask: np.ndarray, image: np.ndarray, tile_global_mean: Optional[float] = None) -> dict:
     """

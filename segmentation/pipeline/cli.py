@@ -256,6 +256,10 @@ def build_parser():
     parser.add_argument('--dedup-by-confidence', action='store_true', default=False,
                         help='Sort by confidence (score) instead of area during deduplication. '
                              'Default: sort by area (largest mask wins overlap).')
+    parser.add_argument('--segmenter', type=str, default='cellpose',
+                        choices=['cellpose', 'instanseg'],
+                        help='Cell segmentation model (default: cellpose). '
+                             'instanseg requires: pip install instanseg-torch')
     parser.add_argument('--dedup-method', type=str, default='mask_overlap',
                         choices=['mask_overlap', 'iou_nms'],
                         help='Deduplication method: mask_overlap (pixel-exact, default; uses '

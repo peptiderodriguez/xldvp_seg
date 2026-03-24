@@ -170,6 +170,21 @@ def _build_kwargs_mesothelium(
     )
 
 
+def _build_kwargs_instanseg(
+    strategy_params: Dict[str, Any],
+    extract_deep_features: bool,
+    extract_sam2_embeddings: bool,
+    **_ignored,
+) -> Dict[str, Any]:
+    """Build constructor kwargs for InstanSegStrategy."""
+    return dict(
+        instanseg_model=strategy_params.get("instanseg_model", "fluorescence_multichannel_general"),
+        extract_deep_features=extract_deep_features,
+        extract_sam2_embeddings=extract_sam2_embeddings,
+        resnet_batch_size=strategy_params.get("resnet_batch_size", 32),
+    )
+
+
 # Map cell_type -> kwargs builder function
 _KWARGS_BUILDERS = {
     "nmj": _build_kwargs_nmj,
@@ -179,6 +194,7 @@ _KWARGS_BUILDERS = {
     "tissue_pattern": _build_kwargs_tissue_pattern,
     "vessel": _build_kwargs_vessel,
     "mesothelium": _build_kwargs_mesothelium,
+    "instanseg": _build_kwargs_instanseg,
 }
 
 # Validate that all registered strategies have kwargs builders

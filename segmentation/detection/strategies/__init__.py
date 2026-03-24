@@ -29,6 +29,7 @@ from .vessel import VesselStrategy
 from .mesothelium import MesotheliumStrategy
 from .islet import IsletStrategy
 from .tissue_pattern import TissuePatternStrategy
+from .instanseg import InstanSegStrategy
 from .mixins import MultiChannelFeatureMixin
 
 __all__ = [
@@ -42,5 +43,6 @@ __all__ = [
     'MesotheliumStrategy',
     'IsletStrategy',
     'TissuePatternStrategy',
+    'InstanSegStrategy',
     'MultiChannelFeatureMixin',
 ]

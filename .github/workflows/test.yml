@@ -1,0 +1,36 @@
+name: Tests
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        python-version: ["3.10", "3.12"]
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python ${{ matrix.python-version }}
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+
+      - name: Install package
+        run: |
+          pip install -e ".[dev]"
+          pip install numpy scipy scikit-learn scikit-image pandas anndata shapely
+
+      - name: Run lightweight tests
+        run: |
+          pytest tests/test_registry.py tests/test_sample_dataset.py \
+                 tests/test_metrics.py tests/test_cli.py \
+                 tests/test_utils.py tests/test_coordinates.py \
+                 -v --tb=short
+        env:
+          PYTHONPATH: .

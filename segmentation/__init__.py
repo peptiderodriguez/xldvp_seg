@@ -31,4 +31,13 @@ __all__ = [
     "processing",
     "preprocessing",
     "utils",
+    "core",
+    "api",
+    "analysis",
+    "models",
+    "metrics",
+    "datasets",
 ]
+
+# Convenience re-exports
+from segmentation.core import SlideAnalysis  # noqa: E402

@@ -78,6 +78,41 @@ def _run_strategies(remaining):
     StrategyRegistry.print_strategies()
 
 
+def _run_download_models(remaining):
+    """Download model checkpoints."""
+    import argparse as _ap
+    parser = _ap.ArgumentParser(prog="xlseg download-models")
+    parser.add_argument("--brightfield", action="store_true",
+                        help="Download brightfield FMs (UNI2, Virchow2, CONCH, Phikon-v2)")
+    parser.add_argument("--all", action="store_true",
+                        help="Download all registered models")
+    parser.add_argument("--model", type=str, default=None,
+                        help="Download a specific model by name")
+    args = parser.parse_args(remaining)
+    from segmentation.models.manager import get_model_manager
+    manager = get_model_manager()
+    models_to_load = []
+    if args.brightfield or args.all:
+        models_to_load = ["uni2", "virchow2", "conch", "phikon_v2"]
+    elif args.model:
+        models_to_load = [args.model]
+    else:
+        parser.print_help()
+        return
+    for name in models_to_load:
+        getter = getattr(manager, f"get_{name}", None)
+        if not getter:
+            print(f"  Unknown model: {name}")
+            continue
+        print(f"  Downloading {name}...")
+        try:
+            getter()
+            print(f"  {name}: OK")
+        except Exception as e:
+            print(f"  {name}: FAILED - {e}")
+    manager.cleanup()
+
+
 # ---------------------------------------------------------------------------
 # Dispatch table
 # ---------------------------------------------------------------------------
@@ -93,6 +128,7 @@ _DISPATCH = {
     "system": _run_system,
     "models": _run_models,
     "strategies": _run_strategies,
+    "download-models": _run_download_models,
 }
 
 
@@ -117,6 +153,7 @@ def cli():
     subparsers.add_parser("system", help="Show system info and SLURM recommendations")
     subparsers.add_parser("models", help="List registered model checkpoints")
     subparsers.add_parser("strategies", help="List registered detection strategies")
+    subparsers.add_parser("download-models", help="Download model checkpoints (brightfield needs HF token)")
 
     args, remaining = parser.parse_known_args()
 

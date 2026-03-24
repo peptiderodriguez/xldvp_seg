@@ -182,6 +182,40 @@ class ModelManager:
         self._dinov2 = None
         self._dinov2_transform = None
         self._mk_classifier = None
+        # Brightfield foundation models
+        self._uni2 = None
+        self._uni2_transform = None
+        self._virchow2 = None
+        self._virchow2_transform = None
+        self._conch = None
+        self._conch_transform = None
+        self._phikon_v2 = None
+        self._phikon_v2_transform = None
+
+    @staticmethod
+    def _get_hf_token():
+        """Read HuggingFace token from standard locations."""
+        import os as _os
+        token = _os.environ.get("HF_TOKEN") or _os.environ.get("HUGGING_FACE_HUB_TOKEN")
+        if token:
+            return token
+        token_path = Path.home() / ".cache" / "huggingface" / "token"
+        if token_path.exists():
+            return token_path.read_text().strip()
+        return None
+
+    def _require_hf_token(self, model_name, hf_url):
+        """Get HF token or raise clear error for gated models."""
+        token = self._get_hf_token()
+        if token is None:
+            raise RuntimeError(
+                f"{model_name} requires HuggingFace authentication.\n"
+                f"1. Create account at https://huggingface.co\n"
+                f"2. Accept license at https://huggingface.co/{hf_url}\n"
+                f"3. Run: huggingface-cli login\n"
+                f"   Or set: export HF_TOKEN='hf_...'"
+            )
+        return token
 
     @property
     def sam2_predictor(self):
@@ -370,6 +404,120 @@ class ModelManager:
             self._dinov2 = None
             self._dinov2_transform = None
 
+    # --- Brightfield Foundation Models ---
+
+    def get_uni2(self) -> Tuple[Any, Any]:
+        """Get UNI2 ViT-Giant/14 and transform (1536D). Gated HF model."""
+        if self._uni2 is None:
+            self._load_uni2()
+        return self._uni2, self._uni2_transform
+
+    def get_virchow2(self) -> Tuple[Any, Any]:
+        """Get Virchow2 and transform (2560D). Gated HF model."""
+        if self._virchow2 is None:
+            self._load_virchow2()
+        return self._virchow2, self._virchow2_transform
+
+    def get_conch(self) -> Tuple[Any, Any]:
+        """Get CONCH multimodal model and transform (512D). Gated HF model."""
+        if self._conch is None:
+            self._load_conch()
+        return self._conch, self._conch_transform
+
+    def get_phikon_v2(self) -> Tuple[Any, Any]:
+        """Get Phikon-v2 ViT-L/16 and transform (1024D). Gated HF model."""
+        if self._phikon_v2 is None:
+            self._load_phikon_v2()
+        return self._phikon_v2, self._phikon_v2_transform
+
+    def _load_uni2(self):
+        """Load UNI2 ViT-Giant/14 from HuggingFace (1536D features)."""
+        logger.info("Loading UNI2 pathology foundation model...")
+        try:
+            import timm
+            self._require_hf_token("UNI2", "MahmoodLab/UNI2-h")
+            self._uni2 = timm.create_model(
+                "hf-hub:MahmoodLab/UNI2-h", pretrained=True,
+            ).eval().to(self.device)
+            from torchvision import transforms as tv_transforms
+            self._uni2_transform = tv_transforms.Compose([
+                tv_transforms.Resize(224), tv_transforms.CenterCrop(224),
+                tv_transforms.ToTensor(),
+                tv_transforms.Normalize([0.485, 0.456, 0.406], [0.229, 0.224, 0.225]),
+            ])
+            logger.info("UNI2 loaded (1536D features)")
+        except Exception as e:
+            logger.warning("Failed to load UNI2: %s", e)
+            self._uni2 = None
+            self._uni2_transform = None
+
+    def _load_virchow2(self):
+        """Load Virchow2 from HuggingFace (2560D = CLS 1280 + mean pool 1280)."""
+        logger.info("Loading Virchow2 pathology foundation model...")
+        try:
+            import timm
+            self._require_hf_token("Virchow2", "paige-ai/Virchow2")
+            self._virchow2 = timm.create_model(
+                "hf-hub:paige-ai/Virchow2", pretrained=True,
+            ).eval().to(self.device)
+            from torchvision import transforms as tv_transforms
+            self._virchow2_transform = tv_transforms.Compose([
+                tv_transforms.Resize(224), tv_transforms.CenterCrop(224),
+                tv_transforms.ToTensor(),
+                tv_transforms.Normalize([0.485, 0.456, 0.406], [0.229, 0.224, 0.225]),
+            ])
+            logger.info("Virchow2 loaded (2560D features)")
+        except Exception as e:
+            logger.warning("Failed to load Virchow2: %s", e)
+            self._virchow2 = None
+            self._virchow2_transform = None
+
+    def _load_conch(self):
+        """Load CONCH multimodal model from HuggingFace (512D)."""
+        logger.info("Loading CONCH multimodal pathology model...")
+        try:
+            self._require_hf_token("CONCH", "MahmoodLab/CONCH")
+            try:
+                from conch.open_clip_custom import create_model_from_pretrained
+                model, transform = create_model_from_pretrained(
+                    "conch_ViT-B-16", "hf_hub:MahmoodLab/CONCH"
+                )
+                self._conch = model.eval().to(self.device)
+                self._conch_transform = transform
+            except ImportError:
+                logger.warning("CONCH requires 'conch' package: pip install conch-ai")
+                self._conch = None
+                self._conch_transform = None
+            logger.info("CONCH loaded (512D features)")
+        except Exception as e:
+            logger.warning("Failed to load CONCH: %s", e)
+            self._conch = None
+            self._conch_transform = None
+
+    def _load_phikon_v2(self):
+        """Load Phikon-v2 ViT-L/16 from HuggingFace (1024D)."""
+        logger.info("Loading Phikon-v2 pathology foundation model...")
+        try:
+            from transformers import AutoModel, AutoImageProcessor
+            self._require_hf_token("Phikon-v2", "owkin/phikon-v2")
+            self._phikon_v2 = AutoModel.from_pretrained(
+                "owkin/phikon-v2",
+            ).eval().to(self.device)
+            processor = AutoImageProcessor.from_pretrained("owkin/phikon-v2")
+            from torchvision import transforms as tv_transforms
+            self._phikon_v2_transform = tv_transforms.Compose([
+                tv_transforms.Resize(224), tv_transforms.CenterCrop(224),
+                tv_transforms.ToTensor(),
+                tv_transforms.Normalize(
+                    mean=processor.image_mean, std=processor.image_std
+                ),
+            ])
+            logger.info("Phikon-v2 loaded (1024D features)")
+        except Exception as e:
+            logger.warning("Failed to load Phikon-v2: %s", e)
+            self._phikon_v2 = None
+            self._phikon_v2_transform = None
+
     def get_models_dict(self) -> Dict[str, Any]:
         """
         Get a dict of all loaded models (for passing to detection strategies).
@@ -418,6 +566,16 @@ class ModelManager:
         # Clear DINOv2
         self._dinov2 = None
         self._dinov2_transform = None
+
+        # Clear brightfield FMs
+        self._uni2 = None
+        self._uni2_transform = None
+        self._virchow2 = None
+        self._virchow2_transform = None
+        self._conch = None
+        self._conch_transform = None
+        self._phikon_v2 = None
+        self._phikon_v2_transform = None
 
         # Force garbage collection
         gc.collect()
