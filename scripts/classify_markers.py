@@ -504,14 +504,14 @@ def parse_args() -> argparse.Namespace:
                         help='Output directory (default: same dir as detections)')
     args = parser.parse_args()
 
-    # Background subtraction: default on for otsu and snr, off for others.
-    # --use-raw implies no bg subtraction (raw values are pre-correction).
+    # Background subtraction: default on for otsu only.
+    # SNR uses pipeline-computed SNR directly — no bg subtraction needed.
     if args.no_background_subtract or args.use_raw:
         args.bg_subtract = False
     elif args.background_subtract is not None:
         args.bg_subtract = args.background_subtract
     else:
-        args.bg_subtract = (args.method in ('otsu', 'snr'))
+        args.bg_subtract = (args.method == 'otsu')
 
     # Auto-detect pipeline-corrected detections and disable bg subtraction
     # to prevent double correction.  This is set after loading detections
@@ -726,22 +726,19 @@ def main():
         marker_method = per_marker_method.get(name, args.method)
         marker_feature = per_marker_feature.get(name, args.intensity_feature)
 
-        # For SNR method, disable bg_subtract (uses pipeline SNR directly)
-        # For otsu with --use-raw, disable local bg_subtract (raw values bypass correction)
-        # Global bg is always allowed (it's a simple slide-wide median)
-        # Derive bg_subtract from per-marker method, not global default
-        if args.no_background_subtract or args.use_raw:
+        # bg_subtract: on for otsu only. SNR uses pipeline features directly.
+        if marker_method == 'snr':
             marker_bg_subtract = False
+            marker_global_bg = False
+        elif args.no_background_subtract or args.use_raw:
+            marker_bg_subtract = False
+            marker_global_bg = args.global_background
         elif args.background_subtract is not None:
             marker_bg_subtract = args.background_subtract
+            marker_global_bg = args.global_background
         else:
-            marker_bg_subtract = (marker_method in ('otsu', 'snr'))
-        marker_global_bg = args.global_background
-        if marker_method == 'snr':
-            marker_bg_subtract = False  # SNR reads from pipeline features
-            marker_global_bg = False    # SNR has its own bg handling
-        elif args.use_raw and not args.global_background:
-            marker_bg_subtract = False  # raw values are pre-correction
+            marker_bg_subtract = (marker_method == 'otsu')
+            marker_global_bg = args.global_background
 
         # Skip normalization if this marker IS the normalize channel (self-normalization = degenerate)
         marker_normalize = None if (normalize_ch is not None and ch == normalize_ch) else normalize_snr
