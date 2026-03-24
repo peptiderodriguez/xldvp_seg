@@ -184,7 +184,7 @@ This replaces manual `--channel`, `--cellpose-input-channels`, and `--marker-cha
 - Mesothelium (ribbon-like structures)
 - Islet (pancreatic, needs nuclear + membrane channels)
 - Tissue Pattern (brain FISH, coronal sections)
-- Generic cell (Cellpose, any tissue) — ask which channels for cyto/nuc input
+- Generic cell (Cellpose or InstanSeg, any tissue) — ask which channels for cyto/nuc input. Offer `--segmenter instanseg` as lightweight alternative (requires `pip install -e .[instanseg]`).
 
 **Step 7 — Offer preprocessing preview.** Ask: *"Want to preview flat-field or photobleach correction before the full run?"* If yes, run `scripts/preview_preprocessing.py --czi-path <path> --channel <N> --preprocessing all --output-dir <output>/preview/` and show the output paths.
 

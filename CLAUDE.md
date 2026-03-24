@@ -83,6 +83,10 @@ Tests are in `tests/` using pytest. Fixtures in `conftest.py`: `sample_tile` (51
 | `test_module_imports.py` | HTML export functions, MK/HSPC module imports |
 | `test_mk_hspc_imports.py` | Feature dimension constants match config |
 | `test_nmj_imports.py` | NMJ strategy class methods, classifier loaders |
+| `test_registry.py` | Strategy registry (8 strategies), model registry (9 models, modality filter) |
+| `test_sample_dataset.py` | `sample()` output format, reproducibility, channel features |
+| `test_metrics.py` | IoU, Dice, PQ, Hungarian matching with known values |
+| `test_cli.py` | `xlseg` subcommand parsing, help output, models/strategies display |
 
 Tests rely on `pip install -e .` (or `PYTHONPATH=$REPO`) for `segmentation.*` imports.
 
@@ -103,6 +107,7 @@ xlseg serve /path/to/html               # Serve HTML viewer
 xlseg system                             # Show system info
 xlseg strategies                         # List detection strategies
 xlseg models                             # List model checkpoints
+xlseg download-models --brightfield      # Download gated HF models
 ```
 
 Type `/analyze` inside Claude Code to begin — it detects your system, inspects your data, and walks you through the full pipeline.
@@ -132,6 +137,7 @@ All commands are in `.claude/commands/`. Documentation: `docs/GETTING_STARTED.md
 | **Islet** | Cellpose membrane+nuclear + marker classification | Pancreatic islet cells |
 | **Mesothelium** | Ridge detection for ribbon structures | Mesothelial ribbon for LMD |
 | **Tissue Pattern** | Cellpose + spatial frequency analysis | Whole-mount tissue (brain FISH, coronal) |
+| **InstanSeg** | InstanSeg 3.8M-param alternative to Cellpose | `--segmenter instanseg` with `--cell-type cell` |
 
 ---
 
@@ -480,6 +486,7 @@ All coordinates are [x, y] (horizontal, vertical). UID format: `{slide}_{celltyp
 - `--sequential` does NOT exist — use `--num-gpus 1`
 - `--nuclear-channel` / `--membrane-channel` are islet-only (validated only for `cell_type=='islet'`)
 - `--sample-fraction` is ALWAYS 1.0 — detect 100%, use `--html-sample-fraction` to subsample HTML only
+- `--segmenter {cellpose,instanseg}` — alternative cell segmenter (default: cellpose). Requires `pip install -e .[instanseg]`. Only applies to `--cell-type cell`.
 
 ### Deduplication
 
