@@ -139,6 +139,7 @@ Type `/analyze` inside Claude Code to begin — it detects your system, inspects
 | `/vessel-analysis` | Multi-scale vessel structure detection + spatial viewer |
 | `/view-results` | Launch HTML result viewer with Cloudflare tunnel |
 | `/spatialdata` | Export to SpatialData zarr + squidpy spatial analysis |
+| `/new-experiment` | Fast-track: inspect CZI, generate YAML config, launch pipeline |
 
 All commands are in `.claude/commands/`. Documentation: `docs/GETTING_STARTED.md`, `docs/NMJ_PIPELINE_GUIDE.md`, `docs/LMD_EXPORT_GUIDE.md`, `docs/COORDINATE_SYSTEM.md`, `docs/VESSEL_COMMUNITY_ANALYSIS.md`.
 

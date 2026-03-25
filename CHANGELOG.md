@@ -30,7 +30,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Channel resolution by name/wavelength (`--channel-spec`)
 - `run_pipeline.sh` YAML config-driven SLURM launcher with downstream job chains
 - Pre-commit hooks (ruff + black), Makefile, CI with coverage
-- 460 automated tests across 18 test files
+- ROI-restricted detection module (`segmentation/roi/`) with marker threshold, circular object, and polygon/mask ROI discovery
+- TMA core detection example (`examples/tma/`) with grid labeling and per-core cell segmentation
+- `/new-experiment` slash command for fast-track YAML config generation
+- 488 automated tests across 19 test files
 
 ### Changed
 - All cell types use unified multi-GPU pipeline (no separate single-GPU path)

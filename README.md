@@ -6,7 +6,7 @@
 [![Python 3.10](https://img.shields.io/badge/python-3.10-blue.svg)](https://www.python.org/downloads/)
 [![License: MIT](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
 [![Code style: black](https://img.shields.io/badge/code%20style-black-000000.svg)](https://github.com/psf/black)
-[![Tests: 460](https://img.shields.io/badge/tests-460%20passed-brightgreen.svg)]()
+[![Tests: 488](https://img.shields.io/badge/tests-488%20passed-brightgreen.svg)]()
 
 Detect cells in whole-slide CZI images, classify them by type and marker expression, analyze spatial organization, and export selected cells for laser microdissection and mass spectrometry. End-to-end DVP (Deep Visual Proteomics) from slide to spatial proteomics.
 
@@ -20,6 +20,7 @@ CZI slide → AI detection → annotation → classification → spatial analysi
 - **6,478 features per cell** — morphological (78) + per-channel intensity + SAM2 (256) + ResNet (4,096) + DINOv2 (2,048)
 - **Multi-GPU, multi-node** — scales from laptop to SLURM cluster with per-tile checkpointing and crash resume
 - **Detect once, classify later** — train RF classifier on annotations, score all detections in seconds without re-running detection
+- **ROI-restricted detection** — find islet regions, TMA cores, or bone marrow areas first, then detect cells only within ROIs (skip 95%+ of non-ROI tissue)
 - **Full spatial analysis** — UMAP/t-SNE, Leiden clustering, Delaunay networks, tissue zonation, SpatialData/scverse integration
 - **LMD-ready** — 384-well plate assignment, contour dilation, serpentine well ordering, XML export for Leica
 
@@ -47,6 +48,7 @@ Or use [Claude Code](https://claude.ai/claude-code) for interactive guidance:
 ```
 cd xldvp_seg && claude
 /analyze                        # Claude walks you through everything
+/new-experiment                 # Fast-track: CZI inspect → YAML config → launch
 ```
 
 ---
@@ -63,6 +65,7 @@ cd xldvp_seg && claude
 | **Tissue Pattern** | Cellpose + spatial frequency analysis | Brain FISH, coronal sections |
 | **Mesothelium** | Ridge detection for ribbon structures | Mesothelial ribbon for LMD |
 | **InstanSeg** | 3.8M-param lightweight alternative | `--segmenter instanseg` |
+| **ROI-restricted** | Marker threshold / circular / polygon ROI discovery + per-ROI cell detection | Islets, TMA cores, bone marrow regions |
 
 ---
 
@@ -102,7 +105,7 @@ examples/                  # Project-specific analyses by experiment
 ├── configs/               # YAML pipeline templates
 └── legacy/                # Deprecated scripts (archived)
 
-tests/                     # 460 tests across 18 files
+tests/                     # 488 tests across 19 files
 ```
 
 ---
@@ -201,7 +204,7 @@ See `examples/` for experiment-specific analyses (bone marrow, liver zonation, i
 
 ```bash
 pip install -e ".[dev]"     # Install with dev tools
-make test                   # 460 tests with coverage
+make test                   # 488 tests with coverage
 make lint                   # ruff + black check
 make format                 # Auto-fix formatting
 pre-commit install          # Hook for pre-commit checks
@@ -234,6 +237,7 @@ pre-commit install          # Hook for pre-commit checks
 - **KD-tree background correction.** Per-cell local background from k=30 nearest neighbors, cached across channels.
 - **Direct-to-SHM loading.** CZI channels loaded directly into shared memory, eliminating ~9 GB peak memory.
 - **Strategy pattern.** Detection strategies self-register via `@register_strategy` decorator — add a new cell type in one file.
+- **ROI-restricted detection.** For structured tissues (islets, TMA cores, bone regions), detect ROIs at low resolution first, then run cell segmentation only within ROI bounding boxes — skipping 95%+ of non-ROI tissue for massive speedups.
 
 ---
 

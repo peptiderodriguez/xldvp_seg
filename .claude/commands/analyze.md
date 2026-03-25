@@ -83,7 +83,7 @@ If the user asks "what can you do?" or wants an overview, give this concise summ
 *"This pipeline handles the complete DVP (Deep Visual Proteomics) workflow:*
 
 *1. **Inspect** your CZI slide — channels, dimensions, pixel size*
-*2. **Detect** cells using Cellpose or InstanSeg (8 cell types supported: generic cell, NMJ, MK, vessel, islet, mesothelium, tissue pattern, plus InstanSeg alternative)*
+*2. **Detect** cells using Cellpose or InstanSeg (8 cell types supported: generic cell, NMJ, MK, vessel, islet, mesothelium, tissue pattern, plus InstanSeg alternative). ROI-restricted detection available for islets, TMA cores, and bone marrow regions — detect only within regions of interest, skipping 95%+ of non-ROI tissue.*
 *3. **Annotate** detections in an interactive HTML viewer — click yes/no on cell crops*
 *4. **Classify** with a random forest trained on your annotations (morph, SAM2, or deep features)*
 *5. **Classify markers** as positive/negative per fluorescence channel (median SNR thresholding)*
@@ -92,6 +92,8 @@ If the user asks "what can you do?" or wants an overview, give this concise summ
 *8. **Link to proteomics** — bridge morphological features to mass-spec data*
 
 *You have a SLURM cluster with {n} GPU nodes available. I'll handle YAML configs, sbatch submission, and monitoring. What would you like to analyze?"*
+
+*For experienced users: `/new-experiment` is a faster alternative that goes straight to CZI inspection and YAML config generation.*
 
 For beginners, expand on each step as you reach it. For advanced users, just ask what they want to do.
 
