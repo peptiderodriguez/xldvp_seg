@@ -212,7 +212,7 @@ channel_map:
 - `--all-channels` — enables per-channel intensity features (~15/channel). Always use for multi-channel slides.
 - `--channels "0,1,2"` — skip failed stains to save RAM
 - `--extract-deep-features` — adds ResNet+DINOv2 (6,144 dims). Off by default; morph-only (78 features) is often competitive with all 6,478. Worth trying if morph F1 < 0.85 after annotation.
-- `--photobleaching-correction` (with `-ing`) — for sequential tile scans with intensity decay
+- `--photobleaching-correction` (with `-ing`) — **EXPERIMENTAL**, results unreliable — for sequential tile scans with intensity decay
 - Flat-field ON by default (`--no-normalize-features` to disable; no `--flat-field-correction` flag)
 - `--html-sample-fraction 0.10` — subsample HTML viewer to 10% of detections (browser-friendly)
 - `--sample-fraction` is ALWAYS 1.0 — detect 100%, never suggest partial detection
@@ -497,7 +497,7 @@ All coordinates are [x, y] (horizontal, vertical). UID format: `{slide}_{celltyp
 ### Flag Gotchas
 
 - `--no-normalize-features` disables flat-field (no `--flat-field-correction` flag exists)
-- `--photobleaching-correction` (with `-ing`)
+- `--photobleaching-correction` (with `-ing`) — **EXPERIMENTAL**, results unreliable
 - `--sequential` does NOT exist — use `--num-gpus 1`
 - `--nuclear-channel` / `--membrane-channel` are islet-only (validated only for `cell_type=='islet'`)
 - `--sample-fraction` is ALWAYS 1.0 — detect 100%, use `--html-sample-fraction` to subsample HTML only

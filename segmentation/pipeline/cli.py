@@ -115,7 +115,7 @@ def build_parser():
     parser.add_argument(
         "--photobleaching-correction",
         action="store_true",
-        help="Apply slide-wide photobleaching correction (fixes horizontal/vertical banding)",
+        help="[EXPERIMENTAL] Apply slide-wide photobleaching correction. Results may be unreliable.",
     )
     parser.add_argument(
         "--norm-params-file",

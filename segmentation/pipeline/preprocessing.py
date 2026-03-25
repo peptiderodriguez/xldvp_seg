@@ -25,8 +25,10 @@ def apply_slide_preprocessing(args, all_channel_data, loader):
         all_channel_data: dict of channel_idx -> 2D array (modified in place)
         loader: CZI loader (channel_data updated in place)
     """
-    # Apply photobleaching correction if requested (slide-wide, before tiling)
+    # EXPERIMENTAL: Photobleaching correction — results may be unreliable.
+    # This feature needs rework before production use.
     if getattr(args, "photobleaching_correction", False):
+        logger.warning("Photobleach correction is EXPERIMENTAL and may produce unreliable results.")
         _apply_photobleach_correction(args, all_channel_data, loader)
 
     # Apply flat-field illumination correction (smooth out regional intensity gradients)
