@@ -25,30 +25,31 @@ Coordinate System:
         uid = f"{slide_name}_{cell_type}_{global_cx}_{global_cy}"
 """
 
-import os
 import gc
+import multiprocessing as mp
+import os
 import queue
 import shutil
 import time
 import traceback
 from contextlib import nullcontext
-from pathlib import Path
-from typing import Dict, List, Optional, Tuple, Any
-import multiprocessing as mp
 from multiprocessing.shared_memory import SharedMemory
+from pathlib import Path
+from typing import Any
+
 import numpy as np
 
-from segmentation.utils.logging import get_logger
-from segmentation.utils.detection_utils import safe_to_uint8 as _safe_to_uint8
 from segmentation.processing.multigpu_shm import (
     register_shm_for_cleanup,
     unregister_shm_for_cleanup,
 )
+from segmentation.utils.detection_utils import safe_to_uint8 as _safe_to_uint8
+from segmentation.utils.logging import get_logger
 
 logger = get_logger(__name__)
 
 # Use 'spawn' start method for CUDA compatibility in subprocesses
-_mp_context = mp.get_context('spawn')
+_mp_context = mp.get_context("spawn")
 Process = _mp_context.Process
 Queue = _mp_context.Queue
 Event = _mp_context.Event
@@ -59,30 +60,28 @@ def _gpu_worker(
     input_queue,
     output_queue,
     stop_event,
-    config: Dict[str, Any],
+    config: dict[str, Any],
 ):
-    slide_info = config['slide_info']
-    cell_type = config['cell_type']
-    strategy_params = config['strategy_params']
-    classifier_path = config.get('classifier_path')
-    pixel_size_um = config['pixel_size_um']
-    extract_deep_features = config.get('extract_deep_features', False)
-    extract_sam2_embeddings = config.get('extract_sam2_embeddings', True)
-    detection_channel = config.get('detection_channel', 1)
-    sam2_checkpoint = config.get('sam2_checkpoint')
-    sam2_config = config.get('sam2_config', "configs/sam2.1/sam2.1_hiera_l.yaml")
-    cd31_channel = config.get('cd31_channel')
-    channel_names = config.get('channel_names')
-    variance_threshold = config.get('variance_threshold', 1000.0)
-    channel_keys = config.get('channel_keys')
-    islet_display_channels = config.get('islet_display_channels')
-    tiles_dir = config.get('tiles_dir')
+    slide_info = config["slide_info"]
+    cell_type = config["cell_type"]
+    strategy_params = config["strategy_params"]
+    classifier_path = config.get("classifier_path")
+    pixel_size_um = config["pixel_size_um"]
+    extract_deep_features = config.get("extract_deep_features", False)
+    extract_sam2_embeddings = config.get("extract_sam2_embeddings", True)
+    detection_channel = config.get("detection_channel", 1)
+    sam2_checkpoint = config.get("sam2_checkpoint")
+    sam2_config = config.get("sam2_config", "configs/sam2.1/sam2.1_hiera_l.yaml")
+    cd31_channel = config.get("cd31_channel")
+    channel_names = config.get("channel_names")
+    variance_threshold = config.get("variance_threshold", 1000.0)
+    channel_keys = config.get("channel_keys")
+    islet_display_channels = config.get("islet_display_channels")
+    tiles_dir = config.get("tiles_dir")
 
-    import torch
-
-    from segmentation.utils.device import set_device_for_worker, empty_cache
     from segmentation.detection.tissue import has_tissue
     from segmentation.processing.tile_processing import process_single_tile
+    from segmentation.utils.device import empty_cache, set_device_for_worker
 
     # Configure device for this worker (sets CUDA_VISIBLE_DEVICES on CUDA,
     # returns 'mps' on Apple Silicon, 'cpu' otherwise)
@@ -92,26 +91,26 @@ def _gpu_worker(
     logger.info(f"[{worker_name}] Starting {cell_type} worker on {device}...")
 
     # --- Attach to shared memory ---
-    shared_slides: Dict[str, Tuple[SharedMemory, np.ndarray]] = {}
+    shared_slides: dict[str, tuple[SharedMemory, np.ndarray]] = {}
     try:
         for slide_name, info in slide_info.items():
-            shm = SharedMemory(name=info['shm_name'])
-            arr = np.ndarray(info['shape'], dtype=np.dtype(info['dtype']), buffer=shm.buf)
+            shm = SharedMemory(name=info["shm_name"])
+            arr = np.ndarray(info["shape"], dtype=np.dtype(info["dtype"]), buffer=shm.buf)
             shared_slides[slide_name] = (shm, arr)
     except Exception as e:
         # Clean up any already-attached segments before returning
         for shm, _ in shared_slides.values():
             shm.close()
         logger.error(f"[{worker_name}] Failed to attach shared memory: {e}")
-        output_queue.put({'status': 'init_error', 'gpu_id': gpu_id, 'error': str(e)})
+        output_queue.put({"status": "init_error", "gpu_id": gpu_id, "error": str(e)})
         return
-    models: Dict[str, Any] = {'device': device}
+    models: dict[str, Any] = {"device": device}
 
     # --- Load SAM2 predictor ---
     if extract_sam2_embeddings:
         try:
-            from sam2.sam2_image_predictor import SAM2ImagePredictor
             from sam2.build_sam import build_sam2
+            from sam2.sam2_image_predictor import SAM2ImagePredictor
 
             checkpoint_path = None
             if sam2_checkpoint and Path(sam2_checkpoint).exists():
@@ -130,7 +129,7 @@ def _gpu_worker(
                 logger.info(f"[{worker_name}] Loading SAM2 from {checkpoint_path}...")
                 sam2_model = build_sam2(sam2_config, str(checkpoint_path), device=device)
                 sam2_predictor = SAM2ImagePredictor(sam2_model)
-                models['sam2_predictor'] = sam2_predictor
+                models["sam2_predictor"] = sam2_predictor
                 logger.info(f"[{worker_name}] SAM2 loaded")
             else:
                 logger.warning(f"[{worker_name}] SAM2 checkpoint not found")
@@ -138,31 +137,35 @@ def _gpu_worker(
             logger.warning(f"[{worker_name}] Failed to load SAM2: {e}")
 
     # --- Load SAM2 auto mask generator (MK/Cell need it) ---
-    if cell_type in ('mk',):
+    if cell_type in ("mk",):
         try:
             from sam2.automatic_mask_generator import SAM2AutomaticMaskGenerator
-            if 'sam2_predictor' in models:
+
+            if "sam2_predictor" in models:
                 sam2_auto = SAM2AutomaticMaskGenerator(
-                    models['sam2_predictor'].model,
+                    models["sam2_predictor"].model,
                     points_per_side=24,
                     pred_iou_thresh=0.5,
                     stability_score_thresh=0.4,
                     min_mask_region_area=500,
                     crop_n_layers=1,
                 )
-                models['sam2_auto'] = sam2_auto
+                models["sam2_auto"] = sam2_auto
                 logger.info(f"[{worker_name}] SAM2 auto mask generator loaded")
         except Exception as e:
             logger.warning(f"[{worker_name}] Failed to load SAM2 auto: {e}")
 
     # --- Load Cellpose (Cell/Islet/TissuePattern strategy needs it) ---
-    if cell_type in ('cell', 'islet', 'tissue_pattern'):
+    if cell_type in ("cell", "islet", "tissue_pattern"):
         try:
             from cellpose import models as cellpose_models
+
             from segmentation.utils.device import device_supports_gpu
+
             cellpose_model = cellpose_models.CellposeModel(
-                gpu=device_supports_gpu(device), pretrained_model='cpsam')
-            models['cellpose'] = cellpose_model
+                gpu=device_supports_gpu(device), pretrained_model="cpsam"
+            )
+            models["cellpose"] = cellpose_model
             logger.info(f"[{worker_name}] Cellpose loaded")
         except Exception as e:
             logger.warning(f"[{worker_name}] Failed to load Cellpose: {e}")
@@ -171,14 +174,15 @@ def _gpu_worker(
     if extract_deep_features:
         try:
             from segmentation.models.manager import ModelManager
+
             device_str = str(device)
             mgr = ModelManager(device=device_str)
             resnet, resnet_transform = mgr.get_resnet()
-            models['resnet'] = resnet
-            models['resnet_transform'] = resnet_transform
+            models["resnet"] = resnet
+            models["resnet_transform"] = resnet_transform
             dinov2, dinov2_transform = mgr.get_dinov2()
-            models['dinov2'] = dinov2
-            models['dinov2_transform'] = dinov2_transform
+            models["dinov2"] = dinov2
+            models["dinov2_transform"] = dinov2_transform
             logger.info(f"[{worker_name}] ResNet50 + DINOv2 loaded via ModelManager")
         except Exception as e:
             logger.warning(f"[{worker_name}] Failed to load deep feature models: {e}")
@@ -186,38 +190,41 @@ def _gpu_worker(
     # --- Load classifier ---
     if classifier_path and Path(classifier_path).exists():
         try:
-            if classifier_path.endswith('.pth'):
+            if classifier_path.endswith(".pth"):
                 from segmentation.detection.strategies.nmj import load_nmj_classifier
+
                 model, transform, dev = load_nmj_classifier(classifier_path, device)
-                models['classifier'] = model
-                models['transform'] = transform
-                models['classifier_type'] = 'cnn'
+                models["classifier"] = model
+                models["transform"] = transform
+                models["classifier_type"] = "cnn"
             else:
                 from segmentation.detection.strategies.nmj import load_nmj_rf_classifier
+
                 classifier_data = load_nmj_rf_classifier(classifier_path)
-                models['classifier'] = classifier_data['pipeline']
-                models['classifier_type'] = 'rf'
-                models['scaler'] = None
-                models['feature_names'] = classifier_data['feature_names']
+                models["classifier"] = classifier_data["pipeline"]
+                models["classifier_type"] = "rf"
+                models["scaler"] = None
+                models["feature_names"] = classifier_data["feature_names"]
             logger.info(f"[{worker_name}] Classifier loaded from {classifier_path}")
         except Exception as e:
             logger.warning(f"[{worker_name}] Failed to load classifier: {e}")
 
     # --- Create strategy via factory (shared with run_segmentation.py) ---
     from segmentation.processing.strategy_factory import create_strategy
+
     strategy = create_strategy(
         cell_type=cell_type,
         strategy_params=strategy_params,
         extract_deep_features=extract_deep_features,
         extract_sam2_embeddings=extract_sam2_embeddings,
         pixel_size_um=pixel_size_um,
-        has_classifier='classifier' in models,
+        has_classifier="classifier" in models,
     )
 
     logger.info(f"[{worker_name}] {cell_type} strategy created: {strategy.get_config()}")
 
     # Signal ready
-    output_queue.put({'status': 'ready', 'gpu_id': gpu_id})
+    output_queue.put({"status": "ready", "gpu_id": gpu_id})
 
     tiles_processed = 0
     detections_found = 0
@@ -237,15 +244,19 @@ def _gpu_worker(
             # Shallow copy to avoid mutating the original dict from the queue
             # (tile['h'] and tile['w'] may be overwritten for strided reads below)
             tile = dict(tile)
-            tid = tile.get('id', f"{tile['x']}_{tile['y']}")
+            tid = tile.get("id", f"{tile['x']}_{tile['y']}")
 
             if slide_name not in shared_slides:
                 logger.error(f"[{worker_name}] Unknown slide: {slide_name}")
-                output_queue.put({
-                    'status': 'error', 'tid': tid,
-                    'slide_name': slide_name, 'tile': tile,
-                    'error': f'Unknown slide: {slide_name}'
-                })
+                output_queue.put(
+                    {
+                        "status": "error",
+                        "tid": tid,
+                        "slide_name": slide_name,
+                        "tile": tile,
+                        "error": f"Unknown slide: {slide_name}",
+                    }
+                )
                 tiles_processed += 1
                 if tiles_processed % 2 == 0:
                     gc.collect()
@@ -254,21 +265,31 @@ def _gpu_worker(
             _, slide_arr = shared_slides[slide_name]
 
             # Multiscale support: scale_factor > 1 means strided read (nearest-neighbor downscale)
-            sf = tile.get('scale_factor', 1)
-            scale_params = tile.get('scale_params')
+            sf = tile.get("scale_factor", 1)
+            scale_params = tile.get("scale_params")
 
             # Extract tile from shared memory
             # Tile coords are global CZI mosaic coords; shared memory is 0-indexed
             # Convert global→relative for array indexing
-            mosaic_ox, mosaic_oy = slide_info[slide_name].get('mosaic_origin', (0, 0))
-            y_rel = tile['y'] - mosaic_oy
-            x_rel = tile['x'] - mosaic_ox
-            tile_h, tile_w = tile['h'], tile['w']
+            mosaic_ox, mosaic_oy = slide_info[slide_name].get("mosaic_origin", (0, 0))
+            y_rel = tile["y"] - mosaic_oy
+            x_rel = tile["x"] - mosaic_ox
+            tile_h, tile_w = tile["h"], tile["w"]
 
             if y_rel < 0 or x_rel < 0:
-                logger.error(f"[{worker_name}] Tile {tid} has negative relative coords "
-                             f"(x_rel={x_rel}, y_rel={y_rel}), skipping")
-                output_queue.put({'status': 'error', 'tid': tid, 'slide_name': slide_name, 'tile': tile, 'error': 'negative_coords'})
+                logger.error(
+                    f"[{worker_name}] Tile {tid} has negative relative coords "
+                    f"(x_rel={x_rel}, y_rel={y_rel}), skipping"
+                )
+                output_queue.put(
+                    {
+                        "status": "error",
+                        "tid": tid,
+                        "slide_name": slide_name,
+                        "tile": tile,
+                        "error": "negative_coords",
+                    }
+                )
                 tiles_processed += 1
                 continue
 
@@ -283,14 +304,16 @@ def _gpu_worker(
                 # Update tile dims to reflect actual strided shape
                 # Store original-scale dims so coordinate conversion still works
                 actual_h, actual_w = tile_raw.shape[:2]
-                tile['h'] = actual_h * sf
-                tile['w'] = actual_w * sf
+                tile["h"] = actual_h * sf
+                tile["w"] = actual_w * sf
                 n_ch = tile_raw.shape[2]
                 if n_ch >= 3:
                     tile_rgb = tile_raw[:, :, :3]
                 elif n_ch == 2:
                     # Pad 2-channel to 3-channel (repeat last channel)
-                    tile_rgb = np.stack([tile_raw[:, :, 0], tile_raw[:, :, 1], tile_raw[:, :, 1]], axis=-1)
+                    tile_rgb = np.stack(
+                        [tile_raw[:, :, 0], tile_raw[:, :, 1], tile_raw[:, :, 1]], axis=-1
+                    )
                 else:
                     tile_rgb = np.stack([tile_raw[:, :, 0]] * 3, axis=-1)
             else:
@@ -299,10 +322,14 @@ def _gpu_worker(
 
             # Validate tile
             if tile_rgb.size == 0 or tile_rgb.max() == 0:
-                output_queue.put({
-                    'status': 'empty', 'tid': tid,
-                    'slide_name': slide_name, 'tile': tile,
-                })
+                output_queue.put(
+                    {
+                        "status": "empty",
+                        "tid": tid,
+                        "slide_name": slide_name,
+                        "tile": tile,
+                    }
+                )
                 tiles_processed += 1
                 if tiles_processed % 2 == 0:
                     gc.collect()
@@ -318,18 +345,26 @@ def _gpu_worker(
                     extra_channel_tiles = {}
                     for slot_idx in range(n_real_ch):
                         # Map slot index back to CZI channel index
-                        czi_ch = channel_keys[slot_idx] if channel_keys and slot_idx < len(channel_keys) else slot_idx
+                        czi_ch = (
+                            channel_keys[slot_idx]
+                            if channel_keys and slot_idx < len(channel_keys)
+                            else slot_idx
+                        )
                         extra_channel_tiles[czi_ch] = tile_raw[:, :, slot_idx]
 
             # For islet: override tile_rgb with display channels from --islet-display-channels
             # so morphological features are extracted from the marker channels,
             # not the first 3 channels.
             _islet_disp = islet_display_channels or [2, 3, 5]
-            if cell_type == 'islet' and extra_channel_tiles and n_ch >= 2:
+            if cell_type == "islet" and extra_channel_tiles and n_ch >= 2:
                 # Find shared memory slots corresponding to the display channel indices
                 _disp_slots = []
                 for _dc in _islet_disp:
-                    slot = next((i for i, k in enumerate(channel_keys) if k == _dc), None) if channel_keys else None
+                    slot = (
+                        next((i for i, k in enumerate(channel_keys) if k == _dc), None)
+                        if channel_keys
+                        else None
+                    )
                     _disp_slots.append(slot)
                 if all(s is not None for s in _disp_slots):
                     rgb_channels = [tile_raw[:, :, s] for s in _disp_slots]
@@ -339,13 +374,21 @@ def _gpu_worker(
                     tile_rgb = np.stack(rgb_channels[:3], axis=-1)
                 else:
                     missing = [c for c, s in zip(_islet_disp, _disp_slots) if s is None]
-                    logger.warning(f"[{worker_name}] Islet display channels {missing} not in "
-                                   f"channel_keys={channel_keys}. Using first 3 channels.")
+                    logger.warning(
+                        f"[{worker_name}] Islet display channels {missing} not in "
+                        f"channel_keys={channel_keys}. Using first 3 channels."
+                    )
 
             # has_tissue() check on uint16 BEFORE conversion
             try:
-                det_ch = extra_channel_tiles.get(detection_channel, tile_rgb[:, :, 0]) if extra_channel_tiles else tile_rgb[:, :, 0]
-                has_tissue_flag, _ = has_tissue(det_ch, variance_threshold=variance_threshold, block_size=512)
+                det_ch = (
+                    extra_channel_tiles.get(detection_channel, tile_rgb[:, :, 0])
+                    if extra_channel_tiles
+                    else tile_rgb[:, :, 0]
+                )
+                has_tissue_flag, _ = has_tissue(
+                    det_ch, variance_threshold=variance_threshold, block_size=512
+                )
             except Exception as e:
                 logger.warning(f"[{worker_name}] has_tissue() failed: {e}, assuming tissue present")
                 has_tissue_flag = True
@@ -356,10 +399,14 @@ def _gpu_worker(
                 tile_rgb = _safe_to_uint8(tile_rgb)
 
             if not has_tissue_flag:
-                output_queue.put({
-                    'status': 'no_tissue', 'tid': tid,
-                    'slide_name': slide_name, 'tile': tile,
-                })
+                output_queue.put(
+                    {
+                        "status": "no_tissue",
+                        "tid": tid,
+                        "slide_name": slide_name,
+                        "tile": tile,
+                    }
+                )
                 tiles_processed += 1
                 if tiles_processed % 2 == 0:
                     gc.collect()
@@ -367,7 +414,11 @@ def _gpu_worker(
 
             # Extract CD31 channel tile for vessel validation (if available in shared memory)
             cd31_channel_data = None
-            if cell_type == 'vessel' and cd31_channel is not None and extra_channel_tiles is not None:
+            if (
+                cell_type == "vessel"
+                and cd31_channel is not None
+                and extra_channel_tiles is not None
+            ):
                 cd31_tile = extra_channel_tiles.get(cd31_channel)
                 if cd31_tile is not None:
                     cd31_channel_data = cd31_tile.astype(np.float32)
@@ -377,13 +428,15 @@ def _gpu_worker(
             # Main process converts to full-res later via convert_detection_to_full_res().
             # Scale pixel_size so diameter filters match the downscaled resolution.
             effective_pixel_size = pixel_size_um * sf
-            tile_x_for_detect = 0 if sf > 1 else tile['x']
-            tile_y_for_detect = 0 if sf > 1 else tile['y']
+            tile_x_for_detect = 0 if sf > 1 else tile["x"]
+            tile_y_for_detect = 0 if sf > 1 else tile["y"]
 
             # For multiscale vessel: override diameter bounds per scale
-            scale_ctx = (strategy._scale_override(scale_params)
-                         if sf > 1 and scale_params and hasattr(strategy, '_scale_override')
-                         else nullcontext())
+            scale_ctx = (
+                strategy._scale_override(scale_params)
+                if sf > 1 and scale_params and hasattr(strategy, "_scale_override")
+                else nullcontext()
+            )
 
             try:
                 with scale_ctx:
@@ -406,23 +459,22 @@ def _gpu_worker(
                 # Each worker has its own strategy instance, so partials must be sent
                 # back to the main process via the result queue.
                 partial_vessels = None
-                if (cell_type == 'vessel' and sf == 1
-                        and hasattr(strategy, 'get_partial_vessels')):
+                if cell_type == "vessel" and sf == 1 and hasattr(strategy, "get_partial_vessels"):
                     tile_key = (tile_x_for_detect, tile_y_for_detect)
-                    pv = strategy.get_partial_vessels(
-                        tile_x=tile_key[0], tile_y=tile_key[1])
+                    pv = strategy.get_partial_vessels(tile_x=tile_key[0], tile_y=tile_key[1])
                     if pv:
                         partial_vessels = pv
-                    strategy.clear_partial_vessels(
-                        tile_x=tile_key[0], tile_y=tile_key[1])
+                    strategy.clear_partial_vessels(tile_x=tile_key[0], tile_y=tile_key[1])
 
                 if result is None:
                     out = {
-                        'status': 'success', 'tid': tid,
-                        'slide_name': slide_name, 'tile': tile,
-                        'masks': None,
-                        'features_list': [],
-                        'scale_factor': sf,
+                        "status": "success",
+                        "tid": tid,
+                        "slide_name": slide_name,
+                        "tile": tile,
+                        "masks": None,
+                        "features_list": [],
+                        "scale_factor": sf,
                     }
                 else:
                     masks, features_list = result
@@ -432,39 +484,49 @@ def _gpu_worker(
                     # Keeps Queue lightweight (~100 bytes vs ~36MB per tile).
                     # Main process reads masks from disk for HTML generation.
                     out = {
-                        'status': 'success', 'tid': tid,
-                        'slide_name': slide_name, 'tile': tile,
-                        'features_list': features_list,
-                        'scale_factor': sf,
+                        "status": "success",
+                        "tid": tid,
+                        "slide_name": slide_name,
+                        "tile": tile,
+                        "features_list": features_list,
+                        "scale_factor": sf,
                     }
                     if tiles_dir is not None and masks is not None:
                         try:
                             import h5py
+
                             tile_id = f"tile_{tile['x']}_{tile['y']}"
                             tile_out = Path(tiles_dir) / tile_id
                             tile_out.mkdir(exist_ok=True)
                             masks_file = tile_out / f"{cell_type}_masks.h5"
-                            with h5py.File(masks_file, 'w') as f:
+                            with h5py.File(masks_file, "w") as f:
                                 from segmentation.io.html_export import create_hdf5_dataset
-                                create_hdf5_dataset(f, 'masks', masks)
-                            out['masks'] = None  # saved to disk, don't send through Queue
+
+                                create_hdf5_dataset(f, "masks", masks)
+                            out["masks"] = None  # saved to disk, don't send through Queue
                         except Exception as e:
-                            logger.warning(f"[{worker_name}] Failed to save masks to disk for {tid}: {e}")
-                            out['masks'] = masks  # fallback: send through Queue
+                            logger.warning(
+                                f"[{worker_name}] Failed to save masks to disk for {tid}: {e}"
+                            )
+                            out["masks"] = masks  # fallback: send through Queue
                     else:
-                        out['masks'] = masks  # no tiles_dir: send through Queue
+                        out["masks"] = masks  # no tiles_dir: send through Queue
                 if partial_vessels:
-                    out['partial_vessels'] = partial_vessels
+                    out["partial_vessels"] = partial_vessels
                 output_queue.put(out)
 
             except Exception as e:
                 logger.error(f"[{worker_name}] Error on tile {tid}: {e}")
                 logger.error(traceback.format_exc())
-                output_queue.put({
-                    'status': 'error', 'tid': tid,
-                    'slide_name': slide_name, 'tile': tile,
-                    'error': str(e),
-                })
+                output_queue.put(
+                    {
+                        "status": "error",
+                        "tid": tid,
+                        "slide_name": slide_name,
+                        "tile": tile,
+                        "error": str(e),
+                    }
+                )
 
             tiles_processed += 1
             if tiles_processed % 20 == 0:
@@ -475,7 +537,9 @@ def _gpu_worker(
             logger.error(f"[{worker_name}] Worker loop error: {e}")
             logger.error(traceback.format_exc())
 
-    logger.info(f"[{worker_name}] Done, processed {tiles_processed} tiles, found {detections_found} detections")
+    logger.info(
+        f"[{worker_name}] Done, processed {tiles_processed} tiles, found {detections_found} detections"
+    )
     gc.collect()
     empty_cache()
 
@@ -508,22 +572,22 @@ class MultiGPUTileProcessor:
     def __init__(
         self,
         num_gpus: int,
-        slide_info: Dict[str, Dict[str, Any]],
+        slide_info: dict[str, dict[str, Any]],
         cell_type: str,
-        strategy_params: Dict[str, Any],
+        strategy_params: dict[str, Any],
         pixel_size_um: float,
-        classifier_path: Optional[str] = None,
+        classifier_path: str | None = None,
         extract_deep_features: bool = False,
         extract_sam2_embeddings: bool = True,
         detection_channel: int = 1,
-        sam2_checkpoint: Optional[str] = None,
+        sam2_checkpoint: str | None = None,
         sam2_config: str = "configs/sam2.1/sam2.1_hiera_l.yaml",
-        cd31_channel: Optional[int] = None,
-        channel_names: Optional[Dict[int, str]] = None,
+        cd31_channel: int | None = None,
+        channel_names: dict[int, str] | None = None,
         variance_threshold: float = 1000.0,
-        channel_keys: Optional[List[int]] = None,
-        islet_display_channels: Optional[List[int]] = None,
-        tiles_dir: Optional[str] = None,
+        channel_keys: list[int] | None = None,
+        islet_display_channels: list[int] | None = None,
+        tiles_dir: str | None = None,
     ):
         self.num_gpus = num_gpus
         self.slide_info = slide_info
@@ -543,12 +607,12 @@ class MultiGPUTileProcessor:
         self.islet_display_channels = islet_display_channels
         self.tiles_dir = tiles_dir
 
-        self.workers: List[Process] = []
-        self.input_queue: Optional[Queue] = None
-        self.output_queue: Optional[Queue] = None
-        self.stop_event: Optional[Event] = None
+        self.workers: list[Process] = []
+        self.input_queue: Queue | None = None
+        self.output_queue: Queue | None = None
+        self.stop_event: Event | None = None
         self.tiles_submitted = 0
-        self._local_checkpoint_path: Optional[Path] = None
+        self._local_checkpoint_path: Path | None = None
         self._workers_started = False
 
     def _copy_checkpoint_to_local(self) -> str:
@@ -556,7 +620,9 @@ class MultiGPUTileProcessor:
         if self.sam2_checkpoint:
             checkpoint_path = Path(self.sam2_checkpoint)
         else:
-            checkpoint_path = Path(__file__).parent.parent.parent / "checkpoints" / "sam2.1_hiera_large.pt"
+            checkpoint_path = (
+                Path(__file__).parent.parent.parent / "checkpoints" / "sam2.1_hiera_large.pt"
+            )
 
         if not checkpoint_path.exists():
             raise FileNotFoundError(f"SAM2 checkpoint not found: {checkpoint_path}")
@@ -570,7 +636,7 @@ class MultiGPUTileProcessor:
             self._local_checkpoint_path = local_path
             return str(local_path)
 
-        logger.info(f"Copying SAM2 checkpoint to /tmp...")
+        logger.info("Copying SAM2 checkpoint to /tmp...")
         start = time.time()
         shutil.copy2(checkpoint_path, local_path)
         logger.info(f"Copied in {time.time() - start:.1f}s")
@@ -590,11 +656,13 @@ class MultiGPUTileProcessor:
         logger.info(f"Starting {self.num_gpus} GPU workers for {self.cell_type} detection...")
 
         for info in self.slide_info.values():
-            shm_name = info.get('shm_name')
+            shm_name = info.get("shm_name")
             if shm_name:
                 register_shm_for_cleanup(shm_name)
 
-        local_checkpoint = self._copy_checkpoint_to_local() if self.extract_sam2_embeddings else None
+        local_checkpoint = (
+            self._copy_checkpoint_to_local() if self.extract_sam2_embeddings else None
+        )
 
         self.input_queue = Queue()
         self.output_queue = Queue(maxsize=self.num_gpus * 4)
@@ -603,22 +671,22 @@ class MultiGPUTileProcessor:
         errors = []
 
         worker_config = {
-            'slide_info': self.slide_info,
-            'cell_type': self.cell_type,
-            'strategy_params': self.strategy_params,
-            'classifier_path': self.classifier_path,
-            'pixel_size_um': self.pixel_size_um,
-            'extract_deep_features': self.extract_deep_features,
-            'extract_sam2_embeddings': self.extract_sam2_embeddings,
-            'detection_channel': self.detection_channel,
-            'sam2_checkpoint': local_checkpoint,
-            'sam2_config': self.sam2_config,
-            'cd31_channel': self.cd31_channel,
-            'channel_names': self.channel_names,
-            'variance_threshold': self.variance_threshold,
-            'channel_keys': self.channel_keys,
-            'islet_display_channels': self.islet_display_channels,
-            'tiles_dir': self.tiles_dir,
+            "slide_info": self.slide_info,
+            "cell_type": self.cell_type,
+            "strategy_params": self.strategy_params,
+            "classifier_path": self.classifier_path,
+            "pixel_size_um": self.pixel_size_um,
+            "extract_deep_features": self.extract_deep_features,
+            "extract_sam2_embeddings": self.extract_sam2_embeddings,
+            "detection_channel": self.detection_channel,
+            "sam2_checkpoint": local_checkpoint,
+            "sam2_config": self.sam2_config,
+            "cd31_channel": self.cd31_channel,
+            "channel_names": self.channel_names,
+            "variance_threshold": self.variance_threshold,
+            "channel_keys": self.channel_keys,
+            "islet_display_channels": self.islet_display_channels,
+            "tiles_dir": self.tiles_dir,
         }
 
         for gpu_id in range(self.num_gpus):
@@ -647,14 +715,18 @@ class MultiGPUTileProcessor:
             except queue.Empty:
                 # Timeout — report which GPUs never responded
                 all_gpus = set(range(self.num_gpus))
-                missing = all_gpus - ready_gpus - {int(e.split(':')[0].split('-')[1]) for e in errors if 'GPU-' in e}
+                missing = (
+                    all_gpus
+                    - ready_gpus
+                    - {int(e.split(":")[0].split("-")[1]) for e in errors if "GPU-" in e}
+                )
                 for gpu_id in missing:
                     errors.append(f"GPU-{gpu_id}: timeout")
                 break
-            if msg.get('status') == 'ready':
-                ready_gpus.add(msg.get('gpu_id'))
+            if msg.get("status") == "ready":
+                ready_gpus.add(msg.get("gpu_id"))
                 logger.info(f"Worker GPU-{msg['gpu_id']} ready ({len(ready_gpus)}/{self.num_gpus})")
-            elif msg.get('status') == 'init_error':
+            elif msg.get("status") == "init_error":
                 errors.append(f"GPU-{msg.get('gpu_id')}: {msg.get('error')}")
 
         if errors:
@@ -668,26 +740,26 @@ class MultiGPUTileProcessor:
         logger.info(f"All {self.num_gpus} workers ready")
         self._workers_started = True
 
-    def submit_tile(self, slide_name: str, tile: Dict[str, Any]):
+    def submit_tile(self, slide_name: str, tile: dict[str, Any]):
         """Submit a tile for processing."""
         self.input_queue.put((slide_name, tile))
         self.tiles_submitted += 1
 
-    def collect_result(self, timeout: float = None) -> Optional[Dict[str, Any]]:
+    def collect_result(self, timeout: float = None) -> dict[str, Any] | None:
         """Collect one tile result from workers."""
         if not self._workers_started:
             raise RuntimeError("Call start() first")
 
         start = time.time()
-        remaining = timeout if timeout is not None else float('inf')
+        remaining = timeout if timeout is not None else float("inf")
 
         while remaining > 0:
             try:
                 result = self.output_queue.get(timeout=min(remaining, 1.0))
-                status = result.get('status')
-                if status in ('success', 'error', 'empty', 'no_tissue'):
+                status = result.get("status")
+                if status in ("success", "error", "empty", "no_tissue"):
                     return result
-                if status in ('ready', 'init_error'):
+                if status in ("ready", "init_error"):
                     continue
                 return result
             except queue.Empty:
@@ -723,7 +795,7 @@ class MultiGPUTileProcessor:
         self._cleanup_local_checkpoint()
 
         for info in self.slide_info.values():
-            shm_name = info.get('shm_name')
+            shm_name = info.get("shm_name")
             if shm_name:
                 unregister_shm_for_cleanup(shm_name)
 

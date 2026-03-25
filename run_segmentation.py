@@ -49,48 +49,56 @@ Usage:
         --cd31-channel 1
 """
 
-import os
 import gc
 import json
-import numpy as np
+import os
 from pathlib import Path
+
 import h5py
-import torch
+import numpy as np
+
+from segmentation.detection.cell_detector import CellDetector
 
 # Segmentation modules
 from segmentation.detection.tissue import (
     calibrate_tissue_threshold,
     filter_tissue_tiles,
 )
+from segmentation.io.czi_loader import get_czi_metadata, get_loader, print_czi_metadata
 from segmentation.io.html_export import (
-    percentile_normalize,
-    image_to_base64,
     create_hdf5_dataset,
+    image_to_base64,
+    percentile_normalize,
 )
-from segmentation.utils.logging import get_logger, setup_logging
-from segmentation.io.czi_loader import get_loader, get_czi_metadata, print_czi_metadata
-from segmentation.utils.json_utils import NumpyEncoder, atomic_json_dump, fast_json_load
-from segmentation.detection.cell_detector import CellDetector
-# tile_processing functions now called from within pipeline modules
-
-# Pipeline modules (extracted from this file)
-from segmentation.pipeline.server import stop_background_server, show_server_status
-from segmentation.pipeline.resume import (
-    detect_resume_stage, reload_detections_from_tiles, _resume_generate_html_samples,
-    compose_tile_rgb, compute_and_apply_islet_markers,
-)
-from segmentation.pipeline.samples import (
-    _compute_tile_percentiles, calibrate_islet_marker_gmm,
-    filter_and_create_html_samples, generate_tile_grid,
-)
-from segmentation.pipeline.finalize import _finish_pipeline
+from segmentation.pipeline.cli import build_parser, postprocess_args
 from segmentation.pipeline.detection_setup import (
     apply_vessel_classifiers,
-    load_classifier_into_detector, build_detection_params, load_vessel_classifiers,
+    build_detection_params,
+    load_classifier_into_detector,
+    load_vessel_classifiers,
 )
-from segmentation.processing.strategy_factory import create_strategy
+from segmentation.pipeline.finalize import _finish_pipeline
 from segmentation.pipeline.preprocessing import apply_slide_preprocessing
-from segmentation.pipeline.cli import build_parser, postprocess_args
+from segmentation.pipeline.resume import (
+    _resume_generate_html_samples,
+    compose_tile_rgb,
+    compute_and_apply_islet_markers,
+    detect_resume_stage,
+    reload_detections_from_tiles,
+)
+from segmentation.pipeline.samples import (
+    _compute_tile_percentiles,
+    calibrate_islet_marker_gmm,
+    filter_and_create_html_samples,
+    generate_tile_grid,
+)
+
+# tile_processing functions now called from within pipeline modules
+# Pipeline modules (extracted from this file)
+from segmentation.pipeline.server import show_server_status, stop_background_server
+from segmentation.processing.strategy_factory import create_strategy
+from segmentation.utils.json_utils import atomic_json_dump, fast_json_load
+from segmentation.utils.logging import get_logger, setup_logging
 
 logger = get_logger(__name__)
 
@@ -99,12 +107,15 @@ logger = get_logger(__name__)
 # HELPERS
 # =============================================================================
 
-def _maybe_export_ome_zarr(args, slide_shm_arr, ch_to_slot, pixel_size_um,
-                           slide_output_dir, slide_name, czi_path):
-    if not getattr(args, 'ome_zarr', True):
+
+def _maybe_export_ome_zarr(
+    args, slide_shm_arr, ch_to_slot, pixel_size_um, slide_output_dir, slide_name, czi_path
+):
+    if not getattr(args, "ome_zarr", True):
         return
     try:
         from segmentation.io.ome_zarr_export import export_shm_to_ome_zarr
+
         zarr_path = slide_output_dir / f"{slide_name}.ome.zarr"
         export_shm_to_ome_zarr(
             shm_array=slide_shm_arr,
@@ -112,8 +123,8 @@ def _maybe_export_ome_zarr(args, slide_shm_arr, ch_to_slot, pixel_size_um,
             pixel_size_um=pixel_size_um,
             output_path=zarr_path,
             czi_path=str(czi_path),
-            pyramid_levels=getattr(args, 'zarr_levels', 5),
-            overwrite=getattr(args, 'force_zarr', False),
+            pyramid_levels=getattr(args, "zarr_levels", 5),
+            overwrite=getattr(args, "force_zarr", False),
         )
     except Exception as e:
         logger.warning(f"OME-Zarr export failed (non-fatal): {e}")
@@ -123,21 +134,24 @@ def _maybe_export_ome_zarr(args, slide_shm_arr, ch_to_slot, pixel_size_um,
 # MAIN PIPELINE
 # =============================================================================
 
+
 def run_pipeline(args):
     """Main pipeline execution."""
     # Setup logging
-    setup_logging(level="DEBUG" if getattr(args, 'verbose', False) else "INFO")
+    setup_logging(level="DEBUG" if getattr(args, "verbose", False) else "INFO")
 
     from datetime import datetime
+
     czi_path = Path(args.czi_path)
     output_dir = Path(args.output_dir)
     slide_name = czi_path.stem
-    run_timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
+    run_timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
 
     # Set random seed early -- ensures all multi-node shards get identical
     # tissue calibration and tile sampling (same tile list on every node)
     import random as _random_mod
-    _seed = getattr(args, 'random_seed', 42)
+
+    _seed = getattr(args, "random_seed", 42)
     np.random.seed(_seed)
     _random_mod.seed(_seed)
 
@@ -150,62 +164,87 @@ def run_pipeline(args):
     logger.info(f"Channel: {args.channel}")
     if args.scene != 0:
         logger.info(f"Scene: {args.scene}")
-    if getattr(args, 'multi_marker', False):
-        logger.info("Multi-marker mode: ENABLED (auto-enabled --all-channels and --parallel-detection)")
-    if getattr(args, 'tile_shard', None):
+    if getattr(args, "multi_marker", False):
+        logger.info(
+            "Multi-marker mode: ENABLED (auto-enabled --all-channels and --parallel-detection)"
+        )
+    if getattr(args, "tile_shard", None):
         shard_idx, shard_total = args.tile_shard
         logger.info(f"Tile shard: {shard_idx}/{shard_total} (detection-only)")
-    elif getattr(args, 'detection_only', False):
+    elif getattr(args, "detection_only", False):
         logger.info("Detection-only mode (skipping dedup/HTML/CSV)")
     logger.info(f"Random seed: {getattr(args, 'random_seed', 42)}")
     logger.info("=" * 60)
 
     # ---- Resume early-exit: skip CZI loading if ALL stages are done ----
     _cached_resume_info = None
-    if getattr(args, 'resume', None):
+    if getattr(args, "resume", None):
         resume_dir = Path(args.resume)
         resume_info = detect_resume_stage(resume_dir, args.cell_type)
         _cached_resume_info = resume_info
-        _has_det = resume_info['has_detections'] and not args.force_detect
-        _has_html = resume_info['has_html'] and not args.force_html
-        _has_tiles = resume_info['has_tiles'] and not args.force_detect
+        _has_det = resume_info["has_detections"] and not args.force_detect
+        _has_html = resume_info["has_html"] and not args.force_html
+        _has_tiles = resume_info["has_tiles"] and not args.force_detect
 
-        logger.info(f"Resume state: tiles={resume_info['tile_count']}, "
-                     f"detections={'yes' if resume_info['has_detections'] else 'no'}"
-                     f" ({resume_info['detection_count']}), "
-                     f"html={'yes' if resume_info['has_html'] else 'no'}")
+        logger.info(
+            f"Resume state: tiles={resume_info['tile_count']}, "
+            f"detections={'yes' if resume_info['has_detections'] else 'no'}"
+            f" ({resume_info['detection_count']}), "
+            f"html={'yes' if resume_info['has_html'] else 'no'}"
+        )
 
         if _has_det and _has_html:
             # Everything done -- just regenerate CSV/summary without loading CZI
-            logger.info("All stages complete -- regenerating CSV and summary only (no CZI load needed)")
+            logger.info(
+                "All stages complete -- regenerating CSV and summary only (no CZI load needed)"
+            )
             slide_output_dir = resume_dir
             det_file = slide_output_dir / f"{args.cell_type}_detections.json"
             all_detections = fast_json_load(det_file)
 
             # Load pipeline config for metadata
-            config_file = slide_output_dir / 'pipeline_config.json'
+            config_file = slide_output_dir / "pipeline_config.json"
             if config_file.exists():
                 cfg = fast_json_load(config_file)
-                pixel_size_um = cfg.get('pixel_size_um')
+                pixel_size_um = cfg.get("pixel_size_um")
                 if pixel_size_um is None:
                     raise ValueError(
                         f"pipeline_config.json is missing 'pixel_size_um'. "
                         f"Re-run detection or add pixel_size_um to {config_file}"
                     )
-                mosaic_info = {'width': cfg.get('width', 0), 'height': cfg.get('height', 0),
-                               'x': cfg.get('x_start', 0), 'y': cfg.get('y_start', 0)}
+                mosaic_info = {
+                    "width": cfg.get("width", 0),
+                    "height": cfg.get("height", 0),
+                    "x": cfg.get("x_start", 0),
+                    "y": cfg.get("y_start", 0),
+                }
             else:
                 # Minimal load: just metadata from CZI
-                loader = get_loader(czi_path, load_to_ram=False, channel=args.channel, scene=args.scene)
+                loader = get_loader(
+                    czi_path, load_to_ram=False, channel=args.channel, scene=args.scene
+                )
                 pixel_size_um = loader.get_pixel_size()
-                mosaic_info = {'width': loader.mosaic_size[0], 'height': loader.mosaic_size[1],
-                               'x': loader.mosaic_origin[0], 'y': loader.mosaic_origin[1]}
+                mosaic_info = {
+                    "width": loader.mosaic_size[0],
+                    "height": loader.mosaic_size[1],
+                    "x": loader.mosaic_origin[0],
+                    "y": loader.mosaic_origin[1],
+                }
 
             pct = int(args.sample_fraction * 100)
             _finish_pipeline(
-                args, all_detections, [], slide_output_dir, slide_output_dir / "tiles",
-                pixel_size_um, slide_name, mosaic_info, run_timestamp, pct,
-                skip_html=True, resumed=True,
+                args,
+                all_detections,
+                [],
+                slide_output_dir,
+                slide_output_dir / "tiles",
+                pixel_size_um,
+                slide_name,
+                mosaic_info,
+                run_timestamp,
+                pct,
+                skip_html=True,
+                resumed=True,
             )
             return
 
@@ -221,7 +260,7 @@ def run_pipeline(args):
         load_to_ram=False,  # metadata only — channels loaded directly to SHM below
         channel=args.channel,
         quiet=False,
-        scene=args.scene
+        scene=args.scene,
     )
 
     # Get mosaic bounds from loader properties
@@ -230,10 +269,10 @@ def run_pipeline(args):
 
     # Build mosaic_info dict for compatibility with existing functions
     mosaic_info = {
-        'x': x_start,
-        'y': y_start,
-        'width': width,
-        'height': height,
+        "x": x_start,
+        "y": y_start,
+        "width": width,
+        "height": height,
     }
     pixel_size_um = loader.get_pixel_size()
 
@@ -245,44 +284,49 @@ def run_pipeline(args):
     try:
         _czi_meta = get_czi_metadata(czi_path, scene=args.scene)
         logger.info(f"  CZI channels ({_czi_meta['n_channels']}):")
-        for _ch in _czi_meta['channels']:
-            _ex = f"{_ch['excitation_nm']:.0f}" if _ch['excitation_nm'] else "?"
-            _em = f"{_ch['emission_nm']:.0f}" if _ch['emission_nm'] else "?"
-            _label = _ch['fluorophore'] if _ch['fluorophore'] != 'N/A' else _ch['name']
-            logger.info(f"    [{_ch['index']}] {_ch['name']:<20s}  Ex {_ex} -> Em {_em} nm  ({_label})")
+        for _ch in _czi_meta["channels"]:
+            _ex = f"{_ch['excitation_nm']:.0f}" if _ch["excitation_nm"] else "?"
+            _em = f"{_ch['emission_nm']:.0f}" if _ch["emission_nm"] else "?"
+            _label = _ch["fluorophore"] if _ch["fluorophore"] != "N/A" else _ch["name"]
+            logger.info(
+                f"    [{_ch['index']}] {_ch['name']:<20s}  Ex {_ex} -> Em {_em} nm  ({_label})"
+            )
         # Validate --channel against actual CZI channel count
-        n_czi_channels = _czi_meta['n_channels']
-        _channels_to_check = [('--channel', args.channel)]
+        n_czi_channels = _czi_meta["n_channels"]
+        _channels_to_check = [("--channel", args.channel)]
         # Only validate cell-type-specific channels when that cell type is active
-        if getattr(args, 'cd31_channel', None) is not None:
-            _channels_to_check.append(('--cd31-channel', args.cd31_channel))
-        if args.cell_type == 'islet':
-            _channels_to_check.append(('--membrane-channel', getattr(args, 'membrane_channel', 1)))
-            _channels_to_check.append(('--nuclear-channel', getattr(args, 'nuclear_channel', 4)))
+        if getattr(args, "cd31_channel", None) is not None:
+            _channels_to_check.append(("--cd31-channel", args.cd31_channel))
+        if args.cell_type == "islet":
+            _channels_to_check.append(("--membrane-channel", getattr(args, "membrane_channel", 1)))
+            _channels_to_check.append(("--nuclear-channel", getattr(args, "nuclear_channel", 4)))
         for _flag, _ch_val in _channels_to_check:
             if _ch_val >= n_czi_channels:
-                logger.error(f"{_flag} {_ch_val} is out of range: CZI has {n_czi_channels} channels (0-{n_czi_channels - 1})")
+                logger.error(
+                    f"{_flag} {_ch_val} is out of range: CZI has {n_czi_channels} channels (0-{n_czi_channels - 1})"
+                )
                 import sys
+
                 sys.exit(1)
     except Exception as _e:
         logger.warning(f"  Could not read channel metadata: {_e}")
 
     # Determine all channels to load
     ch_list = [args.channel]
-    if getattr(args, 'all_channels', False):
-        if getattr(args, 'channels', None):
-            ch_list = [int(x.strip()) for x in args.channels.split(',')]
+    if getattr(args, "all_channels", False):
+        if getattr(args, "channels", None):
+            ch_list = [int(x.strip()) for x in args.channels.split(",")]
             logger.info(f"Will load specified channels {ch_list} for multi-channel analysis...")
         else:
             try:
                 dims = loader.reader.get_dims_shape()[0]
-                _n_ch = dims.get('C', (0, 3))[1]
+                _n_ch = dims.get("C", (0, 3))[1]
             except Exception:
                 _n_ch = 3
             ch_list = list(range(_n_ch))
             logger.info(f"Will load all {len(ch_list)} channels for multi-channel analysis...")
     # Also include CD31 channel for vessel validation
-    if args.cell_type == 'vessel' and args.cd31_channel is not None:
+    if args.cell_type == "vessel" and args.cd31_channel is not None:
         if args.cd31_channel not in ch_list:
             ch_list.append(args.cd31_channel)
     ch_list = sorted(set(ch_list))
@@ -293,27 +337,31 @@ def run_pipeline(args):
     logger.info("=" * 70)
     _ch_label_map = {}
     try:
-        for _ch in _czi_meta['channels']:
-            em = _ch.get('emission_nm')
-            fluor = (_ch.get('fluorophore') or _ch.get('name') or '').strip()
+        for _ch in _czi_meta["channels"]:
+            em = _ch.get("emission_nm")
+            fluor = (_ch.get("fluorophore") or _ch.get("name") or "").strip()
             em_str = f" em={em:.0f}nm" if em else ""
-            _ch_label_map[_ch['index']] = f"{fluor}{em_str}"
+            _ch_label_map[_ch["index"]] = f"{fluor}{em_str}"
     except Exception:
         pass
 
     def _ch_lbl(idx):
         return f"C={idx} ({_ch_label_map.get(idx, '?')})"
 
-    if args.cell_type == 'cell' and getattr(args, 'cellpose_input_channels', None):
-        _parts = str(args.cellpose_input_channels).split(',')
+    if args.cell_type == "cell" and getattr(args, "cellpose_input_channels", None):
+        _parts = str(args.cellpose_input_channels).split(",")
         _cyto = int(_parts[0].strip())
         _nuc = int(_parts[1].strip()) if len(_parts) > 1 else None
-        logger.info(f"  Segmentation (Cellpose):  cyto={_ch_lbl(_cyto)}"
-                    + (f"  |  nuc={_ch_lbl(_nuc)}" if _nuc is not None else ""))
-    elif args.cell_type == 'islet':
-        _mem = getattr(args, 'membrane_channel', 1)
-        _nuc = getattr(args, 'nuclear_channel', 4)
-        logger.info(f"  Segmentation (Cellpose islet):  membrane={_ch_lbl(_mem)}  |  nuc={_ch_lbl(_nuc)}")
+        logger.info(
+            f"  Segmentation (Cellpose):  cyto={_ch_lbl(_cyto)}"
+            + (f"  |  nuc={_ch_lbl(_nuc)}" if _nuc is not None else "")
+        )
+    elif args.cell_type == "islet":
+        _mem = getattr(args, "membrane_channel", 1)
+        _nuc = getattr(args, "nuclear_channel", 4)
+        logger.info(
+            f"  Segmentation (Cellpose islet):  membrane={_ch_lbl(_mem)}  |  nuc={_ch_lbl(_nuc)}"
+        )
     else:
         logger.info(f"  Segmentation:  primary={_ch_lbl(args.channel)}")
 
@@ -329,9 +377,7 @@ def run_pipeline(args):
     logger.info(f"Creating shared memory for {n_ch_total} channels ({h}x{w})...")
     logger.info(f"  Channel list: {ch_list}")
 
-    slide_shm_arr = shm_manager.create_slide_buffer(
-        slide_name, (h, w, n_ch_total), np.uint16
-    )
+    slide_shm_arr = shm_manager.create_slide_buffer(slide_name, (h, w, n_ch_total), np.uint16)
     ch_to_slot = {ch: i for i, ch in enumerate(ch_list)}
 
     # Load each channel directly from CZI into SHM slot (no RAM intermediate)
@@ -358,18 +404,20 @@ def run_pipeline(args):
     # Determine tissue detection channel BEFORE calibration
     # For islet/tissue_pattern: use nuclear channel (universal cell marker)
     tissue_channel = args.channel
-    if args.cell_type == 'islet':
-        tissue_channel = getattr(args, 'nuclear_channel', 4)
+    if args.cell_type == "islet":
+        tissue_channel = getattr(args, "nuclear_channel", 4)
         logger.info(f"Islet: using DAPI (ch{tissue_channel}) for tissue detection")
-    elif args.cell_type == 'tissue_pattern':
-        tissue_channel = getattr(args, 'tp_nuclear_channel', 4)
+    elif args.cell_type == "tissue_pattern":
+        tissue_channel = getattr(args, "tp_nuclear_channel", 4)
         logger.info(f"Tissue pattern: using nuclear (ch{tissue_channel}) for tissue detection")
 
     # Calibrate tissue threshold on the SAME channel used for filtering
-    manual_threshold = getattr(args, 'variance_threshold', None)
+    manual_threshold = getattr(args, "variance_threshold", None)
     if manual_threshold is not None:
         variance_threshold = manual_threshold
-        logger.info(f"Using manual variance threshold: {variance_threshold:.1f} (skipping K-means calibration)")
+        logger.info(
+            f"Using manual variance threshold: {variance_threshold:.1f} (skipping K-means calibration)"
+        )
     else:
         logger.info("Calibrating tissue threshold...")
         variance_threshold = calibrate_tissue_threshold(
@@ -389,8 +437,11 @@ def run_pipeline(args):
     )
 
     if len(tissue_tiles) == 0:
-        logger.error("No tissue-containing tiles found! Check CZI file and tissue detection thresholds.")
+        logger.error(
+            "No tissue-containing tiles found! Check CZI file and tissue detection thresholds."
+        )
         import sys
+
         sys.exit(1)
 
     # Sample from tissue tiles
@@ -398,43 +449,50 @@ def run_pipeline(args):
     sample_indices = np.random.choice(len(tissue_tiles), n_sample, replace=False)
     sampled_tiles = [tissue_tiles[i] for i in sample_indices]
 
-    logger.info(f"Sampled {len(sampled_tiles)} tiles ({args.sample_fraction*100:.0f}% of {len(tissue_tiles)} tissue tiles)")
+    logger.info(
+        f"Sampled {len(sampled_tiles)} tiles ({args.sample_fraction*100:.0f}% of {len(tissue_tiles)} tissue tiles)"
+    )
 
     # Sort sampled tiles deterministically (by position) before sharding
     # so all nodes agree on the same ordering regardless of np.random.choice order
-    sampled_tiles.sort(key=lambda t: (t['y'], t['x']))  # sort by (y, x)
+    sampled_tiles.sort(key=lambda t: (t["y"], t["x"]))  # sort by (y, x)
 
     # Setup output directories (timestamped to avoid overwriting previous runs)
     pct = int(args.sample_fraction * 100)
-    if getattr(args, 'resume', None):
+    if getattr(args, "resume", None):
         slide_output_dir = Path(args.resume)
         logger.info(f"Resuming into existing output directory: {slide_output_dir}")
-    elif getattr(args, 'resume_from', None):
+    elif getattr(args, "resume_from", None):
         slide_output_dir = Path(args.resume_from)
         logger.info(f"Resuming into existing output directory: {slide_output_dir}")
     else:
-        slide_output_dir = output_dir / f'{slide_name}_{run_timestamp}_{pct}pct'
+        slide_output_dir = output_dir / f"{slide_name}_{run_timestamp}_{pct}pct"
     tiles_dir = slide_output_dir / "tiles"
     tiles_dir.mkdir(parents=True, exist_ok=True)
 
     # Multi-node tile list sharing: write/read sampled_tiles.json so all shards
     # process the exact same tile list even if tissue calibration diverges slightly.
     # Tiles are dicts with 'x' and 'y' keys.
-    if getattr(args, 'tile_shard', None):
-        tile_list_file = slide_output_dir / 'sampled_tiles.json'
+    if getattr(args, "tile_shard", None):
+        tile_list_file = slide_output_dir / "sampled_tiles.json"
         if tile_list_file.exists():
             # Another shard already wrote the tile list -- use it
             sampled_tiles = fast_json_load(tile_list_file)
-            logger.info(f"Loaded shared tile list from {tile_list_file} ({len(sampled_tiles)} tiles)")
+            logger.info(
+                f"Loaded shared tile list from {tile_list_file} ({len(sampled_tiles)} tiles)"
+            )
         else:
             # First shard to arrive -- write the tile list (atomic via rename)
             import tempfile
-            tmp_fd, tmp_path = tempfile.mkstemp(dir=slide_output_dir, suffix='.json')
+
+            tmp_fd, tmp_path = tempfile.mkstemp(dir=slide_output_dir, suffix=".json")
             try:
-                with os.fdopen(tmp_fd, 'w') as f:
+                with os.fdopen(tmp_fd, "w") as f:
                     json.dump(sampled_tiles, f)
                 os.replace(tmp_path, tile_list_file)
-                logger.info(f"Wrote shared tile list to {tile_list_file} ({len(sampled_tiles)} tiles)")
+                logger.info(
+                    f"Wrote shared tile list to {tile_list_file} ({len(sampled_tiles)} tiles)"
+                )
             except OSError:
                 # Another shard beat us in a race -- read theirs
                 try:
@@ -443,7 +501,9 @@ def run_pipeline(args):
                     pass
                 if tile_list_file.exists():
                     sampled_tiles = fast_json_load(tile_list_file)
-                    logger.info(f"Race: loaded shared tile list from {tile_list_file} ({len(sampled_tiles)} tiles)")
+                    logger.info(
+                        f"Race: loaded shared tile list from {tile_list_file} ({len(sampled_tiles)} tiles)"
+                    )
 
         # Round-robin shard assignment
         # NOTE: Per-tile resume not implemented for shard mode.
@@ -452,16 +512,19 @@ def run_pipeline(args):
         shard_idx, shard_total = args.tile_shard
         total_before = len(sampled_tiles)
         sampled_tiles = [t for i, t in enumerate(sampled_tiles) if i % shard_total == shard_idx]
-        logger.info(f"Tile shard {shard_idx}/{shard_total}: processing {len(sampled_tiles)}/{total_before} tiles")
+        logger.info(
+            f"Tile shard {shard_idx}/{shard_total}: processing {len(sampled_tiles)}/{total_before} tiles"
+        )
 
         # Write shard manifest for auditability
         manifest = {
-            'shard_idx': shard_idx, 'shard_total': shard_total,
-            'tiles': sampled_tiles,
-            'total_sampled': total_before,
-            'random_seed': getattr(args, 'random_seed', 42),
+            "shard_idx": shard_idx,
+            "shard_total": shard_total,
+            "tiles": sampled_tiles,
+            "total_sampled": total_before,
+            "random_seed": getattr(args, "random_seed", 42),
         }
-        manifest_file = slide_output_dir / f'shard_{shard_idx}_manifest.json'
+        manifest_file = slide_output_dir / f"shard_{shard_idx}_manifest.json"
         atomic_json_dump(manifest, manifest_file)
 
     # ---- Resume: detect completed stages and set skip flags ----
@@ -469,35 +532,47 @@ def run_pipeline(args):
     skip_dedup = False
     skip_html = False
 
-    if getattr(args, 'resume', None) and not getattr(args, 'detection_only', False):
-        resume_info = _cached_resume_info if _cached_resume_info is not None else detect_resume_stage(slide_output_dir, args.cell_type)
-        logger.info(f"Resume state: tiles={resume_info['tile_count']}, "
-                     f"detections={'yes' if resume_info['has_detections'] else 'no'}"
-                     f" ({resume_info['detection_count']}), "
-                     f"html={'yes' if resume_info['has_html'] else 'no'}")
+    if getattr(args, "resume", None) and not getattr(args, "detection_only", False):
+        resume_info = (
+            _cached_resume_info
+            if _cached_resume_info is not None
+            else detect_resume_stage(slide_output_dir, args.cell_type)
+        )
+        logger.info(
+            f"Resume state: tiles={resume_info['tile_count']}, "
+            f"detections={'yes' if resume_info['has_detections'] else 'no'}"
+            f" ({resume_info['detection_count']}), "
+            f"html={'yes' if resume_info['has_html'] else 'no'}"
+        )
 
         # --merge-shards: always reload from tiles (shard detections are pre-dedup),
         # always run dedup, always generate HTML. Checkpointed at each stage.
-        if getattr(args, 'merge_shards', False):
+        if getattr(args, "merge_shards", False):
             # Validate shard completeness
-            shard_manifests = list(slide_output_dir.glob('shard_*_manifest.json'))
+            shard_manifests = list(slide_output_dir.glob("shard_*_manifest.json"))
             if shard_manifests:
                 m0 = fast_json_load(shard_manifests[0])
-                expected_shards = m0.get('shard_total', len(shard_manifests))
+                expected_shards = m0.get("shard_total", len(shard_manifests))
                 if len(shard_manifests) < expected_shards:
-                    logger.warning(f"Only {len(shard_manifests)}/{expected_shards} shard manifests found -- "
-                                   f"some shards may not have completed. Merge will use available data only.")
+                    logger.warning(
+                        f"Only {len(shard_manifests)}/{expected_shards} shard manifests found -- "
+                        f"some shards may not have completed. Merge will use available data only."
+                    )
 
-            merged_det_file = slide_output_dir / f'{args.cell_type}_detections_merged.json'
-            deduped_det_file = slide_output_dir / f'{args.cell_type}_detections.json'
+            merged_det_file = slide_output_dir / f"{args.cell_type}_detections_merged.json"
+            deduped_det_file = slide_output_dir / f"{args.cell_type}_detections.json"
 
             # Checkpoint 1: merged detections (all shards concatenated)
             if merged_det_file.exists() and not args.force_detect:
                 all_detections = fast_json_load(merged_det_file)
-                logger.info(f"Checkpoint: loaded {len(all_detections)} merged detections from {merged_det_file.name}")
-            elif resume_info['has_tiles']:
+                logger.info(
+                    f"Checkpoint: loaded {len(all_detections)} merged detections from {merged_det_file.name}"
+                )
+            elif resume_info["has_tiles"]:
                 all_detections = reload_detections_from_tiles(tiles_dir, args.cell_type)
-                logger.info(f"Merged {len(all_detections)} detections from {resume_info['tile_count']} tile dirs")
+                logger.info(
+                    f"Merged {len(all_detections)} detections from {resume_info['tile_count']} tile dirs"
+                )
                 # Save checkpoint (atomic to prevent corruption on SLURM timeout)
                 atomic_json_dump(all_detections, merged_det_file)
                 logger.info(f"Checkpoint saved: {merged_det_file.name}")
@@ -507,78 +582,98 @@ def run_pipeline(args):
 
             # Checkpoint 2: deduped detections
             # Checkpoint 3: post-dedup processed detections (contours + bg correction)
-            postdedup_file = slide_output_dir / f'{args.cell_type}_detections_postdedup.json'
+            postdedup_file = slide_output_dir / f"{args.cell_type}_detections_postdedup.json"
             if postdedup_file.exists() and not args.force_detect:
                 all_detections = fast_json_load(postdedup_file)
-                logger.info(f"Checkpoint: loaded {len(all_detections)} post-dedup detections from {postdedup_file.name}")
+                logger.info(
+                    f"Checkpoint: loaded {len(all_detections)} post-dedup detections from {postdedup_file.name}"
+                )
                 skip_dedup = True
             elif deduped_det_file.exists() and not args.force_detect:
                 all_detections = fast_json_load(deduped_det_file)
-                logger.info(f"Checkpoint: loaded {len(all_detections)} deduped detections from {deduped_det_file.name}")
+                logger.info(
+                    f"Checkpoint: loaded {len(all_detections)} deduped detections from {deduped_det_file.name}"
+                )
                 skip_dedup = True
             skip_detection = True
             skip_html = False  # Always regenerate HTML for merge
             args.force_html = True
-        elif (resume_info['has_detections'] or resume_info['has_tiles']) and not args.force_detect:
+        elif (resume_info["has_detections"] or resume_info["has_tiles"]) and not args.force_detect:
             # Always fall through to detection — per-tile resume will skip
             # completed tiles and only process missing ones. This prevents
             # trusting incomplete checkpoint JSONs from partial runs.
             skip_detection = False
             skip_dedup = False
             all_detections = []
-            logger.info(f"Resume: {resume_info['tile_count']} tiles found. "
-                        f"Per-tile check will skip completed tiles and detect missing ones.")
+            logger.info(
+                f"Resume: {resume_info['tile_count']} tiles found. "
+                f"Per-tile check will skip completed tiles and detect missing ones."
+            )
 
-        if resume_info['has_html'] and not args.force_html:
+        if resume_info["has_html"] and not args.force_html:
             skip_html = True
             logger.info("HTML exists -- skipping HTML generation (use --force-html to regenerate)")
 
     # Save pipeline config for resume/regeneration
     pipeline_config = {
-        'czi_path': str(czi_path),
-        'cell_type': args.cell_type,
-        'tile_size': args.tile_size,
-        'pixel_size_um': pixel_size_um,
-        'scene': args.scene,
-        'width': width,
-        'height': height,
-        'x_start': x_start,
-        'y_start': y_start,
-        'sample_fraction': args.sample_fraction,
-        'tile_overlap': args.tile_overlap,
-        'channel': args.channel,
+        "czi_path": str(czi_path),
+        "cell_type": args.cell_type,
+        "tile_size": args.tile_size,
+        "pixel_size_um": pixel_size_um,
+        "scene": args.scene,
+        "width": width,
+        "height": height,
+        "x_start": x_start,
+        "y_start": y_start,
+        "sample_fraction": args.sample_fraction,
+        "tile_overlap": args.tile_overlap,
+        "channel": args.channel,
     }
     # Add display channel config
-    if args.cell_type == 'islet':
-        pipeline_config['display_channels'] = getattr(args, 'islet_display_chs', [2, 3, 5])
-        pipeline_config['marker_channels'] = getattr(args, 'islet_marker_channels', 'gcg:2,ins:3,sst:5')
-    elif args.cell_type == 'tissue_pattern':
-        pipeline_config['display_channels'] = getattr(args, 'tp_display_channels_list', [0, 3, 1])
-    config_file = slide_output_dir / 'pipeline_config.json'
-    if not config_file.exists() or not getattr(args, 'resume', None):
+    if args.cell_type == "islet":
+        pipeline_config["display_channels"] = getattr(args, "islet_display_chs", [2, 3, 5])
+        pipeline_config["marker_channels"] = getattr(
+            args, "islet_marker_channels", "gcg:2,ins:3,sst:5"
+        )
+    elif args.cell_type == "tissue_pattern":
+        pipeline_config["display_channels"] = getattr(args, "tp_display_channels_list", [0, 3, 1])
+    config_file = slide_output_dir / "pipeline_config.json"
+    if not config_file.exists() or not getattr(args, "resume", None):
         atomic_json_dump(pipeline_config, config_file)
 
     # ---- Resume fast-path: skip detection, go straight to dedup/HTML/CSV ----
     if skip_detection:
-        is_multiscale = args.cell_type == 'vessel' and getattr(args, 'multi_scale', False)
+        is_multiscale = args.cell_type == "vessel" and getattr(args, "multi_scale", False)
 
         # Run dedup if reloaded from tiles (not from deduped detections JSON)
-        if not skip_dedup and args.tile_overlap > 0 and len(all_detections) > 0 and not is_multiscale:
+        if (
+            not skip_dedup
+            and args.tile_overlap > 0
+            and len(all_detections) > 0
+            and not is_multiscale
+        ):
             pre_dedup = len(all_detections)
-            mask_fn = f'{args.cell_type}_masks.h5'
-            dedup_sort = 'confidence' if getattr(args, 'dedup_by_confidence', False) else 'area'
-            if getattr(args, 'dedup_method', 'mask_overlap') == 'iou_nms':
+            mask_fn = f"{args.cell_type}_masks.h5"
+            dedup_sort = "confidence" if getattr(args, "dedup_by_confidence", False) else "area"
+            if getattr(args, "dedup_method", "mask_overlap") == "iou_nms":
                 from segmentation.processing.deduplication import deduplicate_by_iou_nms
+
                 all_detections = deduplicate_by_iou_nms(
-                    all_detections, tiles_dir,
-                    iou_threshold=getattr(args, 'iou_threshold', 0.2),
-                    mask_filename=mask_fn, sort_by=dedup_sort,
+                    all_detections,
+                    tiles_dir,
+                    iou_threshold=getattr(args, "iou_threshold", 0.2),
+                    mask_filename=mask_fn,
+                    sort_by=dedup_sort,
                 )
             else:
                 from segmentation.processing.deduplication import deduplicate_by_mask_overlap
+
                 all_detections = deduplicate_by_mask_overlap(
-                    all_detections, tiles_dir, min_overlap_fraction=0.1,
-                    mask_filename=mask_fn, sort_by=dedup_sort,
+                    all_detections,
+                    tiles_dir,
+                    min_overlap_fraction=0.1,
+                    mask_filename=mask_fn,
+                    sort_by=dedup_sort,
                 )
             logger.info(f"Dedup (resume): {pre_dedup} -> {len(all_detections)}")
 
@@ -586,29 +681,30 @@ def run_pipeline(args):
         _has_bg = False
         _has_contour = False
         if all_detections:
-            _sample_feat = all_detections[0].get('features', {})
-            _has_bg = any(k.endswith('_background') for k in _sample_feat)
-            _has_contour = all_detections[0].get('contour_dilated_px') is not None
+            _sample_feat = all_detections[0].get("features", {})
+            _has_bg = any(k.endswith("_background") for k in _sample_feat)
+            _has_contour = all_detections[0].get("contour_dilated_px") is not None
 
         _want_contour = args.contour_processing and not _has_contour
         _want_bg = args.background_correction and not _has_bg
 
         if len(all_detections) > 0 and (_want_contour or _want_bg):
             from segmentation.pipeline.post_detection import process_detections_post_dedup
-            mask_fn = f'{args.cell_type}_masks.h5'
+
+            mask_fn = f"{args.cell_type}_masks.h5"
             _display_chs = None
-            if args.cell_type == 'islet':
-                _display_chs = getattr(args, 'islet_display_chs', [2, 3, 5])
-            elif args.cell_type == 'tissue_pattern':
-                _display_chs = getattr(args, 'tp_display_channels_list', [0, 3, 1])
+            if args.cell_type == "islet":
+                _display_chs = getattr(args, "islet_display_chs", [2, 3, 5])
+            elif args.cell_type == "tissue_pattern":
+                _display_chs = getattr(args, "tp_display_channels_list", [0, 3, 1])
 
             # Ensure all channels from the original run are loaded (not just primary).
             # Discover channels from detection features (ch{N}_mean keys).
             _needed_channels: set[int] = set()
-            _sample_keys = all_detections[0].get('features', {}).keys()
+            _sample_keys = all_detections[0].get("features", {}).keys()
             for _k in _sample_keys:
-                if _k.startswith('ch') and _k.endswith('_mean'):
-                    _ch_str = _k[2:].replace('_mean', '')
+                if _k.startswith("ch") and _k.endswith("_mean"):
+                    _ch_str = _k[2:].replace("_mean", "")
                     try:
                         _needed_channels.add(int(_ch_str))
                     except ValueError:
@@ -617,7 +713,7 @@ def run_pipeline(args):
                 # Fallback: at least load all CZI channels
                 try:
                     _dims = loader.reader.get_dims_shape()[0]
-                    _n_ch = _dims.get('C', (0, 3))[1]
+                    _n_ch = _dims.get("C", (0, 3))[1]
                     _needed_channels = set(range(_n_ch))
                 except Exception:
                     _needed_channels = {args.channel}
@@ -633,8 +729,10 @@ def run_pipeline(args):
             _extra_loaded = _needed_channels - set(ch_to_slot.keys())
             _use_shm = not _extra_loaded
             if _extra_loaded:
-                logger.info(f"  Extra channels {sorted(_extra_loaded)} loaded to RAM (not SHM). "
-                            f"Using loader fallback for post-dedup.")
+                logger.info(
+                    f"  Extra channels {sorted(_extra_loaded)} loaded to RAM (not SHM). "
+                    f"Using loader fallback for post-dedup."
+                )
 
             if _has_contour and not _has_bg:
                 logger.info("Contours already processed — running background correction only")
@@ -644,8 +742,8 @@ def run_pipeline(args):
             # Nuclear counting: resolve channel and load models if --count-nuclei
             # Models are loaded in GPU worker subprocesses, not the main process,
             # so we need to load them here explicitly for Phase 4.
-            _count_nuclei = getattr(args, 'count_nuclei', False)
-            _nuc_ch_for_counting = getattr(args, 'nuc_channel_for_counting', None)
+            _count_nuclei = getattr(args, "count_nuclei", False)
+            _nuc_ch_for_counting = getattr(args, "nuc_channel_for_counting", None)
             _cp_model_for_nuc = None
             _sam2_for_nuc = None
             _nuc_model_mgr = None
@@ -654,21 +752,22 @@ def run_pipeline(args):
                 # then cellpose_input_channels (2nd element = nuc),
                 # then cell-type-specific defaults
                 if _nuc_ch_for_counting is None:
-                    cp_input = getattr(args, 'cellpose_input_channels', None)
+                    cp_input = getattr(args, "cellpose_input_channels", None)
                     if cp_input:
-                        parts = str(cp_input).split(',')
+                        parts = str(cp_input).split(",")
                         if len(parts) >= 2:
                             try:
                                 _nuc_ch_for_counting = int(parts[1].strip())
                             except ValueError:
                                 pass
-                if _nuc_ch_for_counting is None and args.cell_type == 'islet':
-                    _nuc_ch_for_counting = getattr(args, 'nuclear_channel', None)
-                if _nuc_ch_for_counting is None and args.cell_type == 'tissue_pattern':
-                    _nuc_ch_for_counting = getattr(args, 'tp_nuclear_channel', None)
+                if _nuc_ch_for_counting is None and args.cell_type == "islet":
+                    _nuc_ch_for_counting = getattr(args, "nuclear_channel", None)
+                if _nuc_ch_for_counting is None and args.cell_type == "tissue_pattern":
+                    _nuc_ch_for_counting = getattr(args, "tp_nuclear_channel", None)
 
                 if _nuc_ch_for_counting is not None:
                     from segmentation.models.manager import ModelManager
+
                     _nuc_model_mgr = ModelManager()
                     _cp_model_for_nuc = _nuc_model_mgr.cellpose
                     _sam2_for_nuc = _nuc_model_mgr.sam2_predictor
@@ -692,13 +791,13 @@ def run_pipeline(args):
                 ch_indices=sorted(all_channel_data.keys()),
                 tile_size=args.tile_size,
                 contour_processing=_want_contour,
-                dilation_um=getattr(args, 'dilation_um', 0.5),
-                rdp_epsilon=getattr(args, 'rdp_epsilon', 5.0),
+                dilation_um=getattr(args, "dilation_um", 0.5),
+                rdp_epsilon=getattr(args, "rdp_epsilon", 5.0),
                 background_correction=_want_bg,
-                bg_neighbors=getattr(args, 'bg_neighbors', 30),
+                bg_neighbors=getattr(args, "bg_neighbors", 30),
                 count_nuclei=_count_nuclei,
                 nuc_channel_idx=_nuc_ch_for_counting,
-                min_nuclear_area=getattr(args, 'min_nuclear_area', 50),
+                min_nuclear_area=getattr(args, "min_nuclear_area", 50),
                 cellpose_model=_cp_model_for_nuc,
                 sam2_predictor=_sam2_for_nuc,
             )
@@ -711,9 +810,11 @@ def run_pipeline(args):
                 _sam2_for_nuc = None
 
             # Checkpoint: save post-processed detections
-            _postdedup_file = slide_output_dir / f'{args.cell_type}_detections_postdedup.json'
+            _postdedup_file = slide_output_dir / f"{args.cell_type}_detections_postdedup.json"
             atomic_json_dump(all_detections, _postdedup_file)
-            logger.info(f"Checkpoint: saved {len(all_detections)} post-dedup detections to {_postdedup_file.name}")
+            logger.info(
+                f"Checkpoint: saved {len(all_detections)} post-dedup detections to {_postdedup_file.name}"
+            )
         elif _has_bg and _has_contour:
             logger.info("Detections already post-processed — skipping")
 
@@ -721,10 +822,12 @@ def run_pipeline(args):
         all_samples = []
         if not skip_html:
             # Ensure all channels are loaded for HTML generation
-            if args.all_channels or (args.cell_type == 'cell' and getattr(args, 'cellpose_input_channels', None)):
+            if args.all_channels or (
+                args.cell_type == "cell" and getattr(args, "cellpose_input_channels", None)
+            ):
                 try:
                     dims = loader.reader.get_dims_shape()[0]
-                    _n_ch = dims.get('C', (0, 3))[1]
+                    _n_ch = dims.get("C", (0, 3))[1]
                 except Exception:
                     _n_ch = 3
                 for ch in range(_n_ch):
@@ -733,11 +836,19 @@ def run_pipeline(args):
                         loader.load_channel(ch)
                         all_channel_data[ch] = loader.get_channel_data(ch)
 
-            logger.info(f"Regenerating HTML for {len(all_detections)} detections from saved tiles...")
+            logger.info(
+                f"Regenerating HTML for {len(all_detections)} detections from saved tiles..."
+            )
             all_samples = _resume_generate_html_samples(
-                args, all_detections, tiles_dir,
-                all_channel_data, loader, pixel_size_um, slide_name,
-                x_start, y_start,
+                args,
+                all_detections,
+                tiles_dir,
+                all_channel_data,
+                loader,
+                pixel_size_um,
+                slide_name,
+                x_start,
+                y_start,
             )
             logger.info(f"Generated {len(all_samples)} HTML samples from resume path")
 
@@ -745,22 +856,43 @@ def run_pipeline(args):
         _html_frac = args.html_sample_fraction
         if _html_frac > 0 and len(all_samples) > 0 and len(all_detections) > 0:
             import random
+
             target = max(100, int(len(all_detections) * _html_frac))
             if len(all_samples) > target:
-                logger.info(f"HTML sample fraction {_html_frac}: subsampling {len(all_samples)} -> {target}")
+                logger.info(
+                    f"HTML sample fraction {_html_frac}: subsampling {len(all_samples)} -> {target}"
+                )
                 all_samples = random.sample(all_samples, target)
 
         # Run the same post-processing as the normal path (HTML export, CSV, summary)
         try:
             _finish_pipeline(
-                args, all_detections, all_samples, slide_output_dir, tiles_dir,
-                pixel_size_um, slide_name, mosaic_info, run_timestamp, pct,
-                skip_html=skip_html, resumed=True,
-                all_tiles=all_tiles, tissue_tiles=tissue_tiles, sampled_tiles=sampled_tiles,
+                args,
+                all_detections,
+                all_samples,
+                slide_output_dir,
+                tiles_dir,
+                pixel_size_um,
+                slide_name,
+                mosaic_info,
+                run_timestamp,
+                pct,
+                skip_html=skip_html,
+                resumed=True,
+                all_tiles=all_tiles,
+                tissue_tiles=tissue_tiles,
+                sampled_tiles=sampled_tiles,
             )
         finally:
-            _maybe_export_ome_zarr(args, slide_shm_arr, ch_to_slot, pixel_size_um,
-                                   slide_output_dir, slide_name, czi_path)
+            _maybe_export_ome_zarr(
+                args,
+                slide_shm_arr,
+                ch_to_slot,
+                pixel_size_um,
+                slide_output_dir,
+                slide_name,
+                czi_path,
+            )
             shm_manager.cleanup()
         return
 
@@ -772,21 +904,27 @@ def run_pipeline(args):
     classifier_loaded = load_classifier_into_detector(args, detector)
 
     # Auto-detect annotation run: no classifier -> show ALL candidates in HTML
-    if args.cell_type in ('nmj', 'islet', 'tissue_pattern') and not classifier_loaded and args.html_score_threshold > 0:
-        logger.info(f"No classifier loaded -- annotation run detected. "
-                     f"Overriding --html-score-threshold from {args.html_score_threshold} to 0.0 "
-                     f"(will show ALL candidates for annotation)")
+    if (
+        args.cell_type in ("nmj", "islet", "tissue_pattern")
+        and not classifier_loaded
+        and args.html_score_threshold > 0
+    ):
+        logger.info(
+            f"No classifier loaded -- annotation run detected. "
+            f"Overriding --html-score-threshold from {args.html_score_threshold} to 0.0 "
+            f"(will show ALL candidates for annotation)"
+        )
         args.html_score_threshold = 0.0
 
     params = build_detection_params(args, pixel_size_um)
-    params['segmenter'] = getattr(args, 'segmenter', 'cellpose')
+    params["segmenter"] = getattr(args, "segmenter", "cellpose")
     logger.info(f"Detection params: {params}")
 
     strategy = create_strategy(
         cell_type=args.cell_type,
         strategy_params=params,
-        extract_deep_features=params.get('extract_deep_features', False),
-        extract_sam2_embeddings=params.get('extract_sam2_embeddings', True),
+        extract_deep_features=params.get("extract_deep_features", False),
+        extract_sam2_embeddings=params.get("extract_sam2_embeddings", True),
         pixel_size_um=pixel_size_um,
     )
     logger.info(f"Using {strategy.name} strategy: {strategy.get_config()}")
@@ -798,10 +936,10 @@ def run_pipeline(args):
     all_samples = []
     all_detections = []  # Universal list with global coordinates
     deferred_html_tiles = []  # For islet: defer HTML until marker thresholds computed
-    is_multiscale = args.cell_type == 'vessel' and getattr(args, 'multi_scale', False)
+    is_multiscale = args.cell_type == "vessel" and getattr(args, "multi_scale", False)
 
     # ---- SHM already populated (direct-to-SHM loading above) ----
-    num_gpus = getattr(args, 'num_gpus', 1)
+    num_gpus = getattr(args, "num_gpus", 1)
     n_channels = len(ch_to_slot)
     ch_keys = ch_list  # CZI channel indices in SHM slot order
 
@@ -814,19 +952,21 @@ def run_pipeline(args):
         # SHM is already created and populated from the direct-to-SHM loading above.
         # Loader channel_data points to SHM views (set during loading).
         # Clear loader references now — workers use SHM directly.
-        if hasattr(loader, 'clear_all_channels'):
+        if hasattr(loader, "clear_all_channels"):
             loader.clear_all_channels()
         else:
             loader.channel_data = None
         gc.collect()
-        logger.info(f"Shared memory ready: {n_channels} channels, {slide_shm_arr.nbytes / (1024**3):.1f} GB")
+        logger.info(
+            f"Shared memory ready: {n_channels} channels, {slide_shm_arr.nbytes / (1024**3):.1f} GB"
+        )
 
         # --- Islet marker calibration (pilot phase, using shared memory) ---
         islet_gmm_thresholds = {}
-        if args.cell_type == 'islet':
-            marker_chs_str = getattr(args, 'islet_marker_channels', 'gcg:2,ins:3,sst:5')
+        if args.cell_type == "islet":
+            marker_chs_str = getattr(args, "islet_marker_channels", "gcg:2,ins:3,sst:5")
             try:
-                marker_chs_list = [int(pair.split(':')[1]) for pair in marker_chs_str.split(',')]
+                marker_chs_list = [int(pair.split(":")[1]) for pair in marker_chs_str.split(",")]
             except (ValueError, IndexError) as e:
                 raise ValueError(
                     f"Invalid --islet-marker-channels format: '{marker_chs_str}'. "
@@ -835,9 +975,9 @@ def run_pipeline(args):
             n_pilot = max(1, int(len(sampled_tiles) * 0.05))
             pilot_indices = np.random.choice(len(sampled_tiles), n_pilot, replace=False)
             pilot_tiles = [sampled_tiles[i] for i in pilot_indices]
-            nuclei_only = getattr(args, 'nuclei_only', False)
-            nuc_ch = getattr(args, 'nuclear_channel', 4)
-            mem_ch = nuc_ch if nuclei_only else getattr(args, 'membrane_channel', 1)
+            nuclei_only = getattr(args, "nuclei_only", False)
+            nuc_ch = getattr(args, "nuclear_channel", 4)
+            mem_ch = nuc_ch if nuclei_only else getattr(args, "membrane_channel", 1)
             islet_gmm_thresholds = calibrate_islet_marker_gmm(
                 pilot_tiles=pilot_tiles,
                 loader=loader,
@@ -856,44 +996,52 @@ def run_pipeline(args):
         # Build strategy parameters from the already-constructed params dict
         strategy_params = dict(params)
         if islet_gmm_thresholds:
-            strategy_params['gmm_prefilter_thresholds'] = islet_gmm_thresholds
+            strategy_params["gmm_prefilter_thresholds"] = islet_gmm_thresholds
 
         # Get classifier path
         classifier_path = None
-        if args.cell_type == 'nmj':
-            classifier_path = getattr(args, 'nmj_classifier', None)
+        if args.cell_type == "nmj":
+            classifier_path = getattr(args, "nmj_classifier", None)
             if classifier_path:
                 logger.info(f"Using specified NMJ classifier: {classifier_path}")
             else:
-                logger.info("No --nmj-classifier specified -- will return all candidates (annotation run)")
-        elif args.cell_type == 'islet':
-            classifier_path = getattr(args, 'islet_classifier', None)
+                logger.info(
+                    "No --nmj-classifier specified -- will return all candidates (annotation run)"
+                )
+        elif args.cell_type == "islet":
+            classifier_path = getattr(args, "islet_classifier", None)
             if classifier_path:
                 logger.info(f"Using specified islet classifier: {classifier_path}")
             else:
-                logger.info("No --islet-classifier specified -- will return all candidates (annotation run)")
-        elif args.cell_type == 'tissue_pattern':
-            classifier_path = getattr(args, 'tp_classifier', None)
+                logger.info(
+                    "No --islet-classifier specified -- will return all candidates (annotation run)"
+                )
+        elif args.cell_type == "tissue_pattern":
+            classifier_path = getattr(args, "tp_classifier", None)
             if classifier_path:
                 logger.info(f"Using specified tissue_pattern classifier: {classifier_path}")
             else:
-                logger.info("No --tp-classifier specified -- will return all candidates (annotation run)")
+                logger.info(
+                    "No --tp-classifier specified -- will return all candidates (annotation run)"
+                )
 
-        extract_deep = getattr(args, 'extract_deep_features', False)
+        extract_deep = getattr(args, "extract_deep_features", False)
         collected_partial_vessels = {}  # For cross-tile vessel merge (populated by workers)
 
         # Vessel-specific params for multi-GPU
-        mgpu_cd31_channel = getattr(args, 'cd31_channel', None) if args.cell_type == 'vessel' else None
+        mgpu_cd31_channel = (
+            getattr(args, "cd31_channel", None) if args.cell_type == "vessel" else None
+        )
         mgpu_channel_names = None
-        if args.cell_type == 'vessel' and getattr(args, 'channel_names', None):
-            names = args.channel_names.split(',')
-            mgpu_channel_names = {ch_keys[i]: name.strip()
-                                  for i, name in enumerate(names)
-                                  if i < len(ch_keys)}
+        if args.cell_type == "vessel" and getattr(args, "channel_names", None):
+            names = args.channel_names.split(",")
+            mgpu_channel_names = {
+                ch_keys[i]: name.strip() for i, name in enumerate(names) if i < len(ch_keys)
+            }
 
         # Add mosaic origin to slide_info so workers can convert global->relative coords
         mgpu_slide_info = shm_manager.get_slide_info()
-        mgpu_slide_info[slide_name]['mosaic_origin'] = (x_start, y_start)
+        mgpu_slide_info[slide_name]["mosaic_origin"] = (x_start, y_start)
 
         # ---- Multi-scale vessel detection mode ----
         if is_multiscale:
@@ -901,14 +1049,17 @@ def run_pipeline(args):
             logger.info(f"MULTI-SCALE VESSEL DETECTION -- {num_gpus} GPU(s)")
             logger.info("=" * 60)
 
-            from segmentation.utils.multiscale import (
-                get_scale_params, generate_tile_grid_at_scale,
-                convert_detection_to_full_res, merge_detections_across_scales,
-            )
             from tqdm import tqdm as tqdm_progress
 
-            scales = [int(s.strip()) for s in args.scales.split(',')]
-            iou_threshold = getattr(args, 'multiscale_iou_threshold', 0.3)
+            from segmentation.utils.multiscale import (
+                convert_detection_to_full_res,
+                generate_tile_grid_at_scale,
+                get_scale_params,
+                merge_detections_across_scales,
+            )
+
+            scales = [int(s.strip()) for s in args.scales.split(",")]
+            iou_threshold = getattr(args, "multiscale_iou_threshold", 0.3)
             tile_size = args.tile_size
 
             logger.info(f"Scales: {scales} (coarse to fine)")
@@ -918,7 +1069,7 @@ def run_pipeline(args):
             with MultiGPUTileProcessor(
                 num_gpus=num_gpus,
                 slide_info=mgpu_slide_info,
-                cell_type='vessel',
+                cell_type="vessel",
                 strategy_params=strategy_params,
                 pixel_size_um=pixel_size_um,
                 classifier_path=classifier_path,
@@ -937,7 +1088,7 @@ def run_pipeline(args):
 
                 # Resume from checkpoints if available
                 completed_scales = set()
-                if getattr(args, 'resume_from', None):
+                if getattr(args, "resume_from", None):
                     checkpoint_dir = Path(args.resume_from) / "checkpoints"
                     if checkpoint_dir.exists():
                         # Sort by modification time (not lexicographic -- scale_8x > scale_16x lex)
@@ -950,16 +1101,18 @@ def run_pipeline(args):
                             all_scale_detections = fast_json_load(latest)
                             # Restore numpy arrays for contours (json.load produces lists)
                             for det in all_scale_detections:
-                                for key in ('outer', 'inner', 'outer_contour', 'inner_contour'):
+                                for key in ("outer", "inner", "outer_contour", "inner_contour"):
                                     if key in det and det[key] is not None:
                                         det[key] = np.array(det[key], dtype=np.int32)
                             for cf in checkpoint_files:
                                 # Parse scale from filename like "scale_32x.json"
                                 try:
-                                    s = int(cf.stem.split('_')[1].rstrip('x'))
+                                    s = int(cf.stem.split("_")[1].rstrip("x"))
                                     completed_scales.add(s)
                                 except (IndexError, ValueError):
-                                    logger.warning(f"Skipping unrecognized checkpoint file: {cf.name}")
+                                    logger.warning(
+                                        f"Skipping unrecognized checkpoint file: {cf.name}"
+                                    )
                             logger.info(
                                 f"Resumed from {latest}: {len(all_scale_detections)} detections, "
                                 f"completed scales: {sorted(completed_scales)}"
@@ -972,8 +1125,11 @@ def run_pipeline(args):
 
                     scale_params = get_scale_params(scale)
                     scale_tiles = generate_tile_grid_at_scale(
-                        mosaic_info['width'], mosaic_info['height'],
-                        tile_size, scale, overlap=0,
+                        mosaic_info["width"],
+                        mosaic_info["height"],
+                        tile_size,
+                        scale,
+                        overlap=0,
                     )
 
                     # Sample tiles if requested
@@ -991,14 +1147,14 @@ def run_pipeline(args):
                     # Submit tiles for this scale with scale metadata
                     for tx_s, ty_s in scale_tiles:
                         tile_with_dims = {
-                            'x': x_start + tx_s * scale,
-                            'y': y_start + ty_s * scale,
-                            'w': tile_size * scale,
-                            'h': tile_size * scale,
-                            'scale_factor': scale,
-                            'scale_params': scale_params,
-                            'tile_x_scaled': tx_s,
-                            'tile_y_scaled': ty_s,
+                            "x": x_start + tx_s * scale,
+                            "y": y_start + ty_s * scale,
+                            "w": tile_size * scale,
+                            "h": tile_size * scale,
+                            "scale_factor": scale,
+                            "scale_params": scale_params,
+                            "tile_x_scaled": tx_s,
+                            "tile_y_scaled": ty_s,
                         }
                         processor.submit_tile(slide_name, tile_with_dims)
 
@@ -1016,30 +1172,37 @@ def run_pipeline(args):
                         results_collected += 1
                         pbar.update(1)
 
-                        if result['status'] == 'success':
+                        if result["status"] == "success":
                             try:
-                                tile_dict = result['tile']
-                                features_list = result['features_list']
-                                sf = result.get('scale_factor', scale)
-                                tx_s = tile_dict.get('tile_x_scaled', 0)
-                                ty_s = tile_dict.get('tile_y_scaled', 0)
+                                tile_dict = result["tile"]
+                                features_list = result["features_list"]
+                                sf = result.get("scale_factor", scale)
+                                tx_s = tile_dict.get("tile_x_scaled", 0)
+                                ty_s = tile_dict.get("tile_y_scaled", 0)
 
                                 # Apply vessel classifiers
-                                apply_vessel_classifiers(features_list, vessel_classifier, vessel_type_classifier)
+                                apply_vessel_classifiers(
+                                    features_list, vessel_classifier, vessel_type_classifier
+                                )
 
                                 # Convert each detection from downscaled-local to full-res global
                                 for feat in features_list:
-                                    if 'outer_contour' in feat and 'outer' not in feat:
-                                        feat['outer'] = feat.pop('outer_contour')
-                                    if 'inner_contour' in feat and 'inner' not in feat:
-                                        feat['inner'] = feat.pop('inner_contour')
-                                    if feat.get('features', {}).get('detection_type') == 'arc':
-                                        feat['is_arc'] = True
+                                    if "outer_contour" in feat and "outer" not in feat:
+                                        feat["outer"] = feat.pop("outer_contour")
+                                    if "inner_contour" in feat and "inner" not in feat:
+                                        feat["inner"] = feat.pop("inner_contour")
+                                    if feat.get("features", {}).get("detection_type") == "arc":
+                                        feat["is_arc"] = True
 
                                     det_fullres = convert_detection_to_full_res(
-                                        feat, sf, tx_s, ty_s,
+                                        feat,
+                                        sf,
+                                        tx_s,
+                                        ty_s,
                                         smooth=True,
-                                        smooth_base_factor=getattr(args, 'smooth_contours_factor', 3.0),
+                                        smooth_base_factor=getattr(
+                                            args, "smooth_contours_factor", 3.0
+                                        ),
                                     )
 
                                     # Add mosaic origin for CZI-global coords
@@ -1048,49 +1211,52 @@ def run_pipeline(args):
                                     # feats['inner_center'] to full-res array-local coords.
                                     # feats['center'] is NOT scaled by that function, so
                                     # scale it here first to match.
-                                    feats_d = det_fullres.get('features', {})
+                                    feats_d = det_fullres.get("features", {})
                                     if isinstance(feats_d, dict):
-                                        if 'center' in feats_d and feats_d['center'] is not None:
-                                            fc = feats_d['center']
-                                            feats_d['center'] = [
+                                        if "center" in feats_d and feats_d["center"] is not None:
+                                            fc = feats_d["center"]
+                                            feats_d["center"] = [
                                                 (fc[0] + tx_s) * sf,
                                                 (fc[1] + ty_s) * sf,
                                             ]
-                                    for key in ('center', 'centroid'):
+                                    for key in ("center", "centroid"):
                                         if key in det_fullres:
                                             det_fullres[key][0] += x_start
                                             det_fullres[key][1] += y_start
                                     if isinstance(feats_d, dict):
-                                        for ck in ('center', 'outer_center', 'inner_center'):
+                                        for ck in ("center", "outer_center", "inner_center"):
                                             if ck in feats_d and feats_d[ck] is not None:
                                                 feats_d[ck][0] += x_start
                                                 feats_d[ck][1] += y_start
                                     mosaic_offset = np.array([x_start, y_start], dtype=np.int32)
-                                    if 'outer' in det_fullres and det_fullres['outer'] is not None:
-                                        det_fullres['outer'] = det_fullres['outer'] + mosaic_offset
-                                    if 'inner' in det_fullres and det_fullres['inner'] is not None:
-                                        det_fullres['inner'] = det_fullres['inner'] + mosaic_offset
+                                    if "outer" in det_fullres and det_fullres["outer"] is not None:
+                                        det_fullres["outer"] = det_fullres["outer"] + mosaic_offset
+                                    if "inner" in det_fullres and det_fullres["inner"] is not None:
+                                        det_fullres["inner"] = det_fullres["inner"] + mosaic_offset
 
-                                    for ckey in ('outer', 'inner'):
+                                    for ckey in ("outer", "inner"):
                                         if ckey in det_fullres and det_fullres[ckey] is not None:
-                                            det_fullres[f'{ckey}_contour'] = det_fullres[ckey]
-                                            det_fullres[f'{ckey}_contour_global'] = [
+                                            det_fullres[f"{ckey}_contour"] = det_fullres[ckey]
+                                            det_fullres[f"{ckey}_contour_global"] = [
                                                 [int(pt[0][0]), int(pt[0][1])]
                                                 for pt in det_fullres[ckey]
                                             ]
 
-                                    det_fullres['scale_detected'] = sf
+                                    det_fullres["scale_detected"] = sf
                                     all_scale_detections.append(det_fullres)
                                     scale_det_count += 1
 
                             except Exception as e:
                                 import traceback
-                                _tid = result.get('tid', '?')
+
+                                _tid = result.get("tid", "?")
                                 logger.error(f"Error post-processing multiscale tile {_tid}: {e}")
                                 logger.error(f"Traceback:\n{traceback.format_exc()}")
 
-                        elif result['status'] == 'error':
-                            logger.warning(f"Tile {result['tid']} error: {result.get('error', 'unknown')}")
+                        elif result["status"] == "error":
+                            logger.warning(
+                                f"Tile {result['tid']} error: {result.get('error', 'unknown')}"
+                            )
 
                     pbar.close()
                     total_tiles_submitted += results_collected
@@ -1098,6 +1264,7 @@ def run_pipeline(args):
 
                     gc.collect()
                     from segmentation.utils.device import empty_cache
+
                     empty_cache()
 
                     # Save checkpoint after each scale
@@ -1105,42 +1272,45 @@ def run_pipeline(args):
                     checkpoint_dir.mkdir(exist_ok=True)
                     checkpoint_file = checkpoint_dir / f"scale_{scale}x.json"
                     atomic_json_dump(all_scale_detections, checkpoint_file)
-                    logger.info(f"Checkpoint saved: {checkpoint_file} ({len(all_scale_detections)} detections)")
+                    logger.info(
+                        f"Checkpoint saved: {checkpoint_file} ({len(all_scale_detections)} detections)"
+                    )
 
             # Merge across scales (contour-based IoU dedup)
             logger.info(f"Merging {len(all_scale_detections)} detections across scales...")
             merged_detections = merge_detections_across_scales(
-                all_scale_detections, iou_threshold=iou_threshold,
+                all_scale_detections,
+                iou_threshold=iou_threshold,
                 tile_size=args.tile_size,
             )
             logger.info(f"After merge: {len(merged_detections)} vessels")
 
             # Regenerate UIDs from full-res global coords and build all_detections
             for det in merged_detections:
-                features_dict = det.get('features', {})
-                center = features_dict.get('center', det.get('center', [0, 0]))
+                features_dict = det.get("features", {})
+                center = features_dict.get("center", det.get("center", [0, 0]))
                 if isinstance(center, (list, tuple)) and len(center) >= 2:
                     cx, cy = int(center[0]), int(center[1])
                 else:
                     cx, cy = 0, 0
 
                 uid = f"{slide_name}_vessel_{cx}_{cy}"
-                det['uid'] = uid
-                det['slide'] = slide_name
-                det['center'] = [cx, cy]
-                det['center_um'] = [cx * pixel_size_um, cy * pixel_size_um]
-                det['global_center'] = [cx, cy]
-                det['global_center_um'] = [cx * pixel_size_um, cy * pixel_size_um]
+                det["uid"] = uid
+                det["slide"] = slide_name
+                det["center"] = [cx, cy]
+                det["center_um"] = [cx * pixel_size_um, cy * pixel_size_um]
+                det["global_center"] = [cx, cy]
+                det["global_center_um"] = [cx * pixel_size_um, cy * pixel_size_um]
                 all_detections.append(det)
 
             # Generate HTML crops from shared memory with percentile normalization
             logger.info(f"Generating HTML crops for {len(all_detections)} multiscale detections...")
 
             for det in all_detections:
-                features_dict = det.get('features', {})
-                cx, cy = det['center']
+                features_dict = det.get("features", {})
+                cx, cy = det["center"]
 
-                diameter_um = features_dict.get('outer_diameter_um', 50)
+                diameter_um = features_dict.get("outer_diameter_um", 50)
                 diameter_px = int(diameter_um / pixel_size_um)
                 crop_size = max(300, min(800, int(diameter_px * 2)))
                 half = crop_size // 2
@@ -1154,8 +1324,12 @@ def run_pipeline(args):
                 x2 = min(w, rel_cx + half)
 
                 crop_rgb = compose_tile_rgb(
-                    None, (y1, x1, y2 - y1, x2 - x1), args.cell_type,
-                    slide_shm_arr=slide_shm_arr, ch_to_slot=ch_to_slot)
+                    None,
+                    (y1, x1, y2 - y1, x2 - x1),
+                    args.cell_type,
+                    slide_shm_arr=slide_shm_arr,
+                    ch_to_slot=ch_to_slot,
+                )
 
                 if crop_rgb.size == 0:
                     continue
@@ -1165,14 +1339,16 @@ def run_pipeline(args):
 
                 b64_str, _ = image_to_base64(crop_rgb)
                 sample = {
-                    'uid': det['uid'],
-                    'image': b64_str,
-                    'stats': features_dict,
+                    "uid": det["uid"],
+                    "image": b64_str,
+                    "stats": features_dict,
                 }
                 all_samples.append(sample)
 
-            logger.info(f"Multi-scale mode: {len(all_detections)} detections, {len(all_samples)} HTML samples "
-                        f"from {total_tiles_submitted} tiles on {num_gpus} GPUs")
+            logger.info(
+                f"Multi-scale mode: {len(all_detections)} detections, {len(all_samples)} HTML samples "
+                f"from {total_tiles_submitted} tiles on {num_gpus} GPUs"
+            )
 
         # ---- Regular (non-multiscale) tile processing ----
         else:
@@ -1194,17 +1370,17 @@ def run_pipeline(args):
                 channel_names=mgpu_channel_names,
                 variance_threshold=variance_threshold,
                 channel_keys=ch_keys,
-                islet_display_channels=getattr(args, 'islet_display_chs', None),
+                islet_display_channels=getattr(args, "islet_display_chs", None),
                 tiles_dir=str(tiles_dir),
             ) as processor:
 
                 # Filter to incomplete tiles on resume (skip tiles with existing features)
                 tile_size = args.tile_size
                 tiles_to_process = sampled_tiles
-                if getattr(args, 'resume', None) and tiles_dir.exists():
+                if getattr(args, "resume", None) and tiles_dir.exists():
                     completed = 0
                     remaining = []
-                    feat_name = f'{args.cell_type}_features.json'
+                    feat_name = f"{args.cell_type}_features.json"
                     for tile in sampled_tiles:
                         tile_feat = tiles_dir / f"tile_{tile['x']}_{tile['y']}" / feat_name
                         if tile_feat.exists():
@@ -1212,8 +1388,10 @@ def run_pipeline(args):
                         else:
                             remaining.append(tile)
                     if completed > 0:
-                        logger.info(f"Resume: {completed}/{len(sampled_tiles)} tiles already completed, "
-                                    f"processing {len(remaining)} remaining")
+                        logger.info(
+                            f"Resume: {completed}/{len(sampled_tiles)} tiles already completed, "
+                            f"processing {len(remaining)} remaining"
+                        )
                         tiles_to_process = remaining
                     if not remaining:
                         logger.info("All tiles already completed — skipping to dedup")
@@ -1226,15 +1404,16 @@ def run_pipeline(args):
                 for tile in tiles_to_process:
                     # Worker expects 'x', 'y', 'w', 'h' keys
                     tile_with_dims = {
-                        'x': tile['x'],
-                        'y': tile['y'],
-                        'w': tile_size,
-                        'h': tile_size,
+                        "x": tile["x"],
+                        "y": tile["y"],
+                        "w": tile_size,
+                        "h": tile_size,
                     }
                     processor.submit_tile(slide_name, tile_with_dims)
 
                 # Collect results with progress bar
                 from tqdm import tqdm as tqdm_progress
+
                 pbar = tqdm_progress(total=len(tiles_to_process), desc="Processing tiles")
 
                 results_collected = 0
@@ -1247,14 +1426,14 @@ def run_pipeline(args):
                     results_collected += 1
                     pbar.update(1)
 
-                    if result['status'] == 'success':
+                    if result["status"] == "success":
                         try:
-                            tile = result['tile']
-                            tile_x, tile_y = tile['x'], tile['y']
-                            features_list = result['features_list']
+                            tile = result["tile"]
+                            tile_x, tile_y = tile["x"], tile["y"]
+                            features_list = result["features_list"]
 
                             # Collect partial vessels from worker for cross-tile merge
-                            pv = result.get('partial_vessels')
+                            pv = result.get("partial_vessels")
                             if pv:
                                 for tk, pvl in pv.items():
                                     if tk not in collected_partial_vessels:
@@ -1266,32 +1445,36 @@ def run_pipeline(args):
                             # Read from disk for HTML generation.
                             tile_id = f"tile_{tile_x}_{tile_y}"
                             tile_out = tiles_dir / tile_id
-                            masks = result['masks']
+                            masks = result["masks"]
 
                             if masks is None and len(features_list) > 0:
                                 # Worker saved to disk — read back for HTML
                                 masks_file = tile_out / f"{args.cell_type}_masks.h5"
                                 if masks_file.exists():
-                                    with h5py.File(masks_file, 'r') as hf:
-                                        masks = hf['masks'][:]
+                                    with h5py.File(masks_file, "r") as hf:
+                                        masks = hf["masks"][:]
 
                             # Skip tiles with no detections
                             if masks is None or len(features_list) == 0:
                                 continue
 
                             # Apply vessel classifier post-processing BEFORE saving
-                            if args.cell_type == 'vessel':
-                                apply_vessel_classifiers(features_list, vessel_classifier, vessel_type_classifier)
+                            if args.cell_type == "vessel":
+                                apply_vessel_classifiers(
+                                    features_list, vessel_classifier, vessel_type_classifier
+                                )
 
                             # Save tile masks (skip if worker already saved)
                             tile_out.mkdir(exist_ok=True)
                             masks_file = tile_out / f"{args.cell_type}_masks.h5"
                             if not masks_file.exists():
-                                with h5py.File(masks_file, 'w') as f:
-                                    create_hdf5_dataset(f, 'masks', masks)
+                                with h5py.File(masks_file, "w") as f:
+                                    create_hdf5_dataset(f, "masks", masks)
 
                             # Save features (includes vessel classification if applicable)
-                            atomic_json_dump(features_list, tile_out / f"{args.cell_type}_features.json")
+                            atomic_json_dump(
+                                features_list, tile_out / f"{args.cell_type}_features.json"
+                            )
 
                             # Add detections to global list
                             for feat in features_list:
@@ -1305,101 +1488,137 @@ def run_pipeline(args):
                             tile_h, tile_w = masks.shape[:2]
                             # Read HTML crops from shared memory (all_channel_data freed after shm creation)
                             _disp_chs = None
-                            if args.cell_type == 'islet':
-                                _disp_chs = getattr(args, 'islet_display_chs', None)
-                            elif args.cell_type == 'tissue_pattern':
-                                _disp_chs = getattr(args, 'tp_display_channels_list', [0, 3, 1])
+                            if args.cell_type == "islet":
+                                _disp_chs = getattr(args, "islet_display_chs", None)
+                            elif args.cell_type == "tissue_pattern":
+                                _disp_chs = getattr(args, "tp_display_channels_list", [0, 3, 1])
                             tile_rgb_html = compose_tile_rgb(
-                                _disp_chs, (rel_ty, rel_tx, tile_h, tile_w), args.cell_type,
-                                slide_shm_arr=slide_shm_arr, ch_to_slot=ch_to_slot)
+                                _disp_chs,
+                                (rel_ty, rel_tx, tile_h, tile_w),
+                                args.cell_type,
+                                slide_shm_arr=slide_shm_arr,
+                                ch_to_slot=ch_to_slot,
+                            )
 
-                            tile_pct = _compute_tile_percentiles(tile_rgb_html) if getattr(args, 'html_normalization', 'crop') == 'tile' else None
+                            tile_pct = (
+                                _compute_tile_percentiles(tile_rgb_html)
+                                if getattr(args, "html_normalization", "crop") == "tile"
+                                else None
+                            )
 
-                            if args.cell_type == 'islet':
+                            if args.cell_type == "islet":
                                 # Flush tile data to disk to avoid OOM
-                                np.save(tile_out / 'tile_rgb_html.npy', tile_rgb_html)
+                                np.save(tile_out / "tile_rgb_html.npy", tile_rgb_html)
                                 if tile_pct is not None:
-                                    with open(tile_out / 'tile_pct.json', 'w') as f_pct:
+                                    with open(tile_out / "tile_pct.json", "w") as f_pct:
                                         json.dump(tile_pct, f_pct)
-                                deferred_html_tiles.append({
-                                    'tile_dir': str(tile_out),
-                                    'tile_x': tile_x, 'tile_y': tile_y,
-                                    'tile_pct': tile_pct,
-                                })
+                                deferred_html_tiles.append(
+                                    {
+                                        "tile_dir": str(tile_out),
+                                        "tile_x": tile_x,
+                                        "tile_y": tile_y,
+                                        "tile_pct": tile_pct,
+                                    }
+                                )
                                 del masks, tile_rgb_html, features_list
-                                result.pop('masks', None)
-                                result['features_list'] = None
+                                result.pop("masks", None)
+                                result["features_list"] = None
                                 gc.collect()
                             else:
                                 _max_html = args.max_html_samples
                                 if _max_html > 0 and len(all_samples) >= _max_html:
                                     if len(all_samples) == _max_html:
-                                        logger.info(f"HTML sample cap reached ({_max_html}). "
-                                                    f"Remaining tiles will not have HTML crops. "
-                                                    f"Use --max-html-samples 0 for unlimited.")
+                                        logger.info(
+                                            f"HTML sample cap reached ({_max_html}). "
+                                            f"Remaining tiles will not have HTML crops. "
+                                            f"Use --max-html-samples 0 for unlimited."
+                                        )
                                 else:
                                     html_samples = filter_and_create_html_samples(
-                                        features_list, tile_x, tile_y, tile_rgb_html, masks,
-                                        pixel_size_um, slide_name, args.cell_type,
+                                        features_list,
+                                        tile_x,
+                                        tile_y,
+                                        tile_rgb_html,
+                                        masks,
+                                        pixel_size_um,
+                                        slide_name,
+                                        args.cell_type,
                                         args.html_score_threshold,
                                         tile_percentiles=tile_pct,
                                         candidate_mode=args.candidate_mode,
-                                        vessel_params=params if args.cell_type == 'vessel' else None,
+                                        vessel_params=(
+                                            params if args.cell_type == "vessel" else None
+                                        ),
                                     )
                                     all_samples.extend(html_samples)
                                     # Cache HTML samples to disk for fast resume
                                     if html_samples:
-                                        _cache_path = tile_out / f'{args.cell_type}_html_samples.json'
+                                        _cache_path = (
+                                            tile_out / f"{args.cell_type}_html_samples.json"
+                                        )
                                         atomic_json_dump(html_samples, _cache_path)
 
                         except Exception as e:
                             import traceback
+
                             logger.error(f"Error post-processing tile ({tile_x}, {tile_y}): {e}")
                             logger.error(f"Traceback:\n{traceback.format_exc()}")
 
-                    elif result['status'] in ('empty', 'no_tissue'):
+                    elif result["status"] in ("empty", "no_tissue"):
                         pass  # Normal - no tissue in tile
-                    elif result['status'] == 'error':
-                        logger.warning(f"Tile {result['tid']} error: {result.get('error', 'unknown')}")
+                    elif result["status"] == "error":
+                        logger.warning(
+                            f"Tile {result['tid']} error: {result.get('error', 'unknown')}"
+                        )
 
                 pbar.close()
 
                 # Deferred HTML generation for islet (needs population-level marker thresholds)
-                if deferred_html_tiles and args.cell_type == 'islet':
+                if deferred_html_tiles and args.cell_type == "islet":
                     marker_thresholds, _islet_mm = compute_and_apply_islet_markers(
-                        args, all_detections)
-                    uid_to_marker = {d.get('uid', ''): d.get('marker_class') for d in all_detections}
+                        args, all_detections
+                    )
+                    uid_to_marker = {
+                        d.get("uid", ""): d.get("marker_class") for d in all_detections
+                    }
                     try:
                         for dt in deferred_html_tiles:
-                            _td = Path(dt['tile_dir'])
-                            _tile_rgb = np.load(_td / 'tile_rgb_html.npy')
-                            with h5py.File(_td / f'{args.cell_type}_masks.h5', 'r') as _hf:
-                                _tile_masks = _hf['masks'][:]
-                            _tile_feats = fast_json_load(_td / f'{args.cell_type}_features.json')
+                            _td = Path(dt["tile_dir"])
+                            _tile_rgb = np.load(_td / "tile_rgb_html.npy")
+                            with h5py.File(_td / f"{args.cell_type}_masks.h5", "r") as _hf:
+                                _tile_masks = _hf["masks"][:]
+                            _tile_feats = fast_json_load(_td / f"{args.cell_type}_features.json")
                             for _feat in _tile_feats:
-                                _mc = uid_to_marker.get(_feat.get('uid', ''))
+                                _mc = uid_to_marker.get(_feat.get("uid", ""))
                                 if _mc:
-                                    _feat['marker_class'] = _mc
+                                    _feat["marker_class"] = _mc
                             html_samples = filter_and_create_html_samples(
-                                _tile_feats, dt['tile_x'], dt['tile_y'],
-                                _tile_rgb, _tile_masks,
-                                pixel_size_um, slide_name, args.cell_type,
+                                _tile_feats,
+                                dt["tile_x"],
+                                dt["tile_y"],
+                                _tile_rgb,
+                                _tile_masks,
+                                pixel_size_um,
+                                slide_name,
+                                args.cell_type,
                                 args.html_score_threshold,
-                                tile_percentiles=dt['tile_pct'],
+                                tile_percentiles=dt["tile_pct"],
                                 marker_thresholds=marker_thresholds,
                                 marker_map=_islet_mm,
                                 candidate_mode=args.candidate_mode,
-                                vessel_params=params if args.cell_type == 'vessel' else None,
+                                vessel_params=params if args.cell_type == "vessel" else None,
                             )
                             all_samples.extend(html_samples)
                             # Cache HTML samples to disk for fast resume
                             if html_samples:
-                                atomic_json_dump(html_samples, _td / f'{args.cell_type}_html_samples.json')
+                                atomic_json_dump(
+                                    html_samples, _td / f"{args.cell_type}_html_samples.json"
+                                )
                             # Clean up deferred temp files
-                            _npy_path = _td / 'tile_rgb_html.npy'
+                            _npy_path = _td / "tile_rgb_html.npy"
                             if _npy_path.exists():
                                 _npy_path.unlink()
-                            _pct_path = _td / 'tile_pct.json'
+                            _pct_path = _td / "tile_pct.json"
                             if _pct_path.exists():
                                 _pct_path.unlink()
                             del _tile_rgb, _tile_masks, _tile_feats
@@ -1407,15 +1626,17 @@ def run_pipeline(args):
                     finally:
                         # Ensure ALL deferred .npy files are cleaned up even on error
                         for dt in deferred_html_tiles:
-                            _td = Path(dt['tile_dir'])
-                            for _tmp in ('tile_rgb_html.npy', 'tile_pct.json'):
+                            _td = Path(dt["tile_dir"])
+                            for _tmp in ("tile_rgb_html.npy", "tile_pct.json"):
                                 _p = _td / _tmp
                                 if _p.exists():
                                     _p.unlink()
                         deferred_html_tiles = []
                     gc.collect()
 
-            logger.info(f"Processing complete: {len(all_detections)} {args.cell_type} detections from {results_collected} tiles")
+            logger.info(
+                f"Processing complete: {len(all_detections)} {args.cell_type} detections from {results_collected} tiles"
+            )
 
     except Exception:
         # Cleanup shared memory on detection failure before re-raising
@@ -1428,12 +1649,14 @@ def run_pipeline(args):
     logger.info(f"Total detections (pre-dedup): {len(all_detections)}")
 
     # Cross-tile vessel merge: reconstruct partial vessels from all workers and merge
-    if (args.cell_type == 'vessel' and not is_multiscale
-            and collected_partial_vessels):
+    if args.cell_type == "vessel" and not is_multiscale and collected_partial_vessels:
         from segmentation.detection.strategies.vessel import VesselStrategy
+
         n_partials = sum(len(v) for v in collected_partial_vessels.values())
         n_tiles_with = len(collected_partial_vessels)
-        logger.info(f"Cross-tile vessel merge: {n_partials} partial vessels from {n_tiles_with} tiles")
+        logger.info(
+            f"Cross-tile vessel merge: {n_partials} partial vessels from {n_tiles_with} tiles"
+        )
         merge_strategy = VesselStrategy()
         merge_strategy.import_partial_vessels(collected_partial_vessels)
         tile_overlap_px = int(args.tile_size * args.tile_overlap)
@@ -1446,24 +1669,24 @@ def run_pipeline(args):
             logger.info(f"Cross-tile merge produced {len(merged_vessels)} merged vessels")
             # Add merged vessels as new detections with proper UIDs
             for mv in merged_vessels:
-                outer = mv.get('outer')
+                outer = mv.get("outer")
                 if outer is None:
                     continue
                 pts = outer.reshape(-1, 2)
                 cx, cy = float(pts[:, 0].mean()), float(pts[:, 1].mean())
                 uid = f"{slide_name}_vessel_{int(round(cx))}_{int(round(cy))}"
-                feat = mv.get('features', {})
-                feat['center'] = [cx, cy]
-                feat['is_cross_tile_merged'] = True
-                feat['merge_score'] = mv.get('merge_score', 0)
+                feat = mv.get("features", {})
+                feat["center"] = [cx, cy]
+                feat["is_cross_tile_merged"] = True
+                feat["merge_score"] = mv.get("merge_score", 0)
                 det = {
-                    'uid': uid,
-                    'slide_name': slide_name,
-                    'global_center': [cx, cy],
-                    'global_center_um': [cx * pixel_size_um, cy * pixel_size_um],
-                    'features': feat,
-                    'tile_origin': list(mv.get('source_tiles', [(0, 0)])[0]),
-                    'is_cross_tile_merged': True,
+                    "uid": uid,
+                    "slide_name": slide_name,
+                    "global_center": [cx, cy],
+                    "global_center_um": [cx * pixel_size_um, cy * pixel_size_um],
+                    "features": feat,
+                    "tile_origin": list(mv.get("source_tiles", [(0, 0)])[0]),
+                    "is_cross_tile_merged": True,
                 }
                 all_detections.append(det)
             logger.info(f"Total detections after cross-tile merge: {len(all_detections)}")
@@ -1473,9 +1696,11 @@ def run_pipeline(args):
         gc.collect()
 
     # Detection-only mode: skip dedup, HTML, CSV -- just save per-tile results and exit
-    if getattr(args, 'detection_only', False):
-        logger.info(f"Detection-only mode: {len(all_detections)} detections saved to tile dirs. Exiting.")
-        if getattr(args, 'tile_shard', None):
+    if getattr(args, "detection_only", False):
+        logger.info(
+            f"Detection-only mode: {len(all_detections)} detections saved to tile dirs. Exiting."
+        )
+        if getattr(args, "tile_shard", None):
             shard_idx, shard_total = args.tile_shard
             logger.info(f"Shard {shard_idx}/{shard_total} complete.")
         shm_manager.cleanup()
@@ -1486,70 +1711,79 @@ def run_pipeline(args):
     # Skip for multiscale -- already deduped by contour IoU in merge_detections_across_scales()
     if not is_multiscale and args.tile_overlap > 0 and len(all_detections) > 0:
         pre_dedup = len(all_detections)
-        mask_fn = f'{args.cell_type}_masks.h5'
-        dedup_sort = 'confidence' if getattr(args, 'dedup_by_confidence', False) else 'area'
-        if getattr(args, 'dedup_method', 'mask_overlap') == 'iou_nms':
+        mask_fn = f"{args.cell_type}_masks.h5"
+        dedup_sort = "confidence" if getattr(args, "dedup_by_confidence", False) else "area"
+        if getattr(args, "dedup_method", "mask_overlap") == "iou_nms":
             from segmentation.processing.deduplication import deduplicate_by_iou_nms
+
             all_detections = deduplicate_by_iou_nms(
-                all_detections, tiles_dir,
-                iou_threshold=getattr(args, 'iou_threshold', 0.2),
-                mask_filename=mask_fn, sort_by=dedup_sort,
+                all_detections,
+                tiles_dir,
+                iou_threshold=getattr(args, "iou_threshold", 0.2),
+                mask_filename=mask_fn,
+                sort_by=dedup_sort,
             )
         else:
             from segmentation.processing.deduplication import deduplicate_by_mask_overlap
+
             all_detections = deduplicate_by_mask_overlap(
-                all_detections, tiles_dir, min_overlap_fraction=0.1,
-                mask_filename=mask_fn, sort_by=dedup_sort,
+                all_detections,
+                tiles_dir,
+                min_overlap_fraction=0.1,
+                mask_filename=mask_fn,
+                sort_by=dedup_sort,
             )
 
         # Filter HTML samples to match deduped detections and remove duplicate UIDs
-        deduped_uids = {det.get('uid', det.get('id', '')) for det in all_detections}
+        deduped_uids = {det.get("uid", det.get("id", "")) for det in all_detections}
         seen_uids = set()
         unique_samples = []
         for s in all_samples:
-            uid = s.get('uid', '')
+            uid = s.get("uid", "")
             if uid in deduped_uids and uid not in seen_uids:
                 seen_uids.add(uid)
                 unique_samples.append(s)
-        logger.info(f"Dedup: {len(all_samples)} HTML samples -> {len(unique_samples)} (removed {len(all_samples) - len(unique_samples)} duplicate UIDs)")
+        logger.info(
+            f"Dedup: {len(all_samples)} HTML samples -> {len(unique_samples)} (removed {len(all_samples) - len(unique_samples)} duplicate UIDs)"
+        )
         all_samples = unique_samples
 
     # ---- Post-dedup: contour dilation + feature re-extraction + bg correction ----
-    if len(all_detections) > 0 and (
-        args.contour_processing or args.background_correction
-    ):
+    if len(all_detections) > 0 and (args.contour_processing or args.background_correction):
         from segmentation.pipeline.post_detection import process_detections_post_dedup
-        mask_fn = f'{args.cell_type}_masks.h5'
+
+        mask_fn = f"{args.cell_type}_masks.h5"
         # Determine display channels for RGB morph extraction
         _display_chs = None
-        if args.cell_type == 'islet':
-            _display_chs = getattr(args, 'islet_display_chs', [2, 3, 5])
-        elif args.cell_type == 'tissue_pattern':
-            _display_chs = getattr(args, 'tp_display_channels_list', [0, 3, 1])
+        if args.cell_type == "islet":
+            _display_chs = getattr(args, "islet_display_chs", [2, 3, 5])
+        elif args.cell_type == "tissue_pattern":
+            _display_chs = getattr(args, "tp_display_channels_list", [0, 3, 1])
 
         # Nuclear counting on normal detection path: load models in main process
-        _count_nuclei_normal = getattr(args, 'count_nuclei', False)
-        _nuc_ch_normal = getattr(args, 'nuc_channel_for_counting', None)
+        _count_nuclei_normal = getattr(args, "count_nuclei", False)
+        _nuc_ch_normal = getattr(args, "nuc_channel_for_counting", None)
         _cp_model_normal = None
         _sam2_normal = None
         _nuc_mgr_normal = None
         if _count_nuclei_normal:
             # Auto-detect nuclear channel from cellpose input or cell-type defaults
             if _nuc_ch_normal is None:
-                cp_input = getattr(args, 'cellpose_input_channels', None)
+                cp_input = getattr(args, "cellpose_input_channels", None)
                 if cp_input:
-                    parts = str(cp_input).split(',')
+                    parts = str(cp_input).split(",")
                     if len(parts) >= 2:
                         try:
                             _nuc_ch_normal = int(parts[1].strip())
                         except ValueError:
                             pass
-            if _nuc_ch_normal is None and args.cell_type == 'islet':
-                _nuc_ch_normal = getattr(args, 'nuclear_channel', None)
-            if _nuc_ch_normal is None and args.cell_type == 'tissue_pattern':
-                _nuc_ch_normal = getattr(args, 'tp_nuclear_channel', None)
+            if _nuc_ch_normal is None and args.cell_type == "islet":
+                _nuc_ch_normal = getattr(args, "nuclear_channel", None)
+            if _nuc_ch_normal is None and args.cell_type == "tissue_pattern":
+                _nuc_ch_normal = getattr(args, "tp_nuclear_channel", None)
             if _nuc_ch_normal is not None:
                 from segmentation.models.manager import ModelManager
+
                 _nuc_mgr_normal = ModelManager()
                 _cp_model_normal = _nuc_mgr_normal.cellpose
                 _sam2_normal = _nuc_mgr_normal.sam2_predictor
@@ -1567,13 +1801,13 @@ def run_pipeline(args):
             x_start=x_start,
             y_start=y_start,
             contour_processing=args.contour_processing,
-            dilation_um=getattr(args, 'dilation_um', 0.5),
-            rdp_epsilon=getattr(args, 'rdp_epsilon', 5.0),
+            dilation_um=getattr(args, "dilation_um", 0.5),
+            rdp_epsilon=getattr(args, "rdp_epsilon", 5.0),
             background_correction=args.background_correction,
-            bg_neighbors=getattr(args, 'bg_neighbors', 30),
+            bg_neighbors=getattr(args, "bg_neighbors", 30),
             count_nuclei=_count_nuclei_normal,
             nuc_channel_idx=_nuc_ch_normal,
-            min_nuclear_area=getattr(args, 'min_nuclear_area', 50),
+            min_nuclear_area=getattr(args, "min_nuclear_area", 50),
             cellpose_model=_cp_model_normal,
             sam2_predictor=_sam2_normal,
         )
@@ -1582,32 +1816,51 @@ def run_pipeline(args):
             _nuc_mgr_normal.cleanup()
 
         # Checkpoint: save post-processed detections before HTML/CSV generation
-        _postdedup_file = slide_output_dir / f'{args.cell_type}_detections_postdedup.json'
+        _postdedup_file = slide_output_dir / f"{args.cell_type}_detections_postdedup.json"
         atomic_json_dump(all_detections, _postdedup_file)
-        logger.info(f"Checkpoint: saved {len(all_detections)} post-dedup detections to {_postdedup_file.name}")
+        logger.info(
+            f"Checkpoint: saved {len(all_detections)} post-dedup detections to {_postdedup_file.name}"
+        )
 
     # ---- Subsample HTML samples by fraction (after dedup, before export) ----
     _html_frac = args.html_sample_fraction
     if _html_frac > 0 and len(all_samples) > 0 and len(all_detections) > 0:
         import random
+
         target = max(100, int(len(all_detections) * _html_frac))
         if len(all_samples) > target:
-            logger.info(f"HTML sample fraction {_html_frac}: subsampling {len(all_samples)} -> {target} "
-                        f"({_html_frac*100:.0f}% of {len(all_detections)} detections)")
+            logger.info(
+                f"HTML sample fraction {_html_frac}: subsampling {len(all_samples)} -> {target} "
+                f"({_html_frac*100:.0f}% of {len(all_detections)} detections)"
+            )
             all_samples = random.sample(all_samples, target)
 
     # ---- Shared post-processing: CSV, JSON, HTML, summary, server ----
     try:
         _finish_pipeline(
-            args, all_detections, all_samples, slide_output_dir, tiles_dir,
-            pixel_size_um, slide_name, mosaic_info, run_timestamp, pct,
-            all_tiles=all_tiles, tissue_tiles=tissue_tiles, sampled_tiles=sampled_tiles,
-            resumed=False, params=params, classifier_loaded=classifier_loaded,
-            is_multiscale=is_multiscale, detector=detector,
+            args,
+            all_detections,
+            all_samples,
+            slide_output_dir,
+            tiles_dir,
+            pixel_size_um,
+            slide_name,
+            mosaic_info,
+            run_timestamp,
+            pct,
+            all_tiles=all_tiles,
+            tissue_tiles=tissue_tiles,
+            sampled_tiles=sampled_tiles,
+            resumed=False,
+            params=params,
+            classifier_loaded=classifier_loaded,
+            is_multiscale=is_multiscale,
+            detector=detector,
         )
     finally:
-        _maybe_export_ome_zarr(args, slide_shm_arr, ch_to_slot, pixel_size_um,
-                               slide_output_dir, slide_name, czi_path)
+        _maybe_export_ome_zarr(
+            args, slide_shm_arr, ch_to_slot, pixel_size_um, slide_output_dir, slide_name, czi_path
+        )
         # All SHM-dependent work is done — safe to free shared memory
         shm_manager.cleanup()
 
@@ -1633,7 +1886,9 @@ def main():
 
     # Require --czi-path for actual pipeline runs
     if args.czi_path is None:
-        parser.error("--czi-path is required (unless using --stop-server, --server-status, or --show-metadata)")
+        parser.error(
+            "--czi-path is required (unless using --stop-server, --server-status, or --show-metadata)"
+        )
 
     # Require --cell-type if not showing metadata
     if args.cell_type is None:
@@ -1643,5 +1898,5 @@ def main():
     run_pipeline(args)
 
 
-if __name__ == '__main__':
+if __name__ == "__main__":
     main()

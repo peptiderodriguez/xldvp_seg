@@ -3,29 +3,31 @@
 import subprocess
 import sys
 
-import pytest
-
-
 # ---------------------------------------------------------------------------
 # Helper: run CLI via subprocess using the Python import path
 # ---------------------------------------------------------------------------
+
 
 def _run_cli(*argv, timeout=30):
     """Run xlseg CLI with given argv via subprocess and return CompletedProcess."""
     argv_str = ", ".join(repr(a) for a in argv)
     return subprocess.run(
         [
-            sys.executable, "-c",
+            sys.executable,
+            "-c",
             f"import sys; sys.argv=['xlseg', {argv_str}]; "
             "from segmentation.cli.main import cli; cli()",
         ],
-        capture_output=True, text=True, timeout=timeout,
+        capture_output=True,
+        text=True,
+        timeout=timeout,
     )
 
 
 # ---------------------------------------------------------------------------
 # General CLI tests (existing)
 # ---------------------------------------------------------------------------
+
 
 class TestCLIHelp:
 
@@ -35,9 +37,19 @@ class TestCLIHelp:
 
     def test_subcommands_listed(self):
         result = _run_cli("--help")
-        for cmd in ["detect", "info", "classify", "markers", "serve",
-                     "score", "export-lmd", "system", "models", "strategies",
-                     "download-models"]:
+        for cmd in [
+            "detect",
+            "info",
+            "classify",
+            "markers",
+            "serve",
+            "score",
+            "export-lmd",
+            "system",
+            "models",
+            "strategies",
+            "download-models",
+        ]:
             assert cmd in result.stdout, f"'{cmd}' not in help"
 
     def test_unknown_subcommand_exits_nonzero(self):
@@ -51,6 +63,7 @@ class TestCLIHelp:
 # ---------------------------------------------------------------------------
 # Subcommands that print tables (no file I/O needed)
 # ---------------------------------------------------------------------------
+
 
 class TestCLIModels:
 
@@ -72,6 +85,7 @@ class TestCLIStrategies:
 # ---------------------------------------------------------------------------
 # Subcommands that use their own argparse (testable via --help)
 # ---------------------------------------------------------------------------
+
 
 class TestCLIDownloadModels:
 
@@ -103,6 +117,7 @@ class TestCLISystem:
 # than running the full script. We use --help where the underlying script
 # supports it.
 # ---------------------------------------------------------------------------
+
 
 class TestCLIDetect:
 
@@ -172,14 +187,24 @@ class TestCLIInfo:
 # Dispatch table completeness
 # ---------------------------------------------------------------------------
 
+
 class TestCLIDispatchTable:
 
     def test_all_subcommands_in_dispatch(self):
         """Every subcommand registered in argparse has a dispatch entry."""
         from segmentation.cli.main import _DISPATCH
+
         expected = {
-            "info", "detect", "classify", "markers", "score",
-            "export-lmd", "serve", "system", "models", "strategies",
+            "info",
+            "detect",
+            "classify",
+            "markers",
+            "score",
+            "export-lmd",
+            "serve",
+            "system",
+            "models",
+            "strategies",
             "download-models",
         }
         assert set(_DISPATCH.keys()) == expected
@@ -187,5 +212,6 @@ class TestCLIDispatchTable:
     def test_dispatch_values_are_callable(self):
         """Every dispatch entry is callable."""
         from segmentation.cli.main import _DISPATCH
+
         for name, func in _DISPATCH.items():
             assert callable(func), f"Dispatch entry '{name}' is not callable"

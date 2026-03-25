@@ -16,10 +16,11 @@ Usage:
     corr = linker.correlate(method="spearman")
 """
 
+from pathlib import Path
+
 import numpy as np
 import pandas as pd
-from pathlib import Path
-from typing import Optional
+
 from segmentation.utils.logging import get_logger
 
 logger = get_logger(__name__)
@@ -69,31 +70,35 @@ class OmicLinker:
     def load_well_mapping(self, lmd_dir):
         """Load detection -> well mapping from LMD export."""
         lmd_dir = Path(lmd_dir)
-        mapping_files = (
-            list(lmd_dir.glob("*well_mapping*.json"))
-            + list(lmd_dir.glob("*well_assignment*.json"))
+        mapping_files = list(lmd_dir.glob("*well_mapping*.json")) + list(
+            lmd_dir.glob("*well_assignment*.json")
         )
         if not mapping_files:
             if self._detections:
                 self._well_mapping = {
                     d.get("uid", d.get("id", "")): d.get("well")
-                    for d in self._detections if d.get("well")
+                    for d in self._detections
+                    if d.get("well")
                 }
-                logger.info("Built well mapping from detections: %d entries",
-                            len(self._well_mapping))
+                logger.info(
+                    "Built well mapping from detections: %d entries", len(self._well_mapping)
+                )
                 return
             raise FileNotFoundError(f"No well mapping files found in {lmd_dir}")
         from segmentation.utils.json_utils import fast_json_load
+
         mapping = fast_json_load(mapping_files[0])
         if isinstance(mapping, list):
             self._well_mapping = {
-                m["uid"]: m["well"] for m in mapping
-                if "uid" in m and "well" in m
+                m["uid"]: m["well"] for m in mapping if "uid" in m and "well" in m
             }
         elif isinstance(mapping, dict):
             self._well_mapping = mapping
-        logger.info("Loaded well mapping: %d entries from %s",
-                    len(self._well_mapping), mapping_files[0].name)
+        logger.info(
+            "Loaded well mapping: %d entries from %s",
+            len(self._well_mapping),
+            mapping_files[0].name,
+        )
 
     def link(self):
         """Join morphological features to proteomics by well.
@@ -118,18 +123,15 @@ class OmicLinker:
             )
             return pd.DataFrame()
 
-        morph_cols = [c for c in df.columns
-                      if c != "well" and not c.endswith("_class")]
+        morph_cols = [c for c in df.columns if c != "well" and not c.endswith("_class")]
         numeric_morph = df[morph_cols].select_dtypes(include=[np.number]).columns
         well_morph = df.groupby("well")[numeric_morph].mean()
 
         self._linked = well_morph.join(self._proteomics, how="inner")
-        logger.info("Linked: %d wells with both morph and proteomics",
-                    len(self._linked))
+        logger.info("Linked: %d wells with both morph and proteomics", len(self._linked))
         return self._linked
 
-    def differential_features(self, group_col, group_a, group_b,
-                              test="mannwhitneyu"):
+    def differential_features(self, group_col, group_a, group_b, test="mannwhitneyu"):
         """Differential feature analysis between two groups.
 
         Args:
@@ -161,28 +163,35 @@ class OmicLinker:
             if len(vals_a) < 3 or len(vals_b) < 3:
                 continue
             if test == "mannwhitneyu":
-                stat, pval = stats.mannwhitneyu(
-                    vals_a, vals_b, alternative="two-sided"
-                )
+                stat, pval = stats.mannwhitneyu(vals_a, vals_b, alternative="two-sided")
             else:
                 stat, pval = stats.ttest_ind(vals_a, vals_b)
             n_a, n_b = len(vals_a), len(vals_b)
-            pooled_var = ((n_a - 1) * vals_a.var() + (n_b - 1) * vals_b.var()) / max(n_a + n_b - 2, 1)
+            pooled_var = ((n_a - 1) * vals_a.var() + (n_b - 1) * vals_b.var()) / max(
+                n_a + n_b - 2, 1
+            )
             pooled_std = np.sqrt(pooled_var) + 1e-10
             effect = (vals_a.mean() - vals_b.mean()) / pooled_std
             mean_a_pos = max(vals_a.mean(), 1e-10)
             mean_b_pos = max(vals_b.mean(), 1e-10)
             log2fc = np.log2(mean_a_pos / mean_b_pos)
-            results.append({
-                "feature": col, "statistic": stat, "p_value": pval,
-                "effect_size": effect, "log2fc": log2fc,
-                "mean_a": vals_a.mean(), "mean_b": vals_b.mean(),
-            })
+            results.append(
+                {
+                    "feature": col,
+                    "statistic": stat,
+                    "p_value": pval,
+                    "effect_size": effect,
+                    "log2fc": log2fc,
+                    "mean_a": vals_a.mean(),
+                    "mean_b": vals_b.mean(),
+                }
+            )
 
         result_df = pd.DataFrame(results).sort_values("p_value")
         if len(result_df) > 0:
             try:
                 from statsmodels.stats.multitest import multipletests
+
                 _, result_df["p_adjusted"], _, _ = multipletests(
                     result_df["p_value"], method="fdr_bh"
                 )
@@ -205,9 +214,7 @@ class OmicLinker:
         if proteins is None:
             proteins = [c for c in self._linked.columns if c in prot_cols]
 
-        corr_matrix = pd.DataFrame(
-            index=morph_features, columns=proteins, dtype=float
-        )
+        corr_matrix = pd.DataFrame(index=morph_features, columns=proteins, dtype=float)
         if method == "spearman":
             from scipy.stats import spearmanr as _corr_func
         else:
@@ -229,6 +236,7 @@ class OmicLinker:
         prot_cols = set(self._proteomics.columns) if self._proteomics is not None else set()
         proteins = [c for c in self._linked.columns if c in prot_cols]
         from scipy.stats import spearmanr
+
         correlations = []
         for prot in proteins:
             vals = self._linked[[morph_feature, prot]].dropna()
@@ -236,6 +244,4 @@ class OmicLinker:
                 continue
             r, p = spearmanr(vals[morph_feature], vals[prot])
             correlations.append({"protein": prot, "correlation": r, "p_value": p})
-        return pd.DataFrame(correlations).sort_values(
-            "correlation", ascending=False
-        ).head(top_n)
+        return pd.DataFrame(correlations).sort_values("correlation", ascending=False).head(top_n)

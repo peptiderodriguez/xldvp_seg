@@ -10,18 +10,15 @@ Tests the following modules:
 Run with: pytest tests/test_utils.py -v
 """
 
-import os
 from unittest import TestCase
 from unittest.mock import MagicMock, patch
-import tempfile
-import json
 
 import numpy as np
-
 
 # =============================================================================
 # CONFIG MODULE TESTS
 # =============================================================================
+
 
 class TestConfigFeatureDimensions(TestCase):
     """Tests for get_feature_dimensions() function in config module."""
@@ -40,7 +37,7 @@ class TestConfigFeatureDimensions(TestCase):
 
         result = get_feature_dimensions()
 
-        required_keys = ['morphological', 'sam2_embedding', 'resnet_embedding', 'total']
+        required_keys = ["morphological", "sam2_embedding", "resnet_embedding", "total"]
         for key in required_keys:
             self.assertIn(key, result, f"Missing required key: {key}")
 
@@ -61,12 +58,12 @@ class TestConfigFeatureDimensions(TestCase):
         result = get_feature_dimensions()
 
         expected_total = (
-            result['morphological'] +
-            result['sam2_embedding'] +
-            result['resnet_embedding'] +
-            result['dinov2_embedding']
+            result["morphological"]
+            + result["sam2_embedding"]
+            + result["resnet_embedding"]
+            + result["dinov2_embedding"]
         )
-        self.assertEqual(result['total'], expected_total)
+        self.assertEqual(result["total"], expected_total)
 
     def test_get_feature_dimensions_known_values(self):
         """Test that dimensions match expected known values."""
@@ -75,11 +72,11 @@ class TestConfigFeatureDimensions(TestCase):
         result = get_feature_dimensions()
 
         # These are the full-pipeline feature counts (config.py)
-        self.assertEqual(result['morphological'], 78)   # 22 base + NMJ-specific + multi-channel
-        self.assertEqual(result['sam2_embedding'], 256)
-        self.assertEqual(result['resnet_embedding'], 4096)  # 2 x 2048 (masked + context)
-        self.assertEqual(result['dinov2_embedding'], 2048)  # 2 x 1024 (masked + context)
-        self.assertEqual(result['total'], 6478)  # 78 + 256 + 4096 + 2048
+        self.assertEqual(result["morphological"], 78)  # 22 base + NMJ-specific + multi-channel
+        self.assertEqual(result["sam2_embedding"], 256)
+        self.assertEqual(result["resnet_embedding"], 4096)  # 2 x 2048 (masked + context)
+        self.assertEqual(result["dinov2_embedding"], 2048)  # 2 x 1024 (masked + context)
+        self.assertEqual(result["total"], 6478)  # 78 + 256 + 4096 + 2048
 
 
 class TestConfigCpuWorkerCount(TestCase):
@@ -149,85 +146,83 @@ class TestConfigValidation(TestCase):
 
         result = validate_config()
 
-        self.assertTrue(result['valid'])
-        self.assertEqual(result['errors'], [])
+        self.assertTrue(result["valid"])
+        self.assertEqual(result["errors"], [])
 
     def test_validate_config_invalid_tile_size_too_small(self):
         """Test that tile_size below minimum fails validation."""
         from segmentation.utils.config import validate_config
 
-        invalid_config = {'tile_size': 500}  # Minimum is 1000
+        invalid_config = {"tile_size": 500}  # Minimum is 1000
         result = validate_config(config=invalid_config)
 
-        self.assertFalse(result['valid'])
-        self.assertTrue(any('tile_size' in e for e in result['errors']))
+        self.assertFalse(result["valid"])
+        self.assertTrue(any("tile_size" in e for e in result["errors"]))
 
     def test_validate_config_invalid_tile_size_too_large(self):
         """Test that tile_size above maximum fails validation."""
         from segmentation.utils.config import validate_config
 
-        invalid_config = {'tile_size': 10000}  # Maximum is 8192
+        invalid_config = {"tile_size": 10000}  # Maximum is 8192
         result = validate_config(config=invalid_config)
 
-        self.assertFalse(result['valid'])
-        self.assertTrue(any('tile_size' in e for e in result['errors']))
+        self.assertFalse(result["valid"])
+        self.assertTrue(any("tile_size" in e for e in result["errors"]))
 
     def test_validate_config_invalid_sample_fraction(self):
         """Test that sample_fraction outside range fails validation."""
         from segmentation.utils.config import validate_config
 
         # Too small
-        invalid_config = {'sample_fraction': 0.001}  # Minimum is 0.01
+        invalid_config = {"sample_fraction": 0.001}  # Minimum is 0.01
         result = validate_config(config=invalid_config)
-        self.assertFalse(result['valid'])
+        self.assertFalse(result["valid"])
 
         # Too large
-        invalid_config = {'sample_fraction': 1.5}  # Maximum is 1.0
+        invalid_config = {"sample_fraction": 1.5}  # Maximum is 1.0
         result = validate_config(config=invalid_config)
-        self.assertFalse(result['valid'])
+        self.assertFalse(result["valid"])
 
     def test_validate_config_invalid_contour_color(self):
         """Test that invalid contour_color fails validation."""
         from segmentation.utils.config import validate_config
 
         # Wrong length
-        invalid_config = {'contour_color': [50, 255]}
+        invalid_config = {"contour_color": [50, 255]}
         result = validate_config(config=invalid_config)
-        self.assertFalse(result['valid'])
+        self.assertFalse(result["valid"])
 
         # Values out of range
-        invalid_config = {'contour_color': [50, 300, 50]}
+        invalid_config = {"contour_color": [50, 300, 50]}
         result = validate_config(config=invalid_config)
-        self.assertFalse(result['valid'])
+        self.assertFalse(result["valid"])
 
     def test_validate_config_invalid_html_theme(self):
         """Test that invalid html_theme fails validation."""
         from segmentation.utils.config import validate_config
 
-        invalid_config = {'html_theme': 'blue'}  # Must be 'dark' or 'light'
+        invalid_config = {"html_theme": "blue"}  # Must be 'dark' or 'light'
         result = validate_config(config=invalid_config)
 
-        self.assertFalse(result['valid'])
-        self.assertTrue(any('html_theme' in e for e in result['errors']))
+        self.assertFalse(result["valid"])
+        self.assertTrue(any("html_theme" in e for e in result["errors"]))
 
     def test_validate_config_invalid_percentiles(self):
         """Test that invalid normalization percentiles fail validation."""
         from segmentation.utils.config import validate_config
 
         # Low >= high
-        invalid_config = {
-            'normalization_percentiles': {'mk': [95, 5]}
-        }
+        invalid_config = {"normalization_percentiles": {"mk": [95, 5]}}
         result = validate_config(config=invalid_config)
 
-        self.assertFalse(result['valid'])
-        self.assertTrue(any('less than high' in e for e in result['errors']))
+        self.assertFalse(result["valid"])
+        self.assertTrue(any("less than high" in e for e in result["errors"]))
 
     def test_validate_config_raise_on_error(self):
         """Test that raise_on_error=True raises exception."""
-        from segmentation.utils.config import validate_config, ConfigValidationError
+        from segmentation.utils.config import ConfigValidationError, validate_config
 
-        invalid_config = {'tile_size': 100}
+        invalid_config = {"tile_size": 100}
 
         with self.assertRaises(ConfigValidationError):
             validate_config(config=invalid_config, raise_on_error=True)
@@ -237,16 +232,18 @@ class TestConfigValidation(TestCase):
         from segmentation.utils.config import validate_config
 
         # mem_per_worker_small_tile > mem_per_worker_large_tile is a warning
-        result = validate_config(memory_thresholds={
-            'min_ram_gb': 8.0,
-            'mem_per_worker_small_tile': 20.0,
-            'mem_per_worker_large_tile': 10.0,
-            'min_gpu_gb': 6.0,
-        })
+        result = validate_config(
+            memory_thresholds={
+                "min_ram_gb": 8.0,
+                "mem_per_worker_small_tile": 20.0,
+                "mem_per_worker_large_tile": 10.0,
+                "min_gpu_gb": 6.0,
+            }
+        )
 
         # Should still be valid but have warnings
-        self.assertTrue(result['valid'])  # warnings don't cause failure
-        self.assertTrue(len(result['warnings']) > 0)
+        self.assertTrue(result["valid"])  # warnings don't cause failure
+        self.assertTrue(len(result["warnings"]) > 0)
 
 
 class TestConfigDetectionDefaults(TestCase):
@@ -256,64 +253,64 @@ class TestConfigDetectionDefaults(TestCase):
         """Test detection defaults for NMJ cell type."""
         from segmentation.utils.config import get_detection_defaults
 
-        result = get_detection_defaults('nmj')
+        result = get_detection_defaults("nmj")
 
         self.assertIsInstance(result, dict)
-        self.assertIn('channel', result)
-        self.assertIn('min_area_px', result)
-        self.assertIn('max_solidity', result)
-        self.assertEqual(result['channel'], 1)
+        self.assertIn("channel", result)
+        self.assertIn("min_area_px", result)
+        self.assertIn("max_solidity", result)
+        self.assertEqual(result["channel"], 1)
 
     def test_get_detection_defaults_mk(self):
         """Test detection defaults for MK cell type."""
         from segmentation.utils.config import get_detection_defaults
 
-        result = get_detection_defaults('mk')
+        result = get_detection_defaults("mk")
 
         self.assertIsInstance(result, dict)
-        self.assertIn('channel', result)
-        self.assertIn('min_area_um2', result)
-        self.assertIn('max_area_um2', result)
-        self.assertEqual(result['min_area_um2'], 200)
-        self.assertEqual(result['max_area_um2'], 2000)
+        self.assertIn("channel", result)
+        self.assertIn("min_area_um2", result)
+        self.assertIn("max_area_um2", result)
+        self.assertEqual(result["min_area_um2"], 200)
+        self.assertEqual(result["max_area_um2"], 2000)
 
     def test_get_detection_defaults_cell(self):
         """Test detection defaults for generic cell type."""
         from segmentation.utils.config import get_detection_defaults
 
-        result = get_detection_defaults('cell')
+        result = get_detection_defaults("cell")
 
         self.assertIsInstance(result, dict)
-        self.assertIn('channel', result)
-        self.assertIn('min_area_px', result)
-        self.assertIn('max_area_px', result)
+        self.assertIn("channel", result)
+        self.assertIn("min_area_px", result)
+        self.assertIn("max_area_px", result)
 
     def test_get_detection_defaults_vessel(self):
         """Test detection defaults for vessel cell type."""
         from segmentation.utils.config import get_detection_defaults
 
-        result = get_detection_defaults('vessel')
+        result = get_detection_defaults("vessel")
 
         self.assertIsInstance(result, dict)
-        self.assertIn('min_diameter_um', result)
-        self.assertIn('max_diameter_um', result)
-        self.assertIn('min_wall_thickness_um', result)
+        self.assertIn("min_diameter_um", result)
+        self.assertIn("max_diameter_um", result)
+        self.assertIn("min_wall_thickness_um", result)
 
     def test_get_detection_defaults_mesothelium(self):
         """Test detection defaults for mesothelium cell type."""
         from segmentation.utils.config import get_detection_defaults
 
-        result = get_detection_defaults('mesothelium')
+        result = get_detection_defaults("mesothelium")
 
         self.assertIsInstance(result, dict)
-        self.assertIn('target_chunk_area_um2', result)
-        self.assertIn('min_ribbon_width_um', result)
+        self.assertIn("target_chunk_area_um2", result)
+        self.assertIn("min_ribbon_width_um", result)
 
     def test_get_detection_defaults_unknown_returns_empty(self):
         """Test that unknown cell type returns empty dict."""
         from segmentation.utils.config import get_detection_defaults
 
-        result = get_detection_defaults('unknown_type')
+        result = get_detection_defaults("unknown_type")
 
         self.assertEqual(result, {})
 
@@ -321,12 +318,12 @@ class TestConfigDetectionDefaults(TestCase):
         """Test that returned dict is a copy, not reference."""
         from segmentation.utils.config import get_detection_defaults
 
-        result1 = get_detection_defaults('mk')
-        result1['modified'] = True
+        result1 = get_detection_defaults("mk")
+        result1["modified"] = True
 
-        result2 = get_detection_defaults('mk')
+        result2 = get_detection_defaults("mk")
 
-        self.assertNotIn('modified', result2)
+        self.assertNotIn("modified", result2)
 
 
 class TestConfigPixelSize(TestCase):
@@ -334,25 +331,25 @@ class TestConfigPixelSize(TestCase):
 
     def test_get_pixel_size_mk(self):
         """Test pixel size for MK cell type."""
-        from segmentation.utils.config import get_pixel_size, DEFAULT_CONFIG
+        from segmentation.utils.config import DEFAULT_CONFIG, get_pixel_size
 
-        result = get_pixel_size(DEFAULT_CONFIG, 'mk')
+        result = get_pixel_size(DEFAULT_CONFIG, "mk")
 
         self.assertEqual(result, 0.22)
 
     def test_get_pixel_size_nmj(self):
         """Test pixel size for NMJ cell type."""
-        from segmentation.utils.config import get_pixel_size, DEFAULT_CONFIG
+        from segmentation.utils.config import DEFAULT_CONFIG, get_pixel_size
 
-        result = get_pixel_size(DEFAULT_CONFIG, 'nmj')
+        result = get_pixel_size(DEFAULT_CONFIG, "nmj")
 
         self.assertEqual(result, 0.1725)
 
     def test_get_pixel_size_default_fallback(self):
         """Test pixel size falls back to default for unknown type."""
-        from segmentation.utils.config import get_pixel_size, DEFAULT_CONFIG
+        from segmentation.utils.config import DEFAULT_CONFIG, get_pixel_size
 
-        result = get_pixel_size(DEFAULT_CONFIG, 'unknown')
+        result = get_pixel_size(DEFAULT_CONFIG, "unknown")
 
         self.assertEqual(result, 0.22)  # default value
 
@@ -360,8 +357,8 @@ class TestConfigPixelSize(TestCase):
         """Test get_pixel_size with scalar pixel_size_um value."""
         from segmentation.utils.config import get_pixel_size
 
-        config = {'pixel_size_um': 0.5}
-        result = get_pixel_size(config, 'mk')
+        config = {"pixel_size_um": 0.5}
+        result = get_pixel_size(config, "mk")
 
         self.assertEqual(result, 0.5)
 
@@ -374,13 +371,13 @@ class TestConfigConstants(TestCase):
         from segmentation.utils.config import DEFAULT_CONFIG
 
         required_keys = [
-            'pixel_size_um',
-            'normalization_percentiles',
-            'contour_color',
-            'contour_thickness',
-            'samples_per_page',
-            'tile_size',
-            'sample_fraction',
+            "pixel_size_um",
+            "normalization_percentiles",
+            "contour_color",
+            "contour_thickness",
+            "samples_per_page",
+            "tile_size",
+            "sample_fraction",
         ]
 
         for key in required_keys:
@@ -390,7 +387,7 @@ class TestConfigConstants(TestCase):
         """Test that BATCH_SIZES has required keys."""
         from segmentation.utils.config import BATCH_SIZES
 
-        required_keys = ['resnet_feature_extraction', 'sam2_embedding', 'gc_interval_tiles']
+        required_keys = ["resnet_feature_extraction", "sam2_embedding", "gc_interval_tiles"]
 
         for key in required_keys:
             self.assertIn(key, BATCH_SIZES, f"Missing key: {key}")
@@ -400,10 +397,10 @@ class TestConfigConstants(TestCase):
         from segmentation.utils.config import MEMORY_THRESHOLDS
 
         required_keys = [
-            'min_ram_gb',
-            'mem_per_worker_small_tile',
-            'mem_per_worker_large_tile',
-            'min_gpu_gb',
+            "min_ram_gb",
+            "mem_per_worker_small_tile",
+            "mem_per_worker_large_tile",
+            "min_gpu_gb",
         ]
 
         for key in required_keys:
@@ -414,19 +411,20 @@ class TestConfigConstants(TestCase):
         from segmentation.utils.config import MEMORY_THRESHOLDS
 
         # min_ram_gb should be reasonable (not too low, not too high)
-        self.assertGreater(MEMORY_THRESHOLDS['min_ram_gb'], 4.0)
-        self.assertLess(MEMORY_THRESHOLDS['min_ram_gb'], 32.0)
+        self.assertGreater(MEMORY_THRESHOLDS["min_ram_gb"], 4.0)
+        self.assertLess(MEMORY_THRESHOLDS["min_ram_gb"], 32.0)
 
         # Large tile memory should be >= small tile memory
         self.assertGreaterEqual(
-            MEMORY_THRESHOLDS['mem_per_worker_large_tile'],
-            MEMORY_THRESHOLDS['mem_per_worker_small_tile']
+            MEMORY_THRESHOLDS["mem_per_worker_large_tile"],
+            MEMORY_THRESHOLDS["mem_per_worker_small_tile"],
         )
 
 
 # =============================================================================
 # MEMORY MODULE TESTS
 # =============================================================================
+
 
 class TestMemoryUsage(TestCase):
     """Tests for get_memory_usage() function in memory module."""
@@ -445,9 +443,9 @@ class TestMemoryUsage(TestCase):
 
         result = get_memory_usage()
 
-        self.assertIn('ram_available_gb', result)
-        self.assertIn('ram_total_gb', result)
-        self.assertIn('ram_used_percent', result)
+        self.assertIn("ram_available_gb", result)
+        self.assertIn("ram_total_gb", result)
+        self.assertIn("ram_used_percent", result)
 
     def test_get_memory_usage_ram_values_sensible(self):
         """Test that RAM values are sensible."""
@@ -456,26 +454,27 @@ class TestMemoryUsage(TestCase):
         result = get_memory_usage()
 
         # Available RAM should be positive
-        self.assertGreater(result['ram_available_gb'], 0)
+        self.assertGreater(result["ram_available_gb"], 0)
 
         # Total RAM should be >= available
-        self.assertGreaterEqual(result['ram_total_gb'], result['ram_available_gb'])
+        self.assertGreaterEqual(result["ram_total_gb"], result["ram_available_gb"])
 
         # Used percent should be 0-100
-        self.assertGreaterEqual(result['ram_used_percent'], 0)
-        self.assertLessEqual(result['ram_used_percent'], 100)
+        self.assertGreaterEqual(result["ram_used_percent"], 0)
+        self.assertLessEqual(result["ram_used_percent"], 100)
 
     def test_get_memory_usage_gpu_keys_when_available(self):
         """Test GPU keys are present when CUDA is available."""
-        from segmentation.processing.memory import get_memory_usage
         import torch
+
+        from segmentation.processing.memory import get_memory_usage
 
         result = get_memory_usage()
 
         if torch.cuda.is_available():
-            self.assertIn('gpu_total_gb', result)
-            self.assertIn('gpu_allocated_gb', result)
-            self.assertIn('gpu_available_gb', result)
+            self.assertIn("gpu_total_gb", result)
+            self.assertIn("gpu_allocated_gb", result)
+            self.assertIn("gpu_available_gb", result)
 
 
 class TestSafeWorkerCount(TestCase):
@@ -511,11 +510,7 @@ class TestSafeWorkerCount(TestCase):
         """Test that auto_adjust=False returns requested count."""
         from segmentation.processing.memory import get_safe_worker_count
 
-        result = get_safe_worker_count(
-            requested_workers=8,
-            tile_size=3000,
-            auto_adjust=False
-        )
+        result = get_safe_worker_count(requested_workers=8, tile_size=3000, auto_adjust=False)
 
         # Should return exactly what was requested
         self.assertEqual(result, 8)
@@ -549,10 +544,10 @@ class TestValidateSystemResources(TestCase):
         result = validate_system_resources(num_workers=4, tile_size=3000)
 
         required_keys = [
-            'warnings',
-            'recommended_workers',
-            'recommended_tile_size',
-            'should_abort',
+            "warnings",
+            "recommended_workers",
+            "recommended_tile_size",
+            "should_abort",
         ]
 
         for key in required_keys:
@@ -564,7 +559,7 @@ class TestValidateSystemResources(TestCase):
 
         result = validate_system_resources(num_workers=4, tile_size=3000)
 
-        self.assertIsInstance(result['warnings'], list)
+        self.assertIsInstance(result["warnings"], list)
 
     def test_validate_system_resources_recommended_workers_positive(self):
         """Test that recommended_workers is a positive integer."""
@@ -572,8 +567,8 @@ class TestValidateSystemResources(TestCase):
 
         result = validate_system_resources(num_workers=4, tile_size=3000)
 
-        self.assertIsInstance(result['recommended_workers'], int)
-        self.assertGreater(result['recommended_workers'], 0)
+        self.assertIsInstance(result["recommended_workers"], int)
+        self.assertGreater(result["recommended_workers"], 0)
 
     def test_validate_system_resources_should_abort_is_bool(self):
         """Test that should_abort is a boolean."""
@@ -581,31 +576,30 @@ class TestValidateSystemResources(TestCase):
 
         result = validate_system_resources(num_workers=4, tile_size=3000)
 
-        self.assertIsInstance(result['should_abort'], bool)
+        self.assertIsInstance(result["should_abort"], bool)
 
-    @patch('segmentation.processing.memory.psutil.virtual_memory')
+    @patch("segmentation.processing.memory.psutil.virtual_memory")
     def test_validate_system_resources_low_memory_warns(self, mock_vm):
         """Test that low memory produces warnings."""
         from segmentation.processing.memory import validate_system_resources
 
         # Mock low memory (5 GB available)
         mock_vm.return_value = MagicMock(
-            available=5 * (1024**3),
-            total=16 * (1024**3),
-            percent=68.75
+            available=5 * (1024**3), total=16 * (1024**3), percent=68.75
         )
 
         result = validate_system_resources(num_workers=8, tile_size=3000)
 
         # Should have warnings about worker count
-        self.assertTrue(len(result['warnings']) > 0)
+        self.assertTrue(len(result["warnings"]) > 0)
         # Recommended workers should be reduced
-        self.assertLess(result['recommended_workers'], 8)
+        self.assertLess(result["recommended_workers"], 8)
 
 
 # =============================================================================
 # COORDINATES MODULE TESTS
 # =============================================================================
+
 
 class TestTileToGlobalCoords(TestCase):
     """Tests for tile_to_global_coords() function in coordinates module."""
@@ -617,9 +611,7 @@ class TestTileToGlobalCoords(TestCase):
         local_x, local_y = 100, 50
         tile_origin_x, tile_origin_y = 1000, 2000
 
-        global_x, global_y = tile_to_global_coords(
-            local_x, local_y, tile_origin_x, tile_origin_y
-        )
+        global_x, global_y = tile_to_global_coords(local_x, local_y, tile_origin_x, tile_origin_y)
 
         self.assertEqual(global_x, 1100)  # 100 + 1000
         self.assertEqual(global_y, 2050)  # 50 + 2000
@@ -631,9 +623,7 @@ class TestTileToGlobalCoords(TestCase):
         local_x, local_y = 50, 75
         tile_origin_x, tile_origin_y = 0, 0
 
-        global_x, global_y = tile_to_global_coords(
-            local_x, local_y, tile_origin_x, tile_origin_y
-        )
+        global_x, global_y = tile_to_global_coords(local_x, local_y, tile_origin_x, tile_origin_y)
 
         # Local coords should equal global when tile is at origin
         self.assertEqual(global_x, 50)
@@ -646,9 +636,7 @@ class TestTileToGlobalCoords(TestCase):
         local_x, local_y = 100.5, 50.5
         tile_origin_x, tile_origin_y = 1000, 2000
 
-        global_x, global_y = tile_to_global_coords(
-            local_x, local_y, tile_origin_x, tile_origin_y
-        )
+        global_x, global_y = tile_to_global_coords(local_x, local_y, tile_origin_x, tile_origin_y)
 
         self.assertEqual(global_x, 1100.5)
         self.assertEqual(global_y, 2050.5)
@@ -664,19 +652,14 @@ class TestGlobalToTileCoords(TestCase):
         global_x, global_y = 1100, 2050
         tile_origin_x, tile_origin_y = 1000, 2000
 
-        local_x, local_y = global_to_tile_coords(
-            global_x, global_y, tile_origin_x, tile_origin_y
-        )
+        local_x, local_y = global_to_tile_coords(global_x, global_y, tile_origin_x, tile_origin_y)
 
         self.assertEqual(local_x, 100)  # 1100 - 1000
-        self.assertEqual(local_y, 50)   # 2050 - 2000
+        self.assertEqual(local_y, 50)  # 2050 - 2000
 
     def test_global_to_tile_coords_roundtrip(self):
         """Test that global_to_tile and tile_to_global are inverses."""
-        from segmentation.processing.coordinates import (
-            tile_to_global_coords,
-            global_to_tile_coords
-        )
+        from segmentation.processing.coordinates import global_to_tile_coords, tile_to_global_coords
 
         original_local_x, original_local_y = 123, 456
         tile_origin_x, tile_origin_y = 5000, 7000
@@ -701,9 +684,7 @@ class TestGlobalToTileCoords(TestCase):
         global_x, global_y = 1000, 2000
         tile_origin_x, tile_origin_y = 1000, 2000
 
-        local_x, local_y = global_to_tile_coords(
-            global_x, global_y, tile_origin_x, tile_origin_y
-        )
+        local_x, local_y = global_to_tile_coords(global_x, global_y, tile_origin_x, tile_origin_y)
 
         self.assertEqual(local_x, 0)
         self.assertEqual(local_y, 0)
@@ -758,26 +739,26 @@ class TestGenerateUID(TestCase):
         """Test that UID has expected format."""
         from segmentation.processing.coordinates import generate_uid
 
-        uid = generate_uid('slide_name', 'mk', 12345.6, 67890.3)
+        uid = generate_uid("slide_name", "mk", 12345.6, 67890.3)
 
         # Format: {slide}_{type}_{round(x)}_{round(y)}
-        self.assertEqual(uid, 'slide_name_mk_12346_67890')
+        self.assertEqual(uid, "slide_name_mk_12346_67890")
 
     def test_generate_uid_rounding(self):
         """Test coordinate rounding in UID."""
         from segmentation.processing.coordinates import generate_uid
 
-        uid = generate_uid('slide', 'nmj', 100.4, 200.6)
+        uid = generate_uid("slide", "nmj", 100.4, 200.6)
 
-        self.assertEqual(uid, 'slide_nmj_100_201')
+        self.assertEqual(uid, "slide_nmj_100_201")
 
     def test_generate_uid_uniqueness(self):
         """Test that different coordinates produce different UIDs."""
         from segmentation.processing.coordinates import generate_uid
 
-        uid1 = generate_uid('slide', 'mk', 100, 200)
-        uid2 = generate_uid('slide', 'mk', 101, 200)
-        uid3 = generate_uid('slide', 'mk', 100, 201)
+        uid1 = generate_uid("slide", "mk", 100, 200)
+        uid2 = generate_uid("slide", "mk", 101, 200)
+        uid3 = generate_uid("slide", "mk", 100, 201)
 
         self.assertNotEqual(uid1, uid2)
         self.assertNotEqual(uid1, uid3)
@@ -787,14 +768,15 @@ class TestGenerateUID(TestCase):
         """Test UID generation for different cell types."""
         from segmentation.processing.coordinates import generate_uid
 
-        for cell_type in ['mk', 'hspc', 'nmj', 'vessel', 'mesothelium']:
-            uid = generate_uid('slide', cell_type, 100, 200)
-            self.assertIn(f'_{cell_type}_', uid)
+        for cell_type in ["mk", "hspc", "nmj", "vessel", "mesothelium"]:
+            uid = generate_uid("slide", cell_type, 100, 200)
+            self.assertIn(f"_{cell_type}_", uid)
 
 
 # =============================================================================
 # MK_HSPC_UTILS MODULE TESTS
 # =============================================================================
+
 
 class TestEnsureRGBArray(TestCase):
     """Tests for ensure_rgb_array() function in mk_hspc_utils module."""
@@ -820,7 +802,7 @@ class TestEnsureRGBArray(TestCase):
         rgba = np.zeros((100, 100, 4), dtype=np.uint8)
         rgba[:, :, 0] = 255  # R
         rgba[:, :, 1] = 128  # G
-        rgba[:, :, 2] = 64   # B
+        rgba[:, :, 2] = 64  # B
         rgba[:, :, 3] = 200  # Alpha (should be dropped)
 
         result = ensure_rgb_array(rgba)
@@ -828,7 +810,7 @@ class TestEnsureRGBArray(TestCase):
         self.assertEqual(result.shape, (100, 100, 3))
         self.assertEqual(result[0, 0, 0], 255)  # R preserved
         self.assertEqual(result[0, 0, 1], 128)  # G preserved
-        self.assertEqual(result[0, 0, 2], 64)   # B preserved
+        self.assertEqual(result[0, 0, 2], 64)  # B preserved
 
     def test_ensure_rgb_array_rgb_input(self):
         """Test that RGB input is returned unchanged."""
@@ -880,10 +862,10 @@ class TestCheckTileValidity(TestCase):
 
         empty_tile = np.zeros((100, 100, 3), dtype=np.uint8)
 
-        is_valid, status = check_tile_validity(empty_tile, 'tile_0_0')
+        is_valid, status = check_tile_validity(empty_tile, "tile_0_0")
 
         self.assertFalse(is_valid)
-        self.assertEqual(status, 'empty')
+        self.assertEqual(status, "empty")
 
     def test_check_tile_validity_valid_tile(self):
         """Test that tile with content is marked valid."""
@@ -891,10 +873,10 @@ class TestCheckTileValidity(TestCase):
 
         valid_tile = np.ones((100, 100, 3), dtype=np.uint8) * 128
 
-        is_valid, status = check_tile_validity(valid_tile, 'tile_0_0')
+        is_valid, status = check_tile_validity(valid_tile, "tile_0_0")
 
         self.assertTrue(is_valid)
-        self.assertEqual(status, 'valid')
+        self.assertEqual(status, "valid")
 
     def test_check_tile_validity_partial_content(self):
         """Test that tile with partial content is valid."""
@@ -903,10 +885,10 @@ class TestCheckTileValidity(TestCase):
         partial_tile = np.zeros((100, 100, 3), dtype=np.uint8)
         partial_tile[50, 50, 0] = 1  # Single non-zero pixel
 
-        is_valid, status = check_tile_validity(partial_tile, 'tile_0_0')
+        is_valid, status = check_tile_validity(partial_tile, "tile_0_0")
 
         self.assertTrue(is_valid)
-        self.assertEqual(status, 'valid')
+        self.assertEqual(status, "valid")
 
     def test_check_tile_validity_returns_tuple(self):
         """Test that result is a tuple of (bool, str)."""
@@ -914,7 +896,7 @@ class TestCheckTileValidity(TestCase):
 
         tile = np.zeros((100, 100, 3), dtype=np.uint8)
 
-        result = check_tile_validity(tile, 'tile_0_0')
+        result = check_tile_validity(tile, "tile_0_0")
 
         self.assertIsInstance(result, tuple)
         self.assertEqual(len(result), 2)
@@ -927,12 +909,12 @@ class TestCheckTileValidity(TestCase):
 
         # Small tile
         small_valid = np.ones((10, 10, 3), dtype=np.uint8)
-        is_valid, _ = check_tile_validity(small_valid, 'tile_small')
+        is_valid, _ = check_tile_validity(small_valid, "tile_small")
         self.assertTrue(is_valid)
 
         # Large tile
         large_valid = np.ones((4096, 4096, 3), dtype=np.uint8)
-        is_valid, _ = check_tile_validity(large_valid, 'tile_large')
+        is_valid, _ = check_tile_validity(large_valid, "tile_large")
         self.assertTrue(is_valid)
 
 
@@ -946,7 +928,7 @@ class TestExtractTileFromSharedMemory(TestCase):
         # Create shared memory array
         shared = np.arange(10000).reshape(100, 100)
 
-        tile_info = {'id': 't1', 'x': 10, 'y': 20, 'w': 30, 'h': 40}
+        tile_info = {"id": "t1", "x": 10, "y": 20, "w": 30, "h": 40}
 
         img, error = extract_tile_from_shared_memory(shared, tile_info)
 
@@ -958,20 +940,20 @@ class TestExtractTileFromSharedMemory(TestCase):
         """Test that None shared memory returns error."""
         from segmentation.processing.mk_hspc_utils import extract_tile_from_shared_memory
 
-        tile_info = {'id': 't1', 'x': 0, 'y': 0, 'w': 10, 'h': 10}
+        tile_info = {"id": "t1", "x": 0, "y": 0, "w": 10, "h": 10}
 
         img, error = extract_tile_from_shared_memory(None, tile_info)
 
         self.assertIsNone(img)
         self.assertIsNotNone(error)
-        self.assertIn('not available', error.lower())
+        self.assertIn("not available", error.lower())
 
     def test_extract_tile_at_origin(self):
         """Test tile extraction at array origin."""
         from segmentation.processing.mk_hspc_utils import extract_tile_from_shared_memory
 
         shared = np.arange(400).reshape(20, 20)
-        tile_info = {'id': 't1', 'x': 0, 'y': 0, 'w': 5, 'h': 5}
+        tile_info = {"id": "t1", "x": 0, "y": 0, "w": 5, "h": 5}
 
         img, error = extract_tile_from_shared_memory(shared, tile_info)
 
@@ -985,7 +967,7 @@ class TestExtractTileFromSharedMemory(TestCase):
         from segmentation.processing.mk_hspc_utils import extract_tile_from_shared_memory
 
         shared = np.arange(100).reshape(10, 10)
-        tile_info = {'id': 't1', 'x': 2, 'y': 3, 'w': 4, 'h': 5}
+        tile_info = {"id": "t1", "x": 2, "y": 3, "w": 4, "h": 5}
 
         img, error = extract_tile_from_shared_memory(shared, tile_info)
 
@@ -1001,24 +983,20 @@ class TestBuildMkHspcResult(TestCase):
         """Test building result with empty status."""
         from segmentation.processing.mk_hspc_utils import build_mk_hspc_result
 
-        result = build_mk_hspc_result('tile_0_0', 'empty')
+        result = build_mk_hspc_result("tile_0_0", "empty")
 
-        self.assertEqual(result['tid'], 'tile_0_0')
-        self.assertEqual(result['status'], 'empty')
-        self.assertNotIn('mk_masks', result)
+        self.assertEqual(result["tid"], "tile_0_0")
+        self.assertEqual(result["status"], "empty")
+        self.assertNotIn("mk_masks", result)
 
     def test_build_result_error_status(self):
         """Test building result with error status."""
         from segmentation.processing.mk_hspc_utils import build_mk_hspc_result
 
-        result = build_mk_hspc_result(
-            'tile_0_0',
-            'error',
-            error='Test error message'
-        )
+        result = build_mk_hspc_result("tile_0_0", "error", error="Test error message")
 
-        self.assertEqual(result['status'], 'error')
-        self.assertEqual(result['error'], 'Test error message')
+        self.assertEqual(result["status"], "error")
+        self.assertEqual(result["error"], "Test error message")
 
     def test_build_result_success_status(self):
         """Test building result with success status."""
@@ -1026,64 +1004,65 @@ class TestBuildMkHspcResult(TestCase):
 
         mk_masks = np.zeros((100, 100))
         hspc_masks = np.zeros((100, 100))
-        mk_feats = [{'area': 100}]
-        hspc_feats = [{'area': 50}]
-        tile = {'id': 'tile_0_0', 'x': 0, 'y': 0}
+        mk_feats = [{"area": 100}]
+        hspc_feats = [{"area": 50}]
+        tile = {"id": "tile_0_0", "x": 0, "y": 0}
 
         result = build_mk_hspc_result(
-            'tile_0_0',
-            'success',
+            "tile_0_0",
+            "success",
             mk_masks=mk_masks,
             hspc_masks=hspc_masks,
             mk_feats=mk_feats,
             hspc_feats=hspc_feats,
-            tile=tile
+            tile=tile,
         )
 
-        self.assertEqual(result['status'], 'success')
-        self.assertIsNotNone(result['mk_masks'])
-        self.assertIsNotNone(result['hspc_masks'])
-        self.assertEqual(result['mk_feats'], mk_feats)
-        self.assertEqual(result['hspc_feats'], hspc_feats)
-        self.assertEqual(result['tile'], tile)
+        self.assertEqual(result["status"], "success")
+        self.assertIsNotNone(result["mk_masks"])
+        self.assertIsNotNone(result["hspc_masks"])
+        self.assertEqual(result["mk_feats"], mk_feats)
+        self.assertEqual(result["hspc_feats"], hspc_feats)
+        self.assertEqual(result["tile"], tile)
 
     def test_build_result_with_slide_name(self):
         """Test building result with optional slide_name."""
         from segmentation.processing.mk_hspc_utils import build_mk_hspc_result
 
         result = build_mk_hspc_result(
-            'tile_0_0',
-            'success',
+            "tile_0_0",
+            "success",
             mk_masks=np.zeros((10, 10)),
             hspc_masks=np.zeros((10, 10)),
             mk_feats=[],
             hspc_feats=[],
             tile={},
-            slide_name='test_slide'
+            slide_name="test_slide",
         )
 
-        self.assertEqual(result['slide_name'], 'test_slide')
+        self.assertEqual(result["slide_name"], "test_slide")
 
     def test_build_result_defaults_empty_lists(self):
         """Test that None features default to empty lists."""
         from segmentation.processing.mk_hspc_utils import build_mk_hspc_result
 
         result = build_mk_hspc_result(
-            'tile_0_0',
-            'success',
+            "tile_0_0",
+            "success",
             mk_masks=np.zeros((10, 10)),
             hspc_masks=np.zeros((10, 10)),
-            tile={}
+            tile={},
         )
 
-        self.assertEqual(result['mk_feats'], [])
-        self.assertEqual(result['hspc_feats'], [])
+        self.assertEqual(result["mk_feats"], [])
+        self.assertEqual(result["hspc_feats"], [])
 
 
 # =============================================================================
 # TEST RUNNER
 # =============================================================================
 
-if __name__ == '__main__':
+if __name__ == "__main__":
     import unittest
+
     unittest.main(verbosity=2)

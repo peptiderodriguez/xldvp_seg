@@ -46,14 +46,14 @@ from pathlib import Path
 
 import numpy as np
 
-from segmentation.lmd.selection import select_cells_for_lmd
 from segmentation.lmd.clustering import two_stage_clustering
+from segmentation.lmd.selection import select_cells_for_lmd
 from segmentation.lmd.well_plate import (
+    WELLS_PER_PLATE,
     generate_multiplate_wells,
     insert_empty_wells,
-    WELLS_PER_PLATE,
 )
-from segmentation.utils.json_utils import fast_json_load, atomic_json_dump
+from segmentation.utils.json_utils import atomic_json_dump, fast_json_load
 from segmentation.utils.logging import get_logger
 
 logger = get_logger(__name__)
@@ -62,6 +62,7 @@ logger = get_logger(__name__)
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
+
 
 def _parse_marker_filter(expr: str):
     """Parse a marker filter expression like 'DCN_class==positive'.
@@ -90,8 +91,7 @@ def _parse_marker_filter(expr: str):
 
             return _filter
     raise ValueError(
-        f"Cannot parse marker filter {expr!r}. "
-        "Expected format: 'KEY==VALUE' or 'KEY!=VALUE'."
+        f"Cannot parse marker filter {expr!r}. " "Expected format: 'KEY==VALUE' or 'KEY!=VALUE'."
     )
 
 
@@ -144,6 +144,7 @@ def _auto_pixel_size(detections: list) -> float:
         area_um2 = feat.get("area_um2")
         if area_px and area_um2 and area_px > 0 and area_um2 > 0:
             import math
+
             return math.sqrt(area_um2 / area_px)
     return None
 
@@ -160,6 +161,7 @@ def _get_global_center(det: dict):
 # ---------------------------------------------------------------------------
 # Mode 1: area-matched replicates
 # ---------------------------------------------------------------------------
+
 
 def run_area_matched(
     detections: list,
@@ -195,6 +197,7 @@ def run_area_matched(
             if isinstance(base, tuple):
                 return base + (cl,)
             return (base, cl)
+
         effective_group_fn = _group_key_fn_with_cluster
     else:
         effective_group_fn = _group_key_fn
@@ -242,8 +245,7 @@ def run_area_matched(
                     c = _get_global_center(m)
                     if c is not None:
                         ps = _get_field(m, "pixel_size_um") or 1.0
-                        centers.append((float(c[0]) * float(ps),
-                                        float(c[1]) * float(ps)))
+                        centers.append((float(c[0]) * float(ps), float(c[1]) * float(ps)))
                 if centers:
                     cx = float(np.mean([c[0] for c in centers]))
                     cy = float(np.mean([c[1] for c in centers]))
@@ -252,25 +254,29 @@ def run_area_matched(
             # Community IDs
             community_ids = None
             if community_key:
-                cids = list({
-                    str(_get_field(m, community_key))
-                    for m in members
-                    if _get_field(m, community_key) is not None
-                })
+                cids = list(
+                    {
+                        str(_get_field(m, community_key))
+                        for m in members
+                        if _get_field(m, community_key) is not None
+                    }
+                )
                 community_ids = sorted(cids) if cids else None
 
-            rep_list.append({
-                "replicate_id": rep_id,
-                "group": group_str,
-                "cluster": cluster_val,
-                "well": None,   # filled later
-                "plate": None,
-                "uids": uids,
-                "n_cells": len(uids),
-                "total_area_um2": round(rep["total_area_um2"], 2),
-                "centroid_um": centroid_um,
-                "community_ids": community_ids,
-            })
+            rep_list.append(
+                {
+                    "replicate_id": rep_id,
+                    "group": group_str,
+                    "cluster": cluster_val,
+                    "well": None,  # filled later
+                    "plate": None,
+                    "uids": uids,
+                    "n_cells": len(uids),
+                    "total_area_um2": round(rep["total_area_um2"], 2),
+                    "centroid_um": centroid_um,
+                    "community_ids": community_ids,
+                }
+            )
             rep_id += 1
 
     return rep_list, summary
@@ -279,6 +285,7 @@ def run_area_matched(
 # ---------------------------------------------------------------------------
 # Mode 2: spatially-clustered replicates
 # ---------------------------------------------------------------------------
+
 
 def run_spatial_clustered(
     detections: list,
@@ -357,25 +364,29 @@ def run_spatial_clustered(
 
             community_ids = None
             if community_key:
-                cids = list({
-                    str(_get_field(m, community_key))
-                    for m in members
-                    if _get_field(m, community_key) is not None
-                })
+                cids = list(
+                    {
+                        str(_get_field(m, community_key))
+                        for m in members
+                        if _get_field(m, community_key) is not None
+                    }
+                )
                 community_ids = sorted(cids) if cids else None
 
-            rep_list.append({
-                "replicate_id": rep_id,
-                "group": group_str,
-                "cluster": None,
-                "well": None,
-                "plate": None,
-                "uids": uids,
-                "n_cells": len(uids),
-                "total_area_um2": round(cl["total_area_um2"], 2),
-                "centroid_um": centroid_um,
-                "community_ids": community_ids,
-            })
+            rep_list.append(
+                {
+                    "replicate_id": rep_id,
+                    "group": group_str,
+                    "cluster": None,
+                    "well": None,
+                    "plate": None,
+                    "uids": uids,
+                    "n_cells": len(uids),
+                    "total_area_um2": round(cl["total_area_um2"], 2),
+                    "centroid_um": centroid_um,
+                    "community_ids": community_ids,
+                }
+            )
             rep_id += 1
 
     total_filtered = sum(len(v) for v in grouped.values())
@@ -386,7 +397,7 @@ def run_spatial_clustered(
         "total_replicates": len(rep_list),
         "total_cells_selected": total_selected,
         "total_outliers_unclustered": total_outliers,
-        "groups_with_max_reps": 0,   # not applicable in spatial mode
+        "groups_with_max_reps": 0,  # not applicable in spatial mode
         "groups_with_fewer_reps": 0,
         "groups_with_no_reps": 0,
     }
@@ -397,6 +408,7 @@ def run_spatial_clustered(
 # ---------------------------------------------------------------------------
 # Well assignment
 # ---------------------------------------------------------------------------
+
 
 def assign_wells(rep_list: list, *, empty_pct: float, seed: int) -> tuple[list, list]:
     """Shuffle replicates, assign well addresses, insert blank wells.
@@ -422,9 +434,7 @@ def assign_wells(rep_list: list, *, empty_pct: float, seed: int) -> tuple[list, 
         )
 
     plate_wells = generate_multiplate_wells(total_wells)
-    _, blank_positions = insert_empty_wells(
-        plate_wells, n_reps, empty_pct=empty_pct, seed=seed
-    )
+    _, blank_positions = insert_empty_wells(plate_wells, n_reps, empty_pct=empty_pct, seed=seed)
 
     blanks_list = []
     n_non_blank = len(plate_wells) - len(blank_positions)
@@ -454,6 +464,7 @@ def assign_wells(rep_list: list, *, empty_pct: float, seed: int) -> tuple[list, 
 # Summary table printer
 # ---------------------------------------------------------------------------
 
+
 def print_summary_table(rep_list: list, blanks_list: list, *, group_keys: list):
     """Print a per-group replicate count table plus final totals."""
     if not rep_list:
@@ -462,6 +473,7 @@ def print_summary_table(rep_list: list, blanks_list: list, *, group_keys: list):
 
     # Group stats
     from collections import defaultdict
+
     group_stats: dict = defaultdict(lambda: {"reps": 0, "cells": 0, "area": 0.0})
     for r in rep_list:
         key = (r["group"], r["cluster"])
@@ -509,6 +521,7 @@ def print_summary_table(rep_list: list, blanks_list: list, *, group_keys: list):
 # Main
 # ---------------------------------------------------------------------------
 
+
 def main():
     parser = argparse.ArgumentParser(
         description=__doc__,
@@ -517,35 +530,47 @@ def main():
 
     # Input / output
     parser.add_argument(
-        "--detections", required=True, type=Path,
+        "--detections",
+        required=True,
+        type=Path,
         help="Path to detections JSON (scored + classified)",
     )
     parser.add_argument(
-        "--output-dir", required=True, type=Path,
+        "--output-dir",
+        required=True,
+        type=Path,
         help="Output directory (created if missing)",
     )
 
     # Replicate geometry
     parser.add_argument(
-        "--cells-per-rep", type=int, default=20,
+        "--cells-per-rep",
+        type=int,
+        default=20,
         help="Target number of cells per replicate (default: 20)",
     )
     parser.add_argument(
-        "--area-per-cell", type=float, default=100.0,
+        "--area-per-cell",
+        type=float,
+        default=100.0,
         help="Target area per cell in µm² (default: 100)",
     )
 
     # Filtering
     parser.add_argument(
-        "--score-threshold", type=float, default=0.5,
+        "--score-threshold",
+        type=float,
+        default=0.5,
         help="Minimum RF score threshold (default: 0.5)",
     )
     parser.add_argument(
-        "--score-key", default="rf_prediction",
+        "--score-key",
+        default="rf_prediction",
         help="Key for RF score in detection dict (default: rf_prediction)",
     )
     parser.add_argument(
-        "--marker-filter", default=None,
+        "--marker-filter",
+        default=None,
         help=(
             "Filter by marker class expression, e.g. 'DCN_class==positive' "
             "or 'MSLN_class!=negative'. Multiple filters: "
@@ -555,21 +580,23 @@ def main():
 
     # Grouping / stratification
     parser.add_argument(
-        "--group-key", default="slide",
+        "--group-key",
+        default="slide",
         help=(
-            "Comma-separated detection fields to group by "
-            "(default: 'slide'). E.g. 'slide,bone'."
+            "Comma-separated detection fields to group by " "(default: 'slide'). E.g. 'slide,bone'."
         ),
     )
     parser.add_argument(
-        "--cluster-key", default=None,
+        "--cluster-key",
+        default=None,
         help=(
             "Field for morphological cluster label (e.g. 'morph_cluster'). "
             "If set, replicates are built within each (group, cluster) partition."
         ),
     )
     parser.add_argument(
-        "--community-key", default=None,
+        "--community-key",
+        default=None,
         help=(
             "Optional field tracking vessel/spatial community IDs "
             "(e.g. 'vessel_community_id'). Preserved in output as community_ids list."
@@ -578,20 +605,25 @@ def main():
 
     # Mode
     parser.add_argument(
-        "--spatial-cluster", action="store_true",
+        "--spatial-cluster",
+        action="store_true",
         help=(
             "Use spatially-clustered mode (two_stage_clustering) instead of "
             "area-matched random mode."
         ),
     )
     parser.add_argument(
-        "--spatial-radius", type=float, default=500.0,
+        "--spatial-radius",
+        type=float,
+        default=500.0,
         help="Spatial clustering radius in µm for Mode 2 (default: 500)",
     )
 
     # Limits
     parser.add_argument(
-        "--max-replicates", type=int, default=999,
+        "--max-replicates",
+        type=int,
+        default=999,
         help=(
             "Maximum replicates per group in Mode 1 (default: 999 = unlimited). "
             "Not used in spatial-cluster mode."
@@ -600,13 +632,17 @@ def main():
 
     # Well plate
     parser.add_argument(
-        "--empty-pct", type=float, default=10.0,
+        "--empty-pct",
+        type=float,
+        default=10.0,
         help="QC empty well percentage (default: 10)",
     )
 
     # Pixel size
     parser.add_argument(
-        "--pixel-size", type=float, default=None,
+        "--pixel-size",
+        type=float,
+        default=None,
         help=(
             "Pixel size in µm (default: auto-detect from features). "
             "Required for spatial-cluster mode if not in features."
@@ -615,7 +651,9 @@ def main():
 
     # Misc
     parser.add_argument(
-        "--seed", type=int, default=42,
+        "--seed",
+        type=int,
+        default=42,
         help="Random seed (default: 42)",
     )
 
@@ -640,8 +678,7 @@ def main():
     if pixel_size is None:
         if args.spatial_cluster:
             parser.error(
-                "Could not auto-detect pixel size from features. "
-                "Please supply --pixel-size."
+                "Could not auto-detect pixel size from features. " "Please supply --pixel-size."
             )
         else:
             pixel_size = 1.0  # area_um2 already in µm², pixel_size only used for centroids
@@ -731,9 +768,7 @@ def main():
     # ------------------------------------------------------------------
     # Assign wells
     # ------------------------------------------------------------------
-    rep_list, blanks_list = assign_wells(
-        rep_list, empty_pct=args.empty_pct, seed=args.seed
-    )
+    rep_list, blanks_list = assign_wells(rep_list, empty_pct=args.empty_pct, seed=args.seed)
 
     n_plates = max((r["plate"] or 1) for r in rep_list) if rep_list else 1
     total_wells = len(rep_list) + len(blanks_list)

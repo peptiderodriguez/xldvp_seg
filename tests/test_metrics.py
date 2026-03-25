@@ -1,10 +1,14 @@
 """Tests for segmentation.metrics (IoU, Dice, PQ, Hungarian matching)."""
 
 import numpy as np
-import pytest
+
 from segmentation.metrics import (
-    iou_matrix, hungarian_match, panoptic_quality,
-    dice_score, detection_f1, evaluate_instance_segmentation,
+    detection_f1,
+    dice_score,
+    evaluate_instance_segmentation,
+    hungarian_match,
+    iou_matrix,
+    panoptic_quality,
 )
 
 

@@ -63,8 +63,10 @@ def load_export_shapes(export_path: Path, pixel_size_override=None):
     elif metadata_pixel_size is not None:
         pixel_size = metadata_pixel_size
     else:
-        logger.error("No pixel_size_um found in export metadata. "
-                      "Provide --pixel-size to specify the pixel size.")
+        logger.error(
+            "No pixel_size_um found in export metadata. "
+            "Provide --pixel-size to specify the pixel size."
+        )
         sys.exit(1)
 
     singles = []
@@ -109,16 +111,23 @@ def load_export_shapes(export_path: Path, pixel_size_override=None):
 
 def main():
     parser = argparse.ArgumentParser(description="View LMD export in Napari")
-    parser.add_argument("--zarr", type=str, required=True,
-                        help="Path to OME-Zarr pyramid")
-    parser.add_argument("--export", type=str, required=True,
-                        help="Path to LMD export JSON (lmd_export_with_controls.json)")
-    parser.add_argument("--pixel-size", type=float, default=None,
-                        help="Pixel size in um/px. If omitted, read from export metadata. "
-                             "Required if metadata does not contain pixel_size_um.")
+    parser.add_argument("--zarr", type=str, required=True, help="Path to OME-Zarr pyramid")
+    parser.add_argument(
+        "--export",
+        type=str,
+        required=True,
+        help="Path to LMD export JSON (lmd_export_with_controls.json)",
+    )
+    parser.add_argument(
+        "--pixel-size",
+        type=float,
+        default=None,
+        help="Pixel size in um/px. If omitted, read from export metadata. "
+        "Required if metadata does not contain pixel_size_um.",
+    )
     args = parser.parse_args()
 
-    logging.basicConfig(level=logging.INFO, format='%(levelname)s: %(message)s')
+    logging.basicConfig(level=logging.INFO, format="%(levelname)s: %(message)s")
 
     zarr_path = Path(args.zarr)
     export_path = Path(args.export)
@@ -149,10 +158,10 @@ def main():
     print(f"Loading export: {export_path}")
     shapes = load_export_shapes(export_path, pixel_size_override=args.pixel_size)
 
-    n_s = len(shapes['singles'])
-    n_sc = len(shapes['single_controls'])
-    n_c = len(shapes['clusters'])
-    n_cc = len(shapes['cluster_controls'])
+    n_s = len(shapes["singles"])
+    n_sc = len(shapes["single_controls"])
+    n_c = len(shapes["clusters"])
+    n_cc = len(shapes["cluster_controls"])
     print(f"  Singles:          {n_s} contours")
     print(f"  Single controls:  {n_sc} contours")
     print(f"  Clusters:         {n_c} contours (cluster members)")
@@ -226,13 +235,13 @@ def main():
             text={"string": cctrl_labels, "size": 10, "color": "orange"},
         )
 
-    print("\n" + "="*60)
+    print("\n" + "=" * 60)
     print("NAPARI VIEWER READY")
     print("  - Green: Singles")
     print("  - Cyan: Single controls")
     print("  - Red: Clusters")
     print("  - Orange: Cluster controls")
-    print("="*60)
+    print("=" * 60)
 
     napari.run()
 

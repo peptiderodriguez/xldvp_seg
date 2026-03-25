@@ -19,27 +19,30 @@ import threading
 from contextlib import contextmanager
 from dataclasses import dataclass, field
 from enum import Enum
-from typing import List, Dict, Any, Optional, Tuple, Set
-import numpy as np
-import cv2
+from typing import Any
 
-from .base import DetectionStrategy, Detection, _safe_to_uint8
-from .mixins import MultiChannelFeatureMixin
+import cv2
+import numpy as np
+
 from segmentation.detection.registry import register_strategy
-from segmentation.utils.logging import get_logger
 from segmentation.utils.feature_extraction import (
     extract_morphological_features,
 )
+from segmentation.utils.logging import get_logger
 from segmentation.utils.vessel_features import (
-    extract_vessel_features,
     extract_all_vessel_features_multichannel,
+    extract_vessel_features,
 )
+
+from .base import Detection, DetectionStrategy, _safe_to_uint8
+from .mixins import MultiChannelFeatureMixin
 
 logger = get_logger(__name__)
 
 
 class BoundaryEdge(Enum):
     """Enumeration of tile boundary edges."""
+
     TOP = "top"
     BOTTOM = "bottom"
     LEFT = "left"
@@ -65,16 +68,17 @@ class PartialVessel:
         is_outer: Whether this is an outer (wall) or inner (lumen) contour
         parent_idx: Index of parent contour if this is a child
     """
+
     tile_x: int
     tile_y: int
     contour: np.ndarray
-    boundary_edges: Set[BoundaryEdge]
+    boundary_edges: set[BoundaryEdge]
     boundary_points: np.ndarray
     orientation: float
     curvature_signature: np.ndarray
-    features: Dict[str, Any] = field(default_factory=dict)
+    features: dict[str, Any] = field(default_factory=dict)
     is_outer: bool = True
-    parent_idx: Optional[int] = None
+    parent_idx: int | None = None
 
 
 @dataclass
@@ -90,6 +94,7 @@ class CrossTileMergeConfig:
         min_boundary_overlap: Minimum fraction of boundary that must overlap
         merge_partial_rings: Whether to attempt merging incomplete rings
     """
+
     enabled: bool = True
     position_tolerance_px: float = 10.0
     orientation_tolerance_deg: float = 30.0
@@ -119,7 +124,7 @@ def smooth_contour_spline(contour, smoothing=3.0, n_points=0, force_closed=None)
     Returns:
         Smoothed contour as int32 array, shape (M, 1, 2) suitable for cv2
     """
-    from scipy.interpolate import splprep, splev
+    from scipy.interpolate import splev, splprep
 
     pts = np.array(contour).reshape(-1, 2).astype(np.float64)
     if len(pts) < 5:
@@ -254,8 +259,8 @@ class VesselStrategy(DetectionStrategy, MultiChannelFeatureMixin):
         max_aspect_ratio: float = 4.0,
         min_circularity: float = 0.3,
         min_ring_completeness: float = 0.5,
-        canny_low: Optional[int] = None,
-        canny_high: Optional[int] = None,
+        canny_low: int | None = None,
+        canny_high: int | None = None,
         classify_vessel_types: bool = False,
         extract_deep_features: bool = False,
         extract_sam2_embeddings: bool = True,
@@ -264,7 +269,7 @@ class VesselStrategy(DetectionStrategy, MultiChannelFeatureMixin):
         enable_boundary_detection: bool = True,
         boundary_margin_px: int = 5,
         use_tree_hierarchy: bool = False,
-        cross_tile_config: Optional[CrossTileMergeConfig] = None,
+        cross_tile_config: CrossTileMergeConfig | None = None,
         # Candidate generation mode - relaxes thresholds to catch more potential vessels
         candidate_mode: bool = False,
         # Parallel detection mode - runs SMA, CD31, LYVE1 detection in parallel
@@ -291,8 +296,12 @@ class VesselStrategy(DetectionStrategy, MultiChannelFeatureMixin):
             self.max_diameter_um = max(max_diameter_um, self.CANDIDATE_MAX_DIAMETER_UM)
             self.max_aspect_ratio = max(max_aspect_ratio, self.CANDIDATE_MAX_ASPECT_RATIO)
             self.min_circularity = min(min_circularity, self.CANDIDATE_MIN_CIRCULARITY)
-            self.min_ring_completeness = min(min_ring_completeness, self.CANDIDATE_MIN_RING_COMPLETENESS)
-            self.min_wall_thickness_um = min(min_wall_thickness_um, self.CANDIDATE_MIN_WALL_THICKNESS_UM)
+            self.min_ring_completeness = min(
+                min_ring_completeness, self.CANDIDATE_MIN_RING_COMPLETENESS
+            )
+            self.min_wall_thickness_um = min(
+                min_wall_thickness_um, self.CANDIDATE_MIN_WALL_THICKNESS_UM
+            )
             logger.info(
                 f"Candidate mode enabled: relaxed thresholds - "
                 f"circularity>={self.min_circularity}, "
@@ -323,7 +332,7 @@ class VesselStrategy(DetectionStrategy, MultiChannelFeatureMixin):
         self.cross_tile_config = cross_tile_config or CrossTileMergeConfig()
 
         # Storage for partial vessels pending merge (tile coords -> list of PartialVessel)
-        self._partial_vessels: Dict[Tuple[int, int], List[PartialVessel]] = {}
+        self._partial_vessels: dict[tuple[int, int], list[PartialVessel]] = {}
         # Lock protecting _partial_vessels dict in multi-GPU mode
         self._partial_vessels_lock = threading.Lock()
 
@@ -355,8 +364,8 @@ class VesselStrategy(DetectionStrategy, MultiChannelFeatureMixin):
         with self._scale_lock:
             orig_min = self.min_diameter_um
             orig_max = self.max_diameter_um
-            self.min_diameter_um = scale_params['min_diameter_um']
-            self.max_diameter_um = scale_params['max_diameter_um']
+            self.min_diameter_um = scale_params["min_diameter_um"]
+            self.max_diameter_um = scale_params["max_diameter_um"]
             try:
                 yield
             finally:
@@ -367,12 +376,7 @@ class VesselStrategy(DetectionStrategy, MultiChannelFeatureMixin):
     def name(self) -> str:
         return "vessel"
 
-    def segment(
-        self,
-        tile: np.ndarray,
-        models: Dict[str, Any],
-        **kwargs
-    ) -> List[np.ndarray]:
+    def segment(self, tile: np.ndarray, models: dict[str, Any], **kwargs) -> list[np.ndarray]:
         """
         Generate candidate binary masks from a tile image.
 
@@ -392,16 +396,15 @@ class VesselStrategy(DetectionStrategy, MultiChannelFeatureMixin):
         Returns:
             List of binary masks (each HxW boolean array)
         """
-        pixel_size_um = kwargs.get('pixel_size_um')
+        pixel_size_um = kwargs.get("pixel_size_um")
         if pixel_size_um is None:
             raise ValueError("pixel_size_um is required in kwargs — must come from CZI metadata")
-        cd31_channel = kwargs.get('cd31_channel', None)
-        tile_x = kwargs.get('tile_x', 0)
-        tile_y = kwargs.get('tile_y', 0)
+        cd31_channel = kwargs.get("cd31_channel", None)
+        tile_x = kwargs.get("tile_x", 0)
+        tile_y = kwargs.get("tile_y", 0)
 
         ring_candidates = self._segment_rings(
-            tile, models, pixel_size_um, cd31_channel,
-            tile_x=tile_x, tile_y=tile_y
+            tile, models, pixel_size_um, cd31_channel, tile_x=tile_x, tile_y=tile_y
         )
 
         # Supplementary lumen-first pass (unless ring_only)
@@ -419,9 +422,9 @@ class VesselStrategy(DetectionStrategy, MultiChannelFeatureMixin):
         masks = []
         for cand in ring_candidates:
             temp = np.zeros((h, w), dtype=np.uint8)
-            cv2.drawContours(temp, [cand['outer']], 0, 1, -1)
-            if cand.get('inner') is not None:
-                cv2.drawContours(temp, [cand['inner']], 0, 0, -1)
+            cv2.drawContours(temp, [cand["outer"]], 0, 1, -1)
+            if cand.get("inner") is not None:
+                cv2.drawContours(temp, [cand["inner"]], 0, 0, -1)
             wall_mask = temp.astype(bool)
             if wall_mask.sum() > 0:
                 masks.append(wall_mask)
@@ -430,12 +433,12 @@ class VesselStrategy(DetectionStrategy, MultiChannelFeatureMixin):
     def _segment_rings(
         self,
         tile: np.ndarray,
-        models: Dict[str, Any],
+        models: dict[str, Any],
         pixel_size_um: float = None,
-        cd31_channel: Optional[np.ndarray] = None,
+        cd31_channel: np.ndarray | None = None,
         tile_x: int = 0,
         tile_y: int = 0,
-    ) -> List[Dict[str, Any]]:
+    ) -> list[dict[str, Any]]:
         """
         Segment ring structures using contour hierarchy.
 
@@ -474,7 +477,9 @@ class VesselStrategy(DetectionStrategy, MultiChannelFeatureMixin):
         else:
             gray_min, gray_max = 0.0, 0.0
         if gray_max - gray_min > 1e-8:
-            gray_norm = np.clip((gray - gray_min) / (gray_max - gray_min) * 255, 0, 255).astype(np.uint8)
+            gray_norm = np.clip((gray - gray_min) / (gray_max - gray_min) * 255, 0, 255).astype(
+                np.uint8
+            )
         else:
             gray_norm = np.zeros_like(gray, dtype=np.uint8)
 
@@ -490,7 +495,9 @@ class VesselStrategy(DetectionStrategy, MultiChannelFeatureMixin):
 
         # Calculate minimum area threshold based on smallest expected vessel
         min_vessel_diameter_px = self.min_diameter_um / pixel_size_um
-        min_area_threshold = int(np.pi * (min_vessel_diameter_px / 2) ** 2 * 0.1)  # 10% of min vessel area
+        min_area_threshold = int(
+            np.pi * (min_vessel_diameter_px / 2) ** 2 * 0.1
+        )  # 10% of min vessel area
         min_area_threshold = max(10, min_area_threshold)  # At least 10 pixels
 
         # Scale 1: Small vessels (fine details, small blur)
@@ -504,7 +511,9 @@ class VesselStrategy(DetectionStrategy, MultiChannelFeatureMixin):
 
         # Auto-calculate Canny thresholds using Otsu's method on medium scale
         if self.canny_low is None or self.canny_high is None:
-            otsu_thresh, _ = cv2.threshold(blurred_medium, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
+            otsu_thresh, _ = cv2.threshold(
+                blurred_medium, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU
+            )
             canny_low = int(otsu_thresh * 0.5)
             canny_high = int(otsu_thresh * 1.0)
         else:
@@ -559,9 +568,7 @@ class VesselStrategy(DetectionStrategy, MultiChannelFeatureMixin):
         # Find contours with hierarchy for ring detection
         # Use RETR_TREE for complex nested structures, RETR_CCOMP for standard detection
         retrieval_mode = cv2.RETR_TREE if self.use_tree_hierarchy else cv2.RETR_CCOMP
-        contours, hierarchy = cv2.findContours(
-            binary, retrieval_mode, cv2.CHAIN_APPROX_SIMPLE
-        )
+        contours, hierarchy = cv2.findContours(binary, retrieval_mode, cv2.CHAIN_APPROX_SIMPLE)
 
         if hierarchy is None or len(contours) == 0:
             # Even with no complete rings, check for partial vessels at boundaries
@@ -591,8 +598,7 @@ class VesselStrategy(DetectionStrategy, MultiChannelFeatureMixin):
         # These are vessel-like curved structures that don't form complete rings
         if self.candidate_mode:
             arc_candidates = self._detect_open_vessel_structures(
-                edges_dilated, contours, hierarchy, binary, h, w,
-                tile_x, tile_y, pixel_size_um
+                edges_dilated, contours, hierarchy, binary, h, w, tile_x, tile_y, pixel_size_um
             )
             ring_candidates.extend(arc_candidates)
 
@@ -600,7 +606,7 @@ class VesselStrategy(DetectionStrategy, MultiChannelFeatureMixin):
 
     def _find_rings_ccomp_hierarchy(
         self,
-        contours: List[np.ndarray],
+        contours: list[np.ndarray],
         hierarchy: np.ndarray,
         binary: np.ndarray,
         h: int,
@@ -608,7 +614,7 @@ class VesselStrategy(DetectionStrategy, MultiChannelFeatureMixin):
         tile_x: int,
         tile_y: int,
         pixel_size_um: float,
-    ) -> List[Dict[str, Any]]:
+    ) -> list[dict[str, Any]]:
         """
         Find ring candidates using RETR_CCOMP (2-level) hierarchy.
 
@@ -639,24 +645,25 @@ class VesselStrategy(DetectionStrategy, MultiChannelFeatureMixin):
                         outer_contour, inner_contour, h, w
                     )
 
-                    ring_candidates.append({
-                        'outer': outer_contour,
-                        'inner': inner_contour,
-                        'all_inner': inner_contours,
-                        'binary': binary,
-                        'touches_boundary': boundary_info['touches_boundary'],
-                        'boundary_edges': boundary_info['edges'],
-                        'is_partial': boundary_info['is_partial'],
-                        'is_merged': False,
-                        'source_tiles': [(tile_x, tile_y)],
-                        'detection_method': 'ring',
-                    })
+                    ring_candidates.append(
+                        {
+                            "outer": outer_contour,
+                            "inner": inner_contour,
+                            "all_inner": inner_contours,
+                            "binary": binary,
+                            "touches_boundary": boundary_info["touches_boundary"],
+                            "boundary_edges": boundary_info["edges"],
+                            "is_partial": boundary_info["is_partial"],
+                            "is_merged": False,
+                            "source_tiles": [(tile_x, tile_y)],
+                            "detection_method": "ring",
+                        }
+                    )
 
         # Detect partial vessels at boundaries (contours without complete ring structure)
         if self.enable_boundary_detection:
             partial_candidates = self._detect_boundary_partial_vessels(
-                contours, hierarchy, processed_contours, binary,
-                h, w, tile_x, tile_y, pixel_size_um
+                contours, hierarchy, processed_contours, binary, h, w, tile_x, tile_y, pixel_size_um
             )
             ring_candidates.extend(partial_candidates)
 
@@ -664,7 +671,7 @@ class VesselStrategy(DetectionStrategy, MultiChannelFeatureMixin):
 
     def _find_rings_tree_hierarchy(
         self,
-        contours: List[np.ndarray],
+        contours: list[np.ndarray],
         hierarchy: np.ndarray,
         binary: np.ndarray,
         h: int,
@@ -672,7 +679,7 @@ class VesselStrategy(DetectionStrategy, MultiChannelFeatureMixin):
         tile_x: int,
         tile_y: int,
         pixel_size_um: float,
-    ) -> List[Dict[str, Any]]:
+    ) -> list[dict[str, Any]]:
         """
         Find ring candidates using RETR_TREE (full) hierarchy.
 
@@ -686,7 +693,7 @@ class VesselStrategy(DetectionStrategy, MultiChannelFeatureMixin):
         ring_candidates = []
         processed_as_inner = set()
 
-        def get_children(idx: int) -> List[int]:
+        def get_children(idx: int) -> list[int]:
             """Get all direct children of a contour."""
             children = []
             child_idx = hierarchy[idx][2]  # First child
@@ -737,20 +744,22 @@ class VesselStrategy(DetectionStrategy, MultiChannelFeatureMixin):
                                 nested_outer, nested_inner, h, w
                             )
 
-                            ring_candidates.append({
-                                'outer': nested_outer,
-                                'inner': nested_inner,
-                                'all_inner': nested_inners,
-                                'binary': binary,
-                                'touches_boundary': boundary_info['touches_boundary'],
-                                'boundary_edges': boundary_info['edges'],
-                                'is_partial': boundary_info['is_partial'],
-                                'is_merged': False,
-                                'is_nested': True,
-                                'parent_vessel_idx': len(ring_candidates),
-                                'source_tiles': [(tile_x, tile_y)],
-                                'detection_method': 'ring',
-                            })
+                            ring_candidates.append(
+                                {
+                                    "outer": nested_outer,
+                                    "inner": nested_inner,
+                                    "all_inner": nested_inners,
+                                    "binary": binary,
+                                    "touches_boundary": boundary_info["touches_boundary"],
+                                    "boundary_edges": boundary_info["edges"],
+                                    "is_partial": boundary_info["is_partial"],
+                                    "is_merged": False,
+                                    "is_nested": True,
+                                    "parent_vessel_idx": len(ring_candidates),
+                                    "source_tiles": [(tile_x, tile_y)],
+                                    "detection_method": "ring",
+                                }
+                            )
 
                         for gc in grandchildren:
                             processed_as_inner.add(gc)
@@ -761,19 +770,21 @@ class VesselStrategy(DetectionStrategy, MultiChannelFeatureMixin):
                         outer_contour, inner_contour, h, w
                     )
 
-                    ring_candidates.append({
-                        'outer': outer_contour,
-                        'inner': inner_contour,
-                        'all_inner': inner_contours,
-                        'binary': binary,
-                        'touches_boundary': boundary_info['touches_boundary'],
-                        'boundary_edges': boundary_info['edges'],
-                        'is_partial': boundary_info['is_partial'],
-                        'is_merged': False,
-                        'is_nested': False,
-                        'source_tiles': [(tile_x, tile_y)],
-                        'detection_method': 'ring',
-                    })
+                    ring_candidates.append(
+                        {
+                            "outer": outer_contour,
+                            "inner": inner_contour,
+                            "all_inner": inner_contours,
+                            "binary": binary,
+                            "touches_boundary": boundary_info["touches_boundary"],
+                            "boundary_edges": boundary_info["edges"],
+                            "is_partial": boundary_info["is_partial"],
+                            "is_merged": False,
+                            "is_nested": False,
+                            "source_tiles": [(tile_x, tile_y)],
+                            "detection_method": "ring",
+                        }
+                    )
 
         # Detect partial vessels at boundaries
         if self.enable_boundary_detection:
@@ -781,13 +792,12 @@ class VesselStrategy(DetectionStrategy, MultiChannelFeatureMixin):
             for rc in ring_candidates:
                 # Add outer contour indices
                 for i, cnt in enumerate(contours):
-                    if np.array_equal(cnt, rc['outer']):
+                    if np.array_equal(cnt, rc["outer"]):
                         processed_contours.add(i)
                         break
 
             partial_candidates = self._detect_boundary_partial_vessels(
-                contours, hierarchy, processed_contours, binary,
-                h, w, tile_x, tile_y, pixel_size_um
+                contours, hierarchy, processed_contours, binary, h, w, tile_x, tile_y, pixel_size_um
             )
             ring_candidates.extend(partial_candidates)
 
@@ -803,8 +813,8 @@ class VesselStrategy(DetectionStrategy, MultiChannelFeatureMixin):
         max_aspect_ratio: float = 5.0,
         min_wall_brightness_ratio: float = 1.15,
         wall_thickness_fraction: float = 0.4,
-        max_wall_thickness_um: Optional[float] = None,
-    ) -> List[Dict[str, Any]]:
+        max_wall_thickness_um: float | None = None,
+    ) -> list[dict[str, Any]]:
         """
         Lumen-first vessel detection: find dark lumens, validate bright SMA+ wall.
 
@@ -834,12 +844,12 @@ class VesselStrategy(DetectionStrategy, MultiChannelFeatureMixin):
 
         # Compute max lumen area from tile dimensions if not specified
         if max_lumen_area_um2 is None:
-            tile_area_um2 = h * w * (pixel_size_um ** 2)
+            tile_area_um2 = h * w * (pixel_size_um**2)
             max_lumen_area_um2 = tile_area_um2 * self.MAX_TILE_AREA_FRACTION
 
         # Convert area thresholds to pixels
-        min_lumen_area_px = min_lumen_area_um2 / (pixel_size_um ** 2)
-        max_lumen_area_px = max_lumen_area_um2 / (pixel_size_um ** 2)
+        min_lumen_area_px = min_lumen_area_um2 / (pixel_size_um**2)
+        max_lumen_area_px = max_lumen_area_um2 / (pixel_size_um**2)
 
         # Normalize to uint8
         if tile.ndim == 3:
@@ -856,7 +866,9 @@ class VesselStrategy(DetectionStrategy, MultiChannelFeatureMixin):
             else:
                 return []
             if img_max - img_min > 1e-8:
-                img_norm = np.clip((gray.astype(np.float32) - img_min) / (img_max - img_min) * 255, 0, 255).astype(np.uint8)
+                img_norm = np.clip(
+                    (gray.astype(np.float32) - img_min) / (img_max - img_min) * 255, 0, 255
+                ).astype(np.uint8)
             else:
                 return []
         else:
@@ -934,8 +946,7 @@ class VesselStrategy(DetectionStrategy, MultiChannelFeatureMixin):
                 wall_thickness = min(wall_thickness, max_wall_px)
 
             kernel_dilate = cv2.getStructuringElement(
-                cv2.MORPH_ELLIPSE,
-                (2 * wall_thickness + 1, 2 * wall_thickness + 1)
+                cv2.MORPH_ELLIPSE, (2 * wall_thickness + 1, 2 * wall_thickness + 1)
             )
             dilated_mask = cv2.dilate(lumen_mask, kernel_dilate)
             wall_mask = dilated_mask - lumen_mask
@@ -964,32 +975,36 @@ class VesselStrategy(DetectionStrategy, MultiChannelFeatureMixin):
             inner_diameter_um = (major_axis + minor_axis) / 2 * pixel_size_um
             outer_diameter_um = inner_diameter_um + 2 * wall_thickness * pixel_size_um
 
-            candidates.append({
-                'outer': outer_contour,
-                'inner': contour,
-                'lumen_contour': contour,
-                'inner_ellipse': ellipse,
-                'centroid': (cx, cy),
-                'inner_area_px': area,
-                'outer_area_px': cv2.contourArea(outer_contour),
-                'inner_diameter_um': inner_diameter_um,
-                'outer_diameter_um': outer_diameter_um,
-                'aspect_ratio': aspect_ratio,
-                'ellipse_fit_quality': fit_quality,
-                'wall_lumen_ratio': wall_lumen_ratio,
-                'lumen_mean': lumen_mean,
-                'wall_mean': wall_mean,
-                'detection_method': 'lumen_first',
-            })
+            candidates.append(
+                {
+                    "outer": outer_contour,
+                    "inner": contour,
+                    "lumen_contour": contour,
+                    "inner_ellipse": ellipse,
+                    "centroid": (cx, cy),
+                    "inner_area_px": area,
+                    "outer_area_px": cv2.contourArea(outer_contour),
+                    "inner_diameter_um": inner_diameter_um,
+                    "outer_diameter_um": outer_diameter_um,
+                    "aspect_ratio": aspect_ratio,
+                    "ellipse_fit_quality": fit_quality,
+                    "wall_lumen_ratio": wall_lumen_ratio,
+                    "lumen_mean": lumen_mean,
+                    "wall_mean": wall_mean,
+                    "detection_method": "lumen_first",
+                }
+            )
 
-        logger.info(f"Lumen-first detection: {len(candidates)} vessels from {len(contours)} dark regions")
+        logger.info(
+            f"Lumen-first detection: {len(candidates)} vessels from {len(contours)} dark regions"
+        )
         return candidates
 
     def _supplementary_lumen_first(
         self,
         tile: np.ndarray,
         pixel_size_um: float,
-    ) -> List[Dict[str, Any]]:
+    ) -> list[dict[str, Any]]:
         """
         Supplementary lumen-first pass targeting great vessels.
 
@@ -1011,13 +1026,13 @@ class VesselStrategy(DetectionStrategy, MultiChannelFeatureMixin):
             max_wall_thickness_um=self.SUPP_LUMEN_MAX_WALL_UM,
         )
         for cand in candidates:
-            cand['detection_method'] = 'lumen_first_supp'
+            cand["detection_method"] = "lumen_first_supp"
         return candidates
 
     def _compute_ellipse_fit_quality(
         self,
         contour: np.ndarray,
-        ellipse: Tuple,
+        ellipse: tuple,
         img_h: int,
         img_w: int,
     ) -> float:
@@ -1029,7 +1044,7 @@ class VesselStrategy(DetectionStrategy, MultiChannelFeatureMixin):
         x, y, w, h = cv2.boundingRect(contour)
         margin = 5
         x1, y1 = max(0, x - margin), max(0, y - margin)
-        w2, h2 = min(w + 2*margin, img_w - x1), min(h + 2*margin, img_h - y1)
+        w2, h2 = min(w + 2 * margin, img_w - x1), min(h + 2 * margin, img_h - y1)
 
         if w2 <= 0 or h2 <= 0:
             return 0.0
@@ -1057,7 +1072,7 @@ class VesselStrategy(DetectionStrategy, MultiChannelFeatureMixin):
     def _detect_open_vessel_structures(
         self,
         edges: np.ndarray,
-        contours: List[np.ndarray],
+        contours: list[np.ndarray],
         hierarchy: np.ndarray,
         binary: np.ndarray,
         h: int,
@@ -1065,7 +1080,7 @@ class VesselStrategy(DetectionStrategy, MultiChannelFeatureMixin):
         tile_x: int,
         tile_y: int,
         pixel_size_um: float,
-    ) -> List[Dict[str, Any]]:
+    ) -> list[dict[str, Any]]:
         """
         Detect "open" vessel structures (arcs/curves) that don't form complete rings.
 
@@ -1091,9 +1106,7 @@ class VesselStrategy(DetectionStrategy, MultiChannelFeatureMixin):
 
         # Find contours from edges that aren't already complete rings
         # We look for curved/arc shapes that might be vessel cross-sections
-        edge_contours, _ = cv2.findContours(
-            edges, cv2.RETR_LIST, cv2.CHAIN_APPROX_SIMPLE
-        )
+        edge_contours, _ = cv2.findContours(edges, cv2.RETR_LIST, cv2.CHAIN_APPROX_SIMPLE)
 
         # Early exit if too many contours (performance protection)
         if len(edge_contours) > 10000:
@@ -1118,9 +1131,11 @@ class VesselStrategy(DetectionStrategy, MultiChannelFeatureMixin):
         edge_contours_with_perim.sort(key=lambda x: -x[0])
 
         # Limit to top N contours by perimeter
-        contours_to_process = edge_contours_with_perim[:self.ARC_MAX_CONTOURS_TO_PROCESS]
+        contours_to_process = edge_contours_with_perim[: self.ARC_MAX_CONTOURS_TO_PROCESS]
 
-        logger.debug(f"Arc detection: processing {len(contours_to_process)}/{len(edge_contours)} contours")
+        logger.debug(
+            f"Arc detection: processing {len(contours_to_process)}/{len(edge_contours)} contours"
+        )
 
         processed_count = 0
         for perimeter, cnt in contours_to_process:
@@ -1190,37 +1205,41 @@ class VesselStrategy(DetectionStrategy, MultiChannelFeatureMixin):
             curvature_consistency = max(0.0, min(1.0, curvature_consistency))
 
             arc_confidence = (
-                0.40 * (1.0 - straightness) +          # More curved is better
-                0.30 * curvature_consistency +         # Consistent curvature
-                0.30 * min(1.0, arc_length_um / 100)   # Longer arcs are more confident
+                0.40 * (1.0 - straightness)  # More curved is better
+                + 0.30 * curvature_consistency  # Consistent curvature
+                + 0.30 * min(1.0, arc_length_um / 100)  # Longer arcs are more confident
             )
             arc_confidence = max(0.0, min(1.0, arc_confidence))
 
             # Create candidate dict (similar structure to ring candidates but marked as arc)
-            arc_candidates.append({
-                'outer': cnt,
-                'inner': None,  # No inner contour for arcs
-                'all_inner': [],
-                'binary': binary,
-                'touches_boundary': False,  # Will be updated below
-                'boundary_edges': set(),
-                'is_partial': True,
-                'is_partial_only': True,
-                'is_merged': False,
-                'source_tiles': [(tile_x, tile_y)],
-                'curvature_signature': curvature_sig,
-                'orientation': float(angle),
-                # Arc-specific fields
-                'is_arc': True,
-                'arc_length_um': float(arc_length_um),
-                'avg_curvature': float(avg_curvature),
-                'straightness': float(straightness),
-                'estimated_diameter_um': float(estimated_diameter_um),
-                'arc_confidence': float(arc_confidence),
-                'detection_method': 'ring_arc',
-            })
+            arc_candidates.append(
+                {
+                    "outer": cnt,
+                    "inner": None,  # No inner contour for arcs
+                    "all_inner": [],
+                    "binary": binary,
+                    "touches_boundary": False,  # Will be updated below
+                    "boundary_edges": set(),
+                    "is_partial": True,
+                    "is_partial_only": True,
+                    "is_merged": False,
+                    "source_tiles": [(tile_x, tile_y)],
+                    "curvature_signature": curvature_sig,
+                    "orientation": float(angle),
+                    # Arc-specific fields
+                    "is_arc": True,
+                    "arc_length_um": float(arc_length_um),
+                    "avg_curvature": float(avg_curvature),
+                    "straightness": float(straightness),
+                    "estimated_diameter_um": float(estimated_diameter_um),
+                    "arc_confidence": float(arc_confidence),
+                    "detection_method": "ring_arc",
+                }
+            )
 
-        logger.debug(f"Detected {len(arc_candidates)} open vessel structures (arcs) in candidate mode")
+        logger.debug(
+            f"Detected {len(arc_candidates)} open vessel structures (arcs) in candidate mode"
+        )
         return arc_candidates
 
     def _detect_cd31_tubular(
@@ -1232,7 +1251,7 @@ class VesselStrategy(DetectionStrategy, MultiChannelFeatureMixin):
         min_tubularity: float = 3.0,
         min_diameter_um: float = 3,
         max_diameter_um: float = 20,
-    ) -> List[Dict]:
+    ) -> list[dict]:
         """
         Detect capillaries as CD31+ tubular structures without SMA rings.
 
@@ -1389,33 +1408,35 @@ class VesselStrategy(DetectionStrategy, MultiChannelFeatureMixin):
             detection_confidence = max(0.0, min(1.0, detection_confidence))
 
             # Create candidate dict
-            capillary_candidates.append({
-                'outer': cnt,
-                'inner': None,  # Capillaries don't have distinct inner/outer walls
-                'all_inner': [],
-                'binary': component_mask,
-                'detected_by': ['cd31'],
-                'vessel_type_hint': 'capillary',
-                'is_tubular': True,
-                'tubularity': float(tubularity),
-                'minor_diameter_um': float(minor_diameter_um),
-                'major_diameter_um': float(major_diameter_um),
-                'cd31_mean_intensity': float(cd31_mean),
-                'sma_mean_intensity': float(sma_mean),
-                'center': (float(ecx), float(ecy)),
-                'orientation': float(angle),
-                'area_px': float(area),
-                'area_um2': float(area * pixel_size_um ** 2),
-                'detection_confidence': float(detection_confidence),
-                # Compatibility fields with ring detection
-                'touches_boundary': False,
-                'boundary_edges': set(),
-                'is_partial': False,
-                'is_partial_only': False,
-                'is_merged': False,
-                'is_arc': False,
-                'detection_method': 'cd31_tubular',
-            })
+            capillary_candidates.append(
+                {
+                    "outer": cnt,
+                    "inner": None,  # Capillaries don't have distinct inner/outer walls
+                    "all_inner": [],
+                    "binary": component_mask,
+                    "detected_by": ["cd31"],
+                    "vessel_type_hint": "capillary",
+                    "is_tubular": True,
+                    "tubularity": float(tubularity),
+                    "minor_diameter_um": float(minor_diameter_um),
+                    "major_diameter_um": float(major_diameter_um),
+                    "cd31_mean_intensity": float(cd31_mean),
+                    "sma_mean_intensity": float(sma_mean),
+                    "center": (float(ecx), float(ecy)),
+                    "orientation": float(angle),
+                    "area_px": float(area),
+                    "area_um2": float(area * pixel_size_um**2),
+                    "detection_confidence": float(detection_confidence),
+                    # Compatibility fields with ring detection
+                    "touches_boundary": False,
+                    "boundary_edges": set(),
+                    "is_partial": False,
+                    "is_partial_only": False,
+                    "is_merged": False,
+                    "is_arc": False,
+                    "detection_method": "cd31_tubular",
+                }
+            )
 
         logger.debug(
             f"Detected {len(capillary_candidates)} CD31+ tubular capillary candidates "
@@ -1426,14 +1447,14 @@ class VesselStrategy(DetectionStrategy, MultiChannelFeatureMixin):
     def _detect_all_markers_parallel(
         self,
         tile: np.ndarray,
-        extra_channels: Dict[int, np.ndarray],
+        extra_channels: dict[int, np.ndarray],
         pixel_size_um: float,
-        channel_names: Dict[int, str],
-        models: Dict[str, Any],
+        channel_names: dict[int, str],
+        models: dict[str, Any],
         n_workers: int = 3,
         tile_x: int = 0,
         tile_y: int = 0,
-    ) -> List[Dict]:
+    ) -> list[dict]:
         """
         Run SMA, CD31, and LYVE1 detection in parallel.
 
@@ -1463,15 +1484,15 @@ class VesselStrategy(DetectionStrategy, MultiChannelFeatureMixin):
         name_to_idx = {v.lower(): k for k, v in channel_names.items()}
 
         # Get SMA channel (primary detection channel)
-        sma_idx = name_to_idx.get('sma', 1)
+        sma_idx = name_to_idx.get("sma", 1)
         sma_channel = extra_channels.get(sma_idx) if sma_idx in extra_channels else tile
 
         # Get CD31 channel if available
-        cd31_idx = name_to_idx.get('cd31')
+        cd31_idx = name_to_idx.get("cd31")
         cd31_channel = extra_channels.get(cd31_idx) if cd31_idx is not None else None
 
         # Get LYVE1 channel if available
-        lyve1_idx = name_to_idx.get('lyve1')
+        lyve1_idx = name_to_idx.get("lyve1")
         lyve1_channel = extra_channels.get(lyve1_idx) if lyve1_idx is not None else None
 
         # Use ThreadPoolExecutor (not ProcessPoolExecutor) since:
@@ -1483,15 +1504,17 @@ class VesselStrategy(DetectionStrategy, MultiChannelFeatureMixin):
 
             # SMA ring detection (always run)
             # Note: segment() is the main SMA detection method
-            futures[executor.submit(
-                self._segment_rings,
-                tile,
-                models,
-                pixel_size_um,
-                cd31_channel,  # CD31 for validation within SMA detection
-                tile_x,
-                tile_y,
-            )] = 'sma'
+            futures[
+                executor.submit(
+                    self._segment_rings,
+                    tile,
+                    models,
+                    pixel_size_um,
+                    cd31_channel,  # CD31 for validation within SMA detection
+                    tile_x,
+                    tile_y,
+                )
+            ] = "sma"
 
             # CD31 tubular detection (for capillaries without SMA)
             if cd31_channel is not None:
@@ -1502,12 +1525,14 @@ class VesselStrategy(DetectionStrategy, MultiChannelFeatureMixin):
                     sma_for_cd31 = _safe_to_uint8(np.mean(tile[:, :, :3], axis=2))
                 else:
                     sma_for_cd31 = _safe_to_uint8(tile)
-                futures[executor.submit(
-                    self._detect_cd31_tubular,
-                    cd31_channel,
-                    sma_for_cd31,
-                    pixel_size_um,
-                )] = 'cd31'
+                futures[
+                    executor.submit(
+                        self._detect_cd31_tubular,
+                        cd31_channel,
+                        sma_for_cd31,
+                        pixel_size_um,
+                    )
+                ] = "cd31"
 
             # LYVE1 detection (for lymphatics)
             if lyve1_channel is not None:
@@ -1518,13 +1543,15 @@ class VesselStrategy(DetectionStrategy, MultiChannelFeatureMixin):
                     sma_2d = _safe_to_uint8(np.mean(tile[:, :, :3], axis=2))
                 else:
                     sma_2d = _safe_to_uint8(tile)
-                futures[executor.submit(
-                    self._detect_lyve1_structures,
-                    lyve1_channel,
-                    cd31_channel,
-                    sma_2d,
-                    pixel_size_um,
-                )] = 'lyve1'
+                futures[
+                    executor.submit(
+                        self._detect_lyve1_structures,
+                        lyve1_channel,
+                        cd31_channel,
+                        sma_2d,
+                        pixel_size_um,
+                    )
+                ] = "lyve1"
 
             # Collect results as they complete
             for future in as_completed(futures):
@@ -1532,7 +1559,9 @@ class VesselStrategy(DetectionStrategy, MultiChannelFeatureMixin):
                 try:
                     result = future.result()
                     if result:
-                        logger.debug(f"Parallel detection: {marker} returned {len(result)} candidates")
+                        logger.debug(
+                            f"Parallel detection: {marker} returned {len(result)} candidates"
+                        )
                         candidates.extend(result)
                 except Exception as e:
                     logger.warning(f"{marker} detection failed in parallel mode: {e}")
@@ -1549,7 +1578,7 @@ class VesselStrategy(DetectionStrategy, MultiChannelFeatureMixin):
         inner_contour: np.ndarray,
         h: int,
         w: int,
-    ) -> Dict[str, Any]:
+    ) -> dict[str, Any]:
         """
         Analyze whether a vessel touches tile boundaries.
 
@@ -1563,7 +1592,7 @@ class VesselStrategy(DetectionStrategy, MultiChannelFeatureMixin):
             Dict with 'touches_boundary', 'edges', and 'is_partial' flags
         """
         margin = self.boundary_margin_px
-        edges: Set[BoundaryEdge] = set()
+        edges: set[BoundaryEdge] = set()
 
         # Check outer contour points against boundaries
         points = outer_contour.reshape(-1, 2)
@@ -1604,23 +1633,23 @@ class VesselStrategy(DetectionStrategy, MultiChannelFeatureMixin):
         is_partial = boundary_point_count / max(total_points, 1) > 0.2
 
         return {
-            'touches_boundary': touches_boundary,
-            'edges': edges,
-            'is_partial': is_partial,
+            "touches_boundary": touches_boundary,
+            "edges": edges,
+            "is_partial": is_partial,
         }
 
     def _detect_boundary_partial_vessels(
         self,
-        contours: List[np.ndarray],
+        contours: list[np.ndarray],
         hierarchy: np.ndarray,
-        processed_contours: Set[int],
+        processed_contours: set[int],
         binary: np.ndarray,
         h: int,
         w: int,
         tile_x: int,
         tile_y: int,
         pixel_size_um: float,
-    ) -> List[Dict[str, Any]]:
+    ) -> list[dict[str, Any]]:
         """
         Detect partial vessels at tile boundaries that don't form complete rings.
 
@@ -1650,7 +1679,7 @@ class VesselStrategy(DetectionStrategy, MultiChannelFeatureMixin):
 
             # Check if this contour touches the boundary
             points = cnt.reshape(-1, 2)
-            edges: Set[BoundaryEdge] = set()
+            edges: set[BoundaryEdge] = set()
 
             at_top = np.any(points[:, 1] <= margin)
             at_bottom = np.any(points[:, 1] >= h - margin)
@@ -1671,7 +1700,9 @@ class VesselStrategy(DetectionStrategy, MultiChannelFeatureMixin):
 
             # Check if contour is large enough to be a vessel candidate
             area = cv2.contourArea(cnt)
-            min_area_px = (self.min_diameter_um / pixel_size_um) ** 2 * 0.1  # 10% of min diameter area
+            min_area_px = (
+                self.min_diameter_um / pixel_size_um
+            ) ** 2 * 0.1  # 10% of min diameter area
             if area < min_area_px:
                 continue
 
@@ -1706,7 +1737,7 @@ class VesselStrategy(DetectionStrategy, MultiChannelFeatureMixin):
                 boundary_points=boundary_points,
                 orientation=orientation,
                 curvature_signature=curvature_sig,
-                features={'area_px': float(area), 'perimeter_px': float(perimeter)},
+                features={"area_px": float(area), "perimeter_px": float(perimeter)},
                 is_outer=True,  # Assume outer until matched
             )
 
@@ -1718,21 +1749,23 @@ class VesselStrategy(DetectionStrategy, MultiChannelFeatureMixin):
                 self._partial_vessels[tile_key].append(partial_vessel)
 
             # Create candidate dict for this partial vessel
-            partial_candidates.append({
-                'outer': cnt,
-                'inner': None,  # No inner contour for partial
-                'all_inner': [],
-                'binary': binary,
-                'touches_boundary': True,
-                'boundary_edges': edges,
-                'is_partial': True,
-                'is_partial_only': True,  # No complete ring structure
-                'is_merged': False,
-                'source_tiles': [(tile_x, tile_y)],
-                'curvature_signature': curvature_sig,
-                'orientation': orientation,
-                'detection_method': 'ring',
-            })
+            partial_candidates.append(
+                {
+                    "outer": cnt,
+                    "inner": None,  # No inner contour for partial
+                    "all_inner": [],
+                    "binary": binary,
+                    "touches_boundary": True,
+                    "boundary_edges": edges,
+                    "is_partial": True,
+                    "is_partial_only": True,  # No complete ring structure
+                    "is_merged": False,
+                    "source_tiles": [(tile_x, tile_y)],
+                    "curvature_signature": curvature_sig,
+                    "orientation": orientation,
+                    "detection_method": "ring",
+                }
+            )
 
         return partial_candidates
 
@@ -1754,13 +1787,11 @@ class VesselStrategy(DetectionStrategy, MultiChannelFeatureMixin):
         margin = self.boundary_margin_px
 
         # Find all contours in binary
-        contours, _ = cv2.findContours(
-            binary, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE
-        )
+        contours, _ = cv2.findContours(binary, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
 
         for cnt in contours:
             points = cnt.reshape(-1, 2)
-            edges: Set[BoundaryEdge] = set()
+            edges: set[BoundaryEdge] = set()
 
             if np.any(points[:, 1] <= margin):
                 edges.add(BoundaryEdge.TOP)
@@ -1791,7 +1822,7 @@ class VesselStrategy(DetectionStrategy, MultiChannelFeatureMixin):
                 boundary_points=boundary_points,
                 orientation=orientation,
                 curvature_signature=curvature_sig,
-                features={'area_px': float(area)},
+                features={"area_px": float(area)},
             )
 
             tile_key = (tile_x, tile_y)
@@ -1803,13 +1834,13 @@ class VesselStrategy(DetectionStrategy, MultiChannelFeatureMixin):
     def _detect_lyve1_structures(
         self,
         lyve1_channel: np.ndarray,
-        cd31_channel: Optional[np.ndarray],
+        cd31_channel: np.ndarray | None,
         sma_channel: np.ndarray,
         pixel_size_um: float = None,
         intensity_percentile: float = 92,
         min_diameter_um: float = 10,
         max_diameter_um: float = 500,
-    ) -> List[Dict]:
+    ) -> list[dict]:
         """
         Detect lymphatics as LYVE1+ structures.
 
@@ -1905,9 +1936,7 @@ class VesselStrategy(DetectionStrategy, MultiChannelFeatureMixin):
         binary = cv2.morphologyEx(binary, cv2.MORPH_CLOSE, kernel_medium, iterations=2)
 
         # Step 3: Find connected components with hierarchy for inner/outer detection
-        contours, hierarchy = cv2.findContours(
-            binary, cv2.RETR_CCOMP, cv2.CHAIN_APPROX_SIMPLE
-        )
+        contours, hierarchy = cv2.findContours(binary, cv2.RETR_CCOMP, cv2.CHAIN_APPROX_SIMPLE)
 
         if hierarchy is None or len(contours) == 0:
             logger.debug("No contours found in LYVE1 channel")
@@ -1998,7 +2027,7 @@ class VesselStrategy(DetectionStrategy, MultiChannelFeatureMixin):
 
             # Calculate morphological features
             perimeter = cv2.arcLength(cnt, True)
-            circularity = 4 * np.pi * area / (perimeter ** 2) if perimeter > 0 else 0
+            circularity = 4 * np.pi * area / (perimeter**2) if perimeter > 0 else 0
 
             # Fit ellipse for shape analysis (if enough points)
             orientation = 0.0
@@ -2021,49 +2050,51 @@ class VesselStrategy(DetectionStrategy, MultiChannelFeatureMixin):
 
             # Build candidate dict
             candidate = {
-                'outer': cnt,
-                'inner': inner_contour,
-                'all_inner': [inner_contour] if inner_contour is not None else [],
-                'detected_by': ['lyve1'],
-                'vessel_type_hint': vessel_type_hint,
-                'lyve1_score': lyve1_score,
-                'cd31_score': cd31_score,
-                'sma_score': sma_score,
+                "outer": cnt,
+                "inner": inner_contour,
+                "all_inner": [inner_contour] if inner_contour is not None else [],
+                "detected_by": ["lyve1"],
+                "vessel_type_hint": vessel_type_hint,
+                "lyve1_score": lyve1_score,
+                "cd31_score": cd31_score,
+                "sma_score": sma_score,
                 # Geometric features
-                'area_px': float(area),
-                'area_um2': float(area * pixel_size_um ** 2),
-                'equivalent_diameter_um': float(equivalent_diameter_um),
-                'perimeter_px': float(perimeter),
-                'circularity': float(circularity),
-                'aspect_ratio': float(aspect_ratio),
-                'orientation': float(orientation),
-                'centroid': (float(cx), float(cy)),
+                "area_px": float(area),
+                "area_um2": float(area * pixel_size_um**2),
+                "equivalent_diameter_um": float(equivalent_diameter_um),
+                "perimeter_px": float(perimeter),
+                "circularity": float(circularity),
+                "aspect_ratio": float(aspect_ratio),
+                "orientation": float(orientation),
+                "centroid": (float(cx), float(cy)),
                 # Detection metadata
-                'is_arc': False,
-                'is_partial': False,
-                'touches_boundary': False,
-                'boundary_edges': set(),
-                'binary': binary,
-                'detection_method': 'lyve1',
+                "is_arc": False,
+                "is_partial": False,
+                "touches_boundary": False,
+                "boundary_edges": set(),
+                "binary": binary,
+                "detection_method": "lyve1",
             }
 
             # If inner contour found, calculate lumen features
             if inner_contour is not None:
                 inner_area = cv2.contourArea(inner_contour)
                 inner_perimeter = cv2.arcLength(inner_contour, True)
-                inner_circularity = 4 * np.pi * inner_area / (inner_perimeter ** 2) if inner_perimeter > 0 else 0
+                inner_circularity = (
+                    4 * np.pi * inner_area / (inner_perimeter**2) if inner_perimeter > 0 else 0
+                )
 
-                candidate['lumen_area_px'] = float(inner_area)
-                candidate['lumen_area_um2'] = float(inner_area * pixel_size_um ** 2)
-                candidate['lumen_circularity'] = float(inner_circularity)
-                candidate['wall_area_px'] = float(area - inner_area)
-                candidate['wall_area_um2'] = float((area - inner_area) * pixel_size_um ** 2)
+                candidate["lumen_area_px"] = float(inner_area)
+                candidate["lumen_area_um2"] = float(inner_area * pixel_size_um**2)
+                candidate["lumen_circularity"] = float(inner_circularity)
+                candidate["wall_area_px"] = float(area - inner_area)
+                candidate["wall_area_um2"] = float((area - inner_area) * pixel_size_um**2)
 
                 # Lumen/wall ratio - lymphatics typically have larger lumens
                 if area > 0:
-                    candidate['lumen_wall_ratio'] = float(inner_area / area)
+                    candidate["lumen_wall_ratio"] = float(inner_area / area)
                 else:
-                    candidate['lumen_wall_ratio'] = 0.0
+                    candidate["lumen_wall_ratio"] = 0.0
 
             candidates.append(candidate)
 
@@ -2074,7 +2105,9 @@ class VesselStrategy(DetectionStrategy, MultiChannelFeatureMixin):
 
         return candidates
 
-    def _compute_curvature_signature(self, contour: np.ndarray, num_samples: int = 32) -> np.ndarray:
+    def _compute_curvature_signature(
+        self, contour: np.ndarray, num_samples: int = 32
+    ) -> np.ndarray:
         """
         Compute a curvature signature along the contour for matching.
 
@@ -2102,10 +2135,12 @@ class VesselStrategy(DetectionStrategy, MultiChannelFeatureMixin):
             # Interpolate to get more points
             t = np.linspace(0, 1, n)
             t_new = np.linspace(0, 1, num_samples)
-            sampled = np.column_stack([
-                np.interp(t_new, t, points[:, 0]),
-                np.interp(t_new, t, points[:, 1]),
-            ])
+            sampled = np.column_stack(
+                [
+                    np.interp(t_new, t, points[:, 0]),
+                    np.interp(t_new, t, points[:, 1]),
+                ]
+            )
 
         # Compute curvature using finite differences
         # Curvature = |x'y'' - y'x''| / (x'^2 + y'^2)^(3/2)
@@ -2129,7 +2164,7 @@ class VesselStrategy(DetectionStrategy, MultiChannelFeatureMixin):
             dx = (dx1 + dx2) / 2
             dy = (dy1 + dy2) / 2
 
-            denom = (dx ** 2 + dy ** 2) ** 1.5
+            denom = (dx**2 + dy**2) ** 1.5
             if denom > 1e-8:
                 curvature[i] = abs(dx * ddy - dy * ddx) / denom
 
@@ -2194,10 +2229,10 @@ class VesselStrategy(DetectionStrategy, MultiChannelFeatureMixin):
         """
         points = contour.reshape(-1, 2)
         boundary_mask = (
-            (points[:, 0] <= margin) |
-            (points[:, 0] >= w - margin) |
-            (points[:, 1] <= margin) |
-            (points[:, 1] >= h - margin)
+            (points[:, 0] <= margin)
+            | (points[:, 0] >= w - margin)
+            | (points[:, 1] <= margin)
+            | (points[:, 1] >= h - margin)
         )
         return points[boundary_mask]
 
@@ -2210,8 +2245,8 @@ class VesselStrategy(DetectionStrategy, MultiChannelFeatureMixin):
         current_tile_x: int,
         current_tile_y: int,
         tile_size: int,
-        candidates: List[Dict[str, Any]],
-    ) -> List[Dict[str, Any]]:
+        candidates: list[dict[str, Any]],
+    ) -> list[dict[str, Any]]:
         """
         Attempt to merge partial vessels from adjacent tiles.
 
@@ -2284,23 +2319,32 @@ class VesselStrategy(DetectionStrategy, MultiChannelFeatureMixin):
                         continue
 
                     score = self._compute_match_score(
-                        curr_partial, adj_partial,
-                        current_tile_x, current_tile_y,
-                        adj_tile[0], adj_tile[1],
-                        tile_size
+                        curr_partial,
+                        adj_partial,
+                        current_tile_x,
+                        current_tile_y,
+                        adj_tile[0],
+                        adj_tile[1],
+                        tile_size,
                     )
 
-                    if score > best_score and score >= self.cross_tile_config.curvature_match_threshold:
+                    if (
+                        score > best_score
+                        and score >= self.cross_tile_config.curvature_match_threshold
+                    ):
                         best_score = score
                         best_match = adj_partial
 
                 if best_match is not None:
                     # Merge the partial vessels
                     merged = self._merge_partial_vessels(
-                        curr_partial, best_match,
-                        current_tile_x, current_tile_y,
-                        adj_tile[0], adj_tile[1],
-                        tile_size
+                        curr_partial,
+                        best_match,
+                        current_tile_x,
+                        current_tile_y,
+                        adj_tile[0],
+                        adj_tile[1],
+                        tile_size,
                     )
 
                     if merged is not None:
@@ -2384,11 +2428,7 @@ class VesselStrategy(DetectionStrategy, MultiChannelFeatureMixin):
             curvature_score = 0.5  # Neutral score if can't compute
 
         # Combine scores (weighted average)
-        total_score = (
-            0.4 * position_score +
-            0.3 * orientation_score +
-            0.3 * curvature_score
-        )
+        total_score = 0.4 * position_score + 0.3 * orientation_score + 0.3 * curvature_score
 
         return total_score
 
@@ -2401,7 +2441,7 @@ class VesselStrategy(DetectionStrategy, MultiChannelFeatureMixin):
         tile2_x: int,
         tile2_y: int,
         tile_size: int,
-    ) -> Optional[Dict[str, Any]]:
+    ) -> dict[str, Any] | None:
         """
         Merge two partial vessels into a combined ring candidate.
 
@@ -2452,16 +2492,16 @@ class VesselStrategy(DetectionStrategy, MultiChannelFeatureMixin):
         # For merged vessels, we don't have separate inner/outer initially
         # The inner contour needs to be estimated or left as None
         merged_candidate = {
-            'outer': merged_contour,
-            'inner': None,  # Will need to be detected in the merged mask
-            'all_inner': [],
-            'binary': None,  # No binary mask for merged
-            'touches_boundary': False,  # Merged vessel is now complete
-            'boundary_edges': set(),
-            'is_partial': False,
-            'is_merged': True,
-            'source_tiles': [(tile1_x, tile1_y), (tile2_x, tile2_y)],
-            'merge_score': self._compute_match_score(
+            "outer": merged_contour,
+            "inner": None,  # Will need to be detected in the merged mask
+            "all_inner": [],
+            "binary": None,  # No binary mask for merged
+            "touches_boundary": False,  # Merged vessel is now complete
+            "boundary_edges": set(),
+            "is_partial": False,
+            "is_merged": True,
+            "source_tiles": [(tile1_x, tile1_y), (tile2_x, tile2_y)],
+            "merge_score": self._compute_match_score(
                 partial1, partial2, tile1_x, tile1_y, tile2_x, tile2_y, tile_size
             ),
         }
@@ -2472,7 +2512,7 @@ class VesselStrategy(DetectionStrategy, MultiChannelFeatureMixin):
         self,
         contour1: np.ndarray,
         contour2: np.ndarray,
-    ) -> Optional[np.ndarray]:
+    ) -> np.ndarray | None:
         """
         Connect two contours at their closest points.
 
@@ -2487,7 +2527,7 @@ class VesselStrategy(DetectionStrategy, MultiChannelFeatureMixin):
             return None
 
         # Find the closest pair of points between contours
-        min_dist = float('inf')
+        min_dist = float("inf")
         best_i, best_j = 0, 0
 
         # Subsample for efficiency if contours are large
@@ -2503,7 +2543,7 @@ class VesselStrategy(DetectionStrategy, MultiChannelFeatureMixin):
 
         # Reorder contours to connect at the closest points
         # Rotate contour1 so best_i is at the end
-        rotated1 = np.concatenate([contour1[best_i+1:], contour1[:best_i+1]])
+        rotated1 = np.concatenate([contour1[best_i + 1 :], contour1[: best_i + 1]])
 
         # Rotate contour2 so best_j is at the start
         rotated2 = np.concatenate([contour2[best_j:], contour2[:best_j]])
@@ -2520,9 +2560,9 @@ class VesselStrategy(DetectionStrategy, MultiChannelFeatureMixin):
 
     def get_partial_vessels(
         self,
-        tile_x: Optional[int] = None,
-        tile_y: Optional[int] = None,
-    ) -> Dict[Tuple[int, int], List[PartialVessel]]:
+        tile_x: int | None = None,
+        tile_y: int | None = None,
+    ) -> dict[tuple[int, int], list[PartialVessel]]:
         """
         Get stored partial vessels, optionally filtered by tile.
 
@@ -2543,8 +2583,8 @@ class VesselStrategy(DetectionStrategy, MultiChannelFeatureMixin):
 
     def clear_partial_vessels(
         self,
-        tile_x: Optional[int] = None,
-        tile_y: Optional[int] = None,
+        tile_x: int | None = None,
+        tile_y: int | None = None,
     ) -> None:
         """
         Clear stored partial vessels, optionally for specific tile only.
@@ -2563,7 +2603,7 @@ class VesselStrategy(DetectionStrategy, MultiChannelFeatureMixin):
 
     def import_partial_vessels(
         self,
-        partials_dict: Dict[Tuple[int, int], List[PartialVessel]],
+        partials_dict: dict[tuple[int, int], list[PartialVessel]],
     ) -> int:
         """Import partial vessels collected from external sources (e.g., multi-GPU workers).
 
@@ -2595,7 +2635,7 @@ class VesselStrategy(DetectionStrategy, MultiChannelFeatureMixin):
         self,
         contour1: np.ndarray,
         contour2: np.ndarray,
-        shape: Tuple[int, int],
+        shape: tuple[int, int],
         max_render_size: int = 512,
     ) -> float:
         """
@@ -2625,7 +2665,7 @@ class VesselStrategy(DetectionStrategy, MultiChannelFeatureMixin):
         x2, y2, w2, h2 = cv2.boundingRect(c2)
 
         # Quick rejection if bounding boxes don't overlap
-        if (x1 + w1 < x2 or x2 + w2 < x1 or y1 + h1 < y2 or y2 + h2 < y1):
+        if x1 + w1 < x2 or x2 + w2 < x1 or y1 + h1 < y2 or y2 + h2 < y1:
             return 0.0
 
         # Translate contours to local coordinates (origin at min of both bboxes)
@@ -2675,9 +2715,9 @@ class VesselStrategy(DetectionStrategy, MultiChannelFeatureMixin):
 
     def _merge_candidates(
         self,
-        candidates: List[Dict],
+        candidates: list[dict],
         iou_threshold: float = 0.5,
-    ) -> List[Dict]:
+    ) -> list[dict]:
         """
         Merge overlapping candidates from different detection channels.
 
@@ -2712,7 +2752,7 @@ class VesselStrategy(DetectionStrategy, MultiChannelFeatureMixin):
         # Get image shape from first candidate with a contour
         shape = None
         for cand in candidates:
-            outer = cand.get('outer')
+            outer = cand.get("outer")
             if outer is not None and len(outer) > 0:
                 points = outer.reshape(-1, 2)
                 max_y = int(np.max(points[:, 1])) + 100
@@ -2728,7 +2768,7 @@ class VesselStrategy(DetectionStrategy, MultiChannelFeatureMixin):
         # Precompute areas for selecting best candidate
         areas = []
         for cand in candidates:
-            outer = cand.get('outer')
+            outer = cand.get("outer")
             if outer is not None and len(outer) >= 3:
                 areas.append(cv2.contourArea(outer.reshape(-1, 1, 2).astype(np.int32)))
             else:
@@ -2759,12 +2799,12 @@ class VesselStrategy(DetectionStrategy, MultiChannelFeatureMixin):
         # Compute pairwise IoU and union overlapping candidates
         logger.debug(f"Computing pairwise IoU for {n} candidates...")
         for i in range(n):
-            outer_i = candidates[i].get('outer')
+            outer_i = candidates[i].get("outer")
             if outer_i is None or len(outer_i) < 3:
                 continue
 
             for j in range(i + 1, n):
-                outer_j = candidates[j].get('outer')
+                outer_j = candidates[j].get("outer")
                 if outer_j is None or len(outer_j) < 3:
                     continue
 
@@ -2772,14 +2812,26 @@ class VesselStrategy(DetectionStrategy, MultiChannelFeatureMixin):
                 pts_i = outer_i.reshape(-1, 2)
                 pts_j = outer_j.reshape(-1, 2)
 
-                bbox_i = (pts_i[:, 0].min(), pts_i[:, 1].min(),
-                          pts_i[:, 0].max(), pts_i[:, 1].max())
-                bbox_j = (pts_j[:, 0].min(), pts_j[:, 1].min(),
-                          pts_j[:, 0].max(), pts_j[:, 1].max())
+                bbox_i = (
+                    pts_i[:, 0].min(),
+                    pts_i[:, 1].min(),
+                    pts_i[:, 0].max(),
+                    pts_i[:, 1].max(),
+                )
+                bbox_j = (
+                    pts_j[:, 0].min(),
+                    pts_j[:, 1].min(),
+                    pts_j[:, 0].max(),
+                    pts_j[:, 1].max(),
+                )
 
                 # Check if bounding boxes overlap
-                if (bbox_i[2] < bbox_j[0] or bbox_j[2] < bbox_i[0] or
-                    bbox_i[3] < bbox_j[1] or bbox_j[3] < bbox_i[1]):
+                if (
+                    bbox_i[2] < bbox_j[0]
+                    or bbox_j[2] < bbox_i[0]
+                    or bbox_i[3] < bbox_j[1]
+                    or bbox_j[3] < bbox_i[1]
+                ):
                     continue  # No overlap possible
 
                 # Compute IoU
@@ -2790,7 +2842,7 @@ class VesselStrategy(DetectionStrategy, MultiChannelFeatureMixin):
                     logger.debug(f"Candidates {i} and {j} merged with IoU={iou:.3f}")
 
         # Group candidates by their root parent
-        groups: Dict[int, List[int]] = {}
+        groups: dict[int, list[int]] = {}
         for i in range(n):
             root = find(i)
             if root not in groups:
@@ -2803,17 +2855,16 @@ class VesselStrategy(DetectionStrategy, MultiChannelFeatureMixin):
             if len(group_indices) == 1:
                 # Single candidate, no merging needed
                 cand = candidates[group_indices[0]].copy()
-                cand['merged_from_count'] = 1
-                if 'detected_by' not in cand:
-                    cand['detected_by'] = ['unknown']
+                cand["merged_from_count"] = 1
+                if "detected_by" not in cand:
+                    cand["detected_by"] = ["unknown"]
                 merged_candidates.append(cand)
             else:
                 # Multiple candidates to merge
                 merged = self._merge_candidate_group(
-                    [candidates[i] for i in group_indices],
-                    [areas[i] for i in group_indices]
+                    [candidates[i] for i in group_indices], [areas[i] for i in group_indices]
                 )
-                merged['merged_from_count'] = len(group_indices)
+                merged["merged_from_count"] = len(group_indices)
                 merged_candidates.append(merged)
 
                 logger.debug(
@@ -2830,9 +2881,9 @@ class VesselStrategy(DetectionStrategy, MultiChannelFeatureMixin):
 
     def _merge_candidate_group(
         self,
-        group: List[Dict],
-        areas: List[float],
-    ) -> Dict:
+        group: list[dict],
+        areas: list[float],
+    ) -> dict:
         """
         Merge a group of overlapping candidates into a single candidate.
 
@@ -2851,32 +2902,32 @@ class VesselStrategy(DetectionStrategy, MultiChannelFeatureMixin):
         merged = group[best_idx].copy()
 
         # Combine 'detected_by' lists from all candidates
-        all_markers: Set[str] = set()
+        all_markers: set[str] = set()
         for cand in group:
-            detected_by = cand.get('detected_by', [])
+            detected_by = cand.get("detected_by", [])
             if isinstance(detected_by, str):
                 all_markers.add(detected_by)
             elif isinstance(detected_by, (list, tuple)):
                 all_markers.update(detected_by)
 
-        merged['detected_by'] = sorted(list(all_markers))
+        merged["detected_by"] = sorted(list(all_markers))
 
         # Combine detection_method provenance from all candidates
-        all_methods: Set[str] = set()
+        all_methods: set[str] = set()
         for cand in group:
-            method = cand.get('detection_method')
+            method = cand.get("detection_method")
             if method:
                 if isinstance(method, list):
                     all_methods.update(method)
                 else:
                     all_methods.add(method)
         if all_methods:
-            merged['detection_method'] = sorted(list(all_methods))
+            merged["detection_method"] = sorted(list(all_methods))
 
         # Combine marker scores if present
-        combined_scores: Dict[str, float] = {}
+        combined_scores: dict[str, float] = {}
         for cand in group:
-            marker_scores = cand.get('marker_scores', {})
+            marker_scores = cand.get("marker_scores", {})
             for marker, score in marker_scores.items():
                 if marker not in combined_scores:
                     combined_scores[marker] = score
@@ -2885,53 +2936,54 @@ class VesselStrategy(DetectionStrategy, MultiChannelFeatureMixin):
                     combined_scores[marker] = max(combined_scores[marker], score)
 
         if combined_scores:
-            merged['marker_scores'] = combined_scores
+            merged["marker_scores"] = combined_scores
 
         # Track source candidates for debugging
         source_indices = []
         for cand in group:
-            if 'source_index' in cand:
-                source_indices.append(cand['source_index'])
+            if "source_index" in cand:
+                source_indices.append(cand["source_index"])
         if source_indices:
-            merged['merged_source_indices'] = source_indices
+            merged["merged_source_indices"] = source_indices
 
         # Keep track of all inner contours from all candidates
-        all_inner: List[np.ndarray] = []
+        all_inner: list[np.ndarray] = []
         for cand in group:
-            inner = cand.get('inner')
+            inner = cand.get("inner")
             if inner is not None and len(inner) >= 3:
                 all_inner.append(inner)
-            cand_all_inner = cand.get('all_inner', [])
+            cand_all_inner = cand.get("all_inner", [])
             for inner_cnt in cand_all_inner:
                 if inner_cnt is not None and len(inner_cnt) >= 3:
                     all_inner.append(inner_cnt)
 
         if all_inner:
             # Select the inner contour with the largest area
-            inner_areas = [cv2.contourArea(cnt.reshape(-1, 1, 2).astype(np.int32))
-                          for cnt in all_inner]
+            inner_areas = [
+                cv2.contourArea(cnt.reshape(-1, 1, 2).astype(np.int32)) for cnt in all_inner
+            ]
             best_inner_idx = np.argmax(inner_areas)
-            merged['inner'] = all_inner[best_inner_idx]
-            merged['all_inner'] = all_inner
+            merged["inner"] = all_inner[best_inner_idx]
+            merged["all_inner"] = all_inner
 
         # Mark as multi-marker merged
-        merged['is_multi_marker_merged'] = True
+        merged["is_multi_marker_merged"] = True
 
         # Combine confidence scores (take maximum)
-        confidences = [cand.get('detection_confidence', 0.0) for cand in group]
+        confidences = [cand.get("detection_confidence", 0.0) for cand in group]
         if any(c > 0 for c in confidences):
-            merged['detection_confidence'] = max(confidences)
+            merged["detection_confidence"] = max(confidences)
 
         return merged
 
     def extract_features(
         self,
-        ring_candidate: Dict[str, Any],
+        ring_candidate: dict[str, Any],
         tile: np.ndarray,
-        models: Dict[str, Any],
+        models: dict[str, Any],
         pixel_size_um: float = None,
-        cd31_channel: Optional[np.ndarray] = None,
-    ) -> Optional[Dict[str, Any]]:
+        cd31_channel: np.ndarray | None = None,
+    ) -> dict[str, Any] | None:
         """
         Extract vessel-specific features from a ring candidate.
 
@@ -2968,31 +3020,36 @@ class VesselStrategy(DetectionStrategy, MultiChannelFeatureMixin):
         from scipy.ndimage import distance_transform_edt
         from skimage.morphology import skeletonize
 
-        outer = ring_candidate['outer']
-        inner = ring_candidate['inner']
-        binary = ring_candidate.get('binary')
+        outer = ring_candidate["outer"]
+        inner = ring_candidate["inner"]
+        binary = ring_candidate.get("binary")
 
         # Extract boundary tracking info (new fields)
-        touches_boundary = ring_candidate.get('touches_boundary', False)
-        boundary_edges = ring_candidate.get('boundary_edges', set())
-        is_partial = ring_candidate.get('is_partial', False)
-        is_merged = ring_candidate.get('is_merged', False)
-        source_tiles = ring_candidate.get('source_tiles', [])
-        is_partial_only = ring_candidate.get('is_partial_only', False)
-        is_arc = ring_candidate.get('is_arc', False)
+        touches_boundary = ring_candidate.get("touches_boundary", False)
+        boundary_edges = ring_candidate.get("boundary_edges", set())
+        is_partial = ring_candidate.get("is_partial", False)
+        is_merged = ring_candidate.get("is_merged", False)
+        source_tiles = ring_candidate.get("source_tiles", [])
+        is_partial_only = ring_candidate.get("is_partial_only", False)
+        is_arc = ring_candidate.get("is_arc", False)
 
         # Handle arc candidates (open vessel structures detected in candidate mode)
         if is_arc:
             return self._extract_arc_vessel_features(
-                ring_candidate, tile, pixel_size_um,
-                touches_boundary, boundary_edges, source_tiles
+                ring_candidate, tile, pixel_size_um, touches_boundary, boundary_edges, source_tiles
             )
 
         # Handle partial-only vessels (no inner contour)
         if is_partial_only or inner is None:
             return self._extract_partial_vessel_features(
-                ring_candidate, tile, pixel_size_um,
-                touches_boundary, boundary_edges, is_partial, is_merged, source_tiles
+                ring_candidate,
+                tile,
+                pixel_size_um,
+                touches_boundary,
+                boundary_edges,
+                is_partial,
+                is_merged,
+                source_tiles,
             )
 
         # Need at least 5 points for ellipse fitting
@@ -3038,7 +3095,7 @@ class VesselStrategy(DetectionStrategy, MultiChannelFeatureMixin):
 
         # Circularity filtering
         perimeter_out = cv2.arcLength(outer, True)
-        circularity = 4 * np.pi * outer_area / (perimeter_out ** 2 + 1e-8)
+        circularity = 4 * np.pi * outer_area / (perimeter_out**2 + 1e-8)
         if circularity < self.min_circularity:
             return None
 
@@ -3061,7 +3118,7 @@ class VesselStrategy(DetectionStrategy, MultiChannelFeatureMixin):
 
         # Sample thickness at points along inner contour
         wall_thickness_values = []
-        for pt in inner[::max(1, len(inner) // 36)]:  # Sample ~36 points
+        for pt in inner[:: max(1, len(inner) // 36)]:  # Sample ~36 points
             px, py = pt[0]
             if 0 <= py < h and 0 <= px < w:
                 if wall_region[py, px] or (lumen_mask_temp[py, px] > 0):
@@ -3119,7 +3176,9 @@ class VesselStrategy(DetectionStrategy, MultiChannelFeatureMixin):
 
                 cos_t = np.cos(theta - angle_out_rad)
                 sin_t = np.sin(theta - angle_out_rad)
-                r_out = (a_out * b_out) / np.sqrt((b_out * cos_t) ** 2 + (a_out * sin_t) ** 2 + 1e-8)
+                r_out = (a_out * b_out) / np.sqrt(
+                    (b_out * cos_t) ** 2 + (a_out * sin_t) ** 2 + 1e-8
+                )
                 r_in = (a_in * b_in) / np.sqrt((b_in * cos_t) ** 2 + (a_in * sin_t) ** 2 + 1e-8)
                 r_mid = (r_out + r_in) / 2
 
@@ -3156,112 +3215,114 @@ class VesselStrategy(DetectionStrategy, MultiChannelFeatureMixin):
 
         # Auto-classify vessel type by size (rule-based)
         # This can be overridden by ML classification in run_segmentation.py
-        vessel_type = 'unknown'
+        vessel_type = "unknown"
         vessel_type_confidence = 0.0
-        classification_method = 'none'
+        classification_method = "none"
         if self.classify_vessel_types:
             if outer_diameter_um < 10:
-                vessel_type = 'capillary'
+                vessel_type = "capillary"
                 vessel_type_confidence = 0.8
             elif outer_diameter_um < 100:
-                vessel_type = 'arteriole'
+                vessel_type = "arteriole"
                 vessel_type_confidence = 0.7
             else:
-                vessel_type = 'artery'
+                vessel_type = "artery"
                 vessel_type_confidence = 0.6
-            classification_method = 'rule_based'
+            classification_method = "rule_based"
 
         # Determine confidence level (categorical)
         if ring_completeness > 0.8 and circularity > 0.6 and aspect_ratio_out < 2.0:
-            confidence = 'high'
+            confidence = "high"
         elif ring_completeness > 0.6 and circularity > 0.4:
-            confidence = 'medium'
+            confidence = "medium"
         else:
-            confidence = 'low'
+            confidence = "low"
 
         # Calculate detection_confidence (continuous 0-1 score)
         # Based on: ring_completeness, circularity, wall_uniformity, aspect_ratio proximity to 1.0
         wall_uniformity = 1.0 - (wall_thickness_std / (wall_thickness_mean + 1e-8))
         wall_uniformity = max(0.0, min(1.0, wall_uniformity))  # Clamp to [0, 1]
 
-        aspect_ratio_score = 1.0 - min(1.0, (aspect_ratio_out - 1.0) / 5.0)  # Closer to 1.0 is better
+        aspect_ratio_score = 1.0 - min(
+            1.0, (aspect_ratio_out - 1.0) / 5.0
+        )  # Closer to 1.0 is better
 
         detection_confidence = (
-            0.30 * ring_completeness +           # Ring completeness (0-1)
-            0.25 * circularity +                 # Circularity (0-1)
-            0.25 * wall_uniformity +             # Wall thickness uniformity (0-1)
-            0.20 * aspect_ratio_score            # Aspect ratio score (0-1)
+            0.30 * ring_completeness  # Ring completeness (0-1)
+            + 0.25 * circularity  # Circularity (0-1)
+            + 0.25 * wall_uniformity  # Wall thickness uniformity (0-1)
+            + 0.20 * aspect_ratio_score  # Aspect ratio score (0-1)
         )
         detection_confidence = max(0.0, min(1.0, detection_confidence))  # Clamp to [0, 1]
 
         # Determine detection type
         if is_merged:
-            detection_type = 'merged'
+            detection_type = "merged"
         elif is_partial:
-            detection_type = 'partial'
+            detection_type = "partial"
         else:
-            detection_type = 'complete'
+            detection_type = "complete"
 
         return {
             # Contours (needed for IoU-based merge in multi-scale detection)
-            'outer': outer,
-            'inner': inner,
+            "outer": outer,
+            "inner": inner,
             # Diameters
-            'outer_diameter_um': float(outer_diameter_um),
-            'inner_diameter_um': float(inner_diameter_um),
-            'major_axis_um': float(max(major_out, minor_out) * pixel_size_um),
-            'minor_axis_um': float(min(major_out, minor_out) * pixel_size_um),
+            "outer_diameter_um": float(outer_diameter_um),
+            "inner_diameter_um": float(inner_diameter_um),
+            "major_axis_um": float(max(major_out, minor_out) * pixel_size_um),
+            "minor_axis_um": float(min(major_out, minor_out) * pixel_size_um),
             # Wall thickness measurements
-            'wall_thickness_mean_um': wall_thickness_mean,
-            'wall_thickness_median_um': wall_thickness_median,
-            'wall_thickness_std_um': wall_thickness_std,
-            'wall_thickness_min_um': wall_thickness_min,
-            'wall_thickness_max_um': wall_thickness_max,
+            "wall_thickness_mean_um": wall_thickness_mean,
+            "wall_thickness_median_um": wall_thickness_median,
+            "wall_thickness_std_um": wall_thickness_std,
+            "wall_thickness_min_um": wall_thickness_min,
+            "wall_thickness_max_um": wall_thickness_max,
             # Areas
-            'lumen_area_um2': float(inner_area * pixel_size_um ** 2),
-            'wall_area_um2': float(wall_area * pixel_size_um ** 2),
-            'outer_area_um2': float(outer_area * pixel_size_um ** 2),
+            "lumen_area_um2": float(inner_area * pixel_size_um**2),
+            "wall_area_um2": float(wall_area * pixel_size_um**2),
+            "outer_area_um2": float(outer_area * pixel_size_um**2),
             # Shape metrics
-            'orientation_deg': float(angle_out),
-            'aspect_ratio': float(aspect_ratio_out),
-            'circularity': float(circularity),
-            'ring_completeness': float(ring_completeness),
+            "orientation_deg": float(angle_out),
+            "aspect_ratio": float(aspect_ratio_out),
+            "circularity": float(circularity),
+            "ring_completeness": float(ring_completeness),
             # Validation
-            'cd31_validated': cd31_validated,
-            'cd31_score': cd31_score,
+            "cd31_validated": cd31_validated,
+            "cd31_score": cd31_score,
             # Classification
-            'vessel_type': vessel_type,
-            'vessel_type_confidence': vessel_type_confidence,
-            'classification_method': classification_method,
-            'confidence': confidence,
+            "vessel_type": vessel_type,
+            "vessel_type_confidence": vessel_type_confidence,
+            "classification_method": classification_method,
+            "confidence": confidence,
             # Detection confidence score (0-1) based on multiple metrics
-            'detection_confidence': float(detection_confidence),
-            'wall_uniformity': float(wall_uniformity),
+            "detection_confidence": float(detection_confidence),
+            "wall_uniformity": float(wall_uniformity),
             # Centers
-            'outer_center': [float(cx_out), float(cy_out)],
-            'inner_center': [float(cx_in), float(cy_in)],
+            "outer_center": [float(cx_out), float(cy_out)],
+            "inner_center": [float(cx_in), float(cy_in)],
             # Boundary detection tracking (new fields)
-            'touches_boundary': touches_boundary,
-            'boundary_edges': [e.value for e in boundary_edges] if boundary_edges else [],
-            'is_partial': is_partial,
-            'is_merged': is_merged,
-            'source_tiles': [[t[0], t[1]] for t in source_tiles] if source_tiles else [],
-            'detection_type': detection_type,
+            "touches_boundary": touches_boundary,
+            "boundary_edges": [e.value for e in boundary_edges] if boundary_edges else [],
+            "is_partial": is_partial,
+            "is_merged": is_merged,
+            "source_tiles": [[t[0], t[1]] for t in source_tiles] if source_tiles else [],
+            "detection_type": detection_type,
             # Candidate mode flag
-            'candidate_mode': self.candidate_mode,
+            "candidate_mode": self.candidate_mode,
         }
 
     def _extract_partial_vessel_features(
         self,
-        ring_candidate: Dict[str, Any],
+        ring_candidate: dict[str, Any],
         tile: np.ndarray,
         pixel_size_um: float,
         touches_boundary: bool,
-        boundary_edges: Set[BoundaryEdge],
+        boundary_edges: set[BoundaryEdge],
         is_partial: bool,
         is_merged: bool,
-        source_tiles: List[Tuple[int, int]],
-    ) -> Optional[Dict[str, Any]]:
+        source_tiles: list[tuple[int, int]],
+    ) -> dict[str, Any] | None:
         """
         Extract features for partial vessels that lack complete ring structure.
 
@@ -3282,7 +3343,7 @@ class VesselStrategy(DetectionStrategy, MultiChannelFeatureMixin):
         Returns:
             Dict of partial vessel features, or None if invalid
         """
-        outer = ring_candidate['outer']
+        outer = ring_candidate["outer"]
 
         if len(outer) < 5:
             return None
@@ -3299,103 +3360,103 @@ class VesselStrategy(DetectionStrategy, MultiChannelFeatureMixin):
             ellipse = cv2.fitEllipse(outer)
             (cx, cy), (minor_ax, major_ax), angle = ellipse
             aspect_ratio = max(major_ax, minor_ax) / (min(major_ax, minor_ax) + 1e-8)
-            circularity = 4 * np.pi * area / (perimeter ** 2 + 1e-8)
+            circularity = 4 * np.pi * area / (perimeter**2 + 1e-8)
         except cv2.error:
             # Fall back to moments-based center
             M = cv2.moments(outer)
-            if M['m00'] > 0:
-                cx = M['m10'] / M['m00']
-                cy = M['m01'] / M['m00']
+            if M["m00"] > 0:
+                cx = M["m10"] / M["m00"]
+                cy = M["m01"] / M["m00"]
             else:
                 pts = outer.reshape(-1, 2)
                 cx, cy = np.mean(pts, axis=0)
             major_ax = minor_ax = np.sqrt(area / np.pi) * 2
             angle = 0
             aspect_ratio = 1.0
-            circularity = 4 * np.pi * area / (perimeter ** 2 + 1e-8)
+            circularity = 4 * np.pi * area / (perimeter**2 + 1e-8)
 
         # Estimate outer diameter from area (assuming roughly circular)
         estimated_diameter_um = 2 * np.sqrt(area / np.pi) * pixel_size_um
 
         # Partial vessels have lower confidence
-        confidence = 'low'
+        confidence = "low"
 
         # Curvature info for matching
-        curvature_sig = ring_candidate.get('curvature_signature')
-        orientation = ring_candidate.get('orientation', angle)
+        curvature_sig = ring_candidate.get("curvature_signature")
+        orientation = ring_candidate.get("orientation", angle)
 
         # Calculate detection_confidence for partial vessels
         # Based only on available metrics (no ring completeness or wall uniformity)
         aspect_ratio_score = 1.0 - min(1.0, (aspect_ratio - 1.0) / 5.0)
         detection_confidence = (
-            0.40 * circularity +                 # Circularity is the main indicator
-            0.30 * aspect_ratio_score +          # Aspect ratio score
-            0.30 * 0.3                           # Partial penalty (assume 30% completeness)
+            0.40 * circularity  # Circularity is the main indicator
+            + 0.30 * aspect_ratio_score  # Aspect ratio score
+            + 0.30 * 0.3  # Partial penalty (assume 30% completeness)
         )
         detection_confidence = max(0.0, min(1.0, detection_confidence))
 
         return {
             # Contours (needed for IoU-based merge in multi-scale detection)
-            'outer': outer,
-            'inner': None,
+            "outer": outer,
+            "inner": None,
             # Estimated measurements (marked as estimates)
-            'outer_diameter_um': float(estimated_diameter_um),
-            'inner_diameter_um': None,  # Unknown for partial
-            'major_axis_um': float(max(major_ax, minor_ax) * pixel_size_um),
-            'minor_axis_um': float(min(major_ax, minor_ax) * pixel_size_um),
+            "outer_diameter_um": float(estimated_diameter_um),
+            "inner_diameter_um": None,  # Unknown for partial
+            "major_axis_um": float(max(major_ax, minor_ax) * pixel_size_um),
+            "minor_axis_um": float(min(major_ax, minor_ax) * pixel_size_um),
             # Wall thickness not measurable for partial
-            'wall_thickness_mean_um': None,
-            'wall_thickness_median_um': None,
-            'wall_thickness_std_um': None,
-            'wall_thickness_min_um': None,
-            'wall_thickness_max_um': None,
+            "wall_thickness_mean_um": None,
+            "wall_thickness_median_um": None,
+            "wall_thickness_std_um": None,
+            "wall_thickness_min_um": None,
+            "wall_thickness_max_um": None,
             # Areas
-            'lumen_area_um2': None,  # Unknown
-            'wall_area_um2': float(area * pixel_size_um ** 2),  # Visible wall area
-            'outer_area_um2': float(area * pixel_size_um ** 2),
+            "lumen_area_um2": None,  # Unknown
+            "wall_area_um2": float(area * pixel_size_um**2),  # Visible wall area
+            "outer_area_um2": float(area * pixel_size_um**2),
             # Shape metrics
-            'orientation_deg': float(orientation if orientation else angle),
-            'aspect_ratio': float(aspect_ratio),
-            'circularity': float(circularity),
-            'ring_completeness': 0.0,  # Incomplete ring
+            "orientation_deg": float(orientation if orientation else angle),
+            "aspect_ratio": float(aspect_ratio),
+            "circularity": float(circularity),
+            "ring_completeness": 0.0,  # Incomplete ring
             # Validation
-            'cd31_validated': None,  # Cannot validate partial
-            'cd31_score': None,
+            "cd31_validated": None,  # Cannot validate partial
+            "cd31_score": None,
             # Classification
-            'vessel_type': 'unknown',
-            'vessel_type_confidence': 0.0,
-            'classification_method': 'none',
-            'confidence': confidence,
+            "vessel_type": "unknown",
+            "vessel_type_confidence": 0.0,
+            "classification_method": "none",
+            "confidence": confidence,
             # Detection confidence score (0-1)
-            'detection_confidence': float(detection_confidence),
-            'wall_uniformity': None,  # Cannot measure for partial
+            "detection_confidence": float(detection_confidence),
+            "wall_uniformity": None,  # Cannot measure for partial
             # Centers
-            'outer_center': [float(cx), float(cy)],
-            'inner_center': None,  # Unknown
+            "outer_center": [float(cx), float(cy)],
+            "inner_center": None,  # Unknown
             # Boundary detection tracking
-            'touches_boundary': touches_boundary,
-            'boundary_edges': [e.value for e in boundary_edges] if boundary_edges else [],
-            'is_partial': True,
-            'is_merged': is_merged,
-            'source_tiles': [[t[0], t[1]] for t in source_tiles] if source_tiles else [],
-            'detection_type': 'partial',
+            "touches_boundary": touches_boundary,
+            "boundary_edges": [e.value for e in boundary_edges] if boundary_edges else [],
+            "is_partial": True,
+            "is_merged": is_merged,
+            "source_tiles": [[t[0], t[1]] for t in source_tiles] if source_tiles else [],
+            "detection_type": "partial",
             # Partial-specific fields
-            'is_partial_only': True,
-            'curvature_signature': curvature_sig.tolist() if curvature_sig is not None else None,
-            'awaiting_merge': True,  # Flag for downstream processing
+            "is_partial_only": True,
+            "curvature_signature": curvature_sig.tolist() if curvature_sig is not None else None,
+            "awaiting_merge": True,  # Flag for downstream processing
             # Candidate mode flag
-            'candidate_mode': self.candidate_mode,
+            "candidate_mode": self.candidate_mode,
         }
 
     def _extract_arc_vessel_features(
         self,
-        ring_candidate: Dict[str, Any],
+        ring_candidate: dict[str, Any],
         tile: np.ndarray,
         pixel_size_um: float,
         touches_boundary: bool,
-        boundary_edges: Set[BoundaryEdge],
-        source_tiles: List[Tuple[int, int]],
-    ) -> Optional[Dict[str, Any]]:
+        boundary_edges: set[BoundaryEdge],
+        source_tiles: list[tuple[int, int]],
+    ) -> dict[str, Any] | None:
         """
         Extract features for arc/curve vessel candidates (open structures).
 
@@ -3414,19 +3475,19 @@ class VesselStrategy(DetectionStrategy, MultiChannelFeatureMixin):
         Returns:
             Dict of arc vessel features, or None if invalid
         """
-        outer = ring_candidate['outer']
+        outer = ring_candidate["outer"]
 
         if len(outer) < 5:
             return None
 
         # Get arc-specific fields
-        arc_length_um = ring_candidate.get('arc_length_um', 0)
-        avg_curvature = ring_candidate.get('avg_curvature', 0)
-        straightness = ring_candidate.get('straightness', 1.0)
-        estimated_diameter_um = ring_candidate.get('estimated_diameter_um', 0)
-        arc_confidence = ring_candidate.get('arc_confidence', 0)
-        curvature_sig = ring_candidate.get('curvature_signature')
-        orientation = ring_candidate.get('orientation', 0)
+        arc_length_um = ring_candidate.get("arc_length_um", 0)
+        avg_curvature = ring_candidate.get("avg_curvature", 0)
+        straightness = ring_candidate.get("straightness", 1.0)
+        estimated_diameter_um = ring_candidate.get("estimated_diameter_um", 0)
+        arc_confidence = ring_candidate.get("arc_confidence", 0)
+        curvature_sig = ring_candidate.get("curvature_signature")
+        orientation = ring_candidate.get("orientation", 0)
 
         # Basic contour measurements
         area = cv2.contourArea(outer)
@@ -3437,13 +3498,13 @@ class VesselStrategy(DetectionStrategy, MultiChannelFeatureMixin):
             ellipse = cv2.fitEllipse(outer)
             (cx, cy), (minor_ax, major_ax), angle = ellipse
             aspect_ratio = max(major_ax, minor_ax) / (min(major_ax, minor_ax) + 1e-8)
-            circularity = 4 * np.pi * area / (perimeter ** 2 + 1e-8)
+            circularity = 4 * np.pi * area / (perimeter**2 + 1e-8)
         except cv2.error:
             # Fall back to moments-based center
             M = cv2.moments(outer)
-            if M['m00'] > 0:
-                cx = M['m10'] / M['m00']
-                cy = M['m01'] / M['m00']
+            if M["m00"] > 0:
+                cx = M["m10"] / M["m00"]
+                cy = M["m01"] / M["m00"]
             else:
                 pts = outer.reshape(-1, 2)
                 cx, cy = np.mean(pts, axis=0)
@@ -3453,74 +3514,74 @@ class VesselStrategy(DetectionStrategy, MultiChannelFeatureMixin):
             circularity = 0.5  # Default for open contours
 
         # Arc vessels have low categorical confidence but may have good detection_confidence
-        confidence = 'low'
+        confidence = "low"
 
         # Detection confidence for arcs is based on the arc_confidence calculated during detection
         detection_confidence = arc_confidence
 
         return {
             # Contours (needed for IoU-based merge in multi-scale detection)
-            'outer': outer,
-            'inner': None,
+            "outer": outer,
+            "inner": None,
             # Estimated measurements (marked as estimates for arcs)
-            'outer_diameter_um': float(estimated_diameter_um),
-            'inner_diameter_um': None,  # Unknown for arcs
-            'major_axis_um': float(max(major_ax, minor_ax) * pixel_size_um),
-            'minor_axis_um': float(min(major_ax, minor_ax) * pixel_size_um),
+            "outer_diameter_um": float(estimated_diameter_um),
+            "inner_diameter_um": None,  # Unknown for arcs
+            "major_axis_um": float(max(major_ax, minor_ax) * pixel_size_um),
+            "minor_axis_um": float(min(major_ax, minor_ax) * pixel_size_um),
             # Wall thickness not measurable for arcs
-            'wall_thickness_mean_um': None,
-            'wall_thickness_median_um': None,
-            'wall_thickness_std_um': None,
-            'wall_thickness_min_um': None,
-            'wall_thickness_max_um': None,
+            "wall_thickness_mean_um": None,
+            "wall_thickness_median_um": None,
+            "wall_thickness_std_um": None,
+            "wall_thickness_min_um": None,
+            "wall_thickness_max_um": None,
             # Areas
-            'lumen_area_um2': None,  # Unknown
-            'wall_area_um2': float(area * pixel_size_um ** 2),  # Visible area
-            'outer_area_um2': float(area * pixel_size_um ** 2),
+            "lumen_area_um2": None,  # Unknown
+            "wall_area_um2": float(area * pixel_size_um**2),  # Visible area
+            "outer_area_um2": float(area * pixel_size_um**2),
             # Shape metrics
-            'orientation_deg': float(angle),
-            'aspect_ratio': float(aspect_ratio),
-            'circularity': float(circularity),
-            'ring_completeness': 0.0,  # Not a complete ring
+            "orientation_deg": float(angle),
+            "aspect_ratio": float(aspect_ratio),
+            "circularity": float(circularity),
+            "ring_completeness": 0.0,  # Not a complete ring
             # Validation
-            'cd31_validated': None,  # Cannot validate arcs
-            'cd31_score': None,
+            "cd31_validated": None,  # Cannot validate arcs
+            "cd31_score": None,
             # Classification
-            'vessel_type': 'unknown',
-            'vessel_type_confidence': 0.0,
-            'classification_method': 'none',
-            'confidence': confidence,
+            "vessel_type": "unknown",
+            "vessel_type_confidence": 0.0,
+            "classification_method": "none",
+            "confidence": confidence,
             # Detection confidence score (0-1)
-            'detection_confidence': float(detection_confidence),
-            'wall_uniformity': None,  # Cannot measure for arcs
+            "detection_confidence": float(detection_confidence),
+            "wall_uniformity": None,  # Cannot measure for arcs
             # Centers
-            'outer_center': [float(cx), float(cy)],
-            'inner_center': None,  # Unknown
+            "outer_center": [float(cx), float(cy)],
+            "inner_center": None,  # Unknown
             # Boundary detection tracking
-            'touches_boundary': touches_boundary,
-            'boundary_edges': [e.value for e in boundary_edges] if boundary_edges else [],
-            'is_partial': True,
-            'is_merged': False,
-            'source_tiles': [[t[0], t[1]] for t in source_tiles] if source_tiles else [],
-            'detection_type': 'arc',
+            "touches_boundary": touches_boundary,
+            "boundary_edges": [e.value for e in boundary_edges] if boundary_edges else [],
+            "is_partial": True,
+            "is_merged": False,
+            "source_tiles": [[t[0], t[1]] for t in source_tiles] if source_tiles else [],
+            "detection_type": "arc",
             # Arc-specific fields
-            'is_arc': True,
-            'arc_length_um': float(arc_length_um),
-            'avg_curvature': float(avg_curvature),
-            'straightness': float(straightness),
-            'curvature_signature': curvature_sig.tolist() if curvature_sig is not None else None,
+            "is_arc": True,
+            "arc_length_um": float(arc_length_um),
+            "avg_curvature": float(avg_curvature),
+            "straightness": float(straightness),
+            "curvature_signature": curvature_sig.tolist() if curvature_sig is not None else None,
             # Candidate mode flag
-            'candidate_mode': self.candidate_mode,
+            "candidate_mode": self.candidate_mode,
         }
 
     def extract_candidate_features(
         self,
-        ring_candidate: Dict[str, Any],
+        ring_candidate: dict[str, Any],
         tile: np.ndarray,
-        models: Dict[str, Any],
+        models: dict[str, Any],
         pixel_size_um: float = None,
-        cd31_channel: Optional[np.ndarray] = None,
-    ) -> Optional[Dict[str, Any]]:
+        cd31_channel: np.ndarray | None = None,
+    ) -> dict[str, Any] | None:
         """
         Extract full vessel features from a ring candidate WITHOUT filtering.
 
@@ -3551,28 +3612,34 @@ class VesselStrategy(DetectionStrategy, MultiChannelFeatureMixin):
         from scipy.ndimage import distance_transform_edt
         from skimage.morphology import skeletonize
 
-        outer = ring_candidate['outer']
-        inner = ring_candidate['inner']
-        binary = ring_candidate.get('binary')
+        outer = ring_candidate["outer"]
+        inner = ring_candidate["inner"]
+        binary = ring_candidate.get("binary")
 
         rejection_reasons = []
         is_vessel = True
 
-        touches_boundary = ring_candidate.get('touches_boundary', False)
-        boundary_edges = ring_candidate.get('boundary_edges', set())
-        is_partial = ring_candidate.get('is_partial', False)
-        is_merged = ring_candidate.get('is_merged', False)
-        source_tiles = ring_candidate.get('source_tiles', [])
-        is_partial_only = ring_candidate.get('is_partial_only', False)
+        touches_boundary = ring_candidate.get("touches_boundary", False)
+        boundary_edges = ring_candidate.get("boundary_edges", set())
+        is_partial = ring_candidate.get("is_partial", False)
+        is_merged = ring_candidate.get("is_merged", False)
+        source_tiles = ring_candidate.get("source_tiles", [])
+        is_partial_only = ring_candidate.get("is_partial_only", False)
 
         if is_partial_only or inner is None:
             partial_feats = self._extract_partial_vessel_features(
-                ring_candidate, tile, pixel_size_um,
-                touches_boundary, boundary_edges, is_partial, is_merged, source_tiles
+                ring_candidate,
+                tile,
+                pixel_size_um,
+                touches_boundary,
+                boundary_edges,
+                is_partial,
+                is_merged,
+                source_tiles,
             )
             if partial_feats is not None:
-                partial_feats['is_vessel'] = False
-                partial_feats['rejection_reasons'] = ['partial_only_no_lumen']
+                partial_feats["is_vessel"] = False
+                partial_feats["rejection_reasons"] = ["partial_only_no_lumen"]
             return partial_feats
 
         if len(outer) < 5 or len(inner) < 5:
@@ -3592,7 +3659,7 @@ class VesselStrategy(DetectionStrategy, MultiChannelFeatureMixin):
         wall_area = outer_area - inner_area
 
         if wall_area <= 0 or inner_area <= 0:
-            rejection_reasons.append('invalid_wall_area')
+            rejection_reasons.append("invalid_wall_area")
             is_vessel = False
             wall_area = max(wall_area, 1)
             inner_area = max(inner_area, 1)
@@ -3605,21 +3672,21 @@ class VesselStrategy(DetectionStrategy, MultiChannelFeatureMixin):
         tile_h, tile_w = tile.shape[:2]
         max_area_px = tile_h * tile_w * self.MAX_TILE_AREA_FRACTION
         if outer_diameter_um < self.DEFAULT_MIN_DIAMETER_UM:
-            rejection_reasons.append(f'too_small:{outer_diameter_um:.1f}um')
+            rejection_reasons.append(f"too_small:{outer_diameter_um:.1f}um")
             is_vessel = False
         if outer_area > max_area_px:
-            rejection_reasons.append(f'too_large:{outer_diameter_um:.1f}um')
+            rejection_reasons.append(f"too_large:{outer_diameter_um:.1f}um")
             is_vessel = False
 
         aspect_ratio_out = max(major_out, minor_out) / (min(major_out, minor_out) + 1e-8)
         if aspect_ratio_out > self.DEFAULT_MAX_ASPECT_RATIO:
-            rejection_reasons.append(f'aspect_ratio:{aspect_ratio_out:.2f}')
+            rejection_reasons.append(f"aspect_ratio:{aspect_ratio_out:.2f}")
             is_vessel = False
 
         perimeter_out = cv2.arcLength(outer, True)
-        circularity = 4 * np.pi * outer_area / (perimeter_out ** 2 + 1e-8)
+        circularity = 4 * np.pi * outer_area / (perimeter_out**2 + 1e-8)
         if circularity < self.DEFAULT_MIN_CIRCULARITY:
-            rejection_reasons.append(f'circularity:{circularity:.2f}')
+            rejection_reasons.append(f"circularity:{circularity:.2f}")
             is_vessel = False
 
         h, w = tile.shape[:2]
@@ -3629,7 +3696,7 @@ class VesselStrategy(DetectionStrategy, MultiChannelFeatureMixin):
         wall_region = wall_mask_temp > 0
 
         if wall_region.sum() == 0:
-            rejection_reasons.append('empty_wall_region')
+            rejection_reasons.append("empty_wall_region")
             is_vessel = False
 
         lumen_mask_temp = np.zeros((h, w), dtype=np.uint8)
@@ -3637,7 +3704,7 @@ class VesselStrategy(DetectionStrategy, MultiChannelFeatureMixin):
         dist_from_lumen = distance_transform_edt(~(lumen_mask_temp > 0))
 
         wall_thickness_values = []
-        for pt in inner[::max(1, len(inner) // 36)]:
+        for pt in inner[:: max(1, len(inner) // 36)]:
             px, py = pt[0]
             if 0 <= py < h and 0 <= px < w:
                 if wall_region[py, px] or (lumen_mask_temp[py, px] > 0):
@@ -3663,7 +3730,7 @@ class VesselStrategy(DetectionStrategy, MultiChannelFeatureMixin):
             wall_thickness_max = float(np.max(wall_thicknesses))
             wall_thickness_median = float(np.median(wall_thicknesses))
         else:
-            rejection_reasons.append('insufficient_wall_samples')
+            rejection_reasons.append("insufficient_wall_samples")
             is_vessel = False
             estimated_thickness = (outer_diameter_um - inner_diameter_um) / 2
             wall_thickness_mean = estimated_thickness
@@ -3673,7 +3740,7 @@ class VesselStrategy(DetectionStrategy, MultiChannelFeatureMixin):
             wall_thickness_median = estimated_thickness
 
         if wall_thickness_mean < 2.0:
-            rejection_reasons.append(f'thin_wall:{wall_thickness_mean:.2f}um')
+            rejection_reasons.append(f"thin_wall:{wall_thickness_mean:.2f}um")
             is_vessel = False
 
         ring_points = 0
@@ -3692,7 +3759,9 @@ class VesselStrategy(DetectionStrategy, MultiChannelFeatureMixin):
                 angle_out_rad = np.radians(angle_out)
                 cos_t = np.cos(theta - angle_out_rad)
                 sin_t = np.sin(theta - angle_out_rad)
-                r_out = (a_out * b_out) / np.sqrt((b_out * cos_t) ** 2 + (a_out * sin_t) ** 2 + 1e-8)
+                r_out = (a_out * b_out) / np.sqrt(
+                    (b_out * cos_t) ** 2 + (a_out * sin_t) ** 2 + 1e-8
+                )
                 r_in = (a_in * b_in) / np.sqrt((b_in * cos_t) ** 2 + (a_in * sin_t) ** 2 + 1e-8)
                 r_mid = (r_out + r_in) / 2
                 px = int(cx_out + r_mid * np.cos(theta))
@@ -3704,7 +3773,7 @@ class VesselStrategy(DetectionStrategy, MultiChannelFeatureMixin):
 
         ring_completeness = ring_positive / (ring_points + 1e-8)
         if ring_completeness < self.min_ring_completeness:
-            rejection_reasons.append(f'incomplete_ring:{ring_completeness:.2f}')
+            rejection_reasons.append(f"incomplete_ring:{ring_completeness:.2f}")
             is_vessel = False
 
         cd31_validated = True
@@ -3720,95 +3789,95 @@ class VesselStrategy(DetectionStrategy, MultiChannelFeatureMixin):
             cd31_score = float(cd31_in_lumen / (cd31_in_wall + 1e-8))
             cd31_validated = cd31_in_lumen > cd31_in_wall * 0.8
 
-        vessel_type = 'unknown'
+        vessel_type = "unknown"
         vessel_type_confidence = 0.0
-        classification_method = 'none'
+        classification_method = "none"
         if self.classify_vessel_types:
             if outer_diameter_um < 10:
-                vessel_type = 'capillary'
+                vessel_type = "capillary"
                 vessel_type_confidence = 0.8
             elif outer_diameter_um < 100:
-                vessel_type = 'arteriole'
+                vessel_type = "arteriole"
                 vessel_type_confidence = 0.7
             else:
-                vessel_type = 'artery'
+                vessel_type = "artery"
                 vessel_type_confidence = 0.6
-            classification_method = 'rule_based'
+            classification_method = "rule_based"
 
         if ring_completeness > 0.8 and circularity > 0.6 and aspect_ratio_out < 2.0:
-            confidence = 'high'
+            confidence = "high"
         elif ring_completeness > 0.6 and circularity > 0.4:
-            confidence = 'medium'
+            confidence = "medium"
         else:
-            confidence = 'low'
+            confidence = "low"
 
         if is_merged:
-            detection_type = 'merged'
+            detection_type = "merged"
         elif is_partial:
-            detection_type = 'partial'
+            detection_type = "partial"
         else:
-            detection_type = 'complete'
+            detection_type = "complete"
 
         # Continuous detection_confidence (0-1) matching extract_features()
         wall_uniformity = 1.0 - (wall_thickness_std / (wall_thickness_mean + 1e-8))
         wall_uniformity = max(0.0, min(1.0, wall_uniformity))
         aspect_ratio_score = 1.0 - min(1.0, (aspect_ratio_out - 1.0) / 5.0)
         detection_confidence = (
-            0.30 * ring_completeness +
-            0.25 * circularity +
-            0.25 * wall_uniformity +
-            0.20 * aspect_ratio_score
+            0.30 * ring_completeness
+            + 0.25 * circularity
+            + 0.25 * wall_uniformity
+            + 0.20 * aspect_ratio_score
         )
         detection_confidence = max(0.0, min(1.0, detection_confidence))
 
         return {
             # Contours (needed for IoU-based merge in multi-scale detection)
-            'outer': outer,
-            'inner': inner,
+            "outer": outer,
+            "inner": inner,
             # Measurements
-            'outer_diameter_um': float(outer_diameter_um),
-            'inner_diameter_um': float(inner_diameter_um),
-            'major_axis_um': float(max(major_out, minor_out) * pixel_size_um),
-            'minor_axis_um': float(min(major_out, minor_out) * pixel_size_um),
-            'wall_thickness_mean_um': wall_thickness_mean,
-            'wall_thickness_median_um': wall_thickness_median,
-            'wall_thickness_std_um': wall_thickness_std,
-            'wall_thickness_min_um': wall_thickness_min,
-            'wall_thickness_max_um': wall_thickness_max,
-            'lumen_area_um2': float(inner_area * pixel_size_um ** 2),
-            'wall_area_um2': float(wall_area * pixel_size_um ** 2),
-            'outer_area_um2': float(outer_area * pixel_size_um ** 2),
-            'orientation_deg': float(angle_out),
-            'aspect_ratio': float(aspect_ratio_out),
-            'circularity': float(circularity),
-            'ring_completeness': float(ring_completeness),
-            'cd31_validated': cd31_validated,
-            'cd31_score': cd31_score,
-            'vessel_type': vessel_type,
-            'vessel_type_confidence': vessel_type_confidence,
-            'classification_method': classification_method,
-            'confidence': confidence,
-            'outer_center': [float(cx_out), float(cy_out)],
-            'inner_center': [float(cx_in), float(cy_in)],
-            'touches_boundary': touches_boundary,
-            'boundary_edges': [e.value for e in boundary_edges] if boundary_edges else [],
-            'is_partial': is_partial,
-            'is_merged': is_merged,
-            'source_tiles': [[t[0], t[1]] for t in source_tiles] if source_tiles else [],
-            'detection_type': detection_type,
+            "outer_diameter_um": float(outer_diameter_um),
+            "inner_diameter_um": float(inner_diameter_um),
+            "major_axis_um": float(max(major_out, minor_out) * pixel_size_um),
+            "minor_axis_um": float(min(major_out, minor_out) * pixel_size_um),
+            "wall_thickness_mean_um": wall_thickness_mean,
+            "wall_thickness_median_um": wall_thickness_median,
+            "wall_thickness_std_um": wall_thickness_std,
+            "wall_thickness_min_um": wall_thickness_min,
+            "wall_thickness_max_um": wall_thickness_max,
+            "lumen_area_um2": float(inner_area * pixel_size_um**2),
+            "wall_area_um2": float(wall_area * pixel_size_um**2),
+            "outer_area_um2": float(outer_area * pixel_size_um**2),
+            "orientation_deg": float(angle_out),
+            "aspect_ratio": float(aspect_ratio_out),
+            "circularity": float(circularity),
+            "ring_completeness": float(ring_completeness),
+            "cd31_validated": cd31_validated,
+            "cd31_score": cd31_score,
+            "vessel_type": vessel_type,
+            "vessel_type_confidence": vessel_type_confidence,
+            "classification_method": classification_method,
+            "confidence": confidence,
+            "outer_center": [float(cx_out), float(cy_out)],
+            "inner_center": [float(cx_in), float(cy_in)],
+            "touches_boundary": touches_boundary,
+            "boundary_edges": [e.value for e in boundary_edges] if boundary_edges else [],
+            "is_partial": is_partial,
+            "is_merged": is_merged,
+            "source_tiles": [[t[0], t[1]] for t in source_tiles] if source_tiles else [],
+            "detection_type": detection_type,
             # Candidate mode fields - essential for RF training
-            'is_vessel': is_vessel,
-            'rejection_reasons': rejection_reasons,
-            'candidate_mode': True,
-            'detection_confidence': float(detection_confidence),
+            "is_vessel": is_vessel,
+            "rejection_reasons": rejection_reasons,
+            "candidate_mode": True,
+            "detection_confidence": float(detection_confidence),
         }
 
     def filter(
         self,
-        masks: List[np.ndarray],
-        features: List[Dict[str, Any]],
+        masks: list[np.ndarray],
+        features: list[dict[str, Any]],
         pixel_size_um: float,
-    ) -> List[Detection]:
+    ) -> list[Detection]:
         """
         Filter candidates based on extracted features.
 
@@ -3830,15 +3899,17 @@ class VesselStrategy(DetectionStrategy, MultiChannelFeatureMixin):
                 continue
 
             # Get centroid from outer center
-            center = feat.get('outer_center', [0, 0])
+            center = feat.get("outer_center", [0, 0])
 
             det = Detection(
                 mask=mask,
                 centroid=center,
                 features=feat,
                 id=f"vessel_{i + 1}",
-                score=1.0 if feat.get('confidence') == 'high' else (
-                    0.7 if feat.get('confidence') == 'medium' else 0.4
+                score=(
+                    1.0
+                    if feat.get("confidence") == "high"
+                    else (0.7 if feat.get("confidence") == "medium" else 0.4)
                 ),
             )
             detections.append(det)
@@ -3848,17 +3919,17 @@ class VesselStrategy(DetectionStrategy, MultiChannelFeatureMixin):
     def detect(
         self,
         tile: np.ndarray,
-        models: Dict[str, Any],
+        models: dict[str, Any],
         pixel_size_um: float = None,
-        cd31_channel: Optional[np.ndarray] = None,
+        cd31_channel: np.ndarray | None = None,
         extract_features: bool = True,
         tile_x: int = 0,
         tile_y: int = 0,
-        tile_size: Optional[int] = None,
+        tile_size: int | None = None,
         attempt_merge: bool = False,
-        extra_channels: Optional[Dict[int, np.ndarray]] = None,
-        channel_names: Optional[Dict[int, str]] = None,
-    ) -> Tuple[np.ndarray, List[Detection]]:
+        extra_channels: dict[int, np.ndarray] | None = None,
+        channel_names: dict[int, str] | None = None,
+    ) -> tuple[np.ndarray, list[Detection]]:
         """
         Complete vessel detection pipeline with full feature extraction.
 
@@ -3943,10 +4014,12 @@ class VesselStrategy(DetectionStrategy, MultiChannelFeatureMixin):
         import torch
 
         # === Phase 1: Primary detection ===
-        if (self.parallel_detection and
-            extra_channels is not None and
-            channel_names is not None and
-            len(extra_channels) > 0):
+        if (
+            self.parallel_detection
+            and extra_channels is not None
+            and channel_names is not None
+            and len(extra_channels) > 0
+        ):
             # Parallel multi-marker detection (SMA + CD31 + LYVE1)
             logger.info(
                 f"Running parallel multi-marker detection with {self.parallel_workers} workers "
@@ -3967,8 +4040,7 @@ class VesselStrategy(DetectionStrategy, MultiChannelFeatureMixin):
             if self.multi_marker and len(ring_candidates) > 1:
                 pre_merge_count = len(ring_candidates)
                 ring_candidates = self._merge_candidates(
-                    ring_candidates,
-                    iou_threshold=self.merge_iou_threshold
+                    ring_candidates, iou_threshold=self.merge_iou_threshold
                 )
                 logger.info(
                     f"Multi-marker merge: {pre_merge_count} candidates -> "
@@ -3977,8 +4049,7 @@ class VesselStrategy(DetectionStrategy, MultiChannelFeatureMixin):
         else:
             # Standard sequential SMA ring detection
             ring_candidates = self._segment_rings(
-                tile, models, pixel_size_um, cd31_channel,
-                tile_x=tile_x, tile_y=tile_y
+                tile, models, pixel_size_um, cd31_channel, tile_x=tile_x, tile_y=tile_y
             )
 
         # === Phase 2: Supplementary lumen-first pass ===
@@ -4033,14 +4104,25 @@ class VesselStrategy(DetectionStrategy, MultiChannelFeatureMixin):
             tile_rgb = _safe_to_uint8(tile_rgb)
 
         # Get models
-        sam2_predictor = models.get('sam2_predictor')
+        sam2_predictor = models.get("sam2_predictor")
         if self.extract_deep_features:
-            resnet = models.get('resnet')
-            resnet_transform = models.get('resnet_transform')
+            resnet = models.get("resnet")
+            resnet_transform = models.get("resnet_transform")
         else:
             resnet = None
             resnet_transform = None
-        device = models.get('device', torch.device('cuda' if torch.cuda.is_available() else ('mps' if hasattr(torch.backends, 'mps') and torch.backends.mps.is_available() else 'cpu')))
+        device = models.get(
+            "device",
+            torch.device(
+                "cuda"
+                if torch.cuda.is_available()
+                else (
+                    "mps"
+                    if hasattr(torch.backends, "mps") and torch.backends.mps.is_available()
+                    else "cpu"
+                )
+            ),
+        )
 
         # Set image for SAM2 embeddings if available
         if sam2_predictor is not None and self.extract_sam2_embeddings and extract_features:
@@ -4061,20 +4143,18 @@ class VesselStrategy(DetectionStrategy, MultiChannelFeatureMixin):
                     cand, tile, models, pixel_size_um, cd31_channel
                 )
             else:
-                vessel_feat = self.extract_features(
-                    cand, tile, models, pixel_size_um, cd31_channel
-                )
+                vessel_feat = self.extract_features(cand, tile, models, pixel_size_um, cd31_channel)
 
             if vessel_feat is None:
                 continue
 
             # Create wall mask - handle partial vessels (no inner contour)
             temp = np.zeros((h, w), dtype=np.uint8)
-            cv2.drawContours(temp, [cand['outer']], 0, 1, -1)
+            cv2.drawContours(temp, [cand["outer"]], 0, 1, -1)
 
             # Only subtract inner contour if it exists (not for partial vessels)
-            if cand.get('inner') is not None:
-                cv2.drawContours(temp, [cand['inner']], 0, 0, -1)
+            if cand.get("inner") is not None:
+                cv2.drawContours(temp, [cand["inner"]], 0, 0, -1)
 
             wall_mask = temp.astype(bool)
 
@@ -4088,10 +4168,10 @@ class VesselStrategy(DetectionStrategy, MultiChannelFeatureMixin):
 
             # Create lumen mask if inner contour exists
             lumen_mask = None
-            if cand.get('inner') is not None:
+            if cand.get("inner") is not None:
                 lumen_mask = np.zeros((h, w), dtype=bool)
                 lumen_temp = np.zeros((h, w), dtype=np.uint8)
-                cv2.drawContours(lumen_temp, [cand['inner']], 0, 255, -1)
+                cv2.drawContours(lumen_temp, [cand["inner"]], 0, 255, -1)
                 lumen_mask = lumen_temp > 0
 
             # Extract vessel-specific features (~28 features + multi-channel if available)
@@ -4111,12 +4191,12 @@ class VesselStrategy(DetectionStrategy, MultiChannelFeatureMixin):
                         wall_mask=wall_mask,
                         lumen_mask=lumen_mask,
                         sma_channel=tile_rgb,
-                        outer_contour=cand['outer'],
-                        inner_contour=cand.get('inner'),
+                        outer_contour=cand["outer"],
+                        inner_contour=cand.get("inner"),
                         pixel_size_um=pixel_size_um,
                         channels_data=extra_channels,
                         channel_names=channel_names,
-                        binary_mask=cand.get('binary'),
+                        binary_mask=cand.get("binary"),
                     )
                 else:
                     # Single-channel (SMA only) feature extraction
@@ -4124,10 +4204,10 @@ class VesselStrategy(DetectionStrategy, MultiChannelFeatureMixin):
                         wall_mask=wall_mask,
                         lumen_mask=lumen_mask,
                         sma_channel=tile_rgb,
-                        outer_contour=cand['outer'],
-                        inner_contour=cand.get('inner'),
+                        outer_contour=cand["outer"],
+                        inner_contour=cand.get("inner"),
                         pixel_size_um=pixel_size_um,
-                        binary_mask=cand.get('binary'),
+                        binary_mask=cand.get("binary"),
                     )
             except Exception as e:
                 logger.debug(f"Vessel-specific feature extraction failed: {e}")
@@ -4139,7 +4219,7 @@ class VesselStrategy(DetectionStrategy, MultiChannelFeatureMixin):
             all_features = {**morph_feat, **vessel_feat, **vessel_specific_feat}
 
             # Get centroid
-            center = vessel_feat.get('outer_center', [0, 0])
+            center = vessel_feat.get("outer_center", [0, 0])
             if center is None:
                 # Fall back to mask centroid
                 ys, xs = np.where(wall_mask)
@@ -4151,11 +4231,11 @@ class VesselStrategy(DetectionStrategy, MultiChannelFeatureMixin):
             if sam2_predictor is not None and self.extract_sam2_embeddings and extract_features:
                 sam2_emb = self._extract_sam2_embedding(sam2_predictor, cy, cx)
                 for i, v in enumerate(sam2_emb):
-                    all_features[f'sam2_{i}'] = float(v)
+                    all_features[f"sam2_{i}"] = float(v)
             elif extract_features:
                 # Fill with zeros if SAM2 not available
                 for i in range(256):
-                    all_features[f'sam2_{i}'] = 0.0
+                    all_features[f"sam2_{i}"] = 0.0
 
             # Prepare crops for batch ResNet/DINOv2 processing (masked + context)
             if self.extract_deep_features and extract_features:
@@ -4163,9 +4243,9 @@ class VesselStrategy(DetectionStrategy, MultiChannelFeatureMixin):
                 if len(ys) > 0:
                     y1, y2 = ys.min(), ys.max()
                     x1, x2 = xs.min(), xs.max()
-                    crop_context = tile_rgb[y1:y2+1, x1:x2+1].copy()
+                    crop_context = tile_rgb[y1 : y2 + 1, x1 : x2 + 1].copy()
                     crop_masked = crop_context.copy()
-                    crop_mask = wall_mask[y1:y2+1, x1:x2+1]
+                    crop_mask = wall_mask[y1 : y2 + 1, x1 : x2 + 1]
                     crop_masked[~crop_mask] = 0  # Zero out background
                     crops_for_resnet.append(crop_masked)
                     crops_for_resnet_context.append(crop_context)
@@ -4174,8 +4254,8 @@ class VesselStrategy(DetectionStrategy, MultiChannelFeatureMixin):
             # Apply mild smoothing at detection scale (handles Canny jaggedness).
             # For multiscale detection, heavier scale-aware smoothing is applied
             # AFTER upscaling in convert_detection_to_full_res().
-            outer_contour = cand['outer']
-            inner_contour = cand.get('inner')
+            outer_contour = cand["outer"]
+            inner_contour = cand.get("inner")
             if self.smooth_contours:
                 outer_contour = smooth_contour_spline(
                     outer_contour, smoothing=self.smooth_contours_factor
@@ -4190,68 +4270,85 @@ class VesselStrategy(DetectionStrategy, MultiChannelFeatureMixin):
             if inner_contour is not None:
                 inner_contour_data = np.array(inner_contour).reshape(-1, 2).tolist()
 
-            valid_candidates.append({
-                'mask': wall_mask,
-                'features': all_features,
-                'centroid': center,
-                'outer_contour': np.array(outer_contour).reshape(-1, 2).tolist(),
-                'inner_contour': inner_contour_data,
-                'is_partial': vessel_feat.get('is_partial', False),
-                'is_merged': vessel_feat.get('is_merged', False),
-                'detection_type': vessel_feat.get('detection_type', 'complete'),
-                'detection_method': cand.get('detection_method', 'unknown'),
-            })
+            valid_candidates.append(
+                {
+                    "mask": wall_mask,
+                    "features": all_features,
+                    "centroid": center,
+                    "outer_contour": np.array(outer_contour).reshape(-1, 2).tolist(),
+                    "inner_contour": inner_contour_data,
+                    "is_partial": vessel_feat.get("is_partial", False),
+                    "is_merged": vessel_feat.get("is_merged", False),
+                    "detection_type": vessel_feat.get("detection_type", "complete"),
+                    "detection_method": cand.get("detection_method", "unknown"),
+                }
+            )
             # Normalize detection_method to always be a list for consistent downstream handling
-            dm = valid_candidates[-1]['detection_method']
+            dm = valid_candidates[-1]["detection_method"]
             if isinstance(dm, str):
-                valid_candidates[-1]['detection_method'] = [dm]
+                valid_candidates[-1]["detection_method"] = [dm]
 
         # Release binary mask references from candidates to allow GC of tile-sized arrays.
         # Done AFTER feature extraction loop (which reads cand['binary'] for ring completeness).
         for cand in ring_candidates:
-            cand.pop('binary', None)
+            cand.pop("binary", None)
 
         # Batch deep feature extraction (ResNet + DINOv2, masked + context)
         # ResNet masked
-        if crops_for_resnet and resnet is not None and resnet_transform is not None and extract_features:
+        if (
+            crops_for_resnet
+            and resnet is not None
+            and resnet_transform is not None
+            and extract_features
+        ):
             resnet_features_list = self._extract_resnet_features_batch(
                 crops_for_resnet, resnet, resnet_transform, device
             )
             for crop_idx, resnet_feats in zip(crop_indices, resnet_features_list):
                 for i, v in enumerate(resnet_feats):
-                    valid_candidates[crop_idx]['features'][f'resnet_{i}'] = float(v)
+                    valid_candidates[crop_idx]["features"][f"resnet_{i}"] = float(v)
 
         # ResNet context
-        if crops_for_resnet_context and resnet is not None and resnet_transform is not None and extract_features:
+        if (
+            crops_for_resnet_context
+            and resnet is not None
+            and resnet_transform is not None
+            and extract_features
+        ):
             resnet_ctx_list = self._extract_resnet_features_batch(
                 crops_for_resnet_context, resnet, resnet_transform, device
             )
             for crop_idx, resnet_feats in zip(crop_indices, resnet_ctx_list):
                 for i, v in enumerate(resnet_feats):
-                    valid_candidates[crop_idx]['features'][f'resnet_ctx_{i}'] = float(v)
+                    valid_candidates[crop_idx]["features"][f"resnet_ctx_{i}"] = float(v)
 
         # DINOv2 (only access model if extract_deep_features is enabled)
         if self.extract_deep_features:
-            dinov2 = models.get('dinov2')
-            dinov2_transform = models.get('dinov2_transform')
+            dinov2 = models.get("dinov2")
+            dinov2_transform = models.get("dinov2_transform")
         else:
             dinov2 = None
             dinov2_transform = None
 
-        if crops_for_resnet and dinov2 is not None and dinov2_transform is not None and extract_features:
+        if (
+            crops_for_resnet
+            and dinov2 is not None
+            and dinov2_transform is not None
+            and extract_features
+        ):
             dinov2_masked_list = self._extract_dinov2_features_batch(
                 crops_for_resnet, dinov2, dinov2_transform, device
             )
             for crop_idx, dino_feats in zip(crop_indices, dinov2_masked_list):
                 for i, v in enumerate(dino_feats):
-                    valid_candidates[crop_idx]['features'][f'dinov2_{i}'] = float(v)
+                    valid_candidates[crop_idx]["features"][f"dinov2_{i}"] = float(v)
 
             dinov2_ctx_list = self._extract_dinov2_features_batch(
                 crops_for_resnet_context, dinov2, dinov2_transform, device
             )
             for crop_idx, dino_feats in zip(crop_indices, dinov2_ctx_list):
                 for i, v in enumerate(dino_feats):
-                    valid_candidates[crop_idx]['features'][f'dinov2_ctx_{i}'] = float(v)
+                    valid_candidates[crop_idx]["features"][f"dinov2_ctx_{i}"] = float(v)
 
         # Fill zeros for candidates that failed crop extraction
         if extract_features and self.extract_deep_features:
@@ -4271,8 +4368,8 @@ class VesselStrategy(DetectionStrategy, MultiChannelFeatureMixin):
         gc.collect()
 
         # Create Detection objects
-        masks_list = [cand['mask'] for cand in valid_candidates]
-        features_list = [cand['features'] for cand in valid_candidates]
+        masks_list = [cand["mask"] for cand in valid_candidates]
+        features_list = [cand["features"] for cand in valid_candidates]
 
         detections = self.filter(masks_list, features_list, pixel_size_um)
 
@@ -4283,15 +4380,18 @@ class VesselStrategy(DetectionStrategy, MultiChannelFeatureMixin):
         # Add contour data and tracking info to detections
         for i, det in enumerate(detections):
             if i < len(valid_candidates):
-                det.features['outer_contour'] = valid_candidates[i]['outer_contour']
-                det.features['inner_contour'] = valid_candidates[i]['inner_contour']  # May be None for partial
-                det.features['detection_method'] = valid_candidates[i].get('detection_method', 'unknown')
+                det.features["outer_contour"] = valid_candidates[i]["outer_contour"]
+                det.features["inner_contour"] = valid_candidates[i][
+                    "inner_contour"
+                ]  # May be None for partial
+                det.features["detection_method"] = valid_candidates[i].get(
+                    "detection_method", "unknown"
+                )
 
         # Sort detections by detection_confidence (continuous 0-1) descending —
         # more confident detections take priority during within-tile overlap checking
         detections.sort(
-            key=lambda d: d.features.get('detection_confidence', d.score or 0),
-            reverse=True
+            key=lambda d: d.features.get("detection_confidence", d.score or 0), reverse=True
         )
 
         # Build combined mask with overlap checking
@@ -4314,11 +4414,11 @@ class VesselStrategy(DetectionStrategy, MultiChannelFeatureMixin):
             combined_mask[mask] = det_id
 
             # Generate ID based on detection type
-            detection_type = det.features.get('detection_type', 'complete')
-            if detection_type == 'merged':
+            detection_type = det.features.get("detection_type", "complete")
+            if detection_type == "merged":
                 merged_count += 1
                 det.id = f"vessel_merged_{merged_count}"
-            elif detection_type == 'partial':
+            elif detection_type == "partial":
                 partial_count += 1
                 det.id = f"vessel_partial_{partial_count}"
             else:
@@ -4340,18 +4440,18 @@ class VesselStrategy(DetectionStrategy, MultiChannelFeatureMixin):
     def detect_multiscale(
         self,
         tile_getter: callable,
-        models: Dict[str, Any],
+        models: dict[str, Any],
         mosaic_width: int,
         mosaic_height: int,
         tile_size: int = 4000,
-        scales: List[int] = None,
+        scales: list[int] = None,
         pixel_size_um: float = None,
         channel: int = 0,
         iou_threshold: float = 0.3,
         sample_fraction: float = 1.0,
-        progress_callback: Optional[callable] = None,
+        progress_callback: callable | None = None,
         **detect_kwargs,
-    ) -> Tuple[List[np.ndarray], List[Detection]]:
+    ) -> tuple[list[np.ndarray], list[Detection]]:
         """
         Multi-scale vessel detection with IoU-based deduplication.
 
@@ -4393,15 +4493,17 @@ class VesselStrategy(DetectionStrategy, MultiChannelFeatureMixin):
         if pixel_size_um is None:
             raise ValueError("pixel_size_um is required — must come from CZI metadata")
 
+        import gc
+        import random
+
+        import torch
+
         from segmentation.utils.multiscale import (
-            get_scale_params,
-            generate_tile_grid_at_scale,
             convert_detection_to_full_res,
+            generate_tile_grid_at_scale,
+            get_scale_params,
             merge_detections_across_scales,
         )
-        import random
-        import gc
-        import torch
 
         if scales is None:
             scales = [32, 16, 8, 4, 2]  # Default: coarse to fine
@@ -4414,9 +4516,7 @@ class VesselStrategy(DetectionStrategy, MultiChannelFeatureMixin):
             scale_params = get_scale_params(scale)
 
             # Generate tile grid at this scale
-            tiles = generate_tile_grid_at_scale(
-                mosaic_width, mosaic_height, tile_size, scale
-            )
+            tiles = generate_tile_grid_at_scale(mosaic_width, mosaic_height, tile_size, scale)
 
             # Sample tiles if sample_fraction < 1.0
             if sample_fraction < 1.0:
@@ -4431,9 +4531,12 @@ class VesselStrategy(DetectionStrategy, MultiChannelFeatureMixin):
 
             scale_detections = 0
             import time as _time
+
             for i, (tile_x, tile_y) in enumerate(tiles):
                 tile_start = _time.time()
-                logger.info(f"  Scale 1/{scale}x: Tile {i+1}/{len(tiles)} at ({tile_x}, {tile_y})...")
+                logger.info(
+                    f"  Scale 1/{scale}x: Tile {i+1}/{len(tiles)} at ({tile_x}, {tile_y})..."
+                )
 
                 # Get tile at this scale
                 tile = tile_getter(tile_x, tile_y, tile_size, channel, scale)
@@ -4450,31 +4553,38 @@ class VesselStrategy(DetectionStrategy, MultiChannelFeatureMixin):
                         pixel_size_um=scale_pixel_size,
                         tile_x=tile_x * scale,  # Convert to full-res coords
                         tile_y=tile_y * scale,
-                        **detect_kwargs
+                        **detect_kwargs,
                     )
 
                     # Convert detections to full resolution coordinates
                     for det in detections:
-                        det_dict = det.to_dict() if hasattr(det, 'to_dict') else det
-                        feats = det.features if hasattr(det, 'features') else det_dict.get('features', {})
+                        det_dict = det.to_dict() if hasattr(det, "to_dict") else det
+                        feats = (
+                            det.features
+                            if hasattr(det, "features")
+                            else det_dict.get("features", {})
+                        )
                         # Promote outer/inner contours to top-level for convert_detection_to_full_res
                         # Features dict uses 'outer_contour'/'inner_contour' keys (from extract_features)
-                        outer_key = 'outer_contour' if 'outer_contour' in feats else 'outer'
-                        inner_key = 'inner_contour' if 'inner_contour' in feats else 'inner'
-                        if feats.get(outer_key) is not None and 'outer' not in det_dict:
-                            det_dict['outer'] = feats[outer_key]
-                        if feats.get(inner_key) is not None and 'inner' not in det_dict:
-                            det_dict['inner'] = feats[inner_key]
+                        outer_key = "outer_contour" if "outer_contour" in feats else "outer"
+                        inner_key = "inner_contour" if "inner_contour" in feats else "inner"
+                        if feats.get(outer_key) is not None and "outer" not in det_dict:
+                            det_dict["outer"] = feats[outer_key]
+                        if feats.get(inner_key) is not None and "inner" not in det_dict:
+                            det_dict["inner"] = feats[inner_key]
                         # to_dict() uses 'centroid', convert_detection_to_full_res uses 'center'
-                        if 'center' not in det_dict and 'centroid' in det_dict:
-                            det_dict['center'] = det_dict['centroid']
-                        elif 'center' not in det_dict and feats.get('outer_center') is not None:
-                            det_dict['center'] = feats['outer_center']
+                        if "center" not in det_dict and "centroid" in det_dict:
+                            det_dict["center"] = det_dict["centroid"]
+                        elif "center" not in det_dict and feats.get("outer_center") is not None:
+                            det_dict["center"] = feats["outer_center"]
                         # Track if this is an arc (open contour) for smoothing
-                        if feats.get('detection_type') == 'arc':
-                            det_dict['is_arc'] = True
+                        if feats.get("detection_type") == "arc":
+                            det_dict["is_arc"] = True
                         det_fullres = convert_detection_to_full_res(
-                            det_dict, scale, tile_x, tile_y,
+                            det_dict,
+                            scale,
+                            tile_x,
+                            tile_y,
                             smooth=self.smooth_contours,
                             smooth_base_factor=self.smooth_contours_factor,
                         )
@@ -4522,21 +4632,23 @@ class VesselStrategy(DetectionStrategy, MultiChannelFeatureMixin):
             else:
                 # Create Detection from dict
                 # Detection dataclass expects: mask, centroid, features, id, score
-                features = det_dict.get('features', {}).copy()
+                features = det_dict.get("features", {}).copy()
                 # ALWAYS use the scaled 'outer' contour from det_dict (not the original in features)
                 # convert_detection_to_full_res() already scaled det_dict['outer'] to full resolution
-                if det_dict.get('outer') is not None:
-                    features['outer'] = det_dict.get('outer')
-                if det_dict.get('inner') is not None:
-                    features['inner'] = det_dict.get('inner')
+                if det_dict.get("outer") is not None:
+                    features["outer"] = det_dict.get("outer")
+                if det_dict.get("inner") is not None:
+                    features["inner"] = det_dict.get("inner")
 
-                final_detections.append(Detection(
-                    mask=det_dict.get('mask', np.zeros((1, 1), dtype=bool)),
-                    centroid=det_dict.get('center', det_dict.get('centroid', [0, 0])),
-                    features=features,
-                    id=det_dict.get('id', det_dict.get('mask_id')),
-                    score=det_dict.get('score', det_dict.get('confidence', 1.0)),
-                ))
+                final_detections.append(
+                    Detection(
+                        mask=det_dict.get("mask", np.zeros((1, 1), dtype=bool)),
+                        centroid=det_dict.get("center", det_dict.get("centroid", [0, 0])),
+                        features=features,
+                        id=det_dict.get("id", det_dict.get("mask_id")),
+                        score=det_dict.get("score", det_dict.get("confidence", 1.0)),
+                    )
+                )
 
         logger.info(
             f"Multi-scale detection complete: {len(final_detections)} vessels "
@@ -4554,15 +4666,15 @@ class VesselStrategy(DetectionStrategy, MultiChannelFeatureMixin):
         mosaic_width: int,
         mosaic_height: int,
         tile_size: int = 4000,
-        scales: List[int] = None,
+        scales: list[int] = None,
         pixel_size_um: float = None,
         channel: int = 0,
         iou_threshold: float = 0.3,
         sample_fraction: float = 1.0,
         medsam_checkpoint: str = None,
-        progress_callback: Optional[callable] = None,
+        progress_callback: callable | None = None,
         **detect_kwargs,
-    ) -> Tuple[List[Dict], List[Detection]]:
+    ) -> tuple[list[dict], list[Detection]]:
         """
         Multi-scale vessel detection using MedSAM with ring structure filtering.
 
@@ -4596,16 +4708,18 @@ class VesselStrategy(DetectionStrategy, MultiChannelFeatureMixin):
         if pixel_size_um is None:
             raise ValueError("pixel_size_um is required — must come from CZI metadata")
 
-        import torch
-        from segment_anything import sam_model_registry, SamAutomaticMaskGenerator
-        from segmentation.utils.multiscale import (
-            get_scale_params,
-            generate_tile_grid_at_scale,
-            convert_detection_to_full_res,
-            merge_detections_across_scales,
-        )
         import random
         import time as _time
+
+        import torch
+        from segment_anything import SamAutomaticMaskGenerator, sam_model_registry
+
+        from segmentation.utils.multiscale import (
+            convert_detection_to_full_res,
+            generate_tile_grid_at_scale,
+            get_scale_params,
+            merge_detections_across_scales,
+        )
 
         if scales is None:
             scales = [32, 16, 8, 4, 2]  # Default: coarse to fine
@@ -4613,6 +4727,7 @@ class VesselStrategy(DetectionStrategy, MultiChannelFeatureMixin):
         # Find MedSAM checkpoint
         if medsam_checkpoint is None:
             import os
+
             possible_paths = [
                 "/home/dude/code/vessel_seg/checkpoints/medsam_vit_b.pth",
                 "checkpoints/medsam_vit_b.pth",
@@ -4623,10 +4738,20 @@ class VesselStrategy(DetectionStrategy, MultiChannelFeatureMixin):
                     medsam_checkpoint = p
                     break
             if medsam_checkpoint is None:
-                raise FileNotFoundError("MedSAM checkpoint not found. Please provide medsam_checkpoint path.")
+                raise FileNotFoundError(
+                    "MedSAM checkpoint not found. Please provide medsam_checkpoint path."
+                )
 
         # Load MedSAM
-        device = "cuda" if torch.cuda.is_available() else ("mps" if hasattr(torch.backends, 'mps') and torch.backends.mps.is_available() else "cpu")
+        device = (
+            "cuda"
+            if torch.cuda.is_available()
+            else (
+                "mps"
+                if hasattr(torch.backends, "mps") and torch.backends.mps.is_available()
+                else "cpu"
+            )
+        )
         logger.info(f"Loading MedSAM from {medsam_checkpoint} on {device}...")
         sam = sam_model_registry["vit_b"](checkpoint=medsam_checkpoint)
         sam.to(device)
@@ -4635,11 +4760,11 @@ class VesselStrategy(DetectionStrategy, MultiChannelFeatureMixin):
         # Create automatic mask generator with settings tuned for vessels
         mask_generator = SamAutomaticMaskGenerator(
             sam,
-            points_per_side=32,          # Dense point grid for finding all structures
-            pred_iou_thresh=0.86,        # Slightly lower for more candidates
-            stability_score_thresh=0.92, # Slightly lower for partial rings
-            min_mask_region_area=50,     # Small area to catch capillaries
-            crop_n_layers=1,             # Multi-crop for better coverage
+            points_per_side=32,  # Dense point grid for finding all structures
+            pred_iou_thresh=0.86,  # Slightly lower for more candidates
+            stability_score_thresh=0.92,  # Slightly lower for partial rings
+            min_mask_region_area=50,  # Small area to catch capillaries
+            crop_n_layers=1,  # Multi-crop for better coverage
             crop_n_points_downscale_factor=2,
         )
         logger.info("MedSAM mask generator created")
@@ -4652,9 +4777,7 @@ class VesselStrategy(DetectionStrategy, MultiChannelFeatureMixin):
             scale_params = get_scale_params(scale)
 
             # Generate tile grid at this scale
-            tiles = generate_tile_grid_at_scale(
-                mosaic_width, mosaic_height, tile_size, scale
-            )
+            tiles = generate_tile_grid_at_scale(mosaic_width, mosaic_height, tile_size, scale)
 
             # Sample tiles if sample_fraction < 1.0
             if sample_fraction < 1.0:
@@ -4670,12 +4793,16 @@ class VesselStrategy(DetectionStrategy, MultiChannelFeatureMixin):
             scale_detections = 0
             for i, (tile_x, tile_y) in enumerate(tiles):
                 tile_start = _time.time()
-                logger.info(f"  MedSAM Scale 1/{scale}x: Tile {i+1}/{len(tiles)} at ({tile_x}, {tile_y})...")
+                logger.info(
+                    f"  MedSAM Scale 1/{scale}x: Tile {i+1}/{len(tiles)} at ({tile_x}, {tile_y})..."
+                )
 
                 # Get tile at this scale
                 tile = tile_getter(tile_x, tile_y, tile_size, channel, scale)
                 if tile is None:
-                    logger.info(f"  MedSAM Scale 1/{scale}x: Tile {i+1}/{len(tiles)} - skipped (no data)")
+                    logger.info(
+                        f"  MedSAM Scale 1/{scale}x: Tile {i+1}/{len(tiles)} - skipped (no data)"
+                    )
                     continue
 
                 # Convert to RGB for MedSAM (expects 3-channel)
@@ -4703,7 +4830,8 @@ class VesselStrategy(DetectionStrategy, MultiChannelFeatureMixin):
                 vessel_detections = self._filter_medsam_masks_for_vessels(
                     masks,
                     tile_rgb,
-                    tile_x, tile_y,
+                    tile_x,
+                    tile_y,
                     scale,
                     scale_pixel_size,
                     scale_params,
@@ -4712,7 +4840,10 @@ class VesselStrategy(DetectionStrategy, MultiChannelFeatureMixin):
                 # Convert to full resolution coordinates
                 for det in vessel_detections:
                     det_fullres = convert_detection_to_full_res(
-                        det, scale, tile_x, tile_y,
+                        det,
+                        scale,
+                        tile_x,
+                        tile_y,
                         smooth=self.smooth_contours,
                         smooth_base_factor=self.smooth_contours_factor,
                     )
@@ -4734,7 +4865,7 @@ class VesselStrategy(DetectionStrategy, MultiChannelFeatureMixin):
         del sam, mask_generator
         if torch.cuda.is_available():
             torch.cuda.empty_cache()
-        elif hasattr(torch, 'mps') and hasattr(torch.mps, 'empty_cache'):
+        elif hasattr(torch, "mps") and hasattr(torch.mps, "empty_cache"):
             torch.mps.empty_cache()
         gc.collect()
 
@@ -4752,19 +4883,21 @@ class VesselStrategy(DetectionStrategy, MultiChannelFeatureMixin):
             if isinstance(det_dict, Detection):
                 final_detections.append(det_dict)
             else:
-                features = det_dict.get('features', {}).copy()
-                if det_dict.get('outer') is not None:
-                    features['outer'] = det_dict.get('outer')
-                if det_dict.get('inner') is not None:
-                    features['inner'] = det_dict.get('inner')
+                features = det_dict.get("features", {}).copy()
+                if det_dict.get("outer") is not None:
+                    features["outer"] = det_dict.get("outer")
+                if det_dict.get("inner") is not None:
+                    features["inner"] = det_dict.get("inner")
 
-                final_detections.append(Detection(
-                    mask=det_dict.get('mask', np.zeros((1, 1), dtype=bool)),
-                    centroid=det_dict.get('center', det_dict.get('centroid', [0, 0])),
-                    features=features,
-                    id=det_dict.get('id', det_dict.get('mask_id')),
-                    score=det_dict.get('score', det_dict.get('confidence', 1.0)),
-                ))
+                final_detections.append(
+                    Detection(
+                        mask=det_dict.get("mask", np.zeros((1, 1), dtype=bool)),
+                        centroid=det_dict.get("center", det_dict.get("centroid", [0, 0])),
+                        features=features,
+                        id=det_dict.get("id", det_dict.get("mask_id")),
+                        score=det_dict.get("score", det_dict.get("confidence", 1.0)),
+                    )
+                )
 
         logger.info(
             f"MedSAM multi-scale detection complete: {len(final_detections)} vessels "
@@ -4775,14 +4908,14 @@ class VesselStrategy(DetectionStrategy, MultiChannelFeatureMixin):
 
     def _filter_medsam_masks_for_vessels(
         self,
-        masks: List[Dict],
+        masks: list[dict],
         tile_rgb: np.ndarray,
         tile_x: int,
         tile_y: int,
         scale: int,
         pixel_size_um: float,
-        scale_params: Dict,
-    ) -> List[Dict]:
+        scale_params: dict,
+    ) -> list[dict]:
         """
         Filter MedSAM masks for vessel ring structures.
 
@@ -4803,25 +4936,23 @@ class VesselStrategy(DetectionStrategy, MultiChannelFeatureMixin):
             List of vessel detection dicts
         """
         vessel_detections = []
-        min_diam_px = scale_params['min_diameter_um'] / pixel_size_um
-        max_diam_px = scale_params['max_diameter_um'] / pixel_size_um
+        min_diam_px = scale_params["min_diameter_um"] / pixel_size_um
+        max_diam_px = scale_params["max_diameter_um"] / pixel_size_um
         min_area_px = np.pi * (min_diam_px / 2) ** 2 * 0.5  # Allow some margin
         # Use tile-area-based max to allow large vessels (up to 90% of tile)
         tile_h, tile_w = tile_rgb.shape[:2]
         max_area_px = tile_h * tile_w * self.MAX_TILE_AREA_FRACTION
 
         for mask_info in masks:
-            mask = mask_info['segmentation'].astype(np.uint8)
-            area = mask_info['area']
+            mask = mask_info["segmentation"].astype(np.uint8)
+            area = mask_info["area"]
 
             # Size filter
             if area < min_area_px or area > max_area_px:
                 continue
 
             # Find contours to check for ring structure
-            contours, hierarchy = cv2.findContours(
-                mask, cv2.RETR_CCOMP, cv2.CHAIN_APPROX_SIMPLE
-            )
+            contours, hierarchy = cv2.findContours(mask, cv2.RETR_CCOMP, cv2.CHAIN_APPROX_SIMPLE)
 
             if len(contours) == 0:
                 continue
@@ -4865,9 +4996,9 @@ class VesselStrategy(DetectionStrategy, MultiChannelFeatureMixin):
                     for ic in inner_contours:
                         # Check if this contour is inside the outer contour
                         M = cv2.moments(ic)
-                        if M['m00'] > 0:
-                            cx = int(M['m10'] / M['m00'])
-                            cy = int(M['m01'] / M['m00'])
+                        if M["m00"] > 0:
+                            cx = int(M["m10"] / M["m00"])
+                            cy = int(M["m01"] / M["m00"])
                             if cv2.pointPolygonTest(outer_contour, (cx, cy), False) > 0:
                                 internal_holes.append(ic)
                     if internal_holes:
@@ -4892,7 +5023,7 @@ class VesselStrategy(DetectionStrategy, MultiChannelFeatureMixin):
             else:
                 # Fallback to bounding rect
                 x, y, w, h = cv2.boundingRect(outer_contour)
-                center = (x + w/2, y + h/2)
+                center = (x + w / 2, y + h / 2)
                 aspect_ratio = max(w, h) / (min(w, h) + 1e-6)
                 outer_diameter_px = (w + h) / 2
 
@@ -4904,7 +5035,7 @@ class VesselStrategy(DetectionStrategy, MultiChannelFeatureMixin):
 
             # Compute circularity
             perimeter = cv2.arcLength(outer_contour, True)
-            circularity = 4 * np.pi * outer_area / (perimeter ** 2 + 1e-6)
+            circularity = 4 * np.pi * outer_area / (perimeter**2 + 1e-6)
 
             if circularity < self.min_circularity:
                 continue
@@ -4927,29 +5058,29 @@ class VesselStrategy(DetectionStrategy, MultiChannelFeatureMixin):
 
             # Build detection dict
             detection = {
-                'id': f"medsam_{tile_x}_{tile_y}_{len(vessel_detections)}",
-                'mask_id': f"medsam_{tile_x}_{tile_y}_{len(vessel_detections)}",
-                'center': [float(center[0]), float(center[1])],
-                'centroid': [float(center[0]), float(center[1])],
-                'outer': outer_contour,
-                'inner': inner_contour,
-                'mask': mask.astype(bool),
-                'score': float(mask_info.get('predicted_iou', 0.9)),
-                'confidence': float(mask_info.get('stability_score', 0.9)),
-                'features': {
-                    'outer': outer_contour,
-                    'inner': inner_contour,
-                    'outer_diameter_um': outer_diameter_um,
-                    'inner_diameter_um': inner_diameter_um,
-                    'wall_thickness_mean_um': wall_thickness_um,
-                    'circularity': circularity,
-                    'aspect_ratio': aspect_ratio,
-                    'ring_completeness': ring_completeness,
-                    'has_ring': has_ring,
-                    'area_px': outer_area,
-                    'area_um2': outer_area * (pixel_size_um ** 2),
-                    'scale_detected': scale,
-                    'detection_method': 'medsam',
+                "id": f"medsam_{tile_x}_{tile_y}_{len(vessel_detections)}",
+                "mask_id": f"medsam_{tile_x}_{tile_y}_{len(vessel_detections)}",
+                "center": [float(center[0]), float(center[1])],
+                "centroid": [float(center[0]), float(center[1])],
+                "outer": outer_contour,
+                "inner": inner_contour,
+                "mask": mask.astype(bool),
+                "score": float(mask_info.get("predicted_iou", 0.9)),
+                "confidence": float(mask_info.get("stability_score", 0.9)),
+                "features": {
+                    "outer": outer_contour,
+                    "inner": inner_contour,
+                    "outer_diameter_um": outer_diameter_um,
+                    "inner_diameter_um": inner_diameter_um,
+                    "wall_thickness_mean_um": wall_thickness_um,
+                    "circularity": circularity,
+                    "aspect_ratio": aspect_ratio,
+                    "ring_completeness": ring_completeness,
+                    "has_ring": has_ring,
+                    "area_px": outer_area,
+                    "area_um2": outer_area * (pixel_size_um**2),
+                    "scale_detected": scale,
+                    "detection_method": "medsam",
                 },
             }
             vessel_detections.append(detection)
@@ -4959,8 +5090,8 @@ class VesselStrategy(DetectionStrategy, MultiChannelFeatureMixin):
     def create_vessel_mask(
         self,
         outer_contour: np.ndarray,
-        inner_contour: Optional[np.ndarray],
-        shape: Tuple[int, int],
+        inner_contour: np.ndarray | None,
+        shape: tuple[int, int],
     ) -> np.ndarray:
         """
         Create a wall mask from outer and inner contours.
@@ -4984,7 +5115,7 @@ class VesselStrategy(DetectionStrategy, MultiChannelFeatureMixin):
 
         return mask > 0
 
-    def get_config(self) -> Dict[str, Any]:
+    def get_config(self) -> dict[str, Any]:
         """
         Return strategy configuration including boundary detection settings.
 
@@ -4992,33 +5123,33 @@ class VesselStrategy(DetectionStrategy, MultiChannelFeatureMixin):
             Dict with all configuration parameters
         """
         base_config = {
-            'strategy': self.name,
-            'min_diameter_um': self.min_diameter_um,
-            'max_diameter_um': self.max_diameter_um,
-            'min_wall_thickness_um': self.min_wall_thickness_um,
-            'max_aspect_ratio': self.max_aspect_ratio,
-            'min_circularity': self.min_circularity,
-            'min_ring_completeness': self.min_ring_completeness,
-            'canny_low': self.canny_low,
-            'canny_high': self.canny_high,
-            'classify_vessel_types': self.classify_vessel_types,
-            'extract_deep_features': self.extract_deep_features,
-            'extract_sam2_embeddings': self.extract_sam2_embeddings,
-            'resnet_batch_size': self.resnet_batch_size,
+            "strategy": self.name,
+            "min_diameter_um": self.min_diameter_um,
+            "max_diameter_um": self.max_diameter_um,
+            "min_wall_thickness_um": self.min_wall_thickness_um,
+            "max_aspect_ratio": self.max_aspect_ratio,
+            "min_circularity": self.min_circularity,
+            "min_ring_completeness": self.min_ring_completeness,
+            "canny_low": self.canny_low,
+            "canny_high": self.canny_high,
+            "classify_vessel_types": self.classify_vessel_types,
+            "extract_deep_features": self.extract_deep_features,
+            "extract_sam2_embeddings": self.extract_sam2_embeddings,
+            "resnet_batch_size": self.resnet_batch_size,
             # Boundary detection settings
-            'enable_boundary_detection': self.enable_boundary_detection,
-            'boundary_margin_px': self.boundary_margin_px,
-            'use_tree_hierarchy': self.use_tree_hierarchy,
+            "enable_boundary_detection": self.enable_boundary_detection,
+            "boundary_margin_px": self.boundary_margin_px,
+            "use_tree_hierarchy": self.use_tree_hierarchy,
             # Cross-tile merge settings
-            'cross_tile_merge_enabled': self.cross_tile_config.enabled,
-            'cross_tile_position_tolerance_px': self.cross_tile_config.position_tolerance_px,
-            'cross_tile_orientation_tolerance_deg': self.cross_tile_config.orientation_tolerance_deg,
-            'cross_tile_curvature_threshold': self.cross_tile_config.curvature_match_threshold,
+            "cross_tile_merge_enabled": self.cross_tile_config.enabled,
+            "cross_tile_position_tolerance_px": self.cross_tile_config.position_tolerance_px,
+            "cross_tile_orientation_tolerance_deg": self.cross_tile_config.orientation_tolerance_deg,
+            "cross_tile_curvature_threshold": self.cross_tile_config.curvature_match_threshold,
             # Contour smoothing
-            'smooth_contours': self.smooth_contours,
-            'smooth_contours_factor': self.smooth_contours_factor,
-            'max_tile_area_fraction': self.MAX_TILE_AREA_FRACTION,
-            'ring_only': self.ring_only,
+            "smooth_contours": self.smooth_contours,
+            "smooth_contours_factor": self.smooth_contours_factor,
+            "max_tile_area_fraction": self.MAX_TILE_AREA_FRACTION,
+            "ring_only": self.ring_only,
         }
         return base_config
 
@@ -5027,7 +5158,7 @@ class VesselStrategy(DetectionStrategy, MultiChannelFeatureMixin):
         tile_size: int,
         overlap: int = 0,
         match_threshold: float = 0.6,
-    ) -> List[Dict[str, Any]]:
+    ) -> list[dict[str, Any]]:
         """
         Orchestrate cross-tile vessel merging AFTER all tiles have been processed.
 
@@ -5110,8 +5241,8 @@ class VesselStrategy(DetectionStrategy, MultiChannelFeatureMixin):
         # Effective tile spacing accounts for overlap
         effective_tile_step = tile_size - overlap
 
-        merged_vessels: List[Dict[str, Any]] = []
-        merged_partial_ids: Set[Tuple[Tuple[int, int], int]] = set()  # (tile_coords, idx)
+        merged_vessels: list[dict[str, Any]] = []
+        merged_partial_ids: set[tuple[tuple[int, int], int]] = set()  # (tile_coords, idx)
 
         # Collect all tile coordinates that have partial vessels
         tile_coords = list(partial_snapshot.keys())
@@ -5122,7 +5253,7 @@ class VesselStrategy(DetectionStrategy, MultiChannelFeatureMixin):
 
         # Build a lookup map of partials by their boundary edges for efficient matching
         # Key: (tile_x, tile_y, edge) -> List[(partial_idx, PartialVessel)]
-        edge_lookup: Dict[Tuple[int, int, BoundaryEdge], List[Tuple[int, PartialVessel]]] = {}
+        edge_lookup: dict[tuple[int, int, BoundaryEdge], list[tuple[int, PartialVessel]]] = {}
 
         for tile_key, partials in partial_snapshot.items():
             tile_x, tile_y = tile_key
@@ -5136,8 +5267,18 @@ class VesselStrategy(DetectionStrategy, MultiChannelFeatureMixin):
         # Define complementary edge pairs and their tile offsets
         # (edge_a, edge_b, dx, dy) means: if tile A has edge_a, look for edge_b in tile at (A.x+dx, A.y+dy)
         edge_pairs = [
-            (BoundaryEdge.RIGHT, BoundaryEdge.LEFT, effective_tile_step, 0),   # Right edge -> Left of tile to the right
-            (BoundaryEdge.BOTTOM, BoundaryEdge.TOP, 0, effective_tile_step),   # Bottom edge -> Top of tile below
+            (
+                BoundaryEdge.RIGHT,
+                BoundaryEdge.LEFT,
+                effective_tile_step,
+                0,
+            ),  # Right edge -> Left of tile to the right
+            (
+                BoundaryEdge.BOTTOM,
+                BoundaryEdge.TOP,
+                0,
+                effective_tile_step,
+            ),  # Bottom edge -> Top of tile below
         ]
 
         total_matches_found = 0
@@ -5184,10 +5325,13 @@ class VesselStrategy(DetectionStrategy, MultiChannelFeatureMixin):
 
                         # Compute match score
                         score = self._compute_match_score(
-                            partial1, partial2,
-                            tile1_x, tile1_y,
-                            tile2_x, tile2_y,
-                            tile_size  # Use original tile_size for score computation
+                            partial1,
+                            partial2,
+                            tile1_x,
+                            tile1_y,
+                            tile2_x,
+                            tile2_y,
+                            tile_size,  # Use original tile_size for score computation
                         )
 
                         if score > best_score and score >= match_threshold:
@@ -5200,15 +5344,18 @@ class VesselStrategy(DetectionStrategy, MultiChannelFeatureMixin):
 
                         # Attempt to merge
                         merged = self._merge_partial_vessels(
-                            partial1, best_match_partial,
-                            tile1_x, tile1_y,
-                            tile2_x, tile2_y,
-                            tile_size
+                            partial1,
+                            best_match_partial,
+                            tile1_x,
+                            tile1_y,
+                            tile2_x,
+                            tile2_y,
+                            tile_size,
                         )
 
                         if merged is not None:
                             # Update merge score with actual computed score
-                            merged['merge_score'] = best_score
+                            merged["merge_score"] = best_score
                             merged_vessels.append(merged)
                             total_merges_successful += 1
 
@@ -5232,7 +5379,7 @@ class VesselStrategy(DetectionStrategy, MultiChannelFeatureMixin):
 
         return merged_vessels
 
-    def get_unmerged_partials(self) -> List[Dict[str, Any]]:
+    def get_unmerged_partials(self) -> list[dict[str, Any]]:
         """
         Get partial vessels that were not merged with any adjacent tile.
 
@@ -5262,21 +5409,23 @@ class VesselStrategy(DetectionStrategy, MultiChannelFeatureMixin):
                 contour[:, 1] += tile_y
                 contour = contour.reshape(-1, 1, 2).astype(np.int32)
 
-                unmerged.append({
-                    'outer': contour,
-                    'inner': None,
-                    'all_inner': [],
-                    'tile_origin': (tile_x, tile_y),
-                    'boundary_edges': partial.boundary_edges,
-                    'is_partial': True,
-                    'is_merged': False,
-                    'features': partial.features,
-                    'orientation': partial.orientation,
-                })
+                unmerged.append(
+                    {
+                        "outer": contour,
+                        "inner": None,
+                        "all_inner": [],
+                        "tile_origin": (tile_x, tile_y),
+                        "boundary_edges": partial.boundary_edges,
+                        "is_partial": True,
+                        "is_merged": False,
+                        "features": partial.features,
+                        "orientation": partial.orientation,
+                    }
+                )
 
         return unmerged
 
-    def get_merge_statistics(self) -> Dict[str, Any]:
+    def get_merge_statistics(self) -> dict[str, Any]:
         """
         Get statistics about stored partial vessels for debugging.
 
@@ -5291,21 +5440,21 @@ class VesselStrategy(DetectionStrategy, MultiChannelFeatureMixin):
             snapshot = {k: list(v) for k, v in self._partial_vessels.items()}
 
         stats = {
-            'total_tiles': len(snapshot),
-            'total_partials': 0,
-            'partials_by_edge': {
-                'top': 0,
-                'bottom': 0,
-                'left': 0,
-                'right': 0,
+            "total_tiles": len(snapshot),
+            "total_partials": 0,
+            "partials_by_edge": {
+                "top": 0,
+                "bottom": 0,
+                "left": 0,
+                "right": 0,
             },
-            'tiles_with_partials': list(snapshot.keys()),
+            "tiles_with_partials": list(snapshot.keys()),
         }
 
         for partials in snapshot.values():
-            stats['total_partials'] += len(partials)
+            stats["total_partials"] += len(partials)
             for partial in partials:
                 for edge in partial.boundary_edges:
-                    stats['partials_by_edge'][edge.value] += 1
+                    stats["partials_by_edge"][edge.value] += 1
 
         return stats

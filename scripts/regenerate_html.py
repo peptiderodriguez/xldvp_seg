@@ -40,14 +40,14 @@ Usage:
 """
 
 import argparse
-import json
 import gc
+import json
 import sys
-from pathlib import Path
 from collections import defaultdict
+from pathlib import Path
 
-import numpy as np
 import h5py
+import numpy as np
 
 # HDF5 LZ4 support
 try:
@@ -56,26 +56,39 @@ except ImportError:
     pass
 
 import cv2
+from PIL import Image
 
-from segmentation.io.czi_loader import get_loader, get_czi_metadata
+from segmentation.io.czi_loader import get_czi_metadata, get_loader
 from segmentation.io.html_export import (
     export_samples_to_html,
-    percentile_normalize,
     image_to_base64,
+    percentile_normalize,
 )
+from segmentation.pipeline.samples import create_sample_from_detection
+from segmentation.utils.islet_utils import classify_islet_marker, compute_islet_marker_thresholds
 from segmentation.utils.json_utils import fast_json_load
 from segmentation.utils.logging import get_logger, setup_logging
-from segmentation.utils.islet_utils import classify_islet_marker, compute_islet_marker_thresholds
-from segmentation.pipeline.samples import create_sample_from_detection
-from PIL import Image
 
 logger = get_logger(__name__)
 
 
-def create_sample_from_contours(det, channel_arrays, display_channels, x_start, y_start,
-                                mosaic_h, mosaic_w, pixel_size_um, slide_name, cell_type,
-                                contour_thickness=2, max_crop_px=800, min_crop_px=300,
-                                dashed_contour=True, crop_context_factor=2.0):
+def create_sample_from_contours(
+    det,
+    channel_arrays,
+    display_channels,
+    x_start,
+    y_start,
+    mosaic_h,
+    mosaic_w,
+    pixel_size_um,
+    slide_name,
+    cell_type,
+    contour_thickness=2,
+    max_crop_px=800,
+    min_crop_px=300,
+    dashed_contour=True,
+    crop_context_factor=2.0,
+):
     """Create an HTML sample by cropping from CZI around a detection's center.
 
     Generic alternative to create_sample() — works for any cell type where detections
@@ -84,17 +97,22 @@ def create_sample_from_contours(det, channel_arrays, display_channels, x_start, 
 
     Draws contour outlines (inner/outer) if present in the detection dict.
     """
-    features = det.get('features', {})
+    features = det.get("features", {})
 
     # Get center in full-res CZI-global pixel coords
-    center = det.get('global_center')
+    center = det.get("global_center")
     if center is None or len(center) < 2:
         return None
     cx, cy = float(center[0]), float(center[1])
 
     # Determine crop size — use contour bounding box when available
     # so the entire detection (including large vessels) is always visible
-    contour_keys = ['inner_contour_global', 'outer_contour_global', 'sma_contour_global', 'contour_dilated_px']
+    contour_keys = [
+        "inner_contour_global",
+        "outer_contour_global",
+        "sma_contour_global",
+        "contour_dilated_px",
+    ]
     all_contour_pts = []
     for ck in contour_keys:
         cd = det.get(ck)
@@ -113,11 +131,11 @@ def create_sample_from_contours(det, channel_arrays, display_channels, x_start, 
         # Padding around the contour bounding box for context
         desired_crop = int(max(bbox_w, bbox_h) * crop_context_factor)
     else:
-        diameter_um = features.get('outer_diameter_um', 0)
+        diameter_um = features.get("outer_diameter_um", 0)
         if diameter_um > 0:
             desired_crop = int((diameter_um / pixel_size_um) * 2)
         else:
-            area_px = features.get('area', 0)
+            area_px = features.get("area", 0)
             if area_px > 0:
                 desired_crop = int(2 * np.sqrt(area_px / np.pi) * 2)
             else:
@@ -173,10 +191,10 @@ def create_sample_from_contours(det, channel_arrays, display_channels, x_start, 
 
     # Draw contours if available (generic: look for any *_contour_global keys)
     contour_colors = {
-        'inner_contour_global': (0, 255, 255),    # cyan — lumen
-        'outer_contour_global': (0, 255, 0),       # green — outer boundary
-        'sma_contour_global': (255, 0, 255),        # magenta — SMA ring
-        'contour_dilated_px': (0, 255, 0),          # green — dilated contour (cell pipeline)
+        "inner_contour_global": (0, 255, 255),  # cyan — lumen
+        "outer_contour_global": (0, 255, 0),  # green — outer boundary
+        "sma_contour_global": (255, 0, 255),  # magenta — SMA ring
+        "contour_dilated_px": (0, 255, 0),  # green — dilated contour (cell pipeline)
     }
     for contour_key, color in contour_colors.items():
         contour_data = det.get(contour_key)
@@ -186,8 +204,8 @@ def create_sample_from_contours(det, channel_arrays, display_channels, x_start, 
         if contour_pts.ndim != 2 or contour_pts.shape[0] < 3:
             continue
         # Shift global contour coords to crop-local: subtract (x1+x_start, y1+y_start)
-        contour_pts[:, 0] -= (x1 + x_start)
-        contour_pts[:, 1] -= (y1 + y_start)
+        contour_pts[:, 0] -= x1 + x_start
+        contour_pts[:, 1] -= y1 + y_start
         # Apply downscale factor
         if scale_factor < 1.0:
             contour_pts *= scale_factor
@@ -217,122 +235,210 @@ def create_sample_from_contours(det, channel_arrays, display_channels, x_start, 
                 for idx in range(0, len(interp_pts), cycle):
                     end = min(idx + dash_len, len(interp_pts) - 1)
                     if end > idx:
-                        cv2.line(crop_norm, tuple(interp_pts[idx]), tuple(interp_pts[end]),
-                                 color, contour_thickness)
-                        cv2.line(contour_only, tuple(interp_pts[idx]), tuple(interp_pts[end]),
-                                 color, contour_thickness)
+                        cv2.line(
+                            crop_norm,
+                            tuple(interp_pts[idx]),
+                            tuple(interp_pts[end]),
+                            color,
+                            contour_thickness,
+                        )
+                        cv2.line(
+                            contour_only,
+                            tuple(interp_pts[idx]),
+                            tuple(interp_pts[end]),
+                            color,
+                            contour_thickness,
+                        )
         else:
             cv2.drawContours(crop_norm, [contour_int], -1, color, contour_thickness)
             cv2.drawContours(contour_only, [contour_int], -1, color, contour_thickness)
 
-    uid = det.get('uid', f"{slide_name}_{cell_type}_{int(round(cx))}_{int(round(cy))}")
+    uid = det.get("uid", f"{slide_name}_{cell_type}_{int(round(cx))}_{int(round(cy))}")
     pil_img = Image.fromarray(crop_norm)
-    img_b64, mime = image_to_base64(pil_img, format='PNG')
+    img_b64, mime = image_to_base64(pil_img, format="PNG")
 
-    area_um2 = features.get('area_um2', features.get('area', 0) * (pixel_size_um ** 2))
+    area_um2 = features.get("area_um2", features.get("area", 0) * (pixel_size_um**2))
     stats = {
-        'area_um2': area_um2,
-        'area_px': features.get('area', 0),
+        "area_um2": area_um2,
+        "area_px": features.get("area", 0),
     }
-    if 'elongation' in features:
-        stats['elongation'] = features['elongation']
-    if 'sam2_iou' in features:
-        stats['confidence'] = features['sam2_iou']
-    if 'rf_prediction' in det and det['rf_prediction'] is not None:
-        stats['rf_prediction'] = det['rf_prediction']
-    if 'detection_method' in features:
-        dm = features['detection_method']
-        stats['detection_method'] = ', '.join(dm) if isinstance(dm, list) else dm
-    if 'scale_detected' in det:
-        stats['scale_detected'] = det['scale_detected']
+    if "elongation" in features:
+        stats["elongation"] = features["elongation"]
+    if "sam2_iou" in features:
+        stats["confidence"] = features["sam2_iou"]
+    if "rf_prediction" in det and det["rf_prediction"] is not None:
+        stats["rf_prediction"] = det["rf_prediction"]
+    if "detection_method" in features:
+        dm = features["detection_method"]
+        stats["detection_method"] = ", ".join(dm) if isinstance(dm, list) else dm
+    if "scale_detected" in det:
+        stats["scale_detected"] = det["scale_detected"]
     # Vessel-specific stats
-    for vk in ('ring_completeness', 'circularity', 'wall_thickness_mean_um',
-               'outer_diameter_um', 'vessel_type', 'has_sma_ring',
-               'cd31_score', 'sma_thickness_mean_um'):
+    for vk in (
+        "ring_completeness",
+        "circularity",
+        "wall_thickness_mean_um",
+        "outer_diameter_um",
+        "vessel_type",
+        "has_sma_ring",
+        "cd31_score",
+        "sma_thickness_mean_um",
+    ):
         if vk in features:
             stats[vk] = features[vk]
 
     # Clean version (no contours) for base layer
     pil_clean = Image.fromarray(crop_clean)
-    img_b64_clean, _ = image_to_base64(pil_clean, format='PNG')
+    img_b64_clean, _ = image_to_base64(pil_clean, format="PNG")
 
     # Contour-only (green on black) for overlay layer with mix-blend-mode:lighten
     pil_contour_only = Image.fromarray(contour_only)
-    img_b64_contour_only, _ = image_to_base64(pil_contour_only, format='PNG')
+    img_b64_contour_only, _ = image_to_base64(pil_contour_only, format="PNG")
 
     return {
-        'uid': uid,
-        'image': img_b64,
-        'image_clean': img_b64_clean,
-        'image_contour_only': img_b64_contour_only,
-        'mime_type': mime,
-        'stats': stats,
+        "uid": uid,
+        "image": img_b64,
+        "image_clean": img_b64_clean,
+        "image_contour_only": img_b64_contour_only,
+        "mime_type": mime,
+        "stats": stats,
     }
 
 
 def main():
     parser = argparse.ArgumentParser(
-        description='Regenerate HTML from existing detections (all cell types)')
+        description="Regenerate HTML from existing detections (all cell types)"
+    )
 
     # Required
-    parser.add_argument('--output-dir', required=True,
-                        help='Path to existing run output directory (contains tiles/ and *_detections.json)')
-    parser.add_argument('--czi-path', required=True,
-                        help='Path to CZI file')
+    parser.add_argument(
+        "--output-dir",
+        required=True,
+        help="Path to existing run output directory (contains tiles/ and *_detections.json)",
+    )
+    parser.add_argument("--czi-path", required=True, help="Path to CZI file")
 
     # General
-    parser.add_argument('--detections', default=None,
-                        help='Path to detections JSON file (overrides auto-detection from output-dir)')
-    parser.add_argument('--cell-type', default=None,
-                        help='Cell type (auto-detected from detections filename if omitted)')
-    parser.add_argument('--display-channels', default=None,
-                        help='Comma-separated channel indices for R,G,B display (default: auto)')
-    parser.add_argument('--channels', default=None,
-                        help='Comma-separated channel indices to load (default: auto from display-channels)')
-    parser.add_argument('--scene', type=int, default=0,
-                        help='CZI scene index (default: 0)')
-    parser.add_argument('--tile-size', type=int, default=None,
-                        help='Tile size used during detection (auto-detected from masks if omitted)')
-    parser.add_argument('--pixel-size', type=float, default=None,
-                        help='Pixel size in um (auto-detected from CZI if not specified)')
-    parser.add_argument('--max-samples', type=int, default=0,
-                        help='Max HTML samples to generate (0=all, default: 0)')
-    parser.add_argument('--samples-per-page', type=int, default=300,
-                        help='Samples per HTML page (default: 300)')
-    parser.add_argument('--sort-by', default='area',
-                        help='Sort key: area, rf_prediction, elongation, confidence (default: area)')
-    parser.add_argument('--sort-order', default='asc',
-                        help='Sort order: asc or desc (default: asc)')
-    parser.add_argument('--contour-thickness', type=int, default=2,
-                        help='Contour line thickness (default: 2)')
-    parser.add_argument('--dashed-contour', action='store_true',
-                        help='Draw dashed black/white contour outlines (visible on any background)')
-    parser.add_argument('--score-threshold', type=float, default=0.0,
-                        help='Min rf_prediction to show (default: 0.0 = all)')
-    parser.add_argument('--crop-context-factor', type=float, default=2.0,
-                        help='Crop size as multiple of mask bounding box '
-                        '(default: 2.0 = 2x mask size). Use sqrt(N) for Nx area context, '
-                        'e.g. 2.74 for 7.5x area context.')
-    parser.add_argument('--prior-annotations', default=None,
-                        help='Path to prior annotations JSON (pre-loaded into HTML localStorage)')
-    parser.add_argument('--html-dir', default=None,
-                        help='Custom HTML output directory (default: <output-dir>/html)')
+    parser.add_argument(
+        "--detections",
+        default=None,
+        help="Path to detections JSON file (overrides auto-detection from output-dir)",
+    )
+    parser.add_argument(
+        "--cell-type",
+        default=None,
+        help="Cell type (auto-detected from detections filename if omitted)",
+    )
+    parser.add_argument(
+        "--display-channels",
+        default=None,
+        help="Comma-separated channel indices for R,G,B display (default: auto)",
+    )
+    parser.add_argument(
+        "--channels",
+        default=None,
+        help="Comma-separated channel indices to load (default: auto from display-channels)",
+    )
+    parser.add_argument("--scene", type=int, default=0, help="CZI scene index (default: 0)")
+    parser.add_argument(
+        "--tile-size",
+        type=int,
+        default=None,
+        help="Tile size used during detection (auto-detected from masks if omitted)",
+    )
+    parser.add_argument(
+        "--pixel-size",
+        type=float,
+        default=None,
+        help="Pixel size in um (auto-detected from CZI if not specified)",
+    )
+    parser.add_argument(
+        "--max-samples",
+        type=int,
+        default=0,
+        help="Max HTML samples to generate (0=all, default: 0)",
+    )
+    parser.add_argument(
+        "--samples-per-page", type=int, default=300, help="Samples per HTML page (default: 300)"
+    )
+    parser.add_argument(
+        "--sort-by",
+        default="area",
+        help="Sort key: area, rf_prediction, elongation, confidence (default: area)",
+    )
+    parser.add_argument(
+        "--sort-order", default="asc", help="Sort order: asc or desc (default: asc)"
+    )
+    parser.add_argument(
+        "--contour-thickness", type=int, default=2, help="Contour line thickness (default: 2)"
+    )
+    parser.add_argument(
+        "--dashed-contour",
+        action="store_true",
+        help="Draw dashed black/white contour outlines (visible on any background)",
+    )
+    parser.add_argument(
+        "--score-threshold",
+        type=float,
+        default=0.0,
+        help="Min rf_prediction to show (default: 0.0 = all)",
+    )
+    parser.add_argument(
+        "--crop-context-factor",
+        type=float,
+        default=2.0,
+        help="Crop size as multiple of mask bounding box "
+        "(default: 2.0 = 2x mask size). Use sqrt(N) for Nx area context, "
+        "e.g. 2.74 for 7.5x area context.",
+    )
+    parser.add_argument(
+        "--prior-annotations",
+        default=None,
+        help="Path to prior annotations JSON (pre-loaded into HTML localStorage)",
+    )
+    parser.add_argument(
+        "--html-dir", default=None, help="Custom HTML output directory (default: <output-dir>/html)"
+    )
 
     # Vessel-specific
-    parser.add_argument('--vessel-quality-filter', action='store_true', default=False,
-                        help='Apply vessel quality filter (ring>=0.30, circ>=0.15, wall>=1.5um)')
+    parser.add_argument(
+        "--vessel-quality-filter",
+        action="store_true",
+        default=False,
+        help="Apply vessel quality filter (ring>=0.30, circ>=0.15, wall>=1.5um)",
+    )
 
     # Islet-specific
-    parser.add_argument('--islet-marker-channels', type=str, default='gcg:2,ins:3,sst:5',
-                        help='Marker-to-channel mapping for islet classification (default: gcg:2,ins:3,sst:5)')
-    parser.add_argument('--gmm-p-cutoff', type=float, default=0.75,
-                        help='GMM posterior probability cutoff for marker classification (default: 0.75)')
-    parser.add_argument('--ratio-min', type=float, default=1.5,
-                        help='Dominant marker must be >= ratio_min * runner-up (default: 1.5)')
-    parser.add_argument('--marker-top-pct', type=float, default=5,
-                        help='For percentile-method channels, top N%% as positive (default: 5)')
-    parser.add_argument('--marker-pct-channels', type=str, default='sst',
-                        help='Comma-separated marker names using percentile thresholding (default: sst)')
+    parser.add_argument(
+        "--islet-marker-channels",
+        type=str,
+        default="gcg:2,ins:3,sst:5",
+        help="Marker-to-channel mapping for islet classification (default: gcg:2,ins:3,sst:5)",
+    )
+    parser.add_argument(
+        "--gmm-p-cutoff",
+        type=float,
+        default=0.75,
+        help="GMM posterior probability cutoff for marker classification (default: 0.75)",
+    )
+    parser.add_argument(
+        "--ratio-min",
+        type=float,
+        default=1.5,
+        help="Dominant marker must be >= ratio_min * runner-up (default: 1.5)",
+    )
+    parser.add_argument(
+        "--marker-top-pct",
+        type=float,
+        default=5,
+        help="For percentile-method channels, top N%% as positive (default: 5)",
+    )
+    parser.add_argument(
+        "--marker-pct-channels",
+        type=str,
+        default="sst",
+        help="Comma-separated marker names using percentile thresholding (default: sst)",
+    )
 
     args = parser.parse_args()
     setup_logging(level="INFO")
@@ -354,14 +460,14 @@ def main():
         det_files = list(output_dir.glob("*_detections.json"))
         if det_files:
             # Parse cell type from filename: {cell_type}_detections.json
-            cell_type = det_files[0].stem.replace('_detections', '')
+            cell_type = det_files[0].stem.replace("_detections", "")
             logger.info(f"Auto-detected cell type: {cell_type}")
         else:
             logger.error("No detections JSON found and no --cell-type specified")
             sys.exit(1)
 
     # Load pipeline config if available
-    config_file = output_dir / 'pipeline_config.json'
+    config_file = output_dir / "pipeline_config.json"
     pipeline_config = {}
     if config_file.exists():
         with open(config_file) as f:
@@ -370,23 +476,23 @@ def main():
 
     # Resolve display channels
     if args.display_channels:
-        display_channels = [int(x.strip()) for x in args.display_channels.split(',')]
-    elif 'display_channels' in pipeline_config:
-        display_channels = pipeline_config['display_channels']
+        display_channels = [int(x.strip()) for x in args.display_channels.split(",")]
+    elif "display_channels" in pipeline_config:
+        display_channels = pipeline_config["display_channels"]
         logger.info(f"Using display channels from pipeline config: {display_channels}")
-    elif cell_type == 'islet':
+    elif cell_type == "islet":
         display_channels = [2, 3, 5]
-    elif cell_type == 'tissue_pattern':
+    elif cell_type == "tissue_pattern":
         display_channels = [1, 2, 0]
     else:
         display_channels = [0, 1, 2]
 
     # Resolve tile size
-    tile_size = args.tile_size or pipeline_config.get('tile_size', 4000)
+    tile_size = args.tile_size or pipeline_config.get("tile_size", 4000)
 
     # Determine channels to load
     if args.channels:
-        channels_to_load = [int(x.strip()) for x in args.channels.split(',')]
+        channels_to_load = [int(x.strip()) for x in args.channels.split(",")]
     else:
         channels_to_load = sorted(set(display_channels))
 
@@ -404,7 +510,7 @@ def main():
                 det_file = multiscale_file
             else:
                 det_files = list(output_dir.glob("*_detections*.json"))
-                det_files = [f for f in det_files if 'checkpoint' not in f.name]
+                det_files = [f for f in det_files if "checkpoint" not in f.name]
                 if det_files:
                     det_file = det_files[0]
                 else:
@@ -416,16 +522,16 @@ def main():
     logger.info(f"Loaded {len(all_detections):,} detections")
 
     # Apply vessel quality filter
-    if args.vessel_quality_filter and cell_type == 'vessel':
+    if args.vessel_quality_filter and cell_type == "vessel":
         pre_filter = len(all_detections)
         filtered = []
         for det in all_detections:
-            feat = det.get('features', {})
-            if feat.get('ring_completeness', 1.0) < 0.30:
+            feat = det.get("features", {})
+            if feat.get("ring_completeness", 1.0) < 0.30:
                 continue
-            if feat.get('circularity', 1.0) < 0.15:
+            if feat.get("circularity", 1.0) < 0.15:
                 continue
-            wt = feat.get('wall_thickness_mean_um')
+            wt = feat.get("wall_thickness_mean_um")
             if wt is not None and wt < 1.5:
                 continue
             filtered.append(det)
@@ -435,16 +541,24 @@ def main():
     # Score threshold filter (rf_prediction)
     if args.score_threshold > 0:
         pre_filter = len(all_detections)
-        all_detections = [d for d in all_detections
-                          if (d.get('rf_prediction') is not None
-                              and d.get('rf_prediction') >= args.score_threshold)
-                          or d.get('rf_prediction') is None]  # keep unscored
-        logger.info(f"Score filter (>= {args.score_threshold}): {pre_filter:,} -> {len(all_detections):,}")
+        all_detections = [
+            d
+            for d in all_detections
+            if (
+                d.get("rf_prediction") is not None
+                and d.get("rf_prediction") >= args.score_threshold
+            )
+            or d.get("rf_prediction") is None
+        ]  # keep unscored
+        logger.info(
+            f"Score filter (>= {args.score_threshold}): {pre_filter:,} -> {len(all_detections):,}"
+        )
 
     # Sample if needed
     if args.max_samples > 0 and len(all_detections) > args.max_samples:
         indices = np.random.default_rng(42).choice(
-            len(all_detections), args.max_samples, replace=False)
+            len(all_detections), args.max_samples, replace=False
+        )
         sampled = [all_detections[i] for i in indices]
         logger.info(f"Sampled {len(sampled):,} / {len(all_detections):,} detections for HTML")
     else:
@@ -462,7 +576,7 @@ def main():
         # Group sampled detections by tile for tile+mask mode
         tile_groups = defaultdict(list)
         for det in sampled:
-            to = det.get('tile_origin')
+            to = det.get("tile_origin")
             if to is None:
                 continue
             tile_key = f"tile_{to[0]}_{to[1]}"
@@ -471,8 +585,7 @@ def main():
 
     # Load CZI channels to RAM
     logger.info(f"Loading CZI channels {channels_to_load} to RAM...")
-    loader = get_loader(czi_path, load_to_ram=True, channel=channels_to_load[0],
-                        scene=args.scene)
+    loader = get_loader(czi_path, load_to_ram=True, channel=channels_to_load[0], scene=args.scene)
     x_start = loader.x_start
     y_start = loader.y_start
     mosaic_w = loader.width
@@ -481,7 +594,9 @@ def main():
 
     channel_arrays = {}
     channel_arrays[channels_to_load[0]] = loader.get_channel_data(channels_to_load[0])
-    logger.info(f"  Channel {channels_to_load[0]} loaded: {channel_arrays[channels_to_load[0]].nbytes / 1e9:.1f} GB")
+    logger.info(
+        f"  Channel {channels_to_load[0]} loaded: {channel_arrays[channels_to_load[0]].nbytes / 1e9:.1f} GB"
+    )
 
     for ch in channels_to_load[1:]:
         get_loader(czi_path, load_to_ram=True, channel=ch, scene=args.scene)
@@ -491,28 +606,37 @@ def main():
     # Islet marker thresholds
     marker_thresholds = None
     marker_map = None
-    if cell_type == 'islet':
+    if cell_type == "islet":
         marker_map = {}
-        for pair in args.islet_marker_channels.split(','):
-            name, ch = pair.strip().split(':')
+        for pair in args.islet_marker_channels.split(","):
+            name, ch = pair.strip().split(":")
             marker_map[name.strip()] = int(ch.strip())
 
-        _pct_channels = set(s.strip() for s in args.marker_pct_channels.split(',')) if args.marker_pct_channels else set()
-        marker_thresholds = compute_islet_marker_thresholds(
-            all_detections,
-            marker_map=marker_map,
-            marker_top_pct=args.marker_top_pct,
-            pct_channels=_pct_channels,
-            gmm_p_cutoff=args.gmm_p_cutoff,
-            ratio_min=args.ratio_min,
-        ) if all_detections else None
+        _pct_channels = (
+            set(s.strip() for s in args.marker_pct_channels.split(","))
+            if args.marker_pct_channels
+            else set()
+        )
+        marker_thresholds = (
+            compute_islet_marker_thresholds(
+                all_detections,
+                marker_map=marker_map,
+                marker_top_pct=args.marker_top_pct,
+                pct_channels=_pct_channels,
+                gmm_p_cutoff=args.gmm_p_cutoff,
+                ratio_min=args.ratio_min,
+            )
+            if all_detections
+            else None
+        )
 
         if marker_thresholds:
             counts = {}
             for det in all_detections:
                 mc, _ = classify_islet_marker(
-                    det.get('features', {}), marker_thresholds, marker_map=marker_map)
-                det['marker_class'] = mc
+                    det.get("features", {}), marker_thresholds, marker_map=marker_map
+                )
+                det["marker_class"] = mc
                 counts[mc] = counts.get(mc, 0) + 1
             logger.info(f"Islet marker classification: {counts}")
 
@@ -522,16 +646,16 @@ def main():
         meta = get_czi_metadata(czi_path, scene=args.scene)
 
         def _ch_label(idx):
-            for ch in meta['channels']:
-                if ch['index'] == idx:
-                    em = f" ({ch['emission_nm']:.0f}nm)" if ch.get('emission_nm') else ''
+            for ch in meta["channels"]:
+                if ch["index"] == idx:
+                    em = f" ({ch['emission_nm']:.0f}nm)" if ch.get("emission_nm") else ""
                     return f"{ch['name']}{em}"
-            return f'Ch{idx}'
+            return f"Ch{idx}"
 
         channel_legend = {
-            'red': _ch_label(display_channels[0]) if len(display_channels) > 0 else 'none',
-            'green': _ch_label(display_channels[1]) if len(display_channels) > 1 else 'none',
-            'blue': _ch_label(display_channels[2]) if len(display_channels) > 2 else 'none',
+            "red": _ch_label(display_channels[0]) if len(display_channels) > 0 else "none",
+            "green": _ch_label(display_channels[1]) if len(display_channels) > 1 else "none",
+            "blue": _ch_label(display_channels[2]) if len(display_channels) > 2 else "none",
         }
         logger.info(f"Channel legend: {channel_legend}")
     except Exception as e:
@@ -547,24 +671,33 @@ def main():
     if use_contour_mode:
         # ---- Contour mode: crop directly from CZI around each detection ----
         # Parallelize with ThreadPool (I/O + numpy, releases GIL)
-        from concurrent.futures import ThreadPoolExecutor
         import os
-        n_workers = min(int(os.environ.get('SLURM_CPUS_PER_TASK', os.cpu_count() or 1)), 32)
+        from concurrent.futures import ThreadPoolExecutor
+
+        n_workers = min(int(os.environ.get("SLURM_CPUS_PER_TASK", os.cpu_count() or 1)), 32)
         logger.info(f"Using {n_workers} threads for contour crop generation")
 
         def _make_sample(det):
             return create_sample_from_contours(
-                det, channel_arrays, display_channels,
-                x_start, y_start, mosaic_h, mosaic_w,
-                pixel_size_um, slide_name, cell_type,
+                det,
+                channel_arrays,
+                display_channels,
+                x_start,
+                y_start,
+                mosaic_h,
+                mosaic_w,
+                pixel_size_um,
+                slide_name,
+                cell_type,
                 contour_thickness=args.contour_thickness,
                 dashed_contour=args.dashed_contour,
                 crop_context_factor=args.crop_context_factor,
             )
 
         with ThreadPoolExecutor(max_workers=n_workers) as pool:
-            results = list(tqdm(pool.map(_make_sample, sampled),
-                                total=len(sampled), desc="Detections"))
+            results = list(
+                tqdm(pool.map(_make_sample, sampled), total=len(sampled), desc="Detections")
+            )
         all_samples = [s for s in results if s is not None]
         tiles_processed = len(sampled)  # each detection is its own "tile"
 
@@ -579,11 +712,11 @@ def main():
                 continue
 
             # Load masks
-            with h5py.File(mask_file, 'r') as hf:
-                if 'masks' in hf:
-                    masks = hf['masks'][:]
-                elif 'labels' in hf:
-                    masks = hf['labels'][:]
+            with h5py.File(mask_file, "r") as hf:
+                if "masks" in hf:
+                    masks = hf["masks"][:]
+                elif "labels" in hf:
+                    masks = hf["labels"][:]
                 else:
                     logger.warning(f"No masks dataset in {mask_file}")
                     continue
@@ -591,7 +724,7 @@ def main():
                     masks = masks[0]
 
             # Parse tile origin from first detection
-            tile_origin = tile_dets[0].get('tile_origin', [0, 0])
+            tile_origin = tile_dets[0].get("tile_origin", [0, 0])
             tile_x, tile_y = tile_origin[0], tile_origin[1]
 
             # Extract tile RGB directly from channel arrays
@@ -602,7 +735,8 @@ def main():
             for ch_idx in display_channels[:3]:
                 if ch_idx in channel_arrays:
                     rgb_channels.append(
-                        channel_arrays[ch_idx][rel_ty:rel_ty+tile_h, rel_tx:rel_tx+tile_w])
+                        channel_arrays[ch_idx][rel_ty : rel_ty + tile_h, rel_tx : rel_tx + tile_w]
+                    )
                 else:
                     _dtype = next(iter(channel_arrays.values())).dtype
                     rgb_channels.append(np.zeros((tile_h, tile_w), dtype=_dtype))
@@ -611,15 +745,21 @@ def main():
             tile_rgb = np.stack(rgb_channels, axis=-1)
 
             # Generate crop for each detection in this tile
-            tile_origin = tile_dets[0].get('tile_origin', [tile_x, tile_y])
+            tile_origin = tile_dets[0].get("tile_origin", [tile_x, tile_y])
             for det in tile_dets:
                 sample = create_sample_from_detection(
-                    tile_origin[0], tile_origin[1], tile_rgb, masks, det,
-                    pixel_size_um, slide_name, cell_type=cell_type,
+                    tile_origin[0],
+                    tile_origin[1],
+                    tile_rgb,
+                    masks,
+                    det,
+                    pixel_size_um,
+                    slide_name,
+                    cell_type=cell_type,
                     marker_thresholds=marker_thresholds,
                     marker_map=marker_map,
                     contour_thickness=args.contour_thickness,
-                    image_format='PNG',
+                    image_format="PNG",
                     dashed_contour=args.dashed_contour,
                 )
                 if sample:
@@ -634,24 +774,25 @@ def main():
 
     # Sort
     sort_key = args.sort_by
-    reverse = (args.sort_order == 'desc')
-    if sort_key == 'rf_prediction':
-        all_samples.sort(key=lambda x: x['stats'].get('rf_prediction') or 0, reverse=reverse)
-    elif sort_key == 'area':
-        all_samples.sort(key=lambda x: x['stats'].get('area_um2', 0), reverse=reverse)
-    elif sort_key == 'elongation':
-        all_samples.sort(key=lambda x: x['stats'].get('elongation', 0), reverse=reverse)
-    elif sort_key == 'confidence':
-        all_samples.sort(key=lambda x: x['stats'].get('confidence', 0), reverse=reverse)
+    reverse = args.sort_order == "desc"
+    if sort_key == "rf_prediction":
+        all_samples.sort(key=lambda x: x["stats"].get("rf_prediction") or 0, reverse=reverse)
+    elif sort_key == "area":
+        all_samples.sort(key=lambda x: x["stats"].get("area_um2", 0), reverse=reverse)
+    elif sort_key == "elongation":
+        all_samples.sort(key=lambda x: x["stats"].get("elongation", 0), reverse=reverse)
+    elif sort_key == "confidence":
+        all_samples.sort(key=lambda x: x["stats"].get("confidence", 0), reverse=reverse)
     else:
-        all_samples.sort(key=lambda x: x['stats'].get(sort_key, 0), reverse=reverse)
+        all_samples.sort(key=lambda x: x["stats"].get(sort_key, 0), reverse=reverse)
 
     # Build classifier subtitle for HTML header
     clf_subtitle = None
     from segmentation.utils.classifier_registry import extract_classifier_info
+
     _scored, _prov, _clf_info = extract_classifier_info(all_detections)
     if _scored > 0 and _clf_info:
-        _f1 = _clf_info.get('cv_f1')
+        _f1 = _clf_info.get("cv_f1")
         _f1_str = f", F1={_f1:.3f}" if _f1 else ""
         clf_subtitle = f"Classifier: {_clf_info.get('classifier_name', 'unknown')}{_f1_str}"
     elif _scored > 0:
@@ -667,7 +808,7 @@ def main():
         samples_per_page=args.samples_per_page,
         title=f"{cell_type.upper()} Annotation Review (regenerated)",
         subtitle=clf_subtitle,
-        page_prefix=f'{cell_type}_page',
+        page_prefix=f"{cell_type}_page",
         experiment_name=experiment_name,
         file_name=f"{slide_name}.czi",
         pixel_size_um=pixel_size_um,
@@ -678,9 +819,11 @@ def main():
     )
 
     logger.info(f"HTML exported to {html_dir}")
-    logger.info(f"  {len(all_samples):,} samples, "
-                f"{(len(all_samples) + args.samples_per_page - 1) // args.samples_per_page} pages")
+    logger.info(
+        f"  {len(all_samples):,} samples, "
+        f"{(len(all_samples) + args.samples_per_page - 1) // args.samples_per_page} pages"
+    )
 
 
-if __name__ == '__main__':
+if __name__ == "__main__":
     main()

@@ -12,17 +12,18 @@ results when channel normalization differs between Cellpose and SAM2 inputs.
 """
 
 import gc
-import numpy as np
-from typing import Dict, Any, List, Tuple
-from scipy import ndimage
+from typing import Any
 
-from .base import DetectionStrategy, Detection, _safe_to_uint8
-from .mixins import MultiChannelFeatureMixin
+import numpy as np
+
 from segmentation.detection.registry import register_strategy
-from segmentation.utils.logging import get_logger
 from segmentation.utils.feature_extraction import (
     extract_morphological_features,
 )
+from segmentation.utils.logging import get_logger
+
+from .base import Detection, DetectionStrategy, _safe_to_uint8
+from .mixins import MultiChannelFeatureMixin
 
 logger = get_logger(__name__)
 
@@ -59,7 +60,7 @@ class CellStrategy(DetectionStrategy, MultiChannelFeatureMixin):
         extract_deep_features: bool = False,
         extract_sam2_embeddings: bool = True,
         resnet_batch_size: int = 32,
-        cellpose_input_channels: list = None
+        cellpose_input_channels: list = None,
     ):
         """
         Initialize cell detection strategy.
@@ -114,10 +115,10 @@ class CellStrategy(DetectionStrategy, MultiChannelFeatureMixin):
     def segment(
         self,
         tile: np.ndarray,
-        models: Dict[str, Any],
-        extra_channels: Dict[int, np.ndarray] = None,
-        **kwargs
-    ) -> List[np.ndarray]:
+        models: dict[str, Any],
+        extra_channels: dict[int, np.ndarray] = None,
+        **kwargs,
+    ) -> list[np.ndarray]:
         """
         Generate cell masks using Cellpose-SAM (cpsam).
 
@@ -133,7 +134,7 @@ class CellStrategy(DetectionStrategy, MultiChannelFeatureMixin):
         Returns:
             List of boolean masks
         """
-        cellpose = models.get('cellpose')
+        cellpose = models.get("cellpose")
         if cellpose is None:
             raise RuntimeError("Cellpose model required for cell detection")
 
@@ -147,12 +148,16 @@ class CellStrategy(DetectionStrategy, MultiChannelFeatureMixin):
                 nuc_u8 = self._percentile_normalize_single(nuc_ch)
                 cp_tile = np.stack([cyto_u8, nuc_u8], axis=-1)
                 cellpose_masks, _, _ = cellpose.eval(cp_tile, channels=[1, 2])
-                logger.info(f"Cellpose 2-channel: cyto=ch{cyto_idx}, nuc=ch{nuc_idx}, "
-                            f"found {len(np.unique(cellpose_masks)) - 1} cells")
+                logger.info(
+                    f"Cellpose 2-channel: cyto=ch{cyto_idx}, nuc=ch{nuc_idx}, "
+                    f"found {len(np.unique(cellpose_masks)) - 1} cells"
+                )
             else:
-                logger.warning(f"Cellpose 2-channel requested but ch{cyto_idx} or ch{nuc_idx} "
-                               f"not in extra_channels (keys: {list(extra_channels.keys())}). "
-                               f"Falling back to grayscale.")
+                logger.warning(
+                    f"Cellpose 2-channel requested but ch{cyto_idx} or ch{nuc_idx} "
+                    f"not in extra_channels (keys: {list(extra_channels.keys())}). "
+                    f"Falling back to grayscale."
+                )
                 cellpose_masks = self._grayscale_cellpose_eval(tile, cellpose)
         else:
             cellpose_masks = self._grayscale_cellpose_eval(tile, cellpose)
@@ -172,11 +177,8 @@ class CellStrategy(DetectionStrategy, MultiChannelFeatureMixin):
         return masks
 
     def filter(
-        self,
-        masks: List[np.ndarray],
-        features: List[Dict[str, Any]],
-        pixel_size_um: float
-    ) -> List[Detection]:
+        self, masks: list[np.ndarray], features: list[dict[str, Any]], pixel_size_um: float
+    ) -> list[Detection]:
         """
         Filter cell candidates by size.
 
@@ -191,7 +193,7 @@ class CellStrategy(DetectionStrategy, MultiChannelFeatureMixin):
         if not masks:
             return []
 
-        pixel_area_um2 = pixel_size_um ** 2
+        pixel_area_um2 = pixel_size_um**2
         min_area_px = self.min_area_um / pixel_area_um2
         max_area_px = self.max_area_um / pixel_area_um2
 
@@ -204,32 +206,34 @@ class CellStrategy(DetectionStrategy, MultiChannelFeatureMixin):
                 continue
 
             # Get centroid
-            centroid = feat.get('centroid', [0, 0])
+            centroid = feat.get("centroid", [0, 0])
 
             # Compute area in microns
             area_um2 = area_px * pixel_area_um2
 
             # Add computed area to features
-            feat['area_um2'] = area_um2
+            feat["area_um2"] = area_um2
 
-            detections.append(Detection(
-                mask=mask,
-                centroid=centroid,
-                features=feat,
-                id=f'{self.name}_{i}',
-                score=feat.get('sam2_score')  # None when no classifier; avoids solidity alias
-            ))
+            detections.append(
+                Detection(
+                    mask=mask,
+                    centroid=centroid,
+                    features=feat,
+                    id=f"{self.name}_{i}",
+                    score=feat.get("sam2_score"),  # None when no classifier; avoids solidity alias
+                )
+            )
 
         return detections
 
     def detect(
         self,
         tile: np.ndarray,
-        models: Dict[str, Any],
+        models: dict[str, Any],
         pixel_size_um: float,
         extract_features: bool = True,
-        extra_channels: Dict[int, np.ndarray] = None
-    ) -> Tuple[np.ndarray, List[Detection]]:
+        extra_channels: dict[int, np.ndarray] = None,
+    ) -> tuple[np.ndarray, list[Detection]]:
         """
         Complete cell detection pipeline with full feature extraction.
 
@@ -253,9 +257,20 @@ class CellStrategy(DetectionStrategy, MultiChannelFeatureMixin):
         import torch
 
         # Get models
-        cellpose = models.get('cellpose')
-        sam2_predictor = models.get('sam2_predictor')
-        device = models.get('device', torch.device('cuda' if torch.cuda.is_available() else ('mps' if hasattr(torch.backends, 'mps') and torch.backends.mps.is_available() else 'cpu')))
+        cellpose = models.get("cellpose")
+        sam2_predictor = models.get("sam2_predictor")
+        device = models.get(
+            "device",
+            torch.device(
+                "cuda"
+                if torch.cuda.is_available()
+                else (
+                    "mps"
+                    if hasattr(torch.backends, "mps") and torch.backends.mps.is_available()
+                    else "cpu"
+                )
+            ),
+        )
 
         if cellpose is None:
             raise RuntimeError("Cellpose model required for cell detection")
@@ -314,7 +329,9 @@ class CellStrategy(DetectionStrategy, MultiChannelFeatureMixin):
 
             # Extract per-channel features if extra_channels provided
             if extra_channels is not None:
-                channels_dict = {f'ch{k}': v for k, v in sorted(extra_channels.items()) if v is not None}
+                channels_dict = {
+                    f"ch{k}": v for k, v in sorted(extra_channels.items()) if v is not None
+                }
                 multichannel_feats = self.extract_multichannel_features(mask, channels_dict)
                 feat.update(multichannel_feats)
 
@@ -323,17 +340,17 @@ class CellStrategy(DetectionStrategy, MultiChannelFeatureMixin):
             if len(ys) == 0:
                 continue
             cx_val, cy_val = float(np.mean(xs)), float(np.mean(ys))
-            feat['centroid'] = [cx_val, cy_val]
+            feat["centroid"] = [cx_val, cy_val]
 
             # SAM2 embeddings (256D) — embedding extraction only, no re-segmentation
             if self.extract_sam2_embeddings and sam2_predictor is not None:
                 sam2_emb = self._extract_sam2_embedding(sam2_predictor, cy_val, cx_val)
                 for i, v in enumerate(sam2_emb):
-                    feat[f'sam2_{i}'] = float(v)
+                    feat[f"sam2_{i}"] = float(v)
             elif self.extract_sam2_embeddings:
                 logger.warning("SAM2 predictor unavailable - zero-filling 256D embeddings")
                 for i in range(256):
-                    feat[f'sam2_{i}'] = 0.0
+                    feat[f"sam2_{i}"] = 0.0
 
             # Prepare crops for batch ResNet/DINOv2 processing (masked + context)
             if self.extract_deep_features:
@@ -341,49 +358,53 @@ class CellStrategy(DetectionStrategy, MultiChannelFeatureMixin):
                 if len(ys) > 0:
                     y1, y2 = ys.min(), ys.max()
                     x1, x2 = xs.min(), xs.max()
-                    crop_context = tile[y1:y2+1, x1:x2+1].copy()
+                    crop_context = tile[y1 : y2 + 1, x1 : x2 + 1].copy()
                     crop_masked = crop_context.copy()
-                    crop_mask = mask[y1:y2+1, x1:x2+1]
+                    crop_mask = mask[y1 : y2 + 1, x1 : x2 + 1]
                     crop_masked[~crop_mask] = 0
 
                     crops_for_resnet.append(crop_masked)
                     crops_for_resnet_context.append(crop_context)
                     crop_indices.append(len(valid_detections))
 
-            valid_detections.append({
-                'mask': mask,
-                'centroid': [cx_val, cy_val],  # [x, y]
-                'features': feat
-            })
+            valid_detections.append(
+                {"mask": mask, "centroid": [cx_val, cy_val], "features": feat}  # [x, y]
+            )
 
         # Batch deep feature extraction (ResNet + DINOv2, masked + context)
         if self.extract_deep_features:
-            resnet = models.get('resnet')
-            resnet_transform = models.get('resnet_transform')
+            resnet = models.get("resnet")
+            resnet_transform = models.get("resnet_transform")
 
             # ResNet masked
             if crops_for_resnet and resnet is not None and resnet_transform is not None:
                 resnet_features = self._extract_resnet_features_batch(
-                    crops_for_resnet, resnet, resnet_transform, device,
-                    batch_size=self.resnet_batch_size
+                    crops_for_resnet,
+                    resnet,
+                    resnet_transform,
+                    device,
+                    batch_size=self.resnet_batch_size,
                 )
                 for crop_idx, resnet_feat in zip(crop_indices, resnet_features):
                     for i, v in enumerate(resnet_feat):
-                        valid_detections[crop_idx]['features'][f'resnet_{i}'] = float(v)
+                        valid_detections[crop_idx]["features"][f"resnet_{i}"] = float(v)
 
             # ResNet context
             if crops_for_resnet_context and resnet is not None and resnet_transform is not None:
                 resnet_ctx_features = self._extract_resnet_features_batch(
-                    crops_for_resnet_context, resnet, resnet_transform, device,
-                    batch_size=self.resnet_batch_size
+                    crops_for_resnet_context,
+                    resnet,
+                    resnet_transform,
+                    device,
+                    batch_size=self.resnet_batch_size,
                 )
                 for crop_idx, resnet_feat in zip(crop_indices, resnet_ctx_features):
                     for i, v in enumerate(resnet_feat):
-                        valid_detections[crop_idx]['features'][f'resnet_ctx_{i}'] = float(v)
+                        valid_detections[crop_idx]["features"][f"resnet_ctx_{i}"] = float(v)
 
             # DINOv2 masked + context
-            dinov2 = models.get('dinov2')
-            dinov2_transform = models.get('dinov2_transform')
+            dinov2 = models.get("dinov2")
+            dinov2_transform = models.get("dinov2_transform")
 
             if crops_for_resnet and dinov2 is not None and dinov2_transform is not None:
                 dinov2_masked = self._extract_dinov2_features_batch(
@@ -391,14 +412,14 @@ class CellStrategy(DetectionStrategy, MultiChannelFeatureMixin):
                 )
                 for crop_idx, dino_feat in zip(crop_indices, dinov2_masked):
                     for i, v in enumerate(dino_feat):
-                        valid_detections[crop_idx]['features'][f'dinov2_{i}'] = float(v)
+                        valid_detections[crop_idx]["features"][f"dinov2_{i}"] = float(v)
 
                 dinov2_ctx = self._extract_dinov2_features_batch(
                     crops_for_resnet_context, dinov2, dinov2_transform, device
                 )
                 for crop_idx, dino_feat in zip(crop_indices, dinov2_ctx):
                     for i, v in enumerate(dino_feat):
-                        valid_detections[crop_idx]['features'][f'dinov2_ctx_{i}'] = float(v)
+                        valid_detections[crop_idx]["features"][f"dinov2_ctx_{i}"] = float(v)
 
             # Fill zeros for detections that failed crop extraction
             self._zero_fill_deep_features(valid_detections, has_dinov2=(dinov2 is not None))
@@ -410,8 +431,8 @@ class CellStrategy(DetectionStrategy, MultiChannelFeatureMixin):
             torch.cuda.empty_cache()
 
         # Build Detection objects and filter by size
-        features_list = [det['features'] for det in valid_detections]
-        masks_list = [det['mask'] for det in valid_detections]
+        features_list = [det["features"] for det in valid_detections]
+        masks_list = [det["mask"] for det in valid_detections]
 
         detections = self.filter(masks_list, features_list, pixel_size_um)
 
@@ -426,11 +447,7 @@ class CellStrategy(DetectionStrategy, MultiChannelFeatureMixin):
     # _extract_sam2_embedding inherited from DetectionStrategy base class
     # _extract_resnet_features_batch inherited from DetectionStrategy base class
 
-    def compute_features(
-        self,
-        mask: np.ndarray,
-        tile: np.ndarray
-    ) -> Dict[str, Any]:
+    def compute_features(self, mask: np.ndarray, tile: np.ndarray) -> dict[str, Any]:
         """
         Compute morphological features for a single mask.
 

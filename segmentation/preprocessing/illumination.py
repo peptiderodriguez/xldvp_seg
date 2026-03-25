@@ -21,13 +21,9 @@ Usage:
 
 import cv2
 import numpy as np
-from typing import Tuple, Dict, Optional
 
 
-def normalize_rows_columns(
-    image: np.ndarray,
-    target_mean: Optional[float] = None
-) -> np.ndarray:
+def normalize_rows_columns(image: np.ndarray, target_mean: float | None = None) -> np.ndarray:
     """
     Normalize each row and column to have consistent mean intensity.
 
@@ -66,20 +62,17 @@ def normalize_rows_columns(
     min_mean = target_mean * 0.1  # Don't amplify more than 10x
     row_means = np.mean(img, axis=1, keepdims=True, dtype=np.float32)
     row_means = np.where(row_means > min_mean, row_means, target_mean)
-    img *= (target_mean / row_means)  # In-place multiplication
+    img *= target_mean / row_means  # In-place multiplication
 
     # Step 2: Normalize columns (in-place)
     col_means = np.mean(img, axis=0, keepdims=True, dtype=np.float32)
     col_means = np.where(col_means > min_mean, col_means, target_mean)
-    img *= (target_mean / col_means)  # In-place multiplication
+    img *= target_mean / col_means  # In-place multiplication
 
     return img
 
 
-def morphological_background_subtraction(
-    image: np.ndarray,
-    kernel_size: int = 101
-) -> np.ndarray:
+def morphological_background_subtraction(image: np.ndarray, kernel_size: int = 101) -> np.ndarray:
     """
     Remove low-frequency background using morphological opening.
 
@@ -106,19 +99,12 @@ def morphological_background_subtraction(
         kernel_size += 1
 
     # Create large elliptical structuring element
-    kernel = cv2.getStructuringElement(
-        cv2.MORPH_ELLIPSE,
-        (kernel_size, kernel_size)
-    )
+    kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (kernel_size, kernel_size))
 
     # Estimate background using morphological opening
     # Opening = erosion followed by dilation
     # This removes bright structures smaller than the kernel
-    background = cv2.morphologyEx(
-        img,
-        cv2.MORPH_OPEN,
-        kernel
-    )
+    background = cv2.morphologyEx(img, cv2.MORPH_OPEN, kernel)
 
     # Subtract background
     corrected = img - background
@@ -134,7 +120,7 @@ def correct_photobleaching(
     row_col_normalize: bool = True,
     morph_subtract: bool = True,
     morph_kernel_size: int = 101,
-    target_mean: Optional[float] = None
+    target_mean: float | None = None,
 ) -> np.ndarray:
     """
     Apply combined photobleaching correction.
@@ -171,15 +157,12 @@ def correct_photobleaching(
         corrected = normalize_rows_columns(corrected, target_mean=target_mean)
 
     if morph_subtract:
-        corrected = morphological_background_subtraction(
-            corrected,
-            kernel_size=morph_kernel_size
-        )
+        corrected = morphological_background_subtraction(corrected, kernel_size=morph_kernel_size)
 
     return corrected
 
 
-def estimate_band_severity(image: np.ndarray) -> Dict[str, float]:
+def estimate_band_severity(image: np.ndarray) -> dict[str, float]:
     """
     Estimate the severity of horizontal and vertical banding artifacts.
 
@@ -206,32 +189,32 @@ def estimate_band_severity(image: np.ndarray) -> Dict[str, float]:
 
     row_mean_of_means = float(np.mean(row_means, dtype=np.float32))
     col_mean_of_means = float(np.mean(col_means, dtype=np.float32))
-    row_cv = float(np.std(row_means, dtype=np.float32)) / row_mean_of_means * 100 if row_mean_of_means > 0 else 0.0
-    col_cv = float(np.std(col_means, dtype=np.float32)) / col_mean_of_means * 100 if col_mean_of_means > 0 else 0.0
+    row_cv = (
+        float(np.std(row_means, dtype=np.float32)) / row_mean_of_means * 100
+        if row_mean_of_means > 0
+        else 0.0
+    )
+    col_cv = (
+        float(np.std(col_means, dtype=np.float32)) / col_mean_of_means * 100
+        if col_mean_of_means > 0
+        else 0.0
+    )
 
     # Determine overall severity
     max_cv = max(row_cv, col_cv)
     if max_cv < 5:
-        severity = 'none'
+        severity = "none"
     elif max_cv < 10:
-        severity = 'mild'
+        severity = "mild"
     elif max_cv < 20:
-        severity = 'moderate'
+        severity = "moderate"
     else:
-        severity = 'severe'
+        severity = "severe"
 
-    return {
-        'row_cv': row_cv,
-        'col_cv': col_cv,
-        'max_cv': max_cv,
-        'severity': severity
-    }
+    return {"row_cv": row_cv, "col_cv": col_cv, "max_cv": max_cv, "severity": severity}
 
 
-def correct_tile_batch(
-    tiles: list,
-    **kwargs
-) -> list:
+def correct_tile_batch(tiles: list, **kwargs) -> list:
     """
     Apply photobleaching correction to a batch of tiles.
 
@@ -249,9 +232,7 @@ def correct_tile_batch(
 
 
 def apply_clahe(
-    image: np.ndarray,
-    clip_limit: float = 2.0,
-    tile_size: Tuple[int, int] = (8, 8)
+    image: np.ndarray, clip_limit: float = 2.0, tile_size: tuple[int, int] = (8, 8)
 ) -> np.ndarray:
     """
     Apply Contrast Limited Adaptive Histogram Equalization (CLAHE).

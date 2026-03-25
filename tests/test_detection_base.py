@@ -4,9 +4,7 @@ Tests for Detection dataclass and DetectionStrategy base class.
 Tests the base detection infrastructure in segmentation/detection/strategies/base.py.
 """
 
-import pytest
 import numpy as np
-from typing import Dict, Any, List
 
 from segmentation.detection.strategies.base import Detection, DetectionStrategy
 
@@ -49,7 +47,7 @@ class TestDetectionDataclass:
 
     def test_detection_to_dict(self, sample_mask):
         """Test conversion to dictionary."""
-        features = {'eccentricity': 0.1, 'solidity': 0.98}
+        features = {"eccentricity": 0.1, "solidity": 0.98}
         detection = Detection(
             mask=sample_mask,
             centroid=[256.5, 256.5],
@@ -61,21 +59,21 @@ class TestDetectionDataclass:
         result = detection.to_dict()
 
         # Check all expected keys
-        assert 'centroid' in result
-        assert 'features' in result
-        assert 'id' in result
-        assert 'score' in result
-        assert 'area' in result
+        assert "centroid" in result
+        assert "features" in result
+        assert "id" in result
+        assert "score" in result
+        assert "area" in result
 
         # Check values
-        assert result['centroid'] == [256.5, 256.5]
-        assert result['features'] == features
-        assert result['id'] == "test_id"
-        assert result['score'] == 0.95
-        assert result['area'] == int(sample_mask.sum())
+        assert result["centroid"] == [256.5, 256.5]
+        assert result["features"] == features
+        assert result["id"] == "test_id"
+        assert result["score"] == 0.95
+        assert result["area"] == int(sample_mask.sum())
 
         # Mask should NOT be in dict (too large for serialization)
-        assert 'mask' not in result
+        assert "mask" not in result
 
     def test_detection_to_dict_minimal(self, empty_mask):
         """Test to_dict with minimal/default values."""
@@ -86,11 +84,11 @@ class TestDetectionDataclass:
 
         result = detection.to_dict()
 
-        assert result['centroid'] == [0.0, 0.0]
-        assert result['features'] == {}
-        assert result['id'] is None
-        assert result['score'] is None
-        assert result['area'] == 0
+        assert result["centroid"] == [0.0, 0.0]
+        assert result["features"] == {}
+        assert result["id"] is None
+        assert result["score"] is None
+        assert result["area"] == 0
 
     def test_detection_default_values(self, sample_mask):
         """Test that Detection has correct default values."""
@@ -106,10 +104,10 @@ class TestDetectionDataclass:
     def test_detection_with_all_fields(self, sample_mask):
         """Test Detection with all fields populated."""
         features = {
-            'area': 7854,
-            'eccentricity': 0.05,
-            'solidity': 0.99,
-            'mean_intensity': 200.0,
+            "area": 7854,
+            "eccentricity": 0.05,
+            "solidity": 0.99,
+            "mean_intensity": 200.0,
         }
 
         detection = Detection(
@@ -132,6 +130,7 @@ class TestDetectionStrategyComputeFeatures:
 
     def _create_test_strategy(self):
         """Create a concrete test strategy implementation."""
+
         class TestStrategy(DetectionStrategy):
             @property
             def name(self):
@@ -167,8 +166,14 @@ class TestDetectionStrategyComputeFeatures:
 
         features = strategy.compute_features(sample_mask, sample_tile)
 
-        required_keys = ['area', 'centroid', 'eccentricity', 'solidity',
-                         'mean_intensity', 'perimeter']
+        required_keys = [
+            "area",
+            "centroid",
+            "eccentricity",
+            "solidity",
+            "mean_intensity",
+            "perimeter",
+        ]
 
         for key in required_keys:
             assert key in features, f"Missing required key: {key}"
@@ -179,7 +184,7 @@ class TestDetectionStrategyComputeFeatures:
 
         features = strategy.compute_features(sample_mask, sample_tile)
 
-        centroid = features['centroid']
+        centroid = features["centroid"]
         assert isinstance(centroid, list)
         assert len(centroid) == 2
         assert all(isinstance(c, float) for c in centroid)
@@ -188,14 +193,16 @@ class TestDetectionStrategyComputeFeatures:
         assert abs(centroid[0] - 256) < 2  # x
         assert abs(centroid[1] - 256) < 2  # y
 
-    def test_strategy_compute_features_area_matches_mask(self, simple_rectangular_mask, sample_tile):
+    def test_strategy_compute_features_area_matches_mask(
+        self, simple_rectangular_mask, sample_tile
+    ):
         """Test that computed area matches mask.sum()."""
         strategy = self._create_test_strategy()
 
         features = strategy.compute_features(simple_rectangular_mask, sample_tile)
 
-        assert features['area'] == int(simple_rectangular_mask.sum())
-        assert features['area'] == 10000  # 100x100
+        assert features["area"] == int(simple_rectangular_mask.sum())
+        assert features["area"] == 10000  # 100x100
 
     def test_strategy_compute_features_with_grayscale(self, sample_mask, sample_tile_grayscale):
         """Test compute_features handles grayscale tiles."""
@@ -204,8 +211,8 @@ class TestDetectionStrategyComputeFeatures:
         features = strategy.compute_features(sample_mask, sample_tile_grayscale)
 
         # Should still work and return features
-        assert 'area' in features
-        assert 'mean_intensity' in features
+        assert "area" in features
+        assert "mean_intensity" in features
 
     def test_strategy_name_property(self):
         """Test that strategy name property works."""
@@ -215,6 +222,7 @@ class TestDetectionStrategyComputeFeatures:
 
     def test_strategy_get_config(self):
         """Test that get_config returns strategy configuration."""
+
         class ConfiguredStrategy(DetectionStrategy):
             def __init__(self, threshold=0.5, min_area=100):
                 self.threshold = threshold
@@ -233,9 +241,9 @@ class TestDetectionStrategyComputeFeatures:
         strategy = ConfiguredStrategy(threshold=0.7, min_area=200)
         config = strategy.get_config()
 
-        assert config['strategy'] == 'configured'
-        assert config['threshold'] == 0.7
-        assert config['min_area'] == 200
+        assert config["strategy"] == "configured"
+        assert config["threshold"] == 0.7
+        assert config["min_area"] == 200
 
 
 class TestDetectionStrategyDetect:
@@ -243,6 +251,7 @@ class TestDetectionStrategyDetect:
 
     def test_strategy_detect_empty_result(self, sample_tile):
         """Test detect() with no masks returns empty list."""
+
         class EmptyStrategy(DetectionStrategy):
             @property
             def name(self):
@@ -265,6 +274,7 @@ class TestDetectionStrategyDetect:
 
     def test_strategy_detect_with_masks(self, sample_tile, sample_mask):
         """Test detect() pipeline with masks."""
+
         class SimpleStrategy(DetectionStrategy):
             def __init__(self, mask_to_return):
                 self._mask = mask_to_return
@@ -281,7 +291,7 @@ class TestDetectionStrategyDetect:
                 return [
                     Detection(
                         mask=m,
-                        centroid=f['centroid'],
+                        centroid=f["centroid"],
                         features=f,
                     )
                     for m, f in zip(masks, features)

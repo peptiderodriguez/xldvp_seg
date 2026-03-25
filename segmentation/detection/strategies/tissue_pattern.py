@@ -16,15 +16,17 @@ Default 5-channel CZI layout (brain FISH):
 """
 
 import gc
+from typing import Any
+
 import numpy as np
 from scipy import ndimage
-from typing import Dict, Any, List, Optional, Tuple
+
+from segmentation.detection.registry import register_strategy
+from segmentation.utils.feature_extraction import extract_morphological_features
+from segmentation.utils.logging import get_logger
 
 from .cell import CellStrategy
 from .islet import _percentile_normalize_channel
-from segmentation.detection.registry import register_strategy
-from segmentation.utils.logging import get_logger
-from segmentation.utils.feature_extraction import extract_morphological_features
 
 logger = get_logger(__name__)
 
@@ -54,7 +56,7 @@ class TissuePatternStrategy(CellStrategy):
 
     def __init__(
         self,
-        detection_channels: List[int] = None,
+        detection_channels: list[int] = None,
         nuclear_channel: int = 4,
         min_area_um: float = 20,
         max_area_um: float = 300,
@@ -83,10 +85,10 @@ class TissuePatternStrategy(CellStrategy):
     def segment(
         self,
         tile: np.ndarray,
-        models: Dict[str, Any],
-        extra_channels: Optional[Dict[int, np.ndarray]] = None,
+        models: dict[str, Any],
+        extra_channels: dict[int, np.ndarray] | None = None,
         **kwargs,
-    ) -> List[np.ndarray]:
+    ) -> list[np.ndarray]:
         """
         Segment cells using Cellpose on summed detection channels (grayscale).
 
@@ -104,13 +106,15 @@ class TissuePatternStrategy(CellStrategy):
         """
         self._last_summed_channel = None  # Reset for each tile
 
-        cellpose = models.get('cellpose')
+        cellpose = models.get("cellpose")
 
         if cellpose is None:
             raise RuntimeError("Cellpose model required for tissue_pattern detection")
 
         if extra_channels is None:
-            logger.warning("No extra_channels for tissue_pattern — falling back to grayscale Cellpose")
+            logger.warning(
+                "No extra_channels for tissue_pattern — falling back to grayscale Cellpose"
+            )
             return super().segment(tile, models, **kwargs)
 
         # Sum detection channels (each percentile-normalized to uint8 first)
@@ -143,7 +147,7 @@ class TissuePatternStrategy(CellStrategy):
         logger.info(f"Cellpose found {len(cellpose_ids)} cells")
 
         # Area filtering (same pattern as islet)
-        pixel_area_um2 = kwargs.get('pixel_size_um', 0.1725) ** 2
+        pixel_area_um2 = kwargs.get("pixel_size_um", 0.1725) ** 2
         min_area_px = int(self.min_area_um / pixel_area_um2) if pixel_area_um2 > 0 else 10
         max_area_px = int(self.max_area_um / pixel_area_um2) if pixel_area_um2 > 0 else 100000
 
@@ -154,8 +158,10 @@ class TissuePatternStrategy(CellStrategy):
         in_range = [(cp_id, a) for cp_id, a in areas if min_area_px <= a <= max_area_px]
         out_of_range = len(areas) - len(in_range)
         if out_of_range > 0:
-            logger.info(f"  Area filter: {len(in_range)} in range [{self.min_area_um}-{self.max_area_um} um²], "
-                        f"{out_of_range} rejected")
+            logger.info(
+                f"  Area filter: {len(in_range)} in range [{self.min_area_um}-{self.max_area_um} um²], "
+                f"{out_of_range} rejected"
+            )
 
         # Extract masks using find_objects for bbox-scoped extraction (not full-tile scan per cell)
         slices = ndimage.find_objects(cellpose_masks)
@@ -165,7 +171,7 @@ class TissuePatternStrategy(CellStrategy):
             if sl is None:
                 continue
             cp_mask = np.zeros(cellpose_masks.shape, dtype=bool)
-            cp_mask[sl] = (cellpose_masks[sl] == cp_id)
+            cp_mask[sl] = cellpose_masks[sl] == cp_id
             if cp_mask.sum() < self.min_mask_pixels:
                 continue
             accepted_masks.append(cp_mask)
@@ -183,11 +189,11 @@ class TissuePatternStrategy(CellStrategy):
     def detect(
         self,
         tile: np.ndarray,
-        models: Dict[str, Any],
+        models: dict[str, Any],
         pixel_size_um: float,
         extract_features: bool = True,
-        extra_channels: Dict[int, np.ndarray] = None,
-    ) -> Tuple[np.ndarray, List['Detection']]:
+        extra_channels: dict[int, np.ndarray] = None,
+    ) -> tuple[np.ndarray, list["Detection"]]:
         """
         Complete tissue pattern detection pipeline.
 
@@ -203,14 +209,15 @@ class TissuePatternStrategy(CellStrategy):
         """
         import torch
 
-        sam2_predictor = models.get('sam2_predictor')
+        sam2_predictor = models.get("sam2_predictor")
 
-        if models.get('cellpose') is None:
+        if models.get("cellpose") is None:
             raise RuntimeError("Cellpose model required for tissue_pattern detection")
 
         # Generate masks using summed-channel segment()
-        masks = self.segment(tile, models, extra_channels=extra_channels,
-                             pixel_size_um=pixel_size_um)
+        masks = self.segment(
+            tile, models, extra_channels=extra_channels, pixel_size_um=pixel_size_um
+        )
 
         if not masks:
             if sam2_predictor is not None:
@@ -221,7 +228,7 @@ class TissuePatternStrategy(CellStrategy):
 
         # Set SAM2 image using summed channel as pseudo-RGB (for embedding extraction)
         if self.extract_sam2_embeddings and sam2_predictor is not None:
-            summed = getattr(self, '_last_summed_channel', None)
+            summed = getattr(self, "_last_summed_channel", None)
             if summed is not None:
                 sam2_rgb = np.stack([summed, summed, summed], axis=-1)
             else:
@@ -234,7 +241,7 @@ class TissuePatternStrategy(CellStrategy):
         crops_for_resnet_context = []
         crop_indices = []
 
-        segment_scores = getattr(self, '_last_segment_scores', [])
+        segment_scores = getattr(self, "_last_segment_scores", [])
 
         # Precompute tile_global_mean once (avoids recomputing per cell in extract_morphological_features)
         if tile.ndim == 3:
@@ -254,13 +261,12 @@ class TissuePatternStrategy(CellStrategy):
                 continue
 
             if idx < len(segment_scores):
-                feat['sam2_score'] = float(segment_scores[idx])
+                feat["sam2_score"] = float(segment_scores[idx])
 
             # Per-channel features from all channels
             if extra_channels is not None:
                 channels_dict = {
-                    f'ch{k}': v for k, v in sorted(extra_channels.items())
-                    if v is not None
+                    f"ch{k}": v for k, v in sorted(extra_channels.items()) if v is not None
                 }
                 multichannel_feats = self.extract_multichannel_features(mask, channels_dict)
                 feat.update(multichannel_feats)
@@ -270,16 +276,16 @@ class TissuePatternStrategy(CellStrategy):
             if len(ys) == 0:
                 continue
             cx_val, cy_val = float(np.mean(xs)), float(np.mean(ys))
-            feat['centroid'] = [cx_val, cy_val]
+            feat["centroid"] = [cx_val, cy_val]
 
             # SAM2 embeddings (256D)
             if self.extract_sam2_embeddings and sam2_predictor is not None:
                 sam2_emb = self._extract_sam2_embedding(sam2_predictor, cy_val, cx_val)
                 for i, v in enumerate(sam2_emb):
-                    feat[f'sam2_{i}'] = float(v)
+                    feat[f"sam2_{i}"] = float(v)
             elif self.extract_sam2_embeddings:
                 for i in range(256):
-                    feat[f'sam2_{i}'] = 0.0
+                    feat[f"sam2_{i}"] = 0.0
 
             # Deep features (opt-in)
             if self.extract_deep_features:
@@ -287,61 +293,86 @@ class TissuePatternStrategy(CellStrategy):
                 if len(ys) > 0:
                     y1, y2 = ys.min(), ys.max()
                     x1, x2 = xs.min(), xs.max()
-                    crop_context = tile[y1:y2+1, x1:x2+1].copy()
+                    crop_context = tile[y1 : y2 + 1, x1 : x2 + 1].copy()
                     crop_masked = crop_context.copy()
-                    crop_mask = mask[y1:y2+1, x1:x2+1]
+                    crop_mask = mask[y1 : y2 + 1, x1 : x2 + 1]
                     crop_masked[~crop_mask] = 0
                     crops_for_resnet.append(crop_masked)
                     crops_for_resnet_context.append(crop_context)
                     crop_indices.append(len(valid_detections))
 
-            valid_detections.append({
-                'mask': mask,
-                'centroid': [cx_val, cy_val],
-                'features': feat,
-            })
+            valid_detections.append(
+                {
+                    "mask": mask,
+                    "centroid": [cx_val, cy_val],
+                    "features": feat,
+                }
+            )
 
         # Batch deep feature extraction
         if self.extract_deep_features:
-            device = models.get('device', torch.device('cuda' if torch.cuda.is_available() else ('mps' if hasattr(torch.backends, 'mps') and torch.backends.mps.is_available() else 'cpu')))
-            resnet = models.get('resnet')
-            resnet_transform = models.get('resnet_transform')
+            device = models.get(
+                "device",
+                torch.device(
+                    "cuda"
+                    if torch.cuda.is_available()
+                    else (
+                        "mps"
+                        if hasattr(torch.backends, "mps") and torch.backends.mps.is_available()
+                        else "cpu"
+                    )
+                ),
+            )
+            resnet = models.get("resnet")
+            resnet_transform = models.get("resnet_transform")
 
             if crops_for_resnet and resnet is not None and resnet_transform is not None:
                 resnet_features = self._extract_resnet_features_batch(
-                    crops_for_resnet, resnet, resnet_transform, device,
+                    crops_for_resnet,
+                    resnet,
+                    resnet_transform,
+                    device,
                     batch_size=self.resnet_batch_size,
                 )
                 for crop_idx, resnet_feat in zip(crop_indices, resnet_features):
                     for i, v in enumerate(resnet_feat):
-                        valid_detections[crop_idx]['features'][f'resnet_{i}'] = float(v)
+                        valid_detections[crop_idx]["features"][f"resnet_{i}"] = float(v)
 
             if crops_for_resnet_context and resnet is not None and resnet_transform is not None:
                 resnet_ctx_features = self._extract_resnet_features_batch(
-                    crops_for_resnet_context, resnet, resnet_transform, device,
+                    crops_for_resnet_context,
+                    resnet,
+                    resnet_transform,
+                    device,
                     batch_size=self.resnet_batch_size,
                 )
                 for crop_idx, resnet_feat in zip(crop_indices, resnet_ctx_features):
                     for i, v in enumerate(resnet_feat):
-                        valid_detections[crop_idx]['features'][f'resnet_ctx_{i}'] = float(v)
+                        valid_detections[crop_idx]["features"][f"resnet_ctx_{i}"] = float(v)
 
-            dinov2 = models.get('dinov2')
-            dinov2_transform = models.get('dinov2_transform')
+            dinov2 = models.get("dinov2")
+            dinov2_transform = models.get("dinov2_transform")
 
             if crops_for_resnet and dinov2 is not None and dinov2_transform is not None:
                 dinov2_masked = self._extract_dinov2_features_batch(
-                    crops_for_resnet, dinov2, dinov2_transform, device,
+                    crops_for_resnet,
+                    dinov2,
+                    dinov2_transform,
+                    device,
                 )
                 for crop_idx, dino_feat in zip(crop_indices, dinov2_masked):
                     for i, v in enumerate(dino_feat):
-                        valid_detections[crop_idx]['features'][f'dinov2_{i}'] = float(v)
+                        valid_detections[crop_idx]["features"][f"dinov2_{i}"] = float(v)
 
                 dinov2_ctx = self._extract_dinov2_features_batch(
-                    crops_for_resnet_context, dinov2, dinov2_transform, device,
+                    crops_for_resnet_context,
+                    dinov2,
+                    dinov2_transform,
+                    device,
                 )
                 for crop_idx, dino_feat in zip(crop_indices, dinov2_ctx):
                     for i, v in enumerate(dino_feat):
-                        valid_detections[crop_idx]['features'][f'dinov2_ctx_{i}'] = float(v)
+                        valid_detections[crop_idx]["features"][f"dinov2_ctx_{i}"] = float(v)
 
             # Fill zeros for missing deep features
             self._zero_fill_deep_features(valid_detections, has_dinov2=(dinov2 is not None))
@@ -353,8 +384,8 @@ class TissuePatternStrategy(CellStrategy):
             torch.cuda.empty_cache()
 
         # Build Detection objects and filter by size
-        features_list = [det['features'] for det in valid_detections]
-        masks_list = [det['mask'] for det in valid_detections]
+        features_list = [det["features"] for det in valid_detections]
+        masks_list = [det["mask"] for det in valid_detections]
 
         detections = self.filter(masks_list, features_list, pixel_size_um)
 
@@ -362,15 +393,13 @@ class TissuePatternStrategy(CellStrategy):
             return np.zeros(tile.shape[:2], dtype=np.uint32), []
 
         # Optional RF classifier scoring
-        if 'classifier' in models:
-            classifier_type = models.get('classifier_type', 'rf')
-            if classifier_type == 'rf':
-                classifier = models['classifier']
-                scaler = models.get('scaler')
-                feature_names = models.get('feature_names', [])
-                detections = self.classify_rf(
-                    detections, classifier, scaler, feature_names
-                )
+        if "classifier" in models:
+            classifier_type = models.get("classifier_type", "rf")
+            if classifier_type == "rf":
+                classifier = models["classifier"]
+                scaler = models.get("scaler")
+                feature_names = models.get("feature_names", [])
+                detections = self.classify_rf(detections, classifier, scaler, feature_names)
 
         # Build label array
         label_array = np.zeros(tile.shape[:2], dtype=np.uint32)

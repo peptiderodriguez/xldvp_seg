@@ -15,9 +15,10 @@ Usage:
     features = recompute_mask_features(cleaned_mask, image, pixel_size_um)
 """
 
+from typing import Any
+
 import numpy as np
 from scipy import ndimage
-from typing import Optional, Dict, Any
 
 
 def get_largest_connected_component(mask: np.ndarray) -> np.ndarray:
@@ -96,7 +97,7 @@ def fill_holes(
             preserve_mask = np.zeros_like(holes)
             for i, size in enumerate(hole_sizes, 1):
                 if size > max_hole_area:
-                    preserve_mask |= (labeled_holes == i)
+                    preserve_mask |= labeled_holes == i
 
             # Result = filled mask minus preserved large holes
             result = filled & ~preserve_mask
@@ -143,9 +144,9 @@ def cleanup_mask(
 
 def recompute_mask_features(
     mask: np.ndarray,
-    image: Optional[np.ndarray] = None,
+    image: np.ndarray | None = None,
     pixel_size_um: float = None,
-) -> Dict[str, Any]:
+) -> dict[str, Any]:
     """
     Recompute mask features after cleanup.
 
@@ -168,27 +169,27 @@ def recompute_mask_features(
     features = {}
 
     if not mask.any():
-        features['area_px'] = 0
-        features['area_um2'] = 0.0
-        features['centroid_xy'] = [0.0, 0.0]
-        features['bbox_xyxy'] = [0, 0, 0, 0]
+        features["area_px"] = 0
+        features["area_um2"] = 0.0
+        features["centroid_xy"] = [0.0, 0.0]
+        features["bbox_xyxy"] = [0, 0, 0, 0]
         return features
 
     mask_bool = mask.astype(bool)
 
     # Area
     area_px = int(mask_bool.sum())
-    features['area_px'] = area_px
-    features['area_um2'] = area_px * (pixel_size_um ** 2)
+    features["area_px"] = area_px
+    features["area_um2"] = area_px * (pixel_size_um**2)
 
     # Centroid (x, y order for consistency with existing code)
     ys, xs = np.where(mask_bool)
     centroid_x = float(xs.mean())
     centroid_y = float(ys.mean())
-    features['centroid_xy'] = [centroid_x, centroid_y]
+    features["centroid_xy"] = [centroid_x, centroid_y]
 
     # Bounding box
-    features['bbox_xyxy'] = [int(xs.min()), int(ys.min()), int(xs.max()) + 1, int(ys.max()) + 1]
+    features["bbox_xyxy"] = [int(xs.min()), int(ys.min()), int(xs.max()) + 1, int(ys.max()) + 1]
 
     # Shape features (solidity, circularity)
     try:
@@ -196,21 +197,21 @@ def recompute_mask_features(
 
         # Solidity = area / convex_area
         props = measure.regionprops(mask_bool.astype(np.uint8))[0]
-        convex_area = getattr(props, 'area_convex', None)
+        convex_area = getattr(props, "area_convex", None)
         if convex_area is None:
-            convex_area = getattr(props, 'convex_area', area_px)
-        features['solidity'] = area_px / convex_area if convex_area > 0 else 1.0
+            convex_area = getattr(props, "convex_area", area_px)
+        features["solidity"] = area_px / convex_area if convex_area > 0 else 1.0
 
         # Circularity = 4 * pi * area / perimeter^2
-        perimeter = props.perimeter if hasattr(props, 'perimeter') else 0
+        perimeter = props.perimeter if hasattr(props, "perimeter") else 0
         if perimeter > 0:
-            features['circularity'] = 4 * np.pi * area_px / (perimeter ** 2)
+            features["circularity"] = 4 * np.pi * area_px / (perimeter**2)
         else:
-            features['circularity'] = 1.0
+            features["circularity"] = 1.0
 
     except Exception:
-        features['solidity'] = 1.0
-        features['circularity'] = 1.0
+        features["solidity"] = 1.0
+        features["circularity"] = 1.0
 
     return features
 
@@ -247,7 +248,7 @@ def refine_mask_intensity(
     Returns:
         Refined binary mask (same dtype as input)
     """
-    from skimage.morphology import opening, disk
+    from skimage.morphology import disk, opening
 
     if not mask.any():
         return mask.copy()
@@ -317,15 +318,15 @@ def refine_mask_intensity(
 
 def apply_cleanup_to_detection(
     mask: np.ndarray,
-    feat: Dict[str, Any],
+    feat: dict[str, Any],
     label_array: np.ndarray,
     det_id: int,
     pixel_size_um: float = None,
     keep_largest: bool = True,
     fill_internal_holes: bool = True,
     max_hole_area_fraction: float = 0.5,
-    image: Optional[np.ndarray] = None,
-    tile_global_mean: Optional[float] = None,
+    image: np.ndarray | None = None,
+    tile_global_mean: float | None = None,
 ) -> np.ndarray:
     """
     Apply cleanup to a single detection and update the label array and features.
@@ -371,7 +372,7 @@ def apply_cleanup_to_detection(
     label_array[cleaned_mask] = det_id  # Set cleaned
 
     # Recompute ALL morphological features from cleaned mask
-    if image is not None and 'features' in feat:
+    if image is not None and "features" in feat:
         # Import here to avoid circular dependency
         from skimage import measure
 
@@ -381,36 +382,40 @@ def apply_cleanup_to_detection(
             props = measure.regionprops(cleaned_mask.astype(np.int32), cache=False)[0]
 
             # Update area
-            feat['features']['area'] = area
-            feat['area'] = area
-            feat['area_um2'] = area * (pixel_size_um ** 2)
+            feat["features"]["area"] = area
+            feat["area"] = area
+            feat["area_um2"] = area * (pixel_size_um**2)
 
             # Recompute centroid
             ys, xs = np.where(cleaned_mask)
-            feat['center'] = [float(xs.mean()), float(ys.mean())]
+            feat["center"] = [float(xs.mean()), float(ys.mean())]
 
             # Recompute shape features
-            perimeter = props.perimeter if hasattr(props, 'perimeter') else 0
-            feat['features']['perimeter'] = perimeter
-            feat['features']['circularity'] = 4 * np.pi * area / (perimeter ** 2) if perimeter > 0 else 0
-            feat['features']['solidity'] = props.solidity if hasattr(props, 'solidity') else 0
+            perimeter = props.perimeter if hasattr(props, "perimeter") else 0
+            feat["features"]["perimeter"] = perimeter
+            feat["features"]["circularity"] = (
+                4 * np.pi * area / (perimeter**2) if perimeter > 0 else 0
+            )
+            feat["features"]["solidity"] = props.solidity if hasattr(props, "solidity") else 0
 
             # Aspect ratio
-            major_axis = getattr(props, 'axis_major_length', None)
+            major_axis = getattr(props, "axis_major_length", None)
             if major_axis is None:
-                major_axis = getattr(props, 'major_axis_length', 0)
-            minor_axis = getattr(props, 'axis_minor_length', None)
+                major_axis = getattr(props, "major_axis_length", 0)
+            minor_axis = getattr(props, "axis_minor_length", None)
             if minor_axis is None:
-                minor_axis = getattr(props, 'minor_axis_length', 0)
+                minor_axis = getattr(props, "minor_axis_length", 0)
             if minor_axis > 0:
-                feat['features']['aspect_ratio'] = major_axis / minor_axis
+                feat["features"]["aspect_ratio"] = major_axis / minor_axis
 
-            feat['features']['extent'] = props.extent if hasattr(props, 'extent') else 0
-            equiv_diameter = getattr(props, 'equivalent_diameter_area', None)
+            feat["features"]["extent"] = props.extent if hasattr(props, "extent") else 0
+            equiv_diameter = getattr(props, "equivalent_diameter_area", None)
             if equiv_diameter is None:
-                equiv_diameter = getattr(props, 'equivalent_diameter', 0)
-            feat['features']['equiv_diameter'] = equiv_diameter
-            feat['features']['eccentricity'] = props.eccentricity if hasattr(props, 'eccentricity') else 0
+                equiv_diameter = getattr(props, "equivalent_diameter", 0)
+            feat["features"]["equiv_diameter"] = equiv_diameter
+            feat["features"]["eccentricity"] = (
+                props.eccentricity if hasattr(props, "eccentricity") else 0
+            )
 
             # Recompute intensity features (RGB, grayscale, HSV)
             # Exclude zero pixels (CZI padding) — matches extract_morphological_features()
@@ -421,32 +426,37 @@ def apply_cleanup_to_detection(
                 masked_pixels = masked_pixels[valid]
                 if len(masked_pixels) == 0:
                     return cleaned_mask  # All padding — skip intensity updates
-                feat['features']['red_mean'] = float(np.mean(masked_pixels[:, 0]))
-                feat['features']['red_std'] = float(np.std(masked_pixels[:, 0]))
-                feat['features']['green_mean'] = float(np.mean(masked_pixels[:, 1]))
-                feat['features']['green_std'] = float(np.std(masked_pixels[:, 1]))
-                feat['features']['blue_mean'] = float(np.mean(masked_pixels[:, 2]))
-                feat['features']['blue_std'] = float(np.std(masked_pixels[:, 2]))
+                feat["features"]["red_mean"] = float(np.mean(masked_pixels[:, 0]))
+                feat["features"]["red_std"] = float(np.std(masked_pixels[:, 0]))
+                feat["features"]["green_mean"] = float(np.mean(masked_pixels[:, 1]))
+                feat["features"]["green_std"] = float(np.std(masked_pixels[:, 1]))
+                feat["features"]["blue_mean"] = float(np.mean(masked_pixels[:, 2]))
+                feat["features"]["blue_std"] = float(np.std(masked_pixels[:, 2]))
                 gray = np.mean(masked_pixels, axis=1)
 
                 # HSV features — use canonical implementation from feature_extraction
                 from segmentation.utils.feature_extraction import compute_hsv_features
+
                 # masked_pixels already has zero pixels excluded (valid filter above)
                 hsv_feats = compute_hsv_features(masked_pixels, sample_size=100)
-                feat['features']['hue_mean'] = hsv_feats['hue_mean']
-                feat['features']['saturation_mean'] = hsv_feats['saturation_mean']
-                feat['features']['value_mean'] = hsv_feats['value_mean']
+                feat["features"]["hue_mean"] = hsv_feats["hue_mean"]
+                feat["features"]["saturation_mean"] = hsv_feats["saturation_mean"]
+                feat["features"]["value_mean"] = hsv_feats["value_mean"]
             else:
                 gray = image[cleaned_mask].astype(float)
                 # Exclude zero pixels
                 gray = gray[gray > 0]
                 if len(gray) == 0:
                     return cleaned_mask
-                feat['features']['red_mean'] = feat['features']['green_mean'] = feat['features']['blue_mean'] = float(np.mean(gray))
-                feat['features']['red_std'] = feat['features']['green_std'] = feat['features']['blue_std'] = float(np.std(gray))
+                feat["features"]["red_mean"] = feat["features"]["green_mean"] = feat["features"][
+                    "blue_mean"
+                ] = float(np.mean(gray))
+                feat["features"]["red_std"] = feat["features"]["green_std"] = feat["features"][
+                    "blue_std"
+                ] = float(np.std(gray))
 
-            feat['features']['gray_mean'] = float(np.mean(gray))
-            feat['features']['gray_std'] = float(np.std(gray))
+            feat["features"]["gray_mean"] = float(np.mean(gray))
+            feat["features"]["gray_std"] = float(np.std(gray))
 
             # Recompute derived features (match extract_morphological_features)
             # Use tile_global_mean excluding zeros for relative_brightness
@@ -458,8 +468,10 @@ def apply_cleanup_to_detection(
                 else:
                     img_nonzero = image[image > 0]
                     tile_global_mean = float(np.mean(img_nonzero)) if len(img_nonzero) > 0 else 0
-            feat['features']['relative_brightness'] = feat['features']['gray_mean'] - tile_global_mean
-            feat['features']['intensity_variance'] = feat['features']['gray_std'] ** 2
+            feat["features"]["relative_brightness"] = (
+                feat["features"]["gray_mean"] - tile_global_mean
+            )
+            feat["features"]["intensity_variance"] = feat["features"]["gray_std"] ** 2
             # Scale dark threshold to image dtype range (matches feature_extraction.py)
             if image.dtype == np.uint16:
                 dark_threshold = 100.0 * 65535.0 / 255.0  # ~25700
@@ -467,15 +479,17 @@ def apply_cleanup_to_detection(
                 dark_threshold = 100.0 / 255.0 if image.max() <= 1.0 else 100.0
             else:
                 dark_threshold = 100.0
-            feat['features']['dark_fraction'] = float(np.mean(gray < dark_threshold)) if len(gray) > 0 else 0
-            feat['features']['nuclear_complexity'] = feat['features']['gray_std']  # Simplified
+            feat["features"]["dark_fraction"] = (
+                float(np.mean(gray < dark_threshold)) if len(gray) > 0 else 0
+            )
+            feat["features"]["nuclear_complexity"] = feat["features"]["gray_std"]  # Simplified
     else:
         # Fallback: just update area and center (old behavior)
-        feat['area'] = int(cleaned_mask.sum())
-        feat['area_um2'] = feat['area'] * (pixel_size_um ** 2)
+        feat["area"] = int(cleaned_mask.sum())
+        feat["area_um2"] = feat["area"] * (pixel_size_um**2)
 
         if cleaned_mask.any():
             ys, xs = np.where(cleaned_mask)
-            feat['center'] = [float(xs.mean()), float(ys.mean())]
+            feat["center"] = [float(xs.mean()), float(ys.mean())]
 
     return cleaned_mask

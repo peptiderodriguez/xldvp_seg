@@ -24,7 +24,6 @@ Usage:
 """
 
 import gc
-from typing import Dict
 
 import numpy as np
 from scipy.ndimage import distance_transform_edt, gaussian_filter, zoom
@@ -47,9 +46,9 @@ class IlluminationProfile:
 
     def __init__(
         self,
-        grids: Dict[int, np.ndarray],
+        grids: dict[int, np.ndarray],
         block_size: int,
-        slide_means: Dict[int, float],
+        slide_means: dict[int, float],
     ):
         self.grids = grids
         self.block_size = block_size
@@ -86,7 +85,11 @@ class IlluminationProfile:
 
         logger.info(
             "Correcting channel %d: grid %s, slide_mean=%.1f, illum_floor=%.1f, dtype=%s",
-            channel, grid.shape, slide_mean, illum_floor, input_dtype,
+            channel,
+            grid.shape,
+            slide_mean,
+            illum_floor,
+            input_dtype,
         )
 
         # Upscale coarse grid to full slide resolution via bilinear interpolation.
@@ -128,12 +131,14 @@ class IlluminationProfile:
 
         logger.info(
             "Channel %d correction range: [%.3f, %.3f]",
-            channel, correction_min, correction_max,
+            channel,
+            correction_min,
+            correction_max,
         )
 
 
 def estimate_illumination_profile(
-    all_channel_data: Dict[int, np.ndarray],
+    all_channel_data: dict[int, np.ndarray],
     block_size: int = 512,
     smooth_sigma: float = 3.0,
 ) -> IlluminationProfile:
@@ -149,8 +154,8 @@ def estimate_illumination_profile(
     Returns:
         An :class:`IlluminationProfile` ready for ``correct_channel_inplace``.
     """
-    grids: Dict[int, np.ndarray] = {}
-    slide_means: Dict[int, float] = {}
+    grids: dict[int, np.ndarray] = {}
+    slide_means: dict[int, float] = {}
 
     for ch, data in all_channel_data.items():
         H, W = data.shape
@@ -177,7 +182,12 @@ def estimate_illumination_profile(
 
         logger.info(
             "Channel %d: coarse grid %dx%d, %d/%d valid blocks, slide_mean=%.1f",
-            ch, n_rows, n_cols, n_valid, n_total, ch_mean,
+            ch,
+            n_rows,
+            n_cols,
+            n_valid,
+            n_total,
+            ch_mean,
         )
 
         # Fill NaN blocks via nearest-neighbor interpolation
@@ -186,9 +196,7 @@ def estimate_illumination_profile(
             _, nearest_indices = distance_transform_edt(
                 nan_mask, return_distances=True, return_indices=True
             )
-            coarse[nan_mask] = coarse[
-                nearest_indices[0][nan_mask], nearest_indices[1][nan_mask]
-            ]
+            coarse[nan_mask] = coarse[nearest_indices[0][nan_mask], nearest_indices[1][nan_mask]]
         elif n_valid == 0:
             # Degenerate: no signal at all — fill with 1.0 (no correction)
             coarse[:] = 1.0

@@ -21,28 +21,28 @@ Mixins:
 - MultiChannelFeatureMixin: Extract per-channel features from multi-channel images
 """
 
-from .base import DetectionStrategy, Detection
-from .mk import MKStrategy
+from .base import Detection, DetectionStrategy
 from .cell import CellStrategy, HSPCStrategy  # HSPCStrategy is backward compatibility alias
-from .nmj import NMJStrategy
-from .vessel import VesselStrategy
-from .mesothelium import MesotheliumStrategy
-from .islet import IsletStrategy
-from .tissue_pattern import TissuePatternStrategy
 from .instanseg import InstanSegStrategy
+from .islet import IsletStrategy
+from .mesothelium import MesotheliumStrategy
 from .mixins import MultiChannelFeatureMixin
+from .mk import MKStrategy
+from .nmj import NMJStrategy
+from .tissue_pattern import TissuePatternStrategy
+from .vessel import VesselStrategy
 
 __all__ = [
-    'DetectionStrategy',
-    'Detection',
-    'MKStrategy',
-    'CellStrategy',
-    'HSPCStrategy',  # Backward compatibility alias
-    'NMJStrategy',
-    'VesselStrategy',
-    'MesotheliumStrategy',
-    'IsletStrategy',
-    'TissuePatternStrategy',
-    'InstanSegStrategy',
-    'MultiChannelFeatureMixin',
+    "DetectionStrategy",
+    "Detection",
+    "MKStrategy",
+    "CellStrategy",
+    "HSPCStrategy",  # Backward compatibility alias
+    "NMJStrategy",
+    "VesselStrategy",
+    "MesotheliumStrategy",
+    "IsletStrategy",
+    "TissuePatternStrategy",
+    "InstanSegStrategy",
+    "MultiChannelFeatureMixin",
 ]

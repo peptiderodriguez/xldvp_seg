@@ -25,7 +25,6 @@ Usage:
 """
 
 from dataclasses import dataclass
-from typing import Dict, List, Optional
 
 from segmentation.utils.logging import get_logger
 
@@ -60,7 +59,7 @@ class ModelRegistry:
     are handled by ModelManager in manager.py.
     """
 
-    _registry: Dict[str, ModelMeta] = {}
+    _registry: dict[str, ModelMeta] = {}
 
     @classmethod
     def register(cls, meta: ModelMeta) -> None:
@@ -73,7 +72,9 @@ class ModelRegistry:
         if meta.name in cls._registry:
             logger.warning("Overwriting model '%s'", meta.name)
         cls._registry[meta.name] = meta
-        logger.debug("Registered model: %s (task=%s, dim=%d)", meta.name, meta.task, meta.feature_dim)
+        logger.debug(
+            "Registered model: %s (task=%s, dim=%d)", meta.name, meta.task, meta.feature_dim
+        )
 
     @classmethod
     def get(cls, name: str) -> ModelMeta:
@@ -91,17 +92,15 @@ class ModelRegistry:
         """
         if name not in cls._registry:
             available = sorted(cls._registry.keys())
-            raise KeyError(
-                f"Model '{name}' not registered. Available: {available}"
-            )
+            raise KeyError(f"Model '{name}' not registered. Available: {available}")
         return cls._registry[name]
 
     @classmethod
     def list_models(
         cls,
-        modality: Optional[str] = None,
-        task: Optional[str] = None,
-    ) -> List[ModelMeta]:
+        modality: str | None = None,
+        task: str | None = None,
+    ) -> list[ModelMeta]:
         """
         List registered models, optionally filtered by modality and/or task.
 
@@ -121,13 +120,15 @@ class ModelRegistry:
         return sorted(models, key=lambda m: m.name)
 
     @classmethod
-    def print_models(cls, modality: Optional[str] = None) -> None:
+    def print_models(cls, modality: str | None = None) -> None:
         """Print a formatted table of registered models."""
         models = cls.list_models(modality=modality)
         if not models:
             print("No models registered.")
             return
-        print(f"{'Name':<18s} {'Task':<14s} {'Dim':<6s} {'Modality':<14s} {'Status':<12s} {'License'}")
+        print(
+            f"{'Name':<18s} {'Task':<14s} {'Dim':<6s} {'Modality':<14s} {'Status':<12s} {'License'}"
+        )
         print("-" * 82)
         for m in models:
             if m.installed:

@@ -12,19 +12,21 @@ Pipeline:
 5. Convert chunks to polygons for LMD export
 """
 
+from typing import Any
+
 import cv2
 import numpy as np
-from typing import Dict, Any, List, Optional, Tuple
 from scipy import ndimage
 
-from .base import DetectionStrategy, Detection
 from segmentation.detection.registry import register_strategy
 from segmentation.utils.logging import get_logger
+
+from .base import Detection, DetectionStrategy
 
 logger = get_logger(__name__)
 
 
-def _trace_skeleton_paths(skeleton: np.ndarray) -> List[np.ndarray]:
+def _trace_skeleton_paths(skeleton: np.ndarray) -> list[np.ndarray]:
     """
     Simple skeleton path tracing (fallback if skan not available).
 
@@ -62,10 +64,12 @@ def _trace_skeleton_paths(skeleton: np.ndarray) -> List[np.ndarray]:
                     if dr == 0 and dc == 0:
                         continue
                     nr, nc = r + dr, c + dc
-                    if (0 <= nr < skeleton.shape[0] and
-                        0 <= nc < skeleton.shape[1] and
-                        skeleton[nr, nc] and
-                        not visited[nr, nc]):
+                    if (
+                        0 <= nr < skeleton.shape[0]
+                        and 0 <= nc < skeleton.shape[1]
+                        and skeleton[nr, nc]
+                        and not visited[nr, nc]
+                    ):
                         path.append(np.array([nr, nc]))
                         visited[nr, nc] = True
                         current = np.array([nr, nc])
@@ -84,10 +88,8 @@ def _trace_skeleton_paths(skeleton: np.ndarray) -> List[np.ndarray]:
 
 
 def _skeleton_chunk_to_polygon(
-    path_points: np.ndarray,
-    widths_px: np.ndarray,
-    pixel_size: float
-) -> Optional[np.ndarray]:
+    path_points: np.ndarray, widths_px: np.ndarray, pixel_size: float
+) -> np.ndarray | None:
     """
     Convert skeleton path with widths to closed polygon.
 
@@ -117,7 +119,7 @@ def _skeleton_chunk_to_polygon(
         elif i == len(path_points) - 1:
             tangent = path_points[-1] - path_points[-2]
         else:
-            tangent = path_points[i+1] - path_points[i-1]
+            tangent = path_points[i + 1] - path_points[i - 1]
 
         norm = np.linalg.norm(tangent)
         if norm < 1e-6:
@@ -139,10 +141,12 @@ def _skeleton_chunk_to_polygon(
 
     # Create closed polygon: left forward, then right backward
     # Convert to (col, row) = (x, y) for cv2
-    polygon = np.vstack([
-        np.array(left_boundary)[:, ::-1],  # (row,col) to (col,row)
-        np.array(right_boundary)[::-1, ::-1]
-    ])
+    polygon = np.vstack(
+        [
+            np.array(left_boundary)[:, ::-1],  # (row,col) to (col,row)
+            np.array(right_boundary)[::-1, ::-1],
+        ]
+    )
 
     return polygon
 
@@ -172,7 +176,7 @@ class MesotheliumStrategy(DetectionStrategy):
     @property
     def name(self) -> str:
         """Return the strategy name."""
-        return 'mesothelium'
+        return "mesothelium"
 
     def __init__(
         self,
@@ -180,7 +184,7 @@ class MesotheliumStrategy(DetectionStrategy):
         min_ribbon_width_um: float = 5.0,
         max_ribbon_width_um: float = 30.0,
         min_fragment_area_um2: float = 1500.0,
-        pixel_size_um: float = 0.22
+        pixel_size_um: float = 0.22,
     ):
         self.target_chunk_area_um2 = target_chunk_area_um2
         self.min_ribbon_width_um = min_ribbon_width_um
@@ -188,11 +192,7 @@ class MesotheliumStrategy(DetectionStrategy):
         self.min_fragment_area_um2 = min_fragment_area_um2
         self.pixel_size_um = pixel_size_um
 
-    def _segment_ribbons(
-        self,
-        tile: np.ndarray,
-        models: Dict[str, Any]
-    ) -> List[Dict[str, Any]]:
+    def _segment_ribbons(self, tile: np.ndarray, models: dict[str, Any]) -> list[dict[str, Any]]:
         """
         Internal: segment mesothelial ribbons and divide into chunks.
 
@@ -216,12 +216,15 @@ class MesotheliumStrategy(DetectionStrategy):
                 - widths_px: width at each skeleton point
                 - branch_id: index of the skeleton branch
         """
-        from skimage.morphology import (
-            medial_axis, remove_small_objects,
-            binary_closing, binary_opening, disk
-        )
         from skimage.filters import meijering, threshold_local
         from skimage.measure import label, regionprops
+        from skimage.morphology import (
+            binary_closing,
+            binary_opening,
+            disk,
+            medial_axis,
+            remove_small_objects,
+        )
 
         pixel_size = self.pixel_size_um
 
@@ -259,7 +262,7 @@ class MesotheliumStrategy(DetectionStrategy):
         # Morphological cleanup
         binary = binary_opening(binary, disk(1))
         binary = binary_closing(binary, disk(2))
-        min_size_px = int(self.min_fragment_area_um2 / (pixel_size ** 2) * 0.1)
+        min_size_px = int(self.min_fragment_area_um2 / (pixel_size**2) * 0.1)
         if min_size_px > 0:
             binary = remove_small_objects(binary, min_size=min_size_px)
 
@@ -270,7 +273,7 @@ class MesotheliumStrategy(DetectionStrategy):
         # Keep only fragments large enough to chunk
         valid_labels = []
         for prop in props:
-            area_um2 = prop.area * (pixel_size ** 2)
+            area_um2 = prop.area * (pixel_size**2)
             if area_um2 >= self.min_fragment_area_um2:
                 valid_labels.append(prop.label)
 
@@ -287,6 +290,7 @@ class MesotheliumStrategy(DetectionStrategy):
         # Parse skeleton into paths
         try:
             from skan import Skeleton as SkanSkeleton
+
             skel_obj = SkanSkeleton(skeleton)
             paths = skel_obj.paths_list()
         except ImportError:
@@ -318,25 +322,27 @@ class MesotheliumStrategy(DetectionStrategy):
 
             for i in range(1, len(path_coords)):
                 # Segment length
-                dx = (path_coords[i][1] - path_coords[i-1][1]) * pixel_size
-                dy = (path_coords[i][0] - path_coords[i-1][0]) * pixel_size
+                dx = (path_coords[i][1] - path_coords[i - 1][1]) * pixel_size
+                dy = (path_coords[i][0] - path_coords[i - 1][0]) * pixel_size
                 seg_length = np.sqrt(dx**2 + dy**2)
 
                 # Average width
-                avg_width = (widths_um[i] + widths_um[i-1]) / 2
+                avg_width = (widths_um[i] + widths_um[i - 1]) / 2
 
                 # Segment area
                 accumulated_area += seg_length * avg_width
 
                 # Check if we've reached target
                 if accumulated_area >= self.target_chunk_area_um2:
-                    chunks.append({
-                        'start_idx': chunk_start_idx,
-                        'end_idx': i,
-                        'path_points': path_coords[chunk_start_idx:i+1],
-                        'widths_px': widths_px[chunk_start_idx:i+1],
-                        'area_um2': accumulated_area
-                    })
+                    chunks.append(
+                        {
+                            "start_idx": chunk_start_idx,
+                            "end_idx": i,
+                            "path_points": path_coords[chunk_start_idx : i + 1],
+                            "widths_px": widths_px[chunk_start_idx : i + 1],
+                            "area_um2": accumulated_area,
+                        }
+                    )
                     chunk_start_idx = i
                     accumulated_area = 0
 
@@ -346,26 +352,28 @@ class MesotheliumStrategy(DetectionStrategy):
                 if remainder_area < self.target_chunk_area_um2 * 0.5 and len(chunks) > 0:
                     # Merge with previous chunk
                     prev = chunks[-1]
-                    prev['end_idx'] = len(path_coords) - 1
-                    prev['path_points'] = np.vstack([prev['path_points'], path_coords[chunk_start_idx+1:]])
-                    prev['widths_px'] = list(prev['widths_px']) + widths_px[chunk_start_idx+1:]
-                    prev['area_um2'] += remainder_area
+                    prev["end_idx"] = len(path_coords) - 1
+                    prev["path_points"] = np.vstack(
+                        [prev["path_points"], path_coords[chunk_start_idx + 1 :]]
+                    )
+                    prev["widths_px"] = list(prev["widths_px"]) + widths_px[chunk_start_idx + 1 :]
+                    prev["area_um2"] += remainder_area
                 elif remainder_area >= self.min_fragment_area_um2 * 0.5:
                     # Keep as separate chunk if not too small
-                    chunks.append({
-                        'start_idx': chunk_start_idx,
-                        'end_idx': len(path_coords) - 1,
-                        'path_points': path_coords[chunk_start_idx:],
-                        'widths_px': widths_px[chunk_start_idx:],
-                        'area_um2': remainder_area
-                    })
+                    chunks.append(
+                        {
+                            "start_idx": chunk_start_idx,
+                            "end_idx": len(path_coords) - 1,
+                            "path_points": path_coords[chunk_start_idx:],
+                            "widths_px": widths_px[chunk_start_idx:],
+                            "area_um2": remainder_area,
+                        }
+                    )
 
             # Convert chunks to polygons
             for chunk in chunks:
                 polygon = _skeleton_chunk_to_polygon(
-                    chunk['path_points'],
-                    chunk['widths_px'],
-                    pixel_size
+                    chunk["path_points"], chunk["widths_px"], pixel_size
                 )
 
                 if polygon is None or len(polygon) < 4:
@@ -382,26 +390,24 @@ class MesotheliumStrategy(DetectionStrategy):
                 # Calculate centroid
                 cy, cx = ndimage.center_of_mass(chunk_mask_bool)
 
-                raw_detections.append({
-                    'det_id': chunk_id,
-                    'mask': chunk_mask_bool,
-                    'centroid': (float(cx), float(cy)),
-                    'polygon': polygon,
-                    'area_um2': float(chunk['area_um2']),
-                    'path_points': chunk['path_points'],
-                    'widths_px': chunk['widths_px'],
-                    'branch_id': path_idx,
-                })
+                raw_detections.append(
+                    {
+                        "det_id": chunk_id,
+                        "mask": chunk_mask_bool,
+                        "centroid": (float(cx), float(cy)),
+                        "polygon": polygon,
+                        "area_um2": float(chunk["area_um2"]),
+                        "path_points": chunk["path_points"],
+                        "widths_px": chunk["widths_px"],
+                        "branch_id": path_idx,
+                    }
+                )
 
                 chunk_id += 1
 
         return raw_detections
 
-    def segment(
-        self,
-        tile: np.ndarray,
-        models: Dict[str, Any]
-    ) -> List[np.ndarray]:
+    def segment(self, tile: np.ndarray, models: dict[str, Any]) -> list[np.ndarray]:
         """
         Segment mesothelial ribbons and divide into chunks.
 
@@ -419,13 +425,11 @@ class MesotheliumStrategy(DetectionStrategy):
         raw_detections = self._segment_ribbons(tile, models)
 
         # Return just the binary masks per base class interface
-        return [det['mask'] for det in raw_detections]
+        return [det["mask"] for det in raw_detections]
 
     def _segment_ribbons_with_metadata(
-        self,
-        tile: np.ndarray,
-        models: Dict[str, Any]
-    ) -> Tuple[List[np.ndarray], List[Dict[str, Any]]]:
+        self, tile: np.ndarray, models: dict[str, Any]
+    ) -> tuple[list[np.ndarray], list[dict[str, Any]]]:
         """
         Segment ribbons and return both masks and metadata (thread-safe).
 
@@ -436,16 +440,16 @@ class MesotheliumStrategy(DetectionStrategy):
             Tuple of (list of binary masks, list of metadata dicts)
         """
         raw_detections = self._segment_ribbons(tile, models)
-        masks = [det['mask'] for det in raw_detections]
+        masks = [det["mask"] for det in raw_detections]
         return masks, raw_detections
 
     def filter(
         self,
-        masks: List[np.ndarray],
-        features: List[Dict[str, Any]],
+        masks: list[np.ndarray],
+        features: list[dict[str, Any]],
         pixel_size_um: float,
-        metadata_list: Optional[List[Dict[str, Any]]] = None
-    ) -> List[Detection]:
+        metadata_list: list[dict[str, Any]] | None = None,
+    ) -> list[Detection]:
         """
         Filter and classify candidate masks.
 
@@ -472,23 +476,25 @@ class MesotheliumStrategy(DetectionStrategy):
             if not feat:
                 continue
 
-            centroid = feat.get('centroid', [0.0, 0.0])
+            centroid = feat.get("centroid", [0.0, 0.0])
 
             # Merge mesothelium-specific metadata into features if available
             if i < len(metadata_list):
                 meta = metadata_list[i]
-                feat.setdefault('area_um2', meta.get('area_um2', 0.0))
-                feat.setdefault('path_length_um',
-                                float(len(meta.get('path_points', [])) * pixel_size_um))
-                feat.setdefault('mean_width_um',
-                                float(np.mean(meta.get('widths_px', [0])) * pixel_size_um))
-                feat.setdefault('n_vertices', len(meta.get('polygon', [])))
-                feat.setdefault('branch_id', meta.get('branch_id', -1))
-                det_id = meta.get('det_id', i + 1)
+                feat.setdefault("area_um2", meta.get("area_um2", 0.0))
+                feat.setdefault(
+                    "path_length_um", float(len(meta.get("path_points", [])) * pixel_size_um)
+                )
+                feat.setdefault(
+                    "mean_width_um", float(np.mean(meta.get("widths_px", [0])) * pixel_size_um)
+                )
+                feat.setdefault("n_vertices", len(meta.get("polygon", [])))
+                feat.setdefault("branch_id", meta.get("branch_id", -1))
+                det_id = meta.get("det_id", i + 1)
                 # Store polygon in features dict for LMD export (thread-safe)
-                polygon = meta.get('polygon')
+                polygon = meta.get("polygon")
                 if polygon is not None:
-                    feat['polygon'] = polygon
+                    feat["polygon"] = polygon
             else:
                 det_id = i + 1
 
@@ -504,11 +510,8 @@ class MesotheliumStrategy(DetectionStrategy):
         return detections
 
     def detect(
-        self,
-        tile: np.ndarray,
-        models: Dict[str, Any],
-        pixel_size_um: Optional[float] = None
-    ) -> Tuple[np.ndarray, List[Detection]]:
+        self, tile: np.ndarray, models: dict[str, Any], pixel_size_um: float | None = None
+    ) -> tuple[np.ndarray, list[Detection]]:
         """
         Full detection pipeline for mesothelium.
 
@@ -534,8 +537,7 @@ class MesotheliumStrategy(DetectionStrategy):
         features = [self.compute_features(m, tile) for m in masks]
 
         # Filter (creates Detection objects; metadata merged into features)
-        detections = self.filter(masks, features, self.pixel_size_um,
-                                 metadata_list=metadata_list)
+        detections = self.filter(masks, features, self.pixel_size_um, metadata_list=metadata_list)
 
         logger.debug(f"Mesothelium: {len(detections)} chunks detected")
 

@@ -4,15 +4,16 @@ Supports both mask-based and contour-based evaluation. Contour-based
 is useful for evaluating pipeline output without loading HDF5 masks.
 """
 
+from typing import Any
+
 import numpy as np
-from typing import List, Tuple, Optional, Dict, Any
 
 from segmentation.utils.logging import get_logger
 
 logger = get_logger(__name__)
 
 
-def iou_matrix(pred_masks: List[np.ndarray], gt_masks: List[np.ndarray]) -> np.ndarray:
+def iou_matrix(pred_masks: list[np.ndarray], gt_masks: list[np.ndarray]) -> np.ndarray:
     """Compute pairwise IoU between predicted and ground-truth masks.
 
     Args:
@@ -39,9 +40,9 @@ def iou_matrix(pred_masks: List[np.ndarray], gt_masks: List[np.ndarray]) -> np.n
 
 
 def iou_from_contours(
-    pred_contours: List[np.ndarray],
-    gt_contours: List[np.ndarray],
-    image_shape: Optional[Tuple[int, int]] = None,
+    pred_contours: list[np.ndarray],
+    gt_contours: list[np.ndarray],
+    image_shape: tuple[int, int] | None = None,
 ) -> np.ndarray:
     """Compute pairwise IoU from contour polygons.
 
@@ -85,7 +86,7 @@ def iou_from_contours(
 def hungarian_match(
     iou: np.ndarray,
     threshold: float = 0.5,
-) -> Tuple[List[Tuple[int, int, float]], List[int], List[int]]:
+) -> tuple[list[tuple[int, int, float]], list[int], list[int]]:
     """Optimal matching between predictions and ground truth using Hungarian algorithm.
 
     Args:
@@ -124,10 +125,10 @@ def hungarian_match(
 
 
 def panoptic_quality(
-    matched: List[Tuple[int, int, float]],
+    matched: list[tuple[int, int, float]],
     n_pred: int,
     n_gt: int,
-) -> Tuple[float, float, float]:
+) -> tuple[float, float, float]:
     """Compute Panoptic Quality = SQ * RQ.
 
     PQ decomposes into:
@@ -178,10 +179,10 @@ def dice_score(pred_mask: np.ndarray, gt_mask: np.ndarray) -> float:
 
 
 def detection_f1(
-    matched: List[Tuple[int, int, float]],
+    matched: list[tuple[int, int, float]],
     n_pred: int,
     n_gt: int,
-) -> Dict[str, float]:
+) -> dict[str, float]:
     """Compute detection-level precision, recall, and F1.
 
     Args:
@@ -211,10 +212,10 @@ def detection_f1(
 
 
 def evaluate_instance_segmentation(
-    pred_masks: List[np.ndarray],
-    gt_masks: List[np.ndarray],
+    pred_masks: list[np.ndarray],
+    gt_masks: list[np.ndarray],
     iou_threshold: float = 0.5,
-) -> Dict[str, Any]:
+) -> dict[str, Any]:
     """Full instance segmentation evaluation.
 
     Computes IoU matrix, optimal matching, PQ, SQ, RQ, F1, precision, recall.

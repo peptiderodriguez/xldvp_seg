@@ -22,23 +22,22 @@ Usage:
     )
 """
 
-from typing import Any, Dict, Optional
-
-from segmentation.detection.registry import StrategyRegistry
-from segmentation.utils.logging import get_logger
+from typing import Any
 
 import segmentation.detection.strategies  # noqa: F401 — triggers @register_strategy decorators
+from segmentation.detection.registry import StrategyRegistry
+from segmentation.utils.logging import get_logger
 
 logger = get_logger(__name__)
 
 
 def _build_kwargs_nmj(
-    strategy_params: Dict[str, Any],
+    strategy_params: dict[str, Any],
     extract_deep_features: bool,
     extract_sam2_embeddings: bool,
     has_classifier: bool,
     **_ignored,
-) -> Dict[str, Any]:
+) -> dict[str, Any]:
     """Build constructor kwargs for NMJStrategy."""
     return dict(
         intensity_percentile=strategy_params.get("intensity_percentile", 98.0),
@@ -55,11 +54,11 @@ def _build_kwargs_nmj(
 
 
 def _build_kwargs_mk(
-    strategy_params: Dict[str, Any],
+    strategy_params: dict[str, Any],
     extract_deep_features: bool,
     extract_sam2_embeddings: bool,
     **_ignored,
-) -> Dict[str, Any]:
+) -> dict[str, Any]:
     """Build constructor kwargs for MKStrategy."""
     return dict(
         min_area_um=strategy_params.get("mk_min_area", 200.0),
@@ -72,11 +71,11 @@ def _build_kwargs_mk(
 
 
 def _build_kwargs_cell(
-    strategy_params: Dict[str, Any],
+    strategy_params: dict[str, Any],
     extract_deep_features: bool,
     extract_sam2_embeddings: bool,
     **_ignored,
-) -> Dict[str, Any]:
+) -> dict[str, Any]:
     """Build constructor kwargs for CellStrategy."""
     return dict(
         min_area_um=strategy_params.get("min_area_um", 50),
@@ -89,11 +88,11 @@ def _build_kwargs_cell(
 
 
 def _build_kwargs_islet(
-    strategy_params: Dict[str, Any],
+    strategy_params: dict[str, Any],
     extract_deep_features: bool,
     extract_sam2_embeddings: bool,
     **_ignored,
-) -> Dict[str, Any]:
+) -> dict[str, Any]:
     """Build constructor kwargs for IsletStrategy."""
     return dict(
         membrane_channel=strategy_params.get("membrane_channel", 1),
@@ -107,11 +106,11 @@ def _build_kwargs_islet(
 
 
 def _build_kwargs_tissue_pattern(
-    strategy_params: Dict[str, Any],
+    strategy_params: dict[str, Any],
     extract_deep_features: bool,
     extract_sam2_embeddings: bool,
     **_ignored,
-) -> Dict[str, Any]:
+) -> dict[str, Any]:
     """Build constructor kwargs for TissuePatternStrategy."""
     return dict(
         detection_channels=strategy_params.get("detection_channels", [0, 3]),
@@ -125,11 +124,11 @@ def _build_kwargs_tissue_pattern(
 
 
 def _build_kwargs_vessel(
-    strategy_params: Dict[str, Any],
+    strategy_params: dict[str, Any],
     extract_deep_features: bool,
     extract_sam2_embeddings: bool,
     **_ignored,
-) -> Dict[str, Any]:
+) -> dict[str, Any]:
     """Build constructor kwargs for VesselStrategy."""
     return dict(
         min_diameter_um=strategy_params.get("min_vessel_diameter_um", 10),
@@ -154,12 +153,12 @@ def _build_kwargs_vessel(
 
 
 def _build_kwargs_mesothelium(
-    strategy_params: Dict[str, Any],
+    strategy_params: dict[str, Any],
     extract_deep_features: bool,
     extract_sam2_embeddings: bool,
-    pixel_size_um: Optional[float] = None,
+    pixel_size_um: float | None = None,
     **_ignored,
-) -> Dict[str, Any]:
+) -> dict[str, Any]:
     """Build constructor kwargs for MesotheliumStrategy."""
     meso_params = {k: v for k, v in strategy_params.items() if k != "pixel_size_um"}
     return dict(
@@ -171,12 +170,12 @@ def _build_kwargs_mesothelium(
 
 
 def _build_kwargs_instanseg(
-    strategy_params: Dict[str, Any],
+    strategy_params: dict[str, Any],
     extract_deep_features: bool,
     extract_sam2_embeddings: bool,
-    pixel_size_um: Optional[float] = None,
+    pixel_size_um: float | None = None,
     **_ignored,
-) -> Dict[str, Any]:
+) -> dict[str, Any]:
     """Build constructor kwargs for InstanSegStrategy."""
     kwargs = dict(
         instanseg_model=strategy_params.get("instanseg_model", "fluorescence_nuclei_and_cells"),
@@ -211,7 +210,7 @@ _validated = False
 
 def create_strategy(
     cell_type: str,
-    strategy_params: Dict[str, Any],
+    strategy_params: dict[str, Any],
     extract_deep_features: bool = False,
     extract_sam2_embeddings: bool = True,
     pixel_size_um: float = None,
@@ -261,9 +260,7 @@ def create_strategy(
         strategy_class = StrategyRegistry.get_strategy_class(effective_type)
     except KeyError:
         available = ", ".join(sorted(StrategyRegistry.list_strategies()))
-        raise ValueError(
-            f"Unknown cell_type: '{effective_type}'. Supported types: {available}"
-        )
+        raise ValueError(f"Unknown cell_type: '{effective_type}'. Supported types: {available}")
 
     # Build strategy-specific kwargs
     kwargs_builder = _KWARGS_BUILDERS.get(effective_type)

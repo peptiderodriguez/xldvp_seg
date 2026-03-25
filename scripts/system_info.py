@@ -15,25 +15,21 @@ import os
 import re
 import shutil
 import subprocess
-import sys
 from pathlib import Path
 
 REPO = Path(__file__).resolve().parent.parent
-XLDVP_PYTHON = Path(
-    os.environ.get("XLDVP_PYTHON", os.environ.get("MKSEG_PYTHON", "python"))
-)
+XLDVP_PYTHON = Path(os.environ.get("XLDVP_PYTHON", os.environ.get("MKSEG_PYTHON", "python")))
 
 
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
 
+
 def _run(cmd, timeout=10):
     """Run a command and return stdout, or None on failure."""
     try:
-        r = subprocess.run(
-            cmd, capture_output=True, text=True, timeout=timeout
-        )
+        r = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout)
         return r.stdout.strip() if r.returncode == 0 else None
     except (FileNotFoundError, subprocess.TimeoutExpired, OSError):
         return None
@@ -58,6 +54,7 @@ def _parse_meminfo():
 # ---------------------------------------------------------------------------
 # Detection functions
 # ---------------------------------------------------------------------------
+
 
 def detect_slurm():
     """Detect SLURM cluster info.  Returns dict or None."""
@@ -94,11 +91,11 @@ def detect_slurm():
 
         # Strip trailing "(S:0)" from GRES like "gpu:l40s:4(S:0)"
         if "(" in gres:
-            gres = gres[:gres.index("(")]
+            gres = gres[: gres.index("(")]
 
         # Count nodes from nodelist (e.g. "hpcl[8005-8059]")
         node_count = 1
-        range_match = re.search(r'\[(\d+)-(\d+)\]', nodelist)
+        range_match = re.search(r"\[(\d+)-(\d+)\]", nodelist)
         if range_match:
             node_count = int(range_match.group(2)) - int(range_match.group(1)) + 1
 
@@ -114,9 +111,15 @@ def detect_slurm():
                 "nodes_idle": 0,
             }
         else:
-            partitions[partition]["cpus_per_node"] = max(partitions[partition]["cpus_per_node"], cpus)
-            partitions[partition]["mem_gb_per_node"] = max(partitions[partition]["mem_gb_per_node"], round(mem_mb / 1024))
-            partitions[partition]["node_count"] = max(partitions[partition]["node_count"], node_count)
+            partitions[partition]["cpus_per_node"] = max(
+                partitions[partition]["cpus_per_node"], cpus
+            )
+            partitions[partition]["mem_gb_per_node"] = max(
+                partitions[partition]["mem_gb_per_node"], round(mem_mb / 1024)
+            )
+            partitions[partition]["node_count"] = max(
+                partitions[partition]["node_count"], node_count
+            )
             if gres and not partitions[partition]["gres"]:
                 partitions[partition]["gres"] = gres
 
@@ -165,14 +168,16 @@ def detect_slurm():
             for line in raw.splitlines():
                 parts = line.split(None, 5)
                 if len(parts) >= 4:
-                    slurm["running_jobs"].append({
-                        "job_id": parts[0],
-                        "name": parts[1],
-                        "partition": parts[2],
-                        "state": parts[3],
-                        "time": parts[4] if len(parts) > 4 else "",
-                        "node": parts[5] if len(parts) > 5 else "",
-                    })
+                    slurm["running_jobs"].append(
+                        {
+                            "job_id": parts[0],
+                            "name": parts[1],
+                            "partition": parts[2],
+                            "state": parts[3],
+                            "time": parts[4] if len(parts) > 4 else "",
+                            "node": parts[5] if len(parts) > 5 else "",
+                        }
+                    )
 
     return slurm
 
@@ -201,8 +206,8 @@ def detect_disk_space(paths=None):
     for p in paths:
         try:
             st = os.statvfs(p)
-            total_gb = round(st.f_blocks * st.f_frsize / (1024 ** 3), 1)
-            free_gb = round(st.f_bavail * st.f_frsize / (1024 ** 3), 1)
+            total_gb = round(st.f_blocks * st.f_frsize / (1024**3), 1)
+            free_gb = round(st.f_bavail * st.f_frsize / (1024**3), 1)
             result[p] = {"total_gb": total_gb, "free_gb": free_gb}
         except OSError:
             pass
@@ -258,8 +263,8 @@ def query_per_node_availability(partition):
         if len(parts) < 5:
             continue
         node = parts[0]
-        cpu_str = parts[1]   # "allocated/idle/other/total"
-        mem_str = parts[2]   # free MB (or "N/A")
+        cpu_str = parts[1]  # "allocated/idle/other/total"
+        mem_str = parts[2]  # free MB (or "N/A")
         gres_str = parts[3]  # e.g. "gpu:l40s:4(IDX:...)" or "(null)"
         state = parts[4]
 
@@ -284,7 +289,7 @@ def query_per_node_availability(partition):
         if gres_str not in ("(null)", "N/A", ""):
             # Strip "(IDX:...)" or "(S:...)" suffix
             if "(" in gres_str:
-                gres_str = gres_str[:gres_str.index("(")]
+                gres_str = gres_str[: gres_str.index("(")]
             gparts = gres_str.split(":")
             if len(gparts) >= 3:
                 try:
@@ -297,13 +302,15 @@ def query_per_node_availability(partition):
                 except ValueError:
                     pass
 
-        nodes.append({
-            "node": node,
-            "idle_cpus": idle_cpus,
-            "free_mem_mb": free_mem_mb,
-            "gpus_total": gpus_total,
-            "state": state,
-        })
+        nodes.append(
+            {
+                "node": node,
+                "idle_cpus": idle_cpus,
+                "free_mem_mb": free_mem_mb,
+                "gpus_total": gpus_total,
+                "state": state,
+            }
+        )
 
     return nodes
 
@@ -351,6 +358,7 @@ def _best_schedulable_resources(partition_info, per_node):
 # ---------------------------------------------------------------------------
 # Recommendation logic
 # ---------------------------------------------------------------------------
+
 
 def recommend(slurm_info, local_gpus, total_ram_gb):
     """Build recommended resource allocation.
@@ -412,6 +420,7 @@ def recommend(slurm_info, local_gpus, total_ram_gb):
 # Main
 # ---------------------------------------------------------------------------
 
+
 def gather():
     """Collect all system info into a dict."""
     total_ram, avail_ram = _parse_meminfo()
@@ -451,24 +460,30 @@ def print_human(info):
         print(f"  Git:          {git.get('branch', '?')} @ {git.get('head_sha', '?')}")
     print(f"  xldvp_seg env: {'OK' if info['xldvp_available'] else 'NOT FOUND'}")
     print(f"  CPUs:         {info['cpus']}")
-    print(f"  RAM:          {info['ram_total_gb']:.0f} GB total, {info['ram_available_gb']:.0f} GB available")
+    print(
+        f"  RAM:          {info['ram_total_gb']:.0f} GB total, {info['ram_available_gb']:.0f} GB available"
+    )
 
     if info.get("local_gpus"):
-        print(f"  Local GPUs:")
+        print("  Local GPUs:")
         for g in info["local_gpus"]:
             print(f"    - {g['name']} ({g['memory_mb']} MB)")
 
     if info.get("slurm"):
         slurm = info["slurm"]
-        print(f"\n  SLURM Partitions:")
+        print("\n  SLURM Partitions:")
         for p in slurm["partitions"]:
-            gpu_str = f", {p['gpus_per_node']}x {p.get('gpu_type', 'GPU')}" if p["gpus_per_node"] else ""
+            gpu_str = (
+                f", {p['gpus_per_node']}x {p.get('gpu_type', 'GPU')}" if p["gpus_per_node"] else ""
+            )
             idle = p.get("nodes_idle", 0)
             alloc = p.get("nodes_allocated", 0)
             total = p["node_count"]
             busy_pct = round(alloc / total * 100) if total else 0
             avail_str = f"  [{idle} idle / {total} total, {busy_pct}% busy]"
-            print(f"    {p['name']:<12s}  {p['cpus_per_node']} CPUs, {p['mem_gb_per_node']}G RAM{gpu_str}{avail_str}")
+            print(
+                f"    {p['name']:<12s}  {p['cpus_per_node']} CPUs, {p['mem_gb_per_node']}G RAM{gpu_str}{avail_str}"
+            )
 
         jobs = slurm.get("running_jobs", [])
         if jobs:
@@ -478,12 +493,12 @@ def print_human(info):
 
     disk = info.get("disk", {})
     if disk:
-        print(f"\n  Disk Space:")
+        print("\n  Disk Space:")
         for path, d in disk.items():
             print(f"    {path}: {d['free_gb']:.0f} GB free / {d['total_gb']:.0f} GB total")
 
     rec = info["recommended"]
-    print(f"\n  Recommended Resources:")
+    print("\n  Recommended Resources:")
     if rec.get("partition"):
         print(f"    Partition:  {rec['partition']}")
         if rec.get("gres"):
@@ -496,14 +511,19 @@ def print_human(info):
     if per_node:
         schedulable = [n for n in per_node if n["state"] in ("idle", "mixed", "idle~", "mixed~")]
         max_idle_cpus = max((n["idle_cpus"] for n in schedulable), default=0)
-        print(f"    Node avail: {len(schedulable)}/{len(per_node)} nodes schedulable, "
-              f"max {max_idle_cpus} idle CPUs on best node")
+        print(
+            f"    Node avail: {len(schedulable)}/{len(per_node)} nodes schedulable, "
+            f"max {max_idle_cpus} idle CPUs on best node"
+        )
     print(f"{'=' * 60}\n")
 
 
 def main():
     import argparse
-    parser = argparse.ArgumentParser(description="Detect system environment and recommend pipeline resources")
+
+    parser = argparse.ArgumentParser(
+        description="Detect system environment and recommend pipeline resources"
+    )
     parser.add_argument("--json", action="store_true", help="Output as JSON")
     args = parser.parse_args()
 

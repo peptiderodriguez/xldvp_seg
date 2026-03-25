@@ -18,13 +18,12 @@ Usage:
     )
 """
 
-from typing import Callable, Optional
+from collections.abc import Callable
 
 import numpy as np
 
 
-def build_replicates(cells, target_area, max_reps, min_fraction, rng,
-                     area_fn=None):
+def build_replicates(cells, target_area, max_reps, min_fraction, rng, area_fn=None):
     """Greedily assign shuffled cells into area-matched replicates.
 
     Adds cells randomly. For the last cell in each replicate (the one that
@@ -65,15 +64,13 @@ def build_replicates(cells, target_area, max_reps, min_fraction, rng,
                 # cell that lands closest to target (over or under)
                 gap = target_area - current_area
                 remaining = list(available)
-                best_idx = min(remaining,
-                               key=lambda i: abs(cell_areas[i] - gap))
+                best_idx = min(remaining, key=lambda i: abs(cell_areas[i] - gap))
                 available.discard(best_idx)
                 current_uids.append(cells[best_idx]["uid"])
                 current_area += cell_areas[best_idx]
                 # Accept if within ±5% of target
                 if current_area >= target_area * 0.95:
-                    replicates.append({"uids": current_uids,
-                                       "total_area_um2": current_area})
+                    replicates.append({"uids": current_uids, "total_area_um2": current_area})
                 break
 
             available.discard(idx)
@@ -82,8 +79,7 @@ def build_replicates(cells, target_area, max_reps, min_fraction, rng,
         else:
             # Exhausted available cells without reaching target
             if current_uids and current_area >= target_area * min_fraction:
-                replicates.append({"uids": current_uids,
-                                   "total_area_um2": current_area})
+                replicates.append({"uids": current_uids, "total_area_um2": current_area})
             break
 
     return replicates
@@ -98,8 +94,8 @@ def select_cells_for_lmd(
     max_replicates: int = 4,
     min_replicate_fraction: float = 0.5,
     seed: int = 42,
-    area_fn: Optional[Callable] = None,
-    exclude_fn: Optional[Callable] = None,
+    area_fn: Callable | None = None,
+    exclude_fn: Callable | None = None,
 ):
     """Select cells for LMD proteomics, grouped into area-matched replicates.
 
@@ -148,8 +144,9 @@ def select_cells_for_lmd(
 
     for key in sorted(grouped.keys()):
         group_cells = grouped[key]
-        reps = build_replicates(group_cells, target_area, max_replicates,
-                                min_replicate_fraction, rng, area_fn)
+        reps = build_replicates(
+            group_cells, target_area, max_replicates, min_replicate_fraction, rng, area_fn
+        )
 
         for rep in reps:
             rep["total_area_um2"] = round(rep["total_area_um2"], 1)
@@ -171,12 +168,13 @@ def select_cells_for_lmd(
     assert len(uid_list) == len(set(uid_list)), "Duplicate UIDs across replicates!"
 
     total_reps = sum(len(g["replicates"]) for g in groups_result.values())
-    groups_with_max = sum(1 for g in groups_result.values()
-                         if len(g["replicates"]) == max_replicates)
-    groups_with_fewer = sum(1 for g in groups_result.values()
-                           if 0 < len(g["replicates"]) < max_replicates)
-    groups_with_none = sum(1 for g in groups_result.values()
-                          if len(g["replicates"]) == 0)
+    groups_with_max = sum(
+        1 for g in groups_result.values() if len(g["replicates"]) == max_replicates
+    )
+    groups_with_fewer = sum(
+        1 for g in groups_result.values() if 0 < len(g["replicates"]) < max_replicates
+    )
+    groups_with_none = sum(1 for g in groups_result.values() if len(g["replicates"]) == 0)
 
     summary = {
         "total_cells_filtered": len(cells),

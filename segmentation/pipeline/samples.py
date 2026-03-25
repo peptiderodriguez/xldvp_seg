@@ -9,9 +9,9 @@ import gc
 
 import numpy as np
 
-from segmentation.utils.logging import get_logger
+from segmentation.io.html_export import draw_mask_contour, image_to_base64, percentile_normalize
 from segmentation.utils.islet_utils import classify_islet_marker
-from segmentation.io.html_export import percentile_normalize, draw_mask_contour, image_to_base64
+from segmentation.utils.logging import get_logger
 
 logger = get_logger(__name__)
 
@@ -26,14 +26,27 @@ def _compute_tile_percentiles(tile_rgb, p_low=1, p_high=99.5):
     for ch in range(tile_rgb.shape[2]):
         valid = tile_rgb[:, :, ch][valid_mask]
         if len(valid) > 0:
-            percentiles[ch] = (float(np.percentile(valid, p_low)), float(np.percentile(valid, p_high)))
+            percentiles[ch] = (
+                float(np.percentile(valid, p_low)),
+                float(np.percentile(valid, p_high)),
+            )
     return percentiles if percentiles else None
 
 
-def calibrate_islet_marker_gmm(pilot_tiles, loader, all_channel_data, slide_shm_arr,
-                               ch_to_slot, marker_channels, membrane_channel=1,
-                               nuclear_channel=4, tile_size=4000, pixel_size_um=None,
-                               nuclei_only=False, mosaic_origin=(0, 0)):
+def calibrate_islet_marker_gmm(
+    pilot_tiles,
+    loader,
+    all_channel_data,
+    slide_shm_arr,
+    ch_to_slot,
+    marker_channels,
+    membrane_channel=1,
+    nuclear_channel=4,
+    tile_size=4000,
+    pixel_size_um=None,
+    nuclei_only=False,
+    mosaic_origin=(0, 0),
+):
     """Run Cellpose on pilot tiles to calibrate global GMM pre-filter thresholds.
 
     Similar to calibrate_tissue_threshold(): samples a few tiles to estimate
@@ -74,7 +87,8 @@ def calibrate_islet_marker_gmm(pilot_tiles, loader, all_channel_data, slide_shm_
     # Load Cellpose model (lightweight -- single GPU, no SAM2 needed)
     try:
         from cellpose.models import CellposeModel
-        cellpose_model = CellposeModel(gpu=True, pretrained_model='cpsam')
+
+        cellpose_model = CellposeModel(gpu=True, pretrained_model="cpsam")
     except Exception as e:
         logger.warning(f"Failed to load Cellpose for calibration: {e}")
         return {}
@@ -83,9 +97,9 @@ def calibrate_islet_marker_gmm(pilot_tiles, loader, all_channel_data, slide_shm_
     def _read_channel(ch_idx, x, y, w, h):
         if slide_shm_arr is not None and ch_to_slot and ch_idx in ch_to_slot:
             slot = ch_to_slot[ch_idx]
-            return slide_shm_arr[y:y+h, x:x+w, slot].copy()
+            return slide_shm_arr[y : y + h, x : x + w, slot].copy()
         elif all_channel_data and ch_idx in all_channel_data:
-            return all_channel_data[ch_idx][y:y+h, x:x+w].copy()
+            return all_channel_data[ch_idx][y : y + h, x : x + w].copy()
         return None
 
     # Helper: percentile normalize uint16 -> uint8
@@ -106,7 +120,7 @@ def calibrate_islet_marker_gmm(pilot_tiles, loader, all_channel_data, slide_shm_
 
     ox, oy = mosaic_origin
     for ti, tile in enumerate(pilot_tiles):
-        tx, ty = tile['x'] - ox, tile['y'] - oy
+        tx, ty = tile["x"] - ox, tile["y"] - oy
         logger.info(f"  Pilot tile {ti+1}/{len(pilot_tiles)} at ({tile['x']}, {tile['y']})...")
 
         # Read channels for Cellpose
@@ -131,8 +145,10 @@ def calibrate_islet_marker_gmm(pilot_tiles, loader, all_channel_data, slide_shm_
         # Run Cellpose
         try:
             masks, _, _ = cellpose_model.eval(
-                cellpose_input, channels=cellpose_channels,
-                diameter=None, flow_threshold=0.4,
+                cellpose_input,
+                channels=cellpose_channels,
+                diameter=None,
+                flow_threshold=0.4,
             )
         except Exception as e:
             logger.warning(f"  Cellpose failed on tile ({tx},{ty}): {e}")
@@ -151,6 +167,7 @@ def calibrate_islet_marker_gmm(pilot_tiles, loader, all_channel_data, slide_shm_
 
         # Extract per-cell marker means (same as Phase 0 in detect())
         from scipy.ndimage import find_objects
+
         slices = find_objects(masks)
         tile_cells = 0
         for label_idx, sl in enumerate(slices):
@@ -174,8 +191,10 @@ def calibrate_islet_marker_gmm(pilot_tiles, loader, all_channel_data, slide_shm_
     logger.info(f"  Pilot calibration: {total_cells} cells from {len(pilot_tiles)} tiles")
 
     if total_cells < 100:
-        logger.warning(f"  Only {total_cells} pilot cells -- too few for reliable GMM. "
-                       "Falling back to per-tile GMM.")
+        logger.warning(
+            f"  Only {total_cells} pilot cells -- too few for reliable GMM. "
+            "Falling back to per-tile GMM."
+        )
         return {}
 
     # Fit 2-component GMM per marker channel
@@ -198,7 +217,9 @@ def calibrate_islet_marker_gmm(pilot_tiles, loader, all_channel_data, slide_shm_
         # Check separation quality
         gmm_means = gmm.means_.flatten()
         gmm_stds = np.sqrt(gmm.covariances_.flatten())
-        separation = abs(gmm_means[signal_idx] - gmm_means[1 - signal_idx]) / max(gmm_stds[1 - signal_idx], gmm_stds[signal_idx])
+        separation = abs(gmm_means[signal_idx] - gmm_means[1 - signal_idx]) / max(
+            gmm_stds[1 - signal_idx], gmm_stds[signal_idx]
+        )
 
         if separation >= 1.0:
             # Good separation: use GMM P=0.75 crossover (matches final classification)
@@ -211,27 +232,32 @@ def calibrate_islet_marker_gmm(pilot_tiles, loader, all_channel_data, slide_shm_
                 else:
                     lo_raw = mid
             threshold = (lo_raw + hi_raw) / 2
-            method = 'GMM(P>=0.75)'
+            method = "GMM(P>=0.75)"
         else:
             # Poor separation: use top-5% percentile (matches compute_islet_marker_thresholds)
             threshold = float(np.percentile(arr_pos, 95))
-            method = 'top-5%'
+            method = "top-5%"
 
         gmm_thresholds[ch_idx] = threshold
         n_pos = int(np.sum(arr > threshold))
-        logger.info(f"  ch{ch_idx}: {method} bg={bg_mean:.0f}, sig={sig_mean:.0f}, sep={separation:.2f}sigma, "
-                    f"threshold={threshold:.0f} (raw), "
-                    f"{n_pos}/{len(arr)} positive ({100*n_pos/len(arr):.1f}%)")
+        logger.info(
+            f"  ch{ch_idx}: {method} bg={bg_mean:.0f}, sig={sig_mean:.0f}, sep={separation:.2f}sigma, "
+            f"threshold={threshold:.0f} (raw), "
+            f"{n_pos}/{len(arr)} positive ({100*n_pos/len(arr):.1f}%)"
+        )
 
     if gmm_thresholds:
-        logger.info(f"Islet marker calibration complete: "
-                    + ", ".join(f"ch{k}={v:.0f}" for k, v in sorted(gmm_thresholds.items())))
+        logger.info(
+            "Islet marker calibration complete: "
+            + ", ".join(f"ch{k}={v:.0f}" for k, v in sorted(gmm_thresholds.items()))
+        )
 
     # Clean up Cellpose model
     del cellpose_model
     gc.collect()
     try:
         from segmentation.utils.device import empty_cache
+
         empty_cache()
     except Exception:
         pass
@@ -240,10 +266,21 @@ def calibrate_islet_marker_gmm(pilot_tiles, loader, all_channel_data, slide_shm_
 
 
 def filter_and_create_html_samples(
-    features_list, tile_x, tile_y, tile_rgb, masks, pixel_size_um,
-    slide_name, cell_type, html_score_threshold, min_area_um2=25.0,
-    tile_percentiles=None, marker_thresholds=None, marker_map=None,
-    candidate_mode=False, vessel_params=None,
+    features_list,
+    tile_x,
+    tile_y,
+    tile_rgb,
+    masks,
+    pixel_size_um,
+    slide_name,
+    cell_type,
+    html_score_threshold,
+    min_area_um2=25.0,
+    tile_percentiles=None,
+    marker_thresholds=None,
+    marker_map=None,
+    candidate_mode=False,
+    vessel_params=None,
 ):
     """Filter detections by quality and create HTML samples.
 
@@ -251,35 +288,43 @@ def filter_and_create_html_samples(
     """
     samples = []
     for feat in features_list:
-        features_dict = feat.get('features', {})
+        features_dict = feat.get("features", {})
 
-        rf_score = feat.get('rf_prediction', feat.get('score', 1.0))
+        rf_score = feat.get("rf_prediction", feat.get("score", 1.0))
         if rf_score is None:
             rf_score = 1.0  # No classifier loaded; show all candidates
         if rf_score < html_score_threshold:
             continue
 
-        area_um2 = features_dict.get('area', 0) * (pixel_size_um ** 2)
+        area_um2 = features_dict.get("area", 0) * (pixel_size_um**2)
         if area_um2 < min_area_um2:
             continue
 
-        if cell_type == 'vessel' and not candidate_mode:
+        if cell_type == "vessel" and not candidate_mode:
             vp = vessel_params or {}
-            min_ring = vp.get('min_ring_completeness', 0.3)
-            min_circ = vp.get('min_circularity', 0.15)
-            min_wt = vp.get('min_wall_thickness_um', 1.5)
-            if features_dict.get('ring_completeness', 1.0) < min_ring:
+            min_ring = vp.get("min_ring_completeness", 0.3)
+            min_circ = vp.get("min_circularity", 0.15)
+            min_wt = vp.get("min_wall_thickness_um", 1.5)
+            if features_dict.get("ring_completeness", 1.0) < min_ring:
                 continue
-            if features_dict.get('circularity', 1.0) < min_circ:
+            if features_dict.get("circularity", 1.0) < min_circ:
                 continue
-            wt = features_dict.get('wall_thickness_mean_um')
+            wt = features_dict.get("wall_thickness_mean_um")
             if wt is not None and wt < min_wt:
                 continue
 
         sample = create_sample_from_detection(
-            tile_x, tile_y, tile_rgb, masks, feat, pixel_size_um, slide_name,
-            cell_type=cell_type, tile_percentiles=tile_percentiles,
-            marker_thresholds=marker_thresholds, marker_map=marker_map,
+            tile_x,
+            tile_y,
+            tile_rgb,
+            masks,
+            feat,
+            pixel_size_um,
+            slide_name,
+            cell_type=cell_type,
+            tile_percentiles=tile_percentiles,
+            marker_thresholds=marker_thresholds,
+            marker_map=marker_map,
         )
         if sample:
             samples.append(sample)
@@ -298,10 +343,10 @@ def generate_tile_grid(mosaic_info, tile_size, overlap_fraction=0.0):
         List of tile coordinate dicts with 'x' and 'y' keys
     """
     tiles = []
-    x_start = mosaic_info['x']
-    y_start = mosaic_info['y']
-    width = mosaic_info['width']
-    height = mosaic_info['height']
+    x_start = mosaic_info["x"]
+    y_start = mosaic_info["y"]
+    width = mosaic_info["width"]
+    height = mosaic_info["height"]
 
     # Calculate stride (step size) based on overlap
     stride = int(tile_size * (1 - overlap_fraction))
@@ -309,16 +354,28 @@ def generate_tile_grid(mosaic_info, tile_size, overlap_fraction=0.0):
 
     for y in range(y_start, y_start + height, stride):
         for x in range(x_start, x_start + width, stride):
-            tiles.append({'x': x, 'y': y})
+            tiles.append({"x": x, "y": y})
 
     return tiles
 
 
-def create_sample_from_detection(tile_x, tile_y, tile_rgb, masks, feat, pixel_size_um,
-                                 slide_name, cell_type='nmj', crop_size=None,
-                                 tile_percentiles=None, marker_thresholds=None,
-                                 marker_map=None, contour_thickness=2,
-                                 image_format='JPEG', dashed_contour=True):
+def create_sample_from_detection(
+    tile_x,
+    tile_y,
+    tile_rgb,
+    masks,
+    feat,
+    pixel_size_um,
+    slide_name,
+    cell_type="nmj",
+    crop_size=None,
+    tile_percentiles=None,
+    marker_thresholds=None,
+    marker_map=None,
+    contour_thickness=2,
+    image_format="JPEG",
+    dashed_contour=True,
+):
     """Create an HTML sample from a detection.
 
     Crop size is calculated dynamically to be 100% larger than the mask,
@@ -344,10 +401,10 @@ def create_sample_from_detection(tile_x, tile_y, tile_rgb, masks, feat, pixel_si
         image_format: 'JPEG' or 'PNG' for the encoded image.
     """
     # Get mask label: try tile_mask_label (saved JSON), mask_label, or parse from id
-    det_num = feat.get('tile_mask_label', feat.get('mask_label', 0))
-    if det_num == 0 and 'id' in feat:
+    det_num = feat.get("tile_mask_label", feat.get("mask_label", 0))
+    if det_num == 0 and "id" in feat:
         try:
-            det_num = int(str(feat['id']).split('_')[-1])
+            det_num = int(str(feat["id"]).split("_")[-1])
         except (ValueError, IndexError):
             pass
     if det_num == 0:
@@ -358,7 +415,7 @@ def create_sample_from_detection(tile_x, tile_y, tile_rgb, masks, feat, pixel_si
     if len(ys) == 0:
         return None
 
-    center = feat.get('center')
+    center = feat.get("center")
     if center is not None and len(center) >= 2:
         cx, cy = float(center[0]), float(center[1])
     else:
@@ -399,36 +456,54 @@ def create_sample_from_detection(tile_x, tile_y, tile_rgb, masks, feat, pixel_si
     pad_right = max(0, x2_ideal - x2)
 
     if pad_top > 0 or pad_bottom > 0 or pad_left > 0 or pad_right > 0:
-        crop = np.pad(crop, ((pad_top, pad_bottom), (pad_left, pad_right), (0, 0)), mode='constant', constant_values=0)
-        crop_mask = np.pad(crop_mask, ((pad_top, pad_bottom), (pad_left, pad_right)), mode='constant', constant_values=False)
+        crop = np.pad(
+            crop,
+            ((pad_top, pad_bottom), (pad_left, pad_right), (0, 0)),
+            mode="constant",
+            constant_values=0,
+        )
+        crop_mask = np.pad(
+            crop_mask,
+            ((pad_top, pad_bottom), (pad_left, pad_right)),
+            mode="constant",
+            constant_values=False,
+        )
 
     # Determine contour color
-    features = feat.get('features', {})
+    features = feat.get("features", {})
     contour_color = (0, 255, 0)  # default green
     marker_class = None
-    if cell_type == 'islet' and marker_thresholds is not None:
-        marker_class, contour_color = classify_islet_marker(features, marker_thresholds, marker_map=marker_map)
+    if cell_type == "islet" and marker_thresholds is not None:
+        marker_class, contour_color = classify_islet_marker(
+            features, marker_thresholds, marker_map=marker_map
+        )
 
     # Normalize and draw contour
-    crop_norm = percentile_normalize(crop, p_low=1, p_high=99.5, global_percentiles=tile_percentiles)
+    crop_norm = percentile_normalize(
+        crop, p_low=1, p_high=99.5, global_percentiles=tile_percentiles
+    )
 
     # Save clean version before drawing contours (for channel toggle base layer)
     img_b64_clean, _ = image_to_base64(crop_norm, format=image_format)
 
     # Draw contours on the image
-    _bw = dashed_contour or (cell_type == 'islet')
-    crop_with_contour = draw_mask_contour(crop_norm, crop_mask, color=contour_color, thickness=contour_thickness, bw_dashed=_bw)
+    _bw = dashed_contour or (cell_type == "islet")
+    crop_with_contour = draw_mask_contour(
+        crop_norm, crop_mask, color=contour_color, thickness=contour_thickness, bw_dashed=_bw
+    )
     img_b64, mime = image_to_base64(crop_with_contour, format=image_format)
 
     # Contour-only image (green on black) for overlay with mix-blend-mode:lighten
     # Use PNG to avoid JPEG artifacts on thin colored lines against black background
     contour_only = np.zeros_like(crop_norm)
-    contour_only = draw_mask_contour(contour_only, crop_mask, color=contour_color, thickness=contour_thickness, bw_dashed=_bw)
-    img_b64_contour_only, _ = image_to_base64(contour_only, format='PNG')
+    contour_only = draw_mask_contour(
+        contour_only, crop_mask, color=contour_color, thickness=contour_thickness, bw_dashed=_bw
+    )
+    img_b64_contour_only, _ = image_to_base64(contour_only, format="PNG")
 
     # Use existing UID if available, otherwise construct from global coords
-    if 'uid' in feat:
-        uid = feat['uid']
+    if "uid" in feat:
+        uid = feat["uid"]
     else:
         local_cx, local_cy = cx, cy
         global_cx = tile_x + local_cx
@@ -436,52 +511,61 @@ def create_sample_from_detection(tile_x, tile_y, tile_rgb, masks, feat, pixel_si
         uid = f"{slide_name}_{cell_type}_{int(round(global_cx))}_{int(round(global_cy))}"
 
     # Build stats
-    area_um2 = features.get('area_um2', features.get('area', 0) * (pixel_size_um ** 2))
+    area_um2 = features.get("area_um2", features.get("area", 0) * (pixel_size_um**2))
 
     stats = {
-        'area_um2': area_um2,
-        'area_px': features.get('area', 0),
+        "area_um2": area_um2,
+        "area_px": features.get("area", 0),
     }
 
     # Marker classification for islet
     if marker_class is not None:
-        stats['marker_class'] = marker_class
-        stats['marker_color'] = f'#{contour_color[0]:02x}{contour_color[1]:02x}{contour_color[2]:02x}'
+        stats["marker_class"] = marker_class
+        stats["marker_color"] = (
+            f"#{contour_color[0]:02x}{contour_color[1]:02x}{contour_color[2]:02x}"
+        )
 
     # Detection method provenance
-    if 'detection_method' in features:
-        dm = features['detection_method']
-        stats['detection_method'] = ', '.join(dm) if isinstance(dm, list) else dm
+    if "detection_method" in features:
+        dm = features["detection_method"]
+        stats["detection_method"] = ", ".join(dm) if isinstance(dm, list) else dm
 
     # Morphological stats
-    if 'elongation' in features:
-        stats['elongation'] = features['elongation']
-    if 'sam2_iou' in features:
-        stats['confidence'] = features['sam2_iou']
-    if 'sam2_score' in features:
-        stats['confidence'] = features['sam2_score']
+    if "elongation" in features:
+        stats["elongation"] = features["elongation"]
+    if "sam2_iou" in features:
+        stats["confidence"] = features["sam2_iou"]
+    if "sam2_score" in features:
+        stats["confidence"] = features["sam2_score"]
 
     # Classifier score
-    rf_pred = feat.get('rf_prediction')
+    rf_pred = feat.get("rf_prediction")
     if rf_pred is not None:
-        stats['rf_prediction'] = rf_pred
+        stats["rf_prediction"] = rf_pred
     else:
-        score = feat.get('score')
+        score = feat.get("score")
         if score is not None:
-            stats['rf_prediction'] = score
+            stats["rf_prediction"] = score
 
     # Vessel-specific stats
-    for vk in ('ring_completeness', 'circularity', 'wall_thickness_mean_um',
-               'outer_diameter_um', 'vessel_type', 'has_sma_ring',
-               'cd31_score', 'sma_thickness_mean_um'):
+    for vk in (
+        "ring_completeness",
+        "circularity",
+        "wall_thickness_mean_um",
+        "outer_diameter_um",
+        "vessel_type",
+        "has_sma_ring",
+        "cd31_score",
+        "sma_thickness_mean_um",
+    ):
         if vk in features:
             stats[vk] = features[vk]
 
     return {
-        'uid': uid,
-        'image': img_b64,
-        'image_clean': img_b64_clean,
-        'image_contour_only': img_b64_contour_only,
-        'mime_type': mime,
-        'stats': stats,
+        "uid": uid,
+        "image": img_b64,
+        "image_clean": img_b64_clean,
+        "image_contour_only": img_b64_contour_only,
+        "mime_type": mime,
+        "stats": stats,
     }

@@ -18,6 +18,7 @@ _REPO = Path(__file__).resolve().parent.parent.parent
 # Dispatch helpers
 # ---------------------------------------------------------------------------
 
+
 def _run_script(script_relpath: str, remaining: list[str]) -> None:
     """Run a script via runpy.run_path, forwarding remaining CLI args."""
     script = _REPO / script_relpath
@@ -34,6 +35,7 @@ def _run_detect(remaining):
     try:
         sys.argv = ["xlseg detect"] + remaining
         from run_segmentation import main
+
         main()
     finally:
         sys.argv = old_argv
@@ -44,6 +46,7 @@ def _run_classify(remaining):
     try:
         sys.argv = ["xlseg classify"] + remaining
         from train_classifier import main
+
         main()
     finally:
         sys.argv = old_argv
@@ -54,6 +57,7 @@ def _run_export_lmd(remaining):
     try:
         sys.argv = ["xlseg export-lmd"] + remaining
         from run_lmd_export import main
+
         main()
     finally:
         sys.argv = old_argv
@@ -64,6 +68,7 @@ def _run_serve(remaining):
     try:
         sys.argv = ["xlseg serve"] + remaining
         from serve_html import main
+
         main()
     finally:
         sys.argv = old_argv
@@ -88,6 +93,7 @@ def _run_system(remaining):
 def _run_models(remaining):
     """Print registered models from the model registry."""
     from segmentation.models.registry import ModelRegistry
+
     ModelRegistry.print_models()
 
 
@@ -95,21 +101,25 @@ def _run_strategies(remaining):
     """Print registered detection strategies."""
     import segmentation.detection.strategies  # noqa: F401 — trigger registration
     from segmentation.detection.registry import StrategyRegistry
+
     StrategyRegistry.print_strategies()
 
 
 def _run_download_models(remaining):
     """Download model checkpoints."""
     import argparse as _ap
+
     parser = _ap.ArgumentParser(prog="xlseg download-models")
-    parser.add_argument("--brightfield", action="store_true",
-                        help="Download brightfield FMs (UNI2, Virchow2, CONCH, Phikon-v2)")
-    parser.add_argument("--all", action="store_true",
-                        help="Download all registered models")
-    parser.add_argument("--model", type=str, default=None,
-                        help="Download a specific model by name")
+    parser.add_argument(
+        "--brightfield",
+        action="store_true",
+        help="Download brightfield FMs (UNI2, Virchow2, CONCH, Phikon-v2)",
+    )
+    parser.add_argument("--all", action="store_true", help="Download all registered models")
+    parser.add_argument("--model", type=str, default=None, help="Download a specific model by name")
     args = parser.parse_args(remaining)
     from segmentation.models.manager import get_model_manager
+
     manager = get_model_manager(device="cpu")
     models_to_load = []
     if args.brightfield or args.all:
@@ -156,6 +166,7 @@ _DISPATCH = {
 # Entry point
 # ---------------------------------------------------------------------------
 
+
 def cli():
     parser = argparse.ArgumentParser(
         prog="xlseg",
@@ -173,7 +184,9 @@ def cli():
     subparsers.add_parser("system", help="Show system info and SLURM recommendations")
     subparsers.add_parser("models", help="List registered model checkpoints")
     subparsers.add_parser("strategies", help="List registered detection strategies")
-    subparsers.add_parser("download-models", help="Download model checkpoints (brightfield needs HF token)")
+    subparsers.add_parser(
+        "download-models", help="Download model checkpoints (brightfield needs HF token)"
+    )
 
     args, remaining = parser.parse_known_args()
 

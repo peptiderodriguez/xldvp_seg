@@ -5,11 +5,12 @@ Uses block-based variance analysis with K-means clustering to
 automatically detect tissue-containing regions in microscopy images.
 """
 
-import numpy as np
+from concurrent.futures import ThreadPoolExecutor, as_completed
+
 import cv2
+import numpy as np
 from sklearn.cluster import KMeans
 from tqdm import tqdm
-from concurrent.futures import ThreadPoolExecutor, as_completed
 
 from segmentation.utils.logging import get_logger
 
@@ -47,8 +48,7 @@ def compute_otsu_threshold(gray_image, max_subsample=10_000_000):
         logger.warning("  compute_otsu_threshold: <100 non-zero pixels, returning default 200")
         return 200.0
 
-    otsu_val, _ = cv2.threshold(pixels.reshape(1, -1), 0, 255,
-                                cv2.THRESH_BINARY + cv2.THRESH_OTSU)
+    otsu_val, _ = cv2.threshold(pixels.reshape(1, -1), 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
     return float(otsu_val)
 
 
@@ -70,7 +70,9 @@ def _normalize_to_uint8(data):
     p_low, p_high = np.percentile(nonzero, [1, 99])
     if p_high <= p_low:
         return np.zeros_like(data, dtype=np.uint8), False
-    result = np.clip((data.astype(np.float64) - p_low) / (p_high - p_low) * 255, 0, 255).astype(np.uint8)
+    result = np.clip((data.astype(np.float64) - p_low) / (p_high - p_low) * 255, 0, 255).astype(
+        np.uint8
+    )
     result[zero_mask] = 0
     return result, True
 
@@ -93,7 +95,7 @@ def calculate_block_variances(gray_image, block_size=512):
 
     for y in range(0, height, block_size):
         for x in range(0, width, block_size):
-            block = gray_image[y:y+block_size, x:x+block_size]
+            block = gray_image[y : y + block_size, x : x + block_size]
             # Skip very small edge blocks (less than ~1.5% of full size)
             # This prevents near-degenerate blocks from skewing statistics
             # while still including most edge tissue
@@ -109,8 +111,13 @@ def calculate_block_variances(gray_image, block_size=512):
     return variances, means
 
 
-def is_tissue_block(gray_block, variance_threshold, modality=None,
-                    intensity_threshold=220, min_tissue_pixel_frac=0.20):
+def is_tissue_block(
+    gray_block,
+    variance_threshold,
+    modality=None,
+    intensity_threshold=220,
+    min_tissue_pixel_frac=0.20,
+):
     """Shared block-level tissue criterion.
 
     Brightfield: Otsu-only — >=20% of non-zero pixels below intensity_threshold.
@@ -134,9 +141,11 @@ def is_tissue_block(gray_block, variance_threshold, modality=None,
     valid = gray_block[gray_block > 0]
     if len(valid) < 10:
         return False
-    if modality == 'brightfield':
+    if modality == "brightfield":
         # Otsu-only: fraction of non-zero pixels below intensity_threshold
-        tissue_frac = np.sum((gray_block > 0) & (gray_block < intensity_threshold)) / gray_block.size
+        tissue_frac = (
+            np.sum((gray_block > 0) & (gray_block < intensity_threshold)) / gray_block.size
+        )
         return tissue_frac >= min_tissue_pixel_frac
     else:
         # Fluorescence: variance-only on non-zero pixels
@@ -145,9 +154,7 @@ def is_tissue_block(gray_block, variance_threshold, modality=None,
 
 
 def compute_pixel_level_tissue_mask(
-    image: np.ndarray,
-    variance_threshold: float,
-    block_size: int = 7
+    image: np.ndarray, variance_threshold: float, block_size: int = 7
 ) -> np.ndarray:
     """
     Compute pixel-level tissue mask using local variance.
@@ -173,9 +180,11 @@ def compute_pixel_level_tissue_mask(
         gray, _ = _normalize_to_uint8(gray_raw)
     elif image.ndim == 3:
         from segmentation.utils.detection_utils import safe_to_uint8
+
         gray = cv2.cvtColor(safe_to_uint8(image), cv2.COLOR_RGB2GRAY)
     else:
         from segmentation.utils.detection_utils import safe_to_uint8
+
         gray = safe_to_uint8(image)
 
     # Compute local variance using uniform filter
@@ -186,8 +195,8 @@ def compute_pixel_level_tissue_mask(
 
     # Local variance: E[X²] - E[X]²
     local_mean = uniform_filter(gray_f, size=block_size)
-    local_mean_sq = uniform_filter(gray_f ** 2, size=block_size)
-    local_variance = local_mean_sq - local_mean ** 2
+    local_mean_sq = uniform_filter(gray_f**2, size=block_size)
+    local_variance = local_mean_sq - local_mean**2
 
     # Threshold: pixels with variance above threshold are tissue
     tissue_mask = local_variance >= variance_threshold
@@ -195,9 +204,16 @@ def compute_pixel_level_tissue_mask(
     return tissue_mask
 
 
-def has_tissue(tile_image, variance_threshold, min_tissue_fraction=0.10, block_size=512,
-               intensity_threshold=220, modality=None, min_tissue_pixel_frac=0.20,
-               max_bg_intensity=None):
+def has_tissue(
+    tile_image,
+    variance_threshold,
+    min_tissue_fraction=0.10,
+    block_size=512,
+    intensity_threshold=220,
+    modality=None,
+    min_tissue_pixel_frac=0.20,
+    max_bg_intensity=None,
+):
     """
     Check if a tile contains tissue using block-based variance and intensity.
 
@@ -243,9 +259,11 @@ def has_tissue(tile_image, variance_threshold, min_tissue_fraction=0.10, block_s
             return False, 0.0
     elif tile_image.ndim == 3:
         from segmentation.utils.detection_utils import safe_to_uint8
+
         gray = cv2.cvtColor(safe_to_uint8(tile_image), cv2.COLOR_RGB2GRAY)
     else:
         from segmentation.utils.detection_utils import safe_to_uint8
+
         gray = safe_to_uint8(tile_image)
 
     # Count tissue blocks using shared is_tissue_block() logic
@@ -254,13 +272,17 @@ def has_tissue(tile_image, variance_threshold, min_tissue_fraction=0.10, block_s
     total_blocks = 0
     for y in range(0, height, block_size):
         for x in range(0, width, block_size):
-            block = gray[y:y+block_size, x:x+block_size]
+            block = gray[y : y + block_size, x : x + block_size]
             if block.size < (block_size * block_size) // 64:
                 continue
             total_blocks += 1
-            if is_tissue_block(block, variance_threshold, modality=modality,
-                               intensity_threshold=intensity_threshold,
-                               min_tissue_pixel_frac=min_tissue_pixel_frac):
+            if is_tissue_block(
+                block,
+                variance_threshold,
+                modality=modality,
+                intensity_threshold=intensity_threshold,
+                min_tissue_pixel_frac=min_tissue_pixel_frac,
+            ):
                 tissue_blocks += 1
 
     if total_blocks == 0:
@@ -287,7 +309,9 @@ def compute_variance_threshold(variances, default=15.0):
     variances = np.asarray(variances, dtype=float)
 
     if len(variances) < 10:
-        logger.warning(f"Not enough variance samples ({len(variances)}), using default threshold {default}")
+        logger.warning(
+            f"Not enough variance samples ({len(variances)}), using default threshold {default}"
+        )
         return default
 
     kmeans = KMeans(n_clusters=3, random_state=42, n_init=10)
@@ -303,14 +327,17 @@ def compute_variance_threshold(variances, default=15.0):
     threshold = float(np.max(bg_variances)) if len(bg_variances) > 0 else default
 
     sorted_centers = sorted(centers)
-    logger.info(f"  K-means centers: {sorted_centers[0]:.1f} (bg), {sorted_centers[1]:.1f} (tissue), {sorted_centers[2]:.1f} (outliers)")
+    logger.info(
+        f"  K-means centers: {sorted_centers[0]:.1f} (bg), {sorted_centers[1]:.1f} (tissue), {sorted_centers[2]:.1f} (outliers)"
+    )
     logger.info(f"  Threshold (bg cluster max): {threshold:.1f}")
 
     return threshold
 
 
-def compute_tissue_thresholds(variances, means, default_var=15.0, default_intensity=220,
-                              modality=None, pixel_samples=None):
+def compute_tissue_thresholds(
+    variances, means, default_var=15.0, default_intensity=220, modality=None, pixel_samples=None
+):
     """Compute variance and intensity thresholds from block-level calibration data.
 
     When modality='brightfield':
@@ -334,7 +361,7 @@ def compute_tissue_thresholds(variances, means, default_var=15.0, default_intens
     """
     variance_threshold = compute_variance_threshold(variances, default=default_var)
 
-    if modality == 'brightfield':
+    if modality == "brightfield":
         # Brightfield: reduce variance threshold by 3× to catch lighter-stained tissue
         variance_threshold = variance_threshold / 3.0
         logger.info(f"  Variance threshold (÷3 brightfield reduction): {variance_threshold:.1f}")
@@ -342,14 +369,21 @@ def compute_tissue_thresholds(variances, means, default_var=15.0, default_intens
         # Brightfield: Otsu on pixel grayscale values (not block means)
         if pixel_samples is not None and len(pixel_samples) >= 100:
             pixel_u8 = np.clip(np.asarray(pixel_samples, dtype=float), 0, 255).astype(np.uint8)
-            otsu_val, _ = cv2.threshold(pixel_u8.reshape(1, -1), 0, 255,
-                                        cv2.THRESH_BINARY + cv2.THRESH_OTSU)
+            otsu_val, _ = cv2.threshold(
+                pixel_u8.reshape(1, -1), 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU
+            )
             intensity_threshold = float(otsu_val)
-            logger.info(f"  Intensity threshold (Otsu on pixel grayscale): {intensity_threshold:.1f}")
-            logger.info(f"  Pixel sample range: {pixel_u8.min():.0f} – "
-                        f"{np.median(pixel_u8):.0f} (median) – {pixel_u8.max():.0f}")
+            logger.info(
+                f"  Intensity threshold (Otsu on pixel grayscale): {intensity_threshold:.1f}"
+            )
+            logger.info(
+                f"  Pixel sample range: {pixel_u8.min():.0f} – "
+                f"{np.median(pixel_u8):.0f} (median) – {pixel_u8.max():.0f}"
+            )
         else:
-            logger.warning(f"  No pixel_samples for brightfield Otsu, using default {default_intensity}")
+            logger.warning(
+                f"  No pixel_samples for brightfield Otsu, using default {default_intensity}"
+            )
             intensity_threshold = default_intensity
 
         return variance_threshold, intensity_threshold
@@ -357,16 +391,22 @@ def compute_tissue_thresholds(variances, means, default_var=15.0, default_intens
     # Default (fluorescence): Otsu on block mean intensities
     means = np.asarray(means, dtype=float)
     if len(means) < 10:
-        logger.warning(f"Not enough mean samples ({len(means)}), using default intensity threshold {default_intensity}")
+        logger.warning(
+            f"Not enough mean samples ({len(means)}), using default intensity threshold {default_intensity}"
+        )
         return variance_threshold, default_intensity
 
     # Otsu on block mean intensities to find tissue/background boundary
     means_uint8 = np.clip(means, 0, 255).astype(np.uint8)
-    otsu_val, _ = cv2.threshold(means_uint8.reshape(1, -1), 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
+    otsu_val, _ = cv2.threshold(
+        means_uint8.reshape(1, -1), 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU
+    )
     intensity_threshold = float(otsu_val)
 
     logger.info(f"  Intensity threshold (Otsu on block means): {intensity_threshold:.1f}")
-    logger.info(f"  Block mean range: {means.min():.1f} – {np.median(means):.1f} (median) – {means.max():.1f}")
+    logger.info(
+        f"  Block mean range: {means.min():.1f} – {np.median(means):.1f} (median) – {means.max():.1f}"
+    )
 
     return variance_threshold, intensity_threshold
 
@@ -406,7 +446,9 @@ def calibrate_tissue_threshold(
     Returns:
         float: Variance threshold for tissue detection
     """
-    logger.info(f"Calibrating tissue threshold (K-means 3-cluster on {calibration_samples} random tiles)...")
+    logger.info(
+        f"Calibrating tissue threshold (K-means 3-cluster on {calibration_samples} random tiles)..."
+    )
 
     # Sample tiles for calibration
     n_tiles = len(tiles)
@@ -420,15 +462,15 @@ def calibrate_tissue_threshold(
 
         # Handle different tile formats
         if isinstance(tile, dict):
-            tile_x = tile.get('x', tile.get('tile_x', 0))
-            tile_y = tile.get('y', tile.get('tile_y', 0))
+            tile_x = tile.get("x", tile.get("tile_x", 0))
+            tile_y = tile.get("y", tile.get("tile_y", 0))
         else:
             tile_x, tile_y = tile
 
         # Get tile image (priority: image_array > loader > reader)
         if image_array is not None:
             # Extract from pre-loaded array
-            tile_img = image_array[tile_y:tile_y+tile_size, tile_x:tile_x+tile_size]
+            tile_img = image_array[tile_y : tile_y + tile_size, tile_x : tile_x + tile_size]
         elif loader is not None:
             # Use CZILoader (RAM-first architecture)
             try:
@@ -444,7 +486,7 @@ def calibrate_tissue_threshold(
                 tile_img = reader.read_mosaic(
                     region=(x_start + tile_x, y_start + tile_y, tile_size, tile_size),
                     scale_factor=1,
-                    C=channel
+                    C=channel,
                 )
                 if tile_img is None or tile_img.size == 0:
                     continue
@@ -535,15 +577,15 @@ def filter_tissue_tiles(
         """Check if a single tile contains tissue."""
         # Handle different tile formats
         if isinstance(tile, dict):
-            tile_x = tile.get('x', tile.get('tile_x', 0))
-            tile_y = tile.get('y', tile.get('tile_y', 0))
+            tile_x = tile.get("x", tile.get("tile_x", 0))
+            tile_y = tile.get("y", tile.get("tile_y", 0))
         else:
             tile_x, tile_y = tile
 
         # Get tile image (priority: image_array > loader > reader)
         try:
             if image_array is not None:
-                tile_img = image_array[tile_y:tile_y+tile_size, tile_x:tile_x+tile_size]
+                tile_img = image_array[tile_y : tile_y + tile_size, tile_x : tile_x + tile_size]
             elif loader is not None:
                 # Use CZILoader (RAM-first architecture)
                 tile_img = loader.get_tile(tile_x, tile_y, tile_size, channel=channel)
@@ -554,7 +596,7 @@ def filter_tissue_tiles(
                 tile_img = reader.read_mosaic(
                     region=(x_start + tile_x, y_start + tile_y, tile_size, tile_size),
                     scale_factor=1,
-                    C=channel
+                    C=channel,
                 )
                 if tile_img is None or tile_img.size == 0:
                     return None
@@ -572,9 +614,14 @@ def filter_tissue_tiles(
                 if not ok:
                     return None
 
-            has_tissue_flag, _ = has_tissue(tile_img, variance_threshold, block_size=block_size,
-                                             modality=modality, intensity_threshold=intensity_threshold,
-                                             min_tissue_pixel_frac=min_tissue_pixel_frac)
+            has_tissue_flag, _ = has_tissue(
+                tile_img,
+                variance_threshold,
+                block_size=block_size,
+                modality=modality,
+                intensity_threshold=intensity_threshold,
+                min_tissue_pixel_frac=min_tissue_pixel_frac,
+            )
 
             if has_tissue_flag:
                 return tile
@@ -612,8 +659,7 @@ def filter_tissue_tiles(
     # and sampling non-reproducible.
     def _tile_sort_key(tile):
         if isinstance(tile, dict):
-            return (tile.get('x', tile.get('tile_x', 0)),
-                    tile.get('y', tile.get('tile_y', 0)))
+            return (tile.get("x", tile.get("tile_x", 0)), tile.get("y", tile.get("tile_y", 0)))
         return tuple(tile)
 
     tissue_tiles.sort(key=_tile_sort_key)

@@ -25,6 +25,7 @@ Usage:
         --group-field cluster_label \\
         --output-dir /path/to/output
 """
+
 import argparse
 import base64
 import gc
@@ -33,10 +34,10 @@ import json
 import sys
 from pathlib import Path
 
-from segmentation.utils.json_utils import fast_json_load
-
 import numpy as np
 import pandas as pd
+
+from segmentation.utils.json_utils import fast_json_load
 
 
 def read_czi_thumbnail(czi_path, display_channels, scale_factor=0.02, scene=0):
@@ -84,9 +85,7 @@ def read_czi_thumbnail(czi_path, display_channels, scale_factor=0.02, scene=0):
             p_low, p_high = np.percentile(valid, [1, 99.5])
             if p_high <= p_low:
                 p_high = p_low + 1
-            normalized = np.clip(
-                (img.astype(np.float32) - p_low) / (p_high - p_low), 0, 1
-            )
+            normalized = np.clip((img.astype(np.float32) - p_low) / (p_high - p_low), 0, 1)
             normalized = (normalized * 255).astype(np.uint8)
             normalized[img == 0] = 0
 
@@ -138,10 +137,10 @@ def generate_cluster_colors(labels, cluster_field):
 
     # Fixed colors for common marker profiles
     marker_colors = {
-        "NeuN+/tdTomato+": "#f1c40f",   # yellow
-        "NeuN+/tdTomato-": "#e74c3c",   # red
-        "NeuN-/tdTomato+": "#2ecc71",   # green
-        "NeuN-/tdTomato-": "#3498db",   # blue
+        "NeuN+/tdTomato+": "#f1c40f",  # yellow
+        "NeuN+/tdTomato-": "#e74c3c",  # red
+        "NeuN-/tdTomato+": "#2ecc71",  # green
+        "NeuN-/tdTomato-": "#3498db",  # blue
         "pm": "#e6194b",
         "msln": "#3cb44b",
         "noise": "#808080",
@@ -167,13 +166,13 @@ def generate_cluster_colors(labels, cluster_field):
             colors[label] = marker_colors[label_str]
         elif cmap is not None:
             rgba = cmap(i % cmap.N)
-            colors[label] = "#{:02x}{:02x}{:02x}".format(
-                int(rgba[0] * 255), int(rgba[1] * 255), int(rgba[2] * 255)
+            colors[label] = (
+                f"#{int(rgba[0] * 255):02x}{int(rgba[1] * 255):02x}{int(rgba[2] * 255):02x}"
             )
         else:
             rgba = all_colors[i % len(all_colors)]
-            colors[label] = "#{:02x}{:02x}{:02x}".format(
-                int(rgba[0] * 255), int(rgba[1] * 255), int(rgba[2] * 255)
+            colors[label] = (
+                f"#{int(rgba[0] * 255):02x}{int(rgba[1] * 255):02x}{int(rgba[2] * 255):02x}"
             )
 
     if -1 in colors:
@@ -185,8 +184,16 @@ def generate_cluster_colors(labels, cluster_field):
 
 
 def generate_overlay_png(
-    channel_arrays, display_channels, df, cluster_field, color_map, scale_factor,
-    output_path, dot_size=2, alpha=0.7, dpi=200
+    channel_arrays,
+    display_channels,
+    df,
+    cluster_field,
+    color_map,
+    scale_factor,
+    output_path,
+    dot_size=2,
+    alpha=0.7,
+    dpi=200,
 ):
     """Generate matplotlib figure with tissue + cluster overlay."""
     import matplotlib
@@ -215,8 +222,14 @@ def generate_overlay_png(
         y_px = sub["y"].values * scale_factor
         color = color_map.get(label, "#ffffff")
         ax.scatter(
-            x_px, y_px, s=dot_size, c=color, alpha=alpha,
-            edgecolors="none", label=f"{label} ({len(sub)})", rasterized=True,
+            x_px,
+            y_px,
+            s=dot_size,
+            c=color,
+            alpha=alpha,
+            edgecolors="none",
+            label=f"{label} ({len(sub)})",
+            rasterized=True,
         )
 
     ax.set_xlim(0, w)
@@ -227,16 +240,27 @@ def generate_overlay_png(
     ncol = max(1, min(4, n_labels // 10 + 1))
     handles = [
         Line2D(
-            [0], [0], marker="o", color="w",
-            markerfacecolor=color_map.get(l, "#fff"), markersize=6,
+            [0],
+            [0],
+            marker="o",
+            color="w",
+            markerfacecolor=color_map.get(l, "#fff"),
+            markersize=6,
             label=f"{l} ({(df[cluster_field]==l).sum()})",
         )
         for l in unique_labels
     ]
     ax.legend(
-        handles=handles, loc="center left", bbox_to_anchor=(1.01, 0.5),
-        fontsize=5, ncol=ncol, frameon=True, facecolor="#1a1a2e",
-        edgecolor="#333", labelcolor="white", markerscale=1.0,
+        handles=handles,
+        loc="center left",
+        bbox_to_anchor=(1.01, 0.5),
+        fontsize=5,
+        ncol=ncol,
+        frameon=True,
+        facecolor="#1a1a2e",
+        edgecolor="#333",
+        labelcolor="white",
+        markerscale=1.0,
     )
 
     fig.patch.set_facecolor("#1a1a2e")
@@ -259,8 +283,16 @@ def _encode_channel_b64(ch_array):
 
 
 def generate_interactive_html(
-    channel_arrays, display_channels, channel_names, df, group_field, color_map,
-    scale_factor, output_path, pixel_size=None, has_uids=False,
+    channel_arrays,
+    display_channels,
+    channel_names,
+    df,
+    group_field,
+    color_map,
+    scale_factor,
+    output_path,
+    pixel_size=None,
+    has_uids=False,
 ):
     """Generate interactive HTML with fluorescence channel toggles, ROI drawing, and cell overlay.
 
@@ -958,19 +990,24 @@ def main():
     )
     input_group.add_argument("--spatial-csv", help="Spatial CSV (legacy)")
     parser.add_argument(
-        "--display-channels", default="1,0",
+        "--display-channels",
+        default="1,0",
         help='Channel indices for R,G,B (e.g., "2,0,1" for tdTom=R, nuc=G, NeuN=B)',
     )
     parser.add_argument(
-        "--channel-names", default=None,
+        "--channel-names",
+        default=None,
         help='Comma-separated channel names (e.g., "tdTomato,nuc488,NeuN"). Auto-detected from CZI if omitted.',
     )
     parser.add_argument(
-        "--group-field", default="marker_profile",
+        "--group-field",
+        default="marker_profile",
         help="Field to color cells by (default: marker_profile). Use cluster_label for spatial CSV.",
     )
     parser.add_argument(
-        "--scale-factor", type=float, default=0.02,
+        "--scale-factor",
+        type=float,
+        default=0.02,
         help="CZI read scale factor (0.02 = 2%%)",
     )
     parser.add_argument("--output-dir", required=True, help="Output directory")
@@ -979,9 +1016,7 @@ def main():
     parser.add_argument("--dpi", type=int, default=200, help="PNG DPI")
     parser.add_argument("--no-html", action="store_true", help="Skip interactive HTML generation")
     parser.add_argument("--no-png", action="store_true", help="Skip static PNG generation")
-    parser.add_argument(
-        "--scene", type=int, default=0, help="CZI scene index (0-based)"
-    )
+    parser.add_argument("--scene", type=int, default=0, help="CZI scene index (0-based)")
     args = parser.parse_args()
 
     output_dir = Path(args.output_dir)
@@ -1000,6 +1035,7 @@ def main():
         czi_name = Path(args.czi_path).stem
         try:
             from segmentation.io.czi_loader import parse_markers_from_filename
+
             markers = parse_markers_from_filename(czi_name)
             # Map display channel index to marker name
             channel_names = []
@@ -1069,8 +1105,16 @@ def main():
         print("Generating overlay PNG...", flush=True)
         png_path = output_dir / f"tissue_overlay_{args.group_field}.png"
         generate_overlay_png(
-            channel_arrays, display_channels, df, cluster_field, color_map,
-            args.scale_factor, png_path, dot_size=args.dot_size, alpha=args.alpha, dpi=args.dpi,
+            channel_arrays,
+            display_channels,
+            df,
+            cluster_field,
+            color_map,
+            args.scale_factor,
+            png_path,
+            dot_size=args.dot_size,
+            alpha=args.alpha,
+            dpi=args.dpi,
         )
 
     # 5. Generate interactive HTML
@@ -1078,9 +1122,16 @@ def main():
         print("Generating interactive HTML...", flush=True)
         html_path = output_dir / f"tissue_overlay_{args.group_field}.html"
         generate_interactive_html(
-            channel_arrays, display_channels[:3], channel_names[:3],
-            df, cluster_field, color_map, args.scale_factor,
-            html_path, pixel_size=pixel_size, has_uids=has_uids,
+            channel_arrays,
+            display_channels[:3],
+            channel_names[:3],
+            df,
+            cluster_field,
+            color_map,
+            args.scale_factor,
+            html_path,
+            pixel_size=pixel_size,
+            has_uids=has_uids,
         )
 
     print("Done!", flush=True)

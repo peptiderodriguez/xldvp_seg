@@ -29,23 +29,22 @@ Usage:
 
 import json
 from pathlib import Path
-from typing import Dict, List, Tuple, Optional, Union, Any
+from typing import Any
 
-import numpy as np
 import joblib
-
+import numpy as np
 from sklearn.ensemble import RandomForestClassifier
-from sklearn.pipeline import Pipeline
-from sklearn.preprocessing import StandardScaler, LabelEncoder
-from sklearn.model_selection import (
-    cross_val_score,
-    StratifiedKFold,
-)
 from sklearn.metrics import (
     classification_report,
     confusion_matrix,
     precision_recall_fscore_support,
 )
+from sklearn.model_selection import (
+    StratifiedKFold,
+    cross_val_score,
+)
+from sklearn.pipeline import Pipeline
+from sklearn.preprocessing import LabelEncoder, StandardScaler
 
 from segmentation.utils.logging import get_logger
 
@@ -55,44 +54,44 @@ logger = get_logger(__name__)
 # Features specifically relevant for artery vs vein classification
 ARTERY_VEIN_FEATURES = [
     # Wall thickness features (arteries have thicker walls)
-    'wall_thickness_mean_um',
-    'wall_thickness_median_um',
-    'wall_thickness_std_um',
-    'wall_thickness_min_um',
-    'wall_thickness_max_um',
+    "wall_thickness_mean_um",
+    "wall_thickness_median_um",
+    "wall_thickness_std_um",
+    "wall_thickness_min_um",
+    "wall_thickness_max_um",
     # Diameter features
-    'outer_diameter_um',
-    'inner_diameter_um',
+    "outer_diameter_um",
+    "inner_diameter_um",
     # Derived ratios (important distinguishing features)
-    'wall_lumen_ratio',  # wall_area / lumen_area - higher for arteries
-    'wall_thickness_ratio',  # wall_thickness / outer_diameter - higher for arteries
+    "wall_lumen_ratio",  # wall_area / lumen_area - higher for arteries
+    "wall_thickness_ratio",  # wall_thickness / outer_diameter - higher for arteries
     # Area features
-    'wall_area_um2',
-    'lumen_area_um2',
-    'outer_area_um2',
+    "wall_area_um2",
+    "lumen_area_um2",
+    "outer_area_um2",
     # Shape features (arteries tend to be more circular)
-    'circularity',
-    'aspect_ratio',
-    'ring_completeness',
+    "circularity",
+    "aspect_ratio",
+    "ring_completeness",
     # Intensity features (wall density)
-    'gray_mean',
-    'gray_std',
-    'intensity_variance',
+    "gray_mean",
+    "gray_std",
+    "intensity_variance",
     # Color features (may indicate staining differences)
-    'red_mean',
-    'green_mean',
-    'blue_mean',
-    'saturation_mean',
+    "red_mean",
+    "green_mean",
+    "blue_mean",
+    "saturation_mean",
 ]
 
 # Minimal feature set when only basic vessel features are available
 MINIMAL_ARTERY_VEIN_FEATURES = [
-    'wall_thickness_mean_um',
-    'outer_diameter_um',
-    'inner_diameter_um',
-    'circularity',
-    'aspect_ratio',
-    'gray_mean',
+    "wall_thickness_mean_um",
+    "outer_diameter_um",
+    "inner_diameter_um",
+    "circularity",
+    "aspect_ratio",
+    "gray_mean",
 ]
 
 
@@ -113,17 +112,17 @@ class ArteryVeinClassifier:
     """
 
     # Class labels
-    LABELS = ['artery', 'vein']
+    LABELS = ["artery", "vein"]
 
     def __init__(
         self,
         n_estimators: int = 100,
-        max_depth: Optional[int] = 10,
+        max_depth: int | None = 10,
         min_samples_split: int = 5,
         min_samples_leaf: int = 3,
-        class_weight: str = 'balanced',
+        class_weight: str = "balanced",
         random_state: int = 42,
-        feature_names: Optional[List[str]] = None,
+        feature_names: list[str] | None = None,
     ):
         """
         Initialize artery/vein classifier.
@@ -161,9 +160,9 @@ class ArteryVeinClassifier:
         self.label_encoder.fit(self.LABELS)
         self.feature_names = feature_names or ARTERY_VEIN_FEATURES.copy()
         self.trained = False
-        self.metrics: Dict[str, Any] = {}
+        self.metrics: dict[str, Any] = {}
 
-    def _compute_derived_features(self, features: Dict[str, Any]) -> Dict[str, Any]:
+    def _compute_derived_features(self, features: dict[str, Any]) -> dict[str, Any]:
         """
         Compute derived features that are important for artery/vein classification.
 
@@ -176,21 +175,19 @@ class ArteryVeinClassifier:
         features = features.copy()
 
         # Wall/lumen ratio
-        wall_area = features.get('wall_area_um2', 0)
-        lumen_area = features.get('lumen_area_um2', 1)  # Avoid division by zero
-        features['wall_lumen_ratio'] = wall_area / max(lumen_area, 1)
+        wall_area = features.get("wall_area_um2", 0)
+        lumen_area = features.get("lumen_area_um2", 1)  # Avoid division by zero
+        features["wall_lumen_ratio"] = wall_area / max(lumen_area, 1)
 
         # Wall thickness ratio (relative to diameter)
-        wall_thickness = features.get('wall_thickness_mean_um', 0)
-        outer_diameter = features.get('outer_diameter_um', 1)
-        features['wall_thickness_ratio'] = wall_thickness / max(outer_diameter, 1)
+        wall_thickness = features.get("wall_thickness_mean_um", 0)
+        outer_diameter = features.get("outer_diameter_um", 1)
+        features["wall_thickness_ratio"] = wall_thickness / max(outer_diameter, 1)
 
         return features
 
     def _extract_features_from_dict(
-        self,
-        features_dict: Dict[str, Any],
-        feature_names: Optional[List[str]] = None
+        self, features_dict: dict[str, Any], feature_names: list[str] | None = None
     ) -> np.ndarray:
         """
         Extract feature vector from a features dictionary.
@@ -224,10 +221,10 @@ class ArteryVeinClassifier:
 
     def _prepare_training_data(
         self,
-        X: Union[np.ndarray, List[Dict]],
-        y: Union[np.ndarray, List[str]],
-        feature_names: Optional[List[str]] = None
-    ) -> Tuple[np.ndarray, np.ndarray]:
+        X: np.ndarray | list[dict],
+        y: np.ndarray | list[str],
+        feature_names: list[str] | None = None,
+    ) -> tuple[np.ndarray, np.ndarray]:
         """
         Prepare training data, handling both array and dict inputs.
 
@@ -240,16 +237,13 @@ class ArteryVeinClassifier:
         """
         # Handle dict input
         if isinstance(X, list) and len(X) > 0 and isinstance(X[0], dict):
-            X_array = np.array([
-                self._extract_features_from_dict(d, feature_names)
-                for d in X
-            ])
+            X_array = np.array([self._extract_features_from_dict(d, feature_names) for d in X])
         else:
             X_array = np.asarray(X, dtype=np.float32)
 
         # Handle string labels
         y_array = np.asarray(y)
-        if y_array.dtype.kind in ('U', 'S', 'O'):  # String types
+        if y_array.dtype.kind in ("U", "S", "O"):  # String types
             y_encoded = self.label_encoder.transform(y_array)
         else:
             y_encoded = y_array.astype(int)
@@ -258,12 +252,12 @@ class ArteryVeinClassifier:
 
     def train(
         self,
-        X: Union[np.ndarray, List[Dict]],
-        y: Union[np.ndarray, List[str]],
-        feature_names: Optional[List[str]] = None,
+        X: np.ndarray | list[dict],
+        y: np.ndarray | list[str],
+        feature_names: list[str] | None = None,
         cv_folds: int = 5,
-        verbose: bool = True
-    ) -> Dict[str, Any]:
+        verbose: bool = True,
+    ) -> dict[str, Any]:
         """
         Train the artery/vein classifier.
 
@@ -301,19 +295,24 @@ class ArteryVeinClassifier:
                 logger.info(f"Running {cv_folds}-fold cross-validation...")
 
             cv = StratifiedKFold(n_splits=cv_folds, shuffle=True, random_state=self.random_state)
-            cv_pipeline = Pipeline([
-                ('scaler', StandardScaler()),
-                ('classifier', RandomForestClassifier(
-                    n_estimators=self.n_estimators,
-                    max_depth=self.max_depth,
-                    min_samples_split=self.min_samples_split,
-                    min_samples_leaf=self.min_samples_leaf,
-                    class_weight=self.class_weight,
-                    random_state=self.random_state,
-                    n_jobs=-1,
-                )),
-            ])
-            cv_scores = cross_val_score(cv_pipeline, X_array, y_encoded, cv=cv, scoring='accuracy')
+            cv_pipeline = Pipeline(
+                [
+                    ("scaler", StandardScaler()),
+                    (
+                        "classifier",
+                        RandomForestClassifier(
+                            n_estimators=self.n_estimators,
+                            max_depth=self.max_depth,
+                            min_samples_split=self.min_samples_split,
+                            min_samples_leaf=self.min_samples_leaf,
+                            class_weight=self.class_weight,
+                            random_state=self.random_state,
+                            n_jobs=-1,
+                        ),
+                    ),
+                ]
+            )
+            cv_scores = cross_val_score(cv_pipeline, X_array, y_encoded, cv=cv, scoring="accuracy")
 
             if verbose:
                 logger.info(f"CV Accuracy: {cv_scores.mean():.4f} (+/- {cv_scores.std() * 2:.4f})")
@@ -331,26 +330,23 @@ class ArteryVeinClassifier:
         y_pred = self.model.predict(X_scaled)
 
         precision, recall, f1, _ = precision_recall_fscore_support(
-            y_encoded, y_pred, average='weighted'
+            y_encoded, y_pred, average="weighted"
         )
 
         train_accuracy = (y_pred == y_encoded).mean()
 
         self.metrics = {
-            'train_accuracy': float(train_accuracy),
-            'cv_accuracy_mean': float(cv_scores.mean()),
-            'cv_accuracy_std': float(cv_scores.std()),
-            'precision': float(precision),
-            'recall': float(recall),
-            'f1_score': float(f1),
-            'n_samples': len(X_array),
-            'n_features': len(self.feature_names),
-            'class_distribution': {
+            "train_accuracy": float(train_accuracy),
+            "cv_accuracy_mean": float(cv_scores.mean()),
+            "cv_accuracy_std": float(cv_scores.std()),
+            "precision": float(precision),
+            "recall": float(recall),
+            "f1_score": float(f1),
+            "n_samples": len(X_array),
+            "n_features": len(self.feature_names),
+            "class_distribution": {
                 label: int(count)
-                for label, count in zip(
-                    self.label_encoder.classes_,
-                    np.bincount(y_encoded)
-                )
+                for label, count in zip(self.label_encoder.classes_, np.bincount(y_encoded))
             },
         }
 
@@ -364,11 +360,11 @@ class ArteryVeinClassifier:
 
     def train_from_files(
         self,
-        annotations_path: Union[str, Path],
-        detections_path: Union[str, Path],
+        annotations_path: str | Path,
+        detections_path: str | Path,
         cv_folds: int = 5,
-        verbose: bool = True
-    ) -> Dict[str, Any]:
+        verbose: bool = True,
+    ) -> dict[str, Any]:
         """
         Train from annotation and detection JSON files.
 
@@ -388,15 +384,14 @@ class ArteryVeinClassifier:
             annotations_data = json.load(f)
 
         # Handle nested format
-        if 'annotations' in annotations_data:
-            annotations = annotations_data['annotations']
+        if "annotations" in annotations_data:
+            annotations = annotations_data["annotations"]
         else:
             annotations = annotations_data
 
         # Filter to only artery/vein annotations
         annotations = {
-            uid: label for uid, label in annotations.items()
-            if label.lower() in ('artery', 'vein')
+            uid: label for uid, label in annotations.items() if label.lower() in ("artery", "vein")
         }
 
         # Load detections
@@ -406,10 +401,10 @@ class ArteryVeinClassifier:
         # Build detection index by UID
         detections_by_uid = {}
         for d in detections_list:
-            if 'uid' in d:
-                detections_by_uid[d['uid']] = d
-            if 'id' in d:
-                detections_by_uid[d['id']] = d
+            if "uid" in d:
+                detections_by_uid[d["uid"]] = d
+            if "id" in d:
+                detections_by_uid[d["id"]] = d
 
         # Match annotations to detections
         X_list = []
@@ -421,7 +416,7 @@ class ArteryVeinClassifier:
                 continue
 
             det = detections_by_uid[uid]
-            features = det.get('features', det)
+            features = det.get("features", det)
 
             X_list.append(features)
             y_list.append(label.lower())
@@ -435,10 +430,7 @@ class ArteryVeinClassifier:
 
         return self.train(X_list, y_list, cv_folds=cv_folds, verbose=verbose)
 
-    def predict(
-        self,
-        features: Union[Dict[str, Any], np.ndarray]
-    ) -> Tuple[str, float]:
+    def predict(self, features: dict[str, Any] | np.ndarray) -> tuple[str, float]:
         """
         Predict artery or vein for a confirmed vessel.
 
@@ -473,9 +465,8 @@ class ArteryVeinClassifier:
         return vessel_type, confidence
 
     def predict_batch(
-        self,
-        features_list: List[Union[Dict[str, Any], np.ndarray]]
-    ) -> Tuple[np.ndarray, np.ndarray]:
+        self, features_list: list[dict[str, Any] | np.ndarray]
+    ) -> tuple[np.ndarray, np.ndarray]:
         """
         Predict for multiple vessels.
 
@@ -509,10 +500,7 @@ class ArteryVeinClassifier:
 
         return vessel_types, confidences
 
-    def predict_proba(
-        self,
-        features: Union[Dict[str, Any], np.ndarray]
-    ) -> Dict[str, float]:
+    def predict_proba(self, features: dict[str, Any] | np.ndarray) -> dict[str, float]:
         """
         Get class probabilities for artery and vein.
 
@@ -540,7 +528,7 @@ class ArteryVeinClassifier:
 
         return dict(zip(self.label_encoder.classes_, proba.tolist()))
 
-    def get_feature_importance(self) -> Dict[str, float]:
+    def get_feature_importance(self) -> dict[str, float]:
         """
         Get feature importance rankings.
 
@@ -553,7 +541,7 @@ class ArteryVeinClassifier:
         importance = self.model.feature_importances_
         return dict(zip(self.feature_names, importance.tolist()))
 
-    def get_top_features(self, n: int = 10) -> List[Tuple[str, float]]:
+    def get_top_features(self, n: int = 10) -> list[tuple[str, float]]:
         """
         Get top N most important features.
 
@@ -568,11 +556,8 @@ class ArteryVeinClassifier:
         return sorted_features[:n]
 
     def evaluate(
-        self,
-        X: Union[np.ndarray, List[Dict]],
-        y: Union[np.ndarray, List[str]],
-        verbose: bool = True
-    ) -> Dict[str, Any]:
+        self, X: np.ndarray | list[dict], y: np.ndarray | list[str], verbose: bool = True
+    ) -> dict[str, Any]:
         """
         Evaluate classifier on test data.
 
@@ -598,14 +583,12 @@ class ArteryVeinClassifier:
         # Compute metrics
         accuracy = (y_pred == y_true).mean()
         precision, recall, f1, _ = precision_recall_fscore_support(
-            y_true, y_pred, average='weighted'
+            y_true, y_pred, average="weighted"
         )
 
         cm = confusion_matrix(y_true, y_pred)
         report = classification_report(
-            y_true, y_pred,
-            target_names=self.label_encoder.classes_,
-            output_dict=True
+            y_true, y_pred, target_names=self.label_encoder.classes_, output_dict=True
         )
 
         if verbose:
@@ -614,24 +597,21 @@ class ArteryVeinClassifier:
             logger.info(f"Recall: {recall:.4f}")
             logger.info(f"F1 Score: {f1:.4f}")
             logger.info("\nClassification Report:")
-            print(classification_report(
-                y_true, y_pred,
-                target_names=self.label_encoder.classes_
-            ))
+            print(classification_report(y_true, y_pred, target_names=self.label_encoder.classes_))
             logger.info("\nConfusion Matrix:")
             print(cm)
 
         return {
-            'accuracy': float(accuracy),
-            'precision': float(precision),
-            'recall': float(recall),
-            'f1_score': float(f1),
-            'confusion_matrix': cm.tolist(),
-            'classification_report': report,
+            "accuracy": float(accuracy),
+            "precision": float(precision),
+            "recall": float(recall),
+            "f1_score": float(f1),
+            "confusion_matrix": cm.tolist(),
+            "classification_report": report,
         }
 
     @staticmethod
-    def rule_based_classify(features: Dict[str, Any]) -> Tuple[str, float]:
+    def rule_based_classify(features: dict[str, Any]) -> tuple[str, float]:
         """
         Fall-back rule-based classification using wall thickness ratios.
 
@@ -643,10 +623,10 @@ class ArteryVeinClassifier:
         Returns:
             Tuple of (vessel_type, confidence)
         """
-        wall_thickness = features.get('wall_thickness_mean_um', 0)
-        outer_diameter = features.get('outer_diameter_um', 1)
-        lumen_area = features.get('lumen_area_um2', 1)
-        wall_area = features.get('wall_area_um2', 0)
+        wall_thickness = features.get("wall_thickness_mean_um", 0)
+        outer_diameter = features.get("outer_diameter_um", 1)
+        lumen_area = features.get("lumen_area_um2", 1)
+        wall_area = features.get("wall_area_um2", 0)
 
         # Calculate ratios
         wall_thickness_ratio = wall_thickness / max(outer_diameter, 1)
@@ -655,11 +635,11 @@ class ArteryVeinClassifier:
         # Arteries have thicker walls relative to diameter and lumen
         # Typical threshold: arteries have wall_thickness_ratio > 0.1
         if wall_thickness_ratio > 0.1 or wall_lumen_ratio > 0.5:
-            return 'artery', 0.6
+            return "artery", 0.6
         else:
-            return 'vein', 0.6
+            return "vein", 0.6
 
-    def save(self, path: Union[str, Path]) -> None:
+    def save(self, path: str | Path) -> None:
         """
         Save trained model to file.
 
@@ -673,28 +653,28 @@ class ArteryVeinClassifier:
         path.parent.mkdir(parents=True, exist_ok=True)
 
         model_data = {
-            'model': self.model,
-            'scaler': self.scaler,
-            'label_encoder': self.label_encoder,
-            'feature_names': self.feature_names,
-            'metrics': self.metrics,
-            'config': {
-                'n_estimators': self.n_estimators,
-                'max_depth': self.max_depth,
-                'min_samples_split': self.min_samples_split,
-                'min_samples_leaf': self.min_samples_leaf,
-                'class_weight': self.class_weight,
-                'random_state': self.random_state,
+            "model": self.model,
+            "scaler": self.scaler,
+            "label_encoder": self.label_encoder,
+            "feature_names": self.feature_names,
+            "metrics": self.metrics,
+            "config": {
+                "n_estimators": self.n_estimators,
+                "max_depth": self.max_depth,
+                "min_samples_split": self.min_samples_split,
+                "min_samples_leaf": self.min_samples_leaf,
+                "class_weight": self.class_weight,
+                "random_state": self.random_state,
             },
-            'model_type': 'artery_vein_classifier',
-            'version': '1.0',
+            "model_type": "artery_vein_classifier",
+            "version": "1.0",
         }
 
         joblib.dump(model_data, path)
         logger.info(f"Model saved to: {path}")
 
     @classmethod
-    def load(cls, path: Union[str, Path]) -> 'ArteryVeinClassifier':
+    def load(cls, path: str | Path) -> "ArteryVeinClassifier":
         """
         Load trained model from file.
 
@@ -711,30 +691,32 @@ class ArteryVeinClassifier:
         model_data = joblib.load(path)
 
         # Verify model type
-        if model_data.get('model_type') != 'artery_vein_classifier':
-            logger.warning(f"Model type mismatch: expected 'artery_vein_classifier', got '{model_data.get('model_type')}'")
+        if model_data.get("model_type") != "artery_vein_classifier":
+            logger.warning(
+                f"Model type mismatch: expected 'artery_vein_classifier', got '{model_data.get('model_type')}'"
+            )
 
         # Create instance with saved config
-        config = model_data.get('config', {})
+        config = model_data.get("config", {})
         instance = cls(
-            n_estimators=config.get('n_estimators', 100),
-            max_depth=config.get('max_depth', 10),
-            min_samples_split=config.get('min_samples_split', 5),
-            min_samples_leaf=config.get('min_samples_leaf', 3),
-            class_weight=config.get('class_weight', 'balanced'),
-            random_state=config.get('random_state', 42),
-            feature_names=model_data['feature_names'],
+            n_estimators=config.get("n_estimators", 100),
+            max_depth=config.get("max_depth", 10),
+            min_samples_split=config.get("min_samples_split", 5),
+            min_samples_leaf=config.get("min_samples_leaf", 3),
+            class_weight=config.get("class_weight", "balanced"),
+            random_state=config.get("random_state", 42),
+            feature_names=model_data["feature_names"],
         )
 
         # Restore trained state
-        instance.model = model_data['model']
-        instance.scaler = model_data['scaler']
-        instance.label_encoder = model_data['label_encoder']
-        instance.metrics = model_data.get('metrics', {})
+        instance.model = model_data["model"]
+        instance.scaler = model_data["scaler"]
+        instance.label_encoder = model_data["label_encoder"]
+        instance.metrics = model_data.get("metrics", {})
         instance.trained = True
 
         logger.info(f"Model loaded from: {path}")
-        f1 = instance.metrics.get('f1_score')
+        f1 = instance.metrics.get("f1_score")
         logger.info(f"  F1 Score: {f1:.4f}" if f1 is not None else "  F1 Score: N/A")
         logger.info(f"  Features: {len(instance.feature_names)}")
 

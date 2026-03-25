@@ -19,22 +19,22 @@ import math
 
 WELLS_PER_PLATE = 308  # 4 quadrants × 77 wells
 
-_EVEN_ROWS = ['B', 'D', 'F', 'H', 'J', 'L', 'N']
-_ODD_ROWS = ['C', 'E', 'G', 'I', 'K', 'M', 'O']
+_EVEN_ROWS = ["B", "D", "F", "H", "J", "L", "N"]
+_ODD_ROWS = ["C", "E", "G", "I", "K", "M", "O"]
 _EVEN_COLS = [2, 4, 6, 8, 10, 12, 14, 16, 18, 20, 22]
 _ODD_COLS = [3, 5, 7, 9, 11, 13, 15, 17, 19, 21, 23]
 
 _QUAD_MAP = {
-    'B2': (_EVEN_ROWS, _EVEN_COLS),
-    'B3': (_EVEN_ROWS, _ODD_COLS),
-    'C2': (_ODD_ROWS, _EVEN_COLS),
-    'C3': (_ODD_ROWS, _ODD_COLS),
+    "B2": (_EVEN_ROWS, _EVEN_COLS),
+    "B3": (_EVEN_ROWS, _ODD_COLS),
+    "C2": (_ODD_ROWS, _EVEN_COLS),
+    "C3": (_ODD_ROWS, _ODD_COLS),
 }
 
-_QUADRANT_ORDER = ['B2', 'B3', 'C3', 'C2']
+_QUADRANT_ORDER = ["B2", "B3", "C3", "C2"]
 
 
-def generate_quadrant_serpentine(quadrant, start_corner='TL'):
+def generate_quadrant_serpentine(quadrant, start_corner="TL"):
     """Generate wells for one 384-well quadrant in serpentine order.
 
     Parameters
@@ -53,16 +53,16 @@ def generate_quadrant_serpentine(quadrant, start_corner='TL'):
         raise ValueError(f"Unknown quadrant: {quadrant}")
     rows, cols = _QUAD_MAP[quadrant]
 
-    if start_corner == 'TL':
+    if start_corner == "TL":
         row_order = rows
         first_row_left_to_right = True
-    elif start_corner == 'TR':
+    elif start_corner == "TR":
         row_order = rows
         first_row_left_to_right = False
-    elif start_corner == 'BL':
+    elif start_corner == "BL":
         row_order = list(reversed(rows))
         first_row_left_to_right = True
-    elif start_corner == 'BR':
+    elif start_corner == "BR":
         row_order = list(reversed(rows))
         first_row_left_to_right = False
     else:
@@ -82,21 +82,21 @@ def generate_quadrant_serpentine(quadrant, start_corner='TL'):
 def _nearest_corner(last_well):
     """Determine the nearest start corner from the previous quadrant's last well."""
     prev_row, prev_col = last_well[0], int(last_well[1:])
-    top_rows = set('BCDEFGH')
+    top_rows = set("BCDEFGH")
     is_top = prev_row in top_rows
     is_left = prev_col <= 12
 
     if is_top and is_left:
-        return 'TL'
+        return "TL"
     elif is_top and not is_left:
-        return 'TR'
+        return "TR"
     elif not is_top and is_left:
-        return 'BL'
+        return "BL"
     else:
-        return 'BR'
+        return "BR"
 
 
-def generate_plate_wells(n_wells, start_quadrant='B2'):
+def generate_plate_wells(n_wells, start_quadrant="B2"):
     """Generate wells for a single 384-well plate.
 
     Traverses quadrants in order (default B2 -> B3 -> C3 -> C2), starting
@@ -135,7 +135,7 @@ def generate_plate_wells(n_wells, start_quadrant='B2'):
     all_wells = []
     for i, quad in enumerate(order):
         if i == 0:
-            wells = generate_quadrant_serpentine(quad, start_corner='TL')
+            wells = generate_quadrant_serpentine(quad, start_corner="TL")
         else:
             wells = generate_quadrant_serpentine(quad, start_corner=_nearest_corner(all_wells[-1]))
         all_wells.extend(wells)
@@ -145,7 +145,7 @@ def generate_plate_wells(n_wells, start_quadrant='B2'):
     return all_wells[:n_wells]
 
 
-def generate_multiplate_wells(n_wells, start_quadrant='B2'):
+def generate_multiplate_wells(n_wells, start_quadrant="B2"):
     """Generate well assignments across as many plates as needed.
 
     Each plate holds up to 308 wells. When a plate fills, the next plate
@@ -208,9 +208,7 @@ def insert_empty_wells(plate_wells, n_samples, empty_pct=10.0, seed=42):
     n_total = len(plate_wells)
 
     if n_empty >= n_total:
-        raise ValueError(
-            f"Cannot insert {n_empty} empty wells into {n_total} total wells"
-        )
+        raise ValueError(f"Cannot insert {n_empty} empty wells into {n_total} total wells")
 
     rng = np.random.default_rng(seed)
     segment_size = n_total / n_empty

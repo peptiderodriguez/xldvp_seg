@@ -21,7 +21,6 @@ import logging
 import sys
 from datetime import datetime
 from pathlib import Path
-from typing import Optional, Union
 
 
 # Custom formatter with colors for terminal output
@@ -29,22 +28,20 @@ class ColoredFormatter(logging.Formatter):
     """Formatter that adds colors to log levels for terminal output."""
 
     COLORS = {
-        'DEBUG': '\033[36m',     # Cyan
-        'INFO': '\033[32m',      # Green
-        'WARNING': '\033[33m',   # Yellow
-        'ERROR': '\033[31m',     # Red
-        'CRITICAL': '\033[35m',  # Magenta
+        "DEBUG": "\033[36m",  # Cyan
+        "INFO": "\033[32m",  # Green
+        "WARNING": "\033[33m",  # Yellow
+        "ERROR": "\033[31m",  # Red
+        "CRITICAL": "\033[35m",  # Magenta
     }
-    RESET = '\033[0m'
+    RESET = "\033[0m"
 
     def format(self, record: logging.LogRecord) -> str:
         # Add color to levelname, but restore original afterward so
         # other handlers (e.g., file handler) see the unmodified name
         orig = record.levelname
         if record.levelname in self.COLORS:
-            record.levelname = (
-                f"{self.COLORS[record.levelname]}{record.levelname}{self.RESET}"
-            )
+            record.levelname = f"{self.COLORS[record.levelname]}{record.levelname}{self.RESET}"
         result = super().format(record)
         record.levelname = orig
         return result
@@ -72,12 +69,12 @@ def get_logger(name: str) -> logging.Logger:
 
 
 def setup_logging(
-    level: Union[str, int] = "INFO",
-    log_file: Optional[Union[str, Path]] = None,
-    log_dir: Optional[Union[str, Path]] = None,
+    level: str | int = "INFO",
+    log_file: str | Path | None = None,
+    log_dir: str | Path | None = None,
     console: bool = True,
     colored: bool = True,
-    format_string: Optional[str] = None,
+    format_string: str | None = None,
 ) -> logging.Logger:
     """
     Setup logging configuration for the application.
@@ -135,7 +132,7 @@ def setup_logging(
 
         log_path.parent.mkdir(parents=True, exist_ok=True)
 
-        file_handler = logging.FileHandler(log_path, mode='a')
+        file_handler = logging.FileHandler(log_path, mode="a")
         file_handler.setLevel(level)
         file_handler.setFormatter(logging.Formatter(format_string))
         root_logger.addHandler(file_handler)
@@ -170,11 +167,7 @@ def log_parameters(logger: logging.Logger, params: dict, title: str = "Parameter
     logger.info(f"{'='*50}")
 
 
-def log_processing_start(
-    logger: logging.Logger,
-    operation: str,
-    **kwargs
-) -> None:
+def log_processing_start(logger: logging.Logger, operation: str, **kwargs) -> None:
     """Log the start of a processing operation with parameters."""
     logger.info(f"Starting: {operation}")
     if kwargs:
@@ -183,10 +176,7 @@ def log_processing_start(
 
 
 def log_processing_end(
-    logger: logging.Logger,
-    operation: str,
-    duration_seconds: Optional[float] = None,
-    **results
+    logger: logging.Logger, operation: str, duration_seconds: float | None = None, **results
 ) -> None:
     """Log the end of a processing operation with results."""
     if duration_seconds is not None:
@@ -211,16 +201,18 @@ class ProcessingTimer:
     def __init__(self, logger: logging.Logger, operation: str):
         self.logger = logger
         self.operation = operation
-        self.start_time: Optional[float] = None
+        self.start_time: float | None = None
 
     def __enter__(self):
         import time
+
         self.start_time = time.time()
         self.logger.info(f"Starting: {self.operation}")
         return self
 
     def __exit__(self, exc_type, exc_val, exc_tb):
         import time
+
         duration = time.time() - self.start_time
         if exc_type is not None:
             self.logger.error(f"Failed: {self.operation} after {duration:.1f}s - {exc_val}")

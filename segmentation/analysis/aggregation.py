@@ -14,7 +14,7 @@ Usage:
 
 import numpy as np
 import pandas as pd
-from typing import Optional, List
+
 from segmentation.utils.logging import get_logger
 
 logger = get_logger(__name__)
@@ -37,9 +37,11 @@ def aggregate_slide(slide, group_by=None):
 
     # Use morph + channel features, skip embeddings (too many columns)
     numeric_cols = df.select_dtypes(include=[np.number]).columns.tolist()
-    summary_cols = [c for c in numeric_cols
-                    if not c.startswith("sam2_") and not c.startswith("resnet_")
-                    and not c.startswith("dinov2_")]
+    summary_cols = [
+        c
+        for c in numeric_cols
+        if not c.startswith("sam2_") and not c.startswith("resnet_") and not c.startswith("dinov2_")
+    ]
 
     if group_by and group_by in df.columns:
         agg = df.groupby(group_by)[summary_cols].agg(["mean", "median", "std", "count"])

@@ -5,9 +5,8 @@ These mixins provide reusable functionality that can be composed into
 different detection strategies without code duplication.
 """
 
-from typing import Dict, Optional
 import numpy as np
-from scipy.stats import skew, kurtosis
+from scipy.stats import kurtosis, skew
 
 
 class MultiChannelFeatureMixin:
@@ -43,8 +42,8 @@ class MultiChannelFeatureMixin:
         mask: np.ndarray,
         channel_data: np.ndarray,
         channel_name: str,
-        _include_zeros: bool = False
-    ) -> Dict[str, float]:
+        _include_zeros: bool = False,
+    ) -> dict[str, float]:
         """
         Extract intensity statistics for a single channel within a mask region.
 
@@ -81,9 +80,26 @@ class MultiChannelFeatureMixin:
 
             Returns empty dict if mask is empty or shapes don't match.
         """
-        _zero_stats = {f'{channel_name}_{stat}': 0.0 for stat in
-                       ['mean', 'std', 'max', 'min', 'median', 'p5', 'p25', 'p75', 'p95',
-                        'variance', 'skewness', 'kurtosis', 'iqr', 'dynamic_range', 'cv']}
+        _zero_stats = {
+            f"{channel_name}_{stat}": 0.0
+            for stat in [
+                "mean",
+                "std",
+                "max",
+                "min",
+                "median",
+                "p5",
+                "p25",
+                "p75",
+                "p95",
+                "variance",
+                "skewness",
+                "kurtosis",
+                "iqr",
+                "dynamic_range",
+                "cv",
+            ]
+        }
         if mask.sum() == 0:
             return _zero_stats
 
@@ -99,49 +115,66 @@ class MultiChannelFeatureMixin:
             # are rare and excluding them has negligible effect on statistics.
             masked_pixels = masked_pixels[masked_pixels > 0]
         if len(masked_pixels) == 0:
-            return {f'{channel_name}_{stat}': 0.0 for stat in
-                    ['mean', 'std', 'max', 'min', 'median', 'p5', 'p25', 'p75', 'p95',
-                     'variance', 'skewness', 'kurtosis', 'iqr', 'dynamic_range', 'cv']}
+            return {
+                f"{channel_name}_{stat}": 0.0
+                for stat in [
+                    "mean",
+                    "std",
+                    "max",
+                    "min",
+                    "median",
+                    "p5",
+                    "p25",
+                    "p75",
+                    "p95",
+                    "variance",
+                    "skewness",
+                    "kurtosis",
+                    "iqr",
+                    "dynamic_range",
+                    "cv",
+                ]
+            }
 
         features = {}
         prefix = channel_name
 
         # Basic intensity statistics
-        features[f'{prefix}_mean'] = float(np.mean(masked_pixels))
-        features[f'{prefix}_std'] = float(np.std(masked_pixels))
-        features[f'{prefix}_max'] = float(np.max(masked_pixels))
-        features[f'{prefix}_min'] = float(np.min(masked_pixels))
-        features[f'{prefix}_median'] = float(np.median(masked_pixels))
+        features[f"{prefix}_mean"] = float(np.mean(masked_pixels))
+        features[f"{prefix}_std"] = float(np.std(masked_pixels))
+        features[f"{prefix}_max"] = float(np.max(masked_pixels))
+        features[f"{prefix}_min"] = float(np.min(masked_pixels))
+        features[f"{prefix}_median"] = float(np.median(masked_pixels))
 
         # Percentiles for robust statistics
-        features[f'{prefix}_p5'] = float(np.percentile(masked_pixels, 5))
-        features[f'{prefix}_p25'] = float(np.percentile(masked_pixels, 25))
-        features[f'{prefix}_p75'] = float(np.percentile(masked_pixels, 75))
-        features[f'{prefix}_p95'] = float(np.percentile(masked_pixels, 95))
+        features[f"{prefix}_p5"] = float(np.percentile(masked_pixels, 5))
+        features[f"{prefix}_p25"] = float(np.percentile(masked_pixels, 25))
+        features[f"{prefix}_p75"] = float(np.percentile(masked_pixels, 75))
+        features[f"{prefix}_p95"] = float(np.percentile(masked_pixels, 95))
 
         # Distribution features
-        features[f'{prefix}_variance'] = float(np.var(masked_pixels))
-        features[f'{prefix}_skewness'] = float(self._safe_skewness(masked_pixels))
-        features[f'{prefix}_kurtosis'] = float(self._safe_kurtosis(masked_pixels))
-        features[f'{prefix}_iqr'] = features[f'{prefix}_p75'] - features[f'{prefix}_p25']
-        features[f'{prefix}_dynamic_range'] = features[f'{prefix}_max'] - features[f'{prefix}_min']
+        features[f"{prefix}_variance"] = float(np.var(masked_pixels))
+        features[f"{prefix}_skewness"] = float(self._safe_skewness(masked_pixels))
+        features[f"{prefix}_kurtosis"] = float(self._safe_kurtosis(masked_pixels))
+        features[f"{prefix}_iqr"] = features[f"{prefix}_p75"] - features[f"{prefix}_p25"]
+        features[f"{prefix}_dynamic_range"] = features[f"{prefix}_max"] - features[f"{prefix}_min"]
 
         # Coefficient of variation
-        if features[f'{prefix}_mean'] > 0:
-            features[f'{prefix}_cv'] = features[f'{prefix}_std'] / features[f'{prefix}_mean']
+        if features[f"{prefix}_mean"] > 0:
+            features[f"{prefix}_cv"] = features[f"{prefix}_std"] / features[f"{prefix}_mean"]
         else:
-            features[f'{prefix}_cv'] = 0.0
+            features[f"{prefix}_cv"] = 0.0
 
         return features
 
     def extract_multichannel_features(
         self,
         mask: np.ndarray,
-        channels_dict: Dict[str, np.ndarray],
-        primary_channel: Optional[str] = None,
+        channels_dict: dict[str, np.ndarray],
+        primary_channel: str | None = None,
         compute_ratios: bool = True,
         _include_zeros: bool = False,
-    ) -> Dict[str, float]:
+    ) -> dict[str, float]:
         """
         Extract features from all channels and compute inter-channel ratios.
 
@@ -205,28 +238,27 @@ class MultiChannelFeatureMixin:
 
             # Extract stats for this channel
             channel_stats = self.extract_channel_stats(
-                mask, channel_data, channel_name, _include_zeros=_include_zeros,
+                mask,
+                channel_data,
+                channel_name,
+                _include_zeros=_include_zeros,
             )
             features.update(channel_stats)
 
             # Store mean for ratio calculations
-            if f'{channel_name}_mean' in channel_stats:
-                channel_means[channel_name] = channel_stats[f'{channel_name}_mean']
+            if f"{channel_name}_mean" in channel_stats:
+                channel_means[channel_name] = channel_stats[f"{channel_name}_mean"]
 
         # Compute inter-channel ratios if requested
         if compute_ratios and len(channel_means) >= 2:
-            ratio_features = self._compute_channel_ratios(
-                channel_means, primary_channel
-            )
+            ratio_features = self._compute_channel_ratios(channel_means, primary_channel)
             features.update(ratio_features)
 
         return features
 
     def _compute_channel_ratios(
-        self,
-        channel_means: Dict[str, float],
-        primary_channel: Optional[str] = None
-    ) -> Dict[str, float]:
+        self, channel_means: dict[str, float], primary_channel: str | None = None
+    ) -> dict[str, float]:
         """
         Compute inter-channel ratios from mean intensities.
 
@@ -247,7 +279,7 @@ class MultiChannelFeatureMixin:
 
         # Compute pairwise ratios
         for i, ch_a in enumerate(channel_names):
-            for ch_b in channel_names[i+1:]:
+            for ch_b in channel_names[i + 1 :]:
                 mean_a = channel_means[ch_a]
                 mean_b = channel_means[ch_b]
 
@@ -256,11 +288,11 @@ class MultiChannelFeatureMixin:
                 safe_mean_a = max(mean_a, 1.0)
 
                 # a/b ratio and difference
-                features[f'{ch_a}_{ch_b}_ratio'] = mean_a / safe_mean_b
-                features[f'{ch_a}_{ch_b}_diff'] = mean_a - mean_b
+                features[f"{ch_a}_{ch_b}_ratio"] = mean_a / safe_mean_b
+                features[f"{ch_a}_{ch_b}_diff"] = mean_a - mean_b
 
                 # b/a ratio (reversed)
-                features[f'{ch_b}_{ch_a}_ratio'] = mean_b / safe_mean_a
+                features[f"{ch_b}_{ch_a}_ratio"] = mean_b / safe_mean_a
 
         # Channel specificity: primary vs max of other channels
         if primary_channel is not None and primary_channel in channel_means:
@@ -269,8 +301,8 @@ class MultiChannelFeatureMixin:
 
             if other_means:
                 max_other = max(other_means)
-                features['channel_specificity'] = primary_mean / max(max_other, 1.0)
-                features['channel_specificity_diff'] = primary_mean - max_other
+                features["channel_specificity"] = primary_mean / max(max_other, 1.0)
+                features["channel_specificity_diff"] = primary_mean - max_other
 
         return features
 
@@ -313,4 +345,3 @@ class MultiChannelFeatureMixin:
             return result if np.isfinite(result) else 0.0
         except Exception:
             return 0.0
-

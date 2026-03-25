@@ -25,7 +25,6 @@ Usage:
 
 import argparse
 import json
-import sys
 import warnings
 from pathlib import Path
 
@@ -33,18 +32,22 @@ import numpy as np
 
 try:
     from segmentation.utils.logging import get_logger
+
     log = get_logger(__name__)
 except ImportError:
     import logging
+
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
     log = logging.getLogger(__name__)
 
 try:
     from segmentation.utils.json_utils import atomic_json_dump, fast_json_load
 except ImportError:
+
     def atomic_json_dump(data, path, **kwargs):
-        with open(path, 'w') as f:
+        with open(path, "w") as f:
             json.dump(data, f)
+
     def fast_json_load(path):
         with open(path) as f:
             return json.load(f)
@@ -71,25 +74,27 @@ def find_slide_crosses(crosses_dir, slide_name):
 
 def get_pixel_size(crosses_data, slide_data):
     """Get pixel size from crosses, replicate metadata, or default."""
-    if crosses_data and crosses_data.get('pixel_size_um'):
-        return crosses_data['pixel_size_um']
+    if crosses_data and crosses_data.get("pixel_size_um"):
+        return crosses_data["pixel_size_um"]
 
     if isinstance(slide_data, dict):
-        meta_px = slide_data.get('pixel_size_um')
+        meta_px = slide_data.get("pixel_size_um")
         if meta_px:
             return meta_px
 
     warnings.warn(
-        f"No pixel_size_um in crosses or replicate data, "
-        f"using default {DEFAULT_PIXEL_SIZE_UM}",
+        f"No pixel_size_um in crosses or replicate data, " f"using default {DEFAULT_PIXEL_SIZE_UM}",
         stacklevel=2,
     )
     return DEFAULT_PIXEL_SIZE_UM
 
 
 try:
-    from segmentation.lmd.contour_processing import transform_native_to_display as _transform_native_to_display
+    from segmentation.lmd.contour_processing import (
+        transform_native_to_display as _transform_native_to_display,
+    )
 except ImportError:
+
     def _transform_native_to_display(pts_xy_um, orig_w_um, orig_h_um, flip_h, rot90):
         """Fallback when segmentation package is not on PYTHONPATH."""
         pts = pts_xy_um.copy()
@@ -106,6 +111,7 @@ except ImportError:
 def _build_serpentine_index():
     """Build well→index mapping for 384-well serpentine order."""
     from segmentation.lmd.well_plate import generate_plate_wells
+
     wells = generate_plate_wells(308)
     return {w: i for i, w in enumerate(wells)}
 
@@ -121,9 +127,16 @@ def _well_sort_key(well):
     return _SERPENTINE_INDEX.get(well, 999)
 
 
-def export_slide_xml(shapes_by_well, slide_name, output_path,
-                     pixel_size_um, image_width_px, image_height_px,
-                     crosses_data=None, y_offset_um=0.0):
+def export_slide_xml(
+    shapes_by_well,
+    slide_name,
+    output_path,
+    pixel_size_um,
+    image_width_px,
+    image_height_px,
+    crosses_data=None,
+    y_offset_um=0.0,
+):
     """Export shapes to Leica LMD XML via py-lmd.
 
     Args:
@@ -147,37 +160,40 @@ def export_slide_xml(shapes_by_well, slide_name, output_path,
     flip_h = False
     rot90 = False
     if crosses_data:
-        dt = crosses_data.get('display_transform', {})
-        flip_h = dt.get('flip_horizontal', False)
-        rot90 = dt.get('rotate_cw_90', False)
+        dt = crosses_data.get("display_transform", {})
+        flip_h = dt.get("flip_horizontal", False)
+        rot90 = dt.get("rotate_cw_90", False)
 
     # After rotation, display dimensions swap
     if rot90:
-        display_h_um = orig_w_um   # original width becomes display height
+        display_h_um = orig_w_um  # original width becomes display height
     else:
         display_h_um = orig_h_um
 
     if crosses_data:
         # Crosses are already in display space; Y-flip for LMD convention
-        calibration_points = np.array([
-            [c['x_um'], display_h_um - c['y_um']]
-            for c in crosses_data['crosses'][:3]
-        ])
-        log.info(f"  Calibration: user-placed crosses")
+        calibration_points = np.array(
+            [[c["x_um"], display_h_um - c["y_um"]] for c in crosses_data["crosses"][:3]]
+        )
+        log.info("  Calibration: user-placed crosses")
         log.info(f"  Display transforms: flip_h={flip_h}, rot90={rot90}")
         log.info(f"  Display height for LMD Y-flip: {display_h_um:.0f} um")
-        for c in crosses_data['crosses']:
-            log.info(f"    Cross {c.get('id', '?')}: napari ({c['x_um']:.0f}, "
-                     f"{c['y_um']:.0f}) um -> XML ({c['x_um']:.0f}, "
-                     f"{display_h_um - c['y_um']:.0f}) um")
+        for c in crosses_data["crosses"]:
+            log.info(
+                f"    Cross {c.get('id', '?')}: napari ({c['x_um']:.0f}, "
+                f"{c['y_um']:.0f}) um -> XML ({c['x_um']:.0f}, "
+                f"{display_h_um - c['y_um']:.0f}) um"
+            )
     else:
         # Fallback: corners of slide extent (no transforms)
-        calibration_points = np.array([
-            [0, 0],
-            [orig_w_um, 0],
-            [0, orig_h_um],
-        ])
-        log.warning(f"  Calibration: NO CROSSES - using dummy corner points")
+        calibration_points = np.array(
+            [
+                [0, 0],
+                [orig_w_um, 0],
+                [0, orig_h_um],
+            ]
+        )
+        log.warning("  Calibration: NO CROSSES - using dummy corner points")
 
     collection = Collection(calibration_points=calibration_points)
     # Note: calibration points in the XML header are sufficient for LMD.
@@ -186,18 +202,18 @@ def export_slide_xml(shapes_by_well, slide_name, output_path,
 
     # Bright colors for wells (RGBDef = R + G*256 + B*65536)
     WELL_COLORS = [
-        (255,   0,   0),  # red
-        (  0, 255,   0),  # green
-        (  0, 100, 255),  # blue
-        (255, 255,   0),  # yellow
-        (255,   0, 255),  # magenta
-        (  0, 255, 255),  # cyan
-        (255, 128,   0),  # orange
-        (128,   0, 255),  # purple
-        (  0, 255, 128),  # spring green
-        (255,   0, 128),  # rose
-        (128, 255,   0),  # lime
-        (  0, 128, 255),  # sky blue
+        (255, 0, 0),  # red
+        (0, 255, 0),  # green
+        (0, 100, 255),  # blue
+        (255, 255, 0),  # yellow
+        (255, 0, 255),  # magenta
+        (0, 255, 255),  # cyan
+        (255, 128, 0),  # orange
+        (128, 0, 255),  # purple
+        (0, 255, 128),  # spring green
+        (255, 0, 128),  # rose
+        (128, 255, 0),  # lime
+        (0, 128, 255),  # sky blue
     ]
 
     # Transform contours from native CZI space to display space (matching
@@ -210,11 +226,10 @@ def export_slide_xml(shapes_by_well, slide_name, output_path,
         r, g, b = WELL_COLORS[wi % len(WELL_COLORS)]
         cell_list = shapes_by_well[well]
         for uid, contour_um in cell_list:
-            polygon = _transform_native_to_display(
-                contour_um, orig_w_um, orig_h_um, flip_h, rot90)
-            polygon[:, 1] = display_h_um - polygon[:, 1]   # Y-flip for LMD
+            polygon = _transform_native_to_display(contour_um, orig_w_um, orig_h_um, flip_h, rot90)
+            polygon[:, 1] = display_h_um - polygon[:, 1]  # Y-flip for LMD
             if y_offset_um != 0:
-                polygon[:, 1] += y_offset_um               # calibration correction
+                polygon[:, 1] += y_offset_um  # calibration correction
 
             # Close polygon
             if not np.allclose(polygon[0], polygon[-1]):
@@ -228,6 +243,7 @@ def export_slide_xml(shapes_by_well, slide_name, output_path,
     # Patch RGBDef into saved XML — insert right after CapID element
     # (compatible with all py-lmd versions)
     import xml.etree.ElementTree as ET
+
     tree = ET.parse(str(output_path))
     root = tree.getroot()
     shape_idx = 0
@@ -236,25 +252,27 @@ def export_slide_xml(shapes_by_well, slide_name, output_path,
         rgb_def = r + g * 256 + b * 65536
         for _ in shapes_by_well[well]:
             shape_idx += 1
-            shape_el = root.find(f'Shape_{shape_idx}')
+            shape_el = root.find(f"Shape_{shape_idx}")
             if shape_el is not None:
-                rgb_el = ET.Element('RGBDef')
+                rgb_el = ET.Element("RGBDef")
                 rgb_el.text = str(rgb_def)
                 # Insert after CapID (index 1) so LMD reads it before points
                 cap_idx = None
                 for ci, child in enumerate(shape_el):
-                    if child.tag == 'CapID':
+                    if child.tag == "CapID":
                         cap_idx = ci
                         break
                 insert_pos = (cap_idx + 1) if cap_idx is not None else 1
                 shape_el.insert(insert_pos, rgb_el)
     if shape_idx > 0:
-        test_el = root.find('Shape_1')
-        if test_el is None or test_el.find('RGBDef') is None:
+        test_el = root.find("Shape_1")
+        if test_el is None or test_el.find("RGBDef") is None:
             log.warning("  RGBDef patching may have failed — verify py-lmd XML format")
-    tree.write(str(output_path), encoding='utf-8', xml_declaration=True)
-    log.info(f"  Exported {n_shapes} shapes in {len(sorted_wells)} wells "
-             f"(serpentine order) to {output_path}")
+    tree.write(str(output_path), encoding="utf-8", xml_declaration=True)
+    log.info(
+        f"  Exported {n_shapes} shapes in {len(sorted_wells)} wells "
+        f"(serpentine order) to {output_path}"
+    )
     if y_offset_um != 0:
         log.info(f"  Y offset correction: {y_offset_um:+.2f} um")
     return n_shapes
@@ -262,29 +280,40 @@ def export_slide_xml(shapes_by_well, slide_name, output_path,
 
 def main():
     parser = argparse.ArgumentParser(
-        description='Generate LMD XML from pre-assigned replicate data',
+        description="Generate LMD XML from pre-assigned replicate data",
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog=(
-            'Example:\n'
-            '  python lmd_export_replicates.py \\\n'
-            '      --sampling-results lmd_replicates_full.json \\\n'
-            '      --contours-json mk_contours_overlay.json \\\n'
-            '      --crosses-dir ./crosses \\\n'
-            '      --output-dir ./xml'
+            "Example:\n"
+            "  python lmd_export_replicates.py \\\n"
+            "      --sampling-results lmd_replicates_full.json \\\n"
+            "      --contours-json mk_contours_overlay.json \\\n"
+            "      --crosses-dir ./crosses \\\n"
+            "      --output-dir ./xml"
         ),
     )
-    parser.add_argument('--sampling-results', required=True,
-                        help='Path to replicate JSON (lmd_replicates_full.json)')
-    parser.add_argument('--contours-json', required=True,
-                        help='Pre-extracted contours JSON (mk_contours_overlay.json)')
-    parser.add_argument('--crosses-dir', default=None,
-                        help='Dir with {slide}_crosses.json from napari')
-    parser.add_argument('--output-dir', required=True,
-                        help='Where to save XML files')
-    parser.add_argument('--slides', nargs='+', default=None,
-                        help='Process only these slides (default: all)')
-    parser.add_argument('--y-offset-um', type=float, default=0.0,
-                        help='Y calibration correction in um (default: 0, compensates laser-to-calibration offset)')
+    parser.add_argument(
+        "--sampling-results",
+        required=True,
+        help="Path to replicate JSON (lmd_replicates_full.json)",
+    )
+    parser.add_argument(
+        "--contours-json",
+        required=True,
+        help="Pre-extracted contours JSON (mk_contours_overlay.json)",
+    )
+    parser.add_argument(
+        "--crosses-dir", default=None, help="Dir with {slide}_crosses.json from napari"
+    )
+    parser.add_argument("--output-dir", required=True, help="Where to save XML files")
+    parser.add_argument(
+        "--slides", nargs="+", default=None, help="Process only these slides (default: all)"
+    )
+    parser.add_argument(
+        "--y-offset-um",
+        type=float,
+        default=0.0,
+        help="Y calibration correction in um (default: 0, compensates laser-to-calibration offset)",
+    )
     args = parser.parse_args()
 
     output_dir = Path(args.output_dir)
@@ -315,10 +344,11 @@ def main():
         crosses_path = find_slide_crosses(args.crosses_dir, slide_name)
         if crosses_path:
             crosses_data = fast_json_load(str(crosses_path))
-            n_crosses = len(crosses_data.get('crosses', []))
+            n_crosses = len(crosses_data.get("crosses", []))
             if n_crosses < 3:
-                log.warning(f"Slide '{slide_name}': only {n_crosses} crosses "
-                            f"(need 3) - skipping")
+                log.warning(
+                    f"Slide '{slide_name}': only {n_crosses} crosses " f"(need 3) - skipping"
+                )
                 continue
         else:
             log.info(f"Slide '{slide_name}': no crosses file - skipping")
@@ -327,8 +357,7 @@ def main():
         log.info(f"\n{'='*60}")
         log.info(f"Slide: {slide_name}")
         log.info(f"{'='*60}")
-        log.info(f"  Crosses: {crosses_path.name} "
-                 f"(saved {crosses_data.get('timestamp', '?')})")
+        log.info(f"  Crosses: {crosses_path.name} " f"(saved {crosses_data.get('timestamp', '?')})")
 
         # Get pixel size
         pixel_size_um = get_pixel_size(crosses_data, slide_data)
@@ -336,8 +365,8 @@ def main():
 
         # Image dimensions from crosses (always available — slides without
         # crosses are skipped above)
-        image_width_px = crosses_data['image_width_px']
-        image_height_px = crosses_data['image_height_px']
+        image_width_px = crosses_data["image_width_px"]
+        image_height_px = crosses_data["image_height_px"]
 
         # Build shapes from contours
         slide_contours = contours_by_slide.get(slide_name, [])
@@ -348,26 +377,26 @@ def main():
         # Index contours by UID for fast lookup
         contour_by_uid = {}
         for entry in slide_contours:
-            contour_by_uid[entry['uid']] = entry
+            contour_by_uid[entry["uid"]] = entry
 
         shapes_by_well = {}
         n_ok = 0
         n_miss = 0
         max_x = max_y = 0
 
-        for rep in slide_data.get('replicates', []):
-            well = rep['well']
+        for rep in slide_data.get("replicates", []):
+            well = rep["well"]
             shapes_by_well.setdefault(well, [])
 
-            for cell in rep.get('cells', []):
-                uid = cell['uid']
+            for cell in rep.get("cells", []):
+                uid = cell["uid"]
                 entry = contour_by_uid.get(uid)
                 if entry is None:
                     n_miss += 1
                     continue
 
                 # contour_yx is [y, x] in global pixels -> [x, y] in um
-                pts_yx = np.array(entry['contour_yx'])
+                pts_yx = np.array(entry["contour_yx"])
                 pts_xy_um = pts_yx[:, ::-1] * pixel_size_um
                 shapes_by_well[well].append((uid, pts_xy_um))
                 n_ok += 1
@@ -380,27 +409,32 @@ def main():
         # Export XML
         xml_path = output_dir / f"{slide_name}_lmd.xml"
         n_shapes = export_slide_xml(
-            shapes_by_well, slide_name, xml_path,
-            pixel_size_um, image_width_px, image_height_px,
-            crosses_data, y_offset_um=args.y_offset_um,
+            shapes_by_well,
+            slide_name,
+            xml_path,
+            pixel_size_um,
+            image_width_px,
+            image_height_px,
+            crosses_data,
+            y_offset_um=args.y_offset_um,
         )
 
         # Summary JSON
         summary = {
-            'slide': slide_name,
-            'pixel_size_um': pixel_size_um,
-            'image_width_px': image_width_px,
-            'image_height_px': image_height_px,
-            'has_crosses': crosses_data is not None,
-            'crosses_file': crosses_path.name if crosses_path else None,
-            'n_shapes': n_shapes,
-            'n_missing_contours': n_miss,
-            'wells': {},
+            "slide": slide_name,
+            "pixel_size_um": pixel_size_um,
+            "image_width_px": image_width_px,
+            "image_height_px": image_height_px,
+            "has_crosses": crosses_data is not None,
+            "crosses_file": crosses_path.name if crosses_path else None,
+            "n_shapes": n_shapes,
+            "n_missing_contours": n_miss,
+            "wells": {},
         }
         for well, cells in shapes_by_well.items():
-            summary['wells'][well] = {
-                'n_shapes': len(cells),
-                'uids': [uid for uid, _ in cells],
+            summary["wells"][well] = {
+                "n_shapes": len(cells),
+                "uids": [uid for uid, _ in cells],
             }
         summary_path = output_dir / f"{slide_name}_summary.json"
         atomic_json_dump(summary, str(summary_path))
@@ -408,5 +442,5 @@ def main():
     log.info("\nDone!")
 
 
-if __name__ == '__main__':
+if __name__ == "__main__":
     main()

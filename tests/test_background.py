@@ -1,6 +1,5 @@
 """Tests for segmentation.pipeline.background.local_background_subtract."""
 
-import pytest
 import numpy as np
 
 from segmentation.pipeline.background import local_background_subtract

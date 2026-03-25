@@ -21,7 +21,6 @@ Usage::
     list_classifiers()  # prints table to stdout
 """
 
-import json
 import shutil
 from datetime import datetime
 from pathlib import Path
@@ -89,9 +88,7 @@ def register_classifier(name, pkl_path, meta, *, overwrite=False):
 
     # If overwriting, remove old entry and reuse v1 filename
     if overwrite:
-        registry["classifiers"] = [
-            e for e in registry["classifiers"] if e["name"] != name
-        ]
+        registry["classifiers"] = [e for e in registry["classifiers"] if e["name"] != name]
         dest_name = f"{name}.pkl"
         dest_path = CLASSIFIERS_DIR / dest_name
         version = 1
@@ -140,9 +137,7 @@ def resolve_classifier(name_or_path):
 
     # Registry lookup
     registry = _load_registry()
-    matches = [
-        e for e in registry["classifiers"] if e["name"] == name_or_path
-    ]
+    matches = [e for e in registry["classifiers"] if e["name"] == name_or_path]
     if not matches:
         raise FileNotFoundError(
             f"Classifier '{name_or_path}' not found as file or in registry. "
@@ -156,9 +151,13 @@ def resolve_classifier(name_or_path):
         raise FileNotFoundError(
             f"Registry entry '{name_or_path}' points to {resolved} which does not exist."
         )
-    logger.info("Resolved classifier '%s' -> %s (v%d, F1=%.3f)",
-                name_or_path, resolved, best.get("version", 1),
-                best.get("cv_f1") or 0)
+    logger.info(
+        "Resolved classifier '%s' -> %s (v%d, F1=%.3f)",
+        name_or_path,
+        resolved,
+        best.get("version", 1),
+        best.get("cv_f1") or 0,
+    )
     return resolved
 
 
@@ -167,9 +166,7 @@ def get_classifier_meta(name_or_path):
     registry = _load_registry()
 
     # Try by name first
-    matches = [
-        e for e in registry["classifiers"] if e["name"] == name_or_path
-    ]
+    matches = [e for e in registry["classifiers"] if e["name"] == name_or_path]
     if matches:
         return max(matches, key=lambda e: e.get("version", 1))
 
@@ -197,14 +194,16 @@ def list_classifiers():
         n_ann = (e.get("n_positive") or 0) + (e.get("n_negative") or 0)
         trained = (e.get("trained_at") or "")[:10]
         f1_str = f"{e['cv_f1']:.3f}" if e.get("cv_f1") is not None else "?"
-        print(fmt.format(
-            e["name"],
-            f"v{e.get('version', 1)}",
-            e.get("feature_set", "?"),
-            f1_str,
-            str(n_ann),
-            trained,
-        ))
+        print(
+            fmt.format(
+                e["name"],
+                f"v{e.get('version', 1)}",
+                e.get("feature_set", "?"),
+                f1_str,
+                str(n_ann),
+                trained,
+            )
+        )
 
 
 def build_classifier_info(clf_path, clf_meta=None):
@@ -234,20 +233,19 @@ def build_classifier_info(clf_path, clf_meta=None):
     _reg = reg_meta or {}
     info = {
         "classifier_path": str(clf_path),
-        "classifier_name": (
-            _reg.get("name") or clf_meta.get("name") or clf_path.stem
-        ),
-        "feature_set": (
-            _reg.get("feature_set") or clf_meta.get("feature_set", "unknown")
-        ),
+        "classifier_name": (_reg.get("name") or clf_meta.get("name") or clf_path.stem),
+        "feature_set": (_reg.get("feature_set") or clf_meta.get("feature_set", "unknown")),
         "cv_f1": _first_not_none(
-            _reg.get("cv_f1"), clf_meta.get("cv_f1_mean"),
+            _reg.get("cv_f1"),
+            clf_meta.get("cv_f1_mean"),
         ),
         "n_train_positive": _first_not_none(
-            _reg.get("n_positive"), clf_meta.get("n_positive"),
+            _reg.get("n_positive"),
+            clf_meta.get("n_positive"),
         ),
         "n_train_negative": _first_not_none(
-            _reg.get("n_negative"), clf_meta.get("n_negative"),
+            _reg.get("n_negative"),
+            clf_meta.get("n_negative"),
         ),
         "scored_at": datetime.now().isoformat(),
     }

@@ -16,17 +16,18 @@ The detection pipeline:
 """
 
 import gc
-from typing import List, Dict, Any, Tuple
+from typing import Any
+
 import numpy as np
 
-from .base import DetectionStrategy, Detection, _safe_to_uint8
-from .mixins import MultiChannelFeatureMixin
 from segmentation.detection.registry import register_strategy
 from segmentation.utils.feature_extraction import (
     extract_morphological_features,
 )
-
 from segmentation.utils.logging import get_logger
+
+from .base import Detection, DetectionStrategy, _safe_to_uint8
+from .mixins import MultiChannelFeatureMixin
 
 logger = get_logger(__name__)
 
@@ -57,15 +58,17 @@ class MKStrategy(DetectionStrategy, MultiChannelFeatureMixin):
         - crop_n_layers: 1 (hierarchical crop refinement)
     """
 
-    def __init__(self,
-                 min_area_um: float = 200.0,
-                 max_area_um: float = 2000.0,
-                 classifier_threshold: float = 0.5,
-                 overlap_threshold: float = 0.5,
-                 extract_deep_features: bool = False,
-                 extract_sam2_embeddings: bool = True,
-                 resnet_batch_size: int = 32,
-                 refine_masks: bool = False):
+    def __init__(
+        self,
+        min_area_um: float = 200.0,
+        max_area_um: float = 2000.0,
+        classifier_threshold: float = 0.5,
+        overlap_threshold: float = 0.5,
+        extract_deep_features: bool = False,
+        extract_sam2_embeddings: bool = True,
+        resnet_batch_size: int = 32,
+        refine_masks: bool = False,
+    ):
         """
         Initialize MK detection strategy.
 
@@ -92,7 +95,7 @@ class MKStrategy(DetectionStrategy, MultiChannelFeatureMixin):
     def name(self) -> str:
         return "mk"
 
-    def segment(self, tile: np.ndarray, models: Dict[str, Any], **kwargs) -> List[np.ndarray]:
+    def segment(self, tile: np.ndarray, models: dict[str, Any], **kwargs) -> list[np.ndarray]:
         """
         Generate candidate binary masks from a tile image.
 
@@ -109,9 +112,9 @@ class MKStrategy(DetectionStrategy, MultiChannelFeatureMixin):
             List of binary masks (each HxW boolean array)
         """
         sam2_results = self._segment_sam2(tile, models)
-        return [result['segmentation'].astype(bool) for result in sam2_results]
+        return [result["segmentation"].astype(bool) for result in sam2_results]
 
-    def _segment_sam2(self, tile: np.ndarray, models: Dict[str, Any]) -> List[Dict[str, Any]]:
+    def _segment_sam2(self, tile: np.ndarray, models: dict[str, Any]) -> list[dict[str, Any]]:
         """
         Use SAM2 automatic mask generation to find MK candidates.
 
@@ -129,9 +132,11 @@ class MKStrategy(DetectionStrategy, MultiChannelFeatureMixin):
         Returns:
             List of SAM2 result dicts with segmentation masks and metadata
         """
-        sam2_auto = models.get('sam2_auto')
+        sam2_auto = models.get("sam2_auto")
         if sam2_auto is None:
-            raise RuntimeError("SAM2 automatic mask generator not loaded - required for MK detection")
+            raise RuntimeError(
+                "SAM2 automatic mask generator not loaded - required for MK detection"
+            )
 
         # SAM2 expects uint8 RGB image
         sam2_img = _safe_to_uint8(tile)
@@ -141,10 +146,9 @@ class MKStrategy(DetectionStrategy, MultiChannelFeatureMixin):
 
         return sam2_results
 
-    def filter(self,
-               masks_or_results: List[Any],
-               features: List[Dict[str, Any]],
-               pixel_size_um: float) -> List[Detection]:
+    def filter(
+        self, masks_or_results: list[Any], features: list[dict[str, Any]], pixel_size_um: float
+    ) -> list[Detection]:
         """
         Filter masks by size, overlap, and classifier score.
 
@@ -165,19 +169,19 @@ class MKStrategy(DetectionStrategy, MultiChannelFeatureMixin):
         from scipy import ndimage
 
         # Convert area thresholds from um^2 to pixels
-        min_area_px = self.min_area_um / (pixel_size_um ** 2)
-        max_area_px = self.max_area_um / (pixel_size_um ** 2)
+        min_area_px = self.min_area_um / (pixel_size_um**2)
+        max_area_px = self.max_area_um / (pixel_size_um**2)
 
         # Handle both SAM2 result dicts and raw masks
         results = []
         for item in masks_or_results:
-            if isinstance(item, dict) and 'segmentation' in item:
+            if isinstance(item, dict) and "segmentation" in item:
                 # SAM2 result dict
-                mask = item['segmentation']
-                area = item.get('area', mask.sum())
+                mask = item["segmentation"]
+                area = item.get("area", mask.sum())
                 metadata = {
-                    'sam2_iou': float(item.get('predicted_iou', 0)),
-                    'sam2_stability': float(item.get('stability_score', 0))
+                    "sam2_iou": float(item.get("predicted_iou", 0)),
+                    "sam2_stability": float(item.get("stability_score", 0)),
                 }
             else:
                 # Raw mask
@@ -185,29 +189,25 @@ class MKStrategy(DetectionStrategy, MultiChannelFeatureMixin):
                 area = mask.sum()
                 metadata = {}
 
-            results.append({
-                'mask': mask,
-                'area': area,
-                'metadata': metadata
-            })
+            results.append({"mask": mask, "area": area, "metadata": metadata})
 
         # Step 1: Size filtering — pair each result with its original feature dict
         # so that filtering doesn't break the index correspondence
         valid_results = []
         for orig_idx, result in enumerate(results):
-            if min_area_px <= result['area'] <= max_area_px:
-                result['_orig_features'] = features[orig_idx] if orig_idx < len(features) else {}
+            if min_area_px <= result["area"] <= max_area_px:
+                result["_orig_features"] = features[orig_idx] if orig_idx < len(features) else {}
                 valid_results.append(result)
 
         # Step 2: Sort by area (largest first) — features travel with results
-        valid_results.sort(key=lambda x: x['area'], reverse=True)
+        valid_results.sort(key=lambda x: x["area"], reverse=True)
 
         # Step 3: Overlap filtering and detection creation
         detections = []
         accepted_mask = None  # Combined mask of all accepted detections
 
         for result in valid_results:
-            mask = result['mask']
+            mask = result["mask"]
 
             # Ensure boolean type (critical for NVIDIA CUDA compatibility)
             if mask.dtype != bool:
@@ -220,10 +220,10 @@ class MKStrategy(DetectionStrategy, MultiChannelFeatureMixin):
                     continue  # Skip this mask - too much overlap
 
             # Get features (aligned with sorted results)
-            feat = result['_orig_features']
+            feat = result["_orig_features"]
 
             # Step 4: Classifier filtering
-            mk_score = feat.get('mk_score', 1.0)
+            mk_score = feat.get("mk_score", 1.0)
             if mk_score < self.classifier_threshold:
                 continue  # Skip - classifier rejected
 
@@ -232,14 +232,14 @@ class MKStrategy(DetectionStrategy, MultiChannelFeatureMixin):
 
             # Create detection - merge SAM2 metadata into features
             feat_with_metadata = feat.copy()
-            feat_with_metadata.update(result['metadata'])
-            feat_with_metadata['mk_score'] = mk_score
+            feat_with_metadata.update(result["metadata"])
+            feat_with_metadata["mk_score"] = mk_score
 
             det = Detection(
                 mask=mask,
                 centroid=[float(cx), float(cy)],  # [x, y] format per base class
                 features=feat_with_metadata,
-                score=mk_score
+                score=mk_score,
             )
             detections.append(det)
 
@@ -251,12 +251,14 @@ class MKStrategy(DetectionStrategy, MultiChannelFeatureMixin):
 
         return detections
 
-    def detect(self,
-               tile: np.ndarray,
-               models: Dict[str, Any],
-               pixel_size_um: float = None,
-               extract_features: bool = True,
-               extra_channels: Dict[int, np.ndarray] = None) -> Tuple[np.ndarray, List[Detection]]:
+    def detect(
+        self,
+        tile: np.ndarray,
+        models: dict[str, Any],
+        pixel_size_um: float = None,
+        extract_features: bool = True,
+        extra_channels: dict[int, np.ndarray] = None,
+    ) -> tuple[np.ndarray, list[Detection]]:
         """
         Full MK detection pipeline with optimized batch processing.
 
@@ -288,11 +290,13 @@ class MKStrategy(DetectionStrategy, MultiChannelFeatureMixin):
         from scipy import ndimage
 
         if pixel_size_um is None:
-            raise ValueError("pixel_size_um is required for MK area filtering — do not rely on defaults")
+            raise ValueError(
+                "pixel_size_um is required for MK area filtering — do not rely on defaults"
+            )
 
         # Convert area thresholds from um^2 to pixels
-        min_area_px = self.min_area_um / (pixel_size_um ** 2)
-        max_area_px = self.max_area_um / (pixel_size_um ** 2)
+        min_area_px = self.min_area_um / (pixel_size_um**2)
+        max_area_px = self.max_area_um / (pixel_size_um**2)
 
         # Step 1: Generate masks with SAM2
         sam2_results = self._segment_sam2(tile, models)
@@ -300,13 +304,13 @@ class MKStrategy(DetectionStrategy, MultiChannelFeatureMixin):
         # Step 2: Pre-filter by size (before expensive feature extraction)
         valid_results = []
         for result in sam2_results:
-            area = result['segmentation'].sum()
+            area = result["segmentation"].sum()
             if min_area_px <= area <= max_area_px:
-                result['area'] = area
+                result["area"] = area
                 valid_results.append(result)
 
         # Sort by area (largest first) for overlap priority
-        valid_results.sort(key=lambda x: x['area'], reverse=True)
+        valid_results.sort(key=lambda x: x["area"], reverse=True)
 
         # Free memory from SAM2 results
         del sam2_results
@@ -318,7 +322,7 @@ class MKStrategy(DetectionStrategy, MultiChannelFeatureMixin):
         det_id = 1
 
         for result in valid_results:
-            mask = result['segmentation']
+            mask = result["segmentation"]
 
             # Ensure boolean type (critical for NVIDIA CUDA compatibility)
             if mask.dtype != bool:
@@ -327,10 +331,11 @@ class MKStrategy(DetectionStrategy, MultiChannelFeatureMixin):
             # Optional mask refinement: morphological opening + intensity trim
             if self.refine_masks:
                 from segmentation.utils.mask_cleanup import refine_mask_intensity
+
                 mask = refine_mask_intensity(mask, tile)
                 if mask.sum() < min_area_px:
                     continue  # Refinement shrunk below minimum
-                result['area'] = int(mask.sum())
+                result["area"] = int(mask.sum())
 
             # Check overlap with already-accepted masks
             if label_array.max() > 0:
@@ -344,14 +349,16 @@ class MKStrategy(DetectionStrategy, MultiChannelFeatureMixin):
             # Compute centroid
             cy, cx = ndimage.center_of_mass(mask)
 
-            valid_detections.append({
-                'id': det_id,
-                'mask': mask,
-                'cy': cy,
-                'cx': cx,
-                'sam2_iou': float(result.get('predicted_iou', 0)),
-                'sam2_stability': float(result.get('stability_score', 0))
-            })
+            valid_detections.append(
+                {
+                    "id": det_id,
+                    "mask": mask,
+                    "cy": cy,
+                    "cx": cx,
+                    "sam2_iou": float(result.get("predicted_iou", 0)),
+                    "sam2_stability": float(result.get("stability_score", 0)),
+                }
+            )
             det_id += 1
 
         # Free memory
@@ -363,7 +370,7 @@ class MKStrategy(DetectionStrategy, MultiChannelFeatureMixin):
 
         if valid_detections and extract_features:
             # Set image for SAM2 embeddings if predictor available
-            sam2_predictor = models.get('sam2_predictor')
+            sam2_predictor = models.get("sam2_predictor")
             if sam2_predictor is not None and self.extract_sam2_embeddings:
                 sam2_img = _safe_to_uint8(tile)
                 sam2_predictor.set_image(sam2_img)
@@ -374,15 +381,17 @@ class MKStrategy(DetectionStrategy, MultiChannelFeatureMixin):
             crop_indices = []
 
             for idx, det in enumerate(valid_detections):
-                mask = det['mask']
-                cy, cx = det['cy'], det['cx']
+                mask = det["mask"]
+                cy, cx = det["cy"], det["cx"]
 
                 # Extract morphological features
                 morph = extract_morphological_features(mask, tile)
 
                 # Extract per-channel features if extra_channels provided
                 if extra_channels is not None:
-                    channels_dict = {f'ch{k}': v for k, v in sorted(extra_channels.items()) if v is not None}
+                    channels_dict = {
+                        f"ch{k}": v for k, v in sorted(extra_channels.items()) if v is not None
+                    }
                     multichannel_feats = self.extract_multichannel_features(mask, channels_dict)
                     morph.update(multichannel_feats)
 
@@ -390,13 +399,13 @@ class MKStrategy(DetectionStrategy, MultiChannelFeatureMixin):
                 if sam2_predictor is not None and self.extract_sam2_embeddings:
                     sam2_emb = self._extract_sam2_embedding(sam2_predictor, cy, cx)
                     for i, v in enumerate(sam2_emb):
-                        morph[f'sam2_{i}'] = float(v)
+                        morph[f"sam2_{i}"] = float(v)
                 elif self.extract_sam2_embeddings:
                     logger.warning("SAM2 predictor unavailable - zero-filling 256D embeddings")
                     for i in range(256):
-                        morph[f'sam2_{i}'] = 0.0
+                        morph[f"sam2_{i}"] = 0.0
 
-                det['features'] = morph
+                det["features"] = morph
 
                 # Prepare crops for batch ResNet/DINOv2 processing (masked + context)
                 if self.extract_deep_features:
@@ -404,9 +413,9 @@ class MKStrategy(DetectionStrategy, MultiChannelFeatureMixin):
                     if len(ys) > 0:
                         y1, y2 = ys.min(), ys.max()
                         x1, x2 = xs.min(), xs.max()
-                        crop_context = tile[y1:y2+1, x1:x2+1].copy()
+                        crop_context = tile[y1 : y2 + 1, x1 : x2 + 1].copy()
                         crop_masked = crop_context.copy()
-                        crop_mask = mask[y1:y2+1, x1:x2+1]
+                        crop_mask = mask[y1 : y2 + 1, x1 : x2 + 1]
                         crop_masked[~crop_mask] = 0  # Zero out background
                         crops.append(crop_masked)
                         crops_context.append(crop_context)
@@ -414,12 +423,12 @@ class MKStrategy(DetectionStrategy, MultiChannelFeatureMixin):
 
             # Batch deep feature extraction (ResNet + DINOv2, masked + context)
             if self.extract_deep_features:
-                resnet = models.get('resnet')
-                resnet_transform = models.get('resnet_transform')
+                resnet = models.get("resnet")
+                resnet_transform = models.get("resnet_transform")
             else:
                 resnet = None
                 resnet_transform = None
-            device = models.get('device')
+            device = models.get("device")
 
             # ResNet masked
             if crops and resnet is not None and resnet_transform is not None:
@@ -428,7 +437,7 @@ class MKStrategy(DetectionStrategy, MultiChannelFeatureMixin):
                 )
                 for crop_idx, resnet_feats in zip(crop_indices, resnet_features_list):
                     for i, v in enumerate(resnet_feats):
-                        valid_detections[crop_idx]['features'][f'resnet_{i}'] = float(v)
+                        valid_detections[crop_idx]["features"][f"resnet_{i}"] = float(v)
 
             # ResNet context
             if crops_context and resnet is not None and resnet_transform is not None:
@@ -437,12 +446,12 @@ class MKStrategy(DetectionStrategy, MultiChannelFeatureMixin):
                 )
                 for crop_idx, resnet_feats in zip(crop_indices, resnet_ctx_list):
                     for i, v in enumerate(resnet_feats):
-                        valid_detections[crop_idx]['features'][f'resnet_ctx_{i}'] = float(v)
+                        valid_detections[crop_idx]["features"][f"resnet_ctx_{i}"] = float(v)
 
             # DINOv2 (only access model if extract_deep_features is enabled)
             if self.extract_deep_features:
-                dinov2 = models.get('dinov2')
-                dinov2_transform = models.get('dinov2_transform')
+                dinov2 = models.get("dinov2")
+                dinov2_transform = models.get("dinov2_transform")
             else:
                 dinov2 = None
                 dinov2_transform = None
@@ -453,14 +462,14 @@ class MKStrategy(DetectionStrategy, MultiChannelFeatureMixin):
                 )
                 for crop_idx, dino_feats in zip(crop_indices, dinov2_masked_list):
                     for i, v in enumerate(dino_feats):
-                        valid_detections[crop_idx]['features'][f'dinov2_{i}'] = float(v)
+                        valid_detections[crop_idx]["features"][f"dinov2_{i}"] = float(v)
 
                 dinov2_ctx_list = self._extract_dinov2_features_batch(
                     crops_context, dinov2, dinov2_transform, device
                 )
                 for crop_idx, dino_feats in zip(crop_indices, dinov2_ctx_list):
                     for i, v in enumerate(dino_feats):
-                        valid_detections[crop_idx]['features'][f'dinov2_ctx_{i}'] = float(v)
+                        valid_detections[crop_idx]["features"][f"dinov2_ctx_{i}"] = float(v)
 
             # Fill zeros for detections that failed crop extraction
             if self.extract_deep_features:
@@ -475,12 +484,12 @@ class MKStrategy(DetectionStrategy, MultiChannelFeatureMixin):
                 torch.cuda.empty_cache()
 
         # Step 5: Apply classifier if available
-        mk_classifier = models.get('mk_classifier')
-        mk_feature_names = models.get('mk_feature_names')
+        mk_classifier = models.get("mk_classifier")
+        mk_feature_names = models.get("mk_feature_names")
 
         # Build final Detection objects
         for det in valid_detections:
-            features = det.get('features', {})
+            features = det.get("features", {})
 
             # Apply classifier if available
             mk_score = 1.0
@@ -490,19 +499,19 @@ class MKStrategy(DetectionStrategy, MultiChannelFeatureMixin):
             # Filter by classifier threshold
             if mk_score < self.classifier_threshold:
                 # Remove from label array
-                label_array[label_array == det['id']] = 0
+                label_array[label_array == det["id"]] = 0
                 continue
 
             # Add SAM2 metadata to features
-            features['sam2_iou'] = det['sam2_iou']
-            features['sam2_stability'] = det['sam2_stability']
-            features['mk_score'] = mk_score
+            features["sam2_iou"] = det["sam2_iou"]
+            features["sam2_stability"] = det["sam2_stability"]
+            features["mk_score"] = mk_score
 
             detection = Detection(
-                mask=det['mask'],
-                centroid=[float(det['cx']), float(det['cy'])],  # [x, y] format per base class
+                mask=det["mask"],
+                centroid=[float(det["cx"]), float(det["cy"])],  # [x, y] format per base class
                 features=features,
-                score=mk_score
+                score=mk_score,
             )
             detections.append(detection)
 
@@ -519,10 +528,9 @@ class MKStrategy(DetectionStrategy, MultiChannelFeatureMixin):
     # SAM2 embeddings are extracted in detect() at line ~374 (set_image + per-detection embedding).
     # _extract_resnet_features_batch inherited from DetectionStrategy base class
 
-    def _apply_classifier(self,
-                          features: Dict[str, float],
-                          classifier,
-                          feature_names: List[str]) -> float:
+    def _apply_classifier(
+        self, features: dict[str, float], classifier, feature_names: list[str]
+    ) -> float:
         """
         Apply trained classifier to features.
 
@@ -546,4 +554,4 @@ class MKStrategy(DetectionStrategy, MultiChannelFeatureMixin):
             return 1.0  # Default to accepting if classifier fails
 
 
-__all__ = ['MKStrategy']
+__all__ = ["MKStrategy"]

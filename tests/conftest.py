@@ -4,12 +4,13 @@ Pytest fixtures for xldvp_seg_repo tests.
 Provides shared fixtures for creating sample data, mocks, and temporary directories.
 """
 
-import pytest
-import numpy as np
-import tempfile
 import shutil
+import tempfile
 from pathlib import Path
 from unittest.mock import MagicMock
+
+import numpy as np
+import pytest
 
 
 @pytest.fixture
@@ -31,7 +32,7 @@ def sample_tile():
     center_y, center_x = 256, 256
     radius = 50
     y_indices, x_indices = np.ogrid[:512, :512]
-    circle_mask = (x_indices - center_x)**2 + (y_indices - center_y)**2 <= radius**2
+    circle_mask = (x_indices - center_x) ** 2 + (y_indices - center_y) ** 2 <= radius**2
     tile[circle_mask] = [255, 255, 255]
 
     # Draw a rectangle in the top-left corner
@@ -55,7 +56,7 @@ def sample_mask(sample_tile):
     center_y, center_x = 256, 256
     radius = 50
     y_indices, x_indices = np.ogrid[:512, :512]
-    mask = (x_indices - center_x)**2 + (y_indices - center_y)**2 <= radius**2
+    mask = (x_indices - center_x) ** 2 + (y_indices - center_y) ** 2 <= radius**2
     return mask
 
 
@@ -141,7 +142,7 @@ def sample_tile_grayscale():
     center_y, center_x = 256, 256
     radius = 50
     y_indices, x_indices = np.ogrid[:512, :512]
-    circle_mask = (x_indices - center_x)**2 + (y_indices - center_y)**2 <= radius**2
+    circle_mask = (x_indices - center_x) ** 2 + (y_indices - center_y) ** 2 <= radius**2
     tile[circle_mask] = 200
 
     return tile
@@ -161,7 +162,7 @@ def sample_tile_uint16():
     center_y, center_x = 256, 256
     radius = 50
     y_indices, x_indices = np.ogrid[:512, :512]
-    circle_mask = (x_indices - center_x)**2 + (y_indices - center_y)**2 <= radius**2
+    circle_mask = (x_indices - center_x) ** 2 + (y_indices - center_y) ** 2 <= radius**2
     tile[circle_mask] = [50000, 50000, 50000]
 
     return tile

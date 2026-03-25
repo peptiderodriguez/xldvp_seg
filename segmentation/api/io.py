@@ -1,14 +1,15 @@
 """I/O and export functions."""
 
 from pathlib import Path
-from typing import Optional
+
 from segmentation.utils.logging import get_logger
 
 logger = get_logger(__name__)
 
 
-def export_lmd(slide, crosses, output_dir=None, min_score=0.5,
-               generate_controls=True, erosion_um=0.0, **kwargs):
+def export_lmd(
+    slide, crosses, output_dir=None, min_score=0.5, generate_controls=True, erosion_um=0.0, **kwargs
+):
     """Export detections for laser microdissection.
 
     Filters by score, extracts contours, assigns wells, generates XML.
@@ -43,6 +44,7 @@ def to_spatialdata(slide, output_path=None, cell_type=None, **kwargs):
         Path to the zarr store.
     """
     import sys
+
     sys.path.insert(0, str(Path(__file__).resolve().parent.parent.parent))
     from scripts.convert_to_spatialdata import build_anndata
 

@@ -64,12 +64,14 @@ def load_detections(path, score_threshold=None):
     if score_threshold is not None:
         before = len(detections)
         detections = [
-            d for d in detections
-            if d.get('rf_prediction', d.get('features', {}).get('rf_prediction', 0.0))
+            d
+            for d in detections
+            if d.get("rf_prediction", d.get("features", {}).get("rf_prediction", 0.0))
             >= score_threshold
         ]
-        logger.info("Score filter >= %s: %s -> %s",
-                     score_threshold, f"{before:,}", f"{len(detections):,}")
+        logger.info(
+            "Score filter >= %s: %s -> %s", score_threshold, f"{before:,}", f"{len(detections):,}"
+        )
 
     return detections
 
@@ -166,9 +168,10 @@ def load_rf_classifier(model_path: str) -> dict:
         ``'feature_names'`` (list[str]), ``'type'`` (``'rf'``),
         ``'raw_meta'`` (dict).
     """
-    import joblib
     import json as _json
     from pathlib import Path as _Path
+
+    import joblib
     from sklearn.pipeline import Pipeline
 
     model_data = joblib.load(model_path)
@@ -179,9 +182,11 @@ def load_rf_classifier(model_path: str) -> dict:
         model_dir = _Path(model_path).parent
         # Check for feature names sidecar (legacy NMJ naming, then generic)
         feature_names_path = None
-        for name in ("nmj_classifier_feature_names.json",
-                      "classifier_feature_names.json",
-                      "feature_names.json"):
+        for name in (
+            "nmj_classifier_feature_names.json",
+            "classifier_feature_names.json",
+            "feature_names.json",
+        ):
             candidate = model_dir / name
             if candidate.exists():
                 feature_names_path = candidate
@@ -192,7 +197,7 @@ def load_rf_classifier(model_path: str) -> dict:
                 feature_names = _json.load(f)
             logger.info("Loaded feature names from %s", feature_names_path)
         else:
-            n_features = pipeline.named_steps['rf'].n_features_in_
+            n_features = pipeline.named_steps["rf"].n_features_in_
             feature_names = [f"feature_{i}" for i in range(n_features)]
             logger.warning(
                 "No feature names file found, using generic names for %d features",
@@ -200,41 +205,38 @@ def load_rf_classifier(model_path: str) -> dict:
             )
 
         result = {
-            'pipeline': pipeline,
-            'feature_names': feature_names,
-            'type': 'rf',
-            'raw_meta': {},  # Legacy Pipeline format has no metadata
+            "pipeline": pipeline,
+            "feature_names": feature_names,
+            "type": "rf",
+            "raw_meta": {},  # Legacy Pipeline format has no metadata
         }
         logger.info("Loaded RF Pipeline classifier with %d features", len(feature_names))
 
     else:
-        rf_model = model_data.get('model', model_data.get('classifier'))
+        rf_model = model_data.get("model", model_data.get("classifier"))
         if rf_model is None:
             raise ValueError(
                 f"Classifier file has no 'model' or 'classifier' key. "
                 f"Keys: {list(model_data.keys())}"
             )
 
-        if 'scaler' in model_data:
-            pipeline = Pipeline([
-                ('scaler', model_data['scaler']),
-                ('rf', rf_model)
-            ])
+        if "scaler" in model_data:
+            pipeline = Pipeline([("scaler", model_data["scaler"]), ("rf", rf_model)])
         else:
             pipeline = rf_model
 
         result = {
-            'pipeline': pipeline,
-            'feature_names': model_data.get('feature_names', []),
-            'type': 'rf',
-            'raw_meta': model_data,  # Preserve training metadata for provenance
+            "pipeline": pipeline,
+            "feature_names": model_data.get("feature_names", []),
+            "type": "rf",
+            "raw_meta": model_data,  # Preserve training metadata for provenance
         }
         logger.info(
             "Loaded RF classifier (legacy format) with %d features",
-            len(result['feature_names']),
+            len(result["feature_names"]),
         )
-        if 'accuracy' in model_data:
-            logger.info("  Accuracy: %s", model_data['accuracy'])
+        if "accuracy" in model_data:
+            logger.info("  Accuracy: %s", model_data["accuracy"])
 
     return result
 
@@ -261,7 +263,7 @@ def extract_feature_matrix(detections, feature_names):
     valid_indices = []
 
     for i, det in enumerate(detections):
-        feats = det.get('features', {})
+        feats = det.get("features", {})
         if not feats:
             continue
         for j, name in enumerate(feature_names):

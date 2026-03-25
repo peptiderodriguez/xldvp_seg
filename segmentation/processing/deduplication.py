@@ -44,8 +44,9 @@ logger = get_logger(__name__)
 _COORD_STRIDE_DEFAULT = 1_000_000
 
 
-def deduplicate_by_mask_overlap(detections, tiles_dir, min_overlap_fraction=0.1,
-                                mask_filename=None, sort_by='area'):
+def deduplicate_by_mask_overlap(
+    detections, tiles_dir, min_overlap_fraction=0.1, mask_filename=None, sort_by="area"
+):
     """Remove duplicate detections by checking actual mask pixel overlap.
 
     For each pair of detections, checks if their masks overlap in global
@@ -65,8 +66,8 @@ def deduplicate_by_mask_overlap(detections, tiles_dir, min_overlap_fraction=0.1,
     Returns:
         List of deduplicated detections
     """
-    from pathlib import Path
     from collections import Counter
+    from pathlib import Path
 
     if not detections:
         return []
@@ -84,7 +85,7 @@ def deduplicate_by_mask_overlap(detections, tiles_dir, min_overlap_fraction=0.1,
     # --- Fix 3 (part 1): Count detections per tile for cache eviction ---
     tile_det_counts = Counter()
     for det in detections:
-        tile_origin = tuple(det.get('tile_origin', [0, 0]))
+        tile_origin = tuple(det.get("tile_origin", [0, 0]))
         tile_x, tile_y = tile_origin
         tile_id = f"tile_{tile_x}_{tile_y}"
         tile_det_counts[tile_id] += 1
@@ -99,14 +100,16 @@ def deduplicate_by_mask_overlap(detections, tiles_dir, min_overlap_fraction=0.1,
         masks_file = tiles_dir / tile_id / mask_filename
         if masks_file.exists():
             try:
-                h5_handles[tile_id] = h5py.File(masks_file, 'r')
+                h5_handles[tile_id] = h5py.File(masks_file, "r")
             except Exception as e:
                 logger.warning(f"Failed to open HDF5 file {masks_file}: {e}")
                 h5_handles[tile_id] = None
         else:
             h5_handles[tile_id] = None
-    logger.info(f"Opened {sum(1 for v in h5_handles.values() if v is not None)} "
-          f"HDF5 files out of {len(unique_tile_ids)} tiles")
+    logger.info(
+        f"Opened {sum(1 for v in h5_handles.values() if v is not None)} "
+        f"HDF5 files out of {len(unique_tile_ids)} tiles"
+    )
 
     # Load all masks and compute global bounding boxes.
     # We collect raw (global_xs, global_ys) first, then encode after the loop
@@ -123,16 +126,16 @@ def deduplicate_by_mask_overlap(detections, tiles_dir, min_overlap_fraction=0.1,
         if i % 5000 == 0 and i > 0:
             logger.info(f"Loading masks: {i}/{n_total}")
 
-        tile_origin = tuple(det.get('tile_origin', [0, 0]))
+        tile_origin = tuple(det.get("tile_origin", [0, 0]))
         tile_x, tile_y = tile_origin
         tile_id = f"tile_{tile_x}_{tile_y}"
-        mask_label = det.get('mask_label')
+        mask_label = det.get("mask_label")
 
         if mask_label is None or mask_label == 0:
             # Try to extract from ID as fallback
-            det_id = det.get('id', '')
+            det_id = det.get("id", "")
             try:
-                mask_label = int(det_id.split('_')[-1])
+                mask_label = int(det_id.split("_")[-1])
             except (ValueError, IndexError):
                 n_maskless += 1
                 det_info_raw.append((det, None, None, None))
@@ -150,7 +153,7 @@ def deduplicate_by_mask_overlap(detections, tiles_dir, min_overlap_fraction=0.1,
             h5f = h5_handles.get(tile_id)
             if h5f is not None:
                 try:
-                    masks_array = h5f['masks'][:]
+                    masks_array = h5f["masks"][:]
                     slices = ndimage.find_objects(masks_array)
                     mask_cache[tile_id] = (masks_array, slices)
                 except Exception as e:
@@ -205,8 +208,12 @@ def deduplicate_by_mask_overlap(detections, tiles_dir, min_overlap_fraction=0.1,
         global_ys = local_ys + sl[0].start + tile_y
 
         # Compute bounding box (x_min, y_min, x_max, y_max)
-        bbox = (int(global_xs.min()), int(global_ys.min()),
-                int(global_xs.max()), int(global_ys.max()))
+        bbox = (
+            int(global_xs.min()),
+            int(global_ys.min()),
+            int(global_xs.max()),
+            int(global_ys.max()),
+        )
 
         # Track max x for dynamic stride computation
         observed_max_x = max(observed_max_x, int(global_xs.max()))
@@ -236,8 +243,10 @@ def deduplicate_by_mask_overlap(detections, tiles_dir, min_overlap_fraction=0.1,
     del tile_det_counts
 
     if n_maskless > 0:
-        logger.warning(f"{n_maskless}/{n_total} detections have no valid mask data; "
-                       f"kept without overlap check")
+        logger.warning(
+            f"{n_maskless}/{n_total} detections have no valid mask data; "
+            f"kept without overlap check"
+        )
 
     # Compute dynamic stride: must exceed max x coordinate to avoid collisions.
     # Use at least _COORD_STRIDE_DEFAULT (1M) for safety on small images.
@@ -260,18 +269,20 @@ def deduplicate_by_mask_overlap(detections, tiles_dir, min_overlap_fraction=0.1,
     logger.info("Masks loaded. Running overlap check...")
 
     # Sort by priority descending (keep higher-priority ones)
-    if sort_by == 'confidence':
+    if sort_by == "confidence":
+
         def _confidence_key(item):
             det = item[0]
-            score = det.get('rf_prediction')
+            score = det.get("rf_prediction")
             if score is None:
-                score = det.get('score')
+                score = det.get("score")
             if score is None:
-                score = det.get('features', {}).get('sam2_score', 0)
+                score = det.get("features", {}).get("sam2_score", 0)
             return score if score is not None else 0
+
         det_info.sort(key=_confidence_key, reverse=True)
     else:
-        det_info.sort(key=lambda x: x[0].get('features', {}).get('area', 0), reverse=True)
+        det_info.sort(key=lambda x: x[0].get("features", {}).get("area", 0), reverse=True)
 
     # Greedy deduplication with spatial grid acceleration.
     # Duplicates only exist in tile overlap zones, so we partition detections
@@ -289,6 +300,7 @@ def deduplicate_by_mask_overlap(detections, tiles_dir, min_overlap_fraction=0.1,
     logger.info(f"Spatial grid cell size: {grid_cell} px")
 
     from collections import defaultdict
+
     grid = defaultdict(list)  # (gx, gy) -> list of indices into kept_data
     # kept_data stores (bbox, coord_frozenset, n_coords) for each kept detection
     kept_data = []
@@ -328,8 +340,12 @@ def deduplicate_by_mask_overlap(detections, tiles_dir, min_overlap_fraction=0.1,
             if kept_bbox is None:
                 continue
             # Bbox overlap check
-            if (bbox[0] > kept_bbox[2] or bbox[2] < kept_bbox[0] or
-                    bbox[1] > kept_bbox[3] or bbox[3] < kept_bbox[1]):
+            if (
+                bbox[0] > kept_bbox[2]
+                or bbox[2] < kept_bbox[0]
+                or bbox[1] > kept_bbox[3]
+                or bbox[3] < kept_bbox[1]
+            ):
                 continue
 
             # --- Fix 2: Set-based overlap with early exit ---
@@ -373,7 +389,9 @@ def deduplicate_by_mask_overlap(detections, tiles_dir, min_overlap_fraction=0.1,
 
     n_removed = len(detections) - len(kept)
     if n_removed > 0:
-        logger.info(f"Mask overlap dedup: {len(detections)} -> {len(kept)} ({n_removed} duplicates removed)")
+        logger.info(
+            f"Mask overlap dedup: {len(detections)} -> {len(kept)} ({n_removed} duplicates removed)"
+        )
     logger.info(f"Done: {len(detections)} -> {len(kept)} ({n_removed} removed)")
 
     return kept
@@ -407,9 +425,10 @@ def deduplicate_by_iou_nms(
     Returns:
         Deduplicated list of detections.
     """
-    import cv2
     from collections import Counter
     from pathlib import Path
+
+    import cv2
     from shapely import STRtree
     from shapely.geometry import Polygon
 
@@ -424,8 +443,9 @@ def deduplicate_by_iou_nms(
 
     tiles_dir = Path(tiles_dir)
     n_total = len(detections)
-    logger.info(f"Starting IoU NMS dedup for {n_total} detections "
-          f"(threshold={iou_threshold})...")
+    logger.info(
+        f"Starting IoU NMS dedup for {n_total} detections " f"(threshold={iou_threshold})..."
+    )
 
     # --- Count detections per tile for cache eviction ---
     tile_det_counts = Counter()
@@ -560,8 +580,7 @@ def deduplicate_by_iou_nms(
             # Convert local contour coords to global coordinates
             # cv2 contour format is (x_local, y_local) within the slice bbox
             global_coords = [
-                (float(pt[0]) + sl[1].start + tile_x,
-                 float(pt[1]) + sl[0].start + tile_y)
+                (float(pt[0]) + sl[1].start + tile_x, float(pt[1]) + sl[0].start + tile_y)
                 for pt in contour
             ]
             poly = Polygon(global_coords)
@@ -621,11 +640,13 @@ def deduplicate_by_iou_nms(
     # Mapping: valid_indices[pos] = det_idx (list is O(1) by position)
     det_idx_to_valid_pos = {det_idx: pos for pos, det_idx in enumerate(valid_indices)}
 
-    logger.info(f"Contours loaded. Built STRtree with {len(valid_polygons)} polygons. "
-          f"Running NMS...")
+    logger.info(
+        f"Contours loaded. Built STRtree with {len(valid_polygons)} polygons. " f"Running NMS..."
+    )
 
     # --- Sort by priority ---
     if sort_by == "confidence":
+
         def _confidence_key(idx):
             det = detections[idx]
             score = det.get("rf_prediction")

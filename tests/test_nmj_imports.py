@@ -13,6 +13,7 @@ import sys
 
 try:
     import pytest
+
     PYTEST_AVAILABLE = True
 except ImportError:
     PYTEST_AVAILABLE = False
@@ -24,23 +25,26 @@ class TestNMJStrategyImports:
     def test_nmj_strategy_import(self):
         """Test that NMJStrategy class can be imported."""
         from segmentation.detection.strategies.nmj import NMJStrategy
+
         assert NMJStrategy is not None
         # Verify it has required methods
-        assert hasattr(NMJStrategy, 'segment')
-        assert hasattr(NMJStrategy, 'detect')
-        assert hasattr(NMJStrategy, 'filter')
-        assert hasattr(NMJStrategy, 'classify')
+        assert hasattr(NMJStrategy, "segment")
+        assert hasattr(NMJStrategy, "detect")
+        assert hasattr(NMJStrategy, "filter")
+        assert hasattr(NMJStrategy, "classify")
 
     def test_nmj_classifier_loaders(self):
         """Test that classifier loading functions can be imported."""
         from segmentation.detection.strategies.nmj import (
+            load_classifier,
             load_nmj_classifier,
             load_nmj_rf_classifier,
-            load_classifier,
         )
+
         assert callable(load_nmj_classifier)
         assert callable(load_nmj_rf_classifier)
         assert callable(load_classifier)
+
 
 class TestStrategyRegistryImports:
     """Test that NMJ strategy is registered in the registry."""
@@ -48,20 +52,23 @@ class TestStrategyRegistryImports:
     def test_registry_import(self):
         """Test that StrategyRegistry can be imported."""
         from segmentation.detection.registry import StrategyRegistry
+
         assert StrategyRegistry is not None
 
     def test_nmj_strategy_registered(self):
         """Test that NMJ strategy is registered in the registry."""
         from segmentation.detection.registry import StrategyRegistry
+
         strategies = StrategyRegistry.list_strategies()
-        assert 'nmj' in strategies
+        assert "nmj" in strategies
 
     def test_nmj_strategy_creation(self):
         """Test that NMJ strategy can be created from registry."""
         from segmentation.detection.registry import StrategyRegistry
-        strategy = StrategyRegistry.create('nmj')
+
+        strategy = StrategyRegistry.create("nmj")
         assert strategy is not None
-        assert strategy.name == 'nmj'
+        assert strategy.name == "nmj"
 
 
 class TestMultiChannelMixinImports:
@@ -70,14 +77,16 @@ class TestMultiChannelMixinImports:
     def test_mixin_import(self):
         """Test that MultiChannelFeatureMixin can be imported."""
         from segmentation.detection.strategies.mixins import MultiChannelFeatureMixin
+
         assert MultiChannelFeatureMixin is not None
 
     def test_mixin_methods_exist(self):
         """Test that mixin has expected methods."""
         from segmentation.detection.strategies.mixins import MultiChannelFeatureMixin
-        assert hasattr(MultiChannelFeatureMixin, 'extract_channel_stats')
-        assert hasattr(MultiChannelFeatureMixin, 'extract_multichannel_features')
-        assert hasattr(MultiChannelFeatureMixin, 'extract_multichannel_features')
+
+        assert hasattr(MultiChannelFeatureMixin, "extract_channel_stats")
+        assert hasattr(MultiChannelFeatureMixin, "extract_multichannel_features")
+        assert hasattr(MultiChannelFeatureMixin, "extract_multichannel_features")
 
 
 class TestHTMLExportImports:
@@ -86,15 +95,17 @@ class TestHTMLExportImports:
     def test_export_samples_to_html(self):
         """Test that export_samples_to_html can be imported."""
         from segmentation.io.html_export import export_samples_to_html
+
         assert callable(export_samples_to_html)
 
     def test_utility_functions(self):
         """Test that utility functions can be imported."""
         from segmentation.io.html_export import (
-            percentile_normalize,
             draw_mask_contour,
             image_to_base64,
+            percentile_normalize,
         )
+
         assert callable(percentile_normalize)
         assert callable(draw_mask_contour)
         assert callable(image_to_base64)
@@ -106,9 +117,10 @@ class TestEntryPointScriptImports:
     def test_run_segmentation_import(self):
         """Test that run_segmentation module can be imported."""
         import run_segmentation
+
         assert run_segmentation is not None
         # Check main function exists
-        assert hasattr(run_segmentation, 'main')
+        assert hasattr(run_segmentation, "main")
 
 
 class TestFeatureExtractionImports:
@@ -117,14 +129,16 @@ class TestFeatureExtractionImports:
     def test_morphological_features(self):
         """Test that morphological feature extraction can be imported."""
         from segmentation.utils.feature_extraction import extract_morphological_features
+
         assert callable(extract_morphological_features)
 
     def test_feature_dimension_constants(self):
         """Test that feature dimension constants can be imported."""
         from segmentation.utils.feature_extraction import (
-            SAM2_EMBEDDING_DIM,
             RESNET50_FEATURE_DIM,
+            SAM2_EMBEDDING_DIM,
         )
+
         assert SAM2_EMBEDDING_DIM == 256
         assert RESNET50_FEATURE_DIM == 2048
 
@@ -135,13 +149,13 @@ class TestCZILoaderImports:
     def test_czi_loader_import(self):
         """Test that CZILoader can be imported."""
         from segmentation.io.czi_loader import CZILoader, get_loader
+
         assert CZILoader is not None
         assert callable(get_loader)
 
 
 def run_tests_standalone():
     """Run tests without pytest."""
-    import sys
 
     test_classes = [
         TestNMJStrategyImports,
@@ -162,7 +176,7 @@ def run_tests_standalone():
     for test_class in test_classes:
         instance = test_class()
         for method_name in dir(instance):
-            if method_name.startswith('test_'):
+            if method_name.startswith("test_"):
                 try:
                     print(f"  {test_class.__name__}.{method_name}...", end=" ")
                     getattr(instance, method_name)()
@@ -181,7 +195,9 @@ def run_tests_standalone():
 if __name__ == "__main__":
     if PYTEST_AVAILABLE:
         import sys
+
         sys.exit(pytest.main([__file__, "-v"]))
     else:
         import sys
+
         sys.exit(run_tests_standalone())

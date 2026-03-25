@@ -38,24 +38,25 @@ REPO = Path(__file__).resolve().parent.parent
 # Helpers
 # ---------------------------------------------------------------------------
 
+
 def find_detections(run_dir: Path, force: bool = False) -> Path:
     """Find the best available detection JSON in priority order."""
-    cell_types = ['cell', 'nmj', 'mk', 'vessel', 'islet', 'tissue_pattern', 'mesothelium']
+    cell_types = ["cell", "nmj", "mk", "vessel", "islet", "tissue_pattern", "mesothelium"]
 
     # Priority order per cell type
-    suffixes = ['_detections_classified.json', '_detections_postdedup.json', '_detections.json']
+    suffixes = ["_detections_classified.json", "_detections_postdedup.json", "_detections.json"]
     if force:
         # When forcing, skip classified (we'll regenerate it)
-        suffixes = ['_detections_postdedup.json', '_detections.json']
+        suffixes = ["_detections_postdedup.json", "_detections.json"]
 
     for suffix in suffixes:
         for ct in cell_types:
-            candidate = run_dir / f'{ct}{suffix}'
+            candidate = run_dir / f"{ct}{suffix}"
             if candidate.exists():
                 return candidate
 
     # Fallback: glob for any *_detections*.json
-    candidates = sorted(run_dir.glob('*_detections*.json'), key=lambda p: p.stat().st_mtime)
+    candidates = sorted(run_dir.glob("*_detections*.json"), key=lambda p: p.stat().st_mtime)
     if candidates:
         return candidates[-1]
 
@@ -65,11 +66,11 @@ def find_detections(run_dir: Path, force: bool = False) -> Path:
 
 def find_czi(run_dir: Path) -> Path | None:
     """Try to find the CZI path from pipeline_config.json."""
-    config_file = run_dir / 'pipeline_config.json'
+    config_file = run_dir / "pipeline_config.json"
     if config_file.exists():
         try:
             config = json.loads(config_file.read_text())
-            czi_path = config.get('czi_path')
+            czi_path = config.get("czi_path")
             if czi_path and Path(czi_path).exists():
                 return Path(czi_path)
         except Exception:
@@ -79,11 +80,11 @@ def find_czi(run_dir: Path) -> Path | None:
 
 def get_pixel_size(run_dir: Path) -> float | None:
     """Read pixel_size_um from pipeline_config.json."""
-    config_file = run_dir / 'pipeline_config.json'
+    config_file = run_dir / "pipeline_config.json"
     if config_file.exists():
         try:
             config = json.loads(config_file.read_text())
-            return config.get('pixel_size_um')
+            return config.get("pixel_size_um")
         except Exception:
             pass
     return None
@@ -94,8 +95,9 @@ def read_yaml_config(config_path: Path) -> dict:
     try:
         import yaml
     except ImportError:
-        print("ERROR: PyYAML required for --config. Install with: pip install pyyaml",
-              file=sys.stderr)
+        print(
+            "ERROR: PyYAML required for --config. Install with: pip install pyyaml", file=sys.stderr
+        )
         sys.exit(1)
     with open(config_path) as f:
         return yaml.safe_load(f)
@@ -105,7 +107,7 @@ def port_is_free(port: int) -> bool:
     """Check if a TCP port is available."""
     with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
         try:
-            s.bind(('', port))
+            s.bind(("", port))
             return True
         except OSError:
             return False
@@ -119,15 +121,15 @@ def find_free_port(start: int = 8080, max_tries: int = 20) -> int:
             return port
     # Fallback: let OS pick
     with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
-        s.bind(('', 0))
+        s.bind(("", 0))
         return s.getsockname()[1]
 
 
 def detect_cell_type(det_path: Path) -> str | None:
     """Infer cell type from detection filename."""
     name = det_path.name
-    for ct in ['cell', 'nmj', 'mk', 'vessel', 'islet', 'tissue_pattern', 'mesothelium']:
-        if name.startswith(ct + '_'):
+    for ct in ["cell", "nmj", "mk", "vessel", "islet", "tissue_pattern", "mesothelium"]:
+        if name.startswith(ct + "_"):
             return ct
     return None
 
@@ -136,25 +138,27 @@ def detect_cell_type(det_path: Path) -> str | None:
 # Pipeline steps (each calls existing scripts via subprocess)
 # ---------------------------------------------------------------------------
 
-def run_classify_markers(det_json: Path, markers: list[dict], czi_path: Path | None,
-                         output_dir: Path) -> Path:
+
+def run_classify_markers(
+    det_json: Path, markers: list[dict], czi_path: Path | None, output_dir: Path
+) -> Path:
     """Run classify_markers.py. Returns path to classified JSON.
 
     If all markers use the same method, runs a single invocation.
     If methods differ, groups by method and runs one invocation per group
     (each reads the previous output so classifications accumulate).
     """
-    methods = set(m.get('method', 'otsu') for m in markers)
+    methods = set(m.get("method", "otsu") for m in markers)
 
     print(f"\n{'=' * 60}")
-    print(f"Step 1: Marker classification")
+    print("Step 1: Marker classification")
     print(f"{'=' * 60}")
     for m in markers:
         method_desc = {
-            'otsu': 'Otsu threshold (auto bg subtraction on pipeline-corrected data)',
-            'otsu_half': 'Otsu/2 — permissive threshold (captures weak expressors)',
-            'gmm': '2-component GMM (P >= 0.75 = positive)',
-        }.get(m.get('method', 'otsu'), m.get('method', 'otsu'))
+            "otsu": "Otsu threshold (auto bg subtraction on pipeline-corrected data)",
+            "otsu_half": "Otsu/2 — permissive threshold (captures weak expressors)",
+            "gmm": "2-component GMM (P >= 0.75 = positive)",
+        }.get(m.get("method", "otsu"), m.get("method", "otsu"))
         print(f"  {m['name']} (ch{m['channel']}): {method_desc}")
     print()
 
@@ -165,22 +169,28 @@ def run_classify_markers(det_json: Path, markers: list[dict], czi_path: Path | N
         # Group by method, run sequentially (each reads previous output)
         by_method = {}
         for m in markers:
-            by_method.setdefault(m.get('method', 'otsu'), []).append(m)
+            by_method.setdefault(m.get("method", "otsu"), []).append(m)
         groups = list(by_method.values())
 
     current_json = det_json
     for group in groups:
-        channels = ','.join(str(m['channel']) for m in group)
-        names = ','.join(m['name'] for m in group)
-        method = group[0].get('method', 'otsu')
+        channels = ",".join(str(m["channel"]) for m in group)
+        names = ",".join(m["name"] for m in group)
+        method = group[0].get("method", "otsu")
 
         cmd = [
-            sys.executable, str(REPO / 'scripts' / 'classify_markers.py'),
-            '--detections', str(current_json),
-            '--marker-channel', channels,
-            '--marker-name', names,
-            '--method', method,
-            '--output-dir', str(output_dir),
+            sys.executable,
+            str(REPO / "scripts" / "classify_markers.py"),
+            "--detections",
+            str(current_json),
+            "--marker-channel",
+            channels,
+            "--marker-name",
+            names,
+            "--method",
+            method,
+            "--output-dir",
+            str(output_dir),
         ]
 
         print(f"  Running: {names} (method={method})")
@@ -190,19 +200,19 @@ def run_classify_markers(det_json: Path, markers: list[dict], czi_path: Path | N
             sys.exit(1)
 
         # Next group reads the classified output from this group
-        cell_type = detect_cell_type(det_json) or 'cell'
-        classified = output_dir / f'{cell_type}_detections_classified.json'
+        cell_type = detect_cell_type(det_json) or "cell"
+        classified = output_dir / f"{cell_type}_detections_classified.json"
         if classified.exists():
             current_json = classified
 
     # Find the classified output
-    cell_type = detect_cell_type(det_json) or 'cell'
-    classified = output_dir / f'{cell_type}_detections_classified.json'
+    cell_type = detect_cell_type(det_json) or "cell"
+    classified = output_dir / f"{cell_type}_detections_classified.json"
     if classified.exists():
         return classified
 
     # Fallback: look for any classified JSON
-    candidates = sorted(output_dir.glob('*_classified.json'), key=lambda p: p.stat().st_mtime)
+    candidates = sorted(output_dir.glob("*_classified.json"), key=lambda p: p.stat().st_mtime)
     if candidates:
         return candidates[-1]
 
@@ -210,28 +220,33 @@ def run_classify_markers(det_json: Path, markers: list[dict], czi_path: Path | N
     return det_json
 
 
-def run_spatial_analysis(det_json: Path, pixel_size: float, spatial_filter: str | None,
-                         output_dir: Path) -> Path:
+def run_spatial_analysis(
+    det_json: Path, pixel_size: float, spatial_filter: str | None, output_dir: Path
+) -> Path:
     """Run spatial_cell_analysis.py --spatial-network. Returns path to enriched JSON."""
     cmd = [
-        sys.executable, str(REPO / 'scripts' / 'spatial_cell_analysis.py'),
-        '--detections', str(det_json),
-        '--output-dir', str(output_dir),
-        '--pixel-size', str(pixel_size),
-        '--spatial-network',
+        sys.executable,
+        str(REPO / "scripts" / "spatial_cell_analysis.py"),
+        "--detections",
+        str(det_json),
+        "--output-dir",
+        str(output_dir),
+        "--pixel-size",
+        str(pixel_size),
+        "--spatial-network",
     ]
     if spatial_filter:
-        cmd.extend(['--marker-filter', spatial_filter])
+        cmd.extend(["--marker-filter", spatial_filter])
 
     print(f"\n{'=' * 60}")
-    print(f"Step 2: Spatial network analysis")
+    print("Step 2: Spatial network analysis")
     print(f"{'=' * 60}")
-    print(f"  Method: Delaunay triangulation → edge pruning → connected components")
-    print(f"  Max edge distance: 50 um (cells farther apart are not neighbors)")
-    print(f"  Min component size: 3 cells (smaller groups ignored)")
+    print("  Method: Delaunay triangulation → edge pruning → connected components")
+    print("  Max edge distance: 50 um (cells farther apart are not neighbors)")
+    print("  Min component size: 3 cells (smaller groups ignored)")
     if spatial_filter:
         print(f"  Cell filter: {spatial_filter}")
-        print(f"  (only filtered cells participate in the spatial graph)")
+        print("  (only filtered cells participate in the spatial graph)")
     print()
     result = subprocess.run(cmd)
     if result.returncode != 0:
@@ -239,12 +254,12 @@ def run_spatial_analysis(det_json: Path, pixel_size: float, spatial_filter: str 
         sys.exit(1)
 
     # spatial_cell_analysis writes *_spatial.json alongside the input
-    spatial = det_json.parent / det_json.name.replace('.json', '_spatial.json')
+    spatial = det_json.parent / det_json.name.replace(".json", "_spatial.json")
     if spatial.exists():
         return spatial
 
     # Also check output_dir
-    spatial = output_dir / det_json.name.replace('.json', '_spatial.json')
+    spatial = output_dir / det_json.name.replace(".json", "_spatial.json")
     if spatial.exists():
         return spatial
 
@@ -252,8 +267,7 @@ def run_spatial_analysis(det_json: Path, pixel_size: float, spatial_filter: str 
     return det_json
 
 
-def run_spatial_viewer(det_json: Path, group_field: str, title: str,
-                       output_dir: Path) -> Path:
+def run_spatial_viewer(det_json: Path, group_field: str, title: str, output_dir: Path) -> Path:
     """Run generate_multi_slide_spatial_viewer.py — unified viewer with DBSCAN + ROI.
 
     Features:
@@ -266,28 +280,33 @@ def run_spatial_viewer(det_json: Path, group_field: str, title: str,
     - Per-group color legend with toggle
     - Pan/zoom on each slide panel
     """
-    output_html = output_dir / 'spatial_viewer.html'
+    output_html = output_dir / "spatial_viewer.html"
 
     cmd = [
-        sys.executable, str(REPO / 'scripts' / 'generate_multi_slide_spatial_viewer.py'),
-        '--detections', str(det_json),
-        '--group-field', group_field,
-        '--title', title,
-        '--output', str(output_html),
+        sys.executable,
+        str(REPO / "scripts" / "generate_multi_slide_spatial_viewer.py"),
+        "--detections",
+        str(det_json),
+        "--group-field",
+        group_field,
+        "--title",
+        title,
+        "--output",
+        str(output_html),
     ]
 
     print(f"\n{'=' * 60}")
-    print(f"Step 3: Generating interactive spatial viewer")
+    print("Step 3: Generating interactive spatial viewer")
     print(f"{'=' * 60}")
     print(f"  Coloring cells by: {group_field}")
-    print(f"  Viewer features:")
-    print(f"    - DBSCAN spatial clustering with auto-eps (KNN knee method)")
-    print(f"    - Eps scale slider: adjust cluster tightness in the browser")
-    print(f"    - Convex hull outlines around clusters (min 24 cells)")
-    print(f"    - Min cells slider for DBSCAN min_samples")
-    print(f"    - ROI drawing (circle, rectangle, polygon) with JSON export")
-    print(f"    - Per-group legend with show/hide toggle")
-    print(f"    - Pan/zoom per slide panel, focus view on double-click")
+    print("  Viewer features:")
+    print("    - DBSCAN spatial clustering with auto-eps (KNN knee method)")
+    print("    - Eps scale slider: adjust cluster tightness in the browser")
+    print("    - Convex hull outlines around clusters (min 24 cells)")
+    print("    - Min cells slider for DBSCAN min_samples")
+    print("    - ROI drawing (circle, rectangle, polygon) with JSON export")
+    print("    - Per-group legend with show/hide toggle")
+    print("    - Pan/zoom per slide panel, focus view on double-click")
     print()
     result = subprocess.run(cmd)
     if result.returncode != 0:
@@ -307,13 +326,13 @@ def serve_directory(directory: Path, port: int):
 
     # Resolve the directory to serve
     serve_dir = directory
-    if (directory / 'html').is_dir():
+    if (directory / "html").is_dir():
         # If there's an html/ subdir AND a spatial_viewer.html at the top level,
         # serve from the top level so both are accessible
-        if (directory / 'spatial_viewer.html').exists():
+        if (directory / "spatial_viewer.html").exists():
             serve_dir = directory
         else:
-            serve_dir = directory / 'html'
+            serve_dir = directory / "html"
 
     slide_name = directory.parent.name if directory.parent != directory else directory.name
 
@@ -323,8 +342,11 @@ def serve_directory(directory: Path, port: int):
     print(f"{'=' * 60}")
 
     http_proc, tunnel_proc, tunnel_url = start_server_and_tunnel(
-        serve_dir, port=port, background=False,
-        slide_name=slide_name, cell_type='view_slide',
+        serve_dir,
+        port=port,
+        background=False,
+        slide_name=slide_name,
+        cell_type="view_slide",
     )
     if http_proc is None:
         print("ERROR: Failed to start server", file=sys.stderr)
@@ -337,33 +359,40 @@ def serve_directory(directory: Path, port: int):
 # Marker spec parsing
 # ---------------------------------------------------------------------------
 
+
 def parse_markers_inline(spec: str) -> list[dict]:
     """Parse inline marker spec: 'name:channel:method,...'"""
     markers = []
-    for item in spec.split(','):
-        parts = item.strip().split(':')
+    for item in spec.split(","):
+        parts = item.strip().split(":")
         if len(parts) < 2:
-            print(f"ERROR: Invalid marker spec '{item}'. Expected 'name:channel[:method]'",
-                  file=sys.stderr)
+            print(
+                f"ERROR: Invalid marker spec '{item}'. Expected 'name:channel[:method]'",
+                file=sys.stderr,
+            )
             sys.exit(1)
-        markers.append({
-            'name': parts[0].strip(),
-            'channel': int(parts[1].strip()),
-            'method': parts[2].strip() if len(parts) > 2 else 'otsu',
-        })
+        markers.append(
+            {
+                "name": parts[0].strip(),
+                "channel": int(parts[1].strip()),
+                "method": parts[2].strip() if len(parts) > 2 else "otsu",
+            }
+        )
     return markers
 
 
 def parse_markers_yaml(config: dict) -> list[dict]:
     """Extract marker list from YAML config."""
-    markers_raw = config.get('markers', [])
+    markers_raw = config.get("markers", [])
     markers = []
     for m in markers_raw:
-        markers.append({
-            'name': m['name'],
-            'channel': m['channel'],
-            'method': m.get('method', 'otsu'),
-        })
+        markers.append(
+            {
+                "name": m["name"],
+                "channel": m["channel"],
+                "method": m.get("method", "otsu"),
+            }
+        )
     return markers
 
 
@@ -371,33 +400,54 @@ def parse_markers_yaml(config: dict) -> list[dict]:
 # Main
 # ---------------------------------------------------------------------------
 
+
 def main():
     parser = argparse.ArgumentParser(
-        description='One-command slide visualization: classify, cluster, view',
+        description="One-command slide visualization: classify, cluster, view",
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog=__doc__,
     )
-    parser.add_argument('run_dir', type=Path,
-                        help='Run directory (timestamped, with tiles/ and *_detections.json)')
-    parser.add_argument('--config', type=Path, default=None,
-                        help='YAML config to read markers/spatial settings from')
-    parser.add_argument('--markers', default=None,
-                        help='Inline marker spec: "name:channel:method,..." '
-                             '(e.g. "NeuN:1:otsu,tdTomato:2:otsu")')
-    parser.add_argument('--spatial', action='store_true',
-                        help='Run spatial clustering (Delaunay + communities)')
-    parser.add_argument('--spatial-filter', default=None,
-                        help='Filter expression for spatial (e.g. "tdTomato_class==positive")')
-    parser.add_argument('--group-field', default='marker_profile',
-                        help='Field to color cells by in viewer (default: marker_profile)')
-    parser.add_argument('--title', default=None,
-                        help='Viewer title (default: slide name)')
-    parser.add_argument('--port', type=int, default=None,
-                        help='HTTP server port (default: auto-detect free port from 8080)')
-    parser.add_argument('--no-serve', action='store_true',
-                        help='Generate viewer HTML without serving')
-    parser.add_argument('--force', action='store_true',
-                        help='Re-run classification even if classified file exists')
+    parser.add_argument(
+        "run_dir", type=Path, help="Run directory (timestamped, with tiles/ and *_detections.json)"
+    )
+    parser.add_argument(
+        "--config",
+        type=Path,
+        default=None,
+        help="YAML config to read markers/spatial settings from",
+    )
+    parser.add_argument(
+        "--markers",
+        default=None,
+        help='Inline marker spec: "name:channel:method,..." '
+        '(e.g. "NeuN:1:otsu,tdTomato:2:otsu")',
+    )
+    parser.add_argument(
+        "--spatial", action="store_true", help="Run spatial clustering (Delaunay + communities)"
+    )
+    parser.add_argument(
+        "--spatial-filter",
+        default=None,
+        help='Filter expression for spatial (e.g. "tdTomato_class==positive")',
+    )
+    parser.add_argument(
+        "--group-field",
+        default="marker_profile",
+        help="Field to color cells by in viewer (default: marker_profile)",
+    )
+    parser.add_argument("--title", default=None, help="Viewer title (default: slide name)")
+    parser.add_argument(
+        "--port",
+        type=int,
+        default=None,
+        help="HTTP server port (default: auto-detect free port from 8080)",
+    )
+    parser.add_argument(
+        "--no-serve", action="store_true", help="Generate viewer HTML without serving"
+    )
+    parser.add_argument(
+        "--force", action="store_true", help="Re-run classification even if classified file exists"
+    )
 
     args = parser.parse_args()
     run_dir = args.run_dir.resolve()
@@ -423,18 +473,18 @@ def main():
                 markers = yaml_markers
 
         # Spatial settings from YAML (CLI flags override)
-        spatial_cfg = config.get('spatial_network', {})
-        if spatial_cfg.get('enabled') and not args.spatial:
+        spatial_cfg = config.get("spatial_network", {})
+        if spatial_cfg.get("enabled") and not args.spatial:
             spatial = True
-        if not args.spatial_filter and spatial_cfg.get('marker_filter'):
-            spatial_filter = spatial_cfg['marker_filter']
+        if not args.spatial_filter and spatial_cfg.get("marker_filter"):
+            spatial_filter = spatial_cfg["marker_filter"]
 
         # Viewer settings from YAML
-        viewer_cfg = config.get('spatial_viewer', {})
-        if args.group_field == 'marker_profile' and viewer_cfg.get('group_field'):
-            group_field = viewer_cfg['group_field']
-        if not args.title and viewer_cfg.get('title'):
-            title = viewer_cfg['title']
+        viewer_cfg = config.get("spatial_viewer", {})
+        if args.group_field == "marker_profile" and viewer_cfg.get("group_field"):
+            group_field = viewer_cfg["group_field"]
+        if not args.title and viewer_cfg.get("title"):
+            title = viewer_cfg["title"]
 
     # CLI --markers overrides YAML
     if args.markers:
@@ -464,8 +514,11 @@ def main():
     # ---- Step 2: Spatial analysis ----
     if spatial:
         if pixel_size is None:
-            print("ERROR: --spatial requires pixel_size_um but pipeline_config.json "
-                  "not found or missing pixel_size_um.", file=sys.stderr)
+            print(
+                "ERROR: --spatial requires pixel_size_um but pipeline_config.json "
+                "not found or missing pixel_size_um.",
+                file=sys.stderr,
+            )
             print("  Provide pixel size via YAML config (pixel_size_um key).", file=sys.stderr)
             sys.exit(1)
         det_json = run_spatial_analysis(det_json, pixel_size, spatial_filter, run_dir)
@@ -487,5 +540,5 @@ def main():
         print(f"To view later: python scripts/view_slide.py {run_dir}")
 
 
-if __name__ == '__main__':
+if __name__ == "__main__":
     main()

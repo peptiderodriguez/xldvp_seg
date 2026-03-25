@@ -29,14 +29,13 @@ import sys
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
-from typing import Dict, List, Optional, Tuple
 
-import numpy as np
 import numcodecs
+import numpy as np
 import zarr
 from tqdm import tqdm
 
-_ZARR_V3 = int(zarr.__version__.split('.')[0]) >= 3
+_ZARR_V3 = int(zarr.__version__.split(".")[0]) >= 3
 
 try:
     from aicspylibczi import CziFile
@@ -44,14 +43,11 @@ except ImportError:
     print("ERROR: aicspylibczi is required. Install with: pip install aicspylibczi")
     sys.exit(1)
 
-logging.basicConfig(
-    level=logging.INFO,
-    format='%(asctime)s - %(levelname)s - %(message)s'
-)
+logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
 logger = logging.getLogger(__name__)
 
 
-def get_mosaic_info(czi: CziFile, scene: int = 0) -> Dict:
+def get_mosaic_info(czi: CziFile, scene: int = 0) -> dict:
     """
     Extract mosaic information from CZI file.
 
@@ -78,18 +74,18 @@ def get_mosaic_info(czi: CziFile, scene: int = 0) -> Dict:
     dims_shape = czi.get_dims_shape()[0]
 
     # Extract dimensions
-    n_channels = dims_shape['C'][1] - dims_shape['C'][0]
-    n_tiles = dims_shape['M'][1] - dims_shape['M'][0]
+    n_channels = dims_shape["C"][1] - dims_shape["C"][0]
+    n_tiles = dims_shape["M"][1] - dims_shape["M"][0]
 
     # Get nominal tile size from first tile
     # Build kwargs based on available dimensions
-    tile_kwargs = {'M': 0}
-    if 'S' in dims_shape:
-        tile_kwargs['S'] = scene
-    if 'H' in dims_shape:
-        tile_kwargs['H'] = 0
-    if 'C' in dims_shape:
-        tile_kwargs['C'] = 0
+    tile_kwargs = {"M": 0}
+    if "S" in dims_shape:
+        tile_kwargs["S"] = scene
+    if "H" in dims_shape:
+        tile_kwargs["H"] = 0
+    if "C" in dims_shape:
+        tile_kwargs["C"] = 0
 
     try:
         first_tile_bbox = czi.get_mosaic_tile_bounding_box(**tile_kwargs)
@@ -107,15 +103,15 @@ def get_mosaic_info(czi: CziFile, scene: int = 0) -> Dict:
     pixel_type = czi.pixel_type
 
     return {
-        'bbox': {'x': bbox.x, 'y': bbox.y, 'w': bbox.w, 'h': bbox.h},
-        'dims_shape': dims_shape,
-        'n_channels': n_channels,
-        'n_tiles': n_tiles,
-        'tiles_per_row': tiles_per_row,
-        'tiles_per_col': tiles_per_col,
-        'nominal_tile_size': nominal_tile_size,
-        'pixel_type': pixel_type,
-        'scene': scene,
+        "bbox": {"x": bbox.x, "y": bbox.y, "w": bbox.w, "h": bbox.h},
+        "dims_shape": dims_shape,
+        "n_channels": n_channels,
+        "n_tiles": n_tiles,
+        "tiles_per_row": tiles_per_row,
+        "tiles_per_col": tiles_per_col,
+        "nominal_tile_size": nominal_tile_size,
+        "pixel_type": pixel_type,
+        "scene": scene,
     }
 
 
@@ -134,50 +130,50 @@ def get_pixel_size_um(czi: CziFile) -> float:
 
 def preflight_check(
     czi: CziFile,
-    mosaic_info: Dict,
-    channels: List[int],
+    mosaic_info: dict,
+    channels: list[int],
     output_path: Path,
     pyramid_levels: int,
     chunk_size: int,
-) -> Dict:
+) -> dict:
     results = {
-        'valid': True,
-        'warnings': [],
-        'errors': [],
-        'estimates': {},
+        "valid": True,
+        "warnings": [],
+        "errors": [],
+        "estimates": {},
     }
 
-    bbox = mosaic_info['bbox']
+    bbox = mosaic_info["bbox"]
 
-    if bbox['w'] <= 0 or bbox['h'] <= 0:
-        results['errors'].append(f"Invalid bounding box: {bbox['w']}x{bbox['h']}")
-        results['valid'] = False
+    if bbox["w"] <= 0 or bbox["h"] <= 0:
+        results["errors"].append(f"Invalid bounding box: {bbox['w']}x{bbox['h']}")
+        results["valid"] = False
 
-    if mosaic_info['n_tiles'] == 0:
-        results['errors'].append("No mosaic tiles found")
-        results['valid'] = False
+    if mosaic_info["n_tiles"] == 0:
+        results["errors"].append("No mosaic tiles found")
+        results["valid"] = False
 
     # Test read a small region to verify CZI is readable
-    test_w = min(512, bbox['w'])
-    test_h = min(512, bbox['h'])
+    test_w = min(512, bbox["w"])
+    test_h = min(512, bbox["h"])
     try:
         test_data = czi.read_mosaic(
-            region=(bbox['x'], bbox['y'], test_w, test_h),
+            region=(bbox["x"], bbox["y"], test_w, test_h),
             scale_factor=1,
             C=channels[0],
         )
         test_data = np.squeeze(test_data)
         logger.info(f"  Test read OK: {test_data.shape}, dtype={test_data.dtype}")
     except Exception as e:
-        results['errors'].append(f"Test read failed: {e}")
-        results['valid'] = False
+        results["errors"].append(f"Test read failed: {e}")
+        results["valid"] = False
 
     if not output_path.parent.exists():
-        results['errors'].append(f"Output directory does not exist: {output_path.parent}")
-        results['valid'] = False
+        results["errors"].append(f"Output directory does not exist: {output_path.parent}")
+        results["valid"] = False
 
-    if results['errors']:
-        for err in results['errors']:
+    if results["errors"]:
+        for err in results["errors"]:
             logger.error(f"  {err}")
 
     return results
@@ -185,8 +181,8 @@ def preflight_check(
 
 def create_zarr_store(
     output_path: Path,
-    shape: Tuple[int, ...],
-    chunks: Tuple[int, ...],
+    shape: tuple[int, ...],
+    chunks: tuple[int, ...],
     dtype: np.dtype,
     n_levels: int = 5,
     overwrite: bool = False,
@@ -208,25 +204,24 @@ def create_zarr_store(
     if output_path.exists():
         if overwrite:
             import shutil
+
             shutil.rmtree(output_path)
             logger.info(f"Removed existing zarr store: {output_path}")
         else:
-            raise FileExistsError(
-                f"Output path exists: {output_path}. Use --overwrite to replace."
-            )
+            raise FileExistsError(f"Output path exists: {output_path}. Use --overwrite to replace.")
 
     # Create zarr v2-format store with Blosc compression
-    compressor = numcodecs.Blosc(cname='zstd', clevel=3, shuffle=numcodecs.Blosc.BITSHUFFLE)
+    compressor = numcodecs.Blosc(cname="zstd", clevel=3, shuffle=numcodecs.Blosc.BITSHUFFLE)
 
     if _ZARR_V3:
-        root = zarr.open_group(str(output_path), mode='w', zarr_format=2)
+        root = zarr.open_group(str(output_path), mode="w", zarr_format=2)
     else:
         store = zarr.DirectoryStore(str(output_path))
         root = zarr.group(store, overwrite=True)
 
     def _create_arr(name, **kwargs):
         if _ZARR_V3:
-            return root.create_array(name, compressors=[kwargs.pop('compressor')], **kwargs)
+            return root.create_array(name, compressors=[kwargs.pop("compressor")], **kwargs)
         else:
             return root.create_dataset(name, **kwargs)
 
@@ -234,9 +229,7 @@ def create_zarr_store(
     current_shape = shape
     for level in range(n_levels):
         # Adjust chunks for smaller levels
-        level_chunks = tuple(
-            min(c, s) for c, s in zip(chunks, current_shape)
-        )
+        level_chunks = tuple(min(c, s) for c, s in zip(chunks, current_shape))
 
         arr = _create_arr(
             str(level),
@@ -246,9 +239,7 @@ def create_zarr_store(
             compressor=compressor,
             fill_value=0,
         )
-        logger.info(
-            f"Created level {level}: shape={current_shape}, chunks={level_chunks}"
-        )
+        logger.info(f"Created level {level}: shape={current_shape}, chunks={level_chunks}")
 
         # Calculate next level shape (downsample by 2, ceil division)
         current_shape = (
@@ -268,7 +259,7 @@ def write_ome_ngff_metadata(
     root: zarr.hierarchy.Group,
     n_levels: int,
     pixel_size_um: float,
-    channel_names: Optional[List[str]] = None,
+    channel_names: list[str] | None = None,
     n_channels: int = 1,
 ) -> None:
     """
@@ -286,20 +277,22 @@ def write_ome_ngff_metadata(
     for level in range(n_levels):
         if str(level) not in root:
             break
-        scale_factor = 2 ** level
-        datasets.append({
-            "path": str(level),
-            "coordinateTransformations": [
-                {
-                    "type": "scale",
-                    "scale": [
-                        1.0,  # channel
-                        pixel_size_um * scale_factor,  # y
-                        pixel_size_um * scale_factor,  # x
-                    ]
-                }
-            ]
-        })
+        scale_factor = 2**level
+        datasets.append(
+            {
+                "path": str(level),
+                "coordinateTransformations": [
+                    {
+                        "type": "scale",
+                        "scale": [
+                            1.0,  # channel
+                            pixel_size_um * scale_factor,  # y
+                            pixel_size_um * scale_factor,  # x
+                        ],
+                    }
+                ],
+            }
+        )
 
     # Build axes
     axes = [
@@ -309,17 +302,16 @@ def write_ome_ngff_metadata(
     ]
 
     # Build multiscales metadata
-    multiscales = [{
-        "version": "0.4",
-        "name": "image",
-        "axes": axes,
-        "datasets": datasets,
-        "type": "local_mean",
-        "metadata": {
-            "method": "skimage.transform.downscale_local_mean",
-            "version": "0.4"
+    multiscales = [
+        {
+            "version": "0.4",
+            "name": "image",
+            "axes": axes,
+            "datasets": datasets,
+            "type": "local_mean",
+            "metadata": {"method": "skimage.transform.downscale_local_mean", "version": "0.4"},
         }
-    }]
+    ]
 
     root.attrs["multiscales"] = multiscales
 
@@ -346,10 +338,10 @@ def write_ome_ngff_metadata(
                     "end": 65535,  # Assume 16-bit, Napari adjusts automatically
                     "min": 0,
                     "max": 65535,
-                }
+                },
             }
             for i in range(n_channels)
-        ]
+        ],
     }
     root.attrs["omero"] = omero
 
@@ -362,17 +354,17 @@ def _process_strip(
     ch_idx: int,
     strip_idx: int,
     strip_height: int,
-    bbox: Dict,
+    bbox: dict,
     zarr_path: str,
     scene: int = 0,
-) -> Tuple[int, int, bool]:
+) -> tuple[int, int, bool]:
     """Process a single strip (for parallel execution)."""
     from aicspylibczi import CziFile
 
-    total_height = bbox['h']
-    total_width = bbox['w']
-    x_start = bbox['x']
-    y_start = bbox['y']
+    total_height = bbox["h"]
+    total_width = bbox["w"]
+    x_start = bbox["x"]
+    y_start = bbox["y"]
 
     y_off = strip_idx * strip_height
     h = min(strip_height, total_height - y_off)
@@ -408,8 +400,8 @@ def _process_strip(
         actual_h, actual_w = h, total_width
 
     # Open zarr and write (each worker opens independently)
-    root = zarr.open(zarr_path, mode='r+')
-    root['0'][ch_idx, y_off:y_off + actual_h, :actual_w] = strip_data
+    root = zarr.open(zarr_path, mode="r+")
+    root["0"][ch_idx, y_off : y_off + actual_h, :actual_w] = strip_data
 
     return ch_idx, strip_idx, True
 
@@ -417,12 +409,12 @@ def _process_strip(
 def copy_tiles_to_zarr(
     czi: CziFile,
     zarr_array: zarr.Array,
-    mosaic_info: Dict,
-    channels: List[int],
+    mosaic_info: dict,
+    channels: list[int],
     strip_height: int = 5000,
     num_workers: int = 1,
-    czi_path: Optional[str] = None,
-    zarr_path: Optional[str] = None,
+    czi_path: str | None = None,
+    zarr_path: str | None = None,
 ) -> None:
     """
     Copy tiles from CZI to zarr array, handling edge tiles correctly.
@@ -440,18 +432,18 @@ def copy_tiles_to_zarr(
         czi_path: Path to CZI file (required for parallel mode)
         zarr_path: Path to zarr store (required for parallel mode)
     """
-    bbox = mosaic_info['bbox']
-    total_height = bbox['h']
-    total_width = bbox['w']
-    x_start = bbox['x']
-    y_start = bbox['y']
+    bbox = mosaic_info["bbox"]
+    total_height = bbox["h"]
+    total_width = bbox["w"]
+    x_start = bbox["x"]
+    y_start = bbox["y"]
 
     n_strips = (total_height + strip_height - 1) // strip_height
     total_work = len(channels) * n_strips
 
     logger.info(f"Writing {len(channels)} channels, {n_strips} strips of {strip_height}px")
 
-    scene = mosaic_info.get('scene', 0)
+    scene = mosaic_info.get("scene", 0)
 
     if num_workers > 1 and czi_path and zarr_path:
         # Parallel mode
@@ -467,7 +459,14 @@ def copy_tiles_to_zarr(
             futures = {
                 executor.submit(
                     _process_strip,
-                    czi_path, ch, ch_idx, strip_idx, strip_height, bbox, zarr_path, scene
+                    czi_path,
+                    ch,
+                    ch_idx,
+                    strip_idx,
+                    strip_height,
+                    bbox,
+                    zarr_path,
+                    scene,
                 ): (ch_idx, strip_idx)
                 for ch, ch_idx, strip_idx in work_items
             }
@@ -510,7 +509,9 @@ def copy_tiles_to_zarr(
                         strip_data = strip_data[..., 0]
                         actual_h, actual_w = strip_data.shape
                     else:
-                        logger.warning(f"Unexpected 3D shape {strip_data.shape}, taking first slice")
+                        logger.warning(
+                            f"Unexpected 3D shape {strip_data.shape}, taking first slice"
+                        )
                         strip_data = strip_data[..., 0]
                         actual_h, actual_w = strip_data.shape
                 else:
@@ -518,7 +519,7 @@ def copy_tiles_to_zarr(
                     actual_h, actual_w = h, total_width
 
                 # Write to zarr
-                zarr_array[ch_idx, y_off:y_off + actual_h, :actual_w] = strip_data
+                zarr_array[ch_idx, y_off : y_off + actual_h, :actual_w] = strip_data
 
     logger.info("Finished writing level 0")
 
@@ -572,11 +573,7 @@ def generate_pyramid_level(
                     pad_h = actual_h % 2
                     pad_w = actual_w % 2
                     if pad_h or pad_w:
-                        block = np.pad(
-                            block,
-                            ((0, pad_h), (0, pad_w)),
-                            mode='edge'
-                        )
+                        block = np.pad(block, ((0, pad_h), (0, pad_w)), mode="edge")
 
                     # Downsample by 2x using local mean
                     downsampled = downscale_local_mean(block, (2, 2))
@@ -603,16 +600,16 @@ def generate_pyramid_level(
 def convert_czi_to_ome_zarr(
     czi_path: Path,
     output_path: Path,
-    channels: Optional[List[int]] = None,
+    channels: list[int] | None = None,
     pyramid_levels: int = 5,
     chunk_size: int = 1024,
     strip_height: int = 5000,
-    channel_names: Optional[List[str]] = None,
+    channel_names: list[str] | None = None,
     overwrite: bool = False,
     dry_run: bool = False,
     num_workers: int = 1,
     scene: int = 0,
-) -> Optional[Dict]:
+) -> dict | None:
     """
     Convert a CZI mosaic file to OME-Zarr format.
 
@@ -641,13 +638,15 @@ def convert_czi_to_ome_zarr(
     mosaic_info = get_mosaic_info(czi, scene=scene)
     logger.info(f"Mosaic size: {mosaic_info['bbox']['w']} x {mosaic_info['bbox']['h']} pixels")
     logger.info(f"Channels: {mosaic_info['n_channels']}")
-    logger.info(f"Tiles: {mosaic_info['n_tiles']} ({mosaic_info['tiles_per_row']} x {mosaic_info['tiles_per_col']})")
+    logger.info(
+        f"Tiles: {mosaic_info['n_tiles']} ({mosaic_info['tiles_per_row']} x {mosaic_info['tiles_per_col']})"
+    )
     logger.info(f"Nominal tile size: {mosaic_info['nominal_tile_size']}")
     logger.info(f"Pixel type: {mosaic_info['pixel_type']}")
 
     # Determine channels to convert
     if channels is None:
-        channels = list(range(mosaic_info['n_channels']))
+        channels = list(range(mosaic_info["n_channels"]))
     n_channels = len(channels)
     logger.info(f"Converting channels: {channels}")
 
@@ -665,7 +664,7 @@ def convert_czi_to_ome_zarr(
         logger.info("Dry run complete. No conversion performed.")
         return preflight_results
 
-    if not preflight_results['valid']:
+    if not preflight_results["valid"]:
         raise ValueError(
             "Preflight check failed. Fix errors above or use --skip-preflight to bypass."
         )
@@ -675,16 +674,22 @@ def convert_czi_to_ome_zarr(
     logger.info(f"Pixel size: {pixel_size_um:.4f} um")
 
     # Determine dtype
-    if 'uint16' in str(mosaic_info['pixel_type']).lower() or 'gray16' in str(mosaic_info['pixel_type']).lower():
+    if (
+        "uint16" in str(mosaic_info["pixel_type"]).lower()
+        or "gray16" in str(mosaic_info["pixel_type"]).lower()
+    ):
         dtype = np.uint16
-    elif 'uint8' in str(mosaic_info['pixel_type']).lower() or 'gray8' in str(mosaic_info['pixel_type']).lower():
+    elif (
+        "uint8" in str(mosaic_info["pixel_type"]).lower()
+        or "gray8" in str(mosaic_info["pixel_type"]).lower()
+    ):
         dtype = np.uint8
     else:
         dtype = np.uint16  # Default
         logger.warning(f"Unknown pixel type '{mosaic_info['pixel_type']}', defaulting to uint16")
 
     # Create zarr store
-    shape = (n_channels, mosaic_info['bbox']['h'], mosaic_info['bbox']['w'])
+    shape = (n_channels, mosaic_info["bbox"]["h"], mosaic_info["bbox"]["w"])
     chunks = (1, chunk_size, chunk_size)
 
     logger.info(f"Creating zarr store: {output_path}")
@@ -717,7 +722,7 @@ def convert_czi_to_ome_zarr(
     logger.info("Writing level 0 (full resolution)...")
     copy_tiles_to_zarr(
         czi,
-        root['0'],
+        root["0"],
         mosaic_info,
         channels,
         strip_height=strip_height,
@@ -752,9 +757,7 @@ def convert_czi_to_ome_zarr(
 
     # Print summary
     total_size = sum(
-        root[str(level)].nbytes_stored
-        for level in range(actual_levels)
-        if str(level) in root
+        root[str(level)].nbytes_stored for level in range(actual_levels) if str(level) in root
     )
     logger.info(f"Total size: {total_size / (1024**3):.2f} GB")
 
@@ -823,7 +826,8 @@ Examples:
         help="Height of strips for reading CZI (default: 5000)",
     )
     parser.add_argument(
-        "--workers", "-j",
+        "--workers",
+        "-j",
         type=int,
         default=1,
         help="Number of parallel workers for strip processing (default: 1)",
@@ -845,7 +849,8 @@ Examples:
         help="CZI scene index (0-based, default: 0)",
     )
     parser.add_argument(
-        "--verbose", "-v",
+        "--verbose",
+        "-v",
         action="store_true",
         help="Verbose output",
     )
@@ -876,7 +881,7 @@ Examples:
     )
 
     if args.dry_run and result:
-        if not result['valid']:
+        if not result["valid"]:
             sys.exit(1)
 
 

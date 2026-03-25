@@ -28,15 +28,15 @@ Usage:
 from __future__ import annotations
 
 import json
+from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Callable, Dict, List, Optional, Union
+from typing import Any
 
-
-from segmentation.utils.logging import get_logger, log_parameters
-from segmentation.utils.config import get_output_dir
 from segmentation.processing.pipeline import DetectionPipeline
+from segmentation.utils.config import get_output_dir
+from segmentation.utils.logging import get_logger, log_parameters
 
 logger = get_logger(__name__)
 
@@ -44,16 +44,17 @@ logger = get_logger(__name__)
 @dataclass
 class SlideInfo:
     """Information about a slide to process."""
+
     path: Path
     name: str
-    output_dir: Optional[Path] = None
+    output_dir: Path | None = None
     status: str = "pending"  # pending, processing, completed, failed
-    error: Optional[str] = None
+    error: str | None = None
     detections_count: int = 0
     processing_time_seconds: float = 0.0
 
     @classmethod
-    def from_path(cls, path: Union[str, Path], output_base: Optional[Path] = None) -> "SlideInfo":
+    def from_path(cls, path: str | Path, output_base: Path | None = None) -> SlideInfo:
         """Create SlideInfo from a path."""
         path = Path(path)
         name = path.stem
@@ -66,12 +67,12 @@ class SlideInfo:
 
 
 def collect_slides(
-    input_dir: Optional[Union[str, Path]] = None,
+    input_dir: str | Path | None = None,
     pattern: str = "*.czi",
-    batch_file: Optional[Union[str, Path]] = None,
-    paths: Optional[List[Union[str, Path]]] = None,
+    batch_file: str | Path | None = None,
+    paths: list[str | Path] | None = None,
     recursive: bool = False,
-) -> List[SlideInfo]:
+) -> list[SlideInfo]:
     """
     Collect slides from various input sources.
 
@@ -85,7 +86,7 @@ def collect_slides(
     Returns:
         List of SlideInfo objects
     """
-    collected: Dict[Path, SlideInfo] = {}
+    collected: dict[Path, SlideInfo] = {}
 
     # From explicit paths
     if paths:
@@ -110,10 +111,10 @@ def collect_slides(
     if batch_file:
         batch_file = Path(batch_file)
         if batch_file.exists():
-            with open(batch_file, 'r') as f:
+            with open(batch_file) as f:
                 for line in f:
                     line = line.strip()
-                    if line and not line.startswith('#'):
+                    if line and not line.startswith("#"):
                         path = Path(line).resolve()
                         if path.exists() and path not in collected:
                             collected[path] = SlideInfo.from_path(path)
@@ -130,15 +131,16 @@ def collect_slides(
 @dataclass
 class BatchResult:
     """Results from batch processing."""
+
     total_slides: int
     completed: int
     failed: int
     total_detections: int
     total_time_seconds: float
-    slides: List[SlideInfo]
+    slides: list[SlideInfo]
     output_dir: Path
 
-    def to_dict(self) -> Dict[str, Any]:
+    def to_dict(self) -> dict[str, Any]:
         """Convert to dictionary for JSON serialization."""
         return {
             "total_slides": self.total_slides,
@@ -160,13 +162,13 @@ class BatchResult:
             "timestamp": datetime.now().isoformat(),
         }
 
-    def save(self, path: Optional[Union[str, Path]] = None) -> Path:
+    def save(self, path: str | Path | None = None) -> Path:
         """Save batch results to JSON."""
         if path is None:
             path = self.output_dir / "batch_results.json"
         path = Path(path)
 
-        with open(path, 'w') as f:
+        with open(path, "w") as f:
             json.dump(self.to_dict(), f)
 
         logger.info(f"Batch results saved to: {path}")
@@ -185,14 +187,14 @@ class BatchProcessor:
 
     def __init__(
         self,
-        slides: List[SlideInfo],
+        slides: list[SlideInfo],
         cell_type: str,
-        output_base: Optional[Union[str, Path]] = None,
+        output_base: str | Path | None = None,
         channel: int = 0,
         tile_size: int = 3000,
         sample_fraction: float = 1.0,
         load_to_ram: bool = False,
-        experiment_name: Optional[str] = None,
+        experiment_name: str | None = None,
     ):
         """
         Initialize batch processor.
@@ -229,7 +231,7 @@ class BatchProcessor:
         for slide in self.slides:
             slide.output_dir = self.output_base / slide.name
 
-        logger.info(f"BatchProcessor initialized:")
+        logger.info("BatchProcessor initialized:")
         logger.info(f"  Slides: {len(self.slides)}")
         logger.info(f"  Cell type: {self.cell_type}")
         logger.info(f"  Output: {self.output_base}")
@@ -240,7 +242,7 @@ class BatchProcessor:
         export_html: bool = True,
         export_csv: bool = True,
         continue_on_error: bool = True,
-        **detector_kwargs
+        **detector_kwargs,
     ) -> BatchResult:
         """
         Run batch processing.
@@ -256,18 +258,23 @@ class BatchProcessor:
             BatchResult with processing summary
         """
         import time
+
         start_time = time.time()
 
-        log_parameters(logger, {
-            "slides": len(self.slides),
-            "cell_type": self.cell_type,
-            "channel": self.channel,
-            "tile_size": self.tile_size,
-            "sample_fraction": self.sample_fraction,
-            "load_to_ram": self.load_to_ram,
-            "export_html": export_html,
-            "export_csv": export_csv,
-        }, title="Batch Processing Parameters")
+        log_parameters(
+            logger,
+            {
+                "slides": len(self.slides),
+                "cell_type": self.cell_type,
+                "channel": self.channel,
+                "tile_size": self.tile_size,
+                "sample_fraction": self.sample_fraction,
+                "load_to_ram": self.load_to_ram,
+                "export_html": export_html,
+                "export_csv": export_csv,
+            },
+            title="Batch Processing Parameters",
+        )
 
         total_detections = 0
         completed = 0
@@ -292,7 +299,7 @@ class BatchProcessor:
                     detections = pipeline.process_tiles(
                         detector_fn=detector_fn,
                         sample_fraction=self.sample_fraction,
-                        **detector_kwargs
+                        **detector_kwargs,
                     )
 
                     # Export results
@@ -313,7 +320,9 @@ class BatchProcessor:
                 slide.status = "completed"
                 completed += 1
                 slide.processing_time_seconds = time.time() - slide_start
-                logger.info(f"  Completed: {slide.detections_count} detections in {slide.processing_time_seconds:.1f}s")
+                logger.info(
+                    f"  Completed: {slide.detections_count} detections in {slide.processing_time_seconds:.1f}s"
+                )
 
             except Exception as e:
                 slide.status = "failed"
@@ -340,7 +349,7 @@ class BatchProcessor:
         # Save batch results
         result.save()
 
-        logger.info(f"Batch processing complete:")
+        logger.info("Batch processing complete:")
         logger.info(f"  Completed: {completed}/{len(self.slides)}")
         logger.info(f"  Failed: {failed}")
         logger.info(f"  Total detections: {total_detections}")
@@ -349,10 +358,7 @@ class BatchProcessor:
         return result
 
     def run_parallel_preload(
-        self,
-        detector_fn: Callable,
-        max_slides_in_memory: int = 2,
-        **kwargs
+        self, detector_fn: Callable, max_slides_in_memory: int = 2, **kwargs
     ) -> BatchResult:
         """
         Run batch with parallel preloading.
@@ -370,10 +376,7 @@ class BatchProcessor:
         return self.run(detector_fn, **kwargs)
 
 
-def create_batch_summary_html(
-    result: BatchResult,
-    output_path: Optional[Union[str, Path]] = None
-) -> Path:
+def create_batch_summary_html(result: BatchResult, output_path: str | Path | None = None) -> Path:
     """
     Create HTML summary of batch processing results.
 
@@ -388,7 +391,7 @@ def create_batch_summary_html(
         output_path = result.output_dir / "batch_summary.html"
     output_path = Path(output_path)
 
-    html = f'''<!DOCTYPE html>
+    html = f"""<!DOCTYPE html>
 <html>
 <head>
     <title>Batch Processing Summary</title>
@@ -464,7 +467,7 @@ def create_batch_summary_html(
                 </tr>
             </thead>
             <tbody>
-'''
+"""
 
     for slide in result.slides:
         status_class = f"status-{slide.status}"
@@ -474,25 +477,25 @@ def create_batch_summary_html(
             if html_path.exists():
                 view_link = f'<a href="{slide.name}/html/index.html">View &rarr;</a>'
 
-        error_info = f' ({slide.error[:50]}...)' if slide.error else ''
+        error_info = f" ({slide.error[:50]}...)" if slide.error else ""
 
-        html += f'''                <tr>
+        html += f"""                <tr>
                     <td>{slide.name}</td>
                     <td class="{status_class}">{slide.status}{error_info}</td>
                     <td>{slide.detections_count:,}</td>
                     <td>{slide.processing_time_seconds:.1f}s</td>
                     <td>{view_link}</td>
                 </tr>
-'''
+"""
 
-    html += '''            </tbody>
+    html += """            </tbody>
         </table>
     </div>
 </body>
 </html>
-'''
+"""
 
-    with open(output_path, 'w') as f:
+    with open(output_path, "w") as f:
         f.write(html)
 
     logger.info(f"Batch summary HTML saved to: {output_path}")

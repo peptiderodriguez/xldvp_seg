@@ -14,6 +14,7 @@ import numpy as np
 
 try:
     import orjson
+
     _HAS_ORJSON = True
 except ImportError:
     _HAS_ORJSON = False
@@ -95,13 +96,13 @@ def atomic_json_dump(data, filepath, sanitize=True):
     if sanitize:
         data = sanitize_for_json(data)
 
-    fd, tmp_path = tempfile.mkstemp(dir=filepath.parent, suffix='.tmp')
+    fd, tmp_path = tempfile.mkstemp(dir=filepath.parent, suffix=".tmp")
     try:
         if _HAS_ORJSON:
-            with os.fdopen(fd, 'wb') as f:
+            with os.fdopen(fd, "wb") as f:
                 f.write(orjson.dumps(data, option=orjson.OPT_SERIALIZE_NUMPY))
         else:
-            with os.fdopen(fd, 'w') as f:
+            with os.fdopen(fd, "w") as f:
                 json.dump(data, f, cls=None if sanitize else NumpyEncoder)
         os.replace(tmp_path, filepath)
     except BaseException:

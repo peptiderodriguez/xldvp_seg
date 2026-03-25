@@ -17,15 +17,22 @@ Usage:
 import argparse
 import tempfile
 from pathlib import Path
-from typing import Optional, List
 
 from segmentation.utils.logging import get_logger
 
 logger = get_logger(__name__)
 
 
-def markers(slide, marker_channels, marker_names, method="snr",
-            snr_threshold=1.5, czi_path=None, output_dir=None, **kwargs):
+def markers(
+    slide,
+    marker_channels,
+    marker_names,
+    method="snr",
+    snr_threshold=1.5,
+    czi_path=None,
+    output_dir=None,
+    **kwargs,
+):
     """Classify markers as positive/negative per channel.
 
     Calls classify_single_marker() for each marker. Mutates detections
@@ -46,6 +53,7 @@ def markers(slide, marker_channels, marker_names, method="snr",
     """
     # Import lazily to avoid circular imports
     import sys
+
     sys.path.insert(0, str(Path(__file__).resolve().parent.parent.parent))
     from scripts.classify_markers import classify_single_marker
 
@@ -70,10 +78,13 @@ def markers(slide, marker_channels, marker_names, method="snr",
             **{k: v for k, v in kwargs.items() if k != "intensity_feature"},
         )
         summaries.append(summary)
-        logger.info("  %s: %d+ / %d- (threshold=%.2f)",
-                     name, summary.get("n_positive", 0),
-                     summary.get("n_negative", 0),
-                     summary.get("threshold", 0))
+        logger.info(
+            "  %s: %d+ / %d- (threshold=%.2f)",
+            name,
+            summary.get("n_positive", 0),
+            summary.get("n_negative", 0),
+            summary.get("threshold", 0),
+        )
 
     # Build marker_profile from all markers (even for single marker)
     for det in detections:
@@ -116,6 +127,7 @@ def score(slide, classifier, score_field="rf_prediction", **kwargs):
 
     # Extract feature matrix
     import numpy as np
+
     X_rows = []
     valid_indices = []
     for i, det in enumerate(detections):
@@ -148,9 +160,12 @@ def score(slide, classifier, score_field="rf_prediction", **kwargs):
         detections[idx][score_field] = float(s)
 
     n_above_50 = sum(1 for s in scores if s >= 0.5)
-    logger.info("Scored %d/%d detections (%.1f%% above 0.5)",
-                len(valid_indices), len(detections),
-                100 * n_above_50 / len(scores) if scores.size else 0)
+    logger.info(
+        "Scored %d/%d detections (%.1f%% above 0.5)",
+        len(valid_indices),
+        len(detections),
+        100 * n_above_50 / len(scores) if scores.size else 0,
+    )
 
     slide._features_df = None
     return slide
@@ -169,13 +184,13 @@ def train(slide, annotations, feature_set="morph", output_path=None, **kwargs):
         Dict with training metrics (f1, precision, recall, etc.)
     """
     import sys
-    sys.path.insert(0, str(Path(__file__).resolve().parent.parent.parent))
-    from train_classifier import load_features_and_annotations
 
+    sys.path.insert(0, str(Path(__file__).resolve().parent.parent.parent))
+    import joblib
     from sklearn.ensemble import RandomForestClassifier
     from sklearn.model_selection import cross_val_score
-    import numpy as np
-    import joblib
+
+    from train_classifier import load_features_and_annotations
 
     det_path = slide.detections_path
     if det_path is None:
@@ -209,15 +224,18 @@ def train(slide, annotations, feature_set="morph", output_path=None, **kwargs):
     output_path = Path(output_path)
     output_path.parent.mkdir(parents=True, exist_ok=True)
 
-    joblib.dump({
-        "model": rf,
-        "feature_names": feature_names,
-        "feature_set": feature_set,
-        "cv_f1_mean": float(cv_scores.mean()),
-        "cv_f1_std": float(cv_scores.std()),
-        "n_positive": int(y.sum()),
-        "n_negative": int(len(y) - y.sum()),
-    }, str(output_path))
+    joblib.dump(
+        {
+            "model": rf,
+            "feature_names": feature_names,
+            "feature_set": feature_set,
+            "cv_f1_mean": float(cv_scores.mean()),
+            "cv_f1_std": float(cv_scores.std()),
+            "n_positive": int(y.sum()),
+            "n_negative": int(len(y) - y.sum()),
+        },
+        str(output_path),
+    )
 
     logger.info("Classifier saved to %s", output_path)
     return {
@@ -230,9 +248,17 @@ def train(slide, annotations, feature_set="morph", output_path=None, **kwargs):
     }
 
 
-def cluster(slide, feature_groups="morph", methods="both", resolution=0.1,
-            output_dir=None, n_neighbors=15, min_dist=0.05,
-            clustering="leiden", **kwargs):
+def cluster(
+    slide,
+    feature_groups="morph",
+    methods="both",
+    resolution=0.1,
+    output_dir=None,
+    n_neighbors=15,
+    min_dist=0.05,
+    clustering="leiden",
+    **kwargs,
+):
     """Feature clustering with UMAP/t-SNE + Leiden/HDBSCAN.
 
     Constructs a synthetic argparse.Namespace and calls run_clustering().
@@ -254,10 +280,13 @@ def cluster(slide, feature_groups="morph", methods="both", resolution=0.1,
         raise ValueError("SlideAnalysis has no detections_path. Save detections first.")
 
     if output_dir is None:
-        output_dir = str(slide.output_dir / "clustering") if slide.output_dir else tempfile.mkdtemp()
+        output_dir = (
+            str(slide.output_dir / "clustering") if slide.output_dir else tempfile.mkdtemp()
+        )
     Path(output_dir).mkdir(parents=True, exist_ok=True)
 
     import sys
+
     sys.path.insert(0, str(Path(__file__).resolve().parent.parent.parent))
     from scripts.cluster_by_features import run_clustering
 
@@ -297,6 +326,7 @@ def cluster(slide, feature_groups="morph", methods="both", resolution=0.1,
 
     # Reload detections with cluster labels
     from segmentation.utils.json_utils import fast_json_load
+
     clustered_files = sorted(Path(output_dir).glob("*_clustered.json"))
     if clustered_files:
         slide._detections = fast_json_load(clustered_files[0])
@@ -306,8 +336,9 @@ def cluster(slide, feature_groups="morph", methods="both", resolution=0.1,
     return slide
 
 
-def spatial(slide, output_dir=None, pixel_size=None,
-            marker_filter=None, max_edge_distance=50.0, **kwargs):
+def spatial(
+    slide, output_dir=None, pixel_size=None, marker_filter=None, max_edge_distance=50.0, **kwargs
+):
     """Spatial network analysis (Delaunay graph + communities).
 
     Args:
@@ -321,6 +352,7 @@ def spatial(slide, output_dir=None, pixel_size=None,
         slide (mutated with spatial features).
     """
     import sys
+
     sys.path.insert(0, str(Path(__file__).resolve().parent.parent.parent))
     from scripts.spatial_cell_analysis import run_spatial_network
 
@@ -332,7 +364,8 @@ def spatial(slide, output_dir=None, pixel_size=None,
     px = pixel_size if pixel_size is not None else (slide.pixel_size_um or None)
 
     result_detections = run_spatial_network(
-        detections, output_dir,
+        detections,
+        output_dir,
         pixel_size=px,
         marker_filter=marker_filter,
         max_edge_distance=max_edge_distance,
@@ -347,8 +380,15 @@ def spatial(slide, output_dir=None, pixel_size=None,
     return slide
 
 
-def nuclei(slide, czi_path, nuclear_channel=None, channel_spec=None,
-           tiles_dir=None, output_path=None, **kwargs):
+def nuclei(
+    slide,
+    czi_path,
+    nuclear_channel=None,
+    channel_spec=None,
+    tiles_dir=None,
+    output_path=None,
+    **kwargs,
+):
     """Count nuclei per cell.
 
     Requires CZI file and tile masks. For existing pipeline runs,

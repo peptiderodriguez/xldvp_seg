@@ -5,29 +5,29 @@ Tests the coordinate conversion functions in segmentation/processing/coordinates
 to ensure correct handling of [x, y] vs [row, col] conventions.
 """
 
-import pytest
-import numpy as np
 from unittest.mock import MagicMock
 
+import pytest
+
 from segmentation.processing.coordinates import (
-    regionprop_centroid_to_xy,
-    xy_to_array_index,
-    array_index_to_xy,
-    extract_crop_bounds,
-    generate_uid,
-    # New UID parsing and migration functions
-    parse_uid,
-    migrate_uid_format,
-    is_spatial_uid,
     # Coordinate validation functions
     CoordinateValidationError,
-    validate_xy_coordinates,
-    validate_array_indices,
-    validate_bbox_xyxy,
+    array_index_to_xy,
+    convert_detections_to_spatial_uids,
     # Coordinate labeling helpers
     create_coordinate_dict,
+    extract_crop_bounds,
     format_coordinates_for_export,
-    convert_detections_to_spatial_uids,
+    generate_uid,
+    is_spatial_uid,
+    migrate_uid_format,
+    # New UID parsing and migration functions
+    parse_uid,
+    regionprop_centroid_to_xy,
+    validate_array_indices,
+    validate_bbox_xyxy,
+    validate_xy_coordinates,
+    xy_to_array_index,
 )
 
 
@@ -202,9 +202,7 @@ class TestExtractCropBounds:
         # Test that bounds are always within [0, image_size]
         for center_x in [0, 256, 511]:
             for center_y in [0, 256, 511]:
-                x1, y1, x2, y2 = extract_crop_bounds(
-                    center_x, center_y, 100, 512, 512
-                )
+                x1, y1, x2, y2 = extract_crop_bounds(center_x, center_y, 100, 512, 512)
 
                 assert x1 >= 0
                 assert y1 >= 0
@@ -265,41 +263,41 @@ class TestParseUID:
         uid = "slide_01_mk_12345_67890"
         parsed = parse_uid(uid)
 
-        assert parsed['slide_name'] == 'slide_01'
-        assert parsed['cell_type'] == 'mk'
-        assert parsed['global_x'] == 12345
-        assert parsed['global_y'] == 67890
-        assert parsed['global_id'] is None
-        assert parsed['is_spatial'] is True
+        assert parsed["slide_name"] == "slide_01"
+        assert parsed["cell_type"] == "mk"
+        assert parsed["global_x"] == 12345
+        assert parsed["global_y"] == 67890
+        assert parsed["global_id"] is None
+        assert parsed["is_spatial"] is True
 
     def test_parse_legacy_uid(self):
         """Test parsing a legacy format UID."""
         uid = "slide_01_mk_123"
         parsed = parse_uid(uid)
 
-        assert parsed['slide_name'] == 'slide_01'
-        assert parsed['cell_type'] == 'mk'
-        assert parsed['global_x'] is None
-        assert parsed['global_y'] is None
-        assert parsed['global_id'] == 123
-        assert parsed['is_spatial'] is False
+        assert parsed["slide_name"] == "slide_01"
+        assert parsed["cell_type"] == "mk"
+        assert parsed["global_x"] is None
+        assert parsed["global_y"] is None
+        assert parsed["global_id"] == 123
+        assert parsed["is_spatial"] is False
 
     def test_parse_uid_with_underscores_in_slide(self):
         """Test parsing UID where slide name contains underscores."""
         uid = "2025_11_18_FGC1_hspc_5000_3000"
         parsed = parse_uid(uid)
 
-        assert parsed['slide_name'] == '2025_11_18_FGC1'
-        assert parsed['cell_type'] == 'hspc'
-        assert parsed['global_x'] == 5000
-        assert parsed['global_y'] == 3000
+        assert parsed["slide_name"] == "2025_11_18_FGC1"
+        assert parsed["cell_type"] == "hspc"
+        assert parsed["global_x"] == 5000
+        assert parsed["global_y"] == 3000
 
     def test_parse_uid_all_cell_types(self):
         """Test parsing UIDs for different cell types."""
-        for cell_type in ['mk', 'hspc', 'nmj', 'vessel']:
+        for cell_type in ["mk", "hspc", "nmj", "vessel"]:
             uid = f"slide_{cell_type}_100_200"
             parsed = parse_uid(uid)
-            assert parsed['cell_type'] == cell_type
+            assert parsed["cell_type"] == cell_type
 
     def test_parse_uid_invalid_raises(self):
         """Test that invalid UID raises ValueError."""
@@ -422,24 +420,24 @@ class TestCreateCoordinateDict:
         """Test basic coordinate dict creation."""
         result = create_coordinate_dict(100.5, 200.5)
 
-        assert result['x'] == 100.5
-        assert result['y'] == 200.5
-        assert result['center_xy'] == [100.5, 200.5]
+        assert result["x"] == 100.5
+        assert result["y"] == 200.5
+        assert result["center_xy"] == [100.5, 200.5]
 
     def test_with_prefix(self):
         """Test coordinate dict with prefix."""
         result = create_coordinate_dict(100, 200, prefix="global_")
 
-        assert result['global_x'] == 100
-        assert result['global_y'] == 200
-        assert result['global_center_xy'] == [100, 200]
+        assert result["global_x"] == 100
+        assert result["global_y"] == 200
+        assert result["global_center_xy"] == [100, 200]
 
     def test_with_rounded(self):
         """Test coordinate dict with rounded values."""
         result = create_coordinate_dict(100.6, 200.4, include_rounded=True)
 
-        assert result['x_rounded'] == 101
-        assert result['y_rounded'] == 200
+        assert result["x_rounded"] == 101
+        assert result["y_rounded"] == 200
 
 
 class TestFormatCoordinatesForExport:
@@ -449,28 +447,26 @@ class TestFormatCoordinatesForExport:
         """Test basic export format."""
         result = format_coordinates_for_export(12345.6, 67890.3)
 
-        assert result['global_x_px'] == 12345.6
-        assert result['global_y_px'] == 67890.3
-        assert result['global_center_xy'] == [12345.6, 67890.3]
+        assert result["global_x_px"] == 12345.6
+        assert result["global_y_px"] == 67890.3
+        assert result["global_center_xy"] == [12345.6, 67890.3]
 
     def test_with_pixel_size(self):
         """Test export format with pixel size conversion."""
         result = format_coordinates_for_export(1000, 2000, pixel_size_um=0.22)
 
-        assert result['global_x_um'] == 220.0
-        assert result['global_y_um'] == 440.0
+        assert result["global_x_um"] == 220.0
+        assert result["global_y_um"] == 440.0
 
     def test_with_local_coords(self):
         """Test export format with local coordinates."""
         result = format_coordinates_for_export(
-            12345, 67890,
-            local_x=345, local_y=890,
-            tile_origin_x=12000, tile_origin_y=67000
+            12345, 67890, local_x=345, local_y=890, tile_origin_x=12000, tile_origin_y=67000
         )
 
-        assert result['local_x_px'] == 345
-        assert result['local_y_px'] == 890
-        assert result['tile_origin_xy'] == [12000, 67000]
+        assert result["local_x_px"] == 345
+        assert result["local_y_px"] == 890
+        assert result["tile_origin_xy"] == [12000, 67000]
 
 
 class TestConvertDetectionsToSpatialUIDs:
@@ -479,25 +475,25 @@ class TestConvertDetectionsToSpatialUIDs:
     def test_convert_with_global_center(self):
         """Test conversion when detections have global_center field."""
         detections = [
-            {'global_id': 123, 'global_center': [1000, 2000]},
-            {'global_id': 456, 'global_center': [3000, 4000]},
+            {"global_id": 123, "global_center": [1000, 2000]},
+            {"global_id": 456, "global_center": [3000, 4000]},
         ]
         result = convert_detections_to_spatial_uids(detections, "slide_01", "mk")
 
-        assert result[0]['uid'] == "slide_01_mk_1000_2000"
-        assert result[1]['uid'] == "slide_01_mk_3000_4000"
+        assert result[0]["uid"] == "slide_01_mk_1000_2000"
+        assert result[1]["uid"] == "slide_01_mk_3000_4000"
 
     def test_preserves_legacy_global_id(self):
         """Test that legacy global_id is preserved."""
-        detections = [{'global_id': 123, 'global_center': [1000, 2000]}]
+        detections = [{"global_id": 123, "global_center": [1000, 2000]}]
         result = convert_detections_to_spatial_uids(detections, "slide", "mk")
 
-        assert result[0]['legacy_global_id'] == 123
+        assert result[0]["legacy_global_id"] == 123
 
     def test_handles_missing_coordinates(self):
         """Test that detections without coordinates are passed through."""
-        detections = [{'some_field': 'value'}]
+        detections = [{"some_field": "value"}]
         result = convert_detections_to_spatial_uids(detections, "slide", "mk")
 
-        assert 'uid' not in result[0]
-        assert result[0]['some_field'] == 'value'
+        assert "uid" not in result[0]
+        assert result[0]["some_field"] == "value"

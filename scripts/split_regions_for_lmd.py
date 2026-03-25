@@ -30,13 +30,12 @@ Usage:
       --output /path/to/output/nfl_pieces.json
 """
 
-import os
-import sys
 import argparse
-
-import numpy as np
-import cv2
+import sys
 from pathlib import Path
+
+import cv2
+import numpy as np
 from scipy.ndimage import distance_transform_edt
 from scipy.spatial import cKDTree
 from skimage.segmentation import watershed
@@ -47,7 +46,7 @@ except ImportError:
     pass
 import h5py
 
-from segmentation.utils.json_utils import fast_json_load, atomic_json_dump
+from segmentation.utils.json_utils import atomic_json_dump, fast_json_load
 from segmentation.utils.logging import get_logger
 
 logger = get_logger(__name__)
@@ -56,6 +55,7 @@ logger = get_logger(__name__)
 # ---------------------------------------------------------------------------
 # Region splitting (same watershed logic as before)
 # ---------------------------------------------------------------------------
+
 
 def split_region(mask: np.ndarray, n_pieces: int, seed: int = 42) -> list:
     """Split a binary mask into n_pieces roughly equal-area sub-regions.
@@ -82,10 +82,12 @@ def split_region(mask: np.ndarray, n_pieces: int, seed: int = 42) -> list:
     for _ in range(50):
         tree = cKDTree(centroids)
         _, labels_km = tree.query(coords)
-        new_centroids = np.array([
-            coords[labels_km == i].mean(axis=0) if (labels_km == i).any() else centroids[i]
-            for i in range(n_pieces)
-        ])
+        new_centroids = np.array(
+            [
+                coords[labels_km == i].mean(axis=0) if (labels_km == i).any() else centroids[i]
+                for i in range(n_pieces)
+            ]
+        )
         if np.allclose(centroids, new_centroids, atol=0.5):
             break
         centroids = new_centroids
@@ -126,6 +128,7 @@ def extract_contour_global(piece: np.ndarray, x_offset: int, y_offset: int) -> l
 # Main
 # ---------------------------------------------------------------------------
 
+
 def parse_args():
     parser = argparse.ArgumentParser(
         description=(
@@ -135,23 +138,35 @@ def parse_args():
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog=__doc__.split("Usage:")[1] if "Usage:" in __doc__ else "",
     )
-    parser.add_argument("--detections", required=True, type=Path,
-                        help="Detection JSON from pipeline run (e.g., nmj_detections.json)")
-    parser.add_argument("--tiles-dir", required=True, type=Path,
-                        help="Tiles directory with HDF5 masks")
-    parser.add_argument("--output", required=True, type=Path,
-                        help="Output JSON path")
-    parser.add_argument("--target-area-um2", type=float, default=None,
-                        help="Target area per piece in um^2. If not set, computed from --target-area-percentile.")
-    parser.add_argument("--target-area-percentile", type=float, default=75.0,
-                        help="Use this percentile of detection area as both the target piece size "
-                             "and minimum cutoff (default: 75 = p75). Detections below this are "
-                             "discarded, detections above are split into pieces of this size. "
-                             "Ignored if --target-area-um2 is set explicitly.")
-    parser.add_argument("--seed", type=int, default=42,
-                        help="Random seed for watershed seeding")
-    parser.add_argument("--cell-type", default="nmj",
-                        help="Cell type label in mask filenames (default: nmj)")
+    parser.add_argument(
+        "--detections",
+        required=True,
+        type=Path,
+        help="Detection JSON from pipeline run (e.g., nmj_detections.json)",
+    )
+    parser.add_argument(
+        "--tiles-dir", required=True, type=Path, help="Tiles directory with HDF5 masks"
+    )
+    parser.add_argument("--output", required=True, type=Path, help="Output JSON path")
+    parser.add_argument(
+        "--target-area-um2",
+        type=float,
+        default=None,
+        help="Target area per piece in um^2. If not set, computed from --target-area-percentile.",
+    )
+    parser.add_argument(
+        "--target-area-percentile",
+        type=float,
+        default=75.0,
+        help="Use this percentile of detection area as both the target piece size "
+        "and minimum cutoff (default: 75 = p75). Detections below this are "
+        "discarded, detections above are split into pieces of this size. "
+        "Ignored if --target-area-um2 is set explicitly.",
+    )
+    parser.add_argument("--seed", type=int, default=42, help="Random seed for watershed seeding")
+    parser.add_argument(
+        "--cell-type", default="nmj", help="Cell type label in mask filenames (default: nmj)"
+    )
     return parser.parse_args()
 
 
@@ -182,11 +197,12 @@ def main():
                 break
     if pixel_size_um is None:
         from segmentation.utils.config import _LEGACY_PIXEL_SIZE_UM
+
         pixel_size_um = _LEGACY_PIXEL_SIZE_UM
         logger.warning(f"Could not detect pixel size, using legacy fallback {pixel_size_um}")
     logger.info(f"  Pixel size: {pixel_size_um:.4f} um/px")
 
-    px2 = pixel_size_um ** 2
+    px2 = pixel_size_um**2
 
     # Determine target area (= piece size AND minimum cutoff)
     if args.target_area_um2 is not None:
@@ -200,8 +216,10 @@ def main():
         all_areas = [a for a in all_areas if a > 0]
         if all_areas:
             target_area_um2 = float(np.percentile(all_areas, args.target_area_percentile))
-            logger.info(f"  Area p{args.target_area_percentile:.0f} = {target_area_um2:.1f} um2 "
-                        f"(from {len(all_areas):,} detections)")
+            logger.info(
+                f"  Area p{args.target_area_percentile:.0f} = {target_area_um2:.1f} um2 "
+                f"(from {len(all_areas):,} detections)"
+            )
         else:
             target_area_um2 = 200.0
             logger.warning("No valid areas found, using default 200 um2")
@@ -234,8 +252,9 @@ def main():
     for (tile_x, tile_y), det_indices in sorted(by_tile.items()):
         # Find HDF5 mask file for this tile
         tile_dir = args.tiles_dir / f"tile_{tile_x}_{tile_y}"
-        mask_files = list(tile_dir.glob(f"{args.cell_type}_masks.h5")) + \
-                     list(tile_dir.glob(f"{args.cell_type}_masks.hdf5"))
+        mask_files = list(tile_dir.glob(f"{args.cell_type}_masks.h5")) + list(
+            tile_dir.glob(f"{args.cell_type}_masks.hdf5")
+        )
         if not mask_files:
             # Keep detections as-is if no mask file
             for i in det_indices:
@@ -283,7 +302,7 @@ def main():
                 n_kept += 1
                 continue
 
-            cell_mask = (masks == int(mask_label))
+            cell_mask = masks == int(mask_label)
             if not cell_mask.any():
                 output_detections.append(det)
                 n_kept += 1
@@ -333,8 +352,10 @@ def main():
                 new_det = {
                     "uid": uid,
                     "global_center": [int(round(cx)), int(round(cy))],
-                    "global_center_um": [round(cx * pixel_size_um, 3),
-                                         round(cy * pixel_size_um, 3)],
+                    "global_center_um": [
+                        round(cx * pixel_size_um, 3),
+                        round(cy * pixel_size_um, 3),
+                    ],
                     "tile_origin": [tile_x, tile_y],
                     "features": {
                         "area": p_area_px,
@@ -351,8 +372,10 @@ def main():
                 n_pieces_total += 1
 
     # --- Summary ---
-    logger.info(f"Results: {n_kept:,} kept, {n_split:,} split into "
-                f"{n_pieces_total:,} pieces, {n_too_small:,} too small")
+    logger.info(
+        f"Results: {n_kept:,} kept, {n_split:,} split into "
+        f"{n_pieces_total:,} pieces, {n_too_small:,} too small"
+    )
     logger.info(f"Total output detections: {len(output_detections):,}")
 
     # --- Write ---
@@ -362,8 +385,10 @@ def main():
 
     if output_detections:
         areas = [d["features"]["area_um2"] for d in output_detections]
-        logger.info(f"Area: min={min(areas):.1f} max={max(areas):.1f} "
-                    f"mean={sum(areas)/len(areas):.1f} um2")
+        logger.info(
+            f"Area: min={min(areas):.1f} max={max(areas):.1f} "
+            f"mean={sum(areas)/len(areas):.1f} um2"
+        )
 
 
 if __name__ == "__main__":

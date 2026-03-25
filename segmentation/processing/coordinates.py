@@ -20,11 +20,12 @@ UID Format:
 See docs/COORDINATE_SYSTEM.md for full specification.
 """
 
+from typing import Any
+
 import numpy as np
-from typing import Tuple, List, Optional, Dict, Any
 
 
-def regionprop_centroid_to_xy(prop) -> List[float]:
+def regionprop_centroid_to_xy(prop) -> list[float]:
     """
     Convert scikit-image regionprops centroid to [x, y] format.
 
@@ -38,7 +39,7 @@ def regionprop_centroid_to_xy(prop) -> List[float]:
     return [float(prop.centroid[1]), float(prop.centroid[0])]
 
 
-def xy_to_array_index(x: float, y: float) -> Tuple[int, int]:
+def xy_to_array_index(x: float, y: float) -> tuple[int, int]:
     """
     Convert [x, y] coordinates to numpy array indices [row, col].
 
@@ -52,7 +53,7 @@ def xy_to_array_index(x: float, y: float) -> Tuple[int, int]:
     return (int(y), int(x))
 
 
-def array_index_to_xy(row: int, col: int) -> Tuple[int, int]:
+def array_index_to_xy(row: int, col: int) -> tuple[int, int]:
     """
     Convert numpy array indices [row, col] to [x, y] coordinates.
 
@@ -67,12 +68,8 @@ def array_index_to_xy(row: int, col: int) -> Tuple[int, int]:
 
 
 def extract_crop_bounds(
-    center_x: float,
-    center_y: float,
-    crop_size: int,
-    image_width: int,
-    image_height: int
-) -> Tuple[int, int, int, int]:
+    center_x: float, center_y: float, crop_size: int, image_width: int, image_height: int
+) -> tuple[int, int, int, int]:
     """
     Calculate crop bounds centered on a point, clipped to image boundaries.
 
@@ -97,12 +94,8 @@ def extract_crop_bounds(
 
 
 def extract_crop(
-    image: np.ndarray,
-    center_x: float,
-    center_y: float,
-    crop_size: int,
-    copy: bool = True
-) -> Tuple[np.ndarray, Tuple[int, int, int, int]]:
+    image: np.ndarray, center_x: float, center_y: float, crop_size: int, copy: bool = True
+) -> tuple[np.ndarray, tuple[int, int, int, int]]:
     """
     Extract a square crop centered on a point.
 
@@ -129,11 +122,8 @@ def extract_crop(
 
 
 def global_to_tile_coords(
-    global_x: float,
-    global_y: float,
-    tile_origin_x: int,
-    tile_origin_y: int
-) -> Tuple[float, float]:
+    global_x: float, global_y: float, tile_origin_x: int, tile_origin_y: int
+) -> tuple[float, float]:
     """
     Convert global mosaic coordinates to tile-relative coordinates.
 
@@ -150,11 +140,8 @@ def global_to_tile_coords(
 
 
 def tile_to_global_coords(
-    local_x: float,
-    local_y: float,
-    tile_origin_x: int,
-    tile_origin_y: int
-) -> Tuple[float, float]:
+    local_x: float, local_y: float, tile_origin_x: int, tile_origin_y: int
+) -> tuple[float, float]:
     """
     Convert tile-relative coordinates to global mosaic coordinates.
 
@@ -170,12 +157,7 @@ def tile_to_global_coords(
     return (local_x + tile_origin_x, local_y + tile_origin_y)
 
 
-def generate_uid(
-    slide_name: str,
-    cell_type: str,
-    global_x: float,
-    global_y: float
-) -> str:
+def generate_uid(slide_name: str, cell_type: str, global_x: float, global_y: float) -> str:
     """
     Generate a unique identifier for a detection.
 
@@ -201,8 +183,8 @@ def mask_to_crop_coords(
     crop_y1: int,
     crop_x1: int,
     crop_height: int,
-    crop_width: int
-) -> Tuple[np.ndarray, np.ndarray]:
+    crop_width: int,
+) -> tuple[np.ndarray, np.ndarray]:
     """
     Map mask pixel coordinates from tile space to crop space (vectorized).
 
@@ -228,10 +210,7 @@ def mask_to_crop_coords(
     crop_xs = global_xs - crop_x1
 
     # Bounds check
-    valid = (
-        (crop_ys >= 0) & (crop_ys < crop_height) &
-        (crop_xs >= 0) & (crop_xs < crop_width)
-    )
+    valid = (crop_ys >= 0) & (crop_ys < crop_height) & (crop_xs >= 0) & (crop_xs < crop_width)
 
     return crop_ys[valid].astype(int), crop_xs[valid].astype(int)
 
@@ -240,7 +219,8 @@ def mask_to_crop_coords(
 # UID Parsing and Migration
 # =============================================================================
 
-def parse_uid(uid: str) -> Dict[str, Any]:
+
+def parse_uid(uid: str) -> dict[str, Any]:
     """
     Parse a spatial UID into its components.
 
@@ -266,7 +246,7 @@ def parse_uid(uid: str) -> Dict[str, Any]:
         {'slide_name': 'slide_01', 'cell_type': 'mk', 'global_x': None, 'global_y': None, 'global_id': 123, 'is_spatial': False}
     """
     # Known cell types
-    cell_types = ['mk', 'hspc', 'nmj', 'vessel', 'cell', 'mesothelium', 'islet', 'tissue_pattern']
+    cell_types = ["mk", "hspc", "nmj", "vessel", "cell", "mesothelium", "islet", "tissue_pattern"]
 
     # Try to find the cell type in the UID
     cell_type = None
@@ -274,7 +254,7 @@ def parse_uid(uid: str) -> Dict[str, Any]:
 
     for ct in cell_types:
         # Look for _{celltype}_ pattern
-        pattern = f'_{ct}_'
+        pattern = f"_{ct}_"
         pos = uid.rfind(pattern)
         if pos != -1:
             cell_type = ct
@@ -288,43 +268,39 @@ def parse_uid(uid: str) -> Dict[str, Any]:
     slide_name = uid[:cell_type_pos]
 
     # Extract the suffix after the cell type
-    suffix = uid[cell_type_pos + len(f'_{cell_type}_'):]
+    suffix = uid[cell_type_pos + len(f"_{cell_type}_") :]
 
     # Check if spatial format (contains underscore with two numbers)
-    parts = suffix.split('_')
+    parts = suffix.split("_")
 
-    if len(parts) >= 2 and parts[0].lstrip('-').isdigit() and parts[1].lstrip('-').isdigit():
+    if len(parts) >= 2 and parts[0].lstrip("-").isdigit() and parts[1].lstrip("-").isdigit():
         # Spatial format: {x}_{y}
         global_x = int(parts[0])
         global_y = int(parts[1])
         return {
-            'slide_name': slide_name,
-            'cell_type': cell_type,
-            'global_x': global_x,
-            'global_y': global_y,
-            'global_id': None,
-            'is_spatial': True,
+            "slide_name": slide_name,
+            "cell_type": cell_type,
+            "global_x": global_x,
+            "global_y": global_y,
+            "global_id": None,
+            "is_spatial": True,
         }
     elif len(parts) == 1 and parts[0].isdigit():
         # Legacy format: {global_id}
         global_id = int(parts[0])
         return {
-            'slide_name': slide_name,
-            'cell_type': cell_type,
-            'global_x': None,
-            'global_y': None,
-            'global_id': global_id,
-            'is_spatial': False,
+            "slide_name": slide_name,
+            "cell_type": cell_type,
+            "global_x": None,
+            "global_y": None,
+            "global_id": global_id,
+            "is_spatial": False,
         }
     else:
         raise ValueError(f"Could not parse coordinates from UID suffix: {suffix}")
 
 
-def migrate_uid_format(
-    old_uid: str,
-    global_x: float,
-    global_y: float
-) -> str:
+def migrate_uid_format(old_uid: str, global_x: float, global_y: float) -> str:
     """
     Convert a legacy global_id UID to the spatial UID format.
 
@@ -341,7 +317,7 @@ def migrate_uid_format(
         'slide_01_mk_12346_67890'
     """
     parsed = parse_uid(old_uid)
-    return generate_uid(parsed['slide_name'], parsed['cell_type'], global_x, global_y)
+    return generate_uid(parsed["slide_name"], parsed["cell_type"], global_x, global_y)
 
 
 def is_spatial_uid(uid: str) -> bool:
@@ -362,7 +338,7 @@ def is_spatial_uid(uid: str) -> bool:
     """
     try:
         parsed = parse_uid(uid)
-        return parsed['is_spatial']
+        return parsed["is_spatial"]
     except ValueError:
         return False
 
@@ -371,18 +347,15 @@ def is_spatial_uid(uid: str) -> bool:
 # Coordinate Validation
 # =============================================================================
 
+
 class CoordinateValidationError(ValueError):
     """Exception raised for invalid coordinates."""
+
     pass
 
 
 def validate_xy_coordinates(
-    x: float,
-    y: float,
-    width: int,
-    height: int,
-    allow_negative: bool = False,
-    context: str = ""
+    x: float, y: float, width: int, height: int, allow_negative: bool = False, context: str = ""
 ) -> None:
     """
     Validate that x, y coordinates are within valid bounds.
@@ -411,22 +384,12 @@ def validate_xy_coordinates(
             raise CoordinateValidationError(f"Y coordinate {y} is negative{ctx}")
 
     if x >= width:
-        raise CoordinateValidationError(
-            f"X coordinate {x} exceeds width {width}{ctx}"
-        )
+        raise CoordinateValidationError(f"X coordinate {x} exceeds width {width}{ctx}")
     if y >= height:
-        raise CoordinateValidationError(
-            f"Y coordinate {y} exceeds height {height}{ctx}"
-        )
+        raise CoordinateValidationError(f"Y coordinate {y} exceeds height {height}{ctx}")
 
 
-def validate_array_indices(
-    row: int,
-    col: int,
-    height: int,
-    width: int,
-    context: str = ""
-) -> None:
+def validate_array_indices(row: int, col: int, height: int, width: int, context: str = "") -> None:
     """
     Validate that row, col indices are within valid bounds for array indexing.
 
@@ -451,20 +414,13 @@ def validate_array_indices(
     if col < 0:
         raise CoordinateValidationError(f"Column index {col} is negative{ctx}")
     if row >= height:
-        raise CoordinateValidationError(
-            f"Row index {row} exceeds height {height}{ctx}"
-        )
+        raise CoordinateValidationError(f"Row index {row} exceeds height {height}{ctx}")
     if col >= width:
-        raise CoordinateValidationError(
-            f"Column index {col} exceeds width {width}{ctx}"
-        )
+        raise CoordinateValidationError(f"Column index {col} exceeds width {width}{ctx}")
 
 
 def validate_bbox_xyxy(
-    bbox: Tuple[int, int, int, int],
-    width: int,
-    height: int,
-    context: str = ""
+    bbox: tuple[int, int, int, int], width: int, height: int, context: str = ""
 ) -> None:
     """
     Validate a bounding box in (x1, y1, x2, y2) format.
@@ -499,12 +455,10 @@ def validate_bbox_xyxy(
 # Coordinate Labeling Helpers
 # =============================================================================
 
+
 def create_coordinate_dict(
-    x: float,
-    y: float,
-    prefix: str = "",
-    include_rounded: bool = False
-) -> Dict[str, Any]:
+    x: float, y: float, prefix: str = "", include_rounded: bool = False
+) -> dict[str, Any]:
     """
     Create a dictionary with explicitly labeled coordinates.
 
@@ -525,14 +479,14 @@ def create_coordinate_dict(
         {'x': 123.4, 'y': 567.8, 'center_xy': [123.4, 567.8], 'x_rounded': 123, 'y_rounded': 568}
     """
     result = {
-        f'{prefix}x': x,
-        f'{prefix}y': y,
-        f'{prefix}center_xy': [x, y],
+        f"{prefix}x": x,
+        f"{prefix}y": y,
+        f"{prefix}center_xy": [x, y],
     }
 
     if include_rounded:
-        result[f'{prefix}x_rounded'] = round(x)
-        result[f'{prefix}y_rounded'] = round(y)
+        result[f"{prefix}x_rounded"] = round(x)
+        result[f"{prefix}y_rounded"] = round(y)
 
     return result
 
@@ -540,12 +494,12 @@ def create_coordinate_dict(
 def format_coordinates_for_export(
     global_x: float,
     global_y: float,
-    local_x: Optional[float] = None,
-    local_y: Optional[float] = None,
-    tile_origin_x: Optional[int] = None,
-    tile_origin_y: Optional[int] = None,
-    pixel_size_um: Optional[float] = None
-) -> Dict[str, Any]:
+    local_x: float | None = None,
+    local_y: float | None = None,
+    tile_origin_x: int | None = None,
+    tile_origin_y: int | None = None,
+    pixel_size_um: float | None = None,
+) -> dict[str, Any]:
     """
     Format coordinates for JSON/CSV export with explicit labeling.
 
@@ -571,24 +525,24 @@ def format_coordinates_for_export(
         2716.032
     """
     result = {
-        'global_x_px': global_x,
-        'global_y_px': global_y,
-        'global_center_xy': [global_x, global_y],
+        "global_x_px": global_x,
+        "global_y_px": global_y,
+        "global_center_xy": [global_x, global_y],
     }
 
     if local_x is not None and local_y is not None:
-        result['local_x_px'] = local_x
-        result['local_y_px'] = local_y
-        result['local_center_xy'] = [local_x, local_y]
+        result["local_x_px"] = local_x
+        result["local_y_px"] = local_y
+        result["local_center_xy"] = [local_x, local_y]
 
     if tile_origin_x is not None and tile_origin_y is not None:
-        result['tile_origin_x'] = tile_origin_x
-        result['tile_origin_y'] = tile_origin_y
-        result['tile_origin_xy'] = [tile_origin_x, tile_origin_y]
+        result["tile_origin_x"] = tile_origin_x
+        result["tile_origin_y"] = tile_origin_y
+        result["tile_origin_xy"] = [tile_origin_x, tile_origin_y]
 
     if pixel_size_um is not None:
-        result['global_x_um'] = global_x * pixel_size_um
-        result['global_y_um'] = global_y * pixel_size_um
+        result["global_x_um"] = global_x * pixel_size_um
+        result["global_y_um"] = global_y * pixel_size_um
 
     return result
 
@@ -597,11 +551,10 @@ def format_coordinates_for_export(
 # Batch Conversion Utilities
 # =============================================================================
 
+
 def convert_detections_to_spatial_uids(
-    detections: List[Dict[str, Any]],
-    slide_name: str,
-    cell_type: str
-) -> List[Dict[str, Any]]:
+    detections: list[dict[str, Any]], slide_name: str, cell_type: str
+) -> list[dict[str, Any]]:
     """
     Convert a list of detections to use spatial UIDs.
 
@@ -629,10 +582,10 @@ def convert_detections_to_spatial_uids(
         det_copy = det.copy()
 
         # Get coordinates — prefer global_center (slide-level), never tile-local center
-        if 'global_center' in det:
-            global_x, global_y = det['global_center'][0], det['global_center'][1]
-        elif 'global_x' in det and 'global_y' in det:
-            global_x, global_y = det['global_x'], det['global_y']
+        if "global_center" in det:
+            global_x, global_y = det["global_center"][0], det["global_center"][1]
+        elif "global_x" in det and "global_y" in det:
+            global_x, global_y = det["global_x"], det["global_y"]
         else:
             # No coordinates available, skip UID generation
             result.append(det_copy)
@@ -642,14 +595,14 @@ def convert_detections_to_spatial_uids(
         base_uid = generate_uid(slide_name, cell_type, global_x, global_y)
         if base_uid in uid_counts:
             uid_counts[base_uid] += 1
-            det_copy['uid'] = f"{base_uid}_{uid_counts[base_uid]}"
+            det_copy["uid"] = f"{base_uid}_{uid_counts[base_uid]}"
         else:
             uid_counts[base_uid] = 0
-            det_copy['uid'] = base_uid
+            det_copy["uid"] = base_uid
 
         # Keep legacy global_id for backwards compatibility if present
-        if 'global_id' in det:
-            det_copy['legacy_global_id'] = det['global_id']
+        if "global_id" in det:
+            det_copy["legacy_global_id"] = det["global_id"]
 
         result.append(det_copy)
 

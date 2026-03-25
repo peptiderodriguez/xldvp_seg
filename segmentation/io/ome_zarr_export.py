@@ -20,7 +20,6 @@ Usage (from pipeline):
 
 import time
 from pathlib import Path
-from typing import Dict, List, Optional
 
 import numpy as np
 
@@ -66,7 +65,7 @@ def _generate_pyramid_level_from_array(
                 pad_h = actual_h % 2
                 pad_w = actual_w % 2
                 if pad_h or pad_w:
-                    block = np.pad(block, ((0, pad_h), (0, pad_w)), mode='edge')
+                    block = np.pad(block, ((0, pad_h), (0, pad_w)), mode="edge")
 
                 downsampled = downscale_local_mean(block, (2, 2)).astype(source_array.dtype)
 
@@ -75,22 +74,22 @@ def _generate_pyramid_level_from_array(
                 tgt_y1 = min(tgt_y0 + downsampled.shape[0], tgt_h)
                 tgt_x1 = min(tgt_x0 + downsampled.shape[1], tgt_w)
 
-                target_array[ch, tgt_y0:tgt_y1, tgt_x0:tgt_x1] = (
-                    downsampled[:tgt_y1 - tgt_y0, :tgt_x1 - tgt_x0]
-                )
+                target_array[ch, tgt_y0:tgt_y1, tgt_x0:tgt_x1] = downsampled[
+                    : tgt_y1 - tgt_y0, : tgt_x1 - tgt_x0
+                ]
 
 
 def export_shm_to_ome_zarr(
     shm_array: np.ndarray,
-    ch_to_slot: Dict[int, int],
+    ch_to_slot: dict[int, int],
     pixel_size_um: float,
     output_path,
     czi_path=None,
-    channel_names: Optional[List[str]] = None,
+    channel_names: list[str] | None = None,
     pyramid_levels: int = 5,
     chunk_size: int = 1024,
     overwrite: bool = False,
-) -> Optional[Path]:
+) -> Path | None:
     """Export SHM slide array to OME-Zarr with pyramids.
 
     Reads directly from the shared memory array (H, W, C) and writes
@@ -112,9 +111,10 @@ def export_shm_to_ome_zarr(
     Returns:
         Path to the created zarr store, or None on failure.
     """
-    import zarr
     import numcodecs
-    _zarr_v3 = int(zarr.__version__.split('.')[0]) >= 3
+    import zarr
+
+    _zarr_v3 = int(zarr.__version__.split(".")[0]) >= 3
 
     output_path = Path(output_path)
     start_time = time.time()
@@ -148,13 +148,14 @@ def export_shm_to_ome_zarr(
     if channel_names is None and czi_path is not None:
         try:
             from segmentation.io.czi_loader import get_czi_metadata
+
             meta = get_czi_metadata(str(czi_path))
             channel_names = []
             for czi_ch, _ in sorted_channels:
-                if czi_ch < len(meta['channels']):
-                    ch_meta = meta['channels'][czi_ch]
-                    name = ch_meta.get('fluorophore', '') or ch_meta.get('name', '')
-                    em = ch_meta.get('emission_nm')
+                if czi_ch < len(meta["channels"]):
+                    ch_meta = meta["channels"][czi_ch]
+                    name = ch_meta.get("fluorophore", "") or ch_meta.get("name", "")
+                    em = ch_meta.get("emission_nm")
                     if em:
                         name = f"{name.strip()} ({em:.0f}nm)"
                     channel_names.append(name.strip() or f"Channel {czi_ch}")
@@ -167,17 +168,17 @@ def export_shm_to_ome_zarr(
         channel_names = [f"Channel {czi_ch}" for czi_ch, _ in sorted_channels]
 
     # Create zarr v2-format store (compatible with ome-zarr, napari, spatialdata)
-    compressor = numcodecs.Blosc(cname='zstd', clevel=3, shuffle=numcodecs.Blosc.BITSHUFFLE)
+    compressor = numcodecs.Blosc(cname="zstd", clevel=3, shuffle=numcodecs.Blosc.BITSHUFFLE)
 
     if _zarr_v3:
-        root = zarr.open_group(str(output_path), mode='w', zarr_format=2)
+        root = zarr.open_group(str(output_path), mode="w", zarr_format=2)
     else:
         store = zarr.DirectoryStore(str(output_path))
         root = zarr.group(store, overwrite=True)
 
     def _create_arr(name, **kwargs):
         if _zarr_v3:
-            return root.create_array(name, compressors=[kwargs.pop('compressor')], **kwargs)
+            return root.create_array(name, compressors=[kwargs.pop("compressor")], **kwargs)
         else:
             return root.create_dataset(name, **kwargs)
 
@@ -210,7 +211,7 @@ def export_shm_to_ome_zarr(
 
     # Write level 0: copy SHM (H, W, C) -> zarr (C, Y, X)
     logger.info("  Writing level 0 (full resolution)...")
-    level0 = root['0']
+    level0 = root["0"]
     for out_idx, (czi_ch, slot_idx) in enumerate(sorted_channels):
         # Write in strips to manage memory and show progress
         strip_h = 5000
@@ -232,30 +233,36 @@ def export_shm_to_ome_zarr(
     # Write OME-NGFF metadata
     datasets = []
     for level in range(actual_levels):
-        scale_factor = 2 ** level
-        datasets.append({
-            "path": str(level),
-            "coordinateTransformations": [{
-                "type": "scale",
-                "scale": [1.0, pixel_size_um * scale_factor, pixel_size_um * scale_factor],
-            }]
-        })
+        scale_factor = 2**level
+        datasets.append(
+            {
+                "path": str(level),
+                "coordinateTransformations": [
+                    {
+                        "type": "scale",
+                        "scale": [1.0, pixel_size_um * scale_factor, pixel_size_um * scale_factor],
+                    }
+                ],
+            }
+        )
 
-    root.attrs["multiscales"] = [{
-        "version": "0.4",
-        "name": "image",
-        "axes": [
-            {"name": "c", "type": "channel"},
-            {"name": "y", "type": "space", "unit": "micrometer"},
-            {"name": "x", "type": "space", "unit": "micrometer"},
-        ],
-        "datasets": datasets,
-        "type": "local_mean",
-        "metadata": {
-            "method": "skimage.transform.downscale_local_mean",
+    root.attrs["multiscales"] = [
+        {
             "version": "0.4",
+            "name": "image",
+            "axes": [
+                {"name": "c", "type": "channel"},
+                {"name": "y", "type": "space", "unit": "micrometer"},
+                {"name": "x", "type": "space", "unit": "micrometer"},
+            ],
+            "datasets": datasets,
+            "type": "local_mean",
+            "metadata": {
+                "method": "skimage.transform.downscale_local_mean",
+                "version": "0.4",
+            },
         }
-    }]
+    ]
 
     # OMERO channel visualization metadata
     colors = ["00FF00", "FF0000", "0000FF", "FFFF00", "FF00FF", "00FFFF"]
@@ -275,7 +282,7 @@ def export_shm_to_ome_zarr(
                 "window": {"start": 0, "end": max_val, "min": 0, "max": max_val},
             }
             for i in range(n_channels)
-        ]
+        ],
     }
 
     elapsed = time.time() - start_time

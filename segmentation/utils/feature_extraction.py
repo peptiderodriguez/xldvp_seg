@@ -13,14 +13,15 @@ Usage:
 """
 
 import gc
+from collections.abc import Callable
+
 import numpy as np
 import torch
-from PIL import Image
-from typing import List, Optional, Callable
 import torchvision.transforms as tv_transforms
+from PIL import Image
 
-from segmentation.utils.logging import get_logger
 from segmentation.utils.detection_utils import safe_to_uint8
+from segmentation.utils.logging import get_logger
 
 logger = get_logger(__name__)
 
@@ -56,12 +57,12 @@ def preprocess_crop_for_resnet(crop: np.ndarray) -> np.ndarray:
 
 
 def extract_resnet_features_batch(
-    crops: List[np.ndarray],
+    crops: list[np.ndarray],
     model: torch.nn.Module,
     transform: Callable,
     device: torch.device,
-    batch_size: int = 16
-) -> List[np.ndarray]:
+    batch_size: int = 16,
+) -> list[np.ndarray]:
     """
     Extract ResNet features for multiple crops in batches for GPU efficiency.
 
@@ -90,7 +91,7 @@ def extract_resnet_features_batch(
     all_features = []
 
     for i in range(0, len(crops), batch_size):
-        batch_crops = crops[i:i + batch_size]
+        batch_crops = crops[i : i + batch_size]
         batch_tensors = []
         valid_indices = []
 
@@ -101,7 +102,7 @@ def extract_resnet_features_batch(
                 processed = preprocess_crop_for_resnet(crop)
 
                 # Convert to PIL and apply transform
-                pil_img = Image.fromarray(processed, mode='RGB')
+                pil_img = Image.fromarray(processed, mode="RGB")
                 tensor = transform(pil_img)
                 batch_tensors.append(tensor)
                 valid_indices.append(idx)
@@ -140,11 +141,13 @@ def extract_resnet_features_batch(
         batch_num = i // batch_size
         if batch_num > 0 and batch_num % 10 == 0:
             from segmentation.utils.device import empty_cache as _empty_cache
+
             _empty_cache()
             gc.collect()
 
     # Final cleanup after all batches processed
     from segmentation.utils.device import empty_cache as _empty_cache
+
     _empty_cache()
     gc.collect()
 
@@ -152,10 +155,7 @@ def extract_resnet_features_batch(
 
 
 def extract_resnet_features_single(
-    crop: np.ndarray,
-    model: torch.nn.Module,
-    transform: Callable,
-    device: torch.device
+    crop: np.ndarray, model: torch.nn.Module, transform: Callable, device: torch.device
 ) -> np.ndarray:
     """
     Extract ResNet features for a single crop.
@@ -177,7 +177,7 @@ def extract_resnet_features_single(
 
     try:
         processed = preprocess_crop_for_resnet(crop)
-        pil_img = Image.fromarray(processed, mode='RGB')
+        pil_img = Image.fromarray(processed, mode="RGB")
         tensor = transform(pil_img).unsqueeze(0).to(device)
 
         with torch.no_grad():
@@ -195,12 +195,14 @@ def create_resnet_transform() -> tv_transforms.Compose:
     Returns:
         Torchvision Compose transform
     """
-    return tv_transforms.Compose([
-        tv_transforms.Resize(224),
-        tv_transforms.CenterCrop(224),
-        tv_transforms.ToTensor(),
-        tv_transforms.Normalize([0.485, 0.456, 0.406], [0.229, 0.224, 0.225])
-    ])
+    return tv_transforms.Compose(
+        [
+            tv_transforms.Resize(224),
+            tv_transforms.CenterCrop(224),
+            tv_transforms.ToTensor(),
+            tv_transforms.Normalize([0.485, 0.456, 0.406], [0.229, 0.224, 0.225]),
+        ]
+    )
 
 
 def rgb_to_hsv_vectorized(rgb_pixels: np.ndarray) -> np.ndarray:
@@ -260,7 +262,7 @@ def compute_hsv_features(masked_pixels: np.ndarray, sample_size: int = 100) -> d
         Dict with 'hue_mean', 'saturation_mean', 'value_mean'
     """
     if len(masked_pixels) == 0:
-        return {'hue_mean': 0.0, 'saturation_mean': 0.0, 'value_mean': 0.0}
+        return {"hue_mean": 0.0, "saturation_mean": 0.0, "value_mean": 0.0}
 
     # Deterministic subsample: take evenly spaced pixels
     if len(masked_pixels) > sample_size:
@@ -273,9 +275,9 @@ def compute_hsv_features(masked_pixels: np.ndarray, sample_size: int = 100) -> d
     hsv = rgb_to_hsv_vectorized(sample)
 
     return {
-        'hue_mean': float(np.mean(hsv[:, 0])),
-        'saturation_mean': float(np.mean(hsv[:, 1])),
-        'value_mean': float(np.mean(hsv[:, 2])),
+        "hue_mean": float(np.mean(hsv[:, 0])),
+        "saturation_mean": float(np.mean(hsv[:, 1])),
+        "value_mean": float(np.mean(hsv[:, 2])),
     }
 
 
@@ -318,7 +320,9 @@ CONCH_FEATURE_DIM = 512
 PHIKON_V2_FEATURE_DIM = 1024
 
 
-def extract_morphological_features(mask: np.ndarray, image: np.ndarray, tile_global_mean: Optional[float] = None) -> dict:
+def extract_morphological_features(
+    mask: np.ndarray, image: np.ndarray, tile_global_mean: float | None = None
+) -> dict:
     """
     Extract MORPHOLOGICAL_FEATURE_COUNT (22) base morphological/intensity features.
 
@@ -359,20 +363,20 @@ def extract_morphological_features(mask: np.ndarray, image: np.ndarray, tile_glo
     area = int(mask.sum())
     props = measure.regionprops(mask.astype(np.int32), cache=False)[0]
 
-    perimeter = props.perimeter if hasattr(props, 'perimeter') else 0
-    circularity = 4 * np.pi * area / (perimeter ** 2) if perimeter > 0 else 0
-    solidity = props.solidity if hasattr(props, 'solidity') else 0
-    major = getattr(props, 'axis_major_length', None)
+    perimeter = props.perimeter if hasattr(props, "perimeter") else 0
+    circularity = 4 * np.pi * area / (perimeter**2) if perimeter > 0 else 0
+    solidity = props.solidity if hasattr(props, "solidity") else 0
+    major = getattr(props, "axis_major_length", None)
     if major is None:
-        major = getattr(props, 'major_axis_length', 0)
-    minor = getattr(props, 'axis_minor_length', None)
+        major = getattr(props, "major_axis_length", 0)
+    minor = getattr(props, "axis_minor_length", None)
     if minor is None:
-        minor = getattr(props, 'minor_axis_length', 0)
+        minor = getattr(props, "minor_axis_length", 0)
     aspect_ratio = major / minor if minor > 0 else 1
-    extent = props.extent if hasattr(props, 'extent') else 0
-    equiv_diameter = getattr(props, 'equivalent_diameter_area', None)
+    extent = props.extent if hasattr(props, "extent") else 0
+    equiv_diameter = getattr(props, "equivalent_diameter_area", None)
     if equiv_diameter is None:
-        equiv_diameter = getattr(props, 'equivalent_diameter', 0)
+        equiv_diameter = getattr(props, "equivalent_diameter", 0)
 
     # Intensity features — exclude zero pixels (CZI padding)
     if image.ndim == 3:
@@ -384,8 +388,12 @@ def extract_morphological_features(mask: np.ndarray, image: np.ndarray, tile_glo
             logger.debug("All-zero mask (CZI padding) at detection — returning empty features")
             return {}
         red_mean, red_std = float(np.mean(masked_pixels[:, 0])), float(np.std(masked_pixels[:, 0]))
-        green_mean, green_std = float(np.mean(masked_pixels[:, 1])), float(np.std(masked_pixels[:, 1]))
-        blue_mean, blue_std = float(np.mean(masked_pixels[:, 2])), float(np.std(masked_pixels[:, 2]))
+        green_mean, green_std = float(np.mean(masked_pixels[:, 1])), float(
+            np.std(masked_pixels[:, 1])
+        )
+        blue_mean, blue_std = float(np.mean(masked_pixels[:, 2])), float(
+            np.std(masked_pixels[:, 2])
+        )
         gray = np.mean(masked_pixels, axis=1)
     else:
         gray = image[mask].astype(np.float32)
@@ -402,9 +410,9 @@ def extract_morphological_features(mask: np.ndarray, image: np.ndarray, tile_glo
     # HSV features (vectorized for speed)
     if image.ndim == 3:
         hsv_feats = compute_hsv_features(masked_pixels, sample_size=100)
-        hue_mean = hsv_feats['hue_mean']
-        sat_mean = hsv_feats['saturation_mean']
-        val_mean = hsv_feats['value_mean']
+        hue_mean = hsv_feats["hue_mean"]
+        sat_mean = hsv_feats["saturation_mean"]
+        val_mean = hsv_feats["value_mean"]
     else:
         hue_mean = sat_mean = 0.0
         val_mean = gray_mean
@@ -413,6 +421,7 @@ def extract_morphological_features(mask: np.ndarray, image: np.ndarray, tile_glo
     # Exclude zero pixels from global mean (CZI padding)
     if tile_global_mean is None:
         import warnings
+
         warnings.warn(
             "tile_global_mean not provided — computing from full image. "
             "Pass precomputed value for O(1) per-mask cost.",
@@ -437,22 +446,26 @@ def extract_morphological_features(mask: np.ndarray, image: np.ndarray, tile_glo
     nuclear_complexity = gray_std
 
     return {
-        'area': area,
-        'perimeter': float(perimeter),
-        'circularity': float(circularity),
-        'solidity': float(solidity),
-        'aspect_ratio': float(aspect_ratio),
-        'extent': float(extent),
-        'equiv_diameter': float(equiv_diameter),
-        'red_mean': red_mean, 'red_std': red_std,
-        'green_mean': green_mean, 'green_std': green_std,
-        'blue_mean': blue_mean, 'blue_std': blue_std,
-        'gray_mean': gray_mean, 'gray_std': gray_std,
-        'hue_mean': float(hue_mean),
-        'saturation_mean': float(sat_mean),
-        'value_mean': float(val_mean),
-        'relative_brightness': float(relative_brightness),
-        'intensity_variance': float(intensity_variance),
-        'dark_fraction': float(dark_fraction),
-        'nuclear_complexity': float(nuclear_complexity),
+        "area": area,
+        "perimeter": float(perimeter),
+        "circularity": float(circularity),
+        "solidity": float(solidity),
+        "aspect_ratio": float(aspect_ratio),
+        "extent": float(extent),
+        "equiv_diameter": float(equiv_diameter),
+        "red_mean": red_mean,
+        "red_std": red_std,
+        "green_mean": green_mean,
+        "green_std": green_std,
+        "blue_mean": blue_mean,
+        "blue_std": blue_std,
+        "gray_mean": gray_mean,
+        "gray_std": gray_std,
+        "hue_mean": float(hue_mean),
+        "saturation_mean": float(sat_mean),
+        "value_mean": float(val_mean),
+        "relative_brightness": float(relative_brightness),
+        "intensity_variance": float(intensity_variance),
+        "dark_fraction": float(dark_fraction),
+        "nuclear_complexity": float(nuclear_complexity),
     }

@@ -15,8 +15,9 @@ Usage:
     vesselness = compute_vesselness(sma_image, sigmas=range(1, 15))
 """
 
+from collections.abc import Sequence
+
 import numpy as np
-from typing import Tuple, Optional, Sequence
 from skimage.filters import frangi
 
 
@@ -25,7 +26,7 @@ def compute_vesselness(
     sigmas: Sequence[float] = range(1, 10),
     alpha: float = 0.5,
     beta: float = 0.5,
-    gamma: Optional[float] = None,
+    gamma: float | None = None,
     black_ridges: bool = False,
 ) -> np.ndarray:
     """
@@ -86,10 +87,8 @@ def compute_vesselness(
 
 
 def compute_vesselness_multiscale(
-    image: np.ndarray,
-    sigma_ranges: list = None,
-    **kwargs
-) -> Tuple[np.ndarray, np.ndarray]:
+    image: np.ndarray, sigma_ranges: list = None, **kwargs
+) -> tuple[np.ndarray, np.ndarray]:
     """
     Compute vesselness at multiple scale ranges and return both
     the combined vesselness and the scale at which max response occurred.
@@ -113,9 +112,9 @@ def compute_vesselness_multiscale(
     """
     if sigma_ranges is None:
         sigma_ranges = [
-            (1, 5),    # Small vessels / capillaries
-            (3, 10),   # Medium vessels
-            (8, 20),   # Large vessels
+            (1, 5),  # Small vessels / capillaries
+            (3, 10),  # Medium vessels
+            (8, 20),  # Large vessels
         ]
 
     vesselness_stack = []

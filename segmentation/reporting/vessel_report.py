@@ -9,26 +9,25 @@ import json
 from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Union
+from typing import Any
 
-from .stats import (
-    VesselStatistics,
-    compute_summary_statistics,
-    compute_batch_comparison,
-)
 from .plots import (
-    create_diameter_histogram,
-    create_wall_thickness_histogram,
-    create_diameter_vs_wall_scatter,
-    create_lumen_vs_wall_scatter,
-    create_vessel_type_pie_chart,
-    create_confidence_histogram,
-    create_ring_completeness_histogram,
+    PLOTLY_AVAILABLE,
     create_batch_comparison_bar,
     create_batch_comparison_violin,
-    PLOTLY_AVAILABLE,
+    create_confidence_histogram,
+    create_diameter_histogram,
+    create_diameter_vs_wall_scatter,
+    create_lumen_vs_wall_scatter,
+    create_ring_completeness_histogram,
+    create_vessel_type_pie_chart,
+    create_wall_thickness_histogram,
 )
-
+from .stats import (
+    VesselStatistics,
+    compute_batch_comparison,
+    compute_summary_statistics,
+)
 
 # CSS styles matching the existing codebase dark theme
 REPORT_CSS = """
@@ -257,16 +256,16 @@ class VesselReport:
         metadata: Additional metadata (pixel_size, etc.)
     """
 
-    detections: List[Dict[str, Any]] = field(default_factory=list)
-    statistics: Optional[VesselStatistics] = None
+    detections: list[dict[str, Any]] = field(default_factory=list)
+    statistics: VesselStatistics | None = None
     slide_name: str = "Unknown"
-    metadata: Dict[str, Any] = field(default_factory=dict)
+    metadata: dict[str, Any] = field(default_factory=dict)
 
     @classmethod
     def from_json(
         cls,
-        json_path: Union[str, Path],
-        slide_name: Optional[str] = None,
+        json_path: str | Path,
+        slide_name: str | None = None,
     ) -> "VesselReport":
         """
         Create a VesselReport from a vessel_detections.json file.
@@ -283,7 +282,7 @@ class VesselReport:
         if not json_path.exists():
             raise FileNotFoundError(f"Detection file not found: {json_path}")
 
-        with open(json_path, "r") as f:
+        with open(json_path) as f:
             detections = json.load(f)
 
         # Try to infer slide name from path or data
@@ -308,7 +307,7 @@ class VesselReport:
         metadata = {}
         summary_path = json_path.parent / "summary.json"
         if summary_path.exists():
-            with open(summary_path, "r") as f:
+            with open(summary_path) as f:
                 metadata = json.load(f)
 
         return cls(
@@ -321,9 +320,9 @@ class VesselReport:
     @classmethod
     def from_detections(
         cls,
-        detections: List[Dict[str, Any]],
+        detections: list[dict[str, Any]],
         slide_name: str = "Unknown",
-        metadata: Optional[Dict[str, Any]] = None,
+        metadata: dict[str, Any] | None = None,
     ) -> "VesselReport":
         """
         Create a VesselReport from detection dicts directly.
@@ -352,7 +351,7 @@ class VesselReport:
             metadata=metadata or {},
         )
 
-    def _get_features_list(self) -> List[Dict[str, Any]]:
+    def _get_features_list(self) -> list[dict[str, Any]]:
         """Extract features list from detections."""
         features_list = []
         for det in self.detections:
@@ -364,7 +363,7 @@ class VesselReport:
 
     def generate_html(
         self,
-        output_path: Union[str, Path],
+        output_path: str | Path,
         include_plots: bool = True,
         standalone: bool = True,
     ) -> Path:
@@ -424,7 +423,7 @@ class VesselReport:
 
     def generate_pdf(
         self,
-        output_path: Union[str, Path],
+        output_path: str | Path,
     ) -> Path:
         """
         Generate a PDF report.
@@ -441,8 +440,7 @@ class VesselReport:
             from weasyprint import HTML
         except ImportError:
             raise ImportError(
-                "weasyprint is required for PDF export. "
-                "Install with: pip install weasyprint"
+                "weasyprint is required for PDF export. " "Install with: pip install weasyprint"
             )
 
         output_path = Path(output_path)
@@ -555,7 +553,7 @@ class VesselReport:
             badge_class = vtype
             rows.append(
                 f'<tr><td><span class="vessel-type-badge {badge_class}">{vtype.capitalize()}</span></td>'
-                f'<td>{count}</td><td>{pct:.1f}%</td></tr>'
+                f"<td>{count}</td><td>{pct:.1f}%</td></tr>"
             )
 
         return f"""
@@ -594,7 +592,7 @@ class VesselReport:
             pct = 100 * count / total_conf
             conf_rows.append(
                 f'<tr><td><span class="confidence-badge {level}">{level.capitalize()}</span></td>'
-                f'<td>{count}</td><td>{pct:.1f}%</td></tr>'
+                f"<td>{count}</td><td>{pct:.1f}%</td></tr>"
             )
 
         return f"""
@@ -646,7 +644,7 @@ class VesselReport:
     </div>
 </div>"""
 
-    def _generate_plots_section(self, features_list: List[Dict[str, Any]]) -> str:
+    def _generate_plots_section(self, features_list: list[dict[str, Any]]) -> str:
         """Generate interactive plots section."""
         if not PLOTLY_AVAILABLE:
             return '<div class="section"><h2>Visualizations</h2><p class="no-data">Plotly not available for interactive plots.</p></div>'
@@ -761,13 +759,13 @@ class BatchVesselReport:
     batch-level statistics and comparisons.
     """
 
-    slide_reports: List[VesselReport] = field(default_factory=list)
+    slide_reports: list[VesselReport] = field(default_factory=list)
     batch_name: str = "Batch Analysis"
 
     @classmethod
     def from_json_files(
         cls,
-        json_paths: List[Union[str, Path]],
+        json_paths: list[str | Path],
         batch_name: str = "Batch Analysis",
     ) -> "BatchVesselReport":
         """
@@ -793,9 +791,9 @@ class BatchVesselReport:
     @classmethod
     def from_directory(
         cls,
-        directory: Union[str, Path],
+        directory: str | Path,
         pattern: str = "**/vessel_detections.json",
-        batch_name: Optional[str] = None,
+        batch_name: str | None = None,
     ) -> "BatchVesselReport":
         """
         Create a BatchVesselReport from all detection files in a directory.
@@ -818,7 +816,7 @@ class BatchVesselReport:
 
     def generate_html(
         self,
-        output_path: Union[str, Path],
+        output_path: str | Path,
         include_individual_reports: bool = False,
     ) -> Path:
         """
@@ -897,7 +895,7 @@ class BatchVesselReport:
 
         return output_path
 
-    def _generate_batch_overview(self, batch_comp: Dict[str, Any]) -> str:
+    def _generate_batch_overview(self, batch_comp: dict[str, Any]) -> str:
         """Generate batch overview statistics."""
         return f"""
 <div class="section">
@@ -922,7 +920,7 @@ class BatchVesselReport:
     </div>
 </div>"""
 
-    def _generate_batch_plots(self, batch_comp: Dict[str, Any]) -> str:
+    def _generate_batch_plots(self, batch_comp: dict[str, Any]) -> str:
         """Generate batch comparison plots."""
         if not PLOTLY_AVAILABLE:
             return ""
@@ -1053,12 +1051,12 @@ class BatchVesselReport:
 
 
 def generate_vessel_report(
-    detection_source: Union[str, Path, List[Dict[str, Any]]],
-    output_dir: Union[str, Path],
-    formats: List[str] = ["html"],
-    slide_name: Optional[str] = None,
+    detection_source: str | Path | list[dict[str, Any]],
+    output_dir: str | Path,
+    formats: list[str] = ["html"],
+    slide_name: str | None = None,
     report_name: str = "vessel_report",
-) -> Dict[str, Path]:
+) -> dict[str, Path]:
     """
     Convenience function to generate vessel reports.
 
@@ -1085,7 +1083,7 @@ def generate_vessel_report(
         )
 
     # Generate requested formats
-    outputs: Dict[str, Path] = {}
+    outputs: dict[str, Path] = {}
 
     if "html" in formats:
         html_path = output_dir / f"{report_name}.html"

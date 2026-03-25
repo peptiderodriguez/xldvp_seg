@@ -20,20 +20,28 @@ Reference parameters from the original pipeline:
 """
 
 import gc
+from typing import Any
+
 import numpy as np
-from typing import Dict, Any, List, Optional, Tuple
 from PIL import Image
-
-from skimage.morphology import skeletonize, remove_small_objects, binary_opening, binary_closing, binary_dilation, disk
 from skimage.measure import label, regionprops
+from skimage.morphology import (
+    binary_closing,
+    binary_dilation,
+    binary_opening,
+    disk,
+    remove_small_objects,
+    skeletonize,
+)
 
-from .base import DetectionStrategy, Detection, _safe_to_uint8
 from segmentation.detection.registry import register_strategy
-from .mixins import MultiChannelFeatureMixin
-from segmentation.utils.logging import get_logger
 from segmentation.utils.feature_extraction import (
     extract_morphological_features,
 )
+from segmentation.utils.logging import get_logger
+
+from .base import Detection, DetectionStrategy, _safe_to_uint8
+from .mixins import MultiChannelFeatureMixin
 
 logger = get_logger(__name__)
 
@@ -80,13 +88,13 @@ class NMJStrategy(DetectionStrategy, MultiChannelFeatureMixin):
         max_solidity: float = 0.85,
         min_skeleton_length: int = 30,
         min_area_px: int = 150,
-        max_area_px: Optional[int] = None,
+        max_area_px: int | None = None,
         min_area_um: float = 25.0,
         classifier_threshold: float = 0.5,
         use_classifier: bool = True,
         extract_deep_features: bool = False,
         extract_sam2_embeddings: bool = True,
-        resnet_batch_size: int = 32
+        resnet_batch_size: int = 32,
     ):
         self.intensity_percentile = intensity_percentile
         self.max_solidity = max_solidity
@@ -104,12 +112,7 @@ class NMJStrategy(DetectionStrategy, MultiChannelFeatureMixin):
     def name(self) -> str:
         return "nmj"
 
-    def segment(
-        self,
-        tile: np.ndarray,
-        models: Dict[str, Any],
-        **kwargs
-    ) -> List[np.ndarray]:
+    def segment(self, tile: np.ndarray, models: dict[str, Any], **kwargs) -> list[np.ndarray]:
         """
         Segment NMJ candidates using intensity threshold + solidity filtering.
 
@@ -168,7 +171,7 @@ class NMJStrategy(DetectionStrategy, MultiChannelFeatureMixin):
                 continue
 
             # Create mask for this region
-            region_mask = (labeled == prop.label)
+            region_mask = labeled == prop.label
 
             # Compute skeleton length
             skeleton = skeletonize(region_mask)
@@ -191,11 +194,8 @@ class NMJStrategy(DetectionStrategy, MultiChannelFeatureMixin):
         return nmj_masks
 
     def filter(
-        self,
-        masks: List[np.ndarray],
-        features: List[Dict[str, Any]],
-        pixel_size_um: float
-    ) -> List[Detection]:
+        self, masks: list[np.ndarray], features: list[dict[str, Any]], pixel_size_um: float
+    ) -> list[Detection]:
         """
         Filter NMJ candidates by area threshold.
 
@@ -217,7 +217,7 @@ class NMJStrategy(DetectionStrategy, MultiChannelFeatureMixin):
                 continue
 
             # Compute area in um^2
-            area_um2 = feat['area'] * (pixel_size_um ** 2)
+            area_um2 = feat["area"] * (pixel_size_um**2)
 
             # Filter by area in um^2
             if area_um2 < self.min_area_um:
@@ -226,13 +226,13 @@ class NMJStrategy(DetectionStrategy, MultiChannelFeatureMixin):
             # Create Detection object
             detection = Detection(
                 mask=mask,
-                centroid=feat['centroid'],
+                centroid=feat["centroid"],
                 features={
                     **feat,
-                    'area_um2': area_um2,
+                    "area_um2": area_um2,
                 },
                 id=f"nmj_{len(detections) + 1}",
-                score=None  # Will be set by classifier
+                score=None,  # Will be set by classifier
             )
 
             detections.append(detection)
@@ -241,13 +241,13 @@ class NMJStrategy(DetectionStrategy, MultiChannelFeatureMixin):
 
     def classify(
         self,
-        detections: List[Detection],
+        detections: list[Detection],
         tile: np.ndarray,
         classifier_model,
         transform,
         device,
-        batch_size: int = 32
-    ) -> List[Detection]:
+        batch_size: int = 32,
+    ) -> list[Detection]:
         """
         Classify NMJ candidates using trained ResNet model.
 
@@ -271,7 +271,9 @@ class NMJStrategy(DetectionStrategy, MultiChannelFeatureMixin):
         if tile.ndim == 2:
             tile_rgb = np.stack([tile] * 3, axis=-1)
         else:
-            tile_rgb = tile[:, :, :3] if tile.shape[2] >= 3 else np.stack([tile[:, :, 0]] * 3, axis=-1)
+            tile_rgb = (
+                tile[:, :, :3] if tile.shape[2] >= 3 else np.stack([tile[:, :, 0]] * 3, axis=-1)
+            )
 
         # Normalize tile
         tile_rgb = self._percentile_normalize(tile_rgb)
@@ -295,8 +297,8 @@ class NMJStrategy(DetectionStrategy, MultiChannelFeatureMixin):
 
         with torch.no_grad():
             for i in range(0, len(crops), batch_size):
-                batch_crops = crops[i:i+batch_size]
-                batch_indices = valid_indices[i:i+batch_size]
+                batch_crops = crops[i : i + batch_size]
+                batch_indices = valid_indices[i : i + batch_size]
 
                 # Transform and stack
                 batch_tensors = torch.stack([transform(c) for c in batch_crops]).to(device)
@@ -313,32 +315,34 @@ class NMJStrategy(DetectionStrategy, MultiChannelFeatureMixin):
         for i, det in enumerate(detections):
             if i in results:
                 det.score = results[i]
-                det.features['rf_prediction'] = results[i]
-                det.features['prob_nmj'] = results[i]  # backward compat
-                det.features['confidence'] = results[i]
+                det.features["rf_prediction"] = results[i]
+                det.features["prob_nmj"] = results[i]  # backward compat
+                det.features["confidence"] = results[i]
             else:
                 det.score = 0.0
-                det.features['rf_prediction'] = 0.0
-                det.features['prob_nmj'] = 0.0  # backward compat
-                det.features['confidence'] = 0.0
+                det.features["rf_prediction"] = 0.0
+                det.features["prob_nmj"] = 0.0  # backward compat
+                det.features["confidence"] = 0.0
 
         n_above = sum(1 for d in detections if d.score >= self.classifier_threshold)
-        logger.debug(f"CNN classifier: {n_above}/{len(detections)} above threshold ({self.classifier_threshold})")
+        logger.debug(
+            f"CNN classifier: {n_above}/{len(detections)} above threshold ({self.classifier_threshold})"
+        )
 
         return detections
 
     def _post_classify_rf_detection(self, det: Detection, prob: float) -> None:
         """Set prob_nmj for backward compatibility with legacy NMJ workflows."""
-        det.features['prob_nmj'] = float(prob)
+        det.features["prob_nmj"] = float(prob)
 
     def detect(
         self,
         tile: np.ndarray,
-        models: Dict[str, Any],
+        models: dict[str, Any],
         pixel_size_um: float,
         extract_features: bool = True,
-        extra_channels: Dict[int, np.ndarray] = None
-    ) -> Tuple[np.ndarray, List[Detection]]:
+        extra_channels: dict[int, np.ndarray] = None,
+    ) -> tuple[np.ndarray, list[Detection]]:
         """
         Complete NMJ detection pipeline with full feature extraction.
 
@@ -391,13 +395,24 @@ class NMJStrategy(DetectionStrategy, MultiChannelFeatureMixin):
         tile_rgb = _safe_to_uint8(tile_rgb)
 
         # Get models - only load ResNet/DINOv2 if we'll use them
-        sam2_predictor = models.get('sam2_predictor')
-        device = models.get('device', torch.device('cuda' if torch.cuda.is_available() else ('mps' if hasattr(torch.backends, 'mps') and torch.backends.mps.is_available() else 'cpu')))
+        sam2_predictor = models.get("sam2_predictor")
+        device = models.get(
+            "device",
+            torch.device(
+                "cuda"
+                if torch.cuda.is_available()
+                else (
+                    "mps"
+                    if hasattr(torch.backends, "mps") and torch.backends.mps.is_available()
+                    else "cpu"
+                )
+            ),
+        )
 
         # Only access ResNet/DINOv2 if extract_deep_features is enabled (avoids triggering lazy load)
         if self.extract_deep_features:
-            resnet = models.get('resnet')
-            resnet_transform = models.get('resnet_transform')
+            resnet = models.get("resnet")
+            resnet_transform = models.get("resnet_transform")
         else:
             resnet = None
             resnet_transform = None
@@ -426,9 +441,11 @@ class NMJStrategy(DetectionStrategy, MultiChannelFeatureMixin):
 
             # Extract per-channel features if extra_channels provided
             if extra_channels is not None and extract_features:
-                channels_dict = {f'ch{k}': v for k, v in sorted(extra_channels.items()) if v is not None}
+                channels_dict = {
+                    f"ch{k}": v for k, v in sorted(extra_channels.items()) if v is not None
+                }
                 multichannel_feats = self.extract_multichannel_features(
-                    mask, channels_dict, primary_channel='ch1'
+                    mask, channels_dict, primary_channel="ch1"
                 )
                 morph_features.update(multichannel_feats)
 
@@ -442,41 +459,48 @@ class NMJStrategy(DetectionStrategy, MultiChannelFeatureMixin):
             if sam2_predictor is not None and self.extract_sam2_embeddings and extract_features:
                 sam2_emb = self._extract_sam2_embedding(sam2_predictor, cy, cx)
                 for i, v in enumerate(sam2_emb):
-                    morph_features[f'sam2_{i}'] = float(v)
+                    morph_features[f"sam2_{i}"] = float(v)
             elif extract_features:
                 # Fill with zeros if SAM2 not available
                 for i in range(256):
-                    morph_features[f'sam2_{i}'] = 0.0
+                    morph_features[f"sam2_{i}"] = 0.0
 
             # Prepare crops for batch ResNet/DINOv2 processing (masked + context)
             if self.extract_deep_features and extract_features:
                 y1, y2 = ys.min(), ys.max()
                 x1, x2 = xs.min(), xs.max()
                 # Context crop (unmasked - full tissue)
-                crop_context = tile_rgb[y1:y2+1, x1:x2+1].copy()
+                crop_context = tile_rgb[y1 : y2 + 1, x1 : x2 + 1].copy()
                 # Masked crop (background zeroed out)
                 crop_masked = crop_context.copy()
-                crop_mask = mask[y1:y2+1, x1:x2+1]
+                crop_mask = mask[y1 : y2 + 1, x1 : x2 + 1]
                 crop_masked[~crop_mask] = 0
                 crops_for_resnet.append(crop_masked)
                 crops_for_resnet_context.append(crop_context)
                 crop_indices.append(len(valid_detections))
 
-            valid_detections.append({
-                'idx': idx,
-                'mask': mask,
-                'centroid': [float(cx), float(cy)],  # [x, y]
-                'features': morph_features,
-                'cy': cy,
-                'cx': cx
-            })
+            valid_detections.append(
+                {
+                    "idx": idx,
+                    "mask": mask,
+                    "centroid": [float(cx), float(cy)],  # [x, y]
+                    "features": morph_features,
+                    "cy": cy,
+                    "cx": cx,
+                }
+            )
 
             # Add to label array
             label_array[mask] = det_id
             det_id += 1
 
         # Batch ResNet feature extraction - masked
-        if crops_for_resnet and resnet is not None and resnet_transform is not None and extract_features:
+        if (
+            crops_for_resnet
+            and resnet is not None
+            and resnet_transform is not None
+            and extract_features
+        ):
             resnet_features_list = self._extract_resnet_features_batch(
                 crops_for_resnet, resnet, resnet_transform, device
             )
@@ -484,10 +508,15 @@ class NMJStrategy(DetectionStrategy, MultiChannelFeatureMixin):
             # Assign masked ResNet features to correct detections
             for crop_idx, resnet_feats in zip(crop_indices, resnet_features_list):
                 for i, v in enumerate(resnet_feats):
-                    valid_detections[crop_idx]['features'][f'resnet_{i}'] = float(v)
+                    valid_detections[crop_idx]["features"][f"resnet_{i}"] = float(v)
 
         # Batch ResNet feature extraction - context (unmasked)
-        if crops_for_resnet_context and resnet is not None and resnet_transform is not None and extract_features:
+        if (
+            crops_for_resnet_context
+            and resnet is not None
+            and resnet_transform is not None
+            and extract_features
+        ):
             resnet_context_list = self._extract_resnet_features_batch(
                 crops_for_resnet_context, resnet, resnet_transform, device
             )
@@ -495,25 +524,30 @@ class NMJStrategy(DetectionStrategy, MultiChannelFeatureMixin):
             # Assign context ResNet features to correct detections
             for crop_idx, resnet_feats in zip(crop_indices, resnet_context_list):
                 for i, v in enumerate(resnet_feats):
-                    valid_detections[crop_idx]['features'][f'resnet_ctx_{i}'] = float(v)
+                    valid_detections[crop_idx]["features"][f"resnet_ctx_{i}"] = float(v)
 
         # Batch DINOv2 feature extraction (masked + context)
         # Only access DINOv2 if extract_deep_features is enabled (avoids triggering lazy load)
         if self.extract_deep_features:
-            dinov2 = models.get('dinov2')
-            dinov2_transform = models.get('dinov2_transform')
+            dinov2 = models.get("dinov2")
+            dinov2_transform = models.get("dinov2_transform")
         else:
             dinov2 = None
             dinov2_transform = None
 
-        if crops_for_resnet and dinov2 is not None and dinov2_transform is not None and extract_features:
+        if (
+            crops_for_resnet
+            and dinov2 is not None
+            and dinov2_transform is not None
+            and extract_features
+        ):
             # DINOv2 masked features
             dinov2_masked_list = self._extract_dinov2_features_batch(
                 crops_for_resnet, dinov2, dinov2_transform, device
             )
             for crop_idx, dino_feats in zip(crop_indices, dinov2_masked_list):
                 for i, v in enumerate(dino_feats):
-                    valid_detections[crop_idx]['features'][f'dinov2_{i}'] = float(v)
+                    valid_detections[crop_idx]["features"][f"dinov2_{i}"] = float(v)
 
             # DINOv2 context features
             dinov2_context_list = self._extract_dinov2_features_batch(
@@ -521,7 +555,7 @@ class NMJStrategy(DetectionStrategy, MultiChannelFeatureMixin):
             )
             for crop_idx, dino_feats in zip(crop_indices, dinov2_context_list):
                 for i, v in enumerate(dino_feats):
-                    valid_detections[crop_idx]['features'][f'dinov2_ctx_{i}'] = float(v)
+                    valid_detections[crop_idx]["features"][f"dinov2_ctx_{i}"] = float(v)
 
         # Fill zeros for detections that failed crop extraction
         if extract_features and self.extract_deep_features:
@@ -541,12 +575,12 @@ class NMJStrategy(DetectionStrategy, MultiChannelFeatureMixin):
         gc.collect()
 
         # Step 3: Filter by area and create Detection objects
-        masks_list = [det['mask'] for det in valid_detections]
-        features_list = [det['features'] for det in valid_detections]
+        masks_list = [det["mask"] for det in valid_detections]
+        features_list = [det["features"] for det in valid_detections]
 
         # Add centroid to features for filter method
         for det in valid_detections:
-            det['features']['centroid'] = det['centroid']
+            det["features"]["centroid"] = det["centroid"]
 
         detections = self.filter(masks_list, features_list, pixel_size_um)
 
@@ -554,24 +588,20 @@ class NMJStrategy(DetectionStrategy, MultiChannelFeatureMixin):
             return np.zeros(tile.shape[:2], dtype=np.uint32), []
 
         # Step 4: Optional classifier filtering
-        if self.use_classifier and 'classifier' in models:
-            classifier = models['classifier']
-            classifier_type = models.get('classifier_type', 'cnn')
+        if self.use_classifier and "classifier" in models:
+            classifier = models["classifier"]
+            classifier_type = models.get("classifier_type", "cnn")
 
-            if classifier_type == 'rf':
+            if classifier_type == "rf":
                 # Random Forest classifier - uses extracted features
-                scaler = models.get('scaler')
-                feature_names = models.get('feature_names', [])
-                detections = self.classify_rf(
-                    detections, classifier, scaler, feature_names
-                )
+                scaler = models.get("scaler")
+                feature_names = models.get("feature_names", [])
+                detections = self.classify_rf(detections, classifier, scaler, feature_names)
             else:
                 # CNN classifier - uses image crops
-                transform = models.get('transform')
+                transform = models.get("transform")
                 if transform is not None and device is not None:
-                    detections = self.classify(
-                        detections, tile, classifier, transform, device
-                    )
+                    detections = self.classify(detections, tile, classifier, transform, device)
 
         # Re-build label array with only final detections
         final_label_array = np.zeros(tile.shape[:2], dtype=np.uint32)
@@ -580,11 +610,7 @@ class NMJStrategy(DetectionStrategy, MultiChannelFeatureMixin):
 
         return final_label_array, detections
 
-    def _compute_nmj_specific_features(
-        self,
-        mask: np.ndarray,
-        tile: np.ndarray
-    ) -> Dict[str, Any]:
+    def _compute_nmj_specific_features(self, mask: np.ndarray, tile: np.ndarray) -> dict[str, Any]:
         """
         Compute NMJ-specific features including skeleton-based metrics.
 
@@ -618,11 +644,11 @@ class NMJStrategy(DetectionStrategy, MultiChannelFeatureMixin):
         prop = props[0]
 
         return {
-            'skeleton_length': skeleton_length,
-            'solidity': float(prop.solidity),
-            'eccentricity': float(prop.eccentricity),
-            'mean_intensity': float(prop.mean_intensity),
-            'bbox': list(prop.bbox),
+            "skeleton_length": skeleton_length,
+            "solidity": float(prop.solidity),
+            "eccentricity": float(prop.eccentricity),
+            "mean_intensity": float(prop.mean_intensity),
+            "bbox": list(prop.bbox),
         }
 
     # _extract_sam2_embedding inherited from DetectionStrategy base class
@@ -635,7 +661,7 @@ class NMJStrategy(DetectionStrategy, MultiChannelFeatureMixin):
         mask: np.ndarray,
         intensity_image: np.ndarray,
         low_threshold_percentile: float = 95.0,
-        max_area_growth: float = 1.0
+        max_area_growth: float = 1.0,
     ) -> np.ndarray:
         """
         Expand mask to signal boundaries using watershed.
@@ -697,10 +723,10 @@ class NMJStrategy(DetectionStrategy, MultiChannelFeatureMixin):
     def _extract_crop(
         self,
         tile_rgb: np.ndarray,
-        centroid: List[float],
+        centroid: list[float],
         zoom_factor: float = 7.5,
-        output_size: int = 300
-    ) -> Optional[Image.Image]:
+        output_size: int = 300,
+    ) -> Image.Image | None:
         """
         Extract crop centered on centroid with zoom factor.
 
@@ -747,21 +773,31 @@ def load_nmj_classifier(model_path: str, device=None):
     from torchvision import models, transforms
 
     if device is None:
-        device = torch.device('cuda' if torch.cuda.is_available() else ('mps' if hasattr(torch.backends, 'mps') and torch.backends.mps.is_available() else 'cpu'))
+        device = torch.device(
+            "cuda"
+            if torch.cuda.is_available()
+            else (
+                "mps"
+                if hasattr(torch.backends, "mps") and torch.backends.mps.is_available()
+                else "cpu"
+            )
+        )
 
     model = models.resnet18(weights=None)
     model.fc = nn.Linear(model.fc.in_features, 2)
 
     checkpoint = torch.load(model_path, map_location=device, weights_only=False)
-    model.load_state_dict(checkpoint['model_state_dict'])
+    model.load_state_dict(checkpoint["model_state_dict"])
     model = model.to(device)
     model.eval()
 
-    transform = transforms.Compose([
-        transforms.Resize((224, 224)),
-        transforms.ToTensor(),
-        transforms.Normalize([0.485, 0.456, 0.406], [0.229, 0.224, 0.225])
-    ])
+    transform = transforms.Compose(
+        [
+            transforms.Resize((224, 224)),
+            transforms.ToTensor(),
+            transforms.Normalize([0.485, 0.456, 0.406], [0.229, 0.224, 0.225]),
+        ]
+    )
 
     return model, transform, device
 
@@ -773,17 +809,13 @@ def load_nmj_rf_classifier(model_path: str):
     (e.g. older scripts) continue to work.
     """
     from segmentation.utils.detection_utils import load_rf_classifier
+
     return load_rf_classifier(model_path)
 
 
 def load_classifier(model_path: str, device=None):
-    if model_path.endswith('.pkl') or model_path.endswith('.joblib'):
+    if model_path.endswith(".pkl") or model_path.endswith(".joblib"):
         return load_nmj_rf_classifier(model_path)
     else:
         model, transform, device = load_nmj_classifier(model_path, device)
-        return {
-            'model': model,
-            'transform': transform,
-            'device': device,
-            'type': 'cnn'
-        }
+        return {"model": model, "transform": transform, "device": device, "type": "cnn"}

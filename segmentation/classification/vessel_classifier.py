@@ -22,15 +22,15 @@ Usage:
 """
 
 from pathlib import Path
-from typing import Dict, List, Tuple, Optional, Union, Any
-import numpy as np
-import joblib
+from typing import Any
 
+import joblib
+import numpy as np
 from sklearn.ensemble import RandomForestClassifier
-from sklearn.pipeline import Pipeline
-from sklearn.preprocessing import StandardScaler, LabelEncoder
-from sklearn.model_selection import cross_val_score, StratifiedKFold
 from sklearn.metrics import classification_report, confusion_matrix
+from sklearn.model_selection import StratifiedKFold, cross_val_score
+from sklearn.pipeline import Pipeline
+from sklearn.preprocessing import LabelEncoder, StandardScaler
 
 from segmentation.utils.logging import get_logger
 
@@ -38,51 +38,57 @@ logger = get_logger(__name__)
 
 
 # Vessel type labels
-VESSEL_TYPES = ['capillary', 'arteriole', 'artery']
+VESSEL_TYPES = ["capillary", "arteriole", "artery"]
 
 # Core vessel-specific features (most discriminative)
 VESSEL_CORE_FEATURES = [
-    'outer_diameter_um',
-    'inner_diameter_um',
-    'wall_thickness_mean_um',
-    'wall_thickness_median_um',
-    'wall_thickness_std_um',
-    'wall_thickness_min_um',
-    'wall_thickness_max_um',
-    'lumen_area_um2',
-    'wall_area_um2',
-    'outer_area_um2',
-    'aspect_ratio',
-    'circularity',
-    'ring_completeness',
+    "outer_diameter_um",
+    "inner_diameter_um",
+    "wall_thickness_mean_um",
+    "wall_thickness_median_um",
+    "wall_thickness_std_um",
+    "wall_thickness_min_um",
+    "wall_thickness_max_um",
+    "lumen_area_um2",
+    "wall_area_um2",
+    "outer_area_um2",
+    "aspect_ratio",
+    "circularity",
+    "ring_completeness",
 ]
 
 # Extended morphological features (from 22 standard features)
 MORPHOLOGICAL_FEATURES = [
-    'area',
-    'perimeter',
-    'solidity',
-    'extent',
-    'equiv_diameter',
-    'red_mean', 'red_std',
-    'green_mean', 'green_std',
-    'blue_mean', 'blue_std',
-    'gray_mean', 'gray_std',
-    'hue_mean', 'saturation_mean', 'value_mean',
-    'relative_brightness',
-    'intensity_variance',
-    'dark_fraction',
-    'nuclear_complexity',
+    "area",
+    "perimeter",
+    "solidity",
+    "extent",
+    "equiv_diameter",
+    "red_mean",
+    "red_std",
+    "green_mean",
+    "green_std",
+    "blue_mean",
+    "blue_std",
+    "gray_mean",
+    "gray_std",
+    "hue_mean",
+    "saturation_mean",
+    "value_mean",
+    "relative_brightness",
+    "intensity_variance",
+    "dark_fraction",
+    "nuclear_complexity",
 ]
 
 # Combined default features (vessel-specific + morphological = ~35 features)
 DEFAULT_FEATURES = VESSEL_CORE_FEATURES + MORPHOLOGICAL_FEATURES
 
 # SAM2 embedding features (256D)
-SAM2_FEATURES = [f'sam2_{i}' for i in range(256)]
+SAM2_FEATURES = [f"sam2_{i}" for i in range(256)]
 
 # ResNet-50 features (2048D)
-RESNET_FEATURES = [f'resnet_{i}' for i in range(2048)]
+RESNET_FEATURES = [f"resnet_{i}" for i in range(2048)]
 
 # Full feature set (single-pass): 22 base morph + 13 vessel-specific + 256 SAM2 + 2048 ResNet
 # Note: Full pipeline uses masked+context (4096 ResNet, 2048 DINOv2) for up to 6478 total
@@ -110,12 +116,12 @@ class VesselClassifier:
     def __init__(
         self,
         n_estimators: int = 100,
-        max_depth: Optional[int] = None,
+        max_depth: int | None = None,
         min_samples_split: int = 5,
         min_samples_leaf: int = 2,
-        class_weight: str = 'balanced',
+        class_weight: str = "balanced",
         random_state: int = 42,
-        feature_names: Optional[List[str]] = None,
+        feature_names: list[str] | None = None,
     ):
         """
         Initialize vessel classifier.
@@ -152,12 +158,10 @@ class VesselClassifier:
         self.label_encoder = LabelEncoder()
         self.feature_names = feature_names or DEFAULT_FEATURES.copy()
         self.trained = False
-        self.metrics: Dict[str, Any] = {}
+        self.metrics: dict[str, Any] = {}
 
     def _extract_features_from_dict(
-        self,
-        features_dict: Dict[str, Any],
-        feature_names: Optional[List[str]] = None
+        self, features_dict: dict[str, Any], feature_names: list[str] | None = None
     ) -> np.ndarray:
         """
         Extract feature vector from a features dictionary.
@@ -186,10 +190,10 @@ class VesselClassifier:
 
     def _prepare_training_data(
         self,
-        X: Union[np.ndarray, List[Dict]],
-        y: Union[np.ndarray, List[str]],
-        feature_names: Optional[List[str]] = None
-    ) -> Tuple[np.ndarray, np.ndarray]:
+        X: np.ndarray | list[dict],
+        y: np.ndarray | list[str],
+        feature_names: list[str] | None = None,
+    ) -> tuple[np.ndarray, np.ndarray]:
         """
         Prepare training data, handling both array and dict inputs.
 
@@ -202,17 +206,14 @@ class VesselClassifier:
         """
         # Handle dict input
         if isinstance(X, list) and len(X) > 0 and isinstance(X[0], dict):
-            X_array = np.array([
-                self._extract_features_from_dict(d, feature_names)
-                for d in X
-            ])
+            X_array = np.array([self._extract_features_from_dict(d, feature_names) for d in X])
         else:
             X_array = np.asarray(X, dtype=np.float32)
 
         # Handle string labels
         y_array = np.asarray(y)
-        if y_array.dtype.kind in ('U', 'S', 'O'):  # String types
-            if not hasattr(self.label_encoder, 'classes_') or len(self.label_encoder.classes_) == 0:
+        if y_array.dtype.kind in ("U", "S", "O"):  # String types
+            if not hasattr(self.label_encoder, "classes_") or len(self.label_encoder.classes_) == 0:
                 # First call (training) — fit the encoder
                 y_encoded = self.label_encoder.fit_transform(y_array)
             else:
@@ -221,19 +222,19 @@ class VesselClassifier:
         else:
             y_encoded = y_array.astype(int)
             # Fit label encoder with known classes if not already fitted
-            if not hasattr(self.label_encoder, 'classes_') or len(self.label_encoder.classes_) == 0:
+            if not hasattr(self.label_encoder, "classes_") or len(self.label_encoder.classes_) == 0:
                 self.label_encoder.fit(VESSEL_TYPES)
 
         return X_array, y_encoded
 
     def train(
         self,
-        X: Union[np.ndarray, List[Dict]],
-        y: Union[np.ndarray, List[str]],
-        feature_names: Optional[List[str]] = None,
+        X: np.ndarray | list[dict],
+        y: np.ndarray | list[str],
+        feature_names: list[str] | None = None,
         cv_folds: int = 5,
-        verbose: bool = True
-    ) -> Dict[str, Any]:
+        verbose: bool = True,
+    ) -> dict[str, Any]:
         """
         Train the classifier on annotated vessel data.
 
@@ -270,19 +271,24 @@ class VesselClassifier:
             logger.info(f"Running {cv_folds}-fold cross-validation...")
 
         cv = StratifiedKFold(n_splits=cv_folds, shuffle=True, random_state=self.random_state)
-        cv_pipeline = Pipeline([
-            ('scaler', StandardScaler()),
-            ('classifier', RandomForestClassifier(
-                n_estimators=self.n_estimators,
-                max_depth=self.max_depth,
-                min_samples_split=self.min_samples_split,
-                min_samples_leaf=self.min_samples_leaf,
-                class_weight=self.class_weight,
-                random_state=self.random_state,
-                n_jobs=-1,
-            )),
-        ])
-        cv_scores = cross_val_score(cv_pipeline, X_array, y_encoded, cv=cv, scoring='accuracy')
+        cv_pipeline = Pipeline(
+            [
+                ("scaler", StandardScaler()),
+                (
+                    "classifier",
+                    RandomForestClassifier(
+                        n_estimators=self.n_estimators,
+                        max_depth=self.max_depth,
+                        min_samples_split=self.min_samples_split,
+                        min_samples_leaf=self.min_samples_leaf,
+                        class_weight=self.class_weight,
+                        random_state=self.random_state,
+                        n_jobs=-1,
+                    ),
+                ),
+            ]
+        )
+        cv_scores = cross_val_score(cv_pipeline, X_array, y_encoded, cv=cv, scoring="accuracy")
 
         if verbose:
             logger.info(f"CV Accuracy: {cv_scores.mean():.4f} (+/- {cv_scores.std() * 2:.4f})")
@@ -297,15 +303,20 @@ class VesselClassifier:
         train_accuracy = (y_pred == y_encoded).mean()
 
         self.metrics = {
-            'train_accuracy': float(train_accuracy),
-            'cv_accuracy_mean': float(cv_scores.mean()),
-            'cv_accuracy_std': float(cv_scores.std()),
-            'n_samples': len(X_array),
-            'n_features': len(self.feature_names),
-            'class_distribution': dict(zip(
-                self.label_encoder.classes_.tolist(),
-                [int(c) for c in np.bincount(y_encoded, minlength=len(self.label_encoder.classes_))]
-            )),
+            "train_accuracy": float(train_accuracy),
+            "cv_accuracy_mean": float(cv_scores.mean()),
+            "cv_accuracy_std": float(cv_scores.std()),
+            "n_samples": len(X_array),
+            "n_features": len(self.feature_names),
+            "class_distribution": dict(
+                zip(
+                    self.label_encoder.classes_.tolist(),
+                    [
+                        int(c)
+                        for c in np.bincount(y_encoded, minlength=len(self.label_encoder.classes_))
+                    ],
+                )
+            ),
         }
 
         if verbose:
@@ -314,10 +325,8 @@ class VesselClassifier:
         return self.metrics
 
     def predict(
-        self,
-        X: Union[np.ndarray, List[Dict], Dict],
-        return_confidence: bool = True
-    ) -> Union[Tuple[np.ndarray, np.ndarray], np.ndarray]:
+        self, X: np.ndarray | list[dict] | dict, return_confidence: bool = True
+    ) -> tuple[np.ndarray, np.ndarray] | np.ndarray:
         """
         Predict vessel types with confidence scores.
 
@@ -345,10 +354,7 @@ class VesselClassifier:
 
         # Convert dict input to array
         if isinstance(X, list) and len(X) > 0 and isinstance(X[0], dict):
-            X_array = np.array([
-                self._extract_features_from_dict(d)
-                for d in X
-            ])
+            X_array = np.array([self._extract_features_from_dict(d) for d in X])
         else:
             X_array = np.asarray(X, dtype=np.float32)
 
@@ -375,10 +381,7 @@ class VesselClassifier:
                 return predictions[0]
             return predictions
 
-    def predict_proba(
-        self,
-        X: Union[np.ndarray, List[Dict], Dict]
-    ) -> np.ndarray:
+    def predict_proba(self, X: np.ndarray | list[dict] | dict) -> np.ndarray:
         """
         Get class probabilities for each vessel type.
 
@@ -400,10 +403,7 @@ class VesselClassifier:
 
         # Convert dict input to array
         if isinstance(X, list) and len(X) > 0 and isinstance(X[0], dict):
-            X_array = np.array([
-                self._extract_features_from_dict(d)
-                for d in X
-            ])
+            X_array = np.array([self._extract_features_from_dict(d) for d in X])
         else:
             X_array = np.asarray(X, dtype=np.float32)
 
@@ -418,7 +418,7 @@ class VesselClassifier:
             return probas[0]
         return probas
 
-    def get_feature_importance(self) -> Dict[str, float]:
+    def get_feature_importance(self) -> dict[str, float]:
         """
         Get feature importance rankings.
 
@@ -431,7 +431,7 @@ class VesselClassifier:
         importance = self.model.feature_importances_
         return dict(zip(self.feature_names, importance.tolist()))
 
-    def get_top_features(self, n: int = 10) -> List[Tuple[str, float]]:
+    def get_top_features(self, n: int = 10) -> list[tuple[str, float]]:
         """
         Get top N most important features.
 
@@ -446,11 +446,8 @@ class VesselClassifier:
         return sorted_features[:n]
 
     def evaluate(
-        self,
-        X: Union[np.ndarray, List[Dict]],
-        y: Union[np.ndarray, List[str]],
-        verbose: bool = True
-    ) -> Dict[str, Any]:
+        self, X: np.ndarray | list[dict], y: np.ndarray | list[str], verbose: bool = True
+    ) -> dict[str, Any]:
         """
         Evaluate classifier on test data.
 
@@ -477,28 +474,23 @@ class VesselClassifier:
         accuracy = (y_pred == y_true).mean()
         cm = confusion_matrix(y_true, y_pred)
         report = classification_report(
-            y_true, y_pred,
-            target_names=self.label_encoder.classes_,
-            output_dict=True
+            y_true, y_pred, target_names=self.label_encoder.classes_, output_dict=True
         )
 
         if verbose:
             logger.info(f"\nTest Accuracy: {accuracy:.4f}")
             logger.info("\nClassification Report:")
-            print(classification_report(
-                y_true, y_pred,
-                target_names=self.label_encoder.classes_
-            ))
+            print(classification_report(y_true, y_pred, target_names=self.label_encoder.classes_))
             logger.info("\nConfusion Matrix:")
             print(cm)
 
         return {
-            'accuracy': float(accuracy),
-            'confusion_matrix': cm.tolist(),
-            'classification_report': report,
+            "accuracy": float(accuracy),
+            "confusion_matrix": cm.tolist(),
+            "classification_report": report,
         }
 
-    def save(self, path: Union[str, Path]) -> None:
+    def save(self, path: str | Path) -> None:
         """
         Save trained model to file.
 
@@ -512,27 +504,27 @@ class VesselClassifier:
         path.parent.mkdir(parents=True, exist_ok=True)
 
         model_data = {
-            'model': self.model,
-            'scaler': self.scaler,
-            'label_encoder': self.label_encoder,
-            'feature_names': self.feature_names,
-            'metrics': self.metrics,
-            'config': {
-                'n_estimators': self.n_estimators,
-                'max_depth': self.max_depth,
-                'min_samples_split': self.min_samples_split,
-                'min_samples_leaf': self.min_samples_leaf,
-                'class_weight': self.class_weight,
-                'random_state': self.random_state,
+            "model": self.model,
+            "scaler": self.scaler,
+            "label_encoder": self.label_encoder,
+            "feature_names": self.feature_names,
+            "metrics": self.metrics,
+            "config": {
+                "n_estimators": self.n_estimators,
+                "max_depth": self.max_depth,
+                "min_samples_split": self.min_samples_split,
+                "min_samples_leaf": self.min_samples_leaf,
+                "class_weight": self.class_weight,
+                "random_state": self.random_state,
             },
-            'version': '1.0',
+            "version": "1.0",
         }
 
         joblib.dump(model_data, path)
         logger.info(f"Model saved to: {path}")
 
     @classmethod
-    def load(cls, path: Union[str, Path]) -> 'VesselClassifier':
+    def load(cls, path: str | Path) -> "VesselClassifier":
         """
         Load trained model from file.
 
@@ -549,33 +541,33 @@ class VesselClassifier:
         model_data = joblib.load(path)
 
         # Create instance with saved config
-        config = model_data.get('config', {})
+        config = model_data.get("config", {})
         instance = cls(
-            n_estimators=config.get('n_estimators', 100),
-            max_depth=config.get('max_depth'),
-            min_samples_split=config.get('min_samples_split', 5),
-            min_samples_leaf=config.get('min_samples_leaf', 2),
-            class_weight=config.get('class_weight', 'balanced'),
-            random_state=config.get('random_state', 42),
-            feature_names=model_data['feature_names'],
+            n_estimators=config.get("n_estimators", 100),
+            max_depth=config.get("max_depth"),
+            min_samples_split=config.get("min_samples_split", 5),
+            min_samples_leaf=config.get("min_samples_leaf", 2),
+            class_weight=config.get("class_weight", "balanced"),
+            random_state=config.get("random_state", 42),
+            feature_names=model_data["feature_names"],
         )
 
         # Restore trained state
-        instance.model = model_data['model']
-        instance.scaler = model_data['scaler']
-        instance.label_encoder = model_data['label_encoder']
-        instance.metrics = model_data.get('metrics', {})
+        instance.model = model_data["model"]
+        instance.scaler = model_data["scaler"]
+        instance.label_encoder = model_data["label_encoder"]
+        instance.metrics = model_data.get("metrics", {})
         instance.trained = True
 
         logger.info(f"Model loaded from: {path}")
-        acc = instance.metrics.get('cv_accuracy_mean')
+        acc = instance.metrics.get("cv_accuracy_mean")
         logger.info(f"  Accuracy: {acc:.4f}" if acc is not None else "  Accuracy: N/A")
         logger.info(f"  Features: {len(instance.feature_names)}")
 
         return instance
 
     @staticmethod
-    def rule_based_classify(features: Dict[str, Any]) -> Tuple[str, float]:
+    def rule_based_classify(features: dict[str, Any]) -> tuple[str, float]:
         """
         Fall-back rule-based classification using diameter thresholds.
 
@@ -588,21 +580,21 @@ class VesselClassifier:
         Returns:
             Tuple of (vessel_type, confidence)
         """
-        diameter = features.get('outer_diameter_um', 0)
+        diameter = features.get("outer_diameter_um", 0)
 
         if diameter < 10:
-            return 'capillary', 0.8
+            return "capillary", 0.8
         elif diameter < 100:
-            return 'arteriole', 0.7
+            return "arteriole", 0.7
         else:
-            return 'artery', 0.6
+            return "artery", 0.6
 
 
 def classify_vessel(
-    features: Dict[str, Any],
-    classifier: Optional[VesselClassifier] = None,
-    model_path: Optional[Union[str, Path]] = None
-) -> Tuple[str, float]:
+    features: dict[str, Any],
+    classifier: VesselClassifier | None = None,
+    model_path: str | Path | None = None,
+) -> tuple[str, float]:
     """
     Convenience function to classify a single vessel.
 

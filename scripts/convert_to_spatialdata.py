@@ -34,18 +34,18 @@ Usage:
 """
 
 import os
-os.environ['HDF5_USE_FILE_LOCKING'] = 'FALSE'
 
-import sys
+os.environ["HDF5_USE_FILE_LOCKING"] = "FALSE"
+
 import argparse
+import sys
 import warnings
 from pathlib import Path
 
 import numpy as np
 
-from segmentation.utils.logging import get_logger, setup_logging
-from segmentation.utils.json_utils import fast_json_load
 from segmentation.utils.detection_utils import load_detections
+from segmentation.utils.logging import get_logger, setup_logging
 
 logger = get_logger(__name__)
 
@@ -55,50 +55,92 @@ logger = get_logger(__name__)
 
 # Morphological features that go into X matrix
 MORPH_FEATURES = [
-    'area', 'perimeter', 'circularity', 'eccentricity', 'solidity',
-    'extent', 'equivalent_diameter', 'major_axis_length', 'minor_axis_length',
-    'aspect_ratio', 'compactness', 'convexity', 'roughness',
-    'mean_intensity', 'std_intensity', 'max_intensity', 'min_intensity',
-    'intensity_range', 'median_intensity', 'p25_intensity', 'p75_intensity',
-    'p90_intensity', 'p95_intensity', 'p99_intensity', 'iqr_intensity',
-    'skewness', 'kurtosis', 'entropy', 'energy', 'contrast',
-    'homogeneity', 'correlation', 'dissimilarity',
+    "area",
+    "perimeter",
+    "circularity",
+    "eccentricity",
+    "solidity",
+    "extent",
+    "equivalent_diameter",
+    "major_axis_length",
+    "minor_axis_length",
+    "aspect_ratio",
+    "compactness",
+    "convexity",
+    "roughness",
+    "mean_intensity",
+    "std_intensity",
+    "max_intensity",
+    "min_intensity",
+    "intensity_range",
+    "median_intensity",
+    "p25_intensity",
+    "p75_intensity",
+    "p90_intensity",
+    "p95_intensity",
+    "p99_intensity",
+    "iqr_intensity",
+    "skewness",
+    "kurtosis",
+    "entropy",
+    "energy",
+    "contrast",
+    "homogeneity",
+    "correlation",
+    "dissimilarity",
 ]
 
 # Vessel-specific morphological features
 VESSEL_FEATURES = [
-    'outer_diameter_um', 'inner_diameter_um', 'wall_thickness_mean_um',
-    'wall_thickness_std_um', 'wall_thickness_cv', 'lumen_area_um2',
-    'wall_area_um2', 'sma_ring_area_um2', 'has_sma_ring', 'confidence',
+    "outer_diameter_um",
+    "inner_diameter_um",
+    "wall_thickness_mean_um",
+    "wall_thickness_std_um",
+    "wall_thickness_cv",
+    "lumen_area_um2",
+    "wall_area_um2",
+    "sma_ring_area_um2",
+    "has_sma_ring",
+    "confidence",
 ]
 
 # Embedding prefixes -> obsm key
 EMBEDDING_PREFIXES = {
-    'sam2_': ('X_sam2', 256),
-    'resnet_masked_': ('X_resnet_masked', 2048),
-    'resnet_context_': ('X_resnet_context', 2048),
-    'dinov2_masked_': ('X_dinov2_masked', 1024),
-    'dinov2_context_': ('X_dinov2_context', 1024),
+    "sam2_": ("X_sam2", 256),
+    "resnet_masked_": ("X_resnet_masked", 2048),
+    "resnet_context_": ("X_resnet_context", 2048),
+    "dinov2_masked_": ("X_dinov2_masked", 1024),
+    "dinov2_context_": ("X_dinov2_context", 1024),
 }
 
 # Metadata fields that go into obs (not X)
 OBS_FIELDS = [
-    'uid', 'slide_name', 'cell_type', 'tile_origin', 'global_center',
-    'global_center_um', 'rf_prediction', 'community_id', 'cluster_id',
-    'mask_label', 'tile_mask_label', 'global_id',
+    "uid",
+    "slide_name",
+    "cell_type",
+    "tile_origin",
+    "global_center",
+    "global_center_um",
+    "rf_prediction",
+    "community_id",
+    "cluster_id",
+    "mask_label",
+    "tile_mask_label",
+    "global_id",
 ]
 
 # Vessel contour keys -> shape layer names
 VESSEL_CONTOUR_KEYS = {
-    'outer_contour_global': 'vessel_outer',
-    'inner_contour_global': 'vessel_lumen',
-    'sma_contour_global': 'vessel_sma',
+    "outer_contour_global": "vessel_outer",
+    "inner_contour_global": "vessel_lumen",
+    "sma_contour_global": "vessel_sma",
 }
 
 
 # ---------------------------------------------------------------------------
 # Core conversion functions
 # ---------------------------------------------------------------------------
+
 
 def _discover_features(detections):
     """Scan detections to discover all available feature names and embeddings.
@@ -112,7 +154,7 @@ def _discover_features(detections):
     embedding_counts = {}  # prefix -> max index seen
 
     for det in detections[:100]:
-        feats = det.get('features', {})
+        feats = det.get("features", {})
         for key in feats:
             val = feats[key]
             # Skip non-numeric values
@@ -126,7 +168,7 @@ def _discover_features(detections):
             for prefix, (obsm_key, expected_dim) in EMBEDDING_PREFIXES.items():
                 if key.startswith(prefix):
                     try:
-                        idx = int(key[len(prefix):])
+                        idx = int(key[len(prefix) :])
                         embedding_counts.setdefault(prefix, 0)
                         embedding_counts[prefix] = max(embedding_counts[prefix], idx + 1)
                         matched_embed = True
@@ -137,7 +179,7 @@ def _discover_features(detections):
                 continue
 
             # Check if it's a channel stat (e.g., ch0_mean, ch2_p95)
-            if key[:3] == 'ch' and key[3:4].isdigit() and '_' in key:
+            if key[:3] == "ch" and key[3:4].isdigit() and "_" in key:
                 channel_stat_names.add(key)
             elif key in MORPH_FEATURES or key in VESSEL_FEATURES:
                 morph_names.add(key)
@@ -167,13 +209,13 @@ def _discover_obs_classes(detections):
     """Discover classification columns (e.g., tdTomato_class, GFP_class) from detections."""
     class_cols = set()
     for det in detections[:10]:
-        feats = det.get('features', {})
+        feats = det.get("features", {})
         for key, val in feats.items():
-            if key.endswith('_class') and isinstance(val, str):
+            if key.endswith("_class") and isinstance(val, str):
                 class_cols.add(key)
         # Also check top-level keys
         for key, val in det.items():
-            if key.endswith('_class') and isinstance(val, str):
+            if key.endswith("_class") and isinstance(val, str):
                 class_cols.add(key)
     return sorted(class_cols)
 
@@ -203,12 +245,17 @@ def build_anndata(detections, cell_type):
     x_names = morph_names + channel_stat_names
     logger.info("  Morphological features: %d", len(morph_names))
     logger.info("  Channel stat features: %d", len(channel_stat_names))
-    logger.info("  Embedding layers: %s", ', '.join(f"{k} ({v[2]}d)" for k, v in embedding_map.items()) or 'none')
-    logger.info("  Classification columns: %s", ', '.join(class_cols) or 'none')
+    logger.info(
+        "  Embedding layers: %s",
+        ", ".join(f"{k} ({v[2]}d)" for k, v in embedding_map.items()) or "none",
+    )
+    logger.info("  Classification columns: %s", ", ".join(class_cols) or "none")
 
     # Pre-allocate arrays
     X = np.zeros((n, len(x_names)), dtype=np.float32)
-    embeddings = {key: np.zeros((n, info[2]), dtype=np.float32) for key, info in embedding_map.items()}
+    embeddings = {
+        key: np.zeros((n, info[2]), dtype=np.float32) for key, info in embedding_map.items()
+    }
 
     # Obs columns
     obs_data = {field: [] for field in OBS_FIELDS}
@@ -220,7 +267,7 @@ def build_anndata(detections, cell_type):
 
     # Fill arrays
     for i, det in enumerate(detections):
-        feats = det.get('features', {})
+        feats = det.get("features", {})
 
         # X matrix
         for j, name in enumerate(x_names):
@@ -236,10 +283,13 @@ def build_anndata(detections, cell_type):
                 embeddings[obsm_key][i, d] = float(val) if val is not None else 0.0
 
         # Spatial coordinates — check both top-level and features sub-dict
-        gc = det.get('global_center') or feats.get('global_center') or [0, 0]
+        gc = det.get("global_center") or feats.get("global_center") or [0, 0]
         spatial_px[i] = [gc[0] if gc[0] is not None else 0, gc[1] if gc[1] is not None else 0]
-        gc_um = det.get('global_center_um') or feats.get('global_center_um') or [0, 0]
-        spatial_um[i] = [gc_um[0] if gc_um[0] is not None else 0, gc_um[1] if gc_um[1] is not None else 0]
+        gc_um = det.get("global_center_um") or feats.get("global_center_um") or [0, 0]
+        spatial_um[i] = [
+            gc_um[0] if gc_um[0] is not None else 0,
+            gc_um[1] if gc_um[1] is not None else 0,
+        ]
 
         # Obs metadata
         for field in OBS_FIELDS:
@@ -251,7 +301,7 @@ def build_anndata(detections, cell_type):
         # Classification columns
         for col in class_cols:
             val = det.get(col, feats.get(col))
-            obs_data[col].append(val if val is not None else 'unknown')
+            obs_data[col].append(val if val is not None else "unknown")
 
     # Clean NaN/Inf in X
     X = np.nan_to_num(X, nan=0.0, posinf=0.0, neginf=0.0)
@@ -260,16 +310,16 @@ def build_anndata(detections, cell_type):
 
     # Build obs DataFrame
     obs_df = pd.DataFrame(obs_data)
-    if 'uid' in obs_df.columns:
-        obs_df.index = obs_df['uid'].astype(str)
+    if "uid" in obs_df.columns:
+        obs_df.index = obs_df["uid"].astype(str)
         obs_df.index.name = None
         if obs_df.index.duplicated().any():
             n_dup = obs_df.index.duplicated().sum()
             logger.warning("Making %d duplicate UIDs unique", n_dup)
             obs_df.index = ad.utils.make_index_unique(obs_df.index)
     # Ensure cell_type column
-    if 'cell_type' not in obs_df.columns or obs_df['cell_type'].isna().all():
-        obs_df['cell_type'] = cell_type
+    if "cell_type" not in obs_df.columns or obs_df["cell_type"].isna().all():
+        obs_df["cell_type"] = cell_type
 
     # Convert classification columns to categorical
     for col in class_cols:
@@ -277,22 +327,25 @@ def build_anndata(detections, cell_type):
 
     # Build var DataFrame
     var_df = pd.DataFrame(index=x_names)
-    var_df.index.name = 'feature'
-    var_df['feature_type'] = ['morphological'] * len(morph_names) + ['channel_stat'] * len(channel_stat_names)
+    var_df.index.name = "feature"
+    var_df["feature_type"] = ["morphological"] * len(morph_names) + ["channel_stat"] * len(
+        channel_stat_names
+    )
 
     # Create AnnData
     adata = ad.AnnData(X=X, obs=obs_df, var=var_df)
 
     # Add spatial coordinates to obsm
-    adata.obsm['spatial'] = spatial_um  # um coords for squidpy
-    adata.obsm['spatial_pixel'] = spatial_px
+    adata.obsm["spatial"] = spatial_um  # um coords for squidpy
+    adata.obsm["spatial_pixel"] = spatial_px
 
     # Add embeddings to obsm
     for key, arr in embeddings.items():
         adata.obsm[key] = arr
 
-    logger.info("Built AnnData: %d obs x %d var, %d obsm layers",
-                adata.n_obs, adata.n_vars, len(adata.obsm))
+    logger.info(
+        "Built AnnData: %d obs x %d var, %d obsm layers", adata.n_obs, adata.n_vars, len(adata.obsm)
+    )
 
     return adata
 
@@ -301,25 +354,26 @@ def build_anndata(detections, cell_type):
 # Shape extraction
 # ---------------------------------------------------------------------------
 
+
 def _extract_shapes_from_hdf5(detections, tiles_dir, cell_type):
     """Extract polygon contours from HDF5 mask files, tile by tile.
 
     Returns:
         List of shapely Polygons (or None for missing contours), parallel to detections.
     """
-    import hdf5plugin  # noqa: F401 - must import before h5py for LZ4
-    import h5py
     import cv2
+    import h5py
+    import hdf5plugin  # noqa: F401 - must import before h5py for LZ4
     from shapely.geometry import Polygon
 
     tiles_dir = Path(tiles_dir)
 
-    mask_filename = f'{cell_type}_masks.h5'
+    mask_filename = f"{cell_type}_masks.h5"
 
     # Group detections by tile
     by_tile = {}
     for idx, det in enumerate(detections):
-        tile_origin = det.get('tile_origin', [0, 0])
+        tile_origin = det.get("tile_origin", [0, 0])
         tile_key = f"tile_{int(tile_origin[0])}_{int(tile_origin[1])}"
         by_tile.setdefault(tile_key, []).append((idx, det))
 
@@ -336,15 +390,15 @@ def _extract_shapes_from_hdf5(detections, tiles_dir, cell_type):
             continue
         tiles_found += 1
 
-        with h5py.File(mask_path, 'r') as hf:
-            masks = hf['masks'][:]
+        with h5py.File(mask_path, "r") as hf:
+            masks = hf["masks"][:]
 
         for det_idx, det in tile_dets:
-            label = det.get('mask_label')
+            label = det.get("mask_label")
             if label is None:
-                det_id = det.get('id', '')
+                det_id = det.get("id", "")
                 try:
-                    label = int(det_id.split('_')[-1])
+                    label = int(det_id.split("_")[-1])
                 except (ValueError, IndexError):
                     continue
 
@@ -360,7 +414,7 @@ def _extract_shapes_from_hdf5(detections, tiles_dir, cell_type):
             pts = largest.reshape(-1, 2).astype(float)
 
             # Convert to global coordinates
-            tile_origin = det.get('tile_origin', [0, 0])
+            tile_origin = det.get("tile_origin", [0, 0])
             pts[:, 0] += tile_origin[0]
             pts[:, 1] += tile_origin[1]
 
@@ -375,8 +429,12 @@ def _extract_shapes_from_hdf5(detections, tiles_dir, cell_type):
 
         del masks  # Free memory before next tile
 
-    logger.info("  Extracted %d polygons from %d tiles (%d tiles with masks)",
-                contours_extracted, len(by_tile), tiles_found)
+    logger.info(
+        "  Extracted %d polygons from %d tiles (%d tiles with masks)",
+        contours_extracted,
+        len(by_tile),
+        tiles_found,
+    )
     return polygons
 
 
@@ -389,7 +447,7 @@ def _extract_vessel_shapes(detections):
     from shapely.geometry import Polygon
 
     layers = {name: [None] * len(detections) for name in VESSEL_CONTOUR_KEYS.values()}
-    counts = {name: 0 for name in VESSEL_CONTOUR_KEYS.values()}
+    counts = dict.fromkeys(VESSEL_CONTOUR_KEYS.values(), 0)
 
     for i, det in enumerate(detections):
         for json_key, layer_name in VESSEL_CONTOUR_KEYS.items():
@@ -425,11 +483,11 @@ def _make_circle_fallback(detections, pixel_size_um):
 
     polygons = [None] * len(detections)
     for i, det in enumerate(detections):
-        gc = det.get('global_center')
+        gc = det.get("global_center")
         if gc is None or gc[0] is None or gc[1] is None:
             continue
-        feats = det.get('features', {})
-        area_px = feats.get('area', 100)
+        feats = det.get("features", {})
+        area_px = feats.get("area", 100)
         radius_px = max(np.sqrt(area_px / np.pi), 3)
         try:
             circle = Point(gc[0], gc[1]).buffer(radius_px, resolution=16)
@@ -456,7 +514,7 @@ def build_shapes(detections, cell_type, tiles_dir=None, pixel_size_um=1.0):
     """
     import geopandas as gpd
 
-    if cell_type == 'vessel':
+    if cell_type == "vessel":
         logger.info("Extracting vessel multi-contour shapes from JSON...")
         layers_dict = _extract_vessel_shapes(detections)
 
@@ -467,12 +525,12 @@ def build_shapes(detections, cell_type, tiles_dir=None, pixel_size_um=1.0):
             if not valid:
                 continue
             indices, geoms = zip(*valid)
-            uids = [detections[i].get('uid', f'det_{i}') for i in indices]
+            uids = [detections[i].get("uid", f"det_{i}") for i in indices]
             gdf = gpd.GeoDataFrame(
-                {'uid': uids, 'det_index': list(indices)},
+                {"uid": uids, "det_index": list(indices)},
                 geometry=list(geoms),
             )
-            gdf.index = gdf['uid']
+            gdf.index = gdf["uid"]
             result[layer_name] = gdf
 
         return result
@@ -482,10 +540,11 @@ def build_shapes(detections, cell_type, tiles_dir=None, pixel_size_um=1.0):
 
     # First, try to use contour_dilated_px from detections (cell pipeline post-dedup)
     from shapely.geometry import Polygon as _Polygon
+
     polygons = [None] * len(detections)
     _from_json = 0
     for i, det in enumerate(detections):
-        contour_px = det.get('contour_dilated_px')
+        contour_px = det.get("contour_dilated_px")
         if contour_px is not None and len(contour_px) >= 3:
             try:
                 poly = _Polygon(contour_px)
@@ -506,14 +565,19 @@ def build_shapes(detections, cell_type, tiles_dir=None, pixel_size_um=1.0):
                 polygons[i] = hdf5_polygons[i]
         n_valid = sum(1 for p in polygons if p is not None)
         if n_valid < len(detections) * 0.5:
-            logger.warning("Only %d/%d detections had contours, using circle fallback for remainder",
-                          n_valid, len(detections))
+            logger.warning(
+                "Only %d/%d detections had contours, using circle fallback for remainder",
+                n_valid,
+                len(detections),
+            )
             circles = _make_circle_fallback(detections, pixel_size_um)
             for i in range(len(polygons)):
                 if polygons[i] is None:
                     polygons[i] = circles[i]
     elif n_missing > 0:
-        logger.info("No tiles-dir provided, using circle fallback for %d shapes without contour", n_missing)
+        logger.info(
+            "No tiles-dir provided, using circle fallback for %d shapes without contour", n_missing
+        )
         circles = _make_circle_fallback(detections, pixel_size_um)
         for i in range(len(polygons)):
             if polygons[i] is None:
@@ -526,13 +590,13 @@ def build_shapes(detections, cell_type, tiles_dir=None, pixel_size_um=1.0):
         return {}
 
     indices, geoms = zip(*valid)
-    uids = [detections[i].get('uid', f'det_{i}') for i in indices]
-    layer_name = f'{cell_type}_cells'
+    uids = [detections[i].get("uid", f"det_{i}") for i in indices]
+    layer_name = f"{cell_type}_cells"
     gdf = gpd.GeoDataFrame(
-        {'uid': uids, 'det_index': list(indices)},
+        {"uid": uids, "det_index": list(indices)},
         geometry=list(geoms),
     )
-    gdf.index = gdf['uid']
+    gdf.index = gdf["uid"]
 
     logger.info("Built shape layer '%s': %d polygons", layer_name, len(gdf))
     return {layer_name: gdf}
@@ -541,6 +605,7 @@ def build_shapes(detections, cell_type, tiles_dir=None, pixel_size_um=1.0):
 # ---------------------------------------------------------------------------
 # Image linking
 # ---------------------------------------------------------------------------
+
 
 def link_zarr_image(zarr_path):
     """Create a lazy dask-backed reference to an OME-Zarr image.
@@ -554,35 +619,35 @@ def link_zarr_image(zarr_path):
         return None
 
     try:
-        from spatialdata.models import Image2DModel
         import dask.array as da
         import zarr
+        from spatialdata.models import Image2DModel
 
-        store = zarr.open(str(zarr_path), mode='r')
+        store = zarr.open(str(zarr_path), mode="r")
 
         # Find the highest-resolution array (level 0)
         # OME-Zarr stores pyramids as '0', '1', '2', ... under root
-        if '0' in store:
-            arr = da.from_zarr(str(zarr_path / '0'))
-        elif 'data' in store:
-            arr = da.from_zarr(str(zarr_path), component='data')
+        if "0" in store:
+            arr = da.from_zarr(str(zarr_path / "0"))
+        elif "data" in store:
+            arr = da.from_zarr(str(zarr_path), component="data")
         else:
             # Try root
             arr = da.from_zarr(str(zarr_path))
 
         # Ensure (C, Y, X) ordering for SpatialData
         # Try reading axis order from OME-NGFF metadata first
-        root = zarr.open(str(zarr_path), mode='r')
+        root = zarr.open(str(zarr_path), mode="r")
         axes_meta = None
         try:
-            axes_meta = root.attrs['multiscales'][0]['axes']
+            axes_meta = root.attrs["multiscales"][0]["axes"]
         except (KeyError, IndexError, TypeError):
             pass
 
         if axes_meta and arr.ndim == len(axes_meta):
-            axis_names = [a['name'] if isinstance(a, dict) else a for a in axes_meta]
-            if 'c' in axis_names and 'y' in axis_names and 'x' in axis_names:
-                c_pos = axis_names.index('c')
+            axis_names = [a["name"] if isinstance(a, dict) else a for a in axes_meta]
+            if "c" in axis_names and "y" in axis_names and "x" in axis_names:
+                c_pos = axis_names.index("c")
                 if c_pos != 0:
                     arr = da.moveaxis(arr, c_pos, 0)
             elif arr.ndim == 2:
@@ -595,7 +660,7 @@ def link_zarr_image(zarr_path):
 
         image = Image2DModel.parse(arr, dims=("c", "y", "x"))
         logger.info("Linked image: shape=%s, dtype=%s (lazy/dask)", arr.shape, arr.dtype)
-        return {'slide': image}
+        return {"slide": image}
 
     except Exception as e:
         logger.warning("Failed to link zarr image: %s", e)
@@ -605,6 +670,7 @@ def link_zarr_image(zarr_path):
 # ---------------------------------------------------------------------------
 # Squidpy analyses
 # ---------------------------------------------------------------------------
+
 
 def run_squidpy_analyses(adata, cluster_key=None, output_dir=None):
     """Run spatial analyses using squidpy on the AnnData object.
@@ -617,11 +683,11 @@ def run_squidpy_analyses(adata, cluster_key=None, output_dir=None):
     Returns:
         Modified adata with results in .obsp and .uns.
     """
-    import squidpy as sq
-
     # Set non-interactive backend before any pyplot import
     import matplotlib
-    matplotlib.use('Agg')
+    import squidpy as sq
+
+    matplotlib.use("Agg")
     import matplotlib.pyplot as plt
 
     if output_dir:
@@ -630,12 +696,13 @@ def run_squidpy_analyses(adata, cluster_key=None, output_dir=None):
 
     # 1. Spatial neighbors (k-nearest neighbors graph)
     logger.info("Computing spatial neighbors (k=15, kNN)...")
-    sq.gr.spatial_neighbors(adata, coord_type='generic', n_neighs=15)
+    sq.gr.spatial_neighbors(adata, coord_type="generic", n_neighs=15)
     logger.info("  Stored: adata.obsp['spatial_connectivities'], adata.obsp['spatial_distances']")
 
     # 2. Neighborhood enrichment (requires categorical cluster_key)
     if cluster_key and cluster_key in adata.obs.columns:
         import pandas as pd
+
         if not isinstance(adata.obs[cluster_key].dtype, pd.CategoricalDtype):
             adata.obs[cluster_key] = pd.Categorical(adata.obs[cluster_key])
 
@@ -649,7 +716,9 @@ def run_squidpy_analyses(adata, cluster_key=None, output_dir=None):
                 if output_dir:
                     try:
                         sq.pl.nhood_enrichment(adata, cluster_key=cluster_key)
-                        plt.savefig(output_dir / 'nhood_enrichment.png', dpi=150, bbox_inches='tight')
+                        plt.savefig(
+                            output_dir / "nhood_enrichment.png", dpi=150, bbox_inches="tight"
+                        )
                         plt.close()
                         logger.info("  Saved: nhood_enrichment.png")
                     except Exception as e:
@@ -666,7 +735,7 @@ def run_squidpy_analyses(adata, cluster_key=None, output_dir=None):
                 if output_dir:
                     try:
                         sq.pl.co_occurrence(adata, cluster_key=cluster_key)
-                        plt.savefig(output_dir / 'co_occurrence.png', dpi=150, bbox_inches='tight')
+                        plt.savefig(output_dir / "co_occurrence.png", dpi=150, bbox_inches="tight")
                         plt.close()
                         logger.info("  Saved: co_occurrence.png")
                     except Exception as e:
@@ -677,31 +746,38 @@ def run_squidpy_analyses(adata, cluster_key=None, output_dir=None):
             # 4. Ripley's function
             logger.info("Ripley's L function on '%s'...", cluster_key)
             try:
-                sq.gr.ripley(adata, cluster_key=cluster_key, mode='L')
+                sq.gr.ripley(adata, cluster_key=cluster_key, mode="L")
                 logger.info("  Stored: adata.uns['%s_ripley']", cluster_key)
             except Exception as e:
                 logger.warning("  Ripley failed: %s", e)
         else:
-            logger.warning("Skipping cluster analyses: '%s' has only %d category", cluster_key, n_cats)
+            logger.warning(
+                "Skipping cluster analyses: '%s' has only %d category", cluster_key, n_cats
+            )
     else:
         if cluster_key:
-            logger.warning("Cluster key '%s' not found in obs columns: %s",
-                          cluster_key, list(adata.obs.columns))
+            logger.warning(
+                "Cluster key '%s' not found in obs columns: %s",
+                cluster_key,
+                list(adata.obs.columns),
+            )
 
     # 5. Spatial autocorrelation (Moran's I) on numeric features
     logger.info("Spatial autocorrelation (Moran's I) on X features...")
     try:
-        sq.gr.spatial_autocorr(adata, mode='moran')
-        moranI = adata.uns.get('moranI')
+        sq.gr.spatial_autocorr(adata, mode="moran")
+        moranI = adata.uns.get("moranI")
         if moranI is not None and output_dir:
-            moranI.to_csv(output_dir / 'morans_i.csv')
+            moranI.to_csv(output_dir / "morans_i.csv")
             logger.info("  Saved: morans_i.csv (%d features)", len(moranI))
 
             # Log top spatially autocorrelated features
-            top = moranI.sort_values('I', ascending=False).head(10)
+            top = moranI.sort_values("I", ascending=False).head(10)
             logger.info("  Top spatially autocorrelated features:")
             for feat, row in top.iterrows():
-                logger.info("    %s: I=%.3f (p=%.2e)", feat, row['I'], row.get('pval_norm', float('nan')))
+                logger.info(
+                    "    %s: I=%.3f (p=%.2e)", feat, row["I"], row.get("pval_norm", float("nan"))
+                )
     except Exception as e:
         logger.warning("  Moran's I failed: %s", e)
 
@@ -711,6 +787,7 @@ def run_squidpy_analyses(adata, cluster_key=None, output_dir=None):
 # ---------------------------------------------------------------------------
 # SpatialData assembly
 # ---------------------------------------------------------------------------
+
 
 def assemble_spatialdata(adata, shapes=None, images=None):
     """Assemble SpatialData object from components.
@@ -734,13 +811,13 @@ def assemble_spatialdata(adata, shapes=None, images=None):
     region_names = list(shapes.keys()) if shapes else []
     if region_names:
         primary_region = region_names[0]
-        adata.obs['region'] = primary_region
-        adata.obs['instance_id'] = adata.obs.index
+        adata.obs["region"] = primary_region
+        adata.obs["instance_id"] = adata.obs.index
         adata = TableModel.parse(
             adata,
             region=primary_region,
-            region_key='region',
-            instance_key='instance_id',
+            region_key="region",
+            instance_key="instance_id",
         )
 
     # Parse shapes through ShapesModel
@@ -755,7 +832,7 @@ def assemble_spatialdata(adata, shapes=None, images=None):
     sdata = SpatialData(
         images=images or {},
         shapes=parsed_shapes,
-        tables={'table': adata},
+        tables={"table": adata},
     )
 
     return sdata
@@ -764,6 +841,7 @@ def assemble_spatialdata(adata, shapes=None, images=None):
 # ---------------------------------------------------------------------------
 # Main conversion pipeline
 # ---------------------------------------------------------------------------
+
 
 def convert(args):
     """Main conversion logic."""
@@ -787,21 +865,21 @@ def convert(args):
     if not cell_type:
         # Try to infer from first detection or filename
         sample = detections[0] if detections else {}
-        cell_type = sample.get('cell_type', '')
+        cell_type = sample.get("cell_type", "")
         if not cell_type:
             stem = detections_path.stem.lower()
-            for ct in ('vessel', 'nmj', 'mk', 'cell', 'islet', 'mesothelium', 'tissue_pattern'):
+            for ct in ("vessel", "nmj", "mk", "cell", "islet", "mesothelium", "tissue_pattern"):
                 if ct in stem:
                     cell_type = ct
                     break
         if not cell_type:
-            cell_type = 'cell'
+            cell_type = "cell"
         logger.info("Inferred cell type: %s", cell_type)
 
     # Get pixel size from first detection
     pixel_size_um = 1.0
     for det in detections[:10]:
-        ps = det.get('pixel_size_um') or det.get('features', {}).get('pixel_size_um')
+        ps = det.get("pixel_size_um") or det.get("features", {}).get("pixel_size_um")
         if ps and ps > 0:
             pixel_size_um = float(ps)
             break
@@ -814,7 +892,9 @@ def convert(args):
     shapes = {}
     if not args.no_shapes:
         tiles_dir = args.tiles_dir
-        shapes = build_shapes(detections, cell_type, tiles_dir=tiles_dir, pixel_size_um=pixel_size_um)
+        shapes = build_shapes(
+            detections, cell_type, tiles_dir=tiles_dir, pixel_size_um=pixel_size_um
+        )
     else:
         logger.info("Shape extraction disabled (--no-shapes)")
 
@@ -829,7 +909,9 @@ def convert(args):
     # 5. Run squidpy analyses
     if args.run_squidpy:
         squidpy_out = output_path.parent / f"{output_path.stem}_squidpy"
-        adata = run_squidpy_analyses(adata, cluster_key=args.squidpy_cluster_key, output_dir=squidpy_out)
+        adata = run_squidpy_analyses(
+            adata, cluster_key=args.squidpy_cluster_key, output_dir=squidpy_out
+        )
 
     # 6. Assemble and write
     logger.info("Assembling SpatialData...")
@@ -838,7 +920,8 @@ def convert(args):
 
     # Write atomically: write to tmp dir, then rename
     import shutil
-    tmp_path = output_path.with_suffix('.zarr.tmp')
+
+    tmp_path = output_path.with_suffix(".zarr.tmp")
     if tmp_path.exists():
         shutil.rmtree(tmp_path)
 
@@ -857,16 +940,18 @@ def convert(args):
     print(f"  Detections: {len(detections):,}")
     print(f"  Cell type:  {cell_type}")
     print(f"  Features:   {adata.n_vars} in X, {len(adata.obsm)} obsm layers")
-    print(f"  Shapes:     {len(shapes)} layers ({', '.join(f'{k}: {len(v)}' for k, v in shapes.items())})")
+    print(
+        f"  Shapes:     {len(shapes)} layers ({', '.join(f'{k}: {len(v)}' for k, v in shapes.items())})"
+    )
     print(f"  Images:     {len(images)} layers")
     print(f"  Output:     {output_path}")
     if args.run_squidpy:
         print(f"  Squidpy:    results in {squidpy_out}/")
     print("=" * 60)
     print("\nLoad in Python:")
-    print(f"  import spatialdata as sd")
+    print("  import spatialdata as sd")
     print(f"  sdata = sd.read_zarr('{output_path}')")
-    print(f"  adata = sdata['table']")
+    print("  adata = sdata['table']")
     print()
 
 
@@ -874,9 +959,18 @@ def convert(args):
 # Lightweight API for pipeline integration (no argparse)
 # ---------------------------------------------------------------------------
 
-def export_spatialdata(detections, output_path, cell_type='cell',
-                       tiles_dir=None, zarr_image=None, pixel_size_um=1.0,
-                       run_squidpy=False, squidpy_cluster_key=None, overwrite=True):
+
+def export_spatialdata(
+    detections,
+    output_path,
+    cell_type="cell",
+    tiles_dir=None,
+    zarr_image=None,
+    pixel_size_um=1.0,
+    run_squidpy=False,
+    squidpy_cluster_key=None,
+    overwrite=True,
+):
     """Programmatic API for converting detections to SpatialData.
 
     Called from segmentation/pipeline/finalize.py for automatic export.
@@ -910,7 +1004,9 @@ def export_spatialdata(detections, output_path, cell_type='cell',
         adata = build_anndata(detections, cell_type)
 
         # Extract shapes
-        shapes = build_shapes(detections, cell_type, tiles_dir=tiles_dir, pixel_size_um=pixel_size_um)
+        shapes = build_shapes(
+            detections, cell_type, tiles_dir=tiles_dir, pixel_size_um=pixel_size_um
+        )
 
         # Link image
         images = {}
@@ -922,13 +1018,16 @@ def export_spatialdata(detections, output_path, cell_type='cell',
         # Squidpy analyses
         if run_squidpy:
             squidpy_out = output_path.parent / f"{output_path.stem}_squidpy"
-            adata = run_squidpy_analyses(adata, cluster_key=squidpy_cluster_key, output_dir=squidpy_out)
+            adata = run_squidpy_analyses(
+                adata, cluster_key=squidpy_cluster_key, output_dir=squidpy_out
+            )
 
         # Assemble and write atomically
         import shutil
+
         sdata = assemble_spatialdata(adata, shapes=shapes, images=images)
 
-        tmp_path = output_path.with_suffix('.zarr.tmp')
+        tmp_path = output_path.with_suffix(".zarr.tmp")
         if tmp_path.exists():
             shutil.rmtree(tmp_path)
 
@@ -938,8 +1037,9 @@ def export_spatialdata(detections, output_path, cell_type='cell',
             shutil.rmtree(output_path)
         tmp_path.rename(output_path)
 
-        logger.info("SpatialData written: %s (%d obs, %d shapes)",
-                    output_path, adata.n_obs, len(shapes))
+        logger.info(
+            "SpatialData written: %s (%d obs, %d shapes)", output_path, adata.n_obs, len(shapes)
+        )
         return output_path
 
     except Exception as e:
@@ -951,61 +1051,71 @@ def export_spatialdata(detections, output_path, cell_type='cell',
 # CLI
 # ---------------------------------------------------------------------------
 
+
 def parse_args():
     parser = argparse.ArgumentParser(
-        description='Convert pipeline detections to SpatialData format',
+        description="Convert pipeline detections to SpatialData format",
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog=__doc__,
     )
-    parser.add_argument('--detections', required=True,
-                        help='Path to detections JSON file')
-    parser.add_argument('--output', required=True,
-                        help='Output path for .zarr store')
-    parser.add_argument('--cell-type', default=None,
-                        help='Cell type (auto-detected from detections if not specified)')
-    parser.add_argument('--tiles-dir', default=None,
-                        help='Path to tiles directory for HDF5 mask contour extraction')
-    parser.add_argument('--zarr-image', default=None,
-                        help='Path to OME-Zarr image to link (lazy/dask, no RAM)')
-    parser.add_argument('--score-threshold', type=float, default=None,
-                        help='Filter detections by rf_prediction >= threshold')
-    parser.add_argument('--no-shapes', action='store_true',
-                        help='Skip shape extraction (table only)')
-    parser.add_argument('--run-squidpy', action='store_true',
-                        help='Run squidpy spatial analyses')
-    parser.add_argument('--squidpy-cluster-key', default=None,
-                        help='obs column for squidpy cluster analyses (e.g., tdTomato_class)')
-    parser.add_argument('--overwrite', action='store_true',
-                        help='Overwrite existing output')
+    parser.add_argument("--detections", required=True, help="Path to detections JSON file")
+    parser.add_argument("--output", required=True, help="Output path for .zarr store")
+    parser.add_argument(
+        "--cell-type",
+        default=None,
+        help="Cell type (auto-detected from detections if not specified)",
+    )
+    parser.add_argument(
+        "--tiles-dir", default=None, help="Path to tiles directory for HDF5 mask contour extraction"
+    )
+    parser.add_argument(
+        "--zarr-image", default=None, help="Path to OME-Zarr image to link (lazy/dask, no RAM)"
+    )
+    parser.add_argument(
+        "--score-threshold",
+        type=float,
+        default=None,
+        help="Filter detections by rf_prediction >= threshold",
+    )
+    parser.add_argument(
+        "--no-shapes", action="store_true", help="Skip shape extraction (table only)"
+    )
+    parser.add_argument("--run-squidpy", action="store_true", help="Run squidpy spatial analyses")
+    parser.add_argument(
+        "--squidpy-cluster-key",
+        default=None,
+        help="obs column for squidpy cluster analyses (e.g., tdTomato_class)",
+    )
+    parser.add_argument("--overwrite", action="store_true", help="Overwrite existing output")
     return parser.parse_args()
 
 
 def main():
     args = parse_args()
-    setup_logging(level='INFO')
+    setup_logging(level="INFO")
 
     # Check dependencies
     missing = []
-    for pkg in ('spatialdata', 'anndata', 'geopandas', 'scanpy'):
+    for pkg in ("spatialdata", "anndata", "geopandas", "scanpy"):
         try:
             __import__(pkg)
         except ImportError:
             missing.append(pkg)
     if args.run_squidpy:
         try:
-            __import__('squidpy')
+            __import__("squidpy")
         except ImportError:
-            missing.append('squidpy')
+            missing.append("squidpy")
     if missing:
-        logger.error("Missing dependencies: %s", ', '.join(missing))
-        logger.error("Install with: pip install %s", ' '.join(missing))
+        logger.error("Missing dependencies: %s", ", ".join(missing))
+        logger.error("Install with: pip install %s", " ".join(missing))
         sys.exit(1)
 
     # Suppress noisy warnings
-    warnings.filterwarnings('ignore', category=FutureWarning)
+    warnings.filterwarnings("ignore", category=FutureWarning)
 
     convert(args)
 
 
-if __name__ == '__main__':
+if __name__ == "__main__":
     main()

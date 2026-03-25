@@ -30,9 +30,10 @@ Usage:
     )
 """
 
-import numpy as np
+from typing import Any
+
 import cv2
-from typing import Dict, Any, Optional, List
+import numpy as np
 from scipy.ndimage import distance_transform_edt, sobel
 from scipy.spatial import ConvexHull
 from skimage.morphology import skeletonize
@@ -48,78 +49,78 @@ logger = get_logger(__name__)
 
 # Ring/Wall Features (5 features)
 RING_WALL_FEATURE_NAMES = [
-    'ring_completeness',       # Fraction of perimeter with SMA signal
-    'wall_thickness_cv',       # Coefficient of variation of wall thickness (std/mean)
-    'wall_asymmetry',          # max/min wall thickness ratio
-    'lumen_wall_ratio',        # lumen_area / wall_area
-    'wall_fraction',           # wall_area / outer_area
+    "ring_completeness",  # Fraction of perimeter with SMA signal
+    "wall_thickness_cv",  # Coefficient of variation of wall thickness (std/mean)
+    "wall_asymmetry",  # max/min wall thickness ratio
+    "lumen_wall_ratio",  # lumen_area / wall_area
+    "wall_fraction",  # wall_area / outer_area
 ]
 
 # Diameter/Size Features (4 features + 6 scale-invariant features)
 DIAMETER_SIZE_FEATURE_NAMES = [
-    'outer_diameter_um',       # Outer diameter in microns
-    'inner_diameter_um',       # Inner diameter in microns
-    'diameter_ratio',          # inner/outer diameter ratio (scale-invariant)
-    'hydraulic_diameter',      # 4 * area / perimeter (flow characteristic)
+    "outer_diameter_um",  # Outer diameter in microns
+    "inner_diameter_um",  # Inner diameter in microns
+    "diameter_ratio",  # inner/outer diameter ratio (scale-invariant)
+    "hydraulic_diameter",  # 4 * area / perimeter (flow characteristic)
 ]
 
 # Log-transformed size features for scale-invariant ML (3 features)
 # These reduce the impact of size on classification
 LOG_SIZE_FEATURE_NAMES = [
-    'log_area',                # log(outer_area) - reduces size bias
-    'log_diameter',            # log(outer_diameter_um) - reduces size bias
-    'log_perimeter',           # log(outer_perimeter) - reduces size bias
+    "log_area",  # log(outer_area) - reduces size bias
+    "log_diameter",  # log(outer_diameter_um) - reduces size bias
+    "log_perimeter",  # log(outer_perimeter) - reduces size bias
 ]
 
 # Size class categorical feature (1 feature, encoded as numeric)
 SIZE_CLASS_FEATURE_NAMES = [
-    'size_class',              # 0=capillary(<10um), 1=arteriole(10-50um), 2=small_artery(50-150um), 3=artery(>150um)
+    "size_class",  # 0=capillary(<10um), 1=arteriole(10-50um), 2=small_artery(50-150um), 3=artery(>150um)
 ]
 
 # Shape Features (5 features)
 SHAPE_FEATURE_NAMES = [
-    'circularity',             # 4*pi*area/perimeter^2
-    'ellipticity',             # 1 - (minor_axis/major_axis)
-    'convexity',               # area / convex_hull_area
-    'roughness',               # perimeter / convex_hull_perimeter
-    'compactness',             # perimeter^2 / area
+    "circularity",  # 4*pi*area/perimeter^2
+    "ellipticity",  # 1 - (minor_axis/major_axis)
+    "convexity",  # area / convex_hull_area
+    "roughness",  # perimeter / convex_hull_perimeter
+    "compactness",  # perimeter^2 / area
 ]
 
 # Intensity/Gradient Features from SMA channel (6 features)
 INTENSITY_GRADIENT_FEATURE_NAMES = [
-    'wall_intensity_mean',     # Mean SMA intensity in wall region
-    'wall_intensity_std',      # Std of SMA intensity in wall
-    'lumen_intensity_mean',    # Mean intensity in lumen (should be low)
-    'wall_lumen_contrast',     # (wall_mean - lumen_mean) / wall_mean
-    'edge_gradient_mean',      # Mean gradient magnitude at outer boundary
-    'edge_gradient_std',       # Edge sharpness consistency
+    "wall_intensity_mean",  # Mean SMA intensity in wall region
+    "wall_intensity_std",  # Std of SMA intensity in wall
+    "lumen_intensity_mean",  # Mean intensity in lumen (should be low)
+    "wall_lumen_contrast",  # (wall_mean - lumen_mean) / wall_mean
+    "edge_gradient_mean",  # Mean gradient magnitude at outer boundary
+    "edge_gradient_std",  # Edge sharpness consistency
 ]
 
 # Context Features (2 features)
 CONTEXT_FEATURE_NAMES = [
-    'background_intensity',    # Mean intensity in region just outside vessel
-    'wall_background_contrast', # Contrast between wall and background
+    "background_intensity",  # Mean intensity in region just outside vessel
+    "wall_background_contrast",  # Contrast between wall and background
 ]
 
 # Additional derived features (5 features)
 DERIVED_FEATURE_NAMES = [
-    'wall_thickness_range',    # max - min wall thickness
-    'wall_eccentricity',       # Measure of wall shape eccentricity
-    'lumen_circularity',       # Circularity of lumen contour
-    'center_offset',           # Distance between outer and inner centers
-    'wall_coverage',           # Fraction of outer perimeter covered by wall
+    "wall_thickness_range",  # max - min wall thickness
+    "wall_eccentricity",  # Measure of wall shape eccentricity
+    "lumen_circularity",  # Circularity of lumen contour
+    "center_offset",  # Distance between outer and inner centers
+    "wall_coverage",  # Fraction of outer perimeter covered by wall
 ]
 
 # Complete list of vessel-specific feature names
 VESSEL_FEATURE_NAMES = (
-    RING_WALL_FEATURE_NAMES +
-    DIAMETER_SIZE_FEATURE_NAMES +
-    LOG_SIZE_FEATURE_NAMES +         # New: log-transformed size features
-    SIZE_CLASS_FEATURE_NAMES +       # New: size class categorical
-    SHAPE_FEATURE_NAMES +
-    INTENSITY_GRADIENT_FEATURE_NAMES +
-    CONTEXT_FEATURE_NAMES +
-    DERIVED_FEATURE_NAMES
+    RING_WALL_FEATURE_NAMES
+    + DIAMETER_SIZE_FEATURE_NAMES
+    + LOG_SIZE_FEATURE_NAMES  # New: log-transformed size features
+    + SIZE_CLASS_FEATURE_NAMES  # New: size class categorical
+    + SHAPE_FEATURE_NAMES
+    + INTENSITY_GRADIENT_FEATURE_NAMES
+    + CONTEXT_FEATURE_NAMES
+    + DERIVED_FEATURE_NAMES
 )
 
 VESSEL_FEATURE_COUNT = len(VESSEL_FEATURE_NAMES)  # Should be ~32 features
@@ -127,11 +128,12 @@ VESSEL_FEATURE_COUNT = len(VESSEL_FEATURE_NAMES)  # Should be ~32 features
 # Size class thresholds (in microns) for vessel categorization
 # Based on standard vascular biology classifications
 SIZE_CLASS_THRESHOLDS = {
-    'capillary': (0, 10),        # 5-10 um (class 0)
-    'arteriole': (10, 50),       # 10-50 um (class 1)
-    'small_artery': (50, 150),   # 50-150 um (class 2)
-    'artery': (150, 1e9)            # >150 um (class 3)
+    "capillary": (0, 10),  # 5-10 um (class 0)
+    "arteriole": (10, 50),  # 10-50 um (class 1)
+    "small_artery": (50, 150),  # 50-150 um (class 2)
+    "artery": (150, 1e9),  # >150 um (class 3)
 }
+
 
 def get_size_class(diameter_um: float) -> int:
     """
@@ -152,6 +154,7 @@ def get_size_class(diameter_um: float) -> int:
     else:
         return 3  # artery
 
+
 def get_size_class_name(size_class: int) -> str:
     """
     Get human-readable name for size class.
@@ -162,7 +165,7 @@ def get_size_class_name(size_class: int) -> str:
     Returns:
         Size class name string
     """
-    names = ['capillary', 'arteriole', 'small_artery', 'artery']
+    names = ["capillary", "arteriole", "small_artery", "artery"]
     return names[min(size_class, 3)]
 
 
@@ -170,15 +173,16 @@ def get_size_class_name(size_class: int) -> str:
 # MAIN FEATURE EXTRACTION FUNCTION
 # =============================================================================
 
+
 def extract_vessel_features(
     wall_mask: np.ndarray,
-    lumen_mask: Optional[np.ndarray],
+    lumen_mask: np.ndarray | None,
     sma_channel: np.ndarray,
     outer_contour: np.ndarray,
-    inner_contour: Optional[np.ndarray],
+    inner_contour: np.ndarray | None,
     pixel_size_um: float = 0.22,
-    binary_mask: Optional[np.ndarray] = None,
-) -> Dict[str, float]:
+    binary_mask: np.ndarray | None = None,
+) -> dict[str, float]:
     """
     Extract comprehensive vessel-specific features.
 
@@ -225,8 +229,7 @@ def extract_vessel_features(
 
     # Extract feature categories
     ring_wall_features = _extract_ring_wall_features(
-        wall_mask, lumen_mask, outer_contour, inner_contour,
-        pixel_size_um, binary_mask
+        wall_mask, lumen_mask, outer_contour, inner_contour, pixel_size_um, binary_mask
     )
     features.update(ring_wall_features)
 
@@ -235,19 +238,13 @@ def extract_vessel_features(
     )
     features.update(diameter_features)
 
-    shape_features = _extract_shape_features(
-        wall_mask, outer_contour, inner_contour
-    )
+    shape_features = _extract_shape_features(wall_mask, outer_contour, inner_contour)
     features.update(shape_features)
 
-    intensity_features = _extract_intensity_features(
-        wall_mask, lumen_mask, sma_norm, outer_contour
-    )
+    intensity_features = _extract_intensity_features(wall_mask, lumen_mask, sma_norm, outer_contour)
     features.update(intensity_features)
 
-    context_features = _extract_context_features(
-        wall_mask, sma_norm, outer_contour
-    )
+    context_features = _extract_context_features(wall_mask, sma_norm, outer_contour)
     features.update(context_features)
 
     derived_features = _extract_derived_features(
@@ -262,14 +259,15 @@ def extract_vessel_features(
 # RING/WALL FEATURE EXTRACTION
 # =============================================================================
 
+
 def _extract_ring_wall_features(
     wall_mask: np.ndarray,
-    lumen_mask: Optional[np.ndarray],
+    lumen_mask: np.ndarray | None,
     outer_contour: np.ndarray,
-    inner_contour: Optional[np.ndarray],
+    inner_contour: np.ndarray | None,
     pixel_size_um: float,
-    binary_mask: Optional[np.ndarray] = None,
-) -> Dict[str, Optional[float]]:
+    binary_mask: np.ndarray | None = None,
+) -> dict[str, float | None]:
     """
     Extract ring/wall integrity and uniformity features.
 
@@ -277,11 +275,11 @@ def _extract_ring_wall_features(
     which is important for distinguishing real vessels from artifacts.
     """
     features = {
-        'ring_completeness': None,
-        'wall_thickness_cv': None,
-        'wall_asymmetry': None,
-        'lumen_wall_ratio': None,
-        'wall_fraction': None,
+        "ring_completeness": None,
+        "wall_thickness_cv": None,
+        "wall_asymmetry": None,
+        "lumen_wall_ratio": None,
+        "wall_fraction": None,
     }
 
     # Wall and outer areas
@@ -293,13 +291,13 @@ def _extract_ring_wall_features(
     if lumen_mask is not None:
         lumen_area = float(lumen_mask.sum())
         outer_area = wall_area + lumen_area
-        features['lumen_wall_ratio'] = lumen_area / wall_area if wall_area > 0 else None
+        features["lumen_wall_ratio"] = lumen_area / wall_area if wall_area > 0 else None
 
-    features['wall_fraction'] = wall_area / outer_area if outer_area > 0 else None
+    features["wall_fraction"] = wall_area / outer_area if outer_area > 0 else None
 
     # Ring completeness - fraction of perimeter with SMA signal
     if binary_mask is not None and inner_contour is not None:
-        features['ring_completeness'] = _compute_ring_completeness(
+        features["ring_completeness"] = _compute_ring_completeness(
             outer_contour, inner_contour, binary_mask
         )
 
@@ -316,10 +314,14 @@ def _extract_ring_wall_features(
             max_thickness = np.max(wall_thicknesses)
 
             # Coefficient of variation (std/mean, lower = more uniform = vessel-like)
-            features['wall_thickness_cv'] = std_thickness / mean_thickness if mean_thickness > 0 else None
+            features["wall_thickness_cv"] = (
+                std_thickness / mean_thickness if mean_thickness > 0 else None
+            )
 
             # Wall asymmetry: max/min ratio
-            features['wall_asymmetry'] = max_thickness / min_thickness if min_thickness > 0 else None
+            features["wall_asymmetry"] = (
+                max_thickness / min_thickness if min_thickness > 0 else None
+            )
 
     return features
 
@@ -366,7 +368,7 @@ def _compute_ring_completeness(
     adaptive_samples = int(approx_perimeter_px / 2)
 
     # Clamp to reasonable range
-    MIN_SAMPLES = 24   # Minimum for very small vessels (~5um capillaries)
+    MIN_SAMPLES = 24  # Minimum for very small vessels (~5um capillaries)
     MAX_SAMPLES = 360  # Maximum for very large vessels (~500um arteries)
     adaptive_samples = max(MIN_SAMPLES, min(MAX_SAMPLES, adaptive_samples))
 
@@ -472,13 +474,14 @@ def _measure_wall_thickness(
 # DIAMETER/SIZE FEATURE EXTRACTION
 # =============================================================================
 
+
 def _extract_diameter_features(
     wall_mask: np.ndarray,
-    lumen_mask: Optional[np.ndarray],
+    lumen_mask: np.ndarray | None,
     outer_contour: np.ndarray,
-    inner_contour: Optional[np.ndarray],
+    inner_contour: np.ndarray | None,
     pixel_size_um: float,
-) -> Dict[str, Optional[float]]:
+) -> dict[str, float | None]:
     """
     Extract diameter and size-related features.
 
@@ -488,16 +491,16 @@ def _extract_diameter_features(
     Includes log-transformed features and size class for scale-invariant ML.
     """
     features = {
-        'outer_diameter_um': None,
-        'inner_diameter_um': None,
-        'diameter_ratio': None,
-        'hydraulic_diameter': None,
+        "outer_diameter_um": None,
+        "inner_diameter_um": None,
+        "diameter_ratio": None,
+        "hydraulic_diameter": None,
         # Log-transformed features (scale-invariant)
-        'log_area': None,
-        'log_diameter': None,
-        'log_perimeter': None,
+        "log_area": None,
+        "log_diameter": None,
+        "log_perimeter": None,
         # Size class categorical feature
-        'size_class': None,
+        "size_class": None,
     }
 
     # Fit ellipse to outer contour
@@ -506,7 +509,7 @@ def _extract_diameter_features(
             outer_ellipse = cv2.fitEllipse(outer_contour)
             (_, _), (minor_out, major_out), _ = outer_ellipse
             outer_diameter_um = max(major_out, minor_out) * pixel_size_um
-            features['outer_diameter_um'] = float(outer_diameter_um)
+            features["outer_diameter_um"] = float(outer_diameter_um)
         except cv2.error:
             pass
 
@@ -516,22 +519,22 @@ def _extract_diameter_features(
             inner_ellipse = cv2.fitEllipse(inner_contour)
             (_, _), (minor_in, major_in), _ = inner_ellipse
             inner_diameter_um = max(major_in, minor_in) * pixel_size_um
-            features['inner_diameter_um'] = float(inner_diameter_um)
+            features["inner_diameter_um"] = float(inner_diameter_um)
 
             # Diameter ratio
-            if features['outer_diameter_um'] is not None and features['outer_diameter_um'] > 0:
-                features['diameter_ratio'] = inner_diameter_um / features['outer_diameter_um']
+            if features["outer_diameter_um"] is not None and features["outer_diameter_um"] > 0:
+                features["diameter_ratio"] = inner_diameter_um / features["outer_diameter_um"]
         except cv2.error:
             pass
 
     # Hydraulic diameter: 4 * area / perimeter (flow characteristic)
     # For the lumen (where blood flows)
     if lumen_mask is not None:
-        lumen_area = float(lumen_mask.sum()) * pixel_size_um ** 2
+        lumen_area = float(lumen_mask.sum()) * pixel_size_um**2
         if inner_contour is not None:
             lumen_perimeter = cv2.arcLength(inner_contour, True) * pixel_size_um
             if lumen_perimeter > 0:
-                features['hydraulic_diameter'] = 4 * lumen_area / lumen_perimeter
+                features["hydraulic_diameter"] = 4 * lumen_area / lumen_perimeter
 
     # =========================================================================
     # LOG-TRANSFORMED SIZE FEATURES (Scale-invariant for ML)
@@ -542,21 +545,21 @@ def _extract_diameter_features(
 
     # Calculate outer area and perimeter for log features
     outer_area = cv2.contourArea(outer_contour)
-    outer_area_um2 = outer_area * pixel_size_um ** 2
+    outer_area_um2 = outer_area * pixel_size_um**2
     outer_perimeter = cv2.arcLength(outer_contour, True)
     outer_perimeter_um = outer_perimeter * pixel_size_um
 
     # Log area (add 1 to avoid log(0))
     if outer_area_um2 > 0:
-        features['log_area'] = float(np.log(outer_area_um2 + 1))
+        features["log_area"] = float(np.log(outer_area_um2 + 1))
 
     # Log diameter
-    if features['outer_diameter_um'] is not None and features['outer_diameter_um'] > 0:
-        features['log_diameter'] = float(np.log(features['outer_diameter_um'] + 1))
+    if features["outer_diameter_um"] is not None and features["outer_diameter_um"] > 0:
+        features["log_diameter"] = float(np.log(features["outer_diameter_um"] + 1))
 
     # Log perimeter
     if outer_perimeter_um > 0:
-        features['log_perimeter'] = float(np.log(outer_perimeter_um + 1))
+        features["log_perimeter"] = float(np.log(outer_perimeter_um + 1))
 
     # =========================================================================
     # SIZE CLASS CATEGORICAL FEATURE
@@ -564,8 +567,8 @@ def _extract_diameter_features(
     # Explicit size binning helps RF classifiers and enables stratified sampling
     # Classes: 0=capillary(<10um), 1=arteriole(10-50um), 2=small_artery(50-150um), 3=artery(>150um)
 
-    if features['outer_diameter_um'] is not None:
-        features['size_class'] = float(get_size_class(features['outer_diameter_um']))
+    if features["outer_diameter_um"] is not None:
+        features["size_class"] = float(get_size_class(features["outer_diameter_um"]))
 
     return features
 
@@ -574,11 +577,12 @@ def _extract_diameter_features(
 # SHAPE FEATURE EXTRACTION
 # =============================================================================
 
+
 def _extract_shape_features(
     wall_mask: np.ndarray,
     outer_contour: np.ndarray,
-    inner_contour: Optional[np.ndarray],
-) -> Dict[str, Optional[float]]:
+    inner_contour: np.ndarray | None,
+) -> dict[str, float | None]:
     """
     Extract geometric shape descriptors.
 
@@ -586,11 +590,11 @@ def _extract_shape_features(
     which helps distinguish vessels from other circular structures.
     """
     features = {
-        'circularity': None,
-        'ellipticity': None,
-        'convexity': None,
-        'roughness': None,
-        'compactness': None,
+        "circularity": None,
+        "ellipticity": None,
+        "convexity": None,
+        "roughness": None,
+        "compactness": None,
     }
 
     # Outer contour metrics
@@ -601,10 +605,10 @@ def _extract_shape_features(
         return features
 
     # Circularity: 4*pi*area/perimeter^2 (1.0 = perfect circle)
-    features['circularity'] = 4 * np.pi * outer_area / (outer_perimeter ** 2)
+    features["circularity"] = 4 * np.pi * outer_area / (outer_perimeter**2)
 
     # Compactness: perimeter^2 / area (inverse of circularity * 4*pi)
-    features['compactness'] = (outer_perimeter ** 2) / outer_area
+    features["compactness"] = (outer_perimeter**2) / outer_area
 
     # Ellipticity: 1 - (minor_axis/major_axis)
     if len(outer_contour) >= 5:
@@ -612,7 +616,7 @@ def _extract_shape_features(
             ellipse = cv2.fitEllipse(outer_contour)
             (_, _), (minor_ax, major_ax), _ = ellipse
             if major_ax > 0:
-                features['ellipticity'] = 1.0 - (min(minor_ax, major_ax) / max(minor_ax, major_ax))
+                features["ellipticity"] = 1.0 - (min(minor_ax, major_ax) / max(minor_ax, major_ax))
         except cv2.error:
             pass
 
@@ -633,11 +637,11 @@ def _extract_shape_features(
 
             # Convexity: area / convex_hull_area (1.0 = convex)
             if hull_area > 0:
-                features['convexity'] = outer_area / hull_area
+                features["convexity"] = outer_area / hull_area
 
             # Roughness: perimeter / convex_hull_perimeter (1.0 = smooth)
             if hull_perimeter > 0:
-                features['roughness'] = outer_perimeter / hull_perimeter
+                features["roughness"] = outer_perimeter / hull_perimeter
     except Exception:
         pass
 
@@ -648,12 +652,13 @@ def _extract_shape_features(
 # INTENSITY/GRADIENT FEATURE EXTRACTION
 # =============================================================================
 
+
 def _extract_intensity_features(
     wall_mask: np.ndarray,
-    lumen_mask: Optional[np.ndarray],
+    lumen_mask: np.ndarray | None,
     sma_channel: np.ndarray,
     outer_contour: np.ndarray,
-) -> Dict[str, Optional[float]]:
+) -> dict[str, float | None]:
     """
     Extract intensity and gradient features from SMA channel.
 
@@ -661,38 +666,37 @@ def _extract_intensity_features(
     critical for vessel identification and type classification.
     """
     features = {
-        'wall_intensity_mean': None,
-        'wall_intensity_std': None,
-        'lumen_intensity_mean': None,
-        'wall_lumen_contrast': None,
-        'edge_gradient_mean': None,
-        'edge_gradient_std': None,
+        "wall_intensity_mean": None,
+        "wall_intensity_std": None,
+        "lumen_intensity_mean": None,
+        "wall_lumen_contrast": None,
+        "edge_gradient_mean": None,
+        "edge_gradient_std": None,
     }
 
     # Wall intensity statistics
     wall_pixels = sma_channel[wall_mask]
     if len(wall_pixels) > 0:
-        features['wall_intensity_mean'] = float(np.mean(wall_pixels))
-        features['wall_intensity_std'] = float(np.std(wall_pixels))
+        features["wall_intensity_mean"] = float(np.mean(wall_pixels))
+        features["wall_intensity_std"] = float(np.std(wall_pixels))
 
     # Lumen intensity (should be low for real vessels)
     if lumen_mask is not None:
         lumen_pixels = sma_channel[lumen_mask]
         if len(lumen_pixels) > 0:
-            features['lumen_intensity_mean'] = float(np.mean(lumen_pixels))
+            features["lumen_intensity_mean"] = float(np.mean(lumen_pixels))
 
             # Wall-lumen contrast
-            if features['wall_intensity_mean'] is not None and features['wall_intensity_mean'] > 0:
-                features['wall_lumen_contrast'] = (
-                    (features['wall_intensity_mean'] - features['lumen_intensity_mean']) /
-                    features['wall_intensity_mean']
-                )
+            if features["wall_intensity_mean"] is not None and features["wall_intensity_mean"] > 0:
+                features["wall_lumen_contrast"] = (
+                    features["wall_intensity_mean"] - features["lumen_intensity_mean"]
+                ) / features["wall_intensity_mean"]
 
     # Edge gradient at outer boundary
     edge_gradients = _compute_edge_gradients(sma_channel, outer_contour)
     if len(edge_gradients) > 0:
-        features['edge_gradient_mean'] = float(np.mean(edge_gradients))
-        features['edge_gradient_std'] = float(np.std(edge_gradients))
+        features["edge_gradient_mean"] = float(np.mean(edge_gradients))
+        features["edge_gradient_std"] = float(np.std(edge_gradients))
 
     return features
 
@@ -713,7 +717,7 @@ def _compute_edge_gradients(
     # Compute gradient magnitude using Sobel
     grad_x = sobel(image, axis=1)
     grad_y = sobel(image, axis=0)
-    grad_mag = np.sqrt(grad_x ** 2 + grad_y ** 2)
+    grad_mag = np.sqrt(grad_x**2 + grad_y**2)
 
     # Sample gradient at contour points
     gradients = []
@@ -731,12 +735,13 @@ def _compute_edge_gradients(
 # CONTEXT FEATURE EXTRACTION
 # =============================================================================
 
+
 def _extract_context_features(
     wall_mask: np.ndarray,
     sma_channel: np.ndarray,
     outer_contour: np.ndarray,
     background_margin: int = 10,
-) -> Dict[str, Optional[float]]:
+) -> dict[str, float | None]:
     """
     Extract contextual features from the region around the vessel.
 
@@ -744,8 +749,8 @@ def _extract_context_features(
     helping distinguish vessels from similarly shaped artifacts.
     """
     features = {
-        'background_intensity': None,
-        'wall_background_contrast': None,
+        "background_intensity": None,
+        "wall_background_contrast": None,
     }
 
     h, w = sma_channel.shape[:2]
@@ -755,7 +760,9 @@ def _extract_context_features(
     cv2.drawContours(outer_mask, [outer_contour], 0, 255, -1)
 
     # Dilate to get region just outside vessel
-    kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (background_margin * 2, background_margin * 2))
+    kernel = cv2.getStructuringElement(
+        cv2.MORPH_ELLIPSE, (background_margin * 2, background_margin * 2)
+    )
     dilated = cv2.dilate(outer_mask, kernel)
 
     # Background is dilated minus original
@@ -763,15 +770,15 @@ def _extract_context_features(
 
     background_pixels = sma_channel[background_mask]
     if len(background_pixels) > 0:
-        features['background_intensity'] = float(np.mean(background_pixels))
+        features["background_intensity"] = float(np.mean(background_pixels))
 
         # Wall-background contrast
         wall_pixels = sma_channel[wall_mask]
         if len(wall_pixels) > 0:
             wall_mean = np.mean(wall_pixels)
-            bg_mean = features['background_intensity']
+            bg_mean = features["background_intensity"]
             if bg_mean > 0:
-                features['wall_background_contrast'] = (wall_mean - bg_mean) / bg_mean
+                features["wall_background_contrast"] = (wall_mean - bg_mean) / bg_mean
 
     return features
 
@@ -780,13 +787,14 @@ def _extract_context_features(
 # DERIVED FEATURE EXTRACTION
 # =============================================================================
 
+
 def _extract_derived_features(
     wall_mask: np.ndarray,
-    lumen_mask: Optional[np.ndarray],
+    lumen_mask: np.ndarray | None,
     outer_contour: np.ndarray,
-    inner_contour: Optional[np.ndarray],
+    inner_contour: np.ndarray | None,
     pixel_size_um: float,
-) -> Dict[str, Optional[float]]:
+) -> dict[str, float | None]:
     """
     Extract additional derived features.
 
@@ -794,11 +802,11 @@ def _extract_derived_features(
     more discriminative features for classification.
     """
     features = {
-        'wall_thickness_range': None,
-        'wall_eccentricity': None,
-        'lumen_circularity': None,
-        'center_offset': None,
-        'wall_coverage': None,
+        "wall_thickness_range": None,
+        "wall_eccentricity": None,
+        "lumen_circularity": None,
+        "center_offset": None,
+        "wall_coverage": None,
     }
 
     # Wall thickness range
@@ -807,7 +815,9 @@ def _extract_derived_features(
             wall_mask, lumen_mask, inner_contour, pixel_size_um
         )
         if len(wall_thicknesses) >= 2:
-            features['wall_thickness_range'] = float(np.max(wall_thicknesses) - np.min(wall_thicknesses))
+            features["wall_thickness_range"] = float(
+                np.max(wall_thicknesses) - np.min(wall_thicknesses)
+            )
 
     # Wall eccentricity using ellipse fit
     if len(outer_contour) >= 5:
@@ -818,7 +828,7 @@ def _extract_derived_features(
                 # Eccentricity = sqrt(1 - (b/a)^2) where a >= b
                 a = max(major_ax, minor_ax) / 2
                 b = min(major_ax, minor_ax) / 2
-                features['wall_eccentricity'] = float(np.sqrt(1 - (b / a) ** 2))
+                features["wall_eccentricity"] = float(np.sqrt(1 - (b / a) ** 2))
         except cv2.error:
             pass
 
@@ -827,7 +837,7 @@ def _extract_derived_features(
         lumen_area = cv2.contourArea(inner_contour)
         lumen_perimeter = cv2.arcLength(inner_contour, True)
         if lumen_perimeter > 0:
-            features['lumen_circularity'] = 4 * np.pi * lumen_area / (lumen_perimeter ** 2)
+            features["lumen_circularity"] = 4 * np.pi * lumen_area / (lumen_perimeter**2)
 
     # Center offset: distance between outer and inner centers
     if inner_contour is not None and len(outer_contour) >= 5 and len(inner_contour) >= 5:
@@ -839,7 +849,7 @@ def _extract_derived_features(
             (cx_in, cy_in), _, _ = inner_ellipse
 
             offset_px = np.sqrt((cx_out - cx_in) ** 2 + (cy_out - cy_in) ** 2)
-            features['center_offset'] = float(offset_px * pixel_size_um)
+            features["center_offset"] = float(offset_px * pixel_size_um)
         except cv2.error:
             pass
 
@@ -855,10 +865,12 @@ def _extract_derived_features(
             # Expected wall area for complete ring (rough approximation)
             avg_radius = np.sqrt(outer_area / np.pi)
             expected_thickness = avg_radius * 0.1  # Assume 10% of radius
-            expected_wall_area = np.pi * avg_radius ** 2 - np.pi * (avg_radius - expected_thickness) ** 2
+            expected_wall_area = (
+                np.pi * avg_radius**2 - np.pi * (avg_radius - expected_thickness) ** 2
+            )
 
             if expected_wall_area > 0:
-                features['wall_coverage'] = min(1.0, wall_area / expected_wall_area)
+                features["wall_coverage"] = min(1.0, wall_area / expected_wall_area)
 
     return features
 
@@ -867,11 +879,12 @@ def _extract_derived_features(
 # BATCH EXTRACTION HELPER
 # =============================================================================
 
+
 def extract_vessel_features_batch(
-    candidates: List[Dict[str, Any]],
+    candidates: list[dict[str, Any]],
     tile: np.ndarray,
     pixel_size_um: float = 0.22,
-) -> List[Dict[str, float]]:
+) -> list[dict[str, float]]:
     """
     Extract vessel features for multiple candidates in batch.
 
@@ -893,9 +906,9 @@ def extract_vessel_features_batch(
     h, w = tile.shape[:2]
 
     for cand in candidates:
-        outer = cand['outer']
-        inner = cand.get('inner')
-        binary = cand.get('binary')
+        outer = cand["outer"]
+        inner = cand.get("inner")
+        binary = cand.get("binary")
 
         # Create masks (use uint8 for cv2.drawContours, then convert to bool)
         wall_mask = np.zeros((h, w), dtype=np.uint8)
@@ -926,7 +939,7 @@ def extract_vessel_features_batch(
             results.append(features)
         except Exception as e:
             logger.debug(f"Failed to extract vessel features: {e}")
-            results.append({name: None for name in VESSEL_FEATURE_NAMES})
+            results.append(dict.fromkeys(VESSEL_FEATURE_NAMES))
 
     return results
 
@@ -935,9 +948,10 @@ def extract_vessel_features_batch(
 # FEATURE VECTOR CONVERSION
 # =============================================================================
 
+
 def vessel_features_to_vector(
-    features: Dict[str, Any],
-    feature_names: Optional[List[str]] = None,
+    features: dict[str, Any],
+    feature_names: list[str] | None = None,
 ) -> np.ndarray:
     """
     Convert vessel feature dict to fixed-length numeric vector.
@@ -958,7 +972,9 @@ def vessel_features_to_vector(
     vector = []
     for name in feature_names:
         val = features.get(name)
-        if val is None or (isinstance(val, (float, np.floating)) and (np.isnan(val) or np.isinf(val))):
+        if val is None or (
+            isinstance(val, (float, np.floating)) and (np.isnan(val) or np.isinf(val))
+        ):
             vector.append(0.0)
         else:
             vector.append(float(val))
@@ -975,44 +991,44 @@ def vessel_features_to_vector(
 # channel_names from CZI metadata / CLI args. Kept only because existing
 # detection JSONs reference these names in feature keys.
 DEFAULT_CHANNEL_NAMES = {
-    0: 'nuclear',    # AF488 - Nuclear stain
-    1: 'sma',        # AF647 - Smooth muscle actin (primary detection)
-    2: 'pm',         # AF750 - Plasma membrane marker
-    3: 'cd31',       # AF555 - CD31 endothelial marker
+    0: "nuclear",  # AF488 - Nuclear stain
+    1: "sma",  # AF647 - Smooth muscle actin (primary detection)
+    2: "pm",  # AF750 - Plasma membrane marker
+    3: "cd31",  # AF555 - CD31 endothelial marker
 }
 
 # Multi-channel feature names (per channel)
 MULTICHANNEL_WALL_FEATURES = [
-    'wall_intensity_mean',
-    'wall_intensity_std',
-    'wall_intensity_median',
-    'wall_intensity_cv',
+    "wall_intensity_mean",
+    "wall_intensity_std",
+    "wall_intensity_median",
+    "wall_intensity_cv",
 ]
 
 MULTICHANNEL_LUMEN_FEATURES = [
-    'lumen_intensity_mean',
-    'lumen_intensity_std',
-    'lumen_intensity_median',
-    'lumen_intensity_cv',
+    "lumen_intensity_mean",
+    "lumen_intensity_std",
+    "lumen_intensity_median",
+    "lumen_intensity_cv",
 ]
 
 # Cross-channel ratio feature names
 CROSS_CHANNEL_RATIO_NAMES = [
-    'sma_cd31_wall_ratio',        # SMA/CD31 in wall (high for muscular vessels)
-    'sma_nuclear_wall_ratio',     # SMA/nuclear in wall
-    'cd31_nuclear_lumen_ratio',   # CD31/nuclear at lumen edge
-    'sma_pm_wall_ratio',          # SMA/PM in wall
-    'cd31_lumen_wall_ratio',      # CD31 lumen vs wall (high if CD31 at lumen edge)
-    'sma_wall_lumen_contrast',    # SMA contrast between wall and lumen
+    "sma_cd31_wall_ratio",  # SMA/CD31 in wall (high for muscular vessels)
+    "sma_nuclear_wall_ratio",  # SMA/nuclear in wall
+    "cd31_nuclear_lumen_ratio",  # CD31/nuclear at lumen edge
+    "sma_pm_wall_ratio",  # SMA/PM in wall
+    "cd31_lumen_wall_ratio",  # CD31 lumen vs wall (high if CD31 at lumen edge)
+    "sma_wall_lumen_contrast",  # SMA contrast between wall and lumen
 ]
 
 
 def extract_multichannel_intensity_features(
     wall_mask: np.ndarray,
-    lumen_mask: Optional[np.ndarray],
-    channels_data: Dict[int, np.ndarray],
-    channel_names: Dict[int, str] = None,
-) -> Dict[str, float]:
+    lumen_mask: np.ndarray | None,
+    channels_data: dict[int, np.ndarray],
+    channel_names: dict[int, str] = None,
+) -> dict[str, float]:
     """
     Extract intensity features from multiple channels.
 
@@ -1048,7 +1064,7 @@ def extract_multichannel_intensity_features(
     features = {}
 
     for ch_idx, ch_data in channels_data.items():
-        ch_name = channel_names.get(ch_idx, f'ch{ch_idx}')
+        ch_name = channel_names.get(ch_idx, f"ch{ch_idx}")
 
         # Ensure channel data matches mask dimensions
         if ch_data.shape[:2] != wall_mask.shape[:2]:
@@ -1070,16 +1086,16 @@ def extract_multichannel_intensity_features(
             cv_val = std_val / mean_val if mean_val > 0 else 0.0
 
             # Store with numeric index prefix (always)
-            features[f'ch{ch_idx}_wall_mean'] = mean_val
-            features[f'ch{ch_idx}_wall_std'] = std_val
-            features[f'ch{ch_idx}_wall_median'] = median_val
-            features[f'ch{ch_idx}_wall_cv'] = cv_val
+            features[f"ch{ch_idx}_wall_mean"] = mean_val
+            features[f"ch{ch_idx}_wall_std"] = std_val
+            features[f"ch{ch_idx}_wall_median"] = median_val
+            features[f"ch{ch_idx}_wall_cv"] = cv_val
 
             # Store with named prefix (for convenience)
-            features[f'{ch_name}_wall_mean'] = mean_val
-            features[f'{ch_name}_wall_std'] = std_val
-            features[f'{ch_name}_wall_median'] = median_val
-            features[f'{ch_name}_wall_cv'] = cv_val
+            features[f"{ch_name}_wall_mean"] = mean_val
+            features[f"{ch_name}_wall_std"] = std_val
+            features[f"{ch_name}_wall_median"] = median_val
+            features[f"{ch_name}_wall_cv"] = cv_val
 
         # Lumen intensity features
         if lumen_mask is not None:
@@ -1090,23 +1106,23 @@ def extract_multichannel_intensity_features(
                 median_val = float(np.median(lumen_pixels))
                 cv_val = std_val / mean_val if mean_val > 0 else 0.0
 
-                features[f'ch{ch_idx}_lumen_mean'] = mean_val
-                features[f'ch{ch_idx}_lumen_std'] = std_val
-                features[f'ch{ch_idx}_lumen_median'] = median_val
-                features[f'ch{ch_idx}_lumen_cv'] = cv_val
+                features[f"ch{ch_idx}_lumen_mean"] = mean_val
+                features[f"ch{ch_idx}_lumen_std"] = std_val
+                features[f"ch{ch_idx}_lumen_median"] = median_val
+                features[f"ch{ch_idx}_lumen_cv"] = cv_val
 
-                features[f'{ch_name}_lumen_mean'] = mean_val
-                features[f'{ch_name}_lumen_std'] = std_val
-                features[f'{ch_name}_lumen_median'] = median_val
-                features[f'{ch_name}_lumen_cv'] = cv_val
+                features[f"{ch_name}_lumen_mean"] = mean_val
+                features[f"{ch_name}_lumen_std"] = std_val
+                features[f"{ch_name}_lumen_median"] = median_val
+                features[f"{ch_name}_lumen_cv"] = cv_val
 
     return features
 
 
 def compute_channel_ratios(
-    multichannel_features: Dict[str, float],
-    channel_names: Dict[int, str] = None,
-) -> Dict[str, float]:
+    multichannel_features: dict[str, float],
+    channel_names: dict[int, str] = None,
+) -> dict[str, float]:
     """
     Compute biologically meaningful ratios between channels.
 
@@ -1135,7 +1151,7 @@ def compute_channel_ratios(
 
     ratios = {}
 
-    def safe_ratio(num_key: str, denom_key: str) -> Optional[float]:
+    def safe_ratio(num_key: str, denom_key: str) -> float | None:
         """Compute ratio safely, returning None if denominator is 0."""
         num = multichannel_features.get(num_key, 0)
         denom = multichannel_features.get(denom_key, 0)
@@ -1144,47 +1160,49 @@ def compute_channel_ratios(
         return float(num / denom) if num is not None else None
 
     # SMA / CD31 ratio in wall (high for muscular arteries)
-    ratios['sma_cd31_wall_ratio'] = safe_ratio('sma_wall_mean', 'cd31_wall_mean')
+    ratios["sma_cd31_wall_ratio"] = safe_ratio("sma_wall_mean", "cd31_wall_mean")
 
     # SMA / nuclear ratio in wall
-    ratios['sma_nuclear_wall_ratio'] = safe_ratio('sma_wall_mean', 'nuclear_wall_mean')
+    ratios["sma_nuclear_wall_ratio"] = safe_ratio("sma_wall_mean", "nuclear_wall_mean")
 
     # CD31 / nuclear ratio in lumen (endothelial presence at lumen)
-    ratios['cd31_nuclear_lumen_ratio'] = safe_ratio('cd31_lumen_mean', 'nuclear_lumen_mean')
+    ratios["cd31_nuclear_lumen_ratio"] = safe_ratio("cd31_lumen_mean", "nuclear_lumen_mean")
 
     # SMA / PM ratio in wall
-    ratios['sma_pm_wall_ratio'] = safe_ratio('sma_wall_mean', 'pm_wall_mean')
+    ratios["sma_pm_wall_ratio"] = safe_ratio("sma_wall_mean", "pm_wall_mean")
 
     # CD31 lumen vs wall ratio (higher if CD31 concentrated at lumen edge)
-    cd31_lumen = multichannel_features.get('cd31_lumen_mean', 0)
-    cd31_wall = multichannel_features.get('cd31_wall_mean', 0)
+    cd31_lumen = multichannel_features.get("cd31_lumen_mean", 0)
+    cd31_wall = multichannel_features.get("cd31_wall_mean", 0)
     if cd31_wall is not None and cd31_wall > 0:
-        ratios['cd31_lumen_wall_ratio'] = float(cd31_lumen / cd31_wall) if cd31_lumen is not None else None
+        ratios["cd31_lumen_wall_ratio"] = (
+            float(cd31_lumen / cd31_wall) if cd31_lumen is not None else None
+        )
     else:
-        ratios['cd31_lumen_wall_ratio'] = None
+        ratios["cd31_lumen_wall_ratio"] = None
 
     # SMA wall-lumen contrast
-    sma_wall = multichannel_features.get('sma_wall_mean', 0)
-    sma_lumen = multichannel_features.get('sma_lumen_mean', 0)
+    sma_wall = multichannel_features.get("sma_wall_mean", 0)
+    sma_lumen = multichannel_features.get("sma_lumen_mean", 0)
     if sma_wall is not None and sma_wall > 0 and sma_lumen is not None:
-        ratios['sma_wall_lumen_contrast'] = float((sma_wall - sma_lumen) / sma_wall)
+        ratios["sma_wall_lumen_contrast"] = float((sma_wall - sma_lumen) / sma_wall)
     else:
-        ratios['sma_wall_lumen_contrast'] = None
+        ratios["sma_wall_lumen_contrast"] = None
 
     return ratios
 
 
 def extract_all_vessel_features_multichannel(
     wall_mask: np.ndarray,
-    lumen_mask: Optional[np.ndarray],
+    lumen_mask: np.ndarray | None,
     sma_channel: np.ndarray,
     outer_contour: np.ndarray,
-    inner_contour: Optional[np.ndarray],
+    inner_contour: np.ndarray | None,
     pixel_size_um: float,
-    channels_data: Optional[Dict[int, np.ndarray]] = None,
-    channel_names: Optional[Dict[int, str]] = None,
-    binary_mask: Optional[np.ndarray] = None,
-) -> Dict[str, float]:
+    channels_data: dict[int, np.ndarray] | None = None,
+    channel_names: dict[int, str] | None = None,
+    binary_mask: np.ndarray | None = None,
+) -> dict[str, float]:
     """
     Extract complete vessel feature set including multi-channel features.
 
@@ -1248,7 +1266,7 @@ def extract_all_vessel_features_multichannel(
     return features
 
 
-def get_vessel_feature_importance() -> Dict[str, str]:
+def get_vessel_feature_importance() -> dict[str, str]:
     """
     Get descriptions of feature importance for documentation.
 
@@ -1257,41 +1275,36 @@ def get_vessel_feature_importance() -> Dict[str, str]:
     """
     return {
         # Ring/Wall features
-        'ring_completeness': 'High for vessels (>0.7), low for artifacts. Key discriminator.',
-        'wall_thickness_cv': 'CV of wall thickness. Low (<0.3) for vessels, high for irregular structures.',
-        'wall_asymmetry': 'Ratio < 3.0 typical for vessels, higher indicates artifacts.',
-        'lumen_wall_ratio': 'Typically 1.0-5.0 for vessels, varies by type.',
-        'wall_fraction': 'Typically 0.1-0.5 for vessels.',
-
+        "ring_completeness": "High for vessels (>0.7), low for artifacts. Key discriminator.",
+        "wall_thickness_cv": "CV of wall thickness. Low (<0.3) for vessels, high for irregular structures.",
+        "wall_asymmetry": "Ratio < 3.0 typical for vessels, higher indicates artifacts.",
+        "lumen_wall_ratio": "Typically 1.0-5.0 for vessels, varies by type.",
+        "wall_fraction": "Typically 0.1-0.5 for vessels.",
         # Diameter features
-        'outer_diameter_um': 'Key for vessel type: <10 capillary, 10-100 arteriole, >100 artery.',
-        'inner_diameter_um': 'Lumen size, correlates with flow capacity.',
-        'diameter_ratio': 'Typically 0.6-0.9 for vessels.',
-        'hydraulic_diameter': 'Flow characteristic, useful for physiology correlation.',
-
+        "outer_diameter_um": "Key for vessel type: <10 capillary, 10-100 arteriole, >100 artery.",
+        "inner_diameter_um": "Lumen size, correlates with flow capacity.",
+        "diameter_ratio": "Typically 0.6-0.9 for vessels.",
+        "hydraulic_diameter": "Flow characteristic, useful for physiology correlation.",
         # Shape features
-        'circularity': 'High (>0.5) for cross-sections, low for longitudinal cuts.',
-        'ellipticity': 'Low (<0.5) for round vessels, higher for elongated.',
-        'convexity': 'High (>0.9) for clean vessels, lower for irregular shapes.',
-        'roughness': 'Close to 1.0 for smooth boundaries.',
-        'compactness': 'Inverse of circularity, useful for some classifiers.',
-
+        "circularity": "High (>0.5) for cross-sections, low for longitudinal cuts.",
+        "ellipticity": "Low (<0.5) for round vessels, higher for elongated.",
+        "convexity": "High (>0.9) for clean vessels, lower for irregular shapes.",
+        "roughness": "Close to 1.0 for smooth boundaries.",
+        "compactness": "Inverse of circularity, useful for some classifiers.",
         # Intensity features
-        'wall_intensity_mean': 'SMA staining intensity. Higher in muscular vessels.',
-        'wall_intensity_std': 'Uniformity of staining. Low indicates consistent staining.',
-        'lumen_intensity_mean': 'Should be low (<50) for real lumens.',
-        'wall_lumen_contrast': 'High (>0.5) indicates clear lumen. Key for vessel ID.',
-        'edge_gradient_mean': 'Sharp edges indicate well-defined boundaries.',
-        'edge_gradient_std': 'Low indicates consistent edge sharpness.',
-
+        "wall_intensity_mean": "SMA staining intensity. Higher in muscular vessels.",
+        "wall_intensity_std": "Uniformity of staining. Low indicates consistent staining.",
+        "lumen_intensity_mean": "Should be low (<50) for real lumens.",
+        "wall_lumen_contrast": "High (>0.5) indicates clear lumen. Key for vessel ID.",
+        "edge_gradient_mean": "Sharp edges indicate well-defined boundaries.",
+        "edge_gradient_std": "Low indicates consistent edge sharpness.",
         # Context features
-        'background_intensity': 'Reference for contrast calculations.',
-        'wall_background_contrast': 'High indicates vessel stands out from background.',
-
+        "background_intensity": "Reference for contrast calculations.",
+        "wall_background_contrast": "High indicates vessel stands out from background.",
         # Derived features
-        'wall_thickness_range': 'Low (<5 um) indicates uniform wall.',
-        'wall_eccentricity': 'Ellipse eccentricity, 0=circle, 1=line.',
-        'lumen_circularity': 'Round lumens (>0.7) typical for cross-sections.',
-        'center_offset': 'Low (<5 um) indicates concentric structure.',
-        'wall_coverage': 'Close to 1.0 for complete rings.',
+        "wall_thickness_range": "Low (<5 um) indicates uniform wall.",
+        "wall_eccentricity": "Ellipse eccentricity, 0=circle, 1=line.",
+        "lumen_circularity": "Round lumens (>0.7) typical for cross-sections.",
+        "center_offset": "Low (<5 um) indicates concentric structure.",
+        "wall_coverage": "Close to 1.0 for complete rings.",
     }

@@ -16,8 +16,9 @@ import json
 import warnings
 from io import BytesIO
 from pathlib import Path
-from PIL import Image
+
 import numpy as np
+from PIL import Image
 from scipy import ndimage
 
 
@@ -32,11 +33,12 @@ def _esc(value) -> str:
 # Try to use LZ4 compression (faster than gzip), fallback to gzip
 try:
     import hdf5plugin
+
     # LZ4 is ~3-5x faster than gzip with similar compression ratio for image masks
     HDF5_COMPRESSION_KWARGS = hdf5plugin.LZ4(nbytes=0)  # Returns dict-like for **unpacking
     HDF5_COMPRESSION_NAME = "LZ4"
 except ImportError:
-    HDF5_COMPRESSION_KWARGS = {'compression': 'gzip'}
+    HDF5_COMPRESSION_KWARGS = {"compression": "gzip"}
     HDF5_COMPRESSION_NAME = "gzip"
 
 
@@ -49,7 +51,9 @@ def create_hdf5_dataset(f, name, data):
         f.create_dataset(name, data=data, **dict(HDF5_COMPRESSION_KWARGS))
 
 
-def generate_preload_annotations_js(annotations_path: str, cell_type: str, experiment_name: str = None) -> str:
+def generate_preload_annotations_js(
+    annotations_path: str, cell_type: str, experiment_name: str = None
+) -> str:
     """
     Generate JavaScript that pre-loads prior annotations into localStorage.
 
@@ -70,27 +74,27 @@ def generate_preload_annotations_js(annotations_path: str, cell_type: str, exper
     if not annotations_path.exists():
         return None
 
-    with open(annotations_path, 'r') as f:
+    with open(annotations_path) as f:
         data = json.load(f)
 
     # Convert from export format {positive: [...], negative: [...]}
     # to localStorage format {uid: 1, uid: 0}
     ls_format = {}
-    for uid in data.get('positive', []):
+    for uid in data.get("positive", []):
         ls_format[uid] = 1
-    for uid in data.get('negative', []):
+    for uid in data.get("negative", []):
         ls_format[uid] = 0
-    for uid in data.get('unsure', []):
+    for uid in data.get("unsure", []):
         ls_format[uid] = 2
 
     # Also handle the alternative format {annotations: {uid: "yes", uid: "no"}}
-    if 'annotations' in data:
-        for uid, label in data['annotations'].items():
-            if label == 'yes':
+    if "annotations" in data:
+        for uid, label in data["annotations"].items():
+            if label == "yes":
                 ls_format[uid] = 1
-            elif label == 'no':
+            elif label == "no":
                 ls_format[uid] = 0
-            elif label == 'unsure':
+            elif label == "unsure":
                 ls_format[uid] = 2
 
     if not ls_format:
@@ -104,8 +108,8 @@ def generate_preload_annotations_js(annotations_path: str, cell_type: str, exper
         page_key_prefix = _esc(f"{cell_type}_labels_page")
 
     # Escape </ sequences to prevent </script> injection in inline JS
-    safe_json = json.dumps(ls_format).replace('</', r'<\/')
-    js_content = f'''// Pre-loaded annotations from {_esc(annotations_path.name)}
+    safe_json = json.dumps(ls_format).replace("</", r"<\/")
+    js_content = f"""// Pre-loaded annotations from {_esc(annotations_path.name)}
 // Generated automatically during HTML export
 // These are EXISTING annotations - new annotations take precedence
 
@@ -142,7 +146,7 @@ const PRELOADED_ANNOTATIONS = {safe_json};
         }}
     }} catch(e) {{ console.error('Failed to load annotations:', e); }}
 }})();
-'''
+"""
     return js_content
 
 
@@ -191,6 +195,7 @@ def percentile_normalize(image, p_low=1, p_high=99.5, global_percentiles=None):
         if image.dtype == np.uint16:
             return (image / 256).astype(np.uint8)
         from segmentation.utils.detection_utils import safe_to_uint8
+
         return safe_to_uint8(image)
     else:
         # Multi-channel: valid pixel = any channel > 0
@@ -215,14 +220,16 @@ def percentile_normalize(image, p_low=1, p_high=99.5, global_percentiles=None):
                     result[:, :, ch] = (ch_data / 256).astype(np.uint8)
                 else:
                     from segmentation.utils.detection_utils import safe_to_uint8
+
                     result[:, :, ch] = safe_to_uint8(ch_data)
         # Keep padding pixels black
         result[~valid_mask] = 0
         return result
 
 
-def draw_mask_contour(img_array, mask, color=(0, 255, 0), thickness=2, dotted=False,
-                      use_cv2=True, bw_dashed=False):
+def draw_mask_contour(
+    img_array, mask, color=(0, 255, 0), thickness=2, dotted=False, use_cv2=True, bw_dashed=False
+):
     """
     Draw mask contour on image.
 
@@ -249,9 +256,7 @@ def draw_mask_contour(img_array, mask, color=(0, 255, 0), thickness=2, dotted=Fa
     if bw_dashed:
         # Thin green dashed contour line
         contours, _ = cv2.findContours(
-            mask.astype(np.uint8),
-            cv2.RETR_EXTERNAL,
-            cv2.CHAIN_APPROX_NONE
+            mask.astype(np.uint8), cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_NONE
         )
         dash_len, gap_len = 8, 5
         line_thickness = thickness
@@ -263,17 +268,14 @@ def draw_mask_contour(img_array, mask, color=(0, 255, 0), thickness=2, dotted=Fa
             while i < n_pts:
                 j = min(i + dash_len, n_pts - 1)
                 if j > i:
-                    cv2.line(img_out, tuple(pts[i]), tuple(pts[j]),
-                             (0, 255, 0), line_thickness)
+                    cv2.line(img_out, tuple(pts[i]), tuple(pts[j]), (0, 255, 0), line_thickness)
                 i += cycle
         return img_out
 
     if use_cv2 and not dotted:
         # Use cv2.drawContours for smooth, thick lines
         contours, _ = cv2.findContours(
-            mask.astype(np.uint8),
-            cv2.RETR_EXTERNAL,
-            cv2.CHAIN_APPROX_SIMPLE
+            mask.astype(np.uint8), cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE
         )
         # Convert RGB to BGR for cv2, then back
         cv2.drawContours(img_out, contours, -1, color, thickness)
@@ -294,13 +296,18 @@ def draw_mask_contour(img_array, mask, color=(0, 255, 0), thickness=2, dotted=Fa
         ys_draw, xs_draw = ys[dot_mask], xs[dot_mask]
     else:
         ys_draw, xs_draw = ys, xs
-    valid = (ys_draw >= 0) & (ys_draw < img_out.shape[0]) & (xs_draw >= 0) & (xs_draw < img_out.shape[1])
+    valid = (
+        (ys_draw >= 0)
+        & (ys_draw < img_out.shape[0])
+        & (xs_draw >= 0)
+        & (xs_draw < img_out.shape[1])
+    )
     img_out[ys_draw[valid], xs_draw[valid]] = color
 
     return img_out
 
 
-def image_to_base64(img_array, format='JPEG', quality=85):
+def image_to_base64(img_array, format="JPEG", quality=85):
     """
     Convert numpy array or PIL image to base64 string.
 
@@ -318,24 +325,24 @@ def image_to_base64(img_array, format='JPEG', quality=85):
         pil_img = img_array
 
     # Use JPEG for opaque images (smaller, faster). PNG only for transparency.
-    has_alpha = pil_img.mode in ('RGBA', 'LA', 'PA')
+    has_alpha = pil_img.mode in ("RGBA", "LA", "PA")
     buffer = BytesIO()
     if has_alpha:
-        pil_img.save(buffer, format='PNG', optimize=True)
-        mime_type = 'png'
+        pil_img.save(buffer, format="PNG", optimize=True)
+        mime_type = "png"
     else:
-        out_format = format.upper() if format else 'JPEG'
-        if pil_img.mode != 'RGB' and out_format == 'JPEG':
-            pil_img = pil_img.convert('RGB')
+        out_format = format.upper() if format else "JPEG"
+        if pil_img.mode != "RGB" and out_format == "JPEG":
+            pil_img = pil_img.convert("RGB")
         pil_img.save(buffer, format=out_format, quality=quality)
         mime_type = out_format.lower()
 
-    return base64.b64encode(buffer.getvalue()).decode('utf-8'), mime_type
+    return base64.b64encode(buffer.getvalue()).decode("utf-8"), mime_type
 
 
 def get_css():
     """Get the unified CSS styles."""
-    return '''
+    return """
         * { box-sizing: border-box; margin: 0; padding: 0; }
         body { font-family: monospace; background: #0a0a0a; color: #ddd; }
 
@@ -590,7 +597,7 @@ def get_css():
             justify-content: center;
             gap: 10px;
         }
-    '''
+    """
 
 
 def get_js(cell_type, total_pages, experiment_name=None, page_num=1):
@@ -625,7 +632,7 @@ def get_js(cell_type, total_pages, experiment_name=None, page_num=1):
     else:
         page_key_prefix = _esc(f"{cell_type}_labels_page")
 
-    return f'''
+    return f"""
         const CELL_TYPE = '{cell_type_safe}';
         const EXPERIMENT_NAME = '{experiment_name_safe}';
         const TOTAL_PAGES = {total_pages};
@@ -924,7 +931,7 @@ def get_js(cell_type, total_pages, experiment_name=None, page_num=1):
 
         // Initialize
         loadAnnotations();
-    '''
+    """
 
 
 def generate_annotation_page(
@@ -933,7 +940,7 @@ def generate_annotation_page(
     page_num,
     total_pages,
     title=None,
-    page_prefix='page',
+    page_prefix="page",
     experiment_name=None,
     channel_legend=None,
     subtitle=None,
@@ -973,94 +980,102 @@ def generate_annotation_page(
     nav_html += f'<span class="page-info">Page {page_num} / {total_pages}</span>'
     if page_num < total_pages:
         nav_html += f'<a href="{page_prefix}_{page_num+1}.html" class="nav-btn">Next</a>'
-    nav_html += '</div>'
+    nav_html += "</div>"
 
     # Build channel legend HTML if provided
-    channel_legend_html = ''
-    ch_r_label = channel_legend.get('red', 'Ch-R') if channel_legend else 'Ch-R'
-    ch_g_label = channel_legend.get('green', 'Ch-G') if channel_legend else 'Ch-G'
-    ch_b_label = channel_legend.get('blue', 'Ch-B') if channel_legend else 'Ch-B'
+    channel_legend_html = ""
+    ch_r_label = channel_legend.get("red", "Ch-R") if channel_legend else "Ch-R"
+    ch_g_label = channel_legend.get("green", "Ch-G") if channel_legend else "Ch-G"
+    ch_b_label = channel_legend.get("blue", "Ch-B") if channel_legend else "Ch-B"
     # Shorten labels for buttons
-    ch_r_label = ch_r_label.split('(')[0].strip()[:10] if ch_r_label else 'Ch-R'
-    ch_g_label = ch_g_label.split('(')[0].strip()[:10] if ch_g_label else 'Ch-G'
-    ch_b_label = ch_b_label.split('(')[0].strip()[:10] if ch_b_label else 'Ch-B'
+    ch_r_label = ch_r_label.split("(")[0].strip()[:10] if ch_r_label else "Ch-R"
+    ch_g_label = ch_g_label.split("(")[0].strip()[:10] if ch_g_label else "Ch-G"
+    ch_b_label = ch_b_label.split("(")[0].strip()[:10] if ch_b_label else "Ch-B"
 
     if channel_legend:
-        channel_legend_html = '<div class="channel-legend"><span class="stats-label">Channels:</span>'
-        if 'red' in channel_legend:
+        channel_legend_html = (
+            '<div class="channel-legend"><span class="stats-label">Channels:</span>'
+        )
+        if "red" in channel_legend:
             channel_legend_html += f'<span class="ch-red">R={_esc(channel_legend["red"])}</span>'
-        if 'green' in channel_legend:
-            channel_legend_html += f'<span class="ch-green">G={_esc(channel_legend["green"])}</span>'
-        if 'blue' in channel_legend:
+        if "green" in channel_legend:
+            channel_legend_html += (
+                f'<span class="ch-green">G={_esc(channel_legend["green"])}</span>'
+            )
+        if "blue" in channel_legend:
             channel_legend_html += f'<span class="ch-blue">B={_esc(channel_legend["blue"])}</span>'
-        channel_legend_html += '</div>'
+        channel_legend_html += "</div>"
 
     # Build subtitle HTML if provided
-    subtitle_html = ''
+    subtitle_html = ""
     if subtitle:
         subtitle_html = f'<div class="header-subtitle">{_esc(subtitle)}</div>'
 
     # Build cards
-    cards_html = ''
+    cards_html = ""
     for sample in samples:
-        uid = _esc(sample['uid'])
-        img_b64 = sample['image']
-        mime = sample.get('mime_type', 'jpeg')
-        if mime not in ('jpeg', 'png'):
-            mime = 'jpeg'  # Safe default
-        stats = sample.get('stats', {})
+        uid = _esc(sample["uid"])
+        img_b64 = sample["image"]
+        mime = sample.get("mime_type", "jpeg")
+        if mime not in ("jpeg", "png"):
+            mime = "jpeg"  # Safe default
+        stats = sample.get("stats", {})
 
         # Format stats line
         stats_parts = []
-        if 'area_um2' in stats:
+        if "area_um2" in stats:
             stats_parts.append(f"{stats['area_um2']:.1f} &micro;m&sup2;")
-        if 'area_px' in stats:
+        if "area_px" in stats:
             stats_parts.append(f"{stats['area_px']:.0f} px")
-        if 'rf_prediction' in stats:
+        if "rf_prediction" in stats:
             stats_parts.append(f"RF: {stats['rf_prediction']:.2f}")
-        elif 'score' in stats:
+        elif "score" in stats:
             stats_parts.append(f"score: {stats['score']:.2f}")
-        if 'sma_ratio' in stats:
+        if "sma_ratio" in stats:
             stats_parts.append(f"sma: {stats['sma_ratio']:.2f}")
-        if 'diameter_um' in stats:
+        if "diameter_um" in stats:
             stats_parts.append(f"&empty; {stats['diameter_um']:.0f} &micro;m")
-        if 'scale' in stats:
+        if "scale" in stats:
             stats_parts.append(f"{_esc(stats['scale'])}")
-        if 'solidity' in stats:
+        if "solidity" in stats:
             stats_parts.append(f"sol: {stats['solidity']:.2f}")
         # Only show confidence if it's numeric and not 1.0 (i.e., after classifier training)
-        if 'confidence' in stats:
-            conf = stats['confidence']
+        if "confidence" in stats:
+            conf = stats["confidence"]
             if isinstance(conf, (int, float)) and conf < 0.999:
                 stats_parts.append(f"{conf*100:.0f}%")
             elif isinstance(conf, str):
                 stats_parts.append(f"{_esc(conf)}")
-        if 'marker_class' in stats:
-            mc = _esc(str(stats['marker_class']))
+        if "marker_class" in stats:
+            mc = _esc(str(stats["marker_class"]))
             # Use stored marker_color (from classify_islet_marker contour color) if available
-            mc_color = stats.get('marker_color', '#888')
-            if mc in ('multi',):
-                mc_color = '#ffaa00'
-            elif mc in ('none',):
-                mc_color = '#888'
+            mc_color = stats.get("marker_color", "#888")
+            if mc in ("multi",):
+                mc_color = "#ffaa00"
+            elif mc in ("none",):
+                mc_color = "#888"
             stats_parts.append(f'<span style="color:{mc_color};font-weight:bold">{mc}</span>')
-        if 'islet_id' in stats and stats['islet_id'] is not None:
+        if "islet_id" in stats and stats["islet_id"] is not None:
             stats_parts.append(f'I{_esc(str(stats["islet_id"]))}')
 
-        stats_str = ' | '.join(stats_parts) if stats_parts else ''
+        stats_str = " | ".join(stats_parts) if stats_parts else ""
 
-        img_clean_b64 = sample.get('image_clean', '')
-        img_contour_only_b64 = sample.get('image_contour_only', '')
+        img_clean_b64 = sample.get("image_clean", "")
+        img_contour_only_b64 = sample.get("image_contour_only", "")
         # Base layer: clean image (gets channel SVG filters)
         # Contour layer: green on black with mix-blend-mode:lighten (always visible)
         base_src = img_clean_b64 or img_b64
-        contour_src = img_contour_only_b64 or ''
+        contour_src = img_contour_only_b64 or ""
         contour_img = (
-            f'<img class="img-contour" src="data:image/{mime};base64,{contour_src}" '
-            f'style="position:absolute;top:0;left:0;width:100%;height:100%;'
-            f'mix-blend-mode:lighten;pointer-events:none;object-fit:contain" alt="">'
-        ) if contour_src else ''
-        cards_html += f'''
+            (
+                f'<img class="img-contour" src="data:image/{mime};base64,{contour_src}" '
+                f'style="position:absolute;top:0;left:0;width:100%;height:100%;'
+                f'mix-blend-mode:lighten;pointer-events:none;object-fit:contain" alt="">'
+            )
+            if contour_src
+            else ""
+        )
+        cards_html += f"""
         <div class="card" id="{uid}" data-label="-1">
             <div class="card-img-container" style="position:relative">
                 <img class="img-base" src="data:image/{mime};base64,{base_src}" alt="{uid}">
@@ -1078,9 +1093,9 @@ def generate_annotation_page(
                 </div>
             </div>
         </div>
-'''
+"""
 
-    html = f'''<!DOCTYPE html>
+    html = f"""<!DOCTYPE html>
 <html>
 <head>
     <meta charset="UTF-8">
@@ -1145,7 +1160,7 @@ def generate_annotation_page(
     {'<script src="preload_annotations.js"></script>' if include_preload_script else ''}
     <script>{get_js(cell_type, total_pages, experiment_name, page_num)}</script>
 </body>
-</html>'''
+</html>"""
 
     return html
 
@@ -1157,7 +1172,7 @@ def generate_index_page(
     title=None,
     subtitle=None,
     extra_stats=None,
-    page_prefix='page',
+    page_prefix="page",
     experiment_name=None,
     file_name=None,
     pixel_size_um=None,
@@ -1211,18 +1226,18 @@ def generate_index_page(
     if timestamp:
         info_lines.append(f"Segmentation: {_esc(timestamp)}")
 
-    info_html = '<br>'.join(info_lines)
+    info_html = "<br>".join(info_lines)
 
-    extra_stats_html = ''
+    extra_stats_html = ""
     if extra_stats:
         for label, value in extra_stats.items():
-            extra_stats_html += f'''
+            extra_stats_html += f"""
             <div class="stat">
                 <span>{_esc(label)}</span>
                 <span class="number">{_esc(value)}</span>
-            </div>'''
+            </div>"""
 
-    html = f'''<!DOCTYPE html>
+    html = f"""<!DOCTYPE html>
 <html>
 <head>
     <meta charset="UTF-8">
@@ -1471,7 +1486,7 @@ def generate_index_page(
         }}
     </script>
 </body>
-</html>'''
+</html>"""
 
     return html
 
@@ -1530,18 +1545,18 @@ def generate_dual_index_page(
     if timestamp:
         info_lines.append(f"Segmentation: {_esc(timestamp)}")
 
-    info_html = '<br>'.join(info_lines) if info_lines else ''
-    subtitle_html = f'<div class="subtitle">{_esc(subtitle)}</div>' if subtitle else ''
+    info_html = "<br>".join(info_lines) if info_lines else ""
+    subtitle_html = f'<div class="subtitle">{_esc(subtitle)}</div>' if subtitle else ""
 
     # Build cell type sections
-    sections_html = ''
+    sections_html = ""
     for ct, info in cell_types.items():
         ct_safe = _esc(ct)
-        total_samples = info.get('total_samples', 0)
-        total_pages = info.get('total_pages', 0)
-        page_prefix = info.get('page_prefix', f'{ct}_page')
+        total_samples = info.get("total_samples", 0)
+        total_pages = info.get("total_pages", 0)
+        page_prefix = info.get("page_prefix", f"{ct}_page")
 
-        sections_html += f'''
+        sections_html += f"""
         <div class="cell-type-section">
             <h2>{ct_safe.upper()}</h2>
             <div class="stats">
@@ -1556,17 +1571,17 @@ def generate_dual_index_page(
             </div>
             <a href="{page_prefix}_1.html" class="btn">Review {ct_safe.upper()}</a>
         </div>
-        '''
+        """
 
     # Build export buttons for each cell type
-    export_buttons = ''
+    export_buttons = ""
     for ct in cell_types.keys():
         ct_safe = _esc(ct)
-        export_buttons += f'''
+        export_buttons += f"""
         <button class="btn btn-export" onclick="exportAnnotations('{ct_safe}')">Export {ct_safe.upper()}</button>
-        '''
+        """
 
-    html = f'''<!DOCTYPE html>
+    html = f"""<!DOCTYPE html>
 <html>
 <head>
     <meta charset="UTF-8">
@@ -1722,7 +1737,7 @@ def generate_dual_index_page(
         }}
     </script>
 </body>
-</html>'''
+</html>"""
 
     return html
 
@@ -1735,7 +1750,7 @@ def export_samples_to_html(
     title=None,
     subtitle=None,
     extra_stats=None,
-    page_prefix='page',
+    page_prefix="page",
     experiment_name=None,
     file_name=None,
     pixel_size_um=None,
@@ -1787,21 +1802,21 @@ def export_samples_to_html(
         preload_js = generate_preload_annotations_js(prior_annotations, cell_type, experiment_name)
         if preload_js:
             preload_path = output_dir / "preload_annotations.js"
-            with open(preload_path, 'w') as f:
+            with open(preload_path, "w") as f:
                 f.write(preload_js)
             has_preload = True
             # Count annotations for logging
-            with open(prior_annotations, 'r') as f:
+            with open(prior_annotations) as f:
                 ann_data = json.load(f)
-            n_pos = len(ann_data.get('positive', []))
-            n_neg = len(ann_data.get('negative', []))
-            if 'annotations' in ann_data:
-                n_pos = sum(1 for v in ann_data['annotations'].values() if v == 'yes')
-                n_neg = sum(1 for v in ann_data['annotations'].values() if v == 'no')
+            n_pos = len(ann_data.get("positive", []))
+            n_neg = len(ann_data.get("negative", []))
+            if "annotations" in ann_data:
+                n_pos = sum(1 for v in ann_data["annotations"].values() if v == "yes")
+                n_neg = sum(1 for v in ann_data["annotations"].values() if v == "no")
             print(f"  Pre-loading {n_pos + n_neg} prior annotations ({n_pos} yes, {n_neg} no)")
 
     # Paginate
-    pages = [samples[i:i+samples_per_page] for i in range(0, len(samples), samples_per_page)]
+    pages = [samples[i : i + samples_per_page] for i in range(0, len(samples), samples_per_page)]
     total_pages = len(pages)
 
     print(f"Generating {total_pages} {cell_type} HTML pages...")
@@ -1822,10 +1837,10 @@ def export_samples_to_html(
         )
 
         page_path = output_dir / f"{page_prefix}_{page_num}.html"
-        with open(page_path, 'w') as f:
+        with open(page_path, "w") as f:
             f.write(html)
 
-        file_size = page_path.stat().st_size / (1024*1024)
+        file_size = page_path.stat().st_size / (1024 * 1024)
         print(f"  Page {page_num}: {len(page_samples)} samples ({file_size:.1f} MB)")
 
     # Generate index
@@ -1846,8 +1861,8 @@ def export_samples_to_html(
         timestamp=timestamp,
     )
 
-    index_path = output_dir / 'index.html'
-    with open(index_path, 'w') as f:
+    index_path = output_dir / "index.html"
+    with open(index_path, "w") as f:
         f.write(index_html)
 
     print(f"Export complete: {output_dir}")
@@ -1860,8 +1875,17 @@ def export_samples_to_html(
 # =============================================================================
 
 
-def compose_tile_rgb(channel_arrays, tile_x, tile_y, tile_size, display_channels,
-                     x_start, y_start, mosaic_h, mosaic_w):
+def compose_tile_rgb(
+    channel_arrays,
+    tile_x,
+    tile_y,
+    tile_size,
+    display_channels,
+    x_start,
+    y_start,
+    mosaic_h,
+    mosaic_w,
+):
     """Extract a tile region and compose RGB from display channels.
 
     Args:
@@ -1906,7 +1930,8 @@ def compose_tile_rgb(channel_arrays, tile_x, tile_y, tile_size, display_channels
                 if p99 > p1:
                     norm = np.clip(
                         (ch_data.astype(np.float32) - p1) / (p99 - p1) * 255,
-                        0, 255,
+                        0,
+                        255,
                     ).astype(np.uint8)
                     norm[~valid] = 0
                     rgb[:, :, i] = norm
@@ -1920,7 +1945,9 @@ def compose_tile_rgb(channel_arrays, tile_x, tile_y, tile_size, display_channels
 # loading samples from slide images already in RAM for efficiency.
 
 
-def load_samples_from_ram(tiles_dir, slide_image, pixel_size_um, cell_type='mk', max_samples=None, logger=None):
+def load_samples_from_ram(
+    tiles_dir, slide_image, pixel_size_um, cell_type="mk", max_samples=None, logger=None
+):
     """
     Load cell samples from segmentation output, using in-memory slide image.
 
@@ -1935,8 +1962,9 @@ def load_samples_from_ram(tiles_dir, slide_image, pixel_size_um, cell_type='mk',
     Returns:
         List of sample dicts with image data and metadata
     """
-    import re
     import json
+    import re
+
     import h5py
 
     tiles_dir = Path(tiles_dir)
@@ -1944,6 +1972,7 @@ def load_samples_from_ram(tiles_dir, slide_image, pixel_size_um, cell_type='mk',
         return []
 
     samples = []
+
     # Sort tile directories - handle both old format (pure int) and new format (slide_name_tileID)
     def tile_sort_key(x):
         name = x.name
@@ -1951,13 +1980,12 @@ def load_samples_from_ram(tiles_dir, slide_image, pixel_size_um, cell_type='mk',
         if name.isdigit():
             return (0, int(name))
         # New format: extract last numeric part (e.g., "2025_11_18_FGC1_1105" -> 1105)
-        parts = name.split('_')
+        parts = name.split("_")
         if parts[-1].isdigit():
             return (1, int(parts[-1]))
         return (2, name)  # Fallback: sort alphabetically
 
-    tile_dirs = sorted([d for d in tiles_dir.iterdir() if d.is_dir()],
-                       key=tile_sort_key)
+    tile_dirs = sorted([d for d in tiles_dir.iterdir() if d.is_dir()], key=tile_sort_key)
 
     for tile_dir in tile_dirs:
         features_file = tile_dir / "features.json"
@@ -1968,10 +1996,10 @@ def load_samples_from_ram(tiles_dir, slide_image, pixel_size_um, cell_type='mk',
             continue
 
         # Load tile window coordinates
-        with open(window_file, 'r') as f:
+        with open(window_file) as f:
             window_str = f.read().strip()
         try:
-            matches = re.findall(r'slice\((\d+),\s*(\d+)', window_str)
+            matches = re.findall(r"slice\((\d+),\s*(\d+)", window_str)
             if len(matches) >= 2:
                 tile_y1, tile_y2 = int(matches[0][0]), int(matches[0][1])
                 tile_x1, tile_x2 = int(matches[1][0]), int(matches[1][1])
@@ -1983,35 +2011,35 @@ def load_samples_from_ram(tiles_dir, slide_image, pixel_size_um, cell_type='mk',
             continue
 
         # Load features
-        with open(features_file, 'r') as f:
+        with open(features_file) as f:
             tile_features = json.load(f)
 
         # Load segmentation masks
-        with h5py.File(seg_file, 'r') as f:
-            if 'labels' in f:
-                masks = f['labels'][0]  # Shape: (H, W)
-            elif 'masks' in f:
-                masks = f['masks'][:]
+        with h5py.File(seg_file, "r") as f:
+            if "labels" in f:
+                masks = f["labels"][0]  # Shape: (H, W)
+            elif "masks" in f:
+                masks = f["masks"][:]
             else:
                 if logger:
                     logger.warning(f"No masks/labels dataset in {seg_file}")
                 continue
 
         # For HSPCs, sort by solidity (higher = more confident/solid shape)
-        if cell_type == 'hspc':
-            tile_features = sorted(tile_features,
-                                   key=lambda x: x['features'].get('solidity', 0),
-                                   reverse=True)
+        if cell_type == "hspc":
+            tile_features = sorted(
+                tile_features, key=lambda x: x["features"].get("solidity", 0), reverse=True
+            )
 
         # Extract each cell
         for feat_dict in tile_features:
-            det_id = feat_dict['id']
-            features = feat_dict['features']
-            area_px = features.get('area', 0)
-            area_um2 = area_px * (pixel_size_um ** 2)
+            det_id = feat_dict["id"]
+            features = feat_dict["features"]
+            area_px = features.get("area", 0)
+            area_um2 = area_px * (pixel_size_um**2)
 
             try:
-                cell_idx = int(det_id.split('_')[1]) + 1
+                cell_idx = int(det_id.split("_")[1]) + 1
             except Exception as e:
                 if logger:
                     logger.debug(f"Failed to parse cell index from {det_id}: {e}")
@@ -2019,12 +2047,12 @@ def load_samples_from_ram(tiles_dir, slide_image, pixel_size_um, cell_type='mk',
 
             cell_mask = masks == cell_idx
             if not cell_mask.any():
-                cell_mask = masks == int(det_id.split('_')[1])
+                cell_mask = masks == int(det_id.split("_")[1])
                 if not cell_mask.any():
                     continue
 
             # For MKs, extract only the largest connected component
-            if cell_type == 'mk':
+            if cell_type == "mk":
                 cell_mask = get_largest_connected_component(cell_mask)
                 if not cell_mask.any():
                     continue
@@ -2099,43 +2127,46 @@ def load_samples_from_ram(tiles_dir, slide_image, pixel_size_um, cell_type='mk',
                 mask_resized = np.array(mask_pil) > 127
 
                 # Draw solid bright green contour on the image (6px thick)
-                crop_with_contour = draw_mask_contour(crop_resized, mask_resized,
-                                                       color=(0, 255, 0), dotted=False)
+                crop_with_contour = draw_mask_contour(
+                    crop_resized, mask_resized, color=(0, 255, 0), dotted=False
+                )
             else:
                 crop_with_contour = crop_resized
 
             # Convert to base64 (JPEG for smaller file sizes)
             pil_img_final = Image.fromarray(crop_with_contour)
             buffer = BytesIO()
-            pil_img_final.save(buffer, format='JPEG', quality=85)
-            img_b64 = base64.b64encode(buffer.getvalue()).decode('utf-8')
+            pil_img_final.save(buffer, format="JPEG", quality=85)
+            img_b64 = base64.b64encode(buffer.getvalue()).decode("utf-8")
 
             # Use global center from features.json if available, otherwise compute
-            if 'center' in feat_dict:
+            if "center" in feat_dict:
                 # center is already in global coordinates
-                global_centroid_x = int(feat_dict['center'][0])
-                global_centroid_y = int(feat_dict['center'][1])
+                global_centroid_x = int(feat_dict["center"][0])
+                global_centroid_y = int(feat_dict["center"][1])
             else:
                 # Backwards compatibility: compute from tile origin + local centroid
                 global_centroid_x = tile_x1 + centroid_x
                 global_centroid_y = tile_y1 + centroid_y
 
             # Get global_id if available
-            global_id = feat_dict.get('global_id', None)
+            global_id = feat_dict.get("global_id", None)
 
-            samples.append({
-                'tile_id': tile_dir.name,
-                'det_id': det_id,
-                'global_id': global_id,
-                'area_px': area_px,
-                'area_um2': area_um2,
-                'image': img_b64,
-                'features': features,
-                'solidity': features.get('solidity', 0),
-                'circularity': features.get('circularity', 0),
-                'global_x': global_centroid_x,
-                'global_y': global_centroid_y
-            })
+            samples.append(
+                {
+                    "tile_id": tile_dir.name,
+                    "det_id": det_id,
+                    "global_id": global_id,
+                    "area_px": area_px,
+                    "area_um2": area_um2,
+                    "image": img_b64,
+                    "features": features,
+                    "solidity": features.get("solidity", 0),
+                    "circularity": features.get("circularity", 0),
+                    "global_x": global_centroid_x,
+                    "global_y": global_centroid_y,
+                }
+            )
 
             if max_samples and len(samples) >= max_samples:
                 return samples
@@ -2143,10 +2174,16 @@ def load_samples_from_ram(tiles_dir, slide_image, pixel_size_um, cell_type='mk',
     return samples
 
 
-def create_mk_hspc_index(output_dir, total_mks, total_hspcs, mk_pages, hspc_pages, slides_summary=None):
+def create_mk_hspc_index(
+    output_dir, total_mks, total_hspcs, mk_pages, hspc_pages, slides_summary=None
+):
     """Create the main index.html page for MK+HSPC batch review."""
-    subtitle_html = f'<p style="color: #888; margin-bottom: 10px;">{slides_summary}</p>' if slides_summary else ''
-    html = f'''<!DOCTYPE html>
+    subtitle_html = (
+        f'<p style="color: #888; margin-bottom: 10px;">{slides_summary}</p>'
+        if slides_summary
+        else ""
+    )
+    html = f"""<!DOCTYPE html>
 <html>
 <head>
     <title>MK + HSPC Cell Review</title>
@@ -2241,8 +2278,8 @@ def create_mk_hspc_index(output_dir, total_mks, total_hspcs, mk_pages, hspc_page
         }}
     </script>
 </body>
-</html>'''
-    with open(Path(output_dir) / 'index.html', 'w') as f:
+</html>"""
+    with open(Path(output_dir) / "index.html", "w") as f:
         f.write(html)
 
 
@@ -2260,7 +2297,7 @@ def generate_mk_hspc_page_html(samples, cell_type, page_num, total_pages, slides
     cell_type_safe = _esc(cell_type)
 
     # Build subtitle HTML
-    subtitle_html = ''
+    subtitle_html = ""
     if slides_summary:
         subtitle_html = f'<div class="header-subtitle">{_esc(slides_summary)}</div>'
 
@@ -2271,25 +2308,27 @@ def generate_mk_hspc_page_html(samples, cell_type, page_num, total_pages, slides
     nav_html += f'<span class="page-info">Page {page_num} of {total_pages}</span>'
     if page_num < total_pages:
         nav_html += f'<a href="{cell_type_safe}_page{page_num+1}.html" class="nav-btn">Next</a>'
-    nav_html += '</div>'
+    nav_html += "</div>"
 
     cards_html = ""
     for sample in samples:
-        slide = sample.get('slide', 'unknown').replace('.', '-')
-        global_x = sample.get('global_x', 0)
-        global_y = sample.get('global_y', 0)
+        slide = sample.get("slide", "unknown").replace(".", "-")
+        global_x = sample.get("global_x", 0)
+        global_y = sample.get("global_y", 0)
         # Always use spatial UID format for consistency across all cell types
         # Format: {slide}_{celltype}_{round(x)}_{round(y)}
         uid = _esc(f"{slide}_{cell_type}_{int(round(global_x))}_{int(round(global_y))}")
         display_id = _esc(f"{cell_type}_{int(round(global_x))}_{int(round(global_y))}")
         # Keep legacy global_id in data attribute for backwards compatibility
-        legacy_global_id = sample.get('global_id')
-        area_um2 = sample.get('area_um2', 0)
-        area_px = sample.get('area_px', 0)
-        img_b64 = sample['image']
+        legacy_global_id = sample.get("global_id")
+        area_um2 = sample.get("area_um2", 0)
+        area_px = sample.get("area_px", 0)
+        img_b64 = sample["image"]
         # Include legacy_global_id as data attribute for migration support
-        legacy_attr = f' data-legacy-id="{_esc(legacy_global_id)}"' if legacy_global_id is not None else ''
-        cards_html += f'''
+        legacy_attr = (
+            f' data-legacy-id="{_esc(legacy_global_id)}"' if legacy_global_id is not None else ""
+        )
+        cards_html += f"""
         <div class="card" id="{uid}" data-label="-1"{legacy_attr}>
             <div class="card-img-container">
                 <img src="data:image/jpeg;base64,{img_b64}" alt="{display_id}">
@@ -2306,12 +2345,12 @@ def generate_mk_hspc_page_html(samples, cell_type, page_num, total_pages, slides
                 </div>
             </div>
         </div>
-'''
+"""
 
     prev_page = page_num - 1
     next_page = page_num + 1
 
-    html = f'''<!DOCTYPE html>
+    html = f"""<!DOCTYPE html>
 <html>
 <head>
     <title>{cell_type_display} - Page {page_num}/{total_pages}</title>
@@ -2494,11 +2533,13 @@ def generate_mk_hspc_page_html(samples, cell_type, page_num, total_pages, slides
         loadAnnotations();
     </script>
 </body>
-</html>'''
+</html>"""
     return html
 
 
-def generate_mk_hspc_pages(samples, cell_type, output_dir, samples_per_page, slides_summary=None, logger=None):
+def generate_mk_hspc_pages(
+    samples, cell_type, output_dir, samples_per_page, slides_summary=None, logger=None
+):
     """Generate separate pages for a single cell type (MK or HSPC).
 
     Args:
@@ -2514,7 +2555,7 @@ def generate_mk_hspc_pages(samples, cell_type, output_dir, samples_per_page, sli
             logger.info(f"  No {cell_type.upper()} samples to export")
         return
 
-    pages = [samples[i:i+samples_per_page] for i in range(0, len(samples), samples_per_page)]
+    pages = [samples[i : i + samples_per_page] for i in range(0, len(samples), samples_per_page)]
     total_pages = len(pages)
 
     if logger:
@@ -2522,15 +2563,24 @@ def generate_mk_hspc_pages(samples, cell_type, output_dir, samples_per_page, sli
 
     for page_num in range(1, total_pages + 1):
         page_samples = pages[page_num - 1]
-        html = generate_mk_hspc_page_html(page_samples, cell_type, page_num, total_pages, slides_summary=slides_summary)
+        html = generate_mk_hspc_page_html(
+            page_samples, cell_type, page_num, total_pages, slides_summary=slides_summary
+        )
 
         html_path = Path(output_dir) / f"{cell_type}_page{page_num}.html"
-        with open(html_path, 'w') as f:
+        with open(html_path, "w") as f:
             f.write(html)
 
 
-def export_mk_hspc_html_from_ram(slide_data, output_base, html_output_dir, samples_per_page=300,
-                                  mk_min_area_um=200, mk_max_area_um=2000, logger=None):
+def export_mk_hspc_html_from_ram(
+    slide_data,
+    output_base,
+    html_output_dir,
+    samples_per_page=300,
+    mk_min_area_um=200,
+    mk_max_area_um=2000,
+    logger=None,
+):
     """
     Export HTML pages using slide images already in RAM.
 
@@ -2572,7 +2622,7 @@ def export_mk_hspc_html_from_ram(slide_data, output_base, html_output_dir, sampl
         if summary_file.exists():
             with open(summary_file) as f:
                 summary = json.load(f)
-                ps = summary.get('pixel_size_um')
+                ps = summary.get("pixel_size_um")
                 if ps:
                     pixel_size_um = ps[0] if isinstance(ps, list) else ps
         if pixel_size_um == _LEGACY_PIXEL_SIZE_UM:
@@ -2582,29 +2632,27 @@ def export_mk_hspc_html_from_ram(slide_data, output_base, html_output_dir, sampl
                 stacklevel=2,
             )
 
-        slide_image = data['image']
+        slide_image = data["image"]
 
         # Load MK samples (uses largest connected component)
         mk_samples = load_samples_from_ram(
-            slide_dir / "mk" / "tiles",
-            slide_image, pixel_size_um,
-            cell_type='mk',
-            logger=logger
+            slide_dir / "mk" / "tiles", slide_image, pixel_size_um, cell_type="mk", logger=logger
         )
 
         # Load HSPC samples (sorted by solidity/confidence)
         hspc_samples = load_samples_from_ram(
             slide_dir / "hspc" / "tiles",
-            slide_image, pixel_size_um,
-            cell_type='hspc',
-            logger=logger
+            slide_image,
+            pixel_size_um,
+            cell_type="hspc",
+            logger=logger,
         )
 
         # Add slide name to each sample
         for s in mk_samples:
-            s['slide'] = slide_name
+            s["slide"] = slide_name
         for s in hspc_samples:
-            s['slide'] = slide_name
+            s["slide"] = slide_name
 
         all_mk_samples.extend(mk_samples)
         all_hspc_samples.extend(hspc_samples)
@@ -2614,14 +2662,15 @@ def export_mk_hspc_html_from_ram(slide_data, output_base, html_output_dir, sampl
 
     # Filter MK by size (use um² directly to avoid pixel_size dependency)
     mk_before = len(all_mk_samples)
-    all_mk_samples = [s for s in all_mk_samples
-                      if mk_min_area_um <= s.get('area_um2', 0) <= mk_max_area_um]
+    all_mk_samples = [
+        s for s in all_mk_samples if mk_min_area_um <= s.get("area_um2", 0) <= mk_max_area_um
+    ]
     if logger:
         logger.info(f"  MK size filter: {mk_before} -> {len(all_mk_samples)}")
 
     # Sort by area
-    all_mk_samples.sort(key=lambda x: x.get('area_um2', 0), reverse=True)
-    all_hspc_samples.sort(key=lambda x: x.get('area_um2', 0), reverse=True)
+    all_mk_samples.sort(key=lambda x: x.get("area_um2", 0), reverse=True)
+    all_hspc_samples.sort(key=lambda x: x.get("area_um2", 0), reverse=True)
 
     # Build slides summary for subtitle (e.g., "16 slides (FGC1, FGC2, ...)")
     slide_names = sorted(slide_data.keys())
@@ -2630,27 +2679,54 @@ def export_mk_hspc_html_from_ram(slide_data, output_base, html_output_dir, sampl
         # Extract short identifiers (e.g., "FGC1" from "2025_11_18_FGC1")
         short_names = []
         for name in slide_names:
-            parts = name.split('_')
+            parts = name.split("_")
             # Take the last part that looks like a group identifier
             short = parts[-1] if parts else name
             short_names.append(short)
         # Show first few names with ellipsis if many
         if len(short_names) > 6:
-            preview = ', '.join(short_names[:4]) + ', ...'
+            preview = ", ".join(short_names[:4]) + ", ..."
         else:
-            preview = ', '.join(short_names)
+            preview = ", ".join(short_names)
         slides_summary = f"{num_slides} slides ({preview})"
     else:
         slides_summary = None
 
     # Generate pages
-    generate_mk_hspc_pages(all_mk_samples, "mk", html_output_dir, samples_per_page, slides_summary=slides_summary, logger=logger)
-    generate_mk_hspc_pages(all_hspc_samples, "hspc", html_output_dir, samples_per_page, slides_summary=slides_summary, logger=logger)
+    generate_mk_hspc_pages(
+        all_mk_samples,
+        "mk",
+        html_output_dir,
+        samples_per_page,
+        slides_summary=slides_summary,
+        logger=logger,
+    )
+    generate_mk_hspc_pages(
+        all_hspc_samples,
+        "hspc",
+        html_output_dir,
+        samples_per_page,
+        slides_summary=slides_summary,
+        logger=logger,
+    )
 
     # Create index
-    mk_pages = (len(all_mk_samples) + samples_per_page - 1) // samples_per_page if all_mk_samples else 0
-    hspc_pages = (len(all_hspc_samples) + samples_per_page - 1) // samples_per_page if all_hspc_samples else 0
-    create_mk_hspc_index(html_output_dir, len(all_mk_samples), len(all_hspc_samples), mk_pages, hspc_pages, slides_summary=slides_summary)
+    mk_pages = (
+        (len(all_mk_samples) + samples_per_page - 1) // samples_per_page if all_mk_samples else 0
+    )
+    hspc_pages = (
+        (len(all_hspc_samples) + samples_per_page - 1) // samples_per_page
+        if all_hspc_samples
+        else 0
+    )
+    create_mk_hspc_index(
+        html_output_dir,
+        len(all_mk_samples),
+        len(all_hspc_samples),
+        mk_pages,
+        hspc_pages,
+        slides_summary=slides_summary,
+    )
 
     if logger:
         logger.info(f"\n  HTML export complete: {html_output_dir}")
@@ -2669,7 +2745,7 @@ def export_mk_hspc_html_from_ram(slide_data, output_base, html_output_dir, sampl
 
 def get_vessel_css():
     """Get enhanced CSS styles for vessel annotation interface."""
-    return '''
+    return """
         * { box-sizing: border-box; margin: 0; padding: 0; }
         body { font-family: monospace; background: #0a0a0a; color: #ddd; }
 
@@ -3131,10 +3207,10 @@ def get_vessel_css():
             max-height: 400px;
             font-size: 0.85em;
         }
-    '''
+    """
 
 
-def get_vessel_js(cell_type, total_pages, experiment_name=None, all_features_json='{}', page_num=1):
+def get_vessel_js(cell_type, total_pages, experiment_name=None, all_features_json="{}", page_num=1):
     """
     Get enhanced JavaScript for vessel annotation with RF training support.
 
@@ -3161,7 +3237,7 @@ def get_vessel_js(cell_type, total_pages, experiment_name=None, all_features_jso
     else:
         page_key_prefix = _esc(f"{cell_type}_labels_page")
 
-    return f'''
+    return f"""
         const CELL_TYPE = '{cell_type_safe}';
         const EXPERIMENT_NAME = '{experiment_name_safe}';
         const TOTAL_PAGES = {total_pages};
@@ -3634,7 +3710,7 @@ Export Formats:
 
         // Initialize
         loadAnnotations();
-    '''
+    """
 
 
 def generate_vessel_annotation_page(
@@ -3643,7 +3719,7 @@ def generate_vessel_annotation_page(
     page_num,
     total_pages,
     title=None,
-    page_prefix='page',
+    page_prefix="page",
     experiment_name=None,
     subtitle=None,
 ):
@@ -3680,65 +3756,66 @@ def generate_vessel_annotation_page(
     nav_html += f'<span class="page-info">Page {page_num} / {total_pages}</span>'
     if page_num < total_pages:
         nav_html += f'<a href="{page_prefix}_{page_num+1}.html" class="nav-btn">Next</a>'
-    nav_html += '</div>'
+    nav_html += "</div>"
 
     # Build subtitle HTML if provided
-    subtitle_html = ''
+    subtitle_html = ""
     if subtitle:
         subtitle_html = f'<div class="header-subtitle">{_esc(subtitle)}</div>'
 
     # Collect all features for this page (for filtering/export)
     all_features = {}
     for sample in samples:
-        uid_raw = sample['uid']
-        feat = sample.get('features', {})
+        uid_raw = sample["uid"]
+        feat = sample.get("features", {})
         # Filter to numeric features only
-        all_features[uid_raw] = {k: v for k, v in feat.items()
-                                 if isinstance(v, (int, float)) and not isinstance(v, bool)}
+        all_features[uid_raw] = {
+            k: v for k, v in feat.items() if isinstance(v, (int, float)) and not isinstance(v, bool)
+        }
 
     all_features_json = json.dumps(all_features)
 
     # Build cards
-    cards_html = ''
+    cards_html = ""
     for idx, sample in enumerate(samples):
-        uid = _esc(sample['uid'])
-        img_b64 = sample['image']
-        img_raw_b64 = sample.get('image_raw')  # Raw image without contours
-        mime = sample.get('mime_type', 'jpeg')
-        if mime not in ('jpeg', 'png'):
-            mime = 'jpeg'  # Safe default
-        feat = sample.get('features', {})
+        uid = _esc(sample["uid"])
+        img_b64 = sample["image"]
+        img_raw_b64 = sample.get("image_raw")  # Raw image without contours
+        mime = sample.get("mime_type", "jpeg")
+        if mime not in ("jpeg", "png"):
+            mime = "jpeg"  # Safe default
+        feat = sample.get("features", {})
 
         # Format stats line with vessel-specific features
         stats_parts = []
-        if 'outer_diameter_um' in feat:
+        if "outer_diameter_um" in feat:
             stats_parts.append(f"D={feat['outer_diameter_um']:.1f}&micro;m")
-        if 'wall_thickness_mean_um' in feat:
+        if "wall_thickness_mean_um" in feat:
             stats_parts.append(f"wall={feat['wall_thickness_mean_um']:.1f}&micro;m")
-        if 'circularity' in feat:
+        if "circularity" in feat:
             stats_parts.append(f"circ={feat['circularity']:.2f}")
-        if 'confidence' in feat:
-            conf = feat['confidence']
+        if "confidence" in feat:
+            conf = feat["confidence"]
             if isinstance(conf, str):
                 stats_parts.append(_esc(conf))
             else:
                 stats_parts.append(f"{conf*100:.0f}%")
 
-        stats_str = ' | '.join(stats_parts) if stats_parts else ''
+        stats_str = " | ".join(stats_parts) if stats_parts else ""
 
         # Additional feature line
         feat_parts = []
-        if 'aspect_ratio' in feat:
+        if "aspect_ratio" in feat:
             feat_parts.append(f"AR={feat['aspect_ratio']:.2f}")
-        if 'ring_completeness' in feat:
+        if "ring_completeness" in feat:
             feat_parts.append(f"ring={feat['ring_completeness']:.2f}")
-        if 'lumen_area_um2' in feat:
+        if "lumen_area_um2" in feat:
             feat_parts.append(f"lumen={feat['lumen_area_um2']:.0f}&micro;m&sup2;")
-        feat_str = ' | '.join(feat_parts) if feat_parts else ''
+        feat_str = " | ".join(feat_parts) if feat_parts else ""
 
         # Build image container - side-by-side if raw image available
         if img_raw_b64:
-            img_container = f'''
+            img_container = f"""
             <div class="card-img-container card-img-sidebyside" onclick="selectCard({idx})">
                 <div class="img-half">
                     <img src="data:image/{mime};base64,{img_raw_b64}" alt="{uid} raw">
@@ -3748,14 +3825,14 @@ def generate_vessel_annotation_page(
                     <img src="data:image/{mime};base64,{img_b64}" alt="{uid} contours">
                     <div class="img-label">Contours</div>
                 </div>
-            </div>'''
+            </div>"""
         else:
-            img_container = f'''
+            img_container = f"""
             <div class="card-img-container" onclick="selectCard({idx})">
                 <img src="data:image/{mime};base64,{img_b64}" alt="{uid}">
-            </div>'''
+            </div>"""
 
-        cards_html += f'''
+        cards_html += f"""
         <div class="card" id="{uid}" data-label="-1"
              data-diameter="{feat.get('outer_diameter_um', 0)}"
              data-confidence="{feat.get('confidence', 'unknown')}">
@@ -3774,9 +3851,9 @@ def generate_vessel_annotation_page(
                 </div>
             </div>
         </div>
-'''
+"""
 
-    html = f'''<!DOCTYPE html>
+    html = f"""<!DOCTYPE html>
 <html>
 <head>
     <meta charset="UTF-8">
@@ -3886,7 +3963,7 @@ def generate_vessel_annotation_page(
 
     <script>{get_vessel_js(cell_type, total_pages, experiment_name, all_features_json, page_num)}</script>
 </body>
-</html>'''
+</html>"""
 
     return html
 
@@ -3898,7 +3975,7 @@ def generate_vessel_index_page(
     title=None,
     subtitle=None,
     extra_stats=None,
-    page_prefix='page',
+    page_prefix="page",
     experiment_name=None,
     file_name=None,
     pixel_size_um=None,
@@ -3941,32 +4018,32 @@ def generate_vessel_index_page(
     if timestamp:
         info_lines.append(f"Segmentation: {_esc(timestamp)}")
 
-    info_html = '<br>'.join(info_lines)
+    info_html = "<br>".join(info_lines)
 
     # Feature summary section
-    feature_html = ''
+    feature_html = ""
     if feature_summary:
         feature_html = '<div class="feature-summary"><h3>Feature Summary</h3><table>'
         for key, stats in feature_summary.items():
-            feature_html += f'''
+            feature_html += f"""
             <tr>
                 <td>{_esc(key)}</td>
                 <td>min: {stats.get("min", 0):.2f}</td>
                 <td>max: {stats.get("max", 0):.2f}</td>
                 <td>mean: {stats.get("mean", 0):.2f}</td>
-            </tr>'''
-        feature_html += '</table></div>'
+            </tr>"""
+        feature_html += "</table></div>"
 
-    extra_stats_html = ''
+    extra_stats_html = ""
     if extra_stats:
         for label, value in extra_stats.items():
-            extra_stats_html += f'''
+            extra_stats_html += f"""
             <div class="stat">
                 <span>{_esc(label)}</span>
                 <span class="number">{_esc(value)}</span>
-            </div>'''
+            </div>"""
 
-    html = f'''<!DOCTYPE html>
+    html = f"""<!DOCTYPE html>
 <html>
 <head>
     <meta charset="UTF-8">
@@ -4243,7 +4320,7 @@ def generate_vessel_index_page(
         setInterval(updateProgress, 5000);
     </script>
 </body>
-</html>'''
+</html>"""
 
     return html
 
@@ -4251,12 +4328,12 @@ def generate_vessel_index_page(
 def export_vessel_samples_to_html(
     samples,
     output_dir,
-    cell_type='vessel',
+    cell_type="vessel",
     samples_per_page=200,
     title=None,
     subtitle=None,
     extra_stats=None,
-    page_prefix='page',
+    page_prefix="page",
     experiment_name=None,
     file_name=None,
     pixel_size_um=None,
@@ -4294,20 +4371,20 @@ def export_vessel_samples_to_html(
 
     # Calculate feature summary for index page
     feature_summary = {}
-    key_features = ['outer_diameter_um', 'wall_thickness_mean_um', 'circularity', 'aspect_ratio']
+    key_features = ["outer_diameter_um", "wall_thickness_mean_um", "circularity", "aspect_ratio"]
     for feat_key in key_features:
-        values = [s['features'].get(feat_key) for s in samples if feat_key in s.get('features', {})]
+        values = [s["features"].get(feat_key) for s in samples if feat_key in s.get("features", {})]
         if values:
             values = [v for v in values if v is not None and isinstance(v, (int, float))]
             if values:
                 feature_summary[feat_key] = {
-                    'min': min(values),
-                    'max': max(values),
-                    'mean': sum(values) / len(values),
+                    "min": min(values),
+                    "max": max(values),
+                    "mean": sum(values) / len(values),
                 }
 
     # Paginate
-    pages = [samples[i:i+samples_per_page] for i in range(0, len(samples), samples_per_page)]
+    pages = [samples[i : i + samples_per_page] for i in range(0, len(samples), samples_per_page)]
     total_pages = len(pages)
 
     print(f"Generating {total_pages} {cell_type} HTML pages...")
@@ -4326,10 +4403,10 @@ def export_vessel_samples_to_html(
         )
 
         page_path = output_dir / f"{page_prefix}_{page_num}.html"
-        with open(page_path, 'w') as f:
+        with open(page_path, "w") as f:
             f.write(html)
 
-        file_size = page_path.stat().st_size / (1024*1024)
+        file_size = page_path.stat().st_size / (1024 * 1024)
         print(f"  Page {page_num}: {len(page_samples)} samples ({file_size:.1f} MB)")
 
     # Generate index
@@ -4348,8 +4425,8 @@ def export_vessel_samples_to_html(
         feature_summary=feature_summary,
     )
 
-    index_path = output_dir / 'index.html'
-    with open(index_path, 'w') as f:
+    index_path = output_dir / "index.html"
+    with open(index_path, "w") as f:
         f.write(index_html)
 
     print(f"Export complete: {output_dir}")

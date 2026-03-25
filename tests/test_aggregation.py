@@ -3,38 +3,39 @@
 Tests slide-level and cohort-level feature aggregation, plus AnnData conversion.
 """
 
-import pytest
 import numpy as np
 import pandas as pd
 
-from segmentation.core import SlideAnalysis
 from segmentation.analysis.aggregation import (
-    aggregate_slide,
     aggregate_cohort,
+    aggregate_slide,
     cohort_to_anndata,
 )
-
+from segmentation.core import SlideAnalysis
 
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
 
+
 def _make_detections(n=10, prefix="slide"):
     """Create sample detections with numeric features and marker classes."""
     dets = []
     for i in range(n):
-        dets.append({
-            "uid": f"{prefix}_cell_{i * 100}_{i * 200}",
-            "rf_prediction": 0.5 + (i % 3) * 0.15,
-            "NeuN_class": "positive" if i % 2 == 0 else "negative",
-            "marker_profile": "NeuN+" if i % 2 == 0 else "NeuN-",
-            "global_center": [i * 100, i * 200],
-            "features": {
-                "area": 500 + i * 50,
-                "solidity": 0.85 + (i % 5) * 0.02,
-                "eccentricity": 0.3 + (i % 4) * 0.1,
-            },
-        })
+        dets.append(
+            {
+                "uid": f"{prefix}_cell_{i * 100}_{i * 200}",
+                "rf_prediction": 0.5 + (i % 3) * 0.15,
+                "NeuN_class": "positive" if i % 2 == 0 else "negative",
+                "marker_profile": "NeuN+" if i % 2 == 0 else "NeuN-",
+                "global_center": [i * 100, i * 200],
+                "features": {
+                    "area": 500 + i * 50,
+                    "solidity": 0.85 + (i % 5) * 0.02,
+                    "eccentricity": 0.3 + (i % 4) * 0.1,
+                },
+            }
+        )
     return dets
 
 
@@ -42,6 +43,7 @@ def _make_slide(n=10, prefix="slide", name="test_slide"):
     """Create a SlideAnalysis with a unique slide name via output_dir."""
     # Use a non-existent path purely for the .name property (slide_name)
     from pathlib import Path
+
     return SlideAnalysis.from_detections(
         _make_detections(n, prefix=prefix),
         output_dir=Path(f"/tmp/fake/{name}"),
@@ -51,6 +53,7 @@ def _make_slide(n=10, prefix="slide", name="test_slide"):
 # ---------------------------------------------------------------------------
 # aggregate_slide
 # ---------------------------------------------------------------------------
+
 
 class TestAggregateSlide:
 
@@ -154,6 +157,7 @@ class TestAggregateSlide:
 # aggregate_cohort
 # ---------------------------------------------------------------------------
 
+
 class TestAggregateCohort:
 
     def test_multiple_slides(self):
@@ -230,6 +234,7 @@ class TestAggregateCohort:
 # ---------------------------------------------------------------------------
 # cohort_to_anndata
 # ---------------------------------------------------------------------------
+
 
 class TestCohortToAnndata:
 

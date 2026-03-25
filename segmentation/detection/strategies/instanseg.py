@@ -7,12 +7,14 @@ features) is inherited from CellStrategy.
 Requires: pip install instanseg-torch
 """
 
-import numpy as np
-from typing import Dict, Any, List
+from typing import Any
 
-from .cell import CellStrategy
+import numpy as np
+
 from segmentation.detection.registry import register_strategy
 from segmentation.utils.logging import get_logger
+
+from .cell import CellStrategy
 
 logger = get_logger(__name__)
 
@@ -60,6 +62,7 @@ class InstanSegStrategy(CellStrategy):
             return
         try:
             from instanseg import InstanSeg
+
             self._instanseg = InstanSeg(self.instanseg_model_name)
             logger.info("InstanSeg loaded: %s", self.instanseg_model_name)
         except ImportError:
@@ -71,10 +74,10 @@ class InstanSegStrategy(CellStrategy):
     def segment(
         self,
         tile: np.ndarray,
-        models: Dict[str, Any],
-        extra_channels: Dict[int, np.ndarray] = None,
+        models: dict[str, Any],
+        extra_channels: dict[int, np.ndarray] = None,
         **kwargs,
-    ) -> List[np.ndarray]:
+    ) -> list[np.ndarray]:
         """Generate cell masks using InstanSeg.
 
         Args:
@@ -99,20 +102,16 @@ class InstanSegStrategy(CellStrategy):
                     cyto_u8 = self._percentile_normalize_single(cyto_ch)
                     nuc_u8 = self._percentile_normalize_single(nuc_ch)
                     # InstanSeg expects (C, H, W) tensor
-                    input_tensor = torch.from_numpy(
-                        np.stack([cyto_u8, nuc_u8], axis=0)
-                    ).float()
+                    input_tensor = torch.from_numpy(np.stack([cyto_u8, nuc_u8], axis=0)).float()
                 else:
-                    input_tensor = torch.from_numpy(
-                        tile.transpose(2, 0, 1)
-                    ).float()
+                    input_tensor = torch.from_numpy(tile.transpose(2, 0, 1)).float()
             else:
                 # RGB tile (H, W, 3) -> (3, H, W) tensor
                 input_tensor = torch.from_numpy(tile.transpose(2, 0, 1)).float()
 
             # Run InstanSeg: eval_small_image returns (labeled_masks, image_tensor)
             # labeled_masks shape: (1, n_types, H, W) where n_types=2 (nuclei+cells)
-            pixel_size = self._pixel_size_um or kwargs.get('pixel_size_um', None)
+            pixel_size = self._pixel_size_um or kwargs.get("pixel_size_um", None)
             if pixel_size is None:
                 raise ValueError(
                     "InstanSeg requires pixel_size_um — set in constructor or pass via kwargs"

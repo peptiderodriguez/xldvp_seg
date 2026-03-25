@@ -26,11 +26,12 @@ import sys
 from pathlib import Path
 
 import matplotlib
+
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 import numpy as np
 
-from segmentation.io.czi_loader import get_loader, get_czi_metadata
+from segmentation.io.czi_loader import get_czi_metadata, get_loader
 from segmentation.preprocessing.flat_field import estimate_illumination_profile
 from segmentation.preprocessing.illumination import (
     correct_photobleaching,
@@ -119,9 +120,21 @@ def apply_flat_field(data, output_dir, channel, meta):
     corrected = data.copy()
     profile.correct_channel_inplace(corrected, channel)
 
-    ch_name = meta["channels"][channel]["name"] if channel < len(meta["channels"]) else f"ch{channel}"
-    make_comparison(before, corrected, f"Flat-Field Correction — {ch_name}", output_dir / f"ch{channel}_flat_field.png")
-    make_histogram(before, corrected, f"Flat-Field Histogram — {ch_name}", output_dir / f"ch{channel}_flat_field_hist.png")
+    ch_name = (
+        meta["channels"][channel]["name"] if channel < len(meta["channels"]) else f"ch{channel}"
+    )
+    make_comparison(
+        before,
+        corrected,
+        f"Flat-Field Correction — {ch_name}",
+        output_dir / f"ch{channel}_flat_field.png",
+    )
+    make_histogram(
+        before,
+        corrected,
+        f"Flat-Field Histogram — {ch_name}",
+        output_dir / f"ch{channel}_flat_field_hist.png",
+    )
     return corrected
 
 
@@ -131,9 +144,21 @@ def apply_photobleach(data, output_dir, channel, meta):
     before = data.copy()
     corrected = correct_photobleaching(data.copy())
 
-    ch_name = meta["channels"][channel]["name"] if channel < len(meta["channels"]) else f"ch{channel}"
-    make_comparison(before, corrected, f"Photobleach Correction — {ch_name}", output_dir / f"ch{channel}_photobleach.png")
-    make_histogram(before, corrected, f"Photobleach Histogram — {ch_name}", output_dir / f"ch{channel}_photobleach_hist.png")
+    ch_name = (
+        meta["channels"][channel]["name"] if channel < len(meta["channels"]) else f"ch{channel}"
+    )
+    make_comparison(
+        before,
+        corrected,
+        f"Photobleach Correction — {ch_name}",
+        output_dir / f"ch{channel}_photobleach.png",
+    )
+    make_histogram(
+        before,
+        corrected,
+        f"Photobleach Histogram — {ch_name}",
+        output_dir / f"ch{channel}_photobleach_hist.png",
+    )
     return corrected
 
 
@@ -143,16 +168,26 @@ def apply_row_col_norm(data, output_dir, channel, meta):
     before = data.copy()
     corrected = normalize_rows_columns(data.copy())
 
-    ch_name = meta["channels"][channel]["name"] if channel < len(meta["channels"]) else f"ch{channel}"
-    make_comparison(before, corrected, f"Row/Column Normalization — {ch_name}", output_dir / f"ch{channel}_rowcol_norm.png")
-    make_histogram(before, corrected, f"Row/Col Norm Histogram — {ch_name}", output_dir / f"ch{channel}_rowcol_norm_hist.png")
+    ch_name = (
+        meta["channels"][channel]["name"] if channel < len(meta["channels"]) else f"ch{channel}"
+    )
+    make_comparison(
+        before,
+        corrected,
+        f"Row/Column Normalization — {ch_name}",
+        output_dir / f"ch{channel}_rowcol_norm.png",
+    )
+    make_histogram(
+        before,
+        corrected,
+        f"Row/Col Norm Histogram — {ch_name}",
+        output_dir / f"ch{channel}_rowcol_norm_hist.png",
+    )
     return corrected
 
 
 def main():
-    parser = argparse.ArgumentParser(
-        description="Preview preprocessing effects on a CZI channel"
-    )
+    parser = argparse.ArgumentParser(description="Preview preprocessing effects on a CZI channel")
     parser.add_argument("--czi-path", required=True, help="Path to CZI file")
     parser.add_argument("--channel", type=int, required=True, help="Channel index")
     parser.add_argument(

@@ -68,15 +68,15 @@ def set_device_for_worker(gpu_id: int) -> torch.device:
     """
     # Set CUDA_VISIBLE_DEVICES BEFORE checking availability to ensure
     # the CUDA runtime (if initialized later) sees only this GPU.
-    os.environ['CUDA_VISIBLE_DEVICES'] = str(gpu_id)
+    os.environ["CUDA_VISIBLE_DEVICES"] = str(gpu_id)
     if torch.cuda.is_available() and torch.cuda.device_count() > 0:
-        return torch.device('cuda:0')
+        return torch.device("cuda:0")
     # On non-CUDA systems the env var is harmless
     if hasattr(torch.backends, "mps") and torch.backends.mps.is_available():
         if gpu_id > 0:
             logger.warning("MPS has only one device; gpu_id=%d ignored", gpu_id)
-        return torch.device('mps')
-    return torch.device('cpu')
+        return torch.device("mps")
+    return torch.device("cpu")
 
 
 def device_supports_gpu(device) -> bool:
@@ -86,14 +86,14 @@ def device_supports_gpu(device) -> bool:
     """
     if isinstance(device, str):
         device = torch.device(device)
-    return device.type in ('cuda', 'mps')
+    return device.type in ("cuda", "mps")
 
 
 __all__ = [
-    'get_default_device',
-    'get_device_count',
-    'is_gpu_available',
-    'empty_cache',
-    'set_device_for_worker',
-    'device_supports_gpu',
+    "get_default_device",
+    "get_device_count",
+    "is_gpu_available",
+    "empty_cache",
+    "set_device_for_worker",
+    "device_supports_gpu",
 ]

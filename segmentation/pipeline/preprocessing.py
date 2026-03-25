@@ -26,21 +26,24 @@ def apply_slide_preprocessing(args, all_channel_data, loader):
         loader: CZI loader (channel_data updated in place)
     """
     # Apply photobleaching correction if requested (slide-wide, before tiling)
-    if getattr(args, 'photobleaching_correction', False):
+    if getattr(args, "photobleaching_correction", False):
         _apply_photobleach_correction(args, all_channel_data, loader)
 
     # Apply flat-field illumination correction (smooth out regional intensity gradients)
-    if getattr(args, 'normalize_features', True):
+    if getattr(args, "normalize_features", True):
         _apply_flat_field_correction(args, all_channel_data, loader)
 
     # Apply Reinhard normalization if params file provided (whole-slide, before tiling)
-    if getattr(args, 'norm_params_file', None):
+    if getattr(args, "norm_params_file", None):
         _apply_reinhard_normalization(args, all_channel_data, loader)
 
 
 def _apply_photobleach_correction(args, all_channel_data, loader):
     """Apply slide-wide photobleaching correction to fix horizontal/vertical banding."""
-    from segmentation.preprocessing.illumination import normalize_rows_columns, estimate_band_severity
+    from segmentation.preprocessing.illumination import (
+        estimate_band_severity,
+        normalize_rows_columns,
+    )
 
     logger.info("Applying slide-wide photobleaching correction...")
 
@@ -49,8 +52,10 @@ def _apply_photobleach_correction(args, all_channel_data, loader):
 
         # Report severity before
         severity_before = estimate_band_severity(ch_data)
-        logger.info(f"  Channel {ch} before: row_cv={severity_before['row_cv']:.1f}%, "
-                   f"col_cv={severity_before['col_cv']:.1f}% ({severity_before['severity']})")
+        logger.info(
+            f"  Channel {ch} before: row_cv={severity_before['row_cv']:.1f}%, "
+            f"col_cv={severity_before['col_cv']:.1f}% ({severity_before['severity']})"
+        )
 
         # Apply row/column normalization to fix banding
         # Note: uses float32 internally, may need ~2x memory temporarily
@@ -70,13 +75,15 @@ def _apply_photobleach_correction(args, all_channel_data, loader):
         # Using np.copyto preserves the SHM backing — dict assignment would replace
         # the view with a new array, disconnecting from shared memory.
         np.copyto(all_channel_data[ch], corrected)
-        if hasattr(loader, 'set_channel_data'):
+        if hasattr(loader, "set_channel_data"):
             loader.set_channel_data(ch, all_channel_data[ch])
 
         # Report severity after
         severity_after = estimate_band_severity(corrected)
-        logger.info(f"  Channel {ch} after:  row_cv={severity_after['row_cv']:.1f}%, "
-                   f"col_cv={severity_after['col_cv']:.1f}% ({severity_after['severity']})")
+        logger.info(
+            f"  Channel {ch} after:  row_cv={severity_after['row_cv']:.1f}%, "
+            f"col_cv={severity_after['col_cv']:.1f}% ({severity_after['severity']})"
+        )
 
         # Drop the local reference so GC can free any intermediate float64 arrays
         del corrected
@@ -101,7 +108,7 @@ def _apply_flat_field_correction(args, all_channel_data, loader):
     for ch in all_channel_data:
         illumination_profile.correct_channel_inplace(all_channel_data[ch], ch)
         # Sync corrected data back to loader for all channels
-        if hasattr(loader, 'set_channel_data'):
+        if hasattr(loader, "set_channel_data"):
             loader.set_channel_data(ch, all_channel_data[ch])
         elif ch == args.channel:
             loader.channel_data = all_channel_data[ch]
@@ -119,11 +126,11 @@ def _apply_reinhard_normalization(args, all_channel_data, loader):
     logger.info(f"{'='*70}")
     logger.info(f"Loading params from: {args.norm_params_file}")
 
-    with open(args.norm_params_file, 'r') as f:
+    with open(args.norm_params_file) as f:
         norm_params = json.load(f)
 
     # Validate required keys
-    required_keys = {'L_median', 'L_mad', 'a_median', 'a_mad', 'b_median', 'b_mad'}
+    required_keys = {"L_median", "L_mad", "a_median", "a_mad", "b_median", "b_mad"}
     missing_keys = required_keys - set(norm_params.keys())
     if missing_keys:
         raise ValueError(
@@ -131,11 +138,19 @@ def _apply_reinhard_normalization(args, all_channel_data, loader):
             f"Required: {required_keys}"
         )
 
-    logger.info(f"  Target: L_median={norm_params['L_median']:.2f}, L_mad={norm_params['L_mad']:.2f}")
-    logger.info(f"  Target: a_median={norm_params['a_median']:.2f}, a_mad={norm_params['a_mad']:.2f}")
-    logger.info(f"  Target: b_median={norm_params['b_median']:.2f}, b_mad={norm_params['b_mad']:.2f}")
-    if 'n_slides' in norm_params:
-        logger.info(f"  Computed from {norm_params['n_slides']} slides, {norm_params.get('n_total_pixels', '?')} pixels")
+    logger.info(
+        f"  Target: L_median={norm_params['L_median']:.2f}, L_mad={norm_params['L_mad']:.2f}"
+    )
+    logger.info(
+        f"  Target: a_median={norm_params['a_median']:.2f}, a_mad={norm_params['a_mad']:.2f}"
+    )
+    logger.info(
+        f"  Target: b_median={norm_params['b_median']:.2f}, b_mad={norm_params['b_mad']:.2f}"
+    )
+    if "n_slides" in norm_params:
+        logger.info(
+            f"  Computed from {norm_params['n_slides']} slides, {norm_params.get('n_total_pixels', '?')} pixels"
+        )
 
     # Build RGB image for normalization
     # Loader produces individual 2D channels — primary_data is always 2D.
@@ -146,16 +161,23 @@ def _apply_reinhard_normalization(args, all_channel_data, loader):
     # This avoids creating a 3-channel uint16 copy (3x memory waste).
     single_u8 = primary_data
     if single_u8.dtype == np.uint16:
-        logger.info(f"  Converting single-channel uint16 -> uint8 before stacking ({single_u8.nbytes / 1e9:.1f} GB)")
+        logger.info(
+            f"  Converting single-channel uint16 -> uint8 before stacking ({single_u8.nbytes / 1e9:.1f} GB)"
+        )
         single_u8 = (single_u8 >> 8).astype(np.uint8)
     elif single_u8.dtype != np.uint8:
         from segmentation.utils.detection_utils import safe_to_uint8
+
         single_u8 = safe_to_uint8(single_u8)
     rgb_for_norm = np.stack([single_u8] * 3, axis=-1)
     del single_u8
 
-    logger.info(f"  RGB shape: {rgb_for_norm.shape}, dtype: {rgb_for_norm.dtype} ({rgb_for_norm.nbytes / 1e9:.1f} GB)")
-    logger.info(f"  Applying Reinhard normalization (this normalizes tissue blocks, preserves background)...")
+    logger.info(
+        f"  RGB shape: {rgb_for_norm.shape}, dtype: {rgb_for_norm.dtype} ({rgb_for_norm.nbytes / 1e9:.1f} GB)"
+    )
+    logger.info(
+        "  Applying Reinhard normalization (this normalizes tissue blocks, preserves background)..."
+    )
 
     normalized_rgb = apply_reinhard_normalization_MEDIAN(rgb_for_norm, norm_params)
     del rgb_for_norm
@@ -166,7 +188,7 @@ def _apply_reinhard_normalization(args, all_channel_data, loader):
     # Single channel -- take first channel from normalized RGB
     normalized_single = normalized_rgb[:, :, 0]
     np.copyto(all_channel_data[args.channel], normalized_single)
-    if hasattr(loader, 'set_channel_data'):
+    if hasattr(loader, "set_channel_data"):
         loader.set_channel_data(args.channel, all_channel_data[args.channel])
     del normalized_single
 

@@ -28,7 +28,8 @@ from pathlib import Path
 import numpy as np
 from sklearn.ensemble import RandomForestClassifier
 from sklearn.model_selection import StratifiedKFold
-from segmentation.utils.json_utils import fast_json_load, atomic_json_dump
+
+from segmentation.utils.json_utils import atomic_json_dump, fast_json_load
 from segmentation.utils.logging import get_logger, setup_logging
 
 logger = get_logger(__name__)
@@ -100,14 +101,22 @@ def load_annotations(annotations_path):
     # Format 2: annotations dict with "yes"/"no" values
     if "annotations" in annotations:
         ann_dict = annotations["annotations"]
-        positive_ids = {uid for uid, val in ann_dict.items()
-                        if str(val).lower() in ("yes", "true", "1", "positive")}
-        negative_ids = {uid for uid, val in ann_dict.items()
-                        if str(val).lower() in ("no", "false", "0", "negative")}
+        positive_ids = {
+            uid
+            for uid, val in ann_dict.items()
+            if str(val).lower() in ("yes", "true", "1", "positive")
+        }
+        negative_ids = {
+            uid
+            for uid, val in ann_dict.items()
+            if str(val).lower() in ("no", "false", "0", "negative")
+        }
         return positive_ids, negative_ids
 
-    logger.error("Unrecognized annotation format. Expected 'positive'/'negative' "
-                 "lists or 'annotations' dict.")
+    logger.error(
+        "Unrecognized annotation format. Expected 'positive'/'negative' "
+        "lists or 'annotations' dict."
+    )
     sys.exit(1)
 
 
@@ -159,7 +168,8 @@ def load_features_and_labels(detections_path, annotations_path):
     for det in detections:
         if det.get("features"):
             feature_names = sorted(
-                k for k, v in det["features"].items()
+                k
+                for k, v in det["features"].items()
                 if isinstance(v, (int, float)) and not isinstance(v, bool)
             )
             break
@@ -190,12 +200,19 @@ def load_features_and_labels(detections_path, annotations_path):
     logger.info(f"Matched: {matched_pos} positive, {matched_neg} negative")
 
     if matched_pos + matched_neg < 20:
-        logger.error(f"Too few matched samples ({matched_pos + matched_neg}). "
-                     "Check that annotation IDs match detection IDs.")
+        logger.error(
+            f"Too few matched samples ({matched_pos + matched_neg}). "
+            "Check that annotation IDs match detection IDs."
+        )
         sys.exit(1)
 
-    return (np.array(X, dtype=np.float64), np.array(y, dtype=int),
-            feature_names, matched_pos, matched_neg)
+    return (
+        np.array(X, dtype=np.float64),
+        np.array(y, dtype=int),
+        feature_names,
+        matched_pos,
+        matched_neg,
+    )
 
 
 def evaluate_feature_set(X, y, feature_indices, n_folds, n_estimators):
@@ -253,19 +270,21 @@ def main():
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog=__doc__,
     )
-    parser.add_argument("--detections", required=True,
-                        help="Path to detections JSON")
-    parser.add_argument("--annotations", required=True,
-                        help="Path to annotations JSON")
-    parser.add_argument("--output-dir", default=None,
-                        help="Output directory (default: alongside detections)")
-    parser.add_argument("--n-folds", type=int, default=5,
-                        help="Cross-validation folds (default: 5)")
-    parser.add_argument("--n-estimators", type=int, default=200,
-                        help="RF trees (default: 200)")
-    parser.add_argument("--sort-by", default="f1",
-                        choices=["accuracy", "precision", "recall", "f1"],
-                        help="Sort results by this metric (default: f1)")
+    parser.add_argument("--detections", required=True, help="Path to detections JSON")
+    parser.add_argument("--annotations", required=True, help="Path to annotations JSON")
+    parser.add_argument(
+        "--output-dir", default=None, help="Output directory (default: alongside detections)"
+    )
+    parser.add_argument(
+        "--n-folds", type=int, default=5, help="Cross-validation folds (default: 5)"
+    )
+    parser.add_argument("--n-estimators", type=int, default=200, help="RF trees (default: 200)")
+    parser.add_argument(
+        "--sort-by",
+        default="f1",
+        choices=["accuracy", "precision", "recall", "f1"],
+        help="Sort results by this metric (default: f1)",
+    )
     args = parser.parse_args()
 
     setup_logging()
@@ -278,9 +297,7 @@ def main():
     output_dir.mkdir(parents=True, exist_ok=True)
 
     # Load data
-    X, y, feature_names, n_pos, n_neg = load_features_and_labels(
-        args.detections, args.annotations
-    )
+    X, y, feature_names, n_pos, n_neg = load_features_and_labels(args.detections, args.annotations)
     X = np.nan_to_num(X, nan=0, posinf=0, neginf=0)
 
     n_samples = len(y)
@@ -323,31 +340,39 @@ def main():
 
         metrics = evaluate_feature_set(X, y, indices, args.n_folds, args.n_estimators)
 
-        results.append({
-            "name": combo_name,
-            "n_features": n_feat,
-            "feature_names": sorted(combo_feature_names),
-            **metrics,
-        })
+        results.append(
+            {
+                "name": combo_name,
+                "n_features": n_feat,
+                "feature_names": sorted(combo_feature_names),
+                **metrics,
+            }
+        )
 
     # Sort by chosen metric
     results.sort(key=lambda r: r[args.sort_by]["mean"], reverse=True)
 
     # Print comparison table
-    header = (f"\nFeature Set Comparison ({args.n_folds}-fold CV, "
-              f"{args.n_estimators} trees, {n_samples} samples)")
+    header = (
+        f"\nFeature Set Comparison ({args.n_folds}-fold CV, "
+        f"{args.n_estimators} trees, {n_samples} samples)"
+    )
     print(header)
     print("=" * len(header.strip()))
-    print(f"{'Feature Set':<28} {'n_feat':>6}  {'Accuracy':>10}  "
-          f"{'Precision':>10}  {'Recall':>10}  {'F1':>10}")
+    print(
+        f"{'Feature Set':<28} {'n_feat':>6}  {'Accuracy':>10}  "
+        f"{'Precision':>10}  {'Recall':>10}  {'F1':>10}"
+    )
     print("-" * 88)
 
     for r in results:
-        print(f"{r['name']:<28} {r['n_features']:>6}  "
-              f"{r['accuracy']['mean']:>10.3f}  "
-              f"{r['precision']['mean']:>10.3f}  "
-              f"{r['recall']['mean']:>10.3f}  "
-              f"{r['f1']['mean']:>10.3f}")
+        print(
+            f"{r['name']:<28} {r['n_features']:>6}  "
+            f"{r['accuracy']['mean']:>10.3f}  "
+            f"{r['precision']['mean']:>10.3f}  "
+            f"{r['recall']['mean']:>10.3f}  "
+            f"{r['f1']['mean']:>10.3f}"
+        )
 
     print()
 

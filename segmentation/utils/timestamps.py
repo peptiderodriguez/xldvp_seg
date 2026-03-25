@@ -15,7 +15,7 @@ Usage:
     # Save JSON with timestamp + symlink
     save_with_timestamp("output/detections.json", data, fmt="json")
 """
-import json
+
 from datetime import datetime
 from pathlib import Path
 
@@ -24,7 +24,7 @@ from segmentation.utils.logging import get_logger
 logger = get_logger(__name__)
 
 # Set once per process — all files in a single run share the same timestamp
-RUN_TIMESTAMP = datetime.now().strftime('%Y%m%d_%H%M%S')
+RUN_TIMESTAMP = datetime.now().strftime("%Y%m%d_%H%M%S")
 
 
 def timestamped_path(path, timestamp=None):
@@ -54,6 +54,7 @@ def update_symlink(link_path, target_path):
         logger.warning(f"Could not create symlink {link_path} -> {target_path.name}: {e}")
         # Fall back to file copy so the canonical name still exists
         import shutil
+
         try:
             shutil.copy2(str(target_path), str(link_path))
             logger.info(f"Copied {target_path.name} -> {link_path.name} (symlink fallback)")
@@ -78,9 +79,10 @@ def save_with_timestamp(base_path, data, fmt="json"):
 
     if fmt == "json":
         from segmentation.utils.json_utils import atomic_json_dump
+
         atomic_json_dump(data, ts_path)
     elif fmt == "text":
-        with open(ts_path, 'w') as f:
+        with open(ts_path, "w") as f:
             f.write(data if isinstance(data, str) else str(data))
     else:
         raise ValueError(f"Unknown format: {fmt}")

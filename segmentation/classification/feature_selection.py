@@ -21,9 +21,9 @@ Usage:
     scores = cross_validate_features(X, y, feature_subset)
 """
 
-from typing import Dict, List, Tuple, Optional, Any
-import numpy as np
+from typing import Any
 
+import numpy as np
 from sklearn.ensemble import RandomForestClassifier
 from sklearn.feature_selection import (
     RFE,
@@ -31,14 +31,14 @@ from sklearn.feature_selection import (
     SelectFromModel,
     mutual_info_classif,
 )
+from sklearn.inspection import permutation_importance
 from sklearn.model_selection import (
-    cross_val_score,
     StratifiedKFold,
+    cross_val_score,
     learning_curve,
 )
 from sklearn.pipeline import Pipeline
-from sklearn.preprocessing import StandardScaler, LabelEncoder
-from sklearn.inspection import permutation_importance
+from sklearn.preprocessing import LabelEncoder, StandardScaler
 
 from segmentation.utils.logging import get_logger
 
@@ -48,11 +48,11 @@ logger = get_logger(__name__)
 def analyze_feature_importance(
     X: np.ndarray,
     y: np.ndarray,
-    feature_names: List[str],
-    method: str = 'all',
+    feature_names: list[str],
+    method: str = "all",
     n_repeats: int = 10,
     random_state: int = 42,
-) -> Dict[str, Dict[str, float]]:
+) -> dict[str, dict[str, float]]:
     """
     Analyze feature importance using multiple methods.
 
@@ -83,7 +83,7 @@ def analyze_feature_importance(
     X = np.nan_to_num(X, nan=0, posinf=0, neginf=0)
 
     # Encode labels if strings
-    if y.dtype.kind in ('U', 'S', 'O'):
+    if y.dtype.kind in ("U", "S", "O"):
         le = LabelEncoder()
         y = le.fit_transform(y)
 
@@ -96,53 +96,36 @@ def analyze_feature_importance(
 
     # Train base model
     rf = RandomForestClassifier(
-        n_estimators=100,
-        random_state=random_state,
-        n_jobs=-1,
-        class_weight='balanced'
+        n_estimators=100, random_state=random_state, n_jobs=-1, class_weight="balanced"
     )
     rf.fit(X_scaled, y)
 
     # Gini importance (MDI - Mean Decrease in Impurity)
-    if method in ('gini', 'all'):
+    if method in ("gini", "all"):
         gini_importance = rf.feature_importances_
-        results['gini'] = dict(zip(feature_names, gini_importance.tolist()))
+        results["gini"] = dict(zip(feature_names, gini_importance.tolist()))
         logger.info("Computed Gini importance")
 
     # Permutation importance
-    if method in ('permutation', 'all'):
+    if method in ("permutation", "all"):
         perm_importance = permutation_importance(
-            rf, X_scaled, y,
-            n_repeats=n_repeats,
-            random_state=random_state,
-            n_jobs=-1
+            rf, X_scaled, y, n_repeats=n_repeats, random_state=random_state, n_jobs=-1
         )
-        results['permutation'] = dict(zip(
-            feature_names,
-            perm_importance.importances_mean.tolist()
-        ))
+        results["permutation"] = dict(zip(feature_names, perm_importance.importances_mean.tolist()))
         logger.info("Computed permutation importance")
 
     # Mutual information
-    if method in ('mutual_info', 'all'):
-        mi_scores = mutual_info_classif(
-            X_scaled, y,
-            random_state=random_state,
-            n_neighbors=5
-        )
-        results['mutual_info'] = dict(zip(feature_names, mi_scores.tolist()))
+    if method in ("mutual_info", "all"):
+        mi_scores = mutual_info_classif(X_scaled, y, random_state=random_state, n_neighbors=5)
+        results["mutual_info"] = dict(zip(feature_names, mi_scores.tolist()))
         logger.info("Computed mutual information")
 
     # Aggregate: average rank across methods
-    if method == 'all' and len(results) > 1:
+    if method == "all" and len(results) > 1:
         # Convert to ranks (higher importance = lower rank = better)
         ranks = {}
         for method_name, importance_dict in results.items():
-            sorted_features = sorted(
-                importance_dict.items(),
-                key=lambda x: x[1],
-                reverse=True
-            )
+            sorted_features = sorted(importance_dict.items(), key=lambda x: x[1], reverse=True)
             for rank, (feat, _) in enumerate(sorted_features):
                 if feat not in ranks:
                     ranks[feat] = []
@@ -150,13 +133,12 @@ def analyze_feature_importance(
 
         # Average rank
         aggregate = {feat: np.mean(rank_list) for feat, rank_list in ranks.items()}
-        results['aggregate'] = aggregate
+        results["aggregate"] = aggregate
 
         # Also compute normalized aggregate score (inverse rank)
         max_rank = len(feature_names) - 1
-        results['aggregate_score'] = {
-            feat: (max_rank - avg_rank) / max_rank
-            for feat, avg_rank in aggregate.items()
+        results["aggregate_score"] = {
+            feat: (max_rank - avg_rank) / max_rank for feat, avg_rank in aggregate.items()
         }
 
     return results
@@ -165,13 +147,13 @@ def analyze_feature_importance(
 def select_optimal_features(
     X: np.ndarray,
     y: np.ndarray,
-    feature_names: List[str],
-    method: str = 'rfecv',
+    feature_names: list[str],
+    method: str = "rfecv",
     min_features: int = 5,
     cv_folds: int = 5,
     random_state: int = 42,
-    verbose: bool = True
-) -> Dict[str, Any]:
+    verbose: bool = True,
+) -> dict[str, Any]:
     """
     Select optimal feature subset using various methods.
 
@@ -203,16 +185,13 @@ def select_optimal_features(
     X = np.nan_to_num(X, nan=0, posinf=0, neginf=0)
 
     # Encode labels
-    if y.dtype.kind in ('U', 'S', 'O'):
+    if y.dtype.kind in ("U", "S", "O"):
         le = LabelEncoder()
         y = le.fit_transform(y)
 
     # Base estimator
     rf = RandomForestClassifier(
-        n_estimators=100,
-        random_state=random_state,
-        n_jobs=-1,
-        class_weight='balanced'
+        n_estimators=100, random_state=random_state, n_jobs=-1, class_weight="balanced"
     )
 
     # NOTE: StandardScaler is unnecessary for RF (scale-invariant) but kept
@@ -222,7 +201,7 @@ def select_optimal_features(
 
     result = {}
 
-    if method == 'rfecv':
+    if method == "rfecv":
         # Recursive Feature Elimination with Cross-Validation
         # RF is scale-invariant (tree-based), so no scaler needed here.
         # This avoids data leakage that would occur from pre-scaling all data.
@@ -231,39 +210,35 @@ def select_optimal_features(
             estimator=rf,
             step=1,
             cv=cv,
-            scoring='accuracy',
+            scoring="accuracy",
             min_features_to_select=min_features,
-            n_jobs=-1
+            n_jobs=-1,
         )
         selector.fit(X, y)
 
         selected_mask = selector.support_
-        result['cv_scores'] = selector.cv_results_['mean_test_score'].tolist()
-        result['optimal_n_features'] = selector.n_features_
-        result['ranking'] = selector.ranking_.tolist()
+        result["cv_scores"] = selector.cv_results_["mean_test_score"].tolist()
+        result["optimal_n_features"] = selector.n_features_
+        result["ranking"] = selector.ranking_.tolist()
 
         if verbose:
             logger.info(f"RFECV selected {selector.n_features_} features")
             logger.info(f"Best CV score: {max(selector.cv_results_['mean_test_score']):.4f}")
 
-    elif method == 'rfe':
+    elif method == "rfe":
         # RFE without CV (no leakage concern since no CV, but use scaled data)
-        selector = RFE(
-            estimator=rf,
-            n_features_to_select=min_features,
-            step=1
-        )
+        selector = RFE(estimator=rf, n_features_to_select=min_features, step=1)
         selector.fit(X_scaled, y)
         selected_mask = selector.support_
-        result['ranking'] = selector.ranking_.tolist()
+        result["ranking"] = selector.ranking_.tolist()
 
         if verbose:
             logger.info(f"RFE selected {min_features} features")
 
-    elif method == 'threshold':
+    elif method == "threshold":
         # Select features above mean importance (no CV, no leakage concern)
         rf.fit(X_scaled, y)
-        selector = SelectFromModel(rf, prefit=True, threshold='mean')
+        selector = SelectFromModel(rf, prefit=True, threshold="mean")
         selected_mask = selector.get_support()
 
         # Ensure minimum features
@@ -277,7 +252,7 @@ def select_optimal_features(
         if verbose:
             logger.info(f"Threshold selection: {selected_mask.sum()} features")
 
-    elif method == 'top_n':
+    elif method == "top_n":
         # Simply select top N by importance (no CV, no leakage concern)
         rf.fit(X_scaled, y)
         importance = rf.feature_importances_
@@ -295,12 +270,14 @@ def select_optimal_features(
     selected_indices = np.where(selected_mask)[0].tolist()
     selected_features = [feature_names[i] for i in selected_indices]
 
-    result.update({
-        'selected_features': selected_features,
-        'selected_indices': selected_indices,
-        'n_features': len(selected_features),
-        'method': method,
-    })
+    result.update(
+        {
+            "selected_features": selected_features,
+            "selected_indices": selected_indices,
+            "n_features": len(selected_features),
+            "method": method,
+        }
+    )
 
     return result
 
@@ -308,14 +285,14 @@ def select_optimal_features(
 def cross_validate_features(
     X: np.ndarray,
     y: np.ndarray,
-    feature_names: Optional[List[str]] = None,
-    feature_subset: Optional[List[str]] = None,
-    feature_indices: Optional[List[int]] = None,
+    feature_names: list[str] | None = None,
+    feature_subset: list[str] | None = None,
+    feature_indices: list[int] | None = None,
     cv_folds: int = 5,
     n_estimators: int = 100,
     random_state: int = 42,
     return_models: bool = False,
-) -> Dict[str, Any]:
+) -> dict[str, Any]:
     """
     Cross-validate classifier with specified feature subset.
 
@@ -350,48 +327,58 @@ def cross_validate_features(
         X = X[:, feature_indices]
 
     # Encode labels
-    if y.dtype.kind in ('U', 'S', 'O'):
+    if y.dtype.kind in ("U", "S", "O"):
         le = LabelEncoder()
         y = le.fit_transform(y)
 
     # Cross-validation with Pipeline to avoid data leakage
     # (scaler fits inside each fold, not on full dataset)
     cv = StratifiedKFold(n_splits=cv_folds, shuffle=True, random_state=random_state)
-    pipe = Pipeline([
-        ('scaler', StandardScaler()),
-        ('rf', RandomForestClassifier(
-            n_estimators=n_estimators,
-            random_state=random_state,
-            n_jobs=-1,
-            class_weight='balanced'
-        )),
-    ])
+    pipe = Pipeline(
+        [
+            ("scaler", StandardScaler()),
+            (
+                "rf",
+                RandomForestClassifier(
+                    n_estimators=n_estimators,
+                    random_state=random_state,
+                    n_jobs=-1,
+                    class_weight="balanced",
+                ),
+            ),
+        ]
+    )
 
-    fold_scores = cross_val_score(pipe, X, y, cv=cv, scoring='accuracy')
+    fold_scores = cross_val_score(pipe, X, y, cv=cv, scoring="accuracy")
 
     result = {
-        'mean_accuracy': float(fold_scores.mean()),
-        'std_accuracy': float(fold_scores.std()),
-        'fold_scores': fold_scores.tolist(),
-        'n_features': X.shape[1],
+        "mean_accuracy": float(fold_scores.mean()),
+        "std_accuracy": float(fold_scores.std()),
+        "fold_scores": fold_scores.tolist(),
+        "n_features": X.shape[1],
     }
 
     # Optionally return trained models (each with its own scaler, no leakage)
     if return_models:
         models = []
         for train_idx, _ in cv.split(X, y):
-            fold_pipe = Pipeline([
-                ('scaler', StandardScaler()),
-                ('rf', RandomForestClassifier(
-                    n_estimators=n_estimators,
-                    random_state=random_state,
-                    n_jobs=-1,
-                    class_weight='balanced'
-                )),
-            ])
+            fold_pipe = Pipeline(
+                [
+                    ("scaler", StandardScaler()),
+                    (
+                        "rf",
+                        RandomForestClassifier(
+                            n_estimators=n_estimators,
+                            random_state=random_state,
+                            n_jobs=-1,
+                            class_weight="balanced",
+                        ),
+                    ),
+                ]
+            )
             fold_pipe.fit(X[train_idx], y[train_idx])
             models.append(fold_pipe)
-        result['models'] = models
+        result["models"] = models
 
     logger.info(f"CV Accuracy: {fold_scores.mean():.4f} (+/- {fold_scores.std() * 2:.4f})")
 
@@ -401,11 +388,11 @@ def cross_validate_features(
 def compute_learning_curve(
     X: np.ndarray,
     y: np.ndarray,
-    train_sizes: Optional[np.ndarray] = None,
+    train_sizes: np.ndarray | None = None,
     cv_folds: int = 5,
     n_estimators: int = 100,
     random_state: int = 42,
-) -> Dict[str, np.ndarray]:
+) -> dict[str, np.ndarray]:
     """
     Compute learning curve to diagnose bias/variance issues.
 
@@ -432,47 +419,54 @@ def compute_learning_curve(
     X = np.nan_to_num(X, nan=0, posinf=0, neginf=0)
 
     # Encode labels
-    if y.dtype.kind in ('U', 'S', 'O'):
+    if y.dtype.kind in ("U", "S", "O"):
         le = LabelEncoder()
         y = le.fit_transform(y)
 
     # Use Pipeline to avoid data leakage: scaler fits per CV fold
-    pipe = Pipeline([
-        ('scaler', StandardScaler()),
-        ('rf', RandomForestClassifier(
-            n_estimators=n_estimators,
-            random_state=random_state,
-            n_jobs=-1,
-            class_weight='balanced'
-        )),
-    ])
+    pipe = Pipeline(
+        [
+            ("scaler", StandardScaler()),
+            (
+                "rf",
+                RandomForestClassifier(
+                    n_estimators=n_estimators,
+                    random_state=random_state,
+                    n_jobs=-1,
+                    class_weight="balanced",
+                ),
+            ),
+        ]
+    )
 
     train_sizes_abs, train_scores, test_scores = learning_curve(
-        pipe, X, y,
+        pipe,
+        X,
+        y,
         train_sizes=train_sizes,
         cv=cv_folds,
-        scoring='accuracy',
+        scoring="accuracy",
         n_jobs=-1,
-        random_state=random_state
+        random_state=random_state,
     )
 
     return {
-        'train_sizes': train_sizes_abs,
-        'train_scores_mean': train_scores.mean(axis=1),
-        'train_scores_std': train_scores.std(axis=1),
-        'test_scores_mean': test_scores.mean(axis=1),
-        'test_scores_std': test_scores.std(axis=1),
+        "train_sizes": train_sizes_abs,
+        "train_scores_mean": train_scores.mean(axis=1),
+        "train_scores_std": train_scores.std(axis=1),
+        "test_scores_mean": test_scores.mean(axis=1),
+        "test_scores_std": test_scores.std(axis=1),
     }
 
 
 def compare_feature_sets(
     X: np.ndarray,
     y: np.ndarray,
-    feature_names: List[str],
-    feature_sets: Dict[str, List[str]],
+    feature_names: list[str],
+    feature_sets: dict[str, list[str]],
     cv_folds: int = 5,
     random_state: int = 42,
-) -> Dict[str, Dict[str, float]]:
+) -> dict[str, dict[str, float]]:
     """
     Compare performance across different feature sets.
 
@@ -496,24 +490,25 @@ def compare_feature_sets(
         logger.info(f"Evaluating feature set: {set_name} ({len(feature_list)} features)")
 
         cv_result = cross_validate_features(
-            X, y,
+            X,
+            y,
             feature_names=feature_names,
             feature_subset=feature_list,
             cv_folds=cv_folds,
-            random_state=random_state
+            random_state=random_state,
         )
 
         results[set_name] = {
-            'mean_accuracy': cv_result['mean_accuracy'],
-            'std_accuracy': cv_result['std_accuracy'],
-            'n_features': cv_result['n_features'],
+            "mean_accuracy": cv_result["mean_accuracy"],
+            "std_accuracy": cv_result["std_accuracy"],
+            "n_features": cv_result["n_features"],
         }
 
     # Print comparison
     logger.info("\n" + "=" * 50)
     logger.info("Feature Set Comparison")
     logger.info("=" * 50)
-    for set_name, metrics in sorted(results.items(), key=lambda x: -x[1]['mean_accuracy']):
+    for set_name, metrics in sorted(results.items(), key=lambda x: -x[1]["mean_accuracy"]):
         logger.info(
             f"{set_name:20s}: {metrics['mean_accuracy']:.4f} "
             f"(+/- {metrics['std_accuracy'] * 2:.4f}) "
@@ -524,10 +519,8 @@ def compare_feature_sets(
 
 
 def get_correlated_features(
-    X: np.ndarray,
-    feature_names: List[str],
-    threshold: float = 0.9
-) -> List[Tuple[str, str, float]]:
+    X: np.ndarray, feature_names: list[str], threshold: float = 0.9
+) -> list[tuple[str, str, float]]:
     """
     Find highly correlated feature pairs.
 
@@ -554,11 +547,7 @@ def get_correlated_features(
         for j in range(i + 1, n_features):
             corr = abs(corr_matrix[i, j])
             if corr >= threshold:
-                correlated_pairs.append((
-                    feature_names[i],
-                    feature_names[j],
-                    float(corr)
-                ))
+                correlated_pairs.append((feature_names[i], feature_names[j], float(corr)))
 
     # Sort by correlation (descending)
     correlated_pairs.sort(key=lambda x: -x[2])

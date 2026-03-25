@@ -6,12 +6,13 @@ All functions return Plotly figure objects that can be embedded in HTML
 or exported to static images.
 """
 
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any
+
 import numpy as np
 
 try:
-    import plotly.graph_objects as go
     import plotly.express as px
+    import plotly.graph_objects as go
     from plotly.subplots import make_subplots
 
     PLOTLY_AVAILABLE = True
@@ -54,8 +55,7 @@ def _check_plotly() -> None:
     """Check if Plotly is available."""
     if not PLOTLY_AVAILABLE:
         raise ImportError(
-            "Plotly is required for visualization. "
-            "Install with: pip install plotly"
+            "Plotly is required for visualization. " "Install with: pip install plotly"
         )
 
 
@@ -86,11 +86,11 @@ def _apply_dark_theme(fig: "go.Figure") -> "go.Figure":
 
 
 def create_diameter_histogram(
-    features_list: List[Dict[str, Any]],
+    features_list: list[dict[str, Any]],
     bins: int = 30,
     title: str = "Vessel Diameter Distribution",
     show_stats: bool = True,
-    range_um: Optional[Tuple[float, float]] = None,
+    range_um: tuple[float, float] | None = None,
 ) -> "go.Figure":
     """
     Create a histogram of vessel outer diameters.
@@ -108,9 +108,7 @@ def create_diameter_histogram(
     _check_plotly()
 
     diameters = [
-        f.get("outer_diameter_um")
-        for f in features_list
-        if f.get("outer_diameter_um") is not None
+        f.get("outer_diameter_um") for f in features_list if f.get("outer_diameter_um") is not None
     ]
 
     if not diameters:
@@ -177,7 +175,7 @@ def create_diameter_histogram(
 
 
 def create_wall_thickness_histogram(
-    features_list: List[Dict[str, Any]],
+    features_list: list[dict[str, Any]],
     bins: int = 25,
     title: str = "Wall Thickness Distribution",
     show_quantiles: bool = True,
@@ -267,7 +265,7 @@ def create_wall_thickness_histogram(
 
 
 def create_diameter_vs_wall_scatter(
-    features_list: List[Dict[str, Any]],
+    features_list: list[dict[str, Any]],
     title: str = "Diameter vs Wall Thickness",
     color_by: str = "confidence",
     show_regression: bool = True,
@@ -292,13 +290,15 @@ def create_diameter_vs_wall_scatter(
         d = f.get("outer_diameter_um")
         w = f.get("wall_thickness_mean_um")
         if d is not None and w is not None:
-            data.append({
-                "diameter": d,
-                "wall_thickness": w,
-                "confidence": f.get("confidence", "unknown"),
-                "vessel_type": f.get("vessel_type", "unknown"),
-                "circularity": f.get("circularity", 0),
-            })
+            data.append(
+                {
+                    "diameter": d,
+                    "wall_thickness": w,
+                    "confidence": f.get("confidence", "unknown"),
+                    "vessel_type": f.get("vessel_type", "unknown"),
+                    "circularity": f.get("circularity", 0),
+                }
+            )
 
     if not data:
         fig = go.Figure()
@@ -423,7 +423,7 @@ def create_diameter_vs_wall_scatter(
 
 
 def create_lumen_vs_wall_scatter(
-    features_list: List[Dict[str, Any]],
+    features_list: list[dict[str, Any]],
     title: str = "Lumen Area vs Wall Area",
     color_by: str = "vessel_type",
     log_scale: bool = True,
@@ -448,12 +448,14 @@ def create_lumen_vs_wall_scatter(
         lumen = f.get("lumen_area_um2")
         wall = f.get("wall_area_um2")
         if lumen is not None and wall is not None and lumen > 0 and wall > 0:
-            data.append({
-                "lumen_area": lumen,
-                "wall_area": wall,
-                "vessel_type": f.get("vessel_type", "unknown"),
-                "confidence": f.get("confidence", "unknown"),
-            })
+            data.append(
+                {
+                    "lumen_area": lumen,
+                    "wall_area": wall,
+                    "vessel_type": f.get("vessel_type", "unknown"),
+                    "confidence": f.get("confidence", "unknown"),
+                }
+            )
 
     if not data:
         fig = go.Figure()
@@ -473,7 +475,7 @@ def create_lumen_vs_wall_scatter(
     colors = VESSEL_TYPE_COLORS if color_by == "vessel_type" else CONFIDENCE_COLORS
     field = "vessel_type" if color_by == "vessel_type" else "confidence"
 
-    groups: Dict[str, Dict[str, List[float]]] = {}
+    groups: dict[str, dict[str, list[float]]] = {}
     for d in data:
         key = d[field]
         if key not in groups:
@@ -532,9 +534,9 @@ def create_lumen_vs_wall_scatter(
 
 
 def create_vessel_type_pie_chart(
-    features_list: List[Dict[str, Any]],
+    features_list: list[dict[str, Any]],
     title: str = "Vessel Type Breakdown",
-    diameter_thresholds: Optional[Dict[str, Tuple[float, float]]] = None,
+    diameter_thresholds: dict[str, tuple[float, float]] | None = None,
 ) -> "go.Figure":
     """
     Create a pie chart showing vessel type distribution.
@@ -557,7 +559,7 @@ def create_vessel_type_pie_chart(
         }
 
     # Count vessel types
-    counts: Dict[str, int] = {vtype: 0 for vtype in diameter_thresholds}
+    counts: dict[str, int] = dict.fromkeys(diameter_thresholds, 0)
     counts["unknown"] = 0
 
     for f in features_list:
@@ -621,7 +623,7 @@ def create_vessel_type_pie_chart(
 
 
 def create_confidence_histogram(
-    features_list: List[Dict[str, Any]],
+    features_list: list[dict[str, Any]],
     title: str = "Confidence Distribution",
 ) -> "go.Figure":
     """
@@ -693,7 +695,7 @@ def create_confidence_histogram(
 
 
 def create_ring_completeness_histogram(
-    features_list: List[Dict[str, Any]],
+    features_list: list[dict[str, Any]],
     bins: int = 20,
     title: str = "Ring Completeness Distribution",
 ) -> "go.Figure":
@@ -711,9 +713,7 @@ def create_ring_completeness_histogram(
     _check_plotly()
 
     completeness = [
-        f.get("ring_completeness")
-        for f in features_list
-        if f.get("ring_completeness") is not None
+        f.get("ring_completeness") for f in features_list if f.get("ring_completeness") is not None
     ]
 
     if not completeness:
@@ -773,11 +773,11 @@ def create_ring_completeness_histogram(
 
 
 def create_batch_comparison_bar(
-    slide_names: List[str],
-    values: List[float],
+    slide_names: list[str],
+    values: list[float],
     title: str = "Vessel Count by Slide",
     yaxis_title: str = "Count",
-    color: Optional[str] = None,
+    color: str | None = None,
 ) -> "go.Figure":
     """
     Create a bar chart comparing values across slides.
@@ -833,7 +833,7 @@ def create_batch_comparison_bar(
 
 
 def create_batch_comparison_violin(
-    slide_data: Dict[str, List[float]],
+    slide_data: dict[str, list[float]],
     title: str = "Distribution Comparison",
     yaxis_title: str = "Value",
 ) -> "go.Figure":
@@ -907,7 +907,7 @@ def create_batch_comparison_violin(
 
 
 def create_multi_panel_summary(
-    features_list: List[Dict[str, Any]],
+    features_list: list[dict[str, Any]],
     title: str = "Vessel Analysis Summary",
 ) -> "go.Figure":
     """
@@ -945,7 +945,9 @@ def create_multi_panel_summary(
 
     # Extract data
     diameters = [f.get("outer_diameter_um") for f in features_list if f.get("outer_diameter_um")]
-    thicknesses = [f.get("wall_thickness_mean_um") for f in features_list if f.get("wall_thickness_mean_um")]
+    thicknesses = [
+        f.get("wall_thickness_mean_um") for f in features_list if f.get("wall_thickness_mean_um")
+    ]
 
     # Diameter histogram
     if diameters:
@@ -983,7 +985,7 @@ def create_multi_panel_summary(
         )
 
     # Pie chart - vessel types
-    type_counts: Dict[str, int] = {"capillary": 0, "arteriole": 0, "artery": 0}
+    type_counts: dict[str, int] = {"capillary": 0, "arteriole": 0, "artery": 0}
     for f in features_list:
         d = f.get("outer_diameter_um", 0)
         if d < 10:

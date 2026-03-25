@@ -10,6 +10,6 @@ Usage:
     xseg.io.export_lmd(slide, crosses="crosses.json")
 """
 
-from segmentation.api import pp, tl, pl, io
+from segmentation.api import io, pl, pp, tl
 
 __all__ = ["pp", "tl", "pl", "io"]

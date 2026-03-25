@@ -95,8 +95,36 @@ target-version = ['py310', 'py311', 'py312']
 
 [tool.ruff]
 line-length = 100
+
+[tool.ruff.lint]
 select = ["E", "F", "W", "I", "N", "UP", "B", "C4"]
-ignore = ["E501"]
+ignore = [
+    "E501",   # line too long (handled by black)
+    "E402",   # module-level import not at top (needed for os.environ before imports)
+    "E731",   # lambda assignment (used in closures)
+    "E741",   # ambiguous variable name (l, I, O — common in scientific code)
+    "N803",   # argument name should be lowercase (X, SAM2_model in scientific code)
+    "N806",   # variable name should be lowercase (X, NMJ_FEATURES in scientific code)
+    "N816",   # mixed-case variable in global scope
+    "B007",   # unused loop variable (common in enumerate patterns)
+    "B905",   # zip without strict= (Python 3.10 compat)
+    "B904",   # raise from within except (verbose for little gain)
+    "B006",   # mutable default argument in function (intentional in some cases)
+    "B027",   # empty method body (abstract methods)
+    "C408",   # unnecessary dict() call (cosmetic)
+    "C401",   # unnecessary generator within set() (cosmetic)
+    "C405",   # unnecessary literal within set() (cosmetic)
+    "C414",   # unnecessary list() within sorted() (cosmetic)
+    "C416",   # unnecessary comprehension (cosmetic)
+    "F841",   # local variable assigned but never used (common in unpacking)
+    "N802",   # function name should be lowercase (scientific code)
+]
+
+[tool.ruff.lint.per-file-ignores]
+"segmentation/__init__.py" = ["F401"]  # re-exports
+"segmentation/processing/deduplication.py" = ["F401"]  # hdf5plugin side-effect import
+"segmentation/core/slide_analysis.py" = ["F821"]  # lazy import type hint
+"segmentation/detection/strategies/tissue_pattern.py" = ["F821"]  # forward reference
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

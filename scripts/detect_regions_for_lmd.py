@@ -63,25 +63,27 @@ from pathlib import Path
 
 import numpy as np
 from scipy.ndimage import (
-    gaussian_filter,
     binary_fill_holes,
     distance_transform_edt,
+    gaussian_filter,
+)
+from scipy.ndimage import (
     label as ndlabel,
 )
-from skimage.measure import (
-    block_reduce,
-    regionprops,
-    find_contours,
-    approximate_polygon,
-)
-from skimage.morphology import remove_small_objects, closing, dilation, erosion, disk
-from skimage.segmentation import watershed
 from skimage.feature import peak_local_max
+from skimage.measure import (
+    approximate_polygon,
+    block_reduce,
+    find_contours,
+    regionprops,
+)
+from skimage.morphology import closing, dilation, disk, erosion, remove_small_objects
+from skimage.segmentation import watershed
 
+from segmentation.analysis.nuclear_count import _percentile_normalize_to_uint8
 from segmentation.io.czi_loader import CZILoader, get_czi_metadata
 from segmentation.utils.json_utils import atomic_json_dump
 from segmentation.utils.logging import get_logger, setup_logging
-from segmentation.analysis.nuclear_count import _percentile_normalize_to_uint8
 
 logger = get_logger(__name__)
 
@@ -188,9 +190,7 @@ def threshold_and_clean(
     mask = remove_small_objects(mask, min_size=max(min_px, 10))
 
     labeled, n_regions = ndlabel(mask)
-    logger.info(
-        f"  {n_regions} regions above p{percentile:.0f} (min {min_area_um2} um^2)"
-    )
+    logger.info(f"  {n_regions} regions above p{percentile:.0f} (min {min_area_um2} um^2)")
 
     return labeled, n_regions
 
@@ -266,9 +266,9 @@ def split_region(region_mask, target_px, depth=0, max_depth=10):
             sub = region_mask.copy()
             # Zero out columns outside [boundaries[i], boundaries[i+1])
             if boundaries[i] > 0:
-                sub[:, :boundaries[i]] = False
+                sub[:, : boundaries[i]] = False
             if boundaries[i + 1] < sub.shape[1]:
-                sub[:, boundaries[i + 1]:] = False
+                sub[:, boundaries[i + 1] :] = False
             if sub.any():
                 result.extend(split_region(sub, target_px, depth + 1, max_depth))
     else:
@@ -278,9 +278,9 @@ def split_region(region_mask, target_px, depth=0, max_depth=10):
         for i in range(n):
             sub = region_mask.copy()
             if boundaries[i] > 0:
-                sub[:boundaries[i], :] = False
+                sub[: boundaries[i], :] = False
             if boundaries[i + 1] < sub.shape[0]:
-                sub[boundaries[i + 1]:, :] = False
+                sub[boundaries[i + 1] :, :] = False
             if sub.any():
                 result.extend(split_region(sub, target_px, depth + 1, max_depth))
 
@@ -377,6 +377,7 @@ def extract_sam2_embeddings(detections, loader, detect_ch, device="cuda"):
     import torch
     from sam2.build_sam import build_sam2
     from sam2.sam2_image_predictor import SAM2ImagePredictor
+
     from segmentation.utils.device import empty_cache
 
     repo = Path(__file__).resolve().parent.parent
@@ -384,9 +385,7 @@ def extract_sam2_embeddings(detections, loader, detect_ch, device="cuda"):
     config = "configs/sam2.1/sam2.1_hiera_l.yaml"
 
     if not Path(checkpoint).exists():
-        logger.warning(
-            f"SAM2 checkpoint not found at {checkpoint}, skipping embeddings"
-        )
+        logger.warning(f"SAM2 checkpoint not found at {checkpoint}, skipping embeddings")
         return
 
     logger.info(f"  Loading SAM2 model on {device}...")
@@ -515,21 +514,17 @@ def detect_regions(args):
             sys.exit(1)
     elif args.channel_spec:
         from segmentation.io.czi_loader import (
-            resolve_channel_indices,
             ChannelResolutionError,
+            resolve_channel_indices,
         )
 
         # Parse "detect=NfL" or "detect=750" or just "NfL"
         spec_val = args.channel_spec.split("=", 1)[-1].strip()
         try:
-            resolved = resolve_channel_indices(
-                czi_meta, [spec_val], filename=czi_path.name
-            )
+            resolved = resolve_channel_indices(czi_meta, [spec_val], filename=czi_path.name)
             detect_ch = list(resolved.values())[0]
         except ChannelResolutionError as e:
-            logger.error(
-                f"Could not resolve channel spec '{args.channel_spec}': {e}"
-            )
+            logger.error(f"Could not resolve channel spec '{args.channel_spec}': {e}")
             sys.exit(1)
         logger.info(f"Resolved channel spec '{args.channel_spec}' -> channel {detect_ch}")
     else:
@@ -682,9 +677,7 @@ def detect_regions(args):
         return
 
     # --- Step 4: Per-channel intensity features ---
-    logger.info(
-        f"  Loading {len(feature_channels)} channels for intensity features..."
-    )
+    logger.info(f"  Loading {len(feature_channels)} channels for intensity features...")
     channel_arrays = {}
     for ch_idx in feature_channels:
         if ch_idx == detect_ch:
@@ -698,9 +691,7 @@ def detect_regions(args):
             # SAM2 (Step 5) reloads the channels it needs at full res.
             loader._channel_data.pop(ch_idx, None)
 
-    logger.info(
-        f"    Extracting intensity features ({len(channel_arrays)} channels)..."
-    )
+    logger.info(f"    Extracting intensity features ({len(channel_arrays)} channels)...")
     for det, (pr, pc) in zip(detections, piece_mask_coords):
         full_mask = np.zeros(detect_reduced.shape[:2], dtype=bool)
         full_mask[pr, pc] = True
@@ -728,8 +719,7 @@ def detect_regions(args):
         areas = [d["features"]["area_um2"] for d in detections]
         logger.info(f"  {n_feats} features per piece")
         logger.info(
-            f"  Area: {min(areas):.0f}-{max(areas):.0f} um^2, "
-            f"median {np.median(areas):.0f}"
+            f"  Area: {min(areas):.0f}-{max(areas):.0f} um^2, " f"median {np.median(areas):.0f}"
         )
         ys = [d["global_center"][1] for d in detections]
         logger.info(f"  Y range: {min(ys):.0f}-{max(ys):.0f} (CZI height: {full_h})")
@@ -858,7 +848,7 @@ def main():
         "--channels",
         default=None,
         help=(
-            'Comma-separated channel indices for intensity features, '
+            "Comma-separated channel indices for intensity features, "
             'e.g., "0,1,2". Default: all channels. Use to skip bad stains.'
         ),
     )

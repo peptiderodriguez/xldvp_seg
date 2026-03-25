@@ -23,19 +23,20 @@ on unique objects, and NumPy/cv2 release the GIL.
 """
 
 import os
-import cv2
-import numpy as np
-import h5py
 
-from segmentation.utils.logging import get_logger
+import cv2
+import h5py
+import numpy as np
+
 from segmentation.detection.strategies.mixins import MultiChannelFeatureMixin
 from segmentation.lmd.contour_processing import (
-    dilate_contour,
-    rdp_simplify,
     DEFAULT_DILATION_UM,
     DEFAULT_RDP_EPSILON,
+    dilate_contour,
+    rdp_simplify,
 )
-from segmentation.pipeline.background import local_background_subtract, _extract_centroids
+from segmentation.pipeline.background import _extract_centroids, local_background_subtract
+from segmentation.utils.logging import get_logger
 
 logger = get_logger(__name__)
 
@@ -47,7 +48,7 @@ _channel_mixin = MultiChannelFeatureMixin()
 # are pure functions.  If instance state is ever added, this singleton must be
 # replaced with per-thread instances or a lock.
 try:
-    _MAX_WORKERS = min(int(os.environ.get('SLURM_CPUS_PER_TASK', '')), 32)
+    _MAX_WORKERS = min(int(os.environ.get("SLURM_CPUS_PER_TASK", "")), 32)
 except (ValueError, TypeError):
     _MAX_WORKERS = min(os.cpu_count() or 4, 32)
 
@@ -55,6 +56,7 @@ except (ValueError, TypeError):
 # ---------------------------------------------------------------------------
 # Internal helpers
 # ---------------------------------------------------------------------------
+
 
 def _contour_from_mask(mask_arr: np.ndarray, label: int) -> np.ndarray | None:
     """Extract the largest external contour for *label* in *mask_arr*.
@@ -122,7 +124,9 @@ def _extract_intensity_features(
     """
     channels_dict = {f"ch{ch}": data for ch, data in sorted(tile_channels.items())}
     return _channel_mixin.extract_multichannel_features(
-        dilated_mask, channels_dict, compute_ratios=True,
+        dilated_mask,
+        channels_dict,
+        compute_ratios=True,
         _include_zeros=include_zeros,
     )
 
@@ -130,6 +134,7 @@ def _extract_intensity_features(
 # ---------------------------------------------------------------------------
 # Tile data readers
 # ---------------------------------------------------------------------------
+
 
 def _read_tile_from_shm(
     slide_shm_arr: np.ndarray,
@@ -149,7 +154,7 @@ def _read_tile_from_shm(
     rel_y = tile_y - y_start
     channels: dict[int, np.ndarray] = {}
     for czi_ch, slot in sorted(ch_to_slot.items()):
-        channels[czi_ch] = slide_shm_arr[rel_y:rel_y + tile_h, rel_x:rel_x + tile_w, slot]
+        channels[czi_ch] = slide_shm_arr[rel_y : rel_y + tile_h, rel_x : rel_x + tile_w, slot]
     return channels
 
 
@@ -173,14 +178,30 @@ def _read_tile_from_loader(
 
 def _load_tile_channels(
     use_shm: bool,
-    slide_shm_arr, ch_to_slot, tile_x, tile_y, tile_h, tile_w,
-    x_start, y_start, loader, _ch_indices, tile_size,
+    slide_shm_arr,
+    ch_to_slot,
+    tile_x,
+    tile_y,
+    tile_h,
+    tile_w,
+    x_start,
+    y_start,
+    loader,
+    _ch_indices,
+    tile_size,
 ) -> dict[int, np.ndarray]:
     """Load tile channel data from SHM or loader, clipping to mask dims."""
     tile_channels: dict[int, np.ndarray] = {}
     if use_shm:
         tile_channels = _read_tile_from_shm(
-            slide_shm_arr, ch_to_slot, tile_x, tile_y, tile_h, tile_w, x_start, y_start,
+            slide_shm_arr,
+            ch_to_slot,
+            tile_x,
+            tile_y,
+            tile_h,
+            tile_w,
+            x_start,
+            y_start,
         )
     elif loader is not None:
         tile_channels = _read_tile_from_loader(loader, _ch_indices, tile_x, tile_y, tile_size)
@@ -201,6 +222,7 @@ def _parse_tile_key(tile_key: str) -> tuple[int, int]:
 # ---------------------------------------------------------------------------
 # Per-tile worker functions (for ThreadPoolExecutor)
 # ---------------------------------------------------------------------------
+
 
 def _phase1_tile(
     tile_key: str,
@@ -243,8 +265,18 @@ def _phase1_tile(
     tile_channels: dict[int, np.ndarray] = {}
     if has_data_source:
         tile_channels = _load_tile_channels(
-            use_shm, slide_shm_arr, ch_to_slot, tile_x, tile_y,
-            tile_h, tile_w, x_start, y_start, loader, ch_indices, tile_size,
+            use_shm,
+            slide_shm_arr,
+            ch_to_slot,
+            tile_x,
+            tile_y,
+            tile_h,
+            tile_w,
+            x_start,
+            y_start,
+            loader,
+            ch_indices,
+            tile_size,
         )
 
     for det in tile_dets:
@@ -260,7 +292,10 @@ def _phase1_tile(
 
         if contour_processing and dilation_px > 0:
             dilated_contour, dilated_mask = _dilated_mask_from_contour(
-                contour_local, tile_h, tile_w, dilation_px,
+                contour_local,
+                tile_h,
+                tile_w,
+                dilation_px,
             )
             if dilated_contour is None:
                 dilated_mask = (masks_arr == label).astype(bool)
@@ -352,8 +387,18 @@ def _phase3_tile(
         return 0, len(tile_dets)
 
     tile_channels = _load_tile_channels(
-        use_shm, slide_shm_arr, ch_to_slot, tile_x, tile_y,
-        tile_h, tile_w, x_start, y_start, loader, ch_indices, tile_size,
+        use_shm,
+        slide_shm_arr,
+        ch_to_slot,
+        tile_x,
+        tile_y,
+        tile_h,
+        tile_w,
+        x_start,
+        y_start,
+        loader,
+        ch_indices,
+        tile_size,
     )
     if not tile_channels:
         return 0, len(tile_dets)
@@ -403,7 +448,9 @@ def _phase3_tile(
                 if ch_bg > 0:
                     crop[crop_mask] = np.maximum(crop[crop_mask] - ch_bg, 0.0)
             intensity_feats = _extract_intensity_features(
-                crop_mask, raw_crops, include_zeros=True,
+                crop_mask,
+                raw_crops,
+                include_zeros=True,
             )
         else:
             intensity_feats = _extract_intensity_features(crop_mask, raw_crops)
@@ -418,7 +465,7 @@ def _phase3_tile(
                 feat[f"ch{ch}_snr"] = float(raw_median / ch_bg)
 
         if det.get("contour_dilated_px") is not None:
-            feat["area_um2"] = float(int(crop_mask.sum()) * pixel_size_um ** 2)
+            feat["area_um2"] = float(int(crop_mask.sum()) * pixel_size_um**2)
 
         n_ok += 1
 
@@ -428,6 +475,7 @@ def _phase3_tile(
 # ---------------------------------------------------------------------------
 # Public API
 # ---------------------------------------------------------------------------
+
 
 def process_detections_post_dedup(
     detections: list[dict],
@@ -489,6 +537,7 @@ def process_detections_post_dedup(
         Summary dict with processing statistics.
     """
     from pathlib import Path
+
     import hdf5plugin  # noqa: F401 — register LZ4 codec before h5py
 
     tiles_dir = Path(tiles_dir)
@@ -528,7 +577,9 @@ def process_detections_post_dedup(
     else:
         logger.info("  Contour processing: DISABLED")
     logger.info("  Background correction: %s (k=%d)", background_correction, bg_neighbors)
-    logger.info("  Data source: %s", "shared memory" if use_shm else ("CZI loader" if loader else "NONE"))
+    logger.info(
+        "  Data source: %s", "shared memory" if use_shm else ("CZI loader" if loader else "NONE")
+    )
 
     # Assign stable indices before grouping (survives across phases)
     for i, det in enumerate(detections):
@@ -557,15 +608,30 @@ def process_detections_post_dedup(
     logger.info("Phase 1: Contour dilation + quick mean extraction (%d workers)", effective_workers)
 
     from concurrent.futures import ThreadPoolExecutor, as_completed
+
     from tqdm import tqdm as _tqdm
 
     with ThreadPoolExecutor(max_workers=effective_workers) as pool:
         futures = {
             pool.submit(
-                _phase1_tile, k, v, tiles_dir, mask_filename,
-                use_shm, slide_shm_arr, ch_to_slot, x_start, y_start,
-                loader, _ch_indices, tile_size, has_data_source,
-                contour_processing, dilation_px, rdp_epsilon, pixel_size_um,
+                _phase1_tile,
+                k,
+                v,
+                tiles_dir,
+                mask_filename,
+                use_shm,
+                slide_shm_arr,
+                ch_to_slot,
+                x_start,
+                y_start,
+                loader,
+                _ch_indices,
+                tile_size,
+                has_data_source,
+                contour_processing,
+                dilation_px,
+                rdp_epsilon,
+                pixel_size_um,
             ): k
             for k, v in by_tile.items()
         }
@@ -610,7 +676,9 @@ def process_detections_post_dedup(
                 dtype=np.float64,
             )
             _, ch_bg, _cached_tree_and_indices = local_background_subtract(
-                values, centroids, bg_neighbors,
+                values,
+                centroids,
+                bg_neighbors,
                 tree_and_indices=_cached_tree_and_indices,
             )
 
@@ -633,10 +701,22 @@ def process_detections_post_dedup(
     with ThreadPoolExecutor(max_workers=effective_workers) as pool:
         futures = {
             pool.submit(
-                _phase3_tile, k, v, tiles_dir, mask_filename,
-                use_shm, slide_shm_arr, ch_to_slot, x_start, y_start,
-                loader, _ch_indices, tile_size, has_data_source,
-                per_cell_bg, pixel_size_um,
+                _phase3_tile,
+                k,
+                v,
+                tiles_dir,
+                mask_filename,
+                use_shm,
+                slide_shm_arr,
+                ch_to_slot,
+                x_start,
+                y_start,
+                loader,
+                _ch_indices,
+                tile_size,
+                has_data_source,
+                per_cell_bg,
+                pixel_size_um,
             ): k
             for k, v in by_tile.items()
         }
@@ -666,8 +746,8 @@ def process_detections_post_dedup(
         logger.info("Phase 4: Nuclear counting (Cellpose on nuclear channel)")
 
         from segmentation.analysis.nuclear_count import (
-            count_nuclei_for_tile,
             _percentile_normalize_to_uint8,
+            count_nuclei_for_tile,
         )
 
         for tile_key, tile_dets in by_tile.items():
@@ -686,8 +766,8 @@ def process_detections_post_dedup(
             if use_shm and nuc_channel_idx in ch_to_slot:
                 slot = ch_to_slot[nuc_channel_idx]
                 nuc_tile = slide_shm_arr[
-                    tile_y - y_start:tile_y - y_start + tile_h,
-                    tile_x - x_start:tile_x - x_start + tile_w,
+                    tile_y - y_start : tile_y - y_start + tile_h,
+                    tile_x - x_start : tile_x - x_start + tile_w,
                     slot,
                 ]
             elif loader is not None:
@@ -707,9 +787,13 @@ def process_detections_post_dedup(
                 sam2_predictor.set_image(nuc_rgb)
 
             results, n_nuc = count_nuclei_for_tile(
-                cell_masks, nuc_tile, cellpose_model,
-                pixel_size_um, min_nuclear_area,
-                tile_x, tile_y,
+                cell_masks,
+                nuc_tile,
+                cellpose_model,
+                pixel_size_um,
+                min_nuclear_area,
+                tile_x,
+                tile_y,
                 sam2_predictor=sam2_predictor,
             )
 
@@ -726,8 +810,14 @@ def process_detections_post_dedup(
                     nuc_feats = results[int(mask_label)]
                     features = det.setdefault("features", {})
                     # Summary metrics go in features (flat, classifier-compatible)
-                    for k in ("n_nuclei", "nuclear_area_um2", "nuclear_area_fraction",
-                              "largest_nucleus_um2", "nuclear_solidity", "nuclear_eccentricity"):
+                    for k in (
+                        "n_nuclei",
+                        "nuclear_area_um2",
+                        "nuclear_area_fraction",
+                        "largest_nucleus_um2",
+                        "nuclear_solidity",
+                        "nuclear_eccentricity",
+                    ):
                         if k in nuc_feats:
                             features[k] = nuc_feats[k]
                     # Per-nucleus detail list at top-level (not in features — avoids JSON bloat
@@ -740,14 +830,14 @@ def process_detections_post_dedup(
     elif count_nuclei:
         logger.warning(
             "Phase 4 skipped: count_nuclei=True but missing nuc_channel_idx=%s, "
-            "cellpose_model=%s", nuc_channel_idx, cellpose_model is not None
+            "cellpose_model=%s",
+            nuc_channel_idx,
+            cellpose_model is not None,
         )
 
     # --- Summary ---
     # Compute corrected channels list for metadata
-    corrected_channels = sorted({
-        ch for bg in per_cell_bg.values() for ch in bg
-    })
+    corrected_channels = sorted({ch for bg in per_cell_bg.values() for ch in bg})
 
     summary = {
         "n_processed": n_total,

@@ -21,7 +21,7 @@ import gc
 import os
 import threading
 from pathlib import Path
-from typing import Dict, Optional, Tuple, Any
+from typing import Any
 
 import torch
 import torchvision.models as tv_models
@@ -37,18 +37,18 @@ logger = get_logger(__name__)
 
 # Central definition of checkpoint paths (previously scattered across files)
 CHECKPOINT_PATHS = {
-    'sam2': [
+    "sam2": [
         Path(__file__).parent.parent.parent / "checkpoints" / "sam2.1_hiera_large.pt",
         Path.home() / ".cache" / "sam2" / "sam2.1_hiera_large.pt",
     ],
-    'cellpose': [
+    "cellpose": [
         Path(__file__).parent.parent.parent / "checkpoints" / "cpsam",
         Path.home() / ".cache" / "cellpose" / "cpsam",
     ],
-    'resnet': [
+    "resnet": [
         Path(__file__).parent.parent.parent / "checkpoints" / "resnet50_custom.pth",
     ],
-    'mk_classifier': [
+    "mk_classifier": [
         Path(__file__).parent.parent.parent / "checkpoints" / "best_model.pth",
     ],
 }
@@ -58,15 +58,15 @@ SAM2_CONFIG = "configs/sam2.1/sam2.1_hiera_l.yaml"
 
 # SAM2 auto mask generator defaults
 SAM2_AUTO_DEFAULTS = {
-    'points_per_side': 24,
-    'pred_iou_thresh': 0.5,
-    'stability_score_thresh': 0.4,
-    'min_mask_region_area': 500,
-    'crop_n_layers': 1,
+    "points_per_side": 24,
+    "pred_iou_thresh": 0.5,
+    "stability_score_thresh": 0.4,
+    "min_mask_region_area": 500,
+    "crop_n_layers": 1,
 }
 
 
-def find_checkpoint(model_name: str) -> Optional[Path]:
+def find_checkpoint(model_name: str) -> Path | None:
     """
     Find checkpoint file for a model by searching known locations.
 
@@ -94,11 +94,11 @@ def find_checkpoint(model_name: str) -> Optional[Path]:
 # =============================================================================
 
 # Global cache of ModelManager instances per device
-_manager_cache: Dict[str, 'ModelManager'] = {}
+_manager_cache: dict[str, "ModelManager"] = {}
 _manager_cache_lock = threading.Lock()
 
 
-def get_model_manager(device: str = None) -> 'ModelManager':
+def get_model_manager(device: str = None) -> "ModelManager":
     """
     Get or create a ModelManager for the specified device.
 
@@ -112,6 +112,7 @@ def get_model_manager(device: str = None) -> 'ModelManager':
     """
     if device is None:
         from segmentation.utils.device import get_default_device
+
         device = get_default_device()
     device_key = str(device)
     with _manager_cache_lock:
@@ -164,6 +165,7 @@ class ModelManager:
         """
         if device is None:
             from segmentation.utils.device import get_default_device
+
             device = get_default_device()
         if isinstance(device, str):
             self.device = torch.device(device)
@@ -265,7 +267,7 @@ class ModelManager:
             self._load_dinov2()
         return self._dinov2_transform
 
-    def get_sam2(self) -> Tuple[Any, Any]:
+    def get_sam2(self) -> tuple[Any, Any]:
         """
         Get SAM2 predictor and automatic mask generator.
 
@@ -293,7 +295,7 @@ class ModelManager:
             self._load_cellpose()
         return self._cellpose
 
-    def get_resnet(self) -> Tuple[Any, Any]:
+    def get_resnet(self) -> tuple[Any, Any]:
         """
         Get ResNet feature extractor and transform.
 
@@ -304,7 +306,7 @@ class ModelManager:
             self._load_resnet()
         return self._resnet, self._resnet_transform
 
-    def get_dinov2(self) -> Tuple[Any, Any]:
+    def get_dinov2(self) -> tuple[Any, Any]:
         """
         Get DINOv2 feature extractor and transform.
 
@@ -318,25 +320,22 @@ class ModelManager:
 
     def _load_sam2(self):
         """Load SAM2 models."""
-        from sam2.sam2_image_predictor import SAM2ImagePredictor
         from sam2.automatic_mask_generator import SAM2AutomaticMaskGenerator
         from sam2.build_sam import build_sam2
+        from sam2.sam2_image_predictor import SAM2ImagePredictor
 
-        checkpoint_path = find_checkpoint('sam2')
+        checkpoint_path = find_checkpoint("sam2")
         if checkpoint_path is None:
             raise RuntimeError(
-                "SAM2 checkpoint not found. Searched locations:\n" +
-                "\n".join(f"  - {p}" for p in CHECKPOINT_PATHS['sam2'])
+                "SAM2 checkpoint not found. Searched locations:\n"
+                + "\n".join(f"  - {p}" for p in CHECKPOINT_PATHS["sam2"])
             )
 
         logger.info("Loading SAM2 from %s...", checkpoint_path)
         self._sam2_model = build_sam2(SAM2_CONFIG, str(checkpoint_path), device=self.device)
 
         # Auto mask generator for MK detection
-        self._sam2_auto = SAM2AutomaticMaskGenerator(
-            self._sam2_model,
-            **SAM2_AUTO_DEFAULTS
-        )
+        self._sam2_auto = SAM2AutomaticMaskGenerator(self._sam2_model, **SAM2_AUTO_DEFAULTS)
 
         # Predictor for point prompts and embeddings
         self._sam2_predictor = SAM2ImagePredictor(self._sam2_model)
@@ -345,18 +344,17 @@ class ModelManager:
     def _load_cellpose(self):
         """Load Cellpose-SAM model."""
         # Set cellpose model path before import if checkpoint exists
-        checkpoint_path = find_checkpoint('cellpose')
+        checkpoint_path = find_checkpoint("cellpose")
         if checkpoint_path is not None:
-            os.environ['CELLPOSE_LOCAL_MODELS_PATH'] = str(checkpoint_path.parent)
+            os.environ["CELLPOSE_LOCAL_MODELS_PATH"] = str(checkpoint_path.parent)
 
         from cellpose.models import CellposeModel
 
         logger.info("Loading Cellpose-SAM...")
         from segmentation.utils.device import device_supports_gpu
+
         self._cellpose = CellposeModel(
-            pretrained_model='cpsam',
-            gpu=device_supports_gpu(self.device),
-            device=self.device
+            pretrained_model="cpsam", gpu=device_supports_gpu(self.device), device=self.device
         )
         logger.info("Cellpose loaded successfully")
 
@@ -365,19 +363,21 @@ class ModelManager:
         logger.info("Loading ResNet-50...")
 
         # Use pretrained weights
-        resnet = tv_models.resnet50(weights='DEFAULT')
+        resnet = tv_models.resnet50(weights="DEFAULT")
 
         # Remove final FC layer to get 2048D features
         self._resnet = torch.nn.Sequential(*list(resnet.children())[:-1])
         self._resnet.eval().to(self.device)
 
         # Standard ImageNet preprocessing
-        self._resnet_transform = tv_transforms.Compose([
-            tv_transforms.Resize(224),
-            tv_transforms.CenterCrop(224),
-            tv_transforms.ToTensor(),
-            tv_transforms.Normalize([0.485, 0.456, 0.406], [0.229, 0.224, 0.225])
-        ])
+        self._resnet_transform = tv_transforms.Compose(
+            [
+                tv_transforms.Resize(224),
+                tv_transforms.CenterCrop(224),
+                tv_transforms.ToTensor(),
+                tv_transforms.Normalize([0.485, 0.456, 0.406], [0.229, 0.224, 0.225]),
+            ]
+        )
 
         logger.info("ResNet-50 loaded successfully")
 
@@ -386,16 +386,18 @@ class ModelManager:
         logger.info("Loading DINOv2 (dinov2_vitl14)...")
 
         try:
-            self._dinov2 = torch.hub.load('facebookresearch/dinov2', 'dinov2_vitl14')
+            self._dinov2 = torch.hub.load("facebookresearch/dinov2", "dinov2_vitl14")
             self._dinov2.eval().to(self.device)
 
             # Same transform as ResNet (ImageNet normalization)
-            self._dinov2_transform = tv_transforms.Compose([
-                tv_transforms.Resize(224),
-                tv_transforms.CenterCrop(224),
-                tv_transforms.ToTensor(),
-                tv_transforms.Normalize([0.485, 0.456, 0.406], [0.229, 0.224, 0.225])
-            ])
+            self._dinov2_transform = tv_transforms.Compose(
+                [
+                    tv_transforms.Resize(224),
+                    tv_transforms.CenterCrop(224),
+                    tv_transforms.ToTensor(),
+                    tv_transforms.Normalize([0.485, 0.456, 0.406], [0.229, 0.224, 0.225]),
+                ]
+            )
 
             logger.info("DINOv2 loaded successfully (1024D features)")
         except Exception as e:
@@ -405,25 +407,25 @@ class ModelManager:
 
     # --- Brightfield Foundation Models ---
 
-    def get_uni2(self) -> Tuple[Any, Any]:
+    def get_uni2(self) -> tuple[Any, Any]:
         """Get UNI2 ViT-Giant/14 and transform (1536D). Gated HF model."""
         if self._uni2 is None:
             self._load_uni2()
         return self._uni2, self._uni2_transform
 
-    def get_virchow2(self) -> Tuple[Any, Any]:
+    def get_virchow2(self) -> tuple[Any, Any]:
         """Get Virchow2 and transform (2560D). Gated HF model."""
         if self._virchow2 is None:
             self._load_virchow2()
         return self._virchow2, self._virchow2_transform
 
-    def get_conch(self) -> Tuple[Any, Any]:
+    def get_conch(self) -> tuple[Any, Any]:
         """Get CONCH multimodal model and transform (512D). Gated HF model."""
         if self._conch is None:
             self._load_conch()
         return self._conch, self._conch_transform
 
-    def get_phikon_v2(self) -> Tuple[Any, Any]:
+    def get_phikon_v2(self) -> tuple[Any, Any]:
         """Get Phikon-v2 ViT-L/16 and transform (1024D). Gated HF model."""
         if self._phikon_v2 is None:
             self._load_phikon_v2()
@@ -434,15 +436,24 @@ class ModelManager:
         logger.info("Loading UNI2 pathology foundation model...")
         try:
             import timm
+
             self._require_hf_token("UNI2", "MahmoodLab/UNI2-h")
-            self._uni2 = timm.create_model(
-                "hf-hub:MahmoodLab/UNI2-h", pretrained=True,
-            ).eval().to(self.device)
-            self._uni2_transform = tv_transforms.Compose([
-                tv_transforms.Resize(224), tv_transforms.CenterCrop(224),
-                tv_transforms.ToTensor(),
-                tv_transforms.Normalize([0.485, 0.456, 0.406], [0.229, 0.224, 0.225]),
-            ])
+            self._uni2 = (
+                timm.create_model(
+                    "hf-hub:MahmoodLab/UNI2-h",
+                    pretrained=True,
+                )
+                .eval()
+                .to(self.device)
+            )
+            self._uni2_transform = tv_transforms.Compose(
+                [
+                    tv_transforms.Resize(224),
+                    tv_transforms.CenterCrop(224),
+                    tv_transforms.ToTensor(),
+                    tv_transforms.Normalize([0.485, 0.456, 0.406], [0.229, 0.224, 0.225]),
+                ]
+            )
             logger.info("UNI2 loaded (1536D features)")
         except RuntimeError:
             raise  # propagate auth error with instructions
@@ -456,15 +467,24 @@ class ModelManager:
         logger.info("Loading Virchow2 pathology foundation model...")
         try:
             import timm
+
             self._require_hf_token("Virchow2", "paige-ai/Virchow2")
-            self._virchow2 = timm.create_model(
-                "hf-hub:paige-ai/Virchow2", pretrained=True,
-            ).eval().to(self.device)
-            self._virchow2_transform = tv_transforms.Compose([
-                tv_transforms.Resize(224), tv_transforms.CenterCrop(224),
-                tv_transforms.ToTensor(),
-                tv_transforms.Normalize([0.485, 0.456, 0.406], [0.229, 0.224, 0.225]),
-            ])
+            self._virchow2 = (
+                timm.create_model(
+                    "hf-hub:paige-ai/Virchow2",
+                    pretrained=True,
+                )
+                .eval()
+                .to(self.device)
+            )
+            self._virchow2_transform = tv_transforms.Compose(
+                [
+                    tv_transforms.Resize(224),
+                    tv_transforms.CenterCrop(224),
+                    tv_transforms.ToTensor(),
+                    tv_transforms.Normalize([0.485, 0.456, 0.406], [0.229, 0.224, 0.225]),
+                ]
+            )
             logger.info("Virchow2 loaded (2560D features)")
         except RuntimeError:
             raise  # propagate auth error with instructions
@@ -480,6 +500,7 @@ class ModelManager:
             self._require_hf_token("CONCH", "MahmoodLab/CONCH")
             try:
                 from conch.open_clip_custom import create_model_from_pretrained
+
                 model, transform = create_model_from_pretrained(
                     "conch_ViT-B-16", "hf_hub:MahmoodLab/CONCH"
                 )
@@ -501,19 +522,25 @@ class ModelManager:
         """Load Phikon-v2 ViT-L/16 from HuggingFace (1024D)."""
         logger.info("Loading Phikon-v2 pathology foundation model...")
         try:
-            from transformers import AutoModel, AutoImageProcessor
+            from transformers import AutoImageProcessor, AutoModel
+
             self._require_hf_token("Phikon-v2", "owkin/phikon-v2")
-            self._phikon_v2 = AutoModel.from_pretrained(
-                "owkin/phikon-v2",
-            ).eval().to(self.device)
+            self._phikon_v2 = (
+                AutoModel.from_pretrained(
+                    "owkin/phikon-v2",
+                )
+                .eval()
+                .to(self.device)
+            )
             processor = AutoImageProcessor.from_pretrained("owkin/phikon-v2")
-            self._phikon_v2_transform = tv_transforms.Compose([
-                tv_transforms.Resize(224), tv_transforms.CenterCrop(224),
-                tv_transforms.ToTensor(),
-                tv_transforms.Normalize(
-                    mean=processor.image_mean, std=processor.image_std
-                ),
-            ])
+            self._phikon_v2_transform = tv_transforms.Compose(
+                [
+                    tv_transforms.Resize(224),
+                    tv_transforms.CenterCrop(224),
+                    tv_transforms.ToTensor(),
+                    tv_transforms.Normalize(mean=processor.image_mean, std=processor.image_std),
+                ]
+            )
             logger.info("Phikon-v2 loaded (1024D features)")
         except RuntimeError:
             raise  # propagate auth error with instructions
@@ -522,7 +549,7 @@ class ModelManager:
             self._phikon_v2 = None
             self._phikon_v2_transform = None
 
-    def get_models_dict(self) -> Dict[str, Any]:
+    def get_models_dict(self) -> dict[str, Any]:
         """
         Get a dict of all loaded models (for passing to detection strategies).
 
@@ -532,14 +559,14 @@ class ModelManager:
             Dict with keys: sam2_predictor, sam2_auto, cellpose, resnet, resnet_transform, device
         """
         return {
-            'sam2_predictor': self._sam2_predictor,
-            'sam2_auto': self._sam2_auto,
-            'cellpose': self._cellpose,
-            'resnet': self._resnet,
-            'resnet_transform': self._resnet_transform,
-            'dinov2': self._dinov2,
-            'dinov2_transform': self._dinov2_transform,
-            'device': self.device,
+            "sam2_predictor": self._sam2_predictor,
+            "sam2_auto": self._sam2_auto,
+            "cellpose": self._cellpose,
+            "resnet": self._resnet,
+            "resnet_transform": self._resnet_transform,
+            "dinov2": self._dinov2,
+            "dinov2_transform": self._dinov2_transform,
+            "device": self.device,
         }
 
     def cleanup(self):
@@ -589,6 +616,7 @@ class ModelManager:
 
         # Clear GPU cache
         from segmentation.utils.device import empty_cache
+
         empty_cache()
 
         logger.info("ModelManager cleanup complete")
@@ -617,11 +645,11 @@ class ModelManager:
 
 
 __all__ = [
-    'ModelManager',
-    'get_model_manager',
-    'clear_manager_cache',
-    'find_checkpoint',
-    'CHECKPOINT_PATHS',
-    'SAM2_CONFIG',
-    'SAM2_AUTO_DEFAULTS',
+    "ModelManager",
+    "get_model_manager",
+    "clear_manager_cache",
+    "find_checkpoint",
+    "CHECKPOINT_PATHS",
+    "SAM2_CONFIG",
+    "SAM2_AUTO_DEFAULTS",
 ]

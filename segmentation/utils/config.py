@@ -28,16 +28,14 @@ import copy
 import json
 import os
 from pathlib import Path
-from typing import Dict, Any, Optional, List, Union, TypedDict, Tuple
-
-
+from typing import Any, TypedDict
 
 from segmentation.utils.json_utils import NumpyEncoder as _NumpyEncoder
-
 
 # =============================================================================
 # CONFIGURATION TYPE DEFINITIONS
 # =============================================================================
+
 
 class BatchSizeConfig(TypedDict):
     """
@@ -51,6 +49,7 @@ class BatchSizeConfig(TypedDict):
         gc_interval_tiles: Run garbage collection every N tiles in sequential mode.
             Valid range: 1-100. Lower values reduce memory but slow processing.
     """
+
     resnet_feature_extraction: int
     sam2_embedding: int
     gc_interval_tiles: int
@@ -70,6 +69,7 @@ class MemoryConfig(TypedDict):
         min_gpu_gb: Minimum GPU memory (GB) for SAM2 + ResNet models.
             Valid range: 4.0-24.0. Required for CUDA-based processing.
     """
+
     min_ram_gb: float
     mem_per_worker_small_tile: float
     mem_per_worker_large_tile: float
@@ -83,6 +83,7 @@ class PixelSizeConfig(TypedDict, total=False):
     All values should be in range 0.05-1.0 µm/px.
     Typical values: 0.1725 (NMJ high-res), 0.22 (standard Axioscan).
     """
+
     mk: float
     cell: float
     nmj: float
@@ -99,13 +100,14 @@ class NormalizationPercentilesConfig(TypedDict, total=False):
     Each value is a list of [low_percentile, high_percentile].
     Valid ranges: low 0-50, high 50-100. Low must be less than high.
     """
-    mk: List[float]
-    cell: List[float]
-    nmj: List[float]
-    vessel: List[float]
-    mesothelium: List[float]
-    islet: List[float]
-    default: List[float]
+
+    mk: list[float]
+    cell: list[float]
+    nmj: list[float]
+    vessel: list[float]
+    mesothelium: list[float]
+    islet: list[float]
+    default: list[float]
 
 
 class ProcessingConfig(TypedDict, total=False):
@@ -126,9 +128,10 @@ class ProcessingConfig(TypedDict, total=False):
         num_workers: Number of parallel workers. Valid range: 1-32.
         serve_port: Port for HTTP server. Valid range: 1024-65535.
     """
+
     pixel_size_um: PixelSizeConfig
     normalization_percentiles: NormalizationPercentilesConfig
-    contour_color: List[int]
+    contour_color: list[int]
     contour_thickness: int
     samples_per_page: int
     html_theme: str
@@ -141,7 +144,7 @@ class ProcessingConfig(TypedDict, total=False):
 
 
 # Validation constraints for each config type
-_VALIDATION_RULES: Dict[str, Dict[str, Any]] = {
+_VALIDATION_RULES: dict[str, dict[str, Any]] = {
     "batch_sizes": {
         "resnet_feature_extraction": {"min": 1, "max": 128, "type": int},
         "sam2_embedding": {"min": 1, "max": 4, "type": int},
@@ -178,7 +181,9 @@ DEFAULT_PATHS = {
     "output_dir": os.getenv("SEGMENTATION_OUTPUT_DIR", str(Path.home() / "segmentation_output")),
     "nmj_output_dir": os.getenv("NMJ_OUTPUT_DIR", str(Path.home() / "nmj_output")),
     "mk_output_dir": os.getenv("MK_OUTPUT_DIR", str(Path.home() / "xldvp_seg_output")),
-    "nmj_model_path": os.getenv("NMJ_MODEL_PATH", str(Path.home() / "nmj_output" / "nmj_classifier.pth")),
+    "nmj_model_path": os.getenv(
+        "NMJ_MODEL_PATH", str(Path.home() / "nmj_output" / "nmj_classifier.pth")
+    ),
     "data_dir": os.getenv("SEGMENTATION_DATA_DIR", "/mnt/x/01_Users/EdRo_axioscan"),
 }
 
@@ -226,9 +231,8 @@ DEFAULT_CONFIG = {
         "vessel": 0.22,
         "mesothelium": 0.22,
         "islet": 0.22,
-        "default": 0.22
+        "default": 0.22,
     },
-
     # Percentile normalization ranges
     "normalization_percentiles": {
         "mk": [5, 95],
@@ -237,24 +241,20 @@ DEFAULT_CONFIG = {
         "vessel": [5, 95],
         "mesothelium": [5, 95],
         "islet": [1, 99.5],
-        "default": [5, 95]
+        "default": [5, 95],
     },
-
     # Contour visualization settings
     "contour_color": [50, 255, 50],  # Bright green RGB
     "contour_thickness": 4,
-
     # HTML export settings
     "samples_per_page": 300,
     "html_theme": "dark",
-
     # Processing settings
     "tile_size": 3000,
     "sample_fraction": 0.10,
     "default_channel": 0,
     "calibration_samples": 50,
     "num_workers": 4,
-
     # Server settings
     "serve_port": 8081,
 }
@@ -310,7 +310,7 @@ DETECTION_DEFAULTS = {
 }
 
 
-def get_detection_defaults(cell_type: str) -> Dict[str, Any]:
+def get_detection_defaults(cell_type: str) -> dict[str, Any]:
     """
     Get default detection parameters for a cell type.
 
@@ -323,7 +323,7 @@ def get_detection_defaults(cell_type: str) -> Dict[str, Any]:
     return DETECTION_DEFAULTS.get(cell_type, {}).copy()
 
 
-def get_pixel_size(config: Dict[str, Any], cell_type: str) -> float:
+def get_pixel_size(config: dict[str, Any], cell_type: str) -> float:
     """
     Get pixel size for a cell type from config.
 
@@ -340,7 +340,7 @@ def get_pixel_size(config: Dict[str, Any], cell_type: str) -> float:
     return pixel_sizes
 
 
-def get_normalization_percentiles(config: Dict[str, Any], cell_type: str) -> Tuple[float, float]:
+def get_normalization_percentiles(config: dict[str, Any], cell_type: str) -> tuple[float, float]:
     """
     Get normalization percentiles for a cell type from config.
 
@@ -351,8 +351,9 @@ def get_normalization_percentiles(config: Dict[str, Any], cell_type: str) -> Tup
     Returns:
         Tuple of (low_percentile, high_percentile)
     """
-    percentiles = config.get("normalization_percentiles",
-                            DEFAULT_CONFIG["normalization_percentiles"])
+    percentiles = config.get(
+        "normalization_percentiles", DEFAULT_CONFIG["normalization_percentiles"]
+    )
     if isinstance(percentiles, dict):
         p = percentiles.get(cell_type, percentiles.get("default", [5, 95]))
     else:
@@ -360,7 +361,7 @@ def get_normalization_percentiles(config: Dict[str, Any], cell_type: str) -> Tup
     return tuple(p)
 
 
-def _deep_merge(base: Dict[str, Any], override: Dict[str, Any]) -> None:
+def _deep_merge(base: dict[str, Any], override: dict[str, Any]) -> None:
     """
     Recursively merge override dict into base dict (in-place).
 
@@ -373,21 +374,15 @@ def _deep_merge(base: Dict[str, Any], override: Dict[str, Any]) -> None:
         override: Dictionary with values to overlay on base
     """
     for key, value in override.items():
-        if (
-            key in base
-            and isinstance(base[key], dict)
-            and isinstance(value, dict)
-        ):
+        if key in base and isinstance(base[key], dict) and isinstance(value, dict):
             _deep_merge(base[key], value)
         else:
             base[key] = copy.deepcopy(value)
 
 
 def load_config(
-    experiment_dir: Union[str, Path],
-    cell_type: Optional[str] = None,
-    config_filename: str = "config.json"
-) -> Dict[str, Any]:
+    experiment_dir: str | Path, cell_type: str | None = None, config_filename: str = "config.json"
+) -> dict[str, Any]:
     """
     Load configuration from experiment directory.
 
@@ -410,11 +405,11 @@ def load_config(
     # Load from file if exists
     if config_path.exists():
         try:
-            with open(config_path, 'r') as f:
+            with open(config_path) as f:
                 file_config = json.load(f)
             # Deep merge file config over defaults (preserves nested dict keys)
             _deep_merge(config, file_config)
-        except (json.JSONDecodeError, IOError) as e:
+        except (OSError, json.JSONDecodeError) as e:
             print(f"Warning: Could not load config from {config_path}: {e}")
 
     # Add cell type if specified
@@ -425,9 +420,7 @@ def load_config(
 
 
 def save_config(
-    experiment_dir: Union[str, Path],
-    config: Dict[str, Any],
-    config_filename: str = "config.json"
+    experiment_dir: str | Path, config: dict[str, Any], config_filename: str = "config.json"
 ) -> Path:
     """
     Save configuration to experiment directory.
@@ -445,19 +438,15 @@ def save_config(
 
     config_path = experiment_dir / config_filename
 
-    with open(config_path, 'w') as f:
+    with open(config_path, "w") as f:
         json.dump(config, f, cls=_NumpyEncoder)
 
     return config_path
 
 
 def create_run_config(
-    experiment_name: str,
-    cell_type: str,
-    slide_name: Optional[str] = None,
-    channel: int = 0,
-    **kwargs
-) -> Dict[str, Any]:
+    experiment_name: str, cell_type: str, slide_name: str | None = None, channel: int = 0, **kwargs
+) -> dict[str, Any]:
     """
     Create a configuration dict for a processing run.
 
@@ -490,8 +479,8 @@ def create_run_config(
     config.update(kwargs)
 
     # Validate critical keys
-    if 'pixel_size_um' in kwargs:
-        ps = kwargs['pixel_size_um']
+    if "pixel_size_um" in kwargs:
+        ps = kwargs["pixel_size_um"]
         if ps is not None and (not isinstance(ps, (int, float)) or ps <= 0):
             raise ValueError(f"Invalid pixel_size_um: {ps}")
 
@@ -551,18 +540,20 @@ def get_memory_threshold(key: str) -> float:
 # CONFIGURATION VALIDATION
 # =============================================================================
 
+
 class ConfigValidationError(Exception):
     """Raised when configuration validation fails."""
+
     pass
 
 
 def _validate_range(
-    value: Union[int, float],
+    value: int | float,
     key: str,
-    min_val: Union[int, float],
-    max_val: Union[int, float],
-    expected_type: Union[type, Tuple[type, ...]]
-) -> List[str]:
+    min_val: int | float,
+    max_val: int | float,
+    expected_type: type | tuple[type, ...],
+) -> list[str]:
     """
     Validate a single value is within expected range and type.
 
@@ -579,7 +570,7 @@ def _validate_range(
     errors = []
 
     # Type check (allow int for float fields)
-    if expected_type == float:
+    if expected_type is float:
         if not isinstance(value, (int, float)):
             errors.append(f"{key}: expected numeric type, got {type(value).__name__}")
             return errors
@@ -600,10 +591,7 @@ def _validate_range(
     return errors
 
 
-def _validate_rgb_color(
-    color: Any,
-    key: str = "contour_color"
-) -> List[str]:
+def _validate_rgb_color(color: Any, key: str = "contour_color") -> list[str]:
     """
     Validate an RGB color list.
 
@@ -629,10 +617,7 @@ def _validate_rgb_color(
     return errors
 
 
-def _validate_percentiles(
-    percentiles: Any,
-    key: str = "normalization_percentiles"
-) -> List[str]:
+def _validate_percentiles(percentiles: Any, key: str = "normalization_percentiles") -> list[str]:
     """
     Validate normalization percentiles configuration.
 
@@ -655,14 +640,16 @@ def _validate_percentiles(
         low_rule = rules["low"]
         high_rule = rules["high"]
 
-        errors.extend(_validate_range(
-            low, f"{key}.{cell_type}[0]",
-            low_rule["min"], low_rule["max"], low_rule["type"]
-        ))
-        errors.extend(_validate_range(
-            high, f"{key}.{cell_type}[1]",
-            high_rule["min"], high_rule["max"], high_rule["type"]
-        ))
+        errors.extend(
+            _validate_range(
+                low, f"{key}.{cell_type}[0]", low_rule["min"], low_rule["max"], low_rule["type"]
+            )
+        )
+        errors.extend(
+            _validate_range(
+                high, f"{key}.{cell_type}[1]", high_rule["min"], high_rule["max"], high_rule["type"]
+            )
+        )
 
         if isinstance(low, (int, float)) and isinstance(high, (int, float)):
             if low >= high:
@@ -671,10 +658,7 @@ def _validate_percentiles(
     return errors
 
 
-def _validate_pixel_sizes(
-    pixel_sizes: Any,
-    key: str = "pixel_size_um"
-) -> List[str]:
+def _validate_pixel_sizes(pixel_sizes: Any, key: str = "pixel_size_um") -> list[str]:
     """
     Validate pixel size configuration.
 
@@ -689,20 +673,19 @@ def _validate_pixel_sizes(
     rule = _VALIDATION_RULES["pixel_size"]["_all_keys"]
 
     for cell_type, value in pixel_sizes.items():
-        errors.extend(_validate_range(
-            value, f"{key}.{cell_type}",
-            rule["min"], rule["max"], rule["type"]
-        ))
+        errors.extend(
+            _validate_range(value, f"{key}.{cell_type}", rule["min"], rule["max"], rule["type"])
+        )
 
     return errors
 
 
 def validate_config(
-    config: Optional[Dict[str, Any]] = None,
-    batch_sizes: Optional[Dict[str, int]] = None,
-    memory_thresholds: Optional[Dict[str, float]] = None,
-    raise_on_error: bool = False
-) -> Dict[str, Union[bool, List[str]]]:
+    config: dict[str, Any] | None = None,
+    batch_sizes: dict[str, int] | None = None,
+    memory_thresholds: dict[str, float] | None = None,
+    raise_on_error: bool = False,
+) -> dict[str, bool | list[str]]:
     """
     Validate configuration dictionaries against expected types and ranges.
 
@@ -740,8 +723,8 @@ def validate_config(
         >>> result = validate_config(config=my_config)
         >>> # Returns: {'valid': False, 'errors': ['tile_size: value 500 out of range [1000, 8192]'], ...}
     """
-    errors: List[str] = []
-    warnings: List[str] = []
+    errors: list[str] = []
+    warnings: list[str] = []
 
     # Use defaults if not provided
     if config is None:
@@ -755,28 +738,31 @@ def validate_config(
     batch_rules = _VALIDATION_RULES["batch_sizes"]
     for key, rule in batch_rules.items():
         if key in batch_sizes:
-            errors.extend(_validate_range(
-                batch_sizes[key], f"batch_sizes.{key}",
-                rule["min"], rule["max"], rule["type"]
-            ))
+            errors.extend(
+                _validate_range(
+                    batch_sizes[key], f"batch_sizes.{key}", rule["min"], rule["max"], rule["type"]
+                )
+            )
 
     # Validate memory thresholds
     mem_rules = _VALIDATION_RULES["memory_thresholds"]
     for key, rule in mem_rules.items():
         if key in memory_thresholds:
-            errors.extend(_validate_range(
-                memory_thresholds[key], f"memory_thresholds.{key}",
-                rule["min"], rule["max"], rule["type"]
-            ))
+            errors.extend(
+                _validate_range(
+                    memory_thresholds[key],
+                    f"memory_thresholds.{key}",
+                    rule["min"],
+                    rule["max"],
+                    rule["type"],
+                )
+            )
 
     # Validate processing config
     proc_rules = _VALIDATION_RULES["processing"]
     for key, rule in proc_rules.items():
         if key in config:
-            errors.extend(_validate_range(
-                config[key], key,
-                rule["min"], rule["max"], rule["type"]
-            ))
+            errors.extend(_validate_range(config[key], key, rule["min"], rule["max"], rule["type"]))
 
     # Validate pixel sizes
     if "pixel_size_um" in config:
@@ -785,10 +771,11 @@ def validate_config(
             errors.extend(_validate_pixel_sizes(pixel_sizes))
         elif isinstance(pixel_sizes, (int, float)):
             rule = _VALIDATION_RULES["pixel_size"]["_all_keys"]
-            errors.extend(_validate_range(
-                pixel_sizes, "pixel_size_um",
-                rule["min"], rule["max"], rule["type"]
-            ))
+            errors.extend(
+                _validate_range(
+                    pixel_sizes, "pixel_size_um", rule["min"], rule["max"], rule["type"]
+                )
+            )
 
     # Validate normalization percentiles
     if "normalization_percentiles" in config:
@@ -807,8 +794,14 @@ def validate_config(
             errors.append(f"html_theme: '{config['html_theme']}' not in {valid_themes}")
 
     # Check for logical consistency warnings
-    if "mem_per_worker_small_tile" in memory_thresholds and "mem_per_worker_large_tile" in memory_thresholds:
-        if memory_thresholds["mem_per_worker_small_tile"] > memory_thresholds["mem_per_worker_large_tile"]:
+    if (
+        "mem_per_worker_small_tile" in memory_thresholds
+        and "mem_per_worker_large_tile" in memory_thresholds
+    ):
+        if (
+            memory_thresholds["mem_per_worker_small_tile"]
+            > memory_thresholds["mem_per_worker_large_tile"]
+        ):
             warnings.append(
                 "mem_per_worker_small_tile > mem_per_worker_large_tile: "
                 "small tiles should require less memory"
@@ -827,10 +820,10 @@ def validate_config(
 
 
 def get_config_summary(
-    config: Optional[Dict[str, Any]] = None,
-    batch_sizes: Optional[Dict[str, int]] = None,
-    memory_thresholds: Optional[Dict[str, float]] = None,
-    include_validation: bool = True
+    config: dict[str, Any] | None = None,
+    batch_sizes: dict[str, int] | None = None,
+    memory_thresholds: dict[str, float] | None = None,
+    include_validation: bool = True,
 ) -> str:
     """
     Generate a formatted summary of current configuration values.
@@ -879,7 +872,7 @@ def get_config_summary(
     if "tile_size" in config:
         lines.append(f"  tile_size: {config['tile_size']} px")
     if "sample_fraction" in config:
-        pct = config['sample_fraction'] * 100
+        pct = config["sample_fraction"] * 100
         lines.append(f"  sample_fraction: {config['sample_fraction']:.2f} ({pct:.1f}%)")
     if "num_workers" in config:
         lines.append(f"  num_workers: {config['num_workers']}")
@@ -892,7 +885,7 @@ def get_config_summary(
     # Display settings
     lines.append("Display Settings:")
     if "contour_color" in config:
-        rgb = config['contour_color']
+        rgb = config["contour_color"]
         lines.append(f"  contour_color: RGB({rgb[0]}, {rgb[1]}, {rgb[2]})")
     if "contour_thickness" in config:
         lines.append(f"  contour_thickness: {config['contour_thickness']} px")
@@ -985,28 +978,33 @@ def get_config_summary(
 #   feature_extraction.SAM2_EMBEDDING_DIM = 256          (same — no doubling for SAM2)
 #   feature_extraction.RESNET50_FEATURE_DIM = 2048       (single pass; doubled here for masked+ctx)
 #   (DINOv2 ViT-L/14 produces 1024 per pass; doubled here for masked+ctx)
-MORPHOLOGICAL_FEATURES_COUNT = 78      # Full-pipeline morphological features (see breakdown above)
-SAM2_EMBEDDING_DIMENSION = 256         # SAM2 256D embedding vectors (= feature_extraction.SAM2_EMBEDDING_DIM)
-RESNET_EMBEDDING_DIMENSION = 4096      # ResNet50 2x2048D (= 2 * feature_extraction.RESNET50_FEATURE_DIM)
-DINOV2_EMBEDDING_DIMENSION = 2048      # DINOv2-L 2x1024D (masked + context)
-TOTAL_FEATURES_PER_CELL = 6478         # Total: 78 + 256 + 4096 + 2048
+MORPHOLOGICAL_FEATURES_COUNT = 78  # Full-pipeline morphological features (see breakdown above)
+SAM2_EMBEDDING_DIMENSION = (
+    256  # SAM2 256D embedding vectors (= feature_extraction.SAM2_EMBEDDING_DIM)
+)
+RESNET_EMBEDDING_DIMENSION = (
+    4096  # ResNet50 2x2048D (= 2 * feature_extraction.RESNET50_FEATURE_DIM)
+)
+DINOV2_EMBEDDING_DIMENSION = 2048  # DINOv2-L 2x1024D (masked + context)
+TOTAL_FEATURES_PER_CELL = 6478  # Total: 78 + 256 + 4096 + 2048
 
 # DEPRECATED: Do not use. Always read pixel_size from CZI metadata via loader.get_pixel_size().
 # Retained only so old test assertions don't break. All production code must use CZI metadata.
 _LEGACY_PIXEL_SIZE_UM = 0.1725
 
 # Batch processing sizes (lines 1119, 1128, 1138, 1185, 1195)
-RESNET_INFERENCE_BATCH_SIZE = 16       # Default batch size for ResNet inference
+RESNET_INFERENCE_BATCH_SIZE = 16  # Default batch size for ResNet inference
 
 # Processing parameters (lines 1954, 1999, 3074)
-CPU_UTILIZATION_FRACTION = 0.8         # Use 80% of available CPU cores
+CPU_UTILIZATION_FRACTION = 0.8  # Use 80% of available CPU cores
 
 
 # =============================================================================
 # HELPER FUNCTIONS FOR ACCESSING MAGIC NUMBERS
 # =============================================================================
 
-def get_feature_dimensions() -> Dict[str, int]:
+
+def get_feature_dimensions() -> dict[str, int]:
     """
     Get all full-pipeline feature dimension constants.
 
@@ -1023,7 +1021,7 @@ def get_feature_dimensions() -> Dict[str, int]:
     }
 
 
-def get_cpu_worker_count(total_cores: Optional[int] = None) -> int:
+def get_cpu_worker_count(total_cores: int | None = None) -> int:
     """
     Calculate safe number of CPU workers based on available cores.
 

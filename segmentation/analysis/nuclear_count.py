@@ -153,7 +153,7 @@ def count_nuclei_in_cells(
             f"nuclear_channel {nuclear_channel.shape}"
         )
 
-    px2 = pixel_size_um ** 2
+    px2 = pixel_size_um**2
 
     # --- Step 1: Segment nuclei with Cellpose single-channel mode ---
     nuc_uint8 = _percentile_normalize_to_uint8(nuclear_channel)
@@ -243,18 +243,14 @@ def count_nuclei_in_cells(
             areas = [n["area_um2"] for n in nuclei]
             r["nuclear_area_um2"] = round(sum(areas), 3)
             r["largest_nucleus_um2"] = round(max(areas), 3)
-            r["nuclear_solidity"] = round(
-                float(np.mean([n["solidity"] for n in nuclei])), 4
-            )
+            r["nuclear_solidity"] = round(float(np.mean([n["solidity"] for n in nuclei])), 4)
             r["nuclear_eccentricity"] = round(
                 float(np.mean([n["eccentricity"] for n in nuclei])), 4
             )
 
             cell_area_um2 = cell_props.get(cl, 1) * px2
             if cell_area_um2 > 0:
-                r["nuclear_area_fraction"] = round(
-                    r["nuclear_area_um2"] / cell_area_um2, 4
-                )
+                r["nuclear_area_fraction"] = round(r["nuclear_area_um2"] / cell_area_um2, 4)
 
     return results
 
@@ -292,8 +288,11 @@ def count_nuclei_for_tile(
         cell_label -> feature dict.
     """
     results = count_nuclei_in_cells(
-        tile_cell_masks, tile_nuclear_channel, cellpose_model,
-        pixel_size_um, min_nuclear_area_px,
+        tile_cell_masks,
+        tile_nuclear_channel,
+        cellpose_model,
+        pixel_size_um,
+        min_nuclear_area_px,
         sam2_predictor=sam2_predictor,
         resnet_model=resnet_model,
         resnet_transform=resnet_transform,

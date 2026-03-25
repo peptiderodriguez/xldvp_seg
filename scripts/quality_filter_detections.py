@@ -104,9 +104,7 @@ def auto_detect_pixel_size(detections, max_scan=100):
             ps = float(ps)
             if 0.01 < ps < 10.0:
                 return ps
-            logger.warning(
-                f"pixel_size_um={ps} outside plausible range [0.01, 10.0] um, skipping"
-            )
+            logger.warning(f"pixel_size_um={ps} outside plausible range [0.01, 10.0] um, skipping")
 
         # Method 2: derive from area vs area_um2
         area_px = feat.get("area")
@@ -115,9 +113,7 @@ def auto_detect_pixel_size(detections, max_scan=100):
             derived = math.sqrt(area_um2 / area_px)
             if 0.01 < derived < 10.0:
                 return derived
-            logger.warning(
-                f"Derived pixel_size={derived:.4f} um outside plausible range, skipping"
-            )
+            logger.warning(f"Derived pixel_size={derived:.4f} um outside plausible range, skipping")
 
     return None
 
@@ -141,17 +137,11 @@ def validate_args(args):
     if not 0.0 <= args.min_solidity <= 1.0:
         errors.append(f"--min-solidity must be in [0, 1], got {args.min_solidity}")
     if args.max_eccentricity is not None and not 0.0 <= args.max_eccentricity <= 1.0:
-        errors.append(
-            f"--max-eccentricity must be in [0, 1], got {args.max_eccentricity}"
-        )
+        errors.append(f"--max-eccentricity must be in [0, 1], got {args.max_eccentricity}")
     if args.max_aspect_ratio is not None and args.max_aspect_ratio <= 0:
-        errors.append(
-            f"--max-aspect-ratio must be > 0, got {args.max_aspect_ratio}"
-        )
+        errors.append(f"--max-aspect-ratio must be > 0, got {args.max_aspect_ratio}")
     if args.pixel_size is not None and not 0.01 < args.pixel_size < 10.0:
-        errors.append(
-            f"--pixel-size must be in (0.01, 10.0) um, got {args.pixel_size}"
-        )
+        errors.append(f"--pixel-size must be in (0.01, 10.0) um, got {args.pixel_size}")
     if errors:
         for e in errors:
             logger.error(e)
@@ -432,9 +422,7 @@ def main():
         logger.info(f"    Channel mean: {reject_channel:,}")
 
     if n_pass == 0:
-        logger.warning(
-            "All detections were rejected. Consider relaxing filter thresholds."
-        )
+        logger.warning("All detections were rejected. Consider relaxing filter thresholds.")
     if n_fail == 0:
         logger.info(
             "All detections passed. Filters may be too lenient, "

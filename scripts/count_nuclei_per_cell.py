@@ -54,7 +54,7 @@ def load_cellpose_cpsam(device=None):
         device = get_default_device()
     logger.info(f"Loading Cellpose cpsam model on {device}...")
     model = CellposeModel(
-        pretrained_model='cpsam',
+        pretrained_model="cpsam",
         gpu=device_supports_gpu(device),
         device=device,
     )
@@ -89,28 +89,41 @@ def main():
         description="Count nuclei per cell using Cellpose on the nuclear channel",
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
-    parser.add_argument("--detections", required=True, type=Path,
-                        help="Cell detection JSON file")
-    parser.add_argument("--czi-path", required=True, type=Path,
-                        help="CZI file path")
-    parser.add_argument("--tiles-dir", required=True, type=Path,
-                        help="Tiles directory with HDF5 masks")
-    parser.add_argument("--nuclear-channel", type=int, default=None,
-                        help="Nuclear channel index")
-    parser.add_argument("--channel-spec", default=None,
-                        help='Channel spec for nuclear channel, e.g., "nuc=Hoechst"')
-    parser.add_argument("--output", required=True, type=Path,
-                        help="Output JSON path (enriched detections)")
-    parser.add_argument("--min-nuclear-area", type=int, default=50,
-                        help="Minimum nuclear area in pixels (default: 50)")
-    parser.add_argument("--extract-deep-features", action="store_true",
-                        help="Extract ResNet + DINOv2 features per nucleus (slower, higher dimensional)")
-    parser.add_argument("--no-sam2", action="store_true",
-                        help="Skip SAM2 embedding extraction (not recommended — SAM2 is default)")
-    parser.add_argument("--gpu-device", type=int, default=0,
-                        help="GPU device index (default: 0)")
-    parser.add_argument("--tile-size", type=int, default=None,
-                        help="Tile size in pixels (auto-detected from masks if omitted)")
+    parser.add_argument("--detections", required=True, type=Path, help="Cell detection JSON file")
+    parser.add_argument("--czi-path", required=True, type=Path, help="CZI file path")
+    parser.add_argument(
+        "--tiles-dir", required=True, type=Path, help="Tiles directory with HDF5 masks"
+    )
+    parser.add_argument("--nuclear-channel", type=int, default=None, help="Nuclear channel index")
+    parser.add_argument(
+        "--channel-spec", default=None, help='Channel spec for nuclear channel, e.g., "nuc=Hoechst"'
+    )
+    parser.add_argument(
+        "--output", required=True, type=Path, help="Output JSON path (enriched detections)"
+    )
+    parser.add_argument(
+        "--min-nuclear-area",
+        type=int,
+        default=50,
+        help="Minimum nuclear area in pixels (default: 50)",
+    )
+    parser.add_argument(
+        "--extract-deep-features",
+        action="store_true",
+        help="Extract ResNet + DINOv2 features per nucleus (slower, higher dimensional)",
+    )
+    parser.add_argument(
+        "--no-sam2",
+        action="store_true",
+        help="Skip SAM2 embedding extraction (not recommended — SAM2 is default)",
+    )
+    parser.add_argument("--gpu-device", type=int, default=0, help="GPU device index (default: 0)")
+    parser.add_argument(
+        "--tile-size",
+        type=int,
+        default=None,
+        help="Tile size in pixels (auto-detected from masks if omitted)",
+    )
 
     args = parser.parse_args()
     setup_logging(level="INFO")
@@ -165,7 +178,10 @@ def main():
 
     # --- Load models ---
     import torch
-    device_str = f"cuda:{args.gpu_device}" if args.gpu_device >= 0 and torch.cuda.is_available() else "cpu"
+
+    device_str = (
+        f"cuda:{args.gpu_device}" if args.gpu_device >= 0 and torch.cuda.is_available() else "cpu"
+    )
     device = torch.device(device_str)
 
     cellpose_model = load_cellpose_cpsam(device=device)
@@ -175,6 +191,7 @@ def main():
     manager = None
     if not args.no_sam2:
         from segmentation.models.manager import ModelManager
+
         logger.info("Loading SAM2 for nuclear embeddings...")
         manager = ModelManager(device=device)
         sam2_predictor = manager.sam2_predictor  # lazy-loads via property
@@ -186,6 +203,7 @@ def main():
     if args.extract_deep_features:
         if manager is None:
             from segmentation.models.manager import ModelManager
+
             manager = ModelManager(device=device)
         logger.info("Loading ResNet + DINOv2 for deep nuclear features...")
         resnet_model, resnet_transform = manager.get_resnet()
@@ -220,8 +238,16 @@ def main():
             # Find minimum positive gap between sorted unique tile X and Y coordinates
             tile_xs = sorted({tx for tx, _, _, _ in tile_dirs})
             tile_ys = sorted({ty for _, ty, _, _ in tile_dirs})
-            x_gaps = [tile_xs[i + 1] - tile_xs[i] for i in range(len(tile_xs) - 1) if tile_xs[i + 1] > tile_xs[i]]
-            y_gaps = [tile_ys[i + 1] - tile_ys[i] for i in range(len(tile_ys) - 1) if tile_ys[i + 1] > tile_ys[i]]
+            x_gaps = [
+                tile_xs[i + 1] - tile_xs[i]
+                for i in range(len(tile_xs) - 1)
+                if tile_xs[i + 1] > tile_xs[i]
+            ]
+            y_gaps = [
+                tile_ys[i + 1] - tile_ys[i]
+                for i in range(len(tile_ys) - 1)
+                if tile_ys[i + 1] > tile_ys[i]
+            ]
             if x_gaps or y_gaps:
                 tile_size = min(x_gaps + y_gaps)
                 logger.info(f"  Inferred tile_size={tile_size} from tile grid spacing")
@@ -304,8 +330,10 @@ def main():
         has_contour_dets = any(
             detections[di].get("tile_mask_label") is None
             and detections[di].get("mask_label") is None
-            and (detections[di].get("outer_contour_global") is not None
-                 or detections[di].get("contour_dilated_px") is not None)
+            and (
+                detections[di].get("outer_contour_global") is not None
+                or detections[di].get("contour_dilated_px") is not None
+            )
             for di in det_indices
         )
         # Ensure dtype can hold new synthetic labels
@@ -342,7 +370,10 @@ def main():
         # Extract nuclear channel tile region
         # tile_x, tile_y are global pixel coordinates of tile origin
         # CZI data is in (H, W) = (rows, cols) format
-        nuc_tile = nuc_data[tile_y - y_start:tile_y - y_start + tile_h, tile_x - x_start:tile_x - x_start + tile_w]
+        nuc_tile = nuc_data[
+            tile_y - y_start : tile_y - y_start + tile_h,
+            tile_x - x_start : tile_x - x_start + tile_w,
+        ]
 
         if nuc_tile.shape != cell_masks.shape[:2]:
             logger.warning(
@@ -358,15 +389,20 @@ def main():
         # composite used in cell detection; this gives nuclear-specific embeddings)
         if sam2_predictor is not None:
             from segmentation.analysis.nuclear_count import _percentile_normalize_to_uint8
+
             nuc_uint8 = _percentile_normalize_to_uint8(nuc_tile)
             nuc_rgb = np.stack([nuc_uint8] * 3, axis=-1)
             sam2_predictor.set_image(nuc_rgb)
 
         # Run nuclear counting with feature extraction
         results, n_nuc = count_nuclei_for_tile(
-            cell_masks, nuc_tile, cellpose_model,
-            pixel_size_um, args.min_nuclear_area,
-            tile_x, tile_y,
+            cell_masks,
+            nuc_tile,
+            cellpose_model,
+            pixel_size_um,
+            args.min_nuclear_area,
+            tile_x,
+            tile_y,
             sam2_predictor=sam2_predictor,
             resnet_model=resnet_model,
             resnet_transform=resnet_transform,
@@ -442,6 +478,7 @@ def main():
         manager.cleanup()
     del cellpose_model
     from segmentation.utils.device import empty_cache
+
     empty_cache()
 
 

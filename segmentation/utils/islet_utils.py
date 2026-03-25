@@ -35,22 +35,27 @@ def classify_islet_marker(features_dict, marker_thresholds=None, marker_map=None
     Returns (class_name, contour_color_rgb).
     """
     if marker_map is None:
-        marker_map = {'gcg': 2, 'ins': 3, 'sst': 5}
+        marker_map = {"gcg": 2, "ins": 3, "sst": 5}
 
     # Build ordered marker list with colors (R, G, B for first 3 markers)
     _marker_colors = [
-        (255, 50, 50), (50, 255, 50), (50, 50, 255),
-        (255, 255, 50), (255, 50, 255), (50, 255, 255),
-        (255, 128, 0), (128, 0, 255),
+        (255, 50, 50),
+        (50, 255, 50),
+        (50, 50, 255),
+        (255, 255, 50),
+        (255, 50, 255),
+        (50, 255, 255),
+        (255, 128, 0),
+        (128, 0, 255),
     ]
     marker_names = list(marker_map.keys())
     marker_vals = {}
     for name in marker_names:
         ch_idx = marker_map[name]
-        marker_vals[name] = features_dict.get(f'ch{ch_idx}_mean', 0)
+        marker_vals[name] = features_dict.get(f"ch{ch_idx}_mean", 0)
 
     if marker_thresholds is None:
-        return 'none', (128, 128, 128)
+        return "none", (128, 128, 128)
 
     norm_ranges, ch_thresholds, ratio_min = marker_thresholds
 
@@ -64,13 +69,13 @@ def classify_islet_marker(features_dict, marker_thresholds=None, marker_map=None
     normed = {}
     positive = {}
     for name in marker_names:
-        ch_key = f'ch{marker_map[name]}'
+        ch_key = f"ch{marker_map[name]}"
         normed[name] = _norm(marker_vals[name], ch_key)
         positive[name] = normed[name] >= ch_thresholds.get(ch_key, 0.5)
 
     # Gate: must exceed at least one channel's threshold
     if not any(positive.values()):
-        return 'none', (128, 128, 128)
+        return "none", (128, 128, 128)
 
     # Ratio classification -- only among channels that are actually positive
     pos_markers = []
@@ -88,15 +93,21 @@ def classify_islet_marker(features_dict, marker_thresholds=None, marker_map=None
     second_val = pos_markers[1][1] if len(pos_markers) > 1 else 0
 
     if second_val > 0 and best_val / second_val < ratio_min:
-        return 'multi', (255, 170, 0)  # orange
+        return "multi", (255, 170, 0)  # orange
 
     return best_name, best_color
 
 
-def compute_islet_marker_thresholds(all_detections, vis_threshold_overrides=None, ratio_min=1.5,
-                                    marker_map=None, marker_top_pct=5,
-                                    pct_channels=None, gmm_p_cutoff=0.75,
-                                    threshold_factor=1.0):
+def compute_islet_marker_thresholds(
+    all_detections,
+    vis_threshold_overrides=None,
+    ratio_min=1.5,
+    marker_map=None,
+    marker_top_pct=5,
+    pct_channels=None,
+    gmm_p_cutoff=0.75,
+    threshold_factor=1.0,
+):
     """Compute per-channel thresholds for islet marker classification.
 
     Two methods, selectable per channel:
@@ -128,13 +139,15 @@ def compute_islet_marker_thresholds(all_detections, vis_threshold_overrides=None
         or None if too few detections for reliable thresholds.
     """
     if marker_map is None:
-        marker_map = {'gcg': 2, 'ins': 3, 'sst': 5}
+        marker_map = {"gcg": 2, "ins": 3, "sst": 5}
     if pct_channels is None:
-        pct_channels = {'sst'}
+        pct_channels = {"sst"}
 
     if len(all_detections) < 10:
-        logger.warning(f"Only {len(all_detections)} detections — too few for reliable "
-                       "marker thresholds. Skipping marker classification.")
+        logger.warning(
+            f"Only {len(all_detections)} detections — too few for reliable "
+            "marker thresholds. Skipping marker classification."
+        )
         return None
 
     from sklearn.mixture import GaussianMixture
@@ -142,21 +155,23 @@ def compute_islet_marker_thresholds(all_detections, vis_threshold_overrides=None
     # Build arrays from features using marker_map channel indices
     marker_arrays = {}
     for name, ch_idx in marker_map.items():
-        marker_arrays[name] = np.array([
-            d.get('features', {}).get(f'ch{ch_idx}_mean', 0) for d in all_detections
-        ])
+        marker_arrays[name] = np.array(
+            [d.get("features", {}).get(f"ch{ch_idx}_mean", 0) for d in all_detections]
+        )
 
     norm_ranges = {}
     ch_thresholds = {}
 
     for name, ch_idx in marker_map.items():
-        ch_key = f'ch{ch_idx}'
+        ch_key = f"ch{ch_idx}"
         ch_name = name.capitalize()
         arr = marker_arrays[name]
         # Exclude zero-valued entries (cells with no signal or missing features)
         arr_pos = arr[arr > 0]
         if len(arr_pos) < 10:
-            logger.warning(f"Only {len(arr_pos)} cells with nonzero {ch_name} — using full array for percentiles")
+            logger.warning(
+                f"Only {len(arr_pos)} cells with nonzero {ch_name} — using full array for percentiles"
+            )
             arr_pos = arr
         lo = float(np.percentile(arr_pos, 1))
         hi = float(np.percentile(arr_pos, 99.5))
@@ -166,12 +181,14 @@ def compute_islet_marker_thresholds(all_detections, vis_threshold_overrides=None
             # --- Percentile-based threshold (for channels with poor GMM separation) ---
             # threshold_factor widens the top-N%: factor=2 -> top 5% becomes top 10%
             effective_pct = min(marker_top_pct * threshold_factor, 50)
-            method = f'top-{effective_pct:.0f}%'
+            method = f"top-{effective_pct:.0f}%"
             pct_cutoff = 100 - effective_pct
             raw_cutoff = float(np.percentile(arr_pos, pct_cutoff))
             bg_mean = sig_mean = separation = 0  # not computed for percentile channels
-            logger.info(f"  {ch_name}: using top {effective_pct:.0f}% "
-                        f"(p{pct_cutoff:.0f}={raw_cutoff:.0f})")
+            logger.info(
+                f"  {ch_name}: using top {effective_pct:.0f}% "
+                f"(p{pct_cutoff:.0f}={raw_cutoff:.0f})"
+            )
         else:
             # --- GMM on log-transformed intensities ---
             # Log1p compresses dynamic range, making background vs signal more Gaussian.
@@ -187,19 +204,23 @@ def compute_islet_marker_thresholds(all_detections, vis_threshold_overrides=None
 
             means = gmm.means_.flatten()
             stds = np.sqrt(gmm.covariances_.flatten())
-            separation = abs(means[signal_idx] - means[bg_idx]) / max(stds[bg_idx], stds[signal_idx])
+            separation = abs(means[signal_idx] - means[bg_idx]) / max(
+                stds[bg_idx], stds[signal_idx]
+            )
 
             if separation < 1.0:
                 # GMM components overlap too much -- binary search for posterior
                 # crossover can converge to wrong point. Fall back to percentile.
-                logger.warning(f"  {ch_name}: GMM separation too low ({separation:.2f} sigma), "
-                               "falling back to percentile method")
-                method = f'GMM-fallback(top-{marker_top_pct}%)'
+                logger.warning(
+                    f"  {ch_name}: GMM separation too low ({separation:.2f} sigma), "
+                    "falling back to percentile method"
+                )
+                method = f"GMM-fallback(top-{marker_top_pct}%)"
                 effective_pct = min(marker_top_pct * threshold_factor, 50)
                 pct_cutoff = 100 - effective_pct
                 raw_cutoff = float(np.percentile(arr_pos, pct_cutoff))
             else:
-                method = f'GMM(P>={gmm_p_cutoff})'
+                method = f"GMM(P>={gmm_p_cutoff})"
                 # Find raw threshold where P(signal) = gmm_p_cutoff via binary search.
                 # Higher than P=0.5 crossover -- requires stronger evidence of signal,
                 # reducing false positives and multi-marker misclassification.
@@ -212,10 +233,12 @@ def compute_islet_marker_thresholds(all_detections, vis_threshold_overrides=None
                 p_at_hi = gmm.predict_proba(np.log1p(np.array([[hi_raw]])))[0, signal_idx]
                 if p_at_hi < gmm_p_cutoff and p_at_lo < gmm_p_cutoff:
                     # P(signal) never reaches cutoff -- fall back to percentile
-                    logger.warning(f"  {ch_name}: GMM posterior never reaches {gmm_p_cutoff} "
-                                   f"(max P(signal)={max(p_at_lo, p_at_hi):.3f}), "
-                                   "falling back to percentile method")
-                    method = f'GMM-fallback(top-{marker_top_pct}%)'
+                    logger.warning(
+                        f"  {ch_name}: GMM posterior never reaches {gmm_p_cutoff} "
+                        f"(max P(signal)={max(p_at_lo, p_at_hi):.3f}), "
+                        "falling back to percentile method"
+                    )
+                    method = f"GMM-fallback(top-{marker_top_pct}%)"
                     effective_pct = min(marker_top_pct * threshold_factor, 50)
                     pct_cutoff = 100 - effective_pct
                     raw_cutoff = float(np.percentile(arr_pos, pct_cutoff))
@@ -249,16 +272,22 @@ def compute_islet_marker_thresholds(all_detections, vis_threshold_overrides=None
             ch_thresholds[ch_key] = vis_threshold_overrides[ch_key]
             override_raw = lo + vis_threshold_overrides[ch_key] * (hi - lo)
             n_override = int(np.sum(arr > override_raw))
-            logger.info(f"Islet {ch_name}({ch_key}): {method} bg={bg_mean:.0f}, sig={sig_mean:.0f}, "
-                        f"sep={separation:.2f}σ, auto={auto_t:.3f} (raw={raw_cutoff:.0f}, {pos_pct:.1f}%), "
-                        f"OVERRIDE={vis_threshold_overrides[ch_key]:.3f} "
-                        f"({100*n_override/len(arr):.1f}%)")
+            logger.info(
+                f"Islet {ch_name}({ch_key}): {method} bg={bg_mean:.0f}, sig={sig_mean:.0f}, "
+                f"sep={separation:.2f}σ, auto={auto_t:.3f} (raw={raw_cutoff:.0f}, {pos_pct:.1f}%), "
+                f"OVERRIDE={vis_threshold_overrides[ch_key]:.3f} "
+                f"({100*n_override/len(arr):.1f}%)"
+            )
         else:
             ch_thresholds[ch_key] = auto_t
-            logger.info(f"Islet {ch_name}({ch_key}): p1={lo:.1f}, p99.5={hi:.1f}, "
-                        f"{method} bg={bg_mean:.0f}, sig={sig_mean:.0f}, sep={separation:.2f}σ, "
-                        f"threshold={auto_t:.3f} (raw>{raw_cutoff:.0f})")
+            logger.info(
+                f"Islet {ch_name}({ch_key}): p1={lo:.1f}, p99.5={hi:.1f}, "
+                f"{method} bg={bg_mean:.0f}, sig={sig_mean:.0f}, sep={separation:.2f}σ, "
+                f"threshold={auto_t:.3f} (raw>{raw_cutoff:.0f})"
+            )
             logger.info(f"  {ch_name}-positive: {n_pos} cells ({pos_pct:.1f}%)")
 
-    logger.info(f"Islet marker ratio_min: {ratio_min}x (dominant must be >= {ratio_min}x runner-up)")
+    logger.info(
+        f"Islet marker ratio_min: {ratio_min}x (dominant must be >= {ratio_min}x runner-up)"
+    )
     return (norm_ranges, ch_thresholds, ratio_min)

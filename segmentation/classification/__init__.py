@@ -48,73 +48,73 @@ Usage:
     top_types = type_classifier.predict_top_k(features, k=3)
 """
 
-from .vessel_classifier import (
-    VesselClassifier,
-    VESSEL_CORE_FEATURES,
-    MORPHOLOGICAL_FEATURES,
-    DEFAULT_FEATURES,
-    SAM2_FEATURES,
-    RESNET_FEATURES,
-    FULL_FEATURES,
-)
-from .vessel_detector_rf import (
-    VesselDetectorRF,
-    train_vessel_detector,
-    predict_vessel,
-    VESSEL_DETECTION_FEATURES,
-    MINIMAL_DETECTION_FEATURES,
-)
 from .artery_vein_classifier import (
-    ArteryVeinClassifier,
     ARTERY_VEIN_FEATURES,
     MINIMAL_ARTERY_VEIN_FEATURES,
-)
-from .vessel_type_classifier import (
-    VesselTypeClassifier,
-    TYPE_FEATURES,
-    EXTENDED_TYPE_FEATURES,
-    MINIMAL_TYPE_FEATURES,
-    VESSEL_TYPES,
-    VESSEL_TYPE_CHARACTERISTICS,
-    classify_vessel_type,
-    get_vessel_type_description,
+    ArteryVeinClassifier,
 )
 from .feature_selection import (
     analyze_feature_importance,
-    select_optimal_features,
     cross_validate_features,
+    select_optimal_features,
+)
+from .vessel_classifier import (
+    DEFAULT_FEATURES,
+    FULL_FEATURES,
+    MORPHOLOGICAL_FEATURES,
+    RESNET_FEATURES,
+    SAM2_FEATURES,
+    VESSEL_CORE_FEATURES,
+    VesselClassifier,
+)
+from .vessel_detector_rf import (
+    MINIMAL_DETECTION_FEATURES,
+    VESSEL_DETECTION_FEATURES,
+    VesselDetectorRF,
+    predict_vessel,
+    train_vessel_detector,
+)
+from .vessel_type_classifier import (
+    EXTENDED_TYPE_FEATURES,
+    MINIMAL_TYPE_FEATURES,
+    TYPE_FEATURES,
+    VESSEL_TYPE_CHARACTERISTICS,
+    VESSEL_TYPES,
+    VesselTypeClassifier,
+    classify_vessel_type,
+    get_vessel_type_description,
 )
 
 __all__ = [
     # Vessel Detection (Stage 1)
-    'VesselDetectorRF',
-    'train_vessel_detector',
-    'predict_vessel',
-    'VESSEL_DETECTION_FEATURES',
-    'MINIMAL_DETECTION_FEATURES',
+    "VesselDetectorRF",
+    "train_vessel_detector",
+    "predict_vessel",
+    "VESSEL_DETECTION_FEATURES",
+    "MINIMAL_DETECTION_FEATURES",
     # Vessel Type Classification (Stage 2a) - 3 classes
-    'VesselClassifier',
-    'VESSEL_CORE_FEATURES',
-    'MORPHOLOGICAL_FEATURES',
-    'DEFAULT_FEATURES',
-    'SAM2_FEATURES',
-    'RESNET_FEATURES',
-    'FULL_FEATURES',
+    "VesselClassifier",
+    "VESSEL_CORE_FEATURES",
+    "MORPHOLOGICAL_FEATURES",
+    "DEFAULT_FEATURES",
+    "SAM2_FEATURES",
+    "RESNET_FEATURES",
+    "FULL_FEATURES",
     # Artery/Vein Classification (Stage 2b) - 2 classes
-    'ArteryVeinClassifier',
-    'ARTERY_VEIN_FEATURES',
-    'MINIMAL_ARTERY_VEIN_FEATURES',
+    "ArteryVeinClassifier",
+    "ARTERY_VEIN_FEATURES",
+    "MINIMAL_ARTERY_VEIN_FEATURES",
     # Full Vessel Type Classification (Stage 2c) - 6 classes with marker profiles
-    'VesselTypeClassifier',
-    'TYPE_FEATURES',
-    'EXTENDED_TYPE_FEATURES',
-    'MINIMAL_TYPE_FEATURES',
-    'VESSEL_TYPES',
-    'VESSEL_TYPE_CHARACTERISTICS',
-    'classify_vessel_type',
-    'get_vessel_type_description',
+    "VesselTypeClassifier",
+    "TYPE_FEATURES",
+    "EXTENDED_TYPE_FEATURES",
+    "MINIMAL_TYPE_FEATURES",
+    "VESSEL_TYPES",
+    "VESSEL_TYPE_CHARACTERISTICS",
+    "classify_vessel_type",
+    "get_vessel_type_description",
     # Feature Selection Utilities
-    'analyze_feature_importance',
-    'select_optimal_features',
-    'cross_validate_features',
+    "analyze_feature_importance",
+    "select_optimal_features",
+    "cross_validate_features",
 ]

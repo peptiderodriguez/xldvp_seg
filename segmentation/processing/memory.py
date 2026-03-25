@@ -18,16 +18,17 @@ Usage:
     safe_workers = get_safe_worker_count(requested_workers=8, tile_size=3000)
 """
 
-from typing import Dict, Any
+from typing import Any
+
 import psutil
 
-from segmentation.utils.logging import get_logger
 from segmentation.utils.config import get_memory_threshold
+from segmentation.utils.logging import get_logger
 
 logger = get_logger(__name__)
 
 
-def validate_system_resources(num_workers: int, tile_size: int) -> Dict[str, Any]:
+def validate_system_resources(num_workers: int, tile_size: int) -> dict[str, Any]:
     """
     Check available RAM and GPU memory before starting processing.
 
@@ -51,17 +52,17 @@ def validate_system_resources(num_workers: int, tile_size: int) -> Dict[str, Any
         - should_abort: True if system resources critically low
     """
     result = {
-        'warnings': [],
-        'recommended_workers': num_workers,
-        'recommended_tile_size': tile_size,
-        'should_abort': False
+        "warnings": [],
+        "recommended_workers": num_workers,
+        "recommended_tile_size": tile_size,
+        "should_abort": False,
     }
 
     # Get thresholds from config
-    min_ram_gb = get_memory_threshold('min_ram_gb')
-    min_gpu_gb = get_memory_threshold('min_gpu_gb')
-    mem_per_worker_large = get_memory_threshold('mem_per_worker_large_tile')
-    mem_per_worker_small = get_memory_threshold('mem_per_worker_small_tile')
+    min_ram_gb = get_memory_threshold("min_ram_gb")
+    min_gpu_gb = get_memory_threshold("min_gpu_gb")
+    mem_per_worker_large = get_memory_threshold("mem_per_worker_large_tile")
+    mem_per_worker_small = get_memory_threshold("mem_per_worker_small_tile")
 
     # Check RAM
     mem = psutil.virtual_memory()
@@ -77,15 +78,16 @@ def validate_system_resources(num_workers: int, tile_size: int) -> Dict[str, Any
     logger.info(f"Estimated memory per worker: ~{mem_per_worker_gb:.0f} GB (tile_size={tile_size})")
 
     if num_workers > max_safe_workers:
-        result['warnings'].append(
+        result["warnings"].append(
             f"WARNING: {num_workers} workers requested but only ~{available_gb:.0f} GB RAM available. "
             f"Risk of OOM crash! Recommend max {max_safe_workers} workers."
         )
-        result['recommended_workers'] = max_safe_workers
+        result["recommended_workers"] = max_safe_workers
 
     # Check GPU memory (all available GPUs, not just device 0)
     try:
         import torch
+
         from segmentation.utils.device import get_default_device
     except ImportError:
         torch = None
@@ -93,53 +95,55 @@ def validate_system_resources(num_workers: int, tile_size: int) -> Dict[str, Any
 
     if torch is not None:
         detected_device = get_default_device()
-        if detected_device == 'cuda':
+        if detected_device == "cuda":
             try:
                 num_gpus_check = min(torch.cuda.device_count(), num_workers if num_workers else 1)
-                min_gpu_available = float('inf')
+                min_gpu_available = float("inf")
                 for gpu_id in range(num_gpus_check):
                     gpu_total = torch.cuda.get_device_properties(gpu_id).total_memory / (1024**3)
                     gpu_reserved = torch.cuda.memory_reserved(gpu_id) / (1024**3)
                     gpu_available = gpu_total - gpu_reserved
-                    logger.info(f"GPU {gpu_id} memory: {gpu_available:.1f} GB available / {gpu_total:.1f} GB total")
+                    logger.info(
+                        f"GPU {gpu_id} memory: {gpu_available:.1f} GB available / {gpu_total:.1f} GB total"
+                    )
                     min_gpu_available = min(min_gpu_available, gpu_available)
 
                 if min_gpu_available < min_gpu_gb:
-                    result['warnings'].append(
+                    result["warnings"].append(
                         f"WARNING: GPU with only {min_gpu_available:.1f} GB memory available. "
                         f"SAM2 + ResNet need ~{min_gpu_gb:.0f}-8 GB. May cause CUDA OOM errors."
                     )
                 logger.info("TIP: Monitor GPU in another terminal: nvidia-smi -l 1")
             except Exception as e:
                 logger.warning(f"Could not check GPU memory: {e}")
-        elif detected_device == 'mps':
+        elif detected_device == "mps":
             # MPS (Apple Silicon) — no per-device memory API, use system RAM as proxy
             # Unified memory means GPU shares system RAM
-            logger.info(f"Apple Silicon MPS backend detected. "
-                        f"Unified memory: {total_gb:.0f} GB total, {available_gb:.0f} GB available")
+            logger.info(
+                f"Apple Silicon MPS backend detected. "
+                f"Unified memory: {total_gb:.0f} GB total, {available_gb:.0f} GB available"
+            )
         else:
-            result['warnings'].append("WARNING: No GPU detected (CUDA or MPS). Processing will be slow.")
+            result["warnings"].append(
+                "WARNING: No GPU detected (CUDA or MPS). Processing will be slow."
+            )
 
     # Critical memory threshold - abort if less than min_ram_gb available
     if available_gb < min_ram_gb:
-        result['warnings'].append(
+        result["warnings"].append(
             f"CRITICAL: Only {available_gb:.1f} GB RAM available. "
             f"This is likely to crash your system. Aborting."
         )
-        result['should_abort'] = True
+        result["should_abort"] = True
 
     # Log warnings
-    for warning in result['warnings']:
+    for warning in result["warnings"]:
         logger.warning(warning)
 
     return result
 
 
-def get_safe_worker_count(
-    requested_workers: int,
-    tile_size: int,
-    auto_adjust: bool = True
-) -> int:
+def get_safe_worker_count(requested_workers: int, tile_size: int, auto_adjust: bool = True) -> int:
     """
     Return a safe number of workers based on available system resources.
 
@@ -155,8 +159,8 @@ def get_safe_worker_count(
     available_gb = mem.available / (1024**3)
 
     # Get thresholds from config
-    mem_per_worker_large = get_memory_threshold('mem_per_worker_large_tile')
-    mem_per_worker_small = get_memory_threshold('mem_per_worker_small_tile')
+    mem_per_worker_large = get_memory_threshold("mem_per_worker_large_tile")
+    mem_per_worker_small = get_memory_threshold("mem_per_worker_small_tile")
 
     # Memory per worker estimate
     mem_per_worker_gb = mem_per_worker_large if tile_size >= 4096 else mem_per_worker_small
@@ -172,7 +176,7 @@ def get_safe_worker_count(
     return requested_workers
 
 
-def get_memory_usage() -> Dict[str, float]:
+def get_memory_usage() -> dict[str, float]:
     """
     Get current memory usage statistics.
 
@@ -181,19 +185,21 @@ def get_memory_usage() -> Dict[str, float]:
     """
     mem = psutil.virtual_memory()
     result = {
-        'ram_available_gb': mem.available / (1024**3),
-        'ram_total_gb': mem.total / (1024**3),
-        'ram_used_percent': mem.percent,
+        "ram_available_gb": mem.available / (1024**3),
+        "ram_total_gb": mem.total / (1024**3),
+        "ram_used_percent": mem.percent,
     }
 
     try:
         import torch
+
         from segmentation.utils.device import get_default_device
+
         _device_type = get_default_device()
     except ImportError:
-        _device_type = 'cpu'
+        _device_type = "cpu"
 
-    if _device_type == 'cuda':
+    if _device_type == "cuda":
         try:
             num_gpus = torch.cuda.device_count()
             total_gpu_total = 0
@@ -207,22 +213,22 @@ def get_memory_usage() -> Dict[str, float]:
                 total_gpu_allocated += gpu_allocated
                 total_gpu_reserved += gpu_reserved
                 if num_gpus > 1:
-                    result[f'gpu{gpu_id}_total_gb'] = gpu_total
-                    result[f'gpu{gpu_id}_available_gb'] = gpu_total - gpu_reserved
+                    result[f"gpu{gpu_id}_total_gb"] = gpu_total
+                    result[f"gpu{gpu_id}_available_gb"] = gpu_total - gpu_reserved
 
-            result['gpu_total_gb'] = total_gpu_total
-            result['gpu_allocated_gb'] = total_gpu_allocated
-            result['gpu_reserved_gb'] = total_gpu_reserved
-            result['gpu_available_gb'] = total_gpu_total - total_gpu_reserved
-            result['gpu_count'] = num_gpus
+            result["gpu_total_gb"] = total_gpu_total
+            result["gpu_allocated_gb"] = total_gpu_allocated
+            result["gpu_reserved_gb"] = total_gpu_reserved
+            result["gpu_available_gb"] = total_gpu_total - total_gpu_reserved
+            result["gpu_count"] = num_gpus
         except Exception:
             pass
-    elif _device_type == 'mps':
+    elif _device_type == "mps":
         # MPS uses unified memory — report system RAM as GPU memory
-        result['gpu_type'] = 'mps'
-        result['gpu_count'] = 1
-        result['gpu_total_gb'] = result['ram_total_gb']
-        result['gpu_available_gb'] = result['ram_available_gb']
+        result["gpu_type"] = "mps"
+        result["gpu_count"] = 1
+        result["gpu_total_gb"] = result["ram_total_gb"]
+        result["gpu_available_gb"] = result["ram_available_gb"]
 
     return result
 
@@ -235,11 +241,9 @@ def log_memory_status(prefix: str = "") -> None:
         prefix: Optional prefix for log message
     """
     usage = get_memory_usage()
-    msg_parts = [
-        f"RAM: {usage['ram_available_gb']:.1f}/{usage['ram_total_gb']:.1f} GB available"
-    ]
+    msg_parts = [f"RAM: {usage['ram_available_gb']:.1f}/{usage['ram_total_gb']:.1f} GB available"]
 
-    if 'gpu_available_gb' in usage:
+    if "gpu_available_gb" in usage:
         msg_parts.append(
             f"GPU: {usage['gpu_available_gb']:.1f}/{usage['gpu_total_gb']:.1f} GB available"
         )
@@ -252,8 +256,8 @@ def log_memory_status(prefix: str = "") -> None:
 
 
 __all__ = [
-    'validate_system_resources',
-    'get_safe_worker_count',
-    'get_memory_usage',
-    'log_memory_status',
+    "validate_system_resources",
+    "get_safe_worker_count",
+    "get_memory_usage",
+    "log_memory_status",
 ]

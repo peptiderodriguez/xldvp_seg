@@ -6,7 +6,6 @@ Run with: pytest tests/test_json_utils.py -v
 """
 
 import json
-import math
 
 import numpy as np
 import pytest

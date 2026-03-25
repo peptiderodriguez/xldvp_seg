@@ -18,9 +18,10 @@ Usage:
     results = process_contours_batch(contours_px, pixel_size_um=pixel_size)
 """
 
-import numpy as np
+from typing import Any
+
 import cv2
-from typing import List, Optional, Tuple, Dict, Any
+import numpy as np
 from shapely.geometry import Polygon
 from shapely.validation import make_valid
 
@@ -31,12 +32,11 @@ logger = get_logger(__name__)
 
 # Default parameters
 # Removed: DEFAULT_PIXEL_SIZE_UM — pixel_size_um must come from CZI metadata
-DEFAULT_DILATION_UM = 0.5      # Dilate by 0.5um
-DEFAULT_RDP_EPSILON = 5        # RDP epsilon in pixels
+DEFAULT_DILATION_UM = 0.5  # Dilate by 0.5um
+DEFAULT_RDP_EPSILON = 5  # RDP epsilon in pixels
 
 
-def transform_native_to_display(pts_xy_um, orig_w_um, orig_h_um,
-                                flip_h, rot90):
+def transform_native_to_display(pts_xy_um, orig_w_um, orig_h_um, flip_h, rot90):
     """Transform contour [x, y] um from native CZI space to display space.
 
     Applies the same transforms that napari_place_crosses.py applied to the
@@ -76,7 +76,7 @@ def rdp_simplify(points: np.ndarray, epsilon: float) -> np.ndarray:
     return simplified.reshape(-1, 2)
 
 
-def validate_polygon(poly: Polygon) -> Optional[Polygon]:
+def validate_polygon(poly: Polygon) -> Polygon | None:
     """
     Validate and fix a Shapely polygon.
 
@@ -98,14 +98,14 @@ def validate_polygon(poly: Polygon) -> Optional[Polygon]:
     # Try to fix invalid polygon
     poly = make_valid(poly)
 
-    if poly.geom_type == 'Polygon':
+    if poly.geom_type == "Polygon":
         return poly
-    elif poly.geom_type == 'MultiPolygon':
+    elif poly.geom_type == "MultiPolygon":
         # Take the largest polygon
         return max(poly.geoms, key=lambda p: p.area)
-    elif poly.geom_type == 'GeometryCollection':
+    elif poly.geom_type == "GeometryCollection":
         # Extract polygons and take the largest
-        polys = [g for g in poly.geoms if g.geom_type == 'Polygon']
+        polys = [g for g in poly.geoms if g.geom_type == "Polygon"]
         if polys:
             return max(polys, key=lambda p: p.area)
         return None
@@ -113,8 +113,9 @@ def validate_polygon(poly: Polygon) -> Optional[Polygon]:
         return None
 
 
-def dilate_contour(contour: np.ndarray, dilation: float,
-                   _poly: Polygon = None) -> Optional[np.ndarray]:
+def dilate_contour(
+    contour: np.ndarray, dilation: float, _poly: Polygon = None
+) -> np.ndarray | None:
     if len(contour) < 3:
         return None
 
@@ -130,7 +131,7 @@ def dilate_contour(contour: np.ndarray, dilation: float,
     if poly_dilated.is_empty:
         return None
 
-    if poly_dilated.geom_type == 'MultiPolygon':
+    if poly_dilated.geom_type == "MultiPolygon":
         poly_dilated = max(poly_dilated.geoms, key=lambda p: p.area)
 
     coords = np.array(poly_dilated.exterior.coords)[:-1]
@@ -138,8 +139,7 @@ def dilate_contour(contour: np.ndarray, dilation: float,
     return coords
 
 
-def erode_contour(contour: np.ndarray, erosion: float,
-                  _poly: Polygon = None) -> Optional[np.ndarray]:
+def erode_contour(contour: np.ndarray, erosion: float, _poly: Polygon = None) -> np.ndarray | None:
     if erosion <= 0:
         return contour
     if len(contour) < 3:
@@ -157,7 +157,7 @@ def erode_contour(contour: np.ndarray, erosion: float,
     if poly_eroded.is_empty:
         return None
 
-    if poly_eroded.geom_type == 'MultiPolygon':
+    if poly_eroded.geom_type == "MultiPolygon":
         poly_eroded = max(poly_eroded.geoms, key=lambda p: p.area)
 
     if poly_eroded.area < 0.1:
@@ -167,7 +167,7 @@ def erode_contour(contour: np.ndarray, erosion: float,
     return coords
 
 
-def erode_contour_percent(contour: np.ndarray, erode_pct: float) -> Optional[np.ndarray]:
+def erode_contour_percent(contour: np.ndarray, erode_pct: float) -> np.ndarray | None:
     """
     Erode a contour by a percentage of its characteristic size (sqrt(area)).
 
@@ -195,7 +195,7 @@ def erode_contour_percent(contour: np.ndarray, erode_pct: float) -> Optional[np.
     poly_eroded = poly.buffer(-erosion)
     if poly_eroded.is_empty:
         return None
-    if poly_eroded.geom_type == 'MultiPolygon':
+    if poly_eroded.geom_type == "MultiPolygon":
         poly_eroded = max(poly_eroded.geoms, key=lambda p: p.area)
     if poly_eroded.area < 0.1:
         return None
@@ -203,14 +203,14 @@ def erode_contour_percent(contour: np.ndarray, erode_pct: float) -> Optional[np.
 
 
 def process_contour(
-    contour_px: List[List[float]],
+    contour_px: list[list[float]],
     pixel_size_um: float = None,
     dilation_um: float = DEFAULT_DILATION_UM,
     rdp_epsilon: float = DEFAULT_RDP_EPSILON,
     erosion_um: float = 0.0,
     erode_pct: float = 0.0,
-    return_stats: bool = False
-) -> Optional[np.ndarray] | Tuple[Optional[np.ndarray], Dict[str, Any]]:
+    return_stats: bool = False,
+) -> np.ndarray | None | tuple[np.ndarray | None, dict[str, Any]]:
     """
     Process a single contour: validate, dilate, simplify, and optionally erode.
 
@@ -243,11 +243,11 @@ def process_contour(
     if pixel_size_um is None:
         raise ValueError("pixel_size_um is required — must come from CZI metadata")
     stats = {
-        'points_before': 0,
-        'points_after': 0,
-        'area_before_um2': 0,
-        'area_after_um2': 0,
-        'valid': False,
+        "points_before": 0,
+        "points_after": 0,
+        "area_before_um2": 0,
+        "area_after_um2": 0,
+        "valid": False,
     }
 
     if contour_px is None or len(contour_px) < 3:
@@ -256,13 +256,13 @@ def process_contour(
         return None
 
     contour_px = np.array(contour_px)
-    stats['points_before'] = len(contour_px)
+    stats["points_before"] = len(contour_px)
 
     # Construct pixel polygon once, reuse for area and dilation
     px_poly = Polygon(contour_px)
     px_poly = validate_polygon(px_poly)
     if px_poly is not None and not px_poly.is_empty:
-        stats['area_before_um2'] = px_poly.area * pixel_size_um * pixel_size_um
+        stats["area_before_um2"] = px_poly.area * pixel_size_um * pixel_size_um
 
     # All operations in pixel space to avoid precision loss from
     # repeated px->um->px conversions.
@@ -299,23 +299,23 @@ def process_contour(
             return None, stats
         return None
 
-    stats['points_after'] = len(simplified_px)
+    stats["points_after"] = len(simplified_px)
 
     # Calculate final area in pixel space (fix self-intersecting post-RDP polygons)
     final_poly_px = Polygon(simplified_px)
     if not final_poly_px.is_valid:
         final_poly_px = make_valid(final_poly_px)
-        if final_poly_px.geom_type != 'Polygon':
-            polys = [g for g in getattr(final_poly_px, 'geoms', []) if g.geom_type == 'Polygon']
+        if final_poly_px.geom_type != "Polygon":
+            polys = [g for g in getattr(final_poly_px, "geoms", []) if g.geom_type == "Polygon"]
             if polys:
                 final_poly_px = max(polys, key=lambda p: p.area)
     if not final_poly_px.is_empty:
-        stats['area_after_um2'] = final_poly_px.area * pixel_size_um * pixel_size_um
+        stats["area_after_um2"] = final_poly_px.area * pixel_size_um * pixel_size_um
 
     # Convert to microns only at the end
     simplified_um = simplified_px * pixel_size_um
 
-    stats['valid'] = True
+    stats["valid"] = True
 
     if return_stats:
         return simplified_um, stats
@@ -323,14 +323,14 @@ def process_contour(
 
 
 def process_contours_batch(
-    contours_px: List[List[List[float]]],
+    contours_px: list[list[list[float]]],
     pixel_size_um: float = None,
     dilation_um: float = DEFAULT_DILATION_UM,
     rdp_epsilon: float = DEFAULT_RDP_EPSILON,
     erosion_um: float = 0.0,
     erode_pct: float = 0.0,
-    verbose: bool = True
-) -> Dict[str, Any]:
+    verbose: bool = True,
+) -> dict[str, Any]:
     """
     Process a batch of contours with statistics.
 
@@ -358,15 +358,15 @@ def process_contours_batch(
     if pixel_size_um is None:
         raise ValueError("pixel_size_um is required — must come from CZI metadata")
     results = {
-        'contours_um': [],
-        'valid_count': 0,
-        'skipped_count': 0,
-        'total_points_before': 0,
-        'total_points_after': 0,
-        'point_reduction_pct': 0,
-        'mean_area_before_um2': 0,
-        'mean_area_after_um2': 0,
-        'area_change_pct': 0,
+        "contours_um": [],
+        "valid_count": 0,
+        "skipped_count": 0,
+        "total_points_before": 0,
+        "total_points_after": 0,
+        "point_reduction_pct": 0,
+        "mean_area_before_um2": 0,
+        "mean_area_after_um2": 0,
+        "area_change_pct": 0,
     }
 
     areas_before = []
@@ -383,36 +383,36 @@ def process_contours_batch(
             rdp_epsilon=rdp_epsilon,
             erosion_um=erosion_um,
             erode_pct=erode_pct,
-            return_stats=True
+            return_stats=True,
         )
 
-        results['contours_um'].append(processed)
-        results['total_points_before'] += stats['points_before']
-        results['total_points_after'] += stats['points_after']
+        results["contours_um"].append(processed)
+        results["total_points_before"] += stats["points_before"]
+        results["total_points_after"] += stats["points_after"]
 
-        if stats['valid']:
-            results['valid_count'] += 1
-            if stats['area_before_um2'] > 0:
-                areas_before.append(stats['area_before_um2'])
-            if stats['area_after_um2'] > 0:
-                areas_after.append(stats['area_after_um2'])
+        if stats["valid"]:
+            results["valid_count"] += 1
+            if stats["area_before_um2"] > 0:
+                areas_before.append(stats["area_before_um2"])
+            if stats["area_after_um2"] > 0:
+                areas_after.append(stats["area_after_um2"])
         else:
-            results['skipped_count'] += 1
+            results["skipped_count"] += 1
 
     # Calculate summary stats
-    if results['total_points_before'] > 0:
-        results['point_reduction_pct'] = (
-            1 - results['total_points_after'] / results['total_points_before']
+    if results["total_points_before"] > 0:
+        results["point_reduction_pct"] = (
+            1 - results["total_points_after"] / results["total_points_before"]
         ) * 100
 
     if areas_before:
-        results['mean_area_before_um2'] = np.mean(areas_before)
+        results["mean_area_before_um2"] = np.mean(areas_before)
     if areas_after:
-        results['mean_area_after_um2'] = np.mean(areas_after)
+        results["mean_area_after_um2"] = np.mean(areas_after)
 
-    if results['mean_area_before_um2'] > 0:
-        results['area_change_pct'] = (
-            results['mean_area_after_um2'] / results['mean_area_before_um2'] - 1
+    if results["mean_area_before_um2"] > 0:
+        results["area_change_pct"] = (
+            results["mean_area_after_um2"] / results["mean_area_before_um2"] - 1
         ) * 100
 
     return results
@@ -420,15 +420,15 @@ def process_contours_batch(
 
 # Convenience function for getting contours from detections
 def process_detection_contours(
-    detections: List[Dict],
-    contour_key: str = 'outer_contour_global',
+    detections: list[dict],
+    contour_key: str = "outer_contour_global",
     pixel_size_um: float = None,
     dilation_um: float = DEFAULT_DILATION_UM,
     rdp_epsilon: float = DEFAULT_RDP_EPSILON,
     erosion_um: float = 0.0,
     erode_pct: float = 0.0,
-    verbose: bool = True
-) -> Tuple[List[Optional[np.ndarray]], Dict[str, Any]]:
+    verbose: bool = True,
+) -> tuple[list[np.ndarray | None], dict[str, Any]]:
     """
     Process contours from a list of detection dictionaries.
 
@@ -465,12 +465,14 @@ def process_detection_contours(
         rdp_epsilon=rdp_epsilon,
         erosion_um=erosion_um,
         erode_pct=erode_pct,
-        verbose=verbose
+        verbose=verbose,
     )
 
     if verbose:
         logger.info(f"  Valid: {results['valid_count']}, Skipped: {results['skipped_count']}")
         logger.info(f"  Point reduction: {results['point_reduction_pct']:.1f}%")
-        logger.info(f"  Area change: {results['mean_area_before_um2']:.1f} -> {results['mean_area_after_um2']:.1f} um2 ({results['area_change_pct']:+.1f}%)")
+        logger.info(
+            f"  Area change: {results['mean_area_before_um2']:.1f} -> {results['mean_area_after_um2']:.1f} um2 ({results['area_change_pct']:+.1f}%)"
+        )
 
-    return results['contours_um'], results
+    return results["contours_um"], results

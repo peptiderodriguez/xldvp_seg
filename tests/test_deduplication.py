@@ -4,11 +4,12 @@ Creates temporary HDF5 mask files with known rectangular masks, then runs
 IoU NMS deduplication to verify correct duplicate removal behavior.
 """
 
-import pytest
-import numpy as np
-import tempfile
 import shutil
+import tempfile
 from pathlib import Path
+
+import numpy as np
+import pytest
 
 try:
     import hdf5plugin
@@ -113,7 +114,7 @@ class TestDeduplicateByIoUNMS:
         """Two non-overlapping rectangles should both be kept."""
         # Tile at origin (0, 0) with two well-separated labels
         mask = np.zeros((500, 500), dtype=np.int32)
-        mask[10:60, 10:60] = 1     # top-left
+        mask[10:60, 10:60] = 1  # top-left
         mask[300:350, 300:350] = 2  # bottom-right (far away)
 
         _create_tile_masks(tiles_dir, (0, 0), mask, self.MASK_FILE)

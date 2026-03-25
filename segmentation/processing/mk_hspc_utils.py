@@ -19,8 +19,9 @@ Usage:
     )
 """
 
+from typing import Any
+
 import numpy as np
-from typing import Any, Dict, List, Optional, Tuple
 
 
 def ensure_rgb_array(img_data: np.ndarray) -> np.ndarray:
@@ -63,7 +64,7 @@ def ensure_rgb_array(img_data: np.ndarray) -> np.ndarray:
         return img_data
 
 
-def check_tile_validity(img_rgb: np.ndarray, tile_id: str) -> Tuple[bool, str]:
+def check_tile_validity(img_rgb: np.ndarray, tile_id: str) -> tuple[bool, str]:
     """
     Check if tile has valid content for processing.
 
@@ -91,15 +92,12 @@ def check_tile_validity(img_rgb: np.ndarray, tile_id: str) -> Tuple[bool, str]:
         (True, 'valid')
     """
     if img_rgb.max() == 0:
-        return False, 'empty'
-    return True, 'valid'
+        return False, "empty"
+    return True, "valid"
 
 
 def prepare_tile_for_detection(
-    img_rgb: np.ndarray,
-    normalize: bool = True,
-    p_low: int = 5,
-    p_high: int = 95
+    img_rgb: np.ndarray, normalize: bool = True, p_low: int = 5, p_high: int = 95
 ) -> np.ndarray:
     """
     Prepare tile for detection by applying percentile normalization.
@@ -125,6 +123,7 @@ def prepare_tile_for_detection(
     """
     if normalize:
         from segmentation.io.html_export import percentile_normalize
+
         return percentile_normalize(img_rgb, p_low=p_low, p_high=p_high)
     return img_rgb
 
@@ -132,14 +131,14 @@ def prepare_tile_for_detection(
 def build_mk_hspc_result(
     tid: str,
     status: str,
-    mk_masks: Optional[np.ndarray] = None,
-    hspc_masks: Optional[np.ndarray] = None,
-    mk_feats: Optional[List[Dict[str, Any]]] = None,
-    hspc_feats: Optional[List[Dict[str, Any]]] = None,
-    tile: Optional[Dict[str, Any]] = None,
-    slide_name: Optional[str] = None,
-    error: Optional[str] = None
-) -> Dict[str, Any]:
+    mk_masks: np.ndarray | None = None,
+    hspc_masks: np.ndarray | None = None,
+    mk_feats: list[dict[str, Any]] | None = None,
+    hspc_feats: list[dict[str, Any]] | None = None,
+    tile: dict[str, Any] | None = None,
+    slide_name: str | None = None,
+    error: str | None = None,
+) -> dict[str, Any]:
     """
     Build result dict for MK/HSPC tile worker functions.
 
@@ -181,33 +180,33 @@ def build_mk_hspc_result(
         'success'
     """
     result = {
-        'tid': tid,
-        'status': status,
+        "tid": tid,
+        "status": status,
     }
 
-    if status == 'success':
-        result.update({
-            'mk_masks': mk_masks,
-            'hspc_masks': hspc_masks,
-            'mk_feats': mk_feats if mk_feats is not None else [],
-            'hspc_feats': hspc_feats if hspc_feats is not None else [],
-            'tile': tile,
-        })
-    elif status == 'error':
-        result['error'] = error if error else 'Unknown error'
+    if status == "success":
+        result.update(
+            {
+                "mk_masks": mk_masks,
+                "hspc_masks": hspc_masks,
+                "mk_feats": mk_feats if mk_feats is not None else [],
+                "hspc_feats": hspc_feats if hspc_feats is not None else [],
+                "tile": tile,
+            }
+        )
+    elif status == "error":
+        result["error"] = error if error else "Unknown error"
 
     # Add slide_name if provided (multi-slide mode)
     if slide_name is not None:
-        result['slide_name'] = slide_name
+        result["slide_name"] = slide_name
 
     return result
 
 
 def extract_tile_from_shared_memory(
-    shared_image: np.ndarray,
-    tile: Dict[str, Any],
-    mosaic_origin: Tuple[int, int] = (0, 0)
-) -> Tuple[Optional[np.ndarray], Optional[str]]:
+    shared_image: np.ndarray, tile: dict[str, Any], mosaic_origin: tuple[int, int] = (0, 0)
+) -> tuple[np.ndarray | None, str | None]:
     """
     Extract tile region from shared memory array.
 
@@ -238,8 +237,7 @@ def extract_tile_from_shared_memory(
     try:
         ox, oy = mosaic_origin
         img = shared_image[
-            tile['y'] - oy:tile['y'] - oy + tile['h'],
-            tile['x'] - ox:tile['x'] - ox + tile['w']
+            tile["y"] - oy : tile["y"] - oy + tile["h"], tile["x"] - ox : tile["x"] - ox + tile["w"]
         ]
         if img.size == 0:
             return None, f"Empty crop extracted from tile {tile.get('id', 'unknown')}"

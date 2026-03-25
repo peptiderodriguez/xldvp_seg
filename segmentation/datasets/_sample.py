@@ -7,8 +7,9 @@ Usage:
     print(f"{len(detections)} synthetic detections across {data['n_clusters']} clusters")
 """
 
+from typing import Any
+
 import numpy as np
-from typing import Dict, Any, List, Optional
 
 
 def sample(
@@ -18,7 +19,7 @@ def sample(
     pixel_size_um: float = 0.325,
     image_size: int = 10000,
     seed: int = 42,
-) -> Dict[str, Any]:
+) -> dict[str, Any]:
     """Generate synthetic detection data with known cluster structure.
 
     Creates detections with:
@@ -73,12 +74,12 @@ def sample(
     }
     cluster_channel_means = rng.uniform(100, 5000, size=(n_clusters, n_channels))
 
-    detections: List[Dict[str, Any]] = []
+    detections: list[dict[str, Any]] = []
     for i in range(n_cells):
         c = labels[i]
         x, y = positions[i]
 
-        features: Dict[str, Any] = {}
+        features: dict[str, Any] = {}
         # Morphological features (with noise around cluster center)
         for key, centers in cluster_morph.items():
             noise_scale = centers[c] * 0.15
@@ -112,7 +113,7 @@ def sample(
         for j in range(256):
             features[f"sam2_{j}"] = float(sam2[j])
 
-        det: Dict[str, Any] = {
+        det: dict[str, Any] = {
             "id": f"sample_cell_{i}",
             "uid": f"sample_cell_{i}",
             "global_center": [float(x), float(y)],

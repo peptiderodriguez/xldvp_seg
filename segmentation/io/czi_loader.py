@@ -13,15 +13,14 @@ Features:
 """
 
 import gc
-import threading
-import numpy as np
-import cv2
-from pathlib import Path
-from typing import Dict, List, Tuple, Optional, Union
-from tqdm import tqdm
-from aicspylibczi import CziFile
-
 import re as _re
+import threading
+from pathlib import Path
+
+import cv2
+import numpy as np
+from aicspylibczi import CziFile
+from tqdm import tqdm
 
 from segmentation.utils.logging import get_logger
 
@@ -47,39 +46,39 @@ def parse_markers_from_filename(filename: str) -> list:
 
     Returns list of dicts sorted by position in filename.
     """
-    stem = Path(filename).stem if '.' in filename else filename
+    stem = Path(filename).stem if "." in filename else filename
     results = []
     seen_positions = set()
 
     # Pattern 1: name followed by wavelength (e.g., SMA647, nuc488, NeuN647, tdTom555)
-    for m in _re.finditer(r'(?<![0-9])([A-Za-z][A-Za-z0-9]*?)(\d{3})(?![0-9])', stem):
+    for m in _re.finditer(r"(?<![0-9])([A-Za-z][A-Za-z0-9]*?)(\d{3})(?![0-9])", stem):
         name, wl = m.group(1), int(m.group(2))
         if 350 <= wl <= 900:  # valid fluorescence wavelength range
-            results.append({'name': name, 'wavelength': wl, '_pos': m.start()})
+            results.append({"name": name, "wavelength": wl, "_pos": m.start()})
             seen_positions.add(m.start())
 
     # Pattern 2: name_wavelength (e.g., CD31_555)
     # Negative lookahead prevents matching NAME_WL when WL is followed by a letter
     # (e.g., Slc17a7_647Gad1 — 647 belongs to Gad1 via Pattern 3, not to Slc17a7)
-    for m in _re.finditer(r'([A-Za-z][A-Za-z0-9]*)_(\d{3})(?![0-9A-Za-z])', stem):
+    for m in _re.finditer(r"([A-Za-z][A-Za-z0-9]*)_(\d{3})(?![0-9A-Za-z])", stem):
         if m.start() not in seen_positions:
             name, wl = m.group(1), int(m.group(2))
             if 350 <= wl <= 900:
-                results.append({'name': name, 'wavelength': wl, '_pos': m.start()})
+                results.append({"name": name, "wavelength": wl, "_pos": m.start()})
                 seen_positions.add(m.start())
 
     # Pattern 3: wavelength before name (e.g., 488Slc17a7)
-    for m in _re.finditer(r'(?<![0-9A-Za-z])(\d{3})([A-Z][A-Za-z0-9]+)', stem):
+    for m in _re.finditer(r"(?<![0-9A-Za-z])(\d{3})([A-Z][A-Za-z0-9]+)", stem):
         if m.start() not in seen_positions:
             wl, name = int(m.group(1)), m.group(2)
             if 350 <= wl <= 900:
-                results.append({'name': name, 'wavelength': wl, '_pos': m.start()})
+                results.append({"name": name, "wavelength": wl, "_pos": m.start()})
                 seen_positions.add(m.start())
 
     # Sort by position in filename, strip internal _pos key
-    results.sort(key=lambda x: x['_pos'])
+    results.sort(key=lambda x: x["_pos"])
     for r in results:
-        del r['_pos']
+        del r["_pos"]
 
     return results
 
@@ -108,31 +107,31 @@ def resolve_channel_indices(
     Raises:
         ChannelResolutionError: If wavelength not found or ambiguous
     """
-    channels = czi_metadata.get('channels', [])
-    n_channels = czi_metadata.get('n_channels', len(channels))
+    channels = czi_metadata.get("channels", [])
+    n_channels = czi_metadata.get("n_channels", len(channels))
 
     # Build wavelength→index lookup from CZI metadata
     wl_to_idx = {}
     for ch in channels:
-        ex = ch.get('excitation_nm')
+        ex = ch.get("excitation_nm")
         if ex is not None:
-            wl_to_idx[float(ex)] = ch['index']
+            wl_to_idx[float(ex)] = ch["index"]
 
     # Parse filename markers if provided
     filename_markers = {}
     if filename:
         parsed = parse_markers_from_filename(filename)
         for entry in parsed:
-            filename_markers[entry['name'].lower()] = entry['wavelength']
+            filename_markers[entry["name"].lower()] = entry["wavelength"]
 
     def _available_channels_str():
         """Format available channels for error messages."""
         parts = []
         for ch in channels:
-            ex = ch.get('excitation_nm')
+            ex = ch.get("excitation_nm")
             ex_str = f"{ex:.0f}nm" if ex else "N/A"
             parts.append(f"ch{ch['index']}={ex_str} ({ch.get('name', '?')})")
-        return ', '.join(parts) if parts else '(no channel metadata)'
+        return ", ".join(parts) if parts else "(no channel metadata)"
 
     def _match_wavelength(target_wl: float) -> int:
         """Find channel index matching a target wavelength (±10nm tolerance)."""
@@ -179,7 +178,9 @@ def resolve_channel_indices(
             # If it's a 3-digit number in wavelength range, treat as wavelength
             if 350 <= idx <= 900:
                 resolved[spec_str] = _match_wavelength(float(idx))
-                logger.debug(f"Channel spec '{spec_str}' -> wavelength {idx}nm -> ch{resolved[spec_str]}")
+                logger.debug(
+                    f"Channel spec '{spec_str}' -> wavelength {idx}nm -> ch{resolved[spec_str]}"
+                )
                 continue
             # Otherwise treat as index if valid
             if 0 <= idx < n_channels:
@@ -207,19 +208,19 @@ def resolve_channel_indices(
         exact_match = None
         substring_matches = []
         for ch in channels:
-            ch_name = (ch.get('name') or '').lower()
-            ch_dye = (ch.get('dye') or '').lower()
-            ch_fluor = (ch.get('fluorophore') or '').lower()
+            ch_name = (ch.get("name") or "").lower()
+            ch_dye = (ch.get("dye") or "").lower()
+            ch_fluor = (ch.get("fluorophore") or "").lower()
             meta_fields = (ch_name, ch_dye, ch_fluor)
             if name_lower in meta_fields:
-                exact_match = ch['index']
+                exact_match = ch["index"]
                 break
             # Substring: spec is contained in a metadata field, or vice versa
             # Require >= 3 chars to avoid short specs matching everything
             if len(name_lower) >= 3:
                 for field in meta_fields:
                     if field and (name_lower in field or field in name_lower):
-                        substring_matches.append(ch['index'])
+                        substring_matches.append(ch["index"])
                         break
         if exact_match is not None:
             resolved[spec_str] = exact_match
@@ -262,19 +263,19 @@ def _squeeze_batch_dims(arr: np.ndarray) -> np.ndarray:
 
 
 # Global cache for CZILoader instances with thread-safe access
-_image_cache: Dict[str, 'CZILoader'] = {}
+_image_cache: dict[str, "CZILoader"] = {}
 _image_cache_lock = threading.Lock()
 
 
 def get_loader(
-    czi_path: Union[str, Path],
+    czi_path: str | Path,
     load_to_ram: bool = True,
-    channels: Optional[List[int]] = None,
-    channel: Optional[int] = None,
+    channels: list[int] | None = None,
+    channel: int | None = None,
     strip_height: int = 5000,
     quiet: bool = False,
-    scene: int = 0
-) -> 'CZILoader':
+    scene: int = 0,
+) -> "CZILoader":
     """
     Get or create a CZILoader for this path.
 
@@ -354,7 +355,7 @@ def get_loader(
             channel=channel,
             strip_height=strip_height,
             quiet=quiet,
-            scene=scene
+            scene=scene,
         )
         with _image_cache_lock:
             _image_cache[key] = loader
@@ -380,7 +381,7 @@ def clear_cache():
     logger.info("Image cache cleared")
 
 
-def get_cached_paths() -> List[str]:
+def get_cached_paths() -> list[str]:
     """Return list of paths currently in the cache."""
     with _image_cache_lock:
         return list(_image_cache.keys())
@@ -405,11 +406,11 @@ def get_czi_metadata(czi_path, scene: int = 0):
 
     czi_path = str(czi_path)
     metadata = {
-        'channels': [],
-        'pixel_size_um': 0.22,  # default
-        'mosaic_size': None,
-        'n_channels': 0,
-        'n_scenes': 1,
+        "channels": [],
+        "pixel_size_um": 0.22,  # default
+        "mosaic_size": None,
+        "n_channels": 0,
+        "n_scenes": 1,
     }
 
     n_data_channels = None  # actual channel count from file dimensions
@@ -423,21 +424,27 @@ def get_czi_metadata(czi_path, scene: int = 0):
             try:
                 scene_bbox = czidoc.scenes_bounding_rectangle
                 if scene_bbox and len(scene_bbox) > 0:
-                    metadata['n_scenes'] = len(scene_bbox)
+                    metadata["n_scenes"] = len(scene_bbox)
                     if scene is not None and scene in scene_bbox:
                         rect = scene_bbox[scene]
-                        metadata['mosaic_size'] = (rect.w, rect.h)
+                        metadata["mosaic_size"] = (rect.w, rect.h)
                     else:
                         # Fallback to total bounding box
                         dims = czidoc.total_bounding_box
-                        metadata['mosaic_size'] = (dims['X'][1] - dims['X'][0], dims['Y'][1] - dims['Y'][0])
+                        metadata["mosaic_size"] = (
+                            dims["X"][1] - dims["X"][0],
+                            dims["Y"][1] - dims["Y"][0],
+                        )
                 else:
                     dims = czidoc.total_bounding_box
-                    metadata['mosaic_size'] = (dims['X'][1] - dims['X'][0], dims['Y'][1] - dims['Y'][0])
+                    metadata["mosaic_size"] = (
+                        dims["X"][1] - dims["X"][0],
+                        dims["Y"][1] - dims["Y"][0],
+                    )
             except (AttributeError, Exception):
                 # Older pylibCZIrw without scenes_bounding_rectangle
                 dims = czidoc.total_bounding_box
-                metadata['mosaic_size'] = (dims['X'][1] - dims['X'][0], dims['Y'][1] - dims['Y'][0])
+                metadata["mosaic_size"] = (dims["X"][1] - dims["X"][0], dims["Y"][1] - dims["Y"][0])
 
             # Get metadata XML
             meta_xml = czidoc.raw_metadata
@@ -452,9 +459,9 @@ def get_czi_metadata(czi_path, scene: int = 0):
         n_data_channels = None
         try:
             dims_shape_list = reader.get_dims_shape()
-            metadata['n_scenes'] = len(dims_shape_list)
-            if 'C' in dims_shape_list[0]:
-                n_data_channels = dims_shape_list[0]['C'][1] - dims_shape_list[0]['C'][0]
+            metadata["n_scenes"] = len(dims_shape_list)
+            if "C" in dims_shape_list[0]:
+                n_data_channels = dims_shape_list[0]["C"][1] - dims_shape_list[0]["C"][0]
         except Exception:
             pass
 
@@ -463,7 +470,7 @@ def get_czi_metadata(czi_path, scene: int = 0):
             bbox = reader.get_mosaic_scene_bounding_box(index=scene)
         else:
             bbox = reader.get_mosaic_bounding_box()
-        metadata['mosaic_size'] = (bbox.w, bbox.h)
+        metadata["mosaic_size"] = (bbox.w, bbox.h)
 
         meta_xml = reader.meta
         if isinstance(meta_xml, str):
@@ -477,45 +484,51 @@ def get_czi_metadata(czi_path, scene: int = 0):
     # all entries indexed by Channel:N id, merging metadata from the richest
     # entry per index. Then limit to actual data channel count from dims_shape.
     channel_map = {}  # index -> ch_info dict
-    for channel in root.iter('Channel'):
-        ch_id = channel.get('Id', '')
-        name = channel.get('Name', '')
+    for channel in root.iter("Channel"):
+        ch_id = channel.get("Id", "")
+        name = channel.get("Name", "")
 
         # Extract channel index from Id like "Channel:0", "Channel:1", etc.
         ch_idx = None
-        if ch_id and ch_id.startswith('Channel:'):
+        if ch_id and ch_id.startswith("Channel:"):
             try:
-                ch_idx = int(ch_id.split(':')[1])
+                ch_idx = int(ch_id.split(":")[1])
             except (ValueError, IndexError) as e:
                 logger.debug(f"Could not parse channel index from '{ch_id}': {e}")
 
-        fluor = channel.find('.//Fluor')
-        fluor_text = fluor.text if fluor is not None else 'N/A'
-        emission = channel.find('.//EmissionWavelength')
+        fluor = channel.find(".//Fluor")
+        fluor_text = fluor.text if fluor is not None else "N/A"
+        emission = channel.find(".//EmissionWavelength")
         emission_nm = float(emission.text) if emission is not None and emission.text else None
-        excitation = channel.find('.//ExcitationWavelength')
-        excitation_nm = float(excitation.text) if excitation is not None and excitation.text else None
-        dye_name = channel.find('.//DyeName')
+        excitation = channel.find(".//ExcitationWavelength")
+        excitation_nm = (
+            float(excitation.text) if excitation is not None and excitation.text else None
+        )
+        dye_name = channel.find(".//DyeName")
         dye = dye_name.text if dye_name is not None else fluor_text
 
         if ch_idx is not None:
             existing = channel_map.get(ch_idx)
             if existing is None:
                 channel_map[ch_idx] = {
-                    'index': ch_idx, 'name': name, 'id': ch_id,
-                    'fluorophore': fluor_text, 'emission_nm': emission_nm,
-                    'excitation_nm': excitation_nm, 'dye': dye,
+                    "index": ch_idx,
+                    "name": name,
+                    "id": ch_id,
+                    "fluorophore": fluor_text,
+                    "emission_nm": emission_nm,
+                    "excitation_nm": excitation_nm,
+                    "dye": dye,
                 }
             else:
                 # Merge: prefer non-null/non-default values
-                if fluor_text and fluor_text != 'N/A' and existing['fluorophore'] == 'N/A':
-                    existing['fluorophore'] = fluor_text
-                if emission_nm and not existing['emission_nm']:
-                    existing['emission_nm'] = emission_nm
-                if excitation_nm and not existing['excitation_nm']:
-                    existing['excitation_nm'] = excitation_nm
-                if dye and dye != 'N/A' and existing['dye'] in ('N/A', existing['fluorophore']):
-                    existing['dye'] = dye
+                if fluor_text and fluor_text != "N/A" and existing["fluorophore"] == "N/A":
+                    existing["fluorophore"] = fluor_text
+                if emission_nm and not existing["emission_nm"]:
+                    existing["emission_nm"] = emission_nm
+                if excitation_nm and not existing["excitation_nm"]:
+                    existing["excitation_nm"] = excitation_nm
+                if dye and dye != "N/A" and existing["dye"] in ("N/A", existing["fluorophore"]):
+                    existing["dye"] = dye
 
     # Build sorted channel list
     channels = [channel_map[k] for k in sorted(channel_map.keys())]
@@ -524,17 +537,17 @@ def get_czi_metadata(czi_path, scene: int = 0):
     if n_data_channels is not None and len(channels) > n_data_channels:
         channels = channels[:n_data_channels]
 
-    metadata['channels'] = channels
-    metadata['n_channels'] = len(channels)
+    metadata["channels"] = channels
+    metadata["n_channels"] = len(channels)
 
     # Parse pixel size
-    for scaling in root.iter('Scaling'):
-        for items in scaling.iter('Items'):
-            for distance in items.iter('Distance'):
-                if distance.get('Id') == 'X':
-                    value = distance.find('Value')
+    for scaling in root.iter("Scaling"):
+        for items in scaling.iter("Items"):
+            for distance in items.iter("Distance"):
+                if distance.get("Id") == "X":
+                    value = distance.find("Value")
                     if value is not None and value.text:
-                        metadata['pixel_size_um'] = float(value.text) * 1e6
+                        metadata["pixel_size_um"] = float(value.text) * 1e6
                         break
 
     return metadata
@@ -548,8 +561,8 @@ def print_czi_metadata(czi_path, scene: int = 0):
     try:
         meta = get_czi_metadata(czi_path, scene=scene)
 
-        if meta['mosaic_size']:
-            w, h = meta['mosaic_size']
+        if meta["mosaic_size"]:
+            w, h = meta["mosaic_size"]
             logger.info(f"Mosaic size: {w:,} x {h:,} px")
 
         logger.info(f"Pixel size: {meta['pixel_size_um']:.4f} um/px")
@@ -557,9 +570,9 @@ def print_czi_metadata(czi_path, scene: int = 0):
 
         logger.info("Channels:")
         logger.info("-" * 60)
-        for ch in meta['channels']:
-            ex = f"{ch['excitation_nm']:.0f}" if ch['excitation_nm'] else "N/A"
-            em = f"{ch['emission_nm']:.0f}" if ch['emission_nm'] else "N/A"
+        for ch in meta["channels"]:
+            ex = f"{ch['excitation_nm']:.0f}" if ch["excitation_nm"] else "N/A"
+            em = f"{ch['emission_nm']:.0f}" if ch["emission_nm"] else "N/A"
             logger.info(f"  [{ch['index']}] {ch['name']}")
             logger.info(f"      Fluorophore: {ch['fluorophore']}")
             logger.info(f"      Excitation: {ex} nm | Emission: {em} nm")
@@ -599,13 +612,13 @@ class CZILoader:
 
     def __init__(
         self,
-        czi_path: Union[str, Path],
+        czi_path: str | Path,
         load_to_ram: bool = False,
-        channel: Optional[int] = None,
-        channels: Optional[List[int]] = None,
+        channel: int | None = None,
+        channels: list[int] | None = None,
         strip_height: int = 5000,
         quiet: bool = False,
-        scene: int = 0
+        scene: int = 0,
     ):
         """
         Initialize CZI loader.
@@ -645,10 +658,10 @@ class CZILoader:
             self.height = self.bbox.h
 
             # Multi-channel RAM data storage
-            self._channel_data: Dict[int, np.ndarray] = {}
+            self._channel_data: dict[int, np.ndarray] = {}
 
             # Backward compatibility: single channel_data property
-            self._primary_channel: Optional[int] = None
+            self._primary_channel: int | None = None
 
             if load_to_ram:
                 # Handle both single channel and multi-channel
@@ -681,9 +694,7 @@ class CZILoader:
         if strip_height <= 0:
             raise ValueError(f"strip_height must be positive, got {strip_height}")
         if self.height <= 0 or self.width <= 0:
-            raise ValueError(
-                f"Mosaic dimensions must be positive, got {self.width}x{self.height}"
-            )
+            raise ValueError(f"Mosaic dimensions must be positive, got {self.width}x{self.height}")
 
         logger.info(f"Loading channel {channel} into RAM ({self.width:,} x {self.height:,} px)...")
 
@@ -714,12 +725,14 @@ class CZILoader:
                 # Ensure RGB data is uint8 using dtype-based normalization
                 # (per-strip max normalization causes visible banding at strip boundaries)
                 if strip.dtype == np.uint16:
-                    strip = (strip >> 8).astype(np.uint8)  # Fast bit-shift, consistent across all strips
+                    strip = (strip >> 8).astype(
+                        np.uint8
+                    )  # Fast bit-shift, consistent across all strips
                 elif strip.dtype not in (np.uint8,):
                     strip = np.clip(strip, 0, 255).astype(np.uint8)
-                channel_array[y_off:y_off+h, :, :] = strip
+                channel_array[y_off : y_off + h, :, :] = strip
             else:
-                channel_array[y_off:y_off+h, :] = strip
+                channel_array[y_off : y_off + h, :] = strip
 
         self._channel_data[channel] = channel_array
 
@@ -730,10 +743,7 @@ class CZILoader:
         logger.info(f"Channel {channel} loaded: {self._get_array_memory_gb(channel_array):.2f} GB")
 
     def load_to_shared_memory(
-        self,
-        channel: int,
-        shm_buffer: np.ndarray,
-        strip_height: int = 5000
+        self, channel: int, shm_buffer: np.ndarray, strip_height: int = 5000
     ) -> None:
         """
         Load a CZI channel directly into a pre-allocated shared memory buffer.
@@ -755,9 +765,7 @@ class CZILoader:
         if strip_height <= 0:
             raise ValueError(f"strip_height must be positive, got {strip_height}")
         if self.height <= 0 or self.width <= 0:
-            raise ValueError(
-                f"Mosaic dimensions must be positive, got {self.width}x{self.height}"
-            )
+            raise ValueError(f"Mosaic dimensions must be positive, got {self.width}x{self.height}")
 
         # Validate buffer dimensions
         expected_2d = (self.height, self.width)
@@ -820,15 +828,18 @@ class CZILoader:
                 # Ensure RGB data is uint8 using dtype-based normalization
                 # (per-strip max normalization causes visible banding at strip boundaries)
                 if strip.dtype == np.uint16:
-                    strip = (strip >> 8).astype(np.uint8)  # Fast bit-shift, consistent across all strips
+                    strip = (strip >> 8).astype(
+                        np.uint8
+                    )  # Fast bit-shift, consistent across all strips
                 elif strip.dtype not in (np.uint8,):
                     strip = np.clip(strip, 0, 255).astype(np.uint8)
-                shm_buffer[y_off:y_off + h, :, :] = strip
+                shm_buffer[y_off : y_off + h, :, :] = strip
             else:
-                shm_buffer[y_off:y_off + h, :] = strip
+                shm_buffer[y_off : y_off + h, :] = strip
 
             if (i + 1) % 10 == 0:
                 from segmentation.processing.memory import log_memory_status
+
                 log_memory_status(f"Loaded strip {i + 1}/{n_strips}")
 
         logger.info(
@@ -855,7 +866,7 @@ class CZILoader:
         test_region = _squeeze_batch_dims(test_region)
         return len(test_region.shape) == 3 and test_region.shape[-1] == 3
 
-    def load_channel(self, channel: int, strip_height: Optional[int] = None):
+    def load_channel(self, channel: int, strip_height: int | None = None):
         """
         Load a channel to RAM if not already loaded (lazy loading).
 
@@ -871,12 +882,12 @@ class CZILoader:
         self._load_channel_to_ram(channel, sh)
 
     @property
-    def loaded_channels(self) -> List[int]:
+    def loaded_channels(self) -> list[int]:
         """Return list of channels currently loaded in RAM."""
         return list(self._channel_data.keys())
 
     @property
-    def channel_data(self) -> Optional[np.ndarray]:
+    def channel_data(self) -> np.ndarray | None:
         """
         Backward compatibility: return primary channel data.
 
@@ -901,7 +912,7 @@ class CZILoader:
                 self._channel_data[0] = value
                 self._primary_channel = 0
 
-    def get_channel_data(self, channel: int) -> Optional[np.ndarray]:
+    def get_channel_data(self, channel: int) -> np.ndarray | None:
         """
         Get the RAM data for a specific channel.
 
@@ -935,7 +946,7 @@ class CZILoader:
 
     def _get_array_memory_gb(self, arr: np.ndarray) -> float:
         """Calculate memory usage of a numpy array in GB."""
-        return arr.nbytes / (1024 ** 3)
+        return arr.nbytes / (1024**3)
 
     def memory_usage_gb(self) -> float:
         """
@@ -945,24 +956,21 @@ class CZILoader:
             Total memory usage in GB
         """
         total_bytes = sum(arr.nbytes for arr in self._channel_data.values())
-        return total_bytes / (1024 ** 3)
+        return total_bytes / (1024**3)
 
-    def memory_info(self) -> Dict:
+    def memory_info(self) -> dict:
         """
         Return detailed memory usage information.
 
         Returns:
             Dict with per-channel and total memory usage
         """
-        info = {
-            'total_gb': self.memory_usage_gb(),
-            'channels': {}
-        }
+        info = {"total_gb": self.memory_usage_gb(), "channels": {}}
         for ch, arr in self._channel_data.items():
-            info['channels'][ch] = {
-                'gb': self._get_array_memory_gb(arr),
-                'shape': arr.shape,
-                'dtype': str(arr.dtype)
+            info["channels"][ch] = {
+                "gb": self._get_array_memory_gb(arr),
+                "shape": arr.shape,
+                "dtype": str(arr.dtype),
             }
         return info
 
@@ -971,9 +979,9 @@ class CZILoader:
         tile_x: int,
         tile_y: int,
         tile_size: int,
-        channel: Optional[int] = None,
-        scale_factor: int = 1
-    ) -> Optional[np.ndarray]:
+        channel: int | None = None,
+        scale_factor: int = 1,
+    ) -> np.ndarray | None:
         """
         Get a tile from the CZI at the specified scale.
 
@@ -1007,7 +1015,9 @@ class CZILoader:
 
         # If no channel specified, try primary channel
         if target_channel is None and self._primary_channel is not None:
-            return self._get_tile_from_ram(tile_x, tile_y, tile_size, self._primary_channel, scale_factor)
+            return self._get_tile_from_ram(
+                tile_x, tile_y, tile_size, self._primary_channel, scale_factor
+            )
 
         # Fall back to reading from CZI
         if target_channel is None:
@@ -1016,13 +1026,8 @@ class CZILoader:
         return self._get_tile_from_czi(tile_x, tile_y, tile_size, target_channel, scale_factor)
 
     def _get_tile_from_ram(
-        self,
-        tile_x: int,
-        tile_y: int,
-        tile_size: int,
-        channel: int,
-        scale_factor: int = 1
-    ) -> Optional[np.ndarray]:
+        self, tile_x: int, tile_y: int, tile_size: int, channel: int, scale_factor: int = 1
+    ) -> np.ndarray | None:
         """
         Extract a tile from RAM-loaded channel data, optionally downsampled.
 
@@ -1080,22 +1085,13 @@ class CZILoader:
                 return None
 
             # Use INTER_AREA for downsampling (best for reduction)
-            tile_data = cv2.resize(
-                tile_data,
-                (target_w, target_h),
-                interpolation=cv2.INTER_AREA
-            )
+            tile_data = cv2.resize(tile_data, (target_w, target_h), interpolation=cv2.INTER_AREA)
 
         return tile_data
 
     def _get_tile_from_czi(
-        self,
-        tile_x: int,
-        tile_y: int,
-        tile_size: int,
-        channel: int,
-        scale_factor: int = 1
-    ) -> Optional[np.ndarray]:
+        self, tile_x: int, tile_y: int, tile_size: int, channel: int, scale_factor: int = 1
+    ) -> np.ndarray | None:
         """
         Read a tile directly from the CZI file at the specified scale.
 
@@ -1113,8 +1109,10 @@ class CZILoader:
             ValueError: If scale_factor is not positive
         """
         if self.reader is None:
-            raise RuntimeError("CZI reader has been released. Cannot read tiles from disk. "
-                               "Use --load-to-ram or reload the CZI file.")
+            raise RuntimeError(
+                "CZI reader has been released. Cannot read tiles from disk. "
+                "Use --load-to-ram or reload the CZI file."
+            )
 
         if scale_factor <= 0:
             raise ValueError(f"scale_factor must be positive, got {scale_factor}")
@@ -1156,6 +1154,7 @@ class CZILoader:
             metadata = self.reader.meta
             if isinstance(metadata, str):
                 import xml.etree.ElementTree as ET
+
                 metadata = ET.fromstring(metadata)
             scaling = metadata.find('.//Scaling/Items/Distance[@Id="X"]/Value')
             if scaling is not None:
@@ -1163,8 +1162,10 @@ class CZILoader:
         except Exception as e:
             logger.warning(f"Could not read pixel size from CZI metadata: {e}")
         if pixel_size is None:
-            logger.warning("pixel_size_um not found in CZI metadata — falling back to 0.22 um/px. "
-                           "Verify this matches your microscope configuration.")
+            logger.warning(
+                "pixel_size_um not found in CZI metadata — falling back to 0.22 um/px. "
+                "Verify this matches your microscope configuration."
+            )
             pixel_size = 0.22
         return pixel_size
 
@@ -1174,18 +1175,18 @@ class CZILoader:
         return self.czi_path.stem
 
     @property
-    def mosaic_size(self) -> Tuple[int, int]:
+    def mosaic_size(self) -> tuple[int, int]:
         """Get mosaic dimensions (width, height)."""
         return (self.width, self.height)
 
     @property
-    def mosaic_origin(self) -> Tuple[int, int]:
+    def mosaic_origin(self) -> tuple[int, int]:
         """Get mosaic origin (x_start, y_start)."""
         return (self.x_start, self.y_start)
 
     def release_reader(self):
         """Release the CziFile reader to free memory while keeping loaded data."""
-        if hasattr(self, 'reader') and self.reader is not None:
+        if hasattr(self, "reader") and self.reader is not None:
             del self.reader
             self.reader = None
             gc.collect()
@@ -1206,7 +1207,9 @@ class CZILoader:
         return False
 
     def __repr__(self) -> str:
-        channels_str = ', '.join(str(c) for c in self.loaded_channels) if self.loaded_channels else 'none'
+        channels_str = (
+            ", ".join(str(c) for c in self.loaded_channels) if self.loaded_channels else "none"
+        )
         scene_str = f", scene={self.scene}" if self.scene != 0 else ""
         return (
             f"CZILoader('{self.slide_name}'{scene_str}, "

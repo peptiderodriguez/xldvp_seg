@@ -4,13 +4,13 @@ Handles starting/stopping background HTTP servers, Cloudflare tunnels for remote
 access, PID file management, and server status display.
 """
 
+import atexit
+import json
 import os
 import re
-import json
-import time
 import signal
-import atexit
 import subprocess
+import time
 from pathlib import Path
 
 from segmentation.utils.logging import get_logger
@@ -21,15 +21,15 @@ logger = get_logger(__name__)
 _spawned_processes = []
 
 # PID file directory for background servers (one file per port)
-SERVER_PID_DIR = Path.home() / '.segmentation_servers'
+SERVER_PID_DIR = Path.home() / ".segmentation_servers"
 # Legacy single PID file (for backwards compatibility)
-SERVER_PID_FILE = Path.home() / '.segmentation_server.pid'
+SERVER_PID_FILE = Path.home() / ".segmentation_server.pid"
 
 
 def _get_pid_file(port: int) -> Path:
     """Get PID file path for a specific port."""
     SERVER_PID_DIR.mkdir(exist_ok=True)
-    return SERVER_PID_DIR / f'server_{port}.json'
+    return SERVER_PID_DIR / f"server_{port}.json"
 
 
 def _get_all_servers() -> list:
@@ -40,19 +40,19 @@ def _get_all_servers() -> list:
     if SERVER_PID_FILE.exists():
         try:
             data = json.loads(SERVER_PID_FILE.read_text())
-            data['_pid_file'] = SERVER_PID_FILE
+            data["_pid_file"] = SERVER_PID_FILE
             servers.append(data)
         except Exception:
             pass
 
     # Check new per-port PID files
     if SERVER_PID_DIR.exists():
-        for pid_file in SERVER_PID_DIR.glob('server_*.json'):
+        for pid_file in SERVER_PID_DIR.glob("server_*.json"):
             try:
                 data = json.loads(pid_file.read_text())
-                data['_pid_file'] = pid_file
+                data["_pid_file"] = pid_file
                 # Skip if already covered by legacy file (same port)
-                if not any(s.get('port') == data.get('port') for s in servers):
+                if not any(s.get("port") == data.get("port") for s in servers):
                     servers.append(data)
             except Exception:
                 pass
@@ -84,11 +84,11 @@ def stop_background_server():
 
     stopped = False
     for data in servers:
-        http_pid = data.get('http_pid')
-        tunnel_pid = data.get('tunnel_pid')
-        pid_file = data.get('_pid_file')
+        http_pid = data.get("http_pid")
+        tunnel_pid = data.get("tunnel_pid")
+        pid_file = data.get("_pid_file")
 
-        for name, pid in [('HTTP server', http_pid), ('Cloudflare tunnel', tunnel_pid)]:
+        for name, pid in [("HTTP server", http_pid), ("Cloudflare tunnel", tunnel_pid)]:
             if pid:
                 try:
                     os.kill(pid, signal.SIGTERM)
@@ -120,14 +120,14 @@ def show_server_status():
     # Filter to only running servers
     running_servers = []
     for data in servers:
-        http_pid = data.get('http_pid')
-        tunnel_pid = data.get('tunnel_pid')
+        http_pid = data.get("http_pid")
+        tunnel_pid = data.get("tunnel_pid")
         http_running = http_pid and _pid_exists(http_pid)
         tunnel_running = tunnel_pid and _pid_exists(tunnel_pid)
 
         if http_running or tunnel_running:
-            data['_http_running'] = http_running
-            data['_tunnel_running'] = tunnel_running
+            data["_http_running"] = http_running
+            data["_tunnel_running"] = tunnel_running
             running_servers.append(data)
 
     if not running_servers:
@@ -139,19 +139,19 @@ def show_server_status():
     print("=" * 70)
 
     for i, data in enumerate(running_servers):
-        http_pid = data.get('http_pid')
-        tunnel_pid = data.get('tunnel_pid')
-        url = data.get('url')
-        port = data.get('port', 8081)
-        slide_name = data.get('slide_name', 'unknown')
-        cell_type = data.get('cell_type', 'unknown')
-        http_running = data.get('_http_running', False)
-        tunnel_running = data.get('_tunnel_running', False)
+        http_pid = data.get("http_pid")
+        tunnel_pid = data.get("tunnel_pid")
+        url = data.get("url")
+        port = data.get("port", 8081)
+        slide_name = data.get("slide_name", "unknown")
+        cell_type = data.get("cell_type", "unknown")
+        http_running = data.get("_http_running", False)
+        tunnel_running = data.get("_tunnel_running", False)
 
         # Build human-readable name
-        if slide_name and slide_name != 'unknown' and cell_type and cell_type != 'unknown':
+        if slide_name and slide_name != "unknown" and cell_type and cell_type != "unknown":
             serving_name = f"{slide_name} ({cell_type.upper()})"
-        elif slide_name and slide_name != 'unknown':
+        elif slide_name and slide_name != "unknown":
             serving_name = slide_name
         else:
             serving_name = f"Server on port {port}"
@@ -163,13 +163,15 @@ def show_server_status():
         print(f"    Slide:      {slide_name}")
         print(f"    Cell Type:  {cell_type}")
         print(f"    Port:       {port}")
-        print(f"    Status:     HTTP={'OK' if http_running else 'DOWN'}, Tunnel={'OK' if tunnel_running else 'DOWN'}")
+        print(
+            f"    Status:     HTTP={'OK' if http_running else 'DOWN'}, Tunnel={'OK' if tunnel_running else 'DOWN'}"
+        )
         if url and tunnel_running:
             print(f"    PUBLIC:     {url}")
         print(f"    LOCAL:      http://localhost:{port}")
 
     print("\n" + "=" * 70)
-    print(f"To stop all: python run_segmentation.py --stop-server")
+    print("To stop all: python run_segmentation.py --stop-server")
     print("=" * 70)
     return True
 
@@ -188,23 +190,29 @@ def _pid_exists(pid):
 def _find_cloudflared() -> str | None:
     """Search common locations for the cloudflared binary."""
     import shutil
+
     # 1. Check PATH (includes ~/.local/bin if configured)
-    found = shutil.which('cloudflared')
+    found = shutil.which("cloudflared")
     if found:
         return found
     # 2. Explicit common locations
     for candidate in [
-        Path.home() / '.local' / 'bin' / 'cloudflared',
-        Path.home() / 'cloudflared',
-        Path('/usr/local/bin/cloudflared'),
+        Path.home() / ".local" / "bin" / "cloudflared",
+        Path.home() / "cloudflared",
+        Path("/usr/local/bin/cloudflared"),
     ]:
         if candidate.is_file() and os.access(candidate, os.X_OK):
             return str(candidate)
     return None
 
 
-def start_server_and_tunnel(html_dir: Path, port: int = 8081, background: bool = False,
-                            slide_name: str = None, cell_type: str = None) -> tuple:
+def start_server_and_tunnel(
+    html_dir: Path,
+    port: int = 8081,
+    background: bool = False,
+    slide_name: str = None,
+    cell_type: str = None,
+) -> tuple:
     """Start HTTP server and Cloudflare tunnel for viewing results.
 
     Args:
@@ -230,10 +238,10 @@ def start_server_and_tunnel(html_dir: Path, port: int = 8081, background: bool =
     if background and SERVER_PID_FILE.exists():
         try:
             data = json.loads(SERVER_PID_FILE.read_text())
-            old_http_pid = data.get('http_pid')
-            old_tunnel_pid = data.get('tunnel_pid')
-            old_port = data.get('port', 8081)
-            existing_tunnel_url = data.get('url')
+            old_http_pid = data.get("http_pid")
+            old_tunnel_pid = data.get("tunnel_pid")
+            old_port = data.get("port", 8081)
+            existing_tunnel_url = data.get("url")
 
             # Check if tunnel is still running
             tunnel_running = old_tunnel_pid and _pid_exists(old_tunnel_pid)
@@ -263,14 +271,14 @@ def start_server_and_tunnel(html_dir: Path, port: int = 8081, background: bool =
     bg_kwargs = {}
     if background:
         bg_kwargs = {
-            'start_new_session': True,  # Detach from parent process group
-            'stdin': subprocess.DEVNULL,
+            "start_new_session": True,  # Detach from parent process group
+            "stdin": subprocess.DEVNULL,
         }
 
     # Start HTTP server
     logger.info(f"Starting HTTP server on port {port}...")
     http_proc = subprocess.Popen(
-        ['python', '-m', 'http.server', str(port)],
+        ["python", "-m", "http.server", str(port)],
         cwd=str(html_dir),
         stdout=subprocess.DEVNULL,
         stderr=subprocess.DEVNULL,
@@ -296,32 +304,42 @@ def start_server_and_tunnel(html_dir: Path, port: int = 8081, background: bool =
         tunnel_proc = None  # We don't have the process object, just the PID
 
         # Update PID file with new HTTP server but keep tunnel info
-        SERVER_PID_FILE.write_text(json.dumps({
-            'http_pid': http_proc.pid,
-            'tunnel_pid': existing_tunnel_pid,
-            'port': port,
-            'html_dir': str(html_dir),
-            'url': existing_tunnel_url,
-            'slide_name': slide_name,
-            'cell_type': cell_type,
-        }))
+        SERVER_PID_FILE.write_text(
+            json.dumps(
+                {
+                    "http_pid": http_proc.pid,
+                    "tunnel_pid": existing_tunnel_pid,
+                    "port": port,
+                    "html_dir": str(html_dir),
+                    "url": existing_tunnel_url,
+                    "slide_name": slide_name,
+                    "cell_type": cell_type,
+                }
+            )
+        )
     else:
         # Need to start a new tunnel — search common locations
         cloudflared_path = _find_cloudflared()
         if cloudflared_path is None:
             logger.warning("cloudflared not found in PATH, ~/.local/bin, or ~/")
-            logger.info("Install with: curl -L https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-amd64 -o ~/.local/bin/cloudflared && chmod +x ~/.local/bin/cloudflared")
+            logger.info(
+                "Install with: curl -L https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-amd64 -o ~/.local/bin/cloudflared && chmod +x ~/.local/bin/cloudflared"
+            )
             if background:
                 # Save HTTP server PID even without tunnel
-                SERVER_PID_FILE.write_text(json.dumps({
-                    'http_pid': http_proc.pid,
-                    'tunnel_pid': None,
-                    'port': port,
-                    'html_dir': str(html_dir),
-                    'url': None,
-                    'slide_name': slide_name,
-                    'cell_type': cell_type,
-                }))
+                SERVER_PID_FILE.write_text(
+                    json.dumps(
+                        {
+                            "http_pid": http_proc.pid,
+                            "tunnel_pid": None,
+                            "port": port,
+                            "html_dir": str(html_dir),
+                            "url": None,
+                            "slide_name": slide_name,
+                            "cell_type": cell_type,
+                        }
+                    )
+                )
             return http_proc, None, None
 
         logger.info("Starting Cloudflare tunnel...")
@@ -329,11 +347,11 @@ def start_server_and_tunnel(html_dir: Path, port: int = 8081, background: bool =
         # For background mode, we need to capture output to get URL but still detach
         if background:
             # Create a log file for tunnel output
-            tunnel_log = html_dir / '.tunnel.log'
-            tunnel_log_file = open(tunnel_log, 'w')
+            tunnel_log = html_dir / ".tunnel.log"
+            tunnel_log_file = open(tunnel_log, "w")
             try:
                 tunnel_proc = subprocess.Popen(
-                    [cloudflared_path, 'tunnel', '--url', f'http://localhost:{port}'],
+                    [cloudflared_path, "tunnel", "--url", f"http://localhost:{port}"],
                     stdout=tunnel_log_file,
                     stderr=subprocess.STDOUT,
                     start_new_session=True,
@@ -347,14 +365,14 @@ def start_server_and_tunnel(html_dir: Path, port: int = 8081, background: bool =
             tunnel_url = None
             try:
                 log_content = tunnel_log.read_text()
-                match = re.search(r'(https://[^\s]+\.trycloudflare\.com)', log_content)
+                match = re.search(r"(https://[^\s]+\.trycloudflare\.com)", log_content)
                 if match:
                     tunnel_url = match.group(1)
             except Exception:
                 pass
         else:
             tunnel_proc = subprocess.Popen(
-                [cloudflared_path, 'tunnel', '--url', f'http://localhost:{port}'],
+                [cloudflared_path, "tunnel", "--url", f"http://localhost:{port}"],
                 stdout=subprocess.PIPE,
                 stderr=subprocess.STDOUT,
                 text=True,
@@ -372,23 +390,27 @@ def start_server_and_tunnel(html_dir: Path, port: int = 8081, background: bool =
                         break
                     continue
                 # Look for the tunnel URL in the output
-                if 'trycloudflare.com' in line:
-                    match = re.search(r'(https://[^\s]+\.trycloudflare\.com)', line)
+                if "trycloudflare.com" in line:
+                    match = re.search(r"(https://[^\s]+\.trycloudflare\.com)", line)
                     if match:
                         tunnel_url = match.group(1)
                         break
 
         # Save PID file for background mode
         if background:
-            SERVER_PID_FILE.write_text(json.dumps({
-                'http_pid': http_proc.pid,
-                'tunnel_pid': tunnel_proc.pid if tunnel_proc else None,
-                'port': port,
-                'html_dir': str(html_dir),
-                'url': tunnel_url,
-                'slide_name': slide_name,
-                'cell_type': cell_type,
-            }))
+            SERVER_PID_FILE.write_text(
+                json.dumps(
+                    {
+                        "http_pid": http_proc.pid,
+                        "tunnel_pid": tunnel_proc.pid if tunnel_proc else None,
+                        "port": port,
+                        "html_dir": str(html_dir),
+                        "url": tunnel_url,
+                        "slide_name": slide_name,
+                        "cell_type": cell_type,
+                    }
+                )
+            )
 
     if tunnel_url:
         logger.info("=" * 60)
@@ -399,7 +421,7 @@ def start_server_and_tunnel(html_dir: Path, port: int = 8081, background: bool =
         if background:
             logger.info("")
             logger.info("Server running in BACKGROUND")
-            logger.info(f"To stop: python run_segmentation.py --stop-server")
+            logger.info("To stop: python run_segmentation.py --stop-server")
             logger.info(f"PID file: {SERVER_PID_FILE}")
         else:
             logger.info("")

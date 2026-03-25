@@ -25,24 +25,23 @@ Usage:
         results = detector.detect(tile, strategies)
 """
 
-from pathlib import Path
-from typing import Any, Dict, List, Optional
 import gc
+from pathlib import Path
+from typing import Any
 
 import numpy as np
 import torch
 import torchvision.models as tv_models
 
-from segmentation.utils.logging import get_logger
-from segmentation.utils.feature_extraction import (
-    extract_resnet_features_batch,
-    preprocess_crop_for_resnet,
-    create_resnet_transform,
-    extract_morphological_features,  # Import from shared module (Issue #7)
-)
-
 # Import base classes from strategies module
 from segmentation.detection.strategies.base import Detection, DetectionStrategy
+from segmentation.utils.feature_extraction import (
+    create_resnet_transform,
+    extract_morphological_features,  # Import from shared module (Issue #7)
+    extract_resnet_features_batch,
+    preprocess_crop_for_resnet,
+)
+from segmentation.utils.logging import get_logger
 
 logger = get_logger(__name__)
 
@@ -55,13 +54,13 @@ class _LazyModelDict(dict):
     only morphological + SAM2 features for NMJ classification).
     """
 
-    def __init__(self, detector: 'CellDetector'):
+    def __init__(self, detector: "CellDetector"):
         super().__init__()
         self._detector = detector
         # Track which models have been loaded (must be set before any dict ops)
-        self._loaded = {'device'}
+        self._loaded = {"device"}
         # Pre-populate with device (always available)
-        super().__setitem__('device', detector.device)
+        super().__setitem__("device", detector.device)
 
     def __getitem__(self, key):
         if key not in self._loaded:
@@ -76,21 +75,21 @@ class _LazyModelDict(dict):
     def _load_model(self, key):
         """Load a model on-demand."""
         self._loaded.add(key)
-        if key == 'sam2_predictor':
+        if key == "sam2_predictor":
             self[key] = self._detector.sam2_predictor
-        elif key == 'sam2_auto':
+        elif key == "sam2_auto":
             self[key] = self._detector.sam2_auto
-        elif key == 'cellpose':
+        elif key == "cellpose":
             self[key] = self._detector.cellpose
-        elif key == 'resnet':
+        elif key == "resnet":
             self[key] = self._detector.resnet
-        elif key == 'resnet_transform':
+        elif key == "resnet_transform":
             self[key] = self._detector.resnet_transform
-        elif key == 'dinov2':
+        elif key == "dinov2":
             self[key] = self._detector.dinov2
-        elif key == 'dinov2_transform':
+        elif key == "dinov2_transform":
             self[key] = self._detector.dinov2_transform
-        elif key == 'device':
+        elif key == "device":
             self[key] = self._detector.device
         # For any other key (like 'classifier'), just leave it as-is
 
@@ -124,11 +123,11 @@ class CellDetector:
 
     def __init__(
         self,
-        sam2_checkpoint: Optional[str] = None,
+        sam2_checkpoint: str | None = None,
         sam2_config: str = "configs/sam2.1/sam2.1_hiera_l.yaml",
         cellpose_model: str = "cpsam",
-        resnet_checkpoint: Optional[str] = None,
-        device: str = None
+        resnet_checkpoint: str | None = None,
+        device: str = None,
     ):
         """
         Initialize detector with shared models.
@@ -146,6 +145,7 @@ class CellDetector:
                     If None, auto-detects best available.
         """
         from segmentation.utils.device import get_default_device
+
         if device is None:
             device = get_default_device()
         if isinstance(device, str):
@@ -175,7 +175,7 @@ class CellDetector:
         logger.info(f"CellDetector initialized (device={self.device})")
 
     @property
-    def models(self) -> Dict[str, Any]:
+    def models(self) -> dict[str, Any]:
         """
         Get models dict for strategies.
 
@@ -246,7 +246,7 @@ class CellDetector:
         logger.info("Loading DINOv2 (dinov2_vitl14)...")
 
         try:
-            self._dinov2 = torch.hub.load('facebookresearch/dinov2', 'dinov2_vitl14')
+            self._dinov2 = torch.hub.load("facebookresearch/dinov2", "dinov2_vitl14")
             self._dinov2.eval().to(self.device)
 
             # Same transform as ResNet (ImageNet normalization)
@@ -258,7 +258,7 @@ class CellDetector:
             self._dinov2 = None
             self._dinov2_transform = None
 
-    def _find_sam2_checkpoint(self) -> Optional[Path]:
+    def _find_sam2_checkpoint(self) -> Path | None:
         """Find SAM2 checkpoint in common locations."""
         if self._sam2_checkpoint:
             cp = Path(self._sam2_checkpoint)
@@ -281,9 +281,9 @@ class CellDetector:
 
     def _load_sam2(self):
         """Load SAM2 models (predictor and auto mask generator)."""
-        from sam2.sam2_image_predictor import SAM2ImagePredictor
         from sam2.automatic_mask_generator import SAM2AutomaticMaskGenerator
         from sam2.build_sam import build_sam2
+        from sam2.sam2_image_predictor import SAM2ImagePredictor
 
         checkpoint_path = self._find_sam2_checkpoint()
         if checkpoint_path is None:
@@ -293,11 +293,7 @@ class CellDetector:
         logger.info(f"Loading SAM2 from {checkpoint_path}...")
 
         # Build SAM2 model
-        self._sam2_model = build_sam2(
-            self._sam2_config,
-            str(checkpoint_path),
-            device=self.device
-        )
+        self._sam2_model = build_sam2(self._sam2_config, str(checkpoint_path), device=self.device)
 
         # Auto mask generator for automatic segmentation (MK detection)
         self._sam2_auto = SAM2AutomaticMaskGenerator(
@@ -306,7 +302,7 @@ class CellDetector:
             pred_iou_thresh=0.5,
             stability_score_thresh=0.4,
             min_mask_region_area=500,
-            crop_n_layers=1
+            crop_n_layers=1,
         )
 
         # Predictor for point prompts (HSPC) and embeddings
@@ -321,10 +317,11 @@ class CellDetector:
         logger.info(f"Loading Cellpose ({self._cellpose_model}) on {self.device}...")
 
         from segmentation.utils.device import device_supports_gpu
+
         self._cellpose = CellposeModel(
             pretrained_model=self._cellpose_model,
             gpu=device_supports_gpu(self.device),
-            device=self.device
+            device=self.device,
         )
 
         logger.info("Cellpose loaded successfully")
@@ -334,7 +331,7 @@ class CellDetector:
         logger.info("Loading ResNet-50...")
 
         # Load pretrained ResNet50
-        resnet = tv_models.resnet50(weights='DEFAULT')
+        resnet = tv_models.resnet50(weights="DEFAULT")
 
         # Remove final FC layer to get feature extractor (2048D output)
         self._resnet = torch.nn.Sequential(*list(resnet.children())[:-1])
@@ -354,11 +351,8 @@ class CellDetector:
         logger.info("ResNet loaded successfully")
 
     def detect(
-        self,
-        tile: np.ndarray,
-        strategies: List[DetectionStrategy],
-        pixel_size_um: float = None
-    ) -> Dict[str, List[Detection]]:
+        self, tile: np.ndarray, strategies: list[DetectionStrategy], pixel_size_um: float = None
+    ) -> dict[str, list[Detection]]:
         """
         Run detection for multiple cell types in one pass.
 
@@ -431,12 +425,8 @@ class CellDetector:
             return np.zeros(256)
 
     def extract_full_features(
-        self,
-        mask: np.ndarray,
-        tile: np.ndarray,
-        cy: float,
-        cx: float
-    ) -> Dict[str, Any]:
+        self, mask: np.ndarray, tile: np.ndarray, cy: float, cx: float
+    ) -> dict[str, Any]:
         """
         Extract full features for a single detection.
 
@@ -460,23 +450,23 @@ class CellDetector:
         # 256 SAM2 embedding features
         sam2_emb = self.extract_sam2_embedding(cy, cx)
         for i, v in enumerate(sam2_emb):
-            features[f'sam2_{i}'] = float(v)
+            features[f"sam2_{i}"] = float(v)
 
         # 2048 ResNet features from masked crop
         ys, xs = np.where(mask)
         if len(ys) > 0:
             y1, y2 = ys.min(), ys.max()
             x1, x2 = xs.min(), xs.max()
-            crop = tile[y1:y2+1, x1:x2+1].copy()
-            crop_mask = mask[y1:y2+1, x1:x2+1]
+            crop = tile[y1 : y2 + 1, x1 : x2 + 1].copy()
+            crop_mask = mask[y1 : y2 + 1, x1 : x2 + 1]
             crop[~crop_mask] = 0
 
             resnet_feats = self._extract_resnet_single(crop)
             for i, v in enumerate(resnet_feats):
-                features[f'resnet_{i}'] = float(v)
+                features[f"resnet_{i}"] = float(v)
         else:
             for i in range(2048):
-                features[f'resnet_{i}'] = 0.0
+                features[f"resnet_{i}"] = 0.0
 
         return features
 
@@ -489,7 +479,7 @@ class CellDetector:
 
         try:
             processed = preprocess_crop_for_resnet(crop)
-            pil_img = Image.fromarray(processed, mode='RGB')
+            pil_img = Image.fromarray(processed, mode="RGB")
             tensor = self.resnet_transform(pil_img).unsqueeze(0).to(self.device)
 
             with torch.no_grad():
@@ -500,10 +490,8 @@ class CellDetector:
             return np.zeros(2048)
 
     def extract_resnet_features_batch(
-        self,
-        crops: List[np.ndarray],
-        batch_size: int = 16
-    ) -> List[np.ndarray]:
+        self, crops: list[np.ndarray], batch_size: int = 16
+    ) -> list[np.ndarray]:
         """
         Extract ResNet features for multiple crops in batches.
 
@@ -517,11 +505,7 @@ class CellDetector:
             List of 2048D feature vectors
         """
         return extract_resnet_features_batch(
-            crops,
-            self.resnet,
-            self.resnet_transform,
-            self.device,
-            batch_size=batch_size
+            crops, self.resnet, self.resnet_transform, self.device, batch_size=batch_size
         )
 
     def set_image(self, image: np.ndarray):
@@ -537,13 +521,18 @@ class CellDetector:
         if self._sam2_predictor is not None:
             # Validate image format explicitly (don't assume)
             if image.ndim != 3:
-                raise ValueError(f"Image must be 3D (HxWxC), got {image.ndim}D with shape {image.shape}")
+                raise ValueError(
+                    f"Image must be 3D (HxWxC), got {image.ndim}D with shape {image.shape}"
+                )
             if image.shape[2] != 3:
-                raise ValueError(f"Image must have 3 channels (RGB), got {image.shape[2]} channels. Shape: {image.shape}")
+                raise ValueError(
+                    f"Image must have 3 channels (RGB), got {image.shape[2]} channels. Shape: {image.shape}"
+                )
 
             # Ensure uint8 format
             if image.dtype != np.uint8:
                 from segmentation.utils.detection_utils import safe_to_uint8
+
                 image = safe_to_uint8(image)
             self._sam2_predictor.set_image(image)
 
@@ -571,6 +560,7 @@ class CellDetector:
 
         gc.collect()
         from segmentation.utils.device import empty_cache
+
         empty_cache()
 
         logger.info("Cleanup complete")
@@ -587,8 +577,8 @@ class CellDetector:
 
 # Re-export Detection and DetectionStrategy for convenience
 __all__ = [
-    'CellDetector',
-    'Detection',
-    'DetectionStrategy',
-    'extract_morphological_features',
+    "CellDetector",
+    "Detection",
+    "DetectionStrategy",
+    "extract_morphological_features",
 ]

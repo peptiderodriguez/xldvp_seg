@@ -30,25 +30,28 @@ Usage:
 """
 
 import json
-import numpy as np
-from pathlib import Path
-from typing import Dict, Any, List, Callable, Optional, Tuple, Generator
-from tqdm import tqdm
+from collections.abc import Callable, Generator
 from datetime import datetime
+from pathlib import Path
+from typing import Any
+
+import numpy as np
+from tqdm import tqdm
+
+from segmentation.io.html_export import export_samples_to_html
+from segmentation.processing.coordinates import (
+    generate_uid,
+    tile_to_global_coords,
+)
 
 # NOTE: CZILoader import moved to __init__ to avoid circular import
 # (czi_loader.py -> processing.memory -> processing/__init__.py -> pipeline.py -> czi_loader.py)
 from segmentation.utils.config import (
-    load_config,
-    save_config,
     create_run_config,
     get_output_dir,
+    load_config,
+    save_config,
 )
-from segmentation.processing.coordinates import (
-    tile_to_global_coords,
-    generate_uid,
-)
-from segmentation.io.html_export import export_samples_to_html
 from segmentation.utils.json_utils import NumpyEncoder
 
 
@@ -68,13 +71,13 @@ class DetectionPipeline:
         self,
         czi_path: str | Path,
         cell_type: str,
-        output_dir: Optional[str | Path] = None,
-        experiment_name: Optional[str] = None,
+        output_dir: str | Path | None = None,
+        experiment_name: str | None = None,
         channel: int = 0,
         tile_size: int = 3000,
         load_to_ram: bool = False,
-        config: Optional[Dict[str, Any]] = None,
-        quiet: bool = False
+        config: dict[str, Any] | None = None,
+        quiet: bool = False,
     ):
         """
         Initialize detection pipeline.
@@ -113,29 +116,24 @@ class DetectionPipeline:
 
         # Initialize CZI loader (local import to avoid circular import)
         from segmentation.io.czi_loader import CZILoader
+
         self.loader = CZILoader(
-            czi_path,
-            load_to_ram=load_to_ram,
-            channel=channel if load_to_ram else None,
-            quiet=quiet
+            czi_path, load_to_ram=load_to_ram, channel=channel if load_to_ram else None, quiet=quiet
         )
 
         # Get pixel size
         self.pixel_size = self.loader.get_pixel_size()
         if self.pixel_size is None:
             raise ValueError(
-                f"CZI file has no pixel size metadata. "
-                f"Provide --pixel-size-um on the command line."
+                "CZI file has no pixel size metadata. "
+                "Provide --pixel-size-um on the command line."
             )
 
         # Storage for results
-        self.detections: List[Dict[str, Any]] = []
-        self.processing_stats: Dict[str, Any] = {}
+        self.detections: list[dict[str, Any]] = []
+        self.processing_stats: dict[str, Any] = {}
 
-    def generate_tile_grid(
-        self,
-        overlap: int = 0
-    ) -> Generator[Tuple[int, int], None, None]:
+    def generate_tile_grid(self, overlap: int = 0) -> Generator[tuple[int, int], None, None]:
         """
         Generate tile coordinates covering the entire mosaic.
 
@@ -155,12 +153,12 @@ class DetectionPipeline:
 
     def process_tiles(
         self,
-        detector_fn: Callable[[np.ndarray, Dict[str, Any]], List[Dict[str, Any]]],
-        tiles: Optional[List[Tuple[int, int]]] = None,
+        detector_fn: Callable[[np.ndarray, dict[str, Any]], list[dict[str, Any]]],
+        tiles: list[tuple[int, int]] | None = None,
         sample_fraction: float = 1.0,
         min_detections_per_tile: int = 0,
-        **detector_kwargs
-    ) -> List[Dict[str, Any]]:
+        **detector_kwargs,
+    ) -> list[dict[str, Any]]:
         """
         Process tiles with a detector function.
 
@@ -196,10 +194,7 @@ class DetectionPipeline:
 
         for tile_x, tile_y in iterator:
             # Get tile data
-            tile_data = self.loader.get_tile(
-                tile_x, tile_y, self.tile_size,
-                channel=self.channel
-            )
+            tile_data = self.loader.get_tile(tile_x, tile_y, self.tile_size, channel=self.channel)
 
             if tile_data is None:
                 continue
@@ -222,40 +217,38 @@ class DetectionPipeline:
             # Convert to global coordinates and add UIDs
             for det in tile_detections:
                 # Get local centroid (should be [x, y])
-                local_x, local_y = det.get('centroid', det.get('local_centroid', [0, 0]))
+                local_x, local_y = det.get("centroid", det.get("local_centroid", [0, 0]))
 
                 # Convert to global
                 global_x, global_y = tile_to_global_coords(local_x, local_y, tile_x, tile_y)
 
                 # Generate UID
-                uid = generate_uid(
-                    self.loader.slide_name,
-                    self.cell_type,
-                    global_x,
-                    global_y
-                )
+                uid = generate_uid(self.loader.slide_name, self.cell_type, global_x, global_y)
 
                 # Build detection record
                 detection = {
-                    'uid': uid,
-                    'tile_origin': [tile_x, tile_y],
-                    'local_centroid': [local_x, local_y],
-                    'global_center': [global_x, global_y],
-                    'features': det.get('features', {}),
-                    **{k: v for k, v in det.items()
-                       if k not in ('centroid', 'local_centroid', 'features')}
+                    "uid": uid,
+                    "tile_origin": [tile_x, tile_y],
+                    "local_centroid": [local_x, local_y],
+                    "global_center": [global_x, global_y],
+                    "features": det.get("features", {}),
+                    **{
+                        k: v
+                        for k, v in det.items()
+                        if k not in ("centroid", "local_centroid", "features")
+                    },
                 }
 
                 self.detections.append(detection)
 
         # Store stats
         self.processing_stats = {
-            'tiles_total': len(tiles),
-            'tiles_processed': tiles_processed,
-            'tiles_with_detections': tiles_with_detections,
-            'total_detections': len(self.detections),
-            'pixel_size_um': self.pixel_size,
-            'timestamp': datetime.now().isoformat(),
+            "tiles_total": len(tiles),
+            "tiles_processed": tiles_processed,
+            "tiles_with_detections": tiles_with_detections,
+            "total_detections": len(self.detections),
+            "pixel_size_um": self.pixel_size,
+            "timestamp": datetime.now().isoformat(),
         }
 
         if not self.quiet:
@@ -264,9 +257,7 @@ class DetectionPipeline:
         return self.detections
 
     def export_results(
-        self,
-        detections: Optional[List[Dict[str, Any]]] = None,
-        filename: Optional[str] = None
+        self, detections: list[dict[str, Any]] | None = None, filename: str | None = None
     ) -> Path:
         """
         Export detections to JSON file.
@@ -287,14 +278,14 @@ class DetectionPipeline:
         output_path = self.output_dir / filename
 
         data = {
-            'slide_name': self.loader.slide_name,
-            'cell_type': self.cell_type,
-            'experiment_name': self.experiment_name,
+            "slide_name": self.loader.slide_name,
+            "cell_type": self.cell_type,
+            "experiment_name": self.experiment_name,
             **self.processing_stats,
-            'detections': detections,
+            "detections": detections,
         }
 
-        with open(output_path, 'w') as f:
+        with open(output_path, "w") as f:
             json.dump(data, f, cls=NumpyEncoder)
 
         if not self.quiet:
@@ -303,9 +294,7 @@ class DetectionPipeline:
         return output_path
 
     def export_csv(
-        self,
-        detections: Optional[List[Dict[str, Any]]] = None,
-        filename: Optional[str] = None
+        self, detections: list[dict[str, Any]] | None = None, filename: str | None = None
     ) -> Path:
         """
         Export detection coordinates to CSV.
@@ -325,13 +314,13 @@ class DetectionPipeline:
 
         output_path = self.output_dir / filename
 
-        with open(output_path, 'w') as f:
+        with open(output_path, "w") as f:
             # Header
             f.write("uid,global_x_px,global_y_px,global_x_um,global_y_um\n")
 
             for det in detections:
-                uid = det['uid']
-                gx, gy = det['global_center']
+                uid = det["uid"]
+                gx, gy = det["global_center"]
                 gx_um = gx * self.pixel_size
                 gy_um = gy * self.pixel_size
                 f.write(f"{uid},{gx:.1f},{gy:.1f},{gx_um:.2f},{gy_um:.2f}\n")
@@ -343,9 +332,9 @@ class DetectionPipeline:
 
     def export_html(
         self,
-        detections: Optional[List[Dict[str, Any]]] = None,
-        samples: Optional[List[Dict[str, Any]]] = None,
-        samples_per_page: int = 300
+        detections: list[dict[str, Any]] | None = None,
+        samples: list[dict[str, Any]] | None = None,
+        samples_per_page: int = 300,
     ) -> Path:
         """
         Export HTML annotation interface.
@@ -362,13 +351,15 @@ class DetectionPipeline:
             # Try to use detections directly if they have image data
             samples = []
             for det in detections:
-                if 'image_b64' in det:
-                    samples.append({
-                        'uid': det['uid'],
-                        'image_b64': det['image_b64'],
-                        'area_um2': det.get('features', {}).get('area', 0) * self.pixel_size ** 2,
-                        'elongation': det.get('features', {}).get('elongation', 0),
-                    })
+                if "image_b64" in det:
+                    samples.append(
+                        {
+                            "uid": det["uid"],
+                            "image_b64": det["image_b64"],
+                            "area_um2": det.get("features", {}).get("area", 0) * self.pixel_size**2,
+                            "elongation": det.get("features", {}).get("elongation", 0),
+                        }
+                    )
 
         if not samples:
             if not self.quiet:
@@ -397,7 +388,7 @@ class DetectionPipeline:
             channel=self.channel,
             pixel_size_um=self.pixel_size,
             tile_size=self.tile_size,
-            **self.processing_stats
+            **self.processing_stats,
         )
         return save_config(self.output_dir, config)
 
@@ -414,9 +405,7 @@ class DetectionPipeline:
 
 
 def create_simple_detector(
-    threshold_fn: Callable[[np.ndarray], np.ndarray],
-    min_area: int = 100,
-    max_area: int = 10000
+    threshold_fn: Callable[[np.ndarray], np.ndarray], min_area: int = 100, max_area: int = 10000
 ) -> Callable:
     """
     Create a simple detector function from a threshold function.
@@ -431,7 +420,7 @@ def create_simple_detector(
     """
     from skimage.measure import label, regionprops
 
-    def detector(tile_data: np.ndarray, **kwargs) -> List[Dict[str, Any]]:
+    def detector(tile_data: np.ndarray, **kwargs) -> list[dict[str, Any]]:
         # Apply threshold
         mask = threshold_fn(tile_data)
 
@@ -444,15 +433,17 @@ def create_simple_detector(
             if prop.area < min_area or prop.area > max_area:
                 continue
 
-            detections.append({
-                'centroid': [float(prop.centroid[1]), float(prop.centroid[0])],  # [x, y]
-                'features': {
-                    'area': int(prop.area),
-                    'eccentricity': float(prop.eccentricity),
-                    'solidity': float(prop.solidity),
-                    'mean_intensity': float(prop.mean_intensity),
+            detections.append(
+                {
+                    "centroid": [float(prop.centroid[1]), float(prop.centroid[0])],  # [x, y]
+                    "features": {
+                        "area": int(prop.area),
+                        "eccentricity": float(prop.eccentricity),
+                        "solidity": float(prop.solidity),
+                        "mean_intensity": float(prop.mean_intensity),
+                    },
                 }
-            })
+            )
 
         return detections
 

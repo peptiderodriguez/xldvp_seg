@@ -12,13 +12,13 @@ Usage:
 """
 
 from .instance import (
-    iou_matrix,
-    iou_from_contours,
-    hungarian_match,
-    panoptic_quality,
-    dice_score,
     detection_f1,
+    dice_score,
     evaluate_instance_segmentation,
+    hungarian_match,
+    iou_from_contours,
+    iou_matrix,
+    panoptic_quality,
 )
 
 __all__ = [

@@ -33,10 +33,11 @@ Coordinate System:
 """
 
 import atexit
-import signal
-from typing import Dict, Any, Set
 import multiprocessing
+import signal
 from multiprocessing.shared_memory import SharedMemory
+from typing import Any
+
 import numpy as np
 
 from segmentation.utils.logging import get_logger
@@ -44,7 +45,8 @@ from segmentation.utils.logging import get_logger
 logger = get_logger(__name__)
 
 # Global registry of shared memory names for cleanup on crash
-_shm_registry: Set[str] = set()
+_shm_registry: set[str] = set()
+
 
 def _cleanup_shared_memory_on_exit():
     """Emergency cleanup of shared memory on process exit.
@@ -64,8 +66,10 @@ def _cleanup_shared_memory_on_exit():
             logger.warning(f"Failed to cleanup shared memory {shm_name}: {e}")
     _shm_registry.clear()
 
+
 # Register cleanup on normal exit
 atexit.register(_cleanup_shared_memory_on_exit)
+
 
 # Register cleanup on SIGTERM (e.g., SLURM job cancellation, timeout)
 def _signal_cleanup(signum, frame):
@@ -73,7 +77,8 @@ def _signal_cleanup(signum, frame):
     _cleanup_shared_memory_on_exit()
     raise SystemExit(128 + signum)
 
-if multiprocessing.current_process().name == 'MainProcess':
+
+if multiprocessing.current_process().name == "MainProcess":
     signal.signal(signal.SIGTERM, _signal_cleanup)
     signal.signal(signal.SIGINT, _signal_cleanup)
 
@@ -92,10 +97,10 @@ class SharedSlideManager:
     """Manages shared memory for slide data."""
 
     def __init__(self):
-        self.shared_memories: Dict[str, SharedMemory] = {}
-        self.slide_info: Dict[str, Dict[str, Any]] = {}
+        self.shared_memories: dict[str, SharedMemory] = {}
+        self.slide_info: dict[str, dict[str, Any]] = {}
 
-    def add_slide(self, name: str, data: np.ndarray) -> Dict[str, Any]:
+    def add_slide(self, name: str, data: np.ndarray) -> dict[str, Any]:
         """
         Copy slide data into shared memory.
 
@@ -119,9 +124,9 @@ class SharedSlideManager:
         # Store references
         self.shared_memories[name] = shm
         info = {
-            'shm_name': shm.name,
-            'shape': data.shape,
-            'dtype': str(data.dtype),
+            "shm_name": shm.name,
+            "shape": data.shape,
+            "dtype": str(data.dtype),
         }
         self.slide_info[name] = info
 
@@ -147,12 +152,16 @@ class SharedSlideManager:
         _shm_registry.add(shm.name)
 
         self.shared_memories[name] = shm
-        self.slide_info[name] = {'shm_name': shm.name, 'shape': shape, 'dtype': str(np.dtype(dtype))}
+        self.slide_info[name] = {
+            "shm_name": shm.name,
+            "shape": shape,
+            "dtype": str(np.dtype(dtype)),
+        }
 
         logger.info(f"Created shared memory for {name}: {size/1e9:.2f} GB")
         return arr
 
-    def get_slide_info(self) -> Dict[str, Dict[str, Any]]:
+    def get_slide_info(self) -> dict[str, dict[str, Any]]:
         """Get info dict for all slides (to pass to workers)."""
         return self.slide_info.copy()
 
@@ -185,7 +194,6 @@ class SharedSlideManager:
                 logger.warning(f"Error releasing shared memory for {name}: {e}")
         self.shared_memories.clear()
         self.slide_info.clear()
-
 
 
 # NOTE: _gpu_worker_shm and MultiGPUTileProcessorSHM were removed (Feb 2026).

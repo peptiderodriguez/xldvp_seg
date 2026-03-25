@@ -27,9 +27,10 @@ class TestHTMLExportImports(unittest.TestCase):
         from segmentation.io.html_export import (
             create_hdf5_dataset,
             draw_mask_contour,
-            percentile_normalize,
             get_largest_connected_component,
+            percentile_normalize,
         )
+
         assert callable(create_hdf5_dataset)
         assert callable(draw_mask_contour)
         assert callable(percentile_normalize)
@@ -38,12 +39,13 @@ class TestHTMLExportImports(unittest.TestCase):
     def test_mk_hspc_export_imports(self):
         """Test that MK/HSPC export functions can be imported."""
         from segmentation.io.html_export import (
-            export_mk_hspc_html_from_ram,
-            load_samples_from_ram,
             create_mk_hspc_index,
+            export_mk_hspc_html_from_ram,
             generate_mk_hspc_page_html,
             generate_mk_hspc_pages,
+            load_samples_from_ram,
         )
+
         assert callable(export_mk_hspc_html_from_ram)
         assert callable(load_samples_from_ram)
         assert callable(create_mk_hspc_index)
@@ -57,26 +59,14 @@ class TestHTMLExportImports(unittest.TestCase):
             generate_annotation_page,
             generate_index_page,
         )
+
         assert callable(export_samples_to_html)
         assert callable(generate_annotation_page)
         assert callable(generate_index_page)
 
     def test_all_html_export_imports_at_once(self):
         """Test importing all HTML export functions at once."""
-        from segmentation.io.html_export import (
-            create_hdf5_dataset,
-            draw_mask_contour,
-            percentile_normalize,
-            get_largest_connected_component,
-            export_mk_hspc_html_from_ram,
-            load_samples_from_ram,
-            create_mk_hspc_index,
-            generate_mk_hspc_page_html,
-            generate_mk_hspc_pages,
-            export_samples_to_html,
-            generate_annotation_page,
-            generate_index_page,
-        )
+
         # All imports succeeded if we reach this point
 
 
@@ -87,11 +77,14 @@ class TestConfigImports(unittest.TestCase):
         """Test that feature dimension constants can be imported."""
         from segmentation.utils.config import (
             MORPHOLOGICAL_FEATURES_COUNT,
-            SAM2_EMBEDDING_DIMENSION,
             RESNET_EMBEDDING_DIMENSION,
+            SAM2_EMBEDDING_DIMENSION,
             TOTAL_FEATURES_PER_CELL,
         )
-        assert MORPHOLOGICAL_FEATURES_COUNT == 78  # Full pipeline (22 base + NMJ-specific + multi-channel)
+
+        assert (
+            MORPHOLOGICAL_FEATURES_COUNT == 78
+        )  # Full pipeline (22 base + NMJ-specific + multi-channel)
         assert SAM2_EMBEDDING_DIMENSION == 256
         assert RESNET_EMBEDDING_DIMENSION == 4096  # 2 x 2048 (masked + context)
         assert TOTAL_FEATURES_PER_CELL == 6478  # 78 + 256 + 4096 + 2048
@@ -99,15 +92,17 @@ class TestConfigImports(unittest.TestCase):
     def test_pixel_size_constant(self):
         """Test that legacy pixel size constant exists (deprecated — use CZI metadata)."""
         from segmentation.utils.config import _LEGACY_PIXEL_SIZE_UM
+
         assert _LEGACY_PIXEL_SIZE_UM == 0.1725
 
     def test_helper_functions(self):
         """Test that helper functions can be imported and called."""
         from segmentation.utils.config import (
-            get_feature_dimensions,
             get_cpu_worker_count,
+            get_feature_dimensions,
             validate_config,
         )
+
         assert callable(get_feature_dimensions)
         assert callable(get_cpu_worker_count)
         assert callable(validate_config)
@@ -115,19 +110,26 @@ class TestConfigImports(unittest.TestCase):
         # Test get_feature_dimensions returns expected structure
         dims = get_feature_dimensions()
         assert isinstance(dims, dict)
-        assert 'morphological' in dims
-        assert 'sam2_embedding' in dims
-        assert 'resnet_embedding' in dims
-        assert 'total' in dims
-        assert dims['total'] == dims['morphological'] + dims['sam2_embedding'] + dims['resnet_embedding'] + dims['dinov2_embedding']
+        assert "morphological" in dims
+        assert "sam2_embedding" in dims
+        assert "resnet_embedding" in dims
+        assert "total" in dims
+        assert (
+            dims["total"]
+            == dims["morphological"]
+            + dims["sam2_embedding"]
+            + dims["resnet_embedding"]
+            + dims["dinov2_embedding"]
+        )
 
     def test_config_constants_and_defaults(self):
         """Test that config defaults and constants can be imported."""
         from segmentation.utils.config import (
             DEFAULT_CONFIG,
-            DETECTION_DEFAULTS,
             DEFAULT_PATHS,
+            DETECTION_DEFAULTS,
         )
+
         assert isinstance(DEFAULT_CONFIG, dict)
         assert isinstance(DETECTION_DEFAULTS, dict)
         assert isinstance(DEFAULT_PATHS, dict)
@@ -136,13 +138,14 @@ class TestConfigImports(unittest.TestCase):
         """Test that config getter functions can be imported."""
         from segmentation.utils.config import (
             get_default_path,
-            get_output_dir,
             get_detection_defaults,
-            get_pixel_size,
             get_normalization_percentiles,
+            get_output_dir,
+            get_pixel_size,
             load_config,
             save_config,
         )
+
         assert callable(get_default_path)
         assert callable(get_output_dir)
         assert callable(get_detection_defaults)
@@ -159,9 +162,10 @@ class TestModelManagerImports(unittest.TestCase):
         """Test that model manager can be imported."""
         from segmentation.models import (
             ModelManager,
-            get_model_manager,
             find_checkpoint,
+            get_model_manager,
         )
+
         assert ModelManager is not None
         assert callable(get_model_manager)
         assert callable(find_checkpoint)
@@ -173,11 +177,12 @@ class TestProcessingModuleImports(unittest.TestCase):
     def test_memory_module_imports(self):
         """Test that memory module functions can be imported."""
         from segmentation.processing.memory import (
-            validate_system_resources,
-            get_safe_worker_count,
             get_memory_usage,
+            get_safe_worker_count,
             log_memory_status,
+            validate_system_resources,
         )
+
         assert callable(validate_system_resources)
         assert callable(get_safe_worker_count)
         assert callable(get_memory_usage)
@@ -186,12 +191,13 @@ class TestProcessingModuleImports(unittest.TestCase):
     def test_mk_hspc_utils_imports(self):
         """Test that MK/HSPC utilities can be imported."""
         from segmentation.processing.mk_hspc_utils import (
-            ensure_rgb_array,
-            check_tile_validity,
-            prepare_tile_for_detection,
             build_mk_hspc_result,
+            check_tile_validity,
+            ensure_rgb_array,
             extract_tile_from_shared_memory,
+            prepare_tile_for_detection,
         )
+
         assert callable(ensure_rgb_array)
         assert callable(check_tile_validity)
         assert callable(prepare_tile_for_detection)
@@ -201,16 +207,17 @@ class TestProcessingModuleImports(unittest.TestCase):
     def test_coordinates_module_imports(self):
         """Test that coordinates module can be imported."""
         from segmentation.processing.coordinates import (
-            tile_to_global_coords,
-            global_to_tile_coords,
-            regionprop_centroid_to_xy,
-            xy_to_array_index,
             array_index_to_xy,
-            extract_crop_bounds,
             extract_crop,
+            extract_crop_bounds,
             generate_uid,
+            global_to_tile_coords,
             mask_to_crop_coords,
+            regionprop_centroid_to_xy,
+            tile_to_global_coords,
+            xy_to_array_index,
         )
+
         assert callable(tile_to_global_coords)
         assert callable(global_to_tile_coords)
         assert callable(regionprop_centroid_to_xy)
@@ -228,6 +235,7 @@ class TestDetectionModuleImports(unittest.TestCase):
     def test_registry_imports(self):
         """Test that strategy registry can be imported."""
         from segmentation.detection.registry import StrategyRegistry
+
         assert StrategyRegistry is not None
         assert callable(StrategyRegistry.list_strategies)
         assert callable(StrategyRegistry.create)
@@ -237,10 +245,11 @@ class TestDetectionModuleImports(unittest.TestCase):
         """Test that tissue detection functions can be imported."""
         from segmentation.detection.tissue import (
             calculate_block_variances,
-            has_tissue,
             calibrate_tissue_threshold,
             filter_tissue_tiles,
+            has_tissue,
         )
+
         assert callable(calculate_block_variances)
         assert callable(has_tissue)
         assert callable(calibrate_tissue_threshold)
@@ -253,6 +262,7 @@ class TestIOModuleImports(unittest.TestCase):
     def test_czi_loader_imports(self):
         """Test that CZI loader can be imported."""
         from segmentation.io.czi_loader import CZILoader
+
         assert CZILoader is not None
 
 
@@ -262,15 +272,13 @@ class TestPackageLevelImports(unittest.TestCase):
     def test_segmentation_package_import(self):
         """Test that main segmentation package can be imported."""
         import segmentation
+
         assert segmentation is not None
 
     def test_subpackage_imports(self):
         """Test that subpackages can be imported."""
-        from segmentation import io
-        from segmentation import utils
-        from segmentation import models
-        from segmentation import detection
-        from segmentation import processing
+        from segmentation import detection, io, models, processing, utils
+
         assert io is not None
         assert utils is not None
         assert models is not None

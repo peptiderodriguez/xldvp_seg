@@ -31,7 +31,7 @@ Test categories:
 """
 
 import unittest
-from unittest.mock import MagicMock, patch
+from unittest.mock import MagicMock
 
 import numpy as np
 
@@ -40,6 +40,7 @@ def _check_torch_available():
     """Helper to check if PyTorch is available."""
     try:
         import torch
+
         return True
     except ImportError:
         return False
@@ -57,68 +58,81 @@ class TestFullPipelineFeatureDimensions(unittest.TestCase):
     def test_morphological_features_count_equals_78(self):
         """Verify MORPHOLOGICAL_FEATURES_COUNT constant equals 78 (full pipeline)."""
         from segmentation.utils.config import MORPHOLOGICAL_FEATURES_COUNT
+
         self.assertEqual(
-            MORPHOLOGICAL_FEATURES_COUNT, 78,
-            f"Expected 78 full-pipeline morphological features, got {MORPHOLOGICAL_FEATURES_COUNT}"
+            MORPHOLOGICAL_FEATURES_COUNT,
+            78,
+            f"Expected 78 full-pipeline morphological features, got {MORPHOLOGICAL_FEATURES_COUNT}",
         )
 
     def test_sam2_embedding_dimension_equals_256(self):
         """Verify SAM2_EMBEDDING_DIMENSION constant equals 256."""
         from segmentation.utils.config import SAM2_EMBEDDING_DIMENSION
+
         self.assertEqual(
-            SAM2_EMBEDDING_DIMENSION, 256,
-            f"Expected SAM2 embedding dimension of 256, got {SAM2_EMBEDDING_DIMENSION}"
+            SAM2_EMBEDDING_DIMENSION,
+            256,
+            f"Expected SAM2 embedding dimension of 256, got {SAM2_EMBEDDING_DIMENSION}",
         )
 
     def test_resnet_embedding_dimension_equals_4096(self):
         """Verify RESNET_EMBEDDING_DIMENSION constant equals 4096 (2x2048 masked+context)."""
         from segmentation.utils.config import RESNET_EMBEDDING_DIMENSION
+
         self.assertEqual(
-            RESNET_EMBEDDING_DIMENSION, 4096,
-            f"Expected ResNet embedding dimension of 4096, got {RESNET_EMBEDDING_DIMENSION}"
+            RESNET_EMBEDDING_DIMENSION,
+            4096,
+            f"Expected ResNet embedding dimension of 4096, got {RESNET_EMBEDDING_DIMENSION}",
         )
 
     def test_dinov2_embedding_dimension_equals_2048(self):
         """Verify DINOV2_EMBEDDING_DIMENSION constant equals 2048 (2x1024 masked+context)."""
         from segmentation.utils.config import DINOV2_EMBEDDING_DIMENSION
+
         self.assertEqual(
-            DINOV2_EMBEDDING_DIMENSION, 2048,
-            f"Expected DINOv2 embedding dimension of 2048, got {DINOV2_EMBEDDING_DIMENSION}"
+            DINOV2_EMBEDDING_DIMENSION,
+            2048,
+            f"Expected DINOv2 embedding dimension of 2048, got {DINOV2_EMBEDDING_DIMENSION}",
         )
 
     def test_total_features_per_cell_equals_6478(self):
         """Verify TOTAL_FEATURES_PER_CELL constant equals 6478 (78 + 256 + 4096 + 2048)."""
         from segmentation.utils.config import TOTAL_FEATURES_PER_CELL
+
         self.assertEqual(
-            TOTAL_FEATURES_PER_CELL, 6478,
-            f"Expected total features of 6478, got {TOTAL_FEATURES_PER_CELL}"
+            TOTAL_FEATURES_PER_CELL,
+            6478,
+            f"Expected total features of 6478, got {TOTAL_FEATURES_PER_CELL}",
         )
 
     def test_total_features_equals_sum_of_components(self):
         """Verify TOTAL_FEATURES_PER_CELL equals sum of all full-pipeline components."""
         from segmentation.utils.config import (
-            MORPHOLOGICAL_FEATURES_COUNT,
-            SAM2_EMBEDDING_DIMENSION,
-            RESNET_EMBEDDING_DIMENSION,
             DINOV2_EMBEDDING_DIMENSION,
+            MORPHOLOGICAL_FEATURES_COUNT,
+            RESNET_EMBEDDING_DIMENSION,
+            SAM2_EMBEDDING_DIMENSION,
             TOTAL_FEATURES_PER_CELL,
         )
+
         expected_total = (
-            MORPHOLOGICAL_FEATURES_COUNT +
-            SAM2_EMBEDDING_DIMENSION +
-            RESNET_EMBEDDING_DIMENSION +
-            DINOV2_EMBEDDING_DIMENSION
+            MORPHOLOGICAL_FEATURES_COUNT
+            + SAM2_EMBEDDING_DIMENSION
+            + RESNET_EMBEDDING_DIMENSION
+            + DINOV2_EMBEDDING_DIMENSION
         )
         self.assertEqual(
-            TOTAL_FEATURES_PER_CELL, expected_total,
+            TOTAL_FEATURES_PER_CELL,
+            expected_total,
             f"Total features ({TOTAL_FEATURES_PER_CELL}) does not equal sum of components ({expected_total}): "
             f"morph={MORPHOLOGICAL_FEATURES_COUNT} + sam2={SAM2_EMBEDDING_DIMENSION} + "
-            f"resnet={RESNET_EMBEDDING_DIMENSION} + dinov2={DINOV2_EMBEDDING_DIMENSION}"
+            f"resnet={RESNET_EMBEDDING_DIMENSION} + dinov2={DINOV2_EMBEDDING_DIMENSION}",
         )
 
     def test_get_feature_dimensions_returns_correct_values(self):
         """Verify get_feature_dimensions() helper returns correct full-pipeline values."""
         from segmentation.utils.config import get_feature_dimensions
+
         dims = get_feature_dimensions()
 
         self.assertIn("morphological", dims)
@@ -148,61 +162,74 @@ class TestSinglePassFeatureDimensions(unittest.TestCase):
     def test_morphological_feature_count_equals_22(self):
         """Verify MORPHOLOGICAL_FEATURE_COUNT (single-pass) equals 22."""
         from segmentation.utils.feature_extraction import MORPHOLOGICAL_FEATURE_COUNT
+
         self.assertEqual(
-            MORPHOLOGICAL_FEATURE_COUNT, 22,
-            f"Expected 22 base morphological features, got {MORPHOLOGICAL_FEATURE_COUNT}"
+            MORPHOLOGICAL_FEATURE_COUNT,
+            22,
+            f"Expected 22 base morphological features, got {MORPHOLOGICAL_FEATURE_COUNT}",
         )
 
     def test_resnet50_feature_dim_equals_2048(self):
         """Verify RESNET50_FEATURE_DIM (single-pass) equals 2048."""
         from segmentation.utils.feature_extraction import RESNET50_FEATURE_DIM
+
         self.assertEqual(
-            RESNET50_FEATURE_DIM, 2048,
-            f"Expected single-pass ResNet dim of 2048, got {RESNET50_FEATURE_DIM}"
+            RESNET50_FEATURE_DIM,
+            2048,
+            f"Expected single-pass ResNet dim of 2048, got {RESNET50_FEATURE_DIM}",
         )
 
     def test_sam2_embedding_dim_equals_256(self):
         """Verify SAM2_EMBEDDING_DIM equals 256."""
         from segmentation.utils.feature_extraction import SAM2_EMBEDDING_DIM
+
         self.assertEqual(SAM2_EMBEDDING_DIM, 256)
 
     def test_sam2_dims_match_across_modules(self):
         """Verify SAM2 dimension is consistent between feature_extraction.py and config.py."""
-        from segmentation.utils.feature_extraction import SAM2_EMBEDDING_DIM
         from segmentation.utils.config import SAM2_EMBEDDING_DIMENSION
+        from segmentation.utils.feature_extraction import SAM2_EMBEDDING_DIM
+
         self.assertEqual(
-            SAM2_EMBEDDING_DIM, SAM2_EMBEDDING_DIMENSION,
-            "SAM2 dimension should be the same in both modules (256)"
+            SAM2_EMBEDDING_DIM,
+            SAM2_EMBEDDING_DIMENSION,
+            "SAM2 dimension should be the same in both modules (256)",
         )
 
     def test_resnet_config_is_double_single_pass(self):
         """Verify config.py ResNet dim is 2x the single-pass dim (masked + context)."""
-        from segmentation.utils.feature_extraction import RESNET50_FEATURE_DIM
         from segmentation.utils.config import RESNET_EMBEDDING_DIMENSION
+        from segmentation.utils.feature_extraction import RESNET50_FEATURE_DIM
+
         self.assertEqual(
-            RESNET_EMBEDDING_DIMENSION, 2 * RESNET50_FEATURE_DIM,
+            RESNET_EMBEDDING_DIMENSION,
+            2 * RESNET50_FEATURE_DIM,
             f"Config ResNet ({RESNET_EMBEDDING_DIMENSION}) should be "
-            f"2 x single-pass ({RESNET50_FEATURE_DIM}) = {2 * RESNET50_FEATURE_DIM}"
+            f"2 x single-pass ({RESNET50_FEATURE_DIM}) = {2 * RESNET50_FEATURE_DIM}",
         )
 
     def test_dinov2_config_is_double_single_pass(self):
         """Verify config.py DINOv2 dim is 2x the single-pass dim (masked + context)."""
         from segmentation.detection.strategies.base import DINOV2_FEATURE_DIM
         from segmentation.utils.config import DINOV2_EMBEDDING_DIMENSION
+
         self.assertEqual(
-            DINOV2_EMBEDDING_DIMENSION, 2 * DINOV2_FEATURE_DIM,
+            DINOV2_EMBEDDING_DIMENSION,
+            2 * DINOV2_FEATURE_DIM,
             f"Config DINOv2 ({DINOV2_EMBEDDING_DIMENSION}) should be "
-            f"2 x single-pass ({DINOV2_FEATURE_DIM}) = {2 * DINOV2_FEATURE_DIM}"
+            f"2 x single-pass ({DINOV2_FEATURE_DIM}) = {2 * DINOV2_FEATURE_DIM}",
         )
 
     def test_config_morph_includes_base_morph(self):
         """Verify config.py morph count (78) is greater than base morph count (22)."""
-        from segmentation.utils.feature_extraction import MORPHOLOGICAL_FEATURE_COUNT
         from segmentation.utils.config import MORPHOLOGICAL_FEATURES_COUNT
+        from segmentation.utils.feature_extraction import MORPHOLOGICAL_FEATURE_COUNT
+
         self.assertGreater(
-            MORPHOLOGICAL_FEATURES_COUNT, MORPHOLOGICAL_FEATURE_COUNT,
+            MORPHOLOGICAL_FEATURES_COUNT,
+            MORPHOLOGICAL_FEATURE_COUNT,
             f"Full-pipeline morph count ({MORPHOLOGICAL_FEATURES_COUNT}) should be "
-            f"greater than base morph count ({MORPHOLOGICAL_FEATURE_COUNT})"
+            f"greater than base morph count ({MORPHOLOGICAL_FEATURE_COUNT})",
         )
 
 
@@ -218,10 +245,10 @@ class TestMorphologicalFeatureExtraction(unittest.TestCase):
         """Create synthetic test data for morphological feature tests."""
         # Create a simple circular mask (radius 50, centered at 100,100)
         self.mask_size = 200
-        y, x = np.ogrid[:self.mask_size, :self.mask_size]
+        y, x = np.ogrid[: self.mask_size, : self.mask_size]
         center_y, center_x = 100, 100
         radius = 50
-        self.circular_mask = ((x - center_x)**2 + (y - center_y)**2 <= radius**2).astype(bool)
+        self.circular_mask = ((x - center_x) ** 2 + (y - center_y) ** 2 <= radius**2).astype(bool)
 
         # Create a simple RGB image with known values
         self.rgb_image = np.zeros((self.mask_size, self.mask_size, 3), dtype=np.uint8)
@@ -237,15 +264,16 @@ class TestMorphologicalFeatureExtraction(unittest.TestCase):
     def test_extract_morphological_features_returns_22_features(self):
         """Verify extract_morphological_features returns exactly 22 base features."""
         from segmentation.utils.feature_extraction import (
-            extract_morphological_features,
             MORPHOLOGICAL_FEATURE_COUNT,
+            extract_morphological_features,
         )
 
         features = extract_morphological_features(self.circular_mask, self.rgb_image)
 
         self.assertEqual(
-            len(features), MORPHOLOGICAL_FEATURE_COUNT,
-            f"Expected {MORPHOLOGICAL_FEATURE_COUNT} features, got {len(features)}"
+            len(features),
+            MORPHOLOGICAL_FEATURE_COUNT,
+            f"Expected {MORPHOLOGICAL_FEATURE_COUNT} features, got {len(features)}",
         )
         self.assertEqual(len(features), 22)
 
@@ -260,17 +288,19 @@ class TestMorphologicalFeatureExtraction(unittest.TestCase):
 
         # Verify area is approximately pi * r^2
         expected_area = np.pi * 50**2
-        actual_area = features['area']
+        actual_area = features["area"]
         self.assertAlmostEqual(
-            actual_area, expected_area, delta=expected_area * 0.05,
-            msg=f"Area {actual_area} should be approximately {expected_area}"
+            actual_area,
+            expected_area,
+            delta=expected_area * 0.05,
+            msg=f"Area {actual_area} should be approximately {expected_area}",
         )
 
         # Circularity should be close to 1.0 for a circle
-        self.assertGreater(features['circularity'], 0.9, "Circularity should be high for circle")
+        self.assertGreater(features["circularity"], 0.9, "Circularity should be high for circle")
 
         # Solidity should be close to 1.0 for a convex shape
-        self.assertGreater(features['solidity'], 0.95, "Solidity should be high for circle")
+        self.assertGreater(features["solidity"], 0.95, "Solidity should be high for circle")
 
     def test_expected_feature_names_present(self):
         """Verify all expected morphological feature names are present."""
@@ -279,18 +309,35 @@ class TestMorphologicalFeatureExtraction(unittest.TestCase):
         features = extract_morphological_features(self.circular_mask, self.rgb_image)
 
         expected_features = [
-            'area', 'perimeter', 'circularity', 'solidity', 'aspect_ratio',
-            'extent', 'equiv_diameter',
-            'red_mean', 'red_std', 'green_mean', 'green_std', 'blue_mean', 'blue_std',
-            'gray_mean', 'gray_std',
-            'hue_mean', 'saturation_mean', 'value_mean',
-            'relative_brightness', 'intensity_variance', 'dark_fraction', 'nuclear_complexity'
+            "area",
+            "perimeter",
+            "circularity",
+            "solidity",
+            "aspect_ratio",
+            "extent",
+            "equiv_diameter",
+            "red_mean",
+            "red_std",
+            "green_mean",
+            "green_std",
+            "blue_mean",
+            "blue_std",
+            "gray_mean",
+            "gray_std",
+            "hue_mean",
+            "saturation_mean",
+            "value_mean",
+            "relative_brightness",
+            "intensity_variance",
+            "dark_fraction",
+            "nuclear_complexity",
         ]
 
         for feature_name in expected_features:
             self.assertIn(
-                feature_name, features,
-                f"Expected feature '{feature_name}' not found in extracted features"
+                feature_name,
+                features,
+                f"Expected feature '{feature_name}' not found in extracted features",
             )
 
         # Verify the expected list has exactly 22 entries
@@ -302,10 +349,7 @@ class TestMorphologicalFeatureExtraction(unittest.TestCase):
 
         features = extract_morphological_features(self.empty_mask, self.rgb_image)
 
-        self.assertEqual(
-            features, {},
-            "Empty mask should return empty dictionary"
-        )
+        self.assertEqual(features, {}, "Empty mask should return empty dictionary")
 
     def test_all_zero_mask_returns_empty_dict(self):
         """Test that all-zero mask returns empty dictionary."""
@@ -321,21 +365,21 @@ class TestMorphologicalFeatureExtraction(unittest.TestCase):
     def test_morphological_features_with_grayscale_image(self):
         """Test feature extraction works with grayscale images."""
         from segmentation.utils.feature_extraction import (
-            extract_morphological_features,
             MORPHOLOGICAL_FEATURE_COUNT,
+            extract_morphological_features,
         )
 
         features = extract_morphological_features(self.circular_mask, self.gray_image)
 
         self.assertEqual(
-            len(features), MORPHOLOGICAL_FEATURE_COUNT,
-            f"Should still return {MORPHOLOGICAL_FEATURE_COUNT} features for grayscale image"
+            len(features),
+            MORPHOLOGICAL_FEATURE_COUNT,
+            f"Should still return {MORPHOLOGICAL_FEATURE_COUNT} features for grayscale image",
         )
 
         # For grayscale, RGB means should equal the grayscale mean
         self.assertAlmostEqual(
-            features['gray_mean'], 180, delta=5,
-            msg="Gray mean should be approximately 180"
+            features["gray_mean"], 180, delta=5, msg="Gray mean should be approximately 180"
         )
 
     def test_color_statistics_correctness(self):
@@ -345,13 +389,13 @@ class TestMorphologicalFeatureExtraction(unittest.TestCase):
         features = extract_morphological_features(self.circular_mask, self.rgb_image)
 
         # Red channel should be ~200
-        self.assertAlmostEqual(features['red_mean'], 200, delta=5)
+        self.assertAlmostEqual(features["red_mean"], 200, delta=5)
 
         # Green channel should be ~150
-        self.assertAlmostEqual(features['green_mean'], 150, delta=5)
+        self.assertAlmostEqual(features["green_mean"], 150, delta=5)
 
         # Blue channel should be ~100
-        self.assertAlmostEqual(features['blue_mean'], 100, delta=5)
+        self.assertAlmostEqual(features["blue_mean"], 100, delta=5)
 
     def test_feature_values_are_numeric(self):
         """Verify all extracted feature values are numeric types."""
@@ -361,8 +405,7 @@ class TestMorphologicalFeatureExtraction(unittest.TestCase):
 
         for key, value in features.items():
             self.assertIsInstance(
-                value, (int, float),
-                f"Feature '{key}' should be numeric, got {type(value)}"
+                value, (int, float), f"Feature '{key}' should be numeric, got {type(value)}"
             )
 
 
@@ -377,6 +420,7 @@ class TestSAM2EmbeddingDimensions(unittest.TestCase):
     def test_sam2_embedding_dim_constant_is_256(self):
         """Verify SAM2_EMBEDDING_DIM constant is 256."""
         from segmentation.utils.feature_extraction import SAM2_EMBEDDING_DIM
+
         self.assertEqual(SAM2_EMBEDDING_DIM, 256)
 
     def test_extract_sam2_embedding_returns_256d_vector(self):
@@ -399,9 +443,7 @@ class TestSAM2EmbeddingDimensions(unittest.TestCase):
 
         # Create mock SAM2 predictor with proper structure
         mock_predictor = MagicMock()
-        mock_features = {
-            "image_embed": MagicMock()
-        }
+        mock_features = {"image_embed": MagicMock()}
         mock_features["image_embed"].shape = (1, 256, 64, 64)  # B, C, H, W
         mock_predictor._features = mock_features
         mock_predictor._orig_hw = [(512, 512)]
@@ -414,8 +456,7 @@ class TestSAM2EmbeddingDimensions(unittest.TestCase):
         embedding = strategy._extract_sam2_embedding(mock_predictor, 256, 256)
 
         self.assertEqual(
-            len(embedding), 256,
-            f"SAM2 embedding should be 256-dimensional, got {len(embedding)}"
+            len(embedding), 256, f"SAM2 embedding should be 256-dimensional, got {len(embedding)}"
         )
 
     def test_extract_sam2_embedding_handles_missing_predictor(self):
@@ -457,6 +498,7 @@ class TestResNetFeatureDimensions(unittest.TestCase):
     def test_resnet50_feature_dim_constant_is_2048(self):
         """Verify RESNET50_FEATURE_DIM constant is 2048 (single pass)."""
         from segmentation.utils.feature_extraction import RESNET50_FEATURE_DIM
+
         self.assertEqual(RESNET50_FEATURE_DIM, 2048)
 
     def test_preprocess_crop_for_resnet_empty_input(self):
@@ -517,8 +559,7 @@ class TestResNetFeatureDimensions(unittest.TestCase):
         self.assertEqual(result.dtype, np.uint8)
 
     @unittest.skipIf(
-        not _check_torch_available(),
-        "PyTorch not available, skipping GPU-dependent tests"
+        not _check_torch_available(), "PyTorch not available, skipping GPU-dependent tests"
     )
     def test_extract_resnet_features_batch_returns_2048d(self):
         """Test batch ResNet extraction returns 2048-dimensional features (single pass)."""
@@ -540,6 +581,7 @@ class TestResNetFeatureDimensions(unittest.TestCase):
 
         # Create mock model and transform
         import torch
+
         mock_model = MagicMock()
         mock_features = torch.randn(2, 2048, 1, 1)  # Batch of 2
         mock_model.return_value = mock_features
@@ -547,7 +589,7 @@ class TestResNetFeatureDimensions(unittest.TestCase):
         mock_transform = MagicMock()
         mock_transform.return_value = torch.randn(3, 224, 224)
 
-        device = torch.device('cpu')
+        device = torch.device("cpu")
 
         # Create test crops
         crops = [
@@ -562,8 +604,9 @@ class TestResNetFeatureDimensions(unittest.TestCase):
         self.assertEqual(len(features), 2)
         for feat in features:
             self.assertEqual(
-                len(feat), RESNET50_FEATURE_DIM,
-                f"ResNet features should be {RESNET50_FEATURE_DIM}-dimensional (single pass)"
+                len(feat),
+                RESNET50_FEATURE_DIM,
+                f"ResNet features should be {RESNET50_FEATURE_DIM}-dimensional (single pass)",
             )
 
 
@@ -584,28 +627,28 @@ class TestCombinedFeatureVector(unittest.TestCase):
     def setUp(self):
         """Create synthetic test data."""
         self.mask_size = 200
-        y, x = np.ogrid[:self.mask_size, :self.mask_size]
+        y, x = np.ogrid[: self.mask_size, : self.mask_size]
         center_y, center_x = 100, 100
         radius = 40
-        self.mask = ((x - center_x)**2 + (y - center_y)**2 <= radius**2).astype(bool)
+        self.mask = ((x - center_x) ** 2 + (y - center_y) ** 2 <= radius**2).astype(bool)
         self.tile = np.random.randint(0, 256, (self.mask_size, self.mask_size, 3), dtype=np.uint8)
 
     def test_total_features_count_from_config(self):
         """Test that full pipeline feature total is 6478."""
         from segmentation.utils.config import (
-            MORPHOLOGICAL_FEATURES_COUNT,
-            SAM2_EMBEDDING_DIMENSION,
-            RESNET_EMBEDDING_DIMENSION,
             DINOV2_EMBEDDING_DIMENSION,
+            MORPHOLOGICAL_FEATURES_COUNT,
+            RESNET_EMBEDDING_DIMENSION,
+            SAM2_EMBEDDING_DIMENSION,
             TOTAL_FEATURES_PER_CELL,
         )
 
         # Verify the math: 78 + 256 + 4096 + 2048 = 6478
         expected_total = (
-            MORPHOLOGICAL_FEATURES_COUNT +
-            SAM2_EMBEDDING_DIMENSION +
-            RESNET_EMBEDDING_DIMENSION +
-            DINOV2_EMBEDDING_DIMENSION
+            MORPHOLOGICAL_FEATURES_COUNT
+            + SAM2_EMBEDDING_DIMENSION
+            + RESNET_EMBEDDING_DIMENSION
+            + DINOV2_EMBEDDING_DIMENSION
         )
 
         self.assertEqual(expected_total, 6478)
@@ -615,8 +658,8 @@ class TestCombinedFeatureVector(unittest.TestCase):
         """Test _extract_full_features_batch returns correct structure."""
         from segmentation.detection.strategies.base import DetectionStrategy
         from segmentation.utils.feature_extraction import (
-            SAM2_EMBEDDING_DIM,
             RESNET50_FEATURE_DIM,
+            SAM2_EMBEDDING_DIM,
         )
 
         class TestStrategy(DetectionStrategy):
@@ -634,55 +677,61 @@ class TestCombinedFeatureVector(unittest.TestCase):
 
         # Use models dict with None values to trigger zero-filling
         models = {
-            'sam2_predictor': None,
-            'resnet': None,
-            'resnet_transform': None,
-            'device': None,
+            "sam2_predictor": None,
+            "resnet": None,
+            "resnet_transform": None,
+            "device": None,
         }
 
         masks = [self.mask]
         feature_list = strategy._extract_full_features_batch(
-            masks, self.tile, models,
-            extract_sam2=True,
-            extract_resnet=True
+            masks, self.tile, models, extract_sam2=True, extract_resnet=True
         )
 
         self.assertEqual(len(feature_list), 1)
         features = feature_list[0]
 
         # Should have morphological features + centroid
-        self.assertIn('area', features)
-        self.assertIn('centroid', features)
-        self.assertIn('circularity', features)
+        self.assertIn("area", features)
+        self.assertIn("centroid", features)
+        self.assertIn("circularity", features)
 
         # Should have SAM2 embedding features (filled with zeros)
-        sam2_count = sum(1 for k in features.keys() if k.startswith('sam2_'))
+        sam2_count = sum(1 for k in features.keys() if k.startswith("sam2_"))
         self.assertEqual(
-            sam2_count, SAM2_EMBEDDING_DIM,
-            f"Expected {SAM2_EMBEDDING_DIM} SAM2 features, got {sam2_count}"
+            sam2_count,
+            SAM2_EMBEDDING_DIM,
+            f"Expected {SAM2_EMBEDDING_DIM} SAM2 features, got {sam2_count}",
         )
 
         # Should have ResNet masked features (filled with zeros) - 2048 per pass
-        resnet_masked_count = sum(1 for k in features.keys()
-                                  if k.startswith('resnet_') and not k.startswith('resnet_ctx_'))
+        resnet_masked_count = sum(
+            1
+            for k in features.keys()
+            if k.startswith("resnet_") and not k.startswith("resnet_ctx_")
+        )
         self.assertEqual(
-            resnet_masked_count, RESNET50_FEATURE_DIM,
-            f"Expected {RESNET50_FEATURE_DIM} ResNet masked features, got {resnet_masked_count}"
+            resnet_masked_count,
+            RESNET50_FEATURE_DIM,
+            f"Expected {RESNET50_FEATURE_DIM} ResNet masked features, got {resnet_masked_count}",
         )
 
         # Should have ResNet context features (filled with zeros) - 2048 per pass
-        resnet_ctx_count = sum(1 for k in features.keys() if k.startswith('resnet_ctx_'))
+        resnet_ctx_count = sum(1 for k in features.keys() if k.startswith("resnet_ctx_"))
         self.assertEqual(
-            resnet_ctx_count, RESNET50_FEATURE_DIM,
-            f"Expected {RESNET50_FEATURE_DIM} ResNet context features, got {resnet_ctx_count}"
+            resnet_ctx_count,
+            RESNET50_FEATURE_DIM,
+            f"Expected {RESNET50_FEATURE_DIM} ResNet context features, got {resnet_ctx_count}",
         )
 
         # Total ResNet features = masked + context = 4096
         total_resnet = resnet_masked_count + resnet_ctx_count
         from segmentation.utils.config import RESNET_EMBEDDING_DIMENSION
+
         self.assertEqual(
-            total_resnet, RESNET_EMBEDDING_DIMENSION,
-            f"Total ResNet features ({total_resnet}) should match config ({RESNET_EMBEDDING_DIMENSION})"
+            total_resnet,
+            RESNET_EMBEDDING_DIMENSION,
+            f"Total ResNet features ({total_resnet}) should match config ({RESNET_EMBEDDING_DIMENSION})",
         )
 
     def test_feature_vector_dimensions_match_constants(self):
@@ -692,11 +741,11 @@ class TestCombinedFeatureVector(unittest.TestCase):
         dims = get_feature_dimensions()
 
         # These should be the canonical full-pipeline values
-        self.assertEqual(dims['morphological'], 78)
-        self.assertEqual(dims['sam2_embedding'], 256)
-        self.assertEqual(dims['resnet_embedding'], 4096)
-        self.assertEqual(dims['dinov2_embedding'], 2048)
-        self.assertEqual(dims['total'], 78 + 256 + 4096 + 2048)
+        self.assertEqual(dims["morphological"], 78)
+        self.assertEqual(dims["sam2_embedding"], 256)
+        self.assertEqual(dims["resnet_embedding"], 4096)
+        self.assertEqual(dims["dinov2_embedding"], 2048)
+        self.assertEqual(dims["total"], 78 + 256 + 4096 + 2048)
 
     def test_empty_mask_list_returns_empty_list(self):
         """Test _extract_full_features_batch with empty mask list."""
@@ -769,8 +818,7 @@ class TestPreprocessCropForResnet(unittest.TestCase):
         # Half of max (32768) / 256 = 128 (approximately)
         half_value = result[50:, :, :].max()
         self.assertTrue(
-            120 <= half_value <= 136,
-            f"Half value {half_value} should be approximately 128"
+            120 <= half_value <= 136, f"Half value {half_value} should be approximately 128"
         )
 
     def test_float_conversion(self):
@@ -823,9 +871,9 @@ class TestHSVColorFeatures(unittest.TestCase):
         empty_pixels = np.zeros((0, 3))
         result = compute_hsv_features(empty_pixels)
 
-        self.assertEqual(result['hue_mean'], 0.0)
-        self.assertEqual(result['saturation_mean'], 0.0)
-        self.assertEqual(result['value_mean'], 0.0)
+        self.assertEqual(result["hue_mean"], 0.0)
+        self.assertEqual(result["saturation_mean"], 0.0)
+        self.assertEqual(result["value_mean"], 0.0)
 
     def test_compute_hsv_features_returns_dict(self):
         """Test that compute_hsv_features returns expected dictionary."""
@@ -834,46 +882,46 @@ class TestHSVColorFeatures(unittest.TestCase):
         pixels = np.array([[200, 150, 100], [210, 160, 110]], dtype=np.uint8)
         result = compute_hsv_features(pixels)
 
-        self.assertIn('hue_mean', result)
-        self.assertIn('saturation_mean', result)
-        self.assertIn('value_mean', result)
+        self.assertIn("hue_mean", result)
+        self.assertIn("saturation_mean", result)
+        self.assertIn("value_mean", result)
 
         # Values should be numeric
-        self.assertIsInstance(result['hue_mean'], float)
-        self.assertIsInstance(result['saturation_mean'], float)
-        self.assertIsInstance(result['value_mean'], float)
+        self.assertIsInstance(result["hue_mean"], float)
+        self.assertIsInstance(result["saturation_mean"], float)
+        self.assertIsInstance(result["value_mean"], float)
 
 
 class TestCreateResNetTransform(unittest.TestCase):
     """Tests for ResNet transform creation."""
 
     @unittest.skipIf(
-        not _check_torch_available(),
-        "PyTorch not available, skipping transform tests"
+        not _check_torch_available(), "PyTorch not available, skipping transform tests"
     )
     def test_create_resnet_transform_returns_compose(self):
         """Test that create_resnet_transform returns a valid Compose object."""
-        from segmentation.utils.feature_extraction import create_resnet_transform
         import torchvision.transforms as tv_transforms
+
+        from segmentation.utils.feature_extraction import create_resnet_transform
 
         transform = create_resnet_transform()
 
         self.assertIsInstance(transform, tv_transforms.Compose)
 
     @unittest.skipIf(
-        not _check_torch_available(),
-        "PyTorch not available, skipping transform tests"
+        not _check_torch_available(), "PyTorch not available, skipping transform tests"
     )
     def test_resnet_transform_output_shape(self):
         """Test that ResNet transform produces correct output shape."""
-        from segmentation.utils.feature_extraction import create_resnet_transform
-        from PIL import Image
         import torch
+        from PIL import Image
+
+        from segmentation.utils.feature_extraction import create_resnet_transform
 
         transform = create_resnet_transform()
 
         # Create a test image
-        test_image = Image.new('RGB', (256, 256), color=(128, 128, 128))
+        test_image = Image.new("RGB", (256, 256), color=(128, 128, 128))
 
         output = transform(test_image)
 
@@ -882,6 +930,6 @@ class TestCreateResNetTransform(unittest.TestCase):
         self.assertIsInstance(output, torch.Tensor)
 
 
-if __name__ == '__main__':
+if __name__ == "__main__":
     # Run tests
     unittest.main(verbosity=2)

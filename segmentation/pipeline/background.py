@@ -21,6 +21,7 @@ logger = get_logger(__name__)
 # Core background subtraction
 # ---------------------------------------------------------------------------
 
+
 def local_background_subtract(
     values: np.ndarray,
     centroids: np.ndarray,
@@ -53,9 +54,10 @@ def local_background_subtract(
     if n < n_neighbors + 1:
         bg = np.median(values)
         logger.warning(
-            "Too few cells (%d) for local background (need %d+1). "
-            "Using global median %.1f",
-            n, n_neighbors, bg,
+            "Too few cells (%d) for local background (need %d+1). " "Using global median %.1f",
+            n,
+            n_neighbors,
+            bg,
         )
         corrected = np.maximum(values - bg, 0.0)
         return corrected, np.full(n, bg), tree_and_indices
@@ -67,7 +69,7 @@ def local_background_subtract(
         # k+1 because the closest neighbor is the cell itself (distance 0)
         _, indices = tree.query(centroids, k=n_neighbors + 1)
 
-    neighbor_values = values[indices[:, 1:]]          # (n, n_neighbors)
+    neighbor_values = values[indices[:, 1:]]  # (n, n_neighbors)
     per_cell_bg = np.median(neighbor_values, axis=1)
 
     corrected = np.maximum(values - per_cell_bg, 0.0)
@@ -80,7 +82,14 @@ def local_background_subtract(
 
 # Intensity suffixes whose values should be shifted by background.
 _INTENSITY_SUFFIXES = [
-    "mean", "median", "min", "max", "p5", "p25", "p75", "p95",
+    "mean",
+    "median",
+    "min",
+    "max",
+    "p5",
+    "p25",
+    "p75",
+    "p95",
 ]
 
 
@@ -193,7 +202,9 @@ def correct_all_channels(
             dtype=np.float64,
         )
         corrected_median, per_cell_bg, _cached_tree_and_indices = local_background_subtract(
-            values, centroids, n_neighbors,
+            values,
+            centroids,
+            n_neighbors,
             tree_and_indices=_cached_tree_and_indices,
         )
         channel_bg[ch] = per_cell_bg
@@ -203,7 +214,10 @@ def correct_all_channels(
         nonzero = corrected_median[corrected_median > 0]
         logger.info(
             "  ch%d: bg median=%.1f, %d/%d cells with signal after correction",
-            ch, bg_median_val, len(nonzero), n_det,
+            ch,
+            bg_median_val,
+            len(nonzero),
+            n_det,
         )
 
     # --- Step 2: correct intensity features & write back ---

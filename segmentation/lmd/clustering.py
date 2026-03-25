@@ -18,28 +18,27 @@ Usage:
 
 import numpy as np
 from scipy.spatial import cKDTree
-from typing import List, Dict, Tuple, Optional
 
 from segmentation.utils.logging import get_logger
 
 logger = get_logger(__name__)
 
 
-def get_detection_area_um2(det: Dict, pixel_size: float) -> float:
+def get_detection_area_um2(det: dict, pixel_size: float) -> float:
     """Compute area in um2 from detection features or contour."""
     # Check for pre-computed area
-    if 'area_um2' in det:
-        return det['area_um2']
+    if "area_um2" in det:
+        return det["area_um2"]
 
     # Check features dict
-    features = det.get('features', {})
-    if 'area_um2' in features:
-        return features['area_um2']
-    if 'area' in features:
-        return features['area'] * pixel_size * pixel_size
+    features = det.get("features", {})
+    if "area_um2" in features:
+        return features["area_um2"]
+    if "area" in features:
+        return features["area"] * pixel_size * pixel_size
 
     # Fallback: compute from contour if available
-    for key in ('outer_contour_global', 'outer_contour'):
+    for key in ("outer_contour_global", "outer_contour"):
         contour = det.get(key)
         if contour is not None and len(contour) >= 3:
             pts = np.array(contour, dtype=np.float64)
@@ -51,27 +50,27 @@ def get_detection_area_um2(det: Dict, pixel_size: float) -> float:
     return 0.0
 
 
-def get_detection_center(det: Dict) -> Optional[Tuple[float, float]]:
+def get_detection_center(det: dict) -> tuple[float, float] | None:
     """
     Get (x, y) center coordinates from detection, in global PIXELS.
 
     Uses ``global_center`` (slide-level coordinates) only.
     Never falls back to ``center`` which is tile-local.
     """
-    if 'global_center' in det:
-        gc = det['global_center']
+    if "global_center" in det:
+        gc = det["global_center"]
         return (float(gc[0]), float(gc[1]))
     return None
 
 
 def cluster_detections_greedy_area(
-    indices: List[int],
+    indices: list[int],
     coords: np.ndarray,
     areas: np.ndarray,
     dist_threshold: float,
     area_min: float,
     area_max: float,
-) -> Tuple[List[List[int]], List[int]]:
+) -> tuple[list[list[int]], list[int]]:
     """
     Single-round greedy spatial clustering with area constraint.
 
@@ -123,7 +122,7 @@ def cluster_detections_greedy_area(
             # Find nearest unclustered within distance threshold using cKDTree
             candidates = tree.query_ball_point(cluster_centroid, dist_threshold)
             best_idx = None
-            best_dist = float('inf')
+            best_dist = float("inf")
             for idx in candidates:
                 if idx not in unclustered:
                     continue
@@ -148,7 +147,9 @@ def cluster_detections_greedy_area(
                 # and prevent floating-point drift from repeated summation.
                 new_weight = centroid_weight + areas[best_idx]
                 if new_weight > 0:
-                    cluster_centroid = (cluster_centroid * centroid_weight + coords[best_idx] * areas[best_idx]) / new_weight
+                    cluster_centroid = (
+                        cluster_centroid * centroid_weight + coords[best_idx] * areas[best_idx]
+                    ) / new_weight
                 centroid_weight = new_weight
             else:
                 # Adding would overshoot beyond midpoint benefit - stop this cluster
@@ -167,14 +168,14 @@ def cluster_detections_greedy_area(
 
 
 def two_stage_clustering(
-    detections: List[Dict],
+    detections: list[dict],
     pixel_size: float,
     area_min: float = 375.0,
     area_max: float = 425.0,
     dist_round1: float = 500.0,
     dist_round2: float = 1000.0,
     min_score: float = 0.5,
-) -> Dict:
+) -> dict:
     """
     Orchestrate two-round clustering.
 
@@ -183,7 +184,7 @@ def two_stage_clustering(
     # Filter detections by score
     filtered_indices = []
     for i, det in enumerate(detections):
-        score = det.get('rf_prediction', det.get('score', 0))
+        score = det.get("rf_prediction", det.get("score", 0))
         if score is None:
             score = 0
         if score >= min_score:
@@ -191,15 +192,20 @@ def two_stage_clustering(
 
     if not filtered_indices:
         return {
-            'parameters': {
-                'area_range': [area_min, area_max],
-                'distance_thresholds': [dist_round1, dist_round2],
-                'min_score': min_score,
-                'pixel_size_um': pixel_size,
+            "parameters": {
+                "area_range": [area_min, area_max],
+                "distance_thresholds": [dist_round1, dist_round2],
+                "min_score": min_score,
+                "pixel_size_um": pixel_size,
             },
-            'summary': {'n_clusters': 0, 'n_singles': 0, 'n_detections_in_clusters': 0, 'n_total_filtered': 0},
-            'main_clusters': [],
-            'outliers': [],
+            "summary": {
+                "n_clusters": 0,
+                "n_singles": 0,
+                "n_detections_in_clusters": 0,
+                "n_total_filtered": 0,
+            },
+            "main_clusters": [],
+            "outliers": [],
         }
 
     # Compute coordinates (in pixels) and areas (in um2)
@@ -219,15 +225,20 @@ def two_stage_clustering(
 
     if not valid_indices:
         return {
-            'parameters': {
-                'area_range': [area_min, area_max],
-                'distance_thresholds': [dist_round1, dist_round2],
-                'min_score': min_score,
-                'pixel_size_um': pixel_size,
+            "parameters": {
+                "area_range": [area_min, area_max],
+                "distance_thresholds": [dist_round1, dist_round2],
+                "min_score": min_score,
+                "pixel_size_um": pixel_size,
             },
-            'summary': {'n_clusters': 0, 'n_singles': 0, 'n_detections_in_clusters': 0, 'n_total_filtered': 0},
-            'main_clusters': [],
-            'outliers': [],
+            "summary": {
+                "n_clusters": 0,
+                "n_singles": 0,
+                "n_detections_in_clusters": 0,
+                "n_total_filtered": 0,
+            },
+            "main_clusters": [],
+            "outliers": [],
         }
 
     coords_arr = np.array(coords_px)
@@ -243,8 +254,12 @@ def two_stage_clustering(
     # Round 1: tight distance
     logger.info(f"  Round 1: dist_threshold={dist_round1} um ...")
     clusters_r1, remaining_r1 = cluster_detections_greedy_area(
-        local_indices, coords_arr, areas_arr,
-        dist_threshold=dist_round1_px, area_min=area_min, area_max=area_max,
+        local_indices,
+        coords_arr,
+        areas_arr,
+        dist_threshold=dist_round1_px,
+        area_min=area_min,
+        area_max=area_max,
     )
     logger.info(f"    Clusters: {len(clusters_r1)}, Remaining: {len(remaining_r1)}")
 
@@ -254,8 +269,12 @@ def two_stage_clustering(
         remaining_coords = coords_arr[remaining_r1]
         remaining_areas = areas_arr[remaining_r1]
         clusters_r2_local, remaining_r2_local = cluster_detections_greedy_area(
-            list(range(len(remaining_r1))), remaining_coords, remaining_areas,
-            dist_threshold=dist_round2_px, area_min=area_min, area_max=area_max,
+            list(range(len(remaining_r1))),
+            remaining_coords,
+            remaining_areas,
+            dist_threshold=dist_round2_px,
+            area_min=area_min,
+            area_max=area_max,
         )
         # Map back to valid_indices
         clusters_r2 = [[remaining_r1[j] for j in cl] for cl in clusters_r2_local]
@@ -276,34 +295,36 @@ def two_stage_clustering(
         cluster_areas = areas_arr[cluster_local_idxs]
         cx, cy = cluster_coords.mean(axis=0)
 
-        main_clusters.append({
-            'id': cid,
-            'detection_indices': member_global_idxs,
-            'cx': float(cx),
-            'cy': float(cy),
-            'n': len(member_global_idxs),
-            'total_area_um2': float(cluster_areas.sum()),
-        })
+        main_clusters.append(
+            {
+                "id": cid,
+                "detection_indices": member_global_idxs,
+                "cx": float(cx),
+                "cy": float(cy),
+                "n": len(member_global_idxs),
+                "total_area_um2": float(cluster_areas.sum()),
+            }
+        )
 
-    outliers = [{'detection_index': valid_indices[li]} for li in remaining_final]
+    outliers = [{"detection_index": valid_indices[li]} for li in remaining_final]
 
-    n_in_clusters = sum(c['n'] for c in main_clusters)
+    n_in_clusters = sum(c["n"] for c in main_clusters)
 
     result = {
-        'parameters': {
-            'area_range': [area_min, area_max],
-            'distance_thresholds': [dist_round1, dist_round2],
-            'min_score': min_score,
-            'pixel_size_um': pixel_size,
+        "parameters": {
+            "area_range": [area_min, area_max],
+            "distance_thresholds": [dist_round1, dist_round2],
+            "min_score": min_score,
+            "pixel_size_um": pixel_size,
         },
-        'summary': {
-            'n_clusters': len(main_clusters),
-            'n_singles': len(outliers),
-            'n_detections_in_clusters': n_in_clusters,
-            'n_total_filtered': len(valid_indices),
+        "summary": {
+            "n_clusters": len(main_clusters),
+            "n_singles": len(outliers),
+            "n_detections_in_clusters": n_in_clusters,
+            "n_total_filtered": len(valid_indices),
         },
-        'main_clusters': main_clusters,
-        'outliers': outliers,
+        "main_clusters": main_clusters,
+        "outliers": outliers,
     }
 
     return result

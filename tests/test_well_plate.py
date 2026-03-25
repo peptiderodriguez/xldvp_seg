@@ -1,14 +1,15 @@
 """Tests for segmentation.lmd.well_plate — 384-well plate serpentine generation."""
 
-import pytest
 import re
 
+import pytest
+
 from segmentation.lmd.well_plate import (
-    generate_quadrant_serpentine,
-    generate_plate_wells,
-    generate_multiplate_wells,
-    insert_empty_wells,
     WELLS_PER_PLATE,
+    generate_multiplate_wells,
+    generate_plate_wells,
+    generate_quadrant_serpentine,
+    insert_empty_wells,
 )
 
 

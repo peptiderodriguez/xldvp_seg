@@ -6,15 +6,14 @@ distributions across multiple slides, correcting for staining variation and
 scanner differences.
 """
 
-import numpy as np
 import cv2
-from typing import Tuple, Dict
+import numpy as np
 
 from segmentation.utils.logging import get_logger
 
 logger = get_logger(__name__)
 
-_LAB_KEYS = ('L_median', 'L_mad', 'a_median', 'a_mad', 'b_median', 'b_mad')
+_LAB_KEYS = ("L_median", "L_mad", "a_median", "a_mad", "b_median", "b_mad")
 
 
 def extract_slide_norm_params(slide_thresh):
@@ -28,17 +27,14 @@ def extract_slide_norm_params(slide_thresh):
     """
     if not slide_thresh:
         return None, None
-    otsu = slide_thresh.get('otsu_threshold', slide_thresh.get('intensity_threshold'))
+    otsu = slide_thresh.get("otsu_threshold", slide_thresh.get("intensity_threshold"))
     slab = {k: slide_thresh[k] for k in _LAB_KEYS if k in slide_thresh}
     return otsu, slab if len(slab) == 6 else None
 
 
 def compute_global_percentiles(
-    slides_data: list,
-    p_low: float = 1.0,
-    p_high: float = 99.0,
-    n_samples: int = 100000
-) -> Tuple[np.ndarray, np.ndarray]:
+    slides_data: list, p_low: float = 1.0, p_high: float = 99.0, n_samples: int = 100000
+) -> tuple[np.ndarray, np.ndarray]:
     """
     Compute global percentiles across all slides for normalization.
 
@@ -72,7 +68,9 @@ def compute_global_percentiles(
             # Random sampling for grayscale with direct 2D indexing
             row_indices = np.random.randint(0, h, size=n_sample)
             col_indices = np.random.randint(0, w, size=n_sample)
-            samples = slide_rgb[row_indices, col_indices].copy().reshape(-1, 1)  # Reshape to (N, 1) for vstack compatibility
+            samples = (
+                slide_rgb[row_indices, col_indices].copy().reshape(-1, 1)
+            )  # Reshape to (N, 1) for vstack compatibility
         else:
             raise ValueError(f"Unexpected slide shape: {slide_rgb.shape}")
 
@@ -92,7 +90,7 @@ def normalize_to_percentiles(
     target_low: np.ndarray,
     target_high: np.ndarray,
     p_low: float = 1.0,
-    p_high: float = 99.0
+    p_high: float = 99.0,
 ) -> np.ndarray:
     """
     Normalize image to match target percentile range.
@@ -198,10 +196,7 @@ def normalize_to_percentiles(
 
 
 def normalize_slide_to_reference(
-    image: np.ndarray,
-    reference_image: np.ndarray,
-    p_low: float = 1.0,
-    p_high: float = 99.0
+    image: np.ndarray, reference_image: np.ndarray, p_low: float = 1.0, p_high: float = 99.0
 ) -> np.ndarray:
     """
     Normalize a slide to match the intensity distribution of a reference slide.
@@ -226,7 +221,7 @@ def percentile_normalize_rgb(
     image: np.ndarray,
     p_low: float = 1.0,
     p_high: float = 99.0,
-    target_range: Tuple[float, float] = (0, 255)
+    target_range: tuple[float, float] = (0, 255),
 ) -> np.ndarray:
     """
     Simple per-slide percentile normalization (no cross-slide reference).
@@ -253,6 +248,7 @@ def percentile_normalize_rgb(
         return normalize_to_percentiles(image, target_low, target_high, p_low, p_high)
 
     from segmentation.io.html_export import percentile_normalize
+
     return percentile_normalize(image, p_low=p_low, p_high=p_high)
 
 
@@ -260,9 +256,10 @@ def percentile_normalize_rgb(
 # Reinhard Normalization (Lab color space)
 # ============================================================================
 
+
 def compute_reinhard_params_from_samples(
     slide_samples: list,
-) -> Dict[str, float]:
+) -> dict[str, float]:
     """
     Compute global Reinhard normalization parameters from sampled pixels.
 
@@ -297,8 +294,8 @@ def compute_reinhard_params_from_samples(
 
         # Convert from cv2 LAB encoding to standard LAB scale
         samples_lab[:, 0] = samples_lab[:, 0] * 100.0 / 255.0  # L: [0,255] -> [0,100]
-        samples_lab[:, 1] = samples_lab[:, 1] - 128.0           # a: [0,255] -> [-128,127]
-        samples_lab[:, 2] = samples_lab[:, 2] - 128.0           # b: [0,255] -> [-128,127]
+        samples_lab[:, 1] = samples_lab[:, 1] - 128.0  # a: [0,255] -> [-128,127]
+        samples_lab[:, 2] = samples_lab[:, 2] - 128.0  # b: [0,255] -> [-128,127]
 
         all_lab_samples.append(samples_lab)
 
@@ -316,17 +313,16 @@ def compute_reinhard_params_from_samples(
     b_mad = np.median(np.abs(combined_lab[:, 2] - b_median))
 
     return {
-        'L_median': float(L_median),
-        'L_mad': float(L_mad),
-        'a_median': float(a_median),
-        'a_mad': float(a_mad),
-        'b_median': float(b_median),
-        'b_mad': float(b_mad),
-        'n_slides': len(slide_samples),
-        'n_total_pixels': int(combined_lab.shape[0]),
-        'method': 'reinhard_median'
+        "L_median": float(L_median),
+        "L_mad": float(L_mad),
+        "a_median": float(a_median),
+        "a_mad": float(a_mad),
+        "b_median": float(b_median),
+        "b_mad": float(b_mad),
+        "n_slides": len(slide_samples),
+        "n_total_pixels": int(combined_lab.shape[0]),
+        "method": "reinhard_median",
     }
-
 
 
 # Deprecated alias: identical to compute_reinhard_params_from_samples (which already
@@ -336,9 +332,9 @@ compute_reinhard_params_from_samples_MEDIAN = compute_reinhard_params_from_sampl
 
 def apply_reinhard_normalization_MEDIAN(
     image: np.ndarray,
-    params: Dict[str, float],
+    params: dict[str, float],
     otsu_threshold: float = None,
-    slide_lab_stats: Dict[str, float] = None,
+    slide_lab_stats: dict[str, float] = None,
     **_legacy_kwargs,
 ) -> np.ndarray:
     """
@@ -382,18 +378,18 @@ def apply_reinhard_normalization_MEDIAN(
 
     # Step 2: Get per-slide LAB stats (from step 1 JSON or compute by sampling)
     if slide_lab_stats is not None:
-        L_src_median = slide_lab_stats['L_median']
-        L_src_mad = slide_lab_stats['L_mad']
-        a_src_median = slide_lab_stats['a_median']
-        a_src_mad = slide_lab_stats['a_mad']
-        b_src_median = slide_lab_stats['b_median']
-        b_src_mad = slide_lab_stats['b_mad']
+        L_src_median = slide_lab_stats["L_median"]
+        L_src_mad = slide_lab_stats["L_mad"]
+        a_src_median = slide_lab_stats["a_median"]
+        a_src_mad = slide_lab_stats["a_mad"]
+        b_src_median = slide_lab_stats["b_median"]
+        b_src_mad = slide_lab_stats["b_mad"]
         logger.info(f"  Using pre-computed slide LAB stats: L={L_src_median:.2f}±{L_src_mad:.2f}")
     else:
         # Fallback: rejection-sample 1M tissue pixels and compute LAB stats
         if gray is None:
             gray = cv2.cvtColor(image, cv2.COLOR_RGB2GRAY)
-        logger.info(f"  Computing slide LAB stats by sampling tissue pixels...")
+        logger.info("  Computing slide LAB stats by sampling tissue pixels...")
         n_samples = 1_000_000
         max_attempts = n_samples * 5
         collected = []
@@ -439,8 +435,12 @@ def apply_reinhard_normalization_MEDIAN(
         del gray
 
     # Log source vs target stats
-    logger.info(f"  Source stats: L={L_src_median:.2f}±{L_src_mad:.2f}, a={a_src_median:.2f}±{a_src_mad:.2f}, b={b_src_median:.2f}±{b_src_mad:.2f}")
-    logger.info(f"  Target stats: L={params['L_median']:.2f}±{params['L_mad']:.2f}, a={params['a_median']:.2f}±{params['a_mad']:.2f}, b={params['b_median']:.2f}±{params['b_mad']:.2f}")
+    logger.info(
+        f"  Source stats: L={L_src_median:.2f}±{L_src_mad:.2f}, a={a_src_median:.2f}±{a_src_mad:.2f}, b={b_src_median:.2f}±{b_src_mad:.2f}"
+    )
+    logger.info(
+        f"  Target stats: L={params['L_median']:.2f}±{params['L_mad']:.2f}, a={params['a_median']:.2f}±{params['a_mad']:.2f}, b={params['b_median']:.2f}±{params['b_mad']:.2f}"
+    )
 
     # Step 3: Normalize tissue pixels block-by-block (512x512 for memory efficiency)
     result = image.copy()
@@ -472,19 +472,25 @@ def apply_reinhard_normalization_MEDIAN(
 
             # Normalize ONLY tissue pixels
             if L_src_mad > 1e-6:
-                block_lab[:, :, 0][tissue_mask] = (block_lab[:, :, 0][tissue_mask] - L_src_median) / L_src_mad * params['L_mad'] + params['L_median']
+                block_lab[:, :, 0][tissue_mask] = (
+                    block_lab[:, :, 0][tissue_mask] - L_src_median
+                ) / L_src_mad * params["L_mad"] + params["L_median"]
             else:
-                block_lab[:, :, 0][tissue_mask] = params['L_median']
+                block_lab[:, :, 0][tissue_mask] = params["L_median"]
 
             if a_src_mad > 1e-6:
-                block_lab[:, :, 1][tissue_mask] = (block_lab[:, :, 1][tissue_mask] - a_src_median) / a_src_mad * params['a_mad'] + params['a_median']
+                block_lab[:, :, 1][tissue_mask] = (
+                    block_lab[:, :, 1][tissue_mask] - a_src_median
+                ) / a_src_mad * params["a_mad"] + params["a_median"]
             else:
-                block_lab[:, :, 1][tissue_mask] = params['a_median']
+                block_lab[:, :, 1][tissue_mask] = params["a_median"]
 
             if b_src_mad > 1e-6:
-                block_lab[:, :, 2][tissue_mask] = (block_lab[:, :, 2][tissue_mask] - b_src_median) / b_src_mad * params['b_mad'] + params['b_median']
+                block_lab[:, :, 2][tissue_mask] = (
+                    block_lab[:, :, 2][tissue_mask] - b_src_median
+                ) / b_src_mad * params["b_mad"] + params["b_median"]
             else:
-                block_lab[:, :, 2][tissue_mask] = params['b_median']
+                block_lab[:, :, 2][tissue_mask] = params["b_median"]
 
             # Clamp to physical LAB ranges before encoding
             block_lab[:, :, 0] = np.clip(block_lab[:, :, 0], 0, 100)
@@ -504,16 +510,18 @@ def apply_reinhard_normalization_MEDIAN(
             result[by:by_end, bx:bx_end][tissue_mask] = block_rgb[tissue_mask]
             del block_lab, block_rgb
 
-    logger.info(f"  Normalized {tissue_px_count:,} tissue pixels ({100*tissue_px_count/max(total_px_count,1):.1f}% of image)")
+    logger.info(
+        f"  Normalized {tissue_px_count:,} tissue pixels ({100*tissue_px_count/max(total_px_count,1):.1f}% of image)"
+    )
 
     return result
 
 
 def apply_reinhard_normalization(
     image: np.ndarray,
-    params: Dict[str, float],
+    params: dict[str, float],
     otsu_threshold: float = None,
-    slide_lab_stats: Dict[str, float] = None,
+    slide_lab_stats: dict[str, float] = None,
     **_legacy_kwargs,
 ) -> np.ndarray:
     """
@@ -533,7 +541,8 @@ def apply_reinhard_normalization(
         Normalized RGB image (H, W, 3), dtype uint8
     """
     return apply_reinhard_normalization_MEDIAN(
-        image, params,
+        image,
+        params,
         otsu_threshold=otsu_threshold,
         slide_lab_stats=slide_lab_stats,
     )

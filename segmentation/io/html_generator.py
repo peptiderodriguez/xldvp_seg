@@ -26,8 +26,9 @@ Example usage:
 
 import html as html_mod
 import warnings
+from collections.abc import Callable
 from pathlib import Path
-from typing import Any, Callable, Dict, List, Literal, Optional, Union
+from typing import Any, Literal
 
 
 def _esc(value) -> str:
@@ -39,7 +40,7 @@ def _esc(value) -> str:
 
 
 # Type aliases
-StorageStrategy = Literal['page-specific', 'global', 'experiment']
+StorageStrategy = Literal["page-specific", "global", "experiment"]
 FormatterFunc = Callable[[Any], str]
 
 
@@ -64,38 +65,38 @@ class HTMLPageGenerator:
     """
 
     # Default formatters for common statistics
-    DEFAULT_FORMATTERS: Dict[str, FormatterFunc] = {
-        'area_um2': lambda v: f"{v:.1f} &micro;m&sup2;",
-        'area_px': lambda v: f"{v:.0f} px",
-        'confidence': lambda v: f"{v * 100:.0f}%",
-        'elongation': lambda v: f"elong: {v:.2f}",
+    DEFAULT_FORMATTERS: dict[str, FormatterFunc] = {
+        "area_um2": lambda v: f"{v:.1f} &micro;m&sup2;",
+        "area_px": lambda v: f"{v:.0f} px",
+        "confidence": lambda v: f"{v * 100:.0f}%",
+        "elongation": lambda v: f"elong: {v:.2f}",
     }
 
     # Dark theme color palette
     COLORS = {
-        'bg_primary': '#0a0a0a',
-        'bg_secondary': '#111',
-        'bg_tertiary': '#1a1a1a',
-        'border': '#333',
-        'text_primary': '#ddd',
-        'text_secondary': '#888',
-        'text_tertiary': '#555',
-        'positive': '#4a4',
-        'negative': '#a44',
-        'unsure': '#aa4',
-        'export': '#44a',
-        'card_yes_bg': '#0f130f',
-        'card_no_bg': '#130f0f',
-        'card_unsure_bg': '#13130f',
+        "bg_primary": "#0a0a0a",
+        "bg_secondary": "#111",
+        "bg_tertiary": "#1a1a1a",
+        "border": "#333",
+        "text_primary": "#ddd",
+        "text_secondary": "#888",
+        "text_tertiary": "#555",
+        "positive": "#4a4",
+        "negative": "#a44",
+        "unsure": "#aa4",
+        "export": "#44a",
+        "card_yes_bg": "#0f130f",
+        "card_no_bg": "#130f0f",
+        "card_unsure_bg": "#13130f",
     }
 
     def __init__(
         self,
         cell_type: str,
-        experiment_name: Optional[str] = None,
-        storage_strategy: StorageStrategy = 'global',
+        experiment_name: str | None = None,
+        storage_strategy: StorageStrategy = "global",
         samples_per_page: int = 300,
-        title: Optional[str] = None,
+        title: str | None = None,
     ) -> None:
         """
         Initialize the HTML page generator.
@@ -115,10 +116,8 @@ class HTMLPageGenerator:
         Raises:
             ValueError: If storage_strategy is 'experiment' but experiment_name is None.
         """
-        if storage_strategy == 'experiment' and experiment_name is None:
-            raise ValueError(
-                "experiment_name is required when storage_strategy is 'experiment'"
-            )
+        if storage_strategy == "experiment" and experiment_name is None:
+            raise ValueError("experiment_name is required when storage_strategy is 'experiment'")
 
         self.cell_type = cell_type
         self.experiment_name = experiment_name
@@ -127,7 +126,7 @@ class HTMLPageGenerator:
         self.title = title or cell_type.upper()
 
         # Initialize formatters with defaults
-        self.formatters: Dict[str, FormatterFunc] = dict(self.DEFAULT_FORMATTERS)
+        self.formatters: dict[str, FormatterFunc] = dict(self.DEFAULT_FORMATTERS)
 
     def register_formatter(
         self,
@@ -148,7 +147,7 @@ class HTMLPageGenerator:
         """
         self.formatters[stat_key] = formatter_func
 
-    def get_storage_key(self, page_num: Optional[int] = None) -> str:
+    def get_storage_key(self, page_num: int | None = None) -> str:
         """
         Get the localStorage key based on the configured strategy.
 
@@ -161,19 +160,17 @@ class HTMLPageGenerator:
         Raises:
             ValueError: If strategy is 'page-specific' and page_num is None.
         """
-        if self.storage_strategy == 'page-specific':
+        if self.storage_strategy == "page-specific":
             if page_num is None:
-                raise ValueError(
-                    "page_num is required for 'page-specific' storage strategy"
-                )
-            return f'{self.cell_type}_labels_page{page_num}'
-        elif self.storage_strategy == 'global':
-            return f'{self.cell_type}_annotations'
-        elif self.storage_strategy == 'experiment':
-            return f'{self.cell_type}_{self.experiment_name}_annotations'
+                raise ValueError("page_num is required for 'page-specific' storage strategy")
+            return f"{self.cell_type}_labels_page{page_num}"
+        elif self.storage_strategy == "global":
+            return f"{self.cell_type}_annotations"
+        elif self.storage_strategy == "experiment":
+            return f"{self.cell_type}_{self.experiment_name}_annotations"
         else:
             # Fallback to global
-            return f'{self.cell_type}_annotations'
+            return f"{self.cell_type}_annotations"
 
     def _generate_css(self) -> str:
         """
@@ -183,7 +180,7 @@ class HTMLPageGenerator:
             CSS string for inclusion in HTML <style> tags.
         """
         c = self.COLORS
-        return f'''
+        return f"""
         * {{ box-sizing: border-box; margin: 0; padding: 0; }}
         body {{ font-family: monospace; background: {c['bg_primary']}; color: {c['text_primary']}; }}
 
@@ -409,7 +406,7 @@ class HTMLPageGenerator:
             justify-content: center;
             gap: 10px;
         }}
-        '''
+        """
 
     def _generate_js(self, total_pages: int = 1) -> str:
         """
@@ -431,7 +428,7 @@ class HTMLPageGenerator:
         """
         storage_key = self.get_storage_key(page_num=1)  # Base key for global/experiment
 
-        return f'''
+        return f"""
         const CELL_TYPE = '{_esc(self.cell_type)}';
         const EXPERIMENT_NAME = '{_esc(self.experiment_name or "")}';
         const TOTAL_PAGES = {total_pages};
@@ -702,13 +699,13 @@ class HTMLPageGenerator:
 
         // Initialize
         loadAnnotations();
-        '''
+        """
 
     def _generate_nav_html(
         self,
         page_num: int,
         total_pages: int,
-        page_prefix: str = 'page',
+        page_prefix: str = "page",
     ) -> str:
         """
         Generate navigation buttons HTML.
@@ -736,10 +733,10 @@ class HTMLPageGenerator:
                 f'<a href="{page_prefix}_{page_num + 1}.html" class="nav-btn">Next</a>'
             )
 
-        nav_parts.append('</div>')
-        return ''.join(nav_parts)
+        nav_parts.append("</div>")
+        return "".join(nav_parts)
 
-    def _format_stats(self, stats: Dict[str, Any]) -> str:
+    def _format_stats(self, stats: dict[str, Any]) -> str:
         """
         Format statistics dictionary using registered formatters.
 
@@ -764,9 +761,9 @@ class HTMLPageGenerator:
                 else:
                     parts.append(f"{key}: {value}")
 
-        return ' | '.join(parts)
+        return " | ".join(parts)
 
-    def _generate_card_html(self, sample: Dict[str, Any]) -> str:
+    def _generate_card_html(self, sample: dict[str, Any]) -> str:
         """
         Generate HTML for a single sample card.
 
@@ -780,14 +777,14 @@ class HTMLPageGenerator:
         Returns:
             HTML string for the card.
         """
-        uid = _esc(sample['uid'])
-        img_b64 = sample['image']
-        mime = sample.get('mime_type', 'jpeg')
-        stats = sample.get('stats', {})
+        uid = _esc(sample["uid"])
+        img_b64 = sample["image"]
+        mime = sample.get("mime_type", "jpeg")
+        stats = sample.get("stats", {})
 
         stats_str = self._format_stats(stats)
 
-        return f'''
+        return f"""
         <div class="card" id="{uid}" data-label="-1">
             <div class="card-img-container">
                 <img src="data:image/{mime};base64,{img_b64}" alt="{uid}">
@@ -804,15 +801,15 @@ class HTMLPageGenerator:
                 </div>
             </div>
         </div>
-'''
+"""
 
     def generate_index_html(
         self,
         total_samples: int,
         total_pages: int,
-        extra_stats: Optional[Dict[str, Any]] = None,
-        page_prefix: str = 'page',
-        subtitle: Optional[str] = None,
+        extra_stats: dict[str, Any] | None = None,
+        page_prefix: str = "page",
+        subtitle: str | None = None,
     ) -> str:
         """
         Generate the index/landing page HTML.
@@ -832,20 +829,20 @@ class HTMLPageGenerator:
             subtitle = "Cell Annotation Interface"
 
         # Build extra stats HTML
-        extra_stats_html = ''
+        extra_stats_html = ""
         if extra_stats:
             for label, value in extra_stats.items():
-                extra_stats_html += f'''
+                extra_stats_html += f"""
             <div class="stat">
                 <span>{_esc(label)}</span>
                 <span class="number">{_esc(value)}</span>
-            </div>'''
+            </div>"""
 
         # Build storage key for export
         storage_key_js = self._get_storage_key_js()
 
         c = self.COLORS
-        return f'''<!DOCTYPE html>
+        return f"""<!DOCTYPE html>
 <html>
 <head>
     <title>{_esc(self.title)}</title>
@@ -1042,7 +1039,7 @@ class HTMLPageGenerator:
         }}
     </script>
 </body>
-</html>'''
+</html>"""
 
     def _get_storage_key_js(self) -> str:
         """
@@ -1051,21 +1048,21 @@ class HTMLPageGenerator:
         Returns:
             JavaScript code that sets STORAGE_KEY variable (used by index pages).
         """
-        if self.storage_strategy == 'experiment':
-            return f'''
+        if self.storage_strategy == "experiment":
+            return """
         const STORAGE_KEY = CELL_TYPE + '_' + EXPERIMENT_NAME + '_annotations';
-            '''
+            """
         else:  # global or page-specific (index page always uses global key)
-            return '''
+            return """
         const STORAGE_KEY = CELL_TYPE + '_annotations';
-            '''
+            """
 
     def generate_page_html(
         self,
-        samples: List[Dict[str, Any]],
+        samples: list[dict[str, Any]],
         page_num: int,
         total_pages: int,
-        page_prefix: str = 'page',
+        page_prefix: str = "page",
     ) -> str:
         """
         Generate an annotation page HTML.
@@ -1086,12 +1083,14 @@ class HTMLPageGenerator:
         nav_html = self._generate_nav_html(page_num, total_pages, page_prefix)
 
         # Generate cards
-        cards_html = ''.join(self._generate_card_html(sample) for sample in samples)
+        cards_html = "".join(self._generate_card_html(sample) for sample in samples)
 
         # Page-specific JS variable for storage key calculation
-        page_num_js = f'const PAGE_NUM = {page_num};' if self.storage_strategy == 'page-specific' else ''
+        page_num_js = (
+            f"const PAGE_NUM = {page_num};" if self.storage_strategy == "page-specific" else ""
+        )
 
-        return f'''<!DOCTYPE html>
+        return f"""<!DOCTYPE html>
 <html>
 <head>
     <title>{_esc(self.title)} - Page {page_num}/{total_pages}</title>
@@ -1137,15 +1136,15 @@ class HTMLPageGenerator:
         {self._generate_js(total_pages)}
     </script>
 </body>
-</html>'''
+</html>"""
 
     def export_to_html(
         self,
-        samples: List[Dict[str, Any]],
-        output_dir: Union[str, Path],
-        page_prefix: str = 'page',
-        subtitle: Optional[str] = None,
-        extra_stats: Optional[Dict[str, Any]] = None,
+        samples: list[dict[str, Any]],
+        output_dir: str | Path,
+        page_prefix: str = "page",
+        subtitle: str | None = None,
+        extra_stats: dict[str, Any] | None = None,
         verbose: bool = True,
     ) -> tuple[int, int]:
         """
@@ -1177,7 +1176,7 @@ class HTMLPageGenerator:
 
         # Paginate samples
         pages = [
-            samples[i:i + self.samples_per_page]
+            samples[i : i + self.samples_per_page]
             for i in range(0, len(samples), self.samples_per_page)
         ]
         total_pages = len(pages)
@@ -1195,7 +1194,7 @@ class HTMLPageGenerator:
             )
 
             page_path = output_dir / f"{page_prefix}_{page_num}.html"
-            with open(page_path, 'w', encoding='utf-8') as f:
+            with open(page_path, "w", encoding="utf-8") as f:
                 f.write(html)
 
             if verbose:
@@ -1211,8 +1210,8 @@ class HTMLPageGenerator:
             subtitle=subtitle,
         )
 
-        index_path = output_dir / 'index.html'
-        with open(index_path, 'w', encoding='utf-8') as f:
+        index_path = output_dir / "index.html"
+        with open(index_path, "w", encoding="utf-8") as f:
             f.write(index_html)
 
         if verbose:
@@ -1227,11 +1226,11 @@ class HTMLPageGenerator:
 # =============================================================================
 
 import base64
-import h5py
 import json
 import re
 from io import BytesIO
 
+import h5py
 import numpy as np
 from PIL import Image
 
@@ -1240,7 +1239,7 @@ from segmentation.utils.logging import get_logger
 _logger = get_logger(__name__)
 
 
-def load_samples_from_ram(tiles_dir, slide_image, pixel_size_um, cell_type='mk', max_samples=None):
+def load_samples_from_ram(tiles_dir, slide_image, pixel_size_um, cell_type="mk", max_samples=None):
     """
     Load cell samples from segmentation output, using in-memory slide image.
 
@@ -1258,8 +1257,8 @@ def load_samples_from_ram(tiles_dir, slide_image, pixel_size_um, cell_type='mk',
         List of sample dicts with image data and metadata
     """
     from segmentation.io.html_export import (
-        get_largest_connected_component,
         draw_mask_contour,
+        get_largest_connected_component,
         percentile_normalize,
     )
 
@@ -1268,8 +1267,7 @@ def load_samples_from_ram(tiles_dir, slide_image, pixel_size_um, cell_type='mk',
         return []
 
     samples = []
-    tile_dirs = sorted([d for d in tiles_dir.iterdir() if d.is_dir()],
-                       key=lambda x: int(x.name))
+    tile_dirs = sorted([d for d in tiles_dir.iterdir() if d.is_dir()], key=lambda x: int(x.name))
 
     for tile_dir in tile_dirs:
         features_file = tile_dir / "features.json"
@@ -1280,10 +1278,10 @@ def load_samples_from_ram(tiles_dir, slide_image, pixel_size_um, cell_type='mk',
             continue
 
         # Load tile window coordinates
-        with open(window_file, 'r') as f:
+        with open(window_file) as f:
             window_str = f.read().strip()
         try:
-            matches = re.findall(r'slice\((\d+),\s*(\d+)', window_str)
+            matches = re.findall(r"slice\((\d+),\s*(\d+)", window_str)
             if len(matches) >= 2:
                 tile_y1, tile_y2 = int(matches[0][0]), int(matches[0][1])
                 tile_x1, tile_x2 = int(matches[1][0]), int(matches[1][1])
@@ -1294,40 +1292,40 @@ def load_samples_from_ram(tiles_dir, slide_image, pixel_size_um, cell_type='mk',
             continue
 
         # Load features
-        with open(features_file, 'r') as f:
+        with open(features_file) as f:
             tile_features = json.load(f)
 
         # Load segmentation masks
-        with h5py.File(seg_file, 'r') as f:
-            masks = f['labels'][0]  # Shape: (H, W)
+        with h5py.File(seg_file, "r") as f:
+            masks = f["labels"][0]  # Shape: (H, W)
 
         # For HSPCs, sort by solidity (higher = more confident/solid shape)
-        if cell_type == 'hspc':
-            tile_features = sorted(tile_features,
-                                   key=lambda x: x['features'].get('solidity', 0),
-                                   reverse=True)
+        if cell_type == "hspc":
+            tile_features = sorted(
+                tile_features, key=lambda x: x["features"].get("solidity", 0), reverse=True
+            )
 
         # Extract each cell
         for feat_dict in tile_features:
-            det_id = feat_dict['id']
-            features = feat_dict['features']
-            area_px = features.get('area', 0)
-            area_um2 = area_px * (pixel_size_um ** 2)
+            det_id = feat_dict["id"]
+            features = feat_dict["features"]
+            area_px = features.get("area", 0)
+            area_um2 = area_px * (pixel_size_um**2)
 
             try:
-                cell_idx = int(det_id.split('_')[1]) + 1
+                cell_idx = int(det_id.split("_")[1]) + 1
             except Exception as e:
                 _logger.debug(f"Failed to parse cell index from {det_id}: {e}")
                 continue
 
             cell_mask = masks == cell_idx
             if not cell_mask.any():
-                cell_mask = masks == int(det_id.split('_')[1])
+                cell_mask = masks == int(det_id.split("_")[1])
                 if not cell_mask.any():
                     continue
 
             # For MKs, extract only the largest connected component
-            if cell_type == 'mk':
+            if cell_type == "mk":
                 cell_mask = get_largest_connected_component(cell_mask)
                 if not cell_mask.any():
                     continue
@@ -1401,43 +1399,46 @@ def load_samples_from_ram(tiles_dir, slide_image, pixel_size_um, cell_type='mk',
                 mask_resized = np.array(mask_pil) > 127
 
                 # Draw solid bright green contour on the image (6px thick)
-                crop_with_contour = draw_mask_contour(crop_resized, mask_resized,
-                                                       color=(0, 255, 0), dotted=False)
+                crop_with_contour = draw_mask_contour(
+                    crop_resized, mask_resized, color=(0, 255, 0), dotted=False
+                )
             else:
                 crop_with_contour = crop_resized
 
             # Convert to base64 (JPEG for smaller file sizes)
             pil_img_final = Image.fromarray(crop_with_contour)
             buffer = BytesIO()
-            pil_img_final.save(buffer, format='JPEG', quality=85)
-            img_b64 = base64.b64encode(buffer.getvalue()).decode('utf-8')
+            pil_img_final.save(buffer, format="JPEG", quality=85)
+            img_b64 = base64.b64encode(buffer.getvalue()).decode("utf-8")
 
             # Use global center from features.json if available, otherwise compute
-            if 'center' in feat_dict:
+            if "center" in feat_dict:
                 # center is already in global coordinates
-                global_centroid_x = int(feat_dict['center'][0])
-                global_centroid_y = int(feat_dict['center'][1])
+                global_centroid_x = int(feat_dict["center"][0])
+                global_centroid_y = int(feat_dict["center"][1])
             else:
                 # Backwards compatibility: compute from tile origin + local centroid
                 global_centroid_x = tile_x1 + centroid_x
                 global_centroid_y = tile_y1 + centroid_y
 
             # Get global_id if available
-            global_id = feat_dict.get('global_id', None)
+            global_id = feat_dict.get("global_id", None)
 
-            samples.append({
-                'tile_id': tile_dir.name,
-                'det_id': det_id,
-                'global_id': global_id,
-                'area_px': area_px,
-                'area_um2': area_um2,
-                'image': img_b64,
-                'features': features,
-                'solidity': features.get('solidity', 0),
-                'circularity': features.get('circularity', 0),
-                'global_x': global_centroid_x,
-                'global_y': global_centroid_y
-            })
+            samples.append(
+                {
+                    "tile_id": tile_dir.name,
+                    "det_id": det_id,
+                    "global_id": global_id,
+                    "area_px": area_px,
+                    "area_um2": area_um2,
+                    "image": img_b64,
+                    "features": features,
+                    "solidity": features.get("solidity", 0),
+                    "circularity": features.get("circularity", 0),
+                    "global_x": global_centroid_x,
+                    "global_y": global_centroid_y,
+                }
+            )
 
             if max_samples and len(samples) >= max_samples:
                 return samples
@@ -1445,7 +1446,16 @@ def load_samples_from_ram(tiles_dir, slide_image, pixel_size_um, cell_type='mk',
     return samples
 
 
-def create_mk_hspc_index(output_dir, total_mks, total_hspcs, mk_pages, hspc_pages, slides_summary=None, timestamp=None, experiment_name=None):
+def create_mk_hspc_index(
+    output_dir,
+    total_mks,
+    total_hspcs,
+    mk_pages,
+    hspc_pages,
+    slides_summary=None,
+    timestamp=None,
+    experiment_name=None,
+):
     """
     Create the main index.html page for MK + HSPC batch review.
 
@@ -1459,9 +1469,17 @@ def create_mk_hspc_index(output_dir, total_mks, total_hspcs, mk_pages, hspc_page
         timestamp: Segmentation timestamp string
         experiment_name: Optional experiment identifier for localStorage isolation and download filenames
     """
-    subtitle_html = f'<p style="color: #888; margin-bottom: 10px;">{slides_summary}</p>' if slides_summary else ''
-    timestamp_html = f'<p style="color: #666; font-size: 0.9em;">Segmentation: {timestamp}</p>' if timestamp else ''
-    html = f'''<!DOCTYPE html>
+    subtitle_html = (
+        f'<p style="color: #888; margin-bottom: 10px;">{slides_summary}</p>'
+        if slides_summary
+        else ""
+    )
+    timestamp_html = (
+        f'<p style="color: #666; font-size: 0.9em;">Segmentation: {timestamp}</p>'
+        if timestamp
+        else ""
+    )
+    html = f"""<!DOCTYPE html>
 <html>
 <head>
     <title>MK + HSPC Cell Review</title>
@@ -1648,12 +1666,14 @@ def create_mk_hspc_index(output_dir, total_mks, total_hspcs, mk_pages, hspc_page
         }}
     </script>
 </body>
-</html>'''
-    with open(Path(output_dir) / 'index.html', 'w') as f:
+</html>"""
+    with open(Path(output_dir) / "index.html", "w") as f:
         f.write(html)
 
 
-def generate_mk_hspc_page_html(samples, cell_type, page_num, total_pages, slides_summary=None, experiment_name=None):
+def generate_mk_hspc_page_html(
+    samples, cell_type, page_num, total_pages, slides_summary=None, experiment_name=None
+):
     """
     Generate HTML for a single MK or HSPC annotation page.
 
@@ -1672,7 +1692,7 @@ def generate_mk_hspc_page_html(samples, cell_type, page_num, total_pages, slides
     cell_type_safe = _esc(cell_type)
 
     # Build subtitle HTML
-    subtitle_html = ''
+    subtitle_html = ""
     if slides_summary:
         subtitle_html = f'<div class="header-subtitle">{_esc(slides_summary)}</div>'
 
@@ -1683,29 +1703,35 @@ def generate_mk_hspc_page_html(samples, cell_type, page_num, total_pages, slides
     nav_html += f'<span class="page-info">Page {page_num} of {total_pages}</span>'
     if page_num < total_pages:
         nav_html += f'<a href="{cell_type_safe}_page{page_num+1}.html" class="nav-btn">Next</a>'
-    nav_html += '</div>'
+    nav_html += "</div>"
 
     cards_html = ""
     for sample in samples:
-        slide = sample.get('slide', 'unknown').replace('.', '-')
-        global_x = sample.get('global_x', 0)
-        global_y = sample.get('global_y', 0)
+        slide = sample.get("slide", "unknown").replace(".", "-")
+        global_x = sample.get("global_x", 0)
+        global_y = sample.get("global_y", 0)
         # Always use spatial UID format for consistency across all cell types
         # Format: {slide}_{celltype}_{round(x)}_{round(y)}
         uid = _esc(f"{slide}_{cell_type}_{int(round(global_x))}_{int(round(global_y))}")
         # Extract short slide name (e.g., "FGC1" from "2025_11_18_FGC1")
-        short_slide = slide.split('_')[-1] if '_' in slide else slide
-        display_id = _esc(f"{short_slide}_{cell_type}_{int(round(global_x))}_{int(round(global_y))}")
+        short_slide = slide.split("_")[-1] if "_" in slide else slide
+        display_id = _esc(
+            f"{short_slide}_{cell_type}_{int(round(global_x))}_{int(round(global_y))}"
+        )
         # Keep legacy global_id in data attribute for backwards compatibility
-        legacy_global_id = sample.get('global_id')
-        area_um2 = sample.get('area_um2', 0)
-        area_px = sample.get('area_px', 0)
-        mk_score = sample.get('mk_score')
-        score_html = f'<div class="card-score">CLF: {mk_score:.2f}</div>' if mk_score is not None else ''
-        img_b64 = sample['image']
+        legacy_global_id = sample.get("global_id")
+        area_um2 = sample.get("area_um2", 0)
+        area_px = sample.get("area_px", 0)
+        mk_score = sample.get("mk_score")
+        score_html = (
+            f'<div class="card-score">CLF: {mk_score:.2f}</div>' if mk_score is not None else ""
+        )
+        img_b64 = sample["image"]
         # Include legacy_global_id as data attribute for migration support
-        legacy_attr = f' data-legacy-id="{_esc(legacy_global_id)}"' if legacy_global_id is not None else ''
-        cards_html += f'''
+        legacy_attr = (
+            f' data-legacy-id="{_esc(legacy_global_id)}"' if legacy_global_id is not None else ""
+        )
+        cards_html += f"""
         <div class="card" id="{uid}" data-label="-1"{legacy_attr}>
             <div class="card-img-container">
                 <img src="data:image/jpeg;base64,{img_b64}" alt="{display_id}">
@@ -1723,12 +1749,12 @@ def generate_mk_hspc_page_html(samples, cell_type, page_num, total_pages, slides
                 </div>
             </div>
         </div>
-'''
+"""
 
     prev_page = page_num - 1
     next_page = page_num + 1
 
-    html = f'''<!DOCTYPE html>
+    html = f"""<!DOCTYPE html>
 <html>
 <head>
     <title>{cell_type_display} - Page {page_num}/{total_pages}</title>
@@ -2010,11 +2036,13 @@ def generate_mk_hspc_page_html(samples, cell_type, page_num, total_pages, slides
         loadAnnotations();
     </script>
 </body>
-</html>'''
+</html>"""
     return html
 
 
-def generate_mk_hspc_pages(samples, cell_type, output_dir, samples_per_page, slides_summary=None, experiment_name=None):
+def generate_mk_hspc_pages(
+    samples, cell_type, output_dir, samples_per_page, slides_summary=None, experiment_name=None
+):
     """
     Generate separate annotation pages for MK or HSPC samples.
 
@@ -2030,22 +2058,37 @@ def generate_mk_hspc_pages(samples, cell_type, output_dir, samples_per_page, sli
         _logger.info(f"  No {cell_type.upper()} samples to export")
         return
 
-    pages = [samples[i:i+samples_per_page] for i in range(0, len(samples), samples_per_page)]
+    pages = [samples[i : i + samples_per_page] for i in range(0, len(samples), samples_per_page)]
     total_pages = len(pages)
 
     _logger.info(f"  Generating {total_pages} {cell_type.upper()} pages...")
 
     for page_num in range(1, total_pages + 1):
         page_samples = pages[page_num - 1]
-        html = generate_mk_hspc_page_html(page_samples, cell_type, page_num, total_pages, slides_summary=slides_summary, experiment_name=experiment_name)
+        html = generate_mk_hspc_page_html(
+            page_samples,
+            cell_type,
+            page_num,
+            total_pages,
+            slides_summary=slides_summary,
+            experiment_name=experiment_name,
+        )
 
         html_path = Path(output_dir) / f"{cell_type}_page{page_num}.html"
-        with open(html_path, 'w') as f:
+        with open(html_path, "w") as f:
             f.write(html)
 
 
-def export_mk_hspc_html_from_ram(slide_data, output_base, html_output_dir, samples_per_page=300,
-                                  mk_min_area_um=200, mk_max_area_um=2000, timestamp=None, experiment_name=None):
+def export_mk_hspc_html_from_ram(
+    slide_data,
+    output_base,
+    html_output_dir,
+    samples_per_page=300,
+    mk_min_area_um=200,
+    mk_max_area_um=2000,
+    timestamp=None,
+    experiment_name=None,
+):
     """
     Export MK + HSPC HTML annotation pages using slide images already in RAM.
 
@@ -2087,7 +2130,7 @@ def export_mk_hspc_html_from_ram(slide_data, output_base, html_output_dir, sampl
         if summary_file.exists():
             with open(summary_file) as f:
                 summary = json.load(f)
-                ps = summary.get('pixel_size_um')
+                ps = summary.get("pixel_size_um")
                 if ps:
                     pixel_size_um = ps[0] if isinstance(ps, list) else ps
         if pixel_size_um == _LEGACY_PIXEL_SIZE_UM:
@@ -2097,27 +2140,23 @@ def export_mk_hspc_html_from_ram(slide_data, output_base, html_output_dir, sampl
                 stacklevel=2,
             )
 
-        slide_image = data['image']
+        slide_image = data["image"]
 
         # Load MK samples (uses largest connected component)
         mk_samples = load_samples_from_ram(
-            slide_dir / "mk" / "tiles",
-            slide_image, pixel_size_um,
-            cell_type='mk'
+            slide_dir / "mk" / "tiles", slide_image, pixel_size_um, cell_type="mk"
         )
 
         # Load HSPC samples (sorted by solidity/confidence)
         hspc_samples = load_samples_from_ram(
-            slide_dir / "hspc" / "tiles",
-            slide_image, pixel_size_um,
-            cell_type='hspc'
+            slide_dir / "hspc" / "tiles", slide_image, pixel_size_um, cell_type="hspc"
         )
 
         # Add slide name to each sample
         for s in mk_samples:
-            s['slide'] = slide_name
+            s["slide"] = slide_name
         for s in hspc_samples:
-            s['slide'] = slide_name
+            s["slide"] = slide_name
 
         all_mk_samples.extend(mk_samples)
         all_hspc_samples.extend(hspc_samples)
@@ -2125,17 +2164,17 @@ def export_mk_hspc_html_from_ram(slide_data, output_base, html_output_dir, sampl
         _logger.info(f"    {len(mk_samples)} MKs, {len(hspc_samples)} HSPCs")
 
     # Filter MK by size
-    um_to_px_factor = _LEGACY_PIXEL_SIZE_UM ** 2
+    um_to_px_factor = _LEGACY_PIXEL_SIZE_UM**2
     mk_min_px = int(mk_min_area_um / um_to_px_factor)
     mk_max_px = int(mk_max_area_um / um_to_px_factor)
 
     mk_before = len(all_mk_samples)
-    all_mk_samples = [s for s in all_mk_samples if mk_min_px <= s.get('area_px', 0) <= mk_max_px]
+    all_mk_samples = [s for s in all_mk_samples if mk_min_px <= s.get("area_px", 0) <= mk_max_px]
     _logger.info(f"  MK size filter: {mk_before} -> {len(all_mk_samples)}")
 
     # Sort by area
-    all_mk_samples.sort(key=lambda x: x.get('area_um2', 0), reverse=True)
-    all_hspc_samples.sort(key=lambda x: x.get('area_um2', 0), reverse=True)
+    all_mk_samples.sort(key=lambda x: x.get("area_um2", 0), reverse=True)
+    all_hspc_samples.sort(key=lambda x: x.get("area_um2", 0), reverse=True)
 
     # Build slides summary for subtitle (e.g., "16 slides (FGC1, FGC2, ...)")
     slide_names = sorted(slide_data.keys())
@@ -2144,27 +2183,56 @@ def export_mk_hspc_html_from_ram(slide_data, output_base, html_output_dir, sampl
         # Extract short identifiers (e.g., "FGC1" from "2025_11_18_FGC1")
         short_names = []
         for name in slide_names:
-            parts = name.split('_')
+            parts = name.split("_")
             # Take the last part that looks like a group identifier
             short = parts[-1] if parts else name
             short_names.append(short)
         # Show first few names with ellipsis if many
         if len(short_names) > 6:
-            preview = ', '.join(short_names[:4]) + ', ...'
+            preview = ", ".join(short_names[:4]) + ", ..."
         else:
-            preview = ', '.join(short_names)
+            preview = ", ".join(short_names)
         slides_summary = f"{num_slides} slides ({preview})"
     else:
         slides_summary = None
 
     # Generate pages
-    generate_mk_hspc_pages(all_mk_samples, "mk", html_output_dir, samples_per_page, slides_summary=slides_summary, experiment_name=experiment_name)
-    generate_mk_hspc_pages(all_hspc_samples, "hspc", html_output_dir, samples_per_page, slides_summary=slides_summary, experiment_name=experiment_name)
+    generate_mk_hspc_pages(
+        all_mk_samples,
+        "mk",
+        html_output_dir,
+        samples_per_page,
+        slides_summary=slides_summary,
+        experiment_name=experiment_name,
+    )
+    generate_mk_hspc_pages(
+        all_hspc_samples,
+        "hspc",
+        html_output_dir,
+        samples_per_page,
+        slides_summary=slides_summary,
+        experiment_name=experiment_name,
+    )
 
     # Create index
-    mk_pages = (len(all_mk_samples) + samples_per_page - 1) // samples_per_page if all_mk_samples else 0
-    hspc_pages = (len(all_hspc_samples) + samples_per_page - 1) // samples_per_page if all_hspc_samples else 0
-    create_mk_hspc_index(html_output_dir, len(all_mk_samples), len(all_hspc_samples), mk_pages, hspc_pages, slides_summary=slides_summary, timestamp=timestamp, experiment_name=experiment_name)
+    mk_pages = (
+        (len(all_mk_samples) + samples_per_page - 1) // samples_per_page if all_mk_samples else 0
+    )
+    hspc_pages = (
+        (len(all_hspc_samples) + samples_per_page - 1) // samples_per_page
+        if all_hspc_samples
+        else 0
+    )
+    create_mk_hspc_index(
+        html_output_dir,
+        len(all_mk_samples),
+        len(all_hspc_samples),
+        mk_pages,
+        hspc_pages,
+        slides_summary=slides_summary,
+        timestamp=timestamp,
+        experiment_name=experiment_name,
+    )
 
     _logger.info(f"\n  HTML export complete: {html_output_dir}")
     _logger.info(f"  Total: {len(all_mk_samples)} MKs, {len(all_hspc_samples)} HSPCs")

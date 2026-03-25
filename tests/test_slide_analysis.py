@@ -6,8 +6,8 @@ filtering, DataFrame export, AnnData export, and repr behaviour.
 Run with: pytest tests/test_slide_analysis.py -v
 """
 
-import pytest
 import numpy as np
+
 from segmentation.core import SlideAnalysis
 
 
@@ -15,20 +15,22 @@ def _make_detections(n=5):
     """Create sample detection dicts with morph + SAM2 features."""
     dets = []
     for i in range(n):
-        dets.append({
-            "uid": f"slide_cell_{i * 100}_{i * 200}",
-            "rf_prediction": 0.3 + i * 0.15,  # 0.3, 0.45, 0.6, 0.75, 0.9
-            "NeuN_class": "positive" if i % 2 == 0 else "negative",
-            "marker_profile": f"NeuN{'+' if i % 2 == 0 else '-'}",
-            "global_center": [i * 100, i * 200],
-            "features": {
-                "area": 500 + i * 100,
-                "solidity": 0.8 + i * 0.02,
-                "eccentricity": 0.3 + i * 0.05,
-                "sam2_0": float(i),
-                "sam2_1": float(i + 1),
-            },
-        })
+        dets.append(
+            {
+                "uid": f"slide_cell_{i * 100}_{i * 200}",
+                "rf_prediction": 0.3 + i * 0.15,  # 0.3, 0.45, 0.6, 0.75, 0.9
+                "NeuN_class": "positive" if i % 2 == 0 else "negative",
+                "marker_profile": f"NeuN{'+' if i % 2 == 0 else '-'}",
+                "global_center": [i * 100, i * 200],
+                "features": {
+                    "area": 500 + i * 100,
+                    "solidity": 0.8 + i * 0.02,
+                    "eccentricity": 0.3 + i * 0.05,
+                    "sam2_0": float(i),
+                    "sam2_1": float(i + 1),
+                },
+            }
+        )
     return dets
 
 
@@ -242,6 +244,7 @@ class TestSaveLoad:
 
         # Verify saved file is valid JSON and has correct count
         from segmentation.utils.json_utils import fast_json_load
+
         loaded = fast_json_load(out)
         assert len(loaded) == 3
         assert loaded[0]["uid"] == dets[0]["uid"]

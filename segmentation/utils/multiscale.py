@@ -13,9 +13,10 @@ Scale factors:
 - 8: 1/8 resolution (1.38 µm/px)
 """
 
-from typing import Dict, List, Tuple, Optional, Callable
-import numpy as np
+from collections.abc import Callable
+
 import cv2
+import numpy as np
 
 from segmentation.utils.logging import get_logger
 
@@ -26,64 +27,64 @@ logger = get_logger(__name__)
 SCALE_PARAMS = {
     # Ultra-coarse scale (1/64x): Aorta and major vessels
     64: {
-        'min_diameter_um': 1000,
-        'max_diameter_um': 10000,
-        'min_circularity': 0.10,
-        'min_ring_completeness': 0.15,
-        'description': 'Aorta and major vessels (>1000 µm)',
+        "min_diameter_um": 1000,
+        "max_diameter_um": 10000,
+        "min_circularity": 0.10,
+        "min_ring_completeness": 0.15,
+        "description": "Aorta and major vessels (>1000 µm)",
     },
     # Very coarse scale (1/32x): Large arteries
     32: {
-        'min_diameter_um': 500,
-        'max_diameter_um': 5000,
-        'min_circularity': 0.12,
-        'min_ring_completeness': 0.20,
-        'description': 'Large arteries (500-5000 µm)',
+        "min_diameter_um": 500,
+        "max_diameter_um": 5000,
+        "min_circularity": 0.12,
+        "min_ring_completeness": 0.20,
+        "description": "Large arteries (500-5000 µm)",
     },
     # Coarse scale (1/16x): Very large vessels only
     16: {
-        'min_diameter_um': 200,
-        'max_diameter_um': 3000,
-        'min_circularity': 0.15,
-        'min_ring_completeness': 0.25,
-        'description': 'Very large arteries (>200 µm)',
+        "min_diameter_um": 200,
+        "max_diameter_um": 3000,
+        "min_circularity": 0.15,
+        "min_ring_completeness": 0.25,
+        "description": "Very large arteries (>200 µm)",
     },
     # Coarse scale (1/8x): Large vessels only
     8: {
-        'min_diameter_um': 100,
-        'max_diameter_um': 1000,
-        'min_circularity': 0.2,
-        'min_ring_completeness': 0.3,
-        'description': 'Large arteries (100-1000 µm)',
+        "min_diameter_um": 100,
+        "max_diameter_um": 1000,
+        "min_circularity": 0.2,
+        "min_ring_completeness": 0.3,
+        "description": "Large arteries (100-1000 µm)",
     },
     # Medium scale (1/4x): Medium vessels
     4: {
-        'min_diameter_um': 50,
-        'max_diameter_um': 300,
-        'min_circularity': 0.2,
-        'min_ring_completeness': 0.3,
-        'description': 'Medium vessels (50-300 µm)',
+        "min_diameter_um": 50,
+        "max_diameter_um": 300,
+        "min_circularity": 0.2,
+        "min_ring_completeness": 0.3,
+        "description": "Medium vessels (50-300 µm)",
     },
     # Medium-fine scale (1/2x): Medium-small vessels
     2: {
-        'min_diameter_um': 20,
-        'max_diameter_um': 150,
-        'min_circularity': 0.2,
-        'min_ring_completeness': 0.3,
-        'description': 'Medium-small vessels (20-150 µm)',
+        "min_diameter_um": 20,
+        "max_diameter_um": 150,
+        "min_circularity": 0.2,
+        "min_ring_completeness": 0.3,
+        "description": "Medium-small vessels (20-150 µm)",
     },
     # Fine scale (1x): Small vessels and capillaries
     1: {
-        'min_diameter_um': 5,
-        'max_diameter_um': 75,
-        'min_circularity': 0.15,
-        'min_ring_completeness': 0.25,
-        'description': 'Small vessels and capillaries (5-75 µm)',
+        "min_diameter_um": 5,
+        "max_diameter_um": 75,
+        "min_circularity": 0.15,
+        "min_ring_completeness": 0.25,
+        "description": "Small vessels and capillaries (5-75 µm)",
     },
 }
 
 
-def get_scale_params(scale_factor: int) -> Dict:
+def get_scale_params(scale_factor: int) -> dict:
     """
     Get detection parameters appropriate for a given scale.
 
@@ -130,7 +131,7 @@ def scale_contour(contour: np.ndarray, scale_factor: int) -> np.ndarray:
     return scaled
 
 
-def scale_point(point: Tuple[float, float], scale_factor: int) -> Tuple[float, float]:
+def scale_point(point: tuple[float, float], scale_factor: int) -> tuple[float, float]:
     """
     Scale a point from scaled space to full resolution.
 
@@ -147,7 +148,7 @@ def scale_point(point: Tuple[float, float], scale_factor: int) -> Tuple[float, f
 def compute_iou_contours(
     contour1: np.ndarray,
     contour2: np.ndarray,
-    image_shape: Optional[Tuple[int, int]] = None,
+    image_shape: tuple[int, int] | None = None,
     max_render_size: int = 512,
 ) -> float:
     """
@@ -181,7 +182,7 @@ def compute_iou_contours(
     x2, y2, w2, h2 = cv2.boundingRect(c2)
 
     # Quick rejection if bounding boxes don't overlap
-    if (x1 + w1 < x2 or x2 + w2 < x1 or y1 + h1 < y2 or y2 + h2 < y1):
+    if x1 + w1 < x2 or x2 + w2 < x1 or y1 + h1 < y2 or y2 + h2 < y1:
         return 0.0
 
     # Translate contours to local coordinates (origin at min of both bounding boxes)
@@ -255,10 +256,10 @@ def compute_iou_from_masks(mask1: np.ndarray, mask2: np.ndarray) -> float:
 
 
 def merge_detections_across_scales(
-    detections: List[Dict],
+    detections: list[dict],
     iou_threshold: float = 0.3,
     tile_size: int = 3000,
-) -> List[Dict]:
+) -> list[dict]:
     """
     Merge detections from different scales, removing duplicates.
 
@@ -288,7 +289,7 @@ def merge_detections_across_scales(
     prepared = []  # (det, contour_cv2, bbox, area)
     skipped_no_outer = 0
     for det in detections:
-        outer = det.get('outer')
+        outer = det.get("outer")
         if outer is None:
             skipped_no_outer += 1
             continue
@@ -335,7 +336,7 @@ def merge_detections_across_scales(
     duplicate_count = 0
     iou_checks = 0
     area_ratio_skips = 0
-    
+
     # Progress tracking for large merge operations
     total_start = time.time()
     progress_interval = max(100, len(prepared) // 100) if len(prepared) > 0 else 100
@@ -389,7 +390,7 @@ def merge_detections_across_scales(
             merged_contours.append((contour, bbox, area))
             for cell in cells:
                 grid[cell].append(new_idx)
-        
+
         # Progress logging
         if (det_idx + 1) % progress_interval == 0:
             elapsed = time.time() - total_start
@@ -402,7 +403,7 @@ def merge_detections_across_scales(
             )
 
     logger.debug(f"Skipped {skipped_no_outer} detections with no outer contour")
-    
+
     # Summary statistics
     elapsed_total = time.time() - total_start
     avg_checks_per_det = iou_checks / len(prepared) if len(prepared) > 0 else 0
@@ -421,12 +422,8 @@ def merge_detections_across_scales(
 
 
 def generate_tile_grid_at_scale(
-    mosaic_width: int,
-    mosaic_height: int,
-    tile_size: int,
-    scale_factor: int,
-    overlap: int = 0
-) -> List[Tuple[int, int]]:
+    mosaic_width: int, mosaic_height: int, tile_size: int, scale_factor: int, overlap: int = 0
+) -> list[tuple[int, int]]:
     """
     Generate tile grid coordinates at a specific scale.
 
@@ -467,13 +464,13 @@ def generate_tile_grid_at_scale(
 
 
 def convert_detection_to_full_res(
-    detection: Dict,
+    detection: dict,
     scale_factor: int,
     tile_x_scaled: int,
     tile_y_scaled: int,
     smooth: bool = True,
     smooth_base_factor: float = 3.0,
-) -> Dict:
+) -> dict:
     """
     Convert a detection from scaled coordinates to full resolution.
 
@@ -500,13 +497,16 @@ def convert_detection_to_full_res(
     # Scale contours — stay in float64 until after offset, then cast to int32.
     # This avoids truncation errors amplified by large scale factors (up to
     # scale_factor pixels of displacement when casting before offset).
-    tile_offset = np.array([tile_x_scaled * scale_factor, tile_y_scaled * scale_factor], dtype=np.float64)
+    tile_offset = np.array(
+        [tile_x_scaled * scale_factor, tile_y_scaled * scale_factor], dtype=np.float64
+    )
 
     # Import smoothing function (lazy to avoid circular imports)
     _smooth_fn = None
     if smooth and scale_factor > 1:
         try:
             from segmentation.detection.strategies.vessel import smooth_contour_spline
+
             _smooth_fn = smooth_contour_spline
         except ImportError:
             pass
@@ -515,45 +515,46 @@ def convert_detection_to_full_res(
     effective_smoothing = smooth_base_factor * scale_factor
 
     # Arc contours are open curves — don't force periodic spline closure
-    is_arc = det.get('is_arc', False)
+    is_arc = det.get("is_arc", False)
     contour_closed = not is_arc
 
-    if 'outer' in det and det['outer'] is not None:
-        det['outer'] = scale_contour(det['outer'], scale_factor)
-        det['outer'] += tile_offset
+    if "outer" in det and det["outer"] is not None:
+        det["outer"] = scale_contour(det["outer"], scale_factor)
+        det["outer"] += tile_offset
         if _smooth_fn is not None:
-            det['outer'] = _smooth_fn(det['outer'], smoothing=effective_smoothing, force_closed=contour_closed)
-        det['outer'] = np.asarray(det['outer']).astype(np.int32)
+            det["outer"] = _smooth_fn(
+                det["outer"], smoothing=effective_smoothing, force_closed=contour_closed
+            )
+        det["outer"] = np.asarray(det["outer"]).astype(np.int32)
 
-    if 'inner' in det and det['inner'] is not None:
-        det['inner'] = scale_contour(det['inner'], scale_factor)
-        det['inner'] += tile_offset
+    if "inner" in det and det["inner"] is not None:
+        det["inner"] = scale_contour(det["inner"], scale_factor)
+        det["inner"] += tile_offset
         if _smooth_fn is not None:
-            det['inner'] = _smooth_fn(det['inner'], smoothing=effective_smoothing, force_closed=contour_closed)
-        det['inner'] = np.asarray(det['inner']).astype(np.int32)
+            det["inner"] = _smooth_fn(
+                det["inner"], smoothing=effective_smoothing, force_closed=contour_closed
+            )
+        det["inner"] = np.asarray(det["inner"]).astype(np.int32)
 
     # Scale center/centroid point
-    for key in ('center', 'centroid'):
+    for key in ("center", "centroid"):
         if key in det:
             cx, cy = det[key]
-            det[key] = [
-                (cx + tile_x_scaled) * scale_factor,
-                (cy + tile_y_scaled) * scale_factor
-            ]
+            det[key] = [(cx + tile_x_scaled) * scale_factor, (cy + tile_y_scaled) * scale_factor]
 
     # Scale center points inside features dict
-    feats = det.get('features', {})
+    feats = det.get("features", {})
     if isinstance(feats, dict):
-        for center_key in ('outer_center', 'inner_center'):
+        for center_key in ("outer_center", "inner_center"):
             if center_key in feats and feats[center_key] is not None:
                 cx, cy = feats[center_key]
                 feats[center_key] = [
                     (cx + tile_x_scaled) * scale_factor,
-                    (cy + tile_y_scaled) * scale_factor
+                    (cy + tile_y_scaled) * scale_factor,
                 ]
 
     # Add scale metadata
-    det['scale_detected'] = scale_factor
+    det["scale_detected"] = scale_factor
 
     return det
 
@@ -564,13 +565,13 @@ def run_multiscale_detection(
     mosaic_width: int,
     mosaic_height: int,
     tile_size: int = 4000,
-    scales: Optional[List[int]] = None,
+    scales: list[int] | None = None,
     pixel_size_um: float = 0.17,
     channel: int = 0,
     iou_threshold: float = 0.3,
-    progress_callback: Optional[Callable] = None,
-    **detect_kwargs
-) -> List[Dict]:
+    progress_callback: Callable | None = None,
+    **detect_kwargs,
+) -> list[dict]:
     """
     Run vessel detection at multiple scales and merge results.
 
@@ -602,9 +603,7 @@ def run_multiscale_detection(
         scale_params = get_scale_params(scale)
 
         # Get tile grid for this scale
-        tiles = generate_tile_grid_at_scale(
-            mosaic_width, mosaic_height, tile_size, scale
-        )
+        tiles = generate_tile_grid_at_scale(mosaic_width, mosaic_height, tile_size, scale)
 
         logger.info(
             f"Scale 1/{scale}x: {len(tiles)} tiles, "
@@ -622,16 +621,14 @@ def run_multiscale_detection(
             detections = detect_fn(
                 tile,
                 pixel_size_um=scale_pixel_size,
-                min_diameter_um=scale_params['min_diameter_um'],
-                max_diameter_um=scale_params['max_diameter_um'],
-                **detect_kwargs
+                min_diameter_um=scale_params["min_diameter_um"],
+                max_diameter_um=scale_params["max_diameter_um"],
+                **detect_kwargs,
             )
 
             # Convert to full resolution coordinates
             for det in detections:
-                det_fullres = convert_detection_to_full_res(
-                    det, scale, tile_x, tile_y
-                )
+                det_fullres = convert_detection_to_full_res(det, scale, tile_x, tile_y)
                 all_detections.append(det_fullres)
 
             if progress_callback:

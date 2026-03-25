@@ -7,34 +7,36 @@ and return expected results.
 Run with: pytest tests/test_api.py -v
 """
 
-import pytest
-import numpy as np
-from pathlib import Path
-from unittest.mock import patch, MagicMock
+from unittest.mock import MagicMock, patch
 
-from segmentation.core import SlideAnalysis
+import numpy as np
+import pytest
+
 from segmentation.api import tl
+from segmentation.core import SlideAnalysis
 
 
 def _make_detections(n=5):
     """Create sample detection dicts with features for scoring."""
     dets = []
     for i in range(n):
-        dets.append({
-            "uid": f"slide_cell_{i * 100}_{i * 200}",
-            "rf_prediction": 0.5,
-            "global_center": [i * 100, i * 200],
-            "features": {
-                "area": 500 + i * 100,
-                "solidity": 0.8 + i * 0.02,
-                "ch1_mean": 100.0 + i * 10,
-                "ch1_snr": 1.0 + i * 0.5,
-                "ch1_background": 50.0,
-                "ch1_median_raw": 80.0 + i * 5,
-                "sam2_0": float(i),
-                "sam2_1": float(i + 1),
-            },
-        })
+        dets.append(
+            {
+                "uid": f"slide_cell_{i * 100}_{i * 200}",
+                "rf_prediction": 0.5,
+                "global_center": [i * 100, i * 200],
+                "features": {
+                    "area": 500 + i * 100,
+                    "solidity": 0.8 + i * 0.02,
+                    "ch1_mean": 100.0 + i * 10,
+                    "ch1_snr": 1.0 + i * 0.5,
+                    "ch1_background": 50.0,
+                    "ch1_median_raw": 80.0 + i * 5,
+                    "sam2_0": float(i),
+                    "sam2_1": float(i + 1),
+                },
+            }
+        )
     return dets
 
 
@@ -45,13 +47,15 @@ class TestTlScore:
     def test_score_applies_predictions(self, mock_load_clf):
         """Verify score() calls predict_proba and writes rf_prediction."""
         mock_pipeline = MagicMock()
-        mock_pipeline.predict_proba.return_value = np.array([
-            [0.2, 0.8],
-            [0.6, 0.4],
-            [0.1, 0.9],
-            [0.5, 0.5],
-            [0.3, 0.7],
-        ])
+        mock_pipeline.predict_proba.return_value = np.array(
+            [
+                [0.2, 0.8],
+                [0.6, 0.4],
+                [0.1, 0.9],
+                [0.5, 0.5],
+                [0.3, 0.7],
+            ]
+        )
         mock_load_clf.return_value = {
             "pipeline": mock_pipeline,
             "feature_names": ["area", "solidity"],
@@ -122,9 +126,13 @@ class TestTlScore:
     def test_score_invalidates_features_df_cache(self, mock_load_clf):
         """Scoring should clear the cached features_df."""
         mock_pipeline = MagicMock()
-        mock_pipeline.predict_proba.return_value = np.array([
-            [0.2, 0.8], [0.6, 0.4], [0.1, 0.9],
-        ])
+        mock_pipeline.predict_proba.return_value = np.array(
+            [
+                [0.2, 0.8],
+                [0.6, 0.4],
+                [0.1, 0.9],
+            ]
+        )
         mock_load_clf.return_value = {
             "pipeline": mock_pipeline,
             "feature_names": ["area"],
@@ -173,10 +181,13 @@ class TestTlMarkers:
         mock_module = MagicMock()
         mock_module.classify_single_marker = mock_classify
 
-        with patch.dict("sys.modules", {
-            "scripts": MagicMock(),
-            "scripts.classify_markers": mock_module,
-        }):
+        with patch.dict(
+            "sys.modules",
+            {
+                "scripts": MagicMock(),
+                "scripts.classify_markers": mock_module,
+            },
+        ):
             result = tl.markers(slide, marker_channels=[1], marker_names=["NeuN"])
             assert result is slide
             # classify_single_marker should NOT have been called
@@ -184,19 +195,26 @@ class TestTlMarkers:
 
     def test_markers_calls_classify_per_channel(self):
         """markers() should call classify_single_marker for each channel."""
-        mock_classify = MagicMock(return_value={
-            "n_positive": 3, "n_negative": 2, "threshold": 1.5,
-        })
+        mock_classify = MagicMock(
+            return_value={
+                "n_positive": 3,
+                "n_negative": 2,
+                "threshold": 1.5,
+            }
+        )
         mock_module = MagicMock()
         mock_module.classify_single_marker = mock_classify
 
         dets = _make_detections(5)
         slide = SlideAnalysis.from_detections(dets)
 
-        with patch.dict("sys.modules", {
-            "scripts": MagicMock(),
-            "scripts.classify_markers": mock_module,
-        }):
+        with patch.dict(
+            "sys.modules",
+            {
+                "scripts": MagicMock(),
+                "scripts.classify_markers": mock_module,
+            },
+        ):
             result = tl.markers(
                 slide,
                 marker_channels=[1, 2],
@@ -216,6 +234,7 @@ class TestTlMarkers:
 
     def test_markers_builds_marker_profile(self):
         """markers() should build marker_profile from marker classes."""
+
         def fake_classify(detections, channel, marker_name, **kwargs):
             target = "positive" if channel == 1 else "negative"
             for det in detections:
@@ -228,10 +247,13 @@ class TestTlMarkers:
         dets = _make_detections(3)
         slide = SlideAnalysis.from_detections(dets)
 
-        with patch.dict("sys.modules", {
-            "scripts": MagicMock(),
-            "scripts.classify_markers": mock_module,
-        }):
+        with patch.dict(
+            "sys.modules",
+            {
+                "scripts": MagicMock(),
+                "scripts.classify_markers": mock_module,
+            },
+        ):
             tl.markers(
                 slide,
                 marker_channels=[1, 2],
@@ -245,9 +267,13 @@ class TestTlMarkers:
 
     def test_markers_invalidates_features_df_cache(self):
         """markers() should clear cached features_df."""
-        mock_classify = MagicMock(return_value={
-            "n_positive": 2, "n_negative": 1, "threshold": 1.0,
-        })
+        mock_classify = MagicMock(
+            return_value={
+                "n_positive": 2,
+                "n_negative": 1,
+                "threshold": 1.0,
+            }
+        )
         mock_module = MagicMock()
         mock_module.classify_single_marker = mock_classify
 
@@ -256,10 +282,13 @@ class TestTlMarkers:
         _ = slide.features_df
         assert slide._features_df is not None
 
-        with patch.dict("sys.modules", {
-            "scripts": MagicMock(),
-            "scripts.classify_markers": mock_module,
-        }):
+        with patch.dict(
+            "sys.modules",
+            {
+                "scripts": MagicMock(),
+                "scripts.classify_markers": mock_module,
+            },
+        ):
             tl.markers(slide, marker_channels=[1], marker_names=["NeuN"])
 
         assert slide._features_df is None
@@ -324,16 +353,21 @@ class TestTlTrain:
         mock_train_module = MagicMock()
         mock_train_module.load_features_and_annotations = mock_load_fn
 
-        with patch.dict("sys.modules", {
-            "train_classifier": mock_train_module,
-            "sklearn.ensemble": MagicMock(RandomForestClassifier=mock_rf_cls),
-            "sklearn.model_selection": MagicMock(cross_val_score=mock_cv),
-            "joblib": mock_joblib,
-        }):
+        with patch.dict(
+            "sys.modules",
+            {
+                "train_classifier": mock_train_module,
+                "sklearn.ensemble": MagicMock(RandomForestClassifier=mock_rf_cls),
+                "sklearn.model_selection": MagicMock(cross_val_score=mock_cv),
+                "joblib": mock_joblib,
+            },
+        ):
             output_pkl = tmp_path / "test_classifier.pkl"
             result = tl.train(
-                slide, annotations=str(ann_path),
-                feature_set="morph", output_path=str(output_pkl),
+                slide,
+                annotations=str(ann_path),
+                feature_set="morph",
+                output_path=str(output_pkl),
             )
 
             assert isinstance(result, dict)
@@ -371,9 +405,12 @@ class TestTlTrain:
         mock_train_module = MagicMock()
         mock_train_module.load_features_and_annotations = mock_load_fn
 
-        with patch.dict("sys.modules", {
-            "train_classifier": mock_train_module,
-        }):
+        with patch.dict(
+            "sys.modules",
+            {
+                "train_classifier": mock_train_module,
+            },
+        ):
             with pytest.raises(ValueError, match="No annotated detections"):
                 tl.train(slide, annotations=str(ann_path))
 

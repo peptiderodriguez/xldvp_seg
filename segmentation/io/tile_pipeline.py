@@ -45,16 +45,11 @@ Example usage:
 from __future__ import annotations
 
 import threading
+from collections.abc import Callable, Iterator
 from concurrent.futures import ThreadPoolExecutor, as_completed
-from queue import Queue, Empty, Full
+from queue import Empty, Full, Queue
 from typing import (
     Any,
-    Callable,
-    Dict,
-    Iterator,
-    List,
-    Optional,
-    Tuple,
     TypeVar,
 )
 
@@ -65,7 +60,7 @@ from segmentation.utils.logging import get_logger
 logger = get_logger(__name__)
 
 # Type variable for generic preprocessing
-T = TypeVar('T')
+T = TypeVar("T")
 
 
 class TilePipeline:
@@ -110,11 +105,11 @@ class TilePipeline:
     def __init__(
         self,
         loader: Any,
-        tile_coords: List[Dict[str, int]],
+        tile_coords: list[dict[str, int]],
         tile_size: int,
         channel: int,
         num_prefetch: int = 4,
-        cd31_channel: Optional[int] = None,
+        cd31_channel: int | None = None,
     ):
         """
         Initialize the tile pipeline.
@@ -142,16 +137,16 @@ class TilePipeline:
         self._queue: Queue = Queue(maxsize=num_prefetch)
 
         # Thread control
-        self._producer_thread: Optional[threading.Thread] = None
+        self._producer_thread: threading.Thread | None = None
         self._stop_event = threading.Event()
-        self._exception: Optional[Exception] = None
+        self._exception: Exception | None = None
 
         # Statistics
         self._tiles_loaded = 0
         self._tiles_failed = 0
         self._lock = threading.Lock()
 
-    def __iter__(self) -> Iterator[Tuple[int, int, Optional[np.ndarray], ...]]:
+    def __iter__(self) -> Iterator[tuple[int, int, np.ndarray | None, ...]]:
         """
         Iterate over tiles with asynchronous prefetching.
 
@@ -225,8 +220,8 @@ class TilePipeline:
                     logger.debug("TilePipeline producer: stop requested")
                     break
 
-                tile_x = tile_coord['x']
-                tile_y = tile_coord['y']
+                tile_x = tile_coord["x"]
+                tile_y = tile_coord["y"]
 
                 try:
                     # Load tile data
@@ -251,9 +246,7 @@ class TilePipeline:
                         result = (tile_x, tile_y, tile_data)
 
                 except Exception as e:
-                    logger.warning(
-                        f"TilePipeline: Failed to load tile ({tile_x}, {tile_y}): {e}"
-                    )
+                    logger.warning(f"TilePipeline: Failed to load tile ({tile_x}, {tile_y}): {e}")
                     with self._lock:
                         self._tiles_failed += 1
 
@@ -288,7 +281,7 @@ class TilePipeline:
                 logger.warning("TilePipeline: Could not put sentinel (queue full)")
 
     @property
-    def stats(self) -> Dict[str, int]:
+    def stats(self) -> dict[str, int]:
         """
         Get pipeline statistics.
 
@@ -297,8 +290,8 @@ class TilePipeline:
         """
         with self._lock:
             return {
-                'tiles_loaded': self._tiles_loaded,
-                'tiles_failed': self._tiles_failed,
+                "tiles_loaded": self._tiles_loaded,
+                "tiles_failed": self._tiles_failed,
             }
 
 
@@ -333,12 +326,12 @@ class TilePipelineWithPreprocessing(TilePipeline):
     def __init__(
         self,
         loader: Any,
-        tile_coords: List[Dict[str, int]],
+        tile_coords: list[dict[str, int]],
         tile_size: int,
         channel: int,
-        preprocessor: Callable[[Optional[np.ndarray], int, int], Optional[np.ndarray]],
+        preprocessor: Callable[[np.ndarray | None, int, int], np.ndarray | None],
         num_prefetch: int = 4,
-        cd31_channel: Optional[int] = None,
+        cd31_channel: int | None = None,
     ):
         """
         Initialize the tile pipeline with preprocessing.
@@ -374,8 +367,8 @@ class TilePipelineWithPreprocessing(TilePipeline):
                     logger.debug("TilePipelineWithPreprocessing producer: stop requested")
                     break
 
-                tile_x = tile_coord['x']
-                tile_y = tile_coord['y']
+                tile_x = tile_coord["x"]
+                tile_y = tile_coord["y"]
 
                 try:
                     # Load tile data
@@ -440,11 +433,11 @@ class TilePipelineWithPreprocessing(TilePipeline):
 
 
 def preprocess_tiles_batch(
-    tiles: List[T],
+    tiles: list[T],
     preprocessor: Callable[[T], Any],
     max_workers: int = 4,
     preserve_order: bool = True,
-) -> List[Any]:
+) -> list[Any]:
     """
     Preprocess multiple tiles in parallel using ThreadPoolExecutor.
 
@@ -504,10 +497,10 @@ def preprocess_tiles_batch(
 
 
 def preprocess_tiles_batch_with_coords(
-    tile_data_list: List[Tuple[int, int, np.ndarray]],
+    tile_data_list: list[tuple[int, int, np.ndarray]],
     preprocessor: Callable[[np.ndarray, int, int], Any],
     max_workers: int = 4,
-) -> List[Tuple[int, int, Any]]:
+) -> list[tuple[int, int, Any]]:
     """
     Preprocess tiles in parallel, passing coordinates to the preprocessor.
 
@@ -535,7 +528,7 @@ def preprocess_tiles_batch_with_coords(
     if not tile_data_list:
         return []
 
-    def wrapped_preprocessor(item: Tuple[int, int, np.ndarray]) -> Tuple[int, int, Any]:
+    def wrapped_preprocessor(item: tuple[int, int, np.ndarray]) -> tuple[int, int, Any]:
         tile_x, tile_y, tile_data = item
         result = preprocessor(tile_data, tile_x, tile_y)
         return (tile_x, tile_y, result)
@@ -580,10 +573,10 @@ class AsyncTileLoader:
         self.channel = channel
         self.num_prefetch = num_prefetch
 
-        self._cache: Dict[Tuple[int, int, int], np.ndarray] = {}
+        self._cache: dict[tuple[int, int, int], np.ndarray] = {}
         self._cache_lock = threading.Lock()
         self._prefetch_queue: Queue = Queue()
-        self._worker_thread: Optional[threading.Thread] = None
+        self._worker_thread: threading.Thread | None = None
         self._stop_event = threading.Event()
 
     def start(self) -> None:
@@ -612,7 +605,7 @@ class AsyncTileLoader:
         """
         self._prefetch_queue.put((tile_x, tile_y, tile_size))
 
-    def get(self, tile_x: int, tile_y: int, tile_size: int) -> Optional[np.ndarray]:
+    def get(self, tile_x: int, tile_y: int, tile_size: int) -> np.ndarray | None:
         """
         Get a tile, loading it if not in cache.
 
@@ -647,9 +640,7 @@ class AsyncTileLoader:
 
             # Load tile
             try:
-                tile_data = self.loader.get_tile(
-                    tile_x, tile_y, tile_size, channel=self.channel
-                )
+                tile_data = self.loader.get_tile(tile_x, tile_y, tile_size, channel=self.channel)
                 with self._cache_lock:
                     # Limit cache size
                     if len(self._cache) >= self.num_prefetch:
@@ -662,9 +653,9 @@ class AsyncTileLoader:
 
 
 __all__ = [
-    'TilePipeline',
-    'TilePipelineWithPreprocessing',
-    'preprocess_tiles_batch',
-    'preprocess_tiles_batch_with_coords',
-    'AsyncTileLoader',
+    "TilePipeline",
+    "TilePipelineWithPreprocessing",
+    "preprocess_tiles_batch",
+    "preprocess_tiles_batch_with_coords",
+    "AsyncTileLoader",
 ]

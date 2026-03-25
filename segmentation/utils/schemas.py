@@ -22,22 +22,23 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
-from typing import Any, Dict, List, Literal, Optional, Union
+from typing import Any, Literal
 
 from pydantic import BaseModel, Field, field_validator, model_validator
-
 
 # =============================================================================
 # Base Types
 # =============================================================================
 
+
 class Coordinate(BaseModel):
     """A 2D coordinate [x, y]."""
+
     x: float
     y: float
 
     @classmethod
-    def from_list(cls, coords: List[float]) -> "Coordinate":
+    def from_list(cls, coords: list[float]) -> Coordinate:
         """Create from [x, y] list."""
         if len(coords) != 2:
             raise ValueError(f"Coordinate must have 2 elements, got {len(coords)}")
@@ -46,6 +47,7 @@ class Coordinate(BaseModel):
 
 class BoundingBox(BaseModel):
     """A bounding box [x1, y1, x2, y2] or [minr, minc, maxr, maxc]."""
+
     x1: float
     y1: float
     x2: float
@@ -56,13 +58,15 @@ class BoundingBox(BaseModel):
 # Feature Schemas
 # =============================================================================
 
+
 class BaseFeatures(BaseModel):
     """Common features for all detection types."""
-    area: Optional[float] = None
-    eccentricity: Optional[float] = None
-    solidity: Optional[float] = None
-    mean_intensity: Optional[float] = None
-    perimeter: Optional[float] = None
+
+    area: float | None = None
+    eccentricity: float | None = None
+    solidity: float | None = None
+    mean_intensity: float | None = None
+    perimeter: float | None = None
 
     class Config:
         extra = "allow"  # Allow additional features
@@ -70,50 +74,55 @@ class BaseFeatures(BaseModel):
 
 class NMJFeatures(BaseFeatures):
     """Features specific to NMJ detections."""
-    skeleton_length: Optional[float] = None
-    elongation: Optional[float] = None
-    prob_nmj: Optional[float] = None
-    confidence: Optional[float] = None
+
+    skeleton_length: float | None = None
+    elongation: float | None = None
+    prob_nmj: float | None = None
+    confidence: float | None = None
 
 
 class VesselFeatures(BaseFeatures):
     """Features specific to vessel detections."""
-    outer_diameter_um: Optional[float] = None
-    inner_diameter_um: Optional[float] = None
-    wall_thickness_mean_um: Optional[float] = None
-    wall_thickness_std_um: Optional[float] = None
-    lumen_area_um2: Optional[float] = None
-    wall_area_um2: Optional[float] = None
-    ring_completeness: Optional[float] = None
-    cd31_validated: Optional[bool] = None
+
+    outer_diameter_um: float | None = None
+    inner_diameter_um: float | None = None
+    wall_thickness_mean_um: float | None = None
+    wall_thickness_std_um: float | None = None
+    lumen_area_um2: float | None = None
+    wall_area_um2: float | None = None
+    ring_completeness: float | None = None
+    cd31_validated: bool | None = None
 
 
 class MKFeatures(BaseFeatures):
     """Features specific to MK detections."""
-    is_megakaryocyte: Optional[bool] = None
-    mk_confidence: Optional[float] = None
+
+    is_megakaryocyte: bool | None = None
+    mk_confidence: float | None = None
 
 
 # =============================================================================
 # Detection Schemas
 # =============================================================================
 
+
 class Detection(BaseModel):
     """A single cell detection."""
-    uid: str = Field(..., description="Unique identifier: slide_celltype_x_y")
-    global_center: List[float] = Field(..., min_length=2, max_length=2)
-    tile_origin: Optional[List[float]] = Field(None, min_length=2, max_length=2)
-    local_centroid: Optional[List[float]] = Field(None, min_length=2, max_length=2)
-    features: Optional[Dict[str, Any]] = None
-    area_px: Optional[float] = None
-    area_um2: Optional[float] = None
-    image_b64: Optional[str] = None
 
-    @field_validator('uid')
+    uid: str = Field(..., description="Unique identifier: slide_celltype_x_y")
+    global_center: list[float] = Field(..., min_length=2, max_length=2)
+    tile_origin: list[float] | None = Field(None, min_length=2, max_length=2)
+    local_centroid: list[float] | None = Field(None, min_length=2, max_length=2)
+    features: dict[str, Any] | None = None
+    area_px: float | None = None
+    area_um2: float | None = None
+    image_b64: str | None = None
+
+    @field_validator("uid")
     @classmethod
     def validate_uid(cls, v: str) -> str:
         """Validate UID format."""
-        parts = v.split('_')
+        parts = v.split("_")
         if len(parts) < 3:
             raise ValueError(f"UID must have at least 3 parts separated by '_', got: {v}")
         return v
@@ -124,21 +133,24 @@ class Detection(BaseModel):
 
 class DetectionFile(BaseModel):
     """Schema for *_detections.json files."""
+
     slide_name: str
-    cell_type: Literal["mk", "cell", "nmj", "vessel", "mesothelium", "hspc", "islet", "tissue_pattern"]
-    experiment_name: Optional[str] = None
-    pixel_size_um: Optional[float] = None
-    total_detections: Optional[int] = None
-    tiles_processed: Optional[int] = None
-    tiles_with_detections: Optional[int] = None
-    timestamp: Optional[str] = None
-    detections: List[Detection] = Field(default_factory=list)
+    cell_type: Literal[
+        "mk", "cell", "nmj", "vessel", "mesothelium", "hspc", "islet", "tissue_pattern"
+    ]
+    experiment_name: str | None = None
+    pixel_size_um: float | None = None
+    total_detections: int | None = None
+    tiles_processed: int | None = None
+    tiles_with_detections: int | None = None
+    timestamp: str | None = None
+    detections: list[Detection] = Field(default_factory=list)
 
     # Also allow 'nmjs' key for backwards compatibility
-    nmjs: Optional[List[Dict[str, Any]]] = None
+    nmjs: list[dict[str, Any]] | None = None
 
-    @model_validator(mode='after')
-    def merge_nmjs_to_detections(self) -> "DetectionFile":
+    @model_validator(mode="after")
+    def merge_nmjs_to_detections(self) -> DetectionFile:
         """Merge 'nmjs' into 'detections' for backwards compatibility."""
         if self.nmjs and not self.detections:
             self.detections = [Detection(**n) for n in self.nmjs]
@@ -152,18 +164,23 @@ class DetectionFile(BaseModel):
 # Configuration Schema
 # =============================================================================
 
+
 class Config(BaseModel):
     """Schema for config.json files."""
-    experiment_name: Optional[str] = None
-    cell_type: Optional[Literal["mk", "cell", "nmj", "vessel", "mesothelium", "hspc", "islet", "tissue_pattern"]] = None
-    slide_name: Optional[str] = None
-    channel: Optional[int] = None
-    pixel_size_um: Optional[float] = None
-    normalization_percentiles: Optional[List[float]] = None
-    contour_color: Optional[List[int]] = None
-    contour_thickness: Optional[int] = None
-    samples_per_page: Optional[int] = None
-    tile_size: Optional[int] = None
+
+    experiment_name: str | None = None
+    cell_type: (
+        Literal["mk", "cell", "nmj", "vessel", "mesothelium", "hspc", "islet", "tissue_pattern"]
+        | None
+    ) = None
+    slide_name: str | None = None
+    channel: int | None = None
+    pixel_size_um: float | None = None
+    normalization_percentiles: list[float] | None = None
+    contour_color: list[int] | None = None
+    contour_thickness: int | None = None
+    samples_per_page: int | None = None
+    tile_size: int | None = None
 
     class Config:
         extra = "allow"
@@ -173,27 +190,31 @@ class Config(BaseModel):
 # Annotation Schemas
 # =============================================================================
 
+
 class AnnotationsOldFormat(BaseModel):
     """Old annotation format: {positive: [...], negative: [...]}"""
-    positive: List[str] = Field(default_factory=list)
-    negative: List[str] = Field(default_factory=list)
+
+    positive: list[str] = Field(default_factory=list)
+    negative: list[str] = Field(default_factory=list)
 
 
 class AnnotationsNewFormat(BaseModel):
     """New annotation format: {annotations: {uid: "yes"|"no"}}"""
-    annotations: Dict[str, Literal["yes", "no", "unsure"]]
+
+    annotations: dict[str, Literal["yes", "no", "unsure"]]
 
 
 class Annotations(BaseModel):
     """Unified annotation schema supporting both formats."""
+
     # Old format
-    positive: Optional[List[str]] = None
-    negative: Optional[List[str]] = None
+    positive: list[str] | None = None
+    negative: list[str] | None = None
 
     # New format
-    annotations: Optional[Dict[str, Literal["yes", "no", "unsure"]]] = None
+    annotations: dict[str, Literal["yes", "no", "unsure"]] | None = None
 
-    def to_unified(self) -> Dict[str, str]:
+    def to_unified(self) -> dict[str, str]:
         """Convert to unified format {uid: "yes"|"no"}."""
         result = {}
 
@@ -228,18 +249,20 @@ class Annotations(BaseModel):
 # NMJ-Specific Schemas
 # =============================================================================
 
+
 class NMJFeatureFile(BaseModel):
     """Schema for nmj_features.json files in tile directories."""
+
     id: str
-    centroid: List[float] = Field(..., min_length=2, max_length=2)
+    centroid: list[float] = Field(..., min_length=2, max_length=2)
     area: int
-    skeleton_length: Optional[int] = None
-    elongation: Optional[float] = None
-    eccentricity: Optional[float] = None
-    mean_intensity: Optional[float] = None
-    bbox: Optional[List[int]] = None
-    perimeter: Optional[float] = None
-    solidity: Optional[float] = None
+    skeleton_length: int | None = None
+    elongation: float | None = None
+    eccentricity: float | None = None
+    mean_intensity: float | None = None
+    bbox: list[int] | None = None
+    perimeter: float | None = None
+    solidity: float | None = None
 
     class Config:
         extra = "allow"
@@ -249,11 +272,10 @@ class NMJFeatureFile(BaseModel):
 # Validation Functions
 # =============================================================================
 
+
 def validate_json_file(
-    file_path: Union[str, Path],
-    schema: type[BaseModel],
-    raise_on_error: bool = True
-) -> Optional[BaseModel]:
+    file_path: str | Path, schema: type[BaseModel], raise_on_error: bool = True
+) -> BaseModel | None:
     """
     Validate a JSON file against a schema.
 
@@ -273,7 +295,7 @@ def validate_json_file(
         return None
 
     try:
-        with open(file_path, 'r') as f:
+        with open(file_path) as f:
             data = json.load(f)
 
         return schema.model_validate(data)
@@ -290,33 +312,27 @@ def validate_json_file(
 
 
 def validate_detection_file(
-    file_path: Union[str, Path],
-    raise_on_error: bool = True
-) -> Optional[DetectionFile]:
+    file_path: str | Path, raise_on_error: bool = True
+) -> DetectionFile | None:
     """Validate a *_detections.json file."""
     return validate_json_file(file_path, DetectionFile, raise_on_error)
 
 
-def validate_config_file(
-    file_path: Union[str, Path],
-    raise_on_error: bool = True
-) -> Optional[Config]:
+def validate_config_file(file_path: str | Path, raise_on_error: bool = True) -> Config | None:
     """Validate a config.json file."""
     return validate_json_file(file_path, Config, raise_on_error)
 
 
 def validate_annotations_file(
-    file_path: Union[str, Path],
-    raise_on_error: bool = True
-) -> Optional[Annotations]:
+    file_path: str | Path, raise_on_error: bool = True
+) -> Annotations | None:
     """Validate an annotations JSON file."""
     return validate_json_file(file_path, Annotations, raise_on_error)
 
 
 def validate_nmj_features_file(
-    file_path: Union[str, Path],
-    raise_on_error: bool = True
-) -> Optional[List[NMJFeatureFile]]:
+    file_path: str | Path, raise_on_error: bool = True
+) -> list[NMJFeatureFile] | None:
     """Validate an nmj_features.json file (list of features)."""
     file_path = Path(file_path)
 
@@ -326,7 +342,7 @@ def validate_nmj_features_file(
         return None
 
     try:
-        with open(file_path, 'r') as f:
+        with open(file_path) as f:
             data = json.load(f)
 
         if not isinstance(data, list):
@@ -340,10 +356,7 @@ def validate_nmj_features_file(
         return None
 
 
-def infer_and_validate(
-    file_path: Union[str, Path],
-    raise_on_error: bool = True
-) -> Optional[BaseModel]:
+def infer_and_validate(file_path: str | Path, raise_on_error: bool = True) -> BaseModel | None:
     """
     Infer schema type from filename and validate.
 

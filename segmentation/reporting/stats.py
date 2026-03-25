@@ -6,7 +6,8 @@ for vessel detection data.
 """
 
 from dataclasses import dataclass, field
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any
+
 import numpy as np
 
 
@@ -26,14 +27,14 @@ class VesselStatistics:
     """
 
     vessel_count: int = 0
-    diameter_stats: Dict[str, float] = field(default_factory=dict)
-    wall_thickness_stats: Dict[str, float] = field(default_factory=dict)
-    area_stats: Dict[str, float] = field(default_factory=dict)
-    vessel_types: Dict[str, int] = field(default_factory=dict)
-    quality_stats: Dict[str, float] = field(default_factory=dict)
-    slide_name: Optional[str] = None
+    diameter_stats: dict[str, float] = field(default_factory=dict)
+    wall_thickness_stats: dict[str, float] = field(default_factory=dict)
+    area_stats: dict[str, float] = field(default_factory=dict)
+    vessel_types: dict[str, int] = field(default_factory=dict)
+    quality_stats: dict[str, float] = field(default_factory=dict)
+    slide_name: str | None = None
 
-    def to_dict(self) -> Dict[str, Any]:
+    def to_dict(self) -> dict[str, Any]:
         """Convert statistics to dictionary for JSON serialization."""
         return {
             "vessel_count": self.vessel_count,
@@ -47,8 +48,8 @@ class VesselStatistics:
 
 
 def compute_summary_statistics(
-    detections: List[Dict[str, Any]],
-    slide_name: Optional[str] = None,
+    detections: list[dict[str, Any]],
+    slide_name: str | None = None,
 ) -> VesselStatistics:
     """
     Compute comprehensive summary statistics from vessel detections.
@@ -102,10 +103,10 @@ def compute_summary_statistics(
 
 
 def compute_diameter_distribution(
-    features_list: List[Dict[str, Any]],
+    features_list: list[dict[str, Any]],
     bins: int = 30,
-    range_um: Optional[Tuple[float, float]] = None,
-) -> Dict[str, Any]:
+    range_um: tuple[float, float] | None = None,
+) -> dict[str, Any]:
     """
     Compute diameter distribution histogram data.
 
@@ -138,9 +139,9 @@ def compute_diameter_distribution(
 
 
 def compute_wall_thickness_quantiles(
-    features_list: List[Dict[str, Any]],
-    quantiles: Optional[List[float]] = None,
-) -> Dict[str, float]:
+    features_list: list[dict[str, Any]],
+    quantiles: list[float] | None = None,
+) -> dict[str, float]:
     """
     Compute wall thickness quantile statistics.
 
@@ -174,9 +175,9 @@ def compute_wall_thickness_quantiles(
 
 
 def compute_vessel_type_breakdown(
-    features_list: List[Dict[str, Any]],
-    diameter_thresholds: Optional[Dict[str, Tuple[float, float]]] = None,
-) -> Dict[str, int]:
+    features_list: list[dict[str, Any]],
+    diameter_thresholds: dict[str, tuple[float, float]] | None = None,
+) -> dict[str, int]:
     """
     Compute vessel type counts and percentages.
 
@@ -200,7 +201,7 @@ def compute_vessel_type_breakdown(
             "artery": (100, float("inf")),
         }
 
-    counts: Dict[str, int] = {vtype: 0 for vtype in diameter_thresholds}
+    counts: dict[str, int] = dict.fromkeys(diameter_thresholds, 0)
     counts["unknown"] = 0
 
     for feat in features_list:
@@ -228,8 +229,8 @@ def compute_vessel_type_breakdown(
 
 
 def compute_quality_metrics(
-    features_list: List[Dict[str, Any]],
-) -> Dict[str, Any]:
+    features_list: list[dict[str, Any]],
+) -> dict[str, Any]:
     """
     Compute quality-related statistics from detections.
 
@@ -261,7 +262,9 @@ def compute_quality_metrics(
     completeness_stats = _compute_distribution_stats(ring_completeness) if ring_completeness else {}
 
     # CD31 validation (if available)
-    cd31_validated = [feat.get("cd31_validated") for feat in features_list if "cd31_validated" in feat]
+    cd31_validated = [
+        feat.get("cd31_validated") for feat in features_list if "cd31_validated" in feat
+    ]
     cd31_stats = {}
     if cd31_validated:
         cd31_stats = {
@@ -288,8 +291,8 @@ def compute_quality_metrics(
 
 
 def compute_batch_comparison(
-    slide_statistics: List[VesselStatistics],
-) -> Dict[str, Any]:
+    slide_statistics: list[VesselStatistics],
+) -> dict[str, Any]:
     """
     Compute comparison statistics across multiple slides.
 
@@ -308,17 +311,13 @@ def compute_batch_comparison(
     vessel_counts = [s.vessel_count for s in slide_statistics]
 
     # Mean diameters per slide
-    mean_diameters = [
-        s.diameter_stats.get("mean", 0) for s in slide_statistics
-    ]
+    mean_diameters = [s.diameter_stats.get("mean", 0) for s in slide_statistics]
 
     # Mean wall thickness per slide
-    mean_wall_thickness = [
-        s.wall_thickness_stats.get("mean", 0) for s in slide_statistics
-    ]
+    mean_wall_thickness = [s.wall_thickness_stats.get("mean", 0) for s in slide_statistics]
 
     # Vessel type breakdown per slide
-    vessel_type_data: Dict[str, List[int]] = {
+    vessel_type_data: dict[str, list[int]] = {
         "capillary": [],
         "arteriole": [],
         "artery": [],
@@ -348,9 +347,9 @@ def compute_batch_comparison(
 
 
 def _extract_values(
-    features_list: List[Dict[str, Any]],
+    features_list: list[dict[str, Any]],
     key: str,
-) -> List[float]:
+) -> list[float]:
     """
     Extract numeric values for a specific key from feature dicts.
 
@@ -369,7 +368,7 @@ def _extract_values(
     return values
 
 
-def _compute_distribution_stats(values: List[float]) -> Dict[str, float]:
+def _compute_distribution_stats(values: list[float]) -> dict[str, float]:
     """
     Compute standard distribution statistics for a list of values.
 

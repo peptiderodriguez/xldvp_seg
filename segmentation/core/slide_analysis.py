@@ -19,13 +19,13 @@ Usage:
     adata = slide.to_anndata()
 """
 
+from pathlib import Path
+
 import numpy as np
 import pandas as pd
-from pathlib import Path
-from typing import Optional, List
 
-from segmentation.utils.json_utils import fast_json_load, atomic_json_dump
 from segmentation.utils.detection_utils import extract_positions_um
+from segmentation.utils.json_utils import atomic_json_dump, fast_json_load
 from segmentation.utils.logging import get_logger
 
 logger = get_logger(__name__)
@@ -65,9 +65,7 @@ class SlideAnalysis:
         return sa
 
     @classmethod
-    def from_detections(
-        cls, detections: list, output_dir: str | Path = None
-    ) -> "SlideAnalysis":
+    def from_detections(cls, detections: list, output_dir: str | Path = None) -> "SlideAnalysis":
         """Create from a pre-loaded detections list."""
         sa = cls(output_dir, detections=detections)
         if output_dir:
@@ -85,11 +83,7 @@ class SlideAnalysis:
         det_files = sorted(d.glob("*_detections.json"))
         # Prefer the canonical name (no extra suffix before _detections)
         # e.g. cell_detections.json over cell_detections_merged.json
-        canonical = [
-            f
-            for f in det_files
-            if "_merged" not in f.stem and "_postdedup" not in f.stem
-        ]
+        canonical = [f for f in det_files if "_merged" not in f.stem and "_postdedup" not in f.stem]
         if canonical:
             self._detections_path = canonical[0]
         elif det_files:
@@ -235,27 +229,27 @@ class SlideAnalysis:
     # --- File path properties ---
 
     @property
-    def detections_path(self) -> Optional[Path]:
+    def detections_path(self) -> Path | None:
         """Path to the detections JSON file (if discovered)."""
         return self._detections_path
 
     @property
-    def tiles_dir(self) -> Optional[Path]:
+    def tiles_dir(self) -> Path | None:
         """Path to the tiles directory (if it exists)."""
         return self._tiles_dir
 
     @property
-    def html_dir(self) -> Optional[Path]:
+    def html_dir(self) -> Path | None:
         """Path to the HTML viewer directory (if it exists)."""
         return self._html_dir
 
     @property
-    def spatialdata_path(self) -> Optional[Path]:
+    def spatialdata_path(self) -> Path | None:
         """Path to the SpatialData zarr store (if it exists)."""
         return self._spatialdata_path
 
     @property
-    def output_dir(self) -> Optional[Path]:
+    def output_dir(self) -> Path | None:
         """Root output directory."""
         return self._output_dir
 
@@ -281,18 +275,14 @@ class SlideAnalysis:
         filtered = list(self.detections)
 
         if score_threshold is not None:
-            filtered = [
-                d for d in filtered if d.get("rf_prediction", 0) >= score_threshold
-            ]
+            filtered = [d for d in filtered if d.get("rf_prediction", 0) >= score_threshold]
 
         if marker is not None:
             marker_key = f"{marker}_class"
             target = "positive" if positive else "negative"
             filtered = [d for d in filtered if d.get(marker_key) == target]
 
-        logger.info(
-            "Filtered: %d -> %d detections", len(self.detections), len(filtered)
-        )
+        logger.info("Filtered: %d -> %d detections", len(self.detections), len(filtered))
         return SlideAnalysis.from_detections(filtered, self._output_dir)
 
     # --- I/O ---
@@ -343,11 +333,19 @@ class SlideAnalysis:
         # ResNet and DINOv2 embeddings in obsm
         # Process longer prefixes first to avoid resnet_ matching resnet_ctx_
         resnet_ctx = sorted([c for c in df.columns if c.startswith("resnet_ctx_")])
-        resnet = sorted([c for c in df.columns if c.startswith("resnet_") and not c.startswith("resnet_ctx_")])
+        resnet = sorted(
+            [c for c in df.columns if c.startswith("resnet_") and not c.startswith("resnet_ctx_")]
+        )
         dinov2_ctx = sorted([c for c in df.columns if c.startswith("dinov2_ctx_")])
-        dinov2 = sorted([c for c in df.columns if c.startswith("dinov2_") and not c.startswith("dinov2_ctx_")])
-        for cols, key in [(resnet, "X_resnet"), (resnet_ctx, "X_resnet_ctx"),
-                          (dinov2, "X_dinov2"), (dinov2_ctx, "X_dinov2_ctx")]:
+        dinov2 = sorted(
+            [c for c in df.columns if c.startswith("dinov2_") and not c.startswith("dinov2_ctx_")]
+        )
+        for cols, key in [
+            (resnet, "X_resnet"),
+            (resnet_ctx, "X_resnet_ctx"),
+            (dinov2, "X_dinov2"),
+            (dinov2_ctx, "X_dinov2_ctx"),
+        ]:
             if cols:
                 vals = df[cols].values.astype(np.float32)
                 vals = np.nan_to_num(vals, nan=0.0, posinf=0.0, neginf=0.0)
@@ -367,18 +365,13 @@ class SlideAnalysis:
         n = len(self._detections) if self._detections is not None else "?"
         summary = self._summary or {}
         config = self._config or {}
-        name = summary.get(
-            "slide_name", self._output_dir.name if self._output_dir else "unknown"
-        )
+        name = summary.get("slide_name", self._output_dir.name if self._output_dir else "unknown")
         ct = summary.get("cell_type", config.get("cell_type", "unknown"))
         px = self._pixel_size_um_cached or summary.get(
             "pixel_size_um", config.get("pixel_size_um", 0.0)
         )
         px_str = f"{px:.4f}" if px else "?"
-        return (
-            f"SlideAnalysis(slide='{name}', cell_type='{ct}', "
-            f"n={n}, px={px_str} um)"
-        )
+        return f"SlideAnalysis(slide='{name}', cell_type='{ct}', " f"n={n}, px={px_str} um)"
 
     def __len__(self) -> int:
         return self.n_detections

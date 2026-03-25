@@ -39,19 +39,19 @@ from pathlib import Path
 import numpy as np
 from scipy.spatial import KDTree
 
-
 # ---------------------------------------------------------------------------
 # Fluorescence background loading
 # ---------------------------------------------------------------------------
+
 
 def _encode_channel_b64(ch_array):
     """Encode a single-channel uint8 array as PNG base64 string."""
     from PIL import Image
 
-    img = Image.fromarray(ch_array, mode='L')
+    img = Image.fromarray(ch_array, mode="L")
     buf = io.BytesIO()
-    img.save(buf, format='PNG', optimize=True)
-    b64 = base64.b64encode(buf.getvalue()).decode('ascii')
+    img.save(buf, format="PNG", optimize=True)
+    b64 = base64.b64encode(buf.getvalue()).decode("ascii")
     del buf
     return b64
 
@@ -82,6 +82,7 @@ def read_czi_thumbnail_channels(czi_path, display_channels, scale_factor=0.0625,
     pixel_size_um = None
     try:
         from segmentation.io.czi_loader import CZILoader
+
         loader = CZILoader(str(czi_path))
         pixel_size_um = loader.get_pixel_size()
     except Exception:
@@ -102,12 +103,15 @@ def read_czi_thumbnail_channels(czi_path, display_channels, scale_factor=0.0625,
     region = (bbox.x, bbox.y, bbox.w, bbox.h)
     mosaic_x = bbox.x
     mosaic_y = bbox.y
-    print(f"    CZI scene {scene}: {bbox.w}x{bbox.h} px at ({bbox.x},{bbox.y}), "
-          f"scale={scale_factor}", flush=True)
+    print(
+        f"    CZI scene {scene}: {bbox.w}x{bbox.h} px at ({bbox.x},{bbox.y}), "
+        f"scale={scale_factor}",
+        flush=True,
+    )
 
     channel_arrays = []
     for ch in display_channels:
-        print(f"    Reading channel {ch}...", end='', flush=True)
+        print(f"    Reading channel {ch}...", end="", flush=True)
         try:
             img = czi.read_mosaic(C=ch, region=region, scale_factor=scale_factor)
             img = np.squeeze(img)
@@ -126,9 +130,7 @@ def read_czi_thumbnail_channels(czi_path, display_channels, scale_factor=0.0625,
         p_high = float(np.percentile(valid, 99.5))
         if p_high <= p_low:
             p_high = p_low + 1.0
-        norm = np.clip(
-            (img.astype(np.float32) - p_low) / (p_high - p_low), 0.0, 1.0
-        )
+        norm = np.clip((img.astype(np.float32) - p_low) / (p_high - p_low), 0.0, 1.0)
         result = (norm * 255).astype(np.uint8)
         if img.dtype != np.uint8:
             result[img == 0] = 0  # preserve CZI padding as black
@@ -140,6 +142,7 @@ def read_czi_thumbnail_channels(czi_path, display_channels, scale_factor=0.0625,
 # ---------------------------------------------------------------------------
 # Auto-eps via KNN knee method
 # ---------------------------------------------------------------------------
+
 
 def compute_auto_eps(positions, k=10):
     """Compute optimal DBSCAN eps using KNN distance knee/elbow method.
@@ -174,17 +177,33 @@ def compute_auto_eps(positions, k=10):
 # ---------------------------------------------------------------------------
 
 # Binary positive/negative
-BINARY_COLORS = {'positive': '#ff4444', 'negative': '#4488ff'}
+BINARY_COLORS = {"positive": "#ff4444", "negative": "#4488ff"}
 
 # 4-group palette (multi-marker profiles)
-QUAD_COLORS = ['#ff4444', '#4488ff', '#44cc44', '#ff8844']
+QUAD_COLORS = ["#ff4444", "#4488ff", "#44cc44", "#ff8844"]
 
 # 20-color maximally-distinct palette for N groups
 AUTO_COLORS = [
-    '#e6194b', '#3cb44b', '#4363d8', '#f58231', '#911eb4',
-    '#42d4f4', '#f032e6', '#bfef45', '#fabebe', '#469990',
-    '#e6beff', '#9a6324', '#ffe119', '#aaffc3', '#800000',
-    '#ffd8b1', '#000075', '#a9a9a9', '#808000', '#ff69b4',
+    "#e6194b",
+    "#3cb44b",
+    "#4363d8",
+    "#f58231",
+    "#911eb4",
+    "#42d4f4",
+    "#f032e6",
+    "#bfef45",
+    "#fabebe",
+    "#469990",
+    "#e6beff",
+    "#9a6324",
+    "#ffe119",
+    "#aaffc3",
+    "#800000",
+    "#ffd8b1",
+    "#000075",
+    "#a9a9a9",
+    "#808000",
+    "#ff69b4",
 ]
 
 
@@ -221,16 +240,24 @@ def _hsl_to_hex(h, s, l):
     ri = int((r + m) * 255)
     gi = int((g + m) * 255)
     bi = int((b + m) * 255)
-    return f'#{ri:02x}{gi:02x}{bi:02x}'
+    return f"#{ri:02x}{gi:02x}{bi:02x}"
 
 
 # ---------------------------------------------------------------------------
 # Graph-based spatial pattern detection (for --graph-patterns)
 # ---------------------------------------------------------------------------
 
-def compute_graph_patterns(positions, types, type_labels, type_colors,
-                           connect_radius_um=150, min_cluster_cells=8,
-                           boundary_dilate_um=50, _cached_trees=None):
+
+def compute_graph_patterns(
+    positions,
+    types,
+    type_labels,
+    type_colors,
+    connect_radius_um=150,
+    min_cluster_cells=8,
+    boundary_dilate_um=50,
+    _cached_trees=None,
+):
     """Detect spatial patterns via graph-based connected components.
 
     Per type: KDTree -> connect cells within connect_radius_um, connected
@@ -244,9 +271,9 @@ def compute_graph_patterns(positions, types, type_labels, type_colors,
     Returns list of region dicts with boundary polygons, composition, pattern.
     """
     import cv2
-    from scipy.spatial import cKDTree
     from scipy.sparse import csr_matrix
     from scipy.sparse.csgraph import connected_components
+    from scipy.spatial import cKDTree
 
     n = len(positions)
     if n == 0:
@@ -259,8 +286,8 @@ def compute_graph_patterns(positions, types, type_labels, type_colors,
         type_mask = types == ti
         n_type = int(type_mask.sum())
         idx = int(ti)
-        label = type_labels[idx] if idx < len(type_labels) else f'type_{idx}'
-        color = type_colors[idx] if idx < len(type_colors) else '#888888'
+        label = type_labels[idx] if idx < len(type_labels) else f"type_{idx}"
+        color = type_colors[idx] if idx < len(type_colors) else "#888888"
 
         if n_type < min_cluster_cells:
             continue
@@ -307,8 +334,7 @@ def compute_graph_patterns(positions, types, type_labels, type_colors,
             elongation = np.sqrt(lam1 / lam2)
 
             # Circle fit
-            radii = np.sqrt((pts[:, 0] - cx_mean)**2 +
-                            (pts[:, 1] - cy_mean)**2)
+            radii = np.sqrt((pts[:, 0] - cx_mean) ** 2 + (pts[:, 1] - cy_mean) ** 2)
             mean_r = radii.mean()
             circularity = (1.0 - radii.std() / mean_r) if mean_r > 1e-6 else 0.0
             hollowness = np.median(radii) / max(radii.max(), 1e-6)
@@ -323,20 +349,20 @@ def compute_graph_patterns(positions, types, type_labels, type_colors,
                 proj2 = centered @ pc2
                 coeffs = np.polyfit(proj1, proj2, 2)
                 pred = np.polyval(coeffs, proj1)
-                ss_res = ((proj2 - pred)**2).sum()
-                ss_tot = ((proj2 - proj2.mean())**2).sum()
+                ss_res = ((proj2 - pred) ** 2).sum()
+                ss_tot = ((proj2 - proj2.mean()) ** 2).sum()
                 r2 = 1 - ss_res / max(ss_tot, 1e-10)
                 if r2 > 0.3 and abs(coeffs[0]) > 1e-6:
                     has_curvature = True
 
             if elongation > 4 and not has_curvature:
-                pattern = 'linear'
+                pattern = "linear"
             elif elongation > 3 and has_curvature:
-                pattern = 'arc'
+                pattern = "arc"
             elif circularity > 0.65 and hollowness > 0.55 and elongation < 3:
-                pattern = 'ring'
+                pattern = "ring"
             else:
-                pattern = 'cluster'
+                pattern = "cluster"
 
             # Boundary via rasterisation
             pad = boundary_dilate_um
@@ -365,14 +391,15 @@ def compute_graph_patterns(positions, types, type_labels, type_colors,
 
             dilate_px = max(2, int(connect_radius_um / rpx * 0.5))
             kern = cv2.getStructuringElement(
-                cv2.MORPH_ELLIPSE, (dilate_px * 2 + 1, dilate_px * 2 + 1))
+                cv2.MORPH_ELLIPSE, (dilate_px * 2 + 1, dilate_px * 2 + 1)
+            )
             raster = cv2.dilate(raster, kern)
             close_kern = cv2.getStructuringElement(
-                cv2.MORPH_ELLIPSE, (dilate_px + 1, dilate_px + 1))
+                cv2.MORPH_ELLIPSE, (dilate_px + 1, dilate_px + 1)
+            )
             raster = cv2.morphologyEx(raster, cv2.MORPH_CLOSE, close_kern)
 
-            contours, _ = cv2.findContours(
-                raster, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+            contours, _ = cv2.findContours(raster, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
             if not contours:
                 continue
 
@@ -384,18 +411,18 @@ def compute_graph_patterns(positions, types, type_labels, type_colors,
 
             boundary = []
             for pt in contour.reshape(-1, 2):
-                boundary.append({
-                    'x': round(float(pt[0] * rpx + bx_min), 1),
-                    'y': round(float(pt[1] * rpy + by_min), 1),
-                })
+                boundary.append(
+                    {
+                        "x": round(float(pt[0] * rpx + bx_min), 1),
+                        "y": round(float(pt[1] * rpy + by_min), 1),
+                    }
+                )
 
             # Composition: count all cell types inside boundary
             cmask_img = np.zeros((rny, rnx), dtype=np.uint8)
             cv2.drawContours(cmask_img, [contour], 0, 255, -1)
-            all_px = np.clip(
-                ((positions[:, 0] - bx_min) / bw * rnx).astype(int), 0, rnx - 1)
-            all_py = np.clip(
-                ((positions[:, 1] - by_min) / bh * rny).astype(int), 0, rny - 1)
+            all_px = np.clip(((positions[:, 0] - bx_min) / bw * rnx).astype(int), 0, rnx - 1)
+            all_py = np.clip(((positions[:, 1] - by_min) / bh * rny).astype(int), 0, rny - 1)
             inside_all = cmask_img[all_py, all_px] > 0
             n_inside_total = int(inside_all.sum())
 
@@ -413,58 +440,61 @@ def compute_graph_patterns(positions, types, type_labels, type_colors,
             dominant_frac = composition[dominant] / max(n_inside_total, 1)
 
             # Normalize composition to fractions
-            composition = {k: round(v / max(n_inside_total, 1), 3)
-                           for k, v in composition.items()}
+            composition = {k: round(v / max(n_inside_total, 1), 3) for k, v in composition.items()}
 
             contour_area_px = cv2.contourArea(contour)
             area_um2 = round(contour_area_px * rpx * rpy, 0)
 
             moments = cv2.moments(contour)
-            if moments['m00'] > 0:
-                mu20 = moments['mu20'] / moments['m00']
-                mu02 = moments['mu02'] / moments['m00']
-                mu11 = moments['mu11'] / moments['m00']
-                d = np.sqrt(4 * mu11**2 + (mu20 - mu02)**2)
+            if moments["m00"] > 0:
+                mu20 = moments["mu20"] / moments["m00"]
+                mu02 = moments["mu02"] / moments["m00"]
+                mu11 = moments["mu11"] / moments["m00"]
+                d = np.sqrt(4 * mu11**2 + (mu20 - mu02) ** 2)
                 major = mu20 + mu02 + d
                 minor = mu20 + mu02 - d
-                cont_elong = round(
-                    np.sqrt(max(major, 1e-9) / max(minor, 1e-9)), 2)
+                cont_elong = round(np.sqrt(max(major, 1e-9) / max(minor, 1e-9)), 2)
             else:
                 cont_elong = round(elongation, 2)
 
-            regions.append({
-                'id': len(regions),
-                'type': label,
-                'label': f'{label} ({pattern}, n={nc})',
-                'color': color,
-                'pattern': pattern,
-                'composition': composition,
-                'n_cells': n_inside_total,
-                'area_um2': area_um2,
-                'elongation': cont_elong,
-                'dominant_frac': round(dominant_frac, 3),
-                'boundary': boundary,
-            })
+            regions.append(
+                {
+                    "id": len(regions),
+                    "type": label,
+                    "label": f"{label} ({pattern}, n={nc})",
+                    "color": color,
+                    "pattern": pattern,
+                    "composition": composition,
+                    "n_cells": n_inside_total,
+                    "area_um2": area_um2,
+                    "elongation": cont_elong,
+                    "dominant_frac": round(dominant_frac, 3),
+                    "boundary": boundary,
+                }
+            )
 
     # Sort by area descending, re-index
-    regions.sort(key=lambda r: r['area_um2'], reverse=True)
+    regions.sort(key=lambda r: r["area_um2"], reverse=True)
     for i, r in enumerate(regions):
-        r['id'] = i
+        r["id"] = i
 
-    n_types_found = len(set(r['type'] for r in regions)) if regions else 0
+    n_types_found = len(set(r["type"] for r in regions)) if regions else 0
     patterns_summary = {}
     for r in regions:
-        p = r['pattern']
+        p = r["pattern"]
         patterns_summary[p] = patterns_summary.get(p, 0) + 1
-    pat_str = ', '.join(f'{v} {k}' for k, v in sorted(patterns_summary.items()))
-    print(f'Graph patterns (r={connect_radius_um}um): {len(regions)} regions '
-          f'from {n_types_found} types (>={min_cluster_cells} cells): {pat_str}')
+    pat_str = ", ".join(f"{v} {k}" for k, v in sorted(patterns_summary.items()))
+    print(
+        f"Graph patterns (r={connect_radius_um}um): {len(regions)} regions "
+        f"from {n_types_found} types (>={min_cluster_cells} cells): {pat_str}"
+    )
     return regions
 
 
 # ---------------------------------------------------------------------------
 # Data loading
 # ---------------------------------------------------------------------------
+
 
 def extract_position_um(det):
     """Extract (x, y) position in microns from a detection dict.
@@ -475,19 +505,19 @@ def extract_position_um(det):
     Returns (x, y) tuple or None if position unavailable.
     """
     # Primary: global_center_um in features
-    pos = det.get('features', {}).get('global_center_um')
+    pos = det.get("features", {}).get("global_center_um")
     if pos is None:
-        pos = det.get('global_center_um')
+        pos = det.get("global_center_um")
     if pos is not None and len(pos) == 2:
         x, y = float(pos[0]), float(pos[1])
         if np.isfinite(x) and np.isfinite(y):
             return (x, y)
 
     # Fallback: pixel coordinates * pixel_size
-    gx = det.get('global_x')
-    gy = det.get('global_y')
+    gx = det.get("global_x")
+    gy = det.get("global_y")
     if gx is not None and gy is not None:
-        pixel_size = det.get('features', {}).get('pixel_size_um')
+        pixel_size = det.get("features", {}).get("pixel_size_um")
         if pixel_size is None or not isinstance(pixel_size, (int, float)):
             return None  # never hardcode pixel_size — CZI metadata is ground truth
         x = float(gx) * float(pixel_size)
@@ -506,9 +536,9 @@ def extract_group(det, group_field):
     """
     val = det.get(group_field)
     if val is None:
-        val = det.get('features', {}).get(group_field)
+        val = det.get("features", {}).get(group_field)
     if val is None:
-        return 'unknown'
+        return "unknown"
     return str(val)
 
 
@@ -528,9 +558,11 @@ def _stream_detections_mmap(filepath):
 
     try:
         import orjson as _json_mod
+
         _parse = _json_mod.loads
     except ImportError:
         import json as _json_mod
+
         _parse = _json_mod.loads
 
     # Two-alternative pattern (order matters — escape sequences consumed first):
@@ -539,7 +571,7 @@ def _stream_detections_mmap(filepath):
     # This eliminates the escape_next flag entirely — no cross-chunk state bug.
     _SIG = re.compile(rb'\\.|[{}"]')
 
-    with open(filepath, 'rb') as f:
+    with open(filepath, "rb") as f:
         mm = mmap.mmap(f.fileno(), 0, access=mmap.ACCESS_READ)
         size = mm.size()
 
@@ -557,7 +589,7 @@ def _stream_detections_mmap(filepath):
             chunk = mm[offset:end]
 
             for m in _SIG.finditer(chunk):
-                tok = chunk[m.start():m.end()]
+                tok = chunk[m.start() : m.end()]
                 abs_pos = offset + m.start()
 
                 if len(tok) == 2:
@@ -578,7 +610,7 @@ def _stream_detections_mmap(filepath):
                 elif b == 0x7D:  # '}'
                     depth -= 1
                     if depth == 0 and obj_start >= 0:
-                        yield _parse(mm[obj_start:abs_pos + 1])
+                        yield _parse(mm[obj_start : abs_pos + 1])
                         obj_start = -1
 
             offset = end
@@ -615,7 +647,7 @@ def load_slide_data(path, group_field, include_contours=False, score_threshold=N
     contours_raw = []  # list of (outer_contour_global, pixel_size_um) when include_contours
 
     if use_streaming:
-        print(f" streaming ({file_size / 1e9:.1f} GB)...", end='', flush=True)
+        print(f" streaming ({file_size / 1e9:.1f} GB)...", end="", flush=True)
         n_parsed = 0
         for det in _stream_detections_mmap(path):
             pos = extract_position_um(det)
@@ -627,13 +659,14 @@ def load_slide_data(path, group_field, include_contours=False, score_threshold=N
                 _collect_contour(det, contours_raw, score_threshold)
             n_parsed += 1
             if n_parsed % 100000 == 0:
-                print(f" {n_parsed // 1000}k...", end='', flush=True)
+                print(f" {n_parsed // 1000}k...", end="", flush=True)
     else:
         try:
             from segmentation.utils.json_utils import fast_json_load
+
             detections = fast_json_load(path)
         except ImportError:
-            with open(path, encoding='utf-8') as f:
+            with open(path, encoding="utf-8") as f:
                 detections = json.load(f)
 
         if not isinstance(detections, list):
@@ -659,25 +692,27 @@ def load_slide_data(path, group_field, include_contours=False, score_threshold=N
     for label, cells in sorted(group_cells.items()):
         arr = np.array(cells, dtype=np.float32)
         auto_eps = compute_auto_eps(arr, k=10) if len(cells) >= 11 else None
-        groups_out.append({
-            'label': label,
-            'n': len(cells),
-            'x': arr[:, 0],
-            'y': arr[:, 1],
-            'auto_eps': auto_eps,
-        })
+        groups_out.append(
+            {
+                "label": label,
+                "n": len(cells),
+                "x": arr[:, 0],
+                "y": arr[:, 1],
+                "auto_eps": auto_eps,
+            }
+        )
 
-    all_x = np.concatenate([g['x'] for g in groups_out])
-    all_y = np.concatenate([g['y'] for g in groups_out])
+    all_x = np.concatenate([g["x"] for g in groups_out])
+    all_y = np.concatenate([g["y"] for g in groups_out])
 
     result = {
-        'groups': groups_out,
-        'n_cells': sum(g['n'] for g in groups_out),
-        'x_range': [float(all_x.min()), float(all_x.max())],
-        'y_range': [float(all_y.min()), float(all_y.max())],
+        "groups": groups_out,
+        "n_cells": sum(g["n"] for g in groups_out),
+        "x_range": [float(all_x.min()), float(all_x.max())],
+        "y_range": [float(all_y.min()), float(all_y.max())],
     }
     if include_contours and contours_raw:
-        result['contours_raw'] = contours_raw
+        result["contours_raw"] = contours_raw
     return result
 
 
@@ -687,23 +722,23 @@ def _collect_contour(det, contours_raw, score_threshold):
     Only collects detections that have outer_contour_global and pixel_size_um.
     If score_threshold is set, filters by features['score'] >= threshold.
     """
-    feat = det.get('features', {})
+    feat = det.get("features", {})
     if score_threshold is not None:
-        score = feat.get('score')
+        score = feat.get("score")
         if score is None:
-            score = det.get('score')
+            score = det.get("score")
         if score is not None and float(score) < score_threshold:
             return
 
-    contour = det.get('outer_contour_global')
+    contour = det.get("outer_contour_global")
     if contour is None:
-        contour = feat.get('outer_contour_global')
+        contour = feat.get("outer_contour_global")
     if contour is None:
-        contour = det.get('contour_dilated_px')  # split_regions output
+        contour = det.get("contour_dilated_px")  # split_regions output
     if contour is None or len(contour) < 3:
         return
 
-    pixel_size = feat.get('pixel_size_um')
+    pixel_size = feat.get("pixel_size_um")
     if pixel_size is None or not isinstance(pixel_size, (int, float)):
         return
 
@@ -769,16 +804,16 @@ def assign_group_colors(slides_data):
     """
     all_groups = set()
     for _, data in slides_data:
-        for g in data['groups']:
-            all_groups.add(g['label'])
+        for g in data["groups"]:
+            all_groups.add(g["label"])
 
     n = len(all_groups)
     sorted_groups = sorted(all_groups)
 
-    if all_groups == {'positive', 'negative'}:
+    if all_groups == {"positive", "negative"}:
         color_map = dict(BINARY_COLORS)
     elif n <= 2:
-        palette = ['#ff4444', '#4488ff']
+        palette = ["#ff4444", "#4488ff"]
         color_map = {lbl: palette[i] for i, lbl in enumerate(sorted_groups)}
     elif n <= 4:
         color_map = {lbl: QUAD_COLORS[i] for i, lbl in enumerate(sorted_groups)}
@@ -790,8 +825,8 @@ def assign_group_colors(slides_data):
 
     # Apply colors to group dicts
     for _, data in slides_data:
-        for g in data['groups']:
-            g['color'] = color_map[g['label']]
+        for g in data["groups"]:
+            g["color"] = color_map[g["label"]]
 
     return color_map
 
@@ -806,8 +841,8 @@ def apply_top_n_filtering(slides_data, top_n, exclude_groups):
     if exclude_groups:
         exc = set(exclude_groups)
         for _, data in slides_data:
-            data['groups'] = [g for g in data['groups'] if g['label'] not in exc]
-            data['n_cells'] = sum(g['n'] for g in data['groups'])
+            data["groups"] = [g for g in data["groups"] if g["label"] not in exc]
+            data["n_cells"] = sum(g["n"] for g in data["groups"])
 
     if top_n is None:
         return
@@ -815,8 +850,8 @@ def apply_top_n_filtering(slides_data, top_n, exclude_groups):
     # Count cells per group globally
     global_counts = {}
     for _, data in slides_data:
-        for g in data['groups']:
-            global_counts[g['label']] = global_counts.get(g['label'], 0) + g['n']
+        for g in data["groups"]:
+            global_counts[g["label"]] = global_counts.get(g["label"], 0) + g["n"]
 
     sorted_groups = sorted(global_counts.items(), key=lambda x: -x[1])
     top_labels = {lbl for i, (lbl, _) in enumerate(sorted_groups) if i < top_n}
@@ -827,40 +862,43 @@ def apply_top_n_filtering(slides_data, top_n, exclude_groups):
         other_x = []
         other_y = []
         other_n = 0
-        for g in data['groups']:
-            if g['label'] in top_labels:
+        for g in data["groups"]:
+            if g["label"] in top_labels:
                 new_groups.append(g)
             else:
-                other_x.append(g['x'])
-                other_y.append(g['y'])
-                other_n += g['n']
+                other_x.append(g["x"])
+                other_y.append(g["y"])
+                other_n += g["n"]
         if other_n > 0:
             ox = np.concatenate(other_x)
             oy = np.concatenate(other_y)
             positions = np.column_stack([ox, oy])
-            new_groups.append({
-                'label': 'other',
-                'n': other_n,
-                'x': ox,
-                'y': oy,
-                'auto_eps': compute_auto_eps(positions, k=10) if other_n >= 11 else None,
-            })
-        data['groups'] = new_groups
-        data['n_cells'] = sum(g['n'] for g in new_groups)
+            new_groups.append(
+                {
+                    "label": "other",
+                    "n": other_n,
+                    "x": ox,
+                    "y": oy,
+                    "auto_eps": compute_auto_eps(positions, k=10) if other_n >= 11 else None,
+                }
+            )
+        data["groups"] = new_groups
+        data["n_cells"] = sum(g["n"] for g in new_groups)
 
 
 # ---------------------------------------------------------------------------
 # Binary data encoding
 # ---------------------------------------------------------------------------
 
+
 def encode_float32_base64(arr):
     """Encode a numpy float32 array as base64 string (little-endian)."""
-    return base64.b64encode(arr.astype(np.float32).tobytes()).decode('ascii')
+    return base64.b64encode(arr.astype(np.float32).tobytes()).decode("ascii")
 
 
 def encode_uint8_base64(arr):
     """Encode a numpy uint8 array as base64 string."""
-    return base64.b64encode(arr.astype(np.uint8).tobytes()).decode('ascii')
+    return base64.b64encode(arr.astype(np.uint8).tobytes()).decode("ascii")
 
 
 def safe_json(obj):
@@ -868,7 +906,7 @@ def safe_json(obj):
 
     Escapes '</' sequences to prevent premature </script> termination (XSS).
     """
-    return json.dumps(obj).replace('</', '<\\/')
+    return json.dumps(obj).replace("</", "<\\/")
 
 
 def build_contour_js_data(contours_raw, max_contours=100_000):
@@ -911,13 +949,15 @@ def build_contour_js_data(contours_raw, max_contours=100_000):
             bx2 = float(pts_um[:, 0].max())
             by1 = float(pts_um[:, 1].min())
             by2 = float(pts_um[:, 1].max())
-            out.append({
-                'pts': flat,
-                'bx1': round(bx1, 1),
-                'by1': round(by1, 1),
-                'bx2': round(bx2, 1),
-                'by2': round(by2, 1),
-            })
+            out.append(
+                {
+                    "pts": flat,
+                    "bx1": round(bx1, 1),
+                    "by1": round(by1, 1),
+                    "bx2": round(bx2, 1),
+                    "by2": round(by2, 1),
+                }
+            )
         except Exception:
             continue
     return out
@@ -927,10 +967,22 @@ def build_contour_js_data(contours_raw, max_contours=100_000):
 # HTML generation
 # ---------------------------------------------------------------------------
 
-def generate_html(slides_data, output_path, color_map, title, group_field,
-                   default_min_cells=10, min_hull_cells=24,
-                   has_regions=False, has_multiscale=False, scale_keys=None,
-                   fluor_data=None, contour_data=None, ch_names=None):
+
+def generate_html(
+    slides_data,
+    output_path,
+    color_map,
+    title,
+    group_field,
+    default_min_cells=10,
+    min_hull_cells=24,
+    has_regions=False,
+    has_multiscale=False,
+    scale_keys=None,
+    fluor_data=None,
+    contour_data=None,
+    ch_names=None,
+):
     """Generate self-contained scrollable HTML with focus view, ROI, and DBSCAN clustering.
 
     Data is embedded as base64-encoded TypedArrays for compact transfer.
@@ -959,18 +1011,22 @@ def generate_html(slides_data, output_path, color_map, title, group_field,
     # Build group label -> index mapping (consistent across all slides)
     group_labels = sorted(color_map.keys())
     if len(group_labels) > 255:
-        print(f"WARNING: {len(group_labels)} groups exceeds Uint8 limit (255). "
-              f"Keeping top 254 groups, collapsing rest into 'other'.", file=sys.stderr)
+        print(
+            f"WARNING: {len(group_labels)} groups exceeds Uint8 limit (255). "
+            f"Keeping top 254 groups, collapsing rest into 'other'.",
+            file=sys.stderr,
+        )
         # Keep the 254 most common groups, collapse the rest
         all_counts = {}
         for _, data in slides_data:
-            for g in data['groups']:
-                all_counts[g['label']] = all_counts.get(g['label'], 0) + g['n']
-        top_labels = [lbl for lbl in sorted(all_counts, key=all_counts.get, reverse=True)
-                      if lbl != 'other'][:254]
-        group_labels = sorted(top_labels) + ['other']
+            for g in data["groups"]:
+                all_counts[g["label"]] = all_counts.get(g["label"], 0) + g["n"]
+        top_labels = [
+            lbl for lbl in sorted(all_counts, key=all_counts.get, reverse=True) if lbl != "other"
+        ][:254]
+        group_labels = sorted(top_labels) + ["other"]
         # Re-map collapsed groups in color_map
-        other_color = '#808080'
+        other_color = "#808080"
         color_map = {lbl: color_map.get(lbl, other_color) for lbl in group_labels}
     group_to_idx = {lbl: i for i, lbl in enumerate(group_labels)}
 
@@ -984,13 +1040,13 @@ def generate_html(slides_data, output_path, color_map, title, group_field,
         all_x = []
         all_y = []
         all_gi = []
-        for g in data['groups']:
-            if g['n'] == 0:
+        for g in data["groups"]:
+            if g["n"] == 0:
                 continue
-            gi = group_to_idx.get(g['label'], group_to_idx.get('other', 0))
-            all_x.append(g['x'])
-            all_y.append(g['y'])
-            all_gi.append(np.full(g['n'], gi, dtype=np.uint8))
+            gi = group_to_idx.get(g["label"], group_to_idx.get("other", 0))
+            all_x.append(g["x"])
+            all_y.append(g["y"])
+            all_gi.append(np.full(g["n"], gi, dtype=np.uint8))
 
         if not all_x:
             continue  # skip slide with no remaining cells
@@ -1008,24 +1064,26 @@ def generate_html(slides_data, output_path, color_map, title, group_field,
         slides_b64_positions.append(encode_float32_base64(positions))
         slides_b64_groups.append(encode_uint8_base64(all_gi))
 
-        slides_meta.append({
-            'name': name,
-            'n': int(n),
-            'xr': [float(data['x_range'][0]), float(data['x_range'][1])],
-            'yr': [float(data['y_range'][0]), float(data['y_range'][1])],
-        })
+        slides_meta.append(
+            {
+                "name": name,
+                "n": int(n),
+                "xr": [float(data["x_range"][0]), float(data["x_range"][1])],
+                "yr": [float(data["y_range"][0]), float(data["y_range"][1])],
+            }
+        )
 
     # Ordered slide names for fluor/contour index alignment
     # (must match slides_meta — skips slides with 0 cells after filtering)
-    slide_names_ordered = [m['name'] for m in slides_meta]
+    slide_names_ordered = [m["name"] for m in slides_meta]
 
     # Build per-slide per-group auto_eps for DBSCAN clustering
     slides_auto_eps = []
     for _, data in slides_data:
         group_eps = {}
-        for g in data['groups']:
-            eps_val = g.get('auto_eps')
-            group_eps[g['label']] = eps_val if eps_val is not None else 100.0
+        for g in data["groups"]:
+            eps_val = g.get("auto_eps")
+            group_eps[g["label"]] = eps_val if eps_val is not None else 100.0
         eps_arr = [group_eps.get(lbl, 100.0) for lbl in group_labels]
         slides_auto_eps.append(eps_arr)
 
@@ -1034,125 +1092,125 @@ def generate_html(slides_data, output_path, color_map, title, group_field,
         """Convert region dicts to compact JS-friendly format (JSON-safe)."""
         compact = []
         for r in reg_list:
-            compact.append({
-                'id': int(r['id']),
-                'type': str(r.get('type', '')),
-                'label': str(r['label']),
-                'color': str(r['color']),
-                'pat': str(r.get('pattern', '')),
-                'n': int(r['n_cells']),
-                'area': float(r['area_um2']),
-                'elong': float(r['elongation']),
-                'dfrac': float(r['dominant_frac']),
-                'comp': {str(k): float(v) for k, v in r['composition'].items()},
-                'bnd': [[float(p['x']), float(p['y'])] for p in r['boundary']],
-            })
+            compact.append(
+                {
+                    "id": int(r["id"]),
+                    "type": str(r.get("type", "")),
+                    "label": str(r["label"]),
+                    "color": str(r["color"]),
+                    "pat": str(r.get("pattern", "")),
+                    "n": int(r["n_cells"]),
+                    "area": float(r["area_um2"]),
+                    "elong": float(r["elongation"]),
+                    "dfrac": float(r["dominant_frac"]),
+                    "comp": {str(k): float(v) for k, v in r["composition"].items()},
+                    "bnd": [[float(p["x"]), float(p["y"])] for p in r["boundary"]],
+                }
+            )
         return compact
 
     slides_region_data = []
     for _, data in slides_data:
-        entry = {'regions': _compact_regions(data.get('regions', []))}
-        rs = data.get('region_scales')
+        entry = {"regions": _compact_regions(data.get("regions", []))}
+        rs = data.get("region_scales")
         if rs:
-            entry['regionScales'] = {
-                k: _compact_regions(v) for k, v in rs.items()
-            }
+            entry["regionScales"] = {k: _compact_regions(v) for k, v in rs.items()}
         slides_region_data.append(entry)
 
     # Build legend info
     legend_items = []
     total_counts = {}
     for _, data in slides_data:
-        for g in data['groups']:
-            total_counts[g['label']] = total_counts.get(g['label'], 0) + g['n']
+        for g in data["groups"]:
+            total_counts[g["label"]] = total_counts.get(g["label"], 0) + g["n"]
 
     for lbl in group_labels:
-        legend_items.append({
-            'label': lbl,
-            'color': color_map[lbl],
-            'count': total_counts.get(lbl, 0),
-        })
+        legend_items.append(
+            {
+                "label": lbl,
+                "color": color_map[lbl],
+                "count": total_counts.get(lbl, 0),
+            }
+        )
 
     n_slides = len(slides_data)
     is_single = n_slides == 1
-    timestamp = datetime.now().isoformat(timespec='seconds')
+    timestamp = datetime.now().isoformat(timespec="seconds")
 
     # Resolve channel names (default Ch0/Ch1/Ch2)
     has_fluor = bool(fluor_data)
     has_contours = bool(contour_data)
     if ch_names is None:
-        ch_names = ['Ch0', 'Ch1', 'Ch2']
-    ch_names = (list(ch_names) + ['Ch0', 'Ch1', 'Ch2'])[:3]
+        ch_names = ["Ch0", "Ch1", "Ch2"]
+    ch_names = (list(ch_names) + ["Ch0", "Ch1", "Ch2"])[:3]
 
     # --- Build conditional sidebar sections ---
     # Build regions sidebar (conditional on --graph-patterns)
-    regions_sidebar_html = ''
+    regions_sidebar_html = ""
     if has_regions:
-        scale_slider_html = ''
+        scale_slider_html = ""
         if has_multiscale and scale_keys:
             mid = len(scale_keys) // 2
             scale_slider_html = (
                 '      <div class="ctrl-row">\n'
-                '        <label>Scale</label>\n'
+                "        <label>Scale</label>\n"
                 f'        <input type="range" id="region-scale" min="0" max="{len(scale_keys)-1}" value="{mid}" step="1">\n'
                 f'        <span class="val" id="region-scale-val">{scale_keys[mid]} &micro;m</span>\n'
-                '      </div>\n'
+                "      </div>\n"
             )
         regions_sidebar_html = (
-            '    <!-- Regions (graph patterns) -->\n'
+            "    <!-- Regions (graph patterns) -->\n"
             '    <div class="sidebar-section">\n'
-            '      <h3>Regions</h3>\n'
+            "      <h3>Regions</h3>\n"
             '      <div class="ctrl-row">\n'
             '        <label style="min-width:auto"><input type="checkbox" id="show-regions" checked> Show</label>\n'
             '        <label style="min-width:auto"><input type="checkbox" id="show-region-labels" checked> Labels</label>\n'
             '        <label style="min-width:auto"><input type="checkbox" id="show-region-bnd" checked> Borders</label>\n'
-            '      </div>\n'
+            "      </div>\n"
             '      <div class="ctrl-row">\n'
-            '        <label>Opacity</label>\n'
+            "        <label>Opacity</label>\n"
             '        <input type="range" id="region-opacity" min="0" max="0.8" value="0.25" step="0.05">\n'
             '        <span class="val" id="region-op-val">0.25</span>\n'
-            '      </div>\n'
-            + scale_slider_html +
-            '    </div>\n'
+            "      </div>\n" + scale_slider_html + "    </div>\n"
         )
 
     # Build fluorescence/contour sidebar (conditional on --czi-path/--czi-dir/--contours)
-    fluor_sidebar_html = ''
+    fluor_sidebar_html = ""
     if has_fluor or has_contours:
         ch0_name = html_mod.escape(ch_names[0])
         ch1_name = html_mod.escape(ch_names[1])
         ch2_name = html_mod.escape(ch_names[2])
-        fluor_sidebar_html = '    <!-- Fluorescence & Contours -->\n'
+        fluor_sidebar_html = "    <!-- Fluorescence & Contours -->\n"
         fluor_sidebar_html += '    <div class="sidebar-section">\n'
-        fluor_sidebar_html += '      <h3>Fluorescence</h3>\n'
+        fluor_sidebar_html += "      <h3>Fluorescence</h3>\n"
         if has_fluor:
             fluor_sidebar_html += (
                 '      <div class="ctrl-row">\n'
                 '        <label style="min-width:auto"><input type="checkbox" id="show-fluor" checked> Show</label>\n'
-                '      </div>\n'
+                "      </div>\n"
                 '      <div class="ctrl-row">\n'
-                '        <label>Opacity</label>\n'
+                "        <label>Opacity</label>\n"
                 '        <input type="range" id="fluor-opacity" min="0" max="1" value="0.8" step="0.05">\n'
                 '        <span class="val" id="fluor-op-val">0.80</span>\n'
-                '      </div>\n'
+                "      </div>\n"
                 '      <div class="btn-row" style="margin:4px 0;">\n'
                 f'        <button class="btn active" id="btn-ch0" style="border-left:3px solid #ff4444">{ch0_name}</button>\n'
                 f'        <button class="btn active" id="btn-ch1" style="border-left:3px solid #44ff44">{ch1_name}</button>\n'
                 f'        <button class="btn active" id="btn-ch2" style="border-left:3px solid #4488ff">{ch2_name}</button>\n'
-                '      </div>\n'
+                "      </div>\n"
             )
         if has_contours:
             fluor_sidebar_html += (
                 '      <div class="ctrl-row">\n'
                 '        <label style="min-width:auto"><input type="checkbox" id="show-contours" checked> Contours</label>\n'
-                '      </div>\n'
+                "      </div>\n"
             )
         fluor_sidebar_html += (
             '      <div class="ctrl-row">\n'
             '        <label style="min-width:auto"><input type="checkbox" id="show-dots" checked> Dots</label>\n'
-            '      </div>\n'
+            "      </div>\n"
         )
-        fluor_sidebar_html += '    </div>\n'
+        fluor_sidebar_html += "    </div>\n"
 
     # --- Build the HTML ---
     html_parts = []
@@ -1475,13 +1533,13 @@ const SCALE_KEYS = {safe_json(scale_keys or [])};
     # Emit base64 data arrays
     html_parts.append("const SLIDE_POS_B64 = [\n")
     for i, b64 in enumerate(slides_b64_positions):
-        comma = ',' if i < len(slides_b64_positions) - 1 else ''
+        comma = "," if i < len(slides_b64_positions) - 1 else ""
         html_parts.append(f'  "{b64}"{comma}\n')
     html_parts.append("];\n")
 
     html_parts.append("const SLIDE_GRP_B64 = [\n")
     for i, b64 in enumerate(slides_b64_groups):
-        comma = ',' if i < len(slides_b64_groups) - 1 else ''
+        comma = "," if i < len(slides_b64_groups) - 1 else ""
         html_parts.append(f'  "{b64}"{comma}\n')
     html_parts.append("];\n")
 
@@ -1489,21 +1547,21 @@ const SCALE_KEYS = {safe_json(scale_keys or [])};
     html_parts.append("// Fluorescence channel data (grayscale PNG base64, one entry per slide)\n")
     html_parts.append("const FLUOR_META = [\n")
     for i, name in enumerate(slide_names_ordered):
-        comma = ',' if i < len(slide_names_ordered) - 1 else ''
+        comma = "," if i < len(slide_names_ordered) - 1 else ""
         fd = (fluor_data or {}).get(name)
         if fd is None:
-            html_parts.append(f'  null{comma}\n')
+            html_parts.append(f"  null{comma}\n")
         else:
             entry = {
-                'w': fd['width'],
-                'h': fd['height'],
-                'scale': fd['scale'],
-                'mx': fd.get('mosaic_x', 0),
-                'my': fd.get('mosaic_y', 0),
-                'pixel_size': fd.get('pixel_size', 0.22),
-                'names': fd.get('names', ['Ch0', 'Ch1', 'Ch2']),
+                "w": fd["width"],
+                "h": fd["height"],
+                "scale": fd["scale"],
+                "mx": fd.get("mosaic_x", 0),
+                "my": fd.get("mosaic_y", 0),
+                "pixel_size": fd.get("pixel_size", 0.22),
+                "names": fd.get("names", ["Ch0", "Ch1", "Ch2"]),
             }
-            html_parts.append(f'  {safe_json(entry)}{comma}\n')
+            html_parts.append(f"  {safe_json(entry)}{comma}\n")
     html_parts.append("];\n")
 
     # Emit channel image base64 data as a flat array (3 images * n_slides)
@@ -1513,8 +1571,8 @@ const SCALE_KEYS = {safe_json(scale_keys or [])};
         fd = (fluor_data or {}).get(name)
         for ci in range(3):
             is_last = (i == len(slide_names_ordered) - 1) and ci == 2
-            comma = '' if is_last else ','
-            if fd is None or ci >= len(fd['channels']) or not fd['channels'][ci]:
+            comma = "" if is_last else ","
+            if fd is None or ci >= len(fd["channels"]) or not fd["channels"][ci]:
                 html_parts.append(f'  ""{comma}\n')
             else:
                 html_parts.append(f'  "{fd["channels"][ci]}"{comma}\n')
@@ -1524,13 +1582,13 @@ const SCALE_KEYS = {safe_json(scale_keys or [])};
     html_parts.append("// Detection contours in um coordinates\n")
     html_parts.append("const CONTOUR_DATA = [\n")
     for i, name in enumerate(slide_names_ordered):
-        comma = ',' if i < len(slide_names_ordered) - 1 else ''
+        comma = "," if i < len(slide_names_ordered) - 1 else ""
         cd = (contour_data or {}).get(name)
         if not cd:
-            html_parts.append(f'  []{comma}\n')
+            html_parts.append(f"  []{comma}\n")
         else:
             # Emit as JSON; pts arrays are plain lists (will become JS arrays)
-            html_parts.append(f'  {safe_json(cd)}{comma}\n')
+            html_parts.append(f"  {safe_json(cd)}{comma}\n")
     html_parts.append("];\n")
 
     html_parts.append(f"""
@@ -3455,10 +3513,10 @@ window.addEventListener('resize', () => {
 
     html_parts.append("</script>\n</body>\n</html>")
 
-    html_content = ''.join(html_parts)
+    html_content = "".join(html_parts)
 
     Path(output_path).parent.mkdir(parents=True, exist_ok=True)
-    with open(output_path, 'w', encoding='utf-8') as f:
+    with open(output_path, "w", encoding="utf-8") as f:
         f.write(html_content)
 
     file_size_mb = Path(output_path).stat().st_size / (1024 * 1024)
@@ -3469,76 +3527,127 @@ window.addEventListener('resize', () => {
 # Main
 # ---------------------------------------------------------------------------
 
+
 def main():
     parser = argparse.ArgumentParser(
-        description='Generate multi-slide spatial viewer HTML from classified detections')
-    parser.add_argument('--input-dir',
-                        help='Directory containing per-slide subdirectories '
-                             '(or a single slide dir with classified JSON)')
-    parser.add_argument('--detections', nargs='+',
-                        help='Explicit list of detection JSON files')
-    parser.add_argument('--detection-glob', default='cell_detections_classified.json',
-                        help='Glob pattern for detection files within slide subdirs '
-                             '(default: cell_detections_classified.json)')
-    parser.add_argument('--group-field', required=True,
-                        help='Field in features dict to color cells by '
-                             '(e.g. tdTomato_class, MSLN_class, marker_profile)')
-    parser.add_argument('--title', default='Multi-Slide Spatial Overview',
-                        help='HTML page title')
-    parser.add_argument('--output', default=None,
-                        help='Output HTML path (default: {input-dir}/spatial_viewer.html)')
-    parser.add_argument('--top-n', type=int, default=None,
-                        help='Keep top N groups by cell count, lump rest into "other"')
-    parser.add_argument('--exclude-groups', default=None,
-                        help='Comma-separated group labels to exclude entirely')
-    parser.add_argument('--default-min-cells', type=int, default=10,
-                        help='Default DBSCAN min_samples (default: 10)')
-    parser.add_argument('--min-hull-cells', type=int, default=24,
-                        help='Min cells in cluster to draw convex hull (default: 24)')
-    parser.add_argument('--no-graph-patterns', action='store_true',
-                        help='Disable graph-based spatial pattern regions (enabled by default)')
-    parser.add_argument('--connect-radius', type=float, nargs='+',
-                        default=[50, 100, 200, 300, 400, 500, 600, 700, 800, 1000],
-                        help='Connection radii in um for graph patterns (default: 10 scales)')
-    parser.add_argument('--min-region-cells', type=int, default=8,
-                        help='Min cells per connected component for regions (default: 8)')
+        description="Generate multi-slide spatial viewer HTML from classified detections"
+    )
+    parser.add_argument(
+        "--input-dir",
+        help="Directory containing per-slide subdirectories "
+        "(or a single slide dir with classified JSON)",
+    )
+    parser.add_argument("--detections", nargs="+", help="Explicit list of detection JSON files")
+    parser.add_argument(
+        "--detection-glob",
+        default="cell_detections_classified.json",
+        help="Glob pattern for detection files within slide subdirs "
+        "(default: cell_detections_classified.json)",
+    )
+    parser.add_argument(
+        "--group-field",
+        required=True,
+        help="Field in features dict to color cells by "
+        "(e.g. tdTomato_class, MSLN_class, marker_profile)",
+    )
+    parser.add_argument("--title", default="Multi-Slide Spatial Overview", help="HTML page title")
+    parser.add_argument(
+        "--output", default=None, help="Output HTML path (default: {input-dir}/spatial_viewer.html)"
+    )
+    parser.add_argument(
+        "--top-n",
+        type=int,
+        default=None,
+        help='Keep top N groups by cell count, lump rest into "other"',
+    )
+    parser.add_argument(
+        "--exclude-groups", default=None, help="Comma-separated group labels to exclude entirely"
+    )
+    parser.add_argument(
+        "--default-min-cells", type=int, default=10, help="Default DBSCAN min_samples (default: 10)"
+    )
+    parser.add_argument(
+        "--min-hull-cells",
+        type=int,
+        default=24,
+        help="Min cells in cluster to draw convex hull (default: 24)",
+    )
+    parser.add_argument(
+        "--no-graph-patterns",
+        action="store_true",
+        help="Disable graph-based spatial pattern regions (enabled by default)",
+    )
+    parser.add_argument(
+        "--connect-radius",
+        type=float,
+        nargs="+",
+        default=[50, 100, 200, 300, 400, 500, 600, 700, 800, 1000],
+        help="Connection radii in um for graph patterns (default: 10 scales)",
+    )
+    parser.add_argument(
+        "--min-region-cells",
+        type=int,
+        default=8,
+        help="Min cells per connected component for regions (default: 8)",
+    )
     # Fluorescence background
-    parser.add_argument('--czi-path',
-                        help='CZI file for fluorescence background (single slide or matched '
-                             'to all slides)')
-    parser.add_argument('--czi-dir',
-                        help='Directory of CZI files matched to slides by stem name')
-    parser.add_argument('--display-channels', default=None,
-                        help='Channel indices for R,G,B display (e.g. "1,2,0"). '
-                             'Default: first 3 channels (0,1,2).')
-    parser.add_argument('--scale-factor', type=float, default=0.0625,
-                        help='CZI downsample factor for background image (default: 1/16)')
+    parser.add_argument(
+        "--czi-path",
+        help="CZI file for fluorescence background (single slide or matched " "to all slides)",
+    )
+    parser.add_argument("--czi-dir", help="Directory of CZI files matched to slides by stem name")
+    parser.add_argument(
+        "--display-channels",
+        default=None,
+        help='Channel indices for R,G,B display (e.g. "1,2,0"). '
+        "Default: first 3 channels (0,1,2).",
+    )
+    parser.add_argument(
+        "--scale-factor",
+        type=float,
+        default=0.0625,
+        help="CZI downsample factor for background image (default: 1/16)",
+    )
     # Detection contours (on by default)
-    parser.add_argument('--no-contours', action='store_true',
-                        help='Disable detection contour embedding (enabled by default when '
-                             'detections have outer_contour_global)')
-    parser.add_argument('--contour-score-threshold', type=float, default=None,
-                        help='Only embed contours for detections with score >= threshold')
-    parser.add_argument('--max-contours', type=int, default=100_000,
-                        help='Maximum contours to embed per slide (default: 100000)')
+    parser.add_argument(
+        "--no-contours",
+        action="store_true",
+        help="Disable detection contour embedding (enabled by default when "
+        "detections have outer_contour_global)",
+    )
+    parser.add_argument(
+        "--contour-score-threshold",
+        type=float,
+        default=None,
+        help="Only embed contours for detections with score >= threshold",
+    )
+    parser.add_argument(
+        "--max-contours",
+        type=int,
+        default=100_000,
+        help="Maximum contours to embed per slide (default: 100000)",
+    )
     args = parser.parse_args()
 
     if not args.input_dir and not args.detections:
-        parser.error('Provide either --input-dir or --detections')
+        parser.error("Provide either --input-dir or --detections")
 
     # Determine output path
     if args.output is None:
         if args.input_dir:
-            args.output = str(Path(args.input_dir) / 'spatial_viewer.html')
+            args.output = str(Path(args.input_dir) / "spatial_viewer.html")
         else:
-            args.output = 'spatial_viewer.html'
+            args.output = "spatial_viewer.html"
 
     # Discover or use explicit files
     if args.input_dir:
         slide_files = discover_slides(args.input_dir, args.detection_glob)
         if not slide_files:
-            print(f"Error: no detection files matching '{args.detection_glob}' "
-                  f"found in {args.input_dir}", file=sys.stderr)
+            print(
+                f"Error: no detection files matching '{args.detection_glob}' "
+                f"found in {args.input_dir}",
+                file=sys.stderr,
+            )
             sys.exit(1)
         print(f"Found {len(slide_files)} slides in {args.input_dir}")
     else:
@@ -3552,16 +3661,19 @@ def main():
     want_contours = not args.no_contours
     slides_data = []
     for name, path in slide_files:
-        print(f"  Loading {name}...", end='', flush=True)
-        data = load_slide_data(path, args.group_field,
-                               include_contours=want_contours,
-                               score_threshold=args.contour_score_threshold)
+        print(f"  Loading {name}...", end="", flush=True)
+        data = load_slide_data(
+            path,
+            args.group_field,
+            include_contours=want_contours,
+            score_threshold=args.contour_score_threshold,
+        )
         if data is None:
             print(" skipped (no data)")
             continue
-        groups_str = ', '.join(f"{g['label']}:{g['n']}" for g in data['groups'])
+        groups_str = ", ".join(f"{g['label']}:{g['n']}" for g in data["groups"])
         slides_data.append((name, data))
-        n_contours = len(data.get('contours_raw', []))
+        n_contours = len(data.get("contours_raw", []))
         extra = f", {n_contours} contours" if want_contours else ""
         print(f" {data['n_cells']} cells [{groups_str}]{extra}")
 
@@ -3572,7 +3684,7 @@ def main():
     # Apply top-N filtering and exclusions
     exclude_groups = set()
     if args.exclude_groups:
-        exclude_groups = {s.strip() for s in args.exclude_groups.split(',')}
+        exclude_groups = {s.strip() for s in args.exclude_groups.split(",")}
     if args.top_n or exclude_groups:
         apply_top_n_filtering(slides_data, args.top_n, exclude_groups)
 
@@ -3596,11 +3708,11 @@ def main():
             type_list = []
             type_labels = []
             type_colors = []
-            for gi, g in enumerate(data['groups']):
-                type_labels.append(g['label'])
-                type_colors.append(g['color'])
-                pos_list.append(np.column_stack([g['x'], g['y']]))
-                type_list.append(np.full(g['n'], gi, dtype=np.int32))
+            for gi, g in enumerate(data["groups"]):
+                type_labels.append(g["label"])
+                type_colors.append(g["color"])
+                pos_list.append(np.column_stack([g["x"], g["y"]]))
+                type_list.append(np.full(g["n"], gi, dtype=np.int32))
 
             positions = np.vstack(pos_list)
             types_arr = np.concatenate(type_list)
@@ -3611,28 +3723,36 @@ def main():
                 tree_cache = {}  # reuse KDTrees across radii
                 for r in radii:
                     scales[str(int(r))] = compute_graph_patterns(
-                        positions, types_arr, type_labels, type_colors,
+                        positions,
+                        types_arr,
+                        type_labels,
+                        type_colors,
                         connect_radius_um=r,
                         min_cluster_cells=args.min_region_cells,
                         boundary_dilate_um=r * 0.4,
-                        _cached_trees=tree_cache)
-                data['region_scales'] = scales
-                data['regions'] = scales[str(int(radii[mid_idx]))]
+                        _cached_trees=tree_cache,
+                    )
+                data["region_scales"] = scales
+                data["regions"] = scales[str(int(radii[mid_idx]))]
             else:
-                data['regions'] = compute_graph_patterns(
-                    positions, types_arr, type_labels, type_colors,
+                data["regions"] = compute_graph_patterns(
+                    positions,
+                    types_arr,
+                    type_labels,
+                    type_colors,
                     connect_radius_um=radii[0],
                     min_cluster_cells=args.min_region_cells,
-                    boundary_dilate_um=radii[0] * 0.4)
+                    boundary_dilate_um=radii[0] * 0.4,
+                )
 
-        has_regions = any(data.get('regions') for _, data in slides_data)
+        has_regions = any(data.get("regions") for _, data in slides_data)
 
     # Build contour data per slide
     contour_data = None
     if want_contours:
         contour_data = {}
         for name, data in slides_data:
-            raw = data.pop('contours_raw', [])
+            raw = data.pop("contours_raw", [])
             if raw:
                 cd = build_contour_js_data(raw, max_contours=args.max_contours)
                 contour_data[name] = cd
@@ -3644,25 +3764,25 @@ def main():
     if args.czi_path or args.czi_dir:
         display_channels = [0, 1, 2]
         if args.display_channels:
-            display_channels = [int(x.strip()) for x in args.display_channels.split(',')]
+            display_channels = [int(x.strip()) for x in args.display_channels.split(",")]
         display_channels = display_channels[:3]
 
         # Build CZI path map: slide_name -> Path (or '*' for single CZI)
         czi_map = {}
         if args.czi_path:
-            czi_map['*'] = Path(args.czi_path)
+            czi_map["*"] = Path(args.czi_path)
         elif args.czi_dir:
-            for czi_file in sorted(Path(args.czi_dir).glob('*.czi')):
+            for czi_file in sorted(Path(args.czi_dir).glob("*.czi")):
                 czi_map[czi_file.stem] = czi_file
 
         fluor_data = {}
         ch_names_collected = None
         for name, _ in slides_data:
             # Find matching CZI: exact stem match, then wildcard, then fuzzy
-            czi_path = czi_map.get(name) or czi_map.get('*')
+            czi_path = czi_map.get(name) or czi_map.get("*")
             if czi_path is None:
                 for stem, path in czi_map.items():
-                    if stem != '*' and (name in stem or stem in name):
+                    if stem != "*" and (name in stem or stem in name):
                         czi_path = path
                         break
             if czi_path is None:
@@ -3672,7 +3792,8 @@ def main():
             print(f"  Loading fluorescence for '{name}' from {czi_path.name}...")
             try:
                 ch_arrays, pixel_size, mx, my = read_czi_thumbnail_channels(
-                    czi_path, display_channels, scale_factor=args.scale_factor)
+                    czi_path, display_channels, scale_factor=args.scale_factor
+                )
             except Exception as exc:
                 print(f"  WARNING: failed to load CZI for '{name}': {exc}", file=sys.stderr)
                 continue
@@ -3680,10 +3801,11 @@ def main():
             if pixel_size is None:
                 # Try to derive from detection features (area vs area_um2)
                 import math as _math
-                for _det in (data.get('_raw_detections') or [])[:100]:
-                    _f = _det.get('features', {})
-                    if _f.get('area') and _f.get('area_um2') and _f['area'] > 0:
-                        pixel_size = _math.sqrt(_f['area_um2'] / _f['area'])
+
+                for _det in (data.get("_raw_detections") or [])[:100]:
+                    _f = _det.get("features", {})
+                    if _f.get("area") and _f.get("area_um2") and _f["area"] > 0:
+                        pixel_size = _math.sqrt(_f["area_um2"] / _f["area"])
                         break
                 if pixel_size is None:
                     raise ValueError(
@@ -3698,13 +3820,14 @@ def main():
             # For accurate names, use czi_info.py metadata. Here we fall back to
             # generic names (Ch0, Ch1...) when marker count doesn't cover the index.
             from segmentation.io.czi_loader import parse_markers_from_filename
+
             markers = parse_markers_from_filename(czi_path.name)
             this_ch_names = []
             for ch_idx in display_channels:
                 if ch_idx < len(markers):
-                    this_ch_names.append(markers[ch_idx]['name'])
+                    this_ch_names.append(markers[ch_idx]["name"])
                 else:
-                    this_ch_names.append(f'Ch{ch_idx}')
+                    this_ch_names.append(f"Ch{ch_idx}")
             if ch_names_collected is None:
                 ch_names_collected = this_ch_names
 
@@ -3712,25 +3835,27 @@ def main():
             ch_b64 = []
             for ch_arr in ch_arrays:
                 if ch_arr is None:
-                    ch_b64.append('')
+                    ch_b64.append("")
                 else:
                     ch_b64.append(_encode_channel_b64(ch_arr))
             while len(ch_b64) < 3:
-                ch_b64.append('')
+                ch_b64.append("")
 
             h, w = ch_arrays[0].shape if ch_arrays[0] is not None else (0, 0)
             fluor_data[name] = {
-                'channels': ch_b64,
-                'names': this_ch_names,
-                'width': w,
-                'height': h,
-                'scale': args.scale_factor,
-                'mosaic_x': mx,
-                'mosaic_y': my,
-                'pixel_size': pixel_size,
+                "channels": ch_b64,
+                "names": this_ch_names,
+                "width": w,
+                "height": h,
+                "scale": args.scale_factor,
+                "mosaic_x": mx,
+                "mosaic_y": my,
+                "pixel_size": pixel_size,
             }
-            print(f"    Encoded {sum(1 for b in ch_b64 if b)} channels "
-                  f"({w}x{h} px thumbnail)", flush=True)
+            print(
+                f"    Encoded {sum(1 for b in ch_b64 if b)} channels " f"({w}x{h} px thumbnail)",
+                flush=True,
+            )
 
         ch_names = ch_names_collected
         if not fluor_data:
@@ -3738,20 +3863,24 @@ def main():
             print("  No fluorescence data loaded")
 
     # Generate HTML
-    total_cells = sum(d['n_cells'] for _, d in slides_data)
-    print(f"\nGenerating HTML for {len(slides_data)} slides, "
-          f"{total_cells:,} total cells...")
-    generate_html(slides_data, args.output, color_map,
-                  title=args.title, group_field=args.group_field,
-                  default_min_cells=args.default_min_cells,
-                  min_hull_cells=args.min_hull_cells,
-                  has_regions=has_regions,
-                  has_multiscale=has_multiscale,
-                  scale_keys=scale_keys,
-                  fluor_data=fluor_data,
-                  contour_data=contour_data,
-                  ch_names=ch_names)
+    total_cells = sum(d["n_cells"] for _, d in slides_data)
+    print(f"\nGenerating HTML for {len(slides_data)} slides, " f"{total_cells:,} total cells...")
+    generate_html(
+        slides_data,
+        args.output,
+        color_map,
+        title=args.title,
+        group_field=args.group_field,
+        default_min_cells=args.default_min_cells,
+        min_hull_cells=args.min_hull_cells,
+        has_regions=has_regions,
+        has_multiscale=has_multiscale,
+        scale_keys=scale_keys,
+        fluor_data=fluor_data,
+        contour_data=contour_data,
+        ch_names=ch_names,
+    )
 
 
-if __name__ == '__main__':
+if __name__ == "__main__":
     main()

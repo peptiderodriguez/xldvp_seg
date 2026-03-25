@@ -7,12 +7,15 @@ a specific type of cell or structure in microscopy images.
 
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
-from typing import Dict, Any, List, Optional, Tuple
+from typing import Any
+
 import numpy as np
 
+from segmentation.utils.detection_utils import (
+    safe_to_uint8 as _safe_to_uint8,  # noqa: F401 — re-exported for mk/nmj/cell imports
+)
+from segmentation.utils.feature_extraction import RESNET50_FEATURE_DIM, SAM2_EMBEDDING_DIM
 from segmentation.utils.logging import get_logger
-from segmentation.utils.feature_extraction import SAM2_EMBEDDING_DIM, RESNET50_FEATURE_DIM
-from segmentation.utils.detection_utils import safe_to_uint8 as _safe_to_uint8  # noqa: F401 — re-exported for mk/nmj/cell imports
 
 # DINOv2 ViT-L/14 feature dimension
 DINOV2_FEATURE_DIM = 1024
@@ -32,27 +35,28 @@ class Detection:
         id: Optional local ID within tile
         score: Optional confidence score (from classifier)
     """
+
     mask: np.ndarray
-    centroid: List[float]
-    features: Dict[str, Any] = field(default_factory=dict)
-    id: Optional[str] = None
-    score: Optional[float] = None
+    centroid: list[float]
+    features: dict[str, Any] = field(default_factory=dict)
+    id: str | None = None
+    score: float | None = None
 
     @property
     def area(self) -> int:
         """Area in pixels."""
         if self.mask is None:
-            return self._area if hasattr(self, '_area') else int(self.features.get('area', 0))
+            return self._area if hasattr(self, "_area") else int(self.features.get("area", 0))
         return int(self.mask.sum())
 
-    def to_dict(self) -> Dict[str, Any]:
+    def to_dict(self) -> dict[str, Any]:
         """Convert to dictionary for serialization."""
         return {
-            'centroid': self.centroid,
-            'features': self.features,
-            'id': self.id,
-            'score': self.score,
-            'area': self.area,
+            "centroid": self.centroid,
+            "features": self.features,
+            "id": self.id,
+            "score": self.score,
+            "area": self.area,
         }
 
 
@@ -80,12 +84,7 @@ class DetectionStrategy(ABC):
         pass
 
     @abstractmethod
-    def segment(
-        self,
-        tile: np.ndarray,
-        models: Dict[str, Any],
-        **kwargs
-    ) -> List[np.ndarray]:
+    def segment(self, tile: np.ndarray, models: dict[str, Any], **kwargs) -> list[np.ndarray]:
         """
         Generate candidate masks from a tile image.
 
@@ -102,11 +101,8 @@ class DetectionStrategy(ABC):
 
     @abstractmethod
     def filter(
-        self,
-        masks: List[np.ndarray],
-        features: List[Dict[str, Any]],
-        pixel_size_um: float
-    ) -> List[Detection]:
+        self, masks: list[np.ndarray], features: list[dict[str, Any]], pixel_size_um: float
+    ) -> list[Detection]:
         """
         Filter and classify candidate masks.
 
@@ -121,11 +117,8 @@ class DetectionStrategy(ABC):
         pass
 
     def detect(
-        self,
-        tile: np.ndarray,
-        models: Dict[str, Any],
-        pixel_size_um: float
-    ) -> Tuple[np.ndarray, List[Detection]]:
+        self, tile: np.ndarray, models: dict[str, Any], pixel_size_um: float
+    ) -> tuple[np.ndarray, list[Detection]]:
         """
         Complete detection pipeline: segment + compute features + filter.
 
@@ -160,11 +153,7 @@ class DetectionStrategy(ABC):
 
         return label_array, detections
 
-    def compute_features(
-        self,
-        mask: np.ndarray,
-        tile: np.ndarray
-    ) -> Dict[str, Any]:
+    def compute_features(self, mask: np.ndarray, tile: np.ndarray) -> dict[str, Any]:
         """
         Compute features for a single mask.
 
@@ -216,24 +205,23 @@ class DetectionStrategy(ABC):
         full_area = int(bool_mask.sum())
 
         return {
-            'area': full_area,
-            'centroid': [float(prop.centroid[1]), float(prop.centroid[0])],  # [x, y]
-            'eccentricity': float(prop.eccentricity),
-            'solidity': float(prop.solidity),
-            'mean_intensity': float(prop.mean_intensity),
-            'perimeter': float(prop.perimeter),
+            "area": full_area,
+            "centroid": [float(prop.centroid[1]), float(prop.centroid[0])],  # [x, y]
+            "eccentricity": float(prop.eccentricity),
+            "solidity": float(prop.solidity),
+            "mean_intensity": float(prop.mean_intensity),
+            "perimeter": float(prop.perimeter),
         }
 
-    def get_config(self) -> Dict[str, Any]:
+    def get_config(self) -> dict[str, Any]:
         """
         Return strategy configuration for logging/reproducibility.
 
         Default implementation returns all instance attributes.
         """
         return {
-            'strategy': self.name,
-            **{k: v for k, v in self.__dict__.items()
-               if not k.startswith('_') and not callable(v)}
+            "strategy": self.name,
+            **{k: v for k, v in self.__dict__.items() if not k.startswith("_") and not callable(v)},
         }
 
     # ===== Shared classifier and feature methods =====
@@ -241,12 +229,8 @@ class DetectionStrategy(ABC):
     # to avoid code duplication.
 
     def classify_rf(
-        self,
-        detections: List[Detection],
-        classifier,
-        scaler,
-        feature_names: List[str]
-    ) -> List[Detection]:
+        self, detections: list[Detection], classifier, scaler, feature_names: list[str]
+    ) -> list[Detection]:
         """
         Classify candidates using trained Random Forest model.
 
@@ -306,8 +290,8 @@ class DetectionStrategy(ABC):
         for j, (idx, prob) in enumerate(zip(valid_indices, probs)):
             det = detections[idx]
             det.score = float(prob)
-            det.features['rf_prediction'] = float(prob)
-            det.features['confidence'] = float(prob)
+            det.features["rf_prediction"] = float(prob)
+            det.features["confidence"] = float(prob)
             # Strategy-specific extras (e.g., NMJ sets prob_nmj)
             self._post_classify_rf_detection(det, prob)
 
@@ -315,11 +299,11 @@ class DetectionStrategy(ABC):
         for i, det in enumerate(detections):
             if det.score is None:
                 det.score = 0.0
-                det.features['rf_prediction'] = 0.0
-                det.features['confidence'] = 0.0
+                det.features["rf_prediction"] = 0.0
+                det.features["confidence"] = 0.0
                 self._post_classify_rf_detection(det, 0.0)
 
-        threshold = getattr(self, 'classifier_threshold', 0.5)
+        threshold = getattr(self, "classifier_threshold", 0.5)
         n_above = sum(1 for d in detections if d.score >= threshold)
         logger.debug(f"RF classifier: {n_above}/{len(detections)} above {threshold}, keeping all")
 
@@ -358,30 +342,25 @@ class DetectionStrategy(ABC):
                 dinov2_* keys get zero-filled).
         """
         for det in detection_dicts:
-            feats = det['features']
-            if 'resnet_0' not in feats:
+            feats = det["features"]
+            if "resnet_0" not in feats:
                 for i in range(RESNET50_FEATURE_DIM):
-                    feats[f'resnet_{i}'] = 0.0
-            if 'resnet_ctx_0' not in feats:
+                    feats[f"resnet_{i}"] = 0.0
+            if "resnet_ctx_0" not in feats:
                 for i in range(RESNET50_FEATURE_DIM):
-                    feats[f'resnet_ctx_{i}'] = 0.0
-            if has_dinov2 and 'dinov2_0' not in feats:
+                    feats[f"resnet_ctx_{i}"] = 0.0
+            if has_dinov2 and "dinov2_0" not in feats:
                 for i in range(DINOV2_FEATURE_DIM):
-                    feats[f'dinov2_{i}'] = 0.0
-            if has_dinov2 and 'dinov2_ctx_0' not in feats:
+                    feats[f"dinov2_{i}"] = 0.0
+            if has_dinov2 and "dinov2_ctx_0" not in feats:
                 for i in range(DINOV2_FEATURE_DIM):
-                    feats[f'dinov2_ctx_{i}'] = 0.0
+                    feats[f"dinov2_ctx_{i}"] = 0.0
 
     # ===== Shared feature extraction methods =====
     # These methods are used by multiple strategies (NMJ, MK, Vessel, Cell)
     # and are provided here to avoid code duplication.
 
-    def _extract_sam2_embedding(
-        self,
-        sam2_predictor,
-        cy: float,
-        cx: float
-    ) -> np.ndarray:
+    def _extract_sam2_embedding(self, sam2_predictor, cy: float, cx: float) -> np.ndarray:
         """
         Extract 256D SAM2 embedding at a point.
 
@@ -421,14 +400,14 @@ class DetectionStrategy(ABC):
 
     def _extract_embedding_batch(
         self,
-        crops: List[np.ndarray],
+        crops: list[np.ndarray],
         model,
         transform,
         device,
         feature_dim: int,
         batch_size: int = 32,
         squeeze_spatial: bool = False,
-    ) -> List[np.ndarray]:
+    ) -> list[np.ndarray]:
         import torch
         from PIL import Image
 
@@ -441,7 +420,7 @@ class DetectionStrategy(ABC):
         all_features = []
 
         for i in range(0, len(crops), batch_size):
-            batch_crops = crops[i:i + batch_size]
+            batch_crops = crops[i : i + batch_size]
             batch_tensors = []
             valid_indices = []
 
@@ -457,7 +436,7 @@ class DetectionStrategy(ABC):
                     if crop.size == 0:
                         continue
 
-                    pil_img = Image.fromarray(crop, mode='RGB')
+                    pil_img = Image.fromarray(crop, mode="RGB")
                     tensor = transform(pil_img)
                     batch_tensors.append(tensor)
                     valid_indices.append(idx)
@@ -488,40 +467,33 @@ class DetectionStrategy(ABC):
         return all_features
 
     def _extract_resnet_features_batch(
-        self,
-        crops: List[np.ndarray],
-        model,
-        transform,
-        device,
-        batch_size: int = 32
-    ) -> List[np.ndarray]:
+        self, crops: list[np.ndarray], model, transform, device, batch_size: int = 32
+    ) -> list[np.ndarray]:
         return self._extract_embedding_batch(
-            crops, model, transform, device,
+            crops,
+            model,
+            transform,
+            device,
             feature_dim=RESNET50_FEATURE_DIM,
             batch_size=batch_size,
             squeeze_spatial=True,
         )
 
     def _extract_dinov2_features_batch(
-        self,
-        crops: List[np.ndarray],
-        model,
-        transform,
-        device,
-        batch_size: int = 32
-    ) -> List[np.ndarray]:
+        self, crops: list[np.ndarray], model, transform, device, batch_size: int = 32
+    ) -> list[np.ndarray]:
         return self._extract_embedding_batch(
-            crops, model, transform, device,
+            crops,
+            model,
+            transform,
+            device,
             feature_dim=DINOV2_FEATURE_DIM,
             batch_size=batch_size,
             squeeze_spatial=False,
         )
 
     def _percentile_normalize(
-        self,
-        image: np.ndarray,
-        p_low: float = 1,
-        p_high: float = 99.5
+        self, image: np.ndarray, p_low: float = 1, p_high: float = 99.5
     ) -> np.ndarray:
         """
         Normalize image using percentiles, excluding zero pixels (CZI padding).
@@ -557,13 +529,13 @@ class DetectionStrategy(ABC):
 
     def _extract_full_features_batch(
         self,
-        masks: List[np.ndarray],
+        masks: list[np.ndarray],
         tile: np.ndarray,
-        models: Dict[str, Any],
+        models: dict[str, Any],
         extract_sam2: bool = True,
         extract_resnet: bool = True,
-        resnet_batch_size: int = 32
-    ) -> List[Dict[str, Any]]:
+        resnet_batch_size: int = 32,
+    ) -> list[dict[str, Any]]:
         """
         Extract full feature set for multiple masks in batch.
 
@@ -612,10 +584,10 @@ class DetectionStrategy(ABC):
         tile_rgb = _safe_to_uint8(tile_rgb)
 
         # Get models
-        sam2_predictor = models.get('sam2_predictor')
-        resnet = models.get('resnet')
-        resnet_transform = models.get('resnet_transform')
-        device = models.get('device')
+        sam2_predictor = models.get("sam2_predictor")
+        resnet = models.get("resnet")
+        resnet_transform = models.get("resnet_transform")
+        device = models.get("device")
 
         # Set image for SAM2 embeddings if available
         if sam2_predictor is not None and extract_sam2:
@@ -650,30 +622,30 @@ class DetectionStrategy(ABC):
                 continue
 
             cy, cx = float(np.mean(ys)), float(np.mean(xs))
-            morph_features['centroid'] = [cx, cy]  # [x, y] format
+            morph_features["centroid"] = [cx, cy]  # [x, y] format
 
             # Extract SAM2 embeddings (256D)
             if sam2_predictor is not None and extract_sam2:
                 sam2_emb = self._extract_sam2_embedding(sam2_predictor, cy, cx)
                 for i, v in enumerate(sam2_emb):
-                    morph_features[f'sam2_{i}'] = float(v)
+                    morph_features[f"sam2_{i}"] = float(v)
             elif extract_sam2:
                 # Fill with zeros if SAM2 not available
                 for i in range(SAM2_EMBEDDING_DIM):
-                    morph_features[f'sam2_{i}'] = 0.0
+                    morph_features[f"sam2_{i}"] = 0.0
 
             # Prepare crops for batch deep feature extraction (ResNet and/or DINOv2)
-            if extract_resnet or (models.get('dinov2') is not None):
+            if extract_resnet or (models.get("dinov2") is not None):
                 y1, y2 = ys.min(), ys.max()
                 x1, x2 = xs.min(), xs.max()
                 if y2 > y1 and x2 > x1:
                     # Context crop (unmasked - full tissue context)
-                    crop_context = tile_rgb[y1:y2+1, x1:x2+1].copy()
+                    crop_context = tile_rgb[y1 : y2 + 1, x1 : x2 + 1].copy()
                     crops_for_resnet_context.append(crop_context)
 
                     # Masked crop (background zeroed out)
                     crop_masked = crop_context.copy()
-                    crop_mask = mask[y1:y2+1, x1:x2+1]
+                    crop_mask = mask[y1 : y2 + 1, x1 : x2 + 1]
                     crop_masked[~crop_mask] = 0
                     crops_for_resnet.append(crop_masked)
                     crop_indices.append(idx)
@@ -681,7 +653,12 @@ class DetectionStrategy(ABC):
             feature_list.append(morph_features)
 
         # Batch ResNet feature extraction - masked (original)
-        if crops_for_resnet and resnet is not None and resnet_transform is not None and extract_resnet:
+        if (
+            crops_for_resnet
+            and resnet is not None
+            and resnet_transform is not None
+            and extract_resnet
+        ):
             resnet_features_list = self._extract_resnet_features_batch(
                 crops_for_resnet, resnet, resnet_transform, device, resnet_batch_size
             )
@@ -690,10 +667,15 @@ class DetectionStrategy(ABC):
             for crop_idx, resnet_feats in zip(crop_indices, resnet_features_list):
                 if feature_list[crop_idx]:  # Only if features dict exists
                     for i, v in enumerate(resnet_feats):
-                        feature_list[crop_idx][f'resnet_{i}'] = float(v)
+                        feature_list[crop_idx][f"resnet_{i}"] = float(v)
 
         # Batch ResNet feature extraction - context (unmasked)
-        if crops_for_resnet_context and resnet is not None and resnet_transform is not None and extract_resnet:
+        if (
+            crops_for_resnet_context
+            and resnet is not None
+            and resnet_transform is not None
+            and extract_resnet
+        ):
             resnet_context_list = self._extract_resnet_features_batch(
                 crops_for_resnet_context, resnet, resnet_transform, device, resnet_batch_size
             )
@@ -702,21 +684,21 @@ class DetectionStrategy(ABC):
             for crop_idx, resnet_feats in zip(crop_indices, resnet_context_list):
                 if feature_list[crop_idx]:
                     for i, v in enumerate(resnet_feats):
-                        feature_list[crop_idx][f'resnet_ctx_{i}'] = float(v)
+                        feature_list[crop_idx][f"resnet_ctx_{i}"] = float(v)
 
         # Fill zeros for features without ResNet values
         if extract_resnet:
             for feat in feature_list:
-                if feat and 'resnet_0' not in feat:
+                if feat and "resnet_0" not in feat:
                     for i in range(RESNET50_FEATURE_DIM):
-                        feat[f'resnet_{i}'] = 0.0
-                if feat and 'resnet_ctx_0' not in feat:
+                        feat[f"resnet_{i}"] = 0.0
+                if feat and "resnet_ctx_0" not in feat:
                     for i in range(RESNET50_FEATURE_DIM):
-                        feat[f'resnet_ctx_{i}'] = 0.0
+                        feat[f"resnet_ctx_{i}"] = 0.0
 
         # Batch DINOv2 feature extraction (both masked and context)
-        dinov2 = models.get('dinov2')
-        dinov2_transform = models.get('dinov2_transform')
+        dinov2 = models.get("dinov2")
+        dinov2_transform = models.get("dinov2_transform")
 
         if crops_for_resnet and dinov2 is not None and dinov2_transform is not None:
             # DINOv2 masked features
@@ -726,7 +708,7 @@ class DetectionStrategy(ABC):
             for crop_idx, dino_feats in zip(crop_indices, dinov2_masked_list):
                 if feature_list[crop_idx]:
                     for i, v in enumerate(dino_feats):
-                        feature_list[crop_idx][f'dinov2_{i}'] = float(v)
+                        feature_list[crop_idx][f"dinov2_{i}"] = float(v)
 
             # DINOv2 context features
             dinov2_context_list = self._extract_dinov2_features_batch(
@@ -735,17 +717,17 @@ class DetectionStrategy(ABC):
             for crop_idx, dino_feats in zip(crop_indices, dinov2_context_list):
                 if feature_list[crop_idx]:
                     for i, v in enumerate(dino_feats):
-                        feature_list[crop_idx][f'dinov2_ctx_{i}'] = float(v)
+                        feature_list[crop_idx][f"dinov2_ctx_{i}"] = float(v)
 
         # Fill zeros for features without DINOv2 values
         if dinov2 is not None:
             for feat in feature_list:
-                if feat and 'dinov2_0' not in feat:
+                if feat and "dinov2_0" not in feat:
                     for i in range(DINOV2_FEATURE_DIM):
-                        feat[f'dinov2_{i}'] = 0.0
-                if feat and 'dinov2_ctx_0' not in feat:
+                        feat[f"dinov2_{i}"] = 0.0
+                if feat and "dinov2_ctx_0" not in feat:
                     for i in range(DINOV2_FEATURE_DIM):
-                        feat[f'dinov2_ctx_{i}'] = 0.0
+                        feat[f"dinov2_ctx_{i}"] = 0.0
 
         # Reset SAM2 predictor to free memory
         if sam2_predictor is not None and extract_sam2:

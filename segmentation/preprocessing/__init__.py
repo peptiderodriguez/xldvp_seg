@@ -8,40 +8,38 @@ Includes:
 """
 
 from .illumination import (
-    normalize_rows_columns,
-    morphological_background_subtraction,
+    apply_clahe,
     correct_photobleaching,
     estimate_band_severity,
-    apply_clahe,
+    morphological_background_subtraction,
+    normalize_rows_columns,
 )
-
+from .stain_normalization import (
+    compute_global_percentiles,
+    normalize_slide_to_reference,
+    normalize_to_percentiles,
+    percentile_normalize_rgb,
+)
 from .vesselness import (
     compute_vesselness,
     compute_vesselness_multiscale,
     enhance_ring_structures,
 )
 
-from .stain_normalization import (
-    percentile_normalize_rgb,
-    compute_global_percentiles,
-    normalize_to_percentiles,
-    normalize_slide_to_reference,
-)
-
 __all__ = [
     # Illumination correction
-    'normalize_rows_columns',
-    'morphological_background_subtraction',
-    'correct_photobleaching',
-    'estimate_band_severity',
-    'apply_clahe',
+    "normalize_rows_columns",
+    "morphological_background_subtraction",
+    "correct_photobleaching",
+    "estimate_band_severity",
+    "apply_clahe",
     # Vesselness filtering
-    'compute_vesselness',
-    'compute_vesselness_multiscale',
-    'enhance_ring_structures',
+    "compute_vesselness",
+    "compute_vesselness_multiscale",
+    "enhance_ring_structures",
     # Stain normalization
-    'percentile_normalize_rgb',
-    'compute_global_percentiles',
-    'normalize_to_percentiles',
-    'normalize_slide_to_reference',
+    "percentile_normalize_rgb",
+    "compute_global_percentiles",
+    "normalize_to_percentiles",
+    "normalize_slide_to_reference",
 ]

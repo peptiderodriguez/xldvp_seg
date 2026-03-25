@@ -33,19 +33,20 @@ Usage:
 """
 
 import os
-os.environ['HDF5_USE_FILE_LOCKING'] = 'FALSE'
+
+os.environ["HDF5_USE_FILE_LOCKING"] = "FALSE"
 
 import argparse
-import numpy as np
 from pathlib import Path
-from typing import List, Dict, Tuple, Optional
+
+import numpy as np
 
 from segmentation.utils.json_utils import fast_json_load
-
 
 # ---------------------------------------------------------------------------
 # Loading helpers
 # ---------------------------------------------------------------------------
+
 
 def load_detections(detections_path):
     """Load detections from JSON file."""
@@ -65,11 +66,11 @@ def load_annotations(annotations_path):
 
     positive_uids = set()
 
-    if 'positive' in data:
-        positive_uids.update(data['positive'])
-    elif 'annotations' in data:
-        for uid, label in data['annotations'].items():
-            if label.lower() in ('yes', 'positive', 'true', '1'):
+    if "positive" in data:
+        positive_uids.update(data["positive"])
+    elif "annotations" in data:
+        for uid, label in data["annotations"].items():
+            if label.lower() in ("yes", "positive", "true", "1"):
                 positive_uids.add(uid)
     elif isinstance(data, list):
         positive_uids.update(data)
@@ -81,13 +82,13 @@ def filter_detections(detections, positive_uids=None, min_score=None):
     """Filter detections by annotations and/or score."""
     filtered = []
     for det in detections:
-        uid = det.get('uid', det.get('id', ''))
+        uid = det.get("uid", det.get("id", ""))
 
         if positive_uids is not None and uid not in positive_uids:
             continue
 
         if min_score is not None:
-            score = det.get('rf_prediction', det.get('score', 0))
+            score = det.get("rf_prediction", det.get("score", 0))
             if score is None:
                 score = 0
             if score < min_score:
@@ -101,8 +102,8 @@ def load_clusters(clusters_path):
     """Load and validate clusters JSON from cluster_detections.py."""
     data = fast_json_load(str(clusters_path))
 
-    if 'main_clusters' not in data or 'outliers' not in data:
-        raise ValueError(f"Invalid clusters file: missing 'main_clusters' or 'outliers' keys")
+    if "main_clusters" not in data or "outliers" not in data:
+        raise ValueError("Invalid clusters file: missing 'main_clusters' or 'outliers' keys")
 
     return data
 
@@ -113,14 +114,15 @@ def get_detection_coordinates(det):
     Uses ``global_center`` (slide-level coordinates) only.
     Never falls back to ``center`` which is tile-local.
     """
-    if 'global_center' in det:
-        return det['global_center']
+    if "global_center" in det:
+        return det["global_center"]
     return None
 
 
 # ---------------------------------------------------------------------------
 # Contour extraction from H5 masks
 # ---------------------------------------------------------------------------
+
 
 def extract_contour_from_mask(mask, label):
     """Extract the outer contour for a specific label in a mask array."""
@@ -138,9 +140,14 @@ def extract_contour_from_mask(mask, label):
     return largest.reshape(-1, 2)
 
 
-def extract_contours_for_detections(detections, tiles_dir, pixel_size,
-                                    mask_filename='nmj_masks.h5',
-                                    dilation_um=0.5, rdp_epsilon=5.0):
+def extract_contours_for_detections(
+    detections,
+    tiles_dir,
+    pixel_size,
+    mask_filename="nmj_masks.h5",
+    dilation_um=0.5,
+    rdp_epsilon=5.0,
+):
     """
     Extract and process contours for detections from H5 mask files.
 
@@ -148,8 +155,9 @@ def extract_contours_for_detections(detections, tiles_dir, pixel_size,
 
     Returns dict mapping uid -> contour data.
     """
-    import hdf5plugin  # noqa: F401 - must import before h5py for LZ4
     import h5py
+    import hdf5plugin  # noqa: F401 - must import before h5py for LZ4
+
     from segmentation.lmd.contour_processing import process_contour
 
     tiles_dir = Path(tiles_dir)
@@ -158,10 +166,10 @@ def extract_contours_for_detections(detections, tiles_dir, pixel_size,
     by_tile = {}
     for det in detections:
         # Skip if contour already exists
-        if det.get('contour_um') is not None:
+        if det.get("contour_um") is not None:
             continue
 
-        tile_origin = det.get('tile_origin', [0, 0])
+        tile_origin = det.get("tile_origin", [0, 0])
         tile_name = f"tile_{tile_origin[0]}_{tile_origin[1]}"
         if tile_name not in by_tile:
             by_tile[tile_name] = []
@@ -180,17 +188,17 @@ def extract_contours_for_detections(detections, tiles_dir, pixel_size,
         if not mask_path.exists():
             continue
 
-        with h5py.File(mask_path, 'r') as hf:
-            masks = hf['masks'][:]
+        with h5py.File(mask_path, "r") as hf:
+            masks = hf["masks"][:]
 
         for det in tile_dets:
-            uid = det.get('uid', det.get('id', ''))
-            label = det.get('mask_label')
+            uid = det.get("uid", det.get("id", ""))
+            label = det.get("mask_label")
             if label is None:
                 # Fallback for single-GPU path: parse from id (e.g., "nmj_3" -> 3)
-                det_id = det.get('id', '')
+                det_id = det.get("id", "")
                 try:
-                    label = int(det_id.split('_')[-1])
+                    label = int(det_id.split("_")[-1])
                 except (ValueError, IndexError):
                     continue
 
@@ -199,7 +207,7 @@ def extract_contours_for_detections(detections, tiles_dir, pixel_size,
                 continue
 
             # Convert to global coordinates
-            tile_origin = det.get('tile_origin', [0, 0])
+            tile_origin = det.get("tile_origin", [0, 0])
             contour_global = contour_local.astype(float)
             contour_global[:, 0] += tile_origin[0]
             contour_global[:, 1] += tile_origin[1]
@@ -217,10 +225,10 @@ def extract_contours_for_detections(detections, tiles_dir, pixel_size,
                 continue
 
             results[uid] = {
-                'contour_global_px': contour_global.tolist(),
-                'contour_um': processed.tolist(),
-                'area_um2': stats['area_after_um2'],
-                'n_points': stats['points_after'],
+                "contour_global_px": contour_global.tolist(),
+                "contour_um": processed.tolist(),
+                "area_um2": stats["area_after_um2"],
+                "n_points": stats["points_after"],
             }
 
     return results
@@ -229,6 +237,7 @@ def extract_contours_for_detections(detections, tiles_dir, pixel_size,
 # ---------------------------------------------------------------------------
 # Nearest-neighbor path ordering
 # ---------------------------------------------------------------------------
+
 
 def nearest_neighbor_order(points, start_idx=None):
     """Order points using nearest-neighbor algorithm with KDTree for efficiency.
@@ -298,11 +307,9 @@ def nearest_neighbor_order(points, start_idx=None):
 # ---------------------------------------------------------------------------
 
 from segmentation.lmd.well_plate import (
-    generate_plate_wells,
-    generate_multiplate_wells,
     WELLS_PER_PLATE,
+    generate_plate_wells,
 )
-
 
 # ---------------------------------------------------------------------------
 # Spatial control generation
@@ -310,14 +317,14 @@ from segmentation.lmd.well_plate import (
 
 # 8 cardinal directions
 CONTROL_DIRECTIONS = {
-    'E':  np.array([1, 0]),
-    'NE': np.array([1, -1]) / np.sqrt(2),
-    'N':  np.array([0, -1]),
-    'NW': np.array([-1, -1]) / np.sqrt(2),
-    'W':  np.array([-1, 0]),
-    'SW': np.array([-1, 1]) / np.sqrt(2),
-    'S':  np.array([0, 1]),
-    'SE': np.array([1, 1]) / np.sqrt(2),
+    "E": np.array([1, 0]),
+    "NE": np.array([1, -1]) / np.sqrt(2),
+    "N": np.array([0, -1]),
+    "NW": np.array([-1, -1]) / np.sqrt(2),
+    "W": np.array([-1, 0]),
+    "SW": np.array([-1, 1]) / np.sqrt(2),
+    "S": np.array([0, 1]),
+    "SE": np.array([1, 1]) / np.sqrt(2),
 }
 
 
@@ -375,7 +382,7 @@ def _check_overlap_indexed(shifted_contour, spatial_tree):
         return True  # Treat invalid as overlapping (skip)
     if spatial_tree is None:
         return False
-    return len(spatial_tree.query(candidate_poly, predicate='intersects')) > 0
+    return len(spatial_tree.query(candidate_poly, predicate="intersects")) > 0
 
 
 def _check_overlap_precomputed(shifted_contour, precomputed_polygons):
@@ -402,9 +409,9 @@ def _check_overlap_precomputed(shifted_contour, precomputed_polygons):
     return False
 
 
-def generate_spatial_control(contour_um, precomputed_polygons,
-                             offset_um=100.0, max_attempts=3,
-                             spatial_tree=None):
+def generate_spatial_control(
+    contour_um, precomputed_polygons, offset_um=100.0, max_attempts=3, spatial_tree=None
+):
     """
     Generate a control contour by shifting in 8 directions.
 
@@ -432,7 +439,7 @@ def generate_spatial_control(contour_um, precomputed_polygons,
         _check = lambda s: _check_overlap_precomputed(s, precomputed_polygons)
 
     for attempt in range(max_attempts):
-        current_offset = offset_um * (1.5 ** attempt)
+        current_offset = offset_um * (1.5**attempt)
 
         for direction_name, direction_vec in CONTROL_DIRECTIONS.items():
             offset_vec = direction_vec * current_offset
@@ -443,15 +450,15 @@ def generate_spatial_control(contour_um, precomputed_polygons,
 
     # Fallback: use first direction (E) at largest attempted offset.
     # This ensures every sample always gets a control.
-    fallback_offset = offset_um * (1.5 ** max_attempts)
-    fallback_vec = CONTROL_DIRECTIONS['E'] * fallback_offset
+    fallback_offset = offset_um * (1.5**max_attempts)
+    fallback_vec = CONTROL_DIRECTIONS["E"] * fallback_offset
     shifted = contour_arr + fallback_vec
-    return shifted.tolist(), 'E_fallback', fallback_offset
+    return shifted.tolist(), "E_fallback", fallback_offset
 
 
-def generate_cluster_control(cluster_contours_um, precomputed_polygons,
-                             offset_um=100.0, max_attempts=3,
-                             spatial_tree=None):
+def generate_cluster_control(
+    cluster_contours_um, precomputed_polygons, offset_um=100.0, max_attempts=3, spatial_tree=None
+):
     """
     Generate control for a cluster: shift ALL member contours by the SAME vector.
 
@@ -472,7 +479,7 @@ def generate_cluster_control(cluster_contours_um, precomputed_polygons,
         _check = lambda s: _check_overlap_precomputed(s, precomputed_polygons)
 
     for attempt in range(max_attempts):
-        current_offset = offset_um * (1.5 ** attempt)
+        current_offset = offset_um * (1.5**attempt)
 
         for direction_name, direction_vec in CONTROL_DIRECTIONS.items():
             offset_vec = direction_vec * current_offset
@@ -486,24 +493,26 @@ def generate_cluster_control(cluster_contours_um, precomputed_polygons,
                     break
 
             if not any_overlap:
-                shifted_contours = [(np.array(c) + offset_vec).tolist()
-                                    for c in cluster_contours_um]
+                shifted_contours = [
+                    (np.array(c) + offset_vec).tolist() for c in cluster_contours_um
+                ]
                 return shifted_contours, direction_name, current_offset
 
     # Fallback
-    fallback_offset = offset_um * (1.5 ** max_attempts)
-    fallback_vec = CONTROL_DIRECTIONS['E'] * fallback_offset
-    shifted_contours = [(np.array(c) + fallback_vec).tolist()
-                        for c in cluster_contours_um]
-    return shifted_contours, 'E_fallback', fallback_offset
+    fallback_offset = offset_um * (1.5**max_attempts)
+    fallback_vec = CONTROL_DIRECTIONS["E"] * fallback_offset
+    shifted_contours = [(np.array(c) + fallback_vec).tolist() for c in cluster_contours_um]
+    return shifted_contours, "E_fallback", fallback_offset
 
 
 # ---------------------------------------------------------------------------
 # Well assignment with controls
 # ---------------------------------------------------------------------------
 
-def assign_wells_with_controls(ordered_singles, ordered_single_ctrls,
-                               ordered_clusters, ordered_cluster_ctrls):
+
+def assign_wells_with_controls(
+    ordered_singles, ordered_single_ctrls, ordered_clusters, ordered_cluster_ctrls
+):
     """
     Assign wells in serpentine order: alternating Target -> Control.
 
@@ -521,21 +530,21 @@ def assign_wells_with_controls(ordered_singles, ordered_single_ctrls,
 
     # Singles: Target -> Control -> Target -> Control ...
     for single, ctrl in zip(ordered_singles, ordered_single_ctrls):
-        single['well'] = wells[well_idx] if well_idx < len(wells) else f"overflow_{well_idx}"
+        single["well"] = wells[well_idx] if well_idx < len(wells) else f"overflow_{well_idx}"
         assignments.append(single)
         well_idx += 1
 
-        ctrl['well'] = wells[well_idx] if well_idx < len(wells) else f"overflow_{well_idx}"
+        ctrl["well"] = wells[well_idx] if well_idx < len(wells) else f"overflow_{well_idx}"
         assignments.append(ctrl)
         well_idx += 1
 
     # Clusters: Cluster -> Control -> Cluster -> Control ...
     for cluster, ctrl in zip(ordered_clusters, ordered_cluster_ctrls):
-        cluster['well'] = wells[well_idx] if well_idx < len(wells) else f"overflow_{well_idx}"
+        cluster["well"] = wells[well_idx] if well_idx < len(wells) else f"overflow_{well_idx}"
         assignments.append(cluster)
         well_idx += 1
 
-        ctrl['well'] = wells[well_idx] if well_idx < len(wells) else f"overflow_{well_idx}"
+        ctrl["well"] = wells[well_idx] if well_idx < len(wells) else f"overflow_{well_idx}"
         assignments.append(ctrl)
         well_idx += 1
 
@@ -546,6 +555,7 @@ def assign_wells_with_controls(ordered_singles, ordered_single_ctrls,
 # Build unified export data
 # ---------------------------------------------------------------------------
 
+
 def build_export_data(assignments, well_order, metadata):
     """Build the unified export JSON structure."""
     shapes = []
@@ -554,29 +564,29 @@ def build_export_data(assignments, well_order, metadata):
 
     for item in assignments:
         shapes.append(item)
-        t = item.get('type', '')
-        if t == 'single':
+        t = item.get("type", "")
+        if t == "single":
             n_singles += 1
-        elif t == 'single_control':
+        elif t == "single_control":
             n_single_controls += 1
-        elif t == 'cluster':
+        elif t == "cluster":
             n_clusters += 1
-            n_detections_in_clusters += item.get('n_members', item.get('n_nmjs', 0))
-        elif t == 'cluster_control':
+            n_detections_in_clusters += item.get("n_members", item.get("n_nmjs", 0))
+        elif t == "cluster_control":
             n_cluster_controls += 1
 
     return {
-        'metadata': metadata,
-        'summary': {
-            'n_singles': n_singles,
-            'n_single_controls': n_single_controls,
-            'n_clusters': n_clusters,
-            'n_cluster_controls': n_cluster_controls,
-            'n_detections_in_clusters': n_detections_in_clusters,
-            'total_wells_used': len(well_order),
+        "metadata": metadata,
+        "summary": {
+            "n_singles": n_singles,
+            "n_single_controls": n_single_controls,
+            "n_clusters": n_clusters,
+            "n_cluster_controls": n_cluster_controls,
+            "n_detections_in_clusters": n_detections_in_clusters,
+            "total_wells_used": len(well_order),
         },
-        'shapes': shapes,
-        'well_order': well_order,
+        "shapes": shapes,
+        "well_order": well_order,
     }
 
 
@@ -584,7 +594,9 @@ def build_export_data(assignments, well_order, metadata):
 # LMD XML export
 # ---------------------------------------------------------------------------
 
-from segmentation.lmd.contour_processing import transform_native_to_display as _transform_native_to_display
+from segmentation.lmd.contour_processing import (
+    transform_native_to_display as _transform_native_to_display,
+)
 
 
 def export_to_lmd_xml(shapes, crosses_data, output_path, flip_y=True):
@@ -600,14 +612,14 @@ def export_to_lmd_xml(shapes, crosses_data, output_path, flip_y=True):
     """
     from lmd.lib import Collection
 
-    pixel_size = crosses_data['pixel_size_um']
-    orig_w_um = crosses_data['image_width_px'] * pixel_size
-    orig_h_um = crosses_data['image_height_px'] * pixel_size
+    pixel_size = crosses_data["pixel_size_um"]
+    orig_w_um = crosses_data["image_width_px"] * pixel_size
+    orig_h_um = crosses_data["image_height_px"] * pixel_size
 
     # Read display transforms from crosses metadata
-    dt = crosses_data.get('display_transform', {})
-    flip_h = dt.get('flip_horizontal', False)
-    rot90 = dt.get('rotate_cw_90', False)
+    dt = crosses_data.get("display_transform", {})
+    flip_h = dt.get("flip_horizontal", False)
+    rot90 = dt.get("rotate_cw_90", False)
 
     # After rotation, display dimensions swap
     display_h_um = orig_w_um if rot90 else orig_h_um
@@ -617,15 +629,14 @@ def export_to_lmd_xml(shapes, crosses_data, output_path, flip_y=True):
         print(f"  Display height for LMD Y-flip: {display_h_um:.0f} um")
 
     # Calibration from first 3 crosses
-    crosses = crosses_data['crosses']
+    crosses = crosses_data["crosses"]
     if len(crosses) < 3:
         raise ValueError("Need at least 3 reference crosses for calibration")
 
     # Crosses are already in display space; Y-flip for LMD convention
-    calibration_points = np.array([
-        [c['x_um'], c['y_um'] if not flip_y else display_h_um - c['y_um']]
-        for c in crosses[:3]
-    ])
+    calibration_points = np.array(
+        [[c["x_um"], c["y_um"] if not flip_y else display_h_um - c["y_um"]] for c in crosses[:3]]
+    )
 
     collection = Collection(calibration_points=calibration_points)
     # Note: calibration points in the XML header are sufficient for LMD.
@@ -633,24 +644,25 @@ def export_to_lmd_xml(shapes, crosses_data, output_path, flip_y=True):
 
     # Add shapes — transform contours from native CZI space to display space
     for shape in shapes:
-        well = shape.get('well', 'A1')
-        shape_type = shape.get('type', 'single')
+        well = shape.get("well", "A1")
+        shape_type = shape.get("type", "single")
 
         # Collect contours for this shape
         contours_um = []
-        if shape_type in ('cluster', 'cluster_control'):
-            for c in shape.get('contours_um', []):
+        if shape_type in ("cluster", "cluster_control"):
+            for c in shape.get("contours_um", []):
                 if c and len(c) >= 3:
                     contours_um.append(np.array(c))
         else:
-            c = shape.get('contour_um')
+            c = shape.get("contour_um")
             if c and len(c) >= 3:
                 contours_um.append(np.array(c))
 
         for idx, polygon_um in enumerate(contours_um):
             # Apply display transforms to match cross coordinate space
             polygon_um = _transform_native_to_display(
-                np.array(polygon_um), orig_w_um, orig_h_um, flip_h, rot90)
+                np.array(polygon_um), orig_w_um, orig_h_um, flip_h, rot90
+            )
             if flip_y:
                 polygon_um[:, 1] = display_h_um - polygon_um[:, 1]
 
@@ -658,11 +670,11 @@ def export_to_lmd_xml(shapes, crosses_data, output_path, flip_y=True):
             if not np.allclose(polygon_um[0], polygon_um[-1]):
                 polygon_um = np.vstack([polygon_um, polygon_um[0]])
 
-            uid = shape.get('uid', '')
-            if shape_type == 'cluster':
-                uids = shape.get('member_uids', [])
+            uid = shape.get("uid", "")
+            if shape_type == "cluster":
+                uids = shape.get("member_uids", [])
                 name = uids[idx] if idx < len(uids) else f"{uid}_member{idx}"
-            elif shape_type == 'cluster_control':
+            elif shape_type == "cluster_control":
                 name = f"{uid}_ctrl_member{idx}"
             else:
                 name = uid
@@ -680,8 +692,10 @@ def export_to_lmd_xml(shapes, crosses_data, output_path, flip_y=True):
 # Cross placement HTML (unchanged from before)
 # ---------------------------------------------------------------------------
 
-def generate_cross_placement_html(detections, output_dir, pixel_size_um,
-                                  image_width_px, image_height_px):
+
+def generate_cross_placement_html(
+    detections, output_dir, pixel_size_um, image_width_px, image_height_px
+):
     """Generate HTML page for interactively placing reference crosses."""
     output_dir = Path(output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
@@ -713,7 +727,7 @@ def generate_cross_placement_html(detections, output_dir, pixel_size_um,
             f'<circle cx="{svg_x:.1f}" cy="{svg_y:.1f}" r="3" fill="lime" opacity="0.7"/>'
         )
 
-    html_content = f'''<!DOCTYPE html>
+    html_content = f"""<!DOCTYPE html>
 <html>
 <head>
     <title>LMD Reference Cross Placement</title>
@@ -859,10 +873,10 @@ def generate_cross_placement_html(detections, output_dir, pixel_size_um,
         }}
     </script>
 </body>
-</html>'''
+</html>"""
 
-    html_path = output_dir / 'place_crosses.html'
-    with open(html_path, 'w') as f:
+    html_path = output_dir / "place_crosses.html"
+    with open(html_path, "w") as f:
         f.write(html_content)
 
     print(f"Generated cross placement HTML: {html_path}")
@@ -873,11 +887,12 @@ def generate_cross_placement_html(detections, output_dir, pixel_size_um,
 # Main pipeline
 # ---------------------------------------------------------------------------
 
+
 def main():
     parser = argparse.ArgumentParser(
-        description='Unified LMD Export - detections to Leica LMD format',
+        description="Unified LMD Export - detections to Leica LMD format",
         formatter_class=argparse.RawDescriptionHelpFormatter,
-        epilog='''
+        epilog="""
 Examples:
   # Full pipeline with clusters and controls
   python run_lmd_export.py \\
@@ -894,99 +909,169 @@ Examples:
       --detections detections.json \\
       --output-dir lmd_export \\
       --generate-cross-html
-''',
+""",
     )
 
     # Input files
-    parser.add_argument('--detections', type=str, required=False, default=None,
-                        help='Path to detections JSON file (required for single-slide mode)')
-    parser.add_argument('--cell-type', type=str, default=None,
-                        help='Cell type (nmj, mk, vessel, mesothelium). '
-                             'Auto-derives mask filename if --mask-filename not set.')
-    parser.add_argument('--annotations', type=str, default=None,
-                        help='Path to annotations JSON (filters to positives only)')
-    parser.add_argument('--crosses', type=str, default=None,
-                        help='Path to reference crosses JSON')
-    parser.add_argument('--clusters', type=str, default=None,
-                        help='Path to clusters JSON from cluster_detections.py')
+    parser.add_argument(
+        "--detections",
+        type=str,
+        required=False,
+        default=None,
+        help="Path to detections JSON file (required for single-slide mode)",
+    )
+    parser.add_argument(
+        "--cell-type",
+        type=str,
+        default=None,
+        help="Cell type (nmj, mk, vessel, mesothelium). "
+        "Auto-derives mask filename if --mask-filename not set.",
+    )
+    parser.add_argument(
+        "--annotations",
+        type=str,
+        default=None,
+        help="Path to annotations JSON (filters to positives only)",
+    )
+    parser.add_argument("--crosses", type=str, default=None, help="Path to reference crosses JSON")
+    parser.add_argument(
+        "--clusters",
+        type=str,
+        default=None,
+        help="Path to clusters JSON from cluster_detections.py",
+    )
 
     # Contour extraction
-    parser.add_argument('--tiles-dir', type=str, default=None,
-                        help='Path to tiles/ directory with H5 masks')
-    parser.add_argument('--mask-filename', type=str, default=None,
-                        help='Mask filename within each tile dir (default: auto from --cell-type, or nmj_masks.h5)')
+    parser.add_argument(
+        "--tiles-dir", type=str, default=None, help="Path to tiles/ directory with H5 masks"
+    )
+    parser.add_argument(
+        "--mask-filename",
+        type=str,
+        default=None,
+        help="Mask filename within each tile dir (default: auto from --cell-type, or nmj_masks.h5)",
+    )
 
     # Output
-    parser.add_argument('--output-dir', type=str, required=True,
-                        help='Output directory for LMD files')
-    parser.add_argument('--output-name', type=str, default='shapes',
-                        help='Base name for output files')
+    parser.add_argument(
+        "--output-dir", type=str, required=True, help="Output directory for LMD files"
+    )
+    parser.add_argument(
+        "--output-name", type=str, default="shapes", help="Base name for output files"
+    )
 
     # Actions
-    parser.add_argument('--generate-cross-html', action='store_true',
-                        help='Generate HTML for placing reference crosses')
-    parser.add_argument('--export', action='store_true',
-                        help='Export to LMD XML (requires --crosses)')
+    parser.add_argument(
+        "--generate-cross-html",
+        action="store_true",
+        help="Generate HTML for placing reference crosses",
+    )
+    parser.add_argument(
+        "--export", action="store_true", help="Export to LMD XML (requires --crosses)"
+    )
 
     # Image metadata
-    parser.add_argument('--pixel-size', type=float, default=None,
-                        help='Pixel size in um (auto-detect from detections if not set)')
-    parser.add_argument('--image-width', type=int, default=None,
-                        help='Image width in pixels')
-    parser.add_argument('--image-height', type=int, default=None,
-                        help='Image height in pixels')
+    parser.add_argument(
+        "--pixel-size",
+        type=float,
+        default=None,
+        help="Pixel size in um (auto-detect from detections if not set)",
+    )
+    parser.add_argument("--image-width", type=int, default=None, help="Image width in pixels")
+    parser.add_argument("--image-height", type=int, default=None, help="Image height in pixels")
 
     # Filtering
-    parser.add_argument('--min-score', type=float, default=None,
-                        help='Minimum rf_prediction score (filters detections)')
+    parser.add_argument(
+        "--min-score",
+        type=float,
+        default=None,
+        help="Minimum rf_prediction score (filters detections)",
+    )
 
     # Zone filtering
-    parser.add_argument('--zone-filter', type=str, default=None,
-                        help='Include only these zone IDs (comma-separated, e.g. "1,3,5")')
-    parser.add_argument('--zone-exclude', type=str, default=None,
-                        help='Exclude these zone IDs (comma-separated, e.g. "0")')
+    parser.add_argument(
+        "--zone-filter",
+        type=str,
+        default=None,
+        help='Include only these zone IDs (comma-separated, e.g. "1,3,5")',
+    )
+    parser.add_argument(
+        "--zone-exclude",
+        type=str,
+        default=None,
+        help='Exclude these zone IDs (comma-separated, e.g. "0")',
+    )
 
     # Controls
-    parser.add_argument('--generate-controls', action='store_true',
-                        help='Generate spatial control regions for every target')
-    parser.add_argument('--control-offset-um', type=float, default=100.0,
-                        help='Offset distance for controls in um (default: 100)')
+    parser.add_argument(
+        "--generate-controls",
+        action="store_true",
+        help="Generate spatial control regions for every target",
+    )
+    parser.add_argument(
+        "--control-offset-um",
+        type=float,
+        default=100.0,
+        help="Offset distance for controls in um (default: 100)",
+    )
 
     # Contour processing
-    parser.add_argument('--dilation-um', type=float, default=0.5,
-                        help='Contour dilation in um (default: 0.5)')
-    parser.add_argument('--rdp-epsilon', type=float, default=5.0,
-                        help='RDP simplification epsilon in pixels (default: 5)')
-    parser.add_argument('--erosion-um', type=float, default=0.0,
-                        help='Shrink contours by absolute distance in um (default: 0, no erosion). '
-                             'Applied after dilation+RDP.')
-    parser.add_argument('--erode-pct', type=float, default=0.0,
-                        help='Shrink contours by percentage of sqrt(area) (default: 0, no erosion). '
-                             'E.g. 0.05 = 5%% erosion. Applied after dilation+RDP.')
+    parser.add_argument(
+        "--dilation-um", type=float, default=0.5, help="Contour dilation in um (default: 0.5)"
+    )
+    parser.add_argument(
+        "--rdp-epsilon",
+        type=float,
+        default=5.0,
+        help="RDP simplification epsilon in pixels (default: 5)",
+    )
+    parser.add_argument(
+        "--erosion-um",
+        type=float,
+        default=0.0,
+        help="Shrink contours by absolute distance in um (default: 0, no erosion). "
+        "Applied after dilation+RDP.",
+    )
+    parser.add_argument(
+        "--erode-pct",
+        type=float,
+        default=0.0,
+        help="Shrink contours by percentage of sqrt(area) (default: 0, no erosion). "
+        "E.g. 0.05 = 5%% erosion. Applied after dilation+RDP.",
+    )
 
     # Multi-slide batch mode
-    parser.add_argument('--input-dir', type=str, default=None,
-                        help='Batch mode: directory with per-slide *_detections.json files')
-    parser.add_argument('--crosses-dir', type=str, default=None,
-                        help='Batch mode: directory with per-slide *_crosses.json files')
+    parser.add_argument(
+        "--input-dir",
+        type=str,
+        default=None,
+        help="Batch mode: directory with per-slide *_detections.json files",
+    )
+    parser.add_argument(
+        "--crosses-dir",
+        type=str,
+        default=None,
+        help="Batch mode: directory with per-slide *_crosses.json files",
+    )
 
     # Options
-    parser.add_argument('--no-flip-y', action='store_true',
-                        help='Do not flip Y axis for stage coordinates')
+    parser.add_argument(
+        "--no-flip-y", action="store_true", help="Do not flip Y axis for stage coordinates"
+    )
 
     args = parser.parse_args()
 
     # Auto-derive mask filename from cell type
     if args.mask_filename is None:
         if args.cell_type:
-            args.mask_filename = f'{args.cell_type}_masks.h5'
+            args.mask_filename = f"{args.cell_type}_masks.h5"
         else:
-            args.mask_filename = 'nmj_masks.h5'  # backward-compatible default
+            args.mask_filename = "nmj_masks.h5"  # backward-compatible default
 
     # -----------------------------------------------------------------------
     # Batch mode dispatch
     # -----------------------------------------------------------------------
-    if getattr(args, 'input_dir', None):
+    if getattr(args, "input_dir", None):
         run_batch_export(args)
         return
 
@@ -1027,29 +1112,34 @@ def _run_single_slide(args):
 
     # Filter by zone (from assign_tissue_zones.py)
     if args.zone_filter:
-        zone_ids = {int(z) for z in args.zone_filter.split(',')}
+        zone_ids = {int(z) for z in args.zone_filter.split(",")}
         before = len(detections)
-        detections = [d for d in detections if d.get('zone_id') in zone_ids]
+        detections = [d for d in detections if d.get("zone_id") in zone_ids]
         print(f"  Zone filter (include {zone_ids}): {before} -> {len(detections)}")
     if args.zone_exclude:
-        exclude_ids = {int(z) for z in args.zone_exclude.split(',')}
+        exclude_ids = {int(z) for z in args.zone_exclude.split(",")}
         before = len(detections)
-        detections = [d for d in detections if d.get('zone_id') not in exclude_ids]
+        detections = [d for d in detections if d.get("zone_id") not in exclude_ids]
         print(f"  Zone exclude ({exclude_ids}): {before} -> {len(detections)}")
 
     # Log classifier provenance
     from segmentation.utils.classifier_registry import extract_classifier_info
+
     _scored, _prov, _clf_info = extract_classifier_info(detections)
     if _scored > 0:
         if _clf_info:
-            _f1 = _clf_info.get('cv_f1')
+            _f1 = _clf_info.get("cv_f1")
             _f1_str = f" (F1={_f1:.3f})" if _f1 else ""
             _thresh_str = f", threshold={args.min_score}" if args.min_score else ""
-            print(f"  LMD export using {len(detections)} detections scored by "
-                  f"{_clf_info.get('classifier_name', 'unknown')}{_f1_str}{_thresh_str}")
+            print(
+                f"  LMD export using {len(detections)} detections scored by "
+                f"{_clf_info.get('classifier_name', 'unknown')}{_f1_str}{_thresh_str}"
+            )
         else:
-            print(f"  WARNING: Detections have {_scored} RF scores with unknown provenance. "
-                  f"Verify before cutting.")
+            print(
+                f"  WARNING: Detections have {_scored} RF scores with unknown provenance. "
+                f"Verify before cutting."
+            )
 
     if len(detections) == 0:
         print("ERROR: No detections to export!")
@@ -1060,13 +1150,15 @@ def _run_single_slide(args):
     if pixel_size is None:
         # Try to get pixel size from detection features
         for det in detections:
-            feat = det.get('features', {})
-            if 'pixel_size_um' in feat:
-                pixel_size = feat['pixel_size_um']
+            feat = det.get("features", {})
+            if "pixel_size_um" in feat:
+                pixel_size = feat["pixel_size_um"]
                 break
         if pixel_size is None:
-            print("ERROR: pixel_size_um is required. Provide via --pixel-size or ensure "
-                  "detections JSON contains pixel_size_um in detection features.")
+            print(
+                "ERROR: pixel_size_um is required. Provide via --pixel-size or ensure "
+                "detections JSON contains pixel_size_um in detection features."
+            )
             return
         print(f"  Pixel size (from detections): {pixel_size} um/px")
     else:
@@ -1082,8 +1174,10 @@ def _run_single_slide(args):
                 max_x = max(max_x, coords[0])
                 max_y = max(max_y, coords[1])
         if max_x == 0 or max_y == 0:
-            print("ERROR: Could not estimate image dimensions from detections. "
-                  "Provide --image-width and --image-height.")
+            print(
+                "ERROR: Could not estimate image dimensions from detections. "
+                "Provide --image-width and --image-height."
+            )
             return
         if image_width is None:
             image_width = int(max_x * 1.1)
@@ -1098,9 +1192,7 @@ def _run_single_slide(args):
     # Generate cross placement HTML
     # -----------------------------------------------------------------------
     if args.generate_cross_html:
-        generate_cross_placement_html(
-            detections, output_dir, pixel_size, image_width, image_height
-        )
+        generate_cross_placement_html(detections, output_dir, pixel_size, image_width, image_height)
 
     # -----------------------------------------------------------------------
     # Export pipeline
@@ -1115,26 +1207,26 @@ def _run_single_slide(args):
 
         # Override metadata from CLI
         if args.pixel_size:
-            crosses_data['pixel_size_um'] = args.pixel_size
+            crosses_data["pixel_size_um"] = args.pixel_size
         if args.image_width:
-            crosses_data['image_width_px'] = args.image_width
+            crosses_data["image_width_px"] = args.image_width
         if args.image_height:
-            crosses_data['image_height_px'] = args.image_height
+            crosses_data["image_height_px"] = args.image_height
 
         # Handle display_transform in crosses JSON (from napari_place_crosses.py)
         # Cross coordinates in JSON are already in slide pixel space (inverse
         # transform applied during placement). The display_transform field is
         # informational only — no further conversion needed here.
-        _dt = crosses_data.get('display_transform')
+        _dt = crosses_data.get("display_transform")
         if _dt:
             _transforms = []
-            if _dt.get('flip_horizontal'):
-                _transforms.append('flip_horizontal')
-            if _dt.get('rotate_cw_90'):
-                _transforms.append('rotate_cw_90')
+            if _dt.get("flip_horizontal"):
+                _transforms.append("flip_horizontal")
+            if _dt.get("rotate_cw_90"):
+                _transforms.append("rotate_cw_90")
             if _transforms:
                 print(f"  Crosses placed with display transforms: {', '.join(_transforms)}")
-                print(f"  (coordinates already in slide pixel space)")
+                print("  (coordinates already in slide pixel space)")
 
         # -------------------------------------------------------------------
         # Step 1: Separate singles vs clustered detections
@@ -1145,25 +1237,30 @@ def _run_single_slide(args):
 
             # Cluster indices reference the ORIGINAL unfiltered detections list
             # (cluster_detections.py runs its own score filtering internally)
-            outlier_indices = [o.get('detection_index', o.get('nmj_index'))
-                               for o in cluster_data['outliers']]
+            outlier_indices = [
+                o.get("detection_index", o.get("nmj_index")) for o in cluster_data["outliers"]
+            ]
 
             single_dets = [all_detections[i] for i in outlier_indices if i < len(all_detections)]
             cluster_groups = []
-            for c in cluster_data['main_clusters']:
-                member_indices = c.get('detection_indices', c.get('nmj_indices', []))
+            for c in cluster_data["main_clusters"]:
+                member_indices = c.get("detection_indices", c.get("nmj_indices", []))
                 members = [all_detections[i] for i in member_indices if i < len(all_detections)]
                 if members:
-                    cluster_groups.append({
-                        'id': c['id'],
-                        'members': members,
-                        'cx': c.get('cx', 0),
-                        'cy': c.get('cy', 0),
-                    })
+                    cluster_groups.append(
+                        {
+                            "id": c["id"],
+                            "members": members,
+                            "cx": c.get("cx", 0),
+                            "cy": c.get("cy", 0),
+                        }
+                    )
 
             print(f"  Singles: {len(single_dets)}")
-            print(f"  Clusters: {len(cluster_groups)} "
-                  f"({sum(len(cg['members']) for cg in cluster_groups)} detections)")
+            print(
+                f"  Clusters: {len(cluster_groups)} "
+                f"({sum(len(cg['members']) for cg in cluster_groups)} detections)"
+            )
         else:
             # No clusters file: all detections are singles
             single_dets = detections
@@ -1175,46 +1272,50 @@ def _run_single_slide(args):
         # -------------------------------------------------------------------
         all_dets_needing_contours = list(single_dets)
         for cg in cluster_groups:
-            all_dets_needing_contours.extend(cg['members'])
+            all_dets_needing_contours.extend(cg["members"])
 
         # Promote pipeline-processed contours: contour_dilated_um -> contour_um
         _promoted = 0
         for d in all_dets_needing_contours:
-            if d.get('contour_um') is None and d.get('contour_dilated_um') is not None:
-                d['contour_um'] = d['contour_dilated_um']
+            if d.get("contour_um") is None and d.get("contour_dilated_um") is not None:
+                d["contour_um"] = d["contour_dilated_um"]
                 _promoted += 1
         if _promoted:
             print(f"  Used {_promoted} pre-processed contours from pipeline (contour_dilated_um)")
 
         # Warn if contours were already processed during pipeline
-        _has_erosion = (
-            getattr(args, 'erosion_um', 0) > 0 or getattr(args, 'erode_pct', 0) > 0
-        )
+        _has_erosion = getattr(args, "erosion_um", 0) > 0 or getattr(args, "erode_pct", 0) > 0
         if _promoted > 0 and _has_erosion:
             _sample_det = next(
-                (d for d in all_dets_needing_contours
-                 if d.get('contour_dilated_um') is not None), None
+                (d for d in all_dets_needing_contours if d.get("contour_dilated_um") is not None),
+                None,
             )
-            _pipe_dilation = _sample_det.get('contour_dilation_um', 0.5) if _sample_det else 0.5
-            _pipe_rdp = _sample_det.get('contour_rdp_epsilon', 5.0) if _sample_det else 5.0
-            print(f"\n  NOTE: Contours were already dilated during pipeline "
-                  f"(dilation={_pipe_dilation}um, rdp={_pipe_rdp}).")
-            print(f"  Applying export-time erosion to pre-processed contours.")
+            _pipe_dilation = _sample_det.get("contour_dilation_um", 0.5) if _sample_det else 0.5
+            _pipe_rdp = _sample_det.get("contour_rdp_epsilon", 5.0) if _sample_det else 5.0
+            print(
+                f"\n  NOTE: Contours were already dilated during pipeline "
+                f"(dilation={_pipe_dilation}um, rdp={_pipe_rdp})."
+            )
+            print("  Applying export-time erosion to pre-processed contours.")
         if _promoted > 0 and (args.dilation_um != 0.5 or args.rdp_epsilon != 5.0):
-            print(f"\n  NOTE: --dilation-um and --rdp-epsilon only affect newly extracted "
-                  f"contours, not pre-processed pipeline contours ({_promoted} promoted).")
+            print(
+                f"\n  NOTE: --dilation-um and --rdp-epsilon only affect newly extracted "
+                f"contours, not pre-processed pipeline contours ({_promoted} promoted)."
+            )
 
         need_extraction = any(
-            d.get('contour_um') is None
-            and d.get('outer_contour_global') is None
-            and d.get('contour_dilated_px') is None
+            d.get("contour_um") is None
+            and d.get("outer_contour_global") is None
+            and d.get("contour_dilated_px") is None
             for d in all_dets_needing_contours
         )
 
         if need_extraction and args.tiles_dir:
             print(f"\nExtracting contours from H5 masks ({args.tiles_dir})...")
             contour_results = extract_contours_for_detections(
-                all_dets_needing_contours, args.tiles_dir, pixel_size,
+                all_dets_needing_contours,
+                args.tiles_dir,
+                pixel_size,
                 mask_filename=args.mask_filename,
                 dilation_um=args.dilation_um,
                 rdp_epsilon=args.rdp_epsilon,
@@ -1223,51 +1324,55 @@ def _run_single_slide(args):
 
             # Attach contours to detections
             for det in all_dets_needing_contours:
-                uid = det.get('uid', det.get('id', ''))
+                uid = det.get("uid", det.get("id", ""))
                 if uid in contour_results:
-                    det['contour_um'] = contour_results[uid]['contour_um']
-                    det['area_um2'] = contour_results[uid]['area_um2']
+                    det["contour_um"] = contour_results[uid]["contour_um"]
+                    det["area_um2"] = contour_results[uid]["area_um2"]
         elif need_extraction and not args.tiles_dir:
             # Try to process existing pixel-coord contours (vessel or cell pipeline)
             from segmentation.lmd.contour_processing import process_contour
+
             print("\nProcessing existing contours (dilation + RDP)...")
             processed_count = 0
             for det in all_dets_needing_contours:
-                if det.get('contour_um') is not None:
+                if det.get("contour_um") is not None:
                     continue
-                contour_px = det.get('outer_contour_global') or det.get('contour_dilated_px')
+                contour_px = det.get("outer_contour_global") or det.get("contour_dilated_px")
                 if contour_px is None:
                     continue
                 # Note: erosion is NOT applied here — Step 2b handles it
                 # uniformly for all contours (promoted, H5-extracted, and fresh)
                 processed, stats = process_contour(
-                    contour_px, pixel_size_um=pixel_size,
+                    contour_px,
+                    pixel_size_um=pixel_size,
                     dilation_um=args.dilation_um,
                     rdp_epsilon=args.rdp_epsilon,
                     return_stats=True,
                 )
                 if processed is not None:
-                    det['contour_um'] = processed.tolist()
-                    det['area_um2'] = stats['area_after_um2']
+                    det["contour_um"] = processed.tolist()
+                    det["area_um2"] = stats["area_after_um2"]
                     processed_count += 1
             print(f"  Processed {processed_count} contours")
 
         # -------------------------------------------------------------------
         # Step 2b: Apply export-time erosion to existing contours (if requested)
         # -------------------------------------------------------------------
-        _erosion_um = getattr(args, 'erosion_um', 0.0)
-        _erode_pct = getattr(args, 'erode_pct', 0.0)
-        if (_erosion_um > 0 or _erode_pct > 0):
-            from segmentation.lmd.contour_processing import erode_contour, erode_contour_percent
+        _erosion_um = getattr(args, "erosion_um", 0.0)
+        _erode_pct = getattr(args, "erode_pct", 0.0)
+        if _erosion_um > 0 or _erode_pct > 0:
             from shapely.geometry import Polygon
 
-            erode_label = (f"{_erosion_um}um" if _erosion_um > 0
-                          else f"{_erode_pct*100:.1f}% of sqrt(area)")
+            from segmentation.lmd.contour_processing import erode_contour, erode_contour_percent
+
+            erode_label = (
+                f"{_erosion_um}um" if _erosion_um > 0 else f"{_erode_pct*100:.1f}% of sqrt(area)"
+            )
             print(f"\nApplying export-time erosion ({erode_label}) to all contours...")
             _eroded_count = 0
             _collapsed_count = 0
             for det in all_dets_needing_contours:
-                contour_um = det.get('contour_um')
+                contour_um = det.get("contour_um")
                 if contour_um is None or len(contour_um) < 3:
                     continue
 
@@ -1278,13 +1383,13 @@ def _run_single_slide(args):
                     result = erode_contour_percent(pts, _erode_pct)
 
                 if result is not None:
-                    det['contour_um'] = result.tolist()
+                    det["contour_um"] = result.tolist()
                     poly = Polygon(result)
-                    det['area_um2'] = poly.area if poly.is_valid else 0
+                    det["area_um2"] = poly.area if poly.is_valid else 0
                     _eroded_count += 1
                 else:
                     # Contour collapsed — remove it
-                    det['contour_um'] = None
+                    det["contour_um"] = None
                     _collapsed_count += 1
 
             print(f"  Eroded {_eroded_count} contours, {_collapsed_count} collapsed (removed)")
@@ -1296,7 +1401,7 @@ def _run_single_slide(args):
         singles_with_contours = []
         singles_positions = []
         for det in single_dets:
-            if det.get('contour_um') is None:
+            if det.get("contour_um") is None:
                 continue
             singles_with_contours.append(det)
             coords = get_detection_coordinates(det)
@@ -1310,12 +1415,16 @@ def _run_single_slide(args):
             ordered_singles_dets = [singles_with_contours[i] for i in nn_order]
             last_pos = singles_positions[nn_order[-1]]
             total_dist = sum(
-                np.linalg.norm(np.array(singles_positions[nn_order[i]]) -
-                               np.array(singles_positions[nn_order[i+1]]))
+                np.linalg.norm(
+                    np.array(singles_positions[nn_order[i]])
+                    - np.array(singles_positions[nn_order[i + 1]])
+                )
                 for i in range(len(nn_order) - 1)
             )
-            print(f"  Ordered {len(ordered_singles_dets)} singles, "
-                  f"path: {total_dist * pixel_size / 1000:.1f} mm")
+            print(
+                f"  Ordered {len(ordered_singles_dets)} singles, "
+                f"path: {total_dist * pixel_size / 1000:.1f} mm"
+            )
         else:
             ordered_singles_dets = []
             last_pos = (0, 0)
@@ -1331,34 +1440,37 @@ def _run_single_slide(args):
             # Check all members have contours
             member_contours = []
             member_uids = []
-            for m in cg['members']:
-                contour = m.get('contour_um')
+            for m in cg["members"]:
+                contour = m.get("contour_um")
                 if contour is not None:
                     member_contours.append(contour)
-                    member_uids.append(m.get('uid', m.get('id', '')))
+                    member_uids.append(m.get("uid", m.get("id", "")))
 
             if not member_contours:
                 print(f"  WARNING: Cluster {cg['id']} has no contours, skipping entirely")
                 continue
 
-            dropped = len(cg['members']) - len(member_contours)
+            dropped = len(cg["members"]) - len(member_contours)
             if dropped > 0:
-                print(f"  WARNING: Cluster {cg['id']} lost {dropped}/{len(cg['members'])} members (contour extraction failed)")
+                print(
+                    f"  WARNING: Cluster {cg['id']} lost {dropped}/{len(cg['members'])} members (contour extraction failed)"
+                )
 
-            clusters_with_contours.append({
-                'id': cg['id'],
-                'members': cg['members'],
-                'member_contours_um': member_contours,
-                'member_uids': member_uids,
-                'cx': cg['cx'],
-                'cy': cg['cy'],
-            })
-            cluster_centroids.append((cg['cx'], cg['cy']))
+            clusters_with_contours.append(
+                {
+                    "id": cg["id"],
+                    "members": cg["members"],
+                    "member_contours_um": member_contours,
+                    "member_uids": member_uids,
+                    "cx": cg["cx"],
+                    "cy": cg["cy"],
+                }
+            )
+            cluster_centroids.append((cg["cx"], cg["cy"]))
 
         if cluster_centroids:
             # Start from nearest cluster to last single position
-            dists = [np.linalg.norm(np.array(cc) - np.array(last_pos))
-                     for cc in cluster_centroids]
+            dists = [np.linalg.norm(np.array(cc) - np.array(last_pos)) for cc in cluster_centroids]
             start_cluster = int(np.argmin(dists))
             cluster_order = nearest_neighbor_order(cluster_centroids, start_idx=start_cluster)
             ordered_clusters_data = [clusters_with_contours[i] for i in cluster_order]
@@ -1373,7 +1485,7 @@ def _run_single_slide(args):
         n_wells_needed = n_items * 2 if args.generate_controls else n_items
         if n_wells_needed > WELLS_PER_PLATE:
             print(f"\n{'='*70}")
-            print(f"WELL CAPACITY EXCEEDED")
+            print("WELL CAPACITY EXCEEDED")
             print(f"{'='*70}")
             print(f"  Singles:  {len(ordered_singles_dets)}")
             print(f"  Clusters: {len(ordered_clusters_data)}")
@@ -1381,10 +1493,10 @@ def _run_single_slide(args):
             print(f"  Wells needed: {n_wells_needed}")
             print(f"  Wells available: {WELLS_PER_PLATE} (384-well plate, 4 quadrants)")
             print(f"  Overflow: {n_wells_needed - WELLS_PER_PLATE} wells")
-            print(f"\nOptions:")
-            print(f"  1. Increase --min-score to reduce detections")
-            print(f"  2. Split detections across multiple plates")
-            print(f"  3. Run without --generate-controls (halves well usage)")
+            print("\nOptions:")
+            print("  1. Increase --min-score to reduce detections")
+            print("  2. Split detections across multiple plates")
+            print("  3. Run without --generate-controls (halves well usage)")
             print(f"{'='*70}")
             return
 
@@ -1399,12 +1511,12 @@ def _run_single_slide(args):
             # recreating Polygon objects on every overlap check)
             precomputed_polygons = []
             for det in ordered_singles_dets:
-                c = det.get('contour_um')
+                c = det.get("contour_um")
                 if c and len(c) >= 3:
                     precomputed_polygons.append(_make_polygon(c))
 
             for cdata in ordered_clusters_data:
-                for c in cdata['member_contours_um']:
+                for c in cdata["member_contours_um"]:
                     if c and len(c) >= 3:
                         precomputed_polygons.append(_make_polygon(c))
 
@@ -1419,58 +1531,70 @@ def _run_single_slide(args):
             if detection_tree is not None:
                 print("  Using STRtree spatial index for overlap checks")
             else:
-                print("  STRtree unavailable, using linear overlap scan (install shapely>=2.0 for speedup)")
+                print(
+                    "  STRtree unavailable, using linear overlap scan (install shapely>=2.0 for speedup)"
+                )
 
             # Generate single controls
             ordered_single_ctrls = []
             fallback_count = 0
             for det in ordered_singles_dets:
-                contour_um = det.get('contour_um')
+                contour_um = det.get("contour_um")
                 shifted, direction, actual_offset = generate_spatial_control(
-                    contour_um, precomputed_polygons,
+                    contour_um,
+                    precomputed_polygons,
                     offset_um=args.control_offset_um,
                     spatial_tree=detection_tree,
                 )
-                if 'fallback' in direction:
+                if "fallback" in direction:
                     fallback_count += 1
 
-                uid = det.get('uid', det.get('id', ''))
-                ordered_single_ctrls.append({
-                    'type': 'single_control',
-                    'uid': uid + '_ctrl',
-                    'control_of': uid,
-                    'contour_um': shifted,
-                    'offset_direction': direction,
-                    'offset_um': actual_offset,
-                    'area_um2': det.get('area_um2', 0),
-                })
+                uid = det.get("uid", det.get("id", ""))
+                ordered_single_ctrls.append(
+                    {
+                        "type": "single_control",
+                        "uid": uid + "_ctrl",
+                        "control_of": uid,
+                        "contour_um": shifted,
+                        "offset_direction": direction,
+                        "offset_um": actual_offset,
+                        "area_um2": det.get("area_um2", 0),
+                    }
+                )
 
-            print(f"  Single controls: {len(ordered_single_ctrls)} "
-                  f"({fallback_count} used fallback offset)")
+            print(
+                f"  Single controls: {len(ordered_single_ctrls)} "
+                f"({fallback_count} used fallback offset)"
+            )
 
             # Generate cluster controls
             ordered_cluster_ctrls = []
             cluster_fallback = 0
             for cdata in ordered_clusters_data:
                 shifted_contours, direction, actual_offset = generate_cluster_control(
-                    cdata['member_contours_um'], precomputed_polygons,
+                    cdata["member_contours_um"],
+                    precomputed_polygons,
                     offset_um=args.control_offset_um,
                     spatial_tree=detection_tree,
                 )
-                if 'fallback' in direction:
+                if "fallback" in direction:
                     cluster_fallback += 1
 
-                ordered_cluster_ctrls.append({
-                    'type': 'cluster_control',
-                    'uid': f"cluster_{cdata['id']}_ctrl",
-                    'control_of_cluster': cdata['id'],
-                    'contours_um': shifted_contours,
-                    'offset_direction': direction,
-                    'offset_um': actual_offset,
-                })
+                ordered_cluster_ctrls.append(
+                    {
+                        "type": "cluster_control",
+                        "uid": f"cluster_{cdata['id']}_ctrl",
+                        "control_of_cluster": cdata["id"],
+                        "contours_um": shifted_contours,
+                        "offset_direction": direction,
+                        "offset_um": actual_offset,
+                    }
+                )
 
-            print(f"  Cluster controls: {len(ordered_cluster_ctrls)} "
-                  f"({cluster_fallback} used fallback offset)")
+            print(
+                f"  Cluster controls: {len(ordered_cluster_ctrls)} "
+                f"({cluster_fallback} used fallback offset)"
+            )
         else:
             ordered_single_ctrls = []
             ordered_cluster_ctrls = []
@@ -1481,43 +1605,50 @@ def _run_single_slide(args):
         # Convert singles to shape dicts
         ordered_singles = []
         for det in ordered_singles_dets:
-            uid = det.get('uid', det.get('id', ''))
-            ordered_singles.append({
-                'type': 'single',
-                'uid': uid,
-                'contour_um': det.get('contour_um'),
-                'area_um2': det.get('area_um2', 0),
-                'global_center': det.get('global_center'),
-            })
+            uid = det.get("uid", det.get("id", ""))
+            ordered_singles.append(
+                {
+                    "type": "single",
+                    "uid": uid,
+                    "contour_um": det.get("contour_um"),
+                    "area_um2": det.get("area_um2", 0),
+                    "global_center": det.get("global_center"),
+                }
+            )
 
         # Convert clusters to shape dicts
         ordered_clusters = []
         for cdata in ordered_clusters_data:
             total_area = sum(
-                m.get('area_um2', 0) for m in cdata['members']
-                if m.get('contour_um') is not None
+                m.get("area_um2", 0) for m in cdata["members"] if m.get("contour_um") is not None
             )
-            ordered_clusters.append({
-                'type': 'cluster',
-                'uid': f"cluster_{cdata['id']}",
-                'cluster_id': cdata['id'],
-                'n_members': len(cdata['member_contours_um']),
-                'contours_um': cdata['member_contours_um'],
-                'member_uids': cdata['member_uids'],
-                'total_area_um2': total_area,
-                'cx': cdata['cx'],
-                'cy': cdata['cy'],
-            })
+            ordered_clusters.append(
+                {
+                    "type": "cluster",
+                    "uid": f"cluster_{cdata['id']}",
+                    "cluster_id": cdata["id"],
+                    "n_members": len(cdata["member_contours_um"]),
+                    "contours_um": cdata["member_contours_um"],
+                    "member_uids": cdata["member_uids"],
+                    "total_area_um2": total_area,
+                    "cx": cdata["cx"],
+                    "cy": cdata["cy"],
+                }
+            )
 
         # -------------------------------------------------------------------
         # Step 7: Assign wells
         # -------------------------------------------------------------------
         try:
             if args.generate_controls:
-                print("\nAssigning wells (serpentine, B2->B3->C3->C2, alternating target/control)...")
+                print(
+                    "\nAssigning wells (serpentine, B2->B3->C3->C2, alternating target/control)..."
+                )
                 assignments, well_order = assign_wells_with_controls(
-                    ordered_singles, ordered_single_ctrls,
-                    ordered_clusters, ordered_cluster_ctrls,
+                    ordered_singles,
+                    ordered_single_ctrls,
+                    ordered_clusters,
+                    ordered_cluster_ctrls,
                 )
             else:
                 # No controls: just assign sequentially
@@ -1525,27 +1656,30 @@ def _run_single_slide(args):
                 n_wells = len(all_shapes)
                 well_order = generate_plate_wells(n_wells)
                 for i, shape in enumerate(all_shapes):
-                    shape['well'] = well_order[i] if i < len(well_order) else f"overflow_{i}"
+                    shape["well"] = well_order[i] if i < len(well_order) else f"overflow_{i}"
                 assignments = all_shapes
         except ValueError as e:
             # Well overflow — save partial results (shapes without well assignments)
             print(f"\nERROR: {e}")
-            partial_shapes = ordered_singles + ordered_single_ctrls + ordered_clusters + ordered_cluster_ctrls
+            partial_shapes = (
+                ordered_singles + ordered_single_ctrls + ordered_clusters + ordered_cluster_ctrls
+            )
             partial_path = output_dir / f"{args.output_name}_NO_WELLS.json"
             partial_data = {
-                'metadata': {
-                    'cell_type': args.cell_type or 'unknown',
-                    'error': str(e),
-                    'n_singles': len(ordered_singles),
-                    'n_clusters': len(ordered_clusters),
-                    'controls': args.generate_controls,
+                "metadata": {
+                    "cell_type": args.cell_type or "unknown",
+                    "error": str(e),
+                    "n_singles": len(ordered_singles),
+                    "n_clusters": len(ordered_clusters),
+                    "controls": args.generate_controls,
                 },
-                'shapes': partial_shapes,
+                "shapes": partial_shapes,
             }
             from segmentation.utils.json_utils import atomic_json_dump
+
             atomic_json_dump(partial_data, partial_path)
             print(f"  Partial results saved to: {partial_path}")
-            print(f"  (shapes without well assignments — prune list and re-run)")
+            print("  (shapes without well assignments — prune list and re-run)")
             return
 
         print(f"  Total wells used: {len(well_order)}")
@@ -1556,19 +1690,20 @@ def _run_single_slide(args):
         # Step 8: Build and save export data
         # -------------------------------------------------------------------
         metadata = {
-            'cell_type': args.cell_type or 'unknown',
-            'plate_format': '384',
-            'quadrant_order': ['B2', 'B3', 'C3', 'C2'],
-            'pixel_size_um': pixel_size,
-            'dilation_um': args.dilation_um,
-            'rdp_epsilon_px': args.rdp_epsilon,
-            'control_offset_um': args.control_offset_um,
+            "cell_type": args.cell_type or "unknown",
+            "plate_format": "384",
+            "quadrant_order": ["B2", "B3", "C3", "C2"],
+            "pixel_size_um": pixel_size,
+            "dilation_um": args.dilation_um,
+            "rdp_epsilon_px": args.rdp_epsilon,
+            "control_offset_um": args.control_offset_um,
         }
 
         export_data = build_export_data(assignments, well_order, metadata)
 
         # Save JSON (timestamped + symlink)
         from segmentation.utils.timestamps import timestamped_path, update_symlink
+
         json_path = output_dir / f"{args.output_name}_with_controls.json"
         ts_json = timestamped_path(json_path)
         atomic_json_dump(export_data, ts_json)
@@ -1578,15 +1713,17 @@ def _run_single_slide(args):
         # Save CSV summary (timestamped + symlink)
         csv_path = output_dir / f"{args.output_name}_summary.csv"
         ts_csv = timestamped_path(csv_path)
-        with open(ts_csv, 'w') as f:
-            f.write('well,type,uid,area_um2,n_contours,offset_direction\n')
+        with open(ts_csv, "w") as f:
+            f.write("well,type,uid,area_um2,n_contours,offset_direction\n")
             for shape in assignments:
-                well = shape.get('well', '')
-                stype = shape.get('type', '')
-                uid = shape.get('uid', '')
-                area = shape.get('area_um2', shape.get('total_area_um2', 0))
-                n_contours = len(shape.get('contours_um', [])) or (1 if shape.get('contour_um') else 0)
-                direction = shape.get('offset_direction', '')
+                well = shape.get("well", "")
+                stype = shape.get("type", "")
+                uid = shape.get("uid", "")
+                area = shape.get("area_um2", shape.get("total_area_um2", 0))
+                n_contours = len(shape.get("contours_um", [])) or (
+                    1 if shape.get("contour_um") else 0
+                )
+                direction = shape.get("offset_direction", "")
                 f.write(f"{well},{stype},{uid},{area:.2f},{n_contours},{direction}\n")
         update_symlink(csv_path, ts_csv)
         print(f"  Saved CSV summary: {ts_csv}")
@@ -1596,7 +1733,9 @@ def _run_single_slide(args):
         ts_xml = timestamped_path(xml_path)
         try:
             export_to_lmd_xml(
-                assignments, crosses_data, ts_xml,
+                assignments,
+                crosses_data,
+                ts_xml,
                 flip_y=not args.no_flip_y,
             )
             update_symlink(xml_path, ts_xml)
@@ -1608,9 +1747,9 @@ def _run_single_slide(args):
             print(f"  WARNING: XML export failed: {e}")
 
         # Print summary
-        s = export_data['summary']
+        s = export_data["summary"]
         print(f"\n{'='*60}")
-        print(f"EXPORT SUMMARY")
+        print("EXPORT SUMMARY")
         print(f"{'='*60}")
         print(f"  Singles:          {s['n_singles']}")
         print(f"  Single controls:  {s['n_single_controls']}")
@@ -1635,9 +1774,9 @@ def run_batch_export(args):
     output_dir.mkdir(parents=True, exist_ok=True)
 
     # Discover detection files
-    det_files = sorted(input_dir.glob('*_detections.json'))
+    det_files = sorted(input_dir.glob("*_detections.json"))
     if not det_files:
-        det_files = sorted(input_dir.glob('*_detections_postdedup.json'))
+        det_files = sorted(input_dir.glob("*_detections_postdedup.json"))
     if not det_files:
         print(f"ERROR: No *_detections.json files found in {input_dir}")
         return
@@ -1647,11 +1786,11 @@ def run_batch_export(args):
     batch_results = []
     for det_file in det_files:
         # Extract slide name from filename (e.g., "nmj_detections.json" -> "nmj")
-        slide_prefix = re.sub(r'_(detections|postdedup)+', '', det_file.stem)
+        slide_prefix = re.sub(r"_(detections|postdedup)+", "", det_file.stem)
 
         # Find matching crosses file (prefer slide-specific, fall back to shared)
         crosses_file = None
-        for pattern in [f'{slide_prefix}_crosses.json', f'{slide_prefix}*crosses*.json']:
+        for pattern in [f"{slide_prefix}_crosses.json", f"{slide_prefix}*crosses*.json"]:
             matches = list(crosses_dir.glob(pattern))
             if matches:
                 crosses_file = matches[0]
@@ -1659,11 +1798,13 @@ def run_batch_export(args):
 
         # Shared fallback — warn the user
         if crosses_file is None:
-            for pattern in ['reference_crosses.json', 'crosses.json']:
+            for pattern in ["reference_crosses.json", "crosses.json"]:
                 matches = list(crosses_dir.glob(pattern))
                 if matches:
                     crosses_file = matches[0]
-                    print(f"  NOTE: Using shared crosses file {crosses_file.name} for {slide_prefix}")
+                    print(
+                        f"  NOTE: Using shared crosses file {crosses_file.name} for {slide_prefix}"
+                    )
                     break
 
         if crosses_file is None and args.crosses:
@@ -1671,9 +1812,9 @@ def run_batch_export(args):
 
         if crosses_file is None or not crosses_file.exists():
             print(f"\n  WARNING: No crosses file for {slide_prefix}, skipping")
-            batch_results.append({
-                'slide': slide_prefix, 'status': 'skipped', 'reason': 'no crosses file'
-            })
+            batch_results.append(
+                {"slide": slide_prefix, "status": "skipped", "reason": "no crosses file"}
+            )
             continue
 
         slide_output = output_dir / slide_prefix
@@ -1696,33 +1837,35 @@ def run_batch_export(args):
 
         try:
             _run_single_slide(slide_args)
-            batch_results.append({'slide': slide_prefix, 'status': 'success'})
+            batch_results.append({"slide": slide_prefix, "status": "success"})
         except Exception as e:
             print(f"  ERROR: {e}")
-            batch_results.append({
-                'slide': slide_prefix, 'status': 'failed', 'reason': str(e)
-            })
+            batch_results.append({"slide": slide_prefix, "status": "failed", "reason": str(e)})
 
     # Write batch summary
-    summary_path = output_dir / 'batch_summary.json'
+    summary_path = output_dir / "batch_summary.json"
     from segmentation.utils.json_utils import atomic_json_dump
-    atomic_json_dump({
-        'n_slides': len(det_files),
-        'n_success': sum(1 for r in batch_results if r['status'] == 'success'),
-        'n_failed': sum(1 for r in batch_results if r['status'] == 'failed'),
-        'n_skipped': sum(1 for r in batch_results if r['status'] == 'skipped'),
-        'results': batch_results,
-    }, summary_path)
+
+    atomic_json_dump(
+        {
+            "n_slides": len(det_files),
+            "n_success": sum(1 for r in batch_results if r["status"] == "success"),
+            "n_failed": sum(1 for r in batch_results if r["status"] == "failed"),
+            "n_skipped": sum(1 for r in batch_results if r["status"] == "skipped"),
+            "results": batch_results,
+        },
+        summary_path,
+    )
 
     print(f"\n{'='*60}")
     print(f"BATCH SUMMARY: {summary_path}")
     print(f"{'='*60}")
     for r in batch_results:
-        status = r['status'].upper()
-        reason = f" ({r.get('reason', '')})" if r.get('reason') else ''
+        status = r["status"].upper()
+        reason = f" ({r.get('reason', '')})" if r.get("reason") else ""
         print(f"  {r['slide']}: {status}{reason}")
     print(f"{'='*60}")
 
 
-if __name__ == '__main__':
+if __name__ == "__main__":
     main()
