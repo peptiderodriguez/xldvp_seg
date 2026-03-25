@@ -14,11 +14,17 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
-      - run: pip install ruff black
+      - run: pip install "ruff>=0.4,<1.0" "black>=24.0,<26.0"
       - name: Ruff check
-        run: ruff check segmentation/ tests/ scripts/
+        run: >
+          ruff check
+          segmentation/ tests/ scripts/
+          run_segmentation.py run_lmd_export.py train_classifier.py serve_html.py
       - name: Black check
-        run: black --check segmentation/ tests/ scripts/ run_segmentation.py run_lmd_export.py train_classifier.py serve_html.py
+        run: >
+          black --check
+          segmentation/ tests/ scripts/
+          run_segmentation.py run_lmd_export.py train_classifier.py serve_html.py
 
   test:
     runs-on: ubuntu-latest
