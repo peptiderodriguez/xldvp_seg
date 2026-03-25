@@ -476,7 +476,10 @@ SBATCH_FILE="${OUTPUT_DIR}/pipeline_${NAME}_$$.sbatch"
             else
                 echo "        \$XLDVP_PYTHON $REPO/scripts/classify_markers.py --detections \"\$DET_JSON\" --marker-channel \"$MARKER_CHANNELS\" --marker-name \"$MARKER_NAMES\" --method \"$MARKER_METHOD\" --output-dir \"\$RUN_DIR\"${classify_extra}"
             fi
-            echo "        DET_JSON=\"\${RUN_DIR}${CELL_TYPE}_detections_classified.json\""
+            echo "        # Discover classified output (may be _filtered_classified or _classified)"
+echo "        for _cf in \"\${RUN_DIR}${CELL_TYPE}_detections_filtered_classified.json\" \"\${RUN_DIR}${CELL_TYPE}_detections_classified.json\"; do"
+echo "            if [[ -f \"\$_cf\" ]]; then DET_JSON=\"\$_cf\"; break; fi"
+echo "        done"
         fi
 
         if [[ "$SPATIAL_ENABLED" == "true" ]]; then
@@ -539,7 +542,10 @@ SBATCH_FILE="${OUTPUT_DIR}/pipeline_${NAME}_$$.sbatch"
             else
                 echo "    \$XLDVP_PYTHON $REPO/scripts/classify_markers.py --detections \"\$DET_JSON\" --marker-channel \"$MARKER_CHANNELS\" --marker-name \"$MARKER_NAMES\" --method \"$MARKER_METHOD\" --output-dir \"\$RUN_DIR\"${classify_extra}"
             fi
-            echo "    DET_JSON=\"\${RUN_DIR}${CELL_TYPE}_detections_classified.json\""
+            echo "    # Discover classified output (may be _filtered_classified or _classified)"
+            echo "    for _cf in \"\${RUN_DIR}${CELL_TYPE}_detections_filtered_classified.json\" \"\${RUN_DIR}${CELL_TYPE}_detections_classified.json\"; do"
+            echo "        if [[ -f \"\$_cf\" ]]; then DET_JSON=\"\$_cf\"; break; fi"
+            echo "    done"
         fi
 
         if [[ "$SPATIAL_ENABLED" == "true" ]]; then
@@ -833,7 +839,7 @@ if [[ "$DS_HTML" == "true" ]]; then
         echo "if [[ -z \"\$RUN_DIR\" ]]; then echo 'ERROR: Run directory not found'; exit 1; fi"
         # Use classified detections if markers ran, else filtered, else raw
         echo "DET=\"\${RUN_DIR}${CELL_TYPE}_detections.json\""
-        echo "for _f in \"\${RUN_DIR}${CELL_TYPE}_detections_classified.json\" \"\${RUN_DIR}${CELL_TYPE}_detections_filtered.json\"; do"
+        echo "for _f in \"\${RUN_DIR}${CELL_TYPE}_detections_filtered_classified.json\" \"\${RUN_DIR}${CELL_TYPE}_detections_classified.json\" \"\${RUN_DIR}${CELL_TYPE}_detections_filtered.json\"; do"
         echo "    if [[ -f \"\$_f\" ]]; then DET=\"\$_f\"; break; fi"
         echo "done"
         echo "echo \"=== \$(date): Annotation HTML from \$DET ===\""
@@ -878,7 +884,7 @@ if [[ "$DS_CLUSTERING" == "true" ]]; then
         fi
         echo "DET=\"\${RUN_DIR}${CELL_TYPE}_detections.json\""
         echo "if [[ -z \"\$RUN_DIR\" || ! -f \"\$DET\" ]]; then echo 'ERROR: Detection output not found'; exit 1; fi"
-        echo "for _f in \"\${RUN_DIR}${CELL_TYPE}_detections_classified.json\" \"\${RUN_DIR}${CELL_TYPE}_detections_filtered.json\"; do"
+        echo "for _f in \"\${RUN_DIR}${CELL_TYPE}_detections_filtered_classified.json\" \"\${RUN_DIR}${CELL_TYPE}_detections_classified.json\" \"\${RUN_DIR}${CELL_TYPE}_detections_filtered.json\"; do"
         echo "    if [[ -f \"\$_f\" ]]; then DET=\"\$_f\"; break; fi"
         echo "done"
         echo "echo \"=== \$(date): Clustering ===\""
@@ -918,7 +924,7 @@ if [[ "$MULTI_SLIDE" == "true" && "$VIEWER_ENABLED" == "true" && -n "$VIEWER_GRO
         echo "echo \"Generating multi-slide spatial viewer...\""
         echo "\$XLDVP_PYTHON $REPO/scripts/generate_multi_slide_spatial_viewer.py \\"
         echo "    --input-dir \"$OUTPUT_DIR\" \\"
-        echo "    --detection-glob \"${CELL_TYPE}_detections_classified.json\" \\"
+        echo "    --detection-glob \"${CELL_TYPE}_detections*classified.json\" \\"
         echo "    --group-field \"$VIEWER_GROUP_FIELD\" \\"
         echo "    --title \"$VIEWER_TITLE_ESC\" \\"
         echo "    --output \"${OUTPUT_DIR}/spatial_viewer.html\""
