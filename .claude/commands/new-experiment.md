@@ -38,7 +38,28 @@ Index  Ex→Em      Fluorophore   Marker        Suggested Role
 
 4. **Any channels to exclude?** (failed stains, etc.)
 
-5. **Downstream analyses?** Use AskUserQuestion with multiSelect:
+5. **Segmenter?** (only for cell type "cell") Options: "Cellpose (default)" / "InstanSeg (lightweight, 3.8M params)". If InstanSeg, add `segmenter: instanseg` to config.
+
+6. **Preprocessing?** Use AskUserQuestion with multiSelect:
+   - "Flat-field correction (ON by default — corrects uneven illumination)" — ON by default, only ask to confirm
+   - "Photobleach correction (for sequential tile scans with intensity decay)" — OFF by default
+   Flat-field is always on unless the user explicitly disables it. Only suggest photobleach if the slide was acquired with sequential tiling. If user asks, offer `/preview-preprocessing` to check.
+
+7. **Deduplication method?** Options: "Mask overlap (default — pixel-exact)" / "IoU NMS (faster, less memory for >100K detections)". If IoU NMS, add `dedup_method: iou_nms` and `iou_threshold: 0.2`.
+
+8. **Marker classification method?** (only if markers were selected in step 3) For each marker, ask:
+   - "SNR (default ≥ 1.5 — median-based, robust)" — default for all markers
+   - "Otsu (auto-threshold)" — good when SNR is too strict/permissive
+   - "GMM (2-component Gaussian)" — good for overlapping distributions
+   Allow per-marker method selection if the user wants different methods for different markers. Also ask SNR threshold if not default (e.g., membrane stains may need different thresholds).
+
+9. **Feature extraction?** Use AskUserQuestion with multiSelect:
+   - "Morphological features (78D, always ON)" — not optional, just informational
+   - "SAM2 embeddings (256D, always ON)" — not optional
+   - "Deep features: ResNet + DINOv2 (6,144D)" — OFF by default. Suggest if user expects subtle phenotype differences.
+   If deep features selected, add `extract_deep_features: true`.
+
+10. **Downstream analyses?** Use AskUserQuestion with multiSelect:
    - "Marker classification (pos/neg per channel)" — ON by default if markers were selected
    - "Nuclear counting (count nuclei per cell)" — useful for MK, hepatocytes, dividing cells
    - "Spatial network analysis (Delaunay, communities)" — useful for multi-marker slides
@@ -47,9 +68,9 @@ Index  Ex→Em      Fluorophore   Marker        Suggested Role
    - "SpatialData export (scverse zarr)" — ON by default
    - "Quality filter (heuristic, no annotation needed)" — alternative to RF classifier
 
-6. **Experiment name?** Suggest a default based on filename.
+11. **Experiment name?** Suggest a default based on filename + cell type.
 
-7. **Output directory?** Suggest a default.
+12. **Output directory?** Suggest a default based on experiment name.
 
 **Step 4 — Check cluster.** Run `$XLDVP_PYTHON $REPO/scripts/system_info.py --json` silently. Extract recommended partition, CPUs, memory, GPUs.
 
@@ -68,6 +89,7 @@ output_dir: <output_path>
 #   [1] AF647 Ex653→Em668 → SMA647
 #   ... (all channels listed as comments)
 cell_type: <type>
+# segmenter: instanseg                  # uncomment for InstanSeg (default: cellpose)
 channel_map:
   cyto: <marker_or_wavelength>           # for cell/islet (e.g., PM, 750)
   nuc: <marker_or_wavelength>            # for cell/islet (e.g., 488, Hoechst)
@@ -76,10 +98,22 @@ all_channels: true
 html_sample_fraction: 0.10
 # load_channels: "0,1,2"                # uncomment to exclude failed channels
 
+# --- Preprocessing ---
+# photobleaching_correction: true        # for sequential tile scans with intensity decay
+# no_normalize_features: true            # disable flat-field (ON by default)
+
+# --- Detection options ---
+# dedup_method: iou_nms                  # faster for >100K detections (default: mask_overlap)
+# iou_threshold: 0.2                     # IoU NMS threshold
+# extract_deep_features: true            # +ResNet (4096D) + DINOv2 (2048D)
+# min_cell_area_um2: 50                  # area filter (debris)
+# max_cell_area_um2: 2000                # area filter (artifacts)
+
 # --- Marker classification (post-detection) ---
 markers:
-  - {channel: <N>, name: <MarkerName>}
-  # - {channel: <N>, name: <MarkerName>, method: snr, threshold: 1.5}
+  - {channel: <N>, name: <MarkerName>, method: snr, threshold: 1.5}
+  # Methods: snr (default), otsu, otsu_half, gmm
+  # Per-marker thresholds: threshold: 2.0 for stringent, 1.0 for permissive
 
 # --- Downstream analyses (enabled by user selection) ---
 
