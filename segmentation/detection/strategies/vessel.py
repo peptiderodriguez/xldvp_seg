@@ -19,7 +19,7 @@ import threading
 from contextlib import contextmanager
 from dataclasses import dataclass, field
 from enum import Enum
-from typing import Any
+from typing import Any, Optional
 
 import cv2
 import numpy as np
@@ -4449,7 +4449,7 @@ class VesselStrategy(DetectionStrategy, MultiChannelFeatureMixin):
         channel: int = 0,
         iou_threshold: float = 0.3,
         sample_fraction: float = 1.0,
-        progress_callback: callable | None = None,
+        progress_callback: Optional[callable] = None,  # noqa: UP045
         **detect_kwargs,
     ) -> tuple[list[np.ndarray], list[Detection]]:
         """
@@ -4672,7 +4672,7 @@ class VesselStrategy(DetectionStrategy, MultiChannelFeatureMixin):
         iou_threshold: float = 0.3,
         sample_fraction: float = 1.0,
         medsam_checkpoint: str = None,
-        progress_callback: callable | None = None,
+        progress_callback: Optional[callable] = None,  # noqa: UP045
         **detect_kwargs,
     ) -> tuple[list[dict], list[Detection]]:
         """
