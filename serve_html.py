@@ -94,6 +94,14 @@ def main():
         print("ERROR: Failed to start server", file=sys.stderr)
         sys.exit(1)
 
+    if tunnel_url:
+        print(f"\n{'=' * 60}")
+        print(f"  TUNNEL URL: {tunnel_url}")
+        print(f"{'=' * 60}\n")
+        print(f"Open in browser: {tunnel_url}")
+    else:
+        print(f"\nLocal only: http://localhost:{args.port}")
+
     if not args.background:
         wait_for_server_shutdown(http_proc, tunnel_proc)
 
