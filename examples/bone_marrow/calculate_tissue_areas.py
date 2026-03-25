@@ -589,7 +589,7 @@ def main():
         }
 
     with open(args.output, "w") as f:
-        json.dump(output_data, f, indent=2)
+        json.dump(output_data, f)
     print(f"\nSaved to {args.output}")
 
     # Generate HTML visualization

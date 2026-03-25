@@ -254,23 +254,12 @@ class CellStrategy(DetectionStrategy, MultiChannelFeatureMixin):
         Returns:
             Tuple of (label_array, list of Detection objects)
         """
-        import torch
+        from segmentation.utils.device import empty_cache, get_default_device
 
         # Get models
         cellpose = models.get("cellpose")
         sam2_predictor = models.get("sam2_predictor")
-        device = models.get(
-            "device",
-            torch.device(
-                "cuda"
-                if torch.cuda.is_available()
-                else (
-                    "mps"
-                    if hasattr(torch.backends, "mps") and torch.backends.mps.is_available()
-                    else "cpu"
-                )
-            ),
-        )
+        device = models.get("device", get_default_device())
 
         if cellpose is None:
             raise RuntimeError("Cellpose model required for cell detection")
@@ -281,8 +270,7 @@ class CellStrategy(DetectionStrategy, MultiChannelFeatureMixin):
         if not masks:
             if sam2_predictor:
                 sam2_predictor.reset_predictor()
-            if torch.cuda.is_available():
-                torch.cuda.empty_cache()
+            empty_cache()
             return np.zeros(tile.shape[:2], dtype=np.uint32), []
 
         # Step 2: Set SAM2 image for embedding extraction
@@ -427,8 +415,7 @@ class CellStrategy(DetectionStrategy, MultiChannelFeatureMixin):
         # Reset predictor state
         if sam2_predictor is not None:
             sam2_predictor.reset_predictor()
-        if torch.cuda.is_available():
-            torch.cuda.empty_cache()
+        empty_cache()
 
         # Build Detection objects and filter by size
         features_list = [det["features"] for det in valid_detections]
@@ -462,7 +449,3 @@ class CellStrategy(DetectionStrategy, MultiChannelFeatureMixin):
             Dictionary of morphological features
         """
         return extract_morphological_features(mask, tile)
-
-
-# Backward compatibility alias
-HSPCStrategy = CellStrategy

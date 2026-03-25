@@ -43,8 +43,9 @@ except ImportError:
     print("ERROR: aicspylibczi is required. Install with: pip install aicspylibczi")
     sys.exit(1)
 
-logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
-logger = logging.getLogger(__name__)
+from segmentation.utils.logging import get_logger
+
+logger = get_logger(__name__)
 
 
 def get_mosaic_info(czi: CziFile, scene: int = 0) -> dict:

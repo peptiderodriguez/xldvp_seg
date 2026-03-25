@@ -355,6 +355,13 @@ class SlideAnalysis:
         pos = self.positions_um
         if pos is not None and len(pos) == adata.n_obs:
             adata.obsm["spatial"] = pos
+        elif pos is not None and len(pos) != adata.n_obs:
+            logger.warning(
+                "Spatial coordinates length (%d) != n_obs (%d); "
+                "obsm['spatial'] not set. Some detections may lack position data.",
+                len(pos),
+                adata.n_obs,
+            )
 
         return adata
 

@@ -1,28 +1,28 @@
 #!/usr/bin/env python3
 """
-Apply a trained RF classifier to existing NMJ detections (CPU-only).
+Apply a trained RF classifier to existing detections (CPU-only).
 
 Scores every detection in the JSON with rf_prediction, without re-running
-detection or feature extraction. Enables a "detect once, classify later"
-workflow where 100% detection is done once (expensive GPU), then classifiers
-can be trained and applied iteratively (cheap CPU).
+detection or feature extraction. Works with any cell type (NMJ, MK, cell,
+vessel, islet, etc.). Enables a "detect once, classify later" workflow where
+100% detection is done once (expensive GPU), then classifiers can be trained
+and applied iteratively (cheap CPU).
 
 Usage:
     python scripts/apply_classifier.py \
-        --detections $RUN_DIR/nmj_detections.json \
-        --classifier ./checkpoints/nmj_classifier_rf_morph_sam2.pkl \
-        --output $RUN_DIR/nmj_detections_scored.json
+        --detections $RUN_DIR/detections.json \
+        --classifier ./checkpoints/rf_classifier.pkl \
+        --output $RUN_DIR/detections_scored.json
 """
 
 import argparse
-import json
 import sys
 from pathlib import Path
 
 import numpy as np
 
 from segmentation.utils.detection_utils import extract_feature_matrix, load_rf_classifier
-from segmentation.utils.json_utils import atomic_json_dump
+from segmentation.utils.json_utils import atomic_json_dump, fast_json_load
 from segmentation.utils.logging import get_logger, setup_logging
 
 logger = get_logger(__name__)
@@ -62,8 +62,7 @@ def main():
 
     # Load detections
     logger.info(f"Loading detections from {det_path}...")
-    with open(det_path) as f:
-        detections = json.load(f)
+    detections = fast_json_load(str(det_path))
     logger.info(f"Loaded {len(detections):,} detections")
 
     # Load classifier

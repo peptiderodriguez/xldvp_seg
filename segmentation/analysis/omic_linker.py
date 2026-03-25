@@ -134,6 +134,11 @@ class OmicLinker:
     def differential_features(self, group_col, group_a, group_b, test="mannwhitneyu"):
         """Differential feature analysis between two groups.
 
+        Uses Cohen's d (difference of means / pooled std) as the primary
+        effect size metric. This is valid for both positive-only features
+        (e.g., intensities, areas) and signed features (e.g., PCA components,
+        z-scored values) where log2 fold-change would be meaningless.
+
         Args:
             group_col: Column name for grouping (e.g., 'marker_profile').
             group_a: Value for group A (e.g., 'NeuN+').
@@ -141,7 +146,8 @@ class OmicLinker:
             test: Statistical test ('mannwhitneyu' or 'ttest').
 
         Returns:
-            DataFrame with feature, statistic, p_value, effect_size, p_adjusted.
+            DataFrame with feature, statistic, p_value, effect_size (Cohen's d),
+            mean_diff, mean_a, mean_b, p_adjusted.
         """
         from scipy import stats
 
@@ -167,23 +173,23 @@ class OmicLinker:
             else:
                 stat, pval = stats.ttest_ind(vals_a, vals_b)
             n_a, n_b = len(vals_a), len(vals_b)
+            mean_a = vals_a.mean()
+            mean_b = vals_b.mean()
+            mean_diff = mean_a - mean_b
             pooled_var = ((n_a - 1) * vals_a.var() + (n_b - 1) * vals_b.var()) / max(
                 n_a + n_b - 2, 1
             )
             pooled_std = np.sqrt(pooled_var) + 1e-10
-            effect = (vals_a.mean() - vals_b.mean()) / pooled_std
-            mean_a_pos = max(vals_a.mean(), 1e-10)
-            mean_b_pos = max(vals_b.mean(), 1e-10)
-            log2fc = np.log2(mean_a_pos / mean_b_pos)
+            cohens_d = mean_diff / pooled_std
             results.append(
                 {
                     "feature": col,
                     "statistic": stat,
                     "p_value": pval,
-                    "effect_size": effect,
-                    "log2fc": log2fc,
-                    "mean_a": vals_a.mean(),
-                    "mean_b": vals_b.mean(),
+                    "effect_size": cohens_d,
+                    "mean_diff": mean_diff,
+                    "mean_a": mean_a,
+                    "mean_b": mean_b,
                 }
             )
 

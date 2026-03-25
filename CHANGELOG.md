@@ -30,7 +30,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Channel resolution by name/wavelength (`--channel-spec`)
 - `run_pipeline.sh` YAML config-driven SLURM launcher with downstream job chains
 - Pre-commit hooks (ruff + black), Makefile, CI with coverage
-- 276+ automated tests across 11 test files
+- 460 automated tests across 18 test files
 
 ### Changed
 - All cell types use unified multi-GPU pipeline (no separate single-GPU path)

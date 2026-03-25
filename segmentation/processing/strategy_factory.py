@@ -160,13 +160,14 @@ def _build_kwargs_mesothelium(
     **_ignored,
 ) -> dict[str, Any]:
     """Build constructor kwargs for MesotheliumStrategy."""
-    meso_params = {k: v for k, v in strategy_params.items() if k != "pixel_size_um"}
-    return dict(
-        pixel_size_um=pixel_size_um,
-        extract_deep_features=extract_deep_features,
-        extract_sam2_embeddings=extract_sam2_embeddings,
-        **meso_params,
+    kwargs = dict(
+        pixel_size_um=pixel_size_um or strategy_params.get("pixel_size_um", 0.22),
+        target_chunk_area_um2=strategy_params.get("target_chunk_area_um2", 1500.0),
+        min_ribbon_width_um=strategy_params.get("min_ribbon_width_um", 5.0),
+        max_ribbon_width_um=strategy_params.get("max_ribbon_width_um", 30.0),
+        min_fragment_area_um2=strategy_params.get("min_fragment_area_um2", 1500.0),
     )
+    return kwargs
 
 
 def _build_kwargs_instanseg(

@@ -22,7 +22,7 @@ Mixins:
 """
 
 from .base import Detection, DetectionStrategy
-from .cell import CellStrategy, HSPCStrategy  # HSPCStrategy is backward compatibility alias
+from .cell import CellStrategy
 from .instanseg import InstanSegStrategy
 from .islet import IsletStrategy
 from .mesothelium import MesotheliumStrategy
@@ -37,7 +37,6 @@ __all__ = [
     "Detection",
     "MKStrategy",
     "CellStrategy",
-    "HSPCStrategy",  # Backward compatibility alias
     "NMJStrategy",
     "VesselStrategy",
     "MesotheliumStrategy",

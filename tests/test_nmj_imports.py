@@ -86,7 +86,6 @@ class TestMultiChannelMixinImports:
 
         assert hasattr(MultiChannelFeatureMixin, "extract_channel_stats")
         assert hasattr(MultiChannelFeatureMixin, "extract_multichannel_features")
-        assert hasattr(MultiChannelFeatureMixin, "extract_multichannel_features")
 
 
 class TestHTMLExportImports:

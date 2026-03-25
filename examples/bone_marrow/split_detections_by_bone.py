@@ -340,11 +340,11 @@ def main():
 
     print(f"\nWriting {femur_path}...")
     with open(femur_path, "w") as f:
-        json.dump(femur_dets, f, indent=2)
+        json.dump(femur_dets, f)
 
     print(f"Writing {humerus_path}...")
     with open(humerus_path, "w") as f:
-        json.dump(humerus_dets, f, indent=2)
+        json.dump(humerus_dets, f)
 
     output_files = {"femur": str(femur_path), "humerus": str(humerus_path)}
 
@@ -352,7 +352,7 @@ def main():
         unknown_path = args.output_dir / f"{args.prefix}_unknown.json"
         print(f"Writing {unknown_path}...")
         with open(unknown_path, "w") as f:
-            json.dump(unknown_dets, f, indent=2)
+            json.dump(unknown_dets, f)
         output_files["unknown"] = str(unknown_path)
 
     # Add metadata to summary

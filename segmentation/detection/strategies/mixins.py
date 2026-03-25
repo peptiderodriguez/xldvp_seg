@@ -8,6 +8,26 @@ different detection strategies without code duplication.
 import numpy as np
 from scipy.stats import kurtosis, skew
 
+# Stat names used for zero-valued fallback dicts in extract_channel_stats.
+# Defined once at module level to avoid rebuilding per call.
+_CHANNEL_STAT_NAMES = (
+    "mean",
+    "std",
+    "max",
+    "min",
+    "median",
+    "p5",
+    "p25",
+    "p75",
+    "p95",
+    "variance",
+    "skewness",
+    "kurtosis",
+    "iqr",
+    "dynamic_range",
+    "cv",
+)
+
 
 class MultiChannelFeatureMixin:
     """
@@ -80,26 +100,7 @@ class MultiChannelFeatureMixin:
 
             Returns empty dict if mask is empty or shapes don't match.
         """
-        _zero_stats = {
-            f"{channel_name}_{stat}": 0.0
-            for stat in [
-                "mean",
-                "std",
-                "max",
-                "min",
-                "median",
-                "p5",
-                "p25",
-                "p75",
-                "p95",
-                "variance",
-                "skewness",
-                "kurtosis",
-                "iqr",
-                "dynamic_range",
-                "cv",
-            ]
-        }
+        _zero_stats = {f"{channel_name}_{stat}": 0.0 for stat in _CHANNEL_STAT_NAMES}
         if mask.sum() == 0:
             return _zero_stats
 
@@ -115,26 +116,7 @@ class MultiChannelFeatureMixin:
             # are rare and excluding them has negligible effect on statistics.
             masked_pixels = masked_pixels[masked_pixels > 0]
         if len(masked_pixels) == 0:
-            return {
-                f"{channel_name}_{stat}": 0.0
-                for stat in [
-                    "mean",
-                    "std",
-                    "max",
-                    "min",
-                    "median",
-                    "p5",
-                    "p25",
-                    "p75",
-                    "p95",
-                    "variance",
-                    "skewness",
-                    "kurtosis",
-                    "iqr",
-                    "dynamic_range",
-                    "cv",
-                ]
-            }
+            return {f"{channel_name}_{stat}": 0.0 for stat in _CHANNEL_STAT_NAMES}
 
         features = {}
         prefix = channel_name

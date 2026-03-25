@@ -41,7 +41,7 @@ from pathlib import Path
 import numpy as np
 from scipy import ndimage
 
-REPO = Path(__file__).resolve().parent.parent
+REPO = Path(__file__).resolve().parent.parent.parent
 
 try:
     import hdf5plugin  # noqa: F401 — registers LZ4 codec for h5py

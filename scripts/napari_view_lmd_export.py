@@ -22,7 +22,9 @@ from pathlib import Path
 
 import numpy as np
 
-logger = logging.getLogger(__name__)
+from segmentation.utils.logging import get_logger
+
+logger = get_logger(__name__)
 
 try:
     import napari

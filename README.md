@@ -41,7 +41,7 @@ Runs on SLURM GPU clusters or local workstations (NVIDIA CUDA, Apple Silicon MPS
 ```bash
 git clone https://github.com/peptiderodriguez/xldvp_seg.git
 cd xldvp_seg
-conda create -n xldvp_seg python=3.11 -y && conda activate xldvp_seg
+conda create -n xldvp_seg python=3.10 -y && conda activate xldvp_seg
 ```
 
 ### Step 2: Install the package
@@ -144,10 +144,10 @@ xlseg download-models --brightfield  # download gated HF models
 
 ### SLURM batch pipeline
 
-Write a YAML config (see `configs/` for examples), then:
+Write a YAML config (see `examples/configs/` for examples), then:
 
 ```bash
-scripts/run_pipeline.sh configs/my_experiment.yaml
+scripts/run_pipeline.sh examples/configs/my_experiment.yaml
 ```
 
 This generates an sbatch script, submits to SLURM, and chains detection → marker classification → spatial analysis → viewer generation. One slide per SLURM array task for parallel throughput.
@@ -221,7 +221,7 @@ SpatialData zarr is auto-exported at the end of every detection run. Load with `
 - **Multi-omic linking**: Bridge morphological features to mass-spec proteomics (OmicLinker)
 - **Interactive viewers**: HTML spatial viewer with KDE contours, ROI drawing, tissue overlay
 - **LMD export**: Contour dilation, clustering, 384-well serpentine layout, multi-plate overflow, XML for Leica
-- **GitHub Actions CI**: Automated testing on Python 3.10 + 3.12
+- **GitHub Actions CI**: Automated testing on Python 3.10
 
 ---
 

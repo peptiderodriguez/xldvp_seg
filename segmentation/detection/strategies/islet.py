@@ -238,7 +238,6 @@ class IsletStrategy(CellStrategy):
         cellpose_ids = cellpose_ids[cellpose_ids > 0]
 
         logger.info(f"Cellpose found {len(cellpose_ids)} cells")
-        print(f"[islet] Cellpose found {len(cellpose_ids)} cells", flush=True)
 
         # Extract individual boolean masks from Cellpose label array using find_objects
         slices = ndimage.find_objects(cellpose_masks)
@@ -291,7 +290,7 @@ class IsletStrategy(CellStrategy):
         Returns:
             Tuple of (label_array, list of Detection objects)
         """
-        import torch
+        from segmentation.utils.device import empty_cache, get_default_device
 
         cellpose = models.get("cellpose")
         sam2_predictor = models.get("sam2_predictor")
@@ -335,7 +334,6 @@ class IsletStrategy(CellStrategy):
         cellpose_ids = cellpose_ids[cellpose_ids > 0]
 
         logger.info(f"Cellpose found {len(cellpose_ids)} cells")
-        print(f"[islet] Cellpose found {len(cellpose_ids)} cells", flush=True)
 
         # find_objects gives bbox slices for each label — O(bbox) access per cell
         cp_slices = ndimage.find_objects(cellpose_masks)
@@ -365,8 +363,7 @@ class IsletStrategy(CellStrategy):
             del cellpose_masks, cp_slices
             if sam2_predictor is not None:
                 sam2_predictor.reset_predictor()
-            if torch.cuda.is_available():
-                torch.cuda.empty_cache()
+            empty_cache()
             return np.zeros(tile_shape, dtype=np.uint32), []
 
         # Set SAM2 image for embedding extraction
@@ -439,7 +436,7 @@ class IsletStrategy(CellStrategy):
 
         for idx, cp_id in enumerate(accepted_ids):
             if idx % 2000 == 0:
-                print(f"[islet] Phase 0 (marker scan) {idx}/{n_cells}", flush=True)
+                logger.info(f"Phase 0 (marker scan) {idx}/{n_cells}")
 
             sl = cp_slices[cp_id - 1]
             local_mask = cellpose_masks[sl] == cp_id
@@ -470,7 +467,7 @@ class IsletStrategy(CellStrategy):
             )
             # local_mask is bbox-sized (~30x30), auto-freed on next iteration
 
-        print(f"[islet] Phase 0 done: {len(quick_data)}/{n_cells} cells scanned", flush=True)
+        logger.info(f"Phase 0 done: {len(quick_data)}/{n_cells} cells scanned")
 
         # ====================================================================
         # GMM pre-filter: use global thresholds from pilot calibration if
@@ -495,10 +492,9 @@ class IsletStrategy(CellStrategy):
                             f"{n_above}/{len(raw_vals)} pass"
                         )
                 if gmm_thresholds:
-                    print(
-                        f"[islet] Pre-filter (global GMM/{divisor:.0f}): "
-                        + ", ".join(f"ch{k}={v:.1f}" for k, v in sorted(gmm_thresholds.items())),
-                        flush=True,
+                    logger.info(
+                        f"Pre-filter (global GMM/{divisor:.0f}): "
+                        + ", ".join(f"ch{k}={v:.1f}" for k, v in sorted(gmm_thresholds.items()))
                     )
             else:
                 # Fallback: fit per-tile GMM
@@ -539,10 +535,9 @@ class IsletStrategy(CellStrategy):
                     )
 
                 if gmm_thresholds:
-                    print(
-                        f"[islet] Pre-filter (tile GMM/{divisor:.0f}): "
-                        + ", ".join(f"ch{k}={v:.1f}" for k, v in sorted(gmm_thresholds.items())),
-                        flush=True,
+                    logger.info(
+                        f"Pre-filter (tile GMM/{divisor:.0f}): "
+                        + ", ".join(f"ch{k}={v:.1f}" for k, v in sorted(gmm_thresholds.items()))
                     )
 
         # Split cells into promising (any marker > GMM threshold) vs background
@@ -564,10 +559,9 @@ class IsletStrategy(CellStrategy):
         n_background = len(background_indices)
         if n_background > 0:
             pct = 100 * n_background / len(quick_data)
-            print(
-                f"[islet] Pre-filter: {n_promising} promising + {n_background} background "
-                f"({pct:.0f}% skipped before feature extraction)",
-                flush=True,
+            logger.info(
+                f"Pre-filter: {n_promising} promising + {n_background} background "
+                f"({pct:.0f}% skipped before feature extraction)"
             )
 
         # ====================================================================
@@ -581,7 +575,7 @@ class IsletStrategy(CellStrategy):
 
         for pi, cell_idx in enumerate(promising_indices):
             if pi % 500 == 0:
-                print(f"[islet] Featurizing cell {pi}/{n_promising}", flush=True)
+                logger.info(f"Featurizing cell {pi}/{n_promising}")
             cell = quick_data[cell_idx]
             cp_id = cell["cp_id"]
             sl = cp_slices[cp_id - 1]
@@ -687,30 +681,16 @@ class IsletStrategy(CellStrategy):
 
         if n_background > 0:
             n_valid = len(valid_detections)
-            print(
-                f"[islet] Pre-filter saved: {n_promising} full + {n_background} minimal "
+            logger.info(
+                f"Pre-filter saved: {n_promising} full + {n_background} minimal "
                 f"({100*n_background/n_valid:.0f}% skipped, "
-                f"~{n_background * 1.8 / 3600:.1f}h SAM2 time saved)",
-                flush=True,
+                f"~{n_background * 1.8 / 3600:.1f}h SAM2 time saved)"
             )
-        print(
-            f"[islet] Feature extraction done: {len(valid_detections)}/{n_cells} valid", flush=True
-        )
+        logger.info(f"Feature extraction done: {len(valid_detections)}/{n_cells} valid")
 
         # Batch deep feature extraction
         if self.extract_deep_features:
-            device = models.get(
-                "device",
-                torch.device(
-                    "cuda"
-                    if torch.cuda.is_available()
-                    else (
-                        "mps"
-                        if hasattr(torch.backends, "mps") and torch.backends.mps.is_available()
-                        else "cpu"
-                    )
-                ),
-            )
+            device = models.get("device", get_default_device())
             resnet = models.get("resnet")
             resnet_transform = models.get("resnet_transform")
 
@@ -801,8 +781,7 @@ class IsletStrategy(CellStrategy):
         self._membrane_u8 = None
         if sam2_predictor is not None:
             sam2_predictor.reset_predictor()
-        if torch.cuda.is_available():
-            torch.cuda.empty_cache()
+        empty_cache()
 
         # Optional RF classifier scoring
         if "classifier" in models:

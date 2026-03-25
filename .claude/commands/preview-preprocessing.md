@@ -29,7 +29,7 @@ $XLDVP_PYTHON $REPO/scripts/preview_preprocessing.py \
 
 For a more detailed comparison with illumination profiles and row/column mean plots:
 ```bash
-$XLDVP_PYTHON $REPO/scripts/visualize_corrections.py \
+$XLDVP_PYTHON $REPO/examples/legacy/visualize_corrections.py \
     --czi-path <path> \
     --channel <N> \
     --output-dir <output_dir>/corrections/

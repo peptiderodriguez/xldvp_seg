@@ -207,7 +207,7 @@ class TissuePatternStrategy(CellStrategy):
         Returns:
             Tuple of (label_array, list of Detection objects)
         """
-        import torch
+        from segmentation.utils.device import empty_cache, get_default_device
 
         sam2_predictor = models.get("sam2_predictor")
 
@@ -222,8 +222,7 @@ class TissuePatternStrategy(CellStrategy):
         if not masks:
             if sam2_predictor is not None:
                 sam2_predictor.reset_predictor()
-            if torch.cuda.is_available():
-                torch.cuda.empty_cache()
+            empty_cache()
             return np.zeros(tile.shape[:2], dtype=np.uint32), []
 
         # Set SAM2 image using summed channel as pseudo-RGB (for embedding extraction)
@@ -311,18 +310,7 @@ class TissuePatternStrategy(CellStrategy):
 
         # Batch deep feature extraction
         if self.extract_deep_features:
-            device = models.get(
-                "device",
-                torch.device(
-                    "cuda"
-                    if torch.cuda.is_available()
-                    else (
-                        "mps"
-                        if hasattr(torch.backends, "mps") and torch.backends.mps.is_available()
-                        else "cpu"
-                    )
-                ),
-            )
+            device = models.get("device", get_default_device())
             resnet = models.get("resnet")
             resnet_transform = models.get("resnet_transform")
 
@@ -380,8 +368,7 @@ class TissuePatternStrategy(CellStrategy):
         # Reset predictor state
         if sam2_predictor is not None:
             sam2_predictor.reset_predictor()
-        if torch.cuda.is_available():
-            torch.cuda.empty_cache()
+        empty_cache()
 
         # Build Detection objects and filter by size
         features_list = [det["features"] for det in valid_detections]

@@ -46,7 +46,7 @@ class Detection:
     def area(self) -> int:
         """Area in pixels."""
         if self.mask is None:
-            return self._area if hasattr(self, "_area") else int(self.features.get("area", 0))
+            return int(self.features.get("area", 0))
         return int(self.mask.sum())
 
     def to_dict(self) -> dict[str, Any]:

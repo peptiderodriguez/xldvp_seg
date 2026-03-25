@@ -31,6 +31,7 @@ import numpy as np
 
 from segmentation.utils.detection_utils import (
     extract_feature_matrix,
+    extract_positions_um,
     load_detections,
 )
 from segmentation.utils.logging import get_logger, setup_logging
@@ -41,25 +42,37 @@ logger = get_logger(__name__)
 def get_positions_um(detections, pixel_size):
     """Extract cell positions in microns.
 
-    Tries global_center_um first, then global_center * pixel_size.
+    Delegates to the shared ``extract_positions_um`` utility for resolution
+    logic (global_center_um -> global_center*px -> global_x/y*px) while
+    also tracking which detection indices had valid positions.
+
     Returns (positions, valid_indices) where positions is (n, 2) in [x, y].
     """
-    positions = []
+    all_positions, _ = extract_positions_um(detections, pixel_size_um=pixel_size)
+
+    # Build valid_indices by re-checking which detections resolved a position.
+    # extract_positions_um returns only resolved rows in order, so we replay
+    # the resolution check to know which original indices they correspond to.
     valid_indices = []
     for i, det in enumerate(detections):
         feats = det.get("features", {})
-        # Try um coordinates first
-        center_um = det.get("global_center_um", feats.get("global_center_um"))
+        center_um = det.get("global_center_um") or feats.get("global_center_um")
         if center_um is not None and len(center_um) == 2:
-            positions.append(center_um)
             valid_indices.append(i)
             continue
-        # Fall back to pixel coordinates * pixel_size
-        center_px = det.get("global_center", feats.get("global_center"))
-        if center_px is not None and len(center_px) == 2:
-            positions.append([center_px[0] * pixel_size, center_px[1] * pixel_size])
+        center_px = det.get("global_center") or feats.get("global_center")
+        if center_px is not None and len(center_px) == 2 and pixel_size:
             valid_indices.append(i)
-    return np.array(positions, dtype=np.float64), valid_indices
+            continue
+        gx = det.get("global_x")
+        gy = det.get("global_y")
+        if gx is not None and gy is not None:
+            ps = feats.get("pixel_size_um") or pixel_size
+            if ps and isinstance(ps, (int, float)):
+                valid_indices.append(i)
+                continue
+
+    return all_positions, valid_indices
 
 
 def subsample_for_umap(max_samples, n_samples, rng=None):

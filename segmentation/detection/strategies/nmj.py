@@ -375,8 +375,6 @@ class NMJStrategy(DetectionStrategy, MultiChannelFeatureMixin):
         Returns:
             Tuple of (label_array, list of Detection objects with full features)
         """
-        import torch
-
         # Step 1: Segment candidates (includes elongation filtering)
         masks = self.segment(tile, models)
 
@@ -394,20 +392,11 @@ class NMJStrategy(DetectionStrategy, MultiChannelFeatureMixin):
         # Ensure uint8 format (safe for float tiles in [0,1] or intermediate ranges)
         tile_rgb = _safe_to_uint8(tile_rgb)
 
+        from segmentation.utils.device import empty_cache, get_default_device
+
         # Get models - only load ResNet/DINOv2 if we'll use them
         sam2_predictor = models.get("sam2_predictor")
-        device = models.get(
-            "device",
-            torch.device(
-                "cuda"
-                if torch.cuda.is_available()
-                else (
-                    "mps"
-                    if hasattr(torch.backends, "mps") and torch.backends.mps.is_available()
-                    else "cpu"
-                )
-            ),
-        )
+        device = models.get("device", get_default_device())
 
         # Only access ResNet/DINOv2 if extract_deep_features is enabled (avoids triggering lazy load)
         if self.extract_deep_features:
@@ -569,8 +558,7 @@ class NMJStrategy(DetectionStrategy, MultiChannelFeatureMixin):
                 logger.debug(f"Failed to reset SAM2 predictor: {e}")
 
         # Clear GPU cache
-        if torch.cuda.is_available():
-            torch.cuda.empty_cache()
+        empty_cache()
 
         gc.collect()
 
@@ -772,16 +760,10 @@ def load_nmj_classifier(model_path: str, device=None):
     import torch.nn as nn
     from torchvision import models, transforms
 
+    from segmentation.utils.device import get_default_device
+
     if device is None:
-        device = torch.device(
-            "cuda"
-            if torch.cuda.is_available()
-            else (
-                "mps"
-                if hasattr(torch.backends, "mps") and torch.backends.mps.is_available()
-                else "cpu"
-            )
-        )
+        device = torch.device(get_default_device())
 
     model = models.resnet18(weights=None)
     model.fc = nn.Linear(model.fc.in_features, 2)

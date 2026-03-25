@@ -66,8 +66,14 @@ class TestHTMLExportImports(unittest.TestCase):
 
     def test_all_html_export_imports_at_once(self):
         """Test importing all HTML export functions at once."""
+        from segmentation.io.html_export import (  # noqa: F401
+            export_samples_to_html,
+            generate_annotation_page,
+            generate_index_page,
+        )
 
         # All imports succeeded if we reach this point
+        assert True
 
 
 class TestConfigImports(unittest.TestCase):

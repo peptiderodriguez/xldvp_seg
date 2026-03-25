@@ -52,8 +52,8 @@ class TestCLIHelp:
         ]:
             assert cmd in result.stdout, f"'{cmd}' not in help"
 
-    def test_unknown_subcommand_exits_nonzero(self):
-        """An unknown subcommand should cause an error."""
+    def test_unknown_subcommand_handled(self):
+        """An unknown subcommand should be handled without crashing."""
         result = _run_cli("nonexistent-command")
         # argparse treats unknown subcommand as unknown args → dispatches None → prints help
         # Implementation exits 0 on None command, so just verify no crash

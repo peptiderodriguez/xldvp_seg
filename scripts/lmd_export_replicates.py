@@ -53,6 +53,8 @@ except ImportError:
             return json.load(f)
 
 
+# WARNING: This is a fallback only. Pixel size should come from CZI metadata
+# or crosses JSON. If this default is used, a warning is emitted.
 DEFAULT_PIXEL_SIZE_UM = 0.1725
 
 
