@@ -131,6 +131,7 @@ For beginners, expand on each step as you reach it. For advanced users, just ask
 | **Omic linking** | Bridge morphological features to mass-spec proteomics data | `segmentation.analysis.omic_linker.OmicLinker` |
 | **Model download** | Download brightfield FMs (UNI2, Virchow2, CONCH, Phikon-v2) | `xlseg download-models --brightfield` |
 | **One-command** | Classify → spatial cluster → viewer → serve (all in one) | `scripts/view_slide.py` |
+| **ROI detection** | Islet regions, TMA cores, bone marrow areas → per-ROI cell detection | `examples/islet/segment_islet_regions.py`, `examples/tma/detect_tma_cells.py` |
 
 **Cell-type-specific scripts** (mention ONLY when relevant to the user's actual cell type — don't list all of these):
 
@@ -152,6 +153,7 @@ For beginners, expand on each step as you reach it. For advanced users, just ask
 | **Mesothelium** | `examples/mesothelium/generate_msln_annotation.py` | Reclassify Msln+ cells into tiers (HTML tool) |
 | **Mesothelium** | `examples/mesothelium/generate_msln_cluster_viewer.py` | Msln+ clustering results viewer |
 | **Mesothelium** | `examples/mesothelium/generate_msln_annotation_crops.py` | Msln crop generation for annotation |
+| **TMA** | `examples/tma/detect_tma_cells.py` | Find TMA cores → cell detection per core with grid labels |
 | **Any** | `scripts/count_nuclei_per_cell.py` | Count nuclei per cell: 2nd Cellpose pass on nuclear channel, per-nucleus morph+SAM2 features |
 | **Any** | `examples/islet/expand_nuclei_masks.py` | Expand nuclei-only masks to approximate cell body |
 | **Any** | `examples/legacy/extract_sam2_embeddings.py` | Extract SAM2 embeddings for existing detections |

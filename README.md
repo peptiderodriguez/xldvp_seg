@@ -92,6 +92,7 @@ examples/                  # Project-specific analyses by experiment
 ├── bone_marrow/           # MK, RBC vascularization, bone regions
 ├── mesothelium/           # MSLN detection + annotation
 ├── islet/                 # Pancreatic islet analysis
+├── tma/                   # TMA core detection + per-core cell segmentation
 ├── liver/                 # Hepatic zonation, DCN+, transects
 ├── nmj/                   # NMJ SLURM scripts
 ├── vessel/                # Vessel classifier training
@@ -189,8 +190,9 @@ Chains detection → marker classification → nuclei counting → HTML viewer g
 | Nuclear counting | `scripts/count_nuclei_per_cell.py` | Cellpose 2nd pass, per-nucleus features |
 | Quality filter | `scripts/quality_filter_detections.py` | Heuristic filter (no annotation needed) |
 | One-command viz | `scripts/view_slide.py` | Classify → cluster → viewer → serve |
+| ROI detection | `examples/islet/`, `examples/tma/` | Find islet regions, TMA cores, or other ROIs → detect cells within ROIs only |
 
-See `examples/` for experiment-specific analyses (bone marrow, liver zonation, islets, vessels, NMJ, mesothelium).
+See `examples/` for experiment-specific analyses (bone marrow, liver zonation, islets, TMA, vessels, NMJ, mesothelium).
 
 ---
 

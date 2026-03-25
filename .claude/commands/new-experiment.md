@@ -25,7 +25,7 @@ Index  Ex→Em      Fluorophore   Marker        Suggested Role
 
 **Step 3 — Ask key questions.** Use AskUserQuestion for each (one at a time, don't batch):
 
-1. **Cell type?** Options: "Cell (generic Cellpose)" / "NMJ" / "MK" / "Vessel" / "Islet" / "Mesothelium" / "Tissue Pattern"
+1. **Cell type?** Options: "Cell (generic Cellpose)" / "NMJ" / "MK" / "Vessel" / "Islet" / "Mesothelium" / "Tissue Pattern". Note: For ROI-restricted detection (islet regions, TMA cores), there are specialized example scripts (`examples/islet/segment_islet_regions.py`, `examples/tma/detect_tma_cells.py`) that detect cells only within specific regions rather than the whole slide.
 
 2. **Which channels for detection?** Based on cell type:
    - Cell: "Which channel is cyto (membrane/cytoplasm)? Which is nuclear?" — offer the likely candidates from the table

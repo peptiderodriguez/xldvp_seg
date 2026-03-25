@@ -443,6 +443,16 @@ Metadata catalog for all models (feature extractors + segmenters). Tracks name, 
 - `tile_processing.py` — shared `process_single_tile()`
 - Multi-node: `--tile-shard INDEX/TOTAL` round-robin, `--merge-shards` on resume
 
+### ROI-Restricted Detection (example scripts)
+
+For workflows that need cell detection within specific regions (not the whole slide), standalone example scripts handle ROI finding + per-ROI detection with multi-GPU parallelism:
+
+- **Islet regions** — `examples/islet/segment_islet_regions.py`: find islet regions via marker signal thresholding, run Cellpose+SAM2 within each ROI
+- **TMA cores** — `examples/tma/detect_tma_cells.py`: find circular TMA cores via morphological thresholding + circularity filter, assign grid labels (A1, A2, ...), detect cells per core
+- **Bone marrow areas** — `examples/bone_marrow/`: manual region annotation, split detections by bone region
+
+These scripts share a common pattern: load CZI channels into RAM, find ROIs at low resolution, extract padded bounding boxes, init Cellpose+SAM2 per GPU, split ROIs round-robin across GPUs, detect in parallel. Each detection is enriched with global coordinates and an ROI identifier (e.g., `islet_id`, `core_id`).
+
 ---
 
 ## Critical Code Patterns
@@ -628,6 +638,7 @@ Project-specific analysis scripts organized by experiment:
 | `examples/bone_marrow/` | MK hindlimb unloading, RBC vascularization, bone regions |
 | `examples/mesothelium/` | MSLN detection + annotation |
 | `examples/islet/` | Pancreatic islet analysis |
+| `examples/tma/` | TMA core detection + per-core cell segmentation |
 | `examples/liver/` | Hepatic zonation, DCN+, transects |
 | `examples/nmj/` | NMJ detection SLURM scripts |
 | `examples/senescence/` | Senescence cell detection configs |
