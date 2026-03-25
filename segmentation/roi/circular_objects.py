@@ -56,6 +56,8 @@ def find_circular_regions(
 
     full = channel_data[channel_idx]
     arr = full[::downsample, ::downsample].astype(np.float32)
+    # Re-zero CZI padding pixels (may become nonzero after float conversion)
+    arr[full[::downsample, ::downsample] == 0] = 0
 
     ds_pixel_size = pixel_size * downsample
 

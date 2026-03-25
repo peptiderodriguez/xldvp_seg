@@ -85,6 +85,7 @@ segmentation/              # Main package (pip install -e .)
 ├── io/                    # CZI loader, HTML export, OME-Zarr
 ├── preprocessing/         # Flat-field, photobleach, stain normalization
 ├── reporting/             # Stats, plots, vessel reports
+├── roi/                   # ROI-restricted detection (marker threshold, circular, polygon/mask)
 └── utils/                 # JSON I/O, device handling, logging, config
 
 scripts/                   # 25 reusable CLI tools

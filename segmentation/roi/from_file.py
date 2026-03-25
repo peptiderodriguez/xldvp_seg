@@ -6,11 +6,11 @@ with ``vertices_px``) and plain NumPy / image label masks.
 
 from __future__ import annotations
 
-import json
 from pathlib import Path
 
 import numpy as np
 
+from segmentation.utils.json_utils import fast_json_load
 from segmentation.utils.logging import get_logger
 
 logger = get_logger(__name__)
@@ -19,7 +19,6 @@ logger = get_logger(__name__)
 def load_rois_from_polygons(
     polygon_json_path: str | Path,
     image_shape: tuple[int, int],
-    pixel_size: float = 1.0,
     scale_factor: float = 1.0,
 ) -> tuple[np.ndarray, int]:
     """Rasterise polygon annotations into a label mask.
@@ -34,7 +33,6 @@ def load_rois_from_polygons(
     Args:
         polygon_json_path: Path to the polygon JSON file.
         image_shape: ``(height, width)`` of the full-resolution image.
-        pixel_size: Pixel size in um (stored but not used for rasterisation).
         scale_factor: Multiply vertex coordinates by this factor before
             rasterisation (e.g. if vertices were drawn at a different scale).
 
@@ -44,8 +42,7 @@ def load_rois_from_polygons(
     import cv2
 
     path = Path(polygon_json_path)
-    with open(path) as f:
-        data = json.load(f)
+    data = fast_json_load(path)
 
     # Extract polygon vertex lists from various JSON shapes
     polygons: list[list[list[float]]] = []
@@ -103,6 +100,8 @@ def load_rois_from_mask(mask_path: str | Path) -> tuple[np.ndarray, int]:
 
     if path.suffix == ".npy":
         labels = np.load(path).astype(np.int32)
+        if labels.ndim != 2:
+            raise ValueError(f"Expected 2-D array, got {labels.ndim}-D")
     else:
         from PIL import Image
 

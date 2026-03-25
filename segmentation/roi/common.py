@@ -153,7 +153,8 @@ def number_rois_spatial(
     current_row: list[tuple[float, float, ROI]] = [centers[0]]
 
     for entry in centers[1:]:
-        if abs(entry[0] - current_row[0][0]) <= row_tolerance_px:
+        row_mean_y = sum(e[0] for e in current_row) / len(current_row)
+        if abs(entry[0] - row_mean_y) <= row_tolerance_px:
             current_row.append(entry)
         else:
             rows.append([e[2] for e in sorted(current_row, key=lambda e: e[1])])
@@ -164,7 +165,7 @@ def number_rois_spatial(
     # Assign IDs
     seq_id = 1
     for row_idx, row in enumerate(rows):
-        row_letter = chr(ord("A") + row_idx)
+        row_letter = chr(ord("A") + row_idx) if row_idx < 26 else f"R{row_idx}"
         for col_idx, roi in enumerate(row):
             roi["roi_id"] = seq_id
             if grid_mode:
@@ -290,22 +291,15 @@ def _detect_single_roi(
     channel_data: dict[int, np.ndarray],
     pixel_size: float,
     cell_type: str,
-    gpu_id: int,
-    channel_map: dict[str, int] | None,
-    extract_sam2: bool,
-    extract_deep_features: bool,
+    strategy: Any,
+    models: dict,
 ) -> list[dict]:
-    """Detect cells in a single ROI crop on the specified GPU.
+    """Detect cells in a single ROI crop using a pre-initialised strategy and models.
 
-    Initialises a :class:`CellDetector` on *gpu_id*, slices channel data to the
-    ROI bounding box, runs detection, and converts local coordinates to global.
+    Slices channel data to the ROI bounding box, runs detection, and converts
+    local coordinates to global.
     """
     import cv2
-
-    from segmentation.detection.cell_detector import CellDetector
-    from segmentation.utils.device import set_device_for_worker
-
-    device = set_device_for_worker(gpu_id)
 
     ay0, ax0, h, w = roi["ay0"], roi["ax0"], roi["height"], roi["width"]
     gx0, gy0 = roi["gx0"], roi["gy0"]
@@ -334,29 +328,16 @@ def _detect_single_roi(
         rgb_planes.append(plane)
     tile_rgb = np.stack(rgb_planes, axis=-1)
 
-    # Initialise detector on this GPU
-    detector = CellDetector(device=str(device))
-
-    # Build strategy via the registry
-    from segmentation.detection.strategy_factory import create_strategy
-
-    strategy_kwargs: dict[str, Any] = {"extract_sam2_embeddings": extract_sam2}
-    if channel_map:
-        for role, ch in channel_map.items():
-            strategy_kwargs[f"{role}_channel"] = ch
-    strategy = create_strategy(cell_type, **strategy_kwargs)
-
     # Run detection
     label_array, dets = strategy.detect(
         tile=tile_rgb,
-        models=detector.models,
+        models=models,
         pixel_size_um=pixel_size,
         extract_features=True,
         extra_channels=extra_channels,
     )
 
     if not dets:
-        detector.cleanup()
         return []
 
     # Extract contours from label array (ROI-local coords)
@@ -409,7 +390,6 @@ def _detect_single_roi(
             }
         )
 
-    detector.cleanup()
     return det_dicts
 
 
@@ -463,30 +443,50 @@ def detect_in_rois(
     )
 
     def _worker(gpu_id: int, assigned: list[ROI]) -> list[dict]:
+        from segmentation.detection.cell_detector import CellDetector
+        from segmentation.processing.strategy_factory import create_strategy
+        from segmentation.utils.device import set_device_for_worker
+
+        device = set_device_for_worker(gpu_id)
+
+        # Init CellDetector ONCE per worker (avoid model reload per ROI)
+        detector = CellDetector(device=str(device))
+
+        strategy_params: dict[str, Any] = {}
+        if channel_map:
+            strategy_params.update(channel_map)
+        strategy = create_strategy(
+            cell_type,
+            strategy_params=strategy_params,
+            extract_sam2_embeddings=extract_sam2,
+            extract_deep_features=extract_deep_features,
+        )
+
         all_dets: list[dict] = []
-        for roi in assigned:
-            t0 = time.time()
-            roi_dets = _detect_single_roi(
-                roi,
-                channel_data,
-                pixel_size,
-                cell_type,
-                gpu_id,
-                channel_map,
-                extract_sam2,
-                extract_deep_features,
-            )
-            all_dets.extend(roi_dets)
-            dt = time.time() - t0
-            logger.info(
-                "[GPU-%d] ROI %d (%dx%d): %d cells (%.1fs)",
-                gpu_id,
-                roi["roi_id"],
-                roi["width"],
-                roi["height"],
-                len(roi_dets),
-                dt,
-            )
+        try:
+            for roi in assigned:
+                t0 = time.time()
+                roi_dets = _detect_single_roi(
+                    roi,
+                    channel_data,
+                    pixel_size,
+                    cell_type,
+                    strategy,
+                    detector.models,
+                )
+                all_dets.extend(roi_dets)
+                dt = time.time() - t0
+                logger.info(
+                    "[GPU-%d] ROI %d (%dx%d): %d cells (%.1fs)",
+                    gpu_id,
+                    roi["roi_id"],
+                    roi["width"],
+                    roi["height"],
+                    len(roi_dets),
+                    dt,
+                )
+        finally:
+            detector.cleanup()
         return all_dets
 
     all_detections: list[dict] = []
@@ -495,8 +495,14 @@ def detect_in_rois(
         for gpu_id in range(num_gpus):
             if rois_per_gpu[gpu_id]:
                 futures.append(pool.submit(_worker, gpu_id, rois_per_gpu[gpu_id]))
-        for future in futures:
-            all_detections.extend(future.result())
+        try:
+            for future in futures:
+                all_detections.extend(future.result())
+        except Exception:
+            from segmentation.utils.device import empty_cache
+
+            empty_cache()
+            raise
 
     logger.info("detect_in_rois: %d total detections from %d ROIs", len(all_detections), len(rois))
     return all_detections

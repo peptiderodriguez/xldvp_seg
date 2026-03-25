@@ -37,6 +37,7 @@ __all__ = [
     "models",
     "metrics",
     "datasets",
+    "roi",
 ]
 
 # Convenience re-exports

@@ -79,11 +79,13 @@ def find_regions_by_marker_signal(
 
     if not normalised:
         logger.warning("No valid marker channels — returning empty labels")
-        empty_shape = (1, 1)
+        # Compute downsampled shape from first available channel
+        first_ch = next(iter(channel_data.values()))
+        ds_shape = (first_ch.shape[0] // downsample, first_ch.shape[1] // downsample)
         return (
-            np.zeros(empty_shape, dtype=np.int32),
+            np.zeros(ds_shape, dtype=np.int32),
             downsample,
-            np.zeros(empty_shape, dtype=np.float32),
+            np.zeros(ds_shape, dtype=np.float32),
         )
 
     # Sum normalised channels

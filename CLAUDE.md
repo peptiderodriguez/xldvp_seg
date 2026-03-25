@@ -94,6 +94,7 @@ Tests are in `tests/` using pytest. Fixtures in `conftest.py`: `sample_tile` (51
 | `test_well_plate.py` | 384-well serpentine generation, multi-plate overflow, QC empties |
 | `test_deduplication.py` | IoU NMS dedup: overlap/non-overlap, threshold, HDF5 mask loading |
 | `test_aggregation.py` | `aggregate_slide`, `aggregate_cohort`, `cohort_to_anndata` |
+| `test_roi.py` | ROI bbox extraction, spatial numbering, tile/detection filters, marker threshold, circular regions, polygon/mask loading |
 
 Tests rely on `pip install -e .` (or `PYTHONPATH=$REPO`) for `segmentation.*` imports.
 
@@ -443,9 +444,18 @@ Metadata catalog for all models (feature extractors + segmenters). Tracks name, 
 - `tile_processing.py` — shared `process_single_tile()`
 - Multi-node: `--tile-shard INDEX/TOTAL` round-robin, `--merge-shards` on resume
 
-### ROI-Restricted Detection (example scripts)
+### ROI-Restricted Detection (`segmentation.roi`)
 
-For workflows that need cell detection within specific regions (not the whole slide), standalone example scripts handle ROI finding + per-ROI detection with multi-GPU parallelism:
+The `segmentation.roi` package provides reusable utilities for ROI-restricted cell detection. Use it when you need detection within specific regions (not the whole slide):
+
+| Module | Purpose |
+|--------|---------|
+| `roi.common` | Bbox extraction, spatial numbering, tile/detection filtering, multi-GPU per-ROI detection |
+| `roi.marker_threshold` | Find ROIs via summed marker signal + Otsu thresholding |
+| `roi.circular_objects` | Find roughly-circular ROIs (e.g. TMA cores, islets) |
+| `roi.from_file` | Load ROIs from polygon JSON or label masks |
+
+Example scripts that use `segmentation.roi`:
 
 - **Islet regions** — `examples/islet/segment_islet_regions.py`: find islet regions via marker signal thresholding, run Cellpose+SAM2 within each ROI
 - **TMA cores** — `examples/tma/detect_tma_cells.py`: find circular TMA cores via morphological thresholding + circularity filter, assign grid labels (A1, A2, ...), detect cells per core

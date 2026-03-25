@@ -524,7 +524,7 @@ def main():
     det_ch = args.detection_channel
 
     # Determine which channels to load
-    channels_to_load = sorted(set(filter(None, [det_ch, nuc_ch, cyto_ch])))
+    channels_to_load = sorted(set(ch for ch in [det_ch, nuc_ch, cyto_ch] if ch is not None))
     if args.all_channels:
         extra = [int(x.strip()) for x in args.all_channels.split(",")]
         channels_to_load = sorted(set(channels_to_load + extra))
