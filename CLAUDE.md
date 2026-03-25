@@ -379,7 +379,7 @@ Beyond the core detect → classify → LMD workflow, the pipeline supports:
 | **Region splitting** | `scripts/split_regions_for_lmd.py` | Post-process pipeline detections → watershed split large regions |
 | **Replicate sampling** | `scripts/paper_figure_sampling.py` | Area-matched or spatially-clustered replicate building, 384-well assignment |
 | **Transect selection** | `scripts/select_transect_cells_for_lmd.py` | Select cells along zonation transect paths for LMD export |
-| **Distance bins** | `scripts/assign_distance_bins.py` | Concentric rings around vascular landmarks, distance features, spatial model comparison |
+| **Distance bins** | `examples/liver/assign_distance_bins.py` | Concentric rings around vascular landmarks, distance features, spatial model comparison |
 | **LMD clustering** | `scripts/cluster_detections.py` | Two-stage biological clustering for well assignment |
 
 **SpatialData** is auto-exported at end of every pipeline run (`{celltype}_spatialdata.zarr`). Load with `spatialdata.read_zarr()`. Run squidpy spatial stats (neighborhood enrichment, co-occurrence, Moran's I) via `--run-squidpy --squidpy-cluster-key <marker_class>`.

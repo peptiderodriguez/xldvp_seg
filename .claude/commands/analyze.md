@@ -100,7 +100,7 @@ For beginners, expand on each step as you reach it. For advanced users, just ask
 | Stage | What you can do | Script / Flag |
 |-------|----------------|---------------|
 | **Inspect** | CZI metadata, channels, mosaic dims | `scripts/czi_info.py` |
-| **Preview** | Flat-field, photobleach, row/col normalization effects | `scripts/preview_preprocessing.py`, `scripts/visualize_corrections.py` |
+| **Preview** | Flat-field, photobleach, row/col normalization effects | `scripts/preview_preprocessing.py`, `examples/legacy/visualize_corrections.py` |
 | **Detect** | NMJ, MK, vessel, mesothelium, islet, tissue pattern, generic cell (Cellpose or InstanSeg) | `run_segmentation.py --cell-type {nmj,mk,vessel,mesothelium,islet,tissue_pattern,cell}`, `--segmenter {cellpose,instanseg}` |
 | **Features** | Morph (78D), SAM2 (256D), ResNet (4096D), DINOv2 (2048D), per-channel stats (15/ch) | `--extract-deep-features`, `--all-channels` |
 | **Annotate** | HTML viewer with pos/neg annotation, JSON export | `scripts/regenerate_html.py`, `serve_html.py` |
@@ -108,9 +108,9 @@ For beginners, expand on each step as you reach it. For advanced users, just ask
 | **Markers** | Median-based SNR thresholding (default ≥1.5) / Otsu / GMM | `scripts/classify_markers.py` |
 | **Explore** | UMAP + t-SNE, Leiden/HDBSCAN clustering, trajectory (diffmap, PAGA, pseudotime), interactive plotly | `scripts/cluster_by_features.py` |
 | **Spatial** | Delaunay networks, community detection, cell neighborhoods | `scripts/spatial_cell_analysis.py` |
-| **Tissue zones** | Spatially-constrained zone discovery, transects, bone region annotation | `scripts/assign_tissue_zones.py`, `scripts/zonation_transect.py`, `scripts/annotate_bone_regions.py` |
-| **Distance bins** | Concentric rings around landmarks (CV/PV), distance + ratio features, model comparison | `scripts/assign_distance_bins.py` |
-| **Tissue area** | Variance-based tissue detection, area measurement from CZI | `scripts/calculate_tissue_areas.py` |
+| **Tissue zones** | Spatially-constrained zone discovery, transects, bone region annotation | `examples/liver/assign_tissue_zones.py`, `examples/liver/zonation_transect.py`, `examples/bone_marrow/annotate_bone_regions.py` |
+| **Distance bins** | Concentric rings around landmarks (CV/PV), distance + ratio features, model comparison | `examples/liver/assign_distance_bins.py` |
+| **Tissue area** | Variance-based tissue detection, area measurement from CZI | `examples/bone_marrow/calculate_tissue_areas.py` |
 | **Visualize** | Multi-slide scrollable HTML with ROI drawing + stats | `scripts/generate_multi_slide_spatial_viewer.py` |
 | **Tissue overlay** | Fluorescence image + cell overlay + ROI + LMD export in one viewer | `scripts/generate_tissue_overlay.py` |
 | **Nuclear count** | Count nuclei per cell (Cellpose 2nd pass on nuclear channel), morph+SAM2+optional deep features per nucleus | `scripts/count_nuclei_per_cell.py` |
@@ -125,7 +125,7 @@ For beginners, expand on each step as you reach it. For advanced users, just ask
 | **Dedup methods** | Mask overlap (default) or contour IoU NMS (faster, less memory) | `--dedup-method {mask_overlap,iou_nms}` |
 | **Seg metrics** | IoU, Dice, PQ, Hungarian matching for benchmarking segmenters | `segmentation.metrics` module |
 | **Sample data** | Synthetic test detections (500 cells, 5 clusters) for dev/testing | `segmentation.datasets.sample()` |
-| **Python API** | Scanpy-style wrappers: `xseg.tl.markers()`, `.score()`, `.cluster()` | `segmentation.api` (`pp`, `tl`, `pl`, `io`) |
+| **Python API** | Scanpy-style wrappers: `segmentation.api.tl.markers()`, `.score()`, `.cluster()` | `segmentation.api` (`pp`, `tl`, `pl`, `io`) |
 | **SlideAnalysis** | Central state object wrapping pipeline output with lazy loading | `segmentation.core.SlideAnalysis` |
 | **Cohort aggregation** | Slide-level feature aggregation for multi-slide comparison | `segmentation.analysis.aggregation` |
 | **Omic linking** | Bridge morphological features to mass-spec proteomics data | `segmentation.analysis.omic_linker.OmicLinker` |
@@ -136,28 +136,28 @@ For beginners, expand on each step as you reach it. For advanced users, just ask
 
 | Cell type | Script | What it does |
 |-----------|--------|-------------|
-| **MK** | `scripts/maturation_analysis.py` | MK maturation staging using nuclear deep features |
-| **MK** | `scripts/mk_comprehensive_analysis.py` | Comprehensive MK analysis across all feature dimensions |
-| **MK** | `scripts/mk_interaction_analysis.py` | ART interaction effects for MK morphological features |
-| **MK** | `scripts/mk_mechanism_figure.py` | Generate mechanosensing figure with data-faithful cells |
-| **MK** | `scripts/split_detections_by_bone.py` | Split detections by bone region (femur/humerus) |
-| **MK** | `scripts/select_mks_for_lmd.py` | MK replicate selection + multi-plate wells |
+| **MK** | `examples/bone_marrow/maturation_analysis.py` | MK maturation staging using nuclear deep features |
+| **MK** | `examples/bone_marrow/mk_comprehensive_analysis.py` | Comprehensive MK analysis across all feature dimensions |
+| **MK** | `examples/bone_marrow/mk_interaction_analysis.py` | ART interaction effects for MK morphological features |
+| **MK** | `examples/bone_marrow/mk_mechanism_figure.py` | Generate mechanosensing figure with data-faithful cells |
+| **MK** | `examples/bone_marrow/split_detections_by_bone.py` | Split detections by bone region (femur/humerus) |
+| **MK** | `examples/bone_marrow/select_mks_for_lmd.py` | MK replicate selection + multi-plate wells |
 | **Vessel** | `scripts/vessel_community_analysis.py` | Multi-scale vessel structure detection |
-| **Vessel** | `scripts/train_vessel_detector.py` | Train vessel RF detector |
-| **Vessel** | `scripts/train_vessel_classifier.py` | Train vessel type classifier (6 types) |
-| **Vessel** | `scripts/rbc_vascularization_analysis.py` | RBC vascularization analysis for MK HU project |
-| **Islet** | `scripts/analyze_islets.py` | Spatial analysis of pancreatic islets |
-| **Islet** | `scripts/segment_islet_regions.py` | ROI-based islet segmentation (nuc vs PM+nuc comparison) |
-| **Islet** | `scripts/generate_islet_overview.py` | HTML islet overview from completed run |
-| **Mesothelium** | `scripts/generate_msln_annotation.py` | Reclassify Msln+ cells into tiers (HTML tool) |
-| **Mesothelium** | `scripts/generate_msln_cluster_viewer.py` | Msln+ clustering results viewer |
-| **Mesothelium** | `scripts/generate_msln_annotation_crops.py` | Msln crop generation for annotation |
+| **Vessel** | `examples/vessel/train_vessel_detector.py` | Train vessel RF detector |
+| **Vessel** | `examples/vessel/train_vessel_classifier.py` | Train vessel type classifier (6 types) |
+| **Vessel** | `examples/bone_marrow/rbc_vascularization_analysis.py` | RBC vascularization analysis for MK HU project |
+| **Islet** | `examples/islet/analyze_islets.py` | Spatial analysis of pancreatic islets |
+| **Islet** | `examples/islet/segment_islet_regions.py` | ROI-based islet segmentation (nuc vs PM+nuc comparison) |
+| **Islet** | `examples/islet/generate_islet_overview.py` | HTML islet overview from completed run |
+| **Mesothelium** | `examples/mesothelium/generate_msln_annotation.py` | Reclassify Msln+ cells into tiers (HTML tool) |
+| **Mesothelium** | `examples/mesothelium/generate_msln_cluster_viewer.py` | Msln+ clustering results viewer |
+| **Mesothelium** | `examples/mesothelium/generate_msln_annotation_crops.py` | Msln crop generation for annotation |
 | **Any** | `scripts/count_nuclei_per_cell.py` | Count nuclei per cell: 2nd Cellpose pass on nuclear channel, per-nucleus morph+SAM2 features |
-| **Any** | `scripts/expand_nuclei_masks.py` | Expand nuclei-only masks to approximate cell body |
-| **Any** | `scripts/extract_sam2_embeddings.py` | Extract SAM2 embeddings for existing detections |
-| **Any** | `scripts/generate_rbc_annotation_html.py` | RBC cluster candidate annotation HTML |
-| **Any** | `scripts/generate_cluster_gallery.py` | Visual gallery of clustered detections |
-| **Any** | `scripts/compare_tissue_vs_bone_outlines.py` | Compare tissue detection vs manual bone region annotations |
+| **Any** | `examples/islet/expand_nuclei_masks.py` | Expand nuclei-only masks to approximate cell body |
+| **Any** | `examples/legacy/extract_sam2_embeddings.py` | Extract SAM2 embeddings for existing detections |
+| **Any** | `examples/bone_marrow/generate_rbc_annotation_html.py` | RBC cluster candidate annotation HTML |
+| **Any** | `examples/legacy/generate_cluster_gallery.py` | Visual gallery of clustered detections |
+| **Any** | `examples/bone_marrow/compare_tissue_vs_bone_outlines.py` | Compare tissue detection vs manual bone region annotations |
 
 Don't list these tables to the user. Just ask what they want to analyze.
 
@@ -238,7 +238,7 @@ This replaces manual `--channel`, `--cellpose-input-channels`, and `--marker-cha
 
 **Step 9 — Generate YAML config + launch.**
 
-For **SLURM**: Write a YAML config file to `configs/<name>.yaml` using this template:
+For **SLURM**: Write a YAML config file to `examples/configs/<name>.yaml` using this template:
 ```yaml
 name: <descriptive_name>
 czi_path: <path>              # single slide
@@ -274,7 +274,7 @@ slurm:
   slides_per_job: 1           # 1 slide/job = parallel SLURM array tasks, not sequential — much faster throughput
   num_jobs: <number of slides>
 ```
-Then run: `scripts/run_pipeline.sh configs/<name>.yaml`
+Then run: `scripts/run_pipeline.sh examples/configs/<name>.yaml`
 
 For a new YAML template, verify the generated sbatch once (`--num-gpus`, Python path, all flags). Once verified, the template can be reused without re-checking. Always check Step 10 verification after the job starts.
 
@@ -312,11 +312,11 @@ On SLURM, use `squeue -u $USER` to check status. Tail the log file to monitor pr
 
 **For SLURM (`run_pipeline.sh`):** Add `resume_dir:` to the YAML config pointing to the exact timestamped run directory, then re-run:
 ```yaml
-# In configs/<name>.yaml — add this line:
+# In examples/configs/<name>.yaml — add this line:
 resume_dir: /path/to/output/slide_name/slide_name_20260302_060105_100pct
 ```
 ```bash
-scripts/run_pipeline.sh configs/<name>.yaml
+scripts/run_pipeline.sh examples/configs/<name>.yaml
 ```
 `run_pipeline.sh` only adds `--resume` when `resume_dir:` is explicitly set. **Without it, re-running always starts a fresh full-detection run.** (Auto-discovery was removed to prevent accidentally resuming old test/sample runs.)
 
@@ -504,22 +504,22 @@ PYTHONPATH=$REPO $XLDVP_PYTHON $REPO/scripts/classify_markers.py \
 If the slide has multiple markers that define tissue zones (e.g., hepatic zonation with GluI/Pck1, or bone marrow regions):
 ```bash
 # Automatic spatially-constrained zone discovery
-PYTHONPATH=$REPO $XLDVP_PYTHON $REPO/scripts/assign_tissue_zones.py \
+PYTHONPATH=$REPO $XLDVP_PYTHON $REPO/examples/liver/assign_tissue_zones.py \
     --detections <detections.json> \
     --output-dir <output>/zones
 
 # Hepatic zonation transect analysis (pericentral → periportal gradients)
-PYTHONPATH=$REPO $XLDVP_PYTHON $REPO/scripts/zonation_transect.py \
+PYTHONPATH=$REPO $XLDVP_PYTHON $REPO/examples/liver/zonation_transect.py \
     --detections <detections.json> \
     --output-dir <output>/transects
 
 # Bone region annotation (interactive HTML tool)
-PYTHONPATH=$REPO $XLDVP_PYTHON $REPO/scripts/annotate_bone_regions.py \
+PYTHONPATH=$REPO $XLDVP_PYTHON $REPO/examples/bone_marrow/annotate_bone_regions.py \
     --detections <detections.json> \
     --output <output>/bone_regions.json
 
 # Calculate tissue areas from CZI (variance-based tissue detection)
-PYTHONPATH=$REPO $XLDVP_PYTHON $REPO/scripts/calculate_tissue_areas.py \
+PYTHONPATH=$REPO $XLDVP_PYTHON $REPO/examples/bone_marrow/calculate_tissue_areas.py \
     --czi-path <czi_path> --output-dir <output>
 ```
 
@@ -597,15 +597,15 @@ This chains: classify_markers → spatial_cell_analysis → generate_multi_slide
 For **MK** detections, offer these additional analyses:
 ```bash
 # Maturation staging using nuclear deep features
-PYTHONPATH=$REPO $XLDVP_PYTHON $REPO/scripts/maturation_analysis.py \
+PYTHONPATH=$REPO $XLDVP_PYTHON $REPO/examples/bone_marrow/maturation_analysis.py \
     --detections <detections.json> --output-dir <output>/maturation
 
 # Comprehensive multi-dimensional analysis
-PYTHONPATH=$REPO $XLDVP_PYTHON $REPO/scripts/mk_comprehensive_analysis.py \
+PYTHONPATH=$REPO $XLDVP_PYTHON $REPO/examples/bone_marrow/mk_comprehensive_analysis.py \
     --detections <detections.json> --output-dir <output>/comprehensive
 
 # Split by bone region (femur/humerus) after bone annotation
-PYTHONPATH=$REPO $XLDVP_PYTHON $REPO/scripts/split_detections_by_bone.py \
+PYTHONPATH=$REPO $XLDVP_PYTHON $REPO/examples/bone_marrow/split_detections_by_bone.py \
     --detections <detections.json> \
     --bone-regions <bone_regions.json> \
     --output-dir <output>
@@ -619,29 +619,29 @@ PYTHONPATH=$REPO $XLDVP_PYTHON $REPO/scripts/vessel_community_analysis.py \
     --output-dir <output>/vessel_communities
 
 # RBC vascularization analysis
-PYTHONPATH=$REPO $XLDVP_PYTHON $REPO/scripts/rbc_vascularization_analysis.py \
+PYTHONPATH=$REPO $XLDVP_PYTHON $REPO/examples/bone_marrow/rbc_vascularization_analysis.py \
     --detections <detections.json> --output-dir <output>/rbc
 ```
 
 For **islet** detections:
 ```bash
 # Spatial islet analysis
-PYTHONPATH=$REPO $XLDVP_PYTHON $REPO/scripts/analyze_islets.py \
+PYTHONPATH=$REPO $XLDVP_PYTHON $REPO/examples/islet/analyze_islets.py \
     --detections <detections.json> --output-dir <output>/islets
 
 # HTML overview
-PYTHONPATH=$REPO $XLDVP_PYTHON $REPO/scripts/generate_islet_overview.py \
+PYTHONPATH=$REPO $XLDVP_PYTHON $REPO/examples/islet/generate_islet_overview.py \
     --detections <detections.json> --output <output>/islet_overview.html
 ```
 
 For **mesothelium** detections:
 ```bash
 # Tier reclassification HTML tool
-PYTHONPATH=$REPO $XLDVP_PYTHON $REPO/scripts/generate_msln_annotation.py \
+PYTHONPATH=$REPO $XLDVP_PYTHON $REPO/examples/mesothelium/generate_msln_annotation.py \
     --detections <detections.json> --output <output>/msln_annotation.html
 
 # Cluster viewer
-PYTHONPATH=$REPO $XLDVP_PYTHON $REPO/scripts/generate_msln_cluster_viewer.py \
+PYTHONPATH=$REPO $XLDVP_PYTHON $REPO/examples/mesothelium/generate_msln_cluster_viewer.py \
     --detections <detections.json> --output <output>/msln_clusters.html
 ```
 
@@ -766,7 +766,7 @@ PYTHONPATH=$REPO $XLDVP_PYTHON $REPO/run_lmd_export.py \
 ```bash
 # Generic: use segmentation.lmd.selection.select_cells_for_lmd() in Python
 # MK-specific wrapper with multi-plate well assignment:
-PYTHONPATH=$REPO $XLDVP_PYTHON $REPO/scripts/select_mks_for_lmd.py \
+PYTHONPATH=$REPO $XLDVP_PYTHON $REPO/examples/bone_marrow/select_mks_for_lmd.py \
     --score-threshold 0.80 --target-area 10000 --max-replicates 4
 ```
 Multi-plate support: `segmentation.lmd.well_plate` handles automatic overflow to additional 384-well plates when >308 wells are needed. Empty QC wells (10% of samples) are inserted evenly across all plates. Well ordering: serpentine within quadrants (B2→B3→C3→C2), nearest-corner transitions between quadrants to minimize laser head travel.
