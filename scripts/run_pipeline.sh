@@ -477,9 +477,9 @@ SBATCH_FILE="${OUTPUT_DIR}/pipeline_${NAME}_$$.sbatch"
                 echo "        \$XLDVP_PYTHON $REPO/scripts/classify_markers.py --detections \"\$DET_JSON\" --marker-channel \"$MARKER_CHANNELS\" --marker-name \"$MARKER_NAMES\" --method \"$MARKER_METHOD\" --output-dir \"\$RUN_DIR\"${classify_extra}"
             fi
             echo "        # Discover classified output (may be _filtered_classified or _classified)"
-echo "        for _cf in \"\${RUN_DIR}${CELL_TYPE}_detections_filtered_classified.json\" \"\${RUN_DIR}${CELL_TYPE}_detections_classified.json\"; do"
-echo "            if [[ -f \"\$_cf\" ]]; then DET_JSON=\"\$_cf\"; break; fi"
-echo "        done"
+            echo "        for _cf in \"\${RUN_DIR}${CELL_TYPE}_detections_filtered_classified.json\" \"\${RUN_DIR}${CELL_TYPE}_detections_classified.json\"; do"
+            echo "            if [[ -f \"\$_cf\" ]]; then DET_JSON=\"\$_cf\"; break; fi"
+            echo "        done"
         fi
 
         if [[ "$SPATIAL_ENABLED" == "true" ]]; then

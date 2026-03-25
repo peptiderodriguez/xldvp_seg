@@ -2,7 +2,7 @@
 Unified logging configuration for the segmentation pipeline.
 
 Usage:
-    from segmentation.logging_config import get_logger, setup_logging
+    from segmentation.utils.logging import get_logger, setup_logging
 
     # Get a logger for your module
     logger = get_logger(__name__)

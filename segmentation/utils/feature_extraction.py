@@ -6,7 +6,7 @@ improving GPU utilization by processing multiple crops at once rather than
 one at a time.
 
 Usage:
-    from segmentation.feature_extraction import extract_resnet_features_batch
+    from segmentation.utils.feature_extraction import extract_resnet_features_batch
 
     crops = [crop1, crop2, crop3, ...]  # List of numpy arrays
     features = extract_resnet_features_batch(crops, model, transform, device, batch_size=16)

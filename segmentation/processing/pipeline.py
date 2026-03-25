@@ -8,7 +8,7 @@ Provides a common framework for:
 - Generating HTML annotation interfaces
 
 Usage:
-    from segmentation.detection_pipeline import DetectionPipeline
+    from segmentation.processing.pipeline import DetectionPipeline
 
     pipeline = DetectionPipeline(
         czi_path='/path/to/slide.czi',
