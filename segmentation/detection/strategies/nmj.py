@@ -47,7 +47,6 @@ from .mixins import MultiChannelFeatureMixin
 logger = get_logger(__name__)
 
 
-# Issue #7: Local extract_morphological_features removed - now imported from shared module
 
 
 @register_strategy(

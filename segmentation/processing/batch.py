@@ -7,7 +7,7 @@ Supports:
 - Mixed input sources
 
 Usage:
-    from shared.batch import BatchProcessor, collect_slides
+    from segmentation.batch import BatchProcessor, collect_slides
 
     # Collect slides from various sources
     slides = collect_slides(

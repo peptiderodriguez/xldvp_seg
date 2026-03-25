@@ -105,7 +105,6 @@ class CrossTileMergeConfig:
     merge_partial_rings: bool = True
 
 
-# Issue #7: Local extract_morphological_features removed - now imported from shared module
 
 
 def smooth_contour_spline(contour, smoothing=3.0, n_points=0, force_closed=None):

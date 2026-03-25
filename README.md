@@ -6,7 +6,7 @@
 [![Python 3.10](https://img.shields.io/badge/python-3.10-blue.svg)](https://www.python.org/downloads/)
 [![License: MIT](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
 [![Code style: black](https://img.shields.io/badge/code%20style-black-000000.svg)](https://github.com/psf/black)
-[![Tests: 488](https://img.shields.io/badge/tests-488%20passed-brightgreen.svg)]()
+![Tests: 488](https://img.shields.io/badge/tests-488%20passed-brightgreen.svg)
 
 Detect cells in whole-slide CZI images, classify them by type and marker expression, analyze spatial organization, and export selected cells for laser microdissection and mass spectrometry. End-to-end DVP (Deep Visual Proteomics) from slide to spatial proteomics.
 
@@ -74,21 +74,23 @@ cd xldvp_seg && claude
 ```
 segmentation/              # Main package (pip install -e .)
 ├── api/                   # Scanpy-style API (pp, tl, pl, io)
+├── classification/        # Vessel type classifiers, feature selection
+├── cli/                   # xlseg CLI entry point (11 subcommands)
 ├── core/                  # SlideAnalysis central state object
+├── datasets/              # Synthetic test data generator
 ├── detection/
 │   ├── strategies/        # 8 strategies, self-registered via @register_strategy
 │   └── registry.py        # Strategy registry with decorator pattern
-├── models/                # Model registry (SAM2, ResNet, DINOv2, brightfield FMs)
-├── pipeline/              # 9 modules: cli, preprocessing, post_detection, background, ...
-├── processing/            # Multi-GPU workers, deduplication, strategy factory
+├── io/                    # CZI loader, HTML export, OME-Zarr
 ├── lmd/                   # Well plates, contour processing, clustering
 ├── analysis/              # OmicLinker, aggregation, nuclear counting
 ├── metrics/               # IoU, Dice, Panoptic Quality, Hungarian matching
-├── datasets/              # Synthetic test data generator
-├── io/                    # CZI loader, HTML export, OME-Zarr
-├── preprocessing/         # Flat-field, photobleach, stain normalization
+├── models/                # Model registry (SAM2, ResNet, DINOv2, brightfield FMs)
+├── pipeline/              # 9 modules: preprocessing, post_detection, background, ...
+├── preprocessing/         # Flat-field, stain normalization
+├── processing/            # Multi-GPU workers, deduplication, strategy factory
 ├── reporting/             # Stats, plots, vessel reports
-├── roi/                   # ROI-restricted detection (marker threshold, circular, polygon/mask)
+├── roi/                   # ROI-restricted detection (marker threshold, circular, polygon)
 └── utils/                 # JSON I/O, device handling, logging, config
 
 scripts/                   # 25 reusable CLI tools
@@ -103,6 +105,7 @@ examples/                  # Project-specific analyses by experiment
 ├── tissue_pattern/        # Brain FISH analysis
 ├── senescence/            # Senescence cell configs
 ├── configs/               # YAML pipeline templates
+├── slurm/                 # Legacy SLURM job scripts
 └── legacy/                # Deprecated scripts (archived)
 
 tests/                     # 488 tests across 19 files

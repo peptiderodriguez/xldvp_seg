@@ -639,6 +639,8 @@ python run_segmentation.py --czi-path slide.czi --cell-type nmj \
 | `scripts/lmd_export_replicates.py` | Replicate-based LMD XML export |
 | `scripts/system_info.py` | Environment detection + SLURM recommendations |
 | `scripts/preview_preprocessing.py` | Correction preview at reduced resolution |
+| `scripts/napari_view_lmd_export.py` | View LMD export contours in Napari |
+| `scripts/czi_to_ome_zarr.py` | Convert CZI to OME-Zarr pyramids for Napari |
 
 ### Examples (`examples/`)
 

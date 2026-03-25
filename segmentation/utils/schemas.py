@@ -4,7 +4,7 @@ JSON Schema validation for all data files in the segmentation pipeline.
 Uses Pydantic for validation with clear error messages.
 
 Usage:
-    from shared.schemas import (
+    from segmentation.schemas import (
         validate_detection_file,
         validate_config_file,
         validate_annotations_file,
