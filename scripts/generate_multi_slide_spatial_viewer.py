@@ -1214,7 +1214,8 @@ def generate_html(
 
     # --- Build the HTML ---
     html_parts = []
-    html_parts.append(f"""<!DOCTYPE html>
+    html_parts.append(
+        f"""<!DOCTYPE html>
 <html>
 <head>
 <meta charset="utf-8">
@@ -1528,7 +1529,8 @@ const REGION_DATA = {safe_json(slides_region_data)};
 const HAS_REGIONS = {'true' if has_regions else 'false'};
 const HAS_MULTISCALE = {'true' if has_multiscale else 'false'};
 const SCALE_KEYS = {safe_json(scale_keys or [])};
-""")
+"""
+    )
 
     # Emit base64 data arrays
     html_parts.append("const SLIDE_POS_B64 = [\n")
@@ -1591,13 +1593,16 @@ const SCALE_KEYS = {safe_json(scale_keys or [])};
             html_parts.append(f"  {safe_json(cd)}{comma}\n")
     html_parts.append("];\n")
 
-    html_parts.append(f"""
+    html_parts.append(
+        f"""
 const HAS_FLUOR = {'true' if has_fluor else 'false'};
 const HAS_CONTOURS = {'true' if has_contours else 'false'};
 const CH_NAMES = {safe_json(ch_names)};
-""")
+"""
+    )
 
-    html_parts.append("""
+    html_parts.append(
+        """
 // Decode binary data into per-slide arrays
 const SLIDES = SLIDE_META.map((meta, i) => {
   const pos = b64toF32(SLIDE_POS_B64[i]);
@@ -3509,7 +3514,8 @@ window.addEventListener('resize', () => {
   scheduleRenderAll();
   panels.forEach(p => renderDrawOverlay(p));
 });
-""")
+"""
+    )
 
     html_parts.append("</script>\n</body>\n</html>")
 

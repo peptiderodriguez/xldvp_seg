@@ -136,7 +136,8 @@ def generate_html(slides_data, output_path):
 
     slides_html = []
     for s in slides_data:
-        slides_html.append(f"""
+        slides_html.append(
+            f"""
         <div class="slide-card">
             <div class="slide-header">{s['name']}</div>
             <img src="data:image/jpeg;base64,{s['image_b64']}"
@@ -146,7 +147,8 @@ def generate_html(slides_data, output_path):
                 {s['full_width']}x{s['full_height']} px
             </div>
         </div>
-        """)
+        """
+        )
 
     html = f"""<!DOCTYPE html>
 <html>

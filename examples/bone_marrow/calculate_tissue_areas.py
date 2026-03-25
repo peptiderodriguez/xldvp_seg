@@ -352,7 +352,8 @@ def generate_visualization_html(slides_vis, output_path):
                 f"</tr>"
             )
 
-        cards_html.append(f"""
+        cards_html.append(
+            f"""
         <div class="slide-card">
             <div class="slide-header">{slide_name}
                 <span class="var-thresh">var_thresh: {result.get("variance_threshold", "?")}</span>
@@ -363,7 +364,8 @@ def generate_visualization_html(slides_vis, output_path):
                 {''.join(stats_rows)}
             </table>
         </div>
-        """)
+        """
+        )
 
     html = f"""<!DOCTYPE html>
 <html>

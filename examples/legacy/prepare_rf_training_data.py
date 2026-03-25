@@ -738,7 +738,8 @@ def prepare_training_data(
     logger.info("=" * 70)
 
     logger.info("\nTo train a Random Forest classifier:")
-    logger.info(f"""
+    logger.info(
+        f"""
     from sklearn.ensemble import RandomForestClassifier
     import numpy as np
     import pickle
@@ -760,7 +761,8 @@ def prepare_training_data(
     # Evaluate
     accuracy = rf.score(X_test, y_test)
     print(f'Test accuracy: {{accuracy:.4f}}')
-    """)
+    """
+    )
 
     return {
         "X_train": X_train_scaled,
