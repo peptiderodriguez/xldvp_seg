@@ -16,15 +16,9 @@ jobs:
           python-version: "3.12"
       - run: pip install "ruff>=0.4,<1.0" "black>=24.0,<26.0"
       - name: Ruff check
-        run: >
-          ruff check
-          segmentation/ tests/ scripts/
-          run_segmentation.py run_lmd_export.py train_classifier.py serve_html.py
+        run: ruff check .
       - name: Black check
-        run: >
-          black --check
-          segmentation/ tests/ scripts/
-          run_segmentation.py run_lmd_export.py train_classifier.py serve_html.py
+        run: black --check .
 
   test:
     runs-on: ubuntu-latest

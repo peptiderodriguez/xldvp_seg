@@ -127,6 +127,8 @@ ignore = [
 "segmentation/processing/deduplication.py" = ["F401"]  # hdf5plugin side-effect import
 "segmentation/core/slide_analysis.py" = ["F821"]  # lazy import type hint
 "segmentation/detection/strategies/tissue_pattern.py" = ["F821"]  # forward reference
+"tests/test_deduplication.py" = ["F401"]  # hdf5plugin side-effect import
+"tests/test_feature_extraction.py" = ["F401"]  # torch availability check
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
