@@ -637,7 +637,7 @@ class CZILoader:
         """
         self.czi_path = Path(czi_path)
 
-        # Issue #12: Validate CZI path exists before attempting to open
+        # Validate CZI path exists before attempting to open
         if not self.czi_path.exists():
             raise FileNotFoundError(f"CZI file not found: {self.czi_path}")
         if not self.czi_path.is_file():

@@ -286,7 +286,7 @@ def compute_hsv_features(masked_pixels: np.ndarray, sample_size: int = 100) -> d
 
 
 # =============================================================================
-# MORPHOLOGICAL FEATURE EXTRACTION (Issue #7 - Consolidated from 7 files)
+# MORPHOLOGICAL FEATURE EXTRACTION (consolidated from strategy files)
 # =============================================================================
 
 # =============================================================================
