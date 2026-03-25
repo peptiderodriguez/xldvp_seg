@@ -17,15 +17,15 @@ Usage:
 
 import argparse
 import sys
-from pathlib import Path
 
 # Use non-interactive backend before importing pyplot
 import matplotlib
-matplotlib.use('Agg')
+
+matplotlib.use("Agg")
 
 import cv2
-import numpy as np
 import matplotlib.pyplot as plt
+import numpy as np
 
 from segmentation.io.czi_loader import CZILoader
 from segmentation.preprocessing import (
@@ -91,9 +91,7 @@ def detect_vessels_lumen_based(
     lumen_mask = cv2.morphologyEx(lumen_mask, cv2.MORPH_CLOSE, kernel_medium)
 
     # Find lumen contours
-    contours, _ = cv2.findContours(
-        lumen_mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE
-    )
+    contours, _ = cv2.findContours(lumen_mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
 
     # Calculate size thresholds
     min_diameter_px = min_diameter_um / pixel_size_um
@@ -129,7 +127,7 @@ def detect_vessels_lumen_based(
         # Circularity filter
         perimeter = cv2.arcLength(cnt, True)
         if perimeter > 0:
-            circularity = 4 * np.pi * area / (perimeter ** 2)
+            circularity = 4 * np.pi * area / (perimeter**2)
         else:
             continue
 
@@ -143,10 +141,7 @@ def detect_vessels_lumen_based(
 
         # Dilate to get wall region
         dilation_px = max(5, int(min_diameter_px * 0.2))
-        kernel_wall = cv2.getStructuringElement(
-            cv2.MORPH_ELLIPSE,
-            (dilation_px, dilation_px)
-        )
+        kernel_wall = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (dilation_px, dilation_px))
         wall_region = cv2.dilate(lumen_single, kernel_wall) - lumen_single
 
         # Sample wall intensity
@@ -174,18 +169,20 @@ def detect_vessels_lumen_based(
         diameter_px = 2 * np.sqrt(area / np.pi)
         diameter_um = diameter_px * pixel_size_um
 
-        vessels.append({
-            'contour': cnt,
-            'lumen_area_px': area,
-            'diameter_um': diameter_um,
-            'center': center,
-            'circularity': circularity,
-            'aspect_ratio': aspect_ratio,
-            'wall_intensity': wall_intensity,
-            'lumen_intensity': lumen_intensity,
-            'intensity_ratio': intensity_ratio,
-            'wall_sma_fraction': wall_sma_fraction,
-        })
+        vessels.append(
+            {
+                "contour": cnt,
+                "lumen_area_px": area,
+                "diameter_um": diameter_um,
+                "center": center,
+                "circularity": circularity,
+                "aspect_ratio": aspect_ratio,
+                "wall_intensity": wall_intensity,
+                "lumen_intensity": lumen_intensity,
+                "intensity_ratio": intensity_ratio,
+                "wall_sma_fraction": wall_sma_fraction,
+            }
+        )
 
     return vessels
 
@@ -221,134 +218,132 @@ def visualize_correction(
 
     # Row 1: Before correction
     # Panel 1: Original image
-    axes[0, 0].imshow(orig_display, cmap='gray')
-    axes[0, 0].set_title(f'Original Image\n(with photobleaching bands)', fontsize=12)
-    axes[0, 0].axis('off')
+    axes[0, 0].imshow(orig_display, cmap="gray")
+    axes[0, 0].set_title("Original Image\n(with photobleaching bands)", fontsize=12)
+    axes[0, 0].axis("off")
 
     # Panel 2: Row/column intensity profiles
     row_means_orig = np.mean(original, axis=1)
     col_means_orig = np.mean(original, axis=0)
 
     ax_profile = axes[0, 1]
-    ax_profile.plot(row_means_orig, label='Row means', alpha=0.7)
-    ax_profile.plot(col_means_orig, label='Column means', alpha=0.7)
-    ax_profile.set_xlabel('Position (pixels)')
-    ax_profile.set_ylabel('Mean Intensity')
-    ax_profile.set_title('Original Intensity Profiles\n(bands visible as spikes/dips)')
+    ax_profile.plot(row_means_orig, label="Row means", alpha=0.7)
+    ax_profile.plot(col_means_orig, label="Column means", alpha=0.7)
+    ax_profile.set_xlabel("Position (pixels)")
+    ax_profile.set_ylabel("Mean Intensity")
+    ax_profile.set_title("Original Intensity Profiles\n(bands visible as spikes/dips)")
     ax_profile.legend()
     ax_profile.grid(True, alpha=0.3)
 
     # Panel 3: Original with vessels
     orig_rgb = np.stack([orig_display] * 3, axis=-1)
     for v in vessels_original:
-        cv2.drawContours(orig_rgb, [v['contour']], 0, (0, 1, 0), 2)
-        cx, cy = v['center']
-        diameter = v['diameter_um']
+        cv2.drawContours(orig_rgb, [v["contour"]], 0, (0, 1, 0), 2)
+        cx, cy = v["center"]
+        diameter = v["diameter_um"]
         cv2.putText(
-            orig_rgb, f'{diameter:.0f}um',
+            orig_rgb,
+            f"{diameter:.0f}um",
             (int(cx) + 10, int(cy)),
-            cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 1, 0), 1
+            cv2.FONT_HERSHEY_SIMPLEX,
+            0.5,
+            (0, 1, 0),
+            1,
         )
     axes[0, 2].imshow(orig_rgb)
-    axes[0, 2].set_title(f'Original: {len(vessels_original)} vessels detected', fontsize=12)
-    axes[0, 2].axis('off')
+    axes[0, 2].set_title(f"Original: {len(vessels_original)} vessels detected", fontsize=12)
+    axes[0, 2].axis("off")
 
     # Row 2: After correction
     # Panel 4: Corrected image
-    axes[1, 0].imshow(corr_display, cmap='gray')
-    axes[1, 0].set_title('Corrected Image\n(bands removed)', fontsize=12)
-    axes[1, 0].axis('off')
+    axes[1, 0].imshow(corr_display, cmap="gray")
+    axes[1, 0].set_title("Corrected Image\n(bands removed)", fontsize=12)
+    axes[1, 0].axis("off")
 
     # Panel 5: Corrected intensity profiles
     row_means_corr = np.mean(corrected, axis=1)
     col_means_corr = np.mean(corrected, axis=0)
 
     ax_profile2 = axes[1, 1]
-    ax_profile2.plot(row_means_corr, label='Row means', alpha=0.7)
-    ax_profile2.plot(col_means_corr, label='Column means', alpha=0.7)
-    ax_profile2.set_xlabel('Position (pixels)')
-    ax_profile2.set_ylabel('Mean Intensity')
-    ax_profile2.set_title('Corrected Intensity Profiles\n(more uniform)')
+    ax_profile2.plot(row_means_corr, label="Row means", alpha=0.7)
+    ax_profile2.plot(col_means_corr, label="Column means", alpha=0.7)
+    ax_profile2.set_xlabel("Position (pixels)")
+    ax_profile2.set_ylabel("Mean Intensity")
+    ax_profile2.set_title("Corrected Intensity Profiles\n(more uniform)")
     ax_profile2.legend()
     ax_profile2.grid(True, alpha=0.3)
 
     # Panel 6: Corrected with vessels
     corr_rgb = np.stack([corr_display] * 3, axis=-1)
     for v in vessels_corrected:
-        cv2.drawContours(corr_rgb, [v['contour']], 0, (0, 1, 0), 2)
-        cx, cy = v['center']
-        diameter = v['diameter_um']
+        cv2.drawContours(corr_rgb, [v["contour"]], 0, (0, 1, 0), 2)
+        cx, cy = v["center"]
+        diameter = v["diameter_um"]
         cv2.putText(
-            corr_rgb, f'{diameter:.0f}um',
+            corr_rgb,
+            f"{diameter:.0f}um",
             (int(cx) + 10, int(cy)),
-            cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 1, 0), 1
+            cv2.FONT_HERSHEY_SIMPLEX,
+            0.5,
+            (0, 1, 0),
+            1,
         )
     axes[1, 2].imshow(corr_rgb)
-    axes[1, 2].set_title(f'Corrected: {len(vessels_corrected)} vessels detected', fontsize=12)
-    axes[1, 2].axis('off')
+    axes[1, 2].set_title(f"Corrected: {len(vessels_corrected)} vessels detected", fontsize=12)
+    axes[1, 2].axis("off")
 
     # Add summary statistics
     fig.suptitle(
-        f'Photobleaching Band Correction - Vessel Detection Comparison\n'
-        f'Tile size: {original.shape[1]}x{original.shape[0]} px | '
-        f'Pixel size: {pixel_size_um:.3f} um/px',
-        fontsize=14, fontweight='bold'
+        f"Photobleaching Band Correction - Vessel Detection Comparison\n"
+        f"Tile size: {original.shape[1]}x{original.shape[0]} px | "
+        f"Pixel size: {pixel_size_um:.3f} um/px",
+        fontsize=14,
+        fontweight="bold",
     )
 
     plt.tight_layout()
-    plt.savefig(output_path, dpi=150, bbox_inches='tight', facecolor='white')
+    plt.savefig(output_path, dpi=150, bbox_inches="tight", facecolor="white")
     plt.close()
 
     print(f"Visualization saved to: {output_path}")
 
 
 def main():
-    parser = argparse.ArgumentParser(
-        description='Photobleaching band correction for CZI tiles'
+    parser = argparse.ArgumentParser(description="Photobleaching band correction for CZI tiles")
+    parser.add_argument("--czi-path", required=True, help="Path to CZI file")
+    parser.add_argument(
+        "--tile-x", type=int, required=True, help="Tile X coordinate (mosaic coordinates)"
     )
     parser.add_argument(
-        '--czi-path', required=True,
-        help='Path to CZI file'
+        "--tile-y", type=int, required=True, help="Tile Y coordinate (mosaic coordinates)"
     )
     parser.add_argument(
-        '--tile-x', type=int, required=True,
-        help='Tile X coordinate (mosaic coordinates)'
+        "--tile-size", type=int, default=2000, help="Tile size in pixels (default: 2000)"
     )
     parser.add_argument(
-        '--tile-y', type=int, required=True,
-        help='Tile Y coordinate (mosaic coordinates)'
+        "--channel", type=int, default=2, help="Channel to extract (default: 2 for SMA)"
     )
     parser.add_argument(
-        '--tile-size', type=int, default=2000,
-        help='Tile size in pixels (default: 2000)'
+        "--output", default="/tmp/lumen_tile3_corrected.png", help="Output path for visualization"
+    )
+    parser.add_argument("--no-row-col", action="store_true", help="Skip row/column normalization")
+    parser.add_argument(
+        "--no-morph", action="store_true", help="Skip morphological background subtraction"
     )
     parser.add_argument(
-        '--channel', type=int, default=2,
-        help='Channel to extract (default: 2 for SMA)'
+        "--morph-kernel", type=int, default=101, help="Morphological kernel size (default: 101)"
     )
     parser.add_argument(
-        '--output', default='/tmp/lumen_tile3_corrected.png',
-        help='Output path for visualization'
+        "--min-diameter",
+        type=float,
+        default=10.0,
+        help="Minimum vessel diameter in microns (default: 10)",
     )
     parser.add_argument(
-        '--no-row-col', action='store_true',
-        help='Skip row/column normalization'
-    )
-    parser.add_argument(
-        '--no-morph', action='store_true',
-        help='Skip morphological background subtraction'
-    )
-    parser.add_argument(
-        '--morph-kernel', type=int, default=101,
-        help='Morphological kernel size (default: 101)'
-    )
-    parser.add_argument(
-        '--min-diameter', type=float, default=10.0,
-        help='Minimum vessel diameter in microns (default: 10)'
-    )
-    parser.add_argument(
-        '--max-diameter', type=float, default=500.0,
-        help='Maximum vessel diameter in microns (default: 500)'
+        "--max-diameter",
+        type=float,
+        default=500.0,
+        help="Maximum vessel diameter in microns (default: 500)",
     )
 
     args = parser.parse_args()
@@ -359,12 +354,12 @@ def main():
 
     print(f"Mosaic size: {loader.width} x {loader.height}")
     print(f"Mosaic origin: ({loader.x_start}, {loader.y_start})")
-    print(f"Extracting tile at ({args.tile_x}, {args.tile_y}), size {args.tile_size}x{args.tile_size}, channel {args.channel}")
+    print(
+        f"Extracting tile at ({args.tile_x}, {args.tile_y}), size {args.tile_size}x{args.tile_size}, channel {args.channel}"
+    )
 
     # Get tile
-    tile = loader._get_tile_from_czi(
-        args.tile_x, args.tile_y, args.tile_size, args.channel
-    )
+    tile = loader._get_tile_from_czi(args.tile_x, args.tile_y, args.tile_size, args.channel)
 
     if tile is None or tile.size == 0:
         print("Error: Could not extract tile from CZI")
@@ -383,7 +378,7 @@ def main():
         tile,
         row_col_normalize=not args.no_row_col,
         morph_subtract=not args.no_morph,
-        morph_kernel_size=args.morph_kernel
+        morph_kernel_size=args.morph_kernel,
     )
 
     print(f"Corrected intensity range: {corrected.min():.1f} - {corrected.max():.1f}")
@@ -417,15 +412,15 @@ def main():
     print(f"Difference:      {len(vessels_corrected) - len(vessels_original):+d} vessels")
 
     if vessels_original:
-        diameters_orig = [v['diameter_um'] for v in vessels_original]
-        print(f"\nOriginal vessel diameters:")
+        diameters_orig = [v["diameter_um"] for v in vessels_original]
+        print("\nOriginal vessel diameters:")
         print(f"  Min: {min(diameters_orig):.1f} um")
         print(f"  Max: {max(diameters_orig):.1f} um")
         print(f"  Mean: {np.mean(diameters_orig):.1f} um")
 
     if vessels_corrected:
-        diameters_corr = [v['diameter_um'] for v in vessels_corrected]
-        print(f"\nCorrected vessel diameters:")
+        diameters_corr = [v["diameter_um"] for v in vessels_corrected]
+        print("\nCorrected vessel diameters:")
         print(f"  Min: {min(diameters_corr):.1f} um")
         print(f"  Max: {max(diameters_corr):.1f} um")
         print(f"  Mean: {np.mean(diameters_corr):.1f} um")
@@ -434,7 +429,7 @@ def main():
     severity_orig = estimate_band_severity(tile)
     severity_corr = estimate_band_severity(corrected)
 
-    print(f"\nIntensity uniformity (CV = coefficient of variation):")
+    print("\nIntensity uniformity (CV = coefficient of variation):")
     print(f"  Original rows:   CV = {severity_orig['row_cv']:.2f}%")
     print(f"  Corrected rows:  CV = {severity_corr['row_cv']:.2f}%")
     print(f"  Original cols:   CV = {severity_orig['col_cv']:.2f}%")
@@ -444,12 +439,14 @@ def main():
     print("=" * 60)
 
     # Create visualization
-    print(f"\nGenerating visualization...")
+    print("\nGenerating visualization...")
     visualize_correction(
-        tile, corrected,
-        vessels_original, vessels_corrected,
+        tile,
+        corrected,
+        vessels_original,
+        vessels_corrected,
         args.output,
-        pixel_size_um=pixel_size_um
+        pixel_size_um=pixel_size_um,
     )
 
     # Cleanup
@@ -458,5 +455,5 @@ def main():
     print("\nDone!")
 
 
-if __name__ == '__main__':
+if __name__ == "__main__":
     main()

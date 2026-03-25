@@ -26,17 +26,14 @@ Usage:
 """
 
 import argparse
+import base64
 import html as html_mod
 import json
 import sys
 from pathlib import Path
 
-import base64
-import io
-
 import cv2
 import numpy as np
-from PIL import Image
 
 from segmentation.utils.logging import get_logger, setup_logging
 
@@ -90,14 +87,15 @@ def composite_crop_mask(crop_b64, mask_b64, contour_color=(0, 255, 0), alpha=0.3
         cv2.drawContours(result, contours, -1, contour_color, 2)
 
         # Re-encode
-        _, buf = cv2.imencode('.jpg', result, [cv2.IMWRITE_JPEG_QUALITY, 85])
-        return base64.b64encode(buf).decode('ascii')
+        _, buf = cv2.imencode(".jpg", result, [cv2.IMWRITE_JPEG_QUALITY, 85])
+        return base64.b64encode(buf).decode("ascii")
     except Exception:
         return crop_b64
 
 
-def load_and_sample_candidates(input_dir, min_score, max_score, min_area,
-                                max_samples_per_slide, slides=None, seed=42):
+def load_and_sample_candidates(
+    input_dir, min_score, max_score, min_area, max_samples_per_slide, slides=None, seed=42
+):
     """Load, filter, and sample candidates one slide at a time to limit memory.
 
     Each slide's JSON is loaded, filtered, sampled, then discarded before
@@ -172,9 +170,7 @@ def load_and_sample_candidates(input_dir, min_score, max_score, min_area,
 
         slide_counts[slide_name] = len(sampled)
         all_samples.extend(sampled)
-        logger.info(
-            f"  {slide_name}: {len(sampled):,} sampled"
-        )
+        logger.info(f"  {slide_name}: {len(sampled):,} sampled")
 
     return all_samples, slide_counts
 
@@ -250,7 +246,7 @@ def stratified_sample(candidates, max_samples, n_bins=5, rng=None):
 
 def get_rbc_css():
     """CSS for the RBC annotation viewer -- matches pipeline dark theme."""
-    return '''
+    return """
         * { box-sizing: border-box; margin: 0; padding: 0; }
         body { font-family: monospace; background: #0a0a0a; color: #ddd; }
 
@@ -492,7 +488,7 @@ def get_rbc_css():
             justify-content: center;
             gap: 10px;
         }
-    '''
+    """
 
 
 def get_rbc_js(total_pages, experiment_name, page_num):
@@ -506,7 +502,7 @@ def get_rbc_js(total_pages, experiment_name, page_num):
     page_key = _esc(f"rbc_{experiment_name}_labels_page{page_num}")
     page_key_prefix = _esc(f"rbc_{experiment_name}_labels_page")
 
-    return f'''
+    return f"""
         const CELL_TYPE = 'rbc';
         const EXPERIMENT_NAME = '{experiment_name_safe}';
         const TOTAL_PAGES = {total_pages};
@@ -765,11 +761,12 @@ def get_rbc_js(total_pages, experiment_name, page_num):
 
         // Initialize
         loadAnnotations();
-    '''
+    """
 
 
-def generate_annotation_page(samples, page_num, total_pages, experiment_name,
-                              subtitle=None, page_prefix='rbc_page'):
+def generate_annotation_page(
+    samples, page_num, total_pages, experiment_name, subtitle=None, page_prefix="rbc_page"
+):
     """Generate a single HTML annotation page for RBC candidates.
 
     Args:
@@ -793,25 +790,25 @@ def generate_annotation_page(samples, page_num, total_pages, experiment_name,
     nav_html += f'<span class="page-info">Page {page_num} / {total_pages}</span>'
     if page_num < total_pages:
         nav_html += f'<a href="{page_prefix}_{page_num+1}.html" class="nav-btn">Next</a>'
-    nav_html += '</div>'
+    nav_html += "</div>"
 
-    subtitle_html = ''
+    subtitle_html = ""
     if subtitle:
         subtitle_html = f'<div class="header-subtitle">{_esc(subtitle)}</div>'
 
     # Build cards
-    cards_html = ''
+    cards_html = ""
     for sample in samples:
-        uid = _esc(sample['uid'])
-        crop_b64 = sample['crop_b64']
-        mask_b64 = sample.get('mask_b64')
+        uid = _esc(sample["uid"])
+        crop_b64 = sample["crop_b64"]
+        mask_b64 = sample.get("mask_b64")
         if mask_b64:
             crop_b64 = composite_crop_mask(crop_b64, mask_b64)
-        mk_score = sample.get('mk_score', 0)
-        area_um2 = sample.get('area_um2', 0)
-        slide = _esc(sample.get('slide', ''))
-        sam2_iou = sample.get('sam2_iou', None)
-        sam2_stability = sample.get('sam2_stability', None)
+        mk_score = sample.get("mk_score", 0)
+        area_um2 = sample.get("area_um2", 0)
+        slide = _esc(sample.get("slide", ""))
+        sam2_iou = sample.get("sam2_iou", None)
+        sam2_stability = sample.get("sam2_stability", None)
 
         # Format stats line
         stats_parts = []
@@ -823,9 +820,9 @@ def generate_annotation_page(samples, page_num, total_pages, experiment_name,
             stats_parts.append(f"stab: {sam2_stability:.2f}")
         stats_parts.append(f"{slide}")
 
-        stats_str = ' | '.join(stats_parts)
+        stats_str = " | ".join(stats_parts)
 
-        cards_html += f'''
+        cards_html += f"""
         <div class="card" id="{uid}" data-label="-1">
             <div class="card-img-container">
                 <img src="data:image/jpeg;base64,{crop_b64}" alt="{uid}">
@@ -842,9 +839,9 @@ def generate_annotation_page(samples, page_num, total_pages, experiment_name,
                 </div>
             </div>
         </div>
-'''
+"""
 
-    html = f'''<!DOCTYPE html>
+    html = f"""<!DOCTYPE html>
 <html>
 <head>
     <meta charset="UTF-8">
@@ -894,14 +891,20 @@ def generate_annotation_page(samples, page_num, total_pages, experiment_name,
 
     <script>{get_rbc_js(total_pages, experiment_name, page_num)}</script>
 </body>
-</html>'''
+</html>"""
 
     return html
 
 
-def generate_index_page(total_samples, total_pages, experiment_name,
-                         slide_counts, score_range, area_range,
-                         page_prefix='rbc_page'):
+def generate_index_page(
+    total_samples,
+    total_pages,
+    experiment_name,
+    slide_counts,
+    score_range,
+    area_range,
+    page_prefix="rbc_page",
+):
     """Generate the index/landing page for RBC annotation.
 
     Args:
@@ -935,9 +938,9 @@ def generate_index_page(total_samples, total_pages, experiment_name,
     for slide, count in sorted(slide_counts.items()):
         info_lines.append(f"&nbsp;&nbsp;{_esc(slide)}: {count:,} samples")
 
-    info_html = '<br>'.join(info_lines)
+    info_html = "<br>".join(info_lines)
 
-    html = f'''<!DOCTYPE html>
+    html = f"""<!DOCTYPE html>
 <html>
 <head>
     <meta charset="UTF-8">
@@ -1154,7 +1157,7 @@ def generate_index_page(total_samples, total_pages, experiment_name,
         }}
     </script>
 </body>
-</html>'''
+</html>"""
 
     return html
 
@@ -1165,44 +1168,43 @@ def main():
     )
 
     parser.add_argument(
-        "--input-dir", required=True,
-        help="Directory containing *_full_unfiltered.json files"
+        "--input-dir", required=True, help="Directory containing *_full_unfiltered.json files"
     )
     parser.add_argument(
-        "--output", required=True,
-        help="Output HTML path (index.html will be created in the parent directory)"
+        "--output",
+        required=True,
+        help="Output HTML path (index.html will be created in the parent directory)",
     )
     parser.add_argument(
-        "--max-samples", type=int, default=200,
-        help="Maximum samples per slide (default: 200)"
+        "--max-samples", type=int, default=200, help="Maximum samples per slide (default: 200)"
     )
     parser.add_argument(
-        "--min-score", type=float, default=0.03,
-        help="Minimum mk_score floor (default: 0.03)"
+        "--min-score", type=float, default=0.03, help="Minimum mk_score floor (default: 0.03)"
     )
     parser.add_argument(
-        "--max-score", type=float, default=0.30,
-        help="Maximum mk_score ceiling (default: 0.30)"
+        "--max-score", type=float, default=0.30, help="Maximum mk_score ceiling (default: 0.30)"
     )
     parser.add_argument(
-        "--min-area", type=float, default=100,
-        help="Minimum area in um2 (default: 100)"
+        "--min-area", type=float, default=100, help="Minimum area in um2 (default: 100)"
     )
     parser.add_argument(
-        "--slides", nargs="*", default=None,
-        help="Optional list of slide name substrings to include"
+        "--slides",
+        nargs="*",
+        default=None,
+        help="Optional list of slide name substrings to include",
+    )
+    parser.add_argument("--seed", type=int, default=42, help="Random seed (default: 42)")
+    parser.add_argument(
+        "--samples-per-page",
+        type=int,
+        default=200,
+        help="Number of samples per HTML page (default: 200)",
     )
     parser.add_argument(
-        "--seed", type=int, default=42,
-        help="Random seed (default: 42)"
-    )
-    parser.add_argument(
-        "--samples-per-page", type=int, default=200,
-        help="Number of samples per HTML page (default: 200)"
-    )
-    parser.add_argument(
-        "--sort-by", default="mk_score", choices=["mk_score", "area_um2", "slide"],
-        help="Sort samples by this key (default: mk_score)"
+        "--sort-by",
+        default="mk_score",
+        choices=["mk_score", "area_um2", "slide"],
+        help="Sort samples by this key (default: mk_score)",
     )
 
     args = parser.parse_args()
@@ -1214,9 +1216,13 @@ def main():
 
     # Load, filter, and sample — one slide at a time to limit memory
     all_samples, slide_counts = load_and_sample_candidates(
-        args.input_dir, args.min_score, args.max_score, args.min_area,
+        args.input_dir,
+        args.min_score,
+        args.max_score,
+        args.min_area,
         max_samples_per_slide=args.max_samples,
-        slides=args.slides, seed=args.seed,
+        slides=args.slides,
+        seed=args.seed,
     )
 
     if not all_samples:
@@ -1244,7 +1250,7 @@ def main():
 
     # Paginate
     pages = [
-        all_samples[i:i + args.samples_per_page]
+        all_samples[i : i + args.samples_per_page]
         for i in range(0, len(all_samples), args.samples_per_page)
     ]
     total_pages = len(pages)
@@ -1259,12 +1265,12 @@ def main():
             total_pages=total_pages,
             experiment_name=experiment_name,
             subtitle=f"mk_score in [{args.min_score:.2f}, {args.max_score:.2f}), "
-                     f"area >= {args.min_area:.0f} um2",
+            f"area >= {args.min_area:.0f} um2",
             page_prefix=page_prefix,
         )
 
         page_path = output_dir / f"{page_prefix}_{page_num}.html"
-        with open(page_path, 'w') as f:
+        with open(page_path, "w") as f:
             f.write(html)
 
         file_size = page_path.stat().st_size / (1024 * 1024)
@@ -1282,7 +1288,7 @@ def main():
     )
 
     index_path = output_dir / "index.html"
-    with open(index_path, 'w') as f:
+    with open(index_path, "w") as f:
         f.write(index_html)
 
     logger.info(f"HTML exported to {output_dir}")

@@ -19,26 +19,39 @@ Usage:
         --output-dir new_slide_scored/
 """
 
+import argparse
 import sys
 from pathlib import Path
 
-import argparse
-import json
 import numpy as np
-from collections import Counter
 
-from segmentation.utils.json_utils import fast_json_load, atomic_json_dump
+from segmentation.utils.json_utils import atomic_json_dump, fast_json_load
 from segmentation.utils.logging import get_logger
 
 logger = get_logger(__name__)
 
 # Morph features that are intensity-independent and should generalize across slides
 MORPH_FEATURES = [
-    "area", "perimeter", "solidity", "eccentricity", "elongation",
-    "major_axis_length", "minor_axis_length", "circularity",
-    "equivalent_diameter", "extent", "convex_area", "filled_area",
-    "euler_number", "orientation", "hu_moment_0", "hu_moment_1",
-    "hu_moment_2", "hu_moment_3", "hu_moment_4", "hu_moment_5",
+    "area",
+    "perimeter",
+    "solidity",
+    "eccentricity",
+    "elongation",
+    "major_axis_length",
+    "minor_axis_length",
+    "circularity",
+    "equivalent_diameter",
+    "extent",
+    "convex_area",
+    "filled_area",
+    "euler_number",
+    "orientation",
+    "hu_moment_0",
+    "hu_moment_1",
+    "hu_moment_2",
+    "hu_moment_3",
+    "hu_moment_4",
+    "hu_moment_5",
     "hu_moment_6",
 ]
 
@@ -112,7 +125,7 @@ def build_dataset(slides):
 def train_and_evaluate(X_train, y_train, X_test, y_test):
     """Train RF on train set, evaluate on test set. Returns (clf, metrics)."""
     from sklearn.ensemble import RandomForestClassifier
-    from sklearn.metrics import f1_score, precision_score, recall_score, accuracy_score
+    from sklearn.metrics import accuracy_score, f1_score, precision_score, recall_score
 
     clf = RandomForestClassifier(n_estimators=100, random_state=42, n_jobs=-1)
     clf.fit(X_train, y_train)
@@ -136,14 +149,18 @@ def main():
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
     parser.add_argument(
-        "--inputs", nargs="+", required=True,
+        "--inputs",
+        nargs="+",
+        required=True,
         help="Detection:annotation pairs (colon-separated). "
-             "E.g., det1.json:annot1.json det2.json:annot2.json. "
-             "Annotation can be omitted for score-only mode.",
+        "E.g., det1.json:annot1.json det2.json:annot2.json. "
+        "Annotation can be omitted for score-only mode.",
     )
     parser.add_argument("--output-dir", required=True, type=Path)
     parser.add_argument(
-        "--classifier", type=Path, default=None,
+        "--classifier",
+        type=Path,
+        default=None,
         help="Existing classifier to apply (skip training, just score)",
     )
     args = parser.parse_args()
@@ -164,6 +181,7 @@ def main():
     # --- Score-only mode ---
     if args.classifier:
         import joblib
+
         clf = joblib.load(str(args.classifier))
         logger.info(f"Loaded classifier: {args.classifier}")
         for dets, _, slide_name in slides:
@@ -187,8 +205,10 @@ def main():
         sys.exit(1)
 
     slide_names = sorted(set(slide_ids))
-    logger.info(f"Combined dataset: {len(X):,} cells, {int(y.sum()):,} positive, "
-                f"{len(y) - int(y.sum()):,} negative, {len(slide_names)} slides")
+    logger.info(
+        f"Combined dataset: {len(X):,} cells, {int(y.sum()):,} positive, "
+        f"{len(y) - int(y.sum()):,} negative, {len(slide_names)} slides"
+    )
 
     # --- Leave-one-slide-out cross-validation ---
     logger.info("\n=== Leave-One-Slide-Out Cross-Validation ===")
@@ -237,6 +257,7 @@ def main():
 
     # Save
     import joblib
+
     clf_path = args.output_dir / "generic_morph_classifier.pkl"
     joblib.dump(clf, str(clf_path))
     logger.info(f"  Saved: {clf_path}")
@@ -244,7 +265,8 @@ def main():
     # Feature importance
     importances = sorted(
         zip(MORPH_FEATURES, clf.feature_importances_),
-        key=lambda x: x[1], reverse=True,
+        key=lambda x: x[1],
+        reverse=True,
     )
     logger.info("  Top features:")
     for feat, imp in importances[:10]:
@@ -267,8 +289,10 @@ def main():
     }
     atomic_json_dump(summary, str(args.output_dir / "generic_classifier_summary.json"))
     logger.info(f"\nDone. Classifier: {clf_path}")
-    logger.info(f"Apply to new slides with: python scripts/train_generic_classifier.py "
-                f"--inputs new_det.json --classifier {clf_path} --output-dir scored/")
+    logger.info(
+        f"Apply to new slides with: python scripts/train_generic_classifier.py "
+        f"--inputs new_det.json --classifier {clf_path} --output-dir scored/"
+    )
 
 
 if __name__ == "__main__":

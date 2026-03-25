@@ -34,16 +34,15 @@ Usage:
         --output-dir rings_both/
 """
 
+import argparse
 import sys
+from collections import Counter
 from pathlib import Path
 
-import argparse
 import numpy as np
 from scipy.spatial import cKDTree
 
-from collections import Counter
-
-from segmentation.utils.json_utils import fast_json_load, atomic_json_dump
+from segmentation.utils.json_utils import atomic_json_dump, fast_json_load
 from segmentation.utils.logging import get_logger
 
 logger = get_logger(__name__)
@@ -117,23 +116,44 @@ def main():
         description="Assign cells to concentric distance bins around vascular landmarks",
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
-    parser.add_argument("--detections", required=True, type=Path,
-                        help="Cell detections JSON (classified)")
-    parser.add_argument("--landmarks", required=True, type=Path,
-                        help="Zonation landmarks JSON (from zonation_transect.py)")
-    parser.add_argument("--center", default="both", choices=["cv", "pv", "both"],
-                        help="Center rings on CV, PV, or both (default: both)")
-    parser.add_argument("--bin-edges", default="0,50,100,150,200",
-                        help="Comma-separated bin edges in µm (default: 0,50,100,150,200)")
+    parser.add_argument(
+        "--detections", required=True, type=Path, help="Cell detections JSON (classified)"
+    )
+    parser.add_argument(
+        "--landmarks",
+        required=True,
+        type=Path,
+        help="Zonation landmarks JSON (from zonation_transect.py)",
+    )
+    parser.add_argument(
+        "--center",
+        default="both",
+        choices=["cv", "pv", "both"],
+        help="Center rings on CV, PV, or both (default: both)",
+    )
+    parser.add_argument(
+        "--bin-edges",
+        default="0,50,100,150,200",
+        help="Comma-separated bin edges in µm (default: 0,50,100,150,200)",
+    )
     parser.add_argument("--output-dir", required=True, type=Path)
-    parser.add_argument("--score-threshold", type=float, default=0.0,
-                        help="Min RF score (default: 0.0 = all)")
+    parser.add_argument(
+        "--score-threshold", type=float, default=0.0, help="Min RF score (default: 0.0 = all)"
+    )
     parser.add_argument("--score-key", default="rf_prediction")
-    parser.add_argument("--every-nth", type=int, default=None,
-                        help="Subsample every Nth cell per bin (for LMD well count control)")
-    parser.add_argument("--max-per-landmark", type=int, default=None,
-                        help="Max cells per bin per landmark. Ensures spatial distribution "
-                             "across multiple lobules instead of clustering near one CV/PV.")
+    parser.add_argument(
+        "--every-nth",
+        type=int,
+        default=None,
+        help="Subsample every Nth cell per bin (for LMD well count control)",
+    )
+    parser.add_argument(
+        "--max-per-landmark",
+        type=int,
+        default=None,
+        help="Max cells per bin per landmark. Ensures spatial distribution "
+        "across multiple lobules instead of clustering near one CV/PV.",
+    )
 
     args = parser.parse_args()
     args.output_dir.mkdir(parents=True, exist_ok=True)
@@ -188,13 +208,21 @@ def main():
 
     if args.center in ("cv", "both"):
         cv_labels, cv_bins = bin_distances(d_cv, bin_edges)
-        results["cv"] = {"labels": cv_labels, "bins": cv_bins, "distances": d_cv,
-                         "nearest_landmark": nearest_cv}
+        results["cv"] = {
+            "labels": cv_labels,
+            "bins": cv_bins,
+            "distances": d_cv,
+            "nearest_landmark": nearest_cv,
+        }
 
     if args.center in ("pv", "both"):
         pv_labels, pv_bins = bin_distances(d_pv, bin_edges)
-        results["pv"] = {"labels": pv_labels, "bins": pv_bins, "distances": d_pv,
-                         "nearest_landmark": nearest_pv}
+        results["pv"] = {
+            "labels": pv_labels,
+            "bins": pv_bins,
+            "distances": d_pv,
+            "nearest_landmark": nearest_pv,
+        }
 
     # --- Enrich detections and build per-bin outputs ---
     for center_type, data in results.items():
@@ -229,13 +257,13 @@ def main():
             if args.max_per_landmark and len(dets) > args.max_per_landmark:
                 # Take evenly spaced subset from this landmark's cells
                 step = max(1, len(dets) // args.max_per_landmark)
-                dets = dets[::step][:args.max_per_landmark]
+                dets = dets[::step][: args.max_per_landmark]
             bins.setdefault(label, []).extend(dets)
 
         # Additional global subsampling if requested
         if args.every_nth and args.every_nth > 1:
             for label in bins:
-                bins[label] = bins[label][::args.every_nth]
+                bins[label] = bins[label][:: args.every_nth]
 
         # Write per-bin and combined
         all_binned = []

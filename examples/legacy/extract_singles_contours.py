@@ -11,21 +11,21 @@ filename pattern ({cell_type}_masks.h5).
 
 # Fix HDF5 plugin issues - must be set BEFORE importing h5py
 import os
-import sys
 from pathlib import Path
-os.environ['HDF5_USE_FILE_LOCKING'] = 'FALSE'
 
-import json
+os.environ["HDF5_USE_FILE_LOCKING"] = "FALSE"
+
 import argparse
-import numpy as np
-import h5py
+import json
+
 import cv2
-from typing import Tuple, Optional
+import h5py
+import numpy as np
 
 from segmentation.lmd.contour_processing import process_contour
 
 
-def extract_contour_from_mask(mask: np.ndarray, label: int) -> Optional[np.ndarray]:
+def extract_contour_from_mask(mask: np.ndarray, label: int) -> np.ndarray | None:
     """
     Extract the outer contour for a specific label in a mask.
 
@@ -57,7 +57,7 @@ def extract_contour_from_mask(mask: np.ndarray, label: int) -> Optional[np.ndarr
     return contour
 
 
-def local_to_global_contour(contour_local: np.ndarray, tile_origin: Tuple[int, int]) -> np.ndarray:
+def local_to_global_contour(contour_local: np.ndarray, tile_origin: tuple[int, int]) -> np.ndarray:
     """
     Convert local tile coordinates to global mosaic coordinates.
 
@@ -74,9 +74,15 @@ def local_to_global_contour(contour_local: np.ndarray, tile_origin: Tuple[int, i
     return contour_global
 
 
-def main(base_dir: Path, tiles_dir: Path, clusters_path: Path,
-         detections_path: Path, output_path: Path, pixel_size_um: float,
-         cell_type: str = "nmj"):
+def main(
+    base_dir: Path,
+    tiles_dir: Path,
+    clusters_path: Path,
+    detections_path: Path,
+    output_path: Path,
+    pixel_size_um: float,
+    cell_type: str = "nmj",
+):
     print("=" * 70)
     print("EXTRACT CONTOURS FOR SINGLES (OUTLIERS)")
     print("=" * 70)
@@ -88,8 +94,8 @@ def main(base_dir: Path, tiles_dir: Path, clusters_path: Path,
     with open(clusters_path) as f:
         cluster_data = json.load(f)
 
-    outliers = cluster_data.get('outliers', [])
-    outlier_indices = [o.get('detection_index', o.get('nmj_index')) for o in outliers]
+    outliers = cluster_data.get("outliers", [])
+    outlier_indices = [o.get("detection_index", o.get("nmj_index")) for o in outliers]
     print(f"  Found {len(outlier_indices)} outliers")
 
     # Load all detections
@@ -97,7 +103,7 @@ def main(base_dir: Path, tiles_dir: Path, clusters_path: Path,
     with open(detections_path) as f:
         all_detections = json.load(f)
 
-    positives = [d for d in all_detections if d.get('rf_prediction', 0) >= 0.5]
+    positives = [d for d in all_detections if d.get("rf_prediction", 0) >= 0.5]
     print(f"  {len(positives)} positive detections")
 
     # Get outlier detections (with bounds checking)
@@ -109,15 +115,17 @@ def main(base_dir: Path, tiles_dir: Path, clusters_path: Path,
             continue
         outlier_detections.append(positives[idx])
     if skipped_indices:
-        print(f"  WARNING: {len(skipped_indices)} outlier indices out of range "
-              f"(max valid: {len(positives) - 1}): {skipped_indices[:10]}"
-              f"{'...' if len(skipped_indices) > 10 else ''}")
+        print(
+            f"  WARNING: {len(skipped_indices)} outlier indices out of range "
+            f"(max valid: {len(positives) - 1}): {skipped_indices[:10]}"
+            f"{'...' if len(skipped_indices) > 10 else ''}"
+        )
 
     # Group by tile for efficient processing
     print("\n[3/5] Grouping by tile...")
     by_tile = {}
     for det in outlier_detections:
-        tile_origin = det.get('tile_origin', [0, 0])
+        tile_origin = det.get("tile_origin", [0, 0])
         tile_name = f"tile_{tile_origin[0]}_{tile_origin[1]}"
         if tile_name not in by_tile:
             by_tile[tile_name] = []
@@ -145,13 +153,13 @@ def main(base_dir: Path, tiles_dir: Path, clusters_path: Path,
             fail_count += len(tile_dets)
             continue
 
-        with h5py.File(mask_path, 'r') as hf:
-            masks = hf['masks'][:]
+        with h5py.File(mask_path, "r") as hf:
+            masks = hf["masks"][:]
 
         # Process each detection in this tile
         for det in tile_dets:
             # Get mask label (centroid-based lookup stored in detection dict)
-            label = det.get('mask_label')
+            label = det.get("mask_label")
             if label is None:
                 fail_count += 1
                 continue
@@ -163,14 +171,12 @@ def main(base_dir: Path, tiles_dir: Path, clusters_path: Path,
                 continue
 
             # Convert to global coordinates
-            tile_origin = det.get('tile_origin', [0, 0])
+            tile_origin = det.get("tile_origin", [0, 0])
             contour_global = local_to_global_contour(contour_local, tile_origin)
 
             # Apply post-processing (dilate + RDP)
             contour_processed, stats = process_contour(
-                contour_global.tolist(),
-                pixel_size_um=pixel_size_um,
-                return_stats=True
+                contour_global.tolist(), pixel_size_um=pixel_size_um, return_stats=True
             )
 
             if contour_processed is None:
@@ -178,26 +184,26 @@ def main(base_dir: Path, tiles_dir: Path, clusters_path: Path,
                 continue
 
             # Track areas
-            areas_before.append(stats['area_before_um2'])
-            areas_after.append(stats['area_after_um2'])
+            areas_before.append(stats["area_before_um2"])
+            areas_after.append(stats["area_after_um2"])
 
             # Build result
             result = {
-                'uid': det.get('uid'),
-                'id': det.get('id'),
-                'tile_name': tile_name,
-                'tile_origin': tile_origin,
-                'center': det.get('center'),
-                'global_center': det.get('global_center'),
-                'global_center_um': det.get('global_center_um'),
-                'rf_prediction': det.get('rf_prediction'),
-                'features': det.get('features'),
-                'outer_contour_global': contour_global.tolist(),
-                'outer_contour_processed_um': contour_processed.tolist(),
-                'area_before_um2': stats['area_before_um2'],
-                'area_after_um2': stats['area_after_um2'],
-                'points_before': stats['points_before'],
-                'points_after': stats['points_after'],
+                "uid": det.get("uid"),
+                "id": det.get("id"),
+                "tile_name": tile_name,
+                "tile_origin": tile_origin,
+                "center": det.get("center"),
+                "global_center": det.get("global_center"),
+                "global_center_um": det.get("global_center_um"),
+                "rf_prediction": det.get("rf_prediction"),
+                "features": det.get("features"),
+                "outer_contour_global": contour_global.tolist(),
+                "outer_contour_processed_um": contour_processed.tolist(),
+                "area_before_um2": stats["area_before_um2"],
+                "area_after_um2": stats["area_after_um2"],
+                "points_before": stats["points_before"],
+                "points_after": stats["points_after"],
             }
             results.append(result)
             success_count += 1
@@ -207,7 +213,7 @@ def main(base_dir: Path, tiles_dir: Path, clusters_path: Path,
     # Save results
     print("\n[5/5] Saving results...")
     output_path.parent.mkdir(parents=True, exist_ok=True)
-    with open(output_path, 'w') as f:
+    with open(output_path, "w") as f:
         json.dump(results, f)
     print(f"  Saved to: {output_path}")
 
@@ -225,35 +231,73 @@ def main(base_dir: Path, tiles_dir: Path, clusters_path: Path,
         print(f"  Mean:   {arr_before.mean():.1f} µm² (std: {arr_before.std():.1f})")
         print(f"  Median: {np.median(arr_before):.1f} µm²")
 
-        print(f"\nAFTER post-processing (dilated +0.5µm, RDP):")
+        print("\nAFTER post-processing (dilated +0.5µm, RDP):")
         print(f"  Range:  {arr_after.min():.1f} - {arr_after.max():.1f} µm²")
         print(f"  Mean:   {arr_after.mean():.1f} µm² (std: {arr_after.std():.1f})")
         print(f"  Median: {np.median(arr_after):.1f} µm²")
 
-        print(f"\nArea increase: {arr_before.mean():.1f} → {arr_after.mean():.1f} µm² (+{(arr_after.mean()/arr_before.mean() - 1)*100:.1f}%)")
+        print(
+            f"\nArea increase: {arr_before.mean():.1f} → {arr_after.mean():.1f} µm² (+{(arr_after.mean()/arr_before.mean() - 1)*100:.1f}%)"
+        )
 
 
-if __name__ == '__main__':
-    parser = argparse.ArgumentParser(description='Extract contours for single (outlier) detections from mask files')
-    parser.add_argument('--base-dir', type=Path, required=True,
-                        help='Base output directory (e.g., nmj_output/experiment_name)')
-    parser.add_argument('--tiles-dir', type=Path, required=True,
-                        help='Directory containing tile subdirectories with {cell_type}_masks.h5 files')
-    parser.add_argument('--cell-type', type=str, default='nmj',
-                        help='Cell type, used to construct mask filename as {cell_type}_masks.h5 (default: nmj)')
-    parser.add_argument('--clusters', type=Path, default=None,
-                        help='Path to clusters JSON (default: <base-dir>/nmj_clusters_375_425_500_1000.json)')
-    parser.add_argument('--detections', type=Path, default=None,
-                        help='Path to detections JSON (default: <base-dir>/nmj_detections_classified_v2.json)')
-    parser.add_argument('--output', type=Path, default=None,
-                        help='Output path for results JSON (default: <base-dir>/lmd_export/singles_with_contours.json)')
-    parser.add_argument('--pixel-size', type=float, required=True,
-                        help='Pixel size in micrometers (from CZI metadata)')
+if __name__ == "__main__":
+    parser = argparse.ArgumentParser(
+        description="Extract contours for single (outlier) detections from mask files"
+    )
+    parser.add_argument(
+        "--base-dir",
+        type=Path,
+        required=True,
+        help="Base output directory (e.g., nmj_output/experiment_name)",
+    )
+    parser.add_argument(
+        "--tiles-dir",
+        type=Path,
+        required=True,
+        help="Directory containing tile subdirectories with {cell_type}_masks.h5 files",
+    )
+    parser.add_argument(
+        "--cell-type",
+        type=str,
+        default="nmj",
+        help="Cell type, used to construct mask filename as {cell_type}_masks.h5 (default: nmj)",
+    )
+    parser.add_argument(
+        "--clusters",
+        type=Path,
+        default=None,
+        help="Path to clusters JSON (default: <base-dir>/nmj_clusters_375_425_500_1000.json)",
+    )
+    parser.add_argument(
+        "--detections",
+        type=Path,
+        default=None,
+        help="Path to detections JSON (default: <base-dir>/nmj_detections_classified_v2.json)",
+    )
+    parser.add_argument(
+        "--output",
+        type=Path,
+        default=None,
+        help="Output path for results JSON (default: <base-dir>/lmd_export/singles_with_contours.json)",
+    )
+    parser.add_argument(
+        "--pixel-size",
+        type=float,
+        required=True,
+        help="Pixel size in micrometers (from CZI metadata)",
+    )
     args = parser.parse_args()
 
-    clusters_path = args.clusters if args.clusters else args.base_dir / "nmj_clusters_375_425_500_1000.json"
-    detections_path = args.detections if args.detections else args.base_dir / "nmj_detections_classified_v2.json"
-    output_path = args.output if args.output else args.base_dir / "lmd_export" / "singles_with_contours.json"
+    clusters_path = (
+        args.clusters if args.clusters else args.base_dir / "nmj_clusters_375_425_500_1000.json"
+    )
+    detections_path = (
+        args.detections if args.detections else args.base_dir / "nmj_detections_classified_v2.json"
+    )
+    output_path = (
+        args.output if args.output else args.base_dir / "lmd_export" / "singles_with_contours.json"
+    )
 
     main(
         base_dir=args.base_dir,

@@ -28,15 +28,14 @@ import argparse
 import json
 import logging
 import pickle
-from pathlib import Path
-from typing import Dict, List, Tuple, Optional, Any
 from collections import Counter
+from pathlib import Path
+from typing import Any
 
 import numpy as np
 
 logging.basicConfig(
-    level=logging.INFO,
-    format='%(asctime)s | %(levelname)-8s | %(name)s | %(message)s'
+    level=logging.INFO, format="%(asctime)s | %(levelname)-8s | %(name)s | %(message)s"
 )
 logger = logging.getLogger(__name__)
 
@@ -46,18 +45,13 @@ logger = logging.getLogger(__name__)
 
 # Size class thresholds (in microns) - must match vessel_features.py
 SIZE_CLASS_THRESHOLDS = {
-    0: (0, 10),        # capillary: 5-10 um
-    1: (10, 50),       # arteriole: 10-50 um
-    2: (50, 150),      # small_artery: 50-150 um
-    3: (150, float('inf'))  # artery: >150 um
+    0: (0, 10),  # capillary: 5-10 um
+    1: (10, 50),  # arteriole: 10-50 um
+    2: (50, 150),  # small_artery: 50-150 um
+    3: (150, float("inf")),  # artery: >150 um
 }
 
-SIZE_CLASS_NAMES = {
-    0: 'capillary',
-    1: 'arteriole',
-    2: 'small_artery',
-    3: 'artery'
-}
+SIZE_CLASS_NAMES = {0: "capillary", 1: "arteriole", 2: "small_artery", 3: "artery"}
 
 
 def get_size_class_from_diameter(diameter_um: float) -> int:
@@ -73,8 +67,8 @@ def get_size_class_from_diameter(diameter_um: float) -> int:
 
 
 def extract_diameters(
-    detections: Dict[str, Dict],
-    uids: List[str],
+    detections: dict[str, dict],
+    uids: list[str],
 ) -> np.ndarray:
     """
     Extract outer diameter values for given UIDs.
@@ -93,15 +87,15 @@ def extract_diameters(
             continue
 
         det = detections[uid]
-        features = det.get('features', det)
+        features = det.get("features", det)
 
         # Try different possible field names for diameter
-        diameter = features.get('outer_diameter_um')
+        diameter = features.get("outer_diameter_um")
         if diameter is None:
-            diameter = features.get('diameter_um')
+            diameter = features.get("diameter_um")
         if diameter is None:
             # Fall back to estimating from area
-            area = features.get('outer_area_um2') or features.get('area')
+            area = features.get("outer_area_um2") or features.get("area")
             if area is not None and area > 0:
                 diameter = 2 * np.sqrt(area / np.pi)
 
@@ -114,7 +108,7 @@ def analyze_size_distribution(
     diameters: np.ndarray,
     labels: np.ndarray,
     prefix: str = "",
-) -> Dict[str, Any]:
+) -> dict[str, Any]:
     """
     Analyze the size distribution of vessels.
 
@@ -131,7 +125,7 @@ def analyze_size_distribution(
     valid_labels = labels[valid_mask]
 
     if len(valid_diameters) == 0:
-        return {'warning': 'No valid diameter measurements found'}
+        return {"warning": "No valid diameter measurements found"}
 
     # Get size classes
     size_classes = np.array([get_size_class_from_diameter(d) for d in valid_diameters])
@@ -154,9 +148,9 @@ def analyze_size_distribution(
         threshold = SIZE_CLASS_THRESHOLDS[class_id]
 
         distribution[class_name] = {
-            'count': count,
-            'percentage': pct,
-            'threshold_um': threshold,
+            "count": count,
+            "percentage": pct,
+            "threshold_um": threshold,
         }
 
         # Count positive/negative within class
@@ -168,8 +162,10 @@ def analyze_size_distribution(
         else:
             pos_in_class = neg_in_class = pos_pct = 0
 
-        logger.info(f"  {class_name:15s}: {count:5d} ({pct:5.1f}%) "
-                   f"[pos: {pos_in_class}, neg: {neg_in_class}, pos%: {pos_pct:.1f}%]")
+        logger.info(
+            f"  {class_name:15s}: {count:5d} ({pct:5.1f}%) "
+            f"[pos: {pos_in_class}, neg: {neg_in_class}, pos%: {pos_pct:.1f}%]"
+        )
 
         # Generate warnings for imbalanced distribution
         if pct < 5 and total > 100:
@@ -189,23 +185,23 @@ def analyze_size_distribution(
             logger.warning(f"    - {w}")
 
     return {
-        'distribution': distribution,
-        'warnings': warnings,
-        'total': total,
-        'diameter_range': (float(valid_diameters.min()), float(valid_diameters.max())),
-        'median_diameter': float(np.median(valid_diameters)),
+        "distribution": distribution,
+        "warnings": warnings,
+        "total": total,
+        "diameter_range": (float(valid_diameters.min()), float(valid_diameters.max())),
+        "median_diameter": float(np.median(valid_diameters)),
     }
 
 
 def stratified_sample_by_size(
     X: np.ndarray,
     y: np.ndarray,
-    uids: List[str],
+    uids: list[str],
     diameters: np.ndarray,
-    samples_per_class: Optional[int] = None,
+    samples_per_class: int | None = None,
     min_samples_per_class: int = 10,
     random_seed: int = 42,
-) -> Tuple[np.ndarray, np.ndarray, List[str], np.ndarray]:
+) -> tuple[np.ndarray, np.ndarray, list[str], np.ndarray]:
     """
     Perform stratified sampling to balance vessel size classes.
 
@@ -259,8 +255,10 @@ def stratified_sample_by_size(
         samples_per_class = min(min_pos, min_neg)
 
     if samples_per_class < min_samples_per_class:
-        logger.warning(f"  Insufficient samples for balanced stratification. "
-                      f"Min class has {samples_per_class} samples, need {min_samples_per_class}")
+        logger.warning(
+            f"  Insufficient samples for balanced stratification. "
+            f"Min class has {samples_per_class} samples, need {min_samples_per_class}"
+        )
         logger.warning("  Using class weights instead of undersampling")
         return X_valid, y_valid, uids_valid, diameters_valid
 
@@ -297,8 +295,10 @@ def stratified_sample_by_size(
             sampled_neg = np.random.choice(neg_indices, n_neg, replace=False)
             selected_indices.extend(sampled_neg.tolist())
 
-        logger.info(f"    {SIZE_CLASS_NAMES[class_id]}: {n_pos} pos, {n_neg} neg "
-                   f"(of {len(pos_indices)} pos, {len(neg_indices)} neg available)")
+        logger.info(
+            f"    {SIZE_CLASS_NAMES[class_id]}: {n_pos} pos, {n_neg} neg "
+            f"(of {len(pos_indices)} pos, {len(neg_indices)} neg available)"
+        )
 
     # Create balanced dataset
     selected_indices = np.array(selected_indices)
@@ -307,13 +307,15 @@ def stratified_sample_by_size(
     uids_balanced = [uids_valid[i] for i in selected_indices]
     diameters_balanced = diameters_valid[selected_indices]
 
-    logger.info(f"\n  Balanced dataset: {len(X_balanced)} samples "
-               f"({(y_balanced == 1).sum()} pos, {(y_balanced == 0).sum()} neg)")
+    logger.info(
+        f"\n  Balanced dataset: {len(X_balanced)} samples "
+        f"({(y_balanced == 1).sum()} pos, {(y_balanced == 0).sum()} neg)"
+    )
 
     return X_balanced, y_balanced, uids_balanced, diameters_balanced
 
 
-def load_annotations(annotations_path: Path) -> Tuple[set, set, set]:
+def load_annotations(annotations_path: Path) -> tuple[set, set, set]:
     """
     Load annotations from JSON file.
 
@@ -328,28 +330,31 @@ def load_annotations(annotations_path: Path) -> Tuple[set, set, set]:
         data = json.load(f)
 
     # Standard format
-    if 'positive' in data:
-        positive_ids = set(data.get('positive', []))
-        negative_ids = set(data.get('negative', []))
-        unsure_ids = set(data.get('unsure', []))
-        logger.info(f"Loaded annotations: {len(positive_ids)} positive, "
-                   f"{len(negative_ids)} negative, {len(unsure_ids)} unsure")
+    if "positive" in data:
+        positive_ids = set(data.get("positive", []))
+        negative_ids = set(data.get("negative", []))
+        unsure_ids = set(data.get("unsure", []))
+        logger.info(
+            f"Loaded annotations: {len(positive_ids)} positive, "
+            f"{len(negative_ids)} negative, {len(unsure_ids)} unsure"
+        )
         return positive_ids, negative_ids, unsure_ids
 
     # sklearn format (already has X, y)
-    if 'X' in data and 'y' in data:
-        uids = data.get('uids', [])
-        y = data['y']
+    if "X" in data and "y" in data:
+        uids = data.get("uids", [])
+        y = data["y"]
         positive_ids = set(uid for uid, label in zip(uids, y) if label == 1)
         negative_ids = set(uid for uid, label in zip(uids, y) if label == 0)
-        logger.info(f"Loaded sklearn format: {len(positive_ids)} positive, "
-                   f"{len(negative_ids)} negative")
+        logger.info(
+            f"Loaded sklearn format: {len(positive_ids)} positive, " f"{len(negative_ids)} negative"
+        )
         return positive_ids, negative_ids, set()
 
     raise ValueError(f"Unknown annotation format in {annotations_path}")
 
 
-def load_detections(detections_path: Path) -> Dict[str, Dict]:
+def load_detections(detections_path: Path) -> dict[str, dict]:
     """
     Load vessel detections with features from JSON.
 
@@ -364,7 +369,7 @@ def load_detections(detections_path: Path) -> Dict[str, Dict]:
         data = json.load(f)
 
     # If already a dict keyed by uid
-    if isinstance(data, dict) and not any(k in data for k in ['detections', 'vessels']):
+    if isinstance(data, dict) and not any(k in data for k in ["detections", "vessels"]):
         logger.info(f"Loaded {len(data)} detections (dict format)")
         return data
 
@@ -372,17 +377,17 @@ def load_detections(detections_path: Path) -> Dict[str, Dict]:
     if isinstance(data, list):
         indexed = {}
         for d in data:
-            uid = d.get('uid') or d.get('id')
+            uid = d.get("uid") or d.get("id")
             if uid:
                 indexed[uid] = d
         logger.info(f"Loaded {len(indexed)} detections (list format)")
         return indexed
 
     # Nested format with 'detections' or 'vessels' key
-    detections = data.get('detections') or data.get('vessels') or []
+    detections = data.get("detections") or data.get("vessels") or []
     indexed = {}
     for d in detections:
-        uid = d.get('uid') or d.get('id')
+        uid = d.get("uid") or d.get("id")
         if uid:
             indexed[uid] = d
 
@@ -391,11 +396,11 @@ def load_detections(detections_path: Path) -> Dict[str, Dict]:
 
 
 def extract_feature_matrix(
-    detections: Dict[str, Dict],
-    uids: List[str],
-    feature_names: Optional[List[str]] = None,
-    exclude_prefixes: Optional[List[str]] = None,
-) -> Tuple[np.ndarray, List[str], List[str]]:
+    detections: dict[str, dict],
+    uids: list[str],
+    feature_names: list[str] | None = None,
+    exclude_prefixes: list[str] | None = None,
+) -> tuple[np.ndarray, list[str], list[str]]:
     """
     Extract feature matrix for given UIDs.
 
@@ -418,7 +423,7 @@ def extract_feature_matrix(
     if feature_names is None:
         sample_uid = next(iter(detections.keys()))
         sample = detections[sample_uid]
-        features = sample.get('features', sample)  # Handle both formats
+        features = sample.get("features", sample)  # Handle both formats
 
         feature_names = []
         for k, v in sorted(features.items()):
@@ -439,7 +444,7 @@ def extract_feature_matrix(
             continue
 
         det = detections[uid]
-        features = det.get('features', det)
+        features = det.get("features", det)
 
         row = []
         for fn in feature_names:
@@ -458,17 +463,17 @@ def extract_feature_matrix(
 
 
 def prepare_training_data(
-    annotations_path: Optional[str] = None,
-    detections_path: Optional[str] = None,
-    sklearn_json_path: Optional[str] = None,
-    output_dir: str = './rf_training_data',
+    annotations_path: str | None = None,
+    detections_path: str | None = None,
+    sklearn_json_path: str | None = None,
+    output_dir: str = "./rf_training_data",
     morph_only: bool = False,
     include_sam2: bool = True,
     include_resnet: bool = True,
     test_size: float = 0.2,
     random_seed: int = 42,
     stratify_by_size: bool = False,
-    samples_per_size_class: Optional[int] = None,
+    samples_per_size_class: int | None = None,
 ):
     """
     Prepare training data for Random Forest classifier.
@@ -489,20 +494,20 @@ def prepare_training_data(
     output_dir = Path(output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
 
-    logger.info("="*70)
+    logger.info("=" * 70)
     logger.info("PREPARING RF TRAINING DATA")
-    logger.info("="*70)
+    logger.info("=" * 70)
 
     # Determine exclude prefixes based on options
     exclude_prefixes = []
     if morph_only:
-        exclude_prefixes = ['sam2_', 'resnet_']
+        exclude_prefixes = ["sam2_", "resnet_"]
         logger.info("Mode: Morphological features only")
     else:
         if not include_sam2:
-            exclude_prefixes.append('sam2_')
+            exclude_prefixes.append("sam2_")
         if not include_resnet:
-            exclude_prefixes.append('resnet_')
+            exclude_prefixes.append("resnet_")
 
     # Load data based on input format
     if sklearn_json_path:
@@ -511,15 +516,16 @@ def prepare_training_data(
         with open(sklearn_json_path) as f:
             data = json.load(f)
 
-        X = np.array(data['X'], dtype=np.float32)
-        y = np.array(data['y'], dtype=np.int32)
-        feature_names = data.get('feature_names', [f'f{i}' for i in range(X.shape[1])])
-        uids = data.get('uids', [f'sample_{i}' for i in range(len(y))])
+        X = np.array(data["X"], dtype=np.float32)
+        y = np.array(data["y"], dtype=np.int32)
+        feature_names = data.get("feature_names", [f"f{i}" for i in range(X.shape[1])])
+        uids = data.get("uids", [f"sample_{i}" for i in range(len(y))])
 
         # Apply feature filtering if needed
         if exclude_prefixes:
             keep_indices = [
-                i for i, fn in enumerate(feature_names)
+                i
+                for i, fn in enumerate(feature_names)
                 if not any(fn.startswith(p) for p in exclude_prefixes)
             ]
             X = X[:, keep_indices]
@@ -529,8 +535,10 @@ def prepare_training_data(
     else:
         # Load from separate annotation + detection files
         if not annotations_path or not detections_path:
-            raise ValueError("Must provide either sklearn_json_path OR both "
-                           "annotations_path and detections_path")
+            raise ValueError(
+                "Must provide either sklearn_json_path OR both "
+                "annotations_path and detections_path"
+            )
 
         logger.info(f"\nLoading annotations: {annotations_path}")
         positive_ids, negative_ids, _ = load_annotations(Path(annotations_path))
@@ -549,8 +557,10 @@ def prepare_training_data(
 
         # Negative samples
         X_neg, valid_neg, _ = extract_feature_matrix(
-            detections, list(negative_ids), feature_names=feature_names,
-            exclude_prefixes=exclude_prefixes
+            detections,
+            list(negative_ids),
+            feature_names=feature_names,
+            exclude_prefixes=exclude_prefixes,
         )
         y_neg = np.zeros(len(valid_neg), dtype=np.int32)
 
@@ -574,10 +584,11 @@ def prepare_training_data(
     logger.info(f"  Negative samples: {(y == 0).sum()}")
 
     # Feature breakdown
-    n_morph = len([f for f in feature_names
-                   if not f.startswith('sam2_') and not f.startswith('resnet_')])
-    n_sam2 = len([f for f in feature_names if f.startswith('sam2_')])
-    n_resnet = len([f for f in feature_names if f.startswith('resnet_')])
+    n_morph = len(
+        [f for f in feature_names if not f.startswith("sam2_") and not f.startswith("resnet_")]
+    )
+    n_sam2 = len([f for f in feature_names if f.startswith("sam2_")])
+    n_resnet = len([f for f in feature_names if f.startswith("resnet_")])
     logger.info(f"  Morphological: {n_morph}")
     logger.info(f"  SAM2 embeddings: {n_sam2}")
     logger.info(f"  ResNet features: {n_resnet}")
@@ -586,12 +597,14 @@ def prepare_training_data(
     if stratify_by_size:
         # Need detections to get diameters
         if sklearn_json_path:
-            logger.warning("Cannot stratify by size from sklearn JSON - need detections file for diameters")
+            logger.warning(
+                "Cannot stratify by size from sklearn JSON - need detections file for diameters"
+            )
             logger.warning("Falling back to standard label stratification")
         elif detections_path:
-            logger.info("\n" + "="*50)
+            logger.info("\n" + "=" * 50)
             logger.info("STRATIFIED SAMPLING BY VESSEL SIZE")
-            logger.info("="*50)
+            logger.info("=" * 50)
 
             detections = load_detections(Path(detections_path))
             diameters = extract_diameters(detections, uids)
@@ -601,7 +614,10 @@ def prepare_training_data(
 
             # Apply stratified sampling
             X, y, uids, diameters = stratified_sample_by_size(
-                X, y, uids, diameters,
+                X,
+                y,
+                uids,
+                diameters,
                 samples_per_class=samples_per_size_class,
                 min_samples_per_class=10,
                 random_seed=random_seed,
@@ -622,7 +638,9 @@ def prepare_training_data(
     )
 
     logger.info(f"\nTrain/test split (seed={random_seed}, test_size={test_size}):")
-    logger.info(f"  Train: {len(X_train)} samples ({(y_train==1).sum()} pos, {(y_train==0).sum()} neg)")
+    logger.info(
+        f"  Train: {len(X_train)} samples ({(y_train==1).sum()} pos, {(y_train==0).sum()} neg)"
+    )
     logger.info(f"  Test: {len(X_test)} samples ({(y_test==1).sum()} pos, {(y_test==0).sum()} neg)")
 
     # Standardize features
@@ -636,87 +654,88 @@ def prepare_training_data(
     logger.info(f"\nSaving to: {output_dir}")
 
     # 1. NumPy arrays (for direct loading)
-    np.save(output_dir / 'X_train.npy', X_train_scaled)
-    np.save(output_dir / 'X_test.npy', X_test_scaled)
-    np.save(output_dir / 'y_train.npy', y_train)
-    np.save(output_dir / 'y_test.npy', y_test)
+    np.save(output_dir / "X_train.npy", X_train_scaled)
+    np.save(output_dir / "X_test.npy", X_test_scaled)
+    np.save(output_dir / "y_train.npy", y_train)
+    np.save(output_dir / "y_test.npy", y_test)
     logger.info("  Saved: X_train.npy, X_test.npy, y_train.npy, y_test.npy")
 
     # 2. Raw (unscaled) arrays
-    np.save(output_dir / 'X_train_raw.npy', X_train)
-    np.save(output_dir / 'X_test_raw.npy', X_test)
+    np.save(output_dir / "X_train_raw.npy", X_train)
+    np.save(output_dir / "X_test_raw.npy", X_test)
     logger.info("  Saved: X_train_raw.npy, X_test_raw.npy (unscaled)")
 
     # 3. Pickle with scaler and metadata
     metadata = {
-        'scaler': scaler,
-        'feature_names': feature_names,
-        'n_features': len(feature_names),
-        'n_train': len(X_train),
-        'n_test': len(X_test),
-        'n_positive': int((y == 1).sum()),
-        'n_negative': int((y == 0).sum()),
-        'test_size': test_size,
-        'random_seed': random_seed,
-        'morph_only': morph_only,
-        'uids_train': uids_train,
-        'uids_test': uids_test,
+        "scaler": scaler,
+        "feature_names": feature_names,
+        "n_features": len(feature_names),
+        "n_train": len(X_train),
+        "n_test": len(X_test),
+        "n_positive": int((y == 1).sum()),
+        "n_negative": int((y == 0).sum()),
+        "test_size": test_size,
+        "random_seed": random_seed,
+        "morph_only": morph_only,
+        "uids_train": uids_train,
+        "uids_test": uids_test,
     }
 
-    with open(output_dir / 'metadata.pkl', 'wb') as f:
+    with open(output_dir / "metadata.pkl", "wb") as f:
         pickle.dump(metadata, f)
     logger.info("  Saved: metadata.pkl (scaler, feature_names, etc.)")
 
     # 4. CSV for inspection (first 50 features max)
     import csv
-    csv_features = feature_names[:50] if len(feature_names) > 50 else feature_names
-    csv_path = output_dir / 'training_data_preview.csv'
 
-    with open(csv_path, 'w', newline='') as f:
+    csv_features = feature_names[:50] if len(feature_names) > 50 else feature_names
+    csv_path = output_dir / "training_data_preview.csv"
+
+    with open(csv_path, "w", newline="") as f:
         writer = csv.writer(f)
-        writer.writerow(['uid', 'label', 'split'] + csv_features)
+        writer.writerow(["uid", "label", "split"] + csv_features)
 
         for uid, label, row in zip(uids_train, y_train, X_train):
-            writer.writerow([uid, label, 'train'] + list(row[:len(csv_features)]))
+            writer.writerow([uid, label, "train"] + list(row[: len(csv_features)]))
         for uid, label, row in zip(uids_test, y_test, X_test):
-            writer.writerow([uid, label, 'test'] + list(row[:len(csv_features)]))
+            writer.writerow([uid, label, "test"] + list(row[: len(csv_features)]))
 
     logger.info(f"  Saved: training_data_preview.csv (first {len(csv_features)} features)")
 
     # 5. Full training data JSON
     training_json = {
-        'feature_names': feature_names,
-        'n_features': len(feature_names),
-        'train': {
-            'X': X_train.tolist(),
-            'y': y_train.tolist(),
-            'uids': uids_train,
+        "feature_names": feature_names,
+        "n_features": len(feature_names),
+        "train": {
+            "X": X_train.tolist(),
+            "y": y_train.tolist(),
+            "uids": uids_train,
         },
-        'test': {
-            'X': X_test.tolist(),
-            'y': y_test.tolist(),
-            'uids': uids_test,
+        "test": {
+            "X": X_test.tolist(),
+            "y": y_test.tolist(),
+            "uids": uids_test,
         },
-        'config': {
-            'test_size': test_size,
-            'random_seed': random_seed,
-            'morph_only': morph_only,
-        }
+        "config": {
+            "test_size": test_size,
+            "random_seed": random_seed,
+            "morph_only": morph_only,
+        },
     }
 
-    with open(output_dir / 'training_data.json', 'w') as f:
+    with open(output_dir / "training_data.json", "w") as f:
         json.dump(training_json, f)
     logger.info("  Saved: training_data.json")
 
     # 6. Feature names list
-    with open(output_dir / 'feature_names.txt', 'w') as f:
+    with open(output_dir / "feature_names.txt", "w") as f:
         for fn in feature_names:
-            f.write(fn + '\n')
+            f.write(fn + "\n")
     logger.info("  Saved: feature_names.txt")
 
-    logger.info("\n" + "="*70)
+    logger.info("\n" + "=" * 70)
     logger.info("PREPARATION COMPLETE")
-    logger.info("="*70)
+    logger.info("=" * 70)
 
     logger.info("\nTo train a Random Forest classifier:")
     logger.info(f"""
@@ -744,18 +763,18 @@ def prepare_training_data(
     """)
 
     return {
-        'X_train': X_train_scaled,
-        'X_test': X_test_scaled,
-        'y_train': y_train,
-        'y_test': y_test,
-        'feature_names': feature_names,
-        'scaler': scaler,
+        "X_train": X_train_scaled,
+        "X_test": X_test_scaled,
+        "y_train": y_train,
+        "y_test": y_test,
+        "feature_names": feature_names,
+        "scaler": scaler,
     }
 
 
 def main():
     parser = argparse.ArgumentParser(
-        description='Prepare Random Forest training data from vessel annotations',
+        description="Prepare Random Forest training data from vessel annotations",
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 Examples:
@@ -775,77 +794,59 @@ Examples:
         --sklearn-json vessel_rf_sklearn.json \\
         --output-dir ./rf_data \\
         --morph-only
-        """
+        """,
     )
 
     # Input options (mutually exclusive groups)
-    input_group = parser.add_argument_group('Input options')
+    input_group = parser.add_argument_group("Input options")
     input_group.add_argument(
-        '--annotations', '-a',
-        help='Path to annotation JSON file (positive/negative/unsure lists)'
+        "--annotations", "-a", help="Path to annotation JSON file (positive/negative/unsure lists)"
     )
+    input_group.add_argument("--detections", "-d", help="Path to detection JSON file with features")
     input_group.add_argument(
-        '--detections', '-d',
-        help='Path to detection JSON file with features'
-    )
-    input_group.add_argument(
-        '--sklearn-json', '-s',
-        help='Path to sklearn-format JSON (alternative to annotations+detections)'
+        "--sklearn-json",
+        "-s",
+        help="Path to sklearn-format JSON (alternative to annotations+detections)",
     )
 
     # Output options
-    output_group = parser.add_argument_group('Output options')
+    output_group = parser.add_argument_group("Output options")
     output_group.add_argument(
-        '--output-dir', '-o',
-        default='./rf_training_data',
-        help='Output directory (default: ./rf_training_data)'
+        "--output-dir",
+        "-o",
+        default="./rf_training_data",
+        help="Output directory (default: ./rf_training_data)",
     )
 
     # Feature options
-    feature_group = parser.add_argument_group('Feature options')
+    feature_group = parser.add_argument_group("Feature options")
     feature_group.add_argument(
-        '--morph-only',
-        action='store_true',
-        help='Use only morphological features (exclude SAM2/ResNet embeddings)'
+        "--morph-only",
+        action="store_true",
+        help="Use only morphological features (exclude SAM2/ResNet embeddings)",
     )
-    feature_group.add_argument(
-        '--no-sam2',
-        action='store_true',
-        help='Exclude SAM2 embeddings'
-    )
-    feature_group.add_argument(
-        '--no-resnet',
-        action='store_true',
-        help='Exclude ResNet features'
-    )
+    feature_group.add_argument("--no-sam2", action="store_true", help="Exclude SAM2 embeddings")
+    feature_group.add_argument("--no-resnet", action="store_true", help="Exclude ResNet features")
 
     # Split options
-    split_group = parser.add_argument_group('Train/test split options')
+    split_group = parser.add_argument_group("Train/test split options")
     split_group.add_argument(
-        '--test-size',
-        type=float,
-        default=0.2,
-        help='Fraction of data for test set (default: 0.2)'
+        "--test-size", type=float, default=0.2, help="Fraction of data for test set (default: 0.2)"
     )
-    split_group.add_argument(
-        '--seed',
-        type=int,
-        default=42,
-        help='Random seed (default: 42)'
-    )
+    split_group.add_argument("--seed", type=int, default=42, help="Random seed (default: 42)")
 
     # Stratification options
-    stratify_group = parser.add_argument_group('Stratification options')
+    stratify_group = parser.add_argument_group("Stratification options")
     stratify_group.add_argument(
-        '--stratify-by-size',
-        action='store_true',
-        help='Balance training data across vessel size classes (capillary/arteriole/small_artery/artery)'
+        "--stratify-by-size",
+        action="store_true",
+        help="Balance training data across vessel size classes (capillary/arteriole/small_artery/artery)",
     )
     stratify_group.add_argument(
-        '--samples-per-size-class',
+        "--samples-per-size-class",
         type=int,
         default=None,
-        help='Target samples per size class (default: auto = min class count)'
+        help="Target samples per size class (default: auto = min class count)",
     )
 
     args = parser.parse_args()
@@ -856,8 +857,9 @@ Examples:
             logger.warning("sklearn-json provided, ignoring annotations/detections")
     else:
         if not args.annotations or not args.detections:
-            parser.error("Must provide either --sklearn-json OR both "
-                        "--annotations and --detections")
+            parser.error(
+                "Must provide either --sklearn-json OR both " "--annotations and --detections"
+            )
 
     prepare_training_data(
         annotations_path=args.annotations,
@@ -874,5 +876,5 @@ Examples:
     )
 
 
-if __name__ == '__main__':
+if __name__ == "__main__":
     main()

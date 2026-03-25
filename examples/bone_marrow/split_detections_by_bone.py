@@ -15,6 +15,7 @@ Output:
     - mk_contours_humerus.json
     - bone_assignment_summary.json
 """
+
 import argparse
 import copy
 import json
@@ -136,13 +137,14 @@ def load_bone_regions(path):
         data = json.load(f)
 
     # Handle both formats
-    if 'slides' in data:
-        return data['slides']
+    if "slides" in data:
+        return data["slides"]
     return data
 
 
-def assign_detections_to_bones(detections_by_slide, regions_by_slide, include_unknown=False,
-                                transform_from_rotated=False):
+def assign_detections_to_bones(
+    detections_by_slide, regions_by_slide, include_unknown=False, transform_from_rotated=False
+):
     """Assign each detection to a bone region.
 
     Args:
@@ -161,15 +163,7 @@ def assign_detections_to_bones(detections_by_slide, regions_by_slide, include_un
     humerus_detections = defaultdict(list)
     unknown_detections = defaultdict(list)
 
-    summary = {
-        'by_slide': {},
-        'totals': {
-            'femur': 0,
-            'humerus': 0,
-            'unknown': 0,
-            'total': 0
-        }
-    }
+    summary = {"by_slide": {}, "totals": {"femur": 0, "humerus": 0, "unknown": 0, "total": 0}}
 
     for slide_name, detections in detections_by_slide.items():
         slide_regions = regions_by_slide.get(slide_name, {})
@@ -178,37 +172,37 @@ def assign_detections_to_bones(detections_by_slide, regions_by_slide, include_un
         femur_poly = None
         humerus_poly = None
 
-        if 'femur' in slide_regions and slide_regions['femur'].get('vertices_px'):
-            femur_poly = create_prepared_polygon(slide_regions['femur']['vertices_px'])
-        if 'humerus' in slide_regions and slide_regions['humerus'].get('vertices_px'):
-            humerus_poly = create_prepared_polygon(slide_regions['humerus']['vertices_px'])
+        if "femur" in slide_regions and slide_regions["femur"].get("vertices_px"):
+            femur_poly = create_prepared_polygon(slide_regions["femur"]["vertices_px"])
+        if "humerus" in slide_regions and slide_regions["humerus"].get("vertices_px"):
+            humerus_poly = create_prepared_polygon(slide_regions["humerus"]["vertices_px"])
 
-        slide_summary = {'femur': 0, 'humerus': 0, 'unknown': 0, 'total': len(detections)}
+        slide_summary = {"femur": 0, "humerus": 0, "unknown": 0, "total": len(detections)}
 
         # Get original dimensions for coordinate transform
-        orig_width = slide_regions.get('full_width')
-        orig_height = slide_regions.get('full_height')
+        orig_width = slide_regions.get("full_width")
+        orig_height = slide_regions.get("full_height")
 
         for det in detections:
             # Compute centroid from contour_yx
-            if 'contour_yx' in det:
-                cx, cy = compute_centroid_from_contour(det['contour_yx'])
-            elif 'centroid' in det:
-                cx, cy = det['centroid']
-            elif 'global_center' in det:
-                cx, cy = det['global_center']
+            if "contour_yx" in det:
+                cx, cy = compute_centroid_from_contour(det["contour_yx"])
+            elif "centroid" in det:
+                cx, cy = det["centroid"]
+            elif "global_center" in det:
+                cx, cy = det["global_center"]
             else:
                 # Try to parse from UID
-                parts = det.get('uid', '').split('_')
+                parts = det.get("uid", "").split("_")
                 if len(parts) >= 2:
                     try:
                         cx, cy = float(parts[-2]), float(parts[-1])
                     except ValueError:
                         print(f"  Warning: Cannot determine centroid for {det.get('uid')}")
-                        slide_summary['unknown'] += 1
+                        slide_summary["unknown"] += 1
                         continue
                 else:
-                    slide_summary['unknown'] += 1
+                    slide_summary["unknown"] += 1
                     continue
 
             # Transform from rotated space to original CZI space if needed
@@ -219,55 +213,81 @@ def assign_detections_to_bones(detections_by_slide, regions_by_slide, include_un
             bone_region = None
 
             if femur_poly and point_in_prepared_polygon(cx, cy, femur_poly):
-                bone_region = 'femur'
+                bone_region = "femur"
             elif humerus_poly and point_in_prepared_polygon(cx, cy, humerus_poly):
-                bone_region = 'humerus'
+                bone_region = "humerus"
 
             # Deep copy to avoid shared references
             det_copy = copy.deepcopy(det)
-            det_copy['bone_region'] = bone_region or 'unknown'
-            det_copy['centroid_xy'] = [cx, cy]
+            det_copy["bone_region"] = bone_region or "unknown"
+            det_copy["centroid_xy"] = [cx, cy]
 
-            if bone_region == 'femur':
+            if bone_region == "femur":
                 femur_detections[slide_name].append(det_copy)
-                slide_summary['femur'] += 1
-            elif bone_region == 'humerus':
+                slide_summary["femur"] += 1
+            elif bone_region == "humerus":
                 humerus_detections[slide_name].append(det_copy)
-                slide_summary['humerus'] += 1
+                slide_summary["humerus"] += 1
             else:
-                slide_summary['unknown'] += 1
+                slide_summary["unknown"] += 1
                 if include_unknown:
                     unknown_detections[slide_name].append(det_copy)
 
-        summary['by_slide'][slide_name] = slide_summary
-        summary['totals']['femur'] += slide_summary['femur']
-        summary['totals']['humerus'] += slide_summary['humerus']
-        summary['totals']['unknown'] += slide_summary['unknown']
-        summary['totals']['total'] += slide_summary['total']
+        summary["by_slide"][slide_name] = slide_summary
+        summary["totals"]["femur"] += slide_summary["femur"]
+        summary["totals"]["humerus"] += slide_summary["humerus"]
+        summary["totals"]["unknown"] += slide_summary["unknown"]
+        summary["totals"]["total"] += slide_summary["total"]
 
-        print(f"  {slide_name}: {slide_summary['femur']} femur, "
-              f"{slide_summary['humerus']} humerus, {slide_summary['unknown']} unknown")
+        print(
+            f"  {slide_name}: {slide_summary['femur']} femur, "
+            f"{slide_summary['humerus']} humerus, {slide_summary['unknown']} unknown"
+        )
 
     result = (dict(femur_detections), dict(humerus_detections), summary)
     if include_unknown:
-        result = (dict(femur_detections), dict(humerus_detections), dict(unknown_detections), summary)
+        result = (
+            dict(femur_detections),
+            dict(humerus_detections),
+            dict(unknown_detections),
+            summary,
+        )
     return result
 
 
 def main():
-    parser = argparse.ArgumentParser(description='Split detections by bone region')
-    parser.add_argument('--detections', '-d', type=Path, required=True,
-                        help='Path to detection JSON (e.g., mk_contours_overlay.json)')
-    parser.add_argument('--regions', '-r', type=Path, required=True,
-                        help='Path to bone regions JSON (from annotation tool)')
-    parser.add_argument('--output-dir', '-o', type=Path, required=True,
-                        help='Output directory for split files')
-    parser.add_argument('--prefix', type=str, default='mk_contours',
-                        help='Output file prefix (default: mk_contours)')
-    parser.add_argument('--include-unknown', action='store_true',
-                        help='Also output detections outside both regions')
-    parser.add_argument('--transform-from-rotated', action='store_true',
-                        help='Transform detection coords from flip-H + rotate-90-CW space')
+    parser = argparse.ArgumentParser(description="Split detections by bone region")
+    parser.add_argument(
+        "--detections",
+        "-d",
+        type=Path,
+        required=True,
+        help="Path to detection JSON (e.g., mk_contours_overlay.json)",
+    )
+    parser.add_argument(
+        "--regions",
+        "-r",
+        type=Path,
+        required=True,
+        help="Path to bone regions JSON (from annotation tool)",
+    )
+    parser.add_argument(
+        "--output-dir", "-o", type=Path, required=True, help="Output directory for split files"
+    )
+    parser.add_argument(
+        "--prefix",
+        type=str,
+        default="mk_contours",
+        help="Output file prefix (default: mk_contours)",
+    )
+    parser.add_argument(
+        "--include-unknown", action="store_true", help="Also output detections outside both regions"
+    )
+    parser.add_argument(
+        "--transform-from-rotated",
+        action="store_true",
+        help="Transform detection coords from flip-H + rotate-90-CW space",
+    )
 
     args = parser.parse_args()
 
@@ -284,7 +304,9 @@ def main():
     # Load data
     print(f"Loading detections from {args.detections}...")
     detections = load_detections(args.detections)
-    print(f"  Found {sum(len(v) for v in detections.values())} detections across {len(detections)} slides")
+    print(
+        f"  Found {sum(len(v) for v in detections.values())} detections across {len(detections)} slides"
+    )
 
     print(f"Loading bone regions from {args.regions}...")
     regions = load_bone_regions(args.regions)
@@ -299,9 +321,12 @@ def main():
     print("\nAssigning detections to bone regions...")
     if args.transform_from_rotated:
         print("  (transforming detection coords from rotated space)")
-    result = assign_detections_to_bones(detections, regions,
-                                        include_unknown=args.include_unknown,
-                                        transform_from_rotated=args.transform_from_rotated)
+    result = assign_detections_to_bones(
+        detections,
+        regions,
+        include_unknown=args.include_unknown,
+        transform_from_rotated=args.transform_from_rotated,
+    )
 
     if args.include_unknown:
         femur_dets, humerus_dets, unknown_dets, summary = result
@@ -309,40 +334,37 @@ def main():
         femur_dets, humerus_dets, summary = result
 
     # Write output files
-    femur_path = args.output_dir / f'{args.prefix}_femur.json'
-    humerus_path = args.output_dir / f'{args.prefix}_humerus.json'
-    summary_path = args.output_dir / 'bone_assignment_summary.json'
+    femur_path = args.output_dir / f"{args.prefix}_femur.json"
+    humerus_path = args.output_dir / f"{args.prefix}_humerus.json"
+    summary_path = args.output_dir / "bone_assignment_summary.json"
 
     print(f"\nWriting {femur_path}...")
-    with open(femur_path, 'w') as f:
+    with open(femur_path, "w") as f:
         json.dump(femur_dets, f, indent=2)
 
     print(f"Writing {humerus_path}...")
-    with open(humerus_path, 'w') as f:
+    with open(humerus_path, "w") as f:
         json.dump(humerus_dets, f, indent=2)
 
-    output_files = {
-        'femur': str(femur_path),
-        'humerus': str(humerus_path)
-    }
+    output_files = {"femur": str(femur_path), "humerus": str(humerus_path)}
 
     if args.include_unknown:
-        unknown_path = args.output_dir / f'{args.prefix}_unknown.json'
+        unknown_path = args.output_dir / f"{args.prefix}_unknown.json"
         print(f"Writing {unknown_path}...")
-        with open(unknown_path, 'w') as f:
+        with open(unknown_path, "w") as f:
             json.dump(unknown_dets, f, indent=2)
-        output_files['unknown'] = str(unknown_path)
+        output_files["unknown"] = str(unknown_path)
 
     # Add metadata to summary
-    summary['metadata'] = {
-        'generated_at': datetime.now().isoformat(),
-        'detections_file': str(args.detections),
-        'regions_file': str(args.regions),
-        'output_files': output_files
+    summary["metadata"] = {
+        "generated_at": datetime.now().isoformat(),
+        "detections_file": str(args.detections),
+        "regions_file": str(args.regions),
+        "output_files": output_files,
     }
 
     print(f"Writing {summary_path}...")
-    with open(summary_path, 'w') as f:
+    with open(summary_path, "w") as f:
         json.dump(summary, f, indent=2)
 
     # Print summary
@@ -353,7 +375,7 @@ def main():
     print(f"  Femur:            {summary['totals']['femur']}")
     print(f"  Humerus:          {summary['totals']['humerus']}")
     print(f"  Unknown/Outside:  {summary['totals']['unknown']}")
-    print(f"\nOutput files:")
+    print("\nOutput files:")
     print(f"  {femur_path}")
     print(f"  {humerus_path}")
     if args.include_unknown:
@@ -361,5 +383,5 @@ def main():
     print(f"  {summary_path}")
 
 
-if __name__ == '__main__':
+if __name__ == "__main__":
     main()

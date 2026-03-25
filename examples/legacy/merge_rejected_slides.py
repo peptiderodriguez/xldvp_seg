@@ -9,11 +9,10 @@ Usage:
     python3 scripts/merge_rejected_slides.py
 """
 
-import json
 import glob
-import sys
-from pathlib import Path
+import json
 from collections import Counter
+from pathlib import Path
 
 from shapely.geometry import Point, Polygon
 from shapely.prepared import prep
@@ -96,7 +95,7 @@ def main():
     existing_uids = {c["uid"] for c in existing}
 
     # Process each new slide
-    new_cells = []       # light format (uid, slide, bone, area, score, center)
+    new_cells = []  # light format (uid, slide, bone, area, score, center)
     new_cells_full = []  # full format (with features dict for ANOVA)
     for slide_name in NEW_SLIDES:
         slide_dir = BASE / slide_name
@@ -142,15 +141,17 @@ def main():
             area_um2 = c.get("area_um2", c.get("area", 0))
 
             # Light format (for LMD selection)
-            kept.append({
-                "uid": c["uid"],
-                "slide": slide_name,
-                "bone": bone,
-                "area_um2": area_um2,
-                "mk_score": c["mk_score"],
-                "center_x": cx,
-                "center_y": cy,
-            })
+            kept.append(
+                {
+                    "uid": c["uid"],
+                    "slide": slide_name,
+                    "bone": bone,
+                    "area_um2": area_um2,
+                    "mk_score": c["mk_score"],
+                    "center_x": cx,
+                    "center_y": cy,
+                }
+            )
 
             # Full format (for ANOVA — needs features dict)
             full_cell = {
@@ -179,7 +180,7 @@ def main():
 
     # Combine
     combined = existing + new_cells
-    print(f"\n--- Summary ---")
+    print("\n--- Summary ---")
     print(f"Existing:  {len(existing)}")
     print(f"New:       {len(new_cells)}")
     print(f"Combined:  {len(combined)}")

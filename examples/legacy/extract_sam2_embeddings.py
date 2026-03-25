@@ -30,7 +30,6 @@ Usage:
 
 import argparse
 import json
-import glob
 import re
 import sys
 from pathlib import Path
@@ -92,7 +91,6 @@ def extract_from_tile_features(base_dir, slides=None):
 
 def extract_from_czi(base_dir, czi_dir, slides=None):
     """Extract SAM2 embeddings by running SAM2 on CZI tiles."""
-    import torch
     from sam2.build_sam import build_sam2
     from sam2.sam2_image_predictor import SAM2ImagePredictor
 
@@ -155,6 +153,7 @@ def extract_from_czi(base_dir, czi_dir, slides=None):
 
         # Load CZI for tile extraction
         from aicspylibczi import CziFile
+
         czi = CziFile(str(czi_file))
         print(f"\n=== {slide_name} (CZI: {czi_file.name}) ===")
 
@@ -176,7 +175,7 @@ def extract_from_czi(base_dir, czi_dir, slides=None):
             # Parse window.csv: "(slice(y0, y1, None), slice(x0, x1, None))"
             with open(window_file) as f:
                 window_str = f.read().strip()
-            slices = re.findall(r'slice\((\d+),\s*(\d+)', window_str)
+            slices = re.findall(r"slice\((\d+),\s*(\d+)", window_str)
             if len(slices) != 2:
                 print(f"    WARNING: Cannot parse window for {tile_dir.name}")
                 continue
@@ -221,9 +220,7 @@ def extract_from_czi(base_dir, czi_dir, slides=None):
                     emb_y = min(max(emb_y, 0), emb_h - 1)
                     emb_x = min(max(emb_x, 0), emb_w - 1)
 
-                    emb = predictor._features["image_embed"][
-                        0, :, emb_y, emb_x
-                    ].cpu().numpy()
+                    emb = predictor._features["image_embed"][0, :, emb_y, emb_x].cpu().numpy()
                     embeddings[uid] = [float(v) for v in emb]
                     slide_count += 1
 
@@ -280,41 +277,56 @@ def merge_embeddings(target_json, embeddings_json, output_json=None):
 
 
 def main():
-    parser = argparse.ArgumentParser(description=__doc__,
-                                     formatter_class=argparse.RawDescriptionHelpFormatter)
+    parser = argparse.ArgumentParser(
+        description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter
+    )
     sub = parser.add_subparsers(dest="command")
 
     # Extract command
     ext = sub.add_parser("extract", help="Extract SAM2 embeddings from tile features or CZI")
-    ext.add_argument("--base-dir", type=Path, required=True,
-                     help="Base directory with slide/mk/tiles/ structure")
-    ext.add_argument("--czi-dir", type=Path, default=None,
-                     help="Directory containing CZI files (enables GPU extraction)")
-    ext.add_argument("--slides", nargs="*", default=None,
-                     help="Specific slide names to process (default: all)")
-    ext.add_argument("--output", type=Path, required=True,
-                     help="Output JSON with uid -> [sam2_0..sam2_255] mapping")
+    ext.add_argument(
+        "--base-dir", type=Path, required=True, help="Base directory with slide/mk/tiles/ structure"
+    )
+    ext.add_argument(
+        "--czi-dir",
+        type=Path,
+        default=None,
+        help="Directory containing CZI files (enables GPU extraction)",
+    )
+    ext.add_argument(
+        "--slides", nargs="*", default=None, help="Specific slide names to process (default: all)"
+    )
+    ext.add_argument(
+        "--output",
+        type=Path,
+        required=True,
+        help="Output JSON with uid -> [sam2_0..sam2_255] mapping",
+    )
 
     # Merge command
     mrg = sub.add_parser("merge", help="Merge SAM2 embeddings into detection JSON")
-    mrg.add_argument("--target", type=Path, required=True,
-                     help="Detection JSON to update (e.g. all_mks_with_rejected3_full.json)")
-    mrg.add_argument("--embeddings", type=Path, required=True,
-                     help="SAM2 embeddings JSON from extract command")
-    mrg.add_argument("--output", type=Path, default=None,
-                     help="Output path (default: overwrite target)")
+    mrg.add_argument(
+        "--target",
+        type=Path,
+        required=True,
+        help="Detection JSON to update (e.g. all_mks_with_rejected3_full.json)",
+    )
+    mrg.add_argument(
+        "--embeddings", type=Path, required=True, help="SAM2 embeddings JSON from extract command"
+    )
+    mrg.add_argument(
+        "--output", type=Path, default=None, help="Output path (default: overwrite target)"
+    )
 
     args = parser.parse_args()
 
     if args.command == "extract":
         if args.czi_dir:
             print("Full extraction mode (GPU required)")
-            embeddings = extract_from_czi(args.base_dir, args.czi_dir,
-                                          slides=args.slides)
+            embeddings = extract_from_czi(args.base_dir, args.czi_dir, slides=args.slides)
         else:
             print("Fast extraction mode (reading existing tile features)")
-            embeddings = extract_from_tile_features(args.base_dir,
-                                                    slides=args.slides)
+            embeddings = extract_from_tile_features(args.base_dir, slides=args.slides)
 
         args.output.parent.mkdir(parents=True, exist_ok=True)
         with open(args.output, "w") as f:
@@ -322,8 +334,9 @@ def main():
         print(f"\nSaved {len(embeddings)} embeddings to {args.output}")
 
     elif args.command == "merge":
-        merge_embeddings(args.target, args.embeddings,
-                         output_json=str(args.output) if args.output else None)
+        merge_embeddings(
+            args.target, args.embeddings, output_json=str(args.output) if args.output else None
+        )
 
     else:
         parser.print_help()

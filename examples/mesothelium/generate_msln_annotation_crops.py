@@ -13,20 +13,21 @@ within each tier.
 
 import argparse
 import json
-from pathlib import Path
 from collections import defaultdict
+from pathlib import Path
 
 import h5py
 import hdf5plugin  # noqa: F401 — enables LZ4 codec for h5py
 import numpy as np
+from aicspylibczi import CziFile
 from PIL import Image
 from tqdm import tqdm
-from aicspylibczi import CziFile
 
-from segmentation.io.html_generator import HTMLPageGenerator
 from segmentation.io.html_export import (
-    image_to_base64, draw_mask_contour,
+    draw_mask_contour,
+    image_to_base64,
 )
+from segmentation.io.html_generator import HTMLPageGenerator
 
 # ---------------------------------------------------------------------------
 # Default paths (overridable via CLI)
@@ -37,8 +38,7 @@ DEFAULT_DETECTIONS_PATH = (
     "detections_msln_density_normalized.json"
 )
 DEFAULT_CZI_PATH = (
-    "/path/to/data/MPIP_psilo/"
-    "20251114_Pdgfra546_Msln750_PM647_nuc488-EDFvar-1-stitch-1.czi"
+    "/path/to/data/MPIP_psilo/" "20251114_Pdgfra546_Msln750_PM647_nuc488-EDFvar-1-stitch-1.czi"
 )
 DEFAULT_OUTPUT_DIR = "/path/to/output/brain_fish_output/msln_annotation_crops"
 DEFAULT_TILES_DIR = (
@@ -48,12 +48,12 @@ DEFAULT_TILES_DIR = (
 )
 
 # Display: Msln750 (ch2) as white, nuc488 (ch0) as blue, PM647 (ch1) hidden
-CH_MSLN = 2   # Msln750 → white (all RGB)
-CH_NUC = 0    # nuc488  → blue (B channel only)
+CH_MSLN = 2  # Msln750 → white (all RGB)
+CH_NUC = 0  # nuc488  → blue (B channel only)
 
 TILES_DIR = None  # Set from CLI in main()
 
-CROP_SIZE = 200          # pixels, centered on cell
+CROP_SIZE = 200  # pixels, centered on cell
 SAMPLES_PER_TIER = None  # None = all cells (no sampling)
 SAMPLES_PER_PAGE = 300
 SEED = 42
@@ -84,13 +84,13 @@ def get_cell_mask_crop(tile_origin, center, mask_label, crop_size):
     # Open (cached) HDF5 file
     key = str(mask_path)
     if key not in _h5_cache:
-        _h5_cache[key] = h5py.File(mask_path, 'r')
+        _h5_cache[key] = h5py.File(mask_path, "r")
     h5f = _h5_cache[key]
 
-    if 'masks' not in h5f:
+    if "masks" not in h5f:
         return None
 
-    label_img = h5f['masks']  # (H, W) uint32, lazy access
+    label_img = h5f["masks"]  # (H, W) uint32, lazy access
     h, w = label_img.shape
 
     cx, cy = int(round(center[0])), int(round(center[1]))
@@ -113,9 +113,9 @@ def get_cell_mask_crop(tile_origin, center, mask_label, crop_size):
     if binary.shape != (crop_size, crop_size):
         padded = np.zeros((crop_size, crop_size), dtype=np.uint8)
         # Offset within padded array
-        py = (half - cy + y0)
-        px = (half - cx + x0)
-        padded[py:py + binary.shape[0], px:px + binary.shape[1]] = binary
+        py = half - cy + y0
+        px = half - cx + x0
+        padded[py : py + binary.shape[0], px : px + binary.shape[1]] = binary
         binary = padded
 
     return binary
@@ -182,14 +182,19 @@ def parse_args():
     parser = argparse.ArgumentParser(
         description="Generate crop-image annotation HTML for Msln+ cells, stratified by tier."
     )
-    parser.add_argument('--detections', type=str, default=DEFAULT_DETECTIONS_PATH,
-                        help='Path to detections JSON')
-    parser.add_argument('--czi-path', type=str, default=DEFAULT_CZI_PATH,
-                        help='Path to CZI file')
-    parser.add_argument('--output-dir', type=str, default=DEFAULT_OUTPUT_DIR,
-                        help='Output directory for HTML crops')
-    parser.add_argument('--tiles-dir', type=str, default=DEFAULT_TILES_DIR,
-                        help='Path to tiles directory (for mask HDF5 files)')
+    parser.add_argument(
+        "--detections", type=str, default=DEFAULT_DETECTIONS_PATH, help="Path to detections JSON"
+    )
+    parser.add_argument("--czi-path", type=str, default=DEFAULT_CZI_PATH, help="Path to CZI file")
+    parser.add_argument(
+        "--output-dir", type=str, default=DEFAULT_OUTPUT_DIR, help="Output directory for HTML crops"
+    )
+    parser.add_argument(
+        "--tiles-dir",
+        type=str,
+        default=DEFAULT_TILES_DIR,
+        help="Path to tiles directory (for mask HDF5 files)",
+    )
     return parser.parse_args()
 
 
@@ -211,7 +216,7 @@ def main():
     # 2. Group by tier
     tier_groups = defaultdict(list)
     for det in all_dets:
-        tier = det.get('features', {}).get('msln_tier', 'unknown')
+        tier = det.get("features", {}).get("msln_tier", "unknown")
         tier_groups[tier].append(det)
 
     print("Tier breakdown:")
@@ -232,9 +237,7 @@ def main():
         selected.extend(sampled)
 
     # Sort by msln_density descending (highest density first)
-    selected.sort(
-        key=lambda d: -(d.get('features', {}).get('msln_density', 0) or 0)
-    )
+    selected.sort(key=lambda d: -(d.get("features", {}).get("msln_density", 0) or 0))
     print(f"Total selected: {len(selected):,}")
 
     # 4. Open CZI reader (on-demand, no RAM loading)
@@ -264,53 +267,49 @@ def main():
     skipped = 0
     for det in tqdm(selected, desc="Crops"):
         # Global pixel center
-        gc = det.get('global_center')
+        gc = det.get("global_center")
         if gc is None:
             skipped += 1
             continue
         global_cx, global_cy = gc[0], gc[1]
 
-        crop_norm = read_crop_from_czi(
-            reader, global_cx, global_cy, CROP_SIZE
-        )
+        crop_norm = read_crop_from_czi(reader, global_cx, global_cy, CROP_SIZE)
         if crop_norm is None:
             skipped += 1
             continue
 
         # Overlay dashed B/W cell contour from mask
-        mask_label = det.get('tile_mask_label') or det.get('mask_label')
-        tile_origin = det.get('tile_origin', [0, 0])
-        center_local = det.get('center', [global_cx - tile_origin[0], global_cy - tile_origin[1]])
+        mask_label = det.get("tile_mask_label") or det.get("mask_label")
+        tile_origin = det.get("tile_origin", [0, 0])
+        center_local = det.get("center", [global_cx - tile_origin[0], global_cy - tile_origin[1]])
         if mask_label is not None:
-            cell_mask = get_cell_mask_crop(
-                tile_origin, center_local, int(mask_label), CROP_SIZE
-            )
+            cell_mask = get_cell_mask_crop(tile_origin, center_local, int(mask_label), CROP_SIZE)
             if cell_mask is not None and cell_mask.any():
-                crop_norm = draw_mask_contour(
-                    crop_norm, cell_mask, bw_dashed=True, thickness=1
-                )
+                crop_norm = draw_mask_contour(crop_norm, cell_mask, bw_dashed=True, thickness=1)
 
         # Encode as base64 PNG
         pil_img = Image.fromarray(crop_norm)
-        img_b64, mime = image_to_base64(pil_img, format='PNG')
+        img_b64, mime = image_to_base64(pil_img, format="PNG")
 
-        features = det.get('features', {})
-        uid = det.get('uid', det.get('id', 'unknown'))
+        features = det.get("features", {})
+        uid = det.get("uid", det.get("id", "unknown"))
 
         stats = {
-            'tier': features.get('msln_tier', '?'),
-            'density': features.get('msln_density', 0),
-            'snr': features.get('msln_snr', 0),
-            'bg_sub': features.get('msln_bg_sub', 0),
-            'area_um2': features.get('area', 0) * (pixel_size_um ** 2),
+            "tier": features.get("msln_tier", "?"),
+            "density": features.get("msln_density", 0),
+            "snr": features.get("msln_snr", 0),
+            "bg_sub": features.get("msln_bg_sub", 0),
+            "area_um2": features.get("area", 0) * (pixel_size_um**2),
         }
 
-        samples.append({
-            'uid': uid,
-            'image': img_b64,
-            'mime_type': mime,
-            'stats': stats,
-        })
+        samples.append(
+            {
+                "uid": uid,
+                "image": img_b64,
+                "mime_type": mime,
+                "stats": stats,
+            }
+        )
 
     # Close cached HDF5 files
     for h5f in _h5_cache.values():
@@ -322,30 +321,30 @@ def main():
     # 6. Generate HTML using HTMLPageGenerator
     print(f"\nExporting HTML to {OUTPUT_DIR}...")
     generator = HTMLPageGenerator(
-        cell_type='msln',
-        experiment_name='msln_annotation',
-        storage_strategy='experiment',
+        cell_type="msln",
+        experiment_name="msln_annotation",
+        storage_strategy="experiment",
         samples_per_page=SAMPLES_PER_PAGE,
-        title='Msln+ Annotation',
+        title="Msln+ Annotation",
     )
 
     # Register custom formatters for our stats
-    generator.register_formatter('tier', lambda v: f"<b>{v}</b>")
-    generator.register_formatter('density', lambda v: f"Density: {v:.1f}")
-    generator.register_formatter('snr', lambda v: f"SNR: {v:.1f}x")
-    generator.register_formatter('bg_sub', lambda v: f"BG-sub: {v:.0f}")
-    generator.register_formatter('area_um2', lambda v: f"{v:.1f} &micro;m&sup2;")
+    generator.register_formatter("tier", lambda v: f"<b>{v}</b>")
+    generator.register_formatter("density", lambda v: f"Density: {v:.1f}")
+    generator.register_formatter("snr", lambda v: f"SNR: {v:.1f}x")
+    generator.register_formatter("bg_sub", lambda v: f"BG-sub: {v:.0f}")
+    generator.register_formatter("area_um2", lambda v: f"{v:.1f} &micro;m&sup2;")
 
     tier_counts = defaultdict(int)
     for s in samples:
-        tier_counts[s['stats']['tier']] += 1
+        tier_counts[s["stats"]["tier"]] += 1
     extra_stats = {f"{tier}": f"{count}" for tier, count in sorted(tier_counts.items())}
-    extra_stats['Total'] = str(len(samples))
+    extra_stats["Total"] = str(len(samples))
 
     total_samples, total_pages = generator.export_to_html(
         samples,
         OUTPUT_DIR,
-        page_prefix='msln_page',
+        page_prefix="msln_page",
         subtitle=f"Msln+ cells from WM PM ({CZI_PATH.stem})",
         extra_stats=extra_stats,
     )
@@ -355,10 +354,8 @@ def main():
         '<span style="color:#ffffff;font-weight:bold;font-size:12px">&#9608; Msln750</span>'
         '<span style="color:#6688ff;font-weight:bold;font-size:12px">&#9608; nuc488</span>'
     )
-    channel_group = (
-        f'<div class="stats-group" style="gap:8px">{channel_legend_items}</div>'
-    )
-    for html_file in OUTPUT_DIR.glob('*.html'):
+    channel_group = f'<div class="stats-group" style="gap:8px">{channel_legend_items}</div>'
+    for html_file in OUTPUT_DIR.glob("*.html"):
         text = html_file.read_text()
         # Insert legend into the stats-row, before the Import button
         text = text.replace(
@@ -372,5 +369,5 @@ def main():
     print(f"Open: {OUTPUT_DIR / 'index.html'}")
 
 
-if __name__ == '__main__':
+if __name__ == "__main__":
     main()

@@ -25,33 +25,49 @@ import argparse
 import json
 import pickle
 import sys
-import warnings
 from pathlib import Path
 
 import numpy as np
 from scipy.spatial import cKDTree
 from sklearn.ensemble import RandomForestClassifier
 from sklearn.metrics import (
-    classification_report,
-    confusion_matrix,
     f1_score,
     roc_auc_score,
 )
 from sklearn.model_selection import StratifiedKFold
 
-from segmentation.utils.logging import get_logger, setup_logging
 from segmentation.utils.json_utils import atomic_json_dump, fast_json_load
+from segmentation.utils.logging import get_logger, setup_logging
 
 log = get_logger(__name__)
 
 # Morph features available in unfiltered detections
 MORPH_FEATURES = [
-    "area", "aspect_ratio", "blue_mean", "blue_std", "circularity",
-    "dark_fraction", "dark_region_fraction", "eccentricity", "elongation",
-    "equiv_diameter", "extent", "gray_mean", "gray_std", "green_mean",
-    "green_std", "hue_mean", "intensity_variance", "nuclear_complexity",
-    "perimeter", "red_mean", "red_std", "relative_brightness",
-    "saturation_mean", "solidity", "value_mean",
+    "area",
+    "aspect_ratio",
+    "blue_mean",
+    "blue_std",
+    "circularity",
+    "dark_fraction",
+    "dark_region_fraction",
+    "eccentricity",
+    "elongation",
+    "equiv_diameter",
+    "extent",
+    "gray_mean",
+    "gray_std",
+    "green_mean",
+    "green_std",
+    "hue_mean",
+    "intensity_variance",
+    "nuclear_complexity",
+    "perimeter",
+    "red_mean",
+    "red_std",
+    "relative_brightness",
+    "saturation_mean",
+    "solidity",
+    "value_mean",
 ]
 
 # Extra top-level features useful for classification
@@ -64,9 +80,9 @@ def parse_slide_metadata(slide_name):
     Format: 2025_11_18_{Sex}{Trt}{Rep} e.g. 2025_11_18_FGC1
     """
     tag = slide_name.split("_")[-1]  # e.g. FGC1
-    sex = tag[0]         # F or M
-    trt = tag[1:3]       # GC or HU
-    rep = tag[3:]         # 1-4
+    sex = tag[0]  # F or M
+    trt = tag[1:3]  # GC or HU
+    rep = tag[3:]  # 1-4
     return {"sex": sex, "treatment": trt, "replicate": rep}
 
 
@@ -99,6 +115,7 @@ def get_feature_names():
 # Step 1: Train
 # ---------------------------------------------------------------------------
 
+
 def train_classifier(annotations_path, unfiltered_dir, output_dir):
     """Train RF classifier from annotations + unfiltered detection features."""
     log.info("=== TRAIN ===")
@@ -112,8 +129,10 @@ def train_classifier(annotations_path, unfiltered_dir, output_dir):
     mk_uids = set(annot.get("mk", []))
     all_annotated = rbc_uids | other_uids | mk_uids
 
-    log.info(f"Annotations: {len(rbc_uids)} RBC, {len(other_uids)} other, "
-             f"{len(mk_uids)} MK = {len(all_annotated)} total")
+    log.info(
+        f"Annotations: {len(rbc_uids)} RBC, {len(other_uids)} other, "
+        f"{len(mk_uids)} MK = {len(all_annotated)} total"
+    )
 
     # Find annotated detections across unfiltered files
     X_list = []
@@ -231,10 +250,7 @@ def train_classifier(annotations_path, unfiltered_dir, output_dir):
         "cv_auc_mean": float(np.mean(cv_aucs)),
         "cv_auc_std": float(np.std(cv_aucs)),
         "feature_names": feature_names,
-        "feature_importances": {
-            feature_names[i]: float(importances[i])
-            for i in imp_order[:15]
-        },
+        "feature_importances": {feature_names[i]: float(importances[i]) for i in imp_order[:15]},
     }
     atomic_json_dump(metrics, str(output_dir / "rbc_classifier_metrics.json"))
 
@@ -244,6 +260,7 @@ def train_classifier(annotations_path, unfiltered_dir, output_dir):
 # ---------------------------------------------------------------------------
 # Step 2: Score
 # ---------------------------------------------------------------------------
+
 
 def score_detections(model_path, unfiltered_dir, output_dir, score_threshold=0.5):
     """Score all detections one slide at a time. Save scored results."""
@@ -289,15 +306,17 @@ def score_detections(model_path, unfiltered_dir, output_dir, score_threshold=0.5
             rbc_score = float(probs[j])
             if rbc_score >= score_threshold:
                 n_above += 1
-                scored.append({
-                    "uid": det["uid"],
-                    "slide": slide,
-                    "center_x": det["center_x"],
-                    "center_y": det["center_y"],
-                    "area_um2": det.get("area_um2", 0),
-                    "mk_score": det.get("mk_score", 0),
-                    "rbc_score": rbc_score,
-                })
+                scored.append(
+                    {
+                        "uid": det["uid"],
+                        "slide": slide,
+                        "center_x": det["center_x"],
+                        "center_y": det["center_y"],
+                        "area_um2": det.get("area_um2", 0),
+                        "mk_score": det.get("mk_score", 0),
+                        "rbc_score": rbc_score,
+                    }
+                )
 
         all_slide_stats[slide] = {
             "total": len(detections),
@@ -324,6 +343,7 @@ def score_detections(model_path, unfiltered_dir, output_dir, score_threshold=0.5
 # Step 3: Spatial analysis
 # ---------------------------------------------------------------------------
 
+
 def load_bone_regions(bone_regions_path):
     """Load bone region polygons. Returns dict: (slide, bone) -> Path object."""
     from matplotlib.path import Path as MplPath
@@ -347,8 +367,9 @@ def load_bone_regions(bone_regions_path):
     return regions
 
 
-def spatial_analysis(output_dir, mk_detections_path, tissue_areas_path=None,
-                     bone_regions_path=None):
+def spatial_analysis(
+    output_dir, mk_detections_path, tissue_areas_path=None, bone_regions_path=None
+):
     """Compute MK-to-RBC spatial metrics per slide/bone."""
     log.info("=== SPATIAL ANALYSIS ===")
 
@@ -375,8 +396,10 @@ def spatial_analysis(output_dir, mk_detections_path, tissue_areas_path=None,
             for bone_name, bone_info in entry.get("bones", {}).items():
                 ta = bone_info.get("tissue_area_mm2", 0)
                 tissue_areas[(slide, bone_name)] = ta
-        log.info(f"  Loaded tissue areas for {len(tissue_areas)} regions, "
-                 f"pixel_size={pixel_size_um} um/px")
+        log.info(
+            f"  Loaded tissue areas for {len(tissue_areas)} regions, "
+            f"pixel_size={pixel_size_um} um/px"
+        )
 
     # Index MKs by slide
     mks_by_slide = {}
@@ -418,10 +441,12 @@ def spatial_analysis(output_dir, mk_detections_path, tissue_areas_path=None,
             rbcs_by_bone[bone].append(rbc)
 
         n_assigned = len(rbcs_by_bone["femur"]) + len(rbcs_by_bone["humerus"])
-        log.info(f"  {slide}: {len(rbc_dets)} RBCs total, "
-                 f"{n_assigned} assigned to bones "
-                 f"(F={len(rbcs_by_bone['femur'])}, "
-                 f"H={len(rbcs_by_bone['humerus'])})")
+        log.info(
+            f"  {slide}: {len(rbc_dets)} RBCs total, "
+            f"{n_assigned} assigned to bones "
+            f"(F={len(rbcs_by_bone['femur'])}, "
+            f"H={len(rbcs_by_bone['humerus'])})"
+        )
 
         # Get MKs for this slide
         slide_mks = mks_by_slide.get(slide, [])
@@ -440,14 +465,11 @@ def spatial_analysis(output_dir, mk_detections_path, tissue_areas_path=None,
             bone_rbcs = rbcs_by_bone.get(bone, [])
 
             if not bone_mks or not bone_rbcs:
-                log.info(f"    {bone}: {len(bone_mks)} MKs, "
-                         f"{len(bone_rbcs)} RBCs — skipping")
+                log.info(f"    {bone}: {len(bone_mks)} MKs, " f"{len(bone_rbcs)} RBCs — skipping")
                 continue
 
-            mk_xy = np.array([[m["center_x"], m["center_y"]]
-                              for m in bone_mks])
-            rbc_xy = np.array([[r["center_x"], r["center_y"]]
-                               for r in bone_rbcs])
+            mk_xy = np.array([[m["center_x"], m["center_y"]] for m in bone_mks])
+            rbc_xy = np.array([[r["center_x"], r["center_y"]] for r in bone_rbcs])
             rbc_tree = cKDTree(rbc_xy)
 
             # MK-to-nearest-RBC distance (in pixels -> um)
@@ -475,12 +497,10 @@ def spatial_analysis(output_dir, mk_detections_path, tissue_areas_path=None,
                 "n_rbc": len(bone_rbcs),
                 "tissue_area_mm2": tissue_area_mm2,
                 "rbc_density_per_mm2": (
-                    len(bone_rbcs) / tissue_area_mm2
-                    if tissue_area_mm2 > 0 else 0
+                    len(bone_rbcs) / tissue_area_mm2 if tissue_area_mm2 > 0 else 0
                 ),
                 "mk_density_per_mm2": (
-                    len(bone_mks) / tissue_area_mm2
-                    if tissue_area_mm2 > 0 else 0
+                    len(bone_mks) / tissue_area_mm2 if tissue_area_mm2 > 0 else 0
                 ),
                 # MK-to-RBC distance stats (um)
                 "mk_rbc_dist_mean_um": float(np.mean(dists_um)),
@@ -496,8 +516,7 @@ def spatial_analysis(output_dir, mk_detections_path, tissue_areas_path=None,
                 "mk_rbc_coloc_100um": coloc_100,
                 "mk_rbc_coloc_200um": coloc_200,
                 # MK area (reference)
-                "mk_area_mean_um2": float(np.mean(
-                    [m["area_um2"] for m in bone_mks])),
+                "mk_area_mean_um2": float(np.mean([m["area_um2"] for m in bone_mks])),
             }
             results.append(row)
 
@@ -515,6 +534,7 @@ def spatial_analysis(output_dir, mk_detections_path, tissue_areas_path=None,
     # Also save as CSV for easy analysis
     if results:
         import csv
+
         csv_path = output_dir / "rbc_spatial_results.csv"
         with open(csv_path, "w", newline="") as f:
             writer = csv.DictWriter(f, fieldnames=results[0].keys())
@@ -529,6 +549,7 @@ def spatial_analysis(output_dir, mk_detections_path, tissue_areas_path=None,
 # ---------------------------------------------------------------------------
 # Step 4: ANOVA
 # ---------------------------------------------------------------------------
+
 
 def run_anova(output_dir):
     """Run 2×2×2 ANOVA (sex × treatment × bone) on spatial metrics."""
@@ -582,8 +603,7 @@ def run_anova(output_dir):
         # Group means
         for (sex, trt, bone), grp in df.groupby(["sex", "treatment", "bone"]):
             vals = grp[metric].values
-            log.info(f"    {sex}{trt} {bone}: "
-                     f"mean={np.mean(vals):.1f}, n={len(vals)}")
+            log.info(f"    {sex}{trt} {bone}: " f"mean={np.mean(vals):.1f}, n={len(vals)}")
 
         # 3-way ANOVA via statsmodels if available
         try:
@@ -604,17 +624,18 @@ def run_anova(output_dir):
                 eta2 = ss / total_ss if total_ss > 0 else 0
 
                 sig = "***" if p < 0.001 else "**" if p < 0.01 else "*" if p < 0.05 else ""
-                log.info(f"    {effect}: F={f_val:.2f}, p={p:.4f}, "
-                         f"η²={eta2:.3f} {sig}")
+                log.info(f"    {effect}: F={f_val:.2f}, p={p:.4f}, " f"η²={eta2:.3f} {sig}")
 
-                anova_results.append({
-                    "metric": metric,
-                    "effect": str(effect),
-                    "F": float(f_val) if not np.isnan(f_val) else 0,
-                    "p": float(p) if not np.isnan(p) else 1,
-                    "eta_squared": float(eta2),
-                    "significant": p < 0.05,
-                })
+                anova_results.append(
+                    {
+                        "metric": metric,
+                        "effect": str(effect),
+                        "F": float(f_val) if not np.isnan(f_val) else 0,
+                        "p": float(p) if not np.isnan(p) else 1,
+                        "eta_squared": float(eta2),
+                        "significant": p < 0.05,
+                    }
+                )
 
         except ImportError:
             log.warning("  statsmodels not available — skipping full ANOVA")
@@ -631,6 +652,7 @@ def run_anova(output_dir):
 
         try:
             import csv
+
             csv_path = output_dir / "rbc_anova_results.csv"
             with open(csv_path, "w", newline="") as f:
                 writer = csv.DictWriter(f, fieldnames=anova_results[0].keys())
@@ -647,34 +669,39 @@ def run_anova(output_dir):
 # Main
 # ---------------------------------------------------------------------------
 
+
 def main():
     parser = argparse.ArgumentParser(
         description="RBC vascularization analysis for MK HU project",
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
-    parser.add_argument("--train", action="store_true",
-                        help="Train RF classifier from annotations")
-    parser.add_argument("--score", action="store_true",
-                        help="Score all detections with trained classifier")
-    parser.add_argument("--analyze", action="store_true",
-                        help="Run spatial analysis (MK-RBC distances)")
-    parser.add_argument("--report", action="store_true",
-                        help="Run ANOVA on spatial results")
+    parser.add_argument("--train", action="store_true", help="Train RF classifier from annotations")
+    parser.add_argument(
+        "--score", action="store_true", help="Score all detections with trained classifier"
+    )
+    parser.add_argument(
+        "--analyze", action="store_true", help="Run spatial analysis (MK-RBC distances)"
+    )
+    parser.add_argument("--report", action="store_true", help="Run ANOVA on spatial results")
 
-    parser.add_argument("--annotations", type=str,
-                        help="Path to rbc_annotations.json")
-    parser.add_argument("--unfiltered-dir", type=str,
-                        help="Dir with *_full_unfiltered.json")
-    parser.add_argument("--mk-detections", type=str,
-                        help="Path to curated MK detections JSON")
-    parser.add_argument("--tissue-areas", type=str, default=None,
-                        help="Path to tissue_areas_by_bone.json")
-    parser.add_argument("--bone-regions", type=str, default=None,
-                        help="Path to bone_regions.json for RBC bone assignment")
-    parser.add_argument("--output-dir", type=str, required=True,
-                        help="Output directory for all results")
-    parser.add_argument("--score-threshold", type=float, default=0.5,
-                        help="RBC score threshold (default: 0.5)")
+    parser.add_argument("--annotations", type=str, help="Path to rbc_annotations.json")
+    parser.add_argument("--unfiltered-dir", type=str, help="Dir with *_full_unfiltered.json")
+    parser.add_argument("--mk-detections", type=str, help="Path to curated MK detections JSON")
+    parser.add_argument(
+        "--tissue-areas", type=str, default=None, help="Path to tissue_areas_by_bone.json"
+    )
+    parser.add_argument(
+        "--bone-regions",
+        type=str,
+        default=None,
+        help="Path to bone_regions.json for RBC bone assignment",
+    )
+    parser.add_argument(
+        "--output-dir", type=str, required=True, help="Output directory for all results"
+    )
+    parser.add_argument(
+        "--score-threshold", type=float, default=0.5, help="RBC score threshold (default: 0.5)"
+    )
 
     args = parser.parse_args()
     setup_logging(level="INFO")

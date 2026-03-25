@@ -56,14 +56,14 @@ _BASE_MARKER_COLORS = [(255, 50, 50), (50, 255, 50), (50, 50, 255)]
 
 def build_marker_colors(marker_map):
     """Build marker_class → RGB color dict from marker_map."""
-    colors = {'multi': (255, 170, 0), 'none': (128, 128, 128)}
+    colors = {"multi": (255, 170, 0), "none": (128, 128, 128)}
     for i, name in enumerate(marker_map.keys()):
         colors[name] = _BASE_MARKER_COLORS[i] if i < len(_BASE_MARKER_COLORS) else (200, 200, 200)
     return colors
 
 
-_MARKER_HTML_COLORS = ['#ff3333', '#33cc33', '#3333ff']
-_MARKER_CSS_NAMES = ['red', 'green', 'blue']
+_MARKER_HTML_COLORS = ["#ff3333", "#33cc33", "#3333ff"]
+_MARKER_CSS_NAMES = ["red", "green", "blue"]
 
 
 def _build_marker_legend(marker_map):
@@ -73,9 +73,9 @@ def _build_marker_legend(marker_map):
         if i < len(_MARKER_HTML_COLORS):
             parts.append(
                 f'<span style="color:{_MARKER_HTML_COLORS[i]}">'
-                f'{_MARKER_CSS_NAMES[i]}={name}</span>'
+                f"{_MARKER_CSS_NAMES[i]}={name}</span>"
             )
-    return '\n'.join(parts)
+    return "\n".join(parts)
 
 
 def pct_norm(img):
@@ -112,23 +112,34 @@ def draw_dashed_contours(img, contours, color=None, thickness=1, dash_len=6, gap
         cycle = dash_len + gap_len
         for i, pt in enumerate(all_pts):
             if (i % cycle) < dash_len:
-                cv2.circle(img, tuple(pt), 0, (0, 0, 0), thickness)       # black dash
+                cv2.circle(img, tuple(pt), 0, (0, 0, 0), thickness)  # black dash
             else:
                 cv2.circle(img, tuple(pt), 0, (255, 255, 255), thickness)  # white dash
 
 
-def render_islet_card(islet_id, cells, masks, tile_vis, tile_x, tile_y,
-                      tile_h, tile_w, pixel_size, signal_per_cell,
-                      marker_colors, marker_map):
+def render_islet_card(
+    islet_id,
+    cells,
+    masks,
+    tile_vis,
+    tile_x,
+    tile_y,
+    tile_h,
+    tile_w,
+    pixel_size,
+    signal_per_cell,
+    marker_colors,
+    marker_map,
+):
     """Render a single islet card and return HTML string, or None if empty."""
     cell_info = []
     mask_labels = []
     for d in cells:
-        gc = d.get('global_center', [0, 0])
+        gc = d.get("global_center", [0, 0])
         cx_rel = gc[0] - tile_x
         cy_rel = gc[1] - tile_y
-        ml = d.get('mask_label')
-        cell_info.append((cx_rel, cy_rel, ml, d.get('marker_class', 'none')))
+        ml = d.get("mask_label")
+        cell_info.append((cx_rel, cy_rel, ml, d.get("marker_class", "none")))
         if ml is not None and ml > 0:
             mask_labels.append(ml)
 
@@ -168,7 +179,7 @@ def render_islet_card(islet_id, cells, masks, tile_vis, tile_x, tile_y,
     contours, _ = cv2.findContours(boundary_crop, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
     cv2.drawContours(crop, contours, -1, PINK, 2, cv2.LINE_AA)
 
-    _, buf = cv2.imencode('.png', cv2.cvtColor(crop, cv2.COLOR_RGB2BGR))
+    _, buf = cv2.imencode(".png", cv2.cvtColor(crop, cv2.COLOR_RGB2BGR))
     b64 = base64.b64encode(buf).decode()
 
     n = len(cells)
@@ -176,18 +187,24 @@ def render_islet_card(islet_id, cells, masks, tile_vis, tile_x, tile_y,
 
     # Count per marker class dynamically
     marker_names = list(marker_map.keys())
-    marker_counts = {name: sum(1 for d in cells if d.get('marker_class') == name) for name in marker_names}
-    n_multi = sum(1 for d in cells if d.get('marker_class') == 'multi')
+    marker_counts = {
+        name: sum(1 for d in cells if d.get("marker_class") == name) for name in marker_names
+    }
+    n_multi = sum(1 for d in cells if d.get("marker_class") == "multi")
 
     total = max(n, 1)
     bar_parts = []
     for i, name in enumerate(marker_names):
         cnt = marker_counts[name]
         if cnt > 0:
-            html_color = _MARKER_HTML_COLORS[i] if i < len(_MARKER_HTML_COLORS) else '#cccccc'
-            bar_parts.append(f'<div style="width:{100*cnt/total:.0f}%;background:{html_color}" title="{name} {cnt}"></div>')
+            html_color = _MARKER_HTML_COLORS[i] if i < len(_MARKER_HTML_COLORS) else "#cccccc"
+            bar_parts.append(
+                f'<div style="width:{100*cnt/total:.0f}%;background:{html_color}" title="{name} {cnt}"></div>'
+            )
     if n_multi > 0:
-        bar_parts.append(f'<div style="width:{100*n_multi/total:.0f}%;background:#ffaa00" title="multi {n_multi}"></div>')
+        bar_parts.append(
+            f'<div style="width:{100*n_multi/total:.0f}%;background:#ffaa00" title="multi {n_multi}"></div>'
+        )
     bar = (
         f'<div style="display:flex;height:8px;width:100%;border-radius:4px;'
         f'overflow:hidden;margin:4px 0">{"".join(bar_parts)}</div>'
@@ -196,13 +213,15 @@ def render_islet_card(islet_id, cells, masks, tile_vis, tile_x, tile_y,
     # Build marker count labels
     count_spans = []
     for i, name in enumerate(marker_names):
-        html_color = _MARKER_HTML_COLORS[i] if i < len(_MARKER_HTML_COLORS) else '#cccccc'
-        count_spans.append(f'<span style="color:{html_color}">{name[0]}:{marker_counts[name]}</span>')
+        html_color = _MARKER_HTML_COLORS[i] if i < len(_MARKER_HTML_COLORS) else "#cccccc"
+        count_spans.append(
+            f'<span style="color:{html_color}">{name[0]}:{marker_counts[name]}</span>'
+        )
     count_spans.append(f'<span style="color:#ffaa00">m:{n_multi}</span>')
-    counts_html = '\n            '.join(count_spans)
+    counts_html = "\n            ".join(count_spans)
 
     spc = signal_per_cell
-    return f'''
+    return f"""
     <div style="display:inline-block;margin:10px;background:#111;border:2px solid #333;
          border-radius:8px;padding:8px;vertical-align:top;max-width:{crop.shape[1]+20}px">
         <img src="data:image/png;base64,{b64}" style="display:block;border-radius:4px">
@@ -211,59 +230,87 @@ def render_islet_card(islet_id, cells, masks, tile_vis, tile_x, tile_y,
             {bar}
             {counts_html}
         </div>
-    </div>'''
+    </div>"""
 
 
 # ---------------------------------------------------------------------------
 # Main
 # ---------------------------------------------------------------------------
 
+
 def main():
     parser = argparse.ArgumentParser(
-        description='Generate HTML islet overview from completed run directory'
+        description="Generate HTML islet overview from completed run directory"
     )
-    parser.add_argument('--run-dir', required=True,
-                        help='Path to existing run output directory')
-    parser.add_argument('--czi-path', required=True,
-                        help='Path to CZI file')
-    parser.add_argument('--eps-um', type=float, default=50.0,
-                        help='DBSCAN epsilon in micrometers (default: 50)')
-    parser.add_argument('--min-samples', type=int, default=5,
-                        help='DBSCAN min_samples (default: 5)')
-    parser.add_argument('--marker-only', action='store_true',
-                        help='Only show marker-positive cells (exclude none/gray)')
-    parser.add_argument('--display-channels', type=str, default='2,3,5',
-                        help='Comma-separated R,G,B channel indices for display (default: 2,3,5)')
-    parser.add_argument('--marker-channels', type=str, default='gcg:2,ins:3,sst:5',
-                        help='Marker-to-channel mapping (default: gcg:2,ins:3,sst:5)')
-    parser.add_argument('--marker-top-pct', type=float, default=5,
-                        help='For percentile-method channels, classify the top N%% '
-                             'as marker-positive (default 5)')
-    parser.add_argument('--marker-pct-channels', type=str, default='sst',
-                        help='Comma-separated marker names using percentile thresholding '
-                             'instead of GMM (default: sst)')
-    parser.add_argument('--gmm-p-cutoff', type=float, default=0.75,
-                        help='GMM posterior probability cutoff for marker classification (default 0.75)')
-    parser.add_argument('--ratio-min', type=float, default=1.5,
-                        help='Dominant marker must be >= ratio_min * runner-up (default 1.5)')
+    parser.add_argument("--run-dir", required=True, help="Path to existing run output directory")
+    parser.add_argument("--czi-path", required=True, help="Path to CZI file")
+    parser.add_argument(
+        "--eps-um", type=float, default=50.0, help="DBSCAN epsilon in micrometers (default: 50)"
+    )
+    parser.add_argument(
+        "--min-samples", type=int, default=5, help="DBSCAN min_samples (default: 5)"
+    )
+    parser.add_argument(
+        "--marker-only",
+        action="store_true",
+        help="Only show marker-positive cells (exclude none/gray)",
+    )
+    parser.add_argument(
+        "--display-channels",
+        type=str,
+        default="2,3,5",
+        help="Comma-separated R,G,B channel indices for display (default: 2,3,5)",
+    )
+    parser.add_argument(
+        "--marker-channels",
+        type=str,
+        default="gcg:2,ins:3,sst:5",
+        help="Marker-to-channel mapping (default: gcg:2,ins:3,sst:5)",
+    )
+    parser.add_argument(
+        "--marker-top-pct",
+        type=float,
+        default=5,
+        help="For percentile-method channels, classify the top N%% "
+        "as marker-positive (default 5)",
+    )
+    parser.add_argument(
+        "--marker-pct-channels",
+        type=str,
+        default="sst",
+        help="Comma-separated marker names using percentile thresholding "
+        "instead of GMM (default: sst)",
+    )
+    parser.add_argument(
+        "--gmm-p-cutoff",
+        type=float,
+        default=0.75,
+        help="GMM posterior probability cutoff for marker classification (default 0.75)",
+    )
+    parser.add_argument(
+        "--ratio-min",
+        type=float,
+        default=1.5,
+        help="Dominant marker must be >= ratio_min * runner-up (default 1.5)",
+    )
     args = parser.parse_args()
 
-    logging.basicConfig(level=logging.INFO, format='%(levelname)s: %(message)s')
+    logging.basicConfig(level=logging.INFO, format="%(levelname)s: %(message)s")
 
     run_dir = Path(args.run_dir)
     czi_path = Path(args.czi_path)
 
     # Parse channel config
-    display_chs = [int(x.strip()) for x in args.display_channels.split(',')]
+    display_chs = [int(x.strip()) for x in args.display_channels.split(",")]
     marker_map = {}
-    for pair in args.marker_channels.split(','):
-        name, ch = pair.strip().split(':')
+    for pair in args.marker_channels.split(","):
+        name, ch = pair.strip().split(":")
         marker_map[name.strip()] = int(ch.strip())
 
     # ---------------------------------------------------------------
     # 1. Load global detections
     # ---------------------------------------------------------------
-    det_path = run_dir / 'islet_detections.json'
+    det_path = run_dir / "islet_detections.json"
     if not det_path.exists():
         logger.error(f"Detections not found: {det_path}")
         sys.exit(1)
@@ -280,22 +327,33 @@ def main():
     # ---------------------------------------------------------------
     # 2. Compute marker thresholds and classify
     # ---------------------------------------------------------------
-    _pct_channels = set(s.strip() for s in args.marker_pct_channels.split(',')) if args.marker_pct_channels else set()
+    _pct_channels = (
+        set(s.strip() for s in args.marker_pct_channels.split(","))
+        if args.marker_pct_channels
+        else set()
+    )
     marker_thresholds = compute_islet_marker_thresholds(
-        all_dets, marker_map=marker_map,
-        marker_top_pct=args.marker_top_pct, pct_channels=_pct_channels,
-        gmm_p_cutoff=args.gmm_p_cutoff, ratio_min=args.ratio_min,
+        all_dets,
+        marker_map=marker_map,
+        marker_top_pct=args.marker_top_pct,
+        pct_channels=_pct_channels,
+        gmm_p_cutoff=args.gmm_p_cutoff,
+        ratio_min=args.ratio_min,
     )
     if marker_thresholds is None:
-        print(f"WARNING: Only {len(all_dets)} detections — too few for marker thresholds. "
-              "All cells will be shown as 'none' (gray).")
+        print(
+            f"WARNING: Only {len(all_dets)} detections — too few for marker thresholds. "
+            "All cells will be shown as 'none' (gray)."
+        )
         if args.marker_only:
             print("ERROR: --marker-only requires marker thresholds (need >= 10 detections).")
             sys.exit(1)
     marker_counts = {}
     for det in all_dets:
-        mc, _ = classify_islet_marker(det.get('features', {}), marker_thresholds, marker_map=marker_map)
-        det['marker_class'] = mc
+        mc, _ = classify_islet_marker(
+            det.get("features", {}), marker_thresholds, marker_map=marker_map
+        )
+        det["marker_class"] = mc
         marker_counts[mc] = marker_counts.get(mc, 0) + 1
     print(f"Marker classification: {marker_counts}")
 
@@ -321,10 +379,10 @@ def main():
     coords = []
     coord_det_indices = []  # maps coord row -> index in all_dets
     for i, det in enumerate(all_dets):
-        mc = det.get('marker_class', 'none')
-        if args.marker_only and mc == 'none':
+        mc = det.get("marker_class", "none")
+        if args.marker_only and mc == "none":
             continue
-        gc = det.get('global_center')
+        gc = det.get("global_center")
         if gc is None:
             continue
         coords.append([gc[0] * pixel_size, gc[1] * pixel_size])  # convert to um
@@ -335,14 +393,16 @@ def main():
         sys.exit(0)
 
     coords_um = np.array(coords)
-    print(f"Running DBSCAN on {len(coords_um)} cells (eps={args.eps_um} um, min_samples={args.min_samples})...")
+    print(
+        f"Running DBSCAN on {len(coords_um)} cells (eps={args.eps_um} um, min_samples={args.min_samples})..."
+    )
 
     dbscan = DBSCAN(eps=args.eps_um, min_samples=args.min_samples)
     cluster_labels = dbscan.fit_predict(coords_um)
 
     # Assign islet_id to detections (-1 = noise/unclustered)
     for row_idx, det_idx in enumerate(coord_det_indices):
-        all_dets[det_idx]['islet_id'] = int(cluster_labels[row_idx])
+        all_dets[det_idx]["islet_id"] = int(cluster_labels[row_idx])
 
     n_clusters = len(set(cluster_labels)) - (1 if -1 in cluster_labels else 0)
     n_noise = int((cluster_labels == -1).sum())
@@ -362,9 +422,9 @@ def main():
     # Sum normalized marker signals across all markers from marker_map
     marker_arrays = {}
     for mname, ch_idx in marker_map.items():
-        marker_arrays[mname] = np.array([
-            d.get('features', {}).get(f'ch{ch_idx}_mean', 0) for d in all_dets
-        ])
+        marker_arrays[mname] = np.array(
+            [d.get("features", {}).get(f"ch{ch_idx}_mean", 0) for d in all_dets]
+        )
     if marker_arrays:
         total_n = sum(norm_arr(arr) for arr in marker_arrays.values())
     else:
@@ -373,7 +433,7 @@ def main():
     # Group by islet_id (exclude noise = -1)
     islet_groups = {}  # islet_id -> [det_index, ...]
     for i, det in enumerate(all_dets):
-        iid = det.get('islet_id')
+        iid = det.get("islet_id")
         if iid is None or iid < 0:
             continue
         islet_groups.setdefault(iid, []).append(i)
@@ -385,11 +445,14 @@ def main():
     # Otsu filter — guard against edge cases
     spc_arr = np.array(list(islet_sig_per_cell.values()))
     if len(spc_arr) < 5:
-        logger.warning(f"Only {len(spc_arr)} islets — too few for reliable Otsu threshold, keeping all")
+        logger.warning(
+            f"Only {len(spc_arr)} islets — too few for reliable Otsu threshold, keeping all"
+        )
         otsu_spc = 0
     else:
         try:
             from skimage.filters import threshold_otsu
+
             otsu_spc = threshold_otsu(spc_arr)
         except (ValueError, IndexError):
             # Empty array, all values identical, or single islet
@@ -406,13 +469,15 @@ def main():
     print(f"Rejected: {len(rejected)} ({n_cells_rejected} cells)")
 
     if len(true_islets) == 0:
-        logger.warning("No islets passed Otsu filter — try lowering --min-samples or check detections")
+        logger.warning(
+            "No islets passed Otsu filter — try lowering --min-samples or check detections"
+        )
         sys.exit(0)
 
     # ---------------------------------------------------------------
     # 6. Determine which tiles each islet spans
     # ---------------------------------------------------------------
-    tiles_dir = run_dir / 'tiles'
+    tiles_dir = run_dir / "tiles"
     if not tiles_dir.exists():
         logger.error(f"Tiles directory not found: {tiles_dir}")
         sys.exit(1)
@@ -420,9 +485,9 @@ def main():
     # Discover available tiles
     tile_info = {}  # (tile_x, tile_y) -> tile_dir path
     for td in sorted(tiles_dir.iterdir()):
-        if not td.is_dir() or not td.name.startswith('tile_'):
+        if not td.is_dir() or not td.name.startswith("tile_"):
             continue
-        parts = td.name.split('_')
+        parts = td.name.split("_")
         if len(parts) < 3:
             continue
         try:
@@ -440,9 +505,9 @@ def main():
     # Map each detection to its tile by checking global_center
     # We need to know tile dimensions to do this; load first tile's masks for shape
     first_tile_dir = next(iter(tile_info.values()))
-    mask_path = first_tile_dir / 'islet_masks.h5'
-    with h5py.File(mask_path, 'r') as f:
-        first_masks = f['masks'][:]
+    mask_path = first_tile_dir / "islet_masks.h5"
+    with h5py.File(mask_path, "r") as f:
+        first_masks = f["masks"][:]
     tile_h, tile_w = first_masks.shape[:2]
     del first_masks
 
@@ -454,7 +519,7 @@ def main():
         cell_coords = []
         for det_idx in islet_groups[iid]:
             det = all_dets[det_idx]
-            gc = det.get('global_center', [0, 0])
+            gc = det.get("global_center", [0, 0])
             cell_coords.append(gc)
         if not cell_coords:
             continue
@@ -466,7 +531,7 @@ def main():
         # Score each candidate tile: min distance from islet bbox to tile edge
         best_tile = None
         best_margin = -1
-        for (tx, ty) in tile_info:
+        for tx, ty in tile_info:
             # Check tile fully contains the islet bbox
             margin_left = islet_xmin - tx
             margin_right = (tx + tile_w) - islet_xmax
@@ -479,30 +544,32 @@ def main():
         if best_tile is not None:
             islet_tile_map[iid] = best_tile
             if best_margin < 0:
-                logger.warning(f"Islet {iid}: no tile fully contains it "
-                               f"(best margin={best_margin:.0f}px). "
-                               f"May be clipped at tile edge.")
+                logger.warning(
+                    f"Islet {iid}: no tile fully contains it "
+                    f"(best margin={best_margin:.0f}px). "
+                    f"May be clipped at tile edge."
+                )
 
     # ---------------------------------------------------------------
     # 7. Load masks + build visuals per tile (only tiles with true islets)
     # ---------------------------------------------------------------
     needed_tiles = set(islet_tile_map.values())
-    tile_masks_cache = {}   # (tx, ty) -> masks array
-    tile_vis_cache = {}     # (tx, ty) -> percentile-normalized RGB
+    tile_masks_cache = {}  # (tx, ty) -> masks array
+    tile_vis_cache = {}  # (tx, ty) -> percentile-normalized RGB
 
-    for (tx, ty) in sorted(needed_tiles):
+    for tx, ty in sorted(needed_tiles):
         td = tile_info.get((tx, ty))
         if td is None:
             logger.warning(f"Tile ({tx}, {ty}) not found in tiles directory — skipping")
             continue
 
         # Load masks
-        mask_path = td / 'islet_masks.h5'
+        mask_path = td / "islet_masks.h5"
         if not mask_path.exists():
             logger.warning(f"No masks file in {td} — skipping")
             continue
-        with h5py.File(mask_path, 'r') as f:
-            masks = f['masks'][:]
+        with h5py.File(mask_path, "r") as f:
+            masks = f["masks"][:]
         tile_masks_cache[(tx, ty)] = masks
 
         # Build RGB from display channels
@@ -512,7 +579,7 @@ def main():
         rgb_channels = []
         for ch in display_chs[:3]:
             if ch in ch_data:
-                rgb_channels.append(ch_data[ch][rel_ty:rel_ty+th, rel_tx:rel_tx+tw])
+                rgb_channels.append(ch_data[ch][rel_ty : rel_ty + th, rel_tx : rel_tx + tw])
             else:
                 rgb_channels.append(np.zeros((th, tw), dtype=np.uint16))
         while len(rgb_channels) < 3:
@@ -525,7 +592,7 @@ def main():
     # ---------------------------------------------------------------
     # 8. Render HTML cards for each true islet
     # ---------------------------------------------------------------
-    cards_html = ''
+    cards_html = ""
     rendered_count = 0
     skipped_count = 0
     mc_colors = build_marker_colors(marker_map)
@@ -550,7 +617,7 @@ def main():
         all_islet_cells = [all_dets[i] for i in islet_groups[iid]]
         cells = []
         for det in all_islet_cells:
-            gc = det.get('global_center', [0, 0])
+            gc = det.get("global_center", [0, 0])
             if tx <= gc[0] < tx + tw and ty <= gc[1] < ty + th:
                 cells.append(det)
         if not cells:
@@ -559,8 +626,18 @@ def main():
         spc = islet_sig_per_cell[iid]
 
         card = render_islet_card(
-            iid, cells, masks, tile_vis, tx, ty, th, tw, pixel_size, spc,
-            marker_colors=mc_colors, marker_map=marker_map,
+            iid,
+            cells,
+            masks,
+            tile_vis,
+            tx,
+            ty,
+            th,
+            tw,
+            pixel_size,
+            spc,
+            marker_colors=mc_colors,
+            marker_map=marker_map,
         )
         if card is not None:
             cards_html += card
@@ -576,7 +653,7 @@ def main():
     slide_name = czi_path.stem
     n_true = len(true_islets)
 
-    html = f'''<!DOCTYPE html>
+    html = f"""<!DOCTYPE html>
 <html><head><meta charset="utf-8"><title>Islet Overview</title>
 <style>body {{ background: #000; margin: 20px; }}
 h1 {{ color: white; font-family: sans-serif; }}
@@ -590,15 +667,15 @@ DBSCAN eps={args.eps_um} um, min_samples={args.min_samples} |
 {_build_marker_legend(marker_map)}
 <span style="color:#ffaa00">orange=multi</span> (dashed)</div>
 {cards_html}
-</body></html>'''
+</body></html>"""
 
-    html_dir = run_dir / 'html'
+    html_dir = run_dir / "html"
     html_dir.mkdir(parents=True, exist_ok=True)
-    out_path = html_dir / 'islet_overview.html'
-    with open(out_path, 'w') as f:
+    out_path = html_dir / "islet_overview.html"
+    with open(out_path, "w") as f:
         f.write(html)
     print(f"Saved: {out_path} ({len(html)/1024/1024:.1f} MB)")
 
 
-if __name__ == '__main__':
+if __name__ == "__main__":
     main()

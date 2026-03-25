@@ -23,9 +23,8 @@ Usage:
 
 import argparse
 import json
-import sys
-from pathlib import Path
 from datetime import datetime
+from pathlib import Path
 
 import numpy as np
 
@@ -57,7 +56,7 @@ def build_rescued_samples(base_dir, annotations_path, full_detections_path):
     base_dir = Path(base_dir)
 
     # Load full detections to get valid UIDs for rescued slides
-    print(f"Loading full detections to get valid UIDs...")
+    print("Loading full detections to get valid UIDs...")
     with open(full_detections_path) as f:
         full_dets = json.load(f)
     valid_uids = set()
@@ -119,7 +118,7 @@ def build_rescued_samples(base_dir, annotations_path, full_detections_path):
                     "det_id": det.get("id", ""),
                     "features": features,
                     "area_px": area_px,
-                    "area_um2": area_px * (PIXEL_SIZE_UM ** 2),
+                    "area_um2": area_px * (PIXEL_SIZE_UM**2),
                     "uid": uid,
                     "label": label,
                     "cell_type": "mk",
@@ -165,22 +164,32 @@ def merge_sam2(samples, embeddings_path):
         print(f"  WARNING: {n_missing} samples still have zero SAM2 embeddings")
 
 
-def train_classifier(samples, output_dir, n_estimators=500, feature_set="all",
-                     exclude_color=False):
+def train_classifier(samples, output_dir, n_estimators=500, feature_set="all", exclude_color=False):
     """Train RF classifier on unified training data."""
     from sklearn.ensemble import RandomForestClassifier
+    from sklearn.metrics import classification_report, confusion_matrix
     from sklearn.model_selection import (
         StratifiedKFold,
         cross_val_score,
         train_test_split,
     )
-    from sklearn.metrics import classification_report, confusion_matrix
 
     # Color/intensity features derived from RGB crop rendering — not biologically meaningful
     COLOR_FEATURES = {
-        "red_mean", "red_std", "green_mean", "green_std", "blue_mean", "blue_std",
-        "hue_mean", "saturation_mean", "value_mean", "gray_mean", "gray_std",
-        "relative_brightness", "intensity_variance", "dark_fraction",
+        "red_mean",
+        "red_std",
+        "green_mean",
+        "green_std",
+        "blue_mean",
+        "blue_std",
+        "hue_mean",
+        "saturation_mean",
+        "value_mean",
+        "gray_mean",
+        "gray_std",
+        "relative_brightness",
+        "intensity_variance",
+        "dark_fraction",
         "dark_region_fraction",
     }
 
@@ -195,16 +204,17 @@ def train_classifier(samples, output_dir, n_estimators=500, feature_set="all",
     # Filter by feature set
     if feature_set == "morph":
         feature_names = sorted(
-            f for f in all_feature_names
+            f
+            for f in all_feature_names
             if not f.startswith("sam2_")
             and not f.startswith("resnet_")
             and not f.startswith("dinov2_")
         )
     elif feature_set == "morph_sam2":
         feature_names = sorted(
-            f for f in all_feature_names
-            if not f.startswith("resnet_")
-            and not f.startswith("dinov2_")
+            f
+            for f in all_feature_names
+            if not f.startswith("resnet_") and not f.startswith("dinov2_")
         )
     else:  # "all"
         feature_names = sorted(all_feature_names)
@@ -329,14 +339,12 @@ def train_classifier(samples, output_dir, n_estimators=500, feature_set="all",
         "sample_ids": [s["uid"] for s in samples],
         "training_samples": samples,
         "source": {
-            "original_training": len([
-                s for s in samples
-                if not any(rs in s["slide"] for rs in ["FGC2", "FGC4", "MHU4"])
-            ]),
-            "rescued_training": len([
-                s for s in samples
-                if any(rs in s["slide"] for rs in ["FGC2", "FGC4", "MHU4"])
-            ]),
+            "original_training": len(
+                [s for s in samples if not any(rs in s["slide"] for rs in ["FGC2", "FGC4", "MHU4"])]
+            ),
+            "rescued_training": len(
+                [s for s in samples if any(rs in s["slide"] for rs in ["FGC2", "FGC4", "MHU4"])]
+            ),
             "timestamp": timestamp,
         },
     }
@@ -392,14 +400,14 @@ def score_detections(classifier_path, detections_path, output_path=None):
             det["mk_score_old"] = old_score
 
     # Summary
-    print(f"\nScore distribution:")
+    print("\nScore distribution:")
     for threshold in [0.50, 0.60, 0.70, 0.80, 0.90]:
         n_above = int((scores >= threshold).sum())
         print(f"  >= {threshold:.2f}: {n_above} ({100 * n_above / len(scores):.1f}%)")
 
     # Per-slide summary at 0.80
     slides = sorted(set(d["slide"] for d in detections))
-    print(f"\nPer-slide (at >= 0.80):")
+    print("\nPer-slide (at >= 0.80):")
     for slide in slides:
         slide_scores = [d["mk_score"] for d in detections if d["slide"] == slide]
         n_above = sum(1 for s in slide_scores if s >= 0.80)
@@ -422,62 +430,82 @@ def main():
     sub = parser.add_subparsers(dest="command")
 
     # Train command
-    tr = sub.add_parser(
-        "train", help="Build unified training set and train classifier"
-    )
+    tr = sub.add_parser("train", help="Build unified training set and train classifier")
     tr.add_argument(
-        "--original-training", type=Path, required=True,
+        "--original-training",
+        type=Path,
+        required=True,
         help="Original training data JSON (mk_training_data_2026-02-11.json)",
     )
     tr.add_argument(
-        "--rescued-base-dir", type=Path, required=True,
+        "--rescued-base-dir",
+        type=Path,
+        required=True,
         help="Base dir with rescued slide tile features ({slide}/mk/tiles/)",
     )
     tr.add_argument(
-        "--rescued-annotations", type=Path, required=True,
+        "--rescued-annotations",
+        type=Path,
+        required=True,
         help="Rescued slide annotations JSON",
     )
     tr.add_argument(
-        "--full-detections", type=Path, required=True,
+        "--full-detections",
+        type=Path,
+        required=True,
         help="Full detection JSON (all_mks_with_rejected3_full.json) — "
-             "used to filter rescued tile features to final detections only",
+        "used to filter rescued tile features to final detections only",
     )
     tr.add_argument(
-        "--sam2-embeddings", type=Path, nargs="+", default=None,
+        "--sam2-embeddings",
+        type=Path,
+        nargs="+",
+        default=None,
         help="SAM2 embeddings JSON(s) from extract_sam2_embeddings.py "
-             "(multiple files will be merged)",
+        "(multiple files will be merged)",
     )
     tr.add_argument(
-        "--output-dir", type=Path, default=Path("retrained_classifier"),
+        "--output-dir",
+        type=Path,
+        default=Path("retrained_classifier"),
         help="Output directory for classifier + training data",
     )
     tr.add_argument(
-        "--n-estimators", type=int, default=500,
+        "--n-estimators",
+        type=int,
+        default=500,
         help="Number of RF trees (default: 500)",
     )
     tr.add_argument(
-        "--feature-set", choices=["all", "morph", "morph_sam2"], default="all",
+        "--feature-set",
+        choices=["all", "morph", "morph_sam2"],
+        default="all",
         help="Feature subset to use (default: all)",
     )
     tr.add_argument(
-        "--exclude-color", action="store_true",
+        "--exclude-color",
+        action="store_true",
         help="Exclude RGB/HSV crop color features (red_mean, hue_mean, etc.)",
     )
 
     # Score command
-    sc = sub.add_parser(
-        "score", help="Re-score all detections with trained classifier"
-    )
+    sc = sub.add_parser("score", help="Re-score all detections with trained classifier")
     sc.add_argument(
-        "--classifier", type=Path, required=True,
+        "--classifier",
+        type=Path,
+        required=True,
         help="Trained classifier PKL",
     )
     sc.add_argument(
-        "--full-detections", type=Path, required=True,
+        "--full-detections",
+        type=Path,
+        required=True,
         help="Full detection JSON to re-score",
     )
     sc.add_argument(
-        "--output", type=Path, default=None,
+        "--output",
+        type=Path,
+        default=None,
         help="Output path (default: *_rescored.json)",
     )
 
@@ -489,7 +517,8 @@ def main():
 
         # Build rescued samples from tile features + annotations
         rescued = build_rescued_samples(
-            args.rescued_base_dir, args.rescued_annotations,
+            args.rescued_base_dir,
+            args.rescued_annotations,
             args.full_detections,
         )
 
@@ -504,9 +533,7 @@ def main():
                 seen.add(s["uid"])
                 deduped.append(s)
         if len(deduped) < len(all_samples):
-            print(
-                f"\nDeduplicated: {len(all_samples)} -> {len(deduped)} samples"
-            )
+            print(f"\nDeduplicated: {len(all_samples)} -> {len(deduped)} samples")
         all_samples = deduped
 
         # Merge SAM2 embeddings if provided
@@ -522,9 +549,8 @@ def main():
 
             # Write merged to temp file for merge_sam2()
             import tempfile
-            with tempfile.NamedTemporaryFile(
-                mode="w", suffix=".json", delete=False
-            ) as tmp:
+
+            with tempfile.NamedTemporaryFile(mode="w", suffix=".json", delete=False) as tmp:
                 json.dump(merged_emb, tmp)
                 tmp_path = tmp.name
             merge_sam2(all_samples, tmp_path)

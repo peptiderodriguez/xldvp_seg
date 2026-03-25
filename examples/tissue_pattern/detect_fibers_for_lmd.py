@@ -23,16 +23,13 @@ Usage:
 """
 
 import argparse
-import json
-import os
-import sys
 from pathlib import Path
 
 import numpy as np
 from scipy.ndimage import label as ndlabel
 from skimage.filters import meijering
-from skimage.measure import regionprops, find_contours
-from skimage.morphology import remove_small_objects, binary_closing, disk
+from skimage.measure import find_contours, regionprops
+from skimage.morphology import binary_closing, disk, remove_small_objects
 
 from segmentation.io.czi_loader import CZILoader
 from segmentation.utils.json_utils import atomic_json_dump
@@ -61,8 +58,10 @@ def load_channel_reduced(czi_path, channel_idx, scale_factor, scene=0):
     full_w, full_h = loader.mosaic_size
     mosaic_x, mosaic_y = loader.mosaic_origin
 
-    logger.info(f"  Mosaic: {full_w}x{full_h} px at ({mosaic_x},{mosaic_y}), "
-                f"pixel_size={pixel_size_um:.4f} um/px")
+    logger.info(
+        f"  Mosaic: {full_w}x{full_h} px at ({mosaic_x},{mosaic_y}), "
+        f"pixel_size={pixel_size_um:.4f} um/px"
+    )
     logger.info(f"  Loading channel {channel_idx} to RAM...")
     loader.load_channel(channel_idx)
     full_img = loader.get_channel_data(channel_idx)
@@ -82,8 +81,7 @@ def load_channel_reduced(czi_path, channel_idx, scale_factor, scene=0):
     return img, pixel_size_um, mosaic_x, mosaic_y, full_h, full_w
 
 
-def detect_fibers(channel, pixel_size_um, scale_factor, fiber_width_um=(2, 10),
-                  min_area_um2=50):
+def detect_fibers(channel, pixel_size_um, scale_factor, fiber_width_um=(2, 10), min_area_um2=50):
     """Detect filamentous structures using Meijering ridge filter.
 
     Args:
@@ -103,8 +101,10 @@ def detect_fibers(channel, pixel_size_um, scale_factor, fiber_width_um=(2, 10),
     max_sigma = fiber_width_um[1] / reduced_pixel_size / 2
     sigmas = np.linspace(max(0.5, min_sigma), max(1.0, max_sigma), 8)
 
-    logger.info(f"  Fiber width: {fiber_width_um[0]}-{fiber_width_um[1]} um "
-                f"= {min_sigma:.1f}-{max_sigma:.1f} px (reduced res)")
+    logger.info(
+        f"  Fiber width: {fiber_width_um[0]}-{fiber_width_um[1]} um "
+        f"= {min_sigma:.1f}-{max_sigma:.1f} px (reduced res)"
+    )
     logger.info(f"  Meijering sigmas: {[f'{s:.1f}' for s in sigmas]}")
 
     # Percentile normalize to float [0, 1] (exclude zeros = CZI padding)
@@ -129,6 +129,7 @@ def detect_fibers(channel, pixel_size_um, scale_factor, fiber_width_um=(2, 10),
         return np.zeros_like(channel, dtype=np.int32), 0
 
     from skimage.filters import threshold_otsu
+
     thresh = threshold_otsu(ridge_valid)
     logger.info(f"  Ridge Otsu threshold: {thresh:.4f}")
 
@@ -139,7 +140,7 @@ def detect_fibers(channel, pixel_size_um, scale_factor, fiber_width_um=(2, 10),
     binary = binary_closing(binary, disk(close_radius))
 
     # Remove small objects
-    min_area_px = int(min_area_um2 / (reduced_pixel_size ** 2))
+    min_area_px = int(min_area_um2 / (reduced_pixel_size**2))
     min_area_px = max(min_area_px, 10)
     binary = remove_small_objects(binary, min_size=min_area_px)
 
@@ -149,9 +150,17 @@ def detect_fibers(channel, pixel_size_um, scale_factor, fiber_width_um=(2, 10),
     return labeled, n_regions
 
 
-def regions_to_detections(labeled, n_regions, pixel_size_um, scale_factor,
-                          mosaic_x, mosaic_y, slide_name,
-                          target_area_um2=200, min_piece_area_um2=50):
+def regions_to_detections(
+    labeled,
+    n_regions,
+    pixel_size_um,
+    scale_factor,
+    mosaic_x,
+    mosaic_y,
+    slide_name,
+    target_area_um2=200,
+    min_piece_area_um2=50,
+):
     """Convert labeled regions to detection dicts with contours in global coordinates.
 
     Large regions are split into equal-area pieces via watershed.
@@ -180,7 +189,7 @@ def regions_to_detections(labeled, n_regions, pixel_size_um, scale_factor,
     det_id = 0
 
     for prop in props:
-        area_um2 = prop.area * (reduced_pixel_size ** 2)
+        area_um2 = prop.area * (reduced_pixel_size**2)
         if area_um2 < min_piece_area_um2:
             continue
 
@@ -194,6 +203,7 @@ def regions_to_detections(labeled, n_regions, pixel_size_um, scale_factor,
             # Watershed split
             dist = distance_transform_edt(region_mask)
             from skimage.feature import peak_local_max
+
             min_dist = max(3, int(np.sqrt(prop.area / n_pieces) / 2))
             coords = peak_local_max(dist, min_distance=min_dist, num_peaks=n_pieces)
             if len(coords) < 2:
@@ -216,7 +226,7 @@ def regions_to_detections(labeled, n_regions, pixel_size_um, scale_factor,
                 piece_mask = region_mask
 
             piece_area_px = piece_mask.sum()
-            piece_area_um2 = piece_area_px * (reduced_pixel_size ** 2)
+            piece_area_um2 = piece_area_px * (reduced_pixel_size**2)
             if piece_area_um2 < min_piece_area_um2:
                 continue
 
@@ -245,49 +255,59 @@ def regions_to_detections(labeled, n_regions, pixel_size_um, scale_factor,
             uid = f"{slide_name}_nfl_{int(cx_global)}_{int(cy_global)}"
 
             det = {
-                'id': uid,
-                'uid': uid,
-                'center': [cx_global - mosaic_x, cy_global - mosaic_y],  # tile-local (legacy)
-                'global_center': [cx_global, cy_global],
-                'global_center_um': [cx_global * pixel_size_um, cy_global * pixel_size_um],
-                'slide_name': slide_name,
-                'pixel_size_um': pixel_size_um,
-                'outer_contour_global': contour_global,
-                'contour_dilated_px': contour_global,  # alias for compatibility
-                'features': {
-                    'area': int(piece_area_px * (scale_inv ** 2)),  # full-res px
-                    'area_um2': float(piece_area_um2),
-                    'pixel_size_um': pixel_size_um,
-                    'n_pieces': n_pieces,
-                    'detection_method': 'meijering_ridge',
+                "id": uid,
+                "uid": uid,
+                "center": [cx_global - mosaic_x, cy_global - mosaic_y],  # tile-local (legacy)
+                "global_center": [cx_global, cy_global],
+                "global_center_um": [cx_global * pixel_size_um, cy_global * pixel_size_um],
+                "slide_name": slide_name,
+                "pixel_size_um": pixel_size_um,
+                "outer_contour_global": contour_global,
+                "contour_dilated_px": contour_global,  # alias for compatibility
+                "features": {
+                    "area": int(piece_area_px * (scale_inv**2)),  # full-res px
+                    "area_um2": float(piece_area_um2),
+                    "pixel_size_um": pixel_size_um,
+                    "n_pieces": n_pieces,
+                    "detection_method": "meijering_ridge",
                 },
-                'rf_prediction': None,  # no classifier
+                "rf_prediction": None,  # no classifier
             }
             detections.append(det)
 
-    logger.info(f"  Generated {len(detections)} fiber pieces "
-                f"({det_id} from {len(props)} regions)")
+    logger.info(
+        f"  Generated {len(detections)} fiber pieces " f"({det_id} from {len(props)} regions)"
+    )
     return detections
 
 
 def main():
     parser = argparse.ArgumentParser(
-        description='Detect nerve fibers from CZI and split into LMD pieces')
-    parser.add_argument('--czi-path', required=True, help='CZI file path')
-    parser.add_argument('--channel', type=int, default=None,
-                        help='Channel index for fiber detection')
-    parser.add_argument('--channel-spec', default=None,
-                        help='Channel spec (e.g., "detect=NfL" or "detect=750")')
-    parser.add_argument('--output-dir', required=True, help='Output directory')
-    parser.add_argument('--scale-factor', type=float, default=0.25,
-                        help='CZI downsample factor (default: 1/4)')
-    parser.add_argument('--fiber-width-um', default='1,30',
-                        help='Min,max fiber width in um (default: 1,30 — covers thin axons to thick bundles)')
-    parser.add_argument('--target-area-um2', type=float, default=200,
-                        help='Target piece area in um² (default: 200)')
-    parser.add_argument('--min-area-um2', type=float, default=50,
-                        help='Minimum region area in um² (default: 50)')
-    parser.add_argument('--scene', type=int, default=0, help='CZI scene index')
+        description="Detect nerve fibers from CZI and split into LMD pieces"
+    )
+    parser.add_argument("--czi-path", required=True, help="CZI file path")
+    parser.add_argument(
+        "--channel", type=int, default=None, help="Channel index for fiber detection"
+    )
+    parser.add_argument(
+        "--channel-spec", default=None, help='Channel spec (e.g., "detect=NfL" or "detect=750")'
+    )
+    parser.add_argument("--output-dir", required=True, help="Output directory")
+    parser.add_argument(
+        "--scale-factor", type=float, default=0.25, help="CZI downsample factor (default: 1/4)"
+    )
+    parser.add_argument(
+        "--fiber-width-um",
+        default="1,30",
+        help="Min,max fiber width in um (default: 1,30 — covers thin axons to thick bundles)",
+    )
+    parser.add_argument(
+        "--target-area-um2", type=float, default=200, help="Target piece area in um² (default: 200)"
+    )
+    parser.add_argument(
+        "--min-area-um2", type=float, default=50, help="Minimum region area in um² (default: 50)"
+    )
+    parser.add_argument("--scene", type=int, default=0, help="CZI scene index")
     args = parser.parse_args()
 
     output_dir = Path(args.output_dir)
@@ -299,7 +319,7 @@ def main():
     elif args.channel_spec:
         # Parse "detect=750" or "detect=NfL" and resolve via CZILoader
         loader = CZILoader(args.czi_path)
-        spec_val = args.channel_spec.split('=', 1)[-1].strip()
+        spec_val = args.channel_spec.split("=", 1)[-1].strip()
         # Try as integer index first
         try:
             channel_idx = int(spec_val)
@@ -311,10 +331,11 @@ def main():
             except (ValueError, AttributeError):
                 # Try as marker name from filename
                 from segmentation.io.czi_loader import parse_markers_from_filename
+
                 markers = parse_markers_from_filename(Path(args.czi_path).name)
                 channel_idx = None
                 for m in markers:
-                    if spec_val.lower() in m.get('name', '').lower():
+                    if spec_val.lower() in m.get("name", "").lower():
                         channel_idx = markers.index(m)
                         break
                 if channel_idx is None:
@@ -324,46 +345,58 @@ def main():
         parser.error("Provide --channel or --channel-spec")
 
     # Parse fiber width
-    fw = [float(x) for x in args.fiber_width_um.split(',')]
+    fw = [float(x) for x in args.fiber_width_um.split(",")]
     fiber_width_um = (fw[0], fw[1]) if len(fw) >= 2 else (fw[0], fw[0] * 5)
 
     # Load channel
     channel, pixel_size_um, mx, my, full_h, full_w = load_channel_reduced(
-        args.czi_path, channel_idx, args.scale_factor, scene=args.scene)
+        args.czi_path, channel_idx, args.scale_factor, scene=args.scene
+    )
 
     slide_name = Path(args.czi_path).stem
 
     # Detect fibers
     labeled, n_regions = detect_fibers(
-        channel, pixel_size_um, args.scale_factor,
+        channel,
+        pixel_size_um,
+        args.scale_factor,
         fiber_width_um=fiber_width_um,
-        min_area_um2=args.min_area_um2)
+        min_area_um2=args.min_area_um2,
+    )
 
     if n_regions == 0:
-        logger.warning("No fiber regions detected. Try adjusting --fiber-width-um or --min-area-um2.")
+        logger.warning(
+            "No fiber regions detected. Try adjusting --fiber-width-um or --min-area-um2."
+        )
         return
 
     # Convert to detections
     detections = regions_to_detections(
-        labeled, n_regions, pixel_size_um, args.scale_factor,
-        mx, my, slide_name,
+        labeled,
+        n_regions,
+        pixel_size_um,
+        args.scale_factor,
+        mx,
+        my,
+        slide_name,
         target_area_um2=args.target_area_um2,
-        min_piece_area_um2=args.min_area_um2)
+        min_piece_area_um2=args.min_area_um2,
+    )
 
     # Save
-    output_path = output_dir / 'nfl_fiber_pieces.json'
+    output_path = output_dir / "nfl_fiber_pieces.json"
     atomic_json_dump(detections, output_path)
     logger.info(f"Saved {len(detections)} fiber pieces to {output_path}")
 
     # Summary
-    areas = [d['features']['area_um2'] for d in detections]
+    areas = [d["features"]["area_um2"] for d in detections]
     logger.info(f"  Area range: {min(areas):.0f} - {max(areas):.0f} um²")
     logger.info(f"  Median area: {np.median(areas):.0f} um²")
-    xs = [d['global_center'][0] for d in detections]
-    ys = [d['global_center'][1] for d in detections]
+    xs = [d["global_center"][0] for d in detections]
+    ys = [d["global_center"][1] for d in detections]
     logger.info(f"  X range: {min(xs):.0f} - {max(xs):.0f} (CZI width: {full_w})")
     logger.info(f"  Y range: {min(ys):.0f} - {max(ys):.0f} (CZI height: {full_h})")
 
 
-if __name__ == '__main__':
+if __name__ == "__main__":
     main()

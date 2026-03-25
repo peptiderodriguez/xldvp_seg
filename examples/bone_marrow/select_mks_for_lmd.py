@@ -10,14 +10,17 @@ Usage:
 
 import argparse
 import re
-import sys
 from pathlib import Path
 
 import numpy as np
 
 from segmentation.lmd.selection import select_cells_for_lmd
-from segmentation.lmd.well_plate import generate_multiplate_wells, insert_empty_wells, WELLS_PER_PLATE
-from segmentation.utils.json_utils import fast_json_load, atomic_json_dump
+from segmentation.lmd.well_plate import (
+    WELLS_PER_PLATE,
+    generate_multiplate_wells,
+    insert_empty_wells,
+)
+from segmentation.utils.json_utils import atomic_json_dump, fast_json_load
 
 DATASET_DIR = Path("/path/to/data/bm_lmd_feb2026/mk_clf084_dataset")
 BONE_JSON = DATASET_DIR / "all_mks_with_rejected3.json"
@@ -35,11 +38,16 @@ def parse_slide_metadata(slide: str) -> dict:
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--score-threshold", type=float, default=0.80)
-    parser.add_argument("--target-area", type=float, default=10000.0,
-                        help="Target total area per replicate in um^2")
+    parser.add_argument(
+        "--target-area", type=float, default=10000.0, help="Target total area per replicate in um^2"
+    )
     parser.add_argument("--max-replicates", type=int, default=4)
-    parser.add_argument("--min-replicate-fraction", type=float, default=0.5,
-                        help="Minimum fraction of target area to keep a partial replicate")
+    parser.add_argument(
+        "--min-replicate-fraction",
+        type=float,
+        default=0.5,
+        help="Minimum fraction of target area to keep a partial replicate",
+    )
     parser.add_argument("--seed", type=int, default=42)
     parser.add_argument("--bone-json", type=Path, default=BONE_JSON)
     parser.add_argument("--output-dir", type=Path, default=DATASET_DIR / "lmd_selections")
@@ -59,12 +67,13 @@ def main():
         max_replicates=args.max_replicates,
         min_replicate_fraction=args.min_replicate_fraction,
         seed=args.seed,
-        exclude_fn=lambda d: (d.get("bone") is None
-                              or d["slide"] in EXCLUDE_SLIDES),
+        exclude_fn=lambda d: (d.get("bone") is None or d["slide"] in EXCLUDE_SLIDES),
     )
 
-    print(f"After score>={args.score_threshold} + exclusions + dedup: "
-          f"{summary['total_cells_filtered']} cells")
+    print(
+        f"After score>={args.score_threshold} + exclusions + dedup: "
+        f"{summary['total_cells_filtered']} cells"
+    )
 
     # Build per-group entries with MK-specific metadata
     group_entries = []
@@ -73,22 +82,26 @@ def main():
         rep_entries = []
         for i, rep in enumerate(gdata["replicates"], 1):
             rep_id = f"{slide.split('_')[-1]}_{bone}_rep{i}"
-            rep_entries.append({
-                "replicate_id": rep_id,
-                "n_cells": len(rep["uids"]),
-                "total_area_um2": rep["total_area_um2"],
-                "uids": rep["uids"],
-            })
+            rep_entries.append(
+                {
+                    "replicate_id": rep_id,
+                    "n_cells": len(rep["uids"]),
+                    "total_area_um2": rep["total_area_um2"],
+                    "uids": rep["uids"],
+                }
+            )
 
-        group_entries.append({
-            "slide": slide,
-            "bone": bone,
-            "sex": meta["sex"],
-            "treatment": meta["treatment"],
-            "replicates": rep_entries,
-            "available_cells": gdata["available_cells"],
-            "unused_cells": gdata["unused_cells"],
-        })
+        group_entries.append(
+            {
+                "slide": slide,
+                "bone": bone,
+                "sex": meta["sex"],
+                "treatment": meta["treatment"],
+                "replicates": rep_entries,
+                "available_cells": gdata["available_cells"],
+                "unused_cells": gdata["unused_cells"],
+            }
+        )
 
     # Randomize order: slides shuffled, bones within each slide shuffled,
     # replicates within each bone shuffled — but all groups from same slide
@@ -120,8 +133,10 @@ def main():
     total_wells = total_reps + n_blanks
     if total_wells > WELLS_PER_PLATE:
         n_plates = -(-total_wells // WELLS_PER_PLATE)
-        print(f"NOTE: {total_wells} wells needed ({total_reps} samples + "
-              f"{n_blanks} blanks) — using {n_plates} plate(s)")
+        print(
+            f"NOTE: {total_wells} wells needed ({total_reps} samples + "
+            f"{n_blanks} blanks) — using {n_plates} plate(s)"
+        )
 
     plate_wells = generate_multiplate_wells(total_wells)
     _, blank_positions = insert_empty_wells(plate_wells, total_reps, empty_pct=10.0, seed=args.seed)
@@ -169,15 +184,16 @@ def main():
     all_wells = []
     for g in results:
         for rep in g["replicates"]:
-            all_wells.append({"well": rep["well"], "type": "sample",
-                              "group": g, "rep": rep})
+            all_wells.append({"well": rep["well"], "type": "sample", "group": g, "rep": rep})
     for well in blanks_list:
         all_wells.append({"well": well, "type": "blank"})
 
     all_wells.sort(key=lambda w: well_order[w["well"]])
 
     # Print summary table in plate order
-    print(f"\n{'Well':<6} {'Slide':<22} {'Bone':<9} {'Sex':>3} {'Tx':>3} {'RepID':<20} {'Cells':>5} {'Area':>8}")
+    print(
+        f"\n{'Well':<6} {'Slide':<22} {'Bone':<9} {'Sex':>3} {'Tx':>3} {'RepID':<20} {'Cells':>5} {'Area':>8}"
+    )
     print("-" * 85)
     current_slide = None
     for entry in all_wells:
@@ -189,13 +205,17 @@ def main():
                 if current_slide is not None:
                     print()
                 current_slide = g["slide"]
-            print(f"{rep['well']:<6} {g['slide']:<22} {g['bone']:<9} {g['sex']:>3} {g['treatment']:>3} "
-                  f"{rep['replicate_id']:<20} {rep['n_cells']:>5} {rep['total_area_um2']:>8.0f}")
+            print(
+                f"{rep['well']:<6} {g['slide']:<22} {g['bone']:<9} {g['sex']:>3} {g['treatment']:>3} "
+                f"{rep['replicate_id']:<20} {rep['n_cells']:>5} {rep['total_area_um2']:>8.0f}"
+            )
 
     print(f"\nTotal: {total_reps} samples + {n_blanks} blanks = {total_wells} wells")
-    print(f"  {summary['groups_with_max_reps']} groups with {args.max_replicates} reps, "
-          f"{summary['groups_with_fewer_reps']} with fewer, "
-          f"{summary['groups_with_no_reps']} with none")
+    print(
+        f"  {summary['groups_with_max_reps']} groups with {args.max_replicates} reps, "
+        f"{summary['groups_with_fewer_reps']} with fewer, "
+        f"{summary['groups_with_no_reps']} with none"
+    )
 
 
 if __name__ == "__main__":

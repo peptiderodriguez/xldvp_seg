@@ -19,6 +19,7 @@ Usage:
         --input /path/to/detections_msln_bg_subtracted.json \\
         --output /path/to/msln_annotation.html
 """
+
 import argparse
 import json
 import sys
@@ -26,35 +27,34 @@ from pathlib import Path
 
 import numpy as np
 
-
 DEFAULT_INPUT = (
-    '/path/to/output/psilo_output/tp_full/'
-    '20251114_Pdgfra546_Msln750_PM647_nuc488-EDFvar-1-stitch-1_20260223_094916_100pct/'
-    'detections_msln_bg_subtracted.json'
+    "/path/to/output/psilo_output/tp_full/"
+    "20251114_Pdgfra546_Msln750_PM647_nuc488-EDFvar-1-stitch-1_20260223_094916_100pct/"
+    "detections_msln_bg_subtracted.json"
 )
-DEFAULT_OUTPUT = '/path/to/output/brain_fish_output/msln_annotation.html'
+DEFAULT_OUTPUT = "/path/to/output/brain_fish_output/msln_annotation.html"
 
 
 def main():
-    parser = argparse.ArgumentParser(description='Generate Msln annotation HTML')
-    parser.add_argument('--input', default=DEFAULT_INPUT,
-                        help='Path to detections_msln_bg_subtracted.json')
-    parser.add_argument('--output', default=DEFAULT_OUTPUT,
-                        help='Output HTML path')
+    parser = argparse.ArgumentParser(description="Generate Msln annotation HTML")
+    parser.add_argument(
+        "--input", default=DEFAULT_INPUT, help="Path to detections_msln_bg_subtracted.json"
+    )
+    parser.add_argument("--output", default=DEFAULT_OUTPUT, help="Output HTML path")
     args = parser.parse_args()
 
     input_path = Path(args.input)
     output_path = Path(args.output)
 
     if not input_path.exists():
-        print(f'ERROR: Input not found: {input_path}', file=sys.stderr)
+        print(f"ERROR: Input not found: {input_path}", file=sys.stderr)
         sys.exit(1)
 
-    print(f'Loading {input_path} ...')
+    print(f"Loading {input_path} ...")
     with open(input_path) as f:
         detections = json.load(f)
 
-    print(f'  {len(detections)} detections loaded')
+    print(f"  {len(detections)} detections loaded")
 
     # Extract cell data
     uids = []
@@ -65,14 +65,14 @@ def main():
     tiers = []
 
     for det in detections:
-        uid = det.get('uid', '')
-        pos = det.get('global_center_um')
+        uid = det.get("uid", "")
+        pos = det.get("global_center_um")
         if pos is None or len(pos) != 2:
             continue
-        feat = det.get('features', {})
-        msln_tier = feat.get('msln_tier', '')
-        msln_snr = feat.get('msln_snr', 0.0)
-        msln_bg_sub = feat.get('msln_bg_sub', 0.0)
+        feat = det.get("features", {})
+        msln_tier = feat.get("msln_tier", "")
+        msln_snr = feat.get("msln_snr", 0.0)
+        msln_bg_sub = feat.get("msln_bg_sub", 0.0)
 
         if not np.isfinite(pos[0]) or not np.isfinite(pos[1]):
             continue
@@ -85,64 +85,84 @@ def main():
         tiers.append(msln_tier)
 
     n = len(uids)
-    print(f'  {n} valid cells extracted')
+    print(f"  {n} valid cells extracted")
 
     # Tier encoding: 0=Msln+(2-3x), 1=Msln++(3-4x), 2=Msln+++(>4x)
     tier_map = {
-        'Msln+ (2-3x)': 0,
-        'Msln++ (3-4x)': 1,
-        'Msln+++ (>4x)': 2,
+        "Msln+ (2-3x)": 0,
+        "Msln++ (3-4x)": 1,
+        "Msln+++ (>4x)": 2,
     }
     tier_indices = [tier_map.get(t, 0) for t in tiers]
 
     # Serialize positions as Float32Array (compact comma-separated)
-    x_str = ','.join(f'{v:.1f}' for v in xs)
-    y_str = ','.join(f'{v:.1f}' for v in ys)
-    snr_str = ','.join(f'{v:.2f}' for v in snrs)
-    bg_str = ','.join(f'{v:.1f}' for v in bg_subs)
-    tier_str = ','.join(str(t) for t in tier_indices)
+    x_str = ",".join(f"{v:.1f}" for v in xs)
+    y_str = ",".join(f"{v:.1f}" for v in ys)
+    snr_str = ",".join(f"{v:.2f}" for v in snrs)
+    bg_str = ",".join(f"{v:.1f}" for v in bg_subs)
+    tier_str = ",".join(str(t) for t in tier_indices)
     uid_json = json.dumps(uids)
 
     # Sort indices by SNR descending for sidebar table
     sorted_indices = sorted(range(n), key=lambda i: -snrs[i])
-    sorted_idx_str = ','.join(str(i) for i in sorted_indices)
+    sorted_idx_str = ",".join(str(i) for i in sorted_indices)
 
     # Counts per tier
     from collections import Counter
+
     tier_counts = Counter(tier_indices)
 
     # Spatial extent for initial view
     x_min, x_max = min(xs), max(xs)
     y_min, y_max = min(ys), max(ys)
 
-    print(f'  X range: {x_min:.1f} - {x_max:.1f} um')
-    print(f'  Y range: {y_min:.1f} - {y_max:.1f} um')
-    print(f'  Tiers: + = {tier_counts.get(0,0)}, ++ = {tier_counts.get(1,0)}, +++ = {tier_counts.get(2,0)}')
+    print(f"  X range: {x_min:.1f} - {x_max:.1f} um")
+    print(f"  Y range: {y_min:.1f} - {y_max:.1f} um")
+    print(
+        f"  Tiers: + = {tier_counts.get(0,0)}, ++ = {tier_counts.get(1,0)}, +++ = {tier_counts.get(2,0)}"
+    )
 
     html = _generate_html(
         n=n,
-        x_str=x_str, y_str=y_str,
-        snr_str=snr_str, bg_str=bg_str,
+        x_str=x_str,
+        y_str=y_str,
+        snr_str=snr_str,
+        bg_str=bg_str,
         tier_str=tier_str,
         uid_json=uid_json,
         sorted_idx_str=sorted_idx_str,
-        x_min=x_min, x_max=x_max,
-        y_min=y_min, y_max=y_max,
+        x_min=x_min,
+        x_max=x_max,
+        y_min=y_min,
+        y_max=y_max,
     )
 
     output_path.parent.mkdir(parents=True, exist_ok=True)
-    with open(output_path, 'w') as f:
+    with open(output_path, "w") as f:
         f.write(html)
 
     size_mb = output_path.stat().st_size / 1024 / 1024
-    print(f'  Written {output_path} ({size_mb:.1f} MB)')
+    print(f"  Written {output_path} ({size_mb:.1f} MB)")
 
 
-def _generate_html(*, n, x_str, y_str, snr_str, bg_str, tier_str,
-                   uid_json, sorted_idx_str, x_min, x_max, y_min, y_max):
+def _generate_html(
+    *,
+    n,
+    x_str,
+    y_str,
+    snr_str,
+    bg_str,
+    tier_str,
+    uid_json,
+    sorted_idx_str,
+    x_min,
+    x_max,
+    y_min,
+    y_max,
+):
     """Build the complete self-contained HTML string."""
 
-    return f'''<!DOCTYPE html>
+    return f"""<!DOCTYPE html>
 <html lang="en">
 <head>
 <meta charset="utf-8">
@@ -948,8 +968,8 @@ scheduleRedraw();
 
 </script>
 </body>
-</html>'''
+</html>"""
 
 
-if __name__ == '__main__':
+if __name__ == "__main__":
     main()

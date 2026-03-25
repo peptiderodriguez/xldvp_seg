@@ -3,6 +3,7 @@
 
 Generates an HTML visualization showing both overlaid on slide thumbnails.
 """
+
 import argparse
 import base64
 import io
@@ -29,7 +30,7 @@ def process_slide(czi_path, bone_regions, scale_factor=0.03):
         scaling = czi.get_scaling()
         if scaling and len(scaling) >= 2:
             pixel_size_um = scaling[0] * 1e6
-    except:
+    except Exception:
         pass
 
     # Read image
@@ -38,7 +39,7 @@ def process_slide(czi_path, bone_regions, scale_factor=0.03):
     full_width, full_height = bbox.w, bbox.h
 
     dims = czi.dims
-    is_rgb = 'A' in dims
+    is_rgb = "A" in dims
 
     if is_rgb:
         img = czi.read_mosaic(C=0, region=region, scale_factor=scale_factor)
@@ -102,9 +103,9 @@ def process_slide(czi_path, bone_regions, scale_factor=0.03):
 
     # Draw bone regions (thick, colored)
     if slide_name in bone_regions:
-        for bone, color in [('femur', (0, 100, 255)), ('humerus', (255, 100, 0))]:
-            if bone in bone_regions[slide_name] and 'vertices_px' in bone_regions[slide_name][bone]:
-                verts = bone_regions[slide_name][bone]['vertices_px']
+        for bone, color in [("femur", (0, 100, 255)), ("humerus", (255, 100, 0))]:
+            if bone in bone_regions[slide_name] and "vertices_px" in bone_regions[slide_name][bone]:
+                verts = bone_regions[slide_name][bone]["vertices_px"]
                 # Scale to thumbnail coordinates
                 scaled_verts = [(int(v[0] * scale_factor), int(v[1] * scale_factor)) for v in verts]
                 if len(scaled_verts) > 2:
@@ -112,21 +113,21 @@ def process_slide(czi_path, bone_regions, scale_factor=0.03):
                     # Label
                     cx = sum(v[0] for v in scaled_verts) // len(scaled_verts)
                     cy = sum(v[1] for v in scaled_verts) // len(scaled_verts)
-                    draw.text((cx-20, cy-10), bone.upper(), fill=color)
+                    draw.text((cx - 20, cy - 10), bone.upper(), fill=color)
 
     # Convert to base64
     buf = io.BytesIO()
-    pil_img.save(buf, format='JPEG', quality=85)
-    b64 = base64.b64encode(buf.getvalue()).decode('ascii')
+    pil_img.save(buf, format="JPEG", quality=85)
+    b64 = base64.b64encode(buf.getvalue()).decode("ascii")
 
     return {
-        'name': slide_name,
-        'image_b64': b64,
-        'width': pil_img.width,
-        'height': pil_img.height,
-        'full_width': full_width,
-        'full_height': full_height,
-        'threshold': float(threshold),
+        "name": slide_name,
+        "image_b64": b64,
+        "width": pil_img.width,
+        "height": pil_img.height,
+        "full_width": full_width,
+        "full_height": full_height,
+        "threshold": float(threshold),
     }
 
 
@@ -135,7 +136,7 @@ def generate_html(slides_data, output_path):
 
     slides_html = []
     for s in slides_data:
-        slides_html.append(f'''
+        slides_html.append(f"""
         <div class="slide-card">
             <div class="slide-header">{s['name']}</div>
             <img src="data:image/jpeg;base64,{s['image_b64']}"
@@ -145,9 +146,9 @@ def generate_html(slides_data, output_path):
                 {s['full_width']}x{s['full_height']} px
             </div>
         </div>
-        ''')
+        """)
 
-    html = f'''<!DOCTYPE html>
+    html = f"""<!DOCTYPE html>
 <html>
 <head>
 <meta charset="UTF-8">
@@ -212,9 +213,9 @@ h1 {{ text-align: center; margin-bottom: 10px; }}
 </p>
 </body>
 </html>
-'''
+"""
 
-    with open(output_path, 'w') as f:
+    with open(output_path, "w") as f:
         f.write(html)
 
     print(f"Wrote {output_path}")
@@ -222,19 +223,19 @@ h1 {{ text-align: center; margin-bottom: 10px; }}
 
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument('--czi-dir', type=Path, required=True)
-    parser.add_argument('--regions', type=Path, required=True)
-    parser.add_argument('--output', '-o', type=Path, required=True)
-    parser.add_argument('--scale-factor', type=float, default=0.03)
+    parser.add_argument("--czi-dir", type=Path, required=True)
+    parser.add_argument("--regions", type=Path, required=True)
+    parser.add_argument("--output", "-o", type=Path, required=True)
+    parser.add_argument("--scale-factor", type=float, default=0.03)
     args = parser.parse_args()
 
     # Load bone regions
     with open(args.regions) as f:
         regions_data = json.load(f)
-    bone_regions = regions_data.get('slides', regions_data)
+    bone_regions = regions_data.get("slides", regions_data)
 
     # Process slides
-    czi_files = sorted(args.czi_dir.glob('*.czi'))
+    czi_files = sorted(args.czi_dir.glob("*.czi"))
     print(f"Processing {len(czi_files)} slides...")
 
     slides_data = []
@@ -249,5 +250,5 @@ def main():
     generate_html(slides_data, args.output)
 
 
-if __name__ == '__main__':
+if __name__ == "__main__":
     main()

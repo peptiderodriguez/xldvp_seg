@@ -44,16 +44,15 @@ Annotation format (from HTML review):
 import argparse
 import json
 import logging
-import sys
 from pathlib import Path
-from typing import Dict, List, Any
+from typing import Any
 
 import numpy as np
 
 from segmentation.classification.vessel_detector_rf import (
-    VesselDetectorRF,
-    VESSEL_DETECTION_FEATURES,
     MINIMAL_DETECTION_FEATURES,
+    VESSEL_DETECTION_FEATURES,
+    VesselDetectorRF,
 )
 
 # =============================================================================
@@ -62,16 +61,12 @@ from segmentation.classification.vessel_detector_rf import (
 
 # Size class thresholds (in microns)
 SIZE_CLASS_THRESHOLDS = {
-    0: (0, 50),       # small: <50 um
-    1: (50, 200),     # medium: 50-200 um
-    2: (200, float('inf'))  # large: >200 um
+    0: (0, 50),  # small: <50 um
+    1: (50, 200),  # medium: 50-200 um
+    2: (200, float("inf")),  # large: >200 um
 }
 
-SIZE_CLASS_NAMES = {
-    0: 'small',
-    1: 'medium',
-    2: 'large'
-}
+SIZE_CLASS_NAMES = {0: "small", 1: "medium", 2: "large"}
 
 
 def get_size_class(diameter_um: float) -> int:
@@ -84,17 +79,17 @@ def get_size_class(diameter_um: float) -> int:
         return 2  # large
 
 
-def extract_diameter(detection: Dict) -> float:
+def extract_diameter(detection: dict) -> float:
     """Extract diameter from a detection dict."""
-    features = detection.get('features', detection)
+    features = detection.get("features", detection)
 
     # Try different possible field names for diameter
-    diameter = features.get('outer_diameter_um')
+    diameter = features.get("outer_diameter_um")
     if diameter is None:
-        diameter = features.get('diameter_um')
+        diameter = features.get("diameter_um")
     if diameter is None:
         # Fall back to estimating from area
-        area = features.get('outer_area_um2') or features.get('area')
+        area = features.get("outer_area_um2") or features.get("area")
         if area is not None and area > 0:
             diameter = 2 * np.sqrt(area / np.pi)
 
@@ -102,10 +97,8 @@ def extract_diameter(detection: Dict) -> float:
 
 
 def analyze_size_distribution(
-    diameters: np.ndarray,
-    labels: np.ndarray,
-    prefix: str = ""
-) -> Dict[str, Any]:
+    diameters: np.ndarray, labels: np.ndarray, prefix: str = ""
+) -> dict[str, Any]:
     """
     Analyze the size distribution of vessels.
 
@@ -122,13 +115,14 @@ def analyze_size_distribution(
     valid_labels = labels[valid_mask]
 
     if len(valid_diameters) == 0:
-        return {'warning': 'No valid diameter measurements found'}
+        return {"warning": "No valid diameter measurements found"}
 
     # Get size classes
     size_classes = np.array([get_size_class(d) for d in valid_diameters])
 
     # Count per class
     from collections import Counter
+
     class_counts = Counter(size_classes)
     total = len(size_classes)
 
@@ -146,9 +140,9 @@ def analyze_size_distribution(
         threshold = SIZE_CLASS_THRESHOLDS[class_id]
 
         distribution[class_name] = {
-            'count': count,
-            'percentage': pct,
-            'threshold_um': threshold,
+            "count": count,
+            "percentage": pct,
+            "threshold_um": threshold,
         }
 
         # Count positive/negative within class
@@ -160,8 +154,10 @@ def analyze_size_distribution(
         else:
             pos_in_class = neg_in_class = pos_pct = 0
 
-        logger.info(f"  {class_name:10s} ({threshold[0]}-{threshold[1]} um): {count:5d} ({pct:5.1f}%) "
-                   f"[pos: {int(pos_in_class)}, neg: {int(neg_in_class)}, pos%: {pos_pct:.1f}%]")
+        logger.info(
+            f"  {class_name:10s} ({threshold[0]}-{threshold[1]} um): {count:5d} ({pct:5.1f}%) "
+            f"[pos: {int(pos_in_class)}, neg: {int(neg_in_class)}, pos%: {pos_pct:.1f}%]"
+        )
 
         # Generate warnings for imbalanced distribution
         if pct < 10 and total > 50:
@@ -181,19 +177,19 @@ def analyze_size_distribution(
             logger.warning(f"    - {w}")
 
     return {
-        'distribution': distribution,
-        'warnings': warnings,
-        'total': total,
-        'diameter_range': (float(valid_diameters.min()), float(valid_diameters.max())),
-        'median_diameter': float(np.median(valid_diameters)),
+        "distribution": distribution,
+        "warnings": warnings,
+        "total": total,
+        "diameter_range": (float(valid_diameters.min()), float(valid_diameters.max())),
+        "median_diameter": float(np.median(valid_diameters)),
     }
 
 
 def stratified_sample_by_size(
-    X_list: List[Dict],
-    y_list: List[int],
-    uids: List[str],
-    detections: Dict[str, Dict],
+    X_list: list[dict],
+    y_list: list[int],
+    uids: list[str],
+    detections: dict[str, dict],
     samples_per_class: int = None,
     min_samples_per_class: int = 10,
     random_seed: int = 42,
@@ -255,8 +251,10 @@ def stratified_sample_by_size(
         samples_per_class = min(min_pos, min_neg)
 
     if samples_per_class < min_samples_per_class:
-        logger.warning(f"  Insufficient samples for balanced stratification. "
-                      f"Min class has {samples_per_class} samples, need {min_samples_per_class}")
+        logger.warning(
+            f"  Insufficient samples for balanced stratification. "
+            f"Min class has {samples_per_class} samples, need {min_samples_per_class}"
+        )
         logger.warning("  Using class weights instead of undersampling")
         return X_valid, y_valid.tolist(), uids_valid
 
@@ -289,27 +287,31 @@ def stratified_sample_by_size(
             sampled_neg = np.random.choice(neg_indices, n_neg, replace=False)
             selected_indices.extend(sampled_neg.tolist())
 
-        logger.info(f"    {SIZE_CLASS_NAMES[class_id]:10s}: {n_pos} pos, {n_neg} neg "
-                   f"(of {len(pos_indices)} pos, {len(neg_indices)} neg available)")
+        logger.info(
+            f"    {SIZE_CLASS_NAMES[class_id]:10s}: {n_pos} pos, {n_neg} neg "
+            f"(of {len(pos_indices)} pos, {len(neg_indices)} neg available)"
+        )
 
     # Create balanced dataset
     X_balanced = [X_valid[i] for i in selected_indices]
     y_balanced = [int(y_valid[i]) for i in selected_indices]
     uids_balanced = [uids_valid[i] for i in selected_indices]
 
-    logger.info(f"\n  Balanced dataset: {len(X_balanced)} samples "
-               f"({sum(1 for y in y_balanced if y == 1)} pos, {sum(1 for y in y_balanced if y == 0)} neg)")
+    logger.info(
+        f"\n  Balanced dataset: {len(X_balanced)} samples "
+        f"({sum(1 for y in y_balanced if y == 1)} pos, {sum(1 for y in y_balanced if y == 0)} neg)"
+    )
 
     return X_balanced, y_balanced, uids_balanced
 
+
 logging.basicConfig(
-    level=logging.INFO,
-    format='%(asctime)s | %(levelname)-8s | %(name)s | %(message)s'
+    level=logging.INFO, format="%(asctime)s | %(levelname)-8s | %(name)s | %(message)s"
 )
 logger = logging.getLogger(__name__)
 
 
-def load_annotations(annotations_path: Path) -> Dict[str, str]:
+def load_annotations(annotations_path: Path) -> dict[str, str]:
     """
     Load vessel annotations from JSON file.
 
@@ -327,14 +329,14 @@ def load_annotations(annotations_path: Path) -> Dict[str, str]:
         data = json.load(f)
 
     # Handle nested format
-    if 'annotations' in data:
-        return data['annotations']
+    if "annotations" in data:
+        return data["annotations"]
 
     # Direct mapping
     return data
 
 
-def load_detections(detections_path: Path) -> Dict[str, Dict]:
+def load_detections(detections_path: Path) -> dict[str, dict]:
     """
     Load vessel detections with features from JSON.
 
@@ -350,29 +352,29 @@ def load_detections(detections_path: Path) -> Dict[str, Dict]:
     indexed = {}
     for d in data:
         # Primary: uid
-        if 'uid' in d:
-            indexed[d['uid']] = d
+        if "uid" in d:
+            indexed[d["uid"]] = d
 
         # Alternative formats for matching
-        if 'tile_origin' in d and 'id' in d:
-            tile_x, tile_y = d['tile_origin']
+        if "tile_origin" in d and "id" in d:
+            tile_x, tile_y = d["tile_origin"]
             alt_id = f"{tile_x}_{tile_y}_{d['id']}"
             indexed[alt_id] = d
 
-            if 'slide_name' in d:
+            if "slide_name" in d:
                 alt_id2 = f"{d['slide_name']}_{tile_x}_{tile_y}_{d['id']}"
                 indexed[alt_id2] = d
 
-        if 'id' in d:
-            indexed[d['id']] = d
+        if "id" in d:
+            indexed[d["id"]] = d
 
     return indexed
 
 
 def extract_training_data(
-    detections: Dict[str, Dict],
-    annotations: Dict[str, str],
-    feature_names: List[str],
+    detections: dict[str, dict],
+    annotations: dict[str, str],
+    feature_names: list[str],
 ) -> tuple:
     """
     Extract feature matrix and labels from annotated vessels.
@@ -395,7 +397,7 @@ def extract_training_data(
             continue
 
         det = detections[uid]
-        features = det.get('features', {})
+        features = det.get("features", {})
 
         # If features are at top level (not nested)
         if not features and any(key in det for key in feature_names[:5]):
@@ -412,35 +414,34 @@ def extract_training_data(
 
 
 def plot_confusion_matrix(
-    cm: np.ndarray,
-    output_path: Path,
-    title: str = 'Vessel Detection Confusion Matrix'
+    cm: np.ndarray, output_path: Path, title: str = "Vessel Detection Confusion Matrix"
 ) -> None:
     """Plot and save confusion matrix visualization."""
     try:
         import matplotlib
-        matplotlib.use('Agg')
+
+        matplotlib.use("Agg")
         import matplotlib.pyplot as plt
         import seaborn as sns
 
         fig, ax = plt.subplots(figsize=(8, 6))
 
         # Normalize for color mapping
-        cm_normalized = cm.astype('float') / (cm.sum(axis=1, keepdims=True) + 1e-8)
+        cm_normalized = cm.astype("float") / (cm.sum(axis=1, keepdims=True) + 1e-8)
 
         sns.heatmap(
             cm_normalized,
             annot=cm,
-            fmt='d',
-            cmap='Blues',
-            xticklabels=['Non-Vessel', 'Vessel'],
-            yticklabels=['Non-Vessel', 'Vessel'],
+            fmt="d",
+            cmap="Blues",
+            xticklabels=["Non-Vessel", "Vessel"],
+            yticklabels=["Non-Vessel", "Vessel"],
             ax=ax,
-            cbar_kws={'label': 'Proportion'}
+            cbar_kws={"label": "Proportion"},
         )
 
-        ax.set_xlabel('Predicted')
-        ax.set_ylabel('True')
+        ax.set_xlabel("Predicted")
+        ax.set_ylabel("True")
         ax.set_title(title)
 
         plt.tight_layout()
@@ -454,15 +455,16 @@ def plot_confusion_matrix(
 
 
 def plot_feature_importance(
-    importance: Dict[str, float],
+    importance: dict[str, float],
     output_path: Path,
     top_n: int = 20,
-    title: str = 'Feature Importance for Vessel Detection'
+    title: str = "Feature Importance for Vessel Detection",
 ) -> None:
     """Plot and save feature importance visualization."""
     try:
         import matplotlib
-        matplotlib.use('Agg')
+
+        matplotlib.use("Agg")
         import matplotlib.pyplot as plt
 
         # Sort and get top N
@@ -473,11 +475,11 @@ def plot_feature_importance(
         fig, ax = plt.subplots(figsize=(10, 8))
 
         y_pos = np.arange(len(names))
-        ax.barh(y_pos, scores, align='center', color='steelblue')
+        ax.barh(y_pos, scores, align="center", color="steelblue")
         ax.set_yticks(y_pos)
         ax.set_yticklabels(names)
         ax.invert_yaxis()
-        ax.set_xlabel('Importance')
+        ax.set_xlabel("Importance")
         ax.set_title(title)
 
         plt.tight_layout()
@@ -490,28 +492,25 @@ def plot_feature_importance(
         logger.warning("matplotlib not available, skipping feature importance plot")
 
 
-def plot_precision_recall_curve(
-    y_true: np.ndarray,
-    y_proba: np.ndarray,
-    output_path: Path
-) -> None:
+def plot_precision_recall_curve(y_true: np.ndarray, y_proba: np.ndarray, output_path: Path) -> None:
     """Plot precision-recall curve."""
     try:
         import matplotlib
-        matplotlib.use('Agg')
+
+        matplotlib.use("Agg")
         import matplotlib.pyplot as plt
-        from sklearn.metrics import precision_recall_curve, average_precision_score
+        from sklearn.metrics import average_precision_score, precision_recall_curve
 
         precision, recall, thresholds = precision_recall_curve(y_true, y_proba)
         avg_precision = average_precision_score(y_true, y_proba)
 
         fig, ax = plt.subplots(figsize=(8, 6))
-        ax.plot(recall, precision, 'b-', linewidth=2, label=f'AP = {avg_precision:.3f}')
+        ax.plot(recall, precision, "b-", linewidth=2, label=f"AP = {avg_precision:.3f}")
         ax.fill_between(recall, precision, alpha=0.3)
-        ax.set_xlabel('Recall')
-        ax.set_ylabel('Precision')
-        ax.set_title('Precision-Recall Curve')
-        ax.legend(loc='lower left')
+        ax.set_xlabel("Recall")
+        ax.set_ylabel("Precision")
+        ax.set_title("Precision-Recall Curve")
+        ax.legend(loc="lower left")
         ax.set_xlim([0.0, 1.0])
         ax.set_ylim([0.0, 1.05])
         ax.grid(True, alpha=0.3)
@@ -528,7 +527,7 @@ def plot_precision_recall_curve(
 
 def main():
     parser = argparse.ArgumentParser(
-        description='Train vessel detector (vessel vs non-vessel classifier)',
+        description="Train vessel detector (vessel vs non-vessel classifier)",
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 Examples:
@@ -550,65 +549,59 @@ Examples:
         --annotations annotations.json \\
         --detections vessel_detections.json \\
         --minimal-features
-        """
+        """,
     )
 
     parser.add_argument(
-        '--annotations', '-a',
+        "--annotations",
+        "-a",
         required=True,
-        help='Path to annotations JSON (yes/no labels from HTML review)'
+        help="Path to annotations JSON (yes/no labels from HTML review)",
     )
     parser.add_argument(
-        '--detections', '-d',
-        required=True,
-        help='Path to vessel detections JSON with features'
+        "--detections", "-d", required=True, help="Path to vessel detections JSON with features"
     )
     parser.add_argument(
-        '--output-dir', '-o',
-        default='./vessel_detector_output',
-        help='Output directory (default: ./vessel_detector_output)'
+        "--output-dir",
+        "-o",
+        default="./vessel_detector_output",
+        help="Output directory (default: ./vessel_detector_output)",
     )
     parser.add_argument(
-        '--n-estimators',
+        "--n-estimators",
         type=int,
         default=100,
-        help='Number of trees in Random Forest (default: 100)'
+        help="Number of trees in Random Forest (default: 100)",
     )
     parser.add_argument(
-        '--max-depth',
+        "--max-depth",
         type=int,
         default=15,
-        help='Maximum tree depth (default: 15, None for unlimited)'
+        help="Maximum tree depth (default: 15, None for unlimited)",
     )
     parser.add_argument(
-        '--test-size',
-        type=float,
-        default=0.2,
-        help='Fraction of data for test set (default: 0.2)'
+        "--test-size", type=float, default=0.2, help="Fraction of data for test set (default: 0.2)"
     )
     parser.add_argument(
-        '--cv-folds',
-        type=int,
-        default=5,
-        help='Number of cross-validation folds (default: 5)'
+        "--cv-folds", type=int, default=5, help="Number of cross-validation folds (default: 5)"
     )
     parser.add_argument(
-        '--minimal-features',
-        action='store_true',
-        help='Use minimal feature set (when vessel-specific features unavailable)'
+        "--minimal-features",
+        action="store_true",
+        help="Use minimal feature set (when vessel-specific features unavailable)",
     )
 
     # Stratification options
     parser.add_argument(
-        '--stratify-by-size',
-        action='store_true',
-        help='Balance training data across vessel size classes (small <50um, medium 50-200um, large >200um)'
+        "--stratify-by-size",
+        action="store_true",
+        help="Balance training data across vessel size classes (small <50um, medium 50-200um, large >200um)",
     )
     parser.add_argument(
-        '--samples-per-size-class',
+        "--samples-per-size-class",
         type=int,
         default=None,
-        help='Target samples per size class per label (default: auto = min class count)'
+        help="Target samples per size class per label (default: auto = min class count)",
     )
 
     args = parser.parse_args()
@@ -652,7 +645,7 @@ Examples:
     logger.info(f"  Matched samples: {len(X_list)}")
 
     # Convert labels to binary
-    y_binary = [1 if str(y).lower() in ('yes', 'vessel', 'true', '1') else 0 for y in y_list]
+    y_binary = [1 if str(y).lower() in ("yes", "vessel", "true", "1") else 0 for y in y_list]
 
     # Apply stratified sampling by size if requested
     if args.stratify_by_size:
@@ -668,24 +661,26 @@ Examples:
 
         # Apply stratified sampling
         X_list, y_binary, valid_uids = stratified_sample_by_size(
-            X_list, y_binary, valid_uids, detections,
+            X_list,
+            y_binary,
+            valid_uids,
+            detections,
             samples_per_class=args.samples_per_size_class,
             min_samples_per_class=10,
             random_seed=42,
         )
 
         # Analyze balanced distribution
-        diameters_balanced = np.array([extract_diameter(detections.get(uid, {})) for uid in valid_uids])
+        diameters_balanced = np.array(
+            [extract_diameter(detections.get(uid, {})) for uid in valid_uids]
+        )
         analyze_size_distribution(diameters_balanced, np.array(y_binary), prefix="Balanced ")
 
     # Split data for evaluation
     from sklearn.model_selection import train_test_split
 
     X_train, X_test, y_train, y_test = train_test_split(
-        X_list, y_binary,
-        test_size=args.test_size,
-        random_state=42,
-        stratify=y_binary
+        X_list, y_binary, test_size=args.test_size, random_state=42, stratify=y_binary
     )
     logger.info(f"\n  Training set: {len(X_train)}")
     logger.info(f"  Test set: {len(X_test)}")
@@ -702,11 +697,12 @@ Examples:
     )
 
     train_metrics = detector.train(
-        X_train, y_train,
+        X_train,
+        y_train,
         feature_names=feature_names,
         cv_folds=args.cv_folds,
         stratify_by_size=args.stratify_by_size,
-        verbose=True
+        verbose=True,
     )
 
     # Evaluate on test set
@@ -729,54 +725,54 @@ Examples:
         logger.info(f"  {i:2d}. {name:35s} = {score:.4f}")
 
     # Save model
-    model_path = output_dir / 'vessel_detector.joblib'
+    model_path = output_dir / "vessel_detector.joblib"
     detector.save(model_path)
 
     # Save feature importance
-    importance_path = output_dir / 'feature_importance.json'
-    with open(importance_path, 'w') as f:
+    importance_path = output_dir / "feature_importance.json"
+    with open(importance_path, "w") as f:
         json.dump(importance, f)
     logger.info(f"\nFeature importance saved to: {importance_path}")
 
     # Save metrics
     metrics = {
-        'train': train_metrics,
-        'test': {
-            'accuracy': eval_metrics['accuracy'],
-            'precision': eval_metrics['precision'],
-            'recall': eval_metrics['recall'],
-            'f1_score': eval_metrics['f1_score'],
-            'auc_roc': eval_metrics.get('auc_roc', 0.0),
-            'confusion_matrix': eval_metrics['confusion_matrix'],
+        "train": train_metrics,
+        "test": {
+            "accuracy": eval_metrics["accuracy"],
+            "precision": eval_metrics["precision"],
+            "recall": eval_metrics["recall"],
+            "f1_score": eval_metrics["f1_score"],
+            "auc_roc": eval_metrics.get("auc_roc", 0.0),
+            "confusion_matrix": eval_metrics["confusion_matrix"],
         },
-        'feature_names': feature_names,
-        'n_samples': len(X_list),
-        'n_train': len(X_train),
-        'n_test': len(X_test),
-        'model_path': str(model_path),
-        'stratify_by_size': args.stratify_by_size,
-        'samples_per_size_class': args.samples_per_size_class,
+        "feature_names": feature_names,
+        "n_samples": len(X_list),
+        "n_train": len(X_train),
+        "n_test": len(X_test),
+        "model_path": str(model_path),
+        "stratify_by_size": args.stratify_by_size,
+        "samples_per_size_class": args.samples_per_size_class,
     }
 
-    metrics_path = output_dir / 'training_metrics.json'
-    with open(metrics_path, 'w') as f:
+    metrics_path = output_dir / "training_metrics.json"
+    with open(metrics_path, "w") as f:
         json.dump(metrics, f, default=str)
     logger.info(f"Training metrics saved to: {metrics_path}")
 
     # Generate visualizations
-    cm = np.array(eval_metrics['confusion_matrix'])
+    cm = np.array(eval_metrics["confusion_matrix"])
 
     plot_confusion_matrix(
         cm,
-        output_dir / 'confusion_matrix.png',
-        title=f'Vessel Detection (F1: {eval_metrics["f1_score"]:.2%})'
+        output_dir / "confusion_matrix.png",
+        title=f'Vessel Detection (F1: {eval_metrics["f1_score"]:.2%})',
     )
 
     plot_feature_importance(
         importance,
-        output_dir / 'feature_importance.png',
+        output_dir / "feature_importance.png",
         top_n=15,
-        title='Top 15 Feature Importances for Vessel Detection'
+        title="Top 15 Feature Importances for Vessel Detection",
     )
 
     # Summary
@@ -788,10 +784,12 @@ Examples:
     logger.info(f"Test precision: {eval_metrics['precision']:.4f}")
     logger.info(f"Test recall: {eval_metrics['recall']:.4f}")
     logger.info(f"Test F1 score: {eval_metrics['f1_score']:.4f}")
-    logger.info(f"CV accuracy: {train_metrics['cv_accuracy_mean']:.4f} (+/- {train_metrics['cv_accuracy_std'] * 2:.4f})")
+    logger.info(
+        f"CV accuracy: {train_metrics['cv_accuracy_mean']:.4f} (+/- {train_metrics['cv_accuracy_std'] * 2:.4f})"
+    )
 
     return metrics
 
 
-if __name__ == '__main__':
+if __name__ == "__main__":
     main()

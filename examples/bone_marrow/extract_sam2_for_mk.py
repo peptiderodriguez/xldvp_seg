@@ -112,13 +112,15 @@ def load_detections_by_slide(detections_path, training_data_path=None):
                 continue
 
             # Create a minimal detection dict (centroid-based, no contour)
-            by_slide[slide].append({
-                "uid": uid,
-                "center_x": cx,
-                "center_y": cy,
-                "slide": slide,
-                # No contour_yx → extraction will use centroid fallback
-            })
+            by_slide[slide].append(
+                {
+                    "uid": uid,
+                    "center_x": cx,
+                    "center_y": cy,
+                    "slide": slide,
+                    # No contour_yx → extraction will use centroid fallback
+                }
+            )
             uid_set.add(uid)
             n_added += 1
 
@@ -133,8 +135,9 @@ def load_detections_by_slide(detections_path, training_data_path=None):
     return by_slide, slides
 
 
-def create_virtual_tiles(detections, tile_size=TILE_SIZE, overlap=TILE_OVERLAP,
-                         use_czi_coords=False):
+def create_virtual_tiles(
+    detections, tile_size=TILE_SIZE, overlap=TILE_OVERLAP, use_czi_coords=False
+):
     """Group detections into virtual tiles.
 
     Each detection is assigned to exactly one tile. Tiles are sized to ensure
@@ -281,6 +284,7 @@ def _worker_extract_slide(args_tuple):
     slide_name, detections, czi_dir, gpu_id, output_dir, checkpoint = args_tuple
 
     import torch
+
     os.environ["CUDA_VISIBLE_DEVICES"] = str(gpu_id)
     device = "cuda" if torch.cuda.is_available() else "cpu"
 
@@ -299,9 +303,9 @@ def _worker_extract_slide(args_tuple):
     t0 = time.time()
     print(f"[GPU {gpu_id}] {slide_name}: {len(detections)} cells, loading SAM2...")
 
+    from aicspylibczi import CziFile
     from sam2.build_sam import build_sam2
     from sam2.sam2_image_predictor import SAM2ImagePredictor
-    from aicspylibczi import CziFile
 
     # Find CZI
     czi_dir = Path(czi_dir)
@@ -343,9 +347,7 @@ def _worker_extract_slide(args_tuple):
             det["_czi_cx"] = float(det["center_x"]) + x_offset
             det["_czi_cy"] = float(det["center_y"]) + y_offset
         if "contour_yx" in det and det["contour_yx"]:
-            det["_czi_contour_yx"] = [
-                [y + y_offset, x + x_offset] for y, x in det["contour_yx"]
-            ]
+            det["_czi_contour_yx"] = [[y + y_offset, x + x_offset] for y, x in det["contour_yx"]]
 
     # Create virtual tiles in CZI absolute coordinates
     tiles = create_virtual_tiles(detections, tile_size=TILE_SIZE, use_czi_coords=True)
@@ -373,7 +375,8 @@ def _worker_extract_slide(args_tuple):
                     if p98 > p2:
                         tile_img = np.clip(
                             (tile_img.astype(np.float32) - p2) / (p98 - p2) * 255,
-                            0, 255,
+                            0,
+                            255,
                         ).astype(np.uint8)
                     else:
                         tile_img = np.zeros_like(tile_img, dtype=np.uint8)
@@ -406,9 +409,7 @@ def _worker_extract_slide(args_tuple):
 
             if contour:
                 # Rasterize contour at embedding resolution
-                mask = rasterize_contour_to_embedding(
-                    contour, tx0, ty0, TILE_SIZE, emb_h, emb_w
-                )
+                mask = rasterize_contour_to_embedding(contour, tx0, ty0, TILE_SIZE, emb_h, emb_w)
                 emb = masked_average_pool(emb_map, mask)
             else:
                 # Fallback: centroid point sampling
@@ -492,30 +493,46 @@ def main():
 
     # Extract command
     ext = sub.add_parser("extract", help="Extract mask-aware SAM2 embeddings from CZI")
-    ext.add_argument("--detections", type=Path, required=True,
-                     help="Combined detection JSON with contour_yx")
-    ext.add_argument("--czi-dir", type=Path, required=True,
-                     help="Directory containing CZI files")
-    ext.add_argument("--output-dir", type=Path, required=True,
-                     help="Output directory for per-slide embedding JSONs")
-    ext.add_argument("--node-index", type=int, default=None,
-                     help="This node's index (0-based, from SLURM_ARRAY_TASK_ID)")
-    ext.add_argument("--num-nodes", type=int, default=None,
-                     help="Total number of nodes")
-    ext.add_argument("--num-gpus", type=int, default=None,
-                     help="GPUs per node (default: auto-detect)")
-    ext.add_argument("--training-data", type=Path, default=None,
-                     help="Training data JSON — adds training samples for SAM2 extraction "
-                          "(centroid-based, coords parsed from UIDs)")
+    ext.add_argument(
+        "--detections", type=Path, required=True, help="Combined detection JSON with contour_yx"
+    )
+    ext.add_argument("--czi-dir", type=Path, required=True, help="Directory containing CZI files")
+    ext.add_argument(
+        "--output-dir",
+        type=Path,
+        required=True,
+        help="Output directory for per-slide embedding JSONs",
+    )
+    ext.add_argument(
+        "--node-index",
+        type=int,
+        default=None,
+        help="This node's index (0-based, from SLURM_ARRAY_TASK_ID)",
+    )
+    ext.add_argument("--num-nodes", type=int, default=None, help="Total number of nodes")
+    ext.add_argument(
+        "--num-gpus", type=int, default=None, help="GPUs per node (default: auto-detect)"
+    )
+    ext.add_argument(
+        "--training-data",
+        type=Path,
+        default=None,
+        help="Training data JSON — adds training samples for SAM2 extraction "
+        "(centroid-based, coords parsed from UIDs)",
+    )
 
     # Merge command
     mrg = sub.add_parser("merge", help="Merge per-slide embeddings into detection JSON")
-    mrg.add_argument("--embeddings-dir", type=Path, required=True,
-                     help="Directory with per-slide sam2_*.json files")
-    mrg.add_argument("--target", type=Path, required=True,
-                     help="Detection JSON to update")
-    mrg.add_argument("--output", type=Path, required=True,
-                     help="Output path for updated detection JSON")
+    mrg.add_argument(
+        "--embeddings-dir",
+        type=Path,
+        required=True,
+        help="Directory with per-slide sam2_*.json files",
+    )
+    mrg.add_argument("--target", type=Path, required=True, help="Detection JSON to update")
+    mrg.add_argument(
+        "--output", type=Path, required=True, help="Output path for updated detection JSON"
+    )
 
     args = parser.parse_args()
 
@@ -535,8 +552,9 @@ def main():
 
         # Determine which slides this node handles
         if args.node_index is not None and args.num_nodes is not None:
-            my_slides = [slides[i] for i in range(len(slides))
-                         if i % args.num_nodes == args.node_index]
+            my_slides = [
+                slides[i] for i in range(len(slides)) if i % args.num_nodes == args.node_index
+            ]
         else:
             my_slides = slides
 
@@ -551,12 +569,19 @@ def main():
         for i, slide_name in enumerate(my_slides):
             gpu_id = i % num_gpus
             gpu_assignments.append(
-                (slide_name, by_slide[slide_name], str(args.czi_dir),
-                 gpu_id, str(args.output_dir), str(checkpoint))
+                (
+                    slide_name,
+                    by_slide[slide_name],
+                    str(args.czi_dir),
+                    gpu_id,
+                    str(args.output_dir),
+                    str(checkpoint),
+                )
             )
 
         t0 = time.time()
         import multiprocessing as mp
+
         ctx = mp.get_context("spawn")
 
         with ProcessPoolExecutor(max_workers=num_gpus, mp_context=ctx) as executor:

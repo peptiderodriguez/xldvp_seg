@@ -27,43 +27,47 @@ from pathlib import Path
 
 import cv2
 import matplotlib
-matplotlib.use('Agg')
+
+matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 import numpy as np
 from PIL import Image
 from scipy import stats
-from sklearn.cluster import KMeans, SpectralClustering, AgglomerativeClustering
+from sklearn.cluster import AgglomerativeClustering, KMeans, SpectralClustering
 from sklearn.decomposition import PCA
 from sklearn.manifold import TSNE, spectral_embedding
-from sklearn.metrics import silhouette_score, calinski_harabasz_score
+from sklearn.metrics import calinski_harabasz_score, silhouette_score
 from sklearn.neighbors import kneighbors_graph
 from sklearn.preprocessing import StandardScaler
 
-logging.basicConfig(level=logging.INFO, format='%(asctime)s %(levelname)s %(message)s')
+logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 logger = logging.getLogger(__name__)
+
 
 # Group mapping
 def slide_to_group(slide_name):
     """Extract group (FGC/FHU/MGC/MHU) from slide name like '2025_11_18_FGC1'."""
-    parts = slide_name.split('_')
+    parts = slide_name.split("_")
     for p in parts:
-        for grp in ['FGC', 'FHU', 'MGC', 'MHU']:
+        for grp in ["FGC", "FHU", "MGC", "MHU"]:
             if p.startswith(grp):
                 return grp
-    return 'UNKNOWN'
+    return "UNKNOWN"
+
 
 GROUP_COLORS = {
-    'FGC': '#e74c3c',  # red (female)
-    'FHU': '#e67e22',  # orange (female)
-    'MGC': '#3498db',  # blue (male)
-    'MHU': '#2ecc71',  # green (male)
+    "FGC": "#e74c3c",  # red (female)
+    "FHU": "#e67e22",  # orange (female)
+    "MGC": "#3498db",  # blue (male)
+    "MHU": "#2ecc71",  # green (male)
 }
-GROUP_ORDER = ['FGC', 'FHU', 'MGC', 'MHU']
+GROUP_ORDER = ["FGC", "FHU", "MGC", "MHU"]
 
 
 # =============================================================================
 # Phase 1: Load, filter, dedup
 # =============================================================================
+
 
 def deduplicate_samples(samples, distance_threshold_px=50):
     """Remove duplicate detections from tile overlap. Keeps larger area."""
@@ -72,20 +76,20 @@ def deduplicate_samples(samples, distance_threshold_px=50):
 
     by_slide = defaultdict(list)
     for s in samples:
-        by_slide[s['slide']].append(s)
+        by_slide[s["slide"]].append(s)
 
     kept = []
     total_removed = 0
 
     for slide, slide_samples in by_slide.items():
-        slide_samples.sort(key=lambda s: s.get('area_px', 0), reverse=True)
+        slide_samples.sort(key=lambda s: s.get("area_px", 0), reverse=True)
 
         grid = {}
         cell_size = distance_threshold_px
         slide_kept = []
 
         for s in slide_samples:
-            x, y = s['global_x'], s['global_y']
+            x, y = s["global_x"], s["global_y"]
             gx, gy = int(x // cell_size), int(y // cell_size)
 
             is_dup = False
@@ -94,7 +98,9 @@ def deduplicate_samples(samples, distance_threshold_px=50):
                     break
                 for dy in (-1, 0, 1):
                     for existing in grid.get((gx + dx, gy + dy), []):
-                        dist = ((x - existing['global_x'])**2 + (y - existing['global_y'])**2) ** 0.5
+                        dist = (
+                            (x - existing["global_x"]) ** 2 + (y - existing["global_y"]) ** 2
+                        ) ** 0.5
                         if dist < distance_threshold_px:
                             is_dup = True
                             break
@@ -108,11 +114,15 @@ def deduplicate_samples(samples, distance_threshold_px=50):
         total_removed += len(slide_samples) - len(slide_kept)
         kept.extend(slide_kept)
 
-    logger.info(f"  Deduplication: {len(samples)} -> {len(kept)} ({total_removed} duplicates removed)")
+    logger.info(
+        f"  Deduplication: {len(samples)} -> {len(kept)} ({total_removed} duplicates removed)"
+    )
     return kept
 
 
-def load_all_mk_features(input_dir, pixel_size_um, min_area_um=200, max_area_um=2000, min_clf_score=0.80):
+def load_all_mk_features(
+    input_dir, pixel_size_um, min_area_um=200, max_area_um=2000, min_clf_score=0.80
+):
     """Load all MK features from segmentation output directory."""
     input_dir = Path(input_dir)
     samples = []
@@ -120,7 +130,7 @@ def load_all_mk_features(input_dir, pixel_size_um, min_area_um=200, max_area_um=
     for slide_dir in sorted(input_dir.iterdir()):
         if not slide_dir.is_dir():
             continue
-        tiles_dir = slide_dir / 'mk' / 'tiles'
+        tiles_dir = slide_dir / "mk" / "tiles"
         if not tiles_dir.exists():
             continue
 
@@ -128,7 +138,7 @@ def load_all_mk_features(input_dir, pixel_size_um, min_area_um=200, max_area_um=
         for tile_dir in sorted(tiles_dir.iterdir()):
             if not tile_dir.is_dir():
                 continue
-            feat_file = tile_dir / 'features.json'
+            feat_file = tile_dir / "features.json"
             if not feat_file.exists():
                 continue
 
@@ -136,12 +146,12 @@ def load_all_mk_features(input_dir, pixel_size_um, min_area_um=200, max_area_um=
                 feats = json.load(f)
 
             for feat in feats:
-                if 'crop_b64' not in feat or 'features' not in feat:
+                if "crop_b64" not in feat or "features" not in feat:
                     continue
 
-                area_px = feat.get('area', feat['features'].get('area', 0))
-                area_um2 = feat.get('area_um2', area_px * pixel_size_um ** 2)
-                mk_score = feat.get('mk_score')
+                area_px = feat.get("area", feat["features"].get("area", 0))
+                area_um2 = feat.get("area_um2", area_px * pixel_size_um**2)
+                mk_score = feat.get("mk_score")
 
                 # Size filter
                 if area_um2 < min_area_um or area_um2 > max_area_um:
@@ -151,19 +161,21 @@ def load_all_mk_features(input_dir, pixel_size_um, min_area_um=200, max_area_um=
                 if min_clf_score is not None and (mk_score is None or mk_score < min_clf_score):
                     continue
 
-                samples.append({
-                    'slide': slide_dir.name,
-                    'group': slide_to_group(slide_dir.name),
-                    'tile_id': tile_dir.name,
-                    'det_id': feat.get('id', ''),
-                    'area_px': area_px,
-                    'area_um2': area_um2,
-                    'mk_score': mk_score,
-                    'global_x': round(feat['center'][0]),
-                    'global_y': round(feat['center'][1]),
-                    'crop_b64': feat['crop_b64'],
-                    'mask_b64': feat.get('mask_b64'),
-                })
+                samples.append(
+                    {
+                        "slide": slide_dir.name,
+                        "group": slide_to_group(slide_dir.name),
+                        "tile_id": tile_dir.name,
+                        "det_id": feat.get("id", ""),
+                        "area_px": area_px,
+                        "area_um2": area_um2,
+                        "mk_score": mk_score,
+                        "global_x": round(feat["center"][0]),
+                        "global_y": round(feat["center"][1]),
+                        "crop_b64": feat["crop_b64"],
+                        "mask_b64": feat.get("mask_b64"),
+                    }
+                )
                 slide_count += 1
 
         if slide_count > 0:
@@ -198,23 +210,23 @@ def run_phase1(args):
     # Per-group counts
     group_counts = defaultdict(int)
     for s in samples:
-        group_counts[s['group']] += 1
+        group_counts[s["group"]] += 1
     for g in GROUP_ORDER:
         logger.info(f"    {g}: {group_counts.get(g, 0)}")
 
     N = len(samples)
 
     # Metadata arrays
-    slides = np.array([s['slide'] for s in samples])
-    groups = np.array([s['group'] for s in samples])
-    area_um2 = np.array([s['area_um2'] for s in samples], dtype=np.float32)
-    mk_scores = np.array([s['mk_score'] for s in samples], dtype=np.float32)
-    global_x = np.array([s['global_x'] for s in samples], dtype=np.float32)
-    global_y = np.array([s['global_y'] for s in samples], dtype=np.float32)
+    slides = np.array([s["slide"] for s in samples])
+    groups = np.array([s["group"] for s in samples])
+    area_um2 = np.array([s["area_um2"] for s in samples], dtype=np.float32)
+    mk_scores = np.array([s["mk_score"] for s in samples], dtype=np.float32)
+    global_x = np.array([s["global_x"] for s in samples], dtype=np.float32)
+    global_y = np.array([s["global_y"] for s in samples], dtype=np.float32)
 
     # Save crop_b64 and mask_b64 separately (large — needed for phase 2 GPU processing)
-    crop_b64_list = [s['crop_b64'] for s in samples]
-    mask_b64_list = [s.get('mask_b64', '') for s in samples]
+    crop_b64_list = [s["crop_b64"] for s in samples]
+    mask_b64_list = [s.get("mask_b64", "") for s in samples]
 
     # Save
     output = Path(args.output)
@@ -232,9 +244,9 @@ def run_phase1(args):
     )
 
     # Save crop/mask b64 as separate JSON (too large for npz string arrays)
-    crops_file = output.parent / (output.stem + '_crops.json')
-    with open(crops_file, 'w') as f:
-        json.dump({'crop_b64': crop_b64_list, 'mask_b64': mask_b64_list}, f)
+    crops_file = output.parent / (output.stem + "_crops.json")
+    with open(crops_file, "w") as f:
+        json.dump({"crop_b64": crop_b64_list, "mask_b64": mask_b64_list}, f)
 
     dt = time.time() - t0
     logger.info(f"Phase 1 complete in {dt:.1f}s. Saved to {output} + {crops_file}")
@@ -246,10 +258,17 @@ def run_phase1(args):
 # =============================================================================
 
 # Nuclear morphological feature names (extracted from nucleus mask)
-NUC_MORPH_NAMES = ['nc_ratio', 'circularity', 'solidity', 'lobe_count',
-                   'intensity_mean', 'area_fraction']
+NUC_MORPH_NAMES = [
+    "nc_ratio",
+    "circularity",
+    "solidity",
+    "lobe_count",
+    "intensity_mean",
+    "area_fraction",
+]
 
 _ROCM_PATCH_APPLIED = False
+
 
 def _apply_rocm_patch_if_needed():
     """Apply ROCm INT_MAX fix lazily — call before using SAM2."""
@@ -259,11 +278,12 @@ def _apply_rocm_patch_if_needed():
     _ROCM_PATCH_APPLIED = True
 
     try:
-        import torch
-        from typing import List, Dict, Any
-        import sam2.utils.amg as amg
+        from typing import Any
 
-        def mask_to_rle_pytorch_rocm_safe(tensor: torch.Tensor) -> List[Dict[str, Any]]:
+        import sam2.utils.amg as amg
+        import torch
+
+        def mask_to_rle_pytorch_rocm_safe(tensor: torch.Tensor) -> list[dict[str, Any]]:
             b, h, w = tensor.shape
             tensor = tensor.permute(0, 2, 1).flatten(1)
             diff = tensor[:, 1:] ^ tensor[:, :-1]
@@ -272,11 +292,13 @@ def _apply_rocm_patch_if_needed():
             out = []
             for i in range(b):
                 cur_idxs = change_indices[change_indices[:, 0] == i, 1]
-                cur_idxs = torch.cat([
-                    torch.tensor([0], dtype=cur_idxs.dtype, device=cur_idxs.device),
-                    cur_idxs + 1,
-                    torch.tensor([h * w], dtype=cur_idxs.dtype, device=cur_idxs.device),
-                ])
+                cur_idxs = torch.cat(
+                    [
+                        torch.tensor([0], dtype=cur_idxs.dtype, device=cur_idxs.device),
+                        cur_idxs + 1,
+                        torch.tensor([h * w], dtype=cur_idxs.dtype, device=cur_idxs.device),
+                    ]
+                )
                 btw_idxs = cur_idxs[1:] - cur_idxs[:-1]
                 counts = [] if tensor[i, 0] == 0 else [0]
                 counts.extend(btw_idxs.detach().cpu().tolist())
@@ -289,8 +311,9 @@ def _apply_rocm_patch_if_needed():
         logger.info(f"[ROCm FIX] Could not apply patch: {e}")
 
 
-def _gpu_worker_nuclear_features(gpu_id, start_idx, end_idx, crops_file_path,
-                                  output_path, sam2_checkpoint, sam2_config):
+def _gpu_worker_nuclear_features(
+    gpu_id, start_idx, end_idx, crops_file_path, output_path, sam2_checkpoint, sam2_config
+):
     """GPU worker: extract nuclear deep features from a chunk of MK crops.
 
     Each worker:
@@ -304,53 +327,58 @@ def _gpu_worker_nuclear_features(gpu_id, start_idx, end_idx, crops_file_path,
     import torchvision.transforms as tv_transforms
     from PIL import Image
     from scipy.ndimage import binary_fill_holes
-    from skimage.measure import regionprops, label as sk_label
+    from skimage.measure import label as sk_label
+    from skimage.measure import regionprops
     from skimage.morphology import remove_small_objects
-    from segmentation.utils.device import set_device_for_worker, empty_cache
+
+    from segmentation.utils.device import empty_cache, set_device_for_worker
 
     # Configure device for this worker (CUDA_VISIBLE_DEVICES on CUDA, MPS on Apple Silicon)
     device = set_device_for_worker(gpu_id)
 
     # Configure logging for subprocess
-    logging.basicConfig(level=logging.INFO, format='%(asctime)s %(levelname)s %(message)s')
-    sub_logger = logging.getLogger(f'gpu_worker_{gpu_id}')
-    sub_logger.info(f"GPU {gpu_id}: processing indices {start_idx}-{end_idx} "
-                    f"({end_idx - start_idx} crops)")
+    logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
+    sub_logger = logging.getLogger(f"gpu_worker_{gpu_id}")
+    sub_logger.info(
+        f"GPU {gpu_id}: processing indices {start_idx}-{end_idx} " f"({end_idx - start_idx} crops)"
+    )
 
     # Apply ROCm patch before SAM2
     _apply_rocm_patch_if_needed()
 
     # Load models (SAM2 + ResNet only — nuclear seg is Otsu-based)
-    from sam2.sam2_image_predictor import SAM2ImagePredictor
     from sam2.build_sam import build_sam2
+    from sam2.sam2_image_predictor import SAM2ImagePredictor
 
     sub_logger.info(f"GPU {gpu_id}: Loading SAM2 from {sam2_checkpoint}...")
     sam2_model = build_sam2(sam2_config, sam2_checkpoint, device=device)
     sam2_predictor = SAM2ImagePredictor(sam2_model)
 
     sub_logger.info(f"GPU {gpu_id}: Loading ResNet-50...")
-    resnet = tv_models.resnet50(weights='DEFAULT')
+    resnet = tv_models.resnet50(weights="DEFAULT")
     resnet_model = torch.nn.Sequential(*list(resnet.children())[:-1])
     resnet_model.eval().to(device)
-    resnet_transform = tv_transforms.Compose([
-        tv_transforms.Resize(224),
-        tv_transforms.CenterCrop(224),
-        tv_transforms.ToTensor(),
-        tv_transforms.Normalize([0.485, 0.456, 0.406], [0.229, 0.224, 0.225])
-    ])
+    resnet_transform = tv_transforms.Compose(
+        [
+            tv_transforms.Resize(224),
+            tv_transforms.CenterCrop(224),
+            tv_transforms.ToTensor(),
+            tv_transforms.Normalize([0.485, 0.456, 0.406], [0.229, 0.224, 0.225]),
+        ]
+    )
 
     # Morphological kernels for nuclear segmentation cleanup
     erode_kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (21, 21))  # 10px radius
-    close_kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (9, 9))    # bridge chromatin gaps
-    open_kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (7, 7))     # snap thin tails
+    close_kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (9, 9))  # bridge chromatin gaps
+    open_kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (7, 7))  # snap thin tails
 
     sub_logger.info(f"GPU {gpu_id}: Models loaded. Processing crops...")
 
     # Load crops (read full file, slice to our chunk)
     with open(crops_file_path) as f:
         crops_data = json.load(f)
-    crop_b64_chunk = crops_data['crop_b64'][start_idx:end_idx]
-    mask_b64_chunk = crops_data['mask_b64'][start_idx:end_idx]
+    crop_b64_chunk = crops_data["crop_b64"][start_idx:end_idx]
+    mask_b64_chunk = crops_data["mask_b64"][start_idx:end_idx]
     del crops_data
 
     chunk_size = end_idx - start_idx
@@ -363,12 +391,12 @@ def _gpu_worker_nuclear_features(gpu_id, start_idx, end_idx, crops_file_path,
         try:
             # Decode crop image
             crop_bytes = base64.b64decode(crop_b64_chunk[local_i])
-            crop_img = np.array(Image.open(BytesIO(crop_bytes)).convert('RGB'))
+            crop_img = np.array(Image.open(BytesIO(crop_bytes)).convert("RGB"))
 
             # Decode cell mask
             if mask_b64_chunk[local_i]:
                 mask_bytes = base64.b64decode(mask_b64_chunk[local_i])
-                mask_img = np.array(Image.open(BytesIO(mask_bytes)).convert('L'))
+                mask_img = np.array(Image.open(BytesIO(mask_bytes)).convert("L"))
                 cell_mask = mask_img > 127
             else:
                 cell_mask = np.ones(crop_img.shape[:2], dtype=bool)
@@ -387,8 +415,7 @@ def _gpu_worker_nuclear_features(gpu_id, start_idx, end_idx, crops_file_path,
 
             # Otsu×1.05 on inverted blue channel within eroded mask
             cell_pixels = inv_blue[eroded_mask]
-            otsu_thresh, _ = cv2.threshold(cell_pixels, 0, 255,
-                                           cv2.THRESH_BINARY + cv2.THRESH_OTSU)
+            otsu_thresh, _ = cv2.threshold(cell_pixels, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
             relaxed_thresh = min(otsu_thresh * 1.05, 255)
             nucleus_mask = (inv_blue > relaxed_thresh) & eroded_mask
 
@@ -414,7 +441,7 @@ def _gpu_worker_nuclear_features(gpu_id, start_idx, end_idx, crops_file_path,
             nucleus_mask = np.zeros_like(nucleus_mask)
             for r in regions_mask:
                 if r.area >= min_component:
-                    nucleus_mask |= (labeled_mask == r.label)
+                    nucleus_mask |= labeled_mask == r.label
 
             nuc_area = nucleus_mask.sum()
             if nuc_area < 10:
@@ -431,7 +458,7 @@ def _gpu_worker_nuclear_features(gpu_id, start_idx, end_idx, crops_file_path,
 
             largest = max(regions, key=lambda r: r.area)
             perim = largest.perimeter
-            circularity = 4 * np.pi * largest.area / (perim ** 2) if perim > 0 else 0.0
+            circularity = 4 * np.pi * largest.area / (perim**2) if perim > 0 else 0.0
             solidity = largest.solidity
 
             intensity_mean = float(gray[nucleus_mask].mean())
@@ -469,12 +496,12 @@ def _gpu_worker_nuclear_features(gpu_id, start_idx, end_idx, crops_file_path,
             cy_crop = nuc_ys.mean() - y0
             cx_crop = nuc_xs.mean() - x0
             sam2_feat = np.zeros(256, dtype=np.float32)
-            if hasattr(sam2_predictor, '_features'):
+            if hasattr(sam2_predictor, "_features"):
                 feat_map = sam2_predictor._features
                 if isinstance(feat_map, dict) and "image_embed" in feat_map:
                     feat_map = feat_map["image_embed"]
                 emb_h, emb_w = feat_map.shape[2], feat_map.shape[3]
-                if hasattr(sam2_predictor, '_orig_hw'):
+                if hasattr(sam2_predictor, "_orig_hw"):
                     orig_hw = sam2_predictor._orig_hw
                     # SAM2 stores as [(H, W)] list — unwrap if needed
                     if isinstance(orig_hw, (list, tuple)) and len(orig_hw) == 1:
@@ -488,23 +515,32 @@ def _gpu_worker_nuclear_features(gpu_id, start_idx, end_idx, crops_file_path,
                 sam2_feat = feat_map[0, :, ey, ex].cpu().numpy()
             sam2_features[local_i] = sam2_feat
 
-            morph_features[local_i] = [nc_ratio, circularity, solidity,
-                                        lobe_count, intensity_mean, area_fraction]
+            morph_features[local_i] = [
+                nc_ratio,
+                circularity,
+                solidity,
+                lobe_count,
+                intensity_mean,
+                area_fraction,
+            ]
             valid[local_i] = True
 
         except Exception as e:
             sub_logger.warning(f"GPU {gpu_id}: MK {start_idx + local_i} error: {e}")
 
         if (local_i + 1) % 200 == 0:
-            n_valid = valid[:local_i + 1].sum()
-            sub_logger.info(f"GPU {gpu_id}: {local_i + 1}/{chunk_size} "
-                            f"({(local_i+1)/chunk_size*100:.0f}%, {n_valid} valid)")
+            n_valid = valid[: local_i + 1].sum()
+            sub_logger.info(
+                f"GPU {gpu_id}: {local_i + 1}/{chunk_size} "
+                f"({(local_i+1)/chunk_size*100:.0f}%, {n_valid} valid)"
+            )
             # Periodic GPU memory cleanup (SAM2 set_image accumulates tensors)
             empty_cache()
 
     n_valid = valid.sum()
-    sub_logger.info(f"GPU {gpu_id}: Done. {n_valid}/{chunk_size} valid "
-                    f"({n_valid/chunk_size*100:.1f}%)")
+    sub_logger.info(
+        f"GPU {gpu_id}: Done. {n_valid}/{chunk_size} valid " f"({n_valid/chunk_size*100:.1f}%)"
+    )
 
     # Save partial results
     np.savez_compressed(
@@ -529,11 +565,11 @@ def run_phase2(args):
 
     # Load phase 1 metadata
     data = np.load(args.input, allow_pickle=True)
-    N = len(data['groups'])
+    N = len(data["groups"])
     logger.info(f"  {N} MKs to process")
 
     # Crops file path
-    crops_file = str(Path(args.input).parent / (Path(args.input).stem + '_crops.json'))
+    crops_file = str(Path(args.input).parent / (Path(args.input).stem + "_crops.json"))
     if not Path(crops_file).exists():
         raise FileNotFoundError(f"Crops file not found: {crops_file}")
 
@@ -548,7 +584,8 @@ def run_phase2(args):
 
     # Spawn GPU workers
     import torch.multiprocessing as torch_mp
-    ctx = torch_mp.get_context('spawn')
+
+    ctx = torch_mp.get_context("spawn")
 
     chunk_size = (N + num_gpus - 1) // num_gpus
     partial_files = []
@@ -560,13 +597,12 @@ def run_phase2(args):
         if start >= N:
             break
 
-        partial_path = str(Path(args.output).parent / f'_partial_gpu{gpu_id}.npz')
+        partial_path = str(Path(args.output).parent / f"_partial_gpu{gpu_id}.npz")
         partial_files.append(partial_path)
 
         p = ctx.Process(
             target=_gpu_worker_nuclear_features,
-            args=(gpu_id, start, end, crops_file, partial_path,
-                  sam2_checkpoint, sam2_config),
+            args=(gpu_id, start, end, crops_file, partial_path, sam2_checkpoint, sam2_config),
         )
         p.start()
         processes.append(p)
@@ -596,12 +632,12 @@ def run_phase2(args):
             logger.warning(f"  Partial file missing (worker crashed?): {pf}")
             continue
         partial = np.load(pf)
-        s = int(partial['chunk_start'][0])
-        e = int(partial['chunk_end'][0])
-        resnet_all[s:e] = partial['resnet']
-        sam2_all[s:e] = partial['sam2']
-        morph_all[s:e] = partial['morph']
-        valid_all[s:e] = partial['valid']
+        s = int(partial["chunk_start"][0])
+        e = int(partial["chunk_end"][0])
+        resnet_all[s:e] = partial["resnet"]
+        sam2_all[s:e] = partial["sam2"]
+        morph_all[s:e] = partial["morph"]
+        valid_all[s:e] = partial["valid"]
         os.remove(pf)
 
     n_valid = valid_all.sum()
@@ -610,12 +646,16 @@ def run_phase2(args):
     # PCA on valid nuclear deep features (2048 ResNet + 256 SAM2 = 2304D)
     valid_idx = np.where(valid_all)[0]
     if len(valid_idx) < 2:
-        raise RuntimeError(f"Only {len(valid_idx)} valid nuclear segmentations out of {N}. "
-                           "Check nuclear segmentation and crop quality. Cannot proceed with PCA.")
+        raise RuntimeError(
+            f"Only {len(valid_idx)} valid nuclear segmentations out of {N}. "
+            "Check nuclear segmentation and crop quality. Cannot proceed with PCA."
+        )
 
     X_deep_valid = np.concatenate([resnet_all[valid_idx], sam2_all[valid_idx]], axis=1)
 
-    logger.info(f"  Z-score normalizing {X_deep_valid.shape[0]} x {X_deep_valid.shape[1]} features...")
+    logger.info(
+        f"  Z-score normalizing {X_deep_valid.shape[0]} x {X_deep_valid.shape[1]} features..."
+    )
     scaler = StandardScaler()
     X_deep_scaled = scaler.fit_transform(X_deep_valid)
 
@@ -629,12 +669,16 @@ def run_phase2(args):
     n95_raw = int(np.searchsorted(cumvar, 0.95)) + 1
     if n95_raw <= pca.n_components_:
         n95 = n95_raw
-        logger.info(f"  PCA: {pca.n_components_} components, 95% variance at {n95} PCs "
-                    f"({total_var*100:.1f}% total captured)")
+        logger.info(
+            f"  PCA: {pca.n_components_} components, 95% variance at {n95} PCs "
+            f"({total_var*100:.1f}% total captured)"
+        )
     else:
         n95 = pca.n_components_  # use all available
-        logger.info(f"  PCA: {pca.n_components_} components capture {total_var*100:.1f}% variance "
-                    f"(95% not reached — would need ~{n95_raw} PCs)")
+        logger.info(
+            f"  PCA: {pca.n_components_} components capture {total_var*100:.1f}% variance "
+            f"(95% not reached — would need ~{n95_raw} PCs)"
+        )
     logger.info(f"  Top-10 cumulative variance: {cumvar[:10].round(3)}")
 
     # Morph feature stats
@@ -643,8 +687,10 @@ def run_phase2(args):
         vals = morph_all[valid_idx, j]
         vals = vals[~np.isnan(vals)]
         if len(vals) > 0:
-            logger.info(f"    {fname}: median={np.median(vals):.3f}, "
-                        f"mean={np.mean(vals):.3f}, std={np.std(vals):.3f}")
+            logger.info(
+                f"    {fname}: median={np.median(vals):.3f}, "
+                f"mean={np.mean(vals):.3f}, std={np.std(vals):.3f}"
+            )
 
     # Save
     output = Path(args.output)
@@ -669,12 +715,15 @@ def run_phase2(args):
 
     dt = time.time() - t0
     logger.info(f"Phase 2 complete in {dt:.1f}s. Saved to {output}")
-    logger.info(f"  {n_valid} valid MKs, using {n95} PCA components ({total_var*100:.1f}% variance)")
+    logger.info(
+        f"  {n_valid} valid MKs, using {n95} PCA components ({total_var*100:.1f}% variance)"
+    )
 
 
 # =============================================================================
 # Phase 3: Clustering on nuclear deep features
 # =============================================================================
+
 
 def run_phase3(args):
     """Phase 3: Unsupervised clustering on PCA-reduced nuclear deep features."""
@@ -688,12 +737,12 @@ def run_phase3(args):
     data = np.load(args.data, allow_pickle=True)
     nuclear = np.load(args.input, allow_pickle=True)
 
-    area_um2 = data['area_um2']
-    groups = data['groups']
+    area_um2 = data["area_um2"]
+    groups = data["groups"]
 
-    X_pca_valid = nuclear['X_pca_valid']
-    valid_idx = nuclear['valid_indices']
-    n95 = int(nuclear['n95_pcs'][0])
+    X_pca_valid = nuclear["X_pca_valid"]
+    valid_idx = nuclear["valid_indices"]
+    n95 = int(nuclear["n95_pcs"][0])
     N_valid = len(valid_idx)
 
     # Use 95% variance PCs
@@ -704,7 +753,7 @@ def run_phase3(args):
     area_valid = area_um2[valid_idx]
 
     # Parse k range
-    k_values = [int(k) for k in args.k_range.split(',')]
+    k_values = [int(k) for k in args.k_range.split(",")]
     logger.info(f"  K values: {k_values}")
 
     # ---- KMeans sweep ----
@@ -718,9 +767,11 @@ def run_phase3(args):
         inertia = km.inertia_
         cluster_areas = [float(area_valid[labels == c].mean()) for c in range(k)]
         kmeans_results[k] = {
-            'labels': labels, 'silhouette': sil,
-            'calinski_harabasz': ch, 'inertia': inertia,
-            'cluster_areas': cluster_areas,
+            "labels": labels,
+            "silhouette": sil,
+            "calinski_harabasz": ch,
+            "inertia": inertia,
+            "cluster_areas": cluster_areas,
         }
         logger.info(f"  k={k}: silhouette={sil:.4f}, CH={ch:.1f}, inertia={inertia:.0f}")
         logger.info(f"         cluster mean areas: {[f'{a:.0f}' for a in cluster_areas]}")
@@ -730,20 +781,26 @@ def run_phase3(args):
     spectral_results = {}
     for knn_k in [15, 30]:
         logger.info(f"  Building kNN graph (k={knn_k})...")
-        connectivity = kneighbors_graph(X_pca95, n_neighbors=knn_k,
-                                         mode='connectivity', include_self=False)
+        connectivity = kneighbors_graph(
+            X_pca95, n_neighbors=knn_k, mode="connectivity", include_self=False
+        )
         affinity = (connectivity + connectivity.T) / 2
         affinity_dense = affinity.toarray()
         for k in k_values:
             try:
                 sc = SpectralClustering(
-                    n_clusters=k, affinity='precomputed', random_state=42, n_init=10,
+                    n_clusters=k,
+                    affinity="precomputed",
+                    random_state=42,
+                    n_init=10,
                 )
                 labels = sc.fit_predict(affinity_dense)
                 sil = silhouette_score(X_pca95, labels) if k > 1 else 0
                 ch = calinski_harabasz_score(X_pca95, labels) if k > 1 else 0
                 spectral_results[(knn_k, k)] = {
-                    'labels': labels, 'silhouette': sil, 'calinski_harabasz': ch,
+                    "labels": labels,
+                    "silhouette": sil,
+                    "calinski_harabasz": ch,
                 }
                 logger.info(f"  kNN={knn_k}, k={k}: silhouette={sil:.4f}, CH={ch:.1f}")
             except Exception as e:
@@ -753,49 +810,59 @@ def run_phase3(args):
     logger.info("\n--- Agglomerative clustering (Ward) ---")
     agglo_results = {}
     for k in k_values:
-        ac = AgglomerativeClustering(n_clusters=k, linkage='ward')
+        ac = AgglomerativeClustering(n_clusters=k, linkage="ward")
         labels = ac.fit_predict(X_pca95)
         sil = silhouette_score(X_pca95, labels) if k > 1 else 0
         ch = calinski_harabasz_score(X_pca95, labels) if k > 1 else 0
         agglo_results[k] = {
-            'labels': labels, 'silhouette': sil, 'calinski_harabasz': ch,
+            "labels": labels,
+            "silhouette": sil,
+            "calinski_harabasz": ch,
         }
         logger.info(f"  k={k}: silhouette={sil:.4f}, CH={ch:.1f}")
 
     # ---- Select best ----
     logger.info("\n--- Summary: best silhouette by k ---")
-    best_overall = {'sil': -1}
+    best_overall = {"sil": -1}
     for k in k_values:
         candidates = []
         if k in kmeans_results:
-            candidates.append(('KMeans', kmeans_results[k]['silhouette'],
-                               kmeans_results[k]['labels']))
+            candidates.append(
+                ("KMeans", kmeans_results[k]["silhouette"], kmeans_results[k]["labels"])
+            )
         for knn_k in [15, 30]:
             key = (knn_k, k)
             if key in spectral_results:
-                candidates.append((f'Spectral_kNN{knn_k}',
-                                   spectral_results[key]['silhouette'],
-                                   spectral_results[key]['labels']))
+                candidates.append(
+                    (
+                        f"Spectral_kNN{knn_k}",
+                        spectral_results[key]["silhouette"],
+                        spectral_results[key]["labels"],
+                    )
+                )
         if k in agglo_results:
-            candidates.append(('Agglomerative', agglo_results[k]['silhouette'],
-                               agglo_results[k]['labels']))
+            candidates.append(
+                ("Agglomerative", agglo_results[k]["silhouette"], agglo_results[k]["labels"])
+            )
         candidates.sort(key=lambda x: x[1], reverse=True)
         if candidates:
             best_name, best_sil, best_labels = candidates[0]
             logger.info(f"  k={k}: best={best_name} (sil={best_sil:.4f})")
-            if best_sil > best_overall['sil']:
-                best_overall = {'k': k, 'method': best_name, 'sil': best_sil,
-                                'labels': best_labels}
+            if best_sil > best_overall["sil"]:
+                best_overall = {"k": k, "method": best_name, "sil": best_sil, "labels": best_labels}
 
-    logger.info(f"\n  BEST: k={best_overall['k']}, method={best_overall['method']}, "
-                f"silhouette={best_overall['sil']:.4f}")
+    logger.info(
+        f"\n  BEST: k={best_overall['k']}, method={best_overall['method']}, "
+        f"silhouette={best_overall['sil']:.4f}"
+    )
 
-    best_labels = best_overall['labels']
-    best_k = best_overall['k']
+    best_labels = best_overall["labels"]
+    best_k = best_overall["k"]
 
     # Order clusters by mean area
-    cluster_mean_area = np.array([float(area_valid[best_labels == c].mean())
-                                  for c in range(best_k)])
+    cluster_mean_area = np.array(
+        [float(area_valid[best_labels == c].mean()) for c in range(best_k)]
+    )
     cluster_order = np.argsort(cluster_mean_area)
     remap = np.zeros(best_k, dtype=int)
     for new_label, old_label in enumerate(cluster_order):
@@ -810,11 +877,13 @@ def run_phase3(args):
 
     # ---- Spectral embedding for pseudotime ----
     logger.info("Computing spectral embedding (kNN=15) for pseudotime...")
-    knn_graph = kneighbors_graph(X_pca95, n_neighbors=15,
-                                  mode='connectivity', include_self=False)
+    knn_graph = kneighbors_graph(X_pca95, n_neighbors=15, mode="connectivity", include_self=False)
     knn_graph = (knn_graph + knn_graph.T) / 2
     spec_embed = spectral_embedding(
-        knn_graph, n_components=5, random_state=42, drop_first=True,
+        knn_graph,
+        n_components=5,
+        random_state=42,
+        drop_first=True,
     )
     logger.info(f"  Spectral embedding shape: {spec_embed.shape}")
 
@@ -822,32 +891,35 @@ def run_phase3(args):
     output = Path(args.output)
     output.parent.mkdir(parents=True, exist_ok=True)
 
-    km_silhouettes = np.array([(k, kmeans_results[k]['silhouette']) for k in k_values])
+    km_silhouettes = np.array([(k, kmeans_results[k]["silhouette"]) for k in k_values])
 
     np.savez_compressed(
         str(output),
         best_labels=best_labels_ordered,
         best_k=np.array([best_k]),
-        best_method=np.array([best_overall['method']]),
-        best_silhouette=np.array([best_overall['sil']]),
+        best_method=np.array([best_overall["method"]]),
+        best_silhouette=np.array([best_overall["sil"]]),
         cluster_order=cluster_order,
         X_tsne=X_tsne,
         spec_embed=spec_embed,
         km_silhouettes=km_silhouettes,
         valid_indices=valid_idx,
-        **{f'kmeans_labels_k{k}': kmeans_results[k]['labels'] for k in k_values},
-        **{f'kmeans_sil_k{k}': np.array([kmeans_results[k]['silhouette']]) for k in k_values},
+        **{f"kmeans_labels_k{k}": kmeans_results[k]["labels"] for k in k_values},
+        **{f"kmeans_sil_k{k}": np.array([kmeans_results[k]["silhouette"]]) for k in k_values},
     )
 
     dt = time.time() - t0
     logger.info(f"\nPhase 3 complete in {dt:.1f}s. Saved to {output}")
-    logger.info(f"  Best: k={best_k}, method={best_overall['method']}, "
-                f"silhouette={best_overall['sil']:.4f}")
+    logger.info(
+        f"  Best: k={best_k}, method={best_overall['method']}, "
+        f"silhouette={best_overall['sil']:.4f}"
+    )
 
 
 # =============================================================================
 # Phase 4: Validation, pseudotime, group comparison
 # =============================================================================
+
 
 def run_phase4(args):
     """Phase 4: Validate clusters, pseudotime inference, group comparison."""
@@ -863,26 +935,26 @@ def run_phase4(args):
     clusters = np.load(args.clusters, allow_pickle=True)
 
     # Phase 1 metadata (all MKs)
-    groups_all = data['groups']
-    slides = data['slides']
-    area_um2_all = data['area_um2']
-    mk_scores_all = data['mk_scores']
+    groups_all = data["groups"]
+    slides = data["slides"]
+    area_um2_all = data["area_um2"]
+    mk_scores_all = data["mk_scores"]
     N_all = len(groups_all)
 
     # Phase 2 nuclear features (valid_indices maps into the full array)
-    valid_idx = nuclear['valid_indices']
-    nuc_features = nuclear['morph_features'][valid_idx]  # only valid MKs
-    nuc_feature_names = list(nuclear['morph_feature_names'])
-    X_pca = nuclear['X_pca_valid']
-    n95 = int(nuclear['n95_pcs'][0])
+    valid_idx = nuclear["valid_indices"]
+    nuc_features = nuclear["morph_features"][valid_idx]  # only valid MKs
+    nuc_feature_names = list(nuclear["morph_feature_names"])
+    X_pca = nuclear["X_pca_valid"]
+    n95 = int(nuclear["n95_pcs"][0])
 
     # Phase 3 clusters (indexed on valid MKs only)
-    best_labels = clusters['best_labels']
-    best_k = int(clusters['best_k'][0])
-    best_method = str(clusters['best_method'][0])
-    X_tsne = clusters['X_tsne']
-    spec_embed = clusters['spec_embed']
-    km_silhouettes = clusters['km_silhouettes']
+    best_labels = clusters["best_labels"]
+    best_k = int(clusters["best_k"][0])
+    best_method = str(clusters["best_method"][0])
+    X_tsne = clusters["X_tsne"]
+    spec_embed = clusters["spec_embed"]
+    km_silhouettes = clusters["km_silhouettes"]
 
     # Subset metadata to valid MKs (matching cluster/t-SNE indices)
     groups = groups_all[valid_idx]
@@ -893,8 +965,10 @@ def run_phase4(args):
     outdir = Path(args.output_dir)
     outdir.mkdir(parents=True, exist_ok=True)
 
-    logger.info(f"  {N} valid MKs (of {N_all} total), {best_k} clusters ({best_method}), "
-                f"{nuc_features.shape[1]} nuclear morph features")
+    logger.info(
+        f"  {N} valid MKs (of {N_all} total), {best_k} clusters ({best_method}), "
+        f"{nuc_features.shape[1]} nuclear morph features"
+    )
 
     # ---- 4a: Validate clusters with nuclear features ----
     logger.info("\n--- 4a: Cluster validation with nuclear features ---")
@@ -904,18 +978,18 @@ def run_phase4(args):
     for c in range(best_k):
         mask = best_labels == c
         n_in_cluster = mask.sum()
-        cstats = {'n': int(n_in_cluster), 'mean_area_um2': float(area_um2[mask].mean())}
+        cstats = {"n": int(n_in_cluster), "mean_area_um2": float(area_um2[mask].mean())}
         for j, fname in enumerate(nuc_feature_names):
             vals = nuc_features[mask, j]
             valid = vals[~np.isnan(vals)]
             if len(valid) > 0:
-                cstats[f'{fname}_mean'] = float(np.mean(valid))
-                cstats[f'{fname}_std'] = float(np.std(valid))
-                cstats[f'{fname}_median'] = float(np.median(valid))
+                cstats[f"{fname}_mean"] = float(np.mean(valid))
+                cstats[f"{fname}_std"] = float(np.std(valid))
+                cstats[f"{fname}_median"] = float(np.median(valid))
             else:
-                cstats[f'{fname}_mean'] = np.nan
-                cstats[f'{fname}_std'] = np.nan
-                cstats[f'{fname}_median'] = np.nan
+                cstats[f"{fname}_mean"] = np.nan
+                cstats[f"{fname}_std"] = np.nan
+                cstats[f"{fname}_median"] = np.nan
         cluster_stats[c] = cstats
         logger.info(f"  Cluster {c}: n={n_in_cluster}, mean_area={cstats['mean_area_um2']:.0f} um2")
 
@@ -923,23 +997,31 @@ def run_phase4(args):
     logger.info("\n  Spearman correlations (cluster_index vs nuclear feature):")
     monotonicity = {}
     for fname in nuc_feature_names:
-        cluster_medians = [cluster_stats[c].get(f'{fname}_median', np.nan) for c in range(best_k)]
+        cluster_medians = [cluster_stats[c].get(f"{fname}_median", np.nan) for c in range(best_k)]
         if any(np.isnan(v) for v in cluster_medians):
             logger.info(f"    {fname}: NaN in some clusters, skipping")
             continue
         rho, pval = stats.spearmanr(range(best_k), cluster_medians)
-        monotonicity[fname] = {'rho': float(rho), 'pval': float(pval)}
-        sig = '***' if pval < 0.001 else '**' if pval < 0.01 else '*' if pval < 0.05 else 'ns'
+        monotonicity[fname] = {"rho": float(rho), "pval": float(pval)}
+        sig = "***" if pval < 0.001 else "**" if pval < 0.01 else "*" if pval < 0.05 else "ns"
         logger.info(f"    {fname}: rho={rho:.3f}, p={pval:.4f} {sig}")
 
     # Save cluster stats as JSON
-    with open(outdir / 'cluster_stats.json', 'w') as f:
-        json.dump({
-            'best_k': best_k,
-            'best_method': best_method,
-            'cluster_stats': {str(k): v for k, v in cluster_stats.items()},
-            'monotonicity': monotonicity,
-        }, f, default=lambda x: None if isinstance(x, float) and np.isnan(x) else float(x) if isinstance(x, (np.floating, np.integer)) else x)
+    with open(outdir / "cluster_stats.json", "w") as f:
+        json.dump(
+            {
+                "best_k": best_k,
+                "best_method": best_method,
+                "cluster_stats": {str(k): v for k, v in cluster_stats.items()},
+                "monotonicity": monotonicity,
+            },
+            f,
+            default=lambda x: (
+                None
+                if isinstance(x, float) and np.isnan(x)
+                else float(x) if isinstance(x, (np.floating, np.integer)) else x
+            ),
+        )
 
     # ---- Heatmap: cluster x nuclear feature means ----
     logger.info("\n  Generating cluster-nuclear feature heatmap...")
@@ -953,14 +1035,16 @@ def run_phase4(args):
 
     # Orient pseudotime: correlate with nuclear circularity
     # Circularity should DECREASE with maturation, so pseudotime should correlate negatively
-    circ_idx = nuc_feature_names.index('circularity')
+    circ_idx = nuc_feature_names.index("circularity")
     valid_mask = ~np.isnan(nuc_features[:, circ_idx])
     if valid_mask.sum() > 10:
         rho, _ = stats.spearmanr(pseudotime_spec[valid_mask], nuc_features[valid_mask, circ_idx])
         if rho > 0:
             # Flip: we want circularity to decrease along pseudotime
             pseudotime_spec = -pseudotime_spec
-            logger.info(f"  Flipped pseudotime (circularity was positively correlated, rho={rho:.3f})")
+            logger.info(
+                f"  Flipped pseudotime (circularity was positively correlated, rho={rho:.3f})"
+            )
         else:
             logger.info(f"  Pseudotime orientation OK (circularity rho={rho:.3f})")
 
@@ -977,7 +1061,7 @@ def run_phase4(args):
         vm = ~np.isnan(nuc_features[:, fidx])
         if vm.sum() > 10:
             rho, pval = stats.spearmanr(pseudotime_spec[vm], nuc_features[vm, fidx])
-            sig = '***' if pval < 0.001 else '**' if pval < 0.01 else '*' if pval < 0.05 else 'ns'
+            sig = "***" if pval < 0.001 else "**" if pval < 0.01 else "*" if pval < 0.05 else "ns"
             logger.info(f"    {fname}: rho={rho:.3f}, p={pval:.2e} {sig}")
 
     logger.info("\n  Pseudotime validation (PCA component 1):")
@@ -986,7 +1070,7 @@ def run_phase4(args):
         vm = ~np.isnan(nuc_features[:, fidx])
         if vm.sum() > 10:
             rho, pval = stats.spearmanr(pseudotime_pca[vm], nuc_features[vm, fidx])
-            sig = '***' if pval < 0.001 else '**' if pval < 0.01 else '*' if pval < 0.05 else 'ns'
+            sig = "***" if pval < 0.001 else "**" if pval < 0.01 else "*" if pval < 0.05 else "ns"
             logger.info(f"    {fname}: rho={rho:.3f}, p={pval:.2e} {sig}")
 
     # Agreement between spectral and PCA pseudotime
@@ -1006,8 +1090,10 @@ def run_phase4(args):
         row_sum = contingency[i].sum()
         if row_sum > 0:
             props = contingency[i] / row_sum * 100
-            logger.info(f"    {g}: {dict(zip(range(best_k), contingency[i]))} "
-                        f"({', '.join(f'{p:.1f}%' for p in props)})")
+            logger.info(
+                f"    {g}: {dict(zip(range(best_k), contingency[i]))} "
+                f"({', '.join(f'{p:.1f}%' for p in props)})"
+            )
         else:
             logger.warning(f"    {g}: no valid MKs in this group")
 
@@ -1026,8 +1112,10 @@ def run_phase4(args):
     for g in GROUP_ORDER:
         gmask = groups == g
         vals = pseudotime_spec[gmask]
-        logger.info(f"    {g}: n={len(vals)}, median={np.median(vals):.4f}, "
-                    f"mean={np.mean(vals):.4f}, std={np.std(vals):.4f}")
+        logger.info(
+            f"    {g}: n={len(vals)}, median={np.median(vals):.4f}, "
+            f"mean={np.mean(vals):.4f}, std={np.std(vals):.4f}"
+        )
 
     # Kruskal-Wallis (filter out empty groups)
     group_pseudotimes = [pseudotime_spec[groups == g] for g in GROUP_ORDER]
@@ -1041,7 +1129,9 @@ def run_phase4(args):
 
     # Pairwise Mann-Whitney U with Bonferroni
     n_comparisons = len(GROUP_ORDER) * (len(GROUP_ORDER) - 1) // 2
-    logger.info(f"\n  Pairwise Mann-Whitney U (Bonferroni correction, {n_comparisons} comparisons):")
+    logger.info(
+        f"\n  Pairwise Mann-Whitney U (Bonferroni correction, {n_comparisons} comparisons):"
+    )
     pairwise_results = {}
     for i in range(len(GROUP_ORDER)):
         for j in range(i + 1, len(GROUP_ORDER)):
@@ -1051,16 +1141,22 @@ def run_phase4(args):
             if len(v1) == 0 or len(v2) == 0:
                 logger.warning(f"    {g1} vs {g2}: skipped (empty group)")
                 continue
-            u_stat, p_val = stats.mannwhitneyu(v1, v2, alternative='two-sided')
+            u_stat, p_val = stats.mannwhitneyu(v1, v2, alternative="two-sided")
             p_adj = min(p_val * n_comparisons, 1.0)
-            sig = '***' if p_adj < 0.001 else '**' if p_adj < 0.01 else '*' if p_adj < 0.05 else 'ns'
-            pairwise_results[f'{g1}_vs_{g2}'] = {'U': float(u_stat), 'p_raw': float(p_val), 'p_adj': float(p_adj)}
+            sig = (
+                "***" if p_adj < 0.001 else "**" if p_adj < 0.01 else "*" if p_adj < 0.05 else "ns"
+            )
+            pairwise_results[f"{g1}_vs_{g2}"] = {
+                "U": float(u_stat),
+                "p_raw": float(p_val),
+                "p_adj": float(p_adj),
+            }
             logger.info(f"    {g1} vs {g2}: U={u_stat:.0f}, p_adj={p_adj:.2e} {sig}")
 
     # Sex and condition comparisons
     logger.info("\n  Sex comparison (F vs M):")
-    female_mask = (groups == 'FGC') | (groups == 'FHU')
-    male_mask = (groups == 'MGC') | (groups == 'MHU')
+    female_mask = (groups == "FGC") | (groups == "FHU")
+    male_mask = (groups == "MGC") | (groups == "MHU")
     if female_mask.sum() > 0 and male_mask.sum() > 0:
         u_sex, p_sex = stats.mannwhitneyu(pseudotime_spec[female_mask], pseudotime_spec[male_mask])
         logger.info(f"    F vs M: U={u_sex:.0f}, p={p_sex:.2e}")
@@ -1069,8 +1165,8 @@ def run_phase4(args):
         logger.warning("    F vs M: skipped (empty group)")
 
     logger.info("\n  Condition comparison (GC vs HU):")
-    gc_mask = (groups == 'FGC') | (groups == 'MGC')
-    hu_mask = (groups == 'FHU') | (groups == 'MHU')
+    gc_mask = (groups == "FGC") | (groups == "MGC")
+    hu_mask = (groups == "FHU") | (groups == "MHU")
     if gc_mask.sum() > 0 and hu_mask.sum() > 0:
         u_cond, p_cond = stats.mannwhitneyu(pseudotime_spec[gc_mask], pseudotime_spec[hu_mask])
         logger.info(f"    GC vs HU: U={u_cond:.0f}, p={p_cond:.2e}")
@@ -1079,15 +1175,18 @@ def run_phase4(args):
         logger.warning("    GC vs HU: skipped (empty group)")
 
     # Save stats
-    with open(outdir / 'group_comparison_stats.json', 'w') as f:
-        json.dump({
-            'chi_squared': {'chi2': float(chi2), 'p': float(chi2_pval), 'dof': int(dof)},
-            'kruskal_wallis': {'H': float(kw_stat), 'p': float(kw_pval)},
-            'pairwise_mannwhitney': pairwise_results,
-            'sex_comparison': {'U': float(u_sex), 'p': float(p_sex)},
-            'condition_comparison': {'U': float(u_cond), 'p': float(p_cond)},
-            'contingency_table': contingency.tolist(),
-        }, f)
+    with open(outdir / "group_comparison_stats.json", "w") as f:
+        json.dump(
+            {
+                "chi_squared": {"chi2": float(chi2), "p": float(chi2_pval), "dof": int(dof)},
+                "kruskal_wallis": {"H": float(kw_stat), "p": float(kw_pval)},
+                "pairwise_mannwhitney": pairwise_results,
+                "sex_comparison": {"U": float(u_sex), "p": float(p_sex)},
+                "condition_comparison": {"U": float(u_cond), "p": float(p_cond)},
+                "contingency_table": contingency.tolist(),
+            },
+            f,
+        )
 
     # ---- Generate all plots ----
     logger.info("\n--- Generating plots ---")
@@ -1096,23 +1195,51 @@ def run_phase4(args):
     _plot_silhouette_elbow(km_silhouettes, outdir)
 
     # 2. t-SNE colored by cluster
-    _plot_tsne_colored(X_tsne, best_labels, best_k, 'Cluster', outdir / 'tsne_by_cluster',
-                       cmap='tab10', discrete=True)
+    _plot_tsne_colored(
+        X_tsne,
+        best_labels,
+        best_k,
+        "Cluster",
+        outdir / "tsne_by_cluster",
+        cmap="tab10",
+        discrete=True,
+    )
 
     # 3. t-SNE colored by group
-    _plot_tsne_by_group(X_tsne, groups, outdir / 'tsne_by_group')
+    _plot_tsne_by_group(X_tsne, groups, outdir / "tsne_by_group")
 
     # 4. t-SNE colored by area
-    _plot_tsne_colored(X_tsne, area_um2, best_k, 'Area (um2)', outdir / 'tsne_by_area',
-                       cmap='viridis', discrete=False)
+    _plot_tsne_colored(
+        X_tsne,
+        area_um2,
+        best_k,
+        "Area (um2)",
+        outdir / "tsne_by_area",
+        cmap="viridis",
+        discrete=False,
+    )
 
     # 5. t-SNE colored by mk_score
-    _plot_tsne_colored(X_tsne, mk_scores, best_k, 'CLF Score', outdir / 'tsne_by_score',
-                       cmap='plasma', discrete=False)
+    _plot_tsne_colored(
+        X_tsne,
+        mk_scores,
+        best_k,
+        "CLF Score",
+        outdir / "tsne_by_score",
+        cmap="plasma",
+        discrete=False,
+    )
 
     # 6. t-SNE colored by pseudotime
-    _plot_tsne_colored(X_tsne, pseudotime_spec, best_k, 'Pseudotime (spectral)',
-                       outdir / 'tsne_by_pseudotime', cmap='coolwarm', discrete=False)
+    _plot_tsne_colored(
+        X_tsne,
+        pseudotime_spec,
+        best_k,
+        "Pseudotime (spectral)",
+        outdir / "tsne_by_pseudotime",
+        cmap="coolwarm",
+        discrete=False,
+    )
 
     # 7. Cluster composition stacked bar
     _plot_cluster_composition(contingency, GROUP_ORDER, best_k, outdir)
@@ -1125,14 +1252,15 @@ def run_phase4(args):
 
     # 10. Representative gallery per cluster
     logger.info("  Generating representative gallery...")
-    crops_file = Path(args.data).parent / (Path(args.data).stem + '_crops.json')
+    crops_file = Path(args.data).parent / (Path(args.data).stem + "_crops.json")
     if crops_file.exists():
         with open(crops_file) as f:
             crops_data = json.load(f)
         # Subset crops to valid MKs (matching cluster indices)
-        valid_crops = [crops_data['crop_b64'][i] for i in valid_idx]
-        _plot_representative_gallery(valid_crops, best_labels, best_k,
-                                     area_um2, pseudotime_spec, outdir)
+        valid_crops = [crops_data["crop_b64"][i] for i in valid_idx]
+        _plot_representative_gallery(
+            valid_crops, best_labels, best_k, area_um2, pseudotime_spec, outdir
+        )
     else:
         logger.warning(f"  Crops file not found: {crops_file}, skipping gallery")
 
@@ -1141,7 +1269,7 @@ def run_phase4(args):
 
     # Save pseudotime values for future use
     np.savez_compressed(
-        str(outdir / 'pseudotime.npz'),
+        str(outdir / "pseudotime.npz"),
         pseudotime_spec=pseudotime_spec,
         pseudotime_pca=pseudotime_pca,
         pseudotime_agreement_rho=np.array([rho_agree]),
@@ -1155,10 +1283,11 @@ def run_phase4(args):
 # Plotting helpers
 # =============================================================================
 
+
 def _save_fig(fig, path_stem):
     """Save figure as PNG and PDF."""
-    fig.savefig(f'{path_stem}.png', dpi=150, bbox_inches='tight')
-    fig.savefig(f'{path_stem}.pdf', bbox_inches='tight')
+    fig.savefig(f"{path_stem}.png", dpi=150, bbox_inches="tight")
+    fig.savefig(f"{path_stem}.pdf", bbox_inches="tight")
     plt.close(fig)
     logger.info(f"  Saved {path_stem}.png/.pdf")
 
@@ -1168,35 +1297,46 @@ def _plot_silhouette_elbow(km_silhouettes, outdir):
     fig, ax = plt.subplots(figsize=(8, 5))
     ks = km_silhouettes[:, 0].astype(int)
     sils = km_silhouettes[:, 1]
-    ax.plot(ks, sils, 'o-', color='#2c3e50', linewidth=2, markersize=8)
-    ax.set_xlabel('Number of clusters (k)', fontsize=12)
-    ax.set_ylabel('Silhouette score', fontsize=12)
-    ax.set_title('KMeans Silhouette Score vs k', fontsize=14)
+    ax.plot(ks, sils, "o-", color="#2c3e50", linewidth=2, markersize=8)
+    ax.set_xlabel("Number of clusters (k)", fontsize=12)
+    ax.set_ylabel("Silhouette score", fontsize=12)
+    ax.set_title("KMeans Silhouette Score vs k", fontsize=14)
     ax.set_xticks(ks)
     ax.grid(True, alpha=0.3)
     best_idx = np.argmax(sils)
-    ax.annotate(f'Best: k={ks[best_idx]}', xy=(ks[best_idx], sils[best_idx]),
-                xytext=(10, 10), textcoords='offset points',
-                fontsize=11, fontweight='bold', color='#e74c3c')
-    _save_fig(fig, str(outdir / 'silhouette_elbow'))
+    ax.annotate(
+        f"Best: k={ks[best_idx]}",
+        xy=(ks[best_idx], sils[best_idx]),
+        xytext=(10, 10),
+        textcoords="offset points",
+        fontsize=11,
+        fontweight="bold",
+        color="#e74c3c",
+    )
+    _save_fig(fig, str(outdir / "silhouette_elbow"))
 
 
-def _plot_tsne_colored(X_tsne, values, k, label, path_stem, cmap='tab10', discrete=True):
+def _plot_tsne_colored(X_tsne, values, k, label, path_stem, cmap="tab10", discrete=True):
     """Generic t-SNE scatter colored by values."""
     fig, ax = plt.subplots(figsize=(10, 8))
     if discrete:
         for c in range(k):
             mask = values == c
-            ax.scatter(X_tsne[mask, 0], X_tsne[mask, 1], s=5, alpha=0.5,
-                       label=f'Cluster {c} (n={mask.sum()})')
+            ax.scatter(
+                X_tsne[mask, 0],
+                X_tsne[mask, 1],
+                s=5,
+                alpha=0.5,
+                label=f"Cluster {c} (n={mask.sum()})",
+            )
         ax.legend(markerscale=3, fontsize=10)
     else:
         sc = ax.scatter(X_tsne[:, 0], X_tsne[:, 1], c=values, s=5, alpha=0.5, cmap=cmap)
         plt.colorbar(sc, ax=ax, label=label, shrink=0.8)
-    ax.set_xlabel('t-SNE 1', fontsize=12)
-    ax.set_ylabel('t-SNE 2', fontsize=12)
-    ax.set_title(f't-SNE colored by {label}', fontsize=14)
-    ax.set_aspect('equal')
+    ax.set_xlabel("t-SNE 1", fontsize=12)
+    ax.set_ylabel("t-SNE 2", fontsize=12)
+    ax.set_title(f"t-SNE colored by {label}", fontsize=14)
+    ax.set_aspect("equal")
     _save_fig(fig, str(path_stem))
 
 
@@ -1205,13 +1345,19 @@ def _plot_tsne_by_group(X_tsne, groups, path_stem):
     fig, ax = plt.subplots(figsize=(10, 8))
     for g in GROUP_ORDER:
         mask = groups == g
-        ax.scatter(X_tsne[mask, 0], X_tsne[mask, 1], s=5, alpha=0.4,
-                   color=GROUP_COLORS[g], label=f'{g} (n={mask.sum()})')
+        ax.scatter(
+            X_tsne[mask, 0],
+            X_tsne[mask, 1],
+            s=5,
+            alpha=0.4,
+            color=GROUP_COLORS[g],
+            label=f"{g} (n={mask.sum()})",
+        )
     ax.legend(markerscale=3, fontsize=10)
-    ax.set_xlabel('t-SNE 1', fontsize=12)
-    ax.set_ylabel('t-SNE 2', fontsize=12)
-    ax.set_title('t-SNE colored by Group', fontsize=14)
-    ax.set_aspect('equal')
+    ax.set_xlabel("t-SNE 1", fontsize=12)
+    ax.set_ylabel("t-SNE 2", fontsize=12)
+    ax.set_title("t-SNE colored by Group", fontsize=14)
+    ax.set_aspect("equal")
     _save_fig(fig, str(path_stem))
 
 
@@ -1219,18 +1365,18 @@ def _plot_cluster_nuclear_heatmap(cluster_stats, nuc_feature_names, best_k, outd
     """Heatmap of cluster x nuclear feature medians."""
     # Short names for display
     short_names = {
-        'nc_ratio': 'N:C Ratio',
-        'circularity': 'Circularity',
-        'solidity': 'Solidity',
-        'lobe_count': 'Lobe Count',
-        'intensity_mean': 'Intensity',
-        'area_fraction': 'Area Fraction',
+        "nc_ratio": "N:C Ratio",
+        "circularity": "Circularity",
+        "solidity": "Solidity",
+        "lobe_count": "Lobe Count",
+        "intensity_mean": "Intensity",
+        "area_fraction": "Area Fraction",
     }
 
     data_matrix = np.zeros((best_k, len(nuc_feature_names)))
     for c in range(best_k):
         for j, fname in enumerate(nuc_feature_names):
-            data_matrix[c, j] = cluster_stats[c].get(f'{fname}_median', np.nan)
+            data_matrix[c, j] = cluster_stats[c].get(f"{fname}_median", np.nan)
 
     # Z-score normalize columns for visualization
     data_z = np.copy(data_matrix)
@@ -1241,26 +1387,33 @@ def _plot_cluster_nuclear_heatmap(cluster_stats, nuc_feature_names, best_k, outd
             data_z[:, j] = (col - np.mean(valid)) / np.std(valid)
 
     fig, ax = plt.subplots(figsize=(14, max(4, best_k * 0.8 + 2)))
-    im = ax.imshow(data_z, cmap='RdBu_r', aspect='auto', vmin=-2, vmax=2)
-    plt.colorbar(im, ax=ax, label='Z-score', shrink=0.8)
+    im = ax.imshow(data_z, cmap="RdBu_r", aspect="auto", vmin=-2, vmax=2)
+    plt.colorbar(im, ax=ax, label="Z-score", shrink=0.8)
 
     # Labels
     ax.set_yticks(range(best_k))
     ax.set_yticklabels([f'Cluster {c}\n(n={cluster_stats[c]["n"]})' for c in range(best_k)])
     ax.set_xticks(range(len(nuc_feature_names)))
-    ax.set_xticklabels([short_names.get(f, f) for f in nuc_feature_names], rotation=45, ha='right')
+    ax.set_xticklabels([short_names.get(f, f) for f in nuc_feature_names], rotation=45, ha="right")
 
     # Annotate with raw values
     for c in range(best_k):
         for j in range(len(nuc_feature_names)):
             val = data_matrix[c, j]
             if not np.isnan(val):
-                ax.text(j, c, f'{val:.2f}', ha='center', va='center', fontsize=8,
-                        color='white' if abs(data_z[c, j]) > 1.5 else 'black')
+                ax.text(
+                    j,
+                    c,
+                    f"{val:.2f}",
+                    ha="center",
+                    va="center",
+                    fontsize=8,
+                    color="white" if abs(data_z[c, j]) > 1.5 else "black",
+                )
 
-    ax.set_title('Nuclear Features by Cluster (ordered by mean cell area)', fontsize=13)
+    ax.set_title("Nuclear Features by Cluster (ordered by mean cell area)", fontsize=13)
     plt.tight_layout()
-    _save_fig(fig, str(outdir / 'cluster_nuclear_heatmap'))
+    _save_fig(fig, str(outdir / "cluster_nuclear_heatmap"))
 
 
 def _plot_cluster_composition(contingency, group_order, best_k, outdir):
@@ -1274,12 +1427,20 @@ def _plot_cluster_composition(contingency, group_order, best_k, outdir):
     bottom = np.zeros(len(group_order))
     for c in range(best_k):
         vals = contingency[:, c]
-        ax1.bar(x, vals, bottom=bottom, color=colors[c], label=f'Cluster {c}', edgecolor='white', linewidth=0.5)
+        ax1.bar(
+            x,
+            vals,
+            bottom=bottom,
+            color=colors[c],
+            label=f"Cluster {c}",
+            edgecolor="white",
+            linewidth=0.5,
+        )
         bottom += vals
     ax1.set_xticks(x)
     ax1.set_xticklabels(group_order, fontsize=12)
-    ax1.set_ylabel('Count', fontsize=12)
-    ax1.set_title('Cluster composition (absolute)', fontsize=13)
+    ax1.set_ylabel("Count", fontsize=12)
+    ax1.set_title("Cluster composition (absolute)", fontsize=13)
     ax1.legend(fontsize=9)
 
     # Proportions (guard against zero-sum rows)
@@ -1289,20 +1450,30 @@ def _plot_cluster_composition(contingency, group_order, best_k, outdir):
     bottom = np.zeros(len(group_order))
     for c in range(best_k):
         vals = props[:, c]
-        ax2.bar(x, vals, bottom=bottom, color=colors[c], label=f'Cluster {c}', edgecolor='white', linewidth=0.5)
+        ax2.bar(
+            x,
+            vals,
+            bottom=bottom,
+            color=colors[c],
+            label=f"Cluster {c}",
+            edgecolor="white",
+            linewidth=0.5,
+        )
         # Label with percentage
         for i, v in enumerate(vals):
             if v > 0.05:
-                ax2.text(i, bottom[i] + v / 2, f'{v*100:.0f}%', ha='center', va='center', fontsize=9)
+                ax2.text(
+                    i, bottom[i] + v / 2, f"{v*100:.0f}%", ha="center", va="center", fontsize=9
+                )
         bottom += vals
     ax2.set_xticks(x)
     ax2.set_xticklabels(group_order, fontsize=12)
-    ax2.set_ylabel('Proportion', fontsize=12)
-    ax2.set_title('Cluster composition (proportional)', fontsize=13)
+    ax2.set_ylabel("Proportion", fontsize=12)
+    ax2.set_title("Cluster composition (proportional)", fontsize=13)
     ax2.legend(fontsize=9)
 
     plt.tight_layout()
-    _save_fig(fig, str(outdir / 'cluster_composition'))
+    _save_fig(fig, str(outdir / "cluster_composition"))
 
 
 def _plot_pseudotime_violins(pseudotime, groups, pairwise_results, outdir):
@@ -1322,27 +1493,28 @@ def _plot_pseudotime_violins(pseudotime, groups, pairwise_results, outdir):
         plt.close(fig)
         return
 
-    parts = ax.violinplot(group_data, positions=range(len(plot_groups)), showmedians=True,
-                          showextrema=False)
+    parts = ax.violinplot(
+        group_data, positions=range(len(plot_groups)), showmedians=True, showextrema=False
+    )
 
     # Color violins
-    for i, pc in enumerate(parts['bodies']):
+    for i, pc in enumerate(parts["bodies"]):
         pc.set_facecolor(GROUP_COLORS[plot_groups[i]])
         pc.set_alpha(0.6)
-    parts['cmedians'].set_color('black')
+    parts["cmedians"].set_color("black")
 
     # Scale widths by count (modify vertices in-place)
     max_n = max(len(d) for d in group_data)
-    for i, pc in enumerate(parts['bodies']):
+    for i, pc in enumerate(parts["bodies"]):
         path = pc.get_paths()[0]
         center = i
         scale = len(group_data[i]) / max_n
         path.vertices[:, 0] = center + (path.vertices[:, 0] - center) * scale
 
     ax.set_xticks(range(len(plot_groups)))
-    ax.set_xticklabels([f'{g}\n(n={len(d)})' for g, d in zip(plot_groups, group_data)], fontsize=11)
-    ax.set_ylabel('Pseudotime (spectral embedding)', fontsize=12)
-    ax.set_title('MK Maturation Pseudotime by Group', fontsize=14)
+    ax.set_xticklabels([f"{g}\n(n={len(d)})" for g, d in zip(plot_groups, group_data)], fontsize=11)
+    ax.set_ylabel("Pseudotime (spectral embedding)", fontsize=12)
+    ax.set_title("MK Maturation Pseudotime by Group", fontsize=14)
 
     # Add significance brackets
     y_max = max(v.max() for v in group_data)
@@ -1355,22 +1527,23 @@ def _plot_pseudotime_violins(pseudotime, groups, pairwise_results, outdir):
     sig_pairs = []
     for i in range(len(plot_groups)):
         for j in range(i + 1, len(plot_groups)):
-            key = f'{plot_groups[i]}_vs_{plot_groups[j]}'
+            key = f"{plot_groups[i]}_vs_{plot_groups[j]}"
             if key in pairwise_results:
-                p_adj = pairwise_results[key]['p_adj']
+                p_adj = pairwise_results[key]["p_adj"]
                 if p_adj < 0.05:
-                    sig = '***' if p_adj < 0.001 else '**' if p_adj < 0.01 else '*'
+                    sig = "***" if p_adj < 0.001 else "**" if p_adj < 0.01 else "*"
                     sig_pairs.append((i, j, sig, p_adj))
 
     for idx, (i, j, sig, p_adj) in enumerate(sig_pairs):
         y = bracket_y + idx * bracket_step
-        ax.plot([i, i, j, j], [y - 0.01 * y_range, y, y, y - 0.01 * y_range],
-                color='black', linewidth=1)
-        ax.text((i + j) / 2, y + 0.005 * y_range, sig, ha='center', va='bottom', fontsize=11)
+        ax.plot(
+            [i, i, j, j], [y - 0.01 * y_range, y, y, y - 0.01 * y_range], color="black", linewidth=1
+        )
+        ax.text((i + j) / 2, y + 0.005 * y_range, sig, ha="center", va="bottom", fontsize=11)
 
-    ax.grid(True, alpha=0.3, axis='y')
+    ax.grid(True, alpha=0.3, axis="y")
     plt.tight_layout()
-    _save_fig(fig, str(outdir / 'pseudotime_violin'))
+    _save_fig(fig, str(outdir / "pseudotime_violin"))
 
 
 def _plot_pseudotime_histograms(pseudotime, groups, outdir):
@@ -1382,29 +1555,44 @@ def _plot_pseudotime_histograms(pseudotime, groups, outdir):
     # Top: raw counts
     for g in GROUP_ORDER:
         vals = pseudotime[groups == g]
-        ax1.hist(vals, bins=bins, histtype='step', linewidth=2,
-                 color=GROUP_COLORS[g], label=f'{g} (n={len(vals)})')
-    ax1.set_ylabel('Count', fontsize=12)
-    ax1.set_title('MK Pseudotime Distribution by Group', fontsize=14)
+        ax1.hist(
+            vals,
+            bins=bins,
+            histtype="step",
+            linewidth=2,
+            color=GROUP_COLORS[g],
+            label=f"{g} (n={len(vals)})",
+        )
+    ax1.set_ylabel("Count", fontsize=12)
+    ax1.set_title("MK Pseudotime Distribution by Group", fontsize=14)
     ax1.legend(fontsize=10)
     ax1.grid(True, alpha=0.3)
 
     # Bottom: density normalized
     for g in GROUP_ORDER:
         vals = pseudotime[groups == g]
-        ax2.hist(vals, bins=bins, histtype='step', linewidth=2, density=True,
-                 color=GROUP_COLORS[g], label=f'{g}')
-    ax2.set_xlabel('Pseudotime (spectral embedding)', fontsize=12)
-    ax2.set_ylabel('Density', fontsize=12)
-    ax2.set_title('Normalized', fontsize=12)
+        ax2.hist(
+            vals,
+            bins=bins,
+            histtype="step",
+            linewidth=2,
+            density=True,
+            color=GROUP_COLORS[g],
+            label=f"{g}",
+        )
+    ax2.set_xlabel("Pseudotime (spectral embedding)", fontsize=12)
+    ax2.set_ylabel("Density", fontsize=12)
+    ax2.set_title("Normalized", fontsize=12)
     ax2.legend(fontsize=10)
     ax2.grid(True, alpha=0.3)
 
     plt.tight_layout()
-    _save_fig(fig, str(outdir / 'pseudotime_histogram'))
+    _save_fig(fig, str(outdir / "pseudotime_histogram"))
 
 
-def _plot_representative_gallery(crop_b64_list, labels, best_k, area_um2, pseudotime, outdir, n_per_cluster=8):
+def _plot_representative_gallery(
+    crop_b64_list, labels, best_k, area_um2, pseudotime, outdir, n_per_cluster=8
+):
     """Grid of representative MK crops per cluster, ordered by pseudotime."""
     fig, axes = plt.subplots(best_k, n_per_cluster, figsize=(2.5 * n_per_cluster, 2.5 * best_k))
     if best_k == 1:
@@ -1431,21 +1619,25 @@ def _plot_representative_gallery(crop_b64_list, labels, best_k, area_um2, pseudo
                 idx = chosen[j]
                 try:
                     crop_bytes = base64.b64decode(crop_b64_list[idx])
-                    crop_img = np.array(Image.open(BytesIO(crop_bytes)).convert('RGB'))
+                    crop_img = np.array(Image.open(BytesIO(crop_bytes)).convert("RGB"))
                     ax.imshow(crop_img)
-                    ax.set_title(f'{area_um2[idx]:.0f}um2', fontsize=8)
+                    ax.set_title(f"{area_um2[idx]:.0f}um2", fontsize=8)
                 except Exception:
-                    ax.text(0.5, 0.5, 'err', ha='center', va='center', transform=ax.transAxes)
-            ax.axis('off')
+                    ax.text(0.5, 0.5, "err", ha="center", va="center", transform=ax.transAxes)
+            ax.axis("off")
 
         # Row label
-        axes[c, 0].set_ylabel(f'C{c}\n(n={cmask.sum()})', fontsize=11, rotation=0,
-                               labelpad=50, va='center')
+        axes[c, 0].set_ylabel(
+            f"C{c}\n(n={cmask.sum()})", fontsize=11, rotation=0, labelpad=50, va="center"
+        )
 
-    plt.suptitle('Representative MKs per Cluster (ordered by pseudotime, left=early, right=late)',
-                 fontsize=13, y=1.01)
+    plt.suptitle(
+        "Representative MKs per Cluster (ordered by pseudotime, left=early, right=late)",
+        fontsize=13,
+        y=1.01,
+    )
     plt.tight_layout()
-    _save_fig(fig, str(outdir / 'representative_gallery'))
+    _save_fig(fig, str(outdir / "representative_gallery"))
 
 
 def _plot_tsne_cluster_group_sidebyside(X_tsne, labels, best_k, groups, outdir):
@@ -1455,86 +1647,104 @@ def _plot_tsne_cluster_group_sidebyside(X_tsne, labels, best_k, groups, outdir):
     # Left: clusters
     for c in range(best_k):
         mask = labels == c
-        ax1.scatter(X_tsne[mask, 0], X_tsne[mask, 1], s=5, alpha=0.5,
-                    label=f'Cluster {c} (n={mask.sum()})')
+        ax1.scatter(
+            X_tsne[mask, 0], X_tsne[mask, 1], s=5, alpha=0.5, label=f"Cluster {c} (n={mask.sum()})"
+        )
     ax1.legend(markerscale=3, fontsize=9)
-    ax1.set_title('Clusters', fontsize=13)
-    ax1.set_xlabel('t-SNE 1')
-    ax1.set_ylabel('t-SNE 2')
-    ax1.set_aspect('equal')
+    ax1.set_title("Clusters", fontsize=13)
+    ax1.set_xlabel("t-SNE 1")
+    ax1.set_ylabel("t-SNE 2")
+    ax1.set_aspect("equal")
 
     # Right: groups
     for g in GROUP_ORDER:
         mask = groups == g
-        ax2.scatter(X_tsne[mask, 0], X_tsne[mask, 1], s=5, alpha=0.4,
-                    color=GROUP_COLORS[g], label=f'{g} (n={mask.sum()})')
+        ax2.scatter(
+            X_tsne[mask, 0],
+            X_tsne[mask, 1],
+            s=5,
+            alpha=0.4,
+            color=GROUP_COLORS[g],
+            label=f"{g} (n={mask.sum()})",
+        )
     ax2.legend(markerscale=3, fontsize=9)
-    ax2.set_title('Groups', fontsize=13)
-    ax2.set_xlabel('t-SNE 1')
-    ax2.set_ylabel('t-SNE 2')
-    ax2.set_aspect('equal')
+    ax2.set_title("Groups", fontsize=13)
+    ax2.set_xlabel("t-SNE 1")
+    ax2.set_ylabel("t-SNE 2")
+    ax2.set_aspect("equal")
 
-    plt.suptitle('t-SNE: Clusters vs Groups', fontsize=14)
+    plt.suptitle("t-SNE: Clusters vs Groups", fontsize=14)
     plt.tight_layout()
-    _save_fig(fig, str(outdir / 'tsne_cluster_vs_group'))
+    _save_fig(fig, str(outdir / "tsne_cluster_vs_group"))
 
 
 # =============================================================================
 # CLI
 # =============================================================================
 
+
 def main():
-    parser = argparse.ArgumentParser(description='MK Maturation Staging Pipeline')
-    subparsers = parser.add_subparsers(dest='phase', help='Pipeline phase to run')
+    parser = argparse.ArgumentParser(description="MK Maturation Staging Pipeline")
+    subparsers = parser.add_subparsers(dest="phase", help="Pipeline phase to run")
 
     # Phase 1: Load, filter, dedup
-    p1 = subparsers.add_parser('phase1_load', help='Load features, filter, dedup, save crops')
-    p1.add_argument('--input-dir', required=True, help='Segmentation output directory')
-    p1.add_argument('--pixel-size', type=float, required=True,
-                    help='Pixel size in um/px (must match CZI metadata)')
-    p1.add_argument('--min-area-um', type=float, default=200, help='Min area in um2')
-    p1.add_argument('--max-area-um', type=float, default=2000, help='Max area in um2')
-    p1.add_argument('--min-clf-score', type=float, default=0.80, help='Min classifier score')
-    p1.add_argument('--output', required=True, help='Output .npz file')
+    p1 = subparsers.add_parser("phase1_load", help="Load features, filter, dedup, save crops")
+    p1.add_argument("--input-dir", required=True, help="Segmentation output directory")
+    p1.add_argument(
+        "--pixel-size",
+        type=float,
+        required=True,
+        help="Pixel size in um/px (must match CZI metadata)",
+    )
+    p1.add_argument("--min-area-um", type=float, default=200, help="Min area in um2")
+    p1.add_argument("--max-area-um", type=float, default=2000, help="Max area in um2")
+    p1.add_argument("--min-clf-score", type=float, default=0.80, help="Min classifier score")
+    p1.add_argument("--output", required=True, help="Output .npz file")
 
     # Phase 2: Nuclear deep feature extraction (GPU)
-    p2 = subparsers.add_parser('phase2_nuclear', help='Otsu nuclear seg + SAM2/ResNet deep features (GPU)')
-    p2.add_argument('--input', required=True, help='Phase 1 output .npz')
-    p2.add_argument('--num-gpus', type=int, default=2, help='Number of GPUs')
-    p2.add_argument('--sam2-checkpoint', default='/path/to/checkpoints/sam2.1_hiera_large.pt',
-                    help='SAM2 checkpoint path')
-    p2.add_argument('--sam2-config', default='configs/sam2.1/sam2.1_hiera_l.yaml',
-                    help='SAM2 config name')
-    p2.add_argument('--output', required=True, help='Output .npz file')
+    p2 = subparsers.add_parser(
+        "phase2_nuclear", help="Otsu nuclear seg + SAM2/ResNet deep features (GPU)"
+    )
+    p2.add_argument("--input", required=True, help="Phase 1 output .npz")
+    p2.add_argument("--num-gpus", type=int, default=2, help="Number of GPUs")
+    p2.add_argument(
+        "--sam2-checkpoint",
+        default="/path/to/checkpoints/sam2.1_hiera_large.pt",
+        help="SAM2 checkpoint path",
+    )
+    p2.add_argument(
+        "--sam2-config", default="configs/sam2.1/sam2.1_hiera_l.yaml", help="SAM2 config name"
+    )
+    p2.add_argument("--output", required=True, help="Output .npz file")
 
     # Phase 3: Clustering on nuclear features
-    p3 = subparsers.add_parser('phase3_cluster', help='Cluster on nuclear deep features')
-    p3.add_argument('--input', required=True, help='Phase 2 nuclear features .npz')
-    p3.add_argument('--data', required=True, help='Phase 1 metadata .npz')
-    p3.add_argument('--k-range', default='3,4,5,6,7,8', help='Comma-separated k values')
-    p3.add_argument('--output', required=True, help='Output .npz file')
+    p3 = subparsers.add_parser("phase3_cluster", help="Cluster on nuclear deep features")
+    p3.add_argument("--input", required=True, help="Phase 2 nuclear features .npz")
+    p3.add_argument("--data", required=True, help="Phase 1 metadata .npz")
+    p3.add_argument("--k-range", default="3,4,5,6,7,8", help="Comma-separated k values")
+    p3.add_argument("--output", required=True, help="Output .npz file")
 
     # Phase 4: Validation, pseudotime, group comparison
-    p4 = subparsers.add_parser('phase4_validate', help='Validation, pseudotime, group comparison')
-    p4.add_argument('--data', required=True, help='Phase 1 .npz')
-    p4.add_argument('--nuclear', required=True, help='Phase 2 nuclear features .npz')
-    p4.add_argument('--clusters', required=True, help='Phase 3 clusters .npz')
-    p4.add_argument('--output-dir', required=True, help='Output directory for plots + stats')
+    p4 = subparsers.add_parser("phase4_validate", help="Validation, pseudotime, group comparison")
+    p4.add_argument("--data", required=True, help="Phase 1 .npz")
+    p4.add_argument("--nuclear", required=True, help="Phase 2 nuclear features .npz")
+    p4.add_argument("--clusters", required=True, help="Phase 3 clusters .npz")
+    p4.add_argument("--output-dir", required=True, help="Output directory for plots + stats")
 
     args = parser.parse_args()
 
-    if args.phase == 'phase1_load':
+    if args.phase == "phase1_load":
         run_phase1(args)
-    elif args.phase == 'phase2_nuclear':
+    elif args.phase == "phase2_nuclear":
         run_phase2(args)
-    elif args.phase == 'phase3_cluster':
+    elif args.phase == "phase3_cluster":
         run_phase3(args)
-    elif args.phase == 'phase4_validate':
+    elif args.phase == "phase4_validate":
         run_phase4(args)
     else:
         parser.print_help()
         sys.exit(1)
 
 
-if __name__ == '__main__':
+if __name__ == "__main__":
     main()

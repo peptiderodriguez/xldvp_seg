@@ -41,32 +41,30 @@ Annotation format (annotations.json):
 import argparse
 import json
 import logging
-import sys
 from pathlib import Path
-from typing import Dict, List, Tuple, Any
+from typing import Any
 
 import numpy as np
 
+from segmentation.classification.feature_selection import (
+    compare_feature_sets,
+    select_optimal_features,
+)
 from segmentation.classification.vessel_classifier import (
-    VesselClassifier,
-    VESSEL_CORE_FEATURES,
-    MORPHOLOGICAL_FEATURES,
     DEFAULT_FEATURES,
     FULL_FEATURES,
-)
-from segmentation.classification.feature_selection import (
-    select_optimal_features,
-    compare_feature_sets,
+    MORPHOLOGICAL_FEATURES,
+    VESSEL_CORE_FEATURES,
+    VesselClassifier,
 )
 
 logging.basicConfig(
-    level=logging.INFO,
-    format='%(asctime)s | %(levelname)-8s | %(name)s | %(message)s'
+    level=logging.INFO, format="%(asctime)s | %(levelname)-8s | %(name)s | %(message)s"
 )
 logger = logging.getLogger(__name__)
 
 
-def load_annotations(annotations_path: Path) -> Dict[str, str]:
+def load_annotations(annotations_path: Path) -> dict[str, str]:
     """
     Load vessel type annotations from JSON file.
 
@@ -84,14 +82,14 @@ def load_annotations(annotations_path: Path) -> Dict[str, str]:
         data = json.load(f)
 
     # Handle nested format
-    if 'annotations' in data:
-        return data['annotations']
+    if "annotations" in data:
+        return data["annotations"]
 
     # Direct mapping
     return data
 
 
-def load_detections(detections_path: Path) -> Dict[str, Dict]:
+def load_detections(detections_path: Path) -> dict[str, dict]:
     """
     Load vessel detections with features from JSON.
 
@@ -109,30 +107,30 @@ def load_detections(detections_path: Path) -> Dict[str, Dict]:
     indexed = {}
     for d in data:
         # Primary: uid
-        if 'uid' in d:
-            indexed[d['uid']] = d
+        if "uid" in d:
+            indexed[d["uid"]] = d
 
         # Alternative formats for matching
-        if 'tile_origin' in d and 'id' in d:
-            tile_x, tile_y = d['tile_origin']
+        if "tile_origin" in d and "id" in d:
+            tile_x, tile_y = d["tile_origin"]
             alt_id = f"{tile_x}_{tile_y}_{d['id']}"
             indexed[alt_id] = d
 
-            if 'slide_name' in d:
+            if "slide_name" in d:
                 alt_id2 = f"{d['slide_name']}_{tile_x}_{tile_y}_{d['id']}"
                 indexed[alt_id2] = d
 
-        if 'id' in d:
-            indexed[d['id']] = d
+        if "id" in d:
+            indexed[d["id"]] = d
 
     return indexed
 
 
 def extract_training_data(
-    detections: Dict[str, Dict],
-    annotations: Dict[str, str],
-    feature_names: List[str],
-) -> Tuple[np.ndarray, np.ndarray, List[str]]:
+    detections: dict[str, dict],
+    annotations: dict[str, str],
+    feature_names: list[str],
+) -> tuple[np.ndarray, np.ndarray, list[str]]:
     """
     Extract feature matrix and labels from annotated vessels.
 
@@ -157,7 +155,7 @@ def extract_training_data(
             continue
 
         det = detections[uid]
-        features = det.get('features', {})
+        features = det.get("features", {})
 
         # Extract feature values
         row = []
@@ -183,10 +181,7 @@ def extract_training_data(
 
 
 def plot_confusion_matrix(
-    cm: np.ndarray,
-    class_names: List[str],
-    output_path: Path,
-    title: str = 'Confusion Matrix'
+    cm: np.ndarray, class_names: list[str], output_path: Path, title: str = "Confusion Matrix"
 ) -> None:
     """
     Plot and save confusion matrix visualization.
@@ -199,29 +194,30 @@ def plot_confusion_matrix(
     """
     try:
         import matplotlib
-        matplotlib.use('Agg')  # Non-interactive backend
+
+        matplotlib.use("Agg")  # Non-interactive backend
         import matplotlib.pyplot as plt
         import seaborn as sns
 
         fig, ax = plt.subplots(figsize=(8, 6))
 
         # Normalize confusion matrix for color mapping
-        cm_normalized = cm.astype('float') / (cm.sum(axis=1, keepdims=True) + 1e-8)
+        cm_normalized = cm.astype("float") / (cm.sum(axis=1, keepdims=True) + 1e-8)
 
         # Plot heatmap
         sns.heatmap(
             cm_normalized,
             annot=cm,  # Show actual counts
-            fmt='d',
-            cmap='Blues',
+            fmt="d",
+            cmap="Blues",
             xticklabels=class_names,
             yticklabels=class_names,
             ax=ax,
-            cbar_kws={'label': 'Proportion'}
+            cbar_kws={"label": "Proportion"},
         )
 
-        ax.set_xlabel('Predicted')
-        ax.set_ylabel('True')
+        ax.set_xlabel("Predicted")
+        ax.set_ylabel("True")
         ax.set_title(title)
 
         plt.tight_layout()
@@ -235,10 +231,10 @@ def plot_confusion_matrix(
 
 
 def plot_feature_importance(
-    importance: Dict[str, float],
+    importance: dict[str, float],
     output_path: Path,
     top_n: int = 20,
-    title: str = 'Feature Importance'
+    title: str = "Feature Importance",
 ) -> None:
     """
     Plot and save feature importance visualization.
@@ -251,7 +247,8 @@ def plot_feature_importance(
     """
     try:
         import matplotlib
-        matplotlib.use('Agg')
+
+        matplotlib.use("Agg")
         import matplotlib.pyplot as plt
 
         # Sort and get top N
@@ -262,11 +259,11 @@ def plot_feature_importance(
         fig, ax = plt.subplots(figsize=(10, 8))
 
         y_pos = np.arange(len(names))
-        ax.barh(y_pos, scores, align='center')
+        ax.barh(y_pos, scores, align="center")
         ax.set_yticks(y_pos)
         ax.set_yticklabels(names)
         ax.invert_yaxis()
-        ax.set_xlabel('Importance')
+        ax.set_xlabel("Importance")
         ax.set_title(title)
 
         plt.tight_layout()
@@ -290,7 +287,7 @@ def train_vessel_classifier(
     feature_selection: bool = True,
     use_core_features_only: bool = False,
     use_full_features: bool = False,
-) -> Dict[str, Any]:
+) -> dict[str, Any]:
     """
     Train vessel type classifier.
 
@@ -347,11 +344,9 @@ def train_vessel_classifier(
 
     # Split data
     from sklearn.model_selection import train_test_split
+
     X_train, X_test, y_train, y_test = train_test_split(
-        X, y,
-        test_size=test_size,
-        random_state=42,
-        stratify=y
+        X, y, test_size=test_size, random_state=42, stratify=y
     )
     logger.info(f"  Training set: {len(X_train)}")
     logger.info(f"  Test set: {len(X_test)}")
@@ -368,10 +363,7 @@ def train_vessel_classifier(
     )
 
     train_metrics = classifier.train(
-        X_train, y_train,
-        feature_names=feature_names,
-        cv_folds=cv_folds,
-        verbose=True
+        X_train, y_train, feature_names=feature_names, cv_folds=cv_folds, verbose=True
     )
 
     # Evaluate on test set
@@ -401,14 +393,15 @@ def train_vessel_classifier(
 
         # Compare feature sets
         feature_sets = {
-            'all_features': feature_names,
-            'vessel_core': VESSEL_CORE_FEATURES,
-            'morphological': MORPHOLOGICAL_FEATURES,
-            'top_10': [f[0] for f in top_features[:10]],
+            "all_features": feature_names,
+            "vessel_core": VESSEL_CORE_FEATURES,
+            "morphological": MORPHOLOGICAL_FEATURES,
+            "top_10": [f[0] for f in top_features[:10]],
         }
 
         comparison = compare_feature_sets(
-            X, y,
+            X,
+            y,
             feature_names=feature_names,
             feature_sets=feature_sets,
             cv_folds=cv_folds,
@@ -417,61 +410,63 @@ def train_vessel_classifier(
         # RFECV for optimal feature subset
         logger.info("\nRunning RFECV...")
         optimal = select_optimal_features(
-            X, y,
+            X,
+            y,
             feature_names=feature_names,
-            method='rfecv',
+            method="rfecv",
             min_features=5,
             cv_folds=cv_folds,
         )
         logger.info(f"RFECV selected {optimal['n_features']} features")
 
     # Save model
-    model_path = output_dir / 'vessel_classifier.joblib'
+    model_path = output_dir / "vessel_classifier.joblib"
     classifier.save(model_path)
 
     # Save feature importance
-    importance_path = output_dir / 'feature_importance.json'
-    with open(importance_path, 'w') as f:
+    importance_path = output_dir / "feature_importance.json"
+    with open(importance_path, "w") as f:
         json.dump(importance, f)
     logger.info(f"Feature importance saved to: {importance_path}")
 
     # Save metrics
     metrics = {
-        'train': train_metrics,
-        'test': {
-            'accuracy': eval_metrics['accuracy'],
-            'classification_report': eval_metrics['classification_report'],
+        "train": train_metrics,
+        "test": {
+            "accuracy": eval_metrics["accuracy"],
+            "classification_report": eval_metrics["classification_report"],
         },
-        'feature_names': feature_names,
-        'n_samples': len(X),
-        'n_train': len(X_train),
-        'n_test': len(X_test),
+        "feature_names": feature_names,
+        "n_samples": len(X),
+        "n_train": len(X_train),
+        "n_test": len(X_test),
     }
 
     if feature_selection:
-        metrics['feature_comparison'] = comparison
-        metrics['optimal_features'] = optimal
+        metrics["feature_comparison"] = comparison
+        metrics["optimal_features"] = optimal
 
-    metrics_path = output_dir / 'training_metrics.json'
-    with open(metrics_path, 'w') as f:
+    metrics_path = output_dir / "training_metrics.json"
+    with open(metrics_path, "w") as f:
         json.dump(metrics, f, default=str)
     logger.info(f"Training metrics saved to: {metrics_path}")
 
     # Generate visualizations
-    cm = np.array(eval_metrics['confusion_matrix'])
+    cm = np.array(eval_metrics["confusion_matrix"])
     class_names = classifier.label_encoder.classes_.tolist()
 
     plot_confusion_matrix(
-        cm, class_names,
-        output_dir / 'confusion_matrix.png',
-        title=f'Vessel Classification (Acc: {eval_metrics["accuracy"]:.2%})'
+        cm,
+        class_names,
+        output_dir / "confusion_matrix.png",
+        title=f'Vessel Classification (Acc: {eval_metrics["accuracy"]:.2%})',
     )
 
     plot_feature_importance(
         importance,
-        output_dir / 'feature_importance.png',
+        output_dir / "feature_importance.png",
         top_n=20,
-        title='Top 20 Feature Importances'
+        title="Top 20 Feature Importances",
     )
 
     # Summary
@@ -480,14 +475,16 @@ def train_vessel_classifier(
     logger.info("=" * 60)
     logger.info(f"Model saved: {model_path}")
     logger.info(f"Test accuracy: {eval_metrics['accuracy']:.4f}")
-    logger.info(f"CV accuracy: {train_metrics['cv_accuracy_mean']:.4f} (+/- {train_metrics['cv_accuracy_std'] * 2:.4f})")
+    logger.info(
+        f"CV accuracy: {train_metrics['cv_accuracy_mean']:.4f} (+/- {train_metrics['cv_accuracy_std'] * 2:.4f})"
+    )
 
     return metrics
 
 
 def main():
     parser = argparse.ArgumentParser(
-        description='Train vessel type classifier',
+        description="Train vessel type classifier",
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 Examples:
@@ -509,62 +506,53 @@ Examples:
         --annotations annotations.json \\
         --detections vessel_detections.json \\
         --core-features-only
-        """
+        """,
     )
 
     parser.add_argument(
-        '--annotations', '-a',
+        "--annotations",
+        "-a",
         required=True,
-        help='Path to annotations JSON (mapping vessel UIDs to types)'
+        help="Path to annotations JSON (mapping vessel UIDs to types)",
     )
     parser.add_argument(
-        '--detections', '-d',
-        required=True,
-        help='Path to vessel detections JSON with features'
+        "--detections", "-d", required=True, help="Path to vessel detections JSON with features"
     )
     parser.add_argument(
-        '--output-dir', '-o',
-        default='./vessel_classifier_output',
-        help='Output directory (default: ./vessel_classifier_output)'
+        "--output-dir",
+        "-o",
+        default="./vessel_classifier_output",
+        help="Output directory (default: ./vessel_classifier_output)",
     )
     parser.add_argument(
-        '--n-estimators',
+        "--n-estimators",
         type=int,
         default=100,
-        help='Number of trees in Random Forest (default: 100)'
+        help="Number of trees in Random Forest (default: 100)",
     )
     parser.add_argument(
-        '--max-depth',
-        type=int,
-        default=None,
-        help='Maximum tree depth (default: unlimited)'
+        "--max-depth", type=int, default=None, help="Maximum tree depth (default: unlimited)"
     )
     parser.add_argument(
-        '--test-size',
-        type=float,
-        default=0.2,
-        help='Fraction of data for test set (default: 0.2)'
+        "--test-size", type=float, default=0.2, help="Fraction of data for test set (default: 0.2)"
     )
     parser.add_argument(
-        '--cv-folds',
-        type=int,
-        default=5,
-        help='Number of cross-validation folds (default: 5)'
+        "--cv-folds", type=int, default=5, help="Number of cross-validation folds (default: 5)"
     )
     parser.add_argument(
-        '--no-feature-selection',
-        action='store_true',
-        help='Skip feature selection analysis (faster)'
+        "--no-feature-selection",
+        action="store_true",
+        help="Skip feature selection analysis (faster)",
     )
     parser.add_argument(
-        '--core-features-only',
-        action='store_true',
-        help='Use only vessel-specific features (diameter, wall thickness, etc.)'
+        "--core-features-only",
+        action="store_true",
+        help="Use only vessel-specific features (diameter, wall thickness, etc.)",
     )
     parser.add_argument(
-        '--full-features',
-        action='store_true',
-        help='Use full 2326 features (22 morphological + 256 SAM2 + 2048 ResNet)'
+        "--full-features",
+        action="store_true",
+        help="Use full 2326 features (22 morphological + 256 SAM2 + 2048 ResNet)",
     )
 
     args = parser.parse_args()
@@ -583,5 +571,5 @@ Examples:
     )
 
 
-if __name__ == '__main__':
+if __name__ == "__main__":
     main()

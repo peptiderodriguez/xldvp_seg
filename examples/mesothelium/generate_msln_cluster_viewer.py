@@ -10,8 +10,8 @@ an interactive_clusters.html file with dual Plotly.js scatter plots (UMAP + spat
 """
 
 import argparse
-import json
 import html as html_mod
+import json
 import os
 from collections import Counter
 
@@ -23,10 +23,12 @@ def parse_args():
     parser = argparse.ArgumentParser(
         description="Generate interactive HTML visualization for Msln+ clustering results."
     )
-    parser.add_argument('--input', type=str, default=DEFAULT_INPUT,
-                        help='Path to detections_clustered.json')
-    parser.add_argument('--output', type=str, default=DEFAULT_OUTPUT,
-                        help='Path for output HTML file')
+    parser.add_argument(
+        "--input", type=str, default=DEFAULT_INPUT, help="Path to detections_clustered.json"
+    )
+    parser.add_argument(
+        "--output", type=str, default=DEFAULT_OUTPUT, help="Path for output HTML file"
+    )
     return parser.parse_args()
 
 
@@ -48,20 +50,22 @@ def main():
         feat = d.get("features", {})
         gc = d.get("global_center")
         ct = d.get("center", [0, 0])
-        records.append({
-            "uid": d.get("uid", ""),
-            "umap_x": d.get("umap_x", 0),
-            "umap_y": d.get("umap_y", 0),
-            "gx": gc[0] if gc else ct[0],
-            "gy": gc[1] if gc else ct[1],
-            "cluster_label": d.get("cluster_label", "unknown"),
-            "cluster_id": d.get("cluster_id", -1),
-            "area": feat.get("area", 0),
-            "area_um2": feat.get("area_um2", 0),
-            "ch0_mean": round(feat.get("ch0_mean", 0), 1),
-            "ch1_mean": round(feat.get("ch1_mean", 0), 1),
-            "ch2_mean": round(feat.get("ch2_mean", 0), 1),
-        })
+        records.append(
+            {
+                "uid": d.get("uid", ""),
+                "umap_x": d.get("umap_x", 0),
+                "umap_y": d.get("umap_y", 0),
+                "gx": gc[0] if gc else ct[0],
+                "gy": gc[1] if gc else ct[1],
+                "cluster_label": d.get("cluster_label", "unknown"),
+                "cluster_id": d.get("cluster_id", -1),
+                "area": feat.get("area", 0),
+                "area_um2": feat.get("area_um2", 0),
+                "ch0_mean": round(feat.get("ch0_mean", 0), 1),
+                "ch1_mean": round(feat.get("ch1_mean", 0), 1),
+                "ch2_mean": round(feat.get("ch2_mean", 0), 1),
+            }
+        )
 
     # -------------------------------------------------------------------
     # Summary stats

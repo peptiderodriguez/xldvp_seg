@@ -15,13 +15,13 @@ Usage:
         --zarr-dir /path/to/zarr/files \
         --output /path/to/bone_annotation.html
 """
+
 import argparse
 import base64
 import gc
 import io
 import json
 import sys
-from datetime import datetime
 from pathlib import Path
 
 import numpy as np
@@ -64,7 +64,7 @@ def read_czi_thumbnail(czi_path, scale_factor=0.05, display_channel=0):
 
     # Check if this is a brightfield (RGB) image
     dims = czi.dims
-    is_rgb = 'A' in dims  # 'A' dimension indicates RGB/BGR
+    is_rgb = "A" in dims  # 'A' dimension indicates RGB/BGR
 
     if is_rgb:
         # Brightfield RGB - need to specify C even if there's only one "channel"
@@ -136,28 +136,28 @@ def read_zarr_thumbnail(zarr_path, level=2):
     """
     import zarr
 
-    root = zarr.open(str(zarr_path), mode='r')
+    root = zarr.open(str(zarr_path), mode="r")
 
     # Get metadata
     pixel_size_um = None
     full_width, full_height = None, None
 
-    if '.zattrs' in root.attrs or 'multiscales' in root.attrs:
-        multiscales = root.attrs.get('multiscales', [{}])[0]
-        datasets = multiscales.get('datasets', [])
+    if ".zattrs" in root.attrs or "multiscales" in root.attrs:
+        multiscales = root.attrs.get("multiscales", [{}])[0]
+        datasets = multiscales.get("datasets", [])
         if datasets:
             # Full resolution from level 0
-            level0 = root[datasets[0]['path']]
+            level0 = root[datasets[0]["path"]]
             if len(level0.shape) >= 2:
                 full_height, full_width = level0.shape[-2], level0.shape[-1]
             elif len(level0.shape) >= 3:
                 full_height, full_width = level0.shape[-2], level0.shape[-1]
 
         # Pixel size from coordinate transforms
-        transforms = multiscales.get('coordinateTransformations', [])
+        transforms = multiscales.get("coordinateTransformations", [])
         for t in transforms:
-            if t.get('type') == 'scale':
-                scale = t.get('scale', [])
+            if t.get("type") == "scale":
+                scale = t.get("scale", [])
                 if len(scale) >= 2:
                     pixel_size_um = scale[-1]  # Assume um
 
@@ -199,12 +199,12 @@ def read_zarr_thumbnail(zarr_path, level=2):
     return rgb, full_width, full_height, pixel_size_um
 
 
-def image_to_base64(img_array, format='JPEG', quality=85):
+def image_to_base64(img_array, format="JPEG", quality=85):
     """Convert numpy array to base64 string."""
     img = Image.fromarray(img_array)
     buf = io.BytesIO()
     img.save(buf, format=format, quality=quality)
-    return base64.b64encode(buf.getvalue()).decode('ascii')
+    return base64.b64encode(buf.getvalue()).decode("ascii")
 
 
 def generate_html(slides_data, output_path):
@@ -223,15 +223,20 @@ def generate_html(slides_data, output_path):
         output_path: Path to write HTML file
     """
     # Build slides JSON for embedding
-    slides_json = json.dumps([{
-        'name': s['name'],
-        'thumbWidth': s['thumb_width'],
-        'thumbHeight': s['thumb_height'],
-        'fullWidth': s['full_width'],
-        'fullHeight': s['full_height'],
-        'scaleFactor': s['scale_factor'],
-        'pixelSizeUm': s['pixel_size_um'],
-    } for s in slides_data])
+    slides_json = json.dumps(
+        [
+            {
+                "name": s["name"],
+                "thumbWidth": s["thumb_width"],
+                "thumbHeight": s["thumb_height"],
+                "fullWidth": s["full_width"],
+                "fullHeight": s["full_height"],
+                "scaleFactor": s["scale_factor"],
+                "pixelSizeUm": s["pixel_size_um"],
+            }
+            for s in slides_data
+        ]
+    )
 
     # Build image data section
     image_tags = []
@@ -239,9 +244,9 @@ def generate_html(slides_data, output_path):
         image_tags.append(
             f'<img id="img-{s["name"]}" src="data:image/jpeg;base64,{s["image_b64"]}" style="display:none;">'
         )
-    images_html = '\n'.join(image_tags)
+    images_html = "\n".join(image_tags)
 
-    html = f'''<!DOCTYPE html>
+    html = f"""<!DOCTYPE html>
 <html>
 <head>
 <meta charset="UTF-8">
@@ -758,9 +763,9 @@ function handleImport(event) {{
 
 </body>
 </html>
-'''
+"""
 
-    with open(output_path, 'w') as f:
+    with open(output_path, "w") as f:
         f.write(html)
 
     print(f"\nWrote {output_path}")
@@ -768,47 +773,51 @@ function handleImport(event) {{
 
 
 def main():
-    parser = argparse.ArgumentParser(description='Generate bone region annotation HTML')
-    parser.add_argument('--czi-dir', type=Path, help='Directory containing CZI files')
-    parser.add_argument('--zarr-dir', type=Path, help='Directory containing OME-Zarr files')
-    parser.add_argument('--output', '-o', type=Path, required=True, help='Output HTML file path')
-    parser.add_argument('--scale-factor', type=float, default=0.05,
-                        help='Thumbnail scale factor for CZI (default: 0.05)')
-    parser.add_argument('--channel', type=int, default=0,
-                        help='Channel to display (default: 0)')
-    parser.add_argument('--zarr-level', type=int, default=2,
-                        help='Pyramid level for OME-Zarr (default: 2)')
+    parser = argparse.ArgumentParser(description="Generate bone region annotation HTML")
+    parser.add_argument("--czi-dir", type=Path, help="Directory containing CZI files")
+    parser.add_argument("--zarr-dir", type=Path, help="Directory containing OME-Zarr files")
+    parser.add_argument("--output", "-o", type=Path, required=True, help="Output HTML file path")
+    parser.add_argument(
+        "--scale-factor",
+        type=float,
+        default=0.05,
+        help="Thumbnail scale factor for CZI (default: 0.05)",
+    )
+    parser.add_argument("--channel", type=int, default=0, help="Channel to display (default: 0)")
+    parser.add_argument(
+        "--zarr-level", type=int, default=2, help="Pyramid level for OME-Zarr (default: 2)"
+    )
 
     args = parser.parse_args()
 
     if not args.czi_dir and not args.zarr_dir:
-        parser.error('Must specify --czi-dir or --zarr-dir')
+        parser.error("Must specify --czi-dir or --zarr-dir")
 
     slides_data = []
 
     # Process CZI files
     if args.czi_dir:
-        czi_files = sorted(args.czi_dir.glob('*.czi'))
+        czi_files = sorted(args.czi_dir.glob("*.czi"))
         print(f"Found {len(czi_files)} CZI files in {args.czi_dir}")
 
         for czi_path in czi_files:
             try:
                 rgb, full_w, full_h, px_size = read_czi_thumbnail(
-                    czi_path,
-                    scale_factor=args.scale_factor,
-                    display_channel=args.channel
+                    czi_path, scale_factor=args.scale_factor, display_channel=args.channel
                 )
 
-                slides_data.append({
-                    'name': czi_path.stem,
-                    'image_b64': image_to_base64(rgb),
-                    'thumb_width': rgb.shape[1],
-                    'thumb_height': rgb.shape[0],
-                    'full_width': full_w,
-                    'full_height': full_h,
-                    'scale_factor': args.scale_factor,
-                    'pixel_size_um': px_size,
-                })
+                slides_data.append(
+                    {
+                        "name": czi_path.stem,
+                        "image_b64": image_to_base64(rgb),
+                        "thumb_width": rgb.shape[1],
+                        "thumb_height": rgb.shape[0],
+                        "full_width": full_w,
+                        "full_height": full_h,
+                        "scale_factor": args.scale_factor,
+                        "pixel_size_um": px_size,
+                    }
+                )
 
                 del rgb
                 gc.collect()
@@ -818,39 +827,45 @@ def main():
 
     # Process OME-Zarr files
     if args.zarr_dir:
-        zarr_dirs = sorted([d for d in args.zarr_dir.iterdir()
-                           if d.is_dir() and d.suffix in ('.zarr', '.ome.zarr')
-                           or (d / '.zarray').exists() or (d / '.zgroup').exists()])
+        zarr_dirs = sorted(
+            [
+                d
+                for d in args.zarr_dir.iterdir()
+                if d.is_dir()
+                and d.suffix in (".zarr", ".ome.zarr")
+                or (d / ".zarray").exists()
+                or (d / ".zgroup").exists()
+            ]
+        )
 
         # Also look for .ome.zarr directories
-        zarr_dirs.extend(sorted(args.zarr_dir.glob('*.ome.zarr')))
+        zarr_dirs.extend(sorted(args.zarr_dir.glob("*.ome.zarr")))
         zarr_dirs = sorted(set(zarr_dirs))
 
         print(f"Found {len(zarr_dirs)} OME-Zarr directories in {args.zarr_dir}")
 
         for zarr_path in zarr_dirs:
             try:
-                rgb, full_w, full_h, px_size = read_zarr_thumbnail(
-                    zarr_path,
-                    level=args.zarr_level
-                )
+                rgb, full_w, full_h, px_size = read_zarr_thumbnail(zarr_path, level=args.zarr_level)
 
                 # Calculate effective scale factor
                 if full_w and full_h:
                     scale_factor = rgb.shape[1] / full_w
                 else:
-                    scale_factor = 1.0 / (2 ** args.zarr_level)
+                    scale_factor = 1.0 / (2**args.zarr_level)
 
-                slides_data.append({
-                    'name': zarr_path.stem.replace('.ome', '').replace('_rotated', ''),
-                    'image_b64': image_to_base64(rgb),
-                    'thumb_width': rgb.shape[1],
-                    'thumb_height': rgb.shape[0],
-                    'full_width': full_w or rgb.shape[1],
-                    'full_height': full_h or rgb.shape[0],
-                    'scale_factor': scale_factor,
-                    'pixel_size_um': px_size,
-                })
+                slides_data.append(
+                    {
+                        "name": zarr_path.stem.replace(".ome", "").replace("_rotated", ""),
+                        "image_b64": image_to_base64(rgb),
+                        "thumb_width": rgb.shape[1],
+                        "thumb_height": rgb.shape[0],
+                        "full_width": full_w or rgb.shape[1],
+                        "full_height": full_h or rgb.shape[0],
+                        "scale_factor": scale_factor,
+                        "pixel_size_um": px_size,
+                    }
+                )
 
                 del rgb
                 gc.collect()
@@ -868,5 +883,5 @@ def main():
     generate_html(slides_data, args.output)
 
 
-if __name__ == '__main__':
+if __name__ == "__main__":
     main()

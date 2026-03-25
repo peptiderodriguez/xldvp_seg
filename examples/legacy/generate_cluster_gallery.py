@@ -54,8 +54,8 @@ def spatial_stratified_sample(cells, n, grid_bins=10):
     if len(cells) <= n:
         return cells
 
-    xs = np.array([c['global_center'][0] for c in cells])
-    ys = np.array([c['global_center'][1] for c in cells])
+    xs = np.array([c["global_center"][0] for c in cells])
+    ys = np.array([c["global_center"][1] for c in cells])
 
     x_edges = np.linspace(xs.min(), xs.max() + 1, grid_bins + 1)
     y_edges = np.linspace(ys.min(), ys.max() + 1, grid_bins + 1)
@@ -150,7 +150,7 @@ def render_crop(tile_data, center_local, crop_size=128):
     # Pad to crop_size if needed
     if rgb.shape[0] < crop_size or rgb.shape[1] < crop_size:
         padded = np.zeros((crop_size, crop_size, 3), dtype=np.uint8)
-        padded[:rgb.shape[0], :rgb.shape[1]] = rgb
+        padded[: rgb.shape[0], : rgb.shape[1]] = rgb
         rgb = padded
 
     return rgb
@@ -159,20 +159,21 @@ def render_crop(tile_data, center_local, crop_size=128):
 def crop_to_base64(rgb_array):
     """Convert RGB array to base64 PNG string."""
     from PIL import Image
+
     img = Image.fromarray(rgb_array)
     buf = io.BytesIO()
-    img.save(buf, format='PNG')
-    return base64.b64encode(buf.getvalue()).decode('ascii')
+    img.save(buf, format="PNG")
+    return base64.b64encode(buf.getvalue()).decode("ascii")
 
 
-def load_tile_channels(czi_path, tile_x, tile_y, tile_size, display_channels,
-                       loader=None):
+def load_tile_channels(czi_path, tile_x, tile_y, tile_size, display_channels, loader=None):
     """Load tile channels from CZI (disk read, no RAM required).
 
     Returns: dict {channel_idx: 2D uint16 array}
     """
     if loader is None:
         from segmentation.io.czi_loader import CZILoader
+
         loader = CZILoader(czi_path)
 
     result = {}
@@ -192,30 +193,32 @@ def load_tile_from_masks_dir(tiles_dir, tile_x, tile_y):
         return None
     tile_dir = Path(tiles_dir) / f"tile_{tile_x}_{tile_y}"
     # Find mask file
-    for pattern in ['*_masks.h5', '*_masks.hdf5']:
+    for pattern in ["*_masks.h5", "*_masks.hdf5"]:
         matches = list(tile_dir.glob(pattern))
         if matches:
             try:
                 import hdf5plugin  # noqa
             except ImportError:
                 pass
-            with h5py.File(matches[0], 'r') as f:
-                return f['masks'][:]
+            with h5py.File(matches[0], "r") as f:
+                return f["masks"][:]
     return None
 
 
 def generate_spatial_map(detections, output_dir):
     """Generate spatial scatter plot of cells colored by cluster."""
     import matplotlib
-    matplotlib.use('Agg')
+
+    matplotlib.use("Agg")
     import matplotlib.pyplot as plt
+
     sys.stdout.flush()
 
     # Extract coords and labels
     xs, ys, labels = [], [], []
     for det in detections:
-        gc = det.get('global_center')
-        cl = det.get('cluster_label', 'other')
+        gc = det.get("global_center")
+        cl = det.get("cluster_label", "other")
         if gc and cl:
             xs.append(gc[0])
             ys.append(gc[1])
@@ -228,7 +231,7 @@ def generate_spatial_map(detections, output_dir):
     unique_labels = sorted(set(labels))
 
     # Color map
-    fixed = {'noise': 'lightgray', 'unclassified': 'lightgray'}
+    fixed = {"noise": "lightgray", "unclassified": "lightgray"}
     tab = list(plt.cm.tab10.colors) + list(plt.cm.tab20.colors)
     color_map = {}
     ci = 0
@@ -243,34 +246,40 @@ def generate_spatial_map(detections, output_dir):
 
     # Plot clusters (skip noise first, then overlay)
     for lbl in unique_labels:
-        if lbl == 'noise':
+        if lbl == "noise":
             continue
         mask = labels == lbl
         n = mask.sum()
-        ax.scatter(xs[mask], ys[mask], c=[color_map[lbl]],
-                  s=3, alpha=0.5, label=f'{lbl} ({n})', zorder=1)
+        ax.scatter(
+            xs[mask], ys[mask], c=[color_map[lbl]], s=3, alpha=0.5, label=f"{lbl} ({n})", zorder=1
+        )
 
     # Noise last (background)
-    noise_mask = labels == 'noise'
+    noise_mask = labels == "noise"
     if noise_mask.any():
-        ax.scatter(xs[noise_mask], ys[noise_mask], c='lightgray',
-                  s=1, alpha=0.2, label=f'noise ({noise_mask.sum()})', zorder=0)
+        ax.scatter(
+            xs[noise_mask],
+            ys[noise_mask],
+            c="lightgray",
+            s=1,
+            alpha=0.2,
+            label=f"noise ({noise_mask.sum()})",
+            zorder=0,
+        )
 
-    ax.set_xlabel('X (px)')
-    ax.set_ylabel('Y (px)')
-    ax.set_title(f'Shape Clusters on Tissue ({len(xs)} cells, '
-                 f'{len(unique_labels)} clusters)')
+    ax.set_xlabel("X (px)")
+    ax.set_ylabel("Y (px)")
+    ax.set_title(f"Shape Clusters on Tissue ({len(xs)} cells, " f"{len(unique_labels)} clusters)")
     ax.invert_yaxis()
-    ax.set_aspect('equal')
+    ax.set_aspect("equal")
 
     # Legend — only show clusters with >1% of cells
     handles, lbls = ax.get_legend_handles_labels()
-    ax.legend(handles[:20], lbls[:20], loc='upper left',
-             fontsize=7, markerscale=3, ncol=2)
+    ax.legend(handles[:20], lbls[:20], loc="upper left", fontsize=7, markerscale=3, ncol=2)
 
     fig.tight_layout()
-    out_path = output_dir / 'cluster_spatial_map.png'
-    fig.savefig(out_path, dpi=200, bbox_inches='tight')
+    out_path = output_dir / "cluster_spatial_map.png"
+    fig.savefig(out_path, dpi=200, bbox_inches="tight")
     plt.close(fig)
     print(f"Saved: {out_path}", flush=True)
 
@@ -282,8 +291,7 @@ def _esc(s):
     return html_module.escape(str(s), quote=True)
 
 
-def generate_cluster_html(cluster_label, cells, crops_b64, output_dir,
-                          marker_channels=None):
+def generate_cluster_html(cluster_label, cells, crops_b64, output_dir, marker_channels=None):
     """Generate HTML gallery page for one cluster.
 
     Args:
@@ -293,52 +301,51 @@ def generate_cluster_html(cluster_label, cells, crops_b64, output_dir,
         output_dir: where to write HTML
         marker_channels: dict {name: ch_idx} for displaying marker values
     """
-    html_path = output_dir / f'cluster_{cluster_label}.html'
+    html_path = output_dir / f"cluster_{cluster_label}.html"
 
     # Compute summary stats
-    areas = [c.get('features', {}).get('area_um2', 0) for c in cells]
-    circs = [c.get('features', {}).get('circularity', 0) for c in cells]
+    areas = [c.get("features", {}).get("area_um2", 0) for c in cells]
+    circs = [c.get("features", {}).get("circularity", 0) for c in cells]
 
     lines = [
-        '<!DOCTYPE html><html><head>',
-        f'<title>Cluster: {_esc(cluster_label)}</title>',
-        '<style>',
-        'body { font-family: Arial, sans-serif; background: #111; color: #eee; margin: 20px; }',
-        '.grid { display: flex; flex-wrap: wrap; gap: 8px; }',
-        '.cell { text-align: center; font-size: 10px; }',
-        '.cell img { width: 128px; height: 128px; image-rendering: pixelated; }',
-        '.stats { margin: 10px 0; padding: 10px; background: #222; border-radius: 5px; }',
-        'a { color: #6af; }',
-        '</style></head><body>',
-        f'<h1>Cluster: {_esc(cluster_label)} ({len(cells)} sampled cells)</h1>',
+        "<!DOCTYPE html><html><head>",
+        f"<title>Cluster: {_esc(cluster_label)}</title>",
+        "<style>",
+        "body { font-family: Arial, sans-serif; background: #111; color: #eee; margin: 20px; }",
+        ".grid { display: flex; flex-wrap: wrap; gap: 8px; }",
+        ".cell { text-align: center; font-size: 10px; }",
+        ".cell img { width: 128px; height: 128px; image-rendering: pixelated; }",
+        ".stats { margin: 10px 0; padding: 10px; background: #222; border-radius: 5px; }",
+        "a { color: #6af; }",
+        "</style></head><body>",
+        f"<h1>Cluster: {_esc(cluster_label)} ({len(cells)} sampled cells)</h1>",
         '<p><a href="index.html">Back to index</a></p>',
         '<div class="stats">',
-        f'  Area: {np.mean(areas):.1f} um2 (std {np.std(areas):.1f}) | ',
-        f'  Circularity: {np.mean(circs):.2f} (std {np.std(circs):.2f})',
+        f"  Area: {np.mean(areas):.1f} um2 (std {np.std(areas):.1f}) | ",
+        f"  Circularity: {np.mean(circs):.2f} (std {np.std(circs):.2f})",
     ]
 
     if marker_channels:
         for mname, midx in sorted(marker_channels.items(), key=lambda x: x[1]):
-            vals = [c.get('features', {}).get(f'ch{midx}_mean', 0) for c in cells]
-            lines.append(f'  | {_esc(mname)}: {np.mean(vals):.0f}')
+            vals = [c.get("features", {}).get(f"ch{midx}_mean", 0) for c in cells]
+            lines.append(f"  | {_esc(mname)}: {np.mean(vals):.0f}")
 
-    lines.append('</div>')
+    lines.append("</div>")
     lines.append('<div class="grid">')
 
     for cell, b64 in zip(cells, crops_b64):
-        uid = _esc(cell.get('uid', ''))
-        gc = cell.get('global_center', [0, 0])
-        area = cell.get('features', {}).get('area_um2', 0)
-        lines.append(f'<div class="cell">')
-        lines.append(f'  <img src="data:image/png;base64,{b64}" '
-                     f'title="{uid}">')
-        lines.append(f'  <br>{area:.0f}um2 ({gc[0]:.0f},{gc[1]:.0f})')
-        lines.append(f'</div>')
+        uid = _esc(cell.get("uid", ""))
+        gc = cell.get("global_center", [0, 0])
+        area = cell.get("features", {}).get("area_um2", 0)
+        lines.append('<div class="cell">')
+        lines.append(f'  <img src="data:image/png;base64,{b64}" ' f'title="{uid}">')
+        lines.append(f"  <br>{area:.0f}um2 ({gc[0]:.0f},{gc[1]:.0f})")
+        lines.append("</div>")
 
-    lines.append('</div></body></html>')
+    lines.append("</div></body></html>")
 
-    with open(html_path, 'w') as f:
-        f.write('\n'.join(lines))
+    with open(html_path, "w") as f:
+        f.write("\n".join(lines))
 
     return html_path
 
@@ -346,29 +353,31 @@ def generate_cluster_html(cluster_label, cells, crops_b64, output_dir,
 def generate_index_html(cluster_summaries, output_dir, spatial_map_path=None):
     """Generate index HTML linking to all cluster galleries."""
     lines = [
-        '<!DOCTYPE html><html><head>',
-        '<title>Cluster Gallery Index</title>',
-        '<style>',
-        'body { font-family: Arial, sans-serif; background: #111; color: #eee; margin: 20px; }',
-        'table { border-collapse: collapse; margin: 20px 0; }',
-        'th, td { padding: 6px 12px; border: 1px solid #444; text-align: right; }',
-        'th { background: #333; }',
-        'a { color: #6af; }',
-        'img { max-width: 100%; margin: 20px 0; }',
-        '</style></head><body>',
-        '<h1>Cluster Gallery</h1>',
+        "<!DOCTYPE html><html><head>",
+        "<title>Cluster Gallery Index</title>",
+        "<style>",
+        "body { font-family: Arial, sans-serif; background: #111; color: #eee; margin: 20px; }",
+        "table { border-collapse: collapse; margin: 20px 0; }",
+        "th, td { padding: 6px 12px; border: 1px solid #444; text-align: right; }",
+        "th { background: #333; }",
+        "a { color: #6af; }",
+        "img { max-width: 100%; margin: 20px 0; }",
+        "</style></head><body>",
+        "<h1>Cluster Gallery</h1>",
     ]
 
     if spatial_map_path:
         rel = spatial_map_path.name
         lines.append(f'<img src="{rel}" alt="Spatial cluster map">')
 
-    lines.append('<table>')
-    lines.append('<tr><th>Cluster</th><th>N cells</th><th>N sampled</th>'
-                 '<th>Area (um2)</th><th>Circularity</th><th>Gallery</th></tr>')
+    lines.append("<table>")
+    lines.append(
+        "<tr><th>Cluster</th><th>N cells</th><th>N sampled</th>"
+        "<th>Area (um2)</th><th>Circularity</th><th>Gallery</th></tr>"
+    )
 
-    for s in sorted(cluster_summaries, key=lambda x: -x['n_total']):
-        lbl = _esc(s['label'])
+    for s in sorted(cluster_summaries, key=lambda x: -x["n_total"]):
+        lbl = _esc(s["label"])
         lines.append(
             f'<tr><td>{lbl}</td><td>{s["n_total"]}</td>'
             f'<td>{s["n_sampled"]}</td>'
@@ -377,55 +386,88 @@ def generate_index_html(cluster_summaries, output_dir, spatial_map_path=None):
             f'<td><a href="cluster_{lbl}.html">View</a></td></tr>'
         )
 
-    lines.append('</table></body></html>')
+    lines.append("</table></body></html>")
 
-    index_path = output_dir / 'index.html'
-    with open(index_path, 'w') as f:
-        f.write('\n'.join(lines))
+    index_path = output_dir / "index.html"
+    with open(index_path, "w") as f:
+        f.write("\n".join(lines))
     print(f"Saved: {index_path}")
 
 
 def main():
     parser = argparse.ArgumentParser(
-        description='Generate per-cluster HTML galleries with spatial sampling')
-    parser.add_argument('--detections', required=True,
-                        help='Path to clustered detections JSON '
-                        '(from cluster_by_features.py)')
-    parser.add_argument('--czi-path', required=True,
-                        help='Path to CZI slide file')
-    parser.add_argument('--tiles-dir', default=None,
-                        help='Path to tiles directory (for mask overlay)')
-    parser.add_argument('--output-dir', required=True,
-                        help='Output directory for HTML galleries')
-    parser.add_argument('--zones', default=None,
-                        help='Path to zoned detections JSON '
-                        '(for zone overlay on spatial map)')
-    parser.add_argument('--display-channels', type=str, default=None,
-                        help='Channels to display as R,G,B: e.g. "1,0,2". '
-                        'Default: first 3 available channels')
-    parser.add_argument('--marker-channels', type=str, default=None,
-                        help='Marker channels for stats: "name:idx,..." '
-                        'e.g. "msln:2,pm:1"')
-    parser.add_argument('--n-per-cluster', type=int, default=100,
-                        help='Max cells to sample per cluster (default: 100)')
-    parser.add_argument('--crop-size', type=int, default=128,
-                        help='Crop size in pixels (default: 128)')
-    parser.add_argument('--tile-size', type=int, default=4000,
-                        help='Tile size used during detection (default: 4000)')
-    parser.add_argument('--min-cluster-cells', type=int, default=20,
-                        help='Skip clusters with fewer cells (default: 20)')
-    parser.add_argument('--cluster-field', type=str, default='cluster_label',
-                        help='Field to group by (default: cluster_label, '
-                        'also: subcluster_label)')
-    parser.add_argument('--scene', type=int, default=0,
-                        help='CZI scene index (0-based, default 0)')
-    parser.add_argument('--annotation-viewer', action='store_true',
-                        help='Use full annotation viewer (channel toggles + contour overlay) '
-                        'per cluster via regenerate_html.py instead of simple gallery')
-    parser.add_argument('--crop-context-factor', type=float, default=2.0,
-                        help='Crop context factor for annotation viewer mode (default: 2.0)')
-    parser.add_argument('--channels', default=None,
-                        help='Channels to load in annotation viewer mode')
+        description="Generate per-cluster HTML galleries with spatial sampling"
+    )
+    parser.add_argument(
+        "--detections",
+        required=True,
+        help="Path to clustered detections JSON " "(from cluster_by_features.py)",
+    )
+    parser.add_argument("--czi-path", required=True, help="Path to CZI slide file")
+    parser.add_argument(
+        "--tiles-dir", default=None, help="Path to tiles directory (for mask overlay)"
+    )
+    parser.add_argument("--output-dir", required=True, help="Output directory for HTML galleries")
+    parser.add_argument(
+        "--zones",
+        default=None,
+        help="Path to zoned detections JSON " "(for zone overlay on spatial map)",
+    )
+    parser.add_argument(
+        "--display-channels",
+        type=str,
+        default=None,
+        help='Channels to display as R,G,B: e.g. "1,0,2". ' "Default: first 3 available channels",
+    )
+    parser.add_argument(
+        "--marker-channels",
+        type=str,
+        default=None,
+        help='Marker channels for stats: "name:idx,..." ' 'e.g. "msln:2,pm:1"',
+    )
+    parser.add_argument(
+        "--n-per-cluster",
+        type=int,
+        default=100,
+        help="Max cells to sample per cluster (default: 100)",
+    )
+    parser.add_argument(
+        "--crop-size", type=int, default=128, help="Crop size in pixels (default: 128)"
+    )
+    parser.add_argument(
+        "--tile-size",
+        type=int,
+        default=4000,
+        help="Tile size used during detection (default: 4000)",
+    )
+    parser.add_argument(
+        "--min-cluster-cells",
+        type=int,
+        default=20,
+        help="Skip clusters with fewer cells (default: 20)",
+    )
+    parser.add_argument(
+        "--cluster-field",
+        type=str,
+        default="cluster_label",
+        help="Field to group by (default: cluster_label, " "also: subcluster_label)",
+    )
+    parser.add_argument("--scene", type=int, default=0, help="CZI scene index (0-based, default 0)")
+    parser.add_argument(
+        "--annotation-viewer",
+        action="store_true",
+        help="Use full annotation viewer (channel toggles + contour overlay) "
+        "per cluster via regenerate_html.py instead of simple gallery",
+    )
+    parser.add_argument(
+        "--crop-context-factor",
+        type=float,
+        default=2.0,
+        help="Crop context factor for annotation viewer mode (default: 2.0)",
+    )
+    parser.add_argument(
+        "--channels", default=None, help="Channels to load in annotation viewer mode"
+    )
     args = parser.parse_args()
 
     output_dir = Path(args.output_dir)
@@ -433,7 +475,7 @@ def main():
 
     # Parse display channels
     if args.display_channels:
-        display_channels = [int(c) for c in args.display_channels.split(',')]
+        display_channels = [int(c) for c in args.display_channels.split(",")]
     else:
         display_channels = None  # auto-detect
 
@@ -441,35 +483,42 @@ def main():
     marker_channels = None
     if args.marker_channels:
         marker_channels = {}
-        for pair in args.marker_channels.split(','):
-            name, idx = pair.split(':')
+        for pair in args.marker_channels.split(","):
+            name, idx = pair.split(":")
             marker_channels[name.strip()] = int(idx.strip())
 
     # Load detections — strip features to reduce memory
     # (we only need coords, cluster labels, and a few feature keys for stats)
     print(f"Loading detections from {args.detections}...", flush=True)
     from segmentation.utils.json_utils import fast_json_load
+
     detections = fast_json_load(str(args.detections))
     print(f"  {len(detections)} detections", flush=True)
 
     # Slim down detections: keep only what we need
     _KEEP_FEAT_KEYS = {
-        'area_um2', 'circularity', 'eccentricity', 'solidity', 'aspect_ratio',
+        "area_um2",
+        "circularity",
+        "eccentricity",
+        "solidity",
+        "aspect_ratio",
     }
     # Also keep marker channel means
     if marker_channels:
         for midx in marker_channels.values():
-            _KEEP_FEAT_KEYS.add(f'ch{midx}_mean')
+            _KEEP_FEAT_KEYS.add(f"ch{midx}_mean")
     for det in detections:
-        feats = det.get('features', {})
+        feats = det.get("features", {})
         if feats:
-            det['features'] = {k: v for k, v in feats.items() if k in _KEEP_FEAT_KEYS}
+            det["features"] = {k: v for k, v in feats.items() if k in _KEEP_FEAT_KEYS}
     import gc as _gc
+
     _gc.collect()
     print(f"  Slimmed features to {len(_KEEP_FEAT_KEYS)} keys", flush=True)
 
     # Auto-detect display channels if needed
     from segmentation.io.czi_loader import CZILoader
+
     loader = CZILoader(args.czi_path, scene=args.scene)
     if display_channels is None:
         n_channels = loader.num_channels
@@ -489,8 +538,9 @@ def main():
     # --- Annotation viewer mode: shell out to regenerate_html.py per cluster ---
     if args.annotation_viewer:
         import subprocess
+
         repo = Path(__file__).resolve().parent.parent
-        regen_script = str(repo / 'scripts' / 'regenerate_html.py')
+        regen_script = str(repo / "scripts" / "regenerate_html.py")
         python = sys.executable
         rng = np.random.default_rng(42)
 
@@ -510,25 +560,36 @@ def main():
             sampled = list(rng.choice(subset, size=n, replace=False))
             print(f"  {name}: {n} / {len(subset)} cells", flush=True)
 
-            tmp_json = output_dir / f'_tmp_{name}.json'
+            tmp_json = output_dir / f"_tmp_{name}.json"
             from segmentation.utils.json_utils import atomic_json_dump
+
             atomic_json_dump(sampled, tmp_json)
 
             cmd = [
-                python, regen_script,
-                '--detections', str(tmp_json),
-                '--output-dir', str(output_dir),
-                '--czi-path', args.czi_path,
-                '--cell-type', 'cell',
-                '--display-channels', args.display_channels or ','.join(str(c) for c in display_channels),
-                '--dashed-contour',
-                '--crop-context-factor', str(args.crop_context_factor),
-                '--max-samples', str(n),
-                '--samples-per-page', str(min(n, 300)),
-                '--html-dir', str(html_dir),
+                python,
+                regen_script,
+                "--detections",
+                str(tmp_json),
+                "--output-dir",
+                str(output_dir),
+                "--czi-path",
+                args.czi_path,
+                "--cell-type",
+                "cell",
+                "--display-channels",
+                args.display_channels or ",".join(str(c) for c in display_channels),
+                "--dashed-contour",
+                "--crop-context-factor",
+                str(args.crop_context_factor),
+                "--max-samples",
+                str(n),
+                "--samples-per-page",
+                str(min(n, 300)),
+                "--html-dir",
+                str(html_dir),
             ]
             if args.channels:
-                cmd.extend(['--channels', args.channels])
+                cmd.extend(["--channels", args.channels])
 
             result = subprocess.run(cmd, capture_output=True, text=True)
             if result.returncode != 0:
@@ -537,34 +598,37 @@ def main():
 
         # Per-cluster galleries
         for label in sorted(clusters_full.keys()):
-            if label in ('noise', 'unclassified'):
+            if label in ("noise", "unclassified"):
                 continue
             if len(clusters_full[label]) < args.min_cluster_cells:
                 continue
-            safe = label.replace(' ', '_').replace('(', '').replace(')', '').replace('/', '_')
-            _run_regen(label, clusters_full[label], output_dir / f'cluster_{safe}')
+            safe = label.replace(" ", "_").replace("(", "").replace(")", "").replace("/", "_")
+            _run_regen(label, clusters_full[label], output_dir / f"cluster_{safe}")
 
         # Random-all gallery
-        all_cells = [d for d in detections_full
-                     if d.get(cluster_field) not in ('noise', 'unclassified', None)]
-        _run_regen('random_all', all_cells, output_dir / 'random_all')
+        all_cells = [
+            d
+            for d in detections_full
+            if d.get(cluster_field) not in ("noise", "unclassified", None)
+        ]
+        _run_regen("random_all", all_cells, output_dir / "random_all")
 
         # Index page
-        index = '<html><head><title>Cluster Galleries</title>'
-        index += '<style>body{font-family:monospace;background:#111;color:#ddd;padding:20px}'
-        index += 'a{color:#4af;font-size:16px}li{margin:8px 0}</style></head><body>'
-        index += '<h1>Cluster Galleries (annotation viewer)</h1><ul>'
+        index = "<html><head><title>Cluster Galleries</title>"
+        index += "<style>body{font-family:monospace;background:#111;color:#ddd;padding:20px}"
+        index += "a{color:#4af;font-size:16px}li{margin:8px 0}</style></head><body>"
+        index += "<h1>Cluster Galleries (annotation viewer)</h1><ul>"
         index += f'<li><a href="random_all/index.html">Random All ({min(args.n_per_cluster, len(all_cells))})</a></li>'
         for label in sorted(clusters_full.keys()):
-            if label in ('noise', 'unclassified'):
+            if label in ("noise", "unclassified"):
                 continue
             if len(clusters_full[label]) < args.min_cluster_cells:
                 continue
-            safe = label.replace(' ', '_').replace('(', '').replace(')', '').replace('/', '_')
+            safe = label.replace(" ", "_").replace("(", "").replace(")", "").replace("/", "_")
             n = len(clusters_full[label])
             index += f'<li><a href="cluster_{safe}/index.html">{label} ({n} cells)</a></li>'
-        index += '</ul></body></html>'
-        (output_dir / 'index.html').write_text(index)
+        index += "</ul></body></html>"
+        (output_dir / "index.html").write_text(index)
         print(f"\nIndex: {output_dir / 'index.html'}", flush=True)
         print("Done!", flush=True)
         return
@@ -575,8 +639,11 @@ def main():
     spatial_path = generate_spatial_map(detections, output_dir)
 
     # Sample cells and generate crops
-    print(f"\nGenerating galleries ({args.n_per_cluster} cells/cluster, "
-          f"crop {args.crop_size}px)...", flush=True)
+    print(
+        f"\nGenerating galleries ({args.n_per_cluster} cells/cluster, "
+        f"crop {args.crop_size}px)...",
+        flush=True,
+    )
 
     # Batch by tile: figure out which tiles we need
     sampled_by_cluster = {}
@@ -590,12 +657,14 @@ def main():
         sampled_by_cluster[label] = sampled
 
         for cell in sampled:
-            to = cell.get('tile_origin', [0, 0])
+            to = cell.get("tile_origin", [0, 0])
             tx, ty = int(to[0]), int(to[1])
             tile_cells[(tx, ty)].append((label, cell))
 
-    print(f"  {len(sampled_by_cluster)} clusters to render, "
-          f"{len(tile_cells)} tiles to read", flush=True)
+    print(
+        f"  {len(sampled_by_cluster)} clusters to render, " f"{len(tile_cells)} tiles to read",
+        flush=True,
+    )
 
     # Read tiles and extract crops
     crops = defaultdict(list)  # cluster_label -> [base64, ...]
@@ -604,8 +673,10 @@ def main():
     n_tiles = len(tile_cells)
     for ti, ((tx, ty), cells_in_tile) in enumerate(sorted(tile_cells.items())):
         if ti % 10 == 0:
-            print(f"  Reading tile {ti+1}/{n_tiles}: ({tx}, {ty}) "
-                  f"({len(cells_in_tile)} crops)", flush=True)
+            print(
+                f"  Reading tile {ti+1}/{n_tiles}: ({tx}, {ty}) " f"({len(cells_in_tile)} crops)",
+                flush=True,
+            )
 
         # Load tile channels from CZI
         tile_data = {}
@@ -620,14 +691,14 @@ def main():
 
         # Extract crops for each cell in this tile
         for label, cell in cells_in_tile:
-            center_local = cell.get('center', [0, 0])
+            center_local = cell.get("center", [0, 0])
             rgb = render_crop(tile_data, center_local, args.crop_size)
             b64 = crop_to_base64(rgb)
             crops[label].append(b64)
             crop_cells[label].append(cell)
 
     # Generate per-cluster HTML
-    print(f"\nWriting HTML galleries...")
+    print("\nWriting HTML galleries...")
     cluster_summaries = []
 
     for label in sorted(sampled_by_cluster.keys()):
@@ -637,19 +708,20 @@ def main():
         if not cells:
             continue
 
-        html_path = generate_cluster_html(
-            label, cells, b64s, output_dir, marker_channels)
+        html_path = generate_cluster_html(label, cells, b64s, output_dir, marker_channels)
 
-        areas = [c.get('features', {}).get('area_um2', 0) for c in cells]
-        circs = [c.get('features', {}).get('circularity', 0) for c in cells]
+        areas = [c.get("features", {}).get("area_um2", 0) for c in cells]
+        circs = [c.get("features", {}).get("circularity", 0) for c in cells]
 
-        cluster_summaries.append({
-            'label': label,
-            'n_total': len(clusters[label]),
-            'n_sampled': len(cells),
-            'area_mean': float(np.mean(areas)) if areas else 0,
-            'circ_mean': float(np.mean(circs)) if circs else 0,
-        })
+        cluster_summaries.append(
+            {
+                "label": label,
+                "n_total": len(clusters[label]),
+                "n_sampled": len(cells),
+                "area_mean": float(np.mean(areas)) if areas else 0,
+                "circ_mean": float(np.mean(circs)) if circs else 0,
+            }
+        )
         print(f"  {label}: {len(cells)} crops -> {html_path.name}")
 
     # Generate index page
@@ -658,5 +730,5 @@ def main():
     print(f"\nDone! {len(cluster_summaries)} cluster galleries in {output_dir}")
 
 
-if __name__ == '__main__':
+if __name__ == "__main__":
     main()

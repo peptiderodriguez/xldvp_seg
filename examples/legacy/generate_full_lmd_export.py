@@ -12,50 +12,51 @@ Usage:
 """
 
 import os
-import sys
 from pathlib import Path
-os.environ['HDF5_USE_FILE_LOCKING'] = 'FALSE'
 
-import json
+os.environ["HDF5_USE_FILE_LOCKING"] = "FALSE"
+
 import argparse
-import numpy as np
-import h5py
+import json
+
 import cv2
-from typing import List, Dict, Tuple, Optional
+import h5py
+import numpy as np
+
 from segmentation.lmd.contour_processing import process_contour
 
 
-def generate_quadrant_serpentine(quadrant: str, start_corner: str = 'auto') -> List[str]:
+def generate_quadrant_serpentine(quadrant: str, start_corner: str = "auto") -> list[str]:
     """Generate wells for a 384-well quadrant in serpentine order."""
-    even_rows = ['B', 'D', 'F', 'H', 'J', 'L', 'N']
-    odd_rows = ['C', 'E', 'G', 'I', 'K', 'M', 'O']
+    even_rows = ["B", "D", "F", "H", "J", "L", "N"]
+    odd_rows = ["C", "E", "G", "I", "K", "M", "O"]
     even_cols = [2, 4, 6, 8, 10, 12, 14, 16, 18, 20, 22]
     odd_cols = [3, 5, 7, 9, 11, 13, 15, 17, 19, 21, 23]
 
-    if quadrant == 'B2':
+    if quadrant == "B2":
         rows, cols = even_rows, even_cols
-    elif quadrant == 'B3':
+    elif quadrant == "B3":
         rows, cols = even_rows, odd_cols
-    elif quadrant == 'C2':
+    elif quadrant == "C2":
         rows, cols = odd_rows, even_cols
-    elif quadrant == 'C3':
+    elif quadrant == "C3":
         rows, cols = odd_rows, odd_cols
     else:
         raise ValueError(f"Unknown quadrant: {quadrant}")
 
-    if start_corner == 'auto':
-        start_corner = 'TL' if quadrant.startswith('B') else 'BR'
+    if start_corner == "auto":
+        start_corner = "TL" if quadrant.startswith("B") else "BR"
 
-    if start_corner == 'TL':
+    if start_corner == "TL":
         row_order = rows
         first_row_left_to_right = True
-    elif start_corner == 'TR':
+    elif start_corner == "TR":
         row_order = rows
         first_row_left_to_right = False
-    elif start_corner == 'BL':
+    elif start_corner == "BL":
         row_order = list(reversed(rows))
         first_row_left_to_right = True
-    elif start_corner == 'BR':
+    elif start_corner == "BR":
         row_order = list(reversed(rows))
         first_row_left_to_right = False
     else:
@@ -73,7 +74,7 @@ def generate_quadrant_serpentine(quadrant: str, start_corner: str = 'auto') -> L
     return wells
 
 
-def generate_multi_quadrant_serpentine(quadrants: List[str]) -> List[str]:
+def generate_multi_quadrant_serpentine(quadrants: list[str]) -> list[str]:
     """Generate wells for multiple quadrants with minimal movement between them."""
     if not quadrants:
         return []
@@ -81,22 +82,22 @@ def generate_multi_quadrant_serpentine(quadrants: List[str]) -> List[str]:
     all_wells = []
     for i, quad in enumerate(quadrants):
         if i == 0:
-            wells = generate_quadrant_serpentine(quad, start_corner='auto')
+            wells = generate_quadrant_serpentine(quad, start_corner="auto")
         else:
             prev_well = all_wells[-1]
             prev_row, prev_col = prev_well[0], int(prev_well[1:])
-            top_rows = set('BCDEFGH')
+            top_rows = set("BCDEFGH")
             is_top = prev_row in top_rows
             is_left = prev_col <= 12
 
             if is_top and is_left:
-                start = 'TL'
+                start = "TL"
             elif is_top and not is_left:
-                start = 'TR'
+                start = "TR"
             elif not is_top and is_left:
-                start = 'BL'
+                start = "BL"
             else:
-                start = 'BR'
+                start = "BR"
 
             wells = generate_quadrant_serpentine(quad, start_corner=start)
 
@@ -105,7 +106,7 @@ def generate_multi_quadrant_serpentine(quadrants: List[str]) -> List[str]:
     return all_wells
 
 
-def nearest_neighbor_order(points: List[Tuple[float, float]], start_idx: int = None) -> List[int]:
+def nearest_neighbor_order(points: list[tuple[float, float]], start_idx: int = None) -> list[int]:
     """Order points using nearest-neighbor algorithm with KDTree for efficiency.
 
     Uses scipy.spatial.cKDTree to find nearest unvisited neighbor at each step,
@@ -158,7 +159,7 @@ def nearest_neighbor_order(points: List[Tuple[float, float]], start_idx: int = N
     return order
 
 
-def extract_contour_from_mask(mask: np.ndarray, label: int) -> Optional[np.ndarray]:
+def extract_contour_from_mask(mask: np.ndarray, label: int) -> np.ndarray | None:
     """Extract the outer contour for a specific label in a mask."""
     binary = (mask == label).astype(np.uint8)
     if binary.sum() == 0:
@@ -172,15 +173,16 @@ def extract_contour_from_mask(mask: np.ndarray, label: int) -> Optional[np.ndarr
     return largest.reshape(-1, 2)
 
 
-def extract_contours_for_detections(detections: List[Dict], tiles_dir: Path,
-                                    pixel_size_um: float = None) -> Dict[str, Dict]:
+def extract_contours_for_detections(
+    detections: list[dict], tiles_dir: Path, pixel_size_um: float = None
+) -> dict[str, dict]:
     """Extract and process contours for a list of detections."""
     if pixel_size_um is None:
         raise ValueError("pixel_size_um is required — get from CZI metadata")
     # Group by tile
     by_tile = {}
     for det in detections:
-        tile_origin = det.get('tile_origin', [0, 0])
+        tile_origin = det.get("tile_origin", [0, 0])
         tile_name = f"tile_{tile_origin[0]}_{tile_origin[1]}"
         if tile_name not in by_tile:
             by_tile[tile_name] = []
@@ -195,15 +197,15 @@ def extract_contours_for_detections(detections: List[Dict], tiles_dir: Path,
         if not mask_path.exists():
             continue
 
-        with h5py.File(mask_path, 'r') as hf:
-            masks = hf['masks'][:]
+        with h5py.File(mask_path, "r") as hf:
+            masks = hf["masks"][:]
 
         for det in tile_dets:
-            det_id = det.get('id', '')
-            uid = det.get('uid', det_id)
+            det_id = det.get("id", "")
+            uid = det.get("uid", det_id)
 
             # Use stored mask_label (centroid-based lookup)
-            label = det.get('mask_label')
+            label = det.get("mask_label")
             if label is None:
                 continue
 
@@ -212,40 +214,43 @@ def extract_contours_for_detections(detections: List[Dict], tiles_dir: Path,
                 continue
 
             # Convert to global coordinates
-            tile_origin = det.get('tile_origin', [0, 0])
+            tile_origin = det.get("tile_origin", [0, 0])
             contour_global = contour_local.astype(float)
             contour_global[:, 0] += tile_origin[0]
             contour_global[:, 1] += tile_origin[1]
 
             # Apply post-processing
             processed, stats = process_contour(
-                contour_global.tolist(),
-                pixel_size_um=pixel_size_um,
-                return_stats=True
+                contour_global.tolist(), pixel_size_um=pixel_size_um, return_stats=True
             )
 
             if processed is None:
                 continue
 
             results[uid] = {
-                'uid': uid,
-                'id': det_id,
-                'tile_name': tile_name,
-                'global_center': det.get('global_center'),
-                'global_center_um': det.get('global_center_um'),
-                'contour_global_px': contour_global.tolist(),
-                'contour_processed_um': processed.tolist(),
-                'area_before_um2': stats['area_before_um2'],
-                'area_after_um2': stats['area_after_um2'],
-                'points_before': stats['points_before'],
-                'points_after': stats['points_after'],
+                "uid": uid,
+                "id": det_id,
+                "tile_name": tile_name,
+                "global_center": det.get("global_center"),
+                "global_center_um": det.get("global_center_um"),
+                "contour_global_px": contour_global.tolist(),
+                "contour_processed_um": processed.tolist(),
+                "area_before_um2": stats["area_before_um2"],
+                "area_after_um2": stats["area_after_um2"],
+                "points_before": stats["points_before"],
+                "points_after": stats["points_after"],
             }
 
     return results
 
 
-def main(base_dir: Path, tiles_dir: Path, clusters_path: Path,
-         detections_path: Path, pixel_size_um: float):
+def main(
+    base_dir: Path,
+    tiles_dir: Path,
+    clusters_path: Path,
+    detections_path: Path,
+    pixel_size_um: float,
+):
     print("=" * 70)
     print("FULL LMD EXPORT: SINGLES + CLUSTERS")
     print("=" * 70)
@@ -268,8 +273,8 @@ def main(base_dir: Path, tiles_dir: Path, clusters_path: Path,
     # directly to get the correct detections.
 
     # Get outliers (singles) — with bounds checking against all_detections
-    outliers = cluster_data.get('outliers', [])
-    outlier_indices = [o.get('detection_index', o.get('nmj_index')) for o in outliers]
+    outliers = cluster_data.get("outliers", [])
+    outlier_indices = [o.get("detection_index", o.get("nmj_index")) for o in outliers]
     outlier_dets = []
     skipped_indices = []
     for idx in outlier_indices:
@@ -278,16 +283,18 @@ def main(base_dir: Path, tiles_dir: Path, clusters_path: Path,
             continue
         outlier_dets.append(all_detections[idx])
     if skipped_indices:
-        print(f"  WARNING: {len(skipped_indices)} outlier indices out of range "
-              f"(max valid: {len(all_detections) - 1}): {skipped_indices[:10]}"
-              f"{'...' if len(skipped_indices) > 10 else ''}")
+        print(
+            f"  WARNING: {len(skipped_indices)} outlier indices out of range "
+            f"(max valid: {len(all_detections) - 1}): {skipped_indices[:10]}"
+            f"{'...' if len(skipped_indices) > 10 else ''}"
+        )
     print(f"  Singles (outliers): {len(outlier_dets)}")
 
     # Get clusters
-    clusters = cluster_data.get('main_clusters', [])
+    clusters = cluster_data.get("main_clusters", [])
     clustered_indices = set()
     for c in clusters:
-        clustered_indices.update(c.get('detection_indices', c.get('nmj_indices', [])))
+        clustered_indices.update(c.get("detection_indices", c.get("nmj_indices", [])))
     print(f"  Clusters: {len(clusters)} containing {len(clustered_indices)} NMJs")
 
     # Extract contours for singles
@@ -297,12 +304,14 @@ def main(base_dir: Path, tiles_dir: Path, clusters_path: Path,
 
     # Extract contours for clustered NMJs
     print("\n[3/7] Extracting contours for clustered NMJs...")
-    clustered_dets = [all_detections[idx] for idx in clustered_indices if 0 <= idx < len(all_detections)]
+    clustered_dets = [
+        all_detections[idx] for idx in clustered_indices if 0 <= idx < len(all_detections)
+    ]
     clustered_contours = extract_contours_for_detections(clustered_dets, tiles_dir, pixel_size_um)
     print(f"  Extracted: {len(clustered_contours)}/{len(clustered_dets)}")
 
     # Generate well order
-    quadrants = ['B2', 'B3', 'C3', 'C2']
+    quadrants = ["B2", "B3", "C3", "C2"]
     print(f"\n[4/7] Generating well order ({' + '.join(quadrants)} quadrants)...")
     all_wells = generate_multi_quadrant_serpentine(quadrants)
     print(f"  Total wells available: {len(all_wells)}")
@@ -313,13 +322,10 @@ def main(base_dir: Path, tiles_dir: Path, clusters_path: Path,
     singles_positions = []
 
     for det in outlier_dets:
-        uid = det.get('uid', det.get('id'))
+        uid = det.get("uid", det.get("id"))
         if uid in singles_contours:
-            singles_with_contours.append({
-                'detection': det,
-                'contour_data': singles_contours[uid]
-            })
-            center = det.get('global_center', [0, 0])
+            singles_with_contours.append({"detection": det, "contour_data": singles_contours[uid]})
+            center = det.get("global_center", [0, 0])
             singles_positions.append((center[0], center[1]))
 
     if singles_positions:
@@ -331,8 +337,10 @@ def main(base_dir: Path, tiles_dir: Path, clusters_path: Path,
         for i in range(len(nn_order) - 1):
             p1 = singles_positions[nn_order[i]]
             p2 = singles_positions[nn_order[i + 1]]
-            total_dist += np.sqrt((p1[0] - p2[0])**2 + (p1[1] - p2[1])**2)
-        print(f"  Ordered {len(ordered_singles)} singles, path: {total_dist * pixel_size_um / 1000:.1f} mm")
+            total_dist += np.sqrt((p1[0] - p2[0]) ** 2 + (p1[1] - p2[1]) ** 2)
+        print(
+            f"  Ordered {len(ordered_singles)} singles, path: {total_dist * pixel_size_um / 1000:.1f} mm"
+        )
 
         last_single_pos = singles_positions[nn_order[-1]]
     else:
@@ -341,11 +349,13 @@ def main(base_dir: Path, tiles_dir: Path, clusters_path: Path,
 
     # Order clusters by nearest-neighbor
     print("\n[6/7] Ordering clusters by nearest-neighbor on slide...")
-    cluster_centroids = [(c['cx'], c['cy']) for c in clusters]
+    cluster_centroids = [(c["cx"], c["cy"]) for c in clusters]
 
     if cluster_centroids and last_single_pos:
-        dists = [np.sqrt((cx - last_single_pos[0])**2 + (cy - last_single_pos[1])**2)
-                 for cx, cy in cluster_centroids]
+        dists = [
+            np.sqrt((cx - last_single_pos[0]) ** 2 + (cy - last_single_pos[1]) ** 2)
+            for cx, cy in cluster_centroids
+        ]
         start_cluster = np.argmin(dists)
     else:
         start_cluster = 0
@@ -358,8 +368,10 @@ def main(base_dir: Path, tiles_dir: Path, clusters_path: Path,
         for i in range(len(cluster_nn_order) - 1):
             p1 = cluster_centroids[cluster_nn_order[i]]
             p2 = cluster_centroids[cluster_nn_order[i + 1]]
-            total_dist += np.sqrt((p1[0] - p2[0])**2 + (p1[1] - p2[1])**2)
-        print(f"  Ordered {len(ordered_clusters)} clusters, path: {total_dist * pixel_size_um / 1000:.1f} mm")
+            total_dist += np.sqrt((p1[0] - p2[0]) ** 2 + (p1[1] - p2[1]) ** 2)
+        print(
+            f"  Ordered {len(ordered_clusters)} clusters, path: {total_dist * pixel_size_um / 1000:.1f} mm"
+        )
     else:
         ordered_clusters = []
 
@@ -374,39 +386,41 @@ def main(base_dir: Path, tiles_dir: Path, clusters_path: Path,
         print(f"  WARNING: Need {total_needed} wells but only have {len(all_wells)}!")
 
     export_data = {
-        'metadata': {
-            'plate_format': '384',
-            'quadrants': quadrants,
-            'pixel_size_um': pixel_size_um,
-            'dilation_um': 0.5,
-            'rdp_epsilon_px': 5,
+        "metadata": {
+            "plate_format": "384",
+            "quadrants": quadrants,
+            "pixel_size_um": pixel_size_um,
+            "dilation_um": 0.5,
+            "rdp_epsilon_px": 5,
         },
-        'summary': {
-            'n_singles': n_singles,
-            'n_clusters': n_clusters,
-            'n_nmjs_in_clusters': sum(c['n'] for c in ordered_clusters),
-            'total_wells': total_needed,
+        "summary": {
+            "n_singles": n_singles,
+            "n_clusters": n_clusters,
+            "n_nmjs_in_clusters": sum(c["n"] for c in ordered_clusters),
+            "total_wells": total_needed,
         },
-        'singles': [],
-        'clusters': [],
-        'well_order': all_wells[:total_needed],
+        "singles": [],
+        "clusters": [],
+        "well_order": all_wells[:total_needed],
     }
 
     # Add singles
     for i, item in enumerate(ordered_singles):
-        det = item['detection']
-        contour = item['contour_data']
+        det = item["detection"]
+        contour = item["contour_data"]
         well = all_wells[i]
 
-        export_data['singles'].append({
-            'well': well,
-            'well_index': i + 1,
-            'uid': contour['uid'],
-            'global_center_um': det.get('global_center_um'),
-            'contour_um': contour['contour_processed_um'],
-            'area_um2': contour['area_after_um2'],
-            'n_points': contour['points_after'],
-        })
+        export_data["singles"].append(
+            {
+                "well": well,
+                "well_index": i + 1,
+                "uid": contour["uid"],
+                "global_center_um": det.get("global_center_um"),
+                "contour_um": contour["contour_processed_um"],
+                "area_um2": contour["area_after_um2"],
+                "n_points": contour["points_after"],
+            }
+        )
 
     # Add clusters
     for i, cluster in enumerate(ordered_clusters):
@@ -414,33 +428,37 @@ def main(base_dir: Path, tiles_dir: Path, clusters_path: Path,
 
         # Get contours for all NMJs in cluster
         cluster_nmjs = []
-        for idx in cluster.get('detection_indices', cluster.get('nmj_indices', [])):
+        for idx in cluster.get("detection_indices", cluster.get("nmj_indices", [])):
             if idx < 0 or idx >= len(all_detections):
                 continue
             det = all_detections[idx]
-            uid = det.get('uid', det.get('id'))
+            uid = det.get("uid", det.get("id"))
             if uid in clustered_contours:
-                cluster_nmjs.append({
-                    'uid': uid,
-                    'global_center_um': det.get('global_center_um'),
-                    'contour_um': clustered_contours[uid]['contour_processed_um'],
-                    'area_um2': clustered_contours[uid]['area_after_um2'],
-                    'n_points': clustered_contours[uid]['points_after'],
-                })
+                cluster_nmjs.append(
+                    {
+                        "uid": uid,
+                        "global_center_um": det.get("global_center_um"),
+                        "contour_um": clustered_contours[uid]["contour_processed_um"],
+                        "area_um2": clustered_contours[uid]["area_after_um2"],
+                        "n_points": clustered_contours[uid]["points_after"],
+                    }
+                )
 
-        export_data['clusters'].append({
-            'well': well,
-            'well_index': n_singles + i + 1,
-            'cluster_id': cluster['id'],
-            'centroid_um': [cluster['cx'] * pixel_size_um, cluster['cy'] * pixel_size_um],
-            'n_nmjs': len(cluster_nmjs),
-            'total_area_um2': sum(nmj['area_um2'] for nmj in cluster_nmjs),
-            'nmjs': cluster_nmjs,
-        })
+        export_data["clusters"].append(
+            {
+                "well": well,
+                "well_index": n_singles + i + 1,
+                "cluster_id": cluster["id"],
+                "centroid_um": [cluster["cx"] * pixel_size_um, cluster["cy"] * pixel_size_um],
+                "n_nmjs": len(cluster_nmjs),
+                "total_area_um2": sum(nmj["area_um2"] for nmj in cluster_nmjs),
+                "nmjs": cluster_nmjs,
+            }
+        )
 
     # Save
     output_path = output_dir / "lmd_export_full.json"
-    with open(output_path, 'w') as f:
+    with open(output_path, "w") as f:
         json.dump(export_data, f)
     print(f"  Saved: {output_path}")
 
@@ -450,47 +468,73 @@ def main(base_dir: Path, tiles_dir: Path, clusters_path: Path,
     print("=" * 70)
     print(f"  Plate: 384-well ({' + '.join(quadrants)} quadrants)")
     print(f"  Total wells: {total_needed} / {len(all_wells)} available")
-    print(f"")
+    print("")
     print(f"  SINGLES: {n_singles}")
     if n_singles > 0:
         print(f"    Wells: {all_wells[0]} → {all_wells[n_singles-1]}")
-        singles_area = sum(s['area_um2'] for s in export_data['singles'])
+        singles_area = sum(s["area_um2"] for s in export_data["singles"])
         print(f"    Total area: {singles_area:.0f} µm²")
     else:
         singles_area = 0
-        print(f"    (none)")
-    print(f"")
+        print("    (none)")
+    print("")
     print(f"  CLUSTERS: {n_clusters}")
     if n_clusters > 0:
         print(f"    Wells: {all_wells[n_singles]} → {all_wells[total_needed-1]}")
         print(f"    NMJs in clusters: {export_data['summary']['n_nmjs_in_clusters']}")
-        clusters_area = sum(c['total_area_um2'] for c in export_data['clusters'])
+        clusters_area = sum(c["total_area_um2"] for c in export_data["clusters"])
         print(f"    Total area: {clusters_area:.0f} µm²")
     else:
         clusters_area = 0
-        print(f"    (none)")
-    print(f"")
+        print("    (none)")
+    print("")
     print(f"  TOTAL NMJs: {n_singles + export_data['summary']['n_nmjs_in_clusters']}")
     print(f"  TOTAL AREA: {singles_area + clusters_area:.0f} µm²")
     print("=" * 70)
 
 
-if __name__ == '__main__':
-    parser = argparse.ArgumentParser(description='Generate complete LMD export with singles + clusters')
-    parser.add_argument('--base-dir', type=Path, required=True,
-                        help='Base output directory (e.g., nmj_output/experiment_name)')
-    parser.add_argument('--tiles-dir', type=Path, required=True,
-                        help='Directory containing tile subdirectories with nmj_masks.h5 files')
-    parser.add_argument('--clusters', type=Path, default=None,
-                        help='Path to clusters JSON (default: <base-dir>/nmj_clusters_375_425_500_1000.json)')
-    parser.add_argument('--detections', type=Path, default=None,
-                        help='Path to detections JSON (default: <base-dir>/nmj_detections_classified_v2.json)')
-    parser.add_argument('--pixel-size', type=float, required=True,
-                        help='Pixel size in micrometers (from CZI metadata)')
+if __name__ == "__main__":
+    parser = argparse.ArgumentParser(
+        description="Generate complete LMD export with singles + clusters"
+    )
+    parser.add_argument(
+        "--base-dir",
+        type=Path,
+        required=True,
+        help="Base output directory (e.g., nmj_output/experiment_name)",
+    )
+    parser.add_argument(
+        "--tiles-dir",
+        type=Path,
+        required=True,
+        help="Directory containing tile subdirectories with nmj_masks.h5 files",
+    )
+    parser.add_argument(
+        "--clusters",
+        type=Path,
+        default=None,
+        help="Path to clusters JSON (default: <base-dir>/nmj_clusters_375_425_500_1000.json)",
+    )
+    parser.add_argument(
+        "--detections",
+        type=Path,
+        default=None,
+        help="Path to detections JSON (default: <base-dir>/nmj_detections_classified_v2.json)",
+    )
+    parser.add_argument(
+        "--pixel-size",
+        type=float,
+        required=True,
+        help="Pixel size in micrometers (from CZI metadata)",
+    )
     args = parser.parse_args()
 
-    clusters_path = args.clusters if args.clusters else args.base_dir / "nmj_clusters_375_425_500_1000.json"
-    detections_path = args.detections if args.detections else args.base_dir / "nmj_detections_classified_v2.json"
+    clusters_path = (
+        args.clusters if args.clusters else args.base_dir / "nmj_clusters_375_425_500_1000.json"
+    )
+    detections_path = (
+        args.detections if args.detections else args.base_dir / "nmj_detections_classified_v2.json"
+    )
 
     main(
         base_dir=args.base_dir,
