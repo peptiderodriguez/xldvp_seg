@@ -1,5 +1,10 @@
 # xldvp_seg — Image Analysis & DVP Pipeline
 
+[![CI](https://github.com/peptiderodriguez/xldvp_seg/actions/workflows/test.yml/badge.svg)](https://github.com/peptiderodriguez/xldvp_seg/actions)
+[![Python 3.10+](https://img.shields.io/badge/python-3.10%2B-blue.svg)](https://www.python.org/downloads/)
+[![License: MIT](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
+[![Code style: black](https://img.shields.io/badge/code%20style-black-000000.svg)](https://github.com/psf/black)
+
 Automated cell detection, annotation, classification, spatial analysis, and LMD (laser microdissection) export for whole-slide CZI microscopy images. Built for the DVP (Deep Visual Proteomics) workflow: find cells on a slide, classify them by type and marker expression, then export selected cells for laser cutting and mass spec analysis.
 
 Runs on SLURM GPU clusters or local workstations (NVIDIA CUDA, Apple Silicon MPS, or CPU-only). Works with or without [Claude Code](https://claude.ai/claude-code) — an optional AI assistant that can guide you through the entire pipeline interactively.
@@ -248,6 +253,23 @@ tl.score(slide, classifier="classifiers/rf_morph.pkl")
 tl.cluster(slide, methods="both", output_dir="clustering/")
 slide.save("scored_detections.json")
 adata = slide.to_anndata()  # export to AnnData for scanpy
+```
+
+**Minimal example — load, filter, export:**
+
+```python
+from segmentation.core import SlideAnalysis
+
+# Load pipeline output
+slide = SlideAnalysis.load("output/my_slide/run_20260324/")
+print(f"{slide.n_detections} detections, {slide.cell_type}")
+
+# Filter to high-confidence NeuN+ neurons
+neurons = slide.filter(score_threshold=0.5)
+neurons = neurons.filter(marker="NeuN", positive=True)
+
+# Export for downstream analysis
+adata = neurons.to_anndata()
 ```
 
 ---

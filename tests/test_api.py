@@ -1,0 +1,392 @@
+"""Tests for segmentation.api.tl -- analysis tool wrappers.
+
+Uses unittest.mock.patch to avoid heavy imports (sklearn, scripts, GPU models).
+Tests that tl.score(), tl.markers(), and tl.train() pass arguments correctly
+and return expected results.
+
+Run with: pytest tests/test_api.py -v
+"""
+
+import pytest
+import numpy as np
+from pathlib import Path
+from unittest.mock import patch, MagicMock
+
+from segmentation.core import SlideAnalysis
+from segmentation.api import tl
+
+
+def _make_detections(n=5):
+    """Create sample detection dicts with features for scoring."""
+    dets = []
+    for i in range(n):
+        dets.append({
+            "uid": f"slide_cell_{i * 100}_{i * 200}",
+            "rf_prediction": 0.5,
+            "global_center": [i * 100, i * 200],
+            "features": {
+                "area": 500 + i * 100,
+                "solidity": 0.8 + i * 0.02,
+                "ch1_mean": 100.0 + i * 10,
+                "ch1_snr": 1.0 + i * 0.5,
+                "ch1_background": 50.0,
+                "ch1_median_raw": 80.0 + i * 5,
+                "sam2_0": float(i),
+                "sam2_1": float(i + 1),
+            },
+        })
+    return dets
+
+
+class TestTlScore:
+    """Tests for tl.score() -- RF classifier scoring."""
+
+    @patch("segmentation.utils.detection_utils.load_rf_classifier")
+    def test_score_applies_predictions(self, mock_load_clf):
+        """Verify score() calls predict_proba and writes rf_prediction."""
+        mock_pipeline = MagicMock()
+        mock_pipeline.predict_proba.return_value = np.array([
+            [0.2, 0.8],
+            [0.6, 0.4],
+            [0.1, 0.9],
+            [0.5, 0.5],
+            [0.3, 0.7],
+        ])
+        mock_load_clf.return_value = {
+            "pipeline": mock_pipeline,
+            "feature_names": ["area", "solidity"],
+            "type": "rf",
+            "raw_meta": {},
+        }
+
+        dets = _make_detections(5)
+        slide = SlideAnalysis.from_detections(dets)
+        result = tl.score(slide, classifier="fake_classifier.pkl")
+
+        assert result is slide
+        mock_load_clf.assert_called_once_with("fake_classifier.pkl")
+        mock_pipeline.predict_proba.assert_called_once()
+        X_arg = mock_pipeline.predict_proba.call_args[0][0]
+        assert X_arg.shape == (5, 2)
+        assert slide.detections[0]["rf_prediction"] == pytest.approx(0.8)
+        assert slide.detections[1]["rf_prediction"] == pytest.approx(0.4)
+
+    @patch("segmentation.utils.detection_utils.load_rf_classifier")
+    def test_score_empty_detections(self, mock_load_clf):
+        """Score on empty slide returns slide without calling classifier."""
+        mock_load_clf.return_value = {
+            "pipeline": MagicMock(),
+            "feature_names": ["area"],
+            "type": "rf",
+            "raw_meta": {},
+        }
+        slide = SlideAnalysis.from_detections([])
+        result = tl.score(slide, classifier="clf.pkl")
+        assert result is slide
+        mock_load_clf.return_value["pipeline"].predict_proba.assert_not_called()
+
+    @patch("segmentation.utils.detection_utils.load_rf_classifier")
+    def test_score_missing_features(self, mock_load_clf):
+        """Detections missing required features are skipped."""
+        mock_pipeline = MagicMock()
+        mock_load_clf.return_value = {
+            "pipeline": mock_pipeline,
+            "feature_names": ["area", "nonexistent_feature"],
+            "type": "rf",
+            "raw_meta": {},
+        }
+        dets = _make_detections(3)
+        slide = SlideAnalysis.from_detections(dets)
+        result = tl.score(slide, classifier="clf.pkl")
+        assert result is slide
+        mock_pipeline.predict_proba.assert_not_called()
+
+    @patch("segmentation.utils.detection_utils.load_rf_classifier")
+    def test_score_custom_field(self, mock_load_clf):
+        """Score with custom score_field name."""
+        mock_pipeline = MagicMock()
+        mock_pipeline.predict_proba.return_value = np.array([[0.1, 0.9]])
+        mock_load_clf.return_value = {
+            "pipeline": mock_pipeline,
+            "feature_names": ["area"],
+            "type": "rf",
+            "raw_meta": {},
+        }
+        dets = _make_detections(1)
+        slide = SlideAnalysis.from_detections(dets)
+        tl.score(slide, classifier="clf.pkl", score_field="custom_score")
+        assert "custom_score" in slide.detections[0]
+        assert slide.detections[0]["custom_score"] == pytest.approx(0.9)
+
+    @patch("segmentation.utils.detection_utils.load_rf_classifier")
+    def test_score_invalidates_features_df_cache(self, mock_load_clf):
+        """Scoring should clear the cached features_df."""
+        mock_pipeline = MagicMock()
+        mock_pipeline.predict_proba.return_value = np.array([
+            [0.2, 0.8], [0.6, 0.4], [0.1, 0.9],
+        ])
+        mock_load_clf.return_value = {
+            "pipeline": mock_pipeline,
+            "feature_names": ["area"],
+            "type": "rf",
+            "raw_meta": {},
+        }
+        dets = _make_detections(3)
+        slide = SlideAnalysis.from_detections(dets)
+        _ = slide.features_df
+        assert slide._features_df is not None
+
+        tl.score(slide, classifier="clf.pkl")
+        assert slide._features_df is None
+
+    @patch("segmentation.utils.detection_utils.load_rf_classifier")
+    def test_score_partial_features(self, mock_load_clf):
+        """When some detections have features and some don't, only valid ones scored."""
+        mock_pipeline = MagicMock()
+        mock_pipeline.predict_proba.return_value = np.array([[0.2, 0.8]])
+        mock_load_clf.return_value = {
+            "pipeline": mock_pipeline,
+            "feature_names": ["area", "solidity"],
+            "type": "rf",
+            "raw_meta": {},
+        }
+        dets = _make_detections(2)
+        # Remove solidity from the second detection
+        del dets[1]["features"]["solidity"]
+        slide = SlideAnalysis.from_detections(dets)
+        tl.score(slide, classifier="clf.pkl")
+        # Only 1 detection should be scored
+        mock_pipeline.predict_proba.assert_called_once()
+        X_arg = mock_pipeline.predict_proba.call_args[0][0]
+        assert X_arg.shape == (1, 2)
+
+
+class TestTlMarkers:
+    """Tests for tl.markers() -- marker classification."""
+
+    def test_markers_empty_detections_returns_early(self):
+        """markers() on empty slide should return slide immediately."""
+        slide = SlideAnalysis.from_detections([])
+
+        # Create a mock module with classify_single_marker
+        mock_classify = MagicMock()
+        mock_module = MagicMock()
+        mock_module.classify_single_marker = mock_classify
+
+        with patch.dict("sys.modules", {
+            "scripts": MagicMock(),
+            "scripts.classify_markers": mock_module,
+        }):
+            result = tl.markers(slide, marker_channels=[1], marker_names=["NeuN"])
+            assert result is slide
+            # classify_single_marker should NOT have been called
+            mock_classify.assert_not_called()
+
+    def test_markers_calls_classify_per_channel(self):
+        """markers() should call classify_single_marker for each channel."""
+        mock_classify = MagicMock(return_value={
+            "n_positive": 3, "n_negative": 2, "threshold": 1.5,
+        })
+        mock_module = MagicMock()
+        mock_module.classify_single_marker = mock_classify
+
+        dets = _make_detections(5)
+        slide = SlideAnalysis.from_detections(dets)
+
+        with patch.dict("sys.modules", {
+            "scripts": MagicMock(),
+            "scripts.classify_markers": mock_module,
+        }):
+            result = tl.markers(
+                slide,
+                marker_channels=[1, 2],
+                marker_names=["NeuN", "CD31"],
+            )
+
+        assert result is slide
+        # Should have been called twice (once per marker)
+        assert mock_classify.call_count == 2
+        # Verify first call had correct channel/name
+        first_call_kwargs = mock_classify.call_args_list[0]
+        assert first_call_kwargs.kwargs["channel"] == 1
+        assert first_call_kwargs.kwargs["marker_name"] == "NeuN"
+        second_call_kwargs = mock_classify.call_args_list[1]
+        assert second_call_kwargs.kwargs["channel"] == 2
+        assert second_call_kwargs.kwargs["marker_name"] == "CD31"
+
+    def test_markers_builds_marker_profile(self):
+        """markers() should build marker_profile from marker classes."""
+        def fake_classify(detections, channel, marker_name, **kwargs):
+            target = "positive" if channel == 1 else "negative"
+            for det in detections:
+                det[f"{marker_name}_class"] = target
+            return {"n_positive": len(detections), "n_negative": 0, "threshold": 1.5}
+
+        mock_module = MagicMock()
+        mock_module.classify_single_marker = fake_classify
+
+        dets = _make_detections(3)
+        slide = SlideAnalysis.from_detections(dets)
+
+        with patch.dict("sys.modules", {
+            "scripts": MagicMock(),
+            "scripts.classify_markers": mock_module,
+        }):
+            tl.markers(
+                slide,
+                marker_channels=[1, 2],
+                marker_names=["NeuN", "CD31"],
+            )
+
+        # All detections should have marker_profile
+        for det in slide.detections:
+            assert "marker_profile" in det
+            assert det["marker_profile"] == "NeuN+/CD31-"
+
+    def test_markers_invalidates_features_df_cache(self):
+        """markers() should clear cached features_df."""
+        mock_classify = MagicMock(return_value={
+            "n_positive": 2, "n_negative": 1, "threshold": 1.0,
+        })
+        mock_module = MagicMock()
+        mock_module.classify_single_marker = mock_classify
+
+        dets = _make_detections(3)
+        slide = SlideAnalysis.from_detections(dets)
+        _ = slide.features_df
+        assert slide._features_df is not None
+
+        with patch.dict("sys.modules", {
+            "scripts": MagicMock(),
+            "scripts.classify_markers": mock_module,
+        }):
+            tl.markers(slide, marker_channels=[1], marker_names=["NeuN"])
+
+        assert slide._features_df is None
+
+    def test_marker_profile_logic(self):
+        """Test the marker_profile construction logic in isolation."""
+        dets = _make_detections(3)
+        for i, det in enumerate(dets):
+            det["NeuN_class"] = "positive" if i % 2 == 0 else "negative"
+            det["CD31_class"] = "negative" if i % 2 == 0 else "positive"
+
+        marker_names = ["NeuN", "CD31"]
+        for det in dets:
+            parts = []
+            for name in marker_names:
+                cls = det.get(f"{name}_class", "")
+                parts.append(f"{name}+" if cls == "positive" else f"{name}-")
+            det["marker_profile"] = "/".join(parts)
+
+        assert dets[0]["marker_profile"] == "NeuN+/CD31-"
+        assert dets[1]["marker_profile"] == "NeuN-/CD31+"
+        assert dets[2]["marker_profile"] == "NeuN+/CD31-"
+
+
+class TestTlTrain:
+    """Tests for tl.train() -- RF classifier training."""
+
+    def test_train_requires_detections_path(self):
+        """train() should raise ValueError if slide has no detections_path."""
+        slide = SlideAnalysis.from_detections(_make_detections(3))
+        assert slide.detections_path is None
+        with pytest.raises(ValueError, match="no detections_path"):
+            tl.train(slide, annotations="annotations.json")
+
+    def test_train_returns_dict(self, tmp_path):
+        """train() should return a dict with training metrics."""
+        import json
+
+        det_path = tmp_path / "cell_detections.json"
+        dets = _make_detections(10)
+        det_path.write_text(json.dumps(dets))
+
+        slide = SlideAnalysis.load(tmp_path)
+        assert slide.detections_path is not None
+
+        ann_path = tmp_path / "annotations.json"
+        annotations = {dets[i]["uid"]: (1 if i < 5 else 0) for i in range(10)}
+        ann_path.write_text(json.dumps(annotations))
+
+        fake_X = np.random.rand(10, 3)
+        fake_y = np.array([1, 1, 1, 1, 1, 0, 0, 0, 0, 0])
+        fake_feature_names = ["area", "solidity", "sam2_0"]
+
+        mock_load_fn = MagicMock(return_value=(fake_X, fake_y, fake_feature_names))
+        mock_rf_instance = MagicMock()
+        mock_rf_instance.fit = MagicMock()
+        mock_rf_cls = MagicMock(return_value=mock_rf_instance)
+        mock_cv = MagicMock(return_value=np.array([0.9, 0.85, 0.88, 0.92, 0.87]))
+        mock_joblib = MagicMock()
+
+        # Patch the dynamic imports used inside train()
+        mock_train_module = MagicMock()
+        mock_train_module.load_features_and_annotations = mock_load_fn
+
+        with patch.dict("sys.modules", {
+            "train_classifier": mock_train_module,
+            "sklearn.ensemble": MagicMock(RandomForestClassifier=mock_rf_cls),
+            "sklearn.model_selection": MagicMock(cross_val_score=mock_cv),
+            "joblib": mock_joblib,
+        }):
+            output_pkl = tmp_path / "test_classifier.pkl"
+            result = tl.train(
+                slide, annotations=str(ann_path),
+                feature_set="morph", output_path=str(output_pkl),
+            )
+
+            assert isinstance(result, dict)
+            assert result["feature_set"] == "morph"
+            assert "cv_f1_mean" in result
+            assert "cv_f1_std" in result
+            assert "n_positive" in result
+            assert "n_negative" in result
+            assert result["n_positive"] == 5
+            assert result["n_negative"] == 5
+
+            # Verify load_features_and_annotations was called with correct args
+            mock_load_fn.assert_called_once()
+            call_args = mock_load_fn.call_args
+            assert str(det_path) in call_args[0][0]
+            assert str(ann_path) in call_args[0][1]
+
+            # Verify RF was trained on all data
+            mock_rf_instance.fit.assert_called_once()
+
+    def test_train_no_annotated_raises(self, tmp_path):
+        """train() should raise ValueError if no annotated detections found."""
+        import json
+
+        det_path = tmp_path / "cell_detections.json"
+        dets = _make_detections(5)
+        det_path.write_text(json.dumps(dets))
+
+        slide = SlideAnalysis.load(tmp_path)
+        ann_path = tmp_path / "annotations.json"
+        ann_path.write_text(json.dumps({}))
+
+        # Return empty X,y from load_features_and_annotations
+        mock_load_fn = MagicMock(return_value=(np.array([]), np.array([]), []))
+        mock_train_module = MagicMock()
+        mock_train_module.load_features_and_annotations = mock_load_fn
+
+        with patch.dict("sys.modules", {
+            "train_classifier": mock_train_module,
+        }):
+            with pytest.raises(ValueError, match="No annotated detections"):
+                tl.train(slide, annotations=str(ann_path))
+
+
+class TestTlNuclei:
+    """Tests for tl.nuclei() -- should raise NotImplementedError."""
+
+    def test_nuclei_not_implemented(self):
+        slide = SlideAnalysis.from_detections(_make_detections(3))
+        with pytest.raises(NotImplementedError):
+            tl.nuclei(slide, czi_path="/fake/path.czi")
+
+    def test_nuclei_error_message_contains_script_path(self):
+        slide = SlideAnalysis.from_detections(_make_detections(3))
+        with pytest.raises(NotImplementedError, match="count_nuclei_per_cell"):
+            tl.nuclei(slide, czi_path="/fake/path.czi")

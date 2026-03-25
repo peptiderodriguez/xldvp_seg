@@ -3,6 +3,7 @@ checkpoints/
 *.pt
 *.pth
 *.ckpt
+*.pkl
 
 # Data files
 *.czi
@@ -94,9 +95,26 @@ docs/MK_ANALYSIS_STATUS.md
 .claude/settings.local.json
 
 # Trained classifiers and site-specific data
+classifiers/
 *.joblib
 normalization_params*.json
 reinhard_params*.json
+
+# Training data
+training_data/
+
+# Input file lists (site-specific)
+input_files*.txt
+
+# Review/planning notes
+review_*.md
+plan_review.md
+
+# Deprecated modules
+shared/
+
+# Examples output
+examples/output/
 
 # Environment files
 .env

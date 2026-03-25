@@ -68,12 +68,7 @@ instanseg = [
 ]
 
 [project.scripts]
-# Unified CLI
 xlseg = "segmentation.cli.main:cli"
-# Backward-compat entry points
-xldvp-seg = "run_segmentation:main"
-xldvp-seg-nmj = "run_segmentation:main"
-xldvp-seg-serve = "serve_html:main"
 
 [project.urls]
 "Homepage" = "https://github.com/peptiderodriguez/xldvp_seg"
@@ -85,16 +80,14 @@ py-modules = [
     "run_lmd_export",
     "serve_html",
     "train_classifier",
-    "compute_normalization_params",
 ]
 
 [tool.setuptools.packages.find]
 where = ["."]
-include = ["segmentation*", "shared*"]
+include = ["segmentation*"]
 
 [tool.setuptools.package-data]
 "*" = ["*.yaml", "*.json"]
-"configs" = ["**/*.yaml"]
 
 [tool.black]
 line-length = 100

@@ -16,7 +16,7 @@ Usage:
 """
 
 # Version
-__version__ = "0.1.0"
+__version__ = "2.0.0"
 
 # Submodule imports are available directly
 # Use lazy imports to avoid circular dependencies and unnecessary loading

@@ -86,9 +86,24 @@ Tests are in `tests/` using pytest. Fixtures in `conftest.py`: `sample_tile` (51
 | `test_registry.py` | Strategy registry (8 strategies), model registry (9 models, modality filter) |
 | `test_sample_dataset.py` | `sample()` output format, reproducibility, channel features |
 | `test_metrics.py` | IoU, Dice, PQ, Hungarian matching with known values |
-| `test_cli.py` | `xlseg` subcommand parsing, help output, models/strategies display |
+| `test_cli.py` | All 11 `xlseg` subcommands: parsing, help output, dispatch table |
+| `test_slide_analysis.py` | `SlideAnalysis`: from_detections, filter, features_df, to_anndata, repr |
+| `test_json_utils.py` | `sanitize_for_json`, `atomic_json_dump`/`fast_json_load` roundtrip, NaN handling |
+| `test_api.py` | API wrappers: `tl.score`, `tl.markers`, `tl.train` (mocked heavy deps) |
+| `test_background.py` | KD-tree local background correction, caching, fallback, non-negative |
+| `test_well_plate.py` | 384-well serpentine generation, multi-plate overflow, QC empties |
+| `test_deduplication.py` | IoU NMS dedup: overlap/non-overlap, threshold, HDF5 mask loading |
+| `test_aggregation.py` | `aggregate_slide`, `aggregate_cohort`, `cohort_to_anndata` |
 
 Tests rely on `pip install -e .` (or `PYTHONPATH=$REPO`) for `segmentation.*` imports.
+
+**Development workflow:**
+```bash
+make install-dev   # Install with dev deps (pytest, ruff, black, pytest-cov)
+make test          # Run all tests with coverage
+make lint          # Check formatting (ruff + black)
+make format        # Auto-fix formatting
+```
 
 ---
 
@@ -571,11 +586,14 @@ python run_segmentation.py --czi-path slide.czi --cell-type nmj \
 
 ## Entry Points
 
+### Core Scripts (root + `scripts/`)
+
 | Script | Purpose |
 |--------|---------|
 | `run_segmentation.py` | Unified detection pipeline (all cell types) |
 | `run_lmd_export.py` | LMD XML export (single + batch) |
 | `train_classifier.py` | Train RF classifier from annotations |
+| `serve_html.py` | HTTP server + Cloudflare tunnel |
 | `scripts/apply_classifier.py` | Score detections with trained classifier |
 | `scripts/classify_markers.py` | Marker pos/neg classification (SNR/Otsu/GMM) |
 | `scripts/regenerate_html.py` | Regenerate HTML viewer from saved detections |
@@ -587,25 +605,34 @@ python run_segmentation.py --czi-path slide.czi --cell-type nmj \
 | `scripts/view_slide.py` | One-command: classify + spatial + viewer + serve |
 | `scripts/vessel_community_analysis.py` | Multi-scale vessel structure detection |
 | `scripts/spatial_cell_analysis.py` | Spatial network analysis |
-| `scripts/cluster_by_features.py` | UMAP/t-SNE + Leiden/HDBSCAN, interactive plotly, --trajectory (diffmap, pseudotime, PAGA, force-directed) |
+| `scripts/cluster_by_features.py` | UMAP/t-SNE + Leiden/HDBSCAN, interactive plotly |
 | `scripts/compare_feature_sets.py` | Compare RF feature subsets via stratified CV |
-| `scripts/count_nuclei_per_cell.py` | Count nuclei per cell (Cellpose 2nd pass + per-nucleus features) |
-| `scripts/detect_regions_for_lmd.py` | Percentile-threshold channel → split → full features (morph+channel+SAM2) |
-| `scripts/quality_filter_detections.py` | Heuristic area+solidity+channel filter (RF alternative) |
-| `scripts/split_regions_for_lmd.py` | Post-process pipeline detections → watershed split large regions |
-| `scripts/paper_figure_sampling.py` | Replicate sampling (area-matched or spatial) with 384-well assignment |
+| `scripts/count_nuclei_per_cell.py` | Count nuclei per cell (Cellpose 2nd pass) |
+| `scripts/detect_regions_for_lmd.py` | Percentile-threshold channel → split → features |
+| `scripts/quality_filter_detections.py` | Heuristic area+solidity+channel filter |
+| `scripts/split_regions_for_lmd.py` | Watershed split large regions |
+| `scripts/paper_figure_sampling.py` | Replicate sampling with 384-well assignment |
 | `scripts/select_transect_cells_for_lmd.py` | Select zonation transect cells for LMD |
 | `scripts/cluster_detections.py` | Biological clustering for LMD wells |
 | `scripts/generate_tissue_overlay.py` | Fluorescence image + cell overlay + ROI viewer |
-| `scripts/assign_tissue_zones.py` | Spatially-constrained marker-based zone discovery |
-| `scripts/zonation_transect.py` | Pericentral → periportal gradient analysis |
-| `scripts/calculate_tissue_areas.py` | Variance-based tissue area measurement |
-| `scripts/annotate_bone_regions.py` | Interactive HTML bone region annotation |
-| `scripts/maturation_analysis.py` | MK maturation staging (nuclear deep features) |
-| `scripts/mk_comprehensive_analysis.py` | Multi-dimensional MK feature analysis |
-| `scripts/analyze_islets.py` | Spatial analysis of pancreatic islets |
-| `scripts/select_mks_for_lmd.py` | MK replicate selection + multi-plate wells |
 | `scripts/lmd_export_replicates.py` | Replicate-based LMD XML export |
 | `scripts/system_info.py` | Environment detection + SLURM recommendations |
 | `scripts/preview_preprocessing.py` | Correction preview at reduced resolution |
-| `serve_html.py` | HTTP server + Cloudflare tunnel |
+
+### Examples (`examples/`)
+
+Project-specific analysis scripts organized by experiment:
+
+| Directory | Experiment |
+|-----------|-----------|
+| `examples/bone_marrow/` | MK hindlimb unloading, RBC vascularization, bone regions |
+| `examples/mesothelium/` | MSLN detection + annotation |
+| `examples/islet/` | Pancreatic islet analysis |
+| `examples/liver/` | Hepatic zonation, DCN+, transects |
+| `examples/nmj/` | NMJ detection SLURM scripts |
+| `examples/senescence/` | Senescence cell detection configs |
+| `examples/vessel/` | Vessel classifier training |
+| `examples/tissue_pattern/` | Brain FISH, coronal section analysis |
+| `examples/configs/` | YAML pipeline config templates |
+| `examples/slurm/` | Legacy SLURM job scripts |
+| `examples/legacy/` | Deprecated one-off scripts |
