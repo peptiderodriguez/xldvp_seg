@@ -37,7 +37,7 @@ echo "Project: Islet ROI — Nuclei vs PM+Nuclei comparison (2 GPUs)"
 echo "Output:  $OUTPUT_DIR"
 echo "============================================================"
 
-$PYTHON $REPO/scripts/segment_islet_regions.py \
+$PYTHON $REPO/examples/islet/segment_islet_regions.py \
     --czi-path "$CZI" \
     --marker-channels gcg:2,ins:3,sst:5 \
     --membrane-channel 1 \

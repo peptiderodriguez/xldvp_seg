@@ -18,6 +18,7 @@ import numpy as np
 
 from segmentation.detection.registry import register_strategy
 from segmentation.utils.feature_extraction import (
+    SAM2_EMBEDDING_DIM,
     extract_morphological_features,
 )
 from segmentation.utils.logging import get_logger
@@ -337,7 +338,7 @@ class CellStrategy(DetectionStrategy, MultiChannelFeatureMixin):
                     feat[f"sam2_{i}"] = float(v)
             elif self.extract_sam2_embeddings:
                 logger.warning("SAM2 predictor unavailable - zero-filling 256D embeddings")
-                for i in range(256):
+                for i in range(SAM2_EMBEDDING_DIM):
                     feat[f"sam2_{i}"] = 0.0
 
             # Prepare crops for batch ResNet/DINOv2 processing (masked + context)

@@ -6,12 +6,12 @@ around each bone on each slide. Regions are saved to localStorage and
 can be exported as JSON.
 
 Usage:
-    python scripts/annotate_bone_regions.py \
+    python examples/bone_marrow/annotate_bone_regions.py \
         --czi-dir /path/to/czi/files \
         --output /path/to/bone_annotation.html
 
     # Or with OME-Zarr files:
-    python scripts/annotate_bone_regions.py \
+    python examples/bone_marrow/annotate_bone_regions.py \
         --zarr-dir /path/to/zarr/files \
         --output /path/to/bone_annotation.html
 """

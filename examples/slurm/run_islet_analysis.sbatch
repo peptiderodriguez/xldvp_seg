@@ -35,7 +35,7 @@ echo "CPUs: $(nproc), RAM: $(free -h | awk '/^Mem:/{print $2}')"
 
 export PYTHONUNBUFFERED=1
 
-python scripts/analyze_islets.py \
+python examples/islet/analyze_islets.py \
     --run-dir "$RUN_DIR" \
     --czi-path "$CZI" \
     --display-channels 2,3,5 \

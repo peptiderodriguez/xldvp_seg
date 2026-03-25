@@ -25,7 +25,9 @@ import cv2
 import numpy as np
 
 from segmentation.detection.registry import register_strategy
+from segmentation.utils.device import empty_cache, get_default_device
 from segmentation.utils.feature_extraction import (
+    SAM2_EMBEDDING_DIM,
     extract_morphological_features,
 )
 from segmentation.utils.logging import get_logger
@@ -4011,7 +4013,6 @@ class VesselStrategy(DetectionStrategy, MultiChannelFeatureMixin):
         """
         if pixel_size_um is None:
             raise ValueError("pixel_size_um is required — read from CZI metadata")
-        import torch
 
         # === Phase 1: Primary detection ===
         if (
@@ -4111,18 +4112,7 @@ class VesselStrategy(DetectionStrategy, MultiChannelFeatureMixin):
         else:
             resnet = None
             resnet_transform = None
-        device = models.get(
-            "device",
-            torch.device(
-                "cuda"
-                if torch.cuda.is_available()
-                else (
-                    "mps"
-                    if hasattr(torch.backends, "mps") and torch.backends.mps.is_available()
-                    else "cpu"
-                )
-            ),
-        )
+        device = models.get("device", get_default_device())
 
         # Set image for SAM2 embeddings if available
         if sam2_predictor is not None and self.extract_sam2_embeddings and extract_features:
@@ -4234,7 +4224,7 @@ class VesselStrategy(DetectionStrategy, MultiChannelFeatureMixin):
                     all_features[f"sam2_{i}"] = float(v)
             elif extract_features:
                 # Fill with zeros if SAM2 not available
-                for i in range(256):
+                for i in range(SAM2_EMBEDDING_DIM):
                     all_features[f"sam2_{i}"] = 0.0
 
             # Prepare crops for batch ResNet/DINOv2 processing (masked + context)
@@ -4362,8 +4352,7 @@ class VesselStrategy(DetectionStrategy, MultiChannelFeatureMixin):
                 logger.debug(f"Failed to reset SAM2 predictor: {e}")
 
         # Clear GPU cache
-        if torch.cuda.is_available():
-            torch.cuda.empty_cache()
+        empty_cache()
 
         gc.collect()
 
@@ -4496,8 +4485,6 @@ class VesselStrategy(DetectionStrategy, MultiChannelFeatureMixin):
         import gc
         import random
 
-        import torch
-
         from segmentation.utils.multiscale import (
             convert_detection_to_full_res,
             generate_tile_grid_at_scale,
@@ -4606,15 +4593,13 @@ class VesselStrategy(DetectionStrategy, MultiChannelFeatureMixin):
                 # Free tile data and GPU cache between tiles to reduce OOM risk
                 del tile, masks, detections
                 gc.collect()
-                if torch.cuda.is_available():
-                    torch.cuda.empty_cache()
+                empty_cache()
 
             logger.info(f"Scale 1/{scale}x: Found {scale_detections} detections")
 
             # Aggressive cleanup between scales
             gc.collect()
-            if torch.cuda.is_available():
-                torch.cuda.empty_cache()
+            empty_cache()
 
         # Merge detections across scales (keep larger/more complete detection)
         logger.info(f"Merging {len(all_detections)} detections across scales...")
@@ -4711,7 +4696,6 @@ class VesselStrategy(DetectionStrategy, MultiChannelFeatureMixin):
         import random
         import time as _time
 
-        import torch
         from segment_anything import SamAutomaticMaskGenerator, sam_model_registry
 
         from segmentation.utils.multiscale import (
@@ -4743,15 +4727,7 @@ class VesselStrategy(DetectionStrategy, MultiChannelFeatureMixin):
                 )
 
         # Load MedSAM
-        device = (
-            "cuda"
-            if torch.cuda.is_available()
-            else (
-                "mps"
-                if hasattr(torch.backends, "mps") and torch.backends.mps.is_available()
-                else "cpu"
-            )
-        )
+        device = get_default_device()
         logger.info(f"Loading MedSAM from {medsam_checkpoint} on {device}...")
         sam = sam_model_registry["vit_b"](checkpoint=medsam_checkpoint)
         sam.to(device)
@@ -4863,10 +4839,7 @@ class VesselStrategy(DetectionStrategy, MultiChannelFeatureMixin):
 
         # Cleanup MedSAM model
         del sam, mask_generator
-        if torch.cuda.is_available():
-            torch.cuda.empty_cache()
-        elif hasattr(torch, "mps") and hasattr(torch.mps, "empty_cache"):
-            torch.mps.empty_cache()
+        empty_cache()
         gc.collect()
 
         # Merge detections across scales (keep larger/more complete detection)

@@ -16,7 +16,7 @@ Outputs:
   - html/islet_analysis.html   — visual overview with cards, pie charts, histograms
 
 Usage:
-  python scripts/analyze_islets.py \\
+  python examples/islet/analyze_islets.py \\
       --run-dir /path/to/islet_output \\
       --czi-path /path/to/slide.czi \\
       --buffer-um 25 --min-cells 5

@@ -118,7 +118,7 @@ echo "=== Clustering complete at $(date) ==="
 CLUSTERED="$OUTPUT/clustering/detections_clustered.json"
 if [ -f "$CLUSTERED" ]; then
     echo "=== Starting zone assignment at $(date) ==="
-    python scripts/assign_tissue_zones.py \
+    python examples/liver/assign_tissue_zones.py \
         --detections "$CLUSTERED" \
         --output-dir "$OUTPUT/zones" \
         --marker-channels "Slc17a7:0,Htr2a:1,Ntrk2:2,Gad1:3" \
@@ -138,7 +138,7 @@ if [ ! -f "$INPUT_FOR_SPATIAL" ]; then
 fi
 
 echo "=== Starting spatial frequency analysis at $(date) ==="
-python scripts/spatial_frequency_analysis.py \
+python examples/tissue_pattern/spatial_frequency_analysis.py \
     --detections "$INPUT_FOR_SPATIAL" \
     --channels 0,1,2,3 \
     --output-dir "$OUTPUT/spatial"
@@ -146,7 +146,7 @@ echo "=== Spatial analysis complete at $(date) ==="
 
 # --- Visualization: cluster gallery ---
 echo "=== Generating cluster gallery at $(date) ==="
-python scripts/generate_cluster_gallery.py \
+python examples/legacy/generate_cluster_gallery.py \
     --detections "$CLUSTERED" \
     --czi-path "$CZI" \
     --output-dir "$OUTPUT/gallery" \

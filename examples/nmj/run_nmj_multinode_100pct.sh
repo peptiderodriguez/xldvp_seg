@@ -46,14 +46,14 @@ fi
 
 # Create output directory + tiles subdir (all shards will write here)
 mkdir -p "$OUTPUT_DIR/tiles"
-mkdir -p "$REPO/slurm/logs"
+mkdir -p "$REPO/examples/nmj/logs"
 
 # Submit detection array job (nodes 0..NUM_NODES-1)
 ARRAY_SPEC="0-$((NUM_NODES - 1))"
 DETECT_JOB=$(sbatch \
     --array="$ARRAY_SPEC" \
     --parsable \
-    "$REPO/slurm/run_nmj_detect_shard.sh" \
+    "$REPO/examples/nmj/run_nmj_detect_shard.sh" \
     "$OUTPUT_DIR" \
     "$SAMPLE_FRACTION" \
     "$CLASSIFIER" \
@@ -65,7 +65,7 @@ echo "Detection array job submitted: $DETECT_JOB (${NUM_NODES} nodes)"
 MERGE_JOB=$(sbatch \
     --dependency=afterok:"$DETECT_JOB" \
     --parsable \
-    "$REPO/slurm/run_nmj_merge.sh" \
+    "$REPO/examples/nmj/run_nmj_merge.sh" \
     "$OUTPUT_DIR" \
     "$SAMPLE_FRACTION" \
     "$CLASSIFIER" \
@@ -75,8 +75,8 @@ echo "Merge job submitted: $MERGE_JOB (depends on $DETECT_JOB)"
 echo ""
 echo "Monitor with:"
 echo "  squeue -u \$USER"
-echo "  tail -f $REPO/slurm/logs/nmj_shard_${DETECT_JOB}_*.out"
-echo "  tail -f $REPO/slurm/logs/nmj_merge_${MERGE_JOB}.out"
+echo "  tail -f $REPO/examples/nmj/logs/nmj_shard_${DETECT_JOB}_*.out"
+echo "  tail -f $REPO/examples/nmj/logs/nmj_merge_${MERGE_JOB}.out"
 echo ""
 echo "Output directory: $OUTPUT_DIR"
 echo ""

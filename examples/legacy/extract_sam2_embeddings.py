@@ -12,18 +12,18 @@ into the training data or full detection JSON.
 
 Usage:
     # Fast mode (read from existing tile features)
-    python scripts/extract_sam2_embeddings.py \
+    python examples/legacy/extract_sam2_embeddings.py \
         --base-dir /path/to/100pct_run \
         --output sam2_embeddings.json
 
     # Full mode (extract from CZI with SAM2 model)
-    python scripts/extract_sam2_embeddings.py \
+    python examples/legacy/extract_sam2_embeddings.py \
         --base-dir /path/to/100pct_run \
         --czi-dir /path/to/czi/files \
         --output sam2_embeddings.json
 
     # Merge into existing full JSON
-    python scripts/extract_sam2_embeddings.py \
+    python examples/legacy/extract_sam2_embeddings.py \
         --merge-into all_mks_with_rejected3_full.json \
         --embeddings sam2_embeddings.json
 """

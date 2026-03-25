@@ -12,7 +12,7 @@ Works with any cell type output (tissue_pattern, islet, NMJ, etc.).
 Requires: pywt (PyWavelets), scipy, matplotlib, numpy.
 
 Usage:
-    python scripts/spatial_frequency_analysis.py \\
+    python examples/tissue_pattern/spatial_frequency_analysis.py \\
         --detections tissue_pattern_detections.json \\
         --channels 0,1,2,3 \\
         --corridor-width-um 200 \\
@@ -20,7 +20,7 @@ Usage:
         --output-dir freq_output/
 
     # With manual transects:
-    python scripts/spatial_frequency_analysis.py \\
+    python examples/tissue_pattern/spatial_frequency_analysis.py \\
         --detections tissue_pattern_detections.json \\
         --transects transects.json \\
         --output-dir freq_output/

@@ -11,18 +11,18 @@ Output: annotated JSON with zone_id/zone_label per cell, zone map visualizations
 
 Usage:
     # Auto-discover zones
-    python scripts/assign_tissue_zones.py \
+    python examples/liver/assign_tissue_zones.py \
         --detections tissue_pattern_detections.json \
         --output-dir zones/
 
     # Manual zone count
-    python scripts/assign_tissue_zones.py \
+    python examples/liver/assign_tissue_zones.py \
         --detections tissue_pattern_detections.json \
         --n-zones 6 \
         --output-dir zones/
 
     # Tune spatial vs marker weight
-    python scripts/assign_tissue_zones.py \
+    python examples/liver/assign_tissue_zones.py \
         --detections tissue_pattern_detections.json \
         --spatial-weight 0.5 \
         --output-dir zones/

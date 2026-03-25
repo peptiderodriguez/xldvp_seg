@@ -7,7 +7,7 @@ fractional position along each path (0=CV, 1=PV), and generates gradient
 plots of marker expression vs zonation position.
 
 Usage:
-    python scripts/zonation_transect.py \\
+    python examples/liver/zonation_transect.py \\
         --detections cell_detections_classified.json \\
         --rois rois.json \\
         --markers GluI,Pck1,DCN \\

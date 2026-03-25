@@ -183,14 +183,14 @@ Beyond the core detection → LMD workflow, the pipeline provides:
 | **Spatial network** | `scripts/spatial_cell_analysis.py` | Delaunay graphs, community detection, neighborhoods |
 | **Interactive spatial viewer** | `scripts/generate_multi_slide_spatial_viewer.py` | KDE contours, graph-pattern regions, DBSCAN + hulls, ROI drawing |
 | **Tissue overlay viewer** | `scripts/generate_tissue_overlay.py` | Fluorescence image + cell overlay + ROI + LMD export |
-| **Tissue zone assignment** | `scripts/assign_tissue_zones.py` | Spatially-constrained marker-based zone discovery |
-| **Zonation transects** | `scripts/zonation_transect.py` | Pericentral → periportal gradient analysis |
-| **Tissue area measurement** | `scripts/calculate_tissue_areas.py` | Variance-based tissue detection from CZI |
-| **Bone region annotation** | `scripts/annotate_bone_regions.py` | Interactive HTML tool for bone region labeling |
+| **Tissue zone assignment** | `examples/liver/assign_tissue_zones.py` | Spatially-constrained marker-based zone discovery |
+| **Zonation transects** | `examples/liver/zonation_transect.py` | Pericentral → periportal gradient analysis |
+| **Tissue area measurement** | `examples/bone_marrow/calculate_tissue_areas.py` | Variance-based tissue detection from CZI |
+| **Bone region annotation** | `examples/bone_marrow/annotate_bone_regions.py` | Interactive HTML tool for bone region labeling |
 | **Vessel community analysis** | `scripts/vessel_community_analysis.py` | Multi-scale vessel structures (morphology + SNR) |
-| **MK maturation staging** | `scripts/maturation_analysis.py` | Nuclear deep features for maturation states |
-| **MK comprehensive** | `scripts/mk_comprehensive_analysis.py` | Multi-dimensional MK feature analysis |
-| **Islet spatial analysis** | `scripts/analyze_islets.py` | Spatial analysis of pancreatic islets |
+| **MK maturation staging** | `examples/bone_marrow/maturation_analysis.py` | Nuclear deep features for maturation states |
+| **MK comprehensive** | `examples/bone_marrow/mk_comprehensive_analysis.py` | Multi-dimensional MK feature analysis |
+| **Islet spatial analysis** | `examples/islet/analyze_islets.py` | Spatial analysis of pancreatic islets |
 | **SpatialData export** | `scripts/convert_to_spatialdata.py` | Export to scverse zarr (squidpy, scanpy, anndata) |
 | **One-command viz** | `scripts/view_slide.py` | Classify → spatial → viewer → serve (all in one) |
 | **Preprocessing preview** | `scripts/preview_preprocessing.py` | Before/after flat-field, photobleach at 1/8 resolution |

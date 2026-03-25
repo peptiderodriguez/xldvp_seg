@@ -154,13 +154,13 @@ Three corrections can be applied before segmentation:
 | Flag | What it does |
 |------|-------------|
 | `--photobleaching-correction` | Row/column mean normalization to fix horizontal and vertical banding from stitched acquisitions |
-| `--norm-params-file params.json` | Reinhard LAB-space normalization for cross-slide intensity harmonization (pre-computed with `compute_normalization_params.py`) |
+| `--norm-params-file params.json` | Reinhard LAB-space normalization for cross-slide intensity harmonization (pre-computed with `examples/legacy/compute_normalization_params.py`) |
 | `--normalize-features` (default ON) | Flat-field illumination correction per-channel (morphological background subtraction) |
 | `--no-normalize-features` | Disable flat-field correction; use raw intensities |
 
 ```bash
 # Compute cross-slide normalization params (run once across all slides)
-python compute_normalization_params.py \
+python examples/legacy/compute_normalization_params.py \
     --czi-dir /path/to/all_slides/ \
     --output /path/to/norm_params.json
 
@@ -708,7 +708,7 @@ Feature group options: `morph`, `shape`, `color`, `sam2`, `channel`, `deep`.
 Outputs: `detections_clustered.json`, `cluster_summary.csv`, `umap_plot.png`,
 `marker_violin.png`, `spatial.h5ad` (AnnData for scanpy), `spatial.csv`.
 
-### Islet Spatial Analysis (`scripts/analyze_islets.py`)
+### Islet Spatial Analysis (`examples/islet/analyze_islets.py`)
 
 Specialized islet-level analysis: finds islet regions from summed marker channels,
 assigns cells to islets, computes per-islet morphometry, composition (Shannon
@@ -716,7 +716,7 @@ entropy, dominant type), spatial features (nearest-neighbor, radial distribution
 mantle-core index, mixing index), and atypical flags.
 
 ```bash
-python scripts/analyze_islets.py \
+python examples/islet/analyze_islets.py \
     --run-dir /path/to/islet_output \
     --czi-path /path/to/slide.czi \
     --buffer-um 25 --min-cells 5
@@ -724,7 +724,7 @@ python scripts/analyze_islets.py \
 
 Outputs: `islet_summary.csv`, `islet_detections.json`, `html/islet_analysis.html`
 
-### MK Maturation Analysis (`scripts/maturation_analysis.py`)
+### MK Maturation Analysis (`examples/bone_marrow/maturation_analysis.py`)
 
 4-phase MK maturation staging using nuclear deep features:
 1. Load + filter + dedup
@@ -801,7 +801,7 @@ Napari visualization uses 4 colors: singles / controls / clusters / cluster-cont
 
 ## Chain Launcher (SLURM)
 
-The `slurm/launch_pipeline.sh` script orchestrates the full pipeline with SLURM
+The `examples/slurm/launch_pipeline.sh` script orchestrates the full pipeline with SLURM
 dependency chaining (`--dependency=afterok`). Each step waits for the previous one
 to succeed.
 
@@ -820,14 +820,14 @@ to succeed.
 
 ```bash
 # Full NMJ pipeline: detect on 4 nodes -> merge -> annotation HTML
-bash slurm/launch_pipeline.sh \
+bash examples/slurm/launch_pipeline.sh \
     --czi /path/to/slide.czi \
     --cell-type nmj --channel 1 \
     --nodes 4 --sample-fraction 1.0 \
     --steps detect,merge,html
 
 # Post-annotation: score + analysis + LMD (reuses existing output)
-bash slurm/launch_pipeline.sh \
+bash examples/slurm/launch_pipeline.sh \
     --output-dir /path/to/existing/run \
     --czi /path/to/slide.czi \
     --cell-type nmj \
@@ -837,14 +837,14 @@ bash slurm/launch_pipeline.sh \
     --steps score,analysis,lmd
 
 # Single-node vessel detection + HTML
-bash slurm/launch_pipeline.sh \
+bash examples/slurm/launch_pipeline.sh \
     --czi /path/to/slide.czi \
     --cell-type vessel --channel 0 \
     --nodes 1 --gpus 4 --partition p.hpcl93 \
     --steps detect,html
 
 # Dry run (print commands without submitting)
-bash slurm/launch_pipeline.sh \
+bash examples/slurm/launch_pipeline.sh \
     --czi /path/to/slide.czi \
     --cell-type nmj --channel 1 \
     --nodes 4 --steps detect,merge,html \
@@ -939,7 +939,7 @@ applicable to any multi-channel detection.
 ### 7. Cross-Slide Normalization
 
 Reinhard LAB-space normalization for consistent intensity across slides.
-Two-phase: `compute_normalization_params.py` computes global target statistics
+Two-phase: `examples/legacy/compute_normalization_params.py` computes global target statistics
 from all slides (with outlier rejection), then `--norm-params-file` applies the
 normalization during detection.
 
@@ -979,12 +979,12 @@ quantifies endothelial and smooth muscle contributions separately.
 | `scripts/cluster_detections.py` | Biological clustering for LMD well assignment |
 | `scripts/cluster_by_features.py` | UMAP + HDBSCAN clustering with auto-labeling |
 | `scripts/spatial_cell_analysis.py` | RF embedding, morph UMAP, spatial network analysis |
-| `scripts/analyze_islets.py` | Islet-level spatial analysis with composition metrics |
-| `scripts/maturation_analysis.py` | MK maturation staging via nuclear deep features |
+| `examples/islet/analyze_islets.py` | Islet-level spatial analysis with composition metrics |
+| `examples/bone_marrow/maturation_analysis.py` | MK maturation staging via nuclear deep features |
 | `scripts/napari_view_lmd_export.py` | View LMD export overlaid on slide |
 | `serve_html.py` | HTTP server + Cloudflare tunnel for remote HTML viewing |
-| `compute_normalization_params.py` | Pre-compute Reinhard LAB stats across slides |
-| `slurm/launch_pipeline.sh` | SLURM dependency chain launcher |
+| `examples/legacy/compute_normalization_params.py` | Pre-compute Reinhard LAB stats across slides |
+| `examples/slurm/launch_pipeline.sh` | SLURM dependency chain launcher |
 
 ---
 

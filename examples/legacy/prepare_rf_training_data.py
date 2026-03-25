@@ -13,13 +13,13 @@ This script:
    - JSON format compatible with scikit-learn workflows
 
 Usage:
-    python scripts/prepare_rf_training_data.py \
+    python examples/legacy/prepare_rf_training_data.py \
         --annotations vessel_annotations.json \
         --detections vessel_detections.json \
         --output-dir /path/to/rf_training_data
 
     # Or with sklearn JSON export from HTML:
-    python scripts/prepare_rf_training_data.py \
+    python examples/legacy/prepare_rf_training_data.py \
         --sklearn-json vessel_rf_sklearn.json \
         --output-dir /path/to/rf_training_data
 """

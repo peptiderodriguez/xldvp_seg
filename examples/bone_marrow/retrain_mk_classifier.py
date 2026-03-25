@@ -7,7 +7,7 @@ embeddings, trains a new RF classifier, and re-scores all detections.
 
 Usage:
     # Step 1: Build unified training set + train classifier
-    python scripts/retrain_mk_classifier.py train \
+    python examples/bone_marrow/retrain_mk_classifier.py train \
         --original-training mk_training_data_2026-02-11.json \
         --rescued-base-dir mk_clf084_dataset \
         --rescued-annotations mk_annotations_2026-03-06_rejected3_unnorm_100pct.json \
@@ -15,7 +15,7 @@ Usage:
         --output-dir retrained_classifier/
 
     # Step 2: Re-score all detections
-    python scripts/retrain_mk_classifier.py score \
+    python examples/bone_marrow/retrain_mk_classifier.py score \
         --classifier retrained_classifier/mk_classifier_YYYY-MM-DD.pkl \
         --full-detections all_mks_with_rejected3_full.json \
         --output all_mks_rescored.json

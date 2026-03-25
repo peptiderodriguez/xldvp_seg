@@ -176,7 +176,7 @@ class OmicLinker:
             mean_a = vals_a.mean()
             mean_b = vals_b.mean()
             mean_diff = mean_a - mean_b
-            pooled_var = ((n_a - 1) * vals_a.var() + (n_b - 1) * vals_b.var()) / max(
+            pooled_var = ((n_a - 1) * vals_a.var(ddof=1) + (n_b - 1) * vals_b.var(ddof=1)) / max(
                 n_a + n_b - 2, 1
             )
             pooled_std = np.sqrt(pooled_var) + 1e-10

@@ -8,7 +8,7 @@ Takes clustered detections (from cluster_by_features.py) and generates:
   3. Index page linking to all cluster galleries
 
 Usage:
-  python scripts/generate_cluster_gallery.py \
+  python examples/legacy/generate_cluster_gallery.py \
       --detections analysis/clustering_shape/detections_clustered.json \
       --czi-path /path/to/slide.czi \
       --tiles-dir /path/to/output/tiles \
@@ -17,7 +17,7 @@ Usage:
       --n-per-cluster 100
 
   # With zone overlay:
-  python scripts/generate_cluster_gallery.py \
+  python examples/legacy/generate_cluster_gallery.py \
       --detections ... --czi-path ... --tiles-dir ... \
       --zones analysis/zones/detections_zoned.json \
       --output-dir analysis/cluster_gallery

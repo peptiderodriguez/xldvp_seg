@@ -19,7 +19,7 @@ Pipeline:
   7. Save detections JSON + comparison stats
 
 Usage:
-  python scripts/segment_islet_regions.py \\
+  python examples/islet/segment_islet_regions.py \\
       --czi-path /path/to/BS-100.czi \\
       --marker-channels gcg:2,ins:3,sst:5 \\
       --membrane-channel 1 --nuclear-channel 4 \\

@@ -144,7 +144,7 @@ For proteomics workflows requiring area-normalized biological replicates across 
 
 **Step 1 -- Select cells and assign replicates:**
 ```bash
-PYTHONPATH=$REPO $XLDVP_PYTHON $REPO/scripts/select_mks_for_lmd.py \
+PYTHONPATH=$REPO $XLDVP_PYTHON $REPO/examples/bone_marrow/select_mks_for_lmd.py \
     --score-threshold 0.80 \
     --target-area 10000 \
     --max-replicates 4

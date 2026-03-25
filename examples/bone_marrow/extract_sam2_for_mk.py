@@ -12,20 +12,20 @@ Multi-GPU: spawns one worker per GPU. SLURM array distributes slides across node
 
 Usage:
     # SLURM array: each node processes 4 slides across 4 GPUs
-    python scripts/extract_sam2_for_mk.py extract \
+    python examples/bone_marrow/extract_sam2_for_mk.py extract \
         --detections all_mks_with_rejected3_full.json \
         --czi-dir /path/to/czi/files \
         --output-dir sam2_embeddings/ \
         --node-index 0 --num-nodes 4
 
     # All slides locally
-    python scripts/extract_sam2_for_mk.py extract \
+    python examples/bone_marrow/extract_sam2_for_mk.py extract \
         --detections all_mks_with_rejected3_full.json \
         --czi-dir /path/to/czi/files \
         --output-dir sam2_embeddings/
 
     # Merge into detection JSON
-    python scripts/extract_sam2_for_mk.py merge \
+    python examples/bone_marrow/extract_sam2_for_mk.py merge \
         --embeddings-dir sam2_embeddings/ \
         --target all_mks_with_rejected3_full.json \
         --output all_mks_with_rejected3_full_sam2.json

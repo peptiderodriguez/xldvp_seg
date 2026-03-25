@@ -35,7 +35,7 @@ echo "=========================================="
 
 cd "$REPO"
 
-PYTHONPATH="$REPO" "$XLDVP_PYTHON" scripts/extract_sam2_for_mk.py extract \
+PYTHONPATH="$REPO" "$XLDVP_PYTHON" examples/bone_marrow/extract_sam2_for_mk.py extract \
     --detections "$DETECTIONS" \
     --training-data "$TRAINING" \
     --czi-dir "$CZI_DIR" \

@@ -23,6 +23,10 @@ from PIL import Image
 from segmentation.utils.detection_utils import safe_to_uint8
 from segmentation.utils.logging import get_logger
 
+# Feature dimension constants
+RESNET50_FEATURE_DIM = 2048
+SAM2_EMBEDDING_DIM = 256
+
 logger = get_logger(__name__)
 
 
@@ -128,14 +132,14 @@ def extract_resnet_features_batch(
                     feature_idx += 1
                 else:
                     # Return zeros for failed crops
-                    all_features.append(np.zeros(2048))
+                    all_features.append(np.zeros(RESNET50_FEATURE_DIM))
 
             # Clear intermediate tensors to prevent memory buildup
             del batch_tensor, features
         else:
             # All crops failed, return zeros
             for _ in batch_crops:
-                all_features.append(np.zeros(2048))
+                all_features.append(np.zeros(RESNET50_FEATURE_DIM))
 
         # Clear GPU memory periodically (every 10 batches) to prevent OOM on long runs
         batch_num = i // batch_size
@@ -173,7 +177,7 @@ def extract_resnet_features_single(
         Feature vector as numpy array (2048D)
     """
     if crop.size == 0:
-        return np.zeros(2048)
+        return np.zeros(RESNET50_FEATURE_DIM)
 
     try:
         processed = preprocess_crop_for_resnet(crop)
@@ -185,7 +189,7 @@ def extract_resnet_features_single(
         return features
     except Exception as e:
         logger.debug(f"Failed to extract ResNet features: {e}")
-        return np.zeros(2048)
+        return np.zeros(RESNET50_FEATURE_DIM)
 
 
 def create_resnet_transform() -> tv_transforms.Compose:
@@ -305,8 +309,6 @@ def compute_hsv_features(masked_pixels: np.ndarray, sample_size: int = 100) -> d
 #                                          |  TOTAL_FEATURES_PER_CELL = 6478
 #                                          |    (78 + 256 + 4096 + 2048)
 # =============================================================================
-SAM2_EMBEDDING_DIM = 256
-RESNET50_FEATURE_DIM = 2048
 MORPHOLOGICAL_FEATURE_COUNT = 22
 
 # Vessel-specific feature count (imported from vessel_features module)

@@ -5,7 +5,7 @@ Thin wrapper around segmentation.lmd.selection with MK-specific config:
 bone grouping, mk_score field, sex/treatment parsing, FGC3 exclusion.
 
 Usage:
-    python3 scripts/select_mks_for_lmd.py --score-threshold 0.80
+    python3 examples/bone_marrow/select_mks_for_lmd.py --score-threshold 0.80
 """
 
 import argparse

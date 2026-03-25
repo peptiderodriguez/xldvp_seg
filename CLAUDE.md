@@ -344,7 +344,7 @@ Batch: `--input-dir <runs> --crosses-dir <crosses>`. Max 308 wells/plate; multi-
 
 **Replicate-based export** (DVP proteomics, area-normalized replicates):
 ```bash
-PYTHONPATH=$REPO $XLDVP_PYTHON $REPO/scripts/select_mks_for_lmd.py \
+PYTHONPATH=$REPO $XLDVP_PYTHON $REPO/examples/bone_marrow/select_mks_for_lmd.py \
     --score-threshold 0.80 --target-area 10000 --max-replicates 4
 
 PYTHONPATH=$REPO $XLDVP_PYTHON $REPO/scripts/lmd_export_replicates.py \

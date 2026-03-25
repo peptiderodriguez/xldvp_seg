@@ -36,7 +36,7 @@ class Detection:
         score: Optional confidence score (from classifier)
     """
 
-    mask: np.ndarray
+    mask: np.ndarray | None
     centroid: list[float]
     features: dict[str, Any] = field(default_factory=dict)
     id: str | None = None
@@ -209,7 +209,7 @@ class DetectionStrategy(ABC):
             "centroid": [float(prop.centroid[1]), float(prop.centroid[0])],  # [x, y]
             "eccentricity": float(prop.eccentricity),
             "solidity": float(prop.solidity),
-            "mean_intensity": float(prop.mean_intensity),
+            "mean_intensity": float(prop.intensity_mean),
             "perimeter": float(prop.perimeter),
         }
 

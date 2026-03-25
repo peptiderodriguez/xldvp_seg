@@ -36,6 +36,7 @@ from skimage.morphology import (
 
 from segmentation.detection.registry import register_strategy
 from segmentation.utils.feature_extraction import (
+    SAM2_EMBEDDING_DIM,
     extract_morphological_features,
 )
 from segmentation.utils.logging import get_logger
@@ -451,7 +452,7 @@ class NMJStrategy(DetectionStrategy, MultiChannelFeatureMixin):
                     morph_features[f"sam2_{i}"] = float(v)
             elif extract_features:
                 # Fill with zeros if SAM2 not available
-                for i in range(256):
+                for i in range(SAM2_EMBEDDING_DIM):
                     morph_features[f"sam2_{i}"] = 0.0
 
             # Prepare crops for batch ResNet/DINOv2 processing (masked + context)

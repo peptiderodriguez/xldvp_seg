@@ -60,7 +60,7 @@ echo "Run dir: $RUN_DIR"
 
 # --- Step 3: Islet analysis (marker classification + tissue-level islets) ---
 echo "=== Step 2: Islet analysis ==="
-$PYTHON $REPO/scripts/analyze_islets.py \
+$PYTHON $REPO/examples/islet/analyze_islets.py \
     --run-dir "$RUN_DIR" \
     --czi-path "$CZI" \
     --display-channels 2,3,5 \

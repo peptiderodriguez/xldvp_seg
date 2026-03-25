@@ -27,7 +27,7 @@ cd $REPO
 # --- Pass 1: 13 original slides ---
 echo "=== Pass 1: 13 original slides ==="
 echo "Starting at $(date)"
-python scripts/extract_sam2_embeddings.py extract \
+python examples/legacy/extract_sam2_embeddings.py extract \
     --base-dir "$BASE_ORIGINAL" \
     --czi-dir "$CZI_DIR" \
     --output "$OUTDIR/sam2_embeddings_original13.json"
@@ -37,7 +37,7 @@ echo ""
 # --- Pass 2: 3 rescued slides (FGC2, FGC4, MHU4) ---
 echo "=== Pass 2: 3 rescued slides ==="
 echo "Starting at $(date)"
-python scripts/extract_sam2_embeddings.py extract \
+python examples/legacy/extract_sam2_embeddings.py extract \
     --base-dir "$BASE_RESCUED" \
     --czi-dir "$CZI_DIR" \
     --slides 2025_11_18_FGC2 2025_11_18_FGC4 2025_11_18_MHU4 \
@@ -50,7 +50,7 @@ echo "  $OUTDIR/sam2_embeddings_original13.json"
 echo "  $OUTDIR/sam2_embeddings_rescued3.json"
 echo ""
 echo "Next step — retrain classifier (can run on CPU):"
-echo "  python scripts/retrain_mk_classifier.py train \\"
+echo "  python examples/bone_marrow/retrain_mk_classifier.py train \\"
 echo "      --original-training /path/to/mk_training_data_2026-02-11.json \\"
 echo "      --rescued-base-dir $BASE_RESCUED \\"
 echo "      --rescued-annotations /path/to/mk_annotations_2026-03-06_rejected3_unnorm_100pct.json \\"

@@ -57,7 +57,7 @@ RUN_DIR=$(ls -dt "$OUTPUT_DIR"/2025_09_03_30610012_BS-100_* | head -1)
 echo "Run dir: $RUN_DIR"
 
 # Post-hoc islet analysis with Otsu quality filter
-$PYTHON "$REPO/scripts/analyze_islets.py" \
+$PYTHON "$REPO/examples/islet/analyze_islets.py" \
     --run-dir "$RUN_DIR" \
     --czi-path "$CZI" \
     --threshold-factor 2.0 \

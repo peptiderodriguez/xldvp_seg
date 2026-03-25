@@ -22,7 +22,10 @@ import numpy as np
 from scipy import ndimage
 
 from segmentation.detection.registry import register_strategy
-from segmentation.utils.feature_extraction import extract_morphological_features
+from segmentation.utils.feature_extraction import (
+    SAM2_EMBEDDING_DIM,
+    extract_morphological_features,
+)
 from segmentation.utils.logging import get_logger
 
 from .cell import CellStrategy
@@ -254,7 +257,7 @@ class TissuePatternStrategy(CellStrategy):
         n_masks = len(masks)
         for idx, mask in enumerate(masks):
             if idx % 500 == 0:
-                print(f"[tissue_pattern] Featurizing cell {idx}/{n_masks}", flush=True)
+                logger.info("Featurizing cell %d/%d", idx, n_masks)
             feat = extract_morphological_features(mask, tile, tile_global_mean=tile_global_mean)
             if not feat:
                 continue
@@ -283,7 +286,7 @@ class TissuePatternStrategy(CellStrategy):
                 for i, v in enumerate(sam2_emb):
                     feat[f"sam2_{i}"] = float(v)
             elif self.extract_sam2_embeddings:
-                for i in range(256):
+                for i in range(SAM2_EMBEDDING_DIM):
                     feat[f"sam2_{i}"] = 0.0
 
             # Deep features (opt-in)

@@ -9,12 +9,12 @@ Optionally intersects with bone region polygons for per-bone density.
 
 Usage:
     # Whole-slide tissue area
-    python scripts/calculate_tissue_areas.py \
+    python examples/bone_marrow/calculate_tissue_areas.py \
         --czi-dir /path/to/czis \
         --output /path/to/tissue_areas.json
 
     # Per-bone tissue area with density
-    python scripts/calculate_tissue_areas.py \
+    python examples/bone_marrow/calculate_tissue_areas.py \
         --czi-dir /path/to/czis \
         --regions /path/to/bone_regions.json \
         --detections /path/to/all_mks_with_bone.json \

@@ -21,7 +21,9 @@ from typing import Any
 import numpy as np
 
 from segmentation.detection.registry import register_strategy
+from segmentation.utils.device import empty_cache
 from segmentation.utils.feature_extraction import (
+    SAM2_EMBEDDING_DIM,
     extract_morphological_features,
 )
 from segmentation.utils.logging import get_logger
@@ -286,7 +288,6 @@ class MKStrategy(DetectionStrategy, MultiChannelFeatureMixin):
         Returns:
             Tuple of (label_array, list of Detection objects)
         """
-        import torch
         from scipy import ndimage
 
         if pixel_size_um is None:
@@ -402,7 +403,7 @@ class MKStrategy(DetectionStrategy, MultiChannelFeatureMixin):
                         morph[f"sam2_{i}"] = float(v)
                 elif self.extract_sam2_embeddings:
                     logger.warning("SAM2 predictor unavailable - zero-filling 256D embeddings")
-                    for i in range(256):
+                    for i in range(SAM2_EMBEDDING_DIM):
                         morph[f"sam2_{i}"] = 0.0
 
                 det["features"] = morph
@@ -480,8 +481,7 @@ class MKStrategy(DetectionStrategy, MultiChannelFeatureMixin):
                 sam2_predictor.reset_predictor()
 
             # Clear GPU cache
-            if torch.cuda.is_available():
-                torch.cuda.empty_cache()
+            empty_cache()
 
         # Step 5: Apply classifier if available
         mk_classifier = models.get("mk_classifier")

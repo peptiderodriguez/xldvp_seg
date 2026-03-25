@@ -40,7 +40,7 @@ MARKER_PCT_CHANNELS="${4:-sst}"
 GMM_P_CUTOFF="${5:-0.75}"
 RATIO_MIN="${6:-1.5}"
 
-$PYTHON scripts/analyze_islets.py \
+$PYTHON examples/islet/analyze_islets.py \
     --run-dir "$RUN_DIR" \
     --czi-path "$CZI" \
     --buffer-um 25 \

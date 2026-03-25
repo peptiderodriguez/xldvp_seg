@@ -21,7 +21,10 @@ import numpy as np
 from scipy import ndimage
 
 from segmentation.detection.registry import register_strategy
-from segmentation.utils.feature_extraction import extract_morphological_features
+from segmentation.utils.feature_extraction import (
+    SAM2_EMBEDDING_DIM,
+    extract_morphological_features,
+)
 from segmentation.utils.logging import get_logger
 
 from .base import Detection
@@ -635,7 +638,7 @@ class IsletStrategy(CellStrategy):
                     feat[f"sam2_{si}"] = float(v)
                 n_sam2_extracted += 1
             elif self.extract_sam2_embeddings:
-                for si in range(256):
+                for si in range(SAM2_EMBEDDING_DIM):
                     feat[f"sam2_{si}"] = 0.0
 
             valid_detections.append(
@@ -665,7 +668,7 @@ class IsletStrategy(CellStrategy):
 
             # Zero SAM2 embeddings
             if self.extract_sam2_embeddings:
-                for si in range(256):
+                for si in range(SAM2_EMBEDDING_DIM):
                     feat[f"sam2_{si}"] = 0.0
 
             valid_detections.append(
