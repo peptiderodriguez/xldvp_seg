@@ -34,8 +34,6 @@ from .mixins import MultiChannelFeatureMixin
 logger = get_logger(__name__)
 
 
-
-
 @register_strategy(
     "mk",
     description="Megakaryocyte detection (SAM2 auto-mask + size filter)",

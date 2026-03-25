@@ -36,8 +36,10 @@ import torchvision.models as tv_models
 # Import base classes from strategies module
 from segmentation.detection.strategies.base import Detection, DetectionStrategy
 from segmentation.utils.feature_extraction import (
+    RESNET50_FEATURE_DIM,
+    SAM2_EMBEDDING_DIM,
     create_resnet_transform,
-    extract_morphological_features,  # Import from shared module (Issue #7)
+    extract_morphological_features,
     extract_resnet_features_batch,
     preprocess_crop_for_resnet,
 )
@@ -404,7 +406,7 @@ class CellDetector:
             256D embedding vector as numpy array
         """
         if self._sam2_predictor is None:
-            return np.zeros(256)
+            return np.zeros(SAM2_EMBEDDING_DIM)
 
         try:
             shape = self._sam2_predictor._features["image_embed"].shape
@@ -412,7 +414,7 @@ class CellDetector:
             img_h, img_w = self._sam2_predictor._orig_hw[0]
 
             if img_h == 0 or img_w == 0:
-                return np.zeros(256)
+                return np.zeros(SAM2_EMBEDDING_DIM)
 
             emb_y = int(cy / img_h * emb_h)
             emb_x = int(cx / img_w * emb_w)
@@ -422,7 +424,7 @@ class CellDetector:
             return self._sam2_predictor._features["image_embed"][0, :, emb_y, emb_x].cpu().numpy()
         except Exception as e:
             logger.debug(f"Failed to extract SAM2 embedding at ({cx}, {cy}): {e}")
-            return np.zeros(256)
+            return np.zeros(SAM2_EMBEDDING_DIM)
 
     def extract_full_features(
         self, mask: np.ndarray, tile: np.ndarray, cy: float, cx: float
@@ -465,7 +467,7 @@ class CellDetector:
             for i, v in enumerate(resnet_feats):
                 features[f"resnet_{i}"] = float(v)
         else:
-            for i in range(2048):
+            for i in range(RESNET50_FEATURE_DIM):
                 features[f"resnet_{i}"] = 0.0
 
         return features
@@ -475,7 +477,7 @@ class CellDetector:
         from PIL import Image
 
         if crop.size == 0:
-            return np.zeros(2048)
+            return np.zeros(RESNET50_FEATURE_DIM)
 
         try:
             processed = preprocess_crop_for_resnet(crop)
@@ -487,7 +489,7 @@ class CellDetector:
             return features
         except Exception as e:
             logger.debug(f"Failed to extract ResNet features: {e}")
-            return np.zeros(2048)
+            return np.zeros(RESNET50_FEATURE_DIM)
 
     def extract_resnet_features_batch(
         self, crops: list[np.ndarray], batch_size: int = 16

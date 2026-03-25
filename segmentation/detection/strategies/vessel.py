@@ -105,8 +105,6 @@ class CrossTileMergeConfig:
     merge_partial_rings: bool = True
 
 
-
-
 def smooth_contour_spline(contour, smoothing=3.0, n_points=0, force_closed=None):
     """
     Smooth a contour using B-spline interpolation.

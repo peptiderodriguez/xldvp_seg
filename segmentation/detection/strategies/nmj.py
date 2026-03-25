@@ -47,8 +47,6 @@ from .mixins import MultiChannelFeatureMixin
 logger = get_logger(__name__)
 
 
-
-
 @register_strategy(
     "nmj",
     description="Neuromuscular junction detection (intensity threshold + morphology + watershed)",

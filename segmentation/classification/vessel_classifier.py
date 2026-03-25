@@ -85,10 +85,12 @@ MORPHOLOGICAL_FEATURES = [
 DEFAULT_FEATURES = VESSEL_CORE_FEATURES + MORPHOLOGICAL_FEATURES
 
 # SAM2 embedding features (256D)
-SAM2_FEATURES = [f"sam2_{i}" for i in range(256)]
+from segmentation.utils.feature_extraction import RESNET50_FEATURE_DIM, SAM2_EMBEDDING_DIM
+
+SAM2_FEATURES = [f"sam2_{i}" for i in range(SAM2_EMBEDDING_DIM)]
 
 # ResNet-50 features (2048D)
-RESNET_FEATURES = [f"resnet_{i}" for i in range(2048)]
+RESNET_FEATURES = [f"resnet_{i}" for i in range(RESNET50_FEATURE_DIM)]
 
 # Full feature set (single-pass): 22 base morph + 13 vessel-specific + 256 SAM2 + 2048 ResNet
 # Note: Full pipeline uses masked+context (4096 ResNet, 2048 DINOv2) for up to 6478 total
