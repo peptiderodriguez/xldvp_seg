@@ -40,9 +40,7 @@ Index  Ex→Em      Fluorophore   Marker        Suggested Role
 
 5. **Segmenter?** (only for cell type "cell") Options: "Cellpose (default)" / "InstanSeg (lightweight, 3.8M params)". If InstanSeg, add `segmenter: instanseg` to config.
 
-6. **Preprocessing?** Flat-field correction is ALWAYS ON (non-negotiable — corrects uneven illumination across tiles). Do NOT ask about it or offer to disable it.
-
-   Only ask about photobleach correction: *"Does this slide have visible intensity decay across the scan direction? (If unsure, run `/preview-preprocessing` to check.)"* Options: "No (default)" / "Yes, enable photobleach correction" / "Not sure — preview first". If "preview first", suggest running `/preview-preprocessing` before continuing.
+6. **Preprocessing?** Flat-field correction is ON by default. Ask only: *"Keep flat-field correction on? (Recommended — corrects uneven tile illumination)"* Options: "Yes (default)" / "No, disable". Do NOT offer or mention photobleach correction — it is experimental and should not be suggested.
 
 7. **Deduplication method?** Options: "Mask overlap (default — pixel-exact)" / "IoU NMS (faster, less memory for >100K detections)". If IoU NMS, add `dedup_method: iou_nms` and `iou_threshold: 0.2`.
 
@@ -98,8 +96,8 @@ html_sample_fraction: 0.10
 # load_channels: "0,1,2"                # uncomment to exclude failed channels
 
 # --- Preprocessing ---
-# Flat-field correction is always ON (no flag needed)
-# photobleaching_correction: true        # only if intensity decays across scan direction
+# Flat-field correction is ON by default (uncomment to disable):
+# no_normalize_features: true
 
 # --- Detection options ---
 # dedup_method: iou_nms                  # faster for >100K detections (default: mask_overlap)
