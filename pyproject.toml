@@ -8,7 +8,7 @@ version = "2.0.0"
 description = "Spatial cell segmentation and DVP pipeline for CZI microscopy (8 detection strategies, multi-GPU, LMD export)"
 readme = "README.md"
 license = {text = "MIT"}
-requires-python = ">=3.10"
+requires-python = "==3.10.*"
 authors = [
     {name = "Cell Segmentation Team"}
 ]
@@ -19,8 +19,6 @@ classifiers = [
     "License :: OSI Approved :: MIT License",
     "Programming Language :: Python :: 3",
     "Programming Language :: Python :: 3.10",
-    "Programming Language :: Python :: 3.11",
-    "Programming Language :: Python :: 3.12",
     "Topic :: Scientific/Engineering :: Bio-Informatics",
     "Topic :: Scientific/Engineering :: Image Processing",
 ]

@@ -68,7 +68,7 @@ PYTHONPATH=$REPO $XLDVP_PYTHON -m black --check .
 PYTHONPATH=$REPO $XLDVP_PYTHON $REPO/scripts/czi_info.py /path/to/slide.czi
 ```
 
-**Style:** Black (line-length 100), Ruff (E/F/W/I/N/UP/B/C4, E501 ignored). Python 3.10+.
+**Style:** Black (line-length 100), Ruff (E/F/W/I/N/UP/B/C4, E501 ignored). **Python 3.10** (pinned).
 
 ### Tests
 

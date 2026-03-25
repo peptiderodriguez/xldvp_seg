@@ -1,7 +1,7 @@
 # xldvp_seg — Image Analysis & DVP Pipeline
 
 [![CI](https://github.com/peptiderodriguez/xldvp_seg/actions/workflows/test.yml/badge.svg)](https://github.com/peptiderodriguez/xldvp_seg/actions)
-[![Python 3.10+](https://img.shields.io/badge/python-3.10%2B-blue.svg)](https://www.python.org/downloads/)
+[![Python 3.10](https://img.shields.io/badge/python-3.10-blue.svg)](https://www.python.org/downloads/)
 [![License: MIT](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
 [![Code style: black](https://img.shields.io/badge/code%20style-black-000000.svg)](https://github.com/psf/black)
 
