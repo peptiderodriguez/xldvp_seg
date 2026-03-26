@@ -61,17 +61,20 @@ def run_dir(output_dir):
     """Discover the timestamped run directory after detection.
 
     The pipeline creates output_dir/<slide_name>/<timestamp>/ structure.
-    We find the most recently modified leaf directory containing detections.
+    We find cell_detections.json at the run root (NOT in tiles/ subdirs).
     """
-    candidates = sorted(
-        output_dir.rglob("cell_detections.json"), key=lambda p: p.stat().st_mtime
-    )
+    # Exclude tile-level JSONs — only look for the final merged/deduped output
+    candidates = [
+        p
+        for p in sorted(output_dir.rglob("cell_detections.json"), key=lambda p: p.stat().st_mtime)
+        if "tiles" not in p.parent.name
+    ]
     if candidates:
         return candidates[-1].parent
-    # Fallback: deepest timestamped directory
-    dirs = sorted(output_dir.rglob("*/"), key=lambda p: p.stat().st_mtime, reverse=True)
-    if dirs:
-        return dirs[0]
+    # Fallback: find the timestamped run dir (contains tiles/ as a subdirectory)
+    for d in sorted(output_dir.rglob("tiles"), key=lambda p: p.stat().st_mtime, reverse=True):
+        if d.is_dir():
+            return d.parent  # The run dir is the parent of tiles/
     return output_dir
 
 
@@ -130,14 +133,16 @@ def test_1_detection(output_dir):
         timeout=5400,  # CZI load + model init + 1% tiles — large slides need time
     )
 
-    # Find the detections JSON
-    det_files = list(output_dir.rglob("cell_detections.json"))
+    # Find the final detections JSON (exclude per-tile JSONs in tiles/ subdirs)
+    det_files = [
+        p for p in output_dir.rglob("cell_detections.json") if "tiles" not in p.parent.name
+    ]
     assert len(det_files) >= 1, (
-        f"No cell_detections.json found under {output_dir}.\n"
+        f"No cell_detections.json found under {output_dir} (excluding tiles/).\n"
         f"stdout: {result.stdout[-2000:]}\nstderr: {result.stderr[-2000:]}"
     )
 
-    det_path = det_files[-1]
+    det_path = sorted(det_files, key=lambda p: p.stat().st_mtime)[-1]
     with open(det_path) as f:
         detections = json.load(f)
 
