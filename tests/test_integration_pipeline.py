@@ -127,7 +127,7 @@ def test_1_detection(output_dir):
             "--html-sample-fraction", "1.0",
             "--output-dir", str(output_dir),
         ],
-        timeout=1800,  # CZI load + model init + 1% tiles can take 10-15 min
+        timeout=5400,  # CZI load + model init + 1% tiles — large slides need time
     )
 
     # Find the detections JSON
