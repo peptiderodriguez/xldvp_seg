@@ -33,7 +33,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - ROI-restricted detection module (`segmentation/roi/`) with marker threshold, circular object, and polygon/mask ROI discovery
 - TMA core detection example (`examples/tma/`) with grid labeling and per-core cell segmentation
 - `/new-experiment` slash command for fast-track YAML config generation
-- 488 automated tests across 19 test files
+- 516 automated tests across 21 test files
 
 ### Changed
 - All cell types use unified multi-GPU pipeline (no separate single-GPU path)

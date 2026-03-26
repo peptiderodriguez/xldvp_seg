@@ -68,8 +68,8 @@ def _make_pipeline_detections(n=20):
             # --- Features dict (everything else) ---
             "features": {
                 # Morphological features
-                "area": int(300 + rng.randint(0, 500)),
-                "area_um2": round((300 + rng.randint(0, 500)) * pixel_size**2, 3),
+                "area": int(area_px := 300 + rng.randint(0, 500)),
+                "area_um2": round(area_px * pixel_size**2, 3),
                 "solidity": round(0.7 + rng.random() * 0.3, 3),
                 "eccentricity": round(rng.random() * 0.8, 3),
                 "perimeter": round(60 + rng.random() * 40, 2),

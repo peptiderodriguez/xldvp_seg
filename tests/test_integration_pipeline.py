@@ -130,6 +130,8 @@ def test_1_detection(output_dir):
             "--channels", "0,1,2",
             "--all-channels",
             "--num-gpus", "1",
+            # NOTE: 0.01 = ~1-2 tiles for fast integration testing.
+            # Production always uses 1.0 (see CLAUDE.md convention).
             "--sample-fraction", "0.01",
             "--html-sample-fraction", "1.0",
             "--output-dir", str(output_dir),
@@ -191,10 +193,15 @@ def test_2_quality_filter(run_dir):
     with open(filtered_path) as f:
         filtered = json.load(f)
 
-    assert len(filtered) <= len(original), (
-        f"Filtered count ({len(filtered)}) should be <= original ({len(original)})"
+    # Quality filter tags ALL detections (rf_prediction=1.0 pass, 0.0 fail) — does NOT remove any
+    assert len(filtered) == len(original), (
+        f"Quality filter should tag ALL detections, not remove any. "
+        f"Got {len(filtered)}, expected {len(original)}"
     )
-    assert len(filtered) > 0, "Quality filter rejected ALL detections"
+    passing = [d for d in filtered if d["rf_prediction"] == 1.0]
+    failing = [d for d in filtered if d["rf_prediction"] == 0.0]
+    assert len(passing) + len(failing) == len(filtered), "All detections should be tagged 0.0 or 1.0"
+    assert len(passing) > 0, "Quality filter rejected ALL detections"
 
     # Every detection should have rf_prediction set to 0.0 or 1.0
     for det in filtered:
@@ -248,7 +255,10 @@ def test_3_marker_classification(run_dir):
     # At least some cells should be positive and some negative
     # (unless stain is very weak/strong -- allow single class as non-fatal)
     classes = {d["features"]["MSLN_class"] for d in classified}
-    assert len(classes) >= 1, "All detections have the same marker class"
+    assert classes <= {"positive", "negative"}, f"Unexpected marker classes: {classes}"
+    if len(classes) == 1:
+        import warnings
+        warnings.warn(f"All detections have the same MSLN class: {classes}. Stain may be weak/strong.")
 
 
 # -------------------------------------------------------------------------
@@ -274,9 +284,13 @@ def test_4_slide_analysis_roundtrip(run_dir):
         f"MSLN_class not in features_df columns: {list(df.columns)}"
     )
 
-    # Filter by marker
+    # Filter by marker — conservation check: positive + negative = total
     msln_pos = slide.filter(marker="MSLN", positive=True)
-    assert msln_pos.n_detections >= 0, "filter(marker=MSLN, positive=True) failed"
+    msln_neg = slide.filter(marker="MSLN", positive=False)
+    assert msln_pos.n_detections + msln_neg.n_detections == slide.n_detections, (
+        f"Positive ({msln_pos.n_detections}) + negative ({msln_neg.n_detections}) "
+        f"should sum to total ({slide.n_detections})"
+    )
 
     # Filter by score
     high_score = slide.filter(score_threshold=0.5)
@@ -333,20 +347,26 @@ def test_5_html_generation(run_dir):
 
 def test_6_serve_html(run_dir):
     """Start serve_html in background, retrieve URL, then stop."""
+    from pathlib import Path
+
+    # Clean up stale server info from previous runs
+    info_file = Path("/tmp/xldvp_seg_serve_info.json")
+    info_file.unlink(missing_ok=True)
+
     html_dir = run_dir / "html_integration_test"
     if not html_dir.exists():
         # Fallback to any html dir
         html_candidates = list(run_dir.rglob("html*"))
         html_dir = html_candidates[0] if html_candidates else run_dir
 
-    # Start in background with --no-tunnel (avoid cloudflared dependency in test)
+    # Start in background (with tunnel — --no-tunnel ignores --background)
     try:
         _run_script(
             "serve_html.py",
-            [str(html_dir), "--background", "--no-tunnel"],
+            [str(html_dir), "--background"],
             timeout=30,
         )
-    except subprocess.CalledProcessError:
+    except (subprocess.CalledProcessError, subprocess.TimeoutExpired):
         pytest.skip("serve_html --background failed (may need cloudflared)")
 
     # Get URL
