@@ -399,6 +399,11 @@ def main():
     parser.add_argument(
         "--html-dir", default=None, help="Custom HTML output directory (default: <output-dir>/html)"
     )
+    parser.add_argument(
+        "--marker-filter",
+        default=None,
+        help='Filter detections by marker class (e.g., "MSLN_class==positive")',
+    )
 
     # Vessel-specific
     parser.add_argument(
@@ -520,6 +525,12 @@ def main():
     logger.info(f"Loading detections from {det_file}...")
     all_detections = fast_json_load(str(det_file))
     logger.info(f"Loaded {len(all_detections):,} detections")
+
+    # Apply marker filter (e.g., "MSLN_class==positive")
+    if args.marker_filter:
+        from segmentation.utils.detection_utils import apply_marker_filter
+
+        all_detections = apply_marker_filter(all_detections, args.marker_filter)
 
     # Apply vessel quality filter
     if args.vessel_quality_filter and cell_type == "vessel":

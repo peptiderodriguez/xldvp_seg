@@ -858,12 +858,34 @@ adata = slide.to_anndata()
 
 ---
 
-## Rules
+## Critical Pipeline Rules
+
+**SLURM & compute:**
+- Use `run_pipeline.sh` + verified YAML templates. Never hand-write sbatch from scratch.
+- ALWAYS verify sbatch before submitting: check dependency IDs, input file paths, flags.
+- Never run heavy compute on login nodes — always SLURM. Previews and `czi_info` are OK on login.
+- Never bare `python` in sbatch — always `$XLDVP_PYTHON`.
+- Get SLURM resources from `system_info.py`, don't hardcode partition names or probe nodes.
+
+**Pipeline behavior:**
+- `--sample-fraction` is ALWAYS 1.0 in production. Detect 100%, subsample HTML only.
+- SNR threshold changes do NOT need re-classification. `ch{N}_snr` is pre-computed during post-dedup. To change threshold, just filter on the existing SNR values — no script re-run needed.
+- Photobleach correction (`--photobleaching-correction`) is EXPERIMENTAL and should never be suggested. Results are unreliable.
+- Pin exact linter versions: black==25.12.0, ruff==0.15.7. Version ranges cause CI/local drift.
+
+**Visualization:**
+- Every figure needs tissue fluorescence overlay with mask contour outlines (not dots). Channel R/G/B toggles + dashed/solid contour overlay is the standard.
+- The annotation HTML viewer with per-channel toggles + contour overlay is THE standard visualization. Auto-generate for every run.
+
+**Code & workflow:**
+- Keep code generic and reusable, not one-off.
+- Don't ask permission for obvious next steps — just do them.
+
+## Operational Rules
 
 - Each phase ends with *"Ready for the next step?"* — the user can stop at any phase.
 - Use `$REPO` = the repo root path throughout. Set `PYTHONPATH=$REPO` before commands.
 - Use `$XLDVP_PYTHON` (from system_info) as the Python interpreter, not bare `python`.
-- On SLURM: always `sbatch`, never run heavy compute on the login node. Previews and `czi_info` are OK on login.
 - All paths should be absolute.
 - **When something fails — diagnose first.** Read the last 50 lines of the log. Common patterns:
   - `CUDA out of memory` → reduce `--num-gpus` or `--tile-size`

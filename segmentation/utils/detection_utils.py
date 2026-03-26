@@ -76,6 +76,34 @@ def load_detections(path, score_threshold=None):
     return detections
 
 
+def apply_marker_filter(detections, filter_expr):
+    """Filter detections by a marker expression like ``"MSLN_class==positive"``.
+
+    Checks both top-level ``det[key]`` and ``det["features"][key]`` (since
+    classify_markers.py stores marker classes in features).
+
+    Args:
+        detections: List of detection dicts.
+        filter_expr: String in ``"key==value"`` format.
+
+    Returns:
+        Filtered list of detection dicts.
+    """
+    if not filter_expr or "==" not in filter_expr:
+        return detections
+
+    key, value = filter_expr.split("==", 1)
+    key = key.strip()
+    value = value.strip()
+
+    before = len(detections)
+    filtered = [
+        d for d in detections if d.get(key) == value or d.get("features", {}).get(key) == value
+    ]
+    logger.info("Marker filter %s==%s: %s -> %s", key, value, f"{before:,}", f"{len(filtered):,}")
+    return filtered
+
+
 def extract_positions_um(detections, pixel_size_um=None):
     """Extract cell positions in microns from a list of detection dicts.
 

@@ -94,7 +94,7 @@ def read_czi_thumbnail(czi_path, display_channels, scale_factor=0.02, scene=0):
     return channel_arrays, pixel_size
 
 
-def load_detections_json(detections_path, group_field="marker_profile"):
+def load_detections_json(detections_path, group_field="marker_profile", marker_filter=None):
     """Load detections JSON and extract cell data for visualization.
 
     Returns:
@@ -103,6 +103,12 @@ def load_detections_json(detections_path, group_field="marker_profile"):
     print(f"Loading detections from {detections_path}...", flush=True)
     detections = fast_json_load(detections_path)
     print(f"  {len(detections)} detections loaded", flush=True)
+
+    if marker_filter:
+        from segmentation.utils.detection_utils import apply_marker_filter
+
+        detections = apply_marker_filter(detections, marker_filter)
+        print(f"  {len(detections)} after marker filter: {marker_filter}", flush=True)
 
     rows = []
     for det in detections:
@@ -1017,6 +1023,11 @@ def main():
     parser.add_argument("--no-html", action="store_true", help="Skip interactive HTML generation")
     parser.add_argument("--no-png", action="store_true", help="Skip static PNG generation")
     parser.add_argument("--scene", type=int, default=0, help="CZI scene index (0-based)")
+    parser.add_argument(
+        "--marker-filter",
+        default=None,
+        help='Filter detections by marker class (e.g., "MSLN_class==positive")',
+    )
     args = parser.parse_args()
 
     output_dir = Path(args.output_dir)
@@ -1081,7 +1092,9 @@ def main():
     # 2. Load cell data
     has_uids = False
     if args.detections:
-        df = load_detections_json(args.detections, args.group_field)
+        df = load_detections_json(
+            args.detections, args.group_field, marker_filter=args.marker_filter
+        )
         has_uids = "uid" in df.columns and df["uid"].notna().any()
         cluster_field = "group"
     else:
