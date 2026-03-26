@@ -10,6 +10,7 @@ import os
 import re
 import signal
 import subprocess
+import sys
 import time
 from pathlib import Path
 
@@ -278,7 +279,7 @@ def start_server_and_tunnel(
     # Start HTTP server
     logger.info(f"Starting HTTP server on port {port}...")
     http_proc = subprocess.Popen(
-        ["python", "-m", "http.server", str(port)],
+        [sys.executable, "-m", "http.server", str(port)],
         cwd=str(html_dir),
         stdout=subprocess.DEVNULL,
         stderr=subprocess.DEVNULL,

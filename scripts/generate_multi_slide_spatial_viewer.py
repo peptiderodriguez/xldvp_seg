@@ -662,8 +662,15 @@ def load_slide_data(
 
     if use_streaming:
         print(f" streaming ({file_size / 1e9:.1f} GB)...", end="", flush=True)
+        # Parse marker filter once for streaming path
+        _mf_key, _mf_val = None, None
+        if marker_filter and "==" in marker_filter:
+            _mf_key, _mf_val = [s.strip() for s in marker_filter.split("==", 1)]
         n_parsed = 0
         for det in _stream_detections_mmap(path):
+            if _mf_key is not None:
+                if det.get(_mf_key) != _mf_val and det.get("features", {}).get(_mf_key) != _mf_val:
+                    continue
             pos = extract_position_um(det)
             if pos is None:
                 continue

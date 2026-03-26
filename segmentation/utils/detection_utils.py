@@ -89,7 +89,13 @@ def apply_marker_filter(detections, filter_expr):
     Returns:
         Filtered list of detection dicts.
     """
-    if not filter_expr or "==" not in filter_expr:
+    if not filter_expr:
+        return detections
+    if "==" not in filter_expr:
+        logger.warning(
+            "Marker filter '%s' has no '==' operator, ignoring. Format: key==value",
+            filter_expr,
+        )
         return detections
 
     key, value = filter_expr.split("==", 1)
