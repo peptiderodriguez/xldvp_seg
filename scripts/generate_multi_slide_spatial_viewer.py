@@ -629,7 +629,9 @@ def _stream_detections_mmap(filepath):
         mm.close()
 
 
-def load_slide_data(path, group_field, include_contours=False, score_threshold=None):
+def load_slide_data(
+    path, group_field, include_contours=False, score_threshold=None, marker_filter=None
+):
     """Load a classified detection JSON and extract positions + groups.
 
     For large files (>500 MB), uses mmap streaming to avoid loading the
@@ -642,6 +644,7 @@ def load_slide_data(path, group_field, include_contours=False, score_threshold=N
             and pixel_size_um for contour rendering.
         score_threshold: If set, only include detections with score >= threshold
             in contours (positions are always included regardless).
+        marker_filter: Optional filter string like "MSLN_class==positive".
 
     Returns:
         Dict with slide data, or None if no valid data.
@@ -683,6 +686,11 @@ def load_slide_data(path, group_field, include_contours=False, score_threshold=N
         if not isinstance(detections, list):
             print(f"  WARNING: {path} is not a JSON list, skipping", file=sys.stderr)
             return None
+
+        if marker_filter:
+            from segmentation.utils.detection_utils import apply_marker_filter
+
+            detections = apply_marker_filter(detections, marker_filter)
 
         for i in range(len(detections)):
             det = detections[i]
@@ -3644,6 +3652,11 @@ def main():
         default=100_000,
         help="Maximum contours to embed per slide (default: 100000)",
     )
+    parser.add_argument(
+        "--marker-filter",
+        default=None,
+        help='Filter detections by marker class (e.g., "MSLN_class==positive")',
+    )
     args = parser.parse_args()
 
     if not args.input_dir and not args.detections:
@@ -3684,6 +3697,7 @@ def main():
             args.group_field,
             include_contours=want_contours,
             score_threshold=args.contour_score_threshold,
+            marker_filter=args.marker_filter,
         )
         if data is None:
             print(" skipped (no data)")
