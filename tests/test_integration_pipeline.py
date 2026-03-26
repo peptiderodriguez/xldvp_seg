@@ -258,7 +258,7 @@ def test_3_marker_classification(run_dir):
     assert classes <= {"positive", "negative"}, f"Unexpected marker classes: {classes}"
     if len(classes) == 1:
         import warnings
-        warnings.warn(f"All detections have the same MSLN class: {classes}. Stain may be weak/strong.")
+        warnings.warn(f"All detections have the same MSLN class: {classes}. Stain may be weak/strong.", stacklevel=2)
 
 
 # -------------------------------------------------------------------------
