@@ -413,7 +413,7 @@ CZI file → czi_loader.py (channel resolution, tiling)
 
 ### Pipeline Package (`segmentation/pipeline/`)
 
-`run_segmentation.py` is a ~1400-line orchestrator importing from 9 pipeline modules:
+`run_segmentation.py` is a ~1900-line orchestrator importing from 9 pipeline modules:
 
 | Module | Purpose |
 |--------|---------|
