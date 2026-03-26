@@ -65,7 +65,8 @@ cd xldvp_seg && claude
 | **Tissue Pattern** | Cellpose + spatial frequency analysis | Brain FISH, coronal sections |
 | **Mesothelium** | Ridge detection for ribbon structures | Mesothelial ribbon for LMD |
 | **InstanSeg** | 3.8M-param lightweight alternative | `--segmenter instanseg` |
-| **ROI-restricted** | Marker threshold / circular / polygon ROI discovery + per-ROI cell detection | Islets, TMA cores, bone marrow regions |
+
+**ROI-restricted detection:** For structured tissues (islets, TMA cores, bone marrow), the `segmentation.roi` module finds regions first, then runs any of the above strategies only within those regions. See `examples/islet/` and `examples/tma/`.
 
 ---
 

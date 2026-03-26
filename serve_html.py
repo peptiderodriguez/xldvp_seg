@@ -104,33 +104,49 @@ def main():
             proc.terminate()
         return
 
-    http_proc, tunnel_proc, tunnel_url = start_server_and_tunnel(
-        directory,
-        port=args.port,
-        background=args.background,
-        slide_name=slide_name,
-        cell_type="serve_html",
-    )
-    if http_proc is None:
-        print("ERROR: Failed to start server", file=sys.stderr)
+    # Try requested port, then up to 5 more if busy
+    max_retries = 5
+    actual_port = args.port
+    for attempt in range(max_retries + 1):
+        try_port = args.port + attempt
+        http_proc, tunnel_proc, tunnel_url = start_server_and_tunnel(
+            directory,
+            port=try_port,
+            background=args.background,
+            slide_name=slide_name,
+            cell_type="serve_html",
+        )
+        if http_proc is not None:
+            actual_port = try_port
+            break
+        if attempt < max_retries:
+            print(f"Port {try_port} busy, trying {try_port + 1}...")
+    else:
+        print(
+            f"ERROR: Could not find a free port ({args.port}-{args.port + max_retries})",
+            file=sys.stderr,
+        )
         sys.exit(1)
+
+    if actual_port != args.port:
+        print(f"Using port {actual_port} (requested {args.port} was busy)")
 
     # Always print the URL prominently
     if tunnel_url:
         print(f"\n{'=' * 60}")
         print(f"  TUNNEL URL: {tunnel_url}")
         print(f"{'=' * 60}")
-        print(f"  Local:  http://localhost:{args.port}")
+        print(f"  Local:  http://localhost:{actual_port}")
         print(f"  Remote: {tunnel_url}")
         print(f"  Dir:    {directory}")
         print(f"{'=' * 60}\n")
     else:
         print(f"\nServing: {directory}")
-        print(f"Local only: http://localhost:{args.port}")
+        print(f"Local only: http://localhost:{actual_port}")
         print("(Cloudflare tunnel not available)\n")
 
     # Write server info to well-known file for programmatic retrieval
-    _write_server_info(directory, args.port, tunnel_url)
+    _write_server_info(directory, actual_port, tunnel_url)
 
     if not args.background:
         wait_for_server_shutdown(http_proc, tunnel_proc)
