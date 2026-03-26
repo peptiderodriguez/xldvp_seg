@@ -399,3 +399,78 @@ class TestBackgroundCorrectionFormat:
         assert "ch0_background" in var_names
         assert "ch0_snr" in var_names
         assert "ch0_median_raw" in var_names
+
+
+# ---------------------------------------------------------------------------
+# apply_marker_filter utility tests
+# ---------------------------------------------------------------------------
+
+
+class TestApplyMarkerFilter:
+    """Tests for the shared apply_marker_filter utility."""
+
+    def test_filter_toplevel_key(self):
+        """Filter matches top-level detection key."""
+        from segmentation.utils.detection_utils import apply_marker_filter
+
+        dets = [{"MSLN_class": "positive"}, {"MSLN_class": "negative"}]
+        result = apply_marker_filter(dets, "MSLN_class==positive")
+        assert len(result) == 1
+        assert result[0]["MSLN_class"] == "positive"
+
+    def test_filter_features_key(self):
+        """Filter matches key inside features dict (real pipeline format)."""
+        from segmentation.utils.detection_utils import apply_marker_filter
+
+        dets = [
+            {"features": {"MSLN_class": "positive"}},
+            {"features": {"MSLN_class": "negative"}},
+        ]
+        result = apply_marker_filter(dets, "MSLN_class==positive")
+        assert len(result) == 1
+
+    def test_filter_no_match(self):
+        """Filter returns empty list when nothing matches."""
+        from segmentation.utils.detection_utils import apply_marker_filter
+
+        dets = [{"features": {"MSLN_class": "negative"}}]
+        result = apply_marker_filter(dets, "MSLN_class==positive")
+        assert len(result) == 0
+
+    def test_filter_none_returns_all(self):
+        """None filter returns all detections."""
+        from segmentation.utils.detection_utils import apply_marker_filter
+
+        dets = [{"a": 1}, {"b": 2}]
+        result = apply_marker_filter(dets, None)
+        assert len(result) == 2
+
+    def test_filter_empty_string_returns_all(self):
+        """Empty string filter returns all detections."""
+        from segmentation.utils.detection_utils import apply_marker_filter
+
+        result = apply_marker_filter([{"a": 1}], "")
+        assert len(result) == 1
+
+    def test_filter_malformed_no_equals(self):
+        """Malformed filter (no ==) returns all with warning."""
+        from segmentation.utils.detection_utils import apply_marker_filter
+
+        dets = [{"MSLN_class": "positive"}]
+        result = apply_marker_filter(dets, "MSLN_class positive")
+        assert len(result) == 1  # returns all, not filtered
+
+    def test_filter_spaces_around_equals(self):
+        """Spaces around == are handled."""
+        from segmentation.utils.detection_utils import apply_marker_filter
+
+        dets = [{"features": {"MSLN_class": "positive"}}]
+        result = apply_marker_filter(dets, "MSLN_class == positive")
+        assert len(result) == 1
+
+    def test_filter_empty_detections(self):
+        """Empty detection list returns empty."""
+        from segmentation.utils.detection_utils import apply_marker_filter
+
+        result = apply_marker_filter([], "MSLN_class==positive")
+        assert len(result) == 0

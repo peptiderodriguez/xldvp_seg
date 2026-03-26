@@ -67,7 +67,7 @@ def run_dir(output_dir):
     candidates = [
         p
         for p in sorted(output_dir.rglob("cell_detections.json"), key=lambda p: p.stat().st_mtime)
-        if "tiles" not in p.parent.name
+        if "tiles" not in p.parts
     ]
     if candidates:
         return candidates[-1].parent

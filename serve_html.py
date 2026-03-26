@@ -43,7 +43,18 @@ def main():
     # Quick URL retrieval — no server startup
     if args.get_url:
         if _SERVER_INFO_FILE.exists():
+            import os
+
             info = json.loads(_SERVER_INFO_FILE.read_text())
+            # Check if server process is still alive
+            pid = info.get("http_pid")
+            if pid:
+                try:
+                    os.kill(pid, 0)  # signal 0 = liveness check
+                except (ProcessLookupError, PermissionError):
+                    print("Server process is no longer running (stale info).", file=sys.stderr)
+                    _SERVER_INFO_FILE.unlink(missing_ok=True)
+                    sys.exit(1)
             url = info.get("tunnel_url") or f"http://localhost:{info.get('port', '?')}"
             print(url)
         else:
@@ -96,7 +107,7 @@ def main():
         )
         url = f"http://localhost:{args.port}"
         print(f"Serving {directory} at {url}")
-        _write_server_info(directory, args.port, url)
+        _write_server_info(directory, args.port, url, http_pid=proc.pid)
         print("Press Ctrl+C to stop")
         try:
             proc.wait()
@@ -146,19 +157,20 @@ def main():
         print("(Cloudflare tunnel not available)\n")
 
     # Write server info to well-known file for programmatic retrieval
-    _write_server_info(directory, actual_port, tunnel_url)
+    _write_server_info(directory, actual_port, tunnel_url, http_pid=http_proc.pid)
 
     if not args.background:
         wait_for_server_shutdown(http_proc, tunnel_proc)
 
 
-def _write_server_info(directory, port, tunnel_url):
+def _write_server_info(directory, port, tunnel_url, http_pid=None):
     """Write server info to a well-known file for programmatic URL retrieval."""
     info = {
         "directory": str(directory),
         "port": port,
         "tunnel_url": tunnel_url,
         "local_url": f"http://localhost:{port}",
+        "http_pid": http_pid,
     }
     try:
         _SERVER_INFO_FILE.write_text(json.dumps(info, indent=2))
