@@ -49,44 +49,29 @@ pytestmark = [
 # -------------------------------------------------------------------------
 
 
-MAX_TEST_DETECTIONS = 500  # Subsample large runs for fast testing
-
-
 @pytest.fixture(scope="module")
 def output_dir():
-    """Create temp output dir, or use existing run from env var."""
-    existing = os.environ.get("INTEGRATION_RUN_DIR")
-    if existing:
-        # When reusing an existing run, create a temp working dir and
-        # subsample the detections to MAX_TEST_DETECTIONS for fast testing
-        with tempfile.TemporaryDirectory(prefix="xldvp_integration_") as d:
-            work_dir = Path(d)
-            src = Path(existing) / "cell_detections.json"
-            if src.exists():
-                from segmentation.utils.json_utils import atomic_json_dump, fast_json_load
-
-                dets = fast_json_load(src)
-                if len(dets) > MAX_TEST_DETECTIONS:
-                    import random
-
-                    random.seed(42)
-                    dets = random.sample(dets, MAX_TEST_DETECTIONS)
-                atomic_json_dump(dets, work_dir / "cell_detections.json")
-            yield work_dir
-    else:
-        with tempfile.TemporaryDirectory(prefix="xldvp_integration_") as d:
-            yield Path(d)
+    """Create a temp output dir for this test session."""
+    with tempfile.TemporaryDirectory(prefix="xldvp_integration_") as d:
+        yield Path(d)
 
 
 @pytest.fixture(scope="module")
 def run_dir(output_dir):
-    """Discover the run directory (or use output_dir directly for subsampled data)."""
-    # Look for cell_detections.json anywhere under output_dir
+    """Discover the timestamped run directory after detection.
+
+    The pipeline creates output_dir/<slide_name>/<timestamp>/ structure.
+    We find the most recently modified leaf directory containing detections.
+    """
     candidates = sorted(
         output_dir.rglob("cell_detections.json"), key=lambda p: p.stat().st_mtime
     )
     if candidates:
         return candidates[-1].parent
+    # Fallback: deepest timestamped directory
+    dirs = sorted(output_dir.rglob("*/"), key=lambda p: p.stat().st_mtime, reverse=True)
+    if dirs:
+        return dirs[0]
     return output_dir
 
 
@@ -127,10 +112,6 @@ def _run_script(script_path, args, timeout=900):
 
 def test_1_detection(output_dir):
     """Run detection pipeline on ~1% of tiles and verify output."""
-    # Skip if using a pre-existing run directory
-    if os.environ.get("INTEGRATION_RUN_DIR"):
-        pytest.skip("Using existing run dir (INTEGRATION_RUN_DIR set)")
-
     result = _run_script(
         "run_segmentation.py",
         [
