@@ -132,3 +132,6 @@ ignore = [
 testpaths = ["tests"]
 python_files = ["test_*.py"]
 addopts = "-v --tb=short"
+markers = [
+    "integration: needs GPU + real CZI data (run on cluster, not CI)",
+]
