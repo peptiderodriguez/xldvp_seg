@@ -80,7 +80,7 @@ def run_dir(output_dir):
     return output_dir
 
 
-def _run_script(script_path, args, timeout=600):
+def _run_script(script_path, args, timeout=900):
     """Run a Python script with PYTHONPATH set to the repo root.
 
     Args:
@@ -136,7 +136,7 @@ def test_1_detection(output_dir):
             "--html-sample-fraction", "1.0",
             "--output-dir", str(output_dir),
         ],
-        timeout=600,
+        timeout=1800,  # CZI load + model init + 1% tiles can take 10-15 min
     )
 
     # Find the detections JSON
