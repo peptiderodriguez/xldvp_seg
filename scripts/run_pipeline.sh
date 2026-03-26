@@ -768,10 +768,49 @@ if [[ "$DS_QUALITY_FILTER" == "true" ]]; then
     DETECT_JOB_ID="$QF_JOB_ID"
 fi
 
-# Marker classification (CPU, depends on detection or quality filter)
-# Already handled inline for the main detection sbatch above.
-# But if downstream.markers is explicitly set AND markers weren't in the inline pipeline,
-# we skip here since markers are already handled.
+# Marker classification on filtered output (CPU, depends on quality filter)
+# If quality filter ran AND markers are configured, re-run markers on the filtered
+# detections so marker classes reflect filtered (debris-free) data.
+if [[ "$DS_QUALITY_FILTER" == "true" && -n "$MARKER_CHANNELS" ]]; then
+    MK_SBATCH="${OUTPUT_DIR}/pipeline_${NAME}_markers_$$.sbatch"
+    {
+        echo "#!/bin/bash"
+        echo "#SBATCH --job-name=${NAME}_markers"
+        echo "#SBATCH --partition=p.hpcl8"
+        echo "#SBATCH --cpus-per-task=24"
+        echo "#SBATCH --mem=64G"
+        echo "#SBATCH --time=1:00:00"
+        echo "#SBATCH --output=${OUTPUT_DIR}/slurm_${NAME}_markers_%j.out"
+        echo "#SBATCH --error=${OUTPUT_DIR}/slurm_${NAME}_markers_%j.err"
+        echo ""
+        echo "set -euo pipefail"
+        echo "export PYTHONPATH=\"$REPO\""
+        echo "XLDVP_PYTHON=\"$XLDVP_PYTHON\""
+        if [[ -n "$KNOWN_RUN_DIR" ]]; then
+            echo "RUN_DIR=\"${KNOWN_RUN_DIR}/\""
+        else
+            echo "RUN_DIR=\$(ls -td \"${OUTPUT_DIR}\"/*/  2>/dev/null | head -1)"
+        fi
+        echo "FILTERED=\"\${RUN_DIR}${CELL_TYPE}_detections_filtered.json\""
+        echo "if [[ -z \"\$RUN_DIR\" || ! -f \"\$FILTERED\" ]]; then echo 'ERROR: Filtered detections not found'; exit 1; fi"
+        echo "echo \"=== \$(date): Marker classification on filtered detections ===\""
+        classify_extra=""
+        if [[ "$CORRECT_ALL_CHANNELS" == "true" ]]; then
+            classify_extra+=" --correct-all-channels"
+        fi
+        if [[ "$MARKER_USE_WAVELENGTH" == "true" ]]; then
+            echo "\$XLDVP_PYTHON $REPO/scripts/classify_markers.py --detections \"\$FILTERED\" --marker-wavelength \"$MARKER_CHANNELS\" --marker-name \"$MARKER_NAMES\" --method \"$MARKER_METHOD\" --czi-path \"$CZI_PATH\" --output-dir \"\$RUN_DIR\"${classify_extra}"
+        else
+            echo "\$XLDVP_PYTHON $REPO/scripts/classify_markers.py --detections \"\$FILTERED\" --marker-channel \"$MARKER_CHANNELS\" --marker-name \"$MARKER_NAMES\" --method \"$MARKER_METHOD\" --output-dir \"\$RUN_DIR\"${classify_extra}"
+        fi
+        echo "echo \"=== \$(date): Done ===\""
+    } > "$MK_SBATCH"
+    chmod +x "$MK_SBATCH"
+    MK_OUTPUT=$(sbatch --dependency=afterok:"$QF_JOB_ID" "$MK_SBATCH")
+    MK_JOB_ID=$(echo "$MK_OUTPUT" | grep -oP 'Submitted batch job \K\d+')
+    echo "  Markers (on filtered) job: $MK_JOB_ID (dep: $QF_JOB_ID)"
+    DETECT_JOB_ID="$MK_JOB_ID"
+fi
 
 # Nuclear counting (GPU, depends on detection — uses UNFILTERED detections)
 if [[ "$DS_NUCLEI" == "true" ]]; then
