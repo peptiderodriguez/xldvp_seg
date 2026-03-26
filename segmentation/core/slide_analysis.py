@@ -280,7 +280,13 @@ class SlideAnalysis:
         if marker is not None:
             marker_key = f"{marker}_class"
             target = "positive" if positive else "negative"
-            filtered = [d for d in filtered if d.get(marker_key) == target]
+            # Check both top-level and features dict (classify_markers stores in features)
+            filtered = [
+                d
+                for d in filtered
+                if d.get(marker_key) == target
+                or d.get("features", {}).get(marker_key) == target
+            ]
 
         logger.info("Filtered: %d -> %d detections", len(self.detections), len(filtered))
         return SlideAnalysis.from_detections(filtered, self._output_dir)

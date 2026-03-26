@@ -3,7 +3,7 @@
 **Spatial cell segmentation and Deep Visual Proteomics pipeline for CZI microscopy**
 
 [![CI](https://github.com/peptiderodriguez/xldvp_seg/actions/workflows/test.yml/badge.svg)](https://github.com/peptiderodriguez/xldvp_seg/actions)
-[![Python 3.10](https://img.shields.io/badge/python-3.10-blue.svg)](https://www.python.org/downloads/)
+[![Python 3.10](https://img.shields.io/badge/python-3.10%20%7C%203.11-blue.svg)](https://www.python.org/downloads/)
 [![License: MIT](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
 [![Code style: black](https://img.shields.io/badge/code%20style-black-000000.svg)](https://github.com/psf/black)
 ![Tests: 488](https://img.shields.io/badge/tests-488%20passed-brightgreen.svg)
@@ -31,7 +31,7 @@ CZI slide → AI detection → annotation → classification → spatial analysi
 ```bash
 # Install
 git clone https://github.com/peptiderodriguez/xldvp_seg.git && cd xldvp_seg
-conda create -n xldvp_seg python=3.10 -y && conda activate xldvp_seg
+conda create -n xldvp_seg python=3.11 -y && conda activate xldvp_seg
 pip install -e .
 ./install.sh                    # PyTorch + SAM2 (auto-detects CUDA)
 

@@ -12,15 +12,19 @@ from segmentation.core import SlideAnalysis
 
 
 def _make_detections(n=5):
-    """Create sample detection dicts with morph + SAM2 features."""
+    """Create sample detection dicts matching real pipeline output format.
+
+    classify_markers.py stores marker classes inside det["features"],
+    NOT at the top level. This fixture matches that real format.
+    """
     dets = []
     for i in range(n):
+        marker_class = "positive" if i % 2 == 0 else "negative"
+        marker_profile = f"NeuN{'+' if i % 2 == 0 else '-'}"
         dets.append(
             {
                 "uid": f"slide_cell_{i * 100}_{i * 200}",
                 "rf_prediction": 0.3 + i * 0.15,  # 0.3, 0.45, 0.6, 0.75, 0.9
-                "NeuN_class": "positive" if i % 2 == 0 else "negative",
-                "marker_profile": f"NeuN{'+' if i % 2 == 0 else '-'}",
                 "global_center": [i * 100, i * 200],
                 "features": {
                     "area": 500 + i * 100,
@@ -28,6 +32,9 @@ def _make_detections(n=5):
                     "eccentricity": 0.3 + i * 0.05,
                     "sam2_0": float(i),
                     "sam2_1": float(i + 1),
+                    # Marker classes in features (real pipeline format)
+                    "NeuN_class": marker_class,
+                    "marker_profile": marker_profile,
                 },
             }
         )
