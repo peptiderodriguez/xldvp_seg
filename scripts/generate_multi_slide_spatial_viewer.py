@@ -32,6 +32,7 @@ import base64
 import html as html_mod
 import io
 import json
+import re
 import sys
 from datetime import datetime
 from pathlib import Path
@@ -54,6 +55,17 @@ def _encode_channel_b64(ch_array):
     b64 = base64.b64encode(buf.getvalue()).decode("ascii")
     del buf
     return b64
+
+
+def _parse_scene_index(name):
+    """Extract CZI scene index from a slide/panel name.
+
+    Supports patterns like ``scene_3``, ``scene03``, or ``Scene_3``.
+    Returns 0 (the default scene) when the name doesn't encode a scene index,
+    so single-scene CZIs and multi-slide directories work unchanged.
+    """
+    m = re.match(r"(?i)scene[_-]?(\d+)", name)
+    return int(m.group(1)) if m else 0
 
 
 def read_czi_thumbnail_channels(czi_path, display_channels, scale_factor=0.0625, scene=0):
@@ -554,7 +566,6 @@ def _stream_detections_mmap(filepath):
     at C speed, making this ~10-50x faster than a Python byte loop.
     """
     import mmap
-    import re
 
     try:
         import orjson as _json_mod
@@ -3795,10 +3806,21 @@ def main():
                 print(f"  No CZI found for slide '{name}', skipping fluorescence")
                 continue
 
-            print(f"  Loading fluorescence for '{name}' from {czi_path.name}...")
+            # For multi-scene CZIs: derive scene index from panel name
+            # (e.g. "scene_3" -> scene=3). Single-scene slides return 0.
+            _scene_idx = _parse_scene_index(name)
+
+            print(
+                f"  Loading fluorescence for '{name}' from {czi_path.name}"
+                + (f" (scene {_scene_idx})" if _scene_idx else "")
+                + "..."
+            )
             try:
                 ch_arrays, pixel_size, mx, my = read_czi_thumbnail_channels(
-                    czi_path, display_channels, scale_factor=args.scale_factor
+                    czi_path,
+                    display_channels,
+                    scale_factor=args.scale_factor,
+                    scene=_scene_idx,
                 )
             except Exception as exc:
                 print(f"  WARNING: failed to load CZI for '{name}': {exc}", file=sys.stderr)

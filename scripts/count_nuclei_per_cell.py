@@ -119,6 +119,12 @@ def main():
     )
     parser.add_argument("--gpu-device", type=int, default=0, help="GPU device index (default: 0)")
     parser.add_argument(
+        "--scene",
+        type=int,
+        default=0,
+        help="CZI scene index (0-based, default 0). For multi-scene CZIs.",
+    )
+    parser.add_argument(
         "--tile-size",
         type=int,
         default=None,
@@ -135,7 +141,7 @@ def main():
         if "=" in spec_str:
             _, spec_str = spec_str.split("=", 1)
         spec_str = spec_str.strip()
-        meta = get_czi_metadata(str(args.czi_path))
+        meta = get_czi_metadata(str(args.czi_path), scene=args.scene)
         resolved = resolve_channel_indices(
             czi_metadata=meta,
             marker_specs=[spec_str],
@@ -167,7 +173,7 @@ def main():
 
     # --- Load CZI nuclear channel ---
     logger.info(f"Loading nuclear channel {nuc_ch} from CZI...")
-    loader = CZILoader(str(args.czi_path), load_to_ram=True, channel=nuc_ch)
+    loader = CZILoader(str(args.czi_path), load_to_ram=True, channel=nuc_ch, scene=args.scene)
     pixel_size_um = loader.get_pixel_size()
     x_start, y_start = loader.mosaic_origin
     nuc_data = loader.get_channel_data(nuc_ch)

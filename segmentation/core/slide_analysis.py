@@ -284,8 +284,7 @@ class SlideAnalysis:
             filtered = [
                 d
                 for d in filtered
-                if d.get(marker_key) == target
-                or d.get("features", {}).get(marker_key) == target
+                if d.get(marker_key) == target or d.get("features", {}).get(marker_key) == target
             ]
 
         logger.info("Filtered: %d -> %d detections", len(self.detections), len(filtered))

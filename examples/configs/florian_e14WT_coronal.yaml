@@ -1,0 +1,35 @@
+# Florian e14 WT coronal — PM750 + nucgreen, Cellpose 2ch cell detection
+# Channels: [0] AF488 nucgreen (nuc), [1] AF750 PM750 (cyto)
+# 10 scenes, 0.1722 µm/px
+name: florian_e14WT_coronal
+czi_path: /fs/pool/pool-mann-axioscan/01_Users/EdRo_axioscan/FlorianN/20260326_florianTest_e14WT_coronal_PM750_nucgreen-EDFvar-stitch.czi
+output_dir: /fs/pool/pool-mann-edwin/output/florian_e14WT_coronal
+cell_type: cell
+scenes: "0-9"
+scene_parallel: true
+num_gpus: 4
+all_channels: true
+channel_map:
+  cyto: PM
+  nuc: 488
+html_sample_fraction: 0.10
+spatialdata:
+  enabled: true
+  extract_shapes: true
+  run_squidpy: false
+slurm:
+  partition: p.hpcl93
+  cpus: 128
+  mem_gb: 500
+  gpus: "l40s:4"
+  time: "3-00:00:00"
+  slides_per_job: 1
+  num_jobs: 1
+downstream:
+  nuclei:
+    enabled: true
+    channel_spec: "nuc=488"
+  annotation_html:
+    enabled: true
+    display_channels: "1,0"
+    max_samples: 10000

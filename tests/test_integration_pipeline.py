@@ -118,17 +118,25 @@ def test_1_detection(output_dir):
     result = _run_script(
         "run_segmentation.py",
         [
-            "--czi-path", str(CZI_PATH),
-            "--cell-type", CELL_TYPE,
-            "--channel-spec", "cyto=PM,nuc=488",
-            "--channels", "0,1,2",
+            "--czi-path",
+            str(CZI_PATH),
+            "--cell-type",
+            CELL_TYPE,
+            "--channel-spec",
+            "cyto=PM,nuc=488",
+            "--channels",
+            "0,1,2",
             "--all-channels",
-            "--num-gpus", "1",
+            "--num-gpus",
+            "1",
             # NOTE: 0.01 = ~1-2 tiles for fast integration testing.
             # Production always uses 1.0 (see CLAUDE.md convention).
-            "--sample-fraction", "0.01",
-            "--html-sample-fraction", "1.0",
-            "--output-dir", str(output_dir),
+            "--sample-fraction",
+            "0.01",
+            "--html-sample-fraction",
+            "1.0",
+            "--output-dir",
+            str(output_dir),
         ],
         timeout=5400,  # CZI load + model init + 1% tiles — large slides need time
     )
@@ -177,8 +185,10 @@ def test_2_quality_filter(run_dir):
     _run_script(
         "scripts/quality_filter_detections.py",
         [
-            "--detections", str(det_path),
-            "--output", str(filtered_path),
+            "--detections",
+            str(det_path),
+            "--output",
+            str(filtered_path),
         ],
     )
 
@@ -196,7 +206,9 @@ def test_2_quality_filter(run_dir):
     )
     passing = [d for d in filtered if d["rf_prediction"] == 1.0]
     failing = [d for d in filtered if d["rf_prediction"] == 0.0]
-    assert len(passing) + len(failing) == len(filtered), "All detections should be tagged 0.0 or 1.0"
+    assert len(passing) + len(failing) == len(
+        filtered
+    ), "All detections should be tagged 0.0 or 1.0"
     assert len(passing) > 0, "Quality filter rejected ALL detections"
 
     # Every detection should have rf_prediction set to 0.0 or 1.0
@@ -219,10 +231,14 @@ def test_3_marker_classification(run_dir):
     _run_script(
         "scripts/classify_markers.py",
         [
-            "--detections", str(filtered_path),
-            "--marker-wavelength", "750",
-            "--marker-name", "MSLN",
-            "--czi-path", str(CZI_PATH),
+            "--detections",
+            str(filtered_path),
+            "--marker-wavelength",
+            "750",
+            "--marker-name",
+            "MSLN",
+            "--czi-path",
+            str(CZI_PATH),
         ],
     )
 
@@ -240,12 +256,11 @@ def test_3_marker_classification(run_dir):
 
     det = classified[0]
     feats = det.get("features", {})
-    assert "MSLN_class" in feats, (
-        f"Missing MSLN_class in features. Keys: {sorted(feats.keys())}"
-    )
-    assert feats["MSLN_class"] in ("positive", "negative"), (
-        f"MSLN_class should be 'positive' or 'negative', got '{feats['MSLN_class']}'"
-    )
+    assert "MSLN_class" in feats, f"Missing MSLN_class in features. Keys: {sorted(feats.keys())}"
+    assert feats["MSLN_class"] in (
+        "positive",
+        "negative",
+    ), f"MSLN_class should be 'positive' or 'negative', got '{feats['MSLN_class']}'"
     assert "marker_profile" in feats, "Missing marker_profile in features"
 
     # At least some cells should be positive and some negative
@@ -254,7 +269,11 @@ def test_3_marker_classification(run_dir):
     assert classes <= {"positive", "negative"}, f"Unexpected marker classes: {classes}"
     if len(classes) == 1:
         import warnings
-        warnings.warn(f"All detections have the same MSLN class: {classes}. Stain may be weak/strong.", stacklevel=2)
+
+        warnings.warn(
+            f"All detections have the same MSLN class: {classes}. Stain may be weak/strong.",
+            stacklevel=2,
+        )
 
 
 # -------------------------------------------------------------------------
@@ -276,9 +295,7 @@ def test_4_slide_analysis_roundtrip(run_dir):
 
     # features_df has MSLN_class column
     df = slide.features_df
-    assert "MSLN_class" in df.columns, (
-        f"MSLN_class not in features_df columns: {list(df.columns)}"
-    )
+    assert "MSLN_class" in df.columns, f"MSLN_class not in features_df columns: {list(df.columns)}"
 
     # Filter by marker — conservation check: positive + negative = total
     msln_pos = slide.filter(marker="MSLN", positive=True)
@@ -297,9 +314,9 @@ def test_4_slide_analysis_roundtrip(run_dir):
 
     # to_anndata shape matches
     adata = slide.to_anndata()
-    assert adata.n_obs == slide.n_detections, (
-        f"AnnData n_obs ({adata.n_obs}) != slide n_detections ({slide.n_detections})"
-    )
+    assert (
+        adata.n_obs == slide.n_detections
+    ), f"AnnData n_obs ({adata.n_obs}) != slide n_detections ({slide.n_detections})"
 
 
 # -------------------------------------------------------------------------
@@ -316,12 +333,18 @@ def test_5_html_generation(run_dir):
     _run_script(
         "scripts/regenerate_html.py",
         [
-            "--output-dir", str(run_dir),
-            "--czi-path", str(CZI_PATH),
-            "--detections", str(classified_path),
-            "--score-threshold", "0.5",
-            "--max-samples", "100",
-            "--html-dir", str(html_dir),
+            "--output-dir",
+            str(run_dir),
+            "--czi-path",
+            str(CZI_PATH),
+            "--detections",
+            str(classified_path),
+            "--score-threshold",
+            "0.5",
+            "--max-samples",
+            "100",
+            "--html-dir",
+            str(html_dir),
         ],
     )
 
@@ -331,8 +354,7 @@ def test_5_html_generation(run_dir):
     # Verify at least one page has real content (>1KB)
     large_pages = [f for f in html_files if f.stat().st_size > 1024]
     assert len(large_pages) >= 1, (
-        f"No HTML pages > 1KB. "
-        f"Sizes: {[(f.name, f.stat().st_size) for f in html_files]}"
+        f"No HTML pages > 1KB. " f"Sizes: {[(f.name, f.stat().st_size) for f in html_files]}"
     )
 
 
@@ -401,8 +423,7 @@ def test_7_save_load_roundtrip(run_dir, tmp_path):
 
     reloaded_dets = fast_json_load(save_path)
     assert len(reloaded_dets) == len(original_dets), (
-        f"Roundtrip changed detection count: "
-        f"{len(original_dets)} -> {len(reloaded_dets)}"
+        f"Roundtrip changed detection count: " f"{len(original_dets)} -> {len(reloaded_dets)}"
     )
 
     # Verify UIDs match
@@ -414,6 +435,6 @@ def test_7_save_load_roundtrip(run_dir, tmp_path):
     for orig, reloaded in zip(original_dets, reloaded_dets):
         orig_feats = orig.get("features", {})
         reload_feats = reloaded.get("features", {})
-        assert set(orig_feats.keys()) == set(reload_feats.keys()), (
-            f"Feature keys differ for {orig['uid']}"
-        )
+        assert set(orig_feats.keys()) == set(
+            reload_feats.keys()
+        ), f"Feature keys differ for {orig['uid']}"
