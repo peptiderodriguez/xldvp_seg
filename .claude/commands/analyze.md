@@ -878,8 +878,10 @@ adata = slide.to_anndata()
 - The annotation HTML viewer with per-channel toggles + contour overlay is THE standard visualization. Auto-generate for every run.
 
 **Code & workflow:**
+- **ALWAYS run `make format` before committing.** No exceptions.
 - Keep code generic and reusable, not one-off.
 - Don't ask permission for obvious next steps — just do them.
+- Review your own code before committing — catch missing imports, wrong keys, formatting.
 
 ## Operational Rules
 
