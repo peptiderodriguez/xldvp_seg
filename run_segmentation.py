@@ -591,7 +591,9 @@ def run_pipeline(args):
                     expected_tiles = fast_json_load(sampled_tiles_file)
                     actual_tile_count = resume_info["tile_count"]
                     expected_count = len(expected_tiles)
-                    coverage_pct = 100 * actual_tile_count / expected_count if expected_count > 0 else 0
+                    coverage_pct = (
+                        100 * actual_tile_count / expected_count if expected_count > 0 else 0
+                    )
                     logger.info(
                         f"Tile coverage: {actual_tile_count}/{expected_count} "
                         f"({coverage_pct:.1f}%)"
@@ -1687,7 +1689,9 @@ def run_pipeline(args):
     n_expected = len(sampled_tiles) if "sampled_tiles" in dir() else 0
     if n_expected > 0:
         coverage_pct = 100 * n_processed / n_expected
-        logger.info(f"Tile coverage: {n_processed}/{n_expected} tiles with detections ({coverage_pct:.1f}%)")
+        logger.info(
+            f"Tile coverage: {n_processed}/{n_expected} tiles with detections ({coverage_pct:.1f}%)"
+        )
         if n_processed < n_expected:
             # Some tiles may legitimately have 0 detections (empty tissue), but
             # a large gap (>10%) suggests a real problem
