@@ -102,6 +102,41 @@ else:
 }
 
 # ---------------------------------------------------------------------------
+# Validate YAML keys (catch typos and misplaced keys early)
+# ---------------------------------------------------------------------------
+_unknown_keys=$("$XLDVP_PYTHON" -c "
+import yaml, sys
+with open(sys.argv[1]) as f:
+    cfg = yaml.safe_load(f) or {}
+
+VALID_TOP = {
+    'name', 'czi_path', 'czi_dir', 'czi_glob', 'output_dir', 'cell_type',
+    'cellpose_input_channels', 'channel_map', 'load_channels', 'channels',
+    'all_channels', 'num_gpus', 'pixel_size_um', 'sample_fraction',
+    'html_sample_fraction', 'photobleach_correction', 'resume_dir',
+    'min_area_um', 'max_area_um', 'dedup_method', 'iou_threshold',
+    'contour_processing', 'background_correction', 'dilation_um',
+    'rdp_epsilon', 'bg_neighbors', 'correct_all_channels',
+    'markers', 'slurm', 'sharding', 'downstream', 'scenes', 'scene_parallel',
+    'spatial_network', 'spatial_viewer', 'spatialdata',
+}
+unknown = [k for k in cfg if k not in VALID_TOP]
+if unknown:
+    print(' '.join(unknown))
+" "$CONFIG")
+
+if [ -n "$_unknown_keys" ]; then
+    echo "ERROR: Unknown YAML keys in config: $_unknown_keys" >&2
+    echo "  Valid top-level keys: name, czi_path, czi_dir, output_dir, cell_type," >&2
+    echo "    channel_map, markers, slurm, sharding, downstream, spatialdata, ..." >&2
+    echo "  Common mistakes:" >&2
+    echo "    - 'num_shards' should be under 'sharding:' (sharding.num_shards)" >&2
+    echo "    - 'partition/cpus/gpus' should be under 'slurm:'" >&2
+    echo "    - 'quality_filter/nuclei/html' should be under 'downstream:'" >&2
+    exit 1
+fi
+
+# ---------------------------------------------------------------------------
 # Read config values
 # ---------------------------------------------------------------------------
 NAME=$(read_yaml name pipeline)
