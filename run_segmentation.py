@@ -584,6 +584,25 @@ def run_pipeline(args):
                 # Save checkpoint (atomic to prevent corruption on SLURM timeout)
                 atomic_json_dump(all_detections, merged_det_file)
                 logger.info(f"Checkpoint saved: {merged_det_file.name}")
+
+                # Verify tile coverage: compare processed tiles vs expected tissue tiles
+                sampled_tiles_file = slide_output_dir / "sampled_tiles.json"
+                if sampled_tiles_file.exists():
+                    expected_tiles = fast_json_load(sampled_tiles_file)
+                    actual_tile_count = resume_info["tile_count"]
+                    expected_count = len(expected_tiles)
+                    coverage_pct = 100 * actual_tile_count / expected_count if expected_count > 0 else 0
+                    logger.info(
+                        f"Tile coverage: {actual_tile_count}/{expected_count} "
+                        f"({coverage_pct:.1f}%)"
+                    )
+                    if actual_tile_count < expected_count:
+                        missing = expected_count - actual_tile_count
+                        logger.warning(
+                            f"INCOMPLETE COVERAGE: {missing} tissue tiles have no detections. "
+                            f"This may indicate shard failures or tissue detection inconsistency. "
+                            f"Expected {expected_count} tiles, found {actual_tile_count}."
+                        )
             else:
                 logger.error("No tile dirs found -- nothing to merge")
                 return
@@ -1655,6 +1674,34 @@ def run_pipeline(args):
     # Cleanup is deferred to after _finish_pipeline().
 
     logger.info(f"Total detections (pre-dedup): {len(all_detections)}")
+
+    # ---- Tile coverage verification ----
+    # After ALL detection paths (single-node, multi-GPU, shard merge), verify
+    # that every tissue tile was processed. Catches shard gaps, tile skips, crashes.
+    tiles_processed = set()
+    for det in all_detections:
+        to = det.get("tile_origin")
+        if to:
+            tiles_processed.add(tuple(to))
+    n_processed = len(tiles_processed)
+    n_expected = len(sampled_tiles) if "sampled_tiles" in dir() else 0
+    if n_expected > 0:
+        coverage_pct = 100 * n_processed / n_expected
+        logger.info(f"Tile coverage: {n_processed}/{n_expected} tiles with detections ({coverage_pct:.1f}%)")
+        if n_processed < n_expected:
+            # Some tiles may legitimately have 0 detections (empty tissue), but
+            # a large gap (>10%) suggests a real problem
+            gap_pct = 100 * (n_expected - n_processed) / n_expected
+            if gap_pct > 10:
+                logger.warning(
+                    f"LOW COVERAGE: {n_expected - n_processed} tissue tiles ({gap_pct:.1f}%) "
+                    f"produced no detections. This may indicate detection issues."
+                )
+            elif gap_pct > 0:
+                logger.info(
+                    f"Note: {n_expected - n_processed} tissue tiles had no detections "
+                    f"(normal for sparse tissue regions)"
+                )
 
     # Cross-tile vessel merge: reconstruct partial vessels from all workers and merge
     if args.cell_type == "vessel" and not is_multiscale and collected_partial_vessels:
