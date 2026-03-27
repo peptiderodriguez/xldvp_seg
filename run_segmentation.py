@@ -177,7 +177,7 @@ def run_pipeline(args):
                 "creates its own directory with independently-ordered tiles, causing "
                 "gaps in coverage. Aborting."
             )
-            sys.exit(1)
+            raise SystemExit(1)
         logger.info(f"Tile shard: {shard_idx}/{shard_total} (detection-only)")
     elif getattr(args, "detection_only", False):
         logger.info("Detection-only mode (skipping dedup/HTML/CSV)")
