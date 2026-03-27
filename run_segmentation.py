@@ -170,6 +170,14 @@ def run_pipeline(args):
         )
     if getattr(args, "tile_shard", None):
         shard_idx, shard_total = args.tile_shard
+        if not getattr(args, "resume", None):
+            logger.error(
+                "--tile-shard REQUIRES --resume <shared-dir> so all shards write to "
+                "the same location and share the tile list. Without --resume, each shard "
+                "creates its own directory with independently-ordered tiles, causing "
+                "gaps in coverage. Aborting."
+            )
+            sys.exit(1)
         logger.info(f"Tile shard: {shard_idx}/{shard_total} (detection-only)")
     elif getattr(args, "detection_only", False):
         logger.info("Detection-only mode (skipping dedup/HTML/CSV)")
