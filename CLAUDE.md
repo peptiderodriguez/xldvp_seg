@@ -14,7 +14,7 @@ These behaviors apply throughout every Claude Code session on this project:
 
 **Code hygiene:**
 - **ALWAYS run `make format` before committing.** No exceptions. Black formatting differences between Python versions have caused repeated CI failures.
-- After completing any significant code change (new feature, bug fix, refactor), review what you wrote before moving on. Catch your own mistakes.
+- After completing any significant code change (new feature, bug fix, refactor), review what you wrote before moving on: check for bugs/errors, missing imports, wrong dict keys, computational inefficiencies, code duplications, missing tests, and poor/stale documentation. Catch your own mistakes — don't rely on review agents to find basic issues like `sys.exit` without `import sys`.
 - After modifying pipeline code, check if CLAUDE.md, the relevant docs/*.md, or slash commands need updating. Keep documentation in sync with code — don't let them drift.
 - When you fix a bug, check if the same pattern exists elsewhere in the codebase. Fix all instances, not just the one the user pointed out.
 

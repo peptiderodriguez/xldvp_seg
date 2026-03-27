@@ -881,7 +881,7 @@ adata = slide.to_anndata()
 - **ALWAYS run `make format` before committing.** No exceptions.
 - Keep code generic and reusable, not one-off.
 - Don't ask permission for obvious next steps — just do them.
-- Review your own code before committing — catch missing imports, wrong keys, formatting.
+- Review your own code before committing — check for bugs/errors, missing imports, wrong dict keys, computational inefficiencies, code duplications, missing tests, poor documentation. Don't rely on review agents for basic issues.
 
 ## Operational Rules
 
