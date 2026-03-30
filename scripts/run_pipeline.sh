@@ -867,6 +867,15 @@ if [[ "$MULTI_SLIDE" == "true" || "$MULTI_SCENE" == "true" ]]; then
             exit 1
         fi
     done
+    # Warn about inline markers/spatial not yet in multi-scene detection sbatch
+    if [[ -n "$MARKER_CHANNELS" && "$MULTI_SCENE" == "true" ]]; then
+        echo "WARNING: Inline marker classification is not yet supported in multi-scene detection jobs." >&2
+        echo "Run classify_markers.py manually per scene after detection completes." >&2
+    fi
+    if [[ "$SPATIAL_ENABLED" == "true" && "$MULTI_SCENE" == "true" ]]; then
+        echo "WARNING: Inline spatial analysis is not yet supported in multi-scene detection jobs." >&2
+        echo "Run spatial_cell_analysis.py manually per scene after detection completes." >&2
+    fi
 fi
 
 if [[ "$NUM_SHARDS" -gt 1 && "$MULTI_SLIDE" == "false" ]]; then

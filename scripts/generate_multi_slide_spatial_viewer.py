@@ -95,7 +95,7 @@ def read_czi_thumbnail_channels(czi_path, display_channels, scale_factor=0.0625,
     try:
         from segmentation.io.czi_loader import CZILoader
 
-        loader = CZILoader(str(czi_path))
+        loader = CZILoader(str(czi_path), scene=scene)
         pixel_size_um = loader.get_pixel_size()
     except Exception:
         pass
@@ -745,7 +745,10 @@ def load_slide_data(
 def _collect_contour(det, contours_raw, score_threshold):
     """Extract contour from a detection dict and append to contours_raw.
 
-    Only collects detections that have outer_contour_global and pixel_size_um.
+    Supports three contour sources (tried in order):
+      1. contour_dilated_um — already in um coordinates (pixel_size=1.0)
+      2. outer_contour_global — pixel coords, requires pixel_size_um
+      3. contour_dilated_px — pixel coords, requires pixel_size_um
     If score_threshold is set, filters by features['score'] >= threshold.
     """
     feat = det.get("features", {})
@@ -756,15 +759,22 @@ def _collect_contour(det, contours_raw, score_threshold):
         if score is not None and float(score) < score_threshold:
             return
 
+    # Try um contours first (already in coordinate space), then px contours
+    contour_um = det.get("contour_dilated_um")
+    if contour_um is not None and len(contour_um) >= 3:
+        # um contours don't need pixel_size conversion — use 1.0 as identity
+        contours_raw.append((contour_um, 1.0))
+        return
+
     contour = det.get("outer_contour_global")
     if contour is None:
         contour = feat.get("outer_contour_global")
     if contour is None:
-        contour = det.get("contour_dilated_px")  # split_regions output
+        contour = det.get("contour_dilated_px")  # split_regions / pipeline output
     if contour is None or len(contour) < 3:
         return
 
-    pixel_size = feat.get("pixel_size_um")
+    pixel_size = det.get("pixel_size_um") or feat.get("pixel_size_um")
     if pixel_size is None or not isinstance(pixel_size, (int, float)):
         return
 
@@ -936,7 +946,7 @@ def safe_json(obj):
 
 
 def build_contour_js_data(contours_raw, max_contours=100_000):
-    """Convert raw pixel-coordinate contours to compact um-coordinate JS objects.
+    """Convert raw contours (pixel or um coordinates) to compact um-coordinate JS objects.
 
     Each contour becomes:
       { pts: Float32Array([x0,y0,x1,y1,...]), bx1, by1, bx2, by2 }
@@ -3582,6 +3592,11 @@ def main():
         help="Field in features dict to color cells by "
         "(e.g. tdTomato_class, MSLN_class, marker_profile)",
     )
+    parser.add_argument(
+        "--group-label-prefix",
+        default=None,
+        help='Prefix for legend labels (e.g. "nuclei" turns "2" into "nuclei: 2")',
+    )
     parser.add_argument("--title", default="Multi-Slide Spatial Overview", help="HTML page title")
     parser.add_argument(
         "--output", default=None, help="Output HTML path (default: {input-dir}/spatial_viewer.html)"
@@ -3640,6 +3655,12 @@ def main():
         default=0.0625,
         help="CZI downsample factor for background image (default: 1/16)",
     )
+    parser.add_argument(
+        "--scene",
+        type=int,
+        default=None,
+        help="CZI scene index for single-scene viewing (auto-creates scene_N directory structure)",
+    )
     # Detection contours (on by default)
     parser.add_argument(
         "--no-contours",
@@ -3676,8 +3697,13 @@ def main():
         else:
             args.output = "spatial_viewer.html"
 
-    # Discover or use explicit files
-    if args.input_dir:
+    # --scene shortcut: wrap a single detection file as scene_N for correct
+    # CZI scene loading (no manual symlink setup needed)
+    if args.scene is not None and args.detections:
+        scene_name = f"scene_{args.scene}"
+        slide_files = [(scene_name, Path(args.detections[0]))]
+        print(f"Single-scene mode: {scene_name} from {args.detections[0]}")
+    elif args.input_dir:
         slide_files = discover_slides(args.input_dir, args.detection_glob)
         if not slide_files:
             print(
@@ -3718,6 +3744,13 @@ def main():
     if not slides_data:
         print("Error: no valid slide data loaded", file=sys.stderr)
         sys.exit(1)
+
+    # Apply group label prefix (e.g. "nuclei" turns "2" into "nuclei: 2")
+    if args.group_label_prefix:
+        pfx = args.group_label_prefix
+        for _, data in slides_data:
+            for g in data["groups"]:
+                g["label"] = f"{pfx}: {g['label']}"
 
     # Apply top-N filtering and exclusions
     exclude_groups = set()

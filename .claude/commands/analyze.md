@@ -120,6 +120,7 @@ For beginners, expand on each step as you reach it. For advanced users, just ask
 | **Region splitting** | Post-process existing pipeline detections → watershed split large regions | `scripts/split_regions_for_lmd.py` |
 | **Replicate sampling** | Area-matched or spatially-clustered replicates, marker/cluster stratification, 384-well assignment | `scripts/paper_figure_sampling.py` |
 | **Transect selection** | Select cells along zonation transect paths for LMD | `scripts/select_transect_cells_for_lmd.py` |
+| **Sliding window** | Area-matched rolling window sampling along ROI centerlines. Grid search for zero-rejection combos. Morphological skeleton + farthest-point spatial balancing. Ref settings: ~6700 cells/mm² brain → r=70um/40% overlap for 20× target, r=90um/40% for 30×. Always use `--czi-path`. | `scripts/sliding_window_sampling.py` |
 | **LMD** | Contour dilation+RDP, clustering, well assignment, XML export | `run_lmd_export.py` |
 | **SpatialData** | Export to scverse ecosystem (squidpy, scanpy, anndata) | `scripts/convert_to_spatialdata.py` |
 | **Convert** | CZI to OME-Zarr pyramids for Napari | `scripts/czi_to_ome_zarr.py` |

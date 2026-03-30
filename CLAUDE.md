@@ -371,7 +371,7 @@ Beyond the core detect → classify → LMD workflow, the pipeline supports:
 | **Segmentation metrics** | `segmentation/metrics/` | IoU, Dice, Panoptic Quality, Hungarian matching — for benchmarking segmenters and dedup strategies |
 | **Sample dataset** | `segmentation/datasets/` | `sample()` generates synthetic detections (500 cells, 5 clusters, 295 features) for testing |
 | **Spatial network** | `scripts/spatial_cell_analysis.py` | Delaunay graphs, connected components, community detection, neighborhoods |
-| **Interactive spatial viewer** | `scripts/generate_multi_slide_spatial_viewer.py` | KDE density contours, graph-pattern regions (linear/arc/ring/cluster), DBSCAN + convex hulls, ROI drawing + stats |
+| **Interactive spatial viewer** | `scripts/generate_multi_slide_spatial_viewer.py` | Fluorescence background + cell contours + ROI drawing. `--scene N` for multi-scene CZIs, `--czi-path` for background, `--group-label-prefix` for legend labels |
 | **Vessel community analysis** | `scripts/vessel_community_analysis.py` | Multi-scale vessel structure detection (connected components + morphology + SNR) |
 | **SpatialData / scverse** | `scripts/convert_to_spatialdata.py` | Export to zarr for squidpy (spatial stats), scanpy (dim reduction), anndata |
 | **One-command viz** | `scripts/view_slide.py` | Classify → spatial cluster → interactive viewer → serve (all in one) |
@@ -382,6 +382,7 @@ Beyond the core detect → classify → LMD workflow, the pipeline supports:
 | **Region splitting** | `scripts/split_regions_for_lmd.py` | Post-process pipeline detections → watershed split large regions |
 | **Replicate sampling** | `scripts/paper_figure_sampling.py` | Area-matched or spatially-clustered replicate building, 384-well assignment |
 | **Transect selection** | `scripts/select_transect_cells_for_lmd.py` | Select cells along zonation transect paths for LMD export |
+| **Sliding window** | `scripts/sliding_window_sampling.py` | Area-matched rolling window along ROI centerlines for LMD. `--grid-search` finds zero-rejection combos. Ref: brain ~6700 cells/mm² → r=70um/40%ov for 20×, r=90um/40%ov for 30×. Always `--czi-path`. |
 | **Distance bins** | `examples/liver/assign_distance_bins.py` | Concentric rings around vascular landmarks, distance features, spatial model comparison |
 | **LMD clustering** | `scripts/cluster_detections.py` | Two-stage biological clustering for well assignment |
 
@@ -635,6 +636,7 @@ python run_segmentation.py --czi-path slide.czi --cell-type nmj \
 | `scripts/split_regions_for_lmd.py` | Watershed split large regions |
 | `scripts/paper_figure_sampling.py` | Replicate sampling with 384-well assignment |
 | `scripts/select_transect_cells_for_lmd.py` | Select zonation transect cells for LMD |
+| `scripts/sliding_window_sampling.py` | Area-matched sliding window sampling along ROI centerlines |
 | `scripts/cluster_detections.py` | Biological clustering for LMD wells |
 | `scripts/generate_tissue_overlay.py` | Fluorescence image + cell overlay + ROI viewer |
 | `scripts/lmd_export_replicates.py` | Replicate-based LMD XML export |
