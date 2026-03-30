@@ -239,21 +239,17 @@ DS_CLUSTERING_RESOLUTION=$(read_yaml downstream.clustering.resolution "0.1")
 PARTITION=$(read_yaml slurm.partition p.hpcl8)
 CPUS=$(read_yaml slurm.cpus 24)
 MEM_GB=$(read_yaml slurm.mem_gb 350)
-# GPUS: the gres suffix (e.g. "l40s:4" or "rtx5000:2").  On GPU partitions we
-# always request all 4 GPUs so SLURM doesn't place us on a non-GPU node.
-# The Python code's --num-gpus controls how many GPUs it actually uses.
-GPUS=$(read_yaml slurm.gpus "rtx5000:2")
-# Ensure GPU gres always requests all 4 GPUs: replace a trailing :N with :4
-# (keeps the GPU type, e.g. "l40s:4" instead of "l40s:2")
-if [[ "$GPUS" =~ ^[a-zA-Z0-9_]+:[0-9]+$ ]]; then
-    GPU_TYPE="${GPUS%:*}"
-    GPUS="${GPU_TYPE}:4"
-elif [[ "$GPUS" =~ ^[0-9]+$ ]]; then
-    GPUS="4"
+# GPU gres: use exactly what the YAML specifies (e.g. "l40s:4" or "rtx5000:2").
+# Default depends on partition: p.hpcl93 has 4x L40S, p.hpcl8 has 2x RTX 5000.
+_default_gpus="l40s:4"
+if [[ "$PARTITION" == "p.hpcl8" ]]; then _default_gpus="rtx5000:2"; fi
+GPUS=$(read_yaml slurm.gpus "$_default_gpus")
+# Extract GPU type for merge job gres (needs type:count format)
+GPU_TYPE=""
+if [[ "$GPUS" =~ ^([a-zA-Z0-9_]+):([0-9]+)$ ]]; then
+    GPU_TYPE="${BASH_REMATCH[1]}"
 fi
 TIME=$(read_yaml slurm.time "3-00:00:00")
-SLIDES_PER_JOB=$(read_yaml slurm.slides_per_job 1)
-NUM_JOBS=$(read_yaml slurm.num_jobs 1)
 
 # Markers (parsed as JSON list, supports both 'channel' and 'wavelength' keys)
 MARKERS_JSON=$("$XLDVP_PYTHON" -c "
@@ -313,11 +309,10 @@ fi
 # Build run_segmentation.py command flags
 # ---------------------------------------------------------------------------
 build_seg_cmd() {
-    # Usage: build_seg_cmd CZI_PATH OUTPUT_DIR [SCENE_VAR]
-    # SCENE_VAR: if provided, adds --scene with this value (literal or shell var)
+    # Usage: build_seg_cmd CZI_PATH OUTPUT_DIR
+    # Scene is handled by the generic body (appended at runtime if non-empty)
     local czi_arg="$1"
     local out_arg="$2"
-    local scene_arg="${3:-}"
     local cmd="$XLDVP_PYTHON $REPO/run_segmentation.py"
     cmd+=" --czi-path \"$czi_arg\""
     cmd+=" --cell-type \"$CELL_TYPE\""
@@ -379,9 +374,6 @@ build_seg_cmd() {
     fi
     if [[ -n "$IOU_THRESHOLD" ]]; then
         cmd+=" --iou-threshold $IOU_THRESHOLD"
-    fi
-    if [[ -n "$scene_arg" ]]; then
-        cmd+=" --scene $scene_arg"
     fi
     echo "$cmd"
 }
@@ -448,24 +440,81 @@ if [[ -n "$MARKERS_JSON" && "$MARKERS_JSON" != "[]" ]]; then
 fi
 
 # ---------------------------------------------------------------------------
-# Pre-compute slide list (once, shared by SBATCH header + body + downstream)
+# Pre-compute work items: (czi_path, output_dir, scene)
+# Every mode is just a different enumeration of these tuples.
+# Single-slide/single-scene is one work item — the universal base case.
 # ---------------------------------------------------------------------------
 _GEN_SLIDES=()
-_N_SLIDES=0
 if [[ "$MULTI_SLIDE" == "true" ]]; then
     mapfile -t _GEN_SLIDES < <(find "$CZI_DIR" -maxdepth 1 -name "$CZI_GLOB" -type f | sort)
-    _N_SLIDES=${#_GEN_SLIDES[@]}
+fi
+
+_WORK_CZI=()
+_WORK_OUT=()
+_WORK_SCENE=()
+
+# Build scene list (empty string means no scene)
+_SCENE_LIST=("")
+if [[ "$MULTI_SCENE" == "true" ]]; then
+    _SCENE_LIST=()
+    for (( _s=SCENE_START; _s<=SCENE_END; _s++ )); do
+        _SCENE_LIST+=("$_s")
+    done
+fi
+
+# Build slide list (single-slide: just CZI_PATH)
+_SLIDE_LIST=()
+_SLIDE_NAMES=()
+if [[ "$MULTI_SLIDE" == "true" ]]; then
+    _SLIDE_LIST=("${_GEN_SLIDES[@]}")
+    for _s in "${_GEN_SLIDES[@]}"; do
+        _SLIDE_NAMES+=("$(basename "$_s" .czi)")
+    done
+else
+    _SLIDE_LIST=("$CZI_PATH")
+    _SLIDE_NAMES+=("")  # no subdirectory for single-slide
+fi
+
+# Cross product: slides × scenes
+for (( _si=0; _si<${#_SLIDE_LIST[@]}; _si++ )); do
+    _czi="${_SLIDE_LIST[$_si]}"
+    _sname="${_SLIDE_NAMES[$_si]}"
+    for _sc in "${_SCENE_LIST[@]}"; do
+        _WORK_CZI+=("$_czi")
+        # Output directory: slide_name/scene_K, slide_name, scene_K, or flat
+        _out="$OUTPUT_DIR"
+        if [[ -n "$_sname" ]]; then _out+="/$_sname"; fi
+        if [[ -n "$_sc" ]]; then _out+="/scene_${_sc}"; fi
+        _WORK_OUT+=("$_out")
+        _WORK_SCENE+=("$_sc")
+    done
+done
+
+_N_WORK=${#_WORK_CZI[@]}
+if [[ $_N_WORK -eq 0 ]]; then
+    echo "Error: no work items generated (no CZI files match glob?)" >&2
+    exit 1
+fi
+
+# Determine if work items run in parallel (array) or sequential (loop)
+USE_ARRAY=true
+if [[ "$MULTI_SCENE" == "true" && "$SCENE_PARALLEL" == "false" && "$MULTI_SLIDE" == "false" ]]; then
+    USE_ARRAY=false
+fi
+# Single work item never needs an array
+if [[ $_N_WORK -eq 1 ]]; then
+    USE_ARRAY=false
 fi
 
 # ---------------------------------------------------------------------------
 # Helper: emit post-detection steps (markers, spatial, spatialdata)
-# Usage: _emit_post_detection INDENT CZI_EXPR
-#   INDENT: e.g. "    " or "        " for loop nesting
-#   CZI_EXPR: CZI path expression (e.g. "$CZI_PATH" or "\$CZI_FILE")
+# Usage: _emit_post_detection INDENT CZI_VAR
+#   INDENT: indentation string
+#   CZI_VAR: CZI path expression in the generated script (e.g. "\$CZI_FILE")
 # ---------------------------------------------------------------------------
 _emit_post_detection() {
-    local I="$1"   # indent
-    local CZI="$2" # CZI path expression for markers
+    local I="$1"
+    local CZI="$2"
 
     if [[ -n "$MARKER_CHANNELS" ]]; then
         local classify_extra=""
@@ -478,22 +527,17 @@ _emit_post_detection() {
         else
             echo "${I}\$XLDVP_PYTHON $REPO/scripts/classify_markers.py --detections \"\$DET_JSON\" --marker-channel \"$MARKER_CHANNELS\" --marker-name \"$MARKER_NAMES\" --method \"$MARKER_METHOD\" --output-dir \"\$RUN_DIR\"${classify_extra}"
         fi
-        echo "${I}# Discover classified output (may be _filtered_classified or _classified)"
         echo "${I}for _cf in \"\${RUN_DIR}${CELL_TYPE}_detections_filtered_classified.json\" \"\${RUN_DIR}${CELL_TYPE}_detections_classified.json\"; do"
         echo "${I}    if [[ -f \"\$_cf\" ]]; then DET_JSON=\"\$_cf\"; break; fi"
         echo "${I}done"
     fi
 
     if [[ "$SPATIAL_ENABLED" == "true" ]]; then
-        echo ""
-        echo "${I}# Spatial analysis"
         echo "${I}echo \"  Running spatial analysis...\""
         echo "${I}\$XLDVP_PYTHON $REPO/scripts/spatial_cell_analysis.py --detections \"\$DET_JSON\" --output-dir \"\$RUN_DIR\" --spatial-network --marker-filter \"$SPATIAL_FILTER\" --max-edge-distance \"$SPATIAL_EDGE\" --min-component-cells \"$SPATIAL_MIN_COMP\" --pixel-size \"$PIXEL_SIZE\""
     fi
 
     if [[ "$SPATIALDATA_ENABLED" == "true" ]]; then
-        echo ""
-        echo "${I}# SpatialData export"
         echo "${I}echo \"  Exporting to SpatialData...\""
         local sd_cmd="${I}\$XLDVP_PYTHON $REPO/scripts/convert_to_spatialdata.py --detections \"\$DET_JSON\" --output \"\${RUN_DIR}${CELL_TYPE}_spatialdata.zarr\" --cell-type \"$CELL_TYPE\" --overwrite"
         if [[ "$SPATIALDATA_SHAPES" == "true" ]]; then
@@ -512,7 +556,39 @@ _emit_post_detection() {
 }
 
 # ---------------------------------------------------------------------------
-# Write sbatch script
+# Helper: bake work item arrays into a generated sbatch script
+# ---------------------------------------------------------------------------
+_emit_work_arrays() {
+    echo "# Work items: ${_N_WORK} total (czi_path, output_dir, scene)"
+    echo "ALL_CZI=("
+    for _c in "${_WORK_CZI[@]}"; do echo "    \"$_c\""; done
+    echo ")"
+    echo "ALL_OUT=("
+    for _o in "${_WORK_OUT[@]}"; do echo "    \"$_o\""; done
+    echo ")"
+    echo "ALL_SCENE=("
+    for _s in "${_WORK_SCENE[@]}"; do echo "    \"$_s\""; done
+    echo ")"
+    echo "N_WORK=${_N_WORK}"
+    echo ""
+
+    # Resume paths (associative array keyed by slide name)
+    echo "declare -A RESUME_PATHS"
+    if [[ -n "$RESUME_DIR" ]]; then
+        if [[ "$MULTI_SLIDE" == "true" ]]; then
+            for _s in "${_GEN_SLIDES[@]}"; do
+                echo "RESUME_PATHS[$(basename "$_s" .czi)]=\"$RESUME_DIR\""
+            done
+        else
+            # Single-slide: key by CZI basename
+            echo "RESUME_PATHS[$(basename "$CZI_PATH" .czi)]=\"$RESUME_DIR\""
+        fi
+    fi
+    echo ""
+}
+
+# ---------------------------------------------------------------------------
+# Write sbatch script — ONE generic body for all modes
 # ---------------------------------------------------------------------------
 mkdir -p "$OUTPUT_DIR"
 SBATCH_FILE="${OUTPUT_DIR}/pipeline_${NAME}_$$.sbatch"
@@ -526,21 +602,10 @@ SBATCH_FILE="${OUTPUT_DIR}/pipeline_${NAME}_$$.sbatch"
     echo "#SBATCH --mem=${MEM_GB}G"
     echo "#SBATCH --gres=gpu:${GPUS}"
     echo "#SBATCH --time=${TIME}"
-    if [[ "$MULTI_SLIDE" == "true" && "$MULTI_SCENE" == "true" && "$SCENE_PARALLEL" == "true" ]]; then
-        # Flat array: one task per (slide, scene) pair
-        _N_SCENES=$(( SCENE_END - SCENE_START + 1 ))
-        _FLAT_TOTAL=$(( _N_SLIDES * _N_SCENES ))
+    if [[ "$USE_ARRAY" == "true" ]]; then
         echo "#SBATCH --output=${OUTPUT_DIR}/slurm_${NAME}_%A_%a.out"
         echo "#SBATCH --error=${OUTPUT_DIR}/slurm_${NAME}_%A_%a.err"
-        echo "#SBATCH --array=0-$((_FLAT_TOTAL - 1))"
-    elif [[ "$MULTI_SLIDE" == "true" ]]; then
-        echo "#SBATCH --output=${OUTPUT_DIR}/slurm_${NAME}_%A_%a.out"
-        echo "#SBATCH --error=${OUTPUT_DIR}/slurm_${NAME}_%A_%a.err"
-        echo "#SBATCH --array=0-$((NUM_JOBS - 1))"
-    elif [[ "$MULTI_SCENE" == "true" && "$SCENE_PARALLEL" == "true" ]]; then
-        echo "#SBATCH --output=${OUTPUT_DIR}/slurm_${NAME}_scene%a_%j.out"
-        echo "#SBATCH --error=${OUTPUT_DIR}/slurm_${NAME}_scene%a_%j.err"
-        echo "#SBATCH --array=${SCENE_START}-${SCENE_END}"
+        echo "#SBATCH --array=0-$((_N_WORK - 1))"
     else
         echo "#SBATCH --output=${OUTPUT_DIR}/slurm_${NAME}_%j.out"
         echo "#SBATCH --error=${OUTPUT_DIR}/slurm_${NAME}_%j.err"
@@ -548,200 +613,61 @@ SBATCH_FILE="${OUTPUT_DIR}/pipeline_${NAME}_$$.sbatch"
 
     echo ""
     echo "set -euo pipefail"
-    echo ""
     echo "export PYTHONPATH=\"$REPO\""
     echo "XLDVP_PYTHON=\"$XLDVP_PYTHON\""
     echo ""
 
-    if [[ "$MULTI_SLIDE" == "true" ]]; then
-        # Bake slide list into sbatch as a fixed array (no runtime glob)
-        echo "ALL_SLIDES=("
-        for _s in "${_GEN_SLIDES[@]}"; do
-            echo "    \"$_s\""
-        done
-        echo ")"
-        echo "TOTAL_SLIDES=${_N_SLIDES}"
-        echo ""
+    # Bake work items into sbatch
+    _emit_work_arrays
 
-        # Resume paths: only if explicitly set in YAML (no auto-discovery)
-        echo "# Resume paths (only set if resume_dir explicitly configured in YAML)"
-        echo "declare -A RESUME_PATHS"
-        if [[ -n "$RESUME_DIR" ]]; then
-            for _s in "${_GEN_SLIDES[@]}"; do
-                _sname=$(basename "$_s" .czi)
-                echo "RESUME_PATHS[$_sname]=\"$RESUME_DIR\""
-            done
-        fi
-        echo ""
-
-        echo "if [[ \$TOTAL_SLIDES -eq 0 ]]; then"
-        echo "    echo \"Error: no slides found\""
-        echo "    exit 1"
-        echo "fi"
-        echo ""
-
-        # Multi-slide + multi-scene parallel: flat array over (slide, scene) pairs
-        if [[ "$MULTI_SCENE" == "true" && "$SCENE_PARALLEL" == "true" ]]; then
-            _N_SCENES=$(( SCENE_END - SCENE_START + 1 ))
-            echo "N_SCENES=${_N_SCENES}"
-            echo "SCENE_START=${SCENE_START}"
-            echo "SLIDE_IDX=\$(( SLURM_ARRAY_TASK_ID / N_SCENES ))"
-            echo "SCENE=\$(( SLURM_ARRAY_TASK_ID % N_SCENES + SCENE_START ))"
-            echo "CZI_FILE=\"\${ALL_SLIDES[\$SLIDE_IDX]}\""
-            echo "SLIDE_NAME=\$(basename \"\$CZI_FILE\" .czi)"
-            echo "SLIDE_OUT=\"${OUTPUT_DIR}/\${SLIDE_NAME}/scene_\${SCENE}\""
-            echo "mkdir -p \"\$SLIDE_OUT\""
-            echo "echo \"=== Slide \$SLIDE_IDX scene \$SCENE: \$CZI_FILE ===\""
-            echo ""
-            echo "RESUME_FLAG=\"\""
-            echo "if [[ -n \"\${RESUME_PATHS[\$SLIDE_NAME]:-}\" ]]; then RESUME_FLAG=\"--resume \${RESUME_PATHS[\$SLIDE_NAME]}\"; fi"
-            echo "$(build_seg_cmd '${CZI_FILE}' '${SLIDE_OUT}' '${SCENE}') \$RESUME_FLAG"
-            echo ""
-            echo "# Step 2: Find detection JSON"
-            echo "RUN_DIR=\$(ls -td \"\${SLIDE_OUT}\"/*/  2>/dev/null | head -1)"
-            echo "DET_JSON=\"\${RUN_DIR}${CELL_TYPE}_detections.json\""
-            echo "if [[ -n \"\$RUN_DIR\" && -f \"\$DET_JSON\" ]]; then"
-            _emit_post_detection "    " "\$CZI_FILE"
-            echo "else"
-            echo "    echo \"WARNING: ${CELL_TYPE}_detections.json not found for slide \${SLIDE_NAME} scene \${SCENE}\""
-            echo "fi"
-
-        # Multi-slide + multi-scene sequential: scene loop inside each slide task
-        elif [[ "$MULTI_SCENE" == "true" && "$SCENE_PARALLEL" == "false" ]]; then
-            echo "# Compute slide range for this array task"
-            echo "START=\$(( SLURM_ARRAY_TASK_ID * $SLIDES_PER_JOB ))"
-            echo "END=\$(( START + $SLIDES_PER_JOB ))"
-            echo "if [[ \$END -gt \$TOTAL_SLIDES ]]; then END=\$TOTAL_SLIDES; fi"
-            echo ""
-            echo "for (( i=START; i<END; i++ )); do"
-            echo "    CZI_FILE=\"\${ALL_SLIDES[\$i]}\""
-            echo "    SLIDE_NAME=\$(basename \"\$CZI_FILE\" .czi)"
-            echo "    echo \"=== Processing slide \$((i+1))/\$TOTAL_SLIDES: \$CZI_FILE ===\""
-            echo "    for SCENE in \$(seq ${SCENE_START} ${SCENE_END}); do"
-            echo "        SLIDE_OUT=\"${OUTPUT_DIR}/\${SLIDE_NAME}/scene_\${SCENE}\""
-            echo "        mkdir -p \"\$SLIDE_OUT\""
-            echo "        echo \"  Scene \${SCENE}\""
-            echo "        RESUME_FLAG=\"\""
-            echo "        if [[ -n \"\${RESUME_PATHS[\$SLIDE_NAME]:-}\" ]]; then RESUME_FLAG=\"--resume \${RESUME_PATHS[\$SLIDE_NAME]}\"; fi"
-            echo "        $(build_seg_cmd '${CZI_FILE}' '${SLIDE_OUT}' '${SCENE}') \$RESUME_FLAG"
-            echo ""
-            echo "        # Step 2: Find detection JSON"
-            echo "        RUN_DIR=\$(ls -td \"\${SLIDE_OUT}\"/*/  2>/dev/null | head -1)"
-            echo "        DET_JSON=\"\${RUN_DIR}${CELL_TYPE}_detections.json\""
-            echo "        if [[ -n \"\$RUN_DIR\" && -f \"\$DET_JSON\" ]]; then"
-            _emit_post_detection "            " "\$CZI_FILE"
-            echo "        else"
-            echo "            echo \"WARNING: ${CELL_TYPE}_detections.json not found for slide \${SLIDE_NAME} scene \${SCENE}\""
-            echo "        fi"
-            echo "    done"
-            echo "done"
-
-        # Multi-slide only (no scenes — existing behavior)
-        else
-            echo "# Compute slide range for this array task"
-            echo "START=\$(( SLURM_ARRAY_TASK_ID * $SLIDES_PER_JOB ))"
-            echo "END=\$(( START + $SLIDES_PER_JOB ))"
-            echo "if [[ \$END -gt \$TOTAL_SLIDES ]]; then END=\$TOTAL_SLIDES; fi"
-            echo ""
-            echo "echo \"Task \$SLURM_ARRAY_TASK_ID: processing slides \$START..\$((END-1)) of \$TOTAL_SLIDES\""
-            echo ""
-            echo "for (( i=START; i<END; i++ )); do"
-            echo "    CZI_FILE=\"\${ALL_SLIDES[\$i]}\""
-            echo "    SLIDE_NAME=\$(basename \"\$CZI_FILE\" .czi)"
-            echo "    SLIDE_OUT=\"${OUTPUT_DIR}/\${SLIDE_NAME}\""
-            echo "    mkdir -p \"\$SLIDE_OUT\""
-            echo "    echo \"=== Processing slide \$((i+1))/\$TOTAL_SLIDES: \$CZI_FILE ===\""
-            echo ""
-            echo "    # Step 1: Segmentation (resume from pre-computed path if available)"
-            echo "    RESUME_FLAG=\"\""
-            echo "    if [[ -n \"\${RESUME_PATHS[\$SLIDE_NAME]:-}\" ]]; then RESUME_FLAG=\"--resume \${RESUME_PATHS[\$SLIDE_NAME]}\"; fi"
-            echo "    $(build_seg_cmd '${CZI_FILE}' '${SLIDE_OUT}') \$RESUME_FLAG"
-            echo ""
-            echo "    # Step 2: Find detection JSON in latest run subdir"
-            echo "    RUN_DIR=\$(ls -td \"\${SLIDE_OUT}\"/*/  2>/dev/null | head -1)"
-            echo "    DET_JSON=\"\${RUN_DIR}${CELL_TYPE}_detections.json\""
-            echo "    if [[ -n \"\$RUN_DIR\" && -f \"\$DET_JSON\" ]]; then"
-            _emit_post_detection "        " "\$CZI_FILE"
-            echo "    else"
-            echo "        echo \"  WARNING: ${CELL_TYPE}_detections.json not found, skipping marker/spatial steps\""
-            echo "    fi"
-            echo "    echo \"\""
-            echo "done"
-        fi
-
-    elif [[ "$MULTI_SCENE" == "true" && "$SCENE_PARALLEL" == "true" ]]; then
-        # Multi-scene parallel: one array task per scene
-        echo "SCENE=\${SLURM_ARRAY_TASK_ID}"
-        echo "SLIDE_OUT=\"${OUTPUT_DIR}/scene_\${SCENE}\""
-        echo "mkdir -p \"\$SLIDE_OUT\""
-        echo ""
-        echo "# Step 1: Segmentation (scene \${SCENE})"
-        if [[ -n "$RESUME_DIR" ]]; then
-            echo "$(build_seg_cmd "$CZI_PATH" '${SLIDE_OUT}' '${SCENE}') --resume \"$RESUME_DIR\""
-        else
-            echo "$(build_seg_cmd "$CZI_PATH" '${SLIDE_OUT}' '${SCENE}')"
-        fi
-        echo ""
-        echo "# Step 2: Find detection JSON"
-        echo "RUN_DIR=\$(ls -td \"\${SLIDE_OUT}\"/*/  2>/dev/null | head -1)"
-        echo "DET_JSON=\"\${RUN_DIR}${CELL_TYPE}_detections.json\""
-        echo "if [[ -n \"\$RUN_DIR\" && -f \"\$DET_JSON\" ]]; then"
-        _emit_post_detection "    " "$CZI_PATH"
-        echo "else"
-        echo "    echo \"WARNING: ${CELL_TYPE}_detections.json not found for scene \${SCENE}\""
-        echo "fi"
-    elif [[ "$MULTI_SCENE" == "true" && "$SCENE_PARALLEL" == "false" ]]; then
-        # Multi-scene sequential: loop over scenes in one job
-        echo "for SCENE in \$(seq ${SCENE_START} ${SCENE_END}); do"
-        echo "    SLIDE_OUT=\"${OUTPUT_DIR}/scene_\${SCENE}\""
-        echo "    mkdir -p \"\$SLIDE_OUT\""
-        echo "    echo \"=== Scene \${SCENE} ===\""
-        echo ""
-        echo "    # Step 1: Segmentation (scene \${SCENE})"
-        if [[ -n "$RESUME_DIR" ]]; then
-            echo "    $(build_seg_cmd "$CZI_PATH" '${SLIDE_OUT}' '${SCENE}') --resume \"$RESUME_DIR\""
-        else
-            echo "    $(build_seg_cmd "$CZI_PATH" '${SLIDE_OUT}' '${SCENE}')"
-        fi
-        echo ""
-        echo "    # Step 2: Find detection JSON"
-        echo "    RUN_DIR=\$(ls -td \"\${SLIDE_OUT}\"/*/  2>/dev/null | head -1)"
-        echo "    DET_JSON=\"\${RUN_DIR}${CELL_TYPE}_detections.json\""
-        echo "    if [[ -n \"\$RUN_DIR\" && -f \"\$DET_JSON\" ]]; then"
-        _emit_post_detection "        " "$CZI_PATH"
-        echo "    else"
-        echo "        echo \"WARNING: ${CELL_TYPE}_detections.json not found for scene \${SCENE}\""
-        echo "    fi"
-        echo "done"
+    # --- Generic work item body (same for ALL modes) ---
+    # Parallel mode: process one work item per array task
+    # Sequential mode: loop over all work items
+    if [[ "$USE_ARRAY" == "true" ]]; then
+        echo "IDX=\$SLURM_ARRAY_TASK_ID"
     else
-        # Single-slide job
-        echo "SLIDE_OUT=\"${OUTPUT_DIR}\""
-        echo "mkdir -p \"\$SLIDE_OUT\""
-        echo ""
-        echo "# Step 1: Segmentation"
-        if [[ -n "$RESUME_DIR" ]]; then
-            echo "$(build_seg_cmd "$CZI_PATH" '${SLIDE_OUT}') --resume \"$RESUME_DIR\""
-        else
-            echo "$(build_seg_cmd "$CZI_PATH" '${SLIDE_OUT}')"
-        fi
-        echo ""
-        echo "# Step 2: Find detection JSON in latest run subdir"
-        echo "RUN_DIR=\$(ls -td \"\${SLIDE_OUT}\"/*/  2>/dev/null | head -1)"
-        echo "DET_JSON=\"\${RUN_DIR}${CELL_TYPE}_detections.json\""
-        echo "if [[ -n \"\$RUN_DIR\" && -f \"\$DET_JSON\" ]]; then"
-        _emit_post_detection "    " "$CZI_PATH"
+        echo "for (( IDX=0; IDX<N_WORK; IDX++ )); do"
+    fi
 
-        # Step 4: Spatial viewer (single-slide, inline)
-        if [[ "$VIEWER_ENABLED" == "true" && -n "$VIEWER_GROUP_FIELD" ]]; then
-            echo ""
-            echo "    # Step 4: Spatial viewer"
-            echo "    echo \"Generating spatial viewer...\""
-            echo "    \$XLDVP_PYTHON $REPO/scripts/generate_multi_slide_spatial_viewer.py --input-dir \"\$SLIDE_OUT\" --group-field \"$VIEWER_GROUP_FIELD\" --title \"$VIEWER_TITLE_ESC\" --output \"\${SLIDE_OUT}/spatial_viewer.html\""
-        fi
+    # Indent: top-level for array, one level for loop
+    I=""
+    if [[ "$USE_ARRAY" == "false" ]]; then I="    "; fi
 
-        echo "else"
-        echo "    echo \"WARNING: ${CELL_TYPE}_detections.json not found, skipping marker/spatial steps\""
-        echo "fi"
+    echo "${I}CZI_FILE=\"\${ALL_CZI[\$IDX]}\""
+    echo "${I}SLIDE_OUT=\"\${ALL_OUT[\$IDX]}\""
+    echo "${I}SCENE=\"\${ALL_SCENE[\$IDX]}\""
+    echo "${I}mkdir -p \"\$SLIDE_OUT\""
+    echo "${I}SLIDE_NAME=\$(basename \"\$CZI_FILE\" .czi)"
+    echo "${I}echo \"=== [\$((IDX+1))/${_N_WORK}] \$SLIDE_NAME scene=\$SCENE ===\""
+    echo ""
+
+    # Segmentation command
+    echo "${I}RESUME_FLAG=\"\""
+    echo "${I}if [[ -n \"\${RESUME_PATHS[\$SLIDE_NAME]:-}\" ]]; then RESUME_FLAG=\"--resume \\\"\${RESUME_PATHS[\$SLIDE_NAME]}\\\"\"; fi"
+    echo "${I}SCENE_FLAG=\"\""
+    echo "${I}if [[ -n \"\$SCENE\" ]]; then SCENE_FLAG=\"--scene \$SCENE\"; fi"
+    echo "${I}$(build_seg_cmd '${CZI_FILE}' '${SLIDE_OUT}') \$SCENE_FLAG \$RESUME_FLAG"
+    echo ""
+
+    # Find detection JSON
+    echo "${I}RUN_DIR=\$(ls -td \"\${SLIDE_OUT}\"/*/  2>/dev/null | head -1)"
+    echo "${I}DET_JSON=\"\${RUN_DIR}${CELL_TYPE}_detections.json\""
+    echo "${I}if [[ -n \"\$RUN_DIR\" && -f \"\$DET_JSON\" ]]; then"
+    _emit_post_detection "${I}    " "\$CZI_FILE"
+
+    # Spatial viewer (inline, after post-detection)
+    if [[ "$VIEWER_ENABLED" == "true" && -n "$VIEWER_GROUP_FIELD" ]]; then
+        echo "${I}    echo \"Generating spatial viewer...\""
+        echo "${I}    \$XLDVP_PYTHON $REPO/scripts/generate_multi_slide_spatial_viewer.py --input-dir \"\$SLIDE_OUT\" --group-field \"$VIEWER_GROUP_FIELD\" --title \"$VIEWER_TITLE_ESC\" --output \"\${SLIDE_OUT}/spatial_viewer.html\""
+    fi
+
+    echo "${I}else"
+    echo "${I}    echo \"WARNING: ${CELL_TYPE}_detections.json not found\""
+    echo "${I}fi"
+
+    # Close loop for sequential mode
+    if [[ "$USE_ARRAY" == "false" ]]; then
+        echo "done"
     fi
 
 } > "$SBATCH_FILE"
@@ -755,24 +681,24 @@ echo "================================================"
 echo "Pipeline: $NAME"
 echo "Config:   $CONFIG"
 echo "Sbatch:   $SBATCH_FILE"
+_mode="single-slide"
 if [[ "$MULTI_SLIDE" == "true" && "$MULTI_SCENE" == "true" ]]; then
-    _strategy="parallel (flat array)"
-    if [[ "$SCENE_PARALLEL" == "false" ]]; then _strategy="sequential (scenes loop per slide)"; fi
-    echo "Mode:     multi-slide + multi-scene ${_strategy} (scenes ${SCENE_START}-${SCENE_END})"
-    echo "CZI dir:  $CZI_DIR"
-    echo "Glob:     $CZI_GLOB"
+    _mode="multi-slide + multi-scene"
 elif [[ "$MULTI_SLIDE" == "true" ]]; then
-    echo "Mode:     multi-slide array ($NUM_JOBS jobs, $SLIDES_PER_JOB slides/job)"
-    echo "CZI dir:  $CZI_DIR"
-    echo "Glob:     $CZI_GLOB"
+    _mode="multi-slide"
 elif [[ "$MULTI_SCENE" == "true" ]]; then
-    _strategy="parallel (array)"
-    if [[ "$SCENE_PARALLEL" == "false" ]]; then _strategy="sequential (loop)"; fi
-    echo "Mode:     multi-scene ${_strategy} (scenes ${SCENE_START}-${SCENE_END})"
-    echo "CZI:      $CZI_PATH"
+    _mode="multi-scene"
+fi
+_strategy="parallel (array)"
+if [[ "$USE_ARRAY" == "false" ]]; then _strategy="sequential (loop)"; fi
+echo "Mode:     ${_mode}, ${_strategy}, ${_N_WORK} work items"
+if [[ "$MULTI_SLIDE" == "true" ]]; then
+    echo "CZI dir:  $CZI_DIR ($CZI_GLOB)"
 else
-    echo "Mode:     single-slide"
     echo "CZI:      $CZI_PATH"
+fi
+if [[ "$MULTI_SCENE" == "true" ]]; then
+    echo "Scenes:   ${SCENE_START}-${SCENE_END}"
 fi
 echo "Output:   $OUTPUT_DIR"
 echo "SLURM:    $PARTITION | ${CPUS} CPUs | ${MEM_GB}G RAM | gpu:${GPUS} | ${TIME}"
@@ -851,7 +777,11 @@ if [[ "$NUM_SHARDS" -gt 1 && "$MULTI_SLIDE" == "false" ]]; then
         echo "#SBATCH --nodes=1"
         echo "#SBATCH --cpus-per-task=${CPUS}"
         echo "#SBATCH --mem=${MEM_GB}G"
-        echo "#SBATCH --gres=gpu:${GPU_TYPE}:1"
+        if [[ -n "$GPU_TYPE" ]]; then
+            echo "#SBATCH --gres=gpu:${GPU_TYPE}:1"
+        else
+            echo "#SBATCH --gres=gpu:1"
+        fi
         echo "#SBATCH --time=${TIME}"
         echo "#SBATCH --output=${OUTPUT_DIR}/slurm_${NAME}_merge_%j.out"
         echo "#SBATCH --error=${OUTPUT_DIR}/slurm_${NAME}_merge_%j.err"
@@ -893,10 +823,6 @@ fi
 # This eliminates the need to write manual sbatch scripts.
 # ---------------------------------------------------------------------------
 DETECT_JOB_ID="$MAIN_JOB_ID"
-LAST_DET_JSON="\${RUN_DIR}${CELL_TYPE}_detections.json"
-
-# For single-slide: determine CZI path for downstream steps
-DS_CZI_PATH="${CZI_PATH}"
 
 # Quality filter (CPU, depends on detection)
 if [[ "$DS_QUALITY_FILTER" == "true" ]]; then
@@ -932,7 +858,6 @@ if [[ "$DS_QUALITY_FILTER" == "true" ]]; then
     QF_OUTPUT=$(sbatch --dependency=afterok:"$DETECT_JOB_ID" "$QF_SBATCH")
     QF_JOB_ID=$(echo "$QF_OUTPUT" | grep -oP 'Submitted batch job \K\d+')
     echo "  Quality filter job: $QF_JOB_ID (dep: $DETECT_JOB_ID)"
-    LAST_DET_JSON="\${RUN_DIR}${CELL_TYPE}_detections_filtered.json"
     DETECT_JOB_ID="$QF_JOB_ID"
 fi
 
@@ -981,35 +906,9 @@ if [[ "$DS_QUALITY_FILTER" == "true" && -n "$MARKER_CHANNELS" ]]; then
 fi
 
 # Nuclear counting (GPU, depends on detection — uses UNFILTERED detections)
-# Strategy mirrors detection: multi-scene parallel → array, sequential → loop
+# Same work item arrays as detection, same parallel/sequential strategy
 if [[ "$DS_NUCLEI" == "true" ]]; then
     NUC_SBATCH="${OUTPUT_DIR}/pipeline_${NAME}_nuc_$$.sbatch"
-
-    # Build the per-scene nuclei command (reused by all modes)
-    # Args: indent, scene_flag, run_dir_expr, czi_path_expr
-    _nuc_cmd_body() {
-        local indent="$1"  # "" or "    " for loop indent
-        local scene_flag="$2"  # "" or "--scene \$SCENE"
-        local run_dir_expr="$3"  # expression to find RUN_DIR
-        local czi_expr="${4:-$DS_CZI_PATH}"  # CZI path (literal or shell var)
-        echo "${indent}RUN_DIR=${run_dir_expr}"
-        echo "${indent}if [[ -z \"\$RUN_DIR\" || ! -f \"\${RUN_DIR}${CELL_TYPE}_detections.json\" ]]; then echo 'ERROR: Detection output not found'; exit 1; fi"
-        echo "${indent}echo \"=== \$(date): Nuclear counting ===\""
-        local nuc_cmd="${indent}\$XLDVP_PYTHON $REPO/scripts/count_nuclei_per_cell.py"
-        nuc_cmd+=" --detections \"\${RUN_DIR}${CELL_TYPE}_detections.json\""
-        nuc_cmd+=" --czi-path \"$czi_expr\""
-        nuc_cmd+=" --tiles-dir \"\${RUN_DIR}tiles\""
-        if [[ -n "$DS_NUC_CHANNEL_SPEC" ]]; then
-            nuc_cmd+=" --channel-spec \"$DS_NUC_CHANNEL_SPEC\""
-        fi
-        if [[ -n "$scene_flag" ]]; then
-            nuc_cmd+=" $scene_flag"
-        fi
-        nuc_cmd+=" --output \"\${RUN_DIR}${CELL_TYPE}_detections_nuclei.json\""
-        echo "$nuc_cmd"
-        echo "${indent}echo \"=== \$(date): Done ===\""
-    }
-
     {
         echo "#!/bin/bash"
         echo "#SBATCH --job-name=${NAME}_nuc"
@@ -1019,22 +918,10 @@ if [[ "$DS_NUCLEI" == "true" ]]; then
         echo "#SBATCH --mem=300G"
         echo "#SBATCH --gres=gpu:l40s:1"
         echo "#SBATCH --time=6:00:00"
-        # Array header: mirrors detection strategy exactly
-        if [[ "$MULTI_SLIDE" == "true" && "$MULTI_SCENE" == "true" && "$SCENE_PARALLEL" == "true" ]]; then
-            # Flat array: one task per (slide, scene)
-            _N_SCENES=$(( SCENE_END - SCENE_START + 1 ))
-            _FLAT_TOTAL=$(( ${#_GEN_SLIDES[@]} * _N_SCENES ))
-            echo "#SBATCH --array=0-$((_FLAT_TOTAL - 1))"
+        if [[ "$USE_ARRAY" == "true" ]]; then
+            echo "#SBATCH --array=0-$((_N_WORK - 1))"
             echo "#SBATCH --output=${OUTPUT_DIR}/slurm_${NAME}_nuc_%A_%a.out"
             echo "#SBATCH --error=${OUTPUT_DIR}/slurm_${NAME}_nuc_%A_%a.err"
-        elif [[ "$MULTI_SLIDE" == "true" ]]; then
-            # Multi-slide (with or without sequential scenes): no array, loops internally
-            echo "#SBATCH --output=${OUTPUT_DIR}/slurm_${NAME}_nuc_%j.out"
-            echo "#SBATCH --error=${OUTPUT_DIR}/slurm_${NAME}_nuc_%j.err"
-        elif [[ "$MULTI_SCENE" == "true" && "$SCENE_PARALLEL" == "true" ]]; then
-            echo "#SBATCH --array=${SCENE_START}-${SCENE_END}"
-            echo "#SBATCH --output=${OUTPUT_DIR}/slurm_${NAME}_nuc_scene%a_%j.out"
-            echo "#SBATCH --error=${OUTPUT_DIR}/slurm_${NAME}_nuc_scene%a_%j.err"
         else
             echo "#SBATCH --output=${OUTPUT_DIR}/slurm_${NAME}_nuc_%j.out"
             echo "#SBATCH --error=${OUTPUT_DIR}/slurm_${NAME}_nuc_%j.err"
@@ -1043,63 +930,39 @@ if [[ "$DS_NUCLEI" == "true" ]]; then
         echo "set -euo pipefail"
         echo "export PYTHONPATH=\"$REPO\""
         echo "XLDVP_PYTHON=\"$XLDVP_PYTHON\""
+        echo ""
+        _emit_work_arrays
 
-        if [[ "$MULTI_SLIDE" == "true" && "$MULTI_SCENE" == "true" && "$SCENE_PARALLEL" == "true" ]]; then
-            # Multi-slide + multi-scene parallel: flat array, same as detection
-            _N_SCENES=$(( SCENE_END - SCENE_START + 1 ))
-            echo "# Baked slide list (same as detection job)"
-            echo "ALL_SLIDES=("
-            for _s in "${_GEN_SLIDES[@]}"; do echo "    \"$_s\""; done
-            echo ")"
-            echo "N_SCENES=${_N_SCENES}"
-            echo "SCENE_START=${SCENE_START}"
-            echo "SLIDE_IDX=\$(( SLURM_ARRAY_TASK_ID / N_SCENES ))"
-            echo "SCENE=\$(( SLURM_ARRAY_TASK_ID % N_SCENES + SCENE_START ))"
-            echo "CZI_FILE=\"\${ALL_SLIDES[\$SLIDE_IDX]}\""
-            echo "SLIDE_NAME=\$(basename \"\$CZI_FILE\" .czi)"
-            _nuc_cmd_body "" "--scene \$SCENE" "\$(ls -td \"${OUTPUT_DIR}/\${SLIDE_NAME}/scene_\${SCENE}\"/*/  2>/dev/null | head -1)" "\$CZI_FILE"
-
-        elif [[ "$MULTI_SLIDE" == "true" && "$MULTI_SCENE" == "true" && "$SCENE_PARALLEL" == "false" ]]; then
-            # Multi-slide + multi-scene sequential: loop slides and scenes
-            echo "ALL_SLIDES=("
-            for _s in "${_GEN_SLIDES[@]}"; do echo "    \"$_s\""; done
-            echo ")"
-            echo "for CZI_FILE in \"\${ALL_SLIDES[@]}\"; do"
-            echo "    SLIDE_NAME=\$(basename \"\$CZI_FILE\" .czi)"
-            echo "    for SCENE in \$(seq ${SCENE_START} ${SCENE_END}); do"
-            echo "        echo \"=== \$SLIDE_NAME scene \$SCENE ===\""
-            _nuc_cmd_body "        " "--scene \$SCENE" "\$(ls -td \"${OUTPUT_DIR}/\${SLIDE_NAME}/scene_\${SCENE}\"/*/  2>/dev/null | head -1)" "\$CZI_FILE"
-            echo "    done"
-            echo "done"
-
-        elif [[ "$MULTI_SLIDE" == "true" ]]; then
-            # Multi-slide only (no scenes): loop over slides
-            echo "ALL_SLIDES=("
-            for _s in "${_GEN_SLIDES[@]}"; do echo "    \"$_s\""; done
-            echo ")"
-            echo "for CZI_FILE in \"\${ALL_SLIDES[@]}\"; do"
-            echo "    SLIDE_NAME=\$(basename \"\$CZI_FILE\" .czi)"
-            echo "    echo \"=== \$SLIDE_NAME ===\""
-            _nuc_cmd_body "    " "" "\$(ls -td \"${OUTPUT_DIR}/\${SLIDE_NAME}\"/*/  2>/dev/null | head -1)" "\$CZI_FILE"
-            echo "done"
-
-        elif [[ "$MULTI_SCENE" == "true" && "$SCENE_PARALLEL" == "true" ]]; then
-            # Single-slide + multi-scene parallel
-            echo "SCENE=\${SLURM_ARRAY_TASK_ID}"
-            _nuc_cmd_body "" "--scene \$SCENE" "\$(ls -td \"${OUTPUT_DIR}/scene_\${SCENE}\"/*/  2>/dev/null | head -1)"
-        elif [[ "$MULTI_SCENE" == "true" && "$SCENE_PARALLEL" == "false" ]]; then
-            # Single-slide + multi-scene sequential
-            echo "for SCENE in \$(seq ${SCENE_START} ${SCENE_END}); do"
-            echo "    echo \"=== Scene \${SCENE} ===\""
-            _nuc_cmd_body "    " "--scene \$SCENE" "\$(ls -td \"${OUTPUT_DIR}/scene_\${SCENE}\"/*/  2>/dev/null | head -1)"
-            echo "done"
+        if [[ "$USE_ARRAY" == "true" ]]; then
+            echo "IDX=\$SLURM_ARRAY_TASK_ID"
         else
-            # Single-scene (original behavior)
-            if [[ -n "$KNOWN_RUN_DIR" ]]; then
-                _nuc_cmd_body "" "" "\"${KNOWN_RUN_DIR}/\""
-            else
-                _nuc_cmd_body "" "" "\$(ls -td \"${OUTPUT_DIR}\"/*/  2>/dev/null | head -1)"
-            fi
+            echo "for (( IDX=0; IDX<N_WORK; IDX++ )); do"
+        fi
+
+        I=""
+        if [[ "$USE_ARRAY" == "false" ]]; then I="    "; fi
+
+        echo "${I}CZI_FILE=\"\${ALL_CZI[\$IDX]}\""
+        echo "${I}SLIDE_OUT=\"\${ALL_OUT[\$IDX]}\""
+        echo "${I}SCENE=\"\${ALL_SCENE[\$IDX]}\""
+        echo "${I}echo \"=== \$(date): Nuclear counting [\$((IDX+1))/${_N_WORK}] ===\""
+        echo "${I}RUN_DIR=\$(ls -td \"\${SLIDE_OUT}\"/*/  2>/dev/null | head -1)"
+        echo "${I}if [[ -z \"\$RUN_DIR\" || ! -f \"\${RUN_DIR}${CELL_TYPE}_detections.json\" ]]; then echo 'ERROR: Detection output not found for \$SLIDE_OUT'; exit 1; fi"
+
+        local_nuc_cmd="\$XLDVP_PYTHON $REPO/scripts/count_nuclei_per_cell.py"
+        local_nuc_cmd+=" --detections \"\${RUN_DIR}${CELL_TYPE}_detections.json\""
+        local_nuc_cmd+=" --czi-path \"\$CZI_FILE\""
+        local_nuc_cmd+=" --tiles-dir \"\${RUN_DIR}tiles\""
+        if [[ -n "$DS_NUC_CHANNEL_SPEC" ]]; then
+            local_nuc_cmd+=" --channel-spec \"$DS_NUC_CHANNEL_SPEC\""
+        fi
+        echo "${I}SCENE_FLAG=\"\""
+        echo "${I}if [[ -n \"\$SCENE\" ]]; then SCENE_FLAG=\"--scene \$SCENE\"; fi"
+        echo "${I}${local_nuc_cmd} \$SCENE_FLAG --output \"\${RUN_DIR}${CELL_TYPE}_detections_nuclei.json\""
+        echo "${I}echo \"=== \$(date): Done ===\""
+
+        if [[ "$USE_ARRAY" == "false" ]]; then
+            echo "done"
         fi
     } > "$NUC_SBATCH"
     chmod +x "$NUC_SBATCH"
@@ -1108,43 +971,11 @@ if [[ "$DS_NUCLEI" == "true" ]]; then
     echo "  Nuclear counting job: $NUC_JOB_ID (dep: $MAIN_JOB_ID)"
 fi
 
-# Annotation HTML (CPU, depends on markers if markers ran, else detection)
-# Strategy mirrors detection: multi-scene parallel → array, sequential → loop
+# Annotation HTML (CPU, depends on detection)
+# Same work item arrays, same parallel/sequential strategy
 if [[ "$DS_HTML" == "true" ]]; then
     HTML_SBATCH="${OUTPUT_DIR}/pipeline_${NAME}_html_$$.sbatch"
     HTML_DEP_ID="$DETECT_JOB_ID"
-
-    # Per-item HTML command (reused by all modes)
-    # Args: indent, scene_flag, run_dir_expr, czi_path_expr
-    _html_cmd_body() {
-        local indent="$1"
-        local scene_flag="$2"
-        local run_dir_expr="$3"
-        local czi_expr="${4:-$DS_CZI_PATH}"
-        echo "${indent}RUN_DIR=${run_dir_expr}"
-        echo "${indent}if [[ -z \"\$RUN_DIR\" ]]; then echo 'ERROR: Run directory not found'; exit 1; fi"
-        echo "${indent}DET=\"\${RUN_DIR}${CELL_TYPE}_detections.json\""
-        echo "${indent}for _f in \"\${RUN_DIR}${CELL_TYPE}_detections_filtered_classified.json\" \"\${RUN_DIR}${CELL_TYPE}_detections_classified.json\" \"\${RUN_DIR}${CELL_TYPE}_detections_filtered.json\"; do"
-        echo "${indent}    if [[ -f \"\$_f\" ]]; then DET=\"\$_f\"; break; fi"
-        echo "${indent}done"
-        echo "${indent}echo \"=== \$(date): Annotation HTML from \$DET ===\""
-        local html_cmd="${indent}\$XLDVP_PYTHON $REPO/scripts/regenerate_html.py"
-        html_cmd+=" --detections \"\$DET\""
-        html_cmd+=" --output-dir \"\$RUN_DIR\""
-        html_cmd+=" --czi-path \"$czi_expr\""
-        if [[ -n "$DS_HTML_DISPLAY_CHANNELS" ]]; then
-            html_cmd+=" --display-channels \"$DS_HTML_DISPLAY_CHANNELS\""
-        fi
-        if [[ -n "$scene_flag" ]]; then
-            html_cmd+=" $scene_flag"
-        fi
-        html_cmd+=" --dashed-contour"
-        html_cmd+=" --max-samples $DS_HTML_MAX_SAMPLES"
-        html_cmd+=" --html-dir \"\${RUN_DIR}html_annotation\""
-        echo "$html_cmd"
-        echo "${indent}echo \"=== \$(date): Done ===\""
-    }
-
     {
         echo "#!/bin/bash"
         echo "#SBATCH --job-name=${NAME}_html"
@@ -1152,17 +983,10 @@ if [[ "$DS_HTML" == "true" ]]; then
         echo "#SBATCH --cpus-per-task=8"
         echo "#SBATCH --mem=64G"
         echo "#SBATCH --time=2:00:00"
-        # Array header mirrors detection strategy
-        if [[ "$MULTI_SLIDE" == "true" && "$MULTI_SCENE" == "true" && "$SCENE_PARALLEL" == "true" ]]; then
-            _N_SCENES=$(( SCENE_END - SCENE_START + 1 ))
-            _FLAT_TOTAL=$(( _N_SLIDES * _N_SCENES ))
-            echo "#SBATCH --array=0-$((_FLAT_TOTAL - 1))"
+        if [[ "$USE_ARRAY" == "true" ]]; then
+            echo "#SBATCH --array=0-$((_N_WORK - 1))"
             echo "#SBATCH --output=${OUTPUT_DIR}/slurm_${NAME}_html_%A_%a.out"
             echo "#SBATCH --error=${OUTPUT_DIR}/slurm_${NAME}_html_%A_%a.err"
-        elif [[ "$MULTI_SCENE" == "true" && "$SCENE_PARALLEL" == "true" ]]; then
-            echo "#SBATCH --array=${SCENE_START}-${SCENE_END}"
-            echo "#SBATCH --output=${OUTPUT_DIR}/slurm_${NAME}_html_scene%a_%j.out"
-            echo "#SBATCH --error=${OUTPUT_DIR}/slurm_${NAME}_html_scene%a_%j.err"
         else
             echo "#SBATCH --output=${OUTPUT_DIR}/slurm_${NAME}_html_%j.out"
             echo "#SBATCH --error=${OUTPUT_DIR}/slurm_${NAME}_html_%j.err"
@@ -1171,59 +995,45 @@ if [[ "$DS_HTML" == "true" ]]; then
         echo "set -euo pipefail"
         echo "export PYTHONPATH=\"$REPO\""
         echo "XLDVP_PYTHON=\"$XLDVP_PYTHON\""
+        echo ""
+        _emit_work_arrays
 
-        if [[ "$MULTI_SLIDE" == "true" && "$MULTI_SCENE" == "true" && "$SCENE_PARALLEL" == "true" ]]; then
-            _N_SCENES=$(( SCENE_END - SCENE_START + 1 ))
-            echo "ALL_SLIDES=("
-            for _s in "${_GEN_SLIDES[@]}"; do echo "    \"$_s\""; done
-            echo ")"
-            echo "N_SCENES=${_N_SCENES}"
-            echo "SCENE_START=${SCENE_START}"
-            echo "SLIDE_IDX=\$(( SLURM_ARRAY_TASK_ID / N_SCENES ))"
-            echo "SCENE=\$(( SLURM_ARRAY_TASK_ID % N_SCENES + SCENE_START ))"
-            echo "CZI_FILE=\"\${ALL_SLIDES[\$SLIDE_IDX]}\""
-            echo "SLIDE_NAME=\$(basename \"\$CZI_FILE\" .czi)"
-            _html_cmd_body "" "--scene \$SCENE" "\$(ls -td \"${OUTPUT_DIR}/\${SLIDE_NAME}/scene_\${SCENE}\"/*/  2>/dev/null | head -1)" "\$CZI_FILE"
-
-        elif [[ "$MULTI_SLIDE" == "true" && "$MULTI_SCENE" == "true" && "$SCENE_PARALLEL" == "false" ]]; then
-            echo "ALL_SLIDES=("
-            for _s in "${_GEN_SLIDES[@]}"; do echo "    \"$_s\""; done
-            echo ")"
-            echo "for CZI_FILE in \"\${ALL_SLIDES[@]}\"; do"
-            echo "    SLIDE_NAME=\$(basename \"\$CZI_FILE\" .czi)"
-            echo "    for SCENE in \$(seq ${SCENE_START} ${SCENE_END}); do"
-            echo "        echo \"=== \$SLIDE_NAME scene \$SCENE ===\""
-            _html_cmd_body "        " "--scene \$SCENE" "\$(ls -td \"${OUTPUT_DIR}/\${SLIDE_NAME}/scene_\${SCENE}\"/*/  2>/dev/null | head -1)" "\$CZI_FILE"
-            echo "    done"
-            echo "done"
-
-        elif [[ "$MULTI_SLIDE" == "true" ]]; then
-            echo "ALL_SLIDES=("
-            for _s in "${_GEN_SLIDES[@]}"; do echo "    \"$_s\""; done
-            echo ")"
-            echo "for CZI_FILE in \"\${ALL_SLIDES[@]}\"; do"
-            echo "    SLIDE_NAME=\$(basename \"\$CZI_FILE\" .czi)"
-            echo "    echo \"=== \$SLIDE_NAME ===\""
-            _html_cmd_body "    " "" "\$(ls -td \"${OUTPUT_DIR}/\${SLIDE_NAME}\"/*/  2>/dev/null | head -1)" "\$CZI_FILE"
-            echo "done"
-
-        elif [[ "$MULTI_SCENE" == "true" && "$SCENE_PARALLEL" == "true" ]]; then
-            echo "SCENE=\${SLURM_ARRAY_TASK_ID}"
-            _html_cmd_body "" "--scene \$SCENE" "\$(ls -td \"${OUTPUT_DIR}/scene_\${SCENE}\"/*/  2>/dev/null | head -1)"
-
-        elif [[ "$MULTI_SCENE" == "true" && "$SCENE_PARALLEL" == "false" ]]; then
-            echo "for SCENE in \$(seq ${SCENE_START} ${SCENE_END}); do"
-            echo "    echo \"=== Scene \${SCENE} ===\""
-            _html_cmd_body "    " "--scene \$SCENE" "\$(ls -td \"${OUTPUT_DIR}/scene_\${SCENE}\"/*/  2>/dev/null | head -1)"
-            echo "done"
-
+        if [[ "$USE_ARRAY" == "true" ]]; then
+            echo "IDX=\$SLURM_ARRAY_TASK_ID"
         else
-            # Single-scene (original behavior)
-            if [[ -n "$KNOWN_RUN_DIR" ]]; then
-                _html_cmd_body "" "" "\"${KNOWN_RUN_DIR}/\""
-            else
-                _html_cmd_body "" "" "\$(ls -td \"${OUTPUT_DIR}\"/*/  2>/dev/null | head -1)"
-            fi
+            echo "for (( IDX=0; IDX<N_WORK; IDX++ )); do"
+        fi
+
+        I=""
+        if [[ "$USE_ARRAY" == "false" ]]; then I="    "; fi
+
+        echo "${I}CZI_FILE=\"\${ALL_CZI[\$IDX]}\""
+        echo "${I}SLIDE_OUT=\"\${ALL_OUT[\$IDX]}\""
+        echo "${I}SCENE=\"\${ALL_SCENE[\$IDX]}\""
+        echo "${I}RUN_DIR=\$(ls -td \"\${SLIDE_OUT}\"/*/  2>/dev/null | head -1)"
+        echo "${I}if [[ -z \"\$RUN_DIR\" ]]; then echo 'ERROR: Run directory not found for \$SLIDE_OUT'; exit 1; fi"
+        echo "${I}DET=\"\${RUN_DIR}${CELL_TYPE}_detections.json\""
+        echo "${I}for _f in \"\${RUN_DIR}${CELL_TYPE}_detections_filtered_classified.json\" \"\${RUN_DIR}${CELL_TYPE}_detections_classified.json\" \"\${RUN_DIR}${CELL_TYPE}_detections_filtered.json\"; do"
+        echo "${I}    if [[ -f \"\$_f\" ]]; then DET=\"\$_f\"; break; fi"
+        echo "${I}done"
+        echo "${I}echo \"=== \$(date): Annotation HTML [\$((IDX+1))/${_N_WORK}] ===\""
+
+        local_html_cmd="\$XLDVP_PYTHON $REPO/scripts/regenerate_html.py"
+        local_html_cmd+=" --detections \"\$DET\""
+        local_html_cmd+=" --output-dir \"\$RUN_DIR\""
+        local_html_cmd+=" --czi-path \"\$CZI_FILE\""
+        if [[ -n "$DS_HTML_DISPLAY_CHANNELS" ]]; then
+            local_html_cmd+=" --display-channels \"$DS_HTML_DISPLAY_CHANNELS\""
+        fi
+        local_html_cmd+=" --dashed-contour --max-samples $DS_HTML_MAX_SAMPLES"
+        local_html_cmd+=" --html-dir \"\${RUN_DIR}html_annotation\""
+        echo "${I}SCENE_FLAG=\"\""
+        echo "${I}if [[ -n \"\$SCENE\" ]]; then SCENE_FLAG=\"--scene \$SCENE\"; fi"
+        echo "${I}${local_html_cmd} \$SCENE_FLAG"
+        echo "${I}echo \"=== \$(date): Done ===\""
+
+        if [[ "$USE_ARRAY" == "false" ]]; then
+            echo "done"
         fi
     } > "$HTML_SBATCH"
     chmod +x "$HTML_SBATCH"
@@ -1274,7 +1084,7 @@ if [[ "$DS_CLUSTERING" == "true" ]]; then
 fi
 
 # ---------------------------------------------------------------------------
-# Step 4: Submit dependent spatial viewer job (multi-slide only)
+# Spatial viewer job (multi-slide only)
 # ---------------------------------------------------------------------------
 if [[ "$MULTI_SLIDE" == "true" && "$VIEWER_ENABLED" == "true" && -n "$VIEWER_GROUP_FIELD" ]]; then
     VIEWER_SBATCH="${OUTPUT_DIR}/pipeline_${NAME}_viewer_$$.sbatch"
