@@ -458,6 +458,60 @@ if [[ "$MULTI_SLIDE" == "true" ]]; then
 fi
 
 # ---------------------------------------------------------------------------
+# Helper: emit post-detection steps (markers, spatial, spatialdata)
+# Usage: _emit_post_detection INDENT CZI_EXPR
+#   INDENT: e.g. "    " or "        " for loop nesting
+#   CZI_EXPR: CZI path expression (e.g. "$CZI_PATH" or "\$CZI_FILE")
+# ---------------------------------------------------------------------------
+_emit_post_detection() {
+    local I="$1"   # indent
+    local CZI="$2" # CZI path expression for markers
+
+    if [[ -n "$MARKER_CHANNELS" ]]; then
+        local classify_extra=""
+        if [[ "$CORRECT_ALL_CHANNELS" == "true" ]]; then
+            classify_extra+=" --correct-all-channels"
+        fi
+        echo "${I}echo \"  Classifying markers: $MARKER_NAMES\""
+        if [[ "$MARKER_USE_WAVELENGTH" == "true" ]]; then
+            echo "${I}\$XLDVP_PYTHON $REPO/scripts/classify_markers.py --detections \"\$DET_JSON\" --marker-wavelength \"$MARKER_CHANNELS\" --marker-name \"$MARKER_NAMES\" --method \"$MARKER_METHOD\" --czi-path \"$CZI\" --output-dir \"\$RUN_DIR\"${classify_extra}"
+        else
+            echo "${I}\$XLDVP_PYTHON $REPO/scripts/classify_markers.py --detections \"\$DET_JSON\" --marker-channel \"$MARKER_CHANNELS\" --marker-name \"$MARKER_NAMES\" --method \"$MARKER_METHOD\" --output-dir \"\$RUN_DIR\"${classify_extra}"
+        fi
+        echo "${I}# Discover classified output (may be _filtered_classified or _classified)"
+        echo "${I}for _cf in \"\${RUN_DIR}${CELL_TYPE}_detections_filtered_classified.json\" \"\${RUN_DIR}${CELL_TYPE}_detections_classified.json\"; do"
+        echo "${I}    if [[ -f \"\$_cf\" ]]; then DET_JSON=\"\$_cf\"; break; fi"
+        echo "${I}done"
+    fi
+
+    if [[ "$SPATIAL_ENABLED" == "true" ]]; then
+        echo ""
+        echo "${I}# Spatial analysis"
+        echo "${I}echo \"  Running spatial analysis...\""
+        echo "${I}\$XLDVP_PYTHON $REPO/scripts/spatial_cell_analysis.py --detections \"\$DET_JSON\" --output-dir \"\$RUN_DIR\" --spatial-network --marker-filter \"$SPATIAL_FILTER\" --max-edge-distance \"$SPATIAL_EDGE\" --min-component-cells \"$SPATIAL_MIN_COMP\" --pixel-size \"$PIXEL_SIZE\""
+    fi
+
+    if [[ "$SPATIALDATA_ENABLED" == "true" ]]; then
+        echo ""
+        echo "${I}# SpatialData export"
+        echo "${I}echo \"  Exporting to SpatialData...\""
+        local sd_cmd="${I}\$XLDVP_PYTHON $REPO/scripts/convert_to_spatialdata.py --detections \"\$DET_JSON\" --output \"\${RUN_DIR}${CELL_TYPE}_spatialdata.zarr\" --cell-type \"$CELL_TYPE\" --overwrite"
+        if [[ "$SPATIALDATA_SHAPES" == "true" ]]; then
+            sd_cmd+=" --tiles-dir \"\${RUN_DIR}tiles\""
+        else
+            sd_cmd+=" --no-shapes"
+        fi
+        if [[ "$SPATIALDATA_SQUIDPY" == "true" ]]; then
+            sd_cmd+=" --run-squidpy"
+            if [[ -n "$SPATIALDATA_CLUSTER_KEY" ]]; then
+                sd_cmd+=" --squidpy-cluster-key \"$SPATIALDATA_CLUSTER_KEY\""
+            fi
+        fi
+        echo "$sd_cmd"
+    fi
+}
+
+# ---------------------------------------------------------------------------
 # Write sbatch script
 # ---------------------------------------------------------------------------
 mkdir -p "$OUTPUT_DIR"
@@ -547,16 +601,7 @@ SBATCH_FILE="${OUTPUT_DIR}/pipeline_${NAME}_$$.sbatch"
             echo "RUN_DIR=\$(ls -td \"\${SLIDE_OUT}\"/*/  2>/dev/null | head -1)"
             echo "DET_JSON=\"\${RUN_DIR}${CELL_TYPE}_detections.json\""
             echo "if [[ -n \"\$RUN_DIR\" && -f \"\$DET_JSON\" ]]; then"
-            if [[ "$SPATIALDATA_ENABLED" == "true" ]]; then
-                echo "    echo \"  Exporting to SpatialData...\""
-                sd_cmd="    \$XLDVP_PYTHON $REPO/scripts/convert_to_spatialdata.py --detections \"\$DET_JSON\" --output \"\${RUN_DIR}${CELL_TYPE}_spatialdata.zarr\" --cell-type \"$CELL_TYPE\" --overwrite"
-                if [[ "$SPATIALDATA_SHAPES" == "true" ]]; then
-                    sd_cmd+=" --tiles-dir \"\${RUN_DIR}tiles\""
-                else
-                    sd_cmd+=" --no-shapes"
-                fi
-                echo "$sd_cmd"
-            fi
+            _emit_post_detection "    " "\$CZI_FILE"
             echo "else"
             echo "    echo \"WARNING: ${CELL_TYPE}_detections.json not found for slide \${SLIDE_NAME} scene \${SCENE}\""
             echo "fi"
@@ -584,16 +629,7 @@ SBATCH_FILE="${OUTPUT_DIR}/pipeline_${NAME}_$$.sbatch"
             echo "        RUN_DIR=\$(ls -td \"\${SLIDE_OUT}\"/*/  2>/dev/null | head -1)"
             echo "        DET_JSON=\"\${RUN_DIR}${CELL_TYPE}_detections.json\""
             echo "        if [[ -n \"\$RUN_DIR\" && -f \"\$DET_JSON\" ]]; then"
-            if [[ "$SPATIALDATA_ENABLED" == "true" ]]; then
-                echo "            echo \"  Exporting to SpatialData...\""
-                sd_cmd="            \$XLDVP_PYTHON $REPO/scripts/convert_to_spatialdata.py --detections \"\$DET_JSON\" --output \"\${RUN_DIR}${CELL_TYPE}_spatialdata.zarr\" --cell-type \"$CELL_TYPE\" --overwrite"
-                if [[ "$SPATIALDATA_SHAPES" == "true" ]]; then
-                    sd_cmd+=" --tiles-dir \"\${RUN_DIR}tiles\""
-                else
-                    sd_cmd+=" --no-shapes"
-                fi
-                echo "$sd_cmd"
-            fi
+            _emit_post_detection "            " "\$CZI_FILE"
             echo "        else"
             echo "            echo \"WARNING: ${CELL_TYPE}_detections.json not found for slide \${SLIDE_NAME} scene \${SCENE}\""
             echo "        fi"
@@ -625,50 +661,7 @@ SBATCH_FILE="${OUTPUT_DIR}/pipeline_${NAME}_$$.sbatch"
             echo "    RUN_DIR=\$(ls -td \"\${SLIDE_OUT}\"/*/  2>/dev/null | head -1)"
             echo "    DET_JSON=\"\${RUN_DIR}${CELL_TYPE}_detections.json\""
             echo "    if [[ -n \"\$RUN_DIR\" && -f \"\$DET_JSON\" ]]; then"
-
-            if [[ -n "$MARKER_CHANNELS" ]]; then
-                classify_extra=""
-                if [[ "$CORRECT_ALL_CHANNELS" == "true" ]]; then
-                    classify_extra+=" --correct-all-channels"
-                fi
-                echo "        echo \"  Classifying markers: $MARKER_NAMES\""
-                if [[ "$MARKER_USE_WAVELENGTH" == "true" ]]; then
-                    echo "        \$XLDVP_PYTHON $REPO/scripts/classify_markers.py --detections \"\$DET_JSON\" --marker-wavelength \"$MARKER_CHANNELS\" --marker-name \"$MARKER_NAMES\" --method \"$MARKER_METHOD\" --czi-path \"\$CZI_FILE\" --output-dir \"\$RUN_DIR\"${classify_extra}"
-                else
-                    echo "        \$XLDVP_PYTHON $REPO/scripts/classify_markers.py --detections \"\$DET_JSON\" --marker-channel \"$MARKER_CHANNELS\" --marker-name \"$MARKER_NAMES\" --method \"$MARKER_METHOD\" --output-dir \"\$RUN_DIR\"${classify_extra}"
-                fi
-                echo "        # Discover classified output (may be _filtered_classified or _classified)"
-                echo "        for _cf in \"\${RUN_DIR}${CELL_TYPE}_detections_filtered_classified.json\" \"\${RUN_DIR}${CELL_TYPE}_detections_classified.json\"; do"
-                echo "            if [[ -f \"\$_cf\" ]]; then DET_JSON=\"\$_cf\"; break; fi"
-                echo "        done"
-            fi
-
-            if [[ "$SPATIAL_ENABLED" == "true" ]]; then
-                echo ""
-                echo "        # Step 3: Spatial analysis"
-                echo "        echo \"  Running spatial analysis...\""
-                echo "        \$XLDVP_PYTHON $REPO/scripts/spatial_cell_analysis.py --detections \"\$DET_JSON\" --output-dir \"\$RUN_DIR\" --spatial-network --marker-filter \"$SPATIAL_FILTER\" --max-edge-distance \"$SPATIAL_EDGE\" --min-component-cells \"$SPATIAL_MIN_COMP\" --pixel-size \"$PIXEL_SIZE\""
-            fi
-
-            if [[ "$SPATIALDATA_ENABLED" == "true" ]]; then
-                echo ""
-                echo "        # SpatialData export"
-                echo "        echo \"  Exporting to SpatialData...\""
-                sd_cmd="        \$XLDVP_PYTHON $REPO/scripts/convert_to_spatialdata.py --detections \"\$DET_JSON\" --output \"\${RUN_DIR}${CELL_TYPE}_spatialdata.zarr\" --cell-type \"$CELL_TYPE\" --overwrite"
-                if [[ "$SPATIALDATA_SHAPES" == "true" ]]; then
-                    sd_cmd+=" --tiles-dir \"\${RUN_DIR}tiles\""
-                else
-                    sd_cmd+=" --no-shapes"
-                fi
-                if [[ "$SPATIALDATA_SQUIDPY" == "true" ]]; then
-                    sd_cmd+=" --run-squidpy"
-                    if [[ -n "$SPATIALDATA_CLUSTER_KEY" ]]; then
-                        sd_cmd+=" --squidpy-cluster-key \"$SPATIALDATA_CLUSTER_KEY\""
-                    fi
-                fi
-                echo "$sd_cmd"
-            fi
-
+            _emit_post_detection "        " "\$CZI_FILE"
             echo "    else"
             echo "        echo \"  WARNING: ${CELL_TYPE}_detections.json not found, skipping marker/spatial steps\""
             echo "    fi"
@@ -693,16 +686,7 @@ SBATCH_FILE="${OUTPUT_DIR}/pipeline_${NAME}_$$.sbatch"
         echo "RUN_DIR=\$(ls -td \"\${SLIDE_OUT}\"/*/  2>/dev/null | head -1)"
         echo "DET_JSON=\"\${RUN_DIR}${CELL_TYPE}_detections.json\""
         echo "if [[ -n \"\$RUN_DIR\" && -f \"\$DET_JSON\" ]]; then"
-        if [[ "$SPATIALDATA_ENABLED" == "true" ]]; then
-            echo "    echo \"Exporting to SpatialData...\""
-            sd_cmd="    \$XLDVP_PYTHON $REPO/scripts/convert_to_spatialdata.py --detections \"\$DET_JSON\" --output \"\${RUN_DIR}${CELL_TYPE}_spatialdata.zarr\" --cell-type \"$CELL_TYPE\" --overwrite"
-            if [[ "$SPATIALDATA_SHAPES" == "true" ]]; then
-                sd_cmd+=" --tiles-dir \"\${RUN_DIR}tiles\""
-            else
-                sd_cmd+=" --no-shapes"
-            fi
-            echo "$sd_cmd"
-        fi
+        _emit_post_detection "    " "$CZI_PATH"
         echo "else"
         echo "    echo \"WARNING: ${CELL_TYPE}_detections.json not found for scene \${SCENE}\""
         echo "fi"
@@ -724,16 +708,7 @@ SBATCH_FILE="${OUTPUT_DIR}/pipeline_${NAME}_$$.sbatch"
         echo "    RUN_DIR=\$(ls -td \"\${SLIDE_OUT}\"/*/  2>/dev/null | head -1)"
         echo "    DET_JSON=\"\${RUN_DIR}${CELL_TYPE}_detections.json\""
         echo "    if [[ -n \"\$RUN_DIR\" && -f \"\$DET_JSON\" ]]; then"
-        if [[ "$SPATIALDATA_ENABLED" == "true" ]]; then
-            echo "        echo \"Exporting to SpatialData...\""
-            sd_cmd="        \$XLDVP_PYTHON $REPO/scripts/convert_to_spatialdata.py --detections \"\$DET_JSON\" --output \"\${RUN_DIR}${CELL_TYPE}_spatialdata.zarr\" --cell-type \"$CELL_TYPE\" --overwrite"
-            if [[ "$SPATIALDATA_SHAPES" == "true" ]]; then
-                sd_cmd+=" --tiles-dir \"\${RUN_DIR}tiles\""
-            else
-                sd_cmd+=" --no-shapes"
-            fi
-            echo "$sd_cmd"
-        fi
+        _emit_post_detection "        " "$CZI_PATH"
         echo "    else"
         echo "        echo \"WARNING: ${CELL_TYPE}_detections.json not found for scene \${SCENE}\""
         echo "    fi"
@@ -754,49 +729,7 @@ SBATCH_FILE="${OUTPUT_DIR}/pipeline_${NAME}_$$.sbatch"
         echo "RUN_DIR=\$(ls -td \"\${SLIDE_OUT}\"/*/  2>/dev/null | head -1)"
         echo "DET_JSON=\"\${RUN_DIR}${CELL_TYPE}_detections.json\""
         echo "if [[ -n \"\$RUN_DIR\" && -f \"\$DET_JSON\" ]]; then"
-
-        if [[ -n "$MARKER_CHANNELS" ]]; then
-            classify_extra=""
-            if [[ "$CORRECT_ALL_CHANNELS" == "true" ]]; then
-                classify_extra+=" --correct-all-channels"
-            fi
-            echo "    echo \"Classifying markers: $MARKER_NAMES\""
-            if [[ "$MARKER_USE_WAVELENGTH" == "true" ]]; then
-                echo "    \$XLDVP_PYTHON $REPO/scripts/classify_markers.py --detections \"\$DET_JSON\" --marker-wavelength \"$MARKER_CHANNELS\" --marker-name \"$MARKER_NAMES\" --method \"$MARKER_METHOD\" --czi-path \"$CZI_PATH\" --output-dir \"\$RUN_DIR\"${classify_extra}"
-            else
-                echo "    \$XLDVP_PYTHON $REPO/scripts/classify_markers.py --detections \"\$DET_JSON\" --marker-channel \"$MARKER_CHANNELS\" --marker-name \"$MARKER_NAMES\" --method \"$MARKER_METHOD\" --output-dir \"\$RUN_DIR\"${classify_extra}"
-            fi
-            echo "    # Discover classified output (may be _filtered_classified or _classified)"
-            echo "    for _cf in \"\${RUN_DIR}${CELL_TYPE}_detections_filtered_classified.json\" \"\${RUN_DIR}${CELL_TYPE}_detections_classified.json\"; do"
-            echo "        if [[ -f \"\$_cf\" ]]; then DET_JSON=\"\$_cf\"; break; fi"
-            echo "    done"
-        fi
-
-        if [[ "$SPATIAL_ENABLED" == "true" ]]; then
-            echo ""
-            echo "    # Step 3: Spatial analysis"
-            echo "    echo \"Running spatial analysis...\""
-            echo "    \$XLDVP_PYTHON $REPO/scripts/spatial_cell_analysis.py --detections \"\$DET_JSON\" --output-dir \"\$RUN_DIR\" --spatial-network --marker-filter \"$SPATIAL_FILTER\" --max-edge-distance \"$SPATIAL_EDGE\" --min-component-cells \"$SPATIAL_MIN_COMP\" --pixel-size \"$PIXEL_SIZE\""
-        fi
-
-        if [[ "$SPATIALDATA_ENABLED" == "true" ]]; then
-            echo ""
-            echo "    # SpatialData export"
-            echo "    echo \"Exporting to SpatialData...\""
-            sd_cmd="    \$XLDVP_PYTHON $REPO/scripts/convert_to_spatialdata.py --detections \"\$DET_JSON\" --output \"\${RUN_DIR}${CELL_TYPE}_spatialdata.zarr\" --cell-type \"$CELL_TYPE\" --overwrite"
-            if [[ "$SPATIALDATA_SHAPES" == "true" ]]; then
-                sd_cmd+=" --tiles-dir \"\${RUN_DIR}tiles\""
-            else
-                sd_cmd+=" --no-shapes"
-            fi
-            if [[ "$SPATIALDATA_SQUIDPY" == "true" ]]; then
-                sd_cmd+=" --run-squidpy"
-                if [[ -n "$SPATIALDATA_CLUSTER_KEY" ]]; then
-                    sd_cmd+=" --squidpy-cluster-key \"$SPATIALDATA_CLUSTER_KEY\""
-                fi
-            fi
-            echo "$sd_cmd"
-        fi
+        _emit_post_detection "    " "$CZI_PATH"
 
         # Step 4: Spatial viewer (single-slide, inline)
         if [[ "$VIEWER_ENABLED" == "true" && -n "$VIEWER_GROUP_FIELD" ]]; then
@@ -867,15 +800,6 @@ if [[ "$MULTI_SLIDE" == "true" || "$MULTI_SCENE" == "true" ]]; then
             exit 1
         fi
     done
-    # Warn about inline markers/spatial not yet in multi-scene detection sbatch
-    if [[ -n "$MARKER_CHANNELS" && "$MULTI_SCENE" == "true" ]]; then
-        echo "WARNING: Inline marker classification is not yet supported in multi-scene detection jobs." >&2
-        echo "Run classify_markers.py manually per scene after detection completes." >&2
-    fi
-    if [[ "$SPATIAL_ENABLED" == "true" && "$MULTI_SCENE" == "true" ]]; then
-        echo "WARNING: Inline spatial analysis is not yet supported in multi-scene detection jobs." >&2
-        echo "Run spatial_cell_analysis.py manually per scene after detection completes." >&2
-    fi
 fi
 
 if [[ "$NUM_SHARDS" -gt 1 && "$MULTI_SLIDE" == "false" ]]; then
