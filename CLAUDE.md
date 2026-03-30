@@ -238,8 +238,9 @@ slurm:
   mem_gb: 556
   gpus: "l40s:4"
   time: "3-00:00:00"
-  slides_per_job: 1             # 1 slide/job = parallel SLURM array tasks
-  num_jobs: 1
+  # Multi-scene CZIs: add scenes + scene_parallel
+  # scenes: "0-9"           # process scenes 0 through 9
+  # scene_parallel: true    # true = array job (one task/scene), false = sequential loop
 ```
 ```bash
 scripts/run_pipeline.sh configs/my_experiment.yaml
@@ -621,7 +622,7 @@ python run_segmentation.py --czi-path slide.czi --cell-type nmj \
 | `scripts/classify_markers.py` | Marker pos/neg classification (SNR/Otsu/GMM) |
 | `scripts/regenerate_html.py` | Regenerate HTML viewer from saved detections |
 | `scripts/czi_info.py` | CZI channel metadata (run first!) |
-| `scripts/run_pipeline.sh` | YAML config-driven SLURM launcher |
+| `scripts/run_pipeline.sh` | YAML config-driven SLURM launcher. Unified work-item model: slides × scenes cross product. `scenes: "0-9"` + `scene_parallel: true/false`. |
 | `scripts/napari_place_crosses.py` | Interactive cross placement for LMD |
 | `scripts/generate_multi_slide_spatial_viewer.py` | Unified spatial viewer with ROI + stats |
 | `scripts/convert_to_spatialdata.py` | Export to SpatialData zarr (scverse) |

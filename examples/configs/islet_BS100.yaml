@@ -1,0 +1,32 @@
+name: islet_BS100
+czi_path: /fs/pool/pool-mann-edwin/marvin_test/2025_09_03_30610012_BS-100.czi
+output_dir: /fs/pool/pool-mann-edwin/marvin_test/output_20260327
+cell_type: islet
+
+# Skip brightfield (ch0), load only fluorescence channels
+load_channels: "1,2,3,4,5"
+
+# Cellpose 2-channel input: membrane + nuclear
+channel_map:
+  cyto: 633       # AF633 membrane marker → Cellpose cytoplasm input
+  nuc: DAPI       # DAPI nuclear stain → Cellpose nucleus input
+
+# Extract per-channel intensity features for all loaded channels
+all_channels: true
+
+# HTML viewer: 10% subsample keeps browser responsive
+html_sample_fraction: 0.10
+
+# SpatialData export for scverse ecosystem
+spatialdata:
+  enabled: true
+  extract_shapes: true
+  run_squidpy: false
+
+# SLURM config — p.hpcl8 (16 idle nodes available)
+slurm:
+  partition: p.hpcl8
+  cpus: 18
+  mem_gb: 294
+  gpus: "rtx5000:2"
+  time: "1-00:00:00"

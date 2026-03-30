@@ -276,8 +276,9 @@ slurm:
   mem_gb: <from system_info recommended.mem_gb, typically ~500>
   gpus: "<gpu_type>:4"          # always request all GPUs on GPU partitions
   time: "3-00:00:00"
-  slides_per_job: 1           # 1 slide/job = parallel SLURM array tasks, not sequential — much faster throughput
-  num_jobs: <number of slides>
+  # Multi-scene CZIs:
+  # scenes: "0-9"             # process scenes 0-9
+  # scene_parallel: true      # true = SLURM array (1 task/scene), false = sequential loop
 ```
 Then run: `scripts/run_pipeline.sh examples/configs/<name>.yaml`
 
