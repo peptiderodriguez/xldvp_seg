@@ -777,6 +777,48 @@ PYTHONPATH=$REPO $XLDVP_PYTHON $REPO/examples/bone_marrow/select_mks_for_lmd.py 
 ```
 Multi-plate support: `segmentation.lmd.well_plate` handles automatic overflow to additional 384-well plates when >308 wells are needed. Empty QC wells (10% of samples) are inserted evenly across all plates. Well ordering: serpentine within quadrants (B2→B3→C3→C2), nearest-corner transitions between quadrants to minimize laser head travel.
 
+**Step 28b — Sliding window sampling (spatially-resolved LMD).** For collecting cells along a tissue structure (e.g., brain region, mesothelial ribbon) where spatial position matters:
+
+1. Draw a polygon ROI in the spatial viewer, export as JSON
+2. Grid search for zero-rejection (radius, overlap) combos:
+```bash
+PYTHONPATH=$REPO $XLDVP_PYTHON $REPO/scripts/sliding_window_sampling.py \
+    --detections <detections.json> \
+    --roi <rois.json> \
+    --czi-path <slide.czi> \
+    --grid-search --target-multiplier 20 \
+    --output-grid zero_rejection_combos.json
+```
+3. Run with best combo:
+```bash
+PYTHONPATH=$REPO $XLDVP_PYTHON $REPO/scripts/sliding_window_sampling.py \
+    --detections <detections.json> \
+    --roi <rois.json> \
+    --czi-path <slide.czi> \
+    --from-grid zero_rejection_combos.json --grid-index 0 \
+    --output samples.json --output-viz viz.png
+```
+
+**How it works:** Computes the morphological skeleton (centerline) of the ROI polygon, places circular windows at regular intervals along it, then samples cells into each window using farthest-point spatial balancing. Each cell is assigned to exactly one window (LMD constraint). Area per window matches N × median cell area ±10%.
+
+**Reference settings** (e14 WT coronal brain, Y-shaped ROI, ~660 cells, ~6700 cells/mm²):
+- 20× target: r=70um, overlap=40% → 20 windows, 0 rejected, 54% coverage
+- 30× target: r=90um, overlap=40% → 15 windows, 0 rejected, 60% coverage
+
+**Key:** Always pass `--czi-path` for pixel size. Narrow/curved ROIs need larger windows for zero rejections. Use `--grid-search` for any new ROI geometry.
+
+**Visualize with the spatial viewer:**
+```bash
+PYTHONPATH=$REPO $XLDVP_PYTHON $REPO/scripts/generate_multi_slide_spatial_viewer.py \
+    --detections <detections.json> \
+    --scene <N> \
+    --czi-path <slide.czi> \
+    --display-channels "1,0" \
+    --scale-factor 0.5 \
+    --group-field n_nuclei --group-label-prefix nuclei \
+    --output viewer.html
+```
+
 ---
 
 ## Phase 6: Cohort Analysis + Multi-omic Linking (optional)
