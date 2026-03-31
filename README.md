@@ -6,7 +6,7 @@
 [![Python 3.10](https://img.shields.io/badge/python-3.10%20%7C%203.11-blue.svg)](https://www.python.org/downloads/)
 [![License: MIT](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
 [![Code style: black](https://img.shields.io/badge/code%20style-black-000000.svg)](https://github.com/psf/black)
-![Tests: 488](https://img.shields.io/badge/tests-516%20passed-brightgreen.svg)
+![Tests: 517](https://img.shields.io/badge/tests-517%20passed-brightgreen.svg)
 
 Detect cells in whole-slide CZI images, classify them by type and marker expression, analyze spatial organization, and export selected cells for laser microdissection and mass spectrometry. End-to-end DVP (Deep Visual Proteomics) from slide to spatial proteomics.
 
@@ -94,7 +94,7 @@ segmentation/              # Main package (pip install -e .)
 ├── roi/                   # ROI-restricted detection (marker threshold, circular, polygon)
 └── utils/                 # JSON I/O, device handling, logging, config
 
-scripts/                   # 25 reusable CLI tools
+scripts/                   # 26 reusable CLI tools
 examples/                  # Project-specific analyses by experiment
 ├── bone_marrow/           # MK, RBC vascularization, bone regions
 ├── mesothelium/           # MSLN detection + annotation
@@ -109,7 +109,7 @@ examples/                  # Project-specific analyses by experiment
 ├── slurm/                 # Legacy SLURM job scripts
 └── legacy/                # Deprecated scripts (archived)
 
-tests/                     # 516 tests across 21 files
+tests/                     # 517 tests across 21 files
 ```
 
 ---
@@ -180,7 +180,7 @@ slurm:
 scripts/run_pipeline.sh examples/configs/my_experiment.yaml
 ```
 
-Chains detection → marker classification → nuclei counting → HTML viewer generation as separate SLURM jobs with correct dependencies.
+Chains detection → marker classification → nuclei counting → HTML viewer generation as separate SLURM jobs with correct dependencies. Unified work-item model: slides × scenes cross product. Add `scenes: "0-9"` + `scene_parallel: true` for multi-scene CZIs.
 
 ---
 
@@ -192,7 +192,9 @@ Chains detection → marker classification → nuclei counting → HTML viewer g
 | Marker classification | `scripts/classify_markers.py` | Median SNR / Otsu / GMM per channel |
 | UMAP + clustering | `scripts/cluster_by_features.py` | Leiden/HDBSCAN, trajectory, spatial smoothing |
 | Spatial networks | `scripts/spatial_cell_analysis.py` | Delaunay graphs, community detection |
-| Interactive viewer | `scripts/generate_multi_slide_spatial_viewer.py` | KDE contours, ROI drawing, graph patterns |
+| Interactive viewer | `scripts/generate_multi_slide_spatial_viewer.py` | Fluorescence overlay, cell contours, ROI drawing. `--scene N` for multi-scene CZIs |
+| Sliding window | `scripts/sliding_window_sampling.py` | Area-matched rolling window along ROI centerlines for LMD. Multi-ROI, `--exclude-cells` for incremental sessions |
+| Curvilinear patterns | `scripts/detect_curvilinear_patterns.py` | Strip/ribbon detection via graph diameter linearity |
 | Vessel structures | `scripts/vessel_community_analysis.py` | Multi-scale morphology + SNR |
 | SpatialData export | `scripts/convert_to_spatialdata.py` | scverse zarr (squidpy, scanpy) |
 | Nuclear counting | `scripts/count_nuclei_per_cell.py` | Cellpose 2nd pass, per-nucleus features |
@@ -208,7 +210,7 @@ See `examples/` for experiment-specific analyses (bone marrow, liver zonation, i
 
 ```bash
 pip install -e ".[dev]"     # Install with dev tools
-make test                   # 516 tests with coverage
+make test                   # 517 tests with coverage
 make lint                   # ruff + black check
 make format                 # Auto-fix formatting
 pre-commit install          # Hook for pre-commit checks
