@@ -486,18 +486,11 @@ def visualize(
 # ---------------------------------------------------------------------------
 
 
-def load_cells_and_roi(detections_path, roi_path, roi_id=None, pixel_size_um=None):
-    """Load detections and ROI polygon, return cells inside ROI.
-
-    Args:
-        detections_path: Path to detection JSON.
-        roi_path: Path to ROI JSON (from spatial viewer export).
-        roi_id: ROI id/name to use (default: first).
-        pixel_size_um: Pixel size from CZI metadata. Required when detections
-            use pixel coordinates (global_center) instead of um coordinates.
+def load_detections(detections_path, pixel_size_um=None):
+    """Load detection positions and areas from JSON.
 
     Returns:
-        (positions, areas, roi_indices, roi_positions, roi_areas, verts, poly, roi_dict)
+        (positions, areas) — Nx2 array and length-N array for ALL detections.
     """
     from segmentation.utils.json_utils import fast_json_load
 
@@ -505,27 +498,8 @@ def load_cells_and_roi(detections_path, roi_path, roi_id=None, pixel_size_um=Non
     if isinstance(dets, dict):
         dets = dets.get("detections", [])
 
-    rois = fast_json_load(str(roi_path))
-    roi_list = rois.get("rois", []) if isinstance(rois, dict) else rois
-    if not isinstance(roi_list, list) or not roi_list:
-        logger.error("No ROIs found in %s", roi_path)
-        sys.exit(1)
-    if roi_id is not None:
-        roi = next(
-            (r for r in roi_list if r.get("id") == roi_id or r.get("name") == roi_id), roi_list[0]
-        )
-    else:
-        roi = roi_list[0]
-
-    verts = np.array(roi["vertices_um"])
-    poly = Polygon(verts)
-
-    # Extract positions and areas in a single pass to keep them aligned.
-    # Positions must match the coordinate system used by the spatial viewer
-    # (where the ROI was drawn): global_center_um (top-level, then features).
     xs, ys, areas = [], [], []
     for d in dets:
-        # Position: top-level global_center_um first (written by pipeline with CZI pixel size)
         gc_um = d.get("global_center_um")
         if gc_um is None:
             gc_um = d.get("features", {}).get("global_center_um")
@@ -537,9 +511,8 @@ def load_cells_and_roi(detections_path, roi_path, roi_id=None, pixel_size_um=Non
             xs.append(gc[0] * pixel_size_um)
             ys.append(gc[1] * pixel_size_um)
         else:
-            continue  # skip detection — no position available
+            continue
 
-        # Area (only appended for detections that have a position)
         f = d.get("features", {})
         a = f.get("area_um2", f.get("area"))
         areas.append(a if a is not None else 0)
@@ -550,7 +523,6 @@ def load_cells_and_roi(detections_path, roi_path, roi_id=None, pixel_size_um=Non
     positions = np.column_stack([xs, ys])
     areas = np.array(areas, dtype=float)
 
-    # Replace zeros with median of non-zero areas
     nonzero = areas[areas > 0]
     if len(nonzero) > 0 and (areas == 0).any():
         n_missing = (areas == 0).sum()
@@ -559,19 +531,54 @@ def load_cells_and_roi(detections_path, roi_path, roi_id=None, pixel_size_um=Non
             f"{n_missing} detections missing area, using median ({np.median(nonzero):.1f} um²)"
         )
 
+    return positions, areas
+
+
+def load_rois(roi_path, roi_id=None):
+    """Load ROI polygons from JSON.
+
+    Args:
+        roi_path: Path to ROI JSON (from spatial viewer export).
+        roi_id: Specific ROI id/name, or None for all ROIs.
+
+    Returns:
+        List of (roi_dict, verts, poly) tuples.
+    """
+    from segmentation.utils.json_utils import fast_json_load
+
+    rois = fast_json_load(str(roi_path))
+    roi_list = rois.get("rois", []) if isinstance(rois, dict) else rois
+    if not isinstance(roi_list, list) or not roi_list:
+        logger.error("No ROIs found in %s", roi_path)
+        sys.exit(1)
+
+    if roi_id is not None:
+        matched = [r for r in roi_list if r.get("id") == roi_id or r.get("name") == roi_id]
+        if not matched:
+            logger.error(
+                f"ROI '{roi_id}' not found. Available: {[r.get('id', r.get('name')) for r in roi_list]}"
+            )
+            sys.exit(1)
+        roi_list = matched
+
+    result = []
+    for roi in roi_list:
+        verts = np.array(roi["vertices_um"])
+        poly = Polygon(verts)
+        result.append((roi, verts, poly))
+
+    return result
+
+
+def get_roi_cells(positions, areas, poly):
+    """Filter cells to those inside a polygon ROI.
+
+    Returns:
+        (roi_indices, roi_positions, roi_areas)
+    """
     inside_mask = contains_xy(poly, positions[:, 0], positions[:, 1])
     roi_indices = np.where(inside_mask)[0]
-
-    return (
-        positions,
-        areas,
-        roi_indices,
-        positions[roi_indices],
-        areas[roi_indices],
-        verts,
-        poly,
-        roi,
-    )
+    return roi_indices, positions[roi_indices], areas[roi_indices]
 
 
 # ---------------------------------------------------------------------------
@@ -589,7 +596,11 @@ def main():
     parser.add_argument(
         "--roi", required=True, type=Path, help="ROI JSON (from spatial viewer export)"
     )
-    parser.add_argument("--roi-id", default=None, help="ROI id/name to use (default: first)")
+    parser.add_argument(
+        "--roi-id",
+        default=None,
+        help="ROI id/name to process (default: all ROIs in the file)",
+    )
     parser.add_argument(
         "--radius", type=float, default=65, help="Window radius in um (default: 65)"
     )
@@ -667,93 +678,14 @@ def main():
             "Always prefer --czi-path."
         )
 
-    # Load data
+    # Load detections (once for all ROIs)
     logger.info(f"Loading detections: {args.detections}")
-    logger.info(f"Loading ROI: {args.roi}")
-    (positions, areas, roi_indices, roi_positions, roi_areas, verts, poly, roi_dict) = (
-        load_cells_and_roi(args.detections, args.roi, args.roi_id, pixel_size_um=pixel_size_um)
-    )
+    positions, areas = load_detections(args.detections, pixel_size_um=pixel_size_um)
 
-    n_cells = len(roi_indices)
-    median_area = float(np.median(roi_areas))
-    logger.info(f"Cells in ROI: {n_cells}")
-    logger.info(f"Median cell area: {median_area:.1f} um²")
-
-    # Compute skeleton
-    logger.info("Computing morphological skeleton...")
-    paths = compute_skeleton_paths(poly)
-    logger.info(f"  {len(paths)} skeleton paths")
-
-    # Determine target area
-    target_area = args.target_multiplier * median_area
-    area_lo = target_area * (1 - args.tolerance)
-    area_hi = target_area * (1 + args.tolerance)
-    logger.info(
-        f"Target area: {args.target_multiplier:.0f} × {median_area:.1f} = {target_area:.0f} um² "
-        f"(±{args.tolerance*100:.0f}%: {area_lo:.0f}-{area_hi:.0f})"
-    )
-
-    # --- Grid search mode ---
-    if args.grid_search:
-        radii = [int(x) for x in args.radii.split(",")] if args.radii else None
-        overlaps = [float(x) for x in args.overlaps.split(",")] if args.overlaps else None
-
-        logger.info("\nGrid search...")
-        results = grid_search(
-            roi_positions,
-            roi_areas,
-            roi_indices,
-            paths,
-            area_lo,
-            area_hi,
-            n_cells,
-            radii=radii,
-            overlaps=overlaps,
-        )
-
-        zero_rej = sorted(
-            [r for r in results if r["n_rejected"] == 0],
-            key=lambda r: -r["coverage_pct"],
-        )
-        logger.info(f"\nAll combos: {len(results)}, zero-rejection: {len(zero_rej)}")
-
-        if zero_rej:
-            logger.info("\nZero-rejection combos (sorted by coverage):")
-            logger.info(
-                f"{'Radius':>7} {'Overlap':>8} {'Step':>6} {'Windows':>8} {'Sampled':>8} {'Coverage':>9}"
-            )
-            logger.info("-" * 60)
-            for r in zero_rej:
-                logger.info(
-                    f"{r['radius_um']:>5}um {r['overlap_pct']:>6}% {r['step_um']:>4}um "
-                    f"{r['n_filled']:>8} {r['n_sampled']:>8} {r['coverage_pct']:>8.1f}%"
-                )
-        else:
-            logger.warning("No zero-rejection combos found. Showing top 10 by fewest rejections:")
-            by_rej = sorted(results, key=lambda r: (r["n_rejected"], -r["coverage_pct"]))
-            for r in by_rej[:10]:
-                logger.info(
-                    f"  r={r['radius_um']}um ov={r['overlap_pct']}% -> "
-                    f"{r['n_filled']} filled, {r['n_rejected']} rejected, {r['coverage_pct']}% coverage"
-                )
-
-        out_path = args.output_grid or Path(args.roi).parent / "zero_rejection_combos.json"
-        output = {
-            "description": "Zero-rejection (radius, overlap) combos for sliding window sampling",
-            "roi_file": str(args.roi),
-            "detections_file": str(args.detections),
-            "n_cells_in_roi": n_cells,
-            "target_area_um2": round(target_area, 1),
-            "target_multiplier": args.target_multiplier,
-            "tolerance": args.tolerance,
-            "median_cell_area_um2": round(median_area, 1),
-            "centerline": "morphological_skeleton",
-            "zero_rejection_combos": zero_rej,
-            "all_combos": results,
-        }
-        atomic_json_dump(output, out_path)
-        logger.info(f"\nSaved: {out_path}")
-        return
+    # Load ROIs — all if no --roi-id, else just the specified one
+    logger.info(f"Loading ROIs: {args.roi}")
+    roi_entries = load_rois(args.roi, roi_id=args.roi_id)
+    logger.info(f"  {len(roi_entries)} ROI(s) to process")
 
     # --- Load params from grid search ---
     radius = args.radius
@@ -776,47 +708,174 @@ def main():
             f"From grid search [{args.grid_index}]: radius={radius}um, overlap={overlap*100:.0f}%"
         )
 
-    # --- Run sampling ---
-    step = 2 * radius * (1 - overlap)
+    # --- Process each ROI (shared used_global prevents double-counting) ---
+    used_global = set()
+    all_roi_results = []
+    all_roi_paths = []  # skeleton paths for visualization
+
+    for roi_idx, (roi_dict, verts, poly) in enumerate(roi_entries):
+        roi_name = roi_dict.get("name", roi_dict.get("id", f"ROI_{roi_idx}"))
+        logger.info(f"\n{'='*60}")
+        logger.info(f"ROI {roi_idx + 1}/{len(roi_entries)}: {roi_name}")
+
+        roi_indices, roi_positions, roi_areas = get_roi_cells(positions, areas, poly)
+
+        # Exclude cells already claimed by previous ROIs
+        available_mask = np.array([i not in used_global for i in roi_indices])
+        roi_indices_avail = roi_indices[available_mask]
+        roi_positions_avail = roi_positions[available_mask]
+        roi_areas_avail = roi_areas[available_mask]
+
+        n_cells = len(roi_indices)
+        n_available = len(roi_indices_avail)
+        if n_cells != n_available:
+            logger.info(
+                f"  {n_cells} cells in ROI, {n_available} available ({n_cells - n_available} claimed by prior ROIs)"
+            )
+        else:
+            logger.info(f"  {n_cells} cells in ROI")
+
+        if n_available == 0:
+            logger.warning(f"  No available cells in {roi_name}, skipping")
+            continue
+
+        median_area = float(np.median(roi_areas_avail))
+        logger.info(f"  Median cell area: {median_area:.1f} um²")
+
+        # Compute skeleton
+        paths = compute_skeleton_paths(poly)
+        logger.info(f"  {len(paths)} skeleton paths")
+        all_roi_paths.extend(paths)
+
+        # Target area
+        target_area = args.target_multiplier * median_area
+        area_lo = target_area * (1 - args.tolerance)
+        area_hi = target_area * (1 + args.tolerance)
+        logger.info(
+            f"  Target: {args.target_multiplier:.0f} × {median_area:.1f} = {target_area:.0f} um² "
+            f"(±{args.tolerance*100:.0f}%)"
+        )
+
+        # --- Grid search mode ---
+        if args.grid_search:
+            radii = [int(x) for x in args.radii.split(",")] if args.radii else None
+            overlaps = [float(x) for x in args.overlaps.split(",")] if args.overlaps else None
+
+            logger.info(f"  Grid search for {roi_name}...")
+            results = grid_search(
+                roi_positions_avail,
+                roi_areas_avail,
+                roi_indices_avail,
+                paths,
+                area_lo,
+                area_hi,
+                n_available,
+                radii=radii,
+                overlaps=overlaps,
+            )
+            zero_rej = sorted(
+                [r for r in results if r["n_rejected"] == 0],
+                key=lambda r: -r["coverage_pct"],
+            )
+            logger.info(f"  All combos: {len(results)}, zero-rejection: {len(zero_rej)}")
+            if zero_rej:
+                logger.info(
+                    f"  {'Radius':>7} {'Overlap':>8} {'Step':>6} {'Windows':>8} {'Coverage':>9}"
+                )
+                for r in zero_rej[:10]:
+                    logger.info(
+                        f"  {r['radius_um']:>5}um {r['overlap_pct']:>6}% {r['step_um']:>4}um "
+                        f"{r['n_filled']:>8} {r['coverage_pct']:>8.1f}%"
+                    )
+
+            all_roi_results.append(
+                {
+                    "roi": roi_dict,
+                    "roi_name": roi_name,
+                    "n_cells": n_available,
+                    "zero_rejection_combos": zero_rej,
+                    "all_combos": results,
+                }
+            )
+            continue  # grid search doesn't sample — move to next ROI
+
+        # --- Run sampling ---
+        step = 2 * radius * (1 - overlap)
+        centers = place_windows_along_paths(paths, radius, step)
+        logger.info(f"  {len(centers)} window positions, step={step:.0f}um")
+
+        if len(centers) == 0:
+            logger.warning(f"  No valid window positions for {roi_name}")
+            continue
+
+        windows, n_rejected = run_sampling(
+            roi_positions_avail,
+            roi_areas_avail,
+            roi_indices_avail,
+            centers,
+            radius,
+            area_lo,
+            area_hi,
+        )
+
+        # Track globally claimed cells
+        roi_cells = [c for w in windows for c in w["cell_indices"]]
+        if len(roi_cells) != len(set(roi_cells)):
+            raise RuntimeError(f"BUG: duplicate cells in {roi_name}")
+        used_global.update(roi_cells)
+        coverage = len(roi_cells) / n_available * 100 if n_available > 0 else 0
+
+        logger.info(f"  Windows: {len(windows)}, Rejected: {n_rejected}")
+        if windows:
+            logger.info(
+                f"  Cells/window: {min(w['n_cells'] for w in windows)}-{max(w['n_cells'] for w in windows)}"
+            )
+        logger.info(f"  Sampled: {len(roi_cells)}/{n_available} ({coverage:.1f}%)")
+
+        all_roi_results.append(
+            {
+                "roi": roi_dict,
+                "roi_name": roi_name,
+                "n_cells_in_roi": n_cells,
+                "n_available": n_available,
+                "n_windows": len(windows),
+                "n_rejected": n_rejected,
+                "n_sampled": len(roi_cells),
+                "coverage_pct": round(coverage, 1),
+                "windows": windows,
+            }
+        )
+
+    # --- Grid search: save and return ---
+    if args.grid_search:
+        out_path = args.output_grid or Path(args.roi).parent / "zero_rejection_combos.json"
+        output = {
+            "description": "Zero-rejection combos per ROI",
+            "roi_file": str(args.roi),
+            "detections_file": str(args.detections),
+            "target_multiplier": args.target_multiplier,
+            "tolerance": args.tolerance,
+            "rois": all_roi_results,
+        }
+        atomic_json_dump(output, out_path)
+        logger.info(f"\nSaved: {out_path}")
+        return
+
+    # --- Summary ---
+    total_windows = sum(r.get("n_windows", 0) for r in all_roi_results)
+    total_sampled = len(used_global)
+    total_cells = sum(r.get("n_cells_in_roi", 0) for r in all_roi_results)
+
+    logger.info(f"\n{'='*60}")
     logger.info(
-        f"\nPlacing windows: radius={radius}um, step={step:.0f}um ({overlap*100:.0f}% overlap)"
+        f"TOTAL: {len(all_roi_results)} ROIs, {total_windows} windows, "
+        f"{total_sampled} unique cells sampled"
     )
-
-    centers = place_windows_along_paths(paths, radius, step)
-    logger.info(f"  {len(centers)} window positions")
-
-    if len(centers) == 0:
-        logger.error("No valid window positions along skeleton")
-        sys.exit(1)
-
-    windows, n_rejected = run_sampling(
-        roi_positions, roi_areas, roi_indices, centers, radius, area_lo, area_hi
-    )
-
-    # Verify uniqueness
-    all_cells = [c for w in windows for c in w["cell_indices"]]
-    if len(all_cells) != len(set(all_cells)):
-        raise RuntimeError("BUG: duplicate cell assignments detected")
-    used_global = set(all_cells)
-    coverage = len(used_global) / n_cells * 100
-
-    logger.info("\nResults:")
-    logger.info(f"  Windows: {len(windows)}, Rejected: {n_rejected}")
-    if windows:
-        logger.info(
-            f"  Cells/window: {min(w['n_cells'] for w in windows)}-{max(w['n_cells'] for w in windows)}"
-        )
-        logger.info(
-            f"  Area/window: {min(w['total_area_um2'] for w in windows):.0f}"
-            f"-{max(w['total_area_um2'] for w in windows):.0f} um²"
-        )
-    logger.info(f"  Sampled: {len(used_global)}/{n_cells} ({coverage:.1f}%)")
-    logger.info("  VERIFIED: each cell sampled exactly once")
+    logger.info("VERIFIED: no cell sampled more than once across all ROIs")
 
     # Save
     out_path = args.output or Path(args.detections).parent / "sliding_window_samples.json"
     output = {
-        "roi": roi_dict,
         "window_size_um": round(2 * radius, 1),
         "radius_um": radius,
         "step_um": round(step, 1),
@@ -828,42 +887,118 @@ def main():
         "target_multiplier": args.target_multiplier,
         "target_area_um2": round(target_area, 1),
         "tolerance": args.tolerance,
-        "median_cell_area_um2": round(median_area, 1),
-        "n_cells_in_roi": n_cells,
-        "n_windows": len(windows),
-        "n_rejected": n_rejected,
-        "n_total_unique_cells": len(used_global),
-        "coverage_pct": round(coverage, 1),
-        "windows": windows,
+        "n_rois": len(all_roi_results),
+        "n_total_windows": total_windows,
+        "n_total_unique_cells": total_sampled,
+        "rois": all_roi_results,
     }
     atomic_json_dump(output, out_path)
     logger.info(f"Saved: {out_path}")
 
-    # Visualize
+    # Visualize — combine all ROIs into one plot
+    all_verts = [verts for _, verts, _ in roi_entries]
+    all_windows = [w for r in all_roi_results for w in r.get("windows", [])]
+    all_roi_indices = (
+        np.concatenate([get_roi_cells(positions, areas, poly)[0] for _, _, poly in roi_entries])
+        if roi_entries
+        else np.array([])
+    )
+
     if args.output_viz is not None:
         viz_path = args.output_viz
     else:
-        cov_str = f"{coverage:.1f}"
         viz_path = (
             Path(args.detections).parent
-            / f"sliding_window_r{int(radius)}_ov{int(overlap*100)}_{n_rejected}rej_{len(windows)}win_{cov_str}cov.png"
+            / f"sliding_window_{len(all_roi_results)}rois_{total_windows}win.png"
         )
 
-    visualize(
-        positions,
-        roi_indices,
-        verts,
-        windows,
-        paths,
-        radius,
-        used_global,
-        n_cells,
-        step,
-        overlap,
-        n_rejected,
-        target_area,
-        viz_path,
+    # Multi-ROI visualization
+    import colorsys
+
+    import matplotlib
+
+    matplotlib.use("Agg")
+    import matplotlib.pyplot as plt
+    from matplotlib.patches import Polygon as MplPolygon
+
+    golden = (1 + 5**0.5) / 2
+    n_win = len(all_windows)
+    colors = [colorsys.hsv_to_rgb((i / golden) % 1.0, 0.85, 0.95) for i in range(n_win)]
+
+    fig, ax = plt.subplots(1, 1, figsize=(18, 7))
+    ax.set_title(
+        f"{len(all_roi_results)} ROIs, {n_win} windows, "
+        f"{total_sampled} unique cells | Each cell exactly once",
+        fontsize=11,
     )
+
+    for v in all_verts:
+        roi_patch = MplPolygon(
+            v, closed=True, fill=False, edgecolor="white", linewidth=2, linestyle="--"
+        )
+        ax.add_patch(roi_patch)
+    for path in all_roi_paths:
+        ax.plot(path[:, 0], path[:, 1], "w-", linewidth=0.8, alpha=0.3, zorder=1)
+
+    unsampled = [i for i in all_roi_indices if i not in used_global]
+    if unsampled:
+        ax.scatter(
+            positions[unsampled, 0],
+            positions[unsampled, 1],
+            s=8,
+            c="gray",
+            alpha=0.5,
+            label=f"Unsampled ({len(unsampled)})",
+            zorder=1,
+            edgecolors="white",
+            linewidths=0.5,
+        )
+
+    for i, w in enumerate(all_windows):
+        c = colors[i]
+        circle = plt.Circle(
+            (w["center_x"], w["center_y"]),
+            radius,
+            fill=False,
+            edgecolor=c,
+            linewidth=1.5,
+            alpha=0.7,
+            zorder=2,
+        )
+        ax.add_patch(circle)
+        cell_pos = positions[w["cell_indices"]]
+        ax.scatter(
+            cell_pos[:, 0],
+            cell_pos[:, 1],
+            s=14,
+            c=[c],
+            alpha=0.95,
+            zorder=3,
+            edgecolors="black",
+            linewidths=0.4,
+        )
+        ax.text(
+            w["center_x"],
+            w["center_y"],
+            f"{i}\n{w['n_cells']}c",
+            fontsize=4,
+            color="white",
+            ha="center",
+            va="center",
+            fontweight="bold",
+            zorder=4,
+            bbox=dict(boxstyle="round,pad=0.15", facecolor=c, alpha=0.7, edgecolor="none"),
+        )
+
+    ax.set_aspect("equal")
+    ax.set_facecolor("#1a1a2e")
+    ax.set_xlabel("X (um)")
+    ax.set_ylabel("Y (um)")
+    ax.legend(fontsize=9, loc="upper right")
+    plt.tight_layout()
+    plt.savefig(viz_path, dpi=200, bbox_inches="tight", facecolor="#0d1117")
+    plt.close()
+    logger.info("Saved visualization: %s", viz_path)
 
 
 if __name__ == "__main__":
