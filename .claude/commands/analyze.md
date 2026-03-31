@@ -110,6 +110,7 @@ For beginners, expand on each step as you reach it. For advanced users, just ask
 | **Markers** | Median-based SNR thresholding (default ≥1.5) / Otsu / GMM | `scripts/classify_markers.py` |
 | **Explore** | UMAP + t-SNE, Leiden/HDBSCAN clustering, trajectory (diffmap, PAGA, pseudotime), interactive plotly | `scripts/cluster_by_features.py` |
 | **Spatial** | Delaunay networks, community detection, cell neighborhoods | `scripts/spatial_cell_analysis.py` |
+| **Curvilinear patterns** | Detect strip/ribbon structures (e.g., mesothelium) via KD-tree radius graph → connected components → graph diameter linearity. Works for curved structures. Tunable: `--radius`, `--linearity-threshold`, `--min-strip-length`, `--min-strip-cells`. Writes strip-only JSON for fast viewer. | `scripts/detect_curvilinear_patterns.py` |
 | **Tissue zones** | Spatially-constrained zone discovery, transects, bone region annotation | `examples/liver/assign_tissue_zones.py`, `examples/liver/zonation_transect.py`, `examples/bone_marrow/annotate_bone_regions.py` |
 | **Distance bins** | Concentric rings around landmarks (CV/PV), distance + ratio features, model comparison | `examples/liver/assign_distance_bins.py` |
 | **Tissue area** | Variance-based tissue detection, area measurement from CZI | `examples/bone_marrow/calculate_tissue_areas.py` |
@@ -640,7 +641,57 @@ PYTHONPATH=$REPO $XLDVP_PYTHON $REPO/examples/islet/generate_islet_overview.py \
     --detections <detections.json> --output <output>/islet_overview.html
 ```
 
-For **mesothelium** detections:
+For **mesothelium** detections, offer curvilinear pattern detection. Use AskUserQuestion to ask:
+- *"Would you like to detect mesothelial strip/ribbon patterns from MSLN+ cells?"*
+  Options: Yes (recommended), No (skip to manual annotation)
+
+If yes, use AskUserQuestion again for parameters:
+- *"What connection radius should I use? Higher values bridge larger gaps between cells."*
+  Options: 50µm (conservative), 75µm (moderate), 100µm (inclusive — recommended)
+- *"What linearity threshold? Higher = stricter strip definition."*
+  Options: 2.0 (inclusive), 2.5 (moderate), 3.0 (strict)
+- *"Minimum strip length? Drops small fragments."*
+  Options: 100µm, 200µm (recommended), 500µm
+
+Then run:
+```bash
+PYTHONPATH=$REPO $XLDVP_PYTHON $REPO/scripts/detect_curvilinear_patterns.py \
+    --detections <classified_detections.json> \
+    --snr-channel <MSLN_channel_index> --snr-threshold 1.5 \
+    --radius <chosen_radius> --linearity-threshold <chosen_threshold> \
+    --min-strip-cells 15 --min-strip-length <chosen_length> \
+    --output-prefix msln --output-dir <output>
+```
+
+After detection, use AskUserQuestion to ask what to view:
+- *"Strip detection found N strip cells in M components. What would you like to view?"*
+  Options:
+  - Strip cells only (fast — uses strip-only JSON)
+  - All MSLN+ cells colored by pattern (strip/cluster/noise)
+  - All cells colored by pattern (slow — 553K+ cells)
+
+For strip-only (fast, recommended):
+```bash
+PYTHONPATH=$REPO $XLDVP_PYTHON $REPO/scripts/generate_multi_slide_spatial_viewer.py \
+    --detections <output>/cell_detections_msln_strip_only.json \
+    --group-field "msln_pattern" --title "MSLN Strips" \
+    --czi-path <czi_path> --output <output>/spatial_viewer_strips.html \
+    --no-graph-patterns
+```
+
+For all MSLN+ cells:
+```bash
+PYTHONPATH=$REPO $XLDVP_PYTHON $REPO/scripts/generate_multi_slide_spatial_viewer.py \
+    --detections <output>/cell_detections_msln_strip_tagged.json \
+    --group-field "msln_pattern" --exclude-groups "other" \
+    --title "MSLN Patterns" --czi-path <czi_path> \
+    --output <output>/spatial_viewer_msln_patterns.html --no-graph-patterns
+```
+
+If the user is unsatisfied with the results, suggest tuning:
+- Missing strips → increase `--radius` or lower `--linearity-threshold`
+- False positive clusters → increase `--linearity-threshold` or add `--min-strip-length`
+
 ```bash
 # Tier reclassification HTML tool
 PYTHONPATH=$REPO $XLDVP_PYTHON $REPO/examples/mesothelium/generate_msln_annotation.py \
@@ -818,6 +869,19 @@ PYTHONPATH=$REPO $XLDVP_PYTHON $REPO/scripts/generate_multi_slide_spatial_viewer
     --group-field n_nuclei --group-label-prefix nuclei \
     --output viewer.html
 ```
+
+**Multi-ROI:** Draw multiple ROIs in the viewer and export them all. The script processes every ROI with shared cell tracking — cells claimed by ROI 1 are excluded from ROI 2. No `--roi-id` needed (default = all).
+
+**Incremental sessions:** Coming back later to draw more ROIs? Pass the prior session's output to exclude already-cut cells:
+```bash
+PYTHONPATH=$REPO $XLDVP_PYTHON $REPO/scripts/sliding_window_sampling.py \
+    --detections <detections.json> \
+    --roi <new_rois.json> \
+    --czi-path <slide.czi> \
+    --exclude-cells <prior_session_samples.json> \
+    --radius 70 --overlap 0.4 --target-multiplier 20
+```
+Output filenames include timestamps so successive runs don't overwrite.
 
 ---
 

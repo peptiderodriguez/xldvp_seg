@@ -373,6 +373,7 @@ Beyond the core detect → classify → LMD workflow, the pipeline supports:
 | **Sample dataset** | `segmentation/datasets/` | `sample()` generates synthetic detections (500 cells, 5 clusters, 295 features) for testing |
 | **Spatial network** | `scripts/spatial_cell_analysis.py` | Delaunay graphs, connected components, community detection, neighborhoods |
 | **Interactive spatial viewer** | `scripts/generate_multi_slide_spatial_viewer.py` | Fluorescence background + cell contours + ROI drawing. `--scene N` for multi-scene CZIs, `--czi-path` for background, `--group-label-prefix` for legend labels |
+| **Curvilinear patterns** | `scripts/detect_curvilinear_patterns.py` | KD-tree radius graph → connected components → graph diameter linearity score. Detects strips/ribbons (e.g., mesothelium) even when curved. `--radius`, `--linearity-threshold`, `--min-strip-length`. Writes strip-only JSON for fast viewer. |
 | **Vessel community analysis** | `scripts/vessel_community_analysis.py` | Multi-scale vessel structure detection (connected components + morphology + SNR) |
 | **SpatialData / scverse** | `scripts/convert_to_spatialdata.py` | Export to zarr for squidpy (spatial stats), scanpy (dim reduction), anndata |
 | **One-command viz** | `scripts/view_slide.py` | Classify → spatial cluster → interactive viewer → serve (all in one) |
@@ -383,7 +384,7 @@ Beyond the core detect → classify → LMD workflow, the pipeline supports:
 | **Region splitting** | `scripts/split_regions_for_lmd.py` | Post-process pipeline detections → watershed split large regions |
 | **Replicate sampling** | `scripts/paper_figure_sampling.py` | Area-matched or spatially-clustered replicate building, 384-well assignment |
 | **Transect selection** | `scripts/select_transect_cells_for_lmd.py` | Select cells along zonation transect paths for LMD export |
-| **Sliding window** | `scripts/sliding_window_sampling.py` | Area-matched rolling window along ROI centerlines for LMD. `--grid-search` finds zero-rejection combos. Ref: brain ~6700 cells/mm² → r=70um/40%ov for 20×, r=90um/40%ov for 30×. Always `--czi-path`. |
+| **Sliding window** | `scripts/sliding_window_sampling.py` | Area-matched rolling window along ROI centerlines for LMD. Multi-ROI (shared cell tracking). `--exclude-cells` for incremental sessions. `--grid-search` finds zero-rejection combos. Ref: brain ~6700 cells/mm² → r=70um/40%ov for 20×, r=90um/40%ov for 30×. Always `--czi-path`. |
 | **Distance bins** | `examples/liver/assign_distance_bins.py` | Concentric rings around vascular landmarks, distance features, spatial model comparison |
 | **LMD clustering** | `scripts/cluster_detections.py` | Two-stage biological clustering for well assignment |
 
@@ -632,6 +633,7 @@ python run_segmentation.py --czi-path slide.czi --cell-type nmj \
 | `scripts/cluster_by_features.py` | UMAP/t-SNE + Leiden/HDBSCAN, interactive plotly |
 | `scripts/compare_feature_sets.py` | Compare RF feature subsets via stratified CV |
 | `scripts/count_nuclei_per_cell.py` | Count nuclei per cell (Cellpose 2nd pass) |
+| `scripts/detect_curvilinear_patterns.py` | KD-tree graph → component linearity → strip/ribbon detection |
 | `scripts/detect_regions_for_lmd.py` | Percentile-threshold channel → split → features |
 | `scripts/quality_filter_detections.py` | Heuristic area+solidity+channel filter |
 | `scripts/split_regions_for_lmd.py` | Watershed split large regions |
