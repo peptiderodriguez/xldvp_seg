@@ -375,112 +375,6 @@ def grid_search(
 # ---------------------------------------------------------------------------
 
 
-def visualize(
-    positions,
-    roi_indices,
-    roi_verts,
-    windows,
-    paths,
-    radius,
-    used_global,
-    n_cells,
-    step,
-    overlap,
-    n_rejected,
-    target_area,
-    output_path,
-):
-    """Generate sliding window visualization."""
-    import colorsys
-
-    import matplotlib
-
-    matplotlib.use("Agg")
-    import matplotlib.pyplot as plt
-    from matplotlib.patches import Polygon as MplPolygon
-
-    golden = (1 + 5**0.5) / 2
-    n_win = len(windows)
-    colors = [colorsys.hsv_to_rgb((i / golden) % 1.0, 0.85, 0.95) for i in range(n_win)]
-
-    fig, ax = plt.subplots(1, 1, figsize=(18, 7))
-    cov = len(used_global) / n_cells * 100
-    ax.set_title(
-        f"r={radius}um, {overlap*100:.0f}% overlap, {n_rejected} rejected, "
-        f"{n_win} windows, {cov:.1f}% coverage\n"
-        f"target {target_area:.0f}um² | Each cell exactly once",
-        fontsize=11,
-    )
-
-    roi_patch = MplPolygon(
-        roi_verts, closed=True, fill=False, edgecolor="white", linewidth=2, linestyle="--"
-    )
-    ax.add_patch(roi_patch)
-
-    for path in paths:
-        ax.plot(path[:, 0], path[:, 1], "w-", linewidth=0.8, alpha=0.3, zorder=1)
-
-    unsampled_idx = [i for i in roi_indices if i not in used_global]
-    if unsampled_idx:
-        ax.scatter(
-            positions[unsampled_idx, 0],
-            positions[unsampled_idx, 1],
-            s=8,
-            c="gray",
-            alpha=0.5,
-            label=f"Unsampled ({len(unsampled_idx)})",
-            zorder=1,
-            edgecolors="white",
-            linewidths=0.5,
-        )
-
-    for i, w in enumerate(windows):
-        c = colors[i]
-        circle = plt.Circle(
-            (w["center_x"], w["center_y"]),
-            radius,
-            fill=False,
-            edgecolor=c,
-            linewidth=1.5,
-            alpha=0.7,
-            zorder=2,
-        )
-        ax.add_patch(circle)
-        cell_pos = positions[w["cell_indices"]]
-        ax.scatter(
-            cell_pos[:, 0],
-            cell_pos[:, 1],
-            s=14,
-            c=[c],
-            alpha=0.95,
-            zorder=3,
-            edgecolors="black",
-            linewidths=0.4,
-        )
-        ax.text(
-            w["center_x"],
-            w["center_y"],
-            f"{i}\n{w['n_cells']}c",
-            fontsize=4,
-            color="white",
-            ha="center",
-            va="center",
-            fontweight="bold",
-            zorder=4,
-            bbox=dict(boxstyle="round,pad=0.15", facecolor=c, alpha=0.7, edgecolor="none"),
-        )
-
-    ax.set_aspect("equal")
-    ax.set_facecolor("#1a1a2e")
-    ax.set_xlabel("X (um)")
-    ax.set_ylabel("Y (um)")
-    ax.legend(fontsize=9, loc="upper right")
-    plt.tight_layout()
-    plt.savefig(output_path, dpi=200, bbox_inches="tight", facecolor="#0d1117")
-    plt.close()
-    logger.info("Saved visualization: %s", output_path)
-
-
 # ---------------------------------------------------------------------------
 # Data loading
 # ---------------------------------------------------------------------------
@@ -728,6 +622,17 @@ def main():
             f"Excluding {len(used_global)} cells from prior session: {args.exclude_cells.name}"
         )
 
+    # Capture prior exclusion count before processing
+    n_excluded_prior = len(used_global)
+
+    # Compute step once (depends only on radius/overlap, constant across ROIs)
+    if not args.grid_search:
+        step = 2 * radius * (1 - overlap)
+
+    # Parse grid search params once (invariant across ROIs)
+    _grid_radii = [int(x) for x in args.radii.split(",")] if args.radii else None
+    _grid_overlaps = [float(x) for x in args.overlaps.split(",")] if args.overlaps else None
+
     # --- Process each ROI (shared used_global prevents double-counting) ---
     all_roi_results = []
     all_roi_paths = []  # skeleton paths for visualization
@@ -777,9 +682,6 @@ def main():
 
         # --- Grid search mode ---
         if args.grid_search:
-            radii = [int(x) for x in args.radii.split(",")] if args.radii else None
-            overlaps = [float(x) for x in args.overlaps.split(",")] if args.overlaps else None
-
             logger.info(f"  Grid search for {roi_name}...")
             results = grid_search(
                 roi_positions_avail,
@@ -789,8 +691,8 @@ def main():
                 area_lo,
                 area_hi,
                 n_available,
-                radii=radii,
-                overlaps=overlaps,
+                radii=_grid_radii,
+                overlaps=_grid_overlaps,
             )
             zero_rej = sorted(
                 [r for r in results if r["n_rejected"] == 0],
@@ -819,7 +721,6 @@ def main():
             continue  # grid search doesn't sample — move to next ROI
 
         # --- Run sampling ---
-        step = 2 * radius * (1 - overlap)
         centers = place_windows_along_paths(paths, radius, step)
         logger.info(f"  {len(centers)} window positions, step={step:.0f}um")
 
@@ -882,14 +783,15 @@ def main():
 
     # --- Summary ---
     total_windows = sum(r.get("n_windows", 0) for r in all_roi_results)
-    total_sampled = len(used_global)
-    total_cells = sum(r.get("n_cells_in_roi", 0) for r in all_roi_results)
+    total_sampled = sum(r.get("n_sampled", 0) for r in all_roi_results)
 
     logger.info(f"\n{'='*60}")
     logger.info(
         f"TOTAL: {len(all_roi_results)} ROIs, {total_windows} windows, "
         f"{total_sampled} unique cells sampled"
     )
+    if n_excluded_prior > 0:
+        logger.info(f"  ({n_excluded_prior} cells excluded from prior session)")
     logger.info("VERIFIED: no cell sampled more than once across all ROIs")
 
     # Save
@@ -902,7 +804,7 @@ def main():
         "detections_file": str(args.detections),
         "roi_file": str(args.roi),
         "exclude_cells_file": str(args.exclude_cells) if args.exclude_cells else None,
-        "n_excluded_from_prior": len(used_global) - total_sampled,
+        "n_excluded_from_prior": n_excluded_prior,
         "window_size_um": round(2 * radius, 1),
         "radius_um": radius,
         "step_um": round(step, 1),
@@ -912,7 +814,6 @@ def main():
         "centerline": "morphological_skeleton",
         "sampling": "spatially_balanced_farthest_point",
         "target_multiplier": args.target_multiplier,
-        "target_area_um2": round(target_area, 1),
         "tolerance": args.tolerance,
         "n_rois": len(all_roi_results),
         "n_total_windows": total_windows,
@@ -926,7 +827,9 @@ def main():
     all_verts = [verts for _, verts, _ in roi_entries]
     all_windows = [w for r in all_roi_results for w in r.get("windows", [])]
     all_roi_indices = (
-        np.concatenate([get_roi_cells(positions, areas, poly)[0] for _, _, poly in roi_entries])
+        np.unique(
+            np.concatenate([get_roi_cells(positions, areas, poly)[0] for _, _, poly in roi_entries])
+        )
         if roi_entries
         else np.array([])
     )
