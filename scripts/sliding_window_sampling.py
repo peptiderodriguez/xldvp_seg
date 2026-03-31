@@ -630,6 +630,12 @@ def main():
     )
     parser.add_argument("--output", type=Path, default=None, help="Output sampling JSON")
     parser.add_argument("--output-viz", type=Path, default=None, help="Output visualization PNG")
+    parser.add_argument(
+        "--exclude-cells",
+        type=Path,
+        default=None,
+        help="Prior sampling JSON — cells from this run are excluded (for incremental ROI sessions)",
+    )
 
     # Grid search mode
     parser.add_argument(
@@ -708,8 +714,21 @@ def main():
             f"From grid search [{args.grid_index}]: radius={radius}um, overlap={overlap*100:.0f}%"
         )
 
-    # --- Process each ROI (shared used_global prevents double-counting) ---
+    # --- Load excluded cells from prior session ---
     used_global = set()
+    if args.exclude_cells:
+        from segmentation.utils.json_utils import fast_json_load
+
+        prior = fast_json_load(str(args.exclude_cells))
+        prior_rois = prior.get("rois", [prior]) if isinstance(prior, dict) else [prior]
+        for pr in prior_rois:
+            for w in pr.get("windows", []):
+                used_global.update(w.get("cell_indices", []))
+        logger.info(
+            f"Excluding {len(used_global)} cells from prior session: {args.exclude_cells.name}"
+        )
+
+    # --- Process each ROI (shared used_global prevents double-counting) ---
     all_roi_results = []
     all_roi_paths = []  # skeleton paths for visualization
 
@@ -874,8 +893,16 @@ def main():
     logger.info("VERIFIED: no cell sampled more than once across all ROIs")
 
     # Save
-    out_path = args.output or Path(args.detections).parent / "sliding_window_samples.json"
+    from datetime import datetime
+
+    _ts = datetime.now().strftime("%Y%m%d_%H%M%S")
+    out_path = args.output or Path(args.detections).parent / f"sliding_window_samples_{_ts}.json"
     output = {
+        "created": _ts,
+        "detections_file": str(args.detections),
+        "roi_file": str(args.roi),
+        "exclude_cells_file": str(args.exclude_cells) if args.exclude_cells else None,
+        "n_excluded_from_prior": len(used_global) - total_sampled,
         "window_size_um": round(2 * radius, 1),
         "radius_um": radius,
         "step_um": round(step, 1),
