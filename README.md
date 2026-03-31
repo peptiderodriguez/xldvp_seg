@@ -192,7 +192,7 @@ Chains detection → marker classification → nuclei counting → HTML viewer g
 | Marker classification | `scripts/classify_markers.py` | Median SNR / Otsu / GMM per channel |
 | UMAP + clustering | `scripts/cluster_by_features.py` | Leiden/HDBSCAN, trajectory, spatial smoothing |
 | Spatial networks | `scripts/spatial_cell_analysis.py` | Delaunay graphs, community detection |
-| Interactive viewer | `scripts/generate_multi_slide_spatial_viewer.py` | Fluorescence overlay, cell contours, ROI drawing. `--scene N` for multi-scene CZIs |
+| Interactive viewer | `scripts/generate_multi_slide_spatial_viewer.py` | Fluorescence overlay, cell contours, ROI drawing. CZI thumbnail caching for fast re-runs |
 | Sliding window | `scripts/sliding_window_sampling.py` | Area-matched rolling window along ROI centerlines for LMD. Multi-ROI, `--exclude-cells` for incremental sessions |
 | Curvilinear patterns | `scripts/detect_curvilinear_patterns.py` | Strip/ribbon detection via graph diameter linearity |
 | Vessel structures | `scripts/vessel_community_analysis.py` | Multi-scale morphology + SNR |

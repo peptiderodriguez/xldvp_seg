@@ -708,6 +708,48 @@ Feature group options: `morph`, `shape`, `color`, `sam2`, `channel`, `deep`.
 Outputs: `detections_clustered.json`, `cluster_summary.csv`, `umap_plot.png`,
 `marker_violin.png`, `spatial.h5ad` (AnnData for scanpy), `spatial.csv`.
 
+### Curvilinear Pattern Detection (`scripts/detect_curvilinear_patterns.py`)
+
+Detects strip/ribbon spatial structures (e.g., mesothelial linings, vascular
+boundaries) from marker-positive cells. Builds a KD-tree radius graph, extracts
+connected components, and classifies each by graph diameter linearity — high
+linearity = strip, low = blob. Follows curvature naturally since graph diameter
+traces the actual path through the component.
+
+```bash
+python scripts/detect_curvilinear_patterns.py \
+    --detections classified_detections.json \
+    --snr-channel 2 --snr-threshold 1.5 \
+    --radius 100 --linearity-threshold 2.0 \
+    --min-strip-cells 15 --min-strip-length 200 \
+    --output-prefix msln --output-dir output/
+```
+
+Key parameters:
+- `--radius`: connection distance in µm (50-100 typical)
+- `--linearity-threshold`: `diameter / sqrt(n_cells)` cutoff (2.0-3.0 typical)
+- `--min-strip-length`: minimum physical path length in µm (drops fragments)
+- `--min-strip-cells`: minimum cells per strip component
+
+Outputs: `cell_detections_{prefix}_strip_tagged.json` (all cells tagged),
+`cell_detections_{prefix}_strip_only.json` (strip cells only — use this for
+fast viewer generation), `{prefix}_component_stats.json`.
+
+View results with the spatial viewer:
+```bash
+python scripts/generate_multi_slide_spatial_viewer.py \
+    --detections output/cell_detections_msln_strip_only.json \
+    --group-field "msln_pattern" --czi-path slide.czi \
+    --output output/strips.html --no-graph-patterns
+```
+
+**CZI thumbnail caching:** The spatial viewer automatically caches the fluorescence
+thumbnail as `.thumbnail_cache_*.npz` next to the output HTML. The first run reads
+the CZI (slow — minutes for large slides), but all subsequent runs load from cache
+(instant). The cache key includes display channels and scale factor, so different
+`--display-channels` or `--scale-factor` values get separate caches. Delete the
+`.thumbnail_cache_*.npz` file to force a re-read.
+
 ### Islet Spatial Analysis (`examples/islet/analyze_islets.py`)
 
 Specialized islet-level analysis: finds islet regions from summed marker channels,

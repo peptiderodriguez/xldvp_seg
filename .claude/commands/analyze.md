@@ -114,7 +114,7 @@ For beginners, expand on each step as you reach it. For advanced users, just ask
 | **Tissue zones** | Spatially-constrained zone discovery, transects, bone region annotation | `examples/liver/assign_tissue_zones.py`, `examples/liver/zonation_transect.py`, `examples/bone_marrow/annotate_bone_regions.py` |
 | **Distance bins** | Concentric rings around landmarks (CV/PV), distance + ratio features, model comparison | `examples/liver/assign_distance_bins.py` |
 | **Tissue area** | Variance-based tissue detection, area measurement from CZI | `examples/bone_marrow/calculate_tissue_areas.py` |
-| **Visualize** | Multi-slide scrollable HTML with ROI drawing + stats | `scripts/generate_multi_slide_spatial_viewer.py` |
+| **Visualize** | Multi-slide scrollable HTML with ROI drawing + stats. **CZI thumbnail caching**: first run reads CZI (slow), subsequent runs load `.thumbnail_cache_*.npz` (instant). Cache key includes channels + scale factor. | `scripts/generate_multi_slide_spatial_viewer.py` |
 | **Tissue overlay** | Fluorescence image + cell overlay + ROI + LMD export in one viewer | `scripts/generate_tissue_overlay.py` |
 | **Nuclear count** | Count nuclei per cell (Cellpose 2nd pass on nuclear channel), morph+SAM2+optional deep features per nucleus | `scripts/count_nuclei_per_cell.py` |
 | **Region detection** | Percentile-threshold any channel → morphological cleanup → split into equal-area pieces → full features (morph+channel+SAM2) → LMD | `scripts/detect_regions_for_lmd.py` |

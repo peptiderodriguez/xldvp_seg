@@ -3869,16 +3869,53 @@ def main():
                 + (f" (scene {_scene_idx})" if _scene_idx else "")
                 + "..."
             )
-            try:
-                ch_arrays, pixel_size, mx, my = read_czi_thumbnail_channels(
-                    czi_path,
-                    display_channels,
-                    scale_factor=args.scale_factor,
-                    scene=_scene_idx,
-                )
-            except Exception as exc:
-                print(f"  WARNING: failed to load CZI for '{name}': {exc}", file=sys.stderr)
-                continue
+            # Check for cached thumbnail (avoids slow CZI re-reads during iteration)
+            _cache_dir = Path(args.output).parent if args.output else Path(".")
+            _ch_key = "_".join(str(c) for c in display_channels)
+            _scale_key = f"{args.scale_factor:.4f}"
+            _cache_stem = czi_path.stem + (f"_scene{_scene_idx}" if _scene_idx else "")
+            _cache_file = (
+                _cache_dir / f".thumbnail_cache_{_cache_stem}_ch{_ch_key}_s{_scale_key}.npz"
+            )
+            ch_arrays = None
+            pixel_size = None
+            mx = my = 0
+            if _cache_file.exists():
+                try:
+                    _cached = np.load(str(_cache_file), allow_pickle=True)
+                    ch_arrays = [
+                        _cached[f"ch{i}"] if _cached[f"ch{i}"].ndim > 0 else None
+                        for i in range(len(display_channels))
+                    ]
+                    _ps = str(_cached["pixel_size"])
+                    pixel_size = float(_ps) if _ps != "None" else None
+                    mx = int(_cached["mosaic_x"])
+                    my = int(_cached["mosaic_y"])
+                    print(f"    Using cached thumbnail: {_cache_file.name}", flush=True)
+                except Exception:
+                    ch_arrays = None  # fall through to CZI read
+
+            if ch_arrays is None:
+                try:
+                    ch_arrays, pixel_size, mx, my = read_czi_thumbnail_channels(
+                        czi_path,
+                        display_channels,
+                        scale_factor=args.scale_factor,
+                        scene=_scene_idx,
+                    )
+                    # Cache for next time
+                    try:
+                        _save = {f"ch{i}": arr for i, arr in enumerate(ch_arrays)}
+                        _save["pixel_size"] = str(pixel_size) if pixel_size is not None else "None"
+                        _save["mosaic_x"] = mx
+                        _save["mosaic_y"] = my
+                        np.savez_compressed(str(_cache_file), **_save)
+                        print(f"    Cached thumbnail: {_cache_file.name}", flush=True)
+                    except Exception:
+                        pass  # caching is best-effort
+                except Exception as exc:
+                    print(f"  WARNING: failed to load CZI for '{name}': {exc}", file=sys.stderr)
+                    continue
 
             if pixel_size is None:
                 # Try to derive from detection features (area vs area_um2)
