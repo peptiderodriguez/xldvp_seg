@@ -345,7 +345,10 @@ PYTHONPATH=$REPO $XLDVP_PYTHON $REPO/run_lmd_export.py \
     --crosses <crosses.json> \
     --output-dir <output>/lmd \
     --generate-controls --min-score 0.5 --export
-    # Optional: --erosion-um 0.2  or  --erode-pct 0.05 (shrink contours for laser)
+    # Contour processing (all at export time, adaptive by default):
+    # --max-area-change-pct 5.0   # adaptive RDP simplification (default 5%)
+    # --max-dilation-area-pct 5.0 # adaptive dilation / laser buffer (default 5%)
+    # --erosion-um 0.2            # optional: shrink contours for laser
 ```
 Batch: `--input-dir <runs> --crosses-dir <crosses>`. Max 308 wells/plate; multi-plate overflow is automatic. Empty QC wells (10%) inserted evenly. Slides without exactly 3 crosses are skipped.
 
@@ -565,7 +568,10 @@ YAML equivalents: `dedup_method`, `iou_threshold`. Note: IoU and overlap-fractio
 
 YAML equivalents: `contour_processing`, `background_correction`, `bg_neighbors`.
 
-Features are always extracted from the **original** segmentation mask (not a dilated or simplified version). Contour simplification uses adaptive RDP at LMD export time — binary search for the largest epsilon keeping symmetric difference within `--max-area-change-pct` (default 5%).
+Features are always extracted from the **original** segmentation mask (not a dilated or simplified version). Contour simplification and dilation are applied at LMD export time only, both with adaptive tolerances:
+- `--max-area-change-pct 5.0` — adaptive RDP: max 5% symmetric-difference deviation
+- `--max-dilation-area-pct 5.0` — adaptive dilation: max 5% area increase for laser buffer
+Set either to 0 to fall back to fixed values (`--rdp-epsilon`, `--dilation-um`).
 
 ### Performance Options
 

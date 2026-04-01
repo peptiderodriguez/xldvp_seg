@@ -94,15 +94,20 @@ The batch mode discovers `*_detections.json` files in `--input-dir` and matches 
 
 Contour simplification, dilation, and erosion are all applied at **LMD export time** (not during detection). The pipeline stores original mask contours as `contour_px` / `contour_um`; the export script processes them for LMD hardware:
 
+Both simplification and dilation use **adaptive** tolerances by default (5% each). These are independently adjustable:
+
 | Flag | Default | Description |
 |------|---------|-------------|
-| `--max-area-change-pct` | 5.0 | Adaptive RDP: max symmetric-difference deviation (%). Set 0 for fixed epsilon. |
-| `--dilation-um` | 0.5 | Expand contours so laser cuts outside the cell |
-| `--rdp-epsilon` | 5.0 | Fixed RDP epsilon (only used when `--max-area-change-pct 0`) |
+| `--max-area-change-pct` | **5.0** | Adaptive RDP: max symmetric-difference deviation (%). Set 0 for fixed `--rdp-epsilon`. |
+| `--max-dilation-area-pct` | **5.0** | Adaptive dilation: max area increase (%) for laser buffer. Set 0 for fixed `--dilation-um`. |
+| `--dilation-um` | 0.5 | Fixed dilation distance (only used when `--max-dilation-area-pct 0`) |
+| `--rdp-epsilon` | 5.0 | Fixed RDP epsilon in pixels (only used when `--max-area-change-pct 0`) |
 | `--erosion-um` | 0.0 | Shrink contours by absolute distance in um |
 | `--erode-pct` | 0.0 | Shrink contours by percentage of sqrt(area) (e.g., 0.05 = 5%) |
 
-Processing order: simplify (adaptive RDP) → dilate (laser buffer) → erode (optional). Erosion is applied last. Use `--erosion-um 0.2` or `--erode-pct 0.05` to ensure the laser cuts inside the cell boundary.
+Processing order: simplify (adaptive RDP) → dilate (adaptive buffer) → erode (optional). Erosion is applied last. Use `--erosion-um 0.2` or `--erode-pct 0.05` to ensure the laser cuts inside the cell boundary.
+
+**Why adaptive?** Fixed dilation (0.5 um) adds ~17% area to a typical 100 um² cell — large enough to distort area measurements. Adaptive dilation caps the area increase per cell, giving small cells a smaller buffer and large cells a larger one.
 
 ### Well Assignment
 
