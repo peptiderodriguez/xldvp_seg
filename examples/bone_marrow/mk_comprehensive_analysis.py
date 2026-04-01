@@ -145,8 +145,7 @@ def main():
             continue
 
         meta = parse_slide(slide)
-        # Support both old format (features) and new format (features_morph_color)
-        feats = det.get("features", det.get("features_morph_color", {}))
+        feats = det.get("features", {})
 
         row = {
             "uid": uid,

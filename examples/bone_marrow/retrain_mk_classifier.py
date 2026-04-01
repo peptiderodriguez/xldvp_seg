@@ -379,8 +379,7 @@ def score_detections(classifier_path, detections_path, output_path=None):
     # Build feature matrix
     X = np.zeros((len(detections), len(feature_names)))
     for i, det in enumerate(detections):
-        feat_key = "features" if "features" in det else "features_morph_color"
-        feats = det.get(feat_key, {})
+        feats = det.get("features", {})
         for j, fname in enumerate(feature_names):
             v = feats.get(fname, 0.0)
             if v is None or (isinstance(v, float) and (np.isnan(v) or np.isinf(v))):

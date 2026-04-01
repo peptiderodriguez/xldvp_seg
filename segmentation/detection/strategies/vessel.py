@@ -4710,7 +4710,6 @@ class VesselStrategy(DetectionStrategy, MultiChannelFeatureMixin):
             import os
 
             possible_paths = [
-                "/home/dude/code/vessel_seg/checkpoints/medsam_vit_b.pth",
                 "checkpoints/medsam_vit_b.pth",
                 os.path.expanduser("~/checkpoints/medsam_vit_b.pth"),
             ]

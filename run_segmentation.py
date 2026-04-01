@@ -1689,7 +1689,7 @@ def run_pipeline(args):
         if to:
             tiles_processed.add(tuple(to))
     n_processed = len(tiles_processed)
-    n_expected = len(sampled_tiles) if "sampled_tiles" in dir() else 0
+    n_expected = len(sampled_tiles) if sampled_tiles else 0
     if n_expected > 0:
         coverage_pct = 100 * n_processed / n_expected
         logger.info(

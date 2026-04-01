@@ -123,7 +123,7 @@ def load_and_prepare_data(score_threshold=0.75):
         if not bone or bone == "unknown":
             continue
         meta = parse_slide(slide)
-        feats = det.get("features", det.get("features_morph_color", {}))
+        feats = det.get("features", {})
         row = {
             "uid": uid,
             "slide": slide,

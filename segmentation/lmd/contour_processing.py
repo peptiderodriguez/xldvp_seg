@@ -92,7 +92,7 @@ def adaptive_rdp_simplify(
     Args:
         contour_px: (N, 2) contour in pixel coordinates.
         max_area_change_pct: Maximum allowed symmetric-difference / original-area
-            (in percent, default 5.0).
+            (in percent, default 10.0).
         max_epsilon: Upper bound of the epsilon search range (pixels).
 
     Returns:
@@ -165,7 +165,7 @@ def adaptive_dilate(
 
     Args:
         contour_px: (N, 2) contour in pixel coordinates.
-        max_area_change_pct: Maximum allowed area increase (percent, default 5.0).
+        max_area_change_pct: Maximum allowed area increase (percent, default 10.0).
         max_dilation_px: Upper bound of the dilation search range (pixels).
 
     Returns:

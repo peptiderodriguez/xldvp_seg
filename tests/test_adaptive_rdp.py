@@ -221,3 +221,42 @@ class TestProcessContourAdaptive:
         )
         # Both should produce the same result (fixed epsilon path)
         assert stats_fixed["points_after"] == stats_none["points_after"]
+
+    def test_adaptive_dilation_via_process_contour(self):
+        """process_contour with max_dilation_area_pct uses adaptive dilation."""
+
+        from segmentation.lmd.contour_processing import process_contour
+
+        contour = _circle_contour(n=200).tolist()
+        result, stats = process_contour(
+            contour,
+            pixel_size_um=0.5,
+            dilation_um=0.0,
+            max_area_change_pct=0,  # disable adaptive RDP
+            rdp_epsilon=0.1,  # minimal fixed RDP (near-identity)
+            max_dilation_area_pct=10.0,
+            return_stats=True,
+        )
+        assert result is not None
+        assert stats["valid"]
+        # Dilation should increase area
+        assert stats["area_after_um2"] > stats["area_before_um2"]
+        # But within tolerance (10% + minimal RDP effect)
+        increase = (stats["area_after_um2"] - stats["area_before_um2"]) / stats["area_before_um2"]
+        assert increase <= 0.15, f"Area increase {increase:.1%} exceeds expected range"
+
+    def test_full_pipeline_rdp_plus_dilation(self):
+        """process_contour with both adaptive RDP and adaptive dilation."""
+        from segmentation.lmd.contour_processing import process_contour
+
+        contour = _circle_contour(n=200).tolist()
+        result, stats = process_contour(
+            contour,
+            pixel_size_um=0.5,
+            max_area_change_pct=10.0,
+            max_dilation_area_pct=10.0,
+            return_stats=True,
+        )
+        assert result is not None
+        assert stats["valid"]
+        assert stats["points_after"] < stats["points_before"]

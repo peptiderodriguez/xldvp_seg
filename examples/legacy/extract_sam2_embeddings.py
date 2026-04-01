@@ -251,14 +251,13 @@ def merge_embeddings(target_json, embeddings_json, output_json=None):
 
     for det in detections:
         uid = det.get("uid", "")
-        feat_key = "features" if "features" in det else "features_morph_color"
-        feats = det.get(feat_key, {})
+        feats = det.get("features", {})
 
         if uid in embeddings:
             emb = embeddings[uid]
             for i, v in enumerate(emb):
                 feats[f"sam2_{i}"] = v
-            det[feat_key] = feats
+            det["features"] = feats
             n_updated += 1
         elif "sam2_0" in feats and feats["sam2_0"] != 0:
             n_already += 1

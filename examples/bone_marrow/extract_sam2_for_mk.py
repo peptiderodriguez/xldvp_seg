@@ -465,7 +465,7 @@ def merge_embeddings(embeddings_dir, target_json, output_json):
 
     for det in detections:
         uid = det.get("uid", "")
-        feats = det.get("features_morph_color", det.get("features", {}))
+        feats = det.get("features", {})
 
         if uid in all_embeddings:
             emb = all_embeddings[uid]
