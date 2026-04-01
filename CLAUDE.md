@@ -73,34 +73,7 @@ PYTHONPATH=$REPO $XLDVP_PYTHON $REPO/scripts/czi_info.py /path/to/slide.czi
 
 ### Tests
 
-Tests are in `tests/` using pytest. Fixtures in `conftest.py`: `sample_tile` (512×512 RGB), `sample_mask` (boolean circle), `mock_loader` (mocked CZI loader), `temp_output_dir`, `sample_tile_uint16`, `mock_regionprop`, `empty_mask`, `simple_rectangular_mask`, `sample_tile_grayscale`.
-
-| Test file | What it validates |
-|-----------|------------------|
-| `test_coordinates.py` | [x,y] coordinate conversion, UID parsing, spatial validation |
-| `test_detection_base.py` | `Detection` dataclass, mask area calculations |
-| `test_feature_extraction.py` | Feature dimensions: morph=78, SAM2=256, ResNet=4096, DINOv2=2048, total=6478 |
-| `test_utils.py` | Config module, `get_feature_dimensions()` |
-| `test_module_imports.py` | HTML export functions, MK/HSPC module imports |
-| `test_mk_hspc_imports.py` | Feature dimension constants match config |
-| `test_nmj_imports.py` | NMJ strategy class methods, classifier loaders |
-| `test_registry.py` | Strategy registry (8 strategies), model registry (9 models, modality filter) |
-| `test_sample_dataset.py` | `sample()` output format, reproducibility, channel features |
-| `test_metrics.py` | IoU, Dice, PQ, Hungarian matching with known values |
-| `test_cli.py` | All 11 `xlseg` subcommands: parsing, help output, dispatch table |
-| `test_slide_analysis.py` | `SlideAnalysis`: from_detections, filter, features_df, to_anndata, repr |
-| `test_json_utils.py` | `sanitize_for_json`, `atomic_json_dump`/`fast_json_load` roundtrip, NaN handling |
-| `test_api.py` | API wrappers: `tl.score`, `tl.markers`, `tl.train` (mocked heavy deps) |
-| `test_background.py` | KD-tree local background correction, caching, fallback, non-negative |
-| `test_well_plate.py` | 384-well serpentine generation, multi-plate overflow, QC empties |
-| `test_deduplication.py` | IoU NMS dedup: overlap/non-overlap, threshold, HDF5 mask loading |
-| `test_aggregation.py` | `aggregate_slide`, `aggregate_cohort`, `cohort_to_anndata` |
-| `test_roi.py` | ROI bbox extraction, spatial numbering, tile/detection filters, marker threshold, circular regions, polygon/mask loading |
-| `test_curvilinear.py` | Curvilinear pattern detection: strip/blob classification, width, SNR/marker filter, refinement, tagging |
-| `test_graph_topology.py` | Shared graph topology: build graph, diameter, linearity, ring_score, arc_fraction, elongation, circularity, hollowness |
-| `test_vessel_structures.py` | Vessel detection: multi-marker selection, morphology classification, morphometry, composition, vessel typing |
-
-Tests rely on `pip install -e .` (or `PYTHONPATH=$REPO`) for `segmentation.*` imports.
+Tests in `tests/` using pytest (~660 tests, 25 files). Run `make test` for all with coverage. Fixtures in `conftest.py`. Tests rely on `pip install -e .` (or `PYTHONPATH=$REPO`) for `segmentation.*` imports.
 
 **Development workflow:**
 ```bash
@@ -165,17 +138,6 @@ All commands are in `.claude/commands/`. Documentation: `docs/GETTING_STARTED.md
 ## Pipeline Workflow: CZI → Detection → Classification → LMD
 
 This is the DVP (Deep Visual Proteomics) workflow — spatial proteomics where LMD-cut cells go into mass spec analysis.
-
-### Overview (for beginners)
-
-1. **Inspect** — Look at your slide's channels (which stains are in which position). Seconds.
-2. **Detect** — AI models (SAM2 + custom segmentation) scan every tile to find all cells. Each gets a contour outline and features (shape, size, brightness, AI embeddings). 1–3 hours on GPU.
-3. **Review** — Open a web viewer, click yes/no on ~200+ cell crops to teach the system what's real vs false positive.
-4. **Classify** — A random forest trains on your annotations and scores every detection in seconds — no re-detection needed.
-5. **Markers** — Classify each cell as positive/negative for each fluorescent marker (e.g., NeuN+ neurons vs NeuN- glia). Default: median-based SNR thresholding (SNR >= 1.5).
-6. **Explore** — UMAP/clustering can reveal cell subtypes from the feature space. Spatial network analysis shows neighborhood patterns.
-7. **Export for LMD** — Package selected cells into XML for the laser microdissection machine with 384-well plate assignment + controls.
-8. **DVP** — LMD cuts cells → mass spec spatial proteomics.
 
 ### Phase 1: Data Inspection
 
@@ -350,54 +312,21 @@ PYTHONPATH=$REPO $XLDVP_PYTHON $REPO/run_lmd_export.py \
     # --max-dilation-area-pct 10.0 # adaptive dilation / laser buffer (default 10%)
     # --erosion-um 0.2            # optional: shrink contours for laser
 ```
-Batch: `--input-dir <runs> --crosses-dir <crosses>`. Max 308 wells/plate; multi-plate overflow is automatic. Empty QC wells (10%) inserted evenly. Slides without exactly 3 crosses are skipped.
-
-**Replicate-based export** (DVP proteomics, area-normalized replicates):
-```bash
-PYTHONPATH=$REPO $XLDVP_PYTHON $REPO/examples/bone_marrow/select_mks_for_lmd.py \
-    --score-threshold 0.80 --target-area 10000 --max-replicates 4
-
-PYTHONPATH=$REPO $XLDVP_PYTHON $REPO/scripts/lmd_export_replicates.py \
-    --sampling-results lmd_replicates_full.json \
-    --contours-json contours.json \
-    --crosses-dir ./crosses --output-dir ./xml
-```
+Batch: `--input-dir <runs> --crosses-dir <crosses>`. Max 308 wells/plate; multi-plate overflow is automatic. Replicate-based export via `lmd_export_replicates.py` (see `/analyze` Phase 5).
 
 ---
 
 ## Available Analyses
 
-Beyond the core detect → classify → LMD workflow, the pipeline supports:
+Use `/analyze` for the full interactive catalog. Key scripts beyond detect → classify → LMD:
 
-| Analysis | Script | What it does |
-|----------|--------|-------------|
-| **RF classifier training** | `train_classifier.py` | Train random forest from annotations, 5-fold CV, feature set comparison |
-| **Batch scoring** | `scripts/apply_classifier.py` | Score all detections with trained classifier (CPU, seconds) |
-| **Marker classification** | `scripts/classify_markers.py` | SNR/Otsu/GMM pos/neg per channel, auto bg correction (median-based) |
-| **Feature exploration** | `scripts/cluster_by_features.py` | UMAP/t-SNE + Leiden/HDBSCAN, interactive plotly, --trajectory, --spatial-smooth (feature-gated) |
-| **Segmentation metrics** | `segmentation/metrics/` | IoU, Dice, Panoptic Quality, Hungarian matching — for benchmarking segmenters and dedup strategies |
-| **Sample dataset** | `segmentation/datasets/` | `sample()` generates synthetic detections (500 cells, 5 clusters, 295 features) for testing |
-| **Spatial network** | `scripts/spatial_cell_analysis.py` | Delaunay graphs, connected components, community detection, neighborhoods |
-| **Interactive spatial viewer** | `scripts/generate_multi_slide_spatial_viewer.py` | Fluorescence background + cell contours + ROI drawing. `--scene N` for multi-scene CZIs, `--czi-path` for background, `--group-label-prefix` for legend labels. **Caches CZI thumbnails** as `.thumbnail_cache_*.npz` next to output — first run reads CZI (slow), subsequent runs load cache (instant). Cache key includes channels + scale factor. |
-| **Curvilinear patterns** | `scripts/detect_curvilinear_patterns.py` | KD-tree radius graph → connected components → graph diameter linearity score. Detects strips/ribbons (e.g., mesothelium) even when curved. `--radius`, `--linearity-threshold`, `--min-strip-length`. Writes strip-only JSON for fast viewer. |
-| **Vessel structure detection** | `scripts/detect_vessel_structures.py` | Graph topology vessel detection from marker+ cells (SMA/CD31/LYVE1). Ring/arc/strip/cluster classification, morphometry (diameter, lumen, wall), marker layering, vessel typing. Multi-marker OR selection. |
-| **Vessel community analysis** | `scripts/vessel_community_analysis.py` | Multi-scale vessel structure detection (connected components + morphology + SNR) |
-| **SpatialData / scverse** | `scripts/convert_to_spatialdata.py` | Export to zarr for squidpy (spatial stats), scanpy (dim reduction), anndata |
-| **One-command viz** | `scripts/view_slide.py` | Classify → spatial cluster → interactive viewer → serve (all in one) |
-| **Preprocessing preview** | `scripts/preview_preprocessing.py` | Before/after flat-field, photobleach correction at 1/8 resolution |
-| **Nuclear counting** | `scripts/count_nuclei_per_cell.py` | Count nuclei per cell (Cellpose 2nd pass on nuclear channel), per-nucleus morph+SAM2 features. Use unfiltered `cell_detections.json` (pre-classifier) for consistency across slides. |
-| **Quality filter** | `scripts/quality_filter_detections.py` | Heuristic area+solidity+channel filter as RF alternative for clean slides |
-| **Region detection** | `scripts/detect_regions_for_lmd.py` | Percentile-threshold any channel → morph cleanup → split → full features (morph+channel+SAM2) |
-| **Region splitting** | `scripts/split_regions_for_lmd.py` | Post-process pipeline detections → watershed split large regions |
-| **Replicate sampling** | `scripts/paper_figure_sampling.py` | Area-matched or spatially-clustered replicate building, 384-well assignment |
-| **Transect selection** | `scripts/select_transect_cells_for_lmd.py` | Select cells along zonation transect paths for LMD export |
-| **Sliding window** | `scripts/sliding_window_sampling.py` | Area-matched rolling window along ROI centerlines for LMD. Multi-ROI (shared cell tracking). `--exclude-cells` for incremental sessions. `--grid-search` finds zero-rejection combos. Ref: brain ~6700 cells/mm² → r=70um/40%ov for 20×, r=90um/40%ov for 30×. Always `--czi-path`. |
-| **Distance bins** | `examples/liver/assign_distance_bins.py` | Concentric rings around vascular landmarks, distance features, spatial model comparison |
-| **LMD clustering** | `scripts/cluster_detections.py` | Two-stage biological clustering for well assignment |
-
-**SpatialData** is auto-exported at end of every pipeline run (`{celltype}_spatialdata.zarr`). Load with `spatialdata.read_zarr()`. Run squidpy spatial stats (neighborhood enrichment, co-occurrence, Moran's I) via `--run-squidpy --squidpy-cluster-key <marker_class>`.
-
-**OME-Zarr** is auto-generated at end of every pipeline run from SHM (fast, no CZI re-read). Used for Napari viewing and cross placement. Flags: `--no-zarr` to skip, `--force-zarr` to overwrite, `--zarr-levels 5`.
+- **Spatial**: `spatial_cell_analysis.py` (Delaunay networks), `cluster_by_features.py` (UMAP/t-SNE + Leiden), `generate_multi_slide_spatial_viewer.py` (interactive HTML viewer with fluorescence background + contours + ROI)
+- **Vessel**: `detect_vessel_structures.py` (graph topology: ring/arc/strip), `vessel_community_analysis.py` (multi-scale + SNR)
+- **Curvilinear**: `detect_curvilinear_patterns.py` (KD-tree graph → linearity → strip/ribbon detection)
+- **LMD sampling**: `sliding_window_sampling.py`, `paper_figure_sampling.py`, `select_transect_cells_for_lmd.py`, `cluster_detections.py`
+- **Nuclear counting**: integrated via `--count-nuclei` (default ON), or standalone `count_nuclei_per_cell.py` for existing runs
+- **SpatialData**: auto-exported as `{celltype}_spatialdata.zarr` every run. `--run-squidpy` for spatial stats.
+- **OME-Zarr**: auto-generated from SHM. `--no-zarr` to skip, `--force-zarr` to overwrite.
 
 ---
 
@@ -458,22 +387,7 @@ Metadata catalog for all models (feature extractors + segmenters). Tracks name, 
 
 ### ROI-Restricted Detection (`segmentation.roi`)
 
-The `segmentation.roi` package provides reusable utilities for ROI-restricted cell detection. Use it when you need detection within specific regions (not the whole slide):
-
-| Module | Purpose |
-|--------|---------|
-| `roi.common` | Bbox extraction, spatial numbering, tile/detection filtering, multi-GPU per-ROI detection |
-| `roi.marker_threshold` | Find ROIs via summed marker signal + Otsu thresholding |
-| `roi.circular_objects` | Find roughly-circular ROIs (e.g. TMA cores, islets) |
-| `roi.from_file` | Load ROIs from polygon JSON or label masks |
-
-Example scripts that use `segmentation.roi`:
-
-- **Islet regions** — `examples/islet/segment_islet_regions.py`: find islet regions via marker signal thresholding, run Cellpose+SAM2 within each ROI
-- **TMA cores** — `examples/tma/detect_tma_cells.py`: find circular TMA cores via morphological thresholding + circularity filter, assign grid labels (A1, A2, ...), detect cells per core
-- **Bone marrow areas** — `examples/bone_marrow/`: manual region annotation, split detections by bone region
-
-These scripts share a common pattern: load CZI channels into RAM, find ROIs at low resolution, extract padded bounding boxes, init Cellpose+SAM2 per GPU, split ROIs round-robin across GPUs, detect in parallel. Each detection is enriched with global coordinates and an ROI identifier (e.g., `islet_id`, `core_id`).
+Reusable utilities for detection within specific regions: `roi.common` (bbox, filtering, multi-GPU), `roi.marker_threshold` (Otsu on marker signal), `roi.circular_objects` (TMA cores, islets), `roi.from_file` (polygon/mask). Examples: `examples/islet/`, `examples/tma/`, `examples/bone_marrow/`.
 
 ---
 
@@ -634,59 +548,8 @@ python run_segmentation.py --czi-path slide.czi --cell-type nmj \
 
 ## Entry Points
 
-### Core Scripts (root + `scripts/`)
+**Core:** `run_segmentation.py` (detection), `run_lmd_export.py` (LMD XML), `train_classifier.py` (RF), `serve_html.py` (viewer). SLURM: `scripts/run_pipeline.sh` (YAML-driven launcher).
 
-| Script | Purpose |
-|--------|---------|
-| `run_segmentation.py` | Unified detection pipeline (all cell types) |
-| `run_lmd_export.py` | LMD XML export (single + batch) |
-| `train_classifier.py` | Train RF classifier from annotations |
-| `serve_html.py` | HTTP server + Cloudflare tunnel |
-| `scripts/apply_classifier.py` | Score detections with trained classifier |
-| `scripts/classify_markers.py` | Marker pos/neg classification (SNR/Otsu/GMM) |
-| `scripts/regenerate_html.py` | Regenerate HTML viewer from saved detections |
-| `scripts/czi_info.py` | CZI channel metadata (run first!) |
-| `scripts/run_pipeline.sh` | YAML config-driven SLURM launcher. Unified work-item model: slides × scenes cross product. `scenes: "0-9"` + `scene_parallel: true/false`. |
-| `scripts/napari_place_crosses.py` | Interactive cross placement for LMD |
-| `scripts/generate_multi_slide_spatial_viewer.py` | Unified spatial viewer with ROI + stats |
-| `scripts/convert_to_spatialdata.py` | Export to SpatialData zarr (scverse) |
-| `scripts/view_slide.py` | One-command: classify + spatial + viewer + serve |
-| `scripts/vessel_community_analysis.py` | Multi-scale vessel structure detection |
-| `scripts/spatial_cell_analysis.py` | Spatial network analysis |
-| `scripts/cluster_by_features.py` | UMAP/t-SNE + Leiden/HDBSCAN, interactive plotly |
-| `scripts/compare_feature_sets.py` | Compare RF feature subsets via stratified CV |
-| `scripts/count_nuclei_per_cell.py` | Count nuclei per cell (Cellpose 2nd pass) |
-| `scripts/detect_curvilinear_patterns.py` | KD-tree graph → component linearity → strip/ribbon detection |
-| `scripts/detect_vessel_structures.py` | Graph topology vessel detection (ring/arc/strip) from marker+ cells |
-| `scripts/detect_regions_for_lmd.py` | Percentile-threshold channel → split → features |
-| `scripts/quality_filter_detections.py` | Heuristic area+solidity+channel filter |
-| `scripts/split_regions_for_lmd.py` | Watershed split large regions |
-| `scripts/paper_figure_sampling.py` | Replicate sampling with 384-well assignment |
-| `scripts/select_transect_cells_for_lmd.py` | Select zonation transect cells for LMD |
-| `scripts/sliding_window_sampling.py` | Area-matched sliding window sampling along ROI centerlines |
-| `scripts/cluster_detections.py` | Biological clustering for LMD wells |
-| `scripts/generate_tissue_overlay.py` | Fluorescence image + cell overlay + ROI viewer |
-| `scripts/lmd_export_replicates.py` | Replicate-based LMD XML export |
-| `scripts/system_info.py` | Environment detection + SLURM recommendations |
-| `scripts/preview_preprocessing.py` | Correction preview at reduced resolution |
-| `scripts/napari_view_lmd_export.py` | View LMD export contours in Napari |
-| `scripts/czi_to_ome_zarr.py` | Convert CZI to OME-Zarr pyramids for Napari |
+**Scripts (`scripts/`):** 30+ reusable tools — `ls scripts/` for full list. Key: `czi_info.py`, `classify_markers.py`, `apply_classifier.py`, `regenerate_html.py`, `generate_multi_slide_spatial_viewer.py`, `detect_vessel_structures.py`, `count_nuclei_per_cell.py`, `sliding_window_sampling.py`.
 
-### Examples (`examples/`)
-
-Project-specific analysis scripts organized by experiment:
-
-| Directory | Experiment |
-|-----------|-----------|
-| `examples/bone_marrow/` | MK hindlimb unloading, RBC vascularization, bone regions |
-| `examples/mesothelium/` | MSLN detection + annotation |
-| `examples/islet/` | Pancreatic islet analysis |
-| `examples/tma/` | TMA core detection + per-core cell segmentation |
-| `examples/liver/` | Hepatic zonation, DCN+, transects |
-| `examples/nmj/` | NMJ detection SLURM scripts |
-| `examples/senescence/` | Senescence cell detection configs |
-| `examples/vessel/` | Vessel classifier training |
-| `examples/tissue_pattern/` | Brain FISH, coronal section analysis |
-| `examples/configs/` | YAML pipeline config templates |
-| `examples/slurm/` | Legacy SLURM job scripts |
-| `examples/legacy/` | Deprecated one-off scripts |
+**Examples (`examples/`):** Project-specific scripts by experiment — `bone_marrow/`, `mesothelium/`, `islet/`, `tma/`, `liver/`, `nmj/`, `vessel/`, `tissue_pattern/`, `configs/` (YAML templates).
