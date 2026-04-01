@@ -691,6 +691,56 @@ PYTHONPATH=$REPO $XLDVP_PYTHON $REPO/scripts/generate_multi_slide_spatial_viewer
 If the user is unsatisfied with the results, suggest tuning:
 - Missing strips → increase `--radius` or lower `--linearity-threshold`
 - False positive clusters → increase `--linearity-threshold` or add `--min-strip-length`
+- Hangers-on → use the UMAP filter + re-detection workflow below
+
+**Advanced: Iterative UMAP filter → re-detection (for cleaner results)**
+
+If the user wants to clean up results further, use AskUserQuestion:
+- *"Would you like to refine with an annotation-driven UMAP filter? This removes false positive cells based on your component annotations."*
+
+The workflow:
+1. **Generate labeled viewer** — color each strip component separately so user can identify FP components
+2. **User annotates** — tells you which component IDs are false positives
+3. **Train UMAP filter** — unsupervised UMAP on labeled cells (FP-biased dedup: if a cell is in an FP component in ANY annotation round → false). 90% FP zone capture.
+4. **Filter + re-detect** — apply UMAP filter to all MSLN+ cells, then rerun strip detection on cleaned set
+
+Key lessons from development:
+- Use **unsupervised UMAP** (not supervised — supervised gives trivially separated embedding that overfits)
+- Keep annotations from the **same SNR threshold** (mixing SNR 1.5 + 1.2 annotations poisons the filter)
+- SNR 1.5 is more reliable than 1.2 (lower SNR introduces too much noise that filtering can't clean)
+- The CZI thumbnail is cached as `.thumbnail_cache_*.npz` — subsequent viewer runs are fast
+
+**Final cell-level cleanup with RF classifier:**
+
+After the UMAP-filtered strip detection looks good:
+1. **Generate annotation HTML** with cell crops from the strip-only detections
+2. User annotates individual cells (yes/no on mesothelial identity)
+3. Train RF classifier on cell annotations using `--feature-set all` (morph + SAM2 + channel stats)
+4. Score ALL MSLN+ cells (even at lower SNR like 1.2) — finds mesothelial cells the strip detection missed
+5. Use high score threshold (>= 0.9) for final selection
+
+```bash
+# Step 1: Generate annotation HTML for strip cells
+PYTHONPATH=$REPO $XLDVP_PYTHON $REPO/scripts/regenerate_html.py \
+    --detections <output>/cell_detections_msln_strip_only.json \
+    --czi-path <czi_path> --output-dir <output>/msln_strip_annotation
+
+# Step 2: Serve for annotation
+PYTHONPATH=$REPO $XLDVP_PYTHON $REPO/serve_html.py <output>/msln_strip_annotation
+
+# Step 3: Train RF on annotations
+PYTHONPATH=$REPO $XLDVP_PYTHON $REPO/train_classifier.py \
+    --detections <output>/cell_detections_msln_strip_only.json \
+    --annotations <annotations.json> \
+    --output-dir <output>/msln_cell_classifier \
+    --feature-set all
+
+# Step 4: Score all MSLN+ cells
+PYTHONPATH=$REPO $XLDVP_PYTHON $REPO/scripts/apply_classifier.py \
+    --detections <all_detections.json> \
+    --classifier <output>/msln_cell_classifier/*_latest.pkl \
+    --output <output>/cell_detections_msln_scored.json
+```
 
 ```bash
 # Tier reclassification HTML tool
