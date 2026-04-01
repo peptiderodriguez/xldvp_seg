@@ -61,8 +61,8 @@ Drop `--min-score 0.5` if no RF classifier was run.
 |------|---------|---------|
 | `--generate-controls` | off | Generate spatial negative controls |
 | `--min-score` | none | Filter by rf_prediction (use 0.5 when classifier was run) |
-| `--max-area-change-pct` | 5.0 | Adaptive RDP: max symmetric-difference deviation (%). 0 = use fixed `--rdp-epsilon`. |
-| `--max-dilation-area-pct` | 5.0 | Adaptive dilation: max area increase (%) for laser buffer. 0 = use fixed `--dilation-um`. |
+| `--max-area-change-pct` | 10.0 | Adaptive RDP: max symmetric-difference deviation (%). 0 = use fixed `--rdp-epsilon`. |
+| `--max-dilation-area-pct` | 10.0 | Adaptive dilation: max area increase (%) for laser buffer. 0 = use fixed `--dilation-um`. |
 | `--dilation-um` | 0.5 | Fixed dilation distance (only when `--max-dilation-area-pct 0`) |
 | `--erosion-um` | 0.0 | Shrink contours by absolute distance in um (applied after dilation) |
 | `--erode-pct` | 0.0 | Shrink contours by % of sqrt(area) (e.g. 0.05 = 5%) |

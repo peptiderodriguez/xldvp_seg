@@ -1033,17 +1033,17 @@ Examples:
     parser.add_argument(
         "--max-area-change-pct",
         type=float,
-        default=5.0,
+        default=10.0,
         help="Max shape deviation (%%) allowed by adaptive RDP simplification "
-        "(symmetric difference / original area, default: 5.0). "
+        "(symmetric difference / original area, default: 10.0). "
         "Set to 0 to disable adaptive RDP and use fixed --rdp-epsilon.",
     )
     parser.add_argument(
         "--max-dilation-area-pct",
         type=float,
-        default=5.0,
+        default=10.0,
         help="Max area increase (%%) allowed by adaptive dilation "
-        "(default: 5.0). Overrides --dilation-um. "
+        "(default: 10.0). Overrides --dilation-um. "
         "Set to 0 to disable adaptive dilation and use fixed --dilation-um.",
     )
     parser.add_argument(
@@ -1306,8 +1306,8 @@ def _run_single_slide(args):
         if _promoted:
             print(f"  Used {_promoted} pre-processed contours from pipeline")
 
-        _max_area_change = getattr(args, "max_area_change_pct", 5.0)
-        _max_dilation_area = getattr(args, "max_dilation_area_pct", 5.0)
+        _max_area_change = getattr(args, "max_area_change_pct", 10.0)
+        _max_dilation_area = getattr(args, "max_dilation_area_pct", 10.0)
 
         need_extraction = any(
             d.get("contour_um") is None

@@ -1057,8 +1057,8 @@ adata = slide.to_anndata()
 | `--clustering` | leiden | hdbscan | Unknown number of clusters |
 | `--resolution` | 0.1 | 0.03 (subsets), 0.3 (fine) | Too many/few clusters |
 | `--html-sample-fraction` | 0.10 | 0.05 (large), 1.0 (small) | Browser performance |
-| `--max-area-change-pct` (LMD) | 5.0 | 1-10, 0=fixed | Adaptive RDP: max shape deviation % |
-| `--max-dilation-area-pct` (LMD) | 5.0 | 1-10, 0=fixed | Adaptive dilation: max area increase % |
+| `--max-area-change-pct` (LMD) | 10.0 | 1-20, 0=fixed | Adaptive RDP: max shape deviation % |
+| `--max-dilation-area-pct` (LMD) | 10.0 | 1-20, 0=fixed | Adaptive dilation: max area increase % |
 | Flat-field | ON | `--no-normalize-features` to disable | Raw intensity needed |
 | Photobleach | OFF | `--photobleaching-correction` | Sequential tile scan decay |
 | Deep features | OFF | `--extract-deep-features` | Subtle phenotypes, morph insufficient |

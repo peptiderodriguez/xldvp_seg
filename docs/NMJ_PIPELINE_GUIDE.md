@@ -105,7 +105,7 @@ After detection + deduplication, three post-processing phases run automatically:
 2. **KD-tree background estimation** -- local background from 30 nearest neighbors
 3. **Background-corrected intensity features** -- re-extracts per-channel stats from the **original mask** with bg subtraction
 
-Features are always computed from the original segmentation mask. Contour simplification (adaptive RDP) and dilation are applied at LMD export time only (`--max-area-change-pct 5.0`).
+Features are always computed from the original segmentation mask. Contour simplification (adaptive RDP) and dilation are applied at LMD export time only (`--max-area-change-pct 10.0`, `--max-dilation-area-pct 10.0`).
 
 Override defaults:
 ```bash

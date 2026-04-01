@@ -94,12 +94,12 @@ The batch mode discovers `*_detections.json` files in `--input-dir` and matches 
 
 Contour simplification, dilation, and erosion are all applied at **LMD export time** (not during detection). The pipeline stores original mask contours as `contour_px` / `contour_um`; the export script processes them for LMD hardware:
 
-Both simplification and dilation use **adaptive** tolerances by default (5% each). These are independently adjustable:
+Both simplification and dilation use **adaptive** tolerances by default (10% each). These are independently adjustable:
 
 | Flag | Default | Description |
 |------|---------|-------------|
-| `--max-area-change-pct` | **5.0** | Adaptive RDP: max symmetric-difference deviation (%). Set 0 for fixed `--rdp-epsilon`. |
-| `--max-dilation-area-pct` | **5.0** | Adaptive dilation: max area increase (%) for laser buffer. Set 0 for fixed `--dilation-um`. |
+| `--max-area-change-pct` | **10.0** | Adaptive RDP: max symmetric-difference deviation (%). Set 0 for fixed `--rdp-epsilon`. |
+| `--max-dilation-area-pct` | **10.0** | Adaptive dilation: max area increase (%) for laser buffer. Set 0 for fixed `--dilation-um`. |
 | `--dilation-um` | 0.5 | Fixed dilation distance (only used when `--max-dilation-area-pct 0`) |
 | `--rdp-epsilon` | 5.0 | Fixed RDP epsilon in pixels (only used when `--max-area-change-pct 0`) |
 | `--erosion-um` | 0.0 | Shrink contours by absolute distance in um |

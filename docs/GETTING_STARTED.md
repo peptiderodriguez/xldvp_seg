@@ -534,7 +534,7 @@ After dedup, a 3-phase post-processing pipeline runs automatically:
 | Phase 2 | Local background estimation (KD-tree, k=30 nearest neighbors) | Single-threaded (global) |
 | Phase 3 | Intensity feature extraction from **original mask** on background-corrected pixels | ThreadPoolExecutor (32 workers) |
 
-All features are computed from the **original** Cellpose/SAM2 segmentation mask — no dilation or simplification is applied during detection. Contour simplification (adaptive RDP, max 5% shape deviation) and dilation (laser buffer) are deferred to LMD export time. Morphological features from initial detection are preserved unchanged.
+All features are computed from the **original** Cellpose/SAM2 segmentation mask — no dilation or simplification is applied during detection. Contour simplification (adaptive RDP, max 10% shape deviation) and dilation (adaptive, max 10% area increase) are deferred to LMD export time. Morphological features from initial detection are preserved unchanged.
 
 ```bash
 # Control post-dedup processing:
