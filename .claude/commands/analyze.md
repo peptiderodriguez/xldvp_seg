@@ -123,7 +123,7 @@ For beginners, expand on each step as you reach it. For advanced users, just ask
 | **Replicate sampling** | Area-matched or spatially-clustered replicates, marker/cluster stratification, 384-well assignment | `scripts/paper_figure_sampling.py` |
 | **Transect selection** | Select cells along zonation transect paths for LMD | `scripts/select_transect_cells_for_lmd.py` |
 | **Sliding window** | Area-matched rolling window sampling along ROI centerlines. Grid search for zero-rejection combos. Morphological skeleton + farthest-point spatial balancing. Ref settings: ~6700 cells/mm² brain → r=70um/40% overlap for 20× target, r=90um/40% for 30×. Always use `--czi-path`. | `scripts/sliding_window_sampling.py` |
-| **LMD** | Contour dilation+RDP, clustering, well assignment, XML export | `run_lmd_export.py` |
+| **LMD** | Adaptive RDP simplification, dilation, clustering, well assignment, XML export | `run_lmd_export.py` |
 | **SpatialData** | Export to scverse ecosystem (squidpy, scanpy, anndata) | `scripts/convert_to_spatialdata.py` |
 | **Convert** | CZI to OME-Zarr pyramids for Napari | `scripts/czi_to_ome_zarr.py` |
 | **Spatial smooth** | Feature-gated spatial smoothing for tighter UMAP clusters | `scripts/cluster_by_features.py --spatial-smooth` |
@@ -1057,7 +1057,8 @@ adata = slide.to_anndata()
 | `--clustering` | leiden | hdbscan | Unknown number of clusters |
 | `--resolution` | 0.1 | 0.03 (subsets), 0.3 (fine) | Too many/few clusters |
 | `--html-sample-fraction` | 0.10 | 0.05 (large), 1.0 (small) | Browser performance |
-| `--dilation-um` | 0.5 | 0-2.0 | Contour coverage for LMD |
+| `--dilation-um` (LMD) | 0.5 | 0-2.0 | Contour coverage for LMD export |
+| `--max-area-change-pct` (LMD) | 5.0 | 1-10 | Adaptive RDP tolerance (symmetric diff %) |
 | Flat-field | ON | `--no-normalize-features` to disable | Raw intensity needed |
 | Photobleach | OFF | `--photobleaching-correction` | Sequential tile scan decay |
 | Deep features | OFF | `--extract-deep-features` | Subtle phenotypes, morph insufficient |

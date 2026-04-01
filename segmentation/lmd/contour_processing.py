@@ -76,6 +76,83 @@ def rdp_simplify(points: np.ndarray, epsilon: float) -> np.ndarray:
     return simplified.reshape(-1, 2)
 
 
+def adaptive_rdp_simplify(
+    contour_px: np.ndarray,
+    max_area_change_pct: float = 5.0,
+    max_epsilon: float = 20.0,
+) -> tuple[np.ndarray, float]:
+    """Find the largest RDP epsilon that keeps shape deviation within tolerance.
+
+    Binary-searches over epsilon to maximise point reduction while keeping
+    the symmetric difference between the original and simplified polygons
+    within *max_area_change_pct* % of the original area.  Symmetric
+    difference catches corner-cutting and area gain that pure area change
+    would miss.
+
+    Args:
+        contour_px: (N, 2) contour in pixel coordinates.
+        max_area_change_pct: Maximum allowed symmetric-difference / original-area
+            (in percent, default 5.0).
+        max_epsilon: Upper bound of the epsilon search range (pixels).
+
+    Returns:
+        ``(simplified_contour, epsilon_used)`` — the simplified (M, 2) array
+        and the epsilon that was applied.  If the contour is already simple
+        (< 10 points) or cannot be simplified within tolerance, the original
+        contour is returned with ``epsilon_used = 0.0``.
+    """
+    contour_px = np.asarray(contour_px, dtype=np.float32)
+
+    if len(contour_px) < 10:
+        return contour_px, 0.0
+
+    # Build original polygon once
+    orig_poly = Polygon(contour_px)
+    orig_poly = validate_polygon(orig_poly)
+    if orig_poly is None or orig_poly.is_empty or orig_poly.area < 0.1:
+        return contour_px, 0.0
+
+    tolerance = max_area_change_pct / 100.0
+
+    lo, hi = 0.0, max_epsilon
+    best_contour = contour_px
+    best_epsilon = 0.0
+
+    for _ in range(20):
+        mid = (lo + hi) / 2.0
+        simplified = rdp_simplify(contour_px, mid)
+        if len(simplified) < 3:
+            hi = mid
+            continue
+
+        simp_poly = Polygon(simplified)
+        if not simp_poly.is_valid:
+            simp_poly = make_valid(simp_poly)
+            if simp_poly.geom_type != "Polygon":
+                polys = [g for g in getattr(simp_poly, "geoms", []) if g.geom_type == "Polygon"]
+                if polys:
+                    simp_poly = max(polys, key=lambda p: p.area)
+                else:
+                    hi = mid
+                    continue
+
+        if simp_poly.is_empty:
+            hi = mid
+            continue
+
+        sym_diff_area = orig_poly.symmetric_difference(simp_poly).area
+        deviation = sym_diff_area / orig_poly.area
+
+        if deviation <= tolerance:
+            best_contour = simplified
+            best_epsilon = mid
+            lo = mid  # try larger epsilon for more reduction
+        else:
+            hi = mid  # too much deviation
+
+    return best_contour, best_epsilon
+
+
 def validate_polygon(poly: Polygon) -> Polygon | None:
     """
     Validate and fix a Shapely polygon.
@@ -209,14 +286,15 @@ def process_contour(
     rdp_epsilon: float = DEFAULT_RDP_EPSILON,
     erosion_um: float = 0.0,
     erode_pct: float = 0.0,
+    max_area_change_pct: float | None = None,
     return_stats: bool = False,
 ) -> np.ndarray | None | tuple[np.ndarray | None, dict[str, Any]]:
     """
-    Process a single contour: validate, dilate, simplify, and optionally erode.
+    Process a single contour: validate, simplify, optionally dilate/erode.
 
     Processing order (all in pixel space to avoid precision loss):
-    1. Dilate in pixel space (validates/fixes polygon geometry)
-    2. Apply RDP simplification in pixel space
+    1. Simplify via RDP (adaptive or fixed epsilon)
+    2. Dilate in pixel space (laser buffer for LMD)
     3. Erode in pixel space (if erosion_um > 0 or erode_pct > 0)
     4. Convert to micrometers only at the end
 
@@ -224,12 +302,17 @@ def process_contour(
         contour_px: Contour points in pixels, list of [x, y] pairs
         pixel_size_um: Pixel size in micrometers
         dilation_um: Dilation amount in micrometers (default 0.5)
-        rdp_epsilon: RDP simplification epsilon in pixels (default 5)
+        rdp_epsilon: RDP simplification epsilon in pixels (default 5).
+            Ignored when *max_area_change_pct* is set.
         erosion_um: Erosion amount in micrometers (default 0.0 = no erosion).
-            Applied AFTER dilation and RDP, in pixel space.
+            Applied AFTER simplification and dilation, in pixel space.
         erode_pct: Erosion as fraction of sqrt(area) (default 0.0 = no erosion).
-            Applied AFTER dilation and RDP. If both erosion_um and erode_pct
-            are set, erosion_um takes priority.
+            Applied AFTER simplification and dilation. If both erosion_um and
+            erode_pct are set, erosion_um takes priority.
+        max_area_change_pct: When set, use adaptive RDP that binary-searches
+            for the largest epsilon keeping symmetric-difference deviation
+            within this percentage of the original area.  Overrides
+            *rdp_epsilon*.
         return_stats: If True, return (contour, stats_dict)
 
     Returns:
@@ -266,16 +349,24 @@ def process_contour(
 
     # All operations in pixel space to avoid precision loss from
     # repeated px->um->px conversions.
-    # Step 1: Dilate in pixel space
-    dilation_px = dilation_um / pixel_size_um
-    dilated_px = dilate_contour(contour_px, dilation_px, _poly=px_poly)
-    if dilated_px is None:
-        if return_stats:
-            return None, stats
-        return None
 
-    # Step 2: RDP simplify in pixel space
-    simplified_px = rdp_simplify(dilated_px, rdp_epsilon)
+    # Step 1: Simplify — adaptive (symmetric-difference-bounded) or fixed epsilon
+    if max_area_change_pct is not None and max_area_change_pct > 0:
+        simplified_px, _eps = adaptive_rdp_simplify(
+            contour_px, max_area_change_pct=max_area_change_pct
+        )
+    else:
+        simplified_px = rdp_simplify(contour_px, rdp_epsilon)
+
+    # Step 2: Dilate in pixel space (laser buffer).
+    # If dilation fails (e.g. tiny polygon), we keep the undilated contour
+    # rather than returning None — having a contour without laser buffer is
+    # better than losing the detection entirely at LMD export.
+    dilation_px = dilation_um / pixel_size_um
+    if dilation_px > 0:
+        dilated_px = dilate_contour(simplified_px, dilation_px)
+        if dilated_px is not None:
+            simplified_px = dilated_px
 
     # Step 3: Erode in pixel space (if requested)
     if erosion_um > 0:
@@ -329,6 +420,7 @@ def process_contours_batch(
     rdp_epsilon: float = DEFAULT_RDP_EPSILON,
     erosion_um: float = 0.0,
     erode_pct: float = 0.0,
+    max_area_change_pct: float | None = None,
     verbose: bool = True,
 ) -> dict[str, Any]:
     """
@@ -341,6 +433,7 @@ def process_contours_batch(
         rdp_epsilon: RDP simplification epsilon in pixels
         erosion_um: Erosion amount in micrometers (default 0.0)
         erode_pct: Erosion as fraction of sqrt(area) (default 0.0)
+        max_area_change_pct: Adaptive RDP tolerance (see process_contour)
         verbose: Print progress
 
     Returns:
@@ -383,6 +476,7 @@ def process_contours_batch(
             rdp_epsilon=rdp_epsilon,
             erosion_um=erosion_um,
             erode_pct=erode_pct,
+            max_area_change_pct=max_area_change_pct,
             return_stats=True,
         )
 
@@ -427,6 +521,7 @@ def process_detection_contours(
     rdp_epsilon: float = DEFAULT_RDP_EPSILON,
     erosion_um: float = 0.0,
     erode_pct: float = 0.0,
+    max_area_change_pct: float | None = None,
     verbose: bool = True,
 ) -> tuple[list[np.ndarray | None], dict[str, Any]]:
     """
@@ -440,6 +535,7 @@ def process_detection_contours(
         rdp_epsilon: RDP simplification epsilon in pixels
         erosion_um: Erosion amount in micrometers (default 0.0)
         erode_pct: Erosion as fraction of sqrt(area) (default 0.0)
+        max_area_change_pct: Adaptive RDP tolerance (see process_contour)
         verbose: Print progress
 
     Returns:
@@ -452,7 +548,10 @@ def process_detection_contours(
     if verbose:
         logger.info(f"Processing {len(contours_px)} contours...")
         logger.info(f"  Dilation: +{dilation_um} um")
-        logger.info(f"  RDP epsilon: {rdp_epsilon} px")
+        if max_area_change_pct is not None and max_area_change_pct > 0:
+            logger.info(f"  Adaptive RDP: max {max_area_change_pct:.1f}% shape deviation")
+        else:
+            logger.info(f"  RDP epsilon: {rdp_epsilon} px")
         if erosion_um > 0:
             logger.info(f"  Erosion: -{erosion_um} um")
         if erode_pct > 0:
@@ -465,6 +564,7 @@ def process_detection_contours(
         rdp_epsilon=rdp_epsilon,
         erosion_um=erosion_um,
         erode_pct=erode_pct,
+        max_area_change_pct=max_area_change_pct,
         verbose=verbose,
     )
 

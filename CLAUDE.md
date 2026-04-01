@@ -271,7 +271,7 @@ PYTHONPATH=$REPO $XLDVP_PYTHON $REPO/run_segmentation.py \
 | Detection | Per-tile dirs (`tile_X_Y/`) | Masks (HDF5) + detections (JSON) + HTML cache |
 | Merge shards | `{celltype}_detections_merged.json` | All shard detections concatenated |
 | Dedup | `{celltype}_detections.json` | Deduplicated detections |
-| Post-dedup | `{celltype}_detections_postdedup.json` | Contours + features + bg correction |
+| Post-dedup | `{celltype}_detections_postdedup.json` | Original-mask contours + features + bg correction |
 | Finalize | `{celltype}_detections.json` + HTML/CSV | Final output |
 
 Contour processing and background correction are checked independently on resume.

@@ -1023,7 +1023,16 @@ Examples:
         "--rdp-epsilon",
         type=float,
         default=5.0,
-        help="RDP simplification epsilon in pixels (default: 5)",
+        help="RDP simplification epsilon in pixels (default: 5). "
+        "Ignored when --max-area-change-pct is set.",
+    )
+    parser.add_argument(
+        "--max-area-change-pct",
+        type=float,
+        default=5.0,
+        help="Max shape deviation (%%) allowed by adaptive RDP simplification "
+        "(symmetric difference / original area, default: 5.0). "
+        "Set to 0 to disable adaptive RDP and use fixed --rdp-epsilon.",
     )
     parser.add_argument(
         "--erosion-um",
@@ -1274,38 +1283,23 @@ def _run_single_slide(args):
         for cg in cluster_groups:
             all_dets_needing_contours.extend(cg["members"])
 
-        # Promote pipeline-processed contours: contour_dilated_um -> contour_um
+        # Promote pipeline contours → contour_um (handles both old and new field names)
         _promoted = 0
         for d in all_dets_needing_contours:
-            if d.get("contour_um") is None and d.get("contour_dilated_um") is not None:
-                d["contour_um"] = d["contour_dilated_um"]
-                _promoted += 1
+            if d.get("contour_um") is None:
+                _um = d.get("contour_dilated_um")
+                if _um is not None:
+                    d["contour_um"] = _um
+                    _promoted += 1
         if _promoted:
-            print(f"  Used {_promoted} pre-processed contours from pipeline (contour_dilated_um)")
+            print(f"  Used {_promoted} pre-processed contours from pipeline")
 
-        # Warn if contours were already processed during pipeline
-        _has_erosion = getattr(args, "erosion_um", 0) > 0 or getattr(args, "erode_pct", 0) > 0
-        if _promoted > 0 and _has_erosion:
-            _sample_det = next(
-                (d for d in all_dets_needing_contours if d.get("contour_dilated_um") is not None),
-                None,
-            )
-            _pipe_dilation = _sample_det.get("contour_dilation_um", 0.5) if _sample_det else 0.5
-            _pipe_rdp = _sample_det.get("contour_rdp_epsilon", 5.0) if _sample_det else 5.0
-            print(
-                f"\n  NOTE: Contours were already dilated during pipeline "
-                f"(dilation={_pipe_dilation}um, rdp={_pipe_rdp})."
-            )
-            print("  Applying export-time erosion to pre-processed contours.")
-        if _promoted > 0 and (args.dilation_um != 0.5 or args.rdp_epsilon != 5.0):
-            print(
-                f"\n  NOTE: --dilation-um and --rdp-epsilon only affect newly extracted "
-                f"contours, not pre-processed pipeline contours ({_promoted} promoted)."
-            )
+        _max_area_change = getattr(args, "max_area_change_pct", 5.0)
 
         need_extraction = any(
             d.get("contour_um") is None
             and d.get("outer_contour_global") is None
+            and d.get("contour_px") is None
             and d.get("contour_dilated_px") is None
             for d in all_dets_needing_contours
         )
@@ -1332,21 +1326,23 @@ def _run_single_slide(args):
             # Try to process existing pixel-coord contours (vessel or cell pipeline)
             from segmentation.lmd.contour_processing import process_contour
 
-            print("\nProcessing existing contours (dilation + RDP)...")
+            print("\nProcessing existing contours (adaptive RDP + dilation)...")
             processed_count = 0
             for det in all_dets_needing_contours:
                 if det.get("contour_um") is not None:
                     continue
-                contour_px = det.get("outer_contour_global") or det.get("contour_dilated_px")
+                contour_px = (
+                    det.get("outer_contour_global")
+                    or det.get("contour_px")
+                    or det.get("contour_dilated_px")
+                )
                 if contour_px is None:
                     continue
-                # Note: erosion is NOT applied here — Step 2b handles it
-                # uniformly for all contours (promoted, H5-extracted, and fresh)
                 processed, stats = process_contour(
                     contour_px,
                     pixel_size_um=pixel_size,
                     dilation_um=args.dilation_um,
-                    rdp_epsilon=args.rdp_epsilon,
+                    max_area_change_pct=_max_area_change,
                     return_stats=True,
                 )
                 if processed is not None:

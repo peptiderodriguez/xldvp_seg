@@ -161,7 +161,7 @@ def test_1_detection(output_dir):
     assert "uid" in det, "Detection missing 'uid'"
     assert "global_center" in det, "Detection missing 'global_center'"
     assert "features" in det, "Detection missing 'features'"
-    assert "contour_dilated_px" in det, "Detection missing 'contour_dilated_px'"
+    assert "contour_px" in det or "contour_dilated_px" in det, "Detection missing contour"
 
     feats = det["features"]
     assert "area" in feats, "Features missing 'area'"

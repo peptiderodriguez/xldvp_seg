@@ -282,7 +282,10 @@ def _finish_pipeline(
     # Check if post-dedup processing was applied
     _sample_feat = all_detections[0].get("features", {}) if all_detections else {}
     _bg_corrected = any(k.endswith("_background") for k in _sample_feat)
-    _contour_processed = any(d.get("contour_dilated_px") is not None for d in all_detections[:1])
+    _contour_processed = any(
+        d.get("contour_px") is not None or d.get("contour_dilated_px") is not None
+        for d in all_detections[:1]
+    )
 
     summary = {
         "slide_name": slide_name,

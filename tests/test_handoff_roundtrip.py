@@ -10,7 +10,7 @@ Key format facts verified here:
   - classify_markers.py stores marker classes INSIDE det["features"]
   - rf_prediction is at the TOP LEVEL of the detection dict
   - quality_filter_detections.py sets det["rf_prediction"] = 1.0 for passing
-  - contour_dilated_px is at the TOP LEVEL (list of [x,y] pairs)
+  - contour_px is at the TOP LEVEL (list of [x,y] pairs)
   - global_center / global_center_um are at the TOP LEVEL
   - features dict: area, solidity, eccentricity, sam2_*, ch*_mean/median/background/snr/median_raw
 """
@@ -27,7 +27,7 @@ def _make_pipeline_detections(n=20):
 
     Includes all the fields that matter for handoff correctness:
     - Top-level: uid, rf_prediction, global_center, global_center_um,
-      contour_dilated_px, cell_type
+      contour_px, cell_type
     - features dict: morphology, SAM2 embeddings, per-channel stats
       (ch0_mean, ch0_median, ch0_background, ch0_snr, ch0_median_raw),
       marker classes (NeuN_class, tdTomato_class), marker_profile
@@ -64,7 +64,7 @@ def _make_pipeline_detections(n=20):
             "rf_prediction": round(0.2 + i * 0.04, 2),  # 0.2 to 0.96
             "global_center": [x_px, y_px],
             "global_center_um": [round(x_px * pixel_size, 3), round(y_px * pixel_size, 3)],
-            "contour_dilated_px": contour,
+            "contour_px": contour,
             # --- Features dict (everything else) ---
             "features": {
                 # Morphological features
@@ -192,7 +192,7 @@ class TestDetectionToSlideAnalysis:
         assert "uid" in det
         assert "rf_prediction" in det
         assert "global_center" in det
-        assert "contour_dilated_px" in det
+        assert "contour_px" in det
         assert "features" in det
         assert "area" in det["features"]
         assert "NeuN_class" in det["features"]
@@ -319,13 +319,13 @@ class TestQualityFilterFormat:
 class TestContourHandoff:
     """Verify contour data flows through pipeline stages."""
 
-    def test_contour_dilated_px_preserved_through_filter(self):
+    def test_contour_px_preserved_through_filter(self):
         """Contours survive SlideAnalysis.filter()."""
         dets = _make_pipeline_detections(10)
         slide = SlideAnalysis.from_detections(dets)
         filtered = slide.filter(score_threshold=0.5)
         for det in filtered.detections:
-            contour = det.get("contour_dilated_px")
+            contour = det.get("contour_px")
             assert contour is not None
             assert len(contour) == 4  # our test square
             # Verify structure: list of [x, y] pairs
@@ -341,6 +341,15 @@ class TestContourHandoff:
             assert isinstance(c, np.ndarray)
             assert c.shape == (4, 2)
 
+    def test_contours_property_reads_legacy_field(self):
+        """SlideAnalysis.contours falls back to contour_dilated_px."""
+        dets = _make_pipeline_detections(3)
+        for d in dets:
+            d["contour_dilated_px"] = d.pop("contour_px")
+        slide = SlideAnalysis.from_detections(dets)
+        contours = slide.contours
+        assert all(c is not None for c in contours)
+
     def test_save_load_preserves_contours(self, tmp_path):
         """save() then load() preserves contour data via atomic_json_dump."""
         dets = _make_pipeline_detections(5)
@@ -351,7 +360,7 @@ class TestContourHandoff:
         loaded = fast_json_load(out)
         assert len(loaded) == 5
         for orig, reloaded in zip(dets, loaded):
-            assert reloaded["contour_dilated_px"] == orig["contour_dilated_px"]
+            assert reloaded["contour_px"] == orig["contour_px"]
             assert reloaded["global_center"] == orig["global_center"]
             assert reloaded["global_center_um"] == orig["global_center_um"]
 

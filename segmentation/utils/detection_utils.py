@@ -310,3 +310,35 @@ def extract_feature_matrix(detections, feature_names):
     X_valid = X[valid_indices]
     X_valid = np.nan_to_num(X_valid, nan=0.0, posinf=0.0, neginf=0.0)
     return X_valid, valid_indices
+
+
+# ---------------------------------------------------------------------------
+# Contour field access (backwards-compatible with old field names)
+# ---------------------------------------------------------------------------
+
+
+def get_contour_px(det: dict) -> list | None:
+    """Get contour in pixels from a detection dict.
+
+    Handles both new (``contour_px``) and legacy (``contour_dilated_px``)
+    field names.  Returns ``None`` if neither is present.
+
+    Uses explicit ``is not None`` checks (not ``or``) to avoid skipping
+    an empty list ``[]`` and falling through to the legacy field.
+    """
+    c = det.get("contour_px")
+    if c is not None:
+        return c
+    return det.get("contour_dilated_px")
+
+
+def get_contour_um(det: dict) -> list | None:
+    """Get contour in micrometers from a detection dict.
+
+    Handles both new (``contour_um``) and legacy (``contour_dilated_um``)
+    field names.  Returns ``None`` if neither is present.
+    """
+    c = det.get("contour_um")
+    if c is not None:
+        return c
+    return det.get("contour_dilated_um")

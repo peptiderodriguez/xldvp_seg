@@ -92,16 +92,17 @@ The batch mode discovers `*_detections.json` files in `--input-dir` and matches 
 
 ### Contour Processing
 
-Contours are processed during detection (dilation + RDP simplification). The export script promotes these pre-processed contours (`contour_dilated_um`) automatically. Additional erosion can be applied at export time:
+Contour simplification, dilation, and erosion are all applied at **LMD export time** (not during detection). The pipeline stores original mask contours as `contour_px` / `contour_um`; the export script processes them for LMD hardware:
 
 | Flag | Default | Description |
 |------|---------|-------------|
+| `--max-area-change-pct` | 5.0 | Adaptive RDP: max symmetric-difference deviation (%). Set 0 for fixed epsilon. |
 | `--dilation-um` | 0.5 | Expand contours so laser cuts outside the cell |
-| `--rdp-epsilon` | 5.0 | RDP simplification (reduce vertex count for LMD hardware) |
+| `--rdp-epsilon` | 5.0 | Fixed RDP epsilon (only used when `--max-area-change-pct 0`) |
 | `--erosion-um` | 0.0 | Shrink contours by absolute distance in um |
 | `--erode-pct` | 0.0 | Shrink contours by percentage of sqrt(area) (e.g., 0.05 = 5%) |
 
-Erosion is applied after dilation and RDP. Use `--erosion-um 0.2` or `--erode-pct 0.05` to ensure the laser cuts inside the cell boundary.
+Processing order: simplify (adaptive RDP) → dilate (laser buffer) → erode (optional). Erosion is applied last. Use `--erosion-um 0.2` or `--erode-pct 0.05` to ensure the laser cuts inside the cell boundary.
 
 ### Well Assignment
 

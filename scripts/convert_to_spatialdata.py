@@ -538,13 +538,13 @@ def build_shapes(detections, cell_type, tiles_dir=None, pixel_size_um=1.0):
     # Non-vessel: single shape layer
     logger.info("Extracting shapes for %s...", cell_type)
 
-    # First, try to use contour_dilated_px from detections (cell pipeline post-dedup)
+    # First, try to use contour_px from detections (cell pipeline post-dedup)
     from shapely.geometry import Polygon as _Polygon
 
     polygons = [None] * len(detections)
     _from_json = 0
     for i, det in enumerate(detections):
-        contour_px = det.get("contour_dilated_px")
+        contour_px = det.get("contour_px") or det.get("contour_dilated_px")
         if contour_px is not None and len(contour_px) >= 3:
             try:
                 poly = _Polygon(contour_px)
@@ -554,7 +554,7 @@ def build_shapes(detections, cell_type, tiles_dir=None, pixel_size_um=1.0):
             except Exception:
                 pass
     if _from_json > 0:
-        logger.info("  Used %d/%d contours from contour_dilated_px", _from_json, len(detections))
+        logger.info("  Used %d/%d contours from detection JSON", _from_json, len(detections))
 
     # Fill remaining Nones from HDF5 or circle fallback
     n_missing = sum(1 for p in polygons if p is None)

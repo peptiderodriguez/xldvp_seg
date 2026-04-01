@@ -263,7 +263,7 @@ def regions_to_detections(
                 "slide_name": slide_name,
                 "pixel_size_um": pixel_size_um,
                 "outer_contour_global": contour_global,
-                "contour_dilated_px": contour_global,  # alias for compatibility
+                "contour_px": contour_global,
                 "features": {
                     "area": int(piece_area_px * (scale_inv**2)),  # full-res px
                     "area_um2": float(piece_area_um2),

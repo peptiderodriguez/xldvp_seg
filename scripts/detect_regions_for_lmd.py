@@ -10,7 +10,7 @@ Use for any bright-region detection where the full segmentation pipeline
 is overkill: NfL nerve fibers, BTX NMJ regions, autofluorescent deposits,
 bright marker-positive tissue patches, etc.
 
-Output format is compatible with run_lmd_export.py (contour_dilated_px,
+Output format is compatible with run_lmd_export.py (contour_px,
 outer_contour_global, global_center, features) and classify_markers.py
 (ch{N}_mean keys).
 
@@ -660,7 +660,7 @@ def detect_regions(args):
                 "slide_name": slide_name,
                 "pixel_size_um": pixel_size,
                 "outer_contour_global": contour_global,
-                "contour_dilated_px": contour_global,
+                "contour_px": contour_global,
                 "features": feats,
                 "rf_prediction": None,
             }

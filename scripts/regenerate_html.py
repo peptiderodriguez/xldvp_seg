@@ -111,6 +111,7 @@ def create_sample_from_contours(
         "inner_contour_global",
         "outer_contour_global",
         "sma_contour_global",
+        "contour_px",
         "contour_dilated_px",
     ]
     all_contour_pts = []
@@ -194,7 +195,8 @@ def create_sample_from_contours(
         "inner_contour_global": (0, 255, 255),  # cyan — lumen
         "outer_contour_global": (0, 255, 0),  # green — outer boundary
         "sma_contour_global": (255, 0, 255),  # magenta — SMA ring
-        "contour_dilated_px": (0, 255, 0),  # green — dilated contour (cell pipeline)
+        "contour_px": (0, 255, 0),  # green — original mask contour
+        "contour_dilated_px": (0, 255, 0),  # green — legacy dilated contour
     }
     for contour_key, color in contour_colors.items():
         contour_data = det.get(contour_key)

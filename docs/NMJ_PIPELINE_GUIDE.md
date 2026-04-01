@@ -101,16 +101,16 @@ scripts/run_pipeline.sh configs/nmj_experiment.yaml
 
 After detection + deduplication, three post-processing phases run automatically:
 
-1. **Contour dilation + RDP simplification** -- expands contours by 0.5 um, simplifies vertices
+1. **Contour extraction** -- extracts original mask contour and stores as `contour_px` / `contour_um`
 2. **KD-tree background estimation** -- local background from 30 nearest neighbors
-3. **Background-corrected intensity features** -- re-extracts per-channel stats with bg subtraction
+3. **Background-corrected intensity features** -- re-extracts per-channel stats from the **original mask** with bg subtraction
+
+Features are always computed from the original segmentation mask. Contour simplification (adaptive RDP) and dilation are applied at LMD export time only (`--max-area-change-pct 5.0`).
 
 Override defaults:
 ```bash
---dilation-um 0.5           # Contour dilation in micrometers (default: 0.5)
---rdp-epsilon 5.0           # RDP simplification epsilon (default: 5)
 --bg-neighbors 30           # KD-tree neighbors for bg estimation (default: 30)
---no-contour-processing     # Skip phase 1
+--no-contour-processing     # Skip contour extraction
 --no-background-correction  # Skip phases 2+3
 ```
 

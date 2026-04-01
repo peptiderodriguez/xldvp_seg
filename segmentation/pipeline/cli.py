@@ -603,21 +603,22 @@ def build_parser():
         dest="contour_processing",
         action="store_false",
         default=True,
-        help="Disable post-dedup contour dilation + RDP simplification. "
-        "When enabled (default), masks are dilated and features re-extracted "
-        "from the dilated mask region.",
+        help="Disable post-dedup contour extraction. "
+        "When enabled (default), original mask contours are extracted "
+        "and stored for visualization and LMD export.",
     )
+    # Deprecated — kept for YAML/CLI backwards compatibility, silently ignored
     parser.add_argument(
         "--dilation-um",
         type=float,
         default=0.5,
-        help="Contour dilation in micrometers (default: 0.5)",
+        help="Deprecated — dilation is now applied at LMD export time only.",
     )
     parser.add_argument(
         "--rdp-epsilon",
         type=float,
         default=5.0,
-        help="RDP simplification epsilon in pixels (default: 5)",
+        help="Deprecated — RDP simplification is now applied at LMD export time only.",
     )
 
     # Post-dedup background correction (default ON)

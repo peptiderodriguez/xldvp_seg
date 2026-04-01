@@ -391,7 +391,9 @@ def _parse_contour(det, orig_h, orig_w, contour_flip, contour_rot90, world_scale
         pts = transform_contour_coords(pts, orig_h, orig_w, contour_flip, contour_rot90)
         return pts / world_scale
 
-    contour_px = det.get("outer_contour_global") or det.get("contour_dilated_px")
+    contour_px = (
+        det.get("outer_contour_global") or det.get("contour_px") or det.get("contour_dilated_px")
+    )
     if contour_px is not None and len(contour_px) >= 3:
         pts_xy = np.array(contour_px, dtype=np.float64)
         pts_yx = pts_xy[:, ::-1]

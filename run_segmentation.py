@@ -712,7 +712,10 @@ def run_pipeline(args):
         if all_detections:
             _sample_feat = all_detections[0].get("features", {})
             _has_bg = any(k.endswith("_background") for k in _sample_feat)
-            _has_contour = all_detections[0].get("contour_dilated_px") is not None
+            _has_contour = (
+                all_detections[0].get("contour_px") is not None
+                or all_detections[0].get("contour_dilated_px") is not None
+            )
 
         _want_contour = args.contour_processing and not _has_contour
         _want_bg = args.background_correction and not _has_bg

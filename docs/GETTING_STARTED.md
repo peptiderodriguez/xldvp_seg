@@ -68,7 +68,7 @@ CZI Image (20-180 GB)
     |                  Multi-GPU processing (always, even with --num-gpus 1)
     |                  Optional multi-node sharding (--tile-shard INDEX/TOTAL)
     v
-[Mask Post-Processing] -- Largest component, hole fill, erosion/dilation, RDP
+[Mask Post-Processing] -- Largest component, hole fill
     |
     v
 [Feature Extraction] --- Up to 6,478 features per detection
@@ -530,18 +530,16 @@ After dedup, a 3-phase post-processing pipeline runs automatically:
 
 | Phase | What it does | Parallelization |
 |-------|-------------|-----------------|
-| Phase 1 | Contour dilation (+0.5 um) + RDP simplification + quick mean extraction | ThreadPoolExecutor (32 workers) |
+| Phase 1 | Original mask contour extraction + quick mean extraction | ThreadPoolExecutor (32 workers) |
 | Phase 2 | Local background estimation (KD-tree, k=30 nearest neighbors) | Single-threaded (global) |
-| Phase 3 | Intensity feature re-extraction on background-corrected pixels | ThreadPoolExecutor (32 workers) |
+| Phase 3 | Intensity feature extraction from **original mask** on background-corrected pixels | ThreadPoolExecutor (32 workers) |
 
-Phase 3 extracts **intensity features only** (per-channel stats). Morphological features from initial detection are preserved unchanged.
+All features are computed from the **original** Cellpose/SAM2 segmentation mask — no dilation or simplification is applied during detection. Contour simplification (adaptive RDP, max 5% shape deviation) and dilation (laser buffer) are deferred to LMD export time. Morphological features from initial detection are preserved unchanged.
 
 ```bash
 # Control post-dedup processing:
---no-contour-processing      # Skip contour dilation + RDP
+--no-contour-processing      # Skip contour extraction
 --no-background-correction   # Skip local background subtraction
---dilation-um 0.5            # Contour dilation in micrometers (default: 0.5)
---rdp-epsilon 5.0            # RDP simplification epsilon in pixels (default: 5)
 --bg-neighbors 30            # KD-tree neighbors for background (default: 30)
 ```
 

@@ -1,10 +1,11 @@
-"""Post-dedup processing: contour dilation, background correction, feature extraction.
+"""Post-dedup processing: contour extraction, background correction, feature extraction.
 
 After deduplication the surviving detections go through three phases:
 
-**Phase 1 — Contour dilation + quick means** (per-tile, parallelized):
-    Extract contour from HDF5 mask, dilate + RDP, compute quick mean
-    intensity per channel from the dilated mask region.
+**Phase 1 — Contour extraction + quick means** (per-tile, parallelized):
+    Extract the original contour from the HDF5 segmentation mask and
+    store it in the detection dict.  Compute quick mean intensity per
+    channel from the **original** binary mask region.
 
 **Phase 2 — Background estimation** (global):
     Build KD-tree from global cell positions and the quick means,
@@ -12,9 +13,13 @@ After deduplication the surviving detections go through three phases:
 
 **Phase 3 — Intensity feature extraction on corrected pixels** (per-tile, parallelized):
     Subtract per-cell background from the pixel data within each
-    detection's dilated mask, then extract per-channel intensity
+    detection's **original** mask, then extract per-channel intensity
     features from the corrected pixels.  Morphological features
     (computed during initial detection) are preserved unchanged.
+
+Contour simplification (RDP) and dilation are deferred to LMD export
+time so that features are always computed from the true segmentation
+mask, not a reduced approximation.
 
 Phases 1 and 3 are parallelized with ThreadPoolExecutor (auto-detects CPU
 count from SLURM_CPUS_PER_TASK or os.cpu_count()).  Thread-safety: SHM is
@@ -29,12 +34,6 @@ import h5py
 import numpy as np
 
 from segmentation.detection.strategies.mixins import MultiChannelFeatureMixin
-from segmentation.lmd.contour_processing import (
-    DEFAULT_DILATION_UM,
-    DEFAULT_RDP_EPSILON,
-    dilate_contour,
-    rdp_simplify,
-)
 from segmentation.pipeline.background import _extract_centroids, local_background_subtract
 from segmentation.utils.logging import get_logger
 
@@ -58,73 +57,42 @@ except (ValueError, TypeError):
 # ---------------------------------------------------------------------------
 
 
-def _contour_from_mask(mask_arr: np.ndarray, label: int) -> np.ndarray | None:
-    """Extract the largest external contour for *label* in *mask_arr*.
+def _contour_from_binary(binary_mask: np.ndarray) -> np.ndarray | None:
+    """Extract the largest external contour from a boolean mask.
+
+    Args:
+        binary_mask: (H, W) boolean array.
 
     Returns (N, 2) int array in local tile coordinates, or ``None``.
     """
-    binary = (mask_arr == label).astype(np.uint8)
-    if binary.sum() == 0:
-        return None
-    contours, _ = cv2.findContours(binary, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_NONE)
+    contours, _ = cv2.findContours(
+        binary_mask.astype(np.uint8), cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_NONE
+    )
     if not contours:
         return None
     largest = max(contours, key=cv2.contourArea)
     return largest.reshape(-1, 2)
 
 
-def _dilated_mask_from_contour(
-    contour_local: np.ndarray,
-    tile_h: int,
-    tile_w: int,
-    dilation_px: float,
-) -> tuple[np.ndarray | None, np.ndarray | None]:
-    """Dilate a contour and rasterise to a binary mask clipped to tile bounds.
-
-    Returns ``(dilated_contour, dilated_mask)`` — both in local tile coords.
-    ``dilated_contour`` is (M, 2) float, ``dilated_mask`` is (tile_h, tile_w) bool.
-    """
-    dilated = dilate_contour(contour_local.astype(float), dilation_px)
-    if dilated is None or len(dilated) < 3:
-        return None, None
-
-    # Clip to tile bounds
-    dilated[:, 0] = np.clip(dilated[:, 0], 0, tile_w - 1)
-    dilated[:, 1] = np.clip(dilated[:, 1], 0, tile_h - 1)
-
-    # Rasterise to binary mask
-    mask = np.zeros((tile_h, tile_w), dtype=np.uint8)
-    pts = np.round(dilated).astype(np.int32)
-    cv2.fillPoly(mask, [pts], 1)
-    return dilated, mask.astype(bool)
-
-
-def _rasterize_contour(contour_local: np.ndarray, tile_h: int, tile_w: int) -> np.ndarray:
-    """Rasterize a contour (local coords) into a boolean mask."""
-    mask = np.zeros((tile_h, tile_w), dtype=np.uint8)
-    pts = np.round(contour_local).astype(np.int32)
-    cv2.fillPoly(mask, [pts], 1)
-    return mask.astype(bool)
-
-
 def _extract_intensity_features(
-    dilated_mask: np.ndarray,
+    mask: np.ndarray,
     tile_channels: dict[int, np.ndarray],
     *,
     include_zeros: bool = False,
 ) -> dict[str, float]:
-    """Extract per-channel intensity features from *tile_channels* within *dilated_mask*.
+    """Extract per-channel intensity features from *tile_channels* within *mask*.
 
     Uses ``MultiChannelFeatureMixin.extract_multichannel_features()`` which
     produces 15 features per channel plus inter-channel ratios.
 
     Args:
+        mask: Boolean mask defining the region to extract features from.
         include_zeros: Pass True for background-corrected data where
             zero-valued pixels are real signal (not CZI padding).
     """
     channels_dict = {f"ch{ch}": data for ch, data in sorted(tile_channels.items())}
     return _channel_mixin.extract_multichannel_features(
-        dilated_mask,
+        mask,
         channels_dict,
         compute_ratios=True,
         _include_zeros=include_zeros,
@@ -239,11 +207,13 @@ def _phase1_tile(
     tile_size: int,
     has_data_source: bool,
     contour_processing: bool,
-    dilation_px: float,
-    rdp_epsilon: float,
     pixel_size_um: float,
 ) -> tuple[int, int]:
-    """Process one tile for Phase 1 (contour dilation + quick means).
+    """Process one tile for Phase 1 (contour extraction + quick means).
+
+    Extracts the original contour from the HDF5 segmentation mask and
+    computes quick mean intensity per channel from the **original** mask
+    region (no dilation or RDP — those are deferred to LMD export).
 
     Returns ``(n_ok, n_fail)``.
     """
@@ -285,62 +255,28 @@ def _phase1_tile(
             n_fail += 1
             continue
 
-        contour_local = _contour_from_mask(masks_arr, label)
-        if contour_local is None:
+        # Compute once, reuse for contour extraction and quick means
+        original_mask = (masks_arr == label).astype(bool)
+        if not original_mask.any():
             n_fail += 1
             continue
 
-        if contour_processing and dilation_px > 0:
-            dilated_contour, dilated_mask = _dilated_mask_from_contour(
-                contour_local,
-                tile_h,
-                tile_w,
-                dilation_px,
-            )
-            if dilated_contour is None:
-                dilated_mask = (masks_arr == label).astype(bool)
-                dilated_contour = rdp_simplify(contour_local.astype(np.float32), rdp_epsilon)
-            else:
-                dilated_contour = rdp_simplify(dilated_contour.astype(np.float32), rdp_epsilon)
-            n_ok += 1
-
-            origin = det.get("tile_origin", [0, 0])
-            contour_global = dilated_contour.copy()
-            contour_global[:, 0] += origin[0]
-            contour_global[:, 1] += origin[1]
-            det["contour_dilated_px"] = contour_global.tolist()
-            det["contour_dilated_um"] = (contour_global * pixel_size_um).tolist()
-        elif contour_processing and dilation_px <= 0:
-            # No dilation, but still apply RDP simplification
-            simplified = rdp_simplify(contour_local.astype(np.float32), rdp_epsilon)
-            dilated_mask = _rasterize_contour(simplified, tile_h, tile_w)
-
-            origin = det.get("tile_origin", [0, 0])
-            contour_global = simplified.copy()
-            contour_global[:, 0] += origin[0]
-            contour_global[:, 1] += origin[1]
-            det["contour_dilated_px"] = contour_global.tolist()
-            det["contour_dilated_um"] = (contour_global * pixel_size_um).tolist()
-            n_ok += 1
-        else:
-            # No contour processing this run — but if the detection already
-            # has a dilated contour (from a previous run), rasterize it so
-            # quick_means use the same region as the original run.
-            if det.get("contour_dilated_px") is not None:
-                contour_global = np.array(det["contour_dilated_px"])
+        if contour_processing:
+            contour_local = _contour_from_binary(original_mask)
+            if contour_local is not None:
                 origin = det.get("tile_origin", [0, 0])
-                contour_local_prev = contour_global.copy()
-                contour_local_prev[:, 0] -= origin[0]
-                contour_local_prev[:, 1] -= origin[1]
-                dilated_mask = _rasterize_contour(contour_local_prev, tile_h, tile_w)
-            else:
-                dilated_mask = (masks_arr == label).astype(bool)
-            n_ok += 1
+                contour_global = contour_local.astype(np.float32)
+                contour_global[:, 0] += origin[0]
+                contour_global[:, 1] += origin[1]
+                det["contour_px"] = contour_global.tolist()
+                det["contour_um"] = (contour_global * pixel_size_um).tolist()
+
+        n_ok += 1
 
         quick_medians = {}
-        if tile_channels and dilated_mask.any():
+        if tile_channels:
             for ch, data in tile_channels.items():
-                pixels = data[dilated_mask].astype(np.float32)
+                pixels = data[original_mask].astype(np.float32)
                 quick_medians[ch] = float(np.median(pixels))
         det["_bg_quick_means"] = quick_medians  # key name kept for compatibility
 
@@ -410,25 +346,18 @@ def _phase3_tile(
             n_fail += 1
             continue
 
-        if det.get("contour_dilated_px") is not None:
-            contour_global = np.array(det["contour_dilated_px"])
-            origin = det.get("tile_origin", [0, 0])
-            contour_local = contour_global.copy()
-            contour_local[:, 0] -= origin[0]
-            contour_local[:, 1] -= origin[1]
-            dilated_mask = _rasterize_contour(contour_local, tile_h, tile_w)
-        else:
-            dilated_mask = (masks_arr == label).astype(bool)
+        # Always use the original segmentation mask from HDF5
+        original_mask = (masks_arr == label).astype(bool)
 
-        if not dilated_mask.any():
+        if not original_mask.any():
             n_fail += 1
             continue
 
-        rows = np.where(dilated_mask.any(axis=1))[0]
-        cols = np.where(dilated_mask.any(axis=0))[0]
+        rows = np.where(original_mask.any(axis=1))[0]
+        cols = np.where(original_mask.any(axis=0))[0]
         r0, r1 = rows[0], rows[-1] + 1
         c0, c1 = cols[0], cols[-1] + 1
-        crop_mask = dilated_mask[r0:r1, c0:c1]
+        crop_mask = original_mask[r0:r1, c0:c1]
 
         bg = per_cell_bg.get(det_idx, {})
         feat = det.setdefault("features", {})
@@ -464,8 +393,8 @@ def _phase3_tile(
                 feat[f"ch{ch}_background"] = ch_bg
                 feat[f"ch{ch}_snr"] = float(raw_median / ch_bg)
 
-        if det.get("contour_dilated_px") is not None:
-            feat["area_um2"] = float(int(crop_mask.sum()) * pixel_size_um**2)
+        # Always compute area_um2 from the original mask
+        feat["area_um2"] = float(int(crop_mask.sum()) * pixel_size_um**2)
 
         n_ok += 1
 
@@ -493,8 +422,6 @@ def process_detections_post_dedup(
     tile_size: int = 3000,
     # Processing toggles
     contour_processing: bool = True,
-    dilation_um: float = DEFAULT_DILATION_UM,
-    rdp_epsilon: float = DEFAULT_RDP_EPSILON,
     background_correction: bool = True,
     bg_neighbors: int = 30,
     # Nuclear counting (Phase 4)
@@ -503,18 +430,26 @@ def process_detections_post_dedup(
     min_nuclear_area: int = 50,
     cellpose_model=None,
     sam2_predictor=None,
+    # Deprecated — accepted for YAML/CLI compat, silently ignored
+    dilation_um: float = 0.0,
+    rdp_epsilon: float = 0.0,
 ) -> dict:
     """Run all post-dedup processing on *detections* **in-place**.
 
     Three-phase pipeline:
 
-    1. **Contour dilation + quick means** — extract contours from HDF5
-       masks, dilate + RDP, compute quick mean intensity per channel.
+    1. **Contour extraction + quick means** — extract original contours
+       from HDF5 masks, compute quick mean intensity per channel from
+       the original mask region.
     2. **Background estimation** — KD-tree on global cell positions,
        estimate per-cell local background for each channel.
     3. **Intensity feature extraction on corrected pixels** — subtract
-       per-cell background, then extract per-channel intensity features.
-       Morphological features from initial detection are preserved.
+       per-cell background, then extract per-channel intensity features
+       from the original mask.  Morphological features from initial
+       detection are preserved.
+
+    Contour simplification (RDP) and dilation are deferred to LMD
+    export time so features always reflect the true segmentation mask.
 
     Args:
         detections: Deduped detection dicts (mutated in-place).
@@ -528,10 +463,11 @@ def process_detections_post_dedup(
         ch_indices: CZI channel indices for loader fallback (required when
             using loader without ch_to_slot).
         tile_size: Tile edge length in pixels (used with loader fallback).
-        contour_processing: Whether to dilate + RDP contours.
-        dilation_um, rdp_epsilon: Contour processing parameters.
+        contour_processing: Whether to extract contours from HDF5 masks.
         background_correction: Whether to run local bg subtraction.
         bg_neighbors: KD-tree neighbor count for bg subtraction.
+        dilation_um: Deprecated — ignored (dilation moved to LMD export).
+        rdp_epsilon: Deprecated — ignored (RDP moved to LMD export).
 
     Returns:
         Summary dict with processing statistics.
@@ -565,17 +501,11 @@ def process_detections_post_dedup(
         effective_workers = 1
         logger.info("CZI loader path is not thread-safe — using single-threaded post-dedup")
 
-    dilation_px = dilation_um / pixel_size_um if contour_processing else 0.0
-
     logger.info("=" * 50)
     logger.info("POST-DEDUP PROCESSING")
     logger.info("=" * 50)
     logger.info("  Detections: %d", n_total)
-    if contour_processing:
-        logger.info("  Contour dilation: +%.2f um (%.1f px)", dilation_um, dilation_px)
-        logger.info("  RDP epsilon: %.1f px", rdp_epsilon)
-    else:
-        logger.info("  Contour processing: DISABLED")
+    logger.info("  Contour extraction: %s", "ON" if contour_processing else "DISABLED")
     logger.info("  Background correction: %s (k=%d)", background_correction, bg_neighbors)
     logger.info(
         "  Data source: %s", "shared memory" if use_shm else ("CZI loader" if loader else "NONE")
@@ -602,10 +532,12 @@ def process_detections_post_dedup(
     n_features_fail = 0
 
     # ==================================================================
-    # PHASE 1: Contour dilation + quick mean extraction (parallelized)
+    # PHASE 1: Contour extraction + quick mean extraction (parallelized)
     # ==================================================================
     logger.info("-" * 40)
-    logger.info("Phase 1: Contour dilation + quick mean extraction (%d workers)", effective_workers)
+    logger.info(
+        "Phase 1: Contour extraction + quick mean extraction (%d workers)", effective_workers
+    )
 
     from concurrent.futures import ThreadPoolExecutor, as_completed
 
@@ -629,8 +561,6 @@ def process_detections_post_dedup(
                 tile_size,
                 has_data_source,
                 contour_processing,
-                dilation_px,
-                rdp_epsilon,
                 pixel_size_um,
             ): k
             for k, v in by_tile.items()
@@ -847,8 +777,6 @@ def process_detections_post_dedup(
         "n_features_ok": n_features_ok,
         "n_features_fail": n_features_fail,
         "contour_processing": contour_processing,
-        "dilation_um": dilation_um,
-        "rdp_epsilon": rdp_epsilon,
         "background_correction": background_correction,
         "bg_neighbors": bg_neighbors,
         "corrected_channels": corrected_channels,
