@@ -114,8 +114,8 @@ markers:
 
 # --- Downstream analyses (enabled by user selection) ---
 
-# Nuclear counting (Cellpose 2nd pass on nuclear channel)
-# count_nuclei: true
+# Nuclear counting (integrated in Phase 4, default ON)
+# count_nuclei: true  # set false to disable
 
 # Spatial network analysis
 # spatial_network:
@@ -151,7 +151,6 @@ slurm:
   mem_gb: <recommended>
   gpus: "<type>:<count>"
   time: "3-00:00:00"
-  slides_per_job: 1                      # 1 slide/job for parallel throughput
 ```
 
 Only include sections the user selected in Step 5. Comment out unselected sections rather than omitting them — this way the user can easily enable them later by uncommenting.
@@ -175,7 +174,7 @@ Ask: *"Launch now, or review first?"*
 - ALWAYS set `all_channels: true` for multi-channel slides
 - Default `html_sample_fraction: 0.10`
 - Get SLURM resources from `system_info.py`, don't hardcode partition names
-- If multi-slide (directory), add `czi_dir:` instead of `czi_path:`, plus `slides_per_job: 1`
+- If multi-slide (directory), add `czi_dir:` instead of `czi_path:`
 - Keep it fast — experienced users don't need explanations, just confirmations
 
 $ARGUMENTS

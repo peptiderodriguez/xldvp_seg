@@ -62,8 +62,6 @@ slurm:
   mem_gb: 556
   gpus: "L40S:4"
   time: "3-00:00:00"
-  slides_per_job: 1
-  num_jobs: 1
 ```
 
 **Resume**: add `resume_dir: /path/to/run_dir` to YAML (the timestamped subdir with `tiles/` directly inside).

@@ -151,7 +151,7 @@ For beginners, expand on each step as you reach it. For advanced users, just ask
 | **Vessel** | `scripts/detect_vessel_structures.py` | Graph topology vessel detection from marker+ cells (ring/arc/strip/cluster → artery/vein/lymphatic/capillary) |
 | **Vessel** | `scripts/vessel_community_analysis.py` | Multi-scale vessel community analysis (tissue-level neighborhoods) |
 | **Vessel** | `examples/vessel/train_vessel_detector.py` | Train vessel RF detector |
-| **Vessel** | `examples/vessel/train_vessel_classifier.py` | Train vessel type classifier (6 types) |
+| **Vessel** | `examples/vessel/train_vessel_classifier.py` | Train vessel type classifier (7 types) |
 | **Vessel** | `examples/bone_marrow/rbc_vascularization_analysis.py` | RBC vascularization analysis for MK HU project |
 | **Islet** | `examples/islet/analyze_islets.py` | Spatial analysis of pancreatic islets |
 | **Islet** | `examples/islet/segment_islet_regions.py` | ROI-based islet segmentation (nuc vs PM+nuc comparison) |

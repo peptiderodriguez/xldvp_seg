@@ -506,7 +506,7 @@ Set either to 0 to fall back to fixed values (`--rdp-epsilon`, `--dilation-um`).
 --multi-scale                  # Multi-scale detection (coarse to fine)
 ```
 
-Vessel 3-contour system: lumen (cyan, inner boundary), CD31 (green, endothelial outer), SMA (magenta, smooth muscle ring expanding from lumen). 6-type classification: artery, arteriole, vein, capillary, lymphatic, collecting_lymphatic.
+Vessel 3-contour system: lumen (cyan, inner boundary), CD31 (green, endothelial outer), SMA (magenta, smooth muscle ring expanding from lumen). 7-type classification: artery, arteriole, vein, venule, capillary, lymphatic, collecting_lymphatic.
 
 ### Multi-Node Sharding
 

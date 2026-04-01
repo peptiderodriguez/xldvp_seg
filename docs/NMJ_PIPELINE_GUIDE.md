@@ -88,8 +88,6 @@ slurm:
   mem_gb: 556
   gpus: "l40s:4"
   time: "3-00:00:00"
-  slides_per_job: 1
-  num_jobs: 1
 ```
 
 Launch:
@@ -189,7 +187,7 @@ PYTHONPATH=$REPO $XLDVP_PYTHON $REPO/scripts/classify_markers.py \
     --czi-path /path/to/slide.czi
 ```
 
-Methods: `otsu` (default), `otsu_half` (more permissive for dim markers), `gmm` (2-component Gaussian).
+Methods: `snr` (default — median-based SNR >= 1.5), `otsu`, `otsu_half` (more permissive for dim markers), `gmm` (2-component Gaussian).
 
 Output adds `{marker}_class`, `{marker}_value`, `{marker}_threshold`, and `marker_profile` fields to each detection.
 

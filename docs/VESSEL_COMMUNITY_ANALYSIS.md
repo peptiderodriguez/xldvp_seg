@@ -6,7 +6,7 @@ Two complementary tools for vessel analysis from classified cell detections.
 
 **Script:** `scripts/detect_vessel_structures.py`
 
-Identifies individual vessel structures from marker-positive cells (SMA+, CD31+, LYVE1+) using graph topology (ring_score, arc_fraction, linearity) and geometric/PCA metrics (circularity, hollowness, elongation). Classifies morphology (ring, arc, strip, cluster), computes vessel morphometry (diameter, lumen, wall extent), analyzes spatial marker layering (Mann-Whitney U), and assigns vessel types (artery, vein, lymphatic, capillary).
+Identifies individual vessel structures from marker-positive cells (SMA+, CD31+, LYVE1+) using graph topology (ring_score, arc_fraction, linearity) and geometric/PCA metrics (circularity, hollowness, elongation). Classifies morphology (ring, arc, strip, cluster), computes vessel morphometry (diameter, lumen, wall extent), analyzes spatial marker layering (Mann-Whitney U), and assigns vessel types (artery, arteriole, vein, venule, capillary, lymphatic, collecting_lymphatic).
 
 ```bash
 python scripts/detect_vessel_structures.py \

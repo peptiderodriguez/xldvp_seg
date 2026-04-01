@@ -122,7 +122,7 @@ The pipeline follows a **detect-once, classify-later** design:
 |------|-------------|------|
 | 1. **Inspect** | Read CZI channel metadata | seconds |
 | 2. **Detect** | AI segmentation (Cellpose/InstanSeg + SAM2). Checkpointed per-tile. | 1-3 hours |
-| 3. **Post-process** | Contour dilation + KD-tree background correction (automatic) | minutes |
+| 3. **Post-process** | Contour extraction + KD-tree background correction + nuclear counting (automatic) | minutes |
 | 4. **Annotate** | Click yes/no on cell crops in HTML viewer. Export JSON. | 10-30 min |
 | 5. **Train** | RF classifier from annotations (morph, SAM2, or all 6,478 features) | seconds |
 | 6. **Score** | Apply classifier to all detections (no re-detection) | seconds |
@@ -198,7 +198,7 @@ Chains detection → marker classification → nuclei counting → HTML viewer g
 | Vessel structures | `scripts/detect_vessel_structures.py` | Graph topology vessel detection (ring/arc/strip) from marker+ cells (SMA/CD31/LYVE1) |
 | Vessel communities | `scripts/vessel_community_analysis.py` | Multi-scale morphology + SNR |
 | SpatialData export | `scripts/convert_to_spatialdata.py` | scverse zarr (squidpy, scanpy) |
-| Nuclear counting | `scripts/count_nuclei_per_cell.py` | Cellpose 2nd pass, per-nucleus features |
+| Nuclear counting | `--count-nuclei` (default ON) | Integrated in Phase 4; standalone: `scripts/count_nuclei_per_cell.py` |
 | Quality filter | `scripts/quality_filter_detections.py` | Heuristic filter (no annotation needed) |
 | One-command viz | `scripts/view_slide.py` | Classify → cluster → viewer → serve |
 | ROI detection | `examples/islet/`, `examples/tma/` | Find islet regions, TMA cores, or other ROIs → detect cells within ROIs only |

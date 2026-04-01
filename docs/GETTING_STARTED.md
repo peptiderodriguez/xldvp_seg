@@ -61,7 +61,7 @@ CZI Image (20-180 GB)
 [Tissue Detection] -- Otsu-calibrated threshold on sampled tiles
     |                  Filter tiles to tissue-containing regions
     v
-[Tile Sampling] ---- Process 10-100% of tissue tiles (--sample-fraction)
+[Tile Sampling] ---- Process 100% of tissue tiles (--sample-fraction always 1.0)
     |
     v
 [Segmentation] ----- Strategy-specific detection (one of 7 cell types)
@@ -128,7 +128,7 @@ python run_segmentation.py --czi-path slide.czi --cell-type cell \
 **Or use `--marker-wavelength` for `classify_markers.py`:**
 ```bash
 python scripts/classify_markers.py --czi-path slide.czi \
-    --marker-wavelength 647,750 --marker-names SMA,MSLN
+    --marker-wavelength 647,750 --marker-name SMA,MSLN
 ```
 
 **Manual indices still work** (e.g. `--channel 2`) but require `czi_info.py` verification first.
@@ -320,13 +320,13 @@ Vessel-specific parameters:
 --cd31-channel 1               # CD31 channel for validation
 --candidate-mode               # Relaxed thresholds for annotation (higher recall)
 --ring-only                    # Disable supplementary lumen-first pass
---classify-vessel-types        # Rule-based type classification (6 types)
+--classify-vessel-types        # Rule-based type classification (7 types)
 --multi-marker                 # Parallel multi-marker detection (SMA, CD31, LYVE1)
 --multi-scale                  # Multi-scale detection for large vessels
 --scales "32,16,8,4,2"         # Downsampling factors for multi-scale
 ```
 
-Vessel type classification (6 types): artery, arteriole, vein, capillary, lymphatic, collecting_lymphatic.
+Vessel type classification (7 types): artery, arteriole, vein, venule, capillary, lymphatic, collecting_lymphatic.
 
 ### Mesothelium Detection
 
@@ -459,7 +459,7 @@ Every detection has features extracted across multiple tiers:
 | Feature Set | Dimensions | When Extracted |
 |-------------|-----------|----------------|
 | Morphological | ~78 | Always |
-| Per-channel stats | ~50 per channel | When `--all-channels` with 2+ channels |
+| Per-channel stats | ~15 per channel | When `--all-channels` with 2+ channels |
 | SAM2 embeddings | 256 | Always (default) |
 | ResNet50 (masked + context) | 4,096 | `--extract-deep-features` |
 | DINOv2-L (masked + context) | 2,048 | `--extract-deep-features` |
@@ -474,10 +474,9 @@ equivalent diameter, major/minor axis length, orientation, Feret diameter, skele
 Hu moments, Haralick texture, Gabor filter responses, LBP (local binary pattern),
 gradient features, curvature, roughness, concavity, branching, and endpoints.
 
-### Per-Channel Intensity Stats (~50 per channel)
+### Per-Channel Intensity Stats (~15 per channel)
 
-For each channel: mean, std, min, max, median, range, percentiles (p10/p25/p75/p90),
-skewness, kurtosis, entropy. Plus inter-channel ratios (e.g., `ch0_ch2_ratio`).
+For each channel: mean, std, max, min, median, p5, p25, p75, p95, variance, skewness, kurtosis, iqr, dynamic_range, cv. Plus inter-channel ratios (e.g., `ch0_ch2_ratio`).
 Feature names are prefixed with `ch0_`, `ch1_`, etc.
 
 ### SAM2 Embeddings (256D)
