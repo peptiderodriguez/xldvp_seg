@@ -175,7 +175,7 @@ Don't list these tables to the user. Just ask what they want to analyze.
 
 **Step 4 — Ask for the CZI file(s).** Accept a single path or a directory.
 
-**Step 4b — Check directory access.** If the CZI path (or output directory) is outside the repo working directory, use AskUserQuestion to ask: *"Your CZI file is at `<path>` which is outside the project directory. Would you like to add `<parent_dir>` to Claude Code's allowed directories so I can access your data?"* Options: "Yes, add it" / "No, I'll handle access myself". If yes, tell the user to run: `! claude config set additionalDirectories '<parent_dir>'` (the `!` prefix runs it in this session). This only needs to be done once per directory.
+**Step 4b — Check directory access.** If the CZI path (or output directory) is outside the repo working directory, use AskUserQuestion to ask: *"Your CZI file is at `<path>` which is outside the project directory. Want me to add `<parent_dir>` to Claude Code's allowed directories so I can access your data?"* Options: "Yes, add it" / "No, I'll handle access myself". If yes, run `claude config set additionalDirectories '<parent_dir>'` — the user will see the command and approve it via the normal permission prompt. This only needs to be done once per directory.
 
 **Step 5 — Inspect the CZI.** Run `xlseg info <path>` (or `$XLDVP_PYTHON $REPO/scripts/czi_info.py <path>`). Show the channel table with wavelengths.
 
