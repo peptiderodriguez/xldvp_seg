@@ -243,6 +243,7 @@ This replaces manual `--channel`, `--cellpose-input-channels`, and `--marker-cha
 - Deduplication: `--dedup-method {mask_overlap,iou_nms}` (default: mask_overlap). IoU NMS uses contour-based IoU with Shapely STRtree — faster and lower memory for large slides. `--iou-threshold 0.2` controls the threshold.
   - *When to try IoU NMS?* Slides with >100K detections where mask overlap dedup is slow or memory-heavy.
   - **Note:** IoU and overlap-fraction are different metrics — IoU may miss size-mismatched overlaps (small cell inside large vessel). Benchmark both before switching default.
+- Nuclear counting: **ON by default** when a nuclear channel is available. Uses AskUserQuestion to ask: *"Nuclear counting is enabled by default — it counts nuclei per cell during detection (no extra I/O). This adds n_nuclei, nuclear_area_fraction (N:C ratio), and per-nucleus features. Want to keep it on?"* Options: "Keep enabled (recommended)" / "Disable (--no-count-nuclei)". If the slide has no nuclear channel specified, mention that nuclear counting will be skipped automatically.
 
 **Step 9 — Generate YAML config + launch.**
 
@@ -373,30 +374,23 @@ The viewer includes per-channel R/G/B toggle buttons, contour overlay toggle, an
 
 For small detections (NfL pieces, region splits), use `--crop-context-factor 4.0 --contour-thickness 3` for more tissue context and visible contours. For standard cells, the default `2.0` context factor works well.
 
-**Step 10d — Nuclear counting (optional, after detection completes).** Ask: *"Want to count nuclei per cell? This runs Cellpose again on just the nuclear channel to segment individual nuclei, then counts how many fall inside each cell."*
+**Step 10d — Nuclear counting (ON by default).** Nuclear counting runs automatically during detection (Phase 4) when a nuclear channel is available — no extra I/O. If the user disabled it in Step 8, or wants to add it to an existing run, use the standalone script:
+
+```bash
+$XLDVP_PYTHON $REPO/scripts/count_nuclei_per_cell.py \
+    --detections <detections.json> \
+    --czi-path <czi> \
+    --tiles-dir <tiles> \
+    --channel-spec "nuc=Hoechst" \
+    --output <detections_with_nuclei.json>
+```
+Add `--extract-deep-features` for ResNet+DINOv2 per nucleus (not available in the integrated pipeline path).
 
 **IMPORTANT**: Use the **unfiltered** `cell_detections.json` (pre-classifier, pre-quality-filter) for nuclear counting. This ensures consistency across slides — the same cell set gets nuclei regardless of downstream filtering.
 
-Two ways to run:
-- **Pipeline-integrated** (for future runs, zero extra I/O — reuses SHM + models):
-  ```bash
-  python run_segmentation.py --cell-type cell \
-      --channel-spec "cyto=PM,nuc=Hoechst" --count-nuclei --all-channels
-  ```
-- **Standalone** (for existing runs — loads CZI + masks + models separately):
-  ```bash
-  $XLDVP_PYTHON $REPO/scripts/count_nuclei_per_cell.py \
-      --detections <detections.json> \
-      --czi-path <czi> \
-      --tiles-dir <tiles> \
-      --channel-spec "nuc=Hoechst" \
-      --output <detections_with_nuclei.json>
-  ```
-  Add `--extract-deep-features` for ResNet+DINOv2 per nucleus.
-
 **Features per cell:** `n_nuclei`, `nuclear_area_um2`, `nuclear_area_fraction` (N:C ratio), `largest_nucleus_um2`, `nuclear_solidity`, `nuclear_eccentricity`. Per-nucleus detail list (morph + SAM2 embeddings) stored at `det["nuclei"]` (not in `features` — avoids JSON bloat and keeps features flat for classifier).
 
-**When to suggest:** After cell detection on any multi-channel slide with a nuclear stain. Particularly valuable for:
+**When to highlight to user:** Particularly valuable for:
 - Identifying multinucleated cells (hepatocytes, MKs)
 - Distinguishing dividing cells (n_nuclei=2) from quiescent (n_nuclei=1)
 - N:C ratio as a morphological feature for UMAP clustering
