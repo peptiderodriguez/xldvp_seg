@@ -1,4 +1,4 @@
-#!/usr/bin/env python
+#!/usr/bin/env python3
 """Detect curvilinear (strip/ribbon) spatial patterns in classified detections.
 
 Builds a KD-tree radius graph on marker-positive cells, extracts connected

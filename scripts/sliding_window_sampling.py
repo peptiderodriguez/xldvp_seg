@@ -1,4 +1,4 @@
-#!/usr/bin/env python
+#!/usr/bin/env python3
 """Sliding window cell sampling along ROI centerlines for LMD.
 
 Places circular windows along the morphological skeleton (centerline) of an

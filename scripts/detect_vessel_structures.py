@@ -1,4 +1,4 @@
-#!/usr/bin/env python
+#!/usr/bin/env python3
 """Detect vessel structures from marker-positive cells using graph topology.
 
 Takes classified cell detections (from classify_markers.py) with SMA, CD31,

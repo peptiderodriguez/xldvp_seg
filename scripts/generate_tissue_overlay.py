@@ -1,4 +1,4 @@
-#!/usr/bin/env python
+#!/usr/bin/env python3
 """Generate tissue overview with fluorescence image, cell overlay, ROI drawing, and LMD export.
 
 Reads the CZI at low resolution, overlays colored dots for each cell

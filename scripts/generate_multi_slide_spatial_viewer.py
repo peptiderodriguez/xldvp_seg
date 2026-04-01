@@ -1,4 +1,4 @@
-#!/usr/bin/env python
+#!/usr/bin/env python3
 """Generate multi-slide spatial viewer HTML from classified detections.
 
 Loads classified detections from multiple slides and renders a self-contained
