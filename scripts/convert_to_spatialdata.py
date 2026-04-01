@@ -544,7 +544,9 @@ def build_shapes(detections, cell_type, tiles_dir=None, pixel_size_um=1.0):
     polygons = [None] * len(detections)
     _from_json = 0
     for i, det in enumerate(detections):
-        contour_px = det.get("contour_px") or det.get("contour_dilated_px")
+        contour_px = det.get("contour_px")
+        if contour_px is None:
+            contour_px = det.get("contour_dilated_px")
         if contour_px is not None and len(contour_px) >= 3:
             try:
                 poly = _Polygon(contour_px)

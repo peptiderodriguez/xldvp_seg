@@ -147,6 +147,7 @@ def extract_contours_for_detections(
     mask_filename="nmj_masks.h5",
     dilation_um=0.5,
     rdp_epsilon=5.0,
+    max_area_change_pct=None,
 ):
     """
     Extract and process contours for detections from H5 mask files.
@@ -212,12 +213,13 @@ def extract_contours_for_detections(
             contour_global[:, 0] += tile_origin[0]
             contour_global[:, 1] += tile_origin[1]
 
-            # Apply post-processing (dilation + RDP)
+            # Apply post-processing (adaptive RDP + dilation)
             processed, stats = process_contour(
                 contour_global.tolist(),
                 pixel_size_um=pixel_size,
                 dilation_um=dilation_um,
                 rdp_epsilon=rdp_epsilon,
+                max_area_change_pct=max_area_change_pct,
                 return_stats=True,
             )
 
@@ -1313,6 +1315,7 @@ def _run_single_slide(args):
                 mask_filename=args.mask_filename,
                 dilation_um=args.dilation_um,
                 rdp_epsilon=args.rdp_epsilon,
+                max_area_change_pct=_max_area_change,
             )
             print(f"  Extracted {len(contour_results)} contours")
 

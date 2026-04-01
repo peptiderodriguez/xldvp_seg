@@ -476,6 +476,13 @@ def process_detections_post_dedup(
 
     import hdf5plugin  # noqa: F401 — register LZ4 codec before h5py
 
+    # Warn if deprecated parameters have non-default values
+    if dilation_um > 0 or rdp_epsilon > 0:
+        logger.warning(
+            "dilation_um and rdp_epsilon are deprecated in post-dedup processing "
+            "(contour simplification moved to LMD export time). Values ignored."
+        )
+
     tiles_dir = Path(tiles_dir)
     n_total = len(detections)
 

@@ -120,3 +120,60 @@ class TestContourFieldHelpers:
         det = {"features": {}}
         assert get_contour_px(det) is None
         assert get_contour_um(det) is None
+
+    def test_empty_list_does_not_fall_through(self):
+        """Empty contour_px should NOT fall through to contour_dilated_px."""
+        det = {"contour_px": [], "contour_dilated_px": [[99, 99]]}
+        assert get_contour_px(det) == []  # returns empty list, NOT [[99, 99]]
+
+    def test_empty_list_um_does_not_fall_through(self):
+        """Empty contour_um should NOT fall through to contour_dilated_um."""
+        det = {"contour_um": [], "contour_dilated_um": [[0.3, 0.6]]}
+        assert get_contour_um(det) == []
+
+
+# ---------------------------------------------------------------------------
+# Tests: process_contour with max_area_change_pct
+# ---------------------------------------------------------------------------
+
+
+class TestProcessContourAdaptive:
+    def test_adaptive_rdp_via_process_contour(self):
+        """process_contour with max_area_change_pct uses adaptive RDP."""
+        from segmentation.lmd.contour_processing import process_contour
+
+        contour = _circle_contour(n=200).tolist()
+        result, stats = process_contour(
+            contour,
+            pixel_size_um=0.5,
+            dilation_um=0.0,
+            max_area_change_pct=5.0,
+            return_stats=True,
+        )
+        assert result is not None
+        assert stats["points_after"] < stats["points_before"]
+        assert stats["valid"]
+
+    def test_zero_pct_uses_fixed_epsilon(self):
+        """max_area_change_pct=0 falls through to fixed rdp_epsilon."""
+        from segmentation.lmd.contour_processing import process_contour
+
+        contour = _circle_contour(n=200).tolist()
+        result_fixed, stats_fixed = process_contour(
+            contour,
+            pixel_size_um=0.5,
+            dilation_um=0.0,
+            rdp_epsilon=2.0,
+            max_area_change_pct=0,
+            return_stats=True,
+        )
+        result_none, stats_none = process_contour(
+            contour,
+            pixel_size_um=0.5,
+            dilation_um=0.0,
+            rdp_epsilon=2.0,
+            max_area_change_pct=None,
+            return_stats=True,
+        )
+        # Both should produce the same result (fixed epsilon path)
+        assert stats_fixed["points_after"] == stats_none["points_after"]

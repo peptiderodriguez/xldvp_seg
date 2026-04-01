@@ -352,11 +352,11 @@ def main():
             det = detections[det_idx]
             if det.get("tile_mask_label") is not None or det.get("mask_label") is not None:
                 continue  # has a real mask label — skip
-            contour = (
-                det.get("outer_contour_global")
-                or det.get("contour_px")
-                or det.get("contour_dilated_px")
-            )
+            contour = det.get("outer_contour_global")
+            if contour is None:
+                contour = det.get("contour_px")
+            if contour is None:
+                contour = det.get("contour_dilated_px")
             if contour is None:
                 continue
             # Convert global contour to tile-local coordinates

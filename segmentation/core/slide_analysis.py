@@ -193,7 +193,11 @@ class SlideAnalysis:
         if self._contours is None:
             self._contours = []
             for det in self.detections:
-                c = det.get("contour_px") or det.get("contour_dilated_px") or det.get("contour_um")
+                c = det.get("contour_px")
+                if c is None:
+                    c = det.get("contour_dilated_px")
+                if c is None:
+                    c = det.get("contour_um")
                 self._contours.append(np.array(c) if c is not None else None)
         return self._contours
 

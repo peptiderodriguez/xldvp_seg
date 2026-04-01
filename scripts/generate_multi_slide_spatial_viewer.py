@@ -760,7 +760,9 @@ def _collect_contour(det, contours_raw, score_threshold):
             return
 
     # Try um contours first (already in coordinate space), then px contours
-    contour_um = det.get("contour_um") or det.get("contour_dilated_um")
+    contour_um = det.get("contour_um")
+    if contour_um is None:
+        contour_um = det.get("contour_dilated_um")
     if contour_um is not None and len(contour_um) >= 3:
         # um contours don't need pixel_size conversion — use 1.0 as identity
         contours_raw.append((contour_um, 1.0))
@@ -770,7 +772,9 @@ def _collect_contour(det, contours_raw, score_threshold):
     if contour is None:
         contour = feat.get("outer_contour_global")
     if contour is None:
-        contour = det.get("contour_px") or det.get("contour_dilated_px")
+        contour = det.get("contour_px")
+    if contour is None:
+        contour = det.get("contour_dilated_px")
     if contour is None or len(contour) < 3:
         return
 
