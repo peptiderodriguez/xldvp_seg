@@ -1,6 +1,41 @@
-You are guiding the user through **vessel community analysis** for the xldvp_seg pipeline. This workflow takes classified cell detections and performs multi-scale spatial clustering to identify vessel structures.
+You are guiding the user through **vessel analysis** for the xldvp_seg pipeline. Two complementary tools are available:
+
+1. **Graph topology vessel detection** (`scripts/detect_vessel_structures.py`) — identifies individual vessel structures from marker+ cells (SMA/CD31/LYVE1) using graph topology (ring/arc/strip classification) + morphometry + vessel typing. **Use this for finding and classifying specific vessels.**
+
+2. **Vessel community analysis** (`scripts/vessel_community_analysis.py`) — multi-scale connected components with PCA morphology for tissue-level vascular neighborhoods. **Use this for broader spatial analysis.**
+
+Ask the user which approach they want. If they want to find specific vessels (arteries, veins, lymphatics) → use tool 1. If they want tissue-level vascular zone analysis → use tool 2. Both require marker-classified detections as input.
 
 ---
+
+## Tool 1: Graph Topology Vessel Detection (Recommended)
+
+### Step 0: Run marker classification if needed
+Same as Tool 2 Step 1 below (classify_markers.py with SMA/CD31/LYVE1).
+
+### Step 1: Run Vessel Structure Detection
+```bash
+PYTHONPATH=$REPO $XLDVP_PYTHON $REPO/scripts/detect_vessel_structures.py \
+    --detections $RUN_DIR/cell_detections_classified.json \
+    --marker-filter "SMA_class==positive" \
+    --marker-filter "CD31_class==positive" \
+    --marker-logic or \
+    --radius 50 --min-cells 5 \
+    --output-dir $RUN_DIR/vessel_structures/ \
+    --output-prefix vessel
+```
+
+For LYVE1 slides (Fig3-type): replace CD31 filter with `"LYVE1_class==positive"`.
+
+### Step 2: Review + Iterate
+Generate spatial viewer, annotate true vs false vessels, tune parameters (radius, thresholds). Expect 5-10 iterative rounds (same playbook as mesothelium curvilinear detection).
+
+### Step 3: Optional RF refinement
+If annotation shows consistent FPs, train RF classifier on vessel cell annotations using `train_classifier.py` with `--feature-set all`, apply at score >= 0.9.
+
+---
+
+## Tool 2: Vessel Community Analysis (Multi-Scale)
 
 ## Workflow Steps
 

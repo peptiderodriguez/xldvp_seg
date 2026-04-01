@@ -1,6 +1,37 @@
-# Vessel Community Analysis
+# Vessel Analysis
 
-Multi-scale vessel structure detection from classified cell detections.
+Two complementary tools for vessel analysis from classified cell detections.
+
+## Tool 1: Graph Topology Vessel Detection (Recommended)
+
+**Script:** `scripts/detect_vessel_structures.py`
+
+Identifies individual vessel structures from marker-positive cells (SMA+, CD31+, LYVE1+) using graph topology (ring_score, arc_fraction, linearity) and geometric/PCA metrics (circularity, hollowness, elongation). Classifies morphology (ring, arc, strip, cluster), computes vessel morphometry (diameter, lumen, wall extent), analyzes spatial marker layering (Mann-Whitney U), and assigns vessel types (artery, vein, lymphatic, capillary).
+
+```bash
+python scripts/detect_vessel_structures.py \
+    --detections cell_detections_classified.json \
+    --marker-filter "SMA_class==positive" \
+    --marker-filter "CD31_class==positive" \
+    --marker-logic or \
+    --radius 50 --min-cells 5 \
+    --output-dir vessel_structures/ --output-prefix vessel
+```
+
+Key parameters:
+- `--marker-filter`: repeat for each vessel marker (OR logic by default)
+- `--radius`: connection distance in µm (30-75 typical)
+- `--min-cells`: minimum cells per vessel structure (5-15)
+- `--linearity-threshold`: strip detection cutoff (default 3.0)
+- `--ring-threshold`: ring score cutoff (default 0.5)
+
+Outputs: `cell_detections_vessel_tagged.json`, `cell_detections_vessel_only.json`, `vessel_structures.json`, `vessel_structures.csv`.
+
+Uses the shared `segmentation.utils.graph_topology` module (also used by `detect_curvilinear_patterns.py` for mesothelium strip detection).
+
+## Tool 2: Vessel Community Analysis (Multi-Scale)
+
+**Script:** `scripts/vessel_community_analysis.py`
 
 ## Overview
 

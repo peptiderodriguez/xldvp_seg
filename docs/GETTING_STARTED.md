@@ -750,6 +750,42 @@ the CZI (slow — minutes for large slides), but all subsequent runs load from c
 `--display-channels` or `--scale-factor` values get separate caches. Delete the
 `.thumbnail_cache_*.npz` file to force a re-read.
 
+### Vessel Structure Detection (`scripts/detect_vessel_structures.py`)
+
+Detects vessel structures (arteries, veins, lymphatics, capillaries) from
+marker-positive cells (SMA+, CD31+, LYVE1+). Uses graph topology (ring score,
+arc fraction, linearity) and geometric/PCA metrics (circularity, hollowness,
+elongation) to classify each connected component as ring, arc, strip, or cluster.
+Computes vessel morphometry (diameter, lumen, wall extent) and assigns vessel
+types from marker composition + spatial layering.
+
+```bash
+python scripts/detect_vessel_structures.py \
+    --detections classified_detections.json \
+    --marker-filter "SMA_class==positive" \
+    --marker-filter "CD31_class==positive" \
+    --marker-logic or \
+    --radius 50 --min-cells 5 \
+    --output-dir output/vessel_structures/ \
+    --output-prefix vessel
+```
+
+Key parameters:
+- `--marker-filter`: repeat for each vessel marker (OR logic by default)
+- `--marker-logic`: `or` (any marker positive) or `and` (all markers positive)
+- `--radius`: connection distance in µm (30-75 typical for vessels)
+- `--min-cells`: minimum cells per vessel structure (5-15 typical)
+- `--linearity-threshold`: strip detection cutoff (default 3.0)
+- `--ring-threshold`: ring score cutoff (default 0.5)
+
+Outputs: `cell_detections_vessel_tagged.json` (all cells tagged),
+`cell_detections_vessel_only.json` (vessel cells only),
+`vessel_structures.json` + `vessel_structures.csv` (per-structure summary).
+
+Both scripts share the `segmentation.utils.graph_topology` module for KD-tree
+graph construction, graph diameter, linearity, ring/arc metrics, and PCA-based
+morphology classification.
+
 ### Islet Spatial Analysis (`examples/islet/analyze_islets.py`)
 
 Specialized islet-level analysis: finds islet regions from summed marker channels,

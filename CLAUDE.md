@@ -96,6 +96,9 @@ Tests are in `tests/` using pytest. Fixtures in `conftest.py`: `sample_tile` (51
 | `test_deduplication.py` | IoU NMS dedup: overlap/non-overlap, threshold, HDF5 mask loading |
 | `test_aggregation.py` | `aggregate_slide`, `aggregate_cohort`, `cohort_to_anndata` |
 | `test_roi.py` | ROI bbox extraction, spatial numbering, tile/detection filters, marker threshold, circular regions, polygon/mask loading |
+| `test_curvilinear.py` | Curvilinear pattern detection: strip/blob classification, width, SNR/marker filter, refinement, tagging |
+| `test_graph_topology.py` | Shared graph topology: build graph, diameter, linearity, ring_score, arc_fraction, elongation, circularity, hollowness |
+| `test_vessel_structures.py` | Vessel detection: multi-marker selection, morphology classification, morphometry, composition, vessel typing |
 
 Tests rely on `pip install -e .` (or `PYTHONPATH=$REPO`) for `segmentation.*` imports.
 
@@ -374,6 +377,7 @@ Beyond the core detect → classify → LMD workflow, the pipeline supports:
 | **Spatial network** | `scripts/spatial_cell_analysis.py` | Delaunay graphs, connected components, community detection, neighborhoods |
 | **Interactive spatial viewer** | `scripts/generate_multi_slide_spatial_viewer.py` | Fluorescence background + cell contours + ROI drawing. `--scene N` for multi-scene CZIs, `--czi-path` for background, `--group-label-prefix` for legend labels. **Caches CZI thumbnails** as `.thumbnail_cache_*.npz` next to output — first run reads CZI (slow), subsequent runs load cache (instant). Cache key includes channels + scale factor. |
 | **Curvilinear patterns** | `scripts/detect_curvilinear_patterns.py` | KD-tree radius graph → connected components → graph diameter linearity score. Detects strips/ribbons (e.g., mesothelium) even when curved. `--radius`, `--linearity-threshold`, `--min-strip-length`. Writes strip-only JSON for fast viewer. |
+| **Vessel structure detection** | `scripts/detect_vessel_structures.py` | Graph topology vessel detection from marker+ cells (SMA/CD31/LYVE1). Ring/arc/strip/cluster classification, morphometry (diameter, lumen, wall), marker layering, vessel typing. Multi-marker OR selection. |
 | **Vessel community analysis** | `scripts/vessel_community_analysis.py` | Multi-scale vessel structure detection (connected components + morphology + SNR) |
 | **SpatialData / scverse** | `scripts/convert_to_spatialdata.py` | Export to zarr for squidpy (spatial stats), scanpy (dim reduction), anndata |
 | **One-command viz** | `scripts/view_slide.py` | Classify → spatial cluster → interactive viewer → serve (all in one) |
@@ -408,9 +412,9 @@ CZI file → czi_loader.py (channel resolution, tiling)
            → Per-tile HTML cache + HDF5 masks + JSON detections
          → Deduplication (>10% pixel overlap)
          → Post-dedup pipeline (post_detection.py):
-           Phase 1: contour dilation + RDP + quick means (ThreadPool)
+           Phase 1: contour extraction + quick means from original mask (ThreadPool)
            Phase 2: KD-tree background estimation (single-thread)
-           Phase 3: bg-corrected intensity features (ThreadPool)
+           Phase 3: bg-corrected intensity features from original mask (ThreadPool)
            Phase 4: nuclear counting (optional, --count-nuclei, single-thread GPU)
          → Finalize: JSON + CSV + HTML + OME-Zarr + SpatialData
 ```
@@ -426,7 +430,7 @@ CZI file → czi_loader.py (channel resolution, tiling)
 | `detection_setup.py` | `build_detection_params()` — strategy config |
 | `samples.py` | HTML sample creation, tile grid, islet GMM calibration |
 | `resume.py` | Checkpoint detection, tile reload, `compose_tile_rgb()` |
-| `post_detection.py` | 3-phase post-dedup (contour, bg, intensity) — ThreadPool parallelized |
+| `post_detection.py` | 3-phase post-dedup (original-mask contour extraction, bg, intensity) — ThreadPool parallelized |
 | `finalize.py` | Channel legend, CSV/JSON/HTML export, summary |
 | `server.py` | HTTP server + Cloudflare tunnel |
 | `background.py` | KD-tree local background correction (shared with classify_markers.py) |
@@ -507,6 +511,17 @@ Background correction KD-tree MUST use `global_center` (slide-level), NOT `featu
 - `load_rf_classifier(model_path)` — generic RF classifier loader (replaces NMJ-specific `load_nmj_rf_classifier`). Handles Pipeline and dict formats, tries multiple sidecar feature-name files.
 - `transform_native_to_display()` in `segmentation/lmd/contour_processing.py` — canonical LMD coordinate transform (flip_h, rot90). Single source of truth for both `run_lmd_export.py` and `lmd_export_replicates.py`.
 
+### Graph Topology (`segmentation/utils/graph_topology.py`)
+
+Shared graph topology analysis for spatial structure detection. Used by both `detect_curvilinear_patterns.py` (mesothelium strips) and `detect_vessel_structures.py` (vessel rings/arcs/strips).
+
+- **Graph construction**: `build_radius_graph_sparse()` uses scipy.sparse for CC (scalable to 100K+ cells), `build_component_subgraph()` for per-component NetworkX analysis.
+- **Strip metrics**: `double_bfs_diameter()`, `component_linearity()`, `component_width()` (half-width from centerline), `path_length_um()`.
+- **Ring/arc metrics (graph)**: `ring_score()` (angular connectivity with AR > 3 guard), `arc_fraction()` (max contiguous arc, same AR guard).
+- **Ring/arc metrics (geometric/PCA)**: `elongation()`, `circularity()` (clamped [0,1]), `hollowness()`, `has_curvature()` (min 10 points).
+- **Geometry**: `safe_hull_area()`, `bounding_box_aspect_ratio()`.
+- **Convenience**: `compute_all_metrics()` returns all metrics as a dict for a single component.
+
 ### Logging
 
 `get_logger(__name__)` from `segmentation.utils.logging` everywhere. No bare `logging.getLogger`.
@@ -541,14 +556,16 @@ YAML equivalents: `dedup_method`, `iou_threshold`. Note: IoU and overlap-fractio
 ### Post-Dedup Processing (default ON)
 
 ```bash
---no-contour-processing     # Skip contour dilation + RDP
---dilation-um 0.5           # Contour dilation in micrometers (default: 0.5)
---rdp-epsilon 5.0           # RDP simplification epsilon (default: 5)
+--no-contour-processing     # Skip contour extraction from HDF5 masks
 --no-background-correction  # Skip local background subtraction
 --bg-neighbors 30           # KD-tree neighbors (default: 30)
+# --dilation-um, --rdp-epsilon: deprecated — dilation and RDP are now
+# applied at LMD export time only (see run_lmd_export.py --max-area-change-pct)
 ```
 
-YAML equivalents: `contour_processing`, `background_correction`, `dilation_um`, `rdp_epsilon`, `bg_neighbors`.
+YAML equivalents: `contour_processing`, `background_correction`, `bg_neighbors`.
+
+Features are always extracted from the **original** segmentation mask (not a dilated or simplified version). Contour simplification uses adaptive RDP at LMD export time — binary search for the largest epsilon keeping symmetric difference within `--max-area-change-pct` (default 5%).
 
 ### Performance Options
 
@@ -634,6 +651,7 @@ python run_segmentation.py --czi-path slide.czi --cell-type nmj \
 | `scripts/compare_feature_sets.py` | Compare RF feature subsets via stratified CV |
 | `scripts/count_nuclei_per_cell.py` | Count nuclei per cell (Cellpose 2nd pass) |
 | `scripts/detect_curvilinear_patterns.py` | KD-tree graph → component linearity → strip/ribbon detection |
+| `scripts/detect_vessel_structures.py` | Graph topology vessel detection (ring/arc/strip) from marker+ cells |
 | `scripts/detect_regions_for_lmd.py` | Percentile-threshold channel → split → features |
 | `scripts/quality_filter_detections.py` | Heuristic area+solidity+channel filter |
 | `scripts/split_regions_for_lmd.py` | Watershed split large regions |

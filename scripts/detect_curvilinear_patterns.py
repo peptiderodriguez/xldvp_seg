@@ -214,33 +214,10 @@ def extract_aligned_positions(detections, positive_idx, extract_positions_um):
 
 
 def _component_width(positions, comp_nodes, path, percentile=95):
-    """Perpendicular width of a component relative to its diameter path.
+    """Perpendicular width — delegates to shared graph_topology module."""
+    from segmentation.utils.graph_topology import component_width
 
-    Computes the distance from each cell to the nearest segment of the diameter
-    path polyline, then returns the given percentile (default 95th) of those
-    distances. Using a percentile rather than the max makes the metric robust
-    to single outlier cells.
-
-    Vectorized: O(C * P) numpy operations, no Python inner loops.
-    """
-    if len(path) < 2:
-        return 0.0
-    pts = positions[comp_nodes]  # (C, 2)
-    seg_a = positions[path[:-1]]  # (P, 2)
-    seg_b = positions[path[1:]]  # (P, 2)
-    ab = seg_b - seg_a  # (P, 2)
-    ab_sq = np.sum(ab * ab, axis=1)  # (P,)
-    # Broadcast: (C, 1, 2) vs (1, P, 2)
-    ap = pts[:, None, :] - seg_a[None, :, :]  # (C, P, 2)
-    t = np.clip(
-        np.sum(ap * ab[None, :, :], axis=2) / np.maximum(ab_sq[None, :], 1e-12),
-        0.0,
-        1.0,
-    )  # (C, P)
-    proj = seg_a[None, :, :] + t[:, :, None] * ab[None, :, :]  # (C, P, 2)
-    dists = np.sqrt(np.sum((pts[:, None, :] - proj) ** 2, axis=2))  # (C, P)
-    min_dists = dists.min(axis=1)  # (C,) — min distance to any segment
-    return float(np.percentile(min_dists, percentile))
+    return component_width(positions, comp_nodes, path, percentile)
 
 
 def classify_components(
@@ -262,10 +239,18 @@ def classify_components(
     Returns per-node labels and component stats.
     """
     import networkx as nx
-    from scipy.spatial import KDTree
+
+    from segmentation.utils.graph_topology import (
+        component_linearity,
+        component_width,
+        double_bfs_diameter,
+        path_length_um,
+    )
 
     # Build radius graph
     logger.info("Building KD-tree radius graph (r=%.0f µm)...", radius)
+    from scipy.spatial import KDTree
+
     tree = KDTree(positions)
     pairs = tree.query_pairs(r=radius)
     logger.info("  %d edges from %d nodes", len(pairs), len(positions))
@@ -303,27 +288,11 @@ def classify_components(
             # Too small — leave as noise
             continue
 
-        # Extract subgraph for this component
-        subgraph = G.subgraph(comp_nodes)
-
-        # Graph diameter — longest shortest path via double-BFS.
-        # Second BFS uses single_source_shortest_path (not just _length)
-        # to recover the actual path without a redundant third BFS.
-        start = next(iter(comp_nodes))
-        far1_dist = nx.single_source_shortest_path_length(subgraph, start)
-        far1_node = max(far1_dist, key=far1_dist.get)
-        far2_paths = nx.single_source_shortest_path(subgraph, far1_node)
-        far2_node = max(far2_paths, key=lambda n: len(far2_paths[n]))
-        diameter = len(far2_paths[far2_node]) - 1
-        path_nodes = far2_paths[far2_node]  # node indices into positions array
-        length_um = 0.0
-        for a, b in zip(path_nodes[:-1], path_nodes[1:]):
-            length_um += np.sqrt(np.sum((positions[a] - positions[b]) ** 2))
-
-        # Width: max perpendicular distance from any cell to the diameter path
-        width_um = _component_width(positions, list(comp_nodes), path_nodes)
-
-        linearity = diameter / np.sqrt(n)
+        # Graph diameter, physical length, width, linearity — via shared module
+        diameter, path_nodes = double_bfs_diameter(G, comp_nodes)
+        length_um = path_length_um(positions, path_nodes)
+        width_um = component_width(positions, list(comp_nodes), path_nodes)
+        linearity = component_linearity(diameter, n)
         is_strip = (
             linearity >= linearity_threshold
             and (min_strip_cells == 0 or n >= min_strip_cells)

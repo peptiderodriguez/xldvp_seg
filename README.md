@@ -195,7 +195,8 @@ Chains detection → marker classification → nuclei counting → HTML viewer g
 | Interactive viewer | `scripts/generate_multi_slide_spatial_viewer.py` | Fluorescence overlay, cell contours, ROI drawing. CZI thumbnail caching for fast re-runs |
 | Sliding window | `scripts/sliding_window_sampling.py` | Area-matched rolling window along ROI centerlines for LMD. Multi-ROI, `--exclude-cells` for incremental sessions |
 | Curvilinear patterns | `scripts/detect_curvilinear_patterns.py` | Strip/ribbon detection via graph diameter linearity |
-| Vessel structures | `scripts/vessel_community_analysis.py` | Multi-scale morphology + SNR |
+| Vessel structures | `scripts/detect_vessel_structures.py` | Graph topology vessel detection (ring/arc/strip) from marker+ cells (SMA/CD31/LYVE1) |
+| Vessel communities | `scripts/vessel_community_analysis.py` | Multi-scale morphology + SNR |
 | SpatialData export | `scripts/convert_to_spatialdata.py` | scverse zarr (squidpy, scanpy) |
 | Nuclear counting | `scripts/count_nuclei_per_cell.py` | Cellpose 2nd pass, per-nucleus features |
 | Quality filter | `scripts/quality_filter_detections.py` | Heuristic filter (no annotation needed) |

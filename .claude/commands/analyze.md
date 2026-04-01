@@ -111,6 +111,7 @@ For beginners, expand on each step as you reach it. For advanced users, just ask
 | **Explore** | UMAP + t-SNE, Leiden/HDBSCAN clustering, trajectory (diffmap, PAGA, pseudotime), interactive plotly | `scripts/cluster_by_features.py` |
 | **Spatial** | Delaunay networks, community detection, cell neighborhoods | `scripts/spatial_cell_analysis.py` |
 | **Curvilinear patterns** | Detect strip/ribbon structures (e.g., mesothelium) via KD-tree radius graph → connected components → graph diameter linearity. Works for curved structures. Tunable: `--radius`, `--linearity-threshold`, `--min-strip-length`, `--min-strip-cells`. Writes strip-only JSON for fast viewer. | `scripts/detect_curvilinear_patterns.py` |
+| **Vessel structures** | Detect vessel structures (arteries, veins, lymphatics, capillaries) from SMA+/CD31+/LYVE1+ cells. Graph topology (ring_score, arc_fraction, linearity) + geometric/PCA (circularity, hollowness, elongation). Morphometry (diameter, lumen, wall extent). Marker layering (Mann-Whitney U). Multi-marker OR/AND selection. Outputs tagged JSON + CSV + vessel-only JSON. | `scripts/detect_vessel_structures.py` |
 | **Tissue zones** | Spatially-constrained zone discovery, transects, bone region annotation | `examples/liver/assign_tissue_zones.py`, `examples/liver/zonation_transect.py`, `examples/bone_marrow/annotate_bone_regions.py` |
 | **Distance bins** | Concentric rings around landmarks (CV/PV), distance + ratio features, model comparison | `examples/liver/assign_distance_bins.py` |
 | **Tissue area** | Variance-based tissue detection, area measurement from CZI | `examples/bone_marrow/calculate_tissue_areas.py` |
@@ -147,7 +148,8 @@ For beginners, expand on each step as you reach it. For advanced users, just ask
 | **MK** | `examples/bone_marrow/mk_mechanism_figure.py` | Generate mechanosensing figure with data-faithful cells |
 | **MK** | `examples/bone_marrow/split_detections_by_bone.py` | Split detections by bone region (femur/humerus) |
 | **MK** | `examples/bone_marrow/select_mks_for_lmd.py` | MK replicate selection + multi-plate wells |
-| **Vessel** | `scripts/vessel_community_analysis.py` | Multi-scale vessel structure detection |
+| **Vessel** | `scripts/detect_vessel_structures.py` | Graph topology vessel detection from marker+ cells (ring/arc/strip/cluster → artery/vein/lymphatic/capillary) |
+| **Vessel** | `scripts/vessel_community_analysis.py` | Multi-scale vessel community analysis (tissue-level neighborhoods) |
 | **Vessel** | `examples/vessel/train_vessel_detector.py` | Train vessel RF detector |
 | **Vessel** | `examples/vessel/train_vessel_classifier.py` | Train vessel type classifier (6 types) |
 | **Vessel** | `examples/bone_marrow/rbc_vascularization_analysis.py` | RBC vascularization analysis for MK HU project |
@@ -215,7 +217,7 @@ This replaces manual `--channel`, `--cellpose-input-channels`, and `--marker-cha
 **Step 6 — Ask what to detect.** Based on channel info:
 - NMJ (needs BTX/bungarotoxin channel)
 - MK/HSPC (bone marrow, large cells)
-- Vessel (needs SMA + CD31 channels)
+- Vessel (needs SMA + CD31 and/or LYVE1 channels). Two approaches: (a) pixel-level ring detection via `--cell-type vessel`, or (b) **cell-based vessel structure detection** — run generic cell detection first, classify markers, then use `detect_vessel_structures.py` to find vessel structures from marker+ cells. Option (b) is recommended for marker composition + vessel typing.
 - Mesothelium (ribbon-like structures)
 - Islet (pancreatic, needs nuclear + membrane channels)
 - Tissue Pattern (brain FISH, coronal sections)
@@ -751,6 +753,53 @@ PYTHONPATH=$REPO $XLDVP_PYTHON $REPO/examples/mesothelium/generate_msln_annotati
 PYTHONPATH=$REPO $XLDVP_PYTHON $REPO/examples/mesothelium/generate_msln_cluster_viewer.py \
     --detections <detections.json> --output <output>/msln_clusters.html
 ```
+
+For **vessel** detections (cell-type=cell with SMA/CD31/LYVE1 markers), offer graph topology vessel structure detection. Use AskUserQuestion to ask:
+- *"Would you like to detect vessel structures (arteries, veins, lymphatics, capillaries) from marker+ cells?"*
+  Options: Yes (recommended), No (skip)
+
+If yes, ask which markers are available on this slide:
+- *"Which vessel markers are classified? (check with the classify_markers output)"*
+  Options: SMA+CD31 (Fig2-type), SMA+LYVE1 (Fig3-type), All three (SMA+CD31+LYVE1)
+
+Then ask about parameters:
+- *"What connection radius? Smaller radii give cleaner vessel boundaries but may fragment vessels."*
+  Options: 30µm (tight), 50µm (recommended), 75µm (inclusive)
+- *"Minimum cells per vessel structure?"*
+  Options: 5 (inclusive — recommended), 10 (moderate), 15 (strict)
+
+Then run:
+```bash
+PYTHONPATH=$REPO $XLDVP_PYTHON $REPO/scripts/detect_vessel_structures.py \
+    --detections <classified_detections.json> \
+    --marker-filter "SMA_class==positive" \
+    --marker-filter "CD31_class==positive" \
+    --marker-logic or \
+    --radius <chosen_radius> --min-cells <chosen_min_cells> \
+    --output-dir <output>/vessel_structures \
+    --output-prefix vessel
+```
+
+After detection, report the summary (morphology distribution, vessel type counts) and offer to generate a viewer:
+```bash
+PYTHONPATH=$REPO $XLDVP_PYTHON $REPO/scripts/generate_multi_slide_spatial_viewer.py \
+    --detections <output>/vessel_structures/cell_detections_vessel_only.json \
+    --czi-path <czi_path> --output-dir <output>/vessel_structures/viewer \
+    --group-field vessel_type
+```
+
+The workflow follows the same iterative pattern as mesothelium:
+1. **Run initial detection** → view in spatial viewer → annotate true vessels vs false positives
+2. **Tune parameters** (radius, thresholds) based on annotation feedback — expect 5-10 rounds
+3. **UMAP filtering** — unsupervised UMAP on component-level features to identify FP zones
+4. **Cell-level annotation** — mark individual cells within vessel structures
+5. **RF classifier** — train on raw features (morph + SAM2 + channel stats), NOT UMAP embedding
+6. **Apply at score >= 0.9** to all marker+ cells for final vessel cell selection
+
+Key considerations:
+- CD31/LYVE1 cells may not form complete rings — gaps are expected (use arc_fraction metric)
+- Radius is critical: too small fragments vessels, too large merges neighbors
+- Both graph topology (ring_score, linearity) and geometric/PCA (circularity, hollowness) metrics are computed — the iterative process determines which combination works best for your tissue
 
 ---
 
