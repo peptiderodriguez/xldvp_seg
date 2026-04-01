@@ -25,7 +25,6 @@ Usage:
 import argparse
 import base64
 import json
-import logging
 import math
 import sys
 from collections import Counter
@@ -42,8 +41,9 @@ except ImportError:
     pass
 
 from segmentation.utils.json_utils import sanitize_for_json
+from segmentation.utils.logging import get_logger, setup_logging
 
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 
 def _get_global_center(det):
@@ -1842,7 +1842,7 @@ def main():
     )
     args = parser.parse_args()
 
-    logging.basicConfig(level=logging.INFO, format="%(levelname)s: %(message)s")
+    setup_logging()
 
     run_dir = Path(args.run_dir)
     czi_path = Path(args.czi_path)

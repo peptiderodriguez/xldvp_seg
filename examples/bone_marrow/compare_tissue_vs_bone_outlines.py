@@ -1,4 +1,4 @@
-#!/usr/bin/env python
+#!/usr/bin/env python3
 """Compare tissue detection outlines vs manual bone region annotations.
 
 Generates an HTML visualization showing both overlaid on slide thumbnails.

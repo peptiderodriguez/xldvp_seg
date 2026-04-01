@@ -1,4 +1,4 @@
-#!/usr/bin/env python
+#!/usr/bin/env python3
 """Generate HTML tool for annotating bone regions (femur/humerus) on slides.
 
 Creates a self-contained HTML file where users can draw polygon regions

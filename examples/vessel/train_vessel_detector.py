@@ -43,7 +43,6 @@ Annotation format (from HTML review):
 
 import argparse
 import json
-import logging
 from pathlib import Path
 from typing import Any
 
@@ -54,6 +53,7 @@ from segmentation.classification.vessel_detector_rf import (
     VESSEL_DETECTION_FEATURES,
     VesselDetectorRF,
 )
+from segmentation.utils.logging import get_logger, setup_logging
 
 # =============================================================================
 # SIZE CLASS DEFINITIONS FOR STRATIFIED SAMPLING
@@ -305,10 +305,8 @@ def stratified_sample_by_size(
     return X_balanced, y_balanced, uids_balanced
 
 
-logging.basicConfig(
-    level=logging.INFO, format="%(asctime)s | %(levelname)-8s | %(name)s | %(message)s"
-)
-logger = logging.getLogger(__name__)
+setup_logging()
+logger = get_logger(__name__)
 
 
 def load_annotations(annotations_path: Path) -> dict[str, str]:

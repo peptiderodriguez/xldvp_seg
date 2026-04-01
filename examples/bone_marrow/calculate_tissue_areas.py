@@ -1,4 +1,4 @@
-#!/usr/bin/env python
+#!/usr/bin/env python3
 """Calculate tissue areas from CZI files using the pipeline's variance-based tissue detection.
 
 Uses the same K-means variance-based approach as the segmentation pipeline

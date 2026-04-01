@@ -40,7 +40,6 @@ Annotation format (annotations.json):
 
 import argparse
 import json
-import logging
 from pathlib import Path
 from typing import Any
 
@@ -57,11 +56,10 @@ from segmentation.classification.vessel_classifier import (
     VESSEL_CORE_FEATURES,
     VesselClassifier,
 )
+from segmentation.utils.logging import get_logger, setup_logging
 
-logging.basicConfig(
-    level=logging.INFO, format="%(asctime)s | %(levelname)-8s | %(name)s | %(message)s"
-)
-logger = logging.getLogger(__name__)
+setup_logging()
+logger = get_logger(__name__)
 
 
 def load_annotations(annotations_path: Path) -> dict[str, str]:

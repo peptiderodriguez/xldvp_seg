@@ -1,4 +1,4 @@
-#!/usr/bin/env python
+#!/usr/bin/env python3
 """Generate self-contained HTML annotation tool for reclassifying Msln+ cells into tiers.
 
 Loads detection JSON, extracts cell positions/SNR/tier data, and produces an

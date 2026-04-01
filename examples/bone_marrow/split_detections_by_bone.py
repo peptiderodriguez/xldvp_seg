@@ -1,4 +1,4 @@
-#!/usr/bin/env python
+#!/usr/bin/env python3
 """Split detections by bone region (femur/humerus).
 
 Takes detection JSON and bone region annotations, assigns each detection

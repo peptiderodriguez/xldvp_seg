@@ -23,7 +23,6 @@ Usage:
 import argparse
 import base64
 import json
-import logging
 import sys
 from pathlib import Path
 
@@ -34,13 +33,14 @@ from sklearn.cluster import DBSCAN
 
 from segmentation.io.czi_loader import get_loader
 from segmentation.utils.islet_utils import classify_islet_marker, compute_islet_marker_thresholds
+from segmentation.utils.logging import get_logger, setup_logging
 
 try:
     import hdf5plugin  # noqa: F401 — registers LZ4 codec for h5py
 except ImportError:
     pass
 
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 
 # ---------------------------------------------------------------------------
@@ -295,7 +295,7 @@ def main():
     )
     args = parser.parse_args()
 
-    logging.basicConfig(level=logging.INFO, format="%(levelname)s: %(message)s")
+    setup_logging()
 
     run_dir = Path(args.run_dir)
     czi_path = Path(args.czi_path)

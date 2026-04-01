@@ -26,7 +26,6 @@ Usage:
 
 import argparse
 import json
-import logging
 import pickle
 from collections import Counter
 from pathlib import Path
@@ -34,10 +33,10 @@ from typing import Any
 
 import numpy as np
 
-logging.basicConfig(
-    level=logging.INFO, format="%(asctime)s | %(levelname)-8s | %(name)s | %(message)s"
-)
-logger = logging.getLogger(__name__)
+from segmentation.utils.logging import get_logger, setup_logging
+
+setup_logging()
+logger = get_logger(__name__)
 
 # =============================================================================
 # SIZE CLASS DEFINITIONS FOR STRATIFIED SAMPLING
