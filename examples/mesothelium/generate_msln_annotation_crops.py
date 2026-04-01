@@ -12,7 +12,6 @@ within each tier.
 """
 
 import argparse
-import json
 from collections import defaultdict
 from pathlib import Path
 
@@ -28,6 +27,7 @@ from segmentation.io.html_export import (
     image_to_base64,
 )
 from segmentation.io.html_generator import HTMLPageGenerator
+from segmentation.utils.json_utils import fast_json_load
 
 # ---------------------------------------------------------------------------
 # Default paths (overridable via CLI)
@@ -209,8 +209,7 @@ def main():
 
     # 1. Load detections
     print(f"Loading detections from {DETECTIONS_PATH}...")
-    with open(DETECTIONS_PATH) as f:
-        all_dets = json.load(f)
+    all_dets = fast_json_load(DETECTIONS_PATH)
     print(f"  Loaded {len(all_dets):,} detections")
 
     # 2. Group by tier

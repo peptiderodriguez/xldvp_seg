@@ -22,11 +22,12 @@ Usage:
 """
 
 import argparse
-import json
 from datetime import datetime
 from pathlib import Path
 
 import numpy as np
+
+from segmentation.utils.json_utils import atomic_json_dump, fast_json_load
 
 RESCUED_SLIDES = ["2025_11_18_FGC2", "2025_11_18_FGC4", "2025_11_18_MHU4"]
 PIXEL_SIZE_UM = 0.1725
@@ -34,8 +35,7 @@ PIXEL_SIZE_UM = 0.1725
 
 def load_original_training(path):
     """Load original training data from mk_training_data JSON."""
-    with open(path) as f:
-        data = json.load(f)
+    data = fast_json_load(path)
     samples = data["training_samples"]
     n_pos = sum(1 for s in samples if s["label"] == 1)
     n_neg = sum(1 for s in samples if s["label"] == 0)
@@ -57,8 +57,7 @@ def build_rescued_samples(base_dir, annotations_path, full_detections_path):
 
     # Load full detections to get valid UIDs for rescued slides
     print("Loading full detections to get valid UIDs...")
-    with open(full_detections_path) as f:
-        full_dets = json.load(f)
+    full_dets = fast_json_load(full_detections_path)
     valid_uids = set()
     for det in full_dets:
         slide = det.get("slide", "")
@@ -66,8 +65,7 @@ def build_rescued_samples(base_dir, annotations_path, full_detections_path):
             valid_uids.add(det.get("uid", ""))
     print(f"  {len(valid_uids)} valid UIDs from rescued slides")
 
-    with open(annotations_path) as f:
-        annotations = json.load(f)
+    annotations = fast_json_load(annotations_path)
 
     # Parse negative UIDs — handle multiple possible formats
     neg_uids = set()
@@ -94,8 +92,7 @@ def build_rescued_samples(base_dir, annotations_path, full_detections_path):
             if not feat_file.exists():
                 continue
 
-            with open(feat_file) as f:
-                tile_feats = json.load(f)
+            tile_feats = fast_json_load(feat_file)
 
             for det in tile_feats:
                 uid = det.get("uid", "")
@@ -140,8 +137,7 @@ def build_rescued_samples(base_dir, annotations_path, full_detections_path):
 
 def merge_sam2(samples, embeddings_path):
     """Merge SAM2 embeddings into training samples by UID."""
-    with open(embeddings_path) as f:
-        embeddings = json.load(f)
+    embeddings = fast_json_load(embeddings_path)
     print(f"SAM2 embeddings: {len(embeddings)} UIDs")
 
     n_updated = 0
@@ -349,8 +345,7 @@ def train_classifier(samples, output_dir, n_estimators=500, feature_set="all", e
         },
     }
     td_path = output_dir / f"mk_training_data_{timestamp}.json"
-    with open(td_path, "w") as f:
-        json.dump(training_data, f)
+    atomic_json_dump(training_data, td_path)
     print(f"Saved training data to {td_path}")
 
     return clf_final, feature_names
@@ -372,8 +367,7 @@ def score_detections(classifier_path, detections_path, output_path=None):
     )
 
     print(f"Loading detections from {detections_path}...")
-    with open(detections_path) as f:
-        detections = json.load(f)
+    detections = fast_json_load(detections_path)
     print(f"  {len(detections)} detections")
 
     # Build feature matrix
@@ -416,8 +410,7 @@ def score_detections(classifier_path, detections_path, output_path=None):
     # Save
     if output_path is None:
         output_path = str(detections_path).replace(".json", "_rescored.json")
-    with open(output_path, "w") as f:
-        json.dump(detections, f)
+    atomic_json_dump(detections, output_path)
     print(f"\nSaved {len(detections)} re-scored detections to {output_path}")
 
 
@@ -541,17 +534,15 @@ def main():
             merged_emb = {}
             for emb_path in args.sam2_embeddings:
                 print(f"\nLoading SAM2 from {emb_path}...")
-                with open(emb_path) as f:
-                    emb = json.load(f)
+                emb = fast_json_load(emb_path)
                 merged_emb.update(emb)
                 print(f"  {len(emb)} UIDs (total: {len(merged_emb)})")
 
             # Write merged to temp file for merge_sam2()
             import tempfile
 
-            with tempfile.NamedTemporaryFile(mode="w", suffix=".json", delete=False) as tmp:
-                json.dump(merged_emb, tmp)
-                tmp_path = tmp.name
+            tmp_path = tempfile.mktemp(suffix=".json")
+            atomic_json_dump(merged_emb, tmp_path)
             merge_sam2(all_samples, tmp_path)
             Path(tmp_path).unlink()
 

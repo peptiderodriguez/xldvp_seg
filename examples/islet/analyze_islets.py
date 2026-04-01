@@ -24,7 +24,6 @@ Usage:
 
 import argparse
 import base64
-import json
 import math
 import sys
 from collections import Counter
@@ -40,7 +39,7 @@ try:
 except ImportError:
     pass
 
-from segmentation.utils.json_utils import sanitize_for_json
+from segmentation.utils.json_utils import atomic_json_dump, fast_json_load
 from segmentation.utils.logging import get_logger, setup_logging
 
 logger = get_logger(__name__)
@@ -262,8 +261,7 @@ def load_detections(run_dir):
     if not det_path.exists():
         logger.error(f"Detections not found: {det_path}")
         sys.exit(1)
-    with open(det_path) as f:
-        dets = json.load(f)
+    dets = fast_json_load(det_path)
     logger.info("Loaded %d detections from %s", len(dets), det_path)
     return dets
 
@@ -1185,9 +1183,7 @@ def export_csv(islet_features, output_path):
 
 def export_detections(detections, output_path):
     """Export enriched detections JSON (with islet_id + marker_class)."""
-    clean = sanitize_for_json(detections)
-    with open(output_path, "w") as f:
-        json.dump(clean, f)
+    atomic_json_dump(detections, output_path)
     logger.info("Saved enriched detections: %s", output_path)
 
 

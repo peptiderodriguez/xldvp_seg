@@ -56,6 +56,7 @@ from segmentation.classification.vessel_classifier import (
     VESSEL_CORE_FEATURES,
     VesselClassifier,
 )
+from segmentation.utils.json_utils import fast_json_load
 from segmentation.utils.logging import get_logger, setup_logging
 
 setup_logging()
@@ -76,8 +77,7 @@ def load_annotations(annotations_path: Path) -> dict[str, str]:
     Returns:
         Dictionary mapping vessel UID to vessel type
     """
-    with open(annotations_path) as f:
-        data = json.load(f)
+    data = fast_json_load(annotations_path)
 
     # Handle nested format
     if "annotations" in data:
@@ -99,8 +99,7 @@ def load_detections(detections_path: Path) -> dict[str, dict]:
     Returns:
         Dictionary mapping UIDs to detection dicts
     """
-    with open(detections_path) as f:
-        data = json.load(f)
+    data = fast_json_load(detections_path)
 
     indexed = {}
     for d in data:

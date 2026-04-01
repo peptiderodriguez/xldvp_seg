@@ -15,6 +15,8 @@ import json
 import os
 from collections import Counter
 
+from segmentation.utils.json_utils import fast_json_load
+
 DEFAULT_INPUT = "/path/to/output/psilo_output/tp_full/20251114_Pdgfra546_Msln750_PM647_nuc488-EDFvar-1-stitch-1_20260223_094916_100pct/msln_plus/detections_clustered.json"
 DEFAULT_OUTPUT = "/path/to/output/psilo_output/tp_full/20251114_Pdgfra546_Msln750_PM647_nuc488-EDFvar-1-stitch-1_20260223_094916_100pct/msln_plus/interactive_clusters.html"
 
@@ -38,8 +40,7 @@ def main():
     OUTPUT = args.output
 
     print(f"Loading {INPUT} ...")
-    with open(INPUT) as f:
-        detections = json.load(f)
+    detections = fast_json_load(INPUT)
     print(f"Loaded {len(detections)} detections")
 
     # -------------------------------------------------------------------

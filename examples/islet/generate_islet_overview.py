@@ -22,7 +22,6 @@ Usage:
 
 import argparse
 import base64
-import json
 import sys
 from pathlib import Path
 
@@ -33,6 +32,7 @@ from sklearn.cluster import DBSCAN
 
 from segmentation.io.czi_loader import get_loader
 from segmentation.utils.islet_utils import classify_islet_marker, compute_islet_marker_thresholds
+from segmentation.utils.json_utils import fast_json_load
 from segmentation.utils.logging import get_logger, setup_logging
 
 try:
@@ -316,8 +316,7 @@ def main():
         sys.exit(1)
 
     print(f"Loading detections from {det_path}...")
-    with open(det_path) as f:
-        all_dets = json.load(f)
+    all_dets = fast_json_load(det_path)
     print(f"  {len(all_dets)} total detections")
 
     if len(all_dets) == 0:

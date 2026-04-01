@@ -21,10 +21,11 @@ Outputs:
 """
 
 import argparse
-import json
 from pathlib import Path
 
 import matplotlib
+
+from segmentation.utils.json_utils import fast_json_load
 
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
@@ -98,12 +99,9 @@ def parse_slide(name):
 def load_and_prepare_data(score_threshold=0.75):
     """Load detections, aggregate to slide x bone medians, IQR filter."""
     print(f"Loading data (score threshold >= {score_threshold})...")
-    with open(DETECTIONS_FULL) as f:
-        full_data = json.load(f)
-    with open(DETECTIONS_BONE) as f:
-        bone_data = json.load(f)
-    with open(TISSUE_AREAS) as f:
-        tissue_data = json.load(f)
+    full_data = fast_json_load(DETECTIONS_FULL)
+    bone_data = fast_json_load(DETECTIONS_BONE)
+    tissue_data = fast_json_load(TISSUE_AREAS)
 
     uid_to_bone = {d["uid"]: d["bone"] for d in bone_data}
     tissue_info = {r["slide"]: r["bones"] for r in tissue_data["results"]}

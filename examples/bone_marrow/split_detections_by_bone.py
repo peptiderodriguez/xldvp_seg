@@ -28,6 +28,8 @@ import numpy as np
 from shapely.geometry import Point, Polygon
 from shapely.prepared import prep
 
+from segmentation.utils.json_utils import atomic_json_dump, fast_json_load
+
 
 def compute_centroid_from_contour(contour_yx):
     """Compute centroid from contour points.
@@ -116,8 +118,7 @@ def load_detections(path):
 
     Handles the format: {slide_name: [detection, ...], ...}
     """
-    with open(path) as f:
-        return json.load(f)
+    return fast_json_load(path)
 
 
 def load_bone_regions(path):
@@ -133,8 +134,7 @@ def load_bone_regions(path):
         }
     }
     """
-    with open(path) as f:
-        data = json.load(f)
+    data = fast_json_load(path)
 
     # Handle both formats
     if "slides" in data:
@@ -339,20 +339,17 @@ def main():
     summary_path = args.output_dir / "bone_assignment_summary.json"
 
     print(f"\nWriting {femur_path}...")
-    with open(femur_path, "w") as f:
-        json.dump(femur_dets, f)
+    atomic_json_dump(femur_dets, femur_path)
 
     print(f"Writing {humerus_path}...")
-    with open(humerus_path, "w") as f:
-        json.dump(humerus_dets, f)
+    atomic_json_dump(humerus_dets, humerus_path)
 
     output_files = {"femur": str(femur_path), "humerus": str(humerus_path)}
 
     if args.include_unknown:
         unknown_path = args.output_dir / f"{args.prefix}_unknown.json"
         print(f"Writing {unknown_path}...")
-        with open(unknown_path, "w") as f:
-            json.dump(unknown_dets, f)
+        atomic_json_dump(unknown_dets, unknown_path)
         output_files["unknown"] = str(unknown_path)
 
     # Add metadata to summary

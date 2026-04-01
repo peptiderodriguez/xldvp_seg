@@ -33,6 +33,8 @@ from pathlib import Path
 
 import matplotlib
 
+from segmentation.utils.json_utils import fast_json_load
+
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 import numpy as np
@@ -44,8 +46,7 @@ from scipy.stats import gaussian_kde
 
 def load_detections(path):
     """Load detection JSON and extract positions + per-channel intensities."""
-    with open(path) as f:
-        data = json.load(f)
+    data = fast_json_load(path)
 
     # Handle both flat list and wrapped format
     if isinstance(data, dict):
@@ -145,8 +146,7 @@ def generate_auto_transects(bbox, n_transects=5, margin_frac=0.05):
 
 def load_transects(path):
     """Load transects from JSON file."""
-    with open(path) as f:
-        data = json.load(f)
+    data = fast_json_load(path)
     return data.get("transects", data)
 
 

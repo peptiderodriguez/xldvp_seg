@@ -18,12 +18,13 @@ Outputs:
 - Figures
 """
 
-import json
 from collections import defaultdict
 from itertools import combinations
 from pathlib import Path
 
 import matplotlib
+
+from segmentation.utils.json_utils import fast_json_load
 
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
@@ -116,12 +117,9 @@ def aligned_rank_transform_interaction(df, feat, factor_a, factor_b):
 def main():
     # ── Load data ───────────────────────────────────────────────────────
     print("Loading data...")
-    with open(DETECTIONS_FULL) as f:
-        full_data = json.load(f)
-    with open(DETECTIONS_BONE) as f:
-        bone_data = json.load(f)
-    with open(TISSUE_AREAS) as f:
-        tissue_data = json.load(f)
+    full_data = fast_json_load(DETECTIONS_FULL)
+    bone_data = fast_json_load(DETECTIONS_BONE)
+    tissue_data = fast_json_load(TISSUE_AREAS)
 
     # Build UID → bone mapping
     uid_to_bone = {}

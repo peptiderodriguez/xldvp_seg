@@ -40,6 +40,7 @@ from sklearn.metrics import calinski_harabasz_score, silhouette_score
 from sklearn.neighbors import kneighbors_graph
 from sklearn.preprocessing import StandardScaler
 
+from segmentation.utils.json_utils import atomic_json_dump, fast_json_load
 from segmentation.utils.logging import get_logger, setup_logging
 
 setup_logging()
@@ -144,8 +145,7 @@ def load_all_mk_features(
             if not feat_file.exists():
                 continue
 
-            with open(feat_file) as f:
-                feats = json.load(f)
+            feats = fast_json_load(feat_file)
 
             for feat in feats:
                 if "crop_b64" not in feat or "features" not in feat:
@@ -247,8 +247,7 @@ def run_phase1(args):
 
     # Save crop/mask b64 as separate JSON (too large for npz string arrays)
     crops_file = output.parent / (output.stem + "_crops.json")
-    with open(crops_file, "w") as f:
-        json.dump({"crop_b64": crop_b64_list, "mask_b64": mask_b64_list}, f)
+    atomic_json_dump({"crop_b64": crop_b64_list, "mask_b64": mask_b64_list}, crops_file)
 
     dt = time.time() - t0
     logger.info(f"Phase 1 complete in {dt:.1f}s. Saved to {output} + {crops_file}")
@@ -377,8 +376,7 @@ def _gpu_worker_nuclear_features(
     sub_logger.info(f"GPU {gpu_id}: Models loaded. Processing crops...")
 
     # Load crops (read full file, slice to our chunk)
-    with open(crops_file_path) as f:
-        crops_data = json.load(f)
+    crops_data = fast_json_load(crops_file_path)
     crop_b64_chunk = crops_data["crop_b64"][start_idx:end_idx]
     mask_b64_chunk = crops_data["mask_b64"][start_idx:end_idx]
     del crops_data
@@ -1256,8 +1254,7 @@ def run_phase4(args):
     logger.info("  Generating representative gallery...")
     crops_file = Path(args.data).parent / (Path(args.data).stem + "_crops.json")
     if crops_file.exists():
-        with open(crops_file) as f:
-            crops_data = json.load(f)
+        crops_data = fast_json_load(crops_file)
         # Subset crops to valid MKs (matching cluster indices)
         valid_crops = [crops_data["crop_b64"][i] for i in valid_idx]
         _plot_representative_gallery(

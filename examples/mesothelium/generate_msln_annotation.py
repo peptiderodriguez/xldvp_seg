@@ -27,6 +27,8 @@ from pathlib import Path
 
 import numpy as np
 
+from segmentation.utils.json_utils import fast_json_load
+
 DEFAULT_INPUT = (
     "/path/to/output/psilo_output/tp_full/"
     "20251114_Pdgfra546_Msln750_PM647_nuc488-EDFvar-1-stitch-1_20260223_094916_100pct/"
@@ -51,8 +53,7 @@ def main():
         sys.exit(1)
 
     print(f"Loading {input_path} ...")
-    with open(input_path) as f:
-        detections = json.load(f)
+    detections = fast_json_load(input_path)
 
     print(f"  {len(detections)} detections loaded")
 

@@ -42,6 +42,8 @@ from pathlib import Path
 
 import numpy as np
 
+from segmentation.utils.json_utils import atomic_json_dump, fast_json_load
+
 SAM2_DIM = 256
 TILE_SIZE = 2048
 TILE_OVERLAP = 256  # Overlap to ensure cells near tile edges are fully covered
@@ -73,8 +75,7 @@ def load_detections_by_slide(detections_path, training_data_path=None):
             coordinates parsed from UIDs and use centroid-based extraction.
     """
     print(f"Loading detections from {detections_path}...")
-    with open(detections_path) as f:
-        dets = json.load(f)
+    dets = fast_json_load(detections_path)
     print(f"  {len(dets)} total detections")
 
     by_slide = defaultdict(list)
@@ -90,8 +91,7 @@ def load_detections_by_slide(detections_path, training_data_path=None):
     # Load training data samples (for SAM2 extraction of training negatives/positives)
     if training_data_path:
         print(f"\nLoading training samples from {training_data_path}...")
-        with open(training_data_path) as f:
-            td = json.load(f)
+        td = fast_json_load(training_data_path)
 
         training_samples = td.get("training_samples", [])
         n_added = 0
@@ -292,12 +292,11 @@ def _worker_extract_slide(args_tuple):
     out_file = Path(output_dir) / f"sam2_{slide_name}.json"
     if out_file.exists() and out_file.stat().st_size > 10:
         try:
-            with open(out_file) as f:
-                existing = json.load(f)
+            existing = fast_json_load(out_file)
             if len(existing) >= len(detections):
                 print(f"[GPU {gpu_id}] {slide_name}: already extracted ({len(existing)}), skipping")
                 return slide_name, len(existing), 0.0
-        except (json.JSONDecodeError, ValueError):
+        except (json.JSONDecodeError, ValueError, Exception):
             pass  # Corrupt file, re-extract
 
     t0 = time.time()
@@ -432,9 +431,7 @@ def _worker_extract_slide(args_tuple):
     print(f"[GPU {gpu_id}] {slide_name}: {len(embeddings)} embeddings in {elapsed:.1f}s")
 
     # Save
-    out_file.parent.mkdir(parents=True, exist_ok=True)
-    with open(out_file, "w") as f:
-        json.dump(embeddings, f)
+    atomic_json_dump(embeddings, out_file)
 
     del predictor, sam2_model
     torch.cuda.empty_cache()
@@ -450,14 +447,12 @@ def merge_embeddings(embeddings_dir, target_json, output_json):
     files = sorted(embeddings_dir.glob("sam2_*.json"))
     for f in files:
         print(f"  Loading {f.name}...")
-        with open(f) as fh:
-            embs = json.load(fh)
+        embs = fast_json_load(f)
         all_embeddings.update(embs)
     print(f"  Total: {len(all_embeddings)} embeddings from {len(files)} files")
 
     print(f"Loading target: {target_json}...")
-    with open(target_json) as f:
-        detections = json.load(f)
+    detections = fast_json_load(target_json)
     print(f"  {len(detections)} detections")
 
     n_updated = 0
@@ -479,8 +474,7 @@ def merge_embeddings(embeddings_dir, target_json, output_json):
     print(f"  Missing: {n_missing}")
 
     print(f"Writing to {output_json}...")
-    with open(output_json, "w") as f:
-        json.dump(detections, f)
+    atomic_json_dump(detections, output_json)
     print(f"  Done ({len(detections)} detections)")
 
 
