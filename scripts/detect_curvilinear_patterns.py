@@ -101,6 +101,28 @@ def parse_args():
         "are typically 50-200µm wide. 0 = no filter (default: 0)",
     )
 
+    # Cell-level refinement (trim hangers-on from strip components)
+    parser.add_argument(
+        "--refine-method",
+        choices=["none", "betweenness", "degree_ratio", "k_core"],
+        default="none",
+        help="Per-cell refinement to trim absorbed non-strip cells. "
+        "betweenness: keep top N%% by betweenness centrality. "
+        "degree_ratio: keep cells where most neighbors are also strip cells. "
+        "k_core: keep k-core backbone (removes leaf-like appendages). "
+        "(default: none)",
+    )
+    parser.add_argument(
+        "--refine-threshold",
+        type=float,
+        default=0,
+        help="Threshold for refinement. "
+        "betweenness: percentile cutoff (e.g., 30 = drop bottom 30%%). "
+        "degree_ratio: min fraction of neighbors in same strip (e.g., 0.5). "
+        "k_core: minimum degree k (e.g., 2). "
+        "(default: 0 = method-specific default)",
+    )
+
     # Output
     parser.add_argument(
         "--output-prefix",
@@ -138,8 +160,14 @@ def select_positive_cells(detections, args):
             raise SystemExit(1)
         key, value = args.marker_filter.split("==", 1)
         key, value = key.strip(), value.strip()
+        # Handle boolean/numeric values stored as non-string types
+        match_values = {value}
+        if value.lower() in ("true", "false"):
+            match_values.add(value.lower() == "true")
         for i, d in enumerate(detections):
-            if d.get(key) == value or d.get("features", {}).get(key) == value:
+            v1 = d.get(key)
+            v2 = d.get("features", {}).get(key)
+            if v1 in match_values or v2 in match_values:
                 positive_idx.append(i)
         logger.info("Marker filter: %s → %d positive cells", args.marker_filter, len(positive_idx))
 
@@ -379,6 +407,115 @@ def classify_components(
     return labels, comp_stats
 
 
+def refine_strip_cells(positions, labels, radius, method, threshold):
+    """Per-cell refinement: demote hanger-on cells from 'strip' to 'cluster'.
+
+    Three methods:
+      betweenness: Drop bottom N% by betweenness centrality within each strip component.
+      degree_ratio: Drop cells where < threshold fraction of neighbors are strip cells.
+      k_core: Keep only the k-core of each strip component's subgraph.
+
+    Args:
+        positions: (N, 2) array of all positive cell positions.
+        labels: list of per-cell labels ("strip", "cluster", "noise").
+        radius: connection radius in µm (for rebuilding local graph).
+        method: "betweenness", "degree_ratio", or "k_core".
+        threshold: method-specific threshold.
+
+    Returns:
+        Updated labels list (some "strip" demoted to "cluster").
+    """
+    import networkx as nx
+    from scipy.spatial import KDTree
+
+    # Defaults
+    if threshold == 0:
+        if method == "betweenness":
+            threshold = 30  # drop bottom 30%
+        elif method == "degree_ratio":
+            threshold = 0.5  # at least 50% strip neighbors
+        elif method == "k_core":
+            threshold = 2  # k=2
+
+    strip_indices = [i for i, lab in enumerate(labels) if lab == "strip"]
+    if not strip_indices:
+        return labels
+
+    logger.info(
+        "Refining %d strip cells with method=%s, threshold=%s",
+        len(strip_indices),
+        method,
+        threshold,
+    )
+
+    # Build graph on ALL positive cells (needed for degree_ratio)
+    tree = KDTree(positions)
+    pairs = tree.query_pairs(r=radius)
+    G_all = nx.Graph()
+    G_all.add_nodes_from(range(len(positions)))
+    G_all.add_edges_from(pairs)
+
+    strip_set = set(strip_indices)
+    labels = list(labels)  # copy
+    demoted = 0
+
+    if method == "betweenness":
+        # Build subgraph of strip cells only
+        G_strip = G_all.subgraph(strip_indices).copy()
+        # Process each connected component separately
+        for comp_nodes in nx.connected_components(G_strip):
+            if len(comp_nodes) < 3:
+                continue
+            sub = G_strip.subgraph(comp_nodes)
+            # Approximate for large components (exact is O(V*E))
+            if len(comp_nodes) > 500:
+                bc = nx.betweenness_centrality(sub, k=min(200, len(comp_nodes)))
+            else:
+                bc = nx.betweenness_centrality(sub)
+            # Find percentile cutoff
+            values = sorted(bc.values())
+            cutoff_idx = int(len(values) * threshold / 100)
+            cutoff_val = values[min(cutoff_idx, len(values) - 1)]
+            for node, val in bc.items():
+                if val < cutoff_val:
+                    labels[node] = "cluster"
+                    demoted += 1
+
+    elif method == "degree_ratio":
+        # For each strip cell, fraction of neighbors that are also strip
+        for i in strip_indices:
+            neighbors = set(G_all.neighbors(i))
+            if not neighbors:
+                labels[i] = "cluster"
+                demoted += 1
+                continue
+            strip_neighbors = neighbors & strip_set
+            ratio = len(strip_neighbors) / len(neighbors)
+            if ratio < threshold:
+                labels[i] = "cluster"
+                demoted += 1
+
+    elif method == "k_core":
+        k = int(threshold)
+        G_strip = G_all.subgraph(strip_indices).copy()
+        # k-core: maximal subgraph where all nodes have degree >= k
+        core = nx.k_core(G_strip, k=k)
+        core_nodes = set(core.nodes())
+        for i in strip_indices:
+            if i not in core_nodes:
+                labels[i] = "cluster"
+                demoted += 1
+
+    logger.info(
+        "  Refinement demoted %d cells (strip: %d → %d)",
+        demoted,
+        len(strip_indices),
+        len(strip_indices) - demoted,
+    )
+
+    return labels
+
+
 def tag_detections(detections, positive_idx, labels, prefix):
     """Tag each detection with pattern classification."""
     field = f"{prefix}_pattern"
@@ -433,6 +570,12 @@ def main():
         args.min_strip_length,
         args.max_strip_width,
     )
+
+    # Per-cell refinement (trim hangers-on)
+    if args.refine_method != "none":
+        labels = refine_strip_cells(
+            positions, labels, args.radius, args.refine_method, args.refine_threshold
+        )
 
     # Tag
     field = tag_detections(detections, positive_idx, labels, args.output_prefix)
