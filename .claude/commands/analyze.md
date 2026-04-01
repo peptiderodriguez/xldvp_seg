@@ -117,7 +117,7 @@ For beginners, expand on each step as you reach it. For advanced users, just ask
 | **Tissue area** | Variance-based tissue detection, area measurement from CZI | `examples/bone_marrow/calculate_tissue_areas.py` |
 | **Visualize** | Multi-slide scrollable HTML with ROI drawing + stats. **CZI thumbnail caching**: first run reads CZI (slow), subsequent runs load `.thumbnail_cache_*.npz` (instant). Cache key includes channels + scale factor. | `scripts/generate_multi_slide_spatial_viewer.py` |
 | **Tissue overlay** | Fluorescence image + cell overlay + ROI + LMD export in one viewer | `scripts/generate_tissue_overlay.py` |
-| **Nuclear count** | Count nuclei per cell (Cellpose 2nd pass on nuclear channel), morph+SAM2+optional deep features per nucleus | `scripts/count_nuclei_per_cell.py` |
+| **Nuclear count** | Count nuclei per cell (integrated in Phase 4, or standalone for existing runs). Morph+SAM2 per nucleus | `--count-nuclei` (default ON) or `scripts/count_nuclei_per_cell.py` |
 | **Region detection** | Percentile-threshold any channel → morphological cleanup → split into equal-area pieces → full features (morph+channel+SAM2) → LMD | `scripts/detect_regions_for_lmd.py` |
 | **Region splitting** | Post-process existing pipeline detections → watershed split large regions | `scripts/split_regions_for_lmd.py` |
 | **Replicate sampling** | Area-matched or spatially-clustered replicates, marker/cluster stratification, 384-well assignment | `scripts/paper_figure_sampling.py` |
@@ -160,7 +160,7 @@ For beginners, expand on each step as you reach it. For advanced users, just ask
 | **Mesothelium** | `examples/mesothelium/generate_msln_cluster_viewer.py` | Msln+ clustering results viewer |
 | **Mesothelium** | `examples/mesothelium/generate_msln_annotation_crops.py` | Msln crop generation for annotation |
 | **TMA** | `examples/tma/detect_tma_cells.py` | Find TMA cores → cell detection per core with grid labels |
-| **Any** | `scripts/count_nuclei_per_cell.py` | Count nuclei per cell: 2nd Cellpose pass on nuclear channel, per-nucleus morph+SAM2 features |
+| **Any** | `scripts/count_nuclei_per_cell.py` | Standalone nuclear counting for existing runs (integrated via `--count-nuclei` for new runs) |
 | **Any** | `examples/islet/expand_nuclei_masks.py` | Expand nuclei-only masks to approximate cell body |
 | **Any** | `examples/legacy/extract_sam2_embeddings.py` | Extract SAM2 embeddings for existing detections |
 | **Any** | `examples/bone_marrow/generate_rbc_annotation_html.py` | RBC cluster candidate annotation HTML |
