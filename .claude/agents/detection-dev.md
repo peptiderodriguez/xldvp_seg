@@ -87,9 +87,11 @@ PYTHONPATH=$REPO $XLDVP_PYTHON $REPO/run_segmentation.py \
 ## Post-Dedup Processing Pipeline
 
 After deduplication, 3 phases run automatically (parallelized with ThreadPoolExecutor):
-- **Phase 1**: Contour dilation (+0.5µm), RDP simplification (epsilon=5px), quick per-channel means
+- **Phase 1**: Original mask contour extraction (`contour_px`/`contour_um`), quick per-channel means from original mask
 - **Phase 2**: Local background estimation (KD-tree, k=30 global neighbors)
-- **Phase 3**: Background subtraction from pixels, then full feature re-extraction on corrected data
+- **Phase 3**: Background subtraction from pixels, then intensity feature extraction from **original mask**
+
+Features are always computed from the original Cellpose/SAM2 segmentation mask. Contour simplification (adaptive RDP) and dilation are deferred to LMD export time.
 
 Code: `segmentation/pipeline/post_detection.py`, `segmentation/pipeline/background.py`
 

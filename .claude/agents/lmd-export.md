@@ -61,8 +61,9 @@ Drop `--min-score 0.5` if no RF classifier was run.
 |------|---------|---------|
 | `--generate-controls` | off | Generate spatial negative controls |
 | `--min-score` | none | Filter by rf_prediction (use 0.5 when classifier was run) |
-| `--dilation-um` | 0.5 | Extra contour dilation beyond post-dedup (usually leave at default) |
-| `--erosion-um` | 0.0 | Shrink contours by absolute distance in um (applied after dilation+RDP) |
+| `--max-area-change-pct` | 5.0 | Adaptive RDP: max symmetric-difference deviation (%). 0 = fixed epsilon. |
+| `--dilation-um` | 0.5 | Contour dilation for laser buffer (applied after RDP simplification) |
+| `--erosion-um` | 0.0 | Shrink contours by absolute distance in um (applied after dilation) |
 | `--erode-pct` | 0.0 | Shrink contours by % of sqrt(area) (e.g. 0.05 = 5%) |
 | `--control-offset-um` | 100 | Distance for control regions |
 | `--no-flip-y` | off | Disable Y-axis flip for stage coordinates (rarely needed) |
@@ -142,13 +143,15 @@ Controls mirror the clustering: singles get individual controls, cluster control
 
 ## Contour Processing
 
-Contours are **pre-computed during detection post-dedup** (dilation +0.5um, RDP epsilon=5px). Export uses them as-is — no re-processing. If the user ran `--no-contour-processing`, contours are extracted fresh during export.
+Post-dedup stores the **original** mask contour as `contour_px` / `contour_um` (no dilation or simplification). All contour processing happens at LMD export time:
 
-**Export-time erosion** (optional): shrink contours so the laser cuts inside the target:
-- `--erosion-um 0.2` — shrink by 0.2 um (absolute)
-- `--erode-pct 0.05` — shrink by 5% of sqrt(area) (proportional)
+1. **Adaptive RDP simplification** (`--max-area-change-pct 5.0`): binary-searches for the largest epsilon keeping symmetric difference within tolerance. Reduces point count for LMD hardware.
+2. **Dilation** (`--dilation-um 0.5`): expands contours so the laser cuts outside the cell boundary.
+3. **Erosion** (optional): shrink contours so the laser cuts inside the target:
+   - `--erosion-um 0.2` — shrink by 0.2 um (absolute)
+   - `--erode-pct 0.05` — shrink by 5% of sqrt(area) (proportional)
 
-Pipeline warns if contours were already processed during detection and additional processing is applied at export time.
+If the user ran `--no-contour-processing`, contours are extracted fresh from HDF5 masks during export.
 
 ---
 

@@ -68,7 +68,7 @@ If multiple slides are running (array jobs), show per-slide status.
 - If GPU utilization is low (<30%): *"GPUs are underutilized. This usually means I/O-bound or the tiles are mostly empty. Normal for sparse tissue."*
 
 **During post-dedup:**
-- Phase 1 (contour processing): *"Processing contours — this is fast, usually a few minutes."*
+- Phase 1 (contour extraction): *"Extracting original mask contours — this is fast, usually a few minutes."*
 - Phase 2 (background estimation): *"Building KD-tree for local background — single-threaded, scales with detection count."*
 - Phase 3 (feature re-extraction): *"Re-extracting intensity features on corrected data — parallelized, this is the longest post-dedup phase for large datasets."*
 
