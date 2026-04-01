@@ -7,6 +7,7 @@ checkpoints/
 
 # Data files
 *.czi
+.thumbnail_cache_*.npz
 *.tif
 *.tiff
 data/

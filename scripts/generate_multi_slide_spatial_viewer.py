@@ -3882,9 +3882,9 @@ def main():
             mx = my = 0
             if _cache_file.exists():
                 try:
-                    _cached = np.load(str(_cache_file), allow_pickle=True)
+                    _cached = np.load(str(_cache_file))
                     ch_arrays = [
-                        _cached[f"ch{i}"] if _cached[f"ch{i}"].ndim > 0 else None
+                        _cached[f"ch{i}"] if _cached[f"ch{i}"].size > 0 else None
                         for i in range(len(display_channels))
                     ]
                     _ps = str(_cached["pixel_size"])
@@ -3905,7 +3905,10 @@ def main():
                     )
                     # Cache for next time
                     try:
-                        _save = {f"ch{i}": arr for i, arr in enumerate(ch_arrays)}
+                        _save = {
+                            f"ch{i}": (arr if arr is not None else np.empty(0, dtype=np.uint8))
+                            for i, arr in enumerate(ch_arrays)
+                        }
                         _save["pixel_size"] = str(pixel_size) if pixel_size is not None else "None"
                         _save["mosaic_x"] = mx
                         _save["mosaic_y"] = my

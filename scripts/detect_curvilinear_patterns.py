@@ -26,13 +26,13 @@ Example:
 """
 
 import argparse
-import logging
 from pathlib import Path
 
 import numpy as np
 
-logging.basicConfig(level=logging.INFO, format="%(asctime)s | %(levelname)-8s | %(message)s")
-logger = logging.getLogger(__name__)
+from segmentation.utils.logging import get_logger
+
+logger = get_logger(__name__)
 
 
 def parse_args():
@@ -64,7 +64,9 @@ def parse_args():
         "--radius",
         type=float,
         default=50.0,
-        help="Connection radius in µm for graph edges (default: 50)",
+        help="Connection radius in µm for graph edges. Should be ~1.5-2x the "
+        "typical cell-to-cell spacing. Larger values bridge gaps but may merge "
+        "separate structures. 50-100 µm typical for mesothelial strips (default: 50)",
     )
     parser.add_argument(
         "--min-component-size",
@@ -182,7 +184,10 @@ def extract_aligned_positions(detections, positive_idx, extract_positions_um):
     _, pixel_size = extract_positions_um(positive_dets)
     px_str = f"{pixel_size:.4f}" if pixel_size else "N/A"
 
-    # Resolve per-detection to maintain exact index alignment
+    # Resolve per-detection to maintain exact index alignment.
+    # extract_positions_um silently skips unresolvable detections without
+    # reporting which indices survived. Per-detection calls are the only way
+    # to track the mapping between input indices and output positions.
     valid_positive_idx = []
     valid_positions = []
     for i, det in zip(positive_idx, positive_dets):
@@ -208,33 +213,34 @@ def extract_aligned_positions(detections, positive_idx, extract_positions_um):
     return valid_positive_idx, positions
 
 
-def _point_to_segment_distance(p, a, b):
-    """Distance from point p to line segment a-b."""
-    ab = b - a
-    ab_sq = np.dot(ab, ab)
-    if ab_sq < 1e-12:
-        return np.sqrt(np.sum((p - a) ** 2))
-    t = np.clip(np.dot(p - a, ab) / ab_sq, 0.0, 1.0)
-    proj = a + t * ab
-    return np.sqrt(np.sum((p - proj) ** 2))
+def _component_width(positions, comp_nodes, path, percentile=95):
+    """Perpendicular width of a component relative to its diameter path.
 
+    Computes the distance from each cell to the nearest segment of the diameter
+    path polyline, then returns the given percentile (default 95th) of those
+    distances. Using a percentile rather than the max makes the metric robust
+    to single outlier cells.
 
-def _component_width(positions, comp_nodes, path):
-    """Max perpendicular distance from any cell to the diameter path polyline."""
+    Vectorized: O(C * P) numpy operations, no Python inner loops.
+    """
     if len(path) < 2:
         return 0.0
-    path_pts = positions[path]
-    max_dist = 0.0
-    for node in comp_nodes:
-        pt = positions[node]
-        min_seg_dist = float("inf")
-        for i in range(len(path_pts) - 1):
-            d = _point_to_segment_distance(pt, path_pts[i], path_pts[i + 1])
-            if d < min_seg_dist:
-                min_seg_dist = d
-        if min_seg_dist > max_dist:
-            max_dist = min_seg_dist
-    return max_dist
+    pts = positions[comp_nodes]  # (C, 2)
+    seg_a = positions[path[:-1]]  # (P, 2)
+    seg_b = positions[path[1:]]  # (P, 2)
+    ab = seg_b - seg_a  # (P, 2)
+    ab_sq = np.sum(ab * ab, axis=1)  # (P,)
+    # Broadcast: (C, 1, 2) vs (1, P, 2)
+    ap = pts[:, None, :] - seg_a[None, :, :]  # (C, P, 2)
+    t = np.clip(
+        np.sum(ap * ab[None, :, :], axis=2) / np.maximum(ab_sq[None, :], 1e-12),
+        0.0,
+        1.0,
+    )  # (C, P)
+    proj = seg_a[None, :, :] + t[:, :, None] * ab[None, :, :]  # (C, P, 2)
+    dists = np.sqrt(np.sum((pts[:, None, :] - proj) ** 2, axis=2))  # (C, P)
+    min_dists = dists.min(axis=1)  # (C,) — min distance to any segment
+    return float(np.percentile(min_dists, percentile))
 
 
 def classify_components(
@@ -300,19 +306,16 @@ def classify_components(
         # Extract subgraph for this component
         subgraph = G.subgraph(comp_nodes)
 
-        # Graph diameter — longest shortest path
-        # Double-BFS to find pseudo-peripheral pair (exact for trees, tight
-        # lower bound otherwise). Also recover the path for length_um.
+        # Graph diameter — longest shortest path via double-BFS.
+        # Second BFS uses single_source_shortest_path (not just _length)
+        # to recover the actual path without a redundant third BFS.
         start = next(iter(comp_nodes))
         far1_dist = nx.single_source_shortest_path_length(subgraph, start)
         far1_node = max(far1_dist, key=far1_dist.get)
-        far2_dist = nx.single_source_shortest_path_length(subgraph, far1_node)
-        far2_node = max(far2_dist, key=far2_dist.get)
-        diameter = far2_dist[far2_node]
-
-        # Physical length: sum euclidean distances along the diameter path
-        path = nx.shortest_path(subgraph, far1_node, far2_node)
-        path_nodes = list(path)  # node indices into positions array
+        far2_paths = nx.single_source_shortest_path(subgraph, far1_node)
+        far2_node = max(far2_paths, key=lambda n: len(far2_paths[n]))
+        diameter = len(far2_paths[far2_node]) - 1
+        path_nodes = far2_paths[far2_node]  # node indices into positions array
         length_um = 0.0
         for a, b in zip(path_nodes[:-1], path_nodes[1:]):
             length_um += np.sqrt(np.sum((positions[a] - positions[b]) ** 2))
@@ -404,10 +407,10 @@ def classify_components(
             c["classification"],
         )
 
-    return labels, comp_stats
+    return labels, comp_stats, G
 
 
-def refine_strip_cells(positions, labels, radius, method, threshold):
+def refine_strip_cells(positions, labels, radius, method, threshold, G_all=None):
     """Per-cell refinement: demote hanger-on cells from 'strip' to 'cluster'.
 
     Three methods:
@@ -418,15 +421,15 @@ def refine_strip_cells(positions, labels, radius, method, threshold):
     Args:
         positions: (N, 2) array of all positive cell positions.
         labels: list of per-cell labels ("strip", "cluster", "noise").
-        radius: connection radius in µm (for rebuilding local graph).
+        radius: connection radius in µm (used only if G_all is None).
         method: "betweenness", "degree_ratio", or "k_core".
         threshold: method-specific threshold.
+        G_all: pre-built networkx Graph (avoids redundant KD-tree rebuild).
 
     Returns:
         Updated labels list (some "strip" demoted to "cluster").
     """
     import networkx as nx
-    from scipy.spatial import KDTree
 
     # Defaults
     if threshold == 0:
@@ -448,12 +451,15 @@ def refine_strip_cells(positions, labels, radius, method, threshold):
         threshold,
     )
 
-    # Build graph on ALL positive cells (needed for degree_ratio)
-    tree = KDTree(positions)
-    pairs = tree.query_pairs(r=radius)
-    G_all = nx.Graph()
-    G_all.add_nodes_from(range(len(positions)))
-    G_all.add_edges_from(pairs)
+    # Reuse graph from classify_components if provided
+    if G_all is None:
+        from scipy.spatial import KDTree
+
+        tree = KDTree(positions)
+        pairs = tree.query_pairs(r=radius)
+        G_all = nx.Graph()
+        G_all.add_nodes_from(range(len(positions)))
+        G_all.add_edges_from(pairs)
 
     strip_set = set(strip_indices)
     labels = list(labels)  # copy
@@ -561,7 +567,7 @@ def main():
         raise SystemExit(1)
 
     # Classify
-    labels, comp_stats = classify_components(
+    labels, comp_stats, G = classify_components(
         positions,
         args.radius,
         args.min_component_size,
@@ -574,7 +580,12 @@ def main():
     # Per-cell refinement (trim hangers-on)
     if args.refine_method != "none":
         labels = refine_strip_cells(
-            positions, labels, args.radius, args.refine_method, args.refine_threshold
+            positions,
+            labels,
+            args.radius,
+            args.refine_method,
+            args.refine_threshold,
+            G_all=G,
         )
 
     # Tag
