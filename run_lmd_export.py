@@ -42,6 +42,9 @@ from pathlib import Path
 import numpy as np
 
 from segmentation.utils.json_utils import fast_json_load
+from segmentation.utils.logging import get_logger
+
+logger = get_logger(__name__)
 
 # ---------------------------------------------------------------------------
 # Loading helpers
@@ -178,13 +181,13 @@ def extract_contours_for_detections(
         by_tile[tile_name].append(det)
 
     if not by_tile:
-        print("    All detections already have contours, skipping extraction.")
+        logger.info("All detections already have contours, skipping extraction.")
         return {}
 
     results = {}
     for tile_idx, (tile_name, tile_dets) in enumerate(by_tile.items()):
         if (tile_idx + 1) % 20 == 0:
-            print(f"    Tile {tile_idx + 1}/{len(by_tile)}...")
+            logger.info("Tile %d/%d...", tile_idx + 1, len(by_tile))
 
         mask_path = tiles_dir / tile_name / mask_filename
         if not mask_path.exists():
@@ -629,8 +632,8 @@ def export_to_lmd_xml(shapes, crosses_data, output_path, flip_y=True):
     display_h_um = orig_w_um if rot90 else orig_h_um
 
     if flip_h or rot90:
-        print(f"  Display transforms: flip_h={flip_h}, rot90={rot90}")
-        print(f"  Display height for LMD Y-flip: {display_h_um:.0f} um")
+        logger.info("Display transforms: flip_h=%s, rot90=%s", flip_h, rot90)
+        logger.info("Display height for LMD Y-flip: %.0f um", display_h_um)
 
     # Calibration from first 3 crosses
     crosses = crosses_data["crosses"]
@@ -687,7 +690,7 @@ def export_to_lmd_xml(shapes, crosses_data, output_path, flip_y=True):
 
     output_path = Path(output_path)
     collection.save(str(output_path))
-    print(f"  Exported LMD XML: {output_path}")
+    logger.info("Exported LMD XML: %s", output_path)
 
     return output_path
 
@@ -712,7 +715,7 @@ def generate_cross_placement_html(
             all_y.append(coords[1])
 
     if not all_x:
-        print("ERROR: No detection coordinates found")
+        logger.error("No detection coordinates found")
         return None
 
     svg_width = 1200
@@ -883,7 +886,7 @@ def generate_cross_placement_html(
     with open(html_path, "w") as f:
         f.write(html_content)
 
-    print(f"Generated cross placement HTML: {html_path}")
+    logger.info("Generated cross placement HTML: %s", html_path)
     return html_path
 
 
@@ -1104,12 +1107,12 @@ def _run_single_slide(args):
     # Load detections (single-slide mode)
     # -----------------------------------------------------------------------
     if args.detections is None:
-        print("ERROR: --detections is required (or use --input-dir for batch mode)")
+        logger.error("--detections is required (or use --input-dir for batch mode)")
         return
 
-    print(f"Loading detections from: {args.detections}")
+    logger.info("Loading detections from: %s", args.detections)
     all_detections = load_detections(args.detections)
-    print(f"  Loaded {len(all_detections)} detections")
+    logger.info("Loaded %d detections", len(all_detections))
 
     # Keep original list for cluster index lookups (cluster_detections.py
     # indices reference the ORIGINAL unfiltered list, since it filters internally)
@@ -1117,31 +1120,31 @@ def _run_single_slide(args):
 
     # Filter by annotations
     if args.annotations:
-        print(f"Loading annotations from: {args.annotations}")
+        logger.info("Loading annotations from: %s", args.annotations)
         positive_uids = load_annotations(args.annotations)
-        print(f"  Found {len(positive_uids)} positive annotations")
+        logger.info("Found %d positive annotations", len(positive_uids))
         detections = filter_detections(detections, positive_uids=positive_uids)
-        print(f"  Filtered to {len(detections)} positive detections")
+        logger.info("Filtered to %d positive detections", len(detections))
 
     # Filter by score (skip if --clusters provided, clustering already filtered)
     if args.min_score is not None and not args.clusters:
         before = len(detections)
         detections = filter_detections(detections, min_score=args.min_score)
-        print(f"  Score filter (>= {args.min_score}): {before} -> {len(detections)}")
+        logger.info("Score filter (>= %s): %d -> %d", args.min_score, before, len(detections))
     elif args.min_score is not None and args.clusters:
-        print(f"  Score filter skipped (clustering already filtered at >= {args.min_score})")
+        logger.info("Score filter skipped (clustering already filtered at >= %s)", args.min_score)
 
     # Filter by zone (from assign_tissue_zones.py)
     if args.zone_filter:
         zone_ids = {int(z) for z in args.zone_filter.split(",")}
         before = len(detections)
         detections = [d for d in detections if d.get("zone_id") in zone_ids]
-        print(f"  Zone filter (include {zone_ids}): {before} -> {len(detections)}")
+        logger.info("Zone filter (include %s): %d -> %d", zone_ids, before, len(detections))
     if args.zone_exclude:
         exclude_ids = {int(z) for z in args.zone_exclude.split(",")}
         before = len(detections)
         detections = [d for d in detections if d.get("zone_id") not in exclude_ids]
-        print(f"  Zone exclude ({exclude_ids}): {before} -> {len(detections)}")
+        logger.info("Zone exclude (%s): %d -> %d", exclude_ids, before, len(detections))
 
     # Log classifier provenance
     from segmentation.utils.classifier_registry import extract_classifier_info
@@ -1152,18 +1155,21 @@ def _run_single_slide(args):
             _f1 = _clf_info.get("cv_f1")
             _f1_str = f" (F1={_f1:.3f})" if _f1 else ""
             _thresh_str = f", threshold={args.min_score}" if args.min_score else ""
-            print(
-                f"  LMD export using {len(detections)} detections scored by "
-                f"{_clf_info.get('classifier_name', 'unknown')}{_f1_str}{_thresh_str}"
+            logger.info(
+                "LMD export using %d detections scored by %s%s%s",
+                len(detections),
+                _clf_info.get("classifier_name", "unknown"),
+                _f1_str,
+                _thresh_str,
             )
         else:
-            print(
-                f"  WARNING: Detections have {_scored} RF scores with unknown provenance. "
-                f"Verify before cutting."
+            logger.warning(
+                "Detections have %d RF scores with unknown provenance. Verify before cutting.",
+                _scored,
             )
 
     if len(detections) == 0:
-        print("ERROR: No detections to export!")
+        logger.error("No detections to export!")
         return
 
     # Auto-detect metadata
@@ -1179,14 +1185,14 @@ def _run_single_slide(args):
                 pixel_size = feat["pixel_size_um"]
                 break
         if pixel_size is None:
-            print(
-                "ERROR: pixel_size_um is required. Provide via --pixel-size or ensure "
+            logger.error(
+                "pixel_size_um is required. Provide via --pixel-size or ensure "
                 "detections JSON contains pixel_size_um."
             )
             return
-        print(f"  Pixel size (from detections): {pixel_size} um/px")
+        logger.info("Pixel size (from detections): %s um/px", pixel_size)
     else:
-        print(f"  Pixel size (from CLI): {pixel_size} um/px")
+        logger.info("Pixel size (from CLI): %s um/px", pixel_size)
 
     image_width = args.image_width
     image_height = args.image_height
@@ -1198,8 +1204,8 @@ def _run_single_slide(args):
                 max_x = max(max_x, coords[0])
                 max_y = max(max_y, coords[1])
         if max_x == 0 or max_y == 0:
-            print(
-                "ERROR: Could not estimate image dimensions from detections. "
+            logger.error(
+                "Could not estimate image dimensions from detections. "
                 "Provide --image-width and --image-height."
             )
             return
@@ -1207,7 +1213,7 @@ def _run_single_slide(args):
             image_width = int(max_x * 1.1)
         if image_height is None:
             image_height = int(max_y * 1.1)
-        print(f"  Image size (estimated): {image_width} x {image_height} px")
+        logger.info("Image size (estimated): %d x %d px", image_width, image_height)
 
     output_dir = Path(args.output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
@@ -1223,10 +1229,10 @@ def _run_single_slide(args):
     # -----------------------------------------------------------------------
     if args.export:
         if not args.crosses:
-            print("ERROR: --crosses required for export. First use --generate-cross-html")
+            logger.error("--crosses required for export. First use --generate-cross-html")
             return
 
-        print(f"\nLoading crosses from: {args.crosses}")
+        logger.info("Loading crosses from: %s", args.crosses)
         crosses_data = fast_json_load(str(args.crosses))
 
         # Override metadata from CLI
@@ -1249,14 +1255,14 @@ def _run_single_slide(args):
             if _dt.get("rotate_cw_90"):
                 _transforms.append("rotate_cw_90")
             if _transforms:
-                print(f"  Crosses placed with display transforms: {', '.join(_transforms)}")
-                print("  (coordinates already in slide pixel space)")
+                logger.info("Crosses placed with display transforms: %s", ", ".join(_transforms))
+                logger.info("(coordinates already in slide pixel space)")
 
         # -------------------------------------------------------------------
         # Step 1: Separate singles vs clustered detections
         # -------------------------------------------------------------------
         if args.clusters:
-            print(f"\nLoading clusters from: {args.clusters}")
+            logger.info("Loading clusters from: %s", args.clusters)
             cluster_data = load_clusters(args.clusters)
 
             # Cluster indices reference the ORIGINAL unfiltered detections list
@@ -1280,16 +1286,17 @@ def _run_single_slide(args):
                         }
                     )
 
-            print(f"  Singles: {len(single_dets)}")
-            print(
-                f"  Clusters: {len(cluster_groups)} "
-                f"({sum(len(cg['members']) for cg in cluster_groups)} detections)"
+            logger.info("Singles: %d", len(single_dets))
+            logger.info(
+                "Clusters: %d (%d detections)",
+                len(cluster_groups),
+                sum(len(cg["members"]) for cg in cluster_groups),
             )
         else:
             # No clusters file: all detections are singles
             single_dets = detections
             cluster_groups = []
-            print(f"  All {len(single_dets)} detections treated as singles (no --clusters)")
+            logger.info("All %d detections treated as singles (no --clusters)", len(single_dets))
 
         # -------------------------------------------------------------------
         # Step 2: Extract contours from H5 masks if needed
@@ -1307,7 +1314,7 @@ def _run_single_slide(args):
                     d["contour_um"] = _um
                     _promoted += 1
         if _promoted:
-            print(f"  Used {_promoted} pre-processed contours from pipeline")
+            logger.info("Used %d pre-processed contours from pipeline", _promoted)
 
         _max_area_change = getattr(args, "max_area_change_pct", 10.0)
         _max_dilation_area = getattr(args, "max_dilation_area_pct", 10.0)
@@ -1321,7 +1328,7 @@ def _run_single_slide(args):
         )
 
         if need_extraction and args.tiles_dir:
-            print(f"\nExtracting contours from H5 masks ({args.tiles_dir})...")
+            logger.info("Extracting contours from H5 masks (%s)...", args.tiles_dir)
             contour_results = extract_contours_for_detections(
                 all_dets_needing_contours,
                 args.tiles_dir,
@@ -1332,7 +1339,7 @@ def _run_single_slide(args):
                 max_area_change_pct=_max_area_change,
                 max_dilation_area_pct=_max_dilation_area,
             )
-            print(f"  Extracted {len(contour_results)} contours")
+            logger.info("Extracted %d contours", len(contour_results))
 
             # Attach contours to detections
             for det in all_dets_needing_contours:
@@ -1344,7 +1351,7 @@ def _run_single_slide(args):
             # Try to process existing pixel-coord contours (vessel or cell pipeline)
             from segmentation.lmd.contour_processing import process_contour
 
-            print("\nProcessing existing contours (adaptive RDP + dilation)...")
+            logger.info("Processing existing contours (adaptive RDP + dilation)...")
             processed_count = 0
             for det in all_dets_needing_contours:
                 if det.get("contour_um") is not None:
@@ -1368,7 +1375,7 @@ def _run_single_slide(args):
                     det["contour_um"] = processed.tolist()
                     det["area_um2"] = stats["area_after_um2"]
                     processed_count += 1
-            print(f"  Processed {processed_count} contours")
+            logger.info("Processed %d contours", processed_count)
 
         # -------------------------------------------------------------------
         # Step 2b: Apply export-time erosion to existing contours (if requested)
@@ -1383,7 +1390,7 @@ def _run_single_slide(args):
             erode_label = (
                 f"{_erosion_um}um" if _erosion_um > 0 else f"{_erode_pct*100:.1f}% of sqrt(area)"
             )
-            print(f"\nApplying export-time erosion ({erode_label}) to all contours...")
+            logger.info("Applying export-time erosion (%s) to all contours...", erode_label)
             _eroded_count = 0
             _collapsed_count = 0
             for det in all_dets_needing_contours:
@@ -1407,12 +1414,14 @@ def _run_single_slide(args):
                     det["contour_um"] = None
                     _collapsed_count += 1
 
-            print(f"  Eroded {_eroded_count} contours, {_collapsed_count} collapsed (removed)")
+            logger.info(
+                "Eroded %d contours, %d collapsed (removed)", _eroded_count, _collapsed_count
+            )
 
         # -------------------------------------------------------------------
         # Step 3: Order singles by nearest-neighbor path
         # -------------------------------------------------------------------
-        print("\nOrdering singles by nearest-neighbor path on slide...")
+        logger.info("Ordering singles by nearest-neighbor path on slide...")
         singles_with_contours = []
         singles_positions = []
         for det in single_dets:
@@ -1436,9 +1445,10 @@ def _run_single_slide(args):
                 )
                 for i in range(len(nn_order) - 1)
             )
-            print(
-                f"  Ordered {len(ordered_singles_dets)} singles, "
-                f"path: {total_dist * pixel_size / 1000:.1f} mm"
+            logger.info(
+                "Ordered %d singles, path: %.1f mm",
+                len(ordered_singles_dets),
+                total_dist * pixel_size / 1000,
             )
         else:
             ordered_singles_dets = []
@@ -1447,7 +1457,7 @@ def _run_single_slide(args):
         # -------------------------------------------------------------------
         # Step 4: Order clusters by nearest-neighbor (from last single)
         # -------------------------------------------------------------------
-        print("Ordering clusters by nearest-neighbor path...")
+        logger.info("Ordering clusters by nearest-neighbor path...")
         clusters_with_contours = []
         cluster_centroids = []
 
@@ -1462,13 +1472,16 @@ def _run_single_slide(args):
                     member_uids.append(m.get("uid", m.get("id", "")))
 
             if not member_contours:
-                print(f"  WARNING: Cluster {cg['id']} has no contours, skipping entirely")
+                logger.warning("Cluster %s has no contours, skipping entirely", cg["id"])
                 continue
 
             dropped = len(cg["members"]) - len(member_contours)
             if dropped > 0:
-                print(
-                    f"  WARNING: Cluster {cg['id']} lost {dropped}/{len(cg['members'])} members (contour extraction failed)"
+                logger.warning(
+                    "Cluster %s lost %d/%d members (contour extraction failed)",
+                    cg["id"],
+                    dropped,
+                    len(cg["members"]),
                 )
 
             clusters_with_contours.append(
@@ -1489,7 +1502,7 @@ def _run_single_slide(args):
             start_cluster = int(np.argmin(dists))
             cluster_order = nearest_neighbor_order(cluster_centroids, start_idx=start_cluster)
             ordered_clusters_data = [clusters_with_contours[i] for i in cluster_order]
-            print(f"  Ordered {len(ordered_clusters_data)} clusters")
+            logger.info("Ordered %d clusters", len(ordered_clusters_data))
         else:
             ordered_clusters_data = []
 
@@ -1499,28 +1512,28 @@ def _run_single_slide(args):
         n_items = len(ordered_singles_dets) + len(ordered_clusters_data)
         n_wells_needed = n_items * 2 if args.generate_controls else n_items
         if n_wells_needed > WELLS_PER_PLATE:
-            print(f"\n{'='*70}")
-            print("WELL CAPACITY EXCEEDED")
-            print(f"{'='*70}")
-            print(f"  Singles:  {len(ordered_singles_dets)}")
-            print(f"  Clusters: {len(ordered_clusters_data)}")
-            print(f"  Controls: {'yes (x2)' if args.generate_controls else 'no'}")
-            print(f"  Wells needed: {n_wells_needed}")
-            print(f"  Wells available: {WELLS_PER_PLATE} (384-well plate, 4 quadrants)")
-            print(f"  Overflow: {n_wells_needed - WELLS_PER_PLATE} wells")
-            print("\nOptions:")
-            print("  1. Increase --min-score to reduce detections")
-            print("  2. Split detections across multiple plates")
-            print("  3. Run without --generate-controls (halves well usage)")
-            print(f"{'='*70}")
+            logger.error("=" * 70)
+            logger.error("WELL CAPACITY EXCEEDED")
+            logger.error("=" * 70)
+            logger.error("Singles:  %d", len(ordered_singles_dets))
+            logger.error("Clusters: %d", len(ordered_clusters_data))
+            logger.error("Controls: %s", "yes (x2)" if args.generate_controls else "no")
+            logger.error("Wells needed: %d", n_wells_needed)
+            logger.error("Wells available: %d (384-well plate, 4 quadrants)", WELLS_PER_PLATE)
+            logger.error("Overflow: %d wells", n_wells_needed - WELLS_PER_PLATE)
+            logger.error("Options:")
+            logger.error("1. Increase --min-score to reduce detections")
+            logger.error("2. Split detections across multiple plates")
+            logger.error("3. Run without --generate-controls (halves well usage)")
+            logger.error("=" * 70)
             return
 
         # -------------------------------------------------------------------
         # Step 5: Generate controls
         # -------------------------------------------------------------------
         if args.generate_controls:
-            print(f"\nGenerating controls (offset: {args.control_offset_um} um)...")
-            print("  Every sample will have a control.")
+            logger.info("Generating controls (offset: %s um)...", args.control_offset_um)
+            logger.info("Every sample will have a control.")
 
             # Precompute Shapely polygons for all detection contours (avoids
             # recreating Polygon objects on every overlap check)
@@ -1535,7 +1548,7 @@ def _run_single_slide(args):
                     if c and len(c) >= 3:
                         precomputed_polygons.append(_make_polygon(c))
 
-            print(f"  Precomputed {len(precomputed_polygons)} collision polygons")
+            logger.info("Precomputed %d collision polygons", len(precomputed_polygons))
 
             # Build spatial index for O(log N) overlap checks.
             # STRtree is static (built once from all detection polygons).
@@ -1544,10 +1557,11 @@ def _run_single_slide(args):
             # to overlap each other.
             detection_tree = _build_spatial_index(precomputed_polygons)
             if detection_tree is not None:
-                print("  Using STRtree spatial index for overlap checks")
+                logger.info("Using STRtree spatial index for overlap checks")
             else:
-                print(
-                    "  STRtree unavailable, using linear overlap scan (install shapely>=2.0 for speedup)"
+                logger.info(
+                    "STRtree unavailable, using linear overlap scan"
+                    " (install shapely>=2.0 for speedup)"
                 )
 
             # Generate single controls
@@ -1577,9 +1591,10 @@ def _run_single_slide(args):
                     }
                 )
 
-            print(
-                f"  Single controls: {len(ordered_single_ctrls)} "
-                f"({fallback_count} used fallback offset)"
+            logger.info(
+                "Single controls: %d (%d used fallback offset)",
+                len(ordered_single_ctrls),
+                fallback_count,
             )
 
             # Generate cluster controls
@@ -1606,9 +1621,10 @@ def _run_single_slide(args):
                     }
                 )
 
-            print(
-                f"  Cluster controls: {len(ordered_cluster_ctrls)} "
-                f"({cluster_fallback} used fallback offset)"
+            logger.info(
+                "Cluster controls: %d (%d used fallback offset)",
+                len(ordered_cluster_ctrls),
+                cluster_fallback,
             )
         else:
             ordered_single_ctrls = []
@@ -1656,8 +1672,8 @@ def _run_single_slide(args):
         # -------------------------------------------------------------------
         try:
             if args.generate_controls:
-                print(
-                    "\nAssigning wells (serpentine, B2->B3->C3->C2, alternating target/control)..."
+                logger.info(
+                    "Assigning wells (serpentine, B2->B3->C3->C2, alternating target/control)..."
                 )
                 assignments, well_order = assign_wells_with_controls(
                     ordered_singles,
@@ -1675,7 +1691,7 @@ def _run_single_slide(args):
                 assignments = all_shapes
         except ValueError as e:
             # Well overflow — save partial results (shapes without well assignments)
-            print(f"\nERROR: {e}")
+            logger.error("%s", e)
             partial_shapes = (
                 ordered_singles + ordered_single_ctrls + ordered_clusters + ordered_cluster_ctrls
             )
@@ -1693,13 +1709,13 @@ def _run_single_slide(args):
             from segmentation.utils.json_utils import atomic_json_dump
 
             atomic_json_dump(partial_data, partial_path)
-            print(f"  Partial results saved to: {partial_path}")
-            print("  (shapes without well assignments — prune list and re-run)")
+            logger.info("Partial results saved to: %s", partial_path)
+            logger.info("(shapes without well assignments -- prune list and re-run)")
             return
 
-        print(f"  Total wells used: {len(well_order)}")
+        logger.info("Total wells used: %d", len(well_order))
         if well_order:
-            print(f"  First well: {well_order[0]}, Last well: {well_order[-1]}")
+            logger.info("First well: %s, Last well: %s", well_order[0], well_order[-1])
 
         # -------------------------------------------------------------------
         # Step 8: Build and save export data
@@ -1723,7 +1739,7 @@ def _run_single_slide(args):
         ts_json = timestamped_path(json_path)
         atomic_json_dump(export_data, ts_json)
         update_symlink(json_path, ts_json)
-        print(f"\n  Saved export JSON: {ts_json}")
+        logger.info("Saved export JSON: %s", ts_json)
 
         # Save CSV summary (timestamped + symlink)
         csv_path = output_dir / f"{args.output_name}_summary.csv"
@@ -1741,7 +1757,7 @@ def _run_single_slide(args):
                 direction = shape.get("offset_direction", "")
                 f.write(f"{well},{stype},{uid},{area:.2f},{n_contours},{direction}\n")
         update_symlink(csv_path, ts_csv)
-        print(f"  Saved CSV summary: {ts_csv}")
+        logger.info("Saved CSV summary: %s", ts_csv)
 
         # Export LMD XML (timestamped + symlink)
         xml_path = output_dir / f"{args.output_name}.xml"
@@ -1754,28 +1770,28 @@ def _run_single_slide(args):
                 flip_y=not args.no_flip_y,
             )
             update_symlink(xml_path, ts_xml)
-            print(f"  Saved LMD XML: {ts_xml}")
+            logger.info("Saved LMD XML: %s", ts_xml)
         except ImportError:
-            print("  WARNING: py-lmd not installed, skipping XML export.")
-            print("  Install with: pip install py-lmd")
+            logger.warning("py-lmd not installed, skipping XML export.")
+            logger.warning("Install with: pip install py-lmd")
         except Exception as e:
-            print(f"  WARNING: XML export failed: {e}")
+            logger.warning("XML export failed: %s", e)
 
         # Print summary
         s = export_data["summary"]
-        print(f"\n{'='*60}")
-        print("EXPORT SUMMARY")
-        print(f"{'='*60}")
-        print(f"  Singles:          {s['n_singles']}")
-        print(f"  Single controls:  {s['n_single_controls']}")
-        print(f"  Clusters:         {s['n_clusters']}")
-        print(f"  Cluster controls: {s['n_cluster_controls']}")
-        print(f"  Detections in clusters: {s['n_detections_in_clusters']}")
-        print(f"  Total wells used: {s['total_wells_used']}")
-        print(f"{'='*60}")
+        logger.info("=" * 60)
+        logger.info("EXPORT SUMMARY")
+        logger.info("=" * 60)
+        logger.info("Singles:          %d", s["n_singles"])
+        logger.info("Single controls:  %d", s["n_single_controls"])
+        logger.info("Clusters:         %d", s["n_clusters"])
+        logger.info("Cluster controls: %d", s["n_cluster_controls"])
+        logger.info("Detections in clusters: %d", s["n_detections_in_clusters"])
+        logger.info("Total wells used: %d", s["total_wells_used"])
+        logger.info("=" * 60)
 
     if not args.generate_cross_html and not args.export:
-        print("No action specified. Use --generate-cross-html or --export")
+        logger.info("No action specified. Use --generate-cross-html or --export")
 
 
 def run_batch_export(args):
@@ -1793,10 +1809,10 @@ def run_batch_export(args):
     if not det_files:
         det_files = sorted(input_dir.glob("*_detections_postdedup.json"))
     if not det_files:
-        print(f"ERROR: No *_detections.json files found in {input_dir}")
+        logger.error("No *_detections.json files found in %s", input_dir)
         return
 
-    print(f"Batch mode: found {len(det_files)} detection files in {input_dir}")
+    logger.info("Batch mode: found %d detection files in %s", len(det_files), input_dir)
 
     batch_results = []
     for det_file in det_files:
@@ -1817,8 +1833,10 @@ def run_batch_export(args):
                 matches = list(crosses_dir.glob(pattern))
                 if matches:
                     crosses_file = matches[0]
-                    print(
-                        f"  NOTE: Using shared crosses file {crosses_file.name} for {slide_prefix}"
+                    logger.info(
+                        "NOTE: Using shared crosses file %s for %s",
+                        crosses_file.name,
+                        slide_prefix,
                     )
                     break
 
@@ -1826,7 +1844,7 @@ def run_batch_export(args):
             crosses_file = Path(args.crosses)
 
         if crosses_file is None or not crosses_file.exists():
-            print(f"\n  WARNING: No crosses file for {slide_prefix}, skipping")
+            logger.warning("No crosses file for %s, skipping", slide_prefix)
             batch_results.append(
                 {"slide": slide_prefix, "status": "skipped", "reason": "no crosses file"}
             )
@@ -1835,12 +1853,12 @@ def run_batch_export(args):
         slide_output = output_dir / slide_prefix
         slide_output.mkdir(parents=True, exist_ok=True)
 
-        print(f"\n{'='*60}")
-        print(f"Slide: {slide_prefix}")
-        print(f"  Detections: {det_file}")
-        print(f"  Crosses: {crosses_file}")
-        print(f"  Output: {slide_output}")
-        print(f"{'='*60}")
+        logger.info("=" * 60)
+        logger.info("Slide: %s", slide_prefix)
+        logger.info("Detections: %s", det_file)
+        logger.info("Crosses: %s", crosses_file)
+        logger.info("Output: %s", slide_output)
+        logger.info("=" * 60)
 
         # Create per-slide args
         slide_args = copy.deepcopy(args)
@@ -1854,7 +1872,7 @@ def run_batch_export(args):
             _run_single_slide(slide_args)
             batch_results.append({"slide": slide_prefix, "status": "success"})
         except Exception as e:
-            print(f"  ERROR: {e}")
+            logger.error("%s", e)
             batch_results.append({"slide": slide_prefix, "status": "failed", "reason": str(e)})
 
     # Write batch summary
@@ -1872,14 +1890,14 @@ def run_batch_export(args):
         summary_path,
     )
 
-    print(f"\n{'='*60}")
-    print(f"BATCH SUMMARY: {summary_path}")
-    print(f"{'='*60}")
+    logger.info("=" * 60)
+    logger.info("BATCH SUMMARY: %s", summary_path)
+    logger.info("=" * 60)
     for r in batch_results:
         status = r["status"].upper()
         reason = f" ({r.get('reason', '')})" if r.get("reason") else ""
-        print(f"  {r['slide']}: {status}{reason}")
-    print(f"{'='*60}")
+        logger.info("%s: %s%s", r["slide"], status, reason)
+    logger.info("=" * 60)
 
 
 if __name__ == "__main__":
