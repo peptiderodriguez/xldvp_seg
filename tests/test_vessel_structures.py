@@ -362,32 +362,74 @@ class TestDetectSpatialLayeringReverse:
 
 
 class TestAssignVesselType:
-    def test_artery(self):
+    def test_artery_thick_wall(self):
+        """Thick SMA wall (wall_cell_layers > 1.5) + large → artery."""
         vt = assign_vessel_type(
             "ring",
             {"sma_frac": 0.6, "cd31_frac": 0.3, "lyve1_frac": 0.0, "n_cells": 30},
+            {},
+            {"vessel_diameter_um": 150, "wall_extent_um": 50, "wall_cell_layers": 3.0},
+        )
+        assert vt == "artery"
+
+    def test_arteriole_thick_wall_small(self):
+        """Thick wall but small diameter → arteriole."""
+        vt = assign_vessel_type(
+            "ring",
+            {"sma_frac": 0.6, "cd31_frac": 0.3, "lyve1_frac": 0.0, "n_cells": 10},
+            {},
+            {"vessel_diameter_um": 40, "wall_extent_um": 15, "wall_cell_layers": 2.0},
+        )
+        assert vt == "arteriole"
+
+    def test_artery_sma_dominant_no_morphometry(self):
+        """SMA dominant but no morphometry → defaults to artery."""
+        vt = assign_vessel_type(
+            "ring",
+            {"sma_frac": 0.6, "cd31_frac": 0.1, "lyve1_frac": 0.0, "n_cells": 5},
             {},
             {},
         )
         assert vt == "artery"
 
-    def test_vein(self):
+    def test_vein_thin_wall(self):
+        """CD31 dominant, thin wall → vein."""
         vt = assign_vessel_type(
             "ring",
-            {"sma_frac": 0.1, "cd31_frac": 0.7, "lyve1_frac": 0.0, "n_cells": 20},
+            {"sma_frac": 0.2, "cd31_frac": 0.7, "lyve1_frac": 0.0, "n_cells": 20},
             {},
-            {},
+            {"vessel_diameter_um": 80, "wall_extent_um": 10, "wall_cell_layers": 1.0},
         )
         assert vt == "vein"
+
+    def test_venule_thin_wall_small(self):
+        """CD31 dominant, thin wall, small → venule."""
+        vt = assign_vessel_type(
+            "ring",
+            {"sma_frac": 0.1, "cd31_frac": 0.7, "lyve1_frac": 0.0, "n_cells": 8},
+            {},
+            {"vessel_diameter_um": 30, "wall_extent_um": 5, "wall_cell_layers": 0.8},
+        )
+        assert vt == "venule"
 
     def test_lymphatic(self):
         vt = assign_vessel_type(
             "ring",
             {"sma_frac": 0.0, "cd31_frac": 0.1, "lyve1_frac": 0.5, "n_cells": 15},
             {},
-            {},
+            {"vessel_diameter_um": 30},
         )
         assert vt == "lymphatic"
+
+    def test_collecting_lymphatic(self):
+        """LYVE1+ with SMA smooth muscle → collecting lymphatic."""
+        vt = assign_vessel_type(
+            "ring",
+            {"sma_frac": 0.2, "cd31_frac": 0.0, "lyve1_frac": 0.5, "n_cells": 25},
+            {},
+            {"vessel_diameter_um": 80},
+        )
+        assert vt == "collecting_lymphatic"
 
     def test_capillary(self):
         vt = assign_vessel_type(

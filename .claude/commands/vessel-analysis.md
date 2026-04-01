@@ -25,7 +25,12 @@ PYTHONPATH=$REPO $XLDVP_PYTHON $REPO/scripts/detect_vessel_structures.py \
     --output-prefix vessel
 ```
 
-For LYVE1 slides (Fig3-type): replace CD31 filter with `"LYVE1_class==positive"`.
+For LYVE1 slides (Fig7-type): replace CD31 filter with `"LYVE1_class==positive"`.
+
+**Vessel type classification:**
+- Artery vs vein: both have CD31 inner + SMA outer. Distinguished by wall thickness (wall_cell_layers > 1.5 or wall/diameter > 0.3 → artery). Size: artery >100µm, arteriole ≤100µm, vein >50µm, venule ≤50µm.
+- Lymphatics: LYVE1+ with SMA ≥15% → collecting_lymphatic. LYVE1+ without SMA → initial lymphatic.
+- Capillary: small CD31+ cluster (<15 cells).
 
 ### Step 2: Review + Iterate
 Generate spatial viewer, annotate true vs false vessels, tune parameters (radius, thresholds). Expect 5-10 iterative rounds (same playbook as mesothelium curvilinear detection).

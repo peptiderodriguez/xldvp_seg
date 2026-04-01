@@ -797,6 +797,12 @@ Key considerations:
 - Radius is critical: too small fragments vessels, too large merges neighbors
 - Both graph topology (ring_score, linearity) and geometric/PCA (circularity, hollowness) metrics are computed — the iterative process determines which combination works best for your tissue
 
+Vessel type classification logic:
+- **Artery vs vein**: Both have CD31 inner + SMA outer. Distinguished by wall thickness: thick SMA wall (wall_cell_layers > 1.5 or wall/diameter > 0.3) → artery/arteriole. Thin wall + CD31 dominant → vein/venule. Spatial layering (Mann-Whitney U: SMA significantly outer) provides additional artery confidence.
+- **Size subtyping** (secondary — wall morphology is primary): artery (>100µm) vs arteriole (≤100µm), vein (>50µm) vs venule (≤50µm). Caveat: diameter cutoffs are tissue-dependent (constriction/dilation, sectioning angle). Do not subtype by size alone — always prioritize SMA organization + wall thickness.
+- **Lymphatics**: LYVE1+ with SMA (≥15%) → collecting_lymphatic (smooth muscle wall). LYVE1+ without SMA → initial lymphatic.
+- **Capillary**: small CD31+ cluster (<15 cells), no SMA
+
 ---
 
 ## Phase 4.5: SpatialData Export (scverse ecosystem)

@@ -198,8 +198,8 @@ def compute_vessel_morphometry(
         "cell_count": n,
     }
 
-    # Lumen/wall metrics only for rings (centroid is displaced for arcs)
-    if morphology == "ring" and n >= 8:
+    # Lumen/wall metrics for rings and arcs (arcs are approximate but still useful for sizing)
+    if morphology in ("ring", "arc") and n >= 5:
         outer_r = float(np.percentile(dists, 95))
         inner_r = float(np.percentile(dists, 5))
         wall_extent = outer_r - inner_r
@@ -338,20 +338,31 @@ def detect_spatial_layering(
 
 
 def assign_vessel_type(morphology, composition, layering, morphometry):
-    """Assign vessel type from morphology + marker composition + spatial layering.
+    """Assign vessel type from morphology + marker composition + wall morphometry.
 
-    Layering is used to disambiguate when both SMA and CD31 are present:
-    if SMA is significantly outer → artery (muscular wall + endothelial lining).
+    Artery vs vein: both have CD31 inner + SMA outer. Key distinction is wall
+    thickness (wall_cell_layers > 1.5 or wall/diameter ratio > 0.3 → artery).
+
+    Size subtyping: artery (>100µm) vs arteriole (≤100µm), vein (>50µm) vs
+    venule (≤50µm).
+
+    Lymphatics: LYVE1+ with SMA (≥15%) → collecting_lymphatic (has smooth
+    muscle wall). LYVE1+ without SMA → initial lymphatic.
+
+    Spatial layering (has_sma_outer) provides additional confidence for artery
+    classification when both SMA and CD31 are present.
     """
     sma_frac = composition.get("sma_frac", 0)
     cd31_frac = composition.get("cd31_frac", 0)
     lyve1_frac = composition.get("lyve1_frac", 0)
+    diameter = morphometry.get("vessel_diameter_um", 0) or 0
 
-    # LYVE1 dominant → lymphatic (must be dominant over SMA to avoid misclassifying
-    # mixed SMA+LYVE1 vessels on Fig3 slides).
+    # LYVE1+ vessels — distinguish collecting (has SMA) from initial (no SMA)
     # Morphology-aware: strips get specific longitudinal label below.
     if lyve1_frac > 0.3 and lyve1_frac > sma_frac and morphology != "strip":
-        return "lymphatic"
+        if sma_frac > 0.15:
+            return "collecting_lymphatic"  # LYVE1+ with SMA smooth muscle wall
+        return "lymphatic"  # initial lymphatic, LYVE1+ only
 
     # Check layering for SMA outer vs CD31 inner (artery signature)
     has_sma_outer = False
@@ -361,12 +372,48 @@ def assign_vessel_type(morphology, composition, layering, morphometry):
                 has_sma_outer = True
 
     if morphology in ("ring", "arc"):
-        if sma_frac > 0.3 and cd31_frac > 0.3 and has_sma_outer:
-            return "artery"  # SMA outer + CD31 inner = classic layered artery
-        elif sma_frac > 0.3:
-            return "artery"  # muscular vessel
-        elif cd31_frac > 0.3:
-            return "vein"
+        # Both arteries and veins have CD31 inner + SMA outer.
+        # Key distinction: wall thickness relative to vessel size.
+        #   Artery: thick SMA wall, multiple smooth muscle layers
+        #   Vein: thin SMA wall, larger/irregular lumen
+        wall_extent = morphometry.get("wall_extent_um", 0) or 0
+        wall_layers = morphometry.get("wall_cell_layers", 0) or 0
+        wall_ratio = wall_extent / diameter if diameter > 0 else 0
+
+        if sma_frac > 0.15 or cd31_frac > 0.15:
+            # Has vascular markers — classify by wall morphometry
+            has_morphometry = "wall_cell_layers" in morphometry
+            is_thick_wall = wall_layers > 1.5 or wall_ratio > 0.3
+
+            if is_thick_wall or (has_sma_outer and sma_frac > 0.3):
+                # Thick wall OR confirmed SMA-outer layering → artery/arteriole
+                if diameter > 100:
+                    return "artery"
+                elif diameter > 0:
+                    return "arteriole"
+                else:
+                    return "artery"
+            elif not has_morphometry and sma_frac > cd31_frac:
+                # No morphometry available, SMA dominant → likely muscular vessel
+                return "artery"
+            elif cd31_frac > sma_frac:
+                # CD31 dominant with thin wall = vein/venule
+                if diameter > 50:
+                    return "vein"
+                elif diameter > 0:
+                    return "venule"
+                else:
+                    return "vein"
+            elif sma_frac > cd31_frac:
+                # SMA dominant but thin wall → arteriole (still muscular)
+                if diameter > 100:
+                    return "artery"
+                elif diameter > 0:
+                    return "arteriole"
+                else:
+                    return "artery"
+            else:
+                return "unclassified"
         else:
             return "unclassified"
     elif morphology == "strip":
