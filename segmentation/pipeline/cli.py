@@ -636,14 +636,20 @@ def build_parser():
         help="KD-tree neighbors for local background estimation (default: 30)",
     )
 
-    # Nuclear counting (optional post-dedup phase)
+    # Nuclear counting (default ON — runs Cellpose on nuclear channel in Phase 4)
     parser.add_argument(
         "--count-nuclei",
         action="store_true",
-        default=False,
+        default=True,
         help="Count nuclei per cell by running Cellpose on the nuclear channel "
-        "in single-channel mode. Adds n_nuclei, nuclear_area_um2, "
+        "in single-channel mode (default: ON). Adds n_nuclei, nuclear_area_um2, "
         "nuclear_area_fraction, and per-nucleus feature list to each detection.",
+    )
+    parser.add_argument(
+        "--no-count-nuclei",
+        dest="count_nuclei",
+        action="store_false",
+        help="Disable nuclear counting (skip Phase 4).",
     )
     parser.add_argument(
         "--nuc-channel-for-counting",
