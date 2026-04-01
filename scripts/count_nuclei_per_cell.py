@@ -39,6 +39,7 @@ except ImportError:
 
 from segmentation.analysis.nuclear_count import count_nuclei_for_tile
 from segmentation.io.czi_loader import CZILoader, get_czi_metadata, resolve_channel_indices
+from segmentation.utils.detection_utils import get_contour_px
 from segmentation.utils.device import device_supports_gpu, get_default_device
 from segmentation.utils.json_utils import atomic_json_dump, fast_json_load
 from segmentation.utils.logging import get_logger, setup_logging
@@ -338,8 +339,7 @@ def main():
             and detections[di].get("mask_label") is None
             and (
                 detections[di].get("outer_contour_global") is not None
-                or detections[di].get("contour_px") is not None
-                or detections[di].get("contour_dilated_px") is not None
+                or get_contour_px(detections[di]) is not None
             )
             for di in det_indices
         )
@@ -354,9 +354,7 @@ def main():
                 continue  # has a real mask label — skip
             contour = det.get("outer_contour_global")
             if contour is None:
-                contour = det.get("contour_px")
-            if contour is None:
-                contour = det.get("contour_dilated_px")
+                contour = get_contour_px(det)
             if contour is None:
                 continue
             # Convert global contour to tile-local coordinates

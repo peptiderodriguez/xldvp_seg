@@ -44,7 +44,7 @@ from pathlib import Path
 
 import numpy as np
 
-from segmentation.utils.detection_utils import load_detections
+from segmentation.utils.detection_utils import get_contour_px, load_detections
 from segmentation.utils.logging import get_logger, setup_logging
 
 logger = get_logger(__name__)
@@ -544,9 +544,7 @@ def build_shapes(detections, cell_type, tiles_dir=None, pixel_size_um=1.0):
     polygons = [None] * len(detections)
     _from_json = 0
     for i, det in enumerate(detections):
-        contour_px = det.get("contour_px")
-        if contour_px is None:
-            contour_px = det.get("contour_dilated_px")
+        contour_px = get_contour_px(det)
         if contour_px is not None and len(contour_px) >= 3:
             try:
                 poly = _Polygon(contour_px)

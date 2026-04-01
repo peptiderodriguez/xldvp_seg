@@ -24,12 +24,26 @@ from collections import Counter
 from pathlib import Path
 
 import numpy as np
-from scipy.sparse import csr_matrix
 from scipy.sparse.csgraph import connected_components
-from scipy.spatial import ConvexHull, cKDTree
 
 REPO = Path(__file__).resolve().parent.parent
 
+from segmentation.utils.graph_topology import (
+    build_radius_graph_sparse,
+    safe_hull_area,
+)
+from segmentation.utils.graph_topology import (
+    circularity as _circularity,
+)
+from segmentation.utils.graph_topology import (
+    elongation as _elongation,
+)
+from segmentation.utils.graph_topology import (
+    has_curvature as _has_curvature,
+)
+from segmentation.utils.graph_topology import (
+    hollowness as _hollowness,
+)
 from segmentation.utils.json_utils import atomic_json_dump, fast_json_load
 from segmentation.utils.logging import get_logger, setup_logging
 
@@ -44,14 +58,16 @@ logger = get_logger(__name__)
 def classify_morphology(pts):
     """Classify spatial pattern of a point set.
 
+    Uses shared metrics from ``segmentation.utils.graph_topology``.
+
     Returns (pattern, metrics) where pattern is one of:
         'ring', 'arc', 'linear', 'cluster'
 
     Metrics dict contains: elongation, circularity, hollowness, has_curvature.
     Thresholds match generate_multi_slide_spatial_viewer.py:compute_graph_patterns().
     """
-    nc = len(pts)
-    if nc < 3:
+    pts = np.asarray(pts)
+    if len(pts) < 3:
         return "cluster", {
             "elongation": 1.0,
             "circularity": 0.0,
@@ -59,52 +75,26 @@ def classify_morphology(pts):
             "has_curvature": False,
         }
 
-    # PCA elongation
-    centered = pts - pts.mean(axis=0)
-    cov = np.cov(centered.T) if nc > 2 else np.eye(2)
-    eigvals = np.sort(np.linalg.eigvalsh(cov))[::-1]
-    lam1 = max(eigvals[0], 1e-10)
-    lam2 = max(eigvals[1], 1e-10)
-    elongation = np.sqrt(lam1 / lam2)
+    elong = _elongation(pts)
+    circ = _circularity(pts)
+    hollow = _hollowness(pts)
+    curv = _has_curvature(pts)
 
-    # Circularity and hollowness
-    cx, cy = pts.mean(axis=0)
-    radii = np.sqrt((pts[:, 0] - cx) ** 2 + (pts[:, 1] - cy) ** 2)
-    mean_r = radii.mean()
-    circularity = (1.0 - radii.std() / mean_r) if mean_r > 1e-6 else 0.0
-    hollowness = np.median(radii) / max(radii.max(), 1e-6)
-
-    # Curvature check (2nd-order polynomial in PCA space)
-    has_curvature = False
-    if nc > 5 and elongation > 2.5:
-        eigvecs = np.linalg.eigh(cov)[1]
-        pc1 = eigvecs[:, -1]
-        pc2 = eigvecs[:, -2]
-        proj1 = centered @ pc1
-        proj2 = centered @ pc2
-        coeffs = np.polyfit(proj1, proj2, 2)
-        pred = np.polyval(coeffs, proj1)
-        ss_res = ((proj2 - pred) ** 2).sum()
-        ss_tot = ((proj2 - proj2.mean()) ** 2).sum()
-        r2 = 1 - ss_res / max(ss_tot, 1e-10)
-        if r2 > 0.3 and abs(coeffs[0]) > 1e-6:
-            has_curvature = True
-
-    # Decision tree
-    if elongation > 4 and not has_curvature:
+    # Decision tree (same thresholds as spatial viewer)
+    if elong > 4 and not curv:
         pattern = "linear"
-    elif elongation > 3 and has_curvature:
+    elif elong > 3 and curv:
         pattern = "arc"
-    elif circularity > 0.65 and hollowness > 0.55 and elongation < 3:
+    elif circ > 0.65 and hollow > 0.55 and elong < 3:
         pattern = "ring"
     else:
         pattern = "cluster"
 
     metrics = {
-        "elongation": round(float(elongation), 3),
-        "circularity": round(float(circularity), 3),
-        "hollowness": round(float(hollowness), 3),
-        "has_curvature": has_curvature,
+        "elongation": round(float(elong), 3),
+        "circularity": round(float(circ), 3),
+        "hollowness": round(float(hollow), 3),
+        "has_curvature": curv,
     }
     return pattern, metrics
 
@@ -117,6 +107,8 @@ def classify_morphology(pts):
 def find_vessel_structures(positions, radii_um, min_cells=3):
     """Find connected components of positive cells at multiple spatial radii.
 
+    Uses ``build_radius_graph_sparse`` from shared graph topology module.
+
     Args:
         positions: (N, 2) array of cell coordinates in microns
         radii_um: list of radii to try
@@ -127,23 +119,10 @@ def find_vessel_structures(positions, radii_um, min_cells=3):
             'indices': array of cell indices in the component
             'positions': (n, 2) array of positions
     """
-    tree = cKDTree(positions)
     results = {}
 
     for radius in radii_um:
-        pairs = tree.query_pairs(r=radius)
-        if not pairs:
-            results[radius] = []
-            continue
-
-        rows, cols = zip(*pairs)
-        rows = np.array(rows, dtype=np.int32)
-        cols = np.array(cols, dtype=np.int32)
-        data = np.ones(len(rows), dtype=np.float32)
-        n = len(positions)
-        adj = csr_matrix((data, (rows, cols)), shape=(n, n))
-        adj = adj + adj.T
-
+        adj = build_radius_graph_sparse(positions, radius)
         n_comp, labels = connected_components(adj, directed=False)
 
         components = []
@@ -293,19 +272,7 @@ def compute_hierarchy(multi_scale_results, radii_um):
 
 
 # ---------------------------------------------------------------------------
-# ConvexHull area
-# ---------------------------------------------------------------------------
-
-
-def safe_hull_area(pts):
-    """Compute convex hull area, return 0 for degenerate cases."""
-    if len(pts) < 3:
-        return 0.0
-    try:
-        hull = ConvexHull(pts)
-        return float(hull.volume)  # 2D: volume = area
-    except Exception:
-        return 0.0
+# safe_hull_area imported from segmentation.utils.graph_topology
 
 
 # ---------------------------------------------------------------------------

@@ -46,6 +46,8 @@ from pathlib import Path
 
 import numpy as np
 
+from segmentation.utils.detection_utils import get_contour_px
+
 try:
     import napari
     from napari.utils.notifications import show_info, show_warning
@@ -393,9 +395,7 @@ def _parse_contour(det, orig_h, orig_w, contour_flip, contour_rot90, world_scale
 
     contour_px = det.get("outer_contour_global")
     if contour_px is None:
-        contour_px = det.get("contour_px")
-    if contour_px is None:
-        contour_px = det.get("contour_dilated_px")
+        contour_px = get_contour_px(det)
     if contour_px is not None and len(contour_px) >= 3:
         pts_xy = np.array(contour_px, dtype=np.float64)
         pts_yx = pts_xy[:, ::-1]
