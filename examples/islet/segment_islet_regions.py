@@ -30,7 +30,6 @@ Usage:
 
 import argparse
 import gc
-import json
 import math
 import sys
 import time
@@ -40,6 +39,8 @@ from pathlib import Path
 
 import numpy as np
 from scipy import ndimage
+
+from segmentation.utils.json_utils import atomic_json_dump
 
 REPO = Path(__file__).resolve().parent.parent.parent
 
@@ -706,8 +707,7 @@ def main():
         )
 
     # Save region bboxes
-    with open(output_dir / "region_bboxes.json", "w") as f:
-        json.dump(sanitize_for_json([dict(r) for r in rois]), f)
+    atomic_json_dump([dict(r) for r in rois], output_dir / "region_bboxes.json")
     print()
 
     # Free region finding intermediates (keep region_labels for post-detection filtering)
@@ -808,9 +808,7 @@ def main():
     print("Step 7: Saving outputs...")
     for mode_name, dets in results.items():
         out_path = output_dir / f"detections_{mode_name}.json"
-        clean = sanitize_for_json(dets)
-        with open(out_path, "w") as f:
-            json.dump(clean, f)
+        atomic_json_dump(dets, out_path)
         print(f"  {out_path} ({len(dets)} detections)")
 
     # Comparison stats (if both modes ran)
@@ -818,8 +816,7 @@ def main():
         print("\n  --- Comparison ---")
         comp = compute_comparison(results["nuclei"], results["pm"], marker_map, pixel_size)
         comp_path = output_dir / "comparison_stats.json"
-        with open(comp_path, "w") as f:
-            json.dump(sanitize_for_json(comp), f)
+        atomic_json_dump(comp, comp_path)
         print(f"  Saved: {comp_path}")
 
         # Print summary table

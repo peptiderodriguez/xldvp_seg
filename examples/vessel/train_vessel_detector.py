@@ -42,7 +42,6 @@ Annotation format (from HTML review):
 """
 
 import argparse
-import json
 from pathlib import Path
 from typing import Any
 
@@ -53,7 +52,7 @@ from segmentation.classification.vessel_detector_rf import (
     VESSEL_DETECTION_FEATURES,
     VesselDetectorRF,
 )
-from segmentation.utils.json_utils import fast_json_load
+from segmentation.utils.json_utils import atomic_json_dump, fast_json_load
 from segmentation.utils.logging import get_logger, setup_logging
 
 # =============================================================================
@@ -727,8 +726,7 @@ Examples:
 
     # Save feature importance
     importance_path = output_dir / "feature_importance.json"
-    with open(importance_path, "w") as f:
-        json.dump(importance, f)
+    atomic_json_dump(importance, importance_path)
     logger.info(f"\nFeature importance saved to: {importance_path}")
 
     # Save metrics
@@ -752,8 +750,7 @@ Examples:
     }
 
     metrics_path = output_dir / "training_metrics.json"
-    with open(metrics_path, "w") as f:
-        json.dump(metrics, f, default=str)
+    atomic_json_dump(metrics, metrics_path)
     logger.info(f"Training metrics saved to: {metrics_path}")
 
     # Generate visualizations

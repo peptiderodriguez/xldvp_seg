@@ -19,12 +19,13 @@ Usage:
 """
 
 import argparse
-import json
 import sys
 from pathlib import Path
 
 import numpy as np
 from scipy import ndimage
+
+from segmentation.utils.json_utils import atomic_json_dump, fast_json_load
 
 
 def load_detections(run_dir):
@@ -32,8 +33,7 @@ def load_detections(run_dir):
     det_path = Path(run_dir) / "islet_detections.json"
     if not det_path.exists():
         raise FileNotFoundError(f"No detections at {det_path}")
-    with open(det_path) as f:
-        return json.load(f)
+    return fast_json_load(det_path)
 
 
 def get_area_distribution(detections):
@@ -244,8 +244,7 @@ def main():
 
     # Save stats
     stats_path = nuclei_dir / "expansion_stats.json"
-    with open(stats_path, "w") as f:
-        json.dump(stats, f)
+    atomic_json_dump(stats, stats_path)
     print(f"\nSaved comparison stats to {stats_path}")
 
     if args.dry_run:
@@ -338,8 +337,7 @@ def main():
         shutil.copy2(det_path, backup_path)
         print(f"  Backed up original to {backup_path.name}")
 
-    with open(det_path, "w") as f:
-        json.dump(nuc_dets, f)
+    atomic_json_dump(nuc_dets, det_path)
     print(f"  Saved expanded detections to {det_path.name}")
 
     print(

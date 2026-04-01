@@ -28,13 +28,13 @@ Usage:
 import argparse
 import base64
 import html as html_mod
-import json
 import sys
 from pathlib import Path
 
 import cv2
 import numpy as np
 
+from segmentation.utils.json_utils import fast_json_load
 from segmentation.utils.logging import get_logger, setup_logging
 
 logger = get_logger(__name__)
@@ -128,8 +128,7 @@ def load_and_sample_candidates(
                 continue
 
         logger.info(f"Loading {jf.name}...")
-        with open(jf) as f:
-            detections = json.load(f)
+        detections = fast_json_load(jf)
 
         logger.info(f"  {len(detections):,} total detections")
 

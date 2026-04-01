@@ -22,7 +22,6 @@ Usage:
 """
 
 import argparse
-import json
 import pickle
 import sys
 from pathlib import Path
@@ -121,8 +120,7 @@ def train_classifier(annotations_path, unfiltered_dir, output_dir):
     log.info("=== TRAIN ===")
 
     # Load annotations
-    with open(annotations_path) as f:
-        annot = json.load(f)
+    annot = fast_json_load(annotations_path)
 
     rbc_uids = set(annot.get("rbc", []))
     other_uids = set(annot.get("other", []))
@@ -348,8 +346,7 @@ def load_bone_regions(bone_regions_path):
     """Load bone region polygons. Returns dict: (slide, bone) -> Path object."""
     from matplotlib.path import Path as MplPath
 
-    with open(bone_regions_path) as f:
-        data = json.load(f)
+    data = fast_json_load(bone_regions_path)
 
     regions = {}
     slides_data = data.get("slides", data)
@@ -387,8 +384,7 @@ def spatial_analysis(
     tissue_areas = {}
     pixel_size_um = 0.22  # default
     if tissue_areas_path and Path(tissue_areas_path).exists():
-        with open(tissue_areas_path) as f:
-            ta_data = json.load(f)
+        ta_data = fast_json_load(tissue_areas_path)
         for entry in ta_data.get("results", []):
             slide = entry["slide"]
             if entry.get("pixel_size_um"):
@@ -415,8 +411,7 @@ def spatial_analysis(
         slide = rbc_file.stem.replace("_rbc_scored", "")
         meta = parse_slide_metadata(slide)
 
-        with open(rbc_file) as f:
-            rbc_dets = json.load(f)
+        rbc_dets = fast_json_load(rbc_file)
 
         if not rbc_dets:
             log.info(f"  {slide}: 0 RBCs — skipping")
@@ -560,8 +555,7 @@ def run_anova(output_dir):
         log.error("No spatial results found — run --analyze first")
         return
 
-    with open(results_path) as f:
-        results = json.load(f)
+    results = fast_json_load(results_path)
 
     try:
         import pandas as pd

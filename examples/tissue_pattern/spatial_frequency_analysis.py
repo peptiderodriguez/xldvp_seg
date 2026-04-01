@@ -27,13 +27,12 @@ Usage:
 """
 
 import argparse
-import json
 import sys
 from pathlib import Path
 
 import matplotlib
 
-from segmentation.utils.json_utils import fast_json_load
+from segmentation.utils.json_utils import atomic_json_dump, fast_json_load
 
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
@@ -616,8 +615,7 @@ def main():
         print(f"Auto-generated {len(transects)} transects")
 
     # Save transects for reproducibility
-    with open(output_dir / "transects_used.json", "w") as f:
-        json.dump({"transects": transects}, f)
+    atomic_json_dump({"transects": transects}, output_dir / "transects_used.json")
 
     # ── Per-transect analysis ───────────────────────────────────────
 
@@ -733,11 +731,9 @@ def main():
         "boundaries": all_boundaries,
     }
 
-    with open(output_dir / "boundaries.json", "w") as f:
-        json.dump({"boundaries": all_boundaries}, f)
+    atomic_json_dump({"boundaries": all_boundaries}, output_dir / "boundaries.json")
 
-    with open(output_dir / "analysis_summary.json", "w") as f:
-        json.dump(summary, f, default=str)
+    atomic_json_dump(summary, output_dir / "analysis_summary.json")
 
     print(f"\nDone. Outputs in {output_dir}/")
     print(

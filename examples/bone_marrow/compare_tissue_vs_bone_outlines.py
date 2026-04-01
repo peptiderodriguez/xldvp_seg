@@ -7,7 +7,6 @@ Generates an HTML visualization showing both overlaid on slide thumbnails.
 import argparse
 import base64
 import io
-import json
 from datetime import datetime
 from pathlib import Path
 
@@ -15,6 +14,8 @@ import numpy as np
 from PIL import Image, ImageDraw
 from skimage.filters import threshold_otsu
 from skimage.measure import find_contours
+
+from segmentation.utils.json_utils import fast_json_load
 
 
 def process_slide(czi_path, bone_regions, scale_factor=0.03):
@@ -232,8 +233,7 @@ def main():
     args = parser.parse_args()
 
     # Load bone regions
-    with open(args.regions) as f:
-        regions_data = json.load(f)
+    regions_data = fast_json_load(args.regions)
     bone_regions = regions_data.get("slides", regions_data)
 
     # Process slides

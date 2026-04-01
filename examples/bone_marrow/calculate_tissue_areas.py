@@ -24,7 +24,6 @@ Usage:
 import argparse
 import base64
 import io
-import json
 from collections import defaultdict
 from datetime import datetime
 from pathlib import Path
@@ -40,6 +39,7 @@ from segmentation.detection.tissue import (
     compute_pixel_level_tissue_mask,
     compute_variance_threshold,
 )
+from segmentation.utils.json_utils import atomic_json_dump, fast_json_load
 
 
 def read_czi_and_detect_tissue(czi_path, scale_factor=0.05):
@@ -276,8 +276,7 @@ def calculate_tissue_area_by_bone(czi_path, slide_regions, scale_factor=0.05):
 
 def load_detections_by_bone(path):
     """Load detections and count per slide x bone."""
-    with open(path) as f:
-        data = json.load(f)
+    data = fast_json_load(path)
 
     counts = defaultdict(lambda: defaultdict(int))
     for det in data:
@@ -496,8 +495,7 @@ def main():
     # Load bone regions if provided
     bone_regions = None
     if args.regions:
-        with open(args.regions) as f:
-            regions_data = json.load(f)
+        regions_data = fast_json_load(args.regions)
         bone_regions = regions_data.get("slides", regions_data)
         print(f"Loaded bone regions for {len(bone_regions)} slides")
 
@@ -588,8 +586,7 @@ def main():
             "slides": {r["slide"]: r for r in results},
         }
 
-    with open(args.output, "w") as f:
-        json.dump(output_data, f)
+    atomic_json_dump(output_data, args.output)
     print(f"\nSaved to {args.output}")
 
     # Generate HTML visualization

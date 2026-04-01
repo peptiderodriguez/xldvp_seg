@@ -50,8 +50,6 @@ Usage:
 """
 
 import gc
-import json
-import os
 from pathlib import Path
 
 import h5py
@@ -490,23 +488,15 @@ def run_pipeline(args):
                 f"Loaded shared tile list from {tile_list_file} ({len(sampled_tiles)} tiles)"
             )
         else:
-            # First shard to arrive -- write the tile list (atomic via rename)
-            import tempfile
-
-            tmp_fd, tmp_path = tempfile.mkstemp(dir=slide_output_dir, suffix=".json")
+            # First shard to arrive -- write the tile list atomically
             try:
-                with os.fdopen(tmp_fd, "w") as f:
-                    json.dump(sampled_tiles, f)
-                os.replace(tmp_path, tile_list_file)
+                atomic_json_dump(sampled_tiles, tile_list_file)
                 logger.info(
                     f"Wrote shared tile list to {tile_list_file} ({len(sampled_tiles)} tiles)"
                 )
             except OSError:
                 # Another shard beat us in a race -- read theirs
-                try:
-                    os.unlink(tmp_path)
-                except OSError:
-                    pass
+                pass
                 if tile_list_file.exists():
                     sampled_tiles = fast_json_load(tile_list_file)
                     logger.info(
@@ -1542,8 +1532,7 @@ def run_pipeline(args):
                                 # Flush tile data to disk to avoid OOM
                                 np.save(tile_out / "tile_rgb_html.npy", tile_rgb_html)
                                 if tile_pct is not None:
-                                    with open(tile_out / "tile_pct.json", "w") as f_pct:
-                                        json.dump(tile_pct, f_pct)
+                                    atomic_json_dump(tile_pct, tile_out / "tile_pct.json")
                                 deferred_html_tiles.append(
                                     {
                                         "tile_dir": str(tile_out),

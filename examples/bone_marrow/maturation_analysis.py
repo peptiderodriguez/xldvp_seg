@@ -16,7 +16,6 @@ Usage:
 
 import argparse
 import base64
-import json
 import logging
 import os
 import sys
@@ -1007,21 +1006,15 @@ def run_phase4(args):
         logger.info(f"    {fname}: rho={rho:.3f}, p={pval:.4f} {sig}")
 
     # Save cluster stats as JSON
-    with open(outdir / "cluster_stats.json", "w") as f:
-        json.dump(
-            {
-                "best_k": best_k,
-                "best_method": best_method,
-                "cluster_stats": {str(k): v for k, v in cluster_stats.items()},
-                "monotonicity": monotonicity,
-            },
-            f,
-            default=lambda x: (
-                None
-                if isinstance(x, float) and np.isnan(x)
-                else float(x) if isinstance(x, (np.floating, np.integer)) else x
-            ),
-        )
+    atomic_json_dump(
+        {
+            "best_k": best_k,
+            "best_method": best_method,
+            "cluster_stats": {str(k): v for k, v in cluster_stats.items()},
+            "monotonicity": monotonicity,
+        },
+        outdir / "cluster_stats.json",
+    )
 
     # ---- Heatmap: cluster x nuclear feature means ----
     logger.info("\n  Generating cluster-nuclear feature heatmap...")
@@ -1175,18 +1168,17 @@ def run_phase4(args):
         logger.warning("    GC vs HU: skipped (empty group)")
 
     # Save stats
-    with open(outdir / "group_comparison_stats.json", "w") as f:
-        json.dump(
-            {
-                "chi_squared": {"chi2": float(chi2), "p": float(chi2_pval), "dof": int(dof)},
-                "kruskal_wallis": {"H": float(kw_stat), "p": float(kw_pval)},
-                "pairwise_mannwhitney": pairwise_results,
-                "sex_comparison": {"U": float(u_sex), "p": float(p_sex)},
-                "condition_comparison": {"U": float(u_cond), "p": float(p_cond)},
-                "contingency_table": contingency.tolist(),
-            },
-            f,
-        )
+    atomic_json_dump(
+        {
+            "chi_squared": {"chi2": float(chi2), "p": float(chi2_pval), "dof": int(dof)},
+            "kruskal_wallis": {"H": float(kw_stat), "p": float(kw_pval)},
+            "pairwise_mannwhitney": pairwise_results,
+            "sex_comparison": {"U": float(u_sex), "p": float(p_sex)},
+            "condition_comparison": {"U": float(u_cond), "p": float(p_cond)},
+            "contingency_table": contingency.tolist(),
+        },
+        outdir / "group_comparison_stats.json",
+    )
 
     # ---- Generate all plots ----
     logger.info("\n--- Generating plots ---")
