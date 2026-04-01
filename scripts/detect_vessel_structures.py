@@ -11,7 +11,7 @@ and/or LYVE1 marker classifications and identifies vessel structures:
    - Geometric/PCA: elongation, circularity, hollowness, curvature
 4. Computes vessel morphometry: diameter, lumen, wall extent, cell layers
 5. Analyzes marker composition + spatial layering (SMA outer vs CD31 inner)
-6. Assigns vessel type: artery, arteriole, vein, lymphatic, capillary
+6. Assigns vessel type: artery, arteriole, vein, venule, capillary, lymphatic, collecting_lymphatic
 7. Tags detections and writes output JSON + CSV
 
 Example:

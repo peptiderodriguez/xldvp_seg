@@ -2,10 +2,10 @@
 
 After deduplication the surviving detections go through three phases:
 
-**Phase 1 — Contour extraction + quick means** (per-tile, parallelized):
+**Phase 1 — Contour extraction + quick medians** (per-tile, parallelized):
     Extract the original contour from the HDF5 segmentation mask and
-    store it in the detection dict.  Compute quick mean intensity per
-    channel from the **original** binary mask region.
+    store it in the detection dict.  Compute per-cell median intensity
+    per channel from the **original** binary mask region.
 
 **Phase 2 — Background estimation** (global):
     Build KD-tree from global cell positions and the quick means,
@@ -209,7 +209,7 @@ def _phase1_tile(
     contour_processing: bool,
     pixel_size_um: float,
 ) -> tuple[int, int]:
-    """Process one tile for Phase 1 (contour extraction + quick means).
+    """Process one tile for Phase 1 (contour extraction + quick medians).
 
     Extracts the original contour from the HDF5 segmentation mask and
     computes quick mean intensity per channel from the **original** mask

@@ -201,7 +201,7 @@ def _finish_pipeline(
                         f"{feat.get('confidence', 'unknown')},{_clf_name}\n"
                     )
                 else:
-                    area_um2 = feat.get("area", 0) * (pixel_size_um**2)
+                    area_um2 = feat.get("area_um2", feat.get("area", 0) * (pixel_size_um**2))
                     f.write(f"{base},{area_um2:.2f},{_clf_name}\n")
         _os_mod.replace(_csv_tmp, ts_csv)
     except BaseException:
