@@ -1,8 +1,8 @@
-"""Tests for adaptive RDP simplification and contour field helpers."""
+"""Tests for adaptive RDP simplification, adaptive dilation, and contour field helpers."""
 
 import numpy as np
 
-from segmentation.lmd.contour_processing import adaptive_rdp_simplify
+from segmentation.lmd.contour_processing import adaptive_dilate, adaptive_rdp_simplify
 from segmentation.utils.detection_utils import get_contour_px, get_contour_um
 
 # ---------------------------------------------------------------------------
@@ -91,6 +91,50 @@ class TestAdaptiveRdpSimplify:
         simplified, _ = adaptive_rdp_simplify(contour, max_area_change_pct=5.0)
         reduction = 1 - len(simplified) / len(contour)
         assert reduction > 0.5, f"Expected >50% reduction, got {reduction:.1%}"
+
+
+# ---------------------------------------------------------------------------
+# Tests: adaptive_dilate
+# ---------------------------------------------------------------------------
+
+
+class TestAdaptiveDilate:
+    def test_circle_within_tolerance(self):
+        """Dilation of a circle should stay within 5% area increase."""
+        from shapely.geometry import Polygon
+
+        contour = _circle_contour(n=200)
+        dilated, dilation = adaptive_dilate(contour, max_area_change_pct=5.0)
+
+        assert dilation > 0, "Should find a non-zero dilation"
+
+        orig_area = Polygon(contour).area
+        dilated_area = Polygon(dilated).area
+        increase = (dilated_area - orig_area) / orig_area
+        assert increase <= 0.05, f"Area increase {increase:.3f} exceeds 5%"
+        assert increase > 0, "Dilation should increase area"
+
+    def test_tight_tolerance_smaller_dilation(self):
+        """1% tolerance should produce smaller dilation than 10%."""
+        contour = _circle_contour(n=200)
+        _, dil_tight = adaptive_dilate(contour, max_area_change_pct=1.0)
+        _, dil_loose = adaptive_dilate(contour, max_area_change_pct=10.0)
+        assert dil_tight < dil_loose
+
+    def test_small_cell_area(self):
+        """Small cell (100 um² at 0.1735 um/px) should get ~0.8 px dilation at 5%."""
+        # 100 um² / (0.1735²) ≈ 3322 px²  →  r ≈ 32.5 px
+        contour = _circle_contour(r=32.5, n=200)
+        _, dilation_px = adaptive_dilate(contour, max_area_change_pct=5.0)
+        # For a circle: d ≈ r * (sqrt(1.05) - 1) ≈ 32.5 * 0.0247 ≈ 0.8 px
+        assert 0.5 < dilation_px < 1.2, f"Expected ~0.8 px, got {dilation_px:.2f}"
+
+    def test_simple_contour_passthrough(self):
+        """Tiny contour (< 3 points) should pass through unchanged."""
+        line = np.array([[0, 0], [10, 10]], dtype=np.float32)
+        result, dilation = adaptive_dilate(line)
+        assert len(result) == 2
+        assert dilation == 0.0
 
 
 # ---------------------------------------------------------------------------

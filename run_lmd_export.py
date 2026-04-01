@@ -148,6 +148,7 @@ def extract_contours_for_detections(
     dilation_um=0.5,
     rdp_epsilon=5.0,
     max_area_change_pct=None,
+    max_dilation_area_pct=None,
 ):
     """
     Extract and process contours for detections from H5 mask files.
@@ -213,13 +214,14 @@ def extract_contours_for_detections(
             contour_global[:, 0] += tile_origin[0]
             contour_global[:, 1] += tile_origin[1]
 
-            # Apply post-processing (adaptive RDP + dilation)
+            # Apply post-processing (adaptive RDP + adaptive dilation)
             processed, stats = process_contour(
                 contour_global.tolist(),
                 pixel_size_um=pixel_size,
                 dilation_um=dilation_um,
                 rdp_epsilon=rdp_epsilon,
                 max_area_change_pct=max_area_change_pct,
+                max_dilation_area_pct=max_dilation_area_pct,
                 return_stats=True,
             )
 
@@ -1037,6 +1039,14 @@ Examples:
         "Set to 0 to disable adaptive RDP and use fixed --rdp-epsilon.",
     )
     parser.add_argument(
+        "--max-dilation-area-pct",
+        type=float,
+        default=5.0,
+        help="Max area increase (%%) allowed by adaptive dilation "
+        "(default: 5.0). Overrides --dilation-um. "
+        "Set to 0 to disable adaptive dilation and use fixed --dilation-um.",
+    )
+    parser.add_argument(
         "--erosion-um",
         type=float,
         default=0.0,
@@ -1297,6 +1307,7 @@ def _run_single_slide(args):
             print(f"  Used {_promoted} pre-processed contours from pipeline")
 
         _max_area_change = getattr(args, "max_area_change_pct", 5.0)
+        _max_dilation_area = getattr(args, "max_dilation_area_pct", 5.0)
 
         need_extraction = any(
             d.get("contour_um") is None
@@ -1316,6 +1327,7 @@ def _run_single_slide(args):
                 dilation_um=args.dilation_um,
                 rdp_epsilon=args.rdp_epsilon,
                 max_area_change_pct=_max_area_change,
+                max_dilation_area_pct=_max_dilation_area,
             )
             print(f"  Extracted {len(contour_results)} contours")
 
@@ -1346,6 +1358,7 @@ def _run_single_slide(args):
                     pixel_size_um=pixel_size,
                     dilation_um=args.dilation_um,
                     max_area_change_pct=_max_area_change,
+                    max_dilation_area_pct=_max_dilation_area,
                     return_stats=True,
                 )
                 if processed is not None:

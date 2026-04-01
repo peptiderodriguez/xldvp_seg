@@ -153,6 +153,66 @@ def adaptive_rdp_simplify(
     return best_contour, best_epsilon
 
 
+def adaptive_dilate(
+    contour_px: np.ndarray,
+    max_area_change_pct: float = 5.0,
+    max_dilation_px: float = 20.0,
+) -> tuple[np.ndarray, float]:
+    """Find the largest dilation that keeps area increase within tolerance.
+
+    Binary-searches over buffer distance to maximise laser clearance while
+    keeping the area increase within *max_area_change_pct* % of the original.
+
+    Args:
+        contour_px: (N, 2) contour in pixel coordinates.
+        max_area_change_pct: Maximum allowed area increase (percent, default 5.0).
+        max_dilation_px: Upper bound of the dilation search range (pixels).
+
+    Returns:
+        ``(dilated_contour, dilation_used)`` — the dilated (M, 2) array
+        and the buffer distance that was applied.  If dilation is not possible
+        within tolerance, the original contour is returned with
+        ``dilation_used = 0.0``.
+    """
+    contour_px = np.asarray(contour_px, dtype=np.float32)
+
+    if len(contour_px) < 3:
+        return contour_px, 0.0
+
+    orig_poly = Polygon(contour_px)
+    orig_poly = validate_polygon(orig_poly)
+    if orig_poly is None or orig_poly.is_empty or orig_poly.area < 0.1:
+        return contour_px, 0.0
+
+    tolerance = max_area_change_pct / 100.0
+
+    lo, hi = 0.0, max_dilation_px
+    best_contour = contour_px
+    best_dilation = 0.0
+
+    for _ in range(20):
+        mid = (lo + hi) / 2.0
+        dilated_poly = orig_poly.buffer(mid)
+
+        if dilated_poly.is_empty:
+            hi = mid
+            continue
+
+        if dilated_poly.geom_type == "MultiPolygon":
+            dilated_poly = max(dilated_poly.geoms, key=lambda p: p.area)
+
+        area_increase = (dilated_poly.area - orig_poly.area) / orig_poly.area
+
+        if area_increase <= tolerance:
+            best_contour = np.array(dilated_poly.exterior.coords)[:-1].astype(np.float32)
+            best_dilation = mid
+            lo = mid  # try larger dilation for more clearance
+        else:
+            hi = mid  # too much area increase
+
+    return best_contour, best_dilation
+
+
 def validate_polygon(poly: Polygon) -> Polygon | None:
     """
     Validate and fix a Shapely polygon.
@@ -287,6 +347,7 @@ def process_contour(
     erosion_um: float = 0.0,
     erode_pct: float = 0.0,
     max_area_change_pct: float | None = None,
+    max_dilation_area_pct: float | None = None,
     return_stats: bool = False,
 ) -> np.ndarray | None | tuple[np.ndarray | None, dict[str, Any]]:
     """
@@ -301,7 +362,8 @@ def process_contour(
     Args:
         contour_px: Contour points in pixels, list of [x, y] pairs
         pixel_size_um: Pixel size in micrometers
-        dilation_um: Dilation amount in micrometers (default 0.5)
+        dilation_um: Dilation amount in micrometers (default 0.5).
+            Ignored when *max_dilation_area_pct* is set.
         rdp_epsilon: RDP simplification epsilon in pixels (default 5).
             Ignored when *max_area_change_pct* is set.
         erosion_um: Erosion amount in micrometers (default 0.0 = no erosion).
@@ -313,6 +375,9 @@ def process_contour(
             for the largest epsilon keeping symmetric-difference deviation
             within this percentage of the original area.  Overrides
             *rdp_epsilon*.
+        max_dilation_area_pct: When set, use adaptive dilation that
+            binary-searches for the largest buffer distance keeping area
+            increase within this percentage.  Overrides *dilation_um*.
         return_stats: If True, return (contour, stats_dict)
 
     Returns:
@@ -359,14 +424,20 @@ def process_contour(
         simplified_px = rdp_simplify(contour_px, rdp_epsilon)
 
     # Step 2: Dilate in pixel space (laser buffer).
+    # Adaptive mode: binary-search for largest buffer within area tolerance.
+    # Fixed mode: apply dilation_um directly.
     # If dilation fails (e.g. tiny polygon), we keep the undilated contour
     # rather than returning None — having a contour without laser buffer is
     # better than losing the detection entirely at LMD export.
-    dilation_px = dilation_um / pixel_size_um
-    if dilation_px > 0:
-        dilated_px = dilate_contour(simplified_px, dilation_px)
-        if dilated_px is not None:
-            simplified_px = dilated_px
+    if max_dilation_area_pct is not None and max_dilation_area_pct > 0:
+        dilated_px, _dil = adaptive_dilate(simplified_px, max_area_change_pct=max_dilation_area_pct)
+        simplified_px = dilated_px
+    else:
+        dilation_px = dilation_um / pixel_size_um
+        if dilation_px > 0:
+            dilated_px = dilate_contour(simplified_px, dilation_px)
+            if dilated_px is not None:
+                simplified_px = dilated_px
 
     # Step 3: Erode in pixel space (if requested)
     if erosion_um > 0:
@@ -421,6 +492,7 @@ def process_contours_batch(
     erosion_um: float = 0.0,
     erode_pct: float = 0.0,
     max_area_change_pct: float | None = None,
+    max_dilation_area_pct: float | None = None,
     verbose: bool = True,
 ) -> dict[str, Any]:
     """
@@ -434,6 +506,7 @@ def process_contours_batch(
         erosion_um: Erosion amount in micrometers (default 0.0)
         erode_pct: Erosion as fraction of sqrt(area) (default 0.0)
         max_area_change_pct: Adaptive RDP tolerance (see process_contour)
+        max_dilation_area_pct: Adaptive dilation tolerance (see process_contour)
         verbose: Print progress
 
     Returns:
@@ -477,6 +550,7 @@ def process_contours_batch(
             erosion_um=erosion_um,
             erode_pct=erode_pct,
             max_area_change_pct=max_area_change_pct,
+            max_dilation_area_pct=max_dilation_area_pct,
             return_stats=True,
         )
 
@@ -522,6 +596,7 @@ def process_detection_contours(
     erosion_um: float = 0.0,
     erode_pct: float = 0.0,
     max_area_change_pct: float | None = None,
+    max_dilation_area_pct: float | None = None,
     verbose: bool = True,
 ) -> tuple[list[np.ndarray | None], dict[str, Any]]:
     """
@@ -536,6 +611,7 @@ def process_detection_contours(
         erosion_um: Erosion amount in micrometers (default 0.0)
         erode_pct: Erosion as fraction of sqrt(area) (default 0.0)
         max_area_change_pct: Adaptive RDP tolerance (see process_contour)
+        max_dilation_area_pct: Adaptive dilation tolerance (see process_contour)
         verbose: Print progress
 
     Returns:
@@ -547,7 +623,10 @@ def process_detection_contours(
 
     if verbose:
         logger.info(f"Processing {len(contours_px)} contours...")
-        logger.info(f"  Dilation: +{dilation_um} um")
+        if max_dilation_area_pct is not None and max_dilation_area_pct > 0:
+            logger.info(f"  Adaptive dilation: max {max_dilation_area_pct:.1f}% area increase")
+        else:
+            logger.info(f"  Dilation: +{dilation_um} um")
         if max_area_change_pct is not None and max_area_change_pct > 0:
             logger.info(f"  Adaptive RDP: max {max_area_change_pct:.1f}% shape deviation")
         else:
@@ -565,6 +644,7 @@ def process_detection_contours(
         erosion_um=erosion_um,
         erode_pct=erode_pct,
         max_area_change_pct=max_area_change_pct,
+        max_dilation_area_pct=max_dilation_area_pct,
         verbose=verbose,
     )
 
