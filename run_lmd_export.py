@@ -1169,8 +1169,11 @@ def _run_single_slide(args):
     # Auto-detect metadata
     pixel_size = args.pixel_size
     if pixel_size is None:
-        # Try to get pixel size from detection features
+        # Try to get pixel size from detections (top-level first, then features)
         for det in detections:
+            if "pixel_size_um" in det:
+                pixel_size = det["pixel_size_um"]
+                break
             feat = det.get("features", {})
             if "pixel_size_um" in feat:
                 pixel_size = feat["pixel_size_um"]
@@ -1178,7 +1181,7 @@ def _run_single_slide(args):
         if pixel_size is None:
             print(
                 "ERROR: pixel_size_um is required. Provide via --pixel-size or ensure "
-                "detections JSON contains pixel_size_um in detection features."
+                "detections JSON contains pixel_size_um."
             )
             return
         print(f"  Pixel size (from detections): {pixel_size} um/px")
