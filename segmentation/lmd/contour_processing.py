@@ -78,7 +78,7 @@ def rdp_simplify(points: np.ndarray, epsilon: float) -> np.ndarray:
 
 def adaptive_rdp_simplify(
     contour_px: np.ndarray,
-    max_area_change_pct: float = 5.0,
+    max_area_change_pct: float = 10.0,
     max_epsilon: float = 20.0,
 ) -> tuple[np.ndarray, float]:
     """Find the largest RDP epsilon that keeps shape deviation within tolerance.
@@ -155,7 +155,7 @@ def adaptive_rdp_simplify(
 
 def adaptive_dilate(
     contour_px: np.ndarray,
-    max_area_change_pct: float = 5.0,
+    max_area_change_pct: float = 10.0,
     max_dilation_px: float = 20.0,
 ) -> tuple[np.ndarray, float]:
     """Find the largest dilation that keeps area increase within tolerance.

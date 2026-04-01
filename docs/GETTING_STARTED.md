@@ -446,8 +446,8 @@ For LMD export, additional post-processing happens in `segmentation/lmd/contour_
 
 | Operation | What it does |
 |-----------|-------------|
-| Dilation | Expand contour by +0.5 um (laser cuts outside the target) |
-| RDP simplification | Ramer-Douglas-Peucker with epsilon=5 pixels (reduce point count for LMD hardware) |
+| Adaptive RDP | Simplify contour (max 10% symmetric-difference deviation, `--max-area-change-pct`) |
+| Adaptive dilation | Expand contour for laser clearance (max 10% area increase, `--max-dilation-area-pct`) |
 | Polygon validation | Fix self-intersections via Shapely `make_valid()` |
 
 ---
@@ -860,9 +860,9 @@ python scripts/napari_view_lmd_export.py \
 
 | Step | Description |
 |------|-------------|
-| Contour extraction | Extract outer contour from H5 masks per detection |
-| Dilation | Expand contour by +0.5 um so the laser cuts outside the cell |
-| RDP simplification | Reduce vertex count (epsilon=5 px) for LMD hardware limits |
+| Contour extraction | Extract original mask contour from H5 masks (or use pre-stored `contour_px`) |
+| Adaptive RDP | Simplify contour within 10% symmetric-difference tolerance (`--max-area-change-pct`) |
+| Adaptive dilation | Expand contour for laser clearance within 10% area increase (`--max-dilation-area-pct`) |
 | Two-stage clustering | Round 1: 500 um radius, Round 2: 1000 um radius. Target 375-425 um^2 per cluster |
 | Singles | Unclustered detections become individual wells |
 | Controls | 100 um offset in 8 compass directions. Cluster controls preserve spatial arrangement |

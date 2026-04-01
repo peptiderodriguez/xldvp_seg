@@ -190,14 +190,14 @@ class SlideAnalysis:
     @property
     def contours(self) -> list:
         """List of contour arrays (contour_px or contour_um per detection)."""
+        from segmentation.utils.detection_utils import get_contour_px, get_contour_um
+
         if self._contours is None:
             self._contours = []
             for det in self.detections:
-                c = det.get("contour_px")
+                c = get_contour_px(det)
                 if c is None:
-                    c = det.get("contour_dilated_px")
-                if c is None:
-                    c = det.get("contour_um")
+                    c = get_contour_um(det)
                 self._contours.append(np.array(c) if c is not None else None)
         return self._contours
 

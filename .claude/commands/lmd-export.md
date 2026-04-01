@@ -10,7 +10,7 @@ The export pipeline is fully automated — 384-well plate, serpentine well order
 - **Well ordering**: nearest-neighbor path optimization minimizes stage travel on slide
 - **Clustering**: two-stage greedy (Round 1=500um, Round 2=1000um, target 375-425um2). Unclustered = singles (1 NMJ/well). Clusters = grouped cells (all in one well)
 - **Controls**: negative control regions at 100um offset (8 directions), cluster controls preserve spatial arrangement
-- **Contours**: pre-dilated (+0.5um) + RDP-simplified during detection post-dedup. Export uses them as-is
+- **Contours**: original mask contours stored during detection. Adaptive RDP (10%) + adaptive dilation (10%) applied at export time
 - **Capacity check**: pipeline warns early if detection count would exceed 308 wells before expensive processing
 - **OME-Zarr**: auto-generated at end of pipeline (no separate conversion step needed)
 
@@ -187,7 +187,7 @@ After each step, review results and give targeted feedback:
 - Always confirm: *"Transfer the XML to the LMD computer and verify cross alignment before cutting."*
 
 **Erosion guidance:**
-- If user doesn't specify erosion: *"No erosion applied — contours include the 0.5 um dilation from post-dedup. The laser will cut at the dilated boundary. Add --erosion-um 0.2 or --erode-pct 0.05 if you want to cut inside the cell boundary."*
+- If user doesn't specify erosion: *"No erosion applied — contours have adaptive dilation (max 10% area increase) for laser clearance. Add --erosion-um 0.2 or --erode-pct 0.05 if you want to cut inside the cell boundary."*
 - If user sets both erosion flags: *"Both --erosion-um and --erode-pct are set. They'll be applied sequentially (absolute first, then percentage). Usually one or the other is enough."*
 
 ---

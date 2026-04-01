@@ -146,8 +146,8 @@ Controls mirror the clustering: singles get individual controls, cluster control
 
 Post-dedup stores the **original** mask contour as `contour_px` / `contour_um` (no dilation or simplification). All contour processing happens at LMD export time:
 
-1. **Adaptive RDP simplification** (`--max-area-change-pct 5.0`): binary-searches for the largest epsilon keeping symmetric difference within tolerance. Reduces point count for LMD hardware.
-2. **Dilation** (`--dilation-um 0.5`): expands contours so the laser cuts outside the cell boundary.
+1. **Adaptive RDP simplification** (`--max-area-change-pct 10.0`): binary-searches for the largest epsilon keeping symmetric difference within tolerance. Reduces point count for LMD hardware.
+2. **Adaptive dilation** (`--max-dilation-area-pct 10.0`): binary-searches for the largest buffer distance keeping area increase within tolerance.
 3. **Erosion** (optional): shrink contours so the laser cuts inside the target:
    - `--erosion-um 0.2` — shrink by 0.2 um (absolute)
    - `--erode-pct 0.05` — shrink by 5% of sqrt(area) (proportional)
