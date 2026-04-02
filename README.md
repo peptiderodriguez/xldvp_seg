@@ -3,26 +3,16 @@
 **Spatial cell segmentation and Deep Visual Proteomics pipeline for CZI microscopy**
 
 [![CI](https://github.com/peptiderodriguez/xldvp_seg/actions/workflows/test.yml/badge.svg)](https://github.com/peptiderodriguez/xldvp_seg/actions)
-[![Python 3.10](https://img.shields.io/badge/python-3.10%20%7C%203.11-blue.svg)](https://www.python.org/downloads/)
+[![Python 3.10+](https://img.shields.io/badge/python-3.10%20%7C%203.11-blue.svg)](https://www.python.org/downloads/)
 [![License: MIT](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
 [![Code style: black](https://img.shields.io/badge/code%20style-black-000000.svg)](https://github.com/psf/black)
-![Tests: 517](https://img.shields.io/badge/tests-517%20passed-brightgreen.svg)
+![Tests: 666](https://img.shields.io/badge/tests-666%20collected-brightgreen.svg)
 
 Detect cells in whole-slide CZI images, classify them by type and marker expression, analyze spatial organization, and export selected cells for laser microdissection and mass spectrometry. End-to-end DVP (Deep Visual Proteomics) from slide to spatial proteomics.
 
 ```
 CZI slide → AI detection → annotation → classification → spatial analysis → LMD export → mass spec
 ```
-
-## Why this pipeline?
-
-- **8 detection strategies** covering NMJ, megakaryocytes, vessels, islet cells, mesothelium, tissue patterns, and generic cells (Cellpose or InstanSeg)
-- **6,478 features per cell** — morphological (78) + per-channel intensity + SAM2 (256) + ResNet (4,096) + DINOv2 (2,048)
-- **Multi-GPU, multi-node** — scales from laptop to SLURM cluster with per-tile checkpointing and crash resume
-- **Detect once, classify later** — train RF classifier on annotations, score all detections in seconds without re-running detection
-- **ROI-restricted detection** — find islet regions, TMA cores, or bone marrow areas first, then detect cells only within ROIs (skip 95%+ of non-ROI tissue)
-- **Full spatial analysis** — UMAP/t-SNE, Leiden clustering, Delaunay networks, tissue zonation, SpatialData/scverse integration
-- **LMD-ready** — 384-well plate assignment, contour dilation, serpentine well ordering, XML export for Leica
 
 ---
 
@@ -31,7 +21,7 @@ CZI slide → AI detection → annotation → classification → spatial analysi
 ```bash
 # Install
 git clone https://github.com/peptiderodriguez/xldvp_seg.git && cd xldvp_seg
-conda create -n xldvp_seg python=3.11 -y && conda activate xldvp_seg
+conda create -n xldvp_seg python=3.10 -y && conda activate xldvp_seg
 pip install -e .
 ./install.sh                    # PyTorch + SAM2 (auto-detects CUDA)
 
@@ -53,6 +43,19 @@ cd xldvp_seg && claude
 
 ---
 
+## Why This Pipeline?
+
+- **8 detection strategies** — NMJ, megakaryocytes, vessels, islet cells, mesothelium, tissue patterns, and generic cells (Cellpose or InstanSeg)
+- **Up to 6,478 features per cell** — morphological (78) + per-channel intensity (~15/ch) + SAM2 (256) + ResNet (4,096) + DINOv2 (2,048)
+- **Multi-GPU, multi-node** — scales from laptop to SLURM cluster with per-tile checkpointing and crash resume
+- **Detect once, classify later** — train RF classifier on annotations, score all detections in seconds without re-running detection
+- **Integrated nuclear counting** — Cellpose 2nd pass on nuclear channel runs during detection (no extra I/O), adds N:C ratio and per-nucleus features
+- **ROI-restricted detection** — find islet regions, TMA cores, or bone marrow areas first, then detect cells only within ROIs
+- **Full spatial analysis** — UMAP/t-SNE, Leiden clustering, Delaunay networks, tissue zonation, SpatialData/scverse integration
+- **LMD-ready** — adaptive contour simplification (10% shape tolerance) + adaptive dilation (10% area tolerance), 384-well plate assignment, XML export for Leica
+
+---
+
 ## Supported Cell Types
 
 | Type | Method | Use Case |
@@ -60,75 +63,29 @@ cd xldvp_seg && claude
 | **Cell** | Cellpose 2-channel (cyto+nuc) + SAM2 | Generic cell detection |
 | **NMJ** | Percentile threshold + morphology + watershed | Neuromuscular junctions |
 | **MK** | SAM2 auto-mask + size filter | Bone marrow megakaryocytes |
-| **Vessel** | SMA+ ring detection, 3-contour hierarchy | Blood vessel morphometry |
+| **Vessel** | SMA+ ring detection, 3-contour hierarchy | Blood vessel morphometry (7 vessel types) |
 | **Islet** | Cellpose membrane+nuclear + markers | Pancreatic islet cells |
 | **Tissue Pattern** | Cellpose + spatial frequency analysis | Brain FISH, coronal sections |
 | **Mesothelium** | Ridge detection for ribbon structures | Mesothelial ribbon for LMD |
 | **InstanSeg** | 3.8M-param lightweight alternative | `--segmenter instanseg` |
 
-**ROI-restricted detection:** For structured tissues (islets, TMA cores, bone marrow), the `segmentation.roi` module finds regions first, then runs any of the above strategies only within those regions. See `examples/islet/` and `examples/tma/`.
-
----
-
-## Architecture
-
-```
-segmentation/              # Main package (pip install -e .)
-├── api/                   # Scanpy-style API (pp, tl, pl, io)
-├── classification/        # Vessel type classifiers, feature selection
-├── cli/                   # xlseg CLI entry point (11 subcommands)
-├── core/                  # SlideAnalysis central state object
-├── datasets/              # Synthetic test data generator
-├── detection/
-│   ├── strategies/        # 8 strategies, self-registered via @register_strategy
-│   └── registry.py        # Strategy registry with decorator pattern
-├── io/                    # CZI loader, HTML export, OME-Zarr
-├── lmd/                   # Well plates, contour processing, clustering
-├── analysis/              # OmicLinker, aggregation, nuclear counting
-├── metrics/               # IoU, Dice, Panoptic Quality, Hungarian matching
-├── models/                # Model registry (SAM2, ResNet, DINOv2, brightfield FMs)
-├── pipeline/              # 9 modules: preprocessing, post_detection, background, ...
-├── preprocessing/         # Flat-field, stain normalization
-├── processing/            # Multi-GPU workers, deduplication, strategy factory
-├── reporting/             # Stats, plots, vessel reports
-├── roi/                   # ROI-restricted detection (marker threshold, circular, polygon)
-└── utils/                 # JSON I/O, device handling, logging, config
-
-scripts/                   # 26 reusable CLI tools
-examples/                  # Project-specific analyses by experiment
-├── bone_marrow/           # MK, RBC vascularization, bone regions
-├── mesothelium/           # MSLN detection + annotation
-├── islet/                 # Pancreatic islet analysis
-├── tma/                   # TMA core detection + per-core cell segmentation
-├── liver/                 # Hepatic zonation, DCN+, transects
-├── nmj/                   # NMJ SLURM scripts
-├── vessel/                # Vessel classifier training
-├── tissue_pattern/        # Brain FISH analysis
-├── senescence/            # Senescence cell configs
-├── configs/               # YAML pipeline templates
-├── slurm/                 # Legacy SLURM job scripts
-└── legacy/                # Deprecated scripts (archived)
-
-tests/                     # 517 tests across 21 files
-```
-
 ---
 
 ## DVP Workflow
 
-The pipeline follows a **detect-once, classify-later** design:
+The pipeline follows a **detect-once, classify-later** design. All features are extracted from the **original segmentation mask** — contour simplification and dilation are applied only at LMD export time.
 
 | Step | What happens | Time |
 |------|-------------|------|
-| 1. **Inspect** | Read CZI channel metadata | seconds |
+| 1. **Inspect** | Read CZI channel metadata (`xlseg info`) | seconds |
 | 2. **Detect** | AI segmentation (Cellpose/InstanSeg + SAM2). Checkpointed per-tile. | 1-3 hours |
-| 3. **Post-process** | Contour extraction + KD-tree background correction + nuclear counting (automatic) | minutes |
+| 3. **Post-process** | Contour extraction + background correction + nuclear counting (automatic) | minutes |
 | 4. **Annotate** | Click yes/no on cell crops in HTML viewer. Export JSON. | 10-30 min |
-| 5. **Train** | RF classifier from annotations (morph, SAM2, or all 6,478 features) | seconds |
+| 5. **Train** | RF classifier from annotations (morph, SAM2, or all features) | seconds |
 | 6. **Score** | Apply classifier to all detections (no re-detection) | seconds |
 | 7. **Markers** | Classify pos/neg per fluorescent channel (SNR ≥ 1.5 default) | seconds |
 | 8. **Explore** | UMAP, Leiden clustering, spatial networks, tissue zonation | minutes |
-| 9. **Export** | LMD XML with 384-well plates, or SpatialData zarr for scverse | seconds |
+| 9. **Export** | LMD XML with adaptive contours + 384-well plates, or SpatialData zarr | seconds |
 
 ---
 
@@ -180,30 +137,71 @@ slurm:
 scripts/run_pipeline.sh examples/configs/my_experiment.yaml
 ```
 
-Chains detection → marker classification → nuclei counting → HTML viewer generation as separate SLURM jobs with correct dependencies. Unified work-item model: slides × scenes cross product. Add `scenes: "0-9"` + `scene_parallel: true` for multi-scene CZIs.
+Chains detection → marker classification → nuclei counting → HTML viewer as separate SLURM jobs with correct dependencies. Unified work-item model: slides × scenes cross product.
 
 ---
 
 ## Available Analyses
 
-| Analysis | Script | Description |
-|----------|--------|-------------|
+| Analysis | Tool | Description |
+|----------|------|-------------|
 | Feature comparison | `scripts/compare_feature_sets.py` | 5-fold CV across morph/SAM2/deep feature subsets |
 | Marker classification | `scripts/classify_markers.py` | Median SNR / Otsu / GMM per channel |
 | UMAP + clustering | `scripts/cluster_by_features.py` | Leiden/HDBSCAN, trajectory, spatial smoothing |
 | Spatial networks | `scripts/spatial_cell_analysis.py` | Delaunay graphs, community detection |
-| Interactive viewer | `scripts/generate_multi_slide_spatial_viewer.py` | Fluorescence overlay, cell contours, ROI drawing. CZI thumbnail caching for fast re-runs |
-| Sliding window | `scripts/sliding_window_sampling.py` | Area-matched rolling window along ROI centerlines for LMD. Multi-ROI, `--exclude-cells` for incremental sessions |
+| Interactive viewer | `scripts/generate_multi_slide_spatial_viewer.py` | Fluorescence overlay + cell contours + ROI drawing |
+| Sliding window | `scripts/sliding_window_sampling.py` | Area-matched rolling window along ROI centerlines for LMD |
 | Curvilinear patterns | `scripts/detect_curvilinear_patterns.py` | Strip/ribbon detection via graph diameter linearity |
-| Vessel structures | `scripts/detect_vessel_structures.py` | Graph topology vessel detection (ring/arc/strip) from marker+ cells (SMA/CD31/LYVE1) |
+| Vessel structures | `scripts/detect_vessel_structures.py` | Ring/arc/strip classification from marker+ cells |
 | Vessel communities | `scripts/vessel_community_analysis.py` | Multi-scale morphology + SNR |
 | SpatialData export | `scripts/convert_to_spatialdata.py` | scverse zarr (squidpy, scanpy) |
-| Nuclear counting | `--count-nuclei` (default ON) | Integrated in Phase 4; standalone: `scripts/count_nuclei_per_cell.py` |
+| Nuclear counting | `--count-nuclei` (default ON) | Integrated in detection; standalone: `scripts/count_nuclei_per_cell.py` |
 | Quality filter | `scripts/quality_filter_detections.py` | Heuristic filter (no annotation needed) |
 | One-command viz | `scripts/view_slide.py` | Classify → cluster → viewer → serve |
-| ROI detection | `examples/islet/`, `examples/tma/` | Find islet regions, TMA cores, or other ROIs → detect cells within ROIs only |
+| ROI detection | `examples/islet/`, `examples/tma/` | Find ROIs → detect cells within ROIs only |
 
 See `examples/` for experiment-specific analyses (bone marrow, liver zonation, islets, TMA, vessels, NMJ, mesothelium).
+
+---
+
+## Architecture
+
+```
+segmentation/              # Main package (pip install -e .)
+├── api/                   # Scanpy-style API (pp, tl, pl, io)
+├── classification/        # Vessel type classifiers, feature selection
+├── cli/                   # xlseg CLI entry point (11 subcommands)
+├── core/                  # SlideAnalysis central state object
+├── detection/strategies/  # 8 strategies, self-registered via @register_strategy
+├── io/                    # CZI loader, HTML export, OME-Zarr
+├── lmd/                   # Well plates, contour processing (adaptive RDP + dilation)
+├── analysis/              # OmicLinker, aggregation, nuclear counting
+├── models/                # Model registry (SAM2, ResNet, DINOv2, brightfield FMs)
+├── pipeline/              # 9 modules: preprocessing, post_detection, background, ...
+├── processing/            # Multi-GPU workers, deduplication, strategy factory
+├── roi/                   # ROI-restricted detection (marker threshold, circular, polygon)
+└── utils/                 # JSON I/O, device handling, logging, config
+
+scripts/                   # 28 reusable CLI tools
+examples/                  # Project-specific analyses by experiment
+tests/                     # 666 tests across 25 files
+```
+
+---
+
+## Key Design Decisions
+
+| Decision | Rationale |
+|----------|-----------|
+| **Channel order is NOT wavelength-sorted** | Always run `xlseg info` first. CZI metadata is the only authoritative source. |
+| **Features from original mask** | Contour simplification + dilation applied at LMD export only — features always reflect the true segmentation boundary. |
+| **Detect 100%, subsample HTML** | `--html-sample-fraction 0.10` keeps the viewer fast; detection is always full coverage. |
+| **Adaptive contour processing** | Binary search for largest RDP epsilon / dilation within 10% tolerance. Cell-size-aware, not one-size-fits-all. |
+| **Atomic JSON writes** | `atomic_json_dump()` uses temp file + `os.replace()` to prevent corruption on crash. |
+| **KD-tree background correction** | Per-cell local background from k=30 nearest neighbors, cached across channels. |
+| **Direct-to-SHM loading** | CZI channels loaded directly into shared memory — no intermediate RAM copy. |
+| **Strategy pattern** | Detection strategies self-register via `@register_strategy` — add a new cell type in one file. |
+| **Nuclear counting integrated** | `--count-nuclei` (default ON) runs during post-dedup using SHM data — zero extra I/O. |
 
 ---
 
@@ -211,13 +209,12 @@ See `examples/` for experiment-specific analyses (bone marrow, liver zonation, i
 
 ```bash
 pip install -e ".[dev]"     # Install with dev tools
-make test                   # 517 tests with coverage
+make test                   # Run all tests with coverage
 make lint                   # ruff + black check
 make format                 # Auto-fix formatting
-pre-commit install          # Hook for pre-commit checks
 ```
 
-**Style:** Black (line-length 100) + Ruff. Python 3.10 (pinned). See [CONTRIBUTING.md](CONTRIBUTING.md).
+**Style:** Black (line-length 100) + Ruff. Python >=3.10,<3.12.
 
 ---
 
@@ -226,25 +223,11 @@ pre-commit install          # Hook for pre-commit checks
 | Document | Description |
 |----------|-------------|
 | [CLAUDE.md](CLAUDE.md) | Technical reference — architecture, CLI flags, code patterns |
-| [CONTRIBUTING.md](CONTRIBUTING.md) | Development setup, style guide, PR process |
-| [CHANGELOG.md](CHANGELOG.md) | Version history |
 | [docs/GETTING_STARTED.md](docs/GETTING_STARTED.md) | Detailed user guide with examples |
 | [docs/COORDINATE_SYSTEM.md](docs/COORDINATE_SYSTEM.md) | Coordinate conventions ([x,y] everywhere) |
 | [docs/LMD_EXPORT_GUIDE.md](docs/LMD_EXPORT_GUIDE.md) | LMD export reference |
 | [docs/NMJ_PIPELINE_GUIDE.md](docs/NMJ_PIPELINE_GUIDE.md) | NMJ detection workflow |
-| [docs/VESSEL_COMMUNITY_ANALYSIS.md](docs/VESSEL_COMMUNITY_ANALYSIS.md) | Vessel community analysis |
-
----
-
-## Key Design Decisions
-
-- **Channel order is NOT wavelength-sorted.** Always run `xlseg info` first. The only authoritative source is CZI metadata.
-- **Detect 100%, subsample HTML.** `--html-sample-fraction 0.10` keeps the viewer fast; detection is always full coverage.
-- **Atomic JSON writes.** `atomic_json_dump()` uses temp file + `os.replace()` to prevent corruption on crash.
-- **KD-tree background correction.** Per-cell local background from k=30 nearest neighbors, cached across channels.
-- **Direct-to-SHM loading.** CZI channels loaded directly into shared memory, eliminating ~9 GB peak memory.
-- **Strategy pattern.** Detection strategies self-register via `@register_strategy` decorator — add a new cell type in one file.
-- **ROI-restricted detection.** For structured tissues (islets, TMA cores, bone regions), detect ROIs at low resolution first, then run cell segmentation only within ROI bounding boxes — skipping 95%+ of non-ROI tissue for massive speedups.
+| [docs/VESSEL_COMMUNITY_ANALYSIS.md](docs/VESSEL_COMMUNITY_ANALYSIS.md) | Vessel structure analysis |
 
 ---
 
