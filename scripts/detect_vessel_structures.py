@@ -675,16 +675,19 @@ def main():
                 pos = [n for n, k in zip(marker_names, class_keys) if feat.get(k) == "positive"]
                 if len(pos) == 1:
                     class_area[pos[0]] += feat.get("area_um2", 0)
-            # OR logic: ANY marker must meet the threshold (not all)
+            # OR logic: ANY marker must meet the threshold (not all).
+            # If no median available (no area_um2 in data), skip filter.
             any_above = False
+            any_checked = False
             for name in marker_names:
                 median_a = median_area_per_class.get(name, 0)
                 if median_a <= 0:
                     continue
+                any_checked = True
                 if class_area[name] >= args.min_marker_cells * median_a:
                     any_above = True
                     break
-            if not any_above:
+            if any_checked and not any_above:
                 continue
 
         # Subgraph via the pre-built full graph (O(k) not O(|pairs|))
