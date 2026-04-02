@@ -507,6 +507,14 @@ def parse_args():
     parser.add_argument(
         "--min-cells", type=int, default=5, help="Min cells per component (default: 5)"
     )
+    parser.add_argument(
+        "--min-marker-cells",
+        type=int,
+        default=0,
+        help="Min cells of EACH marker per vessel structure. Structures without "
+        "at least this many cells of every marker used in --marker-filter are "
+        "dropped. 0 = no filter (default: 0). Use 12 for robust vessel typing.",
+    )
 
     # Classification thresholds
     parser.add_argument(
@@ -608,6 +616,17 @@ def main():
 
         # Marker composition
         composition = analyze_marker_composition(detections, comp_global, marker_names, class_keys)
+
+        # Filter: require min cells of EACH marker
+        if args.min_marker_cells > 0:
+            below_threshold = False
+            for name in marker_names:
+                count_key = f"n_{name.lower()}"
+                if composition.get(count_key, 0) < args.min_marker_cells:
+                    below_threshold = True
+                    break
+            if below_threshold:
+                continue
 
         # Spatial layering (for rings/arcs with sufficient cells)
         layering = {}
