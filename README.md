@@ -87,7 +87,7 @@ You approve the command, and the directory is added to your local settings (`.cl
 - **Multi-GPU, multi-node** — scales from laptop to SLURM cluster with per-tile checkpointing and crash resume
 - **Detect once, classify later** — train RF classifier on annotations, score all detections in seconds without re-running detection
 - **Integrated nuclear counting** — Cellpose segments nuclei within each cell during detection (no extra I/O), adds N:C ratio and per-nucleus features
-- **ROI support (before or after detection)** — define ROIs before detection to skip 95%+ of non-ROI tissue (islets, TMA cores, bone regions), or draw ROIs after detection in the spatial viewer to select cells for downstream analysis and LMD export
+- **ROI support (before or after detection)** — define ROIs before detection to skip 95%+ of non-ROI tissue (islets, TMA cores, bone regions), or draw ROIs after detection in the spatial viewer to select cells for analysis, LMD export, or sliding window sampling along tissue structures
 - **Full spatial analysis** — UMAP/t-SNE, Leiden clustering, Delaunay networks, tissue zonation, SpatialData/scverse integration
 - **LMD-ready** — adaptive contour simplification (10% shape tolerance) + adaptive dilation (10% area tolerance), 384-well plate assignment with serpentine collection through B2→B3→C3→C2 quadrants, nearest-neighbor path optimization on the slide, spatial negative controls, multi-plate overflow, XML export for Leica LMD7
 
