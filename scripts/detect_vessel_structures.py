@@ -535,9 +535,10 @@ def parse_args():
         "--min-marker-cells",
         type=int,
         default=0,
-        help="Min cell-equivalents of EACH marker per vessel structure. "
-        "Total area of marker+ cells must be >= N * median_cell_area for "
-        "every marker. Ensures enough LMD material for mass spec. "
+        help="Min cell-equivalents of EACH single-positive marker class. "
+        "Total area of single-positive cells must be >= N * median_cell_area "
+        "for every marker. Double-positive cells are tracked but not required. "
+        "Ensures enough LMD material for mass spec. "
         "0 = no filter (default: 0). Use 12 for typical DVP experiments.",
     )
 
@@ -657,43 +658,24 @@ def main():
         # Marker composition (cheap — do before expensive graph metrics)
         composition = analyze_marker_composition(detections, comp_global, marker_names, class_keys)
 
-        # Filter: require area equivalent of min_marker_cells for EACH class.
-        # Classes: single-positive per marker + double-positive.
-        # Total area of each class in this component must be ≥ N × median cell area.
-        # This ensures enough LMD material for mass spec per cell type.
+        # Filter: require area equivalent of min_marker_cells for each single-positive
+        # marker class. Double-positive cells are tracked but NOT required.
         if args.min_marker_cells > 0:
+            # Classify cells once, sum area per class
+            class_area = dict.fromkeys(marker_names, 0.0)
+            for g_idx in comp_global:
+                feat = detections[g_idx].get("features", {})
+                pos = [n for n, k in zip(marker_names, class_keys) if feat.get(k) == "positive"]
+                if len(pos) == 1:
+                    class_area[pos[0]] += feat.get("area_um2", 0)
             below_threshold = False
-            # Check each single-positive marker class
-            for name, class_key in zip(marker_names, class_keys):
+            for name in marker_names:
                 median_a = median_area_per_class.get(name, 0)
                 if median_a <= 0:
                     continue
-                min_area = args.min_marker_cells * median_a
-                total_area = 0.0
-                for g_idx in comp_global:
-                    feat = detections[g_idx].get("features", {})
-                    # Single-positive only: positive for this marker, not others
-                    pos = [n for n, k in zip(marker_names, class_keys) if feat.get(k) == "positive"]
-                    if len(pos) == 1 and pos[0] == name:
-                        total_area += feat.get("area_um2", 0)
-                if total_area < min_area:
+                if class_area[name] < args.min_marker_cells * median_a:
                     below_threshold = True
                     break
-            # Also check double-positive class
-            if not below_threshold:
-                median_a = median_area_per_class.get("double_pos", 0)
-                if median_a > 0:
-                    min_area = args.min_marker_cells * median_a
-                    total_area = 0.0
-                    for g_idx in comp_global:
-                        feat = detections[g_idx].get("features", {})
-                        pos = [
-                            n for n, k in zip(marker_names, class_keys) if feat.get(k) == "positive"
-                        ]
-                        if len(pos) >= 2:
-                            total_area += feat.get("area_um2", 0)
-                    if total_area < min_area:
-                        below_threshold = True
             if below_threshold:
                 continue
 
