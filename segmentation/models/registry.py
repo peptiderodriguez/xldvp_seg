@@ -267,6 +267,18 @@ register_model(
     gated=True,
 )
 
+register_model(
+    "h_optimus_1",
+    "embedding",
+    1536,
+    "brightfield",
+    description="H-optimus-1 ViT-G/14 pathology FM (Bioptimus)",
+    license="Apache-2.0",
+    hf_url="bioptimus/H-optimus-1",
+    auto_download=True,
+    gated=False,
+)
+
 # --- Planned alternative segmenters ---
 
 register_model(

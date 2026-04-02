@@ -81,7 +81,7 @@ You approve the command, and the directory is added to your local settings (`.cl
 ## Why This Pipeline?
 
 - **8 detection strategies** — NMJ, megakaryocytes, vessels, islet cells, mesothelium, tissue patterns, and generic cells (Cellpose or InstanSeg)
-- **Up to 6,478 features per cell** — morphological (78) + per-channel intensity (~15/ch) + SAM2 (256) + ResNet (4,096) + DINOv2 (2,048)
+- **Up to 6,478 features per cell** — morphological (78) + per-channel intensity (~15/ch) + [SAM2](https://github.com/facebookresearch/segment-anything-2) (256) + ResNet-50 (4,096) + [DINOv2](https://github.com/facebookresearch/dinov2) (2,048). Brightfield pathology FMs also supported: [UNI2](https://huggingface.co/MahmoodLab/UNI2-h), [Virchow2](https://huggingface.co/paige-ai/Virchow2), [CONCH](https://huggingface.co/MahmoodLab/CONCH), [Phikon-v2](https://huggingface.co/owkin/phikon-v2), [H-optimus-1](https://huggingface.co/bioptimus/H-optimus-1)
 - **Multi-GPU, multi-node** — scales from laptop to SLURM cluster with per-tile checkpointing and crash resume
 - **Detect once, classify later** — train RF classifier on annotations, score all detections in seconds without re-running detection
 - **Integrated nuclear counting** — Cellpose segments nuclei within each cell during detection (no extra I/O), adds N:C ratio and per-nucleus features
