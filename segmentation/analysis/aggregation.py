@@ -107,7 +107,11 @@ def cohort_to_anndata(cohort_df, metadata=None):
     """
     import anndata
 
-    numeric_cols = cohort_df.select_dtypes(include=[np.number]).columns
+    # Exclude metadata columns from X (they belong in obs, not feature matrix)
+    obs_numeric = {"n_cells", "pool_n_cells", "pool_total_area_um2"}
+    numeric_cols = [
+        c for c in cohort_df.select_dtypes(include=[np.number]).columns if c not in obs_numeric
+    ]
     X = cohort_df[numeric_cols].values.astype(np.float32)
     nan_counts = np.isnan(X).sum(axis=0)
     if nan_counts.any():
@@ -122,6 +126,8 @@ def cohort_to_anndata(cohort_df, metadata=None):
     obs = pd.DataFrame(index=cohort_df.index)
     if "group" in cohort_df.columns:
         obs["group"] = cohort_df["group"].values
+    if "n_cells" in cohort_df.columns:
+        obs["n_cells"] = cohort_df["n_cells"].values
     if metadata is not None:
         obs = obs.join(metadata, how="left")
 

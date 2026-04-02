@@ -251,9 +251,9 @@ class TestCohortToAnndata:
         cohort = aggregate_cohort(slides)
         adata = cohort_to_anndata(cohort)
         assert adata.n_vars > 0
-        # n_cells and aggregated features should appear
-        var_names = list(adata.var_names)
-        assert "n_cells" in var_names
+        # n_cells is metadata (obs), not a feature (var)
+        assert "n_cells" in adata.obs.columns
+        assert "n_cells" not in list(adata.var_names)
 
     def test_x_has_no_nans(self):
         """AnnData X matrix should have NaN replaced with 0."""

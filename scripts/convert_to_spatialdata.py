@@ -105,12 +105,14 @@ VESSEL_FEATURES = [
 ]
 
 # Embedding prefixes -> obsm key
+# IMPORTANT: longer prefixes must come first (resnet_ctx_ before resnet_)
+# because matching uses startswith with break-on-first-match.
 EMBEDDING_PREFIXES = {
     "sam2_": ("X_sam2", 256),
-    "resnet_masked_": ("X_resnet_masked", 2048),
-    "resnet_context_": ("X_resnet_context", 2048),
-    "dinov2_masked_": ("X_dinov2_masked", 1024),
-    "dinov2_context_": ("X_dinov2_context", 1024),
+    "resnet_ctx_": ("X_resnet_ctx", 2048),
+    "resnet_": ("X_resnet", 2048),
+    "dinov2_ctx_": ("X_dinov2_ctx", 1024),
+    "dinov2_": ("X_dinov2", 1024),
 }
 
 # Metadata fields that go into obs (not X)
