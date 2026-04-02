@@ -143,6 +143,61 @@ neurons = slide.filter(score_threshold=0.5).filter(marker="NeuN", positive=True)
 adata = neurons.to_anndata()  # AnnData for scanpy/scverse
 ```
 
+### AnnData Layout
+
+`to_anndata()` produces a scanpy-ready object with full pipeline provenance:
+
+| Slot | Content |
+|------|---------|
+| **`X`** | Morphological + per-channel intensity features (float32) |
+| **`obs`** | Per-cell metadata: `uid`, `slide_name`, `cell_type`, `pixel_size_um`, `area_um2`, `rf_prediction`, `marker_profile`, `*_class`, `n_nuclei`, `nuclear_area_fraction` |
+| **`var`** | Feature metadata with `feature_group` column (`morph` / `channel` / `ratio` / `nuclear`) — filter with `adata[:, adata.var["feature_group"] == "morph"]` |
+| **`obsm["spatial"]`** | (N, 2) cell positions in micrometers |
+| **`obsm["X_sam2"]`** | SAM2 embeddings (256D) |
+| **`obsm["X_resnet"]`** | ResNet-50 features (2048D, if `--extract-deep-features`) |
+| **`obsm["X_dinov2"]`** | DINOv2 features (1024D, if `--extract-deep-features`) |
+| **`uns["pipeline"]`** | Provenance: package version, slide name, cell type, pixel size, detection count, channel map |
+
+Multi-scene slides: each scene produces a separate `SlideAnalysis`; concatenate with `anndata.concat(adatas, label="scene")`.
+
+### Downstream Analysis (scanpy + squidpy)
+
+```python
+import scanpy as sc
+import squidpy as sq
+
+adata = slide.to_anndata()
+
+# Standard scanpy workflow
+sc.pp.pca(adata)
+sc.pp.neighbors(adata)
+sc.tl.umap(adata)
+sc.tl.leiden(adata, resolution=0.3)
+sc.pl.umap(adata, color=["leiden", "marker_profile", "area_um2"])
+
+# Spatial analysis
+sq.gr.spatial_neighbors(adata, coord_type="generic")
+sq.gr.nhood_enrichment(adata, cluster_key="marker_profile")
+sq.gr.spatial_autocorr(adata, mode="moran")  # spatially variable features
+```
+
+### Proteomics Integration (after LMD + mass spec)
+
+After laser microdissection and mass spectrometry, link morphological features to protein abundance:
+
+```python
+from segmentation.analysis.omic_linker import OmicLinker
+
+linker = OmicLinker.from_slide(slide)
+linker.load_proteomics("proteomics.csv")    # wells × proteins
+linker.load_well_mapping("lmd_export/")     # detection → well
+linked = linker.link()                       # AnnData: morph + proteomics
+
+# Differential analysis between marker populations
+diff = linker.differential_features("marker_profile", "NeuN+/tdTomato-", "NeuN-/tdTomato+")
+corr = linker.correlate(method="spearman")   # morph ↔ protein correlations
+```
+
 ---
 
 ## SLURM Batch Pipeline

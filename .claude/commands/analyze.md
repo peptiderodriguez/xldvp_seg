@@ -845,23 +845,78 @@ Outputs:
 - `*_spatialdata_squidpy/nhood_enrichment.png` — cell type co-location patterns
 - `*_spatialdata_squidpy/co_occurrence.png` — co-occurrence at multiple distances
 
-**Step 22 — Show how to use the output.** For beginners:
-*"The SpatialData zarr store integrates with the entire scverse ecosystem. You can load it in Python for custom analysis:"*
+**Step 22 — Show how to use the output.** Explain the AnnData layout and give starter analysis code.
+
+*"The pipeline exports a fully annotated AnnData object. Here's what's inside:"*
+
+| Slot | Content |
+|------|---------|
+| `X` | Morphological + per-channel intensity features (float32) |
+| `obs` | Per-cell metadata: `uid`, `slide_name`, `cell_type`, `pixel_size_um`, `area_um2`, `rf_prediction`, `marker_profile`, `*_class`, `n_nuclei`, `nuclear_area_fraction` |
+| `var` | Feature metadata with `feature_group` column (`morph` / `channel` / `ratio` / `nuclear`) |
+| `obsm["spatial"]` | (N, 2) cell positions in micrometers |
+| `obsm["X_sam2"]` | SAM2 embeddings (256D) |
+| `obsm["X_resnet"]`, `obsm["X_dinov2"]` | Deep features (if `--extract-deep-features`) |
+| `uns["pipeline"]` | Provenance: package version, slide name, cell type, pixel size, channel map |
+
+*"You can filter features by group:"* `adata[:, adata.var["feature_group"] == "morph"]`
+
+*"For multi-scene slides, each scene is a separate SlideAnalysis — concatenate with:"* `anndata.concat(adatas, label="scene")`
+
+*"Here's how to get started with spatial analysis in scanpy/squidpy:"*
 ```python
+import scanpy as sc
+import squidpy as sq
+
+# Load from SpatialData zarr or directly via SlideAnalysis
 import spatialdata as sd
 sdata = sd.read_zarr("<output>/<celltype>_spatialdata.zarr")
-adata = sdata["table"]  # AnnData with spatial coords, features, embeddings
+adata = sdata["table"]
 
-# Spatial statistics
-import squidpy as sq
-sq.gr.spatial_neighbors(adata)
-sq.pl.spatial_scatter(adata, color="tdTomato_class")
+# Or load from pipeline output directly
+from segmentation.core import SlideAnalysis
+slide = SlideAnalysis.load("<output>/run_dir/")
+adata = slide.to_anndata()
+
+# --- Standard scanpy workflow ---
+# Preprocessing
+sc.pp.normalize_total(adata)
+sc.pp.log1p(adata)
+sc.pp.highly_variable_genes(adata, n_top_genes=50)
 
 # Dimensionality reduction
-import scanpy as sc
 sc.pp.pca(adata)
+sc.pp.neighbors(adata)
 sc.tl.umap(adata)
-sc.pl.umap(adata, color=["area", "rf_prediction"])
+sc.tl.leiden(adata, resolution=0.3)
+
+# Visualize
+sc.pl.umap(adata, color=["leiden", "marker_profile", "area_um2"])
+sc.pl.umap(adata, color=["rf_prediction", "n_nuclei"])
+
+# --- Spatial analysis with squidpy ---
+# Build spatial graph from cell positions
+sq.gr.spatial_neighbors(adata, coord_type="generic")
+
+# Neighborhood enrichment: which cell types co-locate?
+sq.gr.nhood_enrichment(adata, cluster_key="marker_profile")
+sq.pl.nhood_enrichment(adata, cluster_key="marker_profile")
+
+# Spatial scatter: cells colored by marker class on tissue coordinates
+sq.pl.spatial_scatter(adata, color="marker_profile", shape=None, size=1)
+
+# Moran's I: which features are spatially autocorrelated?
+sq.gr.spatial_autocorr(adata, mode="moran")
+# Top spatially variable features:
+adata.uns["moranI"].sort_values("I", ascending=False).head(10)
+
+# Co-occurrence: marker co-localization at multiple distances
+sq.gr.co_occurrence(adata, cluster_key="marker_profile")
+sq.pl.co_occurrence(adata, cluster_key="marker_profile")
+
+# Ripley's L: spatial clustering/dispersion
+sq.gr.ripley(adata, cluster_key="marker_profile", mode="L")
+sq.pl.ripley(adata, cluster_key="marker_profile", mode="L")
 ```
 
 ---
