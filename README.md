@@ -19,12 +19,22 @@ CZI slide → AI detection → annotation → classification → spatial analysi
 ## Quick Start
 
 ```bash
-# Install
 git clone https://github.com/peptiderodriguez/xldvp_seg.git && cd xldvp_seg
 conda create -n xldvp_seg python=3.10 -y && conda activate xldvp_seg
 pip install -e .
-./install.sh                    # PyTorch + SAM2 (auto-detects CUDA)
+./install.sh                    # auto-detects CUDA, installs PyTorch + SAM2 + deps
+```
 
+### Two install modes
+
+| Mode | Command | Best for |
+|------|---------|----------|
+| **Standard** | `./install.sh` | New setups. Auto-detects your CUDA version, installs latest compatible PyTorch + SAM2 + all dependencies. May differ slightly between installs if upstream packages release new versions. |
+| **Reproducible** | `./install.sh --reproducible` | Matching an existing environment exactly. Installs all 184 dependencies at the exact pinned versions from `requirements-lock.txt` (generated from the tested cluster env). Two people running this a month apart get identical environments. |
+
+Additional flags: `--cuda 11.8|12.1|12.4` (override CUDA auto-detection), `--cpu` (CPU-only), `--rocm` (AMD GPUs), `--dev` (add pytest/ruff/black).
+
+```bash
 # Run
 xlseg info slide.czi            # Inspect channels (ALWAYS first)
 xlseg detect --czi-path slide.czi --cell-type cell \
@@ -152,7 +162,7 @@ Each detection is a row in the AnnData — use standard scanpy workflows:
 ```python
 import scanpy as sc
 import squidpy as sq
-from segmentation.core import SlideAnalysis
+from xldvp_seg.core import SlideAnalysis
 
 slide = SlideAnalysis.load("output/my_slide/run_20260324/")
 adata = slide.to_anndata()
@@ -178,7 +188,7 @@ sq.gr.spatial_autocorr(adata, mode="moran")  # spatially variable features
 DVP typically **pools multiple cells per well** for sufficient protein yield. After LMD cutting and mass spectrometry, `OmicLinker` bridges per-cell morphology to well-level proteomics:
 
 ```python
-from segmentation.analysis.omic_linker import OmicLinker
+from xldvp_seg.analysis.omic_linker import OmicLinker
 
 linker = OmicLinker.from_slide(slide)
 linker.load_proteomics("proteomics.csv")    # wells × proteins (pooled measurement)
@@ -233,8 +243,8 @@ See `examples/` for experiment-specific analyses (bone marrow, liver zonation, i
 ## Python API
 
 ```python
-from segmentation.core import SlideAnalysis
-from segmentation.api import tl
+from xldvp_seg.core import SlideAnalysis
+from xldvp_seg.api import tl
 
 # Load pipeline output
 slide = SlideAnalysis.load("output/my_slide/run_20260324/")
@@ -285,7 +295,7 @@ Chains detection → marker classification → nuclei counting → HTML viewer a
 ## Architecture
 
 ```
-segmentation/              # Main package (pip install -e .)
+xldvp_seg/              # Main package (pip install -e .)
 ├── api/                   # Scanpy-style API (pp, tl, pl, io)
 ├── classification/        # Vessel type classifiers, feature selection
 ├── cli/                   # xlseg CLI entry point (11 subcommands)

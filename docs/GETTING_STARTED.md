@@ -34,10 +34,16 @@ for laser microdissection.
 ## Installation
 
 ```bash
-conda create -n xldvp_seg python=3.11 -y && conda activate xldvp_seg
+conda create -n xldvp_seg python=3.10 -y && conda activate xldvp_seg
 git clone https://github.com/peptiderodriguez/xldvp_seg.git && cd xldvp_seg
-./install.sh   # Auto-detects CUDA version and installs PyTorch + SAM2 + Cellpose
+./install.sh                    # Standard: auto-detects CUDA, latest compatible versions
+# OR
+./install.sh --reproducible     # Reproducible: exact pinned versions from requirements-lock.txt
 ```
+
+**Standard install** auto-detects your CUDA version and installs the latest compatible PyTorch, SAM2, Cellpose, and all dependencies. Best for new setups. May differ slightly between installs if upstream packages release new versions.
+
+**Reproducible install** (`--reproducible`) installs all 184 dependencies at the exact versions from `requirements-lock.txt`, which was generated from the tested cluster environment. Guarantees identical environments across machines and time. Use this when matching an existing setup or when reproducibility matters.
 
 Verify the environment:
 
@@ -436,13 +442,13 @@ Masks go through several cleanup steps before feature extraction:
 
 | Operation | What it does | Module |
 |-----------|-------------|--------|
-| Largest component | Remove disconnected fragments from each mask | `segmentation/utils/mask_cleanup.py` |
-| Hole filling | Fill internal holes below 50% of mask area | `segmentation/utils/mask_cleanup.py` |
+| Largest component | Remove disconnected fragments from each mask | `xldvp_seg/utils/mask_cleanup.py` |
+| Hole filling | Fill internal holes below 50% of mask area | `xldvp_seg/utils/mask_cleanup.py` |
 | Binary smoothing | Opening/closing to clean jagged edges | Strategy-specific |
-| Watershed expansion | Expand masks to capture full signal (NMJ) | `segmentation/detection/strategies/nmj.py` |
-| SAM2 refinement | Point-prompt refinement of Cellpose masks | `segmentation/detection/strategies/cell.py` |
+| Watershed expansion | Expand masks to capture full signal (NMJ) | `xldvp_seg/detection/strategies/nmj.py` |
+| SAM2 refinement | Point-prompt refinement of Cellpose masks | `xldvp_seg/detection/strategies/cell.py` |
 
-For LMD export, additional post-processing happens in `segmentation/lmd/contour_processing.py`:
+For LMD export, additional post-processing happens in `xldvp_seg/lmd/contour_processing.py`:
 
 | Operation | What it does |
 |-----------|-------------|
@@ -513,7 +519,7 @@ combined. Use `train_classifier.py --feature-set` to compare subsets for your da
 ## Step 6 -- Deduplication
 
 Tile overlap (default 10%) creates duplicate detections near tile borders. The
-deduplication module (`segmentation/processing/deduplication.py`) resolves this:
+deduplication module (`xldvp_seg/processing/deduplication.py`) resolves this:
 
 1. Load mask pixels in global coordinates for each detection
 2. For each pair of nearby detections, compute pixel-level overlap
@@ -779,7 +785,7 @@ Outputs: `cell_detections_vessel_tagged.json` (all cells tagged),
 `cell_detections_vessel_only.json` (vessel cells only),
 `vessel_structures.json` + `vessel_structures.csv` (per-structure summary).
 
-Both scripts share the `segmentation.utils.graph_topology` module for KD-tree
+Both scripts share the `xldvp_seg.utils.graph_topology` module for KD-tree
 graph construction, graph diameter, linearity, ring/arc metrics, and PCA-based
 morphology classification.
 
