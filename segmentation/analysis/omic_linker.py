@@ -132,20 +132,11 @@ class OmicLinker:
             )
             return pd.DataFrame()
 
-        # Aggregate numeric features per well
-        # Channel intensity features use median (robust to outlier pixels);
-        # morphological features use mean (area, solidity, etc. are well-behaved)
+        # Aggregate numeric features per well (median — robust to outliers)
         morph_cols = [c for c in df.columns if c != "well" and not c.endswith("_class")]
         numeric_morph = df[morph_cols].select_dtypes(include=[np.number]).columns
-        channel_cols = [c for c in numeric_morph if c[:2] == "ch" and "_" in c[2:5]]
-        other_cols = [c for c in numeric_morph if c not in channel_cols]
-
         grouped = df.groupby("well")
-        well_morph = (
-            grouped[other_cols].mean() if other_cols else pd.DataFrame(index=grouped.size().index)
-        )
-        if channel_cols:
-            well_morph = well_morph.join(grouped[channel_cols].median())
+        well_morph = grouped[numeric_morph].median()
 
         # Pool cell count
         well_morph["pool_n_cells"] = df.groupby("well").size()
