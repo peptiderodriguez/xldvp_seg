@@ -314,43 +314,87 @@ class SlideAnalysis:
     def to_anndata(self) -> anndata.AnnData:
         """Export as AnnData for scanpy/scverse workflows.
 
-        Morphological and channel features go into X; SAM2 embeddings go into
-        obsm['X_sam2']; marker classes and rf_prediction go into obs;
-        spatial coordinates go into obsm['spatial'].
+        Layout:
+            **X** — morphological + per-channel intensity features (float32).
+            **obs** — per-cell metadata: uid, slide_name, cell_type,
+                rf_prediction, marker classes, marker_profile, n_nuclei,
+                nuclear_area_fraction, area_um2.
+            **var** — per-feature metadata: feature_group (morph / channel /
+                ratio / nuclear).
+            **obsm** — embeddings and coordinates:
+                ``spatial`` (N, 2) um positions,
+                ``X_sam2`` (256D), ``X_resnet`` (2048D),
+                ``X_dinov2`` (1024D), plus ``_ctx`` variants.
+            **uns** — pipeline provenance: slide_name, cell_type,
+                pixel_size_um, n_detections, pipeline_version, channel info.
         """
         import anndata
+
+        from segmentation import __version__
 
         df = self.features_df
         if df.empty:
             return anndata.AnnData()
 
-        # Separate feature types
-        obs_cols = [
+        # --- Classify columns ---
+        obs_meta_cols = [
             c
             for c in df.columns
             if c.endswith("_class") or c in ("rf_prediction", "marker_profile")
         ]
         sam2_cols = sorted([c for c in df.columns if c.startswith("sam2_")])
-        exclude = set(obs_cols) | set(sam2_cols)
-        # Also exclude deep feature embeddings from X
-        for prefix in ("resnet_", "dinov2_", "resnet_ctx_", "dinov2_ctx_"):
-            exclude |= {c for c in df.columns if c.startswith(prefix)}
-        morph_cols = [c for c in df.columns if c not in exclude]
+        embedding_prefixes = ("resnet_", "dinov2_", "resnet_ctx_", "dinov2_ctx_")
+        embedding_cols: set[str] = set()
+        for prefix in embedding_prefixes:
+            embedding_cols |= {c for c in df.columns if c.startswith(prefix)}
+        exclude = set(obs_meta_cols) | set(sam2_cols) | embedding_cols
+        x_cols = [c for c in df.columns if c not in exclude]
 
-        # Build AnnData
-        X = df[morph_cols].values.astype(np.float32)
+        # --- Build X (morph + channel features) ---
+        X = df[x_cols].values.astype(np.float32)
         X = np.nan_to_num(X, nan=0.0, posinf=0.0, neginf=0.0)
-        adata = anndata.AnnData(X=X, obs=df[obs_cols].copy())
-        adata.var_names = pd.Index(morph_cols)
 
-        # Embeddings in obsm
+        # --- Build obs (per-cell metadata) ---
+        obs = df[obs_meta_cols].copy()
+        # Enrich obs with top-level detection metadata
+        dets = self.detections
+        uids = [d.get("uid") or d.get("id", "") for d in dets]
+        obs.index = pd.Index(uids, name="uid")
+        obs["slide_name"] = [d.get("slide_name", self.slide_name) for d in dets]
+        obs["cell_type"] = [d.get("cell_type", self.cell_type) for d in dets]
+        obs["area_um2"] = [d.get("features", {}).get("area_um2", np.nan) for d in dets]
+        # Nuclear counting fields (if available)
+        if any("n_nuclei" in d.get("features", {}) for d in dets[:10]):
+            obs["n_nuclei"] = [d.get("features", {}).get("n_nuclei", np.nan) for d in dets]
+            obs["nuclear_area_fraction"] = [
+                d.get("features", {}).get("nuclear_area_fraction", np.nan) for d in dets
+            ]
+
+        # --- Build var (per-feature metadata) ---
+        feature_groups = []
+        for col in x_cols:
+            if col.startswith("ch") and "_" in col[2:5]:
+                # ch0_mean, ch1_snr, etc.
+                if "_ratio" in col or "_diff" in col or "_specificity" in col:
+                    feature_groups.append("ratio")
+                else:
+                    feature_groups.append("channel")
+            elif col.startswith("n_nuclei") or col.startswith("nuclear_"):
+                feature_groups.append("nuclear")
+            else:
+                feature_groups.append("morph")
+        var = pd.DataFrame(
+            {"feature_group": feature_groups}, index=pd.Index(x_cols, name="feature")
+        )
+
+        # --- Assemble AnnData ---
+        adata = anndata.AnnData(X=X, obs=obs, var=var)
+
+        # --- Embeddings in obsm ---
         if sam2_cols:
             sam2_vals = df[sam2_cols].values.astype(np.float32)
-            sam2_vals = np.nan_to_num(sam2_vals, nan=0.0, posinf=0.0, neginf=0.0)
-            adata.obsm["X_sam2"] = sam2_vals
+            adata.obsm["X_sam2"] = np.nan_to_num(sam2_vals, nan=0.0, posinf=0.0, neginf=0.0)
 
-        # ResNet and DINOv2 embeddings in obsm
-        # Process longer prefixes first to avoid resnet_ matching resnet_ctx_
         resnet_ctx = sorted([c for c in df.columns if c.startswith("resnet_ctx_")])
         resnet = sorted(
             [c for c in df.columns if c.startswith("resnet_") and not c.startswith("resnet_ctx_")]
@@ -367,20 +411,34 @@ class SlideAnalysis:
         ]:
             if cols:
                 vals = df[cols].values.astype(np.float32)
-                vals = np.nan_to_num(vals, nan=0.0, posinf=0.0, neginf=0.0)
-                adata.obsm[key] = vals
+                adata.obsm[key] = np.nan_to_num(vals, nan=0.0, posinf=0.0, neginf=0.0)
 
-        # Spatial coordinates
+        # --- Spatial coordinates ---
         pos = self.positions_um
         if pos is not None and len(pos) == adata.n_obs:
             adata.obsm["spatial"] = pos
         elif pos is not None and len(pos) != adata.n_obs:
             logger.warning(
-                "Spatial coordinates length (%d) != n_obs (%d); "
-                "obsm['spatial'] not set. Some detections may lack position data.",
+                "Spatial coordinates length (%d) != n_obs (%d); obsm['spatial'] not set.",
                 len(pos),
                 adata.n_obs,
             )
+
+        # --- Pipeline provenance in uns ---
+        adata.uns["pipeline"] = {
+            "package": "xldvp_seg",
+            "version": __version__,
+            "slide_name": self.slide_name,
+            "cell_type": self.cell_type,
+            "pixel_size_um": self.pixel_size_um,
+            "n_detections": len(dets),
+        }
+        # Channel info from config if available
+        config = self.config
+        if config.get("channel_map"):
+            adata.uns["channel_map"] = config["channel_map"]
+        if config.get("channels"):
+            adata.uns["channels"] = config["channels"]
 
         return adata
 
