@@ -856,7 +856,8 @@ Outputs:
 | `var` | Feature metadata with `feature_group` column (`morph` / `channel` / `ratio` / `nuclear`) |
 | `obsm["spatial"]` | (N, 2) cell positions in micrometers |
 | `obsm["X_sam2"]` | SAM2 embeddings (256D) |
-| `obsm["X_resnet"]`, `obsm["X_dinov2"]` | Deep features (if `--extract-deep-features`) |
+| `obsm["X_resnet"]`, `obsm["X_resnet_ctx"]` | ResNet-50 masked + context (2×2048D, if `--extract-deep-features`) |
+| `obsm["X_dinov2"]`, `obsm["X_dinov2_ctx"]` | DINOv2 masked + context (2×1024D, if `--extract-deep-features`) |
 | `uns["pipeline"]` | Provenance: package version, slide name, cell type, pixel size, channel map |
 
 *"You can filter features by group:"* `adata[:, adata.var["feature_group"] == "morph"]`

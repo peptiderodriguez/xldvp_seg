@@ -486,9 +486,9 @@ Image encoder features from SAM2 (always extracted). Stored as `sam2_0` through 
 ### Deep Features (optional, 6,144D total)
 
 ResNet-50 (pre-trained ImageNet) extracts 2,048D features from both a masked crop
-and a context crop (4,096D total as `resnet_masked_*` and `resnet_context_*`).
-DINOv2 ViT-L/14 extracts 1,024D from each (2,048D total as `dinov2_masked_*` and
-`dinov2_context_*`).
+and a context crop (4,096D total as `resnet_*` and `resnet_ctx_*`).
+DINOv2 ViT-L/14 extracts 1,024D from each (2,048D total as `dinov2_*` and
+`dinov2_ctx_*`).
 
 ### Channel-Corrected Features
 

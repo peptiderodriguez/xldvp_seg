@@ -154,8 +154,8 @@ adata = neurons.to_anndata()  # AnnData for scanpy/scverse
 | **`var`** | Feature metadata with `feature_group` column (`morph` / `channel` / `ratio` / `nuclear`) — filter with `adata[:, adata.var["feature_group"] == "morph"]` |
 | **`obsm["spatial"]`** | (N, 2) cell positions in micrometers |
 | **`obsm["X_sam2"]`** | SAM2 embeddings (256D) |
-| **`obsm["X_resnet"]`** | ResNet-50 features (2048D, if `--extract-deep-features`) |
-| **`obsm["X_dinov2"]`** | DINOv2 features (1024D, if `--extract-deep-features`) |
+| **`obsm["X_resnet"]`**, **`obsm["X_resnet_ctx"]`** | ResNet-50 masked + context features (2×2048D, if `--extract-deep-features`) |
+| **`obsm["X_dinov2"]`**, **`obsm["X_dinov2_ctx"]`** | DINOv2 masked + context features (2×1024D, if `--extract-deep-features`) |
 | **`uns["pipeline"]`** | Provenance: package version, slide name, cell type, pixel size, detection count, channel map |
 
 Multi-scene slides: each scene produces a separate `SlideAnalysis`; concatenate with `anndata.concat(adatas, label="scene")`.
