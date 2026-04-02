@@ -535,11 +535,11 @@ def parse_args():
         "--min-marker-cells",
         type=int,
         default=0,
-        help="Min cell-equivalents of EACH single-positive marker class. "
+        help="Min cell-equivalents of EACH marker (single-positive only). "
         "Total area of single-positive cells must be >= N * median_cell_area "
-        "for every marker. Double-positive cells are tracked but not required. "
-        "Ensures enough LMD material for mass spec. "
-        "0 = no filter (default: 0). Use 12 for typical DVP experiments.",
+        "for every marker. Double-positive cells excluded (contaminate both "
+        "proteomes). Ensures enough clean LMD material for mass spec. "
+        "0 = no filter (default: 0). Use 8 for typical DVP experiments.",
     )
 
     # Classification thresholds
@@ -599,24 +599,23 @@ def main():
     class_keys_map = dict(zip(marker_names, class_keys))
     logger.info("Markers: %s", marker_names)
 
-    # Pre-compute median cell area per marker (total: single + double positive)
+    # Pre-compute median cell area per marker (single-positive only)
     # for min-marker-cells area-equivalent filter.
-    # Uses total marker presence — a cell positive for both SMA and CD31
-    # counts toward both markers' medians.
+    # Double-positive cells excluded — they can't be cleanly cut for either proteome.
     median_area_per_class = {}
     if args.min_marker_cells > 0:
-        for name, class_key in zip(marker_names, class_keys):
-            areas = []
-            for idx in positive_idx:
-                feat = detections[idx].get("features", {})
-                if feat.get(class_key) == "positive":
-                    a = feat.get("area_um2", 0)
-                    if a > 0:
-                        areas.append(a)
+        class_areas = {name: [] for name in marker_names}
+        for idx in positive_idx:
+            feat = detections[idx].get("features", {})
+            pos = [n for n, k in zip(marker_names, class_keys) if feat.get(k) == "positive"]
+            a = feat.get("area_um2", 0)
+            if a > 0 and len(pos) == 1:
+                class_areas[pos[0]].append(a)
+        for name, areas in class_areas.items():
             if areas:
                 median_area_per_class[name] = float(np.median(areas))
                 logger.info(
-                    "  %s: median cell area = %.1f µm² (%d cells)",
+                    "  %s: median single-positive cell area = %.1f µm² (%d cells)",
                     name,
                     median_area_per_class[name],
                     len(areas),
@@ -654,27 +653,22 @@ def main():
         # Marker composition (cheap — do before expensive graph metrics)
         composition = analyze_marker_composition(detections, comp_global, marker_names, class_keys)
 
-        # Filter: require area equivalent of min_marker_cells for each marker.
-        # Uses TOTAL marker presence (single + double positive) for viability —
-        # a vessel is viable if it has enough of each marker regardless of
-        # co-expression. LMD sampling treats double-positive as a separate class
-        # but the viability check counts them toward both markers.
+        # Filter: require area equivalent of min_marker_cells of SINGLE-POSITIVE
+        # cells for each marker. Double-positive cells are excluded from LMD
+        # cuts (contaminate both proteomes), so they don't count toward viability.
         if args.min_marker_cells > 0:
-            marker_area = dict.fromkeys(marker_names, 0.0)
+            class_area = dict.fromkeys(marker_names, 0.0)
             for g_idx in comp_global:
                 feat = detections[g_idx].get("features", {})
-                a = feat.get("area_um2", 0)
-                if a <= 0:
-                    continue
-                for name, class_key in zip(marker_names, class_keys):
-                    if feat.get(class_key) == "positive":
-                        marker_area[name] += a
+                pos = [n for n, k in zip(marker_names, class_keys) if feat.get(k) == "positive"]
+                if len(pos) == 1:
+                    class_area[pos[0]] += feat.get("area_um2", 0)
             below_threshold = False
             for name in marker_names:
                 median_a = median_area_per_class.get(name, 0)
                 if median_a <= 0:
                     continue
-                if marker_area[name] < args.min_marker_cells * median_a:
+                if class_area[name] < args.min_marker_cells * median_a:
                     below_threshold = True
                     break
             if below_threshold:
