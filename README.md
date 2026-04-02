@@ -152,7 +152,9 @@ Each detection is a row in the AnnData — use standard scanpy workflows:
 ```python
 import scanpy as sc
 import squidpy as sq
+from segmentation.core import SlideAnalysis
 
+slide = SlideAnalysis.load("output/my_slide/run_20260324/")
 adata = slide.to_anndata()
 
 # Scale features (z-score — NOT normalize_total/log1p, those are for RNA-seq)
