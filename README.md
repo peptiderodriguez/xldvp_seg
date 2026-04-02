@@ -328,7 +328,7 @@ make lint                   # ruff + black check
 make format                 # Auto-fix formatting
 ```
 
-**Style:** Black (line-length 100) + Ruff. Python 3.10 | 3.11 (CI tests 3.10, cluster runs 3.11).
+**Style:** Black (line-length 100) + Ruff. Python 3.10 | 3.11 (both CI-tested).
 
 ---
 
