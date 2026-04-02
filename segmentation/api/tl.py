@@ -14,25 +14,31 @@ Usage:
     tl.spatial(slide, output_dir="results/spatial/")
 """
 
+from __future__ import annotations
+
 import argparse
 import tempfile
 from pathlib import Path
+from typing import TYPE_CHECKING, Any
 
 from segmentation.utils.logging import get_logger
+
+if TYPE_CHECKING:
+    from segmentation.core.slide_analysis import SlideAnalysis
 
 logger = get_logger(__name__)
 
 
 def markers(
-    slide,
-    marker_channels,
-    marker_names,
-    method="snr",
-    snr_threshold=1.5,
-    czi_path=None,
-    output_dir=None,
-    **kwargs,
-):
+    slide: SlideAnalysis,
+    marker_channels: list[int],
+    marker_names: list[str],
+    method: str = "snr",
+    snr_threshold: float = 1.5,
+    czi_path: str | Path | None = None,
+    output_dir: str | Path | None = None,
+    **kwargs: Any,
+) -> SlideAnalysis:
     """Classify markers as positive/negative per channel.
 
     Calls classify_single_marker() for each marker. Mutates detections
@@ -100,7 +106,12 @@ def markers(
     return slide
 
 
-def score(slide, classifier, score_field="rf_prediction", **kwargs):
+def score(
+    slide: SlideAnalysis,
+    classifier: str | Path,
+    score_field: str = "rf_prediction",
+    **kwargs: Any,
+) -> SlideAnalysis:
     """Score detections with a trained RF classifier.
 
     Calls extract_feature_matrix + pipeline.predict_proba directly.
@@ -171,7 +182,13 @@ def score(slide, classifier, score_field="rf_prediction", **kwargs):
     return slide
 
 
-def train(slide, annotations, feature_set="morph", output_path=None, **kwargs):
+def train(
+    slide: SlideAnalysis,
+    annotations: str | Path,
+    feature_set: str = "morph",
+    output_path: str | Path | None = None,
+    **kwargs: Any,
+) -> dict[str, Any]:
     """Train RF classifier from annotations.
 
     Args:
@@ -249,16 +266,16 @@ def train(slide, annotations, feature_set="morph", output_path=None, **kwargs):
 
 
 def cluster(
-    slide,
-    feature_groups="morph",
-    methods="both",
-    resolution=0.1,
-    output_dir=None,
-    n_neighbors=15,
-    min_dist=0.05,
-    clustering="leiden",
-    **kwargs,
-):
+    slide: SlideAnalysis,
+    feature_groups: str = "morph",
+    methods: str = "both",
+    resolution: float = 0.1,
+    output_dir: str | Path | None = None,
+    n_neighbors: int = 15,
+    min_dist: float = 0.05,
+    clustering: str = "leiden",
+    **kwargs: Any,
+) -> SlideAnalysis:
     """Feature clustering with UMAP/t-SNE + Leiden/HDBSCAN.
 
     Constructs a synthetic argparse.Namespace and calls run_clustering().
@@ -337,8 +354,13 @@ def cluster(
 
 
 def spatial(
-    slide, output_dir=None, pixel_size=None, marker_filter=None, max_edge_distance=50.0, **kwargs
-):
+    slide: SlideAnalysis,
+    output_dir: str | Path | None = None,
+    pixel_size: float | None = None,
+    marker_filter: str | None = None,
+    max_edge_distance: float = 50.0,
+    **kwargs: Any,
+) -> SlideAnalysis:
     """Spatial network analysis (Delaunay graph + communities).
 
     Args:
@@ -381,14 +403,14 @@ def spatial(
 
 
 def nuclei(
-    slide,
-    czi_path,
-    nuclear_channel=None,
-    channel_spec=None,
-    tiles_dir=None,
-    output_path=None,
-    **kwargs,
-):
+    slide: SlideAnalysis,
+    czi_path: str | Path,
+    nuclear_channel: int | None = None,
+    channel_spec: str | None = None,
+    tiles_dir: str | Path | None = None,
+    output_path: str | Path | None = None,
+    **kwargs: Any,
+) -> SlideAnalysis:
     """Count nuclei per cell.
 
     Requires CZI file and tile masks. For existing pipeline runs,
