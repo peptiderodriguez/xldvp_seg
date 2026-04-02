@@ -7,10 +7,10 @@ decorator at import time.
 
 IMPORTANT: This module must NOT import from strategies/ — the strategies import
 from here (not the other way around). Registration happens when strategy modules
-are imported (triggered by importing segmentation.detection.strategies).
+are imported (triggered by importing xldvp_seg.detection.strategies).
 
 Usage:
-    from segmentation.detection.registry import StrategyRegistry, register_strategy
+    from xldvp_seg.detection.registry import StrategyRegistry, register_strategy
 
     @register_strategy("mytype", description="My detection method", channels=["ch1"])
     class MyStrategy(DetectionStrategy):
@@ -24,7 +24,7 @@ Usage:
 
 from dataclasses import dataclass, field
 
-from segmentation.utils.logging import get_logger
+from xldvp_seg.utils.logging import get_logger
 
 logger = get_logger(__name__)
 
@@ -48,7 +48,7 @@ class StrategyRegistry:
     with their metadata and provides methods to register, look up, and list strategies.
 
     Registration is done via the @register_strategy decorator on strategy classes,
-    triggered at import time when segmentation.detection.strategies is imported.
+    triggered at import time when xldvp_seg.detection.strategies is imported.
 
     Attributes:
         _registry: Dict mapping cell type names to StrategyMeta

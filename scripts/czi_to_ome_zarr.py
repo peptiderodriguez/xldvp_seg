@@ -43,7 +43,7 @@ except ImportError:
     print("ERROR: aicspylibczi is required. Install with: pip install aicspylibczi")
     sys.exit(1)
 
-from segmentation.utils.logging import get_logger
+from xldvp_seg.utils.logging import get_logger
 
 logger = get_logger(__name__)
 

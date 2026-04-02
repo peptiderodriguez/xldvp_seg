@@ -17,7 +17,7 @@ Features produced per cell:
           "centroid_local": [x, y]}, ...]
 
 Usage (as library):
-    from segmentation.analysis.nuclear_count import count_nuclei_in_cells
+    from xldvp_seg.analysis.nuclear_count import count_nuclei_in_cells
 
     results = count_nuclei_in_cells(cell_masks, nuc_tile, cellpose_model, pixel_size)
     # results = {cell_label: {n_nuclei: 1, nuclei: [{area_um2: 45.2, ...}], ...}, ...}
@@ -26,7 +26,7 @@ Usage (as library):
 import numpy as np
 from skimage.measure import regionprops
 
-from segmentation.utils.logging import get_logger
+from xldvp_seg.utils.logging import get_logger
 
 logger = get_logger(__name__)
 

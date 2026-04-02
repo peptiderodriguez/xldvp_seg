@@ -5,7 +5,7 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any
 
-from segmentation.utils.logging import get_logger
+from xldvp_seg.utils.logging import get_logger
 
 logger = get_logger(__name__)
 
@@ -19,7 +19,7 @@ def inspect(czi_path: str | Path) -> dict[str, Any]:
     Returns:
         Dict with channel metadata from CZI.
     """
-    from segmentation.io.czi_loader import get_czi_metadata
+    from xldvp_seg.io.czi_loader import get_czi_metadata
 
     return get_czi_metadata(str(czi_path))
 

@@ -5,7 +5,7 @@ in hot loops.  The pipeline still uses plain dicts internally for
 performance; ``Detection`` is for validation and documentation.
 
 Usage:
-    from segmentation.core.schema import Detection
+    from xldvp_seg.core.schema import Detection
 
     # Validate a detection dict (tolerates extra keys, handles legacy names)
     det = Detection.from_dict(raw_dict)

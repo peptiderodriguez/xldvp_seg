@@ -21,6 +21,6 @@ What actually happens. Include error messages/tracebacks.
 ## Environment
 - OS:
 - Python version:
-- xldvp_seg version (`xlseg --version` or `python -c "import segmentation; print(segmentation.__version__)"`)
+- xldvp_seg version (`xlseg --version` or `python -c "import xldvp_seg; print(xldvp_seg.__version__)"`)
 - GPU (if applicable):
 - SLURM (if applicable):

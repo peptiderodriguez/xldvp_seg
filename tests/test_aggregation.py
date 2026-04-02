@@ -1,4 +1,4 @@
-"""Tests for segmentation.analysis.aggregation module.
+"""Tests for xldvp_seg.analysis.aggregation module.
 
 Tests slide-level and cohort-level feature aggregation, plus AnnData conversion.
 """
@@ -6,12 +6,12 @@ Tests slide-level and cohort-level feature aggregation, plus AnnData conversion.
 import numpy as np
 import pandas as pd
 
-from segmentation.analysis.aggregation import (
+from xldvp_seg.analysis.aggregation import (
     aggregate_cohort,
     aggregate_slide,
     cohort_to_anndata,
 )
-from segmentation.core import SlideAnalysis
+from xldvp_seg.core import SlideAnalysis
 
 # ---------------------------------------------------------------------------
 # Helpers

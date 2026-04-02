@@ -1,6 +1,6 @@
 """Tests for Detection schema validation."""
 
-from segmentation.core.schema import Detection
+from xldvp_seg.core.schema import Detection
 
 
 def _sample_det(**overrides):

@@ -9,11 +9,11 @@ from pathlib import Path
 
 import numpy as np
 
-from segmentation.detection.tissue import calibrate_tissue_threshold, filter_tissue_tiles
-from segmentation.pipeline.preprocessing import apply_slide_preprocessing
-from segmentation.pipeline.samples import generate_tile_grid
-from segmentation.utils.json_utils import atomic_json_dump, fast_json_load
-from segmentation.utils.logging import get_logger
+from xldvp_seg.detection.tissue import calibrate_tissue_threshold, filter_tissue_tiles
+from xldvp_seg.pipeline.preprocessing import apply_slide_preprocessing
+from xldvp_seg.pipeline.samples import generate_tile_grid
+from xldvp_seg.utils.json_utils import atomic_json_dump, fast_json_load
+from xldvp_seg.utils.logging import get_logger
 
 logger = get_logger(__name__)
 
@@ -71,7 +71,7 @@ def setup_shared_memory(
             slide_output_dir - Path to this run's output directory
             tiles_dir       - Path to tiles/ subdirectory
     """
-    from segmentation.processing.multigpu_shm import SharedSlideManager
+    from xldvp_seg.processing.multigpu_shm import SharedSlideManager
 
     output_dir = Path(output_dir)
     slide_name = Path(getattr(args, "czi_path", "slide")).stem

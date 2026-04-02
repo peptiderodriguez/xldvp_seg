@@ -4,8 +4,8 @@ Aggregates per-cell features to slide-level summaries for cohort analysis
 (e.g., treatment vs control across 16 slides).
 
 Usage:
-    from segmentation.analysis.aggregation import aggregate_slide, aggregate_cohort
-    from segmentation.core import SlideAnalysis
+    from xldvp_seg.analysis.aggregation import aggregate_slide, aggregate_cohort
+    from xldvp_seg.core import SlideAnalysis
 
     slides = [SlideAnalysis.load(d) for d in slide_dirs]
     cohort = aggregate_cohort(slides, group_by="marker_profile")
@@ -15,7 +15,7 @@ Usage:
 import numpy as np
 import pandas as pd
 
-from segmentation.utils.logging import get_logger
+from xldvp_seg.utils.logging import get_logger
 
 logger = get_logger(__name__)
 

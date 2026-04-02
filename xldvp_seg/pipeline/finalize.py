@@ -8,16 +8,16 @@ JSON, and HTTP server startup.
 
 from pathlib import Path
 
-from segmentation.io.czi_loader import get_czi_metadata
-from segmentation.io.html_export import export_samples_to_html
-from segmentation.pipeline.server import (
+from xldvp_seg.io.czi_loader import get_czi_metadata
+from xldvp_seg.io.html_export import export_samples_to_html
+from xldvp_seg.pipeline.server import (
     show_server_status,
     start_server_and_tunnel,
     wait_for_server_shutdown,
 )
-from segmentation.utils.json_utils import atomic_json_dump
-from segmentation.utils.logging import get_logger
-from segmentation.utils.timestamps import timestamped_path, update_symlink
+from xldvp_seg.utils.json_utils import atomic_json_dump
+from xldvp_seg.utils.logging import get_logger
+from xldvp_seg.utils.timestamps import timestamped_path, update_symlink
 
 logger = get_logger(__name__)
 
@@ -148,7 +148,7 @@ def _finish_pipeline(
     logger.info(f"Saved {len(all_detections)} detections to {ts_detections}")
 
     # Log classifier provenance status
-    from segmentation.utils.classifier_registry import extract_classifier_info
+    from xldvp_seg.utils.classifier_registry import extract_classifier_info
 
     scored_count, prov_count, sample_clf_info = extract_classifier_info(all_detections)
     if scored_count > 0:
@@ -287,7 +287,7 @@ def _finish_pipeline(
         for d in all_detections[:1]
     )
 
-    from segmentation import __version__
+    from xldvp_seg import __version__
 
     summary = {
         "pipeline_version": __version__,

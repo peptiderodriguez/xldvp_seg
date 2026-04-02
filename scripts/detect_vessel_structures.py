@@ -30,12 +30,12 @@ from pathlib import Path
 
 import numpy as np
 
-from segmentation.utils.graph_topology import (
+from xldvp_seg.utils.graph_topology import (
     build_radius_graph_sparse,
     compute_all_metrics,
 )
-from segmentation.utils.json_utils import atomic_json_dump, fast_json_load
-from segmentation.utils.logging import get_logger
+from xldvp_seg.utils.json_utils import atomic_json_dump, fast_json_load
+from xldvp_seg.utils.logging import get_logger
 
 logger = get_logger(__name__)
 
@@ -106,7 +106,7 @@ def select_multi_marker_cells(detections, marker_filters, logic="or"):
 
 def extract_aligned_positions(detections, positive_idx):
     """Extract um positions with exact index alignment."""
-    from segmentation.utils.detection_utils import extract_positions_um
+    from xldvp_seg.utils.detection_utils import extract_positions_um
 
     positive_dets = [detections[i] for i in positive_idx]
     _, pixel_size = extract_positions_um(positive_dets)

@@ -15,7 +15,7 @@ from PIL import Image, ImageDraw
 from skimage.filters import threshold_otsu
 from skimage.measure import find_contours
 
-from segmentation.utils.json_utils import fast_json_load
+from xldvp_seg.utils.json_utils import fast_json_load
 
 
 def process_slide(czi_path, bone_regions, scale_factor=0.03):

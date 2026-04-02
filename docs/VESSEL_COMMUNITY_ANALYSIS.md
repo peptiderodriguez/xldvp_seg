@@ -27,7 +27,7 @@ Key parameters:
 
 Outputs: `cell_detections_vessel_tagged.json`, `cell_detections_vessel_only.json`, `vessel_structures.json`, `vessel_structures.csv`.
 
-Uses the shared `segmentation.utils.graph_topology` module (also used by `detect_curvilinear_patterns.py` for mesothelium strip detection).
+Uses the shared `xldvp_seg.utils.graph_topology` module (also used by `detect_curvilinear_patterns.py` for mesothelium strip detection).
 
 ## Tool 2: Vessel Community Analysis (Multi-Scale)
 

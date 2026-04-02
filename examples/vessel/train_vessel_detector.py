@@ -47,13 +47,13 @@ from typing import Any
 
 import numpy as np
 
-from segmentation.classification.vessel_detector_rf import (
+from xldvp_seg.classification.vessel_detector_rf import (
     MINIMAL_DETECTION_FEATURES,
     VESSEL_DETECTION_FEATURES,
     VesselDetectorRF,
 )
-from segmentation.utils.json_utils import atomic_json_dump, fast_json_load
-from segmentation.utils.logging import get_logger, setup_logging
+from xldvp_seg.utils.json_utils import atomic_json_dump, fast_json_load
+from xldvp_seg.utils.logging import get_logger, setup_logging
 
 # =============================================================================
 # SIZE CLASS DEFINITIONS FOR STRATIFIED SAMPLING

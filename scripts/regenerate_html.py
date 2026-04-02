@@ -58,16 +58,16 @@ except ImportError:
 import cv2
 from PIL import Image
 
-from segmentation.io.czi_loader import get_czi_metadata, get_loader
-from segmentation.io.html_export import (
+from xldvp_seg.io.czi_loader import get_czi_metadata, get_loader
+from xldvp_seg.io.html_export import (
     export_samples_to_html,
     image_to_base64,
     percentile_normalize,
 )
-from segmentation.pipeline.samples import create_sample_from_detection
-from segmentation.utils.islet_utils import classify_islet_marker, compute_islet_marker_thresholds
-from segmentation.utils.json_utils import fast_json_load
-from segmentation.utils.logging import get_logger, setup_logging
+from xldvp_seg.pipeline.samples import create_sample_from_detection
+from xldvp_seg.utils.islet_utils import classify_islet_marker, compute_islet_marker_thresholds
+from xldvp_seg.utils.json_utils import fast_json_load
+from xldvp_seg.utils.logging import get_logger, setup_logging
 
 logger = get_logger(__name__)
 
@@ -530,7 +530,7 @@ def main():
 
     # Apply marker filter (e.g., "MSLN_class==positive")
     if args.marker_filter:
-        from segmentation.utils.detection_utils import apply_marker_filter
+        from xldvp_seg.utils.detection_utils import apply_marker_filter
 
         all_detections = apply_marker_filter(all_detections, args.marker_filter)
 
@@ -801,7 +801,7 @@ def main():
 
     # Build classifier subtitle for HTML header
     clf_subtitle = None
-    from segmentation.utils.classifier_registry import extract_classifier_info
+    from xldvp_seg.utils.classifier_registry import extract_classifier_info
 
     _scored, _prov, _clf_info = extract_classifier_info(all_detections)
     if _scored > 0 and _clf_info:

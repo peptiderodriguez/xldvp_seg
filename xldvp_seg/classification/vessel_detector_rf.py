@@ -43,7 +43,7 @@ from sklearn.model_selection import (
     cross_val_score,
 )
 
-from segmentation.utils.logging import get_logger
+from xldvp_seg.utils.logging import get_logger
 
 logger = get_logger(__name__)
 

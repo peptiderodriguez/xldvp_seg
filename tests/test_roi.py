@@ -1,18 +1,18 @@
-"""Tests for segmentation.roi — ROI-restricted cell detection utilities."""
+"""Tests for xldvp_seg.roi — ROI-restricted cell detection utilities."""
 
 import json
 
 import numpy as np
 
-from segmentation.roi.circular_objects import find_circular_regions
-from segmentation.roi.common import (
+from xldvp_seg.roi.circular_objects import find_circular_regions
+from xldvp_seg.roi.common import (
     extract_region_bboxes,
     filter_detections_by_roi_mask,
     filter_tiles_by_rois,
     number_rois_spatial,
 )
-from segmentation.roi.from_file import load_rois_from_mask, load_rois_from_polygons
-from segmentation.roi.marker_threshold import find_regions_by_marker_signal
+from xldvp_seg.roi.from_file import load_rois_from_mask, load_rois_from_polygons
+from xldvp_seg.roi.marker_threshold import find_regions_by_marker_signal
 
 # ---------------------------------------------------------------------------
 # Helpers

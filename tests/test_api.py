@@ -1,4 +1,4 @@
-"""Tests for segmentation.api.tl -- analysis tool wrappers.
+"""Tests for xldvp_seg.api.tl -- analysis tool wrappers.
 
 Uses unittest.mock.patch to avoid heavy imports (sklearn, scripts, GPU models).
 Tests that tl.score(), tl.markers(), and tl.train() pass arguments correctly
@@ -12,8 +12,8 @@ from unittest.mock import MagicMock, patch
 import numpy as np
 import pytest
 
-from segmentation.api import tl
-from segmentation.core import SlideAnalysis
+from xldvp_seg.api import tl
+from xldvp_seg.core import SlideAnalysis
 
 
 def _make_detections(n=5):
@@ -43,7 +43,7 @@ def _make_detections(n=5):
 class TestTlScore:
     """Tests for tl.score() -- RF classifier scoring."""
 
-    @patch("segmentation.utils.detection_utils.load_rf_classifier")
+    @patch("xldvp_seg.utils.detection_utils.load_rf_classifier")
     def test_score_applies_predictions(self, mock_load_clf):
         """Verify score() calls predict_proba and writes rf_prediction."""
         mock_pipeline = MagicMock()
@@ -75,7 +75,7 @@ class TestTlScore:
         assert slide.detections[0]["rf_prediction"] == pytest.approx(0.8)
         assert slide.detections[1]["rf_prediction"] == pytest.approx(0.4)
 
-    @patch("segmentation.utils.detection_utils.load_rf_classifier")
+    @patch("xldvp_seg.utils.detection_utils.load_rf_classifier")
     def test_score_empty_detections(self, mock_load_clf):
         """Score on empty slide returns slide without calling classifier."""
         mock_load_clf.return_value = {
@@ -89,7 +89,7 @@ class TestTlScore:
         assert result is slide
         mock_load_clf.return_value["pipeline"].predict_proba.assert_not_called()
 
-    @patch("segmentation.utils.detection_utils.load_rf_classifier")
+    @patch("xldvp_seg.utils.detection_utils.load_rf_classifier")
     def test_score_missing_features(self, mock_load_clf):
         """Detections missing required features are skipped."""
         mock_pipeline = MagicMock()
@@ -105,7 +105,7 @@ class TestTlScore:
         assert result is slide
         mock_pipeline.predict_proba.assert_not_called()
 
-    @patch("segmentation.utils.detection_utils.load_rf_classifier")
+    @patch("xldvp_seg.utils.detection_utils.load_rf_classifier")
     def test_score_custom_field(self, mock_load_clf):
         """Score with custom score_field name."""
         mock_pipeline = MagicMock()
@@ -122,7 +122,7 @@ class TestTlScore:
         assert "custom_score" in slide.detections[0]
         assert slide.detections[0]["custom_score"] == pytest.approx(0.9)
 
-    @patch("segmentation.utils.detection_utils.load_rf_classifier")
+    @patch("xldvp_seg.utils.detection_utils.load_rf_classifier")
     def test_score_invalidates_features_df_cache(self, mock_load_clf):
         """Scoring should clear the cached features_df."""
         mock_pipeline = MagicMock()
@@ -147,7 +147,7 @@ class TestTlScore:
         tl.score(slide, classifier="clf.pkl")
         assert slide._features_df is None
 
-    @patch("segmentation.utils.detection_utils.load_rf_classifier")
+    @patch("xldvp_seg.utils.detection_utils.load_rf_classifier")
     def test_score_partial_features(self, mock_load_clf):
         """When some detections have features and some don't, only valid ones scored."""
         mock_pipeline = MagicMock()

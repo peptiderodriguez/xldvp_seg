@@ -62,7 +62,7 @@ def main():
             sys.exit(1)
         return
 
-    from segmentation.pipeline.server import (
+    from xldvp_seg.pipeline.server import (
         show_server_status,
         start_server_and_tunnel,
         stop_background_server,

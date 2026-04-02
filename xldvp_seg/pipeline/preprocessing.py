@@ -9,7 +9,7 @@ import json
 
 import numpy as np
 
-from segmentation.utils.logging import get_logger
+from xldvp_seg.utils.logging import get_logger
 
 logger = get_logger(__name__)
 
@@ -42,7 +42,7 @@ def apply_slide_preprocessing(args, all_channel_data, loader):
 
 def _apply_photobleach_correction(args, all_channel_data, loader):
     """Apply slide-wide photobleaching correction to fix horizontal/vertical banding."""
-    from segmentation.preprocessing.illumination import (
+    from xldvp_seg.preprocessing.illumination import (
         estimate_band_severity,
         normalize_rows_columns,
     )
@@ -98,7 +98,7 @@ def _apply_photobleach_correction(args, all_channel_data, loader):
 
 def _apply_flat_field_correction(args, all_channel_data, loader):
     """Apply flat-field illumination correction to smooth regional intensity gradients."""
-    from segmentation.preprocessing.flat_field import estimate_illumination_profile
+    from xldvp_seg.preprocessing.flat_field import estimate_illumination_profile
 
     logger.info(f"\n{'='*70}")
     logger.info("FLAT-FIELD ILLUMINATION CORRECTION")
@@ -121,7 +121,7 @@ def _apply_flat_field_correction(args, all_channel_data, loader):
 
 def _apply_reinhard_normalization(args, all_channel_data, loader):
     """Apply cross-slide Reinhard normalization (LAB space, median/MAD)."""
-    from segmentation.preprocessing.stain_normalization import apply_reinhard_normalization_MEDIAN
+    from xldvp_seg.preprocessing.stain_normalization import apply_reinhard_normalization_MEDIAN
 
     logger.info(f"\n{'='*70}")
     logger.info("CROSS-SLIDE REINHARD NORMALIZATION (median/MAD)")
@@ -168,7 +168,7 @@ def _apply_reinhard_normalization(args, all_channel_data, loader):
         )
         single_u8 = (single_u8 >> 8).astype(np.uint8)
     elif single_u8.dtype != np.uint8:
-        from segmentation.utils.detection_utils import safe_to_uint8
+        from xldvp_seg.utils.detection_utils import safe_to_uint8
 
         single_u8 = safe_to_uint8(single_u8)
     rgb_for_norm = np.stack([single_u8] * 3, axis=-1)

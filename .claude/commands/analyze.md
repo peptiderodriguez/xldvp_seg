@@ -128,12 +128,12 @@ For beginners, expand on each step as you reach it. For advanced users, just ask
 | **Convert** | CZI to OME-Zarr pyramids for Napari | `scripts/czi_to_ome_zarr.py` |
 | **Spatial smooth** | Feature-gated spatial smoothing for tighter UMAP clusters | `scripts/cluster_by_features.py --spatial-smooth` |
 | **Dedup methods** | Mask overlap (default) or contour IoU NMS (faster, less memory) | `--dedup-method {mask_overlap,iou_nms}` |
-| **Seg metrics** | IoU, Dice, PQ, Hungarian matching for benchmarking segmenters | `segmentation.metrics` module |
-| **Sample data** | Synthetic test detections (500 cells, 5 clusters) for dev/testing | `segmentation.datasets.sample()` |
-| **Python API** | Scanpy-style wrappers: `segmentation.api.tl.markers()`, `.score()`, `.cluster()` | `segmentation.api` (`pp`, `tl`, `pl`, `io`) |
-| **SlideAnalysis** | Central state object wrapping pipeline output with lazy loading | `segmentation.core.SlideAnalysis` |
-| **Cohort aggregation** | Slide-level feature aggregation for multi-slide comparison | `segmentation.analysis.aggregation` |
-| **Omic linking** | Bridge morphological features to mass-spec proteomics data | `segmentation.analysis.omic_linker.OmicLinker` |
+| **Seg metrics** | IoU, Dice, PQ, Hungarian matching for benchmarking segmenters | `xldvp_seg.metrics` module |
+| **Sample data** | Synthetic test detections (500 cells, 5 clusters) for dev/testing | `xldvp_seg.datasets.sample()` |
+| **Python API** | Scanpy-style wrappers: `xldvp_seg.api.tl.markers()`, `.score()`, `.cluster()` | `xldvp_seg.api` (`pp`, `tl`, `pl`, `io`) |
+| **SlideAnalysis** | Central state object wrapping pipeline output with lazy loading | `xldvp_seg.core.SlideAnalysis` |
+| **Cohort aggregation** | Slide-level feature aggregation for multi-slide comparison | `xldvp_seg.analysis.aggregation` |
+| **Omic linking** | Bridge morphological features to mass-spec proteomics data | `xldvp_seg.analysis.omic_linker.OmicLinker` |
 | **Model download** | Download brightfield FMs (UNI2, Virchow2, CONCH, Phikon-v2) | `xlseg download-models --brightfield` |
 | **One-command** | Classify → spatial cluster → viewer → serve (all in one) | `scripts/view_slide.py` |
 | **ROI detection** | Islet regions, TMA cores, bone marrow areas → per-ROI cell detection | `examples/islet/segment_islet_regions.py`, `examples/tma/detect_tma_cells.py` |
@@ -190,7 +190,7 @@ This prints the actual channel index → fluorophore → excitation/emission for
 
 Then also parse the filename markers to match antibody names to the fluorophores:
 ```bash
-$XLDVP_PYTHON -c "from segmentation.io.czi_loader import parse_markers_from_filename; import json; print(json.dumps(parse_markers_from_filename('<czi_filename>'), indent=2))"
+$XLDVP_PYTHON -c "from xldvp_seg.io.czi_loader import parse_markers_from_filename; import json; print(json.dumps(parse_markers_from_filename('<czi_filename>'), indent=2))"
 ```
 
 Build and show the user a confirmed table, for example:
@@ -875,7 +875,7 @@ sdata = sd.read_zarr("<output>/<celltype>_spatialdata.zarr")
 adata = sdata["table"]
 
 # Or load from pipeline output directly
-from segmentation.core import SlideAnalysis
+from xldvp_seg.core import SlideAnalysis
 slide = SlideAnalysis.load("<output>/run_dir/")
 adata = slide.to_anndata()
 
@@ -981,12 +981,12 @@ PYTHONPATH=$REPO $XLDVP_PYTHON $REPO/run_lmd_export.py \
 
 **Step 28 — Replicate building (proteomics).** For experiments collecting area-normalized replicates (e.g., DVP with multiple cell-equivalents per well):
 ```bash
-# Generic: use segmentation.lmd.selection.select_cells_for_lmd() in Python
+# Generic: use xldvp_seg.lmd.selection.select_cells_for_lmd() in Python
 # MK-specific wrapper with multi-plate well assignment:
 PYTHONPATH=$REPO $XLDVP_PYTHON $REPO/examples/bone_marrow/select_mks_for_lmd.py \
     --score-threshold 0.80 --target-area 10000 --max-replicates 4
 ```
-Multi-plate support: `segmentation.lmd.well_plate` handles automatic overflow to additional 384-well plates when >308 wells are needed. Empty QC wells (10% of samples) are inserted evenly across all plates. Well ordering: serpentine within quadrants (B2→B3→C3→C2), nearest-corner transitions between quadrants to minimize laser head travel.
+Multi-plate support: `xldvp_seg.lmd.well_plate` handles automatic overflow to additional 384-well plates when >308 wells are needed. Empty QC wells (10% of samples) are inserted evenly across all plates. Well ordering: serpentine within quadrants (B2→B3→C3→C2), nearest-corner transitions between quadrants to minimize laser head travel.
 
 **Step 28b — Sliding window sampling (spatially-resolved LMD).** For collecting cells along a tissue structure (e.g., brain region, mesothelial ribbon) where spatial position matters:
 
@@ -1051,8 +1051,8 @@ Output filenames include timestamps so successive runs don't overwrite.
 
 **Step 29 — Cohort aggregation.** If the user has multiple slides:
 ```python
-from segmentation.core import SlideAnalysis
-from segmentation.analysis.aggregation import aggregate_cohort, cohort_to_anndata
+from xldvp_seg.core import SlideAnalysis
+from xldvp_seg.analysis.aggregation import aggregate_cohort, cohort_to_anndata
 
 slides = [SlideAnalysis.load(d) for d in slide_dirs]
 cohort = aggregate_cohort(slides, group_by="marker_profile")
@@ -1081,7 +1081,7 @@ DVP typically **pools multiple cells per well** for sufficient protein yield. `O
 Each well also gets `pool_n_cells` and `pool_spread_um` (spatial spread — how tightly clustered the pooled cells are on the tissue).
 
 ```python
-from segmentation.analysis.omic_linker import OmicLinker
+from xldvp_seg.analysis.omic_linker import OmicLinker
 
 linker = OmicLinker.from_slide(slide)
 linker.load_proteomics("proteomics.csv")    # wells × proteins (pooled measurement)
@@ -1097,8 +1097,8 @@ top_proteins = linker.rank_proteins("area", top_n=20)
 
 **Step 31 — Python API** (for notebook users):
 ```python
-from segmentation.core import SlideAnalysis
-from segmentation.api import tl, pp
+from xldvp_seg.core import SlideAnalysis
+from xldvp_seg.api import tl, pp
 
 # Load existing results
 slide = SlideAnalysis.load("output/my_slide/run_20260324_120000/")

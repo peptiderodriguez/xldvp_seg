@@ -9,7 +9,7 @@ Functions for preparing detection contours for laser microdissection:
 Works with any cell type (NMJ, MK, vessel, mesothelium, etc.).
 
 Usage:
-    from segmentation.lmd.contour_processing import process_contour, process_contours_batch
+    from xldvp_seg.lmd.contour_processing import process_contour, process_contours_batch
 
     # Single contour (pixel_size_um from CZI metadata)
     processed = process_contour(contour_px, pixel_size_um=pixel_size)
@@ -27,7 +27,7 @@ import numpy as np
 from shapely.geometry import Polygon
 from shapely.validation import make_valid
 
-from segmentation.utils.logging import get_logger
+from xldvp_seg.utils.logging import get_logger
 
 logger = get_logger(__name__)
 

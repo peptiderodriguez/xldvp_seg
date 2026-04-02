@@ -2,7 +2,7 @@
 """Calculate tissue areas from CZI files using the pipeline's variance-based tissue detection.
 
 Uses the same K-means variance-based approach as the segmentation pipeline
-(segmentation.detection.tissue), ensuring consistency between tissue detection
+(xldvp_seg.detection.tissue), ensuring consistency between tissue detection
 used for segmentation and for density normalization.
 
 Optionally intersects with bone region polygons for per-bone density.
@@ -33,13 +33,13 @@ import numpy as np
 from skimage.draw import polygon as draw_polygon
 from skimage.morphology import remove_small_objects
 
-from segmentation.detection.tissue import (
+from xldvp_seg.detection.tissue import (
     _normalize_to_uint8,
     calculate_block_variances,
     compute_pixel_level_tissue_mask,
     compute_variance_threshold,
 )
-from segmentation.utils.json_utils import atomic_json_dump, fast_json_load
+from xldvp_seg.utils.json_utils import atomic_json_dump, fast_json_load
 
 
 def read_czi_and_detect_tissue(czi_path, scale_factor=0.05):

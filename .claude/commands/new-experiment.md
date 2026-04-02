@@ -11,7 +11,7 @@ PYTHONPATH=$REPO $XLDVP_PYTHON $REPO/scripts/czi_info.py <path>
 ```
 Also parse the filename:
 ```bash
-$XLDVP_PYTHON -c "from segmentation.io.czi_loader import parse_markers_from_filename; import json; print(json.dumps(parse_markers_from_filename('<filename>'), indent=2))"
+$XLDVP_PYTHON -c "from xldvp_seg.io.czi_loader import parse_markers_from_filename; import json; print(json.dumps(parse_markers_from_filename('<filename>'), indent=2))"
 ```
 
 Show the channel table and **ask the user to confirm** before proceeding:

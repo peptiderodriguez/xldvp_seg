@@ -7,7 +7,7 @@ automatically adjust worker counts to prevent OOM crashes.
 Shared across all detection pipelines.
 
 Usage:
-    from segmentation.processing.memory import validate_system_resources, get_safe_worker_count
+    from xldvp_seg.processing.memory import validate_system_resources, get_safe_worker_count
 
     # Check resources before starting
     result = validate_system_resources(num_workers=4, tile_size=3000)
@@ -22,8 +22,8 @@ from typing import Any
 
 import psutil
 
-from segmentation.utils.config import get_memory_threshold
-from segmentation.utils.logging import get_logger
+from xldvp_seg.utils.config import get_memory_threshold
+from xldvp_seg.utils.logging import get_logger
 
 logger = get_logger(__name__)
 
@@ -88,7 +88,7 @@ def validate_system_resources(num_workers: int, tile_size: int) -> dict[str, Any
     try:
         import torch
 
-        from segmentation.utils.device import get_default_device
+        from xldvp_seg.utils.device import get_default_device
     except ImportError:
         torch = None
         logger.info("PyTorch not available, skipping GPU validation")
@@ -193,7 +193,7 @@ def get_memory_usage() -> dict[str, float]:
     try:
         import torch
 
-        from segmentation.utils.device import get_default_device
+        from xldvp_seg.utils.device import get_default_device
 
         _device_type = get_default_device()
     except ImportError:

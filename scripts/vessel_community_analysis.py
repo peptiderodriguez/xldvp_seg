@@ -28,24 +28,24 @@ from scipy.sparse.csgraph import connected_components
 
 REPO = Path(__file__).resolve().parent.parent
 
-from segmentation.utils.graph_topology import (
+from xldvp_seg.utils.graph_topology import (
     build_radius_graph_sparse,
     safe_hull_area,
 )
-from segmentation.utils.graph_topology import (
+from xldvp_seg.utils.graph_topology import (
     circularity as _circularity,
 )
-from segmentation.utils.graph_topology import (
+from xldvp_seg.utils.graph_topology import (
     elongation as _elongation,
 )
-from segmentation.utils.graph_topology import (
+from xldvp_seg.utils.graph_topology import (
     has_curvature as _has_curvature,
 )
-from segmentation.utils.graph_topology import (
+from xldvp_seg.utils.graph_topology import (
     hollowness as _hollowness,
 )
-from segmentation.utils.json_utils import atomic_json_dump, fast_json_load
-from segmentation.utils.logging import get_logger, setup_logging
+from xldvp_seg.utils.json_utils import atomic_json_dump, fast_json_load
+from xldvp_seg.utils.logging import get_logger, setup_logging
 
 logger = get_logger(__name__)
 
@@ -58,7 +58,7 @@ logger = get_logger(__name__)
 def classify_morphology(pts):
     """Classify spatial pattern of a point set.
 
-    Uses shared metrics from ``segmentation.utils.graph_topology``.
+    Uses shared metrics from ``xldvp_seg.utils.graph_topology``.
 
     Returns (pattern, metrics) where pattern is one of:
         'ring', 'arc', 'linear', 'cluster'
@@ -272,7 +272,7 @@ def compute_hierarchy(multi_scale_results, radii_um):
 
 
 # ---------------------------------------------------------------------------
-# safe_hull_area imported from segmentation.utils.graph_topology
+# safe_hull_area imported from xldvp_seg.utils.graph_topology
 
 
 # ---------------------------------------------------------------------------

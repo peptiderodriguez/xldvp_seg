@@ -322,7 +322,7 @@ def serve_directory(directory: Path, port: int):
     Uses the pipeline's server module which tracks PIDs per-port and only
     cleans up THIS script's processes on exit — other tunnels are untouched.
     """
-    from segmentation.pipeline.server import start_server_and_tunnel, wait_for_server_shutdown
+    from xldvp_seg.pipeline.server import start_server_and_tunnel, wait_for_server_shutdown
 
     # Resolve the directory to serve
     serve_dir = directory

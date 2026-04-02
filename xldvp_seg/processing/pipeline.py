@@ -8,7 +8,7 @@ Provides a common framework for:
 - Generating HTML annotation interfaces
 
 Usage:
-    from segmentation.processing.pipeline import DetectionPipeline
+    from xldvp_seg.processing.pipeline import DetectionPipeline
 
     pipeline = DetectionPipeline(
         czi_path='/path/to/slide.czi',
@@ -38,22 +38,22 @@ from typing import Any
 import numpy as np
 from tqdm import tqdm
 
-from segmentation.io.html_export import export_samples_to_html
-from segmentation.processing.coordinates import (
+from xldvp_seg.io.html_export import export_samples_to_html
+from xldvp_seg.processing.coordinates import (
     generate_uid,
     tile_to_global_coords,
 )
 
 # NOTE: CZILoader import moved to __init__ to avoid circular import
 # (czi_loader.py -> processing.memory -> processing/__init__.py -> pipeline.py -> czi_loader.py)
-from segmentation.utils.config import (
+from xldvp_seg.utils.config import (
     create_run_config,
     get_output_dir,
     load_config,
     save_config,
 )
-from segmentation.utils.json_utils import NumpyEncoder
-from segmentation.utils.logging import get_logger
+from xldvp_seg.utils.json_utils import NumpyEncoder
+from xldvp_seg.utils.logging import get_logger
 
 logger = get_logger(__name__)
 
@@ -118,7 +118,7 @@ class DetectionPipeline:
             self.config = load_config(self.output_dir, cell_type)
 
         # Initialize CZI loader (local import to avoid circular import)
-        from segmentation.io.czi_loader import CZILoader
+        from xldvp_seg.io.czi_loader import CZILoader
 
         self.loader = CZILoader(
             czi_path, load_to_ram=load_to_ram, channel=channel if load_to_ram else None, quiet=quiet

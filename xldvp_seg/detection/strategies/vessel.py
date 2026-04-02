@@ -24,14 +24,14 @@ from typing import Any, Optional
 import cv2
 import numpy as np
 
-from segmentation.detection.registry import register_strategy
-from segmentation.utils.device import empty_cache, get_default_device
-from segmentation.utils.feature_extraction import (
+from xldvp_seg.detection.registry import register_strategy
+from xldvp_seg.utils.device import empty_cache, get_default_device
+from xldvp_seg.utils.feature_extraction import (
     SAM2_EMBEDDING_DIM,
     extract_morphological_features,
 )
-from segmentation.utils.logging import get_logger
-from segmentation.utils.vessel_features import (
+from xldvp_seg.utils.logging import get_logger
+from xldvp_seg.utils.vessel_features import (
     extract_all_vessel_features_multichannel,
     extract_vessel_features,
 )
@@ -4482,7 +4482,7 @@ class VesselStrategy(DetectionStrategy, MultiChannelFeatureMixin):
         import gc
         import random
 
-        from segmentation.utils.multiscale import (
+        from xldvp_seg.utils.multiscale import (
             convert_detection_to_full_res,
             generate_tile_grid_at_scale,
             get_scale_params,
@@ -4695,7 +4695,7 @@ class VesselStrategy(DetectionStrategy, MultiChannelFeatureMixin):
 
         from segment_anything import SamAutomaticMaskGenerator, sam_model_registry
 
-        from segmentation.utils.multiscale import (
+        from xldvp_seg.utils.multiscale import (
             convert_detection_to_full_res,
             generate_tile_grid_at_scale,
             get_scale_params,

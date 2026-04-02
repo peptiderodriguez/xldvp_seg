@@ -4,8 +4,8 @@ For DVP (Deep Visual Proteomics): links cell morphology from the pipeline
 to mass-spec proteomic profiles from LMD-cut cells.
 
 Usage:
-    from segmentation.analysis.omic_linker import OmicLinker
-    from segmentation.core import SlideAnalysis
+    from xldvp_seg.analysis.omic_linker import OmicLinker
+    from xldvp_seg.core import SlideAnalysis
 
     slide = SlideAnalysis.load("output/...")
     linker = OmicLinker.from_slide(slide)
@@ -21,7 +21,7 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 
-from segmentation.utils.logging import get_logger
+from xldvp_seg.utils.logging import get_logger
 
 logger = get_logger(__name__)
 
@@ -85,7 +85,7 @@ class OmicLinker:
                 )
                 return
             raise FileNotFoundError(f"No well mapping files found in {lmd_dir}")
-        from segmentation.utils.json_utils import fast_json_load
+        from xldvp_seg.utils.json_utils import fast_json_load
 
         mapping = fast_json_load(mapping_files[0])
         if isinstance(mapping, list):

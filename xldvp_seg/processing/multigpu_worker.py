@@ -39,12 +39,12 @@ from typing import Any
 
 import numpy as np
 
-from segmentation.processing.multigpu_shm import (
+from xldvp_seg.processing.multigpu_shm import (
     register_shm_for_cleanup,
     unregister_shm_for_cleanup,
 )
-from segmentation.utils.detection_utils import safe_to_uint8 as _safe_to_uint8
-from segmentation.utils.logging import get_logger
+from xldvp_seg.utils.detection_utils import safe_to_uint8 as _safe_to_uint8
+from xldvp_seg.utils.logging import get_logger
 
 logger = get_logger(__name__)
 
@@ -79,9 +79,9 @@ def _gpu_worker(
     islet_display_channels = config.get("islet_display_channels")
     tiles_dir = config.get("tiles_dir")
 
-    from segmentation.detection.tissue import has_tissue
-    from segmentation.processing.tile_processing import process_single_tile
-    from segmentation.utils.device import empty_cache, set_device_for_worker
+    from xldvp_seg.detection.tissue import has_tissue
+    from xldvp_seg.processing.tile_processing import process_single_tile
+    from xldvp_seg.utils.device import empty_cache, set_device_for_worker
 
     # Configure device for this worker (sets CUDA_VISIBLE_DEVICES on CUDA,
     # returns 'mps' on Apple Silicon, 'cpu' otherwise)
@@ -160,7 +160,7 @@ def _gpu_worker(
         try:
             from cellpose import models as cellpose_models
 
-            from segmentation.utils.device import device_supports_gpu
+            from xldvp_seg.utils.device import device_supports_gpu
 
             cellpose_model = cellpose_models.CellposeModel(
                 gpu=device_supports_gpu(device), pretrained_model="cpsam"
@@ -173,7 +173,7 @@ def _gpu_worker(
     # --- Load deep feature models if requested ---
     if extract_deep_features:
         try:
-            from segmentation.models.manager import ModelManager
+            from xldvp_seg.models.manager import ModelManager
 
             device_str = str(device)
             mgr = ModelManager(device=device_str)
@@ -191,14 +191,14 @@ def _gpu_worker(
     if classifier_path and Path(classifier_path).exists():
         try:
             if classifier_path.endswith(".pth"):
-                from segmentation.detection.strategies.nmj import load_nmj_classifier
+                from xldvp_seg.detection.strategies.nmj import load_nmj_classifier
 
                 model, transform, dev = load_nmj_classifier(classifier_path, device)
                 models["classifier"] = model
                 models["transform"] = transform
                 models["classifier_type"] = "cnn"
             else:
-                from segmentation.detection.strategies.nmj import load_nmj_rf_classifier
+                from xldvp_seg.detection.strategies.nmj import load_nmj_rf_classifier
 
                 classifier_data = load_nmj_rf_classifier(classifier_path)
                 models["classifier"] = classifier_data["pipeline"]
@@ -210,7 +210,7 @@ def _gpu_worker(
             logger.warning(f"[{worker_name}] Failed to load classifier: {e}")
 
     # --- Create strategy via factory (shared with run_segmentation.py) ---
-    from segmentation.processing.strategy_factory import create_strategy
+    from xldvp_seg.processing.strategy_factory import create_strategy
 
     strategy = create_strategy(
         cell_type=cell_type,
@@ -500,7 +500,7 @@ def _gpu_worker(
                             tile_out.mkdir(exist_ok=True)
                             masks_file = tile_out / f"{cell_type}_masks.h5"
                             with h5py.File(masks_file, "w") as f:
-                                from segmentation.io.html_export import create_hdf5_dataset
+                                from xldvp_seg.io.html_export import create_hdf5_dataset
 
                                 create_hdf5_dataset(f, "masks", masks)
                             out["masks"] = None  # saved to disk, don't send through Queue

@@ -57,7 +57,7 @@ class TestFullPipelineFeatureDimensions(unittest.TestCase):
 
     def test_morphological_features_count_equals_78(self):
         """Verify MORPHOLOGICAL_FEATURES_COUNT constant equals 78 (full pipeline)."""
-        from segmentation.utils.config import MORPHOLOGICAL_FEATURES_COUNT
+        from xldvp_seg.utils.config import MORPHOLOGICAL_FEATURES_COUNT
 
         self.assertEqual(
             MORPHOLOGICAL_FEATURES_COUNT,
@@ -67,7 +67,7 @@ class TestFullPipelineFeatureDimensions(unittest.TestCase):
 
     def test_sam2_embedding_dimension_equals_256(self):
         """Verify SAM2_EMBEDDING_DIMENSION constant equals 256."""
-        from segmentation.utils.config import SAM2_EMBEDDING_DIMENSION
+        from xldvp_seg.utils.config import SAM2_EMBEDDING_DIMENSION
 
         self.assertEqual(
             SAM2_EMBEDDING_DIMENSION,
@@ -77,7 +77,7 @@ class TestFullPipelineFeatureDimensions(unittest.TestCase):
 
     def test_resnet_embedding_dimension_equals_4096(self):
         """Verify RESNET_EMBEDDING_DIMENSION constant equals 4096 (2x2048 masked+context)."""
-        from segmentation.utils.config import RESNET_EMBEDDING_DIMENSION
+        from xldvp_seg.utils.config import RESNET_EMBEDDING_DIMENSION
 
         self.assertEqual(
             RESNET_EMBEDDING_DIMENSION,
@@ -87,7 +87,7 @@ class TestFullPipelineFeatureDimensions(unittest.TestCase):
 
     def test_dinov2_embedding_dimension_equals_2048(self):
         """Verify DINOV2_EMBEDDING_DIMENSION constant equals 2048 (2x1024 masked+context)."""
-        from segmentation.utils.config import DINOV2_EMBEDDING_DIMENSION
+        from xldvp_seg.utils.config import DINOV2_EMBEDDING_DIMENSION
 
         self.assertEqual(
             DINOV2_EMBEDDING_DIMENSION,
@@ -97,7 +97,7 @@ class TestFullPipelineFeatureDimensions(unittest.TestCase):
 
     def test_total_features_per_cell_equals_6478(self):
         """Verify TOTAL_FEATURES_PER_CELL constant equals 6478 (78 + 256 + 4096 + 2048)."""
-        from segmentation.utils.config import TOTAL_FEATURES_PER_CELL
+        from xldvp_seg.utils.config import TOTAL_FEATURES_PER_CELL
 
         self.assertEqual(
             TOTAL_FEATURES_PER_CELL,
@@ -107,7 +107,7 @@ class TestFullPipelineFeatureDimensions(unittest.TestCase):
 
     def test_total_features_equals_sum_of_components(self):
         """Verify TOTAL_FEATURES_PER_CELL equals sum of all full-pipeline components."""
-        from segmentation.utils.config import (
+        from xldvp_seg.utils.config import (
             DINOV2_EMBEDDING_DIMENSION,
             MORPHOLOGICAL_FEATURES_COUNT,
             RESNET_EMBEDDING_DIMENSION,
@@ -131,7 +131,7 @@ class TestFullPipelineFeatureDimensions(unittest.TestCase):
 
     def test_get_feature_dimensions_returns_correct_values(self):
         """Verify get_feature_dimensions() helper returns correct full-pipeline values."""
-        from segmentation.utils.config import get_feature_dimensions
+        from xldvp_seg.utils.config import get_feature_dimensions
 
         dims = get_feature_dimensions()
 
@@ -161,7 +161,7 @@ class TestSinglePassFeatureDimensions(unittest.TestCase):
 
     def test_morphological_feature_count_equals_22(self):
         """Verify MORPHOLOGICAL_FEATURE_COUNT (single-pass) equals 22."""
-        from segmentation.utils.feature_extraction import MORPHOLOGICAL_FEATURE_COUNT
+        from xldvp_seg.utils.feature_extraction import MORPHOLOGICAL_FEATURE_COUNT
 
         self.assertEqual(
             MORPHOLOGICAL_FEATURE_COUNT,
@@ -171,7 +171,7 @@ class TestSinglePassFeatureDimensions(unittest.TestCase):
 
     def test_resnet50_feature_dim_equals_2048(self):
         """Verify RESNET50_FEATURE_DIM (single-pass) equals 2048."""
-        from segmentation.utils.feature_extraction import RESNET50_FEATURE_DIM
+        from xldvp_seg.utils.feature_extraction import RESNET50_FEATURE_DIM
 
         self.assertEqual(
             RESNET50_FEATURE_DIM,
@@ -181,14 +181,14 @@ class TestSinglePassFeatureDimensions(unittest.TestCase):
 
     def test_sam2_embedding_dim_equals_256(self):
         """Verify SAM2_EMBEDDING_DIM equals 256."""
-        from segmentation.utils.feature_extraction import SAM2_EMBEDDING_DIM
+        from xldvp_seg.utils.feature_extraction import SAM2_EMBEDDING_DIM
 
         self.assertEqual(SAM2_EMBEDDING_DIM, 256)
 
     def test_sam2_dims_match_across_modules(self):
         """Verify SAM2 dimension is consistent between feature_extraction.py and config.py."""
-        from segmentation.utils.config import SAM2_EMBEDDING_DIMENSION
-        from segmentation.utils.feature_extraction import SAM2_EMBEDDING_DIM
+        from xldvp_seg.utils.config import SAM2_EMBEDDING_DIMENSION
+        from xldvp_seg.utils.feature_extraction import SAM2_EMBEDDING_DIM
 
         self.assertEqual(
             SAM2_EMBEDDING_DIM,
@@ -198,8 +198,8 @@ class TestSinglePassFeatureDimensions(unittest.TestCase):
 
     def test_resnet_config_is_double_single_pass(self):
         """Verify config.py ResNet dim is 2x the single-pass dim (masked + context)."""
-        from segmentation.utils.config import RESNET_EMBEDDING_DIMENSION
-        from segmentation.utils.feature_extraction import RESNET50_FEATURE_DIM
+        from xldvp_seg.utils.config import RESNET_EMBEDDING_DIMENSION
+        from xldvp_seg.utils.feature_extraction import RESNET50_FEATURE_DIM
 
         self.assertEqual(
             RESNET_EMBEDDING_DIMENSION,
@@ -210,8 +210,8 @@ class TestSinglePassFeatureDimensions(unittest.TestCase):
 
     def test_dinov2_config_is_double_single_pass(self):
         """Verify config.py DINOv2 dim is 2x the single-pass dim (masked + context)."""
-        from segmentation.detection.strategies.base import DINOV2_FEATURE_DIM
-        from segmentation.utils.config import DINOV2_EMBEDDING_DIMENSION
+        from xldvp_seg.detection.strategies.base import DINOV2_FEATURE_DIM
+        from xldvp_seg.utils.config import DINOV2_EMBEDDING_DIMENSION
 
         self.assertEqual(
             DINOV2_EMBEDDING_DIMENSION,
@@ -222,8 +222,8 @@ class TestSinglePassFeatureDimensions(unittest.TestCase):
 
     def test_config_morph_includes_base_morph(self):
         """Verify config.py morph count (78) is greater than base morph count (22)."""
-        from segmentation.utils.config import MORPHOLOGICAL_FEATURES_COUNT
-        from segmentation.utils.feature_extraction import MORPHOLOGICAL_FEATURE_COUNT
+        from xldvp_seg.utils.config import MORPHOLOGICAL_FEATURES_COUNT
+        from xldvp_seg.utils.feature_extraction import MORPHOLOGICAL_FEATURE_COUNT
 
         self.assertGreater(
             MORPHOLOGICAL_FEATURES_COUNT,
@@ -263,7 +263,7 @@ class TestMorphologicalFeatureExtraction(unittest.TestCase):
 
     def test_extract_morphological_features_returns_22_features(self):
         """Verify extract_morphological_features returns exactly 22 base features."""
-        from segmentation.utils.feature_extraction import (
+        from xldvp_seg.utils.feature_extraction import (
             MORPHOLOGICAL_FEATURE_COUNT,
             extract_morphological_features,
         )
@@ -279,7 +279,7 @@ class TestMorphologicalFeatureExtraction(unittest.TestCase):
 
     def test_extract_morphological_features_with_circular_mask(self):
         """Test feature extraction with a synthetic circular mask."""
-        from segmentation.utils.feature_extraction import extract_morphological_features
+        from xldvp_seg.utils.feature_extraction import extract_morphological_features
 
         features = extract_morphological_features(self.circular_mask, self.rgb_image)
 
@@ -304,7 +304,7 @@ class TestMorphologicalFeatureExtraction(unittest.TestCase):
 
     def test_expected_feature_names_present(self):
         """Verify all expected morphological feature names are present."""
-        from segmentation.utils.feature_extraction import extract_morphological_features
+        from xldvp_seg.utils.feature_extraction import extract_morphological_features
 
         features = extract_morphological_features(self.circular_mask, self.rgb_image)
 
@@ -345,7 +345,7 @@ class TestMorphologicalFeatureExtraction(unittest.TestCase):
 
     def test_empty_mask_returns_empty_dict(self):
         """Test that empty mask returns empty dictionary (graceful handling)."""
-        from segmentation.utils.feature_extraction import extract_morphological_features
+        from xldvp_seg.utils.feature_extraction import extract_morphological_features
 
         features = extract_morphological_features(self.empty_mask, self.rgb_image)
 
@@ -353,7 +353,7 @@ class TestMorphologicalFeatureExtraction(unittest.TestCase):
 
     def test_all_zero_mask_returns_empty_dict(self):
         """Test that all-zero mask returns empty dictionary."""
-        from segmentation.utils.feature_extraction import extract_morphological_features
+        from xldvp_seg.utils.feature_extraction import extract_morphological_features
 
         zero_mask = np.zeros((100, 100), dtype=bool)
         image = np.zeros((100, 100, 3), dtype=np.uint8)
@@ -364,7 +364,7 @@ class TestMorphologicalFeatureExtraction(unittest.TestCase):
 
     def test_morphological_features_with_grayscale_image(self):
         """Test feature extraction works with grayscale images."""
-        from segmentation.utils.feature_extraction import (
+        from xldvp_seg.utils.feature_extraction import (
             MORPHOLOGICAL_FEATURE_COUNT,
             extract_morphological_features,
         )
@@ -384,7 +384,7 @@ class TestMorphologicalFeatureExtraction(unittest.TestCase):
 
     def test_color_statistics_correctness(self):
         """Verify color statistics are computed correctly."""
-        from segmentation.utils.feature_extraction import extract_morphological_features
+        from xldvp_seg.utils.feature_extraction import extract_morphological_features
 
         features = extract_morphological_features(self.circular_mask, self.rgb_image)
 
@@ -399,7 +399,7 @@ class TestMorphologicalFeatureExtraction(unittest.TestCase):
 
     def test_feature_values_are_numeric(self):
         """Verify all extracted feature values are numeric types."""
-        from segmentation.utils.feature_extraction import extract_morphological_features
+        from xldvp_seg.utils.feature_extraction import extract_morphological_features
 
         features = extract_morphological_features(self.circular_mask, self.rgb_image)
 
@@ -419,13 +419,13 @@ class TestSAM2EmbeddingDimensions(unittest.TestCase):
 
     def test_sam2_embedding_dim_constant_is_256(self):
         """Verify SAM2_EMBEDDING_DIM constant is 256."""
-        from segmentation.utils.feature_extraction import SAM2_EMBEDDING_DIM
+        from xldvp_seg.utils.feature_extraction import SAM2_EMBEDDING_DIM
 
         self.assertEqual(SAM2_EMBEDDING_DIM, 256)
 
     def test_extract_sam2_embedding_returns_256d_vector(self):
         """Test that SAM2 embedding extraction returns 256-dimensional vector."""
-        from segmentation.detection.strategies.base import DetectionStrategy
+        from xldvp_seg.detection.strategies.base import DetectionStrategy
 
         # Create a concrete test strategy
         class TestStrategy(DetectionStrategy):
@@ -461,8 +461,8 @@ class TestSAM2EmbeddingDimensions(unittest.TestCase):
 
     def test_extract_sam2_embedding_handles_missing_predictor(self):
         """Test SAM2 embedding extraction returns zeros when predictor fails."""
-        from segmentation.detection.strategies.base import DetectionStrategy
-        from segmentation.utils.feature_extraction import SAM2_EMBEDDING_DIM
+        from xldvp_seg.detection.strategies.base import DetectionStrategy
+        from xldvp_seg.utils.feature_extraction import SAM2_EMBEDDING_DIM
 
         class TestStrategy(DetectionStrategy):
             @property
@@ -497,13 +497,13 @@ class TestResNetFeatureDimensions(unittest.TestCase):
 
     def test_resnet50_feature_dim_constant_is_2048(self):
         """Verify RESNET50_FEATURE_DIM constant is 2048 (single pass)."""
-        from segmentation.utils.feature_extraction import RESNET50_FEATURE_DIM
+        from xldvp_seg.utils.feature_extraction import RESNET50_FEATURE_DIM
 
         self.assertEqual(RESNET50_FEATURE_DIM, 2048)
 
     def test_preprocess_crop_for_resnet_empty_input(self):
         """Test preprocessing empty crop returns correct shape."""
-        from segmentation.utils.feature_extraction import preprocess_crop_for_resnet
+        from xldvp_seg.utils.feature_extraction import preprocess_crop_for_resnet
 
         empty_crop = np.array([])
         result = preprocess_crop_for_resnet(empty_crop)
@@ -514,7 +514,7 @@ class TestResNetFeatureDimensions(unittest.TestCase):
 
     def test_preprocess_crop_for_resnet_uint8_rgb(self):
         """Test preprocessing uint8 RGB image."""
-        from segmentation.utils.feature_extraction import preprocess_crop_for_resnet
+        from xldvp_seg.utils.feature_extraction import preprocess_crop_for_resnet
 
         crop = np.random.randint(0, 256, (100, 100, 3), dtype=np.uint8)
         result = preprocess_crop_for_resnet(crop)
@@ -525,7 +525,7 @@ class TestResNetFeatureDimensions(unittest.TestCase):
 
     def test_preprocess_crop_for_resnet_uint16(self):
         """Test preprocessing uint16 image (common for CZI files)."""
-        from segmentation.utils.feature_extraction import preprocess_crop_for_resnet
+        from xldvp_seg.utils.feature_extraction import preprocess_crop_for_resnet
 
         crop = np.random.randint(0, 65536, (100, 100, 3), dtype=np.uint16)
         result = preprocess_crop_for_resnet(crop)
@@ -535,7 +535,7 @@ class TestResNetFeatureDimensions(unittest.TestCase):
 
     def test_preprocess_crop_for_resnet_grayscale(self):
         """Test preprocessing grayscale image converts to RGB."""
-        from segmentation.utils.feature_extraction import preprocess_crop_for_resnet
+        from xldvp_seg.utils.feature_extraction import preprocess_crop_for_resnet
 
         gray_crop = np.random.randint(0, 256, (100, 100), dtype=np.uint8)
         result = preprocess_crop_for_resnet(gray_crop)
@@ -550,7 +550,7 @@ class TestResNetFeatureDimensions(unittest.TestCase):
 
     def test_preprocess_crop_for_resnet_four_channel(self):
         """Test preprocessing 4-channel image (e.g., RGBA) truncates to 3."""
-        from segmentation.utils.feature_extraction import preprocess_crop_for_resnet
+        from xldvp_seg.utils.feature_extraction import preprocess_crop_for_resnet
 
         rgba_crop = np.random.randint(0, 256, (100, 100, 4), dtype=np.uint8)
         result = preprocess_crop_for_resnet(rgba_crop)
@@ -563,8 +563,8 @@ class TestResNetFeatureDimensions(unittest.TestCase):
     )
     def test_extract_resnet_features_batch_returns_2048d(self):
         """Test batch ResNet extraction returns 2048-dimensional features (single pass)."""
-        from segmentation.detection.strategies.base import DetectionStrategy
-        from segmentation.utils.feature_extraction import RESNET50_FEATURE_DIM
+        from xldvp_seg.detection.strategies.base import DetectionStrategy
+        from xldvp_seg.utils.feature_extraction import RESNET50_FEATURE_DIM
 
         class TestStrategy(DetectionStrategy):
             @property
@@ -635,7 +635,7 @@ class TestCombinedFeatureVector(unittest.TestCase):
 
     def test_total_features_count_from_config(self):
         """Test that full pipeline feature total is 6478."""
-        from segmentation.utils.config import (
+        from xldvp_seg.utils.config import (
             DINOV2_EMBEDDING_DIMENSION,
             MORPHOLOGICAL_FEATURES_COUNT,
             RESNET_EMBEDDING_DIMENSION,
@@ -656,8 +656,8 @@ class TestCombinedFeatureVector(unittest.TestCase):
 
     def test_extract_full_features_batch_with_mocks(self):
         """Test _extract_full_features_batch returns correct structure."""
-        from segmentation.detection.strategies.base import DetectionStrategy
-        from segmentation.utils.feature_extraction import (
+        from xldvp_seg.detection.strategies.base import DetectionStrategy
+        from xldvp_seg.utils.feature_extraction import (
             RESNET50_FEATURE_DIM,
             SAM2_EMBEDDING_DIM,
         )
@@ -726,7 +726,7 @@ class TestCombinedFeatureVector(unittest.TestCase):
 
         # Total ResNet features = masked + context = 4096
         total_resnet = resnet_masked_count + resnet_ctx_count
-        from segmentation.utils.config import RESNET_EMBEDDING_DIMENSION
+        from xldvp_seg.utils.config import RESNET_EMBEDDING_DIMENSION
 
         self.assertEqual(
             total_resnet,
@@ -736,7 +736,7 @@ class TestCombinedFeatureVector(unittest.TestCase):
 
     def test_feature_vector_dimensions_match_constants(self):
         """Verify get_feature_dimensions returns correct full-pipeline values."""
-        from segmentation.utils.config import get_feature_dimensions
+        from xldvp_seg.utils.config import get_feature_dimensions
 
         dims = get_feature_dimensions()
 
@@ -749,7 +749,7 @@ class TestCombinedFeatureVector(unittest.TestCase):
 
     def test_empty_mask_list_returns_empty_list(self):
         """Test _extract_full_features_batch with empty mask list."""
-        from segmentation.detection.strategies.base import DetectionStrategy
+        from xldvp_seg.detection.strategies.base import DetectionStrategy
 
         class TestStrategy(DetectionStrategy):
             @property
@@ -770,7 +770,7 @@ class TestCombinedFeatureVector(unittest.TestCase):
 
     def test_empty_mask_in_list_returns_empty_dict(self):
         """Test handling of empty mask within mask list."""
-        from segmentation.detection.strategies.base import DetectionStrategy
+        from xldvp_seg.detection.strategies.base import DetectionStrategy
 
         class TestStrategy(DetectionStrategy):
             @property
@@ -804,7 +804,7 @@ class TestPreprocessCropForResnet(unittest.TestCase):
 
     def test_uint16_scaling_preserves_relative_values(self):
         """Test that uint16 values are properly scaled to uint8."""
-        from segmentation.utils.feature_extraction import preprocess_crop_for_resnet
+        from xldvp_seg.utils.feature_extraction import preprocess_crop_for_resnet
 
         crop = np.zeros((100, 100, 3), dtype=np.uint16)
         crop[:50, :, :] = 65535  # Max uint16 value
@@ -823,7 +823,7 @@ class TestPreprocessCropForResnet(unittest.TestCase):
 
     def test_float_conversion(self):
         """Test preprocessing a float image converts to uint8."""
-        from segmentation.utils.feature_extraction import preprocess_crop_for_resnet
+        from xldvp_seg.utils.feature_extraction import preprocess_crop_for_resnet
 
         float_crop = np.ones((100, 100, 3), dtype=np.float32) * 128.5
         result = preprocess_crop_for_resnet(float_crop)
@@ -840,7 +840,7 @@ class TestHSVColorFeatures(unittest.TestCase):
 
     def test_rgb_to_hsv_vectorized_empty_input(self):
         """Test RGB to HSV conversion with empty input."""
-        from segmentation.utils.feature_extraction import rgb_to_hsv_vectorized
+        from xldvp_seg.utils.feature_extraction import rgb_to_hsv_vectorized
 
         empty_pixels = np.zeros((0, 3))
         result = rgb_to_hsv_vectorized(empty_pixels)
@@ -849,7 +849,7 @@ class TestHSVColorFeatures(unittest.TestCase):
 
     def test_rgb_to_hsv_vectorized_known_colors(self):
         """Test RGB to HSV conversion with known colors."""
-        from segmentation.utils.feature_extraction import rgb_to_hsv_vectorized
+        from xldvp_seg.utils.feature_extraction import rgb_to_hsv_vectorized
 
         # Red, Green, Blue in RGB
         pixels = np.array([[255, 0, 0], [0, 255, 0], [0, 0, 255]], dtype=np.uint8)
@@ -866,7 +866,7 @@ class TestHSVColorFeatures(unittest.TestCase):
 
     def test_compute_hsv_features_empty_pixels(self):
         """Test HSV feature computation with empty pixel array."""
-        from segmentation.utils.feature_extraction import compute_hsv_features
+        from xldvp_seg.utils.feature_extraction import compute_hsv_features
 
         empty_pixels = np.zeros((0, 3))
         result = compute_hsv_features(empty_pixels)
@@ -877,7 +877,7 @@ class TestHSVColorFeatures(unittest.TestCase):
 
     def test_compute_hsv_features_returns_dict(self):
         """Test that compute_hsv_features returns expected dictionary."""
-        from segmentation.utils.feature_extraction import compute_hsv_features
+        from xldvp_seg.utils.feature_extraction import compute_hsv_features
 
         pixels = np.array([[200, 150, 100], [210, 160, 110]], dtype=np.uint8)
         result = compute_hsv_features(pixels)
@@ -902,7 +902,7 @@ class TestCreateResNetTransform(unittest.TestCase):
         """Test that create_resnet_transform returns a valid Compose object."""
         import torchvision.transforms as tv_transforms
 
-        from segmentation.utils.feature_extraction import create_resnet_transform
+        from xldvp_seg.utils.feature_extraction import create_resnet_transform
 
         transform = create_resnet_transform()
 
@@ -916,7 +916,7 @@ class TestCreateResNetTransform(unittest.TestCase):
         import torch
         from PIL import Image
 
-        from segmentation.utils.feature_extraction import create_resnet_transform
+        from xldvp_seg.utils.feature_extraction import create_resnet_transform
 
         transform = create_resnet_transform()
 

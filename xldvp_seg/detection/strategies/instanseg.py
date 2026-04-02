@@ -11,8 +11,8 @@ from typing import Any
 
 import numpy as np
 
-from segmentation.detection.registry import register_strategy
-from segmentation.utils.logging import get_logger
+from xldvp_seg.detection.registry import register_strategy
+from xldvp_seg.utils.logging import get_logger
 
 from .cell import CellStrategy
 

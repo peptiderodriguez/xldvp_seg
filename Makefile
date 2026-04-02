@@ -8,7 +8,7 @@ install-dev:  ## Install package in dev mode with all extras
 	pip install -e ".[dev]"
 
 test:  ## Run all tests with coverage
-	python -m pytest tests/ -v --tb=short --cov=segmentation --cov-report=term-missing
+	python -m pytest tests/ -v --tb=short --cov=xldvp_seg --cov-report=term-missing
 
 lint:  ## Run ruff check and black check
 	python -m ruff check .

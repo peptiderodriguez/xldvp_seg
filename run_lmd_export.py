@@ -41,8 +41,8 @@ from pathlib import Path
 
 import numpy as np
 
-from segmentation.utils.json_utils import fast_json_load
-from segmentation.utils.logging import get_logger
+from xldvp_seg.utils.json_utils import fast_json_load
+from xldvp_seg.utils.logging import get_logger
 
 logger = get_logger(__name__)
 
@@ -163,7 +163,7 @@ def extract_contours_for_detections(
     import h5py
     import hdf5plugin  # noqa: F401 - must import before h5py for LZ4
 
-    from segmentation.lmd.contour_processing import process_contour
+    from xldvp_seg.lmd.contour_processing import process_contour
 
     tiles_dir = Path(tiles_dir)
 
@@ -313,7 +313,7 @@ def nearest_neighbor_order(points, start_idx=None):
 # Serpentine well generation (384-well plate, 4 quadrants)
 # ---------------------------------------------------------------------------
 
-from segmentation.lmd.well_plate import (
+from xldvp_seg.lmd.well_plate import (
     WELLS_PER_PLATE,
     generate_plate_wells,
 )
@@ -601,7 +601,7 @@ def build_export_data(assignments, well_order, metadata):
 # LMD XML export
 # ---------------------------------------------------------------------------
 
-from segmentation.lmd.contour_processing import (
+from xldvp_seg.lmd.contour_processing import (
     transform_native_to_display as _transform_native_to_display,
 )
 
@@ -1147,7 +1147,7 @@ def _run_single_slide(args):
         logger.info("Zone exclude (%s): %d -> %d", exclude_ids, before, len(detections))
 
     # Log classifier provenance
-    from segmentation.utils.classifier_registry import extract_classifier_info
+    from xldvp_seg.utils.classifier_registry import extract_classifier_info
 
     _scored, _prov, _clf_info = extract_classifier_info(detections)
     if _scored > 0:
@@ -1349,7 +1349,7 @@ def _run_single_slide(args):
                     det["area_um2"] = contour_results[uid]["area_um2"]
         elif need_extraction and not args.tiles_dir:
             # Try to process existing pixel-coord contours (vessel or cell pipeline)
-            from segmentation.lmd.contour_processing import process_contour
+            from xldvp_seg.lmd.contour_processing import process_contour
 
             logger.info("Processing existing contours (adaptive RDP + dilation)...")
             processed_count = 0
@@ -1385,7 +1385,7 @@ def _run_single_slide(args):
         if _erosion_um > 0 or _erode_pct > 0:
             from shapely.geometry import Polygon
 
-            from segmentation.lmd.contour_processing import erode_contour, erode_contour_percent
+            from xldvp_seg.lmd.contour_processing import erode_contour, erode_contour_percent
 
             erode_label = (
                 f"{_erosion_um}um" if _erosion_um > 0 else f"{_erode_pct*100:.1f}% of sqrt(area)"
@@ -1706,7 +1706,7 @@ def _run_single_slide(args):
                 },
                 "shapes": partial_shapes,
             }
-            from segmentation.utils.json_utils import atomic_json_dump
+            from xldvp_seg.utils.json_utils import atomic_json_dump
 
             atomic_json_dump(partial_data, partial_path)
             logger.info("Partial results saved to: %s", partial_path)
@@ -1733,7 +1733,7 @@ def _run_single_slide(args):
         export_data = build_export_data(assignments, well_order, metadata)
 
         # Save JSON (timestamped + symlink)
-        from segmentation.utils.timestamps import timestamped_path, update_symlink
+        from xldvp_seg.utils.timestamps import timestamped_path, update_symlink
 
         json_path = output_dir / f"{args.output_name}_with_controls.json"
         ts_json = timestamped_path(json_path)
@@ -1877,7 +1877,7 @@ def run_batch_export(args):
 
     # Write batch summary
     summary_path = output_dir / "batch_summary.json"
-    from segmentation.utils.json_utils import atomic_json_dump
+    from xldvp_seg.utils.json_utils import atomic_json_dump
 
     atomic_json_dump(
         {

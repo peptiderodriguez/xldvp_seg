@@ -5,7 +5,7 @@ Photobleaching Band Correction for CZI Tiles
 Corrects horizontal and vertical photobleaching bands in microscopy images
 and re-runs lumen detection to compare vessel counts before/after correction.
 
-Uses the segmentation.preprocessing module for correction algorithms.
+Uses the xldvp_seg.preprocessing module for correction algorithms.
 
 Usage:
     python scripts/correct_photobleaching.py \
@@ -27,8 +27,8 @@ import cv2
 import matplotlib.pyplot as plt
 import numpy as np
 
-from segmentation.io.czi_loader import CZILoader
-from segmentation.preprocessing import (
+from xldvp_seg.io.czi_loader import CZILoader
+from xldvp_seg.preprocessing import (
     correct_photobleaching,
     estimate_band_severity,
 )

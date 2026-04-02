@@ -29,12 +29,12 @@ from pathlib import Path
 
 import numpy as np
 
-from segmentation.utils.detection_utils import (
+from xldvp_seg.utils.detection_utils import (
     extract_feature_matrix,
     extract_positions_um,
     load_detections,
 )
-from segmentation.utils.logging import get_logger, setup_logging
+from xldvp_seg.utils.logging import get_logger, setup_logging
 
 logger = get_logger(__name__)
 
@@ -183,7 +183,7 @@ def parse_marker_filter(filter_str):
 
 def save_enriched_detections(detections, output_path):
     """Save detections with enriched fields to JSON (no indent, timestamped)."""
-    from segmentation.utils.timestamps import save_with_timestamp
+    from xldvp_seg.utils.timestamps import save_with_timestamp
 
     save_with_timestamp(output_path, detections, fmt="json")
     logger.info(f"Saved enriched detections ({len(detections):,} entries)")
@@ -209,7 +209,7 @@ def run_rf_embedding(
 
     # Load classifier
     logger.info(f"Loading classifier from {classifier_path}...")
-    from segmentation.utils.detection_utils import load_rf_classifier
+    from xldvp_seg.utils.detection_utils import load_rf_classifier
 
     clf_data = load_rf_classifier(str(classifier_path))
     pipeline = clf_data["pipeline"]

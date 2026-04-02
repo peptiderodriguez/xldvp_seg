@@ -18,8 +18,8 @@ Key format facts verified here:
 import numpy as np
 import pytest
 
-from segmentation.core import SlideAnalysis
-from segmentation.utils.json_utils import atomic_json_dump, fast_json_load
+from xldvp_seg.core import SlideAnalysis
+from xldvp_seg.utils.json_utils import atomic_json_dump, fast_json_load
 
 
 def _make_pipeline_detections(n=20):
@@ -420,7 +420,7 @@ class TestApplyMarkerFilter:
 
     def test_filter_toplevel_key(self):
         """Filter matches top-level detection key."""
-        from segmentation.utils.detection_utils import apply_marker_filter
+        from xldvp_seg.utils.detection_utils import apply_marker_filter
 
         dets = [{"MSLN_class": "positive"}, {"MSLN_class": "negative"}]
         result = apply_marker_filter(dets, "MSLN_class==positive")
@@ -429,7 +429,7 @@ class TestApplyMarkerFilter:
 
     def test_filter_features_key(self):
         """Filter matches key inside features dict (real pipeline format)."""
-        from segmentation.utils.detection_utils import apply_marker_filter
+        from xldvp_seg.utils.detection_utils import apply_marker_filter
 
         dets = [
             {"features": {"MSLN_class": "positive"}},
@@ -440,7 +440,7 @@ class TestApplyMarkerFilter:
 
     def test_filter_no_match(self):
         """Filter returns empty list when nothing matches."""
-        from segmentation.utils.detection_utils import apply_marker_filter
+        from xldvp_seg.utils.detection_utils import apply_marker_filter
 
         dets = [{"features": {"MSLN_class": "negative"}}]
         result = apply_marker_filter(dets, "MSLN_class==positive")
@@ -448,7 +448,7 @@ class TestApplyMarkerFilter:
 
     def test_filter_none_returns_all(self):
         """None filter returns all detections."""
-        from segmentation.utils.detection_utils import apply_marker_filter
+        from xldvp_seg.utils.detection_utils import apply_marker_filter
 
         dets = [{"a": 1}, {"b": 2}]
         result = apply_marker_filter(dets, None)
@@ -456,14 +456,14 @@ class TestApplyMarkerFilter:
 
     def test_filter_empty_string_returns_all(self):
         """Empty string filter returns all detections."""
-        from segmentation.utils.detection_utils import apply_marker_filter
+        from xldvp_seg.utils.detection_utils import apply_marker_filter
 
         result = apply_marker_filter([{"a": 1}], "")
         assert len(result) == 1
 
     def test_filter_malformed_no_equals(self):
         """Malformed filter (no ==) returns all with warning."""
-        from segmentation.utils.detection_utils import apply_marker_filter
+        from xldvp_seg.utils.detection_utils import apply_marker_filter
 
         dets = [{"MSLN_class": "positive"}]
         result = apply_marker_filter(dets, "MSLN_class positive")
@@ -471,7 +471,7 @@ class TestApplyMarkerFilter:
 
     def test_filter_spaces_around_equals(self):
         """Spaces around == are handled."""
-        from segmentation.utils.detection_utils import apply_marker_filter
+        from xldvp_seg.utils.detection_utils import apply_marker_filter
 
         dets = [{"features": {"MSLN_class": "positive"}}]
         result = apply_marker_filter(dets, "MSLN_class == positive")
@@ -479,7 +479,7 @@ class TestApplyMarkerFilter:
 
     def test_filter_empty_detections(self):
         """Empty detection list returns empty."""
-        from segmentation.utils.detection_utils import apply_marker_filter
+        from xldvp_seg.utils.detection_utils import apply_marker_filter
 
         result = apply_marker_filter([], "MSLN_class==positive")
         assert len(result) == 0

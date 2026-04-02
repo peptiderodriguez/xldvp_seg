@@ -11,7 +11,7 @@ Functions:
     build_mk_hspc_result: Build result dict for MK/HSPC workers
 
 Usage:
-    from segmentation.processing.mk_hspc_utils import (
+    from xldvp_seg.processing.mk_hspc_utils import (
         ensure_rgb_array,
         check_tile_validity,
         prepare_tile_for_detection,
@@ -122,7 +122,7 @@ def prepare_tile_for_detection(
         dtype('uint8')
     """
     if normalize:
-        from segmentation.io.html_export import percentile_normalize
+        from xldvp_seg.io.html_export import percentile_normalize
 
         return percentile_normalize(img_rgb, p_low=p_low, p_high=p_high)
     return img_rgb

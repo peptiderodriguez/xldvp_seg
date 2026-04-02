@@ -6,7 +6,7 @@ Tests the base detection infrastructure in segmentation/detection/strategies/bas
 
 import numpy as np
 
-from segmentation.detection.strategies.base import Detection, DetectionStrategy
+from xldvp_seg.detection.strategies.base import Detection, DetectionStrategy
 
 
 class TestDetectionDataclass:

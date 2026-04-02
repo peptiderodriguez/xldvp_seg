@@ -25,7 +25,7 @@ from pathlib import Path
 import numpy as np
 from scipy import ndimage
 
-from segmentation.utils.json_utils import atomic_json_dump, fast_json_load
+from xldvp_seg.utils.json_utils import atomic_json_dump, fast_json_load
 
 
 def load_detections(run_dir):

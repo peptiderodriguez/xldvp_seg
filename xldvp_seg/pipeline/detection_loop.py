@@ -17,29 +17,29 @@ from pathlib import Path
 import h5py
 import numpy as np
 
-from segmentation.detection.cell_detector import CellDetector
-from segmentation.io.html_export import image_to_base64, percentile_normalize
-from segmentation.pipeline.detection_setup import (
+from xldvp_seg.detection.cell_detector import CellDetector
+from xldvp_seg.io.html_export import image_to_base64, percentile_normalize
+from xldvp_seg.pipeline.detection_setup import (
     apply_vessel_classifiers,
     build_detection_params,
     load_classifier_into_detector,
     load_vessel_classifiers,
 )
-from segmentation.pipeline.resume import (
+from xldvp_seg.pipeline.resume import (
     compose_tile_rgb,
     compute_and_apply_islet_markers,
     reload_detections_from_tiles,
 )
-from segmentation.pipeline.samples import (
+from xldvp_seg.pipeline.samples import (
     _compute_tile_percentiles,
     calibrate_islet_marker_gmm,
     filter_and_create_html_samples,
 )
-from segmentation.processing.multigpu_worker import MultiGPUTileProcessor
-from segmentation.processing.strategy_factory import create_strategy
-from segmentation.utils.device import empty_cache
-from segmentation.utils.json_utils import atomic_json_dump, fast_json_load
-from segmentation.utils.logging import get_logger
+from xldvp_seg.processing.multigpu_worker import MultiGPUTileProcessor
+from xldvp_seg.processing.strategy_factory import create_strategy
+from xldvp_seg.utils.device import empty_cache
+from xldvp_seg.utils.json_utils import atomic_json_dump, fast_json_load
+from xldvp_seg.utils.logging import get_logger
 
 logger = get_logger(__name__)
 
@@ -266,7 +266,7 @@ def run_detection_loop(
 
             from tqdm import tqdm as tqdm_progress
 
-            from segmentation.utils.multiscale import (
+            from xldvp_seg.utils.multiscale import (
                 convert_detection_to_full_res,
                 generate_tile_grid_at_scale,
                 get_scale_params,
@@ -682,7 +682,7 @@ def run_detection_loop(
                             tile_out.mkdir(exist_ok=True)
                             masks_file = tile_out / f"{args.cell_type}_masks.h5"
                             if not masks_file.exists():
-                                from segmentation.io.html_export import create_hdf5_dataset
+                                from xldvp_seg.io.html_export import create_hdf5_dataset
 
                                 with h5py.File(masks_file, "w") as f:
                                     create_hdf5_dataset(f, "masks", masks)
@@ -898,7 +898,7 @@ def run_detection_loop(
 
     # Cross-tile vessel merge: reconstruct partial vessels from all workers and merge
     if args.cell_type == "vessel" and not is_multiscale and collected_partial_vessels:
-        from segmentation.detection.strategies.vessel import VesselStrategy
+        from xldvp_seg.detection.strategies.vessel import VesselStrategy
 
         n_partials = sum(len(v) for v in collected_partial_vessels.values())
         n_tiles_with = len(collected_partial_vessels)

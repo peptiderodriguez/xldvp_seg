@@ -17,7 +17,7 @@ Target: ~25-30 vessel-specific features that complement the generic
 morphological features for improved vessel classification.
 
 Usage:
-    from segmentation.utils.vessel_features import (
+    from xldvp_seg.utils.vessel_features import (
         extract_vessel_features,
         VESSEL_FEATURE_NAMES,
         VESSEL_FEATURE_COUNT,
@@ -38,7 +38,7 @@ from scipy.ndimage import distance_transform_edt, sobel
 from scipy.spatial import ConvexHull
 from skimage.morphology import skeletonize
 
-from segmentation.utils.logging import get_logger
+from xldvp_seg.utils.logging import get_logger
 
 logger = get_logger(__name__)
 

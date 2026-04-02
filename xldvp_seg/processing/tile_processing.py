@@ -16,8 +16,8 @@ from typing import Any
 import h5py
 import numpy as np
 
-from segmentation.io.html_export import create_hdf5_dataset
-from segmentation.utils.logging import get_logger
+from xldvp_seg.io.html_export import create_hdf5_dataset
+from xldvp_seg.utils.logging import get_logger
 
 logger = get_logger(__name__)
 
@@ -160,7 +160,7 @@ def process_single_tile(
                     f"{attempt + 1}/{max_retries}: {oom_err}"
                 )
                 gc.collect()
-                from segmentation.utils.device import empty_cache as _empty_cache
+                from xldvp_seg.utils.device import empty_cache as _empty_cache
 
                 _empty_cache()
                 if torch.cuda.is_available():
@@ -185,7 +185,7 @@ def process_single_tile(
                     f"{attempt + 1}/{max_retries}: {rt_err}"
                 )
                 gc.collect()
-                from segmentation.utils.device import empty_cache as _empty_cache
+                from xldvp_seg.utils.device import empty_cache as _empty_cache
 
                 _empty_cache()
                 if torch.cuda.is_available():
@@ -450,7 +450,7 @@ def save_tile_outputs(
 
         # Save features to JSON
         features_path = tile_out_dir / f"{cell_type}_features.json"
-        from segmentation.utils.json_utils import NumpyEncoder
+        from xldvp_seg.utils.json_utils import NumpyEncoder
 
         with open(features_path, "w") as f:
             json.dump(features_list, f, cls=NumpyEncoder)

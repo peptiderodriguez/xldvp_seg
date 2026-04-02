@@ -6,7 +6,7 @@ improving GPU utilization by processing multiple crops at once rather than
 one at a time.
 
 Usage:
-    from segmentation.utils.feature_extraction import extract_resnet_features_batch
+    from xldvp_seg.utils.feature_extraction import extract_resnet_features_batch
 
     crops = [crop1, crop2, crop3, ...]  # List of numpy arrays
     features = extract_resnet_features_batch(crops, model, transform, device, batch_size=16)
@@ -20,8 +20,8 @@ import torch
 import torchvision.transforms as tv_transforms
 from PIL import Image
 
-from segmentation.utils.detection_utils import safe_to_uint8
-from segmentation.utils.logging import get_logger
+from xldvp_seg.utils.detection_utils import safe_to_uint8
+from xldvp_seg.utils.logging import get_logger
 
 # Feature dimension constants
 RESNET50_FEATURE_DIM = 2048
@@ -144,13 +144,13 @@ def extract_resnet_features_batch(
         # Clear GPU memory periodically (every 10 batches) to prevent OOM on long runs
         batch_num = i // batch_size
         if batch_num > 0 and batch_num % 10 == 0:
-            from segmentation.utils.device import empty_cache as _empty_cache
+            from xldvp_seg.utils.device import empty_cache as _empty_cache
 
             _empty_cache()
             gc.collect()
 
     # Final cleanup after all batches processed
-    from segmentation.utils.device import empty_cache as _empty_cache
+    from xldvp_seg.utils.device import empty_cache as _empty_cache
 
     _empty_cache()
     gc.collect()

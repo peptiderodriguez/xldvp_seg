@@ -44,19 +44,19 @@ from typing import Any
 
 import numpy as np
 
-from segmentation.classification.feature_selection import (
+from xldvp_seg.classification.feature_selection import (
     compare_feature_sets,
     select_optimal_features,
 )
-from segmentation.classification.vessel_classifier import (
+from xldvp_seg.classification.vessel_classifier import (
     DEFAULT_FEATURES,
     FULL_FEATURES,
     MORPHOLOGICAL_FEATURES,
     VESSEL_CORE_FEATURES,
     VesselClassifier,
 )
-from segmentation.utils.json_utils import atomic_json_dump, fast_json_load
-from segmentation.utils.logging import get_logger, setup_logging
+from xldvp_seg.utils.json_utils import atomic_json_dump, fast_json_load
+from xldvp_seg.utils.logging import get_logger, setup_logging
 
 setup_logging()
 logger = get_logger(__name__)

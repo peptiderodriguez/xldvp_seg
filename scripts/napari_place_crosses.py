@@ -46,7 +46,7 @@ from pathlib import Path
 
 import numpy as np
 
-from segmentation.utils.detection_utils import get_contour_px
+from xldvp_seg.utils.detection_utils import get_contour_px
 
 try:
     import napari

@@ -1,8 +1,8 @@
-"""Tests for segmentation.metrics (IoU, Dice, PQ, Hungarian matching)."""
+"""Tests for xldvp_seg.metrics (IoU, Dice, PQ, Hungarian matching)."""
 
 import numpy as np
 
-from segmentation.metrics import (
+from xldvp_seg.metrics import (
     detection_f1,
     dice_score,
     evaluate_instance_segmentation,

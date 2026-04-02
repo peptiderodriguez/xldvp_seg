@@ -7,7 +7,7 @@ flat-field + photobleach correction). This avoids re-reading the CZI file.
 For standalone CZI-to-Zarr conversion (without SHM), use scripts/czi_to_ome_zarr.py.
 
 Usage (from pipeline):
-    from segmentation.io.ome_zarr_export import export_shm_to_ome_zarr
+    from xldvp_seg.io.ome_zarr_export import export_shm_to_ome_zarr
 
     export_shm_to_ome_zarr(
         shm_array=slide_shm_arr,      # (H, W, C) uint16
@@ -23,7 +23,7 @@ from pathlib import Path
 
 import numpy as np
 
-from segmentation.utils.logging import get_logger
+from xldvp_seg.utils.logging import get_logger
 
 logger = get_logger(__name__)
 
@@ -147,7 +147,7 @@ def export_shm_to_ome_zarr(
     # Resolve channel names
     if channel_names is None and czi_path is not None:
         try:
-            from segmentation.io.czi_loader import get_czi_metadata
+            from xldvp_seg.io.czi_loader import get_czi_metadata
 
             meta = get_czi_metadata(str(czi_path))
             channel_names = []

@@ -21,15 +21,15 @@ import cv2
 import numpy as np
 from PIL import Image, ImageDraw, ImageFont
 
-from segmentation.detection.tissue import (
+from xldvp_seg.detection.tissue import (
     compute_otsu_threshold,
     has_tissue,
 )
-from segmentation.io.czi_loader import get_loader
-from segmentation.preprocessing.stain_normalization import (
+from xldvp_seg.io.czi_loader import get_loader
+from xldvp_seg.preprocessing.stain_normalization import (
     apply_reinhard_normalization,
 )
-from segmentation.utils.logging import get_logger, setup_logging
+from xldvp_seg.utils.logging import get_logger, setup_logging
 
 setup_logging()
 logger = get_logger(__name__)
@@ -108,7 +108,7 @@ def sample_pixels_from_slide(czi_path, channel=0, n_samples=1000000):
         if tissue_frac < 0.001:
             logger.warning(f"  <0.1% tissue pixels in {czi_path.name}, skipping")
             loader.close()
-            from segmentation.io.czi_loader import clear_cache
+            from xldvp_seg.io.czi_loader import clear_cache
 
             clear_cache()
             del loader, channel_data, full_gray
@@ -146,7 +146,7 @@ def sample_pixels_from_slide(czi_path, channel=0, n_samples=1000000):
                 f"  No tissue pixels found after {max_attempts} attempts in {czi_path.name}, skipping"
             )
             loader.close()
-            from segmentation.io.czi_loader import clear_cache
+            from xldvp_seg.io.czi_loader import clear_cache
 
             clear_cache()
             del loader, channel_data, full_gray
@@ -170,7 +170,7 @@ def sample_pixels_from_slide(czi_path, channel=0, n_samples=1000000):
 
         # Close and clear to prevent memory accumulation across slides
         loader.close()
-        from segmentation.io.czi_loader import clear_cache
+        from xldvp_seg.io.czi_loader import clear_cache
 
         clear_cache()
         del loader, channel_data
@@ -628,7 +628,7 @@ def generate_visual_validation(
 
         # Free slide
         loader.close()
-        from segmentation.io.czi_loader import clear_cache
+        from xldvp_seg.io.czi_loader import clear_cache
 
         clear_cache()
         del loader, image_array

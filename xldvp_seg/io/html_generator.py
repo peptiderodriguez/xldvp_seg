@@ -30,7 +30,7 @@ from collections.abc import Callable
 from pathlib import Path
 from typing import Any, Literal
 
-from segmentation.utils.logging import get_logger
+from xldvp_seg.utils.logging import get_logger
 
 logger = get_logger(__name__)
 
@@ -1238,7 +1238,7 @@ import h5py
 import numpy as np
 from PIL import Image
 
-from segmentation.utils.logging import get_logger
+from xldvp_seg.utils.logging import get_logger
 
 _logger = get_logger(__name__)
 
@@ -1260,7 +1260,7 @@ def load_samples_from_ram(tiles_dir, slide_image, pixel_size_um, cell_type="mk",
     Returns:
         List of sample dicts with image data and metadata
     """
-    from segmentation.io.html_export import (
+    from xldvp_seg.io.html_export import (
         draw_mask_contour,
         get_largest_connected_component,
         percentile_normalize,

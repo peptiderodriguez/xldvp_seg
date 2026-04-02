@@ -24,7 +24,7 @@ from pathlib import Path
 
 import matplotlib
 
-from segmentation.utils.json_utils import fast_json_load
+from xldvp_seg.utils.json_utils import fast_json_load
 
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt

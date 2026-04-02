@@ -4,10 +4,10 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING, Any, NoReturn
 
-from segmentation.utils.logging import get_logger
+from xldvp_seg.utils.logging import get_logger
 
 if TYPE_CHECKING:
-    from segmentation.core.slide_analysis import SlideAnalysis
+    from xldvp_seg.core.slide_analysis import SlideAnalysis
 
 logger = get_logger(__name__)
 

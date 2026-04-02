@@ -7,7 +7,7 @@ Provides:
 - Resource cleanup: Proper GPU memory management
 
 Usage:
-    from segmentation.models import get_model_manager
+    from xldvp_seg.models import get_model_manager
 
     # Get singleton manager instance
     manager = get_model_manager()

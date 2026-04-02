@@ -8,8 +8,8 @@ Models are loaded lazily on first use to minimize memory footprint when not all
 models are needed.
 
 Usage:
-    from segmentation.detection.cell_detector import CellDetector
-    from segmentation.detection.strategies import NMJStrategy
+    from xldvp_seg.detection.cell_detector import CellDetector
+    from xldvp_seg.detection.strategies import NMJStrategy
 
     # Create detector with lazy-loaded models
     detector = CellDetector()
@@ -34,8 +34,8 @@ import torch
 import torchvision.models as tv_models
 
 # Import base classes from strategies module
-from segmentation.detection.strategies.base import Detection, DetectionStrategy
-from segmentation.utils.feature_extraction import (
+from xldvp_seg.detection.strategies.base import Detection, DetectionStrategy
+from xldvp_seg.utils.feature_extraction import (
     RESNET50_FEATURE_DIM,
     SAM2_EMBEDDING_DIM,
     create_resnet_transform,
@@ -43,7 +43,7 @@ from segmentation.utils.feature_extraction import (
     extract_resnet_features_batch,
     preprocess_crop_for_resnet,
 )
-from segmentation.utils.logging import get_logger
+from xldvp_seg.utils.logging import get_logger
 
 logger = get_logger(__name__)
 
@@ -146,7 +146,7 @@ class CellDetector:
             device: Device for inference ('cuda', 'mps', 'cpu', or specific GPU).
                     If None, auto-detects best available.
         """
-        from segmentation.utils.device import get_default_device
+        from xldvp_seg.utils.device import get_default_device
 
         if device is None:
             device = get_default_device()
@@ -318,7 +318,7 @@ class CellDetector:
 
         logger.info(f"Loading Cellpose ({self._cellpose_model}) on {self.device}...")
 
-        from segmentation.utils.device import device_supports_gpu
+        from xldvp_seg.utils.device import device_supports_gpu
 
         self._cellpose = CellposeModel(
             pretrained_model=self._cellpose_model,
@@ -533,7 +533,7 @@ class CellDetector:
 
             # Ensure uint8 format
             if image.dtype != np.uint8:
-                from segmentation.utils.detection_utils import safe_to_uint8
+                from xldvp_seg.utils.detection_utils import safe_to_uint8
 
                 image = safe_to_uint8(image)
             self._sam2_predictor.set_image(image)
@@ -561,7 +561,7 @@ class CellDetector:
         self._dinov2_transform = None
 
         gc.collect()
-        from segmentation.utils.device import empty_cache
+        from xldvp_seg.utils.device import empty_cache
 
         empty_cache()
 

@@ -31,9 +31,9 @@ from skimage.filters import meijering
 from skimage.measure import find_contours, regionprops
 from skimage.morphology import binary_closing, disk, remove_small_objects
 
-from segmentation.io.czi_loader import CZILoader
-from segmentation.utils.json_utils import atomic_json_dump
-from segmentation.utils.logging import get_logger
+from xldvp_seg.io.czi_loader import CZILoader
+from xldvp_seg.utils.json_utils import atomic_json_dump
+from xldvp_seg.utils.logging import get_logger
 
 logger = get_logger(__name__)
 
@@ -330,7 +330,7 @@ def main():
                 channel_idx = loader.resolve_wavelength(wl)
             except (ValueError, AttributeError):
                 # Try as marker name from filename
-                from segmentation.io.czi_loader import parse_markers_from_filename
+                from xldvp_seg.io.czi_loader import parse_markers_from_filename
 
                 markers = parse_markers_from_filename(Path(args.czi_path).name)
                 channel_idx = None

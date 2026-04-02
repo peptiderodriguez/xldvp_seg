@@ -21,12 +21,12 @@ from typing import Any
 import numpy as np
 from scipy import ndimage
 
-from segmentation.detection.registry import register_strategy
-from segmentation.utils.feature_extraction import (
+from xldvp_seg.detection.registry import register_strategy
+from xldvp_seg.utils.feature_extraction import (
     SAM2_EMBEDDING_DIM,
     extract_morphological_features,
 )
-from segmentation.utils.logging import get_logger
+from xldvp_seg.utils.logging import get_logger
 
 from .cell import CellStrategy
 from .islet import _percentile_normalize_channel
@@ -210,7 +210,7 @@ class TissuePatternStrategy(CellStrategy):
         Returns:
             Tuple of (label_array, list of Detection objects)
         """
-        from segmentation.utils.device import empty_cache, get_default_device
+        from xldvp_seg.utils.device import empty_cache, get_default_device
 
         sam2_predictor = models.get("sam2_predictor")
 

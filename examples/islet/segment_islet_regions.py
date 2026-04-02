@@ -40,7 +40,7 @@ from pathlib import Path
 import numpy as np
 from scipy import ndimage
 
-from segmentation.utils.json_utils import atomic_json_dump
+from xldvp_seg.utils.json_utils import atomic_json_dump
 
 REPO = Path(__file__).resolve().parent.parent.parent
 
@@ -207,7 +207,7 @@ def detect_roi(roi, ch_data, display_chs, strategy, models, pixel_size, marker_m
     Returns:
         list of enriched detection dicts (with global coords + medians)
     """
-    from segmentation.detection.strategies.islet import _percentile_normalize_channel
+    from xldvp_seg.detection.strategies.islet import _percentile_normalize_channel
 
     ay0 = roi["ay0"]
     ax0 = roi["ax0"]
@@ -329,11 +329,11 @@ def detect_roi(roi, ch_data, display_chs, strategy, models, pixel_size, marker_m
 
 def _init_gpu(gpu_id):
     """Initialize CellDetector on a specific GPU. Called once per GPU."""
-    from segmentation.utils.device import set_device_for_worker
+    from xldvp_seg.utils.device import set_device_for_worker
 
     device = set_device_for_worker(gpu_id)
 
-    from segmentation.detection.cell_detector import CellDetector
+    from xldvp_seg.detection.cell_detector import CellDetector
 
     print(f"  [GPU-{gpu_id}] Loading models on {device}...", flush=True)
     detector = CellDetector(device=str(device))
@@ -363,11 +363,11 @@ def _gpu_worker(
     Returns:
         list of detection dicts from all assigned ROIs
     """
-    from segmentation.utils.device import set_device_for_worker
+    from xldvp_seg.utils.device import set_device_for_worker
 
     set_device_for_worker(gpu_id)
 
-    from segmentation.detection.strategies.islet import IsletStrategy
+    from xldvp_seg.detection.strategies.islet import IsletStrategy
 
     strategy = IsletStrategy(
         membrane_channel=membrane_ch,
@@ -801,7 +801,7 @@ def main():
     # Cleanup GPU memory
     for det in detectors:
         det.cleanup()
-    from segmentation.utils.device import empty_cache
+    from xldvp_seg.utils.device import empty_cache
 
     empty_cache()
 

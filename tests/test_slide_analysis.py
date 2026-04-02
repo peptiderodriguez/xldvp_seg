@@ -1,4 +1,4 @@
-"""Tests for segmentation.core.slide_analysis.SlideAnalysis.
+"""Tests for xldvp_seg.core.slide_analysis.SlideAnalysis.
 
 Tests the central state object wrapping pipeline output: construction,
 filtering, DataFrame export, AnnData export, and repr behaviour.
@@ -8,7 +8,7 @@ Run with: pytest tests/test_slide_analysis.py -v
 
 import numpy as np
 
-from segmentation.core import SlideAnalysis
+from xldvp_seg.core import SlideAnalysis
 
 
 def _make_detections(n=5):
@@ -250,7 +250,7 @@ class TestSaveLoad:
         assert out.exists()
 
         # Verify saved file is valid JSON and has correct count
-        from segmentation.utils.json_utils import fast_json_load
+        from xldvp_seg.utils.json_utils import fast_json_load
 
         loaded = fast_json_load(out)
         assert len(loaded) == 3

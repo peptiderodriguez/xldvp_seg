@@ -10,7 +10,7 @@ flat strategy_params dict to strategy-specific constructor kwargs is inherently
 per-strategy and stays here.
 
 Usage:
-    from segmentation.processing.strategy_factory import create_strategy
+    from xldvp_seg.processing.strategy_factory import create_strategy
 
     strategy = create_strategy(
         cell_type='nmj',
@@ -24,9 +24,9 @@ Usage:
 
 from typing import Any
 
-import segmentation.detection.strategies  # noqa: F401 — triggers @register_strategy decorators
-from segmentation.detection.registry import StrategyRegistry
-from segmentation.utils.logging import get_logger
+import xldvp_seg.detection.strategies  # noqa: F401 — triggers @register_strategy decorators
+from xldvp_seg.detection.registry import StrategyRegistry
+from xldvp_seg.utils.logging import get_logger
 
 logger = get_logger(__name__)
 

@@ -11,13 +11,13 @@ You are a detection algorithm developer for the xldvp_seg segmentation pipelines
 
 ```
 run_segmentation.py  (~1500 lines, orchestrator)
-    → segmentation/pipeline/  (8 modules: cli, detection_setup, finalize, post_detection, etc.)
+    → xldvp_seg/pipeline/  (8 modules: cli, detection_setup, finalize, post_detection, etc.)
     → StrategyRegistry.create(cell_type)
         → DetectionStrategy subclass
             → detect() method
             → MultiChannelFeatureMixin (feature extraction)
-    → segmentation/processing/multigpu_worker.py  (always used, even with --num-gpus 1)
-    → segmentation/processing/tile_processing.py  (shared process_single_tile())
+    → xldvp_seg/processing/multigpu_worker.py  (always used, even with --num-gpus 1)
+    → xldvp_seg/processing/tile_processing.py  (shared process_single_tile())
 ```
 
 ## Detection Strategies
@@ -32,7 +32,7 @@ run_segmentation.py  (~1500 lines, orchestrator)
 | `mesothelium` | `strategies/mesothelium.py` | Ridge detection for ribbon structures |
 | `tissue_pattern` | `strategies/tissue_pattern.py` | Multi-channel summed Cellpose (no SAM2 refinement) |
 
-Registry: `segmentation/detection/registry.py` — `StrategyRegistry.register()`, `.create()`
+Registry: `xldvp_seg/detection/registry.py` — `StrategyRegistry.register()`, `.create()`
 
 ## Feature Hierarchy (extracted by MultiChannelFeatureMixin)
 
@@ -45,16 +45,16 @@ Registry: `segmentation/detection/registry.py` — `StrategyRegistry.register()`
 | DINOv2-L masked+context | 2,048 | `--extract-deep-features` only |
 
 Key files:
-- `segmentation/detection/strategies/mixins.py` — `MultiChannelFeatureMixin`
-- `segmentation/detection/strategies/base.py` — `DetectionStrategy`, `_extract_full_features_batch()`
-- `segmentation/utils/vessel_features.py` — vessel-specific features (channel_names required, no defaults)
-- `segmentation/utils/detection_utils.py` — `safe_to_uint8()` (canonical), shared utilities
+- `xldvp_seg/detection/strategies/mixins.py` — `MultiChannelFeatureMixin`
+- `xldvp_seg/detection/strategies/base.py` — `DetectionStrategy`, `_extract_full_features_batch()`
+- `xldvp_seg/utils/vessel_features.py` — vessel-specific features (channel_names required, no defaults)
+- `xldvp_seg/utils/detection_utils.py` — `safe_to_uint8()` (canonical), shared utilities
 
 ## Adding a New Cell Type
 
 1. **Create strategy file:**
 ```python
-# segmentation/detection/strategies/mytype.py
+# xldvp_seg/detection/strategies/mytype.py
 from .base import DetectionStrategy
 from .mixins import MultiChannelFeatureMixin
 from ..registry import StrategyRegistry
@@ -71,7 +71,7 @@ StrategyRegistry.register('mytype', MyTypeStrategy)
 
 2. **Import in `__init__.py`** (triggers registration):
 ```python
-# segmentation/detection/strategies/__init__.py
+# xldvp_seg/detection/strategies/__init__.py
 from . import mytype
 ```
 
@@ -93,17 +93,17 @@ After deduplication, 3 phases run automatically (parallelized with ThreadPoolExe
 
 Features are always computed from the original Cellpose/SAM2 segmentation mask. Contour simplification (adaptive RDP) and dilation are deferred to LMD export time.
 
-Code: `segmentation/pipeline/post_detection.py`, `segmentation/pipeline/background.py`
+Code: `xldvp_seg/pipeline/post_detection.py`, `xldvp_seg/pipeline/background.py`
 
 Controlled by `--no-contour-processing` and `--no-background-correction`.
 
 ## Key Patterns to Follow
 
-- **`safe_to_uint8()`**: Use from `segmentation.utils.detection_utils`. For uint16 channels with low signal, use `_percentile_normalize_single()` instead (avoids dim bitshift issue).
+- **`safe_to_uint8()`**: Use from `xldvp_seg.utils.detection_utils`. For uint16 channels with low signal, use `_percentile_normalize_single()` instead (avoids dim bitshift issue).
 - **Pixel size**: Never hardcode. Always from `loader.get_pixel_size()`.
 - **Channel indices**: Always verify from CZI metadata (`czi_info.py`). Never assume from filename.
-- **Logger**: `get_logger(__name__)` — no `logging.getLogger` in segmentation/ files.
-- **JSON**: `atomic_json_dump()` from `segmentation.utils.json_utils` for all detection writes.
+- **Logger**: `get_logger(__name__)` — no `logging.getLogger` in xldvp_seg/ files.
+- **JSON**: `atomic_json_dump()` from `xldvp_seg.utils.json_utils` for all detection writes.
 - **`include_zeros`**: Pass `_include_zeros=True` when extracting features on bg-corrected data (real zeros are signal, not padding).
 
 ## Vessel Pipeline Details

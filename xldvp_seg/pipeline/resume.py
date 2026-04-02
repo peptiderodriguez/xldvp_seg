@@ -13,10 +13,10 @@ from pathlib import Path
 import h5py
 import numpy as np
 
-from segmentation.pipeline.samples import _compute_tile_percentiles, filter_and_create_html_samples
-from segmentation.utils.islet_utils import classify_islet_marker, compute_islet_marker_thresholds
-from segmentation.utils.json_utils import fast_json_load
-from segmentation.utils.logging import get_logger
+from xldvp_seg.pipeline.samples import _compute_tile_percentiles, filter_and_create_html_samples
+from xldvp_seg.utils.islet_utils import classify_islet_marker, compute_islet_marker_thresholds
+from xldvp_seg.utils.json_utils import fast_json_load
+from xldvp_seg.utils.logging import get_logger
 
 logger = get_logger(__name__)
 
@@ -186,7 +186,7 @@ def reload_detections_from_tiles(tiles_dir, cell_type):
 
     # Warn about pre-existing classifier scores
     if all_detections:
-        from segmentation.utils.classifier_registry import extract_classifier_info
+        from xldvp_seg.utils.classifier_registry import extract_classifier_info
 
         scored_count, prov_count, sample_info = extract_classifier_info(all_detections)
         if scored_count > 0:

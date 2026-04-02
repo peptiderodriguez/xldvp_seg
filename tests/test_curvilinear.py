@@ -399,7 +399,7 @@ class TestTagDetections:
 
 class TestExtractAlignedPositions:
     def test_basic_extraction(self, sample_detections):
-        from segmentation.utils.detection_utils import extract_positions_um
+        from xldvp_seg.utils.detection_utils import extract_positions_um
 
         positive_idx = list(range(10))
         valid_idx, positions = extract_aligned_positions(
@@ -410,7 +410,7 @@ class TestExtractAlignedPositions:
 
     def test_skips_unresolvable(self):
         """Detections without coordinates should be skipped."""
-        from segmentation.utils.detection_utils import extract_positions_um
+        from xldvp_seg.utils.detection_utils import extract_positions_um
 
         dets = [
             {"features": {"area": 100, "area_um2": 3.0}, "global_center": [10, 20]},

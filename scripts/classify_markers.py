@@ -46,13 +46,13 @@ matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 import numpy as np
 
-from segmentation.pipeline.background import (
+from xldvp_seg.pipeline.background import (
     _extract_centroids,
     correct_all_channels,
     local_background_subtract,
 )
-from segmentation.utils.json_utils import atomic_json_dump
-from segmentation.utils.logging import get_logger, setup_logging
+from xldvp_seg.utils.json_utils import atomic_json_dump
+from xldvp_seg.utils.logging import get_logger, setup_logging
 
 logger = get_logger(__name__)
 
@@ -649,7 +649,7 @@ def main():
     output_dir.mkdir(parents=True, exist_ok=True)
 
     # Parse marker channels — resolve wavelengths if specified
-    from segmentation.io.czi_loader import (
+    from xldvp_seg.io.czi_loader import (
         ChannelResolutionError,
         get_czi_metadata,
         resolve_channel_indices,
@@ -712,7 +712,7 @@ def main():
     logger.info("=" * 70)
 
     # Load detections (use fast_json_load for large files — orjson is 3-5x faster)
-    from segmentation.utils.json_utils import fast_json_load
+    from xldvp_seg.utils.json_utils import fast_json_load
 
     logger.info(f"Loading detections from {det_path}...")
     detections = fast_json_load(det_path)

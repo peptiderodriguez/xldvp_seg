@@ -6,7 +6,7 @@ Addresses two common mask quality issues:
 2. Masks with holes - Donut-shaped masks with internal gaps
 
 Usage:
-    from segmentation.utils.mask_cleanup import cleanup_mask, recompute_mask_features
+    from xldvp_seg.utils.mask_cleanup import cleanup_mask, recompute_mask_features
 
     # Clean up a mask (keep largest component, fill holes)
     cleaned_mask = cleanup_mask(mask, keep_largest=True, fill_internal_holes=True)
@@ -435,7 +435,7 @@ def apply_cleanup_to_detection(
                 gray = np.mean(masked_pixels, axis=1)
 
                 # HSV features — use canonical implementation from feature_extraction
-                from segmentation.utils.feature_extraction import compute_hsv_features
+                from xldvp_seg.utils.feature_extraction import compute_hsv_features
 
                 # masked_pixels already has zero pixels excluded (valid filter above)
                 hsv_feats = compute_hsv_features(masked_pixels, sample_size=100)

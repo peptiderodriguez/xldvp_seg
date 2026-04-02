@@ -20,13 +20,13 @@ from typing import Any
 
 import numpy as np
 
-from segmentation.detection.registry import register_strategy
-from segmentation.utils.device import empty_cache
-from segmentation.utils.feature_extraction import (
+from xldvp_seg.detection.registry import register_strategy
+from xldvp_seg.utils.device import empty_cache
+from xldvp_seg.utils.feature_extraction import (
     SAM2_EMBEDDING_DIM,
     extract_morphological_features,
 )
-from segmentation.utils.logging import get_logger
+from xldvp_seg.utils.logging import get_logger
 
 from .base import Detection, DetectionStrategy, _safe_to_uint8
 from .mixins import MultiChannelFeatureMixin
@@ -328,7 +328,7 @@ class MKStrategy(DetectionStrategy, MultiChannelFeatureMixin):
 
             # Optional mask refinement: morphological opening + intensity trim
             if self.refine_masks:
-                from segmentation.utils.mask_cleanup import refine_mask_intensity
+                from xldvp_seg.utils.mask_cleanup import refine_mask_intensity
 
                 mask = refine_mask_intensity(mask, tile)
                 if mask.sum() < min_area_px:

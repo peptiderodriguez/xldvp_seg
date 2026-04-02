@@ -1,4 +1,4 @@
-"""Tests for segmentation.utils.json_utils.
+"""Tests for xldvp_seg.utils.json_utils.
 
 Tests NaN/Inf sanitization, numpy type handling, atomic writes, and fast loading.
 
@@ -10,7 +10,7 @@ import json
 import numpy as np
 import pytest
 
-from segmentation.utils.json_utils import (
+from xldvp_seg.utils.json_utils import (
     NumpyEncoder,
     atomic_json_dump,
     fast_json_load,

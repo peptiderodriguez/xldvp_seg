@@ -32,7 +32,7 @@ from sklearn.model_selection import StratifiedKFold, cross_val_score
 from sklearn.pipeline import Pipeline
 from sklearn.preprocessing import LabelEncoder, StandardScaler
 
-from segmentation.utils.logging import get_logger
+from xldvp_seg.utils.logging import get_logger
 
 logger = get_logger(__name__)
 
@@ -85,7 +85,7 @@ MORPHOLOGICAL_FEATURES = [
 DEFAULT_FEATURES = VESSEL_CORE_FEATURES + MORPHOLOGICAL_FEATURES
 
 # SAM2 embedding features (256D)
-from segmentation.utils.feature_extraction import RESNET50_FEATURE_DIM, SAM2_EMBEDDING_DIM
+from xldvp_seg.utils.feature_extraction import RESNET50_FEATURE_DIM, SAM2_EMBEDDING_DIM
 
 SAM2_FEATURES = [f"sam2_{i}" for i in range(SAM2_EMBEDDING_DIM)]
 

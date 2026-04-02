@@ -33,9 +33,9 @@ import cv2
 import h5py
 import numpy as np
 
-from segmentation.detection.strategies.mixins import MultiChannelFeatureMixin
-from segmentation.pipeline.background import _extract_centroids, local_background_subtract
-from segmentation.utils.logging import get_logger
+from xldvp_seg.detection.strategies.mixins import MultiChannelFeatureMixin
+from xldvp_seg.pipeline.background import _extract_centroids, local_background_subtract
+from xldvp_seg.utils.logging import get_logger
 
 logger = get_logger(__name__)
 
@@ -675,7 +675,7 @@ def process_detections_post_dedup(
         logger.info("-" * 40)
         logger.info("Phase 4: Nuclear counting (Cellpose on nuclear channel)")
 
-        from segmentation.analysis.nuclear_count import (
+        from xldvp_seg.analysis.nuclear_count import (
             _percentile_normalize_to_uint8,
             count_nuclei_for_tile,
         )

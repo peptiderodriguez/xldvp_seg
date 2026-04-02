@@ -19,7 +19,7 @@ This module provides two main components:
 
 Example usage:
 
-    from segmentation.io.tile_pipeline import TilePipeline, preprocess_tiles_batch
+    from xldvp_seg.io.tile_pipeline import TilePipeline, preprocess_tiles_batch
 
     # Producer-consumer for tile loading
     pipeline = TilePipeline(
@@ -55,7 +55,7 @@ from typing import (
 
 import numpy as np
 
-from segmentation.utils.logging import get_logger
+from xldvp_seg.utils.logging import get_logger
 
 logger = get_logger(__name__)
 
@@ -82,7 +82,7 @@ class TilePipeline:
         num_prefetch: Maximum number of tiles to prefetch (queue size).
 
     Example:
-        >>> from segmentation.io import get_loader
+        >>> from xldvp_seg.io import get_loader
         >>> loader = get_loader('/path/to/slide.czi', load_to_ram=True, channel=1)
         >>> tiles = [{'x': 0, 'y': 0}, {'x': 3000, 'y': 0}, {'x': 6000, 'y': 0}]
         >>>

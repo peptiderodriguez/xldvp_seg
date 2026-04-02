@@ -58,7 +58,7 @@ for prop in props:
 
 Use the helper function for conversion:
 ```python
-from segmentation.processing.coordinates import regionprop_centroid_to_xy
+from xldvp_seg.processing.coordinates import regionprop_centroid_to_xy
 
 centroid_xy = regionprop_centroid_to_xy(prop)  # Returns [x, y]
 ```
@@ -80,7 +80,7 @@ Coordinates in the full mosaic/slide space:
 ### Conversion Functions
 
 ```python
-from segmentation.processing.coordinates import (
+from xldvp_seg.processing.coordinates import (
     tile_to_global_coords,
     global_to_tile_coords,
 )
@@ -120,7 +120,7 @@ All cell types use a **spatial UID format**:
 ### UID Generation
 
 ```python
-from segmentation.processing.coordinates import generate_uid
+from xldvp_seg.processing.coordinates import generate_uid
 
 uid = generate_uid(
     slide_name="2025_11_18_FGC1",
@@ -147,7 +147,7 @@ The old numeric `global_id` format is deprecated:
 
 Use migration utilities if converting old data:
 ```python
-from segmentation.processing.coordinates import migrate_uid_format
+from xldvp_seg.processing.coordinates import migrate_uid_format
 
 new_uid = migrate_uid_format(
     old_uid="slide_mk_123",
@@ -192,7 +192,7 @@ slide_mk_12346_67890,12345.6,67890.3,2715.8,14935.9
 Use validation functions to catch errors early:
 
 ```python
-from segmentation.processing.coordinates import (
+from xldvp_seg.processing.coordinates import (
     validate_xy_coordinates,
     validate_array_indices,
 )
@@ -215,7 +215,7 @@ validate_array_indices(row, col, array_height, array_width)
 
 ## Utility Functions Reference
 
-All coordinate utilities are in `segmentation/processing/coordinates.py`:
+All coordinate utilities are in `xldvp_seg/processing/coordinates.py`:
 
 | Function | Purpose |
 |----------|---------|

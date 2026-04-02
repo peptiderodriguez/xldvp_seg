@@ -39,8 +39,8 @@ from sklearn.metrics import calinski_harabasz_score, silhouette_score
 from sklearn.neighbors import kneighbors_graph
 from sklearn.preprocessing import StandardScaler
 
-from segmentation.utils.json_utils import atomic_json_dump, fast_json_load
-from segmentation.utils.logging import get_logger, setup_logging
+from xldvp_seg.utils.json_utils import atomic_json_dump, fast_json_load
+from xldvp_seg.utils.logging import get_logger, setup_logging
 
 setup_logging()
 logger = get_logger(__name__)
@@ -331,7 +331,7 @@ def _gpu_worker_nuclear_features(
     from skimage.measure import regionprops
     from skimage.morphology import remove_small_objects
 
-    from segmentation.utils.device import empty_cache, set_device_for_worker
+    from xldvp_seg.utils.device import empty_cache, set_device_for_worker
 
     # Configure device for this worker (CUDA_VISIBLE_DEVICES on CUDA, MPS on Apple Silicon)
     device = set_device_for_worker(gpu_id)

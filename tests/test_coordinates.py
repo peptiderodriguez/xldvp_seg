@@ -9,7 +9,7 @@ from unittest.mock import MagicMock
 
 import pytest
 
-from segmentation.processing.coordinates import (
+from xldvp_seg.processing.coordinates import (
     # Coordinate validation functions
     CoordinateValidationError,
     array_index_to_xy,

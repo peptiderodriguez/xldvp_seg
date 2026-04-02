@@ -33,7 +33,7 @@ from typing import Any
 
 import numpy as np
 
-from segmentation.utils.logging import get_logger, setup_logging
+from xldvp_seg.utils.logging import get_logger, setup_logging
 
 setup_logging()
 logger = get_logger(__name__)

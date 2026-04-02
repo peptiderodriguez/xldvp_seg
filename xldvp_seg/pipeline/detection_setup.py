@@ -7,14 +7,14 @@ detection parameter dicts from CLI arguments.
 
 from pathlib import Path
 
-from segmentation.utils.logging import get_logger
+from xldvp_seg.utils.logging import get_logger
 
 logger = get_logger(__name__)
 
 
 def apply_vessel_classifiers(features_list, vessel_classifier, vessel_type_classifier):
     """Apply vessel binary + 6-class classifiers to detection features in-place."""
-    from segmentation.classification.vessel_classifier import VesselClassifier
+    from xldvp_seg.classification.vessel_classifier import VesselClassifier
 
     if vessel_classifier is not None:
         for feat in features_list:
@@ -69,7 +69,7 @@ def load_classifier_into_detector(args, detector):
     classifier_loaded = False
 
     if args.cell_type == "nmj" and getattr(args, "nmj_classifier", None):
-        from segmentation.detection.strategies.nmj import load_classifier
+        from xldvp_seg.detection.strategies.nmj import load_classifier
 
         logger.info(f"Loading NMJ classifier from {args.nmj_classifier}...")
         classifier_data = load_classifier(args.nmj_classifier, device=detector.device)
@@ -108,7 +108,7 @@ def load_classifier_into_detector(args, detector):
             classifier_loaded = True
 
     elif args.cell_type == "islet" and getattr(args, "islet_classifier", None):
-        from segmentation.detection.strategies.nmj import load_nmj_rf_classifier
+        from xldvp_seg.detection.strategies.nmj import load_nmj_rf_classifier
 
         logger.info(f"Loading islet RF classifier from {args.islet_classifier}...")
         classifier_data = load_nmj_rf_classifier(args.islet_classifier)
@@ -123,7 +123,7 @@ def load_classifier_into_detector(args, detector):
         classifier_loaded = True
 
     elif args.cell_type == "tissue_pattern" and getattr(args, "tp_classifier", None):
-        from segmentation.detection.strategies.nmj import load_nmj_rf_classifier
+        from xldvp_seg.detection.strategies.nmj import load_nmj_rf_classifier
 
         logger.info(f"Loading tissue_pattern RF classifier from {args.tp_classifier}...")
         classifier_data = load_nmj_rf_classifier(args.tp_classifier)
@@ -236,8 +236,8 @@ def load_vessel_classifiers(args):
     Returns:
         (vessel_classifier, vessel_type_classifier) tuple, either may be None
     """
-    from segmentation.classification.vessel_classifier import VesselClassifier
-    from segmentation.classification.vessel_type_classifier import VesselTypeClassifier
+    from xldvp_seg.classification.vessel_classifier import VesselClassifier
+    from xldvp_seg.classification.vessel_type_classifier import VesselTypeClassifier
 
     vessel_classifier = None
     vessel_type_classifier = None

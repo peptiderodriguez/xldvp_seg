@@ -31,7 +31,7 @@ from pathlib import Path
 import numpy as np
 
 try:
-    from segmentation.utils.logging import get_logger
+    from xldvp_seg.utils.logging import get_logger
 
     log = get_logger(__name__)
 except ImportError:
@@ -41,7 +41,7 @@ except ImportError:
     log = logging.getLogger(__name__)
 
 try:
-    from segmentation.utils.json_utils import atomic_json_dump, fast_json_load
+    from xldvp_seg.utils.json_utils import atomic_json_dump, fast_json_load
 except ImportError:
 
     def atomic_json_dump(data, path, **kwargs):
@@ -92,7 +92,7 @@ def get_pixel_size(crosses_data, slide_data):
 
 
 try:
-    from segmentation.lmd.contour_processing import (
+    from xldvp_seg.lmd.contour_processing import (
         transform_native_to_display as _transform_native_to_display,
     )
 except ImportError:
@@ -112,7 +112,7 @@ except ImportError:
 
 def _build_serpentine_index():
     """Build well→index mapping for 384-well serpentine order."""
-    from segmentation.lmd.well_plate import generate_plate_wells
+    from xldvp_seg.lmd.well_plate import generate_plate_wells
 
     wells = generate_plate_wells(308)
     return {w: i for i, w in enumerate(wells)}

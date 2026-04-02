@@ -20,11 +20,11 @@ except ImportError:
 
 
 class TestHTMLExportImports(unittest.TestCase):
-    """Test imports from segmentation.io.html_export module."""
+    """Test imports from xldvp_seg.io.html_export module."""
 
     def test_utility_function_imports(self):
         """Test that utility functions can be imported."""
-        from segmentation.io.html_export import (
+        from xldvp_seg.io.html_export import (
             create_hdf5_dataset,
             draw_mask_contour,
             get_largest_connected_component,
@@ -38,7 +38,7 @@ class TestHTMLExportImports(unittest.TestCase):
 
     def test_mk_hspc_export_imports(self):
         """Test that MK/HSPC export functions can be imported."""
-        from segmentation.io.html_export import (
+        from xldvp_seg.io.html_export import (
             create_mk_hspc_index,
             export_mk_hspc_html_from_ram,
             generate_mk_hspc_page_html,
@@ -54,7 +54,7 @@ class TestHTMLExportImports(unittest.TestCase):
 
     def test_general_export_imports(self):
         """Test that general export functions can be imported."""
-        from segmentation.io.html_export import (
+        from xldvp_seg.io.html_export import (
             export_samples_to_html,
             generate_annotation_page,
             generate_index_page,
@@ -66,7 +66,7 @@ class TestHTMLExportImports(unittest.TestCase):
 
     def test_all_html_export_imports_at_once(self):
         """Test importing all HTML export functions at once."""
-        from segmentation.io.html_export import (  # noqa: F401
+        from xldvp_seg.io.html_export import (  # noqa: F401
             export_samples_to_html,
             generate_annotation_page,
             generate_index_page,
@@ -77,11 +77,11 @@ class TestHTMLExportImports(unittest.TestCase):
 
 
 class TestConfigImports(unittest.TestCase):
-    """Test imports from segmentation.utils.config module."""
+    """Test imports from xldvp_seg.utils.config module."""
 
     def test_feature_dimension_constants(self):
         """Test that feature dimension constants can be imported."""
-        from segmentation.utils.config import (
+        from xldvp_seg.utils.config import (
             MORPHOLOGICAL_FEATURES_COUNT,
             RESNET_EMBEDDING_DIMENSION,
             SAM2_EMBEDDING_DIMENSION,
@@ -97,13 +97,13 @@ class TestConfigImports(unittest.TestCase):
 
     def test_pixel_size_constant(self):
         """Test that legacy pixel size constant exists (deprecated — use CZI metadata)."""
-        from segmentation.utils.config import _LEGACY_PIXEL_SIZE_UM
+        from xldvp_seg.utils.config import _LEGACY_PIXEL_SIZE_UM
 
         assert _LEGACY_PIXEL_SIZE_UM == 0.1725
 
     def test_helper_functions(self):
         """Test that helper functions can be imported and called."""
-        from segmentation.utils.config import (
+        from xldvp_seg.utils.config import (
             get_cpu_worker_count,
             get_feature_dimensions,
             validate_config,
@@ -130,7 +130,7 @@ class TestConfigImports(unittest.TestCase):
 
     def test_config_constants_and_defaults(self):
         """Test that config defaults and constants can be imported."""
-        from segmentation.utils.config import (
+        from xldvp_seg.utils.config import (
             DEFAULT_CONFIG,
             DEFAULT_PATHS,
             DETECTION_DEFAULTS,
@@ -142,7 +142,7 @@ class TestConfigImports(unittest.TestCase):
 
     def test_config_getter_functions(self):
         """Test that config getter functions can be imported."""
-        from segmentation.utils.config import (
+        from xldvp_seg.utils.config import (
             get_default_path,
             get_detection_defaults,
             get_normalization_percentiles,
@@ -162,11 +162,11 @@ class TestConfigImports(unittest.TestCase):
 
 
 class TestModelManagerImports(unittest.TestCase):
-    """Test imports from segmentation.models module."""
+    """Test imports from xldvp_seg.models module."""
 
     def test_model_manager_imports(self):
         """Test that model manager can be imported."""
-        from segmentation.models import (
+        from xldvp_seg.models import (
             ModelManager,
             find_checkpoint,
             get_model_manager,
@@ -178,11 +178,11 @@ class TestModelManagerImports(unittest.TestCase):
 
 
 class TestProcessingModuleImports(unittest.TestCase):
-    """Test imports from segmentation.processing modules."""
+    """Test imports from xldvp_seg.processing modules."""
 
     def test_memory_module_imports(self):
         """Test that memory module functions can be imported."""
-        from segmentation.processing.memory import (
+        from xldvp_seg.processing.memory import (
             get_memory_usage,
             get_safe_worker_count,
             log_memory_status,
@@ -196,7 +196,7 @@ class TestProcessingModuleImports(unittest.TestCase):
 
     def test_mk_hspc_utils_imports(self):
         """Test that MK/HSPC utilities can be imported."""
-        from segmentation.processing.mk_hspc_utils import (
+        from xldvp_seg.processing.mk_hspc_utils import (
             build_mk_hspc_result,
             check_tile_validity,
             ensure_rgb_array,
@@ -212,7 +212,7 @@ class TestProcessingModuleImports(unittest.TestCase):
 
     def test_coordinates_module_imports(self):
         """Test that coordinates module can be imported."""
-        from segmentation.processing.coordinates import (
+        from xldvp_seg.processing.coordinates import (
             array_index_to_xy,
             extract_crop,
             extract_crop_bounds,
@@ -236,11 +236,11 @@ class TestProcessingModuleImports(unittest.TestCase):
 
 
 class TestDetectionModuleImports(unittest.TestCase):
-    """Test imports from segmentation.detection modules."""
+    """Test imports from xldvp_seg.detection modules."""
 
     def test_registry_imports(self):
         """Test that strategy registry can be imported."""
-        from segmentation.detection.registry import StrategyRegistry
+        from xldvp_seg.detection.registry import StrategyRegistry
 
         assert StrategyRegistry is not None
         assert callable(StrategyRegistry.list_strategies)
@@ -249,7 +249,7 @@ class TestDetectionModuleImports(unittest.TestCase):
 
     def test_tissue_detection_imports(self):
         """Test that tissue detection functions can be imported."""
-        from segmentation.detection.tissue import (
+        from xldvp_seg.detection.tissue import (
             calculate_block_variances,
             calibrate_tissue_threshold,
             filter_tissue_tiles,
@@ -263,11 +263,11 @@ class TestDetectionModuleImports(unittest.TestCase):
 
 
 class TestIOModuleImports(unittest.TestCase):
-    """Test imports from segmentation.io modules."""
+    """Test imports from xldvp_seg.io modules."""
 
     def test_czi_loader_imports(self):
         """Test that CZI loader can be imported."""
-        from segmentation.io.czi_loader import CZILoader
+        from xldvp_seg.io.czi_loader import CZILoader
 
         assert CZILoader is not None
 
@@ -276,14 +276,14 @@ class TestPackageLevelImports(unittest.TestCase):
     """Test that package-level imports work correctly."""
 
     def test_segmentation_package_import(self):
-        """Test that main segmentation package can be imported."""
-        import segmentation
+        """Test that main xldvp_seg package can be imported."""
+        import xldvp_seg
 
-        assert segmentation is not None
+        assert xldvp_seg is not None
 
     def test_subpackage_imports(self):
         """Test that subpackages can be imported."""
-        from segmentation import detection, io, models, processing, utils
+        from xldvp_seg import detection, io, models, processing, utils
 
         assert io is not None
         assert utils is not None

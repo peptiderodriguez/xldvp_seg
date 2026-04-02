@@ -39,8 +39,8 @@ try:
 except ImportError:
     pass
 
-from segmentation.utils.json_utils import atomic_json_dump, fast_json_load
-from segmentation.utils.logging import get_logger, setup_logging
+from xldvp_seg.utils.json_utils import atomic_json_dump, fast_json_load
+from xldvp_seg.utils.logging import get_logger, setup_logging
 
 logger = get_logger(__name__)
 
@@ -1178,7 +1178,7 @@ def export_csv(islet_features, output_path):
     logger.info("Saved CSV: %s (%d islets)", output_path, len(rows))
 
 
-# sanitize_for_json imported from segmentation.utils.json_utils
+# sanitize_for_json imported from xldvp_seg.utils.json_utils
 
 
 def export_detections(detections, output_path):

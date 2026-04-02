@@ -53,19 +53,19 @@ from pathlib import Path
 
 import numpy as np
 
-from segmentation.io.czi_loader import get_czi_metadata, get_loader, print_czi_metadata
-from segmentation.pipeline.cli import build_parser, postprocess_args
-from segmentation.pipeline.detection_loop import run_detection_loop
-from segmentation.pipeline.finalize import _finish_pipeline
-from segmentation.pipeline.resume import (
+from xldvp_seg.io.czi_loader import get_czi_metadata, get_loader, print_czi_metadata
+from xldvp_seg.pipeline.cli import build_parser, postprocess_args
+from xldvp_seg.pipeline.detection_loop import run_detection_loop
+from xldvp_seg.pipeline.finalize import _finish_pipeline
+from xldvp_seg.pipeline.resume import (
     _resume_generate_html_samples,
     detect_resume_stage,
     reload_detections_from_tiles,
 )
-from segmentation.pipeline.server import show_server_status, stop_background_server
-from segmentation.pipeline.shm_setup import setup_shared_memory
-from segmentation.utils.json_utils import atomic_json_dump, fast_json_load
-from segmentation.utils.logging import get_logger, setup_logging
+from xldvp_seg.pipeline.server import show_server_status, stop_background_server
+from xldvp_seg.pipeline.shm_setup import setup_shared_memory
+from xldvp_seg.utils.json_utils import atomic_json_dump, fast_json_load
+from xldvp_seg.utils.logging import get_logger, setup_logging
 
 logger = get_logger(__name__)
 
@@ -81,7 +81,7 @@ def _maybe_export_ome_zarr(
     if not getattr(args, "ome_zarr", True):
         return
     try:
-        from segmentation.io.ome_zarr_export import export_shm_to_ome_zarr
+        from xldvp_seg.io.ome_zarr_export import export_shm_to_ome_zarr
 
         zarr_path = slide_output_dir / f"{slide_name}.ome.zarr"
         export_shm_to_ome_zarr(
@@ -486,7 +486,7 @@ def run_pipeline(args):
             mask_fn = f"{args.cell_type}_masks.h5"
             dedup_sort = "confidence" if getattr(args, "dedup_by_confidence", False) else "area"
             if getattr(args, "dedup_method", "mask_overlap") == "iou_nms":
-                from segmentation.processing.deduplication import deduplicate_by_iou_nms
+                from xldvp_seg.processing.deduplication import deduplicate_by_iou_nms
 
                 all_detections = deduplicate_by_iou_nms(
                     all_detections,
@@ -496,7 +496,7 @@ def run_pipeline(args):
                     sort_by=dedup_sort,
                 )
             else:
-                from segmentation.processing.deduplication import deduplicate_by_mask_overlap
+                from xldvp_seg.processing.deduplication import deduplicate_by_mask_overlap
 
                 all_detections = deduplicate_by_mask_overlap(
                     all_detections,
@@ -522,7 +522,7 @@ def run_pipeline(args):
         _want_bg = args.background_correction and not _has_bg
 
         if len(all_detections) > 0 and (_want_contour or _want_bg):
-            from segmentation.pipeline.post_detection import process_detections_post_dedup
+            from xldvp_seg.pipeline.post_detection import process_detections_post_dedup
 
             mask_fn = f"{args.cell_type}_masks.h5"
             _display_chs = None
@@ -599,7 +599,7 @@ def run_pipeline(args):
                     _nuc_ch_for_counting = getattr(args, "tp_nuclear_channel", None)
 
                 if _nuc_ch_for_counting is not None:
-                    from segmentation.models.manager import ModelManager
+                    from xldvp_seg.models.manager import ModelManager
 
                     _nuc_model_mgr = ModelManager()
                     _cp_model_for_nuc = _nuc_model_mgr.cellpose
@@ -767,7 +767,7 @@ def run_pipeline(args):
         mask_fn = f"{args.cell_type}_masks.h5"
         dedup_sort = "confidence" if getattr(args, "dedup_by_confidence", False) else "area"
         if getattr(args, "dedup_method", "mask_overlap") == "iou_nms":
-            from segmentation.processing.deduplication import deduplicate_by_iou_nms
+            from xldvp_seg.processing.deduplication import deduplicate_by_iou_nms
 
             all_detections = deduplicate_by_iou_nms(
                 all_detections,
@@ -777,7 +777,7 @@ def run_pipeline(args):
                 sort_by=dedup_sort,
             )
         else:
-            from segmentation.processing.deduplication import deduplicate_by_mask_overlap
+            from xldvp_seg.processing.deduplication import deduplicate_by_mask_overlap
 
             all_detections = deduplicate_by_mask_overlap(
                 all_detections,
@@ -803,7 +803,7 @@ def run_pipeline(args):
 
     # ---- Post-dedup: contour dilation + feature re-extraction + bg correction ----
     if len(all_detections) > 0 and (args.contour_processing or args.background_correction):
-        from segmentation.pipeline.post_detection import process_detections_post_dedup
+        from xldvp_seg.pipeline.post_detection import process_detections_post_dedup
 
         mask_fn = f"{args.cell_type}_masks.h5"
         # Determine display channels for RGB morph extraction
@@ -835,7 +835,7 @@ def run_pipeline(args):
             if _nuc_ch_normal is None and args.cell_type == "tissue_pattern":
                 _nuc_ch_normal = getattr(args, "tp_nuclear_channel", None)
             if _nuc_ch_normal is not None:
-                from segmentation.models.manager import ModelManager
+                from xldvp_seg.models.manager import ModelManager
 
                 _nuc_mgr_normal = ModelManager()
                 _cp_model_normal = _nuc_mgr_normal.cellpose

@@ -10,7 +10,7 @@ This module consolidates model loading logic that was previously duplicated in:
 - segmentation/cli.py
 
 Usage:
-    from segmentation.models import get_model_manager
+    from xldvp_seg.models import get_model_manager
 
     manager = get_model_manager()
     sam2_predictor, sam2_auto = manager.get_sam2()
@@ -27,7 +27,7 @@ import torch
 import torchvision.models as tv_models
 import torchvision.transforms as tv_transforms
 
-from segmentation.utils.logging import get_logger
+from xldvp_seg.utils.logging import get_logger
 
 logger = get_logger(__name__)
 
@@ -111,7 +111,7 @@ def get_model_manager(device: str = None) -> "ModelManager":
         ModelManager instance for the device
     """
     if device is None:
-        from segmentation.utils.device import get_default_device
+        from xldvp_seg.utils.device import get_default_device
 
         device = get_default_device()
     device_key = str(device)
@@ -164,7 +164,7 @@ class ModelManager:
                     If None, auto-detects best available.
         """
         if device is None:
-            from segmentation.utils.device import get_default_device
+            from xldvp_seg.utils.device import get_default_device
 
             device = get_default_device()
         if isinstance(device, str):
@@ -351,7 +351,7 @@ class ModelManager:
         from cellpose.models import CellposeModel
 
         logger.info("Loading Cellpose-SAM...")
-        from segmentation.utils.device import device_supports_gpu
+        from xldvp_seg.utils.device import device_supports_gpu
 
         self._cellpose = CellposeModel(
             pretrained_model="cpsam", gpu=device_supports_gpu(self.device), device=self.device
@@ -615,7 +615,7 @@ class ModelManager:
         gc.collect()
 
         # Clear GPU cache
-        from segmentation.utils.device import empty_cache
+        from xldvp_seg.utils.device import empty_cache
 
         empty_cache()
 

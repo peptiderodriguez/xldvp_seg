@@ -12,7 +12,7 @@ import numpy as np
 from sklearn.cluster import KMeans
 from tqdm import tqdm
 
-from segmentation.utils.logging import get_logger
+from xldvp_seg.utils.logging import get_logger
 
 logger = get_logger(__name__)
 
@@ -179,11 +179,11 @@ def compute_pixel_level_tissue_mask(
             gray_raw = image
         gray, _ = _normalize_to_uint8(gray_raw)
     elif image.ndim == 3:
-        from segmentation.utils.detection_utils import safe_to_uint8
+        from xldvp_seg.utils.detection_utils import safe_to_uint8
 
         gray = cv2.cvtColor(safe_to_uint8(image), cv2.COLOR_RGB2GRAY)
     else:
-        from segmentation.utils.detection_utils import safe_to_uint8
+        from xldvp_seg.utils.detection_utils import safe_to_uint8
 
         gray = safe_to_uint8(image)
 
@@ -258,11 +258,11 @@ def has_tissue(
         if not ok:
             return False, 0.0
     elif tile_image.ndim == 3:
-        from segmentation.utils.detection_utils import safe_to_uint8
+        from xldvp_seg.utils.detection_utils import safe_to_uint8
 
         gray = cv2.cvtColor(safe_to_uint8(tile_image), cv2.COLOR_RGB2GRAY)
     else:
-        from segmentation.utils.detection_utils import safe_to_uint8
+        from xldvp_seg.utils.detection_utils import safe_to_uint8
 
         gray = safe_to_uint8(tile_image)
 

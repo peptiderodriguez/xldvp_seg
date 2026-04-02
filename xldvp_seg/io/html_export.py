@@ -21,7 +21,7 @@ import numpy as np
 from PIL import Image
 from scipy import ndimage
 
-from segmentation.utils.logging import get_logger
+from xldvp_seg.utils.logging import get_logger
 
 logger = get_logger(__name__)
 
@@ -198,7 +198,7 @@ def percentile_normalize(image, p_low=1, p_high=99.5, global_percentiles=None):
             return result
         if image.dtype == np.uint16:
             return (image / 256).astype(np.uint8)
-        from segmentation.utils.detection_utils import safe_to_uint8
+        from xldvp_seg.utils.detection_utils import safe_to_uint8
 
         return safe_to_uint8(image)
     else:
@@ -223,7 +223,7 @@ def percentile_normalize(image, p_low=1, p_high=99.5, global_percentiles=None):
                 if image.dtype == np.uint16:
                     result[:, :, ch] = (ch_data / 256).astype(np.uint8)
                 else:
-                    from segmentation.utils.detection_utils import safe_to_uint8
+                    from xldvp_seg.utils.detection_utils import safe_to_uint8
 
                     result[:, :, ch] = safe_to_uint8(ch_data)
         # Keep padding pixels black

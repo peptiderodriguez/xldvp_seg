@@ -43,7 +43,7 @@ These behaviors apply throughout every Claude Code session on this project:
 ## Development Commands
 
 ```bash
-# Install (editable, registers xlseg CLI + segmentation package)
+# Install (editable, registers xlseg CLI + xldvp_seg package)
 pip install -e .
 
 # Environment (for scripts that are not yet xlseg subcommands)
@@ -73,7 +73,7 @@ PYTHONPATH=$REPO $XLDVP_PYTHON $REPO/scripts/czi_info.py /path/to/slide.czi
 
 ### Tests
 
-Tests in `tests/` using pytest (~660 tests, 25 files). Run `make test` for all with coverage. Fixtures in `conftest.py`. Tests rely on `pip install -e .` (or `PYTHONPATH=$REPO`) for `segmentation.*` imports.
+Tests in `tests/` using pytest (~660 tests, 25 files). Run `make test` for all with coverage. Fixtures in `conftest.py`. Tests rely on `pip install -e .` (or `PYTHONPATH=$REPO`) for `xldvp_seg.*` imports.
 
 **Development workflow:**
 ```bash
@@ -351,7 +351,7 @@ CZI file → czi_loader.py (channel resolution, tiling)
          → Finalize: JSON + CSV + HTML + OME-Zarr + SpatialData
 ```
 
-### Pipeline Package (`segmentation/pipeline/`)
+### Pipeline Package (`xldvp_seg/pipeline/`)
 
 `run_segmentation.py` is a ~1900-line orchestrator importing from 9 pipeline modules:
 
@@ -369,15 +369,15 @@ CZI file → czi_loader.py (channel resolution, tiling)
 
 **Dependency DAG** (no cycles): `resume → samples`, `finalize → server`, `post_detection → background → standalone`, all others standalone.
 
-### Detection Strategies (`segmentation/detection/strategies/`)
+### Detection Strategies (`xldvp_seg/detection/strategies/`)
 
-All inherit from `base.py`, use `MultiChannelFeatureMixin` (from `mixins.py`), implement `detect_in_tile()`. Strategies self-register via `@register_strategy` decorator in `segmentation/detection/registry.py`. Selection via `strategy_factory.py` (registry lookup + per-strategy kwargs builder).
+All inherit from `base.py`, use `MultiChannelFeatureMixin` (from `mixins.py`), implement `detect_in_tile()`. Strategies self-register via `@register_strategy` decorator in `xldvp_seg/detection/registry.py`. Selection via `strategy_factory.py` (registry lookup + per-strategy kwargs builder).
 
-### Model Registry (`segmentation/models/registry.py`)
+### Model Registry (`xldvp_seg/models/registry.py`)
 
 Metadata catalog for all models (feature extractors + segmenters). Tracks name, feature_dim, modality (fluorescence/brightfield/both), license, HuggingFace URL, and gated status. Does NOT handle loading — that stays in `ModelManager`. Use `list_models(modality="brightfield")` to filter. Brightfield FMs (UNI2, Virchow2, CONCH, Phikon-v2) are gated on HuggingFace — download via `xlseg download-models --brightfield`.
 
-### Multi-GPU Processing (`segmentation/processing/`)
+### Multi-GPU Processing (`xldvp_seg/processing/`)
 
 **Always multi-GPU** (even `--num-gpus 1`). No separate single-GPU path.
 - `multigpu_worker.py` — generic worker for ALL cell types, config dict (not positional args)
@@ -385,7 +385,7 @@ Metadata catalog for all models (feature extractors + segmenters). Tracks name, 
 - `tile_processing.py` — shared `process_single_tile()`
 - Multi-node: `--tile-shard INDEX/TOTAL` round-robin, `--merge-shards` on resume
 
-### ROI-Restricted Detection (`segmentation.roi`)
+### ROI-Restricted Detection (`xldvp_seg.roi`)
 
 Reusable utilities for detection within specific regions: `roi.common` (bbox, filtering, multi-GPU), `roi.marker_threshold` (Otsu on marker signal), `roi.circular_objects` (TMA cores, islets), `roi.from_file` (polygon/mask). Examples: `examples/islet/`, `examples/tma/`, `examples/bone_marrow/`.
 
@@ -395,7 +395,7 @@ Reusable utilities for detection within specific regions: `roi.common` (bbox, fi
 
 ### Device Handling
 
-Never hardcode `device="cuda"`. Use from `segmentation.utils.device`:
+Never hardcode `device="cuda"`. Use from `xldvp_seg.utils.device`:
 - `get_default_device()` — detects cuda/mps/cpu automatically
 - `device_supports_gpu()` — for Cellpose `gpu=` flag (not `torch.cuda.is_available()`)
 - `empty_cache()` — handles cuda (clear cache), mps (synchronize + clear), and cpu (no-op)
@@ -412,23 +412,23 @@ Never hardcode `device="cuda"`. Use from `segmentation.utils.device`:
 
 ### JSON I/O
 
-Always use `atomic_json_dump()` from `segmentation.utils.json_utils` — temp file + `os.replace()`, auto-sanitizes NaN/Inf, uses orjson when available. Use `fast_json_load()` for large detection JSON. No `indent=2` anywhere.
+Always use `atomic_json_dump()` from `xldvp_seg.utils.json_utils` — temp file + `os.replace()`, auto-sanitizes NaN/Inf, uses orjson when available. Use `fast_json_load()` for large detection JSON. No `indent=2` anywhere.
 
 ### safe_to_uint8
 
-Canonical in `segmentation/utils/detection_utils.py`. For uint16: simple `arr/256` — very dim for low-signal channels. Use `_percentile_normalize_single()` for proper normalization. Float >1.0 clipped to [0,255].
+Canonical in `xldvp_seg/utils/detection_utils.py`. For uint16: simple `arr/256` — very dim for low-signal channels. Use `_percentile_normalize_single()` for proper normalization. Float >1.0 clipped to [0,255].
 
 ### Centroids
 
 Background correction KD-tree MUST use `global_center` (slide-level), NOT `features["centroid"]` (tile-local). Canonical: `_extract_centroids()` in `background.py`. KD-tree is built once and cached across channels via `tree_and_indices` parameter (4x speedup on 4-channel slides). Background estimate is median-based: per-cell background = median of neighbor median intensities. SNR = median_raw / median_of_neighbor_medians.
 
-### Shared Utilities (`segmentation/utils/detection_utils.py`)
+### Shared Utilities (`xldvp_seg/utils/detection_utils.py`)
 
 - `extract_positions_um(detections, pixel_size_um=None)` — canonical position extraction with 3-level fallback: `global_center_um` → `global_center * pixel_size` → `global_x/y * pixel_size`. Auto-infers pixel_size from `area/area_um2`. Use instead of writing inline position extraction.
 - `load_rf_classifier(model_path)` — generic RF classifier loader (replaces NMJ-specific `load_nmj_rf_classifier`). Handles Pipeline and dict formats, tries multiple sidecar feature-name files.
-- `transform_native_to_display()` in `segmentation/lmd/contour_processing.py` — canonical LMD coordinate transform (flip_h, rot90). Single source of truth for both `run_lmd_export.py` and `lmd_export_replicates.py`.
+- `transform_native_to_display()` in `xldvp_seg/lmd/contour_processing.py` — canonical LMD coordinate transform (flip_h, rot90). Single source of truth for both `run_lmd_export.py` and `lmd_export_replicates.py`.
 
-### Graph Topology (`segmentation/utils/graph_topology.py`)
+### Graph Topology (`xldvp_seg/utils/graph_topology.py`)
 
 Shared graph topology analysis for spatial structure detection. Used by both `detect_curvilinear_patterns.py` (mesothelium strips) and `detect_vessel_structures.py` (vessel rings/arcs/strips).
 
@@ -441,7 +441,7 @@ Shared graph topology analysis for spatial structure detection. Used by both `de
 
 ### Logging
 
-`get_logger(__name__)` from `segmentation.utils.logging` everywhere. No bare `logging.getLogger`.
+`get_logger(__name__)` from `xldvp_seg.utils.logging` everywhere. No bare `logging.getLogger`.
 
 ### Coordinate System
 

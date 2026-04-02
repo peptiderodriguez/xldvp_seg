@@ -7,7 +7,7 @@ Supports:
 - Mixed input sources
 
 Usage:
-    from segmentation.processing.batch import BatchProcessor, collect_slides
+    from xldvp_seg.processing.batch import BatchProcessor, collect_slides
 
     # Collect slides from various sources
     slides = collect_slides(
@@ -34,9 +34,9 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any
 
-from segmentation.processing.pipeline import DetectionPipeline
-from segmentation.utils.config import get_output_dir
-from segmentation.utils.logging import get_logger, log_parameters
+from xldvp_seg.processing.pipeline import DetectionPipeline
+from xldvp_seg.utils.config import get_output_dir
+from xldvp_seg.utils.logging import get_logger, log_parameters
 
 logger = get_logger(__name__)
 

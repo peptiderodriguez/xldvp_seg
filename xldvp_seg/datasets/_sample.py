@@ -1,7 +1,7 @@
 """Generate synthetic detection data for testing and demonstration.
 
 Usage:
-    from segmentation.datasets import sample
+    from xldvp_seg.datasets import sample
     data = sample()
     detections = data["detections"]  # list of detection dicts
     print(f"{len(detections)} synthetic detections across {data['n_clusters']} clusters")

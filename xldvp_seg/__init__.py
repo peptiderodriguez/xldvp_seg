@@ -8,11 +8,11 @@ Provides detection, processing, and I/O utilities for:
 - Vessel (Blood Vessels)
 
 Usage:
-    from segmentation.io import CZILoader, get_loader
-    from segmentation.detection import has_tissue, calibrate_tissue_threshold
-    from segmentation.processing import DetectionPipeline, BatchProcessor
-    from segmentation.preprocessing import correct_photobleaching
-    from segmentation.utils import get_logger, setup_logging, load_config
+    from xldvp_seg.io import CZILoader, get_loader
+    from xldvp_seg.detection import has_tissue, calibrate_tissue_threshold
+    from xldvp_seg.processing import DetectionPipeline, BatchProcessor
+    from xldvp_seg.preprocessing import correct_photobleaching
+    from xldvp_seg.utils import get_logger, setup_logging, load_config
 """
 
 # Version — single source of truth is pyproject.toml
@@ -26,8 +26,8 @@ except Exception:
 # Submodule imports are available directly
 # Use lazy imports to avoid circular dependencies and unnecessary loading
 # Individual modules should be imported explicitly:
-#   from segmentation.io import CZILoader
-#   from segmentation.utils.logging import get_logger
+#   from xldvp_seg.io import CZILoader
+#   from xldvp_seg.utils.logging import get_logger
 
 __all__ = [
     "io",
@@ -46,4 +46,4 @@ __all__ = [
 ]
 
 # Convenience re-exports
-from segmentation.core import SlideAnalysis  # noqa: E402
+from xldvp_seg.core import SlideAnalysis  # noqa: E402

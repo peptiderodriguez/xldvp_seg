@@ -1,10 +1,10 @@
-"""Tests for segmentation.lmd.well_plate — 384-well plate serpentine generation."""
+"""Tests for xldvp_seg.lmd.well_plate — 384-well plate serpentine generation."""
 
 import re
 
 import pytest
 
-from segmentation.lmd.well_plate import (
+from xldvp_seg.lmd.well_plate import (
     WELLS_PER_PLATE,
     generate_multiplate_wells,
     generate_plate_wells,

@@ -28,7 +28,7 @@ import numpy as np
 from shapely.geometry import Point, Polygon
 from shapely.prepared import prep
 
-from segmentation.utils.json_utils import atomic_json_dump, fast_json_load
+from xldvp_seg.utils.json_utils import atomic_json_dump, fast_json_load
 
 
 def compute_centroid_from_contour(contour_yx):

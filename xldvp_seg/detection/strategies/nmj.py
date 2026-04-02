@@ -34,12 +34,12 @@ from skimage.morphology import (
     skeletonize,
 )
 
-from segmentation.detection.registry import register_strategy
-from segmentation.utils.feature_extraction import (
+from xldvp_seg.detection.registry import register_strategy
+from xldvp_seg.utils.feature_extraction import (
     SAM2_EMBEDDING_DIM,
     extract_morphological_features,
 )
-from segmentation.utils.logging import get_logger
+from xldvp_seg.utils.logging import get_logger
 
 from .base import Detection, DetectionStrategy, _safe_to_uint8
 from .mixins import MultiChannelFeatureMixin
@@ -390,7 +390,7 @@ class NMJStrategy(DetectionStrategy, MultiChannelFeatureMixin):
         # Ensure uint8 format (safe for float tiles in [0,1] or intermediate ranges)
         tile_rgb = _safe_to_uint8(tile_rgb)
 
-        from segmentation.utils.device import empty_cache, get_default_device
+        from xldvp_seg.utils.device import empty_cache, get_default_device
 
         # Get models - only load ResNet/DINOv2 if we'll use them
         sam2_predictor = models.get("sam2_predictor")
@@ -758,7 +758,7 @@ def load_nmj_classifier(model_path: str, device=None):
     import torch.nn as nn
     from torchvision import models, transforms
 
-    from segmentation.utils.device import get_default_device
+    from xldvp_seg.utils.device import get_default_device
 
     if device is None:
         device = torch.device(get_default_device())
@@ -788,7 +788,7 @@ def load_nmj_rf_classifier(model_path: str):
     Kept for backward compatibility — callers that import from here
     (e.g. older scripts) continue to work.
     """
-    from segmentation.utils.detection_utils import load_rf_classifier
+    from xldvp_seg.utils.detection_utils import load_rf_classifier
 
     return load_rf_classifier(model_path)
 

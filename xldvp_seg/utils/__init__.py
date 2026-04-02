@@ -79,7 +79,7 @@ from .vessel_features import (
 )
 
 # Schemas require pydantic - import separately if needed
-# from segmentation.utils.schemas import Detection, DetectionFile, Config, Annotations
+# from xldvp_seg.utils.schemas import Detection, DetectionFile, Config, Annotations
 
 __all__ = [
     # Config

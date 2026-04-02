@@ -7,9 +7,9 @@ detection results for Leica LMD laser microdissection systems.
 Works with any cell type (NMJ, MK, vessel, mesothelium, etc.).
 
 Usage:
-    from segmentation.lmd.clustering import two_stage_clustering
-    from segmentation.lmd.contour_processing import process_contour
-    from segmentation.lmd.selection import select_cells_for_lmd
+    from xldvp_seg.lmd.clustering import two_stage_clustering
+    from xldvp_seg.lmd.contour_processing import process_contour
+    from xldvp_seg.lmd.selection import select_cells_for_lmd
 """
 
 # Use explicit imports from submodules to avoid circular deps and

@@ -1,4 +1,4 @@
-"""Tests for segmentation.processing.deduplication.deduplicate_by_iou_nms.
+"""Tests for xldvp_seg.processing.deduplication.deduplicate_by_iou_nms.
 
 Creates temporary HDF5 mask files with known rectangular masks, then runs
 IoU NMS deduplication to verify correct duplicate removal behavior.
@@ -17,7 +17,7 @@ except ImportError:
     pass
 import h5py
 
-from segmentation.processing.deduplication import deduplicate_by_iou_nms
+from xldvp_seg.processing.deduplication import deduplicate_by_iou_nms
 
 
 def _create_tile_masks(tiles_dir, tile_origin, masks_array, mask_filename="test_masks.h5"):

@@ -1,7 +1,7 @@
 """Central state object wrapping pipeline output.
 
 Usage:
-    from segmentation.core import SlideAnalysis
+    from xldvp_seg.core import SlideAnalysis
 
     slide = SlideAnalysis.load("/path/to/output/slide_name/run_timestamp/")
     print(f"{slide.n_detections} detections, {slide.cell_type}")
@@ -27,12 +27,12 @@ from typing import TYPE_CHECKING
 import numpy as np
 import pandas as pd
 
-from segmentation.utils.detection_utils import extract_positions_um
+from xldvp_seg.utils.detection_utils import extract_positions_um
 
 if TYPE_CHECKING:
     import anndata
-from segmentation.utils.json_utils import atomic_json_dump, fast_json_load
-from segmentation.utils.logging import get_logger
+from xldvp_seg.utils.json_utils import atomic_json_dump, fast_json_load
+from xldvp_seg.utils.logging import get_logger
 
 logger = get_logger(__name__)
 
@@ -200,7 +200,7 @@ class SlideAnalysis:
     @property
     def contours(self) -> list[np.ndarray | None]:
         """List of contour arrays (contour_px or contour_um per detection)."""
-        from segmentation.utils.detection_utils import get_contour_px, get_contour_um
+        from xldvp_seg.utils.detection_utils import get_contour_px, get_contour_um
 
         if self._contours is None:
             self._contours = []
@@ -330,7 +330,7 @@ class SlideAnalysis:
         """
         import anndata
 
-        from segmentation import __version__
+        from xldvp_seg import __version__
 
         df = self.features_df
         if df.empty:

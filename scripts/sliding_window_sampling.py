@@ -61,8 +61,8 @@ from shapely import contains_xy
 from shapely.geometry import Polygon
 from skimage.morphology import skeletonize
 
-from segmentation.utils.json_utils import atomic_json_dump
-from segmentation.utils.logging import get_logger, setup_logging
+from xldvp_seg.utils.json_utils import atomic_json_dump
+from xldvp_seg.utils.logging import get_logger, setup_logging
 
 logger = get_logger(__name__)
 
@@ -386,7 +386,7 @@ def load_detections(detections_path, pixel_size_um=None):
     Returns:
         (positions, areas) — Nx2 array and length-N array for ALL detections.
     """
-    from segmentation.utils.json_utils import fast_json_load
+    from xldvp_seg.utils.json_utils import fast_json_load
 
     dets = fast_json_load(str(detections_path))
     if isinstance(dets, dict):
@@ -438,7 +438,7 @@ def load_rois(roi_path, roi_id=None):
     Returns:
         List of (roi_dict, verts, poly) tuples.
     """
-    from segmentation.utils.json_utils import fast_json_load
+    from xldvp_seg.utils.json_utils import fast_json_load
 
     rois = fast_json_load(str(roi_path))
     roi_list = rois.get("rois", []) if isinstance(rois, dict) else rois
@@ -566,7 +566,7 @@ def main():
     # Resolve pixel size from CZI metadata (authoritative) or CLI arg
     pixel_size_um = args.pixel_size
     if args.czi_path:
-        from segmentation.io.czi_loader import get_czi_metadata
+        from xldvp_seg.io.czi_loader import get_czi_metadata
 
         meta = get_czi_metadata(str(args.czi_path))
         pixel_size_um = meta["pixel_size_um"]
@@ -591,7 +591,7 @@ def main():
     radius = args.radius
     overlap = args.overlap
     if args.from_grid:
-        from segmentation.utils.json_utils import fast_json_load
+        from xldvp_seg.utils.json_utils import fast_json_load
 
         grid_data = fast_json_load(str(args.from_grid))
         combos = grid_data.get("zero_rejection_combos", grid_data.get("all_combos", []))
@@ -611,7 +611,7 @@ def main():
     # --- Load excluded cells from prior session ---
     used_global = set()
     if args.exclude_cells:
-        from segmentation.utils.json_utils import fast_json_load
+        from xldvp_seg.utils.json_utils import fast_json_load
 
         prior = fast_json_load(str(args.exclude_cells))
         prior_rois = prior.get("rois", [prior]) if isinstance(prior, dict) else [prior]

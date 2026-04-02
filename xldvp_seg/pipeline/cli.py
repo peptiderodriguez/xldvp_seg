@@ -7,7 +7,7 @@ which applies cell-type-dependent defaults, parses compound args, and validates.
 import argparse
 from pathlib import Path
 
-from segmentation.utils.logging import get_logger
+from xldvp_seg.utils.logging import get_logger
 
 _logger = get_logger(__name__)
 
@@ -803,7 +803,7 @@ def postprocess_args(args, parser):
 
     # Resolve --channel-spec (wavelength/name-based channel selection)
     if getattr(args, "channel_spec", None) and args.czi_path:
-        from segmentation.io.czi_loader import (
+        from xldvp_seg.io.czi_loader import (
             ChannelResolutionError,
             get_czi_metadata,
             resolve_channel_indices,
@@ -934,7 +934,7 @@ def postprocess_args(args, parser):
 
     # Auto-detect number of GPUs if not specified
     if args.num_gpus is None:
-        from segmentation.utils.device import get_default_device, get_device_count
+        from xldvp_seg.utils.device import get_default_device, get_device_count
 
         n = get_device_count()
         args.num_gpus = max(1, n)

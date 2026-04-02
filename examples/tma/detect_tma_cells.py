@@ -38,9 +38,9 @@ import numpy as np
 from skimage.measure import label as sklabel
 from skimage.measure import regionprops
 
-from segmentation.io.czi_loader import CZILoader, get_czi_metadata
-from segmentation.utils.json_utils import atomic_json_dump
-from segmentation.utils.logging import get_logger, setup_logging
+from xldvp_seg.io.czi_loader import CZILoader, get_czi_metadata
+from xldvp_seg.utils.json_utils import atomic_json_dump
+from xldvp_seg.utils.logging import get_logger, setup_logging
 
 logger = get_logger(__name__)
 
@@ -408,11 +408,11 @@ def detect_in_roi(roi, ch_data, nuc_ch, cyto_ch, strategy, models, pixel_size, s
 
 def _init_gpu(gpu_id):
     """Initialize CellDetector on a specific GPU."""
-    from segmentation.utils.device import set_device_for_worker
+    from xldvp_seg.utils.device import set_device_for_worker
 
     device = set_device_for_worker(gpu_id)
 
-    from segmentation.detection.cell_detector import CellDetector
+    from xldvp_seg.detection.cell_detector import CellDetector
 
     logger.info(f"[GPU-{gpu_id}] Loading models on {device}...")
     detector = CellDetector(device=str(device))
@@ -424,8 +424,8 @@ def _init_gpu(gpu_id):
 
 def _gpu_worker(gpu_id, detector, assigned_rois, ch_data, nuc_ch, cyto_ch, pixel_size, slide_name):
     """Worker thread: process ROIs on a pre-initialized GPU."""
-    from segmentation.detection.strategies.cell import CellStrategy
-    from segmentation.utils.device import set_device_for_worker
+    from xldvp_seg.detection.strategies.cell import CellStrategy
+    from xldvp_seg.utils.device import set_device_for_worker
 
     set_device_for_worker(gpu_id)
 
@@ -497,7 +497,7 @@ def process_cores_multigpu(rois, ch_data, nuc_ch, cyto_ch, pixel_size, slide_nam
     # Cleanup GPU memory
     for det in detectors:
         det.cleanup()
-    from segmentation.utils.device import empty_cache
+    from xldvp_seg.utils.device import empty_cache
 
     empty_cache()
 

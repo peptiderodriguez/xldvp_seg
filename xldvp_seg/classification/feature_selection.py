@@ -5,7 +5,7 @@ Provides tools for analyzing feature importance, selecting optimal feature subse
 and cross-validation utilities for model evaluation.
 
 Usage:
-    from segmentation.classification.feature_selection import (
+    from xldvp_seg.classification.feature_selection import (
         analyze_feature_importance,
         select_optimal_features,
         cross_validate_features,
@@ -40,7 +40,7 @@ from sklearn.model_selection import (
 from sklearn.pipeline import Pipeline
 from sklearn.preprocessing import LabelEncoder, StandardScaler
 
-from segmentation.utils.logging import get_logger
+from xldvp_seg.utils.logging import get_logger
 
 logger = get_logger(__name__)
 

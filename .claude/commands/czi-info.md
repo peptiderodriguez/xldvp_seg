@@ -14,7 +14,7 @@ Where `$REPO` is the repo root and `$XLDVP_PYTHON` is the xldvp_seg Python binar
 
 Also parse the filename to match antibody names to fluorophores:
 ```bash
-$XLDVP_PYTHON -c "from segmentation.io.czi_loader import parse_markers_from_filename; import json; print(json.dumps(parse_markers_from_filename('<filename>'), indent=2))"
+$XLDVP_PYTHON -c "from xldvp_seg.io.czi_loader import parse_markers_from_filename; import json; print(json.dumps(parse_markers_from_filename('<filename>'), indent=2))"
 ```
 
 Combine both outputs into a table and **show it to the user for confirmation before doing anything else**:

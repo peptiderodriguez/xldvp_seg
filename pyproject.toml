@@ -66,7 +66,7 @@ instanseg = [
 ]
 
 [project.scripts]
-xlseg = "segmentation.cli.main:cli"
+xlseg = "xldvp_seg.cli.main:cli"
 
 [project.urls]
 "Homepage" = "https://github.com/peptiderodriguez/xldvp_seg"
@@ -84,7 +84,7 @@ py-modules = [
 
 [tool.setuptools.packages.find]
 where = ["."]
-include = ["segmentation*"]
+include = ["xldvp_seg*"]
 
 [tool.setuptools.package-data]
 "*" = ["*.yaml", "*.json"]
@@ -123,10 +123,10 @@ ignore = [
 ]
 
 [tool.ruff.lint.per-file-ignores]
-"segmentation/__init__.py" = ["F401"]  # re-exports
-"segmentation/processing/deduplication.py" = ["F401"]  # hdf5plugin side-effect import
-"segmentation/core/slide_analysis.py" = ["F821"]  # lazy import type hint
-"segmentation/detection/strategies/tissue_pattern.py" = ["F821"]  # forward reference
+"xldvp_seg/__init__.py" = ["F401"]  # re-exports
+"xldvp_seg/processing/deduplication.py" = ["F401"]  # hdf5plugin side-effect import
+"xldvp_seg/core/slide_analysis.py" = ["F821"]  # lazy import type hint
+"xldvp_seg/detection/strategies/tissue_pattern.py" = ["F821"]  # forward reference
 "tests/test_deduplication.py" = ["F401"]  # hdf5plugin side-effect import
 "tests/test_feature_extraction.py" = ["F401"]  # torch availability check
 

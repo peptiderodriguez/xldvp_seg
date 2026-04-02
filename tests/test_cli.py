@@ -16,7 +16,7 @@ def _run_cli(*argv, timeout=30):
             sys.executable,
             "-c",
             f"import sys; sys.argv=['xlseg', {argv_str}]; "
-            "from segmentation.cli.main import cli; cli()",
+            "from xldvp_seg.cli.main import cli; cli()",
         ],
         capture_output=True,
         text=True,
@@ -192,7 +192,7 @@ class TestCLIDispatchTable:
 
     def test_all_subcommands_in_dispatch(self):
         """Every subcommand registered in argparse has a dispatch entry."""
-        from segmentation.cli.main import _DISPATCH
+        from xldvp_seg.cli.main import _DISPATCH
 
         expected = {
             "info",
@@ -211,7 +211,7 @@ class TestCLIDispatchTable:
 
     def test_dispatch_values_are_callable(self):
         """Every dispatch entry is callable."""
-        from segmentation.cli.main import _DISPATCH
+        from xldvp_seg.cli.main import _DISPATCH
 
         for name, func in _DISPATCH.items():
             assert callable(func), f"Dispatch entry '{name}' is not callable"

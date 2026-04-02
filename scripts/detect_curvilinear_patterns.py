@@ -30,7 +30,7 @@ from pathlib import Path
 
 import numpy as np
 
-from segmentation.utils.logging import get_logger
+from xldvp_seg.utils.logging import get_logger
 
 logger = get_logger(__name__)
 
@@ -215,7 +215,7 @@ def extract_aligned_positions(detections, positive_idx, extract_positions_um):
 
 def _component_width(positions, comp_nodes, path, percentile=95):
     """Perpendicular width — delegates to shared graph_topology module."""
-    from segmentation.utils.graph_topology import component_width
+    from xldvp_seg.utils.graph_topology import component_width
 
     return component_width(positions, comp_nodes, path, percentile)
 
@@ -240,7 +240,7 @@ def classify_components(
     """
     import networkx as nx
 
-    from segmentation.utils.graph_topology import (
+    from xldvp_seg.utils.graph_topology import (
         component_linearity,
         component_width,
         double_bfs_diameter,
@@ -513,8 +513,8 @@ def tag_detections(detections, positive_idx, labels, prefix):
 def main():
     args = parse_args()
 
-    from segmentation.utils.detection_utils import extract_positions_um
-    from segmentation.utils.json_utils import atomic_json_dump, fast_json_load
+    from xldvp_seg.utils.detection_utils import extract_positions_um
+    from xldvp_seg.utils.json_utils import atomic_json_dump, fast_json_load
 
     # Load
     logger.info("Loading %s...", args.detections)

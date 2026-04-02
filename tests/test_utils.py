@@ -25,7 +25,7 @@ class TestConfigFeatureDimensions(TestCase):
 
     def test_get_feature_dimensions_returns_dict(self):
         """Test that get_feature_dimensions returns a dictionary."""
-        from segmentation.utils.config import get_feature_dimensions
+        from xldvp_seg.utils.config import get_feature_dimensions
 
         result = get_feature_dimensions()
 
@@ -33,7 +33,7 @@ class TestConfigFeatureDimensions(TestCase):
 
     def test_get_feature_dimensions_has_required_keys(self):
         """Test that the returned dict has all required keys."""
-        from segmentation.utils.config import get_feature_dimensions
+        from xldvp_seg.utils.config import get_feature_dimensions
 
         result = get_feature_dimensions()
 
@@ -43,7 +43,7 @@ class TestConfigFeatureDimensions(TestCase):
 
     def test_get_feature_dimensions_values_are_integers(self):
         """Test that all dimension values are positive integers."""
-        from segmentation.utils.config import get_feature_dimensions
+        from xldvp_seg.utils.config import get_feature_dimensions
 
         result = get_feature_dimensions()
 
@@ -53,7 +53,7 @@ class TestConfigFeatureDimensions(TestCase):
 
     def test_get_feature_dimensions_total_matches_sum(self):
         """Test that total equals sum of individual dimensions."""
-        from segmentation.utils.config import get_feature_dimensions
+        from xldvp_seg.utils.config import get_feature_dimensions
 
         result = get_feature_dimensions()
 
@@ -67,7 +67,7 @@ class TestConfigFeatureDimensions(TestCase):
 
     def test_get_feature_dimensions_known_values(self):
         """Test that dimensions match expected known values."""
-        from segmentation.utils.config import get_feature_dimensions
+        from xldvp_seg.utils.config import get_feature_dimensions
 
         result = get_feature_dimensions()
 
@@ -84,7 +84,7 @@ class TestConfigCpuWorkerCount(TestCase):
 
     def test_get_cpu_worker_count_returns_integer(self):
         """Test that get_cpu_worker_count returns an integer."""
-        from segmentation.utils.config import get_cpu_worker_count
+        from xldvp_seg.utils.config import get_cpu_worker_count
 
         result = get_cpu_worker_count()
 
@@ -92,7 +92,7 @@ class TestConfigCpuWorkerCount(TestCase):
 
     def test_get_cpu_worker_count_at_least_one(self):
         """Test that at least 1 worker is returned."""
-        from segmentation.utils.config import get_cpu_worker_count
+        from xldvp_seg.utils.config import get_cpu_worker_count
 
         result = get_cpu_worker_count()
 
@@ -100,7 +100,7 @@ class TestConfigCpuWorkerCount(TestCase):
 
     def test_get_cpu_worker_count_with_explicit_cores(self):
         """Test get_cpu_worker_count with explicit core count."""
-        from segmentation.utils.config import get_cpu_worker_count
+        from xldvp_seg.utils.config import get_cpu_worker_count
 
         # With 10 cores and 80% utilization, expect 8 workers
         result = get_cpu_worker_count(total_cores=10)
@@ -109,7 +109,7 @@ class TestConfigCpuWorkerCount(TestCase):
 
     def test_get_cpu_worker_count_with_single_core(self):
         """Test that single core still returns 1 worker."""
-        from segmentation.utils.config import get_cpu_worker_count
+        from xldvp_seg.utils.config import get_cpu_worker_count
 
         result = get_cpu_worker_count(total_cores=1)
 
@@ -117,7 +117,7 @@ class TestConfigCpuWorkerCount(TestCase):
 
     def test_get_cpu_worker_count_rounds_down(self):
         """Test that worker count rounds down."""
-        from segmentation.utils.config import get_cpu_worker_count
+        from xldvp_seg.utils.config import get_cpu_worker_count
 
         # 5 cores * 0.8 = 4.0 workers
         result = get_cpu_worker_count(total_cores=5)
@@ -129,7 +129,7 @@ class TestConfigCpuWorkerCount(TestCase):
 
     def test_get_cpu_worker_count_minimum_one(self):
         """Test that even with 0 or negative cores, returns at least 1."""
-        from segmentation.utils.config import get_cpu_worker_count
+        from xldvp_seg.utils.config import get_cpu_worker_count
 
         # Edge case with 0 cores (shouldn't happen but test anyway)
         # Should return at least 1 due to max(1, ...)
@@ -142,7 +142,7 @@ class TestConfigValidation(TestCase):
 
     def test_validate_config_default_passes(self):
         """Test that default config passes validation."""
-        from segmentation.utils.config import validate_config
+        from xldvp_seg.utils.config import validate_config
 
         result = validate_config()
 
@@ -151,7 +151,7 @@ class TestConfigValidation(TestCase):
 
     def test_validate_config_invalid_tile_size_too_small(self):
         """Test that tile_size below minimum fails validation."""
-        from segmentation.utils.config import validate_config
+        from xldvp_seg.utils.config import validate_config
 
         invalid_config = {"tile_size": 500}  # Minimum is 1000
         result = validate_config(config=invalid_config)
@@ -161,7 +161,7 @@ class TestConfigValidation(TestCase):
 
     def test_validate_config_invalid_tile_size_too_large(self):
         """Test that tile_size above maximum fails validation."""
-        from segmentation.utils.config import validate_config
+        from xldvp_seg.utils.config import validate_config
 
         invalid_config = {"tile_size": 10000}  # Maximum is 8192
         result = validate_config(config=invalid_config)
@@ -171,7 +171,7 @@ class TestConfigValidation(TestCase):
 
     def test_validate_config_invalid_sample_fraction(self):
         """Test that sample_fraction outside range fails validation."""
-        from segmentation.utils.config import validate_config
+        from xldvp_seg.utils.config import validate_config
 
         # Too small
         invalid_config = {"sample_fraction": 0.001}  # Minimum is 0.01
@@ -185,7 +185,7 @@ class TestConfigValidation(TestCase):
 
     def test_validate_config_invalid_contour_color(self):
         """Test that invalid contour_color fails validation."""
-        from segmentation.utils.config import validate_config
+        from xldvp_seg.utils.config import validate_config
 
         # Wrong length
         invalid_config = {"contour_color": [50, 255]}
@@ -199,7 +199,7 @@ class TestConfigValidation(TestCase):
 
     def test_validate_config_invalid_html_theme(self):
         """Test that invalid html_theme fails validation."""
-        from segmentation.utils.config import validate_config
+        from xldvp_seg.utils.config import validate_config
 
         invalid_config = {"html_theme": "blue"}  # Must be 'dark' or 'light'
         result = validate_config(config=invalid_config)
@@ -209,7 +209,7 @@ class TestConfigValidation(TestCase):
 
     def test_validate_config_invalid_percentiles(self):
         """Test that invalid normalization percentiles fail validation."""
-        from segmentation.utils.config import validate_config
+        from xldvp_seg.utils.config import validate_config
 
         # Low >= high
         invalid_config = {"normalization_percentiles": {"mk": [95, 5]}}
@@ -220,7 +220,7 @@ class TestConfigValidation(TestCase):
 
     def test_validate_config_raise_on_error(self):
         """Test that raise_on_error=True raises exception."""
-        from segmentation.utils.config import ConfigValidationError, validate_config
+        from xldvp_seg.utils.config import ConfigValidationError, validate_config
 
         invalid_config = {"tile_size": 100}
 
@@ -229,7 +229,7 @@ class TestConfigValidation(TestCase):
 
     def test_validate_config_returns_warnings(self):
         """Test that validation returns warnings for logical issues."""
-        from segmentation.utils.config import validate_config
+        from xldvp_seg.utils.config import validate_config
 
         # mem_per_worker_small_tile > mem_per_worker_large_tile is a warning
         result = validate_config(
@@ -251,7 +251,7 @@ class TestConfigDetectionDefaults(TestCase):
 
     def test_get_detection_defaults_nmj(self):
         """Test detection defaults for NMJ cell type."""
-        from segmentation.utils.config import get_detection_defaults
+        from xldvp_seg.utils.config import get_detection_defaults
 
         result = get_detection_defaults("nmj")
 
@@ -263,7 +263,7 @@ class TestConfigDetectionDefaults(TestCase):
 
     def test_get_detection_defaults_mk(self):
         """Test detection defaults for MK cell type."""
-        from segmentation.utils.config import get_detection_defaults
+        from xldvp_seg.utils.config import get_detection_defaults
 
         result = get_detection_defaults("mk")
 
@@ -276,7 +276,7 @@ class TestConfigDetectionDefaults(TestCase):
 
     def test_get_detection_defaults_cell(self):
         """Test detection defaults for generic cell type."""
-        from segmentation.utils.config import get_detection_defaults
+        from xldvp_seg.utils.config import get_detection_defaults
 
         result = get_detection_defaults("cell")
 
@@ -287,7 +287,7 @@ class TestConfigDetectionDefaults(TestCase):
 
     def test_get_detection_defaults_vessel(self):
         """Test detection defaults for vessel cell type."""
-        from segmentation.utils.config import get_detection_defaults
+        from xldvp_seg.utils.config import get_detection_defaults
 
         result = get_detection_defaults("vessel")
 
@@ -298,7 +298,7 @@ class TestConfigDetectionDefaults(TestCase):
 
     def test_get_detection_defaults_mesothelium(self):
         """Test detection defaults for mesothelium cell type."""
-        from segmentation.utils.config import get_detection_defaults
+        from xldvp_seg.utils.config import get_detection_defaults
 
         result = get_detection_defaults("mesothelium")
 
@@ -308,7 +308,7 @@ class TestConfigDetectionDefaults(TestCase):
 
     def test_get_detection_defaults_unknown_returns_empty(self):
         """Test that unknown cell type returns empty dict."""
-        from segmentation.utils.config import get_detection_defaults
+        from xldvp_seg.utils.config import get_detection_defaults
 
         result = get_detection_defaults("unknown_type")
 
@@ -316,7 +316,7 @@ class TestConfigDetectionDefaults(TestCase):
 
     def test_get_detection_defaults_returns_copy(self):
         """Test that returned dict is a copy, not reference."""
-        from segmentation.utils.config import get_detection_defaults
+        from xldvp_seg.utils.config import get_detection_defaults
 
         result1 = get_detection_defaults("mk")
         result1["modified"] = True
@@ -331,7 +331,7 @@ class TestConfigPixelSize(TestCase):
 
     def test_get_pixel_size_mk(self):
         """Test pixel size for MK cell type."""
-        from segmentation.utils.config import DEFAULT_CONFIG, get_pixel_size
+        from xldvp_seg.utils.config import DEFAULT_CONFIG, get_pixel_size
 
         result = get_pixel_size(DEFAULT_CONFIG, "mk")
 
@@ -339,7 +339,7 @@ class TestConfigPixelSize(TestCase):
 
     def test_get_pixel_size_nmj(self):
         """Test pixel size for NMJ cell type."""
-        from segmentation.utils.config import DEFAULT_CONFIG, get_pixel_size
+        from xldvp_seg.utils.config import DEFAULT_CONFIG, get_pixel_size
 
         result = get_pixel_size(DEFAULT_CONFIG, "nmj")
 
@@ -347,7 +347,7 @@ class TestConfigPixelSize(TestCase):
 
     def test_get_pixel_size_default_fallback(self):
         """Test pixel size falls back to default for unknown type."""
-        from segmentation.utils.config import DEFAULT_CONFIG, get_pixel_size
+        from xldvp_seg.utils.config import DEFAULT_CONFIG, get_pixel_size
 
         result = get_pixel_size(DEFAULT_CONFIG, "unknown")
 
@@ -355,7 +355,7 @@ class TestConfigPixelSize(TestCase):
 
     def test_get_pixel_size_scalar_config(self):
         """Test get_pixel_size with scalar pixel_size_um value."""
-        from segmentation.utils.config import get_pixel_size
+        from xldvp_seg.utils.config import get_pixel_size
 
         config = {"pixel_size_um": 0.5}
         result = get_pixel_size(config, "mk")
@@ -368,7 +368,7 @@ class TestConfigConstants(TestCase):
 
     def test_default_config_has_required_keys(self):
         """Test that DEFAULT_CONFIG has all required keys."""
-        from segmentation.utils.config import DEFAULT_CONFIG
+        from xldvp_seg.utils.config import DEFAULT_CONFIG
 
         required_keys = [
             "pixel_size_um",
@@ -385,7 +385,7 @@ class TestConfigConstants(TestCase):
 
     def test_batch_sizes_has_required_keys(self):
         """Test that BATCH_SIZES has required keys."""
-        from segmentation.utils.config import BATCH_SIZES
+        from xldvp_seg.utils.config import BATCH_SIZES
 
         required_keys = ["resnet_feature_extraction", "sam2_embedding", "gc_interval_tiles"]
 
@@ -394,7 +394,7 @@ class TestConfigConstants(TestCase):
 
     def test_memory_thresholds_has_required_keys(self):
         """Test that MEMORY_THRESHOLDS has required keys."""
-        from segmentation.utils.config import MEMORY_THRESHOLDS
+        from xldvp_seg.utils.config import MEMORY_THRESHOLDS
 
         required_keys = [
             "min_ram_gb",
@@ -408,7 +408,7 @@ class TestConfigConstants(TestCase):
 
     def test_memory_thresholds_values_sensible(self):
         """Test that memory thresholds have sensible values."""
-        from segmentation.utils.config import MEMORY_THRESHOLDS
+        from xldvp_seg.utils.config import MEMORY_THRESHOLDS
 
         # min_ram_gb should be reasonable (not too low, not too high)
         self.assertGreater(MEMORY_THRESHOLDS["min_ram_gb"], 4.0)
@@ -431,7 +431,7 @@ class TestMemoryUsage(TestCase):
 
     def test_get_memory_usage_returns_dict(self):
         """Test that get_memory_usage returns a dictionary."""
-        from segmentation.processing.memory import get_memory_usage
+        from xldvp_seg.processing.memory import get_memory_usage
 
         result = get_memory_usage()
 
@@ -439,7 +439,7 @@ class TestMemoryUsage(TestCase):
 
     def test_get_memory_usage_has_ram_keys(self):
         """Test that returned dict has RAM-related keys."""
-        from segmentation.processing.memory import get_memory_usage
+        from xldvp_seg.processing.memory import get_memory_usage
 
         result = get_memory_usage()
 
@@ -449,7 +449,7 @@ class TestMemoryUsage(TestCase):
 
     def test_get_memory_usage_ram_values_sensible(self):
         """Test that RAM values are sensible."""
-        from segmentation.processing.memory import get_memory_usage
+        from xldvp_seg.processing.memory import get_memory_usage
 
         result = get_memory_usage()
 
@@ -467,7 +467,7 @@ class TestMemoryUsage(TestCase):
         """Test GPU keys are present when CUDA is available."""
         import torch
 
-        from segmentation.processing.memory import get_memory_usage
+        from xldvp_seg.processing.memory import get_memory_usage
 
         result = get_memory_usage()
 
@@ -482,7 +482,7 @@ class TestSafeWorkerCount(TestCase):
 
     def test_get_safe_worker_count_returns_integer(self):
         """Test that get_safe_worker_count returns an integer."""
-        from segmentation.processing.memory import get_safe_worker_count
+        from xldvp_seg.processing.memory import get_safe_worker_count
 
         result = get_safe_worker_count(requested_workers=4, tile_size=3000)
 
@@ -490,7 +490,7 @@ class TestSafeWorkerCount(TestCase):
 
     def test_get_safe_worker_count_minimum_one(self):
         """Test that at least 1 worker is returned."""
-        from segmentation.processing.memory import get_safe_worker_count
+        from xldvp_seg.processing.memory import get_safe_worker_count
 
         result = get_safe_worker_count(requested_workers=1, tile_size=3000)
 
@@ -498,7 +498,7 @@ class TestSafeWorkerCount(TestCase):
 
     def test_get_safe_worker_count_respects_requested(self):
         """Test that requested count is respected when memory allows."""
-        from segmentation.processing.memory import get_safe_worker_count
+        from xldvp_seg.processing.memory import get_safe_worker_count
 
         # Request a small number that should always be allowed
         result = get_safe_worker_count(requested_workers=1, tile_size=3000)
@@ -508,7 +508,7 @@ class TestSafeWorkerCount(TestCase):
 
     def test_get_safe_worker_count_no_auto_adjust(self):
         """Test that auto_adjust=False returns requested count."""
-        from segmentation.processing.memory import get_safe_worker_count
+        from xldvp_seg.processing.memory import get_safe_worker_count
 
         result = get_safe_worker_count(requested_workers=8, tile_size=3000, auto_adjust=False)
 
@@ -517,7 +517,7 @@ class TestSafeWorkerCount(TestCase):
 
     def test_get_safe_worker_count_between_1_and_max(self):
         """Test that result is between 1 and requested workers."""
-        from segmentation.processing.memory import get_safe_worker_count
+        from xldvp_seg.processing.memory import get_safe_worker_count
 
         requested = 16
         result = get_safe_worker_count(requested_workers=requested, tile_size=3000)
@@ -531,7 +531,7 @@ class TestValidateSystemResources(TestCase):
 
     def test_validate_system_resources_returns_dict(self):
         """Test that validate_system_resources returns a dictionary."""
-        from segmentation.processing.memory import validate_system_resources
+        from xldvp_seg.processing.memory import validate_system_resources
 
         result = validate_system_resources(num_workers=4, tile_size=3000)
 
@@ -539,7 +539,7 @@ class TestValidateSystemResources(TestCase):
 
     def test_validate_system_resources_has_required_keys(self):
         """Test that returned dict has all required keys."""
-        from segmentation.processing.memory import validate_system_resources
+        from xldvp_seg.processing.memory import validate_system_resources
 
         result = validate_system_resources(num_workers=4, tile_size=3000)
 
@@ -555,7 +555,7 @@ class TestValidateSystemResources(TestCase):
 
     def test_validate_system_resources_warnings_is_list(self):
         """Test that warnings is a list."""
-        from segmentation.processing.memory import validate_system_resources
+        from xldvp_seg.processing.memory import validate_system_resources
 
         result = validate_system_resources(num_workers=4, tile_size=3000)
 
@@ -563,7 +563,7 @@ class TestValidateSystemResources(TestCase):
 
     def test_validate_system_resources_recommended_workers_positive(self):
         """Test that recommended_workers is a positive integer."""
-        from segmentation.processing.memory import validate_system_resources
+        from xldvp_seg.processing.memory import validate_system_resources
 
         result = validate_system_resources(num_workers=4, tile_size=3000)
 
@@ -572,16 +572,16 @@ class TestValidateSystemResources(TestCase):
 
     def test_validate_system_resources_should_abort_is_bool(self):
         """Test that should_abort is a boolean."""
-        from segmentation.processing.memory import validate_system_resources
+        from xldvp_seg.processing.memory import validate_system_resources
 
         result = validate_system_resources(num_workers=4, tile_size=3000)
 
         self.assertIsInstance(result["should_abort"], bool)
 
-    @patch("segmentation.processing.memory.psutil.virtual_memory")
+    @patch("xldvp_seg.processing.memory.psutil.virtual_memory")
     def test_validate_system_resources_low_memory_warns(self, mock_vm):
         """Test that low memory produces warnings."""
-        from segmentation.processing.memory import validate_system_resources
+        from xldvp_seg.processing.memory import validate_system_resources
 
         # Mock low memory (5 GB available)
         mock_vm.return_value = MagicMock(
@@ -606,7 +606,7 @@ class TestTileToGlobalCoords(TestCase):
 
     def test_tile_to_global_coords_basic(self):
         """Test basic tile to global coordinate conversion."""
-        from segmentation.processing.coordinates import tile_to_global_coords
+        from xldvp_seg.processing.coordinates import tile_to_global_coords
 
         local_x, local_y = 100, 50
         tile_origin_x, tile_origin_y = 1000, 2000
@@ -618,7 +618,7 @@ class TestTileToGlobalCoords(TestCase):
 
     def test_tile_to_global_coords_origin_zero(self):
         """Test conversion with tile at origin."""
-        from segmentation.processing.coordinates import tile_to_global_coords
+        from xldvp_seg.processing.coordinates import tile_to_global_coords
 
         local_x, local_y = 50, 75
         tile_origin_x, tile_origin_y = 0, 0
@@ -631,7 +631,7 @@ class TestTileToGlobalCoords(TestCase):
 
     def test_tile_to_global_coords_float_inputs(self):
         """Test conversion with float inputs."""
-        from segmentation.processing.coordinates import tile_to_global_coords
+        from xldvp_seg.processing.coordinates import tile_to_global_coords
 
         local_x, local_y = 100.5, 50.5
         tile_origin_x, tile_origin_y = 1000, 2000
@@ -647,7 +647,7 @@ class TestGlobalToTileCoords(TestCase):
 
     def test_global_to_tile_coords_basic(self):
         """Test basic global to tile coordinate conversion."""
-        from segmentation.processing.coordinates import global_to_tile_coords
+        from xldvp_seg.processing.coordinates import global_to_tile_coords
 
         global_x, global_y = 1100, 2050
         tile_origin_x, tile_origin_y = 1000, 2000
@@ -659,7 +659,7 @@ class TestGlobalToTileCoords(TestCase):
 
     def test_global_to_tile_coords_roundtrip(self):
         """Test that global_to_tile and tile_to_global are inverses."""
-        from segmentation.processing.coordinates import global_to_tile_coords, tile_to_global_coords
+        from xldvp_seg.processing.coordinates import global_to_tile_coords, tile_to_global_coords
 
         original_local_x, original_local_y = 123, 456
         tile_origin_x, tile_origin_y = 5000, 7000
@@ -679,7 +679,7 @@ class TestGlobalToTileCoords(TestCase):
 
     def test_global_to_tile_coords_at_origin(self):
         """Test conversion when point is at tile origin."""
-        from segmentation.processing.coordinates import global_to_tile_coords
+        from xldvp_seg.processing.coordinates import global_to_tile_coords
 
         global_x, global_y = 1000, 2000
         tile_origin_x, tile_origin_y = 1000, 2000
@@ -695,7 +695,7 @@ class TestRegionpropCentroidToXY(TestCase):
 
     def test_regionprop_centroid_to_xy_basic(self):
         """Test conversion from regionprops centroid to xy format."""
-        from segmentation.processing.coordinates import regionprop_centroid_to_xy
+        from xldvp_seg.processing.coordinates import regionprop_centroid_to_xy
 
         # Mock regionprops object
         prop = MagicMock()
@@ -709,7 +709,7 @@ class TestRegionpropCentroidToXY(TestCase):
 
     def test_regionprop_centroid_to_xy_returns_list(self):
         """Test that result is a list."""
-        from segmentation.processing.coordinates import regionprop_centroid_to_xy
+        from xldvp_seg.processing.coordinates import regionprop_centroid_to_xy
 
         prop = MagicMock()
         prop.centroid = (50, 100)
@@ -721,7 +721,7 @@ class TestRegionpropCentroidToXY(TestCase):
 
     def test_regionprop_centroid_to_xy_returns_floats(self):
         """Test that result contains floats."""
-        from segmentation.processing.coordinates import regionprop_centroid_to_xy
+        from xldvp_seg.processing.coordinates import regionprop_centroid_to_xy
 
         prop = MagicMock()
         prop.centroid = (50, 100)  # Integers
@@ -737,7 +737,7 @@ class TestGenerateUID(TestCase):
 
     def test_generate_uid_format(self):
         """Test that UID has expected format."""
-        from segmentation.processing.coordinates import generate_uid
+        from xldvp_seg.processing.coordinates import generate_uid
 
         uid = generate_uid("slide_name", "mk", 12345.6, 67890.3)
 
@@ -746,7 +746,7 @@ class TestGenerateUID(TestCase):
 
     def test_generate_uid_rounding(self):
         """Test coordinate rounding in UID."""
-        from segmentation.processing.coordinates import generate_uid
+        from xldvp_seg.processing.coordinates import generate_uid
 
         uid = generate_uid("slide", "nmj", 100.4, 200.6)
 
@@ -754,7 +754,7 @@ class TestGenerateUID(TestCase):
 
     def test_generate_uid_uniqueness(self):
         """Test that different coordinates produce different UIDs."""
-        from segmentation.processing.coordinates import generate_uid
+        from xldvp_seg.processing.coordinates import generate_uid
 
         uid1 = generate_uid("slide", "mk", 100, 200)
         uid2 = generate_uid("slide", "mk", 101, 200)
@@ -766,7 +766,7 @@ class TestGenerateUID(TestCase):
 
     def test_generate_uid_different_cell_types(self):
         """Test UID generation for different cell types."""
-        from segmentation.processing.coordinates import generate_uid
+        from xldvp_seg.processing.coordinates import generate_uid
 
         for cell_type in ["mk", "hspc", "nmj", "vessel", "mesothelium"]:
             uid = generate_uid("slide", cell_type, 100, 200)
@@ -783,7 +783,7 @@ class TestEnsureRGBArray(TestCase):
 
     def test_ensure_rgb_array_grayscale_input(self):
         """Test conversion of grayscale image to RGB."""
-        from segmentation.processing.mk_hspc_utils import ensure_rgb_array
+        from xldvp_seg.processing.mk_hspc_utils import ensure_rgb_array
 
         grayscale = np.zeros((100, 100), dtype=np.uint8)
         grayscale[50:60, 50:60] = 128
@@ -797,7 +797,7 @@ class TestEnsureRGBArray(TestCase):
 
     def test_ensure_rgb_array_rgba_input(self):
         """Test conversion of RGBA image to RGB (drops alpha)."""
-        from segmentation.processing.mk_hspc_utils import ensure_rgb_array
+        from xldvp_seg.processing.mk_hspc_utils import ensure_rgb_array
 
         rgba = np.zeros((100, 100, 4), dtype=np.uint8)
         rgba[:, :, 0] = 255  # R
@@ -814,7 +814,7 @@ class TestEnsureRGBArray(TestCase):
 
     def test_ensure_rgb_array_rgb_input(self):
         """Test that RGB input is returned unchanged."""
-        from segmentation.processing.mk_hspc_utils import ensure_rgb_array
+        from xldvp_seg.processing.mk_hspc_utils import ensure_rgb_array
 
         rgb = np.zeros((100, 100, 3), dtype=np.uint8)
         rgb[:, :, 0] = 255
@@ -828,7 +828,7 @@ class TestEnsureRGBArray(TestCase):
 
     def test_ensure_rgb_array_preserves_content(self):
         """Test that content is preserved during conversion."""
-        from segmentation.processing.mk_hspc_utils import ensure_rgb_array
+        from xldvp_seg.processing.mk_hspc_utils import ensure_rgb_array
 
         grayscale = np.array([[0, 128], [255, 64]], dtype=np.uint8)
 
@@ -840,7 +840,7 @@ class TestEnsureRGBArray(TestCase):
 
     def test_ensure_rgb_array_different_dtypes(self):
         """Test handling of different numpy dtypes."""
-        from segmentation.processing.mk_hspc_utils import ensure_rgb_array
+        from xldvp_seg.processing.mk_hspc_utils import ensure_rgb_array
 
         # Test uint16 (common for CZI images)
         grayscale_16 = np.zeros((50, 50), dtype=np.uint16)
@@ -858,7 +858,7 @@ class TestCheckTileValidity(TestCase):
 
     def test_check_tile_validity_empty_tile(self):
         """Test that empty (all zeros) tile is marked invalid."""
-        from segmentation.processing.mk_hspc_utils import check_tile_validity
+        from xldvp_seg.processing.mk_hspc_utils import check_tile_validity
 
         empty_tile = np.zeros((100, 100, 3), dtype=np.uint8)
 
@@ -869,7 +869,7 @@ class TestCheckTileValidity(TestCase):
 
     def test_check_tile_validity_valid_tile(self):
         """Test that tile with content is marked valid."""
-        from segmentation.processing.mk_hspc_utils import check_tile_validity
+        from xldvp_seg.processing.mk_hspc_utils import check_tile_validity
 
         valid_tile = np.ones((100, 100, 3), dtype=np.uint8) * 128
 
@@ -880,7 +880,7 @@ class TestCheckTileValidity(TestCase):
 
     def test_check_tile_validity_partial_content(self):
         """Test that tile with partial content is valid."""
-        from segmentation.processing.mk_hspc_utils import check_tile_validity
+        from xldvp_seg.processing.mk_hspc_utils import check_tile_validity
 
         partial_tile = np.zeros((100, 100, 3), dtype=np.uint8)
         partial_tile[50, 50, 0] = 1  # Single non-zero pixel
@@ -892,7 +892,7 @@ class TestCheckTileValidity(TestCase):
 
     def test_check_tile_validity_returns_tuple(self):
         """Test that result is a tuple of (bool, str)."""
-        from segmentation.processing.mk_hspc_utils import check_tile_validity
+        from xldvp_seg.processing.mk_hspc_utils import check_tile_validity
 
         tile = np.zeros((100, 100, 3), dtype=np.uint8)
 
@@ -905,7 +905,7 @@ class TestCheckTileValidity(TestCase):
 
     def test_check_tile_validity_different_shapes(self):
         """Test validity check with different tile shapes."""
-        from segmentation.processing.mk_hspc_utils import check_tile_validity
+        from xldvp_seg.processing.mk_hspc_utils import check_tile_validity
 
         # Small tile
         small_valid = np.ones((10, 10, 3), dtype=np.uint8)
@@ -923,7 +923,7 @@ class TestExtractTileFromSharedMemory(TestCase):
 
     def test_extract_tile_basic(self):
         """Test basic tile extraction from shared memory."""
-        from segmentation.processing.mk_hspc_utils import extract_tile_from_shared_memory
+        from xldvp_seg.processing.mk_hspc_utils import extract_tile_from_shared_memory
 
         # Create shared memory array
         shared = np.arange(10000).reshape(100, 100)
@@ -938,7 +938,7 @@ class TestExtractTileFromSharedMemory(TestCase):
 
     def test_extract_tile_null_shared_memory(self):
         """Test that None shared memory returns error."""
-        from segmentation.processing.mk_hspc_utils import extract_tile_from_shared_memory
+        from xldvp_seg.processing.mk_hspc_utils import extract_tile_from_shared_memory
 
         tile_info = {"id": "t1", "x": 0, "y": 0, "w": 10, "h": 10}
 
@@ -950,7 +950,7 @@ class TestExtractTileFromSharedMemory(TestCase):
 
     def test_extract_tile_at_origin(self):
         """Test tile extraction at array origin."""
-        from segmentation.processing.mk_hspc_utils import extract_tile_from_shared_memory
+        from xldvp_seg.processing.mk_hspc_utils import extract_tile_from_shared_memory
 
         shared = np.arange(400).reshape(20, 20)
         tile_info = {"id": "t1", "x": 0, "y": 0, "w": 5, "h": 5}
@@ -964,7 +964,7 @@ class TestExtractTileFromSharedMemory(TestCase):
 
     def test_extract_tile_preserves_values(self):
         """Test that extracted values match source array."""
-        from segmentation.processing.mk_hspc_utils import extract_tile_from_shared_memory
+        from xldvp_seg.processing.mk_hspc_utils import extract_tile_from_shared_memory
 
         shared = np.arange(100).reshape(10, 10)
         tile_info = {"id": "t1", "x": 2, "y": 3, "w": 4, "h": 5}
@@ -981,7 +981,7 @@ class TestBuildMkHspcResult(TestCase):
 
     def test_build_result_empty_status(self):
         """Test building result with empty status."""
-        from segmentation.processing.mk_hspc_utils import build_mk_hspc_result
+        from xldvp_seg.processing.mk_hspc_utils import build_mk_hspc_result
 
         result = build_mk_hspc_result("tile_0_0", "empty")
 
@@ -991,7 +991,7 @@ class TestBuildMkHspcResult(TestCase):
 
     def test_build_result_error_status(self):
         """Test building result with error status."""
-        from segmentation.processing.mk_hspc_utils import build_mk_hspc_result
+        from xldvp_seg.processing.mk_hspc_utils import build_mk_hspc_result
 
         result = build_mk_hspc_result("tile_0_0", "error", error="Test error message")
 
@@ -1000,7 +1000,7 @@ class TestBuildMkHspcResult(TestCase):
 
     def test_build_result_success_status(self):
         """Test building result with success status."""
-        from segmentation.processing.mk_hspc_utils import build_mk_hspc_result
+        from xldvp_seg.processing.mk_hspc_utils import build_mk_hspc_result
 
         mk_masks = np.zeros((100, 100))
         hspc_masks = np.zeros((100, 100))
@@ -1027,7 +1027,7 @@ class TestBuildMkHspcResult(TestCase):
 
     def test_build_result_with_slide_name(self):
         """Test building result with optional slide_name."""
-        from segmentation.processing.mk_hspc_utils import build_mk_hspc_result
+        from xldvp_seg.processing.mk_hspc_utils import build_mk_hspc_result
 
         result = build_mk_hspc_result(
             "tile_0_0",
@@ -1044,7 +1044,7 @@ class TestBuildMkHspcResult(TestCase):
 
     def test_build_result_defaults_empty_lists(self):
         """Test that None features default to empty lists."""
-        from segmentation.processing.mk_hspc_utils import build_mk_hspc_result
+        from xldvp_seg.processing.mk_hspc_utils import build_mk_hspc_result
 
         result = build_mk_hspc_result(
             "tile_0_0",

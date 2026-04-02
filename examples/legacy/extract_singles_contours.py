@@ -22,7 +22,7 @@ import cv2
 import h5py
 import numpy as np
 
-from segmentation.lmd.contour_processing import process_contour
+from xldvp_seg.lmd.contour_processing import process_contour
 
 
 def extract_contour_from_mask(mask: np.ndarray, label: int) -> np.ndarray | None:

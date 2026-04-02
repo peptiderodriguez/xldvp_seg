@@ -27,7 +27,7 @@ from pathlib import Path
 
 import numpy as np
 
-from segmentation.utils.json_utils import fast_json_load
+from xldvp_seg.utils.json_utils import fast_json_load
 
 DEFAULT_INPUT = (
     "/path/to/output/psilo_output/tp_full/"

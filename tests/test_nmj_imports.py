@@ -24,7 +24,7 @@ class TestNMJStrategyImports:
 
     def test_nmj_strategy_import(self):
         """Test that NMJStrategy class can be imported."""
-        from segmentation.detection.strategies.nmj import NMJStrategy
+        from xldvp_seg.detection.strategies.nmj import NMJStrategy
 
         assert NMJStrategy is not None
         # Verify it has required methods
@@ -35,7 +35,7 @@ class TestNMJStrategyImports:
 
     def test_nmj_classifier_loaders(self):
         """Test that classifier loading functions can be imported."""
-        from segmentation.detection.strategies.nmj import (
+        from xldvp_seg.detection.strategies.nmj import (
             load_classifier,
             load_nmj_classifier,
             load_nmj_rf_classifier,
@@ -51,20 +51,20 @@ class TestStrategyRegistryImports:
 
     def test_registry_import(self):
         """Test that StrategyRegistry can be imported."""
-        from segmentation.detection.registry import StrategyRegistry
+        from xldvp_seg.detection.registry import StrategyRegistry
 
         assert StrategyRegistry is not None
 
     def test_nmj_strategy_registered(self):
         """Test that NMJ strategy is registered in the registry."""
-        from segmentation.detection.registry import StrategyRegistry
+        from xldvp_seg.detection.registry import StrategyRegistry
 
         strategies = StrategyRegistry.list_strategies()
         assert "nmj" in strategies
 
     def test_nmj_strategy_creation(self):
         """Test that NMJ strategy can be created from registry."""
-        from segmentation.detection.registry import StrategyRegistry
+        from xldvp_seg.detection.registry import StrategyRegistry
 
         strategy = StrategyRegistry.create("nmj")
         assert strategy is not None
@@ -76,13 +76,13 @@ class TestMultiChannelMixinImports:
 
     def test_mixin_import(self):
         """Test that MultiChannelFeatureMixin can be imported."""
-        from segmentation.detection.strategies.mixins import MultiChannelFeatureMixin
+        from xldvp_seg.detection.strategies.mixins import MultiChannelFeatureMixin
 
         assert MultiChannelFeatureMixin is not None
 
     def test_mixin_methods_exist(self):
         """Test that mixin has expected methods."""
-        from segmentation.detection.strategies.mixins import MultiChannelFeatureMixin
+        from xldvp_seg.detection.strategies.mixins import MultiChannelFeatureMixin
 
         assert hasattr(MultiChannelFeatureMixin, "extract_channel_stats")
         assert hasattr(MultiChannelFeatureMixin, "extract_multichannel_features")
@@ -93,13 +93,13 @@ class TestHTMLExportImports:
 
     def test_export_samples_to_html(self):
         """Test that export_samples_to_html can be imported."""
-        from segmentation.io.html_export import export_samples_to_html
+        from xldvp_seg.io.html_export import export_samples_to_html
 
         assert callable(export_samples_to_html)
 
     def test_utility_functions(self):
         """Test that utility functions can be imported."""
-        from segmentation.io.html_export import (
+        from xldvp_seg.io.html_export import (
             draw_mask_contour,
             image_to_base64,
             percentile_normalize,
@@ -127,13 +127,13 @@ class TestFeatureExtractionImports:
 
     def test_morphological_features(self):
         """Test that morphological feature extraction can be imported."""
-        from segmentation.utils.feature_extraction import extract_morphological_features
+        from xldvp_seg.utils.feature_extraction import extract_morphological_features
 
         assert callable(extract_morphological_features)
 
     def test_feature_dimension_constants(self):
         """Test that feature dimension constants can be imported."""
-        from segmentation.utils.feature_extraction import (
+        from xldvp_seg.utils.feature_extraction import (
             RESNET50_FEATURE_DIM,
             SAM2_EMBEDDING_DIM,
         )
@@ -147,7 +147,7 @@ class TestCZILoaderImports:
 
     def test_czi_loader_import(self):
         """Test that CZILoader can be imported."""
-        from segmentation.io.czi_loader import CZILoader, get_loader
+        from xldvp_seg.io.czi_loader import CZILoader, get_loader
 
         assert CZILoader is not None
         assert callable(get_loader)

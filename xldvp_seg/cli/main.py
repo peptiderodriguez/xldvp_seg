@@ -10,7 +10,7 @@ import runpy
 import sys
 from pathlib import Path
 
-# Repo root -- two levels up from segmentation/cli/main.py
+# Repo root -- two levels up from xldvp_seg/cli/main.py
 _REPO = Path(__file__).resolve().parent.parent.parent
 
 
@@ -92,15 +92,15 @@ def _run_system(remaining):
 
 def _run_models(remaining):
     """Print registered models from the model registry."""
-    from segmentation.models.registry import ModelRegistry
+    from xldvp_seg.models.registry import ModelRegistry
 
     ModelRegistry.print_models()
 
 
 def _run_strategies(remaining):
     """Print registered detection strategies."""
-    import segmentation.detection.strategies  # noqa: F401 — trigger registration
-    from segmentation.detection.registry import StrategyRegistry
+    import xldvp_seg.detection.strategies  # noqa: F401 — trigger registration
+    from xldvp_seg.detection.registry import StrategyRegistry
 
     StrategyRegistry.print_strategies()
 
@@ -118,7 +118,7 @@ def _run_download_models(remaining):
     parser.add_argument("--all", action="store_true", help="Download all registered models")
     parser.add_argument("--model", type=str, default=None, help="Download a specific model by name")
     args = parser.parse_args(remaining)
-    from segmentation.models.manager import get_model_manager
+    from xldvp_seg.models.manager import get_model_manager
 
     manager = get_model_manager(device="cpu")
     models_to_load = []

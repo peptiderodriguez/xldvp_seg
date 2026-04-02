@@ -18,7 +18,7 @@ from collections.abc import Callable
 import cv2
 import numpy as np
 
-from segmentation.utils.logging import get_logger
+from xldvp_seg.utils.logging import get_logger
 
 logger = get_logger(__name__)
 
@@ -505,7 +505,7 @@ def convert_detection_to_full_res(
     _smooth_fn = None
     if smooth and scale_factor > 1:
         try:
-            from segmentation.detection.strategies.vessel import smooth_contour_spline
+            from xldvp_seg.detection.strategies.vessel import smooth_contour_spline
 
             _smooth_fn = smooth_contour_spline
         except ImportError:

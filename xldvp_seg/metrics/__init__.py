@@ -4,7 +4,7 @@ For benchmarking segmentation methods (Cellpose vs InstanSeg), comparing
 dedup strategies, and evaluating contour accuracy against ground truth.
 
 Usage:
-    from segmentation.metrics import iou_matrix, hungarian_match, panoptic_quality
+    from xldvp_seg.metrics import iou_matrix, hungarian_match, panoptic_quality
 
     iou = iou_matrix(pred_masks, gt_masks)
     matched, unmatched_pred, unmatched_gt = hungarian_match(iou, threshold=0.5)

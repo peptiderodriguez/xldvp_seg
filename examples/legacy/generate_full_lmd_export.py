@@ -23,7 +23,7 @@ import cv2
 import h5py
 import numpy as np
 
-from segmentation.lmd.contour_processing import process_contour
+from xldvp_seg.lmd.contour_processing import process_contour
 
 
 def generate_quadrant_serpentine(quadrant: str, start_corner: str = "auto") -> list[str]:

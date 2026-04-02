@@ -5,7 +5,7 @@ Generates PDF and HTML reports with statistical analysis and visualizations
 for vessel detection results.
 
 Usage:
-    from segmentation.reporting import VesselReport, generate_vessel_report
+    from xldvp_seg.reporting import VesselReport, generate_vessel_report
 
     # Load detections and generate report
     report = VesselReport.from_json("vessel_detections.json")

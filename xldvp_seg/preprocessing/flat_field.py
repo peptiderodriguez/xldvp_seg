@@ -14,7 +14,7 @@ Algorithm:
 Zero pixels (CZI padding) are preserved as zero throughout.
 
 Usage:
-    from segmentation.preprocessing.flat_field import (
+    from xldvp_seg.preprocessing.flat_field import (
         estimate_illumination_profile, IlluminationProfile
     )
 
@@ -28,7 +28,7 @@ import gc
 import numpy as np
 from scipy.ndimage import distance_transform_edt, gaussian_filter, zoom
 
-from segmentation.utils.logging import get_logger
+from xldvp_seg.utils.logging import get_logger
 
 logger = get_logger(__name__)
 

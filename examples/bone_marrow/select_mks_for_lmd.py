@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Select MK detections for LMD proteomics replicates.
 
-Thin wrapper around segmentation.lmd.selection with MK-specific config:
+Thin wrapper around xldvp_seg.lmd.selection with MK-specific config:
 bone grouping, mk_score field, sex/treatment parsing, FGC3 exclusion.
 
 Usage:
@@ -14,13 +14,13 @@ from pathlib import Path
 
 import numpy as np
 
-from segmentation.lmd.selection import select_cells_for_lmd
-from segmentation.lmd.well_plate import (
+from xldvp_seg.lmd.selection import select_cells_for_lmd
+from xldvp_seg.lmd.well_plate import (
     WELLS_PER_PLATE,
     generate_multiplate_wells,
     insert_empty_wells,
 )
-from segmentation.utils.json_utils import atomic_json_dump, fast_json_load
+from xldvp_seg.utils.json_utils import atomic_json_dump, fast_json_load
 
 DATASET_DIR = Path("/path/to/data/bm_lmd_feb2026/mk_clf084_dataset")
 BONE_JSON = DATASET_DIR / "all_mks_with_rejected3.json"

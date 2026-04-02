@@ -14,7 +14,7 @@ from typing import Any
 import numpy as np
 from scipy import ndimage
 
-from segmentation.utils.logging import get_logger
+from xldvp_seg.utils.logging import get_logger
 
 logger = get_logger(__name__)
 
@@ -443,9 +443,9 @@ def detect_in_rois(
     )
 
     def _worker(gpu_id: int, assigned: list[ROI]) -> list[dict]:
-        from segmentation.detection.cell_detector import CellDetector
-        from segmentation.processing.strategy_factory import create_strategy
-        from segmentation.utils.device import set_device_for_worker
+        from xldvp_seg.detection.cell_detector import CellDetector
+        from xldvp_seg.processing.strategy_factory import create_strategy
+        from xldvp_seg.utils.device import set_device_for_worker
 
         device = set_device_for_worker(gpu_id)
 
@@ -499,7 +499,7 @@ def detect_in_rois(
             for future in futures:
                 all_detections.extend(future.result())
         except Exception:
-            from segmentation.utils.device import empty_cache
+            from xldvp_seg.utils.device import empty_cache
 
             empty_cache()
             raise

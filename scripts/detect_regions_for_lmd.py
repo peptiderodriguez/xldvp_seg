@@ -80,10 +80,10 @@ from skimage.measure import (
 from skimage.morphology import closing, dilation, disk, erosion, remove_small_objects
 from skimage.segmentation import watershed
 
-from segmentation.analysis.nuclear_count import _percentile_normalize_to_uint8
-from segmentation.io.czi_loader import CZILoader, get_czi_metadata
-from segmentation.utils.json_utils import atomic_json_dump
-from segmentation.utils.logging import get_logger, setup_logging
+from xldvp_seg.analysis.nuclear_count import _percentile_normalize_to_uint8
+from xldvp_seg.io.czi_loader import CZILoader, get_czi_metadata
+from xldvp_seg.utils.json_utils import atomic_json_dump
+from xldvp_seg.utils.logging import get_logger, setup_logging
 
 logger = get_logger(__name__)
 
@@ -378,7 +378,7 @@ def extract_sam2_embeddings(detections, loader, detect_ch, device="cuda"):
     from sam2.build_sam import build_sam2
     from sam2.sam2_image_predictor import SAM2ImagePredictor
 
-    from segmentation.utils.device import empty_cache
+    from xldvp_seg.utils.device import empty_cache
 
     repo = Path(__file__).resolve().parent.parent
     checkpoint = str(repo / "checkpoints" / "sam2.1_hiera_large.pt")
@@ -513,7 +513,7 @@ def detect_regions(args):
             )
             sys.exit(1)
     elif args.channel_spec:
-        from segmentation.io.czi_loader import (
+        from xldvp_seg.io.czi_loader import (
             ChannelResolutionError,
             resolve_channel_indices,
         )
@@ -704,7 +704,7 @@ def detect_regions(args):
 
     # --- Step 5: SAM2 embeddings (optional, needs GPU) ---
     if args.sam2:
-        from segmentation.utils.device import get_default_device
+        from xldvp_seg.utils.device import get_default_device
 
         device = get_default_device()
         if str(device) == "cpu":

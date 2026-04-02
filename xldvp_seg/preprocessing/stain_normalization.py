@@ -9,7 +9,7 @@ scanner differences.
 import cv2
 import numpy as np
 
-from segmentation.utils.logging import get_logger
+from xldvp_seg.utils.logging import get_logger
 
 logger = get_logger(__name__)
 
@@ -226,7 +226,7 @@ def percentile_normalize_rgb(
     """
     Simple per-slide percentile normalization (no cross-slide reference).
 
-    Thin wrapper around :func:`segmentation.io.html_export.percentile_normalize`,
+    Thin wrapper around :func:`xldvp_seg.io.html_export.percentile_normalize`,
     which is the canonical implementation. This wrapper preserves the original
     call signature for backward compatibility.
 
@@ -247,7 +247,7 @@ def percentile_normalize_rgb(
         target_high = np.full(3, target_range[1], dtype=np.float32)
         return normalize_to_percentiles(image, target_low, target_high, p_low, p_high)
 
-    from segmentation.io.html_export import percentile_normalize
+    from xldvp_seg.io.html_export import percentile_normalize
 
     return percentile_normalize(image, p_low=p_low, p_high=p_high)
 
@@ -361,7 +361,7 @@ def apply_reinhard_normalization_MEDIAN(
     Returns:
         Normalized RGB image (H, W, 3), dtype uint8
     """
-    from segmentation.detection.tissue import compute_otsu_threshold
+    from xldvp_seg.detection.tissue import compute_otsu_threshold
 
     h, w, c = image.shape
     block_sz = 512

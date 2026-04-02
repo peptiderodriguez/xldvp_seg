@@ -8,7 +8,7 @@ Provides centralized defaults and config file loading/saving for:
 - Vessel (Blood Vessels)
 
 Usage:
-    from segmentation.utils.config import load_config, save_config, DEFAULT_CONFIG
+    from xldvp_seg.utils.config import load_config, save_config, DEFAULT_CONFIG
 
     # Load config with defaults
     config = load_config('/path/to/experiment')
@@ -29,12 +29,12 @@ import json
 import os
 from pathlib import Path
 
-from segmentation.utils.logging import get_logger
+from xldvp_seg.utils.logging import get_logger
 
 logger = get_logger(__name__)
 from typing import Any, TypedDict
 
-from segmentation.utils.json_utils import NumpyEncoder as _NumpyEncoder
+from xldvp_seg.utils.json_utils import NumpyEncoder as _NumpyEncoder
 
 # =============================================================================
 # CONFIGURATION TYPE DEFINITIONS

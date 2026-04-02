@@ -7,7 +7,7 @@ annotation count, timestamp).
 
 Usage::
 
-    from segmentation.utils.classifier_registry import (
+    from xldvp_seg.utils.classifier_registry import (
         register_classifier, resolve_classifier, list_classifiers,
     )
 
@@ -25,8 +25,8 @@ import shutil
 from datetime import datetime
 from pathlib import Path
 
-from segmentation.utils.json_utils import atomic_json_dump, fast_json_load
-from segmentation.utils.logging import get_logger
+from xldvp_seg.utils.json_utils import atomic_json_dump, fast_json_load
+from xldvp_seg.utils.logging import get_logger
 
 logger = get_logger(__name__)
 

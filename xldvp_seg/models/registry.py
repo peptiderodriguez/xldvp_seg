@@ -7,7 +7,7 @@ ModelManager (segmentation/models/manager.py). This is a metadata catalog
 for discovery and documentation.
 
 Usage:
-    from segmentation.models.registry import list_models, get_model_info, ModelRegistry
+    from xldvp_seg.models.registry import list_models, get_model_info, ModelRegistry
 
     # List all models
     for m in list_models():
@@ -26,7 +26,7 @@ Usage:
 
 from dataclasses import dataclass
 
-from segmentation.utils.logging import get_logger
+from xldvp_seg.utils.logging import get_logger
 
 logger = get_logger(__name__)
 

@@ -37,7 +37,7 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 
-from segmentation.utils.json_utils import fast_json_load
+from xldvp_seg.utils.json_utils import fast_json_load
 
 
 def read_czi_thumbnail(czi_path, display_channels, scale_factor=0.02, scene=0):
@@ -105,7 +105,7 @@ def load_detections_json(detections_path, group_field="marker_profile", marker_f
     print(f"  {len(detections)} detections loaded", flush=True)
 
     if marker_filter:
-        from segmentation.utils.detection_utils import apply_marker_filter
+        from xldvp_seg.utils.detection_utils import apply_marker_filter
 
         detections = apply_marker_filter(detections, marker_filter)
         print(f"  {len(detections)} after marker filter: {marker_filter}", flush=True)
@@ -1045,7 +1045,7 @@ def main():
         # Try to get from CZI filename
         czi_name = Path(args.czi_path).stem
         try:
-            from segmentation.io.czi_loader import parse_markers_from_filename
+            from xldvp_seg.io.czi_loader import parse_markers_from_filename
 
             markers = parse_markers_from_filename(czi_name)
             # Map display channel index to marker name

@@ -9,9 +9,9 @@ import gc
 
 import numpy as np
 
-from segmentation.io.html_export import draw_mask_contour, image_to_base64, percentile_normalize
-from segmentation.utils.islet_utils import classify_islet_marker
-from segmentation.utils.logging import get_logger
+from xldvp_seg.io.html_export import draw_mask_contour, image_to_base64, percentile_normalize
+from xldvp_seg.utils.islet_utils import classify_islet_marker
+from xldvp_seg.utils.logging import get_logger
 
 logger = get_logger(__name__)
 
@@ -256,7 +256,7 @@ def calibrate_islet_marker_gmm(
     del cellpose_model
     gc.collect()
     try:
-        from segmentation.utils.device import empty_cache
+        from xldvp_seg.utils.device import empty_cache
 
         empty_cache()
     except Exception:

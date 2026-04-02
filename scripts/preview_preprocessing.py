@@ -31,9 +31,9 @@ matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 import numpy as np
 
-from segmentation.io.czi_loader import get_czi_metadata, get_loader
-from segmentation.preprocessing.flat_field import estimate_illumination_profile
-from segmentation.preprocessing.illumination import (
+from xldvp_seg.io.czi_loader import get_czi_metadata, get_loader
+from xldvp_seg.preprocessing.flat_field import estimate_illumination_profile
+from xldvp_seg.preprocessing.illumination import (
     correct_photobleaching,
     normalize_rows_columns,
 )

@@ -2,8 +2,8 @@
 
 import numpy as np
 
-from segmentation.lmd.contour_processing import adaptive_dilate, adaptive_rdp_simplify
-from segmentation.utils.detection_utils import get_contour_px, get_contour_um
+from xldvp_seg.lmd.contour_processing import adaptive_dilate, adaptive_rdp_simplify
+from xldvp_seg.utils.detection_utils import get_contour_px, get_contour_um
 
 # ---------------------------------------------------------------------------
 # Helper: generate test contours
@@ -184,7 +184,7 @@ class TestContourFieldHelpers:
 class TestProcessContourAdaptive:
     def test_adaptive_rdp_via_process_contour(self):
         """process_contour with max_area_change_pct uses adaptive RDP."""
-        from segmentation.lmd.contour_processing import process_contour
+        from xldvp_seg.lmd.contour_processing import process_contour
 
         contour = _circle_contour(n=200).tolist()
         result, stats = process_contour(
@@ -200,7 +200,7 @@ class TestProcessContourAdaptive:
 
     def test_zero_pct_uses_fixed_epsilon(self):
         """max_area_change_pct=0 falls through to fixed rdp_epsilon."""
-        from segmentation.lmd.contour_processing import process_contour
+        from xldvp_seg.lmd.contour_processing import process_contour
 
         contour = _circle_contour(n=200).tolist()
         result_fixed, stats_fixed = process_contour(
@@ -225,7 +225,7 @@ class TestProcessContourAdaptive:
     def test_adaptive_dilation_via_process_contour(self):
         """process_contour with max_dilation_area_pct uses adaptive dilation."""
 
-        from segmentation.lmd.contour_processing import process_contour
+        from xldvp_seg.lmd.contour_processing import process_contour
 
         contour = _circle_contour(n=200).tolist()
         result, stats = process_contour(
@@ -247,7 +247,7 @@ class TestProcessContourAdaptive:
 
     def test_full_pipeline_rdp_plus_dilation(self):
         """process_contour with both adaptive RDP and adaptive dilation."""
-        from segmentation.lmd.contour_processing import process_contour
+        from xldvp_seg.lmd.contour_processing import process_contour
 
         contour = _circle_contour(n=200).tolist()
         result, stats = process_contour(

@@ -21,9 +21,9 @@ from pathlib import Path
 
 import numpy as np
 
-from segmentation.utils.detection_utils import extract_feature_matrix, load_rf_classifier
-from segmentation.utils.json_utils import atomic_json_dump, fast_json_load
-from segmentation.utils.logging import get_logger, setup_logging
+from xldvp_seg.utils.detection_utils import extract_feature_matrix, load_rf_classifier
+from xldvp_seg.utils.json_utils import atomic_json_dump, fast_json_load
+from xldvp_seg.utils.logging import get_logger, setup_logging
 
 logger = get_logger(__name__)
 
@@ -46,7 +46,7 @@ def main():
         sys.exit(1)
 
     # Resolve classifier: registry name or file path
-    from segmentation.utils.classifier_registry import resolve_classifier
+    from xldvp_seg.utils.classifier_registry import resolve_classifier
 
     try:
         clf_path = resolve_classifier(args.classifier)
@@ -73,7 +73,7 @@ def main():
     logger.info(f"Classifier has {len(feature_names)} features")
 
     # Build provenance info from the already-loaded clf_data (avoids double pkl load)
-    from segmentation.utils.classifier_registry import build_classifier_info
+    from xldvp_seg.utils.classifier_registry import build_classifier_info
 
     classifier_info = build_classifier_info(clf_path, clf_data.get("raw_meta", {}))
     logger.info(
@@ -153,7 +153,7 @@ def main():
             logger.info(f"  >= {thresh}: {n_above:,} ({100*n_above/len(all_scores):.1f}%)")
 
     # Save with timestamp
-    from segmentation.utils.timestamps import timestamped_path, update_symlink
+    from xldvp_seg.utils.timestamps import timestamped_path, update_symlink
 
     ts_out = timestamped_path(out_path)
     logger.info(f"Saving scored detections to {ts_out}...")

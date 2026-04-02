@@ -40,7 +40,7 @@ from pathlib import Path
 import numpy as np
 from scipy.spatial import KDTree
 
-from segmentation.utils.detection_utils import get_contour_px, get_contour_um
+from xldvp_seg.utils.detection_utils import get_contour_px, get_contour_um
 
 # ---------------------------------------------------------------------------
 # Fluorescence background loading
@@ -95,7 +95,7 @@ def read_czi_thumbnail_channels(czi_path, display_channels, scale_factor=0.0625,
     # Get pixel size from metadata — try CZILoader first (more robust), then aicspylibczi
     pixel_size_um = None
     try:
-        from segmentation.io.czi_loader import CZILoader
+        from xldvp_seg.io.czi_loader import CZILoader
 
         loader = CZILoader(str(czi_path), scene=scene)
         pixel_size_um = loader.get_pixel_size()
@@ -685,7 +685,7 @@ def load_slide_data(
                 print(f" {n_parsed // 1000}k...", end="", flush=True)
     else:
         try:
-            from segmentation.utils.json_utils import fast_json_load
+            from xldvp_seg.utils.json_utils import fast_json_load
 
             detections = fast_json_load(path)
         except ImportError:
@@ -697,7 +697,7 @@ def load_slide_data(
             return None
 
         if marker_filter:
-            from segmentation.utils.detection_utils import apply_marker_filter
+            from xldvp_seg.utils.detection_utils import apply_marker_filter
 
             detections = apply_marker_filter(detections, marker_filter)
 
@@ -3950,7 +3950,7 @@ def main():
             # Determine channel names by matching filename markers to CZI channels
             # via wavelength. Filename marker order ≠ CZI channel order, so we
             # resolve each CZI channel's wavelength to the filename marker name.
-            from segmentation.io.czi_loader import parse_markers_from_filename
+            from xldvp_seg.io.czi_loader import parse_markers_from_filename
 
             markers = parse_markers_from_filename(czi_path.name)
             # Build wavelength → marker name lookup from filename

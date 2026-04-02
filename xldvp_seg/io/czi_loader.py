@@ -22,7 +22,7 @@ import numpy as np
 from aicspylibczi import CziFile
 from tqdm import tqdm
 
-from segmentation.utils.logging import get_logger
+from xldvp_seg.utils.logging import get_logger
 
 logger = get_logger(__name__)
 
@@ -838,7 +838,7 @@ class CZILoader:
                 shm_buffer[y_off : y_off + h, :] = strip
 
             if (i + 1) % 10 == 0:
-                from segmentation.processing.memory import log_memory_status
+                from xldvp_seg.processing.memory import log_memory_status
 
                 log_memory_status(f"Loaded strip {i + 1}/{n_strips}")
 

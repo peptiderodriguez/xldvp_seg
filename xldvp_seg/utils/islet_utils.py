@@ -5,7 +5,7 @@ Functions for classifying islet cells by dominant hormone marker (alpha/beta/del
 using GMM-based or percentile-based thresholding on per-channel intensities.
 
 Usage:
-    from segmentation.utils.islet_utils import classify_islet_marker, compute_islet_marker_thresholds
+    from xldvp_seg.utils.islet_utils import classify_islet_marker, compute_islet_marker_thresholds
 
     # Compute thresholds from all detections
     thresholds = compute_islet_marker_thresholds(all_detections, marker_map={'gcg': 2, 'ins': 3, 'sst': 5})
@@ -16,7 +16,7 @@ Usage:
 
 import numpy as np
 
-from segmentation.utils.logging import get_logger
+from xldvp_seg.utils.logging import get_logger
 
 logger = get_logger(__name__)
 

@@ -44,8 +44,8 @@ from pathlib import Path
 
 import numpy as np
 
-from segmentation.utils.detection_utils import get_contour_px, load_detections
-from segmentation.utils.logging import get_logger, setup_logging
+from xldvp_seg.utils.detection_utils import get_contour_px, load_detections
+from xldvp_seg.utils.logging import get_logger, setup_logging
 
 logger = get_logger(__name__)
 

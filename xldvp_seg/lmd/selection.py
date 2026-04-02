@@ -8,7 +8,7 @@ Works with any cell type — caller provides callables for grouping, scoring,
 and area extraction.
 
 Usage:
-    from segmentation.lmd.selection import select_cells_for_lmd
+    from xldvp_seg.lmd.selection import select_cells_for_lmd
 
     groups, summary = select_cells_for_lmd(
         detections=cells,

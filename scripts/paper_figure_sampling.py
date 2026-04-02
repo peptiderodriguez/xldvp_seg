@@ -46,15 +46,15 @@ from pathlib import Path
 
 import numpy as np
 
-from segmentation.lmd.clustering import two_stage_clustering
-from segmentation.lmd.selection import select_cells_for_lmd
-from segmentation.lmd.well_plate import (
+from xldvp_seg.lmd.clustering import two_stage_clustering
+from xldvp_seg.lmd.selection import select_cells_for_lmd
+from xldvp_seg.lmd.well_plate import (
     WELLS_PER_PLATE,
     generate_multiplate_wells,
     insert_empty_wells,
 )
-from segmentation.utils.json_utils import atomic_json_dump, fast_json_load
-from segmentation.utils.logging import get_logger
+from xldvp_seg.utils.json_utils import atomic_json_dump, fast_json_load
+from xldvp_seg.utils.logging import get_logger
 
 logger = get_logger(__name__)
 

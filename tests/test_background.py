@@ -1,8 +1,8 @@
-"""Tests for segmentation.pipeline.background.local_background_subtract."""
+"""Tests for xldvp_seg.pipeline.background.local_background_subtract."""
 
 import numpy as np
 
-from segmentation.pipeline.background import local_background_subtract
+from xldvp_seg.pipeline.background import local_background_subtract
 
 
 class TestLocalBackgroundSubtract:

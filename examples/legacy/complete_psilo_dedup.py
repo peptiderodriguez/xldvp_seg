@@ -11,7 +11,7 @@ import argparse
 import json
 from pathlib import Path
 
-from segmentation.utils.json_utils import NumpyEncoder
+from xldvp_seg.utils.json_utils import NumpyEncoder
 
 DEFAULT_RUN_DIR = (
     "/path/to/output/psilo_output/tp_full/"
@@ -69,7 +69,7 @@ def main():
     print(f"  {n_tiles} tiles, {len(all_detections)} detections (pre-dedup)")
 
     # 2. Run spatial grid dedup
-    from segmentation.processing.deduplication import deduplicate_by_mask_overlap
+    from xldvp_seg.processing.deduplication import deduplicate_by_mask_overlap
 
     pre_dedup = len(all_detections)
     all_detections = deduplicate_by_mask_overlap(

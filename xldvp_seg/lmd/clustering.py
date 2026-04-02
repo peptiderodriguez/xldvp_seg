@@ -11,7 +11,7 @@ Overshoot rule: add detection only if |total + area - 400| < |total - 400|.
 Works with any cell type (NMJ, MK, vessel, mesothelium, etc.).
 
 Usage:
-    from segmentation.lmd.clustering import two_stage_clustering
+    from xldvp_seg.lmd.clustering import two_stage_clustering
 
     result = two_stage_clustering(detections, pixel_size=0.1725)
 """
@@ -19,7 +19,7 @@ Usage:
 import numpy as np
 from scipy.spatial import cKDTree
 
-from segmentation.utils.logging import get_logger
+from xldvp_seg.utils.logging import get_logger
 
 logger = get_logger(__name__)
 

@@ -1,9 +1,9 @@
-"""Tests for segmentation.utils.graph_topology — shared graph topology analysis."""
+"""Tests for xldvp_seg.utils.graph_topology — shared graph topology analysis."""
 
 import numpy as np
 import pytest
 
-from segmentation.utils.graph_topology import (
+from xldvp_seg.utils.graph_topology import (
     arc_fraction,
     bounding_box_aspect_ratio,
     build_component_subgraph,

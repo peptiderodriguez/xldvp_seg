@@ -37,12 +37,12 @@ try:
 except ImportError:
     pass
 
-from segmentation.analysis.nuclear_count import count_nuclei_for_tile
-from segmentation.io.czi_loader import CZILoader, get_czi_metadata, resolve_channel_indices
-from segmentation.utils.detection_utils import get_contour_px
-from segmentation.utils.device import device_supports_gpu, get_default_device
-from segmentation.utils.json_utils import atomic_json_dump, fast_json_load
-from segmentation.utils.logging import get_logger, setup_logging
+from xldvp_seg.analysis.nuclear_count import count_nuclei_for_tile
+from xldvp_seg.io.czi_loader import CZILoader, get_czi_metadata, resolve_channel_indices
+from xldvp_seg.utils.detection_utils import get_contour_px
+from xldvp_seg.utils.device import device_supports_gpu, get_default_device
+from xldvp_seg.utils.json_utils import atomic_json_dump, fast_json_load
+from xldvp_seg.utils.logging import get_logger, setup_logging
 
 logger = get_logger(__name__)
 
@@ -197,7 +197,7 @@ def main():
     sam2_predictor = None
     manager = None
     if not args.no_sam2:
-        from segmentation.models.manager import ModelManager
+        from xldvp_seg.models.manager import ModelManager
 
         logger.info("Loading SAM2 for nuclear embeddings...")
         manager = ModelManager(device=device)
@@ -209,7 +209,7 @@ def main():
     dinov2_model, dinov2_transform = None, None
     if args.extract_deep_features:
         if manager is None:
-            from segmentation.models.manager import ModelManager
+            from xldvp_seg.models.manager import ModelManager
 
             manager = ModelManager(device=device)
         logger.info("Loading ResNet + DINOv2 for deep nuclear features...")
@@ -397,7 +397,7 @@ def main():
         # Set SAM2 image for this tile — nuclear channel only (not the cyto+nuc
         # composite used in cell detection; this gives nuclear-specific embeddings)
         if sam2_predictor is not None:
-            from segmentation.analysis.nuclear_count import _percentile_normalize_to_uint8
+            from xldvp_seg.analysis.nuclear_count import _percentile_normalize_to_uint8
 
             nuc_uint8 = _percentile_normalize_to_uint8(nuc_tile)
             nuc_rgb = np.stack([nuc_uint8] * 3, axis=-1)
@@ -486,7 +486,7 @@ def main():
     if manager is not None:
         manager.cleanup()
     del cellpose_model
-    from segmentation.utils.device import empty_cache
+    from xldvp_seg.utils.device import empty_cache
 
     empty_cache()
 

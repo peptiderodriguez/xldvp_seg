@@ -25,8 +25,8 @@ make format    # auto-fix
 ```
 
 Key conventions:
-- Use `get_logger(__name__)` from `segmentation.utils.logging` (never bare `logging.getLogger`).
-- Use `atomic_json_dump()` / `fast_json_load()` from `segmentation.utils.json_utils` for all JSON I/O.
+- Use `get_logger(__name__)` from `xldvp_seg.utils.logging` (never bare `logging.getLogger`).
+- Use `atomic_json_dump()` / `fast_json_load()` from `xldvp_seg.utils.json_utils` for all JSON I/O.
 - Never hardcode pixel sizes, channel indices, or file paths that should come from CZI metadata.
 - All coordinates are **[x, y]** (horizontal, vertical). See `docs/COORDINATE_SYSTEM.md`.
 
@@ -54,7 +54,7 @@ make lint && make test
 
 ## Adding a Detection Strategy
 
-1. Create a new file in `segmentation/detection/strategies/`.
+1. Create a new file in `xldvp_seg/detection/strategies/`.
 2. Inherit from `DetectionStrategy` and use `MultiChannelFeatureMixin`.
 3. Register with `@register_strategy("your_strategy")`.
 4. Implement `detect_in_tile()`.
@@ -62,7 +62,7 @@ make lint && make test
 
 ## Device Handling
 
-Never hardcode `device="cuda"`. Use helpers from `segmentation.utils.device`:
+Never hardcode `device="cuda"`. Use helpers from `xldvp_seg.utils.device`:
 
 - `get_default_device()` -- detects cuda/mps/cpu
 - `device_supports_gpu()` -- for Cellpose `gpu=` flag

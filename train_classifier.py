@@ -24,8 +24,8 @@ from sklearn.ensemble import RandomForestClassifier
 from sklearn.metrics import classification_report, confusion_matrix
 from sklearn.model_selection import cross_val_score, train_test_split
 
-from segmentation.utils.json_utils import fast_json_load
-from segmentation.utils.logging import get_logger, setup_logging
+from xldvp_seg.utils.json_utils import fast_json_load
+from xldvp_seg.utils.logging import get_logger, setup_logging
 
 logger = get_logger(__name__)
 
@@ -268,7 +268,7 @@ def main():
 
     # List classifiers and exit if requested
     if args.list_classifiers:
-        from segmentation.utils.classifier_registry import list_classifiers
+        from xldvp_seg.utils.classifier_registry import list_classifiers
 
         list_classifiers()
         return
@@ -395,7 +395,7 @@ def main():
 
     # Auto-register if --register or --name provided
     if args.register or args.name:
-        from segmentation.utils.classifier_registry import register_classifier
+        from xldvp_seg.utils.classifier_registry import register_classifier
 
         # Derive training slide name from detections path (e.g. .../slide_name/run_dir/det.json)
         _det_path = Path(args.detections).resolve()

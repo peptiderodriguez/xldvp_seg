@@ -4,7 +4,7 @@ Provides a single entry point for choosing the best available torch device,
 so the rest of the pipeline doesn't need to scatter torch.cuda checks everywhere.
 
 Usage:
-    from segmentation.utils.device import get_default_device, get_device_count, empty_cache
+    from xldvp_seg.utils.device import get_default_device, get_device_count, empty_cache
 
     device = get_default_device()          # 'cuda', 'mps', or 'cpu'
     n = get_device_count()                 # number of accelerator devices
@@ -15,7 +15,7 @@ import os
 
 import torch
 
-from segmentation.utils.logging import get_logger
+from xldvp_seg.utils.logging import get_logger
 
 logger = get_logger(__name__)
 

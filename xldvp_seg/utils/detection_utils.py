@@ -10,8 +10,8 @@ from pathlib import Path
 
 import numpy as np
 
-from segmentation.utils.json_utils import fast_json_load
-from segmentation.utils.logging import get_logger
+from xldvp_seg.utils.json_utils import fast_json_load
+from xldvp_seg.utils.logging import get_logger
 
 logger = get_logger(__name__)
 

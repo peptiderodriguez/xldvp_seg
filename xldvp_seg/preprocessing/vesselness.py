@@ -6,7 +6,7 @@ detect vessel-like structures regardless of intensity, responding to
 local geometry/structure instead.
 
 Usage:
-    from segmentation.preprocessing import compute_vesselness
+    from xldvp_seg.preprocessing import compute_vesselness
 
     # Enhance vessel walls in SMA image
     vesselness = compute_vesselness(sma_image)

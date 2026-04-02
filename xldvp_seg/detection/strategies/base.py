@@ -11,11 +11,11 @@ from typing import Any
 
 import numpy as np
 
-from segmentation.utils.detection_utils import (
+from xldvp_seg.utils.detection_utils import (
     safe_to_uint8 as _safe_to_uint8,  # noqa: F401 — re-exported for mk/nmj/cell imports
 )
-from segmentation.utils.feature_extraction import RESNET50_FEATURE_DIM, SAM2_EMBEDDING_DIM
-from segmentation.utils.logging import get_logger
+from xldvp_seg.utils.feature_extraction import RESNET50_FEATURE_DIM, SAM2_EMBEDDING_DIM
+from xldvp_seg.utils.logging import get_logger
 
 # DINOv2 ViT-L/14 feature dimension
 DINOV2_FEATURE_DIM = 1024
@@ -567,7 +567,7 @@ class DetectionStrategy(ABC):
             - 'resnet_0' through 'resnet_2047': ResNet feature values
             Empty dict returned for invalid masks.
         """
-        from segmentation.utils.feature_extraction import extract_morphological_features
+        from xldvp_seg.utils.feature_extraction import extract_morphological_features
 
         if not masks:
             return []

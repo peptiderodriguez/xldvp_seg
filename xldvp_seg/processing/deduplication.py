@@ -34,7 +34,7 @@ except ImportError:
     pass
 import h5py
 
-from segmentation.utils.logging import get_logger
+from xldvp_seg.utils.logging import get_logger
 
 logger = get_logger(__name__)
 

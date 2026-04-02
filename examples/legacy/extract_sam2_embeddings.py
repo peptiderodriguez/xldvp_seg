@@ -94,7 +94,7 @@ def extract_from_czi(base_dir, czi_dir, slides=None):
     from sam2.build_sam import build_sam2
     from sam2.sam2_image_predictor import SAM2ImagePredictor
 
-    from segmentation.utils.device import get_default_device
+    from xldvp_seg.utils.device import get_default_device
 
     base_dir = Path(base_dir)
     czi_dir = Path(czi_dir)

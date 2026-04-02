@@ -9,7 +9,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 - `xlseg` unified CLI with 11 subcommands (info, detect, classify, markers, score, export-lmd, serve, system, models, strategies, download-models)
-- Scanpy-style Python API (`segmentation.api.{pp,tl,pl,io}`)
+- Scanpy-style Python API (`xldvp_seg.api.{pp,tl,pl,io}`)
 - `SlideAnalysis` central state object for notebook workflows
 - Model registry with modality tracking (fluorescence/brightfield/both)
 - Strategy registry with `@register_strategy` decorator (8 strategies)
@@ -30,7 +30,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Channel resolution by name/wavelength (`--channel-spec`)
 - `run_pipeline.sh` YAML config-driven SLURM launcher with downstream job chains
 - Pre-commit hooks (ruff + black), Makefile, CI with coverage
-- ROI-restricted detection module (`segmentation/roi/`) with marker threshold, circular object, and polygon/mask ROI discovery
+- ROI-restricted detection module (`xldvp_seg/roi/`) with marker threshold, circular object, and polygon/mask ROI discovery
 - TMA core detection example (`examples/tma/`) with grid labeling and per-core cell segmentation
 - `/new-experiment` slash command for fast-track YAML config generation
 - 516 automated tests across 21 test files

@@ -26,9 +26,9 @@ import random
 import sys
 from pathlib import Path
 
-from segmentation.lmd.well_plate import generate_multiplate_wells, insert_empty_wells
-from segmentation.utils.json_utils import atomic_json_dump, fast_json_load
-from segmentation.utils.logging import get_logger, setup_logging
+from xldvp_seg.lmd.well_plate import generate_multiplate_wells, insert_empty_wells
+from xldvp_seg.utils.json_utils import atomic_json_dump, fast_json_load
+from xldvp_seg.utils.logging import get_logger, setup_logging
 
 logger = get_logger(__name__)
 

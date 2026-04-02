@@ -14,7 +14,7 @@ import json
 import sys
 from pathlib import Path
 
-from segmentation.io.czi_loader import get_czi_metadata
+from xldvp_seg.io.czi_loader import get_czi_metadata
 
 
 def main():

@@ -8,13 +8,13 @@ tiled microscopy images, including:
 - Vignetting
 
 Usage:
-    from segmentation.preprocessing import correct_photobleaching
+    from xldvp_seg.preprocessing import correct_photobleaching
 
     # Simple correction with defaults
     corrected = correct_photobleaching(image)
 
     # Custom correction
-    from segmentation.preprocessing import normalize_rows_columns, morphological_background_subtraction
+    from xldvp_seg.preprocessing import normalize_rows_columns, morphological_background_subtraction
     corrected = normalize_rows_columns(image)
     corrected = morphological_background_subtraction(corrected, kernel_size=151)
 """
@@ -140,7 +140,7 @@ def correct_photobleaching(
         Corrected image (float32)
 
     Example:
-        >>> from segmentation.preprocessing import correct_photobleaching
+        >>> from xldvp_seg.preprocessing import correct_photobleaching
         >>>
         >>> # Full correction (recommended for most cases)
         >>> corrected = correct_photobleaching(tile)

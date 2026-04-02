@@ -18,28 +18,28 @@ Stage 2 - Vessel Type Classification (multiple options):
 
 Usage:
     # Stage 1: Vessel Detection
-    from segmentation.classification import VesselDetectorRF
+    from xldvp_seg.classification import VesselDetectorRF
 
     detector = VesselDetectorRF()
     detector.train_from_files('annotations.json', 'detections.json')
     is_vessel, confidence = detector.predict_vessel(features)
 
     # Stage 2a: Vessel Type (capillary/arteriole/artery)
-    from segmentation.classification import VesselClassifier
+    from xldvp_seg.classification import VesselClassifier
 
     classifier = VesselClassifier()
     classifier.train(X, y, feature_names)
     predictions, confidence = classifier.predict(features)
 
     # Stage 2b: Artery vs Vein (binary)
-    from segmentation.classification import ArteryVeinClassifier
+    from xldvp_seg.classification import ArteryVeinClassifier
 
     av_classifier = ArteryVeinClassifier()
     av_classifier.train(X, y)
     vessel_type, confidence = av_classifier.predict(features)
 
     # Stage 2c: Full 6-class Vessel Type (with marker profiles)
-    from segmentation.classification import VesselTypeClassifier
+    from xldvp_seg.classification import VesselTypeClassifier
 
     type_classifier = VesselTypeClassifier()
     type_classifier.train(X, y, feature_names)

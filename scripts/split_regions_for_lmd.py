@@ -46,8 +46,8 @@ except ImportError:
     pass
 import h5py
 
-from segmentation.utils.json_utils import atomic_json_dump, fast_json_load
-from segmentation.utils.logging import get_logger
+from xldvp_seg.utils.json_utils import atomic_json_dump, fast_json_load
+from xldvp_seg.utils.logging import get_logger
 
 logger = get_logger(__name__)
 
@@ -196,7 +196,7 @@ def main():
                 pixel_size_um = gc_um[0] / gc[0]
                 break
     if pixel_size_um is None:
-        from segmentation.utils.config import _LEGACY_PIXEL_SIZE_UM
+        from xldvp_seg.utils.config import _LEGACY_PIXEL_SIZE_UM
 
         pixel_size_um = _LEGACY_PIXEL_SIZE_UM
         logger.warning(f"Could not detect pixel size, using legacy fallback {pixel_size_um}")

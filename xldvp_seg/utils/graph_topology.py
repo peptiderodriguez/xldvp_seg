@@ -16,7 +16,7 @@ from scipy.sparse import csr_matrix
 from scipy.sparse.csgraph import connected_components as sparse_cc
 from scipy.spatial import ConvexHull, cKDTree
 
-from segmentation.utils.logging import get_logger
+from xldvp_seg.utils.logging import get_logger
 
 __all__ = [
     "build_radius_graph_sparse",

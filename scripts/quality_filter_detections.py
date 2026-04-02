@@ -46,9 +46,9 @@ import math
 import sys
 from pathlib import Path
 
-from segmentation.utils.json_utils import atomic_json_dump, fast_json_load
-from segmentation.utils.logging import get_logger, setup_logging
-from segmentation.utils.timestamps import timestamped_path, update_symlink
+from xldvp_seg.utils.json_utils import atomic_json_dump, fast_json_load
+from xldvp_seg.utils.logging import get_logger, setup_logging
+from xldvp_seg.utils.timestamps import timestamped_path, update_symlink
 
 logger = get_logger(__name__)
 
@@ -254,7 +254,7 @@ def main():
     if pixel_size is None:
         pixel_size = auto_detect_pixel_size(detections)
     if pixel_size is None:
-        from segmentation.utils.config import _LEGACY_PIXEL_SIZE_UM
+        from xldvp_seg.utils.config import _LEGACY_PIXEL_SIZE_UM
 
         pixel_size = _LEGACY_PIXEL_SIZE_UM
         logger.warning(

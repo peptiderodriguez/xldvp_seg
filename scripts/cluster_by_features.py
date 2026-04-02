@@ -69,7 +69,7 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 
-from segmentation.utils.json_utils import atomic_json_dump, fast_json_load, sanitize_for_json
+from xldvp_seg.utils.json_utils import atomic_json_dump, fast_json_load, sanitize_for_json
 
 # Default islet marker mapping (backward compatibility)
 _ISLET_MARKER_DEFAULTS = {
@@ -79,7 +79,7 @@ _ISLET_MARKER_DEFAULTS = {
 }
 
 
-# sanitize_for_json imported from segmentation.utils.json_utils
+# sanitize_for_json imported from xldvp_seg.utils.json_utils
 
 
 def parse_marker_channels(marker_str):
@@ -684,7 +684,7 @@ def run_clustering(args):
 
     # Feature-gated spatial smoothing (opt-in)
     if args.spatial_smooth:
-        from segmentation.utils.detection_utils import extract_positions_um
+        from xldvp_seg.utils.detection_utils import extract_positions_um
 
         # Extract positions only for valid detections (aligned with X_scaled rows)
         valid_dets_for_positions = [detections[i] for i in valid_indices]

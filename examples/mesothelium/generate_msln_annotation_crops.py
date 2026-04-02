@@ -22,12 +22,12 @@ from aicspylibczi import CziFile
 from PIL import Image
 from tqdm import tqdm
 
-from segmentation.io.html_export import (
+from xldvp_seg.io.html_export import (
     draw_mask_contour,
     image_to_base64,
 )
-from segmentation.io.html_generator import HTMLPageGenerator
-from segmentation.utils.json_utils import fast_json_load
+from xldvp_seg.io.html_generator import HTMLPageGenerator
+from xldvp_seg.utils.json_utils import fast_json_load
 
 # ---------------------------------------------------------------------------
 # Default paths (overridable via CLI)

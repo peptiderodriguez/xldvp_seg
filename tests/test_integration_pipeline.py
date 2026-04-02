@@ -283,7 +283,7 @@ def test_3_marker_classification(run_dir):
 
 def test_4_slide_analysis_roundtrip(run_dir):
     """Load classified JSON into SlideAnalysis and test filtering + export."""
-    from segmentation.core import SlideAnalysis
+    from xldvp_seg.core import SlideAnalysis
 
     classified_path = run_dir / "cell_detections_filtered_classified.json"
     assert classified_path.exists(), f"Classified detections not found: {classified_path}"
@@ -408,8 +408,8 @@ def test_6_serve_html(run_dir):
 
 def test_7_save_load_roundtrip(run_dir, tmp_path):
     """SlideAnalysis.save() then fast_json_load() produces identical data."""
-    from segmentation.core import SlideAnalysis
-    from segmentation.utils.json_utils import fast_json_load
+    from xldvp_seg.core import SlideAnalysis
+    from xldvp_seg.utils.json_utils import fast_json_load
 
     classified_path = run_dir / "cell_detections_filtered_classified.json"
     assert classified_path.exists(), f"Classified detections not found: {classified_path}"

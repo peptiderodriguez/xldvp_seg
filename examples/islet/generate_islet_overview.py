@@ -30,10 +30,10 @@ import h5py
 import numpy as np
 from sklearn.cluster import DBSCAN
 
-from segmentation.io.czi_loader import get_loader
-from segmentation.utils.islet_utils import classify_islet_marker, compute_islet_marker_thresholds
-from segmentation.utils.json_utils import fast_json_load
-from segmentation.utils.logging import get_logger, setup_logging
+from xldvp_seg.io.czi_loader import get_loader
+from xldvp_seg.utils.islet_utils import classify_islet_marker, compute_islet_marker_thresholds
+from xldvp_seg.utils.json_utils import fast_json_load
+from xldvp_seg.utils.logging import get_logger, setup_logging
 
 try:
     import hdf5plugin  # noqa: F401 — registers LZ4 codec for h5py

@@ -5,8 +5,8 @@ Each function calls the underlying script's internal work function directly
 and return the slide for chaining.
 
 Usage:
-    from segmentation.core import SlideAnalysis
-    from segmentation.api import tl
+    from xldvp_seg.core import SlideAnalysis
+    from xldvp_seg.api import tl
 
     slide = SlideAnalysis.load("output/...")
     tl.markers(slide, marker_channels=[1, 2], marker_names=["NeuN", "tdTomato"])
@@ -21,10 +21,10 @@ import tempfile
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
-from segmentation.utils.logging import get_logger
+from xldvp_seg.utils.logging import get_logger
 
 if TYPE_CHECKING:
-    from segmentation.core.slide_analysis import SlideAnalysis
+    from xldvp_seg.core.slide_analysis import SlideAnalysis
 
 logger = get_logger(__name__)
 
@@ -125,7 +125,7 @@ def score(
     Returns:
         slide (mutated with scores).
     """
-    from segmentation.utils.detection_utils import load_rf_classifier
+    from xldvp_seg.utils.detection_utils import load_rf_classifier
 
     clf_data = load_rf_classifier(str(classifier))
     pipeline = clf_data["pipeline"]
@@ -342,7 +342,7 @@ def cluster(
     logger.info("Clustering complete. Output: %s", output_dir)
 
     # Reload detections with cluster labels
-    from segmentation.utils.json_utils import fast_json_load
+    from xldvp_seg.utils.json_utils import fast_json_load
 
     clustered_files = sorted(Path(output_dir).glob("*_clustered.json"))
     if clustered_files:

@@ -27,7 +27,7 @@ from pathlib import Path
 
 import numpy as np
 
-from segmentation.utils.json_utils import atomic_json_dump, fast_json_load
+from xldvp_seg.utils.json_utils import atomic_json_dump, fast_json_load
 
 RESCUED_SLIDES = ["2025_11_18_FGC2", "2025_11_18_FGC4", "2025_11_18_MHU4"]
 PIXEL_SIZE_UM = 0.1725

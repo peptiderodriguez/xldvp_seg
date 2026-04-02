@@ -172,7 +172,7 @@ def load_tile_channels(czi_path, tile_x, tile_y, tile_size, display_channels, lo
     Returns: dict {channel_idx: 2D uint16 array}
     """
     if loader is None:
-        from segmentation.io.czi_loader import CZILoader
+        from xldvp_seg.io.czi_loader import CZILoader
 
         loader = CZILoader(czi_path)
 
@@ -490,7 +490,7 @@ def main():
     # Load detections — strip features to reduce memory
     # (we only need coords, cluster labels, and a few feature keys for stats)
     print(f"Loading detections from {args.detections}...", flush=True)
-    from segmentation.utils.json_utils import fast_json_load
+    from xldvp_seg.utils.json_utils import fast_json_load
 
     detections = fast_json_load(str(args.detections))
     print(f"  {len(detections)} detections", flush=True)
@@ -517,7 +517,7 @@ def main():
     print(f"  Slimmed features to {len(_KEEP_FEAT_KEYS)} keys", flush=True)
 
     # Auto-detect display channels if needed
-    from segmentation.io.czi_loader import CZILoader
+    from xldvp_seg.io.czi_loader import CZILoader
 
     loader = CZILoader(args.czi_path, scene=args.scene)
     if display_channels is None:
@@ -561,7 +561,7 @@ def main():
             print(f"  {name}: {n} / {len(subset)} cells", flush=True)
 
             tmp_json = output_dir / f"_tmp_{name}.json"
-            from segmentation.utils.json_utils import atomic_json_dump
+            from xldvp_seg.utils.json_utils import atomic_json_dump
 
             atomic_json_dump(sampled, tmp_json)
 

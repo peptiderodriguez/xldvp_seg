@@ -6,7 +6,7 @@ Convention:
   - RUN_TIMESTAMP is set once at import and reused throughout a single pipeline run
 
 Usage:
-    from segmentation.utils.timestamps import timestamped_path, save_with_timestamp
+    from xldvp_seg.utils.timestamps import timestamped_path, save_with_timestamp
 
     # Get timestamped path
     ts_path = timestamped_path("output/detections.json")
@@ -19,7 +19,7 @@ Usage:
 from datetime import datetime
 from pathlib import Path
 
-from segmentation.utils.logging import get_logger
+from xldvp_seg.utils.logging import get_logger
 
 logger = get_logger(__name__)
 
@@ -78,7 +78,7 @@ def save_with_timestamp(base_path, data, fmt="json"):
     base.parent.mkdir(parents=True, exist_ok=True)
 
     if fmt == "json":
-        from segmentation.utils.json_utils import atomic_json_dump
+        from xldvp_seg.utils.json_utils import atomic_json_dump
 
         atomic_json_dump(data, ts_path)
     elif fmt == "text":
