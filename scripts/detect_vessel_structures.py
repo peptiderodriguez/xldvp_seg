@@ -462,9 +462,7 @@ def assign_vessel_type(morphology, composition, layering, morphometry):
 # ---------------------------------------------------------------------------
 
 
-def tag_detections(
-    detections, positive_idx, comp_assignments, marker_names, class_keys, prefix="vessel"
-):
+def tag_detections(detections, comp_assignments, marker_names, class_keys, prefix="vessel"):
     """Tag each detection with vessel structure membership + cell type within vessel."""
     field_id = f"{prefix}_id"
     field_type = f"{prefix}_type"
@@ -754,7 +752,7 @@ def main():
 
     # Tag all detections
     field = tag_detections(
-        detections, positive_idx, comp_assignments, marker_names, class_keys, args.output_prefix
+        detections, comp_assignments, marker_names, class_keys, args.output_prefix
     )
 
     # Output
