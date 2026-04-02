@@ -600,6 +600,20 @@ def main():
         comp_global = [positive_idx[i] for i in comp_local]
         comp_nodes = set(comp_local.tolist())
 
+        # Marker composition (cheap — do before expensive graph metrics)
+        composition = analyze_marker_composition(detections, comp_global, marker_names, class_keys)
+
+        # Filter: require min cells of EACH marker (skip expensive graph work)
+        if args.min_marker_cells > 0:
+            below_threshold = False
+            for name in marker_names:
+                count_key = f"n_{name.lower()}"
+                if composition.get(count_key, 0) < args.min_marker_cells:
+                    below_threshold = True
+                    break
+            if below_threshold:
+                continue
+
         # Subgraph via the pre-built full graph (O(k) not O(|pairs|))
         G = G_full.subgraph(comp_nodes)
 
@@ -613,20 +627,6 @@ def main():
         morphometry = compute_vessel_morphometry(
             positions, list(comp_local), morphology, detections, comp_global
         )
-
-        # Marker composition
-        composition = analyze_marker_composition(detections, comp_global, marker_names, class_keys)
-
-        # Filter: require min cells of EACH marker
-        if args.min_marker_cells > 0:
-            below_threshold = False
-            for name in marker_names:
-                count_key = f"n_{name.lower()}"
-                if composition.get(count_key, 0) < args.min_marker_cells:
-                    below_threshold = True
-                    break
-            if below_threshold:
-                continue
 
         # Spatial layering (for rings/arcs with sufficient cells)
         layering = {}
