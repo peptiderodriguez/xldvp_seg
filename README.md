@@ -29,10 +29,10 @@ pip install -e .
 
 | Mode | Command | Best for |
 |------|---------|----------|
-| **Standard** | `./install.sh` | New setups. Auto-detects your CUDA version, installs latest compatible PyTorch + SAM2 + all dependencies. May differ slightly between installs if upstream packages release new versions. |
-| **Reproducible** | `./install.sh --reproducible` | Matching an existing environment exactly. Installs all 184 dependencies at the exact pinned versions from `requirements-lock.txt` (generated from the tested cluster env). Two people running this a month apart get identical environments. |
+| **Reproducible** (default) | `./install.sh` | Exact pinned versions from `requirements-lock.txt`. Two people running this a month apart get identical environments. Recommended for most users. |
+| **Latest** | `./install.sh --latest` | Auto-detects your CUDA version, installs latest compatible PyTorch + SAM2 + all deps. Use when setting up on new hardware with a different CUDA version than the lock file. |
 
-Additional flags: `--cuda 11.8|12.1|12.4` (override CUDA auto-detection), `--cpu` (CPU-only), `--rocm` (AMD GPUs), `--dev` (add pytest/ruff/black).
+Additional flags: `--cuda 11.8|12.1|12.4` (implies --latest), `--cpu` (CPU-only, implies --latest), `--rocm` (AMD GPUs, implies --latest), `--dev` (add pytest/ruff/black).
 
 ```bash
 # Run

@@ -17,11 +17,15 @@
 #   ./install.sh
 #
 # Options:
-#   --cuda 11.8|12.1|12.4   Specify CUDA version (default: auto-detect or 12.1)
-#   --rocm                   Install for AMD GPUs (ROCm)
-#   --cpu                    CPU-only installation (no GPU)
+#   --latest                 Use latest compatible versions (auto-detect CUDA)
+#   --cuda 11.8|12.1|12.4   Specify CUDA version (implies --latest)
+#   --rocm                   Install for AMD GPUs (ROCm, implies --latest)
+#   --cpu                    CPU-only installation (implies --latest)
 #   --dev                    Install development dependencies
-#   --reproducible           Use requirements-lock.txt for exact pinned versions
+#
+# By default, installs exact pinned versions from requirements-lock.txt
+# for reproducibility. Use --latest to auto-detect CUDA and grab the
+# latest compatible versions instead.
 #
 # =============================================================================
 
@@ -32,21 +36,28 @@ CUDA_VERSION=""
 ROCM=false
 CPU_ONLY=false
 DEV=false
-REPRODUCIBLE=false
+LATEST=false
 
 # Parse arguments
 while [[ $# -gt 0 ]]; do
     case $1 in
+        --latest)
+            LATEST=true
+            shift
+            ;;
         --cuda)
             CUDA_VERSION="$2"
+            LATEST=true
             shift 2
             ;;
         --rocm)
             ROCM=true
+            LATEST=true
             shift
             ;;
         --cpu)
             CPU_ONLY=true
+            LATEST=true
             shift
             ;;
         --dev)
@@ -54,7 +65,7 @@ while [[ $# -gt 0 ]]; do
             shift
             ;;
         --reproducible)
-            REPRODUCIBLE=true
+            # Kept for backwards compat — this is now the default
             shift
             ;;
         *)
@@ -70,18 +81,25 @@ echo "============================================================"
 echo "xldvp_seg Installation"
 echo "============================================================"
 
-# Reproducible mode: install exact pinned versions from lock file
-if [ "$REPRODUCIBLE" = true ]; then
+# Default: reproducible install from lock file
+# Use --latest to opt into auto-detect CUDA + latest versions
+if [ "$LATEST" = false ]; then
     echo ""
-    echo "REPRODUCIBLE MODE: Installing exact pinned versions from requirements-lock.txt"
+    echo "REPRODUCIBLE INSTALL (default): exact pinned versions from requirements-lock.txt"
+    echo "Use './install.sh --latest' to auto-detect CUDA and install latest versions instead."
     echo "------------------------------------------------------------"
     LOCK_FILE="$SCRIPT_DIR/requirements-lock.txt"
     if [ ! -f "$LOCK_FILE" ]; then
         echo "ERROR: requirements-lock.txt not found at $LOCK_FILE"
+        echo "Run './install.sh --latest' to install without the lock file."
         exit 1
     fi
     pip install -r "$LOCK_FILE"
-    pip install -e "$SCRIPT_DIR"
+    if [ "$DEV" = true ]; then
+        pip install -e "$SCRIPT_DIR[dev]"
+    else
+        pip install -e "$SCRIPT_DIR"
+    fi
     echo ""
     echo "============================================================"
     echo "Reproducible installation complete!"

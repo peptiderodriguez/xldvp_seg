@@ -36,14 +36,14 @@ for laser microdissection.
 ```bash
 conda create -n xldvp_seg python=3.10 -y && conda activate xldvp_seg
 git clone https://github.com/peptiderodriguez/xldvp_seg.git && cd xldvp_seg
-./install.sh                    # Standard: auto-detects CUDA, latest compatible versions
+./install.sh                    # Reproducible (default): exact pinned versions
 # OR
-./install.sh --reproducible     # Reproducible: exact pinned versions from requirements-lock.txt
+./install.sh --latest           # Latest: auto-detects CUDA, grabs newest packages
 ```
 
-**Standard install** auto-detects your CUDA version and installs the latest compatible PyTorch, SAM2, Cellpose, and all dependencies. Best for new setups. May differ slightly between installs if upstream packages release new versions.
+**Reproducible install** (default) installs all 184 dependencies at the exact versions from `requirements-lock.txt`, generated from the tested cluster environment. Guarantees identical environments across machines and time. Recommended for most users.
 
-**Reproducible install** (`--reproducible`) installs all 184 dependencies at the exact versions from `requirements-lock.txt`, which was generated from the tested cluster environment. Guarantees identical environments across machines and time. Use this when matching an existing setup or when reproducibility matters.
+**Latest install** (`--latest`) auto-detects your CUDA version and installs the latest compatible PyTorch, SAM2, Cellpose, and all dependencies. Use this when setting up on new hardware with a different CUDA version than the lock file, or when you need the newest package versions.
 
 Verify the environment:
 
