@@ -87,7 +87,7 @@ You approve the command, and the directory is added to your local settings (`.cl
 - **Multi-GPU, multi-node** — scales from laptop to SLURM cluster with per-tile checkpointing and crash resume
 - **Detect once, classify later** — train RF classifier on annotations, score all detections in seconds without re-running detection
 - **Integrated nuclear counting** — Cellpose segments nuclei within each cell during detection (no extra I/O), adds N:C ratio and per-nucleus features
-- **ROI-restricted detection** — find islet regions, TMA cores, or bone marrow areas first, then detect cells only within ROIs
+- **ROI support (before or after detection)** — define ROIs before detection to skip 95%+ of non-ROI tissue (islets, TMA cores, bone regions), or draw ROIs after detection in the spatial viewer to select cells for downstream analysis and LMD export
 - **Full spatial analysis** — UMAP/t-SNE, Leiden clustering, Delaunay networks, tissue zonation, SpatialData/scverse integration
 - **LMD-ready** — adaptive contour simplification (10% shape tolerance) + adaptive dilation (10% area tolerance), 384-well plate assignment with serpentine collection through B2→B3→C3→C2 quadrants, nearest-neighbor path optimization on the slide, spatial negative controls, multi-plate overflow, XML export for Leica LMD7
 
@@ -224,7 +224,7 @@ For rare large cells (e.g., MKs), single-cell-per-well is sometimes feasible —
 | Nuclear counting | `--count-nuclei` (default ON) | Integrated in detection; standalone: `scripts/count_nuclei_per_cell.py` |
 | Quality filter | `scripts/quality_filter_detections.py` | Heuristic filter (no annotation needed) |
 | One-command viz | `scripts/view_slide.py` | Classify → cluster → viewer → serve |
-| ROI detection | `examples/islet/`, `examples/tma/` | Find ROIs → detect cells within ROIs only |
+| ROI detection | `examples/islet/`, `examples/tma/` | Pre-detection: find ROIs → detect within ROIs only. Post-detection: draw ROIs in viewer → filter/export selected cells |
 
 See `examples/` for experiment-specific analyses (bone marrow, liver zonation, islets, TMA, vessels, NMJ, mesothelium).
 
@@ -297,7 +297,7 @@ segmentation/              # Main package (pip install -e .)
 ├── models/                # Model registry (SAM2, ResNet, DINOv2, brightfield FMs)
 ├── pipeline/              # 9 modules: preprocessing, post_detection, background, ...
 ├── processing/            # Multi-GPU workers, deduplication, strategy factory
-├── roi/                   # ROI-restricted detection (marker threshold, circular, polygon)
+├── roi/                   # ROI support: pre-detection (restrict to regions) or post-detection (spatial filtering)
 └── utils/                 # JSON I/O, device handling, logging, config
 
 scripts/                   # 28 reusable CLI tools
