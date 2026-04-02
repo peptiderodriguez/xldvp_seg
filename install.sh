@@ -21,6 +21,7 @@
 #   --rocm                   Install for AMD GPUs (ROCm)
 #   --cpu                    CPU-only installation (no GPU)
 #   --dev                    Install development dependencies
+#   --reproducible           Use requirements-lock.txt for exact pinned versions
 #
 # =============================================================================
 
@@ -31,6 +32,7 @@ CUDA_VERSION=""
 ROCM=false
 CPU_ONLY=false
 DEV=false
+REPRODUCIBLE=false
 
 # Parse arguments
 while [[ $# -gt 0 ]]; do
@@ -51,6 +53,10 @@ while [[ $# -gt 0 ]]; do
             DEV=true
             shift
             ;;
+        --reproducible)
+            REPRODUCIBLE=true
+            shift
+            ;;
         *)
             echo "Unknown option: $1"
             exit 1
@@ -58,9 +64,31 @@ while [[ $# -gt 0 ]]; do
     esac
 done
 
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+
 echo "============================================================"
 echo "xldvp_seg Installation"
 echo "============================================================"
+
+# Reproducible mode: install exact pinned versions from lock file
+if [ "$REPRODUCIBLE" = true ]; then
+    echo ""
+    echo "REPRODUCIBLE MODE: Installing exact pinned versions from requirements-lock.txt"
+    echo "------------------------------------------------------------"
+    LOCK_FILE="$SCRIPT_DIR/requirements-lock.txt"
+    if [ ! -f "$LOCK_FILE" ]; then
+        echo "ERROR: requirements-lock.txt not found at $LOCK_FILE"
+        exit 1
+    fi
+    pip install -r "$LOCK_FILE"
+    pip install -e "$SCRIPT_DIR"
+    echo ""
+    echo "============================================================"
+    echo "Reproducible installation complete!"
+    echo "All packages pinned to exact versions from requirements-lock.txt."
+    echo "============================================================"
+    exit 0
+fi
 
 # Detect CUDA version if not specified
 if [ -z "$CUDA_VERSION" ] && [ "$ROCM" = false ] && [ "$CPU_ONLY" = false ]; then
