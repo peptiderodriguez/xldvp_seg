@@ -30,6 +30,10 @@ from collections.abc import Callable
 from pathlib import Path
 from typing import Any, Literal
 
+from segmentation.utils.logging import get_logger
+
+logger = get_logger(__name__)
+
 
 def _esc(value) -> str:
     """Escape a value for safe insertion into HTML/JS strings.
@@ -1171,7 +1175,7 @@ class HTMLPageGenerator:
 
         if not samples:
             if verbose:
-                print(f"No {self.cell_type} samples to export")
+                logger.info(f"No {self.cell_type} samples to export")
             return 0, 0
 
         # Paginate samples
@@ -1182,7 +1186,7 @@ class HTMLPageGenerator:
         total_pages = len(pages)
 
         if verbose:
-            print(f"Generating {total_pages} {self.cell_type} HTML pages...")
+            logger.info(f"Generating {total_pages} {self.cell_type} HTML pages...")
 
         # Generate annotation pages
         for page_num, page_samples in enumerate(pages, 1):
@@ -1199,7 +1203,7 @@ class HTMLPageGenerator:
 
             if verbose:
                 file_size = page_path.stat().st_size / (1024 * 1024)
-                print(f"  Page {page_num}: {len(page_samples)} samples ({file_size:.1f} MB)")
+                logger.info(f"  Page {page_num}: {len(page_samples)} samples ({file_size:.1f} MB)")
 
         # Generate index page
         index_html = self.generate_index_html(
@@ -1215,7 +1219,7 @@ class HTMLPageGenerator:
             f.write(index_html)
 
         if verbose:
-            print(f"Export complete: {output_dir}")
+            logger.info(f"Export complete: {output_dir}")
 
         return len(samples), total_pages
 

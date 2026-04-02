@@ -21,6 +21,10 @@ import numpy as np
 from PIL import Image
 from scipy import ndimage
 
+from segmentation.utils.logging import get_logger
+
+logger = get_logger(__name__)
+
 
 def _esc(value) -> str:
     """Escape a value for safe insertion into HTML/JS strings.
@@ -1793,7 +1797,7 @@ def export_samples_to_html(
     output_dir.mkdir(parents=True, exist_ok=True)
 
     if not samples:
-        print(f"No {cell_type} samples to export")
+        logger.info(f"No {cell_type} samples to export")
         return 0, 0
 
     # Generate preload_annotations.js if prior annotations provided
@@ -1813,13 +1817,15 @@ def export_samples_to_html(
             if "annotations" in ann_data:
                 n_pos = sum(1 for v in ann_data["annotations"].values() if v == "yes")
                 n_neg = sum(1 for v in ann_data["annotations"].values() if v == "no")
-            print(f"  Pre-loading {n_pos + n_neg} prior annotations ({n_pos} yes, {n_neg} no)")
+            logger.info(
+                f"  Pre-loading {n_pos + n_neg} prior annotations ({n_pos} yes, {n_neg} no)"
+            )
 
     # Paginate
     pages = [samples[i : i + samples_per_page] for i in range(0, len(samples), samples_per_page)]
     total_pages = len(pages)
 
-    print(f"Generating {total_pages} {cell_type} HTML pages...")
+    logger.info(f"Generating {total_pages} {cell_type} HTML pages...")
 
     # Generate pages
     for page_num, page_samples in enumerate(pages, 1):
@@ -1841,7 +1847,7 @@ def export_samples_to_html(
             f.write(html)
 
         file_size = page_path.stat().st_size / (1024 * 1024)
-        print(f"  Page {page_num}: {len(page_samples)} samples ({file_size:.1f} MB)")
+        logger.info(f"  Page {page_num}: {len(page_samples)} samples ({file_size:.1f} MB)")
 
     # Generate index
     index_html = generate_index_page(
@@ -1865,7 +1871,7 @@ def export_samples_to_html(
     with open(index_path, "w") as f:
         f.write(index_html)
 
-    print(f"Export complete: {output_dir}")
+    logger.info(f"Export complete: {output_dir}")
 
     return len(samples), total_pages
 
@@ -4366,7 +4372,7 @@ def export_vessel_samples_to_html(
     output_dir.mkdir(parents=True, exist_ok=True)
 
     if not samples:
-        print(f"No {cell_type} samples to export")
+        logger.info(f"No {cell_type} samples to export")
         return 0, 0
 
     # Calculate feature summary for index page
@@ -4387,7 +4393,7 @@ def export_vessel_samples_to_html(
     pages = [samples[i : i + samples_per_page] for i in range(0, len(samples), samples_per_page)]
     total_pages = len(pages)
 
-    print(f"Generating {total_pages} {cell_type} HTML pages...")
+    logger.info(f"Generating {total_pages} {cell_type} HTML pages...")
 
     # Generate pages
     for page_num, page_samples in enumerate(pages, 1):
@@ -4407,7 +4413,7 @@ def export_vessel_samples_to_html(
             f.write(html)
 
         file_size = page_path.stat().st_size / (1024 * 1024)
-        print(f"  Page {page_num}: {len(page_samples)} samples ({file_size:.1f} MB)")
+        logger.info(f"  Page {page_num}: {len(page_samples)} samples ({file_size:.1f} MB)")
 
     # Generate index
     index_html = generate_vessel_index_page(
@@ -4429,6 +4435,6 @@ def export_vessel_samples_to_html(
     with open(index_path, "w") as f:
         f.write(index_html)
 
-    print(f"Export complete: {output_dir}")
+    logger.info(f"Export complete: {output_dir}")
 
     return len(samples), total_pages

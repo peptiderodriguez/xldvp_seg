@@ -11,6 +11,8 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any
 
+from segmentation.utils.logging import get_logger
+
 from .plots import (
     PLOTLY_AVAILABLE,
     create_batch_comparison_bar,
@@ -28,6 +30,8 @@ from .stats import (
     compute_batch_comparison,
     compute_summary_statistics,
 )
+
+logger = get_logger(__name__)
 
 # CSS styles matching the existing codebase dark theme
 REPORT_CSS = """
@@ -784,7 +788,7 @@ class BatchVesselReport:
                 report = VesselReport.from_json(path)
                 slide_reports.append(report)
             except Exception as e:
-                print(f"Warning: Failed to load {path}: {e}")
+                logger.warning(f"Failed to load {path}: {e}")
 
         return cls(slide_reports=slide_reports, batch_name=batch_name)
 
@@ -1106,6 +1110,6 @@ def generate_vessel_report(
             report.generate_pdf(pdf_path)
             outputs["pdf"] = pdf_path
         except ImportError as e:
-            print(f"Warning: PDF generation skipped - {e}")
+            logger.warning(f"PDF generation skipped - {e}")
 
     return outputs

@@ -53,6 +53,9 @@ from segmentation.utils.config import (
     save_config,
 )
 from segmentation.utils.json_utils import NumpyEncoder
+from segmentation.utils.logging import get_logger
+
+logger = get_logger(__name__)
 
 
 class DetectionPipeline:
@@ -182,7 +185,7 @@ class DetectionPipeline:
             tiles = [tiles[i] for i in sorted(indices)]
 
         if not self.quiet:
-            print(f"Processing {len(tiles)} tiles...")
+            logger.info(f"Processing {len(tiles)} tiles...")
 
         self.detections = []
         tiles_processed = 0
@@ -206,7 +209,7 @@ class DetectionPipeline:
                 tile_detections = detector_fn(tile_data, **detector_kwargs)
             except Exception as e:
                 if not self.quiet:
-                    print(f"  WARNING: Detector failed on tile ({tile_x}, {tile_y}): {e}")
+                    logger.warning(f"Detector failed on tile ({tile_x}, {tile_y}): {e}")
                 continue
 
             if len(tile_detections) < min_detections_per_tile:
@@ -252,7 +255,7 @@ class DetectionPipeline:
         }
 
         if not self.quiet:
-            print(f"Found {len(self.detections)} detections in {tiles_with_detections} tiles")
+            logger.info(f"Found {len(self.detections)} detections in {tiles_with_detections} tiles")
 
         return self.detections
 
@@ -289,7 +292,7 @@ class DetectionPipeline:
             json.dump(data, f, cls=NumpyEncoder)
 
         if not self.quiet:
-            print(f"Results saved to: {output_path}")
+            logger.info(f"Results saved to: {output_path}")
 
         return output_path
 
@@ -326,7 +329,7 @@ class DetectionPipeline:
                 f.write(f"{uid},{gx:.1f},{gy:.1f},{gx_um:.2f},{gy_um:.2f}\n")
 
         if not self.quiet:
-            print(f"Coordinates saved to: {output_path}")
+            logger.info(f"Coordinates saved to: {output_path}")
 
         return output_path
 
@@ -363,7 +366,7 @@ class DetectionPipeline:
 
         if not samples:
             if not self.quiet:
-                print("No samples with images to export")
+                logger.info("No samples with images to export")
             return self.output_dir / "html"
 
         html_dir = export_samples_to_html(
@@ -375,7 +378,7 @@ class DetectionPipeline:
         )
 
         if not self.quiet:
-            print(f"HTML exported to: {html_dir}")
+            logger.info(f"HTML exported to: {html_dir}")
 
         return html_dir
 

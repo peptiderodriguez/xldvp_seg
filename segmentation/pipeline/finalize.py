@@ -355,5 +355,5 @@ def _finish_pipeline(
             start_server_and_tunnel(
                 html_dir, port, background=True, slide_name=slide_name, cell_type=cell_type
             )
-            print("")
+            logger.info("")
             show_server_status()

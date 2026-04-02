@@ -28,6 +28,10 @@ import copy
 import json
 import os
 from pathlib import Path
+
+from segmentation.utils.logging import get_logger
+
+logger = get_logger(__name__)
 from typing import Any, TypedDict
 
 from segmentation.utils.json_utils import NumpyEncoder as _NumpyEncoder
@@ -410,7 +414,7 @@ def load_config(
             # Deep merge file config over defaults (preserves nested dict keys)
             _deep_merge(config, file_config)
         except (OSError, json.JSONDecodeError) as e:
-            print(f"Warning: Could not load config from {config_path}: {e}")
+            logger.warning(f"Could not load config from {config_path}: {e}")
 
     # Add cell type if specified
     if cell_type:
