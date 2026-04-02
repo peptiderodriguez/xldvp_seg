@@ -87,7 +87,7 @@ You approve the command, and the directory is added to your local settings (`.cl
 - **Integrated nuclear counting** — Cellpose segments nuclei within each cell during detection (no extra I/O), adds N:C ratio and per-nucleus features
 - **ROI-restricted detection** — find islet regions, TMA cores, or bone marrow areas first, then detect cells only within ROIs
 - **Full spatial analysis** — UMAP/t-SNE, Leiden clustering, Delaunay networks, tissue zonation, SpatialData/scverse integration
-- **LMD-ready** — adaptive contour simplification (10% shape tolerance) + adaptive dilation (10% area tolerance), 384-well plate assignment, XML export for Leica
+- **LMD-ready** — adaptive contour simplification (10% shape tolerance) + adaptive dilation (10% area tolerance), 384-well plate assignment with serpentine collection through B2→B3→C3→C2 quadrants, nearest-neighbor path optimization on the slide, spatial negative controls, multi-plate overflow, XML export for Leica LMD7
 
 ---
 
