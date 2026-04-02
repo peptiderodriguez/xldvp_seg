@@ -33,15 +33,17 @@ xlseg detect --czi-path slide.czi --cell-type cell \
 xlseg serve output/             # View results in browser
 ```
 
-Or use [Claude Code](https://claude.ai/claude-code) for interactive guidance:
+---
+
+## Claude Code Integration
+
+Use [Claude Code](https://claude.ai/claude-code) for interactive, AI-guided analysis:
 
 ```
 cd xldvp_seg && claude
 /analyze                        # Claude walks you through everything
 /new-experiment                 # Fast-track: CZI inspect → YAML config → launch
 ```
-
-### How the Claude agent works
 
 The package ships with a custom Claude Code configuration (`.claude/commands/`, `.claude/agents/`, `CLAUDE.md`) that turns Claude into a pipeline-aware assistant:
 
@@ -91,21 +93,6 @@ You approve the command, and the directory is added to your local settings (`.cl
 
 ---
 
-## Supported Cell Types
-
-| Type | Method | Use Case |
-|------|--------|----------|
-| **Cell** | Cellpose 2-channel (cyto+nuc) + SAM2 | Generic cell detection |
-| **NMJ** | Percentile threshold + morphology + watershed | Neuromuscular junctions |
-| **MK** | SAM2 auto-mask + size filter | Bone marrow megakaryocytes |
-| **Vessel** | SMA+ ring detection, 3-contour hierarchy | Blood vessel morphometry (7 vessel types) |
-| **Islet** | Cellpose membrane+nuclear + markers | Pancreatic islet cells |
-| **Tissue Pattern** | Cellpose + spatial frequency analysis | Brain FISH, coronal sections |
-| **Mesothelium** | Ridge detection for ribbon structures | Mesothelial ribbon for LMD |
-| **InstanSeg** | 3.8M-param lightweight alternative | `--segmenter instanseg` |
-
----
-
 ## DVP Workflow
 
 The pipeline follows a **detect-once, classify-later** design. All features are extracted from the **original segmentation mask** — contour simplification and dilation are applied only at LMD export time.
@@ -124,24 +111,22 @@ The pipeline follows a **detect-once, classify-later** design. All features are 
 
 ---
 
-## Python API
+## Supported Cell Types
 
-```python
-from segmentation.core import SlideAnalysis
-from segmentation.api import tl
+| Type | Method | Use Case |
+|------|--------|----------|
+| **Cell** | Cellpose 2-channel (cyto+nuc) + SAM2 | Generic cell detection |
+| **NMJ** | Percentile threshold + morphology + watershed | Neuromuscular junctions |
+| **MK** | SAM2 auto-mask + size filter | Bone marrow megakaryocytes |
+| **Vessel** | SMA+ ring detection, 3-contour hierarchy | Blood vessel morphometry (7 vessel types) |
+| **Islet** | Cellpose membrane+nuclear + markers | Pancreatic islet cells |
+| **Tissue Pattern** | Cellpose + spatial frequency analysis | Brain FISH, coronal sections |
+| **Mesothelium** | Ridge detection for ribbon structures | Mesothelial ribbon for LMD |
+| **InstanSeg** | 3.8M-param lightweight alternative | `--segmenter instanseg` |
 
-# Load pipeline output
-slide = SlideAnalysis.load("output/my_slide/run_20260324/")
-print(f"{slide.n_detections} detections, {slide.cell_type}")
+---
 
-# Classify markers + score with trained RF
-tl.markers(slide, marker_channels=[1, 2], marker_names=["NeuN", "tdTomato"])
-tl.score(slide, classifier="classifiers/rf_morph.pkl")
-
-# Filter and export
-neurons = slide.filter(score_threshold=0.5).filter(marker="NeuN", positive=True)
-adata = neurons.to_anndata()  # AnnData for scanpy/scverse
-```
+## Data Export & Downstream Analysis
 
 ### AnnData Layout
 
@@ -220,6 +205,50 @@ For rare large cells (e.g., MKs), single-cell-per-well is sometimes feasible —
 
 ---
 
+## Available Analyses
+
+| Analysis | Tool | Description |
+|----------|------|-------------|
+| Feature comparison | `scripts/compare_feature_sets.py` | 5-fold CV across morph/SAM2/deep feature subsets |
+| Marker classification | `scripts/classify_markers.py` | Median SNR / Otsu / GMM per channel |
+| UMAP + clustering | `scripts/cluster_by_features.py` | Leiden/HDBSCAN, trajectory, spatial smoothing |
+| Spatial networks | `scripts/spatial_cell_analysis.py` | Delaunay graphs, community detection |
+| Interactive viewer | `scripts/generate_multi_slide_spatial_viewer.py` | Fluorescence overlay + cell contours + ROI drawing |
+| Sliding window | `scripts/sliding_window_sampling.py` | Area-matched rolling window along ROI centerlines for LMD |
+| Curvilinear patterns | `scripts/detect_curvilinear_patterns.py` | Strip/ribbon detection via graph diameter linearity |
+| Vessel structures | `scripts/detect_vessel_structures.py` | Ring/arc/strip classification from marker+ cells |
+| Vessel communities | `scripts/vessel_community_analysis.py` | Multi-scale morphology + SNR |
+| SpatialData export | `scripts/convert_to_spatialdata.py` | scverse zarr (squidpy, scanpy) |
+| Nuclear counting | `--count-nuclei` (default ON) | Integrated in detection; standalone: `scripts/count_nuclei_per_cell.py` |
+| Quality filter | `scripts/quality_filter_detections.py` | Heuristic filter (no annotation needed) |
+| One-command viz | `scripts/view_slide.py` | Classify → cluster → viewer → serve |
+| ROI detection | `examples/islet/`, `examples/tma/` | Find ROIs → detect cells within ROIs only |
+
+See `examples/` for experiment-specific analyses (bone marrow, liver zonation, islets, TMA, vessels, NMJ, mesothelium).
+
+---
+
+## Python API
+
+```python
+from segmentation.core import SlideAnalysis
+from segmentation.api import tl
+
+# Load pipeline output
+slide = SlideAnalysis.load("output/my_slide/run_20260324/")
+print(f"{slide.n_detections} detections, {slide.cell_type}")
+
+# Classify markers + score with trained RF
+tl.markers(slide, marker_channels=[1, 2], marker_names=["NeuN", "tdTomato"])
+tl.score(slide, classifier="classifiers/rf_morph.pkl")
+
+# Filter and export
+neurons = slide.filter(score_threshold=0.5).filter(marker="NeuN", positive=True)
+adata = neurons.to_anndata()  # AnnData for scanpy/scverse
+```
+
+---
+
 ## SLURM Batch Pipeline
 
 Write a YAML config and launch:
@@ -251,29 +280,6 @@ Chains detection → marker classification → nuclei counting → HTML viewer a
 
 ---
 
-## Available Analyses
-
-| Analysis | Tool | Description |
-|----------|------|-------------|
-| Feature comparison | `scripts/compare_feature_sets.py` | 5-fold CV across morph/SAM2/deep feature subsets |
-| Marker classification | `scripts/classify_markers.py` | Median SNR / Otsu / GMM per channel |
-| UMAP + clustering | `scripts/cluster_by_features.py` | Leiden/HDBSCAN, trajectory, spatial smoothing |
-| Spatial networks | `scripts/spatial_cell_analysis.py` | Delaunay graphs, community detection |
-| Interactive viewer | `scripts/generate_multi_slide_spatial_viewer.py` | Fluorescence overlay + cell contours + ROI drawing |
-| Sliding window | `scripts/sliding_window_sampling.py` | Area-matched rolling window along ROI centerlines for LMD |
-| Curvilinear patterns | `scripts/detect_curvilinear_patterns.py` | Strip/ribbon detection via graph diameter linearity |
-| Vessel structures | `scripts/detect_vessel_structures.py` | Ring/arc/strip classification from marker+ cells |
-| Vessel communities | `scripts/vessel_community_analysis.py` | Multi-scale morphology + SNR |
-| SpatialData export | `scripts/convert_to_spatialdata.py` | scverse zarr (squidpy, scanpy) |
-| Nuclear counting | `--count-nuclei` (default ON) | Integrated in detection; standalone: `scripts/count_nuclei_per_cell.py` |
-| Quality filter | `scripts/quality_filter_detections.py` | Heuristic filter (no annotation needed) |
-| One-command viz | `scripts/view_slide.py` | Classify → cluster → viewer → serve |
-| ROI detection | `examples/islet/`, `examples/tma/` | Find ROIs → detect cells within ROIs only |
-
-See `examples/` for experiment-specific analyses (bone marrow, liver zonation, islets, TMA, vessels, NMJ, mesothelium).
-
----
-
 ## Architecture
 
 ```
@@ -297,8 +303,6 @@ examples/                  # Project-specific analyses by experiment
 tests/                     # 666 tests across 25 files
 ```
 
----
-
 ## Key Design Decisions
 
 | Decision | Rationale |
@@ -312,8 +316,6 @@ tests/                     # 666 tests across 25 files
 | **Direct-to-SHM loading** | CZI channels loaded directly into shared memory — no intermediate RAM copy. |
 | **Strategy pattern** | Detection strategies self-register via `@register_strategy` — add a new cell type in one file. |
 | **Nuclear counting integrated** | `--count-nuclei` (default ON) runs during post-dedup using SHM data — zero extra I/O. |
-
----
 
 ## Development
 
