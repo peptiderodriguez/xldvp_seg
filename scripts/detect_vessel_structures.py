@@ -511,9 +511,10 @@ def parse_args():
         "--min-marker-cells",
         type=int,
         default=0,
-        help="Min cells of EACH marker per vessel structure. Structures without "
-        "at least this many cells of every marker used in --marker-filter are "
-        "dropped. 0 = no filter (default: 0). Use 12 for robust vessel typing.",
+        help="Min cell-equivalents of EACH marker per vessel structure. "
+        "Total area of marker+ cells must be >= N * median_cell_area for "
+        "every marker. Ensures enough LMD material for mass spec. "
+        "0 = no filter (default: 0). Use 12 for typical DVP experiments.",
     )
 
     # Classification thresholds
@@ -573,6 +574,28 @@ def main():
     class_keys_map = dict(zip(marker_names, class_keys))
     logger.info("Markers: %s", marker_names)
 
+    # Pre-compute median cell area per marker (for min-marker-cells area-equivalent filter)
+    median_area_per_marker = {}
+    if args.min_marker_cells > 0:
+        for name, class_key in zip(marker_names, class_keys):
+            areas = []
+            for idx in positive_idx:
+                feat = detections[idx].get("features", {})
+                if feat.get(class_key) == "positive":
+                    a = feat.get("area_um2", 0)
+                    if a > 0:
+                        areas.append(a)
+            if areas:
+                median_area_per_marker[name] = float(np.median(areas))
+                logger.info(
+                    "  %s: median cell area = %.1f µm² (%d cells)",
+                    name,
+                    median_area_per_marker[name],
+                    len(areas),
+                )
+            else:
+                median_area_per_marker[name] = 0
+
     # Build graph + find components
     logger.info("Building radius graph (r=%.0f µm)...", args.radius)
     n_comp, labels, pairs = build_radius_graph_sparse(positions, args.radius)
@@ -603,12 +626,23 @@ def main():
         # Marker composition (cheap — do before expensive graph metrics)
         composition = analyze_marker_composition(detections, comp_global, marker_names, class_keys)
 
-        # Filter: require min cells of EACH marker (skip expensive graph work)
+        # Filter: require area equivalent of min_marker_cells for EACH marker.
+        # Total area of marker+ cells in this component must be ≥ N × median cell area.
+        # This ensures enough material for mass spec per marker type.
         if args.min_marker_cells > 0:
             below_threshold = False
-            for name in marker_names:
-                count_key = f"n_{name.lower()}"
-                if composition.get(count_key, 0) < args.min_marker_cells:
+            for name, class_key in zip(marker_names, class_keys):
+                median_a = median_area_per_marker.get(name, 0)
+                if median_a <= 0:
+                    continue
+                min_area = args.min_marker_cells * median_a
+                # Sum actual area of this marker's cells in the component
+                total_area = 0.0
+                for g_idx in comp_global:
+                    feat = detections[g_idx].get("features", {})
+                    if feat.get(class_key) == "positive":
+                        total_area += feat.get("area_um2", 0)
+                if total_area < min_area:
                     below_threshold = True
                     break
             if below_threshold:
