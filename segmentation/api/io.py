@@ -1,15 +1,27 @@
 """I/O and export functions."""
 
+from __future__ import annotations
+
 from pathlib import Path
+from typing import TYPE_CHECKING, Any
 
 from segmentation.utils.logging import get_logger
+
+if TYPE_CHECKING:
+    from segmentation.core.slide_analysis import SlideAnalysis
 
 logger = get_logger(__name__)
 
 
 def export_lmd(
-    slide, crosses, output_dir=None, min_score=0.5, generate_controls=True, erosion_um=0.0, **kwargs
-):
+    slide: SlideAnalysis,
+    crosses: str | Path,
+    output_dir: str | Path | None = None,
+    min_score: float = 0.5,
+    generate_controls: bool = True,
+    erosion_um: float = 0.0,
+    **kwargs: Any,
+) -> Path:
     """Export detections for laser microdissection.
 
     Filters by score, extracts contours, assigns wells, generates XML.
@@ -32,7 +44,12 @@ def export_lmd(
     )
 
 
-def to_spatialdata(slide, output_path=None, cell_type=None, **kwargs):
+def to_spatialdata(
+    slide: SlideAnalysis,
+    output_path: str | Path | None = None,
+    cell_type: str | None = None,
+    **kwargs: Any,
+) -> Path | None:
     """Export detections to SpatialData zarr for scverse ecosystem.
 
     Args:

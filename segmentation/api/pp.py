@@ -1,11 +1,16 @@
 """Preprocessing functions."""
 
+from __future__ import annotations
+
+from pathlib import Path
+from typing import Any
+
 from segmentation.utils.logging import get_logger
 
 logger = get_logger(__name__)
 
 
-def inspect(czi_path):
+def inspect(czi_path: str | Path) -> dict[str, Any]:
     """Inspect CZI metadata. Returns channel info dict.
 
     Args:
@@ -19,7 +24,14 @@ def inspect(czi_path):
     return get_czi_metadata(str(czi_path))
 
 
-def detect(czi_path, cell_type="cell", output_dir=None, channel_spec=None, num_gpus=4, **kwargs):
+def detect(
+    czi_path: str | Path,
+    cell_type: str = "cell",
+    output_dir: str | Path | None = None,
+    channel_spec: str | None = None,
+    num_gpus: int = 4,
+    **kwargs: Any,
+) -> str:
     """Run detection pipeline.
 
     For production runs, use run_pipeline.sh with YAML configs instead.

@@ -1,11 +1,18 @@
 """Plotting functions."""
 
+from __future__ import annotations
+
+from typing import TYPE_CHECKING, Any, NoReturn
+
 from segmentation.utils.logging import get_logger
+
+if TYPE_CHECKING:
+    from segmentation.core.slide_analysis import SlideAnalysis
 
 logger = get_logger(__name__)
 
 
-def umap(slide, color_by=None, **kwargs):
+def umap(slide: SlideAnalysis, color_by: str | None = None, **kwargs: Any) -> NoReturn:
     """Display UMAP plot.
 
     Use scripts/cluster_by_features.py --methods both directly for now.
@@ -15,7 +22,7 @@ def umap(slide, color_by=None, **kwargs):
     )
 
 
-def spatial(slide, **kwargs):
+def spatial(slide: SlideAnalysis, **kwargs: Any) -> NoReturn:
     """Display spatial viewer.
 
     Use scripts/generate_multi_slide_spatial_viewer.py directly for now.

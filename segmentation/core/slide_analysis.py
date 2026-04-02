@@ -19,12 +19,18 @@ Usage:
     adata = slide.to_anndata()
 """
 
+from __future__ import annotations
+
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 import numpy as np
 import pandas as pd
 
 from segmentation.utils.detection_utils import extract_positions_um
+
+if TYPE_CHECKING:
+    import anndata
 from segmentation.utils.json_utils import atomic_json_dump, fast_json_load
 from segmentation.utils.logging import get_logger
 
@@ -39,7 +45,9 @@ class SlideAnalysis:
     Uses existing pipeline utilities for all I/O and coordinate extraction.
     """
 
-    def __init__(self, output_dir: str | Path = None, detections: list = None):
+    def __init__(
+        self, output_dir: str | Path | None = None, detections: list[dict] | None = None
+    ) -> None:
         self._output_dir = Path(output_dir) if output_dir else None
         self._detections_override = detections  # for filtered instances
         self._detections = None
@@ -58,14 +66,16 @@ class SlideAnalysis:
         self._spatialdata_path = None
 
     @classmethod
-    def load(cls, output_dir: str | Path) -> "SlideAnalysis":
+    def load(cls, output_dir: str | Path) -> SlideAnalysis:
         """Factory: auto-discovers files in the output directory."""
         sa = cls(output_dir)
         sa._discover_files()
         return sa
 
     @classmethod
-    def from_detections(cls, detections: list, output_dir: str | Path = None) -> "SlideAnalysis":
+    def from_detections(
+        cls, detections: list[dict], output_dir: str | Path | None = None
+    ) -> SlideAnalysis:
         """Create from a pre-loaded detections list."""
         sa = cls(output_dir, detections=detections)
         if output_dir:
@@ -117,7 +127,7 @@ class SlideAnalysis:
     # --- Lazy-loaded properties ---
 
     @property
-    def detections(self) -> list:
+    def detections(self) -> list[dict]:
         """List of detection dicts (loaded lazily from disk)."""
         if self._detections is None:
             if self._detections_override is not None:
@@ -188,7 +198,7 @@ class SlideAnalysis:
         return self._positions_um
 
     @property
-    def contours(self) -> list:
+    def contours(self) -> list[np.ndarray | None]:
         """List of contour arrays (contour_px or contour_um per detection)."""
         from segmentation.utils.detection_utils import get_contour_px, get_contour_um
 
@@ -262,10 +272,10 @@ class SlideAnalysis:
     def filter(
         self,
         *,
-        score_threshold: float = None,
-        marker: str = None,
+        score_threshold: float | None = None,
+        marker: str | None = None,
         positive: bool = True,
-    ) -> "SlideAnalysis":
+    ) -> SlideAnalysis:
         """Return new SlideAnalysis with filtered detections.
 
         Args:
@@ -301,7 +311,7 @@ class SlideAnalysis:
         atomic_json_dump(self.detections, Path(path))
         logger.info("Saved %d detections to %s", len(self.detections), path)
 
-    def to_anndata(self) -> "anndata.AnnData":
+    def to_anndata(self) -> anndata.AnnData:
         """Export as AnnData for scanpy/scverse workflows.
 
         Morphological and channel features go into X; SAM2 embeddings go into

@@ -4,6 +4,8 @@ These were duplicated across spatial_cell_analysis.py, cluster_by_features.py,
 and apply_classifier.py.
 """
 
+from __future__ import annotations
+
 from pathlib import Path
 
 import numpy as np
@@ -41,7 +43,7 @@ def safe_to_uint8(arr: np.ndarray) -> np.ndarray:
         return arr.clip(0, 255).astype(np.uint8)
 
 
-def load_detections(path, score_threshold=None):
+def load_detections(path: str | Path, score_threshold: float | None = None) -> list[dict]:
     """Load detections JSON, optionally filtering by rf_prediction.
 
     Args:
@@ -76,7 +78,7 @@ def load_detections(path, score_threshold=None):
     return detections
 
 
-def apply_marker_filter(detections, filter_expr):
+def apply_marker_filter(detections: list[dict], filter_expr: str | None) -> list[dict]:
     """Filter detections by a marker expression like ``"MSLN_class==positive"``.
 
     Checks both top-level ``det[key]`` and ``det["features"][key]`` (since
@@ -110,7 +112,9 @@ def apply_marker_filter(detections, filter_expr):
     return filtered
 
 
-def extract_positions_um(detections, pixel_size_um=None):
+def extract_positions_um(
+    detections: list[dict], pixel_size_um: float | None = None
+) -> tuple[np.ndarray, float | None]:
     """Extract cell positions in microns from a list of detection dicts.
 
     Resolution order for each detection:
@@ -275,7 +279,9 @@ def load_rf_classifier(model_path: str) -> dict:
     return result
 
 
-def extract_feature_matrix(detections, feature_names):
+def extract_feature_matrix(
+    detections: list[dict], feature_names: list[str]
+) -> tuple[np.ndarray, list[int]]:
     """Extract a feature matrix from detections for given feature names.
 
     Pre-allocates a numpy array and fills it row by row. Detections
@@ -317,7 +323,7 @@ def extract_feature_matrix(detections, feature_names):
 # ---------------------------------------------------------------------------
 
 
-def get_contour_px(det: dict) -> list | None:
+def get_contour_px(det: dict) -> list[list[float]] | None:
     """Get contour in pixels from a detection dict.
 
     Handles both new (``contour_px``) and legacy (``contour_dilated_px``)
@@ -332,7 +338,7 @@ def get_contour_px(det: dict) -> list | None:
     return det.get("contour_dilated_px")
 
 
-def get_contour_um(det: dict) -> list | None:
+def get_contour_um(det: dict) -> list[list[float]] | None:
     """Get contour in micrometers from a detection dict.
 
     Handles both new (``contour_um``) and legacy (``contour_dilated_um``)

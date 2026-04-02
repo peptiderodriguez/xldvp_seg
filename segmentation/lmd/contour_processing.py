@@ -18,6 +18,8 @@ Usage:
     results = process_contours_batch(contours_px, pixel_size_um=pixel_size)
 """
 
+from __future__ import annotations
+
 from typing import Any
 
 import cv2
@@ -36,7 +38,13 @@ DEFAULT_DILATION_UM = 0.5  # Dilate by 0.5um
 DEFAULT_RDP_EPSILON = 5  # RDP epsilon in pixels
 
 
-def transform_native_to_display(pts_xy_um, orig_w_um, orig_h_um, flip_h, rot90):
+def transform_native_to_display(
+    pts_xy_um: np.ndarray,
+    orig_w_um: float,
+    orig_h_um: float,
+    flip_h: bool,
+    rot90: bool,
+) -> np.ndarray:
     """Transform contour [x, y] um from native CZI space to display space.
 
     Applies the same transforms that napari_place_crosses.py applied to the
@@ -251,7 +259,7 @@ def validate_polygon(poly: Polygon) -> Polygon | None:
 
 
 def dilate_contour(
-    contour: np.ndarray, dilation: float, _poly: Polygon = None
+    contour: np.ndarray, dilation: float, _poly: Polygon | None = None
 ) -> np.ndarray | None:
     if len(contour) < 3:
         return None
@@ -276,7 +284,9 @@ def dilate_contour(
     return coords
 
 
-def erode_contour(contour: np.ndarray, erosion: float, _poly: Polygon = None) -> np.ndarray | None:
+def erode_contour(
+    contour: np.ndarray, erosion: float, _poly: Polygon | None = None
+) -> np.ndarray | None:
     if erosion <= 0:
         return contour
     if len(contour) < 3:
@@ -341,7 +351,7 @@ def erode_contour_percent(contour: np.ndarray, erode_pct: float) -> np.ndarray |
 
 def process_contour(
     contour_px: list[list[float]],
-    pixel_size_um: float = None,
+    pixel_size_um: float | None = None,
     dilation_um: float = DEFAULT_DILATION_UM,
     rdp_epsilon: float = DEFAULT_RDP_EPSILON,
     erosion_um: float = 0.0,
@@ -486,7 +496,7 @@ def process_contour(
 
 def process_contours_batch(
     contours_px: list[list[list[float]]],
-    pixel_size_um: float = None,
+    pixel_size_um: float | None = None,
     dilation_um: float = DEFAULT_DILATION_UM,
     rdp_epsilon: float = DEFAULT_RDP_EPSILON,
     erosion_um: float = 0.0,
@@ -590,7 +600,7 @@ def process_contours_batch(
 def process_detection_contours(
     detections: list[dict],
     contour_key: str = "outer_contour_global",
-    pixel_size_um: float = None,
+    pixel_size_um: float | None = None,
     dilation_um: float = DEFAULT_DILATION_UM,
     rdp_epsilon: float = DEFAULT_RDP_EPSILON,
     erosion_um: float = 0.0,
