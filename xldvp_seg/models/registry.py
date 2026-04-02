@@ -3,7 +3,7 @@ Model registry: metadata catalog for feature extraction and segmentation models.
 
 Tracks available models with their properties (feature dimensions, modality,
 license, HuggingFace URL). Does NOT handle model loading -- that stays in
-ModelManager (segmentation/models/manager.py). This is a metadata catalog
+ModelManager (xldvp_seg/models/manager.py). This is a metadata catalog
 for discovery and documentation.
 
 Usage:

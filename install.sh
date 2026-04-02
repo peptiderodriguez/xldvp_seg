@@ -95,10 +95,11 @@ if [ "$LATEST" = false ]; then
         exit 1
     fi
     pip install -r "$LOCK_FILE"
+    # --no-deps: don't re-resolve dependencies (lock file is authoritative)
     if [ "$DEV" = true ]; then
-        pip install -e "$SCRIPT_DIR[dev]"
+        pip install --no-deps -e "$SCRIPT_DIR[dev]"
     else
-        pip install -e "$SCRIPT_DIR"
+        pip install --no-deps -e "$SCRIPT_DIR"
     fi
     echo ""
     echo "============================================================"

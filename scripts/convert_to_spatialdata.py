@@ -975,7 +975,7 @@ def export_spatialdata(
 ):
     """Programmatic API for converting detections to SpatialData.
 
-    Called from segmentation/pipeline/finalize.py for automatic export.
+    Called from xldvp_seg/pipeline/finalize.py for automatic export.
 
     Args:
         detections: List of detection dicts.

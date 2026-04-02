@@ -295,7 +295,7 @@ def compute_hsv_features(masked_pixels: np.ndarray, sample_size: int = 100) -> d
 # These are the "single-pass" dimensions — i.e., what each individual extraction
 # function produces.  The full-pipeline dimensions (which double ResNet/DINOv2
 # for masked + context crops, and include NMJ-specific + multi-channel features)
-# are defined in segmentation/utils/config.py.
+# are defined in xldvp_seg/utils/config.py.
 #
 #   This module (feature_extraction.py)    |  config.py (full pipeline)
 #   ─────────────────────────────────────  |  ────────────────────────────

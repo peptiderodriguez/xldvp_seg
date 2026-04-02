@@ -2,10 +2,10 @@
 Comprehensive unit tests for core utility modules in xldvp_seg_repo.
 
 Tests the following modules:
-- segmentation/utils/config.py - Configuration management and validation
-- segmentation/processing/memory.py - Memory validation and management
-- segmentation/processing/coordinates.py - Coordinate conversion utilities
-- segmentation/processing/mk_hspc_utils.py - MK/HSPC tile processing utilities
+- xldvp_seg/utils/config.py - Configuration management and validation
+- xldvp_seg/processing/memory.py - Memory validation and management
+- xldvp_seg/processing/coordinates.py - Coordinate conversion utilities
+- xldvp_seg/processing/mk_hspc_utils.py - MK/HSPC tile processing utilities
 
 Run with: pytest tests/test_utils.py -v
 """

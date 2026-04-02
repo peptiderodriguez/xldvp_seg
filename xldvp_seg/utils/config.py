@@ -961,7 +961,7 @@ def get_config_summary(
 #
 # These represent the total features produced by the complete detection pipeline
 # (not just a single extraction function). For the per-function "single-pass"
-# constants, see segmentation/utils/feature_extraction.py.
+# constants, see xldvp_seg/utils/feature_extraction.py.
 #
 # Morphological breakdown (78 total for 3-channel NMJ pipeline):
 #   - 22 base features from extract_morphological_features()
@@ -977,7 +977,7 @@ def get_config_summary(
 # Full-pipeline feature dimensions.
 # These are the TOTAL dimensions produced by the detection pipeline (masked + context
 # crops combined). The per-function "single-pass" constants live in
-# segmentation/utils/feature_extraction.py:
+# xldvp_seg/utils/feature_extraction.py:
 #   feature_extraction.MORPHOLOGICAL_FEATURE_COUNT = 22  (base only; 78 after NMJ + multi-ch)
 #   feature_extraction.SAM2_EMBEDDING_DIM = 256          (same — no doubling for SAM2)
 #   feature_extraction.RESNET50_FEATURE_DIM = 2048       (single pass; doubled here for masked+ctx)

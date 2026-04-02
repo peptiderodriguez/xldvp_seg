@@ -1,7 +1,7 @@
 """
 Tests for Detection dataclass and DetectionStrategy base class.
 
-Tests the base detection infrastructure in segmentation/detection/strategies/base.py.
+Tests the base detection infrastructure in xldvp_seg/detection/strategies/base.py.
 """
 
 import numpy as np

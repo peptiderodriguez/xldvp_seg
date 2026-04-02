@@ -3,9 +3,9 @@ Comprehensive tests for feature extraction utilities.
 
 Tests the feature extraction functions and constants in the xldvp_seg_repo codebase,
 specifically from:
-- segmentation/utils/config.py (full-pipeline feature dimension constants)
-- segmentation/utils/feature_extraction.py (base morphological features, single-pass ResNet, SAM2)
-- segmentation/detection/strategies/base.py (feature extraction methods)
+- xldvp_seg/utils/config.py (full-pipeline feature dimension constants)
+- xldvp_seg/utils/feature_extraction.py (base morphological features, single-pass ResNet, SAM2)
+- xldvp_seg/detection/strategies/base.py (feature extraction methods)
 
 Feature dimension constants exist at TWO levels:
 
@@ -48,7 +48,7 @@ def _check_torch_available():
 
 class TestFullPipelineFeatureDimensions(unittest.TestCase):
     """
-    Tests for full-pipeline feature dimension constants in segmentation/utils/config.py.
+    Tests for full-pipeline feature dimension constants in xldvp_seg/utils/config.py.
 
     These represent the total features produced by the complete detection pipeline
     (including masked + context crops for ResNet/DINOv2, and all morphological
@@ -235,7 +235,7 @@ class TestSinglePassFeatureDimensions(unittest.TestCase):
 
 class TestMorphologicalFeatureExtraction(unittest.TestCase):
     """
-    Tests for morphological feature extraction from segmentation/utils/feature_extraction.py.
+    Tests for morphological feature extraction from xldvp_seg/utils/feature_extraction.py.
 
     The extract_morphological_features() function should return exactly 22 base features
     including area, perimeter, circularity, solidity, color stats, etc.

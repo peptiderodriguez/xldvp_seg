@@ -1,5 +1,5 @@
 """
-Segmentation package for unified cell segmentation pipeline.
+xldvp_seg — spatial cell segmentation and Deep Visual Proteomics pipeline.
 
 Provides detection, processing, and I/O utilities for:
 - MK (Megakaryocytes)

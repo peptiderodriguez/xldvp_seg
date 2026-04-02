@@ -1,7 +1,7 @@
 """
 Tests for coordinate handling utilities.
 
-Tests the coordinate conversion functions in segmentation/processing/coordinates.py
+Tests the coordinate conversion functions in xldvp_seg/processing/coordinates.py
 to ensure correct handling of [x, y] vs [row, col] conventions.
 """
 

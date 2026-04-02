@@ -6,8 +6,8 @@ of all ML models used in the segmentation pipeline.
 
 This module consolidates model loading logic that was previously duplicated in:
 - run_segmentation.py
-- segmentation/detection/cell_detector.py
-- segmentation/cli.py
+- xldvp_seg/detection/cell_detector.py
+- xldvp_seg/cli.py
 
 Usage:
     from xldvp_seg.models import get_model_manager
