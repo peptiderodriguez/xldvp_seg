@@ -599,34 +599,30 @@ def main():
     class_keys_map = dict(zip(marker_names, class_keys))
     logger.info("Markers: %s", marker_names)
 
-    # Pre-compute median cell area per class (single-positive per marker + double-positive)
-    # for min-marker-cells area-equivalent filter
+    # Pre-compute median cell area per marker (total: single + double positive)
+    # for min-marker-cells area-equivalent filter.
+    # Uses total marker presence — a cell positive for both SMA and CD31
+    # counts toward both markers' medians.
     median_area_per_class = {}
     if args.min_marker_cells > 0:
-        # Collect areas by class: single-positive per marker, double-positive
-        class_areas = {name: [] for name in marker_names}
-        class_areas["double_pos"] = []
-        for idx in positive_idx:
-            feat = detections[idx].get("features", {})
-            pos = [n for n, k in zip(marker_names, class_keys) if feat.get(k) == "positive"]
-            a = feat.get("area_um2", 0)
-            if a <= 0:
-                continue
-            if len(pos) >= 2:
-                class_areas["double_pos"].append(a)
-            elif len(pos) == 1:
-                class_areas[pos[0]].append(a)
-        for cls, areas in class_areas.items():
+        for name, class_key in zip(marker_names, class_keys):
+            areas = []
+            for idx in positive_idx:
+                feat = detections[idx].get("features", {})
+                if feat.get(class_key) == "positive":
+                    a = feat.get("area_um2", 0)
+                    if a > 0:
+                        areas.append(a)
             if areas:
-                median_area_per_class[cls] = float(np.median(areas))
+                median_area_per_class[name] = float(np.median(areas))
                 logger.info(
                     "  %s: median cell area = %.1f µm² (%d cells)",
-                    cls,
-                    median_area_per_class[cls],
+                    name,
+                    median_area_per_class[name],
                     len(areas),
                 )
             else:
-                median_area_per_class[cls] = 0
+                median_area_per_class[name] = 0
 
     # Build graph + find components
     logger.info("Building radius graph (r=%.0f µm)...", args.radius)
@@ -658,22 +654,27 @@ def main():
         # Marker composition (cheap — do before expensive graph metrics)
         composition = analyze_marker_composition(detections, comp_global, marker_names, class_keys)
 
-        # Filter: require area equivalent of min_marker_cells for each single-positive
-        # marker class. Double-positive cells are tracked but NOT required.
+        # Filter: require area equivalent of min_marker_cells for each marker.
+        # Uses TOTAL marker presence (single + double positive) for viability —
+        # a vessel is viable if it has enough of each marker regardless of
+        # co-expression. LMD sampling treats double-positive as a separate class
+        # but the viability check counts them toward both markers.
         if args.min_marker_cells > 0:
-            # Classify cells once, sum area per class
-            class_area = dict.fromkeys(marker_names, 0.0)
+            marker_area = dict.fromkeys(marker_names, 0.0)
             for g_idx in comp_global:
                 feat = detections[g_idx].get("features", {})
-                pos = [n for n, k in zip(marker_names, class_keys) if feat.get(k) == "positive"]
-                if len(pos) == 1:
-                    class_area[pos[0]] += feat.get("area_um2", 0)
+                a = feat.get("area_um2", 0)
+                if a <= 0:
+                    continue
+                for name, class_key in zip(marker_names, class_keys):
+                    if feat.get(class_key) == "positive":
+                        marker_area[name] += a
             below_threshold = False
             for name in marker_names:
                 median_a = median_area_per_class.get(name, 0)
                 if median_a <= 0:
                     continue
-                if class_area[name] < args.min_marker_cells * median_a:
+                if marker_area[name] < args.min_marker_cells * median_a:
                     below_threshold = True
                     break
             if below_threshold:
