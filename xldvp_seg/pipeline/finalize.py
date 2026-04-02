@@ -74,7 +74,7 @@ def _export_spatialdata(
         return
 
     try:
-        from scripts.convert_to_spatialdata import export_spatialdata
+        from xldvp_seg.io.spatialdata_export import export_spatialdata
 
         output_zarr = slide_output_dir / f"{cell_type}_spatialdata.zarr"
         tiles_path = str(tiles_dir) if tiles_dir and Path(tiles_dir).exists() else None

@@ -60,10 +60,7 @@ def to_spatialdata(
     Returns:
         Path to the zarr store.
     """
-    import sys
-
-    sys.path.insert(0, str(Path(__file__).resolve().parent.parent.parent))
-    from scripts.convert_to_spatialdata import build_anndata
+    from xldvp_seg.io.spatialdata_export import build_anndata
 
     ct = cell_type or slide.cell_type or "cell"
     detections = slide.detections
