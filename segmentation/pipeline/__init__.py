@@ -11,4 +11,6 @@ Submodules:
     cli: Argument parser construction and postprocessing
     background: Local background correction (KD-tree based)
     post_detection: Post-dedup pipeline (dilate, re-extract features, bg correct)
+    shm_setup: Shared memory creation, channel loading, tissue filtering, tile sampling
+    detection_loop: GPU tile processing loop (normal non-resume path)
 """
