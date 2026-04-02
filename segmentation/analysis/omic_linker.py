@@ -132,11 +132,25 @@ class OmicLinker:
             )
             return pd.DataFrame()
 
-        # Aggregate numeric features per well (median — robust to outliers)
+        # Aggregate numeric features per well
+        # Embeddings (sam2_, resnet_, dinov2_) use mean — preserves centroid
+        # in representation space. All other features use median — robust to outliers.
         morph_cols = [c for c in df.columns if c != "well" and not c.endswith("_class")]
         numeric_morph = df[morph_cols].select_dtypes(include=[np.number]).columns
+        embedding_prefixes = ("sam2_", "resnet_", "dinov2_", "resnet_ctx_", "dinov2_ctx_")
+        embedding_cols = [
+            c for c in numeric_morph if any(c.startswith(p) for p in embedding_prefixes)
+        ]
+        scalar_cols = [c for c in numeric_morph if c not in embedding_cols]
+
         grouped = df.groupby("well")
-        well_morph = grouped[numeric_morph].median()
+        well_morph = (
+            grouped[scalar_cols].median()
+            if scalar_cols
+            else pd.DataFrame(index=grouped.size().index)
+        )
+        if embedding_cols:
+            well_morph = well_morph.join(grouped[embedding_cols].mean())
 
         # Pool cell count
         well_morph["pool_n_cells"] = df.groupby("well").size()
