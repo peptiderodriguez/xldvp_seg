@@ -103,8 +103,17 @@ class OmicLinker:
     def link(self):
         """Join morphological features to proteomics by well.
 
+        Aggregates per-cell features to well level (mean of numeric features),
+        adds pool spatial metadata (centroid, spread, cell count), then joins
+        with well-level proteomics.
+
+        Pool spatial columns added:
+            - ``pool_x_um``, ``pool_y_um``: centroid of pooled cells (mean position)
+            - ``pool_spread_um``: spatial spread (std of distances from centroid)
+            - ``pool_n_cells``: number of cells pooled into the well
+
         Returns:
-            DataFrame with rows=wells, columns=[morph features + proteins].
+            DataFrame with rows=wells, columns=[morph features + spatial + proteins].
         """
         if self._features_df is None:
             raise ValueError("No features loaded. Use from_slide() or from_detections().")
@@ -123,9 +132,57 @@ class OmicLinker:
             )
             return pd.DataFrame()
 
+        # Aggregate numeric features per well (mean)
         morph_cols = [c for c in df.columns if c != "well" and not c.endswith("_class")]
         numeric_morph = df[morph_cols].select_dtypes(include=[np.number]).columns
         well_morph = df.groupby("well")[numeric_morph].mean()
+
+        # Pool cell count
+        well_morph["pool_n_cells"] = df.groupby("well").size()
+
+        # Pool spatial position (centroid + spread)
+        if self._detections:
+            uid_to_pos = {}
+            for det in self._detections:
+                uid = det.get("uid") or det.get("id", "")
+                pos = det.get("global_center_um")
+                if pos is None:
+                    gc = det.get("global_center")
+                    px = det.get("pixel_size_um") or det.get("features", {}).get("pixel_size_um")
+                    if gc and px:
+                        pos = [gc[0] * px, gc[1] * px]
+                if pos and len(pos) == 2:
+                    uid_to_pos[uid] = pos
+
+            if uid_to_pos:
+                # Build per-detection position series aligned to df
+                pos_x = df.index.map(lambda u: uid_to_pos.get(u, [np.nan, np.nan])[0])
+                pos_y = df.index.map(lambda u: uid_to_pos.get(u, [np.nan, np.nan])[1])
+                df["_pos_x"] = pos_x.astype(float)
+                df["_pos_y"] = pos_y.astype(float)
+
+                # Centroid per well
+                well_morph["pool_x_um"] = df.groupby("well")["_pos_x"].mean()
+                well_morph["pool_y_um"] = df.groupby("well")["_pos_y"].mean()
+
+                # Spatial spread per well (std of distances from centroid)
+                spreads = {}
+                for well, grp in df.groupby("well"):
+                    xs = grp["_pos_x"].dropna().values
+                    ys = grp["_pos_y"].dropna().values
+                    if len(xs) >= 2:
+                        cx, cy = xs.mean(), ys.mean()
+                        dists = np.sqrt((xs - cx) ** 2 + (ys - cy) ** 2)
+                        spreads[well] = float(dists.std())
+                    else:
+                        spreads[well] = 0.0
+                well_morph["pool_spread_um"] = pd.Series(spreads)
+
+                logger.info(
+                    "Pool spatial: %d/%d wells have positions",
+                    well_morph["pool_x_um"].notna().sum(),
+                    len(well_morph),
+                )
 
         self._linked = well_morph.join(self._proteomics, how="inner")
         logger.info("Linked: %d wells with both morph and proteomics", len(self._linked))
