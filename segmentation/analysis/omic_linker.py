@@ -152,8 +152,10 @@ class OmicLinker:
         if embedding_cols:
             well_morph = well_morph.join(grouped[embedding_cols].mean())
 
-        # Pool cell count
+        # Pool cell count + total area
         well_morph["pool_n_cells"] = df.groupby("well").size()
+        if "area_um2" in df.columns:
+            well_morph["pool_total_area_um2"] = grouped["area_um2"].sum()
 
         # Pool spatial position (centroid + spread)
         if self._detections:
