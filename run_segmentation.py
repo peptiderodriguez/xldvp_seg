@@ -526,11 +526,6 @@ def run_pipeline(args):
                 from xldvp_seg.pipeline.post_detection import process_detections_post_dedup
 
                 mask_fn = f"{args.cell_type}_masks.h5"
-                _display_chs = None
-                if args.cell_type == "islet":
-                    _display_chs = getattr(args, "islet_display_chs", [2, 3, 5])
-                elif args.cell_type == "tissue_pattern":
-                    _display_chs = getattr(args, "tp_display_channels_list", [0, 3, 1])
 
                 # Ensure all channels from the original run are loaded (not just primary).
                 # Discover channels from detection features (ch{N}_mean keys).
@@ -811,12 +806,6 @@ def run_pipeline(args):
             from xldvp_seg.pipeline.post_detection import process_detections_post_dedup
 
             mask_fn = f"{args.cell_type}_masks.h5"
-            # Determine display channels for RGB morph extraction
-            _display_chs = None
-            if args.cell_type == "islet":
-                _display_chs = getattr(args, "islet_display_chs", [2, 3, 5])
-            elif args.cell_type == "tissue_pattern":
-                _display_chs = getattr(args, "tp_display_channels_list", [0, 3, 1])
 
             # Nuclear counting on normal detection path: load models in main process
             _count_nuclei_normal = getattr(args, "count_nuclei", False)

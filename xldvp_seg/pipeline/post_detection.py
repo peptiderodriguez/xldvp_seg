@@ -212,7 +212,7 @@ def _phase1_tile(
     """Process one tile for Phase 1 (contour extraction + quick medians).
 
     Extracts the original contour from the HDF5 segmentation mask and
-    computes quick mean intensity per channel from the **original** mask
+    computes quick median intensity per channel from the **original** mask
     region (no dilation or RDP — those are deferred to LMD export).
 
     Returns ``(n_ok, n_fail)``.
@@ -255,7 +255,7 @@ def _phase1_tile(
             n_fail += 1
             continue
 
-        # Compute once, reuse for contour extraction and quick means
+        # Compute once, reuse for contour extraction and quick medians
         original_mask = (masks_arr == label).astype(bool)
         if not original_mask.any():
             n_fail += 1
@@ -278,7 +278,7 @@ def _phase1_tile(
             for ch, data in tile_channels.items():
                 pixels = data[original_mask].astype(np.float32)
                 quick_medians[ch] = float(np.median(pixels))
-        det["_bg_quick_means"] = quick_medians  # key name kept for compatibility
+        det["_bg_quick_medians"] = quick_medians
 
     return n_ok, n_fail
 
@@ -594,7 +594,7 @@ def process_detections_post_dedup(
         # Discover which channels have data
         bg_channels: set[int] = set()
         for det in detections:
-            bg_channels.update(det.get("_bg_quick_means", {}).keys())
+            bg_channels.update(det.get("_bg_quick_medians", {}).keys())
         bg_channels_sorted = sorted(bg_channels)
 
         # Build the KD-tree once and reuse across all channels
@@ -602,7 +602,7 @@ def process_detections_post_dedup(
 
         for ch in bg_channels_sorted:
             values = np.array(
-                [d.get("_bg_quick_means", {}).get(ch, 0.0) for d in detections],
+                [d.get("_bg_quick_medians", {}).get(ch, 0.0) for d in detections],
                 dtype=np.float64,
             )
             _, ch_bg, _cached_tree_and_indices = local_background_subtract(
@@ -664,7 +664,7 @@ def process_detections_post_dedup(
 
     # --- Cleanup temporary keys ---
     for det in detections:
-        det.pop("_bg_quick_means", None)
+        det.pop("_bg_quick_medians", None)
         det.pop("_postdedup_idx", None)
 
     # ==================================================================

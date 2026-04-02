@@ -348,7 +348,14 @@ class SlideAnalysis:
         for prefix in embedding_prefixes:
             embedding_cols |= {c for c in df.columns if c.startswith(prefix)}
         # Metadata columns that belong in obs, not X
-        obs_feature_cols = {"area_um2", "n_nuclei", "nuclear_area_fraction"}
+        obs_feature_cols = {
+            "area_um2",
+            "n_nuclei",
+            "nuclear_area_fraction",
+            "nuclear_solidity",
+            "nuclear_eccentricity",
+            "largest_nucleus_um2",
+        }
         exclude = set(obs_meta_cols) | set(sam2_cols) | embedding_cols | obs_feature_cols
         x_cols = [c for c in df.columns if c not in exclude]
 
