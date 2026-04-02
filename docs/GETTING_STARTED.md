@@ -535,7 +535,7 @@ After dedup, a 3-phase post-processing pipeline runs automatically:
 
 | Phase | What it does | Parallelization |
 |-------|-------------|-----------------|
-| Phase 1 | Original mask contour extraction + quick mean extraction | ThreadPoolExecutor (32 workers) |
+| Phase 1 | Original mask contour extraction + quick median extraction | ThreadPoolExecutor (32 workers) |
 | Phase 2 | Local background estimation (KD-tree, k=30 nearest neighbors) | Single-threaded (global) |
 | Phase 3 | Intensity feature extraction from **original mask** on background-corrected pixels | ThreadPoolExecutor (32 workers) |
 

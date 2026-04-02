@@ -145,7 +145,7 @@ The pipeline follows a **detect-once, classify-later** design. All features are 
 | Slot | Content |
 |------|---------|
 | **`X`** | Morphological + per-channel intensity features (float32). `area_um2`, `n_nuclei`, `nuclear_area_fraction` are in obs, not X. |
-| **`obs`** | Per-cell metadata: `uid`, `slide_name`, `cell_type`, `pixel_size_um`, `area_um2`, `rf_prediction`, `marker_profile`, `*_class`, `n_nuclei`, `nuclear_area_fraction` |
+| **`obs`** | Per-cell metadata: `uid`, `slide_name`, `cell_type`, `pixel_size_um`, `area_um2`, `rf_prediction`, `marker_profile`, `*_class`, `n_nuclei`, `nuclear_area_fraction`, `nuclear_solidity`, `nuclear_eccentricity`, `largest_nucleus_um2` |
 | **`var`** | Feature metadata with `feature_group` column (`morph` / `channel` / `ratio` / `nuclear`) — filter with `adata[:, adata.var["feature_group"] == "morph"]` |
 | **`obsm["spatial"]`** | (N, 2) cell positions in micrometers |
 | **`obsm["X_sam2"]`** | SAM2 embeddings (256D) |
@@ -299,13 +299,13 @@ xldvp_seg/              # Main package (pip install -e .)
 ├── api/                   # Scanpy-style API (pp, tl, pl, io)
 ├── classification/        # Vessel type classifiers, feature selection
 ├── cli/                   # xlseg CLI entry point (11 subcommands)
-├── core/                  # SlideAnalysis central state object
+├── core/                  # SlideAnalysis central state object + detection schema
 ├── detection/strategies/  # 8 strategies, self-registered via @register_strategy
-├── io/                    # CZI loader, HTML export, OME-Zarr
+├── io/                    # CZI loader, HTML export, OME-Zarr, SpatialData export
 ├── lmd/                   # Well plates, contour processing (adaptive RDP + dilation)
 ├── analysis/              # OmicLinker, aggregation, nuclear counting
 ├── models/                # Model registry (SAM2, ResNet, DINOv2, brightfield FMs)
-├── pipeline/              # 9 modules: preprocessing, post_detection, background, ...
+├── pipeline/              # 11 modules: shm_setup, detection_loop, preprocessing, post_detection, ...
 ├── processing/            # Multi-GPU workers, deduplication, strategy factory
 ├── roi/                   # ROI support: pre-detection (restrict to regions) or post-detection (spatial filtering)
 └── utils/                 # JSON I/O, device handling, logging, config

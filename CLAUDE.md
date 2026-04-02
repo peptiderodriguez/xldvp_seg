@@ -73,7 +73,7 @@ PYTHONPATH=$REPO $XLDVP_PYTHON $REPO/scripts/czi_info.py /path/to/slide.czi
 
 ### Tests
 
-Tests in `tests/` using pytest (~677 tests, 26 files). Run `make test` for all with coverage. Fixtures in `conftest.py`. Tests rely on `pip install -e .` (or `PYTHONPATH=$REPO`) for `xldvp_seg.*` imports.
+Tests in `tests/` using pytest (677 tests, 26 files). Run `make test` for all with coverage. Fixtures in `conftest.py`. Tests rely on `pip install -e .` (or `PYTHONPATH=$REPO`) for `xldvp_seg.*` imports.
 
 **Development workflow:**
 ```bash
@@ -336,13 +336,13 @@ Use `/analyze` for the full interactive catalog. Key scripts beyond detect → c
 
 ```
 CZI file → czi_loader.py (channel resolution, tiling)
-         → Direct-to-SHM loading (no RAM intermediate)
+         → shm_setup.py: Direct-to-SHM loading (no RAM intermediate)
          → Preprocessing (flat-field, photobleach) on SHM views
-         → Multi-GPU tile processing (multigpu_worker.py)
+         → detection_loop.py: Multi-GPU tile processing (multigpu_worker.py)
            → Strategy.detect_in_tile() per tile
            → Feature extraction (morph + SAM2 + optional ResNet/DINOv2)
            → Per-tile HTML cache + HDF5 masks + JSON detections
-         → Deduplication (>10% pixel overlap)
+         → detection_loop.py: Deduplication (>10% pixel overlap)
          → Post-dedup pipeline (post_detection.py):
            Phase 1: contour extraction + per-cell median intensities (ThreadPool)
            Phase 2: KD-tree local background estimation (single-thread)
@@ -353,13 +353,15 @@ CZI file → czi_loader.py (channel resolution, tiling)
 
 ### Pipeline Package (`xldvp_seg/pipeline/`)
 
-`run_segmentation.py` is a ~1900-line orchestrator importing from 9 pipeline modules:
+`run_segmentation.py` is a ~950-line orchestrator importing from 11 pipeline modules:
 
 | Module | Purpose |
 |--------|---------|
 | `cli.py` | Argparse + postprocess_args() + channel-spec resolution |
 | `preprocessing.py` | Photobleach, flat-field, Reinhard normalization |
 | `detection_setup.py` | `build_detection_params()` — strategy config |
+| `shm_setup.py` | Shared memory allocation + CZI channel loading |
+| `detection_loop.py` | Tile dispatch, multi-GPU detection, shard merge, dedup |
 | `samples.py` | HTML sample creation, tile grid, islet GMM calibration |
 | `resume.py` | Checkpoint detection, tile reload, `compose_tile_rgb()` |
 | `post_detection.py` | 3-phase post-dedup (original-mask contour extraction, bg, intensity) — ThreadPool parallelized |
@@ -367,7 +369,7 @@ CZI file → czi_loader.py (channel resolution, tiling)
 | `server.py` | HTTP server + Cloudflare tunnel |
 | `background.py` | KD-tree local background correction (shared with classify_markers.py) |
 
-**Dependency DAG** (no cycles): `resume → samples`, `finalize → server`, `post_detection → background → standalone`, all others standalone.
+**Dependency DAG** (no cycles): `detection_loop → shm_setup`, `resume → samples`, `finalize → server`, `post_detection → background → standalone`, all others standalone.
 
 ### Detection Strategies (`xldvp_seg/detection/strategies/`)
 
@@ -550,6 +552,6 @@ python run_segmentation.py --czi-path slide.czi --cell-type nmj \
 
 **Core:** `run_segmentation.py` (detection), `run_lmd_export.py` (LMD XML), `train_classifier.py` (RF), `serve_html.py` (viewer). SLURM: `scripts/run_pipeline.sh` (YAML-driven launcher).
 
-**Scripts (`scripts/`):** 30+ reusable tools — `ls scripts/` for full list. Key: `czi_info.py`, `classify_markers.py`, `apply_classifier.py`, `regenerate_html.py`, `generate_multi_slide_spatial_viewer.py`, `detect_vessel_structures.py`, `count_nuclei_per_cell.py`, `sliding_window_sampling.py`.
+**Scripts (`scripts/`):** 28 reusable tools — `ls scripts/` for full list. Key: `czi_info.py`, `classify_markers.py`, `apply_classifier.py`, `regenerate_html.py`, `generate_multi_slide_spatial_viewer.py`, `detect_vessel_structures.py`, `count_nuclei_per_cell.py`, `sliding_window_sampling.py`.
 
 **Examples (`examples/`):** Project-specific scripts by experiment — `bone_marrow/`, `mesothelium/`, `islet/`, `tma/`, `liver/`, `nmj/`, `vessel/`, `tissue_pattern/`, `configs/` (YAML templates).

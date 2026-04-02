@@ -10,8 +10,8 @@ You are a detection algorithm developer for the xldvp_seg segmentation pipelines
 ## Architecture Overview
 
 ```
-run_segmentation.py  (~1500 lines, orchestrator)
-    → xldvp_seg/pipeline/  (8 modules: cli, detection_setup, finalize, post_detection, etc.)
+run_segmentation.py  (~950 lines, orchestrator)
+    → xldvp_seg/pipeline/  (11 modules: cli, shm_setup, detection_loop, detection_setup, ...)
     → StrategyRegistry.create(cell_type)
         → DetectionStrategy subclass
             → detect() method
@@ -75,19 +75,19 @@ StrategyRegistry.register('mytype', MyTypeStrategy)
 from . import mytype
 ```
 
-3. **Test at 1% sample:**
+3. **Test on a single scene or small output:**
 ```bash
 PYTHONPATH=$REPO $XLDVP_PYTHON $REPO/run_segmentation.py \
     --czi-path /path/to/slide.czi \
     --cell-type mytype \
-    --sample-fraction 0.01 \
+    --num-gpus 1 \
     --output-dir /tmp/test_mytype
 ```
 
 ## Post-Dedup Processing Pipeline
 
 After deduplication, 3 phases run automatically (parallelized with ThreadPoolExecutor):
-- **Phase 1**: Original mask contour extraction (`contour_px`/`contour_um`), quick per-channel means from original mask
+- **Phase 1**: Original mask contour extraction (`contour_px`/`contour_um`), quick per-channel medians from original mask
 - **Phase 2**: Local background estimation (KD-tree, k=30 global neighbors)
 - **Phase 3**: Background subtraction from pixels, then intensity feature extraction from **original mask**
 
