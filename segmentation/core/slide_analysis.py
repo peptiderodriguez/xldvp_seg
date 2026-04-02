@@ -347,7 +347,9 @@ class SlideAnalysis:
         embedding_cols: set[str] = set()
         for prefix in embedding_prefixes:
             embedding_cols |= {c for c in df.columns if c.startswith(prefix)}
-        exclude = set(obs_meta_cols) | set(sam2_cols) | embedding_cols
+        # Metadata columns that belong in obs, not X
+        obs_feature_cols = {"area_um2", "n_nuclei", "nuclear_area_fraction"}
+        exclude = set(obs_meta_cols) | set(sam2_cols) | embedding_cols | obs_feature_cols
         x_cols = [c for c in df.columns if c not in exclude]
 
         # --- Build X (morph + channel features) ---
@@ -359,9 +361,20 @@ class SlideAnalysis:
         # Enrich obs with top-level detection metadata
         dets = self.detections
         uids = [d.get("uid") or d.get("id", "") for d in dets]
-        obs.index = pd.Index(uids, name="uid")
+        # Ensure unique obs_names (AnnData requirement)
+        seen: dict[str, int] = {}
+        unique_uids = []
+        for u in uids:
+            if u in seen:
+                seen[u] += 1
+                unique_uids.append(f"{u}_{seen[u]}")
+            else:
+                seen[u] = 0
+                unique_uids.append(u)
+        obs.index = pd.Index(unique_uids, name="uid")
         obs["slide_name"] = [d.get("slide_name", self.slide_name) for d in dets]
         obs["cell_type"] = [d.get("cell_type", self.cell_type) for d in dets]
+        obs["pixel_size_um"] = self.pixel_size_um or np.nan
         obs["area_um2"] = [d.get("features", {}).get("area_um2", np.nan) for d in dets]
         # Nuclear counting fields (if available)
         if any("n_nuclei" in d.get("features", {}) for d in dets[:10]):
