@@ -49,7 +49,7 @@ cd xldvp_seg && claude
 - **Up to 6,478 features per cell** — morphological (78) + per-channel intensity (~15/ch) + SAM2 (256) + ResNet (4,096) + DINOv2 (2,048)
 - **Multi-GPU, multi-node** — scales from laptop to SLURM cluster with per-tile checkpointing and crash resume
 - **Detect once, classify later** — train RF classifier on annotations, score all detections in seconds without re-running detection
-- **Integrated nuclear counting** — Cellpose 2nd pass on nuclear channel runs during detection (no extra I/O), adds N:C ratio and per-nucleus features
+- **Integrated nuclear counting** — Cellpose segments nuclei within each cell during detection (no extra I/O), adds N:C ratio and per-nucleus features
 - **ROI-restricted detection** — find islet regions, TMA cores, or bone marrow areas first, then detect cells only within ROIs
 - **Full spatial analysis** — UMAP/t-SNE, Leiden clustering, Delaunay networks, tissue zonation, SpatialData/scverse integration
 - **LMD-ready** — adaptive contour simplification (10% shape tolerance) + adaptive dilation (10% area tolerance), 384-well plate assignment, XML export for Leica
