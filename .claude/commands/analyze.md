@@ -1063,7 +1063,18 @@ sc.pl.umap(adata, color="treatment")
 
 **Step 30 — Multi-omic linking** (after LMD + mass spec):
 
-DVP typically **pools multiple cells per well** for sufficient protein yield. The pipeline tracks which cells went into each well and aggregates their morphological features (mean area, mean solidity, etc.) to match the well-level proteomics measurement. For rare large cells (e.g., MKs), single-cell-per-well is sometimes feasible.
+DVP typically **pools multiple cells per well** for sufficient protein yield. `OmicLinker` tracks which cells went into each well and aggregates their features before joining with proteomics. For rare large cells (e.g., MKs), single-cell-per-well is sometimes feasible — the aggregation is a no-op in that case.
+
+**Feature aggregation per well:**
+
+| Feature type | Aggregation | Rationale |
+|-------------|-------------|-----------|
+| Morphology (area, solidity, ...) | **median** | Robust to outlier cells |
+| Channel intensity (ch0_snr, ...) | **median** | Robust to outlier pixels |
+| Embeddings (sam2_, resnet_, ...) | **mean** | Preserves centroid in representation space |
+| Spatial position | **centroid** | Pool center-of-mass on tissue (`pool_x_um`, `pool_y_um`) |
+
+Each well also gets `pool_n_cells` and `pool_spread_um` (spatial spread — how tightly clustered the pooled cells are on the tissue).
 
 ```python
 from segmentation.analysis.omic_linker import OmicLinker
@@ -1071,7 +1082,7 @@ from segmentation.analysis.omic_linker import OmicLinker
 linker = OmicLinker.from_slide(slide)
 linker.load_proteomics("proteomics.csv")    # wells × proteins (pooled measurement)
 linker.load_well_mapping("lmd_export/")     # cell → well assignment
-linked = linker.link()                       # AnnData: aggregated morph + proteomics per well
+linked = linker.link()                       # DataFrame: aggregated features + proteomics per well
 
 # Differential features between marker populations
 diff = linker.differential_features("marker_profile", "NeuN+/tdTomato-", "NeuN-/tdTomato+")

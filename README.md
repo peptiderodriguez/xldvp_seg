@@ -160,7 +160,9 @@ adata = neurons.to_anndata()  # AnnData for scanpy/scverse
 
 Multi-scene slides: each scene produces a separate `SlideAnalysis`; concatenate with `anndata.concat(adatas, label="scene")`.
 
-### Downstream Analysis (scanpy + squidpy)
+### Single-Cell Analysis (scanpy + squidpy)
+
+Each detection is a row in the AnnData — use standard scanpy workflows:
 
 ```python
 import scanpy as sc
@@ -168,7 +170,7 @@ import squidpy as sq
 
 adata = slide.to_anndata()
 
-# Standard scanpy workflow
+# Dimensionality reduction + clustering
 sc.pp.pca(adata)
 sc.pp.neighbors(adata)
 sc.tl.umap(adata)
@@ -181,22 +183,37 @@ sq.gr.nhood_enrichment(adata, cluster_key="marker_profile")
 sq.gr.spatial_autocorr(adata, mode="moran")  # spatially variable features
 ```
 
-### Proteomics Integration (after LMD + mass spec)
+### Pooled-Cell Proteomics (after LMD + mass spec)
 
-After laser microdissection and mass spectrometry, link morphological features to protein abundance. DVP typically **pools multiple cells per well** for sufficient protein yield — the pipeline tracks which cells went into each well and aggregates their morphological features to match the well-level proteomics measurement.
+DVP typically **pools multiple cells per well** for sufficient protein yield. After LMD cutting and mass spectrometry, `OmicLinker` bridges per-cell morphology to well-level proteomics:
 
 ```python
 from segmentation.analysis.omic_linker import OmicLinker
 
 linker = OmicLinker.from_slide(slide)
-linker.load_proteomics("proteomics.csv")    # wells × proteins (pooled)
+linker.load_proteomics("proteomics.csv")    # wells × proteins (pooled measurement)
 linker.load_well_mapping("lmd_export/")     # cell → well assignment
-linked = linker.link()                       # AnnData: aggregated morph + proteomics per well
+linked = linker.link()                       # DataFrame: aggregated features + proteomics per well
+```
 
+**Feature aggregation per well:**
+
+| Feature type | Aggregation | Rationale |
+|-------------|-------------|-----------|
+| Morphology (area, solidity, ...) | **median** | Robust to outlier cells |
+| Channel intensity (ch0_snr, ...) | **median** | Robust to outlier pixels |
+| Embeddings (sam2_, resnet_, ...) | **mean** | Preserves centroid in representation space |
+| Spatial position | **centroid** | Pool center-of-mass on tissue (`pool_x_um`, `pool_y_um`) |
+
+Each well also gets `pool_n_cells` (number of pooled cells) and `pool_spread_um` (spatial spread — std of distances from centroid). This enables correlating protein abundance with tissue position.
+
+```python
 # Differential analysis between marker populations
 diff = linker.differential_features("marker_profile", "NeuN+/tdTomato-", "NeuN-/tdTomato+")
 corr = linker.correlate(method="spearman")   # well-level morph ↔ protein correlations
 ```
+
+For rare large cells (e.g., MKs), single-cell-per-well is sometimes feasible — in that case the aggregation is a no-op (median of 1 = the value itself).
 
 ---
 
