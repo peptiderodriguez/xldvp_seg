@@ -280,10 +280,10 @@ class TestAnalyzeMarkerComposition:
         comp = analyze_marker_composition(
             dets, list(range(10)), ["SMA", "CD31"], ["SMA_class", "CD31_class"]
         )
-        assert comp["n_sma"] == 10
-        assert comp["n_cd31"] == 10
-        # n_sma + n_cd31 > n_cells is expected for double-positive cells
-        assert comp["n_sma"] + comp["n_cd31"] > comp["n_cells"]
+        assert comp["n_sma"] == 0  # single-positive SMA = 0
+        assert comp["n_cd31"] == 0  # single-positive CD31 = 0
+        assert comp["n_double_pos"] == 10  # all are double-positive
+        assert comp["double_pos_frac"] == 1.0
 
 
 # ---------------------------------------------------------------------------

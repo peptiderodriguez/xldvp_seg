@@ -248,25 +248,41 @@ def compute_vessel_morphometry(
 
 
 def analyze_marker_composition(detections, comp_global_indices, marker_names, class_keys):
-    """Count marker-positive cells per marker in a component."""
-    counts = dict.fromkeys(marker_names, 0)
+    """Count marker-positive cells per marker in a component.
+
+    Tracks single-positive and double-positive cells separately.
+    Double-positive cells (positive for 2+ markers) are counted in their
+    own class, NOT in individual marker counts — avoids double-counting
+    the same physical material.
+    """
     n = len(comp_global_indices)
+
+    # Classify each cell: single-positive for one marker, double-positive, or negative
+    single_counts = dict.fromkeys(marker_names, 0)
+    double_pos_count = 0
 
     for idx in comp_global_indices:
         feat = detections[idx].get("features", {})
-        for name, key in zip(marker_names, class_keys):
-            if feat.get(key) == "positive":
-                counts[name] += 1
+        pos_markers = [
+            name for name, key in zip(marker_names, class_keys) if feat.get(key) == "positive"
+        ]
+        if len(pos_markers) >= 2:
+            double_pos_count += 1
+        elif len(pos_markers) == 1:
+            single_counts[pos_markers[0]] += 1
 
-    composition = {"n_cells": n}
+    composition = {"n_cells": n, "n_double_pos": double_pos_count}
+    total_pos = double_pos_count
     for name in marker_names:
-        composition[f"n_{name.lower()}"] = counts[name]
-        composition[f"{name.lower()}_frac"] = round(counts[name] / max(n, 1), 3)
+        composition[f"n_{name.lower()}"] = single_counts[name]
+        composition[f"{name.lower()}_frac"] = round(single_counts[name] / max(n, 1), 3)
+        total_pos += single_counts[name]
+    composition["double_pos_frac"] = round(double_pos_count / max(n, 1), 3)
 
-    # Dominant marker
+    # Dominant marker (single-positive only — double-positive is its own class)
     if marker_names:
-        dominant = max(marker_names, key=lambda m: counts[m])
-        composition["dominant_marker"] = dominant if counts[dominant] > 0 else "none"
+        dominant = max(marker_names, key=lambda m: single_counts[m])
+        composition["dominant_marker"] = dominant if single_counts[dominant] > 0 else "none"
 
     return composition
 
@@ -352,15 +368,23 @@ def assign_vessel_type(morphology, composition, layering, morphometry):
     Spatial layering (has_sma_outer) provides additional confidence for artery
     classification when both SMA and CD31 are present.
     """
+    # Use single-positive fracs for typing. Double-positive cells are their own class
+    # for LMD but for vessel typing we consider total marker presence.
+    n = composition.get("n_cells", 1)
+    n_dp = composition.get("n_double_pos", 0)
     sma_frac = composition.get("sma_frac", 0)
     cd31_frac = composition.get("cd31_frac", 0)
     lyve1_frac = composition.get("lyve1_frac", 0)
+    # Total marker presence (single + double) for typing decisions
+    sma_total_frac = sma_frac + composition.get("double_pos_frac", 0)
+    cd31_total_frac = cd31_frac + composition.get("double_pos_frac", 0)
+    lyve1_total_frac = lyve1_frac + composition.get("double_pos_frac", 0)
     diameter = morphometry.get("vessel_diameter_um", 0) or 0
 
     # LYVE1+ vessels — distinguish collecting (has SMA) from initial (no SMA)
     # Morphology-aware: strips get specific longitudinal label below.
-    if lyve1_frac > 0.3 and lyve1_frac > sma_frac and morphology != "strip":
-        if sma_frac > 0.15:
+    if lyve1_total_frac > 0.3 and lyve1_total_frac > sma_total_frac and morphology != "strip":
+        if sma_total_frac > 0.15:
             return "collecting_lymphatic"  # LYVE1+ with SMA smooth muscle wall
         return "lymphatic"  # initial lymphatic, LYVE1+ only
 
@@ -380,12 +404,12 @@ def assign_vessel_type(morphology, composition, layering, morphometry):
         wall_layers = morphometry.get("wall_cell_layers", 0) or 0
         wall_ratio = wall_extent / diameter if diameter > 0 else 0
 
-        if sma_frac > 0.15 or cd31_frac > 0.15:
+        if sma_total_frac > 0.15 or cd31_total_frac > 0.15:
             # Has vascular markers — classify by wall morphometry
             has_morphometry = "wall_cell_layers" in morphometry
             is_thick_wall = wall_layers > 1.5 or wall_ratio > 0.3
 
-            if is_thick_wall or (has_sma_outer and sma_frac > 0.3):
+            if is_thick_wall or (has_sma_outer and sma_total_frac > 0.3):
                 # Thick wall OR confirmed SMA-outer layering → artery/arteriole
                 if diameter > 100:
                     return "artery"
@@ -393,10 +417,10 @@ def assign_vessel_type(morphology, composition, layering, morphometry):
                     return "arteriole"
                 else:
                     return "artery"
-            elif not has_morphometry and sma_frac > cd31_frac:
+            elif not has_morphometry and sma_total_frac > cd31_total_frac:
                 # No morphometry available, SMA dominant → likely muscular vessel
                 return "artery"
-            elif cd31_frac > sma_frac:
+            elif cd31_total_frac > sma_total_frac:
                 # CD31 dominant with thin wall = vein/venule
                 if diameter > 50:
                     return "vein"
@@ -404,7 +428,7 @@ def assign_vessel_type(morphology, composition, layering, morphometry):
                     return "venule"
                 else:
                     return "vein"
-            elif sma_frac > cd31_frac:
+            elif sma_total_frac > cd31_total_frac:
                 # SMA dominant but thin wall → arteriole (still muscular)
                 if diameter > 100:
                     return "artery"
@@ -417,16 +441,16 @@ def assign_vessel_type(morphology, composition, layering, morphometry):
         else:
             return "unclassified"
     elif morphology == "strip":
-        if sma_frac > 0.3:
+        if sma_total_frac > 0.3:
             return "artery_longitudinal"
-        elif cd31_frac > 0.3:
+        elif cd31_total_frac > 0.3:
             return "vein_longitudinal"
-        elif lyve1_frac > 0.1:
+        elif lyve1_total_frac > 0.1:
             return "lymphatic_longitudinal"
         else:
             return "unclassified"
     elif morphology == "cluster":
-        if cd31_frac > 0.5 and composition.get("n_cells", 0) < 15:
+        if cd31_total_frac > 0.5 and composition.get("n_cells", 0) < 15:
             return "capillary"
         return "unclassified"
 
@@ -574,27 +598,34 @@ def main():
     class_keys_map = dict(zip(marker_names, class_keys))
     logger.info("Markers: %s", marker_names)
 
-    # Pre-compute median cell area per marker (for min-marker-cells area-equivalent filter)
-    median_area_per_marker = {}
+    # Pre-compute median cell area per class (single-positive per marker + double-positive)
+    # for min-marker-cells area-equivalent filter
+    median_area_per_class = {}
     if args.min_marker_cells > 0:
-        for name, class_key in zip(marker_names, class_keys):
-            areas = []
-            for idx in positive_idx:
-                feat = detections[idx].get("features", {})
-                if feat.get(class_key) == "positive":
-                    a = feat.get("area_um2", 0)
-                    if a > 0:
-                        areas.append(a)
+        # Collect areas by class: single-positive per marker, double-positive
+        class_areas = {name: [] for name in marker_names}
+        class_areas["double_pos"] = []
+        for idx in positive_idx:
+            feat = detections[idx].get("features", {})
+            pos = [n for n, k in zip(marker_names, class_keys) if feat.get(k) == "positive"]
+            a = feat.get("area_um2", 0)
+            if a <= 0:
+                continue
+            if len(pos) >= 2:
+                class_areas["double_pos"].append(a)
+            elif len(pos) == 1:
+                class_areas[pos[0]].append(a)
+        for cls, areas in class_areas.items():
             if areas:
-                median_area_per_marker[name] = float(np.median(areas))
+                median_area_per_class[cls] = float(np.median(areas))
                 logger.info(
                     "  %s: median cell area = %.1f µm² (%d cells)",
-                    name,
-                    median_area_per_marker[name],
+                    cls,
+                    median_area_per_class[cls],
                     len(areas),
                 )
             else:
-                median_area_per_marker[name] = 0
+                median_area_per_class[cls] = 0
 
     # Build graph + find components
     logger.info("Building radius graph (r=%.0f µm)...", args.radius)
@@ -626,25 +657,43 @@ def main():
         # Marker composition (cheap — do before expensive graph metrics)
         composition = analyze_marker_composition(detections, comp_global, marker_names, class_keys)
 
-        # Filter: require area equivalent of min_marker_cells for EACH marker.
-        # Total area of marker+ cells in this component must be ≥ N × median cell area.
-        # This ensures enough material for mass spec per marker type.
+        # Filter: require area equivalent of min_marker_cells for EACH class.
+        # Classes: single-positive per marker + double-positive.
+        # Total area of each class in this component must be ≥ N × median cell area.
+        # This ensures enough LMD material for mass spec per cell type.
         if args.min_marker_cells > 0:
             below_threshold = False
+            # Check each single-positive marker class
             for name, class_key in zip(marker_names, class_keys):
-                median_a = median_area_per_marker.get(name, 0)
+                median_a = median_area_per_class.get(name, 0)
                 if median_a <= 0:
                     continue
                 min_area = args.min_marker_cells * median_a
-                # Sum actual area of this marker's cells in the component
                 total_area = 0.0
                 for g_idx in comp_global:
                     feat = detections[g_idx].get("features", {})
-                    if feat.get(class_key) == "positive":
+                    # Single-positive only: positive for this marker, not others
+                    pos = [n for n, k in zip(marker_names, class_keys) if feat.get(k) == "positive"]
+                    if len(pos) == 1 and pos[0] == name:
                         total_area += feat.get("area_um2", 0)
                 if total_area < min_area:
                     below_threshold = True
                     break
+            # Also check double-positive class
+            if not below_threshold:
+                median_a = median_area_per_class.get("double_pos", 0)
+                if median_a > 0:
+                    min_area = args.min_marker_cells * median_a
+                    total_area = 0.0
+                    for g_idx in comp_global:
+                        feat = detections[g_idx].get("features", {})
+                        pos = [
+                            n for n, k in zip(marker_names, class_keys) if feat.get(k) == "positive"
+                        ]
+                        if len(pos) >= 2:
+                            total_area += feat.get("area_um2", 0)
+                    if total_area < min_area:
+                        below_threshold = True
             if below_threshold:
                 continue
 
