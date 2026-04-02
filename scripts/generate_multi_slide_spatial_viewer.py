@@ -1391,6 +1391,7 @@ def generate_html(
 </head>
 <body>
 <div id="app">
+  <button id="floating-reset-zoom" style="position:fixed;bottom:20px;right:20px;z-index:1000;padding:8px 16px;background:#333;color:#fff;border:1px solid #555;border-radius:6px;cursor:pointer;font-size:13px;opacity:0.85;" onmouseover="this.style.opacity='1'" onmouseout="this.style.opacity='0.85'">Reset Zoom</button>
   <div id="sidebar">
     <div>
       <h2>{title_escaped}</h2>
@@ -1440,7 +1441,7 @@ def generate_html(
     <div class="sidebar-section">
       <h3>KDE Density</h3>
       <div class="ctrl-row">
-        <label style="min-width:auto"><input type="checkbox" id="show-kde" checked> Show</label>
+        <label style="min-width:auto"><input type="checkbox" id="show-kde"> Show</label>
       </div>
       <div class="ctrl-row">
         <label>Bandwidth</label>
@@ -1458,8 +1459,8 @@ def generate_html(
         <span class="val" id="kde-op-val">0.50</span>
       </div>
       <div class="ctrl-row">
-        <label style="min-width:auto"><input type="checkbox" id="kde-fill" checked> Fill</label>
-        <label style="min-width:auto"><input type="checkbox" id="kde-lines" checked> Lines</label>
+        <label style="min-width:auto"><input type="checkbox" id="kde-fill"> Fill</label>
+        <label style="min-width:auto"><input type="checkbox" id="kde-lines"> Lines</label>
       </div>
     </div>
 
@@ -1479,8 +1480,8 @@ def generate_html(
         <span class="val" id="min-cells-val">{default_min_cells}</span>
       </div>
       <div class="ctrl-row">
-        <label style="min-width:auto"><input type="checkbox" id="show-hulls" checked> Hulls</label>
-        <label style="min-width:auto"><input type="checkbox" id="show-labels" checked> Labels</label>
+        <label style="min-width:auto"><input type="checkbox" id="show-hulls"> Hulls</label>
+        <label style="min-width:auto"><input type="checkbox" id="show-labels"> Labels</label>
       </div>
       <div id="cluster-status" style="font-size:10px;color:#777;"></div>
     </div>
@@ -1696,12 +1697,12 @@ FLUOR_CH_B64.length = 0;
 // ===================================================================
 const hidden = new Set();
 let dotSize = 3, dotAlpha = 0.7;
-let showHulls = true, showLabels = true;
+let showHulls = false, showLabels = false;
 let drawMode = 'pan';  // pan | circle | rect | polygon
 
 // KDE state
 const KDE_RADII = [50, 100, 200, 300, 400, 500, 600, 700, 800, 1000];
-let showKDE = true, kdeBWIdx = 3, kdeLevels = 3, kdeAlpha = 0.5, kdeFill = true, kdeLines = true;
+let showKDE = false, kdeBWIdx = 3, kdeLevels = 3, kdeAlpha = 0.5, kdeFill = false, kdeLines = false;
 const kdeCache = new Map();  // slideIdx -> {bwIdx, levels, hiddenKey, data}
 let kdeDebounceTimer = null;
 
@@ -3346,13 +3347,15 @@ function initControls() {
     scheduleRenderAll();
   };
 
-  // Reset zoom
-  document.getElementById('btn-reset-zoom').onclick = () => {
+  // Reset zoom (sidebar button + floating button)
+  const resetZoomFn = () => {
     resizePanels();
     panels.forEach(fitPanel);
     scheduleRenderAll();
     panels.forEach(p => renderDrawOverlay(p));
   };
+  document.getElementById('btn-reset-zoom').onclick = resetZoomFn;
+  document.getElementById('floating-reset-zoom').onclick = resetZoomFn;
 
   // Slide jump
   document.getElementById('slide-select').onchange = e => {
@@ -3652,6 +3655,12 @@ def main():
         "Default: first 3 channels (0,1,2).",
     )
     parser.add_argument(
+        "--channel-names",
+        default=None,
+        help='Override channel names for R,G,B legend (e.g. "SMA,CD31,nuc"). '
+        "Default: auto-detected from CZI filename.",
+    )
+    parser.add_argument(
         "--scale-factor",
         type=float,
         default=0.0625,
@@ -3938,20 +3947,60 @@ def main():
                         f"Ensure detections have both 'area' and 'area_um2' features."
                     )
 
-            # Determine channel names from CZI filename markers.
-            # NOTE: This is best-effort — filename marker order may NOT match CZI
-            # channel order (which is determined by detector/acquisition config).
-            # For accurate names, use czi_info.py metadata. Here we fall back to
-            # generic names (Ch0, Ch1...) when marker count doesn't cover the index.
+            # Determine channel names by matching filename markers to CZI channels
+            # via wavelength. Filename marker order ≠ CZI channel order, so we
+            # resolve each CZI channel's wavelength to the filename marker name.
             from segmentation.io.czi_loader import parse_markers_from_filename
 
             markers = parse_markers_from_filename(czi_path.name)
+            # Build wavelength → marker name lookup from filename
+            wl_to_name = {}
+            for m in markers:
+                if m.get("wavelength") and m["wavelength"] not in wl_to_name:
+                    wl_to_name[m["wavelength"]] = m["name"]
+
+            # Get CZI channel wavelengths from metadata
+            try:
+                import re
+
+                import aicspylibczi
+
+                czi_file = aicspylibczi.CziFile(str(czi_path))
+                czi_root = czi_file.meta
+                czi_channels = []
+                seen = set()
+                for ch_el in czi_root.iter("Channel"):
+                    ch_name = ch_el.get("Name", "")
+                    if ch_name in seen:
+                        continue  # skip duplicates from multi-scene metadata
+                    seen.add(ch_name)
+                    # Extract excitation wavelength: try metadata field first,
+                    # then parse from channel name (e.g., 'AF488' → 488)
+                    ex_wl = None
+                    for ex in ch_el.iter("ExcitationWavelength"):
+                        try:
+                            ex_wl = int(round(float(ex.text)))
+                        except (TypeError, ValueError):
+                            pass
+                    if ex_wl is None and ch_name:
+                        wl_match = re.search(r"(\d{3})", ch_name)
+                        if wl_match:
+                            ex_wl = int(wl_match.group(1))
+                    czi_channels.append({"name": ch_name, "wavelength": ex_wl})
+            except Exception as e:
+                print(f"  Warning: could not parse CZI channel metadata: {e}")
+                czi_channels = []
+
             this_ch_names = []
             for ch_idx in display_channels:
-                if ch_idx < len(markers):
-                    this_ch_names.append(markers[ch_idx]["name"])
-                else:
-                    this_ch_names.append(f"Ch{ch_idx}")
+                ch_label = f"Ch{ch_idx}"
+                if ch_idx < len(czi_channels):
+                    wl = czi_channels[ch_idx].get("wavelength")
+                    if wl and wl in wl_to_name:
+                        ch_label = wl_to_name[wl]
+                    elif wl:
+                        ch_label = f"{wl}nm"
+                this_ch_names.append(ch_label)
             if ch_names_collected is None:
                 ch_names_collected = this_ch_names
 
@@ -3982,6 +4031,9 @@ def main():
             )
 
         ch_names = ch_names_collected
+        # CLI override for channel names (when auto-detection from filename is wrong)
+        if args.channel_names:
+            ch_names = [n.strip() for n in args.channel_names.split(",")][:3]
         if not fluor_data:
             fluor_data = None
             print("  No fluorescence data loaded")
