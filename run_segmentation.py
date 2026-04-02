@@ -473,232 +473,234 @@ def run_pipeline(args):
 
     # ---- Resume fast-path: skip detection, go straight to dedup/HTML/CSV ----
     if skip_detection:
-        is_multiscale = args.cell_type == "vessel" and getattr(args, "multi_scale", False)
+        try:
+            is_multiscale = args.cell_type == "vessel" and getattr(args, "multi_scale", False)
 
-        # Run dedup if reloaded from tiles (not from deduped detections JSON)
-        if (
-            not skip_dedup
-            and args.tile_overlap > 0
-            and len(all_detections) > 0
-            and not is_multiscale
-        ):
-            pre_dedup = len(all_detections)
-            mask_fn = f"{args.cell_type}_masks.h5"
-            dedup_sort = "confidence" if getattr(args, "dedup_by_confidence", False) else "area"
-            if getattr(args, "dedup_method", "mask_overlap") == "iou_nms":
-                from xldvp_seg.processing.deduplication import deduplicate_by_iou_nms
+            # Run dedup if reloaded from tiles (not from deduped detections JSON)
+            if (
+                not skip_dedup
+                and args.tile_overlap > 0
+                and len(all_detections) > 0
+                and not is_multiscale
+            ):
+                pre_dedup = len(all_detections)
+                mask_fn = f"{args.cell_type}_masks.h5"
+                dedup_sort = "confidence" if getattr(args, "dedup_by_confidence", False) else "area"
+                if getattr(args, "dedup_method", "mask_overlap") == "iou_nms":
+                    from xldvp_seg.processing.deduplication import deduplicate_by_iou_nms
 
-                all_detections = deduplicate_by_iou_nms(
-                    all_detections,
-                    tiles_dir,
-                    iou_threshold=getattr(args, "iou_threshold", 0.2),
-                    mask_filename=mask_fn,
-                    sort_by=dedup_sort,
-                )
-            else:
-                from xldvp_seg.processing.deduplication import deduplicate_by_mask_overlap
-
-                all_detections = deduplicate_by_mask_overlap(
-                    all_detections,
-                    tiles_dir,
-                    min_overlap_fraction=0.1,
-                    mask_filename=mask_fn,
-                    sort_by=dedup_sort,
-                )
-            logger.info(f"Dedup (resume): {pre_dedup} -> {len(all_detections)}")
-
-        # Post-dedup processing (resume path) — skip already-completed steps
-        _has_bg = False
-        _has_contour = False
-        if all_detections:
-            _sample_feat = all_detections[0].get("features", {})
-            _has_bg = any(k.endswith("_background") for k in _sample_feat)
-            _has_contour = (
-                all_detections[0].get("contour_px") is not None
-                or all_detections[0].get("contour_dilated_px") is not None
-            )
-
-        _want_contour = args.contour_processing and not _has_contour
-        _want_bg = args.background_correction and not _has_bg
-
-        if len(all_detections) > 0 and (_want_contour or _want_bg):
-            from xldvp_seg.pipeline.post_detection import process_detections_post_dedup
-
-            mask_fn = f"{args.cell_type}_masks.h5"
-            _display_chs = None
-            if args.cell_type == "islet":
-                _display_chs = getattr(args, "islet_display_chs", [2, 3, 5])
-            elif args.cell_type == "tissue_pattern":
-                _display_chs = getattr(args, "tp_display_channels_list", [0, 3, 1])
-
-            # Ensure all channels from the original run are loaded (not just primary).
-            # Discover channels from detection features (ch{N}_mean keys).
-            _needed_channels: set[int] = set()
-            _sample_keys = all_detections[0].get("features", {}).keys()
-            for _k in _sample_keys:
-                if _k.startswith("ch") and _k.endswith("_mean"):
-                    _ch_str = _k[2:].replace("_mean", "")
-                    try:
-                        _needed_channels.add(int(_ch_str))
-                    except ValueError:
-                        pass
-            if not _needed_channels:
-                # Fallback: at least load all CZI channels
-                try:
-                    _dims = loader.reader.get_dims_shape()[0]
-                    _n_ch = _dims.get("C", (0, 3))[1]
-                    _needed_channels = set(range(_n_ch))
-                except Exception:
-                    _needed_channels = {args.channel}
-
-            for _ch in sorted(_needed_channels):
-                if _ch not in all_channel_data:
-                    logger.info(f"  Loading channel {_ch} for post-dedup processing (resume)...")
-                    loader.load_channel(_ch)
-                    all_channel_data[_ch] = loader.get_channel_data(_ch)
-
-            # If extra channels were loaded outside SHM, fall back to loader
-            # (SHM reader only sees channels in ch_to_slot)
-            _extra_loaded = _needed_channels - set(ch_to_slot.keys())
-            _use_shm = not _extra_loaded
-            if _extra_loaded:
-                logger.info(
-                    f"  Extra channels {sorted(_extra_loaded)} loaded to RAM (not SHM). "
-                    f"Using loader fallback for post-dedup."
-                )
-
-            if _has_contour and not _has_bg:
-                logger.info("Contours already processed — running background correction only")
-            elif _has_bg and not _has_contour:
-                logger.info("Background already corrected — running contour processing only")
-
-            # Nuclear counting: resolve channel and load models if --count-nuclei
-            # Models are loaded in GPU worker subprocesses, not the main process,
-            # so we need to load them here explicitly for Phase 4.
-            _count_nuclei = getattr(args, "count_nuclei", False)
-            _nuc_ch_for_counting = getattr(args, "nuc_channel_for_counting", None)
-            _cp_model_for_nuc = None
-            _sam2_for_nuc = None
-            _nuc_model_mgr = None
-            if _count_nuclei:
-                # Auto-detect nuclear channel: check explicit arg first,
-                # then cellpose_input_channels (2nd element = nuc),
-                # then cell-type-specific defaults
-                if _nuc_ch_for_counting is None:
-                    cp_input = getattr(args, "cellpose_input_channels", None)
-                    if cp_input:
-                        parts = str(cp_input).split(",")
-                        if len(parts) >= 2:
-                            try:
-                                _nuc_ch_for_counting = int(parts[1].strip())
-                            except ValueError:
-                                pass
-                if _nuc_ch_for_counting is None and args.cell_type == "islet":
-                    _nuc_ch_for_counting = getattr(args, "nuclear_channel", None)
-                if _nuc_ch_for_counting is None and args.cell_type == "tissue_pattern":
-                    _nuc_ch_for_counting = getattr(args, "tp_nuclear_channel", None)
-
-                if _nuc_ch_for_counting is not None:
-                    from xldvp_seg.models.manager import ModelManager
-
-                    _nuc_model_mgr = ModelManager()
-                    _cp_model_for_nuc = _nuc_model_mgr.cellpose
-                    _sam2_for_nuc = _nuc_model_mgr.sam2_predictor
-                    logger.info(f"Nuclear counting enabled: nuc_channel={_nuc_ch_for_counting}")
+                    all_detections = deduplicate_by_iou_nms(
+                        all_detections,
+                        tiles_dir,
+                        iou_threshold=getattr(args, "iou_threshold", 0.2),
+                        mask_filename=mask_fn,
+                        sort_by=dedup_sort,
+                    )
                 else:
-                    logger.warning(
-                        "--count-nuclei requires --nuc-channel-for-counting or "
-                        "--channel-spec with nuc=... to identify the nuclear channel"
+                    from xldvp_seg.processing.deduplication import deduplicate_by_mask_overlap
+
+                    all_detections = deduplicate_by_mask_overlap(
+                        all_detections,
+                        tiles_dir,
+                        min_overlap_fraction=0.1,
+                        mask_filename=mask_fn,
+                        sort_by=dedup_sort,
+                    )
+                logger.info(f"Dedup (resume): {pre_dedup} -> {len(all_detections)}")
+
+            # Post-dedup processing (resume path) — skip already-completed steps
+            _has_bg = False
+            _has_contour = False
+            if all_detections:
+                _sample_feat = all_detections[0].get("features", {})
+                _has_bg = any(k.endswith("_background") for k in _sample_feat)
+                _has_contour = (
+                    all_detections[0].get("contour_px") is not None
+                    or all_detections[0].get("contour_dilated_px") is not None
+                )
+
+            _want_contour = args.contour_processing and not _has_contour
+            _want_bg = args.background_correction and not _has_bg
+
+            if len(all_detections) > 0 and (_want_contour or _want_bg):
+                from xldvp_seg.pipeline.post_detection import process_detections_post_dedup
+
+                mask_fn = f"{args.cell_type}_masks.h5"
+                _display_chs = None
+                if args.cell_type == "islet":
+                    _display_chs = getattr(args, "islet_display_chs", [2, 3, 5])
+                elif args.cell_type == "tissue_pattern":
+                    _display_chs = getattr(args, "tp_display_channels_list", [0, 3, 1])
+
+                # Ensure all channels from the original run are loaded (not just primary).
+                # Discover channels from detection features (ch{N}_mean keys).
+                _needed_channels: set[int] = set()
+                _sample_keys = all_detections[0].get("features", {}).keys()
+                for _k in _sample_keys:
+                    if _k.startswith("ch") and _k.endswith("_mean"):
+                        _ch_str = _k[2:].replace("_mean", "")
+                        try:
+                            _needed_channels.add(int(_ch_str))
+                        except ValueError:
+                            pass
+                if not _needed_channels:
+                    # Fallback: at least load all CZI channels
+                    try:
+                        _dims = loader.reader.get_dims_shape()[0]
+                        _n_ch = _dims.get("C", (0, 3))[1]
+                        _needed_channels = set(range(_n_ch))
+                    except Exception:
+                        _needed_channels = {args.channel}
+
+                for _ch in sorted(_needed_channels):
+                    if _ch not in all_channel_data:
+                        logger.info(
+                            f"  Loading channel {_ch} for post-dedup processing (resume)..."
+                        )
+                        loader.load_channel(_ch)
+                        all_channel_data[_ch] = loader.get_channel_data(_ch)
+
+                # If extra channels were loaded outside SHM, fall back to loader
+                # (SHM reader only sees channels in ch_to_slot)
+                _extra_loaded = _needed_channels - set(ch_to_slot.keys())
+                _use_shm = not _extra_loaded
+                if _extra_loaded:
+                    logger.info(
+                        f"  Extra channels {sorted(_extra_loaded)} loaded to RAM (not SHM). "
+                        f"Using loader fallback for post-dedup."
                     )
 
-            process_detections_post_dedup(
-                all_detections,
-                tiles_dir,
-                pixel_size_um,
-                mask_filename=mask_fn,
-                slide_shm_arr=slide_shm_arr if _use_shm else None,
-                ch_to_slot=ch_to_slot if _use_shm else None,
-                x_start=x_start,
-                y_start=y_start,
-                loader=loader,
-                ch_indices=sorted(all_channel_data.keys()),
-                tile_size=args.tile_size,
-                contour_processing=_want_contour,
-                dilation_um=getattr(args, "dilation_um", 0.5),
-                rdp_epsilon=getattr(args, "rdp_epsilon", 5.0),
-                background_correction=_want_bg,
-                bg_neighbors=getattr(args, "bg_neighbors", 30),
-                count_nuclei=_count_nuclei,
-                nuc_channel_idx=_nuc_ch_for_counting,
-                min_nuclear_area=getattr(args, "min_nuclear_area", 50),
-                cellpose_model=_cp_model_for_nuc,
-                sam2_predictor=_sam2_for_nuc,
-            )
+                if _has_contour and not _has_bg:
+                    logger.info("Contours already processed — running background correction only")
+                elif _has_bg and not _has_contour:
+                    logger.info("Background already corrected — running contour processing only")
 
-            # Cleanup nuclear counting models (free GPU memory before HTML generation)
-            if _nuc_model_mgr is not None:
-                _nuc_model_mgr.cleanup()
-                _nuc_model_mgr = None
+                # Nuclear counting: resolve channel and load models if --count-nuclei
+                # Models are loaded in GPU worker subprocesses, not the main process,
+                # so we need to load them here explicitly for Phase 4.
+                _count_nuclei = getattr(args, "count_nuclei", False)
+                _nuc_ch_for_counting = getattr(args, "nuc_channel_for_counting", None)
                 _cp_model_for_nuc = None
                 _sam2_for_nuc = None
+                _nuc_model_mgr = None
+                if _count_nuclei:
+                    # Auto-detect nuclear channel: check explicit arg first,
+                    # then cellpose_input_channels (2nd element = nuc),
+                    # then cell-type-specific defaults
+                    if _nuc_ch_for_counting is None:
+                        cp_input = getattr(args, "cellpose_input_channels", None)
+                        if cp_input:
+                            parts = str(cp_input).split(",")
+                            if len(parts) >= 2:
+                                try:
+                                    _nuc_ch_for_counting = int(parts[1].strip())
+                                except ValueError:
+                                    pass
+                    if _nuc_ch_for_counting is None and args.cell_type == "islet":
+                        _nuc_ch_for_counting = getattr(args, "nuclear_channel", None)
+                    if _nuc_ch_for_counting is None and args.cell_type == "tissue_pattern":
+                        _nuc_ch_for_counting = getattr(args, "tp_nuclear_channel", None)
 
-            # Checkpoint: save post-processed detections
-            _postdedup_file = slide_output_dir / f"{args.cell_type}_detections_postdedup.json"
-            atomic_json_dump(all_detections, _postdedup_file)
-            logger.info(
-                f"Checkpoint: saved {len(all_detections)} post-dedup detections to {_postdedup_file.name}"
-            )
-        elif _has_bg and _has_contour:
-            logger.info("Detections already post-processed — skipping")
+                    if _nuc_ch_for_counting is not None:
+                        from xldvp_seg.models.manager import ModelManager
 
-        # Regenerate HTML if needed (requires CZI + tile masks)
-        all_samples = []
-        if not skip_html:
-            # Ensure all channels are loaded for HTML generation
-            if args.all_channels or (
-                args.cell_type == "cell" and getattr(args, "cellpose_input_channels", None)
-            ):
-                try:
-                    dims = loader.reader.get_dims_shape()[0]
-                    _n_ch = dims.get("C", (0, 3))[1]
-                except Exception:
-                    _n_ch = 3
-                for ch in range(_n_ch):
-                    if ch not in all_channel_data:
-                        logger.info(f"  Loading channel {ch} for HTML generation (resume)...")
-                        loader.load_channel(ch)
-                        all_channel_data[ch] = loader.get_channel_data(ch)
+                        _nuc_model_mgr = ModelManager()
+                        _cp_model_for_nuc = _nuc_model_mgr.cellpose
+                        _sam2_for_nuc = _nuc_model_mgr.sam2_predictor
+                        logger.info(f"Nuclear counting enabled: nuc_channel={_nuc_ch_for_counting}")
+                    else:
+                        logger.warning(
+                            "--count-nuclei requires --nuc-channel-for-counting or "
+                            "--channel-spec with nuc=... to identify the nuclear channel"
+                        )
 
-            logger.info(
-                f"Regenerating HTML for {len(all_detections)} detections from saved tiles..."
-            )
-            all_samples = _resume_generate_html_samples(
-                args,
-                all_detections,
-                tiles_dir,
-                all_channel_data,
-                loader,
-                pixel_size_um,
-                slide_name,
-                x_start,
-                y_start,
-            )
-            logger.info(f"Generated {len(all_samples)} HTML samples from resume path")
-
-        # Subsample HTML by fraction if configured
-        _html_frac = args.html_sample_fraction
-        if _html_frac > 0 and len(all_samples) > 0 and len(all_detections) > 0:
-            import random
-
-            target = max(100, int(len(all_detections) * _html_frac))
-            if len(all_samples) > target:
-                logger.info(
-                    f"HTML sample fraction {_html_frac}: subsampling {len(all_samples)} -> {target}"
+                process_detections_post_dedup(
+                    all_detections,
+                    tiles_dir,
+                    pixel_size_um,
+                    mask_filename=mask_fn,
+                    slide_shm_arr=slide_shm_arr if _use_shm else None,
+                    ch_to_slot=ch_to_slot if _use_shm else None,
+                    x_start=x_start,
+                    y_start=y_start,
+                    loader=loader,
+                    ch_indices=sorted(all_channel_data.keys()),
+                    tile_size=args.tile_size,
+                    contour_processing=_want_contour,
+                    dilation_um=getattr(args, "dilation_um", 0.5),
+                    rdp_epsilon=getattr(args, "rdp_epsilon", 5.0),
+                    background_correction=_want_bg,
+                    bg_neighbors=getattr(args, "bg_neighbors", 30),
+                    count_nuclei=_count_nuclei,
+                    nuc_channel_idx=_nuc_ch_for_counting,
+                    min_nuclear_area=getattr(args, "min_nuclear_area", 50),
+                    cellpose_model=_cp_model_for_nuc,
+                    sam2_predictor=_sam2_for_nuc,
                 )
-                all_samples = random.sample(all_samples, target)
 
-        # Run the same post-processing as the normal path (HTML export, CSV, summary)
-        try:
+                # Cleanup nuclear counting models (free GPU memory before HTML generation)
+                if _nuc_model_mgr is not None:
+                    _nuc_model_mgr.cleanup()
+                    _nuc_model_mgr = None
+                    _cp_model_for_nuc = None
+                    _sam2_for_nuc = None
+
+                # Checkpoint: save post-processed detections
+                _postdedup_file = slide_output_dir / f"{args.cell_type}_detections_postdedup.json"
+                atomic_json_dump(all_detections, _postdedup_file)
+                logger.info(
+                    f"Checkpoint: saved {len(all_detections)} post-dedup detections to {_postdedup_file.name}"
+                )
+            elif _has_bg and _has_contour:
+                logger.info("Detections already post-processed — skipping")
+
+            # Regenerate HTML if needed (requires CZI + tile masks)
+            all_samples = []
+            if not skip_html:
+                # Ensure all channels are loaded for HTML generation
+                if args.all_channels or (
+                    args.cell_type == "cell" and getattr(args, "cellpose_input_channels", None)
+                ):
+                    try:
+                        dims = loader.reader.get_dims_shape()[0]
+                        _n_ch = dims.get("C", (0, 3))[1]
+                    except Exception:
+                        _n_ch = 3
+                    for ch in range(_n_ch):
+                        if ch not in all_channel_data:
+                            logger.info(f"  Loading channel {ch} for HTML generation (resume)...")
+                            loader.load_channel(ch)
+                            all_channel_data[ch] = loader.get_channel_data(ch)
+
+                logger.info(
+                    f"Regenerating HTML for {len(all_detections)} detections from saved tiles..."
+                )
+                all_samples = _resume_generate_html_samples(
+                    args,
+                    all_detections,
+                    tiles_dir,
+                    all_channel_data,
+                    loader,
+                    pixel_size_um,
+                    slide_name,
+                    x_start,
+                    y_start,
+                )
+                logger.info(f"Generated {len(all_samples)} HTML samples from resume path")
+
+            # Subsample HTML by fraction if configured
+            _html_frac = args.html_sample_fraction
+            if _html_frac > 0 and len(all_samples) > 0 and len(all_detections) > 0:
+                import random
+
+                target = max(100, int(len(all_detections) * _html_frac))
+                if len(all_samples) > target:
+                    logger.info(
+                        f"HTML sample fraction {_html_frac}: subsampling {len(all_samples)} -> {target}"
+                    )
+                    all_samples = random.sample(all_samples, target)
+
+            # Run the same post-processing as the normal path (HTML export, CSV, summary)
             _finish_pipeline(
                 args,
                 all_detections,
