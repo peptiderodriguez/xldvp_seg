@@ -6,7 +6,7 @@
 [![Python 3.10+](https://img.shields.io/badge/python-3.10%20%7C%203.11-blue.svg)](https://www.python.org/downloads/)
 [![License: MIT](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
 [![Code style: black](https://img.shields.io/badge/code%20style-black-000000.svg)](https://github.com/psf/black)
-![Tests: 666](https://img.shields.io/badge/tests-666%20collected-brightgreen.svg)
+[![codecov](https://codecov.io/gh/peptiderodriguez/xldvp_seg/branch/main/graph/badge.svg)](https://codecov.io/gh/peptiderodriguez/xldvp_seg)
 
 Detect cells in whole-slide CZI images, classify them by type and marker expression, analyze spatial organization, and export selected cells for laser microdissection and mass spectrometry. End-to-end DVP (Deep Visual Proteomics) from slide to spatial proteomics.
 

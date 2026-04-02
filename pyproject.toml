@@ -70,7 +70,9 @@ xlseg = "segmentation.cli.main:cli"
 
 [project.urls]
 "Homepage" = "https://github.com/peptiderodriguez/xldvp_seg"
+"Repository" = "https://github.com/peptiderodriguez/xldvp_seg"
 "Bug Tracker" = "https://github.com/peptiderodriguez/xldvp_seg/issues"
+"Documentation" = "https://github.com/peptiderodriguez/xldvp_seg/blob/main/docs/GETTING_STARTED.md"
 
 [tool.setuptools]
 py-modules = [

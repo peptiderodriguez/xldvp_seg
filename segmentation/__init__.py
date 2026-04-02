@@ -15,8 +15,13 @@ Usage:
     from segmentation.utils import get_logger, setup_logging, load_config
 """
 
-# Version
-__version__ = "2.0.0"
+# Version — single source of truth is pyproject.toml
+try:
+    from importlib.metadata import version as _get_version
+
+    __version__ = _get_version("xldvp_seg")
+except Exception:
+    __version__ = "2.0.0"  # fallback for uninstalled editable mode
 
 # Submodule imports are available directly
 # Use lazy imports to avoid circular dependencies and unnecessary loading
