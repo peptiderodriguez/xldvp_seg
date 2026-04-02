@@ -41,6 +41,41 @@ cd xldvp_seg && claude
 /new-experiment                 # Fast-track: CZI inspect → YAML config → launch
 ```
 
+### How the Claude agent works
+
+The package ships with a custom Claude Code configuration (`.claude/commands/`, `.claude/agents/`, `CLAUDE.md`) that turns Claude into a pipeline-aware assistant:
+
+- **Adaptive experience level** — type `/analyze` and Claude asks if you're new or experienced. Beginners get step-by-step explanations with jargon defined inline; experienced users get concise commands with confirmation prompts. Switch anytime by saying "beginner mode" or "advanced mode."
+- **Guided workflows** — Claude follows the standard DVP pipeline (inspect → detect → annotate → classify → markers → spatial → LMD) but you're free to skip steps, jump ahead, or mix and match. It will warn you if you're missing a dependency (e.g., trying marker classification without `--all-channels`).
+- **Interactive decisions** — at key points (cell type selection, channel mapping, marker thresholds, which analyses to run), Claude uses a structured question tool so you can click options rather than type. It never assumes — it asks.
+- **SLURM-aware** — Claude checks cluster availability, writes YAML configs, generates sbatch scripts, monitors jobs, and diagnoses failures from log files.
+
+### Security
+
+The package includes project-level security settings (`.claude/settings.json`) that apply to all users:
+
+```json
+{
+  "permissions": {
+    "deny": [
+      "Read(~/.ssh/**)", "Read(~/.aws/**)", "Read(**/.env)",
+      "Bash(rm:*)", "Bash(sudo:*)", "Bash(su:*)",
+      "Bash(curl:*)", "Bash(wget:*)", "Bash(ssh:*)"
+    ]
+  }
+}
+```
+
+This prevents Claude from accessing credentials, running destructive commands, or making network requests via shell. All tool calls require your approval via the standard permission prompt — Claude proposes, you approve.
+
+**Data directory access:** By default Claude can only access the project directory. When you provide CZI or output paths outside the repo, Claude will offer to add them:
+
+```bash
+claude config set additionalDirectories '/path/to/your/data'
+```
+
+You approve the command, and the directory is added to your local settings (`.claude/settings.local.json`, gitignored — never shared).
+
 ---
 
 ## Why This Pipeline?
