@@ -312,7 +312,7 @@ xldvp_seg/              # Main package (pip install -e .)
 
 scripts/                   # 28 reusable CLI tools
 examples/                  # Project-specific analyses by experiment
-tests/                     # 666 tests across 25 files
+tests/                     # 677 tests across 26 files
 ```
 
 ## Key Design Decisions

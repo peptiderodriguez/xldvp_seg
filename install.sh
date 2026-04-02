@@ -299,7 +299,7 @@ import scanpy
 import spatialdata
 import squidpy
 import geopandas
-from segmentation.processing.multigpu_worker import MultiGPUTileProcessor
+from xldvp_seg.processing.multigpu_worker import MultiGPUTileProcessor
 print('All imports successful!')
 print(f'  torch: {torch.__version__}')
 print(f'  cellpose: {cellpose.__version__}')

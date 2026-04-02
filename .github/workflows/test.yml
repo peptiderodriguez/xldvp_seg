@@ -42,7 +42,7 @@ jobs:
       - name: Run tests with coverage
         run: |
           pytest tests/ -v --tb=short -m "not integration" \
-            --cov=segmentation --cov-report=xml --cov-report=term-missing
+            --cov=xldvp_seg --cov-report=xml --cov-report=term-missing
         env:
           PYTHONPATH: .
       - name: Upload coverage

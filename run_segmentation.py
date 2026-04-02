@@ -759,157 +759,159 @@ def run_pipeline(args):
     classifier_loaded = _det["classifier_loaded"]
     is_multiscale = _det["is_multiscale"]
 
-    # Deduplication: tile overlap causes same detection in adjacent tiles
-    # Uses actual mask pixel overlap (loads HDF5 mask files) for accurate dedup
-    # Skip for multiscale -- already deduped by contour IoU in merge_detections_across_scales()
-    if not is_multiscale and args.tile_overlap > 0 and len(all_detections) > 0:
-        pre_dedup = len(all_detections)
-        mask_fn = f"{args.cell_type}_masks.h5"
-        dedup_sort = "confidence" if getattr(args, "dedup_by_confidence", False) else "area"
-        if getattr(args, "dedup_method", "mask_overlap") == "iou_nms":
-            from xldvp_seg.processing.deduplication import deduplicate_by_iou_nms
-
-            all_detections = deduplicate_by_iou_nms(
-                all_detections,
-                tiles_dir,
-                iou_threshold=getattr(args, "iou_threshold", 0.2),
-                mask_filename=mask_fn,
-                sort_by=dedup_sort,
-            )
-        else:
-            from xldvp_seg.processing.deduplication import deduplicate_by_mask_overlap
-
-            all_detections = deduplicate_by_mask_overlap(
-                all_detections,
-                tiles_dir,
-                min_overlap_fraction=0.1,
-                mask_filename=mask_fn,
-                sort_by=dedup_sort,
-            )
-
-        # Filter HTML samples to match deduped detections and remove duplicate UIDs
-        deduped_uids = {det.get("uid", det.get("id", "")) for det in all_detections}
-        seen_uids = set()
-        unique_samples = []
-        for s in all_samples:
-            uid = s.get("uid", "")
-            if uid in deduped_uids and uid not in seen_uids:
-                seen_uids.add(uid)
-                unique_samples.append(s)
-        logger.info(
-            f"Dedup: {len(all_samples)} HTML samples -> {len(unique_samples)} (removed {len(all_samples) - len(unique_samples)} duplicate UIDs)"
-        )
-        all_samples = unique_samples
-
-    # ---- Post-dedup: contour dilation + feature re-extraction + bg correction ----
-    if len(all_detections) > 0 and (args.contour_processing or args.background_correction):
-        from xldvp_seg.pipeline.post_detection import process_detections_post_dedup
-
-        mask_fn = f"{args.cell_type}_masks.h5"
-        # Determine display channels for RGB morph extraction
-        _display_chs = None
-        if args.cell_type == "islet":
-            _display_chs = getattr(args, "islet_display_chs", [2, 3, 5])
-        elif args.cell_type == "tissue_pattern":
-            _display_chs = getattr(args, "tp_display_channels_list", [0, 3, 1])
-
-        # Nuclear counting on normal detection path: load models in main process
-        _count_nuclei_normal = getattr(args, "count_nuclei", False)
-        _nuc_ch_normal = getattr(args, "nuc_channel_for_counting", None)
-        _cp_model_normal = None
-        _sam2_normal = None
-        _nuc_mgr_normal = None
-        if _count_nuclei_normal:
-            # Auto-detect nuclear channel from cellpose input or cell-type defaults
-            if _nuc_ch_normal is None:
-                cp_input = getattr(args, "cellpose_input_channels", None)
-                if cp_input:
-                    parts = str(cp_input).split(",")
-                    if len(parts) >= 2:
-                        try:
-                            _nuc_ch_normal = int(parts[1].strip())
-                        except ValueError:
-                            pass
-            if _nuc_ch_normal is None and args.cell_type == "islet":
-                _nuc_ch_normal = getattr(args, "nuclear_channel", None)
-            if _nuc_ch_normal is None and args.cell_type == "tissue_pattern":
-                _nuc_ch_normal = getattr(args, "tp_nuclear_channel", None)
-            if _nuc_ch_normal is not None:
-                from xldvp_seg.models.manager import ModelManager
-
-                _nuc_mgr_normal = ModelManager()
-                _cp_model_normal = _nuc_mgr_normal.cellpose
-                _sam2_normal = _nuc_mgr_normal.sam2_predictor
-                logger.info(f"Nuclear counting enabled: nuc_channel={_nuc_ch_normal}")
-            else:
-                logger.warning("--count-nuclei: could not determine nuclear channel")
-
-        process_detections_post_dedup(
-            all_detections,
-            tiles_dir,
-            pixel_size_um,
-            mask_filename=mask_fn,
-            slide_shm_arr=slide_shm_arr,
-            ch_to_slot=ch_to_slot,
-            x_start=x_start,
-            y_start=y_start,
-            contour_processing=args.contour_processing,
-            dilation_um=getattr(args, "dilation_um", 0.5),
-            rdp_epsilon=getattr(args, "rdp_epsilon", 5.0),
-            background_correction=args.background_correction,
-            bg_neighbors=getattr(args, "bg_neighbors", 30),
-            count_nuclei=_count_nuclei_normal,
-            nuc_channel_idx=_nuc_ch_normal,
-            min_nuclear_area=getattr(args, "min_nuclear_area", 50),
-            cellpose_model=_cp_model_normal,
-            sam2_predictor=_sam2_normal,
-        )
-
-        if _nuc_mgr_normal is not None:
-            _nuc_mgr_normal.cleanup()
-
-        # Checkpoint: save post-processed detections before HTML/CSV generation
-        _postdedup_file = slide_output_dir / f"{args.cell_type}_detections_postdedup.json"
-        atomic_json_dump(all_detections, _postdedup_file)
-        logger.info(
-            f"Checkpoint: saved {len(all_detections)} post-dedup detections to {_postdedup_file.name}"
-        )
-
-    # ---- Subsample HTML samples by fraction (after dedup, before export) ----
-    _html_frac = args.html_sample_fraction
-    if _html_frac > 0 and len(all_samples) > 0 and len(all_detections) > 0:
-        import random
-
-        target = max(100, int(len(all_detections) * _html_frac))
-        if len(all_samples) > target:
-            logger.info(
-                f"HTML sample fraction {_html_frac}: subsampling {len(all_samples)} -> {target} "
-                f"({_html_frac*100:.0f}% of {len(all_detections)} detections)"
-            )
-            all_samples = random.sample(all_samples, target)
-
-    # ---- Shared post-processing: CSV, JSON, HTML, summary, server ----
+    # Everything below uses SHM — wrap in try/finally to ensure cleanup on crash
     try:
-        _finish_pipeline(
-            args,
-            all_detections,
-            all_samples,
-            slide_output_dir,
-            tiles_dir,
-            pixel_size_um,
-            slide_name,
-            mosaic_info,
-            run_timestamp,
-            pct,
-            all_tiles=all_tiles,
-            tissue_tiles=tissue_tiles,
-            sampled_tiles=sampled_tiles,
-            resumed=False,
-            params=params,
-            classifier_loaded=classifier_loaded,
-            is_multiscale=is_multiscale,
-            detector=detector,
-        )
+
+        # Deduplication: tile overlap causes same detection in adjacent tiles
+        # Uses actual mask pixel overlap (loads HDF5 mask files) for accurate dedup
+        # Skip for multiscale -- already deduped by contour IoU in merge_detections_across_scales()
+        if not is_multiscale and args.tile_overlap > 0 and len(all_detections) > 0:
+            pre_dedup = len(all_detections)
+            mask_fn = f"{args.cell_type}_masks.h5"
+            dedup_sort = "confidence" if getattr(args, "dedup_by_confidence", False) else "area"
+            if getattr(args, "dedup_method", "mask_overlap") == "iou_nms":
+                from xldvp_seg.processing.deduplication import deduplicate_by_iou_nms
+
+                all_detections = deduplicate_by_iou_nms(
+                    all_detections,
+                    tiles_dir,
+                    iou_threshold=getattr(args, "iou_threshold", 0.2),
+                    mask_filename=mask_fn,
+                    sort_by=dedup_sort,
+                )
+            else:
+                from xldvp_seg.processing.deduplication import deduplicate_by_mask_overlap
+
+                all_detections = deduplicate_by_mask_overlap(
+                    all_detections,
+                    tiles_dir,
+                    min_overlap_fraction=0.1,
+                    mask_filename=mask_fn,
+                    sort_by=dedup_sort,
+                )
+
+            # Filter HTML samples to match deduped detections and remove duplicate UIDs
+            deduped_uids = {det.get("uid", det.get("id", "")) for det in all_detections}
+            seen_uids = set()
+            unique_samples = []
+            for s in all_samples:
+                uid = s.get("uid", "")
+                if uid in deduped_uids and uid not in seen_uids:
+                    seen_uids.add(uid)
+                    unique_samples.append(s)
+            logger.info(
+                f"Dedup: {len(all_samples)} HTML samples -> {len(unique_samples)} (removed {len(all_samples) - len(unique_samples)} duplicate UIDs)"
+            )
+            all_samples = unique_samples
+
+        # ---- Post-dedup: contour dilation + feature re-extraction + bg correction ----
+        if len(all_detections) > 0 and (args.contour_processing or args.background_correction):
+            from xldvp_seg.pipeline.post_detection import process_detections_post_dedup
+
+            mask_fn = f"{args.cell_type}_masks.h5"
+            # Determine display channels for RGB morph extraction
+            _display_chs = None
+            if args.cell_type == "islet":
+                _display_chs = getattr(args, "islet_display_chs", [2, 3, 5])
+            elif args.cell_type == "tissue_pattern":
+                _display_chs = getattr(args, "tp_display_channels_list", [0, 3, 1])
+
+            # Nuclear counting on normal detection path: load models in main process
+            _count_nuclei_normal = getattr(args, "count_nuclei", False)
+            _nuc_ch_normal = getattr(args, "nuc_channel_for_counting", None)
+            _cp_model_normal = None
+            _sam2_normal = None
+            _nuc_mgr_normal = None
+            if _count_nuclei_normal:
+                # Auto-detect nuclear channel from cellpose input or cell-type defaults
+                if _nuc_ch_normal is None:
+                    cp_input = getattr(args, "cellpose_input_channels", None)
+                    if cp_input:
+                        parts = str(cp_input).split(",")
+                        if len(parts) >= 2:
+                            try:
+                                _nuc_ch_normal = int(parts[1].strip())
+                            except ValueError:
+                                pass
+                if _nuc_ch_normal is None and args.cell_type == "islet":
+                    _nuc_ch_normal = getattr(args, "nuclear_channel", None)
+                if _nuc_ch_normal is None and args.cell_type == "tissue_pattern":
+                    _nuc_ch_normal = getattr(args, "tp_nuclear_channel", None)
+                if _nuc_ch_normal is not None:
+                    from xldvp_seg.models.manager import ModelManager
+
+                    _nuc_mgr_normal = ModelManager()
+                    _cp_model_normal = _nuc_mgr_normal.cellpose
+                    _sam2_normal = _nuc_mgr_normal.sam2_predictor
+                    logger.info(f"Nuclear counting enabled: nuc_channel={_nuc_ch_normal}")
+                else:
+                    logger.warning("--count-nuclei: could not determine nuclear channel")
+
+            process_detections_post_dedup(
+                all_detections,
+                tiles_dir,
+                pixel_size_um,
+                mask_filename=mask_fn,
+                slide_shm_arr=slide_shm_arr,
+                ch_to_slot=ch_to_slot,
+                x_start=x_start,
+                y_start=y_start,
+                contour_processing=args.contour_processing,
+                dilation_um=getattr(args, "dilation_um", 0.5),
+                rdp_epsilon=getattr(args, "rdp_epsilon", 5.0),
+                background_correction=args.background_correction,
+                bg_neighbors=getattr(args, "bg_neighbors", 30),
+                count_nuclei=_count_nuclei_normal,
+                nuc_channel_idx=_nuc_ch_normal,
+                min_nuclear_area=getattr(args, "min_nuclear_area", 50),
+                cellpose_model=_cp_model_normal,
+                sam2_predictor=_sam2_normal,
+            )
+
+            if _nuc_mgr_normal is not None:
+                _nuc_mgr_normal.cleanup()
+
+            # Checkpoint: save post-processed detections before HTML/CSV generation
+            _postdedup_file = slide_output_dir / f"{args.cell_type}_detections_postdedup.json"
+            atomic_json_dump(all_detections, _postdedup_file)
+            logger.info(
+                f"Checkpoint: saved {len(all_detections)} post-dedup detections to {_postdedup_file.name}"
+            )
+
+        # ---- Subsample HTML samples by fraction (after dedup, before export) ----
+        _html_frac = args.html_sample_fraction
+        if _html_frac > 0 and len(all_samples) > 0 and len(all_detections) > 0:
+            import random
+
+            target = max(100, int(len(all_detections) * _html_frac))
+            if len(all_samples) > target:
+                logger.info(
+                    f"HTML sample fraction {_html_frac}: subsampling {len(all_samples)} -> {target} "
+                    f"({_html_frac*100:.0f}% of {len(all_detections)} detections)"
+                )
+                all_samples = random.sample(all_samples, target)
+
+            # ---- Shared post-processing: CSV, JSON, HTML, summary, server ----
+            _finish_pipeline(
+                args,
+                all_detections,
+                all_samples,
+                slide_output_dir,
+                tiles_dir,
+                pixel_size_um,
+                slide_name,
+                mosaic_info,
+                run_timestamp,
+                pct,
+                all_tiles=all_tiles,
+                tissue_tiles=tissue_tiles,
+                sampled_tiles=sampled_tiles,
+                resumed=False,
+                params=params,
+                classifier_loaded=classifier_loaded,
+                is_multiscale=is_multiscale,
+                detector=detector,
+            )
     finally:
         _maybe_export_ome_zarr(
             args, slide_shm_arr, ch_to_slot, pixel_size_um, slide_output_dir, slide_name, czi_path

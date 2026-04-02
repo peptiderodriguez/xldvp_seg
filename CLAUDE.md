@@ -69,11 +69,11 @@ PYTHONPATH=$REPO $XLDVP_PYTHON -m black --check .
 PYTHONPATH=$REPO $XLDVP_PYTHON $REPO/scripts/czi_info.py /path/to/slide.czi
 ```
 
-**Style:** Black (line-length 100), Ruff (E/F/W/I/N/UP/B/C4, E501 ignored). **Python 3.10** (pinned).
+**Style:** Black (line-length 100), Ruff (E/F/W/I/N/UP/B/C4, E501 ignored). **Python 3.10 | 3.11** (both CI-tested).
 
 ### Tests
 
-Tests in `tests/` using pytest (~660 tests, 25 files). Run `make test` for all with coverage. Fixtures in `conftest.py`. Tests rely on `pip install -e .` (or `PYTHONPATH=$REPO`) for `xldvp_seg.*` imports.
+Tests in `tests/` using pytest (~677 tests, 26 files). Run `make test` for all with coverage. Fixtures in `conftest.py`. Tests rely on `pip install -e .` (or `PYTHONPATH=$REPO`) for `xldvp_seg.*` imports.
 
 **Development workflow:**
 ```bash
