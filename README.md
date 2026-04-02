@@ -208,7 +208,7 @@ linked = linker.link()                       # DataFrame: aggregated features + 
 | Embeddings (sam2_, resnet_, ...) | **mean** | Preserves centroid in representation space |
 | Spatial position | **centroid** | Pool center-of-mass on tissue (`pool_x_um`, `pool_y_um`) |
 
-Each well also gets `pool_n_cells` (number of pooled cells) and `pool_spread_um` (spatial spread — std of distances from centroid). This enables correlating protein abundance with tissue position.
+Each well also gets: `pool_total_area_um2` (summed cell area — correlates with protein yield), `pool_n_cells` (cell count), `pool_x_um`/`pool_y_um` (spatial centroid), and `pool_spread_um` (spatial spread).
 
 ```python
 # Differential analysis between marker populations
