@@ -879,12 +879,12 @@ slide = SlideAnalysis.load("<output>/run_dir/")
 adata = slide.to_anndata()
 
 # --- Standard scanpy workflow ---
-# Preprocessing
-sc.pp.normalize_total(adata)
-sc.pp.log1p(adata)
-sc.pp.highly_variable_genes(adata, n_top_genes=50)
+# NOTE: morphological features are continuous measurements, NOT counts.
+# Do NOT use sc.pp.normalize_total / sc.pp.log1p (those are for RNA-seq).
+# Use sc.pp.scale (z-score) instead, or let PCA handle centering.
+sc.pp.scale(adata)  # zero mean, unit variance per feature
 
-# Dimensionality reduction
+# Dimensionality reduction + clustering
 sc.pp.pca(adata)
 sc.pp.neighbors(adata)
 sc.tl.umap(adata)
@@ -893,6 +893,9 @@ sc.tl.leiden(adata, resolution=0.3)
 # Visualize
 sc.pl.umap(adata, color=["leiden", "marker_profile", "area_um2"])
 sc.pl.umap(adata, color=["rf_prediction", "n_nuclei"])
+
+# Filter features by group (e.g., morph only for clustering)
+morph_adata = adata[:, adata.var["feature_group"] == "morph"].copy()
 
 # --- Spatial analysis with squidpy ---
 # Build spatial graph from cell positions

@@ -149,7 +149,7 @@ adata = neurons.to_anndata()  # AnnData for scanpy/scverse
 
 | Slot | Content |
 |------|---------|
-| **`X`** | Morphological + per-channel intensity features (float32) |
+| **`X`** | Morphological + per-channel intensity features (float32). `area_um2`, `n_nuclei`, `nuclear_area_fraction` are in obs, not X. |
 | **`obs`** | Per-cell metadata: `uid`, `slide_name`, `cell_type`, `pixel_size_um`, `area_um2`, `rf_prediction`, `marker_profile`, `*_class`, `n_nuclei`, `nuclear_area_fraction` |
 | **`var`** | Feature metadata with `feature_group` column (`morph` / `channel` / `ratio` / `nuclear`) — filter with `adata[:, adata.var["feature_group"] == "morph"]` |
 | **`obsm["spatial"]`** | (N, 2) cell positions in micrometers |
@@ -169,6 +169,9 @@ import scanpy as sc
 import squidpy as sq
 
 adata = slide.to_anndata()
+
+# Scale features (z-score — NOT normalize_total/log1p, those are for RNA-seq)
+sc.pp.scale(adata)
 
 # Dimensionality reduction + clustering
 sc.pp.pca(adata)
