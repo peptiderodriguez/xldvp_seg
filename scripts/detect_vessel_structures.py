@@ -462,12 +462,15 @@ def assign_vessel_type(morphology, composition, layering, morphometry):
 # ---------------------------------------------------------------------------
 
 
-def tag_detections(detections, positive_idx, comp_assignments, prefix="vessel"):
-    """Tag each detection with vessel structure membership."""
+def tag_detections(
+    detections, positive_idx, comp_assignments, marker_names, class_keys, prefix="vessel"
+):
+    """Tag each detection with vessel structure membership + cell type within vessel."""
     field_id = f"{prefix}_id"
     field_type = f"{prefix}_type"
     field_morph = f"{prefix}_morphology"
     field_size = f"{prefix}_size_class"
+    field_cell_type = f"{prefix}_cell_type"
 
     # Initialize all detections
     for d in detections:
@@ -476,14 +479,24 @@ def tag_detections(detections, positive_idx, comp_assignments, prefix="vessel"):
         feat[field_type] = "none"
         feat[field_morph] = "none"
         feat[field_size] = "none"
+        feat[field_cell_type] = "none"
 
-    # Apply assignments
+    # Apply assignments + per-cell marker type
     for global_idx, assignment in comp_assignments.items():
         feat = detections[global_idx].setdefault("features", {})
         feat[field_id] = assignment["vessel_id"]
         feat[field_type] = assignment["vessel_type"]
         feat[field_morph] = assignment["morphology"]
         feat[field_size] = assignment.get("size_class", "unknown")
+
+        # Cell type within vessel: which marker(s) is this cell positive for?
+        pos = [n for n, k in zip(marker_names, class_keys) if feat.get(k) == "positive"]
+        if len(pos) >= 2:
+            feat[field_cell_type] = "double_pos"
+        elif len(pos) == 1:
+            feat[field_cell_type] = f"{pos[0]}_only"
+        else:
+            feat[field_cell_type] = "negative"
 
     # Summary
     type_counts = {}
@@ -535,11 +548,10 @@ def parse_args():
         "--min-marker-cells",
         type=int,
         default=0,
-        help="Min cell-equivalents of EACH marker (single-positive only). "
-        "Total area of single-positive cells must be >= N * median_cell_area "
-        "for every marker. Double-positive cells excluded (contaminate both "
-        "proteomes). Ensures enough clean LMD material for mass spec. "
-        "0 = no filter (default: 0). Use 8 for typical DVP experiments.",
+        help="Min cell-equivalents of ANY marker (single-positive only). "
+        "A vessel is kept if ANY marker has total single-positive area >= "
+        "N * median_cell_area. Double-positive cells excluded (contaminate "
+        "both proteomes). 0 = no filter (default: 0). Use 12 for DVP.",
     )
 
     # Classification thresholds
@@ -663,15 +675,16 @@ def main():
                 pos = [n for n, k in zip(marker_names, class_keys) if feat.get(k) == "positive"]
                 if len(pos) == 1:
                     class_area[pos[0]] += feat.get("area_um2", 0)
-            below_threshold = False
+            # OR logic: ANY marker must meet the threshold (not all)
+            any_above = False
             for name in marker_names:
                 median_a = median_area_per_class.get(name, 0)
                 if median_a <= 0:
                     continue
-                if class_area[name] < args.min_marker_cells * median_a:
-                    below_threshold = True
+                if class_area[name] >= args.min_marker_cells * median_a:
+                    any_above = True
                     break
-            if below_threshold:
+            if not any_above:
                 continue
 
         # Subgraph via the pre-built full graph (O(k) not O(|pairs|))
@@ -737,7 +750,9 @@ def main():
     logger.info("  Total vessel cells: %d / %d positive", len(comp_assignments), len(positive_idx))
 
     # Tag all detections
-    field = tag_detections(detections, positive_idx, comp_assignments, args.output_prefix)
+    field = tag_detections(
+        detections, positive_idx, comp_assignments, marker_names, class_keys, args.output_prefix
+    )
 
     # Output
     out_dir = Path(args.output_dir) if args.output_dir else Path(args.detections).parent

@@ -579,14 +579,47 @@ class TestTagDetections:
                 "size_class": "large",
             },
         }
-        tag_detections(dets, positive_idx, assignments)
+        tag_detections(
+            dets, positive_idx, assignments, ["SMA", "CD31"], ["SMA_class", "CD31_class"]
+        )
 
         assert dets[0]["features"]["vessel_type"] == "artery"
         assert dets[0]["features"]["vessel_id"] == 0
         assert dets[5]["features"]["vessel_type"] == "none"
         assert dets[5]["features"]["vessel_id"] == -1
 
+    def test_cell_type_tagging(self):
+        dets = [
+            _make_detection({"SMA_class": "positive", "CD31_class": "negative"}),
+            _make_detection({"SMA_class": "negative", "CD31_class": "positive"}),
+            _make_detection({"SMA_class": "positive", "CD31_class": "positive"}),
+        ]
+        assignments = {
+            0: {
+                "vessel_id": 0,
+                "vessel_type": "artery",
+                "morphology": "ring",
+                "size_class": "large",
+            },
+            1: {
+                "vessel_id": 0,
+                "vessel_type": "artery",
+                "morphology": "ring",
+                "size_class": "large",
+            },
+            2: {
+                "vessel_id": 0,
+                "vessel_type": "artery",
+                "morphology": "ring",
+                "size_class": "large",
+            },
+        }
+        tag_detections(dets, [0, 1, 2], assignments, ["SMA", "CD31"], ["SMA_class", "CD31_class"])
+        assert dets[0]["features"]["vessel_cell_type"] == "SMA_only"
+        assert dets[1]["features"]["vessel_cell_type"] == "CD31_only"
+        assert dets[2]["features"]["vessel_cell_type"] == "double_pos"
+
     def test_handles_empty_assignments(self):
         dets = [_make_detection() for _ in range(5)]
-        tag_detections(dets, [], {})
+        tag_detections(dets, [], {}, ["SMA"], ["SMA_class"])
         assert all(d["features"]["vessel_id"] == -1 for d in dets)
