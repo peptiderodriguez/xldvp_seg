@@ -183,19 +183,19 @@ sq.gr.spatial_autocorr(adata, mode="moran")  # spatially variable features
 
 ### Proteomics Integration (after LMD + mass spec)
 
-After laser microdissection and mass spectrometry, link morphological features to protein abundance:
+After laser microdissection and mass spectrometry, link morphological features to protein abundance. DVP typically **pools multiple cells per well** for sufficient protein yield — the pipeline tracks which cells went into each well and aggregates their morphological features to match the well-level proteomics measurement.
 
 ```python
 from segmentation.analysis.omic_linker import OmicLinker
 
 linker = OmicLinker.from_slide(slide)
-linker.load_proteomics("proteomics.csv")    # wells × proteins
-linker.load_well_mapping("lmd_export/")     # detection → well
-linked = linker.link()                       # AnnData: morph + proteomics
+linker.load_proteomics("proteomics.csv")    # wells × proteins (pooled)
+linker.load_well_mapping("lmd_export/")     # cell → well assignment
+linked = linker.link()                       # AnnData: aggregated morph + proteomics per well
 
 # Differential analysis between marker populations
 diff = linker.differential_features("marker_profile", "NeuN+/tdTomato-", "NeuN-/tdTomato+")
-corr = linker.correlate(method="spearman")   # morph ↔ protein correlations
+corr = linker.correlate(method="spearman")   # well-level morph ↔ protein correlations
 ```
 
 ---

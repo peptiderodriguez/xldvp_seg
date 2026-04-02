@@ -1062,17 +1062,20 @@ sc.pl.umap(adata, color="treatment")
 ```
 
 **Step 30 — Multi-omic linking** (after LMD + mass spec):
+
+DVP typically **pools multiple cells per well** for sufficient protein yield. The pipeline tracks which cells went into each well and aggregates their morphological features (mean area, mean solidity, etc.) to match the well-level proteomics measurement. For rare large cells (e.g., MKs), single-cell-per-well is sometimes feasible.
+
 ```python
 from segmentation.analysis.omic_linker import OmicLinker
 
 linker = OmicLinker.from_slide(slide)
-linker.load_proteomics("proteomics.csv")    # wells × proteins
-linker.load_well_mapping("lmd_export/")     # detection → well
-linked = linker.link()                       # join morph + proteomics
+linker.load_proteomics("proteomics.csv")    # wells × proteins (pooled measurement)
+linker.load_well_mapping("lmd_export/")     # cell → well assignment
+linked = linker.link()                       # AnnData: aggregated morph + proteomics per well
 
-# Differential features between marker+ and marker- cells
+# Differential features between marker populations
 diff = linker.differential_features("marker_profile", "NeuN+/tdTomato-", "NeuN-/tdTomato+")
-# Correlate morphology with protein abundance
+# Well-level correlations: aggregated morphology ↔ protein abundance
 corr = linker.correlate(method="spearman")
 top_proteins = linker.rank_proteins("area", top_n=20)
 ```
