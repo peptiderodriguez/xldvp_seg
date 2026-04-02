@@ -103,6 +103,17 @@ def main():
                     "Was the classifier trained on a different feature set?"
                 )
 
+    # Warn if classifier was trained on different feature extraction method
+    clf_meta = clf_data.get("raw_meta", {})
+    clf_extraction = clf_meta.get("feature_extraction", "")
+    if clf_extraction and clf_extraction != "original_mask":
+        logger.warning(
+            "Classifier was trained with feature_extraction='%s' but current pipeline "
+            "uses 'original_mask'. Features may differ — scores could be unreliable. "
+            "Consider retraining the classifier on current pipeline output.",
+            clf_extraction,
+        )
+
     if not valid_indices:
         logger.warning("No detections have features — setting all rf_prediction = 0.0")
         for det in detections:

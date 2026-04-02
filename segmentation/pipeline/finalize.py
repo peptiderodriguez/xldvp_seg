@@ -287,7 +287,11 @@ def _finish_pipeline(
         for d in all_detections[:1]
     )
 
+    from segmentation import __version__
+
     summary = {
+        "pipeline_version": __version__,
+        "feature_extraction": "original_mask",
         "slide_name": slide_name,
         "cell_type": cell_type,
         "pixel_size_um": pixel_size_um,

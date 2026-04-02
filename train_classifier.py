@@ -378,6 +378,7 @@ def main():
             "training_annotations_path": os.path.abspath(args.annotations),
             "cell_type": getattr(args, "cell_type", "unknown") or "unknown",
             "description": getattr(args, "description", "") or "",
+            "feature_extraction": "original_mask",
         },
         model_path,
     )

@@ -68,7 +68,7 @@ The package includes project-level security settings (`.claude/settings.json`) t
 }
 ```
 
-This prevents Claude from accessing credentials, running destructive commands, or making network requests via shell. All tool calls require your approval via the standard permission prompt — Claude proposes, you approve.
+These rules are **project-scoped** — they only apply when Claude Code is launched from within this repo directory. They do not affect your global Claude Code settings or other projects. All tool calls still require your approval via the standard permission prompt — Claude proposes, you approve.
 
 **Data directory access:** By default Claude can only access the project directory. When you provide CZI or output paths outside the repo, Claude will offer to add them:
 
