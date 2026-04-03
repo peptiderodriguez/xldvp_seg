@@ -511,12 +511,13 @@ def main():
             pct = 100 * count / len(detections)
             logger.info(f"    {profile}: {count:,} ({pct:.1f}%)")
 
-    # Save enriched detections — strip existing _classified suffix to prevent
-    # doubling (e.g., cell_detections_classified_classified.json) when chaining
+    # Save enriched detections with provenance in filename.
     stem = det_path.stem
-    if stem.endswith("_classified"):
-        stem = stem[: -len("_classified")]
-    out_json = output_dir / f"{stem}_classified.json"
+    if "_classified" in stem:
+        stem = stem[: stem.index("_classified")]
+    method_tag = args.method
+    feat_tag = args.intensity_feature
+    out_json = output_dir / f"{stem}_classified_{method_tag}_{feat_tag}.json"
     logger.info(f"Saving classified detections to {out_json}...")
     atomic_json_dump(detections, out_json)
     logger.info(f"  Wrote {len(detections):,} detections")
