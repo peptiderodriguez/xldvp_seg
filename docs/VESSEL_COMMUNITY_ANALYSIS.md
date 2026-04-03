@@ -1,12 +1,60 @@
 # Vessel Analysis
 
-Two complementary tools for vessel analysis from classified cell detections.
+Three complementary tools for vessel analysis from classified cell detections.
 
-## Tool 1: Graph Topology Vessel Detection (Recommended)
+## Tool 1: Lumen-First Vessel Detection (Recommended)
+
+**Script:** `scripts/segment_vessel_lumens.py`
+
+Uses SAM2 automatic mask generation on OME-Zarr multi-resolution tiles to find vessel lumens (dark tissue-free regions), validates them by proximity of marker-positive cells (SMA+, CD31+, LYVE1+), then characterizes each vessel with morphometry, marker composition, spatial layering, and type assignment.
+
+**Key design:** No circularity requirement — oblique cuts, compressed vessels, and irregular lumens are all valid. Lumens are validated by biological evidence (marker+ cells at the boundary), not geometric shape.
+
+```bash
+python scripts/segment_vessel_lumens.py \
+    --zarr-path output/slide.ome.zarr \
+    --detections output/top5pct/cell_detections_top5pct.json \
+    --marker-names SMA,CD31 \
+    --rgb-channels 1,3,0 \
+    --scales 2,4,8,16 \
+    --output-dir output/vessel_lumens/
+```
+
+**Pipeline:**
+1. Multi-scale tiling: reads OME-Zarr at 4 scales (2x, 4x, 8x, 16x)
+2. SAM2 auto-mask per tile → candidate regions
+3. 3-layer filter: size bounds + interior darkness + boundary contrast ratio
+4. Cross-tile IoU dedup (Shapely STRtree)
+5. Cross-scale merge (finest-first priority)
+6. Biological validation: KD-tree finds marker+ cells near lumen boundary, coverage metric rejects tissue tears/artifacts
+7. Vessel characterization via shared `xldvp_seg.analysis.vessel_characterization` module
+
+**Parameters:**
+- `--rgb-channels`: 3 zarr channel indices for SAM2 RGB input
+- `--scales`: downscale factors (default: 2,4,8,16)
+- `--min-contrast`: boundary/interior contrast ratio (default: 1.5)
+- `--min-coverage`: boundary cell coverage threshold (default: 0.1)
+- `--tile-size`: tile side length (default: 3000px)
+- `--overlap`: tile overlap (default: 750px, ~25% — ensures most lumens fit in at least one tile)
+- `--save-debug`: save rejected lumens with rejection reasons
+
+**Outputs:** `vessel_lumens.json`, `cell_detections_vessels.json`, `cell_detections_vessel_only.json`, `vessel_summary.csv`.
+
+**Vessel typing** (shared with Tool 2 via `xldvp_seg.analysis.vessel_characterization`):
+- Artery/arteriole: thick SMA wall (layers > 1.5 or wall/diameter > 0.3)
+- Vein/venule: CD31-dominant thin wall
+- Lymphatic: LYVE1+ dominant (> 30%), no SMA
+- Collecting lymphatic: LYVE1+ with SMA ≥ 15%
+- Capillary: small CD31+ cluster
+- Longitudinal variants: detected when lumen elongation > 4.0
+
+**When to use:** Cross-sectional vessels where lumens are visible. Handles all sizes from capillaries to aorta. Best for vasculature (Fig6) and lymphatics (Fig7) slides.
+
+## Tool 2: Graph Topology Vessel Detection (Complementary)
 
 **Script:** `scripts/detect_vessel_structures.py`
 
-Identifies individual vessel structures from marker-positive cells (SMA+, CD31+, LYVE1+) using graph topology (ring_score, arc_fraction, linearity) and geometric/PCA metrics (circularity, hollowness, elongation). Classifies morphology (ring, arc, strip, cluster), computes vessel morphometry (diameter, lumen, wall extent), analyzes spatial marker layering (Mann-Whitney U), and assigns vessel types (artery, arteriole, vein, venule, capillary, lymphatic, collecting_lymphatic).
+Identifies individual vessel structures from marker-positive cells (SMA+, CD31+, LYVE1+) using graph topology (ring_score, arc_fraction, linearity) and geometric/PCA metrics (circularity, hollowness, elongation). Best for **longitudinal sections** (strips) and structures where lumens are not visible. Classifies morphology (ring, arc, strip, cluster), computes vessel morphometry, analyzes spatial marker layering (Mann-Whitney U), and assigns vessel types. Shares characterization logic with Tool 1 via `xldvp_seg.analysis.vessel_characterization`.
 
 ```bash
 python scripts/detect_vessel_structures.py \
