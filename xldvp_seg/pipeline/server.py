@@ -43,7 +43,7 @@ def _get_all_servers() -> list:
             data = json.loads(SERVER_PID_FILE.read_text())
             data["_pid_file"] = SERVER_PID_FILE
             servers.append(data)
-        except Exception:
+        except (json.JSONDecodeError, FileNotFoundError, OSError):
             pass
 
     # Check new per-port PID files
@@ -55,7 +55,7 @@ def _get_all_servers() -> list:
                 # Skip if already covered by legacy file (same port)
                 if not any(s.get("port") == data.get("port") for s in servers):
                     servers.append(data)
-            except Exception:
+            except (json.JSONDecodeError, FileNotFoundError, OSError):
                 pass
 
     return servers
@@ -68,7 +68,7 @@ def _cleanup_processes():
             if proc.poll() is None:  # Still running
                 proc.terminate()
                 proc.wait(timeout=5)
-        except Exception:
+        except (OSError, subprocess.TimeoutExpired):
             pass
 
 
@@ -258,14 +258,15 @@ def start_server_and_tunnel(
                         os.kill(old_http_pid, signal.SIGTERM)
                         logger.info(f"Stopped old HTTP server (PID {old_http_pid})")
                         time.sleep(0.5)  # Give it time to release the port
-                    except Exception:
-                        pass
+                    except Exception as e:
+                        logger.debug("Failed to stop old HTTP server (PID %s): %s", old_http_pid, e)
             else:
                 # Tunnel not running or different port - start fresh
                 logger.info("Starting new server and tunnel...")
                 stop_background_server()
                 existing_tunnel_url = None
-        except Exception:
+        except Exception as e:
+            logger.debug("Error checking existing server state: %s", e)
             stop_background_server()
 
     # Common args for background mode (detach from parent)
@@ -369,8 +370,8 @@ def start_server_and_tunnel(
                 match = re.search(r"(https://[^\s]+\.trycloudflare\.com)", log_content)
                 if match:
                     tunnel_url = match.group(1)
-            except Exception:
-                pass
+            except Exception as e:
+                logger.debug("Failed to read tunnel log for URL extraction: %s", e)
         else:
             tunnel_proc = subprocess.Popen(
                 [cloudflared_path, "tunnel", "--url", f"http://localhost:{port}"],

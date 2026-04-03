@@ -25,7 +25,7 @@ classifiers = [
 
 # Core dependencies (PyTorch and SAM2 installed separately - see install.sh)
 dependencies = [
-    "numpy>=1.24",
+    "numpy>=1.24,<2.0",
     "pandas>=1.5",
     "opencv-python>=4.8",
     "scipy>=1.10",
@@ -73,14 +73,6 @@ xlseg = "xldvp_seg.cli.main:cli"
 "Repository" = "https://github.com/peptiderodriguez/xldvp_seg"
 "Bug Tracker" = "https://github.com/peptiderodriguez/xldvp_seg/issues"
 "Documentation" = "https://github.com/peptiderodriguez/xldvp_seg/blob/main/docs/GETTING_STARTED.md"
-
-[tool.setuptools]
-py-modules = [
-    "run_segmentation",
-    "run_lmd_export",
-    "serve_html",
-    "train_classifier",
-]
 
 [tool.setuptools.packages.find]
 where = ["."]

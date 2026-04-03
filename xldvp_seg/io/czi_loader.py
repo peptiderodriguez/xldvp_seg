@@ -462,8 +462,8 @@ def get_czi_metadata(czi_path, scene: int = 0):
             metadata["n_scenes"] = len(dims_shape_list)
             if "C" in dims_shape_list[0]:
                 n_data_channels = dims_shape_list[0]["C"][1] - dims_shape_list[0]["C"][0]
-        except Exception:
-            pass
+        except Exception as e:
+            logger.debug("Failed to query dims_shape from CZI reader: %s", e)
 
         # Get per-scene bounding box
         if scene is not None:

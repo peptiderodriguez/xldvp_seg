@@ -937,7 +937,10 @@ class VesselTypeClassifier:
         if not path.exists():
             raise FileNotFoundError(f"Model file not found: {path}")
 
-        model_data = joblib.load(path)
+        try:
+            model_data = joblib.load(path)
+        except (EOFError, ModuleNotFoundError) as e:
+            raise ValueError(f"Failed to load classifier from {path}: {e}") from e
 
         # Verify model type
         if model_data.get("model_type") != "vessel_type_classifier":

@@ -640,7 +640,8 @@ def run_spatial_network(
         else:
             try:
                 diameter = nx.approximation.diameter(subgraph)
-            except Exception:
+            except Exception as e:
+                logger.debug("Approximate diameter failed for component %d: %s", comp_id, e)
                 diameter = 0
 
         # Mean channel features for the component

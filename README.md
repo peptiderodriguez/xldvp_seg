@@ -335,6 +335,7 @@ tests/                     # 781 tests across 32 files
 | **Direct-to-SHM loading** | CZI channels loaded directly into shared memory — no intermediate RAM copy. |
 | **Strategy pattern** | Detection strategies self-register via `@register_strategy` — add a new cell type in one file. |
 | **Nuclear counting integrated** | `--count-nuclei` (default ON) runs during post-dedup using SHM data — zero extra I/O. |
+| **Pickle security** | Classifier files (`.pkl`) use Python pickle serialization via joblib. Only load classifiers from trusted sources. The pipeline validates classifier structure after loading but cannot prevent arbitrary code execution from malicious pickle files. |
 
 ## Development
 

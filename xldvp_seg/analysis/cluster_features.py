@@ -1054,8 +1054,8 @@ def _run_clustering_impl(args):
                             linestyle="--",
                             alpha=0.8,
                         )
-                    except Exception:
-                        pass  # Degenerate hull (collinear points)
+                    except Exception as e:
+                        logger.debug("ConvexHull overlay failed (collinear points): %s", e)
 
             # Marker rings: second scatter pass, one per marker color
             ring_handles = []

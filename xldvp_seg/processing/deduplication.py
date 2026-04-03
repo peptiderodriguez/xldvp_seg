@@ -230,8 +230,8 @@ def deduplicate_by_mask_overlap(
         if h5f is not None:
             try:
                 h5f.close()
-            except Exception:
-                pass
+            except Exception as e:
+                logger.debug("Failed to close HDF5 handle for tile %s: %s", tile_id, e)
     del h5_handles
 
     # Free any remaining mask cache entries (should be empty after eviction)
@@ -609,8 +609,8 @@ def deduplicate_by_iou_nms(
         if h5f is not None:
             try:
                 h5f.close()
-            except Exception:
-                pass
+            except Exception as e:
+                logger.debug("Failed to close HDF5 handle for tile %s: %s", tile_id, e)
     del h5_handles
 
     # Free remaining mask cache
@@ -688,7 +688,7 @@ def deduplicate_by_iou_nms(
             poly_j = valid_polygons[j_pos]
             try:
                 intersection_area = poly_i.intersection(poly_j).area
-            except Exception:
+            except (ValueError, TypeError):
                 # Geometry errors (rare): skip this pair
                 continue
             if intersection_area == 0:

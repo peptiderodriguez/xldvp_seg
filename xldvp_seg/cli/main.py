@@ -31,47 +31,19 @@ def _run_script(script_relpath: str, remaining: list[str]) -> None:
 
 
 def _run_detect(remaining):
-    old_argv = sys.argv
-    try:
-        sys.argv = ["xlseg detect"] + remaining
-        from run_segmentation import main
-
-        main()
-    finally:
-        sys.argv = old_argv
+    _run_script("run_segmentation.py", remaining)
 
 
 def _run_classify(remaining):
-    old_argv = sys.argv
-    try:
-        sys.argv = ["xlseg classify"] + remaining
-        from train_classifier import main
-
-        main()
-    finally:
-        sys.argv = old_argv
+    _run_script("train_classifier.py", remaining)
 
 
 def _run_export_lmd(remaining):
-    old_argv = sys.argv
-    try:
-        sys.argv = ["xlseg export-lmd"] + remaining
-        from run_lmd_export import main
-
-        main()
-    finally:
-        sys.argv = old_argv
+    _run_script("run_lmd_export.py", remaining)
 
 
 def _run_serve(remaining):
-    old_argv = sys.argv
-    try:
-        sys.argv = ["xlseg serve"] + remaining
-        from serve_html import main
-
-        main()
-    finally:
-        sys.argv = old_argv
+    _run_script("serve_html.py", remaining)
 
 
 def _run_info(remaining):

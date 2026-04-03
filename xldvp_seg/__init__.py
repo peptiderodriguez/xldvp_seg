@@ -20,7 +20,7 @@ try:
     from importlib.metadata import version as _get_version
 
     __version__ = _get_version("xldvp_seg")
-except Exception:
+except ImportError:
     __version__ = "2.0.0"  # fallback for uninstalled editable mode
 
 # Submodule imports are available directly

@@ -540,7 +540,10 @@ class VesselClassifier:
         if not path.exists():
             raise FileNotFoundError(f"Model file not found: {path}")
 
-        model_data = joblib.load(path)
+        try:
+            model_data = joblib.load(path)
+        except (EOFError, ModuleNotFoundError) as e:
+            raise ValueError(f"Failed to load classifier from {path}: {e}") from e
 
         # Create instance with saved config
         config = model_data.get("config", {})

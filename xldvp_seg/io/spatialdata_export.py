@@ -399,7 +399,7 @@ def _extract_shapes_from_hdf5(detections, tiles_dir, cell_type):
                     if poly.is_valid:
                         polygons[det_idx] = poly
                         contours_extracted += 1
-                except Exception:  # noqa: E722
+                except (ValueError, TypeError):
                     pass
 
         del masks  # Free memory before next tile
@@ -437,7 +437,7 @@ def _extract_vessel_shapes(detections):
                 if poly.is_valid:
                     layers[layer_name][i] = poly
                     counts[layer_name] += 1
-            except Exception:
+            except (ValueError, TypeError):
                 pass
 
     for name, count in counts.items():
@@ -467,7 +467,7 @@ def _make_circle_fallback(detections, pixel_size_um):
         try:
             circle = Point(gc[0], gc[1]).buffer(radius_px, resolution=16)
             polygons[i] = circle
-        except Exception:
+        except (ValueError, TypeError):
             pass
 
     n_valid = sum(1 for p in polygons if p is not None)
@@ -526,7 +526,7 @@ def build_shapes(detections, cell_type, tiles_dir=None, pixel_size_um=1.0):
                 if poly.is_valid:
                     polygons[i] = poly
                     _from_json += 1
-            except Exception:
+            except (ValueError, TypeError):
                 pass
     if _from_json > 0:
         logger.info("  Used %d/%d contours from detection JSON", _from_json, len(detections))

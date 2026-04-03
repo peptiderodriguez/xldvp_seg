@@ -121,6 +121,15 @@ def run_pipeline(args):
     _seed = getattr(args, "random_seed", 42)
     np.random.seed(_seed)
     _random_mod.seed(_seed)
+    try:
+        import torch
+
+        torch.manual_seed(_seed)
+        if torch.cuda.is_available():
+            torch.cuda.manual_seed_all(_seed)
+        logger.info("Random seed: %d (numpy + stdlib + torch)", _seed)
+    except ImportError:
+        logger.info("Random seed: %d (numpy + stdlib; torch not available)", _seed)
 
     logger.info("=" * 60)
     logger.info("UNIFIED SEGMENTATION PIPELINE")

@@ -152,7 +152,8 @@ def smooth_contour_spline(contour, smoothing=3.0, n_points=0, force_closed=None)
         x_new, y_new = splev(u_new, tck)
         smoothed = np.stack([x_new, y_new], axis=-1).astype(np.int32)
         return smoothed.reshape(-1, 1, 2)
-    except Exception:
+    except Exception as e:
+        logger.debug("B-spline smoothing failed, returning original contour: %s", e)
         return np.array(contour).reshape(-1, 1, 2).astype(np.int32)
 
 
@@ -913,7 +914,7 @@ class VesselStrategy(DetectionStrategy, MultiChannelFeatureMixin):
             # Fit ellipse
             try:
                 ellipse = cv2.fitEllipse(contour)
-            except Exception:
+            except (cv2.error, ValueError):
                 continue
 
             (cx, cy), (minor_axis, major_axis), angle = ellipse
@@ -1058,7 +1059,7 @@ class VesselStrategy(DetectionStrategy, MultiChannelFeatureMixin):
         ellipse_shifted = ((cx - x1, cy - y1), (ma, MA), angle)
         try:
             cv2.ellipse(ellipse_mask, ellipse_shifted, 255, -1)
-        except Exception:
+        except (cv2.error, ValueError):
             return 0.0
 
         intersection = np.logical_and(contour_mask > 0, ellipse_mask > 0).sum()
@@ -3718,8 +3719,8 @@ class VesselStrategy(DetectionStrategy, MultiChannelFeatureMixin):
                 if len(skeleton_distances) > 0:
                     medial_thicknesses = skeleton_distances * 2 * pixel_size_um
                     wall_thickness_values.extend(medial_thicknesses.tolist())
-        except Exception:
-            pass
+        except Exception as e:
+            logger.debug("Skeleton-based wall thickness analysis failed: %s", e)
 
         if len(wall_thickness_values) >= 5:
             wall_thicknesses = np.array(wall_thickness_values)

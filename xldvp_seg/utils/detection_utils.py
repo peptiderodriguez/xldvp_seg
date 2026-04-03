@@ -216,7 +216,10 @@ def load_rf_classifier(model_path: str) -> dict:
     import joblib
     from sklearn.pipeline import Pipeline
 
-    model_data = joblib.load(model_path)
+    try:
+        model_data = joblib.load(model_path)
+    except (EOFError, ModuleNotFoundError, FileNotFoundError) as e:
+        raise ValueError(f"Failed to load classifier from {model_path}: {e}") from e
 
     if isinstance(model_data, Pipeline):
         pipeline = model_data
@@ -258,8 +261,13 @@ def load_rf_classifier(model_path: str) -> dict:
         rf_model = model_data.get("model", model_data.get("classifier"))
         if rf_model is None:
             raise ValueError(
-                f"Classifier file has no 'model' or 'classifier' key. "
-                f"Keys: {list(model_data.keys())}"
+                f"Classifier at {model_path} has no 'model' or 'classifier' key. "
+                f"Keys found: {list(model_data.keys())}"
+            )
+        if not hasattr(rf_model, "predict"):
+            raise ValueError(
+                f"Classifier at {model_path}: loaded object has no predict() method. "
+                f"Type: {type(rf_model).__name__}"
             )
 
         if "scaler" in model_data:
