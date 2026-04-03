@@ -101,8 +101,14 @@ $XLDVP_PYTHON $REPO/scripts/regenerate_html.py \
 
 Ask: *"Want to explore the feature space with dimensionality reduction?"*
 
-**UMAP + HDBSCAN clustering:**
+**UMAP + HDBSCAN clustering** (core: `xldvp_seg.analysis.cluster_features`):
 ```bash
+# Via CLI subcommand
+xlseg cluster --detections <detections.json> \
+    --output-dir <output>/clustering \
+    --feature-groups "morph,sam2"
+
+# Or directly
 $XLDVP_PYTHON $REPO/scripts/cluster_by_features.py \
     --detections <detections.json> \
     --output-dir <output>/clustering \

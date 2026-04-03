@@ -107,10 +107,10 @@ For beginners, expand on each step as you reach it. For advanced users, just ask
 | **Features** | Morph (78D), SAM2 (256D), ResNet (4096D), DINOv2 (2048D), per-channel stats (15/ch) | `--extract-deep-features`, `--all-channels` |
 | **Annotate** | HTML viewer with pos/neg annotation, JSON export | `scripts/regenerate_html.py`, `serve_html.py` |
 | **Classify** | RF training, feature comparison (5-fold CV), batch scoring | `train_classifier.py`, `scripts/compare_feature_sets.py`, `scripts/apply_classifier.py` |
-| **Markers** | Median-based SNR thresholding (default ≥1.5) / Otsu / GMM | `scripts/classify_markers.py` |
-| **Explore** | UMAP + t-SNE, Leiden/HDBSCAN clustering, trajectory (diffmap, PAGA, pseudotime), interactive plotly | `scripts/cluster_by_features.py` |
-| **Spatial** | Delaunay networks, community detection, cell neighborhoods | `scripts/spatial_cell_analysis.py` |
-| **Curvilinear patterns** | Detect strip/ribbon structures (e.g., mesothelium) via KD-tree radius graph → connected components → graph diameter linearity. Works for curved structures. Tunable: `--radius`, `--linearity-threshold`, `--min-strip-length`, `--min-strip-cells`. Writes strip-only JSON for fast viewer. | `scripts/detect_curvilinear_patterns.py` |
+| **Markers** | Median-based SNR thresholding (default ≥1.5) / Otsu / GMM | `scripts/classify_markers.py` (core: `xldvp_seg.analysis.marker_classification`) |
+| **Explore** | UMAP + t-SNE, Leiden/HDBSCAN clustering, trajectory (diffmap, PAGA, pseudotime), interactive plotly | `xlseg cluster` / `scripts/cluster_by_features.py` (core: `xldvp_seg.analysis.cluster_features`) |
+| **Spatial** | Delaunay networks, community detection, cell neighborhoods | `scripts/spatial_cell_analysis.py` (core: `xldvp_seg.analysis.spatial_network`) |
+| **Curvilinear patterns** | Detect strip/ribbon structures (e.g., mesothelium) via KD-tree radius graph → connected components → graph diameter linearity. Works for curved structures. Tunable: `--radius`, `--linearity-threshold`, `--min-strip-length`, `--min-strip-cells`. Writes strip-only JSON for fast viewer. | `scripts/detect_curvilinear_patterns.py` (core: `xldvp_seg.analysis.pattern_detection`) |
 | **Vessel structures** | Detect vessel structures (arteries, veins, lymphatics, capillaries) from SMA+/CD31+/LYVE1+ cells. Graph topology (ring_score, arc_fraction, linearity) + geometric/PCA (circularity, hollowness, elongation). Morphometry (diameter, lumen, wall extent). Marker layering (Mann-Whitney U). Multi-marker OR/AND selection. Outputs tagged JSON + CSV + vessel-only JSON. | `scripts/detect_vessel_structures.py` |
 | **Tissue zones** | Spatially-constrained zone discovery, transects, bone region annotation | `examples/liver/assign_tissue_zones.py`, `examples/liver/zonation_transect.py`, `examples/bone_marrow/annotate_bone_regions.py` |
 | **Distance bins** | Concentric rings around landmarks (CV/PV), distance + ratio features, model comparison | `examples/liver/assign_distance_bins.py` |
@@ -122,7 +122,7 @@ For beginners, expand on each step as you reach it. For advanced users, just ask
 | **Region splitting** | Post-process existing pipeline detections → watershed split large regions | `scripts/split_regions_for_lmd.py` |
 | **Replicate sampling** | Area-matched or spatially-clustered replicates, marker/cluster stratification, 384-well assignment | `scripts/paper_figure_sampling.py` |
 | **Transect selection** | Select cells along zonation transect paths for LMD | `scripts/select_transect_cells_for_lmd.py` |
-| **Sliding window** | Area-matched rolling window sampling along ROI centerlines. Grid search for zero-rejection combos. Morphological skeleton + farthest-point spatial balancing. Ref settings: ~6700 cells/mm² brain → r=70um/40% overlap for 20× target, r=90um/40% for 30×. Always use `--czi-path`. | `scripts/sliding_window_sampling.py` |
+| **Sliding window** | Area-matched rolling window sampling along ROI centerlines. Grid search for zero-rejection combos. Morphological skeleton + farthest-point spatial balancing. Ref settings: ~6700 cells/mm² brain → r=70um/40% overlap for 20× target, r=90um/40% for 30×. Always use `--czi-path`. | `scripts/sliding_window_sampling.py` (core: `xldvp_seg.analysis.sliding_window_sampling`) |
 | **LMD** | Adaptive RDP simplification, dilation, clustering, well assignment, XML export | `run_lmd_export.py` |
 | **SpatialData** | Export to scverse ecosystem (squidpy, scanpy, anndata) | `scripts/convert_to_spatialdata.py` |
 | **Convert** | CZI to OME-Zarr pyramids for Napari | `scripts/czi_to_ome_zarr.py` |
@@ -463,11 +463,11 @@ PYTHONPATH=$REPO $XLDVP_PYTHON $REPO/scripts/regenerate_html.py \
 
 ## Phase 4: Marker Classification + Spatial Analysis
 
-**Step 15 — Marker classification** (if multi-channel):
+**Step 15 — Marker classification** (if multi-channel, core: `xldvp_seg.analysis.marker_classification`):
 
 Ask: *"Which channels are markers you want to classify as positive/negative?"*
 
-**Background correction is automatic.** The pipeline computes median-based local background during detection (post-dedup phase). SNR = median_raw / median_of_neighbor_medians. `classify_markers.py` uses these pre-computed SNR values directly.
+**Background correction is automatic.** The pipeline computes median-based local background during detection (post-dedup phase). SNR = median_raw / median_of_neighbor_medians. `classify_markers.py` (or `xlseg markers`) uses these pre-computed SNR values directly.
 
 ```bash
 # Standard usage — median SNR >= 1.5 (default):
@@ -528,7 +528,7 @@ PYTHONPATH=$REPO $XLDVP_PYTHON $REPO/examples/bone_marrow/calculate_tissue_areas
     --czi-path <czi_path> --output-dir <output>
 ```
 
-**Step 17 — Spatial network analysis:**
+**Step 17 — Spatial network analysis** (core: `xldvp_seg.analysis.spatial_network`):
 ```bash
 PYTHONPATH=$REPO $XLDVP_PYTHON $REPO/scripts/spatial_cell_analysis.py \
     --detections <detections.json> \
@@ -539,9 +539,10 @@ PYTHONPATH=$REPO $XLDVP_PYTHON $REPO/scripts/spatial_cell_analysis.py \
     --pixel-size <from czi_info>
 ```
 
-**Step 18 — Feature exploration.** Offer UMAP/t-SNE + Leiden clustering:
+**Step 18 — Feature exploration.** Offer UMAP/t-SNE + Leiden clustering (core: `xldvp_seg.analysis.cluster_features`):
 ```bash
-PYTHONPATH=$REPO $XLDVP_PYTHON $REPO/scripts/cluster_by_features.py \
+# Via xlseg CLI or direct script invocation
+xlseg cluster \
     --detections <detections.json> \
     --output-dir <output>/clustering \
     --feature-groups "morph" \
@@ -563,7 +564,7 @@ PYTHONPATH=$REPO $XLDVP_PYTHON $REPO/scripts/cluster_by_features.py \
 **Marker-positive subsets**: For focused analysis of marker+ populations, filter first then cluster with lower resolution:
 ```bash
 # Example: cluster only SMA+ cells, excluding the SMA channel from features
-PYTHONPATH=$REPO $XLDVP_PYTHON $REPO/scripts/cluster_by_features.py \
+xlseg cluster \
     --detections <SMA_positive.json> \
     --output-dir <output>/SMA_positive_clustering \
     --threshold 0.0 --feature-groups morph --methods both \

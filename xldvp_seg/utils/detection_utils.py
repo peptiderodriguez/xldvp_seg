@@ -150,7 +150,9 @@ def extract_positions_um(
         feats = det.get("features", {})
 
         # 1. global_center_um
-        center_um = det.get("global_center_um") or feats.get("global_center_um")
+        center_um = det.get("global_center_um")
+        if center_um is None:
+            center_um = feats.get("global_center_um")
         if center_um is not None and len(center_um) == 2:
             x, y = float(center_um[0]), float(center_um[1])
             if np.isfinite(x) and np.isfinite(y):
@@ -158,7 +160,9 @@ def extract_positions_um(
                 continue
 
         # 2. global_center * pixel_size_um
-        center_px = det.get("global_center") or feats.get("global_center")
+        center_px = det.get("global_center")
+        if center_px is None:
+            center_px = feats.get("global_center")
         if center_px is not None and len(center_px) == 2 and pixel_size_um:
             x = float(center_px[0]) * pixel_size_um
             y = float(center_px[1]) * pixel_size_um

@@ -645,8 +645,9 @@ The pipeline supports iterative refinement without re-detection:
 
 ## Step 8 -- Spatial Analysis
 
-The `scripts/spatial_cell_analysis.py` script provides three independent analysis
-modes that can be combined:
+The `scripts/spatial_cell_analysis.py` script (core logic in
+`xldvp_seg.analysis.spatial_network`) provides three independent analysis modes
+that can be combined:
 
 ### RF Leaf-Node Embedding (`--rf-embedding`)
 
@@ -693,12 +694,20 @@ python scripts/spatial_cell_analysis.py \
 
 Outputs: `spatial_network_summary.csv`, `spatial_components.png`, community metrics
 
-### UMAP + HDBSCAN Clustering (`scripts/cluster_by_features.py`)
+### UMAP + HDBSCAN Clustering (`xlseg cluster` / `scripts/cluster_by_features.py`)
 
 Unsupervised clustering using UMAP dimensionality reduction and HDBSCAN density
 clustering. Auto-labels clusters by dominant marker channel expression (z-score).
+Core logic lives in `xldvp_seg.analysis.cluster_features`.
 
 ```bash
+# Via CLI subcommand (preferred)
+xlseg cluster --detections detections.json \
+    --output-dir clustering/ \
+    --marker-channels "gcg:2,ins:3,sst:5" \
+    --feature-groups "morph,sam2,channel"
+
+# Or directly
 python scripts/cluster_by_features.py \
     --detections detections.json \
     --output-dir clustering/ \
@@ -712,6 +721,8 @@ Outputs: `detections_clustered.json`, `cluster_summary.csv`, `umap_plot.png`,
 `marker_violin.png`, `spatial.h5ad` (AnnData for scanpy), `spatial.csv`.
 
 ### Curvilinear Pattern Detection (`scripts/detect_curvilinear_patterns.py`)
+
+Core logic in `xldvp_seg.analysis.pattern_detection`.
 
 Detects strip/ribbon spatial structures (e.g., mesothelial linings, vascular
 boundaries) from marker-positive cells. Builds a KD-tree radius graph, extracts
@@ -998,8 +1009,8 @@ Cross-marker correlations between any pair of channels using the `ch*_mean`,
 
 ### 4. Spatial Clustering (Morphological Subtypes)
 
-HDBSCAN on UMAP embeddings (`scripts/cluster_by_features.py`) to find
-morphological subtypes within a population. Auto-labels clusters by dominant
+HDBSCAN on UMAP embeddings (`xlseg cluster` or `scripts/cluster_by_features.py`;
+core: `xldvp_seg.analysis.cluster_features`) to find morphological subtypes within a population. Auto-labels clusters by dominant
 marker channel using z-scored mean expression.
 
 ### 5. Tissue Zone Analysis
@@ -1058,8 +1069,8 @@ quantifies endothelial and smooth muscle contributions separately.
 | `scripts/czi_to_ome_zarr.py` | Convert CZI to OME-Zarr with pyramids |
 | `scripts/napari_place_crosses.py` | Interactive cross placement (CZI + OME-Zarr, RGB crosses, flip/rotate, contour overlay) |
 | `scripts/cluster_detections.py` | Biological clustering for LMD well assignment |
-| `scripts/cluster_by_features.py` | UMAP + HDBSCAN clustering with auto-labeling |
-| `scripts/spatial_cell_analysis.py` | RF embedding, morph UMAP, spatial network analysis |
+| `xlseg cluster` / `scripts/cluster_by_features.py` | UMAP + HDBSCAN clustering with auto-labeling (core: `xldvp_seg.analysis.cluster_features`) |
+| `scripts/spatial_cell_analysis.py` | RF embedding, morph UMAP, spatial network analysis (core: `xldvp_seg.analysis.spatial_network`) |
 | `examples/islet/analyze_islets.py` | Islet-level spatial analysis with composition metrics |
 | `examples/bone_marrow/maturation_analysis.py` | MK maturation staging via nuclear deep features |
 | `scripts/napari_view_lmd_export.py` | View LMD export overlaid on slide |

@@ -176,17 +176,11 @@ class TestTlMarkers:
         """markers() on empty slide should return slide immediately."""
         slide = SlideAnalysis.from_detections([])
 
-        # Create a mock module with classify_single_marker
         mock_classify = MagicMock()
-        mock_module = MagicMock()
-        mock_module.classify_single_marker = mock_classify
 
-        with patch.dict(
-            "sys.modules",
-            {
-                "scripts": MagicMock(),
-                "scripts.classify_markers": mock_module,
-            },
+        with patch(
+            "xldvp_seg.analysis.marker_classification.classify_single_marker",
+            mock_classify,
         ):
             result = tl.markers(slide, marker_channels=[1], marker_names=["NeuN"])
             assert result is slide
@@ -202,18 +196,13 @@ class TestTlMarkers:
                 "threshold": 1.5,
             }
         )
-        mock_module = MagicMock()
-        mock_module.classify_single_marker = mock_classify
 
         dets = _make_detections(5)
         slide = SlideAnalysis.from_detections(dets)
 
-        with patch.dict(
-            "sys.modules",
-            {
-                "scripts": MagicMock(),
-                "scripts.classify_markers": mock_module,
-            },
+        with patch(
+            "xldvp_seg.analysis.marker_classification.classify_single_marker",
+            mock_classify,
         ):
             result = tl.markers(
                 slide,
@@ -238,21 +227,16 @@ class TestTlMarkers:
         def fake_classify(detections, channel, marker_name, **kwargs):
             target = "positive" if channel == 1 else "negative"
             for det in detections:
-                det[f"{marker_name}_class"] = target
+                feat = det.setdefault("features", {})
+                feat[f"{marker_name}_class"] = target
             return {"n_positive": len(detections), "n_negative": 0, "threshold": 1.5}
-
-        mock_module = MagicMock()
-        mock_module.classify_single_marker = fake_classify
 
         dets = _make_detections(3)
         slide = SlideAnalysis.from_detections(dets)
 
-        with patch.dict(
-            "sys.modules",
-            {
-                "scripts": MagicMock(),
-                "scripts.classify_markers": mock_module,
-            },
+        with patch(
+            "xldvp_seg.analysis.marker_classification.classify_single_marker",
+            fake_classify,
         ):
             tl.markers(
                 slide,
@@ -262,8 +246,9 @@ class TestTlMarkers:
 
         # All detections should have marker_profile
         for det in slide.detections:
-            assert "marker_profile" in det
-            assert det["marker_profile"] == "NeuN+/CD31-"
+            feat = det.get("features", {})
+            assert "marker_profile" in feat
+            assert feat["marker_profile"] == "NeuN+/CD31-"
 
     def test_markers_invalidates_features_df_cache(self):
         """markers() should clear cached features_df."""
@@ -274,20 +259,15 @@ class TestTlMarkers:
                 "threshold": 1.0,
             }
         )
-        mock_module = MagicMock()
-        mock_module.classify_single_marker = mock_classify
 
         dets = _make_detections(3)
         slide = SlideAnalysis.from_detections(dets)
         _ = slide.features_df
         assert slide._features_df is not None
 
-        with patch.dict(
-            "sys.modules",
-            {
-                "scripts": MagicMock(),
-                "scripts.classify_markers": mock_module,
-            },
+        with patch(
+            "xldvp_seg.analysis.marker_classification.classify_single_marker",
+            mock_classify,
         ):
             tl.markers(slide, marker_channels=[1], marker_names=["NeuN"])
 
@@ -297,20 +277,22 @@ class TestTlMarkers:
         """Test the marker_profile construction logic in isolation."""
         dets = _make_detections(3)
         for i, det in enumerate(dets):
-            det["NeuN_class"] = "positive" if i % 2 == 0 else "negative"
-            det["CD31_class"] = "negative" if i % 2 == 0 else "positive"
+            feat = det.setdefault("features", {})
+            feat["NeuN_class"] = "positive" if i % 2 == 0 else "negative"
+            feat["CD31_class"] = "negative" if i % 2 == 0 else "positive"
 
         marker_names = ["NeuN", "CD31"]
         for det in dets:
+            feat = det.get("features", {})
             parts = []
             for name in marker_names:
-                cls = det.get(f"{name}_class", "")
+                cls = feat.get(f"{name}_class", "negative")
                 parts.append(f"{name}+" if cls == "positive" else f"{name}-")
-            det["marker_profile"] = "/".join(parts)
+            feat["marker_profile"] = "/".join(parts)
 
-        assert dets[0]["marker_profile"] == "NeuN+/CD31-"
-        assert dets[1]["marker_profile"] == "NeuN-/CD31+"
-        assert dets[2]["marker_profile"] == "NeuN+/CD31-"
+        assert dets[0]["features"]["marker_profile"] == "NeuN+/CD31-"
+        assert dets[1]["features"]["marker_profile"] == "NeuN-/CD31+"
+        assert dets[2]["features"]["marker_profile"] == "NeuN+/CD31-"
 
 
 class TestTlTrain:
@@ -349,18 +331,23 @@ class TestTlTrain:
         mock_cv = MagicMock(return_value=np.array([0.9, 0.85, 0.88, 0.92, 0.87]))
         mock_joblib = MagicMock()
 
-        # Patch the dynamic imports used inside train()
-        mock_train_module = MagicMock()
-        mock_train_module.load_features_and_annotations = mock_load_fn
-
-        with patch.dict(
-            "sys.modules",
-            {
-                "train_classifier": mock_train_module,
-                "sklearn.ensemble": MagicMock(RandomForestClassifier=mock_rf_cls),
-                "sklearn.model_selection": MagicMock(cross_val_score=mock_cv),
-                "joblib": mock_joblib,
-            },
+        with (
+            patch(
+                "xldvp_seg.training.feature_loader.load_features_and_annotations",
+                mock_load_fn,
+            ),
+            patch(
+                "sklearn.ensemble.RandomForestClassifier",
+                mock_rf_cls,
+            ),
+            patch(
+                "sklearn.model_selection.cross_val_score",
+                mock_cv,
+            ),
+            patch(
+                "joblib.dump",
+                mock_joblib.dump,
+            ),
         ):
             output_pkl = tmp_path / "test_classifier.pkl"
             result = tl.train(
@@ -402,14 +389,10 @@ class TestTlTrain:
 
         # Return empty X,y from load_features_and_annotations
         mock_load_fn = MagicMock(return_value=(np.array([]), np.array([]), []))
-        mock_train_module = MagicMock()
-        mock_train_module.load_features_and_annotations = mock_load_fn
 
-        with patch.dict(
-            "sys.modules",
-            {
-                "train_classifier": mock_train_module,
-            },
+        with patch(
+            "xldvp_seg.training.feature_loader.load_features_and_annotations",
+            mock_load_fn,
         ):
             with pytest.raises(ValueError, match="No annotated detections"):
                 tl.train(slide, annotations=str(ann_path))

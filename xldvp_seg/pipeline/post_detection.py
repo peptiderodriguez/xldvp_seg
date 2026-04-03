@@ -703,6 +703,8 @@ def process_detections_post_dedup(
             elif loader is not None:
                 nuc_tile = loader.get_tile(tile_x, tile_y, tile_size, channel=nuc_channel_idx)
                 if nuc_tile is not None:
+                    if nuc_tile.ndim == 3:
+                        nuc_tile = nuc_tile[:, :, 0]
                     nuc_tile = nuc_tile[:tile_h, :tile_w]
             else:
                 continue

@@ -10,20 +10,22 @@ Tests cover:
 
 import sys
 from pathlib import Path
-from unittest.mock import MagicMock
 
 import numpy as np
 import pytest
 
-# Ensure scripts/ is importable
+from xldvp_seg.analysis.pattern_detection import (
+    classify_components,
+    refine_strip_cells,
+    select_positive_cells,
+)
+from xldvp_seg.utils.graph_topology import component_width
+
+# Ensure scripts/ is importable for functions that remain in the script
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "scripts"))
 
 from detect_curvilinear_patterns import (
-    _component_width,
-    classify_components,
     extract_aligned_positions,
-    refine_strip_cells,
-    select_positive_cells,
     tag_detections,
 )
 
@@ -194,7 +196,7 @@ class TestClassifyComponents:
 
 
 # ---------------------------------------------------------------------------
-# _component_width tests
+# component_width tests
 # ---------------------------------------------------------------------------
 
 
@@ -202,7 +204,7 @@ class TestComponentWidth:
     def test_zero_width_for_collinear_points(self):
         """Points exactly on the path should have width 0."""
         positions = np.array([[0, 0], [10, 0], [20, 0], [30, 0]], dtype=np.float64)
-        w = _component_width(positions, [0, 1, 2, 3], [0, 1, 2, 3])
+        w = component_width(positions, [0, 1, 2, 3], [0, 1, 2, 3])
         assert w == pytest.approx(0.0, abs=0.1)
 
     def test_known_perpendicular_offset(self):
@@ -212,14 +214,14 @@ class TestComponentWidth:
             dtype=np.float64,
         )
         path = [0, 1, 2]  # x-axis
-        w = _component_width(positions, [0, 1, 2, 3, 4], path)
+        w = component_width(positions, [0, 1, 2, 3, 4], path)
         assert w == pytest.approx(30.0, abs=1.0)
 
     def test_short_path(self):
         """Path with < 2 nodes should return 0."""
         positions = np.array([[0, 0], [10, 0]], dtype=np.float64)
-        assert _component_width(positions, [0, 1], [0]) == 0.0
-        assert _component_width(positions, [0, 1], []) == 0.0
+        assert component_width(positions, [0, 1], [0]) == 0.0
+        assert component_width(positions, [0, 1], []) == 0.0
 
     def test_robust_to_outlier(self):
         """95th percentile width should be robust to single outlier."""
@@ -229,7 +231,7 @@ class TestComponentWidth:
             dtype=np.float64,
         )
         path = list(range(19))
-        w = _component_width(positions, list(range(20)), path)
+        w = component_width(positions, list(range(20)), path)
         # 95th percentile should be much less than 100 (the outlier)
         assert w < 100
 
@@ -241,18 +243,11 @@ class TestComponentWidth:
 
 class TestSelectPositiveCells:
     def test_snr_filter(self, sample_detections):
-        args = MagicMock()
-        args.snr_channel = 2
-        args.snr_threshold = 1.5
-        args.marker_filter = None
-        idx = select_positive_cells(sample_detections, args)
+        idx = select_positive_cells(sample_detections, snr_channel=2, snr_threshold=1.5)
         assert len(idx) == 10  # first 10 have snr=2.0
 
     def test_marker_filter_string(self, sample_detections):
-        args = MagicMock()
-        args.snr_channel = None
-        args.marker_filter = "MSLN_class==positive"
-        idx = select_positive_cells(sample_detections, args)
+        idx = select_positive_cells(sample_detections, marker_filter="MSLN_class==positive")
         assert len(idx) == 10
 
     def test_marker_filter_boolean(self):
@@ -262,30 +257,20 @@ class TestSelectPositiveCells:
             {"features": {"passed": False}},
             {"features": {"passed": True}},
         ]
-        args = MagicMock()
-        args.snr_channel = None
-        args.marker_filter = "passed==True"
-        idx = select_positive_cells(dets, args)
+        idx = select_positive_cells(dets, marker_filter="passed==True")
         assert len(idx) == 2
         assert idx == [0, 2]
 
     def test_snr_channel_zero(self):
         """SNR channel 0 should work (not treated as falsy)."""
         dets = [{"features": {"ch0_snr": 2.0}}, {"features": {"ch0_snr": 0.5}}]
-        args = MagicMock()
-        args.snr_channel = 0
-        args.snr_threshold = 1.0
-        args.marker_filter = None
-        idx = select_positive_cells(dets, args)
+        idx = select_positive_cells(dets, snr_channel=0, snr_threshold=1.0)
         assert len(idx) == 1
 
     def test_malformed_marker_filter(self):
-        """Marker filter without == should raise SystemExit."""
-        args = MagicMock()
-        args.snr_channel = None
-        args.marker_filter = "MSLN_class:positive"
-        with pytest.raises(SystemExit):
-            select_positive_cells([], args)
+        """Marker filter without == should raise ValueError."""
+        with pytest.raises(ValueError):
+            select_positive_cells([], marker_filter="MSLN_class:positive")
 
 
 # ---------------------------------------------------------------------------

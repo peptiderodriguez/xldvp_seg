@@ -57,11 +57,7 @@ def markers(
     Returns:
         slide (mutated with marker classifications).
     """
-    # Import lazily to avoid circular imports
-    import sys
-
-    sys.path.insert(0, str(Path(__file__).resolve().parent.parent.parent))
-    from scripts.classify_markers import classify_single_marker
+    from xldvp_seg.analysis.marker_classification import classify_single_marker
 
     detections = slide.detections
     if not detections:
@@ -94,11 +90,12 @@ def markers(
 
     # Build marker_profile from all markers (even for single marker)
     for det in detections:
+        feat = det.setdefault("features", {})
         parts = []
         for name in marker_names:
-            cls = det.get(f"{name}_class", "")
+            cls = feat.get(f"{name}_class", "negative")
             parts.append(f"{name}+" if cls == "positive" else f"{name}-")
-        det["marker_profile"] = "/".join(parts)
+        feat["marker_profile"] = "/".join(parts)
 
     # Invalidate cached features_df since detections changed
     slide._features_df = None
@@ -200,14 +197,11 @@ def train(
     Returns:
         Dict with training metrics (f1, precision, recall, etc.)
     """
-    import sys
-
-    sys.path.insert(0, str(Path(__file__).resolve().parent.parent.parent))
     import joblib
     from sklearn.ensemble import RandomForestClassifier
     from sklearn.model_selection import cross_val_score
 
-    from train_classifier import load_features_and_annotations
+    from xldvp_seg.training.feature_loader import load_features_and_annotations
 
     det_path = slide.detections_path
     if det_path is None:
@@ -244,8 +238,10 @@ def train(
     joblib.dump(
         {
             "model": rf,
+            "classifier": rf,  # legacy compat key for load_rf_classifier
             "feature_names": feature_names,
             "feature_set": feature_set,
+            "feature_extraction": "original_mask",
             "cv_f1_mean": float(cv_scores.mean()),
             "cv_f1_std": float(cv_scores.std()),
             "n_positive": int(y.sum()),
@@ -373,10 +369,7 @@ def spatial(
     Returns:
         slide (mutated with spatial features).
     """
-    import sys
-
-    sys.path.insert(0, str(Path(__file__).resolve().parent.parent.parent))
-    from scripts.spatial_cell_analysis import run_spatial_network
+    from xldvp_seg.analysis.spatial_network import run_spatial_network
 
     if output_dir is None:
         output_dir = str(slide.output_dir / "spatial") if slide.output_dir else tempfile.mkdtemp()

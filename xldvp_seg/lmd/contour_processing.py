@@ -481,8 +481,11 @@ def process_contour(
             polys = [g for g in getattr(final_poly_px, "geoms", []) if g.geom_type == "Polygon"]
             if polys:
                 final_poly_px = max(polys, key=lambda p: p.area)
-    if not final_poly_px.is_empty:
+    if not final_poly_px.is_empty and final_poly_px.geom_type == "Polygon":
         stats["area_after_um2"] = final_poly_px.area * pixel_size_um * pixel_size_um
+        # Use validated coordinates if make_valid repaired the geometry
+        if not final_poly_px.equals(Polygon(simplified_px)):
+            simplified_px = np.array(final_poly_px.exterior.coords)[:-1]
 
     # Convert to microns only at the end
     simplified_um = simplified_px * pixel_size_um

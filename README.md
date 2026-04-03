@@ -222,12 +222,12 @@ For rare large cells (e.g., MKs), single-cell-per-well is sometimes feasible —
 | Analysis | Tool | Description |
 |----------|------|-------------|
 | Feature comparison | `scripts/compare_feature_sets.py` | 5-fold CV across morph/SAM2/deep feature subsets |
-| Marker classification | `scripts/classify_markers.py` | Median SNR / Otsu / GMM per channel |
-| UMAP + clustering | `scripts/cluster_by_features.py` | Leiden/HDBSCAN, trajectory, spatial smoothing |
-| Spatial networks | `scripts/spatial_cell_analysis.py` | Delaunay graphs, community detection |
+| Marker classification | `scripts/classify_markers.py` | Median SNR / Otsu / GMM per channel (core: `xldvp_seg.analysis.marker_classification`) |
+| UMAP + clustering | `xlseg cluster` / `scripts/cluster_by_features.py` | Leiden/HDBSCAN, trajectory, spatial smoothing (core: `xldvp_seg.analysis.cluster_features`) |
+| Spatial networks | `scripts/spatial_cell_analysis.py` | Delaunay graphs, community detection (core: `xldvp_seg.analysis.spatial_network`) |
 | Interactive viewer | `scripts/generate_multi_slide_spatial_viewer.py` | Fluorescence overlay + cell contours + ROI drawing |
-| Sliding window | `scripts/sliding_window_sampling.py` | Area-matched rolling window along ROI centerlines for LMD |
-| Curvilinear patterns | `scripts/detect_curvilinear_patterns.py` | Strip/ribbon detection via graph diameter linearity |
+| Sliding window | `scripts/sliding_window_sampling.py` | Area-matched rolling window along ROI centerlines for LMD (core: `xldvp_seg.analysis.sliding_window_sampling`) |
+| Curvilinear patterns | `scripts/detect_curvilinear_patterns.py` | Strip/ribbon detection via graph diameter linearity (core: `xldvp_seg.analysis.pattern_detection`) |
 | Vessel structures | `scripts/detect_vessel_structures.py` | Ring/arc/strip classification from marker+ cells |
 | Vessel communities | `scripts/vessel_community_analysis.py` | Multi-scale morphology + SNR |
 | SpatialData export | `scripts/convert_to_spatialdata.py` | scverse zarr (squidpy, scanpy) |
@@ -253,6 +253,12 @@ print(f"{slide.n_detections} detections, {slide.cell_type}")
 # Classify markers + score with trained RF
 tl.markers(slide, marker_channels=[1, 2], marker_names=["NeuN", "tdTomato"])
 tl.score(slide, classifier="classifiers/rf_morph.pkl")
+
+# Cluster by features (UMAP + Leiden)
+tl.cluster(slide, feature_groups="morph,channel", output_dir="results/clustering/")
+
+# Spatial network analysis (Delaunay + Louvain communities)
+tl.spatial(slide, output_dir="results/spatial/", marker_filter="NeuN_class==positive")
 
 # Filter and export
 neurons = slide.filter(score_threshold=0.5).filter(marker="NeuN", positive=True)
@@ -298,12 +304,13 @@ Chains detection → marker classification → nuclei counting → HTML viewer a
 xldvp_seg/              # Main package (pip install -e .)
 ├── api/                   # Scanpy-style API (pp, tl, pl, io)
 ├── classification/        # Vessel type classifiers, feature selection
-├── cli/                   # xlseg CLI entry point (11 subcommands)
+├── cli/                   # xlseg CLI entry point (12 subcommands)
 ├── core/                  # SlideAnalysis central state object + detection schema
 ├── detection/strategies/  # 8 strategies, self-registered via @register_strategy
 ├── io/                    # CZI loader, HTML export, OME-Zarr, SpatialData export
 ├── lmd/                   # Well plates, contour processing (adaptive RDP + dilation)
-├── analysis/              # OmicLinker, aggregation, nuclear counting
+├── analysis/              # 8 modules: marker classification, clustering, spatial networks, patterns, sampling, OmicLinker, aggregation, nuclear counting
+├── training/              # Classifier training: feature loading, annotation matching
 ├── models/                # Model registry (SAM2, ResNet, DINOv2, brightfield FMs)
 ├── pipeline/              # 11 modules: shm_setup, detection_loop, preprocessing, post_detection, ...
 ├── processing/            # Multi-GPU workers, deduplication, strategy factory
@@ -312,7 +319,7 @@ xldvp_seg/              # Main package (pip install -e .)
 
 scripts/                   # 28 reusable CLI tools
 examples/                  # Project-specific analyses by experiment
-tests/                     # 677 tests across 26 files
+tests/                     # 670 tests across 26 files
 ```
 
 ## Key Design Decisions

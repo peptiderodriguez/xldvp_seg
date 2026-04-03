@@ -360,6 +360,8 @@ class SlideAnalysis:
         x_cols = [c for c in df.columns if c not in exclude]
 
         # --- Build X (morph + channel features) ---
+        # Filter out non-numeric columns (e.g., string/list vessel features)
+        x_cols = [c for c in x_cols if df[c].dtype.kind in ("f", "i", "u", "b")]
         X = df[x_cols].values.astype(np.float32)
         X = np.nan_to_num(X, nan=0.0, posinf=0.0, neginf=0.0)
 
@@ -381,7 +383,8 @@ class SlideAnalysis:
         obs.index = pd.Index(unique_uids, name="uid")
         obs["slide_name"] = [d.get("slide_name", self.slide_name) for d in dets]
         obs["cell_type"] = [d.get("cell_type", self.cell_type) for d in dets]
-        obs["pixel_size_um"] = self.pixel_size_um or np.nan
+        px_um = self.pixel_size_um
+        obs["pixel_size_um"] = px_um if px_um is not None and px_um > 0 else np.nan
         obs["area_um2"] = [d.get("features", {}).get("area_um2", np.nan) for d in dets]
         # Nuclear counting fields (if available)
         if any("n_nuclei" in d.get("features", {}) for d in dets[:10]):

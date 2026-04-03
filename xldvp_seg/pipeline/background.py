@@ -237,17 +237,17 @@ def correct_all_channels(
 
             raw_key = f"ch{ch}_{suffix}_raw"
             for i, det in enumerate(detections):
-                feat = det["features"]
+                feat = det.setdefault("features", {})
                 feat[raw_key] = float(values[i])
                 feat[key] = float(corrected[i])
 
         # background & SNR (median / median — robust to bright outlier pixels)
         median_raw = np.array(
-            [d["features"].get(f"ch{ch}_median_raw", 0.0) for d in detections],
+            [d.get("features", {}).get(f"ch{ch}_median_raw", 0.0) for d in detections],
             dtype=np.float64,
         )
         for i, det in enumerate(detections):
-            feat = det["features"]
+            feat = det.setdefault("features", {})
             feat[f"ch{ch}_background"] = float(per_cell_bg[i])
             feat[f"ch{ch}_snr"] = (
                 float(median_raw[i] / per_cell_bg[i]) if per_cell_bg[i] > 0 else 0.0
@@ -256,7 +256,7 @@ def correct_all_channels(
         # cv = std / corrected_mean (CV is defined as std/mean, not std/median)
         if f"ch{ch}_cv" in sample_keys and f"ch{ch}_std" in sample_keys:
             for i, det in enumerate(detections):
-                feat = det["features"]
+                feat = det.setdefault("features", {})
                 corr_mean = feat.get(f"ch{ch}_mean", 0.0)
                 std = feat.get(f"ch{ch}_std", 0.0)
                 feat[f"ch{ch}_cv"] = float(std / corr_mean) if corr_mean > 0 else 0.0
@@ -266,7 +266,7 @@ def correct_all_channels(
         dr_key = f"ch{ch}_dynamic_range"
         if dr_key in sample_keys:
             for det in detections:
-                feat = det["features"]
+                feat = det.setdefault("features", {})
                 cmin = feat.get(f"ch{ch}_min", 0.0)
                 cmax = feat.get(f"ch{ch}_max", 0.0)
                 feat[dr_key] = float(cmax - cmin)
@@ -280,13 +280,13 @@ def correct_all_channels(
             diff_key = f"ch{ch_a}_ch{ch_b}_diff"
             if ratio_key in sample_keys:
                 for i, det in enumerate(detections):
-                    feat = det["features"]
+                    feat = det.setdefault("features", {})
                     a = channel_corrected_median[ch_a][i]
                     b = channel_corrected_median[ch_b][i]
                     feat[ratio_key] = float(a / b) if b > 0 else 0.0
             if diff_key in sample_keys:
                 for i, det in enumerate(detections):
-                    feat = det["features"]
+                    feat = det.setdefault("features", {})
                     a = channel_corrected_median[ch_a][i]
                     b = channel_corrected_median[ch_b][i]
                     feat[diff_key] = float(a - b)

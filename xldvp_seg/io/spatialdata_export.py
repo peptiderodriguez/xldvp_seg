@@ -183,7 +183,7 @@ def _discover_features(detections):
 def _discover_obs_classes(detections):
     """Discover classification columns (e.g., tdTomato_class, GFP_class) from detections."""
     class_cols = set()
-    for det in detections[:10]:
+    for det in detections[:100]:
         feats = det.get("features", {})
         for key, val in feats.items():
             if key.endswith("_class") and isinstance(val, str):

@@ -82,6 +82,10 @@ def _run_markers(remaining):
     _run_script("scripts/classify_markers.py", remaining)
 
 
+def _run_cluster(remaining):
+    _run_script("scripts/cluster_by_features.py", remaining)
+
+
 def _run_score(remaining):
     _run_script("scripts/apply_classifier.py", remaining)
 
@@ -151,6 +155,7 @@ _DISPATCH = {
     "info": _run_info,
     "detect": _run_detect,
     "classify": _run_classify,
+    "cluster": _run_cluster,
     "markers": _run_markers,
     "score": _run_score,
     "export-lmd": _run_export_lmd,
@@ -177,6 +182,7 @@ def cli():
     subparsers.add_parser("info", help="Inspect CZI metadata (channels, dimensions)")
     subparsers.add_parser("detect", help="Run cell detection pipeline")
     subparsers.add_parser("classify", help="Train RF classifier from annotations")
+    subparsers.add_parser("cluster", help="Feature clustering with UMAP/t-SNE + Leiden/HDBSCAN")
     subparsers.add_parser("markers", help="Classify marker pos/neg per channel")
     subparsers.add_parser("score", help="Score detections with trained classifier")
     subparsers.add_parser("export-lmd", help="Export for laser microdissection")

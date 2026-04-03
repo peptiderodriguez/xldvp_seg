@@ -18,6 +18,12 @@ run_segmentation.py  (~950 lines, orchestrator)
             → MultiChannelFeatureMixin (feature extraction)
     → xldvp_seg/processing/multigpu_worker.py  (always used, even with --num-gpus 1)
     → xldvp_seg/processing/tile_processing.py  (shared process_single_tile())
+
+Post-detection analysis (promoted from scripts/ into package):
+    → xldvp_seg/analysis/  (8 modules: marker_classification, cluster_features,
+        spatial_network, pattern_detection, sliding_window_sampling,
+        aggregation, nuclear_count, omic_linker)
+    → xldvp_seg/training/  (feature_loader — annotation matching for classifier training)
 ```
 
 ## Detection Strategies

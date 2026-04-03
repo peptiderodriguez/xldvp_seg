@@ -198,6 +198,7 @@ class TestCLIDispatchTable:
             "info",
             "detect",
             "classify",
+            "cluster",
             "markers",
             "score",
             "export-lmd",

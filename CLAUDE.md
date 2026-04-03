@@ -73,7 +73,7 @@ PYTHONPATH=$REPO $XLDVP_PYTHON $REPO/scripts/czi_info.py /path/to/slide.czi
 
 ### Tests
 
-Tests in `tests/` using pytest (677 tests, 26 files). Run `make test` for all with coverage. Fixtures in `conftest.py`. Tests rely on `pip install -e .` (or `PYTHONPATH=$REPO`) for `xldvp_seg.*` imports.
+Tests in `tests/` using pytest (670 tests, 26 files). Run `make test` for all with coverage. Fixtures in `conftest.py`. Tests rely on `pip install -e .` (or `PYTHONPATH=$REPO`) for `xldvp_seg.*` imports.
 
 **Development workflow:**
 ```bash
@@ -95,6 +95,7 @@ xlseg detect --czi-path slide.czi ...   # Run detection pipeline
 xlseg classify --detections ...          # Train RF classifier
 xlseg markers --detections ...           # Marker pos/neg classification
 xlseg score --detections ... --classifier ... # Score detections
+xlseg cluster --detections ...           # Feature clustering (UMAP/t-SNE + Leiden)
 xlseg export-lmd --detections ...        # LMD export
 xlseg serve /path/to/html               # Serve HTML viewer
 xlseg system                             # Show system info
@@ -320,10 +321,11 @@ Batch: `--input-dir <runs> --crosses-dir <crosses>`. Max 308 wells/plate; multi-
 
 Use `/analyze` for the full interactive catalog. Key scripts beyond detect → classify → LMD:
 
-- **Spatial**: `spatial_cell_analysis.py` (Delaunay networks), `cluster_by_features.py` (UMAP/t-SNE + Leiden), `generate_multi_slide_spatial_viewer.py` (interactive HTML viewer with fluorescence background + contours + ROI)
+- **Spatial**: `spatial_cell_analysis.py` (Delaunay networks; core: `xldvp_seg.analysis.spatial_network`), `cluster_by_features.py` (UMAP/t-SNE + Leiden; core: `xldvp_seg.analysis.cluster_features`), `generate_multi_slide_spatial_viewer.py` (interactive HTML viewer with fluorescence background + contours + ROI)
 - **Vessel**: `detect_vessel_structures.py` (graph topology: ring/arc/strip), `vessel_community_analysis.py` (multi-scale + SNR)
-- **Curvilinear**: `detect_curvilinear_patterns.py` (KD-tree graph → linearity → strip/ribbon detection)
-- **LMD sampling**: `sliding_window_sampling.py`, `paper_figure_sampling.py`, `select_transect_cells_for_lmd.py`, `cluster_detections.py`
+- **Curvilinear**: `detect_curvilinear_patterns.py` (KD-tree graph → linearity → strip/ribbon detection; core: `xldvp_seg.analysis.pattern_detection`)
+- **Markers**: `classify_markers.py` (median SNR / Otsu / GMM; core: `xldvp_seg.analysis.marker_classification`)
+- **LMD sampling**: `sliding_window_sampling.py` (core: `xldvp_seg.analysis.sliding_window_sampling`), `paper_figure_sampling.py`, `select_transect_cells_for_lmd.py`, `cluster_detections.py`
 - **Nuclear counting**: integrated via `--count-nuclei` (default ON), or standalone `count_nuclei_per_cell.py` for existing runs
 - **SpatialData**: auto-exported as `{celltype}_spatialdata.zarr` every run. `--run-squidpy` for spatial stats.
 - **OME-Zarr**: auto-generated from SHM. `--no-zarr` to skip, `--force-zarr` to overwrite.
@@ -390,6 +392,27 @@ Metadata catalog for all models (feature extractors + segmenters). Tracks name, 
 ### ROI-Restricted Detection (`xldvp_seg.roi`)
 
 Reusable utilities for detection within specific regions: `roi.common` (bbox, filtering, multi-GPU), `roi.marker_threshold` (Otsu on marker signal), `roi.circular_objects` (TMA cores, islets), `roi.from_file` (polygon/mask). Examples: `examples/islet/`, `examples/tma/`, `examples/bone_marrow/`.
+
+### Analysis Modules (`xldvp_seg/analysis/`)
+
+Post-detection analysis functions promoted from scripts/ into the package for clean programmatic access:
+
+| Module | Purpose |
+|--------|---------|
+| `marker_classification.py` | Marker pos/neg classification (SNR, Otsu, GMM) — used by `xlseg markers` and `tl.markers()` |
+| `cluster_features.py` | Feature selection, matrix building, normalization, cluster labeling — used by `xlseg cluster` |
+| `spatial_network.py` | Delaunay networks, Louvain communities, RF/morph UMAP — used by `tl.spatial()` |
+| `pattern_detection.py` | Strip/cluster spatial pattern classification (curvilinear detection) |
+| `sliding_window_sampling.py` | Skeleton-based spatial sampling along ROI centerlines for LMD |
+| `aggregation.py` | Slide-level and cohort-level feature aggregation |
+| `nuclear_count.py` | Cellpose-based nuclear segmentation within cells |
+| `omic_linker.py` | Morphology-to-proteomics bridge (DVP linking) |
+
+### Training Utilities (`xldvp_seg/training/`)
+
+| Module | Purpose |
+|--------|---------|
+| `feature_loader.py` | Load features + annotations, feature set filtering — used by `tl.train()` |
 
 ---
 
@@ -550,8 +573,8 @@ python run_segmentation.py --czi-path slide.czi --cell-type nmj \
 
 ## Entry Points
 
-**Core:** `run_segmentation.py` (detection), `run_lmd_export.py` (LMD XML), `train_classifier.py` (RF), `serve_html.py` (viewer). SLURM: `scripts/run_pipeline.sh` (YAML-driven launcher).
+**Core:** `run_segmentation.py` (detection), `run_lmd_export.py` (LMD XML), `train_classifier.py` (RF), `serve_html.py` (viewer). SLURM: `scripts/run_pipeline.sh` (YAML-driven launcher). **CLI:** `xlseg` with 12 subcommands (info, detect, classify, cluster, markers, score, export-lmd, serve, system, models, strategies, download-models).
 
-**Scripts (`scripts/`):** 28 reusable tools — `ls scripts/` for full list. Key: `czi_info.py`, `classify_markers.py`, `apply_classifier.py`, `regenerate_html.py`, `generate_multi_slide_spatial_viewer.py`, `detect_vessel_structures.py`, `count_nuclei_per_cell.py`, `sliding_window_sampling.py`.
+**Scripts (`scripts/`):** 28 reusable tools — `ls scripts/` for full list. Key: `czi_info.py`, `classify_markers.py`, `apply_classifier.py`, `regenerate_html.py`, `generate_multi_slide_spatial_viewer.py`, `detect_vessel_structures.py`, `count_nuclei_per_cell.py`, `sliding_window_sampling.py`. Core logic of 5 promoted scripts now lives in `xldvp_seg/analysis/` for programmatic access (scripts delegate to package modules).
 
 **Examples (`examples/`):** Project-specific scripts by experiment — `bone_marrow/`, `mesothelium/`, `islet/`, `tma/`, `liver/`, `nmj/`, `vessel/`, `tissue_pattern/`, `configs/` (YAML templates).

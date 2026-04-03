@@ -863,96 +863,101 @@ def run_detection_loop(
 
     # NOTE: shared memory is still alive here — post-dedup and HTML generation need it.
     # Cleanup is deferred to after _finish_pipeline().
+    # Post-detection code (tile coverage, vessel merge) is wrapped in its own
+    # try/except to prevent SHM leaks if these steps crash.
+    try:
+        logger.info(f"Total detections (pre-dedup): {len(all_detections)}")
 
-    logger.info(f"Total detections (pre-dedup): {len(all_detections)}")
+        # ---- Tile coverage verification ----
+        # After ALL detection paths (single-node, multi-GPU, shard merge), verify
+        # that every tissue tile was processed. Catches shard gaps, tile skips, crashes.
+        tiles_processed = set()
+        for det in all_detections:
+            to = det.get("tile_origin")
+            if to:
+                tiles_processed.add(tuple(to))
+        n_processed = len(tiles_processed)
+        n_expected = len(sampled_tiles) if sampled_tiles else 0
+        if n_expected > 0:
+            coverage_pct = 100 * n_processed / n_expected
+            logger.info(
+                f"Tile coverage: {n_processed}/{n_expected} tiles with detections ({coverage_pct:.1f}%)"
+            )
+            if n_processed < n_expected:
+                # Some tiles may legitimately have 0 detections (empty tissue), but
+                # a large gap (>10%) suggests a real problem
+                gap_pct = 100 * (n_expected - n_processed) / n_expected
+                if gap_pct > 10:
+                    logger.warning(
+                        f"LOW COVERAGE: {n_expected - n_processed} tissue tiles ({gap_pct:.1f}%) "
+                        f"produced no detections. This may indicate detection issues."
+                    )
+                elif gap_pct > 0:
+                    logger.info(
+                        f"Note: {n_expected - n_processed} tissue tiles had no detections "
+                        f"(normal for sparse tissue regions)"
+                    )
 
-    # ---- Tile coverage verification ----
-    # After ALL detection paths (single-node, multi-GPU, shard merge), verify
-    # that every tissue tile was processed. Catches shard gaps, tile skips, crashes.
-    tiles_processed = set()
-    for det in all_detections:
-        to = det.get("tile_origin")
-        if to:
-            tiles_processed.add(tuple(to))
-    n_processed = len(tiles_processed)
-    n_expected = len(sampled_tiles) if sampled_tiles else 0
-    if n_expected > 0:
-        coverage_pct = 100 * n_processed / n_expected
-        logger.info(
-            f"Tile coverage: {n_processed}/{n_expected} tiles with detections ({coverage_pct:.1f}%)"
-        )
-        if n_processed < n_expected:
-            # Some tiles may legitimately have 0 detections (empty tissue), but
-            # a large gap (>10%) suggests a real problem
-            gap_pct = 100 * (n_expected - n_processed) / n_expected
-            if gap_pct > 10:
-                logger.warning(
-                    f"LOW COVERAGE: {n_expected - n_processed} tissue tiles ({gap_pct:.1f}%) "
-                    f"produced no detections. This may indicate detection issues."
-                )
-            elif gap_pct > 0:
-                logger.info(
-                    f"Note: {n_expected - n_processed} tissue tiles had no detections "
-                    f"(normal for sparse tissue regions)"
-                )
+        # Cross-tile vessel merge: reconstruct partial vessels from all workers and merge
+        if args.cell_type == "vessel" and not is_multiscale and collected_partial_vessels:
+            from xldvp_seg.detection.strategies.vessel import VesselStrategy
 
-    # Cross-tile vessel merge: reconstruct partial vessels from all workers and merge
-    if args.cell_type == "vessel" and not is_multiscale and collected_partial_vessels:
-        from xldvp_seg.detection.strategies.vessel import VesselStrategy
+            n_partials = sum(len(v) for v in collected_partial_vessels.values())
+            n_tiles_with = len(collected_partial_vessels)
+            logger.info(
+                f"Cross-tile vessel merge: {n_partials} partial vessels from {n_tiles_with} tiles"
+            )
+            merge_strategy = VesselStrategy()
+            merge_strategy.import_partial_vessels(collected_partial_vessels)
+            tile_overlap_px = int(args.tile_size * args.tile_overlap)
+            merged_vessels = merge_strategy.merge_cross_tile_vessels(
+                tile_size=args.tile_size,
+                overlap=tile_overlap_px,
+                match_threshold=0.6,
+            )
+            if merged_vessels:
+                logger.info(f"Cross-tile merge produced {len(merged_vessels)} merged vessels")
+                # Add merged vessels as new detections with proper UIDs
+                for mv in merged_vessels:
+                    outer = mv.get("outer")
+                    if outer is None:
+                        continue
+                    pts = outer.reshape(-1, 2)
+                    cx, cy = float(pts[:, 0].mean()), float(pts[:, 1].mean())
+                    uid = f"{slide_name}_vessel_{int(round(cx))}_{int(round(cy))}"
+                    feat = mv.get("features", {})
+                    feat["center"] = [cx, cy]
+                    feat["is_cross_tile_merged"] = True
+                    feat["merge_score"] = mv.get("merge_score", 0)
+                    det = {
+                        "uid": uid,
+                        "slide_name": slide_name,
+                        "global_center": [cx, cy],
+                        "global_center_um": [cx * pixel_size_um, cy * pixel_size_um],
+                        "features": feat,
+                        "tile_origin": list(mv.get("source_tiles", [(0, 0)])[0]),
+                        "is_cross_tile_merged": True,
+                    }
+                    all_detections.append(det)
+                logger.info(f"Total detections after cross-tile merge: {len(all_detections)}")
+            else:
+                logger.info("Cross-tile merge: no matches found")
+            del merge_strategy, collected_partial_vessels
+            gc.collect()
 
-        n_partials = sum(len(v) for v in collected_partial_vessels.values())
-        n_tiles_with = len(collected_partial_vessels)
-        logger.info(
-            f"Cross-tile vessel merge: {n_partials} partial vessels from {n_tiles_with} tiles"
-        )
-        merge_strategy = VesselStrategy()
-        merge_strategy.import_partial_vessels(collected_partial_vessels)
-        tile_overlap_px = int(args.tile_size * args.tile_overlap)
-        merged_vessels = merge_strategy.merge_cross_tile_vessels(
-            tile_size=args.tile_size,
-            overlap=tile_overlap_px,
-            match_threshold=0.6,
-        )
-        if merged_vessels:
-            logger.info(f"Cross-tile merge produced {len(merged_vessels)} merged vessels")
-            # Add merged vessels as new detections with proper UIDs
-            for mv in merged_vessels:
-                outer = mv.get("outer")
-                if outer is None:
-                    continue
-                pts = outer.reshape(-1, 2)
-                cx, cy = float(pts[:, 0].mean()), float(pts[:, 1].mean())
-                uid = f"{slide_name}_vessel_{int(round(cx))}_{int(round(cy))}"
-                feat = mv.get("features", {})
-                feat["center"] = [cx, cy]
-                feat["is_cross_tile_merged"] = True
-                feat["merge_score"] = mv.get("merge_score", 0)
-                det = {
-                    "uid": uid,
-                    "slide_name": slide_name,
-                    "global_center": [cx, cy],
-                    "global_center_um": [cx * pixel_size_um, cy * pixel_size_um],
-                    "features": feat,
-                    "tile_origin": list(mv.get("source_tiles", [(0, 0)])[0]),
-                    "is_cross_tile_merged": True,
-                }
-                all_detections.append(det)
-            logger.info(f"Total detections after cross-tile merge: {len(all_detections)}")
-        else:
-            logger.info("Cross-tile merge: no matches found")
-        del merge_strategy, collected_partial_vessels
-        gc.collect()
-
-    # Detection-only mode: skip dedup, HTML, CSV -- just save per-tile results and exit
-    if getattr(args, "detection_only", False):
-        logger.info(
-            f"Detection-only mode: {len(all_detections)} detections saved to tile dirs. Exiting."
-        )
-        if getattr(args, "tile_shard", None):
-            shard_idx, shard_total = args.tile_shard
-            logger.info(f"Shard {shard_idx}/{shard_total} complete.")
+        # Detection-only mode: skip dedup, HTML, CSV -- just save per-tile results and exit
+        if getattr(args, "detection_only", False):
+            logger.info(
+                f"Detection-only mode: {len(all_detections)} detections saved to tile dirs. Exiting."
+            )
+            if getattr(args, "tile_shard", None):
+                shard_idx, shard_total = args.tile_shard
+                logger.info(f"Shard {shard_idx}/{shard_total} complete.")
+            shm_manager.cleanup()
+            return {"exit_early": True}
+    except Exception:
         shm_manager.cleanup()
-        return {"exit_early": True}
+        raise
 
     return {
         "exit_early": False,

@@ -110,9 +110,9 @@ class Detection:
         """Validate a batch of detection dicts. Returns list of error messages (empty = valid)."""
         errors = []
         for i, d in enumerate(detections):
-            if not d.get("uid") and not d.get("id"):
+            if d.get("uid") is None and d.get("id") is None:
                 errors.append(f"Detection {i}: missing uid/id")
-            if not d.get("global_center"):
+            if d.get("global_center") is None:
                 errors.append(f"Detection {i}: missing global_center")
             if d.get("mask_label") is None and d.get("contour_px") is None:
                 errors.append(f"Detection {i}: missing both mask_label and contour_px")
