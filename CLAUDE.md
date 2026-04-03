@@ -418,6 +418,10 @@ Post-detection analysis functions promoted from scripts/ into the package for cl
 
 ## Critical Code Patterns
 
+### Random Seeds & Reproducibility
+
+Pipeline sets numpy, stdlib, and torch seeds at startup (`--random-seed`, default 42). `torch.cuda.manual_seed_all()` is called when CUDA is available. **GPU non-determinism:** cuDNN and CUDA atomics mean results may differ slightly across runs even with fixed seeds. Full determinism requires `torch.use_deterministic_algorithms(True)` which incurs ~10-20% overhead and is not enabled by default. This is a known limitation.
+
 ### Device Handling
 
 Never hardcode `device="cuda"`. Use from `xldvp_seg.utils.device`:

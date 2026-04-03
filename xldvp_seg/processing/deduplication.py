@@ -36,6 +36,11 @@ import h5py
 
 from xldvp_seg.utils.logging import get_logger
 
+try:
+    from shapely.errors import GEOSException
+except ImportError:
+    GEOSException = Exception
+
 logger = get_logger(__name__)
 
 # Default stride for encoding (x, y) as single int64 for fast numpy set
@@ -688,7 +693,7 @@ def deduplicate_by_iou_nms(
             poly_j = valid_polygons[j_pos]
             try:
                 intersection_area = poly_i.intersection(poly_j).area
-            except (ValueError, TypeError):
+            except (ValueError, TypeError, GEOSException):
                 # Geometry errors (rare): skip this pair
                 continue
             if intersection_area == 0:

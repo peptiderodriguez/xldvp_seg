@@ -18,6 +18,11 @@ from pathlib import Path
 import numpy as np
 
 from xldvp_seg.utils.detection_utils import get_contour_px
+
+try:
+    from shapely.errors import GEOSException
+except ImportError:
+    GEOSException = Exception  # fallback for older shapely
 from xldvp_seg.utils.logging import get_logger
 
 logger = get_logger(__name__)
@@ -399,7 +404,7 @@ def _extract_shapes_from_hdf5(detections, tiles_dir, cell_type):
                     if poly.is_valid:
                         polygons[det_idx] = poly
                         contours_extracted += 1
-                except (ValueError, TypeError):
+                except (ValueError, TypeError, GEOSException):
                     pass
 
         del masks  # Free memory before next tile
@@ -437,7 +442,7 @@ def _extract_vessel_shapes(detections):
                 if poly.is_valid:
                     layers[layer_name][i] = poly
                     counts[layer_name] += 1
-            except (ValueError, TypeError):
+            except (ValueError, TypeError, GEOSException):
                 pass
 
     for name, count in counts.items():
@@ -467,7 +472,7 @@ def _make_circle_fallback(detections, pixel_size_um):
         try:
             circle = Point(gc[0], gc[1]).buffer(radius_px, resolution=16)
             polygons[i] = circle
-        except (ValueError, TypeError):
+        except (ValueError, TypeError, GEOSException):
             pass
 
     n_valid = sum(1 for p in polygons if p is not None)
@@ -526,7 +531,7 @@ def build_shapes(detections, cell_type, tiles_dir=None, pixel_size_um=1.0):
                 if poly.is_valid:
                     polygons[i] = poly
                     _from_json += 1
-            except (ValueError, TypeError):
+            except (ValueError, TypeError, GEOSException):
                 pass
     if _from_json > 0:
         logger.info("  Used %d/%d contours from detection JSON", _from_json, len(detections))
