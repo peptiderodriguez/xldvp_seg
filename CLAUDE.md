@@ -73,7 +73,7 @@ PYTHONPATH=$REPO $XLDVP_PYTHON $REPO/scripts/czi_info.py /path/to/slide.czi
 
 ### Tests
 
-Tests in `tests/` using pytest (781 tests, 32 files). Run `make test` for all with coverage. Fixtures in `conftest.py`. Tests rely on `pip install -e .` (or `PYTHONPATH=$REPO`) for `xldvp_seg.*` imports.
+Tests in `tests/` using pytest (789 collected, 782 passing, 7 skipped, 32 files). Run `make test` for all with coverage. Fixtures in `conftest.py`. Tests rely on `pip install -e .` (or `PYTHONPATH=$REPO`) for `xldvp_seg.*` imports.
 
 **Development workflow:**
 ```bash
