@@ -264,6 +264,9 @@ class TestAnalyzeMarkerComposition:
         assert comp["n_sma"] == 8
         assert comp["n_cd31"] == 6
         assert comp["sma_frac"] == pytest.approx(8 / 14, abs=0.01)
+        assert comp["sma_total_frac"] == pytest.approx(8 / 14, abs=0.01)  # no DP → same
+        assert comp["cd31_total_frac"] == pytest.approx(6 / 14, abs=0.01)
+        assert comp["n_double_pos"] == 0
         assert comp["dominant_marker"] == "SMA"
 
     def test_single_marker(self):
@@ -273,7 +276,7 @@ class TestAnalyzeMarkerComposition:
         assert comp["lyve1_frac"] == 1.0
 
     def test_double_positive_cells(self):
-        """Cells positive for both SMA and CD31 are counted in BOTH markers."""
+        """Cells positive for both SMA and CD31 are double-pos, but total fracs are per-marker."""
         dets = [
             _make_detection({"SMA_class": "positive", "CD31_class": "positive"}) for _ in range(10)
         ]
@@ -284,6 +287,27 @@ class TestAnalyzeMarkerComposition:
         assert comp["n_cd31"] == 0  # single-positive CD31 = 0
         assert comp["n_double_pos"] == 10  # all are double-positive
         assert comp["double_pos_frac"] == 1.0
+        # Per-marker total fracs include double-positive cells expressing THAT marker
+        assert comp["sma_total_frac"] == 1.0  # all 10 express SMA
+        assert comp["cd31_total_frac"] == 1.0  # all 10 express CD31
+
+    def test_total_frac_excludes_irrelevant_double_pos(self):
+        """SMA+CD31 double-positive cells must NOT inflate LYVE1 total frac."""
+        dets = [
+            _make_detection(
+                {"SMA_class": "positive", "CD31_class": "positive", "LYVE1_class": "negative"}
+            )
+            for _ in range(10)
+        ]
+        comp = analyze_marker_composition(
+            dets,
+            list(range(10)),
+            ["SMA", "CD31", "LYVE1"],
+            ["SMA_class", "CD31_class", "LYVE1_class"],
+        )
+        assert comp["sma_total_frac"] == 1.0
+        assert comp["cd31_total_frac"] == 1.0
+        assert comp["lyve1_total_frac"] == 0.0  # no LYVE1+ cells at all
 
 
 # ---------------------------------------------------------------------------
@@ -488,6 +512,44 @@ class TestAssignVesselType:
         )
         assert vt == "lymphatic"
 
+    def test_artery_with_total_frac_keys(self):
+        """Verify typing works with _total_frac keys (primary path, not fallback)."""
+        vt = assign_vessel_type(
+            "ring",
+            {
+                "sma_frac": 0.3,
+                "cd31_frac": 0.1,
+                "lyve1_frac": 0.0,
+                "sma_total_frac": 0.8,
+                "cd31_total_frac": 0.6,
+                "lyve1_total_frac": 0.0,
+                "double_pos_frac": 0.5,
+                "n_cells": 20,
+            },
+            {},
+            {"vessel_diameter_um": 150, "wall_extent_um": 50, "wall_cell_layers": 3.0},
+        )
+        assert vt == "artery"
+
+    def test_collecting_lymphatic_longitudinal(self):
+        """Longitudinal collecting lymphatic must not be misclassified as artery."""
+        vt = assign_vessel_type(
+            "strip",
+            {
+                "sma_frac": 0.1,
+                "cd31_frac": 0.0,
+                "lyve1_frac": 0.3,
+                "sma_total_frac": 0.25,
+                "cd31_total_frac": 0.0,
+                "lyve1_total_frac": 0.5,
+                "double_pos_frac": 0.15,
+                "n_cells": 30,
+            },
+            {},
+            {},
+        )
+        assert vt == "collecting_lymphatic_longitudinal"
+
 
 # ---------------------------------------------------------------------------
 # Spatial layering
@@ -621,3 +683,125 @@ class TestTagDetections:
         dets = [_make_detection() for _ in range(5)]
         tag_detections(dets, {}, ["SMA"], ["SMA_class"])
         assert all(d["features"]["vessel_id"] == -1 for d in dets)
+
+
+# ---------------------------------------------------------------------------
+# Tests for vessel_characterization shared module (new functions)
+# ---------------------------------------------------------------------------
+
+
+class TestComputeLumenMorphometry:
+    """Tests for compute_lumen_morphometry from the shared module."""
+
+    def test_circle(self):
+        from xldvp_seg.analysis.vessel_characterization import compute_lumen_morphometry
+
+        # Regular polygon approximating a circle (r=50 µm)
+        n = 64
+        angles = np.linspace(0, 2 * np.pi, n, endpoint=False)
+        pts = np.column_stack([50 * np.cos(angles), 50 * np.sin(angles)])
+        m = compute_lumen_morphometry(pts)
+
+        expected_area = np.pi * 50**2
+        assert abs(m["lumen_area_um2"] - expected_area) / expected_area < 0.05
+        assert abs(m["lumen_equiv_diameter_um"] - 100.0) < 5.0
+        assert m["lumen_circularity"] > 0.9
+        assert m["lumen_elongation"] < 1.3
+        assert m["lumen_convexity"] > 0.95
+
+    def test_elongated(self):
+        from xldvp_seg.analysis.vessel_characterization import compute_lumen_morphometry
+
+        # Elongated ellipse: major=200, minor=30
+        n = 64
+        angles = np.linspace(0, 2 * np.pi, n, endpoint=False)
+        pts = np.column_stack([200 * np.cos(angles), 30 * np.sin(angles)])
+        m = compute_lumen_morphometry(pts)
+
+        assert m["lumen_elongation"] > 2.0
+        assert m["lumen_circularity"] < 0.5
+        assert m["lumen_area_um2"] > 0
+
+    def test_degenerate_few_points(self):
+        from xldvp_seg.analysis.vessel_characterization import compute_lumen_morphometry
+
+        # Only 2 points — should not crash
+        pts = np.array([[0, 0], [10, 10]])
+        m = compute_lumen_morphometry(pts)
+        assert m["lumen_area_um2"] == 0.0
+        assert m["lumen_elongation"] == 1.0
+
+    def test_triangle(self):
+        from xldvp_seg.analysis.vessel_characterization import compute_lumen_morphometry
+
+        pts = np.array([[0, 0], [100, 0], [50, 80]])
+        m = compute_lumen_morphometry(pts)
+        assert m["lumen_area_um2"] > 0
+        assert m["lumen_perimeter_um"] > 0
+        assert 0 < m["lumen_circularity"] <= 1.0
+
+
+class TestComputeWallMorphometry:
+    """Tests for compute_wall_morphometry from the shared module."""
+
+    def test_basic(self):
+        from xldvp_seg.analysis.vessel_characterization import compute_wall_morphometry
+
+        # Lumen contour: circle r=30, cells at r=50
+        n_contour = 32
+        angles_c = np.linspace(0, 2 * np.pi, n_contour, endpoint=False)
+        contour = np.column_stack([30 * np.cos(angles_c), 30 * np.sin(angles_c)])
+
+        n_cells = 20
+        angles_cells = np.linspace(0, 2 * np.pi, n_cells, endpoint=False)
+        cells = np.column_stack([50 * np.cos(angles_cells), 50 * np.sin(angles_cells)])
+
+        m = compute_wall_morphometry(contour, cells)
+        # Cells are ~20 µm from the lumen boundary (50-30)
+        assert 15 < m["wall_thickness_um"] < 25
+        assert m["n_wall_cells"] == 20
+        assert 0 < m["wall_uniformity"] <= 1.0
+
+    def test_with_cell_areas(self):
+        from xldvp_seg.analysis.vessel_characterization import compute_wall_morphometry
+
+        contour = np.column_stack(
+            [
+                30 * np.cos(np.linspace(0, 2 * np.pi, 32, endpoint=False)),
+                30 * np.sin(np.linspace(0, 2 * np.pi, 32, endpoint=False)),
+            ]
+        )
+        cells = np.column_stack(
+            [
+                50 * np.cos(np.linspace(0, 2 * np.pi, 10, endpoint=False)),
+                50 * np.sin(np.linspace(0, 2 * np.pi, 10, endpoint=False)),
+            ]
+        )
+        areas = np.full(10, 100.0)  # ~11.3 µm diameter
+
+        m = compute_wall_morphometry(contour, cells, cell_areas_um2=areas)
+        assert "wall_cell_layers" in m
+        assert m["wall_cell_layers"] > 0
+
+    def test_empty_cells(self):
+        from xldvp_seg.analysis.vessel_characterization import compute_wall_morphometry
+
+        contour = np.array([[0, 0], [10, 0], [10, 10], [0, 10]])
+        cells = np.empty((0, 2))
+        m = compute_wall_morphometry(contour, cells)
+        assert m["n_wall_cells"] == 0
+        assert m["wall_thickness_um"] == 0.0
+
+    def test_single_cell(self):
+        from xldvp_seg.analysis.vessel_characterization import compute_wall_morphometry
+
+        contour = np.column_stack(
+            [
+                30 * np.cos(np.linspace(0, 2 * np.pi, 32, endpoint=False)),
+                30 * np.sin(np.linspace(0, 2 * np.pi, 32, endpoint=False)),
+            ]
+        )
+        cells = np.array([[50, 0]])  # One cell at x=50, ~20µm from boundary
+        m = compute_wall_morphometry(contour, cells)
+        assert m["n_wall_cells"] == 1
+        assert 15 < m["wall_thickness_um"] < 25

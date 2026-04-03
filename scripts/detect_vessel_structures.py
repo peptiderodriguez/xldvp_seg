@@ -30,6 +30,12 @@ from pathlib import Path
 
 import numpy as np
 
+from xldvp_seg.analysis.vessel_characterization import (
+    analyze_marker_composition,
+    assign_vessel_type,
+    detect_spatial_layering,
+    tag_detections,
+)
 from xldvp_seg.utils.graph_topology import (
     build_radius_graph_sparse,
     compute_all_metrics,
@@ -242,268 +248,8 @@ def compute_vessel_morphometry(
     return morph
 
 
-# ---------------------------------------------------------------------------
-# Marker composition + spatial layering
-# ---------------------------------------------------------------------------
-
-
-def analyze_marker_composition(detections, comp_global_indices, marker_names, class_keys):
-    """Count marker-positive cells per marker in a component.
-
-    Tracks single-positive and double-positive cells separately.
-    Double-positive cells (positive for 2+ markers) are counted in their
-    own class, NOT in individual marker counts — avoids double-counting
-    the same physical material.
-    """
-    n = len(comp_global_indices)
-
-    # Classify each cell: single-positive for one marker, double-positive, or negative
-    single_counts = dict.fromkeys(marker_names, 0)
-    double_pos_count = 0
-
-    for idx in comp_global_indices:
-        feat = detections[idx].get("features", {})
-        pos_markers = [
-            name for name, key in zip(marker_names, class_keys) if feat.get(key) == "positive"
-        ]
-        if len(pos_markers) >= 2:
-            double_pos_count += 1
-        elif len(pos_markers) == 1:
-            single_counts[pos_markers[0]] += 1
-
-    composition = {"n_cells": n, "n_double_pos": double_pos_count}
-    total_pos = double_pos_count
-    for name in marker_names:
-        composition[f"n_{name.lower()}"] = single_counts[name]
-        composition[f"{name.lower()}_frac"] = round(single_counts[name] / max(n, 1), 3)
-        total_pos += single_counts[name]
-    composition["double_pos_frac"] = round(double_pos_count / max(n, 1), 3)
-
-    # Dominant marker (single-positive only — double-positive is its own class)
-    if marker_names:
-        dominant = max(marker_names, key=lambda m: single_counts[m])
-        composition["dominant_marker"] = dominant if single_counts[dominant] > 0 else "none"
-
-    return composition
-
-
-def detect_spatial_layering(
-    positions, detections, comp_local_indices, comp_global_indices, class_keys_map
-):
-    """Detect radial layering of markers (SMA outer vs CD31 inner).
-
-    Uses Mann-Whitney U test for statistical rigor.
-    """
-    from scipy.stats import mannwhitneyu
-
-    pts = positions[comp_local_indices]
-    centroid = pts.mean(axis=0)
-    dists = np.sqrt(np.sum((pts - centroid) ** 2, axis=1))
-
-    layering = {}
-
-    # Get per-marker radial distributions — O(n) per marker via enumerate
-    marker_radii = {}
-    for marker_name, class_key in class_keys_map.items():
-        radii = []
-        for enum_i, global_i in enumerate(comp_global_indices):
-            feat = detections[global_i].get("features", {})
-            if feat.get(class_key) == "positive":
-                radii.append(dists[enum_i])
-        if radii:
-            marker_radii[marker_name] = np.array(radii)
-
-    # Pairwise layering tests — test BOTH directions per pair
-    markers = list(marker_radii.keys())
-    for i, m1 in enumerate(markers):
-        for m2 in markers[i + 1 :]:
-            r1 = marker_radii[m1]
-            r2 = marker_radii[m2]
-            if len(r1) >= 5 and len(r2) >= 5:
-                # Test m1 outer vs m2
-                _, pval_fwd = mannwhitneyu(r1, r2, alternative="greater")
-                # Test m2 outer vs m1
-                _, pval_rev = mannwhitneyu(r2, r1, alternative="greater")
-
-                # Report the significant direction (or forward if neither)
-                if pval_rev < pval_fwd:
-                    # m2 is outer
-                    key = f"{m2}_outer_vs_{m1}"
-                    score = float(np.median(r2) - np.median(r1))
-                    pval = pval_rev
-                else:
-                    # m1 is outer (or neither significant)
-                    key = f"{m1}_outer_vs_{m2}"
-                    score = float(np.median(r1) - np.median(r2))
-                    pval = pval_fwd
-
-                layering[key] = {
-                    "score": round(score, 2),
-                    "p_value": round(float(pval), 4),
-                    "significant": pval < 0.05,
-                    f"n_{m1.lower()}": len(r1),
-                    f"n_{m2.lower()}": len(r2),
-                }
-
-    return layering
-
-
-# ---------------------------------------------------------------------------
-# Vessel type assignment
-# ---------------------------------------------------------------------------
-
-
-def assign_vessel_type(morphology, composition, layering, morphometry):
-    """Assign vessel type from morphology + marker composition + wall morphometry.
-
-    Artery vs vein: both have CD31 inner + SMA outer. Key distinction is wall
-    thickness (wall_cell_layers > 1.5 or wall/diameter ratio > 0.3 → artery).
-
-    Size subtyping: artery (>100µm) vs arteriole (≤100µm), vein (>50µm) vs
-    venule (≤50µm).
-
-    Lymphatics: LYVE1+ with SMA (≥15%) → collecting_lymphatic (has smooth
-    muscle wall). LYVE1+ without SMA → initial lymphatic.
-
-    Spatial layering (has_sma_outer) provides additional confidence for artery
-    classification when both SMA and CD31 are present.
-    """
-    # Use single-positive fracs for typing. Double-positive cells are their own class
-    # for LMD but for vessel typing we consider total marker presence.
-    n = composition.get("n_cells", 1)
-    n_dp = composition.get("n_double_pos", 0)
-    sma_frac = composition.get("sma_frac", 0)
-    cd31_frac = composition.get("cd31_frac", 0)
-    lyve1_frac = composition.get("lyve1_frac", 0)
-    # Total marker presence (single + double) for typing decisions
-    sma_total_frac = sma_frac + composition.get("double_pos_frac", 0)
-    cd31_total_frac = cd31_frac + composition.get("double_pos_frac", 0)
-    lyve1_total_frac = lyve1_frac + composition.get("double_pos_frac", 0)
-    diameter = morphometry.get("vessel_diameter_um", 0) or 0
-
-    # LYVE1+ vessels — distinguish collecting (has SMA) from initial (no SMA)
-    # Morphology-aware: strips get specific longitudinal label below.
-    if lyve1_total_frac > 0.3 and lyve1_total_frac > sma_total_frac and morphology != "strip":
-        if sma_total_frac > 0.15:
-            return "collecting_lymphatic"  # LYVE1+ with SMA smooth muscle wall
-        return "lymphatic"  # initial lymphatic, LYVE1+ only
-
-    # Check layering for SMA outer vs CD31 inner (artery signature)
-    has_sma_outer = False
-    if layering:
-        for key, info in layering.items():
-            if "SMA_outer" in key and info.get("significant"):
-                has_sma_outer = True
-
-    if morphology in ("ring", "arc"):
-        # Both arteries and veins have CD31 inner + SMA outer.
-        # Key distinction: wall thickness relative to vessel size.
-        #   Artery: thick SMA wall, multiple smooth muscle layers
-        #   Vein: thin SMA wall, larger/irregular lumen
-        wall_extent = morphometry.get("wall_extent_um", 0) or 0
-        wall_layers = morphometry.get("wall_cell_layers", 0) or 0
-        wall_ratio = wall_extent / diameter if diameter > 0 else 0
-
-        if sma_total_frac > 0.15 or cd31_total_frac > 0.15:
-            # Has vascular markers — classify by wall morphometry
-            has_morphometry = "wall_cell_layers" in morphometry
-            is_thick_wall = wall_layers > 1.5 or wall_ratio > 0.3
-
-            if is_thick_wall or (has_sma_outer and sma_total_frac > 0.3):
-                # Thick wall OR confirmed SMA-outer layering → artery/arteriole
-                if diameter > 100:
-                    return "artery"
-                elif diameter > 0:
-                    return "arteriole"
-                else:
-                    return "artery"
-            elif not has_morphometry and sma_total_frac > cd31_total_frac:
-                # No morphometry available, SMA dominant → likely muscular vessel
-                return "artery"
-            elif cd31_total_frac > sma_total_frac:
-                # CD31 dominant with thin wall = vein/venule
-                if diameter > 50:
-                    return "vein"
-                elif diameter > 0:
-                    return "venule"
-                else:
-                    return "vein"
-            elif sma_total_frac > cd31_total_frac:
-                # SMA dominant but thin wall → arteriole (still muscular)
-                if diameter > 100:
-                    return "artery"
-                elif diameter > 0:
-                    return "arteriole"
-                else:
-                    return "artery"
-            else:
-                return "unclassified"
-        else:
-            return "unclassified"
-    elif morphology == "strip":
-        if sma_total_frac > 0.3:
-            return "artery_longitudinal"
-        elif cd31_total_frac > 0.3:
-            return "vein_longitudinal"
-        elif lyve1_total_frac > 0.1:
-            return "lymphatic_longitudinal"
-        else:
-            return "unclassified"
-    elif morphology == "cluster":
-        if cd31_total_frac > 0.5 and composition.get("n_cells", 0) < 15:
-            return "capillary"
-        return "unclassified"
-
-    return "unclassified"
-
-
-# ---------------------------------------------------------------------------
-# Tag detections
-# ---------------------------------------------------------------------------
-
-
-def tag_detections(detections, comp_assignments, marker_names, class_keys, prefix="vessel"):
-    """Tag each detection with vessel structure membership + cell type within vessel."""
-    field_id = f"{prefix}_id"
-    field_type = f"{prefix}_type"
-    field_morph = f"{prefix}_morphology"
-    field_size = f"{prefix}_size_class"
-    field_cell_type = f"{prefix}_cell_type"
-
-    # Initialize all detections
-    for d in detections:
-        feat = d.setdefault("features", {})
-        feat[field_id] = -1
-        feat[field_type] = "none"
-        feat[field_morph] = "none"
-        feat[field_size] = "none"
-        feat[field_cell_type] = "none"
-
-    # Apply assignments + per-cell marker type
-    for global_idx, assignment in comp_assignments.items():
-        feat = detections[global_idx].setdefault("features", {})
-        feat[field_id] = assignment["vessel_id"]
-        feat[field_type] = assignment["vessel_type"]
-        feat[field_morph] = assignment["morphology"]
-        feat[field_size] = assignment.get("size_class", "unknown")
-
-        # Cell type within vessel: which marker(s) is this cell positive for?
-        pos = [n for n, k in zip(marker_names, class_keys) if feat.get(k) == "positive"]
-        if len(pos) >= 2:
-            feat[field_cell_type] = "double_pos"
-        elif len(pos) == 1:
-            feat[field_cell_type] = f"{pos[0]}_only"
-        else:
-            feat[field_cell_type] = "negative"
-
-    # Summary
-    type_counts = {}
-    for d in detections:
-        vt = d.get("features", {}).get(field_type, "none")
-        type_counts[vt] = type_counts.get(vt, 0) + 1
-    logger.info("Vessel type distribution: %s", type_counts)
-
-    return field_type
+# analyze_marker_composition, detect_spatial_layering, assign_vessel_type,
+# and tag_detections are imported from xldvp_seg.analysis.vessel_characterization
 
 
 # ---------------------------------------------------------------------------
@@ -794,8 +540,14 @@ def main():
         # Dynamic fieldnames: core + marker-specific columns
         marker_cols = []
         for name in marker_names:
-            marker_cols.extend([f"n_{name.lower()}", f"{name.lower()}_frac"])
-        marker_cols.append("dominant_marker")
+            marker_cols.extend(
+                [
+                    f"n_{name.lower()}",
+                    f"{name.lower()}_frac",
+                    f"{name.lower()}_total_frac",
+                ]
+            )
+        marker_cols.extend(["n_double_pos", "double_pos_frac", "dominant_marker"])
         fieldnames = (
             [
                 "id",

@@ -9,3 +9,4 @@
 #   spatial_network          - Delaunay networks, RF/morph UMAP, Louvain communities
 #   pattern_detection        - Strip/cluster spatial pattern classification
 #   sliding_window_sampling  - Skeleton-based spatial sampling for LMD
+#   vessel_characterization  - Shared vessel characterization (composition, layering, typing)
