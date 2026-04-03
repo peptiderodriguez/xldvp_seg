@@ -437,20 +437,13 @@ def classify_single_marker(
     class_key = f"{marker_name}_class"
     value_key = f"{marker_name}_value"
     raw_key = f"{marker_name}_raw"
-    thresh_key = f"{marker_name}_threshold"
     bg_key = f"{marker_name}_background"
     snr_key = f"{marker_name}_snr"
-
-    method_key = f"{marker_name}_method"
-    feature_key = f"{marker_name}_feature"
 
     for i, det in enumerate(detections):
         feat = det.setdefault("features", {})
         feat[class_key] = "positive" if positive_mask[i] else "negative"
         feat[value_key] = float(values[i])  # bg-subtracted if enabled
-        feat[thresh_key] = float(threshold)
-        feat[method_key] = method
-        feat[feature_key] = intensity_feature
         if per_cell_bg is not None:
             feat[raw_key] = float(raw_values[i])
             feat[bg_key] = float(per_cell_bg[i])

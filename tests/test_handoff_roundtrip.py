@@ -95,10 +95,8 @@ def _make_pipeline_detections(n=20):
                 # Marker classes -- INSIDE features (classify_markers.py format)
                 "NeuN_class": neun_class,
                 "NeuN_value": round(rng.random() * 5.0, 3),
-                "NeuN_threshold": 1.5,
                 "tdTomato_class": tdt_class,
                 "tdTomato_value": round(rng.random() * 3.0, 3),
-                "tdTomato_threshold": 1.2,
                 "marker_profile": marker_profile,
             },
         }
@@ -301,7 +299,7 @@ class TestQualityFilterFormat:
         # Remove marker classes from features (pre-classification state)
         for det in dets:
             for key in list(det["features"].keys()):
-                if "_class" in key or "_value" in key or "_threshold" in key:
+                if "_class" in key or "_value" in key:
                     del det["features"][key]
             if "marker_profile" in det["features"]:
                 del det["features"]["marker_profile"]

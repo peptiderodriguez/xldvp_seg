@@ -512,15 +512,32 @@ def main():
             logger.info(f"    {profile}: {count:,} ({pct:.1f}%)")
 
     # Save enriched detections with provenance in filename.
-    stem = det_path.stem
-    if "_classified" in stem:
-        stem = stem[: stem.index("_classified")]
     method_tag = args.method
     feat_tag = args.intensity_feature
-    out_json = output_dir / f"{stem}_classified_{method_tag}_{feat_tag}.json"
+    out_json = output_dir / f"cell_detections_classified_{method_tag}_{feat_tag}.json"
     logger.info(f"Saving classified detections to {out_json}...")
     atomic_json_dump(detections, out_json)
     logger.info(f"  Wrote {len(detections):,} detections")
+
+    # Save classification metadata (method, feature, thresholds — not per-cell)
+    meta = {
+        "method": method_tag,
+        "intensity_feature": feat_tag,
+        "use_raw": args.use_raw,
+        "markers": {},
+    }
+    for row in summaries:
+        meta["markers"][row["marker"]] = {
+            "channel": row.get("channel"),
+            "method": row.get("method", method_tag),
+            "threshold": row.get("threshold"),
+            "n_positive": row.get("n_positive"),
+            "n_negative": row.get("n_negative"),
+            "pct_positive": row.get("pct_positive"),
+        }
+    meta_json = output_dir / f"classification_metadata_{method_tag}_{feat_tag}.json"
+    atomic_json_dump(meta, meta_json)
+    logger.info(f"  Wrote classification metadata to {meta_json.name}")
 
     # Save summary CSV
     summary_path = output_dir / "marker_summary.csv"
