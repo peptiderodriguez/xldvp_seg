@@ -16,7 +16,6 @@ Usage:
 
 from __future__ import annotations
 
-import argparse
 import tempfile
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
@@ -274,8 +273,6 @@ def cluster(
 ) -> SlideAnalysis:
     """Feature clustering with UMAP/t-SNE + Leiden/HDBSCAN.
 
-    Constructs a synthetic argparse.Namespace and calls run_clustering().
-
     Args:
         slide: SlideAnalysis object.
         feature_groups: Feature groups ("morph", "morph_sam2", "all").
@@ -289,6 +286,8 @@ def cluster(
     Returns:
         slide (mutated with cluster labels).
     """
+    from xldvp_seg.analysis.cluster_features import run_clustering
+
     if slide.detections_path is None:
         raise ValueError("SlideAnalysis has no detections_path. Save detections first.")
 
@@ -298,12 +297,7 @@ def cluster(
         )
     Path(output_dir).mkdir(parents=True, exist_ok=True)
 
-    import sys
-
-    sys.path.insert(0, str(Path(__file__).resolve().parent.parent.parent))
-    from scripts.cluster_by_features import run_clustering
-
-    args = argparse.Namespace(
+    run_clustering(
         detections=str(slide.detections_path),
         output_dir=str(output_dir),
         feature_groups=feature_groups,
@@ -331,10 +325,7 @@ def cluster(
         subcluster=kwargs.get("subcluster", False),
         subcluster_features=kwargs.get("subcluster_features", "shape,sam2"),
         subcluster_min_size=kwargs.get("subcluster_min_size", 50),
-        subcluster_input=None,
     )
-
-    run_clustering(args)
     logger.info("Clustering complete. Output: %s", output_dir)
 
     # Reload detections with cluster labels

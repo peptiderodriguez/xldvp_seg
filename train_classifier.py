@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Train NMJ classifier using extracted multi-channel features.
+Train RF classifier from annotated detections.
 
 Uses Random Forest on raw (unscaled) features — RF is scale-invariant,
 so no StandardScaler is needed. This keeps the prediction path simple:
@@ -33,12 +33,12 @@ logger = get_logger(__name__)
 
 
 def main():
-    parser = argparse.ArgumentParser(description="Train NMJ Feature Classifier")
+    parser = argparse.ArgumentParser(description="Train RF Feature Classifier")
     parser.add_argument(
         "--detections",
         type=str,
         default=None,
-        help="Path to nmj_detections.json (required for training)",
+        help="Path to detections JSON (required for training)",
     )
     parser.add_argument(
         "--annotations",
@@ -183,12 +183,12 @@ def main():
 
     # --- Step 4: Save model (no scaler!) ---
     # Save raw RF classifier directly — no Pipeline wrapping needed since RF
-    # is scale-invariant. load_nmj_rf_classifier() handles wrapping if needed.
+    # is scale-invariant. load_rf_classifier() handles wrapping if needed.
     output_dir = Path(args.output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
 
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-    model_path = output_dir / f"nmj_classifier_rf_{timestamp}.pkl"
+    model_path = output_dir / f"rf_classifier_{timestamp}.pkl"
     clf_name = args.name or f"rf_{args.feature_set}_{datetime.now().strftime('%Y%m%d')}"
     joblib.dump(
         {
@@ -213,7 +213,7 @@ def main():
     )
 
     # Symlink latest classifier for easy reference
-    latest_link = output_dir / "nmj_classifier_rf_latest.pkl"
+    latest_link = output_dir / "rf_classifier_latest.pkl"
     try:
         if latest_link.is_symlink() or latest_link.exists():
             latest_link.unlink()

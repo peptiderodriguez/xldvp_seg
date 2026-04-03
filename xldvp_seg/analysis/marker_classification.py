@@ -207,7 +207,7 @@ def extract_marker_values(
     values = np.array([d.get("features", {}).get(key, 0.0) for d in detections], dtype=np.float64)
 
     # Warn if all zeros (likely missing feature key)
-    if values.max() == 0:
+    if len(values) > 0 and values.max() == 0:
         fallback_key = f"ch{channel}_{feature}"
         if use_raw:
             logger.warning(

@@ -1068,9 +1068,12 @@ quantifies endothelial and smooth muscle contributions separately.
 | `scripts/regenerate_html.py` | Regenerate HTML viewer from saved detections (all cell types) |
 | `scripts/czi_to_ome_zarr.py` | Convert CZI to OME-Zarr with pyramids |
 | `scripts/napari_place_crosses.py` | Interactive cross placement (CZI + OME-Zarr, RGB crosses, flip/rotate, contour overlay) |
+| `scripts/classify_markers.py` | Marker pos/neg classification per fluorescent channel (core: `xldvp_seg.analysis.marker_classification`) |
 | `scripts/cluster_detections.py` | Biological clustering for LMD well assignment |
 | `xlseg cluster` / `scripts/cluster_by_features.py` | UMAP + HDBSCAN clustering with auto-labeling (core: `xldvp_seg.analysis.cluster_features`) |
 | `scripts/spatial_cell_analysis.py` | RF embedding, morph UMAP, spatial network analysis (core: `xldvp_seg.analysis.spatial_network`) |
+| `scripts/sliding_window_sampling.py` | Area-matched rolling window sampling along ROI centerlines (core: `xldvp_seg.analysis.sliding_window_sampling`) |
+| `scripts/detect_curvilinear_patterns.py` | Strip/ribbon spatial pattern detection (core: `xldvp_seg.analysis.pattern_detection`) |
 | `examples/islet/analyze_islets.py` | Islet-level spatial analysis with composition metrics |
 | `examples/bone_marrow/maturation_analysis.py` | MK maturation staging via nuclear deep features |
 | `scripts/napari_view_lmd_export.py` | View LMD export overlaid on slide |

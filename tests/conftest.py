@@ -122,7 +122,7 @@ def temp_output_dir():
     Yields:
         Path: Path to temporary directory
     """
-    temp_dir = tempfile.mkdtemp(prefix="bm_mk_seg_test_")
+    temp_dir = tempfile.mkdtemp(prefix="xldvp_seg_test_")
     yield Path(temp_dir)
     # Cleanup after test
     shutil.rmtree(temp_dir, ignore_errors=True)
