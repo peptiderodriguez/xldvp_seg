@@ -1450,13 +1450,29 @@ def main() -> None:
     all_lumens = merge_across_scales(all_lumens, iou_threshold=0.3)
     logger.info("After cross-scale merge: %d lumens", len(all_lumens))
 
-    # ---- 7. Load cell detections + validate ----
+    # ---- 8. Validate, characterize, output (shared with --merge-shards) ----
+    _validate_characterize_and_output(all_lumens, args, output_dir, marker_names, class_keys)
+
+    elapsed = time.time() - t0
+    logger.info("Completed in %.1f seconds (%.1f min)", elapsed, elapsed / 60)
+
+
+def _validate_characterize_and_output(
+    all_lumens: list[dict],
+    args: argparse.Namespace,
+    output_dir: Path,
+    marker_names: list[str],
+    class_keys: list[str],
+) -> None:
+    """Validate lumens, characterize vessels, write all output files.
+
+    Shared by both the single-run path in main() and the --merge-shards path.
+    """
     logger.info("Loading cell detections from %s...", args.detections)
     detections = fast_json_load(str(args.detections))
     logger.info("  %d detections loaded", len(detections))
 
     cell_positions, cell_features, cell_indices = extract_cell_data(detections, args.marker_names)
-
     if len(cell_positions) == 0:
         logger.error("No marker+ cells found. Cannot validate lumens.")
         sys.exit(1)
@@ -1479,30 +1495,23 @@ def main() -> None:
             atomic_json_dump(
                 [
                     {
-                        "rejection_reason": l.get("rejection_reason", "unknown"),
-                        "equiv_diameter_um": l.get("equiv_diameter_um"),
-                        "scale": l.get("scale"),
-                        "contrast_ratio": l.get("contrast_ratio"),
+                        "rejection_reason": r.get("rejection_reason", "unknown"),
+                        "equiv_diameter_um": r.get("equiv_diameter_um"),
+                        "scale": r.get("scale"),
+                        "contrast_ratio": r.get("contrast_ratio"),
                     }
-                    for l in rejected
+                    for r in rejected
                 ],
                 str(output_dir / "vessel_lumens_rejected.json"),
             )
-            logger.info("Saved %d rejected lumens for debugging", len(rejected))
         return
 
-    # ---- 8. Characterize each vessel ----
+    # Characterize each vessel
     logger.info("Characterizing %d validated vessels...", len(validated))
     vessels: list[dict] = []
 
-    # Map cell_indices back to original detection indices for characterization
-    # cell_positions[j] corresponds to detections[cell_indices[j]]
-    # lumen.assigned_cell_indices are indices into cell_positions
-    # We need to map them to indices into detections
-
     for vid, lumen in enumerate(validated):
-        # Map assigned cell indices from cell_positions space to detections space.
-        # Must remap both indices and distances in lockstep to keep alignment.
+        # Map cell indices from cell_positions space to detections space (lockstep)
         assigned_cell_pos_idx = lumen.get("assigned_cell_indices", [])
         old_distances = lumen.get("cell_distances_um", [])
         new_indices = []
@@ -1517,21 +1526,17 @@ def main() -> None:
         lumen["n_assigned_cells"] = len(new_indices)
 
         characterization = characterize_vessel(lumen, detections, marker_names, class_keys)
-
         record = build_vessel_record(vid, lumen, characterization, lumen.get("scale", 0))
         vessels.append(record)
 
-    # ---- 9. Tag cell detections ----
     tag_cell_detections(detections, vessels, prefix="lumen_vessel")
 
-    # ---- 10. Output ----
+    # Summary
     logger.info("")
     logger.info("=" * 70)
     logger.info("LUMEN VESSEL DETECTION SUMMARY")
     logger.info("=" * 70)
     logger.info("  Total validated vessels: %d", len(vessels))
-
-    # Type distribution
     type_counts: dict[str, int] = {}
     morph_counts: dict[str, int] = {}
     scale_counts: dict[int, int] = {}
@@ -1545,52 +1550,40 @@ def main() -> None:
     logger.info("  Vessel types: %s", type_counts)
     logger.info("  Morphology: %s", morph_counts)
     logger.info("  By scale: %s", scale_counts)
+    logger.info("  Total assigned cells: %d", sum(v.get("n_assigned_cells", 0) for v in vessels))
 
-    total_cells = sum(v.get("n_assigned_cells", 0) for v in vessels)
-    logger.info("  Total assigned cells: %d", total_cells)
+    # Write outputs
+    atomic_json_dump(vessels, str(output_dir / "vessel_lumens.json"))
+    logger.info("Saved %d vessel records to %s", len(vessels), output_dir / "vessel_lumens.json")
 
-    # Vessel lumens JSON (full records)
-    vessel_out = output_dir / "vessel_lumens.json"
-    atomic_json_dump(vessels, str(vessel_out))
-    logger.info("Saved %d vessel records to %s", len(vessels), vessel_out)
-
-    # Tagged cell detections JSON
     det_out = output_dir / "cell_detections_vessels.json"
     atomic_json_dump(detections, str(det_out))
     logger.info("Saved tagged detections to %s", det_out)
 
-    # Vessel-only cell detections
     vessel_cells = [d for d in detections if d.get("features", {}).get("lumen_vessel_id", -1) >= 0]
-    vessel_cells_out = output_dir / "cell_detections_vessel_only.json"
-    atomic_json_dump(vessel_cells, str(vessel_cells_out))
-    logger.info("Saved %d vessel-only cell detections to %s", len(vessel_cells), vessel_cells_out)
+    atomic_json_dump(vessel_cells, str(output_dir / "cell_detections_vessel_only.json"))
+    logger.info("Saved %d vessel-only detections", len(vessel_cells))
 
-    # CSV summary
-    csv_out = output_dir / "vessel_summary.csv"
-    write_vessel_csv(vessels, csv_out, marker_names)
+    write_vessel_csv(vessels, output_dir / "vessel_summary.csv", marker_names)
 
-    # Debug output
     if args.save_debug and rejected:
-        debug_out = output_dir / "vessel_lumens_rejected.json"
-        rejected_records = []
-        for l in rejected:
-            rejected_records.append(
+        atomic_json_dump(
+            [
                 {
-                    "rejection_reason": l.get("rejection_reason", "unknown"),
-                    "equiv_diameter_um": l.get("equiv_diameter_um"),
-                    "scale": l.get("scale"),
-                    "contrast_ratio": l.get("contrast_ratio"),
-                    "interior_median": l.get("interior_median"),
-                    "boundary_median": l.get("boundary_median"),
-                    "sam2_iou": l.get("sam2_iou"),
-                    "sam2_stability": l.get("sam2_stability"),
+                    "rejection_reason": r.get("rejection_reason", "unknown"),
+                    "equiv_diameter_um": r.get("equiv_diameter_um"),
+                    "scale": r.get("scale"),
+                    "contrast_ratio": r.get("contrast_ratio"),
+                    "interior_median": r.get("interior_median"),
+                    "boundary_median": r.get("boundary_median"),
+                    "sam2_iou": r.get("sam2_iou"),
+                    "sam2_stability": r.get("sam2_stability"),
                 }
-            )
-        atomic_json_dump(rejected_records, str(debug_out))
-        logger.info("Saved %d rejected lumens to %s", len(rejected_records), debug_out)
-
-    elapsed = time.time() - t0
-    logger.info("Completed in %.1f seconds (%.1f min)", elapsed, elapsed / 60)
+                for r in rejected
+            ],
+            str(output_dir / "vessel_lumens_rejected.json"),
+        )
+        logger.info("Saved %d rejected lumens for debugging", len(rejected))
 
 
 def _merge_shards_and_finish(args: argparse.Namespace) -> None:
@@ -1631,92 +1624,10 @@ def _merge_shards_and_finish(args: argparse.Namespace) -> None:
     all_lumens = merge_across_scales(all_lumens, iou_threshold=0.3)
     logger.info("After dedup + cross-scale merge: %d lumens", len(all_lumens))
 
-    # Continue with validation + characterization (reuse main() logic)
-    # Re-parse needed args
+    # Validate, characterize, output (shared code path with main)
     marker_names = [m.strip() for m in args.marker_names.split(",")]
     class_keys = [f"{name}_class" for name in marker_names]
-
-    logger.info("Loading cell detections from %s...", args.detections)
-    detections = fast_json_load(str(args.detections))
-    logger.info("  %d detections loaded", len(detections))
-
-    cell_positions, cell_features, cell_indices = extract_cell_data(detections, args.marker_names)
-    if len(cell_positions) == 0:
-        logger.error("No marker+ cells found. Cannot validate lumens.")
-        sys.exit(1)
-
-    validated, rejected = validate_lumens_with_cells(
-        all_lumens,
-        cell_positions,
-        cell_features,
-        marker_names,
-        radius_min=args.assignment_radius_min,
-        radius_max=args.assignment_radius_max,
-        min_coverage=args.min_coverage,
-        save_debug=args.save_debug,
-    )
-
-    if not validated:
-        logger.warning("No lumens passed biological validation.")
-        atomic_json_dump([], str(output_dir / "vessel_lumens.json"))
-        return
-
-    # Characterize vessels
-    logger.info("Characterizing %d validated vessels...", len(validated))
-    vessels: list[dict] = []
-
-    for vid, lumen in enumerate(validated):
-        assigned_cell_pos_idx = lumen.get("assigned_cell_indices", [])
-        old_distances = lumen.get("cell_distances_um", [])
-        new_indices = []
-        new_distances = []
-        for k, j in enumerate(assigned_cell_pos_idx):
-            if j < len(cell_indices):
-                new_indices.append(cell_indices[j])
-                if k < len(old_distances):
-                    new_distances.append(old_distances[k])
-        lumen["assigned_cell_indices"] = new_indices
-        lumen["cell_distances_um"] = new_distances
-        lumen["n_assigned_cells"] = len(new_indices)
-
-        characterization = characterize_vessel(lumen, detections, marker_names, class_keys)
-        record = build_vessel_record(vid, lumen, characterization, lumen.get("scale", 0))
-        vessels.append(record)
-
-    tag_cell_detections(detections, vessels, prefix="lumen_vessel")
-
-    # Output
-    logger.info("=" * 70)
-    logger.info("LUMEN VESSEL DETECTION SUMMARY (merged)")
-    logger.info("=" * 70)
-    logger.info("  Total validated vessels: %d", len(vessels))
-    type_counts: dict[str, int] = {}
-    for v in vessels:
-        vt = v.get("vessel_type", "unclassified")
-        type_counts[vt] = type_counts.get(vt, 0) + 1
-    logger.info("  Vessel types: %s", type_counts)
-
-    atomic_json_dump(vessels, str(output_dir / "vessel_lumens.json"))
-    logger.info("Saved %d vessel records", len(vessels))
-
-    det_out = output_dir / "cell_detections_vessels.json"
-    atomic_json_dump(detections, str(det_out))
-    logger.info("Saved tagged detections to %s", det_out)
-
-    vessel_cells = [d for d in detections if d.get("features", {}).get("lumen_vessel_id", -1) >= 0]
-    atomic_json_dump(vessel_cells, str(output_dir / "cell_detections_vessel_only.json"))
-    logger.info("Saved %d vessel-only detections", len(vessel_cells))
-
-    write_vessel_csv(vessels, output_dir / "vessel_summary.csv", marker_names)
-
-    if args.save_debug and rejected:
-        atomic_json_dump(
-            [
-                {"rejection_reason": r.get("rejection_reason"), "scale": r.get("scale")}
-                for r in rejected
-            ],
-            str(output_dir / "vessel_lumens_rejected.json"),
-        )
+    _validate_characterize_and_output(all_lumens, args, output_dir, marker_names, class_keys)
 
 
 if __name__ == "__main__":
