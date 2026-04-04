@@ -64,16 +64,11 @@ def _initialize_detector(
     sampled_tiles,
     pixel_size_um,
     shm_manager,
-    slide_output_dir,
-    tiles_dir,
     x_start,
     y_start,
     tile_size,
     ch_keys,
     slide_name,
-    tissue_channel,
-    variance_threshold,
-    mosaic_info,
 ):
     """Create CellDetector, resolve classifiers, build strategy params, islet GMM calibration.
 
@@ -535,7 +530,7 @@ def _run_multiscale_tiles(processor, args, ctx, init, sampled_tiles):
 # ---------------------------------------------------------------------------
 
 
-def _run_regular_tiles(processor, args, ctx, init, sampled_tiles, all_samples_ref, shm_manager):
+def _run_regular_tiles(processor, args, ctx, init, sampled_tiles, all_samples_ref):
     """Run standard per-tile processing with resume, deferred islet HTML, etc.
 
     Args:
@@ -545,7 +540,6 @@ def _run_regular_tiles(processor, args, ctx, init, sampled_tiles, all_samples_re
         init: Dict returned by ``_initialize_detector``.
         sampled_tiles: List of tile dicts.
         all_samples_ref: Mutable list to extend with HTML samples.
-        shm_manager: SharedSlideManager (for slide info, NOT for cleanup).
 
     Returns:
         (all_detections, all_samples, collected_partial_vessels)
@@ -1071,16 +1065,11 @@ def run_detection_loop(
             sampled_tiles=sampled_tiles,
             pixel_size_um=pixel_size_um,
             shm_manager=shm_manager,
-            slide_output_dir=slide_output_dir,
-            tiles_dir=tiles_dir,
             x_start=x_start,
             y_start=y_start,
             tile_size=tile_size,
             ch_keys=ch_keys,
             slide_name=slide_name,
-            tissue_channel=tissue_channel,
-            variance_threshold=variance_threshold,
-            mosaic_info=mosaic_info,
         )
 
         collected_partial_vessels = {}
@@ -1114,7 +1103,7 @@ def run_detection_loop(
             processor_kwargs["islet_display_channels"] = getattr(args, "islet_display_chs", None)
             with MultiGPUTileProcessor(**processor_kwargs) as processor:
                 all_detections, all_samples, collected_partial_vessels = _run_regular_tiles(
-                    processor, args, ctx, init, sampled_tiles, all_samples, shm_manager
+                    processor, args, ctx, init, sampled_tiles, all_samples
                 )
 
     except Exception:
