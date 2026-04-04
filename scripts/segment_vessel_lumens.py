@@ -799,6 +799,58 @@ def characterize_vessel(
 # ---------------------------------------------------------------------------
 
 
+def classify_markers_by_snr_percentile(
+    detections: list[dict],
+    marker_names: list[str],
+    snr_keys: list[str],
+    percentile: float = 95.0,
+) -> int:
+    """Tag detections with {marker}_class based on top-N% SNR per channel.
+
+    Modifies detections in-place. Each cell is tagged as positive for a marker
+    if its SNR in that channel is >= the percentile threshold. Cells above
+    threshold for ANY marker are considered marker-positive.
+
+    Args:
+        detections: Full detection list (modified in-place).
+        marker_names: Marker names (e.g., ["SMA", "CD31"]).
+        snr_keys: Corresponding SNR feature keys (e.g., ["ch1_snr", "ch3_snr"]).
+        percentile: Percentile threshold (default 95 = top 5%).
+
+    Returns:
+        Number of cells tagged as positive for at least one marker.
+    """
+    # Compute threshold per channel
+    thresholds = {}
+    for marker, snr_key in zip(marker_names, snr_keys):
+        vals = np.array([d.get("features", {}).get(snr_key, 0) for d in detections])
+        thresholds[marker] = float(np.percentile(vals, percentile))
+        logger.info(
+            "  %s (%s): p%.0f threshold = %.3f", marker, snr_key, percentile, thresholds[marker]
+        )
+
+    # Tag each cell
+    n_positive = 0
+    for d in detections:
+        feat = d.setdefault("features", {})
+        any_pos = False
+        for marker, snr_key in zip(marker_names, snr_keys):
+            is_pos = feat.get(snr_key, 0) >= thresholds[marker]
+            feat[f"{marker}_class"] = "positive" if is_pos else "negative"
+            if is_pos:
+                any_pos = True
+        if any_pos:
+            n_positive += 1
+
+    logger.info(
+        "SNR percentile classification: %d / %d cells positive (%.1f%%)",
+        n_positive,
+        len(detections),
+        100.0 * n_positive / max(len(detections), 1),
+    )
+    return n_positive
+
+
 def extract_cell_data(
     detections: list[dict], marker_names: str
 ) -> tuple[np.ndarray, list[dict], list[int]]:
@@ -1121,6 +1173,20 @@ def parse_args() -> argparse.Namespace:
         "--marker-names",
         required=True,
         help="Comma-separated marker names (e.g., SMA,CD31)",
+    )
+    parser.add_argument(
+        "--marker-snr-channels",
+        default=None,
+        help="Comma-separated SNR feature keys per marker (e.g., ch1_snr,ch3_snr). "
+        "When provided, computes top-5%% SNR per channel and tags cells as "
+        "{marker}_class=positive/negative. Use when detections lack _class fields. "
+        "Must match --marker-names order.",
+    )
+    parser.add_argument(
+        "--marker-percentile",
+        type=float,
+        default=95.0,
+        help="Percentile threshold for SNR-based marker classification (default: 95 = top 5%%)",
     )
     parser.add_argument(
         "--rgb-channels",
@@ -1486,6 +1552,22 @@ def _validate_characterize_and_output(
     logger.info("Loading cell detections from %s...", args.detections)
     detections = fast_json_load(str(args.detections))
     logger.info("  %d detections loaded", len(detections))
+
+    # If --marker-snr-channels is provided, classify cells by top-N% SNR
+    # before selecting marker+ cells. This handles detections that lack _class fields.
+    if args.marker_snr_channels:
+        snr_keys = [k.strip() for k in args.marker_snr_channels.split(",")]
+        if len(snr_keys) != len(marker_names):
+            logger.error(
+                "--marker-snr-channels has %d keys but --marker-names has %d markers",
+                len(snr_keys),
+                len(marker_names),
+            )
+            sys.exit(1)
+        logger.info("Classifying markers by top-%.0f%% SNR...", 100 - args.marker_percentile)
+        classify_markers_by_snr_percentile(
+            detections, marker_names, snr_keys, args.marker_percentile
+        )
 
     cell_positions, cell_features, cell_indices = extract_cell_data(detections, args.marker_names)
     if len(cell_positions) == 0:
