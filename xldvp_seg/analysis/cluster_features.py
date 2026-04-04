@@ -857,12 +857,6 @@ def _cluster_and_label(
 
     Returns a dict with keys: labels, n_clusters, cluster_label_map.
     """
-    try:
-        import hdbscan
-    except ImportError:
-        logger.error("hdbscan not installed. Run: pip install hdbscan")
-        raise
-
     umap_embedding = embeddings["umap_embedding"]
     tsne_embedding = embeddings["tsne_embedding"]
 
@@ -881,6 +875,10 @@ def _cluster_and_label(
         logger.info("  Found %d clusters (Leiden resolution=%s)", n_clusters, args.resolution)
         del adata_tmp
     else:
+        try:
+            import hdbscan
+        except ImportError:
+            raise ImportError("hdbscan not installed. Run: pip install hdbscan")
         logger.info("Running HDBSCAN (min_cluster_size=%d)...", args.min_cluster_size)
         clusterer = hdbscan.HDBSCAN(
             min_cluster_size=args.min_cluster_size,
