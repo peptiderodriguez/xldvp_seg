@@ -597,9 +597,12 @@ class ArteryVeinClassifier:
             logger.info(f"Recall: {recall:.4f}")
             logger.info(f"F1 Score: {f1:.4f}")
             logger.info("\nClassification Report:")
-            print(classification_report(y_true, y_pred, target_names=self.label_encoder.classes_))
+            logger.info(
+                "\n%s",
+                classification_report(y_true, y_pred, target_names=self.label_encoder.classes_),
+            )
             logger.info("\nConfusion Matrix:")
-            print(cm)
+            logger.info("\n%s", cm)
 
         return {
             "accuracy": float(accuracy),

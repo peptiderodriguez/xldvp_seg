@@ -298,7 +298,8 @@ def merge_detections_across_scales(
             bbox = cv2.boundingRect(c)  # (x, y, w, h)
             area = abs(cv2.contourArea(c))
             prepared.append((det, c, bbox, area))
-        except Exception:
+        except Exception as e:
+            logger.debug("Contour reshape/bbox failed, skipping detection: %s", e)
             skipped_no_outer += 1
 
     logger.info(f"Merge: {len(prepared)} valid contours, {skipped_no_outer} skipped (no outer)")

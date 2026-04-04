@@ -88,8 +88,8 @@ def setup_shared_memory(
                 fluor = (_ch.get("fluorophore") or _ch.get("name") or "").strip()
                 em_str = f" em={em:.0f}nm" if em else ""
                 _ch_label_map[_ch["index"]] = f"{fluor}{em_str}"
-    except Exception:
-        pass
+    except Exception as e:
+        logger.debug("Channel label map construction failed: %s", e)
 
     def _ch_lbl(idx):
         return f"C={idx} ({_ch_label_map.get(idx, '?')})"

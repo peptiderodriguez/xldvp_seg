@@ -463,8 +463,8 @@ def _measure_wall_thickness(
             # distance-transform value is roughly half the total wall width.
             medial_thicknesses = skeleton_distances * 2 * pixel_size_um
             return medial_thicknesses
-    except Exception:
-        pass
+    except Exception as e:
+        logger.debug("Skeletonize wall thickness failed: %s", e)
 
     # Return whatever contour-sampling collected (may be empty)
     return np.array(contour_thicknesses) if contour_thicknesses else np.array([])
@@ -642,8 +642,8 @@ def _extract_shape_features(
             # Roughness: perimeter / convex_hull_perimeter (1.0 = smooth)
             if hull_perimeter > 0:
                 features["roughness"] = outer_perimeter / hull_perimeter
-    except Exception:
-        pass
+    except Exception as e:
+        logger.debug("Convex hull shape feature extraction failed: %s", e)
 
     return features
 

@@ -20,6 +20,10 @@ from typing import Any
 import numpy as np
 from scipy import ndimage
 
+from xldvp_seg.utils.logging import get_logger
+
+logger = get_logger(__name__)
+
 
 def get_largest_connected_component(mask: np.ndarray) -> np.ndarray:
     """
@@ -209,7 +213,8 @@ def recompute_mask_features(
         else:
             features["circularity"] = 1.0
 
-    except Exception:
+    except Exception as e:
+        logger.debug("Failed to compute solidity/circularity, using defaults: %s", e)
         features["solidity"] = 1.0
         features["circularity"] = 1.0
 

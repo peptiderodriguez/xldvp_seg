@@ -294,6 +294,44 @@ class TestClassifySingleMarker:
         assert result["n_positive"] == 150
         assert result["cv_filtered"] == 50
 
+    def test_gmm_method(self, tmp_path):
+        """GMM method works through classify_single_marker with correct threshold."""
+        values = _bimodal_values(mu_low=1.0, mu_high=10.0)
+        dets = _make_detections(len(values), feature_key="ch1_mean", values=values)
+        result = classify_single_marker(
+            dets,
+            channel=1,
+            marker_name="GMM_Test",
+            method="gmm",
+            output_dir=tmp_path,
+        )
+        assert (
+            1.0 < result["threshold"] < 10.0
+        ), f"GMM threshold {result['threshold']:.2f} not between modes"
+        assert 350 < result["n_positive"] < 650
+
+    def test_otsu_half_method(self, tmp_path):
+        """otsu_half through classify_single_marker is more permissive than otsu."""
+        values = _bimodal_values(mu_low=2.0, mu_high=20.0)
+        dets_otsu = _make_detections(len(values), feature_key="ch1_mean", values=values)
+        dets_half = _make_detections(len(values), feature_key="ch1_mean", values=values)
+        result_otsu = classify_single_marker(
+            dets_otsu,
+            channel=1,
+            marker_name="OtsuFull",
+            method="otsu",
+            output_dir=tmp_path,
+        )
+        result_half = classify_single_marker(
+            dets_half,
+            channel=1,
+            marker_name="OtsuHalf",
+            method="otsu_half",
+            output_dir=tmp_path,
+        )
+        assert result_half["n_positive"] >= result_otsu["n_positive"]
+        assert result_half["threshold"] < result_otsu["threshold"]
+
     def test_unknown_method_raises(self, tmp_path):
         dets = _make_detections(10, feature_key="ch1_snr", values=np.ones(10) * 5.0)
         with pytest.raises(ValueError, match="Unknown method"):

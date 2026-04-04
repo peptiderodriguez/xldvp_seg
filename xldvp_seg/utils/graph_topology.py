@@ -370,7 +370,8 @@ def safe_hull_area(pts: np.ndarray) -> float:
     try:
         hull = ConvexHull(pts)
         return float(hull.volume)  # 2D: volume = area
-    except Exception:
+    except Exception as e:
+        logger.debug("ConvexHull failed for safe_hull_area: %s", e)
         return 0.0
 
 

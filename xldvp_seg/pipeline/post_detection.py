@@ -732,8 +732,8 @@ def process_detections_post_dedup(
             if sam2_predictor is not None:
                 try:
                     sam2_predictor.reset_predictor()
-                except Exception:
-                    pass
+                except Exception as e:
+                    logger.debug("SAM2 predictor reset failed: %s", e)
 
             # Enrich detections: summary metrics in features, per-nucleus list at top-level
             for det in tile_dets:

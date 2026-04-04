@@ -482,9 +482,12 @@ class VesselClassifier:
         if verbose:
             logger.info(f"\nTest Accuracy: {accuracy:.4f}")
             logger.info("\nClassification Report:")
-            print(classification_report(y_true, y_pred, target_names=self.label_encoder.classes_))
+            logger.info(
+                "\n%s",
+                classification_report(y_true, y_pred, target_names=self.label_encoder.classes_),
+            )
             logger.info("\nConfusion Matrix:")
-            print(cm)
+            logger.info("\n%s", cm)
 
         return {
             "accuracy": float(accuracy),

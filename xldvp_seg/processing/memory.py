@@ -221,8 +221,8 @@ def get_memory_usage() -> dict[str, float]:
             result["gpu_reserved_gb"] = total_gpu_reserved
             result["gpu_available_gb"] = total_gpu_total - total_gpu_reserved
             result["gpu_count"] = num_gpus
-        except Exception:
-            pass
+        except Exception as e:
+            logger.debug("GPU memory query failed: %s", e)
     elif _device_type == "mps":
         # MPS uses unified memory — report system RAM as GPU memory
         result["gpu_type"] = "mps"

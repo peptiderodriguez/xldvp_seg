@@ -259,8 +259,8 @@ def calibrate_islet_marker_gmm(
         from xldvp_seg.utils.device import empty_cache
 
         empty_cache()
-    except Exception:
-        pass
+    except Exception as e:
+        logger.debug("Cache cleanup after GMM calibration failed: %s", e)
 
     return gmm_thresholds
 
