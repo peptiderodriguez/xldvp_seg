@@ -109,6 +109,128 @@ def generate_tiles(
 
 
 # ---------------------------------------------------------------------------
+# Multi-scale zarr tile reading (reusable)
+# ---------------------------------------------------------------------------
+
+
+def resolve_zarr_scales(
+    zarr_root: Any,
+    scales: list[int],
+) -> list[tuple[int, int, str, int]]:
+    """Resolve requested scales against available zarr pyramid levels.
+
+    For scales that exceed the zarr pyramid (e.g., 64x when zarr only has
+    levels 0–4 = up to 16x), maps to the coarsest available level plus an
+    extra downsample factor applied in-script.
+
+    Args:
+        zarr_root: Opened zarr group with numeric level keys ('0', '1', ...).
+        scales: List of scale factors (must be powers of 2).
+
+    Returns:
+        List of (scale, zarr_level, level_key, extra_downsample) tuples.
+
+    Raises:
+        ValueError: If any scale is not a power of 2.
+    """
+    # Validate power-of-2
+    for s in scales:
+        if s < 1 or (s & (s - 1)) != 0:
+            raise ValueError(
+                f"Scale {s} is not a power of 2. Scales must be powers of 2 "
+                f"(e.g., 2, 4, 8, 16, 32, 64)."
+            )
+
+    max_zarr_level = max(int(k) for k in zarr_root.keys() if k.isdigit())
+    resolved = []
+
+    for s in scales:
+        level = int(np.log2(s))
+        level_key = str(level)
+        if level_key in zarr_root:
+            resolved.append((s, level, level_key, 1))
+        elif level > max_zarr_level:
+            extra_ds = 2 ** (level - max_zarr_level)
+            coarse_key = str(max_zarr_level)
+            logger.info(
+                "Scale %dx: zarr level %d not found, will read level %d + %dx downsample",
+                s,
+                level,
+                max_zarr_level,
+                extra_ds,
+            )
+            resolved.append((s, max_zarr_level, coarse_key, extra_ds))
+        else:
+            logger.warning("Zarr level %d (scale %dx) not found, skipping", level, s)
+
+    return resolved
+
+
+def get_effective_shape(
+    level_data: Any,
+    extra_ds: int,
+) -> tuple[int, int, int]:
+    """Get the effective (C, H, W) shape after optional extra downsampling.
+
+    Args:
+        level_data: Zarr array with shape (C, H, W).
+        extra_ds: Extra downsample factor (1 = no downsampling).
+
+    Returns:
+        (C, H, W) tuple representing the shape SAM2 will see.
+    """
+    c, h, w = level_data.shape
+    if extra_ds > 1:
+        return (c, h // extra_ds, w // extra_ds)
+    return (c, h, w)
+
+
+def read_zarr_tile(
+    level_data: Any,
+    channel: int,
+    tile_y: int,
+    tile_x: int,
+    tile_h: int,
+    tile_w: int,
+    extra_ds: int = 1,
+) -> np.ndarray:
+    """Read a single-channel tile from zarr with optional extra downsampling.
+
+    When extra_ds > 1, reads the corresponding larger region from the zarr
+    level and downsamples with cv2.INTER_AREA (anti-aliased averaging).
+
+    Args:
+        level_data: Zarr array with shape (C, H, W).
+        channel: Channel index to read.
+        tile_y: Tile y-offset in the effective (downsampled) coordinate space.
+        tile_x: Tile x-offset in the effective (downsampled) coordinate space.
+        tile_h: Tile height in the effective coordinate space.
+        tile_w: Tile width in the effective coordinate space.
+        extra_ds: Extra downsample factor (1 = direct read, no downsampling).
+
+    Returns:
+        2D numpy array of shape (tile_h, tile_w), same dtype as zarr source
+        (or resized via INTER_AREA if extra_ds > 1).
+    """
+    if extra_ds > 1:
+        import cv2
+
+        # Map effective coords back to zarr-level coords
+        zy = tile_y * extra_ds
+        zx = tile_x * extra_ds
+        zh = min(tile_h * extra_ds, level_data.shape[1] - zy)
+        zw = min(tile_w * extra_ds, level_data.shape[2] - zx)
+        raw = np.array(level_data[channel, zy : zy + zh, zx : zx + zw])
+        # Compute actual output size (may differ from tile_h/tile_w at edges
+        # due to rounding in integer division)
+        out_h = min(tile_h, int(np.ceil(zh / extra_ds)))
+        out_w = min(tile_w, int(np.ceil(zw / extra_ds)))
+        return cv2.resize(raw, (out_w, out_h), interpolation=cv2.INTER_AREA)
+    else:
+        return np.array(level_data[channel, tile_y : tile_y + tile_h, tile_x : tile_x + tile_w])
+
+
+# ---------------------------------------------------------------------------
 # Per-tile SAM2 lumen detection
 # ---------------------------------------------------------------------------
 
@@ -1116,15 +1238,12 @@ def main() -> None:
     else:
         root = zarr.open(str(zarr_path), mode="r")
 
-    # Verify levels exist
-    available_levels = []
-    for s in scales:
-        level = int(np.log2(s))
-        level_key = str(level)
-        if level_key in root:
-            available_levels.append((s, level, level_key))
-        else:
-            logger.warning("Zarr level %d (scale %dx) not found, skipping", level, s)
+    # Resolve scales against zarr pyramid (supports beyond-pyramid downsampling)
+    try:
+        available_levels = resolve_zarr_scales(root, scales)
+    except ValueError as e:
+        logger.error("%s", e)
+        sys.exit(1)
 
     if not available_levels:
         logger.error("No valid zarr levels found for scales %s", scales)
@@ -1165,59 +1284,74 @@ def main() -> None:
     import cv2
     from tqdm import tqdm
 
-    # Scale-specific size bounds (min/max diameter in um)
-    size_bounds = {
+    # Scale-specific size bounds (min/max diameter in um).
+    # Auto-computed for scales not in the dict: min = scale * 7.5, max = 100000.
+    _size_bounds = {
         2: (15, 300),
         4: (50, 800),
         8: (200, 2000),
         16: (500, 100000),
+        32: (1000, 100000),
+        64: (2000, 100000),
     }
 
     all_lumens: list[dict] = []
 
-    for scale, level, level_key in available_levels:
+    for scale, level, level_key, extra_ds in available_levels:
         level_data = root[level_key]
-        level_shape = level_data.shape  # (C, H, W)
         pixel_size_at_level = base_pixel_size * scale
+        eff_shape = get_effective_shape(level_data, extra_ds)
 
-        tiles = generate_tiles(level_shape, args.tile_size, args.overlap)
+        tiles = generate_tiles(eff_shape, args.tile_size, args.overlap)
         logger.info(
-            "Scale %dx: %d tiles (level %d, shape %s, %.3f um/px)",
+            "Scale %dx: %d tiles (level %d%s, effective shape %s, %.3f um/px)",
             scale,
             len(tiles),
             level,
-            level_shape,
+            f" + {extra_ds}x downsample" if extra_ds > 1 else "",
+            eff_shape,
             pixel_size_at_level,
         )
 
-        min_diam, max_diam = size_bounds.get(scale, (30, 10000))
+        min_diam, max_diam = _size_bounds.get(scale, (scale * 7.5, 100000))
         scale_lumens_before = len(all_lumens)
 
         for tile_y, tile_x, tile_h, tile_w in tqdm(
             tiles, desc=f"Scale {scale}x", unit="tile", leave=True
         ):
-            # Read 3 channels, compose RGB uint8
-            rgb = np.zeros((tile_h, tile_w, 3), dtype=np.uint8)
+            # Read 3 channels via reusable helper, compose RGB uint8.
+            # Track actual data extent — edge tiles with extra_ds may be
+            # slightly smaller than (tile_h, tile_w). We crop the RGB to
+            # the actual extent so SAM2 never sees zero-padding.
+            actual_h, actual_w = tile_h, tile_w
+            channels_ok = True
+            channel_arrays = []
             for i, ch_idx in enumerate(rgb_channels):
                 try:
-                    raw = np.array(
-                        level_data[ch_idx, tile_y : tile_y + tile_h, tile_x : tile_x + tile_w]
+                    raw = read_zarr_tile(
+                        level_data, ch_idx, tile_y, tile_x, tile_h, tile_w, extra_ds
                     )
                 except Exception as e:
                     logger.debug(
-                        "Failed to read tile [%d, %d:%d, %d:%d] at level %d: %s",
+                        "Failed to read tile ch=%d y=%d x=%d at scale %dx: %s",
                         ch_idx,
                         tile_y,
-                        tile_y + tile_h,
                         tile_x,
-                        tile_x + tile_w,
-                        level,
+                        scale,
                         e,
                     )
+                    channels_ok = False
                     break
-                rgb[:, :, i] = percentile_normalize_uint8(raw)
-            else:
-                # Only process if all channels read successfully
+                actual_h = min(actual_h, raw.shape[0])
+                actual_w = min(actual_w, raw.shape[1])
+                channel_arrays.append(raw)
+
+            if channels_ok:
+                # Compose RGB cropped to actual data extent (no zero-padding)
+                rgb = np.zeros((actual_h, actual_w, 3), dtype=np.uint8)
+                for i, raw in enumerate(channel_arrays):
+                    rgb[:, :, i] = percentile_normalize_uint8(raw[:actual_h, :actual_w])
+
                 # Detect lumens in this tile
                 tile_lumens = detect_lumens_in_tile(
                     rgb,
