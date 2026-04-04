@@ -1158,10 +1158,17 @@ def parse_args() -> argparse.Namespace:
         help="Maximum cell-to-lumen assignment radius in um",
     )
     parser.add_argument(
-        "--num-gpus",
-        type=int,
-        default=0,
-        help="Number of GPUs for parallel SAM2 inference (0 = auto-detect all available)",
+        "--tile-shard",
+        default=None,
+        help="Tile sharding for multi-GPU: INDEX/TOTAL (e.g., 0/4). "
+        "Each shard processes every TOTAL-th tile starting at INDEX. "
+        "Run N shards in parallel (one per GPU), then merge results.",
+    )
+    parser.add_argument(
+        "--merge-shards",
+        action="store_true",
+        help="Merge shard results instead of running detection. "
+        "Reads vessel_lumens_shard_*.json from --output-dir.",
     )
     parser.add_argument("--output-dir", required=True, help="Output directory")
     parser.add_argument(
@@ -1199,7 +1206,20 @@ def parse_args() -> argparse.Namespace:
 
 
 def main() -> None:
+    import logging
+
+    logging.basicConfig(
+        level=logging.INFO,
+        format="%(asctime)s %(name)s %(levelname)s %(message)s",
+        datefmt="%H:%M:%S",
+    )
+
     args = parse_args()
+
+    # Handle --merge-shards mode (skip detection, just merge + validate + characterize)
+    if args.merge_shards:
+        _merge_shards_and_finish(args)
+        return
     t0 = time.time()
 
     zarr_path = Path(args.zarr_path)
@@ -1215,6 +1235,16 @@ def main() -> None:
     scales = sorted(int(s.strip()) for s in args.scales.split(","))
     marker_names = [m.strip() for m in args.marker_names.split(",")]
     class_keys = [f"{name}_class" for name in marker_names]
+
+    # Parse tile shard
+    shard_idx, shard_total = 0, 1
+    if args.tile_shard:
+        parts = args.tile_shard.split("/")
+        if len(parts) != 2:
+            logger.error("--tile-shard must be INDEX/TOTAL (e.g., 0/4)")
+            sys.exit(1)
+        shard_idx, shard_total = int(parts[0]), int(parts[1])
+        logger.info("Tile shard: %d / %d", shard_idx, shard_total)
 
     logger.info("=" * 70)
     logger.info("LUMEN-FIRST VESSEL DETECTION")
@@ -1259,48 +1289,34 @@ def main() -> None:
     base_pixel_size = get_pixel_size(root, args.czi_path)
     logger.info("Base pixel size: %.4f um/px", base_pixel_size)
 
-    # ---- 3. Load SAM2 on all available GPUs ----
-    import torch
+    # ---- 3. Load SAM2 (single GPU per shard task) ----
+    logger.info("Loading SAM2...")
+    from xldvp_seg.models.manager import get_model_manager
+    from xldvp_seg.utils.device import get_default_device
+
+    device = get_default_device()
+    manager = get_model_manager(device=device)
+    _, _ = manager.get_sam2()
+
     from sam2.automatic_mask_generator import SAM2AutomaticMaskGenerator
-    from sam2.build_sam import build_sam2
 
-    from xldvp_seg.models.manager import SAM2_CONFIG, find_checkpoint
-
-    n_gpus = args.num_gpus if args.num_gpus > 0 else torch.cuda.device_count()
-    if n_gpus == 0:
-        n_gpus = 1  # CPU fallback
-    logger.info("Loading SAM2 on %d GPU(s)...", n_gpus)
-
-    checkpoint_path = find_checkpoint("sam2")
-    if checkpoint_path is None:
-        logger.error("SAM2 checkpoint not found")
-        sys.exit(1)
-
-    sam2_generators: list[SAM2AutomaticMaskGenerator] = []
-    sam2_config = {
-        "points_per_side": args.sam2_points_per_side,
-        "pred_iou_thresh": args.sam2_pred_iou_thresh,
-        "stability_score_thresh": args.sam2_stability_thresh,
-        "min_mask_region_area": 100,
-        "crop_n_layers": 1,
-    }
-    for gpu_id in range(n_gpus):
-        device = f"cuda:{gpu_id}" if torch.cuda.is_available() else "cpu"
-        model = build_sam2(SAM2_CONFIG, str(checkpoint_path), device=device)
-        gen = SAM2AutomaticMaskGenerator(model, **sam2_config)
-        sam2_generators.append(gen)
-        logger.info("  GPU %d (%s): SAM2 loaded", gpu_id, device)
-
+    sam2_lumen = SAM2AutomaticMaskGenerator(
+        manager._sam2_model,
+        points_per_side=args.sam2_points_per_side,
+        pred_iou_thresh=args.sam2_pred_iou_thresh,
+        stability_score_thresh=args.sam2_stability_thresh,
+        min_mask_region_area=100,
+        crop_n_layers=1,
+    )
     logger.info(
-        "SAM2 ready on %d GPU(s) (points_per_side=%d, iou_thresh=%.2f, stability=%.2f)",
-        n_gpus,
+        "SAM2 ready on %s (points_per_side=%d, iou_thresh=%.2f, stability=%.2f)",
+        device,
         args.sam2_points_per_side,
         args.sam2_pred_iou_thresh,
         args.sam2_stability_thresh,
     )
 
     # ---- 4. Multi-scale lumen detection (multi-GPU) ----
-    from concurrent.futures import ThreadPoolExecutor
 
     import cv2
     from tqdm import tqdm
@@ -1318,67 +1334,6 @@ def main() -> None:
         64: (2000, 100000),
     }
 
-    def _process_one_tile(
-        tile_info: tuple[int, int, int, int],
-        gpu_id: int,
-        level_data: Any,
-        extra_ds: int,
-        pixel_size_at_level: float,
-        scale: int,
-        min_area_um2: float,
-        min_contrast: float,
-        rgb_ch: list[int],
-        base_px_um: float,
-    ) -> list[dict]:
-        """Read one tile, run SAM2, return filtered lumens with global coords.
-
-        All dependencies are passed explicitly for thread safety.
-        """
-        tile_y, tile_x, tile_h, tile_w = tile_info
-
-        # Read channels
-        actual_h, actual_w = tile_h, tile_w
-        channel_arrays = []
-        for ch_idx in rgb_ch:
-            try:
-                raw = read_zarr_tile(level_data, ch_idx, tile_y, tile_x, tile_h, tile_w, extra_ds)
-            except Exception as e:
-                logger.debug("Tile ch=%d y=%d x=%d scale %dx: %s", ch_idx, tile_y, tile_x, scale, e)
-                return []
-            actual_h = min(actual_h, raw.shape[0])
-            actual_w = min(actual_w, raw.shape[1])
-            channel_arrays.append(raw)
-
-        # Compose RGB
-        rgb = np.zeros((actual_h, actual_w, 3), dtype=np.uint8)
-        for i, raw in enumerate(channel_arrays):
-            rgb[:, :, i] = percentile_normalize_uint8(raw[:actual_h, :actual_w])
-
-        # SAM2 inference on assigned GPU
-        tile_lumens = detect_lumens_in_tile(
-            rgb, pixel_size_at_level, min_area_um2, min_contrast, sam2_generators[gpu_id]
-        )
-
-        # Convert to global um
-        results = []
-        for lumen in tile_lumens:
-            lumen["contour_global_um"] = tile_contour_to_global_um(
-                lumen["contour_tile_xy"], tile_y, tile_x, scale, base_px_um
-            )
-            lumen["scale"] = scale
-            area_um2 = lumen["area_px"] * pixel_size_at_level**2
-            lumen["equiv_diameter_um"] = round(2 * np.sqrt(area_um2 / np.pi), 2)
-            lumen["perimeter_um"] = round(
-                float(
-                    cv2.arcLength(lumen["contour_tile_xy"].reshape(-1, 1, 2).astype(np.int32), True)
-                )
-                * pixel_size_at_level,
-                2,
-            )
-            del lumen["contour_tile_xy"]
-            results.append(lumen)
-        return results
-
     all_lumens: list[dict] = []
 
     for scale, level, level_key, extra_ds in available_levels:
@@ -1386,74 +1341,112 @@ def main() -> None:
         pixel_size_at_level = base_pixel_size * scale
         eff_shape = get_effective_shape(level_data, extra_ds)
 
-        tiles = generate_tiles(eff_shape, args.tile_size, args.overlap)
+        all_tiles = generate_tiles(eff_shape, args.tile_size, args.overlap)
+        # Round-robin shard: each shard gets every N-th tile
+        tiles = [t for i, t in enumerate(all_tiles) if i % shard_total == shard_idx]
         logger.info(
-            "Scale %dx: %d tiles (level %d%s, effective shape %s, %.3f um/px) on %d GPU(s)",
+            "Scale %dx: %d/%d tiles (shard %d/%d, level %d%s, %.3f um/px)",
             scale,
             len(tiles),
+            len(all_tiles),
+            shard_idx,
+            shard_total,
             level,
             f" + {extra_ds}x downsample" if extra_ds > 1 else "",
-            eff_shape,
             pixel_size_at_level,
-            n_gpus,
         )
 
         min_diam, max_diam = _size_bounds.get(scale, (scale * 7.5, 100000))
         scale_lumens_before = len(all_lumens)
 
-        # Dispatch tiles round-robin across GPUs via thread pool.
-        # CUDA releases the GIL during kernel execution, so threads give
-        # true parallelism for SAM2 inference. I/O (zarr reads) is also
-        # GIL-releasing (C extension). Each GPU gets its own SAM2 instance.
-        from concurrent.futures import as_completed
+        for tile_y, tile_x, tile_h, tile_w in tqdm(
+            tiles, desc=f"Scale {scale}x", unit="tile", leave=True
+        ):
+            # Read channels, crop to actual data extent (no zero-padding)
+            actual_h, actual_w = tile_h, tile_w
+            channels_ok = True
+            channel_arrays = []
+            for ch_idx in rgb_channels:
+                try:
+                    raw = read_zarr_tile(
+                        level_data, ch_idx, tile_y, tile_x, tile_h, tile_w, extra_ds
+                    )
+                except Exception as e:
+                    logger.debug(
+                        "Tile ch=%d y=%d x=%d scale %dx: %s", ch_idx, tile_y, tile_x, scale, e
+                    )
+                    channels_ok = False
+                    break
+                actual_h = min(actual_h, raw.shape[0])
+                actual_w = min(actual_w, raw.shape[1])
+                channel_arrays.append(raw)
 
-        with ThreadPoolExecutor(max_workers=n_gpus) as pool:
-            futures = []
-            for tile_idx, tile_info in enumerate(tiles):
-                gpu_id = tile_idx % n_gpus
-                fut = pool.submit(
-                    _process_one_tile,
-                    tile_info,
-                    gpu_id,
-                    level_data,
-                    extra_ds,
+            if channels_ok:
+                rgb = np.zeros((actual_h, actual_w, 3), dtype=np.uint8)
+                for i, raw in enumerate(channel_arrays):
+                    rgb[:, :, i] = percentile_normalize_uint8(raw[:actual_h, :actual_w])
+
+                tile_lumens = detect_lumens_in_tile(
+                    rgb,
                     pixel_size_at_level,
-                    scale,
                     args.min_lumen_area_um2,
                     args.min_contrast,
-                    rgb_channels,
-                    base_pixel_size,
+                    sam2_lumen,
                 )
-                futures.append(fut)
 
-            # Collect results as they complete (responsive progress bar)
-            with tqdm(total=len(futures), desc=f"Scale {scale}x", unit="tile", leave=True) as pbar:
-                for fut in as_completed(futures):
-                    tile_lumens = fut.result()
-                    for lumen in tile_lumens:
-                        d = lumen["equiv_diameter_um"]
-                        if min_diam <= d <= max_diam:
-                            all_lumens.append(lumen)
-                    pbar.update(1)
+                for lumen in tile_lumens:
+                    lumen["contour_global_um"] = tile_contour_to_global_um(
+                        lumen["contour_tile_xy"], tile_y, tile_x, scale, base_pixel_size
+                    )
+                    lumen["scale"] = scale
+                    area_um2 = lumen["area_px"] * pixel_size_at_level**2
+                    lumen["equiv_diameter_um"] = round(2 * np.sqrt(area_um2 / np.pi), 2)
+                    lumen["perimeter_um"] = round(
+                        float(
+                            cv2.arcLength(
+                                lumen["contour_tile_xy"].reshape(-1, 1, 2).astype(np.int32), True
+                            )
+                        )
+                        * pixel_size_at_level,
+                        2,
+                    )
+                    del lumen["contour_tile_xy"]
+
+                    d = lumen["equiv_diameter_um"]
+                    if min_diam <= d <= max_diam:
+                        all_lumens.append(lumen)
 
         empty_cache()
 
         n_new = len(all_lumens) - scale_lumens_before
         logger.info("  -> %d new candidates at scale %dx (%d total)", n_new, scale, len(all_lumens))
 
+    # ---- 5. Save shard or proceed to dedup ----
+    if shard_total > 1:
+        # Save shard results for later merging
+        shard_out = output_dir / f"vessel_lumens_shard_{shard_idx}.json"
+        atomic_json_dump(all_lumens, str(shard_out))
+        logger.info(
+            "Shard %d/%d: saved %d candidates to %s",
+            shard_idx,
+            shard_total,
+            len(all_lumens),
+            shard_out,
+        )
+        return  # merge step runs separately via --merge-shards
+
     if not all_lumens:
         logger.warning("No lumen candidates found at any scale. Exiting.")
-        # Write empty outputs
         atomic_json_dump([], str(output_dir / "vessel_lumens.json"))
         logger.info("Wrote empty vessel_lumens.json")
         return
 
     logger.info("Total candidates before dedup: %d", len(all_lumens))
 
-    # ---- 5. Cross-tile dedup ----
+    # ---- 6. Cross-tile dedup ----
     all_lumens = dedup_lumens_iou(all_lumens, iou_threshold=0.3)
 
-    # ---- 6. Cross-scale merge ----
+    # ---- 7. Cross-scale merge ----
     all_lumens = merge_across_scales(all_lumens, iou_threshold=0.3)
     logger.info("After cross-scale merge: %d lumens", len(all_lumens))
 
@@ -1598,6 +1591,132 @@ def main() -> None:
 
     elapsed = time.time() - t0
     logger.info("Completed in %.1f seconds (%.1f min)", elapsed, elapsed / 60)
+
+
+def _merge_shards_and_finish(args: argparse.Namespace) -> None:
+    """Merge shard results, dedup, validate, characterize, and write output.
+
+    Called when --merge-shards is specified. Reads vessel_lumens_shard_*.json
+    from --output-dir, concatenates, runs cross-tile dedup + cross-scale merge,
+    then continues with biological validation and characterization.
+    """
+    import glob
+
+    output_dir = Path(args.output_dir)
+    shard_files = sorted(glob.glob(str(output_dir / "vessel_lumens_shard_*.json")))
+    if not shard_files:
+        logger.error("No shard files found in %s", output_dir)
+        sys.exit(1)
+
+    logger.info("Merging %d shard files...", len(shard_files))
+    all_lumens: list[dict] = []
+    for sf in shard_files:
+        shard_data = fast_json_load(sf)
+        logger.info("  %s: %d candidates", Path(sf).name, len(shard_data))
+        # Convert contour lists back to numpy arrays
+        for lumen in shard_data:
+            c = lumen.get("contour_global_um")
+            if c is not None and not isinstance(c, np.ndarray):
+                lumen["contour_global_um"] = np.array(c, dtype=np.float64)
+        all_lumens.extend(shard_data)
+    logger.info("Total candidates from all shards: %d", len(all_lumens))
+
+    if not all_lumens:
+        logger.warning("No candidates after merging shards.")
+        atomic_json_dump([], str(output_dir / "vessel_lumens.json"))
+        return
+
+    # Dedup + merge
+    all_lumens = dedup_lumens_iou(all_lumens, iou_threshold=0.3)
+    all_lumens = merge_across_scales(all_lumens, iou_threshold=0.3)
+    logger.info("After dedup + cross-scale merge: %d lumens", len(all_lumens))
+
+    # Continue with validation + characterization (reuse main() logic)
+    # Re-parse needed args
+    marker_names = [m.strip() for m in args.marker_names.split(",")]
+    class_keys = [f"{name}_class" for name in marker_names]
+
+    logger.info("Loading cell detections from %s...", args.detections)
+    detections = fast_json_load(str(args.detections))
+    logger.info("  %d detections loaded", len(detections))
+
+    cell_positions, cell_features, cell_indices = extract_cell_data(detections, args.marker_names)
+    if len(cell_positions) == 0:
+        logger.error("No marker+ cells found. Cannot validate lumens.")
+        sys.exit(1)
+
+    validated, rejected = validate_lumens_with_cells(
+        all_lumens,
+        cell_positions,
+        cell_features,
+        marker_names,
+        radius_min=args.assignment_radius_min,
+        radius_max=args.assignment_radius_max,
+        min_coverage=args.min_coverage,
+        save_debug=args.save_debug,
+    )
+
+    if not validated:
+        logger.warning("No lumens passed biological validation.")
+        atomic_json_dump([], str(output_dir / "vessel_lumens.json"))
+        return
+
+    # Characterize vessels
+    logger.info("Characterizing %d validated vessels...", len(validated))
+    vessels: list[dict] = []
+
+    for vid, lumen in enumerate(validated):
+        assigned_cell_pos_idx = lumen.get("assigned_cell_indices", [])
+        old_distances = lumen.get("cell_distances_um", [])
+        new_indices = []
+        new_distances = []
+        for k, j in enumerate(assigned_cell_pos_idx):
+            if j < len(cell_indices):
+                new_indices.append(cell_indices[j])
+                if k < len(old_distances):
+                    new_distances.append(old_distances[k])
+        lumen["assigned_cell_indices"] = new_indices
+        lumen["cell_distances_um"] = new_distances
+        lumen["n_assigned_cells"] = len(new_indices)
+
+        characterization = characterize_vessel(lumen, detections, marker_names, class_keys)
+        record = build_vessel_record(vid, lumen, characterization, lumen.get("scale", 0))
+        vessels.append(record)
+
+    tag_cell_detections(detections, vessels, prefix="lumen_vessel")
+
+    # Output
+    logger.info("=" * 70)
+    logger.info("LUMEN VESSEL DETECTION SUMMARY (merged)")
+    logger.info("=" * 70)
+    logger.info("  Total validated vessels: %d", len(vessels))
+    type_counts: dict[str, int] = {}
+    for v in vessels:
+        vt = v.get("vessel_type", "unclassified")
+        type_counts[vt] = type_counts.get(vt, 0) + 1
+    logger.info("  Vessel types: %s", type_counts)
+
+    atomic_json_dump(vessels, str(output_dir / "vessel_lumens.json"))
+    logger.info("Saved %d vessel records", len(vessels))
+
+    det_out = output_dir / "cell_detections_vessels.json"
+    atomic_json_dump(detections, str(det_out))
+    logger.info("Saved tagged detections to %s", det_out)
+
+    vessel_cells = [d for d in detections if d.get("features", {}).get("lumen_vessel_id", -1) >= 0]
+    atomic_json_dump(vessel_cells, str(output_dir / "cell_detections_vessel_only.json"))
+    logger.info("Saved %d vessel-only detections", len(vessel_cells))
+
+    write_vessel_csv(vessels, output_dir / "vessel_summary.csv", marker_names)
+
+    if args.save_debug and rejected:
+        atomic_json_dump(
+            [
+                {"rejection_reason": r.get("rejection_reason"), "scale": r.get("scale")}
+                for r in rejected
+            ],
+            str(output_dir / "vessel_lumens_rejected.json"),
+        )
 
 
 if __name__ == "__main__":
