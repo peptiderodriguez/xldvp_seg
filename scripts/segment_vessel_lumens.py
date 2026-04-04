@@ -477,6 +477,7 @@ def merge_across_scales(lumens: list[dict], iou_threshold: float = 0.3) -> list[
         Merged list of lumen dicts.
     """
     from shapely.geometry import Polygon
+    from shapely.strtree import STRtree
 
     if len(lumens) <= 1:
         return lumens
@@ -494,6 +495,11 @@ def merge_across_scales(lumens: list[dict], iou_threshold: float = 0.3) -> list[
         scale_lumens = by_scale[scale]
         n_added = 0
 
+        # Rebuild STRtree from accepted lumens for fast spatial queries.
+        # Tree is rebuilt per-scale (not per-lumen) to amortize cost.
+        accepted_tree = STRtree(accepted_polys) if accepted_polys else None
+        accepted_id_to_idx = {id(p): i for i, p in enumerate(accepted_polys)}
+
         for lumen in scale_lumens:
             pts = lumen.get("contour_global_um")
             if pts is None or len(pts) < 3:
@@ -504,20 +510,33 @@ def merge_across_scales(lumens: list[dict], iou_threshold: float = 0.3) -> list[
                     poly = poly.buffer(0)
                 if not poly.is_valid or poly.is_empty:
                     continue
-            except Exception:
+            except Exception as e:
+                logger.debug("Polygon operation failed: %s", e)
                 continue
 
-            # Check overlap with already-accepted (finer-scale) lumens
+            # Check overlap with already-accepted (finer-scale) lumens via STRtree
             overlaps = False
-            for ap in accepted_polys:
+            if accepted_tree is not None:
                 try:
-                    inter = poly.intersection(ap).area
-                    union = poly.union(ap).area
-                    if union > 0 and (inter / union) >= iou_threshold:
-                        overlaps = True
-                        break
-                except Exception:
-                    continue
+                    candidates = accepted_tree.query(poly)
+                except Exception as e:
+                    logger.debug("STRtree query failed: %s", e)
+                    candidates = []
+
+                for ci_raw in candidates:
+                    ci = ci_raw if isinstance(ci_raw, int) else accepted_id_to_idx.get(id(ci_raw))
+                    if ci is None:
+                        continue
+                    ap = accepted_polys[ci]
+                    try:
+                        inter = poly.intersection(ap).area
+                        union = poly.union(ap).area
+                        if union > 0 and (inter / union) >= iou_threshold:
+                            overlaps = True
+                            break
+                    except Exception as e:
+                        logger.debug("Polygon operation failed: %s", e)
+                        continue
 
             if not overlaps:
                 accepted.append(lumen)
