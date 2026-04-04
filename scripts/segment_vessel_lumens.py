@@ -1157,6 +1157,12 @@ def parse_args() -> argparse.Namespace:
         default=100.0,
         help="Maximum cell-to-lumen assignment radius in um",
     )
+    parser.add_argument(
+        "--num-gpus",
+        type=int,
+        default=0,
+        help="Number of GPUs for parallel SAM2 inference (0 = auto-detect all available)",
+    )
     parser.add_argument("--output-dir", required=True, help="Output directory")
     parser.add_argument(
         "--save-debug",
@@ -1253,36 +1259,53 @@ def main() -> None:
     base_pixel_size = get_pixel_size(root, args.czi_path)
     logger.info("Base pixel size: %.4f um/px", base_pixel_size)
 
-    # ---- 3. Load SAM2 ----
-    logger.info("Loading SAM2...")
-    from xldvp_seg.models.manager import get_model_manager
-    from xldvp_seg.utils.device import get_default_device
-
-    device = get_default_device()
-    manager = get_model_manager(device=device)
-    # Load the underlying SAM2 model via get_sam2 (triggers lazy loading)
-    _, _ = manager.get_sam2()
-
+    # ---- 3. Load SAM2 on all available GPUs ----
+    import torch
     from sam2.automatic_mask_generator import SAM2AutomaticMaskGenerator
+    from sam2.build_sam import build_sam2
 
-    sam2_lumen = SAM2AutomaticMaskGenerator(
-        manager._sam2_model,
-        points_per_side=args.sam2_points_per_side,
-        pred_iou_thresh=args.sam2_pred_iou_thresh,
-        stability_score_thresh=args.sam2_stability_thresh,
-        min_mask_region_area=100,
-        crop_n_layers=1,
-    )
+    from xldvp_seg.models.manager import SAM2_CONFIG, find_checkpoint
+
+    n_gpus = args.num_gpus if args.num_gpus > 0 else torch.cuda.device_count()
+    if n_gpus == 0:
+        n_gpus = 1  # CPU fallback
+    logger.info("Loading SAM2 on %d GPU(s)...", n_gpus)
+
+    checkpoint_path = find_checkpoint("sam2")
+    if checkpoint_path is None:
+        logger.error("SAM2 checkpoint not found")
+        sys.exit(1)
+
+    sam2_generators: list[SAM2AutomaticMaskGenerator] = []
+    sam2_config = {
+        "points_per_side": args.sam2_points_per_side,
+        "pred_iou_thresh": args.sam2_pred_iou_thresh,
+        "stability_score_thresh": args.sam2_stability_thresh,
+        "min_mask_region_area": 100,
+        "crop_n_layers": 1,
+    }
+    for gpu_id in range(n_gpus):
+        device = f"cuda:{gpu_id}" if torch.cuda.is_available() else "cpu"
+        model = build_sam2(SAM2_CONFIG, str(checkpoint_path), device=device)
+        gen = SAM2AutomaticMaskGenerator(model, **sam2_config)
+        sam2_generators.append(gen)
+        logger.info("  GPU %d (%s): SAM2 loaded", gpu_id, device)
+
     logger.info(
-        "SAM2 ready (points_per_side=%d, iou_thresh=%.2f, stability=%.2f)",
+        "SAM2 ready on %d GPU(s) (points_per_side=%d, iou_thresh=%.2f, stability=%.2f)",
+        n_gpus,
         args.sam2_points_per_side,
         args.sam2_pred_iou_thresh,
         args.sam2_stability_thresh,
     )
 
-    # ---- 4. Multi-scale lumen detection ----
+    # ---- 4. Multi-scale lumen detection (multi-GPU) ----
+    from concurrent.futures import ThreadPoolExecutor
+
     import cv2
     from tqdm import tqdm
+
+    from xldvp_seg.utils.device import empty_cache
 
     # Scale-specific size bounds (min/max diameter in um).
     # Auto-computed for scales not in the dict: min = scale * 7.5, max = 100000.
@@ -1295,6 +1318,67 @@ def main() -> None:
         64: (2000, 100000),
     }
 
+    def _process_one_tile(
+        tile_info: tuple[int, int, int, int],
+        gpu_id: int,
+        level_data: Any,
+        extra_ds: int,
+        pixel_size_at_level: float,
+        scale: int,
+        min_area_um2: float,
+        min_contrast: float,
+        rgb_ch: list[int],
+        base_px_um: float,
+    ) -> list[dict]:
+        """Read one tile, run SAM2, return filtered lumens with global coords.
+
+        All dependencies are passed explicitly for thread safety.
+        """
+        tile_y, tile_x, tile_h, tile_w = tile_info
+
+        # Read channels
+        actual_h, actual_w = tile_h, tile_w
+        channel_arrays = []
+        for ch_idx in rgb_ch:
+            try:
+                raw = read_zarr_tile(level_data, ch_idx, tile_y, tile_x, tile_h, tile_w, extra_ds)
+            except Exception as e:
+                logger.debug("Tile ch=%d y=%d x=%d scale %dx: %s", ch_idx, tile_y, tile_x, scale, e)
+                return []
+            actual_h = min(actual_h, raw.shape[0])
+            actual_w = min(actual_w, raw.shape[1])
+            channel_arrays.append(raw)
+
+        # Compose RGB
+        rgb = np.zeros((actual_h, actual_w, 3), dtype=np.uint8)
+        for i, raw in enumerate(channel_arrays):
+            rgb[:, :, i] = percentile_normalize_uint8(raw[:actual_h, :actual_w])
+
+        # SAM2 inference on assigned GPU
+        tile_lumens = detect_lumens_in_tile(
+            rgb, pixel_size_at_level, min_area_um2, min_contrast, sam2_generators[gpu_id]
+        )
+
+        # Convert to global um
+        results = []
+        for lumen in tile_lumens:
+            lumen["contour_global_um"] = tile_contour_to_global_um(
+                lumen["contour_tile_xy"], tile_y, tile_x, scale, base_px_um
+            )
+            lumen["scale"] = scale
+            area_um2 = lumen["area_px"] * pixel_size_at_level**2
+            lumen["equiv_diameter_um"] = round(2 * np.sqrt(area_um2 / np.pi), 2)
+            lumen["perimeter_um"] = round(
+                float(
+                    cv2.arcLength(lumen["contour_tile_xy"].reshape(-1, 1, 2).astype(np.int32), True)
+                )
+                * pixel_size_at_level,
+                2,
+            )
+            del lumen["contour_tile_xy"]
+            results.append(lumen)
+        return results
+
     all_lumens: list[dict] = []
 
     for scale, level, level_key, extra_ds in available_levels:
@@ -1304,96 +1388,53 @@ def main() -> None:
 
         tiles = generate_tiles(eff_shape, args.tile_size, args.overlap)
         logger.info(
-            "Scale %dx: %d tiles (level %d%s, effective shape %s, %.3f um/px)",
+            "Scale %dx: %d tiles (level %d%s, effective shape %s, %.3f um/px) on %d GPU(s)",
             scale,
             len(tiles),
             level,
             f" + {extra_ds}x downsample" if extra_ds > 1 else "",
             eff_shape,
             pixel_size_at_level,
+            n_gpus,
         )
 
         min_diam, max_diam = _size_bounds.get(scale, (scale * 7.5, 100000))
         scale_lumens_before = len(all_lumens)
 
-        for tile_y, tile_x, tile_h, tile_w in tqdm(
-            tiles, desc=f"Scale {scale}x", unit="tile", leave=True
-        ):
-            # Read 3 channels via reusable helper, compose RGB uint8.
-            # Track actual data extent — edge tiles with extra_ds may be
-            # slightly smaller than (tile_h, tile_w). We crop the RGB to
-            # the actual extent so SAM2 never sees zero-padding.
-            actual_h, actual_w = tile_h, tile_w
-            channels_ok = True
-            channel_arrays = []
-            for i, ch_idx in enumerate(rgb_channels):
-                try:
-                    raw = read_zarr_tile(
-                        level_data, ch_idx, tile_y, tile_x, tile_h, tile_w, extra_ds
-                    )
-                except Exception as e:
-                    logger.debug(
-                        "Failed to read tile ch=%d y=%d x=%d at scale %dx: %s",
-                        ch_idx,
-                        tile_y,
-                        tile_x,
-                        scale,
-                        e,
-                    )
-                    channels_ok = False
-                    break
-                actual_h = min(actual_h, raw.shape[0])
-                actual_w = min(actual_w, raw.shape[1])
-                channel_arrays.append(raw)
+        # Dispatch tiles round-robin across GPUs via thread pool.
+        # CUDA releases the GIL during kernel execution, so threads give
+        # true parallelism for SAM2 inference. I/O (zarr reads) is also
+        # GIL-releasing (C extension). Each GPU gets its own SAM2 instance.
+        from concurrent.futures import as_completed
 
-            if channels_ok:
-                # Compose RGB cropped to actual data extent (no zero-padding)
-                rgb = np.zeros((actual_h, actual_w, 3), dtype=np.uint8)
-                for i, raw in enumerate(channel_arrays):
-                    rgb[:, :, i] = percentile_normalize_uint8(raw[:actual_h, :actual_w])
-
-                # Detect lumens in this tile
-                tile_lumens = detect_lumens_in_tile(
-                    rgb,
+        with ThreadPoolExecutor(max_workers=n_gpus) as pool:
+            futures = []
+            for tile_idx, tile_info in enumerate(tiles):
+                gpu_id = tile_idx % n_gpus
+                fut = pool.submit(
+                    _process_one_tile,
+                    tile_info,
+                    gpu_id,
+                    level_data,
+                    extra_ds,
                     pixel_size_at_level,
+                    scale,
                     args.min_lumen_area_um2,
                     args.min_contrast,
-                    sam2_lumen,
+                    rgb_channels,
+                    base_pixel_size,
                 )
+                futures.append(fut)
 
-                # Convert to global um and apply scale-specific size filter
-                for lumen in tile_lumens:
-                    lumen["contour_global_um"] = tile_contour_to_global_um(
-                        lumen["contour_tile_xy"],
-                        tile_y,
-                        tile_x,
-                        scale,
-                        base_pixel_size,
-                    )
-                    lumen["scale"] = scale
-                    area_um2 = lumen["area_px"] * pixel_size_at_level**2
-                    lumen["equiv_diameter_um"] = round(2 * np.sqrt(area_um2 / np.pi), 2)
-                    lumen["perimeter_um"] = round(
-                        float(
-                            cv2.arcLength(
-                                lumen["contour_tile_xy"].reshape(-1, 1, 2).astype(np.int32),
-                                True,
-                            )
-                        )
-                        * pixel_size_at_level,
-                        2,
-                    )
-
-                    # Free tile-local contour now that global coords are computed
-                    del lumen["contour_tile_xy"]
-
-                    # Scale-specific diameter filter
-                    d = lumen["equiv_diameter_um"]
-                    if min_diam <= d <= max_diam:
-                        all_lumens.append(lumen)
-
-        # Clear GPU cache between scales
-        from xldvp_seg.utils.device import empty_cache
+            # Collect results as they complete (responsive progress bar)
+            with tqdm(total=len(futures), desc=f"Scale {scale}x", unit="tile", leave=True) as pbar:
+                for fut in as_completed(futures):
+                    tile_lumens = fut.result()
+                    for lumen in tile_lumens:
+                        d = lumen["equiv_diameter_um"]
+                        if min_diam <= d <= max_diam:
+                            all_lumens.append(lumen)
+                    pbar.update(1)
 
         empty_cache()
 
