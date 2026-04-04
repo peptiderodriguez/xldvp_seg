@@ -582,9 +582,8 @@ def validate_lumens_with_cells(
     Returns:
         Tuple of (validated_lumens, rejected_lumens).
     """
+    import cv2
     from scipy.spatial import cKDTree
-    from shapely.geometry import Point
-    from shapely.geometry import Polygon as ShapelyPolygon
 
     if len(cell_positions_um) == 0:
         logger.warning("No cell positions provided for validation")
@@ -609,19 +608,16 @@ def validate_lumens_with_cells(
         equiv_diam = lumen.get("equiv_diameter_um", 50.0)
         radius = float(np.clip(0.5 * equiv_diam, radius_min, radius_max))
 
-        # Build lumen polygon
-        try:
-            lumen_poly = ShapelyPolygon(contour)
-            if not lumen_poly.is_valid:
-                lumen_poly = lumen_poly.buffer(0)
-            if not lumen_poly.is_valid or lumen_poly.is_empty:
-                lumen["rejection_reason"] = "invalid_polygon"
-                if save_debug:
-                    rejected.append(lumen)
-                continue
-            lumen_boundary = lumen_poly.boundary
-        except Exception:
-            lumen["rejection_reason"] = "polygon_error"
+        # Prepare contour for cv2.pointPolygonTest (float32, Nx1x2 format).
+        # cv2.pointPolygonTest returns signed distance: positive = outside,
+        # negative = inside, 0 = on boundary. Single C++ call replaces both
+        # Shapely contains() and boundary.distance().
+        contour_cv = contour.astype(np.float32).reshape(-1, 1, 2)
+
+        # Validate contour is usable (non-degenerate area)
+        contour_area = cv2.contourArea(contour_cv)
+        if contour_area <= 0:
+            lumen["rejection_reason"] = "zero_area_contour"
             if save_debug:
                 rejected.append(lumen)
             continue
@@ -639,14 +635,14 @@ def validate_lumens_with_cells(
                 rejected.append(lumen)
             continue
 
-        # Fine filter: distance from cell to lumen boundary.
-        # Skip cells inside the lumen polygon (oblique cuts / tissue folds).
+        # Fine filter: signed distance from cell to lumen boundary via cv2.
+        # Positive = outside (wall cell), negative = inside (skip).
         assigned_cells = []
         for idx in nearby_idx:
-            pt = Point(cell_positions_um[idx])
-            if lumen_poly.contains(pt):
+            pt = (float(cell_positions_um[idx, 0]), float(cell_positions_um[idx, 1]))
+            dist = cv2.pointPolygonTest(contour_cv, pt, measureDist=True)
+            if dist < 0:
                 continue  # cell is inside lumen — not a wall cell
-            dist = lumen_boundary.distance(pt)
             if dist <= radius:
                 assigned_cells.append({"cell_idx": int(idx), "distance_um": round(float(dist), 2)})
 
@@ -665,7 +661,7 @@ def validate_lumens_with_cells(
         mean_cell_diam = float(np.mean(cell_diams)) if cell_diams else 10.0
 
         # Coverage: fraction of boundary 'staffed' by marker+ cells
-        perimeter = lumen.get("perimeter_um", lumen_poly.length)
+        perimeter = lumen.get("perimeter_um", float(cv2.arcLength(contour_cv, True)))
         expected_cells = perimeter / max(mean_cell_diam, 1.0)
         coverage = len(assigned_cells) / max(expected_cells, 1.0)
 
