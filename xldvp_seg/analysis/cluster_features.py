@@ -70,6 +70,34 @@ _SHAPE_FEATURES = frozenset(
     }
 )
 
+# Distinct colors for interactive Plotly cluster traces
+_PLOTLY_COLORS = [
+    "#e6194b",
+    "#3cb44b",
+    "#4363d8",
+    "#f58231",
+    "#911eb4",
+    "#42d4f4",
+    "#f032e6",
+    "#bfef45",
+    "#fabebe",
+    "#469990",
+    "#e6beff",
+    "#9a6324",
+    "#ffe119",
+    "#aaffc3",
+    "#800000",
+    "#ffd8b1",
+    "#000075",
+    "#a9a9a9",
+    "#808000",
+    "#ff69b4",
+    "#dcbeff",
+    "#00ffff",
+    "#ff6347",
+    "#7cfc00",
+]
+
 
 # ---------------------------------------------------------------------------
 # Parsing helpers
@@ -541,24 +569,13 @@ def spatial_smooth_features(X, positions_um, k=15, sim_threshold=0.5, n_pca=50):
 # ---------------------------------------------------------------------------
 
 
-def _run_clustering_impl(args):
-    """Main clustering pipeline (internal, takes namespace-like object)."""
-    import os
+def _load_and_prepare_features(args):
+    """Load detections, apply gating, discover channels, extract and scale features.
 
-    import pandas as pd
+    Returns a dict with keys: detections, X, X_scaled, feature_names, valid_indices,
+    marker_channels, exclude_channels, norm_ranges, marker_mean_pairs, output_dir.
+    """
     from sklearn.preprocessing import StandardScaler
-
-    try:
-        import umap
-    except ImportError:
-        logger.error("umap-learn not installed. Run: pip install umap-learn")
-        raise
-
-    try:
-        import hdbscan
-    except ImportError:
-        logger.error("hdbscan not installed. Run: pip install hdbscan")
-        raise
 
     output_dir = Path(args.output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
@@ -706,7 +723,6 @@ def _run_clustering_impl(args):
         valid_dets_for_positions = [detections[i] for i in valid_indices]
         positions, _px_size = extract_positions_um(valid_dets_for_positions)
         if positions is not None and len(positions) == X_scaled.shape[0]:
-            X_original = X_scaled.copy()  # noqa: F841 — keep unsmoothed for comparison
             X_scaled = spatial_smooth_features(
                 X_scaled,
                 positions,
@@ -721,6 +737,35 @@ def _run_clustering_impl(args):
                 n_pos,
                 X_scaled.shape[0],
             )
+
+    marker_mean_pairs = get_marker_mean_keys(marker_channels)
+
+    return {
+        "detections": detections,
+        "X": X,
+        "X_scaled": X_scaled,
+        "feature_names": feature_names,
+        "valid_indices": valid_indices,
+        "marker_channels": marker_channels,
+        "exclude_channels": exclude_channels,
+        "norm_ranges": norm_ranges,
+        "marker_mean_pairs": marker_mean_pairs,
+        "output_dir": output_dir,
+    }
+
+
+def _reduce_dimensions(X_scaled, args):
+    """PCA pre-reduction, UMAP, and/or t-SNE dimensionality reduction.
+
+    Returns a dict with keys: umap_embedding, tsne_embedding, cluster_embedding.
+    """
+    import os
+
+    try:
+        import umap
+    except ImportError:
+        logger.error("umap-learn not installed. Run: pip install umap-learn")
+        raise
 
     # Optional PCA pre-reduction for large feature sets
     if X_scaled.shape[1] > 50:
@@ -798,6 +843,29 @@ def _run_clustering_impl(args):
     # Fall back to t-SNE if UMAP wasn't run
     cluster_embedding = umap_embedding if umap_embedding is not None else tsne_embedding
 
+    return {
+        "umap_embedding": umap_embedding,
+        "tsne_embedding": tsne_embedding,
+        "cluster_embedding": cluster_embedding,
+    }
+
+
+def _cluster_and_label(
+    cluster_embedding, detections, valid_indices, marker_channels, norm_ranges, embeddings, args
+):
+    """Run Leiden/HDBSCAN clustering, auto-label, enrich detections in-place.
+
+    Returns a dict with keys: labels, n_clusters, cluster_label_map.
+    """
+    try:
+        import hdbscan
+    except ImportError:
+        logger.error("hdbscan not installed. Run: pip install hdbscan")
+        raise
+
+    umap_embedding = embeddings["umap_embedding"]
+    tsne_embedding = embeddings["tsne_embedding"]
+
     # Clustering
     if args.clustering == "leiden":
         logger.info("Running Leiden clustering (resolution=%s)...", args.resolution)
@@ -856,13 +924,38 @@ def _run_clustering_impl(args):
                 det["tsne_x"] = None
                 det["tsne_y"] = None
 
+    return {
+        "labels": labels,
+        "n_clusters": n_clusters,
+        "cluster_label_map": cluster_label_map,
+    }
+
+
+def _save_results(
+    detections,
+    valid_indices,
+    feature_names,
+    X,
+    embeddings,
+    cluster_info,
+    marker_mean_pairs,
+    output_dir,
+):
+    """Save enriched detections JSON, spatial CSV, cluster summary CSV, AnnData H5AD.
+
+    Returns the spatial DataFrame (needed by visualization).
+    """
+    import pandas as pd
+
+    umap_embedding = embeddings["umap_embedding"]
+    tsne_embedding = embeddings["tsne_embedding"]
+
     # Save enriched detections
     clustered_path = output_dir / "detections_clustered.json"
     atomic_json_dump(sanitize_for_json(detections), str(clustered_path))
     logger.info("  Saved: %s", clustered_path)
 
     # Build summary DataFrame
-    marker_mean_pairs = get_marker_mean_keys(marker_channels)  # [(name, key), ...]
     rows = []
     for i, idx in enumerate(valid_indices):
         det = detections[idx]
@@ -934,7 +1027,26 @@ def _run_clustering_impl(args):
     except ImportError:
         logger.info("  Skipping .h5ad export (anndata not installed)")
 
-    # Plots
+    return df
+
+
+def _generate_visualizations(
+    df,
+    detections,
+    valid_indices,
+    embeddings,
+    cluster_info,
+    marker_channels,
+    marker_mean_pairs,
+    output_dir,
+    args,
+):
+    """Generate matplotlib plots (UMAP, t-SNE, combined, violin) and Plotly interactive HTML."""
+    umap_embedding = embeddings["umap_embedding"]
+    tsne_embedding = embeddings["tsne_embedding"]
+    n_clusters = cluster_info["n_clusters"]
+
+    # --- Matplotlib plots ---
     try:
         import matplotlib
 
@@ -1223,37 +1335,10 @@ def _run_clustering_impl(args):
     except ImportError:
         logger.info("  Skipping plots (matplotlib not installed)")
 
-    # Interactive HTML (plotly) — white background, click legend to highlight clusters
+    # --- Interactive HTML (plotly) ---
     try:
         import plotly.graph_objects as go
         import plotly.io as pio
-
-        _PLOTLY_COLORS = [
-            "#e6194b",
-            "#3cb44b",
-            "#4363d8",
-            "#f58231",
-            "#911eb4",
-            "#42d4f4",
-            "#f032e6",
-            "#bfef45",
-            "#fabebe",
-            "#469990",
-            "#e6beff",
-            "#9a6324",
-            "#ffe119",
-            "#aaffc3",
-            "#800000",
-            "#ffd8b1",
-            "#000075",
-            "#a9a9a9",
-            "#808000",
-            "#ff69b4",
-            "#dcbeff",
-            "#00ffff",
-            "#ff6347",
-            "#7cfc00",
-        ]
 
         def _build_interactive(df, x_col, y_col, title, xlabel, ylabel, out_path, detections=None):
             """Build plotly interactive with white bg + click-to-highlight clusters.
@@ -1383,6 +1468,7 @@ def _run_clustering_impl(args):
         valid_dets = [detections[i] for i in valid_indices] if valid_indices else None
 
         if umap_embedding is not None and "umap_x" in df.columns:
+            main_title = f"Cell Clustering ({len(df)} cells, {n_clusters} clusters)"
             _build_interactive(
                 df,
                 "umap_x",
@@ -1395,6 +1481,7 @@ def _run_clustering_impl(args):
             )
 
         if tsne_embedding is not None and "tsne_x" in df.columns:
+            main_title = f"Cell Clustering ({len(df)} cells, {n_clusters} clusters)"
             _build_interactive(
                 df,
                 "tsne_x",
@@ -1409,161 +1496,246 @@ def _run_clustering_impl(args):
     except ImportError:
         logger.info("  Skipping interactive plots (plotly not installed)")
 
-    logger.info("Done! %d clusters found in %d cells.", n_clusters, len(valid_indices))
 
-    # Sub-clustering (optional)
+def _run_trajectory(
+    X, feature_names, valid_indices, detections, df, umap_embedding, output_dir, args
+):
+    """Run trajectory analysis: diffusion map, PAGA, pseudotime, force-directed layout.
+
+    Raises ImportError if scanpy/anndata not available. Other exceptions propagate
+    to the caller for handling.
+    """
+    import anndata as ad
+    import scanpy as sc
+
+    logger.info("--- Trajectory Analysis ---")
+    X_clean = np.nan_to_num(X, nan=0.0, posinf=0.0, neginf=0.0)
+    adata = ad.AnnData(X=X_clean)
+    adata.var_names = feature_names
+    adata.obs["cluster_label"] = [
+        detections[i].get("cluster_label", "unknown") for i in valid_indices
+    ]
+    adata.obs["cluster_label"] = adata.obs["cluster_label"].astype("category")
+    if umap_embedding is not None:
+        adata.obsm["X_umap"] = umap_embedding
+
+    logger.info("  Computing neighbors (n_neighbors=%d)...", args.n_neighbors)
+    sc.pp.neighbors(adata, n_neighbors=args.n_neighbors, use_rep="X")
+
+    logger.info("  Computing diffusion map...")
+    sc.tl.diffmap(adata)
+
+    logger.info("  Computing PAGA...")
+    sc.tl.paga(adata, groups="cluster_label")
+    # Compute PAGA node positions (required before draw_graph with init_pos='paga')
+    sc.pl.paga(adata, show=False)
+
+    logger.info("  Computing force-directed layout...")
+    sc.tl.draw_graph(adata, init_pos="paga")
+
+    # Diffusion pseudotime
+    root_cluster = args.root_cluster
+    if root_cluster is None:
+        root_cluster = adata.obs["cluster_label"].value_counts().index[0]
+    root_mask = adata.obs["cluster_label"] == root_cluster
+    has_dpt = False
+    if root_mask.any():
+        adata.uns["iroot"] = int(np.where(root_mask)[0][0])
+        logger.info("  Computing diffusion pseudotime (root: %s)...", root_cluster)
+        sc.tl.dpt(adata)
+        has_dpt = True
+
+    h5ad_path = output_dir / "trajectory.h5ad"
+    adata.write(h5ad_path)
+    logger.info("  Saved: %s", h5ad_path)
+
+    # Enrich detections
+    for i, idx in enumerate(valid_indices):
+        det = detections[idx]
+        if has_dpt and "dpt_pseudotime" in adata.obs.columns:
+            det["dpt_pseudotime"] = float(adata.obs["dpt_pseudotime"].iloc[i])
+        if "X_diffmap" in adata.obsm:
+            for dc in range(min(3, adata.obsm["X_diffmap"].shape[1])):
+                det[f"diffmap_{dc}"] = float(adata.obsm["X_diffmap"][i, dc])
+        if "X_draw_graph_fa" in adata.obsm:
+            det["fa_x"] = float(adata.obsm["X_draw_graph_fa"][i, 0])
+            det["fa_y"] = float(adata.obsm["X_draw_graph_fa"][i, 1])
+
+    atomic_json_dump(sanitize_for_json(detections), output_dir / "detections_clustered.json")
+
+    # Plots
+    import matplotlib
+
+    matplotlib.use("Agg")
+    import matplotlib.pyplot as plt
+
+    fig, ax = plt.subplots(figsize=(10, 8))
+    sc.pl.paga(adata, ax=ax, show=False, fontsize=8)
+    ax.set_title("PAGA: Cluster Connectivity")
+    fig.savefig(output_dir / "paga.png", dpi=150, bbox_inches="tight")
+    plt.close(fig)
+    logger.info("  Saved: paga.png")
+
+    if "X_draw_graph_fa" in adata.obsm:
+        fig, ax = plt.subplots(figsize=(10, 8))
+        sc.pl.draw_graph(adata, color="cluster_label", ax=ax, show=False, size=1, alpha=0.3)
+        fig.savefig(output_dir / "force_directed.png", dpi=150, bbox_inches="tight")
+        plt.close(fig)
+        logger.info("  Saved: force_directed.png")
+
+    if has_dpt and umap_embedding is not None:
+        fig, ax = plt.subplots(figsize=(10, 8))
+        sc.pl.umap(
+            adata,
+            color="dpt_pseudotime",
+            ax=ax,
+            show=False,
+            size=1,
+            alpha=0.3,
+            color_map="viridis",
+        )
+        fig.savefig(output_dir / "pseudotime_umap.png", dpi=150, bbox_inches="tight")
+        plt.close(fig)
+        logger.info("  Saved: pseudotime_umap.png")
+
+    if "X_diffmap" in adata.obsm:
+        fig, ax = plt.subplots(figsize=(10, 8))
+        sc.pl.diffmap(adata, color="cluster_label", ax=ax, show=False, size=1, alpha=0.3)
+        fig.savefig(output_dir / "diffusion_map.png", dpi=150, bbox_inches="tight")
+        plt.close(fig)
+        logger.info("  Saved: diffusion_map.png")
+
+    # Interactive pseudotime
+    if has_dpt and umap_embedding is not None:
+        try:
+            import plotly.express as px
+            import plotly.io as pio
+
+            df["dpt_pseudotime"] = adata.obs["dpt_pseudotime"].values
+            fig_pt = px.scatter(
+                df,
+                x="umap_x",
+                y="umap_y",
+                color="dpt_pseudotime",
+                hover_data=(["uid", "cluster_label"] if "uid" in df.columns else ["cluster_label"]),
+                title="Diffusion Pseudotime on UMAP",
+                color_continuous_scale="viridis",
+                opacity=0.4,
+            )
+            fig_pt.update_traces(marker=dict(size=2))
+            fig_pt.update_layout(template="plotly_dark", width=1400, height=900)
+            pio.write_html(fig_pt, str(output_dir / "pseudotime_interactive.html"))
+            logger.info("  Saved: pseudotime_interactive.html")
+        except ImportError:
+            pass
+
+    logger.info("  Trajectory analysis complete!")
+
+
+# ---------------------------------------------------------------------------
+# Orchestrator
+# ---------------------------------------------------------------------------
+
+
+def _run_clustering_impl(args):
+    """Main clustering pipeline (internal, takes namespace-like object).
+
+    Orchestrates 6 stages: load/prepare, reduce dimensions, cluster/label,
+    save results, visualize, and optional trajectory analysis.
+    """
+    # Fail-fast: check optional dependencies before expensive work
+    try:
+        import umap  # noqa: F401
+    except ImportError:
+        raise ImportError("umap-learn not installed. Run: pip install umap-learn")
+    if getattr(args, "clustering", "leiden") == "hdbscan":
+        try:
+            import hdbscan  # noqa: F401
+        except ImportError:
+            raise ImportError("hdbscan not installed. Run: pip install hdbscan")
+
+    # Step 1: Load data and prepare features
+    data = _load_and_prepare_features(args)
+
+    # Step 2: Dimensionality reduction
+    embeddings = _reduce_dimensions(data["X_scaled"], args)
+
+    # Step 3: Clustering and labeling
+    cluster_info = _cluster_and_label(
+        embeddings["cluster_embedding"],
+        data["detections"],
+        data["valid_indices"],
+        data["marker_channels"],
+        data["norm_ranges"],
+        embeddings,
+        args,
+    )
+
+    # Step 4: Save results
+    df = _save_results(
+        data["detections"],
+        data["valid_indices"],
+        data["feature_names"],
+        data["X"],
+        embeddings,
+        cluster_info,
+        data["marker_mean_pairs"],
+        data["output_dir"],
+    )
+
+    # Step 5: Generate visualizations
+    _generate_visualizations(
+        df,
+        data["detections"],
+        data["valid_indices"],
+        embeddings,
+        cluster_info,
+        data["marker_channels"],
+        data["marker_mean_pairs"],
+        data["output_dir"],
+        args,
+    )
+
+    # Step 6: Optional subclustering
     if getattr(args, "subcluster", False):
         run_subclustering(
-            detections,
-            output_dir,
-            marker_channels,
-            exclude_channels,
+            data["detections"],
+            data["output_dir"],
+            data["marker_channels"],
+            data["exclude_channels"],
             subcluster_features=args.subcluster_features,
             subcluster_min_size=args.subcluster_min_size,
             n_neighbors=args.n_neighbors,
             min_dist=args.min_dist,
         )
         # Re-save detections with subcluster fields
-        clustered_path = output_dir / "detections_clustered.json"
-        atomic_json_dump(sanitize_for_json(detections), str(clustered_path))
+        clustered_path = data["output_dir"] / "detections_clustered.json"
+        atomic_json_dump(sanitize_for_json(data["detections"]), str(clustered_path))
         logger.info("  Updated: %s (with subcluster fields)", clustered_path)
 
-    # Trajectory analysis (optional)
+    # Step 7: Optional trajectory analysis
     if args.trajectory:
         try:
-            import anndata as ad
-            import scanpy as sc
-
-            logger.info("--- Trajectory Analysis ---")
-            X_clean = np.nan_to_num(X, nan=0.0, posinf=0.0, neginf=0.0)
-            adata = ad.AnnData(X=X_clean)
-            adata.var_names = feature_names
-            adata.obs["cluster_label"] = [
-                detections[i].get("cluster_label", "unknown") for i in valid_indices
-            ]
-            adata.obs["cluster_label"] = adata.obs["cluster_label"].astype("category")
-            if umap_embedding is not None:
-                adata.obsm["X_umap"] = umap_embedding
-
-            logger.info("  Computing neighbors (n_neighbors=%d)...", args.n_neighbors)
-            sc.pp.neighbors(adata, n_neighbors=args.n_neighbors, use_rep="X")
-
-            logger.info("  Computing diffusion map...")
-            sc.tl.diffmap(adata)
-
-            logger.info("  Computing PAGA...")
-            sc.tl.paga(adata, groups="cluster_label")
-            # Compute PAGA node positions (required before draw_graph with init_pos='paga')
-            sc.pl.paga(adata, show=False)
-
-            logger.info("  Computing force-directed layout...")
-            sc.tl.draw_graph(adata, init_pos="paga")
-
-            # Diffusion pseudotime
-            root_cluster = args.root_cluster
-            if root_cluster is None:
-                root_cluster = adata.obs["cluster_label"].value_counts().index[0]
-            root_mask = adata.obs["cluster_label"] == root_cluster
-            has_dpt = False
-            if root_mask.any():
-                adata.uns["iroot"] = int(np.where(root_mask)[0][0])
-                logger.info("  Computing diffusion pseudotime (root: %s)...", root_cluster)
-                sc.tl.dpt(adata)
-                has_dpt = True
-
-            h5ad_path = output_dir / "trajectory.h5ad"
-            adata.write(h5ad_path)
-            logger.info("  Saved: %s", h5ad_path)
-
-            # Enrich detections
-            for i, idx in enumerate(valid_indices):
-                det = detections[idx]
-                if has_dpt and "dpt_pseudotime" in adata.obs.columns:
-                    det["dpt_pseudotime"] = float(adata.obs["dpt_pseudotime"].iloc[i])
-                if "X_diffmap" in adata.obsm:
-                    for dc in range(min(3, adata.obsm["X_diffmap"].shape[1])):
-                        det[f"diffmap_{dc}"] = float(adata.obsm["X_diffmap"][i, dc])
-                if "X_draw_graph_fa" in adata.obsm:
-                    det["fa_x"] = float(adata.obsm["X_draw_graph_fa"][i, 0])
-                    det["fa_y"] = float(adata.obsm["X_draw_graph_fa"][i, 1])
-
-            atomic_json_dump(
-                sanitize_for_json(detections), output_dir / "detections_clustered.json"
+            _run_trajectory(
+                data["X"],
+                data["feature_names"],
+                data["valid_indices"],
+                data["detections"],
+                df,
+                embeddings["umap_embedding"],
+                data["output_dir"],
+                args,
             )
-
-            # Plots
-            import matplotlib
-
-            matplotlib.use("Agg")
-            import matplotlib.pyplot as plt
-
-            fig, ax = plt.subplots(figsize=(10, 8))
-            sc.pl.paga(adata, ax=ax, show=False, fontsize=8)
-            ax.set_title("PAGA: Cluster Connectivity")
-            fig.savefig(output_dir / "paga.png", dpi=150, bbox_inches="tight")
-            plt.close(fig)
-            logger.info("  Saved: paga.png")
-
-            if "X_draw_graph_fa" in adata.obsm:
-                fig, ax = plt.subplots(figsize=(10, 8))
-                sc.pl.draw_graph(adata, color="cluster_label", ax=ax, show=False, size=1, alpha=0.3)
-                fig.savefig(output_dir / "force_directed.png", dpi=150, bbox_inches="tight")
-                plt.close(fig)
-                logger.info("  Saved: force_directed.png")
-
-            if has_dpt and umap_embedding is not None:
-                fig, ax = plt.subplots(figsize=(10, 8))
-                sc.pl.umap(
-                    adata,
-                    color="dpt_pseudotime",
-                    ax=ax,
-                    show=False,
-                    size=1,
-                    alpha=0.3,
-                    color_map="viridis",
-                )
-                fig.savefig(output_dir / "pseudotime_umap.png", dpi=150, bbox_inches="tight")
-                plt.close(fig)
-                logger.info("  Saved: pseudotime_umap.png")
-
-            if "X_diffmap" in adata.obsm:
-                fig, ax = plt.subplots(figsize=(10, 8))
-                sc.pl.diffmap(adata, color="cluster_label", ax=ax, show=False, size=1, alpha=0.3)
-                fig.savefig(output_dir / "diffusion_map.png", dpi=150, bbox_inches="tight")
-                plt.close(fig)
-                logger.info("  Saved: diffusion_map.png")
-
-            # Interactive pseudotime
-            if has_dpt and umap_embedding is not None:
-                try:
-                    import plotly.express as px
-                    import plotly.io as pio
-
-                    df["dpt_pseudotime"] = adata.obs["dpt_pseudotime"].values
-                    fig_pt = px.scatter(
-                        df,
-                        x="umap_x",
-                        y="umap_y",
-                        color="dpt_pseudotime",
-                        hover_data=(
-                            ["uid", "cluster_label"] if "uid" in df.columns else ["cluster_label"]
-                        ),
-                        title="Diffusion Pseudotime on UMAP",
-                        color_continuous_scale="viridis",
-                        opacity=0.4,
-                    )
-                    fig_pt.update_traces(marker=dict(size=2))
-                    fig_pt.update_layout(template="plotly_dark", width=1400, height=900)
-                    pio.write_html(fig_pt, str(output_dir / "pseudotime_interactive.html"))
-                    logger.info("  Saved: pseudotime_interactive.html")
-                except ImportError:
-                    pass
-
-            logger.info("  Trajectory analysis complete!")
         except ImportError as e:
             logger.info("  Skipping trajectory analysis (%s)", e)
         except Exception as e:
             logger.warning("  Trajectory analysis failed: %s", e, exc_info=True)
+
+    logger.info(
+        "Clustering complete: %d clusters, %d cells",
+        cluster_info["n_clusters"],
+        len(data["valid_indices"]),
+    )
 
 
 def run_clustering(**kwargs):
