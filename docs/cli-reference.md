@@ -1,0 +1,210 @@
+# CLI Reference
+
+The `xlseg` command provides 12 subcommands covering the full pipeline from
+CZI inspection through detection, classification, and export.
+
+```bash
+xlseg --help
+```
+
+## Subcommands
+
+### `xlseg info`
+
+Inspect CZI metadata -- channels, dimensions, pixel size, scene count.
+
+```bash
+xlseg info /path/to/slide.czi
+```
+
+**Always run this before writing any channel configuration.** Channel order
+in CZI files is NOT wavelength-sorted.
+
+---
+
+### `xlseg detect`
+
+Run the cell detection pipeline. Supports all 8 detection strategies with
+multi-GPU processing.
+
+```bash
+xlseg detect \
+    --czi-path /path/to/slide.czi \
+    --cell-type cell \
+    --channel-spec "cyto=PM,nuc=488" \
+    --all-channels \
+    --num-gpus 4 \
+    --output-dir /path/to/output
+```
+
+Key flags:
+
+| Flag | Description |
+|------|-------------|
+| `--cell-type` | Strategy: `cell`, `nmj`, `mk`, `vessel`, `mesothelium`, `islet`, `tissue_pattern` |
+| `--channel-spec` | Resolve channels by name or wavelength (e.g., `"cyto=PM,nuc=488"`) |
+| `--all-channels` | Extract per-channel intensity features (~15 per channel) |
+| `--num-gpus N` | Number of GPUs (always multi-GPU architecture) |
+| `--extract-deep-features` | Add ResNet + DINOv2 features (6,144 dims, off by default) |
+| `--html-sample-fraction` | Subsample HTML viewer (e.g., 0.10 for 10%) |
+| `--segmenter` | `cellpose` (default) or `instanseg` |
+| `--dedup-method` | `mask_overlap` (default) or `iou_nms` |
+| `--resume` | Resume from a previous run directory |
+| `--no-contour-processing` | Skip contour extraction from HDF5 masks |
+| `--no-background-correction` | Skip local background subtraction |
+
+---
+
+### `xlseg classify`
+
+Train a random forest classifier from annotated detections.
+
+```bash
+xlseg classify \
+    --detections /path/to/cell_detections.json \
+    --annotations /path/to/annotations.json \
+    --output-dir /path/to/classifiers \
+    --feature-set morph
+```
+
+| Flag | Description |
+|------|-------------|
+| `--feature-set` | `morph` (78D), `morph_sam2` (334D), `channel_stats`, `all` (6,478D) |
+
+---
+
+### `xlseg score`
+
+Apply a trained classifier to score all detections.
+
+```bash
+xlseg score \
+    --detections /path/to/cell_detections.json \
+    --classifier /path/to/rf_classifier.pkl \
+    --output /path/to/cell_detections_scored.json
+```
+
+---
+
+### `xlseg markers`
+
+Classify each cell as marker-positive or marker-negative per fluorescent channel.
+
+```bash
+xlseg markers \
+    --detections /path/to/cell_detections.json \
+    --marker-wavelength 647,555 \
+    --marker-name SMA,CD31 \
+    --czi-path /path/to/slide.czi
+```
+
+| Flag | Description |
+|------|-------------|
+| `--marker-wavelength` | Wavelengths to resolve (auto-matches CZI channels) |
+| `--marker-channel` | Direct channel indices (alternative to wavelength) |
+| `--marker-name` | Human-readable names for each marker |
+| `--method` | `snr` (default), `otsu`, `otsu_half`, `gmm` |
+
+---
+
+### `xlseg cluster`
+
+Feature clustering with UMAP/t-SNE dimensionality reduction and
+Leiden/HDBSCAN community detection.
+
+```bash
+xlseg cluster \
+    --detections /path/to/cell_detections.json \
+    --feature-groups "morph,channel" \
+    --output-dir /path/to/clusters
+```
+
+| Flag | Description |
+|------|-------------|
+| `--feature-groups` | Comma-separated: `morph`, `shape`, `color`, `sam2`, `channel`, `deep` |
+| `--clustering` | `leiden` (default) or `hdbscan` |
+
+---
+
+### `xlseg export-lmd`
+
+Export scored detections to Leica LMD XML format for laser microdissection.
+
+```bash
+xlseg export-lmd \
+    --detections /path/to/cell_detections_scored.json \
+    --crosses /path/to/crosses.json \
+    --output-dir /path/to/lmd \
+    --min-score 0.5 \
+    --export
+```
+
+| Flag | Description |
+|------|-------------|
+| `--crosses` | Reference cross positions from Napari |
+| `--min-score` | Minimum classifier score for export |
+| `--max-area-change-pct` | Adaptive RDP simplification tolerance (default 10%) |
+| `--max-dilation-area-pct` | Adaptive dilation for laser buffer (default 10%) |
+| `--generate-controls` | Add control wells |
+
+---
+
+### `xlseg serve`
+
+Launch the HTML detection viewer with Cloudflare tunnel.
+
+```bash
+xlseg serve /path/to/output
+```
+
+---
+
+### `xlseg system`
+
+Show system information: CPU, RAM, GPU, SLURM partition availability,
+and resource recommendations.
+
+```bash
+xlseg system
+```
+
+---
+
+### `xlseg models`
+
+List all registered model checkpoints with feature dimensions,
+modality, and HuggingFace availability.
+
+```bash
+xlseg models
+```
+
+---
+
+### `xlseg strategies`
+
+List all registered detection strategies.
+
+```bash
+xlseg strategies
+```
+
+---
+
+### `xlseg download-models`
+
+Download gated model checkpoints from HuggingFace (requires HF token).
+
+```bash
+xlseg download-models --brightfield   # UNI2, Virchow2, CONCH, Phikon-v2
+xlseg download-models --all           # All registered models
+xlseg download-models --model uni2    # Specific model
+```
+
+## Flag Gotchas
+
+- `--no-normalize-features` disables flat-field (no `--flat-field-correction` flag exists)
+- `--photobleaching-correction` (with `-ing`) is experimental
+- `--sequential` does not exist -- use `--num-gpus 1`
+- `--sample-fraction` is always 1.0 -- use `--html-sample-fraction` to subsample the viewer
+- `--nuclear-channel` / `--membrane-channel` are islet-only

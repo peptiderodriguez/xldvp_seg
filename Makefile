@@ -1,4 +1,4 @@
-.PHONY: test lint format clean install-dev help
+.PHONY: test lint format clean install-dev docs help
 
 help:  ## Show this help
 	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) | sort | \
@@ -17,6 +17,12 @@ lint:  ## Run ruff check and black check
 format:  ## Auto-format with ruff and black
 	python -m ruff check --fix .
 	python -m black .
+
+docs:  ## Build docs locally (mkdocs serve)
+	python -m mkdocs serve
+
+docs-build:  ## Build static docs site
+	python -m mkdocs build
 
 clean:  ## Remove build artifacts and caches
 	rm -rf build/ dist/ *.egg-info/ .eggs/ .pytest_cache/ .ruff_cache/
