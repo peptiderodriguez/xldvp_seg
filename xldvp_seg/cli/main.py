@@ -81,6 +81,18 @@ def _run_strategies(remaining):
     StrategyRegistry.print_strategies()
 
 
+def _run_qc(remaining):
+    """Quick quality check on pipeline output."""
+    from xldvp_seg.cli.qc import main as qc_main
+
+    old_argv = sys.argv
+    try:
+        sys.argv = ["xlseg qc"] + remaining
+        qc_main()
+    finally:
+        sys.argv = old_argv
+
+
 def _run_download_models(remaining):
     """Download model checkpoints."""
     import argparse as _ap
@@ -136,6 +148,7 @@ _DISPATCH = {
     "models": _run_models,
     "strategies": _run_strategies,
     "download-models": _run_download_models,
+    "qc": _run_qc,
 }
 
 
@@ -165,6 +178,7 @@ def cli():
     subparsers.add_parser(
         "download-models", help="Download model checkpoints (brightfield needs HF token)"
     )
+    subparsers.add_parser("qc", help="Quick quality check on pipeline output")
 
     args, remaining = parser.parse_known_args()
 

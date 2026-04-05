@@ -1,3 +1,5 @@
+site/
+.hypothesis/
 # Model checkpoints (large files - download separately)
 checkpoints/
 *.pt
@@ -122,3 +124,4 @@ examples/output/
 # Environment files
 .env
 .env.*
+.hypothesis/

@@ -636,6 +636,24 @@ def build_parser():
         help="KD-tree neighbors for local background estimation (default: 30)",
     )
 
+    # Built-in marker classification via SNR threshold (zero extra cost — uses
+    # pre-computed ch{N}_snr from background correction Phase 2).
+    parser.add_argument(
+        "--marker-snr-channels",
+        type=str,
+        default=None,
+        help="Auto-classify top-SNR channels as marker+/- during detection. "
+        "Format: 'SMA:1,CD31:3' (name:channel_index). Uses SNR >= 1.5 threshold. "
+        "Results appear as {name}_class in features. Skip with --no-marker-snr.",
+    )
+    parser.add_argument(
+        "--no-marker-snr",
+        dest="marker_snr_channels",
+        action="store_const",
+        const=None,
+        help="Disable built-in marker SNR classification even if --marker-snr-channels is set.",
+    )
+
     # Nuclear counting (default ON — runs Cellpose on nuclear channel in Phase 4)
     parser.add_argument(
         "--count-nuclei",

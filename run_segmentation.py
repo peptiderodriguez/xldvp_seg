@@ -97,6 +97,61 @@ def _maybe_export_ome_zarr(
         logger.warning(f"OME-Zarr export failed (non-fatal): {e}")
 
 
+def _apply_marker_snr_classification(args, detections, slide_output_dir):
+    """Classify marker+/- from pre-computed SNR features (zero extra cost).
+
+    Called after ``process_detections_post_dedup`` which writes ``ch{N}_snr``
+    into each detection's features dict.  This function simply applies a
+    threshold comparison and stores ``{name}_class`` / ``marker_profile``.
+    """
+    spec = getattr(args, "marker_snr_channels", None)
+    if not spec:
+        return
+
+    from xldvp_seg.analysis.marker_classification import classify_single_marker
+
+    marker_specs = [s.strip() for s in spec.split(",")]
+    marker_names = []
+    for ms in marker_specs:
+        if ":" not in ms:
+            logger.error("--marker-snr-channels: each entry must be NAME:CHANNEL, got '%s'", ms)
+            return
+        name, ch_str = ms.split(":", 1)
+        try:
+            ch = int(ch_str.strip())
+        except ValueError:
+            logger.error(
+                "--marker-snr-channels: channel must be integer, got '%s' in '%s'",
+                ch_str.strip(),
+                ms,
+            )
+            return
+        marker_names.append(name.strip())
+        logger.info("Auto-classifying marker %s (ch%d, SNR >= 1.5)...", name.strip(), ch)
+        classify_single_marker(
+            detections,
+            channel=ch,
+            marker_name=name.strip(),
+            method="snr",
+            output_dir=Path(slide_output_dir),
+            snr_threshold=1.5,
+        )
+
+    # Build marker_profile from classified markers
+    for det in detections:
+        feat = det.setdefault("features", {})
+        parts = []
+        for mn in marker_names:
+            cls = feat.get(f"{mn}_class", "negative")
+            parts.append(f"{mn}+" if cls == "positive" else f"{mn}-")
+        feat["marker_profile"] = "/".join(parts)
+
+    logger.info(
+        "Marker classification complete: %s",
+        ", ".join(f"{n} (ch{s.split(':')[1].strip()})" for n, s in zip(marker_names, marker_specs)),
+    )
+
+
 # =============================================================================
 # MAIN PIPELINE
 # =============================================================================
@@ -658,6 +713,9 @@ def run_pipeline(args):
             elif _has_bg and _has_contour:
                 logger.info("Detections already post-processed — skipping")
 
+            # ---- Built-in marker SNR classification (resume path) ----
+            _apply_marker_snr_classification(args, all_detections, slide_output_dir)
+
             # Regenerate HTML if needed (requires CZI + tile masks)
             all_samples = []
             if not skip_html:
@@ -877,6 +935,9 @@ def run_pipeline(args):
             logger.info(
                 f"Checkpoint: saved {len(all_detections)} post-dedup detections to {_postdedup_file.name}"
             )
+
+        # ---- Built-in marker SNR classification (normal path) ----
+        _apply_marker_snr_classification(args, all_detections, slide_output_dir)
 
         # ---- Subsample HTML samples by fraction (after dedup, before export) ----
         _html_frac = args.html_sample_fraction

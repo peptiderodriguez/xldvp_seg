@@ -191,6 +191,9 @@ BG_NEIGHBORS=$(read_yaml bg_neighbors "")
 DEDUP_METHOD=$(read_yaml dedup_method "")
 IOU_THRESHOLD=$(read_yaml iou_threshold "")
 
+# Built-in marker SNR classification (format: "SMA:1,CD31:3")
+MARKER_SNR_CHANNELS=$(read_yaml marker_snr_channels "")
+
 # Multi-scene support (single CZI with multiple scenes)
 # scenes: "0-9" or scenes: [0, 1, 2] in YAML
 # scene_parallel: true (default) → array job, one task per scene
@@ -374,6 +377,10 @@ build_seg_cmd() {
     fi
     if [[ -n "$IOU_THRESHOLD" ]]; then
         cmd+=" --iou-threshold $IOU_THRESHOLD"
+    fi
+    # Built-in marker SNR classification
+    if [[ -n "$MARKER_SNR_CHANNELS" ]]; then
+        cmd+=" --marker-snr-channels \"$MARKER_SNR_CHANNELS\""
     fi
     echo "$cmd"
 }

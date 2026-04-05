@@ -49,6 +49,7 @@ class TestCLIHelp:
             "models",
             "strategies",
             "download-models",
+            "qc",
         ]:
             assert cmd in result.stdout, f"'{cmd}' not in help"
 
@@ -183,6 +184,22 @@ class TestCLIInfo:
         assert "czi" in result.stdout.lower() or "info" in result.stdout.lower()
 
 
+class TestCLIQc:
+
+    def test_qc_help(self):
+        """xlseg qc --help should print QC usage."""
+        result = _run_cli("qc", "--help")
+        assert result.returncode == 0
+        assert "qc" in result.stdout.lower()
+
+    def test_qc_missing_dir(self):
+        """xlseg qc with a non-existent dir should report no detections."""
+        result = _run_cli("qc", "/tmp/nonexistent_xldvp_qc_test_dir")
+        # Should complete without crashing (prints "No detection files found")
+        assert result.returncode == 0
+        assert "no detection" in result.stdout.lower()
+
+
 # ---------------------------------------------------------------------------
 # Dispatch table completeness
 # ---------------------------------------------------------------------------
@@ -207,6 +224,7 @@ class TestCLIDispatchTable:
             "models",
             "strategies",
             "download-models",
+            "qc",
         }
         assert set(_DISPATCH.keys()) == expected
 
