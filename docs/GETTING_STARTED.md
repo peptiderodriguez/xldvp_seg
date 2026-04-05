@@ -9,20 +9,7 @@ for laser microdissection.
 
 ## Table of Contents
 
-1. [Installation](#installation)
-2. [Pipeline Overview](#pipeline-overview)
-3. [Step 0 — Inspect the CZI (ALWAYS do this first)](#step-0--inspect-the-czi-always-do-this-first)
-4. [Step 1 -- Import CZI](#step-1----import-czi)
-4. [Step 2 -- Tissue Detection and Sampling](#step-2----tissue-detection-and-sampling)
-5. [Step 3 -- Segmentation](#step-3----segmentation)
-6. [Step 4 -- Mask Post-Processing](#step-4----mask-post-processing)
-7. [Step 5 -- Feature Extraction](#step-5----feature-extraction)
-8. [Step 6 -- Deduplication](#step-6----deduplication)
-9. [Step 7 -- Annotation and Classification](#step-7----annotation-and-classification)
-10. [Step 8 -- Spatial Analysis](#step-8----spatial-analysis)
-11. [Step 9 -- LMD Export](#step-9----lmd-export)
-12. [Chain Launcher (SLURM)](#chain-launcher-slurm)
-13. [Interesting Side Analyses](#interesting-side-analyses)
+*Use the table of contents on the right to navigate between sections.*
 14. [Entry Points Reference](#entry-points-reference)
 15. [Output Structure](#output-structure)
 16. [Coordinate System and Conventions](#coordinate-system-and-conventions)
