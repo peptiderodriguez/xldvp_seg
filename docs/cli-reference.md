@@ -1,6 +1,6 @@
 # CLI Reference
 
-The `xlseg` command provides 12 subcommands covering the full pipeline from
+The `xlseg` command provides 13 subcommands covering the full pipeline from
 CZI inspection through detection, classification, and export.
 
 ```bash

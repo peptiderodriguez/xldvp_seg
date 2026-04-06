@@ -304,7 +304,7 @@ Chains detection → marker classification → nuclei counting → HTML viewer a
 xldvp_seg/              # Main package (pip install -e .)
 ├── api/                   # Scanpy-style API (pp, tl, pl, io)
 ├── classification/        # Vessel type classifiers, feature selection
-├── cli/                   # xlseg CLI entry point (12 subcommands)
+├── cli/                   # xlseg CLI entry point (13 subcommands)
 ├── core/                  # SlideAnalysis central state object + detection schema
 ├── detection/strategies/  # 8 strategies, self-registered via @register_strategy
 ├── io/                    # CZI loader, HTML export, OME-Zarr, SpatialData export

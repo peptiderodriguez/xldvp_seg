@@ -96,6 +96,7 @@ xlseg classify --detections ...          # Train RF classifier
 xlseg markers --detections ...           # Marker pos/neg classification
 xlseg score --detections ... --classifier ... # Score detections
 xlseg cluster --detections ...           # Feature clustering (UMAP/t-SNE + Leiden)
+xlseg qc /path/to/output                 # Quick quality check (no HTML needed)
 xlseg export-lmd --detections ...        # LMD export
 xlseg serve /path/to/html               # Serve HTML viewer
 xlseg system                             # Show system info
@@ -590,7 +591,7 @@ python run_segmentation.py --czi-path slide.czi --cell-type nmj \
 
 ## Entry Points
 
-**Core:** `run_segmentation.py` (detection), `run_lmd_export.py` (LMD XML), `train_classifier.py` (RF), `serve_html.py` (viewer). SLURM: `scripts/run_pipeline.sh` (YAML-driven launcher). **CLI:** `xlseg` with 12 subcommands (info, detect, classify, cluster, markers, score, export-lmd, serve, system, models, strategies, download-models).
+**Core:** `run_segmentation.py` (detection), `run_lmd_export.py` (LMD XML), `train_classifier.py` (RF), `serve_html.py` (viewer). SLURM: `scripts/run_pipeline.sh` (YAML-driven launcher). **CLI:** `xlseg` with 13 subcommands (info, detect, classify, cluster, markers, score, export-lmd, serve, system, models, strategies, download-models).
 
 **Scripts (`scripts/`):** 29 reusable tools — `ls scripts/` for full list. Key: `czi_info.py`, `classify_markers.py`, `apply_classifier.py`, `regenerate_html.py`, `generate_multi_slide_spatial_viewer.py`, `detect_vessel_structures.py`, `segment_vessel_lumens.py`, `count_nuclei_per_cell.py`, `sliding_window_sampling.py`. Core logic of 6 promoted scripts now lives in `xldvp_seg/analysis/` for programmatic access (scripts delegate to package modules).
 

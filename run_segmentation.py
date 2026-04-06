@@ -114,28 +114,38 @@ def _apply_marker_snr_classification(args, detections, slide_output_dir):
     marker_names = []
     for ms in marker_specs:
         if ":" not in ms:
-            logger.error("--marker-snr-channels: each entry must be NAME:CHANNEL, got '%s'", ms)
-            return
+            logger.warning("--marker-snr-channels: skipping '%s' (expected NAME:CHANNEL)", ms)
+            continue
         name, ch_str = ms.split(":", 1)
         try:
             ch = int(ch_str.strip())
         except ValueError:
-            logger.error(
-                "--marker-snr-channels: channel must be integer, got '%s' in '%s'",
-                ch_str.strip(),
-                ms,
+            logger.warning("--marker-snr-channels: skipping '%s' (channel must be integer)", ms)
+            continue
+        name = name.strip()
+        # Verify channel has SNR features before attempting classification
+        sample_feat = detections[0].get("features", {}) if detections else {}
+        if not sample_feat.get(f"ch{ch}_snr"):
+            logger.warning(
+                "--marker-snr-channels: skipping %s — ch%d_snr not found in features "
+                "(background correction may have been disabled or channel does not exist)",
+                name,
+                ch,
             )
-            return
-        marker_names.append(name.strip())
-        logger.info("Auto-classifying marker %s (ch%d, SNR >= 1.5)...", name.strip(), ch)
-        classify_single_marker(
-            detections,
-            channel=ch,
-            marker_name=name.strip(),
-            method="snr",
-            output_dir=Path(slide_output_dir),
-            snr_threshold=1.5,
-        )
+            continue
+        marker_names.append(name)
+        logger.info("Auto-classifying marker %s (ch%d, SNR >= 1.5)...", name, ch)
+        try:
+            classify_single_marker(
+                detections,
+                channel=ch,
+                marker_name=name,
+                method="snr",
+                output_dir=Path(slide_output_dir),
+                snr_threshold=1.5,
+            )
+        except Exception as e:
+            logger.warning("Marker SNR classification failed for %s (ch%d): %s", name, ch, e)
 
     # Build marker_profile from classified markers
     for det in detections:
@@ -269,6 +279,9 @@ def run_pipeline(args):
                     "x": loader.mosaic_origin[0],
                     "y": loader.mosaic_origin[1],
                 }
+
+            # Apply marker SNR classification if requested (uses pre-computed SNR)
+            _apply_marker_snr_classification(args, all_detections, slide_output_dir)
 
             pct = int(args.sample_fraction * 100)
             _finish_pipeline(
