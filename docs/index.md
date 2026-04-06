@@ -51,7 +51,14 @@ xlseg cluster \
     --detections /path/to/output/cell_detections_scored.json \
     --feature-groups "morph,channel" \
     --output-dir /path/to/output/clusters
+
+# 8. Quick quality check (detection count, area stats, marker profiles)
+xlseg qc /path/to/output
 ```
+
+!!! tip
+    Use `--marker-snr-channels "SMA:1,CD31:3"` on `xlseg detect` to classify
+    markers automatically during detection -- no separate `xlseg markers` step needed.
 
 ### Python API
 

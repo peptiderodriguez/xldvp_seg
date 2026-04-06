@@ -195,6 +195,11 @@ Available methods: `snr` (default), `otsu`, `otsu_half`, `gmm`.
     background during detection, and marker classification auto-detects this
     via `ch{N}_background` keys.
 
+!!! tip
+    Alternatively, use `--marker-snr-channels "SMA:1,CD31:3"` on `xlseg detect`
+    to classify markers automatically during detection -- no separate step needed.
+    This uses the pre-computed SNR >= 1.5 threshold at zero extra cost.
+
 ## Step 7: Explore with Clustering
 
 Group cells by morphological and intensity features using UMAP/t-SNE
@@ -240,6 +245,11 @@ The AnnData object contains:
 - `obsm["spatial"]` -- spatial coordinates (x, y in micrometers)
 - `var` -- feature metadata with `feature_group` column
 - `uns` -- provenance metadata (pipeline version, parameters, timestamps)
+
+!!! tip
+    After any step, run `xlseg qc /path/to/output` for a quick quality summary
+    (detection count, area distribution, classifier scores, marker profiles,
+    per-channel SNR) without needing the HTML viewer.
 
 ## Next Steps
 

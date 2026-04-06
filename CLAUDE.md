@@ -287,6 +287,8 @@ PYTHONPATH=$REPO $XLDVP_PYTHON $REPO/scripts/classify_markers.py \
 
 **Methods:** `snr` (default — median-based SNR >= 1.5, robust to membrane stains with median=0 inside cells), `otsu` (auto-threshold maximizing inter-class variance), `otsu_half` (more permissive for dim markers), `gmm` (2-component Gaussian for overlapping distributions). Optional `--normalize-channel` normalizes per-channel intensities before thresholding, but is NOT recommended as default because PM membrane stains have median=0 inside cells.
 
+**Shortcut — `--marker-snr-channels`:** Instead of running `classify_markers.py` as a separate step, pass `--marker-snr-channels "SMA:1,CD31:3"` to `xlseg detect` (or `run_segmentation.py`). This classifies markers during detection using the pre-computed SNR >= 1.5 threshold at zero extra cost. Format: `"NAME:CHANNEL_INDEX,..."`. The same output fields are produced.
+
 **Output fields:** `{marker}_class` (positive/negative), `{marker}_value`, `{marker}_threshold`, `marker_profile` (e.g., `NeuN+/tdTomato-`). Pipeline also stores `ch{N}_background`, `ch{N}_snr`, `ch{N}_median_raw` in features.
 
 ### Phase 5: Spatial Analysis & Exploration
@@ -502,6 +504,7 @@ All coordinates are [x, y] (horizontal, vertical). UID format: `{slide}_{celltyp
 - `--nuclear-channel` / `--membrane-channel` are islet-only (validated only for `cell_type=='islet'`)
 - `--sample-fraction` is ALWAYS 1.0 — detect 100%, use `--html-sample-fraction` to subsample HTML only
 - `--segmenter {cellpose,instanseg}` — alternative cell segmenter (default: cellpose). Requires `pip install -e .[instanseg]`. Only applies to `--cell-type cell`.
+- `--marker-snr-channels "SMA:1,CD31:3"` — auto-classify markers during detection using pre-computed SNR >= 1.5. Replaces the separate `classify_markers.py` step. Format: `"NAME:CHANNEL_INDEX,..."`. Requires `--all-channels`.
 
 ### Deduplication
 
@@ -591,7 +594,7 @@ python run_segmentation.py --czi-path slide.czi --cell-type nmj \
 
 ## Entry Points
 
-**Core:** `run_segmentation.py` (detection), `run_lmd_export.py` (LMD XML), `train_classifier.py` (RF), `serve_html.py` (viewer). SLURM: `scripts/run_pipeline.sh` (YAML-driven launcher). **CLI:** `xlseg` with 13 subcommands (info, detect, classify, cluster, markers, score, export-lmd, serve, system, models, strategies, download-models).
+**Core:** `run_segmentation.py` (detection), `run_lmd_export.py` (LMD XML), `train_classifier.py` (RF), `serve_html.py` (viewer). SLURM: `scripts/run_pipeline.sh` (YAML-driven launcher). **CLI:** `xlseg` with 13 subcommands (info, detect, classify, cluster, markers, score, qc, export-lmd, serve, system, models, strategies, download-models).
 
 **Scripts (`scripts/`):** 29 reusable tools — `ls scripts/` for full list. Key: `czi_info.py`, `classify_markers.py`, `apply_classifier.py`, `regenerate_html.py`, `generate_multi_slide_spatial_viewer.py`, `detect_vessel_structures.py`, `segment_vessel_lumens.py`, `count_nuclei_per_cell.py`, `sliding_window_sampling.py`. Core logic of 6 promoted scripts now lives in `xldvp_seg/analysis/` for programmatic access (scripts delegate to package modules).
 

@@ -50,6 +50,7 @@ Key flags:
 | `--segmenter` | `cellpose` (default) or `instanseg` |
 | `--dedup-method` | `mask_overlap` (default) or `iou_nms` |
 | `--resume` | Resume from a previous run directory |
+| `--marker-snr-channels` | Auto-classify markers during detection using pre-computed SNR >= 1.5 (format: `"SMA:1,CD31:3"`) |
 | `--no-contour-processing` | Skip contour extraction from HDF5 masks |
 | `--no-background-correction` | Skip local background subtraction |
 
@@ -123,6 +124,18 @@ xlseg cluster \
 |------|-------------|
 | `--feature-groups` | Comma-separated: `morph`, `shape`, `color`, `sam2`, `channel`, `deep` |
 | `--clustering` | `leiden` (default) or `hdbscan` |
+
+---
+
+### `xlseg qc`
+
+Quick quality check on pipeline output. Prints detection count, feature summary,
+area distribution, classifier scores, marker profiles, per-channel SNR, and
+nuclear counting summary -- no HTML viewer needed.
+
+```bash
+xlseg qc /path/to/output
+```
 
 ---
 

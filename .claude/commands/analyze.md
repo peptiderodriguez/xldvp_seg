@@ -123,6 +123,7 @@ For beginners, expand on each step as you reach it. For advanced users, just ask
 | **Replicate sampling** | Area-matched or spatially-clustered replicates, marker/cluster stratification, 384-well assignment | `scripts/paper_figure_sampling.py` |
 | **Transect selection** | Select cells along zonation transect paths for LMD | `scripts/select_transect_cells_for_lmd.py` |
 | **Sliding window** | Area-matched rolling window sampling along ROI centerlines. Grid search for zero-rejection combos. Morphological skeleton + farthest-point spatial balancing. Ref settings: ~6700 cells/mm² brain → r=70um/40% overlap for 20× target, r=90um/40% for 30×. Always use `--czi-path`. | `scripts/sliding_window_sampling.py` (core: `xldvp_seg.analysis.sliding_window_sampling`) |
+| **QC** | Quick post-run quality check: detection count, area stats, RF scores, marker profiles, per-channel SNR, nuclear counts — no HTML viewer needed | `xlseg qc <output_dir>` |
 | **LMD** | Adaptive RDP simplification, dilation, clustering, well assignment, XML export | `run_lmd_export.py` |
 | **SpatialData** | Export to scverse ecosystem (squidpy, scanpy, anndata) | `scripts/convert_to_spatialdata.py` |
 | **Convert** | CZI to OME-Zarr pyramids for Napari | `scripts/czi_to_ome_zarr.py` |
@@ -466,6 +467,8 @@ PYTHONPATH=$REPO $XLDVP_PYTHON $REPO/scripts/regenerate_html.py \
 **Step 15 — Marker classification** (if multi-channel, core: `xldvp_seg.analysis.marker_classification`):
 
 Ask: *"Which channels are markers you want to classify as positive/negative?"*
+
+**Shortcut:** If the user just wants SNR-based classification (the most common case), suggest `--marker-snr-channels "SMA:1,CD31:3"` on the original `xlseg detect` command — this classifies markers automatically during detection at zero extra cost. No separate step needed.
 
 **Background correction is automatic.** The pipeline computes median-based local background during detection (post-dedup phase). SNR = median_raw / median_of_neighbor_medians. `classify_markers.py` (or `xlseg markers`) uses these pre-computed SNR values directly.
 
