@@ -309,7 +309,7 @@ xldvp_seg/              # Main package (pip install -e .)
 ├── detection/strategies/  # 8 strategies, self-registered via @register_strategy
 ├── io/                    # CZI loader, HTML export, OME-Zarr, SpatialData export
 ├── lmd/                   # Well plates, contour processing (adaptive RDP + dilation)
-├── analysis/              # 8 modules: marker classification, clustering, spatial networks, patterns, sampling, OmicLinker, aggregation, nuclear counting
+├── analysis/              # 9 modules: marker classification, clustering, spatial networks, patterns, sampling, OmicLinker, aggregation, nuclear counting, vessel characterization
 ├── training/              # Classifier training: feature loading, annotation matching
 ├── models/                # Model registry (SAM2, ResNet, DINOv2, brightfield FMs)
 ├── pipeline/              # 11 modules: shm_setup, detection_loop, preprocessing, post_detection, ...
@@ -317,9 +317,9 @@ xldvp_seg/              # Main package (pip install -e .)
 ├── roi/                   # ROI support: pre-detection (restrict to regions) or post-detection (spatial filtering)
 └── utils/                 # JSON I/O, device handling, logging, config
 
-scripts/                   # 28 reusable CLI tools
+scripts/                   # 29 reusable CLI tools
 examples/                  # Project-specific analyses by experiment
-tests/                     # 789 tests (782 passing, 7 skipped) across 32 files
+tests/                     # pytest suite (run `make test` for current counts)
 ```
 
 ## Key Design Decisions

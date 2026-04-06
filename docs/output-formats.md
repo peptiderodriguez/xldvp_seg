@@ -20,14 +20,20 @@ output_dir/
       cell_detections.html          # interactive HTML viewer
       slide.ome.zarr/               # OME-Zarr pyramid
       cell_spatialdata.zarr/        # SpatialData zarr store
-      detection_summary.json        # run metadata + statistics
+      pipeline_config.json          # pipeline configuration used
+      summary.json                  # run metadata + statistics
 ```
 
 ## Detection JSON Schema
 
-Each detection is a dictionary with these fields:
+Each detection is a dictionary with **two levels of nesting**:
 
-### Required Fields (always present)
+- **Top-level keys**: identity and geometry (`uid`, `cell_type`, `global_center`, `global_center_um`, `tile_origin`, `mask_label`, `rf_prediction`, `contour_px`, `contour_um`)
+- **`features` sub-dict**: all computed features (`area`, `circularity`, `ch0_mean`, `SMA_class`, `marker_profile`, etc.)
+
+When writing custom analysis code, access features via `det["features"]["area"]`, not `det["area"]`.
+
+### Required Fields (top-level, always present)
 
 | Field | Type | Description |
 |-------|------|-------------|
@@ -38,7 +44,7 @@ Each detection is a dictionary with these fields:
 | `tile_origin` | [int, int] | Tile origin in global pixels |
 | `mask_label` | int | Label index in the tile's HDF5 mask |
 
-### Morphological Features
+### Morphological Features (in `features` sub-dict)
 
 | Field | Type | Description |
 |-------|------|-------------|
@@ -50,7 +56,7 @@ Each detection is a dictionary with these fields:
 | `aspect_ratio` | float | Major axis / minor axis |
 | `eccentricity` | float | Eccentricity of fitted ellipse |
 
-### Channel Features (with `--all-channels`)
+### Channel Features (in `features` sub-dict, with `--all-channels`)
 
 For each channel N:
 
@@ -65,20 +71,21 @@ For each channel N:
 
 ### Classification Fields (after scoring)
 
-| Field | Type | Description |
-|-------|------|-------------|
-| `rf_prediction` | float | Random forest confidence (0.0 to 1.0) |
+| Field | Location | Type | Description |
+|-------|----------|------|-------------|
+| `rf_prediction` | top-level | float | Random forest confidence (0.0 to 1.0) |
 
-### Marker Fields (after marker classification)
+### Marker Fields (in `features` sub-dict, after marker classification)
 
 | Field | Type | Description |
 |-------|------|-------------|
 | `{marker}_class` | string | "positive" or "negative" |
-| `{marker}_value` | float | Raw intensity value used |
-| `{marker}_threshold` | float | Threshold applied |
+| `{marker}_value` | float | Raw intensity value used for classification |
 | `marker_profile` | string | Combined profile, e.g., "SMA+/CD31-" |
 
-### Contour Fields (after post-dedup)
+The threshold used for each marker is stored in the summary dict returned by `classify_single_marker()`, not per-detection.
+
+### Contour Fields (top-level, after post-dedup)
 
 | Field | Type | Description |
 |-------|------|-------------|

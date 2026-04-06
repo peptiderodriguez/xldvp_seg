@@ -124,7 +124,7 @@ Train a random forest classifier from your annotations.
     ```python
     slide = SlideAnalysis.load("/path/to/output/...")
     tl.train(slide, annotations="annotations.json",
-             feature_set="morph", output_dir="classifiers/")
+             feature_set="morph", output_path="classifiers/rf_morph.pkl")  # note: output_path, not output_dir
     ```
 
 Feature sets:
@@ -181,12 +181,15 @@ threshold of 1.5.
     tl.markers(slide, marker_channels=[1, 3], marker_names=["SMA", "CD31"])
     ```
 
-This adds to each detection:
+This adds fields inside each detection's `features` sub-dict:
 
 - `{marker}_class` -- "positive" or "negative"
-- `{marker}_value` -- the raw intensity value
-- `{marker}_threshold` -- the threshold used
+- `{marker}_value` -- the raw intensity value used for classification
 - `marker_profile` -- e.g., "SMA+/CD31-"
+
+!!! note
+    The threshold used for classification is stored in the summary dict
+    returned by `classify_single_marker()`, not per-detection.
 
 Available methods: `snr` (default), `otsu`, `otsu_half`, `gmm`.
 
@@ -219,6 +222,9 @@ dimensionality reduction and Leiden community detection.
     ```python
     tl.cluster(slide, feature_groups="morph,channel",
                output_dir="results/clusters/")
+    # Note: tl.cluster() defaults to feature_groups='morph'.
+    # The CLI `xlseg cluster` defaults to 'morph,sam2,channel'.
+    # Always specify explicitly to avoid surprises.
     ```
 
 ## Step 8: Export to AnnData

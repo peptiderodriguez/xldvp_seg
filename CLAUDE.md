@@ -73,7 +73,7 @@ PYTHONPATH=$REPO $XLDVP_PYTHON $REPO/scripts/czi_info.py /path/to/slide.czi
 
 ### Tests
 
-Tests in `tests/` using pytest (789 collected, 782 passing, 7 skipped, 32 files). Run `make test` for all with coverage. Fixtures in `conftest.py`. Tests rely on `pip install -e .` (or `PYTHONPATH=$REPO`) for `xldvp_seg.*` imports.
+Tests in `tests/` using pytest. Run `make test` for current counts and coverage. Fixtures in `conftest.py`. Tests rely on `pip install -e .` (or `PYTHONPATH=$REPO`) for `xldvp_seg.*` imports.
 
 **Development workflow:**
 ```bash
@@ -186,6 +186,7 @@ channel_map:
 - Flat-field ON by default (`--no-normalize-features` to disable; no `--flat-field-correction` flag)
 - `--html-sample-fraction 0.10` — subsample HTML viewer to 10% of detections (browser-friendly)
 - `--sample-fraction` is ALWAYS 1.0 — detect 100%, never suggest partial detection
+- `--marker-snr-channels "SMA:1,CD31:3"` — classify markers during detection using pre-computed SNR >= 1.5 at zero extra cost (format: `"NAME:CHANNEL_INDEX,..."`)
 
 **SLURM launch (YAML config):**
 ```yaml
@@ -370,7 +371,7 @@ CZI file → czi_loader.py (channel resolution, tiling)
 
 ### Pipeline Package (`xldvp_seg/pipeline/`)
 
-`run_segmentation.py` is a ~950-line orchestrator importing from 11 pipeline modules:
+`run_segmentation.py` is a ~1,030-line orchestrator importing from 11 pipeline modules:
 
 | Module | Purpose |
 |--------|---------|

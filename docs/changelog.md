@@ -9,7 +9,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
-- `xlseg` unified CLI with 13 subcommands (info, detect, classify, markers, score, cluster, export-lmd, serve, system, models, strategies, download-models)
+- `xlseg` unified CLI with 13 subcommands (info, detect, classify, markers, score, cluster, qc, export-lmd, serve, system, models, strategies, download-models)
 - Scanpy-style Python API (`xldvp_seg.api.{pp,tl,pl,io}`)
 - `SlideAnalysis` central state object for notebook workflows
 - Model registry with modality tracking (fluorescence/brightfield/both)

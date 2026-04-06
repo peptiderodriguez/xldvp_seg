@@ -41,14 +41,14 @@ def markers(
     """Classify markers as positive/negative per channel.
 
     Calls classify_single_marker() for each marker. Mutates detections
-    in-place with {marker}_class, {marker}_value, {marker}_threshold,
-    and marker_profile fields.
+    in-place with {marker}_class, {marker}_value, and marker_profile
+    fields (stored in each detection's ``features`` sub-dict).
 
     Args:
         slide: SlideAnalysis object.
         marker_channels: List of channel indices (e.g., [1, 2]).
         marker_names: List of marker names (e.g., ["NeuN", "tdTomato"]).
-        method: Classification method ("snr", "otsu", "gmm").
+        method: Classification method ("snr", "otsu", "otsu_half", "gmm").
         snr_threshold: SNR threshold for 'snr' method (default: 1.5).
         czi_path: Path to CZI for channel metadata resolution.
         output_dir: Directory for summary output (optional).
