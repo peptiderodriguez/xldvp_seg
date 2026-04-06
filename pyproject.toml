@@ -84,6 +84,7 @@ include = ["xldvp_seg*"]
 
 [tool.setuptools.package-data]
 "*" = ["*.yaml", "*.json"]
+"xldvp_seg.visualization" = ["js/*.js"]
 
 [tool.black]
 line-length = 100
