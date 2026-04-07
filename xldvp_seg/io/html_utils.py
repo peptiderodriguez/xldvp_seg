@@ -17,6 +17,7 @@ from PIL import Image
 from scipy import ndimage
 
 from xldvp_seg.utils.logging import get_logger
+from xldvp_seg.utils.mask_cleanup import get_largest_connected_component  # noqa: F401
 
 logger = get_logger(__name__)
 
@@ -48,17 +49,6 @@ def create_hdf5_dataset(f, name, data):
     else:
         # hdf5plugin filter object — pass as compression kwarg
         f.create_dataset(name, data=data, **dict(HDF5_COMPRESSION_KWARGS))
-
-
-def get_largest_connected_component(mask):
-    """Extract only the largest connected component from a binary mask."""
-    labeled, num_features = ndimage.label(mask)
-    if num_features == 0:
-        return mask
-    # Find largest component
-    sizes = ndimage.sum(mask, labeled, range(1, num_features + 1))
-    largest_label = np.argmax(sizes) + 1
-    return labeled == largest_label
 
 
 def percentile_normalize(image, p_low=1, p_high=99.5, global_percentiles=None):

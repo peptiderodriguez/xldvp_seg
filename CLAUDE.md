@@ -463,6 +463,7 @@ Split across focused modules with backward-compatible re-exports in `html_export
 | `html_scripts.py` | JS generators: `get_js()`, `get_vessel_js()`, `generate_preload_annotations_js()` |
 | `html_utils.py` | Image utilities: `percentile_normalize`, `draw_mask_contour`, `image_to_base64`, `compose_tile_rgb`, `_esc`, HDF5 compression constants |
 | `html_generator.py` | Class-based `HTMLPageGenerator` API for per-tile HTML generation |
+| `html_batch_export.py` | MK/HSPC batch export: `load_samples_from_ram`, `export_mk_hspc_html_from_ram`, index/page generators |
 
 ### Training Utilities (`xldvp_seg/training/`)
 

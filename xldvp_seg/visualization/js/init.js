@@ -278,12 +278,16 @@ if (IS_SINGLE && panels.length === 1) {
 
 setTimeout(fullInit, 80);
 
+let _resizeTimer;
 window.addEventListener('resize', () => {
-  if (focusedIdx >= 0) {
-    resizePanel(panels[focusedIdx]);
-  } else {
-    resizePanels();
-  }
-  scheduleRenderAll();
-  panels.forEach(p => renderDrawOverlay(p));
+  clearTimeout(_resizeTimer);
+  _resizeTimer = setTimeout(() => {
+    if (focusedIdx >= 0) {
+      resizePanel(panels[focusedIdx]);
+    } else {
+      resizePanels();
+    }
+    scheduleRenderAll();
+    panels.forEach(p => renderDrawOverlay(p));
+  }, 100);
 });

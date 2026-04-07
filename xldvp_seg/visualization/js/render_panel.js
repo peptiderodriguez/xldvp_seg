@@ -52,6 +52,12 @@ function renderPanel(p) {
 
   const useROIFilter = roiFilterActive && rois.length > 0;
 
+  // Compute visible bounds in data space for viewport culling
+  const vx1 = -p.panX / p.zoom;
+  const vy1 = -p.panY / p.zoom;
+  const vx2 = vx1 + cw / p.zoom;
+  const vy2 = vy1 + ch / p.zoom;
+
   if (showDots) {
     for (let gi = 0; gi < N_GROUPS; gi++) {
       if (hidden.has(GROUP_LABELS[gi])) continue;
@@ -62,6 +68,7 @@ function renderPanel(p) {
         if (grp[i] !== gi) continue;
         const x = pos[i * 2];
         const y = pos[i * 2 + 1];
+        if (x < vx1 || x > vx2 || y < vy1 || y > vy2) continue;  // viewport cull
         if (useROIFilter && !cellPassesROIFilter(x, y, p.idx)) continue;
         ctx.fillRect(x - halfR, y - halfR, r, r);
         total++;

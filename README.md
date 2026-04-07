@@ -310,7 +310,7 @@ xldvp_seg/              # Main package (pip install -e .)
 ├── cli/                   # xlseg CLI entry point (13 subcommands)
 ├── core/                  # SlideAnalysis central state object + detection schema
 ├── detection/strategies/  # 8 strategies, self-registered via @register_strategy
-├── io/                    # CZI loader, HTML export (4 modules), OME-Zarr, SpatialData export
+├── io/                    # CZI loader, HTML export (6 modules), OME-Zarr, SpatialData export
 ├── lmd/                   # Well plates, contour processing (adaptive RDP + dilation)
 ├── analysis/              # 9 modules: marker classification, clustering, spatial networks, patterns, sampling, OmicLinker, aggregation, nuclear counting, vessel characterization
 ├── visualization/         # Reusable HTML visualization: fluorescence, colors, encoding, data loading, HTML builder, graph patterns, 17 JS components

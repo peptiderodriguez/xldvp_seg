@@ -35,10 +35,12 @@ function drawFluorescence(ctx, slideIdx, panZoom) {
     const result = new Uint8ClampedArray(iw * ih * 4);
     for (let ci = 0; ci < 3; ci++) {
       if (!chEnabled[ci] || !fd.imgs[ci]) continue;
-      // Draw grayscale channel to temp canvas, read pixels
-      const tmp = document.createElement('canvas');
-      tmp.width = iw; tmp.height = ih;
-      const tctx = tmp.getContext('2d');
+      // Draw grayscale channel to temp canvas, read pixels (reuse canvas)
+      if (!fd._tmpCanvas) {
+        fd._tmpCanvas = document.createElement('canvas');
+      }
+      fd._tmpCanvas.width = iw; fd._tmpCanvas.height = ih;
+      const tctx = fd._tmpCanvas.getContext('2d');
       tctx.drawImage(fd.imgs[ci], 0, 0);
       const px = tctx.getImageData(0, 0, iw, ih).data;
       const [tr, tg, tb] = CH_TINTS[ci];

@@ -26,6 +26,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - `scripts/generate_multi_slide_spatial_viewer.py` refactored: inline JS replaced with `load_js()` from 17 component files (3,115 to 1,115 lines, -64%). Same external behavior.
 - Extracted `html_utils.py` (image/HDF5 utilities), `html_styles.py` (CSS generators), and `html_scripts.py` (JS generators) from `html_export.py` (3,696 to 1,790 lines). Backward-compatible re-exports maintained.
+- Extracted `html_batch_export.py` (MK/HSPC batch functions) from `html_generator.py` (2,247 to 1,236 lines). Backward-compatible re-exports in `html_generator.py`.
+- Spatial viewer JS performance: viewport culling for cell dots, temp canvas reuse in fluorescence compositing, debounced window resize handler.
+- `get_largest_connected_component` in `html_utils.py` replaced with import from canonical `mask_cleanup.py`.
+- SVG channel filter block deduplicated in `html_export.py` (extracted to `_SVG_CHANNEL_FILTERS` constant).
 - Exception migration: 82 bare `RuntimeError`/`ValueError` sites across 39 files replaced with domain-specific exceptions from `xldvp_seg.exceptions` (~35 genuine `ValueError` sites retained intentionally).
 - HTML module consolidation: 5 MK/HSPC duplicate functions replaced with backward-compatible shims (749 lines removed from `html_export.py`).
 - F841 ruff: 41 dead-code violations fixed, global suppress replaced with per-file ignore for `vessel.py` only.

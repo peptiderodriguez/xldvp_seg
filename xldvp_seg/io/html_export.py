@@ -38,6 +38,27 @@ from xldvp_seg.utils.logging import get_logger
 
 logger = get_logger(__name__)
 
+# SVG filters for channel toggling (all 7 combinations of 3 channels off).
+# Used by generate_annotation_page and generate_index_page.
+_SVG_CHANNEL_FILTERS = (
+    '<svg style="display:none">\n'
+    '        <filter id="no-r"><feColorMatrix type="matrix"'
+    ' values="0 0 0 0 0  0 1 0 0 0  0 0 1 0 0  0 0 0 1 0"/></filter>\n'
+    '        <filter id="no-g"><feColorMatrix type="matrix"'
+    ' values="1 0 0 0 0  0 0 0 0 0  0 0 1 0 0  0 0 0 1 0"/></filter>\n'
+    '        <filter id="no-b"><feColorMatrix type="matrix"'
+    ' values="1 0 0 0 0  0 1 0 0 0  0 0 0 0 0  0 0 0 1 0"/></filter>\n'
+    '        <filter id="no-rg"><feColorMatrix type="matrix"'
+    ' values="0 0 0 0 0  0 0 0 0 0  0 0 1 0 0  0 0 0 1 0"/></filter>\n'
+    '        <filter id="no-rb"><feColorMatrix type="matrix"'
+    ' values="0 0 0 0 0  0 1 0 0 0  0 0 0 0 0  0 0 0 1 0"/></filter>\n'
+    '        <filter id="no-gb"><feColorMatrix type="matrix"'
+    ' values="1 0 0 0 0  0 0 0 0 0  0 0 0 0 0  0 0 0 1 0"/></filter>\n'
+    '        <filter id="no-rgb"><feColorMatrix type="matrix"'
+    ' values="0 0 0 0 0  0 0 0 0 0  0 0 0 0 0  0 0 0 1 0"/></filter>\n'
+    "    </svg>"
+)
+
 # Re-export everything for backward compatibility -- external code imports
 # these names from xldvp_seg.io.html_export and must keep working.
 __all__ = [
@@ -275,16 +296,7 @@ def generate_annotation_page(
         </div>
     </div>
 
-    <!-- SVG filters for channel toggling (all 7 combinations of 3 channels off) -->
-    <svg style="display:none">
-        <filter id="no-r"><feColorMatrix type="matrix" values="0 0 0 0 0  0 1 0 0 0  0 0 1 0 0  0 0 0 1 0"/></filter>
-        <filter id="no-g"><feColorMatrix type="matrix" values="1 0 0 0 0  0 0 0 0 0  0 0 1 0 0  0 0 0 1 0"/></filter>
-        <filter id="no-b"><feColorMatrix type="matrix" values="1 0 0 0 0  0 1 0 0 0  0 0 0 0 0  0 0 0 1 0"/></filter>
-        <filter id="no-rg"><feColorMatrix type="matrix" values="0 0 0 0 0  0 0 0 0 0  0 0 1 0 0  0 0 0 1 0"/></filter>
-        <filter id="no-rb"><feColorMatrix type="matrix" values="0 0 0 0 0  0 1 0 0 0  0 0 0 0 0  0 0 0 1 0"/></filter>
-        <filter id="no-gb"><feColorMatrix type="matrix" values="1 0 0 0 0  0 0 0 0 0  0 0 0 0 0  0 0 0 1 0"/></filter>
-        <filter id="no-rgb"><feColorMatrix type="matrix" values="0 0 0 0 0  0 0 0 0 0  0 0 0 0 0  0 0 0 1 0"/></filter>
-    </svg>
+    {_SVG_CHANNEL_FILTERS}
 
     <div class="content">
         <div class="grid">{cards_html}</div>
@@ -496,16 +508,7 @@ def generate_index_page(
         <button class="btn btn-danger" onclick="clearAll()">Clear All</button>
     </div>
 
-    <!-- SVG filters for channel toggling -->
-    <svg style="display:none">
-        <filter id="no-r"><feColorMatrix type="matrix" values="0 0 0 0 0  0 1 0 0 0  0 0 1 0 0  0 0 0 1 0"/></filter>
-        <filter id="no-g"><feColorMatrix type="matrix" values="1 0 0 0 0  0 0 0 0 0  0 0 1 0 0  0 0 0 1 0"/></filter>
-        <filter id="no-b"><feColorMatrix type="matrix" values="1 0 0 0 0  0 1 0 0 0  0 0 0 0 0  0 0 0 1 0"/></filter>
-        <filter id="no-rg"><feColorMatrix type="matrix" values="0 0 0 0 0  0 0 0 0 0  0 0 1 0 0  0 0 0 1 0"/></filter>
-        <filter id="no-rb"><feColorMatrix type="matrix" values="0 0 0 0 0  0 1 0 0 0  0 0 0 0 0  0 0 0 1 0"/></filter>
-        <filter id="no-gb"><feColorMatrix type="matrix" values="1 0 0 0 0  0 0 0 0 0  0 0 0 0 0  0 0 0 1 0"/></filter>
-        <filter id="no-rgb"><feColorMatrix type="matrix" values="0 0 0 0 0  0 0 0 0 0  0 0 0 0 0  0 0 0 1 0"/></filter>
-    </svg>
+    {_SVG_CHANNEL_FILTERS}
 
     <script>
         let contoursVisible = true;
@@ -1016,45 +1019,45 @@ def export_samples_to_html(
 # =============================================================================
 # MK/HSPC BATCH HTML EXPORT (RAM-based)
 # =============================================================================
-# Backward-compatible shims -- authoritative implementations live in html_generator.py.
+# Backward-compatible shims -- authoritative implementations live in html_batch_export.py.
 # These shims accept the legacy ``logger=None`` parameter for API compatibility
-# but delegate to the html_generator versions (which use module-level logging).
-# Imports are lazy (inside each function) to avoid circular imports, since
-# html_generator.py imports draw_mask_contour / get_largest_connected_component /
-# percentile_normalize from this module.
+# but delegate to the html_batch_export versions (which use module-level logging).
+# Imports are lazy (inside each function) to keep these shims lightweight
+# and avoid loading html_batch_export (with its h5py/numpy/PIL dependencies)
+# unless the functions are actually called.
 
 
 def load_samples_from_ram(*args, logger=None, **kwargs):
-    """Backward-compatible shim -- delegates to html_generator."""
-    from xldvp_seg.io.html_generator import load_samples_from_ram as _impl
+    """Backward-compatible shim -- delegates to html_batch_export."""
+    from xldvp_seg.io.html_batch_export import load_samples_from_ram as _impl
 
     return _impl(*args, **kwargs)
 
 
 def create_mk_hspc_index(*args, **kwargs):
-    """Backward-compatible shim -- delegates to html_generator."""
-    from xldvp_seg.io.html_generator import create_mk_hspc_index as _impl
+    """Backward-compatible shim -- delegates to html_batch_export."""
+    from xldvp_seg.io.html_batch_export import create_mk_hspc_index as _impl
 
     return _impl(*args, **kwargs)
 
 
 def generate_mk_hspc_page_html(*args, **kwargs):
-    """Backward-compatible shim -- delegates to html_generator."""
-    from xldvp_seg.io.html_generator import generate_mk_hspc_page_html as _impl
+    """Backward-compatible shim -- delegates to html_batch_export."""
+    from xldvp_seg.io.html_batch_export import generate_mk_hspc_page_html as _impl
 
     return _impl(*args, **kwargs)
 
 
 def generate_mk_hspc_pages(*args, logger=None, **kwargs):
-    """Backward-compatible shim -- delegates to html_generator."""
-    from xldvp_seg.io.html_generator import generate_mk_hspc_pages as _impl
+    """Backward-compatible shim -- delegates to html_batch_export."""
+    from xldvp_seg.io.html_batch_export import generate_mk_hspc_pages as _impl
 
     return _impl(*args, **kwargs)
 
 
 def export_mk_hspc_html_from_ram(*args, logger=None, **kwargs):
-    """Backward-compatible shim -- delegates to html_generator."""
-    from xldvp_seg.io.html_generator import export_mk_hspc_html_from_ram as _impl
+    """Backward-compatible shim -- delegates to html_batch_export."""
+    from xldvp_seg.io.html_batch_export import export_mk_hspc_html_from_ram as _impl
 
     return _impl(*args, **kwargs)
 
