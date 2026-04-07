@@ -393,7 +393,7 @@ class ArteryVeinClassifier(BaseVesselClassifier):
             logger.info(f"Matched {matched_count}/{len(annotations)} artery/vein annotations")
 
         if not X_list:
-            raise ValueError("No matching samples found!")
+            raise ClassificationError("No matching samples found!")
 
         return self.train(X_list, y_list, cv_folds=cv_folds, verbose=verbose)
 

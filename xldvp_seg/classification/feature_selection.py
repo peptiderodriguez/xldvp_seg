@@ -40,6 +40,7 @@ from sklearn.model_selection import (
 from sklearn.pipeline import Pipeline
 from sklearn.preprocessing import LabelEncoder, StandardScaler
 
+from xldvp_seg.exceptions import ConfigError
 from xldvp_seg.utils.logging import get_logger
 
 logger = get_logger(__name__)
@@ -264,7 +265,7 @@ def select_optimal_features(
             logger.info(f"Selected top {min_features} features by importance")
 
     else:
-        raise ValueError(f"Unknown selection method: {method}")
+        raise ConfigError(f"Unknown selection method: {method}")
 
     # Extract selected features
     selected_indices = np.where(selected_mask)[0].tolist()

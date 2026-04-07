@@ -38,6 +38,7 @@ from typing import Any
 import numpy as np
 from tqdm import tqdm
 
+from xldvp_seg.exceptions import ConfigError
 from xldvp_seg.io.html_export import export_samples_to_html
 from xldvp_seg.processing.coordinates import (
     generate_uid,
@@ -127,7 +128,7 @@ class DetectionPipeline:
         # Get pixel size
         self.pixel_size = self.loader.get_pixel_size()
         if self.pixel_size is None:
-            raise ValueError(
+            raise ConfigError(
                 "CZI file has no pixel size metadata. "
                 "Provide --pixel-size-um on the command line."
             )

@@ -9,6 +9,7 @@ import gc
 
 import numpy as np
 
+from xldvp_seg.exceptions import ConfigError
 from xldvp_seg.io.html_export import draw_mask_contour, image_to_base64, percentile_normalize
 from xldvp_seg.utils.islet_utils import classify_islet_marker
 from xldvp_seg.utils.logging import get_logger
@@ -76,7 +77,7 @@ def calibrate_islet_marker_gmm(
         or empty dict if calibration fails.
     """
     if pixel_size_um is None:
-        raise ValueError("pixel_size_um is required -- must come from CZI metadata")
+        raise ConfigError("pixel_size_um is required -- must come from CZI metadata")
     from sklearn.mixture import GaussianMixture
 
     if not pilot_tiles:

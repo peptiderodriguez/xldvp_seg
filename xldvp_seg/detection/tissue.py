@@ -12,6 +12,7 @@ import numpy as np
 from sklearn.cluster import KMeans
 from tqdm import tqdm
 
+from xldvp_seg.exceptions import ConfigError
 from xldvp_seg.utils.logging import get_logger
 
 logger = get_logger(__name__)
@@ -495,7 +496,7 @@ def calibrate_tissue_threshold(
                 logger.debug(f"Failed to read tile ({tile_x}, {tile_y}) via CZI reader: {e}")
                 continue
         else:
-            raise ValueError("Either reader, loader, or image_array must be provided")
+            raise ConfigError("Either reader, loader, or image_array must be provided")
 
         # Skip empty tiles
         if tile_img.max() == 0:

@@ -148,16 +148,18 @@ def dedup_lumens(
             if not should_suppress:
                 continue
 
-            # Keep largest by area_px, tiebreak by sam2_stability
-            apx_q = lumens[valid_indices[qi]].get("area_px", 0)
-            apx_c = lumens[valid_indices[ci]].get("area_px", 0)
-            if apx_q > apx_c:
+            # Keep largest by physical size (equiv_diameter_um), tiebreak by sam2_stability.
+            # NOTE: area_px is in detection-scale pixels (scale-dependent), so a scale-64
+            # lumen has tiny area_px despite being physically huge. Use um-based size.
+            size_q = lumens[valid_indices[qi]].get("equiv_diameter_um", 0)
+            size_c = lumens[valid_indices[ci]].get("equiv_diameter_um", 0)
+            if size_q > size_c:
                 suppressed.add(ci)
-            elif apx_c > apx_q:
+            elif size_c > size_q:
                 suppressed.add(qi)
                 break  # qi suppressed — stop checking
             else:
-                # Equal area — tiebreak by stability
+                # Equal size — tiebreak by stability
                 stab_q = lumens[valid_indices[qi]].get("sam2_stability", 0)
                 stab_c = lumens[valid_indices[ci]].get("sam2_stability", 0)
                 if stab_q >= stab_c:
@@ -192,16 +194,24 @@ def dedup_lumens(
 def merge_across_scales(
     lumens: list[dict],
     iou_threshold: float = 0.3,
+    containment_threshold: float = 0.8,
+    coarsest_first: bool = False,
 ) -> tuple[list[dict], list[dict]]:
-    """Coarsest-first cross-scale merge: scale 64 -> 16 -> 8 -> 4 -> 2.
+    """Cross-scale merge: suppress lumens that overlap already-accepted ones.
 
-    At each finer scale, only add lumens that don't overlap with already-
-    accepted coarser-scale lumens. Coarse-scale lumens capture the overall
-    vessel shape more reliably; finer-scale lumens fill in gaps.
+    Default is coarsest-first (scale 64 → 16 → 8 → 4 → 2) so large vessels
+    get clean coarse-scale boundaries. Fine-scale lumens fill gaps where
+    coarse detection missed. Set ``coarsest_first=False`` for finest-first.
+
+    Uses BOTH IoU and containment checks — a tiny lumen fully inside a large
+    one has low IoU but high containment, so both criteria are needed.
 
     Args:
         lumens: Input lumen dicts with ``scale`` and ``contour_global_um``.
         iou_threshold: IoU threshold for cross-scale overlap.
+        containment_threshold: Fraction of candidate's area covered by
+            intersection with an accepted lumen for suppression.
+        coarsest_first: If True, process coarsest scales first.
 
     Returns:
         Tuple of (accepted, rejected) lumen lists.
@@ -221,15 +231,18 @@ def merge_across_scales(
     accepted_polys: list = []
     rejected: list[dict] = []
 
-    for scale in sorted(by_scale.keys(), reverse=True):  # coarsest first (64, 16, 8, ...)
+    scale_order = sorted(by_scale.keys(), reverse=coarsest_first)
+    order_label = "coarsest-first" if coarsest_first else "finest-first"
+    logger.info("Cross-scale merge order: %s %s", order_label, list(scale_order))
+
+    for scale in scale_order:
         scale_lumens = by_scale[scale]
         n_added = 0
 
-        # Rebuild STRtree from all previously accepted lumens (coarser scales).
+        # Rebuild STRtree from all previously accepted lumens.
         # NOTE: Same-scale lumens accepted in this loop are NOT in the tree,
         # so intra-scale overlaps are not caught here — they should already
-        # be resolved by dedup_lumens() in step 1a (which uses the same IoU
-        # threshold).
+        # be resolved by dedup_lumens() in step 1a.
         accepted_tree = STRtree(accepted_polys) if accepted_polys else None
 
         for lumen in scale_lumens:
@@ -247,18 +260,27 @@ def merge_across_scales(
                     logger.debug("STRtree query failed: %s", exc)
                     candidates = []
 
+                poly_area = poly.area
                 for ci_raw in candidates:
                     ci = int(ci_raw)
                     ap = accepted_polys[ci]
                     try:
                         inter = poly.intersection(ap).area
-                        union = poly.union(ap).area
-                        if union > 0 and (inter / union) >= iou_threshold:
-                            overlaps = True
-                            break
                     except Exception as exc:
                         logger.debug("Polygon operation failed: %s", exc)
                         continue
+
+                    # Check IoU
+                    union = poly_area + ap.area - inter
+                    if union > 0 and (inter / union) >= iou_threshold:
+                        overlaps = True
+                        break
+
+                    # Check containment: is this candidate mostly inside
+                    # an already-accepted lumen?
+                    if poly_area > 0 and (inter / poly_area) >= containment_threshold:
+                        overlaps = True
+                        break
 
             if not overlaps:
                 accepted.append(lumen)
@@ -761,6 +783,8 @@ def main(argv: list[str] | None = None) -> None:
     merged, rejected_merge = merge_across_scales(
         deduped,
         iou_threshold=args.iou_threshold,
+        containment_threshold=args.containment_threshold,
+        coarsest_first=True,
     )
     n_after_dedup = len(merged)
     all_rejected = rejected_dedup + rejected_merge

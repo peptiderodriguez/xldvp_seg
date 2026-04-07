@@ -23,6 +23,7 @@ from pathlib import Path
 
 import numpy as np
 
+from xldvp_seg.exceptions import ConfigError
 from xldvp_seg.utils.detection_utils import extract_feature_matrix, extract_positions_um
 from xldvp_seg.utils.logging import get_logger
 
@@ -148,7 +149,7 @@ def parse_marker_filter(filter_str):
             "!=": lambda a, b: a != b,
         }
         if op not in ops:
-            raise ValueError(f"Unsupported operator '{op}' in marker filter")
+            raise ConfigError(f"Unsupported operator '{op}' in marker filter")
         cmp_fn = ops[op]
 
         def predicate(det):
@@ -177,7 +178,7 @@ def parse_marker_filter(filter_str):
 
         return predicate
 
-    raise ValueError(
+    raise ConfigError(
         f"Cannot parse marker filter: '{filter_str}' "
         f"(expected e.g. 'ch0_mean>100' or 'tdTomato_class==positive')"
     )
@@ -487,7 +488,7 @@ def run_spatial_network(
 ):
     """Build Delaunay-based cell adjacency graph, find components + communities."""
     if pixel_size is None:
-        raise ValueError("pixel_size is required -- must come from CZI metadata")
+        raise ConfigError("pixel_size is required -- must come from CZI metadata")
     import networkx as nx
     from scipy.spatial import ConvexHull, Delaunay
 

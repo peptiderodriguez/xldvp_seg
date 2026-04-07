@@ -20,6 +20,7 @@ from typing import Any
 import numpy as np
 from scipy import ndimage
 
+from xldvp_seg.exceptions import ConfigError
 from xldvp_seg.utils.logging import get_logger
 
 logger = get_logger(__name__)
@@ -169,7 +170,7 @@ def recompute_mask_features(
         Dictionary with recomputed features
     """
     if pixel_size_um is None:
-        raise ValueError("pixel_size_um is required — get from CZI metadata")
+        raise ConfigError("pixel_size_um is required — get from CZI metadata")
     features = {}
 
     if not mask.any():
@@ -354,7 +355,7 @@ def apply_cleanup_to_detection(
         Cleaned mask (label_array is also updated in place)
     """
     if pixel_size_um is None:
-        raise ValueError("pixel_size_um is required for area conversion — get from CZI metadata")
+        raise ConfigError("pixel_size_um is required for area conversion — get from CZI metadata")
 
     # Apply cleanup
     cleaned_mask = cleanup_mask(

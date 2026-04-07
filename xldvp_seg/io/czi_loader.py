@@ -23,6 +23,7 @@ from aicspylibczi import CziFile
 from tqdm import tqdm
 
 from xldvp_seg.exceptions import ChannelResolutionError as _BaseChannelResolutionError
+from xldvp_seg.exceptions import ConfigError, DetectionError
 from xldvp_seg.utils.logging import get_logger
 
 logger = get_logger(__name__)
@@ -343,7 +344,7 @@ def get_loader(
         with _image_cache_lock:
             result = _image_cache.get(key)
             if result is None or isinstance(result, threading.Event):
-                raise RuntimeError(f"Loader construction failed for {key}")
+                raise DetectionError(f"Loader construction failed for {key}")
             return result
 
     # We are the builder — construct outside the lock
@@ -673,7 +674,7 @@ class CZILoader:
                 elif channel is not None:
                     channels_to_load = [channel]
                 else:
-                    raise ValueError("channel or channels is required when load_to_ram=True")
+                    raise ConfigError("channel or channels is required when load_to_ram=True")
 
                 for ch in channels_to_load:
                     self._load_channel_to_ram(ch, strip_height)
@@ -1022,7 +1023,7 @@ class CZILoader:
 
         # Fall back to reading from CZI
         if target_channel is None:
-            raise ValueError("channel is required when data not loaded to RAM")
+            raise ConfigError("channel is required when data not loaded to RAM")
 
         return self._get_tile_from_czi(tile_x, tile_y, tile_size, target_channel, scale_factor)
 
@@ -1110,7 +1111,7 @@ class CZILoader:
             ValueError: If scale_factor is not positive
         """
         if self.reader is None:
-            raise RuntimeError(
+            raise DetectionError(
                 "CZI reader has been released. Cannot read tiles from disk. "
                 "Use --load-to-ram or reload the CZI file."
             )

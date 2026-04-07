@@ -21,6 +21,7 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 
+from xldvp_seg.exceptions import ConfigError
 from xldvp_seg.utils.logging import get_logger
 
 logger = get_logger(__name__)
@@ -116,11 +117,11 @@ class OmicLinker:
             DataFrame with rows=wells, columns=[morph features + spatial + proteins].
         """
         if self._features_df is None:
-            raise ValueError("No features loaded. Use from_slide() or from_detections().")
+            raise ConfigError("No features loaded. Use from_slide() or from_detections().")
         if self._proteomics is None:
-            raise ValueError("No proteomics loaded. Call load_proteomics() first.")
+            raise ConfigError("No proteomics loaded. Call load_proteomics() first.")
         if self._well_mapping is None:
-            raise ValueError("No well mapping. Call load_well_mapping() first.")
+            raise ConfigError("No well mapping. Call load_well_mapping() first.")
 
         df = self._features_df.copy()
         df["well"] = df.index.map(self._well_mapping)
@@ -226,7 +227,7 @@ class OmicLinker:
         from scipy import stats
 
         if self._features_df is None:
-            raise ValueError("No features loaded.")
+            raise ConfigError("No features loaded.")
 
         df = self._features_df.copy()
         if group_col not in df.columns and self._detections:
@@ -288,7 +289,7 @@ class OmicLinker:
             DataFrame: rows=morph_features, columns=proteins, values=correlation.
         """
         if self._linked is None:
-            raise ValueError("Call link() first.")
+            raise ConfigError("Call link() first.")
 
         prot_cols = set(self._proteomics.columns) if self._proteomics is not None else set()
         if morph_features is None:
@@ -314,7 +315,7 @@ class OmicLinker:
     def rank_proteins(self, morph_feature, top_n=50):
         """Rank proteins by correlation with a morphological feature."""
         if self._linked is None:
-            raise ValueError("Call link() first.")
+            raise ConfigError("Call link() first.")
         prot_cols = set(self._proteomics.columns) if self._proteomics is not None else set()
         proteins = [c for c in self._linked.columns if c in prot_cols]
         from scipy.stats import spearmanr

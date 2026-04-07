@@ -9,6 +9,7 @@ import json
 
 import numpy as np
 
+from xldvp_seg.exceptions import DataLoadError
 from xldvp_seg.utils.logging import get_logger
 
 logger = get_logger(__name__)
@@ -135,7 +136,7 @@ def _apply_reinhard_normalization(args, all_channel_data, loader):
     required_keys = {"L_median", "L_mad", "a_median", "a_mad", "b_median", "b_mad"}
     missing_keys = required_keys - set(norm_params.keys())
     if missing_keys:
-        raise ValueError(
+        raise DataLoadError(
             f"Normalization params file missing required keys: {missing_keys}. "
             f"Required: {required_keys}"
         )

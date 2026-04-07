@@ -29,6 +29,7 @@ import json
 import os
 from pathlib import Path
 
+from xldvp_seg.exceptions import ConfigError
 from xldvp_seg.utils.logging import get_logger
 
 logger = get_logger(__name__)
@@ -486,7 +487,7 @@ def create_run_config(
     if "pixel_size_um" in kwargs:
         ps = kwargs["pixel_size_um"]
         if ps is not None and (not isinstance(ps, (int, float)) or ps <= 0):
-            raise ValueError(f"Invalid pixel_size_um: {ps}")
+            raise ConfigError(f"Invalid pixel_size_um: {ps}")
 
     return config
 
@@ -543,8 +544,6 @@ def get_memory_threshold(key: str) -> float:
 # =============================================================================
 # CONFIGURATION VALIDATION
 # =============================================================================
-
-from xldvp_seg.exceptions import ConfigError
 
 
 class ConfigValidationError(ConfigError):

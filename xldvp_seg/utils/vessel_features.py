@@ -38,6 +38,7 @@ from scipy.ndimage import distance_transform_edt, sobel
 from scipy.spatial import ConvexHull
 from skimage.morphology import skeletonize
 
+from xldvp_seg.exceptions import ConfigError
 from xldvp_seg.utils.logging import get_logger
 
 logger = get_logger(__name__)
@@ -1056,7 +1057,7 @@ def extract_multichannel_intensity_features(
         ValueError: If channel_names is None
     """
     if channel_names is None:
-        raise ValueError(
+        raise ConfigError(
             "channel_names is required for multi-channel feature extraction. "
             "Pass --channel-names on the CLI or use --channel-spec for automatic resolution."
         )
@@ -1144,7 +1145,7 @@ def compute_channel_ratios(
         ValueError: If channel_names is None
     """
     if channel_names is None:
-        raise ValueError(
+        raise ConfigError(
             "channel_names is required for cross-channel ratio computation. "
             "Pass --channel-names on the CLI or use --channel-spec for automatic resolution."
         )

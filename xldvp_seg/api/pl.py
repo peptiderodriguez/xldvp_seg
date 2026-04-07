@@ -5,6 +5,7 @@ from __future__ import annotations
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, NoReturn
 
+from xldvp_seg.exceptions import ConfigError
 from xldvp_seg.utils.logging import get_logger
 
 if TYPE_CHECKING:
@@ -37,10 +38,10 @@ def umap(
     from xldvp_seg.analysis.cluster_features import run_clustering
 
     if slide.detections_path is None:
-        raise ValueError("SlideAnalysis has no detections_path. Save detections first.")
+        raise ConfigError("SlideAnalysis has no detections_path. Save detections first.")
 
     if output_dir is None:
-        raise ValueError(
+        raise ConfigError(
             "output_dir is required — UMAP plots are written to disk. "
             "Pass a directory path to save the output."
         )

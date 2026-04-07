@@ -17,6 +17,7 @@ from typing import Any
 import numpy as np
 
 from xldvp_seg.detection.registry import register_strategy
+from xldvp_seg.exceptions import DetectionError
 from xldvp_seg.utils.feature_extraction import (
     SAM2_EMBEDDING_DIM,
     extract_morphological_features,
@@ -137,7 +138,7 @@ class CellStrategy(DetectionStrategy, MultiChannelFeatureMixin):
         """
         cellpose = models.get("cellpose")
         if cellpose is None:
-            raise RuntimeError("Cellpose model required for cell detection")
+            raise DetectionError("Cellpose model required for cell detection")
 
         # Run Cellpose (2-channel or grayscale)
         if self.cellpose_input_channels and extra_channels:
@@ -263,7 +264,7 @@ class CellStrategy(DetectionStrategy, MultiChannelFeatureMixin):
         device = models.get("device", get_default_device())
 
         if cellpose is None:
-            raise RuntimeError("Cellpose model required for cell detection")
+            raise DetectionError("Cellpose model required for cell detection")
 
         # Step 1: Generate masks using Cellpose-SAM
         masks = self.segment(tile, models, extra_channels=extra_channels)

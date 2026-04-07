@@ -277,7 +277,7 @@ class BaseVesselClassifier(abc.ABC):
         try:
             model_data = joblib.load(path)
         except (EOFError, ModuleNotFoundError) as e:
-            raise ValueError(f"Failed to load classifier from {path}: {e}") from e
+            raise ClassificationError(f"Failed to load classifier from {path}: {e}") from e
 
         # Verify model type
         expected = cls.MODEL_TYPE

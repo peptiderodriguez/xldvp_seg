@@ -24,6 +24,7 @@ from typing import Any
 
 import numpy as np
 
+from xldvp_seg.exceptions import ConfigError
 from xldvp_seg.utils.logging import get_logger
 
 logger = get_logger(__name__)
@@ -63,7 +64,7 @@ def select_positive_cells(
             are provided, or if *marker_filter* is malformed.
     """
     if (snr_channel is None) == (marker_filter is None):
-        raise ValueError("Exactly one of snr_channel or marker_filter must be provided")
+        raise ConfigError("Exactly one of snr_channel or marker_filter must be provided")
 
     positive_idx: list[int] = []
 
@@ -82,7 +83,7 @@ def select_positive_cells(
     else:
         assert marker_filter is not None  # for type checker
         if "==" not in marker_filter:
-            raise ValueError(
+            raise ConfigError(
                 f"Malformed marker_filter: expected 'key==value', got {marker_filter!r}"
             )
         key, value = marker_filter.split("==", 1)

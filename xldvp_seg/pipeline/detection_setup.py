@@ -7,6 +7,7 @@ detection parameter dicts from CLI arguments.
 
 from pathlib import Path
 
+from xldvp_seg.exceptions import ConfigError
 from xldvp_seg.utils.logging import get_logger
 
 logger = get_logger(__name__)
@@ -173,7 +174,7 @@ def build_detection_params(args, pixel_size_um):
                 parts = args.cellpose_input_channels.split(",")
                 params["cellpose_input_channels"] = [int(parts[0]), int(parts[1])]
             except (ValueError, IndexError):
-                raise ValueError(
+                raise ConfigError(
                     f"--cellpose-input-channels must be two integers like '1,0', got '{args.cellpose_input_channels}'"
                 )
     elif args.cell_type == "vessel":
@@ -221,7 +222,7 @@ def build_detection_params(args, pixel_size_um):
             "extract_deep_features": getattr(args, "extract_deep_features", False),
         }
     else:
-        raise ValueError(f"Unknown cell type: {args.cell_type}")
+        raise ConfigError(f"Unknown cell type: {args.cell_type}")
 
     return params
 

@@ -20,6 +20,7 @@ import tempfile
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
+from xldvp_seg.exceptions import ConfigError
 from xldvp_seg.utils.logging import get_logger
 
 if TYPE_CHECKING:
@@ -217,14 +218,14 @@ def train(
 
     det_path = slide.detections_path
     if det_path is None:
-        raise ValueError("SlideAnalysis has no detections_path. Save detections first.")
+        raise ConfigError("SlideAnalysis has no detections_path. Save detections first.")
 
     X, y, feature_names = load_features_and_annotations(
         str(det_path), str(annotations), feature_set=feature_set
     )
 
     if len(X) == 0:
-        raise ValueError("No annotated detections found matching the detections file.")
+        raise ConfigError("No annotated detections found matching the detections file.")
 
     # Train RF directly — no scaler needed (RF is invariant to monotonic transforms)
     rf = RandomForestClassifier(
@@ -305,7 +306,7 @@ def cluster(
     from xldvp_seg.analysis.cluster_features import run_clustering
 
     if slide.detections_path is None:
-        raise ValueError("SlideAnalysis has no detections_path. Save detections first.")
+        raise ConfigError("SlideAnalysis has no detections_path. Save detections first.")
 
     if output_dir is None:
         output_dir = (

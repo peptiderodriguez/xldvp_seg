@@ -24,6 +24,7 @@ import h5py
 import numpy as np
 
 from xldvp_seg.detection.cell_detector import CellDetector
+from xldvp_seg.exceptions import ConfigError
 from xldvp_seg.io.html_export import image_to_base64, percentile_normalize
 from xldvp_seg.pipeline.detection_setup import (
     apply_vessel_classifiers,
@@ -124,7 +125,7 @@ def _initialize_detector(
         try:
             marker_chs_list = [int(pair.split(":")[1]) for pair in marker_chs_str.split(",")]
         except (ValueError, IndexError) as e:
-            raise ValueError(
+            raise ConfigError(
                 f"Invalid --islet-marker-channels format: '{marker_chs_str}'. "
                 f"Expected 'name:ch_idx,...' e.g. 'gcg:2,ins:3,sst:5'. Error: {e}"
             )

@@ -1,8 +1,10 @@
 """Tests for cluster feature utilities."""
 
 import numpy as np
+import pytest
 
 from xldvp_seg.analysis.cluster_features import (
+    ClusteringConfig,
     _extract_feature_matrix,
     classify_feature_group,
     discover_channels_from_features,
@@ -153,6 +155,26 @@ class TestExtractFeatureMatrix:
         X, names, valid = _extract_feature_matrix(dets, ["area"])
         # No detection has the required feature, so X is None
         assert X is None or X.shape[0] == 0
+
+
+class TestClusteringConfig:
+    def test_defaults(self):
+        cfg = ClusteringConfig()
+        assert cfg.resolution == 1.0
+        assert cfg.n_neighbors == 30
+        assert cfg.feature_groups == "morph,sam2,channel"
+        assert cfg.methods == "both"
+        assert cfg.clustering == "leiden"
+        assert cfg.min_dist == 0.1
+
+    def test_custom_attribute(self):
+        cfg = ClusteringConfig(resolution=0.5, n_neighbors=15)
+        assert cfg.resolution == 0.5
+        assert cfg.n_neighbors == 15
+
+    def test_rejects_unknown_kwargs(self):
+        with pytest.raises(TypeError):
+            ClusteringConfig(unknown_arg=True)
 
 
 class TestNormalizeMarkerFeatures:

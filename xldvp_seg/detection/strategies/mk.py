@@ -21,6 +21,7 @@ from typing import Any
 import numpy as np
 
 from xldvp_seg.detection.registry import register_strategy
+from xldvp_seg.exceptions import ConfigError, DetectionError
 from xldvp_seg.utils.device import empty_cache
 from xldvp_seg.utils.feature_extraction import (
     SAM2_EMBEDDING_DIM,
@@ -133,7 +134,7 @@ class MKStrategy(DetectionStrategy, MultiChannelFeatureMixin):
         """
         sam2_auto = models.get("sam2_auto")
         if sam2_auto is None:
-            raise RuntimeError(
+            raise DetectionError(
                 "SAM2 automatic mask generator not loaded - required for MK detection"
             )
 
@@ -288,7 +289,7 @@ class MKStrategy(DetectionStrategy, MultiChannelFeatureMixin):
         from scipy import ndimage
 
         if pixel_size_um is None:
-            raise ValueError(
+            raise ConfigError(
                 "pixel_size_um is required for MK area filtering — do not rely on defaults"
             )
 

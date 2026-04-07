@@ -1,12 +1,20 @@
-"""
-Unified HTML page generator for cell annotation interfaces.
+"""Class-based HTML generator (HTMLPageGenerator) + MK/HSPC annotation workflows.
 
-Provides a class-based API for generating HTML annotation pages with:
+Higher-level API built on ``html_export.py`` utilities (image processing,
+CSS/JS templates). Contains:
+
+**HTMLPageGenerator class:** Configurable annotation page generator with
+    localStorage strategies, custom stat formatters, experiment naming.
+**MK/HSPC functions:** load_samples_from_ram, create_mk_hspc_index,
+    generate_mk_hspc_page_html, generate_mk_hspc_pages,
+    export_mk_hspc_html_from_ram (authoritative implementations).
+
+See also ``html_export.py`` for core utilities and NMJ/vessel page generators.
+
+Features:
 - Configurable localStorage strategies (page-specific, global, experiment)
 - Dark theme styling
 - Keyboard navigation (Y/N/U for labeling, arrows for navigation)
-- Local + global annotation statistics
-- JSON export functionality
 - Custom stat formatters
 
 Example usage:
@@ -30,6 +38,7 @@ from collections.abc import Callable
 from pathlib import Path
 from typing import Any, Literal
 
+from xldvp_seg.exceptions import ConfigError
 from xldvp_seg.utils.logging import get_logger
 
 logger = get_logger(__name__)
@@ -121,7 +130,7 @@ class HTMLPageGenerator:
             ValueError: If storage_strategy is 'experiment' but experiment_name is None.
         """
         if storage_strategy == "experiment" and experiment_name is None:
-            raise ValueError("experiment_name is required when storage_strategy is 'experiment'")
+            raise ConfigError("experiment_name is required when storage_strategy is 'experiment'")
 
         self.cell_type = cell_type
         self.experiment_name = experiment_name
@@ -166,7 +175,7 @@ class HTMLPageGenerator:
         """
         if self.storage_strategy == "page-specific":
             if page_num is None:
-                raise ValueError("page_num is required for 'page-specific' storage strategy")
+                raise ConfigError("page_num is required for 'page-specific' storage strategy")
             return f"{self.cell_type}_labels_page{page_num}"
         elif self.storage_strategy == "global":
             return f"{self.cell_type}_annotations"

@@ -1,13 +1,19 @@
-"""
-Unified HTML export module for cell annotation interfaces.
+"""Core HTML export — page generators, CSS/JS templates, image utilities.
 
-Provides a consistent dark-themed annotation interface for all cell types
-(MK, HSPC, NMJ, etc.) with:
-- Keyboard navigation (Y/N keys for labeling, arrows for navigation)
-- Local + global annotation statistics
-- Dual localStorage keys (page-specific + global) for annotation persistence
-- JSON export functionality
-- Auto-loading of prior annotations (for post-classifier HTML regeneration)
+Used by the detection pipeline for per-tile HTML annotation pages. Contains:
+
+**Image utilities:** percentile_normalize, draw_mask_contour, image_to_base64,
+    get_largest_connected_component, compose_tile_rgb, create_hdf5_dataset
+**CSS/JS generators:** get_css, get_js, get_vessel_css, get_vessel_js
+**Page generators:** generate_annotation_page, generate_index_page,
+    generate_dual_index_page, export_samples_to_html
+**Vessel pages:** generate_vessel_annotation_page, generate_vessel_index_page,
+    export_vessel_samples_to_html
+
+MK/HSPC functions (load_samples_from_ram, create_mk_hspc_index, etc.) are
+backward-compatible shims delegating to ``html_generator.py``.
+
+See also ``html_generator.py`` for the class-based HTMLPageGenerator API.
 """
 
 import base64

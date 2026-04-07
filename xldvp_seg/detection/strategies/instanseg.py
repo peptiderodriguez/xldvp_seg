@@ -12,6 +12,7 @@ from typing import Any
 import numpy as np
 
 from xldvp_seg.detection.registry import register_strategy
+from xldvp_seg.exceptions import ConfigError, DetectionError
 from xldvp_seg.utils.logging import get_logger
 
 from .cell import CellStrategy
@@ -66,7 +67,7 @@ class InstanSegStrategy(CellStrategy):
             self._instanseg = InstanSeg(self.instanseg_model_name)
             logger.info("InstanSeg loaded: %s", self.instanseg_model_name)
         except ImportError:
-            raise RuntimeError(
+            raise DetectionError(
                 "InstanSeg not installed. Install with: pip install instanseg-torch\n"
                 "See: https://github.com/instanseg/instanseg"
             )
@@ -113,7 +114,7 @@ class InstanSegStrategy(CellStrategy):
             # labeled_masks shape: (1, n_types, H, W) where n_types=2 (nuclei+cells)
             pixel_size = self._pixel_size_um or kwargs.get("pixel_size_um", None)
             if pixel_size is None:
-                raise ValueError(
+                raise ConfigError(
                     "InstanSeg requires pixel_size_um — set in constructor or pass via kwargs"
                 )
             result = self._instanseg.eval_small_image(

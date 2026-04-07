@@ -26,6 +26,7 @@ from typing import Any
 
 import xldvp_seg.detection.strategies  # noqa: F401 — triggers @register_strategy decorators
 from xldvp_seg.detection.registry import StrategyRegistry
+from xldvp_seg.exceptions import ConfigError
 from xldvp_seg.utils.logging import get_logger
 
 logger = get_logger(__name__)
@@ -261,12 +262,12 @@ def create_strategy(
         strategy_class = StrategyRegistry.get_strategy_class(effective_type)
     except KeyError:
         available = ", ".join(sorted(StrategyRegistry.list_strategies()))
-        raise ValueError(f"Unknown cell_type: '{effective_type}'. Supported types: {available}")
+        raise ConfigError(f"Unknown cell_type: '{effective_type}'. Supported types: {available}")
 
     # Build strategy-specific kwargs
     kwargs_builder = _KWARGS_BUILDERS.get(effective_type)
     if kwargs_builder is None:
-        raise ValueError(
+        raise ConfigError(
             f"No parameter builder for cell_type '{effective_type}'. "
             f"Add a _build_kwargs_{effective_type}() function and register it in _KWARGS_BUILDERS."
         )

@@ -27,6 +27,7 @@ import torch
 import torchvision.models as tv_models
 import torchvision.transforms as tv_transforms
 
+from xldvp_seg.exceptions import DetectionError
 from xldvp_seg.utils.logging import get_logger
 
 logger = get_logger(__name__)
@@ -209,7 +210,7 @@ class ModelManager:
         """Get HF token or raise clear error for gated models."""
         token = self._get_hf_token()
         if token is None:
-            raise RuntimeError(
+            raise DetectionError(
                 f"{model_name} requires HuggingFace authentication.\n"
                 f"1. Create account at https://huggingface.co\n"
                 f"2. Accept license at https://huggingface.co/{hf_url}\n"
@@ -326,7 +327,7 @@ class ModelManager:
 
         checkpoint_path = find_checkpoint("sam2")
         if checkpoint_path is None:
-            raise RuntimeError(
+            raise DetectionError(
                 "SAM2 checkpoint not found. Searched locations:\n"
                 + "\n".join(f"  - {p}" for p in CHECKPOINT_PATHS["sam2"])
             )

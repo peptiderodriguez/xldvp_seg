@@ -360,7 +360,9 @@ class TestClassifySingleMarker:
         dets = _make_detections(10, feature_key="ch1_mean", values=np.ones(10) * 50.0)
         for d in dets:
             d["features"].pop("ch1_snr", None)
-        with pytest.raises(ValueError, match="SNR method requires"):
+        from xldvp_seg.exceptions import DataLoadError
+
+        with pytest.raises(DataLoadError, match="SNR method requires"):
             classify_single_marker(
                 dets,
                 channel=1,

@@ -22,6 +22,7 @@ import numpy as np
 from scipy import ndimage
 
 from xldvp_seg.detection.registry import register_strategy
+from xldvp_seg.exceptions import DetectionError
 from xldvp_seg.utils.feature_extraction import (
     SAM2_EMBEDDING_DIM,
     extract_morphological_features,
@@ -112,7 +113,7 @@ class TissuePatternStrategy(CellStrategy):
         cellpose = models.get("cellpose")
 
         if cellpose is None:
-            raise RuntimeError("Cellpose model required for tissue_pattern detection")
+            raise DetectionError("Cellpose model required for tissue_pattern detection")
 
         if extra_channels is None:
             logger.warning(
@@ -215,7 +216,7 @@ class TissuePatternStrategy(CellStrategy):
         sam2_predictor = models.get("sam2_predictor")
 
         if models.get("cellpose") is None:
-            raise RuntimeError("Cellpose model required for tissue_pattern detection")
+            raise DetectionError("Cellpose model required for tissue_pattern detection")
 
         # Generate masks using summed-channel segment()
         masks = self.segment(

@@ -22,6 +22,7 @@ import numpy as np
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 
+from xldvp_seg.exceptions import ConfigError, DataLoadError
 from xldvp_seg.pipeline.background import (
     _extract_centroids,
     local_background_subtract,
@@ -388,7 +389,7 @@ def classify_single_marker(
             snr_values = np.where(per_cell_bg > 0, raw_values / per_cell_bg, 0.0)
             logger.info("  Computing SNR from raw_values / per_cell_bg")
         else:
-            raise ValueError(
+            raise DataLoadError(
                 f"SNR method requires either pipeline bg correction (ch{channel}_snr in features) "
                 "or --background-subtract. Neither found."
             )
@@ -410,7 +411,7 @@ def classify_single_marker(
     elif method == "gmm":
         threshold, positive_mask = classify_gmm(values)
     else:
-        raise ValueError(f"Unknown method: {method}")
+        raise ConfigError(f"Unknown method: {method}")
 
     # Apply CV filter (force high-CV cells to negative)
     if cv_mask is not None:

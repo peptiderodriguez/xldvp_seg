@@ -27,6 +27,7 @@ import numpy as np
 from shapely.geometry import Polygon
 from shapely.validation import make_valid
 
+from xldvp_seg.exceptions import ConfigError
 from xldvp_seg.utils.logging import get_logger
 
 logger = get_logger(__name__)
@@ -399,7 +400,7 @@ def process_contour(
             - area_after_um2: final area
     """
     if pixel_size_um is None:
-        raise ValueError("pixel_size_um is required — must come from CZI metadata")
+        raise ConfigError("pixel_size_um is required — must come from CZI metadata")
     stats = {
         "points_before": 0,
         "points_after": 0,
@@ -535,7 +536,7 @@ def process_contours_batch(
             - area_change_pct: Percentage increase in area (from dilation)
     """
     if pixel_size_um is None:
-        raise ValueError("pixel_size_um is required — must come from CZI metadata")
+        raise ConfigError("pixel_size_um is required — must come from CZI metadata")
     results = {
         "contours_um": [],
         "valid_count": 0,
@@ -631,7 +632,7 @@ def process_detection_contours(
         Tuple of (processed_contours, stats_dict)
     """
     if pixel_size_um is None:
-        raise ValueError("pixel_size_um is required — must come from CZI metadata")
+        raise ConfigError("pixel_size_um is required — must come from CZI metadata")
     contours_px = [d.get(contour_key) for d in detections]
 
     if verbose:

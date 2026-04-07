@@ -17,6 +17,7 @@ from pathlib import Path
 
 import numpy as np
 
+from xldvp_seg.exceptions import DataLoadError
 from xldvp_seg.utils.detection_utils import get_contour_px
 
 try:
@@ -215,7 +216,7 @@ def build_anndata(detections, cell_type):
 
     n = len(detections)
     if n == 0:
-        raise ValueError("No detections to convert")
+        raise DataLoadError("No detections to convert")
 
     logger.info("Discovering features from %s detections...", f"{n:,}")
     morph_names, channel_stat_names, embedding_map = _discover_features(detections)

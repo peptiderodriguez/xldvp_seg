@@ -22,6 +22,7 @@ from pathlib import Path
 
 import numpy as np
 
+from xldvp_seg.exceptions import ConfigError
 from xldvp_seg.utils.json_utils import atomic_json_dump, fast_json_load, sanitize_for_json
 from xldvp_seg.utils.logging import get_logger
 
@@ -650,7 +651,7 @@ def _load_and_prepare_features(args):
             if v is not None:
                 gate_values.append(float(v))
         if not gate_values:
-            raise ValueError(f"No detections have feature '{gate_key}' -- cannot gate")
+            raise ConfigError(f"No detections have feature '{gate_key}' -- cannot gate")
         gate_cutoff = float(np.percentile(gate_values, args.gate_percentile))
         before = len(detections)
         detections = [
@@ -667,7 +668,7 @@ def _load_and_prepare_features(args):
         )
 
     if len(detections) < args.min_cluster_size:
-        raise ValueError(
+        raise ConfigError(
             f"Not enough detections ({len(detections)}) for clustering "
             f"(need at least {args.min_cluster_size})"
         )
@@ -723,7 +724,7 @@ def _load_and_prepare_features(args):
 
     if args.marker_only:
         if not marker_channels:
-            raise ValueError("marker_only requires marker channels but none found")
+            raise ConfigError("marker_only requires marker channels but none found")
         feature_names = sorted(marker_mean_keys)
         logger.info("  Using normalized marker channels only: %s", feature_names)
         X, feature_names, valid_indices = _extract_feature_matrix(detections, feature_names)
@@ -743,7 +744,7 @@ def _load_and_prepare_features(args):
         X, feature_names, valid_indices = _extract_feature_matrix(detections, feature_names)
 
     if X is None or len(X) == 0:
-        raise ValueError("No valid features found in detections")
+        raise ConfigError("No valid features found in detections")
 
     logger.info("  Feature matrix: %d cells x %d features", X.shape[0], X.shape[1])
 

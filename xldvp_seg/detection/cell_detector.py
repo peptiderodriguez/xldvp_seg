@@ -35,6 +35,7 @@ import torchvision.models as tv_models
 
 # Import base classes from strategies module
 from xldvp_seg.detection.strategies.base import Detection, DetectionStrategy
+from xldvp_seg.exceptions import ConfigError
 from xldvp_seg.utils.feature_extraction import (
     RESNET50_FEATURE_DIM,
     SAM2_EMBEDDING_DIM,
@@ -367,7 +368,7 @@ class CellDetector:
             Dict mapping cell type name to list of Detection objects
         """
         if pixel_size_um is None:
-            raise ValueError("pixel_size_um must be provided (from CZI metadata)")
+            raise ConfigError("pixel_size_um must be provided (from CZI metadata)")
 
         results = {}
 

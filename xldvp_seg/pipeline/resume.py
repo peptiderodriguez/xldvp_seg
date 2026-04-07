@@ -13,6 +13,7 @@ from pathlib import Path
 import h5py
 import numpy as np
 
+from xldvp_seg.exceptions import DataLoadError
 from xldvp_seg.pipeline.samples import _compute_tile_percentiles, filter_and_create_html_samples
 from xldvp_seg.utils.islet_utils import classify_islet_marker, compute_islet_marker_thresholds
 from xldvp_seg.utils.json_utils import fast_json_load
@@ -66,7 +67,9 @@ def compose_tile_rgb(
                     )
                 else:
                     if not all_channel_data:
-                        raise ValueError("No channel data loaded -- check --channel and CZI file")
+                        raise DataLoadError(
+                            "No channel data loaded -- check --channel and CZI file"
+                        )
                     dtype = next(iter(all_channel_data.values())).dtype
                     rgb_channels.append(np.zeros((tile_h, tile_w), dtype=dtype))
             return np.stack(rgb_channels, axis=-1)

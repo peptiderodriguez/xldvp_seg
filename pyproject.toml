@@ -26,7 +26,7 @@ classifiers = [
 
 # Core dependencies (PyTorch and SAM2 installed separately - see install.sh)
 dependencies = [
-    "numpy>=1.24,<2.0",
+    "numpy>=1.24",
     "pandas>=1.5",
     "opencv-python>=4.8",
     "scipy>=1.10",

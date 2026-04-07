@@ -34,6 +34,7 @@ except ImportError:
     pass
 import h5py
 
+from xldvp_seg.exceptions import ConfigError
 from xldvp_seg.utils.logging import get_logger
 
 try:
@@ -78,7 +79,7 @@ def deduplicate_by_mask_overlap(
         return []
 
     if mask_filename is None:
-        raise ValueError(
+        raise ConfigError(
             "mask_filename must be provided (e.g. '{cell_type}_masks.h5'). "
             "No default is assumed to avoid cell-type-specific assumptions."
         )
@@ -441,7 +442,7 @@ def deduplicate_by_iou_nms(
         return []
 
     if mask_filename is None:
-        raise ValueError(
+        raise ConfigError(
             "mask_filename must be provided (e.g. '{cell_type}_masks.h5'). "
             "No default is assumed to avoid cell-type-specific assumptions."
         )

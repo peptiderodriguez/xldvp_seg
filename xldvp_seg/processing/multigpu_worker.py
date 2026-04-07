@@ -39,6 +39,7 @@ from typing import Any
 
 import numpy as np
 
+from xldvp_seg.exceptions import DetectionError
 from xldvp_seg.processing.multigpu_shm import (
     register_shm_for_cleanup,
     unregister_shm_for_cleanup,
@@ -735,11 +736,11 @@ class MultiGPUTileProcessor:
 
         if errors:
             self.stop()
-            raise RuntimeError(f"Worker init errors: {errors}")
+            raise DetectionError(f"Worker init errors: {errors}")
 
         if len(ready_gpus) < self.num_gpus:
             self.stop()
-            raise RuntimeError(f"Only {len(ready_gpus)}/{self.num_gpus} workers ready")
+            raise DetectionError(f"Only {len(ready_gpus)}/{self.num_gpus} workers ready")
 
         logger.info(f"All {self.num_gpus} workers ready")
         self._workers_started = True
@@ -752,7 +753,7 @@ class MultiGPUTileProcessor:
     def collect_result(self, timeout: float = None) -> dict[str, Any] | None:
         """Collect one tile result from workers."""
         if not self._workers_started:
-            raise RuntimeError("Call start() first")
+            raise DetectionError("Call start() first")
 
         start = time.time()
         remaining = timeout if timeout is not None else float("inf")

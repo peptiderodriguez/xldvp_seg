@@ -274,12 +274,12 @@ def load_rf_classifier(model_path: str) -> dict:
     else:
         rf_model = model_data.get("model", model_data.get("classifier"))
         if rf_model is None:
-            raise ValueError(
+            raise DataLoadError(
                 f"Classifier at {model_path} has no 'model' or 'classifier' key. "
                 f"Keys found: {list(model_data.keys())}"
             )
         if not hasattr(rf_model, "predict"):
-            raise ValueError(
+            raise DataLoadError(
                 f"Classifier at {model_path}: loaded object has no predict() method. "
                 f"Type: {type(rf_model).__name__}"
             )

@@ -21,6 +21,7 @@ import numpy as np
 from scipy import ndimage
 
 from xldvp_seg.detection.registry import register_strategy
+from xldvp_seg.exceptions import ConfigError, DetectionError
 from xldvp_seg.utils.feature_extraction import (
     SAM2_EMBEDDING_DIM,
     extract_morphological_features,
@@ -204,12 +205,12 @@ class IsletStrategy(CellStrategy):
         cellpose = models.get("cellpose")
 
         if cellpose is None:
-            raise RuntimeError("Cellpose model required for islet detection")
+            raise DetectionError("Cellpose model required for islet detection")
 
         # --- Build Cellpose input from extra_channels ---
         nuclear_raw = extra_channels.get(self.nuclear_channel) if extra_channels else None
         if nuclear_raw is None:
-            raise ValueError(
+            raise ConfigError(
                 f"IsletStrategy requires extra_channels with nuclear_channel={self.nuclear_channel}. "
                 f"Available: {list(extra_channels.keys()) if extra_channels else 'None'}"
             )
@@ -220,7 +221,7 @@ class IsletStrategy(CellStrategy):
             # PM + nuclei mode: 2-channel Cellpose input
             membrane_raw = extra_channels.get(self.membrane_channel) if extra_channels else None
             if membrane_raw is None:
-                raise ValueError(
+                raise ConfigError(
                     f"IsletStrategy requires extra_channels with membrane_channel={self.membrane_channel}. "
                     f"Available: {list(extra_channels.keys()) if extra_channels else 'None'}"
                 )
@@ -299,14 +300,14 @@ class IsletStrategy(CellStrategy):
         sam2_predictor = models.get("sam2_predictor")
 
         if cellpose is None:
-            raise RuntimeError("Cellpose model required for islet detection")
+            raise DetectionError("Cellpose model required for islet detection")
 
         # =================================================================
         # Cellpose segmentation (compact mode — NO full-tile boolean masks)
         # =================================================================
         nuclear_raw = extra_channels.get(self.nuclear_channel) if extra_channels else None
         if nuclear_raw is None:
-            raise ValueError(
+            raise ConfigError(
                 f"IsletStrategy requires extra_channels with nuclear_channel={self.nuclear_channel}. "
                 f"Available: {list(extra_channels.keys()) if extra_channels else 'None'}"
             )
@@ -317,7 +318,7 @@ class IsletStrategy(CellStrategy):
             # PM + nuclei mode: 2-channel Cellpose input
             membrane_raw = extra_channels.get(self.membrane_channel) if extra_channels else None
             if membrane_raw is None:
-                raise ValueError(
+                raise ConfigError(
                     f"IsletStrategy requires extra_channels with membrane_channel={self.membrane_channel}. "
                     f"Available: {list(extra_channels.keys()) if extra_channels else 'None'}"
                 )

@@ -26,6 +26,8 @@ from typing import Any, Literal
 
 from pydantic import BaseModel, Field, field_validator, model_validator
 
+from xldvp_seg.exceptions import DataLoadError
+
 # =============================================================================
 # Base Types
 # =============================================================================
@@ -302,12 +304,12 @@ def validate_json_file(
 
     except json.JSONDecodeError as e:
         if raise_on_error:
-            raise ValueError(f"Invalid JSON in {file_path}: {e}")
+            raise DataLoadError(f"Invalid JSON in {file_path}: {e}")
         return None
 
     except Exception as e:
         if raise_on_error:
-            raise ValueError(f"Validation failed for {file_path}: {e}")
+            raise DataLoadError(f"Validation failed for {file_path}: {e}")
         return None
 
 
@@ -346,13 +348,13 @@ def validate_nmj_features_file(
             data = json.load(f)
 
         if not isinstance(data, list):
-            raise ValueError("nmj_features.json must be a list")
+            raise DataLoadError("nmj_features.json must be a list")
 
         return [NMJFeatureFile.model_validate(item) for item in data]
 
     except Exception as e:
         if raise_on_error:
-            raise ValueError(f"Validation failed for {file_path}: {e}")
+            raise DataLoadError(f"Validation failed for {file_path}: {e}")
         return None
 
 

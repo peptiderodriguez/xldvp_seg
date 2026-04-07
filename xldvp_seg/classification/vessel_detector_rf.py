@@ -464,7 +464,7 @@ class VesselDetectorRF(BaseVesselClassifier):
                 )
 
         if not X_list:
-            raise ValueError(
+            raise ClassificationError(
                 "No matching samples found! Check annotation UIDs match detection UIDs."
             )
 

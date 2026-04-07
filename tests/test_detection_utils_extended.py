@@ -243,11 +243,13 @@ class TestLoadRfClassifier:
         assert result["feature_names"] == ["f1", "f2", "f3"]
 
     def test_dict_without_model_key_raises(self, tmp_path):
-        """Dict without model/classifier key should raise ValueError."""
+        """Dict without model/classifier key should raise DataLoadError."""
         import joblib
+
+        from xldvp_seg.exceptions import DataLoadError
 
         model_path = tmp_path / "bad_model.pkl"
         joblib.dump({"feature_names": ["f1"]}, model_path)
 
-        with pytest.raises(ValueError, match="no 'model' or 'classifier' key"):
+        with pytest.raises(DataLoadError, match="no 'model' or 'classifier' key"):
             load_rf_classifier(str(model_path))

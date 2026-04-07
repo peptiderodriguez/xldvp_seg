@@ -17,6 +17,8 @@ previous quadrant (minimizes laser head / stage travel).
 
 import math
 
+from xldvp_seg.exceptions import ConfigError
+
 WELLS_PER_PLATE = 308  # 4 quadrants × 77 wells
 
 _EVEN_ROWS = ["B", "D", "F", "H", "J", "L", "N"]
@@ -50,7 +52,7 @@ def generate_quadrant_serpentine(quadrant, start_corner="TL"):
         77 well addresses in serpentine order (e.g. ['B2', 'B4', ..., 'N22']).
     """
     if quadrant not in _QUAD_MAP:
-        raise ValueError(f"Unknown quadrant: {quadrant}")
+        raise ConfigError(f"Unknown quadrant: {quadrant}")
     rows, cols = _QUAD_MAP[quadrant]
 
     if start_corner == "TL":
@@ -66,7 +68,7 @@ def generate_quadrant_serpentine(quadrant, start_corner="TL"):
         row_order = list(reversed(rows))
         first_row_left_to_right = False
     else:
-        raise ValueError(f"Unknown start_corner: {start_corner}")
+        raise ConfigError(f"Unknown start_corner: {start_corner}")
 
     wells = []
     for i, row in enumerate(row_order):
@@ -123,7 +125,7 @@ def generate_plate_wells(n_wells, start_quadrant="B2"):
     if n_wells <= 0:
         return []
     if n_wells > WELLS_PER_PLATE:
-        raise ValueError(
+        raise ConfigError(
             f"Requested {n_wells} wells but a single 384-well plate only has "
             f"{WELLS_PER_PLATE} usable wells (4 quadrants x 77). "
             f"Use generate_multiplate_wells() for overflow."
