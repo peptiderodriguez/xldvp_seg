@@ -544,8 +544,10 @@ def get_memory_threshold(key: str) -> float:
 # CONFIGURATION VALIDATION
 # =============================================================================
 
+from xldvp_seg.exceptions import ConfigError
 
-class ConfigValidationError(Exception):
+
+class ConfigValidationError(ConfigError):
     """Raised when configuration validation fails."""
 
     pass

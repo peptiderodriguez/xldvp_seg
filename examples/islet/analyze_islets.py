@@ -1472,7 +1472,6 @@ def _make_pie_svg(islet_feat, marker_names, size=60):
     cx, cy = r, r
     slices = []
     colors = list(_MARKER_HTML_COLORS[: len(marker_names)]) + ["#ffaa00", "#555"]
-    labels = list(marker_names) + ["multi", "none"]
     values = [islet_feat.get(f"n_{n}", 0) for n in marker_names]
     values.append(islet_feat.get("n_multi", 0))
     values.append(islet_feat.get("n_none", 0))

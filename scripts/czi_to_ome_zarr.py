@@ -232,7 +232,7 @@ def create_zarr_store(
         # Adjust chunks for smaller levels
         level_chunks = tuple(min(c, s) for c, s in zip(chunks, current_shape))
 
-        arr = _create_arr(
+        _create_arr(
             str(level),
             shape=current_shape,
             chunks=level_chunks,

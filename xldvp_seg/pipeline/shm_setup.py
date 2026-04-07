@@ -9,6 +9,7 @@ from pathlib import Path
 import numpy as np
 
 from xldvp_seg.detection.tissue import calibrate_tissue_threshold, filter_tissue_tiles
+from xldvp_seg.exceptions import ConfigError, DetectionError
 from xldvp_seg.pipeline.preprocessing import apply_slide_preprocessing
 from xldvp_seg.pipeline.samples import generate_tile_grid
 from xldvp_seg.utils.json_utils import atomic_json_dump
@@ -180,7 +181,7 @@ def setup_shared_memory(
     )
 
     if len(tissue_tiles) == 0:
-        raise RuntimeError(
+        raise DetectionError(
             "No tissue-containing tiles found! Check CZI file and tissue detection thresholds."
         )
 
@@ -215,7 +216,7 @@ def setup_shared_memory(
     # Tiles are dicts with 'x' and 'y' keys.
     if getattr(args, "tile_shard", None):
         if getattr(args, "sample_fraction", 1.0) != 1.0:
-            raise ValueError("Multi-node sharding requires sample_fraction=1.0")
+            raise ConfigError("Multi-node sharding requires sample_fraction=1.0")
         tile_list_file = slide_output_dir / "sampled_tiles.json"
         # All shards derive the same tile list from the same CZI (sample_fraction=1.0),
         # so atomic writes are safe — last writer wins with identical content.

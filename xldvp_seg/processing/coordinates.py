@@ -347,8 +347,10 @@ def is_spatial_uid(uid: str) -> bool:
 # Coordinate Validation
 # =============================================================================
 
+from xldvp_seg.exceptions import ConfigError
 
-class CoordinateValidationError(ValueError):
+
+class CoordinateValidationError(ConfigError):
     """Exception raised for invalid coordinates."""
 
     pass

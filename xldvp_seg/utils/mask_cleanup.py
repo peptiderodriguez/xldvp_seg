@@ -285,10 +285,7 @@ def refine_mask_intensity(
         if not refined.any():
             break
 
-        # Create 1-pixel boundary ring: dilated minus current mask
-        dilated = ndimage.binary_dilation(refined, iterations=1)
-        boundary = dilated & ~refined
-        # Actually we want inner boundary: eroded subtracted from mask
+        # Inner boundary: mask minus eroded mask
         eroded = ndimage.binary_erosion(refined, iterations=1)
         inner_boundary = refined & ~eroded
 

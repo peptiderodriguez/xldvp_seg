@@ -473,7 +473,6 @@ def run_squidpy_analysis(
 
     # Build AnnData from positive cells
     pos_pos = positions[positive_indices]
-    n_pos = len(positive_indices)
 
     # Cell type labels and SNR features
     cell_types = []

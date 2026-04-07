@@ -494,9 +494,6 @@ def main():
     else:
         display_channels = [0, 1, 2]
 
-    # Resolve tile size
-    tile_size = args.tile_size or pipeline_config.get("tile_size", 4000)
-
     # Determine channels to load
     if args.channels:
         channels_to_load = [int(x.strip()) for x in args.channels.split(",")]

@@ -602,7 +602,6 @@ def plot_zonation_heatmap(all_data, markers, output_dir, n_bins=20):
 
     frac = np.concatenate([d["frac_pos"] for d in all_data])
     bin_edges = np.linspace(0, 1, n_bins + 1)
-    bin_centers = (bin_edges[:-1] + bin_edges[1:]) / 2
     bin_idx = np.clip(np.digitize(frac, bin_edges) - 1, 0, n_bins - 1)
 
     heatmap = np.zeros((len(markers), n_bins))

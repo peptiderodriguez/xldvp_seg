@@ -80,9 +80,6 @@ def detect_vessels_lumen_based(
     # Create lumen mask (dark regions)
     lumen_mask = (img_norm < lumen_thresh).astype(np.uint8) * 255
 
-    # Create wall mask (bright regions)
-    wall_mask = (img_norm > wall_thresh).astype(np.uint8) * 255
-
     # Clean up lumen mask
     kernel_small = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (3, 3))
     kernel_medium = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (5, 5))

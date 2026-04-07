@@ -1,8 +1,9 @@
-"""Tests for xldvp_seg.api.tl -- analysis tool wrappers.
+"""Tests for xldvp_seg.api -- analysis tool wrappers, plotting, and I/O.
 
 Uses unittest.mock.patch to avoid heavy imports (sklearn, scripts, GPU models).
-Tests that tl.score(), tl.markers(), and tl.train() pass arguments correctly
-and return expected results.
+Tests that tl.score(), tl.markers(), tl.train(), pl.umap(), pl.spatial(),
+io.export_lmd(), and pp.detect() pass arguments correctly and return expected
+results.
 
 Run with: pytest tests/test_api.py -v
 """
@@ -12,7 +13,7 @@ from unittest.mock import MagicMock, patch
 import numpy as np
 import pytest
 
-from xldvp_seg.api import tl
+from xldvp_seg.api import io, pl, pp, tl
 from xldvp_seg.core import SlideAnalysis
 
 
@@ -410,3 +411,111 @@ class TestTlNuclei:
         slide = SlideAnalysis.from_detections(_make_detections(3))
         with pytest.raises(NotImplementedError, match="count_nuclei_per_cell"):
             tl.nuclei(slide, czi_path="/fake/path.czi")
+
+    def test_nuclei_error_mentions_pipeline_flag(self):
+        slide = SlideAnalysis.from_detections(_make_detections(3))
+        with pytest.raises(NotImplementedError, match="--count-nuclei"):
+            tl.nuclei(slide, czi_path="/fake/path.czi")
+
+
+class TestPpDetect:
+    """Tests for pp.detect() -- command builder."""
+
+    def test_detect_returns_command_string(self):
+        cmd = pp.detect(czi_path="/fake/slide.czi", cell_type="cell")
+        assert isinstance(cmd, str)
+        assert "xlseg detect" in cmd
+        assert "--czi-path /fake/slide.czi" in cmd
+        assert "--cell-type cell" in cmd
+
+    def test_detect_includes_channel_spec(self):
+        cmd = pp.detect(
+            czi_path="/fake/slide.czi",
+            channel_spec="cyto=PM,nuc=488",
+        )
+        assert "cyto=PM,nuc=488" in cmd
+
+    def test_detect_includes_output_dir(self):
+        cmd = pp.detect(czi_path="/fake/slide.czi", output_dir="/tmp/out")
+        assert "--output-dir /tmp/out" in cmd
+
+    def test_detect_does_not_execute(self):
+        """detect() must return a string, not run anything."""
+        result = pp.detect(czi_path="/nonexistent.czi")
+        assert isinstance(result, str)
+
+
+class TestPlUmap:
+    """Tests for pl.umap() -- UMAP visualization."""
+
+    def test_umap_requires_detections_path(self):
+        slide = SlideAnalysis.from_detections(_make_detections(3))
+        assert slide.detections_path is None
+        with pytest.raises(ValueError, match="no detections_path"):
+            pl.umap(slide)
+
+    @patch("xldvp_seg.analysis.cluster_features.run_clustering")
+    def test_umap_delegates_to_run_clustering(self, mock_run, tmp_path):
+        """umap() should call run_clustering with methods='umap'."""
+        import json
+
+        det_path = tmp_path / "cell_detections.json"
+        det_path.write_text(json.dumps(_make_detections(5)))
+        slide = SlideAnalysis.load(tmp_path)
+
+        out_dir = tmp_path / "umap_out"
+        result = pl.umap(slide, output_dir=str(out_dir))
+
+        assert result is slide
+        mock_run.assert_called_once()
+        call_kwargs = mock_run.call_args
+        assert call_kwargs.kwargs["methods"] == "umap"
+        assert str(det_path) in call_kwargs.kwargs["detections"]
+
+    @patch("xldvp_seg.analysis.cluster_features.run_clustering")
+    def test_umap_forwards_kwargs(self, mock_run, tmp_path):
+        """Extra kwargs should be forwarded to run_clustering."""
+        import json
+
+        det_path = tmp_path / "cell_detections.json"
+        det_path.write_text(json.dumps(_make_detections(5)))
+        slide = SlideAnalysis.load(tmp_path)
+
+        pl.umap(slide, output_dir=str(tmp_path / "out"), n_neighbors=50, min_dist=0.3)
+
+        call_kwargs = mock_run.call_args.kwargs
+        assert call_kwargs["n_neighbors"] == 50
+        assert call_kwargs["min_dist"] == 0.3
+
+
+class TestPlSpatial:
+    """Tests for pl.spatial() -- should raise NotImplementedError."""
+
+    def test_spatial_not_implemented(self):
+        slide = SlideAnalysis.from_detections(_make_detections(3))
+        with pytest.raises(NotImplementedError):
+            pl.spatial(slide)
+
+    def test_spatial_error_message_mentions_viewer(self):
+        slide = SlideAnalysis.from_detections(_make_detections(3))
+        with pytest.raises(NotImplementedError, match="generate_multi_slide_spatial_viewer"):
+            pl.spatial(slide)
+
+
+class TestIoExportLmd:
+    """Tests for io.export_lmd() -- should raise NotImplementedError with helpful message."""
+
+    def test_export_lmd_not_implemented(self):
+        slide = SlideAnalysis.from_detections(_make_detections(3))
+        with pytest.raises(NotImplementedError):
+            io.export_lmd(slide, crosses="/fake/crosses.json")
+
+    def test_export_lmd_error_mentions_cli(self):
+        slide = SlideAnalysis.from_detections(_make_detections(3))
+        with pytest.raises(NotImplementedError, match="xlseg export-lmd"):
+            io.export_lmd(slide, crosses="/fake/crosses.json")
+
+    def test_export_lmd_error_mentions_building_blocks(self):
+        slide = SlideAnalysis.from_detections(_make_detections(3))
+        with pytest.raises(NotImplementedError, match="xldvp_seg.lmd.export"):
+            io.export_lmd(slide, crosses="/fake/crosses.json")

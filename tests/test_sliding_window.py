@@ -21,7 +21,6 @@ from xldvp_seg.analysis.sliding_window_sampling import (
 class TestSpatiallyBalancedSample:
     def test_basic_grid(self):
         """Grid of points: should select cells until area target is met."""
-        rng = np.random.default_rng(42)
         n = 50
         positions = np.column_stack([np.linspace(0, 500, n), np.zeros(n)])
         areas = np.full(n, 100.0)  # each cell is 100 um^2
@@ -124,7 +123,6 @@ class TestPlaceWindowsAlongPaths:
 class TestRunSampling:
     def test_basic_sampling(self):
         """Sampling should fill windows with cells from the ROI."""
-        rng = np.random.default_rng(42)
         n = 200
         positions = np.column_stack([np.linspace(0, 1000, n), np.zeros(n)])
         areas = np.full(n, 50.0)
@@ -146,7 +144,6 @@ class TestRunSampling:
 
     def test_no_overlap_in_cell_assignments(self):
         """Each cell should be assigned to at most one window."""
-        rng = np.random.default_rng(42)
         n = 100
         positions = np.column_stack([np.linspace(0, 500, n), np.zeros(n)])
         areas = np.full(n, 50.0)

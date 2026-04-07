@@ -430,8 +430,6 @@ class HTMLPageGenerator:
         Returns:
             JavaScript code string.
         """
-        storage_key = self.get_storage_key(page_num=1)  # Base key for global/experiment
-
         return f"""
         const CELL_TYPE = '{_esc(self.cell_type)}';
         const EXPERIMENT_NAME = '{_esc(self.experiment_name or "")}';
@@ -1287,8 +1285,8 @@ def load_samples_from_ram(tiles_dir, slide_image, pixel_size_um, cell_type="mk",
         try:
             matches = re.findall(r"slice\((\d+),\s*(\d+)", window_str)
             if len(matches) >= 2:
-                tile_y1, tile_y2 = int(matches[0][0]), int(matches[0][1])
-                tile_x1, tile_x2 = int(matches[1][0]), int(matches[1][1])
+                tile_y1, _tile_y2 = int(matches[0][0]), int(matches[0][1])
+                tile_x1, _tile_x2 = int(matches[1][0]), int(matches[1][1])
             else:
                 continue
         except Exception as e:
@@ -1392,7 +1390,6 @@ def load_samples_from_ram(tiles_dir, slide_image, pixel_size_um, cell_type="mk",
 
             # Resize crop and mask to 300x300
             pil_img = Image.fromarray(crop)
-            original_size = pil_img.size
             pil_img = pil_img.resize((300, 300), Image.LANCZOS)
             crop_resized = np.array(pil_img)
 

@@ -32,10 +32,12 @@ def detect(
     num_gpus: int = 4,
     **kwargs: Any,
 ) -> str:
-    """Run detection pipeline.
+    """Build a CLI command string for detection. Does not execute detection.
 
-    For production runs, use run_pipeline.sh with YAML configs instead.
-    This function builds and logs the equivalent command.
+    Use ``xlseg detect`` from the command line or call
+    ``run_segmentation.run_pipeline(args)`` directly for programmatic access.
+    Detection requires GPU workers, shared memory, and tile dispatch which
+    cannot be reduced to a simple function call.
 
     Args:
         czi_path: Path to CZI file.
@@ -45,7 +47,7 @@ def detect(
         num_gpus: Number of GPUs.
 
     Returns:
-        Command string (for now).
+        CLI command string suitable for shell execution.
     """
     parts = [f"xlseg detect --czi-path {czi_path} --cell-type {cell_type}"]
     if output_dir:

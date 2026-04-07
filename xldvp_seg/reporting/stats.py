@@ -72,7 +72,6 @@ def compute_summary_statistics(
     diameter_stats = _compute_distribution_stats(diameters) if diameters else {}
 
     # Wall thickness statistics
-    wall_thicknesses = _extract_values(features_list, "wall_thickness_mean_um")
     wall_stats = compute_wall_thickness_quantiles(features_list)
 
     # Area statistics

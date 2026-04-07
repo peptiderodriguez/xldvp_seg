@@ -18,6 +18,7 @@ Usage:
 __all__ = [
     "clustering",
     "contour_processing",
+    "export",
     "selection",
     "well_plate",
 ]

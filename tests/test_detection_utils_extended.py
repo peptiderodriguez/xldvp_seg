@@ -184,8 +184,10 @@ class TestExtractPositionsUm:
 
 class TestLoadRfClassifier:
     def test_missing_file_raises(self):
-        """Missing file should raise ValueError."""
-        with pytest.raises(ValueError, match="Failed to load"):
+        """Missing file should raise DataLoadError (also an IOError)."""
+        from xldvp_seg.exceptions import DataLoadError
+
+        with pytest.raises(DataLoadError, match="Failed to load"):
             load_rf_classifier("/nonexistent/path/model.pkl")
 
     def test_dict_format(self, tmp_path):

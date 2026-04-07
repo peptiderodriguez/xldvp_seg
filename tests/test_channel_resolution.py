@@ -117,7 +117,6 @@ class TestParseMarkersFromFilename:
 
     def test_wavelength_before_name(self):
         markers = parse_markers_from_filename("488Slc17a7_647Gad1.czi")
-        names = [m["name"] for m in markers]
         wavelengths = [m["wavelength"] for m in markers]
         assert 488 in wavelengths
         assert 647 in wavelengths

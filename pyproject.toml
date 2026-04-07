@@ -116,7 +116,6 @@ ignore = [
     "C405",   # unnecessary literal within set() (cosmetic)
     "C414",   # unnecessary list() within sorted() (cosmetic)
     "C416",   # unnecessary comprehension (cosmetic)
-    "F841",   # local variable assigned but never used (common in unpacking)
     "N802",   # function name should be lowercase (scientific code)
 ]
 
@@ -127,6 +126,7 @@ ignore = [
 "xldvp_seg/detection/strategies/tissue_pattern.py" = ["F821"]  # forward reference
 "tests/test_deduplication.py" = ["F401"]  # hdf5plugin side-effect import
 "tests/test_feature_extraction.py" = ["F401"]  # torch availability check
+"xldvp_seg/detection/strategies/vessel.py" = ["F841"]  # actively being modified
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

@@ -102,8 +102,6 @@ def compute_graph_patterns(
                 continue
 
             pts = tp[cmask]
-            cx_mean = pts[:, 0].mean()
-            cy_mean = pts[:, 1].mean()
 
             # Pattern classification via canonical graph_topology functions
             elongation = _elongation(pts)

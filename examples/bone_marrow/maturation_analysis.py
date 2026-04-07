@@ -737,7 +737,7 @@ def run_phase3(args):
     nuclear = np.load(args.input, allow_pickle=True)
 
     area_um2 = data["area_um2"]
-    groups = data["groups"]
+    _groups = data["groups"]
 
     X_pca_valid = nuclear["X_pca_valid"]
     valid_idx = nuclear["valid_indices"]
@@ -935,7 +935,7 @@ def run_phase4(args):
 
     # Phase 1 metadata (all MKs)
     groups_all = data["groups"]
-    slides = data["slides"]
+    _slides = data["slides"]
     area_um2_all = data["area_um2"]
     mk_scores_all = data["mk_scores"]
     N_all = len(groups_all)
@@ -945,7 +945,7 @@ def run_phase4(args):
     nuc_features = nuclear["morph_features"][valid_idx]  # only valid MKs
     nuc_feature_names = list(nuclear["morph_feature_names"])
     X_pca = nuclear["X_pca_valid"]
-    n95 = int(nuclear["n95_pcs"][0])
+    _n95 = int(nuclear["n95_pcs"][0])
 
     # Phase 3 clusters (indexed on valid MKs only)
     best_labels = clusters["best_labels"]
@@ -1514,7 +1514,6 @@ def _plot_pseudotime_violins(pseudotime, groups, pairwise_results, outdir):
     bracket_step = 0.06 * y_range
 
     # Map group names to violin positions for bracket placement
-    group_pos = {g: i for i, g in enumerate(plot_groups)}
     sig_pairs = []
     for i in range(len(plot_groups)):
         for j in range(i + 1, len(plot_groups)):

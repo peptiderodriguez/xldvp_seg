@@ -30,7 +30,7 @@ def process_slide(czi_path, bone_regions, scale_factor=0.03):
     try:
         scaling = czi.get_scaling()
         if scaling and len(scaling) >= 2:
-            pixel_size_um = scaling[0] * 1e6
+            pixel_size_um = scaling[0] * 1e6  # noqa: F841
     except Exception:
         pass
 

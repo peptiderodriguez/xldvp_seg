@@ -81,7 +81,6 @@ def draw_cell(
 
 def main():
     fig = plt.figure(figsize=(16, 18))
-    rng = np.random.default_rng(42)
 
     # Compute exaggerated HU values for visualization
     EXAG_DATA = {}

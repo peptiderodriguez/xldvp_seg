@@ -76,7 +76,6 @@ class TestDeduplicateByIoUNMS:
         # second tile at the same origin so both detections map to overlapping
         # global coordinates.
         mask1 = _make_rect_mask((200, 200), 50, 150, 50, 150, label=1)
-        mask2 = _make_rect_mask((200, 200), 50, 150, 50, 150, label=1)
 
         _create_tile_masks(tiles_dir, (0, 0), mask1, self.MASK_FILE)
         # Second tile at same origin but different tile dir requires same coords.

@@ -53,6 +53,7 @@ from .artery_vein_classifier import (
     MINIMAL_ARTERY_VEIN_FEATURES,
     ArteryVeinClassifier,
 )
+from .base import BaseVesselClassifier
 from .feature_selection import (
     analyze_feature_importance,
     cross_validate_features,
@@ -86,6 +87,8 @@ from .vessel_type_classifier import (
 )
 
 __all__ = [
+    # Base class
+    "BaseVesselClassifier",
     # Vessel Detection (Stage 1)
     "VesselDetectorRF",
     "train_vessel_detector",

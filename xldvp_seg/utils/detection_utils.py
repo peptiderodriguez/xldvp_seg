@@ -10,6 +10,7 @@ from pathlib import Path
 
 import numpy as np
 
+from xldvp_seg.exceptions import DataLoadError
 from xldvp_seg.utils.json_utils import fast_json_load
 from xldvp_seg.utils.logging import get_logger
 
@@ -232,7 +233,7 @@ def load_rf_classifier(model_path: str) -> dict:
     try:
         model_data = joblib.load(model_path)
     except (EOFError, ModuleNotFoundError, FileNotFoundError) as e:
-        raise ValueError(f"Failed to load classifier from {model_path}: {e}") from e
+        raise DataLoadError(f"Failed to load classifier from {model_path}: {e}") from e
 
     if isinstance(model_data, Pipeline):
         pipeline = model_data

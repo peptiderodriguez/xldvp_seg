@@ -31,7 +31,6 @@ import json
 from pathlib import Path
 from typing import Any
 
-import joblib
 import numpy as np
 from sklearn.ensemble import RandomForestClassifier
 from sklearn.metrics import (
@@ -44,8 +43,10 @@ from sklearn.model_selection import (
     cross_val_score,
 )
 from sklearn.pipeline import Pipeline
-from sklearn.preprocessing import LabelEncoder, StandardScaler
+from sklearn.preprocessing import StandardScaler
 
+from xldvp_seg.classification.base import BaseVesselClassifier
+from xldvp_seg.exceptions import ClassificationError
 from xldvp_seg.utils.logging import get_logger
 
 logger = get_logger(__name__)
@@ -95,7 +96,7 @@ MINIMAL_ARTERY_VEIN_FEATURES = [
 ]
 
 
-class ArteryVeinClassifier:
+class ArteryVeinClassifier(BaseVesselClassifier):
     """
     Random Forest classifier for artery vs vein classification.
 
@@ -113,6 +114,8 @@ class ArteryVeinClassifier:
 
     # Class labels
     LABELS = ["artery", "vein"]
+
+    MODEL_TYPE = "artery_vein_classifier"
 
     def __init__(
         self,
@@ -136,31 +139,28 @@ class ArteryVeinClassifier:
             random_state: Random seed for reproducibility
             feature_names: List of feature names to use (None for defaults)
         """
-        self.n_estimators = n_estimators
-        self.max_depth = max_depth
-        self.min_samples_split = min_samples_split
-        self.min_samples_leaf = min_samples_leaf
-        self.class_weight = class_weight
-        self.random_state = random_state
-
-        self.model = RandomForestClassifier(
+        super().__init__(
             n_estimators=n_estimators,
             max_depth=max_depth,
             min_samples_split=min_samples_split,
             min_samples_leaf=min_samples_leaf,
             class_weight=class_weight,
             random_state=random_state,
-            n_jobs=-1,
+            feature_names=feature_names,
+            default_features=ARTERY_VEIN_FEATURES,
+            use_scaler=True,
+            label_classes=self.LABELS,
         )
 
-        # NOTE: StandardScaler is unnecessary for RF (scale-invariant) but kept
-        # for backward compatibility with previously trained/serialized models.
-        self.scaler = StandardScaler()
-        self.label_encoder = LabelEncoder()
-        self.label_encoder.fit(self.LABELS)
-        self.feature_names = feature_names or ARTERY_VEIN_FEATURES.copy()
-        self.trained = False
-        self.metrics: dict[str, Any] = {}
+    def _coerce_value(self, v: Any) -> float:
+        """Handle bool values in addition to base coercion."""
+        if v is None:
+            return 0.0
+        if isinstance(v, (list, tuple)):
+            return 0.0
+        if isinstance(v, bool):
+            return 1.0 if v else 0.0
+        return float(v)
 
     def _compute_derived_features(self, features: dict[str, Any]) -> dict[str, Any]:
         """
@@ -185,39 +185,6 @@ class ArteryVeinClassifier:
         features["wall_thickness_ratio"] = wall_thickness / max(outer_diameter, 1)
 
         return features
-
-    def _extract_features_from_dict(
-        self, features_dict: dict[str, Any], feature_names: list[str] | None = None
-    ) -> np.ndarray:
-        """
-        Extract feature vector from a features dictionary.
-
-        Args:
-            features_dict: Dictionary of features from vessel detection
-            feature_names: List of feature names to extract
-
-        Returns:
-            1D numpy array of feature values
-        """
-        if feature_names is None:
-            feature_names = self.feature_names
-
-        # Compute derived features first
-        features_dict = self._compute_derived_features(features_dict)
-
-        values = []
-        for name in feature_names:
-            val = features_dict.get(name, 0)
-            # Handle non-scalar values
-            if isinstance(val, (list, tuple)):
-                val = 0
-            elif val is None:
-                val = 0
-            elif isinstance(val, bool):
-                val = 1 if val else 0
-            values.append(float(val))
-
-        return np.array(values, dtype=np.float32)
 
     def _prepare_training_data(
         self,
@@ -443,7 +410,7 @@ class ArteryVeinClassifier:
             - confidence: Probability of predicted class (0.0 to 1.0)
         """
         if not self.trained:
-            raise RuntimeError("Model not trained. Call train() or load() first.")
+            raise ClassificationError("Model not trained. Call train() or load() first.")
 
         # Extract features
         if isinstance(features, dict):
@@ -479,7 +446,7 @@ class ArteryVeinClassifier:
             - confidences: Array of confidence scores
         """
         if not self.trained:
-            raise RuntimeError("Model not trained. Call train() or load() first.")
+            raise ClassificationError("Model not trained. Call train() or load() first.")
 
         # Extract features
         if isinstance(features_list[0], dict):
@@ -511,7 +478,7 @@ class ArteryVeinClassifier:
             Dictionary {'artery': prob, 'vein': prob}
         """
         if not self.trained:
-            raise RuntimeError("Model not trained. Call train() or load() first.")
+            raise ClassificationError("Model not trained. Call train() or load() first.")
 
         # Extract features
         if isinstance(features, dict):
@@ -528,33 +495,6 @@ class ArteryVeinClassifier:
 
         return dict(zip(self.label_encoder.classes_, proba.tolist()))
 
-    def get_feature_importance(self) -> dict[str, float]:
-        """
-        Get feature importance rankings.
-
-        Returns:
-            Dictionary mapping feature names to importance scores
-        """
-        if not self.trained:
-            raise RuntimeError("Model not trained. Call train() or load() first.")
-
-        importance = self.model.feature_importances_
-        return dict(zip(self.feature_names, importance.tolist()))
-
-    def get_top_features(self, n: int = 10) -> list[tuple[str, float]]:
-        """
-        Get top N most important features.
-
-        Args:
-            n: Number of features to return
-
-        Returns:
-            List of (feature_name, importance) tuples sorted by importance
-        """
-        importance = self.get_feature_importance()
-        sorted_features = sorted(importance.items(), key=lambda x: x[1], reverse=True)
-        return sorted_features[:n]
-
     def evaluate(
         self, X: np.ndarray | list[dict], y: np.ndarray | list[str], verbose: bool = True
     ) -> dict[str, Any]:
@@ -570,7 +510,7 @@ class ArteryVeinClassifier:
             Dictionary with accuracy, precision, recall, F1, confusion matrix
         """
         if not self.trained:
-            raise RuntimeError("Model not trained. Call train() or load() first.")
+            raise ClassificationError("Model not trained. Call train() or load() first.")
 
         # Prepare data
         X_array, y_true = self._prepare_training_data(X, y)
@@ -642,40 +582,6 @@ class ArteryVeinClassifier:
         else:
             return "vein", 0.6
 
-    def save(self, path: str | Path) -> None:
-        """
-        Save trained model to file.
-
-        Args:
-            path: Output file path (use .joblib extension)
-        """
-        if not self.trained:
-            raise RuntimeError("Cannot save untrained model. Call train() first.")
-
-        path = Path(path)
-        path.parent.mkdir(parents=True, exist_ok=True)
-
-        model_data = {
-            "model": self.model,
-            "scaler": self.scaler,
-            "label_encoder": self.label_encoder,
-            "feature_names": self.feature_names,
-            "metrics": self.metrics,
-            "config": {
-                "n_estimators": self.n_estimators,
-                "max_depth": self.max_depth,
-                "min_samples_split": self.min_samples_split,
-                "min_samples_leaf": self.min_samples_leaf,
-                "class_weight": self.class_weight,
-                "random_state": self.random_state,
-            },
-            "model_type": "artery_vein_classifier",
-            "version": "1.0",
-        }
-
-        joblib.dump(model_data, path)
-        logger.info(f"Model saved to: {path}")
-
     @classmethod
     def load(cls, path: str | Path) -> "ArteryVeinClassifier":
         """
@@ -687,43 +593,7 @@ class ArteryVeinClassifier:
         Returns:
             ArteryVeinClassifier instance with loaded model
         """
-        path = Path(path)
-        if not path.exists():
-            raise FileNotFoundError(f"Model file not found: {path}")
-
-        try:
-            model_data = joblib.load(path)
-        except (EOFError, ModuleNotFoundError) as e:
-            raise ValueError(f"Failed to load classifier from {path}: {e}") from e
-
-        # Verify model type
-        if model_data.get("model_type") != "artery_vein_classifier":
-            logger.warning(
-                f"Model type mismatch: expected 'artery_vein_classifier', got '{model_data.get('model_type')}'"
-            )
-
-        # Create instance with saved config
-        config = model_data.get("config", {})
-        instance = cls(
-            n_estimators=config.get("n_estimators", 100),
-            max_depth=config.get("max_depth", 10),
-            min_samples_split=config.get("min_samples_split", 5),
-            min_samples_leaf=config.get("min_samples_leaf", 3),
-            class_weight=config.get("class_weight", "balanced"),
-            random_state=config.get("random_state", 42),
-            feature_names=model_data["feature_names"],
-        )
-
-        # Restore trained state
-        instance.model = model_data["model"]
-        instance.scaler = model_data["scaler"]
-        instance.label_encoder = model_data["label_encoder"]
-        instance.metrics = model_data.get("metrics", {})
-        instance.trained = True
-
-        logger.info(f"Model loaded from: {path}")
+        instance = super().load(path)
         f1 = instance.metrics.get("f1_score")
         logger.info(f"  F1 Score: {f1:.4f}" if f1 is not None else "  F1 Score: N/A")
-        logger.info(f"  Features: {len(instance.feature_names)}")
-
         return instance

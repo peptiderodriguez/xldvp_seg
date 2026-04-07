@@ -14,9 +14,10 @@ Feature groups:
   - "deep":    deep features (resnet_*, dinov2_*)
 """
 
+import dataclasses
 import math
 import re
-import types
+from dataclasses import dataclass
 from pathlib import Path
 
 import numpy as np
@@ -25,6 +26,51 @@ from xldvp_seg.utils.json_utils import atomic_json_dump, fast_json_load, sanitiz
 from xldvp_seg.utils.logging import get_logger
 
 logger = get_logger(__name__)
+
+
+# ---------------------------------------------------------------------------
+# Configuration dataclass
+# ---------------------------------------------------------------------------
+
+
+@dataclass
+class ClusteringConfig:
+    """Typed configuration for feature clustering.
+
+    Replaces the previous ``types.SimpleNamespace`` pattern with a proper
+    dataclass for IDE autocomplete, typo detection at construction time,
+    and clear documentation of all parameters.
+    """
+
+    detections: str | None = None
+    output_dir: str | None = None
+    feature_groups: str = "morph,sam2,channel"
+    methods: str = "both"
+    clustering: str = "leiden"
+    resolution: float = 1.0
+    n_neighbors: int = 30
+    min_dist: float = 0.1
+    threshold: float = 0.5
+    min_cluster_size: int = 50
+    marker_channels: str = ""
+    exclude_channels: str = ""
+    marker_rings: bool = True
+    trajectory: bool = False
+    root_cluster: str | None = None
+    spatial_smooth: bool = False
+    smooth_k: int = 15
+    smooth_sim_threshold: float = 0.5
+    marker_only: bool = False
+    gate_channel: int | None = None
+    gate_percentile: int = 90
+    perplexity: int = 30
+    tsne_n_iter: int = 1000
+    min_samples: int | None = None
+    subcluster: bool = False
+    subcluster_features: str = "shape,sam2"
+    subcluster_min_size: int = 50
+    subcluster_input: str | None = None
+
 
 # ---------------------------------------------------------------------------
 # Constants
@@ -1313,9 +1359,7 @@ def _generate_visualizations(
                 data_filtered = [d for d, v in zip(data, valid_mask) if v]
                 tick_labels = [cl for cl, v in zip(cluster_labels_sorted, valid_mask) if v]
                 if data_filtered:
-                    parts = ax.violinplot(
-                        data_filtered, showmeans=True, showmedians=True
-                    )  # noqa: F841
+                    ax.violinplot(data_filtered, showmeans=True, showmedians=True)
                     ax.set_xticks(range(1, len(tick_labels) + 1))
                     ax.set_xticklabels(tick_labels, rotation=45)
                 ax.set_title(f"{marker_name} (ch{marker_channels[marker_name]})")
@@ -1636,7 +1680,7 @@ def _run_trajectory(
 
 
 def _run_clustering_impl(args):
-    """Main clustering pipeline (internal, takes namespace-like object).
+    """Main clustering pipeline (internal, takes ClusteringConfig).
 
     Orchestrates 6 stages: load/prepare, reduce dimensions, cluster/label,
     save results, visualize, and optional trajectory analysis.
@@ -1773,40 +1817,11 @@ def run_clustering(**kwargs):
         subcluster_min_size: HDBSCAN min_cluster_size for sub-clusters (default: 50).
         subcluster_input: Path to pre-clustered detections for standalone subclustering.
     """
-    defaults = dict(
-        detections=None,
-        output_dir=None,
-        feature_groups="morph,sam2,channel",
-        methods="both",
-        clustering="leiden",
-        resolution=1.0,
-        n_neighbors=30,
-        min_dist=0.1,
-        threshold=0.5,
-        min_cluster_size=50,
-        marker_channels="",
-        exclude_channels="",
-        marker_rings=True,
-        trajectory=False,
-        root_cluster=None,
-        spatial_smooth=False,
-        smooth_k=15,
-        smooth_sim_threshold=0.5,
-        marker_only=False,
-        gate_channel=None,
-        gate_percentile=90,
-        perplexity=30,
-        tsne_n_iter=1000,
-        min_samples=None,
-        subcluster=False,
-        subcluster_features="shape,sam2",
-        subcluster_min_size=50,
-        subcluster_input=None,
-    )
-    # Merge caller kwargs over defaults
-    merged = {**defaults, **kwargs}
-    ns = types.SimpleNamespace(**merged)
-    _run_clustering_impl(ns)
+    # Filter kwargs to only known ClusteringConfig fields (callers like
+    # cluster_by_features.py pass vars(args) which includes argparse-only keys).
+    known_fields = {f.name for f in dataclasses.fields(ClusteringConfig)}
+    cfg = ClusteringConfig(**{k: v for k, v in kwargs.items() if k in known_fields})
+    _run_clustering_impl(cfg)
 
 
 def run_subclustering(

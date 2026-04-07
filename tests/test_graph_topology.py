@@ -118,7 +118,6 @@ class TestBuildRadiusGraphSparseEdgeCases:
 
 class TestDoubleBfsDiameter:
     def test_single_node(self):
-        positions = np.array([[0.0, 0.0]])
         pairs = set()
         G = build_component_subgraph(pairs, {0})
         diam, path = double_bfs_diameter(G, {0})
@@ -126,7 +125,6 @@ class TestDoubleBfsDiameter:
         assert path == [0]
 
     def test_two_nodes(self):
-        positions = np.array([[0.0, 0.0], [10.0, 0.0]])
         pairs = {(0, 1)}
         G = build_component_subgraph(pairs, {0, 1})
         diam, path = double_bfs_diameter(G, {0, 1})
@@ -134,7 +132,6 @@ class TestDoubleBfsDiameter:
         assert len(path) == 2
 
     def test_triangle(self):
-        positions = np.array([[0.0, 0.0], [10.0, 0.0], [5.0, 8.66]])
         pairs = {(0, 1), (1, 2), (0, 2)}
         G = build_component_subgraph(pairs, {0, 1, 2})
         diam, path = double_bfs_diameter(G, {0, 1, 2})

@@ -342,7 +342,6 @@ def merge_detections_across_scales(
     total_start = time.time()
     progress_interval = max(100, len(prepared) // 100) if len(prepared) > 0 else 100
     max_detections_per_cell = 0
-    cell_with_max = None
 
     for det_idx, (det, contour, bbox, area) in enumerate(prepared):
         cells = _bbox_cells(bbox)
@@ -353,7 +352,6 @@ def merge_detections_across_scales(
             cell_size_check = len(grid[cell])
             if cell_size_check > max_detections_per_cell:
                 max_detections_per_cell = cell_size_check
-                cell_with_max = cell
             for idx in grid[cell]:
                 candidate_indices.add(idx)
 

@@ -22,12 +22,13 @@ import numpy as np
 from aicspylibczi import CziFile
 from tqdm import tqdm
 
+from xldvp_seg.exceptions import ChannelResolutionError as _BaseChannelResolutionError
 from xldvp_seg.utils.logging import get_logger
 
 logger = get_logger(__name__)
 
 
-class ChannelResolutionError(ValueError):
+class ChannelResolutionError(_BaseChannelResolutionError):
     """Raised when a channel spec cannot be resolved to a CZI channel index."""
 
 

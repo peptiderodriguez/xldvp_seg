@@ -526,7 +526,6 @@ def compute_wall_morphometry(
     # Vectorized: for each cell, find closest point on each contour segment,
     # then take the minimum across all segments.
     # Contour segments: from contour[i] to contour[(i+1) % M]
-    n_seg = len(contour)
     seg_starts = contour
     seg_ends = np.roll(contour, -1, axis=0)
     seg_vecs = seg_ends - seg_starts

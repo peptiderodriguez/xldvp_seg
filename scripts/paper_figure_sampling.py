@@ -327,7 +327,6 @@ def run_spatial_clustered(
         key = _group_key_fn(d)
         grouped.setdefault(key, []).append(d)
 
-    uid_to_det = {d["uid"]: d for d in detections if "uid" in d}
     rep_list = []
     rep_id = 0
     total_clustered = 0

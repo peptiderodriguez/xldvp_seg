@@ -411,10 +411,17 @@ def nuclei(
     output_path: str | Path | None = None,
     **kwargs: Any,
 ) -> SlideAnalysis:
-    """Count nuclei per cell.
+    """Count nuclei per cell (not implemented as API call).
 
-    Requires CZI file and tile masks. For existing pipeline runs,
-    use the standalone script which handles CZI loading and tile mapping.
+    Nuclear counting requires GPU + Cellpose, CZI loading, and tile-mask
+    alignment. It runs as part of the detection pipeline (``--count-nuclei``,
+    default ON). For standalone counting on existing runs, use::
+
+        python scripts/count_nuclei_per_cell.py \\
+            --detections detections.json \\
+            --czi-path slide.czi \\
+            --tiles-dir output/tiles/ \\
+            --channel-spec "nuc=Hoechst"
 
     Args:
         slide: SlideAnalysis object.
@@ -424,16 +431,12 @@ def nuclei(
         tiles_dir: Tiles directory (auto-discovered from slide if None).
         output_path: Output JSON path.
 
-    Returns:
-        slide (mutated with nuclear counts).
+    Raises:
+        NotImplementedError: Always. Use the detection pipeline or
+            ``scripts/count_nuclei_per_cell.py``.
     """
-    # Nuclear counting requires CZI loading, GPU models, and tile-mask alignment.
-    # This is inherently a heavy operation best run via the standalone script.
     raise NotImplementedError(
-        "Nuclear counting requires CZI loading and GPU models. Use:\n"
-        f"  python scripts/count_nuclei_per_cell.py \\\n"
-        f"    --detections {slide.detections_path or '<det.json>'} \\\n"
-        f"    --czi-path {czi_path} \\\n"
-        f"    --tiles-dir {tiles_dir or slide.tiles_dir or '<tiles>'} \\\n"
-        f"    --channel-spec '{channel_spec or 'nuc=<nuclear_marker>'}'"
+        "Nuclear counting requires GPU + Cellpose and runs as part of the detection "
+        "pipeline (--count-nuclei, default ON). For standalone counting on existing "
+        "runs, use: python scripts/count_nuclei_per_cell.py --help"
     )

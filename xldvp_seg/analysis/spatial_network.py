@@ -737,7 +737,7 @@ def run_spatial_network(
     # Clustered cells
     clustered = ~unclustered
     if np.any(clustered):
-        sc = ax.scatter(
+        ax.scatter(
             positions[clustered, 0],
             positions[clustered, 1],
             c=node_colors[clustered],
@@ -767,7 +767,7 @@ def run_spatial_network(
             for node in comm_nodes:
                 comm_colors[node] = comm_id
 
-        sc = ax.scatter(
+        ax.scatter(
             positions[:, 0],
             positions[:, 1],
             c=comm_colors,

@@ -228,7 +228,6 @@ def main():
     # detections < p75 are discarded, detections > p75 are split into p75-sized pieces
     min_area_um2 = target_area_um2
     target_area_px = max(1, int(target_area_um2 / px2))
-    min_area_px = target_area_px
     logger.info(f"  Target piece size: {target_area_um2:.1f} um2 ({target_area_px} px)")
     logger.info(f"  Min area cutoff: {min_area_um2:.1f} um2 (same as target — discard smaller)")
 

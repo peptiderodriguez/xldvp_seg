@@ -476,7 +476,6 @@ def load_contour_overlay(
         groups = {}
         label_centroids = []
         label_texts = []
-        label_colors = []
         for det in detections:
             pts = _parse_contour(det, orig_h, orig_w, contour_flip, contour_rot90, world_scale)
             if pts is None:

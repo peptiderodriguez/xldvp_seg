@@ -122,11 +122,9 @@ def _stream_detections_mmap(filepath):
                 end = min(offset + CHUNK + 1, size)  # +1 overlap for escape pairs
                 chunk = mm[offset:end]
 
-                last_match_end = 0
                 for m in _SIG.finditer(chunk):
                     tok = chunk[m.start() : m.end()]
                     abs_pos = offset + m.start()
-                    last_match_end = m.end()
 
                     if len(tok) == 2:
                         # Escape sequence (\", \\, \n, \t, etc.) — skip entirely

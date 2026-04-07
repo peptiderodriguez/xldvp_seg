@@ -24,7 +24,22 @@ def export_lmd(
 ) -> Path:
     """Export detections for laser microdissection.
 
-    Filters by score, extracts contours, assigns wells, generates XML.
+    LMD export is a multi-step pipeline (contour extraction from HDF5 masks,
+    reference cross calibration, adaptive RDP simplification, spatial control
+    generation, well assignment, and XML generation via py-lmd) that cannot
+    be reduced to a simple function call.
+
+    Use the CLI instead::
+
+        xlseg export-lmd \\
+            --detections path/to/detections.json \\
+            --crosses path/to/crosses.json \\
+            --output-dir path/to/output \\
+            --min-score 0.5
+
+    Or for programmatic access, use the building blocks in
+    :mod:`xldvp_seg.lmd.export` (``filter_detections``,
+    ``extract_contours_for_detections``, ``export_to_lmd_xml``, etc.).
 
     Args:
         slide: SlideAnalysis object.
@@ -34,13 +49,18 @@ def export_lmd(
         generate_controls: Generate spatial control wells (default: True).
         erosion_um: Contour erosion in um (default: 0.0).
 
-    Returns:
-        Path to output directory with XML files.
+    Raises:
+        NotImplementedError: Always. Use ``xlseg export-lmd`` CLI or
+            :mod:`xldvp_seg.lmd.export` functions directly.
     """
+    det_path = slide.detections_path or "<detections.json>"
     raise NotImplementedError(
-        f"Full LMD export pipeline requires contour extraction from HDF5 masks.\n"
-        f"Use: xlseg export-lmd --detections {slide.detections_path} "
-        f"--crosses {crosses} --output-dir {output_dir} --min-score {min_score}"
+        "LMD export requires contour extraction from HDF5 masks, reference cross "
+        "calibration, and well assignment -- too complex for a single API call.\n"
+        f"Use: xlseg export-lmd --detections {det_path} "
+        f"--crosses {crosses} --output-dir {output_dir or '<output>'} "
+        f"--min-score {min_score}\n"
+        "Or use building blocks from xldvp_seg.lmd.export directly."
     )
 
 

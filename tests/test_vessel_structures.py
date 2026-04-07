@@ -635,7 +635,6 @@ class TestMorphometryGlobalIndices:
 class TestTagDetections:
     def test_tags_vessel_cells(self):
         dets = [_make_detection() for _ in range(10)]
-        positive_idx = list(range(5))
         assignments = {
             0: {
                 "vessel_id": 0,
