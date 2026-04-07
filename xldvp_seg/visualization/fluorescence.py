@@ -65,14 +65,14 @@ def read_czi_thumbnail_channels(czi_path, display_channels, scale_factor=0.0625,
         pixel_size_um = loader.get_pixel_size()
         del loader  # close file handle
     except Exception:
-        pass
+        logger.debug("CZI pixel size extraction failed", exc_info=True)
     if pixel_size_um is None:
         try:
             scaling = czi.get_scaling()
             if scaling and len(scaling) >= 1:
                 pixel_size_um = scaling[0] * 1e6  # m -> um
         except Exception:
-            pass
+            logger.debug("Bounding box scaling failed", exc_info=True)
 
     # Get mosaic bounding box for the scene
     try:

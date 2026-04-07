@@ -8,6 +8,10 @@ different detection strategies without code duplication.
 import numpy as np
 from scipy.stats import kurtosis, skew
 
+from xldvp_seg.utils.logging import get_logger
+
+logger = get_logger(__name__)
+
 # Stat names used for zero-valued fallback dicts in extract_channel_stats.
 # Defined once at module level to avoid rebuilding per call.
 _CHANNEL_STAT_NAMES = (
@@ -306,6 +310,7 @@ class MultiChannelFeatureMixin:
             result = float(skew(data))
             return result if np.isfinite(result) else 0.0
         except Exception:
+            logger.debug("Feature extraction failed", exc_info=True)
             return 0.0
 
     def _safe_kurtosis(self, data: np.ndarray) -> float:
@@ -326,4 +331,5 @@ class MultiChannelFeatureMixin:
             result = float(kurtosis(data))
             return result if np.isfinite(result) else 0.0
         except Exception:
+            logger.debug("Feature extraction failed", exc_info=True)
             return 0.0

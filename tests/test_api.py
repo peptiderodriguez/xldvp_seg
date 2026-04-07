@@ -12,7 +12,7 @@ from unittest.mock import MagicMock, patch
 import numpy as np
 import pytest
 
-from xldvp_seg.api import pl, pp, tl
+from xldvp_seg.api import io, pl, pp, tl
 from xldvp_seg.core import SlideAnalysis
 
 
@@ -466,3 +466,189 @@ class TestPlUmap:
         call_kwargs = mock_run.call_args.kwargs
         assert call_kwargs["n_neighbors"] == 50
         assert call_kwargs["min_dist"] == 0.3
+
+
+class TestPpInspect:
+    """Tests for pp.inspect() -- CZI metadata inspection."""
+
+    @patch("xldvp_seg.io.czi_loader.get_czi_metadata")
+    def test_inspect_returns_metadata_dict(self, mock_get_meta):
+        """inspect() should return the dict from get_czi_metadata."""
+        expected = {"channels": [{"name": "AF488", "wavelength": 488}], "n_scenes": 1}
+        mock_get_meta.return_value = expected
+
+        result = pp.inspect("/fake/slide.czi")
+
+        assert result is expected
+        mock_get_meta.assert_called_once_with("/fake/slide.czi")
+
+    @patch("xldvp_seg.io.czi_loader.get_czi_metadata")
+    def test_inspect_converts_path_to_str(self, mock_get_meta):
+        """inspect() should accept a Path object and convert to str."""
+        from pathlib import Path
+
+        mock_get_meta.return_value = {}
+        pp.inspect(Path("/fake/slide.czi"))
+        mock_get_meta.assert_called_once_with("/fake/slide.czi")
+
+
+class TestIoReadProteomics:
+    """Tests for io.read_proteomics() -- CSV and dvp-io paths."""
+
+    def test_read_proteomics_csv(self, tmp_path):
+        """read_proteomics() without search_engine reads a plain CSV."""
+        import pandas as pd
+
+        csv_path = tmp_path / "proteomics.csv"
+        csv_path.write_text("well_id,ProteinA,ProteinB\nW1,1.0,2.0\nW2,3.0,4.0\n")
+
+        result = io.read_proteomics(csv_path)
+
+        assert isinstance(result, pd.DataFrame)
+        assert list(result.index) == ["W1", "W2"]
+        assert "ProteinA" in result.columns
+        assert "ProteinB" in result.columns
+
+    @patch("xldvp_seg.analysis.omic_linker.OmicLinker")
+    def test_read_proteomics_via_dvpio(self, mock_linker_cls, tmp_path):
+        """read_proteomics() with search_engine delegates to OmicLinker."""
+        import pandas as pd
+
+        mock_linker = MagicMock()
+        mock_linker._proteomics = pd.DataFrame({"ProteinA": [1.0]}, index=["W1"])
+        mock_linker_cls.return_value = mock_linker
+
+        report_path = tmp_path / "report.tsv"
+        report_path.write_text("dummy\n")
+
+        result = io.read_proteomics(report_path, search_engine="diann")
+
+        mock_linker.load_proteomics_report.assert_called_once()
+        call_args = mock_linker.load_proteomics_report.call_args
+        assert call_args[0][1] == "diann"
+        assert isinstance(result, pd.DataFrame)
+
+
+class TestTlCluster:
+    """Tests for tl.cluster() -- feature clustering."""
+
+    @patch("xldvp_seg.analysis.cluster_features.run_clustering")
+    def test_cluster_requires_detections_path(self, mock_run):
+        """cluster() raises if slide has no detections_path."""
+        slide = SlideAnalysis.from_detections(_make_detections(3))
+        with pytest.raises(Exception, match="no detections_path"):
+            tl.cluster(slide)
+        mock_run.assert_not_called()
+
+    @patch("xldvp_seg.analysis.cluster_features.run_clustering")
+    def test_cluster_forwards_kwargs(self, mock_run, tmp_path):
+        """cluster() should forward feature_groups, methods, resolution to run_clustering."""
+        import json
+
+        det_path = tmp_path / "cell_detections.json"
+        det_path.write_text(json.dumps(_make_detections(5)))
+        slide = SlideAnalysis.load(tmp_path)
+
+        out_dir = tmp_path / "cluster_out"
+        tl.cluster(
+            slide,
+            feature_groups="morph,sam2",
+            methods="umap",
+            resolution=0.5,
+            output_dir=str(out_dir),
+        )
+
+        mock_run.assert_called_once()
+        call_kwargs = mock_run.call_args.kwargs
+        assert call_kwargs["feature_groups"] == "morph,sam2"
+        assert call_kwargs["methods"] == "umap"
+        assert call_kwargs["resolution"] == 0.5
+
+    @patch("xldvp_seg.analysis.cluster_features.run_clustering")
+    def test_cluster_returns_slide(self, mock_run, tmp_path):
+        """cluster() should return the slide object."""
+        import json
+
+        det_path = tmp_path / "cell_detections.json"
+        det_path.write_text(json.dumps(_make_detections(5)))
+        slide = SlideAnalysis.load(tmp_path)
+
+        result = tl.cluster(slide, output_dir=str(tmp_path / "out"))
+
+        assert result is slide
+
+
+class TestTlSpatial:
+    """Tests for tl.spatial() -- spatial network analysis."""
+
+    @patch("xldvp_seg.analysis.spatial_network.run_spatial_network")
+    def test_spatial_returns_slide(self, mock_run):
+        """spatial() should return the slide object."""
+        mock_run.return_value = None
+        dets = _make_detections(5)
+        slide = SlideAnalysis.from_detections(dets)
+
+        result = tl.spatial(slide, output_dir="/tmp/spatial_test_out")
+
+        assert result is slide
+
+    @patch("xldvp_seg.analysis.spatial_network.run_spatial_network")
+    def test_spatial_calls_run_spatial_network(self, mock_run, tmp_path):
+        """spatial() should call run_spatial_network with slide's detections."""
+        mock_run.return_value = None
+        dets = _make_detections(3)
+        slide = SlideAnalysis.from_detections(dets)
+
+        tl.spatial(slide, output_dir=str(tmp_path), max_edge_distance=75.0)
+
+        mock_run.assert_called_once()
+        call_args, call_kwargs = mock_run.call_args
+        # First positional arg is detections list
+        assert call_args[0] == dets
+        assert call_kwargs["max_edge_distance"] == 75.0
+
+    @patch("xldvp_seg.analysis.spatial_network.run_spatial_network")
+    def test_spatial_updates_detections_when_result_returned(self, mock_run, tmp_path):
+        """When run_spatial_network returns detections, slide._detections is updated."""
+        updated_dets = _make_detections(3)
+        for det in updated_dets:
+            det["community_id"] = 42
+        mock_run.return_value = updated_dets
+
+        slide = SlideAnalysis.from_detections(_make_detections(3))
+        tl.spatial(slide, output_dir=str(tmp_path))
+
+        assert slide.detections[0].get("community_id") == 42
+
+
+class TestIoToSpatialdata:
+    """Tests for io.to_spatialdata() -- SpatialData export."""
+
+    @patch("xldvp_seg.io.spatialdata_export.build_anndata")
+    def test_to_spatialdata_builds_anndata(self, mock_build):
+        """to_spatialdata() calls build_anndata with the slide's detections."""
+        import anndata as ad
+
+        mock_adata = MagicMock(spec=ad.AnnData)
+        mock_adata.shape = (5, 10)
+        mock_build.return_value = mock_adata
+
+        dets = _make_detections(5)
+        slide = SlideAnalysis.from_detections(dets)
+        slide.summary["cell_type"] = "cell"
+
+        # Patch spatialdata import to avoid needing the package
+        with patch.dict("sys.modules", {"spatialdata": None, "spatialdata.models": None}):
+            # When spatialdata is missing, should fall back to h5ad
+            with patch.object(mock_adata, "write_h5ad"):
+                io.to_spatialdata(slide, output_path="/tmp/test_spatialdata.zarr")
+
+        mock_build.assert_called_once_with(dets, "cell")
+
+    @patch("xldvp_seg.io.spatialdata_export.build_anndata")
+    def test_to_spatialdata_returns_none_for_empty(self, mock_build):
+        """to_spatialdata() returns None when slide has no detections."""
+        slide = SlideAnalysis.from_detections([])
+        result = io.to_spatialdata(slide)
+        assert result is None
+        mock_build.assert_not_called()

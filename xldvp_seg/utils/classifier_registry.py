@@ -183,18 +183,18 @@ def list_classifiers():
     registry = _load_registry()
     entries = registry.get("classifiers", [])
     if not entries:
-        print("No classifiers registered. Use `train_classifier.py --register` to add one.")
+        logger.info("No classifiers registered. Use `train_classifier.py --register` to add one.")
         return
 
     # Header
     fmt = "{:<20s} {:<8s} {:<12s} {:<6s} {:<12s} {:<12s}"
-    print(fmt.format("Name", "Version", "Features", "F1", "Annotations", "Trained"))
-    print("-" * 72)
+    logger.info(fmt.format("Name", "Version", "Features", "F1", "Annotations", "Trained"))
+    logger.info("-" * 72)
     for e in sorted(entries, key=lambda x: (x["name"], x.get("version", 1))):
         n_ann = (e.get("n_positive") or 0) + (e.get("n_negative") or 0)
         trained = (e.get("trained_at") or "")[:10]
         f1_str = f"{e['cv_f1']:.3f}" if e.get("cv_f1") is not None else "?"
-        print(
+        logger.info(
             fmt.format(
                 e["name"],
                 f"v{e.get('version', 1)}",

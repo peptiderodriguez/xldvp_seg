@@ -2,10 +2,14 @@
 xldvp_seg — spatial cell segmentation and Deep Visual Proteomics pipeline.
 
 Provides detection, processing, and I/O utilities for:
-- MK (Megakaryocytes)
-- HSPC (Hematopoietic Stem/Progenitor Cells)
-- NMJ (Neuromuscular Junctions)
-- Vessel (Blood Vessels)
+- Cell (generic 2-channel Cellpose + SAM2 embeddings)
+- NMJ (Neuromuscular Junctions — intensity threshold + watershed)
+- MK (Megakaryocytes — SAM2 auto-mask)
+- Vessel (Blood Vessels — 3-contour SMA ring detection)
+- Islet (Pancreatic Islets — Cellpose + GMM marker classification)
+- Mesothelium (ridge detection for ribbon structures)
+- Tissue Pattern (multi-channel Cellpose spatial frequency analysis)
+- InstanSeg (alternative segmenter via --segmenter instanseg with --cell-type cell)
 
 Usage:
     from xldvp_seg.io import CZILoader, get_loader

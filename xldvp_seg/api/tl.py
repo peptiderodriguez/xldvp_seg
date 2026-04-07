@@ -244,7 +244,14 @@ def train(
 
     # Save
     if output_path is None:
-        output_path = Path(tempfile.mkdtemp()) / f"rf_{feature_set}.pkl"
+        if slide.output_dir:
+            output_path = Path(slide.output_dir) / f"rf_{feature_set}.pkl"
+        else:
+            output_path = Path(tempfile.mkdtemp()) / f"rf_{feature_set}.pkl"
+            logger.warning(
+                "No output_dir on slide — saving classifier to temp dir: %s",
+                output_path.parent,
+            )
     output_path = Path(output_path)
     output_path.parent.mkdir(parents=True, exist_ok=True)
 

@@ -583,7 +583,7 @@ class ModelManager:
             try:
                 self._sam2_predictor.reset_predictor()
             except Exception:
-                pass
+                logger.debug("SAM2 predictor cleanup error", exc_info=True)
             self._sam2_predictor = None
         self._sam2_auto = None
         self._sam2_model = None

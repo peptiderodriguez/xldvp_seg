@@ -126,9 +126,7 @@ class ModelRegistry:
         if not models:
             print("No models registered.")
             return
-        print(
-            f"{'Name':<18s} {'Task':<14s} {'Dim':<6s} {'Modality':<14s} {'Status':<12s} {'License'}"
-        )
+        print(f"{'Name':<18} {'Task':<14} {'Dim':<6} {'Modality':<14} {'Status':<12} License")
         print("-" * 82)
         for m in models:
             if m.installed:
@@ -138,8 +136,8 @@ class ModelRegistry:
             else:
                 status = "available"
             print(
-                f"{m.name:<18s} {m.task:<14s} {m.feature_dim:<6d} "
-                f"{m.modality:<14s} {status:<12s} {m.license}"
+                f"{m.name:<18} {m.task:<14} {m.feature_dim:<6d} "
+                f"{m.modality:<14} {status:<12} {m.license}"
             )
 
 

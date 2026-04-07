@@ -134,7 +134,7 @@ def _discover_features(detections):
     channel_stat_names = set()
     embedding_counts = {}  # prefix -> max index seen
 
-    for det in detections[:100]:
+    for det in detections:
         feats = det.get("features", {})
         for key in feats:
             val = feats[key]
@@ -189,7 +189,7 @@ def _discover_features(detections):
 def _discover_obs_classes(detections):
     """Discover classification columns (e.g., tdTomato_class, GFP_class) from detections."""
     class_cols = set()
-    for det in detections[:100]:
+    for det in detections:
         feats = det.get("features", {})
         for key, val in feats.items():
             if key.endswith("_class") and isinstance(val, str):
@@ -288,6 +288,15 @@ def build_anndata(detections, cell_type):
     X = np.nan_to_num(X, nan=0.0, posinf=0.0, neginf=0.0)
     for key in embeddings:
         embeddings[key] = np.nan_to_num(embeddings[key], nan=0.0, posinf=0.0, neginf=0.0)
+
+    # Log features that were zero-filled due to missing values
+    if len(x_names) > 0:
+        n_zeros = (X == 0).sum(axis=0)
+        cols_with_zeros = [
+            (x_names[i], int(n_zeros[i])) for i in range(len(x_names)) if n_zeros[i] > 0
+        ]
+        if cols_with_zeros:
+            logger.debug("Features with zero-fill: %s", cols_with_zeros[:10])
 
     # Build obs DataFrame
     obs_df = pd.DataFrame(obs_data)

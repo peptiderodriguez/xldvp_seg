@@ -193,11 +193,11 @@ class StrategyRegistry:
         if not entries:
             print("No strategies registered.")
             return
-        print(f"{'Name':<20s} {'Channels':<20s} {'Description'}")
+        print(f"{'Name':<20} {'Channels':<20} Description")
         print("-" * 80)
         for meta in entries:
             channels_str = ", ".join(meta.channels) if meta.channels else "(auto)"
-            print(f"{meta.name:<20s} {channels_str:<20s} {meta.description}")
+            print(f"{meta.name:<20} {channels_str:<20} {meta.description}")
 
 
 def register_strategy(name, *, description="", channels=None, feature_dims=None):

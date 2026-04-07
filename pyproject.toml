@@ -49,6 +49,7 @@ dependencies = [
     "geopandas>=0.14",
     "shapely>=2.0",
     "dvp-io>=0.4",
+    "statsmodels>=0.14",
 ]
 
 [project.optional-dependencies]

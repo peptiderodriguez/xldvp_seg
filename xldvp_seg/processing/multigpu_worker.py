@@ -786,7 +786,7 @@ class MultiGPUTileProcessor:
                 try:
                     self.input_queue.put(None, timeout=1.0)
                 except Exception:
-                    pass
+                    logger.debug("Queue put failed during shutdown", exc_info=True)
 
         if self.stop_event:
             self.stop_event.set()

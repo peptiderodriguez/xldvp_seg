@@ -316,6 +316,7 @@ def _make_polygon(contour):
             poly = make_valid(poly)
         return poly
     except Exception:
+        logger.debug("Polygon construction failed for contour", exc_info=True)
         return None
 
 
@@ -377,6 +378,7 @@ def _check_overlap_precomputed(shifted_contour, precomputed_polygons):
             if candidate_poly.intersects(existing_poly):
                 return True
         except Exception:
+            logger.debug("Intersection check failed", exc_info=True)
             return True
     return False
 

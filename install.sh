@@ -164,13 +164,13 @@ fi
 
 # Verify PyTorch installation
 echo ""
-python -c "import torch; print(f'PyTorch {torch.__version__} installed'); print(f'CUDA available: {torch.cuda.is_available()}')"
+python3 -c "import torch; print(f'PyTorch {torch.__version__} installed'); print(f'CUDA available: {torch.cuda.is_available()}')"
 
 # Install SAM2
 echo ""
 echo "Step 2: Installing SAM2..."
 echo "------------------------------------------------------------"
-pip install git+https://github.com/facebookresearch/segment-anything-2.git
+pip install git+https://github.com/facebookresearch/segment-anything-2.git@2b90b9f5ceec907a1c18123530e92e794ad901a4
 
 # Install this package
 echo ""
@@ -289,7 +289,7 @@ echo ""
 echo "Step 7: Verifying installation..."
 echo "------------------------------------------------------------"
 
-python -c "
+python3 -c "
 import torch
 import cellpose
 import numpy

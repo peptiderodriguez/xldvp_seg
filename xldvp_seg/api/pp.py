@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from pathlib import Path
+from shlex import quote
 from typing import Any
 
 from xldvp_seg.utils.logging import get_logger
@@ -49,11 +50,11 @@ def detect(
     Returns:
         CLI command string suitable for shell execution.
     """
-    parts = [f"xlseg detect --czi-path {czi_path} --cell-type {cell_type}"]
+    parts = [f"xlseg detect --czi-path {quote(str(czi_path))} --cell-type {quote(cell_type)}"]
     if output_dir:
-        parts.append(f"--output-dir {output_dir}")
+        parts.append(f"--output-dir {quote(str(output_dir))}")
     if channel_spec:
-        parts.append(f'--channel-spec "{channel_spec}"')
+        parts.append(f"--channel-spec {quote(channel_spec)}")
     parts.append(f"--num-gpus {num_gpus}")
     cmd = " ".join(parts)
     logger.info("Detection command: %s", cmd)

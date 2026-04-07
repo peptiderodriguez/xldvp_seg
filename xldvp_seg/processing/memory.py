@@ -12,7 +12,7 @@ Usage:
     # Check resources before starting
     result = validate_system_resources(num_workers=4, tile_size=3000)
     if result['should_abort']:
-        sys.exit(1)
+        raise RuntimeError("Insufficient memory")
 
     # Auto-adjust worker count
     safe_workers = get_safe_worker_count(requested_workers=8, tile_size=3000)

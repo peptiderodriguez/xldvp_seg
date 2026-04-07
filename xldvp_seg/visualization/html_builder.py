@@ -14,11 +14,12 @@ Public API
 
 from __future__ import annotations
 
-import sys
-
 import numpy as np
 
+from xldvp_seg.utils.logging import get_logger
 from xldvp_seg.visualization.encoding import encode_float32_base64, encode_uint8_base64
+
+logger = get_logger(__name__)
 
 
 def build_group_index(
@@ -42,10 +43,12 @@ def build_group_index(
     """
     group_labels = sorted(color_map.keys())
     if len(group_labels) > max_groups:
-        print(
-            f"WARNING: {len(group_labels)} groups exceeds Uint8 limit ({max_groups}). "
-            f"Keeping top {max_groups - 1} groups, collapsing rest into 'other'.",
-            file=sys.stderr,
+        logger.warning(
+            "%d groups exceeds Uint8 limit (%d). "
+            "Keeping top %d groups, collapsing rest into 'other'.",
+            len(group_labels),
+            max_groups,
+            max_groups - 1,
         )
         all_counts: dict[str, int] = {}
         for _, data in slides_data:

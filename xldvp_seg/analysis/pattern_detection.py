@@ -13,7 +13,7 @@ Typical workflow::
         refine_strip_cells,
     )
 
-    positive_idx = select_positive_cells(detections, snr_channel=2, snr_threshold=1.5)
+    positive_idx = select_positive_cells(detections, snr_channel=MARKER_CH, snr_threshold=1.5)
     labels, stats, G = classify_components(positions, radius=50, ...)
     labels = refine_strip_cells(positions, labels, radius=50, method="k_core", ...)
 """

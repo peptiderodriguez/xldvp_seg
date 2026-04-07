@@ -16,7 +16,10 @@ Usage:
     corr = linker.correlate(method="spearman")
 """
 
+from __future__ import annotations
+
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 import numpy as np
 import pandas as pd
@@ -24,13 +27,20 @@ import pandas as pd
 from xldvp_seg.exceptions import ConfigError
 from xldvp_seg.utils.logging import get_logger
 
+if TYPE_CHECKING:
+    import anndata as ad
+
 logger = get_logger(__name__)
 
 
 class OmicLinker:
     """Links morphological features to mass-spec proteomics data."""
 
-    def __init__(self, features_df=None, detections=None):
+    def __init__(
+        self,
+        features_df: pd.DataFrame | None = None,
+        detections: list[dict] | None = None,
+    ) -> None:
         self.__features_df = features_df
         self._detections = detections
         self._proteomics = None
@@ -54,6 +64,11 @@ class OmicLinker:
     def _features_df(self, value):
         self.__features_df = value
 
+    @property
+    def proteomics_adata(self):
+        """Raw AnnData from dvp-io, available after ``load_proteomics_report()``."""
+        return self._proteomics_adata
+
     @classmethod
     def from_slide(cls, slide):
         """Create from a SlideAnalysis object."""
@@ -64,12 +79,18 @@ class OmicLinker:
         """Create from a detections list."""
         return cls(detections=detections)
 
-    def load_proteomics(self, path, well_column="well_id"):
+    def load_proteomics(self, path: str | Path, well_column: str = "well_id") -> None:
         """Load proteomics CSV. Rows=wells, columns=proteins."""
         self._proteomics = pd.read_csv(path, index_col=well_column)
         logger.info("Loaded proteomics: %d wells, %d proteins", *self._proteomics.shape)
 
-    def load_proteomics_report(self, path, search_engine, well_column="well_id", **kwargs):
+    def load_proteomics_report(
+        self,
+        path: str | Path,
+        search_engine: str,
+        well_column: str = "well_id",
+        **kwargs,
+    ) -> ad.AnnData:
         """Load proteomics from a search engine report via dvp-io.
 
         Supports: alphadia, alphapept, diann, directlfq, fragpipe,
@@ -112,7 +133,7 @@ class OmicLinker:
         return adata
 
     @staticmethod
-    def available_engines():
+    def available_engines() -> list[str]:
         """List supported proteomics search engines (from dvp-io)."""
         from dvpio.read.omics.report_reader import available_reader
 
@@ -151,7 +172,7 @@ class OmicLinker:
             mapping_files[0].name,
         )
 
-    def link(self):
+    def link(self) -> pd.DataFrame:
         """Join morphological features to proteomics by well.
 
         Aggregates per-cell features to well level (mean of numeric features),
@@ -322,21 +343,30 @@ class OmicLinker:
         if len(result_df) > 0:
             result_df = result_df.sort_values("p_value")
         if len(result_df) > 0:
-            try:
-                from statsmodels.stats.multitest import multipletests
+            from statsmodels.stats.multitest import multipletests
 
-                _, result_df["p_adjusted"], _, _ = multipletests(
-                    result_df["p_value"], method="fdr_bh"
-                )
-            except ImportError:
-                result_df["p_adjusted"] = result_df["p_value"]
+            _, result_df["p_adjusted"], _, _ = multipletests(result_df["p_value"], method="fdr_bh")
         return result_df
 
-    def correlate(self, morph_features=None, proteins=None, method="spearman"):
+    def correlate(
+        self,
+        morph_features: list[str] | None = None,
+        proteins: list[str] | None = None,
+        method: str = "spearman",
+        return_pvalues: bool = False,
+    ) -> pd.DataFrame | tuple[pd.DataFrame, pd.DataFrame]:
         """Correlate morphological features with protein abundances.
 
+        Args:
+            morph_features: List of morphological feature column names (default: all non-protein
+                columns).
+            proteins: List of protein column names (default: all protein columns).
+            method: Correlation method ('spearman' or 'pearson').
+            return_pvalues: If True, return (corr_df, pval_df) tuple.
+
         Returns:
-            DataFrame: rows=morph_features, columns=proteins, values=correlation.
+            DataFrame (rows=morph_features, columns=proteins, values=correlation).
+            If return_pvalues=True, returns (corr_df, pval_df) tuple.
         """
         if self._linked is None:
             raise ConfigError("Call link() first.")
@@ -347,22 +377,40 @@ class OmicLinker:
         if proteins is None:
             proteins = [c for c in self._linked.columns if c in prot_cols]
 
-        corr_matrix = pd.DataFrame(index=morph_features, columns=proteins, dtype=float)
-        if method == "spearman":
-            from scipy.stats import spearmanr as _corr_func
-        else:
-            from scipy.stats import pearsonr as _corr_func
-        for mf in morph_features:
-            for prot in proteins:
-                vals = self._linked[[mf, prot]].dropna()
-                if len(vals) < 5:
-                    corr_matrix.loc[mf, prot] = np.nan
-                    continue
-                r, _ = _corr_func(vals[mf], vals[prot])
-                corr_matrix.loc[mf, prot] = r
-        return corr_matrix
+        all_cols = morph_features + proteins
+        corr_full = self._linked[all_cols].corr(method=method, min_periods=5)
+        corr_df = corr_full.loc[morph_features, proteins]
 
-    def rank_proteins(self, morph_feature, top_n=50):
+        if not return_pvalues:
+            return corr_df
+
+        # Compute p-values via scipy (requires complete matrix)
+        from scipy.stats import pearsonr, spearmanr
+
+        subset = self._linked[all_cols].dropna()
+        if len(subset) < 5:
+            pval_df = pd.DataFrame(np.nan, index=morph_features, columns=proteins)
+        else:
+            if method == "spearman":
+                # spearmanr on a matrix returns (r_matrix, p_matrix)
+                _, p_matrix = spearmanr(subset[all_cols].values)
+                p_full = pd.DataFrame(p_matrix, index=all_cols, columns=all_cols)
+                pval_df = p_full.loc[morph_features, proteins]
+            else:
+                # pearsonr doesn't support matrix input — use per-pair
+                pval_df = pd.DataFrame(index=morph_features, columns=proteins, dtype=float)
+                for mf in morph_features:
+                    for prot in proteins:
+                        vals = self._linked[[mf, prot]].dropna()
+                        if len(vals) < 5:
+                            pval_df.loc[mf, prot] = np.nan
+                        else:
+                            _, p = pearsonr(vals[mf], vals[prot])
+                            pval_df.loc[mf, prot] = p
+
+        return corr_df, pval_df
+
+    def rank_proteins(self, morph_feature: str, top_n: int = 50) -> pd.DataFrame:
         """Rank proteins by correlation with a morphological feature."""
         if self._linked is None:
             raise ConfigError("Call link() first.")
@@ -377,4 +425,9 @@ class OmicLinker:
                 continue
             r, p = spearmanr(vals[morph_feature], vals[prot])
             correlations.append({"protein": prot, "correlation": r, "p_value": p})
-        return pd.DataFrame(correlations).sort_values("correlation", ascending=False).head(top_n)
+        result_df = pd.DataFrame(correlations).sort_values("correlation", ascending=False)
+        if len(result_df) > 0:
+            from statsmodels.stats.multitest import multipletests
+
+            _, result_df["p_adjusted"], _, _ = multipletests(result_df["p_value"], method="fdr_bh")
+        return result_df.head(top_n)

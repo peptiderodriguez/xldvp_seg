@@ -137,11 +137,12 @@ def generate_annotation_page(
     # Build navigation
     nav_html = '<div class="nav-buttons">'
     nav_html += '<a href="index.html" class="nav-btn">Home</a>'
+    _page_prefix_esc = _esc(page_prefix)
     if page_num > 1:
-        nav_html += f'<a href="{page_prefix}_{page_num-1}.html" class="nav-btn">Prev</a>'
+        nav_html += f'<a href="{_page_prefix_esc}_{page_num-1}.html" class="nav-btn">Prev</a>'
     nav_html += f'<span class="page-info">Page {page_num} / {total_pages}</span>'
     if page_num < total_pages:
-        nav_html += f'<a href="{page_prefix}_{page_num+1}.html" class="nav-btn">Next</a>'
+        nav_html += f'<a href="{_page_prefix_esc}_{page_num+1}.html" class="nav-btn">Next</a>'
     nav_html += "</div>"
 
     # Build channel legend HTML if provided
@@ -216,7 +217,7 @@ def generate_annotation_page(
                 mc_color = "#ffaa00"
             elif mc in ("none",):
                 mc_color = "#888"
-            stats_parts.append(f'<span style="color:{mc_color};font-weight:bold">{mc}</span>')
+            stats_parts.append(f'<span style="color:{_esc(mc_color)};font-weight:bold">{mc}</span>')
         if "islet_id" in stats and stats["islet_id"] is not None:
             stats_parts.append(f'I{_esc(str(stats["islet_id"]))}')
 
@@ -359,6 +360,7 @@ def generate_index_page(
     if title is None:
         title = f"{cell_type.upper()} Annotation Review"
     title = _esc(title)
+    page_prefix = _esc(page_prefix)
 
     # Build info lines
     info_lines = []
@@ -698,7 +700,7 @@ def generate_dual_index_page(
         ct_safe = _esc(ct)
         total_samples = info.get("total_samples", 0)
         total_pages = info.get("total_pages", 0)
-        page_prefix = info.get("page_prefix", f"{ct}_page")
+        page_prefix = _esc(info.get("page_prefix", f"{ct}_page"))
 
         sections_html += f"""
         <div class="cell-type-section">
@@ -1110,11 +1112,12 @@ def generate_vessel_annotation_page(
     # Build navigation
     nav_html = '<div class="nav-buttons">'
     nav_html += '<a href="index.html" class="nav-btn">Home</a>'
+    _page_prefix_esc = _esc(page_prefix)
     if page_num > 1:
-        nav_html += f'<a href="{page_prefix}_{page_num-1}.html" class="nav-btn">Prev</a>'
+        nav_html += f'<a href="{_page_prefix_esc}_{page_num-1}.html" class="nav-btn">Prev</a>'
     nav_html += f'<span class="page-info">Page {page_num} / {total_pages}</span>'
     if page_num < total_pages:
-        nav_html += f'<a href="{page_prefix}_{page_num+1}.html" class="nav-btn">Next</a>'
+        nav_html += f'<a href="{_page_prefix_esc}_{page_num+1}.html" class="nav-btn">Next</a>'
     nav_html += "</div>"
 
     # Build subtitle HTML if provided
@@ -1364,6 +1367,7 @@ def generate_vessel_index_page(
     if title is None:
         title = f"{cell_type.upper()} Annotation Review"
     title = _esc(title)
+    page_prefix = _esc(page_prefix)
 
     # Build info lines
     info_lines = []
