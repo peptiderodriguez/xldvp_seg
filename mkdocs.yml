@@ -52,6 +52,9 @@ nav:
       - "I/O": api/io.md
       - Training: api/training.md
       - Visualization: api/visualization.md
+  - Guides:
+      - NMJ Pipeline: NMJ_PIPELINE_GUIDE.md
+      - Vessel Analysis: VESSEL_COMMUNITY_ANALYSIS.md
   - Contributing: contributing.md
   - Changelog: changelog.md
 

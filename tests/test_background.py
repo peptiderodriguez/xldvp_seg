@@ -103,3 +103,33 @@ class TestLocalBackgroundSubtract:
         assert np.all(corrected >= 0)
         # Outlier should retain most of its value (bg from neighbors ~ 50)
         assert corrected[0] > 9000
+
+    def test_nan_values_no_crash(self):
+        """NaN values in input should not crash (numpy propagates NaN gracefully)."""
+        np.random.seed(42)
+        n = 50
+        centroids = np.random.rand(n, 2) * 1000
+        values = np.random.rand(n) * 100
+        values[5] = np.nan
+        # Should not raise — NaN propagation is acceptable
+        corrected, bg, _ = local_background_subtract(values, centroids)
+        assert len(corrected) == n
+
+    def test_negative_values_clipped(self):
+        """Negative input values should result in corrected >= 0."""
+        np.random.seed(42)
+        n = 50
+        centroids = np.random.rand(n, 2) * 1000
+        values = np.random.rand(n) * 100 - 50  # some negative
+        corrected, bg, _ = local_background_subtract(values, centroids)
+        assert np.all(corrected >= 0)
+
+    def test_background_positive_when_nonzero_values(self):
+        """When values are positive, at least some background should be > 0."""
+        np.random.seed(42)
+        n = 100
+        centroids = np.random.rand(n, 2) * 1000
+        values = np.random.rand(n) * 100 + 10  # all > 10
+        corrected, bg, _ = local_background_subtract(values, centroids)
+        assert np.any(bg > 0)
+        assert np.any(corrected < values)

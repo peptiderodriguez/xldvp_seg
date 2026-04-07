@@ -8,6 +8,8 @@ Provides:
 - Feature extraction utilities
 """
 
+import importlib
+
 from .config import (
     DEFAULT_CONFIG,
     DEFAULT_PATHS,
@@ -24,18 +26,6 @@ from .config import (
 from .detection_utils import (
     extract_feature_matrix,
     load_detections,
-)
-from .feature_extraction import (
-    MORPHOLOGICAL_FEATURE_COUNT,
-    RESNET50_FEATURE_DIM,
-    SAM2_EMBEDDING_DIM,
-    VESSEL_FEATURE_COUNT,
-    compute_hsv_features,
-    create_resnet_transform,
-    extract_morphological_features,
-    extract_resnet_features_batch,
-    extract_resnet_features_single,
-    preprocess_crop_for_resnet,
 )
 from .json_utils import (
     NumpyEncoder,
@@ -81,6 +71,31 @@ from .vessel_features import (
 # Schemas require pydantic - import separately if needed
 # from xldvp_seg.utils.schemas import Detection, DetectionFile, Config, Annotations
 
+# --- Lazy imports for torch-dependent symbols from feature_extraction ---
+# These are deferred to avoid loading torch/torchvision on `import xldvp_seg`.
+_LAZY_IMPORTS = {
+    "MORPHOLOGICAL_FEATURE_COUNT": "xldvp_seg.utils.feature_extraction",
+    "RESNET50_FEATURE_DIM": "xldvp_seg.utils.feature_extraction",
+    "SAM2_EMBEDDING_DIM": "xldvp_seg.utils.feature_extraction",
+    "VESSEL_FEATURE_COUNT": "xldvp_seg.utils.feature_extraction",
+    "compute_hsv_features": "xldvp_seg.utils.feature_extraction",
+    "create_resnet_transform": "xldvp_seg.utils.feature_extraction",
+    "extract_morphological_features": "xldvp_seg.utils.feature_extraction",
+    "extract_resnet_features_batch": "xldvp_seg.utils.feature_extraction",
+    "extract_resnet_features_single": "xldvp_seg.utils.feature_extraction",
+    "preprocess_crop_for_resnet": "xldvp_seg.utils.feature_extraction",
+}
+
+
+def __getattr__(name):
+    if name in _LAZY_IMPORTS:
+        mod = importlib.import_module(_LAZY_IMPORTS[name])
+        val = getattr(mod, name)
+        globals()[name] = val  # cache for subsequent access
+        return val
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
+
+
 __all__ = [
     # Config
     "DEFAULT_CONFIG",
@@ -101,7 +116,7 @@ __all__ = [
     "log_processing_start",
     "log_processing_end",
     "ProcessingTimer",
-    # Feature Extraction
+    # Feature Extraction (lazy — loaded on first access)
     "extract_resnet_features_batch",
     "extract_resnet_features_single",
     "preprocess_crop_for_resnet",

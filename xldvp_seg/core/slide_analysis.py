@@ -392,6 +392,8 @@ class SlideAnalysis:
             obs["nuclear_area_fraction"] = [
                 d.get("features", {}).get("nuclear_area_fraction", np.nan) for d in dets
             ]
+            for nuc_key in ("nuclear_solidity", "nuclear_eccentricity", "largest_nucleus_um2"):
+                obs[nuc_key] = [d.get("features", {}).get(nuc_key, np.nan) for d in dets]
 
         # --- Build var (per-feature metadata) ---
         feature_groups = []

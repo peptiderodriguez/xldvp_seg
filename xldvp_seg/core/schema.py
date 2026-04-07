@@ -19,6 +19,10 @@ Usage:
 
 from __future__ import annotations
 
+from xldvp_seg.utils.logging import get_logger
+
+logger = get_logger(__name__)
+
 from dataclasses import asdict, dataclass, field
 
 
@@ -64,6 +68,8 @@ class Detection:
         """
         # Resolve legacy field names
         uid = d.get("uid") or d.get("id", "")
+        if not uid:
+            logger.debug("Detection missing uid/id, using empty string")
         contour_px = d.get("contour_px")
         if contour_px is None:
             contour_px = d.get("contour_dilated_px")

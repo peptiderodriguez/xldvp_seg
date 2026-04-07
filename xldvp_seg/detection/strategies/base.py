@@ -287,7 +287,7 @@ class DetectionStrategy(ABC):
             probs = classifier.predict_proba(X)[:, 1]
 
         # Update detections with scores (keep ALL - filter post-hoc by rf_prediction)
-        for j, (idx, prob) in enumerate(zip(valid_indices, probs)):
+        for idx, prob in zip(valid_indices, probs):
             det = detections[idx]
             det.score = float(prob)
             det.features["rf_prediction"] = float(prob)

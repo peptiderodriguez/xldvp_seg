@@ -442,11 +442,37 @@ def build_parser():
         help="Path to trained islet RF classifier (.pkl)",
     )
     parser.add_argument(
+        "--tissue-channels",
+        type=str,
+        default=None,
+        help="Comma-separated CZI channel indices (e.g., '2,3,5') that identify tissue "
+        "regions worth segmenting. Tiles with low summed signal in these channels are "
+        "skipped, focusing segmentation on areas with marker expression. Also used for "
+        "morphological feature extraction and SAM2 embeddings. NOT for Cellpose "
+        "segmentation (use --channel-spec for that). Required for islet detection. "
+        "For other cell types, defaults to the first 3 loaded channels.",
+    )
+    # Legacy aliases
+    parser.add_argument(
+        "--rgb-channels",
+        type=str,
+        default=None,
+        dest="rgb_channels_legacy",
+        help="Deprecated: use --tissue-channels instead.",
+    )
+    parser.add_argument(
+        "--display-channels",
+        type=str,
+        default=None,
+        dest="display_channels_legacy",
+        help="Deprecated: use --tissue-channels instead.",
+    )
+    parser.add_argument(
         "--islet-display-channels",
         type=str,
-        default="2,3,5",
-        help="Comma-separated R,G,B channel indices for islet HTML display (default: 2,3,5). "
-        "Channels are mapped to R/G/B in order.",
+        default=None,
+        dest="islet_display_channels_legacy",
+        help="Deprecated: use --tissue-channels instead.",
     )
     parser.add_argument(
         "--islet-marker-channels",
@@ -910,11 +936,29 @@ def postprocess_args(args, parser):
         else:
             args.channel = 0
 
+    # Parse --tissue-channels (or legacy aliases) into list of ints
+    _dc_raw = (
+        args.tissue_channels
+        or getattr(args, "rgb_channels_legacy", None)
+        or getattr(args, "display_channels_legacy", None)
+        or getattr(args, "islet_display_channels_legacy", None)
+    )
+    if _dc_raw:
+        args.display_channel_list = [int(x.strip()) for x in _dc_raw.split(",")]
+    else:
+        args.display_channel_list = None
+
     # Handle --cell-type islet: auto-enable all-channels, dedup by area (largest wins)
     if args.cell_type == "islet":
         args.all_channels = True
-        # Parse --islet-display-channels into list of ints
-        args.islet_display_chs = [int(x.strip()) for x in args.islet_display_channels.split(",")]
+        if not args.display_channel_list:
+            parser.error(
+                "--tissue-channels is required for islet detection (e.g., '--tissue-channels 2,3,5'). "
+                "These are the marker channels used to find tissue regions worth segmenting — "
+                "NOT the segmentation channels (use --channel-spec for that). "
+                "Run `xlseg info` on your CZI to determine the correct channel indices."
+            )
+        args.islet_display_chs = args.display_channel_list
         # Parse --islet-marker-channels into dict: {name: channel_index}
         args.islet_marker_map = {}
         for pair in args.islet_marker_channels.split(","):

@@ -184,7 +184,7 @@ threshold of 1.5.
 This adds fields inside each detection's `features` sub-dict:
 
 - `{marker}_class` -- "positive" or "negative"
-- `{marker}_value` -- the raw intensity value used for classification
+- `{marker}_value` -- the intensity value used for classification (background-subtracted when bg correction is enabled; raw otherwise)
 - `marker_profile` -- e.g., "SMA+/CD31-"
 
 !!! note
@@ -222,9 +222,8 @@ dimensionality reduction and Leiden community detection.
     ```python
     tl.cluster(slide, feature_groups="morph,channel",
                output_dir="results/clusters/")
-    # Note: tl.cluster() defaults to feature_groups='morph'.
-    # The CLI `xlseg cluster` defaults to 'morph,sam2,channel'.
-    # Always specify explicitly to avoid surprises.
+    # The API defaults match the CLI: resolution=1.0, n_neighbors=30,
+    # feature_groups='morph,sam2,channel'.
     ```
 
 ## Step 8: Export to AnnData

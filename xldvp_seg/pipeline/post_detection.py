@@ -39,13 +39,13 @@ from xldvp_seg.utils.logging import get_logger
 
 logger = get_logger(__name__)
 
-# Re-use a singleton mixin instance for channel stats extraction
+# Thread-safety note: MultiChannelFeatureMixin is stateless — all methods are pure
+# functions that take inputs and return outputs with no instance state mutation.
+# This singleton is safe for concurrent use across ThreadPoolExecutor workers.
+# DO NOT add instance state to this class without refactoring to per-thread instances.
 _channel_mixin = MultiChannelFeatureMixin()
 
 # Thread pool sizing: SLURM_CPUS_PER_TASK or os.cpu_count(), capped at 32
-# Thread-safety: MultiChannelFeatureMixin has NO instance state — all methods
-# are pure functions.  If instance state is ever added, this singleton must be
-# replaced with per-thread instances or a lock.
 try:
     _MAX_WORKERS = min(int(os.environ.get("SLURM_CPUS_PER_TASK", "")), 32)
 except (ValueError, TypeError):
@@ -392,6 +392,8 @@ def _phase3_tile(
                 raw_median = feat.get(f"ch{ch}_median_raw", 0.0)
                 feat[f"ch{ch}_background"] = ch_bg
                 feat[f"ch{ch}_snr"] = float(raw_median / ch_bg)
+            else:
+                feat[f"ch{ch}_background"] = 0.0
 
         # Always compute area_um2 from the original mask
         feat["area_um2"] = float(int(crop_mask.sum()) * pixel_size_um**2)
@@ -534,14 +536,14 @@ def process_detections_post_dedup(
     # ==================================================================
     # PHASE 1: Contour extraction + quick mean extraction (parallelized)
     # ==================================================================
+    from concurrent.futures import ThreadPoolExecutor, as_completed
+
+    from tqdm import tqdm as _tqdm
+
     logger.info("-" * 40)
     logger.info(
         "Phase 1: Contour extraction + quick mean extraction (%d workers)", effective_workers
     )
-
-    from concurrent.futures import ThreadPoolExecutor, as_completed
-
-    from tqdm import tqdm as _tqdm
 
     with ThreadPoolExecutor(max_workers=effective_workers) as pool:
         futures = {

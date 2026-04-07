@@ -44,6 +44,10 @@ def markers(
     in-place with {marker}_class, {marker}_value, and marker_profile
     fields (stored in each detection's ``features`` sub-dict).
 
+    Note: defaults to ``intensity_feature='snr'`` (recommended for most
+    use cases). The lower-level ``classify_single_marker`` defaults to
+    ``'mean'``.
+
     Args:
         slide: SlideAnalysis object.
         marker_channels: List of channel indices (e.g., [1, 2]).
@@ -63,29 +67,38 @@ def markers(
         logger.warning("No detections to classify")
         return slide
 
-    out_dir = Path(output_dir) if output_dir else Path(tempfile.mkdtemp())
+    _tmp_ctx = None
+    if output_dir:
+        out_dir = Path(output_dir)
+    else:
+        _tmp_ctx = tempfile.TemporaryDirectory()
+        out_dir = Path(_tmp_ctx.name)
 
-    summaries = []
-    for ch, name in zip(marker_channels, marker_names):
-        logger.info("Classifying marker %s (channel %d, method=%s)", name, ch, method)
-        summary = classify_single_marker(
-            detections=detections,
-            channel=ch,
-            marker_name=name,
-            method=method,
-            output_dir=out_dir,
-            snr_threshold=snr_threshold,
-            intensity_feature=kwargs.get("intensity_feature", "snr"),
-            **{k: v for k, v in kwargs.items() if k != "intensity_feature"},
-        )
-        summaries.append(summary)
-        logger.info(
-            "  %s: %d+ / %d- (threshold=%.2f)",
-            name,
-            summary.get("n_positive", 0),
-            summary.get("n_negative", 0),
-            summary.get("threshold", 0),
-        )
+    try:
+        summaries = []
+        for ch, name in zip(marker_channels, marker_names):
+            logger.info("Classifying marker %s (channel %d, method=%s)", name, ch, method)
+            summary = classify_single_marker(
+                detections=detections,
+                channel=ch,
+                marker_name=name,
+                method=method,
+                output_dir=out_dir,
+                snr_threshold=snr_threshold,
+                intensity_feature=kwargs.get("intensity_feature", "snr"),
+                **{k: v for k, v in kwargs.items() if k != "intensity_feature"},
+            )
+            summaries.append(summary)
+            logger.info(
+                "  %s: %d+ / %d- (threshold=%.2f)",
+                name,
+                summary.get("n_positive", 0),
+                summary.get("n_negative", 0),
+                summary.get("threshold", 0),
+            )
+    finally:
+        if _tmp_ctx is not None:
+            _tmp_ctx.cleanup()
 
     # Build marker_profile from all markers (even for single marker)
     for det in detections:
@@ -262,12 +275,12 @@ def train(
 
 def cluster(
     slide: SlideAnalysis,
-    feature_groups: str = "morph",
+    feature_groups: str = "morph,sam2,channel",
     methods: str = "both",
-    resolution: float = 0.1,
+    resolution: float = 1.0,
     output_dir: str | Path | None = None,
-    n_neighbors: int = 15,
-    min_dist: float = 0.05,
+    n_neighbors: int = 30,
+    min_dist: float = 0.1,
     clustering: str = "leiden",
     **kwargs: Any,
 ) -> SlideAnalysis:
@@ -275,12 +288,15 @@ def cluster(
 
     Args:
         slide: SlideAnalysis object.
-        feature_groups: Feature groups ("morph", "morph_sam2", "all").
+        feature_groups: Comma-separated feature groups to include. Valid values:
+            "morph" (shape + color), "shape", "color", "sam2", "channel"
+            (per-channel intensities), "deep" (ResNet + DINOv2). Example:
+            ``"morph,sam2,channel"``. Default: ``"morph,sam2,channel"``.
         methods: Dim reduction methods ("umap", "tsne", "both").
-        resolution: Leiden resolution (default: 0.1).
+        resolution: Leiden resolution (default: 1.0).
         output_dir: Output directory for plots and clustered JSON.
-        n_neighbors: UMAP n_neighbors (default: 15).
-        min_dist: UMAP min_dist (default: 0.05).
+        n_neighbors: UMAP n_neighbors (default: 30).
+        min_dist: UMAP min_dist (default: 0.1).
         clustering: Clustering method ("leiden", "hdbscan").
 
     Returns:

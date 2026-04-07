@@ -132,7 +132,7 @@ The pipeline follows a **detect-once, classify-later** design. All features are 
 | **Islet** | Cellpose membrane+nuclear + markers | Pancreatic islet cells |
 | **Tissue Pattern** | Cellpose + spatial frequency analysis | Brain FISH, coronal sections |
 | **Mesothelium** | Ridge detection for ribbon structures | Mesothelial ribbon for LMD |
-| **InstanSeg** | 3.8M-param lightweight alternative | `--segmenter instanseg` |
+| **InstanSeg** | 3.8M-param lightweight alternative | `--cell-type cell --segmenter instanseg` |
 
 ---
 
@@ -243,6 +243,8 @@ See `examples/` for experiment-specific analyses (bone marrow, liver zonation, i
 
 ## Python API
 
+`tl.*` is the primary programmatic API (markers, scoring, clustering, spatial analysis). Detection runs via CLI (`xlseg detect`). Plotting and LMD export APIs are planned.
+
 ```python
 from xldvp_seg.core import SlideAnalysis
 from xldvp_seg.api import tl
@@ -303,7 +305,7 @@ Chains detection → marker classification → nuclei counting → HTML viewer a
 
 ```
 xldvp_seg/              # Main package (pip install -e .)
-├── api/                   # Scanpy-style API (pp, tl, pl, io)
+├── api/                   # Scanpy-style API (tl is primary; pp, pl, io planned)
 ├── classification/        # Vessel type classifiers, feature selection
 ├── cli/                   # xlseg CLI entry point (13 subcommands)
 ├── core/                  # SlideAnalysis central state object + detection schema

@@ -11,10 +11,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - `xldvp_seg/visualization/` package -- reusable HTML visualization components extracted from the monolithic spatial viewer. 7 Python modules (`fluorescence.py`, `colors.py`, `encoding.py`, `data_loading.py`, `graph_patterns.py`, `js_loader.py`, `__init__.py`) + 13 JS component files in `js/` subdirectory.
 - `scripts/generate_contour_viewer.py` -- generates self-contained HTML for contour overlays on CZI fluorescence. Supports grouping by configurable field (vessel_type, scale, etc.), R/G/B channel toggle, pan/zoom with RAF batching, viewport culling for 50K+ contours, and click-to-inspect metadata panel.
+- `--marker-snr-channels` flag for built-in SNR marker classification during detection (zero extra cost).
+- `xlseg qc` subcommand for quick quality checks without HTML viewer (now 13 subcommands total).
+- Lazy torch imports for faster package loading.
 
 ### Changed
 
 - `scripts/generate_multi_slide_spatial_viewer.py` refactored to import from `xldvp_seg.visualization` instead of defining utilities inline (4062 to 3115 lines, ~30% smaller). Same external behavior.
+
+### Fixed
+
+- 16+ documentation findings (nesting, stale counts, field names).
+- mmap chunk boundary escape bug (overlap chunks by 1 byte + try/finally).
+- `sys.exit()` in library code replaced with proper exceptions.
+- AnnData nuclear fields placement (obs, not X).
+- Coordinate mutation safety in position extraction utilities.
+- Various bug fixes: SHM leak on resume, marker_profile dict level, non-numeric columns crash.
 
 ## [2.0.0] - 2026-03-25
 

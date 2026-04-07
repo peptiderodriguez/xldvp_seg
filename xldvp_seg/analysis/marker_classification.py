@@ -238,8 +238,9 @@ def classify_single_marker(
     """Classify detections for one marker. Returns summary row dict.
 
     Mutates detections in-place: adds {marker}_class, {marker}_value,
-    {marker}_threshold, and optionally {marker}_background and {marker}_snr
-    to each detection's features dict.
+    {marker}_raw, {marker}_background, and {marker}_snr
+    to each detection's features dict. The threshold is returned in the
+    summary dict, not stored per-detection.
 
     Args:
         intensity_feature: Which stat to threshold on ('mean', 'median', 'p75', 'p95').

@@ -267,7 +267,9 @@ class OmicLinker:
                 }
             )
 
-        result_df = pd.DataFrame(results).sort_values("p_value")
+        result_df = pd.DataFrame(results)
+        if len(result_df) > 0:
+            result_df = result_df.sort_values("p_value")
         if len(result_df) > 0:
             try:
                 from statsmodels.stats.multitest import multipletests

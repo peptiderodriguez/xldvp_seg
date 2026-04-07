@@ -198,9 +198,9 @@ def _gpu_worker(
                 models["transform"] = transform
                 models["classifier_type"] = "cnn"
             else:
-                from xldvp_seg.detection.strategies.nmj import load_nmj_rf_classifier
+                from xldvp_seg.utils.detection_utils import load_rf_classifier
 
-                classifier_data = load_nmj_rf_classifier(classifier_path)
+                classifier_data = load_rf_classifier(classifier_path)
                 models["classifier"] = classifier_data["pipeline"]
                 models["classifier_type"] = "rf"
                 models["scaler"] = None
@@ -235,6 +235,11 @@ def _gpu_worker(
                 work_item = input_queue.get(timeout=1.0)
             except queue.Empty:
                 continue
+            except (BrokenPipeError, EOFError):
+                logger.warning(
+                    f"[{worker_name}] Queue pipe broken — main process likely dead, exiting"
+                )
+                break
 
             if work_item is None:
                 logger.info(f"[{worker_name}] Received shutdown signal")
@@ -352,14 +357,13 @@ def _gpu_worker(
                         )
                         extra_channel_tiles[czi_ch] = tile_raw[:, :, slot_idx]
 
-            # For islet: override tile_rgb with display channels from --islet-display-channels
-            # so morphological features are extracted from the marker channels,
-            # not the first 3 channels.
-            _islet_disp = islet_display_channels or [2, 3, 5]
-            if cell_type == "islet" and extra_channel_tiles and n_ch >= 2:
-                # Find shared memory slots corresponding to the display channel indices
+            # Override tile_rgb with user-specified --tissue-channels.
+            # Maps selected CZI marker channels to R/G/B to focus segmentation on
+            # tissue regions with signal. Also used for morphological feature extraction
+            # and SAM2 embeddings. Works for any cell type (required for islet).
+            if islet_display_channels and extra_channel_tiles and n_ch >= 2:
                 _disp_slots = []
-                for _dc in _islet_disp:
+                for _dc in islet_display_channels:
                     slot = (
                         next((i for i, k in enumerate(channel_keys) if k == _dc), None)
                         if channel_keys
@@ -373,9 +377,9 @@ def _gpu_worker(
                         rgb_channels.append(np.zeros_like(rgb_channels[0]))
                     tile_rgb = np.stack(rgb_channels[:3], axis=-1)
                 else:
-                    missing = [c for c, s in zip(_islet_disp, _disp_slots) if s is None]
+                    missing = [c for c, s in zip(islet_display_channels, _disp_slots) if s is None]
                     logger.warning(
-                        f"[{worker_name}] Islet display channels {missing} not in "
+                        f"[{worker_name}] Display channels {missing} not in "
                         f"channel_keys={channel_keys}. Using first 3 channels."
                     )
 

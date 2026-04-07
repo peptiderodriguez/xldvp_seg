@@ -7,10 +7,8 @@ Provides:
 - Detection strategies for different cell types (NMJ, MK, vessel, etc.)
 """
 
-from .cell_detector import (
-    CellDetector,
-    extract_morphological_features,
-)
+import importlib
+
 from .registry import StrategyRegistry
 from .strategies import (
     Detection,
@@ -27,6 +25,22 @@ from .tissue import (
     is_tissue_block,
 )
 
+# --- Lazy imports for torch-dependent symbols from cell_detector ---
+_LAZY_IMPORTS = {
+    "CellDetector": "xldvp_seg.detection.cell_detector",
+    "extract_morphological_features": "xldvp_seg.detection.cell_detector",
+}
+
+
+def __getattr__(name):
+    if name in _LAZY_IMPORTS:
+        mod = importlib.import_module(_LAZY_IMPORTS[name])
+        val = getattr(mod, name)
+        globals()[name] = val  # cache for subsequent access
+        return val
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
+
+
 __all__ = [
     # Tissue detection
     "calculate_block_variances",
@@ -36,7 +50,7 @@ __all__ = [
     "compute_tissue_thresholds",
     "calibrate_tissue_threshold",
     "filter_tissue_tiles",
-    # Unified cell detector
+    # Unified cell detector (lazy — loaded on first access)
     "CellDetector",
     "extract_morphological_features",
     # Detection strategies

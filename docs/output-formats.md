@@ -80,7 +80,10 @@ For each channel N:
 | Field | Type | Description |
 |-------|------|-------------|
 | `{marker}_class` | string | "positive" or "negative" |
-| `{marker}_value` | float | Raw intensity value used for classification |
+| `{marker}_value` | float | Intensity value used for classification (background-subtracted when bg correction is enabled; raw otherwise) |
+| `{marker}_raw` | float | Raw (uncorrected) intensity value (only when bg correction is enabled) |
+| `{marker}_background` | float | Per-cell background estimate (only when bg correction is enabled) |
+| `{marker}_snr` | float | Signal-to-noise ratio: raw / background (only when bg correction is enabled) |
 | `marker_profile` | string | Combined profile, e.g., "SMA+/CD31-" |
 
 The threshold used for each marker is stored in the summary dict returned by `classify_single_marker()`, not per-detection.

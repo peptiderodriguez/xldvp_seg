@@ -1,4 +1,8 @@
-"""Tests for curvilinear pattern detection (detect_curvilinear_patterns.py).
+"""Tests for curvilinear pattern detection.
+
+Core logic promoted into the package is imported from xldvp_seg.analysis.pattern_detection
+and xldvp_seg.utils.graph_topology. Helper functions that remain in the script
+(extract_aligned_positions, tag_detections) are imported via sys.path.
 
 Tests cover:
 - Component classification (strip vs blob via graph diameter linearity)
@@ -14,6 +18,7 @@ from pathlib import Path
 import numpy as np
 import pytest
 
+# Package-level imports (promoted from script)
 from xldvp_seg.analysis.pattern_detection import (
     classify_components,
     refine_strip_cells,
@@ -21,7 +26,7 @@ from xldvp_seg.analysis.pattern_detection import (
 )
 from xldvp_seg.utils.graph_topology import component_width
 
-# Ensure scripts/ is importable for functions that remain in the script
+# Script-level imports (not yet promoted into package)
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "scripts"))
 
 from detect_curvilinear_patterns import (

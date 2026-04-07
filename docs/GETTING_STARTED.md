@@ -57,7 +57,7 @@ CZI Image (20-180 GB)
 [Tile Sampling] ---- Process 100% of tissue tiles (--sample-fraction always 1.0)
     |
     v
-[Segmentation] ----- Strategy-specific detection (one of 7 cell types)
+[Segmentation] ----- Strategy-specific detection (7 cell types + InstanSeg segmenter)
     |                  Multi-GPU processing (always, even with --num-gpus 1)
     |                  Optional multi-node sharding (--tile-shard INDEX/TOTAL)
     v
@@ -205,7 +205,7 @@ Tiles are generated with configurable overlap:
 
 ## Step 3 -- Segmentation
 
-Seven cell types are supported, each with a dedicated detection strategy:
+7 cell types via `--cell-type` (nmj, mk, cell, vessel, mesothelium, islet, tissue_pattern), plus InstanSeg as an alternative segmenter (`--cell-type cell --segmenter instanseg`):
 
 | Cell Type | Strategy | Detection Method |
 |-----------|----------|-----------------|
@@ -216,6 +216,7 @@ Seven cell types are supported, each with a dedicated detection strategy:
 | `mesothelium` | MesotheliumStrategy | Ridge detection + skeleton chunking for LMD |
 | `islet` | IsletStrategy | Cellpose (membrane+nuclear) + SAM2 + GMM/percentile marker classification |
 | `tissue_pattern` | TissuePatternStrategy | Multi-channel summed Cellpose (no SAM2 refinement) |
+| `cell --segmenter instanseg` | InstanSegStrategy | InstanSeg 3.8M-param lightweight alternative to Cellpose |
 
 ### NMJ Detection
 
@@ -263,9 +264,9 @@ python run_segmentation.py \
     --mk-max-area 2000
 ```
 
-### Cell (HSPC) Detection
+### Cell Detection (Generic)
 
-Generic Cellpose + SAM2 pipeline for hematopoietic stem/progenitor cells.
+Generic Cellpose + SAM2 pipeline for any cell type.
 
 ```bash
 python run_segmentation.py \
@@ -348,7 +349,7 @@ python run_segmentation.py \
     --membrane-channel 1 \
     --nuclear-channel 4 \
     --all-channels \
-    --islet-display-channels 2,3,5 \
+    --tissue-channels 2,3,5 \
     --islet-marker-channels "gcg:2,ins:3,sst:5" \
     --gmm-p-cutoff 0.75 \
     --marker-top-pct 5 \
@@ -360,7 +361,7 @@ Islet-specific parameters:
 ```bash
 --membrane-channel 1          # AF633 membrane marker
 --nuclear-channel 4           # DAPI
---islet-display-channels 2,3,5  # Channels for RGB HTML display
+--tissue-channels 2,3,5        # Marker channels identifying tissue regions to segment
 --islet-marker-channels "gcg:2,ins:3,sst:5"  # Marker name:channel pairs
 --nuclei-only                 # DAPI-only mode (no membrane channel)
 --marker-signal-factor 2.0    # Fold above background for positive call
@@ -1230,6 +1231,6 @@ repeated network I/O.
 
 | Port | Use |
 |------|-----|
-| 8080 | MK/HSPC viewer |
+| 8080 | MK/Cell viewer |
 | 8081 | NMJ viewer (default for `run_segmentation.py`) |
 | 8082 | Vessel viewer |

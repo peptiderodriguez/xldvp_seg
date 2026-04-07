@@ -74,6 +74,19 @@ class TestClassifyOtsu:
         _, mask = classify_otsu(values)
         assert len(mask) == len(values)
 
+    def test_single_element(self):
+        """Single element should not crash."""
+        values = np.array([5.0])
+        threshold, mask = classify_otsu(values)
+        assert threshold == 0.0
+        assert mask.sum() == 0
+
+    def test_nan_values(self):
+        """NaN in values should be handled gracefully (not crash)."""
+        values = np.array([1.0, 2.0, float("nan"), 5.0, 6.0, 7.0, 8.0, 9.0, 10.0, 20.0, 30.0, 40.0])
+        threshold, mask = classify_otsu(values)
+        assert len(mask) == len(values)
+
     def test_positive_requires_above_zero(self):
         values = np.array([0.0, 0.0, 0.0, 5.0, 6.0, 7.0, 8.0, 9.0, 10.0, 20.0, 30.0, 40.0])
         _, mask = classify_otsu(values)

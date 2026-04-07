@@ -290,7 +290,7 @@ PYTHONPATH=$REPO $XLDVP_PYTHON $REPO/scripts/classify_markers.py \
 
 **Shortcut — `--marker-snr-channels`:** Instead of running `classify_markers.py` as a separate step, pass `--marker-snr-channels "SMA:1,CD31:3"` to `xlseg detect` (or `run_segmentation.py`). This classifies markers during detection using the pre-computed SNR >= 1.5 threshold at zero extra cost. Format: `"NAME:CHANNEL_INDEX,..."`. The same output fields are produced.
 
-**Output fields:** `{marker}_class` (positive/negative), `{marker}_value`, `{marker}_threshold`, `marker_profile` (e.g., `NeuN+/tdTomato-`). Pipeline also stores `ch{N}_background`, `ch{N}_snr`, `ch{N}_median_raw` in features.
+**Output fields:** `{marker}_class` (positive/negative), `{marker}_value`, `{marker}_raw`, `{marker}_background`, `{marker}_snr`, `marker_profile` (e.g., `NeuN+/tdTomato-`). Pipeline also stores `ch{N}_background`, `ch{N}_snr`, `ch{N}_median_raw` in features.
 
 ### Phase 5: Spatial Analysis & Exploration
 
@@ -382,7 +382,7 @@ CZI file → czi_loader.py (channel resolution, tiling)
 | `detection_loop.py` | Tile dispatch, multi-GPU detection, shard merge, dedup |
 | `samples.py` | HTML sample creation, tile grid, islet GMM calibration |
 | `resume.py` | Checkpoint detection, tile reload, `compose_tile_rgb()` |
-| `post_detection.py` | 3-phase post-dedup (original-mask contour extraction, bg, intensity) — ThreadPool parallelized |
+| `post_detection.py` | 3-phase post-dedup + optional Phase 4 nuclear counting (original-mask contour extraction, bg, intensity, nuclei) — ThreadPool parallelized |
 | `finalize.py` | Channel legend, CSV/JSON/HTML export, summary |
 | `server.py` | HTTP server + Cloudflare tunnel |
 | `background.py` | KD-tree local background correction (shared with classify_markers.py) |
@@ -484,7 +484,7 @@ Background correction KD-tree MUST use `global_center` (slide-level), NOT `featu
 
 ### Shared Utilities (`xldvp_seg/utils/detection_utils.py`)
 
-- `extract_positions_um(detections, pixel_size_um=None)` — canonical position extraction with 3-level fallback: `global_center_um` → `global_center * pixel_size` → `global_x/y * pixel_size`. Auto-infers pixel_size from `area/area_um2`. Use instead of writing inline position extraction.
+- `extract_positions_um(detections, pixel_size_um=None, return_indices=False)` — canonical position extraction with 3-level fallback: `global_center_um` → `global_center * pixel_size` → `global_x/y * pixel_size`. Auto-infers pixel_size from `area/area_um2`. Pass `return_indices=True` to get a 3-tuple `(positions, pixel_size, valid_indices)`. Use instead of writing inline position extraction.
 - `load_rf_classifier(model_path)` — generic RF classifier loader (replaces NMJ-specific `load_nmj_rf_classifier`). Handles Pipeline and dict formats, tries multiple sidecar feature-name files.
 - `transform_native_to_display()` in `xldvp_seg/lmd/contour_processing.py` — canonical LMD coordinate transform (flip_h, rot90). Single source of truth for both `run_lmd_export.py` and `lmd_export_replicates.py`.
 
@@ -517,6 +517,7 @@ All coordinates are [x, y] (horizontal, vertical). UID format: `{slide}_{celltyp
 - `--photobleaching-correction` (with `-ing`) — **EXPERIMENTAL**, results unreliable
 - `--sequential` does NOT exist — use `--num-gpus 1`
 - `--nuclear-channel` / `--membrane-channel` are islet-only (validated only for `cell_type=='islet'`)
+- `--tissue-channels "2,3,5"` — marker channels that identify tissue regions worth segmenting. Tiles with low signal in these channels are skipped. Also controls morphological feature extraction and SAM2 embeddings. NOT for Cellpose segmentation (use `--channel-spec`). Required for islet; optional for other cell types. Legacy: `--islet-display-channels` / `--display-channels` / `--rgb-channels` still accepted.
 - `--sample-fraction` is ALWAYS 1.0 — detect 100%, use `--html-sample-fraction` to subsample HTML only
 - `--segmenter {cellpose,instanseg}` — alternative cell segmenter (default: cellpose). Requires `pip install -e .[instanseg]`. Only applies to `--cell-type cell`.
 - `--marker-snr-channels "SMA:1,CD31:3"` — auto-classify markers during detection using pre-computed SNR >= 1.5. Replaces the separate `classify_markers.py` step. Format: `"NAME:CHANNEL_INDEX,..."`. Requires `--all-channels`.

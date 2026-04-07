@@ -4,7 +4,6 @@ Encapsulates the direct-to-SHM channel loading, tile grid generation, tissue
 detection/calibration, tile sampling, and shard manifest logic from run_pipeline().
 """
 
-import sys
 from pathlib import Path
 
 import numpy as np
@@ -12,7 +11,7 @@ import numpy as np
 from xldvp_seg.detection.tissue import calibrate_tissue_threshold, filter_tissue_tiles
 from xldvp_seg.pipeline.preprocessing import apply_slide_preprocessing
 from xldvp_seg.pipeline.samples import generate_tile_grid
-from xldvp_seg.utils.json_utils import atomic_json_dump, fast_json_load
+from xldvp_seg.utils.json_utils import atomic_json_dump
 from xldvp_seg.utils.logging import get_logger
 
 logger = get_logger(__name__)
@@ -181,10 +180,9 @@ def setup_shared_memory(
     )
 
     if len(tissue_tiles) == 0:
-        logger.error(
+        raise RuntimeError(
             "No tissue-containing tiles found! Check CZI file and tissue detection thresholds."
         )
-        sys.exit(1)
 
     # Sample from tissue tiles
     n_sample = max(1, int(len(tissue_tiles) * args.sample_fraction))
@@ -216,27 +214,13 @@ def setup_shared_memory(
     # process the exact same tile list even if tissue calibration diverges slightly.
     # Tiles are dicts with 'x' and 'y' keys.
     if getattr(args, "tile_shard", None):
+        if getattr(args, "sample_fraction", 1.0) != 1.0:
+            raise ValueError("Multi-node sharding requires sample_fraction=1.0")
         tile_list_file = slide_output_dir / "sampled_tiles.json"
-        if tile_list_file.exists():
-            # Another shard already wrote the tile list -- use it
-            sampled_tiles = fast_json_load(tile_list_file)
-            logger.info(
-                f"Loaded shared tile list from {tile_list_file} ({len(sampled_tiles)} tiles)"
-            )
-        else:
-            # First shard to arrive -- write the tile list atomically
-            try:
-                atomic_json_dump(sampled_tiles, tile_list_file)
-                logger.info(
-                    f"Wrote shared tile list to {tile_list_file} ({len(sampled_tiles)} tiles)"
-                )
-            except OSError:
-                # Another shard beat us in a race -- read theirs
-                if tile_list_file.exists():
-                    sampled_tiles = fast_json_load(tile_list_file)
-                    logger.info(
-                        f"Race: loaded shared tile list from {tile_list_file} ({len(sampled_tiles)} tiles)"
-                    )
+        # All shards derive the same tile list from the same CZI (sample_fraction=1.0),
+        # so atomic writes are safe — last writer wins with identical content.
+        atomic_json_dump(sampled_tiles, tile_list_file)
+        logger.info(f"Wrote shared tile list to {tile_list_file} ({len(sampled_tiles)} tiles)")
 
         # Round-robin shard assignment
         # NOTE: Per-tile resume not implemented for shard mode.

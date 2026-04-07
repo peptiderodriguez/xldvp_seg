@@ -51,6 +51,7 @@ Key flags:
 | `--dedup-method` | `mask_overlap` (default) or `iou_nms` |
 | `--resume` | Resume from a previous run directory |
 | `--marker-snr-channels` | Auto-classify markers during detection using pre-computed SNR >= 1.5 (format: `"SMA:1,CD31:3"`) |
+| `--tissue-channels` | Marker channels identifying tissue regions to segment (e.g., `"2,3,5"`). Required for islet. Not for Cellpose segmentation (use `--channel-spec`). Legacy: `--islet-display-channels` |
 | `--no-contour-processing` | Skip contour extraction from HDF5 masks |
 | `--no-background-correction` | Skip local background subtraction |
 

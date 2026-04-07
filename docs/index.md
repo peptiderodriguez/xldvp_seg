@@ -94,7 +94,9 @@ adata = slide.to_anndata()
 | **Islet** | Cellpose membrane+nuclear + marker classification | Pancreatic islet cells |
 | **Mesothelium** | Ridge detection for ribbon structures | Mesothelial ribbon for LMD |
 | **Tissue Pattern** | Cellpose + spatial frequency analysis | Whole-mount tissue (brain FISH) |
-| **InstanSeg** | InstanSeg 3.8M-param alternative to Cellpose | Lightweight alternative segmenter |
+| **InstanSeg** | InstanSeg 3.8M-param alternative to Cellpose | `--cell-type cell --segmenter instanseg` |
+
+`tl.*` is the primary programmatic API (markers, scoring, clustering, spatial analysis). Detection runs via CLI (`xlseg detect`). Plotting and LMD export APIs are planned.
 
 ## Next Steps
 

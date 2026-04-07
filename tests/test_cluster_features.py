@@ -3,9 +3,9 @@
 import numpy as np
 
 from xldvp_seg.analysis.cluster_features import (
+    _extract_feature_matrix,
     classify_feature_group,
     discover_channels_from_features,
-    extract_feature_matrix,
     normalize_marker_features,
     parse_exclude_channels,
     parse_marker_channels,
@@ -128,7 +128,7 @@ class TestExtractFeatureMatrix:
             {"features": {"area": 100.0, "circ": 0.9}},
             {"features": {"area": 75.0, "circ": 0.7}},
         ]
-        X, names, valid = extract_feature_matrix(dets, ["area", "circ"])
+        X, names, valid = _extract_feature_matrix(dets, ["area", "circ"])
         assert X.shape == (3, 2)
         assert valid == [0, 1, 2]
 
@@ -138,19 +138,19 @@ class TestExtractFeatureMatrix:
             {"features": {"area": 100.0}},  # missing circ
             {"features": {"area": 75.0, "circ": 0.7}},
         ]
-        X, names, valid = extract_feature_matrix(dets, ["area", "circ"])
+        X, names, valid = _extract_feature_matrix(dets, ["area", "circ"])
         assert X.shape == (2, 2)
         assert valid == [0, 2]
 
     def test_empty_feature_names(self):
-        X, names, valid = extract_feature_matrix([], [])
+        X, names, valid = _extract_feature_matrix([], [])
         assert X is None
         assert names == []
         assert valid == []
 
     def test_no_valid_rows(self):
         dets = [{"features": {}}]
-        X, names, valid = extract_feature_matrix(dets, ["area"])
+        X, names, valid = _extract_feature_matrix(dets, ["area"])
         # No detection has the required feature, so X is None
         assert X is None or X.shape[0] == 0
 

@@ -124,8 +124,12 @@ def _apply_marker_snr_classification(args, detections, slide_output_dir):
             continue
         name = name.strip()
         # Verify channel has SNR features before attempting classification
-        sample_feat = detections[0].get("features", {}) if detections else {}
-        if not sample_feat.get(f"ch{ch}_snr"):
+        has_snr = (
+            any(d.get("features", {}).get(f"ch{ch}_snr") for d in detections[:5])
+            if detections
+            else False
+        )
+        if not has_snr:
             logger.warning(
                 "--marker-snr-channels: skipping %s — ch%d_snr not found in features "
                 "(background correction may have been disabled or channel does not exist)",
@@ -355,12 +359,11 @@ def run_pipeline(args):
             _channels_to_check.append(("--nuclear-channel", getattr(args, "nuclear_channel", 4)))
         for _flag, _ch_val in _channels_to_check:
             if _ch_val >= n_czi_channels:
-                logger.error(
+                raise ValueError(
                     f"{_flag} {_ch_val} is out of range: CZI has {n_czi_channels} channels (0-{n_czi_channels - 1})"
                 )
-                import sys
-
-                sys.exit(1)
+    except ValueError:
+        raise  # Re-raise channel validation errors
     except Exception as _e:
         logger.warning(f"  Could not read channel metadata: {_e}")
 

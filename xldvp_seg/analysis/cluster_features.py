@@ -320,7 +320,7 @@ def load_detections_filtered(detections_path, threshold=0.5):
 # ---------------------------------------------------------------------------
 
 
-def extract_feature_matrix(detections, feature_names):
+def _extract_feature_matrix(detections, feature_names):
     """Extract feature matrix from detections using explicit feature name list.
 
     Strict mode: skips detections with any missing/non-finite feature value.
@@ -680,7 +680,7 @@ def _load_and_prepare_features(args):
             raise ValueError("marker_only requires marker channels but none found")
         feature_names = sorted(marker_mean_keys)
         logger.info("  Using normalized marker channels only: %s", feature_names)
-        X, feature_names, valid_indices = extract_feature_matrix(detections, feature_names)
+        X, feature_names, valid_indices = _extract_feature_matrix(detections, feature_names)
     else:
         feature_names = select_feature_names(detections, feature_groups, exclude_channels)
         logger.info(
@@ -694,7 +694,7 @@ def _load_and_prepare_features(args):
         for g in sorted(group_counts):
             logger.info("    %s: %d features", g, group_counts[g])
 
-        X, feature_names, valid_indices = extract_feature_matrix(detections, feature_names)
+        X, feature_names, valid_indices = _extract_feature_matrix(detections, feature_names)
 
     if X is None or len(X) == 0:
         raise ValueError("No valid features found in detections")
@@ -1898,7 +1898,7 @@ def run_subclustering(
 
         # Build feature matrix for this subset only
         sub_dets = [detections[di] for di in det_indices]
-        X_sub, _, sub_valid_local = extract_feature_matrix(sub_dets, sub_feature_names)
+        X_sub, _, sub_valid_local = _extract_feature_matrix(sub_dets, sub_feature_names)
 
         if X_sub is None or len(X_sub) < min_for_sub:
             n = 0 if X_sub is None else len(X_sub)

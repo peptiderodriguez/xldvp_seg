@@ -1,4 +1,8 @@
-"""Tests for scripts/detect_vessel_structures.py — vessel structure detection."""
+"""Tests for vessel structure detection.
+
+Functions promoted into the package are imported from xldvp_seg.analysis.vessel_characterization.
+Functions that remain in the script are imported from scripts/detect_vessel_structures.py.
+"""
 
 import sys
 from pathlib import Path
@@ -7,16 +11,21 @@ from types import SimpleNamespace
 import numpy as np
 import pytest
 
-# Add scripts to path for import
+# Package-level imports (promoted from script)
+from xldvp_seg.analysis.vessel_characterization import (
+    analyze_marker_composition,
+    assign_vessel_type,
+    detect_spatial_layering,
+    tag_detections,
+)
+
+# Script-level imports (not yet promoted)
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "scripts"))
 
 from detect_vessel_structures import (
-    analyze_marker_composition,
-    assign_vessel_type,
     classify_vessel_morphology,
     compute_vessel_morphometry,
     select_multi_marker_cells,
-    tag_detections,
 )
 
 # ---------------------------------------------------------------------------
@@ -318,7 +327,7 @@ class TestAnalyzeMarkerComposition:
 class TestDetectSpatialLayeringReverse:
     def test_cd31_outer_sma_inner(self):
         """Reversed layering: CD31 outer, SMA inner → vein-like arrangement."""
-        from detect_vessel_structures import detect_spatial_layering
+        # detect_spatial_layering imported at module level from package
 
         n = 20
         angles = np.linspace(0, 2 * np.pi, n, endpoint=False)
@@ -350,7 +359,7 @@ class TestDetectSpatialLayeringReverse:
 
     def test_layering_with_index_offset(self):
         """Verify layering works when local indices don't start at 0."""
-        from detect_vessel_structures import detect_spatial_layering
+        # detect_spatial_layering imported at module level from package
 
         # 10 cells, local indices 5..14, global indices 100..109
         n = 10
@@ -559,7 +568,7 @@ class TestAssignVesselType:
 class TestDetectSpatialLayering:
     def test_sma_outer_cd31_inner(self):
         """SMA cells at larger radii than CD31 → significant layering."""
-        from detect_vessel_structures import detect_spatial_layering
+        # detect_spatial_layering imported at module level from package
 
         # 20 cells in a ring: SMA at radius ~50, CD31 at radius ~30
         n = 20

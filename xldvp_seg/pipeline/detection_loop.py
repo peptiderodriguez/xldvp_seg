@@ -398,6 +398,7 @@ def _run_multiscale_tiles(processor, args, ctx, init, sampled_tiles):
                                 ]
                         for key in ("center", "centroid"):
                             if key in det_fullres:
+                                det_fullres[key] = list(det_fullres[key])  # defensive copy
                                 det_fullres[key][0] += x_start
                                 det_fullres[key][1] += y_start
                         if isinstance(feats_d, dict):
@@ -1099,8 +1100,10 @@ def run_detection_loop(
                     processor, args, ctx, init, sampled_tiles
                 )
         else:
-            # Regular path needs islet_display_channels
-            processor_kwargs["islet_display_channels"] = getattr(args, "islet_display_chs", None)
+            # Pass display channels for tile_rgb override (generic, not islet-only)
+            processor_kwargs["islet_display_channels"] = getattr(
+                args, "display_channel_list", None
+            ) or getattr(args, "islet_display_chs", None)
             with MultiGPUTileProcessor(**processor_kwargs) as processor:
                 all_detections, all_samples, collected_partial_vessels = _run_regular_tiles(
                     processor, args, ctx, init, sampled_tiles, all_samples

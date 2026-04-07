@@ -195,7 +195,11 @@ def correct_all_channels(
         # Read raw (uncorrected) median pixel intensity for background estimation.
         # After correct_all_channels runs: ch{N}_median = corrected, ch{N}_median_raw = original.
         # Before correct_all_channels (first pipeline run): ch{N}_median = original, no _raw yet.
-        has_raw = f"ch{ch}_median_raw" in detections[0].get("features", {}) if detections else False
+        has_raw = (
+            any(f"ch{ch}_median_raw" in d.get("features", {}) for d in detections[:10])
+            if detections
+            else False
+        )
         value_key = f"ch{ch}_median_raw" if has_raw else f"ch{ch}_median"
         values = np.array(
             [d.get("features", {}).get(value_key, 0.0) for d in detections],

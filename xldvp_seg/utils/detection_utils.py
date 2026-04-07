@@ -33,6 +33,8 @@ def safe_to_uint8(arr: np.ndarray) -> np.ndarray:
         return arr
     if arr.dtype == np.uint16:
         return (arr / 256).astype(np.uint8)
+    if arr.size == 0:
+        return np.zeros_like(arr, dtype=np.uint8)
     arr = arr.astype(np.float32)
     arr_max = arr.max()
     if arr_max <= 0:
@@ -113,8 +115,10 @@ def apply_marker_filter(detections: list[dict], filter_expr: str | None) -> list
 
 
 def extract_positions_um(
-    detections: list[dict], pixel_size_um: float | None = None
-) -> tuple[np.ndarray, float | None]:
+    detections: list[dict],
+    pixel_size_um: float | None = None,
+    return_indices: bool = False,
+) -> tuple[np.ndarray, float | None] | tuple[np.ndarray, float | None, list[int]]:
     """Extract cell positions in microns from a list of detection dicts.
 
     Resolution order for each detection:
@@ -130,12 +134,15 @@ def extract_positions_um(
         pixel_size_um: Pixel size in micrometers.  If ``None``, the
             function attempts to infer it from ``area`` / ``area_um2``
             in the first detection's features.
+        return_indices: If ``True``, also return a list of original
+            detection indices that were successfully resolved.
 
     Returns:
-        ``(positions, pixel_size_um)`` where *positions* is an
-        ``(N, 2)`` float64 array of ``[x, y]`` coordinates in microns
-        (only rows for which a position could be resolved), and
-        *pixel_size_um* is the pixel size used (may have been inferred).
+        ``(positions, pixel_size_um)`` when *return_indices* is False, or
+        ``(positions, pixel_size_um, valid_indices)`` when True.
+        *positions* is an ``(N, 2)`` float64 array of ``[x, y]``
+        coordinates in microns (only rows for which a position could be
+        resolved).
     """
     # Try to infer pixel_size_um if not provided
     if pixel_size_um is None and detections:
@@ -146,7 +153,8 @@ def extract_positions_um(
             pixel_size_um = float(np.sqrt(area_um2 / area_px))
 
     positions = []
-    for det in detections:
+    valid_indices = []
+    for i, det in enumerate(detections):
         feats = det.get("features", {})
 
         # 1. global_center_um
@@ -157,6 +165,7 @@ def extract_positions_um(
             x, y = float(center_um[0]), float(center_um[1])
             if np.isfinite(x) and np.isfinite(y):
                 positions.append([x, y])
+                valid_indices.append(i)
                 continue
 
         # 2. global_center * pixel_size_um
@@ -168,6 +177,7 @@ def extract_positions_um(
             y = float(center_px[1]) * pixel_size_um
             if np.isfinite(x) and np.isfinite(y):
                 positions.append([x, y])
+                valid_indices.append(i)
                 continue
 
         # 3. global_x / global_y
@@ -180,12 +190,15 @@ def extract_positions_um(
                 y = float(gy) * float(ps)
                 if np.isfinite(x) and np.isfinite(y):
                     positions.append([x, y])
+                    valid_indices.append(i)
                     continue
 
         # Could not resolve position for this detection — skip
         continue
 
     arr = np.array(positions, dtype=np.float64) if positions else np.empty((0, 2), dtype=np.float64)
+    if return_indices:
+        return arr, pixel_size_um, valid_indices
     return arr, pixel_size_um
 
 

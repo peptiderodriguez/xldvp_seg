@@ -46,6 +46,7 @@ logger = get_logger(__name__)
 
 # Global registry of shared memory names for cleanup on crash
 _shm_registry: set[str] = set()
+_shm_owner_pid: int | None = None  # PID that registered the SHM — only this process should unlink
 
 
 def _cleanup_shared_memory_on_exit():
@@ -53,7 +54,13 @@ def _cleanup_shared_memory_on_exit():
 
     This ensures shared memory is released even if the main process crashes
     or is killed. Without this, shared memory persists until system reboot.
+    Only runs in the process that originally registered the shared memory,
+    preventing child processes from unlinking parent's SHM.
     """
+    import os
+
+    if _shm_owner_pid is not None and os.getpid() != _shm_owner_pid:
+        return  # Child process — do not unlink parent's shared memory
     for shm_name in list(_shm_registry):
         try:
             shm = SharedMemory(name=shm_name)
@@ -85,6 +92,11 @@ if multiprocessing.current_process().name == "MainProcess":
 
 def register_shm_for_cleanup(name: str):
     """Register a shared memory name for emergency cleanup on process exit."""
+    import os
+
+    global _shm_owner_pid
+    if _shm_owner_pid is None:
+        _shm_owner_pid = os.getpid()
     _shm_registry.add(name)
 
 
