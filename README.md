@@ -305,15 +305,15 @@ Chains detection → marker classification → nuclei counting → HTML viewer a
 
 ```
 xldvp_seg/              # Main package (pip install -e .)
-├── api/                   # Scanpy-style API (tl is primary; pp, pl, io planned)
+├── api/                   # Scanpy-style API (tl primary, pl.umap + io.to_spatialdata implemented)
 ├── classification/        # Vessel type classifiers, feature selection
 ├── cli/                   # xlseg CLI entry point (13 subcommands)
 ├── core/                  # SlideAnalysis central state object + detection schema
 ├── detection/strategies/  # 8 strategies, self-registered via @register_strategy
-├── io/                    # CZI loader, HTML export, OME-Zarr, SpatialData export
+├── io/                    # CZI loader, HTML export (4 modules), OME-Zarr, SpatialData export
 ├── lmd/                   # Well plates, contour processing (adaptive RDP + dilation)
 ├── analysis/              # 9 modules: marker classification, clustering, spatial networks, patterns, sampling, OmicLinker, aggregation, nuclear counting, vessel characterization
-├── visualization/         # Reusable HTML visualization: fluorescence, colors, encoding, data loading, HTML builder, graph patterns, JS components
+├── visualization/         # Reusable HTML visualization: fluorescence, colors, encoding, data loading, HTML builder, graph patterns, 17 JS components
 ├── training/              # Classifier training: feature loading, annotation matching
 ├── models/                # Model registry (SAM2, ResNet, DINOv2, brightfield FMs)
 ├── pipeline/              # 11 modules: shm_setup, detection_loop, preprocessing, post_detection, ...

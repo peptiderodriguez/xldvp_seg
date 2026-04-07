@@ -14,13 +14,10 @@ from .czi_loader import (
     get_loader,
 )
 from .html_export import (
-    draw_mask_contour,
     export_samples_to_html,
     generate_annotation_page,
     generate_dual_index_page,
     generate_index_page,
-    image_to_base64,
-    percentile_normalize,
 )
 from .html_generator import (
     HTMLPageGenerator,
@@ -35,6 +32,11 @@ from .html_generator import (
     generate_mk_hspc_pages,
     # MK/HSPC batch export functions
     load_samples_from_ram,
+)
+from .html_utils import (
+    draw_mask_contour,
+    image_to_base64,
+    percentile_normalize,
 )
 from .tile_pipeline import (
     AsyncTileLoader,

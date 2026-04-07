@@ -9,7 +9,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
-- `xldvp_seg/visualization/` package -- reusable HTML visualization components extracted from the monolithic spatial viewer. 8 Python modules (`fluorescence.py`, `colors.py`, `encoding.py`, `data_loading.py`, `graph_patterns.py`, `html_builder.py`, `js_loader.py`, `__init__.py`) + 13 JS component files in `js/` subdirectory.
+- `xldvp_seg/visualization/` package -- reusable HTML visualization components extracted from the monolithic spatial viewer. 8 Python modules (`fluorescence.py`, `colors.py`, `encoding.py`, `data_loading.py`, `graph_patterns.py`, `html_builder.py`, `js_loader.py`, `__init__.py`) + 17 JS component files in `js/` subdirectory.
 - `scripts/generate_contour_viewer.py` -- generates self-contained HTML for contour overlays on CZI fluorescence. Supports grouping by configurable field (vessel_type, scale, etc.), R/G/B channel toggle, pan/zoom with RAF batching, viewport culling for 50K+ contours, and click-to-inspect metadata panel.
 - `--marker-snr-channels` flag for built-in SNR marker classification during detection (zero extra cost).
 - `--tissue-channels` flag (replaces `--islet-display-channels`) -- generic flag for selecting marker channels that identify tissue regions worth segmenting. Required for islet; optional for other cell types.
@@ -20,20 +20,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `xldvp_seg/lmd/export.py` -- 18 pure-logic LMD export functions promoted from `run_lmd_export.py` (script reduced from 1,904 to 1,086 lines).
 - `ClusteringConfig` dataclass in `cluster_features.py` replaces `SimpleNamespace` (28 typed fields, IDE autocomplete).
 - `pl.umap()` API implemented (delegates to `run_clustering(methods='umap')`).
-- 934 tests across 40 test files (up from 781 across 32 at 2.0.0 release).
+- 972 tests across 43 test files (up from 781 across 32 at 2.0.0 release).
 
 ### Changed
 
-- `scripts/generate_multi_slide_spatial_viewer.py` refactored to import from `xldvp_seg.visualization` instead of defining utilities inline (4062 to 3115 lines, ~30% smaller). Same external behavior.
+- `scripts/generate_multi_slide_spatial_viewer.py` refactored: inline JS replaced with `load_js()` from 17 component files (3,115 to 1,115 lines, -64%). Same external behavior.
+- Extracted `html_utils.py` (image/HDF5 utilities), `html_styles.py` (CSS generators), and `html_scripts.py` (JS generators) from `html_export.py` (3,696 to 1,790 lines). Backward-compatible re-exports maintained.
+- Exception migration: 82 bare `RuntimeError`/`ValueError` sites across 39 files replaced with domain-specific exceptions from `xldvp_seg.exceptions` (~35 genuine `ValueError` sites retained intentionally).
+- HTML module consolidation: 5 MK/HSPC duplicate functions replaced with backward-compatible shims (749 lines removed from `html_export.py`).
+- F841 ruff: 41 dead-code violations fixed, global suppress replaced with per-file ignore for `vessel.py` only.
+- Removed `numpy<2.0` upper bound pin from `pyproject.toml` (now `numpy>=1.24`).
 
 ### Fixed
 
+- 20+ bug fixes including: SHM leak on resume, marker_profile dict level, non-numeric columns crash, islet hardcoded channel fallback, single-detection sampling, worker BrokenPipeError handling, SHM cleanup PID guard, tile list race condition, temp dir leak in `tl.markers()`.
 - 16+ documentation findings (nesting, stale counts, field names).
 - mmap chunk boundary escape bug (overlap chunks by 1 byte + try/finally).
 - `sys.exit()` in library code replaced with proper exceptions.
 - AnnData nuclear fields placement (obs, not X).
 - Coordinate mutation safety in position extraction utilities.
-- Various bug fixes: SHM leak on resume, marker_profile dict level, non-numeric columns crash.
 
 ## [2.0.0] - 2026-03-25
 

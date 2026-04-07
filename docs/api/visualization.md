@@ -63,6 +63,16 @@ Spatial graph pattern detection for viewer overlays.
       show_root_heading: false
       members_order: source
 
+## HTML Builder
+
+Group index construction, position serialization, and region data compaction for
+multi-slide HTML viewers.
+
+::: xldvp_seg.visualization.html_builder
+    options:
+      show_root_heading: false
+      members_order: source
+
 ## JS Loader
 
 Composable JavaScript component loading for HTML viewers.

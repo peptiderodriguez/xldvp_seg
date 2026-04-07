@@ -32,24 +32,16 @@ Example usage:
     generator.export_to_html(samples, '/path/to/output')
 """
 
-import html as html_mod
 import warnings
 from collections.abc import Callable
 from pathlib import Path
 from typing import Any, Literal
 
 from xldvp_seg.exceptions import ConfigError
+from xldvp_seg.io.html_utils import _esc  # noqa: F401 — used throughout this module
 from xldvp_seg.utils.logging import get_logger
 
 logger = get_logger(__name__)
-
-
-def _esc(value) -> str:
-    """Escape a value for safe insertion into HTML/JS strings.
-
-    Prevents XSS by escaping <, >, &, ", and ' characters.
-    """
-    return html_mod.escape(str(value), quote=True)
 
 
 # Type aliases
@@ -1267,7 +1259,7 @@ def load_samples_from_ram(tiles_dir, slide_image, pixel_size_um, cell_type="mk",
     Returns:
         List of sample dicts with image data and metadata
     """
-    from xldvp_seg.io.html_export import (
+    from xldvp_seg.io.html_utils import (
         draw_mask_contour,
         get_largest_connected_component,
         percentile_normalize,

@@ -428,7 +428,7 @@ Post-detection analysis functions promoted from scripts/ into the package for cl
 | Module | Purpose |
 |--------|---------|
 | `marker_classification.py` | Marker pos/neg classification (SNR, Otsu, GMM) — used by `xlseg markers` and `tl.markers()` |
-| `cluster_features.py` | Feature selection, matrix building, normalization, cluster labeling — used by `xlseg cluster` |
+| `cluster_features.py` | Feature selection, matrix building, normalization, cluster labeling — `ClusteringConfig` dataclass replaces SimpleNamespace — used by `xlseg cluster` |
 | `spatial_network.py` | Delaunay networks, Louvain communities, RF/morph UMAP — used by `tl.spatial()` |
 | `pattern_detection.py` | Strip/cluster spatial pattern classification (curvilinear detection) |
 | `sliding_window_sampling.py` | Skeleton-based spatial sampling along ROI centerlines for LMD |
@@ -450,7 +450,19 @@ Reusable HTML visualization components extracted from the monolithic spatial vie
 | `graph_patterns.py` | Spatial graph pattern detection (`compute_graph_patterns`) |
 | `html_builder.py` | Group index construction, position serialization, auto-eps collection, region compaction (`build_group_index`, `serialize_slide_positions`, `collect_auto_eps`, `compact_region_data`) |
 | `js_loader.py` | Composable JS component loading (`load_js`) |
-| `js/` | 13 reusable Canvas 2D components (pan/zoom, contour rendering, viewport culling, metadata panel, etc.) |
+| `js/` | 17 reusable Canvas 2D components (pan/zoom, contour rendering, viewport culling, metadata panel, controls, init, regions, render_panel) |
+
+### HTML Export (`xldvp_seg/io/`)
+
+Split across focused modules with backward-compatible re-exports in `html_export.py`:
+
+| Module | Purpose |
+|--------|---------|
+| `html_export.py` | Page generators: `generate_annotation_page`, `generate_index_page`, `generate_dual_index_page`, `export_samples_to_html`, vessel variants. Re-exports all names from submodules for backward compatibility. |
+| `html_styles.py` | CSS generators: `get_css()`, `get_vessel_css()` |
+| `html_scripts.py` | JS generators: `get_js()`, `get_vessel_js()`, `generate_preload_annotations_js()` |
+| `html_utils.py` | Image utilities: `percentile_normalize`, `draw_mask_contour`, `image_to_base64`, `compose_tile_rgb`, `_esc`, HDF5 compression constants |
+| `html_generator.py` | Class-based `HTMLPageGenerator` API for per-tile HTML generation |
 
 ### Training Utilities (`xldvp_seg/training/`)
 
