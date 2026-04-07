@@ -337,7 +337,7 @@ Batch: `--input-dir <runs> --crosses-dir <crosses>`. Max 308 wells/plate; multi-
 
 Use `/analyze` for the full interactive catalog. Key scripts beyond detect → classify → LMD:
 
-- **Spatial**: `spatial_cell_analysis.py` (Delaunay networks; core: `xldvp_seg.analysis.spatial_network`), `cluster_by_features.py` (UMAP/t-SNE + Leiden; core: `xldvp_seg.analysis.cluster_features`), `generate_multi_slide_spatial_viewer.py` (interactive HTML viewer with fluorescence background + contours + ROI)
+- **Spatial**: `spatial_cell_analysis.py` (Delaunay networks; core: `xldvp_seg.analysis.spatial_network`), `cluster_by_features.py` (UMAP/t-SNE + Leiden; core: `xldvp_seg.analysis.cluster_features`), `generate_multi_slide_spatial_viewer.py` (interactive HTML viewer with fluorescence background + contours + ROI), `generate_contour_viewer.py` (contour overlays on CZI fluorescence with pan/zoom, group toggling, click-to-inspect metadata; core: `xldvp_seg.visualization`)
 - **Vessel**: `segment_vessel_lumens.py` (SAM2 lumen-first: OME-Zarr multi-scale → dark-lumen detection → marker-cell validation → vessel typing), `detect_vessel_structures.py` (graph topology: ring/arc/strip from marker+ cells), `vessel_community_analysis.py` (multi-scale + SNR). Shared characterization: `xldvp_seg.analysis.vessel_characterization`
 - **Curvilinear**: `detect_curvilinear_patterns.py` (KD-tree graph → linearity → strip/ribbon detection; core: `xldvp_seg.analysis.pattern_detection`)
 - **Markers**: `classify_markers.py` (median SNR / Otsu / GMM; core: `xldvp_seg.analysis.marker_classification`)
@@ -424,6 +424,20 @@ Post-detection analysis functions promoted from scripts/ into the package for cl
 | `nuclear_count.py` | Cellpose-based nuclear segmentation within cells |
 | `omic_linker.py` | Morphology-to-proteomics bridge (DVP linking) |
 | `vessel_characterization.py` | Shared vessel analysis: marker composition, spatial layering, vessel typing, lumen/wall morphometry |
+
+### Visualization Package (`xldvp_seg/visualization/`)
+
+Reusable HTML visualization components extracted from the monolithic spatial viewer. Used by `generate_multi_slide_spatial_viewer.py` and `generate_contour_viewer.py`.
+
+| Module | Purpose |
+|--------|---------|
+| `fluorescence.py` | CZI thumbnail loading + base64 encoding (`read_czi_thumbnail_channels`, `encode_channel_b64`, `parse_scene_index`) |
+| `colors.py` | Color palettes + group assignment (`BINARY_COLORS`, `QUAD_COLORS`, `AUTO_COLORS`, `hsl_palette`, `assign_group_colors`) |
+| `encoding.py` | Binary data encoding for HTML (`encode_float32_base64`, `encode_uint8_base64`, `safe_json`, `build_contour_js_data`) |
+| `data_loading.py` | Detection JSON streaming + position/group extraction (`compute_auto_eps`, `extract_position_um`, `extract_group`, `load_slide_data`, `discover_slides`, `apply_top_n_filtering`) |
+| `graph_patterns.py` | Spatial graph pattern detection (`compute_graph_patterns`) |
+| `js_loader.py` | Composable JS component loading (`load_js`) |
+| `js/` | 13 reusable Canvas 2D components (pan/zoom, contour rendering, viewport culling, metadata panel, etc.) |
 
 ### Training Utilities (`xldvp_seg/training/`)
 
@@ -597,6 +611,6 @@ python run_segmentation.py --czi-path slide.czi --cell-type nmj \
 
 **Core:** `run_segmentation.py` (detection), `run_lmd_export.py` (LMD XML), `train_classifier.py` (RF), `serve_html.py` (viewer). SLURM: `scripts/run_pipeline.sh` (YAML-driven launcher). **CLI:** `xlseg` with 13 subcommands (info, detect, classify, cluster, markers, score, qc, export-lmd, serve, system, models, strategies, download-models).
 
-**Scripts (`scripts/`):** 29 reusable tools — `ls scripts/` for full list. Key: `czi_info.py`, `classify_markers.py`, `apply_classifier.py`, `regenerate_html.py`, `generate_multi_slide_spatial_viewer.py`, `detect_vessel_structures.py`, `segment_vessel_lumens.py`, `count_nuclei_per_cell.py`, `sliding_window_sampling.py`. Core logic of 6 promoted scripts now lives in `xldvp_seg/analysis/` for programmatic access (scripts delegate to package modules).
+**Scripts (`scripts/`):** 30 reusable tools — `ls scripts/` for full list. Key: `czi_info.py`, `classify_markers.py`, `apply_classifier.py`, `regenerate_html.py`, `generate_multi_slide_spatial_viewer.py`, `generate_contour_viewer.py`, `detect_vessel_structures.py`, `segment_vessel_lumens.py`, `count_nuclei_per_cell.py`, `sliding_window_sampling.py`. Core logic of 6 promoted scripts now lives in `xldvp_seg/analysis/` for programmatic access (scripts delegate to package modules).
 
 **Examples (`examples/`):** Project-specific scripts by experiment — `bone_marrow/`, `mesothelium/`, `islet/`, `tma/`, `liver/`, `nmj/`, `vessel/`, `tissue_pattern/`, `configs/` (YAML templates).

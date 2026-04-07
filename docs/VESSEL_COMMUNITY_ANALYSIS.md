@@ -48,6 +48,19 @@ python scripts/segment_vessel_lumens.py \
 - Capillary: small CD31+ cluster
 - Longitudinal variants: detected when lumen elongation > 4.0
 
+**Visualize results with the contour viewer:**
+```bash
+python scripts/generate_contour_viewer.py \
+    --contours output/vessel_lumens/vessel_lumens.json \
+    --group-field vessel_type \
+    --czi-path slide.czi \
+    --display-channels 1,3,0 \
+    --channel-names "SMA,CD31,nuc" \
+    --title "Vessel Lumen Detection" \
+    --output output/vessel_lumens/vessel_viewer.html
+```
+This generates a self-contained HTML with contour overlays on fluorescence, pan/zoom for 50K+ contours, per-vessel-type color toggling, and click-to-inspect metadata.
+
 **When to use:** Cross-sectional vessels where lumens are visible. Handles all sizes from capillaries to aorta. Best for vasculature (Fig6) and lymphatics (Fig7) slides.
 
 ## Tool 2: Graph Topology Vessel Detection (Complementary)

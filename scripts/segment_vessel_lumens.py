@@ -820,6 +820,11 @@ def classify_markers_by_snr_percentile(
     Returns:
         Number of cells tagged as positive for at least one marker.
     """
+    if len(marker_names) != len(snr_keys):
+        raise ValueError(
+            f"marker_names ({len(marker_names)}) and snr_keys ({len(snr_keys)}) must match"
+        )
+
     # Compute threshold per channel
     thresholds = {}
     for marker, snr_key in zip(marker_names, snr_keys):

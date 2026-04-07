@@ -226,6 +226,7 @@ For rare large cells (e.g., MKs), single-cell-per-well is sometimes feasible —
 | UMAP + clustering | `xlseg cluster` / `scripts/cluster_by_features.py` | Leiden/HDBSCAN, trajectory, spatial smoothing (core: `xldvp_seg.analysis.cluster_features`) |
 | Spatial networks | `scripts/spatial_cell_analysis.py` | Delaunay graphs, community detection (core: `xldvp_seg.analysis.spatial_network`) |
 | Interactive viewer | `scripts/generate_multi_slide_spatial_viewer.py` | Fluorescence overlay + cell contours + ROI drawing |
+| Contour viewer | `scripts/generate_contour_viewer.py` | Contour overlays on CZI fluorescence with pan/zoom, group toggling, click-to-inspect |
 | Sliding window | `scripts/sliding_window_sampling.py` | Area-matched rolling window along ROI centerlines for LMD (core: `xldvp_seg.analysis.sliding_window_sampling`) |
 | Curvilinear patterns | `scripts/detect_curvilinear_patterns.py` | Strip/ribbon detection via graph diameter linearity (core: `xldvp_seg.analysis.pattern_detection`) |
 | Vessel structures | `scripts/detect_vessel_structures.py` | Ring/arc/strip classification from marker+ cells |
@@ -310,6 +311,7 @@ xldvp_seg/              # Main package (pip install -e .)
 ├── io/                    # CZI loader, HTML export, OME-Zarr, SpatialData export
 ├── lmd/                   # Well plates, contour processing (adaptive RDP + dilation)
 ├── analysis/              # 9 modules: marker classification, clustering, spatial networks, patterns, sampling, OmicLinker, aggregation, nuclear counting, vessel characterization
+├── visualization/         # Reusable HTML visualization: fluorescence thumbnails, color palettes, binary encoding, data loading, JS components
 ├── training/              # Classifier training: feature loading, annotation matching
 ├── models/                # Model registry (SAM2, ResNet, DINOv2, brightfield FMs)
 ├── pipeline/              # 11 modules: shm_setup, detection_loop, preprocessing, post_detection, ...
@@ -317,7 +319,7 @@ xldvp_seg/              # Main package (pip install -e .)
 ├── roi/                   # ROI support: pre-detection (restrict to regions) or post-detection (spatial filtering)
 └── utils/                 # JSON I/O, device handling, logging, config
 
-scripts/                   # 29 reusable CLI tools
+scripts/                   # 30 reusable CLI tools
 examples/                  # Project-specific analyses by experiment
 tests/                     # pytest suite (run `make test` for current counts)
 ```

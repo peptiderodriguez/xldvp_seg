@@ -5,6 +5,17 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+
+- `xldvp_seg/visualization/` package -- reusable HTML visualization components extracted from the monolithic spatial viewer. 7 Python modules (`fluorescence.py`, `colors.py`, `encoding.py`, `data_loading.py`, `graph_patterns.py`, `js_loader.py`, `__init__.py`) + 13 JS component files in `js/` subdirectory.
+- `scripts/generate_contour_viewer.py` -- generates self-contained HTML for contour overlays on CZI fluorescence. Supports grouping by configurable field (vessel_type, scale, etc.), R/G/B channel toggle, pan/zoom with RAF batching, viewport culling for 50K+ contours, and click-to-inspect metadata panel.
+
+### Changed
+
+- `scripts/generate_multi_slide_spatial_viewer.py` refactored to import from `xldvp_seg.visualization` instead of defining utilities inline (4062 to 3115 lines, ~30% smaller). Same external behavior.
+
 ## [2.0.0] - 2026-03-25
 
 ### Added

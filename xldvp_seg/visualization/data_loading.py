@@ -3,7 +3,6 @@
 import json
 import mmap
 import re
-import sys
 from pathlib import Path
 
 import numpy as np
@@ -46,32 +45,20 @@ def compute_auto_eps(positions, k=10):
 def extract_position_um(det):
     """Extract (x, y) position in microns from a detection dict.
 
-    Tries global_center_um first, then falls back to global_x / global_y
-    (pixel coords multiplied by pixel_size_um).
+    Delegates to the canonical ``extract_positions_um`` from
+    ``xldvp_seg.utils.detection_utils`` for the actual extraction logic,
+    which handles the 3-level fallback: global_center_um → global_center ×
+    pixel_size → global_x/y × pixel_size.
 
     Returns (x, y) tuple or None if position unavailable.
     """
-    # Primary: global_center_um in features
-    pos = det.get("features", {}).get("global_center_um")
-    if pos is None:
-        pos = det.get("global_center_um")
-    if pos is not None and len(pos) == 2:
-        x, y = float(pos[0]), float(pos[1])
+    from xldvp_seg.utils.detection_utils import extract_positions_um
+
+    positions, _ = extract_positions_um([det])
+    if len(positions) == 1:
+        x, y = float(positions[0, 0]), float(positions[0, 1])
         if np.isfinite(x) and np.isfinite(y):
             return (x, y)
-
-    # Fallback: pixel coordinates * pixel_size
-    gx = det.get("global_x")
-    gy = det.get("global_y")
-    if gx is not None and gy is not None:
-        pixel_size = det.get("features", {}).get("pixel_size_um")
-        if pixel_size is None or not isinstance(pixel_size, (int, float)):
-            return None  # never hardcode pixel_size — CZI metadata is ground truth
-        x = float(gx) * float(pixel_size)
-        y = float(gy) * float(pixel_size)
-        if np.isfinite(x) and np.isfinite(y):
-            return (x, y)
-
     return None
 
 
@@ -117,49 +104,55 @@ def _stream_detections_mmap(filepath):
 
     with open(filepath, "rb") as f:
         mm = mmap.mmap(f.fileno(), 0, access=mmap.ACCESS_READ)
-        size = mm.size()
+        try:
+            size = mm.size()
 
-        depth = 0
-        in_string = False
-        obj_start = -1
+            depth = 0
+            in_string = False
+            obj_start = -1
 
-        # Process in 4MB chunks — large enough for good regex throughput,
-        # small enough to not bloat memory
-        CHUNK = 4 * 1024 * 1024
-        offset = 0
+            # Process in 4MB chunks — large enough for good regex throughput,
+            # small enough to not bloat memory.
+            # Overlap by 1 byte so that a backslash at the end of a chunk
+            # can pair with the escaped character in the next chunk (the \\. rule).
+            CHUNK = 4 * 1024 * 1024
+            offset = 0
 
-        while offset < size:
-            end = min(offset + CHUNK, size)
-            chunk = mm[offset:end]
+            while offset < size:
+                end = min(offset + CHUNK + 1, size)  # +1 overlap for escape pairs
+                chunk = mm[offset:end]
 
-            for m in _SIG.finditer(chunk):
-                tok = chunk[m.start() : m.end()]
-                abs_pos = offset + m.start()
+                last_match_end = 0
+                for m in _SIG.finditer(chunk):
+                    tok = chunk[m.start() : m.end()]
+                    abs_pos = offset + m.start()
+                    last_match_end = m.end()
 
-                if len(tok) == 2:
-                    # Escape sequence (\", \\, \n, \t, etc.) — skip entirely
-                    continue
+                    if len(tok) == 2:
+                        # Escape sequence (\", \\, \n, \t, etc.) — skip entirely
+                        continue
 
-                b = tok[0]
-                if b == 0x22:  # double quote
-                    in_string = not in_string
-                    continue
-                if in_string:
-                    continue
+                    b = tok[0]
+                    if b == 0x22:  # double quote
+                        in_string = not in_string
+                        continue
+                    if in_string:
+                        continue
 
-                if b == 0x7B:  # '{'
-                    if depth == 0:
-                        obj_start = abs_pos
-                    depth += 1
-                elif b == 0x7D:  # '}'
-                    depth -= 1
-                    if depth == 0 and obj_start >= 0:
-                        yield _parse(mm[obj_start : abs_pos + 1])
-                        obj_start = -1
+                    if b == 0x7B:  # '{'
+                        if depth == 0:
+                            obj_start = abs_pos
+                        depth += 1
+                    elif b == 0x7D:  # '}'
+                        depth -= 1
+                        if depth == 0 and obj_start >= 0:
+                            yield _parse(mm[obj_start : abs_pos + 1])
+                            obj_start = -1
 
-            offset = end
-
-        mm.close()
+                # Advance by CHUNK (not end) to keep 1-byte overlap
+                offset = min(offset + CHUNK, size)
+        finally:
+            mm.close()
 
 
 def _collect_contour(det, contours_raw, score_threshold):
@@ -225,7 +218,7 @@ def load_slide_data(
     """
     path = Path(path)
     if not path.exists():
-        print(f"  WARNING: {path} not found, skipping", file=sys.stderr)
+        logger.warning("File not found, skipping: %s", path)
         return None
 
     file_size = path.stat().st_size
@@ -235,7 +228,7 @@ def load_slide_data(
     contours_raw = []  # list of (outer_contour_global, pixel_size_um) when include_contours
 
     if use_streaming:
-        print(f" streaming ({file_size / 1e9:.1f} GB)...", end="", flush=True)
+        logger.info("Streaming %s (%.1f GB)...", path.name, file_size / 1e9)
         # Parse marker filter once for streaming path
         _mf_key, _mf_val = None, None
         if marker_filter and "==" in marker_filter:
@@ -254,7 +247,7 @@ def load_slide_data(
                 _collect_contour(det, contours_raw, score_threshold)
             n_parsed += 1
             if n_parsed % 100000 == 0:
-                print(f" {n_parsed // 1000}k...", end="", flush=True)
+                logger.info("  %dk parsed...", n_parsed // 1000)
     else:
         try:
             from xldvp_seg.utils.json_utils import fast_json_load
@@ -265,7 +258,7 @@ def load_slide_data(
                 detections = json.load(f)
 
         if not isinstance(detections, list):
-            print(f"  WARNING: {path} is not a JSON list, skipping", file=sys.stderr)
+            logger.warning("Not a JSON list, skipping: %s", path)
             return None
 
         if marker_filter:

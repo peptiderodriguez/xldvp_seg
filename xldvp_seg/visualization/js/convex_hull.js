@@ -4,12 +4,12 @@
 function convexHull(points) {
   const n = points.length;
   if (n < 3) return points.slice();
-  points.sort((a, b) => a[0] - b[0] || a[1] - b[1]);
+  const sorted = points.slice().sort((a, b) => a[0] - b[0] || a[1] - b[1]);
 
-  const pts = [points[0]];
+  const pts = [sorted[0]];
   for (let i = 1; i < n; i++) {
-    if (points[i][0] !== points[i-1][0] || points[i][1] !== points[i-1][1])
-      pts.push(points[i]);
+    if (sorted[i][0] !== sorted[i-1][0] || sorted[i][1] !== sorted[i-1][1])
+      pts.push(sorted[i]);
   }
   if (pts.length < 3) return pts;
 

@@ -51,6 +51,7 @@ nav:
       - Spatial Networks: api/spatial_network.md
       - "I/O": api/io.md
       - Training: api/training.md
+      - Visualization: api/visualization.md
   - Contributing: contributing.md
   - Changelog: changelog.md
 

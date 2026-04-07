@@ -1,5 +1,7 @@
 // Component: fluorescence — extracted from generate_multi_slide_spatial_viewer.py
 // Additive RGB fluorescence channel compositing onto canvas
+// Requires globals: fluorImages, chEnabled, fluorAlpha, CH_TINTS
+// Requires functions: scheduleRenderAll (for async image load callback)
 
 function drawFluorescence(ctx, slideIdx, panZoom) {
   const fd = fluorImages[slideIdx];

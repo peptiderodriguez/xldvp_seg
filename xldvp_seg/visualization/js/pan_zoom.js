@@ -1,6 +1,8 @@
 // Component: pan_zoom — extracted from generate_multi_slide_spatial_viewer.py
 // Mouse wheel zoom handler, mouse drag for panning, and draw drag handling.
 // These are set up per-panel inside initPanels() and as global window handlers.
+// Requires globals: drawMode, activePanel, drawStart, drawCurrent
+// Requires functions: screenToData, scheduleRender, renderDrawOverlay, addROI
 
 // Per-panel wheel zoom (attached to both data canvas and draw overlay canvas):
 function handleWheel(state, div, e) {

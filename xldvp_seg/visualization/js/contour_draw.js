@@ -1,5 +1,6 @@
 // Component: contour_draw — extracted from generate_multi_slide_spatial_viewer.py
 // Detection contour rendering with Path2D and viewport culling
+// Requires globals: CONTOUR_DATA (array of per-slide contour arrays), showContours
 
 function drawContours(ctx, p, panZoom) {
   const contours = CONTOUR_DATA[p.idx];

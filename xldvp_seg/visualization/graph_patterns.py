@@ -4,8 +4,6 @@ import numpy as np
 
 from xldvp_seg.utils.logging import get_logger
 
-from .data_loading import compute_auto_eps  # noqa: F401 — re-export for convenience
-
 logger = get_logger(__name__)
 
 
@@ -43,6 +41,19 @@ def compute_graph_patterns(
     from scipy.sparse import csr_matrix
     from scipy.sparse.csgraph import connected_components
     from scipy.spatial import cKDTree
+
+    from xldvp_seg.utils.graph_topology import (
+        circularity as _circularity,
+    )
+    from xldvp_seg.utils.graph_topology import (
+        elongation as _elongation,
+    )
+    from xldvp_seg.utils.graph_topology import (
+        has_curvature as _has_curvature,
+    )
+    from xldvp_seg.utils.graph_topology import (
+        hollowness as _hollowness,
+    )
 
     n = len(positions)
     if n == 0:
@@ -94,39 +105,15 @@ def compute_graph_patterns(
             cx_mean = pts[:, 0].mean()
             cy_mean = pts[:, 1].mean()
 
-            # Pattern classification via PCA
-            centered = pts - pts.mean(axis=0)
-            cov = np.cov(centered.T) if nc > 2 else np.eye(2)
-            eigvals = np.sort(np.linalg.eigvalsh(cov))[::-1]
-            lam1 = max(eigvals[0], 1e-10)
-            lam2 = max(eigvals[1], 1e-10)
-            elongation = np.sqrt(lam1 / lam2)
+            # Pattern classification via canonical graph_topology functions
+            elongation = _elongation(pts)
+            circularity = _circularity(pts)
+            hollowness = _hollowness(pts)
+            curvature = _has_curvature(pts)
 
-            # Circle fit
-            radii = np.sqrt((pts[:, 0] - cx_mean) ** 2 + (pts[:, 1] - cy_mean) ** 2)
-            mean_r = radii.mean()
-            circularity = (1.0 - radii.std() / mean_r) if mean_r > 1e-6 else 0.0
-            hollowness = np.median(radii) / max(radii.max(), 1e-6)
-
-            # Curvature check
-            has_curvature = False
-            if nc > 5 and elongation > 2.5:
-                eigvecs = np.linalg.eigh(cov)[1]
-                pc1 = eigvecs[:, -1]
-                pc2 = eigvecs[:, -2]
-                proj1 = centered @ pc1
-                proj2 = centered @ pc2
-                coeffs = np.polyfit(proj1, proj2, 2)
-                pred = np.polyval(coeffs, proj1)
-                ss_res = ((proj2 - pred) ** 2).sum()
-                ss_tot = ((proj2 - proj2.mean()) ** 2).sum()
-                r2 = 1 - ss_res / max(ss_tot, 1e-10)
-                if r2 > 0.3 and abs(coeffs[0]) > 1e-6:
-                    has_curvature = True
-
-            if elongation > 4 and not has_curvature:
+            if elongation > 4 and not curvature:
                 pattern = "linear"
-            elif elongation > 3 and has_curvature:
+            elif elongation > 3 and curvature:
                 pattern = "arc"
             elif circularity > 0.65 and hollowness > 0.55 and elongation < 3:
                 pattern = "ring"

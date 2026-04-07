@@ -116,6 +116,7 @@ For beginners, expand on each step as you reach it. For advanced users, just ask
 | **Distance bins** | Concentric rings around landmarks (CV/PV), distance + ratio features, model comparison | `examples/liver/assign_distance_bins.py` |
 | **Tissue area** | Variance-based tissue detection, area measurement from CZI | `examples/bone_marrow/calculate_tissue_areas.py` |
 | **Visualize** | Multi-slide scrollable HTML with ROI drawing + stats. **CZI thumbnail caching**: first run reads CZI (slow), subsequent runs load `.thumbnail_cache_*.npz` (instant). Cache key includes channels + scale factor. | `scripts/generate_multi_slide_spatial_viewer.py` |
+| **Contour viewer** | Contour overlay on CZI fluorescence — per-group coloring, click-to-inspect metadata, viewport culling. For vessel lumens, cell boundaries, or any polygon contour JSON. | `scripts/generate_contour_viewer.py` |
 | **Tissue overlay** | Fluorescence image + cell overlay + ROI + LMD export in one viewer | `scripts/generate_tissue_overlay.py` |
 | **Nuclear count** | Count nuclei per cell (integrated in Phase 4, or standalone for existing runs). Morph+SAM2 per nucleus | `--count-nuclei` (default ON) or `scripts/count_nuclei_per_cell.py` |
 | **Region detection** | Percentile-threshold any channel → morphological cleanup → split into equal-area pieces → full features (morph+channel+SAM2) → LMD | `scripts/detect_regions_for_lmd.py` |
@@ -782,10 +783,20 @@ PYTHONPATH=$REPO $XLDVP_PYTHON $REPO/scripts/detect_vessel_structures.py \
 
 After detection, report the summary (morphology distribution, vessel type counts) and offer to generate a viewer:
 ```bash
+# Spatial viewer (cell dots by vessel type)
 PYTHONPATH=$REPO $XLDVP_PYTHON $REPO/scripts/generate_multi_slide_spatial_viewer.py \
     --detections <output>/vessel_structures/cell_detections_vessel_only.json \
     --czi-path <czi_path> --output-dir <output>/vessel_structures/viewer \
     --group-field vessel_type
+
+# Contour viewer (polygon outlines on fluorescence — for lumens or cell boundaries)
+PYTHONPATH=$REPO $XLDVP_PYTHON $REPO/scripts/generate_contour_viewer.py \
+    --contours <output>/vessel_lumens/vessel_lumens.json \
+    --group-field vessel_type \
+    --czi-path <czi_path> \
+    --display-channels 1,3,0 --channel-names "SMA,CD31,nuc" \
+    --title "Vessel Lumens" \
+    --output <output>/vessel_lumens/lumen_viewer.html
 ```
 
 The workflow follows the same iterative pattern as mesothelium:

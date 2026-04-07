@@ -1,6 +1,32 @@
 // Component: kde — extracted from generate_multi_slide_spatial_viewer.py
 // Full KDE pipeline: 2D histogram, Gaussian blur, marching squares isoline
 // extraction, per-group KDE computation with caching, and contour rendering.
+//
+// Requires globals: SLIDES, GROUP_LABELS, GROUP_COLORS, N_GROUPS, hidden,
+//   KDE_RADII, kdeCache, kdeBWIdx, kdeLevels
+// Requires functions: getGroupPositions (viewer-specific), hexToRgb (below)
+
+function hexToRgb(hex) {
+  const h = hex.replace('#', '');
+  return [parseInt(h.substring(0,2),16), parseInt(h.substring(2,4),16), parseInt(h.substring(4,6),16)];
+}
+
+function getGroupPositions(slideIdx) {
+  const slide = SLIDES[slideIdx];
+  if (slide._groupPos) return slide._groupPos;
+  const gp = new Array(N_GROUPS).fill(null).map(() => ({xi:[], yi:[]}));
+  for (let i = 0; i < slide.n; i++) {
+    const gi = slide.grp[i];
+    gp[gi].xi.push(slide.pos[i*2]);
+    gp[gi].yi.push(slide.pos[i*2+1]);
+  }
+  slide._groupPos = gp.map(g => ({
+    x: new Float32Array(g.xi),
+    y: new Float32Array(g.yi),
+    n: g.xi.length,
+  }));
+  return slide._groupPos;
+}
 
 function computeHistogram2D(x, y, w, nx, ny, xr, yr) {
   const grid = new Float32Array(ny * nx);

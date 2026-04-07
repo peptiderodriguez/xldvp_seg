@@ -1,5 +1,7 @@
 // Component: canvas_setup — extracted from generate_multi_slide_spatial_viewer.py
 // Panel resize, fit-to-view, and requestAnimationFrame render batching
+// Requires globals: panels, rafDirty, rafId
+// Requires functions: renderPanel (viewer-specific)
 
 function resizePanel(p) {
   const dpr = window.devicePixelRatio || 1;

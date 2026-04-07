@@ -77,6 +77,7 @@ def build_contour_js_data(contours_raw, max_contours=100_000):
                     "by2": round(by2, 1),
                 }
             )
-        except Exception:
+        except (ValueError, IndexError, TypeError) as exc:
+            logger.debug("Skipping contour %d: %s", i, exc)
             continue
     return out

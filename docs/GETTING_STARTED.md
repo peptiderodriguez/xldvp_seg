@@ -1059,6 +1059,7 @@ quantifies endothelial and smooth muscle contributions separately.
 | `scripts/cluster_detections.py` | Biological clustering for LMD well assignment |
 | `xlseg cluster` / `scripts/cluster_by_features.py` | UMAP + HDBSCAN clustering with auto-labeling (core: `xldvp_seg.analysis.cluster_features`) |
 | `scripts/spatial_cell_analysis.py` | RF embedding, morph UMAP, spatial network analysis (core: `xldvp_seg.analysis.spatial_network`) |
+| `scripts/generate_contour_viewer.py` | Contour overlays on CZI fluorescence with pan/zoom, group toggling, click-to-inspect (core: `xldvp_seg.visualization`) |
 | `scripts/sliding_window_sampling.py` | Area-matched rolling window sampling along ROI centerlines (core: `xldvp_seg.analysis.sliding_window_sampling`) |
 | `scripts/detect_curvilinear_patterns.py` | Strip/ribbon spatial pattern detection (core: `xldvp_seg.analysis.pattern_detection`) |
 | `examples/islet/analyze_islets.py` | Islet-level spatial analysis with composition metrics |

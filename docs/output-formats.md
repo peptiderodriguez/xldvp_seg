@@ -126,3 +126,29 @@ The `cell_spatialdata.zarr/` store contains:
 - **table**: AnnData with features linked to shapes
 
 Compatible with squidpy spatial analysis (`--run-squidpy`).
+
+## Contour Viewer HTML
+
+`scripts/generate_contour_viewer.py` produces a self-contained HTML file for
+visualizing contour overlays on CZI fluorescence. The viewer embeds:
+
+- CZI fluorescence thumbnail as base64-encoded channel images
+- Contour coordinate data in binary-encoded Float32 arrays
+- Per-contour metadata (group assignment, morphometry, vessel type, etc.)
+- Composable Canvas 2D JS components from `xldvp_seg/visualization/js/`
+
+Features: pan/zoom with RAF batching, viewport culling for 50K+ contours,
+per-group color-coded contour toggling, R/G/B fluorescence channel toggle,
+click-to-inspect metadata panel. Output is a single `.html` file with no
+external dependencies.
+
+```bash
+python scripts/generate_contour_viewer.py \
+    --contours vessel_lumens.json \
+    --group-field vessel_type \
+    --czi-path slide.czi \
+    --display-channels 1,3,0 \
+    --channel-names "SMA,CD31,nuc" \
+    --title "Vessel Lumen Detection" \
+    --output vessel_viewer.html
+```

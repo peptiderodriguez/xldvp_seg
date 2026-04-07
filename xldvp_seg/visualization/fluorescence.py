@@ -11,7 +11,7 @@ from xldvp_seg.utils.logging import get_logger
 logger = get_logger(__name__)
 
 
-def _encode_channel_b64(ch_array):
+def encode_channel_b64(ch_array):
     """Encode a single-channel uint8 array as PNG base64 string."""
     from PIL import Image
 
@@ -23,7 +23,7 @@ def _encode_channel_b64(ch_array):
     return b64
 
 
-def _parse_scene_index(name):
+def parse_scene_index(name):
     """Extract CZI scene index from a slide/panel name.
 
     Supports patterns like ``scene_3``, ``scene03``, or ``Scene_3``.
@@ -63,6 +63,7 @@ def read_czi_thumbnail_channels(czi_path, display_channels, scale_factor=0.0625,
 
         loader = CZILoader(str(czi_path), scene=scene)
         pixel_size_um = loader.get_pixel_size()
+        del loader  # close file handle
     except Exception:
         pass
     if pixel_size_um is None:
@@ -104,18 +105,25 @@ def read_czi_thumbnail_channels(czi_path, display_channels, scale_factor=0.0625,
             continue
 
         # Percentile-normalise to uint8 (exclude zeros which are CZI padding)
-        valid = img[img > 0] if img.dtype != np.uint8 else img.ravel()
+        nonzero_mask = img > 0 if img.dtype != np.uint8 else None
+        valid = img[nonzero_mask] if nonzero_mask is not None else img.ravel()
         if len(valid) == 0:
             channel_arrays.append(np.zeros(img.shape[:2], dtype=np.uint8))
             continue
         p_low = float(np.percentile(valid, 1))
         p_high = float(np.percentile(valid, 99.5))
+        del valid  # free memory before float32 conversion
         if p_high <= p_low:
             p_high = p_low + 1.0
-        norm = np.clip((img.astype(np.float32) - p_low) / (p_high - p_low), 0.0, 1.0)
-        result = (norm * 255).astype(np.uint8)
-        if img.dtype != np.uint8:
-            result[img == 0] = 0  # preserve CZI padding as black
+        # In-place normalisation to avoid extra float32 copy
+        result = img.astype(np.float32)
+        result -= p_low
+        result /= p_high - p_low
+        np.clip(result, 0.0, 1.0, out=result)
+        result *= 255
+        result = result.astype(np.uint8)
+        if nonzero_mask is not None:
+            result[~nonzero_mask] = 0  # preserve CZI padding as black
         channel_arrays.append(result)
 
     return channel_arrays, pixel_size_um, mosaic_x, mosaic_y

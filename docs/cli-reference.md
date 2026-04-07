@@ -214,6 +214,41 @@ xlseg download-models --all           # All registered models
 xlseg download-models --model uni2    # Specific model
 ```
 
+## Standalone Scripts
+
+### `generate_contour_viewer.py`
+
+Generate a self-contained HTML viewer for contour overlays on CZI fluorescence.
+Loads contours from JSON files (vessel lumens, cell detections), groups by a
+configurable field, and renders with pan/zoom, viewport culling for 50K+ contours,
+R/G/B channel toggle, and click-to-inspect metadata panel.
+
+```bash
+python scripts/generate_contour_viewer.py \
+    --contours vessel_lumens.json \
+    --group-field vessel_type \
+    --czi-path slide.czi \
+    --display-channels 1,3,0 \
+    --channel-names "SMA,CD31,nuc" \
+    --title "Vessel Lumen Detection" \
+    --output vessel_viewer.html
+```
+
+| Flag | Description |
+|------|-------------|
+| `--contours` | Path to JSON file with contour data (vessel lumens, cell detections) |
+| `--group-field` | Field to group contours by (e.g., `vessel_type`, `scale`, `marker_profile`) |
+| `--czi-path` | CZI file for fluorescence background |
+| `--display-channels` | Comma-separated channel indices for R,G,B display |
+| `--channel-names` | Comma-separated human-readable channel names |
+| `--title` | Viewer title |
+| `--output` | Output HTML file path |
+
+The viewer uses the `xldvp_seg.visualization` package for CZI thumbnail loading,
+color palette assignment, binary data encoding, and composable JS components.
+
+---
+
 ## Flag Gotchas
 
 - `--no-normalize-features` disables flat-field (no `--flat-field-correction` flag exists)
