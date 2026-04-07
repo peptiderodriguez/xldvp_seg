@@ -74,7 +74,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `run_pipeline.sh` YAML config-driven SLURM launcher with downstream job chains
 - Pre-commit hooks (ruff + black), Makefile, CI with coverage
 - ROI-restricted detection module (`xldvp_seg/roi/`) with marker threshold, circular object, and polygon/mask ROI discovery
-- 781 automated tests across 32 test files
+- 974 tests passing across 43 test files
 
 ### Changed
 

@@ -296,7 +296,9 @@ def build_anndata(detections, cell_type):
             (x_names[i], int(n_zeros[i])) for i in range(len(x_names)) if n_zeros[i] > 0
         ]
         if cols_with_zeros:
-            logger.debug("Features with zero-fill: %s", cols_with_zeros[:10])
+            logger.debug(
+                "Features with zero values (includes NaN-replaced): %s", cols_with_zeros[:10]
+            )
 
     # Build obs DataFrame
     obs_df = pd.DataFrame(obs_data)

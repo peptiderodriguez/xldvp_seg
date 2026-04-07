@@ -384,29 +384,19 @@ class OmicLinker:
         if not return_pvalues:
             return corr_df
 
-        # Compute p-values via scipy (requires complete matrix)
+        # Compute p-values pairwise (matching corr()'s pairwise-complete behavior)
         from scipy.stats import pearsonr, spearmanr
 
-        subset = self._linked[all_cols].dropna()
-        if len(subset) < 5:
-            pval_df = pd.DataFrame(np.nan, index=morph_features, columns=proteins)
-        else:
-            if method == "spearman":
-                # spearmanr on a matrix returns (r_matrix, p_matrix)
-                _, p_matrix = spearmanr(subset[all_cols].values)
-                p_full = pd.DataFrame(p_matrix, index=all_cols, columns=all_cols)
-                pval_df = p_full.loc[morph_features, proteins]
-            else:
-                # pearsonr doesn't support matrix input — use per-pair
-                pval_df = pd.DataFrame(index=morph_features, columns=proteins, dtype=float)
-                for mf in morph_features:
-                    for prot in proteins:
-                        vals = self._linked[[mf, prot]].dropna()
-                        if len(vals) < 5:
-                            pval_df.loc[mf, prot] = np.nan
-                        else:
-                            _, p = pearsonr(vals[mf], vals[prot])
-                            pval_df.loc[mf, prot] = p
+        corr_func = spearmanr if method == "spearman" else pearsonr
+        pval_df = pd.DataFrame(index=morph_features, columns=proteins, dtype=float)
+        for mf in morph_features:
+            for prot in proteins:
+                vals = self._linked[[mf, prot]].dropna()
+                if len(vals) < 5:
+                    pval_df.loc[mf, prot] = np.nan
+                else:
+                    _, p = corr_func(vals[mf], vals[prot])
+                    pval_df.loc[mf, prot] = p
 
         return corr_df, pval_df
 
