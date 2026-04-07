@@ -69,7 +69,7 @@ PYTHONPATH=$REPO $XLDVP_PYTHON -m black --check .
 PYTHONPATH=$REPO $XLDVP_PYTHON $REPO/scripts/czi_info.py /path/to/slide.czi
 ```
 
-**Style:** Black (line-length 100), Ruff (E/F/W/I/N/UP/B/C4, E501 ignored). **Python 3.10 | 3.11** (both CI-tested).
+**Style:** Black (line-length 100), Ruff (E/F/W/I/N/UP/B/C4, E501 ignored, F841 per-file for vessel.py only). **Python 3.10 | 3.11** (both CI-tested).
 
 ### Tests
 
@@ -393,6 +393,18 @@ CZI file → czi_loader.py (channel resolution, tiling)
 
 All inherit from `base.py`, use `MultiChannelFeatureMixin` (from `mixins.py`), implement `detect_in_tile()`. Strategies self-register via `@register_strategy` decorator in `xldvp_seg/detection/registry.py`. Selection via `strategy_factory.py` (registry lookup + per-strategy kwargs builder).
 
+### Vessel Classification (`xldvp_seg/classification/`)
+
+Four RF classifiers sharing `BaseVesselClassifier` (`base.py`): `VesselDetectorRF` (binary), `VesselClassifier` (3-class), `ArteryVeinClassifier`, `VesselTypeClassifier` (6-class). Base class provides shared save/load (joblib), feature importance, feature extraction with template hooks (`_coerce_value`, `_compute_derived_features`). Predict/train/evaluate stay in subclasses (divergent signatures).
+
+### Custom Exceptions (`xldvp_seg/exceptions.py`)
+
+Domain-specific exception hierarchy with dual-inheritance from builtins for backward compatibility: `XldvpSegError` (base), `ConfigError(ValueError)`, `DataLoadError(IOError)`, `DetectionError(RuntimeError)`, `ClassificationError(RuntimeError)`, `ExportError(RuntimeError)`, `ChannelResolutionError(ValueError)`. Existing `except ValueError` blocks still catch new types.
+
+### LMD Export (`xldvp_seg/lmd/`)
+
+`export.py` contains 18 pure-logic functions promoted from `run_lmd_export.py`: detection loading/filtering, contour extraction from HDF5, spatial control generation, well assignment (serpentine ordering), XML export via py-lmd. `contour_processing.py` handles coordinate transforms. `well_plate.py` handles plate geometry. `run_lmd_export.py` retains CLI orchestration only.
+
 ### Model Registry (`xldvp_seg/models/registry.py`)
 
 Metadata catalog for all models (feature extractors + segmenters). Tracks name, feature_dim, modality (fluorescence/brightfield/both), license, HuggingFace URL, and gated status. Does NOT handle loading — that stays in `ModelManager`. Use `list_models(modality="brightfield")` to filter. Brightfield FMs (UNI2, Virchow2, CONCH, Phikon-v2) are gated on HuggingFace — download via `xlseg download-models --brightfield`.
@@ -436,6 +448,7 @@ Reusable HTML visualization components extracted from the monolithic spatial vie
 | `encoding.py` | Binary data encoding for HTML (`encode_float32_base64`, `encode_uint8_base64`, `safe_json`, `build_contour_js_data`) |
 | `data_loading.py` | Detection JSON streaming + position/group extraction (`compute_auto_eps`, `extract_position_um`, `extract_group`, `load_slide_data`, `discover_slides`, `apply_top_n_filtering`) |
 | `graph_patterns.py` | Spatial graph pattern detection (`compute_graph_patterns`) |
+| `html_builder.py` | Group index construction, position serialization, auto-eps collection, region compaction (`build_group_index`, `serialize_slide_positions`, `collect_auto_eps`, `compact_region_data`) |
 | `js_loader.py` | Composable JS component loading (`load_js`) |
 | `js/` | 13 reusable Canvas 2D components (pan/zoom, contour rendering, viewport culling, metadata panel, etc.) |
 
@@ -612,6 +625,6 @@ python run_segmentation.py --czi-path slide.czi --cell-type nmj \
 
 **Core:** `run_segmentation.py` (detection), `run_lmd_export.py` (LMD XML), `train_classifier.py` (RF), `serve_html.py` (viewer). SLURM: `scripts/run_pipeline.sh` (YAML-driven launcher). **CLI:** `xlseg` with 13 subcommands (info, detect, classify, cluster, markers, score, qc, export-lmd, serve, system, models, strategies, download-models).
 
-**Scripts (`scripts/`):** 30 reusable tools — `ls scripts/` for full list. Key: `czi_info.py`, `classify_markers.py`, `apply_classifier.py`, `regenerate_html.py`, `generate_multi_slide_spatial_viewer.py`, `generate_contour_viewer.py`, `detect_vessel_structures.py`, `segment_vessel_lumens.py`, `count_nuclei_per_cell.py`, `sliding_window_sampling.py`. Core logic of 6 promoted scripts now lives in `xldvp_seg/analysis/` for programmatic access (scripts delegate to package modules).
+**Scripts (`scripts/`):** 31 reusable tools — `ls scripts/` for full list. Key: `czi_info.py`, `classify_markers.py`, `apply_classifier.py`, `regenerate_html.py`, `generate_multi_slide_spatial_viewer.py`, `generate_contour_viewer.py`, `detect_vessel_structures.py`, `segment_vessel_lumens.py`, `count_nuclei_per_cell.py`, `sliding_window_sampling.py`. Core logic of 6 promoted scripts now lives in `xldvp_seg/analysis/` for programmatic access (scripts delegate to package modules).
 
 **Examples (`examples/`):** Project-specific scripts by experiment — `bone_marrow/`, `mesothelium/`, `islet/`, `tma/`, `liver/`, `nmj/`, `vessel/`, `tissue_pattern/`, `configs/` (YAML templates).

@@ -243,7 +243,7 @@ See `examples/` for experiment-specific analyses (bone marrow, liver zonation, i
 
 ## Python API
 
-`tl.*` is the primary programmatic API (markers, scoring, clustering, spatial analysis). Detection runs via CLI (`xlseg detect`). Plotting and LMD export APIs are planned.
+`tl.*` is the primary programmatic API (markers, scoring, clustering, spatial analysis). `pl.umap()` and `io.to_spatialdata()` are also implemented. Detection runs via CLI (`xlseg detect`). `pl.spatial()` and `io.export_lmd()` point to CLI/script alternatives.
 
 ```python
 from xldvp_seg.core import SlideAnalysis
@@ -313,7 +313,7 @@ xldvp_seg/              # Main package (pip install -e .)
 ├── io/                    # CZI loader, HTML export, OME-Zarr, SpatialData export
 ├── lmd/                   # Well plates, contour processing (adaptive RDP + dilation)
 ├── analysis/              # 9 modules: marker classification, clustering, spatial networks, patterns, sampling, OmicLinker, aggregation, nuclear counting, vessel characterization
-├── visualization/         # Reusable HTML visualization: fluorescence thumbnails, color palettes, binary encoding, data loading, JS components
+├── visualization/         # Reusable HTML visualization: fluorescence, colors, encoding, data loading, HTML builder, graph patterns, JS components
 ├── training/              # Classifier training: feature loading, annotation matching
 ├── models/                # Model registry (SAM2, ResNet, DINOv2, brightfield FMs)
 ├── pipeline/              # 11 modules: shm_setup, detection_loop, preprocessing, post_detection, ...
@@ -321,7 +321,7 @@ xldvp_seg/              # Main package (pip install -e .)
 ├── roi/                   # ROI support: pre-detection (restrict to regions) or post-detection (spatial filtering)
 └── utils/                 # JSON I/O, device handling, logging, config
 
-scripts/                   # 30 reusable CLI tools
+scripts/                   # 31 reusable CLI tools
 examples/                  # Project-specific analyses by experiment
 tests/                     # pytest suite (run `make test` for current counts)
 ```

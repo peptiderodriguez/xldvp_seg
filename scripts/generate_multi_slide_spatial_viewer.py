@@ -43,8 +43,6 @@ from xldvp_seg.visualization.data_loading import (
 )
 from xldvp_seg.visualization.encoding import (
     build_contour_js_data,
-    encode_float32_base64,
-    encode_uint8_base64,
     safe_json,
 )
 from xldvp_seg.visualization.fluorescence import (
@@ -53,6 +51,12 @@ from xldvp_seg.visualization.fluorescence import (
     read_czi_thumbnail_channels,
 )
 from xldvp_seg.visualization.graph_patterns import compute_graph_patterns
+from xldvp_seg.visualization.html_builder import (
+    build_group_index,
+    collect_auto_eps,
+    compact_region_data,
+    serialize_slide_positions,
+)
 
 # ---------------------------------------------------------------------------
 # HTML generation
@@ -100,113 +104,20 @@ def generate_html(
     title_escaped = html_mod.escape(title)
 
     # Build group label -> index mapping (consistent across all slides)
-    group_labels = sorted(color_map.keys())
-    if len(group_labels) > 255:
-        print(
-            f"WARNING: {len(group_labels)} groups exceeds Uint8 limit (255). "
-            f"Keeping top 254 groups, collapsing rest into 'other'.",
-            file=sys.stderr,
-        )
-        # Keep the 254 most common groups, collapse the rest
-        all_counts = {}
-        for _, data in slides_data:
-            for g in data["groups"]:
-                all_counts[g["label"]] = all_counts.get(g["label"], 0) + g["n"]
-        top_labels = [
-            lbl for lbl in sorted(all_counts, key=all_counts.get, reverse=True) if lbl != "other"
-        ][:254]
-        group_labels = sorted(top_labels) + ["other"]
-        # Re-map collapsed groups in color_map
-        other_color = "#808080"
-        color_map = {lbl: color_map.get(lbl, other_color) for lbl in group_labels}
-    group_to_idx = {lbl: i for i, lbl in enumerate(group_labels)}
+    group_labels, group_to_idx, color_map = build_group_index(
+        slides_data, color_map, max_groups=255
+    )
 
     # Serialize each slide as base64 binary data
-    slides_meta = []
-    slides_b64_positions = []
-    slides_b64_groups = []
-
-    for name, data in slides_data:
-        # Interleave all positions into one flat array: [x0,y0,x1,y1,...]
-        all_x = []
-        all_y = []
-        all_gi = []
-        for g in data["groups"]:
-            if g["n"] == 0:
-                continue
-            gi = group_to_idx.get(g["label"], group_to_idx.get("other", 0))
-            all_x.append(g["x"])
-            all_y.append(g["y"])
-            all_gi.append(np.full(g["n"], gi, dtype=np.uint8))
-
-        if not all_x:
-            continue  # skip slide with no remaining cells
-
-        all_x = np.concatenate(all_x)
-        all_y = np.concatenate(all_y)
-        all_gi = np.concatenate(all_gi)
-        n = len(all_x)
-
-        # Interleave x,y into flat float32 array
-        positions = np.empty(n * 2, dtype=np.float32)
-        positions[0::2] = all_x
-        positions[1::2] = all_y
-
-        slides_b64_positions.append(encode_float32_base64(positions))
-        slides_b64_groups.append(encode_uint8_base64(all_gi))
-
-        slides_meta.append(
-            {
-                "name": name,
-                "n": int(n),
-                "xr": [float(data["x_range"][0]), float(data["x_range"][1])],
-                "yr": [float(data["y_range"][0]), float(data["y_range"][1])],
-            }
-        )
-
-    # Ordered slide names for fluor/contour index alignment
-    # (must match slides_meta — skips slides with 0 cells after filtering)
-    slide_names_ordered = [m["name"] for m in slides_meta]
+    slides_meta, slides_b64_positions, slides_b64_groups, slide_names_ordered = (
+        serialize_slide_positions(slides_data, group_to_idx)
+    )
 
     # Build per-slide per-group auto_eps for DBSCAN clustering
-    slides_auto_eps = []
-    for _, data in slides_data:
-        group_eps = {}
-        for g in data["groups"]:
-            eps_val = g.get("auto_eps")
-            group_eps[g["label"]] = eps_val if eps_val is not None else 100.0
-        eps_arr = [group_eps.get(lbl, 100.0) for lbl in group_labels]
-        slides_auto_eps.append(eps_arr)
+    slides_auto_eps = collect_auto_eps(slides_data, group_labels)
 
     # Serialize region data per-slide (compact format for embedding)
-    def _compact_regions(reg_list):
-        """Convert region dicts to compact JS-friendly format (JSON-safe)."""
-        compact = []
-        for r in reg_list:
-            compact.append(
-                {
-                    "id": int(r["id"]),
-                    "type": str(r.get("type", "")),
-                    "label": str(r["label"]),
-                    "color": str(r["color"]),
-                    "pat": str(r.get("pattern", "")),
-                    "n": int(r["n_cells"]),
-                    "area": float(r["area_um2"]),
-                    "elong": float(r["elongation"]),
-                    "dfrac": float(r["dominant_frac"]),
-                    "comp": {str(k): float(v) for k, v in r["composition"].items()},
-                    "bnd": [[float(p["x"]), float(p["y"])] for p in r["boundary"]],
-                }
-            )
-        return compact
-
-    slides_region_data = []
-    for _, data in slides_data:
-        entry = {"regions": _compact_regions(data.get("regions", []))}
-        rs = data.get("region_scales")
-        if rs:
-            entry["regionScales"] = {k: _compact_regions(v) for k, v in rs.items()}
-        slides_region_data.append(entry)
+    slides_region_data = compact_region_data(slides_data)
 
     # Build legend info
     legend_items = []

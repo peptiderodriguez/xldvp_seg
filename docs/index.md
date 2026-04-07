@@ -96,7 +96,7 @@ adata = slide.to_anndata()
 | **Tissue Pattern** | Cellpose + spatial frequency analysis | Whole-mount tissue (brain FISH) |
 | **InstanSeg** | InstanSeg 3.8M-param alternative to Cellpose | `--cell-type cell --segmenter instanseg` |
 
-`tl.*` is the primary programmatic API (markers, scoring, clustering, spatial analysis). Detection runs via CLI (`xlseg detect`). Plotting and LMD export APIs are planned.
+`tl.*` is the primary programmatic API (markers, scoring, clustering, spatial analysis). `pl.umap()` and `io.to_spatialdata()` are also implemented. Detection runs via CLI (`xlseg detect`). `pl.spatial()` and `io.export_lmd()` point to CLI/script alternatives.
 
 ## Next Steps
 
