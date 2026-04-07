@@ -22,8 +22,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `pl.umap()` API implemented (delegates to `run_clustering(methods='umap')`).
 - 972 tests across 43 test files (up from 781 across 32 at 2.0.0 release).
 
+### Added
+
+- **dvp-io integration**: `OmicLinker.load_proteomics_report()` parses search engine reports (AlphaDIA, DIANN, MaxQuant, Spectronaut, etc.) directly into the morphology→proteomics linking workflow. dvp-io is now a core dependency.
+- `OmicLinker.available_engines()` lists supported proteomics search engines.
+- `xseg.io.read_proteomics()` public API function for CSV or dvp-io report loading.
+
 ### Changed
 
+- Removed 3 API stubs (`pl.spatial`, `tl.nuclei`, `io.export_lmd`) that raised `NotImplementedError`. These operations require CLI/SLURM and were never going to be simple function calls.
 - `scripts/generate_multi_slide_spatial_viewer.py` refactored: inline JS replaced with `load_js()` from 17 component files (3,115 to 1,115 lines, -64%). Same external behavior.
 - Extracted `html_utils.py` (image/HDF5 utilities), `html_styles.py` (CSS generators), and `html_scripts.py` (JS generators) from `html_export.py` (3,696 to 1,790 lines). Backward-compatible re-exports maintained.
 - Extracted `html_batch_export.py` (MK/HSPC batch functions) from `html_generator.py` (2,247 to 1,236 lines). Backward-compatible re-exports in `html_generator.py`.

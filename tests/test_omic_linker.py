@@ -5,8 +5,13 @@ Covers:
 - link() with mean method (embedding columns)
 - Mismatched pool IDs (no overlap)
 - differential_features() with two groups
+- load_proteomics_report() with dvp-io integration
+- available_engines() helper
 """
 
+from unittest.mock import patch
+
+import anndata as ad
 import numpy as np
 import pandas as pd
 import pytest
@@ -176,3 +181,78 @@ class TestOmicLinkerDifferentialFeatures:
         # Too few samples (2 in A, 1 in B -- both < 3), so no features tested
         assert isinstance(result, pd.DataFrame)
         assert len(result) == 0
+
+
+def _make_mock_adata(n_samples=3, n_proteins=5, well_ids=None, sparse=False):
+    """Build a mock AnnData matching dvp-io read_pg_table output."""
+    rng = np.random.default_rng(42)
+    X = rng.random((n_samples, n_proteins)).astype(np.float32)
+    if sparse:
+        import scipy.sparse
+
+        X = scipy.sparse.csr_matrix(X)
+    if well_ids is None:
+        well_ids = [f"W{i + 1}" for i in range(n_samples)]
+    return ad.AnnData(
+        X=X,
+        obs=pd.DataFrame({"well_id": well_ids}, index=[f"s{i}" for i in range(n_samples)]),
+        var=pd.DataFrame(index=[f"PROT{i + 1}" for i in range(n_proteins)]),
+    )
+
+
+class TestLoadProteomicsReport:
+    """Tests for load_proteomics_report() with dvp-io integration."""
+
+    def test_load_report_success(self):
+        """Should parse AnnData -> DataFrame and store both."""
+        mock_adata = _make_mock_adata(n_samples=3, n_proteins=5)
+        with patch("dvpio.read.omics.report_reader.read_pg_table", return_value=mock_adata):
+            linker = OmicLinker()
+            ret = linker.load_proteomics_report("report.tsv", "diann")
+            assert ret is mock_adata
+            assert linker._proteomics.shape == (3, 5)
+            assert list(linker._proteomics.index) == ["W1", "W2", "W3"]
+            assert linker._proteomics_adata is mock_adata
+
+    def test_load_report_sparse_matrix(self):
+        """Should handle sparse X matrix correctly."""
+        mock_adata = _make_mock_adata(n_samples=3, n_proteins=5, sparse=True)
+        with patch("dvpio.read.omics.report_reader.read_pg_table", return_value=mock_adata):
+            linker = OmicLinker()
+            linker.load_proteomics_report("report.tsv", "maxquant")
+            assert linker._proteomics.shape == (3, 5)
+            # Verify it was converted to dense
+            assert not hasattr(linker._proteomics.values, "toarray")
+
+    def test_load_report_no_well_column(self):
+        """When well_column not in obs, should keep obs_names as index."""
+        mock_adata = ad.AnnData(
+            X=np.random.rand(2, 3).astype(np.float32),
+            obs=pd.DataFrame({"other_col": ["a", "b"]}, index=["sample_0", "sample_1"]),
+            var=pd.DataFrame(index=["P1", "P2", "P3"]),
+        )
+        with patch("dvpio.read.omics.report_reader.read_pg_table", return_value=mock_adata):
+            linker = OmicLinker()
+            linker.load_proteomics_report("report.tsv", "diann")
+            # Falls back to obs_names since "well_id" not in obs
+            assert list(linker._proteomics.index) == ["sample_0", "sample_1"]
+
+    def test_available_engines(self):
+        """Should return list of engine names."""
+        engines = OmicLinker.available_engines()
+        assert isinstance(engines, list)
+        assert len(engines) >= 5
+        assert "diann" in engines
+
+    def test_link_with_report(self):
+        """End-to-end: load report -> link -> verify joined output."""
+        dets = _make_detections(n_wells=2, n_cells_per_well=5)
+        mock_adata = _make_mock_adata(n_samples=2, n_proteins=3, well_ids=["W1", "W2"])
+        with patch("dvpio.read.omics.report_reader.read_pg_table", return_value=mock_adata):
+            linker = OmicLinker.from_detections(dets)
+            linker.load_proteomics_report("report.tsv", "diann")
+            linker._well_mapping = {d["uid"]: d["well"] for d in dets}
+            linked = linker.link()
+            assert "PROT1" in linked.columns
+            assert "area" in linked.columns
+            assert len(linked) == 2

@@ -51,6 +51,7 @@ nav:
       - Spatial Networks: api/spatial_network.md
       - "I/O": api/io.md
       - Training: api/training.md
+      - Omic Linker: api/omic_linker.md
       - Visualization: api/visualization.md
   - Guides:
       - NMJ Pipeline: NMJ_PIPELINE_GUIDE.md

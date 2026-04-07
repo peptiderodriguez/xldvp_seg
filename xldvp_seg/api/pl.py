@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, NoReturn
+from typing import TYPE_CHECKING, Any
 
 from xldvp_seg.exceptions import ConfigError
 from xldvp_seg.utils.logging import get_logger
@@ -56,22 +56,3 @@ def umap(
     )
     logger.info("UMAP output written to %s", _out)
     return slide
-
-
-def spatial(slide: SlideAnalysis, **kwargs: Any) -> NoReturn:
-    """Spatial visualization is too complex for a simple API call.
-
-    The spatial viewer requires CZI fluorescence backgrounds, multi-slide
-    discovery, and an interactive HTML pipeline with Canvas 2D rendering.
-
-    Use the CLI instead::
-
-        python scripts/generate_multi_slide_spatial_viewer.py \\
-            --detections path/to/detections.json \\
-            --czi-path path/to/slide.czi \\
-            --output viewer.html
-    """
-    raise NotImplementedError(
-        "Spatial visualization requires the full viewer pipeline. "
-        "Use: python scripts/generate_multi_slide_spatial_viewer.py --help"
-    )

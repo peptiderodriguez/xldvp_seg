@@ -7,7 +7,7 @@ Usage:
     slide = SlideAnalysis.load("output/my_slide/...")
     xseg.tl.markers(slide, ...)
     xseg.pl.umap(slide)
-    xseg.io.export_lmd(slide, crosses="crosses.json")
+    xseg.io.read_proteomics("report.tsv", search_engine="diann")
 """
 
 from xldvp_seg.api import io, pl, pp, tl

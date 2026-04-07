@@ -434,7 +434,7 @@ Post-detection analysis functions promoted from scripts/ into the package for cl
 | `sliding_window_sampling.py` | Skeleton-based spatial sampling along ROI centerlines for LMD |
 | `aggregation.py` | Slide-level and cohort-level feature aggregation |
 | `nuclear_count.py` | Cellpose-based nuclear segmentation within cells |
-| `omic_linker.py` | Morphology-to-proteomics bridge (DVP linking) |
+| `omic_linker.py` | Morphology-to-proteomics bridge (DVP linking). Supports dvp-io for direct search engine report parsing (AlphaDIA, DIANN, MaxQuant, Spectronaut, etc.) |
 | `vessel_characterization.py` | Shared vessel analysis: marker composition, spatial layering, vessel typing, lumen/wall morphometry |
 
 ### Visualization Package (`xldvp_seg/visualization/`)

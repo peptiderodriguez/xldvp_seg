@@ -34,6 +34,7 @@ class OmicLinker:
         self.__features_df = features_df
         self._detections = detections
         self._proteomics = None
+        self._proteomics_adata = None
         self._well_mapping = None
         self._linked = None
 
@@ -67,6 +68,55 @@ class OmicLinker:
         """Load proteomics CSV. Rows=wells, columns=proteins."""
         self._proteomics = pd.read_csv(path, index_col=well_column)
         logger.info("Loaded proteomics: %d wells, %d proteins", *self._proteomics.shape)
+
+    def load_proteomics_report(self, path, search_engine, well_column="well_id", **kwargs):
+        """Load proteomics from a search engine report via dvp-io.
+
+        Supports: alphadia, alphapept, diann, directlfq, fragpipe,
+        maxquant, mztab, spectronaut. See :meth:`available_engines` for
+        the full list.
+
+        Args:
+            path: Path to search engine output file.
+            search_engine: Engine name (e.g., ``'diann'``, ``'maxquant'``).
+            well_column: Column in ``adata.obs`` that identifies wells/samples.
+                dvp-io uses ``'sample_id'`` by default.  If your LMD well IDs
+                differ, set this to the column that maps to your well plate.
+            **kwargs: Forwarded to ``dvpio.read.omics.read_pg_table()``.
+
+        Returns:
+            AnnData from dvp-io (also stored internally as DataFrame for linking).
+        """
+        from dvpio.read.omics.report_reader import read_pg_table
+
+        adata = read_pg_table(str(path), search_engine, **kwargs)
+        # adata.to_df() handles both sparse and dense X matrices
+        df = adata.to_df()
+        if well_column in adata.obs.columns:
+            df.index = adata.obs[well_column].values
+        else:
+            logger.warning(
+                "Column '%s' not found in adata.obs (available: %s). " "Using obs_names as index.",
+                well_column,
+                list(adata.obs.columns),
+            )
+        df.index.name = well_column
+        self._proteomics = df
+        # Keep raw AnnData for scverse downstream (squidpy, scanpy)
+        self._proteomics_adata = adata
+        logger.info(
+            "Loaded proteomics report (%s): %d samples, %d proteins",
+            search_engine,
+            *df.shape,
+        )
+        return adata
+
+    @staticmethod
+    def available_engines():
+        """List supported proteomics search engines (from dvp-io)."""
+        from dvpio.read.omics.report_reader import available_reader
+
+        return available_reader("pg_reader")
 
     def load_well_mapping(self, lmd_dir):
         """Load detection -> well mapping from LMD export."""

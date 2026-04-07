@@ -34,6 +34,8 @@ pip install -e .
 
 Additional flags: `--cuda 11.8|12.1|12.4` (implies --latest), `--cpu` (CPU-only, implies --latest), `--rocm` (AMD GPUs, implies --latest), `--dev` (add pytest/ruff/black).
 
+**Optional extras:** `pip install -e ".[brightfield]"` for brightfield foundation models. `pip install -e ".[instanseg]"` for InstanSeg segmenter.
+
 ```bash
 # Run
 xlseg info slide.czi            # Inspect channels (ALWAYS first)
@@ -243,7 +245,7 @@ See `examples/` for experiment-specific analyses (bone marrow, liver zonation, i
 
 ## Python API
 
-`tl.*` is the primary programmatic API (markers, scoring, clustering, spatial analysis). `pl.umap()` and `io.to_spatialdata()` are also implemented. Detection runs via CLI (`xlseg detect`). `pl.spatial()` and `io.export_lmd()` point to CLI/script alternatives.
+`tl.*` is the primary programmatic API (markers, scoring, clustering, spatial analysis). `pl.umap()`, `io.to_spatialdata()`, and `io.read_proteomics()` are also implemented. Detection and LMD export run via CLI (`xlseg detect`, `xlseg export-lmd`).
 
 ```python
 from xldvp_seg.core import SlideAnalysis

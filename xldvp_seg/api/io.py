@@ -13,55 +13,40 @@ if TYPE_CHECKING:
 logger = get_logger(__name__)
 
 
-def export_lmd(
-    slide: SlideAnalysis,
-    crosses: str | Path,
-    output_dir: str | Path | None = None,
-    min_score: float = 0.5,
-    generate_controls: bool = True,
-    erosion_um: float = 0.0,
+def read_proteomics(
+    path: str | Path,
+    search_engine: str | None = None,
+    well_column: str = "well_id",
     **kwargs: Any,
-) -> Path:
-    """Export detections for laser microdissection.
+):
+    """Read proteomics data from CSV or search engine report.
 
-    LMD export is a multi-step pipeline (contour extraction from HDF5 masks,
-    reference cross calibration, adaptive RDP simplification, spatial control
-    generation, well assignment, and XML generation via py-lmd) that cannot
-    be reduced to a simple function call.
+    If *search_engine* is provided, uses `dvp-io <https://github.com/MannLabs/dvp-io>`_
+    to parse the report.  Otherwise reads plain CSV (rows=wells, columns=proteins).
 
-    Use the CLI instead::
-
-        xlseg export-lmd \\
-            --detections path/to/detections.json \\
-            --crosses path/to/crosses.json \\
-            --output-dir path/to/output \\
-            --min-score 0.5
-
-    Or for programmatic access, use the building blocks in
-    :mod:`xldvp_seg.lmd.export` (``filter_detections``,
-    ``extract_contours_for_detections``, ``export_to_lmd_xml``, etc.).
+    Supported engines: alphadia, alphapept, diann, directlfq, fragpipe,
+    maxquant, mztab, spectronaut.
 
     Args:
-        slide: SlideAnalysis object.
-        crosses: Path to reference crosses JSON (from napari_place_crosses.py).
-        output_dir: Output directory for XML files.
-        min_score: Minimum rf_prediction to include (default: 0.5).
-        generate_controls: Generate spatial control wells (default: True).
-        erosion_um: Contour erosion in um (default: 0.0).
+        path: Path to CSV or search engine report file.
+        search_engine: Engine name (e.g., ``'diann'``, ``'maxquant'``).
+            ``None`` for plain CSV.
+        well_column: Column identifying wells/samples.
+        **kwargs: Forwarded to ``dvpio.read.omics.read_pg_table()``.
 
-    Raises:
-        NotImplementedError: Always. Use ``xlseg export-lmd`` CLI or
-            :mod:`xldvp_seg.lmd.export` functions directly.
+    Returns:
+        DataFrame with wells as index, proteins as columns.
     """
-    det_path = slide.detections_path or "<detections.json>"
-    raise NotImplementedError(
-        "LMD export requires contour extraction from HDF5 masks, reference cross "
-        "calibration, and well assignment -- too complex for a single API call.\n"
-        f"Use: xlseg export-lmd --detections {det_path} "
-        f"--crosses {crosses} --output-dir {output_dir or '<output>'} "
-        f"--min-score {min_score}\n"
-        "Or use building blocks from xldvp_seg.lmd.export directly."
-    )
+    import pandas as pd
+
+    if search_engine is None:
+        return pd.read_csv(str(path), index_col=well_column)
+
+    from xldvp_seg.analysis.omic_linker import OmicLinker
+
+    linker = OmicLinker()
+    linker.load_proteomics_report(path, search_engine, well_column=well_column, **kwargs)
+    return linker._proteomics
 
 
 def to_spatialdata(

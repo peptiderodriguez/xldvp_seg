@@ -1,9 +1,8 @@
 """Tests for xldvp_seg.api -- analysis tool wrappers, plotting, and I/O.
 
 Uses unittest.mock.patch to avoid heavy imports (sklearn, scripts, GPU models).
-Tests that tl.score(), tl.markers(), tl.train(), pl.umap(), pl.spatial(),
-io.export_lmd(), and pp.detect() pass arguments correctly and return expected
-results.
+Tests that tl.score(), tl.markers(), tl.train(), pl.umap(),
+and pp.detect() pass arguments correctly and return expected results.
 
 Run with: pytest tests/test_api.py -v
 """
@@ -13,7 +12,7 @@ from unittest.mock import MagicMock, patch
 import numpy as np
 import pytest
 
-from xldvp_seg.api import io, pl, pp, tl
+from xldvp_seg.api import pl, pp, tl
 from xldvp_seg.core import SlideAnalysis
 
 
@@ -399,25 +398,6 @@ class TestTlTrain:
                 tl.train(slide, annotations=str(ann_path))
 
 
-class TestTlNuclei:
-    """Tests for tl.nuclei() -- should raise NotImplementedError."""
-
-    def test_nuclei_not_implemented(self):
-        slide = SlideAnalysis.from_detections(_make_detections(3))
-        with pytest.raises(NotImplementedError):
-            tl.nuclei(slide, czi_path="/fake/path.czi")
-
-    def test_nuclei_error_message_contains_script_path(self):
-        slide = SlideAnalysis.from_detections(_make_detections(3))
-        with pytest.raises(NotImplementedError, match="count_nuclei_per_cell"):
-            tl.nuclei(slide, czi_path="/fake/path.czi")
-
-    def test_nuclei_error_mentions_pipeline_flag(self):
-        slide = SlideAnalysis.from_detections(_make_detections(3))
-        with pytest.raises(NotImplementedError, match="--count-nuclei"):
-            tl.nuclei(slide, czi_path="/fake/path.czi")
-
-
 class TestPpDetect:
     """Tests for pp.detect() -- command builder."""
 
@@ -486,36 +466,3 @@ class TestPlUmap:
         call_kwargs = mock_run.call_args.kwargs
         assert call_kwargs["n_neighbors"] == 50
         assert call_kwargs["min_dist"] == 0.3
-
-
-class TestPlSpatial:
-    """Tests for pl.spatial() -- should raise NotImplementedError."""
-
-    def test_spatial_not_implemented(self):
-        slide = SlideAnalysis.from_detections(_make_detections(3))
-        with pytest.raises(NotImplementedError):
-            pl.spatial(slide)
-
-    def test_spatial_error_message_mentions_viewer(self):
-        slide = SlideAnalysis.from_detections(_make_detections(3))
-        with pytest.raises(NotImplementedError, match="generate_multi_slide_spatial_viewer"):
-            pl.spatial(slide)
-
-
-class TestIoExportLmd:
-    """Tests for io.export_lmd() -- should raise NotImplementedError with helpful message."""
-
-    def test_export_lmd_not_implemented(self):
-        slide = SlideAnalysis.from_detections(_make_detections(3))
-        with pytest.raises(NotImplementedError):
-            io.export_lmd(slide, crosses="/fake/crosses.json")
-
-    def test_export_lmd_error_mentions_cli(self):
-        slide = SlideAnalysis.from_detections(_make_detections(3))
-        with pytest.raises(NotImplementedError, match="xlseg export-lmd"):
-            io.export_lmd(slide, crosses="/fake/crosses.json")
-
-    def test_export_lmd_error_mentions_building_blocks(self):
-        slide = SlideAnalysis.from_detections(_make_detections(3))
-        with pytest.raises(NotImplementedError, match="xldvp_seg.lmd.export"):
-            io.export_lmd(slide, crosses="/fake/crosses.json")

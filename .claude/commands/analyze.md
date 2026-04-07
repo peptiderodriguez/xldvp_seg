@@ -1099,7 +1099,10 @@ Each well also gets `pool_n_cells` and `pool_spread_um` (spatial spread — how 
 from xldvp_seg.analysis.omic_linker import OmicLinker
 
 linker = OmicLinker.from_slide(slide)
+# Option A: CSV (pre-processed)
 linker.load_proteomics("proteomics.csv")    # wells × proteins (pooled measurement)
+# Option B: search engine report via dvp-io (included)
+# linker.load_proteomics_report("diann_report.tsv", search_engine="diann")
 linker.load_well_mapping("lmd_export/")     # cell → well assignment
 linked = linker.link()                       # DataFrame: aggregated features + proteomics per well
 
