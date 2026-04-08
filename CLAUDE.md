@@ -243,30 +243,7 @@ Contour processing and background correction are checked independently on resume
 
 ### Phase 3: Annotation & Classification
 
-**Step 1 — Serve results:** `$XLDVP_PYTHON $REPO/serve_html.py <output_dir>` — opens HTML viewer via Cloudflare tunnel. Click green ✓ for real detections, red ✗ for false positives. Export annotations via the Export button.
-
-**Step 2 — Train classifier:**
-```bash
-PYTHONPATH=$REPO $XLDVP_PYTHON $REPO/train_classifier.py \
-    --detections <detections.json> \
-    --annotations <annotations.json> \
-    --output-dir <output> \
-    --feature-set morph   # or morph_sam2, channel_stats, all
-```
-Feature sets: `morph` (78D, fast), `morph_sam2` (334D), `channel_stats` (per-channel intensities), `all` (6,478D). Use `train_classifier.py --feature-set` to compare — performance varies by cell type and staining.
-
-**Step 3 — Score all detections + regenerate filtered HTML:**
-```bash
-PYTHONPATH=$REPO $XLDVP_PYTHON $REPO/scripts/apply_classifier.py \
-    --detections <detections.json> \
-    --classifier <rf_classifier.pkl> \
-    --output <scored_detections.json>
-
-PYTHONPATH=$REPO $XLDVP_PYTHON $REPO/scripts/regenerate_html.py \
-    --detections <scored_detections.json> \
-    --czi-path <path> --output-dir <output> \
-    --score-threshold 0.5
-```
+Serve HTML viewer → annotate (yes/no on crops) → train RF → score all detections. Feature sets: `morph` (78D, fast), `morph_sam2` (334D), `channel_stats` (per-channel), `all` (6,478D). See `docs/GETTING_STARTED.md` for full commands.
 
 ### Phase 4: Marker Classification
 
@@ -294,42 +271,11 @@ PYTHONPATH=$REPO $XLDVP_PYTHON $REPO/scripts/classify_markers.py \
 
 ### Phase 5: Spatial Analysis & Exploration
 
-See **Available Analyses** section below for the full catalog.
-
-**Vessel analysis — lumen-first approach** (recommended for vasculature/lymphatics):
-```bash
-PYTHONPATH=$REPO $XLDVP_PYTHON $REPO/scripts/segment_vessel_lumens.py \
-    --zarr-path <output>/slide.ome.zarr \
-    --detections <output>/top5pct/cell_detections_top5pct.json \
-    --marker-names SMA,CD31 \
-    --rgb-channels 1,3,0 \
-    --scales 2,4,8,16 \
-    --output-dir <output>/vessel_lumens/
-```
-Reads OME-Zarr at 4 scales, runs SAM2 auto-mask to find dark lumens, validates via marker+ cell proximity, classifies vessel types. No circularity requirement — oblique cuts and irregular lumens are valid. Outputs: `vessel_lumens.json`, `cell_detections_vessels.json`, `vessel_summary.csv`.
+See **Available Analyses** section below for the full catalog. Vessel analysis via `segment_vessel_lumens.py` (SAM2 lumen-first at 4 OME-Zarr scales) or `detect_vessel_structures.py` (graph topology from marker+ cells).
 
 ### Phase 6: LMD Export
 
-**Step 1 — Place 3 reference crosses** in Napari:
-```bash
-PYTHONPATH=$REPO $XLDVP_PYTHON $REPO/scripts/napari_place_crosses.py \
-    -i <czi_path> --flip-horizontal -o <crosses.json>
-```
-Keybinds: R/G/B = cross color, Space = place, S = save, U = undo, Q = save+quit. `--rotate-cw-90` is ON by default (LMD7 orientation). Crosses JSON stores `display_transform`; export scripts apply matching transforms to contours.
-
-**Step 2 — Export XML:**
-```bash
-PYTHONPATH=$REPO $XLDVP_PYTHON $REPO/run_lmd_export.py \
-    --detections <detections.json> \
-    --crosses <crosses.json> \
-    --output-dir <output>/lmd \
-    --generate-controls --min-score 0.5 --export
-    # Contour processing (all at export time, adaptive by default):
-    # --max-area-change-pct 10.0   # adaptive RDP simplification (default 10%)
-    # --max-dilation-area-pct 10.0 # adaptive dilation / laser buffer (default 10%)
-    # --erosion-um 0.2            # optional: shrink contours for laser
-```
-Batch: `--input-dir <runs> --crosses-dir <crosses>`. Max 308 wells/plate; multi-plate overflow is automatic. Replicate-based export via `lmd_export_replicates.py` (see `/analyze` Phase 5).
+Place 3 reference crosses in Napari (`napari_place_crosses.py`), then export XML via `run_lmd_export.py`. Adaptive RDP simplification (10% shape tolerance) + adaptive dilation (10% area tolerance). Max 308 wells/plate with multi-plate overflow. See `docs/LMD_EXPORT_GUIDE.md` for full reference.
 
 ---
 
@@ -439,37 +385,15 @@ Post-detection analysis functions promoted from scripts/ into the package for cl
 
 ### Visualization Package (`xldvp_seg/visualization/`)
 
-Reusable HTML visualization components extracted from the monolithic spatial viewer. Used by `generate_multi_slide_spatial_viewer.py` and `generate_contour_viewer.py`.
-
-| Module | Purpose |
-|--------|---------|
-| `fluorescence.py` | CZI thumbnail loading + base64 encoding (`read_czi_thumbnail_channels`, `encode_channel_b64`, `parse_scene_index`) |
-| `colors.py` | Color palettes + group assignment (`BINARY_COLORS`, `QUAD_COLORS`, `AUTO_COLORS`, `hsl_palette`, `assign_group_colors`) |
-| `encoding.py` | Binary data encoding for HTML (`encode_float32_base64`, `encode_uint8_base64`, `safe_json`, `build_contour_js_data`) |
-| `data_loading.py` | Detection JSON streaming + position/group extraction (`compute_auto_eps`, `extract_position_um`, `extract_group`, `load_slide_data`, `discover_slides`, `apply_top_n_filtering`) |
-| `graph_patterns.py` | Spatial graph pattern detection (`compute_graph_patterns`) |
-| `html_builder.py` | Group index construction, position serialization, auto-eps collection, region compaction (`build_group_index`, `serialize_slide_positions`, `collect_auto_eps`, `compact_region_data`) |
-| `js_loader.py` | Composable JS component loading (`load_js`) |
-| `js/` | 17 reusable Canvas 2D components (pan/zoom, contour rendering, viewport culling, metadata panel, controls, init, regions, render_panel) |
+8 modules + 17 JS components for reusable HTML visualization. Key: `fluorescence.py` (CZI thumbnails), `colors.py` (palettes), `encoding.py` (base64, `safe_json`, contour data), `data_loading.py` (JSON streaming, `compute_auto_eps`), `js_loader.py` (`load_js()` for composable Canvas 2D components).
 
 ### HTML Export (`xldvp_seg/io/`)
 
-Split across focused modules with backward-compatible re-exports in `html_export.py`:
+Split across 6 modules with backward-compatible re-exports: `html_export.py` (page generators), `html_styles.py` (CSS), `html_scripts.py` (JS), `html_utils.py` (image utils, `_esc`, `_js_esc`), `html_generator.py` (class-based per-tile), `html_batch_export.py` (MK/HSPC batch).
 
-| Module | Purpose |
-|--------|---------|
-| `html_export.py` | Page generators: `generate_annotation_page`, `generate_index_page`, `generate_dual_index_page`, `export_samples_to_html`, vessel variants. Re-exports all names from submodules for backward compatibility. |
-| `html_styles.py` | CSS generators: `get_css()`, `get_vessel_css()` |
-| `html_scripts.py` | JS generators: `get_js()`, `get_vessel_js()`, `generate_preload_annotations_js()` |
-| `html_utils.py` | Image utilities: `percentile_normalize`, `draw_mask_contour`, `image_to_base64`, `compose_tile_rgb`, `_esc`, HDF5 compression constants |
-| `html_generator.py` | Class-based `HTMLPageGenerator` API for per-tile HTML generation |
-| `html_batch_export.py` | MK/HSPC batch export: `load_samples_from_ram`, `export_mk_hspc_html_from_ram`, index/page generators |
+### Training (`xldvp_seg/training/`)
 
-### Training Utilities (`xldvp_seg/training/`)
-
-| Module | Purpose |
-|--------|---------|
-| `feature_loader.py` | Load features + annotations, feature set filtering — used by `tl.train()` |
+`feature_loader.py` — load features + annotations, feature set filtering (used by `tl.train()`).
 
 ---
 
