@@ -20,6 +20,9 @@ import tempfile
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
+from sklearn.ensemble import RandomForestClassifier
+from sklearn.model_selection import cross_val_score
+
 from xldvp_seg.exceptions import ConfigError
 from xldvp_seg.utils.logging import get_logger
 
@@ -127,6 +130,9 @@ def score(
     Calls extract_feature_matrix + pipeline.predict_proba directly.
     Mutates detections in-place with rf_prediction field.
 
+    Missing feature values are defaulted to 0.0 so that all detections
+    are scored (matching ``extract_feature_matrix`` behavior).
+
     Args:
         slide: SlideAnalysis object.
         classifier: Path to .pkl classifier file.
@@ -154,16 +160,13 @@ def score(
     for i, det in enumerate(detections):
         features = det.get("features", {})
         row = []
-        valid = True
         for fn in feature_names:
             val = features.get(fn)
             if val is None:
-                valid = False
-                break
+                val = 0.0
             row.append(float(val))
-        if valid:
-            X_rows.append(row)
-            valid_indices.append(i)
+        X_rows.append(row)
+        valid_indices.append(i)
 
     if not X_rows:
         logger.warning("No detections have all required features")
@@ -211,8 +214,6 @@ def train(
         Dict with training metrics (f1, precision, recall, etc.)
     """
     import joblib
-    from sklearn.ensemble import RandomForestClassifier
-    from sklearn.model_selection import cross_val_score
 
     from xldvp_seg.training.feature_loader import load_features_and_annotations
 

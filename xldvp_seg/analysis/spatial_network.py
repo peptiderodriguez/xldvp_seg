@@ -676,6 +676,8 @@ def run_spatial_network(
         logger.info("  Saved component_summary.csv (%d components)", len(comp_rows))
 
     # Community detection (Louvain) on full pruned graph
+    # NOTE: Edge weight in GraphML is distance_um (not affinity).
+    # For community detection, use weight=None to avoid grouping distant cells.
     # Use weight=None so all edges are equal -- the stored weight is distance_um,
     # and Louvain groups by high weight, which would invert the spatial semantics.
     logger.info("Running Louvain community detection...")

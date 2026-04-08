@@ -226,7 +226,7 @@ class OmicLinker:
 
         # Within-well variability (std per feature)
         if scalar_cols:
-            well_std = grouped[scalar_cols].std()
+            well_std = grouped[scalar_cols].std().fillna(0.0)
             well_std.columns = [f"pool_std_{c}" for c in well_std.columns]
             well_morph = well_morph.join(well_std)
 
@@ -273,6 +273,8 @@ class OmicLinker:
                         spreads[well] = 0.0
                 well_morph["pool_spread_um"] = pd.Series(spreads)
 
+                df.drop(columns=["_pos_x", "_pos_y"], inplace=True, errors="ignore")
+
                 logger.info(
                     "Pool spatial: %d/%d wells have positions",
                     well_morph["pool_x_um"].notna().sum(),
@@ -298,8 +300,8 @@ class OmicLinker:
             test: Statistical test ('mannwhitneyu' or 'ttest').
 
         Returns:
-            DataFrame with feature, statistic, p_value, effect_size (Cohen's d),
-            mean_diff, mean_a, mean_b, p_adjusted.
+            DataFrame with feature, statistic, p_value, effect_size (Cohen's d,
+            capped at +/-10), mean_diff, mean_a, mean_b, n_a, n_b, p_adjusted.
         """
         from scipy import stats
 
@@ -328,13 +330,14 @@ class OmicLinker:
             mean_a = vals_a.mean()
             mean_b = vals_b.mean()
             mean_diff = mean_a - mean_b
-            pooled_var = ((n_a - 1) * vals_a.var(ddof=1) + (n_b - 1) * vals_b.var(ddof=1)) / max(
-                n_a + n_b - 2, 1
+            pooled_var = ((n_a - 1) * vals_a.var(ddof=1) + (n_b - 1) * vals_b.var(ddof=1)) / (
+                n_a + n_b - 2
             )
             if pooled_var < 1e-20:
                 cohens_d = 0.0
             else:
                 cohens_d = mean_diff / np.sqrt(pooled_var)
+            cohens_d = float(np.clip(cohens_d, -10.0, 10.0))
             results.append(
                 {
                     "feature": col,
@@ -344,6 +347,8 @@ class OmicLinker:
                     "mean_diff": mean_diff,
                     "mean_a": mean_a,
                     "mean_b": mean_b,
+                    "n_a": n_a,
+                    "n_b": n_b,
                 }
             )
 
@@ -375,7 +380,11 @@ class OmicLinker:
             fdr_correct: If True (default) and return_pvalues=True, apply
                 Benjamini-Hochberg FDR correction to the p-value matrix.
                 With many features x proteins (e.g., 78 x 5000 = 390K tests),
-                uncorrected p-values are misleading.
+                uncorrected p-values are misleading. However, BH correction
+                is very conservative at this scale and few results survive.
+                For exploratory analysis, consider pre-selecting a small set of
+                morph features before correlating, or use ``fdr_correct=False``
+                with explicit caution about multiple testing.
 
         Returns:
             DataFrame (rows=morph_features, columns=proteins, values=correlation).
@@ -467,4 +476,5 @@ class OmicLinker:
             result_df = result_df.sort_values("p_adjusted", ascending=True)
         else:
             result_df = result_df.sort_values("correlation", ascending=False)
+        logger.info("Returning top %d of %d proteins", min(top_n, len(result_df)), len(result_df))
         return result_df.head(top_n)

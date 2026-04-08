@@ -170,9 +170,9 @@ def correct_all_channels(
     if not detections:
         return []
 
-    # Guard: refuse to double-correct — scan first 10 detections
+    # Guard: refuse to double-correct — scan first 100 detections
     sample_keys: set[str] = set()
-    for d in detections[:10]:
+    for d in detections[:100]:
         sample_keys.update(d.get("features", {}).keys())
     if any(k.endswith("_background") for k in sample_keys):
         logger.info(

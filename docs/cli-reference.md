@@ -105,7 +105,7 @@ xlseg markers \
 | `--marker-wavelength` | Wavelengths to resolve (auto-matches CZI channels) |
 | `--marker-channel` | Direct channel indices (alternative to wavelength) |
 | `--marker-name` | Human-readable names for each marker |
-| `--method` | `snr` (default), `otsu`, `otsu_half`, `gmm` |
+| `--method` | `snr` (default), `otsu`, `otsu_half`, `gmm` (BIC model selection; returns all-negative for unimodal data) |
 
 ---
 

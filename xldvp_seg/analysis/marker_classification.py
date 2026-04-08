@@ -57,6 +57,13 @@ def classify_otsu(values: np.ndarray, include_zeros: bool = False) -> tuple[floa
     from skimage.filters import threshold_otsu
 
     vals_for_otsu = values if include_zeros else values[values > 0]
+    n_zeros = len(values) - len(vals_for_otsu)
+    if not include_zeros and n_zeros > len(values) * 0.5:
+        logger.warning(
+            "%.1f%% of values are zero (excluded from Otsu). Consider include_zeros=True "
+            "if data is background-corrected.",
+            100 * n_zeros / max(len(values), 1),
+        )
     if len(vals_for_otsu) < 10:
         logger.warning(
             "Too few %svalues for Otsu; defaulting threshold to 0",
@@ -89,6 +96,13 @@ def classify_otsu_half(values: np.ndarray, include_zeros: bool = False) -> tuple
     from skimage.filters import threshold_otsu
 
     nonzero = values if include_zeros else values[values > 0]
+    n_zeros = len(values) - len(nonzero)
+    if not include_zeros and n_zeros > len(values) * 0.5:
+        logger.warning(
+            "%.1f%% of values are zero (excluded from Otsu). Consider include_zeros=True "
+            "if data is background-corrected.",
+            100 * n_zeros / max(len(values), 1),
+        )
     if len(nonzero) < 10:
         logger.warning("Too few non-zero values for Otsu; defaulting threshold to 0")
         return 0.0, np.zeros(len(values), dtype=bool)
@@ -141,8 +155,11 @@ def classify_gmm(values: np.ndarray, posterior_threshold: float = 0.75) -> tuple
     # BIC model selection: prefer 1-component if data is unimodal
     gmm1 = GaussianMixture(n_components=1, random_state=42).fit(log_vals)
     gmm2 = GaussianMixture(n_components=2, random_state=42, max_iter=200).fit(log_vals)
-    if gmm1.bic(log_vals) <= gmm2.bic(log_vals):
-        logger.info("BIC prefers 1 component (unimodal distribution). Returning all-negative.")
+    if gmm1.bic(log_vals) - gmm2.bic(log_vals) < 6:
+        logger.info(
+            "BIC does not strongly favor 2 components (delta=%.1f < 6). Returning all-negative.",
+            gmm1.bic(log_vals) - gmm2.bic(log_vals),
+        )
         return 0.0, np.zeros(len(values), dtype=bool)
     gmm = gmm2
 
@@ -160,6 +177,13 @@ def classify_gmm(values: np.ndarray, posterior_threshold: float = 0.75) -> tuple
             "Data may be unimodal. Consider otsu_half method instead.",
             separation,
         )
+        if min(gmm.weights_) < 0.1:
+            logger.info(
+                "Poorly separated GMM with minor component weight %.2f < 0.1. "
+                "Returning all-negative.",
+                min(gmm.weights_),
+            )
+            return 0.0, np.zeros(len(values), dtype=bool)
 
     # Posterior probability for the high component
     probs = gmm.predict_proba(log_vals)[:, high_idx]
@@ -416,6 +440,7 @@ def classify_single_marker(
         )
 
     # Classify
+    _include_zeros = bg_subtract or global_background
     if method == "snr":
         # SNR-based: positive if channel SNR >= snr_threshold
         # First try pipeline-computed ch{N}_snr, then compute from raw/bg
@@ -446,9 +471,9 @@ def classify_single_marker(
         threshold = snr_threshold
         positive_mask = snr_values >= snr_threshold
     elif method == "otsu":
-        threshold, positive_mask = classify_otsu(values)
+        threshold, positive_mask = classify_otsu(values, include_zeros=_include_zeros)
     elif method == "otsu_half":
-        threshold, positive_mask = classify_otsu_half(values)
+        threshold, positive_mask = classify_otsu_half(values, include_zeros=_include_zeros)
     elif method == "gmm":
         threshold, positive_mask = classify_gmm(values)
     else:

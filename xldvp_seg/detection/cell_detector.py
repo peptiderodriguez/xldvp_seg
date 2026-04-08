@@ -77,7 +77,6 @@ class _LazyModelDict(dict):
 
     def _load_model(self, key):
         """Load a model on-demand."""
-        self._loaded.add(key)
         if key == "sam2_predictor":
             self[key] = self._detector.sam2_predictor
         elif key == "sam2_auto":
@@ -95,6 +94,7 @@ class _LazyModelDict(dict):
         elif key == "device":
             self[key] = self._detector.device
         # For any other key (like 'classifier'), just leave it as-is
+        self._loaded.add(key)
 
     def __setitem__(self, key, value):
         """Allow setting arbitrary keys (e.g., classifier)."""

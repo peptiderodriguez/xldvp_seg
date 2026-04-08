@@ -88,6 +88,21 @@ For each channel N:
 
 The threshold used for each marker is stored in the summary dict returned by `classify_single_marker()`, not per-detection. Classification methods: `snr` (default, median-based SNR >= 1.5), `otsu` (automatic threshold), `otsu_half` (permissive), `gmm` (2-component Gaussian mixture with BIC model selection — automatically returns all-negative when data is unimodal).
 
+### Differential Analysis Fields (from `OmicLinker.differential_features()`)
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `feature` | string | Feature name |
+| `statistic` | float | Test statistic (Mann-Whitney U or t) |
+| `p_value` | float | Raw p-value |
+| `p_adjusted` | float | Benjamini-Hochberg FDR-adjusted p-value |
+| `effect_size` | float | Cohen's d (capped at ±10 to prevent inflation from near-zero variance) |
+| `mean_diff` | float | Mean difference (group A - group B) |
+| `mean_a` | float | Mean in group A |
+| `mean_b` | float | Mean in group B |
+| `n_a` | int | Sample size in group A |
+| `n_b` | int | Sample size in group B |
+
 ### Contour Fields (top-level, after post-dedup)
 
 | Field | Type | Description |

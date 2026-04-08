@@ -73,7 +73,7 @@ def generate_preload_annotations_js(
         page_key_prefix = _js_esc(f"{cell_type}_labels_page")
 
     # Escape </ sequences to prevent </script> injection in inline JS
-    safe_json = json.dumps(ls_format).replace("</", r"<\/")
+    safe_json = json.dumps(ls_format).replace("</", r"<\/").replace("<!--", r"<\!--")
     js_content = f"""// Pre-loaded annotations from {_esc(annotations_path.name)}
 // Generated automatically during HTML export
 // These are EXISTING annotations - new annotations take precedence

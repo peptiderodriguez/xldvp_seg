@@ -74,6 +74,11 @@ def sample(
     }
     cluster_channel_means = rng.uniform(100, 5000, size=(n_clusters, n_channels))
 
+    cluster_embeddings = {
+        c: np.random.default_rng(seed + n_clusters + c).standard_normal(256)
+        for c in range(n_clusters)
+    }
+
     detections: list[dict[str, Any]] = []
     for i in range(n_cells):
         c = labels[i]
@@ -107,8 +112,8 @@ def sample(
 
         # SAM2-style embeddings (256D, cluster-structured)
         sam2_base = rng.standard_normal(256) * 0.1  # per-cell noise
-        # Add cluster-specific component
-        cluster_embedding = np.random.default_rng(seed + c).standard_normal(256)
+        # Add cluster-specific component (precomputed for reproducibility)
+        cluster_embedding = cluster_embeddings[labels[i]]
         sam2 = sam2_base + cluster_embedding * 0.5
         for j in range(256):
             features[f"sam2_{j}"] = float(sam2[j])

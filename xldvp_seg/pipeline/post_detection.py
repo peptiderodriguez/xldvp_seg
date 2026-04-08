@@ -215,6 +215,10 @@ def _phase1_tile(
     computes quick median intensity per channel from the **original** mask
     region (no dilation or RDP — those are deferred to LMD export).
 
+    Note: HDF5 mask files are read in both Phase 1 and Phase 3 independently.
+    On network filesystems (GPFS), this adds I/O latency. A future optimization
+    could cache masks from Phase 1 for Phase 3 reuse.
+
     Returns ``(n_ok, n_fail)``.
     """
     import hdf5plugin  # noqa: F401 — register LZ4 codec
@@ -265,7 +269,7 @@ def _phase1_tile(
             contour_local = _contour_from_binary(original_mask)
             if contour_local is not None:
                 origin = det.get("tile_origin", [0, 0])
-                contour_global = contour_local.astype(np.float32)
+                contour_global = contour_local.astype(np.float64)
                 contour_global[:, 0] += origin[0]
                 contour_global[:, 1] += origin[1]
                 det["contour_px"] = contour_global.tolist()
@@ -277,7 +281,10 @@ def _phase1_tile(
         if tile_channels:
             for ch, data in tile_channels.items():
                 pixels = data[original_mask].astype(np.float32)
-                quick_medians[ch] = float(np.median(pixels))
+                nonzero_pixels = pixels[pixels > 0]
+                quick_medians[ch] = (
+                    float(np.median(nonzero_pixels)) if len(nonzero_pixels) > 0 else 0.0
+                )
         det["_bg_quick_medians"] = quick_medians
 
     return n_ok, n_fail
@@ -394,6 +401,7 @@ def _phase3_tile(
                 feat[f"ch{ch}_snr"] = float(raw_median / ch_bg)
             else:
                 feat[f"ch{ch}_background"] = 0.0
+                feat[f"ch{ch}_snr"] = 0.0
 
         # Always compute area_um2 from the original mask
         feat["area_um2"] = float(int(crop_mask.sum()) * pixel_size_um**2)
@@ -640,54 +648,55 @@ def process_detections_post_dedup(
     logger.info("-" * 40)
     logger.info("Phase 3: Feature extraction on corrected pixels (%d workers)", effective_workers)
 
-    with ThreadPoolExecutor(max_workers=effective_workers) as pool:
-        futures = {
-            pool.submit(
-                _phase3_tile,
-                k,
-                v,
-                tiles_dir,
-                mask_filename,
-                use_shm,
-                slide_shm_arr,
-                ch_to_slot,
-                x_start,
-                y_start,
-                loader,
-                _ch_indices,
-                tile_size,
-                has_data_source,
-                per_cell_bg,
-                pixel_size_um,
-            ): k
-            for k, v in by_tile.items()
-        }
-        with _tqdm(total=len(futures), desc="Phase 3") as pbar:
-            for f in as_completed(futures):
-                tile_key = futures[f]
-                try:
-                    ok, fail = f.result()
-                    n_features_ok += ok
-                    n_features_fail += fail
-                except Exception:
-                    logger.error("Phase 3 failed for tile %s", tile_key, exc_info=True)
-                    n_features_fail += len(by_tile[tile_key])
-                pbar.update(1)
+    try:
+        with ThreadPoolExecutor(max_workers=effective_workers) as pool:
+            futures = {
+                pool.submit(
+                    _phase3_tile,
+                    k,
+                    v,
+                    tiles_dir,
+                    mask_filename,
+                    use_shm,
+                    slide_shm_arr,
+                    ch_to_slot,
+                    x_start,
+                    y_start,
+                    loader,
+                    _ch_indices,
+                    tile_size,
+                    has_data_source,
+                    per_cell_bg,
+                    pixel_size_um,
+                ): k
+                for k, v in by_tile.items()
+            }
+            with _tqdm(total=len(futures), desc="Phase 3") as pbar:
+                for f in as_completed(futures):
+                    tile_key = futures[f]
+                    try:
+                        ok, fail = f.result()
+                        n_features_ok += ok
+                        n_features_fail += fail
+                    except Exception:
+                        logger.error("Phase 3 failed for tile %s", tile_key, exc_info=True)
+                        n_features_fail += len(by_tile[tile_key])
+                    pbar.update(1)
 
-    total_phase3 = n_features_ok + n_features_fail
-    if total_phase3 > 0 and n_features_fail / total_phase3 > 0.05:
-        logger.warning(
-            "Phase 3 failure rate %.1f%% (%d/%d) exceeds 5%% threshold. "
-            "Check data source and feature extraction.",
-            100 * n_features_fail / total_phase3,
-            n_features_fail,
-            total_phase3,
-        )
-
-    # --- Cleanup temporary keys ---
-    for det in detections:
-        det.pop("_bg_quick_medians", None)
-        det.pop("_postdedup_idx", None)
+        total_phase3 = n_features_ok + n_features_fail
+        if total_phase3 > 0 and n_features_fail / total_phase3 > 0.05:
+            logger.warning(
+                "Phase 3 failure rate %.1f%% (%d/%d) exceeds 5%% threshold. "
+                "Check data source and feature extraction.",
+                100 * n_features_fail / total_phase3,
+                n_features_fail,
+                total_phase3,
+            )
+    finally:
+        # --- Cleanup temporary keys ---
+        for det in detections:
+            det.pop("_bg_quick_medians", None)
+            det.pop("_postdedup_idx", None)
 
     # ==================================================================
     # PHASE 4: Nuclear counting (optional, single-threaded — uses GPU)

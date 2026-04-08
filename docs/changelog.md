@@ -37,6 +37,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- `classify_single_marker()` now passes `include_zeros=True` to Otsu/Otsu-half when `bg_subtract` or `global_background` is active, ensuring background-corrected zeros are included in threshold computation.
+- `classify_gmm()` BIC comparison requires delta ≥ 6 (Raftery's "strong evidence") for 2-component preference, plus hard guard: returns all-negative when separation < 0.5 AND minor component weight < 0.1.
+- `tl.score()` now defaults missing feature values to 0.0 instead of skipping detections, matching `extract_feature_matrix` behavior. All detections are now scored.
+- `load_rf_classifier()` raises `DataLoadError` on unexpected model type (was `logger.warning` + fallthrough).
+- `differential_features()` now returns `n_a` and `n_b` sample size columns. Cohen's d capped at ±10.
+- `pool_std` columns use `fillna(0.0)` for single-cell wells (std is undefined with ddof=1 for n=1).
+- Phase 1 quick medians now filter zero-valued pixels (CZI padding) before computing median.
+- `ch{N}_snr` is now always written (0.0 when background is zero), consistent with `correct_all_channels`.
+- Phase 3 cleanup (`_bg_quick_medians`, `_postdedup_idx`) wrapped in `try/finally` for exception safety.
+- Contour global coordinates use float64 (was float32) to preserve sub-pixel precision for large slides.
+- `build_contour_js_data` uses random subsampling (was fixed-step) for spatially unbiased contour selection.
+- `correct_all_channels` scans first 100 detections for feature keys (was 10) to handle edge-tile variability.
+- `_LazyModelDict._load_model` marks key as loaded only after successful model assignment (prevents stale `_loaded` on load failure).
+- `_ISLET_MARKER_DEFAULTS` deprecation warning now includes removal timeline (v3.0).
+- `safe_json` escapes both `</` and `<!--` sequences consistently across `encoding.py` and `html_scripts.py`.
 - `torch.load()` now uses `weights_only=True` in NMJ strategy and cell detector (security hardening).
 - `joblib.load()` in `BaseVesselClassifier.load()` validates dict type and raises `ClassificationError` on model type mismatch (was `logger.warning`).
 - `ClusteringConfig.threshold` default changed from 0.5 to 0.0 (matches CLI + API defaults).

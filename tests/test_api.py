@@ -90,9 +90,10 @@ class TestTlScore:
         mock_load_clf.return_value["pipeline"].predict_proba.assert_not_called()
 
     @patch("xldvp_seg.utils.detection_utils.load_rf_classifier")
-    def test_score_missing_features(self, mock_load_clf):
-        """Detections missing required features are skipped."""
+    def test_score_missing_features_defaulted(self, mock_load_clf):
+        """Detections with missing features get 0.0 defaults and are still scored."""
         mock_pipeline = MagicMock()
+        mock_pipeline.predict_proba.return_value = np.array([[0.1, 0.9]] * 3)
         mock_load_clf.return_value = {
             "pipeline": mock_pipeline,
             "feature_names": ["area", "nonexistent_feature"],
@@ -103,7 +104,12 @@ class TestTlScore:
         slide = SlideAnalysis.from_detections(dets)
         result = tl.score(slide, classifier="clf.pkl")
         assert result is slide
-        mock_pipeline.predict_proba.assert_not_called()
+        # All 3 detections scored — missing features default to 0.0
+        mock_pipeline.predict_proba.assert_called_once()
+        X_arg = mock_pipeline.predict_proba.call_args[0][0]
+        assert X_arg.shape == (3, 2)
+        # nonexistent_feature column should be all zeros
+        assert (X_arg[:, 1] == 0.0).all()
 
     @patch("xldvp_seg.utils.detection_utils.load_rf_classifier")
     def test_score_custom_field(self, mock_load_clf):
@@ -149,9 +155,9 @@ class TestTlScore:
 
     @patch("xldvp_seg.utils.detection_utils.load_rf_classifier")
     def test_score_partial_features(self, mock_load_clf):
-        """When some detections have features and some don't, only valid ones scored."""
+        """When some detections are missing features, missing values default to 0.0."""
         mock_pipeline = MagicMock()
-        mock_pipeline.predict_proba.return_value = np.array([[0.2, 0.8]])
+        mock_pipeline.predict_proba.return_value = np.array([[0.2, 0.8], [0.3, 0.7]])
         mock_load_clf.return_value = {
             "pipeline": mock_pipeline,
             "feature_names": ["area", "solidity"],
@@ -163,10 +169,11 @@ class TestTlScore:
         del dets[1]["features"]["solidity"]
         slide = SlideAnalysis.from_detections(dets)
         tl.score(slide, classifier="clf.pkl")
-        # Only 1 detection should be scored
+        # Both detections scored — missing solidity defaults to 0.0
         mock_pipeline.predict_proba.assert_called_once()
         X_arg = mock_pipeline.predict_proba.call_args[0][0]
-        assert X_arg.shape == (1, 2)
+        assert X_arg.shape == (2, 2)
+        assert X_arg[1, 1] == 0.0  # missing solidity → 0.0
 
 
 class TestTlMarkers:
@@ -337,11 +344,11 @@ class TestTlTrain:
                 mock_load_fn,
             ),
             patch(
-                "sklearn.ensemble.RandomForestClassifier",
+                "xldvp_seg.api.tl.RandomForestClassifier",
                 mock_rf_cls,
             ),
             patch(
-                "sklearn.model_selection.cross_val_score",
+                "xldvp_seg.api.tl.cross_val_score",
                 mock_cv,
             ),
             patch(

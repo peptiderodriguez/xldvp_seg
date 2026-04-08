@@ -241,11 +241,9 @@ def load_rf_classifier(model_path: str) -> dict:
         raise DataLoadError(f"Failed to load classifier from {model_path}: {e}") from e
 
     if not isinstance(model_data, (dict, Pipeline)):
-        logger.warning(
-            "Loaded model from %s has unexpected type %s. "
-            "Only load classifiers from trusted sources.",
-            model_path,
-            type(model_data).__name__,
+        raise DataLoadError(
+            f"Unexpected model format from {model_path}: expected dict or Pipeline, "
+            f"got {type(model_data).__name__}."
         )
 
     if isinstance(model_data, Pipeline):

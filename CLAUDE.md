@@ -286,7 +286,7 @@ PYTHONPATH=$REPO $XLDVP_PYTHON $REPO/scripts/classify_markers.py \
     --marker-channel 1,2 --marker-name NeuN,tdTomato
 ```
 
-**Methods:** `snr` (default — median-based SNR >= 1.5, robust to membrane stains with median=0 inside cells), `otsu` (auto-threshold maximizing inter-class variance), `otsu_half` (more permissive for dim markers), `gmm` (2-component Gaussian with BIC model selection — returns all-negative for unimodal data). Optional `--normalize-channel` normalizes per-channel intensities before thresholding, but is NOT recommended as default because PM membrane stains have median=0 inside cells.
+**Methods:** `snr` (default — median-based SNR >= 1.5, robust to membrane stains with median=0 inside cells), `otsu` (auto-threshold maximizing inter-class variance; `include_zeros` parameter auto-enabled when bg correction is active), `otsu_half` (more permissive for dim markers), `gmm` (2-component Gaussian with BIC model selection requiring delta ≥ 6 for 2-component preference — returns all-negative for unimodal data or when minor component weight < 0.1). Optional `--normalize-channel` normalizes per-channel intensities before thresholding, but is NOT recommended as default because PM membrane stains have median=0 inside cells.
 
 **Shortcut — `--marker-snr-channels`:** Instead of running `classify_markers.py` as a separate step, pass `--marker-snr-channels "SMA:1,CD31:3"` to `xlseg detect` (or `run_segmentation.py`). This classifies markers during detection using the pre-computed SNR >= 1.5 threshold at zero extra cost. Format: `"NAME:CHANNEL_INDEX,..."`. The same output fields are produced.
 
@@ -631,6 +631,27 @@ python run_segmentation.py --czi-path slide.czi --cell-type nmj \
 | SAM2 `_orig_hw` | `img_h, img_w = sam2_predictor._orig_hw[0]` (list of tuple) |
 | HDF5 LZ4 error | `import hdf5plugin` before `h5py` |
 | Network mount timeout | Socket timeout 60s automatic. Check with `ls /mnt/x/` |
+
+---
+
+## Python API (`xldvp_seg.api`)
+
+Scanpy-style wrappers for notebook and programmatic use. All operate on `SlideAnalysis` objects.
+
+| Module | Function | What it does |
+|--------|----------|-------------|
+| `tl` | `markers(slide, ...)` | Classify markers as pos/neg per channel (SNR/Otsu/GMM) |
+| `tl` | `score(slide, classifier=...)` | Score detections with trained RF. Missing features default to 0.0 — all detections are scored. |
+| `tl` | `train(slide, annotations=..., feature_set=...)` | Train RF classifier from annotations. Returns classifier path. |
+| `tl` | `cluster(slide, feature_groups=..., methods=...)` | UMAP/t-SNE + Leiden/HDBSCAN clustering |
+| `tl` | `spatial(slide, ...)` | Delaunay network + Louvain community detection |
+| `pp` | `inspect(czi_path)` | Return CZI metadata dict (channels, dimensions, pixel size) |
+| `pp` | `detect(czi_path, cell_type=..., ...)` | Generate and print detection CLI command |
+| `io` | `read_proteomics(path, ...)` | Load proteomics CSV or dvp-io search engine report |
+| `io` | `to_spatialdata(slide, ...)` | Export to SpatialData zarr for scverse |
+| `pl` | `umap(slide, ...)` | UMAP visualization (delegates to clustering) |
+
+**OmicLinker** (`xldvp_seg.analysis.omic_linker`): bridges morphology → proteomics. `link()` aggregates per-cell features to well level (median for scalars, mean for embeddings) with `pool_std_*` columns for within-well variability. `correlate(fdr_correct=True)` applies BH FDR correction. `differential_features()` returns Cohen's d (capped ±10) with `n_a`, `n_b` sample sizes and FDR-adjusted p-values. `rank_proteins(sort_by="p_adjusted")` for significance-ordered ranking.
 
 ---
 

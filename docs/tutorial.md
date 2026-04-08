@@ -191,7 +191,7 @@ This adds fields inside each detection's `features` sub-dict:
     The threshold used for classification is stored in the summary dict
     returned by `classify_single_marker()`, not per-detection.
 
-Available methods: `snr` (default), `otsu`, `otsu_half`, `gmm`.
+Available methods: `snr` (default), `otsu` (auto-includes zeros when bg correction is active), `otsu_half`, `gmm` (BIC model selection — compares 1 vs 2 components, returns all-negative for unimodal data).
 
 !!! note
     Background correction is automatic. The pipeline computes pixel-level

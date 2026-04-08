@@ -491,8 +491,8 @@ PYTHONPATH=$REPO $XLDVP_PYTHON $REPO/scripts/classify_markers.py \
 | Method | Description | When |
 |--------|-------------|------|
 | `snr` (default) | Median-based SNR >= threshold (default 1.5). Robust to bright outlier pixels. | Default for all markers |
-| `otsu` | Auto threshold maximizing inter-class variance on bg-corrected intensities | Fallback when SNR is too strict/permissive |
-| `gmm` | 2-component Gaussian mixture model on log1p intensities | Overlapping distributions, weak signal markers |
+| `otsu` | Auto threshold maximizing inter-class variance. Automatically includes zeros in threshold computation when background correction is active (`include_zeros`). | Fallback when SNR is too strict/permissive |
+| `gmm` | Gaussian mixture with BIC model selection (1 vs 2 components, delta ≥ 6 required). Returns all-negative for unimodal data or when minor component weight < 0.1. Configurable `posterior_threshold`. | Overlapping distributions, weak signal markers |
 
 **Pipeline-level background correction** (median-based, written during detection):
 - `ch{N}_background`: per-cell local background (median of k=30 nearest neighbors' medians)

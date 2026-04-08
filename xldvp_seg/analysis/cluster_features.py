@@ -242,8 +242,8 @@ def discover_marker_channels(detections, exclude_channels=None):
         import warnings
 
         warnings.warn(
-            "_ISLET_MARKER_DEFAULTS is deprecated. Use --channel-spec to specify "
-            "marker channels explicitly.",
+            "_ISLET_MARKER_DEFAULTS is deprecated and will be removed in v3.0. "
+            "Use --channel-spec to specify marker channels explicitly.",
             DeprecationWarning,
             stacklevel=2,
         )
@@ -516,6 +516,8 @@ def auto_label_clusters(detections, labels, valid_indices, marker_channels, norm
         enriched = None
         if marker_means and max(marker_means.values()) > 0:
             best = max(marker_means, key=marker_means.get)
+            # 0.1 on [0,1] normalized scale = top 10% of dynamic range;
+            # 0.5 z-score = cluster mean 0.5 std above population mean.
             threshold = 0.1 if norm_ranges else 0.5
             if marker_means[best] >= threshold:
                 enriched = best

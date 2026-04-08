@@ -25,7 +25,7 @@ def safe_json(obj):
 
     Escapes '</' sequences to prevent premature </script> termination (XSS).
     """
-    return json.dumps(obj).replace("</", "<\\/")
+    return json.dumps(obj).replace("</", "<\\/").replace("<!--", "<\\!--")
 
 
 def build_contour_js_data(contours_raw, max_contours=100_000):
@@ -47,10 +47,13 @@ def build_contour_js_data(contours_raw, max_contours=100_000):
     if not contours_raw:
         return []
 
+    if len(contours_raw) > max_contours:
+        _rng = np.random.default_rng(42)
+        indices = sorted(_rng.choice(len(contours_raw), max_contours, replace=False))
+        contours_raw = [contours_raw[i] for i in indices]
+
     out = []
-    step = max(1, len(contours_raw) // max_contours)
-    for i in range(0, len(contours_raw), step):
-        contour, pixel_size = contours_raw[i]
+    for i, (contour, pixel_size) in enumerate(contours_raw):
         try:
             pts = np.asarray(contour, dtype=np.float32)
             # Contour may be [[x,y],...] or [[x,y,z],...] — take only x,y

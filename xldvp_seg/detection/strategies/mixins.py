@@ -269,7 +269,8 @@ class MultiChannelFeatureMixin:
                 mean_a = channel_means[ch_a]
                 mean_b = channel_means[ch_b]
 
-                # Avoid division by zero
+                # Floor of 1.0 prevents division by zero and is appropriate for uint16
+                # fluorescence intensities (typical signal range: hundreds to thousands).
                 safe_mean_b = max(mean_b, 1.0)
                 safe_mean_a = max(mean_a, 1.0)
 

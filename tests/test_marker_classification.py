@@ -20,9 +20,9 @@ from xldvp_seg.analysis.marker_classification import (
 
 def _make_detections(n, channel=1, feature_key="ch1_mean", values=None):
     """Build detection dicts with features.{feature_key} populated."""
-    np.random.seed(42)
+    rng = np.random.default_rng(42)
     if values is None:
-        values = np.random.rand(n) * 100.0
+        values = rng.random(n) * 100.0
     dets = []
     for i, v in enumerate(values):
         dets.append(
@@ -36,9 +36,9 @@ def _make_detections(n, channel=1, feature_key="ch1_mean", values=None):
 
 
 def _bimodal_values(n_low=500, n_high=500, mu_low=1.0, sigma_low=0.3, mu_high=5.0, sigma_high=0.5):
-    np.random.seed(42)
-    low = np.random.normal(mu_low, sigma_low, n_low)
-    high = np.random.normal(mu_high, sigma_high, n_high)
+    rng = np.random.default_rng(42)
+    low = rng.normal(mu_low, sigma_low, n_low)
+    high = rng.normal(mu_high, sigma_high, n_high)
     return np.concatenate([low, high])
 
 
@@ -132,14 +132,14 @@ class TestClassifyGmm:
         assert threshold == 0.0
         assert mask.sum() == 0
 
-    def test_unimodal_still_classifies(self):
-        """Unimodal data: GMM still returns a result (may warn about poor separation)."""
-        np.random.seed(42)
-        values = np.random.normal(5.0, 0.1, 200)
+    def test_unimodal_returns_all_negative(self):
+        """Unimodal data: BIC should prefer 1 component, returning all negative."""
+        rng = np.random.default_rng(42)
+        values = rng.normal(5.0, 0.1, 200)
         threshold, mask = classify_gmm(values)
-        # Should not crash; threshold and mask should be valid
         assert isinstance(threshold, float)
         assert len(mask) == 200
+        assert mask.sum() == 0, "BIC should prefer 1 component for unimodal data"
 
     def test_zero_variance(self):
         values = np.full(50, 42.0)
@@ -188,10 +188,10 @@ class TestExtractMarkerValues:
 
 class TestClassifySingleMarker:
     def test_snr_method_realistic(self, tmp_path):
-        np.random.seed(42)
+        rng = np.random.default_rng(42)
         n = 1000
-        snr_low = np.random.normal(0.5, 0.2, n // 2)
-        snr_high = np.random.normal(3.0, 0.5, n // 2)
+        snr_low = rng.normal(0.5, 0.2, n // 2)
+        snr_high = rng.normal(3.0, 0.5, n // 2)
         snr_all = np.concatenate([snr_low, snr_high])
 
         dets = []
@@ -284,7 +284,6 @@ class TestClassifySingleMarker:
         assert result["n_negative"] == 0
 
     def test_cv_filter(self, tmp_path):
-        np.random.seed(42)
         dets = []
         for i in range(200):
             cv_val = 0.5 if i < 150 else 2.0
@@ -386,8 +385,8 @@ class TestClassifySingleMarker:
 
 class TestPlotDistribution:
     def test_creates_png(self, tmp_path):
-        np.random.seed(42)
-        values = np.random.normal(50, 10, 500)
+        rng = np.random.default_rng(42)
+        values = rng.normal(50, 10, 500)
         out = tmp_path / "test_dist.png"
         plot_distribution(values, 50.0, "TestMarker", "otsu", 250, 250, out)
         assert out.exists()
@@ -399,11 +398,11 @@ class TestPlotDistribution:
         assert not out.exists()
 
     def test_log_scale_wide_range(self, tmp_path):
-        np.random.seed(42)
+        rng = np.random.default_rng(42)
         values = np.concatenate(
             [
-                np.random.normal(1, 0.5, 500),
-                np.random.normal(1000, 100, 500),
+                rng.normal(1, 0.5, 500),
+                rng.normal(1000, 100, 500),
             ]
         )
         values = np.maximum(values, 0)
