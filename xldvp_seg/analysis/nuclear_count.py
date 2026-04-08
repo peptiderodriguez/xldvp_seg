@@ -118,6 +118,7 @@ def count_nuclei_in_cells(
     dinov2_model=None,
     dinov2_transform=None,
     device=None,
+    nuc_channels: list[int] | None = None,
 ) -> dict:
     """Count nuclei per cell by running Cellpose on the nuclear channel.
 
@@ -127,7 +128,7 @@ def count_nuclei_in_cells(
         nuclear_channel: 2D uint16/uint8 array of the nuclear stain (same shape
                          as cell_masks). Will be normalized to uint8 for Cellpose.
         cellpose_model: Loaded CellposeModel (cpsam). Called with
-                        model.eval(tile, channels=[0, 0]) for single-channel mode.
+                        model.eval(tile, channels=nuc_channels) for single-channel mode.
         pixel_size_um: Pixel size in micrometers.
         min_nuclear_area_px: Minimum nuclear object area in pixels to count.
                              Filters small debris/noise.
@@ -138,6 +139,8 @@ def count_nuclei_in_cells(
                       Only used with --extract-deep-features.
         resnet_transform: Transform for resnet_model input.
         device: Torch device for ResNet inference.
+        nuc_channels: Cellpose channel specification for nuclear segmentation.
+                      Defaults to ``[0, 0]`` (single-channel grayscale mode).
 
     Returns:
         Dict mapping cell label (int) to a feature dict:
@@ -155,9 +158,12 @@ def count_nuclei_in_cells(
 
     px2 = pixel_size_um**2
 
+    if nuc_channels is None:
+        nuc_channels = [0, 0]
+
     # --- Step 1: Segment nuclei with Cellpose single-channel mode ---
     nuc_uint8 = _percentile_normalize_to_uint8(nuclear_channel)
-    nuclear_masks, _, _ = cellpose_model.eval(nuc_uint8, channels=[0, 0])
+    nuclear_masks, _, _ = cellpose_model.eval(nuc_uint8, channels=nuc_channels)
 
     # --- Step 2: Compute nuclear properties (with intensity for mean_intensity) ---
     nuc_props = regionprops(nuclear_masks, intensity_image=nuclear_channel)
@@ -267,6 +273,7 @@ def count_nuclei_for_tile(
     resnet_model=None,
     resnet_transform=None,
     device=None,
+    nuc_channels: list[int] | None = None,
     **kwargs,
 ) -> tuple:
     """Convenience wrapper that returns (nuclear_results, n_nuclei_segmented).
@@ -282,6 +289,8 @@ def count_nuclei_for_tile(
         resnet_model: Optional ResNet model (for deep features).
         resnet_transform: Transform for ResNet.
         device: Torch device string.
+        nuc_channels: Cellpose channel specification for nuclear segmentation.
+                      Defaults to ``[0, 0]`` (single-channel grayscale mode).
 
     Returns:
         (results_dict, n_total_nuclei) where results_dict maps
@@ -299,6 +308,7 @@ def count_nuclei_for_tile(
         dinov2_model=kwargs.get("dinov2_model"),
         dinov2_transform=kwargs.get("dinov2_transform"),
         device=device,
+        nuc_channels=nuc_channels,
     )
 
     n_cells = len(results)

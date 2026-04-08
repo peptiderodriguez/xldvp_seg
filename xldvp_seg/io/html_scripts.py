@@ -13,7 +13,7 @@ Extracted from ``html_export.py``. Contains:
 import json
 from pathlib import Path
 
-from xldvp_seg.io.html_utils import _esc
+from xldvp_seg.io.html_utils import _esc, _js_esc
 
 
 def generate_preload_annotations_js(
@@ -66,11 +66,11 @@ def generate_preload_annotations_js(
         return None
 
     if experiment_name:
-        global_key = _esc(f"{cell_type}_{experiment_name}_annotations")
-        page_key_prefix = _esc(f"{cell_type}_{experiment_name}_labels_page")
+        global_key = _js_esc(f"{cell_type}_{experiment_name}_annotations")
+        page_key_prefix = _js_esc(f"{cell_type}_{experiment_name}_labels_page")
     else:
-        global_key = _esc(f"{cell_type}_annotations")
-        page_key_prefix = _esc(f"{cell_type}_labels_page")
+        global_key = _js_esc(f"{cell_type}_annotations")
+        page_key_prefix = _js_esc(f"{cell_type}_labels_page")
 
     # Escape </ sequences to prevent </script> injection in inline JS
     safe_json = json.dumps(ls_format).replace("</", r"<\/")
@@ -135,17 +135,17 @@ def get_js(cell_type, total_pages, experiment_name=None, page_num=1):
     """
     # Build storage keys: both global and page-specific
     if experiment_name:
-        global_key = _esc(f"{cell_type}_{experiment_name}_annotations")
-        page_key = _esc(f"{cell_type}_{experiment_name}_labels_page{page_num}")
+        global_key = _js_esc(f"{cell_type}_{experiment_name}_annotations")
+        page_key = _js_esc(f"{cell_type}_{experiment_name}_labels_page{page_num}")
     else:
-        global_key = _esc(f"{cell_type}_annotations")
-        page_key = _esc(f"{cell_type}_labels_page{page_num}")
-    cell_type_safe = _esc(cell_type)
-    experiment_name_safe = _esc(experiment_name or "")
+        global_key = _js_esc(f"{cell_type}_annotations")
+        page_key = _js_esc(f"{cell_type}_labels_page{page_num}")
+    cell_type_safe = _js_esc(cell_type)
+    experiment_name_safe = _js_esc(experiment_name or "")
     if experiment_name:
-        page_key_prefix = _esc(f"{cell_type}_{experiment_name}_labels_page")
+        page_key_prefix = _js_esc(f"{cell_type}_{experiment_name}_labels_page")
     else:
-        page_key_prefix = _esc(f"{cell_type}_labels_page")
+        page_key_prefix = _js_esc(f"{cell_type}_labels_page")
 
     return f"""
         const CELL_TYPE = '{cell_type_safe}';
@@ -464,17 +464,17 @@ def get_vessel_js(cell_type, total_pages, experiment_name=None, all_features_jso
     """
     # Build storage keys: both global and page-specific
     if experiment_name:
-        global_key = _esc(f"{cell_type}_{experiment_name}_annotations")
-        page_key = _esc(f"{cell_type}_{experiment_name}_labels_page{page_num}")
+        global_key = _js_esc(f"{cell_type}_{experiment_name}_annotations")
+        page_key = _js_esc(f"{cell_type}_{experiment_name}_labels_page{page_num}")
     else:
-        global_key = _esc(f"{cell_type}_annotations")
-        page_key = _esc(f"{cell_type}_labels_page{page_num}")
-    cell_type_safe = _esc(cell_type)
-    experiment_name_safe = _esc(experiment_name or "")
+        global_key = _js_esc(f"{cell_type}_annotations")
+        page_key = _js_esc(f"{cell_type}_labels_page{page_num}")
+    cell_type_safe = _js_esc(cell_type)
+    experiment_name_safe = _js_esc(experiment_name or "")
     if experiment_name:
-        page_key_prefix = _esc(f"{cell_type}_{experiment_name}_labels_page")
+        page_key_prefix = _js_esc(f"{cell_type}_{experiment_name}_labels_page")
     else:
-        page_key_prefix = _esc(f"{cell_type}_labels_page")
+        page_key_prefix = _js_esc(f"{cell_type}_labels_page")
 
     return f"""
         const CELL_TYPE = '{cell_type_safe}';

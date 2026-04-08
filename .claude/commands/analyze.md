@@ -107,7 +107,7 @@ For beginners, expand on each step as you reach it. For advanced users, just ask
 | **Features** | Morph (78D), SAM2 (256D), ResNet (4096D), DINOv2 (2048D), per-channel stats (15/ch) | `--extract-deep-features`, `--all-channels` |
 | **Annotate** | HTML viewer with pos/neg annotation, JSON export | `scripts/regenerate_html.py`, `serve_html.py` |
 | **Classify** | RF training, feature comparison (5-fold CV), batch scoring | `train_classifier.py`, `scripts/compare_feature_sets.py`, `scripts/apply_classifier.py` |
-| **Markers** | Median-based SNR thresholding (default ≥1.5) / Otsu / GMM | `scripts/classify_markers.py` (core: `xldvp_seg.analysis.marker_classification`) |
+| **Markers** | Median-based SNR thresholding (default ≥1.5) / Otsu / GMM (BIC model selection: compares 1 vs 2 components, returns all-negative for unimodal data) | `scripts/classify_markers.py` (core: `xldvp_seg.analysis.marker_classification`) |
 | **Explore** | UMAP + t-SNE, Leiden/HDBSCAN clustering, trajectory (diffmap, PAGA, pseudotime), interactive plotly | `xlseg cluster` / `scripts/cluster_by_features.py` (core: `xldvp_seg.analysis.cluster_features`) |
 | **Spatial** | Delaunay networks, community detection, cell neighborhoods | `scripts/spatial_cell_analysis.py` (core: `xldvp_seg.analysis.spatial_network`) |
 | **Curvilinear patterns** | Detect strip/ribbon structures (e.g., mesothelium) via KD-tree radius graph → connected components → graph diameter linearity. Works for curved structures. Tunable: `--radius`, `--linearity-threshold`, `--min-strip-length`, `--min-strip-cells`. Writes strip-only JSON for fast viewer. | `scripts/detect_curvilinear_patterns.py` (core: `xldvp_seg.analysis.pattern_detection`) |
@@ -1108,9 +1108,11 @@ linked = linker.link()                       # DataFrame: aggregated features + 
 
 # Differential features between marker populations
 diff = linker.differential_features("marker_profile", "NeuN+/tdTomato-", "NeuN-/tdTomato+")
-# Well-level correlations: aggregated morphology ↔ protein abundance
-corr = linker.correlate(method="spearman")
-top_proteins = linker.rank_proteins("area", top_n=20)
+# Well-level correlations (FDR-corrected by default — critical with many features × proteins)
+corr = linker.correlate(method="spearman")                         # correlation matrix
+corr, pvals = linker.correlate(return_pvalues=True)                # + BH-adjusted p-values
+top_proteins = linker.rank_proteins("area", top_n=20)              # by correlation
+top_proteins = linker.rank_proteins("area", sort_by="p_adjusted")  # by significance
 ```
 
 **Step 31 — Python API** (for notebook users):

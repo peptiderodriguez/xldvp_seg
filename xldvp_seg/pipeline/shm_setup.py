@@ -187,7 +187,8 @@ def setup_shared_memory(
 
     # Sample from tissue tiles
     n_sample = max(1, int(len(tissue_tiles) * args.sample_fraction))
-    sample_indices = np.random.choice(len(tissue_tiles), n_sample, replace=False)
+    _rng = np.random.default_rng(getattr(args, "random_seed", 42))
+    sample_indices = _rng.choice(len(tissue_tiles), n_sample, replace=False)
     sampled_tiles = [tissue_tiles[i] for i in sample_indices]
 
     logger.info(
@@ -217,17 +218,52 @@ def setup_shared_memory(
     if getattr(args, "tile_shard", None):
         if getattr(args, "sample_fraction", 1.0) != 1.0:
             raise ConfigError("Multi-node sharding requires sample_fraction=1.0")
+
+        # Parse shard info early for tile list coordination
+        shard_idx, shard_total = args.tile_shard
         tile_list_file = slide_output_dir / "sampled_tiles.json"
-        # All shards derive the same tile list from the same CZI (sample_fraction=1.0),
-        # so atomic writes are safe — last writer wins with identical content.
-        atomic_json_dump(sampled_tiles, tile_list_file)
-        logger.info(f"Wrote shared tile list to {tile_list_file} ({len(sampled_tiles)} tiles)")
+
+        if shard_idx == 0:
+            atomic_json_dump(sampled_tiles, tile_list_file)
+            logger.info(
+                "Shard 0 wrote tile list to %s (%d tiles)", tile_list_file, len(sampled_tiles)
+            )
+        else:
+            # Wait for shard 0 to write the canonical tile list
+            import time
+
+            from xldvp_seg.utils.json_utils import fast_json_load
+
+            for _wait in range(30):
+                if tile_list_file.exists():
+                    break
+                time.sleep(1)
+            if tile_list_file.exists():
+                loaded = fast_json_load(str(tile_list_file))
+                if len(loaded) != len(sampled_tiles):
+                    logger.warning(
+                        "Tile list size mismatch: local=%d, shard-0=%d. Using shard-0 list.",
+                        len(sampled_tiles),
+                        len(loaded),
+                    )
+                sampled_tiles = loaded
+                logger.info(
+                    "Shard %d loaded tile list from %s (%d tiles)",
+                    shard_idx,
+                    tile_list_file,
+                    len(sampled_tiles),
+                )
+            else:
+                logger.warning(
+                    "Shard %d: tile list not found after 30s, using locally computed list",
+                    shard_idx,
+                )
+                atomic_json_dump(sampled_tiles, tile_list_file)
 
         # Round-robin shard assignment
         # NOTE: Per-tile resume not implemented for shard mode.
         # If a shard crashes, it re-processes all tiles in its shard.
         # For large slides, consider using smaller shard counts.
-        shard_idx, shard_total = args.tile_shard
         total_before = len(sampled_tiles)
         sampled_tiles = [t for i, t in enumerate(sampled_tiles) if i % shard_total == shard_idx]
         logger.info(

@@ -93,6 +93,8 @@ def _maybe_export_ome_zarr(
             pyramid_levels=getattr(args, "zarr_levels", 5),
             overwrite=getattr(args, "force_zarr", False),
         )
+    except (MemoryError, OSError):
+        raise
     except Exception as e:
         logger.warning(f"OME-Zarr export failed (non-fatal): {e}")
 

@@ -86,7 +86,7 @@ For each channel N:
 | `{marker}_snr` | float | Signal-to-noise ratio: raw / background (only when bg correction is enabled) |
 | `marker_profile` | string | Combined profile, e.g., "SMA+/CD31-" |
 
-The threshold used for each marker is stored in the summary dict returned by `classify_single_marker()`, not per-detection.
+The threshold used for each marker is stored in the summary dict returned by `classify_single_marker()`, not per-detection. Classification methods: `snr` (default, median-based SNR >= 1.5), `otsu` (automatic threshold), `otsu_half` (permissive), `gmm` (2-component Gaussian mixture with BIC model selection — automatically returns all-negative when data is unimodal).
 
 ### Contour Fields (top-level, after post-dedup)
 

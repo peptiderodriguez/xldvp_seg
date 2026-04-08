@@ -5,7 +5,7 @@ Extracted from ``html_export.py`` for reuse across the I/O package.
 **Image utilities:** percentile_normalize, draw_mask_contour, image_to_base64,
     get_largest_connected_component, compose_tile_rgb
 **HDF5 helpers:** create_hdf5_dataset, HDF5_COMPRESSION_KWARGS, HDF5_COMPRESSION_NAME
-**HTML helpers:** _esc (HTML/JS string escaping)
+**HTML helpers:** _esc (HTML escaping), _js_esc (JS string literal escaping)
 """
 
 import base64
@@ -28,6 +28,18 @@ def _esc(value) -> str:
     Prevents XSS by escaping <, >, &, ", and ' characters.
     """
     return html_mod.escape(str(value), quote=True)
+
+
+def _js_esc(value) -> str:
+    """Escape a value for safe insertion into JavaScript string literals.
+
+    Uses json.dumps() which properly handles backslashes, newlines, quotes,
+    and Unicode for JS string context.  Returns the content WITHOUT
+    surrounding quotes — the caller provides those in the template.
+    """
+    import json
+
+    return json.dumps(str(value))[1:-1]
 
 
 # Try to use LZ4 compression (faster than gzip), fallback to gzip

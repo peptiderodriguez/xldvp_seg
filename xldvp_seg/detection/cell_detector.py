@@ -348,7 +348,7 @@ class CellDetector:
             cp_path = Path(self._resnet_checkpoint)
             if cp_path.exists():
                 logger.info(f"Loading ResNet checkpoint from {cp_path}...")
-                state_dict = torch.load(cp_path, map_location=self.device)
+                state_dict = torch.load(cp_path, map_location=self.device, weights_only=True)
                 self._resnet.load_state_dict(state_dict, strict=False)
 
         logger.info("ResNet loaded successfully")

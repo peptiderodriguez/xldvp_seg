@@ -47,6 +47,12 @@ def local_background_subtract(
         ``(corrected_values, per_cell_background, (tree, indices))``.
         Corrected values are clipped >= 0.  The third element can be
         passed as *tree_and_indices* to subsequent calls.
+
+    Known limitation:
+        The KD-tree finds the k nearest spatial neighbors regardless of tissue
+        compartment. At tissue boundaries (e.g., vessel walls, tumor margins,
+        capsules), neighbors may span biologically distinct regions with different
+        background levels. Verify marker classification visually at boundaries.
     """
     from scipy.spatial import cKDTree
 
@@ -100,20 +106,34 @@ def _extract_centroids(detections: list[dict]) -> np.ndarray:
     ``features["centroid"]`` which is local to the tile.  The KD-tree
     neighbourhood must use global coordinates to find spatially adjacent
     cells.
+
+    Detections missing ``global_center`` are imputed with the slide median
+    position to avoid corrupting KD-tree neighbor estimates.
     """
     centroids = []
-    for i, d in enumerate(detections):
+    n_missing = 0
+    for d in detections:
         c = d.get("global_center")
         if c is None:
-            logger.warning(
-                "Detection %d has no global_center — falling back to [0, 0], "
-                "which may corrupt KD-tree neighbor estimation.  "
-                "Do NOT fall back to 'center' (tile-local).",
-                i,
-            )
-            c = [0, 0]
+            n_missing += 1
+            c = [np.nan, np.nan]
         centroids.append(c)
-    return np.array(centroids, dtype=np.float64)
+    result = np.array(centroids, dtype=np.float64)
+
+    if n_missing > 0:
+        nan_mask = np.isnan(result).any(axis=1)
+        valid = result[~nan_mask]
+        if len(valid) > 0:
+            median_pos = np.median(valid, axis=0)
+        else:
+            median_pos = np.array([0.0, 0.0])
+        result[nan_mask] = median_pos
+        logger.warning(
+            "%d/%d detections had no global_center; imputed with slide median position",
+            n_missing,
+            len(result),
+        )
+    return result
 
 
 def correct_all_channels(

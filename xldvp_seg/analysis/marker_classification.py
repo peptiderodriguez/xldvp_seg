@@ -37,38 +37,58 @@ logger = get_logger(__name__)
 # ---------------------------------------------------------------------------
 
 
-def classify_otsu(values: np.ndarray) -> tuple[float, np.ndarray]:
+def classify_otsu(values: np.ndarray, include_zeros: bool = False) -> tuple[float, np.ndarray]:
     """Full Otsu threshold on (background-subtracted) intensity values.
 
     Use after background subtraction — the noise floor is already removed,
     so the full Otsu threshold cleanly separates signal from residual noise.
 
+    Args:
+        values: Per-cell intensity values.
+        include_zeros: If True, include zero-valued pixels in the Otsu computation
+            and allow zero-valued cells to be classified as positive (when above
+            threshold). Default False because zeros are often CZI buffer/padding
+            areas that would bias the threshold downward. Set True only when zeros
+            represent genuine background-corrected signal (e.g., after local
+            background subtraction where zeros are real).
+
     Returns (threshold, boolean mask where True = positive).
     """
     from skimage.filters import threshold_otsu
 
-    nonzero = values[values > 0]
-    if len(nonzero) < 10:
-        logger.warning("Too few non-zero values for Otsu; defaulting threshold to 0")
+    vals_for_otsu = values if include_zeros else values[values > 0]
+    if len(vals_for_otsu) < 10:
+        logger.warning(
+            "Too few %svalues for Otsu; defaulting threshold to 0",
+            "" if include_zeros else "non-zero ",
+        )
         return 0.0, np.zeros(len(values), dtype=bool)
 
-    if np.std(nonzero) < 1e-6:
+    if np.std(vals_for_otsu) < 1e-6:
         logger.warning("Near-zero variance in marker values; all cells classified as negative")
         return 0.0, np.zeros(len(values), dtype=bool)
 
-    threshold = float(threshold_otsu(nonzero))
-    positive = (values >= threshold) & (values > 0)
+    threshold = float(threshold_otsu(vals_for_otsu))
+    if include_zeros:
+        positive = values >= threshold
+    else:
+        positive = (values >= threshold) & (values > 0)
     return threshold, positive
 
 
-def classify_otsu_half(values: np.ndarray) -> tuple[float, np.ndarray]:
+def classify_otsu_half(values: np.ndarray, include_zeros: bool = False) -> tuple[float, np.ndarray]:
     """Otsu threshold / 2 on raw intensity values.
+
+    Args:
+        include_zeros: If True, include zero-valued cells in the Otsu
+            computation.  Default False excludes zeros because they often
+            represent CZI buffer/padding areas rather than real signal.
 
     Returns (threshold, boolean mask where True = positive).
     """
     from skimage.filters import threshold_otsu
 
-    nonzero = values[values > 0]
+    nonzero = values if include_zeros else values[values > 0]
     if len(nonzero) < 10:
         logger.warning("Too few non-zero values for Otsu; defaulting threshold to 0")
         return 0.0, np.zeros(len(values), dtype=bool)
@@ -81,15 +101,26 @@ def classify_otsu_half(values: np.ndarray) -> tuple[float, np.ndarray]:
     # Otsu/2: permissive cutoff to capture weakly-expressing marker-positive cells,
     # reducing false negatives at the cost of more false positives.
     threshold = otsu_t / 2.0
-    positive = (values >= threshold) & (values > 0)
+    if include_zeros:
+        positive = values >= threshold
+    else:
+        positive = (values >= threshold) & (values > 0)
     return float(threshold), positive
 
 
-def classify_gmm(values: np.ndarray) -> tuple[float, np.ndarray]:
-    """2-component GMM on log1p intensities.
+def classify_gmm(values: np.ndarray, posterior_threshold: float = 0.75) -> tuple[float, np.ndarray]:
+    """2-component GMM on log1p intensities with BIC model selection.
 
-    The component with the higher mean is treated as the 'high' (signal) class.
-    Cells with posterior probability >= 0.75 for that component are positive.
+    First compares 1-component vs 2-component GMM using BIC. If the
+    1-component model is preferred (unimodal distribution), all cells are
+    classified as negative. Otherwise, the component with the higher mean
+    is treated as the 'high' (signal) class. Cells with posterior
+    probability >= *posterior_threshold* for that component are positive.
+
+    Args:
+        values: Per-cell intensity values.
+        posterior_threshold: Minimum posterior probability for the high-signal
+            component to classify a cell as positive (default 0.75).
 
     Returns (threshold, boolean mask where True = positive).
     The threshold is the value where the two component posteriors cross
@@ -107,8 +138,13 @@ def classify_gmm(values: np.ndarray) -> tuple[float, np.ndarray]:
         logger.warning("Near-zero variance in log1p values; all cells classified as negative")
         return 0.0, np.zeros(len(values), dtype=bool)
 
-    gmm = GaussianMixture(n_components=2, random_state=42, max_iter=200)
-    gmm.fit(log_vals)
+    # BIC model selection: prefer 1-component if data is unimodal
+    gmm1 = GaussianMixture(n_components=1, random_state=42).fit(log_vals)
+    gmm2 = GaussianMixture(n_components=2, random_state=42, max_iter=200).fit(log_vals)
+    if gmm1.bic(log_vals) <= gmm2.bic(log_vals):
+        logger.info("BIC prefers 1 component (unimodal distribution). Returning all-negative.")
+        return 0.0, np.zeros(len(values), dtype=bool)
+    gmm = gmm2
 
     # Identify which component has the higher mean
     high_idx = int(np.argmax(gmm.means_.flatten()))
@@ -127,7 +163,7 @@ def classify_gmm(values: np.ndarray) -> tuple[float, np.ndarray]:
 
     # Posterior probability for the high component
     probs = gmm.predict_proba(log_vals)[:, high_idx]
-    positive = probs >= 0.75
+    positive = probs >= posterior_threshold
 
     # Approximate threshold: crossing point in log space, convert back.
     # This weighted-midpoint formula is exact for equal priors (weights)
@@ -248,6 +284,11 @@ def classify_single_marker(
         use_raw: Use pre-bg-correction values (``ch{N}_{feat}_raw``).
         global_background: Subtract slide-wide median (not local neighbors).
             Avoids inflating background in expression zones.
+        snr_threshold: SNR cutoff for positive classification (default 1.5).
+            An SNR of 1.5 means the signal is at least 50% above the local
+            background — a standard threshold for positive fluorescence signal
+            in tissue imaging. Lower values (e.g., 1.2) increase sensitivity
+            at the cost of specificity. Validate per experiment.
         cv_max: If set, cells with ``ch{N}_cv > cv_max`` are classified negative
             regardless of intensity (filters out particulate noise).
     """

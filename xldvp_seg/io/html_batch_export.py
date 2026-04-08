@@ -27,7 +27,7 @@ import h5py
 import numpy as np
 from PIL import Image
 
-from xldvp_seg.io.html_utils import _esc
+from xldvp_seg.io.html_utils import _esc, _js_esc
 from xldvp_seg.utils.logging import get_logger
 
 _logger = get_logger(__name__)
@@ -329,7 +329,7 @@ def create_mk_hspc_index(
         </div>
     </div>
     <script>
-        const EXPERIMENT_NAME = '{_esc(experiment_name or "")}';
+        const EXPERIMENT_NAME = '{_js_esc(experiment_name or "")}';
         const MK_PAGES = {mk_pages};
         const HSPC_PAGES = {hspc_pages};
 
@@ -616,7 +616,7 @@ def generate_mk_hspc_page_html(
     </div>
     {nav_html}
     <script>
-        const EXPERIMENT_NAME = '{_esc(experiment_name or "")}';
+        const EXPERIMENT_NAME = '{_js_esc(experiment_name or "")}';
         const PAGE_STORAGE_KEY = EXPERIMENT_NAME ? '{cell_type_safe}_' + EXPERIMENT_NAME + '_labels_page{page_num}' : '{cell_type_safe}_labels_page{page_num}';
         const GLOBAL_STORAGE_KEY = EXPERIMENT_NAME ? '{cell_type_safe}_' + EXPERIMENT_NAME + '_annotations' : '{cell_type_safe}_annotations';
         const CELL_TYPE = '{cell_type_safe}';

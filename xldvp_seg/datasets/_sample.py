@@ -45,7 +45,7 @@ def sample(
             - 'pixel_size_um': Pixel size used
             - 'channel_names': List of synthetic channel names
     """
-    rng = np.random.RandomState(seed)
+    rng = np.random.default_rng(seed)
 
     channel_names = [f"ch{i}" for i in range(n_channels)]
 
@@ -59,7 +59,7 @@ def sample(
     positions = np.zeros((n_cells, 2))
     for i in range(n_cells):
         spread = rng.uniform(100, 500)  # variable cluster tightness
-        positions[i] = cluster_centers_px[labels[i]] + rng.randn(2) * spread
+        positions[i] = cluster_centers_px[labels[i]] + rng.standard_normal(2) * spread
     positions = np.clip(positions, 0, image_size)
 
     # Generate per-cluster feature profiles
@@ -83,7 +83,7 @@ def sample(
         # Morphological features (with noise around cluster center)
         for key, centers in cluster_morph.items():
             noise_scale = centers[c] * 0.15
-            val = max(0.01, centers[c] + rng.randn() * noise_scale)
+            val = max(0.01, centers[c] + rng.standard_normal() * noise_scale)
             # Clamp eccentricity to valid range [0, 1]
             if key == "eccentricity":
                 val = min(1.0, max(0.0, val))
@@ -95,7 +95,7 @@ def sample(
         for ch_idx in range(n_channels):
             base = cluster_channel_means[c, ch_idx]
             noise = base * 0.2
-            mean_val = max(0, base + rng.randn() * noise)
+            mean_val = max(0, base + rng.standard_normal() * noise)
             features[f"ch{ch_idx}_mean"] = mean_val
             features[f"ch{ch_idx}_median"] = mean_val * rng.uniform(0.8, 1.2)
             features[f"ch{ch_idx}_std"] = mean_val * rng.uniform(0.1, 0.5)
@@ -106,9 +106,9 @@ def sample(
             features[f"ch{ch_idx}_median_raw"] = mean_val + features[f"ch{ch_idx}_background"]
 
         # SAM2-style embeddings (256D, cluster-structured)
-        sam2_base = rng.randn(256) * 0.1  # per-cell noise
+        sam2_base = rng.standard_normal(256) * 0.1  # per-cell noise
         # Add cluster-specific component
-        cluster_embedding = np.random.RandomState(seed + c).randn(256)
+        cluster_embedding = np.random.default_rng(seed + c).standard_normal(256)
         sam2 = sam2_base + cluster_embedding * 0.5
         for j in range(256):
             features[f"sam2_{j}"] = float(sam2[j])

@@ -200,6 +200,16 @@ def _make_mock_adata(n_samples=3, n_proteins=5, well_ids=None, sparse=False):
     )
 
 
+# Guard for dvp-io tests — skip if dvp-io not installed
+try:
+    import dvpio  # noqa: F401
+
+    _has_dvpio = True
+except ImportError:
+    _has_dvpio = False
+
+
+@pytest.mark.skipif(not _has_dvpio, reason="dvp-io not installed")
 class TestLoadProteomicsReport:
     """Tests for load_proteomics_report() with dvp-io integration."""
 

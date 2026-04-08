@@ -224,6 +224,12 @@ class OmicLinker:
         if embedding_cols:
             well_morph = well_morph.join(grouped[embedding_cols].mean())
 
+        # Within-well variability (std per feature)
+        if scalar_cols:
+            well_std = grouped[scalar_cols].std()
+            well_std.columns = [f"pool_std_{c}" for c in well_std.columns]
+            well_morph = well_morph.join(well_std)
+
         # Pool cell count + total area
         well_morph["pool_n_cells"] = df.groupby("well").size()
         if "area_um2" in df.columns:
@@ -325,8 +331,10 @@ class OmicLinker:
             pooled_var = ((n_a - 1) * vals_a.var(ddof=1) + (n_b - 1) * vals_b.var(ddof=1)) / max(
                 n_a + n_b - 2, 1
             )
-            pooled_std = np.sqrt(pooled_var) + 1e-10
-            cohens_d = mean_diff / pooled_std
+            if pooled_var < 1e-20:
+                cohens_d = 0.0
+            else:
+                cohens_d = mean_diff / np.sqrt(pooled_var)
             results.append(
                 {
                     "feature": col,
@@ -354,6 +362,7 @@ class OmicLinker:
         proteins: list[str] | None = None,
         method: str = "spearman",
         return_pvalues: bool = False,
+        fdr_correct: bool = True,
     ) -> pd.DataFrame | tuple[pd.DataFrame, pd.DataFrame]:
         """Correlate morphological features with protein abundances.
 
@@ -363,10 +372,15 @@ class OmicLinker:
             proteins: List of protein column names (default: all protein columns).
             method: Correlation method ('spearman' or 'pearson').
             return_pvalues: If True, return (corr_df, pval_df) tuple.
+            fdr_correct: If True (default) and return_pvalues=True, apply
+                Benjamini-Hochberg FDR correction to the p-value matrix.
+                With many features x proteins (e.g., 78 x 5000 = 390K tests),
+                uncorrected p-values are misleading.
 
         Returns:
             DataFrame (rows=morph_features, columns=proteins, values=correlation).
-            If return_pvalues=True, returns (corr_df, pval_df) tuple.
+            If return_pvalues=True, returns (corr_df, pval_df) tuple where
+            pval_df contains FDR-adjusted p-values when fdr_correct=True.
         """
         if self._linked is None:
             raise ConfigError("Call link() first.")
@@ -398,12 +412,40 @@ class OmicLinker:
                     _, p = corr_func(vals[mf], vals[prot])
                     pval_df.loc[mf, prot] = p
 
+        if fdr_correct:
+            from statsmodels.stats.multitest import multipletests
+
+            pvals_flat = pval_df.values.flatten().astype(float)
+            valid = ~np.isnan(pvals_flat)
+            if valid.sum() > 0:
+                _, adjusted, _, _ = multipletests(pvals_flat[valid], method="fdr_bh")
+                pvals_flat[valid] = adjusted
+                pval_df = pd.DataFrame(
+                    pvals_flat.reshape(pval_df.shape),
+                    index=pval_df.index,
+                    columns=pval_df.columns,
+                )
+
         return corr_df, pval_df
 
-    def rank_proteins(self, morph_feature: str, top_n: int = 50) -> pd.DataFrame:
-        """Rank proteins by correlation with a morphological feature."""
+    def rank_proteins(
+        self, morph_feature: str, top_n: int = 50, sort_by: str = "correlation"
+    ) -> pd.DataFrame:
+        """Rank proteins by correlation with a morphological feature.
+
+        Args:
+            morph_feature: Name of the morphological feature column to correlate against.
+            top_n: Number of top-ranked proteins to return.
+            sort_by: Sort criterion — ``"correlation"`` (descending, default) or
+                ``"p_adjusted"`` (ascending, most significant first).
+        """
         if self._linked is None:
             raise ConfigError("Call link() first.")
+        if morph_feature not in self._linked.columns:
+            raise ConfigError(
+                f"Feature '{morph_feature}' not found in linked data. "
+                f"Available: {sorted(self._linked.columns[:20].tolist())}"
+            )
         prot_cols = set(self._proteomics.columns) if self._proteomics is not None else set()
         proteins = [c for c in self._linked.columns if c in prot_cols]
         from scipy.stats import spearmanr
@@ -415,9 +457,14 @@ class OmicLinker:
                 continue
             r, p = spearmanr(vals[morph_feature], vals[prot])
             correlations.append({"protein": prot, "correlation": r, "p_value": p})
-        result_df = pd.DataFrame(correlations).sort_values("correlation", ascending=False)
-        if len(result_df) > 0:
-            from statsmodels.stats.multitest import multipletests
+        result_df = pd.DataFrame(correlations)
+        if len(result_df) == 0:
+            return result_df
+        from statsmodels.stats.multitest import multipletests
 
-            _, result_df["p_adjusted"], _, _ = multipletests(result_df["p_value"], method="fdr_bh")
+        _, result_df["p_adjusted"], _, _ = multipletests(result_df["p_value"], method="fdr_bh")
+        if sort_by == "p_adjusted":
+            result_df = result_df.sort_values("p_adjusted", ascending=True)
+        else:
+            result_df = result_df.sort_values("correlation", ascending=False)
         return result_df.head(top_n)

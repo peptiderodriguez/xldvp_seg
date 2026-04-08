@@ -27,6 +27,7 @@ from xldvp_seg.io.html_utils import (
     HDF5_COMPRESSION_KWARGS,
     HDF5_COMPRESSION_NAME,
     _esc,
+    _js_esc,
     compose_tile_rgb,
     create_hdf5_dataset,
     draw_mask_contour,
@@ -544,8 +545,8 @@ def generate_index_page(
                 img.style.filter = filterVal;
             }});
         }}
-        const CELL_TYPE = '{_esc(cell_type)}';
-        const EXPERIMENT_NAME = '{_esc(experiment_name or "")}';
+        const CELL_TYPE = '{_js_esc(cell_type)}';
+        const EXPERIMENT_NAME = '{_js_esc(experiment_name or "")}';
         const STORAGE_KEY = EXPERIMENT_NAME ? CELL_TYPE + '_' + EXPERIMENT_NAME + '_annotations' : CELL_TYPE + '_annotations';
         const PAGE_KEY_PREFIX = EXPERIMENT_NAME ? CELL_TYPE + '_' + EXPERIMENT_NAME + '_labels_page' : CELL_TYPE + '_labels_page';
 
@@ -826,7 +827,7 @@ def generate_dual_index_page(
     </div>
 
     <script>
-        const EXPERIMENT_NAME = '{_esc(experiment_name or "")}';
+        const EXPERIMENT_NAME = '{_js_esc(experiment_name or "")}';
 
         function getStorageKey(cellType) {{
             return EXPERIMENT_NAME ? cellType + '_' + EXPERIMENT_NAME + '_annotations' : cellType + '_annotations';
@@ -1599,8 +1600,8 @@ def generate_vessel_index_page(
     </div>
 
     <script>
-        const CELL_TYPE = '{_esc(cell_type)}';
-        const EXPERIMENT_NAME = '{_esc(experiment_name or "")}';
+        const CELL_TYPE = '{_js_esc(cell_type)}';
+        const EXPERIMENT_NAME = '{_js_esc(experiment_name or "")}';
         const TOTAL_SAMPLES = {total_samples};
         const STORAGE_KEY = EXPERIMENT_NAME ? CELL_TYPE + '_' + EXPERIMENT_NAME + '_annotations' : CELL_TYPE + '_annotations';
         const PAGE_KEY_PREFIX = EXPERIMENT_NAME ? CELL_TYPE + '_' + EXPERIMENT_NAME + '_labels_page' : CELL_TYPE + '_labels_page';

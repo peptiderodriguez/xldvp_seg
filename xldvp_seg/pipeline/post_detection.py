@@ -581,6 +581,16 @@ def process_detections_post_dedup(
 
     logger.info("  Phase 1 complete: %d contours ok, %d failed", n_contour_ok, n_contour_fail)
 
+    total_phase1 = n_contour_ok + n_contour_fail
+    if total_phase1 > 0 and n_contour_fail / total_phase1 > 0.05:
+        logger.warning(
+            "Phase 1 failure rate %.1f%% (%d/%d) exceeds 5%% threshold. "
+            "Check tile data integrity.",
+            100 * n_contour_fail / total_phase1,
+            n_contour_fail,
+            total_phase1,
+        )
+
     # ==================================================================
     # PHASE 2: Background estimation (KD-tree)
     # ==================================================================
@@ -663,6 +673,16 @@ def process_detections_post_dedup(
                     logger.error("Phase 3 failed for tile %s", tile_key, exc_info=True)
                     n_features_fail += len(by_tile[tile_key])
                 pbar.update(1)
+
+    total_phase3 = n_features_ok + n_features_fail
+    if total_phase3 > 0 and n_features_fail / total_phase3 > 0.05:
+        logger.warning(
+            "Phase 3 failure rate %.1f%% (%d/%d) exceeds 5%% threshold. "
+            "Check data source and feature extraction.",
+            100 * n_features_fail / total_phase3,
+            n_features_fail,
+            total_phase3,
+        )
 
     # --- Cleanup temporary keys ---
     for det in detections:

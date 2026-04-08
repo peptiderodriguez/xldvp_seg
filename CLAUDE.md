@@ -286,7 +286,7 @@ PYTHONPATH=$REPO $XLDVP_PYTHON $REPO/scripts/classify_markers.py \
     --marker-channel 1,2 --marker-name NeuN,tdTomato
 ```
 
-**Methods:** `snr` (default — median-based SNR >= 1.5, robust to membrane stains with median=0 inside cells), `otsu` (auto-threshold maximizing inter-class variance), `otsu_half` (more permissive for dim markers), `gmm` (2-component Gaussian for overlapping distributions). Optional `--normalize-channel` normalizes per-channel intensities before thresholding, but is NOT recommended as default because PM membrane stains have median=0 inside cells.
+**Methods:** `snr` (default — median-based SNR >= 1.5, robust to membrane stains with median=0 inside cells), `otsu` (auto-threshold maximizing inter-class variance), `otsu_half` (more permissive for dim markers), `gmm` (2-component Gaussian with BIC model selection — returns all-negative for unimodal data). Optional `--normalize-channel` normalizes per-channel intensities before thresholding, but is NOT recommended as default because PM membrane stains have median=0 inside cells.
 
 **Shortcut — `--marker-snr-channels`:** Instead of running `classify_markers.py` as a separate step, pass `--marker-snr-channels "SMA:1,CD31:3"` to `xlseg detect` (or `run_segmentation.py`). This classifies markers during detection using the pre-computed SNR >= 1.5 threshold at zero extra cost. Format: `"NAME:CHANNEL_INDEX,..."`. The same output fields are produced.
 
@@ -506,7 +506,7 @@ Canonical in `xldvp_seg/utils/detection_utils.py`. For uint16: simple `arr/256` 
 
 ### Centroids
 
-Background correction KD-tree MUST use `global_center` (slide-level), NOT `features["centroid"]` (tile-local). Canonical: `_extract_centroids()` in `background.py`. KD-tree is built once and cached across channels via `tree_and_indices` parameter (4x speedup on 4-channel slides). Background estimate is median-based: per-cell background = median of neighbor median intensities. SNR = median_raw / median_of_neighbor_medians.
+Background correction KD-tree MUST use `global_center` (slide-level), NOT `features["centroid"]` (tile-local). Canonical: `_extract_centroids()` in `background.py`. KD-tree is built once and cached across channels via `tree_and_indices` parameter (4x speedup on 4-channel slides). Background estimate is median-based: per-cell background = median of neighbor median intensities. SNR = median_raw / median_of_neighbor_medians. Known limitation: KD-tree neighbors may span tissue boundaries (vessel walls, tumor margins) — verify marker classification visually at boundaries.
 
 ### Shared Utilities (`xldvp_seg/utils/detection_utils.py`)
 

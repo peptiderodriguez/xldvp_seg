@@ -335,6 +335,14 @@ def build_anndata(detections, cell_type):
     for key, arr in embeddings.items():
         adata.obsm[key] = arr
 
+    from xldvp_seg import __version__
+
+    adata.uns["pipeline"] = {
+        "package": "xldvp_seg",
+        "version": __version__,
+        "cell_type": cell_type,
+    }
+
     logger.info(
         "Built AnnData: %d obs x %d var, %d obsm layers", adata.n_obs, adata.n_vars, len(adata.obsm)
     )

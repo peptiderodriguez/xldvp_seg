@@ -51,7 +51,7 @@ class ClusteringConfig:
     resolution: float = 1.0
     n_neighbors: int = 30
     min_dist: float = 0.1
-    threshold: float = 0.5
+    threshold: float = 0.0
     min_cluster_size: int = 50
     marker_channels: str = ""
     exclude_channels: str = ""
@@ -71,6 +71,7 @@ class ClusteringConfig:
     subcluster_features: str = "shape,sam2"
     subcluster_min_size: int = 50
     subcluster_input: str | None = None
+    pca_variance: float = 0.95
 
 
 # ---------------------------------------------------------------------------
@@ -210,7 +211,7 @@ def discover_channels_from_features(detections):
     """
     ch_indices = set()
     ch_pattern = re.compile(r"^ch(\d+)_")
-    for det in detections:
+    for det in detections[:10]:
         feats = det.get("features", {})
         if not feats:
             continue
@@ -218,8 +219,6 @@ def discover_channels_from_features(detections):
             m = ch_pattern.match(key)
             if m:
                 ch_indices.add(int(m.group(1)))
-        if ch_indices:
-            break
     return sorted(ch_indices)
 
 
@@ -240,6 +239,14 @@ def discover_marker_channels(detections, exclude_channels=None):
     # Check for islet defaults (backward compat)
     islet_channels = set(_ISLET_MARKER_DEFAULTS.values())
     if islet_channels.issubset(set(available)):
+        import warnings
+
+        warnings.warn(
+            "_ISLET_MARKER_DEFAULTS is deprecated. Use --channel-spec to specify "
+            "marker channels explicitly.",
+            DeprecationWarning,
+            stacklevel=2,
+        )
         return dict(_ISLET_MARKER_DEFAULTS)
 
     # Generic: name channels by index
@@ -558,6 +565,14 @@ def spatial_smooth_features(X, positions_um, k=15, sim_threshold=0.5, n_pca=50):
 
     Returns:
         X_smooth: Smoothed feature matrix (same shape as X).
+
+    Practical guidance:
+        - Dense tissue (e.g., liver parenchyma): k=15-30, sim_threshold=0.5
+        - Sparse stroma or scattered cells: k=5-10, sim_threshold=0.7
+        - Smoothing reduces noise but can mask rare cell populations. Compare
+          smoothed vs. unsmoothed clustering results to assess impact.
+        - Not recommended when biological heterogeneity is the signal of interest
+          (e.g., tumor-stroma boundaries, immune infiltrates).
     """
     from scipy.spatial import KDTree
     from sklearn.decomposition import PCA
@@ -818,7 +833,7 @@ def _reduce_dimensions(X_scaled, args):
     if X_scaled.shape[1] > 50:
         from sklearn.decomposition import PCA
 
-        pca_target = 0.95
+        pca_target = args.pca_variance
         logger.info(
             "  PCA pre-reduction: %d dims -> %.0f%% variance...",
             X_scaled.shape[1],

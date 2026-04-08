@@ -766,7 +766,7 @@ def load_nmj_classifier(model_path: str, device=None):
     model = models.resnet18(weights=None)
     model.fc = nn.Linear(model.fc.in_features, 2)
 
-    checkpoint = torch.load(model_path, map_location=device, weights_only=False)
+    checkpoint = torch.load(model_path, map_location=device, weights_only=True)
     model.load_state_dict(checkpoint["model_state_dict"])
     model = model.to(device)
     model.eval()

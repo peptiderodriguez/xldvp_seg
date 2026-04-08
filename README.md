@@ -207,12 +207,13 @@ linked = linker.link()                       # DataFrame: aggregated features + 
 | Embeddings (sam2_, resnet_, ...) | **mean** | Preserves centroid in representation space |
 | Spatial position | **centroid** | Pool center-of-mass on tissue (`pool_x_um`, `pool_y_um`) |
 
-Each well also gets: `pool_total_area_um2` (summed cell area — correlates with protein yield), `pool_n_cells` (cell count), `pool_x_um`/`pool_y_um` (spatial centroid), and `pool_spread_um` (spatial spread).
+Each well also gets: `pool_total_area_um2` (summed cell area — correlates with protein yield), `pool_n_cells` (cell count), `pool_x_um`/`pool_y_um` (spatial centroid), `pool_spread_um` (spatial spread), and `pool_std_{feature}` (within-well standard deviation for assessing pool heterogeneity).
 
 ```python
 # Differential analysis between marker populations
 diff = linker.differential_features("marker_profile", "NeuN+/tdTomato-", "NeuN-/tdTomato+")
-corr = linker.correlate(method="spearman")   # well-level morph ↔ protein correlations
+corr = linker.correlate(method="spearman")   # FDR-corrected well-level correlations
+corr, pvals = linker.correlate(return_pvalues=True)  # with Benjamini-Hochberg adjusted p-values
 ```
 
 For rare large cells (e.g., MKs), single-cell-per-well is sometimes feasible — in that case the aggregation is a no-op (median of 1 = the value itself).
@@ -224,7 +225,7 @@ For rare large cells (e.g., MKs), single-cell-per-well is sometimes feasible —
 | Analysis | Tool | Description |
 |----------|------|-------------|
 | Feature comparison | `scripts/compare_feature_sets.py` | 5-fold CV across morph/SAM2/deep feature subsets |
-| Marker classification | `scripts/classify_markers.py` | Median SNR / Otsu / GMM per channel (core: `xldvp_seg.analysis.marker_classification`) |
+| Marker classification | `scripts/classify_markers.py` | Median SNR / Otsu / GMM (with BIC model selection) per channel (core: `xldvp_seg.analysis.marker_classification`) |
 | UMAP + clustering | `xlseg cluster` / `scripts/cluster_by_features.py` | Leiden/HDBSCAN, trajectory, spatial smoothing (core: `xldvp_seg.analysis.cluster_features`) |
 | Spatial networks | `scripts/spatial_cell_analysis.py` | Delaunay graphs, community detection (core: `xldvp_seg.analysis.spatial_network`) |
 | Interactive viewer | `scripts/generate_multi_slide_spatial_viewer.py` | Fluorescence overlay + cell contours + ROI drawing |
@@ -325,7 +326,7 @@ xldvp_seg/              # Main package (pip install -e .)
 
 scripts/                   # 31 reusable CLI tools
 examples/                  # Project-specific analyses by experiment
-tests/                     # pytest suite (run `make test` for current counts)
+tests/                     # pytest suite (1047 tests — run `make test`)
 ```
 
 ## Key Design Decisions
@@ -341,7 +342,7 @@ tests/                     # pytest suite (run `make test` for current counts)
 | **Direct-to-SHM loading** | CZI channels loaded directly into shared memory — no intermediate RAM copy. |
 | **Strategy pattern** | Detection strategies self-register via `@register_strategy` — add a new cell type in one file. |
 | **Nuclear counting integrated** | `--count-nuclei` (default ON) runs during post-dedup using SHM data — zero extra I/O. |
-| **Pickle security** | Classifier files (`.pkl`) use Python pickle serialization via joblib. Only load classifiers from trusted sources. The pipeline validates classifier structure after loading but cannot prevent arbitrary code execution from malicious pickle files. |
+| **Pickle security** | Classifier files (`.pkl`) use Python pickle serialization via joblib. The pipeline validates structure (dict type check) and model type after loading, and `torch.load` uses `weights_only=True`. Only load classifiers from trusted sources — joblib cannot prevent arbitrary code execution from malicious pickle files. |
 
 ## Development
 

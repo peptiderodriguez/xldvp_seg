@@ -130,7 +130,8 @@ def _initialize_detector(
                 f"Expected 'name:ch_idx,...' e.g. 'gcg:2,ins:3,sst:5'. Error: {e}"
             )
         n_pilot = max(1, int(len(sampled_tiles) * 0.05))
-        pilot_indices = np.random.choice(len(sampled_tiles), n_pilot, replace=False)
+        _rng = np.random.default_rng(getattr(args, "random_seed", 42))
+        pilot_indices = _rng.choice(len(sampled_tiles), n_pilot, replace=False)
         pilot_tiles = [sampled_tiles[i] for i in pilot_indices]
         nuclei_only = getattr(args, "nuclei_only", False)
         nuc_ch = getattr(args, "nuclear_channel", 4)
@@ -315,7 +316,8 @@ def _run_multiscale_tiles(processor, args, ctx, init, sampled_tiles):
         # Sample tiles if requested
         if args.sample_fraction < 1.0:
             n_sample = max(1, int(len(scale_tiles) * args.sample_fraction))
-            indices = np.random.choice(len(scale_tiles), n_sample, replace=False)
+            _rng = np.random.default_rng(getattr(args, "random_seed", 42))
+            indices = _rng.choice(len(scale_tiles), n_sample, replace=False)
             scale_tiles = [scale_tiles[i] for i in indices]
 
         logger.info(

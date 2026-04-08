@@ -652,3 +652,186 @@ class TestIoToSpatialdata:
         result = io.to_spatialdata(slide)
         assert result is None
         mock_build.assert_not_called()
+
+
+# ---------------------------------------------------------------------------
+# Integration tests -- use real sklearn/numpy, no mocks
+# ---------------------------------------------------------------------------
+
+
+def _make_integration_detections(n=100, seed=42):
+    """Create realistic synthetic detections for integration tests.
+
+    Uses the datasets.sample() generator but produces detections with
+    tile_origin and id fields needed by load_features_and_annotations.
+    """
+    rng = np.random.default_rng(seed)
+    dets = []
+    for i in range(n):
+        area = float(rng.uniform(200, 2000))
+        solidity = float(rng.uniform(0.7, 0.99))
+        eccentricity = float(rng.uniform(0.1, 0.8))
+        perimeter = float(rng.uniform(50, 200))
+        major_axis = float(rng.uniform(15, 60))
+        minor_axis = float(rng.uniform(10, 40))
+        x = float(rng.uniform(0, 10000))
+        y = float(rng.uniform(0, 10000))
+
+        features = {
+            "area": area,
+            "solidity": solidity,
+            "eccentricity": eccentricity,
+            "perimeter": perimeter,
+            "major_axis_length": major_axis,
+            "minor_axis_length": minor_axis,
+            "area_um2": area * 0.325**2,
+        }
+
+        # Per-channel features (2 channels)
+        for ch in range(2):
+            base = float(rng.uniform(100, 5000))
+            bg = float(rng.uniform(50, 500))
+            features[f"ch{ch}_mean"] = base
+            features[f"ch{ch}_median"] = base * float(rng.uniform(0.8, 1.2))
+            features[f"ch{ch}_std"] = base * float(rng.uniform(0.1, 0.5))
+            features[f"ch{ch}_max"] = base * float(rng.uniform(1.5, 3.0))
+            features[f"ch{ch}_min"] = base * float(rng.uniform(0.0, 0.3))
+            features[f"ch{ch}_snr"] = float(rng.uniform(0.5, 5.0))
+            features[f"ch{ch}_background"] = bg
+            features[f"ch{ch}_median_raw"] = base + bg
+
+        det = {
+            "id": f"cell_{i}",
+            "uid": f"sample_cell_{i}",
+            "tile_origin": [0, 0],
+            "global_center": [x, y],
+            "global_center_um": [x * 0.325, y * 0.325],
+            "features": features,
+        }
+        dets.append(det)
+    return dets
+
+
+@pytest.mark.integration
+class TestApiIntegration:
+    """Integration tests using synthetic data through real code paths.
+
+    These tests exercise real sklearn, numpy, and xldvp_seg analysis code
+    without mocking. Marked with @pytest.mark.integration so they can be
+    skipped in fast CI runs.
+    """
+
+    def test_train_score_roundtrip(self, tmp_path):
+        """Train RF on synthetic data, score it, verify predictions."""
+        import json
+
+        # Generate synthetic detections
+        dets = _make_integration_detections(n=60, seed=42)
+
+        # Save detections to disk (needed by tl.train -> feature_loader)
+        det_path = tmp_path / "cell_detections.json"
+        det_path.write_text(json.dumps(dets))
+
+        # Create annotations: first 30 positive, last 30 negative
+        annotations = {
+            "positive": [d["uid"] for d in dets[:30]],
+            "negative": [d["uid"] for d in dets[30:]],
+        }
+        ann_path = tmp_path / "annotations.json"
+        ann_path.write_text(json.dumps(annotations))
+
+        # Load slide from disk
+        slide = SlideAnalysis.load(tmp_path)
+        assert slide.detections_path is not None
+
+        # Train classifier (real sklearn, no mocks)
+        output_pkl = tmp_path / "classifier.pkl"
+        result = tl.train(
+            slide,
+            annotations=str(ann_path),
+            feature_set="morph",
+            output_path=str(output_pkl),
+            n_estimators=10,  # small for speed
+            max_depth=5,
+        )
+
+        assert isinstance(result, dict)
+        assert "cv_f1_mean" in result
+        assert result["cv_f1_mean"] > 0  # some signal in the data
+        assert result["n_positive"] == 30
+        assert result["n_negative"] == 30
+        assert output_pkl.exists()
+
+        # Score the same detections with the trained classifier
+        scored_slide = tl.score(slide, classifier=str(output_pkl))
+
+        assert scored_slide is slide
+        # All detections should now have rf_prediction
+        scored_count = sum(1 for d in slide.detections if "rf_prediction" in d)
+        assert scored_count == len(dets)
+
+        # Scores should be valid probabilities in [0, 1]
+        for det in slide.detections:
+            score = det["rf_prediction"]
+            assert 0.0 <= score <= 1.0, f"Score {score} out of range"
+
+    def test_markers_classification(self, tmp_path):
+        """Run tl.markers() on synthetic bimodal data."""
+        rng = np.random.default_rng(42)
+
+        # Create detections with bimodal channel intensities:
+        # First 25: high SNR (positive), last 25: low SNR (negative)
+        dets = []
+        for i in range(50):
+            is_positive = i < 25
+            snr = float(rng.uniform(3.0, 8.0) if is_positive else rng.uniform(0.2, 0.8))
+            bg = float(rng.uniform(50, 100))
+            median_raw = bg * snr
+
+            features = {
+                "area": float(rng.uniform(200, 1000)),
+                "ch1_mean": median_raw,
+                "ch1_median": median_raw,
+                "ch1_snr": snr,
+                "ch1_background": bg,
+                "ch1_median_raw": median_raw + bg,
+            }
+            det = {
+                "uid": f"cell_{i}",
+                "global_center": [float(i * 100), float(i * 200)],
+                "features": features,
+            }
+            dets.append(det)
+
+        slide = SlideAnalysis.from_detections(dets)
+
+        # Run marker classification (real code, no mocks)
+        result = tl.markers(
+            slide,
+            marker_channels=[1],
+            marker_names=["TestMarker"],
+            method="snr",
+            snr_threshold=1.5,
+            output_dir=str(tmp_path),
+        )
+
+        assert result is slide
+
+        # Verify marker_class fields are set on every detection
+        for det in slide.detections:
+            feat = det.get("features", {})
+            assert "TestMarker_class" in feat, "Missing TestMarker_class"
+            assert feat["TestMarker_class"] in ("positive", "negative")
+            assert "marker_profile" in feat
+
+        # Check that the bimodal structure is preserved
+        positive_count = sum(
+            1 for d in slide.detections if d["features"]["TestMarker_class"] == "positive"
+        )
+        negative_count = sum(
+            1 for d in slide.detections if d["features"]["TestMarker_class"] == "negative"
+        )
+        # With clear bimodal separation (SNR 3-8 vs 0.2-0.8, threshold 1.5),
+        # we expect most high-SNR cells to be positive and low-SNR negative
+        assert positive_count >= 20, f"Expected >= 20 positive, got {positive_count}"
+        assert negative_count >= 20, f"Expected >= 20 negative, got {negative_count}"

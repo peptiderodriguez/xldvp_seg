@@ -37,7 +37,7 @@ from pathlib import Path
 from typing import Any, Literal
 
 from xldvp_seg.exceptions import ConfigError
-from xldvp_seg.io.html_utils import _esc  # noqa: F401 — used throughout this module
+from xldvp_seg.io.html_utils import _esc, _js_esc  # noqa: F401 — used throughout this module
 from xldvp_seg.utils.logging import get_logger
 
 logger = get_logger(__name__)
@@ -431,10 +431,10 @@ class HTMLPageGenerator:
             JavaScript code string.
         """
         return f"""
-        const CELL_TYPE = '{_esc(self.cell_type)}';
-        const EXPERIMENT_NAME = '{_esc(self.experiment_name or "")}';
+        const CELL_TYPE = '{_js_esc(self.cell_type)}';
+        const EXPERIMENT_NAME = '{_js_esc(self.experiment_name or "")}';
         const TOTAL_PAGES = {total_pages};
-        const STORAGE_STRATEGY = '{_esc(self.storage_strategy)}';
+        const STORAGE_STRATEGY = '{_js_esc(self.storage_strategy)}';
 
         // Get storage keys: both page-specific and global
         function getGlobalKey() {{
@@ -952,9 +952,9 @@ class HTMLPageGenerator:
     </div>
 
     <script>
-        const CELL_TYPE = '{_esc(self.cell_type)}';
-        const EXPERIMENT_NAME = '{_esc(self.experiment_name or "")}';
-        const STORAGE_STRATEGY = '{_esc(self.storage_strategy)}';
+        const CELL_TYPE = '{_js_esc(self.cell_type)}';
+        const EXPERIMENT_NAME = '{_js_esc(self.experiment_name or "")}';
+        const STORAGE_STRATEGY = '{_js_esc(self.storage_strategy)}';
         const TOTAL_PAGES = {total_pages};
 
         {storage_key_js}

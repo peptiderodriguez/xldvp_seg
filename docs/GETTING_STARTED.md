@@ -524,7 +524,7 @@ After dedup, a 3-phase post-processing pipeline runs automatically:
 | Phase | What it does | Parallelization |
 |-------|-------------|-----------------|
 | Phase 1 | Original mask contour extraction + quick median extraction | ThreadPoolExecutor (32 workers) |
-| Phase 2 | Local background estimation (KD-tree, k=30 nearest neighbors) | Single-threaded (global) |
+| Phase 2 | Local background estimation (KD-tree, k=30 nearest neighbors). **Note:** neighbors may span tissue boundaries (vessel walls, tumor margins) — verify marker calls visually at boundaries. | Single-threaded (global) |
 | Phase 3 | Intensity feature extraction from **original mask** on background-corrected pixels | ThreadPoolExecutor (32 workers) |
 
 All features are computed from the **original** Cellpose/SAM2 segmentation mask — no dilation or simplification is applied during detection. Contour simplification (adaptive RDP, max 10% shape deviation) and dilation (adaptive, max 10% area increase) are deferred to LMD export time. Morphological features from initial detection are preserved unchanged.

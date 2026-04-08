@@ -268,7 +268,7 @@ class BaseVesselClassifier(abc.ABC):
 
         Raises:
             FileNotFoundError: If path does not exist.
-            ValueError: If file cannot be deserialized.
+            ClassificationError: If file cannot be deserialized or model type mismatches.
         """
         path = Path(path)
         if not path.exists():
@@ -279,11 +279,21 @@ class BaseVesselClassifier(abc.ABC):
         except (EOFError, ModuleNotFoundError) as e:
             raise ClassificationError(f"Failed to load classifier from {path}: {e}") from e
 
+        if not isinstance(model_data, dict):
+            raise ClassificationError(
+                f"Unexpected model format from {path}: expected dict, "
+                f"got {type(model_data).__name__}. "
+                "This may indicate a corrupted or malicious model file."
+            )
+
         # Verify model type
         expected = cls.MODEL_TYPE
         actual = model_data.get("model_type")
         if expected and actual != expected:
-            logger.warning(f"Model type mismatch: expected '{expected}', got '{actual}'")
+            raise ClassificationError(
+                f"Model type mismatch: expected '{expected}', got '{actual}' "
+                f"(loaded from {path})"
+            )
 
         # Create instance with saved config
         config = model_data.get("config", {})

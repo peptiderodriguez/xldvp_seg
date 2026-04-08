@@ -9,6 +9,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- `_js_esc()` function in `html_utils.py` for safe JavaScript string escaping (separate from `_esc()` for HTML context). All JS `const` assignments across `html_generator.py`, `html_batch_export.py`, `html_export.py`, and `html_scripts.py` now use `_js_esc()`.
+- `classify_gmm()` now performs BIC-based model selection (1 vs 2 components) — returns all-negative for unimodal data instead of forcing a 2-component fit. Configurable `posterior_threshold` parameter.
+- `classify_otsu()` and `classify_otsu_half()` gain `include_zeros` parameter for background-corrected data where zeros represent genuine signal.
+- `correlate(fdr_correct=True)` applies Benjamini-Hochberg FDR correction to p-value matrix (default on).
+- `rank_proteins(sort_by="p_adjusted")` parameter for significance-ordered ranking.
+- `link()` adds `pool_std_{feature}` columns for within-well variability assessment.
+- `ClusteringConfig.pca_variance` field makes PCA variance retention configurable (default 0.95).
+- `nuc_channels` parameter in `count_nuclei_in_cells()` and `count_nuclei_for_tile()` (default `[0, 0]`).
+- `adata.uns["pipeline"]` provenance in `build_anndata()` (package, version, cell_type).
+- 82 new tests: `test_visualization.py` (38), `test_lmd_export.py` (33), `test_api.py` integration tests (2), plus 9 fixes to existing tests. Total: 1047 tests across 46 files.
+- `pytest.importorskip("dvpio")` guard on dvp-io tests for graceful CI degradation.
 - `xldvp_seg/visualization/` package -- reusable HTML visualization components extracted from the monolithic spatial viewer. 8 Python modules (`fluorescence.py`, `colors.py`, `encoding.py`, `data_loading.py`, `graph_patterns.py`, `html_builder.py`, `js_loader.py`, `__init__.py`) + 17 JS component files in `js/` subdirectory.
 - `scripts/generate_contour_viewer.py` -- generates self-contained HTML for contour overlays on CZI fluorescence. Supports grouping by configurable field (vessel_type, scale, etc.), R/G/B channel toggle, pan/zoom with RAF batching, viewport culling for 50K+ contours, and click-to-inspect metadata panel.
 - `--marker-snr-channels` flag for built-in SNR marker classification during detection (zero extra cost).
@@ -26,6 +37,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- `torch.load()` now uses `weights_only=True` in NMJ strategy and cell detector (security hardening).
+- `joblib.load()` in `BaseVesselClassifier.load()` validates dict type and raises `ClassificationError` on model type mismatch (was `logger.warning`).
+- `ClusteringConfig.threshold` default changed from 0.5 to 0.0 (matches CLI + API defaults).
+- `discover_channels_from_features()` scans first 10 detections instead of breaking after the first with features.
+- `_extract_centroids()` uses NaN + slide-median imputation instead of `[0, 0]` fallback for missing `global_center`.
+- Multi-node tile sharding: only shard 0 writes `sampled_tiles.json`; other shards wait and read (eliminates race condition).
+- OME-Zarr export re-raises `MemoryError` and `OSError` instead of silently catching all exceptions.
+- Pipeline np.random calls in `shm_setup.py` and `detection_loop.py` migrated from global state to `np.random.default_rng(seed)`.
+- `_sample.py` migrated from `np.random.RandomState` to `np.random.default_rng`.
+- `py.typed` added to `pyproject.toml` package-data for PEP 561 compliance.
+- `_ISLET_MARKER_DEFAULTS` emits `DeprecationWarning` at usage site.
 - Removed 3 API stubs (`pl.spatial`, `tl.nuclei`, `io.export_lmd`) that raised `NotImplementedError`. These operations require CLI/SLURM and were never going to be simple function calls.
 - `scripts/generate_multi_slide_spatial_viewer.py` refactored: inline JS replaced with `load_js()` from 17 component files (3,115 to 1,115 lines, -64%). Same external behavior.
 - Extracted `html_utils.py` (image/HDF5 utilities), `html_styles.py` (CSS generators), and `html_scripts.py` (JS generators) from `html_export.py` (3,696 to 1,790 lines). Backward-compatible re-exports maintained.
@@ -40,6 +62,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Cohen's d epsilon inflation: `pooled_std + 1e-10` replaced with proper zero-variance guard (`cohens_d = 0.0` when `pooled_var < 1e-20`).
+- `rank_proteins()` crash on empty result set (no proteins with >=5 non-NA observations).
+- `rank_proteins()` missing `morph_feature` validation (now raises `ConfigError`).
+- Post-detection pipeline logs warning when Phase 1 or Phase 3 failure rate exceeds 5%.
+- Background correction tissue-boundary limitation documented in `background.py` docstring.
+- `base.py` load() docstring updated: `ValueError` -> `ClassificationError`.
+- `safe_to_uint8` docstring corrected: `arr // 256` -> `arr / 256` to match code.
+- Stale test count updated: 974 -> 1047 (77 -> 46 files).
 - 20+ bug fixes including: SHM leak on resume, marker_profile dict level, non-numeric columns crash, islet hardcoded channel fallback, single-detection sampling, worker BrokenPipeError handling, SHM cleanup PID guard, tile list race condition, temp dir leak in `tl.markers()`.
 - 16+ documentation findings (nesting, stale counts, field names).
 - mmap chunk boundary escape bug (overlap chunks by 1 byte + try/finally).

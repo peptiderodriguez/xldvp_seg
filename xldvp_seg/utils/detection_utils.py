@@ -24,6 +24,11 @@ def safe_to_uint8(arr: np.ndarray) -> np.ndarray:
     photobleaching correction or normalization), uint16 tiles, and already-uint8.
     Bare ``.astype(np.uint8)`` on float [0, 1] data truncates everything to 0.
 
+    Note: uint16 inputs are converted via ``arr / 256``, mapping the full
+    16-bit range [0, 65535] to [0, 255].  This loses the lower 8 bits but is
+    sufficient for ResNet/DINOv2 feature extraction.  For quantitative
+    intensity analysis, use the original uint16 values directly.
+
     Args:
         arr: Input array of any numeric dtype.
 
@@ -234,6 +239,14 @@ def load_rf_classifier(model_path: str) -> dict:
         model_data = joblib.load(model_path)
     except (EOFError, ModuleNotFoundError, FileNotFoundError) as e:
         raise DataLoadError(f"Failed to load classifier from {model_path}: {e}") from e
+
+    if not isinstance(model_data, (dict, Pipeline)):
+        logger.warning(
+            "Loaded model from %s has unexpected type %s. "
+            "Only load classifiers from trusted sources.",
+            model_path,
+            type(model_data).__name__,
+        )
 
     if isinstance(model_data, Pipeline):
         pipeline = model_data
