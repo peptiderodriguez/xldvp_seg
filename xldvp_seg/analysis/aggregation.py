@@ -108,12 +108,14 @@ def cohort_to_anndata(cohort_df, metadata=None):
     import anndata
 
     # Exclude metadata columns from X (they belong in obs, not feature matrix)
-    obs_numeric = {"n_cells", "pool_n_cells", "pool_total_area_um2"}
+    count_cols = {c for c in cohort_df.columns if c.endswith("_count")}
+    obs_numeric = {"n_cells", "pool_n_cells", "pool_total_area_um2"} | count_cols
     numeric_cols = [
         c for c in cohort_df.select_dtypes(include=[np.number]).columns if c not in obs_numeric
     ]
     X = cohort_df[numeric_cols].values.astype(np.float32)
-    nan_counts = np.isnan(X).sum(axis=0)
+    missing_mask = np.isnan(X)
+    nan_counts = missing_mask.sum(axis=0)
     if nan_counts.any():
         nan_features = [numeric_cols[i] for i in range(len(nan_counts)) if nan_counts[i] > 0]
         logger.warning(
@@ -133,6 +135,9 @@ def cohort_to_anndata(cohort_df, metadata=None):
 
     adata = anndata.AnnData(X=X, obs=obs)
     adata.var_names = list(numeric_cols)
+
+    if missing_mask.any():
+        adata.layers["missing"] = missing_mask
 
     logger.info("Cohort AnnData: %d slides x %d features", adata.n_obs, adata.n_vars)
     return adata

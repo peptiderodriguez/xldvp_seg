@@ -674,6 +674,10 @@ def generate_cross_placement_html(
     output_dir = Path(output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
 
+    for val in [pixel_size_um, image_width_px, image_height_px]:
+        if not np.isfinite(val):
+            raise ExportError(f"Non-finite value in cross placement: {val}")
+
     all_x, all_y = [], []
     for det in detections:
         coords = get_detection_coordinates(det)

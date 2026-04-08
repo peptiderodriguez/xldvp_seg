@@ -489,6 +489,10 @@ def detect_in_rois(
             detector.cleanup()
         return all_dets
 
+    # NOTE: Uses ThreadPoolExecutor (not ProcessPoolExecutor) for multi-GPU ROI
+    # detection. Python-heavy feature extraction contends on the GIL, making this
+    # slower than the main pipeline's multiprocessing architecture for large ROIs.
+    # For production runs with many ROIs, prefer the main pipeline (run_segmentation.py).
     all_detections: list[dict] = []
     with ThreadPoolExecutor(max_workers=num_gpus) as pool:
         futures = []

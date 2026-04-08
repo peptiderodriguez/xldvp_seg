@@ -147,6 +147,21 @@ class TestClassifyGmm:
         assert threshold == 0.0
         assert mask.sum() == 0
 
+    def test_gmm_exclude_zeros(self):
+        """GMM with include_zeros=False should exclude zeros from fit."""
+        rng = np.random.default_rng(42)
+        # 200 zeros (padding) + 100 low signal + 100 high signal
+        zeros = np.zeros(200)
+        low = rng.normal(2.0, 0.3, 100)
+        high = rng.normal(8.0, 0.5, 100)
+        values = np.concatenate([zeros, low, high])
+
+        threshold_excl, mask_excl = classify_gmm(values, include_zeros=False)
+        # Zeros should all be negative
+        assert mask_excl[:200].sum() == 0
+        # Some high-signal cells should be positive
+        assert mask_excl[300:].sum() > 50
+
 
 class TestExtractMarkerValues:
     def test_normal_extraction(self):

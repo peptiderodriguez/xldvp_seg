@@ -181,7 +181,7 @@ def extract_vessel_features(
     sma_channel: np.ndarray,
     outer_contour: np.ndarray,
     inner_contour: np.ndarray | None,
-    pixel_size_um: float = 0.22,
+    pixel_size_um: float = None,
     binary_mask: np.ndarray | None = None,
 ) -> dict[str, float]:
     """
@@ -213,6 +213,12 @@ def extract_vessel_features(
         >>> print(features['wall_thickness_cv'])
         0.15
     """
+    if pixel_size_um is None:
+        logger.warning(
+            "pixel_size_um not provided — defaulting to 0.22 um/px. "
+            "Pass pixel_size explicitly for accurate measurements."
+        )
+        pixel_size_um = 0.22
     features = {}
 
     # Ensure SMA channel is grayscale float
@@ -332,7 +338,7 @@ def _compute_ring_completeness(
     inner_contour: np.ndarray,
     binary_mask: np.ndarray,
     num_samples: int = 72,
-    pixel_size_um: float = 0.22,
+    pixel_size_um: float = None,
 ) -> float:
     """
     Compute the fraction of the vessel perimeter that has SMA signal.
@@ -351,6 +357,12 @@ def _compute_ring_completeness(
     - Small vessels might have overlapping samples (biasing toward positive)
     - Large vessels might have gaps in sampling (biasing toward negative)
     """
+    if pixel_size_um is None:
+        logger.warning(
+            "pixel_size_um not provided — defaulting to 0.22 um/px. "
+            "Pass pixel_size explicitly for accurate measurements."
+        )
+        pixel_size_um = 0.22
     try:
         outer_ellipse = cv2.fitEllipse(outer_contour)
         inner_ellipse = cv2.fitEllipse(inner_contour)
@@ -884,7 +896,7 @@ def _extract_derived_features(
 def extract_vessel_features_batch(
     candidates: list[dict[str, Any]],
     tile: np.ndarray,
-    pixel_size_um: float = 0.22,
+    pixel_size_um: float = None,
 ) -> list[dict[str, float]]:
     """
     Extract vessel features for multiple candidates in batch.
@@ -903,6 +915,12 @@ def extract_vessel_features_batch(
     Returns:
         List of feature dictionaries, one per candidate.
     """
+    if pixel_size_um is None:
+        logger.warning(
+            "pixel_size_um not provided — defaulting to 0.22 um/px. "
+            "Pass pixel_size explicitly for accurate measurements."
+        )
+        pixel_size_um = 0.22
     results = []
     h, w = tile.shape[:2]
 

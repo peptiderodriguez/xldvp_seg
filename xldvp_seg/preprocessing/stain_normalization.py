@@ -33,7 +33,11 @@ def extract_slide_norm_params(slide_thresh):
 
 
 def compute_global_percentiles(
-    slides_data: list, p_low: float = 1.0, p_high: float = 99.0, n_samples: int = 100000
+    slides_data: list,
+    p_low: float = 1.0,
+    p_high: float = 99.0,
+    n_samples: int = 100000,
+    seed: int = 42,
 ) -> tuple[np.ndarray, np.ndarray]:
     """
     Compute global percentiles across all slides for normalization.
@@ -43,10 +47,12 @@ def compute_global_percentiles(
         p_low: Lower percentile (default 1.0)
         p_high: Upper percentile (default 99.0)
         n_samples: Number of pixels to sample per slide
+        seed: Random seed for reproducible sampling (default 42)
 
     Returns:
         (low_values, high_values): Arrays of shape (3,) for RGB channels
     """
+    rng = np.random.default_rng(seed)
     all_samples = []
 
     for slide_rgb in slides_data:
@@ -57,8 +63,8 @@ def compute_global_percentiles(
             n_sample = min(n_samples, n_pixels)
 
             # Random sampling with direct 2D indexing (no reshape/flatten)
-            row_indices = np.random.randint(0, h, size=n_sample)
-            col_indices = np.random.randint(0, w, size=n_sample)
+            row_indices = rng.integers(0, h, size=n_sample)
+            col_indices = rng.integers(0, w, size=n_sample)
             samples = slide_rgb[row_indices, col_indices, :].copy()
         elif slide_rgb.ndim == 2:
             h, w = slide_rgb.shape
@@ -66,8 +72,8 @@ def compute_global_percentiles(
             n_sample = min(n_samples, n_pixels)
 
             # Random sampling for grayscale with direct 2D indexing
-            row_indices = np.random.randint(0, h, size=n_sample)
-            col_indices = np.random.randint(0, w, size=n_sample)
+            row_indices = rng.integers(0, h, size=n_sample)
+            col_indices = rng.integers(0, w, size=n_sample)
             samples = (
                 slide_rgb[row_indices, col_indices].copy().reshape(-1, 1)
             )  # Reshape to (N, 1) for vstack compatibility
@@ -91,6 +97,7 @@ def normalize_to_percentiles(
     target_high: np.ndarray,
     p_low: float = 1.0,
     p_high: float = 99.0,
+    seed: int = 42,
 ) -> np.ndarray:
     """
     Normalize image to match target percentile range.
@@ -104,10 +111,12 @@ def normalize_to_percentiles(
         target_high: Target values for p_high percentile (shape: 3 for RGB, scalar for grayscale)
         p_low: Lower percentile
         p_high: Upper percentile
+        seed: Random seed for reproducible sampling (default 42)
 
     Returns:
         Normalized image (uint8)
     """
+    rng = np.random.default_rng(seed)
     # Handle RGB vs grayscale
     if image.ndim == 3 and image.shape[2] == 3:
         # RGB image - allocate output as uint8 directly (not float32!)
@@ -123,8 +132,8 @@ def normalize_to_percentiles(
             if n_sample < channel.size:
                 # Random 2D sampling (allows replacement, negligible collision probability)
                 h, w = channel.shape
-                row_idx = np.random.randint(0, h, size=n_sample)
-                col_idx = np.random.randint(0, w, size=n_sample)
+                row_idx = rng.integers(0, h, size=n_sample)
+                col_idx = rng.integers(0, w, size=n_sample)
                 sample = channel[row_idx, col_idx]
             else:
                 sample = channel.ravel()
@@ -162,8 +171,8 @@ def normalize_to_percentiles(
         if n_sample < channel.size:
             # Random 2D sampling (allows replacement, negligible collision probability)
             h, w = channel.shape
-            row_idx = np.random.randint(0, h, size=n_sample)
-            col_idx = np.random.randint(0, w, size=n_sample)
+            row_idx = rng.integers(0, h, size=n_sample)
+            col_idx = rng.integers(0, w, size=n_sample)
             sample = channel[row_idx, col_idx]
         else:
             sample = channel.ravel()
@@ -335,6 +344,7 @@ def apply_reinhard_normalization_MEDIAN(
     params: dict[str, float],
     otsu_threshold: float = None,
     slide_lab_stats: dict[str, float] = None,
+    seed: int = 42,
     **_legacy_kwargs,
 ) -> np.ndarray:
     """
@@ -353,6 +363,7 @@ def apply_reinhard_normalization_MEDIAN(
         slide_lab_stats: Per-slide LAB stats dict from step 1 JSON with keys:
             L_median, L_mad, a_median, a_mad, b_median, b_mad.
             If None, computed from image by sampling tissue pixels.
+        seed: Random seed for reproducible sampling (default 42).
         **_legacy_kwargs: Accepts (and ignores) former dead parameters
             ``variance_threshold``, ``tile_size``, ``block_size``,
             ``precomputed_variance_threshold``, ``precomputed_intensity_threshold``
@@ -363,6 +374,7 @@ def apply_reinhard_normalization_MEDIAN(
     """
     from xldvp_seg.detection.tissue import compute_otsu_threshold
 
+    rng = np.random.default_rng(seed)
     h, w, c = image.shape
     block_sz = 512
     gray = None  # Lazy — only computed if otsu_threshold or slide_lab_stats is missing
@@ -397,8 +409,8 @@ def apply_reinhard_normalization_MEDIAN(
         attempt = 0
         while total_collected < n_samples and attempt < max_attempts:
             batch = min(n_samples * 2, max_attempts - attempt)
-            rows = np.random.randint(0, h, size=batch)
-            cols = np.random.randint(0, w, size=batch)
+            rows = rng.integers(0, h, size=batch)
+            cols = rng.integers(0, w, size=batch)
             g = gray[rows, cols]
             mask = (g > 0) & (g < otsu_val)
             tissue_rows = rows[mask]

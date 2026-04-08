@@ -62,6 +62,12 @@ class ModelRegistry:
     _registry: dict[str, ModelMeta] = {}
 
     @classmethod
+    def reset(cls):
+        """Reset the registry to its default state (for testing)."""
+        cls._registry.clear()
+        _register_defaults()
+
+    @classmethod
     def register(cls, meta: ModelMeta) -> None:
         """
         Register a model's metadata.
@@ -171,120 +177,127 @@ def get_model_info(name):
 # Register known models at module load time
 # ---------------------------------------------------------------------------
 
-# --- Existing models (installed in the pipeline) ---
 
-register_model(
-    "sam2",
-    "embedding",
-    256,
-    "both",
-    description="SAM2 spatial point embeddings",
-    license="Apache-2.0",
-    installed=True,
-)
+def _register_defaults():
+    """Register all built-in model metadata."""
 
-register_model(
-    "resnet50",
-    "embedding",
-    4096,
-    "both",
-    description="ResNet-50 ImageNet features (2x2048D: masked + context)",
-    license="BSD-3",
-    installed=True,
-)
+    # --- Existing models (installed in the pipeline) ---
 
-register_model(
-    "dinov2_vitl14",
-    "embedding",
-    2048,
-    "both",
-    description="DINOv2 ViT-L/14 features (2x1024D: masked + context)",
-    license="Apache-2.0",
-    installed=True,
-)
+    register_model(
+        "sam2",
+        "embedding",
+        256,
+        "both",
+        description="SAM2 spatial point embeddings",
+        license="Apache-2.0",
+        installed=True,
+    )
 
-register_model(
-    "cellpose",
-    "segmentation",
-    0,
-    "both",
-    description="Cellpose cell segmentation (cpsam model)",
-    license="BSD-3",
-    installed=True,
-)
+    register_model(
+        "resnet50",
+        "embedding",
+        4096,
+        "both",
+        description="ResNet-50 ImageNet features (2x2048D: masked + context)",
+        license="BSD-3",
+        installed=True,
+    )
 
-# --- Brightfield foundation models (gated, require HuggingFace token) ---
-# Download with: xlseg download-models --brightfield
-# /analyze walks novice users through HF account + token setup.
+    register_model(
+        "dinov2_vitl14",
+        "embedding",
+        2048,
+        "both",
+        description="DINOv2 ViT-L/14 features (2x1024D: masked + context)",
+        license="Apache-2.0",
+        installed=True,
+    )
 
-register_model(
-    "uni2",
-    "embedding",
-    1536,
-    "brightfield",
-    description="UNI2 ViT-Giant/14 pathology FM (Mahmood Lab)",
-    license="CC-BY-NC-ND",
-    hf_url="MahmoodLab/UNI2-h",
-    auto_download=True,
-    gated=True,
-)
+    register_model(
+        "cellpose",
+        "segmentation",
+        0,
+        "both",
+        description="Cellpose cell segmentation (cpsam model)",
+        license="BSD-3",
+        installed=True,
+    )
 
-register_model(
-    "virchow2",
-    "embedding",
-    2560,
-    "brightfield",
-    description="Virchow2 pathology FM, mixed magnification (Paige AI)",
-    license="CC-BY-NC-ND",
-    hf_url="paige-ai/Virchow2",
-    auto_download=True,
-    gated=True,
-)
+    # --- Brightfield foundation models (gated, require HuggingFace token) ---
+    # Download with: xlseg download-models --brightfield
+    # /analyze walks novice users through HF account + token setup.
 
-register_model(
-    "conch",
-    "multimodal",
-    512,
-    "brightfield",
-    description="CONCH multimodal image+text pathology model (Mahmood Lab)",
-    license="CC-BY-NC-ND",
-    hf_url="MahmoodLab/CONCH",
-    auto_download=True,
-    gated=True,
-)
+    register_model(
+        "uni2",
+        "embedding",
+        1536,
+        "brightfield",
+        description="UNI2 ViT-Giant/14 pathology FM (Mahmood Lab)",
+        license="CC-BY-NC-ND",
+        hf_url="MahmoodLab/UNI2-h",
+        auto_download=True,
+        gated=True,
+    )
 
-register_model(
-    "phikon_v2",
-    "embedding",
-    1024,
-    "brightfield",
-    description="Phikon-v2 ViT-L/16 DINOv2-based pathology FM (Owkin)",
-    license="Non-commercial",
-    hf_url="owkin/phikon-v2",
-    auto_download=True,
-    gated=True,
-)
+    register_model(
+        "virchow2",
+        "embedding",
+        2560,
+        "brightfield",
+        description="Virchow2 pathology FM, mixed magnification (Paige AI)",
+        license="CC-BY-NC-ND",
+        hf_url="paige-ai/Virchow2",
+        auto_download=True,
+        gated=True,
+    )
 
-register_model(
-    "h_optimus_1",
-    "embedding",
-    1536,
-    "brightfield",
-    description="H-optimus-1 ViT-G/14 pathology FM (Bioptimus)",
-    license="Apache-2.0",
-    hf_url="bioptimus/H-optimus-1",
-    auto_download=True,
-    gated=False,
-)
+    register_model(
+        "conch",
+        "multimodal",
+        512,
+        "brightfield",
+        description="CONCH multimodal image+text pathology model (Mahmood Lab)",
+        license="CC-BY-NC-ND",
+        hf_url="MahmoodLab/CONCH",
+        auto_download=True,
+        gated=True,
+    )
 
-# --- Planned alternative segmenters ---
+    register_model(
+        "phikon_v2",
+        "embedding",
+        1024,
+        "brightfield",
+        description="Phikon-v2 ViT-L/16 DINOv2-based pathology FM (Owkin)",
+        license="Non-commercial",
+        hf_url="owkin/phikon-v2",
+        auto_download=True,
+        gated=True,
+    )
 
-register_model(
-    "instanseg",
-    "segmentation",
-    0,
-    "both",
-    description="InstanSeg lightweight instance segmentation (3.8M params)",
-    license="Apache-2.0",
-    auto_download=True,
-)
+    register_model(
+        "h_optimus_1",
+        "embedding",
+        1536,
+        "brightfield",
+        description="H-optimus-1 ViT-G/14 pathology FM (Bioptimus)",
+        license="Apache-2.0",
+        hf_url="bioptimus/H-optimus-1",
+        auto_download=True,
+        gated=False,
+    )
+
+    # --- Planned alternative segmenters ---
+
+    register_model(
+        "instanseg",
+        "segmentation",
+        0,
+        "both",
+        description="InstanSeg lightweight instance segmentation (3.8M params)",
+        license="Apache-2.0",
+        auto_download=True,
+    )
+
+
+_register_defaults()

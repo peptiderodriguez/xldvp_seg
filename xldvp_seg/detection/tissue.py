@@ -18,7 +18,7 @@ from xldvp_seg.utils.logging import get_logger
 logger = get_logger(__name__)
 
 
-def compute_otsu_threshold(gray_image, max_subsample=10_000_000):
+def compute_otsu_threshold(gray_image, max_subsample=10_000_000, seed=42):
     """Compute Otsu threshold on a grayscale image, excluding black padding.
 
     Subsamples up to max_subsample non-zero pixels to avoid allocating a
@@ -27,18 +27,20 @@ def compute_otsu_threshold(gray_image, max_subsample=10_000_000):
     Args:
         gray_image: 2D uint8 grayscale array
         max_subsample: Maximum pixels to feed to Otsu (default 10M)
+        seed: Random seed for reproducible subsampling (default 42)
 
     Returns:
         float: Otsu threshold value
     """
     # Subsample random pixels (avoids full-image allocation)
+    rng = np.random.default_rng(seed)
     h, w = gray_image.shape
     n_total = h * w
     n_sample = min(max_subsample, n_total)
 
     if n_sample < n_total:
-        rows = np.random.randint(0, h, size=n_sample)
-        cols = np.random.randint(0, w, size=n_sample)
+        rows = rng.integers(0, h, size=n_sample)
+        cols = rng.integers(0, w, size=n_sample)
         pixels = gray_image[rows, cols]
     else:
         pixels = gray_image.ravel()
@@ -423,6 +425,7 @@ def calibrate_tissue_threshold(
     channel=0,
     tile_size=3000,
     loader=None,
+    seed=42,
 ):
     """
     Auto-detect variance threshold using K-means clustering.
@@ -443,10 +446,12 @@ def calibrate_tissue_threshold(
         channel: Channel index for CZI reader or loader
         tile_size: Size of tiles
         loader: CZILoader instance (preferred over reader for RAM-first architecture)
+        seed: Random seed for reproducible tile sampling (default 42)
 
     Returns:
         float: Variance threshold for tissue detection
     """
+    rng = np.random.default_rng(seed)
     logger.info(
         f"Calibrating tissue threshold (K-means 3-cluster on {calibration_samples} random tiles)..."
     )
@@ -454,7 +459,7 @@ def calibrate_tissue_threshold(
     # Sample tiles for calibration
     n_tiles = len(tiles)
     n_samples = min(calibration_samples, n_tiles)
-    sample_indices = np.random.choice(n_tiles, n_samples, replace=False)
+    sample_indices = rng.choice(n_tiles, n_samples, replace=False)
 
     all_variances = []
 

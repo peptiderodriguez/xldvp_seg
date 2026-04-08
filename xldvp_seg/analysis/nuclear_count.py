@@ -149,6 +149,11 @@ def count_nuclei_in_cells(
                       nuclei: [{area_um2, sam2_0..sam2_255, resnet_0..resnet_2047, ...}]}}
 
         Cells with no nuclei detected get n_nuclei=0 and zero for all metrics.
+
+    Known limitation: Nuclear assignment uses centroid lookup only, not mask
+    overlap. Peripheral nuclei whose centroid falls outside the cell mask
+    boundary are dropped. This may undercount nuclei in large multinucleated
+    cells (megakaryocytes, osteoclasts). Future: overlap-based assignment.
     """
     if cell_masks.shape != nuclear_channel.shape:
         raise ValueError(
@@ -274,6 +279,8 @@ def count_nuclei_for_tile(
     resnet_transform=None,
     device=None,
     nuc_channels: list[int] | None = None,
+    dinov2_model=None,
+    dinov2_transform=None,
     **kwargs,
 ) -> tuple:
     """Convenience wrapper that returns (nuclear_results, n_nuclei_segmented).
@@ -291,6 +298,8 @@ def count_nuclei_for_tile(
         device: Torch device string.
         nuc_channels: Cellpose channel specification for nuclear segmentation.
                       Defaults to ``[0, 0]`` (single-channel grayscale mode).
+        dinov2_model: Optional DINOv2 model for deep features per nucleus.
+        dinov2_transform: Transform for DINOv2 model input.
 
     Returns:
         (results_dict, n_total_nuclei) where results_dict maps
@@ -305,8 +314,8 @@ def count_nuclei_for_tile(
         sam2_predictor=sam2_predictor,
         resnet_model=resnet_model,
         resnet_transform=resnet_transform,
-        dinov2_model=kwargs.get("dinov2_model"),
-        dinov2_transform=kwargs.get("dinov2_transform"),
+        dinov2_model=dinov2_model,
+        dinov2_transform=dinov2_transform,
         device=device,
         nuc_channels=nuc_channels,
     )

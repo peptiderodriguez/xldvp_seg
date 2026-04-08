@@ -70,6 +70,15 @@ def load_rois_from_polygons(
         return np.zeros(image_shape, dtype=np.int32), 1
 
     h, w = image_shape
+    mem_bytes = h * w * 4
+    if mem_bytes > 4e9:
+        logger.warning(
+            "Label array requires %.1f GB (full resolution %d x %d). "
+            "Consider downsampling for large slides.",
+            mem_bytes / 1e9,
+            h,
+            w,
+        )
     labels = np.zeros((h, w), dtype=np.int32)
 
     for label_id, verts in enumerate(polygons, start=1):

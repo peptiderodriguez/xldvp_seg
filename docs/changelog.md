@@ -37,6 +37,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- `classify_gmm()` gains `include_zeros` parameter, wired from `classify_single_marker` when bg correction is active (regression fix from round 3).
+- SpatialData shape polygons now use micron coordinates (matching `obsm["spatial"]`) instead of pixel coordinates (fixes spatial analysis coordinate mismatch).
+- `aggregation.py`: `*_count` columns moved from AnnData X to obs; `adata.layers["missing"]` stores NaN positions before zero-fill.
+- `vessel_features.py`: pixel_size_um default changed from 0.22 to None with warning+fallback.
+- `models/manager.py`: torch/torchvision imports moved inside methods (faster CLI startup).
+- `stain_normalization.py`, `tissue.py`, `processing/pipeline.py`: np.random global state migrated to `default_rng(seed)`.
+- `multigpu_worker.py`: SAM2 cache uses `$SLURM_TMPDIR` / `tempfile.gettempdir()` instead of hardcoded `/tmp`.
+- `pattern_detection.py`: betweenness refinement uses rank-based demotion (handles tied zero values).
+- Nuclear counting centroid-only assignment documented as known limitation.
+- `generate_cross_placement_html()` validates `pixel_size_um`, `image_width_px`, `image_height_px` are finite before embedding in HTML.
+- `ModelRegistry.reset()` classmethod for test isolation (clears and re-registers defaults).
+- `process_contour()` uses `cv2.contourArea` for initial area instead of constructing a Shapely Polygon.
+- `feature_extraction.py` tile_global_mean fallback uses `logger.debug` instead of `warnings.warn`.
+- `_discover_features()` in `spatialdata_export.py` sorts `EMBEDDING_PREFIXES` by length descending (robust prefix matching).
+- `count_nuclei_for_tile()` promotes `dinov2_model` and `dinov2_transform` from `**kwargs` to explicit parameters.
 - `classify_single_marker()` now passes `include_zeros=True` to Otsu/Otsu-half when `bg_subtract` or `global_background` is active, ensuring background-corrected zeros are included in threshold computation.
 - `classify_gmm()` BIC comparison requires delta ≥ 6 (Raftery's "strong evidence") for 2-component preference, plus hard guard: returns all-negative when separation < 0.5 AND minor component weight < 0.1.
 - `tl.score()` now defaults missing feature values to 0.0 instead of skipping detections, matching `extract_feature_matrix` behavior. All detections are now scored.

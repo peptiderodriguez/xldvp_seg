@@ -146,7 +146,9 @@ def _discover_features(detections):
 
             # Check if it's an embedding dimension
             matched_embed = False
-            for prefix, (obsm_key, expected_dim) in EMBEDDING_PREFIXES.items():
+            for prefix, (obsm_key, expected_dim) in sorted(
+                EMBEDDING_PREFIXES.items(), key=lambda x: -len(x[0])
+            ):
                 if key.startswith(prefix):
                     try:
                         idx = int(key[len(prefix) :])
@@ -355,8 +357,15 @@ def build_anndata(detections, cell_type):
 # ---------------------------------------------------------------------------
 
 
-def _extract_shapes_from_hdf5(detections, tiles_dir, cell_type):
+def _extract_shapes_from_hdf5(detections, tiles_dir, cell_type, pixel_size_um=1.0):
     """Extract polygon contours from HDF5 mask files, tile by tile.
+
+    Args:
+        detections: List of detection dicts.
+        tiles_dir: Path to tiles directory with HDF5 masks.
+        cell_type: Cell type string for mask filename.
+        pixel_size_um: Pixel size in microns. Contour coordinates are
+            converted from pixels to microns.
 
     Returns:
         List of shapely Polygons (or None for missing contours), parallel to detections.
@@ -413,10 +422,10 @@ def _extract_shapes_from_hdf5(detections, tiles_dir, cell_type):
             largest = max(contours_cv, key=cv2.contourArea)
             pts = largest.reshape(-1, 2).astype(float)
 
-            # Convert to global coordinates
+            # Convert to global coordinates in microns
             tile_origin = det.get("tile_origin", [0, 0])
-            pts[:, 0] += tile_origin[0]
-            pts[:, 1] += tile_origin[1]
+            pts[:, 0] = (pts[:, 0] + tile_origin[0]) * pixel_size_um
+            pts[:, 1] = (pts[:, 1] + tile_origin[1]) * pixel_size_um
 
             if len(pts) >= 3:
                 try:
@@ -488,9 +497,11 @@ def _make_circle_fallback(detections, pixel_size_um):
             continue
         feats = det.get("features", {})
         area_px = feats.get("area", 100)
-        radius_px = max(np.sqrt(area_px / np.pi), 3)
+        # Convert center and radius to microns
+        gc_um = [gc[0] * pixel_size_um, gc[1] * pixel_size_um]
+        radius_um = max(np.sqrt(area_px * pixel_size_um**2 / np.pi), 3 * pixel_size_um)
         try:
-            circle = Point(gc[0], gc[1]).buffer(radius_px, resolution=16)
+            circle = Point(gc_um[0], gc_um[1]).buffer(radius_um, resolution=16)
             polygons[i] = circle
         except (ValueError, TypeError, GEOSException):
             pass
@@ -547,7 +558,8 @@ def build_shapes(detections, cell_type, tiles_dir=None, pixel_size_um=1.0):
         contour_px = get_contour_px(det)
         if contour_px is not None and len(contour_px) >= 3:
             try:
-                poly = _Polygon(contour_px)
+                contour_um = np.array(contour_px) * pixel_size_um
+                poly = _Polygon(contour_um)
                 if poly.is_valid:
                     polygons[i] = poly
                     _from_json += 1
@@ -559,7 +571,7 @@ def build_shapes(detections, cell_type, tiles_dir=None, pixel_size_um=1.0):
     # Fill remaining Nones from HDF5 or circle fallback
     n_missing = sum(1 for p in polygons if p is None)
     if n_missing > 0 and tiles_dir:
-        hdf5_polygons = _extract_shapes_from_hdf5(detections, tiles_dir, cell_type)
+        hdf5_polygons = _extract_shapes_from_hdf5(detections, tiles_dir, cell_type, pixel_size_um)
         for i in range(len(polygons)):
             if polygons[i] is None and hdf5_polygons[i] is not None:
                 polygons[i] = hdf5_polygons[i]

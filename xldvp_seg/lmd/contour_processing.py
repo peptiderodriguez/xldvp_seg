@@ -417,11 +417,10 @@ def process_contour(
     contour_px = np.array(contour_px)
     stats["points_before"] = len(contour_px)
 
-    # Construct pixel polygon once, reuse for area and dilation
-    px_poly = Polygon(contour_px)
-    px_poly = validate_polygon(px_poly)
-    if px_poly is not None and not px_poly.is_empty:
-        stats["area_before_um2"] = px_poly.area * pixel_size_um * pixel_size_um
+    # Compute area before processing using cv2 (avoids Shapely Polygon overhead)
+    area_before_px2 = cv2.contourArea(np.array(contour_px, dtype=np.float32))
+    if area_before_px2 > 0:
+        stats["area_before_um2"] = area_before_px2 * pixel_size_um * pixel_size_um
 
     # All operations in pixel space to avoid precision loss from
     # repeated px->um->px conversions.

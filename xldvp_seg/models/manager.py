@@ -23,10 +23,6 @@ import threading
 from pathlib import Path
 from typing import Any
 
-import torch
-import torchvision.models as tv_models
-import torchvision.transforms as tv_transforms
-
 from xldvp_seg.exceptions import DetectionError
 from xldvp_seg.utils.logging import get_logger
 
@@ -164,6 +160,8 @@ class ModelManager:
             device: Device for model inference ('cuda', 'mps', 'cpu', or specific GPU).
                     If None, auto-detects best available.
         """
+        import torch
+
         if device is None:
             from xldvp_seg.utils.device import get_default_device
 
@@ -361,6 +359,10 @@ class ModelManager:
 
     def _load_resnet(self):
         """Load ResNet-50 feature extractor."""
+        import torch
+        import torchvision.models as tv_models
+        import torchvision.transforms as tv_transforms
+
         logger.info("Loading ResNet-50...")
 
         # Use pretrained weights
@@ -384,6 +386,9 @@ class ModelManager:
 
     def _load_dinov2(self):
         """Load DINOv2 ViT-L/14 feature extractor (1024D features)."""
+        import torch
+        import torchvision.transforms as tv_transforms
+
         logger.info("Loading DINOv2 (dinov2_vitl14)...")
 
         try:
@@ -434,6 +439,8 @@ class ModelManager:
 
     def _load_uni2(self):
         """Load UNI2 ViT-Giant/14 from HuggingFace (1536D features)."""
+        import torchvision.transforms as tv_transforms
+
         logger.info("Loading UNI2 pathology foundation model...")
         try:
             import timm
@@ -465,6 +472,8 @@ class ModelManager:
 
     def _load_virchow2(self):
         """Load Virchow2 from HuggingFace (2560D = CLS 1280 + mean pool 1280)."""
+        import torchvision.transforms as tv_transforms
+
         logger.info("Loading Virchow2 pathology foundation model...")
         try:
             import timm
@@ -521,6 +530,8 @@ class ModelManager:
 
     def _load_phikon_v2(self):
         """Load Phikon-v2 ViT-L/16 from HuggingFace (1024D)."""
+        import torchvision.transforms as tv_transforms
+
         logger.info("Loading Phikon-v2 pathology foundation model...")
         try:
             from transformers import AutoImageProcessor, AutoModel

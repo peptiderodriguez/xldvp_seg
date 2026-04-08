@@ -422,12 +422,9 @@ def extract_morphological_features(
     # Texture features
     # Exclude zero pixels from global mean (CZI padding)
     if tile_global_mean is None:
-        import warnings
-
-        warnings.warn(
+        logger.debug(
             "tile_global_mean not provided — computing from full image. "
-            "Pass precomputed value for O(1) per-mask cost.",
-            stacklevel=2,
+            "Pass precomputed value for O(1) per-mask cost."
         )
         if image.ndim == 3:
             global_valid = np.max(image, axis=2) > 0

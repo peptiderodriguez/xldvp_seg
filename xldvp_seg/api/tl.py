@@ -157,16 +157,31 @@ def score(
 
     X_rows = []
     valid_indices = []
+    n_zeroed = 0
+    zeroed_names: list[str] = []
     for i, det in enumerate(detections):
         features = det.get("features", {})
         row = []
+        det_had_missing = False
         for fn in feature_names:
             val = features.get(fn)
             if val is None:
                 val = 0.0
+                if not det_had_missing:
+                    det_had_missing = True
+                    n_zeroed += 1
+                if fn not in zeroed_names:
+                    zeroed_names.append(fn)
             row.append(float(val))
         X_rows.append(row)
         valid_indices.append(i)
+
+    if n_zeroed > 0:
+        logger.warning(
+            "%d detections had missing features defaulted to 0.0 (%s...)",
+            n_zeroed,
+            ", ".join(zeroed_names[:3]),
+        )
 
     if not X_rows:
         logger.warning("No detections have all required features")

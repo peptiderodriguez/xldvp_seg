@@ -30,6 +30,7 @@ import multiprocessing as mp
 import os
 import queue
 import shutil
+import tempfile
 import time
 import traceback
 from contextlib import nullcontext
@@ -632,7 +633,10 @@ class MultiGPUTileProcessor:
         if not checkpoint_path.exists():
             raise FileNotFoundError(f"SAM2 checkpoint not found: {checkpoint_path}")
 
-        local_dir = Path("/tmp") / f"sam2_cache_{os.getpid()}"
+        local_dir = (
+            Path(os.environ.get("SLURM_TMPDIR", tempfile.gettempdir()))
+            / f"sam2_cache_{os.getpid()}"
+        )
         local_dir.mkdir(exist_ok=True)
         local_path = local_dir / checkpoint_path.name
 

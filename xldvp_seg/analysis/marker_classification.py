@@ -122,7 +122,11 @@ def classify_otsu_half(values: np.ndarray, include_zeros: bool = False) -> tuple
     return float(threshold), positive
 
 
-def classify_gmm(values: np.ndarray, posterior_threshold: float = 0.75) -> tuple[float, np.ndarray]:
+def classify_gmm(
+    values: np.ndarray,
+    posterior_threshold: float = 0.75,
+    include_zeros: bool = False,
+) -> tuple[float, np.ndarray]:
     """2-component GMM on log1p intensities with BIC model selection.
 
     First compares 1-component vs 2-component GMM using BIC. If the
@@ -135,6 +139,10 @@ def classify_gmm(values: np.ndarray, posterior_threshold: float = 0.75) -> tuple
         values: Per-cell intensity values.
         posterior_threshold: Minimum posterior probability for the high-signal
             component to classify a cell as positive (default 0.75).
+        include_zeros: If True, include zero-valued cells in the GMM fit.
+            Default False excludes zeros because they often represent CZI
+            buffer/padding areas rather than real signal. Set True when zeros
+            represent genuine background-corrected signal.
 
     Returns (threshold, boolean mask where True = positive).
     The threshold is the value where the two component posteriors cross
@@ -142,11 +150,19 @@ def classify_gmm(values: np.ndarray, posterior_threshold: float = 0.75) -> tuple
     """
     from sklearn.mixture import GaussianMixture
 
-    if len(values) < 20:
+    # Filter zeros if requested
+    if not include_zeros:
+        nonzero_mask = values > 0
+        vals = values[nonzero_mask]
+    else:
+        vals = values
+        nonzero_mask = None
+
+    if len(vals) < 20:
         logger.warning("Too few values for GMM; defaulting all to negative")
         return 0.0, np.zeros(len(values), dtype=bool)
 
-    log_vals = np.log1p(values).reshape(-1, 1)
+    log_vals = np.log1p(vals).reshape(-1, 1)
 
     if np.std(log_vals) < 1e-6:
         logger.warning("Near-zero variance in log1p values; all cells classified as negative")
@@ -194,6 +210,12 @@ def classify_gmm(values: np.ndarray, posterior_threshold: float = 0.75) -> tuple
     # and approximate for unequal priors.
     log_threshold = (means[0] * stds[1] + means[1] * stds[0]) / (stds[0] + stds[1])
     threshold = float(np.expm1(log_threshold))
+
+    # Map back to original indices if zeros were excluded
+    if nonzero_mask is not None:
+        full_positive = np.zeros(len(values), dtype=bool)
+        full_positive[nonzero_mask] = positive
+        return threshold, full_positive
 
     return threshold, positive
 
@@ -475,7 +497,7 @@ def classify_single_marker(
     elif method == "otsu_half":
         threshold, positive_mask = classify_otsu_half(values, include_zeros=_include_zeros)
     elif method == "gmm":
-        threshold, positive_mask = classify_gmm(values)
+        threshold, positive_mask = classify_gmm(values, include_zeros=_include_zeros)
     else:
         raise ConfigError(f"Unknown method: {method}")
 

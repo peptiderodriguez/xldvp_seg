@@ -356,14 +356,12 @@ def refine_strip_cells(
                 bc = nx.betweenness_centrality(sub, k=min(200, len(comp_nodes)))
             else:
                 bc = nx.betweenness_centrality(sub)
-            # Find percentile cutoff
-            values = sorted(bc.values())
-            cutoff_idx = int(len(values) * threshold / 100)
-            cutoff_val = values[min(cutoff_idx, len(values) - 1)]
-            for node, val in bc.items():
-                if val < cutoff_val:
-                    labels[node] = "cluster"
-                    demoted += 1
+            # Rank-based demotion: bottom N% of betweenness centrality
+            sorted_nodes = sorted(bc.items(), key=lambda x: x[1])
+            n_demote = int(len(sorted_nodes) * threshold / 100)
+            for node, val in sorted_nodes[:n_demote]:
+                labels[node] = "cluster"
+                demoted += 1
 
     elif method == "degree_ratio":
         # For each strip cell, fraction of neighbors that are also strip

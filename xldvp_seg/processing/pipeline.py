@@ -161,6 +161,7 @@ class DetectionPipeline:
         tiles: list[tuple[int, int]] | None = None,
         sample_fraction: float = 1.0,
         min_detections_per_tile: int = 0,
+        seed: int = 42,
         **detector_kwargs,
     ) -> list[dict[str, Any]]:
         """
@@ -171,6 +172,7 @@ class DetectionPipeline:
             tiles: List of (tile_x, tile_y) to process (default: all tiles)
             sample_fraction: Fraction of tiles to sample (default: 1.0 = all)
             min_detections_per_tile: Skip tiles with fewer detections
+            seed: Random seed for reproducible tile sampling (default 42)
             **detector_kwargs: Additional arguments passed to detector_fn
 
         Returns:
@@ -181,8 +183,9 @@ class DetectionPipeline:
 
         # Sample tiles if requested
         if sample_fraction < 1.0:
+            rng = np.random.default_rng(seed)
             n_sample = max(1, int(len(tiles) * sample_fraction))
-            indices = np.random.choice(len(tiles), n_sample, replace=False)
+            indices = rng.choice(len(tiles), n_sample, replace=False)
             tiles = [tiles[i] for i in sorted(indices)]
 
         if not self.quiet:
