@@ -37,58 +37,62 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
-- `classify_gmm()` gains `include_zeros` parameter, wired from `classify_single_marker` when bg correction is active (regression fix from round 3).
-- SpatialData shape polygons now use micron coordinates (matching `obsm["spatial"]`) instead of pixel coordinates (fixes spatial analysis coordinate mismatch).
-- `aggregation.py`: `*_count` columns moved from AnnData X to obs; `adata.layers["missing"]` stores NaN positions before zero-fill.
-- `vessel_features.py`: pixel_size_um default changed from 0.22 to None with warning+fallback.
-- `models/manager.py`: torch/torchvision imports moved inside methods (faster CLI startup).
-- `stain_normalization.py`, `tissue.py`, `processing/pipeline.py`: np.random global state migrated to `default_rng(seed)`.
-- `multigpu_worker.py`: SAM2 cache uses `$SLURM_TMPDIR` / `tempfile.gettempdir()` instead of hardcoded `/tmp`.
-- `pattern_detection.py`: betweenness refinement uses rank-based demotion (handles tied zero values).
-- Nuclear counting centroid-only assignment documented as known limitation.
-- `generate_cross_placement_html()` validates `pixel_size_um`, `image_width_px`, `image_height_px` are finite before embedding in HTML.
-- `ModelRegistry.reset()` classmethod for test isolation (clears and re-registers defaults).
-- `process_contour()` uses `cv2.contourArea` for initial area instead of constructing a Shapely Polygon.
-- `feature_extraction.py` tile_global_mean fallback uses `logger.debug` instead of `warnings.warn`.
-- `_discover_features()` in `spatialdata_export.py` sorts `EMBEDDING_PREFIXES` by length descending (robust prefix matching).
-- `count_nuclei_for_tile()` promotes `dinov2_model` and `dinov2_transform` from `**kwargs` to explicit parameters.
-- `classify_single_marker()` now passes `include_zeros=True` to Otsu/Otsu-half when `bg_subtract` or `global_background` is active, ensuring background-corrected zeros are included in threshold computation.
-- `classify_gmm()` BIC comparison requires delta ≥ 6 (Raftery's "strong evidence") for 2-component preference, plus hard guard: returns all-negative when separation < 0.5 AND minor component weight < 0.1.
-- `tl.score()` now defaults missing feature values to 0.0 instead of skipping detections, matching `extract_feature_matrix` behavior. All detections are now scored.
-- `load_rf_classifier()` raises `DataLoadError` on unexpected model type (was `logger.warning` + fallthrough).
-- `differential_features()` now returns `n_a` and `n_b` sample size columns. Cohen's d capped at ±10.
-- `pool_std` columns use `fillna(0.0)` for single-cell wells (std is undefined with ddof=1 for n=1).
-- Phase 1 quick medians now filter zero-valued pixels (CZI padding) before computing median.
-- `ch{N}_snr` is now always written (0.0 when background is zero), consistent with `correct_all_channels`.
-- Phase 3 cleanup (`_bg_quick_medians`, `_postdedup_idx`) wrapped in `try/finally` for exception safety.
-- Contour global coordinates use float64 (was float32) to preserve sub-pixel precision for large slides.
-- `build_contour_js_data` uses random subsampling (was fixed-step) for spatially unbiased contour selection.
-- `correct_all_channels` scans first 100 detections for feature keys (was 10) to handle edge-tile variability.
-- `_LazyModelDict._load_model` marks key as loaded only after successful model assignment (prevents stale `_loaded` on load failure).
-- `_ISLET_MARKER_DEFAULTS` deprecation warning now includes removal timeline (v3.0).
-- `safe_json` escapes both `</` and `<!--` sequences consistently across `encoding.py` and `html_scripts.py`.
-- `torch.load()` now uses `weights_only=True` in NMJ strategy and cell detector (security hardening).
-- `joblib.load()` in `BaseVesselClassifier.load()` validates dict type and raises `ClassificationError` on model type mismatch (was `logger.warning`).
-- `ClusteringConfig.threshold` default changed from 0.5 to 0.0 (matches CLI + API defaults).
-- `discover_channels_from_features()` scans first 10 detections instead of breaking after the first with features.
-- `_extract_centroids()` uses NaN + slide-median imputation instead of `[0, 0]` fallback for missing `global_center`.
-- Multi-node tile sharding: only shard 0 writes `sampled_tiles.json`; other shards wait and read (eliminates race condition).
-- OME-Zarr export re-raises `MemoryError` and `OSError` instead of silently catching all exceptions.
-- Pipeline np.random calls in `shm_setup.py` and `detection_loop.py` migrated from global state to `np.random.default_rng(seed)`.
-- `_sample.py` migrated from `np.random.RandomState` to `np.random.default_rng`.
-- `py.typed` added to `pyproject.toml` package-data for PEP 561 compliance.
-- `_ISLET_MARKER_DEFAULTS` emits `DeprecationWarning` at usage site.
-- Removed 3 API stubs (`pl.spatial`, `tl.nuclei`, `io.export_lmd`) that raised `NotImplementedError`. These operations require CLI/SLURM and were never going to be simple function calls.
-- `scripts/generate_multi_slide_spatial_viewer.py` refactored: inline JS replaced with `load_js()` from 17 component files (3,115 to 1,115 lines, -64%). Same external behavior.
-- Extracted `html_utils.py` (image/HDF5 utilities), `html_styles.py` (CSS generators), and `html_scripts.py` (JS generators) from `html_export.py` (3,696 to 1,790 lines). Backward-compatible re-exports maintained.
-- Extracted `html_batch_export.py` (MK/HSPC batch functions) from `html_generator.py` (2,247 to 1,236 lines). Backward-compatible re-exports in `html_generator.py`.
-- Spatial viewer JS performance: viewport culling for cell dots, temp canvas reuse in fluorescence compositing, debounced window resize handler.
-- `get_largest_connected_component` in `html_utils.py` replaced with import from canonical `mask_cleanup.py`.
-- SVG channel filter block deduplicated in `html_export.py` (extracted to `_SVG_CHANNEL_FILTERS` constant).
-- Exception migration: 82 bare `RuntimeError`/`ValueError` sites across 39 files replaced with domain-specific exceptions from `xldvp_seg.exceptions` (~35 genuine `ValueError` sites retained intentionally).
-- HTML module consolidation: 5 MK/HSPC duplicate functions replaced with backward-compatible shims (749 lines removed from `html_export.py`).
-- F841 ruff: 41 dead-code violations fixed, global suppress replaced with per-file ignore for `vessel.py` only.
-- Removed `numpy<2.0` upper bound pin from `pyproject.toml` (now `numpy>=1.24`).
+**Security & deserialization:**
+- `torch.load()` uses `weights_only=True` in NMJ strategy and cell detector.
+- `joblib.load()` in `BaseVesselClassifier.load()` validates dict type and raises `ClassificationError` on model type mismatch. `load_rf_classifier()` raises `DataLoadError` on unexpected type.
+- `safe_json` escapes both `</` and `<!--` sequences. `_js_esc()` function for JS string contexts across all HTML generator files.
+- `generate_cross_placement_html()` validates numeric inputs are finite before embedding in HTML.
+
+**Marker classification:**
+- `classify_gmm()` uses BIC model selection (delta ≥ 6 for 2-component preference), returns all-negative when separation < 0.5 AND minor component weight < 0.1. New `include_zeros` and `posterior_threshold` parameters.
+- `classify_single_marker()` passes `include_zeros=True` to Otsu/Otsu-half/GMM when `bg_subtract` or `global_background` is active.
+
+**Pipeline & background correction:**
+- Phase 1 quick medians filter zero-valued pixels (CZI padding). `ch{N}_snr` always written (0.0 when bg is zero).
+- Phase 3 cleanup in `try/finally`. Contour global coordinates use float64 (was float32).
+- `_extract_centroids()` uses NaN + slide-median imputation instead of `[0, 0]` fallback.
+- `correct_all_channels` scans first 100 detections for feature keys (was 10).
+- Multi-node sharding: shard 0 writes `sampled_tiles.json`; others wait and read.
+- OME-Zarr export re-raises `MemoryError` and `OSError`.
+
+**Reproducibility:**
+- `np.random.default_rng(seed)` migration across `shm_setup.py`, `detection_loop.py`, `stain_normalization.py`, `tissue.py`, `processing/pipeline.py`, `_sample.py`.
+- `multigpu_worker.py` SAM2 cache uses `$SLURM_TMPDIR` / `tempfile.gettempdir()` instead of hardcoded `/tmp`.
+
+**OmicLinker & statistics:**
+- `correlate(fdr_correct=True)` applies BH FDR correction to p-value matrix. `rank_proteins(sort_by="p_adjusted")` for significance-ordered ranking.
+- `link()` adds `pool_std_{feature}` columns (`.fillna(0.0)` for single-cell wells).
+- `differential_features()` returns `n_a`, `n_b` sample sizes. Cohen's d capped at ±10 with zero-variance guard.
+- `tl.score()` defaults missing features to 0.0 (scores all detections, logs warning with feature names).
+
+**Clustering & spatial analysis:**
+- `ClusteringConfig.threshold` default 0.5 → 0.0. New `pca_variance` field (default 0.95).
+- `discover_channels_from_features()` scans first 10 detections instead of breaking after first.
+- `pattern_detection.py` betweenness refinement uses rank-based demotion (handles tied zero values).
+- `_ISLET_MARKER_DEFAULTS` emits `DeprecationWarning` with v3.0 removal timeline.
+
+**SpatialData & export:**
+- SpatialData shape polygons use micron coordinates (matching `obsm["spatial"]`).
+- `adata.uns["pipeline"]` provenance in `build_anndata()`. `_discover_features()` sorts prefixes by length descending.
+- `aggregation.py`: `*_count` columns moved to obs; `adata.layers["missing"]` stores NaN positions before zero-fill.
+- `build_contour_js_data` uses random subsampling for spatially unbiased contour selection.
+
+**Model & infrastructure:**
+- `models/manager.py`: torch/torchvision imports moved inside methods (faster CLI startup). `ModelRegistry.reset()` for test isolation.
+- `_LazyModelDict._load_model` marks key as loaded only after successful assignment.
+- `vessel_features.py`: `pixel_size_um` default None with warning+fallback (was hardcoded 0.22).
+- `count_nuclei_for_tile()` promotes dinov2 kwargs to explicit parameters. Centroid-only assignment documented.
+- `process_contour()` uses `cv2.contourArea` instead of Shapely Polygon for initial area.
+
+**Module restructuring:**
+- Removed 3 API stubs (`pl.spatial`, `tl.nuclei`, `io.export_lmd`).
+- `scripts/generate_multi_slide_spatial_viewer.py`: inline JS → `load_js()` (3,115 → 1,115 lines).
+- `html_export.py` split into `html_utils.py`, `html_styles.py`, `html_scripts.py` (3,696 → 1,790 lines).
+- `html_batch_export.py` extracted from `html_generator.py` (2,247 → 1,236 lines).
+- Exception migration: 82 bare `RuntimeError`/`ValueError` → domain-specific exceptions.
+- HTML module consolidation: 5 duplicate functions replaced with shims (-749 lines).
+- `py.typed` in `pyproject.toml` package-data. Removed `numpy<2.0` pin.
+- F841 ruff: 41 dead-code violations fixed. Spatial viewer JS performance optimizations.
 
 ### Fixed
 

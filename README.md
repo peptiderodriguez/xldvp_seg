@@ -326,7 +326,7 @@ xldvp_seg/              # Main package (pip install -e .)
 
 scripts/                   # 31 reusable CLI tools
 examples/                  # Project-specific analyses by experiment
-tests/                     # pytest suite (1047 tests — run `make test`)
+tests/                     # pytest suite (1048 tests — run `make test`)
 ```
 
 ## Key Design Decisions
