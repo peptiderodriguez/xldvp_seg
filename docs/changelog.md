@@ -37,6 +37,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+**Nuclear counting:**
+- Nuclear-to-cell assignment uses mask overlap instead of centroid lookup. Each nucleus is assigned to the cell with the most overlapping pixels, correctly handling peripheral nuclei in multinucleated cells (megakaryocytes, osteoclasts).
+
 **Security & deserialization:**
 - `torch.load()` uses `weights_only=True` in NMJ strategy and cell detector.
 - `joblib.load()` in `BaseVesselClassifier.load()` validates dict type and raises `ClassificationError` on model type mismatch. `load_rf_classifier()` raises `DataLoadError` on unexpected type.

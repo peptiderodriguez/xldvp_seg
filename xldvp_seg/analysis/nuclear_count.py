@@ -150,10 +150,11 @@ def count_nuclei_in_cells(
 
         Cells with no nuclei detected get n_nuclei=0 and zero for all metrics.
 
-    Known limitation: Nuclear assignment uses centroid lookup only, not mask
-    overlap. Peripheral nuclei whose centroid falls outside the cell mask
-    boundary are dropped. This may undercount nuclei in large multinucleated
-    cells (megakaryocytes, osteoclasts). Future: overlap-based assignment.
+    Nuclear assignment uses mask overlap: each nucleus is assigned to the
+    cell with the most overlapping pixels. This correctly handles
+    peripheral nuclei in large multinucleated cells (megakaryocytes,
+    osteoclasts). When overlap is equal between cells, the lower cell
+    label is chosen.
     """
     if cell_masks.shape != nuclear_channel.shape:
         raise ValueError(
@@ -194,18 +195,17 @@ def count_nuclei_in_cells(
         }
 
     for nuc_prop in nuc_props:
-        # Centroid is (row, col) = (y, x)
+        # Centroid kept for SAM2 point-based feature extraction
         cy, cx = nuc_prop.centroid
-        iy, ix = int(round(cy)), int(round(cx))
 
-        # Bounds check
-        if iy < 0 or iy >= cell_masks.shape[0] or ix < 0 or ix >= cell_masks.shape[1]:
-            continue
-
-        cell_label = cell_masks[iy, ix]
-        if cell_label == 0:
+        # Overlap-based assignment: find cell with most overlapping pixels
+        coords = nuc_prop.coords  # (N, 2) array of (row, col)
+        cell_labels_at_nuc = cell_masks[coords[:, 0], coords[:, 1]]
+        cell_labels_at_nuc = cell_labels_at_nuc[cell_labels_at_nuc > 0]
+        if len(cell_labels_at_nuc) == 0:
             continue  # nucleus not inside any cell
 
+        cell_label = int(np.bincount(cell_labels_at_nuc).argmax())
         if cell_label not in results:
             continue
 
