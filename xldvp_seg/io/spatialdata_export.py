@@ -84,8 +84,8 @@ VESSEL_FEATURES = [
 ]
 
 # Embedding prefixes -> obsm key
-# IMPORTANT: longer prefixes must come first (resnet_ctx_ before resnet_)
-# because matching uses startswith with break-on-first-match.
+# Iteration sorts by descending prefix length at use time (see _discover_features),
+# so dict insertion order does not matter.
 EMBEDDING_PREFIXES = {
     "sam2_": ("X_sam2", 256),
     "resnet_ctx_": ("X_resnet_ctx", 2048),

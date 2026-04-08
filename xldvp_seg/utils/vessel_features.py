@@ -357,11 +357,8 @@ def _compute_ring_completeness(
     - Small vessels might have overlapping samples (biasing toward positive)
     - Large vessels might have gaps in sampling (biasing toward negative)
     """
+    # pixel_size_um validated by caller (extract_vessel_features)
     if pixel_size_um is None:
-        logger.warning(
-            "pixel_size_um not provided — defaulting to 0.22 um/px. "
-            "Pass pixel_size explicitly for accurate measurements."
-        )
         pixel_size_um = 0.22
     try:
         outer_ellipse = cv2.fitEllipse(outer_contour)

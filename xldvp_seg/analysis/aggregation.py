@@ -128,8 +128,10 @@ def cohort_to_anndata(cohort_df, metadata=None):
     obs = pd.DataFrame(index=cohort_df.index)
     if "group" in cohort_df.columns:
         obs["group"] = cohort_df["group"].values
-    if "n_cells" in cohort_df.columns:
-        obs["n_cells"] = cohort_df["n_cells"].values
+    # Add excluded numeric columns (counts, metadata) to obs
+    for col in sorted(obs_numeric):
+        if col in cohort_df.columns:
+            obs[col] = cohort_df[col].values
     if metadata is not None:
         obs = obs.join(metadata, how="left")
 
