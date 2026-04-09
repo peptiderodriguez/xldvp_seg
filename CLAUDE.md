@@ -420,6 +420,10 @@ Never hardcode `device="cuda"`. Use from `xldvp_seg.utils.device`:
 - Bg-corrected data → include zeros (real signal)
 - Controlled via `_include_zeros` param on `MultiChannelFeatureMixin.extract_multichannel_features()`
 
+### Channel Ratios
+
+Inter-channel ratios (`ch{N}_{M}_ratio`, `channel_specificity`) use **median** intensities — robust to outlier pixels. Consistent across initial detection (`_compute_channel_ratios` in `mixins.py`) and background correction recomputation (`correct_all_channels` in `background.py`).
+
 ### JSON I/O
 
 Always use `atomic_json_dump()` from `xldvp_seg.utils.json_utils` — temp file + `os.replace()`, auto-sanitizes NaN/Inf, uses orjson when available. Use `fast_json_load()` for large detection JSON. No `indent=2` anywhere.

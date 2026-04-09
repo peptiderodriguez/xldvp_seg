@@ -39,6 +39,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 **Nuclear counting:**
 - Nuclear-to-cell assignment uses mask overlap instead of centroid lookup. Each nucleus is assigned to the cell with the most overlapping pixels, correctly handling peripheral nuclei in multinucleated cells (megakaryocytes, osteoclasts).
+- Per-nucleus `overlap_area_um2` (area within assigned cell) for correct N:C ratio; `area_um2` remains full nuclear area for ploidy. `nuclear_area_fraction` clamped ≤ 1.0.
+
+**Feature extraction:**
+- Inter-channel ratios (`ch{N}_{M}_ratio`, `channel_specificity`) now use median intensities instead of means — robust to outlier pixels (debris, membrane hotspots). Feature key names unchanged; trained classifiers should be retrained.
 
 **Security & deserialization:**
 - `torch.load()` uses `weights_only=True` in NMJ strategy and cell detector.
