@@ -215,7 +215,7 @@ class MultiChannelFeatureMixin:
             return {}
 
         features = {}
-        channel_means = {}
+        channel_medians = {}
 
         # Extract per-channel statistics
         for channel_name, channel_data in sorted(channels_dict.items()):
@@ -231,65 +231,64 @@ class MultiChannelFeatureMixin:
             )
             features.update(channel_stats)
 
-            # Store mean for ratio calculations
-            if f"{channel_name}_mean" in channel_stats:
-                channel_means[channel_name] = channel_stats[f"{channel_name}_mean"]
+            # Store median for ratio calculations (robust to outlier pixels)
+            if f"{channel_name}_median" in channel_stats:
+                channel_medians[channel_name] = channel_stats[f"{channel_name}_median"]
 
         # Compute inter-channel ratios if requested
-        if compute_ratios and len(channel_means) >= 2:
-            ratio_features = self._compute_channel_ratios(channel_means, primary_channel)
+        if compute_ratios and len(channel_medians) >= 2:
+            ratio_features = self._compute_channel_ratios(channel_medians, primary_channel)
             features.update(ratio_features)
 
         return features
 
     def _compute_channel_ratios(
-        self, channel_means: dict[str, float], primary_channel: str | None = None
+        self, channel_medians: dict[str, float], primary_channel: str | None = None
     ) -> dict[str, float]:
         """
-        Compute inter-channel ratios from mean intensities.
+        Compute inter-channel ratios from median intensities.
 
-        These ratios are critical for distinguishing biological signals from
-        autofluorescence. Real biological signals (e.g., NMJs stained with BTX)
-        should have high intensity in the target channel but low intensity in
-        non-specific channels like nuclear stain.
+        Uses medians rather than means for robustness to outlier pixels
+        (debris, membrane hotspots). These ratios distinguish biological
+        signals from autofluorescence.
 
         Args:
-            channel_means: Dictionary mapping channel names to mean intensities
+            channel_medians: Dictionary mapping channel names to median intensities
             primary_channel: Name of the primary signal channel for specificity
 
         Returns:
             Dictionary of ratio features
         """
         features = {}
-        channel_names = sorted(channel_means.keys())
+        channel_names = sorted(channel_medians.keys())
 
         # Compute pairwise ratios
         for i, ch_a in enumerate(channel_names):
             for ch_b in channel_names[i + 1 :]:
-                mean_a = channel_means[ch_a]
-                mean_b = channel_means[ch_b]
+                med_a = channel_medians[ch_a]
+                med_b = channel_medians[ch_b]
 
                 # Floor of 1.0 prevents division by zero and is appropriate for uint16
                 # fluorescence intensities (typical signal range: hundreds to thousands).
-                safe_mean_b = max(mean_b, 1.0)
-                safe_mean_a = max(mean_a, 1.0)
+                safe_b = max(med_b, 1.0)
+                safe_a = max(med_a, 1.0)
 
                 # a/b ratio and difference
-                features[f"{ch_a}_{ch_b}_ratio"] = mean_a / safe_mean_b
-                features[f"{ch_a}_{ch_b}_diff"] = mean_a - mean_b
+                features[f"{ch_a}_{ch_b}_ratio"] = med_a / safe_b
+                features[f"{ch_a}_{ch_b}_diff"] = med_a - med_b
 
                 # b/a ratio (reversed)
-                features[f"{ch_b}_{ch_a}_ratio"] = mean_b / safe_mean_a
+                features[f"{ch_b}_{ch_a}_ratio"] = med_b / safe_a
 
         # Channel specificity: primary vs max of other channels
-        if primary_channel is not None and primary_channel in channel_means:
-            primary_mean = channel_means[primary_channel]
-            other_means = [v for k, v in channel_means.items() if k != primary_channel]
+        if primary_channel is not None and primary_channel in channel_medians:
+            primary_med = channel_medians[primary_channel]
+            other_meds = [v for k, v in channel_medians.items() if k != primary_channel]
 
-            if other_means:
-                max_other = max(other_means)
-                features["channel_specificity"] = primary_mean / max(max_other, 1.0)
-                features["channel_specificity_diff"] = primary_mean - max_other
+            if other_meds:
+                max_other = max(other_meds)
+                features["channel_specificity"] = primary_med / max(max_other, 1.0)
+                features["channel_specificity_diff"] = primary_med - max_other
 
         return features
 
