@@ -88,6 +88,19 @@ For each channel N:
 
 The threshold used for each marker is stored in the summary dict returned by `classify_single_marker()`, not per-detection. Classification methods: `snr` (default, median-based SNR >= 1.5), `otsu` (automatic threshold), `otsu_half` (permissive), `gmm` (2-component Gaussian mixture with BIC model selection — automatically returns all-negative when data is unimodal).
 
+### Nuclear Counting Fields (in `features` sub-dict, with `--count-nuclei`)
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `n_nuclei` | int | Number of nuclei assigned to this cell (overlap-based) |
+| `nuclear_area_um2` | float | Total nuclear overlap area within cell (µm²) |
+| `nuclear_area_fraction` | float | Overlap area / cell area (N:C ratio, clamped ≤ 1.0) |
+| `largest_nucleus_um2` | float | Full area of largest nucleus (for ploidy estimation) |
+| `nuclear_solidity` | float | Mean solidity of nuclear objects |
+| `nuclear_eccentricity` | float | Mean eccentricity of nuclear objects |
+
+Per-nucleus details are in the top-level `nuclei` list. Each entry has `area_um2` (full nuclear area for ploidy), `overlap_area_um2` (area within assigned cell), `solidity`, `eccentricity`, `perimeter_um`, `mean_intensity`, and `centroid_local`.
+
 ### Differential Analysis Fields (from `OmicLinker.differential_features()`)
 
 | Field | Type | Description |
