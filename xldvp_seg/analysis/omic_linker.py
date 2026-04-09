@@ -312,6 +312,12 @@ class OmicLinker:
         if group_col not in df.columns and self._detections:
             df[group_col] = [d.get(group_col, "") for d in self._detections]
 
+        if group_col not in df.columns:
+            raise ConfigError(
+                f"Column '{group_col}' not found in features. "
+                f"Available: {sorted(df.columns[:20].tolist())}"
+            )
+
         mask_a = df[group_col] == group_a
         mask_b = df[group_col] == group_b
         numeric_cols = df.select_dtypes(include=[np.number]).columns

@@ -1,8 +1,8 @@
 """Count nuclei per cell using Cellpose on the nuclear channel.
 
 Runs Cellpose (cpsam model, single-channel mode) on the nuclear stain to segment
-individual nuclei, then spatial-joins nuclear centroids to cell masks to count
-how many nuclei fall inside each cell.
+individual nuclei, then assigns each nucleus to the cell mask with the most
+overlapping pixels and counts how many nuclei belong to each cell.
 
 Features produced per cell:
     n_nuclei             — number of nuclear objects inside cell mask
@@ -154,7 +154,10 @@ def count_nuclei_in_cells(
     cell with the most overlapping pixels. This correctly handles
     peripheral nuclei in large multinucleated cells (megakaryocytes,
     osteoclasts). When overlap is equal between cells, the lower cell
-    label is chosen.
+    label is chosen (np.unique sorts labels ascending, argmax picks the
+    first maximum). Per-nucleus ``area_um2`` is the full nuclear area
+    (for ploidy estimation); cell-level ``nuclear_area_um2`` and
+    ``nuclear_area_fraction`` use the overlap area within that cell.
     """
     if cell_masks.shape != nuclear_channel.shape:
         raise ValueError(
@@ -177,8 +180,8 @@ def count_nuclei_in_cells(
     # Filter by minimum area
     nuc_props = [p for p in nuc_props if p.area >= min_nuclear_area_px]
 
-    # --- Step 3: Assign each nucleus to a cell via centroid lookup ---
-    # For each nuclear centroid, check which cell label it falls inside
+    # --- Step 3: Assign each nucleus to a cell via mask overlap ---
+    # For each nucleus, find the cell with the most overlapping pixels
     cell_labels_in_image = set(np.unique(cell_masks)) - {0}
 
     # Initialize results for all cells
@@ -205,13 +208,19 @@ def count_nuclei_in_cells(
         if len(cell_labels_at_nuc) == 0:
             continue  # nucleus not inside any cell
 
-        cell_label = int(np.bincount(cell_labels_at_nuc).argmax())
+        unique_labels, counts = np.unique(cell_labels_at_nuc, return_counts=True)
+        best_idx = counts.argmax()
+        cell_label = int(unique_labels[best_idx])
+        overlap_px = int(counts[best_idx])
         if cell_label not in results:
             continue
 
         # Per-nucleus morphological features (always extracted)
+        # area_um2 = full nuclear area (for ploidy estimation)
+        # overlap_area_um2 = area within the assigned cell (for N:C ratio)
         nuc_feat = {
             "area_um2": round(nuc_prop.area * px2, 3),
+            "overlap_area_um2": round(overlap_px * px2, 3),
             "perimeter_um": round(nuc_prop.perimeter * pixel_size_um, 3),
             "solidity": round(float(nuc_prop.solidity), 4),
             "eccentricity": round(float(nuc_prop.eccentricity), 4),
@@ -251,9 +260,10 @@ def count_nuclei_in_cells(
     for cl, r in results.items():
         nuclei = r["nuclei"]
         if nuclei:
-            areas = [n["area_um2"] for n in nuclei]
-            r["nuclear_area_um2"] = round(sum(areas), 3)
-            r["largest_nucleus_um2"] = round(max(areas), 3)
+            full_areas = [n["area_um2"] for n in nuclei]
+            overlap_areas = [n.get("overlap_area_um2", n["area_um2"]) for n in nuclei]
+            r["nuclear_area_um2"] = round(sum(overlap_areas), 3)
+            r["largest_nucleus_um2"] = round(max(full_areas), 3)
             r["nuclear_solidity"] = round(float(np.mean([n["solidity"] for n in nuclei])), 4)
             r["nuclear_eccentricity"] = round(
                 float(np.mean([n["eccentricity"] for n in nuclei])), 4
@@ -261,7 +271,9 @@ def count_nuclei_in_cells(
 
             cell_area_um2 = cell_props.get(cl, 1) * px2
             if cell_area_um2 > 0:
-                r["nuclear_area_fraction"] = round(r["nuclear_area_um2"] / cell_area_um2, 4)
+                r["nuclear_area_fraction"] = round(
+                    min(r["nuclear_area_um2"] / cell_area_um2, 1.0), 4
+                )
 
     return results
 

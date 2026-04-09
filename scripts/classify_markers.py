@@ -336,8 +336,10 @@ def main():
     # to prevent double correction.  Pipeline post-dedup writes ch{N}_background keys.
     _pipeline_corrected = False
     if detections:
-        sample_feat = detections[0].get("features", {})
-        _pipeline_corrected = any(k.endswith("_background") for k in sample_feat)
+        _sample_keys: set[str] = set()
+        for d in detections[:10]:
+            _sample_keys.update(d.get("features", {}).keys())
+        _pipeline_corrected = any(k.endswith("_background") for k in _sample_keys)
     if _pipeline_corrected:
         if args.bg_subtract:
             logger.info(

@@ -8,7 +8,7 @@ After deduplication the surviving detections go through three phases:
     per channel from the **original** binary mask region.
 
 **Phase 2 — Background estimation** (global):
-    Build KD-tree from global cell positions and the quick means,
+    Build KD-tree from global cell positions and the quick medians,
     estimate per-cell local background for each channel.
 
 **Phase 3 — Intensity feature extraction on corrected pixels** (per-tile, parallelized):
@@ -448,8 +448,8 @@ def process_detections_post_dedup(
 
     Three-phase pipeline:
 
-    1. **Contour extraction + quick means** — extract original contours
-       from HDF5 masks, compute quick mean intensity per channel from
+    1. **Contour extraction + quick medians** — extract original contours
+       from HDF5 masks, compute quick median intensity per channel from
        the original mask region.
     2. **Background estimation** — KD-tree on global cell positions,
        estimate per-cell local background for each channel.
@@ -542,7 +542,7 @@ def process_detections_post_dedup(
     n_features_fail = 0
 
     # ==================================================================
-    # PHASE 1: Contour extraction + quick mean extraction (parallelized)
+    # PHASE 1: Contour extraction + quick median extraction (parallelized)
     # ==================================================================
     from concurrent.futures import ThreadPoolExecutor, as_completed
 
@@ -550,7 +550,7 @@ def process_detections_post_dedup(
 
     logger.info("-" * 40)
     logger.info(
-        "Phase 1: Contour extraction + quick mean extraction (%d workers)", effective_workers
+        "Phase 1: Contour extraction + quick median extraction (%d workers)", effective_workers
     )
 
     with ThreadPoolExecutor(max_workers=effective_workers) as pool:

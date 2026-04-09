@@ -4,6 +4,12 @@ import numpy as np
 from skimage.measure import regionprops
 
 
+def _majority_label(labels):
+    """Find the label with the most occurrences (matching production np.unique logic)."""
+    unique, counts = np.unique(labels, return_counts=True)
+    return int(unique[counts.argmax()])
+
+
 class TestOverlapAssignment:
     """Verify overlap-based nuclear-to-cell assignment logic."""
 
@@ -20,7 +26,7 @@ class TestOverlapAssignment:
         labels = cell_masks[coords[:, 0], coords[:, 1]]
         labels = labels[labels > 0]
         assert len(labels) == 16  # 4x4 block
-        assert int(np.bincount(labels).argmax()) == 1
+        assert int(_majority_label(labels)) == 1
 
     def test_nucleus_in_background_skipped(self):
         """Nucleus entirely in background produces empty overlap."""
@@ -51,7 +57,7 @@ class TestOverlapAssignment:
         coords = nuc_prop.coords
         labels = cell_masks[coords[:, 0], coords[:, 1]]
         labels = labels[labels > 0]
-        assert int(np.bincount(labels).argmax()) == 1  # cell 1 wins
+        assert int(_majority_label(labels)) == 1  # cell 1 wins
 
     def test_centroid_in_gap_but_overlap_captures_nucleus(self):
         """Nucleus whose centroid falls in a segmentation gap is still assigned."""
@@ -76,7 +82,7 @@ class TestOverlapAssignment:
         labels = cell_masks[coords[:, 0], coords[:, 1]]
         labels = labels[labels > 0]
         assert len(labels) > 0, "Overlap finds pixels despite centroid in gap"
-        assigned = int(np.bincount(labels).argmax())
+        assigned = int(_majority_label(labels))
         assert assigned in (1, 2)  # assigned to one of the cells
 
     def test_single_pixel_nucleus(self):
@@ -92,7 +98,7 @@ class TestOverlapAssignment:
         labels = cell_masks[coords[:, 0], coords[:, 1]]
         labels = labels[labels > 0]
         assert len(labels) == 1
-        assert int(np.bincount(labels).argmax()) == 1
+        assert int(_majority_label(labels)) == 1
 
     def test_multiple_cells_overlap(self):
         """Nucleus overlapping 3 cells is assigned to the one with most pixels."""
@@ -110,4 +116,26 @@ class TestOverlapAssignment:
         coords = nuc_prop.coords
         labels = cell_masks[coords[:, 0], coords[:, 1]]
         labels = labels[labels > 0]
-        assert int(np.bincount(labels).argmax()) == 2  # cell 2 has most overlap
+        assert int(_majority_label(labels)) == 2  # cell 2 has most overlap
+
+    def test_overlap_area_less_than_full_area(self):
+        """For boundary nuclei, overlap pixel count < total nuclear pixels."""
+        cell_masks = np.zeros((20, 20), dtype=np.int32)
+        cell_masks[0:10, :] = 1
+
+        # Nucleus: 6 rows total, 4 inside cell (6-9), 2 outside (10-11)
+        nuclear_masks = np.zeros((20, 20), dtype=np.int32)
+        nuclear_masks[6:12, 8:13] = 1  # 6 * 5 = 30 total pixels
+
+        nuc_prop = regionprops(nuclear_masks)[0]
+        coords = nuc_prop.coords
+        labels = cell_masks[coords[:, 0], coords[:, 1]]
+        labels_nonzero = labels[labels > 0]
+
+        unique, counts = np.unique(labels_nonzero, return_counts=True)
+        overlap_px = int(counts[counts.argmax()])
+        full_area = nuc_prop.area
+
+        assert overlap_px == 20  # 4 rows * 5 cols inside cell
+        assert full_area == 30  # 6 rows * 5 cols total
+        assert overlap_px < full_area  # overlap < full (boundary nucleus)

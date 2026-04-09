@@ -66,8 +66,14 @@ def main():
     logger.info(f"Loaded {len(detections):,} detections")
 
     # Load classifier
+    from xldvp_seg.exceptions import DataLoadError
+
     logger.info(f"Loading classifier from {clf_path}...")
-    clf_data = load_rf_classifier(str(clf_path))
+    try:
+        clf_data = load_rf_classifier(str(clf_path))
+    except DataLoadError as e:
+        logger.error(str(e))
+        sys.exit(1)
     pipeline = clf_data["pipeline"]
     feature_names = clf_data["feature_names"]
     logger.info(f"Classifier has {len(feature_names)} features")
