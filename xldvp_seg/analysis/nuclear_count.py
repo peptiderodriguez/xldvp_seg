@@ -5,14 +5,15 @@ individual nuclei, then assigns each nucleus to the cell mask with the most
 overlapping pixels and counts how many nuclei belong to each cell.
 
 Features produced per cell:
-    n_nuclei             — number of nuclear objects inside cell mask
-    nuclear_area_um2     — total nuclear area in µm²
-    nuclear_area_fraction — nuclear area / cell area (N:C ratio by area)
-    largest_nucleus_um2  — area of the largest nucleus
+    n_nuclei             — number of nuclear objects assigned to this cell
+    nuclear_area_um2     — total nuclear overlap area within cell (µm²)
+    nuclear_area_fraction — overlap area / cell area (N:C ratio, clamped ≤1.0)
+    largest_nucleus_um2  — full area of the largest nucleus (for ploidy)
     nuclear_solidity     — mean solidity of nuclear objects (1.0 = convex)
     nuclear_eccentricity — mean eccentricity of nuclear objects
     nuclei               — list of per-nucleus feature dicts:
-        [{"area_um2", "solidity", "eccentricity", "perimeter_um",
+        [{"area_um2" (full), "overlap_area_um2" (within cell),
+          "solidity", "eccentricity", "perimeter_um",
           "major_axis_um", "minor_axis_um", "mean_intensity",
           "centroid_local": [x, y]}, ...]
 
