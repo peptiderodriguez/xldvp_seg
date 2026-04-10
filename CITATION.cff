@@ -1,0 +1,19 @@
+cff-version: 1.2.0
+message: "If you use this software, please cite it as below."
+type: software
+title: "xldvp_seg: Spatial Cell Segmentation and Deep Visual Proteomics Pipeline"
+version: 2.0.0
+date-released: 2026-03-25
+url: "https://github.com/peptiderodriguez/xldvp_seg"
+repository-code: "https://github.com/peptiderodriguez/xldvp_seg"
+license: MIT
+authors:
+  - family-names: Rodriguez
+    given-names: Edwin
+    affiliation: "Max Planck Institute of Biochemistry"
+keywords:
+  - deep visual proteomics
+  - cell segmentation
+  - laser microdissection
+  - spatial proteomics
+  - fluorescence microscopy

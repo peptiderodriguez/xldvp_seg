@@ -343,6 +343,8 @@ class OmicLinker:
                 cohens_d = 0.0
             else:
                 cohens_d = mean_diff / np.sqrt(pooled_var)
+            # Cap at ±10: prevents artifacts from near-zero variance;
+            # d=10 (10σ) exceeds any plausible biological effect size.
             cohens_d = float(np.clip(cohens_d, -10.0, 10.0))
             results.append(
                 {
@@ -413,19 +415,42 @@ class OmicLinker:
         if not return_pvalues:
             return corr_df
 
-        # Compute p-values pairwise (matching corr()'s pairwise-complete behavior)
         from scipy.stats import pearsonr, spearmanr
 
         corr_func = spearmanr if method == "spearman" else pearsonr
-        pval_df = pd.DataFrame(index=morph_features, columns=proteins, dtype=float)
-        for mf in morph_features:
-            for prot in proteins:
-                vals = self._linked[[mf, prot]].dropna()
-                if len(vals) < 5:
-                    pval_df.loc[mf, prot] = np.nan
-                else:
-                    _, p = corr_func(vals[mf], vals[prot])
-                    pval_df.loc[mf, prot] = p
+
+        # Fast path: no NaN → single scipy call for full p-value matrix
+        subset = self._linked[all_cols].dropna()
+        if len(subset) >= 5 and len(subset) == len(self._linked):
+            _, pval_full = (
+                spearmanr(subset[all_cols].values)
+                if method == "spearman"
+                else (None, None)  # pearsonr doesn't support matrix input
+            )
+            if pval_full is not None:
+                pval_full_df = pd.DataFrame(pval_full, index=all_cols, columns=all_cols)
+                pval_df = pval_full_df.loc[morph_features, proteins].astype(float)
+            else:
+                # Fall through to slow path for pearsonr
+                pval_df = None
+        else:
+            pval_df = None
+
+        # Slow path: per-pair with NaN handling + pre-filter on |r| > 0.2
+        if pval_df is None:
+            pval_df = pd.DataFrame(index=morph_features, columns=proteins, dtype=float)
+            for mf in morph_features:
+                for prot in proteins:
+                    # Skip weak correlations — p-value is meaningless
+                    if abs(corr_df.loc[mf, prot]) < 0.2:
+                        pval_df.loc[mf, prot] = 1.0
+                        continue
+                    vals = self._linked[[mf, prot]].dropna()
+                    if len(vals) < 5:
+                        pval_df.loc[mf, prot] = np.nan
+                    else:
+                        _, p = corr_func(vals[mf], vals[prot])
+                        pval_df.loc[mf, prot] = p
 
         if fdr_correct:
             from statsmodels.stats.multitest import multipletests

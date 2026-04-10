@@ -171,6 +171,8 @@ def classify_gmm(
     # BIC model selection: prefer 1-component if data is unimodal
     gmm1 = GaussianMixture(n_components=1, random_state=42).fit(log_vals)
     gmm2 = GaussianMixture(n_components=2, random_state=42, max_iter=200).fit(log_vals)
+    # BIC delta of 6 ≈ "strong" evidence on the Kass & Raftery (1995) scale
+    # (JASA 90:773-795). Balances false negatives vs false positives.
     if gmm1.bic(log_vals) - gmm2.bic(log_vals) < 6:
         logger.info(
             "BIC does not strongly favor 2 components (delta=%.1f < 6). Returning all-negative.",

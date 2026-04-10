@@ -45,6 +45,17 @@ xlseg detect --czi-path slide.czi --cell-type cell \
 xlseg serve output/             # View results in browser
 ```
 
+### Try the API without data
+
+```python
+from xldvp_seg.datasets import sample
+from xldvp_seg.core import SlideAnalysis
+
+slide = SlideAnalysis.from_detections(sample()["detections"])
+print(f"{slide.n_detections} synthetic detections")
+adata = slide.to_anndata()  # AnnData ready for scanpy
+```
+
 ---
 
 ## Claude Code Integration

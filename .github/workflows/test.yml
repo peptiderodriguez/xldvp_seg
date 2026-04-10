@@ -46,7 +46,7 @@ jobs:
           pip install -e ".[dev]" 2>/dev/null || true
       - name: Run tests with coverage
         run: |
-          pytest tests/ -v --tb=short -m "not integration" \
+          pytest tests/ -v --tb=short \
             --cov=xldvp_seg --cov-report=xml --cov-report=term-missing
         env:
           PYTHONPATH: .
