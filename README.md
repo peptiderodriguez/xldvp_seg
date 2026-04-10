@@ -385,6 +385,17 @@ make format                 # Auto-fix formatting
 
 If you use this pipeline, please cite:
 
+```bibtex
+@software{rodriguez2026xldvp,
+  title = {xldvp_seg: Spatial Cell Segmentation and Deep Visual Proteomics Pipeline},
+  author = {Rodriguez, Edwin},
+  year = {2026},
+  url = {https://github.com/peptiderodriguez/xldvp_seg},
+  version = {2.0.0}
+}
+```
+
+Also cite the underlying methods:
 - [SAM2](https://github.com/facebookresearch/segment-anything-2) — Segment Anything Model 2 (Meta AI)
 - [Cellpose](https://github.com/MouseLand/cellpose) — Cell segmentation (Stringer et al.)
 
