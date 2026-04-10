@@ -329,6 +329,16 @@ class OmicLinker:
             if len(vals_a) < 3 or len(vals_b) < 3:
                 continue
             if test == "mannwhitneyu":
+                combined = np.concatenate([vals_a.values, vals_b.values])
+                n_unique = len(np.unique(combined))
+                tie_frac = 1.0 - n_unique / len(combined)
+                if tie_frac > 0.3:
+                    logger.warning(
+                        "Feature '%s' has %.0f%% tied values. Mann-Whitney U p-value "
+                        "may be inaccurate for highly discrete features.",
+                        col,
+                        100 * tie_frac,
+                    )
                 stat, pval = stats.mannwhitneyu(vals_a, vals_b, alternative="two-sided")
             else:
                 stat, pval = stats.ttest_ind(vals_a, vals_b)

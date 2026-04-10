@@ -307,7 +307,7 @@ def correct_all_channels(
                     feat = det.setdefault("features", {})
                     a = channel_corrected_median[ch_a][i]
                     b = channel_corrected_median[ch_b][i]
-                    feat[ratio_key] = float(a / b) if b > 0 else 0.0
+                    feat[ratio_key] = float(a / max(b, 1.0))
             if diff_key in sample_keys:
                 for i, det in enumerate(detections):
                     feat = det.setdefault("features", {})

@@ -266,3 +266,82 @@ class TestLoadProteomicsReport:
             assert "PROT1" in linked.columns
             assert "area" in linked.columns
             assert len(linked) == 2
+
+
+class TestOmicLinkerCorrelateAndRank:
+    """Tests for correlate() and rank_proteins()."""
+
+    def _make_linked_linker(self):
+        """Create a linker with linked data (detections + proteomics)."""
+        rng = np.random.default_rng(42)
+        dets = []
+        for w in range(6):
+            for c in range(7):  # ~7 cells per well = 42 total
+                dets.append(
+                    {
+                        "uid": f"cell_{w}_{c}",
+                        "well": f"W{w+1}",
+                        "global_center_um": [
+                            float(rng.uniform(0, 1000)),
+                            float(rng.uniform(0, 1000)),
+                        ],
+                        "features": {
+                            "area": float(rng.normal(100, 10)),
+                            "circularity": float(rng.normal(0.7, 0.1)),
+                            "ch0_median": float(rng.normal(500, 50)),
+                        },
+                    }
+                )
+        # Create matching proteomics (6 wells x 5 proteins — need >=5 for min_periods)
+        prot_df = pd.DataFrame(
+            rng.normal(10, 2, (6, 5)),
+            index=[f"W{i+1}" for i in range(6)],
+            columns=[f"PROT{i}" for i in range(5)],
+        )
+        linker = OmicLinker.from_detections(dets)
+        linker._proteomics = prot_df
+        linker._well_mapping = {d["uid"]: d["well"] for d in dets}
+        linker.link()
+        return linker
+
+    def test_correlate_returns_dataframe(self):
+        linker = self._make_linked_linker()
+        corr = linker.correlate()
+        assert isinstance(corr, pd.DataFrame)
+        assert corr.shape[1] == 5  # 5 proteins
+
+    def test_correlate_with_pvalues(self):
+        linker = self._make_linked_linker()
+        corr, pvals = linker.correlate(return_pvalues=True)
+        assert isinstance(pvals, pd.DataFrame)
+        assert corr.shape == pvals.shape
+        # FDR-corrected by default — p-values should be valid DataFrames
+        corr2, pvals_raw = linker.correlate(return_pvalues=True, fdr_correct=False)
+        assert not pvals_raw.isna().all().all()
+
+    def test_correlate_fdr_correct_false(self):
+        linker = self._make_linked_linker()
+        corr, pvals = linker.correlate(return_pvalues=True, fdr_correct=False)
+        assert isinstance(pvals, pd.DataFrame)
+
+    def test_rank_proteins_default_sort(self):
+        linker = self._make_linked_linker()
+        result = linker.rank_proteins("area", top_n=3)
+        assert len(result) <= 3
+        if len(result) > 1:
+            # Default sort: correlation descending
+            assert result.iloc[0]["correlation"] >= result.iloc[1]["correlation"]
+
+    def test_rank_proteins_sort_by_p_adjusted(self):
+        linker = self._make_linked_linker()
+        result = linker.rank_proteins("area", sort_by="p_adjusted")
+        if len(result) > 1:
+            assert result.iloc[0]["p_adjusted"] <= result.iloc[1]["p_adjusted"]
+
+    def test_rank_proteins_empty(self):
+        """Sparse data with <5 observations per protein returns empty."""
+        linker = self._make_linked_linker()
+        # Truncate linked data to fewer than 5 rows so spearmanr is skipped
+        linker._linked = linker._linked.head(1)
+        result = linker.rank_proteins("area")
+        assert len(result) == 0

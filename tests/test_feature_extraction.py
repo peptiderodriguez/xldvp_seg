@@ -930,6 +930,57 @@ class TestCreateResNetTransform(unittest.TestCase):
         self.assertIsInstance(output, torch.Tensor)
 
 
+class TestComputeChannelRatios(unittest.TestCase):
+    """Tests for MultiChannelFeatureMixin._compute_channel_ratios."""
+
+    def _get_mixin(self):
+        from xldvp_seg.detection.strategies.mixins import MultiChannelFeatureMixin
+
+        class _Mixin(MultiChannelFeatureMixin):
+            pass
+
+        return _Mixin()
+
+    def test_normal_two_channels(self):
+        mixin = self._get_mixin()
+        result = mixin._compute_channel_ratios({"ch0": 100.0, "ch1": 50.0})
+        self.assertIn("ch0_ch1_ratio", result)
+        self.assertAlmostEqual(result["ch0_ch1_ratio"], 2.0)
+        self.assertIn("ch1_ch0_ratio", result)
+        self.assertAlmostEqual(result["ch1_ch0_ratio"], 0.5)
+
+    def test_zero_median_floored(self):
+        mixin = self._get_mixin()
+        result = mixin._compute_channel_ratios({"ch0": 100.0, "ch1": 0.0})
+        # safe_b = max(0.0, 1.0) = 1.0, so ch0/ch1 = 100.0 / 1.0 = 100.0
+        self.assertAlmostEqual(result["ch0_ch1_ratio"], 100.0)
+        # safe_a = max(100.0, 1.0) = 100.0, so ch1/ch0 = 0.0 / 100.0 = 0.0
+        self.assertAlmostEqual(result["ch1_ch0_ratio"], 0.0)
+
+    def test_difference_feature(self):
+        mixin = self._get_mixin()
+        result = mixin._compute_channel_ratios({"ch0": 100.0, "ch1": 50.0})
+        self.assertIn("ch0_ch1_diff", result)
+        self.assertAlmostEqual(result["ch0_ch1_diff"], 50.0)
+
+    def test_channel_specificity(self):
+        mixin = self._get_mixin()
+        result = mixin._compute_channel_ratios(
+            {"ch0": 100.0, "ch1": 20.0, "ch2": 30.0},
+            primary_channel="ch0",
+        )
+        self.assertIn("channel_specificity", result)
+        # primary / max(other) = 100.0 / 30.0
+        self.assertAlmostEqual(result["channel_specificity"], 100.0 / 30.0)
+        self.assertIn("channel_specificity_diff", result)
+        self.assertAlmostEqual(result["channel_specificity_diff"], 70.0)
+
+    def test_single_channel_no_ratios(self):
+        mixin = self._get_mixin()
+        result = mixin._compute_channel_ratios({"ch0": 100.0})
+        self.assertEqual(len(result), 0)  # no pairwise ratios possible
+
+
 if __name__ == "__main__":
     # Run tests
     unittest.main(verbosity=2)

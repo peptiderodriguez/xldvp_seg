@@ -137,6 +137,17 @@ if [ -n "$_unknown_keys" ]; then
 fi
 
 # ---------------------------------------------------------------------------
+# Validate YAML values against shell injection
+# ---------------------------------------------------------------------------
+validate_yaml_value() {
+    local val="$1" name="$2"
+    if [[ "$val" =~ [\`\$\(\)\;\|\&\>\<\!\\] ]] || [[ "$val" == *$'\n'* ]]; then
+        echo "ERROR: Unsafe character in $name. Aborting." >&2
+        exit 1
+    fi
+}
+
+# ---------------------------------------------------------------------------
 # Read config values
 # ---------------------------------------------------------------------------
 NAME=$(read_yaml name pipeline)
@@ -298,6 +309,65 @@ if [[ "$SPATIAL_ENABLED" == "true" && -z "$PIXEL_SIZE" ]]; then
 fi
 
 # ---------------------------------------------------------------------------
+# Validate all YAML-sourced values that are interpolated into shell commands
+# ---------------------------------------------------------------------------
+# Core pipeline values
+validate_yaml_value "$NAME" "name"
+validate_yaml_value "$CZI_PATH" "czi_path"
+validate_yaml_value "$CZI_DIR" "czi_dir"
+validate_yaml_value "$CZI_GLOB" "czi_glob"
+validate_yaml_value "$OUTPUT_DIR" "output_dir"
+validate_yaml_value "$CELL_TYPE" "cell_type"
+validate_yaml_value "$CP_CHANNELS" "cellpose_input_channels"
+validate_yaml_value "$LOAD_CHANNELS" "load_channels"
+validate_yaml_value "$NUM_GPUS" "num_gpus"
+validate_yaml_value "$MIN_AREA" "min_area_um"
+validate_yaml_value "$MAX_AREA" "max_area_um"
+validate_yaml_value "$SAMPLE_FRACTION" "sample_fraction"
+validate_yaml_value "$HTML_SAMPLE_FRACTION" "html_sample_fraction"
+validate_yaml_value "$CHANNEL_SPEC" "channel_map"
+validate_yaml_value "$RESUME_DIR" "resume_dir"
+validate_yaml_value "$MARKER_SNR_CHANNELS" "marker_snr_channels"
+
+# Post-dedup processing
+validate_yaml_value "$DILATION_UM" "dilation_um"
+validate_yaml_value "$RDP_EPSILON" "rdp_epsilon"
+validate_yaml_value "$BG_NEIGHBORS" "bg_neighbors"
+validate_yaml_value "$DEDUP_METHOD" "dedup_method"
+validate_yaml_value "$IOU_THRESHOLD" "iou_threshold"
+
+# SLURM settings
+validate_yaml_value "$PARTITION" "slurm.partition"
+validate_yaml_value "$CPUS" "slurm.cpus"
+validate_yaml_value "$MEM_GB" "slurm.mem_gb"
+validate_yaml_value "$GPUS" "slurm.gpus"
+validate_yaml_value "$TIME" "slurm.time"
+
+# Spatial network
+validate_yaml_value "$SPATIAL_FILTER" "spatial_network.marker_filter"
+validate_yaml_value "$SPATIAL_EDGE" "spatial_network.max_edge_distance"
+validate_yaml_value "$SPATIAL_MIN_COMP" "spatial_network.min_component_cells"
+validate_yaml_value "$PIXEL_SIZE" "pixel_size_um"
+
+# SpatialData
+validate_yaml_value "$SPATIALDATA_CLUSTER_KEY" "spatialdata.squidpy_cluster_key"
+
+# Spatial viewer
+validate_yaml_value "$VIEWER_GROUP_FIELD" "spatial_viewer.group_field"
+validate_yaml_value "$VIEWER_TITLE" "spatial_viewer.title"
+
+# Downstream steps
+validate_yaml_value "$DS_QF_MIN_AREA" "downstream.quality_filter.min_area_um2"
+validate_yaml_value "$DS_QF_MAX_AREA" "downstream.quality_filter.max_area_um2"
+validate_yaml_value "$DS_QF_MIN_SOLIDITY" "downstream.quality_filter.min_solidity"
+validate_yaml_value "$DS_NUC_CHANNEL_SPEC" "downstream.nuclei.channel_spec"
+validate_yaml_value "$DS_HTML_MAX_SAMPLES" "downstream.annotation_html.max_samples"
+validate_yaml_value "$DS_HTML_DISPLAY_CHANNELS" "downstream.annotation_html.display_channels"
+validate_yaml_value "$DS_CLUSTERING_FEATURES" "downstream.clustering.feature_groups"
+validate_yaml_value "$DS_CLUSTERING_METHODS" "downstream.clustering.methods"
+validate_yaml_value "$DS_CLUSTERING_RESOLUTION" "downstream.clustering.resolution"
+
+# ---------------------------------------------------------------------------
 # Determine multi-slide vs single-slide mode
 # ---------------------------------------------------------------------------
 MULTI_SLIDE=false
@@ -445,6 +515,11 @@ if [[ -n "$MARKERS_JSON" && "$MARKERS_JSON" != "[]" ]]; then
         exit 1
     fi
 fi
+
+# Validate marker values (parsed from markers JSON list)
+validate_yaml_value "$MARKER_CHANNELS" "markers[].channel/wavelength"
+validate_yaml_value "$MARKER_NAMES" "markers[].name"
+validate_yaml_value "$MARKER_METHOD" "markers[].method"
 
 # ---------------------------------------------------------------------------
 # Pre-compute work items: (czi_path, output_dir, scene)
