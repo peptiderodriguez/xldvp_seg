@@ -138,6 +138,7 @@ For beginners, expand on each step as you reach it. For advanced users, just ask
 | **Omic linking** | Bridge morphological features to mass-spec proteomics data | `xldvp_seg.analysis.omic_linker.OmicLinker` |
 | **Model download** | Download brightfield FMs (UNI2, Virchow2, CONCH, Phikon-v2) | `xlseg download-models --brightfield` |
 | **One-command** | Classify → spatial cluster → viewer → serve (all in one) | `scripts/view_slide.py` |
+| **Block-face registration** | Register gross tissue photo to fluorescence, recursive SAM2 organ segmentation, organ-specific LMD | VALIS + SAM2 (see `docs/BLOCKFACE_REGISTRATION.md`) |
 | **ROI detection** | Islet regions, TMA cores, bone marrow areas → per-ROI cell detection | `examples/islet/segment_islet_regions.py`, `examples/tma/detect_tma_cells.py` |
 
 **Cell-type-specific scripts** (mention ONLY when relevant to the user's actual cell type — don't list all of these):

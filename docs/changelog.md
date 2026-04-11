@@ -9,6 +9,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Block-face registration workflow**: register gross tissue photos (phone, dissection scope) to fluorescence CZI via VALIS 2-pass nonrigid registration. Recursive SAM2 auto-segments anatomical regions with area-scaled point density. Per-region UMAP and organ-specific LMD export. See `docs/BLOCKFACE_REGISTRATION.md`.
 - `_js_esc()` function in `html_utils.py` for safe JavaScript string escaping (separate from `_esc()` for HTML context). All JS `const` assignments across `html_generator.py`, `html_batch_export.py`, `html_export.py`, and `html_scripts.py` now use `_js_esc()`.
 - `classify_gmm()` now performs BIC-based model selection (1 vs 2 components) — returns all-negative for unimodal data instead of forcing a 2-component fit. Configurable `posterior_threshold` parameter.
 - `classify_otsu()` and `classify_otsu_half()` gain `include_zeros` parameter for background-corrected data where zeros represent genuine signal.

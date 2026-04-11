@@ -250,6 +250,7 @@ For rare large cells (e.g., MKs), single-cell-per-well is sometimes feasible —
 | Quality filter | `scripts/quality_filter_detections.py` | Heuristic filter (no annotation needed) |
 | One-command viz | `scripts/view_slide.py` | Classify → cluster → viewer → serve |
 | ROI detection | `examples/islet/`, `examples/tma/` | Pre-detection: find ROIs → detect within ROIs only. Post-detection: draw ROIs in viewer → filter/export selected cells |
+| Block-face registration | VALIS + SAM2 | Register gross tissue photo to fluorescence CZI, auto-segment organs with recursive SAM2, assign detections to anatomical regions for organ-specific LMD. See `docs/BLOCKFACE_REGISTRATION.md` |
 
 See `examples/` for experiment-specific analyses (bone marrow, liver zonation, islets, TMA, vessels, NMJ, mesothelium).
 

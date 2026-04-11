@@ -291,6 +291,7 @@ Use `/analyze` for the full interactive catalog. Key scripts beyond detect → c
 - **Nuclear counting**: integrated via `--count-nuclei` (default ON), or standalone `count_nuclei_per_cell.py` for existing runs
 - **SpatialData**: auto-exported as `{celltype}_spatialdata.zarr` every run. `--run-squidpy` for spatial stats.
 - **OME-Zarr**: auto-generated from SHM. `--no-zarr` to skip, `--force-zarr` to overwrite.
+- **Block-face registration**: Register gross tissue photo (phone, dissection scope) to fluorescence CZI via VALIS (2-pass nonrigid+rigid). Recursive SAM2 auto-segments organs with area-scaled point density. See `docs/BLOCKFACE_REGISTRATION.md`.
 
 ---
 
