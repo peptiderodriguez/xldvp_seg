@@ -1,5 +1,39 @@
 # Block-Face Registration & Organ Segmentation
 
+## Recommended: Fluorescence-Native Segmentation
+
+For slides where the fluorescence channels provide sufficient tissue contrast (Hoechst, PM, marker channels), **SAM2 can segment regions directly on fluorescence thumbnails** without any cross-modal registration. This is simpler, faster, and avoids all registration artifacts.
+
+```bash
+# 1. Segment regions (point density series, parallel SLURM)
+python scripts/segment_regions.py \
+    --czi-path slide.czi --display-channels "4,2" \
+    --points-series 32,64,128,256,512 \
+    --fill --fill-interstitial \
+    --slurm --partition p.hpcl93 --mem 556G --time 1-00:00:00 \
+    --viewer-after --output-dir regions/
+
+# 2. Pick the best density, assign cells
+python scripts/assign_cells_to_regions.py \
+    --detections cell_detections.json \
+    --label-map regions/labels_4_2_pts64_filled.npy \
+    --czi-path slide.czi \
+    --output cell_detections_with_regions.json
+
+# 3. Generate viewer with nuclear stats
+python scripts/generate_region_viewer.py \
+    --label-maps regions/labels_4_2_pts64_filled.npy \
+    --czi-path slide.czi --display-channels "4" \
+    --nuc-stats regions/region_nuc_stats.json \
+    --min-cells 1000 --output viewer.html
+```
+
+The block-face registration workflow below is only needed when fluorescence channels lack organ-level contrast (rare — Hoechst alone usually suffices).
+
+---
+
+## Block-Face Registration (when fluorescence contrast is insufficient)
+
 Register a gross tissue photo (phone, dissection scope) to a fluorescence CZI, segment anatomical regions in the fluorescence coordinate frame, and assign detections to organs for organ-specific LMD export.
 
 This is the **protocol as it actually works** — earlier attempts (warping label images through VALIS, warping contour points, direct ANTs/MONAI without pre-alignment) did not survive contact with real data. See "Why this order" at the bottom for what was tried and why it was abandoned.

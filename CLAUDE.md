@@ -271,7 +271,7 @@ PYTHONPATH=$REPO $XLDVP_PYTHON $REPO/scripts/classify_markers.py \
 
 ### Phase 5: Spatial Analysis & Exploration
 
-See **Available Analyses** section below for the full catalog. Vessel analysis via `segment_vessel_lumens.py` (SAM2 lumen-first at 4 OME-Zarr scales) or `detect_vessel_structures.py` (graph topology from marker+ cells).
+See **Available Analyses** section below for the full catalog. Vessel analysis via `detect_vessel_lumens_threshold.py` (Gaussian local-mean threshold + watershed on OME-Zarr, marker validation, inline features, RF scoring), `segment_vessel_lumens.py` (SAM2 lumen-first at 4 OME-Zarr scales), or `detect_vessel_structures.py` (graph topology from marker+ cells).
 
 ### Phase 6: LMD Export
 
@@ -283,8 +283,9 @@ Place 3 reference crosses in Napari (`napari_place_crosses.py`), then export XML
 
 Use `/analyze` for the full interactive catalog. Key scripts beyond detect → classify → LMD:
 
+- **Region segmentation**: `segment_regions.py` (SAM2 auto-mask on fluorescence thumbnails → tissue regions; supports `--points-series` for parallel SLURM density sweep; core: `xldvp_seg.analysis.region_segmentation`), `assign_cells_to_regions.py` (map detected cells to regions via label-map lookup), `generate_region_viewer.py` (interactive HTML with per-region nuclear stats, pan/zoom, thickness slider, PNG export; single-layer or multi-layer comparison; core: `xldvp_seg.visualization.region_viewer`)
 - **Spatial**: `spatial_cell_analysis.py` (Delaunay networks; core: `xldvp_seg.analysis.spatial_network`), `cluster_by_features.py` (UMAP/t-SNE + Leiden; core: `xldvp_seg.analysis.cluster_features`), `generate_multi_slide_spatial_viewer.py` (interactive HTML viewer with fluorescence background + contours + ROI), `generate_contour_viewer.py` (contour overlays on CZI fluorescence with pan/zoom, group toggling, click-to-inspect metadata; core: `xldvp_seg.visualization`)
-- **Vessel**: `segment_vessel_lumens.py` (SAM2 lumen-first: OME-Zarr multi-scale → dark-lumen detection → marker-cell validation → vessel typing), `detect_vessel_structures.py` (graph topology: ring/arc/strip from marker+ cells), `vessel_community_analysis.py` (multi-scale + SNR). Shared characterization: `xldvp_seg.analysis.vessel_characterization`
+- **Vessel**: `detect_vessel_lumens_threshold.py` (Gaussian local-mean threshold + seeded watershed on OME-Zarr pyramids, `--marker-classes` for generic marker validation, inline morph+channel features, RF scoring; see memory notes for full 9-step reproducible pipeline), `assign_vessel_wall_cells.py` (per-marker KD-tree wall cell assignment, brightest-first UIDs for LMD, replicate counting), `segment_vessel_lumens.py` (SAM2 lumen-first: OME-Zarr multi-scale → dark-lumen detection → marker-cell validation → vessel typing), `detect_vessel_structures.py` (graph topology: ring/arc/strip from marker+ cells), `vessel_community_analysis.py` (multi-scale + SNR). Shared characterization: `xldvp_seg.analysis.vessel_characterization`
 - **Curvilinear**: `detect_curvilinear_patterns.py` (KD-tree graph → linearity → strip/ribbon detection; core: `xldvp_seg.analysis.pattern_detection`)
 - **Markers**: `classify_markers.py` (median SNR / Otsu / GMM; core: `xldvp_seg.analysis.marker_classification`)
 - **LMD sampling**: `sliding_window_sampling.py` (core: `xldvp_seg.analysis.sliding_window_sampling`), `paper_figure_sampling.py`, `select_transect_cells_for_lmd.py`, `cluster_detections.py`
@@ -386,10 +387,11 @@ Post-detection analysis functions promoted from scripts/ into the package for cl
 | `nuclear_count.py` | Cellpose-based nuclear segmentation within cells (overlap-based assignment) |
 | `omic_linker.py` | Morphology-to-proteomics bridge (DVP linking). Supports dvp-io for direct search engine report parsing (AlphaDIA, DIANN, MaxQuant, Spectronaut, etc.) |
 | `vessel_characterization.py` | Shared vessel analysis: marker composition, spatial layering, vessel typing, lumen/wall morphometry |
+| `region_segmentation.py` | SAM2-based tissue region segmentation: tissue masking, label cleaning (min area + tissue overlap), gap filling (`expand_labels` + interstitial hole detection), per-region nuclear stats |
 
 ### Visualization Package (`xldvp_seg/visualization/`)
 
-8 modules + 17 JS components for reusable HTML visualization. Key: `fluorescence.py` (CZI thumbnails), `colors.py` (palettes), `encoding.py` (base64, `safe_json`, contour data), `data_loading.py` (JSON streaming, `compute_auto_eps`), `js_loader.py` (`load_js()` for composable Canvas 2D components).
+9 modules + 18 JS components for reusable HTML visualization. Key: `fluorescence.py` (CZI thumbnails), `colors.py` (palettes), `encoding.py` (base64, `safe_json`, contour data), `data_loading.py` (JSON streaming, `compute_auto_eps`), `js_loader.py` (`load_js()` for composable Canvas 2D components), `region_viewer.py` (interactive region viewer with nuclear stats, single-layer or multi-layer comparison).
 
 ### HTML Export (`xldvp_seg/io/`)
 
@@ -591,6 +593,6 @@ Scanpy-style wrappers for notebook and programmatic use. All operate on `SlideAn
 
 **Core:** `run_segmentation.py` (detection), `run_lmd_export.py` (LMD XML), `train_classifier.py` (RF), `serve_html.py` (viewer). SLURM: `scripts/run_pipeline.sh` (YAML-driven launcher). **CLI:** `xlseg` with 13 subcommands (info, detect, classify, cluster, markers, score, qc, export-lmd, serve, system, models, strategies, download-models).
 
-**Scripts (`scripts/`):** 31 reusable tools — `ls scripts/` for full list. Key: `czi_info.py`, `classify_markers.py`, `apply_classifier.py`, `regenerate_html.py`, `generate_multi_slide_spatial_viewer.py`, `generate_contour_viewer.py`, `detect_vessel_structures.py`, `segment_vessel_lumens.py`, `count_nuclei_per_cell.py`, `sliding_window_sampling.py`. Core logic of 6 promoted scripts now lives in `xldvp_seg/analysis/` for programmatic access (scripts delegate to package modules).
+**Scripts (`scripts/`):** 33 reusable tools — `ls scripts/` for full list. Key: `czi_info.py`, `classify_markers.py`, `apply_classifier.py`, `regenerate_html.py`, `generate_multi_slide_spatial_viewer.py`, `generate_contour_viewer.py`, `detect_vessel_lumens_threshold.py`, `assign_vessel_wall_cells.py`, `detect_vessel_structures.py`, `segment_vessel_lumens.py`, `count_nuclei_per_cell.py`, `sliding_window_sampling.py`. Core logic of 6 promoted scripts now lives in `xldvp_seg/analysis/` for programmatic access (scripts delegate to package modules).
 
 **Examples (`examples/`):** Project-specific scripts by experiment — `bone_marrow/`, `mesothelium/`, `islet/`, `tma/`, `liver/`, `nmj/`, `vessel/`, `tissue_pattern/`, `configs/` (YAML templates).
