@@ -147,6 +147,7 @@ def load_contours(
     pixel_size_um: float | None,
     score_threshold: float | None,
     max_contours: int,
+    max_area_um2: float | None = None,
 ) -> tuple[list[dict], list[str]]:
     """Load contours from JSON files, extract groups, build JS-ready dicts.
 
@@ -178,6 +179,13 @@ def load_contours(
         before = len(raw_dets)
         raw_dets = [d for d in raw_dets if d.get("score", 1.0) >= score_threshold]
         logger.info("Score filter (>= %.2f): %d -> %d", score_threshold, before, len(raw_dets))
+
+    # Area filter (remove giant false positives)
+    if max_area_um2 is not None:
+        before = len(raw_dets)
+        raw_dets = [d for d in raw_dets if d.get("area_um2", 0) <= max_area_um2]
+        if len(raw_dets) < before:
+            logger.info("Area filter (<= %.0f um^2): %d -> %d", max_area_um2, before, len(raw_dets))
 
     # Subsample if needed
     if len(raw_dets) > max_contours:
@@ -217,6 +225,12 @@ def load_contours(
         bx2 = float(pts[:, 0].max())
         by1 = float(pts[:, 1].min())
         by2 = float(pts[:, 1].max())
+        # Pass through uid if present in metadata; fallback to centroid-based
+        uid = meta.pop("uid", None)
+        if uid is None:
+            cx = round((bx1 + bx2) / 2, 2)
+            cy = round((by1 + by2) / 2, 2)
+            uid = f"lumen_{cx}_{cy}"
         contour_data.append(
             {
                 "pts": flat,
@@ -225,6 +239,7 @@ def load_contours(
                 "bx2": round(bx2, 1),
                 "by2": round(by2, 1),
                 "gi": group_to_idx[grp],
+                "uid": uid,
                 "meta": meta,
             }
         )
@@ -427,6 +442,37 @@ body {{ background: #111; color: #eee; font-family: -apple-system, BlinkMacSyste
 #meta-panel td:first-child {{ color: #888; white-space: nowrap; }}
 #meta-panel td:last-child {{ word-break: break-all; }}
 
+#anno-buttons {{ display: flex; gap: 4px; margin-top: 6px; flex-wrap: wrap; }}
+.anno-btn {{
+  padding: 3px 8px; border-radius: 4px; border: 1px solid #555;
+  background: #333; color: #eee; font-size: 11px; cursor: pointer;
+  transition: background 0.15s;
+}}
+.anno-btn:hover {{ background: #444; }}
+.anno-btn.active-true {{ background: #264d26; border-color: #4a4; }}
+.anno-btn.active-false {{ background: #4d2626; border-color: #a44; }}
+.anno-btn.active-type {{ background: #263d4d; border-color: #48a; }}
+
+#anno-toolbar {{
+  padding: 6px 12px; border-top: 1px solid #333; font-size: 11px;
+  display: flex; flex-direction: column; gap: 4px;
+}}
+#anno-toolbar .anno-row {{ display: flex; align-items: center; gap: 6px; }}
+#anno-toolbar .anno-count {{ color: #aaa; }}
+.anno-mode-btn {{
+  padding: 2px 6px; border-radius: 3px; border: 1px solid #555;
+  background: #333; color: #eee; font-size: 10px; cursor: pointer;
+}}
+.anno-mode-btn.active {{ border-color: #8af; background: #234; }}
+.anno-export-btn {{
+  padding: 2px 8px; border-radius: 3px; border: 1px solid #555;
+  background: #2a4a2a; color: #cfc; font-size: 10px; cursor: pointer;
+}}
+.anno-import-btn {{
+  padding: 2px 8px; border-radius: 3px; border: 1px solid #555;
+  background: #2a2a4a; color: #ccf; font-size: 10px; cursor: pointer;
+}}
+
 #canvas-wrap {{
   flex: 1; position: relative; overflow: hidden; background: #000;
 }}
@@ -439,6 +485,11 @@ canvas {{
   background: rgba(0,0,0,0.7); padding: 4px 10px; border-radius: 4px;
   font-size: 11px; color: #aaa; pointer-events: none;
 }}
+#floating-fit {{
+  position: absolute; top: 10px; right: 10px;
+  background: rgba(0,0,0,0.7); padding: 5px 12px; border-radius: 4px;
+  border: 1px solid #555; color: #ccc; font-size: 12px; cursor: pointer;
+}}
 </style>
 </head>
 <body>
@@ -448,6 +499,19 @@ canvas {{
   <div id="legend"></div>
   <div id="meta-panel"><h3>Click a contour to inspect</h3>
     <table id="meta-table"></table>
+    <div id="anno-buttons"></div>
+  </div>
+  <div id="anno-toolbar">
+    <div class="anno-row">
+      <span class="anno-count" id="anno-count">0 annotated</span>
+      <button class="anno-mode-btn active" id="mode-binary">Binary</button>
+      <button class="anno-mode-btn" id="mode-type">Type</button>
+    </div>
+    <div class="anno-row">
+      <button class="anno-export-btn" id="anno-export">Export</button>
+      <button class="anno-import-btn" id="anno-import">Import</button>
+      <input type="file" id="anno-file" accept=".json" style="display:none">
+    </div>
   </div>
   <div id="controls">
     <label>Contour opacity
@@ -458,7 +522,11 @@ canvas {{
     </label>
     <label>Fill opacity
       <input type="range" id="fill-slider" min="0" max="100" value="15">
-    </label>"""
+    </label>
+    <div class="ch-btns">
+      <button class="ch-btn" id="btn-fit">Fit</button>
+      <button class="ch-btn" id="btn-reset">Reset zoom</button>
+    </div>"""
     )
 
     # Fluorescence channel toggle buttons
@@ -486,6 +554,7 @@ canvas {{
 
 <div id="canvas-wrap">
   <canvas id="canvas"></canvas>
+  <button id="floating-fit">Fit view</button>
   <div id="info-bar">Scroll to zoom, drag to pan, click contour to inspect.
     Generated {timestamp}</div>
 </div>
@@ -888,6 +957,269 @@ function init() {
 }
 
 window.addEventListener('resize', function() { resize(); render(); });
+
+// ===== ANNOTATION SYSTEM =====
+const annotations = {};  // {uid: label}
+let selectedContour = null;
+let annoMode = 'binary';  // 'binary' or 'type'
+const ANNO_COLORS = {
+  'true': '#44aa44', 'false_positive': '#aa4444',
+  'artery': '#cc4444', 'arteriole': '#cc8844', 'vein': '#4444cc',
+  'capillary': '#cc44cc', 'lymphatic': '#44cccc', 'collecting_lymphatic': '#44cc88'
+};
+const STORAGE_KEY = 'contour_anno_' + TITLE.replace(/[^a-zA-Z0-9]/g, '_');
+
+// Build UID lookup for O(1) access
+const uidToIdx = {};
+for (let i = 0; i < CONTOUR_DATA.length; i++) {
+  if (CONTOUR_DATA[i].uid) uidToIdx[CONTOUR_DATA[i].uid] = i;
+}
+
+function updateAnnoCount() {
+  const n = Object.keys(annotations).length;
+  document.getElementById('anno-count').textContent = n + ' / ' + CONTOUR_DATA.length + ' annotated';
+}
+
+function setAnnotation(uid, label) {
+  if (!uid) return;
+  if (label === null || label === undefined) {
+    delete annotations[uid];
+  } else {
+    annotations[uid] = label;
+  }
+  saveAnnotations();
+  updateAnnoCount();
+  scheduleRender();
+  updateAnnoButtons();
+}
+
+function saveAnnotations() {
+  try {
+    localStorage.setItem(STORAGE_KEY, JSON.stringify(annotations));
+  } catch(e) {
+    console.warn('localStorage save failed:', e);
+    const el = document.getElementById('anno-count');
+    el.style.color = '#f44';
+    el.title = 'localStorage full - export your annotations!';
+  }
+}
+
+function loadAnnotations() {
+  try {
+    const stored = localStorage.getItem(STORAGE_KEY);
+    if (stored) {
+      const parsed = JSON.parse(stored);
+      for (const [k, v] of Object.entries(parsed)) {
+        if (uidToIdx[k] !== undefined) annotations[k] = v;
+      }
+      updateAnnoCount();
+    }
+  } catch(e) {}
+}
+
+function updateAnnoButtons() {
+  const container = document.getElementById('anno-buttons');
+  if (!selectedContour) { container.innerHTML = ''; return; }
+  const uid = selectedContour.uid;
+  const current = annotations[uid] || null;
+
+  let html = '';
+  if (annoMode === 'binary') {
+    html += btnHtml('True', 'true', current === 'true', 'active-true', 'Y');
+    html += btnHtml('False', 'false_positive', current === 'false_positive', 'active-false', 'N');
+    html += btnHtml('Clear', null, false, '', 'U');
+  } else {
+    const types = ['artery','arteriole','vein','capillary','lymphatic','collecting_lymphatic','false_positive'];
+    const keys  = ['A','R','V','C','L','G','N'];
+    for (let i = 0; i < types.length; i++) {
+      const isActive = current === types[i];
+      html += btnHtml(types[i].replace('_',' '), types[i], isActive,
+        types[i] === 'false_positive' ? 'active-false' : 'active-type', keys[i]);
+    }
+    html += btnHtml('Clear', null, false, '', 'U');
+  }
+  container.innerHTML = html;
+}
+
+function btnHtml(label, value, isActive, activeClass, key) {
+  const cls = 'anno-btn' + (isActive ? ' ' + activeClass : '');
+  const vAttr = value === null ? 'data-clear="1"' : 'data-value="' + value + '"';
+  return '<button class="' + cls + '" ' + vAttr + ' title="' + key + '">' +
+         label + ' <small style="opacity:0.5">' + key + '</small></button>';
+}
+
+document.getElementById('anno-buttons').addEventListener('click', function(e) {
+  const btn = e.target.closest('.anno-btn');
+  if (!btn || !selectedContour) return;
+  const value = btn.dataset.clear ? null : btn.dataset.value;
+  setAnnotation(selectedContour.uid, value);
+});
+
+// Mode toggle
+document.getElementById('mode-binary').addEventListener('click', function() {
+  annoMode = 'binary';
+  this.classList.add('active');
+  document.getElementById('mode-type').classList.remove('active');
+  updateAnnoButtons();
+});
+document.getElementById('mode-type').addEventListener('click', function() {
+  annoMode = 'type';
+  this.classList.add('active');
+  document.getElementById('mode-binary').classList.remove('active');
+  updateAnnoButtons();
+});
+
+// Keyboard shortcuts (only when a contour is selected)
+window.addEventListener('keydown', function(e) {
+  if (!selectedContour) return;
+  // Don't capture if user is typing in an input
+  if (e.target.tagName === 'INPUT' || e.target.tagName === 'TEXTAREA') return;
+  const key = e.key.toUpperCase();
+  if (annoMode === 'binary') {
+    if (key === 'Y') setAnnotation(selectedContour.uid, 'true');
+    else if (key === 'N') setAnnotation(selectedContour.uid, 'false_positive');
+    else if (key === 'U') setAnnotation(selectedContour.uid, null);
+    else return;
+  } else {
+    const typeMap = {A:'artery',R:'arteriole',V:'vein',C:'capillary',
+                     L:'lymphatic',G:'collecting_lymphatic',N:'false_positive'};
+    if (key === 'U') setAnnotation(selectedContour.uid, null);
+    else if (typeMap[key]) setAnnotation(selectedContour.uid, typeMap[key]);
+    else return;
+  }
+  e.preventDefault();
+});
+
+// Export
+document.getElementById('anno-export').addEventListener('click', function() {
+  const positive = [], negative = [];
+  const labels = {};
+  for (const [uid, label] of Object.entries(annotations)) {
+    labels[uid] = label;
+    if (label === 'false_positive') negative.push(uid);
+    else positive.push(uid);
+  }
+  const data = {
+    mode: annoMode,
+    exported_at: new Date().toISOString(),
+    source: TITLE,
+    n_annotated: Object.keys(annotations).length,
+    n_total: CONTOUR_DATA.length,
+    annotations: labels,
+    labels: labels,
+    positive: positive,
+    negative: negative
+  };
+  const blob = new Blob([JSON.stringify(data, null, 2)], {type: 'application/json'});
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = 'lumen_annotations.json';
+  a.click();
+  URL.revokeObjectURL(url);
+});
+
+// Import
+document.getElementById('anno-import').addEventListener('click', function() {
+  document.getElementById('anno-file').click();
+});
+document.getElementById('anno-file').addEventListener('change', function(e) {
+  const file = e.target.files[0];
+  if (!file) return;
+  const reader = new FileReader();
+  reader.onload = function(ev) {
+    try {
+      const data = JSON.parse(ev.target.result);
+      // Support both {labels: {uid: label}} and {annotations: {uid: label}} formats
+      const src = data.labels || data.annotations || {};
+      let imported = 0;
+      for (const [uid, label] of Object.entries(src)) {
+        if (uidToIdx[uid] !== undefined) {
+          annotations[uid] = String(label);
+          imported++;
+        }
+      }
+      saveAnnotations();
+      updateAnnoCount();
+      updateAnnoButtons();
+      scheduleRender();
+      alert('Imported ' + imported + ' annotations');
+    } catch(err) { alert('Failed to parse JSON: ' + err.message); }
+  };
+  reader.readAsText(file);
+  e.target.value = '';
+});
+
+// Patch showMeta to track selectedContour
+const _origShowMeta = showMeta;
+showMeta = function(c) {
+  selectedContour = c;
+  _origShowMeta(c);
+  updateAnnoButtons();
+};
+const _origHideMeta = hideMeta;
+hideMeta = function() {
+  selectedContour = null;
+  _origHideMeta();
+  document.getElementById('anno-buttons').innerHTML = '';
+};
+
+// Patch render to draw annotation highlights
+const _origRender = render;
+render = function() {
+  _origRender();
+  // Draw annotation overlays
+  const nAnno = Object.keys(annotations).length;
+  if (nAnno === 0 && !selectedContour) return;
+  ctx.save();
+  ctx.setTransform(window.devicePixelRatio || 1, 0, 0, window.devicePixelRatio || 1, 0, 0);
+  ctx.translate(panX, panY);
+  ctx.scale(zoom, zoom);
+  const vx1 = -panX / zoom, vy1 = -panY / zoom;
+  const vx2 = (cw - panX) / zoom, vy2 = (ch - panY) / zoom;
+  const lw = Math.max(2, strokeWidth * 1.5) / zoom;
+
+  // Only iterate annotated contours + selection (not all contours)
+  const toRender = new Set(Object.keys(annotations));
+  if (selectedContour) toRender.add(selectedContour.uid);
+  for (const uid of toRender) {
+    const idx = uidToIdx[uid];
+    if (idx === undefined) continue;
+    const c = CONTOUR_DATA[idx];
+    if (hidden.has(GROUP_LABELS[c.gi])) continue;
+    if (c.bx2 < vx1 || c.bx1 > vx2 || c.by2 < vy1 || c.by1 > vy2) continue;
+    const pts = c.pts;
+    if (!pts || pts.length < 6) continue;
+    const path = new Path2D();
+    path.moveTo(pts[0], pts[1]);
+    for (let j = 2; j < pts.length; j += 2) path.lineTo(pts[j], pts[j+1]);
+    path.closePath();
+    const label = annotations[uid];
+    if (label) {
+      ctx.globalAlpha = 0.25;
+      ctx.fillStyle = ANNO_COLORS[label] || '#888';
+      ctx.fill(path);
+    }
+    if (selectedContour && uid === selectedContour.uid) {
+      ctx.globalAlpha = 0.9;
+      ctx.strokeStyle = '#fff';
+      ctx.lineWidth = lw;
+      ctx.stroke(path);
+    }
+  }
+  ctx.globalAlpha = 1;
+  ctx.restore();
+};
+
+// Load saved annotations on startup
+loadAnnotations();
+// ===== END ANNOTATION SYSTEM =====
+
+// ===== Zoom buttons =====
+document.getElementById('btn-fit').addEventListener('click', function() { fitView(); scheduleRender(); });
+document.getElementById('btn-reset').addEventListener('click', function() { zoom = 1; panX = 0; panY = 0; scheduleRender(); });
+document.getElementById('floating-fit').addEventListener('click', function() { fitView(); scheduleRender(); });
+
 init();
 </script>
 </body>
@@ -972,6 +1304,12 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         help="Maximum number of contours (default: 50000).",
     )
     p.add_argument(
+        "--max-area-um2",
+        type=float,
+        default=None,
+        help="Filter out contours with area > this (um^2). Useful for removing background FPs.",
+    )
+    p.add_argument(
         "--title",
         default="Contour Viewer",
         help="HTML page title.",
@@ -1029,6 +1367,7 @@ def main(argv: list[str] | None = None):
         pixel_size_um,
         args.score_threshold,
         args.max_contours,
+        max_area_um2=args.max_area_um2,
     )
 
     if not contour_data:

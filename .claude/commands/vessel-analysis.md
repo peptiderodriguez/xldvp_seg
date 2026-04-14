@@ -1,48 +1,56 @@
-You are guiding the user through **vessel analysis** for the xldvp_seg pipeline. Three complementary tools are available:
+You are guiding the user through **vessel analysis** for the xldvp_seg pipeline. Four complementary tools are available:
 
-1. **Lumen-first vessel detection** (`scripts/segment_vessel_lumens.py`) — SAM2 auto-mask on OME-Zarr multi-resolution tiles to find dark lumens, validated by marker+ cell proximity. **Recommended for cross-sectional vessels. No circularity requirement — handles oblique cuts, compressed vessels, irregular lumens.**
+1. **Threshold lumen detection** (`scripts/detect_vessel_lumens_threshold.py`) — Gaussian local-mean threshold + seeded watershed on OME-Zarr pyramids. CPU-only, no GPU needed. Includes marker validation, RF scoring, and LMD replicate assignment. **Recommended for whole-mount cross-sections with OME-Zarr. Most reproducible approach.**
 
-2. **Graph topology vessel detection** (`scripts/detect_vessel_structures.py`) — identifies vessel structures from marker+ cells (SMA/CD31/LYVE1) using graph topology (ring/arc/strip classification). **Best for longitudinal sections (strips) and small structures.**
+2. **SAM2 lumen detection** (`scripts/segment_vessel_lumens.py`) — SAM2 auto-mask on OME-Zarr multi-resolution tiles to find dark lumens. **Best for flexible shapes, oblique cuts, compressed vessels. Requires GPU.**
 
-3. **Vessel community analysis** (`scripts/vessel_community_analysis.py`) — multi-scale connected components with PCA morphology for tissue-level vascular neighborhoods. **Use this for broader spatial analysis.**
+3. **Graph topology vessel detection** (`scripts/detect_vessel_structures.py`) — identifies vessel structures from marker+ cells (SMA/CD31/LYVE1) using graph topology (ring/arc/strip classification). **Best for longitudinal sections (strips) and structures where lumens are not visible (tangential cuts, collapsed vessels).**
 
-Ask the user which approach they want. For finding specific vessels (arteries, veins, lymphatics) → use tool 1 (lumen-first, recommended) or tool 2 (cell-topology, complementary for strips). For tissue-level vascular zone analysis → use tool 3. Tools 1 and 2 share characterization logic via `xldvp_seg.analysis.vessel_characterization`.
+4. **Vessel community analysis** (`scripts/vessel_community_analysis.py`) — multi-scale connected components with PCA morphology for tissue-level vascular neighborhoods. **Use this for broader spatial analysis.**
+
+Ask the user which approach they want. For whole-mount slides with OME-Zarr → use tool 1 (threshold, recommended). For flexible shapes needing GPU → tool 2 (SAM2). For longitudinal sections/strips → tool 3 (graph topology). For tissue-level neighborhoods → tool 4. Tools 2 and 3 share characterization logic via `xldvp_seg.analysis.vessel_characterization`.
 
 ---
 
-## Tool 1: Graph Topology Vessel Detection (Recommended)
+## Tool 1: Threshold Lumen Detection (Recommended)
 
-### Step 0: Run marker classification if needed
-Same as Tool 2 Step 1 below (classify_markers.py with SMA/CD31/LYVE1).
+Full pipeline: detect → annotate → RF score → filter → wall-cell assignment. CPU-only. See `docs/VESSEL_LUMEN_THRESHOLD_PIPELINE.md` for the complete guide.
 
-### Step 1: Run Vessel Structure Detection
+### Quick start
 ```bash
-PYTHONPATH=$REPO $XLDVP_PYTHON $REPO/scripts/detect_vessel_structures.py \
-    --detections $RUN_DIR/cell_detections_classified.json \
-    --marker-filter "SMA_class==positive" \
-    --marker-filter "CD31_class==positive" \
-    --marker-logic or \
-    --radius 50 --min-cells 5 \
-    --output-dir $RUN_DIR/vessel_structures/ \
-    --output-prefix vessel
+# 1. Detect lumens (SLURM, p.hpcl8, 370G, ~3-14h depending on slide size)
+PYTHONPATH=$REPO $XLDVP_PYTHON scripts/detect_vessel_lumens_threshold.py \
+    --zarr-path slide.ome.zarr --scales 4,8,16,64 --discovery-scales 64,16,8,4 \
+    --block-size-um 2400 --threshold-fraction 0.5 --fill-expansion 1.5 \
+    --marker-cells-json cell_detections_snr2_markers.json \
+    --marker-classes "SMA,CD31" --min-marker-cells 6 \
+    --output-dir lumens/ --save-debug --skip-viewer
+
+# 2. Generate annotation pages
+PYTHONPATH=$REPO $XLDVP_PYTHON scripts/generate_lumen_annotation.py \
+    --lumens lumens/vessel_lumens_threshold.json --zarr-path slide.ome.zarr \
+    --output-dir lumens/annotation_v1/ --display-channels 1,3,0 \
+    --channel-names "SMA,CD31,nuc" --pixel-size-um 0.1725
+
+# 3. Score + filter (after user annotates ~300-500 lumens)
+PYTHONPATH=$REPO $XLDVP_PYTHON scripts/score_vessel_lumens.py \
+    --lumens lumens/vessel_lumens_threshold.json \
+    --annotations lumens/annotation_v1/annotations.json \
+    --output-dir lumens/scored/ --cells cell_detections_snr2_markers.json \
+    --markers "SMA,CD31" --rf-threshold 0.75 --min-marker-cells 8
+
+# 4. Assign wall cells for LMD (if not done in step 3 via --cells)
+PYTHONPATH=$REPO $XLDVP_PYTHON scripts/assign_vessel_wall_cells.py \
+    --vessels lumens/scored/vessel_lumens_final.json \
+    --cells cell_detections_snr2_markers.json \
+    --markers "SMA,CD31" --output lumens/vessel_lumens_with_cells.json
 ```
 
-For LYVE1 slides (Fig7-type): replace CD31 filter with `"LYVE1_class==positive"`.
-
-**Vessel type classification:**
-- Artery vs vein: both have CD31 inner + SMA outer. Distinguished by wall thickness (wall_cell_layers > 1.5 or wall/diameter > 0.3 → artery). Size: artery >100µm, arteriole ≤100µm, vein >50µm, venule ≤50µm.
-- Lymphatics: LYVE1+ with SMA ≥15% → collecting_lymphatic. LYVE1+ without SMA → initial lymphatic.
-- Capillary: small CD31+ cluster (<15 cells).
-
-### Step 2: Review + Iterate
-Generate spatial viewer, annotate true vs false vessels, tune parameters (radius, thresholds). Expect 5-10 iterative rounds (same playbook as mesothelium curvilinear detection).
-
-### Step 3: Optional RF refinement
-If annotation shows consistent FPs, train RF classifier on vessel cell annotations using `train_classifier.py` with `--feature-set all`, apply at score >= 0.9.
+For LYVE1 slides: change `--marker-classes "SMA,LYVE1"`, `--display-channels 1,2,0`, `--channel-names "SMA,LYVE1,nuc"`.
 
 ---
 
-## Tool 1: Lumen-First Vessel Detection (Recommended)
+## Tool 2: SAM2 Lumen-First Vessel Detection
 
 ### Prerequisites
 1. **Cell detections** with marker classification (top-5% SNR or other method)
@@ -78,7 +86,7 @@ For lymphatic slides: `--marker-names SMA,LYVE1 --rgb-channels 1,2,0`
 - `--min-coverage`: fraction of boundary staffed by cells (default 0.1)
 - `--save-debug`: keep rejected lumens for parameter tuning
 
-**Vessel typing:** same decision tree as cell-topology approach (shared module):
+**Vessel typing** (shared decision tree with graph topology):
 - LYVE1+ dominant → lymphatic / collecting_lymphatic (has SMA)
 - Thick wall (layers > 1.5 or wall/diameter > 0.3) → artery/arteriole
 - CD31-dominant thin wall → vein/venule
@@ -101,15 +109,41 @@ Inspect `vessel_summary.csv` for type distribution and size range. Generate spat
 
 ---
 
-## Tool 2: Graph Topology Vessel Detection (Complementary)
+## Tool 3: Graph Topology Vessel Detection
 
-Best for **longitudinal sections** (strips) and structures where lumens are not visible (tangential cuts, collapsed vessels). Complements lumen-first by finding structures it cannot detect.
+Best for longitudinal sections (strips) and structures where lumens are not visible (tangential cuts, collapsed vessels). Complements lumen-first tools by finding structures they cannot detect.
+
+### Step 0: Run marker classification if needed
+Run `classify_markers.py` with SMA/CD31/LYVE1 first (see Tool 4 Step 1 for the exact invocation).
+
+### Step 1: Run Vessel Structure Detection
+```bash
+PYTHONPATH=$REPO $XLDVP_PYTHON $REPO/scripts/detect_vessel_structures.py \
+    --detections $RUN_DIR/cell_detections_classified.json \
+    --marker-filter "SMA_class==positive" \
+    --marker-filter "CD31_class==positive" \
+    --marker-logic or \
+    --radius 50 --min-cells 5 \
+    --output-dir $RUN_DIR/vessel_structures/ \
+    --output-prefix vessel
+```
+
+For LYVE1 slides (Fig7-type): replace CD31 filter with `"LYVE1_class==positive"`.
+
+**Vessel type classification:**
+- Artery vs vein: both have CD31 inner + SMA outer. Distinguished by wall thickness (wall_cell_layers > 1.5 or wall/diameter > 0.3 → artery). Size: artery >100µm, arteriole ≤100µm, vein >50µm, venule ≤50µm.
+- Lymphatics: LYVE1+ with SMA ≥15% → collecting_lymphatic. LYVE1+ without SMA → initial lymphatic.
+- Capillary: small CD31+ cluster (<15 cells).
+
+### Step 2: Review + Iterate
+Generate spatial viewer, annotate true vs false vessels, tune parameters (radius, thresholds). Expect 5-10 iterative rounds (same playbook as mesothelium curvilinear detection).
+
+### Step 3: Optional RF refinement
+If annotation shows consistent FPs, train RF classifier on vessel cell annotations using `train_classifier.py` with `--feature-set all`, apply at score >= 0.9.
 
 ---
 
-## Tool 3: Vessel Community Analysis (Multi-Scale)
-
-## Workflow Steps
+## Tool 4: Vessel Community Analysis (Multi-Scale)
 
 ### Step 1: Check Prerequisites
 
@@ -182,4 +216,4 @@ The viewer supports zoom/pan, cell coloring by vessel_type or vessel_morphology.
 - **Memory**: 306K cells needs ~50-100GB RAM for Leiden/viewer. Submit as SLURM job on p.hpcl8 with `--mem=370G --cpus-per-task=24`
 - `--snr-channels` is required when pipeline bg correction stored SNR as `ch{N}_snr` instead of `{marker}_snr`
 - The viewer uses a slim JSON (coords + group fields) to avoid OOM on the 4GB full JSON
-- For more details: `docs/VESSEL_COMMUNITY_ANALYSIS.md`
+- For more details: `docs/VESSEL_COMMUNITY_ANALYSIS.md` (Tool 2 + 4) and `docs/VESSEL_LUMEN_THRESHOLD_PIPELINE.md` (Tool 1)

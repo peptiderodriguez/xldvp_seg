@@ -151,6 +151,10 @@ For beginners, expand on each step as you reach it. For advanced users, just ask
 | **MK** | `examples/bone_marrow/mk_mechanism_figure.py` | Generate mechanosensing figure with data-faithful cells |
 | **MK** | `examples/bone_marrow/split_detections_by_bone.py` | Split detections by bone region (femur/humerus) |
 | **MK** | `examples/bone_marrow/select_mks_for_lmd.py` | MK replicate selection + multi-plate wells |
+| **Vessel** | `scripts/detect_vessel_lumens_threshold.py` | Threshold lumen detection on OME-Zarr (CPU, recommended for whole-mount). See `docs/VESSEL_LUMEN_THRESHOLD_PIPELINE.md` |
+| **Vessel** | `scripts/score_vessel_lumens.py` | RF training + scoring + filtering with annotation overrides |
+| **Vessel** | `scripts/generate_lumen_annotation.py` | Card-grid annotation HTML from zarr crops |
+| **Vessel** | `scripts/assign_vessel_wall_cells.py` | Per-marker wall cell assignment + LMD replicates |
 | **Vessel** | `scripts/detect_vessel_structures.py` | Graph topology vessel detection from marker+ cells (ring/arc/strip/cluster → artery/vein/lymphatic/capillary) |
 | **Vessel** | `scripts/vessel_community_analysis.py` | Multi-scale vessel community analysis (tissue-level neighborhoods) |
 | **Vessel** | `examples/vessel/train_vessel_detector.py` | Train vessel RF detector |
@@ -756,16 +760,21 @@ PYTHONPATH=$REPO $XLDVP_PYTHON $REPO/examples/mesothelium/generate_msln_cluster_
     --detections <detections.json> --output <output>/msln_clusters.html
 ```
 
-For **vessel** detections (cell-type=cell with SMA/CD31/LYVE1 markers), offer graph topology vessel structure detection. Use AskUserQuestion to ask:
-- *"Would you like to detect vessel structures (arteries, veins, lymphatics, capillaries) from marker+ cells?"*
-  Options: Yes (recommended), No (skip)
+For **vessel** detections (cell-type=cell with SMA/CD31/LYVE1 markers), ask which vessel detection approach. Use AskUserQuestion:
+- *"Which vessel detection approach? (a) Threshold lumens — recommended for whole-mount cross-sections with OME-Zarr, CPU-only. (b) Graph topology — for strips/longitudinal sections. (c) Both."*
 
-If yes, ask which markers are available on this slide:
-- *"Which vessel markers are classified? (check with the classify_markers output)"*
-  Options: SMA+CD31 (Fig2-type), SMA+LYVE1 (Fig3-type), All three (SMA+CD31+LYVE1)
+**If threshold lumens (option a):** Follow the 4-step pipeline in `docs/VESSEL_LUMEN_THRESHOLD_PIPELINE.md`:
+1. `detect_vessel_lumens_threshold.py` — detect dark lumens via local threshold + watershed
+2. `generate_lumen_annotation.py` — card-grid annotation HTML from zarr crops
+3. `score_vessel_lumens.py` — RF train, score, filter (with optional `--cells` for wall assignment)
+4. `assign_vessel_wall_cells.py` — per-marker wall cells for LMD replicates
 
-Then ask about parameters:
-- *"What connection radius? Smaller radii give cleaner vessel boundaries but may fragment vessels."*
+Ask which markers: SMA+CD31, SMA+LYVE1, or all three. Pass `--marker-classes` accordingly.
+
+**If graph topology (option b):** ask:
+- *"Which vessel markers are classified?"*
+  Options: SMA+CD31 (Fig2-type), SMA+LYVE1 (Fig3-type), All three
+- *"What connection radius?"*
   Options: 30µm (tight), 50µm (recommended), 75µm (inclusive)
 - *"Minimum cells per vessel structure?"*
   Options: 5 (inclusive — recommended), 10 (moderate), 15 (strict)

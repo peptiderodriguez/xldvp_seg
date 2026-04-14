@@ -243,6 +243,10 @@ For rare large cells (e.g., MKs), single-cell-per-well is sometimes feasible —
 | Contour viewer | `scripts/generate_contour_viewer.py` | Contour overlays on CZI fluorescence with pan/zoom, group toggling, click-to-inspect |
 | Sliding window | `scripts/sliding_window_sampling.py` | Area-matched rolling window along ROI centerlines for LMD (core: `xldvp_seg.analysis.sliding_window_sampling`) |
 | Curvilinear patterns | `scripts/detect_curvilinear_patterns.py` | Strip/ribbon detection via graph diameter linearity (core: `xldvp_seg.analysis.pattern_detection`) |
+| Vessel lumen threshold | `scripts/detect_vessel_lumens_threshold.py` | Gaussian local threshold + watershed on OME-Zarr (CPU, no GPU). See `docs/VESSEL_LUMEN_THRESHOLD_PIPELINE.md` |
+| Vessel lumen scoring | `scripts/score_vessel_lumens.py` | RF training, scoring, filtering with annotation overrides |
+| Lumen annotation | `scripts/generate_lumen_annotation.py` | Card-grid annotation HTML from zarr crops |
+| Vessel wall cells | `scripts/assign_vessel_wall_cells.py` | Per-marker KD-tree wall cell assignment + LMD replicates |
 | Vessel structures | `scripts/detect_vessel_structures.py` | Ring/arc/strip classification from marker+ cells |
 | Vessel communities | `scripts/vessel_community_analysis.py` | Multi-scale morphology + SNR |
 | SpatialData export | `scripts/convert_to_spatialdata.py` | scverse zarr (squidpy, scanpy) |
@@ -336,9 +340,9 @@ xldvp_seg/              # Main package (pip install -e .)
 ├── roi/                   # ROI support: pre-detection (restrict to regions) or post-detection (spatial filtering)
 └── utils/                 # JSON I/O, device handling, logging, config
 
-scripts/                   # 31 reusable CLI tools
+scripts/                   # 42 reusable CLI tools
 examples/                  # Project-specific analyses by experiment
-tests/                     # pytest suite (1048 tests — run `make test`)
+tests/                     # pytest suite (1151 tests — run `make test`)
 ```
 
 ## Key Design Decisions

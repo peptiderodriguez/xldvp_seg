@@ -56,6 +56,7 @@ nav:
   - Guides:
       - NMJ Pipeline: NMJ_PIPELINE_GUIDE.md
       - Vessel Analysis: VESSEL_COMMUNITY_ANALYSIS.md
+      - Vessel Lumen Threshold Pipeline: VESSEL_LUMEN_THRESHOLD_PIPELINE.md
       - Block-Face Registration: BLOCKFACE_REGISTRATION.md
   - Contributing: contributing.md
   - Changelog: changelog.md
