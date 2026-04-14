@@ -652,18 +652,18 @@ def run_pipeline(args):
                 elif _has_bg and not _has_contour:
                     logger.info("Background already corrected — running contour processing only")
 
-                # Nuclear counting: resolve channel and load models if --count-nuclei
-                # Models are loaded in GPU worker subprocesses, not the main process,
-                # so we need to load them here explicitly for Phase 4.
+                # Nuclear counting: resolve nuclear channel.
+                # When SHM is available we use the multi-GPU Phase 4 orchestrator,
+                # which loads Cellpose+SAM2 inside each worker process — no need
+                # to preload in the main process. Single-process fallback is used
+                # only when SHM is unavailable (loader path).
                 _count_nuclei = getattr(args, "count_nuclei", False)
                 _nuc_ch_for_counting = getattr(args, "nuc_channel_for_counting", None)
                 _cp_model_for_nuc = None
                 _sam2_for_nuc = None
                 _nuc_model_mgr = None
+                _phase4_num_gpus = int(getattr(args, "num_gpus", 0)) if _use_shm else 0
                 if _count_nuclei:
-                    # Auto-detect nuclear channel: check explicit arg first,
-                    # then cellpose_input_channels (2nd element = nuc),
-                    # then cell-type-specific defaults
                     if _nuc_ch_for_counting is None:
                         cp_input = getattr(args, "cellpose_input_channels", None)
                         if cp_input:
@@ -679,17 +679,35 @@ def run_pipeline(args):
                         _nuc_ch_for_counting = getattr(args, "tp_nuclear_channel", None)
 
                     if _nuc_ch_for_counting is not None:
-                        from xldvp_seg.models.manager import ModelManager
+                        if _phase4_num_gpus >= 1:
+                            logger.info(
+                                "Nuclear counting enabled: nuc_channel=%s, "
+                                "multi-GPU Phase 4 with %d workers",
+                                _nuc_ch_for_counting,
+                                _phase4_num_gpus,
+                            )
+                        else:
+                            from xldvp_seg.models.manager import ModelManager
 
-                        _nuc_model_mgr = ModelManager()
-                        _cp_model_for_nuc = _nuc_model_mgr.cellpose
-                        _sam2_for_nuc = _nuc_model_mgr.sam2_predictor
-                        logger.info(f"Nuclear counting enabled: nuc_channel={_nuc_ch_for_counting}")
+                            _nuc_model_mgr = ModelManager()
+                            _cp_model_for_nuc = _nuc_model_mgr.cellpose
+                            _sam2_for_nuc = _nuc_model_mgr.sam2_predictor
+                            logger.info(
+                                "Nuclear counting enabled (single-process fallback): "
+                                "nuc_channel=%s",
+                                _nuc_ch_for_counting,
+                            )
                     else:
                         logger.warning(
                             "--count-nuclei requires --nuc-channel-for-counting or "
                             "--channel-spec with nuc=... to identify the nuclear channel"
                         )
+
+                _shm_name_for_phase4 = (
+                    shm_manager.slide_info[slide_name]["shm_name"]
+                    if (_use_shm and _phase4_num_gpus >= 1)
+                    else None
+                )
 
                 process_detections_post_dedup(
                     all_detections,
@@ -713,6 +731,8 @@ def run_pipeline(args):
                     min_nuclear_area=getattr(args, "min_nuclear_area", 50),
                     cellpose_model=_cp_model_for_nuc,
                     sam2_predictor=_sam2_for_nuc,
+                    num_gpus=_phase4_num_gpus,
+                    shm_name=_shm_name_for_phase4,
                 )
 
                 # Cleanup nuclear counting models (free GPU memory before HTML generation)
@@ -892,14 +912,15 @@ def run_pipeline(args):
 
             mask_fn = f"{args.cell_type}_masks.h5"
 
-            # Nuclear counting on normal detection path: load models in main process
+            # Nuclear counting (normal detection path).
+            # Multi-GPU Phase 4: workers load Cellpose/SAM2; no main-process preload.
             _count_nuclei_normal = getattr(args, "count_nuclei", False)
             _nuc_ch_normal = getattr(args, "nuc_channel_for_counting", None)
             _cp_model_normal = None
             _sam2_normal = None
             _nuc_mgr_normal = None
+            _phase4_num_gpus_normal = int(getattr(args, "num_gpus", 0))
             if _count_nuclei_normal:
-                # Auto-detect nuclear channel from cellpose input or cell-type defaults
                 if _nuc_ch_normal is None:
                     cp_input = getattr(args, "cellpose_input_channels", None)
                     if cp_input:
@@ -914,14 +935,31 @@ def run_pipeline(args):
                 if _nuc_ch_normal is None and args.cell_type == "tissue_pattern":
                     _nuc_ch_normal = getattr(args, "tp_nuclear_channel", None)
                 if _nuc_ch_normal is not None:
-                    from xldvp_seg.models.manager import ModelManager
+                    if _phase4_num_gpus_normal >= 1:
+                        logger.info(
+                            "Nuclear counting enabled: nuc_channel=%s, "
+                            "multi-GPU Phase 4 with %d workers",
+                            _nuc_ch_normal,
+                            _phase4_num_gpus_normal,
+                        )
+                    else:
+                        from xldvp_seg.models.manager import ModelManager
 
-                    _nuc_mgr_normal = ModelManager()
-                    _cp_model_normal = _nuc_mgr_normal.cellpose
-                    _sam2_normal = _nuc_mgr_normal.sam2_predictor
-                    logger.info(f"Nuclear counting enabled: nuc_channel={_nuc_ch_normal}")
+                        _nuc_mgr_normal = ModelManager()
+                        _cp_model_normal = _nuc_mgr_normal.cellpose
+                        _sam2_normal = _nuc_mgr_normal.sam2_predictor
+                        logger.info(
+                            "Nuclear counting enabled (single-process fallback): " "nuc_channel=%s",
+                            _nuc_ch_normal,
+                        )
                 else:
                     logger.warning("--count-nuclei: could not determine nuclear channel")
+
+            _shm_name_for_phase4 = (
+                shm_manager.slide_info[slide_name]["shm_name"]
+                if _phase4_num_gpus_normal >= 1
+                else None
+            )
 
             process_detections_post_dedup(
                 all_detections,
@@ -942,6 +980,8 @@ def run_pipeline(args):
                 min_nuclear_area=getattr(args, "min_nuclear_area", 50),
                 cellpose_model=_cp_model_normal,
                 sam2_predictor=_sam2_normal,
+                num_gpus=_phase4_num_gpus_normal,
+                shm_name=_shm_name_for_phase4,
             )
 
             if _nuc_mgr_normal is not None:

@@ -32,6 +32,7 @@ import os
 import cv2
 import h5py
 import numpy as np
+from scipy.ndimage import find_objects
 
 from xldvp_seg.detection.strategies.mixins import MultiChannelFeatureMixin
 from xldvp_seg.pipeline.background import _extract_centroids, local_background_subtract
@@ -236,6 +237,11 @@ def _phase1_tile(
         masks_arr = hf["masks"][:]
     tile_h, tile_w = masks_arr.shape[:2]
 
+    # Compute bboxes for all labels ONCE per tile in C (scipy).
+    # Without this, doing (masks_arr == label) per detection is O(N_cells × tile_pixels).
+    bboxes = find_objects(masks_arr)
+    n_labels = len(bboxes)
+
     tile_channels: dict[int, np.ndarray] = {}
     if has_data_source:
         tile_channels = _load_tile_channels(
@@ -255,23 +261,31 @@ def _phase1_tile(
 
     for det in tile_dets:
         label = det.get("mask_label")
-        if label is None:
+        if label is None or label <= 0 or label > n_labels:
             n_fail += 1
             continue
 
-        # Compute once, reuse for contour extraction and quick medians
-        original_mask = (masks_arr == label).astype(bool)
-        if not original_mask.any():
+        bbox = bboxes[label - 1]
+        if bbox is None:
+            n_fail += 1
+            continue
+
+        r_slice, c_slice = bbox
+        # bbox-sized mask, not tile-sized
+        crop_mask = masks_arr[r_slice, c_slice] == label
+        if not crop_mask.any():
             n_fail += 1
             continue
 
         if contour_processing:
-            contour_local = _contour_from_binary(original_mask)
+            contour_local = _contour_from_binary(crop_mask)
             if contour_local is not None:
+                # cv2 returns (x, y) = (col, row) coords in bbox-local space.
+                # Shift to tile-local, then to global.
                 origin = det.get("tile_origin", [0, 0])
                 contour_global = contour_local.astype(np.float64)
-                contour_global[:, 0] += origin[0]
-                contour_global[:, 1] += origin[1]
+                contour_global[:, 0] += c_slice.start + origin[0]
+                contour_global[:, 1] += r_slice.start + origin[1]
                 det["contour_px"] = contour_global.tolist()
                 det["contour_um"] = (contour_global * pixel_size_um).tolist()
 
@@ -280,7 +294,8 @@ def _phase1_tile(
         quick_medians = {}
         if tile_channels:
             for ch, data in tile_channels.items():
-                pixels = data[original_mask].astype(np.float32)
+                crop = data[r_slice, c_slice]
+                pixels = crop[crop_mask].astype(np.float32)
                 nonzero_pixels = pixels[pixels > 0]
                 quick_medians[ch] = (
                     float(np.median(nonzero_pixels)) if len(nonzero_pixels) > 0 else 0.0
@@ -346,25 +361,28 @@ def _phase3_tile(
     if not tile_channels:
         return 0, len(tile_dets)
 
+    # Compute bboxes for all labels ONCE per tile in C (scipy).
+    # Without this, per-detection bbox extraction is O(N_cells × tile_pixels).
+    bboxes = find_objects(masks_arr)
+    n_labels = len(bboxes)
+
     for det in tile_dets:
         det_idx = det["_postdedup_idx"]
         label = det.get("mask_label")
-        if label is None:
+        if label is None or label <= 0 or label > n_labels:
             n_fail += 1
             continue
 
-        # Always use the original segmentation mask from HDF5
-        original_mask = (masks_arr == label).astype(bool)
-
-        if not original_mask.any():
+        bbox = bboxes[label - 1]
+        if bbox is None:
             n_fail += 1
             continue
 
-        rows = np.where(original_mask.any(axis=1))[0]
-        cols = np.where(original_mask.any(axis=0))[0]
-        r0, r1 = rows[0], rows[-1] + 1
-        c0, c1 = cols[0], cols[-1] + 1
-        crop_mask = original_mask[r0:r1, c0:c1]
+        r_slice, c_slice = bbox
+        crop_mask = masks_arr[r_slice, c_slice] == label
+        if not crop_mask.any():
+            n_fail += 1
+            continue
 
         bg = per_cell_bg.get(det_idx, {})
         feat = det.setdefault("features", {})
@@ -372,13 +390,19 @@ def _phase3_tile(
 
         raw_crops: dict[int, np.ndarray] = {}
         for ch, data in tile_channels.items():
-            raw_crops[ch] = data[r0:r1, c0:c1].astype(np.float32)
+            raw_crops[ch] = data[r_slice, c_slice].astype(np.float32)
 
         if has_bg:
-            raw_feats = _extract_intensity_features(crop_mask, raw_crops)
+            # Raw pass: stats only — ratios are computed on the corrected data below.
+            raw_channels_dict = {f"ch{ch}": data for ch, data in sorted(raw_crops.items())}
+            raw_feats = _channel_mixin.extract_multichannel_features(
+                crop_mask,
+                raw_channels_dict,
+                compute_ratios=False,
+                _include_zeros=False,
+            )
             for k, v in raw_feats.items():
-                if "_ratio" not in k and "_diff" not in k and "_specificity" not in k:
-                    feat[f"{k}_raw"] = v
+                feat[f"{k}_raw"] = v
             for ch, crop in raw_crops.items():
                 ch_bg = bg.get(ch, 0.0)
                 if ch_bg > 0:
@@ -403,12 +427,299 @@ def _phase3_tile(
                 feat[f"ch{ch}_background"] = 0.0
                 feat[f"ch{ch}_snr"] = 0.0
 
-        # Always compute area_um2 from the original mask
         feat["area_um2"] = float(int(crop_mask.sum()) * pixel_size_um**2)
 
         n_ok += 1
 
     return n_ok, n_fail
+
+
+# ---------------------------------------------------------------------------
+# Multi-process workers (ProcessPool path — workaround for h5py phil lock)
+#
+# h5py has a global Python-level lock (``phil``) that serializes all HDF5
+# operations across threads in a single process. ThreadPool on Phase 1/3
+# therefore hits the lock on every ``hf["masks"][:]`` read, capping effective
+# parallelism at ~3× regardless of worker count. Running workers in separate
+# processes (each with their own ``phil``) restores true parallelism.
+#
+# The task functions below live at module scope so ``ProcessPoolExecutor`` can
+# pickle them by qualname. They operate on minimal task packets (not full
+# detection dicts) to keep per-task pickling cheap, and return update dicts
+# that the main process merges with :func:`_apply_tile_updates`.
+# ---------------------------------------------------------------------------
+
+
+def _load_tile_channels_in_worker(
+    ctx,
+    tile_x: int,
+    tile_y: int,
+    tile_h: int,
+    tile_w: int,
+) -> dict[int, np.ndarray]:
+    """Slice per-channel 2-D arrays from the worker's attached SHM."""
+    cfg = ctx.slide_config
+    rel_x = tile_x - cfg.x_start
+    rel_y = tile_y - cfg.y_start
+    out: dict[int, np.ndarray] = {}
+    for czi_ch, slot in sorted(cfg.ch_to_slot.items()):
+        out[czi_ch] = ctx.slide_arr[rel_y : rel_y + tile_h, rel_x : rel_x + tile_w, slot]
+    return out
+
+
+def _read_tile_masks(ctx, tile_x: int, tile_y: int):
+    """Read ``masks_arr`` for one tile; return ``(masks_arr, bboxes)`` or ``None``."""
+    from pathlib import Path
+
+    import h5py
+
+    cfg = ctx.slide_config
+    tile_dir = Path(cfg.tiles_dir) / f"tile_{tile_x}_{tile_y}"
+    mask_path = tile_dir / cfg.mask_filename
+    if not mask_path.exists():
+        return None
+    with h5py.File(str(mask_path), "r") as hf:
+        masks_arr = hf["masks"][:]
+    bboxes = find_objects(masks_arr)
+    return masks_arr, bboxes
+
+
+def _phase1_mp_task(task: dict, ctx) -> dict[int, dict]:
+    """Worker: compute Phase 1 updates (contour + quick medians) for one tile.
+
+    Returns a dict ``{det_idx: {...update fields...}}``. Fields may include
+    ``contour_px``, ``contour_um``, ``_bg_quick_medians``. Detections that
+    fail validation are simply omitted from the result.
+    """
+    tile_x, tile_y = _parse_tile_key(task["tile_key"])
+    contour_processing = bool(task.get("contour_processing", True))
+    pixel_size_um = float(task["pixel_size_um"])
+    dets = task["dets"]  # [{"idx": int, "mask_label": int, "tile_origin": [ox, oy]}, ...]
+
+    read = _read_tile_masks(ctx, tile_x, tile_y)
+    if read is None:
+        return {}
+    masks_arr, bboxes = read
+    tile_h, tile_w = masks_arr.shape[:2]
+    n_labels = len(bboxes)
+
+    tile_channels = _load_tile_channels_in_worker(ctx, tile_x, tile_y, tile_h, tile_w)
+
+    updates: dict[int, dict] = {}
+    for d in dets:
+        label = d["mask_label"]
+        if label is None or label <= 0 or label > n_labels:
+            continue
+        bbox = bboxes[label - 1]
+        if bbox is None:
+            continue
+        r_slice, c_slice = bbox
+        crop_mask = masks_arr[r_slice, c_slice] == label
+        if not crop_mask.any():
+            continue
+
+        det_upd: dict = {}
+        if contour_processing:
+            contour_local = _contour_from_binary(crop_mask)
+            if contour_local is not None:
+                ox, oy = d.get("tile_origin", [0, 0])
+                cg = contour_local.astype(np.float64)
+                cg[:, 0] += c_slice.start + ox
+                cg[:, 1] += r_slice.start + oy
+                det_upd["contour_px"] = cg.tolist()
+                det_upd["contour_um"] = (cg * pixel_size_um).tolist()
+
+        quick_medians: dict[int, float] = {}
+        for ch, data in tile_channels.items():
+            crop = data[r_slice, c_slice]
+            pixels = crop[crop_mask].astype(np.float32)
+            nz = pixels[pixels > 0]
+            quick_medians[ch] = float(np.median(nz)) if len(nz) > 0 else 0.0
+        det_upd["_bg_quick_medians"] = quick_medians
+
+        updates[d["idx"]] = det_upd
+
+    return updates
+
+
+def _phase3_mp_task(task: dict, ctx) -> dict[int, dict]:
+    """Worker: compute Phase 3 updates (bg-corrected intensity features) for one tile.
+
+    Returns a dict ``{det_idx: {"features": {...}}}`` where ``features`` is
+    the diff to merge into each detection's feature dict (NOT a replacement).
+    """
+    tile_x, tile_y = _parse_tile_key(task["tile_key"])
+    pixel_size_um = float(task["pixel_size_um"])
+    dets = task["dets"]
+    # per_cell_bg is keyed by int det_idx → {ch: bg} but JSON/pickle round-trips
+    # often stringify int keys; normalize defensively.
+    raw_bg = task.get("per_cell_bg", {})
+    per_cell_bg: dict[int, dict[int, float]] = {
+        int(k): {int(ch): float(v) for ch, v in chmap.items()} for k, chmap in raw_bg.items()
+    }
+
+    read = _read_tile_masks(ctx, tile_x, tile_y)
+    if read is None:
+        return {}
+    masks_arr, bboxes = read
+    tile_h, tile_w = masks_arr.shape[:2]
+    n_labels = len(bboxes)
+
+    tile_channels = _load_tile_channels_in_worker(ctx, tile_x, tile_y, tile_h, tile_w)
+    if not tile_channels:
+        return {}
+
+    updates: dict[int, dict] = {}
+    for d in dets:
+        label = d["mask_label"]
+        det_idx = d["idx"]
+        if label is None or label <= 0 or label > n_labels:
+            continue
+        bbox = bboxes[label - 1]
+        if bbox is None:
+            continue
+        r_slice, c_slice = bbox
+        crop_mask = masks_arr[r_slice, c_slice] == label
+        if not crop_mask.any():
+            continue
+
+        bg = per_cell_bg.get(det_idx, {})
+        has_bg = bool(bg)
+        features: dict = {}
+
+        raw_crops: dict[int, np.ndarray] = {}
+        for ch, data in tile_channels.items():
+            raw_crops[ch] = data[r_slice, c_slice].astype(np.float32)
+
+        if has_bg:
+            raw_channels_dict = {f"ch{ch}": arr for ch, arr in sorted(raw_crops.items())}
+            raw_feats = _channel_mixin.extract_multichannel_features(
+                crop_mask,
+                raw_channels_dict,
+                compute_ratios=False,
+                _include_zeros=False,
+            )
+            for k, v in raw_feats.items():
+                features[f"{k}_raw"] = v
+            for ch, crop in raw_crops.items():
+                ch_bg = bg.get(ch, 0.0)
+                if ch_bg > 0:
+                    crop[crop_mask] = np.maximum(crop[crop_mask] - ch_bg, 0.0)
+            intensity_feats = _extract_intensity_features(crop_mask, raw_crops, include_zeros=True)
+        else:
+            intensity_feats = _extract_intensity_features(crop_mask, raw_crops)
+
+        features.update(intensity_feats)
+
+        for ch in tile_channels:
+            ch_bg = bg.get(ch, 0.0)
+            if ch_bg > 0:
+                raw_median = features.get(f"ch{ch}_median_raw", 0.0)
+                features[f"ch{ch}_background"] = ch_bg
+                features[f"ch{ch}_snr"] = float(raw_median / ch_bg)
+            else:
+                features[f"ch{ch}_background"] = 0.0
+                features[f"ch{ch}_snr"] = 0.0
+
+        features["area_um2"] = float(int(crop_mask.sum()) * pixel_size_um**2)
+
+        updates[det_idx] = {"features": features}
+
+    return updates
+
+
+def _build_phase1_tasks(
+    by_tile: dict[str, list[dict]],
+    *,
+    contour_processing: bool,
+    pixel_size_um: float,
+) -> list[dict]:
+    """Build minimal, picklable task packets for Phase 1."""
+    tasks: list[dict] = []
+    for tile_key, tile_dets in by_tile.items():
+        refs: list[dict] = []
+        for i, det in enumerate(tile_dets):
+            label = det.get("mask_label")
+            if label is None:
+                continue
+            origin = det.get("tile_origin", [0, 0])
+            # Strict primitive types for pickle safety
+            refs.append(
+                {
+                    "idx": int(det["_postdedup_idx"]),
+                    "mask_label": int(label),
+                    "tile_origin": [int(origin[0]), int(origin[1])],
+                    "_local_idx": i,
+                }
+            )
+        if refs:
+            tasks.append(
+                {
+                    "tile_key": tile_key,
+                    "dets": refs,
+                    "contour_processing": bool(contour_processing),
+                    "pixel_size_um": float(pixel_size_um),
+                }
+            )
+    return tasks
+
+
+def _build_phase3_tasks(
+    by_tile: dict[str, list[dict]],
+    per_cell_bg: dict[int, dict[int, float]],
+    *,
+    pixel_size_um: float,
+) -> list[dict]:
+    """Build minimal, picklable task packets for Phase 3.
+
+    ``per_cell_bg`` is sliced per tile so each task only carries the bg entries
+    for cells in that tile — avoids broadcasting a multi-MB global dict.
+    """
+    tasks: list[dict] = []
+    for tile_key, tile_dets in by_tile.items():
+        refs: list[dict] = []
+        bg_slice: dict[int, dict[int, float]] = {}
+        for det in tile_dets:
+            label = det.get("mask_label")
+            if label is None:
+                continue
+            det_idx = int(det["_postdedup_idx"])
+            refs.append({"idx": det_idx, "mask_label": int(label)})
+            cell_bg = per_cell_bg.get(det_idx)
+            if cell_bg:
+                bg_slice[det_idx] = {int(ch): float(v) for ch, v in cell_bg.items()}
+        if refs:
+            tasks.append(
+                {
+                    "tile_key": tile_key,
+                    "dets": refs,
+                    "per_cell_bg": bg_slice,
+                    "pixel_size_um": float(pixel_size_um),
+                }
+            )
+    return tasks
+
+
+def _apply_tile_updates(detections: list[dict], updates: dict[int, dict]) -> int:
+    """Merge worker-returned update dicts into the main-process detection list.
+
+    Semantics:
+      - ``features`` key: merged into existing ``det['features']`` via ``dict.update``
+      - all other keys: replace existing value
+    Returns the number of detections mutated.
+    """
+    n = 0
+    for det_idx, upd in updates.items():
+        if det_idx < 0 or det_idx >= len(detections):
+            continue
+        det = detections[det_idx]
+        for k, v in upd.items():
+            if k == "features":
+                det.setdefault("features", {}).update(v)
+            else:
+                det[k] = v
+        n += 1
+    return n
 
 
 # ---------------------------------------------------------------------------
@@ -440,6 +751,12 @@ def process_detections_post_dedup(
     min_nuclear_area: int = 50,
     cellpose_model=None,
     sam2_predictor=None,
+    # Multi-GPU Phase 4 (preferred when SHM available)
+    num_gpus: int = 0,
+    shm_name: str | None = None,
+    sam2_checkpoint=None,
+    sam2_config: str = "configs/sam2.1/sam2.1_hiera_l.yaml",
+    extract_sam2_embeddings: bool = True,
     # Deprecated — accepted for YAML/CLI compat, silently ignored
     dilation_um: float = 0.0,
     rdp_epsilon: float = 0.0,
@@ -548,44 +865,92 @@ def process_detections_post_dedup(
 
     from tqdm import tqdm as _tqdm
 
-    logger.info("-" * 40)
-    logger.info(
-        "Phase 1: Contour extraction + quick median extraction (%d workers)", effective_workers
-    )
+    # Multi-process path (ProcessPool) — preferred when SHM is available.
+    # Workaround for h5py phil lock; see _phase1_mp_task docstring.
+    use_mp_postdedup = use_shm and shm_name is not None
 
-    with ThreadPoolExecutor(max_workers=effective_workers) as pool:
-        futures = {
-            pool.submit(
-                _phase1_tile,
-                k,
-                v,
-                tiles_dir,
-                mask_filename,
-                use_shm,
-                slide_shm_arr,
-                ch_to_slot,
-                x_start,
-                y_start,
-                loader,
-                _ch_indices,
-                tile_size,
-                has_data_source,
-                contour_processing,
-                pixel_size_um,
-            ): k
-            for k, v in by_tile.items()
-        }
-        with _tqdm(total=len(futures), desc="Phase 1") as pbar:
-            for f in as_completed(futures):
-                tile_key = futures[f]
-                try:
-                    ok, fail = f.result()
-                    n_contour_ok += ok
-                    n_contour_fail += fail
-                except Exception:
-                    logger.error("Phase 1 failed for tile %s", tile_key, exc_info=True)
-                    n_contour_fail += len(by_tile[tile_key])
+    if use_mp_postdedup:
+        from xldvp_seg.processing.multiprocess_tiles import (
+            SharedSlideConfig,
+            TileProcessor,
+        )
+
+        slide_cfg = SharedSlideConfig(
+            shm_name=shm_name,
+            shm_shape=tuple(slide_shm_arr.shape),
+            shm_dtype=str(slide_shm_arr.dtype),
+            ch_to_slot=dict(ch_to_slot),
+            x_start=int(x_start),
+            y_start=int(y_start),
+            tiles_dir=str(tiles_dir),
+            mask_filename=str(mask_filename),
+        )
+        processor = TileProcessor(slide_cfg)
+
+        tasks = _build_phase1_tasks(
+            by_tile,
+            contour_processing=contour_processing,
+            pixel_size_um=pixel_size_um,
+        )
+        logger.info("-" * 40)
+        logger.info(
+            "Phase 1: Contour extraction + quick median extraction (ProcessPool, %d workers)",
+            processor.num_workers,
+        )
+
+        with _tqdm(total=len(tasks), desc="Phase 1") as pbar:
+            for task, updates in processor.run(
+                _phase1_mp_task,
+                tasks,
+                desc="Phase 1",
+                largest_first_key=lambda t: len(t["dets"]),
+            ):
+                tile_key = task["tile_key"]
+                expected = len(task["dets"])
+                got = _apply_tile_updates(detections, updates)
+                n_contour_ok += got
+                n_contour_fail += max(0, expected - got)
                 pbar.update(1)
+    else:
+        logger.info("-" * 40)
+        logger.info(
+            "Phase 1: Contour extraction + quick median extraction (ThreadPool, %d workers)",
+            effective_workers,
+        )
+
+        with ThreadPoolExecutor(max_workers=effective_workers) as pool:
+            futures = {
+                pool.submit(
+                    _phase1_tile,
+                    k,
+                    v,
+                    tiles_dir,
+                    mask_filename,
+                    use_shm,
+                    slide_shm_arr,
+                    ch_to_slot,
+                    x_start,
+                    y_start,
+                    loader,
+                    _ch_indices,
+                    tile_size,
+                    has_data_source,
+                    contour_processing,
+                    pixel_size_um,
+                ): k
+                for k, v in by_tile.items()
+            }
+            with _tqdm(total=len(futures), desc="Phase 1") as pbar:
+                for f in as_completed(futures):
+                    tile_key = futures[f]
+                    try:
+                        ok, fail = f.result()
+                        n_contour_ok += ok
+                        n_contour_fail += fail
+                    except Exception:
+                        logger.error("Phase 1 failed for tile %s", tile_key, exc_info=True)
+                        n_contour_fail += len(by_tile[tile_key])
+                    pbar.update(1)
 
     logger.info("  Phase 1 complete: %d contours ok, %d failed", n_contour_ok, n_contour_fail)
 
@@ -645,43 +1010,83 @@ def process_detections_post_dedup(
     # ==================================================================
     # PHASE 3: Feature extraction on background-corrected pixels (parallelized)
     # ==================================================================
-    logger.info("-" * 40)
-    logger.info("Phase 3: Feature extraction on corrected pixels (%d workers)", effective_workers)
-
     try:
-        with ThreadPoolExecutor(max_workers=effective_workers) as pool:
-            futures = {
-                pool.submit(
-                    _phase3_tile,
-                    k,
-                    v,
-                    tiles_dir,
-                    mask_filename,
-                    use_shm,
-                    slide_shm_arr,
-                    ch_to_slot,
-                    x_start,
-                    y_start,
-                    loader,
-                    _ch_indices,
-                    tile_size,
-                    has_data_source,
-                    per_cell_bg,
-                    pixel_size_um,
-                ): k
-                for k, v in by_tile.items()
-            }
-            with _tqdm(total=len(futures), desc="Phase 3") as pbar:
-                for f in as_completed(futures):
-                    tile_key = futures[f]
-                    try:
-                        ok, fail = f.result()
-                        n_features_ok += ok
-                        n_features_fail += fail
-                    except Exception:
-                        logger.error("Phase 3 failed for tile %s", tile_key, exc_info=True)
-                        n_features_fail += len(by_tile[tile_key])
+        if use_mp_postdedup:
+            from xldvp_seg.processing.multiprocess_tiles import (
+                SharedSlideConfig,
+                TileProcessor,
+            )
+
+            slide_cfg = SharedSlideConfig(
+                shm_name=shm_name,
+                shm_shape=tuple(slide_shm_arr.shape),
+                shm_dtype=str(slide_shm_arr.dtype),
+                ch_to_slot=dict(ch_to_slot),
+                x_start=int(x_start),
+                y_start=int(y_start),
+                tiles_dir=str(tiles_dir),
+                mask_filename=str(mask_filename),
+            )
+            processor = TileProcessor(slide_cfg)
+
+            tasks = _build_phase3_tasks(by_tile, per_cell_bg, pixel_size_um=pixel_size_um)
+            logger.info("-" * 40)
+            logger.info(
+                "Phase 3: Feature extraction on corrected pixels (ProcessPool, %d workers)",
+                processor.num_workers,
+            )
+
+            with _tqdm(total=len(tasks), desc="Phase 3") as pbar:
+                for task, updates in processor.run(
+                    _phase3_mp_task,
+                    tasks,
+                    desc="Phase 3",
+                    largest_first_key=lambda t: len(t["dets"]),
+                ):
+                    expected = len(task["dets"])
+                    got = _apply_tile_updates(detections, updates)
+                    n_features_ok += got
+                    n_features_fail += max(0, expected - got)
                     pbar.update(1)
+        else:
+            logger.info("-" * 40)
+            logger.info(
+                "Phase 3: Feature extraction on corrected pixels (ThreadPool, %d workers)",
+                effective_workers,
+            )
+            with ThreadPoolExecutor(max_workers=effective_workers) as pool:
+                futures = {
+                    pool.submit(
+                        _phase3_tile,
+                        k,
+                        v,
+                        tiles_dir,
+                        mask_filename,
+                        use_shm,
+                        slide_shm_arr,
+                        ch_to_slot,
+                        x_start,
+                        y_start,
+                        loader,
+                        _ch_indices,
+                        tile_size,
+                        has_data_source,
+                        per_cell_bg,
+                        pixel_size_um,
+                    ): k
+                    for k, v in by_tile.items()
+                }
+                with _tqdm(total=len(futures), desc="Phase 3") as pbar:
+                    for f in as_completed(futures):
+                        tile_key = futures[f]
+                        try:
+                            ok, fail = f.result()
+                            n_features_ok += ok
+                            n_features_fail += fail
+                        except Exception:
+                            logger.error("Phase 3 failed for tile %s", tile_key, exc_info=True)
+                            n_features_fail += len(by_tile[tile_key])
+                        pbar.update(1)
 
         total_phase3 = n_features_ok + n_features_fail
         if total_phase3 > 0 and n_features_fail / total_phase3 > 0.05:
@@ -699,12 +1104,45 @@ def process_detections_post_dedup(
             det.pop("_postdedup_idx", None)
 
     # ==================================================================
-    # PHASE 4: Nuclear counting (optional, single-threaded — uses GPU)
+    # PHASE 4: Nuclear counting (optional)
     # ==================================================================
     n_nuclei_counted = 0
-    if count_nuclei and nuc_channel_idx is not None and cellpose_model is not None:
+    use_multigpu_phase4 = (
+        count_nuclei
+        and nuc_channel_idx is not None
+        and num_gpus >= 1
+        and use_shm
+        and shm_name is not None
+    )
+
+    if use_multigpu_phase4:
         logger.info("-" * 40)
-        logger.info("Phase 4: Nuclear counting (Cellpose on nuclear channel)")
+        logger.info("Phase 4: Nuclear counting (multi-GPU, %d workers)", num_gpus)
+        from xldvp_seg.pipeline.multigpu_phase4 import run_multigpu_phase4
+
+        n_nuclei_counted = run_multigpu_phase4(
+            by_tile,
+            detections,
+            num_gpus=num_gpus,
+            tiles_dir=tiles_dir,
+            mask_filename=mask_filename,
+            pixel_size_um=pixel_size_um,
+            min_nuclear_area=min_nuclear_area,
+            slide_shm_arr=slide_shm_arr,
+            shm_name=shm_name,
+            nuc_channel_idx=nuc_channel_idx,
+            ch_to_slot=ch_to_slot,
+            x_start=x_start,
+            y_start=y_start,
+            sam2_checkpoint=sam2_checkpoint,
+            sam2_config=sam2_config,
+            extract_sam2_embeddings=extract_sam2_embeddings,
+        )
+        logger.info("  Phase 4 complete: %d cells enriched with nuclear counts", n_nuclei_counted)
+
+    elif count_nuclei and nuc_channel_idx is not None and cellpose_model is not None:
+        logger.info("-" * 40)
+        logger.info("Phase 4: Nuclear counting (single-process fallback)")
 
         from xldvp_seg.analysis.nuclear_count import (
             _percentile_normalize_to_uint8,
@@ -792,9 +1230,13 @@ def process_detections_post_dedup(
         logger.info("  Phase 4 complete: %d cells enriched with nuclear counts", n_nuclei_counted)
     elif count_nuclei:
         logger.warning(
-            "Phase 4 skipped: count_nuclei=True but missing nuc_channel_idx=%s, "
+            "Phase 4 skipped: count_nuclei=True but missing prerequisites: "
+            "nuc_channel_idx=%s, num_gpus=%d, use_shm=%s, shm_name=%s, "
             "cellpose_model=%s",
             nuc_channel_idx,
+            num_gpus,
+            use_shm,
+            shm_name is not None,
             cellpose_model is not None,
         )
 

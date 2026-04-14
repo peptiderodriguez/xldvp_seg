@@ -312,7 +312,7 @@ CZI file → czi_loader.py (channel resolution, tiling)
            Phase 1: contour extraction + per-cell median intensities (ThreadPool)
            Phase 2: KD-tree local background estimation (single-thread)
            Phase 3: bg-corrected intensity features from original mask (ThreadPool)
-           Phase 4: nuclear counting (optional, --count-nuclei, single-thread GPU)
+           Phase 4: nuclear counting (optional, --count-nuclei, multi-GPU when SHM available)
          → Finalize: JSON + CSV + HTML + OME-Zarr + SpatialData
 ```
 
@@ -329,7 +329,10 @@ CZI file → czi_loader.py (channel resolution, tiling)
 | `detection_loop.py` | Tile dispatch, multi-GPU detection, shard merge, dedup |
 | `samples.py` | HTML sample creation, tile grid, islet GMM calibration |
 | `resume.py` | Checkpoint detection, tile reload, `compose_tile_rgb()` |
-| `post_detection.py` | 3-phase post-dedup + optional Phase 4 nuclear counting (original-mask contour extraction, bg, intensity, nuclei) — ThreadPool parallelized |
+| `post_detection.py` | 3-phase post-dedup + optional Phase 4 nuclear counting (original-mask contour extraction, bg, intensity, nuclei) — Phases 1/3 ProcessPool-parallelized via `TileProcessor` when SHM available (h5py phil workaround), ThreadPool fallback; per-tile bbox lookup via `find_objects`; Phase 4 multi-GPU via `multigpu_phase4.py` |
+| `multigpu_phase4.py` | Multi-GPU Phase 4 orchestrator: spawns N workers (one per GPU), each loads Cellpose+SAM2, drains tiles from a queue, writes per-tile JSON to scratch dir; main process merges. Used when SHM available and `num_gpus >= 1`. |
+| `xldvp_seg/processing/multiprocess_tiles.py` | Generic CPU ProcessPool executor for per-tile HDF5+SHM work. `TileProcessor` spawns workers (each attaches SHM + primes h5py/cv2), task functions are plain module-level callables receiving `(task_dict, WorkerContext)` and returning update dicts. Works around the h5py `phil` global lock that cripples ThreadPool HDF5 parallelism. Reusable for future per-tile pipelines. |
+| `xldvp_seg/processing/shm_attach.py` | Shared helper: attach to a slide's SHM in a worker process; used by both `multigpu_phase4.py` and `multiprocess_tiles.py` to keep the attach contract in one place. |
 | `finalize.py` | Channel legend, CSV/JSON/HTML export, summary |
 | `server.py` | HTTP server + Cloudflare tunnel |
 | `background.py` | KD-tree local background correction (shared with classify_markers.py) |
