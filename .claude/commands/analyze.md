@@ -15,166 +15,43 @@ This is the package's main entry point. A new user who just downloaded the packa
 
 ---
 
-## Adaptive Guidance Principles
+## Guiding Principles
 
-You serve three roles throughout the workflow:
+**Planner:** Choose sensible defaults from hardware + CZI metadata. Don't over-ask when the answer is obvious.
 
-**1. Rational planner (ego):** Break the user's goal into concrete pipeline steps. Choose defaults that work for their hardware and data. Don't over-ask — if the answer is obvious from the CZI metadata or system info, just do it.
+**Guardrail:** `czi_info.py` before any channel config; confirm channel mapping with user before launching; never let double bg correction happen; verify `--resume` points to the exact timestamped run dir (with `tiles/` inside).
 
-**2. Quality guardrail (super-ego):** Enforce non-negotiable correctness checks:
-- Always run `czi_info.py` before any channel config — no exceptions
-- Always confirm channel mapping with user before launching detection
-- Never let double background correction happen
-- Always verify `--resume` points to the right directory
+**Collaborator:** Hardware is good (up to 256 CPU / 760G / 4× L40S per node). Don't catastrophize cluster use. If nodes are idle, just launch. If the cluster is full, offer queue-vs-smaller-partition as an explicit choice — many users prefer to queue on better hardware.
 
-**3. Supportive collaborator:** The user has good hardware (256 CPUs, 760G RAM, 4x L40S per node). Don't be pessimistic about what's feasible. Specifically:
+**Adaptive feedback after results:**
+- After detection: >200K → `--html-sample-fraction 0.05`; <500 → suggest lowering threshold / checking preview.
+- After classification: morph F1 <0.85 → suggest `morph_sam2` or `--extract-deep-features` next round.
+- After marker classification: <1% or >99% positive → flag potential mis-threshold, suggest alternate method (gmm vs otsu).
 
-**Cluster awareness:** Report partition busyness from `system_info.py`. If nodes are idle, just launch — no warnings about "expensive jobs." Only flag resource constraints when the cluster is actually busy or the slide won't fit in available RAM.
-
-**Error recovery:** When something fails, diagnose first. Read the log, identify the specific error (OOM, CUDA, missing file, bad channel index), and suggest the targeted fix. Don't suggest "try running it again" or catastrophize — most failures have a single clear cause.
-
-**Adaptive recommendations after results come in:**
-- After detection: check detection count. If >200K, suggest `--html-sample-fraction 0.05` for the viewer. If <500, suggest lowering the detection threshold.
-- After classification: check F1 and class balance. If morph F1 is low, suggest trying `--feature-set morph_sam2` or `--extract-deep-features` on the next round — deep features are worth exploring when basic features underperform.
-- After marker classification: check positive/negative ratios. If a marker shows <1% or >99% positive, flag it as potentially mis-thresholded and suggest reviewing with a different method (gmm vs otsu).
-
-**Feature recommendations:** Morph-only (78 features) is the pragmatic default — fast, often competitive with all 6,478 combined. But optimal feature sets vary by cell type and staining — always run `compare_feature_sets.py` on your specific data. Deep features are worth trying when:
-- Morph+SAM2 underperforms after annotation
-- The cell type has subtle visual differences not captured by shape (e.g., maturation states)
-- The user wants to explore — it's a reasonable experiment, not a waste of resources
-
-**Don't gatekeep.** If the user wants to try something, help them do it well rather than talking them out of it. Offer context on tradeoffs, but respect their judgment.
+Morph-only (78 features) is the pragmatic default. Run `compare_feature_sets.py` on the user's data before recommending deep features. Don't gatekeep — help the user do what they want to do well.
 
 ---
 
-## Phase 0: System Detection + Toolbox
+## Phase 0: System Detection + Experience Level
 
-**Step 1 — Detect the environment (do this silently, no need to ask):**
-Run `$XLDVP_PYTHON $REPO/scripts/system_info.py --json` (where `$REPO` is the repo root). Parse the JSON to determine:
-- SLURM cluster or local workstation?
-- Available GPUs, RAM, CPUs, partitions
-- **Per-node availability**: `system_info.py` queries actual idle CPUs, free memory, and GPU allocation per node — not just partition specs. It recommends resources based on what's *currently schedulable*.
-- Recommended resources: capped at 128 CPUs max (reliably schedulable on busy clusters even when nodes are partially allocated). Memory at ~65% of node spec. All 4 GPUs on GPU partitions. Use `system_info.py` output — don't hardcode partition names or specs.
+**Step 1 — Detect environment silently.** Run `$XLDVP_PYTHON $REPO/scripts/system_info.py --json`. Parse: SLURM vs local, per-node idle CPUs/RAM/GPUs (not just partition specs — it queries actual availability), recommended resources (capped 128 CPUs for schedulability, ~65% RAM, all GPUs on GPU partitions).
 
-**Tell the user what's available and let them choose.** Example: *"p.hpcl93 (4x L40S): 3 nodes have 4 free GPUs. Best node has 212 idle CPUs and 728G free. Recommending 128 CPUs, 500G, 4 GPUs."*
+Tell the user what's available: *"p.hpcl93 (4× L40S): 3 nodes have 4 free GPUs. Recommending 128 CPUs, 500G, 4 GPUs."*
 
-If the preferred GPU partition is fully busy, **don't silently fall back** — present it as a choice:
-*"p.hpcl93 is fully loaded right now (all GPUs allocated). Options: (1) submit and queue — you'll get a node when one frees up, (2) use p.hpcl8 (2x RTX 5000, 24 CPUs, 380G — smaller but available now), (3) wait and check back later. Which do you prefer?"*
+If preferred partition is fully loaded, present choices explicitly — don't silently fall back:
+*"p.hpcl93 is fully loaded. (1) Submit and queue, (2) use p.hpcl8 (smaller but free now), (3) wait. Which?"*
 
-Many users prefer to queue on the better partition rather than run on weaker hardware.
+On GPU partitions, always request all GPUs (scheduling is per-device exclusive) and `--nodes=1`.
 
-Use this info throughout to set `--num-gpus`, SLURM `--mem`, `--cpus-per-task`, `--gres`, etc. On GPU partitions, **always request all 4 GPUs** (GPU scheduling is per-device exclusive) and `--nodes=1`.
+**Step 2 — Ask experience level** via AskUserQuestion: *"Are you new to this pipeline, or experienced?"* Never infer. User can switch mid-session.
 
-**Step 2 — Ask the user's experience level.** ALWAYS ask explicitly: *"Are you new to this pipeline, or experienced?"* Do NOT try to infer from context. The user can switch at any time by saying "beginner mode" or "advanced mode" — acknowledge the switch and adjust immediately.
+- **Beginner**: explain each step as you reach it, define jargon inline (channels = fluorescent stains; CZI = Zeiss raw format; etc.), show expected outputs. Brief intro only: *"This pipeline finds cells in your slide, lets you review and classify them, then exports for laser microdissection."* Don't front-load a wall of text.
+- **Advanced**: concise mode. Show command, ask "looks good?", run. Point them at `/new-experiment` for fastest path.
 
-- **Beginner**: Explain what each step does and why before running it. Define jargon (CZI, channels, features, contours, Cellpose, SAM2, Otsu, etc.). Show expected outputs. Give the brief DVP workflow overview below, then explain each step as you reach it.
-- **Advanced**: Concise mode. Show the command, ask "looks good?", run it. Skip explanations unless something is unusual. If they ask "what can this do?" or want the full toolbox, show the analysis table from Step 3 — but don't show it unprompted.
+If the user asks "what can this do?" summarize:
+> Inspect CZI → Detect cells (8 types + ROI-restricted) → Annotate in HTML → RF classify → Marker classification → UMAP/Leiden + spatial analysis → LMD export → proteomics linking.
 
-**For beginners, give a brief overview** (3-4 sentences max, not the full 8-step list):
-
-*"This pipeline finds cells in your microscopy slide, lets you review and classify them, then exports the ones you want for laser microdissection. I'll walk you through each step — starting with inspecting your slide's channels."*
-
-Explain each step **as you reach it**, not all upfront. Define jargon inline when it first appears (e.g., "channels — the different fluorescent stains in your image"). Don't front-load a wall of text.
-
-**Step 3 — Know what's available.** Use the internal reference below to suggest relevant tools at the right moment. Don't list everything upfront — introduce capabilities as they become relevant.
-
-If the user asks "what can you do?" or wants an overview, give this concise summary:
-
-*"This pipeline handles the complete DVP (Deep Visual Proteomics) workflow:*
-
-*1. **Inspect** your CZI slide — channels, dimensions, pixel size*
-*2. **Detect** cells using Cellpose or InstanSeg (8 cell types supported: generic cell, NMJ, MK, vessel, islet, mesothelium, tissue pattern, plus InstanSeg alternative). ROI-restricted detection available for islets, TMA cores, and bone marrow regions — detect only within regions of interest, skipping 95%+ of non-ROI tissue.*
-*3. **Annotate** detections in an interactive HTML viewer — click yes/no on cell crops*
-*4. **Classify** with a random forest trained on your annotations (morph, SAM2, or deep features)*
-*5. **Classify markers** as positive/negative per fluorescence channel (median SNR thresholding)*
-*6. **Explore** with UMAP/t-SNE + Leiden clustering, trajectory analysis, spatial network analysis*
-*7. **Export for LMD** — contours, well plates, XML for laser microdissection*
-*8. **Link to proteomics** — bridge morphological features to mass-spec data*
-
-*You have a SLURM cluster with {n} GPU nodes available. I'll handle YAML configs, sbatch submission, and monitoring. What would you like to analyze?"*
-
-*For experienced users: `/new-experiment` is a faster alternative that goes straight to CZI inspection and YAML config generation.*
-
-For beginners, expand on each step as you reach it. For advanced users, just ask what they want to do.
-
-**Internal reference — available analyses:**
-
-| Stage | What you can do | Script / Flag |
-|-------|----------------|---------------|
-| **Inspect** | CZI metadata, channels, mosaic dims | `scripts/czi_info.py` |
-| **Preview** | Flat-field, photobleach, row/col normalization effects | `scripts/preview_preprocessing.py`, `examples/legacy/visualize_corrections.py` |
-| **Detect** | NMJ, MK, vessel, mesothelium, islet, tissue pattern, generic cell (Cellpose or InstanSeg) | `run_segmentation.py --cell-type {nmj,mk,vessel,mesothelium,islet,tissue_pattern,cell}`, `--segmenter {cellpose,instanseg}` |
-| **Features** | Morph (78D), SAM2 (256D), ResNet (4096D), DINOv2 (2048D), per-channel stats (15/ch) | `--extract-deep-features`, `--all-channels` |
-| **Annotate** | HTML viewer with pos/neg annotation, JSON export | `scripts/regenerate_html.py`, `serve_html.py` |
-| **Classify** | RF training, feature comparison (5-fold CV), batch scoring | `train_classifier.py`, `scripts/compare_feature_sets.py`, `scripts/apply_classifier.py` |
-| **Markers** | Median-based SNR thresholding (default ≥1.5) / Otsu / GMM (BIC model selection: compares 1 vs 2 components, returns all-negative for unimodal data) | `scripts/classify_markers.py` (core: `xldvp_seg.analysis.marker_classification`) |
-| **Explore** | UMAP + t-SNE, Leiden/HDBSCAN clustering, trajectory (diffmap, PAGA, pseudotime), interactive plotly | `xlseg cluster` / `scripts/cluster_by_features.py` (core: `xldvp_seg.analysis.cluster_features`) |
-| **Spatial** | Delaunay networks, community detection, cell neighborhoods | `scripts/spatial_cell_analysis.py` (core: `xldvp_seg.analysis.spatial_network`) |
-| **Curvilinear patterns** | Detect strip/ribbon structures (e.g., mesothelium) via KD-tree radius graph → connected components → graph diameter linearity. Works for curved structures. Tunable: `--radius`, `--linearity-threshold`, `--min-strip-length`, `--min-strip-cells`. Writes strip-only JSON for fast viewer. | `scripts/detect_curvilinear_patterns.py` (core: `xldvp_seg.analysis.pattern_detection`) |
-| **Vessel structures** | Detect vessel structures (arteries, veins, lymphatics, capillaries) from SMA+/CD31+/LYVE1+ cells. Graph topology (ring_score, arc_fraction, linearity) + geometric/PCA (circularity, hollowness, elongation). Morphometry (diameter, lumen, wall extent). Marker layering (Mann-Whitney U). Multi-marker OR/AND selection. Outputs tagged JSON + CSV + vessel-only JSON. | `scripts/detect_vessel_structures.py` |
-| **Tissue zones** | Spatially-constrained zone discovery, transects, bone region annotation | `examples/liver/assign_tissue_zones.py`, `examples/liver/zonation_transect.py`, `examples/bone_marrow/annotate_bone_regions.py` |
-| **Distance bins** | Concentric rings around landmarks (CV/PV), distance + ratio features, model comparison | `examples/liver/assign_distance_bins.py` |
-| **Tissue area** | Variance-based tissue detection, area measurement from CZI | `examples/bone_marrow/calculate_tissue_areas.py` |
-| **Visualize** | Multi-slide scrollable HTML with ROI drawing + stats. **CZI thumbnail caching**: first run reads CZI (slow), subsequent runs load `.thumbnail_cache_*.npz` (instant). Cache key includes channels + scale factor. | `scripts/generate_multi_slide_spatial_viewer.py` |
-| **Contour viewer** | Contour overlay on CZI fluorescence — per-group coloring, click-to-inspect metadata, viewport culling. For vessel lumens, cell boundaries, or any polygon contour JSON. | `scripts/generate_contour_viewer.py` |
-| **Tissue overlay** | Fluorescence image + cell overlay + ROI + LMD export in one viewer | `scripts/generate_tissue_overlay.py` |
-| **Nuclear count** | Count nuclei per cell (integrated in Phase 4, or standalone for existing runs). Morph+SAM2 per nucleus | `--count-nuclei` (default ON) or `scripts/count_nuclei_per_cell.py` |
-| **Region detection** | Percentile-threshold any channel → morphological cleanup → split into equal-area pieces → full features (morph+channel+SAM2) → LMD | `scripts/detect_regions_for_lmd.py` |
-| **Region splitting** | Post-process existing pipeline detections → watershed split large regions | `scripts/split_regions_for_lmd.py` |
-| **Replicate sampling** | Area-matched or spatially-clustered replicates, marker/cluster stratification, 384-well assignment | `scripts/paper_figure_sampling.py` |
-| **Transect selection** | Select cells along zonation transect paths for LMD | `scripts/select_transect_cells_for_lmd.py` |
-| **Sliding window** | Area-matched rolling window sampling along ROI centerlines. Grid search for zero-rejection combos. Morphological skeleton + farthest-point spatial balancing. Ref settings: ~6700 cells/mm² brain → r=70um/40% overlap for 20× target, r=90um/40% for 30×. Always use `--czi-path`. | `scripts/sliding_window_sampling.py` (core: `xldvp_seg.analysis.sliding_window_sampling`) |
-| **QC** | Quick post-run quality check: detection count, area stats, RF scores, marker profiles, per-channel SNR, nuclear counts — no HTML viewer needed | `xlseg qc <output_dir>` |
-| **LMD** | Adaptive RDP simplification, dilation, clustering, well assignment, XML export | `run_lmd_export.py` |
-| **SpatialData** | Export to scverse ecosystem (squidpy, scanpy, anndata) | `scripts/convert_to_spatialdata.py` |
-| **Convert** | CZI to OME-Zarr pyramids for Napari | `scripts/czi_to_ome_zarr.py` |
-| **Spatial smooth** | Feature-gated spatial smoothing for tighter UMAP clusters | `scripts/cluster_by_features.py --spatial-smooth` |
-| **Dedup methods** | Mask overlap (default) or contour IoU NMS (faster, less memory) | `--dedup-method {mask_overlap,iou_nms}` |
-| **Seg metrics** | IoU, Dice, PQ, Hungarian matching for benchmarking segmenters | `xldvp_seg.metrics` module |
-| **Sample data** | Synthetic test detections (500 cells, 5 clusters) for dev/testing | `xldvp_seg.datasets.sample()` |
-| **Python API** | Scanpy-style wrappers: `xldvp_seg.api.tl.markers()`, `.score()`, `.cluster()` | `xldvp_seg.api` (`pp`, `tl`, `pl`, `io`) |
-| **SlideAnalysis** | Central state object wrapping pipeline output with lazy loading | `xldvp_seg.core.SlideAnalysis` |
-| **Cohort aggregation** | Slide-level feature aggregation for multi-slide comparison | `xldvp_seg.analysis.aggregation` |
-| **Omic linking** | Bridge morphological features to mass-spec proteomics data | `xldvp_seg.analysis.omic_linker.OmicLinker` |
-| **Model download** | Download brightfield FMs (UNI2, Virchow2, CONCH, Phikon-v2) | `xlseg download-models --brightfield` |
-| **One-command** | Classify → spatial cluster → viewer → serve (all in one) | `scripts/view_slide.py` |
-| **Block-face registration** | Register gross tissue photo to fluorescence, recursive SAM2 organ segmentation, organ-specific LMD | VALIS + SAM2 (see `docs/BLOCKFACE_REGISTRATION.md`) |
-| **ROI detection** | Islet regions, TMA cores, bone marrow areas → per-ROI cell detection | `examples/islet/segment_islet_regions.py`, `examples/tma/detect_tma_cells.py` |
-
-**Cell-type-specific scripts** (mention ONLY when relevant to the user's actual cell type — don't list all of these):
-
-| Cell type | Script | What it does |
-|-----------|--------|-------------|
-| **MK** | `examples/bone_marrow/maturation_analysis.py` | MK maturation staging using nuclear deep features |
-| **MK** | `examples/bone_marrow/mk_comprehensive_analysis.py` | Comprehensive MK analysis across all feature dimensions |
-| **MK** | `examples/bone_marrow/mk_interaction_analysis.py` | ART interaction effects for MK morphological features |
-| **MK** | `examples/bone_marrow/mk_mechanism_figure.py` | Generate mechanosensing figure with data-faithful cells |
-| **MK** | `examples/bone_marrow/split_detections_by_bone.py` | Split detections by bone region (femur/humerus) |
-| **MK** | `examples/bone_marrow/select_mks_for_lmd.py` | MK replicate selection + multi-plate wells |
-| **Vessel** | `scripts/detect_vessel_lumens_threshold.py` | Threshold lumen detection on OME-Zarr (CPU, recommended for whole-mount). See `docs/VESSEL_LUMEN_THRESHOLD_PIPELINE.md` |
-| **Vessel** | `scripts/score_vessel_lumens.py` | RF training + scoring + filtering with annotation overrides |
-| **Vessel** | `scripts/generate_lumen_annotation.py` | Card-grid annotation HTML from zarr crops |
-| **Vessel** | `scripts/assign_vessel_wall_cells.py` | Per-marker wall cell assignment + LMD replicates |
-| **Vessel** | `scripts/detect_vessel_structures.py` | Graph topology vessel detection from marker+ cells (ring/arc/strip/cluster → artery/vein/lymphatic/capillary) |
-| **Vessel** | `scripts/vessel_community_analysis.py` | Multi-scale vessel community analysis (tissue-level neighborhoods) |
-| **Vessel** | `examples/vessel/train_vessel_detector.py` | Train vessel RF detector |
-| **Vessel** | `examples/vessel/train_vessel_classifier.py` | Train vessel type classifier (7 types) |
-| **Vessel** | `examples/bone_marrow/rbc_vascularization_analysis.py` | RBC vascularization analysis for MK HU project |
-| **Islet** | `examples/islet/analyze_islets.py` | Spatial analysis of pancreatic islets |
-| **Islet** | `examples/islet/segment_islet_regions.py` | ROI-based islet segmentation (nuc vs PM+nuc comparison) |
-| **Islet** | `examples/islet/generate_islet_overview.py` | HTML islet overview from completed run |
-| **Mesothelium** | `examples/mesothelium/generate_msln_annotation.py` | Reclassify Msln+ cells into tiers (HTML tool) |
-| **Mesothelium** | `examples/mesothelium/generate_msln_cluster_viewer.py` | Msln+ clustering results viewer |
-| **Mesothelium** | `examples/mesothelium/generate_msln_annotation_crops.py` | Msln crop generation for annotation |
-| **TMA** | `examples/tma/detect_tma_cells.py` | Find TMA cores → cell detection per core with grid labels |
-| **Any** | `scripts/count_nuclei_per_cell.py` | Standalone nuclear counting for existing runs (integrated via `--count-nuclei` for new runs) |
-| **Any** | `examples/islet/expand_nuclei_masks.py` | Expand nuclei-only masks to approximate cell body |
-| **Any** | `examples/legacy/extract_sam2_embeddings.py` | Extract SAM2 embeddings for existing detections |
-| **Any** | `examples/bone_marrow/generate_rbc_annotation_html.py` | RBC cluster candidate annotation HTML |
-| **Any** | `examples/legacy/generate_cluster_gallery.py` | Visual gallery of clustered detections |
-| **Any** | `examples/bone_marrow/compare_tissue_vs_bone_outlines.py` | Compare tissue detection vs manual bone region annotations |
-
-Don't list these tables to the user. Just ask what they want to analyze.
+See **Analysis Catalog** at the end of this file for the full toolbox. Don't list it unless asked.
 
 ---
 
@@ -232,27 +109,26 @@ This replaces manual `--channel`, `--cellpose-input-channels`, and `--marker-cha
 - Tissue Pattern (brain FISH, coronal sections)
 - Generic cell (Cellpose or InstanSeg, any tissue) — ask which channels for cyto/nuc input. Offer `--segmenter instanseg` as lightweight alternative (requires `pip install -e .[instanseg]`).
 
-**Step 7 — Offer preprocessing preview.** Ask: *"Want to preview flat-field or photobleach correction before the full run?"* If yes, run `scripts/preview_preprocessing.py --czi-path <path> --channel <N> --preprocessing all --output-dir <output>/preview/` and show the output paths.
+**Step 7 — Offer flat-field preview (optional).** Ask: *"Want to preview flat-field correction before the full run?"* If yes, run `scripts/preview_preprocessing.py --czi-path <path> --channel <N> --preprocessing flat_field --output-dir <output>/preview/`. Do NOT offer photobleach correction — it's experimental and unreliable.
 
-**Step 8 — Configure parameters.** Set up:
-- Detection channel: use `--channel-spec "detect=<marker_or_wavelength>"` (preferred) or `--channel <index>`
-- For 2-channel Cellpose: `--channel-spec "cyto=<marker>,nuc=<marker>"` (preferred) or `--cellpose-input-channels <cyto>,<nuc>`
-  - *Why PM+nuc?* PM (plasma membrane) labels all cell bodies regardless of lineage; nuclear is the second Cellpose channel that sharpens borders. Detect everything with morphology, then separate cell types by marker intensity post-detection.
-- Multi-channel features: `--all-channels` if >1 channel is relevant. Add `--channels "0,1,2"` to skip failed stains.
-  - *Why?* Each channel adds ~15 intensity features per cell (mean, std, percentiles, SNR). Without `--all-channels`, marker expression is not captured in features and the RF classifier has no intensity signal to work with.
-- Deep features: `--extract-deep-features` adds ResNet+DINOv2 (6,144 dims). Off by default.
-  - *Why off by default?* Morphological features alone are often sufficient. Deep features increase detection time but can help for cell types where shape alone isn't discriminative enough (maturation states, subtle phenotypes). Always run `compare_feature_sets.py` on your specific data to find the best combination — performance varies by cell type and staining.
-- Sample fraction: always `1.0` (the default) — detect 100% of tissue tiles. Use `0.01` only for a quick sanity-check that the pipeline runs correctly on a new slide.
-  - *Why always 100%?* Detection is checkpointed per-tile and the classifier is applied post-hoc — you never re-detect. Annotate from the HTML subsample (`html_sample_fraction: 0.10`) which shows 10% of *detections* in the browser, then train and score all detections without re-running anything.
-- Preprocessing flags: `--photobleaching-correction` for sequential tile scans with intensity decay. Flat-field is ON by default (`--no-normalize-features` to disable).
-  - *Why flat-field on by default?* Tiled mosaic acquisitions almost always have uneven illumination (bright center, dark edges). Correcting this prevents false intensity gradients across the slide from affecting feature extraction.
-  - *When to use photobleach correction?* Only if you see a visible intensity gradient across scan direction. Check with `/preview-preprocessing`.
-- Area filters (`--min-cell-area`, `--max-cell-area` in µm²) if the cell type has a known size range — cuts debris and giant artifacts before feature extraction.
-- Segmenter: `--segmenter {cellpose,instanseg}` (default: cellpose). InstanSeg is a lightweight 3.8M-param alternative. Requires `pip install -e .[instanseg]`.
-- Deduplication: `--dedup-method {mask_overlap,iou_nms}` (default: mask_overlap). IoU NMS uses contour-based IoU with Shapely STRtree — faster and lower memory for large slides. `--iou-threshold 0.2` controls the threshold.
-  - *When to try IoU NMS?* Slides with >100K detections where mask overlap dedup is slow or memory-heavy.
-  - **Note:** IoU and overlap-fraction are different metrics — IoU may miss size-mismatched overlaps (small cell inside large vessel). Benchmark both before switching default.
-- Nuclear counting: **ON by default** when a nuclear channel is available. Uses AskUserQuestion to ask: *"Nuclear counting is enabled by default — it counts nuclei per cell during detection (no extra I/O). This adds n_nuclei, nuclear_area_fraction (N:C ratio), and per-nucleus features. Want to keep it on?"* Options: "Keep enabled (recommended)" / "Disable (--no-count-nuclei)". If the slide has no nuclear channel specified, mention that nuclear counting will be skipped automatically.
+**Step 8 — Configure parameters.** *(For beginners, include the italicized `*Why?*` rationale when presenting each option; for advanced users, show the flag and move on.)*
+
+- **Detection channel:** `--channel-spec "detect=<marker_or_wavelength>"` (preferred) or `--channel <index>`. For 2-channel Cellpose: `--channel-spec "cyto=PM,nuc=488"`.
+  - *Why PM+nuc?* PM labels all cell bodies regardless of lineage; nuclear sharpens borders. Detect with morphology, separate by marker intensity post-detection.
+- **Multi-channel features:** `--all-channels` if >1 channel relevant. `--channels "0,1,2"` to skip failed stains.
+  - *Why?* Each channel adds ~15 intensity features (mean, std, percentiles, SNR). Without this, the RF has no marker signal to work with.
+- **Deep features:** `--extract-deep-features` adds ResNet+DINOv2 (6,144 dims). Off by default.
+  - *Why off?* Morph alone is often competitive. Deep features help for subtle phenotypes (maturation states) — try if morph F1 <0.85. Run `compare_feature_sets.py` to decide.
+- **Sample fraction:** ALWAYS 1.0 (default). Use 0.01 only for sanity-check on a brand-new slide.
+  - *Why always 100%?* Detection is checkpointed per-tile, classifier applied post-hoc — you never re-detect. Subsample HTML viewer with `html_sample_fraction: 0.10`.
+- **Preprocessing:** flat-field ON by default (`--no-normalize-features` to disable). `--photobleaching-correction` is EXPERIMENTAL — do NOT suggest.
+  - *Why flat-field on?* Tiled mosaics have uneven illumination (bright center, dark edges). Corrects false intensity gradients across the slide.
+- **Area filters:** `--min-cell-area`, `--max-cell-area` (µm²) cut debris and giant artifacts when cell type has a known size range.
+- **Segmenter:** `--segmenter {cellpose,instanseg}` (default cellpose). InstanSeg is a lightweight 3.8M-param alternative; requires `pip install -e .[instanseg]`.
+- **Dedup:** `--dedup-method mask_overlap` (default, pixel-exact) or `iou_nms` (Shapely STRtree, faster with >100K detections). `--iou-threshold 0.2` for IoU.
+  - Note: IoU and overlap-fraction are different metrics — IoU may miss size-mismatched overlaps. Benchmark before switching default.
+- **Nuclear counting:** ON by default when a nuclear channel exists (zero extra I/O). Ask via AskUserQuestion: *"Nuclear counting adds n_nuclei, N:C ratio, per-nucleus features. Keep on?"* Options: "Keep (recommended)" / "Disable (`--no-count-nuclei`)". Skipped automatically if no nuclear channel.
+- **Marker classification shortcut:** `--marker-snr-channels "SMA:1,CD31:3"` (SNR≥1.5 during detection, zero extra cost — replaces separate markers step). Requires `--all-channels`.
 
 **Step 9 — Generate YAML config + launch.**
 
@@ -581,31 +457,24 @@ xlseg cluster \
     --exclude-channels "1" --marker-channels "nuc:0,PM:2,CD31:3"
 ```
 
-**Step 19 — Interactive spatial viewer:**
+**Step 19 — Interactive spatial viewer.** Three options depending on what you need:
+
 ```bash
+# Cell dots colored by field (most common)
 PYTHONPATH=$REPO $XLDVP_PYTHON $REPO/scripts/generate_multi_slide_spatial_viewer.py \
-    --input-dir <output> \
-    --group-field <marker_class_field> \
-    --title "Spatial Overview" \
-    --output <output>/spatial_viewer.html
-```
+    --input-dir <output> --group-field <marker_class> \
+    --title "Spatial Overview" --output <output>/spatial_viewer.html
 
-Or use the tissue overlay viewer (fluorescence image + cell overlay + ROI + LMD export):
-```bash
+# Tissue overlay: fluorescence + cell contours + ROI drawing + LMD export in one
 PYTHONPATH=$REPO $XLDVP_PYTHON $REPO/scripts/generate_tissue_overlay.py \
-    --detections <detections.json> \
-    --czi-path <czi_path> \
-    --output <output>/tissue_overlay.html
+    --detections <detections.json> --czi-path <czi_path> --output <output>/tissue_overlay.html
+
+# All-in-one: classify_markers → spatial → viewer → serve
+PYTHONPATH=$REPO $XLDVP_PYTHON $REPO/scripts/view_slide.py \
+    --detections <detections.json> --czi-path <czi_path> --output-dir <output>
 ```
 
-Or the all-in-one command:
-```bash
-PYTHONPATH=$REPO $XLDVP_PYTHON $REPO/scripts/view_slide.py \
-    --detections <detections.json> \
-    --czi-path <czi_path> \
-    --output-dir <output>
-```
-This chains: classify_markers → spatial_cell_analysis → generate_multi_slide_spatial_viewer → serve_html.
+**Step 19a — Quick QC (recommended).** Run `xlseg qc <output_dir>` for a text summary: detection count, area distribution, RF score distribution, marker profiles, per-channel SNR, nuclear counts. Faster than HTML when all you need is numbers. Flag anomalies (unexpected count, >99% marker positive, etc.) to the user.
 
 **Step 19b — Cell-type-specific analyses.**
 
@@ -1211,4 +1080,85 @@ adata = slide.to_anndata()
   - Identify the specific error, explain it, and suggest the targeted fix. Most failures have one clear cause.
 - **Give helpful guidance and pushback** when you see potential issues — suggest better approaches, flag questionable parameter choices, recommend trying alternatives. But respect the user's judgment and don't gatekeep.
 
-$ARGUMENTS
+---
+
+## Analysis Catalog
+
+Reference tables — introduce capabilities as they become relevant, don't list upfront. Use this to look up tools when the user asks "what can I do?" or at an appropriate pipeline point.
+
+### General analyses
+
+| Stage | What you can do | Script / Flag |
+|-------|----------------|---------------|
+| **Inspect** | CZI metadata, channels, mosaic dims | `scripts/czi_info.py` |
+| **Preview** | Flat-field correction preview | `scripts/preview_preprocessing.py` |
+| **Detect** | NMJ, MK, vessel, mesothelium, islet, tissue pattern, generic cell | `run_segmentation.py --cell-type {...}`, `--segmenter {cellpose,instanseg}` |
+| **Features** | Morph (78D), SAM2 (256D), ResNet (4096D), DINOv2 (2048D), per-channel (15/ch) | `--extract-deep-features`, `--all-channels` |
+| **Annotate** | HTML viewer (pos/neg, JSON export) | `scripts/regenerate_html.py`, `serve_html.py` |
+| **Classify** | RF training, 5-fold CV, batch scoring | `train_classifier.py`, `scripts/apply_classifier.py`, `scripts/compare_feature_sets.py` |
+| **Markers** | SNR ≥1.5 / Otsu / GMM (BIC selection) | `scripts/classify_markers.py` (core: `xldvp_seg.analysis.marker_classification`) |
+| **Explore** | UMAP + t-SNE, Leiden/HDBSCAN, trajectory (diffmap/PAGA/pseudotime) | `xlseg cluster` (core: `xldvp_seg.analysis.cluster_features`) |
+| **Spatial** | Delaunay networks, community detection | `scripts/spatial_cell_analysis.py` (core: `xldvp_seg.analysis.spatial_network`) |
+| **Curvilinear patterns** | Strip/ribbon detection via graph linearity. Tunable: `--radius`, `--linearity-threshold`, `--min-strip-{length,cells}` | `scripts/detect_curvilinear_patterns.py` |
+| **Vessel structures** | Graph topology from marker+ cells → ring/arc/strip → artery/vein/lymphatic/capillary | `scripts/detect_vessel_structures.py` |
+| **Tissue zones** | Spatially-constrained zone discovery, transects, bone region annotation | `examples/liver/{assign_tissue_zones,zonation_transect}.py`, `examples/bone_marrow/annotate_bone_regions.py` |
+| **Tissue area** | Variance-based tissue detection | `examples/bone_marrow/calculate_tissue_areas.py` |
+| **Visualize** | Multi-slide scrollable HTML + ROI + stats. CZI thumbnail cached after first read. | `scripts/generate_multi_slide_spatial_viewer.py` |
+| **Contour viewer** | Polygon overlay on fluorescence (vessel lumens, cell boundaries) | `scripts/generate_contour_viewer.py` |
+| **Tissue overlay** | Fluorescence + cells + ROI + LMD export | `scripts/generate_tissue_overlay.py` |
+| **Nuclear count** | Nuclei per cell (morph + SAM2 per nucleus) | `--count-nuclei` (default ON) or `scripts/count_nuclei_per_cell.py` |
+| **Region detection** | Percentile-threshold → cleanup → equal-area split → features → LMD | `scripts/detect_regions_for_lmd.py` |
+| **Region splitting** | Watershed split large existing regions | `scripts/split_regions_for_lmd.py` |
+| **Replicate sampling** | Area-matched / spatially-clustered, marker-stratified, 384-well | `scripts/paper_figure_sampling.py` |
+| **Transect selection** | Cells along zonation transect paths | `scripts/select_transect_cells_for_lmd.py` |
+| **Sliding window** | Rolling window along ROI centerlines, grid-search zero-rejection combos. Ref: r=70um/40% overlap for 20× brain target. | `scripts/sliding_window_sampling.py` |
+| **QC** | Quick post-run quality check (count, area, RF scores, marker profiles, SNR, nuclei) | `xlseg qc <output_dir>` |
+| **LMD** | Adaptive RDP + dilation + well assignment + XML | `run_lmd_export.py` |
+| **SpatialData** | scverse zarr export (squidpy/scanpy/anndata) | `scripts/convert_to_spatialdata.py` |
+| **Convert** | CZI → OME-Zarr pyramids | `scripts/czi_to_ome_zarr.py` (or automatic) |
+| **Spatial smooth** | Feature-gated smoothing (tighter UMAP) | `scripts/cluster_by_features.py --spatial-smooth` |
+| **Dedup** | Mask overlap (default) or IoU NMS (fast) | `--dedup-method {mask_overlap,iou_nms}` |
+| **Seg metrics** | IoU, Dice, PQ, Hungarian matching | `xldvp_seg.metrics` |
+| **Sample data** | Synthetic 500 cells / 5 clusters | `xldvp_seg.datasets.sample()` |
+| **Python API** | `tl.markers/.score/.cluster`, `pp`, `pl`, `io` | `xldvp_seg.api` |
+| **Cohort** | Slide-level aggregation | `xldvp_seg.analysis.aggregation` |
+| **Omic linking** | Morphology ↔ proteomics | `xldvp_seg.analysis.omic_linker.OmicLinker` |
+| **Models** | Download brightfield FMs (UNI2/Virchow2/CONCH/Phikon-v2) | `xlseg download-models --brightfield` |
+| **One-command** | Classify → cluster → viewer → serve | `scripts/view_slide.py` |
+| **Block-face registration** | Gross tissue photo → CZI via VALIS + recursive SAM2 → organ-specific LMD | `docs/BLOCKFACE_REGISTRATION.md` |
+| **ROI-restricted detection** | Islets, TMA cores, bone marrow regions | `examples/islet/segment_islet_regions.py`, `examples/tma/detect_tma_cells.py` |
+
+### Cell-type-specific scripts
+
+Mention only when relevant to the user's cell type — don't list all of these.
+
+| Cell type | Script | What it does |
+|-----------|--------|-------------|
+| **MK** | `examples/bone_marrow/maturation_analysis.py` | MK maturation staging (nuclear deep features) |
+| **MK** | `examples/bone_marrow/mk_comprehensive_analysis.py` | Multi-dimensional MK analysis |
+| **MK** | `examples/bone_marrow/mk_interaction_analysis.py` | ART interaction effects |
+| **MK** | `examples/bone_marrow/mk_mechanism_figure.py` | Mechanosensing figure |
+| **MK** | `examples/bone_marrow/split_detections_by_bone.py` | Split by femur/humerus |
+| **MK** | `examples/bone_marrow/select_mks_for_lmd.py` | Replicate selection + multi-plate wells |
+| **Vessel** | `scripts/detect_vessel_lumens_threshold.py` | Threshold lumen detection on OME-Zarr (CPU, **recommended** for whole-mount). See `docs/VESSEL_LUMEN_THRESHOLD_PIPELINE.md`. |
+| **Vessel** | `scripts/score_vessel_lumens.py` | RF scoring + filtering with annotation overrides |
+| **Vessel** | `scripts/generate_lumen_annotation.py` | Card-grid annotation HTML from zarr crops |
+| **Vessel** | `scripts/assign_vessel_wall_cells.py` | Per-marker wall cell assignment + LMD replicates |
+| **Vessel** | `scripts/segment_vessel_lumens.py` | SAM2 lumen-first (flexible shapes, GPU) |
+| **Vessel** | `scripts/detect_vessel_structures.py` | Graph topology from marker+ cells |
+| **Vessel** | `scripts/vessel_community_analysis.py` | Multi-scale vessel communities |
+| **Vessel** | `examples/vessel/train_vessel_{detector,classifier}.py` | Train RF detector / 7-type classifier |
+| **Vessel** | `examples/bone_marrow/rbc_vascularization_analysis.py` | RBC vascularization (MK HU project) |
+| **Islet** | `examples/islet/analyze_islets.py` | Spatial islet analysis |
+| **Islet** | `examples/islet/segment_islet_regions.py` | ROI-based islet segmentation |
+| **Islet** | `examples/islet/generate_islet_overview.py` | HTML overview |
+| **Mesothelium** | `examples/mesothelium/generate_msln_annotation.py` | Reclassify Msln+ tiers |
+| **Mesothelium** | `examples/mesothelium/generate_msln_cluster_viewer.py` | Cluster results viewer |
+| **Mesothelium** | `examples/mesothelium/generate_msln_annotation_crops.py` | Crop generation |
+| **TMA** | `examples/tma/detect_tma_cells.py` | Find cores → per-core detection with grid labels |
+| **Any** | `scripts/count_nuclei_per_cell.py` | Standalone nuclear counting (integrated via `--count-nuclei`) |
+| **Any** | `examples/islet/expand_nuclei_masks.py` | Expand nuclei masks to cell body |
+| **Any** | `examples/legacy/extract_sam2_embeddings.py` | Extract SAM2 for existing detections |
+| **Any** | `examples/bone_marrow/generate_rbc_annotation_html.py` | RBC annotation HTML |
+| **Any** | `examples/legacy/generate_cluster_gallery.py` | Visual cluster gallery |
+| **Any** | `examples/bone_marrow/compare_tissue_vs_bone_outlines.py` | Compare tissue vs manual bone annotations |
