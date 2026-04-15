@@ -236,9 +236,11 @@ def process_region(
 ):
     """Full per-region PCA → UMAP → 4-way clustering pipeline.
 
-    Clustering (kmeans/Leiden/HDBSCAN) is run on the **PCA-reduced subsample**
-    (principled — UMAP distorts distances). HDBSCAN-on-UMAP is also computed
-    for visual parity with the UMAP plot.
+    **Clustering runs on the full set of cells** (kmeans, Leiden, HDBSCAN-PCA).
+    UMAP runs on a subsample for speed and display (UMAP scales poorly past
+    ~30K points, and the HTML viewer can't render more than that anyway).
+    HDBSCAN-UMAP runs on the UMAP subsample (that's the only place UMAP coords
+    exist — document this in the viewer).
 
     Returns a JSON-serializable dict suitable for embedding in HTML viewers,
     or ``None`` if the region has too few valid cells (<50 after filtering)
@@ -274,9 +276,27 @@ def process_region(
     n_pcs = max(2, min(n_for_cutoff, max_pcs, full_max))
 
     X_pca = pca_full.transform(X_scaled)[:, :n_pcs]
-
-    # Subsample for UMAP + viewer
     n_total = X_pca.shape[0]
+
+    # --- Clustering on FULL PCA space ---
+    hopkins = hopkins_statistic(X_pca, rng=rng)
+    best_k, sil, labels_kmeans, ch, sil_per_k, inertia_per_k = find_optimal_k_elbow(
+        X_pca, max_k=max_k, rng=rng
+    )
+    try:
+        labels_leiden = cluster_leiden(
+            X_pca, n_neighbors=leiden_knn, resolution=leiden_resolution
+        )
+    except Exception as e:
+        logger.warning("Leiden failed: %s", e)
+        labels_leiden = np.zeros(n_total, dtype=np.int32)
+    try:
+        labels_hdb_pca = cluster_hdbscan(X_pca, min_cluster_size=hdbscan_min_size)
+    except Exception as e:
+        logger.warning("HDBSCAN (PCA) failed: %s", e)
+        labels_hdb_pca = np.zeros(n_total, dtype=np.int32)
+
+    # --- Subsample for UMAP + viewer display ---
     if n_total > max_points_plot:
         sub_idx = rng.choice(n_total, size=max_points_plot, replace=False)
         sub_idx.sort()
@@ -284,7 +304,7 @@ def process_region(
         sub_idx = np.arange(n_total)
     X_pca_sub = X_pca[sub_idx]
 
-    # UMAP
+    # UMAP on subsample (full-set UMAP is too slow per-region; 5K is ample for viz)
     n_neighbors = min(umap_neighbors, X_pca_sub.shape[0] - 1)
     umap = UMAP(
         n_components=2,
@@ -295,31 +315,16 @@ def process_region(
     )
     X_umap = umap.fit_transform(X_pca_sub)
 
-    # Clustering (PCA space)
-    hopkins = hopkins_statistic(X_pca_sub, rng=rng)
-    best_k, sil, labels_kmeans, ch, sil_per_k, inertia_per_k = find_optimal_k_elbow(
-        X_pca_sub, max_k=max_k, rng=rng
-    )
-
+    # HDBSCAN on UMAP coords — only subsample has UMAP
     try:
-        labels_leiden = cluster_leiden(
-            X_pca_sub, n_neighbors=leiden_knn, resolution=leiden_resolution
-        )
-    except Exception as e:
-        logger.warning("Leiden failed: %s", e)
-        labels_leiden = np.zeros(len(sub_idx), dtype=np.int32)
-
-    try:
-        labels_hdb_pca = cluster_hdbscan(X_pca_sub, min_cluster_size=hdbscan_min_size)
-    except Exception as e:
-        logger.warning("HDBSCAN (PCA) failed: %s", e)
-        labels_hdb_pca = np.zeros(len(sub_idx), dtype=np.int32)
-
-    try:
-        labels_hdb_umap = cluster_hdbscan(X_umap, min_cluster_size=hdbscan_min_size)
+        labels_hdb_umap_sub = cluster_hdbscan(X_umap, min_cluster_size=hdbscan_min_size)
     except Exception as e:
         logger.warning("HDBSCAN (UMAP) failed: %s", e)
-        labels_hdb_umap = np.zeros(len(sub_idx), dtype=np.int32)
+        labels_hdb_umap_sub = np.zeros(len(sub_idx), dtype=np.int32)
+    # Extend HDBSCAN-UMAP labels to full-set length so indexing is uniform.
+    # Non-subsampled cells get label -1 (noise) since we have no UMAP coord for them.
+    labels_hdb_umap = np.full(n_total, -1, dtype=np.int32)
+    labels_hdb_umap[sub_idx] = labels_hdb_umap_sub
 
     def _n_clusters(lbl):
         return int(len(np.unique(lbl[lbl >= 0])))
@@ -341,6 +346,8 @@ def process_region(
             {"feature": active_names[i], "loading": round(float(loadings[i]), 3)} for i in top_idx
         ]
 
+    # Cluster counts / noise counts reflect FULL-SET labels (all cells in region).
+    # Display label arrays (labels_*) are subsample-sliced to match the scatter.
     return {
         "n_cells": n_total,
         "n_features": len(active_names),
@@ -350,22 +357,24 @@ def process_region(
         "pc2": X_pca_sub[:, 1].tolist() if X_pca_sub.shape[1] >= 2 else [0.0] * len(sub_idx),
         "umap_x": X_umap[:, 0].tolist(),
         "umap_y": X_umap[:, 1].tolist(),
-        "labels": labels_kmeans.tolist(),  # backward-compat (kmeans default)
-        "labels_kmeans": labels_kmeans.tolist(),
-        "labels_leiden": labels_leiden.tolist(),
-        "labels_hdbscan_pca": labels_hdb_pca.tolist(),
-        "labels_hdbscan_umap": labels_hdb_umap.tolist(),
+        # Subsample-sliced labels for the scatter display:
+        "labels": labels_kmeans[sub_idx].tolist(),  # backward-compat (kmeans default)
+        "labels_kmeans": labels_kmeans[sub_idx].tolist(),
+        "labels_leiden": labels_leiden[sub_idx].tolist(),
+        "labels_hdbscan_pca": labels_hdb_pca[sub_idx].tolist(),
+        "labels_hdbscan_umap": labels_hdb_umap_sub.tolist(),  # already subsample
+        # Counts computed on FULL-SET labels (true cluster count for the region):
         "n_clusters": {
             "kmeans": int(best_k),
             "leiden": _n_clusters(labels_leiden),
             "hdbscan_pca": _n_clusters(labels_hdb_pca),
-            "hdbscan_umap": _n_clusters(labels_hdb_umap),
+            "hdbscan_umap": _n_clusters(labels_hdb_umap_sub),  # HDBSCAN-UMAP full=subsample
         },
         "n_noise": {
             "kmeans": 0,
             "leiden": _n_noise(labels_leiden),
             "hdbscan_pca": _n_noise(labels_hdb_pca),
-            "hdbscan_umap": _n_noise(labels_hdb_umap),
+            "hdbscan_umap": _n_noise(labels_hdb_umap_sub),
         },
         "hopkins": round(float(hopkins), 3),
         "best_k": int(best_k),
