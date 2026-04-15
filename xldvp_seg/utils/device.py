@@ -20,6 +20,14 @@ from xldvp_seg.utils.logging import get_logger
 logger = get_logger(__name__)
 
 
+# Enable MPS → CPU fallback for ops not yet implemented on Apple Silicon MPS.
+# SAM2's image encoder and most Cellpose ops run natively on MPS; the handful
+# of ops with no MPS kernel (some indexing paths, a few custom ops) silently
+# fall back to CPU instead of raising NotImplementedError mid-run. No-op on
+# Linux/Windows — it's only read by torch when MPS is the active backend.
+os.environ.setdefault("PYTORCH_ENABLE_MPS_FALLBACK", "1")
+
+
 def get_default_device() -> str:
     """Return the best available device string: 'cuda', 'mps', or 'cpu'."""
     if torch.cuda.is_available() and torch.cuda.device_count() > 0:

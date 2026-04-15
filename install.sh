@@ -145,8 +145,10 @@ if [ "$LATEST" = false ]; then
     fi
 
     # Step E: SAM2 — required for detection. Not on PyPI, install from git.
-    echo "Step E: installing SAM2..."
-    pip install "git+https://github.com/facebookresearch/segment-anything-2.git@2b90b9f5ceec907a1c18123530e92e794ad901a4"
+    # --no-deps: SAM2's runtime deps (torch, hydra-core, iopath, pillow) are all
+    # already satisfied by the lock; re-resolving triggers ResolutionTooDeep.
+    echo "Step E: installing SAM2 (--no-deps; transitive deps already in lock)..."
+    pip install --no-deps "git+https://github.com/facebookresearch/segment-anything-2.git@2b90b9f5ceec907a1c18123530e92e794ad901a4"
 
     # Step F: SAM2 checkpoint (700MB). Skip if already present.
     CHECKPOINT_DIR="$SCRIPT_DIR/checkpoints"
