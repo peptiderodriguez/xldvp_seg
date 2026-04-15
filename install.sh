@@ -35,6 +35,34 @@
 
 set -e
 
+# Guard: user should be inside a conda env, not installing into the system Python.
+# Warn loudly and ask for confirmation if CONDA_PREFIX is unset.
+if [ -z "${CONDA_PREFIX:-}" ]; then
+    echo ""
+    echo "============================================================"
+    echo "WARNING: no conda env active. pip will install into whichever"
+    echo "Python is on PATH ($(command -v python3 || echo MISSING))."
+    echo "This may trash your system Python and its dependencies."
+    echo ""
+    echo "Strongly recommended:"
+    echo "  conda create -n xldvp_seg python=3.11 -y"
+    echo "  conda activate xldvp_seg"
+    echo "  ./install.sh"
+    echo "============================================================"
+    read -p "Proceed without a conda env? [y/N] " -n 1 -r REPLY_CONDA
+    echo
+    if [[ ! "$REPLY_CONDA" =~ ^[Yy]$ ]]; then
+        echo "Aborted. Create a conda env and re-run."
+        exit 1
+    fi
+fi
+
+# Require pip on PATH
+if ! command -v pip &> /dev/null; then
+    echo "ERROR: 'pip' not found on PATH. Activate your conda env first."
+    exit 1
+fi
+
 # Default values
 CUDA_VERSION=""
 ROCM=false
@@ -146,18 +174,25 @@ if [ "$LATEST" = false ]; then
     fi
 
     # Step A: pin numpy early. Torch wheels declare `numpy>=1.22` with no upper
-    # bound, and without a pre-pin pip pulls numpy 2.x — which breaks several
-    # compiled transitive deps (cv2, spatialdata). Extract the exact version
-    # from the lock file and install it first.
-    NUMPY_PIN=$(grep -E '^numpy==' "$LOCK_FILE")
-    echo "Step A: pinning $NUMPY_PIN first (prevents torch pulling in numpy 2.x)..."
+    # bound, and without a pre-pin pip pulls whatever numpy matches other
+    # transitive deps. Extract the exact version from the lock file.
+    NUMPY_PIN=$(grep -E '^numpy==' "$LOCK_FILE" || true)
+    if [ -z "$NUMPY_PIN" ]; then
+        echo "ERROR: no numpy pin in $LOCK_FILE. Lock file is corrupt."
+        exit 1
+    fi
+    echo "Step A: pinning $NUMPY_PIN first..."
     pip install "$NUMPY_PIN"
 
     # Step B: install torch with the right index. Detect CUDA so GPU users don't
     # silently land on CPU wheels. If the user passed --cpu, --rocm, or --cuda,
     # those override detection.
-    TORCH_PIN=$(grep -E '^torch==' "$LOCK_FILE")
-    TORCHVISION_PIN=$(grep -E '^torchvision==' "$LOCK_FILE")
+    TORCH_PIN=$(grep -E '^torch==' "$LOCK_FILE" || true)
+    TORCHVISION_PIN=$(grep -E '^torchvision==' "$LOCK_FILE" || true)
+    if [ -z "$TORCH_PIN" ] || [ -z "$TORCHVISION_PIN" ]; then
+        echo "ERROR: no torch/torchvision pin in $LOCK_FILE. Lock file is corrupt."
+        exit 1
+    fi
     if [ "$CPU_ONLY" = true ]; then
         TORCH_INDEX="https://download.pytorch.org/whl/cpu"
         echo "Step B: installing CPU PyTorch ($TORCH_PIN) ..."
@@ -220,11 +255,23 @@ if [ "$LATEST" = false ]; then
         mkdir -p "$CHECKPOINT_DIR"
         echo "Step F: downloading SAM2 checkpoint (700MB)..."
         if command -v curl &> /dev/null; then
-            curl -L -o "$CHECKPOINT_FILE" https://dl.fbaipublicfiles.com/segment_anything_2/092824/sam2.1_hiera_large.pt
+            # -f: fail on HTTP errors (don't save a 404/503 HTML page as the .pt file)
+            curl -fL --retry 3 -o "$CHECKPOINT_FILE" https://dl.fbaipublicfiles.com/segment_anything_2/092824/sam2.1_hiera_large.pt \
+                || { echo "  ERROR: checkpoint download failed. Retry: ./install.sh; or download manually to $CHECKPOINT_FILE"; rm -f "$CHECKPOINT_FILE"; exit 1; }
         elif command -v wget &> /dev/null; then
-            wget -O "$CHECKPOINT_FILE" https://dl.fbaipublicfiles.com/segment_anything_2/092824/sam2.1_hiera_large.pt
+            wget --tries=3 -O "$CHECKPOINT_FILE" https://dl.fbaipublicfiles.com/segment_anything_2/092824/sam2.1_hiera_large.pt \
+                || { echo "  ERROR: checkpoint download failed."; rm -f "$CHECKPOINT_FILE"; exit 1; }
         else
             echo "  WARNING: curl/wget not found — download manually to $CHECKPOINT_FILE"
+        fi
+        # Sanity check: file should be ~700MB, not an HTML error page
+        if [ -f "$CHECKPOINT_FILE" ]; then
+            SIZE=$(stat -c%s "$CHECKPOINT_FILE" 2>/dev/null || stat -f%z "$CHECKPOINT_FILE" 2>/dev/null || echo 0)
+            if [ "$SIZE" -lt 100000000 ]; then   # <100MB = probably an error page
+                echo "  ERROR: checkpoint file is only ${SIZE} bytes (expected ~700MB). Corrupted download."
+                rm -f "$CHECKPOINT_FILE"
+                exit 1
+            fi
         fi
     else
         echo "Step F: SAM2 checkpoint already present at $CHECKPOINT_FILE"
@@ -251,6 +298,27 @@ EOF
         echo "Step G: CONDA_PREFIX not set — skipping activate-hook. Set XLDVP_PYTHON manually if needed:"
         echo "        export XLDVP_PYTHON=\$(which python)"
     fi
+
+    # Step H: verify critical imports. Non-fatal — if something fails, the user
+    # still gets the "complete" banner + next-steps, but they see the error.
+    echo ""
+    echo "Step H: verifying install..."
+    python3 - <<'PYEOF' || echo "  WARNING: verify failed above. Re-run install.sh or check the errors."
+try:
+    import torch, cellpose, numpy, cv2, anndata, spatialdata, scanpy, squidpy
+    import xldvp_seg
+    from xldvp_seg.processing.multigpu_worker import MultiGPUTileProcessor  # noqa: F401
+    cp_ver = getattr(cellpose, "__version__", None) or cellpose.version
+    print(f"  OK — xldvp_seg {xldvp_seg.__version__}, torch {torch.__version__},"
+          f" numpy {numpy.__version__}, cellpose {cp_ver},")
+    print(f"       anndata {anndata.__version__}, spatialdata {spatialdata.__version__},"
+          f" scanpy {scanpy.__version__}, squidpy {squidpy.__version__}")
+    print(f"       CUDA: {torch.cuda.is_available()}"
+          + (f" ({torch.cuda.get_device_name(0)})" if torch.cuda.is_available() else ""))
+except Exception as e:
+    print(f"  FAILED: {type(e).__name__}: {e}")
+    raise
+PYEOF
 
     [ "$WITH_CLAUDE_CODE" = true ] && install_claude_code || true
 
@@ -327,11 +395,13 @@ fi
 echo ""
 python3 -c "import torch; print(f'PyTorch {torch.__version__} installed'); print(f'CUDA available: {torch.cuda.is_available()}')"
 
-# Install SAM2
+# Install SAM2 (--no-deps: torch + hydra-core + iopath get installed via the
+# main package dependency tree below; skipping re-resolution avoids
+# ResolutionTooDeep on envs with many constraints).
 echo ""
 echo "Step 2: Installing SAM2..."
 echo "------------------------------------------------------------"
-pip install git+https://github.com/facebookresearch/segment-anything-2.git@2b90b9f5ceec907a1c18123530e92e794ad901a4
+pip install --no-deps git+https://github.com/facebookresearch/segment-anything-2.git@2b90b9f5ceec907a1c18123530e92e794ad901a4
 
 # Install this package
 echo ""
@@ -387,7 +457,7 @@ if ! pip install fa2-modified; then
 fi
 
 echo "Installing napari (interactive viewer for cross placement + LMD overlay)..."
-if ! pip install napari[all]; then
+if ! pip install 'napari[all]'; then
     echo ""
     echo "  WARNING: napari failed to install."
     echo "  Impact: Cross placement (napari_place_crosses.py) and LMD overlay"
@@ -431,9 +501,15 @@ if command -v cloudflared &> /dev/null; then
     echo "cloudflared already installed — skipping."
 elif [ "$(uname -s)" = "Linux" ] && [ "$(uname -m)" = "x86_64" ]; then
     mkdir -p ~/.local/bin
-    curl -sL https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-amd64 \
-        -o ~/.local/bin/cloudflared && chmod +x ~/.local/bin/cloudflared
-    echo "Installed cloudflared to ~/.local/bin/cloudflared"
+    # -f: fail on HTTP errors so we don't save a 404/503 page as the binary
+    if curl -fsSL https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-amd64 \
+        -o ~/.local/bin/cloudflared; then
+        chmod +x ~/.local/bin/cloudflared
+        echo "Installed cloudflared to ~/.local/bin/cloudflared"
+    else
+        echo "Note: cloudflared download failed (optional — only needed for remote HTML viewing)"
+        rm -f ~/.local/bin/cloudflared
+    fi
 elif [ "$(uname -s)" = "Darwin" ]; then
     if command -v brew &> /dev/null; then
         brew install cloudflared 2>/dev/null || echo "Note: brew install cloudflared failed (optional)"
@@ -461,37 +537,35 @@ EOF
     echo "Wired XLDVP_PYTHON into $(basename $CONDA_PREFIX)'s activate hook."
 fi
 
-# Verify installation
+# Verify installation — non-fatal. If a single import is broken we still want
+# the user to see the "Installation complete!" banner with the next steps, not
+# crash out after 15 min of successful setup.
 echo ""
 echo "Step 7: Verifying installation..."
 echo "------------------------------------------------------------"
 
-python3 -c "
-import torch
-import cellpose
-import numpy
-import cv2
-import h5py
-import anndata
-import scanpy
-import spatialdata
-import squidpy
-import geopandas
-from xldvp_seg.processing.multigpu_worker import MultiGPUTileProcessor
-print('All imports successful!')
-print(f'  torch: {torch.__version__}')
-print(f'  cellpose: {getattr(cellpose, \"__version__\", None) or cellpose.version}')
-print(f'  numpy: {numpy.__version__}')
-print(f'  cv2: {cv2.__version__}')
-print(f'  anndata: {anndata.__version__}')
-print(f'  scanpy: {scanpy.__version__}')
-print(f'  spatialdata: {spatialdata.__version__}')
-print(f'  squidpy: {squidpy.__version__}')
-print(f'  geopandas: {geopandas.__version__}')
-print(f'  CUDA: {torch.cuda.is_available()}')
-if torch.cuda.is_available():
-    print(f'  GPU: {torch.cuda.get_device_name(0)}')
-"
+python3 - <<'PYEOF' || echo "  WARNING: one or more imports failed. Re-run install.sh or check the errors above."
+try:
+    import torch, cellpose, numpy, cv2, h5py, anndata, scanpy, spatialdata, squidpy, geopandas
+    from xldvp_seg.processing.multigpu_worker import MultiGPUTileProcessor  # noqa: F401
+    print("All imports successful!")
+    print(f"  torch: {torch.__version__}")
+    cp_ver = getattr(cellpose, "__version__", None) or cellpose.version
+    print(f"  cellpose: {cp_ver}")
+    print(f"  numpy: {numpy.__version__}")
+    print(f"  cv2: {cv2.__version__}")
+    print(f"  anndata: {anndata.__version__}")
+    print(f"  scanpy: {scanpy.__version__}")
+    print(f"  spatialdata: {spatialdata.__version__}")
+    print(f"  squidpy: {squidpy.__version__}")
+    print(f"  geopandas: {geopandas.__version__}")
+    print(f"  CUDA: {torch.cuda.is_available()}")
+    if torch.cuda.is_available():
+        print(f"  GPU: {torch.cuda.get_device_name(0)}")
+except Exception as e:
+    print(f"  ERROR during verify: {type(e).__name__}: {e}")
+    raise
+PYEOF
 
 # Check SAM2 checkpoint
 if [ -f "$CHECKPOINT_FILE" ]; then
