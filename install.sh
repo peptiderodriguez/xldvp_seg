@@ -125,9 +125,17 @@ if [ "$LATEST" = false ]; then
                 *)     TORCH_INDEX="https://download.pytorch.org/whl/cpu" ;;
             esac
             echo "Step B: detected CUDA $DETECTED_CUDA — installing $TORCH_PIN from $TORCH_INDEX ..."
+        elif command -v sinfo &> /dev/null; then
+            # SLURM present but nvidia-smi missing (typical login node on a GPU cluster).
+            # Defaulting to CUDA 12.4 is the right call for modern GPU clusters —
+            # users almost never mean "install CPU torch on my HPC cluster".
+            TORCH_INDEX="https://download.pytorch.org/whl/cu124"
+            echo "Step B: SLURM detected but no nvidia-smi on this node (login?) —"
+            echo "        assuming compute nodes have CUDA GPUs; using CUDA 12.4 wheel."
+            echo "        (Override with './install.sh --cuda 11.8|12.1|12.4' or '--cpu'.)"
         else
             TORCH_INDEX="https://download.pytorch.org/whl/cpu"
-            echo "Step B: no nvidia-smi — installing CPU PyTorch ($TORCH_PIN) ..."
+            echo "Step B: no nvidia-smi, no SLURM — installing CPU PyTorch ($TORCH_PIN) ..."
         fi
     fi
     pip install "$TORCH_PIN" "$TORCHVISION_PIN" --index-url "$TORCH_INDEX"
