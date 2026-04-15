@@ -21,7 +21,12 @@ This is the package's main entry point. A new user who just downloaded the packa
 
 **Guardrail:** `czi_info.py` before any channel config; confirm channel mapping with user before launching; never let double bg correction happen; verify `--resume` points to the exact timestamped run dir (with `tiles/` inside).
 
-**Collaborator:** Hardware is good (up to 256 CPU / 760G / 4× L40S per node). Don't catastrophize cluster use. If nodes are idle, just launch. If the cluster is full, offer queue-vs-smaller-partition as an explicit choice — many users prefer to queue on better hardware.
+**Collaborator:** Users run this in three very different settings:
+- **SLURM cluster** (up to 256 CPU / 760G / 4× L40S per node) — our reference setup, but not universal
+- **Workstation** (Windows/Linux, often 16–64 cores, 64–256G RAM, 1–4 GPUs, no scheduler) — "monster" desktops
+- **Laptop** (Mac/Windows/Linux, limited RAM, CPU-only or Apple Silicon) — iterate + small slides
+
+**Never assume cluster.** Many users don't have one. `system_info.py` tells you which environment this actually is — use it. If SLURM isn't there, don't hallucinate partition names or sbatch templates; drop to direct `xlseg detect` commands with the 75% cap applied. Don't catastrophize local use either — a small slide on a good workstation runs comfortably.
 
 **Adaptive feedback after results:**
 - After detection: >200K → `--html-sample-fraction 0.05`; <500 → suggest lowering threshold / checking preview.
@@ -34,14 +39,22 @@ Morph-only (78 features) is the pragmatic default. Run `compare_feature_sets.py`
 
 ## Phase 0: System Detection + Experience Level
 
-**Step 1 — Detect environment silently.** Run `$XLDVP_PYTHON $REPO/scripts/system_info.py --json`. Parse: SLURM vs local, per-node idle CPUs/RAM/GPUs (not just partition specs — it queries actual availability), recommended resources (capped 128 CPUs for schedulability, ~65% RAM, all GPUs on GPU partitions).
+**Step 1 — Detect environment silently.** Run `$XLDVP_PYTHON $REPO/scripts/system_info.py --json`. Parse the `environment` field (one of `slurm`, `workstation`, `laptop` per heuristics in `system_info.py`), CPU/RAM/GPU counts, and the `recommended` block (auto-caps at ~75% of available CPU/RAM; requests all GPUs).
 
-Tell the user what's available: *"p.hpcl93 (4× L40S): 3 nodes have 4 free GPUs. Recommending 128 CPUs, 500G, 4 GPUs."*
+Report briefly:
 
-If preferred partition is fully loaded, present choices explicitly — don't silently fall back:
-*"p.hpcl93 is fully loaded. (1) Submit and queue, (2) use p.hpcl8 (smaller but free now), (3) wait. Which?"*
+- **SLURM**: *"p.hpcl93 (4× L40S): 3 nodes have 4 free GPUs. Recommending 128 CPUs, 500G, 4 GPUs."*
+  If the preferred partition is fully loaded, don't silently fall back — present choices:
+  *"p.hpcl93 is fully loaded. (1) Submit and queue, (2) use p.hpcl8 (smaller but free now), (3) wait. Which?"*
+  On GPU partitions, always request all GPUs (scheduling is per-device exclusive) and `--nodes=1`.
 
-On GPU partitions, always request all GPUs (scheduling is per-device exclusive) and `--nodes=1`.
+- **Workstation (no SLURM)**: *"Detected local Linux/Windows machine with 32 cores, 128GB RAM, 1× RTX 4090. Will cap at ~24 cores and ~96GB RAM (75% rule) to leave headroom for the OS."*
+  Submission path is `xlseg detect` (or `run_segmentation.py` directly), NOT `run_pipeline.sh` (sbatch isn't available). No YAML needed; build the CLI command directly.
+
+- **Laptop (limited)**: *"Detected MacBook with 10 cores / 32GB RAM / Apple Silicon GPU (MPS). Using 7 cores + 24GB cap. For slides with <50K cells this should be fine — larger slides may take hours. Shall we proceed, or preview a subset first?"*
+  Ask the user to confirm they want to proceed with a full-slide detection on a laptop BEFORE launching — set expectations upfront.
+
+**Apply the 75% cap everywhere**, not just SLURM. On a laptop this is what keeps the machine usable while detection runs. `system_info.py` already returns the capped values — trust them.
 
 **Step 2 — Ask experience level** via AskUserQuestion: *"Are you new to this pipeline, or experienced?"* Never infer. User can switch mid-session.
 
@@ -173,7 +186,7 @@ Then run: `scripts/run_pipeline.sh examples/configs/<name>.yaml`
 
 For a new YAML template, verify the generated sbatch once (`--num-gpus`, Python path, all flags). Once verified, the template can be reused without re-checking. Always check Step 10 verification after the job starts.
 
-For **local**: Build and run the `run_segmentation.py` command directly:
+For **local on the cluster (no scheduler)**: Build and run the `run_segmentation.py` command directly:
 ```bash
 PYTHONPATH=$REPO $XLDVP_PYTHON $REPO/run_segmentation.py \
     --czi-path <path> \
@@ -187,6 +200,45 @@ For 2-channel Cellpose (generic cell detection):
 ```bash
     --channel-spec "cyto=<marker>,nuc=<nuclear_marker>"
 ```
+
+### Running on a personal computer (Mac / Windows / Linux workstation)
+
+**When this makes sense:** small slides (<50K cells), a single scene, post-detection analysis, development / iteration on a subset. The pipeline works cross-platform via `pip install -e .` and the `xlseg` CLI. Large whole-mouse slides (600K+ cells) realistically need the cluster — set the user's expectations before they spend 24h trying to run it locally.
+
+**Before offering this path, confirm with the user they understand the trade-offs:**
+- Detection on a laptop CPU-only: easily 10–30x slower than a cluster GPU node
+- 16GB RAM struggles past ~50K cells; 32–64GB is comfortable for medium slides
+- Apple Silicon MPS works for Cellpose and SAM2 (autodetected via `xldvp_seg.utils.device`) but is slower than CUDA
+- Windows: fine for `xlseg info`, `xlseg markers`, and viewer generation; detection works but SHM-based preloading may not; use `--no-load-to-ram` if you hit issues
+- Shared-filesystem features (e.g. OME-Zarr at network paths) aren't involved on a single machine — everything stays local to the machine's disk
+
+**Resource policy applies here too.** `scripts/system_info.py` caps requested CPUs/RAM at ~75% of whatever the OS reports, whether that's 256 cores on a cluster node or 10 cores on a MacBook. Never request 100% on a laptop — it freezes the desktop. Run `system_info.py --json` first; trust its recommendation.
+
+**Concrete workflow on a laptop:**
+```bash
+# 1. Install (once)
+git clone <repo> xldvp_seg && cd xldvp_seg
+pip install -e ".[dev]"        # registers the `xlseg` CLI
+
+# 2. Inspect the CZI first — always
+xlseg info /path/to/slide.czi    # confirm channel order + pixel size with the user
+
+# 3. See what resources are sane to use
+python scripts/system_info.py --json     # respects 75% cap
+
+# 4. Detect. For small slides use --num-gpus 1 (or 0 with --segmenter instanseg on Apple Silicon)
+xlseg detect --czi-path /path/to/slide.czi \
+    --cell-type cell \
+    --channel-spec "cyto=PM,nuc=Hoechst" \
+    --all-channels \
+    --num-gpus 1 \
+    --output-dir ~/analysis/my_slide
+```
+
+**Caveats to flag in conversation:**
+- `--photobleaching-correction` is EXPERIMENTAL — omit unless the user explicitly asks.
+- If the user has only CPU, skip `--extract-deep-features` (ResNet/DINOv2 will be painfully slow). Morph-only features are often competitive.
+- Post-detection (classification, marker classification, LMD export, viewers) runs fine even on a small laptop — that's a good split if detection has to happen on the cluster.
 
 **Step 10 — Verify and monitor.**
 

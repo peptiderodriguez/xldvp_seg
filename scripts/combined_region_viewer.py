@@ -33,11 +33,8 @@ from PIL import Image
 REPO = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(REPO))
 
-# Reuse all the PCA/UMAP/clustering plumbing from region_pca_viewer.py
-sys.path.insert(0, str(REPO / "scripts"))
-from region_pca_viewer import process_region  # noqa: E402
-
 from xldvp_seg.analysis.cluster_features import select_feature_names  # noqa: E402
+from xldvp_seg.analysis.region_clustering import process_region  # noqa: E402
 from xldvp_seg.utils.image_utils import percentile_normalize  # noqa: E402
 from xldvp_seg.utils.json_utils import fast_json_load  # noqa: E402
 from xldvp_seg.utils.logging import get_logger  # noqa: E402
@@ -473,10 +470,7 @@ function onSpatialMouseMove(e) {{
   spatialTx = drag.tx + dx; spatialTy = drag.ty + dy;
   redrawSpatial();
 }}
-function onSpatialMouseUp(e) {{
-  if (drag && !drag.moved) onSpatialClick(e);
-  drag = null;
-}}
+function onSpatialMouseUp(e) {{ drag = null; }}
 
 // ---------- UMAP pane (right) ----------
 function setColoring(btn) {{
@@ -641,6 +635,7 @@ function drawElbowChart(inertiaPerK, silPerK, bestK) {{
 window.addEventListener('resize', () => {{ fitView(); if (currentRegion) selectRegion(currentRegion); }});
 const cwrap = document.getElementById('canvas-wrap');
 cwrap.addEventListener('wheel', onSpatialWheel, {{ passive: false }});
+cwrap.addEventListener('click', onSpatialClick);
 cwrap.addEventListener('mousedown', onSpatialMouseDown);
 window.addEventListener('mousemove', onSpatialMouseMove);
 window.addEventListener('mouseup', onSpatialMouseUp);

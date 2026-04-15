@@ -405,9 +405,12 @@ def recommend(slurm_info, local_gpus, total_ram_gb):
             rec["gres"] = ""
         rec["per_node_data"] = per_node
     else:
-        rec["environment"] = "local"
-        cpus = os.cpu_count() or 1
-        rec["cpus"] = min(math.floor(cpus * 0.75), MAX_RECOMMENDED_CPUS)
+        # Split local into 'workstation' vs 'laptop' so /analyze can tailor
+        # expectations. Heuristic: >= 16 cores OR >= 64 GB RAM OR has a GPU = workstation.
+        cpus_total = os.cpu_count() or 1
+        is_workstation = cpus_total >= 16 or total_ram_gb >= 64 or len(local_gpus) > 0
+        rec["environment"] = "workstation" if is_workstation else "laptop"
+        rec["cpus"] = min(math.floor(cpus_total * 0.75), MAX_RECOMMENDED_CPUS)
         rec["mem_gb"] = math.floor(total_ram_gb * 0.75)
         rec["gpus"] = len(local_gpus)
         if local_gpus:
@@ -427,8 +430,19 @@ def gather():
     slurm = detect_slurm()
     local_gpus = detect_local_gpus()
 
+    # top-level environment mirrors recommend()'s classification for consistency
+    if slurm:
+        top_env = "slurm"
+    else:
+        cpus_total = os.cpu_count() or 1
+        top_env = (
+            "workstation"
+            if (cpus_total >= 16 or total_ram >= 64 or len(local_gpus) > 0)
+            else "laptop"
+        )
+
     info = {
-        "environment": "slurm" if slurm else "local",
+        "environment": top_env,
         "repo_path": str(REPO),
         "xldvp_python": str(XLDVP_PYTHON),
         "xldvp_available": detect_conda_env(),
