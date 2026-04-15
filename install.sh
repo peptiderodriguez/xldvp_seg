@@ -10,7 +10,7 @@
 #
 # Usage:
 #   # Create conda environment first (recommended):
-#   conda create -n xldvp_seg python=3.10 -y
+#   conda create -n xldvp_seg python=3.11 -y
 #   conda activate xldvp_seg
 #
 #   # Then run this script:

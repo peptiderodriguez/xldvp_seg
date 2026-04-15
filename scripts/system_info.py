@@ -415,6 +415,23 @@ def recommend(slurm_info, local_gpus, total_ram_gb):
         rec["gpus"] = len(local_gpus)
         if local_gpus:
             rec["gpu_type"] = local_gpus[0]["name"]
+        # Resource tiers for /analyze to offer users a choice.
+        # SLURM doesn't need these — its recommendation already accounts for
+        # shared-partition etiquette.
+        rec["tiers"] = {
+            "background": {  # 25% — keep the machine usable
+                "cpus": max(1, min(math.floor(cpus_total * 0.25), MAX_RECOMMENDED_CPUS)),
+                "mem_gb": max(2, math.floor(total_ram_gb * 0.25)),
+            },
+            "balanced": {  # 50%
+                "cpus": max(1, min(math.floor(cpus_total * 0.50), MAX_RECOMMENDED_CPUS)),
+                "mem_gb": max(2, math.floor(total_ram_gb * 0.50)),
+            },
+            "full_throttle": {  # 75% — machine will be busy
+                "cpus": max(1, min(math.floor(cpus_total * 0.75), MAX_RECOMMENDED_CPUS)),
+                "mem_gb": max(2, math.floor(total_ram_gb * 0.75)),
+            },
+        }
 
     return rec
 

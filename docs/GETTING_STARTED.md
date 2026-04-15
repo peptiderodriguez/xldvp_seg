@@ -20,24 +20,30 @@ for laser microdissection.
 
 ## Installation
 
+**Python 3.11 required** (3.10 and earlier aren't supported — several scverse dependencies moved to ≥3.11).
+
 ```bash
-conda create -n xldvp_seg python=3.10 -y && conda activate xldvp_seg
+conda create -n xldvp_seg python=3.11 -y && conda activate xldvp_seg
 git clone https://github.com/peptiderodriguez/xldvp_seg.git && cd xldvp_seg
 ./install.sh                    # Reproducible (default): exact pinned versions
 # OR
 ./install.sh --latest           # Latest: auto-detects CUDA, grabs newest packages
 ```
 
-**Reproducible install** (default) installs all 184 dependencies at the exact versions from `requirements-lock.txt`, generated from the tested cluster environment. Guarantees identical environments across machines and time. Recommended for most users.
+**Reproducible install** (default) installs all dependencies at the exact versions from `requirements-lock.txt`. `install.sh` skips pip's dep resolver entirely — it installs the pre-solved set directly, avoiding `ResolutionTooDeep` failures. Guarantees identical environments across machines and time. Recommended for most users.
 
 **Latest install** (`--latest`) auto-detects your CUDA version and installs the latest compatible PyTorch, SAM2, Cellpose, and all dependencies. Use this when setting up on new hardware with a different CUDA version than the lock file, or when you need the newest package versions.
+
+**Don't run `pip install -e .` directly** — our pyproject pins several upper bounds (numpy<2, opencv<4.13, etc.) that combined with transitive deps can push pip's resolver into `ResolutionTooDeep`. Always use `install.sh` (Linux/Mac) or follow the Windows steps in the README.
 
 Verify the environment:
 
 ```bash
-source ~/miniforge3/etc/profile.d/conda.sh && conda activate xldvp_seg
-python -c "import torch; print(f'PyTorch: {torch.__version__}, CUDA: {torch.cuda.is_available()}')"
+xlseg --version
+python -c "import torch; print(f'PyTorch: {torch.__version__}, CUDA: {torch.cuda.is_available()}, MPS: {torch.backends.mps.is_available()}')"
 ```
+
+Apple Silicon: MPS is autodetected for Cellpose segmentation (3–10× faster than CPU). No flag needed.
 
 ---
 

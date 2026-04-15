@@ -17,7 +17,7 @@ Pre-commit hooks (ruff + black) run automatically on each commit.
 
 - **Formatter:** Black, line-length 100
 - **Linter:** Ruff (E/F/W/I/N/UP/B/C4, E501 ignored)
-- **Python:** 3.10 or 3.11 (not 3.12+ -- black formats differently)
+- **Python:** 3.11 (3.10 and earlier no longer supported — several scverse deps require ≥3.11; 3.12+ not supported because black formats differently)
 
 ```bash
 make lint      # check style

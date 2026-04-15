@@ -7,8 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- **Python 3.11 required** (dropped 3.10). Several scverse deps (anndata ≥0.12, spatialdata ≥0.7, squidpy ≥1.8) require 3.11. CI matrix pinned to 3.11 only. `pyproject.toml`, `install.sh`, README, docs all updated.
+- **Dependency pins hardened** in `pyproject.toml` to prevent `ResolutionTooDeep` on fresh installs: `numpy<2`, `opencv-python<4.13`, `pandas<3`, `anndata>=0.11`, `spatialdata>=0.7`. `requirements-lock.txt` always used by `install.sh` — skips pip's resolver entirely.
+- **Cross-platform install**: `install.sh` explicit paths for Linux + Mac; Windows has a 3-step manual recipe in README (SAM2 checkpoint download included). Apple Silicon MPS autodetected for Cellpose (3-10× faster than CPU).
+
 ### Added
 
+- **Global cluster + spatial divergence viewer**: `scripts/global_cluster_spatial_viewer.py` — inverse of region-first analysis. Clusters ALL nucleated cells globally (Leiden on full PCA-kNN + k-means elbow + HDBSCAN on PCA + HDBSCAN on full UMAP). Spatial divergence metrics per cluster: entropy, `n_major_regions`, `top3_frac`, `k_90`, `focal_multimodal` (explicitly rewards 2-5 distinct regions — "same feature profile, different anatomy"). Interactive HTML viewer with 4-method coloring toggle, min-cells-per-region threshold, click-to-select on UMAP or spatial map. 520K-cell run ≈ 90-150 min on 64 CPUs.
 - **Per-region PCA/UMAP + clustering**: `xldvp_seg.analysis.region_clustering` exposes `hopkins_statistic`, `find_optimal_k_elbow`, `cluster_leiden`, `cluster_hdbscan`, and `process_region`. Driven by `scripts/region_pca_viewer.py` (single-HTML viewer with 4-way color toggle: kmeans/leiden/hdbscan-PCA/hdbscan-UMAP) and `scripts/combined_region_viewer.py` (2-pane viewer: spatial region map clickable → per-region UMAP). Tested at `tests/test_region_clustering.py` (12 tests).
 - **Per-region multinucleation analysis**: `scripts/region_multinuc_plot.py` generates a 3-panel PNG (histogram+KDE, ranked %multi, stacked n=1/2/3/4+ composition) plus Tukey fences + GMM(k=2 via BIC) outlier detection with a ranked CSV.
 - **Consolidated transcript tool**: `scripts/export_transcript.py` merges prior two scripts (`export_session_transcript.py`, `transcript_add_png_export.py`) into a single tool with `--mode curate` (keep/skip review UI) and `--mode present` (per-card + combined PNG export). Works on any Claude Code session JSONL.

@@ -43,7 +43,7 @@ Morph-only (78 features) is the pragmatic default. Run `compare_feature_sets.py`
 
 1. **Check if already installed.** Run `xlseg --version`. If it returns a version, skip ahead to Step 1b.
 
-2. **If missing, detect platform** (Python `platform.system()`, or `uname -s`): `Linux`, `Darwin` (Mac), or `Windows`. Also detect GPU: run `nvidia-smi --query-gpu=name --format=csv,noheader 2>&1` — success with output means CUDA, failure means no CUDA. On Darwin: MPS is available automatically on Apple Silicon (Python 3.10+, torch ≥2.0).
+2. **If missing, detect platform** (Python `platform.system()`, or `uname -s`): `Linux`, `Darwin` (Mac), or `Windows`. Also detect GPU: run `nvidia-smi --query-gpu=name --format=csv,noheader 2>&1` — success with output means CUDA, failure means no CUDA. On Darwin: MPS is available automatically on Apple Silicon (Python 3.11, torch ≥2.0).
 
 3. **Tell the user what you're about to do, briefly:**
    *"The pipeline isn't installed yet. I'll set it up — the package, PyTorch, and SAM2 (the segmentation model). This takes about 5 minutes. Please confirm before I start."*
@@ -57,10 +57,13 @@ Morph-only (78 features) is the pragmatic default. Run `compare_feature_sets.py`
    - **Windows**: run the 3 steps yourself via Bash tool — PyTorch wheel (CUDA or CPU per detection), `pip install -e .`, `pip install "git+https://github.com/facebookresearch/sam2.git"`, then download the checkpoint via `curl -L -o checkpoints/sam2.1_hiera_large.pt https://dl.fbaipublicfiles.com/segment_anything_2/092824/sam2.1_hiera_large.pt` (works in Git Bash / WSL / PowerShell 7+).
 
 5. **If install fails**, surface the actual error. Don't bury it. Common fallbacks:
-   - conda env doesn't exist → create it first: `conda create -n xldvp_seg python=3.10 -y && conda activate xldvp_seg`
+   - conda env doesn't exist → create it first: `conda create -n xldvp_seg python=3.11 -y && conda activate xldvp_seg`
    - `./install.sh` not found → they're in the wrong directory — ask where they cloned the repo
+   - **`ResolutionTooDeep` error** → user ran `pip install -e .` directly instead of `./install.sh`. Our pyproject has 7+ upper-bound constraints (numpy<2, opencv<4.13, anndata>=0.11, spatialdata>=0.7, etc.) that blow up the resolver. Fix: `pip install -r requirements-lock.txt && pip install --no-deps -e .` (what install.sh does internally).
+   - **Python <3.11** → the package requires Python ≥3.11. Ask user to recreate the env: `conda create -n xldvp_seg python=3.11 -y && conda activate xldvp_seg && ./install.sh`.
+   - **numpy 2 ABI mismatch** → several compiled deps (cv2, spatialdata) aren't numpy-2 compatible yet. `pip install 'numpy<2' 'opencv-python<4.13'` to pin the working set.
    - Rust compiler needed for `orjson` → pre-wheel available from pypi usually; retry with `pip install --upgrade pip` first
-   - SAM2 pip install fails on Windows without git — offer `conda install git -y` then retry
+   - SAM2 pip install fails on Windows without git → offer `conda install git -y` then retry
    - Slow network during checkpoint download → retry, or direct them to download manually into `checkpoints/sam2.1_hiera_large.pt`
 
 6. **Verify silently**: `xlseg --version` must return a version; `python -c "import torch; print(torch.__version__, torch.cuda.is_available() or torch.backends.mps.is_available())"` must print True. Only then tell the user *"Install complete — ready to analyze. What CZI file are we working with?"*
@@ -76,13 +79,23 @@ Report briefly:
   *"p.hpcl93 is fully loaded. (1) Submit and queue, (2) use p.hpcl8 (smaller but free now), (3) wait. Which?"*
   On GPU partitions, always request all GPUs (scheduling is per-device exclusive) and `--nodes=1`.
 
-- **Workstation (no SLURM)**: *"Detected local Linux/Windows machine with 32 cores, 128GB RAM, 1× RTX 4090. Will cap at ~24 cores and ~96GB RAM (75% rule) to leave headroom for the OS."*
-  Submission path is `xlseg detect` (or `run_segmentation.py` directly), NOT `run_pipeline.sh` (sbatch isn't available). No YAML needed; build the CLI command directly.
+- **Workstation (no SLURM)**: *"Detected local Linux/Windows machine with 32 cores, 128GB RAM, 1× RTX 4090."*
+  Submission path is `xlseg detect` (or `run_segmentation.py` directly), NOT `run_pipeline.sh` (sbatch isn't available). No YAML needed; build the CLI command directly. GPU is used automatically if available.
 
-- **Laptop (limited)**: *"Detected MacBook with 10 cores / 32GB RAM / Apple Silicon GPU (MPS). Using 7 cores + 24GB cap. For slides with <50K cells this should be fine — larger slides may take hours. Shall we proceed, or preview a subset first?"*
-  Ask the user to confirm they want to proceed with a full-slide detection on a laptop BEFORE launching — set expectations upfront.
+- **Laptop (limited)**: *"Detected MacBook with 10 cores / 32GB RAM / Apple Silicon (MPS autodetected — Cellpose will use it automatically)."*
+  Ask the user to confirm they want to proceed with full-slide detection on a laptop BEFORE launching — set expectations upfront. For slides <50K cells, MPS-accelerated detection is comfortable; >200K cells may take hours.
 
-**Apply the 75% cap everywhere**, not just SLURM. On a laptop this is what keeps the machine usable while detection runs. `system_info.py` already returns the capped values — trust them.
+**Resource-allocation choice (workstation & laptop only — SLURM uses cluster defaults):**
+
+After detecting the environment, ask the user how much of their machine they want the pipeline to use, via `AskUserQuestion`. Never default; always ask:
+
+- **25% (background-friendly)** — e.g. 8 cores / 32GB of 32 cores / 128GB. Machine stays snappy for other work.
+- **50% (balanced)** — 16 cores / 64GB. Some background use possible.
+- **75% (full throttle)** — 24 cores / 96GB. Machine will be busy; do your other work elsewhere.
+
+Wire the chosen percentage into the `xlseg detect` command via `--num-workers` (= `int(total_cpus * pct)`) and pass appropriate `--num-gpus` (always all available on workstation; 1 on Mac MPS).
+
+On SLURM, do NOT ask this — the cluster's 75% cap is the right trade-off for shared-partition etiquette.
 
 **Step 2 — Ask experience level** via AskUserQuestion: *"Are you new to this pipeline, or experienced?"* Never infer. User can switch mid-session.
 

@@ -171,12 +171,8 @@ texttable==1.7.0
 threadpoolctl==3.6.0
 tifffile==2026.1.14
 toolz==1.1.0
-torch==2.6.0+cu124
-torch-geometric==2.7.0
-torch_cluster==1.6.3+pt26cu124
-torch_scatter==2.1.2+pt26cu124
-torch_sparse==0.6.18+pt26cu124
-torchvision==0.21.0+cu124
+torch==2.6.0
+torchvision==0.21.0
 tornado==6.5.4
 tqdm==4.67.1
 triton==3.2.0
@@ -192,7 +188,6 @@ wrapt==1.17.3
 xarray==2024.11.0
 xarray-dataclass==2.0.0
 xarray-spatial==0.5.3
--e git+ssh://git@github.com/peptiderodriguez/xldvp_seg.git@b6d72e99af78e8c32e003fb39439e5698991499d#egg=xldvp_seg
 xmltodict==1.0.4
 xxhash==3.6.0
 yarl==1.22.0

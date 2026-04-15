@@ -8,7 +8,7 @@ version = "2.0.0"
 description = "Spatial cell segmentation and DVP pipeline for CZI microscopy (8 detection strategies, multi-GPU, LMD export)"
 readme = "README.md"
 license = {text = "MIT"}
-requires-python = ">=3.10,<3.12"
+requires-python = ">=3.11,<3.12"
 authors = [
     {name = "Cell Segmentation Team"}
 ]
@@ -18,7 +18,6 @@ classifiers = [
     "Intended Audience :: Science/Research",
     "License :: OSI Approved :: MIT License",
     "Programming Language :: Python :: 3",
-    "Programming Language :: Python :: 3.10",
     "Programming Language :: Python :: 3.11",
     "Topic :: Scientific/Engineering :: Bio-Informatics",
     "Topic :: Scientific/Engineering :: Image Processing",
@@ -42,8 +41,8 @@ dependencies = [
     "joblib>=1.2",
     "cellpose>=3.0",
     # SpatialData / scverse ecosystem (upper bounds prevent pip resolution-too-deep)
-    "spatialdata>=0.1,<1.0",
-    "anndata>=0.10,<1.0",
+    "spatialdata>=0.7,<1.0",  # 0.7+ for stable TableModel.parse signature (region=, instance_key=)
+    "anndata>=0.11,<1.0",     # 0.11+ removed .concatenate() — use anndata.concat()
     "scanpy>=1.9,<2.0",
     "squidpy>=1.3,<2.0",
     "geopandas>=0.14",

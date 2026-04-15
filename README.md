@@ -3,7 +3,7 @@
 **Spatial cell segmentation and Deep Visual Proteomics pipeline for CZI microscopy**
 
 [![CI](https://github.com/peptiderodriguez/xldvp_seg/actions/workflows/test.yml/badge.svg)](https://github.com/peptiderodriguez/xldvp_seg/actions)
-[![Python 3.10 | 3.11](https://img.shields.io/badge/python-3.10%20%7C%203.11-blue.svg)](https://www.python.org/downloads/)
+[![Python 3.11](https://img.shields.io/badge/python-3.11-blue.svg)](https://www.python.org/downloads/)
 [![License: MIT](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
 [![Code style: black](https://img.shields.io/badge/code%20style-black-000000.svg)](https://github.com/psf/black)
 [![codecov](https://codecov.io/gh/peptiderodriguez/xldvp_seg/branch/main/graph/badge.svg)](https://codecov.io/gh/peptiderodriguez/xldvp_seg)
@@ -24,7 +24,7 @@ CZI slide → AI detection → annotation → classification → spatial analysi
 
 ```bash
 git clone https://github.com/peptiderodriguez/xldvp_seg.git && cd xldvp_seg
-conda create -n xldvp_seg python=3.10 -y && conda activate xldvp_seg
+conda create -n xldvp_seg python=3.11 -y && conda activate xldvp_seg
 ./install.sh                    # installs package + PyTorch (auto-detects CUDA) + SAM2 + checkpoint
 ```
 
@@ -32,7 +32,7 @@ conda create -n xldvp_seg python=3.10 -y && conda activate xldvp_seg
 
 ```bash
 git clone https://github.com/peptiderodriguez/xldvp_seg.git && cd xldvp_seg
-conda create -n xldvp_seg python=3.10 -y && conda activate xldvp_seg
+conda create -n xldvp_seg python=3.11 -y && conda activate xldvp_seg
 ./install.sh --cpu              # Mac: no CUDA — PyTorch's MPS backend kicks in automatically for Cellpose
 ```
 Apple Silicon MPS is autodetected at runtime via `xldvp_seg.utils.device` — Cellpose segmentation runs 3–10× faster on MPS than on CPU. No manual flag needed.
@@ -300,6 +300,7 @@ For rare large cells (e.g., MKs), single-cell-per-well is sometimes feasible —
 | Region segmentation | `scripts/segment_regions.py` / `scripts/assign_cells_to_regions.py` / `scripts/generate_region_viewer.py` | SAM2 on fluorescence thumbnails → per-cell organ assignment → interactive viewer (core: `xldvp_seg.analysis.region_segmentation`) |
 | Per-region PCA/UMAP | `scripts/region_pca_viewer.py` | PCA → UMAP with 4 clusterings (kmeans-elbow, Leiden on PCA-kNN, HDBSCAN on PCA, HDBSCAN on UMAP); interactive HTML with color toggle (core: `xldvp_seg.analysis.region_clustering`) |
 | Combined region + UMAP viewer | `scripts/combined_region_viewer.py` | 2-pane HTML: whole-slide region map (click to select) + UMAP/clustering side-by-side |
+| Global cluster + spatial divergence | `scripts/global_cluster_spatial_viewer.py` | Inverse: cluster ALL cells globally, rank by spatial-divergence metrics (`focal_multimodal`, `k_90`) to find "same feature profile, different anatomy" cell populations |
 | Per-region multinucleation | `scripts/region_multinuc_plot.py` | Histogram + KDE + Tukey fences + GMM(k=2 via BIC) outlier detection |
 | Transcript export | `scripts/export_transcript.py` | Claude Code session JSONL → markdown/HTML (curate + present modes with PNG export) |
 
@@ -416,7 +417,7 @@ make lint                   # ruff + black check
 make format                 # Auto-fix formatting
 ```
 
-**Style:** Black (line-length 100) + Ruff. Python 3.10 | 3.11 (both CI-tested).
+**Style:** Black (line-length 100) + Ruff. Python 3.11 (CI-tested).
 
 ---
 
