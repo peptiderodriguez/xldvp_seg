@@ -369,7 +369,7 @@ import geopandas
 from xldvp_seg.processing.multigpu_worker import MultiGPUTileProcessor
 print('All imports successful!')
 print(f'  torch: {torch.__version__}')
-print(f'  cellpose: {cellpose.__version__}')
+print(f'  cellpose: {getattr(cellpose, \"__version__\", None) or cellpose.version}')
 print(f'  numpy: {numpy.__version__}')
 print(f'  cv2: {cv2.__version__}')
 print(f'  anndata: {anndata.__version__}')
