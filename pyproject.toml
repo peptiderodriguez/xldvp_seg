@@ -27,8 +27,8 @@ classifiers = [
 # Core dependencies (PyTorch and SAM2 installed separately - see install.sh)
 dependencies = [
     "numpy>=1.24,<2",  # cv2/spatialdata/dvp-io not yet numpy-2 compat; upper bound prevents pip pulling 2.x
-    "pandas>=1.5",
-    "opencv-python>=4.8",
+    "pandas>=1.5,<3",
+    "opencv-python>=4.8,<4.13",  # opencv-python>=4.13 requires numpy>=2; pin to stay numpy-1 compatible
     "scipy>=1.10",
     "scikit-learn>=1.0",
     "scikit-image>=0.21",
