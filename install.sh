@@ -119,10 +119,11 @@ if [ "$LATEST" = false ]; then
         if command -v nvidia-smi &> /dev/null; then
             DETECTED_CUDA=$(nvidia-smi | grep "CUDA Version" | sed -E 's/.*CUDA Version: ([0-9]+\.[0-9]+).*/\1/' | head -1)
             case "$DETECTED_CUDA" in
-                11.*)  TORCH_INDEX="https://download.pytorch.org/whl/cu118" ;;
+                11.*)      TORCH_INDEX="https://download.pytorch.org/whl/cu118" ;;
                 12.0|12.1) TORCH_INDEX="https://download.pytorch.org/whl/cu121" ;;
-                12.*)  TORCH_INDEX="https://download.pytorch.org/whl/cu124" ;;
-                *)     TORCH_INDEX="https://download.pytorch.org/whl/cpu" ;;
+                12.*)      TORCH_INDEX="https://download.pytorch.org/whl/cu124" ;;
+                13.*)      TORCH_INDEX="https://download.pytorch.org/whl/cu124" ;;  # torch has no cu130 wheels yet; cu124 is backward-compat
+                *)         TORCH_INDEX="https://download.pytorch.org/whl/cpu" ;;
             esac
             echo "Step B: detected CUDA $DETECTED_CUDA — installing $TORCH_PIN from $TORCH_INDEX ..."
         elif command -v sinfo &> /dev/null; then
@@ -198,7 +199,8 @@ if [ -z "$CUDA_VERSION" ] && [ "$ROCM" = false ] && [ "$CPU_ONLY" = false ]; the
                 11.*) CUDA_VERSION="11.8" ;;
                 12.0|12.1) CUDA_VERSION="12.1" ;;
                 12.*) CUDA_VERSION="12.4" ;;
-                *) CUDA_VERSION="12.1" ;;
+                13.*) CUDA_VERSION="12.4" ;;  # no cu130 wheels yet; cu124 is backward-compat
+                *) CUDA_VERSION="12.4" ;;    # default to newest for unrecognized (was 12.1)
             esac
         fi
     fi
