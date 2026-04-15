@@ -162,6 +162,14 @@ def cli():
         prog="xlseg",
         description="xldvp_seg: spatial cell segmentation & DVP pipeline",
     )
+    # Resolve version from the installed package metadata (single source of truth).
+    try:
+        from importlib.metadata import version as _pkg_version
+
+        _version = _pkg_version("xldvp_seg")
+    except Exception:
+        _version = "unknown"
+    parser.add_argument("--version", action="version", version=f"xlseg (xldvp_seg) {_version}")
     subparsers = parser.add_subparsers(dest="command", help="Available commands")
 
     subparsers.add_parser("info", help="Inspect CZI metadata (channels, dimensions)")
