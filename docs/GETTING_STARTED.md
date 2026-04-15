@@ -20,6 +20,27 @@ for laser microdissection.
 
 ## Installation
 
+### Recommended: install Claude Code first
+
+The package ships slash commands (`/analyze`, `/new-experiment`, `/czi-info`, ...), custom agents, and a `CLAUDE.md` that together make [Claude Code](https://claude.ai/claude-code) the easiest way to drive the pipeline — especially if you're new to the codebase.
+
+```bash
+# macOS / Linux
+curl -fsSL https://claude.ai/install.sh | bash
+
+# Windows (PowerShell)
+irm https://claude.ai/install.ps1 | iex
+
+# Or via npm (any platform with Node ≥18)
+npm install -g @anthropic-ai/claude-code
+```
+
+After installing: `cd` into the repo, run `claude`, then type `/analyze`. The skill will walk you through everything else below — install, config, detection, classification, LMD export — as an interactive conversation.
+
+If you'd rather do it manually, or if you want to understand what's happening under the hood, read on.
+
+### Package install
+
 **Python 3.11 required** (3.10 and earlier aren't supported — several scverse dependencies moved to ≥3.11).
 
 ```bash

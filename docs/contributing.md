@@ -5,13 +5,23 @@ Thank you for your interest in contributing. This guide covers the essentials fo
 ## Development Setup
 
 ```bash
-# Clone and install in editable mode with dev dependencies
+# Clone
 git clone <repo-url> && cd xldvp_seg
-pip install -e ".[dev]"
-pre-commit install
+
+# Create env + install (use install.sh so the lock + SAM2 are set up correctly)
+conda create -n xldvp_seg python=3.11 -y && conda activate xldvp_seg
+./install.sh --dev                  # --dev adds pytest/ruff/black/mkdocs
+
+pre-commit install                  # ruff + black run on every commit
 ```
 
-Pre-commit hooks (ruff + black) run automatically on each commit.
+Also recommended — install [Claude Code](https://claude.ai/claude-code) for iterating on the pipeline and using the bundled slash commands (`/analyze`, `/new-experiment`, etc.):
+
+```bash
+curl -fsSL https://claude.ai/install.sh | bash    # macOS/Linux
+# Windows:  irm https://claude.ai/install.ps1 | iex
+# Or:       npm install -g @anthropic-ai/claude-code
+```
 
 ## Code Style
 

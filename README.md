@@ -102,12 +102,29 @@ adata = slide.to_anndata()  # AnnData ready for scanpy
 
 ## Claude Code Integration
 
-Use [Claude Code](https://claude.ai/claude-code) for interactive, AI-guided analysis:
+**The recommended way to use this package** is through [Claude Code](https://claude.ai/claude-code) — the repo ships with slash commands, custom agents, and a pipeline-aware `CLAUDE.md` that guide you end-to-end.
 
+### Install Claude Code (one-time)
+
+```bash
+# macOS / Linux — recommended
+curl -fsSL https://claude.ai/install.sh | bash
+
+# Windows (PowerShell) — recommended
+irm https://claude.ai/install.ps1 | iex
+
+# Alternative — any platform with Node 18+
+npm install -g @anthropic-ai/claude-code
 ```
-cd xldvp_seg && claude
-/analyze                        # Claude walks you through everything
-/new-experiment                 # Fast-track: CZI inspect → YAML config → launch
+
+Then sign in once: `claude` (first run prompts for browser auth against your Anthropic / Claude account).
+
+### Use it with xldvp_seg
+
+```bash
+cd xldvp_seg && claude       # opens Claude Code inside the repo; /analyze etc. become available
+/analyze                     # Claude walks you through install, detection, analysis — one question at a time
+/new-experiment              # Fast-track: CZI inspect → YAML config → launch
 ```
 
 The package ships with a custom Claude Code configuration (`.claude/commands/`, `.claude/agents/`, `CLAUDE.md`) that turns Claude into a pipeline-aware assistant:

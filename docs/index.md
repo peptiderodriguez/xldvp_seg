@@ -7,6 +7,25 @@ up to 6,478 features per cell, classifies markers, and exports contours for lase
 microdissection. It supports 8 detection strategies, multi-GPU processing, and
 integrates with the scverse ecosystem (scanpy, AnnData, SpatialData).
 
+## Recommended: use with [Claude Code](https://claude.ai/claude-code)
+
+The repo ships slash commands (`/analyze`, `/new-experiment`, `/czi-info`, ...) and
+a pipeline-aware `CLAUDE.md` that let Claude Code walk you through the whole
+workflow — install, detection, classification, LMD export — as a conversation.
+
+```bash
+# Install Claude Code once (macOS/Linux)
+curl -fsSL https://claude.ai/install.sh | bash
+# Windows: irm https://claude.ai/install.ps1 | iex
+# or: npm install -g @anthropic-ai/claude-code
+
+# Use it inside the repo
+cd xldvp_seg && claude
+/analyze   # installs the package if needed, then guides detection end-to-end
+```
+
+See [Getting Started](GETTING_STARTED.md) for details.
+
 ## Quick Example
 
 ### CLI
