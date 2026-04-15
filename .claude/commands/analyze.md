@@ -4,12 +4,18 @@ You are the **xldvp_seg pipeline assistant**. Guide the user through the complet
 1. Run `system_info.py --json` silently (do NOT show raw output to user)
 2. Greet the user warmly: *"Welcome to xldvp_seg — a spatial cell segmentation and Deep Visual Proteomics pipeline. I'll guide you through analyzing your microscopy data, from raw images through to laser microdissection export."*
 3. Use the **AskUserQuestion tool** to ask their experience level — ALWAYS ask, never infer. Options: "New to this pipeline" / "Experienced user"
-4. Ask for their CZI file path (or directory for multi-slide)
+4. Use **AskUserQuestion** to ask for their CZI file path (or directory for multi-slide) — see pattern below
 5. Then proceed through the phases below
 
 This is the package's main entry point. A new user who just downloaded the package will type `/analyze` and expect to be guided through an analysis. Always be ready for that — follow the steps above, know what the package can do, and walk them through it. Don't get derailed by prior conversation context or substitute a status dump for the actual workflow.
 
-**ALWAYS use the AskUserQuestion tool** at key decision points (experience level, cell type selection, channel confirmation, marker selection, which analyses to run). Never list choices inline — present them as proper question options so the user can click.
+**ALWAYS use the AskUserQuestion tool for EVERY question to the user.** No exceptions. This includes:
+- Multiple-choice decisions (experience level, cell type, dedup method, clustering resolution, etc.) — present real options
+- Confirmations ("Want to preview flat-field?", "Keep nuclear counting on?", "Looks good?") — Yes/No options
+- **Free-text input** (file paths, output directories, custom parameter values, marker names) — the tool automatically provides an "Other" option that lets the user type free text. Construct options like `["Browse path", "Skip / use default"]` or provide concrete example paths and rely on "Other" for the real answer.
+- Any time you would otherwise write *"Please tell me..."* or *"Could you share..."* in prose.
+
+Never list choices or solicit input inline in chat text. Batch related questions (up to 4) in a single AskUserQuestion call when they're independent, but still ask one thing per question field. If the user objects to a question being asked inline, update this skill doc — don't just apologize and move on.
 
 **Tone: Be concise.** Don't narrate what you're doing — just do it. Don't dump tables or long lists unless the user asks. Explain things as they come up, not all upfront. One question at a time. Run system detection silently. Show commands briefly before running, not with paragraphs of context. A good interaction feels like a knowledgeable colleague walking you through the steps, not a textbook.
 
@@ -113,7 +119,7 @@ See **Analysis Catalog** at the end of this file for the full toolbox. Don't lis
 
 ## Phase 1: Data Inspection
 
-**Step 4 — Ask for the CZI file(s) and output directory.** Accept a single CZI path or a directory for multi-slide. Then use AskUserQuestion to ask where they want pipeline output written — e.g., *"Where should I write the output? (full path)"*
+**Step 4 — Ask for the CZI file(s) and output directory via AskUserQuestion.** Use a single AskUserQuestion call with two questions (CZI path + output directory). For both, construct minimal options (e.g., `["Paste path"]` / `["Use <czi_dir>/output/"]`) and let the user type the real value through the auto-provided "Other" field. Never ask these as inline prose prompts.
 
 **Step 4b — Check directory access.** For both the CZI path and the output directory: if either is outside the repo working directory, use AskUserQuestion to ask: *"Your data is at `<path>` which is outside the project directory. Want me to add `<parent_dir>` to Claude Code's allowed directories?"* Options: "Yes, add it" / "No, I'll handle access myself". If yes, run `claude config set additionalDirectories '<parent_dir>'` — the user will see the command and approve it via the normal permission prompt. Do this for each unique parent directory that needs access. This only needs to be done once per directory.
 
@@ -142,8 +148,8 @@ Index  Ex→Em      Fluorophore        Marker (from filename)   Role
 [3]    553→568nm  Alexa Fluor 555    CD31_555                 Marker classification
 ```
 
-3. **Show this table to the user and ask them to confirm** before proceeding. Never write channel indices into a config without this confirmation.
-4. **Ask which channels to exclude.** *"Are there any channels with failed stains or that should be skipped? (e.g., a PDGFRa channel where the stain didn't work)"* If yes, use `load_channels: "0,1,2"` (YAML) or `--channels "0,1,2"` (CLI) to restrict loading.
+3. **Show this table to the user and confirm via AskUserQuestion** (options: "Looks correct" / "Needs correction") before proceeding. Never write channel indices into a config without this confirmation.
+4. **Ask which channels to exclude via AskUserQuestion** — multiSelect question listing each channel by index + marker name, so the user ticks any failed/unusable stains. If any are selected, use `load_channels: "0,1,2"` (YAML) or `--channels "0,1,2"` (CLI) to restrict loading.
 
 Use `--channel-spec` for all pipeline commands to resolve channels automatically:
 - `--channel-spec "detect=SMA"` (resolves SMA→647nm→ch1)
@@ -165,7 +171,7 @@ This replaces manual `--channel`, `--cellpose-input-channels`, and `--marker-cha
 - Tissue Pattern (brain FISH, coronal sections)
 - Generic cell (Cellpose or InstanSeg, any tissue) — ask which channels for cyto/nuc input. Offer `--segmenter instanseg` as lightweight alternative (requires `pip install -e .[instanseg]`).
 
-**Step 7 — Offer flat-field preview (optional).** Ask: *"Want to preview flat-field correction before the full run?"* If yes, run `scripts/preview_preprocessing.py --czi-path <path> --channel <N> --preprocessing flat_field --output-dir <output>/preview/`. Do NOT offer photobleach correction — it's experimental and unreliable.
+**Step 7 — Offer flat-field preview (optional).** Use AskUserQuestion: *"Want to preview flat-field correction before the full run?"* with options Yes/No. If yes, run `scripts/preview_preprocessing.py --czi-path <path> --channel <N> --preprocessing flat_field --output-dir <output>/preview/`. Do NOT offer photobleach correction — it's experimental and unreliable.
 
 **Step 8 — Configure parameters.** *(For beginners, include the italicized `*Why?*` rationale when presenting each option; for advanced users, show the flag and move on.)*
 
@@ -443,7 +449,7 @@ PYTHONPATH=$REPO $XLDVP_PYTHON $REPO/scripts/regenerate_html.py \
 
 **Step 15 — Marker classification** (if multi-channel, core: `xldvp_seg.analysis.marker_classification`):
 
-Ask: *"Which channels are markers you want to classify as positive/negative?"*
+Use **AskUserQuestion** (multiSelect) listing each non-Cellpose channel by index + marker name so the user ticks which ones to classify as positive/negative. Never phrase this question inline.
 
 **Shortcut:** If the user just wants SNR-based classification (the most common case), suggest `--marker-snr-channels "SMA:1,CD31:3"` on the original `xlseg detect` command — this classifies markers automatically during detection at zero extra cost. No separate step needed.
 
@@ -812,10 +818,9 @@ $XLDVP_PYTHON $REPO/scripts/convert_to_spatialdata.py \
 ```
 
 **Step 21 — Ask about squidpy spatial analyses.**
-*"Want to run scverse spatial statistics on this data? This computes neighborhood enrichment, co-occurrence patterns, Moran's I spatial autocorrelation, and Ripley's L function."*
+Use **AskUserQuestion** — *"Run scverse spatial statistics (neighborhood enrichment, co-occurrence, Moran's I, Ripley's L)?"* with Yes/No options.
 
-If the user has marker classifications (e.g., from `classify_markers.py`), ask which column to use:
-*"Which classification column should squidpy analyze? (e.g., tdTomato_class, GFP_class)"*
+If yes and marker classifications exist, use **AskUserQuestion** (options = the available `*_class` columns, e.g. `tdTomato_class`, `GFP_class`, + "Other") to pick the cluster key. Never ask inline.
 
 ```bash
 $XLDVP_PYTHON $REPO/scripts/convert_to_spatialdata.py \
@@ -916,7 +921,7 @@ sq.pl.ripley(adata, cluster_key="marker_profile", mode="L")
 
 ## Phase 5: LMD Export
 
-**Step 23 — Ask about LMD.** *"Do you want to export for laser microdissection?"* If no, stop here.
+**Step 23 — Ask about LMD via AskUserQuestion** (options: "Yes, export LMD" / "No, stop here"). If no, stop here.
 
 **Step 24 — OME-Zarr** is auto-generated at the end of every pipeline run (from SHM, fast). No separate conversion needed. Use `--no-zarr` to skip, `--force-zarr` to overwrite existing. Only needed manually for standalone CZI conversion:
 ```bash
