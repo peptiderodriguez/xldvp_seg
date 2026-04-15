@@ -138,6 +138,10 @@ if [ "$LATEST" = false ]; then
             echo "Step B: no nvidia-smi, no SLURM — installing CPU PyTorch ($TORCH_PIN) ..."
         fi
     fi
+    # Uninstall any previous torch so re-running with a different backend
+    # (e.g. first --cpu, then --cuda 12.4) actually swaps the wheel instead of
+    # silently no-op'ing because torch is already installed.
+    pip uninstall -y torch torchvision 2>/dev/null || true
     pip install "$TORCH_PIN" "$TORCHVISION_PIN" --index-url "$TORCH_INDEX"
 
     # Step C: install the rest of the lock. numpy + torch already satisfied,
@@ -209,6 +213,11 @@ fi
 echo ""
 echo "Step 1: Installing PyTorch..."
 echo "------------------------------------------------------------"
+
+# If torch is already installed, uninstall it so the new backend (CPU/CUDA/ROCm)
+# can actually be applied. Without this, re-running install.sh with a different
+# backend flag is a silent no-op (pip sees torch already installed and skips).
+pip uninstall -y torch torchvision 2>/dev/null || true
 
 if [ "$CPU_ONLY" = true ]; then
     echo "Installing CPU-only PyTorch..."
