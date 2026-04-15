@@ -622,7 +622,7 @@ class MultiGPUTileProcessor:
         self._workers_started = False
 
     def _copy_checkpoint_to_local(self) -> str:
-        """Copy SAM2 checkpoint to local /tmp for faster loading."""
+        """Copy SAM2 checkpoint to a local temp dir for faster loading (cross-platform)."""
         if self.sam2_checkpoint:
             checkpoint_path = Path(self.sam2_checkpoint)
         else:
@@ -645,7 +645,7 @@ class MultiGPUTileProcessor:
             self._local_checkpoint_path = local_path
             return str(local_path)
 
-        logger.info("Copying SAM2 checkpoint to /tmp...")
+        logger.info("Copying SAM2 checkpoint to %s...", local_dir.parent)
         start = time.time()
         shutil.copy2(checkpoint_path, local_path)
         logger.info(f"Copied in {time.time() - start:.1f}s")

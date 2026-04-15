@@ -283,10 +283,10 @@ def _worker_extract_slide(args_tuple):
     """Worker function for ProcessPoolExecutor. Runs on one GPU."""
     slide_name, detections, czi_dir, gpu_id, output_dir, checkpoint = args_tuple
 
-    import torch
-
     os.environ["CUDA_VISIBLE_DEVICES"] = str(gpu_id)
-    device = "cuda" if torch.cuda.is_available() else "cpu"
+    from xldvp_seg.utils.device import get_default_device
+
+    device = str(get_default_device())  # 'cuda', 'mps', or 'cpu'
 
     # Check if already done (require non-empty and matching count)
     out_file = Path(output_dir) / f"sam2_{slide_name}.json"
@@ -434,7 +434,9 @@ def _worker_extract_slide(args_tuple):
     atomic_json_dump(embeddings, out_file)
 
     del predictor, sam2_model
-    torch.cuda.empty_cache()
+    from xldvp_seg.utils.device import empty_cache
+
+    empty_cache()
 
     return slide_name, len(embeddings), elapsed
 

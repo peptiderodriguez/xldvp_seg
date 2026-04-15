@@ -357,7 +357,7 @@ def extract_channel_features(piece_mask, channel_arrays):
     return feats
 
 
-def extract_sam2_embeddings(detections, loader, detect_ch, device="cuda"):
+def extract_sam2_embeddings(detections, loader, detect_ch, device=None):
     """Extract SAM2 256-dim embeddings for each detection.
 
     Crops a 512x512 region around each detection center from full-resolution
@@ -378,7 +378,10 @@ def extract_sam2_embeddings(detections, loader, detect_ch, device="cuda"):
     from sam2.build_sam import build_sam2
     from sam2.sam2_image_predictor import SAM2ImagePredictor
 
-    from xldvp_seg.utils.device import empty_cache
+    from xldvp_seg.utils.device import empty_cache, get_default_device
+
+    if device is None:
+        device = get_default_device()
 
     repo = Path(__file__).resolve().parent.parent
     checkpoint = str(repo / "checkpoints" / "sam2.1_hiera_large.pt")

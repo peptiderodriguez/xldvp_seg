@@ -86,10 +86,14 @@ def calibrate_islet_marker_gmm(
     logger.info(f"Calibrating islet marker thresholds on {len(pilot_tiles)} pilot tiles...")
 
     # Load Cellpose model (lightweight -- single GPU, no SAM2 needed)
+    # Route through device helper so Mac MPS / CPU-only boxes don't crash.
     try:
         from cellpose.models import CellposeModel
 
-        cellpose_model = CellposeModel(gpu=True, pretrained_model="cpsam")
+        from xldvp_seg.utils.device import device_supports_gpu, get_default_device
+
+        _device = get_default_device()
+        cellpose_model = CellposeModel(gpu=device_supports_gpu(_device), pretrained_model="cpsam")
     except Exception as e:
         logger.warning(f"Failed to load Cellpose for calibration: {e}")
         return {}
