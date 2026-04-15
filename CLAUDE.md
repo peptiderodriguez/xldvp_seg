@@ -129,6 +129,8 @@ Place 3 reference crosses in Napari → `run_lmd_export.py`. Adaptive RDP (10% s
 Use `/analyze` for the interactive catalog. Scripts beyond detect → classify → LMD:
 
 - **Region segmentation**: `segment_regions.py` (SAM2 on fluorescence thumbnails), `assign_cells_to_regions.py`, `generate_region_viewer.py` (interactive HTML, per-region nuclear stats). Core: `xldvp_seg.analysis.region_segmentation`.
+- **Per-region feature exploration**: `region_pca_viewer.py` (PCA→UMAP per region with 4 clusterings: kmeans-elbow / Leiden / HDBSCAN-PCA / HDBSCAN-UMAP; color toggle in HTML), `combined_region_viewer.py` (spatial map + UMAP side-by-side — click region on map to jump UMAP), `region_multinuc_plot.py` (per-region multinucleation histogram + Tukey + GMM outlier detection).
+- **Transcript export**: `export_transcript.py` (Claude Code session JSONL → markdown/HTML; `--mode curate` for keep/skip review, `--mode present` for PNG export).
 - **Spatial**: `spatial_cell_analysis.py` (Delaunay), `cluster_by_features.py` (UMAP + Leiden), `generate_multi_slide_spatial_viewer.py`, `generate_contour_viewer.py`. Cores in `xldvp_seg.analysis.*`.
 - **Vessel (4 tools)**: `detect_vessel_lumens_threshold.py` (threshold + watershed on OME-Zarr, CPU, recommended for whole-mount — see `docs/VESSEL_LUMEN_THRESHOLD_PIPELINE.md`), `score_vessel_lumens.py` (RF), `generate_lumen_annotation.py` (card-grid HTML), `assign_vessel_wall_cells.py` (per-marker wall cells + LMD replicates). Also: `segment_vessel_lumens.py` (SAM2 lumen-first), `detect_vessel_structures.py` (graph topology), `vessel_community_analysis.py`. Shared: `xldvp_seg.analysis.vessel_characterization`.
 - **Curvilinear patterns**: `detect_curvilinear_patterns.py` (strips/ribbons via graph linearity).
