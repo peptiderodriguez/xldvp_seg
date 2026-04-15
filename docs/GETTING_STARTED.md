@@ -63,7 +63,7 @@ git clone https://github.com/peptiderodriguez/xldvp_seg.git && cd xldvp_seg
 
 **Latest install** (`--latest`) auto-detects your CUDA version and installs the latest compatible PyTorch, SAM2, Cellpose, and all dependencies. Use this when setting up on new hardware with a different CUDA version than the lock file, or when you need the newest package versions.
 
-**Don't run `pip install -e .` directly** — our pyproject pins several upper bounds (numpy<2, opencv<4.13, etc.) that combined with transitive deps can push pip's resolver into `ResolutionTooDeep`. Always use `install.sh` (Linux/Mac) or follow the Windows steps in the README.
+**Don't run `pip install -e .` directly** — combining our pyproject constraints with scverse transitive deps has historically pushed pip's resolver into `ResolutionTooDeep`. Always use `install.sh` (Linux/Mac) or follow the Windows steps in the README — both install from the lock file directly, skipping the resolver.
 
 Verify the environment:
 

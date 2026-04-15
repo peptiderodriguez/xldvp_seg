@@ -10,7 +10,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Changed
 
 - **Python 3.11 required** (dropped 3.10). Several scverse deps (anndata ≥0.12, spatialdata ≥0.7, squidpy ≥1.8) require 3.11. CI matrix pinned to 3.11 only. `pyproject.toml`, `install.sh`, README, docs all updated.
-- **Dependency pins hardened** in `pyproject.toml` to prevent `ResolutionTooDeep` on fresh installs: `numpy<2`, `opencv-python<4.13`, `pandas<3`, `anndata>=0.11`, `spatialdata>=0.7`. `requirements-lock.txt` always used by `install.sh` — skips pip's resolver entirely.
+- **Dependency pins hardened** in `pyproject.toml` to prevent `ResolutionTooDeep` on fresh installs: `numpy>=1.26`, `pandas<3`, `anndata>=0.11`, `spatialdata>=0.7`. `requirements-lock.txt` always used by `install.sh` — skips pip's resolver entirely. `install.sh` hardened against silent failures (HTTP errors, missing lock pins, `pip install torch` no-ops, SAM2 `ResolutionTooDeep`).
 - **Cross-platform install**: `install.sh` explicit paths for Linux + Mac; Windows has a 3-step manual recipe in README (SAM2 checkpoint download included). Apple Silicon MPS autodetected for Cellpose (3-10× faster than CPU).
 
 ### Added

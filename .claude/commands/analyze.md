@@ -65,9 +65,9 @@ Morph-only (78 features) is the pragmatic default. Run `compare_feature_sets.py`
 5. **If install fails**, surface the actual error. Don't bury it. Common fallbacks:
    - conda env doesn't exist → create it first: `conda create -n xldvp_seg python=3.11 -y && conda activate xldvp_seg`
    - `./install.sh` not found → they're in the wrong directory — ask where they cloned the repo
-   - **`ResolutionTooDeep` error** → user ran `pip install -e .` directly instead of `./install.sh`. Our pyproject has 7+ upper-bound constraints (numpy<2, opencv<4.13, anndata>=0.11, spatialdata>=0.7, etc.) that blow up the resolver. Fix: `pip install -r requirements-lock.txt && pip install --no-deps -e .` (what install.sh does internally).
+   - **`ResolutionTooDeep` error** → user ran `pip install -e .` directly instead of `./install.sh`. Fix: `./install.sh` (installs from the pre-solved lock file, no resolution needed).
    - **Python <3.11** → the package requires Python ≥3.11. Ask user to recreate the env: `conda create -n xldvp_seg python=3.11 -y && conda activate xldvp_seg && ./install.sh`.
-   - **numpy 2 ABI mismatch** → several compiled deps (cv2, spatialdata) aren't numpy-2 compatible yet. `pip install 'numpy<2' 'opencv-python<4.13'` to pin the working set.
+   - **torch CPU wheel installed on a GPU machine** → `torch.__version__` shows `+cpu` but nvidia-smi shows a GPU. Re-run with the explicit flag: `./install.sh --cuda 12.4` (or 11.8, 12.1). install.sh now uninstalls existing torch before swapping backends.
    - Rust compiler needed for `orjson` → pre-wheel available from pypi usually; retry with `pip install --upgrade pip` first
    - SAM2 pip install fails on Windows without git → offer `conda install git -y` then retry
    - Slow network during checkpoint download → retry, or direct them to download manually into `checkpoints/sam2.1_hiera_large.pt`
@@ -293,7 +293,7 @@ xlseg detect --czi-path /path/to/slide.czi \
 
 **Immediately after submission (within 30 seconds):**
 1. Read the generated sbatch — verify `--num-gpus` matches SLURM GPU allocation (e.g., 4 GPUs allocated = `--num-gpus 4`)
-2. Verify the Python path is the mkseg conda python, not bare `python`
+2. Verify the Python path is `$XLDVP_PYTHON` (auto-set on `conda activate xldvp_seg`), not a bare `python`
 3. Verify `--dependency` job IDs (if chained) point to the correct jobs that haven't been cancelled
 4. Verify input file paths exist and are from the correct pipeline run
 

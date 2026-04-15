@@ -37,12 +37,15 @@ Guidance for Claude Code sessions on the `xldvp_seg` project — Spatial cell se
 ## Development Commands
 
 ```bash
-pip install -e .                        # Install (registers xlseg CLI)
-make install-dev                        # With dev deps (pytest/ruff/black)
+./install.sh                            # Install pipeline + deps from lock file (Linux/Mac)
+./install.sh --dev                      # Adds pytest/ruff/black/mkdocs
+./install.sh --with-claude-code         # Also installs Claude Code CLI (opt-in)
 make test                               # All tests + coverage
 make lint                               # ruff + black check
 make format                             # Auto-fix formatting
 ```
+
+**Never** run `pip install -e .` standalone — combining scverse transitive deps with our constraints hits `ResolutionTooDeep`. `install.sh` installs from the pre-solved `requirements-lock.txt` to avoid that path.
 
 **Style:** Black (line-length 100), Ruff (E/F/W/I/N/UP/B/C4, E501 ignored). Python 3.11 (CI-tested). Tests in `tests/` using pytest; rely on `pip install -e .` for `xldvp_seg.*` imports.
 
