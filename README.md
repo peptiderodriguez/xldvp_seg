@@ -18,21 +18,63 @@ CZI slide → AI detection → annotation → classification → spatial analysi
 
 ## Quick Start
 
+**Every install path installs three things: the package, PyTorch, and SAM2 (model + checkpoint).** On Linux/Mac `./install.sh` does all three. On Windows you do them manually (3 commands).
+
+### Linux (cluster / workstation / laptop)
+
 ```bash
 git clone https://github.com/peptiderodriguez/xldvp_seg.git && cd xldvp_seg
 conda create -n xldvp_seg python=3.10 -y && conda activate xldvp_seg
-pip install -e .
-./install.sh                    # auto-detects CUDA, installs PyTorch + SAM2 + deps
+./install.sh                    # installs package + PyTorch (auto-detects CUDA) + SAM2 + checkpoint
 ```
 
-### Two install modes
+### macOS (Apple Silicon or Intel)
+
+```bash
+git clone https://github.com/peptiderodriguez/xldvp_seg.git && cd xldvp_seg
+conda create -n xldvp_seg python=3.10 -y && conda activate xldvp_seg
+./install.sh --cpu              # Mac: no CUDA — PyTorch's MPS backend kicks in automatically for Cellpose
+```
+Apple Silicon MPS is autodetected at runtime via `xldvp_seg.utils.device` — Cellpose segmentation runs 3–10× faster on MPS than on CPU. No manual flag needed.
+
+### Windows (no `install.sh` — manual, one-time)
+
+```powershell
+git clone https://github.com/peptiderodriguez/xldvp_seg.git
+cd xldvp_seg
+conda create -n xldvp_seg python=3.11 -y
+conda activate xldvp_seg
+# 1. PyTorch (pick CUDA or CPU)
+pip install torch torchvision --index-url https://download.pytorch.org/whl/cu121
+# pip install torch torchvision --index-url https://download.pytorch.org/whl/cpu  # if no GPU
+# 2. Package
+pip install -e .
+# 3. SAM2 + checkpoint
+pip install "git+https://github.com/facebookresearch/sam2.git"
+mkdir checkpoints
+# Download the checkpoint manually (PowerShell):
+Invoke-WebRequest -Uri "https://dl.fbaipublicfiles.com/segment_anything_2/092824/sam2.1_hiera_large.pt" -OutFile "checkpoints\sam2.1_hiera_large.pt"
+```
+
+### Verify (any platform)
+
+```bash
+xlseg --version                 # confirms package installed
+python -c "import torch; print('CUDA:', torch.cuda.is_available(), 'MPS:', torch.backends.mps.is_available())"
+xlseg info slide.czi            # test CZI reading (ALWAYS run before detection)
+```
+
+### `install.sh` mode flags (Linux/Mac)
 
 | Mode | Command | Best for |
 |------|---------|----------|
-| **Reproducible** (default) | `./install.sh` | Exact pinned versions from `requirements-lock.txt`. Two people running this a month apart get identical environments. Recommended for most users. |
-| **Latest** | `./install.sh --latest` | Auto-detects your CUDA version, installs latest compatible PyTorch + SAM2 + all deps. Use when setting up on new hardware with a different CUDA version than the lock file. |
+| **Reproducible** (default) | `./install.sh` | Exact pinned versions from `requirements-lock.txt` — two people running this a month apart get identical environments |
+| **Latest** | `./install.sh --latest` | Auto-detects CUDA version, installs latest compatible PyTorch + SAM2 |
+| **CPU-only** | `./install.sh --cpu` | No GPU (Mac Intel, some laptops); MPS still works on Mac Apple Silicon |
+| **AMD GPU** | `./install.sh --rocm` | ROCm instead of CUDA |
+| **Dev tools** | `./install.sh --dev` | Adds pytest/ruff/black |
 
-Additional flags: `--cuda 11.8|12.1|12.4` (implies --latest), `--cpu` (CPU-only, implies --latest), `--rocm` (AMD GPUs, implies --latest), `--dev` (add pytest/ruff/black).
+Specify CUDA version with `--cuda 11.8|12.1|12.4`.
 
 **Optional extras:** `pip install -e ".[brightfield]"` for brightfield foundation models. `pip install -e ".[instanseg]"` for InstanSeg segmenter.
 
@@ -255,6 +297,11 @@ For rare large cells (e.g., MKs), single-cell-per-well is sometimes feasible —
 | One-command viz | `scripts/view_slide.py` | Classify → cluster → viewer → serve |
 | ROI detection | `examples/islet/`, `examples/tma/` | Pre-detection: find ROIs → detect within ROIs only. Post-detection: draw ROIs in viewer → filter/export selected cells |
 | Block-face registration | VALIS + SAM2 | Register gross tissue photo to fluorescence CZI, auto-segment organs with recursive SAM2, assign detections to anatomical regions for organ-specific LMD. See `docs/BLOCKFACE_REGISTRATION.md` |
+| Region segmentation | `scripts/segment_regions.py` / `scripts/assign_cells_to_regions.py` / `scripts/generate_region_viewer.py` | SAM2 on fluorescence thumbnails → per-cell organ assignment → interactive viewer (core: `xldvp_seg.analysis.region_segmentation`) |
+| Per-region PCA/UMAP | `scripts/region_pca_viewer.py` | PCA → UMAP with 4 clusterings (kmeans-elbow, Leiden on PCA-kNN, HDBSCAN on PCA, HDBSCAN on UMAP); interactive HTML with color toggle (core: `xldvp_seg.analysis.region_clustering`) |
+| Combined region + UMAP viewer | `scripts/combined_region_viewer.py` | 2-pane HTML: whole-slide region map (click to select) + UMAP/clustering side-by-side |
+| Per-region multinucleation | `scripts/region_multinuc_plot.py` | Histogram + KDE + Tukey fences + GMM(k=2 via BIC) outlier detection |
+| Transcript export | `scripts/export_transcript.py` | Claude Code session JSONL → markdown/HTML (curate + present modes with PNG export) |
 
 See `examples/` for experiment-specific analyses (bone marrow, liver zonation, islets, TMA, vessels, NMJ, mesothelium).
 

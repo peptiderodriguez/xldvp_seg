@@ -39,7 +39,35 @@ Morph-only (78 features) is the pragmatic default. Run `compare_feature_sets.py`
 
 ## Phase 0: System Detection + Experience Level
 
-**Step 1 — Detect environment silently.** Run `$XLDVP_PYTHON $REPO/scripts/system_info.py --json`. Parse the `environment` field (one of `slurm`, `workstation`, `laptop` per heuristics in `system_info.py`), CPU/RAM/GPU counts, and the `recommended` block (auto-caps at ~75% of available CPU/RAM; requests all GPUs).
+**Step 1a — Install preflight (agent does this automatically; user sees only progress).** The goal: the user types `/analyze`, and if the pipeline isn't installed, it just gets installed. They don't need to know about platforms, SAM2, CUDA, MPS, or what conda is.
+
+1. **Check if already installed.** Run `xlseg --version`. If it returns a version, skip ahead to Step 1b.
+
+2. **If missing, detect platform** (Python `platform.system()`, or `uname -s`): `Linux`, `Darwin` (Mac), or `Windows`. Also detect GPU: run `nvidia-smi --query-gpu=name --format=csv,noheader 2>&1` — success with output means CUDA, failure means no CUDA. On Darwin: MPS is available automatically on Apple Silicon (Python 3.10+, torch ≥2.0).
+
+3. **Tell the user what you're about to do, briefly:**
+   *"The pipeline isn't installed yet. I'll set it up — the package, PyTorch, and SAM2 (the segmentation model). This takes about 5 minutes. Please confirm before I start."*
+   Use AskUserQuestion for confirmation. Never run install commands without the user saying yes.
+
+4. **Once confirmed, run the right install — YOU run it, silently.** Don't show the commands in chat; show *"Installing PyTorch..."*, *"Installing package..."*, *"Downloading SAM2 checkpoint (700MB)..."* as high-level progress. Pass `run_in_background=true` for the long pip install and tail progress.
+
+   - **Linux + CUDA**: `./install.sh`
+   - **Linux + no CUDA**: `./install.sh --cpu`
+   - **Mac (any)**: `./install.sh --cpu` (MPS kicks in automatically for Cellpose at runtime — no flag needed)
+   - **Windows**: run the 3 steps yourself via Bash tool — PyTorch wheel (CUDA or CPU per detection), `pip install -e .`, `pip install "git+https://github.com/facebookresearch/sam2.git"`, then download the checkpoint via `curl -L -o checkpoints/sam2.1_hiera_large.pt https://dl.fbaipublicfiles.com/segment_anything_2/092824/sam2.1_hiera_large.pt` (works in Git Bash / WSL / PowerShell 7+).
+
+5. **If install fails**, surface the actual error. Don't bury it. Common fallbacks:
+   - conda env doesn't exist → create it first: `conda create -n xldvp_seg python=3.10 -y && conda activate xldvp_seg`
+   - `./install.sh` not found → they're in the wrong directory — ask where they cloned the repo
+   - Rust compiler needed for `orjson` → pre-wheel available from pypi usually; retry with `pip install --upgrade pip` first
+   - SAM2 pip install fails on Windows without git — offer `conda install git -y` then retry
+   - Slow network during checkpoint download → retry, or direct them to download manually into `checkpoints/sam2.1_hiera_large.pt`
+
+6. **Verify silently**: `xlseg --version` must return a version; `python -c "import torch; print(torch.__version__, torch.cuda.is_available() or torch.backends.mps.is_available())"` must print True. Only then tell the user *"Install complete — ready to analyze. What CZI file are we working with?"*
+
+This whole flow should feel like a single step to the user. They press Enter, they wait ~5 min while hearing *"Installing..."*, they're done. Platform details only surface if something errors.
+
+**Step 1b — Detect environment silently.** Run `$XLDVP_PYTHON $REPO/scripts/system_info.py --json`. Parse the `environment` field (one of `slurm`, `workstation`, `laptop` per heuristics in `system_info.py`), CPU/RAM/GPU counts, and the `recommended` block (auto-caps at ~75% of available CPU/RAM; requests all GPUs).
 
 Report briefly:
 
@@ -208,7 +236,7 @@ For 2-channel Cellpose (generic cell detection):
 **Before offering this path, confirm with the user they understand the trade-offs:**
 - Detection on a laptop CPU-only: easily 10–30x slower than a cluster GPU node
 - 16GB RAM struggles past ~50K cells; 32–64GB is comfortable for medium slides
-- Apple Silicon MPS works for Cellpose and SAM2 (autodetected via `xldvp_seg.utils.device`) but is slower than CUDA
+- Apple Silicon MPS is autodetected via `xldvp_seg.utils.device.get_default_device()` and actively used for Cellpose segmentation (verified in `device.py`) — **use it**, don't fall back to CPU. MPS is 3–10× faster than CPU for Cellpose on typical slides, though still slower than a CUDA GPU. No flags needed; the pipeline picks MPS automatically when CUDA isn't available.
 - Windows: fine for `xlseg info`, `xlseg markers`, and viewer generation; detection works but SHM-based preloading may not; use `--no-load-to-ram` if you hit issues
 - Shared-filesystem features (e.g. OME-Zarr at network paths) aren't involved on a single machine — everything stays local to the machine's disk
 

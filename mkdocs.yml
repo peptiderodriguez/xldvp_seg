@@ -48,6 +48,7 @@ nav:
       - SlideAnalysis: api/slide_analysis.md
       - Marker Classification: api/marker_classification.md
       - Clustering: api/cluster_features.md
+      - Region Clustering (per-region): api/region_clustering.md
       - Spatial Networks: api/spatial_network.md
       - "I/O": api/io.md
       - Training: api/training.md
