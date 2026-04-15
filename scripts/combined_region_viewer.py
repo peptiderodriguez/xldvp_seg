@@ -285,7 +285,7 @@ function buildSidebar() {{
     let meta = r.n_cells.toLocaleString() + ' | H=' + r.hopkins;
     if (r.mean_nuc !== undefined) meta += ' | nuc=' + r.mean_nuc;
     div.innerHTML = '<div class="rid">Region ' + r.id + '</div><div class="meta">' + meta + '</div>';
-    div.onclick = () => selectRegion(String(r.id));
+    div.onclick = () => selectRegion(String(r.id) === currentRegion ? null : String(r.id));
     list.appendChild(div);
   }});
 }}
