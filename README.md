@@ -73,6 +73,7 @@ xlseg info slide.czi            # test CZI reading (ALWAYS run before detection)
 | **CPU-only** | `./install.sh --cpu` | No GPU (Mac Intel, some laptops); MPS still works on Mac Apple Silicon |
 | **AMD GPU** | `./install.sh --rocm` | ROCm instead of CUDA |
 | **Dev tools** | `./install.sh --dev` | Adds pytest/ruff/black |
+| **With Claude Code** | `./install.sh --with-claude-code` | Also installs the Claude Code CLI (opt-in) so `/analyze` is available right after install |
 
 Specify CUDA version with `--cuda 11.8|12.1|12.4`.
 

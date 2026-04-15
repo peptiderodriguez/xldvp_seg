@@ -37,6 +37,14 @@ npm install -g @anthropic-ai/claude-code
 
 After installing: `cd` into the repo, run `claude`, then type `/analyze`. The skill will walk you through everything else below — install, config, detection, classification, LMD export — as an interactive conversation.
 
+**One-shot install** (package + Claude Code together): pass `--with-claude-code` to install.sh:
+
+```bash
+conda create -n xldvp_seg python=3.11 -y && conda activate xldvp_seg
+git clone <repo> xldvp_seg && cd xldvp_seg
+./install.sh --with-claude-code   # one command gets you everything; still sign-in to Claude manually via `claude`
+```
+
 If you'd rather do it manually, or if you want to understand what's happening under the hood, read on.
 
 ### Package install
