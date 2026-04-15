@@ -94,13 +94,77 @@ if [ "$LATEST" = false ]; then
         echo "Run './install.sh --latest' to install without the lock file."
         exit 1
     fi
+
+    # Step A: pin numpy early. Torch wheels declare `numpy>=1.22` with no upper
+    # bound, and without a pre-pin pip pulls numpy 2.x — which breaks several
+    # compiled transitive deps (cv2, spatialdata). Extract the exact version
+    # from the lock file and install it first.
+    NUMPY_PIN=$(grep -E '^numpy==' "$LOCK_FILE")
+    echo "Step A: pinning $NUMPY_PIN first (prevents torch pulling in numpy 2.x)..."
+    pip install "$NUMPY_PIN"
+
+    # Step B: install torch with the right index. Detect CUDA so GPU users don't
+    # silently land on CPU wheels. If the user passed --cpu, --rocm, or --cuda,
+    # those override detection.
+    TORCH_PIN=$(grep -E '^torch==' "$LOCK_FILE")
+    TORCHVISION_PIN=$(grep -E '^torchvision==' "$LOCK_FILE")
+    if [ "$CPU_ONLY" = true ]; then
+        TORCH_INDEX="https://download.pytorch.org/whl/cpu"
+        echo "Step B: installing CPU PyTorch ($TORCH_PIN) ..."
+    elif [ "$ROCM" = true ]; then
+        TORCH_INDEX="https://download.pytorch.org/whl/rocm6.0"
+        echo "Step B: installing ROCm PyTorch ($TORCH_PIN) ..."
+    else
+        # Auto-detect CUDA from nvidia-smi
+        if command -v nvidia-smi &> /dev/null; then
+            DETECTED_CUDA=$(nvidia-smi | grep "CUDA Version" | sed -E 's/.*CUDA Version: ([0-9]+\.[0-9]+).*/\1/' | head -1)
+            case "$DETECTED_CUDA" in
+                11.*)  TORCH_INDEX="https://download.pytorch.org/whl/cu118" ;;
+                12.0|12.1) TORCH_INDEX="https://download.pytorch.org/whl/cu121" ;;
+                12.*)  TORCH_INDEX="https://download.pytorch.org/whl/cu124" ;;
+                *)     TORCH_INDEX="https://download.pytorch.org/whl/cpu" ;;
+            esac
+            echo "Step B: detected CUDA $DETECTED_CUDA — installing $TORCH_PIN from $TORCH_INDEX ..."
+        else
+            TORCH_INDEX="https://download.pytorch.org/whl/cpu"
+            echo "Step B: no nvidia-smi — installing CPU PyTorch ($TORCH_PIN) ..."
+        fi
+    fi
+    pip install "$TORCH_PIN" "$TORCHVISION_PIN" --index-url "$TORCH_INDEX"
+
+    # Step C: install the rest of the lock. numpy + torch already satisfied,
+    # so pip skips them. Everything else resolves against the exact pins.
+    echo "Step C: installing remaining dependencies from lock file..."
     pip install -r "$LOCK_FILE"
-    # --no-deps: don't re-resolve dependencies (lock file is authoritative)
+
+    # Step D: install our package (editable) without re-resolving deps.
     if [ "$DEV" = true ]; then
         pip install --no-deps -e "$SCRIPT_DIR[dev]"
     else
         pip install --no-deps -e "$SCRIPT_DIR"
     fi
+
+    # Step E: SAM2 — required for detection. Not on PyPI, install from git.
+    echo "Step E: installing SAM2..."
+    pip install "git+https://github.com/facebookresearch/segment-anything-2.git@2b90b9f5ceec907a1c18123530e92e794ad901a4"
+
+    # Step F: SAM2 checkpoint (700MB). Skip if already present.
+    CHECKPOINT_DIR="$SCRIPT_DIR/checkpoints"
+    CHECKPOINT_FILE="$CHECKPOINT_DIR/sam2.1_hiera_large.pt"
+    if [ ! -f "$CHECKPOINT_FILE" ]; then
+        mkdir -p "$CHECKPOINT_DIR"
+        echo "Step F: downloading SAM2 checkpoint (700MB)..."
+        if command -v curl &> /dev/null; then
+            curl -L -o "$CHECKPOINT_FILE" https://dl.fbaipublicfiles.com/segment_anything_2/092824/sam2.1_hiera_large.pt
+        elif command -v wget &> /dev/null; then
+            wget -O "$CHECKPOINT_FILE" https://dl.fbaipublicfiles.com/segment_anything_2/092824/sam2.1_hiera_large.pt
+        else
+            echo "  WARNING: curl/wget not found — download manually to $CHECKPOINT_FILE"
+        fi
+    else
+        echo "Step F: SAM2 checkpoint already present at $CHECKPOINT_FILE"
+    fi
+
     echo ""
     echo "============================================================"
     echo "Reproducible installation complete!"

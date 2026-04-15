@@ -80,10 +80,12 @@ Report briefly:
   On GPU partitions, always request all GPUs (scheduling is per-device exclusive) and `--nodes=1`.
 
 - **Workstation (no SLURM)**: *"Detected local Linux/Windows machine with 32 cores, 128GB RAM, 1× RTX 4090."*
-  Submission path is `xlseg detect` (or `run_segmentation.py` directly), NOT `run_pipeline.sh` (sbatch isn't available). No YAML needed; build the CLI command directly. GPU is used automatically if available.
+  **Always write a YAML config** to `examples/configs/<name>.yaml` first (same format as SLURM path — keeps everything structured and readable). Then run directly via `xlseg detect` with the values the YAML specifies (`run_pipeline.sh` is SLURM-only, not applicable here). GPU is used automatically if available.
 
 - **Laptop (limited)**: *"Detected MacBook with 10 cores / 32GB RAM / Apple Silicon (MPS autodetected — Cellpose will use it automatically)."*
-  Ask the user to confirm they want to proceed with full-slide detection on a laptop BEFORE launching — set expectations upfront. For slides <50K cells, MPS-accelerated detection is comfortable; >200K cells may take hours.
+  Same YAML-first approach as workstation. Ask the user to confirm they want to proceed with full-slide detection on a laptop BEFORE launching — set expectations upfront. For slides <50K cells, MPS-accelerated detection is comfortable; >200K cells may take hours.
+
+**YAML is the source of truth in all three environments.** Even for one-off local runs, write the YAML first — it documents exactly what was run, stays around for reproducibility, and is trivial to re-run or share. SLURM users launch it via `run_pipeline.sh configs/<name>.yaml`; workstation/laptop users run a direct `xlseg detect` command built from the YAML (show both the YAML and the derived command to the user).
 
 **Resource-allocation choice (workstation & laptop only — SLURM uses cluster defaults):**
 
