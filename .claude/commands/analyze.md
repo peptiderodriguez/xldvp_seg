@@ -1209,6 +1209,10 @@ Reference tables — introduce capabilities as they become relevant, don't list 
 | **Nuclear count** | Nuclei per cell (morph + SAM2 per nucleus) | `--count-nuclei` (default ON) or `scripts/count_nuclei_per_cell.py` |
 | **Region detection** | Percentile-threshold → cleanup → equal-area split → features → LMD | `scripts/detect_regions_for_lmd.py` |
 | **Region splitting** | Watershed split large existing regions | `scripts/split_regions_for_lmd.py` |
+| **Fluor-native region segmentation** | SAM2 on fluorescence thumbnails → per-cell organ assignment → interactive viewer. Preferred over registration for organ-level analysis. | `scripts/segment_regions.py` → `assign_cells_to_regions.py` → `generate_region_viewer.py` (core: `xldvp_seg.analysis.region_segmentation`) |
+| **Per-region PCA/UMAP** | PCA → UMAP per region with 4 clusterings (kmeans-elbow, Leiden on PCA-kNN, HDBSCAN-PCA, HDBSCAN-UMAP); HTML with color-toggle | `scripts/region_pca_viewer.py`, `scripts/combined_region_viewer.py` (2-pane: spatial map + UMAP, click region → UMAP) (core: `xldvp_seg.analysis.region_clustering`) |
+| **Global cluster + spatial divergence** | Inverse of per-region: clusters ALL nucleated cells globally, then ranks by spatial-divergence metrics (`focal_multimodal`, `k_90`, entropy) to find "same feature profile, different anatomy" populations | `scripts/global_cluster_spatial_viewer.py` |
+| **Per-region multinucleation** | Histogram + Tukey fences + GMM(k=2 via BIC) outlier detection | `scripts/region_multinuc_plot.py` |
 | **Replicate sampling** | Area-matched / spatially-clustered, marker-stratified, 384-well | `scripts/paper_figure_sampling.py` |
 | **Transect selection** | Cells along zonation transect paths | `scripts/select_transect_cells_for_lmd.py` |
 | **Sliding window** | Rolling window along ROI centerlines, grid-search zero-rejection combos. Ref: r=70um/40% overlap for 20× brain target. | `scripts/sliding_window_sampling.py` |

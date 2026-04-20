@@ -397,18 +397,18 @@ xldvp_seg/              # Main package (pip install -e .)
 ├── detection/strategies/  # 8 strategies, self-registered via @register_strategy
 ├── io/                    # CZI loader, HTML export (6 modules), OME-Zarr, SpatialData export
 ├── lmd/                   # Well plates, contour processing (adaptive RDP + dilation)
-├── analysis/              # 9 modules: marker classification, clustering, spatial networks, patterns, sampling, OmicLinker, aggregation, nuclear counting, vessel characterization
+├── analysis/              # 12 modules: marker classification, clustering (whole-slide + per-region), spatial networks, patterns, sampling, OmicLinker, aggregation, nuclear counting, vessel characterization, region segmentation, background correction
 ├── visualization/         # Reusable HTML visualization: fluorescence, colors, encoding, data loading, HTML builder, graph patterns, 17 JS components
 ├── training/              # Classifier training: feature loading, annotation matching
 ├── models/                # Model registry (SAM2, ResNet, DINOv2, brightfield FMs)
-├── pipeline/              # 11 modules: shm_setup, detection_loop, preprocessing, post_detection, ...
+├── pipeline/              # 11 modules: shm_setup, detection_loop, preprocessing, post_detection, ... (bg correction now lives in analysis/)
 ├── processing/            # Multi-GPU workers, deduplication, strategy factory
 ├── roi/                   # ROI support: pre-detection (restrict to regions) or post-detection (spatial filtering)
 └── utils/                 # JSON I/O, device handling, logging, config
 
-scripts/                   # 42 reusable CLI tools
+scripts/                   # 44 reusable CLI tools
 examples/                  # Project-specific analyses by experiment
-tests/                     # pytest suite (1151 tests — run `make test`)
+tests/                     # pytest suite (1169 tests across 56 files — run `make test`)
 ```
 
 ## Key Design Decisions
