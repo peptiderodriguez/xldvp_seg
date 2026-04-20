@@ -35,6 +35,7 @@ Usage:
 import argparse
 import base64
 import io
+import math
 import sys
 from collections import Counter
 from pathlib import Path
@@ -137,7 +138,7 @@ def leiden_on_knn_graph(X, *, n_neighbors=15, resolution=1.0, seed=42):
     # Build undirected edge list (skip self at column 0)
     src = np.repeat(np.arange(n), n_neighbors - 1)
     dst = idxs[:, 1:].reshape(-1)
-    edges = list(zip(src.tolist(), dst.tolist()))
+    edges = np.column_stack([src, dst]).tolist()
 
     logger.info("Building igraph (%d edges)...", len(edges))
     g = ig.Graph(n=n, edges=edges, directed=False)
@@ -685,13 +686,15 @@ def main():
         if oid == 0:
             continue
         nn = det.get("features", {}).get("n_nuclei")
-        if nn is None or int(nn) < args.min_nuclei:
+        try:
+            nn_val = float(nn) if nn is not None else None
+        except (TypeError, ValueError):
+            continue
+        if nn_val is None or not math.isfinite(nn_val) or int(nn_val) < args.min_nuclei:
             continue
         kept.append(det)
     del detections
-    logger.info(
-        "Kept %d cells with organ_id>0 AND n_nuclei>=%d", len(kept), args.min_nuclei
-    )
+    logger.info("Kept %d cells with organ_id>0 AND n_nuclei>=%d", len(kept), args.min_nuclei)
 
     # Also drop cells from tiny regions (noise)
     region_counts = Counter(d["organ_id"] for d in kept)
@@ -720,7 +723,6 @@ def main():
     # Drop zero-variance features, scale
     variances = np.var(X, axis=0)
     nonconstant = variances > 1e-12
-    active_names = [feature_names[i] for i in range(len(feature_names)) if nonconstant[i]]
     X = X[:, nonconstant]
     X_scaled = StandardScaler().fit_transform(X).astype(np.float32)
 
@@ -853,9 +855,7 @@ def main():
     label_map = np.load(args.label_map)
     contours = extract_region_contours(label_map)
     channels = [int(c.strip()) for c in args.display_channels.split(",")]
-    fluor_thumbnails = build_fluor_thumbnails(
-        args.czi_path, channels, args.scale, args.scene
-    )
+    fluor_thumbnails = build_fluor_thumbnails(args.czi_path, channels, args.scale, args.scene)
 
     # Only keep contours for regions that appear in at least one cluster (any method)
     touched_regions = set()

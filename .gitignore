@@ -125,3 +125,9 @@ examples/output/
 .env
 .env.*
 .hypothesis/
+
+# Stray src/ dir (accidental pip install scratch)
+src/
+
+# Backup files
+*.bak

@@ -138,14 +138,20 @@ class TestSafeJson:
         assert "</" not in result
         assert "<\\/" in result
 
-    def test_nan_inf_pass_through(self):
-        """safe_json wraps json.dumps with default allow_nan=True."""
-        # Python's json.dumps allows NaN/Inf by default (non-standard JSON)
-        result_nan = safe_json(float("nan"))
-        assert "NaN" in result_nan
+    def test_nan_inf_sanitized_to_null(self):
+        """safe_json sanitizes NaN/Inf to null for strict-JSON browser parsing.
 
-        result_inf = safe_json(float("inf"))
-        assert "Infinity" in result_inf
+        stdlib json.dumps emits NaN/Infinity by default (non-standard JSON
+        that breaks JSON.parse in browsers). safe_json recursively replaces
+        non-finite floats with None before serialization.
+        """
+        assert safe_json(float("nan")) == "null"
+        assert safe_json(float("inf")) == "null"
+        assert safe_json(float("-inf")) == "null"
+        # Nested sanitization
+        assert safe_json({"a": float("nan"), "b": [1.0, float("inf"), 3.0]}) == (
+            '{"a": null, "b": [1.0, null, 3.0]}'
+        )
 
     def test_list_output(self):
         """Lists are correctly serialized."""

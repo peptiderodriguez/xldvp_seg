@@ -2,6 +2,7 @@
 
 import base64
 import json
+import math
 
 import numpy as np
 
@@ -20,12 +21,32 @@ def encode_uint8_base64(arr):
     return base64.b64encode(arr.astype(np.uint8).tobytes()).decode("ascii")
 
 
+def _sanitize(obj):
+    """Recursively replace NaN/Inf with None so output is strict-JSON parsable.
+
+    Browsers' JSON.parse rejects NaN/Infinity. stdlib json.dumps emits them by
+    default (allow_nan=True), producing HTML that silently breaks client-side
+    parsing. This helper converts them to null before serialization.
+    """
+    if isinstance(obj, float):
+        return obj if math.isfinite(obj) else None
+    if isinstance(obj, dict):
+        return {k: _sanitize(v) for k, v in obj.items()}
+    if isinstance(obj, (list, tuple)):
+        return [_sanitize(v) for v in obj]
+    return obj
+
+
 def safe_json(obj):
     """JSON-encode an object safe for embedding in <script> blocks.
 
-    Escapes '</' sequences to prevent premature </script> termination (XSS).
+    - Sanitizes NaN/Inf → null (strict JSON, parses in the browser).
+    - Escapes '</' sequences to prevent premature </script> termination (XSS).
+    - Escapes '<!--' so the payload can't open an HTML comment.
     """
-    return json.dumps(obj).replace("</", "<\\/").replace("<!--", "<\\!--")
+    return (
+        json.dumps(_sanitize(obj), allow_nan=False).replace("</", "<\\/").replace("<!--", "<\\!--")
+    )
 
 
 def build_contour_js_data(contours_raw, max_contours=100_000):

@@ -98,7 +98,9 @@ def find_optimal_k_elbow(X, max_k=8, rng=None):
     n = X.shape[0]
     max_k = min(max_k, n - 1)
     if max_k < 2:
-        return 1, 0.0, np.zeros(n, dtype=int), 0.0, {}, {}
+        # Degenerate input: return single-entry sentinels instead of empty dicts
+        # so downstream consumers (plotting, CSV export) don't crash on KeyError.
+        return 1, 0.0, np.zeros(n, dtype=int), 0.0, {1: 0.0}, {1: 0.0}
 
     sil_per_k: dict[int, float] = {}
     inertia_per_k: dict[int, float] = {}
@@ -180,12 +182,15 @@ def cluster_leiden(X, *, n_neighbors=15, resolution=1.0, seed=42):
     import leidenalg
 
     n = X.shape[0]
+    if n < 2:
+        # NearestNeighbors + leiden both require n >= 2; return a single cluster.
+        return np.zeros(n, dtype=np.int32)
     n_neighbors = min(n_neighbors, n - 1)
     nn = NearestNeighbors(n_neighbors=n_neighbors + 1, metric="euclidean").fit(X)
     _, idxs = nn.kneighbors(X)
     src = np.repeat(np.arange(n), n_neighbors)
     dst = idxs[:, 1:].reshape(-1)
-    edges = list(zip(src.tolist(), dst.tolist()))
+    edges = np.column_stack([src, dst]).tolist()
     g = ig.Graph(n=n, edges=edges, directed=False)
     g = g.simplify(multiple=True, loops=True)
     partition = leidenalg.find_partition(
@@ -284,9 +289,7 @@ def process_region(
         X_pca, max_k=max_k, rng=rng
     )
     try:
-        labels_leiden = cluster_leiden(
-            X_pca, n_neighbors=leiden_knn, resolution=leiden_resolution
-        )
+        labels_leiden = cluster_leiden(X_pca, n_neighbors=leiden_knn, resolution=leiden_resolution)
     except Exception as e:
         logger.warning("Leiden failed: %s", e)
         labels_leiden = np.zeros(n_total, dtype=np.int32)

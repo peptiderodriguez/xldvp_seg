@@ -1,4 +1,4 @@
-"""Tests for xldvp_seg.pipeline.background.correct_all_channels.
+"""Tests for xldvp_seg.analysis.background.correct_all_channels.
 
 Covers:
 - Raw value preservation (ch{N}_median_raw)
@@ -11,7 +11,7 @@ Covers:
 
 import numpy as np
 
-from xldvp_seg.pipeline.background import correct_all_channels
+from xldvp_seg.analysis.background import correct_all_channels
 
 
 def _make_detections(n, n_channels=2, seed=42):

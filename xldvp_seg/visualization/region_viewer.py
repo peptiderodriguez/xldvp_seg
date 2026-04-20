@@ -104,6 +104,7 @@ def generate_region_viewer(
     min_cells: int = 0,
     title: str = "",
     contour_thickness: float = 1.2,
+    highlight_ids: set[int] | None = None,
 ) -> None:
     """Generate a single-layer interactive region viewer.
 
@@ -118,6 +119,10 @@ def generate_region_viewer(
         min_cells: Minimum nucleated cell count to include a region (default: 0).
         title: Viewer title (default: auto-generated).
         contour_thickness: Default contour line width (default: 1.2).
+        highlight_ids: Optional set of region IDs to render with a bold outline +
+            colored fill (e.g., statistical outliers). Non-highlighted regions get
+            a thin outline only. ``None`` = all regions drawn with the default
+            stroke style.
     """
     img_h, img_w = label_map.shape
     contours = extract_region_contours(label_map)
@@ -144,6 +149,7 @@ def generate_region_viewer(
     )
 
     # Build JS region data
+    hl_set = set(highlight_ids) if highlight_ids else set()
     js_regions = []
     for i, rid in enumerate(sorted_rids):
         hue = int(360 * i / max(n_reg, 1))
@@ -151,6 +157,7 @@ def generate_region_viewer(
             "id": int(rid),
             "pts": contours[rid],
             "hue": hue,
+            "hl": int(rid) in hl_set,
         }
         if region_stats and rid in region_stats:
             s = region_stats[rid]
@@ -309,19 +316,27 @@ let V = new Set(R.map((_, i) => i));
 let si = null, solo = false;
 
 function drawRegions(ctx, zm, lw) {{
-    for (let i = 0; i < R.length; i++) {{
-        if (!V.has(i)) continue;
-        const r = R[i], p = r.pts;
-        if (!p || p.length < 3) continue;
-        ctx.beginPath();
-        ctx.moveTo(p[0][0], p[0][1]);
-        for (let j = 1; j < p.length; j++) ctx.lineTo(p[j][0], p[j][1]);
-        ctx.closePath();
-        const sel = i === si;
-        if (sel) {{ ctx.fillStyle = 'hsla(' + r.hue + ',70%,55%,0.2)'; ctx.fill(); }}
-        ctx.strokeStyle = sel ? '#fff' : 'hsl(' + r.hue + ',70%,55%)';
-        ctx.lineWidth = (sel ? lw * 2.5 : lw) / zm;
-        ctx.stroke();
+    // Two-pass: thin/normal first, highlighted on top so bold outlines aren't covered
+    for (let pass = 0; pass < 2; pass++) {{
+        for (let i = 0; i < R.length; i++) {{
+            if (!V.has(i)) continue;
+            const r = R[i], p = r.pts;
+            if (!p || p.length < 3) continue;
+            const hl = !!r.hl;
+            if (pass === 0 && hl) continue;
+            if (pass === 1 && !hl) continue;
+            ctx.beginPath();
+            ctx.moveTo(p[0][0], p[0][1]);
+            for (let j = 1; j < p.length; j++) ctx.lineTo(p[j][0], p[j][1]);
+            ctx.closePath();
+            const sel = i === si;
+            if (hl) {{ ctx.fillStyle = 'hsla(' + r.hue + ',70%,55%,0.3)'; ctx.fill(); }}
+            else if (sel) {{ ctx.fillStyle = 'hsla(' + r.hue + ',70%,55%,0.2)'; ctx.fill(); }}
+            ctx.strokeStyle = sel ? '#fff' : 'hsl(' + r.hue + ',70%,55%)';
+            const w = hl ? lw * 2.5 : lw;
+            ctx.lineWidth = (sel ? w * 1.5 : w) / zm;
+            ctx.stroke();
+        }}
     }}
 }}
 

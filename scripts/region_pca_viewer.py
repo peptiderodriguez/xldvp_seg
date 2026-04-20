@@ -30,6 +30,7 @@ Usage:
 
 import argparse
 import json
+import math
 import sys
 from collections import defaultdict
 from pathlib import Path
@@ -524,7 +525,11 @@ def main():
         if oid == 0:
             continue
         nn = det.get("features", {}).get("n_nuclei")
-        if nn is None or int(nn) < 1:
+        try:
+            nn_val = float(nn) if nn is not None else None
+        except (TypeError, ValueError):
+            continue
+        if nn_val is None or not math.isfinite(nn_val) or int(nn_val) < 1:
             continue
         regions[oid].append(det)
     del detections  # Free ~60GB — detections are now partitioned into regions

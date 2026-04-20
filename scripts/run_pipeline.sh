@@ -21,24 +21,19 @@ elif [ -n "${MKSEG_PYTHON:-}" ] && [ -x "${MKSEG_PYTHON:-}" ]; then
 else
     XLDVP_PYTHON=""
     # Try conda info to find env paths
-    for _env_name in xldvp_seg mkseg; do
-        _conda_prefix=$(conda info --envs 2>/dev/null | grep "^${_env_name} " | awk '{print $NF}')
-        if [ -n "$_conda_prefix" ] && [ -x "$_conda_prefix/bin/python" ]; then
-            XLDVP_PYTHON="$_conda_prefix/bin/python"
-            break
-        fi
-    done
+    _conda_prefix=$(conda info --envs 2>/dev/null | grep "^xldvp_seg " | awk '{print $NF}')
+    if [ -n "$_conda_prefix" ] && [ -x "$_conda_prefix/bin/python" ]; then
+        XLDVP_PYTHON="$_conda_prefix/bin/python"
+    fi
     # Fallback: search common paths (HOME may differ from actual conda location)
     if [ -z "$XLDVP_PYTHON" ]; then
         for _base in "$HOME" "$(getent passwd "$(whoami)" 2>/dev/null | cut -d: -f6)"; do
-            for _env in xldvp_seg mkseg; do
-                for _mgr in miniforge3 miniconda3 anaconda3 mambaforge; do
-                    _p="$_base/$_mgr/envs/$_env/bin/python"
-                    if [ -x "$_p" ]; then
-                        XLDVP_PYTHON="$_p"
-                        break 3
-                    fi
-                done
+            for _mgr in miniforge3 miniconda3 anaconda3 mambaforge; do
+                _p="$_base/$_mgr/envs/xldvp_seg/bin/python"
+                if [ -x "$_p" ]; then
+                    XLDVP_PYTHON="$_p"
+                    break 2
+                fi
             done
         done
     fi
@@ -50,7 +45,7 @@ else
         fi
     fi
     if [ -z "$XLDVP_PYTHON" ]; then
-        echo "ERROR: Cannot find xldvp_seg/mkseg conda python."
+        echo "ERROR: Cannot find xldvp_seg conda python."
         echo "Set XLDVP_PYTHON=/path/to/python or activate the conda env."
         exit 1
     fi

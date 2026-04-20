@@ -172,8 +172,19 @@ def count_nuclei_in_cells(
         nuc_channels = [0, 0]
 
     # --- Step 1: Segment nuclei with Cellpose single-channel mode ---
+    # flows[2] is the per-pixel cell probability map (Cellpose "cellprob") —
+    # higher values = more confident this pixel is part of a cell/nucleus.
+    # We mean-pool it within each nucleus mask as a per-nucleus confidence score.
     nuc_uint8 = _percentile_normalize_to_uint8(nuclear_channel)
-    nuclear_masks, _, _ = cellpose_model.eval(nuc_uint8, channels=nuc_channels)
+    nuclear_masks, flows, _ = cellpose_model.eval(nuc_uint8, channels=nuc_channels)
+    cellprob_map = None
+    try:
+        if flows is not None and len(flows) >= 3:
+            cellprob_map = np.asarray(flows[2], dtype=np.float32)
+            if cellprob_map.shape != nuclear_masks.shape:
+                cellprob_map = None
+    except Exception:
+        cellprob_map = None
 
     # --- Step 2: Compute nuclear properties (with intensity for mean_intensity) ---
     nuc_props = regionprops(nuclear_masks, intensity_image=nuclear_channel)
@@ -219,9 +230,14 @@ def count_nuclei_in_cells(
         # Per-nucleus morphological features (always extracted)
         # area_um2 = full nuclear area (for ploidy estimation)
         # overlap_area_um2 = area within the assigned cell (for N:C ratio)
+        # cellpose_prob = mean Cellpose cell-probability over nucleus pixels
+        #                 (confidence score; higher = more certain nucleus)
+        #                 overlap_fraction = overlap_area / area (inside-cell fraction,
+        #                 low values flag nuclei split across cell boundaries)
         nuc_feat = {
             "area_um2": round(nuc_prop.area * px2, 3),
             "overlap_area_um2": round(overlap_px * px2, 3),
+            "overlap_fraction": round(overlap_px / nuc_prop.area, 4) if nuc_prop.area else 0.0,
             "perimeter_um": round(nuc_prop.perimeter * pixel_size_um, 3),
             "solidity": round(float(nuc_prop.solidity), 4),
             "eccentricity": round(float(nuc_prop.eccentricity), 4),
@@ -230,6 +246,10 @@ def count_nuclei_in_cells(
             "mean_intensity": round(float(nuc_prop.mean_intensity), 2),
             "centroid_local": [round(float(cx), 1), round(float(cy), 1)],
         }
+        if cellprob_map is not None:
+            nuc_feat["cellpose_prob"] = round(
+                float(cellprob_map[coords[:, 0], coords[:, 1]].mean()), 4
+            )
 
         # SAM2 embedding (default — same as cell detection)
         if sam2_predictor is not None:

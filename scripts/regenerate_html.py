@@ -8,13 +8,22 @@ that handles NMJ, MK, vessel, islet, tissue_pattern, and any future cell types.
 Reads per-tile masks (HDF5) and the deduped detections JSON, loads CZI display
 channels, composes RGB crops, and generates the full HTML annotation interface.
 
+Supports single-slide (--czi-path) and multi-slide (--czi-dir) modes.
+
 Usage:
-    # Tissue pattern
+    # Single slide
     python scripts/regenerate_html.py \\
         --output-dir /path/to/run_output \\
         --czi-path /path/to/slide.czi \\
         --display-channels 1,2,0 \\
         --max-samples 15000
+
+    # Multi-slide (matches CZI stems to detection 'slide' field)
+    python scripts/regenerate_html.py \\
+        --output-dir /path/to/html_output \\
+        --czi-dir /path/to/czis/ \\
+        --detections all_detections.json \\
+        --cell-type mk --dashed-contour
 
     # Islet with marker coloring
     python scripts/regenerate_html.py \\
@@ -96,8 +105,42 @@ def create_sample_from_contours(
     Used for multiscale vessel, or any resumed run where masks were not saved.
 
     Draws contour outlines (inner/outer) if present in the detection dict.
+
+    Normalizes detection formats: supports both pipeline-native (global_center,
+    contour_px [X,Y]) and aggregated/curated (center_x/center_y, contour_yx [Y,X]).
     """
+    # --- Format normalization (shallow copy to avoid mutating caller's dict) ---
+    # center_x/center_y and contour_yx are mosaic-relative (0-indexed pixel coords).
+    # global_center and contour_px are in CZI stage coords (include x_start/y_start offset).
+    # We convert mosaic-relative → stage coords so the existing offset subtraction works.
+
+    # Normalize center: global_center ← [center_x + x_start, center_y + y_start]
+    if det.get("global_center") is None:
+        cx_val, cy_val = det.get("center_x"), det.get("center_y")
+        if cx_val is not None and cy_val is not None:
+            det = {**det, "global_center": [float(cx_val) + x_start, float(cy_val) + y_start]}
+
+    # Normalize contour: contour_yx [Y,X] mosaic-relative → contour_px [X,Y] stage coords
+    if det.get("contour_yx") is not None and det.get("contour_px") is None:
+        pts = np.array(det["contour_yx"], dtype=np.float64)
+        if pts.ndim == 2 and pts.shape[1] == 2:
+            flipped = pts[:, ::-1].copy()  # [Y,X] → [X,Y]
+            flipped[:, 0] += x_start  # X → stage X
+            flipped[:, 1] += y_start  # Y → stage Y
+            det = {**det, "contour_px": flipped.tolist()}
+
+    # Normalize score: mk_score → rf_prediction
+    if "mk_score" in det and "rf_prediction" not in det:
+        det = {**det, "rf_prediction": det["mk_score"]}
+
+    # Normalize area: top-level area_um2 → features.area_um2
     features = det.get("features", {})
+    if "area_um2" in det and "area_um2" not in features:
+        features = {**features, "area_um2": det["area_um2"]}
+    if "area" in det and "area" not in features:
+        features = {**features, "area": det["area"]}
+
+    # --- End normalization ---
 
     # Get center in full-res CZI-global pixel coords
     center = det.get("global_center")
@@ -268,8 +311,11 @@ def create_sample_from_contours(
         stats["elongation"] = features["elongation"]
     if "sam2_iou" in features:
         stats["confidence"] = features["sam2_iou"]
-    if "rf_prediction" in det and det["rf_prediction"] is not None:
-        stats["rf_prediction"] = det["rf_prediction"]
+    # Score: rf_prediction or mk_score (already normalized above)
+    for _score_key in ("rf_prediction", "mk_score"):
+        if _score_key in det and det[_score_key] is not None:
+            stats["rf_prediction"] = det[_score_key]
+            break
     if "detection_method" in features:
         dm = features["detection_method"]
         stats["detection_method"] = ", ".join(dm) if isinstance(dm, list) else dm
@@ -307,6 +353,378 @@ def create_sample_from_contours(
     }
 
 
+def _get_score(det):
+    """Get detection score from rf_prediction or mk_score."""
+    return det.get("rf_prediction") or det.get("mk_score")
+
+
+def _process_single_slide(
+    args,
+    czi_path,
+    sampled,
+    all_detections,
+    channels_to_load,
+    display_channels,
+    cell_type,
+    output_dir,
+):
+    """Load one CZI and generate HTML samples. Returns (samples, pixel_size, legend, n_tiles)."""
+    from tqdm import tqdm
+
+    slide_name = czi_path.stem
+    tiles_dir = output_dir / "tiles"
+
+    # Decide crop mode
+    has_tile_masks = tiles_dir.exists() and any(tiles_dir.glob(f"tile_*/{cell_type}_masks.h5"))
+    use_contour_mode = not has_tile_masks
+    tile_groups = {}
+    if use_contour_mode:
+        logger.info("No per-tile HDF5 masks found — using contour-based cropping from CZI")
+    else:
+        tile_groups = defaultdict(list)
+        for det in sampled:
+            to = det.get("tile_origin")
+            if to is None:
+                continue
+            tile_key = f"tile_{to[0]}_{to[1]}"
+            tile_groups[tile_key].append(det)
+        logger.info(f"{len(sampled):,} detections across {len(tile_groups)} tiles")
+
+    # Load CZI channels to RAM
+    logger.info(f"Loading CZI {czi_path.name} channels {channels_to_load} to RAM...")
+    loader = get_loader(czi_path, load_to_ram=True, channel=channels_to_load[0], scene=args.scene)
+    x_start = loader.x_start
+    y_start = loader.y_start
+    mosaic_w = loader.width
+    mosaic_h = loader.height
+    pixel_size_um = args.pixel_size or loader.get_pixel_size()
+
+    channel_arrays = {}
+    channel_arrays[channels_to_load[0]] = loader.get_channel_data(channels_to_load[0])
+    logger.info(
+        f"  Channel {channels_to_load[0]} loaded: "
+        f"{channel_arrays[channels_to_load[0]].nbytes / 1e9:.1f} GB"
+    )
+
+    for ch in channels_to_load[1:]:
+        get_loader(czi_path, load_to_ram=True, channel=ch, scene=args.scene)
+        channel_arrays[ch] = loader.get_channel_data(ch)
+        logger.info(f"  Channel {ch} loaded: {channel_arrays[ch].nbytes / 1e9:.1f} GB")
+
+    # Islet marker thresholds
+    marker_thresholds = None
+    marker_map = None
+    if cell_type == "islet":
+        marker_map = {}
+        for pair in args.islet_marker_channels.split(","):
+            name, ch = pair.strip().split(":")
+            marker_map[name.strip()] = int(ch.strip())
+
+        _pct_channels = (
+            set(s.strip() for s in args.marker_pct_channels.split(","))
+            if args.marker_pct_channels
+            else set()
+        )
+        marker_thresholds = (
+            compute_islet_marker_thresholds(
+                all_detections,
+                marker_map=marker_map,
+                marker_top_pct=args.marker_top_pct,
+                pct_channels=_pct_channels,
+                gmm_p_cutoff=args.gmm_p_cutoff,
+                ratio_min=args.ratio_min,
+            )
+            if all_detections
+            else None
+        )
+
+        if marker_thresholds:
+            counts = {}
+            for det in all_detections:
+                mc, _ = classify_islet_marker(
+                    det.get("features", {}), marker_thresholds, marker_map=marker_map
+                )
+                det["marker_class"] = mc
+                counts[mc] = counts.get(mc, 0) + 1
+            logger.info(f"Islet marker classification: {counts}")
+
+    # Channel legend from CZI metadata
+    channel_legend = None
+    try:
+        meta = get_czi_metadata(czi_path, scene=args.scene)
+
+        def _ch_label(idx):
+            for ch in meta["channels"]:
+                if ch["index"] == idx:
+                    em = f" ({ch['emission_nm']:.0f}nm)" if ch.get("emission_nm") else ""
+                    return f"{ch['name']}{em}"
+            return f"Ch{idx}"
+
+        channel_legend = {
+            "red": _ch_label(display_channels[0]) if len(display_channels) > 0 else "none",
+            "green": _ch_label(display_channels[1]) if len(display_channels) > 1 else "none",
+            "blue": _ch_label(display_channels[2]) if len(display_channels) > 2 else "none",
+        }
+        logger.info(f"Channel legend: {channel_legend}")
+    except Exception as e:
+        logger.warning(f"Could not extract channel legend: {e}")
+
+    # Generate samples
+    logger.info(f"Generating HTML crops for {len(sampled):,} detections...")
+    all_samples = []
+    tiles_processed = 0
+
+    if use_contour_mode:
+        import os
+        from concurrent.futures import ThreadPoolExecutor
+
+        n_workers = min(int(os.environ.get("SLURM_CPUS_PER_TASK", os.cpu_count() or 1)), 32)
+        logger.info(f"Using {n_workers} threads for contour crop generation")
+
+        def _make_sample(det):
+            return create_sample_from_contours(
+                det,
+                channel_arrays,
+                display_channels,
+                x_start,
+                y_start,
+                mosaic_h,
+                mosaic_w,
+                pixel_size_um,
+                slide_name,
+                cell_type,
+                contour_thickness=args.contour_thickness,
+                dashed_contour=args.dashed_contour,
+                crop_context_factor=args.crop_context_factor,
+            )
+
+        with ThreadPoolExecutor(max_workers=n_workers) as pool:
+            results = list(
+                tqdm(pool.map(_make_sample, sampled), total=len(sampled), desc="Detections")
+            )
+        all_samples = [s for s in results if s is not None]
+        tiles_processed = len(sampled)
+
+    else:
+        for tile_key, tile_dets in tqdm(tile_groups.items(), desc="Tiles"):
+            tile_dir = tiles_dir / tile_key
+            mask_file = tile_dir / f"{cell_type}_masks.h5"
+
+            if not mask_file.exists():
+                logger.warning(f"No mask file for {tile_key}, skipping {len(tile_dets)} detections")
+                continue
+
+            with h5py.File(mask_file, "r") as hf:
+                if "masks" in hf:
+                    masks = hf["masks"][:]
+                elif "labels" in hf:
+                    masks = hf["labels"][:]
+                else:
+                    logger.warning(f"No masks dataset in {mask_file}")
+                    continue
+                if masks.ndim == 3 and masks.shape[0] == 1:
+                    masks = masks[0]
+
+            tile_origin = tile_dets[0].get("tile_origin", [0, 0])
+            tile_x, tile_y = tile_origin[0], tile_origin[1]
+
+            rel_tx = tile_x - x_start
+            rel_ty = tile_y - y_start
+            tile_h, tile_w = masks.shape[:2]
+            rgb_channels = []
+            for ch_idx in display_channels[:3]:
+                if ch_idx in channel_arrays:
+                    rgb_channels.append(
+                        channel_arrays[ch_idx][rel_ty : rel_ty + tile_h, rel_tx : rel_tx + tile_w]
+                    )
+                else:
+                    _dtype = next(iter(channel_arrays.values())).dtype
+                    rgb_channels.append(np.zeros((tile_h, tile_w), dtype=_dtype))
+            if not rgb_channels:
+                continue
+            tile_rgb = np.stack(rgb_channels, axis=-1)
+
+            tile_origin = tile_dets[0].get("tile_origin", [tile_x, tile_y])
+            for det in tile_dets:
+                sample = create_sample_from_detection(
+                    tile_origin[0],
+                    tile_origin[1],
+                    tile_rgb,
+                    masks,
+                    det,
+                    pixel_size_um,
+                    slide_name,
+                    cell_type=cell_type,
+                    marker_thresholds=marker_thresholds,
+                    marker_map=marker_map,
+                    contour_thickness=args.contour_thickness,
+                    image_format="PNG",
+                    dashed_contour=args.dashed_contour,
+                )
+                if sample:
+                    all_samples.append(sample)
+
+            tiles_processed += 1
+            del masks, tile_rgb
+            if tiles_processed % 100 == 0:
+                gc.collect()
+
+    return all_samples, pixel_size_um, channel_legend, tiles_processed
+
+
+def _process_one_slide_for_pool(args_tuple):
+    """Top-level function for ProcessPoolExecutor — processes one slide.
+
+    Defined at module level so it's picklable.
+    """
+    czi_path, slide_dets, channels_to_load, display_channels, cell_type, args_dict = args_tuple
+
+    import os
+    from concurrent.futures import ThreadPoolExecutor
+
+    from xldvp_seg.io.czi_loader import get_czi_metadata, get_loader
+
+    czi_path = Path(czi_path)
+    slide_name = czi_path.stem
+    pixel_size_um = args_dict.get("pixel_size") or None
+
+    # Load CZI
+    loader = get_loader(
+        czi_path, load_to_ram=True, channel=channels_to_load[0], scene=args_dict.get("scene", 0)
+    )
+    x_start = loader.x_start
+    y_start = loader.y_start
+    mosaic_w = loader.width
+    mosaic_h = loader.height
+    if pixel_size_um is None:
+        pixel_size_um = loader.get_pixel_size()
+
+    channel_arrays = {}
+    channel_arrays[channels_to_load[0]] = loader.get_channel_data(channels_to_load[0])
+    for ch in channels_to_load[1:]:
+        get_loader(czi_path, load_to_ram=True, channel=ch, scene=args_dict.get("scene", 0))
+        channel_arrays[ch] = loader.get_channel_data(ch)
+
+    # Channel legend
+    channel_legend = None
+    try:
+        meta = get_czi_metadata(czi_path, scene=args_dict.get("scene", 0))
+
+        def _ch_label(idx):
+            for ch in meta["channels"]:
+                if ch["index"] == idx:
+                    em = f" ({ch['emission_nm']:.0f}nm)" if ch.get("emission_nm") else ""
+                    return f"{ch['name']}{em}"
+            return f"Ch{idx}"
+
+        channel_legend = {
+            "red": _ch_label(display_channels[0]) if len(display_channels) > 0 else "none",
+            "green": _ch_label(display_channels[1]) if len(display_channels) > 1 else "none",
+            "blue": _ch_label(display_channels[2]) if len(display_channels) > 2 else "none",
+        }
+    except Exception:
+        pass
+
+    # Generate crops via ThreadPool within this process
+    n_workers = min(int(os.environ.get("SLURM_CPUS_PER_TASK", os.cpu_count() or 1)), 32)
+
+    def _make_sample(det):
+        return create_sample_from_contours(
+            det,
+            channel_arrays,
+            display_channels,
+            x_start,
+            y_start,
+            mosaic_h,
+            mosaic_w,
+            pixel_size_um,
+            slide_name,
+            cell_type,
+            contour_thickness=args_dict.get("contour_thickness", 2),
+            dashed_contour=args_dict.get("dashed_contour", True),
+            crop_context_factor=args_dict.get("crop_context_factor", 2.0),
+        )
+
+    with ThreadPoolExecutor(max_workers=n_workers) as pool:
+        results = list(pool.map(_make_sample, slide_dets))
+
+    samples = [s for s in results if s is not None]
+    return slide_name, samples, pixel_size_um, channel_legend
+
+
+def _process_multi_slide(args, sampled, channels_to_load, display_channels, cell_type):
+    """Process multiple slides in parallel. Returns (samples, pixel_size, legend, n_tiles)."""
+    from concurrent.futures import ProcessPoolExecutor, as_completed
+
+    czi_dir = Path(args.czi_dir)
+    czi_map = {f.stem: f for f in sorted(czi_dir.glob("*.czi"))}
+
+    # Group detections by slide
+    by_slide = defaultdict(list)
+    for det in sampled:
+        slide = det.get("slide_name") or det.get("slide", "unknown")
+        by_slide[slide].append(det)
+
+    # Warn about unmatched slides
+    for slide_name in sorted(by_slide):
+        if slide_name not in czi_map:
+            logger.warning(
+                f"No CZI found for slide '{slide_name}', "
+                f"skipping {len(by_slide[slide_name])} detections"
+            )
+
+    matched = [(s, by_slide[s]) for s in sorted(by_slide) if s in czi_map]
+    if not matched:
+        logger.error("No slides matched between detections and CZI directory")
+        sys.exit(1)
+
+    logger.info(
+        f"Processing {len(matched)} slides in parallel "
+        f"({sum(len(d) for _, d in matched):,} detections total)..."
+    )
+
+    # Serialize args to a plain dict for pickling across processes
+    args_dict = {
+        "pixel_size": args.pixel_size,
+        "scene": args.scene,
+        "contour_thickness": args.contour_thickness,
+        "dashed_contour": args.dashed_contour,
+        "crop_context_factor": args.crop_context_factor,
+    }
+
+    all_samples = []
+    pixel_size_um = None
+    channel_legend = None
+
+    with ProcessPoolExecutor(max_workers=len(matched)) as pool:
+        futures = {}
+        for slide_name, slide_dets in matched:
+            task_args = (
+                str(czi_map[slide_name]),
+                slide_dets,
+                channels_to_load,
+                display_channels,
+                cell_type,
+                args_dict,
+            )
+            futures[pool.submit(_process_one_slide_for_pool, task_args)] = slide_name
+
+        for future in as_completed(futures):
+            slide_name = futures[future]
+            try:
+                sname, samples, ps, legend = future.result()
+                logger.info(f"  {sname}: {len(samples)} samples")
+                all_samples.extend(samples)
+                if pixel_size_um is None:
+                    pixel_size_um = ps
+                if channel_legend is None:
+                    channel_legend = legend
+            except Exception as e:
+                logger.error(f"  {slide_name}: FAILED — {e}")
+
+    return all_samples, pixel_size_um, channel_legend, len(all_samples)
+
+
 def main():
     parser = argparse.ArgumentParser(
         description="Regenerate HTML from existing detections (all cell types)"
@@ -318,7 +736,17 @@ def main():
         required=True,
         help="Path to existing run output directory (contains tiles/ and *_detections.json)",
     )
-    parser.add_argument("--czi-path", required=True, help="Path to CZI file")
+    parser.add_argument(
+        "--czi-path",
+        default=None,
+        help="Path to CZI file (single-slide mode)",
+    )
+    parser.add_argument(
+        "--czi-dir",
+        default=None,
+        help="Directory of CZI files (multi-slide mode). "
+        "Matches CZI stems to detection 'slide'/'slide_name' field.",
+    )
 
     # General
     parser.add_argument(
@@ -450,11 +878,14 @@ def main():
     args = parser.parse_args()
     setup_logging(level="INFO")
 
+    # Validate CZI source — exactly one of --czi-path or --czi-dir required
+    if not args.czi_path and not args.czi_dir:
+        parser.error("Either --czi-path or --czi-dir is required")
+    if args.czi_path and args.czi_dir:
+        parser.error("--czi-path and --czi-dir are mutually exclusive")
+
     output_dir = Path(args.output_dir)
-    tiles_dir = output_dir / "tiles"
     html_dir = Path(args.html_dir) if args.html_dir else output_dir / "html"
-    czi_path = Path(args.czi_path)
-    slide_name = czi_path.stem
 
     # Validate prior-annotations path early (before expensive CZI load)
     if args.prior_annotations and not Path(args.prior_annotations).exists():
@@ -466,7 +897,6 @@ def main():
     if cell_type is None:
         det_files = list(output_dir.glob("*_detections.json"))
         if det_files:
-            # Parse cell type from filename: {cell_type}_detections.json
             cell_type = det_files[0].stem.replace("_detections", "")
             logger.info(f"Auto-detected cell type: {cell_type}")
         else:
@@ -548,18 +978,14 @@ def main():
         all_detections = filtered
         logger.info(f"Vessel quality filter: {pre_filter} → {len(all_detections)}")
 
-    # Score threshold filter (rf_prediction)
+    # Score threshold filter (rf_prediction or mk_score)
     if args.score_threshold > 0:
         pre_filter = len(all_detections)
         all_detections = [
             d
             for d in all_detections
-            if (
-                d.get("rf_prediction") is not None
-                and d.get("rf_prediction") >= args.score_threshold
-            )
-            or d.get("rf_prediction") is None
-        ]  # keep unscored
+            if _get_score(d) is None or _get_score(d) >= args.score_threshold
+        ]
         logger.info(
             f"Score filter (>= {args.score_threshold}): {pre_filter:,} -> {len(all_detections):,}"
         )
@@ -574,218 +1000,32 @@ def main():
     else:
         sampled = all_detections
 
-    # Decide crop mode: tile+mask (HDF5) vs contour-based (direct CZI crop)
-    # Contour mode is used when tile masks aren't available — e.g. multiscale vessel,
-    # or any run where masks weren't saved. Works for any cell type.
-    has_tile_masks = tiles_dir.exists() and any(tiles_dir.glob(f"tile_*/{cell_type}_masks.h5"))
-    use_contour_mode = not has_tile_masks
-    tile_groups = {}
-    if use_contour_mode:
-        logger.info("No per-tile HDF5 masks found — using contour-based cropping from CZI")
-    else:
-        # Group sampled detections by tile for tile+mask mode
-        tile_groups = defaultdict(list)
-        for det in sampled:
-            to = det.get("tile_origin")
-            if to is None:
-                continue
-            tile_key = f"tile_{to[0]}_{to[1]}"
-            tile_groups[tile_key].append(det)
-        logger.info(f"{len(sampled):,} detections across {len(tile_groups)} tiles")
-
-    # Load CZI channels to RAM
-    logger.info(f"Loading CZI channels {channels_to_load} to RAM...")
-    loader = get_loader(czi_path, load_to_ram=True, channel=channels_to_load[0], scene=args.scene)
-    x_start = loader.x_start
-    y_start = loader.y_start
-    mosaic_w = loader.width
-    mosaic_h = loader.height
-    pixel_size_um = args.pixel_size or loader.get_pixel_size()
-
-    channel_arrays = {}
-    channel_arrays[channels_to_load[0]] = loader.get_channel_data(channels_to_load[0])
-    logger.info(
-        f"  Channel {channels_to_load[0]} loaded: {channel_arrays[channels_to_load[0]].nbytes / 1e9:.1f} GB"
-    )
-
-    for ch in channels_to_load[1:]:
-        get_loader(czi_path, load_to_ram=True, channel=ch, scene=args.scene)
-        channel_arrays[ch] = loader.get_channel_data(ch)
-        logger.info(f"  Channel {ch} loaded: {channel_arrays[ch].nbytes / 1e9:.1f} GB")
-
-    # Islet marker thresholds
-    marker_thresholds = None
-    marker_map = None
-    if cell_type == "islet":
-        marker_map = {}
-        for pair in args.islet_marker_channels.split(","):
-            name, ch = pair.strip().split(":")
-            marker_map[name.strip()] = int(ch.strip())
-
-        _pct_channels = (
-            set(s.strip() for s in args.marker_pct_channels.split(","))
-            if args.marker_pct_channels
-            else set()
+    # ---- Multi-slide vs single-slide dispatch ----
+    if args.czi_dir:
+        all_samples, pixel_size_um, channel_legend, tiles_processed = _process_multi_slide(
+            args, sampled, channels_to_load, display_channels, cell_type
         )
-        marker_thresholds = (
-            compute_islet_marker_thresholds(
-                all_detections,
-                marker_map=marker_map,
-                marker_top_pct=args.marker_top_pct,
-                pct_channels=_pct_channels,
-                gmm_p_cutoff=args.gmm_p_cutoff,
-                ratio_min=args.ratio_min,
-            )
-            if all_detections
-            else None
+        slide_name = "multi_slide"
+    else:
+        czi_path = Path(args.czi_path)
+        slide_name = czi_path.stem
+        all_samples, pixel_size_um, channel_legend, tiles_processed = _process_single_slide(
+            args,
+            czi_path,
+            sampled,
+            all_detections,
+            channels_to_load,
+            display_channels,
+            cell_type,
+            output_dir,
         )
 
-        if marker_thresholds:
-            counts = {}
-            for det in all_detections:
-                mc, _ = classify_islet_marker(
-                    det.get("features", {}), marker_thresholds, marker_map=marker_map
-                )
-                det["marker_class"] = mc
-                counts[mc] = counts.get(mc, 0) + 1
-            logger.info(f"Islet marker classification: {counts}")
-
-    # Channel legend from CZI metadata
-    channel_legend = None
-    try:
-        meta = get_czi_metadata(czi_path, scene=args.scene)
-
-        def _ch_label(idx):
-            for ch in meta["channels"]:
-                if ch["index"] == idx:
-                    em = f" ({ch['emission_nm']:.0f}nm)" if ch.get("emission_nm") else ""
-                    return f"{ch['name']}{em}"
-            return f"Ch{idx}"
-
-        channel_legend = {
-            "red": _ch_label(display_channels[0]) if len(display_channels) > 0 else "none",
-            "green": _ch_label(display_channels[1]) if len(display_channels) > 1 else "none",
-            "blue": _ch_label(display_channels[2]) if len(display_channels) > 2 else "none",
-        }
-        logger.info(f"Channel legend: {channel_legend}")
-    except Exception as e:
-        logger.warning(f"Could not extract channel legend: {e}")
-
-    # Generate samples — two modes
-    logger.info(f"Generating HTML crops for {len(sampled):,} detections...")
-    all_samples = []
-    tiles_processed = 0
-
-    from tqdm import tqdm
-
-    if use_contour_mode:
-        # ---- Contour mode: crop directly from CZI around each detection ----
-        # Parallelize with ThreadPool (I/O + numpy, releases GIL)
-        import os
-        from concurrent.futures import ThreadPoolExecutor
-
-        n_workers = min(int(os.environ.get("SLURM_CPUS_PER_TASK", os.cpu_count() or 1)), 32)
-        logger.info(f"Using {n_workers} threads for contour crop generation")
-
-        def _make_sample(det):
-            return create_sample_from_contours(
-                det,
-                channel_arrays,
-                display_channels,
-                x_start,
-                y_start,
-                mosaic_h,
-                mosaic_w,
-                pixel_size_um,
-                slide_name,
-                cell_type,
-                contour_thickness=args.contour_thickness,
-                dashed_contour=args.dashed_contour,
-                crop_context_factor=args.crop_context_factor,
-            )
-
-        with ThreadPoolExecutor(max_workers=n_workers) as pool:
-            results = list(
-                tqdm(pool.map(_make_sample, sampled), total=len(sampled), desc="Detections")
-            )
-        all_samples = [s for s in results if s is not None]
-        tiles_processed = len(sampled)  # each detection is its own "tile"
-
-    else:
-        # ---- Tile+mask mode: group by tile, load HDF5 masks ----
-        for tile_key, tile_dets in tqdm(tile_groups.items(), desc="Tiles"):
-            tile_dir = tiles_dir / tile_key
-            mask_file = tile_dir / f"{cell_type}_masks.h5"
-
-            if not mask_file.exists():
-                logger.warning(f"No mask file for {tile_key}, skipping {len(tile_dets)} detections")
-                continue
-
-            # Load masks
-            with h5py.File(mask_file, "r") as hf:
-                if "masks" in hf:
-                    masks = hf["masks"][:]
-                elif "labels" in hf:
-                    masks = hf["labels"][:]
-                else:
-                    logger.warning(f"No masks dataset in {mask_file}")
-                    continue
-                if masks.ndim == 3 and masks.shape[0] == 1:
-                    masks = masks[0]
-
-            # Parse tile origin from first detection
-            tile_origin = tile_dets[0].get("tile_origin", [0, 0])
-            tile_x, tile_y = tile_origin[0], tile_origin[1]
-
-            # Extract tile RGB directly from channel arrays
-            rel_tx = tile_x - x_start
-            rel_ty = tile_y - y_start
-            tile_h, tile_w = masks.shape[:2]
-            rgb_channels = []
-            for ch_idx in display_channels[:3]:
-                if ch_idx in channel_arrays:
-                    rgb_channels.append(
-                        channel_arrays[ch_idx][rel_ty : rel_ty + tile_h, rel_tx : rel_tx + tile_w]
-                    )
-                else:
-                    _dtype = next(iter(channel_arrays.values())).dtype
-                    rgb_channels.append(np.zeros((tile_h, tile_w), dtype=_dtype))
-            if not rgb_channels:
-                continue
-            tile_rgb = np.stack(rgb_channels, axis=-1)
-
-            # Generate crop for each detection in this tile
-            tile_origin = tile_dets[0].get("tile_origin", [tile_x, tile_y])
-            for det in tile_dets:
-                sample = create_sample_from_detection(
-                    tile_origin[0],
-                    tile_origin[1],
-                    tile_rgb,
-                    masks,
-                    det,
-                    pixel_size_um,
-                    slide_name,
-                    cell_type=cell_type,
-                    marker_thresholds=marker_thresholds,
-                    marker_map=marker_map,
-                    contour_thickness=args.contour_thickness,
-                    image_format="PNG",
-                    dashed_contour=args.dashed_contour,
-                )
-                if sample:
-                    all_samples.append(sample)
-
-            tiles_processed += 1
-            del masks, tile_rgb
-            if tiles_processed % 100 == 0:
-                gc.collect()
-
-    logger.info(f"Generated {len(all_samples):,} HTML samples from {tiles_processed} tiles")
+    logger.info(f"Generated {len(all_samples):,} HTML samples")
 
     # Sort
     sort_key = args.sort_by
-    reverse = args.sort_order == "desc"
-    if sort_key == "rf_prediction":
+    reverse = args.sort_order in ("desc", "descending")
+    if sort_key in ("rf_prediction", "mk_score"):
         all_samples.sort(key=lambda x: x["stats"].get("rf_prediction") or 0, reverse=reverse)
     elif sort_key == "area":
         all_samples.sort(key=lambda x: x["stats"].get("area_um2", 0), reverse=reverse)
@@ -808,6 +1048,18 @@ def main():
     elif _scored > 0:
         clf_subtitle = "Classifier: unknown (no provenance)"
 
+    # Multi-slide subtitle
+    if args.czi_dir:
+        slides_in_data = sorted(set(d.get("slide_name") or d.get("slide", "") for d in sampled))
+        if len(slides_in_data) > 1:
+            short = [n.split("_")[-1] for n in slides_in_data]
+            if len(short) > 6:
+                preview = ", ".join(short[:4]) + ", ..."
+            else:
+                preview = ", ".join(short)
+            slide_summary = f"{len(slides_in_data)} slides ({preview})"
+            clf_subtitle = f"{slide_summary}; {clf_subtitle}" if clf_subtitle else slide_summary
+
     # Export HTML
     experiment_name = f"{slide_name}_regen"
 
@@ -820,10 +1072,10 @@ def main():
         subtitle=clf_subtitle,
         page_prefix=f"{cell_type}_page",
         experiment_name=experiment_name,
-        file_name=f"{slide_name}.czi",
+        file_name=f"{slide_name}.czi" if not args.czi_dir else None,
         pixel_size_um=pixel_size_um,
         tiles_processed=tiles_processed,
-        tiles_total=len(tile_groups) if tile_groups else len(sampled),
+        tiles_total=tiles_processed,
         channel_legend=channel_legend,
         prior_annotations=args.prior_annotations,
     )

@@ -74,7 +74,9 @@ def test_elbow_returns_degenerate_on_tiny_input():
     X = np.array([[0.0, 0.0]])  # n=1, can't even do k=2
     best_k, sil, labels, ch, sil_per_k, inertia_per_k = find_optimal_k_elbow(X, max_k=8)
     assert best_k == 1
-    assert sil_per_k == {} and inertia_per_k == {}
+    # Degenerate-branch sentinels: non-empty single-entry dicts so downstream
+    # consumers (plotting, CSV export) don't crash on KeyError.
+    assert sil_per_k == {1: 0.0} and inertia_per_k == {1: 0.0}
     assert labels.shape == (1,)
 
 
@@ -222,6 +224,90 @@ def test_process_region_drops_constant_features():
     assert result["n_features"] == 3
     loadings_pc1 = [item["feature"] for item in result["top_loadings"]["PC1"]]
     assert "constant" not in loadings_pc1
+
+
+# ---------------------------------------------------------------------------
+# Degenerate-input cases (Phase 3)
+# ---------------------------------------------------------------------------
+
+
+def test_process_region_n_equals_50_exact():
+    """n=50 is the exact threshold for process_region -- must not be rejected."""
+    detections = _synthetic_detections(n_per_blob=50, centers=[[0, 0]], seed=0)
+    assert len(detections) == 50
+    result = process_region(
+        detections,
+        ["area_um2", "circularity", "ch0_mean", "ch1_mean"],
+        max_points_plot=500,
+        rng=np.random.default_rng(0),
+    )
+    assert result is not None, "n=50 (exactly at threshold) should return a result"
+    assert result["n_cells"] == 50
+
+
+def test_process_region_all_constant_features():
+    """All detections share identical feature values -> <2 nonconstant -> None."""
+    dets = []
+    for _ in range(60):  # above the n>=50 threshold
+        dets.append(
+            {
+                "organ_id": 1,
+                "features": {
+                    "area_um2": 100.0,
+                    "circularity": 0.5,
+                    "ch0_mean": 500.0,
+                },
+            }
+        )
+    result = process_region(
+        dets,
+        ["area_um2", "circularity", "ch0_mean"],
+        max_points_plot=500,
+        rng=np.random.default_rng(0),
+    )
+    assert result is None, "all-constant features must drop to <2 nonconstant -> None"
+
+
+def test_find_optimal_k_elbow_n_less_than_2():
+    """n=1 (max_k collapses below 2) returns sentinel dicts.
+
+    Spec: "non-empty single-entry sentinels (not empty dicts)".
+    Current implementation returns EMPTY dicts -- this test is expected to
+    flag that behavior if it differs from spec.
+    """
+    X = np.array([[1.0, 2.0, 3.0]])
+    best_k, sil, labels, ch, sil_per_k, inertia_per_k = find_optimal_k_elbow(
+        X, max_k=8, rng=np.random.default_rng(0)
+    )
+    assert best_k == 1
+    assert sil == 0.0
+    assert labels.shape == (1,)
+    # Per spec: the dicts should be non-empty single-entry sentinels.
+    assert len(sil_per_k) >= 1, (
+        "expected non-empty single-entry sentinel dict for sil_per_k, "
+        f"got {sil_per_k!r} (current code returns {{}})"
+    )
+    assert len(inertia_per_k) >= 1, (
+        "expected non-empty single-entry sentinel dict for inertia_per_k, "
+        f"got {inertia_per_k!r} (current code returns {{}})"
+    )
+
+
+def test_cluster_leiden_single_point():
+    """Single point: no edges -> Leiden should return shape (1,) with label 0."""
+    X = np.array([[1.0, 2.0, 3.0]])
+    labels = cluster_leiden(X, n_neighbors=15, resolution=1.0)
+    assert labels.shape == (1,)
+    assert labels[0] == 0
+
+
+def test_cluster_hdbscan_min_size_cap():
+    """min_cluster_size=10000 with n=20 should internally cap to n//5 (=4) without crashing."""
+    X, _ = _make_blobs(n_per_blob=10, centers=[[0, 0], [5, 5]])
+    assert X.shape[0] == 20
+    # Should not crash even with absurdly large min_cluster_size
+    labels = cluster_hdbscan(X, min_cluster_size=10000)
+    assert labels.shape == (20,)
 
 
 if __name__ == "__main__":

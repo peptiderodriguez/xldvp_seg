@@ -30,15 +30,9 @@ from pathlib import Path
 
 import numpy as np
 
-try:
-    from xldvp_seg.utils.logging import get_logger
+from xldvp_seg.utils.logging import get_logger
 
-    log = get_logger(__name__)
-except ImportError:
-    import logging
-
-    logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
-    log = logging.getLogger(__name__)
+log = get_logger(__name__)
 
 try:
     from xldvp_seg.utils.json_utils import atomic_json_dump, fast_json_load

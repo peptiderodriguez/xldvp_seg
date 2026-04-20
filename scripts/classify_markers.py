@@ -45,7 +45,7 @@ import matplotlib
 matplotlib.use("Agg")
 import numpy as np
 
-from xldvp_seg.pipeline.background import (
+from xldvp_seg.analysis.background import (
     _extract_centroids,
     correct_all_channels,
 )

@@ -99,49 +99,58 @@ def main():
     print(f"Tukey mild outliers: {len(tukey_mild)} | extreme: {len(tukey_extreme)}")
 
     # --- GMM with BIC k=1 vs k=2 ---
-    from sklearn.mixture import GaussianMixture
-
-    X = pcts.reshape(-1, 1)
-    gmm1 = GaussianMixture(n_components=1, random_state=42).fit(X)
-    gmm2 = GaussianMixture(n_components=2, random_state=42, n_init=5).fit(X)
-    bic1, bic2 = gmm1.bic(X), gmm2.bic(X)
-    print(f"\nGMM: BIC(k=1)={bic1:.1f}, BIC(k=2)={bic2:.1f}, delta={bic1-bic2:.1f}")
-
+    # GaussianMixture(n_components=2) needs at least 2 samples; skip cleanly
+    # for degenerate inputs so callers still get Tukey results + a posterior=0
+    # fallback on every row.
     gmm_outliers = []
     gmm_threshold = None
-    if bic2 < bic1 - 6:  # k=2 preferred (delta >= 6 = strong evidence)
-        # Minority component = outliers
-        weights = gmm2.weights_
-        means = gmm2.means_.flatten()
-        stds = np.sqrt(gmm2.covariances_.flatten())
-        minority_idx = int(np.argmin(weights))
-        majority_idx = 1 - minority_idx
-        print(
-            f"GMM k=2 preferred (delta>=6): majority mean={means[majority_idx]:.2f}\u00b1{stds[majority_idx]:.2f} "
-            f"(w={weights[majority_idx]:.2f}), minority mean={means[minority_idx]:.2f}\u00b1{stds[minority_idx]:.2f} "
-            f"(w={weights[minority_idx]:.2f})"
-        )
-        # Posterior probability of minority component per region
-        posteriors = gmm2.predict_proba(X)[:, minority_idx]
-        for r, p in zip(rows, posteriors):
-            r["gmm_posterior"] = float(p)
-            r["gmm_outlier"] = bool(p > 0.5)
-            if p > 0.5:
-                gmm_outliers.append(r)
-        # Threshold: crossover point where posteriors are equal
-        # For two Gaussians, this is computed analytically but simpler to scan
-        x_scan = np.linspace(pcts.min(), pcts.max(), 1000).reshape(-1, 1)
-        post_scan = gmm2.predict_proba(x_scan)[:, minority_idx]
-        cross_idx = np.argmin(np.abs(post_scan - 0.5))
-        gmm_threshold = float(x_scan[cross_idx, 0])
-        print(
-            f"GMM outliers: {len(gmm_outliers)} (posterior > 0.5, threshold at {gmm_threshold:.2f}%)"
-        )
-    else:
-        print("GMM: k=1 preferred (single population, no clean split). Use Tukey/MAD.")
+    if len(rows) < 2:
+        print("\nGMM: skipped (need >= 2 regions). Use Tukey/MAD.")
         for r in rows:
             r["gmm_posterior"] = 0.0
             r["gmm_outlier"] = False
+    else:
+        from sklearn.mixture import GaussianMixture
+
+        X = pcts.reshape(-1, 1)
+        gmm1 = GaussianMixture(n_components=1, random_state=42).fit(X)
+        gmm2 = GaussianMixture(n_components=2, random_state=42, n_init=5).fit(X)
+        bic1, bic2 = gmm1.bic(X), gmm2.bic(X)
+        print(f"\nGMM: BIC(k=1)={bic1:.1f}, BIC(k=2)={bic2:.1f}, delta={bic1-bic2:.1f}")
+
+        if bic2 < bic1 - 6:  # k=2 preferred (delta >= 6 = strong evidence)
+            # Minority component = outliers
+            weights = gmm2.weights_
+            means = gmm2.means_.flatten()
+            stds = np.sqrt(gmm2.covariances_.flatten())
+            minority_idx = int(np.argmin(weights))
+            majority_idx = 1 - minority_idx
+            print(
+                f"GMM k=2 preferred (delta>=6): majority mean={means[majority_idx]:.2f}\u00b1{stds[majority_idx]:.2f} "
+                f"(w={weights[majority_idx]:.2f}), minority mean={means[minority_idx]:.2f}\u00b1{stds[minority_idx]:.2f} "
+                f"(w={weights[minority_idx]:.2f})"
+            )
+            # Posterior probability of minority component per region
+            posteriors = gmm2.predict_proba(X)[:, minority_idx]
+            for r, p in zip(rows, posteriors):
+                r["gmm_posterior"] = float(p)
+                r["gmm_outlier"] = bool(p > 0.5)
+                if p > 0.5:
+                    gmm_outliers.append(r)
+            # Threshold: crossover point where posteriors are equal
+            # For two Gaussians, this is computed analytically but simpler to scan
+            x_scan = np.linspace(pcts.min(), pcts.max(), 1000).reshape(-1, 1)
+            post_scan = gmm2.predict_proba(x_scan)[:, minority_idx]
+            cross_idx = np.argmin(np.abs(post_scan - 0.5))
+            gmm_threshold = float(x_scan[cross_idx, 0])
+            print(
+                f"GMM outliers: {len(gmm_outliers)} (posterior > 0.5, threshold at {gmm_threshold:.2f}%)"
+            )
+        else:
+            print("GMM: k=1 preferred (single population, no clean split). Use Tukey/MAD.")
+            for r in rows:
+                r["gmm_posterior"] = 0.0
+                r["gmm_outlier"] = False
 
     # Histogram + ranked %multi + stacked composition
     fig, axes = plt.subplots(1, 3, figsize=(21, 5))
@@ -328,7 +337,33 @@ def main():
     tukey_mild_only = [
         r["region"] for r in rows_sorted if r["tukey_mild"] and not r["tukey_extreme"]
     ]
-    gmm_ids = [r["region"] for r in rows_sorted if r.get("gmm_outlier")]
+    # Tukey "+": all regions above inner fence (includes both mild and extreme)
+    tukey_plus_ids = sorted([r["region"] for r in rows_sorted if r["tukey_mild"]])
+    gmm_ids = sorted([r["region"] for r in rows_sorted if r.get("gmm_outlier")])
+
+    # Write outlier ID lists as JSON for downstream viewers
+    outlier_json = {
+        "thresholds": {
+            "tukey_inner_low": float(tukey_inner_low),
+            "tukey_inner_high": float(tukey_inner_high),
+            "tukey_outer_low": float(tukey_outer_low),
+            "tukey_outer_high": float(tukey_outer_high),
+            "gmm_threshold": float(gmm_threshold) if gmm_threshold is not None else None,
+        },
+        "tukey_plus": tukey_plus_ids,
+        "tukey_extreme": sorted(tukey_ext_ids),
+        "gmm_outliers": gmm_ids,
+        "tukey_plus_and_gmm": sorted(set(tukey_plus_ids) & set(gmm_ids)),
+    }
+    json_path = out_dir / "region_multinuc_outlier_ids.json"
+    with open(json_path, "w") as f:
+        json.dump(outlier_json, f, indent=2)
+    print(f"Wrote {json_path}")
+    # Also write flat ID lists (directly consumable by --highlight-regions)
+    for key in ("tukey_plus", "tukey_extreme", "gmm_outliers"):
+        p = out_dir / f"region_multinuc_{key}_ids.json"
+        with open(p, "w") as f:
+            json.dump(outlier_json[key], f)
     print("\n=== Outlier flags ===")
     print(
         f"  Tukey extreme (|x-Q|>3*IQR): {len(tukey_ext_ids):>3} regions: {tukey_ext_ids[:15]}"

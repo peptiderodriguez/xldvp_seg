@@ -34,8 +34,8 @@ import h5py
 import numpy as np
 from scipy.ndimage import find_objects
 
+from xldvp_seg.analysis.background import _extract_centroids, local_background_subtract
 from xldvp_seg.detection.strategies.mixins import MultiChannelFeatureMixin
-from xldvp_seg.pipeline.background import _extract_centroids, local_background_subtract
 from xldvp_seg.utils.logging import get_logger
 
 logger = get_logger(__name__)

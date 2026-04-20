@@ -22,11 +22,11 @@ import numpy as np
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 
-from xldvp_seg.exceptions import ConfigError, DataLoadError
-from xldvp_seg.pipeline.background import (
+from xldvp_seg.analysis.background import (
     _extract_centroids,
     local_background_subtract,
 )
+from xldvp_seg.exceptions import ConfigError, DataLoadError
 from xldvp_seg.utils.logging import get_logger
 
 logger = get_logger(__name__)

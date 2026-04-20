@@ -65,6 +65,14 @@ def parse_args(argv=None):
     )
     parser.add_argument("--title", default="", help="Viewer title")
     parser.add_argument("--output", required=True, help="Output HTML path")
+    parser.add_argument(
+        "--highlight-regions",
+        default=None,
+        help="Comma-separated region IDs OR path to a JSON file containing a list "
+        "of region IDs. Highlighted regions render with a bold outline + colored "
+        "fill; others get a thin outline only. Useful for marking statistical "
+        "outliers (e.g., Tukey+ multinucleated regions).",
+    )
     return parser.parse_args(argv)
 
 
@@ -128,6 +136,17 @@ def main():
         )
         del dets
 
+    # Parse --highlight-regions (comma-separated IDs or JSON file path)
+    highlight_ids = None
+    if args.highlight_regions:
+        hr = args.highlight_regions
+        if Path(hr).exists():
+            with open(hr) as f:
+                highlight_ids = {int(x) for x in json.load(f)}
+        else:
+            highlight_ids = {int(x.strip()) for x in hr.split(",") if x.strip()}
+        logger.info("Highlighting %d regions", len(highlight_ids))
+
     # Generate viewer
     if len(label_maps) == 1 and region_stats is not None:
         name, lbl = label_maps[0]
@@ -138,6 +157,7 @@ def main():
             region_stats=region_stats,
             min_cells=args.min_cells,
             title=args.title,
+            highlight_ids=highlight_ids,
         )
     else:
         generate_multi_layer_viewer(

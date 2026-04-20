@@ -188,7 +188,7 @@ class TestScoreRealRF:
 
 class TestBackgroundCorrectionReal:
     def test_correct_all_channels(self):
-        from xldvp_seg.pipeline.background import correct_all_channels
+        from xldvp_seg.analysis.background import correct_all_channels
 
         rng = np.random.default_rng(42)
         dets = []

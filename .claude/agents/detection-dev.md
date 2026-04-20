@@ -99,7 +99,7 @@ After deduplication, 3 phases run automatically (parallelized with ThreadPoolExe
 
 Features are always computed from the original Cellpose/SAM2 segmentation mask. Contour simplification (adaptive RDP) and dilation are deferred to LMD export time.
 
-Code: `xldvp_seg/pipeline/post_detection.py`, `xldvp_seg/pipeline/background.py`
+Code: `xldvp_seg/pipeline/post_detection.py`, `xldvp_seg/analysis/background.py`
 
 Controlled by `--no-contour-processing` and `--no-background-correction`.
 
