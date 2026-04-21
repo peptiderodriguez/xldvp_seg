@@ -377,7 +377,7 @@ def create_sample_from_detection(
     tile_percentiles=None,
     marker_thresholds=None,
     marker_map=None,
-    contour_thickness=2,
+    contour_thickness=6,
     image_format="JPEG",
     dashed_contour=True,
 ):
@@ -491,10 +491,15 @@ def create_sample_from_detection(
     # Save clean version before drawing contours (for channel toggle base layer)
     img_b64_clean, _ = image_to_base64(crop_norm, format=image_format)
 
+    # Scale contour thickness to rendered crop size so large cells get proportionally
+    # thicker outlines (~1.5% of the rendered crop's shorter side). Floor = contour_thickness.
+    _rendered_size = min(crop_norm.shape[:2])
+    _effective_thickness = max(contour_thickness, _rendered_size // 60)
+
     # Draw contours on the image
     _bw = dashed_contour or (cell_type == "islet")
     crop_with_contour = draw_mask_contour(
-        crop_norm, crop_mask, color=contour_color, thickness=contour_thickness, bw_dashed=_bw
+        crop_norm, crop_mask, color=contour_color, thickness=_effective_thickness, bw_dashed=_bw
     )
     img_b64, mime = image_to_base64(crop_with_contour, format=image_format)
 
@@ -502,7 +507,7 @@ def create_sample_from_detection(
     # Use PNG to avoid JPEG artifacts on thin colored lines against black background
     contour_only = np.zeros_like(crop_norm)
     contour_only = draw_mask_contour(
-        contour_only, crop_mask, color=contour_color, thickness=contour_thickness, bw_dashed=_bw
+        contour_only, crop_mask, color=contour_color, thickness=_effective_thickness, bw_dashed=_bw
     )
     img_b64_contour_only, _ = image_to_base64(contour_only, format="PNG")
 

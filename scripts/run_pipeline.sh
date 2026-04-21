@@ -112,6 +112,7 @@ VALID_TOP = {
     'min_area_um', 'max_area_um', 'dedup_method', 'iou_threshold',
     'contour_processing', 'background_correction', 'dilation_um',
     'rdp_epsilon', 'bg_neighbors', 'correct_all_channels',
+    'tile_size', 'tile_overlap',
     'markers', 'slurm', 'sharding', 'downstream', 'scenes', 'scene_parallel',
     'spatial_network', 'spatial_viewer', 'spatialdata',
 }
@@ -192,6 +193,10 @@ CONTOUR_PROCESSING=$(read_yaml contour_processing true)
 DILATION_UM=$(read_yaml dilation_um "")
 RDP_EPSILON=$(read_yaml rdp_epsilon "")
 BG_NEIGHBORS=$(read_yaml bg_neighbors "")
+
+# Tile grid (overlap critical for large cells spanning tile boundaries)
+TILE_SIZE=$(read_yaml tile_size "")
+TILE_OVERLAP=$(read_yaml tile_overlap "")
 
 # Deduplication method
 DEDUP_METHOD=$(read_yaml dedup_method "")
@@ -446,6 +451,13 @@ build_seg_cmd() {
     # Built-in marker SNR classification
     if [[ -n "$MARKER_SNR_CHANNELS" ]]; then
         cmd+=" --marker-snr-channels \"$MARKER_SNR_CHANNELS\""
+    fi
+    # Tile grid overrides
+    if [[ -n "$TILE_SIZE" ]]; then
+        cmd+=" --tile-size $TILE_SIZE"
+    fi
+    if [[ -n "$TILE_OVERLAP" ]]; then
+        cmd+=" --tile-overlap $TILE_OVERLAP"
     fi
     echo "$cmd"
 }

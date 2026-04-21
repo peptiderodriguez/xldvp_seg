@@ -121,20 +121,51 @@ def setup_shared_memory(
     logger.info(f"Creating shared memory for {n_ch_total} channels ({h}x{w})...")
     logger.info(f"  Channel list: {ch_list}")
 
-    slide_shm_arr = shm_manager.create_slide_buffer(slide_name, (h, w, n_ch_total), np.uint16)
-    ch_to_slot = {ch: i for i, ch in enumerate(ch_list)}
+    # Probe channels for RGB (cheap: ~100×100 reads). RGB brightfield CZIs store
+    # a single logical channel as (H, W, 3) uint8, which can't share a uint16 SHM
+    # slot with grayscale fluorescence channels.
+    is_rgb = {ch: loader.is_channel_rgb(ch) for ch in ch_list}
+    rgb_mode = any(is_rgb.values())
 
-    # Load each channel directly from CZI into SHM slot (no RAM intermediate)
-    for ch in ch_list:
-        slot = ch_to_slot[ch]
-        shm_view = slide_shm_arr[:, :, slot]
-        loader.load_to_shared_memory(ch, shm_view)
-        # Register the SHM view as the loader's channel data (for get_tile, tissue detection)
-        loader.set_channel_data(ch, shm_view)
-    logger.info(f"  All {n_ch_total} channels loaded directly to shared memory")
+    if rgb_mode and not all(is_rgb.values()):
+        raise DetectionError(
+            "Mixed RGB + grayscale channels in one CZI not supported. "
+            f"RGB: {[c for c, r in is_rgb.items() if r]}, "
+            f"grayscale: {[c for c, r in is_rgb.items() if not r]}"
+        )
+    if rgb_mode and len(ch_list) != 1:
+        raise DetectionError(
+            f"Only single-channel RGB CZIs supported, got {len(ch_list)} RGB channels"
+        )
 
-    # Build all_channel_data as views into SHM (for preprocessing, resume HTML, etc.)
-    all_channel_data = {ch: slide_shm_arr[:, :, ch_to_slot[ch]] for ch in ch_list}
+    if rgb_mode:
+        # RGB brightfield: allocate (H, W, 3) uint8 buffer registered under slide_name
+        # (worker's shared_slides[slide_name] lookup resolves unchanged).
+        ch = ch_list[0]
+        slide_shm_arr = shm_manager.create_slide_buffer(slide_name, (h, w, 3), np.uint8)
+        loader.load_to_shared_memory(ch, slide_shm_arr)
+        loader.set_channel_data(ch, slide_shm_arr)
+        all_channel_data = {ch: slide_shm_arr}
+        # ch_to_slot is irrelevant for single RGB channel but downstream code expects
+        # the key to exist in the return dict.
+        ch_to_slot = {ch: 0}
+        logger.info("  RGB brightfield mode: (H, W, 3) uint8 SHM buffer")
+    else:
+        # Fluorescence mode: unified (H, W, n_ch) uint16 buffer
+        slide_shm_arr = shm_manager.create_slide_buffer(slide_name, (h, w, n_ch_total), np.uint16)
+        ch_to_slot = {ch: i for i, ch in enumerate(ch_list)}
+
+        # Load each channel directly from CZI into SHM slot (no RAM intermediate)
+        for ch in ch_list:
+            slot = ch_to_slot[ch]
+            shm_view = slide_shm_arr[:, :, slot]
+            loader.load_to_shared_memory(ch, shm_view)
+            # Register the SHM view as the loader's channel data (for get_tile, tissue detection)
+            loader.set_channel_data(ch, shm_view)
+        logger.info(f"  All {n_ch_total} channels loaded directly to shared memory")
+
+        # Build all_channel_data as views into SHM (for preprocessing, resume HTML, etc.)
+        all_channel_data = {ch: slide_shm_arr[:, :, ch_to_slot[ch]] for ch in ch_list}
 
     # Apply slide-wide preprocessing on SHM views (modifies data in-place)
     apply_slide_preprocessing(args, all_channel_data, loader)
@@ -155,7 +186,10 @@ def setup_shared_memory(
         tissue_channel = getattr(args, "tp_nuclear_channel", 4)
         logger.info(f"Tissue pattern: using nuclear (ch{tissue_channel}) for tissue detection")
 
-    # Calibrate tissue threshold on the SAME channel used for filtering
+    # Calibrate tissue threshold on the SAME channel used for filtering.
+    # For RGB brightfield pass modality='brightfield' to filter_tissue_tiles (Otsu path).
+    # calibrate_tissue_threshold is variance-based and modality-agnostic — works for both.
+    filter_kwargs = {"modality": "brightfield"} if rgb_mode else {}
     manual_threshold = getattr(args, "variance_threshold", None)
     if manual_threshold is not None:
         variance_threshold = manual_threshold
@@ -178,6 +212,7 @@ def setup_shared_memory(
         channel=tissue_channel,
         tile_size=args.tile_size,
         loader=loader,  # Loader handles mosaic origin offset correctly
+        **filter_kwargs,
     )
 
     if len(tissue_tiles) == 0:

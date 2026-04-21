@@ -1,0 +1,28 @@
+name: mk_bm_16slides_20260421_overlap25
+czi_dir: /fs/pool/pool-mann-axioscan/01_Users/EdRo_axioscan/bonemarrow/2025_11_18
+czi_glob: "2025_11_18_*.czi"
+output_dir: /fs/pool/pool-mann-edwin/mk_output/2026_04_21_BM_16slides_overlap25
+
+cell_type: mk
+num_gpus: 4
+
+# Single-channel brightfield RGB CZIs (Axioscan 20x, Nissl/H&E-style)
+# CZI reports 1 channel but it's actually packed RGB.
+pixel_size_um: 0.22
+all_channels: false
+
+# Tile overlap: 25% (~165µm at 0.22µm/px) to cover MK cells spanning tile edges.
+# Default 10% (66µm) is smaller than MK diameter (100-150µm) and causes clipped
+# masks at tile boundaries.
+tile_size: 3000
+tile_overlap: 0.25
+
+# HTML sample fraction for browser-friendly viewer
+html_sample_fraction: 0.10
+
+slurm:
+  partition: p.hpcl93
+  cpus: 128
+  mem_gb: 659
+  gpus: "l40s:4"
+  time: "1-00:00:00"

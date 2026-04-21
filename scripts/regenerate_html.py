@@ -51,6 +51,7 @@ Usage:
 import argparse
 import gc
 import json
+import os
 import sys
 from collections import defaultdict
 from pathlib import Path
@@ -92,7 +93,7 @@ def create_sample_from_contours(
     pixel_size_um,
     slide_name,
     cell_type,
-    contour_thickness=2,
+    contour_thickness=6,
     max_crop_px=800,
     min_crop_px=300,
     dashed_contour=True,
@@ -210,11 +211,18 @@ def create_sample_from_contours(
     rgb_channels = []
     for ch_idx in display_channels[:3]:
         if ch_idx in channel_arrays:
-            rgb_channels.append(channel_arrays[ch_idx][y1:y2, x1:x2])
+            ch_crop = channel_arrays[ch_idx][y1:y2, x1:x2]
+            if ch_crop.ndim == 3:
+                # Already RGB (e.g., brightfield CZI) — use directly
+                crop = ch_crop
+                rgb_channels = None
+                break
+            rgb_channels.append(ch_crop)
         else:
             _dtype = next(iter(channel_arrays.values())).dtype
             rgb_channels.append(np.zeros((y2 - y1, x2 - x1), dtype=_dtype))
-    crop = np.stack(rgb_channels, axis=-1)
+    if rgb_channels is not None:
+        crop = np.stack(rgb_channels, axis=-1)
 
     if crop.size == 0:
         return None
@@ -232,6 +240,12 @@ def create_sample_from_contours(
     crop_clean = crop_norm.copy()
     # Also create contour-only image (green on black) for overlay layer
     contour_only = np.zeros_like(crop_norm)
+
+    # Scale contour thickness to rendered crop size so large cells get proportionally
+    # thicker outlines (baseline ~1.5-2% of the rendered crop's shorter side).
+    # Uses user-provided contour_thickness as a floor.
+    _rendered_size = min(crop_norm.shape[:2])
+    effective_thickness = max(contour_thickness, _rendered_size // 60)
 
     # Draw contours if available (generic: look for any *_contour_global keys)
     contour_colors = {
@@ -272,8 +286,8 @@ def create_sample_from_contours(
                 for t in np.linspace(0, 1, n_interp, endpoint=False):
                     interp_pts.append((p0 + t * (p1 - p0)).astype(np.int32))
             if len(interp_pts) < 2:
-                cv2.drawContours(crop_norm, [contour_int], -1, color, contour_thickness)
-                cv2.drawContours(contour_only, [contour_int], -1, color, contour_thickness)
+                cv2.drawContours(crop_norm, [contour_int], -1, color, effective_thickness)
+                cv2.drawContours(contour_only, [contour_int], -1, color, effective_thickness)
             else:
                 dash_len, gap_len = 8, 5
                 cycle = dash_len + gap_len
@@ -285,18 +299,18 @@ def create_sample_from_contours(
                             tuple(interp_pts[idx]),
                             tuple(interp_pts[end]),
                             color,
-                            contour_thickness,
+                            effective_thickness,
                         )
                         cv2.line(
                             contour_only,
                             tuple(interp_pts[idx]),
                             tuple(interp_pts[end]),
                             color,
-                            contour_thickness,
+                            effective_thickness,
                         )
         else:
-            cv2.drawContours(crop_norm, [contour_int], -1, color, contour_thickness)
-            cv2.drawContours(contour_only, [contour_int], -1, color, contour_thickness)
+            cv2.drawContours(crop_norm, [contour_int], -1, color, effective_thickness)
+            cv2.drawContours(contour_only, [contour_int], -1, color, effective_thickness)
 
     uid = det.get("uid", f"{slide_name}_{cell_type}_{int(round(cx))}_{int(round(cy))}")
     pil_img = Image.fromarray(crop_norm)
@@ -696,7 +710,13 @@ def _process_multi_slide(args, sampled, channels_to_load, display_channels, cell
     pixel_size_um = None
     channel_legend = None
 
-    with ProcessPoolExecutor(max_workers=len(matched)) as pool:
+    # Cap parallelism to avoid OOM. Each worker loads a full CZI (~20-30GB RGB,
+    # multi-GB fluorescence) and keeps it resident for crop generation.
+    # Override via XLDVP_MAX_SLIDE_WORKERS env var.
+    _max_workers = int(os.environ.get("XLDVP_MAX_SLIDE_WORKERS", "8"))
+    n_workers = min(_max_workers, len(matched))
+    logger.info(f"  Using {n_workers} parallel slide workers (cap={_max_workers})")
+    with ProcessPoolExecutor(max_workers=n_workers) as pool:
         futures = {}
         for slide_name, slide_dets in matched:
             task_args = (
@@ -800,7 +820,7 @@ def main():
         "--sort-order", default="asc", help="Sort order: asc or desc (default: asc)"
     )
     parser.add_argument(
-        "--contour-thickness", type=int, default=2, help="Contour line thickness (default: 2)"
+        "--contour-thickness", type=int, default=6, help="Contour line thickness (default: 6)"
     )
     parser.add_argument(
         "--dashed-contour",

@@ -26,6 +26,13 @@ def apply_slide_preprocessing(args, all_channel_data, loader):
         all_channel_data: dict of channel_idx -> 2D array (modified in place)
         loader: CZI loader (channel_data updated in place)
     """
+    # RGB brightfield CZIs: skip all preprocessing.
+    # Photobleach/flat-field/Reinhard are designed for 2D uint16 fluorescence and
+    # either crash or produce garbage on 3D uint8 RGB brightfield data.
+    if any(arr.ndim == 3 and arr.dtype == np.uint8 for arr in all_channel_data.values()):
+        logger.info("RGB brightfield detected — skipping photobleach/flat-field/Reinhard")
+        return
+
     # EXPERIMENTAL: Photobleaching correction — results may be unreliable.
     # This feature needs rework before production use.
     if getattr(args, "photobleaching_correction", False):
