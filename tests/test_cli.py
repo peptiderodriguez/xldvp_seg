@@ -225,6 +225,7 @@ class TestCLIDispatchTable:
             "strategies",
             "download-models",
             "qc",
+            "discover-rare-cells",
         }
         assert set(_DISPATCH.keys()) == expected
 

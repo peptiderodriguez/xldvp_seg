@@ -107,7 +107,52 @@ def parse_args(argv=None):
     )
     parser.add_argument("--nuc-stats", help="Optional region_nuc_stats.json for display")
     parser.add_argument("--output", required=True, help="Output HTML path")
-    return parser.parse_args(argv)
+
+    # --- Rare-cell-population mode (optional) ---
+    rare = parser.add_argument_group(
+        "rare-mode",
+        "Visualize pre-computed rare cell populations from "
+        "`xlseg discover-rare-cells`. When --rare-mode is set, the viewer "
+        "skips its own clustering and reads `rare_pop_id` from detections.",
+    )
+    rare.add_argument(
+        "--rare-mode",
+        action="store_true",
+        help="Enable rare-mode viewer (reads rare_pop_id from detections).",
+    )
+    rare.add_argument(
+        "--rare-cluster-summary",
+        type=Path,
+        default=None,
+        help="Path to cluster_summary.csv produced by discover_rare_cell_types.py. "
+        "Required when --rare-mode.",
+    )
+    rare.add_argument(
+        "--rare-linkage-matrix",
+        type=Path,
+        default=None,
+        help="Optional scipy linkage matrix (.npy) on cluster centroids for an "
+        "inline-SVG dendrogram. Preferred over --rare-dendrogram-png.",
+    )
+    rare.add_argument(
+        "--rare-cluster-ids",
+        type=Path,
+        default=None,
+        help="Optional cluster_ids.npy (matching the linkage matrix order).",
+    )
+    rare.add_argument(
+        "--rare-dendrogram-png",
+        type=Path,
+        default=None,
+        help="Optional fallback pre-rendered dendrogram PNG if linkage-matrix unavailable.",
+    )
+
+    args = parser.parse_args(argv)
+
+    if args.rare_mode and args.rare_cluster_summary is None:
+        parser.error("--rare-mode requires --rare-cluster-summary <cluster_summary.csv>")
+
+    return args
 
 
 def leiden_on_knn_graph(X, *, n_neighbors=15, resolution=1.0, seed=42):
@@ -154,6 +199,357 @@ def leiden_on_knn_graph(X, *, n_neighbors=15, resolution=1.0, seed=42):
     labels = np.array(partition.membership, dtype=np.int32)
     logger.info("Leiden found %d communities", len(np.unique(labels)))
     return labels
+
+
+def _load_rare_cluster_summary(csv_path: Path) -> list[dict]:
+    """Read cluster_summary.csv produced by discover_rare_cell_types.py.
+
+    Returns list of dicts with typed fields (size int, persistence/moran_i float,
+    stable bool).
+    """
+    import csv as _csv
+
+    rows = []
+    with open(csv_path, encoding="utf-8") as f:
+        reader = _csv.DictReader(f)
+        for r in reader:
+            moran_raw = r.get("moran_i", "")
+            moran_val: float | None = None
+            if moran_raw not in ("", None):
+                try:
+                    moran_val = float(moran_raw)
+                    if not math.isfinite(moran_val):
+                        moran_val = None
+                except ValueError:
+                    moran_val = None
+            rows.append(
+                {
+                    "cluster_id": int(r["cluster_id"]),
+                    "size": int(r["size"]),
+                    "hdbscan_persistence": float(r.get("hdbscan_persistence", 0.0) or 0.0),
+                    "moran_i": moran_val,
+                    "stable": (r.get("stable", "False") or "").lower() in ("true", "1", "yes"),
+                    "noise_pct": float(r.get("noise_pct", 0.0) or 0.0),
+                    "top_regions": r.get("top_regions", ""),
+                    "top_morph_features": r.get("top_morph_features", ""),
+                }
+            )
+    return rows
+
+
+def _build_rare_dendrogram_svg(
+    linkage: np.ndarray,
+    cluster_ids: np.ndarray,
+    summary_by_id: dict[int, dict],
+    width: int = 900,
+    height: int = 260,
+    margin_l: int = 40,
+    margin_r: int = 20,
+    margin_t: int = 20,
+    margin_b: int = 40,
+) -> str:
+    """Render Ward-linkage dendrogram as inline SVG with clickable leaves.
+
+    Leaves are colored by rarity tier (smallest 20% red, largest 20% gray).
+    Data attribute ``data-cid`` on each leaf circle wires into the viewer's
+    existing ``selectCluster(cid)`` JS handler.
+
+    Returns empty string if fewer than 2 clusters.
+    """
+    if linkage.shape[0] < 1 or len(cluster_ids) < 3:
+        return ""
+
+    from scipy.cluster.hierarchy import dendrogram
+
+    d = dendrogram(linkage, no_plot=True)
+    icoord = np.asarray(d["icoord"])  # (K-1, 4)
+    dcoord = np.asarray(d["dcoord"])
+    leaves = d["leaves"]  # permutation mapping leaf index → cluster-ids row index
+    leaf_ordered_ids = [int(cluster_ids[i]) for i in leaves]
+
+    # Rarity tiers by size
+    sizes = np.array([summary_by_id.get(cid, {}).get("size", 0) for cid in leaf_ordered_ids])
+    if len(sizes):
+        p20, p80 = np.percentile(sizes, [20, 80])
+    else:
+        p20, p80 = 0, 0
+
+    def _color_for(cid: int) -> str:
+        info = summary_by_id.get(cid)
+        # Missing-from-summary is abnormal — treat as exploratory (not stable).
+        if info is None or not info.get("stable", False):
+            return "#888888"
+        sz = info.get("size", 0)
+        if sz <= p20:
+            return "#e6194b"
+        if sz >= p80:
+            return "#5a5a5a"
+        return "#bfef45"
+
+    # Scale coords
+    x_min, x_max = icoord.min(), icoord.max()
+    y_max = max(1.0, dcoord.max())
+    plot_w = width - margin_l - margin_r
+    plot_h = height - margin_t - margin_b
+
+    def _sx(x):
+        return margin_l + (x - x_min) / (x_max - x_min) * plot_w if x_max > x_min else margin_l
+
+    def _sy(y):
+        return margin_t + plot_h - (y / y_max) * plot_h
+
+    # Draw links as polylines
+    polylines = []
+    for i in range(len(icoord)):
+        xs = [_sx(x) for x in icoord[i]]
+        ys = [_sy(y) for y in dcoord[i]]
+        points = " ".join(f"{x:.1f},{y:.1f}" for x, y in zip(xs, ys))
+        polylines.append(
+            f'<polyline points="{points}" fill="none" stroke="#888" stroke-width="1.2"/>'
+        )
+
+    # Draw leaves: little circles + labels
+    leaves_svg = []
+    # Leaf x positions from icoord: each leaf occupies odd position index (5, 15, 25, ...)
+    # Actually scipy's dendrogram leaf positions are at x = 5, 15, 25 ... by default
+    n_leaves = len(leaf_ordered_ids)
+    leaf_xs = [5 + 10 * i for i in range(n_leaves)]
+    for idx, cid in enumerate(leaf_ordered_ids):
+        cx = _sx(leaf_xs[idx])
+        cy = _sy(0)
+        color = _color_for(cid)
+        sz = summary_by_id.get(cid, {}).get("size", 0)
+        stable = summary_by_id.get(cid, {}).get("stable", True)
+        leaves_svg.append(
+            f'<g class="rare-leaf" data-cid="{cid}" cursor="pointer" '
+            f'onclick="selectCluster({cid})">'
+            f'<circle cx="{cx:.1f}" cy="{cy:.1f}" r="5" fill="{color}" '
+            f'stroke="#fff" stroke-width="{1 if stable else 0.5}"/>'
+            f'<text x="{cx:.1f}" y="{cy+18:.1f}" text-anchor="middle" '
+            f'font-size="9" fill="#ccc">{cid}</text>'
+            f'<title>cluster {cid}: {sz:,} cells{"" if stable else " (exploratory)"}</title>'
+            f"</g>"
+        )
+
+    return (
+        f'<svg viewBox="0 0 {width} {height}" width="100%" height="{height}" '
+        f'xmlns="http://www.w3.org/2000/svg" style="background:#0d0d0d">'
+        + "".join(polylines)
+        + "".join(leaves_svg)
+        + '<text x="10" y="15" fill="#aaa" font-size="10">Ward linkage · '
+        "red=rare · olive=typical · gray=common/exploratory</text>" + "</svg>"
+    )
+
+
+def generate_rare_html(
+    kept_detections: list[dict],
+    region_ids: np.ndarray,
+    summary: list[dict],
+    linkage: np.ndarray,
+    cluster_ids: np.ndarray,
+    dendrogram_png_b64: str | None,
+    output_path: Path,
+    *,
+    # Backward-compat kwargs for callers still passing the legacy signature.
+    # These are NOT used by the current taxonomy-only rare-mode template;
+    # spatial-map rendering belongs to a follow-up feature. Accepted and
+    # ignored so older callers don't break.
+    contours: dict | None = None,
+    fluor_b64: str = "",
+    img_w: int = 0,
+    img_h: int = 0,
+) -> None:
+    """Generate rare-mode viewer HTML (taxonomy dendrogram + cluster sidebar).
+
+    Simpler than ``generate_html`` — no UMAP (HDBSCAN in PCA doesn't emit one
+    by default, and adding one would double runtime). Focused on two things
+    that matter for rare-population review: cluster taxonomy (dendrogram) and
+    per-cluster metrics (size, persistence, Moran's I, stable flag).
+
+    Spatial map rendering is intentionally out of scope for this view — the
+    default viewer (``--no-rare-mode``) already handles spatial.
+    """
+    del contours, fluor_b64, img_w, img_h  # accepted for compat; unused here.
+    summary_by_id = {row["cluster_id"]: row for row in summary}
+
+    # Prefer inline SVG dendrogram; fall back to PNG if provided.
+    dendrogram_svg = _build_rare_dendrogram_svg(linkage, cluster_ids, summary_by_id)
+    if not dendrogram_svg and dendrogram_png_b64:
+        dendrogram_svg = (
+            f'<img src="data:image/png;base64,{dendrogram_png_b64}" '
+            f'style="width:100%;max-height:280px;background:#0d0d0d"/>'
+        )
+    if not dendrogram_svg:
+        dendrogram_svg = (
+            '<div style="padding:30px;color:#888">Fewer than 3 clusters — '
+            "dendrogram skipped.</div>"
+        )
+
+    # Per-cluster spatial stats (region distribution) — reuse existing helper.
+    labels_arr = np.array([int(d.get("rare_pop_id", -1)) for d in kept_detections])
+    spatial_stats = compute_cluster_spatial_stats(labels_arr, region_ids, major_threshold=0.10)
+
+    # Prepare cluster rows for sidebar
+    rows_json = []
+    for row in summary:
+        cid = row["cluster_id"]
+        spat = spatial_stats.get(cid, {}) if isinstance(spatial_stats, dict) else {}
+        rows_json.append(
+            {
+                "cluster_id": cid,
+                "size": row["size"],
+                "persistence": row["hdbscan_persistence"],
+                "moran_i": row["moran_i"],
+                "stable": row["stable"],
+                "n_major_regions": spat.get("n_major", 0),
+                "top_region_frac": round(spat.get("top_region_frac", 0.0), 3),
+                "top_regions": row.get("top_regions", ""),
+                "top_features": row.get("top_morph_features", ""),
+            }
+        )
+
+    data_json = safe_json(rows_json)
+    n_stable = sum(1 for r in summary if r.get("stable"))
+    summary_noise_pct = float(summary[0]["noise_pct"]) if summary else 0.0
+    banner = ""
+    if n_stable == 0:
+        banner = (
+            '<div style="background:#5a1a1a;color:#fff;padding:8px 14px">'
+            "No STABLE clusters found. Showing all clusters as exploratory.</div>"
+        )
+
+    # Inline CSS + minimal JS
+    html = f"""<!DOCTYPE html><html><head><meta charset=utf-8>
+<title>Rare Cell Populations</title>
+<style>
+*{{margin:0;padding:0;box-sizing:border-box}}
+body{{background:#0a0a0a;color:#e0e0e0;font-family:system-ui,sans-serif;display:flex;height:100vh;overflow:hidden;font-size:12px}}
+#sb{{width:340px;min-width:340px;background:#111;border-right:1px solid #222;overflow-y:auto}}
+.hdr{{padding:12px 14px;border-bottom:1px solid #222}}
+.hdr h1{{font-size:15px;margin-bottom:4px}}
+.hdr .sub{{color:#888;font-size:11px}}
+.controls{{padding:8px 14px;border-bottom:1px solid #1a1a1a;display:flex;flex-wrap:wrap;gap:6px}}
+.controls button{{background:#222;color:#ddd;border:1px solid #333;padding:4px 8px;border-radius:3px;cursor:pointer;font-size:10px}}
+.controls button:hover{{background:#333}}
+.controls button.active{{background:#2d4a2d;border-color:#4a7a4a}}
+.r{{margin:2px 8px;padding:6px 10px;border-radius:3px;cursor:pointer;border-left:3px solid transparent;display:flex;align-items:center;gap:8px}}
+.r.stable{{border-left-color:#4caf50}}
+.r.exploratory{{border-left-color:#888;opacity:0.65}}
+.r.sel{{outline:1px solid #fff;background:#1a1a1a}}
+.r:hover{{background:#1a1a1a}}
+.r .info{{flex:1;min-width:0}}
+.r .nm{{font-weight:600}}
+.r .stat{{color:#888;font-size:10px;margin-top:1px}}
+#main{{flex:1;display:flex;flex-direction:column;overflow:hidden}}
+#dendro{{background:#0d0d0d;border-bottom:1px solid #222;overflow-x:auto;min-height:280px;max-height:300px}}
+#spatial{{flex:1;background:#000;position:relative;overflow:auto}}
+#spatial .stage{{position:relative;display:inline-block;transform-origin:0 0}}
+#spatial .stage img{{display:block}}
+#spatial .stage svg{{position:absolute;top:0;left:0;pointer-events:auto}}
+.cluster-poly{{cursor:pointer}}
+.cluster-poly.sel{{stroke-width:3 !important}}
+#detail{{position:fixed;top:320px;right:14px;background:rgba(17,17,17,0.95);padding:10px 14px;border-radius:4px;max-width:320px;font-size:11px;border:1px solid #333;z-index:100}}
+#detail h3{{font-size:12px;margin-bottom:4px}}
+#detail table{{font-size:10px;border-collapse:collapse;margin-top:4px}}
+#detail td{{padding:1px 8px 1px 0;color:#bbb}}
+</style></head><body>
+<div id=sb>
+<div class=hdr>
+<h1>Rare Cell Populations</h1>
+<div class=sub>{len(summary)} clusters · {n_stable} stable · noise {100 * summary_noise_pct:.1f}%</div>
+</div>
+{banner}
+<div class=controls>
+<b style="margin-right:4px">Sort</b>
+<button onclick="sortBy('size',1)">size↑</button>
+<button onclick="sortBy('persistence',-1)">persistence↓</button>
+<button onclick="sortBy('moran_i',-1)">Moran↓</button>
+</div>
+<div class=controls>
+<b style="margin-right:4px">Filter</b>
+<button id=fallbtn onclick="setFilter('all')" class=active>All</button>
+<button id=fstablebtn onclick="setFilter('stable')">Stable only</button>
+<button id=fsmallbtn onclick="setFilter('smallest')">Smallest 20</button>
+</div>
+<div id=rl></div>
+</div>
+<div id=main>
+<div id=dendro>{dendrogram_svg}</div>
+<div id=spatial></div>
+</div>
+<div id=detail><h3>Click a cluster or leaf to inspect</h3></div>
+<script>
+const R = {data_json};
+let currentRows = R.slice();
+let selectedCid = null;
+let filter = 'all';
+
+function render() {{
+  const el = document.getElementById('rl');
+  let rows = currentRows;
+  if (filter === 'stable') rows = rows.filter(r => r.stable);
+  if (filter === 'smallest') rows = [...rows].sort((a,b)=>a.size-b.size).slice(0, 20);
+  el.innerHTML = '';
+  for (const r of rows) {{
+    const d = document.createElement('div');
+    d.className = 'r ' + (r.stable ? 'stable' : 'exploratory') +
+      (r.cluster_id === selectedCid ? ' sel' : '');
+    d.dataset.cid = r.cluster_id;
+    const moranStr = (r.moran_i == null) ? '—' : r.moran_i.toFixed(2);
+    d.innerHTML = '<div class=info>' +
+      '<div class=nm>Cluster ' + r.cluster_id + '</div>' +
+      '<div class=stat>' + r.size.toLocaleString() + ' cells · ' +
+      'persist ' + r.persistence.toFixed(3) + ' · Moran ' + moranStr + '</div>' +
+      '</div>';
+    d.onclick = () => selectCluster(r.cluster_id);
+    el.appendChild(d);
+  }}
+}}
+
+function sortBy(key, dir) {{
+  currentRows.sort((a,b) => dir * (a[key] - b[key]));
+  render();
+}}
+
+function setFilter(f) {{
+  filter = f;
+  document.querySelectorAll('.controls button').forEach(b => {{
+    if (b.id === 'fallbtn' || b.id === 'fstablebtn' || b.id === 'fsmallbtn') {{
+      b.classList.remove('active');
+    }}
+  }});
+  document.getElementById({{'all':'fallbtn','stable':'fstablebtn','smallest':'fsmallbtn'}}[f]).classList.add('active');
+  render();
+}}
+
+function selectCluster(cid) {{
+  selectedCid = cid;
+  const r = R.find(x => x.cluster_id === cid);
+  if (r) {{
+    const el = document.getElementById('detail');
+    const topReg = r.top_regions.split(';').map(s=>s.trim()).filter(Boolean).slice(0,5);
+    const topFeat = r.top_features.split(';').map(s=>s.trim()).filter(Boolean).slice(0,8);
+    const moranStr = (r.moran_i == null) ? '—' : r.moran_i.toFixed(3);
+    el.innerHTML = '<h3>Cluster ' + cid + (r.stable ? ' (stable)' : ' (exploratory)') + '</h3>' +
+      '<div>' + r.size.toLocaleString() + ' cells | ' +
+      'persist ' + r.persistence.toFixed(3) + ' | Moran I ' + moranStr + '</div>' +
+      '<div style="margin-top:4px"><b>Top regions:</b> ' + topReg.join(', ') + '</div>' +
+      '<div style="margin-top:4px"><b>Top features (z):</b><br>' +
+      topFeat.map(f => '&nbsp;&nbsp;' + f).join('<br>') + '</div>';
+  }}
+  // Highlight leaf in dendrogram
+  document.querySelectorAll('.rare-leaf circle').forEach(c => {{
+    c.setAttribute('stroke-width', c.closest('.rare-leaf').dataset.cid == cid ? '3' : '1');
+  }});
+  render();
+}}
+
+render();
+</script>
+</body></html>"""
+
+    output_path.write_text(html, encoding="utf-8")
+    logger.info("Wrote rare-mode viewer: %s (%.1f MB)", output_path, len(html) / 1e6)
 
 
 def compute_cluster_spatial_stats(
@@ -670,8 +1066,60 @@ drawSpatial();
     )
 
 
+def _run_rare_mode(args) -> int:
+    """Rare-mode viewer: reads `rare_pop_id` from detections + pre-computed
+    cluster summary, skips Leiden/k-means/HDBSCAN, writes dendrogram + spatial
+    map HTML.
+    """
+    logger.info("Rare mode: loading detections %s", args.detections)
+    detections = fast_json_load(args.detections)
+    kept = [d for d in detections if d.get("organ_id", 0) > 0 and "rare_pop_id" in d]
+    del detections
+    logger.info("  %d cells with organ_id>0 AND rare_pop_id labeled", len(kept))
+
+    summary = _load_rare_cluster_summary(args.rare_cluster_summary)
+    logger.info(
+        "  %d clusters in summary (%d stable)",
+        len(summary),
+        sum(1 for r in summary if r["stable"]),
+    )
+
+    linkage = np.zeros((0, 4), dtype=np.float32)
+    cluster_ids = np.array([], dtype=np.int32)
+    if args.rare_linkage_matrix:
+        linkage = np.load(args.rare_linkage_matrix, allow_pickle=False)
+        logger.info("  linkage loaded: shape=%s", linkage.shape)
+    if args.rare_cluster_ids:
+        cluster_ids = np.load(args.rare_cluster_ids, allow_pickle=False)
+    elif linkage.size > 0:
+        # Derive cluster_ids from summary in stable-first order
+        cluster_ids = np.array([r["cluster_id"] for r in summary])
+
+    dendrogram_png_b64 = None
+    if args.rare_dendrogram_png and args.rare_dendrogram_png.exists():
+        dendrogram_png_b64 = base64.b64encode(args.rare_dendrogram_png.read_bytes()).decode()
+
+    # Taxonomy-only view: no CZI thumbnail load (saves ~5s + ~50MB RAM).
+    region_ids = np.array([d["organ_id"] for d in kept])
+    generate_rare_html(
+        kept_detections=kept,
+        region_ids=region_ids,
+        summary=summary,
+        linkage=linkage,
+        cluster_ids=cluster_ids,
+        dendrogram_png_b64=dendrogram_png_b64,
+        output_path=Path(args.output),
+    )
+    return 0
+
+
 def main():
     args = parse_args()
+
+    # --- Rare-mode short-circuit ---
+    if args.rare_mode:
+        return _run_rare_mode(args)
+
     rng = np.random.default_rng(42)
 
     # --- Load detections, filter ---

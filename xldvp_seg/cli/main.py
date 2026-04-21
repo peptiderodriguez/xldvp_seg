@@ -93,6 +93,10 @@ def _run_qc(remaining):
         sys.argv = old_argv
 
 
+def _run_discover_rare_cells(remaining):
+    _run_script("scripts/discover_rare_cell_types.py", remaining)
+
+
 def _run_download_models(remaining):
     """Download model checkpoints."""
     import argparse as _ap
@@ -149,6 +153,7 @@ _DISPATCH = {
     "strategies": _run_strategies,
     "download-models": _run_download_models,
     "qc": _run_qc,
+    "discover-rare-cells": _run_discover_rare_cells,
 }
 
 
@@ -187,6 +192,10 @@ def cli():
         "download-models", help="Download model checkpoints (brightfield needs HF token)"
     )
     subparsers.add_parser("qc", help="Quick quality check on pipeline output")
+    subparsers.add_parser(
+        "discover-rare-cells",
+        help="Discover rare cell populations (HDBSCAN + Ward taxonomy)",
+    )
 
     args, remaining = parser.parse_known_args()
 
