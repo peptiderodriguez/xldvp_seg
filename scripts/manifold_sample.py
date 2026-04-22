@@ -42,6 +42,7 @@ REPO = Path(__file__).resolve().parent.parent
 from xldvp_seg.analysis.manifold_sampling import (  # noqa: E402
     ManifoldSamplingConfig,
     discover_manifold_replicates,
+    sample_group_exemplars,
     select_lmd_replicates,
 )
 from xldvp_seg.utils.json_utils import atomic_json_dump, fast_json_load  # noqa: E402
@@ -282,6 +283,14 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         action="store_true",
         help="Skip writing exemplar_detections.json (kept cells with manifold_group_id).",
     )
+    p.add_argument(
+        "--exemplars-per-group",
+        type=int,
+        default=0,
+        help="If > 0, also emit manifold_exemplars.json with up to N cells per "
+        "Voronoi group (ranked by distance-to-anchor). Deduped by construction "
+        "— each cell appears in exactly one group. 0 = skip. Default: 0.",
+    )
 
     return p.parse_args(argv)
 
@@ -364,6 +373,24 @@ def main(argv: list[str] | None = None) -> int:
         out_ex = args.output_dir / "exemplar_detections.json"
         atomic_json_dump(result["kept_detections"], str(out_ex))
         logger.info("Wrote kept detections: %s", out_ex)
+
+    # Per-group card-grid exemplars — deduped by Voronoi assignment.
+    if args.exemplars_per_group > 0:
+        exemplars = sample_group_exemplars(
+            result["kept_detections"],
+            result["labels"],
+            result["d_to_anchor"],
+            per_group=args.exemplars_per_group,
+            outlier_mask=result["outlier_mask"],
+        )
+        out_card = args.output_dir / "manifold_exemplars.json"
+        atomic_json_dump(exemplars, str(out_card))
+        logger.info(
+            "Wrote card-grid exemplars: %d picks -> %s",
+            len(exemplars),
+            out_card,
+        )
+        stats["n_card_exemplars"] = len(exemplars)
 
     # Summary stats
     out_stats = args.output_dir / "manifold_sample_stats.json"

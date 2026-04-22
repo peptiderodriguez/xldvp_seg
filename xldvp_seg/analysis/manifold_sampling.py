@@ -609,6 +609,66 @@ def spatial_replicates(
 # ---------------------------------------------------------------------------
 
 
+def sample_group_exemplars(
+    kept: list[dict],
+    labels: np.ndarray,
+    d_to_anchor: np.ndarray,
+    *,
+    per_group: int = 30,
+    outlier_mask: np.ndarray | None = None,
+    exemplar_field: str = "_exemplar_group_id",
+) -> list[dict]:
+    """Pick up to ``per_group`` cells from each Voronoi group, ranked by
+    proximity to the anchor (smallest ``d_to_anchor`` first).
+
+    Each cell appears at most once — picks within a group share the same
+    ``manifold_group_id`` and come from that group's Voronoi cell only, so
+    there is no cross-group duplication (the n45 ad-hoc script's bug of
+    overlapping "k nearest per anchor" neighborhoods is not possible here).
+
+    Args:
+        kept: kept detections aligned with ``labels``/``d_to_anchor``.
+        labels: ``(N,)`` Voronoi group id per cell.
+        d_to_anchor: ``(N,)`` distance-to-anchor (smaller = more central).
+        per_group: max picks per group. ``30`` is a reasonable card-grid
+            density — 1000 groups × 30 = 30k cards.
+        outlier_mask: optional ``(N,)`` boolean — excluded from picks.
+        exemplar_field: key written on each output dict to record the
+            group id (mirrors ``manifold_group_id`` for downstream HTML
+            cluster-coloring).
+
+    Returns:
+        Flat list of detection dicts (deep-copied). Order: group 0 picks
+        first (closest-to-anchor first), then group 1, ...
+    """
+    if labels.shape[0] != len(kept) or d_to_anchor.shape[0] != len(kept):
+        raise ConfigError("sample_group_exemplars: labels/d_to_anchor length must match kept")
+    if per_group <= 0:
+        raise ConfigError(f"sample_group_exemplars: per_group must be positive, got {per_group}")
+
+    eligible = np.ones(labels.shape[0], dtype=bool)
+    if outlier_mask is not None:
+        eligible &= ~outlier_mask
+
+    out: list[dict] = []
+    for gid in np.unique(labels):
+        in_g = np.flatnonzero((labels == gid) & eligible)
+        if in_g.size == 0:
+            continue
+        order = np.argsort(d_to_anchor[in_g], kind="stable")[:per_group]
+        for i in in_g[order]:
+            det = dict(kept[int(i)])  # shallow copy — feature dicts shared, fine for HTML
+            det[exemplar_field] = int(gid)
+            out.append(det)
+    logger.info(
+        "sample_group_exemplars: %d picks across %d groups (per_group<=%d)",
+        len(out),
+        int(np.unique(labels).size),
+        per_group,
+    )
+    return out
+
+
 def _zscore(x: np.ndarray) -> np.ndarray:
     """Z-score with zero-variance guard (returns zeros if std < 1e-12)."""
     mu = float(np.mean(x))
@@ -937,6 +997,7 @@ __all__ = [
     "discover_manifold_replicates",
     "flag_outliers",
     "fps_anchors",
+    "sample_group_exemplars",
     "select_lmd_replicates",
     "spatial_replicates",
     "voronoi_assign",
