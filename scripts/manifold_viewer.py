@@ -227,6 +227,14 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         default="Manifold viewer",
         help="HTML title / info-panel header.",
     )
+    p.add_argument(
+        "--annotations",
+        type=Path,
+        default=None,
+        help="Optional kept_groups.json from aggregate_group_annotations.py. "
+        "Dropped groups are rendered at 25%% brightness and flagged in the "
+        "info panel; kept groups at full color.",
+    )
 
     return p.parse_args(argv)
 
@@ -315,6 +323,45 @@ def main(argv: list[str] | None = None) -> int:
         pos_shifted[:, 0] -= mosaic_x * pixel_size_um
         pos_shifted[:, 1] -= mosaic_y * pixel_size_um
 
+    # --- Optional: annotation-driven color override + info panel ----------
+    group_colors = None
+    info_extra_html = ""
+    if args.annotations is not None:
+        from xldvp_seg.visualization.colors import shuffled_hsv_palette
+
+        payload = fast_json_load(str(args.annotations))
+        per_group = {int(g["manifold_group_id"]): g for g in payload.get("groups", [])}
+        n_groups = int(labels_all.max()) + 1 if labels_all.size else 0
+        # Start from the same palette the viewer uses by default, then dim
+        # dropped / un-annotated groups so kept ones stand out visually.
+        palette = shuffled_hsv_palette(n_groups, seed=0)
+        for gid in range(n_groups):
+            g = per_group.get(gid)
+            if g is None or not g.get("kept"):
+                palette[gid] = (palette[gid] * 0.25).astype(np.uint8)
+        group_colors = palette
+        # Summary stats for the info panel.
+        n_kept_groups = int(payload.get("n_groups_kept", 0))
+        n_total_groups = int(payload.get("n_groups_total", n_groups))
+        n_ann = int(payload.get("n_annotated_total", 0))
+        threshold = float(payload.get("threshold", 0.0))
+        info_extra_html = (
+            f"<div style='margin-top:12px;padding:8px;background:#1a1a1a;"
+            f"border-radius:6px;font-size:12px'>"
+            f"<b>Annotation results</b><br>"
+            f"Threshold: {threshold:.0%}<br>"
+            f"Annotated: {n_ann} cards<br>"
+            f"Kept: {n_kept_groups}/{n_total_groups} groups<br>"
+            f"<span style='color:#888'>dropped groups dimmed to 25%</span>"
+            f"</div>"
+        )
+        logger.info(
+            "Annotations: %d kept / %d total groups (threshold=%.2f)",
+            n_kept_groups,
+            n_total_groups,
+            threshold,
+        )
+
     # --- Build HTML --------------------------------------------------------
     html = build_linked_viewer_html(
         umap_coords_3d=umap_3d,
@@ -323,7 +370,9 @@ def main(argv: list[str] | None = None) -> int:
         thumbnail_rgb=thumb_rgb,
         slide_extent_um=(width_um, height_um),
         selected_only_on_slide=args.selected_only_on_slide,
+        group_colors=group_colors,
         title=args.title,
+        info_extra_html=info_extra_html,
     )
 
     # Atomic write
