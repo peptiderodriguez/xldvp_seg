@@ -113,6 +113,27 @@ def atomic_json_dump(data, filepath, sanitize=True):
         raise
 
 
+def atomic_savez(path, **arrays):
+    """``np.savez`` via temp + ``os.replace`` so a crash can't leave a
+    half-written ``.npz`` that crashes ``np.load`` on the next run.
+
+    Hands ``np.savez`` a file handle (rather than a string path) so its
+    auto-``.npz`` suffix doesn't append to the ``.tmp`` name.
+
+    Args:
+        path: Target ``.npz`` path (str or Path).
+        **arrays: Arrays to save, keyed by archive name.
+    """
+    import numpy as np
+
+    path = Path(path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp = path.with_name(path.name + ".tmp")
+    with open(tmp, "wb") as f:
+        np.savez(f, **arrays)
+    os.replace(tmp, path)
+
+
 def fast_json_load(filepath):
     """Load JSON file using orjson if available (2-3x faster for large files)."""
     filepath = Path(filepath)

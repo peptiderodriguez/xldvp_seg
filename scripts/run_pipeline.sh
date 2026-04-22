@@ -55,11 +55,30 @@ fi
 # ---------------------------------------------------------------------------
 # Argument check
 # ---------------------------------------------------------------------------
-if [[ $# -ne 1 ]]; then
-    echo "Usage: $0 <config.yaml>"
+DRY_RUN=false
+CONFIG=""
+for _arg in "$@"; do
+    case "$_arg" in
+        --dry-run) DRY_RUN=true ;;
+        -h|--help)
+            echo "Usage: $0 <config.yaml> [--dry-run]"
+            exit 0
+            ;;
+        *)
+            if [[ -z "$CONFIG" ]]; then
+                CONFIG="$_arg"
+            else
+                echo "Usage: $0 <config.yaml> [--dry-run]"
+                exit 1
+            fi
+            ;;
+    esac
+done
+if [[ -z "$CONFIG" ]]; then
+    echo "Usage: $0 <config.yaml> [--dry-run]"
     exit 1
 fi
-CONFIG="$(realpath "$1")"
+CONFIG="$(realpath "$CONFIG")"
 if [[ ! -f "$CONFIG" ]]; then
     echo "Error: config file not found: $CONFIG"
     exit 1
@@ -115,6 +134,10 @@ VALID_TOP = {
     'tile_size', 'tile_overlap',
     'markers', 'slurm', 'sharding', 'downstream', 'scenes', 'scene_parallel',
     'spatial_network', 'spatial_viewer', 'spatialdata',
+    # mode: manifold
+    'mode', 'detections', 'feature_groups', 'feature_group_weights',
+    'max_pcs', 'pca_variance', 'seed',
+    'manifold_sampling', 'organ_grouping', 'viewers',
 }
 unknown = [k for k in cfg if k not in VALID_TOP]
 if unknown:
@@ -142,6 +165,217 @@ validate_yaml_value() {
         exit 1
     fi
 }
+
+# ---------------------------------------------------------------------------
+# Mode dispatch — delegate non-detection pipelines before reading segmentation
+# specific keys. Adding a new mode? Insert a branch here and return/exit at the
+# end of the branch so the segmentation-mode code below is skipped.
+# ---------------------------------------------------------------------------
+MODE=$(read_yaml mode detect)
+validate_yaml_value "$MODE" "mode"
+
+if [[ "$MODE" == "manifold" ]]; then
+    NAME=$(read_yaml name manifold)
+    OUTPUT_DIR=$(read_yaml output_dir "")
+    DETECTIONS=$(read_yaml detections "")
+    # czi_path is optional — only used if the viewer step is appended below.
+    CZI_PATH=$(read_yaml czi_path "")
+
+    validate_yaml_value "$NAME" "name"
+    validate_yaml_value "$OUTPUT_DIR" "output_dir"
+    validate_yaml_value "$DETECTIONS" "detections"
+    validate_yaml_value "$CZI_PATH" "czi_path"
+
+    if [[ -z "$OUTPUT_DIR" || -z "$DETECTIONS" ]]; then
+        echo "Error: mode=manifold requires output_dir + detections" >&2
+        exit 1
+    fi
+
+    # Feature / embedding flags
+    M_FEATURE_GROUPS=$(read_yaml feature_groups "")
+    M_FEATURE_WEIGHTS=$(read_yaml feature_group_weights "equal")
+    M_MAX_PCS=$(read_yaml max_pcs "30")
+    M_PCA_VARIANCE=$(read_yaml pca_variance "")
+    M_SEED=$(read_yaml seed "42")
+
+    # manifold_sampling block
+    M_K_ANCHORS=$(read_yaml manifold_sampling.k_anchors "1000")
+    M_TARGET_AREA=$(read_yaml manifold_sampling.target_area_um2 "")
+    M_TARGET_N=$(read_yaml manifold_sampling.target_n_cells "")
+    M_OUTLIER_METHOD=$(read_yaml manifold_sampling.outlier_method "global_pct")
+    M_OUTLIER_THR=$(read_yaml manifold_sampling.outlier_threshold "98.0")
+    M_INCLUDE_PARTIAL=$(read_yaml manifold_sampling.include_partial "false")
+    M_CAP_PER_GROUP=$(read_yaml manifold_sampling.cap_per_group "5")
+    M_PRIORITY=$(read_yaml manifold_sampling.priority "anchor_dist")
+    M_MIN_SPREAD=$(read_yaml manifold_sampling.min_spread_replicate_radii "4.0")
+
+    # organ_grouping block
+    M_ORGAN_FIELD=$(read_yaml organ_grouping.field "")
+    M_ORGAN_DROP=$(read_yaml organ_grouping.drop_value "")
+    M_ORGAN_REQUIRED=$(read_yaml organ_grouping.required "false")
+
+    # Optional viewer step (separate sbatch line, not CLI flags).
+    M_VIEW_CHANNELS=$(read_yaml viewers.thumbnail_channels "")
+    M_VIEW_SCALE=$(read_yaml viewers.thumbnail_scale "0.0625")
+    M_VIEW_LINKED=$(read_yaml viewers.linked "false")
+
+    # Validate interpolated values
+    for _v in "$M_FEATURE_GROUPS" "$M_FEATURE_WEIGHTS" "$M_MAX_PCS" "$M_PCA_VARIANCE" \
+              "$M_SEED" "$M_K_ANCHORS" "$M_TARGET_AREA" "$M_TARGET_N" \
+              "$M_OUTLIER_METHOD" "$M_OUTLIER_THR" "$M_CAP_PER_GROUP" \
+              "$M_PRIORITY" "$M_MIN_SPREAD" "$M_ORGAN_FIELD" "$M_ORGAN_DROP" \
+              "$M_VIEW_CHANNELS" "$M_VIEW_SCALE"; do
+        validate_yaml_value "$_v" "manifold-field"
+    done
+
+    # SLURM settings (manifold uses its own schema to match the ad-hoc sbatch)
+    M_PARTITION=$(read_yaml slurm.partition p.hpcl93)
+    M_CPUS=$(read_yaml slurm.cpus_per_task "$(read_yaml slurm.cpus 32)")
+    M_MEM=$(read_yaml slurm.mem "$(read_yaml slurm.mem_gb 0)")
+    M_GRES=$(read_yaml slurm.gres "$(read_yaml slurm.gpus gpu:1)")
+    M_TIME=$(read_yaml slurm.time "01:30:00")
+    M_EXCLUSIVE=$(read_yaml slurm.exclusive "false")
+    # Normalize gres: allow bare "gpu:1" or "l40s:4" -> "gpu:l40s:4"
+    if [[ "$M_GRES" != gpu:* ]]; then
+        M_GRES="gpu:${M_GRES}"
+    fi
+    # Normalize mem: "0" means all-node (emit as 0); integer -> append G
+    if [[ "$M_MEM" =~ ^[0-9]+$ ]]; then
+        if [[ "$M_MEM" == "0" ]]; then
+            M_MEM_DIRECTIVE="0"
+        else
+            M_MEM_DIRECTIVE="${M_MEM}G"
+        fi
+    else
+        M_MEM_DIRECTIVE="$M_MEM"
+    fi
+
+    validate_yaml_value "$M_PARTITION" "slurm.partition"
+    validate_yaml_value "$M_CPUS" "slurm.cpus_per_task"
+    validate_yaml_value "$M_MEM_DIRECTIVE" "slurm.mem"
+    validate_yaml_value "$M_GRES" "slurm.gres"
+    validate_yaml_value "$M_TIME" "slurm.time"
+
+    mkdir -p "$OUTPUT_DIR"
+    _TS=$(date +%Y%m%d_%H%M%S)
+    SBATCH_FILE="${OUTPUT_DIR}/sbatch_manifold_${_TS}.sbatch"
+
+    # Build the xlseg CLI invocation. Flag names mirror the YAML keys;
+    # the CLI (scripts/manifold_sample.py) is the source of truth — every
+    # flag below must exist in its argparse spec.
+    _build_manifold_cmd() {
+        local cmd="\$XLDVP_PYTHON -u -m xldvp_seg.cli manifold-sample"
+        cmd+=" --detections \"$DETECTIONS\""
+        cmd+=" --output-dir \"$OUTPUT_DIR\""
+        cmd+=" --k-anchors $M_K_ANCHORS"
+        cmd+=" --max-pcs $M_MAX_PCS"
+        cmd+=" --feature-group-weights $M_FEATURE_WEIGHTS"
+        cmd+=" --seed $M_SEED"
+        cmd+=" --outlier-method $M_OUTLIER_METHOD"
+        cmd+=" --outlier-threshold $M_OUTLIER_THR"
+        cmd+=" --cap-per-group $M_CAP_PER_GROUP"
+        cmd+=" --priority $M_PRIORITY"
+        cmd+=" --min-spread-replicate-radii $M_MIN_SPREAD"
+        if [[ -n "$M_FEATURE_GROUPS" ]]; then
+            # YAML list -> space-separated -> comma-separated CLI
+            local _fg
+            _fg=$(echo "$M_FEATURE_GROUPS" | tr ' ' ',')
+            cmd+=" --feature-groups $_fg"
+        fi
+        if [[ -n "$M_PCA_VARIANCE" && "$M_PCA_VARIANCE" != "None" ]]; then
+            cmd+=" --pca-variance $M_PCA_VARIANCE"
+        fi
+        if [[ -n "$M_TARGET_AREA" && "$M_TARGET_AREA" != "None" ]]; then
+            cmd+=" --target-area-um2 $M_TARGET_AREA"
+        fi
+        if [[ -n "$M_TARGET_N" && "$M_TARGET_N" != "None" ]]; then
+            cmd+=" --target-n-cells $M_TARGET_N"
+        fi
+        if [[ "$M_INCLUDE_PARTIAL" == "true" ]]; then
+            cmd+=" --include-partial"
+        fi
+        if [[ -n "$M_ORGAN_FIELD" ]]; then
+            cmd+=" --organ-field \"$M_ORGAN_FIELD\""
+        fi
+        if [[ -n "$M_ORGAN_DROP" && "$M_ORGAN_DROP" != "None" ]]; then
+            cmd+=" --organ-drop-value $M_ORGAN_DROP"
+        fi
+        if [[ "$M_ORGAN_REQUIRED" == "true" ]]; then
+            cmd+=" --organ-required"
+        fi
+        echo "$cmd"
+    }
+
+    # Optional linked-viewer step. The viewer lives in a separate script
+    # (scripts/manifold_viewer.py) because it has orthogonal deps
+    # (UMAP + CZI thumbnail). Only wired when viewers.linked=true AND
+    # czi_path is set.
+    _build_viewer_cmd() {
+        if [[ "$M_VIEW_LINKED" != "true" || -z "$CZI_PATH" ]]; then
+            return
+        fi
+        local cmd="\$XLDVP_PYTHON -u $REPO/scripts/manifold_viewer.py"
+        cmd+=" --state-npz \"${OUTPUT_DIR}\"/manifold_state_*.npz"
+        cmd+=" --detections \"${OUTPUT_DIR}\"/exemplar_detections.json"
+        cmd+=" --czi-path \"$CZI_PATH\""
+        cmd+=" --output \"${OUTPUT_DIR}\"/manifold_umap3d_linked.html"
+        if [[ -n "$M_VIEW_CHANNELS" ]]; then
+            local _vc
+            _vc=$(echo "$M_VIEW_CHANNELS" | tr ' ' ',')
+            cmd+=" --display-channels $_vc"
+        fi
+        if [[ -n "$M_VIEW_SCALE" ]]; then
+            cmd+=" --thumbnail-scale $M_VIEW_SCALE"
+        fi
+        echo "$cmd"
+    }
+
+    {
+        echo "#!/bin/bash"
+        echo "#SBATCH --job-name=${NAME}"
+        echo "#SBATCH --partition=${M_PARTITION}"
+        echo "#SBATCH --nodes=1"
+        echo "#SBATCH --cpus-per-task=${M_CPUS}"
+        echo "#SBATCH --mem=${M_MEM_DIRECTIVE}"
+        echo "#SBATCH --gres=${M_GRES}"
+        echo "#SBATCH --time=${M_TIME}"
+        if [[ "$M_EXCLUSIVE" == "true" ]]; then
+            echo "#SBATCH --exclusive"
+        fi
+        echo "#SBATCH --output=${OUTPUT_DIR}/slurm_${NAME}_%j.out"
+        echo "#SBATCH --error=${OUTPUT_DIR}/slurm_${NAME}_%j.err"
+        echo ""
+        echo "set -euo pipefail"
+        echo "source $REPO/scripts/slurm/nvidia_ld_library_path.sh"
+        echo "export PYTHONPATH=\"$REPO\""
+        echo "export PYTHONUNBUFFERED=1"
+        echo "XLDVP_PYTHON=\"$XLDVP_PYTHON\""
+        echo ""
+        echo "echo \"=== ${NAME} manifold-sample on \$(hostname), start \$(date) ===\""
+        echo "$(_build_manifold_cmd)"
+        echo "echo \"=== done \$(date) ===\""
+        echo "ls -la \"${OUTPUT_DIR}/\""
+    } > "$SBATCH_FILE"
+    chmod +x "$SBATCH_FILE"
+
+    echo "================================================"
+    echo "Pipeline: $NAME (mode=manifold)"
+    echo "Config:   $CONFIG"
+    echo "Sbatch:   $SBATCH_FILE"
+    echo "Output:   $OUTPUT_DIR"
+    echo "SLURM:    $M_PARTITION | ${M_CPUS} CPUs | ${M_MEM_DIRECTIVE} RAM | ${M_GRES} | ${M_TIME}"
+    echo "================================================"
+
+    if [[ "$DRY_RUN" == "true" ]]; then
+        echo "DRY-RUN: sbatch NOT submitted. Inspect $SBATCH_FILE and re-run without --dry-run."
+        exit 0
+    fi
+
+    echo "Submitting job..."
+    MANIFOLD_OUTPUT=$(sbatch "$SBATCH_FILE") || { echo "Error: sbatch submission failed" >&2; exit 1; }
+    echo "$MANIFOLD_OUTPUT"
+    exit 0
+fi
 
 # ---------------------------------------------------------------------------
 # Read config values

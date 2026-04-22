@@ -1,5 +1,9 @@
 """Group color assignment and palettes for spatial viewers."""
 
+import colorsys
+
+import numpy as np
+
 from xldvp_seg.utils.logging import get_logger
 
 logger = get_logger(__name__)
@@ -113,3 +117,36 @@ def assign_group_colors(slides_data):
             g["color"] = color_map[g["label"]]
 
     return color_map
+
+
+def shuffled_hsv_palette(
+    k: int,
+    *,
+    seed: int = 0,
+    saturation: float = 0.85,
+    value: float = 0.95,
+) -> np.ndarray:
+    """Return (k, 3) uint8 RGB palette with shuffled HSV hues.
+
+    Adjacent indices get dissimilar hues, so neighboring groups in any
+    plot don't visually blur together. Used for manifold-sampling group
+    coloring (1000 distinct groups on a single UMAP).
+
+    Args:
+        k: number of distinct colors to generate.
+        seed: RNG seed for the hue permutation (deterministic).
+        saturation: HSV saturation (0..1), default 0.85.
+        value: HSV value/brightness (0..1), default 0.95.
+
+    Returns:
+        (k, 3) uint8 RGB array.
+    """
+    rng = np.random.default_rng(seed)
+    hues = rng.permutation(k) / k
+    rgb = np.empty((k, 3), dtype=np.uint8)
+    for i, h in enumerate(hues):
+        r, g, b = colorsys.hsv_to_rgb(float(h), saturation, value)
+        rgb[i, 0] = int(r * 255)
+        rgb[i, 1] = int(g * 255)
+        rgb[i, 2] = int(b * 255)
+    return rgb

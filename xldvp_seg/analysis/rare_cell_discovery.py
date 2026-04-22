@@ -136,6 +136,39 @@ class RareCellConfig:
     exclude_channels: tuple[int, ...] = field(default_factory=tuple)
 
 
+@dataclass
+class EmbeddingResult:
+    """Result of :func:`load_and_embed` — wraps the detections + PCA embedding
+    for downstream analyses (manifold sampling, rare-cell discovery, etc.).
+
+    Fields:
+        kept: post-pre-filter detections (aligned row-wise with ``X_pca`` /
+            ``X_scaled``).
+        X_pca: ``(len(kept), n_components)`` float32 PCA embedding.
+        feature_names: column names for the pre-PCA matrix.
+        X_scaled: ``(len(kept), n_features)`` RobustScaler + group-weighted
+            matrix (pre-PCA input).
+        var_explained: cumulative variance captured by ``n_components``.
+        n_components: actual PCs used (≤ ``cfg.max_pcs``).
+        weights_by_group: per-feature-group multiplier applied during scaling
+            (``{}`` if weighting was ``"raw"``).
+        pca_cache_key: 12-char hash identifying the ``X_pca_<hash>.npz`` file
+            on disk (or ``""`` if ``cache_dir`` was ``None``). Downstream
+            consumers that need to find the sibling cache can compute
+            ``cache_dir / f"X_pca_{pca_cache_key}.npz"`` directly instead of
+            re-deriving the hash.
+    """
+
+    kept: list[dict]
+    X_pca: np.ndarray
+    feature_names: list[str]
+    X_scaled: np.ndarray
+    var_explained: float
+    n_components: int
+    weights_by_group: dict[str, float]
+    pca_cache_key: str = ""
+
+
 # ---------------------------------------------------------------------------
 # Step 1 — Quality pre-filter
 # ---------------------------------------------------------------------------
@@ -793,19 +826,7 @@ def _cache_key(feature_names: list[str], n_cells: int, cfg: RareCellConfig) -> s
     return m.hexdigest()[:12]
 
 
-def _atomic_savez(path: Path, **arrays) -> None:
-    """``np.savez`` via temp file + ``os.replace`` so a crash can't leave a
-    half-written cache that crashes ``np.load`` on the next run.
-
-    ``np.savez`` auto-appends ``.npz`` if not already present, so we use the
-    full filename + ``.tmp`` suffix (avoiding the auto-suffix quirk).
-    """
-    tmp = path.with_name(path.name + ".tmp")
-    # Use open file handle: np.savez accepts file-like objects and writes
-    # exactly the requested bytes, so no .npz-append surprise.
-    with open(tmp, "wb") as f:
-        np.savez(f, **arrays)
-    os.replace(tmp, path)
+from xldvp_seg.utils.json_utils import atomic_savez as _atomic_savez  # shared helper
 
 
 def _atomic_save_npz(path: Path, matrix: sparse.csr_matrix) -> None:
@@ -1053,7 +1074,148 @@ def discover_rare_cell_types(
     }
 
 
+# ---------------------------------------------------------------------------
+# Shared helper — load + pre-filter + feature matrix + scale + PCA (no HDBSCAN)
+# ---------------------------------------------------------------------------
+
+
+def load_and_embed(
+    detections: list[dict] | str | Path,
+    cfg: RareCellConfig,
+) -> EmbeddingResult:
+    """Load detections, pre-filter, build feature matrix, log1p, RobustScale +
+    group-weight, and PCA — stopping before HDBSCAN.
+
+    This is the shared front half of :func:`discover_rare_cell_types` packaged
+    for downstream analyses (manifold sampling, rare-cell review, etc.) that
+    need the same embedding but not the density clustering.
+
+    Cache-aware: reuses the ``X_pca_<hash>.npz`` cache written by
+    :func:`discover_rare_cell_types` when present (same cache-key logic as
+    :func:`_cache_key`), and writes one on miss if ``cfg.cache_dir`` is set.
+
+    Args:
+        detections: list of detection dicts, OR a path (str / Path) to a JSON
+            file loaded via :func:`~xldvp_seg.utils.json_utils.fast_json_load`.
+        cfg: :class:`RareCellConfig` — uses ``feature_groups``,
+            ``exclude_channels``, pre-filter thresholds, ``max_pcs``,
+            ``pca_variance``, ``feature_group_weights``, ``use_gpu``, ``seed``,
+            and ``cache_dir``.
+
+    Returns:
+        :class:`EmbeddingResult` with kept detections + PCA embedding.
+
+    Raises:
+        ConfigError: too few cells survived the pre-filter (requires
+            ``≥ 2 × cfg.min_cluster_size``), or no features matched the
+            requested groups.
+    """
+    # --- 0. Load (if path) ---
+    if isinstance(detections, (str, Path)):
+        from xldvp_seg.utils.json_utils import fast_json_load
+
+        logger.info("Loading detections from %s", detections)
+        detections = fast_json_load(str(detections))
+    if not isinstance(detections, list):
+        raise ConfigError(
+            f"detections must be a list of dicts or a path; got {type(detections).__name__}"
+        )
+
+    # --- 1. Pre-filter ---
+    logger.info("Pre-filtering %d detections", len(detections))
+    kept, pf_stats, _drop_reasons = pre_filter_cells(detections, cfg)
+    logger.info(
+        "Pre-filter: kept %d/%d (dropped: n_nuclei=%d, nc=%d, overlap=%d, area=%d)",
+        pf_stats["kept"],
+        pf_stats["input"],
+        pf_stats["dropped_n_nuclei"],
+        pf_stats["dropped_nc_ratio"],
+        pf_stats["dropped_overlap"],
+        pf_stats["dropped_area"],
+    )
+    # NOTE: the HDBSCAN-specific ``kept >= 2 * min_cluster_size`` guard lives
+    # in :func:`discover_rare_cell_types` — it's not a universal requirement
+    # of the embedding pipeline, and other callers (e.g. manifold sampling)
+    # legitimately use a much smaller anchor count.
+
+    # --- 2. Feature matrix (drop rows with missing/non-finite values) ---
+    X_raw, feature_names, valid_indices = build_feature_matrix(
+        kept, cfg.feature_groups, cfg.exclude_channels
+    )
+    if len(valid_indices) < len(kept):
+        kept = [kept[i] for i in valid_indices]
+
+    # --- 3. log1p on scale-spanning columns ---
+    X_log = log_transform_copy(X_raw, feature_names)
+
+    # --- 4. Scale + PCA (with cache) ---
+    ckey = _cache_key(feature_names, len(kept), cfg)
+    X_pca: np.ndarray | None = None
+    X_scaled: np.ndarray | None = None
+    var_explained = 0.0
+    n_components = 0
+    weights_by_group: dict[str, float] = {}
+    cache_hit = False
+    if cfg.cache_dir is not None:
+        cfg.cache_dir.mkdir(parents=True, exist_ok=True)
+        pca_cache = cfg.cache_dir / f"X_pca_{ckey}.npz"
+        if pca_cache.exists():
+            try:
+                data = np.load(pca_cache, allow_pickle=False)
+                X_pca = data["X_pca"]
+                X_scaled = data["X_scaled"]
+                var_explained = float(data["var_explained"])
+                n_components = int(data["n_components"])
+                # weights_by_group is stored as parallel (names, values) arrays
+                # so we avoid allow_pickle=True (safer + faster). Older caches
+                # without the keys simply recompute via weights_by_group={}.
+                if "weights_group_names" in data.files and "weights_group_values" in data.files:
+                    names = [str(s) for s in data["weights_group_names"]]
+                    values = [float(v) for v in data["weights_group_values"]]
+                    weights_by_group = dict(zip(names, values))
+                cache_hit = True
+                logger.info(
+                    "PCA cache hit: %s (%d components, %.1f%% var)",
+                    pca_cache.name,
+                    n_components,
+                    100 * var_explained,
+                )
+            except (OSError, ValueError, KeyError) as e:
+                logger.warning("PCA cache load failed (%s) — recomputing", e)
+                cache_hit = False
+    if not cache_hit:
+        X_pca, var_explained, n_components, X_scaled, weights_by_group = scale_and_pca(
+            X_log, cfg, feature_names
+        )
+        if cfg.cache_dir is not None:
+            _names = np.array(list(weights_by_group.keys()), dtype="U32")
+            _values = np.array(list(weights_by_group.values()), dtype=np.float32)
+            _atomic_savez(
+                cfg.cache_dir / f"X_pca_{ckey}.npz",
+                X_pca=X_pca,
+                X_scaled=X_scaled,
+                var_explained=np.float64(var_explained),
+                n_components=np.int64(n_components),
+                weights_group_names=_names,
+                weights_group_values=_values,
+            )
+
+    assert X_pca is not None and X_scaled is not None
+
+    return EmbeddingResult(
+        kept=kept,
+        X_pca=X_pca,
+        feature_names=feature_names,
+        X_scaled=X_scaled,
+        var_explained=var_explained,
+        n_components=n_components,
+        weights_by_group=weights_by_group,
+        pca_cache_key=ckey if cfg.cache_dir is not None else "",
+    )
+
+
 __all__ = [
+    "EmbeddingResult",
     "RareCellConfig",
     "apply_group_weights",
     "build_delaunay_knn",  # alias, backward-compat
@@ -1062,6 +1224,7 @@ __all__ = [
     "compute_centroids",
     "compute_stability",
     "discover_rare_cell_types",
+    "load_and_embed",
     "log_transform_copy",
     "log_transform_inplace",  # alias, backward-compat
     "morans_i_vectorized",

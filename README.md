@@ -321,6 +321,7 @@ For rare large cells (e.g., MKs), single-cell-per-well is sometimes feasible —
 | Combined region + UMAP viewer | `scripts/combined_region_viewer.py` | 2-pane HTML: whole-slide region map (click to select) + UMAP/clustering side-by-side |
 | Global cluster + spatial divergence | `scripts/global_cluster_spatial_viewer.py` | Inverse: cluster ALL cells globally, rank by spatial-divergence metrics (`focal_multimodal`, `k_90`) to find "same feature profile, different anatomy" cell populations |
 | Morphological cluster discovery | `xlseg discover-rare-cells` / `scripts/discover_rare_cell_types.py` | HDBSCAN in PCA space with reciprocal-best-match Jaccard stability + vectorized Moran's I + Ward taxonomy. Per-group 1/√(dim) weighting so SAM2 doesn't drown morphology; `-2` sentinel distinguishes pre-filter drops from HDBSCAN noise. Pairs with `global_cluster_spatial_viewer.py --rare-mode` for clickable-dendrogram review. See [docs/CLUSTER_DISCOVERY.md](docs/CLUSTER_DISCOVERY.md) |
+| Manifold sampling (LMD pools) | `xlseg manifold-sample` / `scripts/manifold_sample.py` | FPS + Voronoi partition the whole population into K morphologically-coherent "manifold groups", then Ward on xy within each `(group, organ)` pair emits spatially-tight replicate pools at a fixed tissue-area budget (default 2500 µm² ≈ 25 cells). Same embedding as rare-cell discovery; output is LMD-ready pools, not cluster labels. Pairs with `global_cluster_spatial_viewer.py --rare-mode` for review and `xlseg export-lmd` for Leica XML. See [docs/MANIFOLD_SAMPLING.md](docs/MANIFOLD_SAMPLING.md) |
 | Per-region multinucleation | `scripts/region_multinuc_plot.py` | Histogram + KDE + Tukey fences + GMM(k=2 via BIC) outlier detection |
 | Transcript export | `scripts/export_transcript.py` | Claude Code session JSONL → markdown/HTML (curate + present modes with PNG export) |
 
@@ -394,12 +395,12 @@ Chains detection → marker classification → nuclei counting → HTML viewer a
 xldvp_seg/              # Main package (pip install -e .)
 ├── api/                   # Scanpy-style API (tl primary, pl.umap + io.to_spatialdata implemented)
 ├── classification/        # Vessel type classifiers, feature selection
-├── cli/                   # xlseg CLI entry point (14 subcommands)
+├── cli/                   # xlseg CLI entry point (15 subcommands)
 ├── core/                  # SlideAnalysis central state object + detection schema
 ├── detection/strategies/  # 8 strategies, self-registered via @register_strategy
 ├── io/                    # CZI loader, HTML export (6 modules), OME-Zarr, SpatialData export
 ├── lmd/                   # Well plates, contour processing (adaptive RDP + dilation)
-├── analysis/              # 13 modules: marker classification, clustering (whole-slide + per-region), spatial networks, patterns, sampling, OmicLinker, aggregation, nuclear counting, vessel characterization, region segmentation, background correction, morphological cluster discovery
+├── analysis/              # 14 modules: marker classification, clustering (whole-slide + per-region), spatial networks, patterns, sampling, OmicLinker, aggregation, nuclear counting, vessel characterization, region segmentation, background correction, morphological cluster discovery, manifold sampling (LMD replicate pools)
 ├── visualization/         # Reusable HTML visualization: fluorescence, colors, encoding, data loading, HTML builder, graph patterns, 17 JS components
 ├── training/              # Classifier training: feature loading, annotation matching
 ├── models/                # Model registry (SAM2, ResNet, DINOv2, brightfield FMs)
@@ -452,6 +453,7 @@ make format                 # Auto-fix formatting
 | [docs/NMJ_PIPELINE_GUIDE.md](docs/NMJ_PIPELINE_GUIDE.md) | NMJ detection workflow |
 | [docs/VESSEL_COMMUNITY_ANALYSIS.md](docs/VESSEL_COMMUNITY_ANALYSIS.md) | Vessel structure analysis |
 | [docs/CLUSTER_DISCOVERY.md](docs/CLUSTER_DISCOVERY.md) | Morphological cluster discovery (HDBSCAN + Ward taxonomy) |
+| [docs/MANIFOLD_SAMPLING.md](docs/MANIFOLD_SAMPLING.md) | Manifold sampling for LMD replicate pools (FPS + Voronoi + Ward) |
 
 ---
 

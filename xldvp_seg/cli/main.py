@@ -97,6 +97,10 @@ def _run_discover_rare_cells(remaining):
     _run_script("scripts/discover_rare_cell_types.py", remaining)
 
 
+def _run_manifold_sample(remaining):
+    _run_script("scripts/manifold_sample.py", remaining)
+
+
 def _run_download_models(remaining):
     """Download model checkpoints."""
     import argparse as _ap
@@ -154,6 +158,7 @@ _DISPATCH = {
     "download-models": _run_download_models,
     "qc": _run_qc,
     "discover-rare-cells": _run_discover_rare_cells,
+    "manifold-sample": _run_manifold_sample,
 }
 
 
@@ -195,6 +200,10 @@ def cli():
     subparsers.add_parser(
         "discover-rare-cells",
         help="Discover rare cell populations (HDBSCAN + Ward taxonomy)",
+    )
+    subparsers.add_parser(
+        "manifold-sample",
+        help="Manifold-spanning LMD replicate pool builder (FPS + Ward)",
     )
 
     args, remaining = parser.parse_known_args()

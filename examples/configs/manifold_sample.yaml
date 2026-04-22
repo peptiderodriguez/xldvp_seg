@@ -1,0 +1,54 @@
+# Example config — update paths for your environment
+# Manifold-sampling pipeline for LMD replicate pool generation.
+# Inputs: detection JSON (with optional organ_id) + CZI slide.
+# Outputs: 1000-group FPS partition, spatial-replicate pools, linked viewer HTML.
+name: n45_manifold_example
+mode: manifold                              # dispatch selector for run_pipeline.sh
+
+# Input data
+detections: /path/to/cell_detections_with_organs.json
+czi_path: /path/to/slide.czi
+output_dir: /path/to/output
+
+# Feature pipeline (feeds into load_and_embed -> PCA)
+feature_groups: [shape, color, sam2]
+feature_group_weights: raw                  # or "equal" to prevent SAM2 dominating
+max_pcs: 30
+pca_variance: 0.95
+seed: 42
+
+# Level 1 — manifold partition (FPS + Voronoi)
+manifold_sampling:
+  k_anchors: 1000
+  target_area_um2: 2500                     # = 25 cell-equivalents @ 100 um^2/cell
+  target_n_cells: null                      # alternative target; null = area-only
+  outlier_method: global_pct                # or per_group_mad
+  outlier_threshold: 98.0
+  include_partial: false
+  cap_per_group: 5
+  priority: anchor_dist                     # anchor_dist | spatial_tight | composite
+  min_spread_replicate_radii: 2.0
+
+# Level 2 — spatial splitter (within each manifold group x organ)
+organ_grouping:
+  field: organ_id                           # per-cell field name; dataset-agnostic
+  drop_value: 0                             # cells with this value are excluded
+  required: false                           # false -> skip Level 2 if field missing
+
+# Viewer generation
+viewers:
+  thumbnail_channels: [2, 4]                # indices resolved via channel_map
+  thumbnail_scale: 0.0625                   # 1/16 — passed as scale_factor to read_czi_thumbnail_channels
+  umap_subsample: 200000
+  linked: true
+  umap_3d: true
+  selected_only_on_slide: true
+
+# SLURM
+slurm:
+  partition: p.hpcl93
+  exclusive: true
+  mem: 0                                    # 0 = all node memory
+  gres: gpu:1
+  cpus_per_task: 32
+  time: "01:30:00"
