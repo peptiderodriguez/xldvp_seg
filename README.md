@@ -200,7 +200,7 @@ The pipeline follows a **detect-once, classify-later** design. All features are 
 |------|--------|----------|
 | **Cell** | Cellpose 2-channel (cyto+nuc) + SAM2 | Generic cell detection |
 | **NMJ** | Percentile threshold + morphology + watershed | Neuromuscular junctions |
-| **MK** | SAM2 auto-mask + size filter | Bone marrow megakaryocytes |
+| **MK** | SAM2 auto-mask + size filter; **RGB brightfield CZIs supported**; set `tile_overlap: 0.25` in YAML for large cells | Bone marrow megakaryocytes |
 | **Vessel** | SMA+ ring detection, 3-contour hierarchy | Blood vessel morphometry (7 vessel types) |
 | **Islet** | Cellpose membrane+nuclear + markers | Pancreatic islet cells |
 | **Tissue Pattern** | Cellpose + spatial frequency analysis | Brain FISH, coronal sections |
@@ -312,6 +312,7 @@ For rare large cells (e.g., MKs), single-cell-per-well is sometimes feasible —
 | SpatialData export | `scripts/convert_to_spatialdata.py` | scverse zarr (squidpy, scanpy) |
 | Nuclear counting | `--count-nuclei` (default ON) | Integrated in detection; standalone: `scripts/count_nuclei_per_cell.py` |
 | Quality filter | `scripts/quality_filter_detections.py` | Heuristic filter (no annotation needed) |
+| Post-hoc mask refinement | `scripts/refine_detection_masks.py` | Adaptive per-cell intensity-based boundary peeling (removes bleed into white/empty space) — recomputes contours + shape features without re-running detection. Generic across cell types. |
 | One-command viz | `scripts/view_slide.py` | Classify → cluster → viewer → serve |
 | ROI detection | `examples/islet/`, `examples/tma/` | Pre-detection: find ROIs → detect within ROIs only. Post-detection: draw ROIs in viewer → filter/export selected cells |
 | Block-face registration | VALIS + SAM2 | Register gross tissue photo to fluorescence CZI, auto-segment organs with recursive SAM2, assign detections to anatomical regions for organ-specific LMD. See `docs/BLOCKFACE_REGISTRATION.md` |
@@ -319,6 +320,7 @@ For rare large cells (e.g., MKs), single-cell-per-well is sometimes feasible —
 | Per-region PCA/UMAP | `scripts/region_pca_viewer.py` | PCA → UMAP with 4 clusterings (kmeans-elbow, Leiden on PCA-kNN, HDBSCAN on PCA, HDBSCAN on UMAP); interactive HTML with color toggle (core: `xldvp_seg.analysis.region_clustering`) |
 | Combined region + UMAP viewer | `scripts/combined_region_viewer.py` | 2-pane HTML: whole-slide region map (click to select) + UMAP/clustering side-by-side |
 | Global cluster + spatial divergence | `scripts/global_cluster_spatial_viewer.py` | Inverse: cluster ALL cells globally, rank by spatial-divergence metrics (`focal_multimodal`, `k_90`) to find "same feature profile, different anatomy" cell populations |
+| Morphological cluster discovery | `xlseg discover-rare-cells` / `scripts/discover_rare_cell_types.py` | HDBSCAN in PCA space with reciprocal-best-match Jaccard stability + vectorized Moran's I + Ward taxonomy. Per-group 1/√(dim) weighting so SAM2 doesn't drown morphology; `-2` sentinel distinguishes pre-filter drops from HDBSCAN noise. Pairs with `global_cluster_spatial_viewer.py --rare-mode` for clickable-dendrogram review. See [docs/CLUSTER_DISCOVERY.md](docs/CLUSTER_DISCOVERY.md) |
 | Per-region multinucleation | `scripts/region_multinuc_plot.py` | Histogram + KDE + Tukey fences + GMM(k=2 via BIC) outlier detection |
 | Transcript export | `scripts/export_transcript.py` | Claude Code session JSONL → markdown/HTML (curate + present modes with PNG export) |
 
@@ -392,12 +394,12 @@ Chains detection → marker classification → nuclei counting → HTML viewer a
 xldvp_seg/              # Main package (pip install -e .)
 ├── api/                   # Scanpy-style API (tl primary, pl.umap + io.to_spatialdata implemented)
 ├── classification/        # Vessel type classifiers, feature selection
-├── cli/                   # xlseg CLI entry point (13 subcommands)
+├── cli/                   # xlseg CLI entry point (14 subcommands)
 ├── core/                  # SlideAnalysis central state object + detection schema
 ├── detection/strategies/  # 8 strategies, self-registered via @register_strategy
 ├── io/                    # CZI loader, HTML export (6 modules), OME-Zarr, SpatialData export
 ├── lmd/                   # Well plates, contour processing (adaptive RDP + dilation)
-├── analysis/              # 12 modules: marker classification, clustering (whole-slide + per-region), spatial networks, patterns, sampling, OmicLinker, aggregation, nuclear counting, vessel characterization, region segmentation, background correction
+├── analysis/              # 13 modules: marker classification, clustering (whole-slide + per-region), spatial networks, patterns, sampling, OmicLinker, aggregation, nuclear counting, vessel characterization, region segmentation, background correction, morphological cluster discovery
 ├── visualization/         # Reusable HTML visualization: fluorescence, colors, encoding, data loading, HTML builder, graph patterns, 17 JS components
 ├── training/              # Classifier training: feature loading, annotation matching
 ├── models/                # Model registry (SAM2, ResNet, DINOv2, brightfield FMs)
@@ -408,7 +410,7 @@ xldvp_seg/              # Main package (pip install -e .)
 
 scripts/                   # 44 reusable CLI tools
 examples/                  # Project-specific analyses by experiment
-tests/                     # pytest suite (1169 tests across 56 files — run `make test`)
+tests/                     # pytest suite (1206 tests across 59 files — run `make test`)
 ```
 
 ## Key Design Decisions
@@ -449,6 +451,7 @@ make format                 # Auto-fix formatting
 | [docs/LMD_EXPORT_GUIDE.md](docs/LMD_EXPORT_GUIDE.md) | LMD export reference |
 | [docs/NMJ_PIPELINE_GUIDE.md](docs/NMJ_PIPELINE_GUIDE.md) | NMJ detection workflow |
 | [docs/VESSEL_COMMUNITY_ANALYSIS.md](docs/VESSEL_COMMUNITY_ANALYSIS.md) | Vessel structure analysis |
+| [docs/CLUSTER_DISCOVERY.md](docs/CLUSTER_DISCOVERY.md) | Morphological cluster discovery (HDBSCAN + Ward taxonomy) |
 
 ---
 

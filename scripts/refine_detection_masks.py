@@ -1,0 +1,301 @@
+#!/usr/bin/env python3
+"""Post-hoc mask refinement for an existing detection run.
+
+Applies ``xldvp_seg.utils.mask_cleanup.refine_mask_intensity`` to every
+per-tile HDF5 mask, recomputes ``contour_px`` / ``contour_um`` /
+``area`` / ``area_um2`` / ``solidity`` / ``circularity`` from the refined mask,
+and writes a new detections JSON with the updated geometry.
+
+Works for any cell type that has per-tile ``{cell_type}_masks.h5`` files
+under ``<run_dir>/tiles/tile_*/``. Generic — no MK-specific assumptions.
+
+The refinement is non-uniform and adaptive:
+  - Computes a 90th-percentile intensity threshold from the *interior* of
+    each mask.
+  - Iteratively peels boundary pixels that are brighter than that threshold
+    (i.e. bleed into bright/empty space).
+  - Size guard: reverts if refinement removes >50% of original area.
+  - Unchanged for cells where no boundary is brighter than interior.
+
+Usage:
+    python scripts/refine_detection_masks.py \\
+        --run-dir /path/to/<slide>/<timestamp>_100pct \\
+        --czi-path /path/to/slide.czi \\
+        --cell-type mk \\
+        [--workers 16] \\
+        [--output /path/to/<cell_type>_detections_refined.json]
+"""
+
+import argparse
+import sys
+import time
+from concurrent.futures import ProcessPoolExecutor, as_completed
+from pathlib import Path
+
+import h5py
+import numpy as np
+
+try:
+    import hdf5plugin  # noqa: F401 — LZ4 support for segmentation.h5
+except ImportError:
+    pass
+
+import cv2
+
+from xldvp_seg.io.czi_loader import get_loader
+from xldvp_seg.utils.json_utils import atomic_json_dump, fast_json_load
+from xldvp_seg.utils.logging import get_logger, setup_logging
+from xldvp_seg.utils.mask_cleanup import recompute_mask_features, refine_mask_intensity
+
+logger = get_logger(__name__)
+
+
+def _find_tile_mask_files(run_dir: Path, cell_type: str) -> list[Path]:
+    """Find every {cell_type}_masks.h5 under run_dir/tiles/tile_*/."""
+    tiles_dir = run_dir / "tiles"
+    return sorted(tiles_dir.glob(f"tile_*/{cell_type}_masks.h5"))
+
+
+def _parse_tile_origin(mask_file: Path) -> tuple[int, int]:
+    """Tile directory name encodes origin as ``tile_{x}_{y}``."""
+    parts = mask_file.parent.name.split("_")
+    return int(parts[1]), int(parts[2])
+
+
+def _load_tile_rgb(loader, tile_x: int, tile_y: int, tile_h: int, tile_w: int, channel: int):
+    """Read a tile image for intensity reference. Uses RAM-loaded channel data
+    (via loader.channel_data) which handles both 2D grayscale uint16 and
+    3D RGB uint8 transparently.
+    """
+    rel_x = tile_x - loader.x_start
+    rel_y = tile_y - loader.y_start
+    data = loader._channel_data.get(channel)
+    if data is None:
+        tile = loader.get_tile(tile_x, tile_y, max(tile_h, tile_w), channel=channel)
+        return tile
+    return data[rel_y : rel_y + tile_h, rel_x : rel_x + tile_w]
+
+
+def _refine_one_tile(task: dict) -> dict:
+    """Process one tile's masks. Returns per-detection updates keyed by UID.
+
+    Top-level function so ProcessPoolExecutor can pickle it.
+    """
+    mask_file = Path(task["mask_file"])
+    czi_path = task["czi_path"]
+    channel = task["channel"]
+    pixel_size_um = task["pixel_size_um"]
+    tile_x, tile_y = task["tile_origin"]
+    det_uids = task["det_uids"]  # {mask_label: uid} for this tile's detections
+
+    # Lazy loader (re-opened in each process; cheap since no load_to_ram)
+    loader = get_loader(czi_path, load_to_ram=False, channel=channel)
+
+    # Load mask label array
+    with h5py.File(mask_file, "r") as hf:
+        if "masks" in hf:
+            masks = hf["masks"][:]
+        elif "labels" in hf:
+            masks = hf["labels"][:]
+        else:
+            return {"updates": {}, "tile": f"{tile_x}_{tile_y}", "skipped": "no masks dataset"}
+        if masks.ndim == 3 and masks.shape[0] == 1:
+            masks = masks[0]
+
+    tile_h, tile_w = masks.shape[:2]
+    tile = _load_tile_rgb(loader, tile_x, tile_y, tile_h, tile_w, channel)
+    if tile is None or tile.size == 0:
+        return {"updates": {}, "tile": f"{tile_x}_{tile_y}", "skipped": "empty tile"}
+
+    updates: dict[str, dict] = {}
+    unique_labels = np.unique(masks)
+    unique_labels = unique_labels[unique_labels > 0]
+
+    for label in unique_labels:
+        uid = det_uids.get(int(label))
+        if uid is None:
+            continue
+
+        mask = masks == label
+        orig_area = int(mask.sum())
+        if orig_area == 0:
+            continue
+
+        # Apply intensity-based refinement
+        refined = refine_mask_intensity(mask, tile)
+        if not refined.any():
+            continue
+
+        # Recompute shape features on the refined mask
+        feats = recompute_mask_features(refined, pixel_size_um=pixel_size_um)
+
+        # Extract contour in tile-local coords, shift to global (stage) coords
+        contour_local = _contour_from_mask(refined)
+        if contour_local is None:
+            continue
+        # contour_local is [X, Y] tile-local; shift to global stage coords
+        contour_global = contour_local.astype(np.float64).copy()
+        contour_global[:, 0] += tile_x
+        contour_global[:, 1] += tile_y
+
+        # Global centroid
+        cx_local, cy_local = feats["centroid_xy"]
+        global_cx = cx_local + tile_x
+        global_cy = cy_local + tile_y
+
+        updates[uid] = {
+            "contour_px": contour_global.astype(np.int32).tolist(),
+            "area": feats["area_px"],
+            "area_um2": feats["area_um2"],
+            "solidity": feats["solidity"],
+            "circularity": feats["circularity"],
+            "refined_area_fraction": feats["area_px"] / orig_area if orig_area > 0 else 1.0,
+            "global_center": [float(global_cx), float(global_cy)],
+        }
+
+    # Also write the refined mask back so downstream steps see it.
+    # (Skipped here to keep the tool read-only; can be added with --write-masks.)
+
+    return {"updates": updates, "tile": f"{tile_x}_{tile_y}", "n_refined": len(updates)}
+
+
+def _contour_from_mask(binary_mask: np.ndarray):
+    """Largest external contour from a binary mask, [X, Y] tile-local coords."""
+    contours, _ = cv2.findContours(
+        binary_mask.astype(np.uint8), cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_NONE
+    )
+    if not contours:
+        return None
+    largest = max(contours, key=cv2.contourArea)
+    return largest.reshape(-1, 2)
+
+
+def main():
+    parser = argparse.ArgumentParser(
+        description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter
+    )
+    parser.add_argument("--run-dir", required=True, help="Detection output dir (contains tiles/)")
+    parser.add_argument("--czi-path", required=True, help="CZI file for intensity reference")
+    parser.add_argument(
+        "--cell-type", required=True, help="Cell type (for *_detections.json / *_masks.h5)"
+    )
+    parser.add_argument(
+        "--channel", type=int, default=0, help="CZI channel for intensity (default 0)"
+    )
+    parser.add_argument(
+        "--output",
+        default=None,
+        help="Output JSON (default <run_dir>/<cell_type>_detections_refined.json)",
+    )
+    parser.add_argument(
+        "--workers", type=int, default=16, help="Parallel tile workers (default 16)"
+    )
+    args = parser.parse_args()
+    setup_logging(level="INFO")
+
+    run_dir = Path(args.run_dir)
+    det_path = run_dir / f"{args.cell_type}_detections.json"
+    if not det_path.exists():
+        logger.error(f"Detections JSON not found: {det_path}")
+        sys.exit(1)
+
+    out_path = (
+        Path(args.output) if args.output else run_dir / f"{args.cell_type}_detections_refined.json"
+    )
+
+    logger.info(f"Loading detections from {det_path}")
+    detections = fast_json_load(str(det_path))
+    logger.info(f"  {len(detections):,} detections")
+
+    # Load pixel size from CZI (authoritative — do not trust stale det JSON)
+    loader = get_loader(args.czi_path, load_to_ram=False, channel=args.channel)
+    pixel_size_um = loader.get_pixel_size()
+    logger.info(f"  Pixel size: {pixel_size_um} um/px (from CZI)")
+
+    # Group detections by tile_origin for batch per-tile processing
+    by_tile: dict[tuple[int, int], dict[int, str]] = {}
+    for det in detections:
+        to = det.get("tile_origin")
+        label = det.get("mask_label") or det.get("tile_mask_label")
+        uid = det.get("uid")
+        if to is None or label is None or uid is None:
+            continue
+        tile_key = (int(to[0]), int(to[1]))
+        by_tile.setdefault(tile_key, {})[int(label)] = uid
+    logger.info(f"  {len(by_tile)} tiles with mask labels")
+
+    # Build task list — one per tile
+    mask_files = _find_tile_mask_files(run_dir, args.cell_type)
+    logger.info(f"  {len(mask_files)} mask files on disk")
+
+    tasks = []
+    for mf in mask_files:
+        tx, ty = _parse_tile_origin(mf)
+        det_uids = by_tile.get((tx, ty))
+        if not det_uids:
+            continue
+        tasks.append(
+            {
+                "mask_file": str(mf),
+                "czi_path": args.czi_path,
+                "channel": args.channel,
+                "pixel_size_um": pixel_size_um,
+                "tile_origin": (tx, ty),
+                "det_uids": det_uids,
+            }
+        )
+    logger.info(f"Processing {len(tasks)} tiles with {args.workers} workers...")
+
+    # Run refinement
+    all_updates: dict[str, dict] = {}
+    t0 = time.time()
+    with ProcessPoolExecutor(max_workers=args.workers) as pool:
+        futures = {pool.submit(_refine_one_tile, t): t for t in tasks}
+        done = 0
+        for future in as_completed(futures):
+            res = future.result()
+            done += 1
+            all_updates.update(res.get("updates", {}))
+            if done % 50 == 0:
+                elapsed = time.time() - t0
+                rate = done / elapsed if elapsed > 0 else 0
+                eta = (len(tasks) - done) / rate if rate > 0 else 0
+                logger.info(
+                    f"  [{done}/{len(tasks)}] refined={len(all_updates):,} rate={rate:.1f}/s eta={eta:.0f}s"
+                )
+    elapsed = time.time() - t0
+    logger.info(
+        f"Refined {len(all_updates):,} masks in {elapsed:.1f}s ({len(tasks)/elapsed:.1f} tiles/s)"
+    )
+
+    # Merge updates into detections
+    area_deltas = []
+    for det in detections:
+        uid = det.get("uid")
+        upd = all_updates.get(uid)
+        if upd is None:
+            continue
+        orig_area = det.get("area", 0)
+        det.update(upd)
+        # Also update um-scale contour if present
+        if "contour_um" in det:
+            det["contour_um"] = (
+                np.array(det["contour_px"], dtype=np.float64) * pixel_size_um
+            ).tolist()
+        if orig_area > 0 and upd.get("area"):
+            area_deltas.append(upd["area"] / orig_area)
+
+    if area_deltas:
+        area_deltas = np.array(area_deltas)
+        logger.info(
+            f"Area change: mean={area_deltas.mean():.3f}x, median={np.median(area_deltas):.3f}x, "
+            f"min={area_deltas.min():.3f}x, max={area_deltas.max():.3f}x"
+        )
+
+    logger.info(f"Writing refined detections to {out_path}")
+    atomic_json_dump(detections, out_path)
+    logger.info(f"Done. {len(all_updates):,} / {len(detections):,} detections refined.")
+
+
+if __name__ == "__main__":
+    main()

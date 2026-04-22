@@ -59,6 +59,7 @@ nav:
       - Vessel Analysis: VESSEL_COMMUNITY_ANALYSIS.md
       - Vessel Lumen Threshold Pipeline: VESSEL_LUMEN_THRESHOLD_PIPELINE.md
       - Block-Face Registration: BLOCKFACE_REGISTRATION.md
+      - Morphological Cluster Discovery: CLUSTER_DISCOVERY.md
   - Contributing: contributing.md
   - Changelog: changelog.md
 

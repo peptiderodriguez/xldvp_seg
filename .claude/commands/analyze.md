@@ -189,6 +189,8 @@ This replaces manual `--channel`, `--cellpose-input-channels`, and `--marker-cha
 - **Segmenter:** `--segmenter {cellpose,instanseg}` (default cellpose). InstanSeg is a lightweight 3.8M-param alternative; requires `pip install -e .[instanseg]`.
 - **Dedup:** `--dedup-method mask_overlap` (default, pixel-exact) or `iou_nms` (Shapely STRtree, faster with >100K detections). `--iou-threshold 0.2` for IoU.
   - Note: IoU and overlap-fraction are different metrics — IoU may miss size-mismatched overlaps. Benchmark before switching default.
+- **Tile overlap:** `tile_overlap: 0.25` in YAML (or `--tile-overlap 0.25`) for large cells (MK ≥100µm, multinucleated hepatocytes). Default 0.10 is smaller than MK diameter → cells bisected at tile edges. Dedup only merges TRUE duplicates, not bisected cells, so you end up with clipped contours. Cross-tile merging exists only for vessel strategy today. Observed: 25% overlap on 16 MK slides recovered ~10% more detections vs 10%.
+- **RGB brightfield CZIs** (H&E-style, single packed-RGB channel): supported automatically for MK (+ cell). Pipeline detects RGB and switches to `(H, W, 3)` uint8 SHM, brightfield Otsu tissue detection, and skips fluorescence-specific preprocessing. Set `load_channels: "0"` — no additional config needed.
 - **Nuclear counting:** ON by default when a nuclear channel exists (zero extra I/O). Ask via AskUserQuestion: *"Nuclear counting adds n_nuclei, N:C ratio, per-nucleus features. Keep on?"* Options: "Keep (recommended)" / "Disable (`--no-count-nuclei`)". Skipped automatically if no nuclear channel.
 - **Marker classification shortcut:** `--marker-snr-channels "SMA:1,CD31:3"` (SNR≥1.5 during detection, zero extra cost — replaces separate markers step). Requires `--all-channels`.
 
@@ -358,7 +360,20 @@ PYTHONPATH=$REPO $XLDVP_PYTHON $REPO/scripts/regenerate_html.py \
 ```
 The viewer includes per-channel R/G/B toggle buttons, contour overlay toggle, and keyboard navigation (Y/N/U for annotation). This is the standard visualization for all pipeline outputs.
 
-For small detections (NfL pieces, region splits), use `--crop-context-factor 4.0 --contour-thickness 3` for more tissue context and visible contours. For standard cells, the default `2.0` context factor works well.
+For small detections (NfL pieces, region splits), use `--crop-context-factor 4.0 --contour-thickness 3` for more tissue context and visible contours. For standard cells, the default `2.0` context factor works well. Contour thickness now **auto-scales with rendered crop size** (floor = `--contour-thickness`) so big cells get proportionally thicker outlines.
+
+**Step 10c3 — Post-hoc mask refinement (optional, recommended for brightfield).** If masks look like they have white/empty-space bleed (common in MK detection where cells near bone/marrow cavities get extra bright pixels included), apply the refinement tool. It's generic across cell types — loads per-tile `segmentation.h5`, applies adaptive interior-vs-boundary intensity peeling, recomputes contours + shape features, writes `<cell_type>_detections_refined.json`. No re-detection needed.
+
+```bash
+$XLDVP_PYTHON $REPO/scripts/refine_detection_masks.py \
+    --run-dir <slide_run_dir> \
+    --czi-path <czi> \
+    --cell-type mk \
+    --channel 0 \
+    --workers 32
+```
+
+Multi-slide: submit as a SLURM array, one task per slide. Typical: mean 1–5% area reduction, cells with no bleed unchanged (size guard reverts if refinement would remove >50%).
 
 **Step 10d — Nuclear counting (ON by default).** Nuclear counting runs automatically during detection (Phase 4) when a nuclear channel is available — no extra I/O. If the user disabled it in Step 8, or wants to add it to an existing run, use the standalone script:
 
@@ -1207,12 +1222,13 @@ Reference tables — introduce capabilities as they become relevant, don't list 
 | **Contour viewer** | Polygon overlay on fluorescence (vessel lumens, cell boundaries) | `scripts/generate_contour_viewer.py` |
 | **Tissue overlay** | Fluorescence + cells + ROI + LMD export | `scripts/generate_tissue_overlay.py` |
 | **Nuclear count** | Nuclei per cell (morph + SAM2 per nucleus) | `--count-nuclei` (default ON) or `scripts/count_nuclei_per_cell.py` |
+| **Post-hoc mask refinement** | Adaptive per-cell intensity-based boundary peeling (removes white/bleed pixels). Generic across cell types. | `scripts/refine_detection_masks.py --run-dir ... --czi-path ... --cell-type ...` |
 | **Region detection** | Percentile-threshold → cleanup → equal-area split → features → LMD | `scripts/detect_regions_for_lmd.py` |
 | **Region splitting** | Watershed split large existing regions | `scripts/split_regions_for_lmd.py` |
 | **Fluor-native region segmentation** | SAM2 on fluorescence thumbnails → per-cell organ assignment → interactive viewer. Preferred over registration for organ-level analysis. | `scripts/segment_regions.py` → `assign_cells_to_regions.py` → `generate_region_viewer.py` (core: `xldvp_seg.analysis.region_segmentation`) |
 | **Per-region PCA/UMAP** | PCA → UMAP per region with 4 clusterings (kmeans-elbow, Leiden on PCA-kNN, HDBSCAN-PCA, HDBSCAN-UMAP); HTML with color-toggle | `scripts/region_pca_viewer.py`, `scripts/combined_region_viewer.py` (2-pane: spatial map + UMAP, click region → UMAP) (core: `xldvp_seg.analysis.region_clustering`) |
 | **Global cluster + spatial divergence** | Inverse of per-region: clusters ALL nucleated cells globally, then ranks by spatial-divergence metrics (`focal_multimodal`, `k_90`, entropy) to find "same feature profile, different anatomy" populations | `scripts/global_cluster_spatial_viewer.py` |
-| **Rare cell-population discovery** | HDBSCAN (≥1000-cell populations) + reciprocal-best-match Jaccard stability + Moran's I + Ward taxonomy. Per-group 1/√(dim) weighting so SAM2 (256D) doesn't drown morphology. `-2` sentinel on `rare_pop_id` distinguishes pre-filter drops from HDBSCAN noise. Pairs with `global_cluster_spatial_viewer.py --rare-mode` for clickable-dendrogram review. | `xlseg discover-rare-cells` / `scripts/discover_rare_cell_types.py` (core: `xldvp_seg.analysis.rare_cell_discovery`) |
+| **Morphological cluster discovery** | HDBSCAN (≥1000-cell populations) + reciprocal-best-match Jaccard stability + Moran's I + Ward taxonomy. Per-group 1/√(dim) weighting so SAM2 (256D) doesn't drown morphology. `-2` sentinel on `rare_pop_id` distinguishes pre-filter drops from HDBSCAN noise. Pairs with `global_cluster_spatial_viewer.py --rare-mode` for clickable-dendrogram review. Covers the whole population — surfaces both common types and smaller coherent subgroups. See [docs/CLUSTER_DISCOVERY.md](../../docs/CLUSTER_DISCOVERY.md). | `xlseg discover-rare-cells` / `scripts/discover_rare_cell_types.py` (core: `xldvp_seg.analysis.rare_cell_discovery`) |
 | **Per-region multinucleation** | Histogram + Tukey fences + GMM(k=2 via BIC) outlier detection | `scripts/region_multinuc_plot.py` |
 | **Replicate sampling** | Area-matched / spatially-clustered, marker-stratified, 384-well | `scripts/paper_figure_sampling.py` |
 | **Transect selection** | Cells along zonation transect paths | `scripts/select_transect_cells_for_lmd.py` |

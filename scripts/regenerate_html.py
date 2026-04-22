@@ -98,6 +98,7 @@ def create_sample_from_contours(
     min_crop_px=300,
     dashed_contour=True,
     crop_context_factor=2.0,
+    mask_only=False,
 ):
     """Create an HTML sample by cropping from CZI around a detection's center.
 
@@ -235,6 +236,30 @@ def create_sample_from_contours(
         target_h = max(1, int(crop_norm.shape[0] * scale_factor))
         target_w = max(1, int(crop_norm.shape[1] * scale_factor))
         crop_norm = cv2.resize(crop_norm, (target_w, target_h), interpolation=cv2.INTER_AREA)
+
+    # Optional mask-only rendering: zero out pixels outside the cell's
+    # segmentation contour so only the cell itself is shown. Useful for
+    # morphology-focused review where surrounding tissue is distracting.
+    if mask_only:
+        # Build filled mask from the primary cell contour. Use the same
+        # offset math as the contour drawing block below.
+        mask_contour_key = None
+        for key in ("contour_px", "contour_dilated_px", "outer_contour_global"):
+            if det.get(key) is not None:
+                mask_contour_key = key
+                break
+        if mask_contour_key is not None:
+            mpts = np.array(det[mask_contour_key], dtype=np.float64).copy()
+            if mpts.ndim == 2 and mpts.shape[0] >= 3:
+                mpts[:, 0] -= x1 + x_start
+                mpts[:, 1] -= y1 + y_start
+                if scale_factor < 1.0:
+                    mpts *= scale_factor
+                cell_mask = np.zeros(crop_norm.shape[:2], dtype=np.uint8)
+                cv2.fillPoly(cell_mask, [mpts.astype(np.int32)], 1)
+                # Broadcast mask over RGB channels
+                crop_norm = crop_norm * cell_mask[:, :, None]
+                crop_norm = crop_norm.astype(np.uint8)
 
     # Save clean version BEFORE drawing contours (for channel toggle)
     crop_clean = crop_norm.copy()
@@ -510,6 +535,7 @@ def _process_single_slide(
                 contour_thickness=args.contour_thickness,
                 dashed_contour=args.dashed_contour,
                 crop_context_factor=args.crop_context_factor,
+                mask_only=args.mask_only,
             )
 
         with ThreadPoolExecutor(max_workers=n_workers) as pool:
@@ -657,6 +683,7 @@ def _process_one_slide_for_pool(args_tuple):
             contour_thickness=args_dict.get("contour_thickness", 2),
             dashed_contour=args_dict.get("dashed_contour", True),
             crop_context_factor=args_dict.get("crop_context_factor", 2.0),
+            mask_only=args_dict.get("mask_only", False),
         )
 
     with ThreadPoolExecutor(max_workers=n_workers) as pool:
@@ -704,6 +731,7 @@ def _process_multi_slide(args, sampled, channels_to_load, display_channels, cell
         "contour_thickness": args.contour_thickness,
         "dashed_contour": args.dashed_contour,
         "crop_context_factor": args.crop_context_factor,
+        "mask_only": args.mask_only,
     }
 
     all_samples = []
@@ -840,6 +868,13 @@ def main():
         help="Crop size as multiple of mask bounding box "
         "(default: 2.0 = 2x mask size). Use sqrt(N) for Nx area context, "
         "e.g. 2.74 for 7.5x area context.",
+    )
+    parser.add_argument(
+        "--mask-only",
+        action="store_true",
+        help="Black out all pixels outside the cell's segmentation contour so only "
+        "the cell itself is visible. Useful for morphology-only review where "
+        "surrounding tissue is distracting.",
     )
     parser.add_argument(
         "--prior-annotations",
