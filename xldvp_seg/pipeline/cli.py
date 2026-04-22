@@ -208,8 +208,11 @@ def build_parser():
     parser.add_argument(
         "--max-cell-area",
         type=float,
-        default=200.0,
-        help="Maximum cell area in um^2 for --cell-type cell (default 200)",
+        default=2000.0,
+        help="Maximum cell area in um^2 for --cell-type cell (default 2000). "
+        "Default was 200 prior to 2026-04-22 — that silently capped polyploid "
+        "hepatocytes (tetraploid ~400, octoploid ~800). Bump higher for MKs "
+        "(~8000) or multinucleated syncytia.",
     )
 
     # Vessel parameters

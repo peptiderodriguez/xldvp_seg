@@ -93,7 +93,7 @@ def create_sample_from_contours(
     pixel_size_um,
     slide_name,
     cell_type,
-    contour_thickness=6,
+    contour_thickness=3,
     max_crop_px=800,
     min_crop_px=300,
     dashed_contour=True,
@@ -223,6 +223,10 @@ def create_sample_from_contours(
             _dtype = next(iter(channel_arrays.values())).dtype
             rgb_channels.append(np.zeros((y2 - y1, x2 - x1), dtype=_dtype))
     if rgb_channels is not None:
+        # Pad to 3 channels so PIL writes true RGB (otherwise (H, W, 2) -> LA
+        # grayscale+alpha and cv2.drawContours silently drops 3-tuple colors).
+        while len(rgb_channels) < 3:
+            rgb_channels.append(np.zeros_like(rgb_channels[0]))
         crop = np.stack(rgb_channels, axis=-1)
 
     if crop.size == 0:
@@ -267,10 +271,10 @@ def create_sample_from_contours(
     contour_only = np.zeros_like(crop_norm)
 
     # Scale contour thickness to rendered crop size so large cells get proportionally
-    # thicker outlines (baseline ~1.5-2% of the rendered crop's shorter side).
+    # thicker outlines (baseline ~0.8% of the rendered crop's shorter side).
     # Uses user-provided contour_thickness as a floor.
     _rendered_size = min(crop_norm.shape[:2])
-    effective_thickness = max(contour_thickness, _rendered_size // 60)
+    effective_thickness = max(contour_thickness, _rendered_size // 120)
 
     # Draw contours if available (generic: look for any *_contour_global keys)
     contour_colors = {
@@ -295,29 +299,30 @@ def create_sample_from_contours(
             contour_pts *= scale_factor
         contour_int = contour_pts.astype(np.int32).reshape(-1, 1, 2)
         if dashed_contour:
-            # Interpolate along polygon edges to create evenly-spaced dash points
+            # Dashed: line segments with gaps. Dash + gap scale with thickness
+            # so gaps stay visible even on thick contours.
             pts_flat = contour_int.reshape(-1, 2)
-            # Close the polygon
             if not np.array_equal(pts_flat[0], pts_flat[-1]):
                 pts_flat = np.vstack([pts_flat, pts_flat[0:1]])
-            # Walk along edges, accumulating pixel distance
             interp_pts = []
             for k in range(len(pts_flat) - 1):
                 p0, p1 = pts_flat[k].astype(float), pts_flat[k + 1].astype(float)
                 seg_len = np.linalg.norm(p1 - p0)
                 if seg_len < 1:
                     continue
-                n_interp = max(2, int(seg_len / 2))  # ~2px spacing
+                n_interp = max(2, int(seg_len))  # ~1px spacing
                 for t in np.linspace(0, 1, n_interp, endpoint=False):
                     interp_pts.append((p0 + t * (p1 - p0)).astype(np.int32))
             if len(interp_pts) < 2:
                 cv2.drawContours(crop_norm, [contour_int], -1, color, effective_thickness)
                 cv2.drawContours(contour_only, [contour_int], -1, color, effective_thickness)
             else:
-                dash_len, gap_len = 8, 5
+                dash_len = max(12, effective_thickness * 3)
+                gap_len = max(8, effective_thickness * 2)
                 cycle = dash_len + gap_len
-                for idx in range(0, len(interp_pts), cycle):
-                    end = min(idx + dash_len, len(interp_pts) - 1)
+                n = len(interp_pts)
+                for idx in range(0, n, cycle):
+                    end = min(idx + dash_len, n - 1)
                     if end > idx:
                         cv2.line(
                             crop_norm,
@@ -325,6 +330,7 @@ def create_sample_from_contours(
                             tuple(interp_pts[end]),
                             color,
                             effective_thickness,
+                            cv2.LINE_AA,
                         )
                         cv2.line(
                             contour_only,
@@ -332,6 +338,7 @@ def create_sample_from_contours(
                             tuple(interp_pts[end]),
                             color,
                             effective_thickness,
+                            cv2.LINE_AA,
                         )
         else:
             cv2.drawContours(crop_norm, [contour_int], -1, color, effective_thickness)
@@ -582,6 +589,8 @@ def _process_single_slide(
                     rgb_channels.append(np.zeros((tile_h, tile_w), dtype=_dtype))
             if not rgb_channels:
                 continue
+            while len(rgb_channels) < 3:
+                rgb_channels.append(np.zeros_like(rgb_channels[0]))
             tile_rgb = np.stack(rgb_channels, axis=-1)
 
             tile_origin = tile_dets[0].get("tile_origin", [tile_x, tile_y])

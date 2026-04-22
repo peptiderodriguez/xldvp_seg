@@ -129,6 +129,12 @@ class RareCellConfig:
     nuc_filter_min_overlap: float = 0.8
     area_filter_min_um2: float = 20.0
     area_filter_max_um2: float = 5000.0
+    # Mask-quality filters (off by default — 0.0 disables).
+    # Enable to trim broken/fused masks (solidity) and masks over empty tissue
+    # (max-across-channels SNR). Each filter logs an individual drop count in
+    # ``pre_filter_cells`` stats so you can tune without overdoing it.
+    min_solidity: float = 0.0
+    min_max_channel_snr: float = 0.0
     delaunay_k: int = 10
     use_gpu: bool = True
     seed: int = 42
@@ -157,6 +163,11 @@ class EmbeddingResult:
             consumers that need to find the sibling cache can compute
             ``cache_dir / f"X_pca_{pca_cache_key}.npz"`` directly instead of
             re-deriving the hash.
+        prefilter_stats: waterfall counts from :func:`pre_filter_cells`
+            (``input``, ``dropped_n_nuclei``, ``dropped_nc_ratio``,
+            ``dropped_overlap``, ``dropped_area``, ``dropped_solidity``,
+            ``dropped_snr``, ``kept``). Persisted so callers can audit how
+            aggressive each quality filter was.
     """
 
     kept: list[dict]
@@ -167,6 +178,7 @@ class EmbeddingResult:
     n_components: int
     weights_by_group: dict[str, float]
     pca_cache_key: str = ""
+    prefilter_stats: dict = field(default_factory=dict)
 
 
 # ---------------------------------------------------------------------------
@@ -195,10 +207,17 @@ def pre_filter_cells(
         "dropped_nc_ratio": 0,
         "dropped_overlap": 0,
         "dropped_area": 0,
+        "dropped_solidity": 0,
+        "dropped_snr": 0,
         "kept": 0,
     }
     kept: list[dict] = []
     drop_reasons: list[str | None] = [None] * len(detections)
+    # Detect channel SNR field list once (e.g. [ch0_snr, ch1_snr, ...]).
+    snr_keys: list[str] = []
+    if cfg.min_max_channel_snr > 0.0 and detections:
+        probe = detections[0].get("features", {}) or {}
+        snr_keys = sorted(k for k in probe if k.startswith("ch") and k.endswith("_snr"))
     for i, det in enumerate(detections):
         feats = det.get("features", {})
         area_um2 = feats.get("area_um2", det.get("area_um2", 0.0))
@@ -230,6 +249,18 @@ def pre_filter_cells(
             stats["dropped_area"] += 1
             drop_reasons[i] = "area"
             continue
+        if cfg.min_solidity > 0.0:
+            solidity = float(feats.get("solidity", 1.0))
+            if solidity < cfg.min_solidity:
+                stats["dropped_solidity"] += 1
+                drop_reasons[i] = "solidity"
+                continue
+        if cfg.min_max_channel_snr > 0.0 and snr_keys:
+            max_snr = max((float(feats.get(k, 0.0)) for k in snr_keys), default=0.0)
+            if max_snr < cfg.min_max_channel_snr:
+                stats["dropped_snr"] += 1
+                drop_reasons[i] = "snr"
+                continue
         kept.append(det)
 
     stats["kept"] = len(kept)
@@ -818,7 +849,8 @@ def _cache_key(feature_names: list[str], n_cells: int, cfg: RareCellConfig) -> s
     m.update(
         f"filter={cfg.nuc_filter_min_n_nuclei},{cfg.nuc_filter_nc_min},"
         f"{cfg.nuc_filter_nc_max},{cfg.nuc_filter_min_overlap},"
-        f"{cfg.area_filter_min_um2},{cfg.area_filter_max_um2}".encode()
+        f"{cfg.area_filter_min_um2},{cfg.area_filter_max_um2},"
+        f"{cfg.min_solidity},{cfg.min_max_channel_snr}".encode()
     )
     m.update(f"pca={cfg.max_pcs},{cfg.pca_variance},seed={cfg.seed}".encode())
     m.update(f"excl={sorted(cfg.exclude_channels)}".encode())
@@ -880,13 +912,16 @@ def discover_rare_cell_types(
     logger.info("Pre-filtering %d detections", len(detections))
     kept, pf_stats, drop_reasons = pre_filter_cells(detections, cfg)
     logger.info(
-        "Pre-filter: kept %d/%d (dropped: n_nuclei=%d, nc=%d, overlap=%d, area=%d)",
+        "Pre-filter: kept %d/%d "
+        "(dropped: n_nuclei=%d, nc=%d, overlap=%d, area=%d, solidity=%d, snr=%d)",
         pf_stats["kept"],
         pf_stats["input"],
         pf_stats["dropped_n_nuclei"],
         pf_stats["dropped_nc_ratio"],
         pf_stats["dropped_overlap"],
         pf_stats["dropped_area"],
+        pf_stats.get("dropped_solidity", 0),
+        pf_stats.get("dropped_snr", 0),
     )
 
     # Tag filter-dropped cells with -2 sentinel + reason immediately. Kept
@@ -1125,13 +1160,16 @@ def load_and_embed(
     logger.info("Pre-filtering %d detections", len(detections))
     kept, pf_stats, _drop_reasons = pre_filter_cells(detections, cfg)
     logger.info(
-        "Pre-filter: kept %d/%d (dropped: n_nuclei=%d, nc=%d, overlap=%d, area=%d)",
+        "Pre-filter: kept %d/%d "
+        "(dropped: n_nuclei=%d, nc=%d, overlap=%d, area=%d, solidity=%d, snr=%d)",
         pf_stats["kept"],
         pf_stats["input"],
         pf_stats["dropped_n_nuclei"],
         pf_stats["dropped_nc_ratio"],
         pf_stats["dropped_overlap"],
         pf_stats["dropped_area"],
+        pf_stats.get("dropped_solidity", 0),
+        pf_stats.get("dropped_snr", 0),
     )
     # NOTE: the HDBSCAN-specific ``kept >= 2 * min_cluster_size`` guard lives
     # in :func:`discover_rare_cell_types` — it's not a universal requirement
@@ -1211,6 +1249,7 @@ def load_and_embed(
         n_components=n_components,
         weights_by_group=weights_by_group,
         pca_cache_key=ckey if cfg.cache_dir is not None else "",
+        prefilter_stats=dict(pf_stats),
     )
 
 

@@ -169,6 +169,16 @@ def build_detection_params(args, pixel_size_um):
             "min_area_um": args.min_cell_area,
             "max_area_um": args.max_cell_area,
         }
+        # Loud log — silent area caps cost us a whole detection run once.
+        # If the user sees this and it's too restrictive, they can re-run.
+        logger.info(
+            "Cell area filter: %.0f - %.0f um^2 "
+            "(cells outside this range are silently dropped). "
+            "Typical references: diploid hepatocyte ~200, tetraploid ~400, "
+            "octoploid ~800, megakaryocyte ~8000.",
+            args.min_cell_area,
+            args.max_cell_area,
+        )
         if args.cellpose_input_channels:
             try:
                 parts = args.cellpose_input_channels.split(",")

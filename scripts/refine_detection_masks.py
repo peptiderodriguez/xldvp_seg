@@ -122,11 +122,18 @@ def _refine_one_tile(task: dict) -> dict:
         if orig_area == 0:
             continue
 
-        # Apply intensity-based refinement.
-        # refine_mask_intensity's size guard (default min_area_fraction=0.5)
-        # returns the ORIGINAL mask when refinement would drop >50%. So an
-        # empty refined mask here would be unexpected — warn and skip.
-        refined = refine_mask_intensity(mask, tile)
+        # Apply intensity-based refinement with user-configurable thresholds.
+        # Size guard returns the ORIGINAL mask when refinement would drop
+        # below min_area_fraction. An empty refined mask here would be
+        # unexpected — warn and skip.
+        refined = refine_mask_intensity(
+            mask,
+            tile,
+            opening_radius=task["opening_radius"],
+            bright_percentile=task["bright_percentile"],
+            peel_iterations=task["peel_iterations"],
+            min_area_fraction=task["min_area_fraction"],
+        )
         if not refined.any():
             logger.warning(
                 f"Refinement emptied mask for {uid} in tile ({tile_x},{tile_y}); "
@@ -200,6 +207,37 @@ def main():
     parser.add_argument(
         "--workers", type=int, default=16, help="Parallel tile workers (default 16)"
     )
+    # Refinement tuning — exposed to cope with varied staining intensity
+    parser.add_argument(
+        "--bright-percentile",
+        type=float,
+        default=70.0,
+        help="Percentile of mask interior used as the peel threshold. Boundary "
+        "pixels brighter than this percentile of the interior are removed. "
+        "Lower = more aggressive. Default 70 (was 90 in mask_cleanup default — "
+        "too lenient for masks with preexisting white-bleed in interior).",
+    )
+    parser.add_argument(
+        "--peel-iterations",
+        type=int,
+        default=10,
+        help="Number of boundary-peeling iterations. Default 10 (was 3 in "
+        "mask_cleanup default — stops too early on wide bleed).",
+    )
+    parser.add_argument(
+        "--min-area-fraction",
+        type=float,
+        default=0.3,
+        help="Size guard: if refinement reduces mask below this fraction of "
+        "original area, revert to original. Default 0.3 (was 0.5 — allow up "
+        "to 70%% removal for heavily-bleeding masks).",
+    )
+    parser.add_argument(
+        "--opening-radius",
+        type=int,
+        default=3,
+        help="Morphological opening radius in pixels before peeling. 0 disables.",
+    )
     args = parser.parse_args()
     setup_logging(level="INFO")
 
@@ -263,6 +301,10 @@ def main():
                 "pixel_size_um": pixel_size_um,
                 "tile_origin": (tx, ty),
                 "det_uids": det_uids,
+                "bright_percentile": args.bright_percentile,
+                "peel_iterations": args.peel_iterations,
+                "min_area_fraction": args.min_area_fraction,
+                "opening_radius": args.opening_radius,
             }
         )
     logger.info(f"Processing {len(tasks)} tiles with {args.workers} threads...")

@@ -56,7 +56,7 @@ class CellStrategy(DetectionStrategy, MultiChannelFeatureMixin):
     def __init__(
         self,
         min_area_um: float = 50,
-        max_area_um: float = 200,
+        max_area_um: float = 2000,
         overlap_threshold: float = 0.5,
         min_mask_pixels: int = 10,
         extract_deep_features: bool = False,
@@ -69,7 +69,10 @@ class CellStrategy(DetectionStrategy, MultiChannelFeatureMixin):
 
         Args:
             min_area_um: Minimum area in square microns (default 50)
-            max_area_um: Maximum area in square microns (default 200)
+            max_area_um: Maximum area in square microns (default 2000 — covers
+                polyploid hepatocytes up to octoploid ~1600 µm²; bump higher
+                for megakaryocytes (~8000 µm²) or multinucleated syncytia).
+                Previously 200, which silently capped polyploid cells.
             overlap_threshold: Kept for API compat (unused — Cellpose masks don't overlap)
             min_mask_pixels: Minimum mask size in pixels (default 10)
             extract_deep_features: Whether to extract ResNet+DINOv2 features (default False)

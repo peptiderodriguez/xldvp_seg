@@ -103,6 +103,11 @@ class ManifoldSamplingConfig:
     nuc_filter_min_overlap: float = 0.8
     area_filter_min_um2: float = 20.0
     area_filter_max_um2: float = 5000.0
+    # Mask-quality filters (off by default). Each logs an individual drop count
+    # in the pre_filter waterfall (see manifold_sample_stats.json) so the user
+    # can tune without overdoing it.
+    min_solidity: float = 0.0
+    min_max_channel_snr: float = 0.0
     # Organ handling (Level-2 grouping).
     organ_field: str = "organ_id"
     organ_drop_value: int = 0
@@ -824,6 +829,8 @@ def discover_manifold_replicates(
         nuc_filter_min_overlap=cfg.nuc_filter_min_overlap,
         area_filter_min_um2=cfg.area_filter_min_um2,
         area_filter_max_um2=cfg.area_filter_max_um2,
+        min_solidity=cfg.min_solidity,
+        min_max_channel_snr=cfg.min_max_channel_snr,
         use_gpu=cfg.use_gpu,
         seed=cfg.seed,
         cache_dir=cfg.cache_dir,
@@ -831,6 +838,7 @@ def discover_manifold_replicates(
 
     embed_fn = getattr(rcd, "load_and_embed", None)
     pca_cache_key = ""
+    prefilter_stats: dict = {}
     if embed_fn is not None:
         result = embed_fn(detections, rcd_cfg)
         kept = result.kept
@@ -840,10 +848,12 @@ def discover_manifold_replicates(
         n_components = int(result.n_components)
         weights_by_group = getattr(result, "weights_by_group", {})
         pca_cache_key = getattr(result, "pca_cache_key", "")
+        prefilter_stats = dict(getattr(result, "prefilter_stats", {}) or {})
         logger.info("Embedding via rare_cell_discovery.load_and_embed()")
     else:
         logger.info("rare_cell_discovery.load_and_embed() not found; inline embedding")
         kept, pf_stats, _ = rcd.pre_filter_cells(detections, rcd_cfg)
+        prefilter_stats = dict(pf_stats)
         logger.info("Pre-filter kept %d/%d cells", pf_stats["kept"], pf_stats["input"])
         X_raw, feature_names, valid_indices = rcd.build_feature_matrix(
             kept, rcd_cfg.feature_groups, rcd_cfg.exclude_channels
@@ -884,6 +894,10 @@ def discover_manifold_replicates(
         "area_filter": (
             rcd_cfg.area_filter_min_um2,
             rcd_cfg.area_filter_max_um2,
+        ),
+        "quality_filter": (
+            rcd_cfg.min_solidity,
+            rcd_cfg.min_max_channel_snr,
         ),
         "organ_field": cfg.organ_field,
         "organ_drop_value": cfg.organ_drop_value,
@@ -975,6 +989,7 @@ def discover_manifold_replicates(
         "outlier_threshold": cfg.outlier_threshold,
         "target_area_um2": cfg.target_area_um2,
         "include_partial": cfg.include_partial,
+        "prefilter_stats": prefilter_stats,
     }
 
     return {

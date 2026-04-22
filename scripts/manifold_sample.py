@@ -251,6 +251,21 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     p.add_argument("--filter-min-overlap", type=float, default=0.8)
     p.add_argument("--filter-area-min-um2", type=float, default=20.0)
     p.add_argument("--filter-area-max-um2", type=float, default=5000.0)
+    # Mask-quality filters (off by default — 0.0 disables).
+    p.add_argument(
+        "--min-solidity",
+        type=float,
+        default=0.0,
+        help="Drop cells with solidity < this (area / convex-hull area). "
+        "Filters broken/fused masks. 0.0 disables. Try 0.75 to trim outliers.",
+    )
+    p.add_argument(
+        "--min-max-channel-snr",
+        type=float,
+        default=0.0,
+        help="Drop cells where max(ch_N_snr across channels) < this. "
+        "Filters masks over empty tissue. 0.0 disables. Try 1.5.",
+    )
 
     # Organ handling (Level 2 grouping).
     p.add_argument(
@@ -328,6 +343,8 @@ def main(argv: list[str] | None = None) -> int:
         nuc_filter_min_overlap=args.filter_min_overlap,
         area_filter_min_um2=args.filter_area_min_um2,
         area_filter_max_um2=args.filter_area_max_um2,
+        min_solidity=args.min_solidity,
+        min_max_channel_snr=args.min_max_channel_snr,
         # Organ handling.
         organ_field=args.organ_field,
         organ_drop_value=args.organ_drop_value,
