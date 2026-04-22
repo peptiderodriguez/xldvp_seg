@@ -29,7 +29,7 @@ Usage:
 import argparse
 import sys
 import time
-from concurrent.futures import ProcessPoolExecutor, as_completed
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 
 import h5py
@@ -62,34 +62,35 @@ def _parse_tile_origin(mask_file: Path) -> tuple[int, int]:
     return int(parts[1]), int(parts[2])
 
 
-def _load_tile_rgb(loader, tile_x: int, tile_y: int, tile_h: int, tile_w: int, channel: int):
-    """Read a tile image for intensity reference. Uses RAM-loaded channel data
-    (via loader.channel_data) which handles both 2D grayscale uint16 and
-    3D RGB uint8 transparently.
+def _load_tile_rgb(
+    channel_array: np.ndarray,
+    x_start: int,
+    y_start: int,
+    tile_x: int,
+    tile_y: int,
+    tile_h: int,
+    tile_w: int,
+):
+    """Slice a tile from the in-RAM channel array. Works for 2D grayscale uint16
+    and 3D RGB uint8 transparently (numpy slicing preserves trailing axes).
     """
-    rel_x = tile_x - loader.x_start
-    rel_y = tile_y - loader.y_start
-    data = loader._channel_data.get(channel)
-    if data is None:
-        tile = loader.get_tile(tile_x, tile_y, max(tile_h, tile_w), channel=channel)
-        return tile
-    return data[rel_y : rel_y + tile_h, rel_x : rel_x + tile_w]
+    rel_x = tile_x - x_start
+    rel_y = tile_y - y_start
+    return channel_array[rel_y : rel_y + tile_h, rel_x : rel_x + tile_w]
 
 
 def _refine_one_tile(task: dict) -> dict:
     """Process one tile's masks. Returns per-detection updates keyed by UID.
 
-    Top-level function so ProcessPoolExecutor can pickle it.
+    ThreadPoolExecutor worker — shares the pre-loaded channel_array via closure.
     """
     mask_file = Path(task["mask_file"])
-    czi_path = task["czi_path"]
-    channel = task["channel"]
+    channel_array = task["channel_array"]
+    x_start = task["x_start"]
+    y_start = task["y_start"]
     pixel_size_um = task["pixel_size_um"]
     tile_x, tile_y = task["tile_origin"]
     det_uids = task["det_uids"]  # {mask_label: uid} for this tile's detections
-
-    # Lazy loader (re-opened in each process; cheap since no load_to_ram)
-    loader = get_loader(czi_path, load_to_ram=False, channel=channel)
 
     # Load mask label array
     with h5py.File(mask_file, "r") as hf:
@@ -103,7 +104,7 @@ def _refine_one_tile(task: dict) -> dict:
             masks = masks[0]
 
     tile_h, tile_w = masks.shape[:2]
-    tile = _load_tile_rgb(loader, tile_x, tile_y, tile_h, tile_w, channel)
+    tile = _load_tile_rgb(channel_array, x_start, y_start, tile_x, tile_y, tile_h, tile_w)
     if tile is None or tile.size == 0:
         return {"updates": {}, "tile": f"{tile_x}_{tile_y}", "skipped": "empty tile"}
 
@@ -121,9 +122,16 @@ def _refine_one_tile(task: dict) -> dict:
         if orig_area == 0:
             continue
 
-        # Apply intensity-based refinement
+        # Apply intensity-based refinement.
+        # refine_mask_intensity's size guard (default min_area_fraction=0.5)
+        # returns the ORIGINAL mask when refinement would drop >50%. So an
+        # empty refined mask here would be unexpected — warn and skip.
         refined = refine_mask_intensity(mask, tile)
         if not refined.any():
+            logger.warning(
+                f"Refinement emptied mask for {uid} in tile ({tile_x},{tile_y}); "
+                "keeping original"
+            )
             continue
 
         # Recompute shape features on the refined mask
@@ -153,9 +161,11 @@ def _refine_one_tile(task: dict) -> dict:
             "global_center": [float(global_cx), float(global_cy)],
         }
 
-    # Also write the refined mask back so downstream steps see it.
-    # (Skipped here to keep the tool read-only; can be added with --write-masks.)
-
+    # Note: we do NOT rewrite the HDF5 mask file. The refined contour/features
+    # are returned as updates to the detection JSON only. Downstream tools that
+    # read masks from HDF5 (e.g. regenerate_html.py's tile+mask mode) will still
+    # see the unrefined mask — pass the refined detections JSON directly via
+    # --detections to use the refined contour_px instead.
     return {"updates": updates, "tile": f"{tile_x}_{tile_y}", "n_refined": len(updates)}
 
 
@@ -207,10 +217,19 @@ def main():
     detections = fast_json_load(str(det_path))
     logger.info(f"  {len(detections):,} detections")
 
-    # Load pixel size from CZI (authoritative — do not trust stale det JSON)
-    loader = get_loader(args.czi_path, load_to_ram=False, channel=args.channel)
+    # Load CZI channel into RAM once (aicspylibczi isn't safe for concurrent
+    # access, so we load upfront and share the numpy array via closure to
+    # ThreadPool workers — threads release the GIL during cv2/numpy ops).
+    logger.info(f"Loading CZI channel {args.channel} to RAM...")
+    loader = get_loader(args.czi_path, load_to_ram=True, channel=args.channel)
+    channel_array = loader.get_channel_data(args.channel)
     pixel_size_um = loader.get_pixel_size()
-    logger.info(f"  Pixel size: {pixel_size_um} um/px (from CZI)")
+    x_start, y_start = loader.x_start, loader.y_start
+    logger.info(
+        f"  Pixel size: {pixel_size_um} um/px, "
+        f"array shape={channel_array.shape} dtype={channel_array.dtype} "
+        f"({channel_array.nbytes / 1e9:.1f} GB)"
+    )
 
     # Group detections by tile_origin for batch per-tile processing
     by_tile: dict[tuple[int, int], dict[int, str]] = {}
@@ -224,7 +243,8 @@ def main():
         by_tile.setdefault(tile_key, {})[int(label)] = uid
     logger.info(f"  {len(by_tile)} tiles with mask labels")
 
-    # Build task list — one per tile
+    # Build task list — one per tile. channel_array is shared by reference across
+    # threads (no copy, no pickling).
     mask_files = _find_tile_mask_files(run_dir, args.cell_type)
     logger.info(f"  {len(mask_files)} mask files on disk")
 
@@ -237,19 +257,20 @@ def main():
         tasks.append(
             {
                 "mask_file": str(mf),
-                "czi_path": args.czi_path,
-                "channel": args.channel,
+                "channel_array": channel_array,
+                "x_start": x_start,
+                "y_start": y_start,
                 "pixel_size_um": pixel_size_um,
                 "tile_origin": (tx, ty),
                 "det_uids": det_uids,
             }
         )
-    logger.info(f"Processing {len(tasks)} tiles with {args.workers} workers...")
+    logger.info(f"Processing {len(tasks)} tiles with {args.workers} threads...")
 
-    # Run refinement
+    # Run refinement (ThreadPool — cv2 + numpy release the GIL)
     all_updates: dict[str, dict] = {}
     t0 = time.time()
-    with ProcessPoolExecutor(max_workers=args.workers) as pool:
+    with ThreadPoolExecutor(max_workers=args.workers) as pool:
         futures = {pool.submit(_refine_one_tile, t): t for t in tasks}
         done = 0
         for future in as_completed(futures):
@@ -261,7 +282,8 @@ def main():
                 rate = done / elapsed if elapsed > 0 else 0
                 eta = (len(tasks) - done) / rate if rate > 0 else 0
                 logger.info(
-                    f"  [{done}/{len(tasks)}] refined={len(all_updates):,} rate={rate:.1f}/s eta={eta:.0f}s"
+                    f"  [{done}/{len(tasks)}] refined={len(all_updates):,} "
+                    f"rate={rate:.1f}/s eta={eta:.0f}s"
                 )
     elapsed = time.time() - t0
     logger.info(
